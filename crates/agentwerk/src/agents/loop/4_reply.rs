@@ -97,13 +97,9 @@ pub(super) async fn run(context: &mut LoopContext<'_>, messages: Vec<Message>) -
                             message: e.to_string(),
                         },
                     );
-                    context.ticket_system.emit(
-                        &context.ticket_key,
-                        context.agent.get_name(),
-                        EventKind::TicketFailed {
-                            key: context.ticket_key.clone(),
-                        },
-                    );
+                    let _ = context
+                        .ticket_system
+                        .set_failed(&context.ticket_key);
                     return Action::Replay;
                 }
             },
@@ -116,13 +112,9 @@ pub(super) async fn run(context: &mut LoopContext<'_>, messages: Vec<Message>) -
                         message: e.to_string(),
                     },
                 );
-                context.ticket_system.emit(
-                    &context.ticket_key,
-                    context.agent.get_name(),
-                    EventKind::TicketFailed {
-                        key: context.ticket_key.clone(),
-                    },
-                );
+                let _ = context
+                    .ticket_system
+                    .set_failed(&context.ticket_key);
                 return Action::Replay;
             }
         }
@@ -343,6 +335,53 @@ mod tests {
             assert!(failures[0].contains(needle), "{needle}: {}", failures[0]);
             assert!(retries_in(&events).is_empty(), "{needle}");
         }
+    }
+
+    #[tokio::test]
+    async fn terminal_provider_error_marks_ticket_failed() {
+        use crate::providers::ProviderError;
+        let cases: Vec<ProviderError> = vec![
+            ProviderError::AuthenticationFailed {
+                message: "bad key 401".into(),
+            },
+            ProviderError::PermissionDenied {
+                message: "no access 403".into(),
+            },
+            ProviderError::ModelNotFound {
+                message: "unknown-model-xyz".into(),
+            },
+            ProviderError::SafetyFilterTriggered {
+                message: "blocked".into(),
+            },
+            ProviderError::ResponseMalformed {
+                message: "bad json".into(),
+            },
+        ];
+
+        for err in cases {
+            let provider = MockProvider::with_results(vec![Err(err)]);
+            let (_, _, ticket) = run_one(provider, 3, 10, None).await;
+            assert_eq!(
+                ticket.status,
+                Status::Failed,
+                "terminal provider error must transition ticket to Failed"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn retry_exhausted_marks_ticket_failed() {
+        let provider = MockProvider::with_results(vec![
+            Err(rate_limit()),
+            Err(rate_limit()),
+            Err(rate_limit()),
+        ]);
+        let (_, _, ticket) = run_one(provider, 2, 10, None).await;
+        assert_eq!(
+            ticket.status,
+            Status::Failed,
+            "exhausted retry budget must transition ticket to Failed"
+        );
     }
 
     // Backoff timing
