@@ -42,6 +42,7 @@ update:
 # Note: use args= not -- to pass arguments
 use_case:
 ifdef name
+	@if [ -f .env ]; then set -a; . ./.env; set +a; fi; \
 	cargo run -p use-cases --bin $(name) -- $(args)
 else
 	@echo "Available use cases:"
