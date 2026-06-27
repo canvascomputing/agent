@@ -1,18 +1,35 @@
-//! Hand-rolled minimal JSON Schema validator. Covers the subset of
-//! keywords agents actually use to constrain structured content:
-//! `type`, `required`, `properties`, `additionalProperties` (bool
-//! only), `items`, `enum`, `const`, `minimum`, `maximum`,
-//! `minLength`, `maxLength`, `minItems`, `maxItems`.
+//! Hand-rolled JSON Schema validator for the keyword subset agentwerk
+//! needs to constrain agent replies. The public surface is
+//! [`Schema::parse`] and [`Schema::validate`].
 //!
-//! The public surface is `Schema::parse` + `Schema::validate`,
-//! identical to what a real JSON Schema crate would expose. If we
-//! later need `$ref`, `pattern`, `format`, `oneOf`/`anyOf`/`allOf`,
-//! etc., the implementation behind this API can be swapped for a
-//! third-party validator without callers noticing.
+//! The subset is deliberately small: structural keywords, the scalar
+//! value bounds the model APIs do not enforce, the logical and
+//! conditional applicators, and `pattern`. Any keyword outside the
+//! supported set is rejected at parse time rather than silently ignored,
+//! so a caller learns the limit instead of trusting a constraint that
+//! never ran. `pattern` compiles with the `regex` crate, whose dialect
+//! lacks the ECMA-262 backreferences, lookahead, and lookbehind that
+//! JSON Schema nominally allows.
 //!
-//! Unsupported keywords are rejected at parse time with a clear
-//! message, not silently ignored — agents get fast feedback that
-//! their schema overreached.
+//! ```
+//! use agentwerk::schemas::Schema;
+//! use serde_json::json;
+//!
+//! let schema = Schema::parse(json!({
+//!     "type": "object",
+//!     "properties": { "name": { "type": "string", "minLength": 1 } },
+//!     "required": ["name"],
+//! }))
+//! .unwrap();
+//!
+//! // A conforming value comes back unchanged.
+//! let value = json!({ "name": "Ada" });
+//! assert_eq!(schema.validate(value.clone()).unwrap(), value);
+//!
+//! // Otherwise every problem is reported as a violation.
+//! let violations = schema.validate(json!({})).unwrap_err();
+//! assert!(violations.iter().any(|v| v.message.contains("name")));
+//! ```
 
 use std::collections::HashSet;
 use std::fmt;
@@ -39,6 +56,17 @@ impl Schema {
     /// (malformed schema, unsupported keyword, …) come back as
     /// [`SchemaParseError`] and never feed the retry budget — they
     /// are programming errors, not content violations.
+    ///
+    /// ```
+    /// use agentwerk::schemas::Schema;
+    /// use serde_json::json;
+    ///
+    /// assert!(Schema::parse(json!({ "type": "string", "pattern": "^[a-z]+$" })).is_ok());
+    ///
+    /// // A keyword outside the supported set is rejected up front.
+    /// let err = Schema::parse(json!({ "uniqueItems": true })).unwrap_err();
+    /// assert!(err.message.contains("unsupported keyword"));
+    /// ```
     pub fn parse(document: Value) -> Result<Self, SchemaParseError> {
         let compiled = compile(&document, "")?;
         Ok(Self {
@@ -54,16 +82,38 @@ impl Schema {
     /// instead of `{...}`) is decoded once and returned if the decoded value
     /// conforms. Otherwise the original violations are returned, so a retry
     /// points at the real problem, not the decoding.
+    ///
+    /// ```
+    /// use agentwerk::schemas::Schema;
+    /// use serde_json::json;
+    ///
+    /// let schema = Schema::parse(json!({ "type": "object", "required": ["status"] })).unwrap();
+    ///
+    /// // A string an agent double-encoded is decoded once, then validated.
+    /// let decoded = schema.validate(json!("{\"status\": \"done\"}")).unwrap();
+    /// assert_eq!(decoded, json!({ "status": "done" }));
+    ///
+    /// // A failure carries the instance path of each problem.
+    /// let violations = schema.validate(json!({})).unwrap_err();
+    /// assert_eq!(violations[0].instance_path, "");
+    /// ```
     pub fn validate(&self, value: Value) -> Result<Value, Vec<SchemaViolation>> {
-        match self.check(&value) {
-            Ok(()) => Ok(value),
-            Err(violations) => match &value {
-                Value::String(s) => match serde_json::from_str::<Value>(s) {
-                    Ok(decoded) if self.check(&decoded).is_ok() => Ok(decoded),
-                    _ => Err(violations),
-                },
-                _ => Err(violations),
-            },
+        let violations = match self.check(&value) {
+            Ok(()) => return Ok(value),
+            Err(v) => v,
+        };
+
+        let Value::String(s) = &value else {
+            return Err(violations);
+        };
+        let Ok(decoded) = serde_json::from_str::<Value>(s) else {
+            return Err(violations);
+        };
+
+        if self.check(&decoded).is_ok() {
+            Ok(decoded)
+        } else {
+            Err(violations)
         }
     }
 
@@ -156,30 +206,43 @@ pub(crate) fn format_violations(violations: &[SchemaViolation]) -> String {
 
 // ---------- compiled schema tree ----------
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct Node {
     schema_path: String,
+    // type / enum / const
     types: Option<Vec<JsonType>>,
     enum_values: Option<Vec<Value>>,
     const_value: Option<Value>,
+    // logical combinators
+    all_of: Option<Vec<Node>>,
+    any_of: Option<Vec<Node>>,
+    one_of: Option<Vec<Node>>,
+    not: Option<Box<Node>>,
+    // conditional
+    if_schema: Option<Box<Node>>,
+    then_schema: Option<Box<Node>>,
+    else_schema: Option<Box<Node>>,
+    // object
     properties: Option<Vec<(String, Node)>>,
     required: Option<Vec<String>>,
     additional_properties: AdditionalProperties,
+    // array
     items: Option<Box<Node>>,
-    minimum: Option<f64>,
-    maximum: Option<f64>,
-    min_length: Option<usize>,
-    max_length: Option<usize>,
     min_items: Option<usize>,
     max_items: Option<usize>,
+    // number
+    minimum: Option<f64>,
+    maximum: Option<f64>,
+    // string
+    min_length: Option<usize>,
+    max_length: Option<usize>,
+    pattern: Option<regex::Regex>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 enum AdditionalProperties {
-    /// `additionalProperties` was not set — JSON Schema default is
-    /// "anything goes".
-    Unset,
-    /// `additionalProperties: true` — explicitly permissive.
+    /// `additionalProperties` not set or `true` — extra keys are permitted.
+    #[default]
     Allowed,
     /// `additionalProperties: false` — extra keys produce a violation.
     Forbidden,
@@ -246,7 +309,11 @@ fn is_integer(n: &Number) -> bool {
         .is_some_and(|f| f.is_finite() && f.fract() == 0.0)
 }
 
+/// The keywords this validator understands. Anything outside this list is
+/// rejected at parse time, so an unsupported constraint surfaces as an
+/// error instead of passing silently.
 const SUPPORTED_KEYWORDS: &[&str] = &[
+    // assertions
     "type",
     "required",
     "properties",
@@ -258,12 +325,21 @@ const SUPPORTED_KEYWORDS: &[&str] = &[
     "maximum",
     "minLength",
     "maxLength",
+    "pattern",
     "minItems",
     "maxItems",
-    // "$schema" / "$id" / "title" / "description" / "default"
-    // are accepted as informational-only and don't influence validation.
+    // applicators
+    "allOf",
+    "anyOf",
+    "oneOf",
+    "not",
+    "if",
+    "then",
+    "else",
+    // informational — accepted but not evaluated
     "$schema",
     "$id",
+    "$comment",
     "title",
     "description",
     "default",
@@ -274,17 +350,15 @@ fn compile(value: &Value, schema_path: &str) -> Result<Node, SchemaParseError> {
     let obj = match value {
         Value::Object(map) => map,
         Value::Bool(true) => {
-            // `true` accepts everything.
-            return Ok(empty_node(schema_path.to_string()));
+            return Ok(Node { schema_path: schema_path.to_string(), ..Node::default() });
         }
         Value::Bool(false) => {
-            // `false` rejects everything — model as "type: <none>"
-            // by giving the node an enum_values of `[]`. Simplest
-            // way: attach a magic "always fails" marker. We use an
-            // empty `types` list (which never matches anything).
-            let mut node = empty_node(schema_path.to_string());
-            node.types = Some(Vec::new());
-            return Ok(node);
+            // false schema rejects everything; model as empty types list.
+            return Ok(Node {
+                schema_path: schema_path.to_string(),
+                types: Some(Vec::new()),
+                ..Node::default()
+            });
         }
         other => {
             return Err(parse_err(
@@ -401,7 +475,7 @@ fn compile(value: &Value, schema_path: &str) -> Result<Node, SchemaParseError> {
     };
 
     let additional_properties = match obj.get("additionalProperties") {
-        None => AdditionalProperties::Unset,
+        None => AdditionalProperties::Allowed,
         Some(Value::Bool(true)) => AdditionalProperties::Allowed,
         Some(Value::Bool(false)) => AdditionalProperties::Forbidden,
         Some(other) => {
@@ -432,6 +506,15 @@ fn compile(value: &Value, schema_path: &str) -> Result<Node, SchemaParseError> {
         }
     };
 
+    let all_of = parse_subschema_array(obj, "allOf", schema_path)?;
+    let any_of = parse_subschema_array(obj, "anyOf", schema_path)?;
+    let one_of = parse_subschema_array(obj, "oneOf", schema_path)?;
+    let not = parse_subschema(obj, "not", schema_path)?;
+
+    let if_schema = parse_subschema(obj, "if", schema_path)?;
+    let then_schema = parse_subschema(obj, "then", schema_path)?;
+    let else_schema = parse_subschema(obj, "else", schema_path)?;
+
     let minimum = parse_number(obj.get("minimum"), schema_path, "minimum")?;
     let maximum = parse_number(obj.get("maximum"), schema_path, "maximum")?;
     let min_length = parse_usize(obj.get("minLength"), schema_path, "minLength")?;
@@ -439,40 +522,91 @@ fn compile(value: &Value, schema_path: &str) -> Result<Node, SchemaParseError> {
     let min_items = parse_usize(obj.get("minItems"), schema_path, "minItems")?;
     let max_items = parse_usize(obj.get("maxItems"), schema_path, "maxItems")?;
 
+    let pattern = match obj.get("pattern") {
+        None => None,
+        Some(Value::String(s)) => Some(compile_regex(s, schema_path, "pattern")?),
+        Some(other) => {
+            return Err(parse_err(
+                schema_path,
+                format!("`pattern` must be a string, got {}", value_label(other)),
+            ));
+        }
+    };
+
     Ok(Node {
         schema_path: schema_path.to_string(),
         types,
         enum_values,
         const_value,
+        all_of,
+        any_of,
+        one_of,
+        not,
+        if_schema,
+        then_schema,
+        else_schema,
         properties,
         required,
         additional_properties,
         items,
+        min_items,
+        max_items,
         minimum,
         maximum,
         min_length,
         max_length,
-        min_items,
-        max_items,
+        pattern,
     })
 }
 
-fn empty_node(schema_path: String) -> Node {
-    Node {
-        schema_path,
-        types: None,
-        enum_values: None,
-        const_value: None,
-        properties: None,
-        required: None,
-        additional_properties: AdditionalProperties::Unset,
-        items: None,
-        minimum: None,
-        maximum: None,
-        min_length: None,
-        max_length: None,
-        min_items: None,
-        max_items: None,
+/// Parse a single subschema keyword (object or boolean schema).
+fn parse_subschema(
+    obj: &Map<String, Value>,
+    key: &str,
+    schema_path: &str,
+) -> Result<Option<Box<Node>>, SchemaParseError> {
+    match obj.get(key) {
+        None => Ok(None),
+        Some(v @ (Value::Object(_) | Value::Bool(_))) => {
+            Ok(Some(Box::new(compile(v, &format!("{schema_path}/{key}"))?)))
+        }
+        Some(other) => Err(parse_err(
+            schema_path,
+            format!(
+                "`{key}` must be a schema (object or boolean), got {}",
+                value_label(other)
+            ),
+        )),
+    }
+}
+
+/// Parse a non-empty array of subschemas (`allOf`, `anyOf`, `oneOf`).
+fn parse_subschema_array(
+    obj: &Map<String, Value>,
+    key: &str,
+    schema_path: &str,
+) -> Result<Option<Vec<Node>>, SchemaParseError> {
+    match obj.get(key) {
+        None => Ok(None),
+        Some(Value::Array(arr)) if !arr.is_empty() => {
+            let mut out = Vec::with_capacity(arr.len());
+            for (i, item) in arr.iter().enumerate() {
+                let sub_path = format!("{schema_path}/{key}/{i}");
+                out.push(compile(item, &sub_path)?);
+            }
+            Ok(Some(out))
+        }
+        Some(Value::Array(_)) => Err(parse_err(
+            schema_path,
+            format!("`{key}` must contain at least one schema"),
+        )),
+        Some(other) => Err(parse_err(
+            schema_path,
+            format!(
+                "`{key}` must be a non-empty array of schemas, got {}",
+                value_label(other)
+            ),
+        )),
     }
 }
 
@@ -503,12 +637,15 @@ fn parse_usize(
 ) -> Result<Option<usize>, SchemaParseError> {
     match v {
         None => Ok(None),
-        Some(Value::Number(n)) => n.as_u64().map(|u| u as usize).map(Some).ok_or_else(|| {
-            parse_err(
-                schema_path,
-                format!("`{key}` must be a non-negative integer, got {n}"),
-            )
-        }),
+        Some(Value::Number(n)) => {
+            let u = n.as_u64().ok_or_else(|| {
+                parse_err(
+                    schema_path,
+                    format!("`{key}` must be a non-negative integer, got {n}"),
+                )
+            })?;
+            Ok(Some(u as usize))
+        }
         Some(other) => Err(parse_err(
             schema_path,
             format!(
@@ -517,6 +654,15 @@ fn parse_usize(
             ),
         )),
     }
+}
+
+fn compile_regex(
+    pattern: &str,
+    schema_path: &str,
+    key: &str,
+) -> Result<regex::Regex, SchemaParseError> {
+    regex::Regex::new(pattern)
+        .map_err(|e| parse_err(schema_path, format!("`{key}` is not a valid regex: {e}")))
 }
 
 fn parse_err(schema_path: &str, message: impl Into<String>) -> SchemaParseError {
@@ -542,7 +688,6 @@ fn value_label(v: &Value) -> &'static str {
 }
 
 fn escape_pointer(segment: &str) -> String {
-    // RFC 6901: ~ becomes ~0, / becomes ~1.
     segment.replace('~', "~0").replace('/', "~1")
 }
 
@@ -550,7 +695,6 @@ fn escape_pointer(segment: &str) -> String {
 
 impl Node {
     fn check(&self, instance: &Value, instance_path: &str, out: &mut Vec<SchemaViolation>) {
-        // type
         if let Some(types) = &self.types {
             if types.is_empty() {
                 self.violation(
@@ -573,13 +717,10 @@ impl Node {
                     ),
                     out,
                 );
-                // Don't probe sub-keywords if the type is wrong —
-                // most of them assume a particular shape.
                 return;
             }
         }
 
-        // const
         if let Some(expected) = &self.const_value {
             if instance != expected {
                 self.violation(
@@ -591,10 +732,76 @@ impl Node {
             }
         }
 
-        // enum
         if let Some(values) = &self.enum_values {
             if !values.iter().any(|v| v == instance) {
                 self.violation(instance_path, "/enum", "value is not in `enum`", out);
+            }
+        }
+
+        // allOf collects violations from every branch, not just the first failure
+        if let Some(schemas) = &self.all_of {
+            for sub in schemas {
+                sub.check(instance, instance_path, out);
+            }
+        }
+
+        if let Some(schemas) = &self.any_of {
+            let passed = schemas.iter().any(|sub| {
+                let mut tmp = Vec::new();
+                sub.check(instance, instance_path, &mut tmp);
+                tmp.is_empty()
+            });
+            if !passed {
+                self.violation(
+                    instance_path,
+                    "/anyOf",
+                    "value does not match any of the anyOf schemas",
+                    out,
+                );
+            }
+        }
+
+        if let Some(schemas) = &self.one_of {
+            let count = schemas
+                .iter()
+                .filter(|sub| {
+                    let mut tmp = Vec::new();
+                    sub.check(instance, instance_path, &mut tmp);
+                    tmp.is_empty()
+                })
+                .count();
+            if count != 1 {
+                self.violation(
+                    instance_path,
+                    "/oneOf",
+                    format!("value matches {count} of the oneOf schemas, expected exactly 1"),
+                    out,
+                );
+            }
+        }
+
+        if let Some(sub) = &self.not {
+            let mut tmp = Vec::new();
+            sub.check(instance, instance_path, &mut tmp);
+            if tmp.is_empty() {
+                self.violation(
+                    instance_path,
+                    "/not",
+                    "value must not match the `not` schema",
+                    out,
+                );
+            }
+        }
+
+        if let Some(if_sub) = &self.if_schema {
+            let mut tmp = Vec::new();
+            if_sub.check(instance, instance_path, &mut tmp);
+            if tmp.is_empty() {
+                if let Some(then_sub) = &self.then_schema {
+                    then_sub.check(instance, instance_path, out);
+                }
+            } else if let Some(else_sub) = &self.else_schema {
+                else_sub.check(instance, instance_path, out);
             }
         }
 
@@ -626,12 +833,6 @@ impl Node {
             }
         }
 
-        let known: HashSet<&str> = self
-            .properties
-            .as_ref()
-            .map(|ps| ps.iter().map(|(k, _)| k.as_str()).collect())
-            .unwrap_or_default();
-
         if let Some(props) = &self.properties {
             for (name, sub) in props {
                 if let Some(v) = map.get(name) {
@@ -642,6 +843,11 @@ impl Node {
         }
 
         if matches!(self.additional_properties, AdditionalProperties::Forbidden) {
+            let known: HashSet<&str> = self
+                .properties
+                .as_ref()
+                .map(|ps| ps.iter().map(|(k, _)| k.as_str()).collect())
+                .unwrap_or_default();
             for name in map.keys() {
                 if !known.contains(name.as_str()) {
                     self.violation(
@@ -706,6 +912,16 @@ impl Node {
                 );
             }
         }
+        if let Some(re) = &self.pattern {
+            if !re.is_match(s) {
+                self.violation(
+                    instance_path,
+                    "/pattern",
+                    format!("string does not match pattern `{}`", re.as_str()),
+                    out,
+                );
+            }
+        }
     }
 
     fn check_number(&self, n: &Number, instance_path: &str, out: &mut Vec<SchemaViolation>) {
@@ -763,6 +979,8 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    // ---------- parse errors ----------
+
     #[test]
     fn parse_rejects_malformed_schema() {
         let bad = json!({"type": 42});
@@ -778,13 +996,98 @@ mod tests {
 
     #[test]
     fn parse_rejects_unsupported_keyword() {
-        // `pattern` is intentionally not supported in this minimal
-        // validator. We surface that at parse time so the agent
-        // sees the limitation rather than silently passing values
-        // that ought to fail.
-        let err = Schema::parse(json!({"type": "string", "pattern": ".+"})).unwrap_err();
-        assert!(err.message.contains("unsupported keyword `pattern`"));
+        // `uniqueItems` is outside the supported subset; the limit must
+        // surface at parse time rather than silently passing values it
+        // would otherwise constrain.
+        let err = Schema::parse(json!({"type": "array", "uniqueItems": true})).unwrap_err();
+        assert!(err.message.contains("unsupported keyword `uniqueItems`"));
     }
+
+    #[test]
+    fn parse_rejects_additional_properties_subschema_form() {
+        let err = Schema::parse(json!({"additionalProperties": {"type": "integer"}})).unwrap_err();
+        assert!(err.message.contains("subschema form is unsupported"));
+    }
+
+    #[test]
+    fn parse_rejects_invalid_regex() {
+        let err = Schema::parse(json!({"pattern": "["})).unwrap_err();
+        assert!(err.message.contains("pattern"));
+    }
+
+    #[test]
+    fn parse_rejects_empty_all_of() {
+        let err = Schema::parse(json!({"allOf": []})).unwrap_err();
+        assert!(err.message.contains("allOf"));
+    }
+
+    #[test]
+    fn parse_rejects_empty_any_of() {
+        let err = Schema::parse(json!({"anyOf": []})).unwrap_err();
+        assert!(err.message.contains("anyOf"));
+    }
+
+    #[test]
+    fn parse_rejects_empty_one_of() {
+        let err = Schema::parse(json!({"oneOf": []})).unwrap_err();
+        assert!(err.message.contains("oneOf"));
+    }
+
+    // ---------- type ----------
+
+    #[test]
+    fn validate_type_rejects_wrong_kind() {
+        let schema = Schema::parse(json!({"type": "object", "required": ["status"]})).unwrap();
+        assert!(schema.validate(json!({"status": "ok"})).is_ok());
+        assert!(schema.validate(json!(42)).is_err());
+    }
+
+    #[test]
+    fn validate_type_array_accepts_any_listed() {
+        let schema = Schema::parse(json!({"type": ["string", "null"]})).unwrap();
+        assert!(schema.validate(json!("hi")).is_ok());
+        assert!(schema.validate(json!(null)).is_ok());
+        assert!(schema.validate(json!(1)).is_err());
+    }
+
+    #[test]
+    fn validate_integer_accepts_whole_floats() {
+        let schema = Schema::parse(json!({"type": "integer"})).unwrap();
+        assert!(schema.validate(json!(1.0)).is_ok());
+        assert!(schema.validate(json!(1.5)).is_err());
+    }
+
+    #[test]
+    fn boolean_true_schema_accepts_anything() {
+        let schema = Schema::parse(json!(true)).unwrap();
+        assert!(schema.validate(json!(null)).is_ok());
+        assert!(schema.validate(json!({"a": [1, 2]})).is_ok());
+    }
+
+    #[test]
+    fn boolean_false_schema_rejects_everything() {
+        let schema = Schema::parse(json!(false)).unwrap();
+        assert!(schema.validate(json!(null)).is_err());
+        assert!(schema.validate(json!("anything")).is_err());
+    }
+
+    // ---------- enum / const ----------
+
+    #[test]
+    fn validate_enum_rejects_value_not_in_list() {
+        let schema = Schema::parse(json!({"enum": ["a", "b", "c"]})).unwrap();
+        assert!(schema.validate(json!("b")).is_ok());
+        assert!(schema.validate(json!("z")).is_err());
+    }
+
+    #[test]
+    fn validate_const_rejects_non_matching_value() {
+        let schema = Schema::parse(json!({"const": 42})).unwrap();
+        assert!(schema.validate(json!(42)).is_ok());
+        assert!(schema.validate(json!(43)).is_err());
+    }
+
+    // ---------- object ----------
 
     #[test]
     fn validate_passes_conforming_object() {
@@ -831,43 +1134,6 @@ mod tests {
     }
 
     #[test]
-    fn validate_arrays_with_items_schema() {
-        let schema = Schema::parse(json!({
-            "type": "array",
-            "items": { "type": "integer", "minimum": 0 },
-            "minItems": 1,
-        }))
-        .unwrap();
-        assert!(schema.validate(json!([1, 2, 3])).is_ok());
-        let violations = schema.validate(json!([])).unwrap_err();
-        assert!(violations
-            .iter()
-            .any(|v| v.schema_path.ends_with("/minItems")));
-        let violations = schema.validate(json!([0, -1])).unwrap_err();
-        assert!(violations.iter().any(|v| v.instance_path == "/1"));
-    }
-
-    #[test]
-    fn validate_enum_and_const() {
-        let enum_schema = Schema::parse(json!({"enum": ["a", "b", "c"]})).unwrap();
-        assert!(enum_schema.validate(json!("b")).is_ok());
-        assert!(enum_schema.validate(json!("z")).is_err());
-
-        let const_schema = Schema::parse(json!({"const": 42})).unwrap();
-        assert!(const_schema.validate(json!(42)).is_ok());
-        assert!(const_schema.validate(json!(43)).is_err());
-    }
-
-    #[test]
-    fn validate_string_length_bounds() {
-        let schema =
-            Schema::parse(json!({"type": "string", "minLength": 2, "maxLength": 4})).unwrap();
-        assert!(schema.validate(json!("ok")).is_ok());
-        assert!(schema.validate(json!("a")).is_err());
-        assert!(schema.validate(json!("toolong")).is_err());
-    }
-
-    #[test]
     fn validate_additional_properties_forbidden() {
         let schema = Schema::parse(json!({
             "type": "object",
@@ -880,36 +1146,195 @@ mod tests {
         assert!(violations.iter().any(|v| v.message.contains("`y`")));
     }
 
+    // ---------- array ----------
+
     #[test]
-    fn validate_integer_accepts_whole_floats() {
-        // JSON Schema treats `1.0` as integer-valid.
-        let schema = Schema::parse(json!({"type": "integer"})).unwrap();
-        assert!(schema.validate(json!(1.0)).is_ok());
-        assert!(schema.validate(json!(1.5)).is_err());
+    fn validate_items_schema_validates_each_element() {
+        let schema =
+            Schema::parse(json!({"type": "array", "items": {"type": "integer", "minimum": 0}}))
+                .unwrap();
+        assert!(schema.validate(json!([1, 2, 3])).is_ok());
+        let violations = schema.validate(json!([0, -1])).unwrap_err();
+        assert!(violations.iter().any(|v| v.instance_path == "/1"));
     }
 
     #[test]
-    fn validate_type_array_accepts_any_listed() {
-        let schema = Schema::parse(json!({"type": ["string", "null"]})).unwrap();
-        assert!(schema.validate(json!("hi")).is_ok());
-        assert!(schema.validate(json!(null)).is_ok());
-        assert!(schema.validate(json!(1)).is_err());
+    fn validate_min_items_requires_minimum_count() {
+        let schema = Schema::parse(json!({"type": "array", "minItems": 1})).unwrap();
+        assert!(schema.validate(json!([1])).is_ok());
+        let violations = schema.validate(json!([])).unwrap_err();
+        assert!(violations
+            .iter()
+            .any(|v| v.schema_path.ends_with("/minItems")));
     }
 
     #[test]
-    fn format_violations_renders_one_line_per_violation() {
+    fn validate_max_items_rejects_excess_count() {
+        let schema = Schema::parse(json!({"type": "array", "maxItems": 2})).unwrap();
+        assert!(schema.validate(json!([1, 2])).is_ok());
+        let violations = schema.validate(json!([1, 2, 3])).unwrap_err();
+        assert!(violations
+            .iter()
+            .any(|v| v.schema_path.ends_with("/maxItems")));
+    }
+
+    // ---------- string ----------
+
+    #[test]
+    fn validate_string_length_bounds() {
+        let schema =
+            Schema::parse(json!({"type": "string", "minLength": 2, "maxLength": 4})).unwrap();
+        assert!(schema.validate(json!("ok")).is_ok());
+        assert!(schema.validate(json!("a")).is_err());
+        assert!(schema.validate(json!("toolong")).is_err());
+    }
+
+    #[test]
+    fn validate_pattern_matches_string() {
+        let schema = Schema::parse(json!({"pattern": "^foo"})).unwrap();
+        assert!(schema.validate(json!("foobar")).is_ok());
+        let violations = schema.validate(json!("bar")).unwrap_err();
+        assert!(violations.iter().any(|v| v.schema_path.ends_with("/pattern")));
+    }
+
+    #[test]
+    fn validate_pattern_is_unanchored() {
+        let schema = Schema::parse(json!({"pattern": "foo"})).unwrap();
+        assert!(schema.validate(json!("barfoobar")).is_ok());
+    }
+
+    #[test]
+    fn validate_pattern_ignored_for_non_strings() {
+        let schema = Schema::parse(json!({"pattern": "foo"})).unwrap();
+        assert!(schema.validate(json!(42)).is_ok());
+    }
+
+    // ---------- number ----------
+
+    #[test]
+    fn validate_minimum_and_maximum_bounds() {
+        let schema = Schema::parse(json!({"minimum": 0, "maximum": 10})).unwrap();
+        assert!(schema.validate(json!(5)).is_ok());
+        assert!(schema.validate(json!(-1)).is_err());
+        assert!(schema.validate(json!(11)).is_err());
+    }
+
+    // ---------- logical combinators ----------
+
+    #[test]
+    fn validate_all_of_passes_when_all_schemas_match() {
         let schema = Schema::parse(json!({
-            "type": "object",
-            "properties": { "x": { "type": "string" } },
-            "required": ["x", "y"],
+            "allOf": [
+                { "type": "object" },
+                { "required": ["name"] },
+            ]
         }))
         .unwrap();
-        let violations = schema.validate(json!({"x": 1})).unwrap_err();
-        let formatted = format_violations(&violations);
-        assert!(formatted.starts_with("Schema validation failed:\n"));
-        let body = formatted.trim_start_matches("Schema validation failed:\n");
-        assert!(body.lines().all(|line| line.starts_with("- ")));
+        assert!(schema.validate(json!({"name": "alice"})).is_ok());
+        assert!(schema.validate(json!({})).is_err());
     }
+
+    #[test]
+    fn validate_all_of_collects_violations_from_all_failing_schemas() {
+        let schema = Schema::parse(json!({
+            "allOf": [
+                { "required": ["a"] },
+                { "required": ["b"] },
+            ]
+        }))
+        .unwrap();
+        let violations = schema.validate(json!({})).unwrap_err();
+        assert!(violations.iter().any(|v| v.message.contains("`a`")));
+        assert!(violations.iter().any(|v| v.message.contains("`b`")));
+    }
+
+    #[test]
+    fn validate_any_of_passes_when_at_least_one_matches() {
+        let schema = Schema::parse(json!({
+            "anyOf": [
+                { "type": "string" },
+                { "type": "number" },
+            ]
+        }))
+        .unwrap();
+        assert!(schema.validate(json!("hello")).is_ok());
+        assert!(schema.validate(json!(42)).is_ok());
+        let violations = schema.validate(json!(null)).unwrap_err();
+        assert!(violations.iter().any(|v| v.schema_path.ends_with("/anyOf")));
+    }
+
+    #[test]
+    fn validate_one_of_requires_exactly_one_match() {
+        let schema = Schema::parse(json!({
+            "oneOf": [
+                { "type": "string" },
+                { "type": "number" },
+            ]
+        }))
+        .unwrap();
+        // Matches exactly one branch.
+        assert!(schema.validate(json!("hello")).is_ok());
+        assert!(schema.validate(json!(42)).is_ok());
+        // Matches neither branch.
+        let none = schema.validate(json!(true)).unwrap_err();
+        assert!(none.iter().any(|v| v.schema_path.ends_with("/oneOf")));
+
+        // A number matches both `number` and `minimum`, so oneOf fails.
+        let both = Schema::parse(json!({
+            "oneOf": [
+                { "type": "number" },
+                { "minimum": 0 },
+            ]
+        }))
+        .unwrap();
+        let violations = both.validate(json!(5)).unwrap_err();
+        assert!(violations.iter().any(|v| v.schema_path.ends_with("/oneOf")));
+    }
+
+    #[test]
+    fn validate_not_inverts_subschema() {
+        let schema = Schema::parse(json!({"not": {"type": "string"}})).unwrap();
+        assert!(schema.validate(json!(42)).is_ok());
+        let violations = schema.validate(json!("hello")).unwrap_err();
+        assert!(violations.iter().any(|v| v.schema_path.ends_with("/not")));
+    }
+
+    // ---------- if / then / else ----------
+
+    #[test]
+    fn validate_if_then_applies_then_when_if_passes() {
+        let schema = Schema::parse(json!({
+            "if":   { "type": "string" },
+            "then": { "minLength": 3 },
+        }))
+        .unwrap();
+        assert!(schema.validate(json!("hello")).is_ok());
+        assert!(schema.validate(json!("hi")).is_err());
+        assert!(schema.validate(json!(42)).is_ok());
+    }
+
+    #[test]
+    fn validate_if_then_else_selects_correct_branch() {
+        let schema = Schema::parse(json!({
+            "if":   { "type": "string" },
+            "then": { "minLength": 3 },
+            "else": { "minimum": 0 },
+        }))
+        .unwrap();
+        assert!(schema.validate(json!("hello")).is_ok());
+        assert!(schema.validate(json!("hi")).is_err()); // then fires, fails
+        assert!(schema.validate(json!(5)).is_ok());
+        assert!(schema.validate(json!(-1)).is_err()); // else fires, fails
+    }
+
+    #[test]
+    fn validate_if_without_then_else_has_no_effect() {
+        let schema = Schema::parse(json!({"if": {"type": "string"}})).unwrap();
+        assert!(schema.validate(json!("hello")).is_ok());
+        assert!(schema.validate(json!(42)).is_ok());
+    }
+
+    // ---------- decode fallback ----------
 
     #[test]
     fn validate_returns_a_conforming_value_unchanged() {
@@ -931,18 +1356,16 @@ mod tests {
             "required": ["status"],
         }))
         .unwrap();
-        // The agent double-encoded the object as a JSON string.
         let encoded = json!("{\"status\": \"ok\"}");
-        assert_eq!(schema.validate(encoded).unwrap(), json!({"status": "ok"}),);
+        assert_eq!(schema.validate(encoded).unwrap(), json!({"status": "ok"}));
     }
 
     #[test]
-    fn validate_returns_the_pre_decoding_violations_when_decoded_value_still_fails() {
+    fn validate_reports_string_type_violation_when_decoded_object_also_fails() {
+        // The string decodes to a valid object, but that object still fails
+        // `required`. The violation reported must be the outer /type error,
+        // not the inner /required, so the agent retry targets the real problem.
         let schema = Schema::parse(json!({"type": "object", "required": ["status"]})).unwrap();
-        // The string decodes to valid JSON, but the decoded object still
-        // violates the schema (no `status`). The caller must see the original
-        // violation about the string (`/type`), not one about the decoded
-        // object (`/required`), so the retry points at the real problem.
         let violations = schema.validate(json!("{\"other\": 1}")).unwrap_err();
         assert!(violations.iter().any(|v| v.schema_path.ends_with("/type")));
         assert!(!violations
@@ -951,31 +1374,28 @@ mod tests {
     }
 
     #[test]
-    fn validate_does_not_decode_a_non_string_value() {
+    fn validate_non_string_fails_type_check_without_decode_attempt() {
         let schema = Schema::parse(json!({"type": "object", "required": ["status"]})).unwrap();
-        // A number is not a string-encoding candidate; it fails as-is.
         assert!(schema.validate(json!(42)).is_err());
     }
 
+    // ---------- serde / clone ----------
+
     #[test]
-    fn clone_is_cheap() {
-        let schema = Schema::parse(json!({"type": "string"})).unwrap();
+    fn clone_shares_compiled_state() {
+        let schema = Schema::parse(json!({
+            "type": "object",
+            "properties": { "x": { "type": "string" } },
+            "required": ["x"],
+        }))
+        .unwrap();
         let cloned = schema.clone();
+        assert!(schema.validate(json!({"x": "hi"})).is_ok());
+        assert!(cloned.validate(json!({"x": "hi"})).is_ok());
+        assert!(schema.validate(json!({})).is_err());
+        assert!(cloned.validate(json!({})).is_err());
+        // The underlying compiled node is the same allocation (Arc-backed).
         assert!(Arc::ptr_eq(&schema.inner, &cloned.inner));
-    }
-
-    #[test]
-    fn boolean_true_schema_accepts_anything() {
-        let schema = Schema::parse(json!(true)).unwrap();
-        assert!(schema.validate(json!(null)).is_ok());
-        assert!(schema.validate(json!({"a": [1, 2]})).is_ok());
-    }
-
-    #[test]
-    fn boolean_false_schema_rejects_everything() {
-        let schema = Schema::parse(json!(false)).unwrap();
-        assert!(schema.validate(json!(null)).is_err());
-        assert!(schema.validate(json!("anything")).is_err());
     }
 
     #[test]
@@ -997,5 +1417,22 @@ mod tests {
     fn option_schema_deserializes_null_as_none() {
         let none: Option<Schema> = serde_json::from_value(Value::Null).unwrap();
         assert!(none.is_none());
+    }
+
+    // ---------- format_violations (agent-facing feedback) ----------
+
+    #[test]
+    fn format_violations_renders_one_line_per_violation() {
+        let schema = Schema::parse(json!({
+            "type": "object",
+            "properties": { "x": { "type": "string" } },
+            "required": ["x", "y"],
+        }))
+        .unwrap();
+        let violations = schema.validate(json!({"x": 1})).unwrap_err();
+        let formatted = format_violations(&violations);
+        assert!(formatted.starts_with("Schema validation failed:\n"));
+        let body = formatted.trim_start_matches("Schema validation failed:\n");
+        assert!(body.lines().all(|line| line.starts_with("- ")));
     }
 }

@@ -97,9 +97,7 @@ pub(super) async fn run(context: &mut LoopContext<'_>, messages: Vec<Message>) -
                             message: e.to_string(),
                         },
                     );
-                    let _ = context
-                        .ticket_system
-                        .set_failed(&context.ticket_key);
+                    let _ = context.ticket_system.set_failed(&context.ticket_key);
                     return Action::Replay;
                 }
             },
@@ -112,9 +110,7 @@ pub(super) async fn run(context: &mut LoopContext<'_>, messages: Vec<Message>) -
                         message: e.to_string(),
                     },
                 );
-                let _ = context
-                    .ticket_system
-                    .set_failed(&context.ticket_key);
+                let _ = context.ticket_system.set_failed(&context.ticket_key);
                 return Action::Replay;
             }
         }
