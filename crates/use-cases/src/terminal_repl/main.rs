@@ -261,7 +261,7 @@ async fn main() {
                 if tickets
                     .tickets()
                     .iter()
-                    .any(|t| t.key == k && t.status.to_string() == "in_progress") =>
+                    .any(|t| t.key == k && t.is_in_progress()) =>
             {
                 tickets.reply(k, payload);
                 k.to_string()
@@ -492,20 +492,9 @@ fn window_usage_suffix(window: Option<u64>, last_input: &AtomicU64) -> String {
 /// carrying a tool call doesn't count: tool execution is still pending
 /// and the prompt would race the user against the loop.
 async fn wait_for_assistant_pause(tickets: &TicketSystem, key: &str) {
-    loop {
-        match tickets.get_ticket(key) {
-            None => return,
-            Some(t) if is_terminal(&t) => return,
-            Some(t) if is_paused_on_text(&t) => return,
-            _ => {}
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-    }
-}
-
-fn is_terminal(ticket: &Ticket) -> bool {
-    let s = ticket.status.to_string();
-    s == "finished" || s == "failed"
+    tickets
+        .wait_for_ticket(|t| t.key == key && (t.is_resolved() || is_paused_on_text(t)))
+        .await;
 }
 
 fn is_paused_on_text(ticket: &Ticket) -> bool {
@@ -559,10 +548,7 @@ impl Style {
 /// any orphan Todo left by an interrupted `/new <message>`.
 fn fail_stale_chats(tickets: &TicketSystem, label: &str) -> usize {
     let stale: Vec<String> = tickets
-        .find_tickets(|t| {
-            let pending = t.status.to_string() == "in_progress" || t.status.to_string() == "todo";
-            pending && t.labels.iter().any(|l| l == label)
-        })
+        .find_tickets(|t| t.is_pending() && t.has_label(label))
         .iter()
         .map(|t| t.key.clone())
         .collect();

@@ -130,6 +130,21 @@ impl Ticket {
         self.status == Status::Finished
     }
 
+    /// True while an agent holds the ticket.
+    pub fn is_in_progress(&self) -> bool {
+        self.status == Status::InProgress
+    }
+
+    /// True while the ticket is still in flight: `Todo` or `InProgress`.
+    pub fn is_pending(&self) -> bool {
+        matches!(self.status, Status::Todo | Status::InProgress)
+    }
+
+    /// True once the ticket reached a terminal state: `Finished` or `Failed`.
+    pub fn is_resolved(&self) -> bool {
+        matches!(self.status, Status::Finished | Status::Failed)
+    }
+
     /// Reduce the transcript to just `summary_text`: every non-system
     /// reply is dropped and a single `user` reply carrying
     /// `summary_text` is appended. System-author replies (the system
@@ -432,6 +447,46 @@ mod tests {
         for status in [Status::Todo, Status::InProgress, Status::Failed] {
             t.status = status;
             assert!(!t.is_finished(), "expected !is_finished for {status:?}");
+        }
+    }
+
+    #[test]
+    fn is_in_progress_true_only_while_claimed() {
+        let mut t = Ticket::new("x");
+        t.status = Status::InProgress;
+        assert!(t.is_in_progress());
+        for status in [Status::Todo, Status::Finished, Status::Failed] {
+            t.status = status;
+            assert!(
+                !t.is_in_progress(),
+                "expected !is_in_progress for {status:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn is_pending_true_for_todo_and_in_progress() {
+        let mut t = Ticket::new("x");
+        for status in [Status::Todo, Status::InProgress] {
+            t.status = status;
+            assert!(t.is_pending(), "expected is_pending for {status:?}");
+        }
+        for status in [Status::Finished, Status::Failed] {
+            t.status = status;
+            assert!(!t.is_pending(), "expected !is_pending for {status:?}");
+        }
+    }
+
+    #[test]
+    fn is_resolved_true_for_finished_and_failed() {
+        let mut t = Ticket::new("x");
+        for status in [Status::Finished, Status::Failed] {
+            t.status = status;
+            assert!(t.is_resolved(), "expected is_resolved for {status:?}");
+        }
+        for status in [Status::Todo, Status::InProgress] {
+            t.status = status;
+            assert!(!t.is_resolved(), "expected !is_resolved for {status:?}");
         }
     }
 }

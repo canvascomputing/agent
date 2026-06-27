@@ -154,7 +154,7 @@ fn print_research_outcome(tickets: &TicketSystem, outcome: &Outcome) {
             let all = tickets.tickets();
             let researcher_findings: Vec<_> = all
                 .iter()
-                .filter(|t| t.status.to_string() == "finished")
+                .filter(|t| t.is_finished())
                 .filter(|t| !t.labels.iter().any(|l| l == "report"))
                 .filter_map(|t| {
                     t.result
@@ -186,14 +186,8 @@ enum Outcome {
 async fn wait_for_outcome(tickets: &TicketSystem) -> Outcome {
     use std::time::Duration;
 
-    let report_ticket = || {
-        tickets.find_ticket(|t| {
-            t.labels.iter().any(|l| l == "report") && t.status.to_string() == "finished"
-        })
-    };
-    let pending = || {
-        tickets.count_tickets(|t| matches!(t.status.to_string().as_str(), "todo" | "in_progress"))
-    };
+    let report_ticket = || tickets.find_ticket(|t| t.has_label("report") && t.is_finished());
+    let pending = || tickets.count_tickets(|t| t.is_pending());
 
     loop {
         if tickets.is_cancelled() {

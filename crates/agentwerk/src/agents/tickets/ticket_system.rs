@@ -677,6 +677,41 @@ impl TicketSystem {
             .filter_map(|t| t.result.and_then(|v| serde_json::from_value(v).ok()))
             .collect()
     }
+
+    /// Earliest finished ticket carrying `label`, with its result
+    /// deserialized into `T`. `None` when no finished ticket has the
+    /// label or the result fails to deserialize — matches the
+    /// skip-on-mismatch precedent of [`Self::collect_results_by_label`].
+    pub fn result_by_label<T>(&self, label: &str) -> Option<T>
+    where
+        T: serde::de::DeserializeOwned,
+    {
+        self.find_ticket(|t| t.is_finished() && t.has_label(label))
+            .and_then(|t| t.result)
+            .and_then(|v| serde_json::from_value(v).ok())
+    }
+
+    /// Resolve to the earliest ticket matching `predicate`, polling every
+    /// ~50 ms. Resolves to `None` if the run stops (cancel, policy, or
+    /// clean drain) before any ticket matches. Call after [`Self::start`].
+    ///
+    /// The predicate runs while `self.tickets` is locked (via
+    /// `find_ticket`); it MUST NOT call other `TicketSystem` methods that
+    /// lock the same `Mutex`: deadlock.
+    pub async fn wait_for_ticket<F>(&self, predicate: F) -> Option<Ticket>
+    where
+        F: Fn(&Ticket) -> bool,
+    {
+        loop {
+            if let Some(ticket) = self.find_ticket(&predicate) {
+                return Some(ticket);
+            }
+            if self.stop_signal.lock().unwrap().load(Ordering::Relaxed) {
+                return None;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -934,6 +969,62 @@ mod tests {
         sys.set_finished(&key).unwrap();
         let hits: Vec<serde_json::Value> = sys.collect_results_by_label("missing");
         assert!(hits.is_empty());
+    }
+
+    #[test]
+    fn result_by_label_returns_earliest_finished_match() {
+        let (sys, _tmp) = test_system();
+        sys.ticket(Ticket::new("a").label("analysis"));
+        sys.ticket(Ticket::new("b").label("analysis"));
+        let key_a = sys
+            .claim(|t| t.task == serde_json::json!("a"), "agent")
+            .unwrap();
+        sys.set_result(&key_a, serde_json::json!({"score": 7}))
+            .unwrap();
+        sys.set_finished(&key_a).unwrap();
+        let key_b = sys
+            .claim(|t| t.task == serde_json::json!("b"), "agent")
+            .unwrap();
+        sys.set_result(&key_b, serde_json::json!({"score": 9}))
+            .unwrap();
+        sys.set_finished(&key_b).unwrap();
+        #[derive(serde::Deserialize, Debug, PartialEq)]
+        struct Finding {
+            score: i32,
+        }
+        let hit: Option<Finding> = sys.result_by_label("analysis");
+        assert_eq!(hit, Some(Finding { score: 7 }));
+    }
+
+    #[test]
+    fn result_by_label_none_when_no_finished_label() {
+        let (sys, _tmp) = test_system();
+        sys.ticket(Ticket::new("x").label("other"));
+        let hit: Option<serde_json::Value> = sys.result_by_label("analysis");
+        assert!(hit.is_none());
+    }
+
+    #[tokio::test]
+    async fn wait_for_ticket_resolves_when_ticket_matches() {
+        let (sys, _tmp) = test_system();
+        let key = sys.task("work");
+        let writer = Arc::clone(&sys);
+        let claimed = key.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(30)).await;
+            attach_done_result(&writer, &claimed, "done");
+        });
+        let found = sys.wait_for_ticket(|t| t.is_finished()).await;
+        assert_eq!(found.map(|t| t.key), Some(key));
+    }
+
+    #[tokio::test]
+    async fn wait_for_ticket_none_after_cancel() {
+        let (sys, _tmp) = test_system();
+        sys.task("never matches");
+        sys.cancel();
+        let found = sys.wait_for_ticket(|t| t.is_finished()).await;
+        assert!(found.is_none());
     }
 
     #[test]

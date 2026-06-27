@@ -214,7 +214,7 @@ let answer = tickets.last_result();
 | `cancel()` | Cancel the run. |
 | `finish_reason()` | Return why the most recent `finish()` returned: `Drained`, `PolicyViolated(kind)`, or `Cancelled`. |
 
-To cancel when another task finishes, use `cancel_on(trigger)`. To cancel when an event matches a condition you supply, use `cancel_on_event(p)`. `is_cancelled()` reports external cancel only; a clean drain or a policy stop leaves it false. The same outcome is announced as `EventKind::RunFinished { reason }` for subscribers attached via `on_event`. See [`TicketSystem`](https://docs.rs/agentwerk/latest/agentwerk/agents/tickets/struct.TicketSystem.html).
+To cancel when another task finishes, use `cancel_on(trigger)`. To cancel when an event matches a condition you supply, use `cancel_on_event(p)`. To block until one ticket matches a predicate rather than draining the whole queue, use `wait_for_ticket(p).await`. `is_cancelled()` reports external cancel only; a clean drain or a policy stop leaves it false. The same outcome is announced as `EventKind::RunFinished { reason }` for subscribers attached via `on_event`. See [`TicketSystem`](https://docs.rs/agentwerk/latest/agentwerk/agents/tickets/struct.TicketSystem.html).
 
 ### Reading results
 
@@ -239,7 +239,7 @@ for ticket in tickets.tickets() {
 | `tickets()` | Return every ticket in creation order, with status, payload, and metadata. |
 | `find_ticket(predicate)` | Return the earliest ticket matching the predicate. |
 
-More query methods on [`TicketSystem`](https://docs.rs/agentwerk/latest/agentwerk/agents/tickets/struct.TicketSystem.html): `get_ticket`, `first_ticket`, `last_ticket`, `search_tickets`, `find_tickets`, `count_tickets`, `is_cancelled`.
+More query methods on [`TicketSystem`](https://docs.rs/agentwerk/latest/agentwerk/agents/tickets/struct.TicketSystem.html): `get_ticket`, `first_ticket`, `last_ticket`, `search_tickets`, `find_tickets`, `count_tickets`, `collect_results_by_label`, `result_by_label`, `is_cancelled`.
 
 ### Inspecting tickets
 
@@ -253,7 +253,7 @@ let ticket = tickets.find_ticket(|t| t.has_label("analysis")).unwrap();
 let report: Report = serde_json::from_value(ticket.result.clone().unwrap()).unwrap();
 ```
 
-See [`Ticket`](https://docs.rs/agentwerk/latest/agentwerk/agents/tickets/struct.Ticket.html) for the full field list (`key`, `status`, `result`, `replies`, `labels`, `parent`, and the four lifecycle timestamps).
+See [`Ticket`](https://docs.rs/agentwerk/latest/agentwerk/agents/tickets/struct.Ticket.html) for the full field list (`key`, `status`, `result`, `replies`, `labels`, `parent`, and the four lifecycle timestamps) and the status predicates that read better than comparing `status` directly: `is_finished`, `is_in_progress`, `is_pending`, `is_resolved`, `has_label`.
 
 ### Policies
 
