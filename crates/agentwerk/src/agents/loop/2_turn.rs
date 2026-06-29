@@ -349,7 +349,7 @@ mod tests {
     use crate::agents::tickets::{Status, TicketSystem};
     use crate::agents::Knowledge;
     use crate::providers::Provider;
-    use crate::tools::ManageTicketsTool;
+    use crate::tools::{FinishTicketTool, HandoverTicketTool, ManageTicketsTool};
 
     // Run lifecycle
 
@@ -386,6 +386,48 @@ mod tests {
 
         assert_eq!(tickets.results().len(), 2);
         assert_eq!(tickets.last_result().as_deref(), Some("b-done"));
+    }
+
+    #[tokio::test]
+    async fn finish_waits_through_handover_chain() {
+        // alice hands TICKET-1 off to bob. The handover inserts the child
+        // before finishing the parent, so finish() must not observe an
+        // empty queue in between and drain the chain early.
+        let results_dir = crate::test_util::TempDir::new().unwrap();
+        let provider = MockProvider::with_results(vec![
+            Ok(handover_response("bob", "continue", "alice-done")),
+            Ok(write_result_response("bob-done")),
+        ]);
+        let tickets = TicketSystem::new();
+        tickets
+            .dir(results_dir.path().to_path_buf())
+            .max_request_retries(0)
+            .request_retry_delay(Duration::from_millis(1));
+        for name in ["alice", "bob"] {
+            tickets.agent(
+                Agent::new()
+                    .name(name)
+                    .provider(Arc::clone(&provider) as Arc<dyn Provider>)
+                    .model("mock")
+                    .role("test")
+                    .tool(HandoverTicketTool)
+                    .tool(FinishTicketTool)
+                    .build(),
+            );
+        }
+
+        tickets.start();
+        tickets.task_labeled("a", "alice");
+
+        tokio::time::timeout(Duration::from_secs(5), tickets.finish())
+            .await
+            .expect("finish did not finish within 5s");
+
+        assert_eq!(tickets.results().len(), 2);
+        assert_eq!(
+            tickets.get_ticket("TICKET-2").unwrap().status,
+            Status::Finished
+        );
     }
 
     #[tokio::test]

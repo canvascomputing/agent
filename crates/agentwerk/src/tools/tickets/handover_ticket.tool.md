@@ -7,7 +7,7 @@ Finish the current ticket and hand follow-up work to another agent in one atomic
 
 - Operates on your current ticket; there is no `key` parameter. Call once, when the work is done and the next turn belongs to another agent.
 - `to` labels the child: an agent name pins it to that agent, a scope label routes it to any agent in that scope.
-- `result` is a non-empty plain-text summary of your work (`null` or empty is rejected); `task` is the child's plain-text instruction.
+- `result` is your final answer for the current ticket: any JSON value, validated against this ticket's own schema (like `finish_ticket`); when this ticket has no schema, any value is accepted (`null` or an empty string is rejected). `task` is the child's plain-text instruction.
 - An optional `schema` rides along to the child, whose result must then validate against it. A schema failure on your own `result` counts toward `max_schema_retries`, and the child is NOT created.
 
 ## When NOT to use
@@ -30,8 +30,7 @@ Finish the current ticket and hand follow-up work to another agent in one atomic
       "description": "Body of the child ticket as a plain-text instruction. MUST be a non-empty string. Describe what the receiving agent should do next. Reserved placeholders `{parent_key}` and `{parent_result}` are substituted at handover time with the finishing ticket's key and result string; unknown `{name}` placeholders pass through verbatim."
     },
     "result": {
-      "type": "string",
-      "description": "Final answer for the current ticket as a non-empty plain-text string summarising your work before the handover."
+      "description": "Final answer for the current ticket before the handover: any JSON value, validated against this ticket's own schema. A plain-text summary when this ticket has no schema. `null` or an empty string is rejected."
     },
     "schema": {
       "type": "object",

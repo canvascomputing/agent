@@ -7,8 +7,7 @@
 use serde_json::Value;
 
 use crate::agents::tickets::{Status, Ticket, TicketError, TicketSystem};
-use crate::persistence::{Append, Results};
-use crate::schemas::{format_violations, Schema};
+use crate::schemas::Schema;
 
 use super::tool::{ToolContext, ToolResult};
 
@@ -338,56 +337,13 @@ fn action_edit(ticket_system: &TicketSystem, input: &Value, ctx: &ToolContext) -
     }
 }
 
-/// Validate `result` against the ticket's schema (or against the
-/// "non-empty string" rule when there is no schema), append an NDJSON
-/// `{agent, ticket, result}` line to the configured results directory,
-/// attach the payload to the ticket, and transition the ticket to
-/// `Finished`. The `agent` field is taken from the calling context; the
-/// `ticket` field is the resolved key. Shared by `FinishTicketTool` and
-/// the loop's terminal-reply path.
-pub(super) fn write_result(
-    ticket_system: &TicketSystem,
-    ctx: &ToolContext,
-    key: &str,
-    result: Value,
-) -> ToolResult {
-    let agent = match ctx.agent_name_str() {
-        Some(a) => a.to_string(),
-        None => {
-            return ToolResult::error("No agent_name set on this tool context");
-        }
-    };
-
-    // Validate against the ticket's schema, decoding a result an agent
-    // double-encoded as a JSON string so the stored value is the object.
-    let schema = ticket_system.get_ticket(key).and_then(|t| t.schema.clone());
-    let result = match schema.as_ref() {
-        Some(schema) => match schema.validate(result) {
-            Ok(normalized) => normalized,
-            Err(violations) => return ToolResult::schema_error(format_violations(&violations)),
-        },
-        None => result,
-    };
-
-    let log_line = serde_json::json!({
-        "agent": agent,
-        "ticket": key,
-        "result": result,
-    });
-
-    let target_dir = ticket_system.dir_value();
-    {
-        let _guard = finish_ticket::results_write_lock().lock().unwrap();
-        if let Err(e) = Results::append(&target_dir, &log_line) {
-            return ToolResult::error(format!(
-                "Cannot write result to {}: {e}",
-                target_dir.display()
-            ));
-        }
-    }
-
-    if let Err(e) = ticket_system.set_result(key, result) {
-        return ToolResult::error(ticket_error_message(e));
+/// Validate `result` against the ticket's schema, append an NDJSON
+/// `{ticket, result}` line to the configured results directory, attach
+/// the payload to the ticket, and transition the ticket to `Finished`.
+/// The `ticket` field is the resolved key. Called by `FinishTicketTool`.
+pub(super) fn write_result(ticket_system: &TicketSystem, key: &str, result: Value) -> ToolResult {
+    if let Err(violations) = ticket_system.set_result(key, result) {
+        return ToolResult::schema_error(violations.to_string());
     }
     match ticket_system.set_finished(key) {
         Ok(()) => ToolResult::success(format!("Ticket {key} marked finished")),

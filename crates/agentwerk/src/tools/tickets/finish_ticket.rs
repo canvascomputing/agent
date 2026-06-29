@@ -5,15 +5,9 @@
 
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
 
 use serde_json::Value;
-
-static RESULTS_WRITE_LOCK: Mutex<()> = Mutex::new(());
-
-pub(super) fn results_write_lock() -> &'static Mutex<()> {
-    &RESULTS_WRITE_LOCK
-}
 
 use crate::providers::ProviderResult;
 
@@ -76,7 +70,7 @@ impl ToolLike for FinishTicketTool {
                 Err(e) => return Ok(e),
             };
             let result = input.get("result").cloned().unwrap_or(Value::Null);
-            Ok(write_result(&ticket_system, ctx, &key, result))
+            Ok(write_result(&ticket_system, &key, result))
         })
     }
 }
@@ -137,7 +131,6 @@ mod tests {
         let log = std::fs::read_to_string(dir.path().join("results.jsonl")).unwrap();
         let line = log.trim_end();
         let parsed: serde_json::Value = serde_json::from_str(line).unwrap();
-        assert_eq!(parsed["agent"], "alice");
         assert_eq!(parsed["ticket"], key.as_str());
         assert_eq!(parsed["result"], "the answer");
     }
@@ -319,10 +312,8 @@ mod tests {
         assert_eq!(lines.len(), 2);
         let first: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
         let second: serde_json::Value = serde_json::from_str(lines[1]).unwrap();
-        assert_eq!(first["agent"], "alice");
         assert_eq!(first["ticket"], key1.as_str());
         assert_eq!(first["result"], "from alice");
-        assert_eq!(second["agent"], "bob");
         assert_eq!(second["ticket"], key2.as_str());
         assert_eq!(second["result"], "from bob");
     }

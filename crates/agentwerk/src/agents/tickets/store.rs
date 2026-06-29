@@ -4,7 +4,8 @@
 
 use std::path::PathBuf;
 
-use crate::persistence::{Append, Persist, TicketEvents};
+use crate::persistence::{Append, Persist, Results, TicketEvents};
+use crate::schemas::SchemaViolations;
 
 use super::super::stats::TicketStats;
 use super::error::TicketError;
@@ -231,24 +232,43 @@ impl TicketSystem {
         }
     }
 
-    /// Attach a result payload to the ticket at `key`.
+    /// Validate `result` against the ticket's schema, append it to
+    /// `results.jsonl`, and store the validated result on the ticket,
+    /// which it returns. A result an agent double-encoded as a JSON
+    /// string is decoded so the stored value is the object. Does not
+    /// finish the ticket: the caller does.
     pub(crate) fn set_result(
         &self,
         key: &str,
         result: serde_json::Value,
-    ) -> Result<(), TicketError> {
+    ) -> Result<serde_json::Value, SchemaViolations> {
+        let schema = self
+            .tickets
+            .lock()
+            .unwrap()
+            .get(key)
+            .and_then(|t| t.schema.clone());
+        let result = match schema.as_ref() {
+            Some(schema) => schema.validate(result)?,
+            None => result,
+        };
         let ticket_copy = {
             let mut store = self.tickets.lock().unwrap();
-            let ticket = store
-                .get_mut(key)
-                .ok_or_else(|| TicketError::TicketMissing {
-                    key: key.to_string(),
-                })?;
-            ticket.result = Some(result);
-            ticket.clone()
+            store.get_mut(key).map(|ticket| {
+                ticket.result = Some(result.clone());
+                ticket.clone()
+            })
         };
-        let _ = ticket_copy.save(&self.dir_value());
-        Ok(())
+        // A missing ticket records nothing: no phantom results line, no save.
+        if let Some(ticket_copy) = ticket_copy {
+            let log_line = serde_json::json!({ "ticket": key, "result": result });
+            let _guard = self.results_log_lock.lock().unwrap();
+            // Both writes are best-effort: the result is already attached in
+            // memory, so a failed log or save is observational, not load-bearing.
+            let _ = Results::append(&self.dir_value(), &log_line);
+            let _ = ticket_copy.save(&self.dir_value());
+        }
+        Ok(result)
     }
 
     /// Collapse the ticket's transcript to `summary` and write the

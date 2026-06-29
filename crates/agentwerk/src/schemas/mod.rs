@@ -97,10 +97,10 @@ impl Schema {
     /// let violations = schema.validate(json!({})).unwrap_err();
     /// assert_eq!(violations[0].instance_path, "");
     /// ```
-    pub fn validate(&self, value: Value) -> Result<Value, Vec<SchemaViolation>> {
+    pub fn validate(&self, value: Value) -> Result<Value, SchemaViolations> {
         let violations = match self.check(&value) {
             Ok(()) => return Ok(value),
-            Err(v) => v,
+            Err(v) => SchemaViolations(v),
         };
 
         let Value::String(s) = &value else {
@@ -173,6 +173,32 @@ impl fmt::Display for SchemaViolation {
     }
 }
 
+/// Every violation from one [`Schema::validate`] call. Its `Display` is
+/// the agent-facing feedback a tool returns on a schema failure: a
+/// header followed by one line per violation. Derefs to the underlying
+/// slice for inspection.
+#[derive(Debug, Clone)]
+pub struct SchemaViolations(Vec<SchemaViolation>);
+
+impl std::ops::Deref for SchemaViolations {
+    type Target = [SchemaViolation];
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl fmt::Display for SchemaViolations {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Schema validation failed:")?;
+        for violation in &self.0 {
+            write!(f, "\n- {violation}")?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for SchemaViolations {}
+
 /// Schema compilation failure — the caller-supplied schema is itself
 /// invalid. Distinct from [`SchemaViolation`] (an instance failing a
 /// valid schema).
@@ -188,21 +214,6 @@ impl fmt::Display for SchemaParseError {
 }
 
 impl std::error::Error for SchemaParseError {}
-
-/// Format a slice of violations as a single model-facing error
-/// string — one violation per line, leading with the instance path.
-pub(crate) fn format_violations(violations: &[SchemaViolation]) -> String {
-    let mut out = String::from("Schema validation failed:\n");
-    for v in violations {
-        out.push_str("- ");
-        out.push_str(&v.to_string());
-        out.push('\n');
-    }
-    if out.ends_with('\n') {
-        out.pop();
-    }
-    out
-}
 
 // ---------- compiled schema tree ----------
 
@@ -350,7 +361,10 @@ fn compile(value: &Value, schema_path: &str) -> Result<Node, SchemaParseError> {
     let obj = match value {
         Value::Object(map) => map,
         Value::Bool(true) => {
-            return Ok(Node { schema_path: schema_path.to_string(), ..Node::default() });
+            return Ok(Node {
+                schema_path: schema_path.to_string(),
+                ..Node::default()
+            });
         }
         Value::Bool(false) => {
             // false schema rejects everything; model as empty types list.
@@ -1194,7 +1208,9 @@ mod tests {
         let schema = Schema::parse(json!({"pattern": "^foo"})).unwrap();
         assert!(schema.validate(json!("foobar")).is_ok());
         let violations = schema.validate(json!("bar")).unwrap_err();
-        assert!(violations.iter().any(|v| v.schema_path.ends_with("/pattern")));
+        assert!(violations
+            .iter()
+            .any(|v| v.schema_path.ends_with("/pattern")));
     }
 
     #[test]
@@ -1419,10 +1435,10 @@ mod tests {
         assert!(none.is_none());
     }
 
-    // ---------- format_violations (agent-facing feedback) ----------
+    // ---------- SchemaViolations display (agent-facing feedback) ----------
 
     #[test]
-    fn format_violations_renders_one_line_per_violation() {
+    fn violations_display_renders_one_line_per_violation() {
         let schema = Schema::parse(json!({
             "type": "object",
             "properties": { "x": { "type": "string" } },
@@ -1430,7 +1446,7 @@ mod tests {
         }))
         .unwrap();
         let violations = schema.validate(json!({"x": 1})).unwrap_err();
-        let formatted = format_violations(&violations);
+        let formatted = violations.to_string();
         assert!(formatted.starts_with("Schema validation failed:\n"));
         let body = formatted.trim_start_matches("Schema validation failed:\n");
         assert!(body.lines().all(|line| line.starts_with("- ")));

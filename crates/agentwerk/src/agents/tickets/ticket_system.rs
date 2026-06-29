@@ -109,6 +109,7 @@ pub struct TicketSystem {
     pub(super) event_handlers: Mutex<Vec<Arc<EventHandler>>>,
     pub(super) dir: Mutex<PathBuf>,
     pub(super) tickets_log_lock: Mutex<()>,
+    pub(super) results_log_lock: Mutex<()>,
     pub(super) join_handle: Mutex<Option<JoinHandle<()>>>,
 }
 
@@ -130,6 +131,7 @@ impl TicketSystem {
             event_handlers: Mutex::new(Vec::new()),
             dir: Mutex::new(PathBuf::from(".agentwerk")),
             tickets_log_lock: Mutex::new(()),
+            results_log_lock: Mutex::new(()),
             join_handle: Mutex::new(None),
         })
     }
@@ -192,6 +194,7 @@ impl TicketSystem {
             event_handlers: Mutex::new(Vec::new()),
             dir: Mutex::new(tickets_dir),
             tickets_log_lock: Mutex::new(()),
+            results_log_lock: Mutex::new(()),
             join_handle: Mutex::new(None),
         }))
     }

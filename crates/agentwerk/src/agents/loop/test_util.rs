@@ -102,6 +102,19 @@ pub fn write_result_value(result: serde_json::Value) -> ModelResponse {
     }
 }
 
+pub fn handover_response(to: &str, task: &str, result: &str) -> ModelResponse {
+    ModelResponse {
+        content: vec![ContentBlock::ToolUse {
+            id: "call-1".into(),
+            name: "handover_ticket".into(),
+            input: serde_json::json!({ "to": to, "task": task, "result": result }),
+        }],
+        status: ResponseStatus::ToolUse,
+        usage: TokenUsage::default(),
+        model: "mock".into(),
+    }
+}
+
 pub fn knowledge_write_response(slug: &str, summary: &str, content: &str) -> ModelResponse {
     ModelResponse {
         content: vec![ContentBlock::ToolUse {
