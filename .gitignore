@@ -5,3 +5,4 @@
 
 # Per-contributor integration-test env (see agentdocs/workflow.md).
 .env
+.env-local
