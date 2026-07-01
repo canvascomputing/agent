@@ -97,6 +97,11 @@ impl ToolLike for CodegrepTool {
                 }
             };
 
+            let constraints = match parse_constraints(&input, &pattern) {
+                Ok(constraints) => constraints,
+                Err(message) => return Ok(ToolResult::error(message)),
+            };
+
             let mut files = Vec::new();
             collect_files(&base, &glob_filter, &mut files);
             files.sort();
@@ -110,6 +115,9 @@ impl ToolLike for CodegrepTool {
                 let matches = codegrep::search(&pattern, &content);
                 let rel = relative_path(file, &base);
                 for codegrep_match in matches {
+                    if !satisfies_constraints(&codegrep_match, &constraints) {
+                        continue;
+                    }
                     let (line, col) = byte_to_line_col(&content, codegrep_match.loc.start);
                     let summary = render_summary(&codegrep_match.loc.substring);
                     let captures = render_captures(&codegrep_match.captures);
@@ -212,6 +220,56 @@ fn truncate_to_chars(text: &str, max_chars: usize) -> String {
     }
     let truncated: String = text.chars().take(max_chars).collect();
     format!("{truncated}...")
+}
+
+/// Compile `constraints` into `(metavariable, regex)` pairs, rejecting names the
+/// pattern does not capture and regexes that do not compile. Regex filtering lives
+/// here, in the tool, so the core matcher stays free of a regex backend.
+fn parse_constraints(
+    input: &Value,
+    pattern: &Pattern,
+) -> std::result::Result<Vec<(String, regex::Regex)>, String> {
+    let Some(items) = input["constraints"].as_array() else {
+        return Ok(Vec::new());
+    };
+    let names = pattern.metavariable_names();
+    let mut compiled = Vec::new();
+    for item in items {
+        let name = item["metavariable"]
+            .as_str()
+            .unwrap_or("")
+            .trim_start_matches('$');
+        let source = item["regex"].as_str().unwrap_or("");
+        if name.is_empty() || source.is_empty() {
+            return Err("each constraint needs a metavariable and a regex".to_string());
+        }
+        if !names.contains(name) {
+            return Err(format!(
+                "constraint references unknown metavariable ${name}"
+            ));
+        }
+        let regex = regex::Regex::new(source).map_err(|error| {
+            format!("invalid metavariable-regex constraint for ${name}: {error}")
+        })?;
+        compiled.push((name.to_string(), regex));
+    }
+    Ok(compiled)
+}
+
+/// Keep a match only when every constraint's named capture is present and its text
+/// matches the regex. An absent capture fails the match.
+fn satisfies_constraints(
+    codegrep_match: &codegrep::Match,
+    constraints: &[(String, regex::Regex)],
+) -> bool {
+    constraints.iter().all(|(name, regex)| {
+        codegrep_match
+            .captures
+            .iter()
+            .find(|(metavariable, _)| &metavariable.bare_name == name)
+            .map(|(_, loc)| regex.is_match(&loc.substring))
+            .unwrap_or(false)
+    })
 }
 
 #[cfg(test)]
@@ -407,5 +465,205 @@ mod tests {
         )
         .await;
         assert!(!output.contains("[$"), "output: {output}");
+    }
+
+    #[tokio::test]
+    async fn constraint_keeps_only_matches_whose_capture_satisfies_regex() {
+        let tmp = crate::test_util::TempDir::new().unwrap();
+        fs::write(
+            tmp.path().join("keys.rs"),
+            "let good = AKIAIOSFODNN7EXAMPLE;\nlet bad = AKIAshort;\n",
+        )
+        .unwrap();
+        let output = run(
+            &CodegrepTool,
+            &test_ctx(tmp.path()),
+            serde_json::json!({
+                "pattern": "$X",
+                "constraints": [{"metavariable": "X", "regex": "^AKIA[0-9A-Z]{16}$"}]
+            }),
+        )
+        .await;
+        assert!(output.contains("AKIAIOSFODNN7EXAMPLE"), "output: {output}");
+        assert!(!output.contains("AKIAshort"), "output: {output}");
+    }
+
+    #[tokio::test]
+    async fn returns_error_when_constraint_names_unknown_metavariable() {
+        let tmp = crate::test_util::TempDir::new().unwrap();
+        fs::write(
+            tmp.path().join("keys.rs"),
+            "let k = AKIAIOSFODNN7EXAMPLE;\n",
+        )
+        .unwrap();
+        let output = run(
+            &CodegrepTool,
+            &test_ctx(tmp.path()),
+            serde_json::json!({
+                "pattern": "$X",
+                "constraints": [{"metavariable": "NOPE", "regex": "^.*$"}]
+            }),
+        )
+        .await;
+        assert!(output.contains("unknown metavariable"), "output: {output}");
+    }
+
+    #[tokio::test]
+    async fn returns_error_when_constraint_regex_is_invalid() {
+        let tmp = crate::test_util::TempDir::new().unwrap();
+        fs::write(
+            tmp.path().join("keys.rs"),
+            "let k = AKIAIOSFODNN7EXAMPLE;\n",
+        )
+        .unwrap();
+        let output = run(
+            &CodegrepTool,
+            &test_ctx(tmp.path()),
+            serde_json::json!({
+                "pattern": "$X",
+                "constraints": [{"metavariable": "X", "regex": "["}]
+            }),
+        )
+        .await;
+        assert!(
+            output.contains("invalid metavariable-regex"),
+            "output: {output}"
+        );
+    }
+
+    #[tokio::test]
+    async fn constraint_filters_a_plain_metavar_capture() {
+        let tmp = crate::test_util::TempDir::new().unwrap();
+        fs::write(tmp.path().join("a.php"), "include('x.php');\nprint('y');\n").unwrap();
+        let output = run(
+            &CodegrepTool,
+            &test_ctx(tmp.path()),
+            serde_json::json!({
+                "pattern": "$FUNC(...)",
+                "constraints": [{"metavariable": "FUNC", "regex": "^(include|require|require_once)$"}]
+            }),
+        )
+        .await;
+        assert!(output.contains("include"), "output: {output}");
+        assert!(!output.contains("print"), "output: {output}");
+    }
+
+    #[tokio::test]
+    async fn constraint_accepts_a_capture_named_inside_brackets() {
+        let tmp = crate::test_util::TempDir::new().unwrap();
+        fs::write(tmp.path().join("a.rs"), "foo(secret123);\nfoo(public);\n").unwrap();
+        let output = run(
+            &CodegrepTool,
+            &test_ctx(tmp.path()),
+            serde_json::json!({
+                "pattern": "foo($X)",
+                "constraints": [{"metavariable": "X", "regex": "^secret"}]
+            }),
+        )
+        .await;
+        assert!(!output.contains("unknown metavariable"), "output: {output}");
+        assert!(output.contains("secret123"), "output: {output}");
+        assert!(!output.contains("public"), "output: {output}");
+    }
+
+    #[tokio::test]
+    async fn constraint_metavariable_accepts_a_leading_dollar() {
+        let tmp = crate::test_util::TempDir::new().unwrap();
+        fs::write(
+            tmp.path().join("keys.rs"),
+            "let g = AKIAIOSFODNN7EXAMPLE;\nlet b = AKIAshort;\n",
+        )
+        .unwrap();
+        let output = run(
+            &CodegrepTool,
+            &test_ctx(tmp.path()),
+            serde_json::json!({
+                "pattern": "$X",
+                "constraints": [{"metavariable": "$X", "regex": "^AKIA[0-9A-Z]{16}$"}]
+            }),
+        )
+        .await;
+        assert!(output.contains("AKIAIOSFODNN7EXAMPLE"), "output: {output}");
+        assert!(!output.contains("AKIAshort"), "output: {output}");
+    }
+
+    #[tokio::test]
+    async fn multiple_constraints_all_must_match() {
+        let tmp = crate::test_util::TempDir::new().unwrap();
+        fs::write(tmp.path().join("c.txt"), "aaa = bbb\naaa = ccc\n").unwrap();
+        let output = run(
+            &CodegrepTool,
+            &test_ctx(tmp.path()),
+            serde_json::json!({
+                "pattern": "$L = $R",
+                "constraints": [
+                    {"metavariable": "L", "regex": "^aaa$"},
+                    {"metavariable": "R", "regex": "^bbb$"}
+                ]
+            }),
+        )
+        .await;
+        assert!(output.contains("bbb"), "output: {output}");
+        assert!(!output.contains("ccc"), "output: {output}");
+    }
+
+    #[tokio::test]
+    async fn caseless_match_does_not_relax_a_case_sensitive_constraint() {
+        let tmp = crate::test_util::TempDir::new().unwrap();
+        fs::write(
+            tmp.path().join("k.rs"),
+            "let u = AKIAIOSFODNN7EXAMPLE;\nlet l = akiaiosfodnn7example;\n",
+        )
+        .unwrap();
+        let output = run(
+            &CodegrepTool,
+            &test_ctx(tmp.path()),
+            serde_json::json!({
+                "pattern": "$X",
+                "caseless": true,
+                "constraints": [{"metavariable": "X", "regex": "^AKIA[0-9A-Z]{16}$"}]
+            }),
+        )
+        .await;
+        assert!(output.contains("AKIAIOSFODNN7EXAMPLE"), "output: {output}");
+        assert!(!output.contains("akiaiosfodnn7example"), "output: {output}");
+    }
+
+    #[tokio::test]
+    async fn constraint_supports_regex_flags_classes_and_alternation() {
+        let tmp = crate::test_util::TempDir::new().unwrap();
+        fs::write(tmp.path().join("k.txt"), "id = SECRET123\nid = TOKEN45\n").unwrap();
+        let output = run(
+            &CodegrepTool,
+            &test_ctx(tmp.path()),
+            serde_json::json!({
+                "pattern": "id = $V",
+                "constraints": [{"metavariable": "V", "regex": "(?i)^(secret|token)\\d{3}$"}]
+            }),
+        )
+        .await;
+        assert!(output.contains("SECRET123"), "output: {output}");
+        assert!(!output.contains("TOKEN45"), "output: {output}");
+    }
+
+    #[tokio::test]
+    async fn constraint_filters_on_a_span_capture_text() {
+        let tmp = crate::test_util::TempDir::new().unwrap();
+        fs::write(
+            tmp.path().join("a.js"),
+            "exec(\"rm -rf /tmp\")\nexec(\"ls\")\n",
+        )
+        .unwrap();
+        let output = run(
+            &CodegrepTool,
+            &test_ctx(tmp.path()),
+            serde_json::json!({
+                "pattern": "exec(\"$...ARG\")",
+                "constraints": [{"metavariable": "ARG", "regex": "rm"}]
+            }),
+        )
+        .await;
+        assert!(output.contains("rm -rf"), "output: {output}");
+        assert!(!output.contains("\"ls\""), "output: {output}");
     }
 }

@@ -2,7 +2,7 @@
 
 use super::conf::Conf;
 use super::token::{self, Token};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Whether a capture comes from `$X` (one word) or `$...X` / `$....X`
 /// (a span). Short and long ellipsis variants share this kind because
@@ -54,6 +54,14 @@ impl Pattern {
     /// The configuration carried with this pattern.
     pub fn conf(&self) -> &Conf {
         &self.conf
+    }
+
+    /// Bare names of every metavariable in the pattern.
+    pub fn metavariable_names(&self) -> HashSet<String> {
+        let mut seen = HashMap::new();
+        // parse() already validated consistency, so this walk cannot error.
+        let _ = walk_metavars(&self.nodes, &mut seen);
+        seen.into_keys().collect()
     }
 }
 

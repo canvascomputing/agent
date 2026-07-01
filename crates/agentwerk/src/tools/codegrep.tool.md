@@ -13,6 +13,7 @@ Each match prints `<path>:<line>:<col>: <matched_text>` plus `[$NAME=value]` for
 - Do NOT use regex syntax. Character classes (`[a-z]`), quantifiers (`*`, `+`, `?`), and the wildcard `.` are plain characters here, not operators.
 - Pass the pattern exactly as written, with no backslash escaping: send `fn $NAME(...)`, never `fn \$NAME\(\)`; send `eval(`, never `eval\(`.
 - `$NAME` captures one word, `$...NAME` a span; reusing a name back-references it exactly. `...` spans tokens at one bracket level and stops at newlines; `....` crosses them.
+- `constraints` keep a match only when a named capture matches a regex (anchor with `^...$`); this is the one place regex applies, the pattern itself never does.
 
 ## When NOT to use
 
@@ -29,6 +30,7 @@ Each match prints `<path>:<line>:<col>: <matched_text>` plus `[$NAME=value]` for
 - `catch ($E) {}` (Java): empty catch blocks, to audit for swallowed errors.
 - `$X === $X` (JavaScript): a self-comparison bug; reusing `$X` forces both sides to be the same text.
 - `SELECT *` with `caseless: true` (SQL): a keyword search regardless of letter case.
+- `$X` with `constraints: [{ "metavariable": "X", "regex": "^AKIA[0-9A-Z]{16}$" }]`: an AWS access-key id, the whole token pinned to its shape.
 
 ## Schema
 
@@ -59,6 +61,24 @@ Each match prints `<path>:<line>:<col>: <matched_text>` plus `[$NAME=value]` for
     "max_results": {
       "type": "integer",
       "description": "Maximum number of matches to return (default: 100)."
+    },
+    "constraints": {
+      "type": "array",
+      "description": "Keep a match only when each named capture exists and its text matches the regex.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "metavariable": {
+            "type": "string",
+            "description": "Capture name to test, e.g. `REST` (leading `$` optional)."
+          },
+          "regex": {
+            "type": "string",
+            "description": "Regex the capture's text must match. Anchor with `^...$`. No backreferences or lookaround."
+          }
+        },
+        "required": ["metavariable", "regex"]
+      }
     }
   },
   "required": [
