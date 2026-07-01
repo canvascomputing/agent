@@ -639,6 +639,81 @@ fn bracket_balanced_call_pattern_fires_on_call_and_skips_assignment_to_same_name
     assert!(matches[0].loc.substring.starts_with("execSync("));
 }
 
+// Contract pins for the argument and quoted-value gotchas: a bare `$X` binds one
+// word, so it misses string literals and multi-token values; `(...)` and `$...X`
+// catch them.
+
+#[test]
+fn bare_metavar_argument_misses_a_string_literal_call() {
+    let matches = parse_and_search(&multiline(), "Command::new($X)", "Command::new(\"curl\")");
+    assert_eq!(matches.len(), 0);
+}
+
+#[test]
+fn ellipsis_argument_matches_a_string_literal_call() {
+    let matches = parse_and_search(&multiline(), "Command::new(...)", "Command::new(\"curl\")");
+    assert_eq!(matches.len(), 1);
+}
+
+#[test]
+fn bare_metavar_misses_quoted_multi_token_value() {
+    let matches = parse_and_search(&multiline(), "\"k\": $V", "\"k\": \"node x\"");
+    assert_eq!(matches.len(), 0);
+}
+
+#[test]
+fn span_metavar_in_quotes_matches_quoted_multi_token_value() {
+    let matches = parse_and_search(&multiline(), "\"k\": \"$...V\"", "\"k\": \"node x\"");
+    assert_eq!(matches.len(), 1);
+    assert_eq!(capture_value(&matches, "V"), Some("node x"));
+}
+
+// Gotchas the prompt teaches, across quote styles and config formats.
+
+#[test]
+fn bare_metavar_argument_misses_string_literals_across_quote_styles() {
+    for source in ["system(\"curl\")", "system('curl')", "system(`curl`)"] {
+        let matches = parse_and_search(&multiline(), "system($X)", source);
+        assert_eq!(matches.len(), 0, "should miss the literal: {source}");
+    }
+}
+
+#[test]
+fn ellipsis_argument_matches_string_literals_across_quote_styles() {
+    for source in ["system(\"curl\")", "system('curl')", "system(`curl`)"] {
+        let matches = parse_and_search(&multiline(), "system(...)", source);
+        assert_eq!(matches.len(), 1, "should match: {source}");
+    }
+}
+
+#[test]
+fn bare_metavar_misses_a_quoted_config_value_but_a_span_matches() {
+    let source = "\"postinstall\": \"node build.js\"";
+    assert_eq!(
+        parse_and_search(&multiline(), "\"postinstall\": $CMD", source).len(),
+        0
+    );
+    let span = parse_and_search(&multiline(), "\"postinstall\": \"$...CMD\"", source);
+    assert_eq!(span.len(), 1);
+    assert_eq!(capture_value(&span, "CMD"), Some("node build.js"));
+}
+
+#[test]
+fn two_dot_typo_matches_nothing_while_three_dots_match() {
+    assert_eq!(
+        parse_and_search(&multiline(), "fn $NAME(..)", "fn handler(arg) {}").len(),
+        0
+    );
+    assert_eq!(
+        parse_and_search(&multiline(), "$X.decode(..)", "data.decode(blob)").len(),
+        0
+    );
+    assert_eq!(
+        parse_and_search(&multiline(), "fn $NAME(...)", "fn handler(arg) {}").len(),
+        1
+    );
+}
+
 // Zero-width matches.
 
 #[test]

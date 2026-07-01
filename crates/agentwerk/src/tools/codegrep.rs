@@ -36,7 +36,8 @@ const SKIP_DIRS: &[&str] = &[".git", "target", "node_modules", "vendor"];
 /// structural query and can correct on its next turn instead of repeating it.
 const NO_MATCH_HINT: &str = "No matches. This is structural search, not regex: write the literal code \
 and use `$NAME` to capture an identifier, e.g. `fn $NAME(...)`. Regex syntax (`[a-z]`, `*`, `\\`) is \
-matched literally, so it will not match code.";
+matched literally, so it will not match code. Ellipsis is three dots `...` or four `....`; `..` is two \
+literal dots.";
 
 fn tool_file() -> &'static ToolFile {
     static FILE: OnceLock<ToolFile> = OnceLock::new();
@@ -134,11 +135,48 @@ impl ToolLike for CodegrepTool {
             }
 
             if output.is_empty() {
-                return Ok(ToolResult::success(NO_MATCH_HINT));
+                return Ok(ToolResult::success(match placeholder_hint(pattern_source) {
+                    Some(extra) => format!("{NO_MATCH_HINT}\n{extra}"),
+                    None => NO_MATCH_HINT.to_string(),
+                }));
             }
             Ok(ToolResult::success(output.join("\n")))
         })
     }
+}
+
+/// A pattern like `<call>(...)` is a placeholder the writer meant to fill with a
+/// real identifier; codegrep matched the literal `<`, the word, and `>`, which no
+/// code contains. When a no-match pattern carries such a token, name it so the
+/// next attempt substitutes the identifier instead of retrying variants. Only
+/// lowercase-led `<word>` tokens trigger it, so generics (`<T>`) are untouched
+/// and a real `<script>` that matched never reaches this path.
+fn placeholder_hint(pattern_source: &str) -> Option<String> {
+    let chars: Vec<char> = pattern_source.chars().collect();
+    for (i, &c) in chars.iter().enumerate() {
+        if c != '<' {
+            continue;
+        }
+        let start = i + 1;
+        if chars.get(start).is_none_or(|first| !first.is_ascii_lowercase()) {
+            continue;
+        }
+        let mut end = start;
+        while chars
+            .get(end)
+            .is_some_and(|w| w.is_ascii_lowercase() || w.is_ascii_digit() || *w == '_')
+        {
+            end += 1;
+        }
+        if chars.get(end) == Some(&'>') {
+            let word: String = chars[start..end].iter().collect();
+            return Some(format!(
+                "Note: `<{word}>` is not a placeholder. It matched the literal `<`, `{word}`, `>`, \
+which no code contains. Write the real identifier instead, e.g. `{word}(...)`."
+            ));
+        }
+    }
+    None
 }
 
 fn collect_files(dir: &Path, glob_filter: &Option<String>, results: &mut Vec<PathBuf>) {
@@ -364,6 +402,22 @@ mod tests {
         assert!(output.starts_with("No matches"), "output: {output}");
         // The miss should teach the metavariable form, not leave the model guessing.
         assert!(output.contains("$NAME"), "output: {output}");
+    }
+
+    #[tokio::test]
+    async fn no_match_on_angle_bracket_placeholder_names_the_real_identifier() {
+        let tmp = crate::test_util::TempDir::new().unwrap();
+        fs::write(tmp.path().join("a.go"), "func handler() { run() }\n").unwrap();
+        let output = run(
+            &CodegrepTool,
+            &test_ctx(tmp.path()),
+            serde_json::json!({"pattern": "<decode>(...)"}),
+        )
+        .await;
+        assert!(output.starts_with("No matches"), "output: {output}");
+        // The miss should point at the placeholder, not leave the model retrying it.
+        assert!(output.contains("`<decode>` is not a placeholder"), "output: {output}");
+        assert!(output.contains("decode(...)"), "output: {output}");
     }
 
     #[tokio::test]
