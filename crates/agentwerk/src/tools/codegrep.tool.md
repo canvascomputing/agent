@@ -10,11 +10,9 @@ To list things whose names you do not know in advance, capture them: the pattern
 Each match prints `<path>:<line>:<col>: <matched_text>` plus `[$NAME=value]` for captures (newlines shown as `\n`, long matches truncated); skips `.git`, `target`, `node_modules`, `vendor`. A pattern that matches nothing reports `No matches` with a reminder of the syntax.
 
 - Use when the match must ignore identifier names, whitespace, or argument shape; use `grep_tool` for a byte-for-byte literal. Restrict to a file or folder with `path`, or to a name pattern with `glob` (`*.rs`, `*.ts`); never put a file name in `pattern`.
-- Do NOT use regex syntax. Character classes (`[a-z]`), quantifiers (`*`, `+`, `?`), and the wildcard `.` are plain characters here, not operators.
-- Pass the pattern exactly as written. A backslash is a literal character here, not an escape, so escaping makes a pattern match nothing: write the punctuation plainly, like `fn $NAME(...)`.
-- `$NAME` captures one word, `$...NAME` a span; reusing a name back-references it exactly. `...` spans tokens at one bracket level and stops at newlines; `....` crosses them.
-- A metavariable's name is a label for whatever it captures, never a search term: `$...SECRET` matches any span, not the word `secret`. Anchor a pattern on literal code; a lone `$NAME` or `$...NAME` matches everything.
-- `constraints` keep a match only when a named capture matches a regex (anchor with `^...$`); this is the one place regex applies, the pattern itself never does.
+- `$NAME` captures one word, `$...NAME` a span; reusing a name back-references it exactly. `...` spans tokens at one bracket level and stops at newlines; `....` crosses them. A metavariable's name is a label for what it captures, never a search term (`$...SECRET` matches any span, not the word `secret`), so anchor every pattern on literal code.
+- Not a regex: a backslash, character class (`[a-z]`), quantifier (`*`, `+`, `?`), or wildcard `.` is a plain character here, matched literally. Pass the pattern exactly as written, like `fn $NAME(...)`.
+- Put a regex only in `constraints`, which keeps a match when a named capture matches it (anchor with `^...$`); the pattern itself never applies one.
 
 ## When NOT to use
 
