@@ -651,3 +651,50 @@ fn ellipsis_reports_empty_line_as_a_zero_width_match() {
     assert_eq!(empty.loc.length, 0);
     assert_eq!(empty.loc.substring, "");
 }
+
+// UTF-8 / multibyte encoding.
+
+#[test]
+fn span_backref_skips_a_candidate_whose_length_splits_a_multibyte_char() {
+    // Re-checking the backref starts at '→' with a 1-byte capture, so here_end lands
+    // inside the 3-byte char; the matcher must skip the split, not slice mid-char.
+    let matches = parse_and_search(&multiline(), "[$...A $...A]", "[x →x]");
+    assert_eq!(matches.len(), 0);
+}
+
+#[test]
+fn span_backref_matches_identical_multibyte_content() {
+    let matches = parse_and_search(&multiline(), "[$...A $...A]", "[é é]");
+    assert_eq!(matches.len(), 1);
+    assert_eq!(capture_value(&matches, "A"), Some("é"));
+}
+
+#[test]
+fn span_backref_rejects_content_differing_in_a_multibyte_char() {
+    let matches = parse_and_search(&multiline(), "[$...A $...A]", "[é à]");
+    assert_eq!(matches.len(), 0);
+}
+
+#[test]
+fn span_metavar_captures_multibyte_content_between_parens() {
+    let matches = parse_and_search(&multiline(), "($...A)", "(café)");
+    assert_eq!(matches.len(), 1);
+    assert_eq!(capture_value(&matches, "A"), Some("café"));
+}
+
+#[test]
+fn match_loc_reports_byte_offset_after_a_multibyte_prefix() {
+    let matches = parse_and_search(&multiline(), "x", "é x");
+    assert_eq!(matches.len(), 1);
+    // 'é' is two bytes, so the match starts at byte 3, not char index 2.
+    assert_eq!(matches[0].loc.start, 3);
+    assert_eq!(matches[0].loc.length, 1);
+    assert_eq!(matches[0].loc.substring, "x");
+}
+
+#[test]
+fn caseless_does_not_fold_non_ascii_case() {
+    let mut conf = multiline();
+    conf.caseless = true;
+    assert_eq!(parse_and_search(&conf, "É", "é").len(), 0);
+}

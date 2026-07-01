@@ -521,6 +521,11 @@ fn match_ellipsis_backref(
     if here_end > target.len() {
         return None;
     }
+    // here_end is byte arithmetic; if it splits a multibyte char the backref cannot
+    // align here, and the &str slices below would panic on a non-boundary index.
+    if !target.is_char_boundary(here_end) {
+        return None;
+    }
     if &target[here_start..here_end] != captured {
         return None;
     }
