@@ -7,7 +7,7 @@ use std::sync::Arc;
 use crate::agents::agent::Agent;
 use crate::agents::compaction as algo;
 use crate::agents::policy::Policies;
-use crate::agents::tickets::{policy_violated_kind, Reply, Status, TicketSystem};
+use crate::agents::tickets::{policy_violated_kind, Reply, Status, Ticket, TicketSystem};
 use crate::event::{CompactReason, EventKind, PolicyKind};
 use crate::providers::{AsUserMessage, Message, Model, RequestErrorKind};
 
@@ -90,20 +90,21 @@ pub(super) async fn start_turn<'a>(
 
     if context.is_none() {
         fn next_ticket_key(ticket_system: &Arc<TicketSystem>, agent: &Agent) -> Option<String> {
+            let claimable = |t: &Ticket| {
+                t.status == Status::Todo
+                    && agent.handles_labels(&t.labels)
+                    && !ticket_system.labels_cancelled(&t.labels)
+            };
+            let resumable = |t: &Ticket| {
+                t.status == Status::InProgress
+                    && t.labels.iter().any(|l| l == agent.get_name())
+                    && (t.is_waiting_for_response() || !agent.is_interactive())
+                    && !ticket_system.labels_cancelled(&t.labels)
+            };
+
             ticket_system
-                .claim(
-                    |t| t.status == Status::Todo && agent.handles_labels(&t.labels),
-                    agent.get_name(),
-                )
-                .or_else(|| {
-                    ticket_system
-                        .find_ticket(|t| {
-                            t.status == Status::InProgress
-                                && t.labels.iter().any(|l| l == agent.get_name())
-                                && (t.is_waiting_for_response() || !agent.is_interactive())
-                        })
-                        .map(|t| t.key.clone())
-                })
+                .claim(claimable, agent.get_name())
+                .or_else(|| ticket_system.find_ticket(resumable).map(|t| t.key.clone()))
         }
         let Some(ticket_key) = next_ticket_key(ticket_system, agent) else {
             tokio::time::sleep(POLL_INTERVAL).await;
@@ -164,6 +165,12 @@ pub(super) async fn start_turn<'a>(
         *context = None;
         return Action::Replay;
     };
+    // The pool was called off mid-flight: walk off, leaving the ticket InProgress
+    // (abandoned), the same way an external cancel leaves in-flight tickets.
+    if context_ref.ticket_system.labels_cancelled(&ticket.labels) {
+        *context = None;
+        return Action::Replay;
+    }
     let status = match ticket.status {
         Status::Finished => Some(EventKind::TicketFinished {
             key: context_ref.ticket_key.clone(),
@@ -691,6 +698,77 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(2), tickets.finish())
             .await
             .expect("run did not exit within 2s of cancel()");
+    }
+
+    #[tokio::test]
+    async fn cancel_label_keeps_that_pool_off_the_queue_while_others_run() {
+        let results_dir = crate::test_util::TempDir::new().unwrap();
+        let tickets = TicketSystem::new();
+        tickets
+            .dir(results_dir.path().to_path_buf())
+            .max_request_retries(0)
+            .request_retry_delay(Duration::from_millis(1));
+
+        let analyst = MockProvider::with_results(vec![Ok(write_result_response("analyzed"))]);
+        let researcher = MockProvider::with_results(vec![Ok(write_result_response("hunted"))]);
+        tickets.agent(
+            Agent::new()
+                .name("analyst")
+                .label("analysis")
+                .provider(analyst as Arc<dyn Provider>)
+                .model("mock")
+                .role("test")
+                .build(),
+        );
+        tickets.agent(
+            Agent::new()
+                .name("researcher")
+                .label("research")
+                .provider(Arc::clone(&researcher) as Arc<dyn Provider>)
+                .model("mock")
+                .role("test")
+                .build(),
+        );
+
+        // Call off the research pool on the live run (start() resets signals), then
+        // enqueue both tickets; the analysis pool runs on.
+        tickets.start();
+        tickets.cancel_label("research");
+        tickets.task_labeled("hunt", "research");
+        tickets.task_labeled("triage", "analysis");
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let analyzed = tickets
+                .tickets()
+                .iter()
+                .any(|t| t.status == Status::Finished && t.task.as_str() == Some("triage"));
+            if analyzed {
+                break;
+            }
+            if tokio::time::Instant::now() > deadline {
+                tickets.cancel();
+                panic!("analysis ticket did not finish within 5s");
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+
+        let hunt = tickets
+            .tickets()
+            .into_iter()
+            .find(|t| t.task.as_str() == Some("hunt"))
+            .expect("research ticket exists");
+        assert_eq!(
+            hunt.status,
+            Status::Todo,
+            "a cancelled pool's ticket is never claimed",
+        );
+        assert_eq!(researcher.requests(), 0, "the researcher never ran");
+
+        tickets.cancel();
+        tokio::time::timeout(Duration::from_secs(2), tickets.finish())
+            .await
+            .expect("finish returns after cancel()");
     }
 
     #[tokio::test]

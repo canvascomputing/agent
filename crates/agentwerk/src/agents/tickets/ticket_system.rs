@@ -5,7 +5,7 @@
 //! Mutation impls (`claim`, `set_finished`, `summarize`, etc.) live
 //! next door in `store.rs`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::io;
 use std::path::PathBuf;
@@ -102,6 +102,11 @@ pub struct TicketSystem {
     /// by `is_cancelled()` so observers can tell external cancel apart
     /// from policy stops and clean drains.
     pub(crate) cancel_signal: Mutex<Arc<AtomicBool>>,
+    /// Labels whose pool has been called off via `cancel_label`. The loop
+    /// skips claiming or resuming a ticket carrying one of these, and walks
+    /// an agent off a ticket whose label lands here mid-flight, stopping one
+    /// pool while the rest of the run continues.
+    pub(crate) cancelled_labels: Mutex<HashSet<String>>,
     /// Reason the most recent `finish()` returned. `None` before the
     /// first `finish()` and between `start()` and the next `finish()`.
     pub(crate) finish_reason: Mutex<Option<FinishReason>>,
@@ -126,6 +131,7 @@ impl TicketSystem {
             policies: Mutex::new(Policies::default()),
             stop_signal: Mutex::new(Arc::new(AtomicBool::new(false))),
             cancel_signal: Mutex::new(Arc::new(AtomicBool::new(false))),
+            cancelled_labels: Mutex::new(HashSet::new()),
             finish_reason: Mutex::new(None),
             stats: Stats::new(),
             event_handlers: Mutex::new(Vec::new()),
@@ -189,6 +195,7 @@ impl TicketSystem {
             policies: Mutex::new(Policies::default()),
             stop_signal: Mutex::new(Arc::new(AtomicBool::new(false))),
             cancel_signal: Mutex::new(Arc::new(AtomicBool::new(false))),
+            cancelled_labels: Mutex::new(HashSet::new()),
             finish_reason: Mutex::new(None),
             stats,
             event_handlers: Mutex::new(Vec::new()),
@@ -341,6 +348,26 @@ impl TicketSystem {
         })
     }
 
+    /// Call off the `label` pool when `predicate(&event)` first returns true.
+    /// The label-scoped sibling of [`Self::cancel_on_event`]: instead of stopping
+    /// the whole run it invokes [`Self::cancel_label`], so the other pools keep
+    /// going. Implemented as one more entry on the [`Self::on_event`] chain.
+    pub fn cancel_label_on_event<F>(&self, label: impl Into<String>, predicate: F) -> &Self
+    where
+        F: Fn(&Event) -> bool + Send + Sync + 'static,
+    {
+        let supervisor = self.weak_self.clone();
+        let label = label.into();
+        self.on_event(move |event| {
+            if !predicate(&event) {
+                return;
+            }
+            if let Some(s) = supervisor.upgrade() {
+                s.cancel_label(label.clone());
+            }
+        })
+    }
+
     /// Override the directory under which the system writes
     /// `results.jsonl`, `tickets.jsonl`, and per-ticket
     /// `tickets/<key>/ticket.<ts>.json` files. Defaults to `./.agentwerk`.
@@ -477,6 +504,23 @@ impl TicketSystem {
             .count()
     }
 
+    /// Call off the pool carrying `label`: the loop stops claiming or resuming its
+    /// tickets and walks any agent off one it already holds, leaving that ticket
+    /// `InProgress` (abandoned), just as [`Self::cancel`] leaves in-flight tickets.
+    /// Stops one pool while the rest of the run continues.
+    pub fn cancel_label(&self, label: impl Into<String>) {
+        self.cancelled_labels.lock().unwrap().insert(label.into());
+    }
+
+    /// True when any of `labels` names a pool called off via [`Self::cancel_label`].
+    /// The loop's claim/resume path reads this to keep a cancelled pool's tickets
+    /// off the queue. Locks only `cancelled_labels`, so it is safe to call from a
+    /// claim predicate that already holds the `tickets` lock.
+    pub(crate) fn labels_cancelled(&self, labels: &[String]) -> bool {
+        let cancelled = self.cancelled_labels.lock().unwrap();
+        labels.iter().any(|l| cancelled.contains(l))
+    }
+
     /// Count of tickets the run watcher still considers in flight: every
     /// ticket whose status is `Todo` or `InProgress`.
     pub(crate) fn pending_count(&self) -> usize {
@@ -559,6 +603,7 @@ impl TicketSystem {
             .lock()
             .unwrap()
             .store(false, Ordering::Relaxed);
+        self.cancelled_labels.lock().unwrap().clear();
         self.finish_reason.lock().unwrap().take();
         let supervisor = self
             .weak_self
@@ -889,6 +934,21 @@ mod tests {
         sys.set_finished(&key_a).unwrap();
         sys.set_failed(&key_b).unwrap();
         assert_eq!(sys.pending_count(), 0);
+    }
+
+    #[test]
+    fn cancel_label_flags_only_that_label() {
+        let (sys, _tmp) = test_system();
+        sys.cancel_label("research");
+
+        assert!(sys.labels_cancelled(&["research".into()]));
+        // A ticket carries its agent name too once claimed; the pool label still hits.
+        assert!(sys.labels_cancelled(&["research".into(), "Threat Researcher 1".into()]));
+        assert!(
+            !sys.labels_cancelled(&["analysis".into()]),
+            "other pools are untouched",
+        );
+        assert!(!sys.labels_cancelled(&[]));
     }
 
     #[test]
