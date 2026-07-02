@@ -75,7 +75,7 @@
 //! - [`Knowledge`]: durable memory the agent curates and shares across tickets and other agents.
 //! - [`Stats`]: statistics for tickets, tokens, and activity.
 //! - [`Event`]: lifecycle events emitted as agents work.
-//! - [`tools`]: built-in tools agents call: file I/O, search, shell, web, knowledge, ticket finishers.
+//! - [`tools`]: built-in tools agents call: file I/O, search, shell, web, knowledge, ticket finish tools.
 
 pub mod agents;
 pub mod codegrep;

@@ -322,10 +322,18 @@ fn last_committed_compaction_at(ticket_dir: &Path) -> Option<u64> {
 
 impl AsUserMessage for Ticket {
     fn as_user_message(&self) -> Message {
-        let body = match &self.task {
+        let mut body = match &self.task {
             serde_json::Value::String(s) => s.clone(),
             other => serde_json::to_string_pretty(other).unwrap_or_default(),
         };
+        // Show the result shape up front: the finish tool validates against it, and
+        // the role prompt alone is a thin thread for the model to hold. The
+        // directive names an object schema's fields as top-level arguments.
+        if let Some(schema) = &self.schema {
+            if let Ok(document) = serde_json::to_value(schema) {
+                body.push_str(&crate::prompts::schema_directive(&document));
+            }
+        }
         Message::user(body)
     }
 }
@@ -339,7 +347,7 @@ pub enum Status {
     InProgress,
     /// Finished with a result.
     Finished,
-    /// Failed after a schema-retry trip, missing-finisher exhaustion,
+    /// Failed after a schema-retry trip, missing-finish-tool exhaustion,
     /// or policy violation.
     Failed,
 }
@@ -368,6 +376,26 @@ mod tests {
     fn ticket_label_helpers_compose() {
         let t = Ticket::new("body").label("research").label("urgent");
         assert_eq!(t.labels, vec!["research".to_string(), "urgent".to_string()]);
+    }
+
+    #[test]
+    fn as_user_message_appends_the_result_schema_when_set() {
+        let schema = crate::schemas::Schema::parse(serde_json::json!({
+            "type": "object",
+            "properties": {"summary": {"type": "string"}},
+            "required": ["summary"],
+        }))
+        .unwrap();
+        let ticket = Ticket::new("describe the project").schema(schema);
+        let Message::User { content } = ticket.as_user_message() else {
+            panic!("as_user_message must return Message::User");
+        };
+        let [ContentBlock::Text { text }] = content.as_slice() else {
+            panic!("expected a single text block, got {content:?}");
+        };
+        assert!(text.starts_with("describe the project"));
+        assert!(text.contains("matching this schema"));
+        assert!(text.contains("summary"));
     }
 
     #[test]

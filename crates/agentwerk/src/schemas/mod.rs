@@ -164,12 +164,13 @@ pub struct SchemaViolation {
 
 impl fmt::Display for SchemaViolation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let path = if self.instance_path.is_empty() {
-            "<root>"
+        // A root violation has no pointer to name, so show the message alone
+        // rather than a placeholder path.
+        if self.instance_path.is_empty() {
+            write!(f, "{}", self.message)
         } else {
-            self.instance_path.as_str()
-        };
-        write!(f, "{path}: {}", self.message)
+            write!(f, "{}: {}", self.instance_path, self.message)
+        }
     }
 }
 

@@ -70,14 +70,15 @@ impl ToolLike for ListDirectoryTool {
             match list_entries(&base, &base, recursive) {
                 Ok(mut entries) => {
                     entries.sort_by(|a, b| a.display_name.cmp(&b.display_name));
+                    // Suffix the type onto the name (`ls -F` style) instead of a
+                    // separate column: a bare `dir`/`file` word reads as a second
+                    // entry and gets listed as a path that does not exist.
                     let lines: Vec<String> = entries
                         .iter()
-                        .map(|e| {
-                            if e.size.is_some() {
-                                format!("{}  {}  {}", e.display_name, e.kind, e.size.unwrap())
-                            } else {
-                                format!("{}  {}", e.display_name, e.kind)
-                            }
+                        .map(|e| match e.kind {
+                            "dir" => format!("{}/", e.display_name),
+                            "symlink" => format!("{}@", e.display_name),
+                            _ => format!("{}  {} bytes", e.display_name, e.size.unwrap_or(0)),
                         })
                         .collect();
                     Ok(ToolResult::success(lines.join("\n")))
@@ -170,11 +171,9 @@ mod tests {
         assert_eq!(lines.len(), 3);
         // Sorted alphabetically
         assert!(lines[0].starts_with("alpha.txt"));
-        assert!(lines[0].contains("file"));
-        assert!(lines[0].contains("5")); // 5 bytes
+        assert!(lines[0].contains("5 bytes"));
         assert!(lines[1].starts_with("beta.txt"));
-        assert!(lines[2].starts_with("subdir"));
-        assert!(lines[2].contains("dir"));
+        assert_eq!(lines[2], "subdir/");
     }
 
     #[tokio::test]

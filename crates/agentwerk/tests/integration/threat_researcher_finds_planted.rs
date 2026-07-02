@@ -269,7 +269,10 @@ fn has_angle_placeholder(pattern: &str) -> bool {
             continue;
         }
         let start = i + 1;
-        if !chars.get(start).is_some_and(|first| first.is_ascii_lowercase()) {
+        if !chars
+            .get(start)
+            .is_some_and(|first| first.is_ascii_lowercase())
+        {
             continue;
         }
         let mut end = start;

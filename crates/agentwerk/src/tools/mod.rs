@@ -33,6 +33,6 @@ pub use grep::GrepTool;
 pub use list_directory::ListDirectoryTool;
 pub use manage_knowledge::ManageKnowledgeTool;
 pub use read_file::ReadFileTool;
-pub(crate) use tickets::TICKET_FINISHER_TOOLS;
+pub(crate) use tickets::{finish_tool_input_schema, TICKET_FINISH_TOOLS};
 pub use tickets::{FinishTicketTool, HandoverTicketTool, ManageTicketsTool, ReadTicketsTool};
 pub use write_file::WriteFileTool;

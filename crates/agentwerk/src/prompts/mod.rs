@@ -7,6 +7,8 @@ mod section;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use serde_json::Value;
+
 pub(crate) use builder::PromptBuilder;
 pub(crate) use section::Section;
 
@@ -21,8 +23,8 @@ const COMPACTION_TEMPLATE: &str = include_str!("compaction.directive.md");
 
 /// Render the corrective user message the loop pushes when the model's
 /// previous reply could not finalise the current piece of work. Used
-/// for two cases: a finisher tool returned a schema-validation error,
-/// or the model ended its turn without calling any finisher tool.
+/// for two cases: a finish tool returned a schema-validation error,
+/// or the model ended its turn without calling any finish tool.
 /// Callers compose a self-contained `detail` describing what was
 /// wrong; the template wraps it with the consistent framing.
 pub(crate) fn retry_directive(detail: &str) -> String {
@@ -36,15 +38,42 @@ pub(crate) fn compaction_directive() -> &'static str {
     COMPACTION_TEMPLATE
 }
 
+/// Render the model-facing block that tells the agent how to return a result
+/// matching `schema`, with the document as pretty JSON. Leads with a blank line
+/// so callers append it directly after preceding text. Shared by the ticket seed
+/// message and the schema-retry directive so the wording stays in step. An
+/// object schema is passed as the finish tool's top-level arguments; any other
+/// shape rides in `result`, the only place a scalar or array fits.
+pub(crate) fn schema_directive(schema: &Value) -> String {
+    let pretty = serde_json::to_string_pretty(schema).unwrap_or_default();
+    if is_object_schema(schema) {
+        format!("\n\nCall `finish_ticket` with these fields as its top-level arguments, not wrapped in `result`, matching this schema:\n{pretty}")
+    } else {
+        format!("\n\nRecord your `result` via `finish_ticket` as a JSON value matching this schema:\n{pretty}")
+    }
+}
+
 /// Compose the detail string for a schema-validation retry. Plugged
-/// into `retry_directive` when a finisher tool's output does not match
-/// the ticket's schema.
-pub(crate) fn schema_retry_detail(validator_message: &str) -> String {
-    format!(
-        "The `result` you passed did not match the ticket's schema. Call the \
-         finisher again with `result` set to a JSON value that matches it. \
-         Validator said: {validator_message}"
-    )
+/// into `retry_directive` when a finish tool's output does not match
+/// the ticket's schema. The validator names what was wrong but not the
+/// target shape, so the schema is rendered via [`schema_directive`] and
+/// appended when known: without it a model that guessed the shape has
+/// nothing new to correct against. Object-schema tickets are always finished
+/// via a finish tool that inlines, so the argument wording is correct there.
+pub(crate) fn schema_retry_detail(validator_message: &str, schema: Option<&Value>) -> String {
+    let shape = schema.map(schema_directive).unwrap_or_default();
+    let lead = if schema.is_some_and(is_object_schema) {
+        "The arguments you passed did not match the ticket's schema. Call `finish_ticket` \
+         again with the fields as its top-level arguments that match it."
+    } else {
+        "The `result` you passed did not match the ticket's schema. Call `finish_ticket` \
+         again with `result` set to a JSON value that matches it."
+    };
+    format!("{lead} Validator said: {validator_message}{shape}")
+}
+
+fn is_object_schema(schema: &Value) -> bool {
+    schema.get("type").and_then(Value::as_str) == Some("object")
 }
 
 /// Build the default context body: a `## Context` markdown block with the
@@ -130,6 +159,45 @@ mod tests {
     use crate::agents::stats::{LoopStats, TicketStats};
     use std::path::PathBuf;
     use std::time::Duration;
+
+    #[test]
+    fn schema_directive_for_an_object_asks_for_top_level_arguments() {
+        let directive = schema_directive(&serde_json::json!({
+            "type": "object",
+            "properties": {"summary": {"type": "string"}},
+            "required": ["summary"],
+        }));
+        assert!(directive.contains("top-level arguments"));
+        assert!(directive.contains("matching this schema"));
+        assert!(directive.contains("summary"));
+    }
+
+    #[test]
+    fn schema_directive_for_a_scalar_keeps_the_result_envelope() {
+        let directive = schema_directive(&serde_json::json!({ "type": "string" }));
+        assert!(directive.contains("`result`"));
+        assert!(directive.contains("finish_ticket"));
+    }
+
+    #[test]
+    fn schema_retry_detail_appends_the_schema_when_known() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {"summary": {"type": "string"}},
+        });
+        let rendered = schema_retry_detail("expected type object, got string", Some(&schema));
+        assert!(rendered.contains("expected type object, got string"));
+        // The model that guessed wrong now sees the keys it must produce.
+        assert!(rendered.contains("matching this schema"));
+        assert!(rendered.contains("summary"));
+    }
+
+    #[test]
+    fn schema_retry_detail_adds_no_shape_without_a_schema() {
+        let rendered = schema_retry_detail("expected type object, got string", None);
+        assert!(rendered.contains("expected type object, got string"));
+        assert!(!rendered.contains("matching this schema"));
+    }
 
     #[test]
     fn retry_directive_substitutes_detail_placeholder() {

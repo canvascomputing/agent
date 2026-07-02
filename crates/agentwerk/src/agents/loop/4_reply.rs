@@ -5,7 +5,9 @@ use std::sync::Arc;
 use crate::agents::retry::{ExponentialRetry, Retry};
 use crate::event::{CompactReason, EventKind};
 use crate::providers::types::{ResponseStatus, StreamEvent};
-use crate::providers::{ContentBlock, Message, ModelRequest, ProviderError};
+use crate::providers::{
+    ContentBlock, Message, ModelRequest, ProviderError, ProviderToolDefinition,
+};
 use crate::tools::ToolCall;
 
 use super::turn;
@@ -14,7 +16,7 @@ use super::wait_for_signal;
 use super::{Action, Reply};
 
 pub(super) async fn run(context: &mut LoopContext<'_>, messages: Vec<Message>) -> Action<Reply> {
-    let tools = context.agent.tool_definitions();
+    let tools = finish_tools_with_ticket_schema(context, context.agent.tool_definitions());
     let model_name = context.model.name.clone();
     context.ticket_system.emit(
         &context.ticket_key,
@@ -162,6 +164,30 @@ pub(super) async fn run(context: &mut LoopContext<'_>, messages: Vec<Message>) -
     }
 
     Action::Proceed(reply)
+}
+
+/// Advertise each finish tool's arguments in the shape the current ticket expects:
+/// an object schema inlines to top-level arguments, everything else keeps the
+/// `result` envelope. Shares `finish_tool_input_schema` with `finish_ticket` /
+/// `handover_ticket` so the advertised shape and the parsed shape always agree.
+fn finish_tools_with_ticket_schema(
+    context: &LoopContext<'_>,
+    mut tools: Vec<ProviderToolDefinition>,
+) -> Vec<ProviderToolDefinition> {
+    let schema = context
+        .ticket_system
+        .get_ticket(&context.ticket_key)
+        .and_then(|t| t.schema);
+    for definition in &mut tools {
+        if crate::tools::TICKET_FINISH_TOOLS.contains(&definition.name.as_str()) {
+            definition.input_schema = crate::tools::finish_tool_input_schema(
+                &definition.name,
+                definition.input_schema.clone(),
+                schema.as_ref(),
+            );
+        }
+    }
+    tools
 }
 
 #[cfg(test)]

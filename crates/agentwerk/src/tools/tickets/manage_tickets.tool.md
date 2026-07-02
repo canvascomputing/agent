@@ -52,7 +52,7 @@ Read and mutate the ticket queue from one tool: `get` / `list` / `search` to rea
     },
     "schema": {
       "type": "object",
-      "description": "For `create` or `edit` (optional): a JSON Schema document. When set, the agent's final result (written via `finish_ticket`) must validate against it; failures count toward `max_schema_retries`."
+      "description": "For `create` or `edit` (optional): a JSON Schema document. When set, the agent's final answer must validate against it: an object schema is passed as `finish_ticket`'s top-level arguments, any other shape via the `result` field. Failures count toward `max_schema_retries`."
     }
   },
   "required": [

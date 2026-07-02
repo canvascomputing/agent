@@ -135,10 +135,12 @@ impl ToolLike for CodegrepTool {
             }
 
             if output.is_empty() {
-                return Ok(ToolResult::success(match placeholder_hint(pattern_source) {
-                    Some(extra) => format!("{NO_MATCH_HINT}\n{extra}"),
-                    None => NO_MATCH_HINT.to_string(),
-                }));
+                return Ok(ToolResult::success(
+                    match placeholder_hint(pattern_source) {
+                        Some(extra) => format!("{NO_MATCH_HINT}\n{extra}"),
+                        None => NO_MATCH_HINT.to_string(),
+                    },
+                ));
             }
             Ok(ToolResult::success(output.join("\n")))
         })
@@ -158,7 +160,10 @@ fn placeholder_hint(pattern_source: &str) -> Option<String> {
             continue;
         }
         let start = i + 1;
-        if chars.get(start).is_none_or(|first| !first.is_ascii_lowercase()) {
+        if chars
+            .get(start)
+            .is_none_or(|first| !first.is_ascii_lowercase())
+        {
             continue;
         }
         let mut end = start;
@@ -416,7 +421,10 @@ mod tests {
         .await;
         assert!(output.starts_with("No matches"), "output: {output}");
         // The miss should point at the placeholder, not leave the model retrying it.
-        assert!(output.contains("`<decode>` is not a placeholder"), "output: {output}");
+        assert!(
+            output.contains("`<decode>` is not a placeholder"),
+            "output: {output}"
+        );
         assert!(output.contains("decode(...)"), "output: {output}");
     }
 

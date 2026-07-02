@@ -71,7 +71,7 @@ impl AgentBuilder<(), ()> {
     /// when the agent must not have `FinishTicketTool` available: for
     /// example, a researcher in a chain that should only ever call
     /// `HandoverTicketTool`. The caller is responsible for registering
-    /// at least one finisher tool (`FinishTicketTool` or
+    /// at least one finish tool (`FinishTicketTool` or
     /// `HandoverTicketTool`) via [`Self::tool`].
     pub fn empty() -> Self {
         let knowledge = Knowledge::load(".agentwerk").expect("open knowledge store");

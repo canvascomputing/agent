@@ -69,7 +69,9 @@ impl ToolLike for FinishTicketTool {
                 Ok(k) => k,
                 Err(e) => return Ok(e),
             };
-            let result = input.get("result").cloned().unwrap_or(Value::Null);
+            let schema = ticket_system.get_ticket(&key).and_then(|t| t.schema);
+            let result =
+                super::result_shape::parse_result("finish_ticket", schema.as_ref(), &input);
             Ok(write_result(&ticket_system, &key, result))
         })
     }
@@ -225,6 +227,38 @@ mod tests {
         let t = sys.get_ticket(&key).unwrap();
         assert_eq!(t.status, Status::Finished);
         assert_eq!(t.result.as_ref().unwrap()["x"], "ok");
+    }
+
+    #[tokio::test]
+    async fn object_schema_takes_flat_arguments_as_the_result() {
+        let dir = crate::test_util::TempDir::new().unwrap();
+        let sys = TicketSystem::new();
+        sys.dir(shared_test_dir().to_path_buf());
+        sys.dir(dir.path().to_path_buf());
+        let schema = Schema::parse(serde_json::json!({
+            "type": "object",
+            "properties": {"x": {"type": "string"}},
+            "required": ["x"]
+        }))
+        .unwrap();
+        sys.insert(
+            Ticket::new("hi").schema(schema).label("alice"),
+            "tester".into(),
+        );
+        let key = sys
+            .claim(|t| t.status == Status::Todo, "alice")
+            .expect("claim must succeed");
+        let ctx = ctx_with(Arc::clone(&sys), "alice", dir.path().to_path_buf());
+
+        // Fields at the top level, no `result` wrapper.
+        let outcome = FinishTicketTool
+            .call(serde_json::json!({"x": "ok"}), &ctx)
+            .await
+            .unwrap();
+        assert!(matches!(outcome, ToolResult::Success(_)));
+        let t = sys.get_ticket(&key).unwrap();
+        assert_eq!(t.status, Status::Finished);
+        assert_eq!(t.result.as_ref().unwrap(), &serde_json::json!({"x": "ok"}));
     }
 
     #[tokio::test]

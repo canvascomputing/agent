@@ -3,7 +3,7 @@ name: list_directory_tool
 read_only: true
 ---
 
-List a directory's entries to survey an unfamiliar layout. Output is one entry per line, sorted alphabetically: `<name>  file  <size_bytes>` or `<name>  dir`; in recursive mode `<name>` is relative to `path`. The path resolves against the working directory.
+List a directory's entries to survey an unfamiliar layout. Output is one entry per line, sorted alphabetically: a directory ends in `/`, a symlink ends in `@`, a file shows its size as `<name>  <size_bytes> bytes`. The suffix marks the type: it is not a separate entry, so never list or read it as a path. In recursive mode `<name>` is relative to `path`. The path resolves against the working directory.
 
 ## When NOT to use
 

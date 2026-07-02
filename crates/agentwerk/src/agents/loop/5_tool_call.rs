@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use crate::event::{EventKind, PolicyKind, ToolFailureKind};
 use crate::prompts::{retry_directive, schema_retry_detail};
 use crate::providers::ContentBlock;
-use crate::tools::{ToolContext, ToolError, TICKET_FINISHER_TOOLS};
+use crate::tools::{ToolContext, ToolError, TICKET_FINISH_TOOLS};
 
 use super::turn::LoopContext;
 use super::Action;
@@ -51,7 +51,7 @@ pub(super) async fn run(context: &mut LoopContext<'_>, reply: Reply) -> Action<(
                 let tool_name = call.map(|c| c.name.clone()).unwrap_or_default();
                 match tool_result {
                     Ok(output) => {
-                        if call.is_some_and(|c| TICKET_FINISHER_TOOLS.contains(&c.name.as_str())) {
+                        if call.is_some_and(|c| TICKET_FINISH_TOOLS.contains(&c.name.as_str())) {
                             context.consecutive_schema_failures = 0;
                         }
                         context.ticket_system.emit(
@@ -102,7 +102,12 @@ pub(super) async fn run(context: &mut LoopContext<'_>, reply: Reply) -> Action<(
                 blocks.push(block);
             }
             if let Some(validator_message) = &schema_failure_message {
-                let schema_detail = schema_retry_detail(validator_message);
+                let schema = context
+                    .ticket_system
+                    .get_ticket(&context.ticket_key)
+                    .and_then(|t| t.schema)
+                    .and_then(|s| serde_json::to_value(&s).ok());
+                let schema_detail = schema_retry_detail(validator_message, schema.as_ref());
                 context.ticket_system.emit(
                     &context.ticket_key,
                     context.agent.get_name(),

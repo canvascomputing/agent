@@ -15,11 +15,13 @@ mod finish_ticket;
 mod handover_ticket;
 mod manage_tickets;
 mod read_tickets;
+mod result_shape;
 
 pub use finish_ticket::FinishTicketTool;
 pub use handover_ticket::HandoverTicketTool;
 pub use manage_tickets::ManageTicketsTool;
 pub use read_tickets::ReadTicketsTool;
+pub(crate) use result_shape::finish_tool_input_schema;
 
 /// Action sets each multi-action tool exposes. Keeps the dispatch logic
 /// in one place and lets each tool reject actions outside its
@@ -27,11 +29,11 @@ pub use read_tickets::ReadTicketsTool;
 pub(super) const READ_ACTIONS: &[&str] = &["get", "list", "search"];
 pub(super) const WRITE_ACTIONS: &[&str] = &["create", "edit"];
 
-/// Wire names of every built-in finisher tool. The loop reads this to
-/// classify successful tool calls (resetting the schema-retry counter)
-/// and to build the missing-finisher directive against the agent's
-/// actual tool registry.
-pub(crate) const TICKET_FINISHER_TOOLS: &[&str] = &["finish_ticket", "handover_ticket"];
+/// Wire names of the tools that finish a ticket. The loop reads this to
+/// classify successful tool calls (resetting the schema-retry counter) and to
+/// build the missing-`finish_ticket` directive against the agent's actual tool
+/// registry.
+pub(crate) const TICKET_FINISH_TOOLS: &[&str] = &["finish_ticket", "handover_ticket"];
 
 pub(super) fn dispatch(input: Value, ctx: &ToolContext, allowed: &[&str]) -> ToolResult {
     let action = match input["action"].as_str() {

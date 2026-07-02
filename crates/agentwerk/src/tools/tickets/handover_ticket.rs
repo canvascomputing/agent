@@ -1,4 +1,4 @@
-//! Atomic finisher + spawner: record the agent's `result` on the current
+//! Atomic finish + spawner: record the agent's `result` on the current
 //! ticket (validate against its schema, log, attach) via
 //! `TicketSystem::set_result`, insert a child pinned to `to` (with the
 //! current ticket as its `parent`), then finish the current ticket.
@@ -102,19 +102,6 @@ impl ToolLike for HandoverTicketTool {
                 }
                 Some(_) => return Ok(ToolResult::error("`task` must be a string")),
             };
-            // Any JSON value is accepted; `set_result` validates it against
-            // the parent ticket's own schema, the same check finish_ticket
-            // gets. null and an empty string are rejected here: a handoff
-            // needs a real result.
-            let result = match input.get("result") {
-                Some(Value::String(s)) if s.is_empty() => {
-                    return Ok(ToolResult::error("`result` must not be an empty string"))
-                }
-                Some(Value::Null) | None => {
-                    return Ok(ToolResult::error("Missing required parameter: result"))
-                }
-                Some(value) => value.clone(),
-            };
             let child_schema: Option<Schema> = match input.get("schema") {
                 Some(doc) if !doc.is_null() => match Schema::parse(doc.clone()) {
                     Ok(s) => Some(s),
@@ -136,6 +123,20 @@ impl ToolLike for HandoverTicketTool {
                 .agent_name_str()
                 .expect("agent_name on ToolContext")
                 .to_string();
+
+            // The parent's own schema decides whether the result rode in as
+            // the top-level arguments (object schema) or under `result`. null
+            // and an empty string are rejected: a handoff needs a real result.
+            let schema = ticket_system.get_ticket(&parent_key).and_then(|t| t.schema);
+            let result =
+                super::result_shape::parse_result("handover_ticket", schema.as_ref(), &input);
+            match &result {
+                Value::String(s) if s.is_empty() => {
+                    return Ok(ToolResult::error("`result` must not be an empty string"))
+                }
+                Value::Null => return Ok(ToolResult::error("Missing required parameter: result")),
+                _ => {}
+            }
 
             // Validate, log, and attach the parent result. set_result does
             // not finish the ticket, so the child is inserted and the
@@ -412,6 +413,30 @@ mod tests {
         let log = std::fs::read_to_string(dir.path().join("results.jsonl")).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(log.lines().next().unwrap()).unwrap();
         assert_eq!(parsed["result"], serde_json::json!({"status": "done"}));
+    }
+
+    #[tokio::test]
+    async fn object_schema_takes_result_fields_flat_alongside_control_keys() {
+        let dir = crate::test_util::TempDir::new().unwrap();
+        let (sys, parent_key) = one_ticket_with_object_schema("alice", dir.path().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&sys), "alice", dir.path().to_path_buf());
+
+        // `status` sits at the top level next to `to`/`task`, no `result` wrapper.
+        let outcome = HandoverTicketTool
+            .call(
+                serde_json::json!({"to": "bob", "task": "next", "status": "done"}),
+                &ctx,
+            )
+            .await
+            .unwrap();
+        assert!(matches!(outcome, ToolResult::Success(_)));
+
+        let parent = sys.get_ticket(&parent_key).unwrap();
+        assert_eq!(parent.status, Status::Finished);
+        assert_eq!(
+            parent.result.as_ref(),
+            Some(&serde_json::json!({"status": "done"}))
+        );
     }
 
     #[tokio::test]
