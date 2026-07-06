@@ -32,7 +32,7 @@ Where code lives and the rules that govern placement.
   - `tickets/ticket_system.rs`: the `TicketSystem` struct, constructors, configuration, policy builders, ticket-creation API, agent binding, run lifecycle, results, and queries.
   - `tickets/store.rs`: the `impl TicketSystem` block for store mutations (`insert`, `claim`, `set_finished`, `summarize`, transition recording, etc.).
 - `loop.rs` holds the `Runnable` trait (implemented by `TicketSystem`) and the per-agent loop driver.
-- `knowledge.rs` holds `Knowledge`: the cross-ticket store backed by a `pages/` directory of markdown files and a compact `index.md`. Mutations go through `write_page` / `read_page` / `remove_page` / `clear`.
+- `knowledge.rs` holds `Knowledge`: the cross-ticket store, an OKF v0.1 bundle backed by a `pages/` directory of concept files and a derived `index.md`. Pages are curated through the `pages()` handle (`save` / `load` / `remove`) plus `clear`.
 - `policy.rs` holds `Policies` and the limit checks the loop applies on each turn.
 - `stats.rs` holds `Stats`, `LoopStats`, and the run-wide counters and timings.
 

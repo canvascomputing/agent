@@ -867,7 +867,8 @@ mod tests {
             .pages()
             .save(crate::agents::knowledge::Page {
                 slug: "from-store".into(),
-                summary: "From store".into(),
+                kind: String::new(),
+                description: "From store".into(),
                 content: "# From Store".into(),
                 tags: vec![],
             })
@@ -886,7 +887,8 @@ mod tests {
             .pages()
             .save(crate::agents::knowledge::Page {
                 slug: "shared".into(),
-                summary: "Shared note".into(),
+                kind: String::new(),
+                description: "Shared note".into(),
                 content: "# Shared".into(),
                 tags: vec![],
             })
@@ -905,7 +907,8 @@ mod tests {
             .pages()
             .save(crate::agents::knowledge::Page {
                 slug: "from-alice".into(),
-                summary: "From Alice".into(),
+                kind: String::new(),
+                description: "From Alice".into(),
                 content: "# Alice".into(),
                 tags: vec![],
             })

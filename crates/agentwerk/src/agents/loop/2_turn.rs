@@ -1322,7 +1322,7 @@ mod tests {
         let index_path = knowledge_dir.path().join("index.md");
         assert!(index_path.exists(), "index.md should exist on disk");
         let index_raw = std::fs::read_to_string(&index_path).unwrap();
-        assert!(index_raw.contains("- **api-config** — API runs on port 3000"));
+        assert!(index_raw.contains("* [api-config](pages/api-config.md) - API runs on port 3000"));
 
         let received = provider.received();
         let turn3_messages = &received[2];
@@ -1353,8 +1353,8 @@ mod tests {
             "read result should not contain frontmatter delimiters: {read_result}"
         );
         assert!(
-            !read_result.contains("updated:"),
-            "read result should not contain updated field: {read_result}"
+            !read_result.contains("timestamp:"),
+            "read result should not contain timestamp field: {read_result}"
         );
         assert!(
             read_result.contains("Rate limit: 100 req/min"),

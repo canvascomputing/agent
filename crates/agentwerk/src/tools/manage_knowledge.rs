@@ -79,10 +79,12 @@ impl ToolLike for ManageKnowledgeTool {
                         Some(s) => s,
                         None => return Ok(ToolResult::error("Missing required parameter: slug")),
                     };
-                    let summary = match input.get("summary").and_then(Value::as_str) {
+                    let description = match input.get("description").and_then(Value::as_str) {
                         Some(s) => s,
                         None => {
-                            return Ok(ToolResult::error("Missing required parameter: summary"))
+                            return Ok(ToolResult::error(
+                                "Missing required parameter: description",
+                            ))
                         }
                     };
                     let content = match input.get("content").and_then(Value::as_str) {
@@ -91,6 +93,11 @@ impl ToolLike for ManageKnowledgeTool {
                             return Ok(ToolResult::error("Missing required parameter: content"))
                         }
                     };
+                    let kind = input
+                        .get("type")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string();
                     let tags: Vec<String> = input
                         .get("tags")
                         .and_then(Value::as_array)
@@ -104,9 +111,10 @@ impl ToolLike for ManageKnowledgeTool {
 
                     let page = crate::agents::knowledge::Page {
                         slug: slug.to_string(),
-                        summary: summary.to_string(),
+                        kind,
+                        description: description.to_string(),
                         content: content.to_string(),
-                        tags: tags.clone(),
+                        tags,
                     };
                     match self.store.pages().save(page) {
                         Ok(out) => {
@@ -194,10 +202,11 @@ mod tests {
         (store, dir)
     }
 
-    fn save_page(store: &Knowledge, slug: &str, summary: &str, content: &str, tags: &[&str]) {
+    fn save_page(store: &Knowledge, slug: &str, description: &str, content: &str, tags: &[&str]) {
         let page = Page {
             slug: slug.to_string(),
-            summary: summary.to_string(),
+            kind: String::new(),
+            description: description.to_string(),
             content: content.to_string(),
             tags: tags.iter().map(|s| s.to_string()).collect(),
         };
@@ -233,7 +242,7 @@ mod tests {
                 serde_json::json!({
                     "action": "write",
                     "slug": "test",
-                    "summary": "A test page",
+                    "description": "A test page",
                     "content": "# Test\n\nContent."
                 }),
                 &ctx(),
@@ -288,7 +297,7 @@ mod tests {
         match &r {
             ToolResult::Success(s) => {
                 assert!(!s.contains("---"));
-                assert!(!s.contains("updated:"));
+                assert!(!s.contains("timestamp:"));
             }
             _ => panic!("expected Success"),
         }
@@ -339,7 +348,7 @@ mod tests {
         let tool = ManageKnowledgeTool::new(Arc::clone(&store));
         let r = tool
             .call(
-                serde_json::json!({"action": "write", "summary": "s", "content": "c"}),
+                serde_json::json!({"action": "write", "description": "s", "content": "c"}),
                 &ctx(),
             )
             .await
@@ -348,7 +357,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn write_without_summary_is_rejected() {
+    async fn write_without_description_is_rejected() {
         let (store, _dir) = fresh_store();
         let tool = ManageKnowledgeTool::new(Arc::clone(&store));
         let r = tool
@@ -358,7 +367,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_error(&r, "summary");
+        assert_error(&r, "description");
     }
 
     #[tokio::test]
@@ -367,7 +376,7 @@ mod tests {
         let tool = ManageKnowledgeTool::new(Arc::clone(&store));
         let r = tool
             .call(
-                serde_json::json!({"action": "write", "slug": "test", "summary": "s"}),
+                serde_json::json!({"action": "write", "slug": "test", "description": "s"}),
                 &ctx(),
             )
             .await

@@ -391,7 +391,7 @@ let greet = Tool::new("greet", "Say hello")
 
 A `Knowledge` store is the agent's long-term memory. It is written to disk, can be shared across multiple agents, and is curated by the agent through `ManageKnowledgeTool`.
 
-Each entry is stored as a markdown page on disk; a compact index of one-line summaries is injected into the system prompt so the agent can decide which pages to read.
+Each page is an Open Knowledge Format (OKF) v0.1 concept file with `type`, `description`, and `timestamp` frontmatter. A compact index of one-line descriptions goes into the system prompt, so the agent picks which pages to read. Because the store is a plain OKF bundle, `Knowledge::load` can open one authored elsewhere to seed an agent.
 
 ```rust
 use agentwerk::Knowledge;

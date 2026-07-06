@@ -115,12 +115,12 @@ pub fn handover_response(to: &str, task: &str, result: &str) -> ModelResponse {
     }
 }
 
-pub fn knowledge_write_response(slug: &str, summary: &str, content: &str) -> ModelResponse {
+pub fn knowledge_write_response(slug: &str, description: &str, content: &str) -> ModelResponse {
     ModelResponse {
         content: vec![ContentBlock::ToolUse {
             id: "call-1".into(),
             name: "manage_knowledge".into(),
-            input: serde_json::json!({"action": "write", "slug": slug, "summary": summary, "content": content}),
+            input: serde_json::json!({"action": "write", "slug": slug, "description": description, "content": content}),
         }],
         status: ResponseStatus::ToolUse,
         usage: TokenUsage::default(),

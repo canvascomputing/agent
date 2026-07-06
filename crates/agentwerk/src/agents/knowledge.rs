@@ -16,14 +16,21 @@ use crate::persistence::{write_atomic, Persist};
 const INDEX_FILE: &str = "index.md";
 const PAGES_DIR: &str = "pages";
 const DEFAULT_INDEX_CHAR_LIMIT: usize = 4000;
+const DEFAULT_PAGE_TYPE: &str = "Knowledge";
 const LEGACY_MEMORY_FILE: &str = "memory.jsonl";
 const MIGRATED_SUFFIX: &str = ".migrated";
+/// OKF changelog file. We never write one, but reserve the name so a seed
+/// bundle's `log.md` is not walked in as a concept page.
+const LOG_FILE: &str = "log.md";
 
 /// One entry in the in-memory index.
 #[derive(Clone, Debug)]
 struct IndexEntry {
     slug: String,
-    summary: String,
+    description: String,
+    /// Bundle-root-relative path to the concept file, so a seeded page
+    /// outside `pages/` stays readable and its index link resolves.
+    path: String,
 }
 
 /// Returned by [`Pages::save`] and [`Pages::remove`] on success so the tool
@@ -36,11 +43,14 @@ pub struct KnowledgeOutcome {
     pub pages: usize,
 }
 
-/// Durable memory the agent curates and shares across tickets and
-/// other agents. Written to disk and curated by the agent through
-/// `ManageKnowledgeTool`. Pages are individual markdown files under
-/// `<dir>/pages/<slug>.md`; the index at `<dir>/index.md` carries
-/// one-line summaries injected into the system prompt.
+/// Durable memory the agent curates and shares across tickets and other
+/// agents, stored on disk as an Open Knowledge Format (OKF) v0.1 bundle and
+/// curated through `ManageKnowledgeTool`. Each page is a markdown concept file
+/// under `<dir>/pages/<slug>.md` with `type`/`description`/`timestamp`
+/// frontmatter; `<dir>/index.md` is a derived index of one-line descriptions
+/// injected into the system prompt.
+///
+/// Two agents bound to one store share it:
 ///
 /// ```no_run
 /// use agentwerk::{Agent, Knowledge};
@@ -53,6 +63,20 @@ pub struct KnowledgeOutcome {
 /// # Ok(())
 /// # }
 /// ```
+///
+/// Because the store is a plain OKF bundle, an agent can be seeded from one a
+/// human or another tool authored:
+///
+/// ```no_run
+/// use agentwerk::{Agent, Knowledge};
+///
+/// # fn run() -> Result<(), Box<dyn std::error::Error>> {
+/// let seeded = Knowledge::load("./known-signatures")?;
+/// let scanner = Agent::new().knowledge(&seeded);
+/// # let _ = scanner;
+/// # Ok(())
+/// # }
+/// ```
 pub struct Knowledge {
     knowledge_dir: PathBuf,
     index: Mutex<Vec<IndexEntry>>,
@@ -61,25 +85,23 @@ pub struct Knowledge {
 }
 
 impl Knowledge {
-    /// Open or create a knowledge store rooted at `knowledge_dir`.
-    /// Creates `<dir>/pages/` if missing. Reads `index.md` if present;
-    /// if absent but pages exist, rebuilds from page H1 headings.
-    /// If `memory.jsonl` exists and `index.md` does not, migrates
-    /// all entries into `pages/legacy-notes.md`.
+    /// Open or create a knowledge store rooted at `knowledge_dir`, treated as
+    /// an OKF v0.1 bundle. Creates `<dir>/pages/` if missing. The index is
+    /// rebuilt by walking the concept files under the root, so pointing this
+    /// at an existing OKF bundle seeds the store from it. A `memory.jsonl` left
+    /// by an older version is migrated once into `pages/legacy-notes.md`.
     pub fn load(knowledge_dir: impl Into<PathBuf>) -> io::Result<Arc<Self>> {
         let knowledge_dir = knowledge_dir.into();
         fs::create_dir_all(knowledge_dir.join(PAGES_DIR))?;
 
-        let index_path = knowledge_dir.join(INDEX_FILE);
         let legacy_path = knowledge_dir.join(LEGACY_MEMORY_FILE);
 
-        let index = if index_path.exists() {
-            parse_index_file(&index_path)?
-        } else if legacy_path.exists() {
-            // Migration: convert memory.jsonl to knowledge format.
+        // Page frontmatter is the source of truth: rebuild the in-memory index
+        // by walking the bundle and regenerate the derived `index.md`. A legacy
+        // migration runs first, made idempotent by its own `.migrated` rename.
+        let index = if legacy_path.exists() {
             migrate_memory_jsonl(&knowledge_dir)?
         } else {
-            // Rebuild from page H1 headings if pages exist but no index.
             rebuild_index_from_pages(&knowledge_dir)?
         };
 
@@ -141,13 +163,15 @@ impl Knowledge {
     }
 }
 
-/// One knowledge page: the file shape stored under `<dir>/pages/<slug>.md`.
-/// `summary` is mirrored into the page frontmatter so `Page::load`
-/// recovers it without consulting the index file.
+/// One knowledge page: an OKF v0.1 concept document stored under
+/// `<dir>/pages/<slug>.md`. The frontmatter carries `type` (from `kind`),
+/// `description`, and `timestamp`; the markdown body follows.
 #[derive(Debug, Clone)]
 pub struct Page {
     pub slug: String,
-    pub summary: String,
+    /// OKF `type`: a short concept kind. Defaults to `Knowledge`.
+    pub kind: String,
+    pub description: String,
     pub content: String,
     pub tags: Vec<String>,
 }
@@ -156,16 +180,17 @@ impl Persist for Page {
     type Key = String;
 
     fn save(&self, dir: &Path) -> io::Result<()> {
-        let body = render_page(&self.summary, &self.content, &self.tags);
+        let body = render_page(&self.kind, &self.description, &self.content, &self.tags);
         write_atomic(&page_path(dir, &self.slug), body.as_bytes())
     }
 
     fn load(dir: &Path, slug: &Self::Key) -> io::Result<Self> {
         let raw = fs::read_to_string(page_path(dir, slug))?;
-        let (summary, tags, content) = parse_page(&raw);
+        let (kind, description, tags, content) = parse_page(&raw);
         Ok(Page {
             slug: slug.clone(),
-            summary,
+            kind,
+            description,
             content,
             tags,
         })
@@ -185,20 +210,25 @@ impl Pages<'_> {
     /// the new char usage so the tool layer can show progress.
     pub fn save(&self, page: Page) -> Result<KnowledgeOutcome, String> {
         let slug = normalize_slug(&page.slug)?;
-        let summary = page.summary.trim();
-        if summary.is_empty() {
-            return Err("Summary must not be empty".into());
+        let description = page.description.trim();
+        if description.is_empty() {
+            return Err("Description must not be empty".into());
         }
         if page.content.trim().is_empty() {
             return Err("Content must not be empty".into());
         }
+        let kind = match page.kind.trim() {
+            "" => DEFAULT_PAGE_TYPE.to_string(),
+            k => k.to_string(),
+        };
 
         let _w = self.inner.write_lock.lock().unwrap();
         let mut index = self.inner.index.lock().unwrap().clone();
 
         let entry = IndexEntry {
             slug: slug.clone(),
-            summary: summary.to_string(),
+            description: description.to_string(),
+            path: format!("{PAGES_DIR}/{slug}.md"),
         };
         if let Some(pos) = index.iter().position(|e| e.slug == slug) {
             index[pos] = entry;
@@ -220,7 +250,8 @@ impl Pages<'_> {
 
         let normalized = Page {
             slug,
-            summary: summary.to_string(),
+            kind,
+            description: description.to_string(),
             content: page.content,
             tags: page.tags,
         };
@@ -246,14 +277,36 @@ impl Pages<'_> {
         })
     }
 
-    /// Read the page at `slug`. Returns the full [`Page`] struct.
+    /// Read the page at `slug`. Returns the full [`Page`] struct. Resolves
+    /// the file through the index so a seeded page outside `pages/` is still
+    /// readable; falls back to `pages/<slug>.md`.
     pub fn load(&self, slug: &str) -> Result<Page, String> {
         let slug = normalize_slug(slug)?;
-        if !page_path(&self.inner.knowledge_dir, &slug).exists() {
+        let relative = self
+            .inner
+            .index
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|e| e.slug == slug)
+            .map(|e| e.path.clone());
+        let path = match relative {
+            Some(rel) => self.inner.knowledge_dir.join(rel),
+            None => page_path(&self.inner.knowledge_dir, &slug),
+        };
+        if !path.exists() {
             return Err(format!("Page `{slug}` not found"));
         }
-        <Page as Persist>::load(&self.inner.knowledge_dir, &slug)
-            .map_err(|e| format!("Failed to read page `{slug}`: {e}"))
+        let raw =
+            fs::read_to_string(&path).map_err(|e| format!("Failed to read page `{slug}`: {e}"))?;
+        let (kind, description, tags, content) = parse_page(&raw);
+        Ok(Page {
+            slug,
+            kind,
+            description,
+            content,
+            tags,
+        })
     }
 
     /// Delete the page file at `slug` and its index entry.
@@ -266,11 +319,11 @@ impl Pages<'_> {
             .iter()
             .position(|e| e.slug == slug)
             .ok_or_else(|| format!("Page `{slug}` not found in index"))?;
-        index.remove(pos);
+        let removed = index.remove(pos);
 
-        let page_path = page_path(&self.inner.knowledge_dir, &slug);
-        if page_path.exists() {
-            fs::remove_file(&page_path).map_err(|e| format!("Failed to remove page file: {e}"))?;
+        let page_file = self.inner.knowledge_dir.join(&removed.path);
+        if page_file.exists() {
+            fs::remove_file(&page_file).map_err(|e| format!("Failed to remove page file: {e}"))?;
         }
 
         let index_body = render_index_file(&index);
@@ -359,9 +412,8 @@ pub(crate) fn normalize_slug(raw: &str) -> Result<String, String> {
 
 // ---- frontmatter ----
 
-fn render_page(summary: &str, content: &str, tags: &[String]) -> String {
+fn render_page(kind: &str, description: &str, content: &str, tags: &[String]) -> String {
     let now = format_iso8601_now();
-    let summary_line = format!("\nsummary: {summary}");
     let tags_str = if tags.is_empty() {
         String::new()
     } else {
@@ -373,31 +425,48 @@ fn render_page(summary: &str, content: &str, tags: &[String]) -> String {
                 .join(", ")
         )
     };
-    format!("---\nupdated: {now}{summary_line}{tags_str}\n---\n{content}\n")
+    // OKF v0.1 reserved keys: `type` (required), `description`, `timestamp`.
+    format!("---\ntype: {kind}\ndescription: {description}\ntimestamp: {now}{tags_str}\n---\n{content}\n")
 }
 
-/// Parse a page file into `(summary, tags, content)`. Legacy pages
-/// without a `summary` line in their frontmatter come back with an
-/// empty summary; the index file still holds the canonical text.
-fn parse_page(raw: &str) -> (String, Vec<String>, String) {
+/// Parse a page file into `(kind, description, tags, content)`. A missing
+/// `type` defaults to `Knowledge`; the legacy `summary` key is still read as
+/// `description` so older stores load.
+fn parse_page(raw: &str) -> (String, String, Vec<String>, String) {
     let trimmed = raw.trim_start();
     if !trimmed.starts_with("---") {
-        return (String::new(), Vec::new(), raw.to_string());
+        return (
+            DEFAULT_PAGE_TYPE.to_string(),
+            String::new(),
+            Vec::new(),
+            raw.to_string(),
+        );
     }
     let after_first = &trimmed[3..];
     let Some(end) = after_first.find("\n---") else {
-        return (String::new(), Vec::new(), raw.to_string());
+        return (
+            DEFAULT_PAGE_TYPE.to_string(),
+            String::new(),
+            Vec::new(),
+            raw.to_string(),
+        );
     };
     let frontmatter = &after_first[..end];
     let rest = &after_first[end + 4..];
     let content = rest.strip_prefix('\n').unwrap_or(rest).to_string();
 
-    let mut summary = String::new();
+    let mut kind = String::new();
+    let mut description = String::new();
     let mut tags = Vec::new();
     for line in frontmatter.lines() {
         let line = line.trim();
-        if let Some(value) = line.strip_prefix("summary:") {
-            summary = value.trim().to_string();
+        if let Some(value) = line.strip_prefix("type:") {
+            kind = value.trim().to_string();
+        } else if let Some(value) = line
+            .strip_prefix("description:")
+            .or_else(|| line.strip_prefix("summary:"))
+        {
+            description = value.trim().to_string();
         } else if let Some(value) = line.strip_prefix("tags:") {
             let body = value.trim().trim_start_matches('[').trim_end_matches(']');
             tags = body
@@ -407,89 +476,125 @@ fn parse_page(raw: &str) -> (String, Vec<String>, String) {
                 .collect();
         }
     }
-    (summary, tags, content)
+    if kind.is_empty() {
+        kind = DEFAULT_PAGE_TYPE.to_string();
+    }
+    (kind, description, tags, content)
 }
 
+#[cfg(test)]
 fn strip_frontmatter(raw: &str) -> String {
-    parse_page(raw).2
+    parse_page(raw).3
 }
 
 // ---- index rendering / parsing ----
 
+/// Compact index injected into the system prompt. The model reads a page by
+/// its slug, so the slug stays visible here.
 fn render_index(entries: &[IndexEntry]) -> String {
     entries
         .iter()
-        .map(|e| format!("- **{}** — {}", e.slug, e.summary))
+        .map(|e| format!("- **{}**: {}", e.slug, e.description))
         .collect::<Vec<_>>()
         .join("\n")
 }
 
+/// The on-disk `index.md`: an OKF progressive-disclosure view. Frontmatter-free,
+/// with a clickable link to each concept file. Written as a derived artifact and
+/// never parsed back; the page frontmatter is the source of truth.
 fn render_index_file(entries: &[IndexEntry]) -> String {
-    let body = render_index(entries);
-    if body.is_empty() {
-        String::new()
-    } else {
-        format!("{body}\n")
+    if entries.is_empty() {
+        return String::new();
     }
+    let body = entries
+        .iter()
+        .map(|e| format!("* [{}]({}) - {}", e.slug, e.path, e.description))
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!("{body}\n")
 }
 
-fn parse_index_file(path: &Path) -> io::Result<Vec<IndexEntry>> {
-    let raw = fs::read_to_string(path)?;
-    Ok(parse_index_lines(&raw))
-}
-
-fn parse_index_lines(raw: &str) -> Vec<IndexEntry> {
-    raw.lines()
-        .filter_map(|line| {
-            let line = line.trim();
-            // Expected format: `- **slug** — summary`
-            let rest = line.strip_prefix("- **")?;
-            let (slug, rest) = rest.split_once("**")?;
-            let summary = rest
-                .strip_prefix(" — ")
-                .or_else(|| rest.strip_prefix(" - "))?;
-            if slug.is_empty() || summary.is_empty() {
-                return None;
-            }
-            Some(IndexEntry {
-                slug: slug.to_string(),
-                summary: summary.trim().to_string(),
-            })
-        })
-        .collect()
-}
-
+/// Rebuild the in-memory index by walking the bundle for concept files, then
+/// regenerate the derived `index.md`. The page frontmatter is the source of
+/// truth (OKF: `index.md` is a derived view), so pointing this at an external
+/// OKF bundle seeds the store from it.
 fn rebuild_index_from_pages(knowledge_dir: &Path) -> io::Result<Vec<IndexEntry>> {
-    let pages_dir = knowledge_dir.join(PAGES_DIR);
-    if !pages_dir.exists() {
-        return Ok(Vec::new());
-    }
     let mut entries = Vec::new();
-    for entry in fs::read_dir(&pages_dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.extension().is_some_and(|ext| ext == "md") {
-            let slug = path
-                .file_stem()
-                .map(|s| s.to_string_lossy().to_string())
-                .unwrap_or_default();
-            if slug.is_empty() {
-                continue;
-            }
-            let raw = fs::read_to_string(&path)?;
-            let body = strip_frontmatter(&raw);
-            let summary = extract_h1_summary(&body);
-            entries.push(IndexEntry { slug, summary });
-        }
-    }
+    collect_pages(knowledge_dir, knowledge_dir, &mut entries)?;
     entries.sort_by(|a, b| a.slug.cmp(&b.slug));
 
-    // Write the rebuilt index to disk.
     if !entries.is_empty() {
         let index_body = render_index_file(&entries);
         write_atomic(&knowledge_dir.join(INDEX_FILE), index_body.as_bytes())?;
     }
     Ok(entries)
+}
+
+/// Walk `dir` recursively, turning every non-reserved markdown file into an
+/// index entry. The description comes from page frontmatter, falling back to
+/// the body H1 for a frontmatter-less page.
+fn collect_pages(root: &Path, dir: &Path, entries: &mut Vec<IndexEntry>) -> io::Result<()> {
+    if !dir.exists() {
+        return Ok(());
+    }
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            collect_pages(root, &path, entries)?;
+            continue;
+        }
+        if path.extension().is_none_or(|ext| ext != "md") {
+            continue;
+        }
+        let file_name = path
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default();
+        if is_reserved(&file_name) {
+            continue;
+        }
+        let Ok(slug) = bundle_slug(root, &path) else {
+            continue;
+        };
+        if entries.iter().any(|e| e.slug == slug) {
+            continue;
+        }
+        let raw = fs::read_to_string(&path)?;
+        let (_kind, description, _tags, content) = parse_page(&raw);
+        let description = if description.is_empty() {
+            extract_h1_summary(&content)
+        } else {
+            description
+        };
+        let relative = path
+            .strip_prefix(root)
+            .unwrap_or(&path)
+            .to_string_lossy()
+            .replace('\\', "/");
+        entries.push(IndexEntry {
+            slug,
+            description,
+            path: relative,
+        });
+    }
+    Ok(())
+}
+
+/// Reserved OKF filenames and migrated legacy files never become concepts.
+fn is_reserved(file_name: &str) -> bool {
+    file_name == INDEX_FILE || file_name == LOG_FILE || file_name.ends_with(MIGRATED_SUFFIX)
+}
+
+/// Slug for a concept file: its bundle-relative path minus `.md`, with a
+/// leading `pages/` stripped so a native page keeps `slug == file stem`.
+fn bundle_slug(root: &Path, path: &Path) -> Result<String, String> {
+    let relative = path.strip_prefix(root).unwrap_or(path).with_extension("");
+    let mut text = relative.to_string_lossy().replace('\\', "/");
+    if let Some(stripped) = text.strip_prefix(&format!("{PAGES_DIR}/")) {
+        text = stripped.to_string();
+    }
+    normalize_slug(&text)
 }
 
 fn extract_h1_summary(body: &str) -> String {
@@ -540,13 +645,14 @@ fn migrate_memory_jsonl(knowledge_dir: &Path) -> io::Result<Vec<IndexEntry>> {
         let slug = "legacy-notes";
         let summary = format!("Migrated from memory.jsonl ({} entries)", contents.len());
 
-        let page_file = render_page(&summary, &page_body, &[]);
+        let page_file = render_page(DEFAULT_PAGE_TYPE, &summary, &page_body, &[]);
         let page_path = knowledge_dir.join(PAGES_DIR).join(format!("{slug}.md"));
         write_atomic(&page_path, page_file.as_bytes())?;
 
         let entry = IndexEntry {
             slug: slug.to_string(),
-            summary,
+            description: summary,
+            path: format!("{PAGES_DIR}/{slug}.md"),
         };
         vec![entry]
     };
@@ -606,13 +712,14 @@ mod tests {
     fn save_page(
         store: &Knowledge,
         slug: &str,
-        summary: &str,
+        description: &str,
         content: &str,
         tags: &[&str],
     ) -> KnowledgeOutcome {
         let page = Page {
             slug: slug.to_string(),
-            summary: summary.to_string(),
+            kind: String::new(),
+            description: description.to_string(),
             content: content.to_string(),
             tags: tags.iter().map(|s| s.to_string()).collect(),
         };
@@ -651,14 +758,14 @@ mod tests {
     }
 
     #[test]
-    fn save_page_upserts_existing_entry() {
+    fn save_page_replaces_existing_entry() {
         let (store, _dir) = fresh_store();
         save_page(&store, "config", "v1", "# Config\n\nVersion 1.", &[]);
         save_page(&store, "config", "v2", "# Config\n\nVersion 2.", &[]);
         let idx = store.index();
         assert!(idx.contains("v2"));
         assert!(!idx.contains("v1"));
-        // Only one line in the index (the upserted entry).
+        // Only one line in the index (the replaced entry).
         assert_eq!(idx.lines().count(), 1);
     }
 
@@ -676,7 +783,7 @@ mod tests {
         assert!(body.contains("# Test"));
         assert!(body.contains("Hello world."));
         assert!(!body.contains("---"));
-        assert!(!body.contains("updated:"));
+        assert!(!body.contains("timestamp:"));
         assert!(!body.contains("tags:"));
     }
 
@@ -773,7 +880,7 @@ mod tests {
 
     #[test]
     fn frontmatter_is_stripped_correctly() {
-        let raw = "---\nupdated: 2026-01-01T00:00:00Z\ntags: [a, b]\n---\n# Title\n\nBody.";
+        let raw = "---\ntype: Knowledge\ntimestamp: 2026-01-01T00:00:00Z\ntags: [a, b]\n---\n# Title\n\nBody.";
         let body = strip_frontmatter(raw);
         assert_eq!(body, "# Title\n\nBody.");
     }
@@ -788,13 +895,14 @@ mod tests {
     fn index_char_limit_rejects_oversized_write() {
         let dir = crate::test_util::TempDir::new().unwrap();
         let store = Knowledge::load(dir.path()).unwrap();
-        // Write a very long summary to push the index past the limit.
-        let long_summary = "x".repeat(DEFAULT_INDEX_CHAR_LIMIT + 1);
+        // Write a very long description to push the index past the limit.
+        let long_description = "x".repeat(DEFAULT_INDEX_CHAR_LIMIT + 1);
         let err = store
             .pages()
             .save(Page {
                 slug: "big".into(),
-                summary: long_summary.clone(),
+                kind: String::new(),
+                description: long_description,
                 content: "# Big".into(),
                 tags: vec![],
             })
@@ -808,12 +916,13 @@ mod tests {
         let store = store.index_char_limit(80);
 
         // 80-char budget rejects what the default 4000-char budget would accept.
-        let long_summary = "x".repeat(200);
+        let long_description = "x".repeat(200);
         let err = store
             .pages()
             .save(Page {
                 slug: "big".into(),
-                summary: long_summary.clone(),
+                kind: String::new(),
+                description: long_description,
                 content: "# Big".into(),
                 tags: vec![],
             })
@@ -929,29 +1038,19 @@ mod tests {
     }
 
     #[test]
-    fn parse_index_lines_handles_em_dash_and_hyphen() {
-        let input = "- **slug-one** — Summary one\n- **slug-two** - Summary two";
-        let entries = parse_index_lines(input);
-        assert_eq!(entries.len(), 2);
-        assert_eq!(entries[0].slug, "slug-one");
-        assert_eq!(entries[0].summary, "Summary one");
-        assert_eq!(entries[1].slug, "slug-two");
-        assert_eq!(entries[1].summary, "Summary two");
-    }
-
-    #[test]
-    fn write_page_rejects_empty_summary() {
+    fn write_page_rejects_empty_description() {
         let (store, _dir) = fresh_store();
         let err = store
             .pages()
             .save(Page {
                 slug: "test".into(),
-                summary: ("").to_string(),
+                kind: String::new(),
+                description: String::new(),
                 content: "content".into(),
                 tags: vec![],
             })
             .unwrap_err();
-        assert!(err.contains("Summary"));
+        assert!(err.contains("Description"));
     }
 
     #[test]
@@ -961,7 +1060,8 @@ mod tests {
             .pages()
             .save(Page {
                 slug: "test".into(),
-                summary: ("summary").to_string(),
+                kind: String::new(),
+                description: "a description".to_string(),
                 content: "".into(),
                 tags: vec![],
             })
@@ -976,5 +1076,77 @@ mod tests {
         let out = store.pages().remove("temp").unwrap();
         assert_eq!(out.message, "page removed");
         assert_eq!(out.pages, 0);
+    }
+
+    #[test]
+    fn page_frontmatter_uses_okf_keys() {
+        let (store, dir) = fresh_store();
+        save_page(&store, "cfg", "Config page", "# Config\n\nBody.", &[]);
+        let raw = fs::read_to_string(dir.path().join(PAGES_DIR).join("cfg.md")).unwrap();
+        assert!(raw.contains("type: Knowledge"));
+        assert!(raw.contains("description: Config page"));
+        assert!(raw.contains("timestamp: "));
+    }
+
+    #[test]
+    fn index_file_is_okf_progressive_disclosure() {
+        let (store, dir) = fresh_store();
+        save_page(&store, "cfg", "Config page", "# Config", &[]);
+        let index = fs::read_to_string(dir.path().join(INDEX_FILE)).unwrap();
+        assert!(index.contains("* [cfg](pages/cfg.md) - Config page"));
+        assert!(!index.contains("---"));
+    }
+
+    #[test]
+    fn agent_set_type_round_trips_and_defaults_to_knowledge() {
+        let (store, _dir) = fresh_store();
+        store
+            .pages()
+            .save(Page {
+                slug: "verdict".into(),
+                kind: "Verdict".into(),
+                description: "A verdict".into(),
+                content: "# Verdict".into(),
+                tags: vec![],
+            })
+            .unwrap();
+        assert_eq!(store.pages().load("verdict").unwrap().kind, "Verdict");
+        // An empty kind falls back to the default on write.
+        save_page(&store, "note", "A note", "# Note", &[]);
+        assert_eq!(store.pages().load("note").unwrap().kind, "Knowledge");
+    }
+
+    #[test]
+    fn loads_external_okf_bundle_flattening_nested_slugs() {
+        let dir = crate::test_util::TempDir::new().unwrap();
+        let tables = dir.path().join("tables");
+        fs::create_dir_all(&tables).unwrap();
+        fs::write(
+            tables.join("orders.md"),
+            "---\ntype: Table\ndescription: One row per order.\n---\n# Orders\n\nBody.",
+        )
+        .unwrap();
+        let store = Knowledge::load(dir.path()).unwrap();
+        let idx = store.index();
+        assert!(idx.contains("tables-orders"));
+        assert!(idx.contains("One row per order."));
+        // The nested concept stays readable through its flattened slug.
+        let page = store.pages().load("tables-orders").unwrap();
+        assert_eq!(page.kind, "Table");
+        assert!(page.content.contains("Body."));
+    }
+
+    #[test]
+    fn seeded_page_without_type_loads_as_knowledge() {
+        let dir = crate::test_util::TempDir::new().unwrap();
+        let pages = dir.path().join(PAGES_DIR);
+        fs::create_dir_all(&pages).unwrap();
+        fs::write(
+            pages.join("bare.md"),
+            "---\ndescription: No type here.\n---\n# Bare\n\nBody.",
+        )
+        .unwrap();
+        let store = Knowledge::load(dir.path()).unwrap();
+        assert_eq!(store.pages().load("bare").unwrap().kind, "Knowledge");
     }
 }
