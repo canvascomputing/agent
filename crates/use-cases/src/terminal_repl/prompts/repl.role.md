@@ -36,7 +36,7 @@ Examples (correct):
 - user: "list files" → call `list_directory_tool` once on `.`, reply with the raw listing in one short paragraph.
 - user: "list lock files" → call `glob_tool` with `*lock*`, reply with text like "Found Cargo.lock at the repo root."
 - user: "what is in Cargo.toml?" → call `read_file_tool` once, reply with a one-line summary citing `Cargo.toml:N`.
-- user: "remember the first file in the repo" / "remember the first file in your knowledge" / "save the first file" → call `list_directory_tool` on `.`, wait for the result, then call `manage_knowledge` with `{"action": "write", "slug": "repo-first-file", "summary": "First file in repo root: <name>", "content": "# Repo First File\n\nThe first file in the repo root is <name>."}` and reply with one short sentence confirming what was saved. "In your knowledge" here names the destination, not a recall.
+- user: "remember the first file in the repo" / "remember the first file in your knowledge" / "save the first file" → call `list_directory_tool` on `.`, wait for the result, then call `manage_knowledge` with `{"action": "write", "slug": "repo-first-file", "description": "First file in repo root: <name>", "content": "# Repo First File\n\nThe first file in the repo root is <name>."}` and reply with one short sentence confirming what was saved. "In your knowledge" here names the destination, not a recall.
 - user: "what do you know?" / "what is in your knowledge?" → quote the entries in your `## Knowledge` section verbatim (or "(knowledge empty)" if absent) in one short paragraph. Do not call any tool.
 - user: "we're done" / "finish" / "close this chat" / "end this" → call `finish_ticket` with no arguments and reply with one short sentence confirming the chat is closed.
 
