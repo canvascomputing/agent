@@ -116,6 +116,12 @@ pub struct TicketSystem {
     pub(super) tickets_log_lock: Mutex<()>,
     pub(super) results_log_lock: Mutex<()>,
     pub(super) join_handle: Mutex<Option<JoinHandle<()>>>,
+    /// Next `TICKET-<N>` id to hand out, or `None` until it's known.
+    /// `load()` seeds it directly from the tickets it just read off disk.
+    /// A system built via `new()` (with or without a later `.dir(path)`)
+    /// leaves it `None`; the first `insert()` scans for the highest
+    /// existing id then, since `new()` never reads the directory itself.
+    pub(super) next_ticket_id: Mutex<Option<u64>>,
 }
 
 impl TicketSystem {
@@ -139,6 +145,7 @@ impl TicketSystem {
             tickets_log_lock: Mutex::new(()),
             results_log_lock: Mutex::new(()),
             join_handle: Mutex::new(None),
+            next_ticket_id: Mutex::new(None),
         })
     }
 
@@ -157,8 +164,6 @@ impl TicketSystem {
     /// the agent whose name is already in the ticket's `labels`.
     ///
     /// Caller contracts:
-    /// - Tickets dirs deleted by hand break the `TICKET-N` counter:
-    ///   the next inserted ticket may collide with an existing key.
     /// - Agent names must stay stable across restarts; agentwerk
     ///   matches `InProgress` tickets by name via the ticket's labels.
     pub fn load(tickets_dir: impl Into<PathBuf>) -> io::Result<Arc<Self>> {
@@ -187,6 +192,12 @@ impl TicketSystem {
         }
 
         let stats = Stats::load(&tickets_dir).unwrap_or_else(|_| Stats::derive(&tickets));
+        let next_id = tickets
+            .keys()
+            .map(|k| numeric_id(k) as u64)
+            .filter(|&n| n != u32::MAX as u64)
+            .max()
+            .unwrap_or(0);
 
         Ok(Arc::new_cyclic(|weak| Self {
             weak_self: weak.clone(),
@@ -203,6 +214,7 @@ impl TicketSystem {
             tickets_log_lock: Mutex::new(()),
             results_log_lock: Mutex::new(()),
             join_handle: Mutex::new(None),
+            next_ticket_id: Mutex::new(Some(next_id)),
         }))
     }
 

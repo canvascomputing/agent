@@ -2,7 +2,7 @@
 //! status transitions, transcript appends, result attachment,
 //! compaction-pair writes, and the matching observational events.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::persistence::{Append, Persist, Results, TicketEvents};
 use crate::schemas::SchemaViolations;
@@ -14,13 +14,35 @@ use super::ticket::{Status, Ticket};
 use super::ticket_system::TicketSystem;
 use super::{now_millis, numeric_id, Replies};
 
+/// Highest `TICKET-<N>` already on disk under `<dir>/tickets/`, or 0 if
+/// none. Only needed for a system built via `new()`, which never reads
+/// the directory itself; `load()` derives this from what it already read.
+fn max_existing_ticket_id(dir: &Path) -> u64 {
+    std::fs::read_dir(dir.join("tickets"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name();
+            name.to_str().map(numeric_id).map(u64::from)
+        })
+        .filter(|&n| n != u64::from(u32::MAX))
+        .max()
+        .unwrap_or(0)
+}
+
 impl TicketSystem {
     /// Insert `ticket`, stamping system fields. The ticket is always born
     /// `Todo`; to pin it to a specific agent, label it with the agent's
     /// name. Returns the inserted ticket's key.
     pub(crate) fn insert(&self, mut ticket: Ticket, reporter: String) -> String {
+        let id = {
+            let mut next = self.next_ticket_id.lock().unwrap();
+            let base = next.get_or_insert_with(|| max_existing_ticket_id(&self.dir_value()));
+            *base += 1;
+            *base
+        };
         let mut store = self.tickets.lock().unwrap();
-        let id = store.len() + 1;
         ticket.key = format!("TICKET-{id}");
         ticket.created_at = now_millis();
         ticket.reporter = reporter;
@@ -691,6 +713,50 @@ mod tests {
         assert_eq!(t.status, Status::Finished);
         assert_eq!(t.result.as_ref(), Some(&serde_json::json!({"ok": true})));
         assert_eq!(t.task, serde_json::Value::String("seed work".into()));
+    }
+
+    #[test]
+    fn insert_after_load_never_reuses_an_existing_key() {
+        let dir = crate::test_util::TempDir::new().unwrap();
+        let original = TicketSystem::new();
+        original.dir(dir.path().to_path_buf());
+        original.task("seed work");
+        drop(original);
+
+        let resumed = TicketSystem::load(dir.path()).unwrap();
+        assert_eq!(resumed.task("more work"), "TICKET-2");
+    }
+
+    #[test]
+    fn insert_after_new_plus_dir_never_reuses_an_existing_key() {
+        // The pattern a fresh process actually uses against a directory a
+        // prior run already wrote into: `new()` (not `load()`) plus `.dir(..)`.
+        let dir = crate::test_util::TempDir::new().unwrap();
+        let first = TicketSystem::new();
+        first.dir(dir.path().to_path_buf());
+        first.task("seed work");
+        drop(first);
+
+        let second = TicketSystem::new();
+        second.dir(dir.path().to_path_buf());
+        assert_eq!(second.task("more work"), "TICKET-2");
+    }
+
+    #[test]
+    fn load_seeds_next_ticket_id_without_rescanning_tickets_dir() {
+        let dir = crate::test_util::TempDir::new().unwrap();
+        let original = TicketSystem::new();
+        original.dir(dir.path().to_path_buf());
+        original.task("seed work");
+        drop(original);
+
+        let resumed = TicketSystem::load(dir.path()).unwrap();
+        // `load()` already knows the highest key from what it just read
+        // into memory; removing the directory here proves `insert()` does
+        // not rescan it, since a rescan would find nothing and wrongly
+        // restart numbering at 1.
+        std::fs::remove_dir_all(dir.path().join("tickets")).unwrap();
+        assert_eq!(resumed.task("more work"), "TICKET-2");
     }
 
     #[test]
