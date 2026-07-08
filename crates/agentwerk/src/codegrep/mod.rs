@@ -13,7 +13,7 @@ pub mod token;
 
 pub use ast::{MetavariableKind, Node, ParseError, Pattern};
 pub use conf::{Conf, ConfError};
-pub use matcher::{search, Loc, Match, Metavariable};
+pub use matcher::{search, search_tokens, Loc, Match, Metavariable};
 pub use token::{tokenize_pattern, tokenize_target, Token};
 
 #[cfg(test)]

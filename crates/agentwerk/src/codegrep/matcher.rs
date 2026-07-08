@@ -48,20 +48,32 @@ struct MetavarEnv {
 
 /// Find all non-overlapping matches of `pattern` in `target`.
 pub fn search(pattern: &Pattern, target: &str) -> Vec<Match> {
+    let tokens = token::tokenize_target(target, pattern.conf());
+    search_tokens(pattern, &tokens, target)
+}
+
+/// Like [`search`], but reuses tokens the caller already built. Running a whole
+/// pattern catalogue over one file tokenizes it once here instead of once per
+/// [`search`] call.
+///
+/// `tokens` must be [`token::tokenize_target`] of this `target`. Its `Conf` need
+/// only match `pattern.conf()` in word and bracket rules, the parts tokenizing
+/// depends on: patterns differing only in `caseless` or `multiline` share tokens
+/// safely. Other word or bracket rules yield silently wrong matches.
+pub fn search_tokens(pattern: &Pattern, tokens: &[Token], target: &str) -> Vec<Match> {
     let conf = pattern.conf();
     let params = MatchParams {
         caseless: conf.caseless,
         multiline: conf.multiline,
         word_chars: conf.word_chars.iter().copied().collect(),
     };
-    let tokens = token::tokenize_target(target, conf);
     let mut out = Vec::new();
     let mut pos = 0;
     while pos <= tokens.len() {
         let mut env = MetavarEnv::default();
         if let Some(end) = match_seq(
             pattern.nodes(),
-            &tokens,
+            tokens,
             pos,
             target,
             &mut env,
@@ -71,7 +83,7 @@ pub fn search(pattern: &Pattern, target: &str) -> Vec<Match> {
             &params,
             None,
         ) {
-            out.push(build_match(&tokens, target, pos, end, &env));
+            out.push(build_match(tokens, target, pos, end, &env));
             pos = if end == pos { pos + 1 } else { end };
         } else {
             pos += 1;

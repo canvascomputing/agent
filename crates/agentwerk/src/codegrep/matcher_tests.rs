@@ -6,7 +6,8 @@
 
 use super::ast::{MetavariableKind, Pattern};
 use super::conf::Conf;
-use super::matcher::{search, Match};
+use super::matcher::{search, search_tokens, Match};
+use super::token::tokenize_target;
 
 fn parse_and_search(conf: &Conf, pattern: &str, target: &str) -> Vec<Match> {
     let parsed = Pattern::parse(pattern, conf).expect("pattern parses");
@@ -772,4 +773,23 @@ fn caseless_does_not_fold_non_ascii_case() {
     let mut conf = multiline();
     conf.caseless = true;
     assert_eq!(parse_and_search(&conf, "É", "é").len(), 0);
+}
+
+// Shared-token catalogue contract.
+
+#[test]
+fn search_tokens_over_one_shared_stream_equals_per_pattern_search() {
+    // The malware scanner tokenizes a file once and runs a whole catalogue over
+    // those tokens; each pattern must see exactly what a standalone search would.
+    let conf = multiline();
+    let target = "fn handler(arg) {} Command::new(\"curl\")";
+    let tokens = tokenize_target(target, &conf);
+    for source in ["fn $NAME(...)", "Command::new(...)"] {
+        let pattern = Pattern::parse(source, &conf).expect("pattern parses");
+        assert_eq!(
+            search_tokens(&pattern, &tokens, target),
+            search(&pattern, target),
+            "shared-token result diverged for {source}"
+        );
+    }
 }
