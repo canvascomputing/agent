@@ -18,7 +18,7 @@ pub(crate) enum ResultShape {
 /// mistake such a field for a control key. No schema in the tree does.
 fn control_keys(tool_name: &str) -> &'static [&'static str] {
     match tool_name {
-        "handover_ticket" => &["to", "task", "schema"],
+        "handover_ticket" => &["to", "task"],
         _ => &[],
     }
 }
@@ -133,9 +133,7 @@ fn merge_controls(mut document: Value, static_schema: &Value, tool_name: &str) -
             .as_array_mut()
     }) {
         for key in control_keys(tool_name) {
-            if *key != "schema" {
-                required.push(Value::String((*key).to_string()));
-            }
+            required.push(Value::String((*key).to_string()));
         }
     }
     document
@@ -246,7 +244,6 @@ mod tests {
             "properties": {
                 "to": { "type": "string" },
                 "task": { "type": "string" },
-                "schema": { "type": "object" },
                 "result": {},
             },
             "required": ["to", "task", "result"],

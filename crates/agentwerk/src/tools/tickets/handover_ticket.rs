@@ -15,7 +15,6 @@ use serde_json::Value;
 
 use crate::agents::tickets::Ticket;
 use crate::providers::ProviderResult;
-use crate::schemas::Schema;
 
 use super::super::tool::{ToolContext, ToolLike, ToolResult};
 use super::super::tool_file::ToolFile;
@@ -102,18 +101,6 @@ impl ToolLike for HandoverTicketTool {
                 }
                 Some(_) => return Ok(ToolResult::error("`task` must be a string")),
             };
-            let child_schema: Option<Schema> = match input.get("schema") {
-                Some(doc) if !doc.is_null() => match Schema::parse(doc.clone()) {
-                    Ok(s) => Some(s),
-                    Err(e) => {
-                        return Ok(ToolResult::error(format!(
-                            "Cannot hand off: supplied `schema` is invalid: {e}"
-                        )));
-                    }
-                },
-                _ => None,
-            };
-
             let parent_key = match resolve_current_key(&ticket_system, ctx) {
                 Ok(k) => k,
                 Err(e) => return Ok(e),
@@ -155,10 +142,7 @@ impl ToolLike for HandoverTicketTool {
             };
 
             let task = apply_handover_templates(task, &parent_key, &parent_result_str);
-            let mut child = Ticket::new(task).label(&to).parent(&parent_key);
-            if let Some(schema) = child_schema {
-                child = child.schema(schema);
-            }
+            let child = Ticket::new(task).label(&to).parent(&parent_key);
 
             // Insert the child BEFORE finishing the parent: the child is
             // already `Todo` when the parent leaves the queue, so a
@@ -314,57 +298,6 @@ mod tests {
             "no child created on schema failure"
         );
         assert!(!dir.path().join("results.jsonl").exists());
-    }
-
-    #[tokio::test]
-    async fn malformed_schema_aborts_atomically() {
-        let dir = crate::test_util::TempDir::new().unwrap();
-        let (sys, parent_key) = one_ticket("alice");
-        sys.dir(dir.path().to_path_buf());
-        let ctx = ctx_with(Arc::clone(&sys), "alice", dir.path().to_path_buf());
-
-        let outcome = HandoverTicketTool
-            .call(
-                serde_json::json!({
-                    "to": "bob",
-                    "task": "next",
-                    "result": "ok",
-                    "schema": {"type": "not_a_real_type"}
-                }),
-                &ctx,
-            )
-            .await
-            .unwrap();
-        assert!(matches!(outcome, ToolResult::Error(_)));
-
-        let parent = sys.get_ticket(&parent_key).unwrap();
-        assert_eq!(parent.status, Status::InProgress);
-        assert!(sys.get_ticket("TICKET-2").is_none());
-        assert!(!dir.path().join("results.jsonl").exists());
-    }
-
-    #[tokio::test]
-    async fn optional_schema_attached_to_child() {
-        let dir = crate::test_util::TempDir::new().unwrap();
-        let (sys, _key) = one_ticket("alice");
-        sys.dir(dir.path().to_path_buf());
-        let ctx = ctx_with(Arc::clone(&sys), "alice", dir.path().to_path_buf());
-
-        HandoverTicketTool
-            .call(
-                serde_json::json!({
-                    "to": "bob",
-                    "task": "produce a report",
-                    "result": "alice's findings",
-                    "schema": {"type": "object", "required": ["title"]}
-                }),
-                &ctx,
-            )
-            .await
-            .unwrap();
-
-        let child = sys.get_ticket("TICKET-2").unwrap();
-        assert!(child.schema.is_some());
     }
 
     /// Build a claimed parent whose own schema requires an object with a

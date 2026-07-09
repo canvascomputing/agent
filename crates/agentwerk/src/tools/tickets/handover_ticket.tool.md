@@ -5,8 +5,8 @@ read_only: false
 
 Finish the current ticket and hand follow-up work to another agent in one atomic call: it writes this ticket's `result`, marks it `Finished` (terminal), and creates a `Todo` child pinned to `to` with this ticket as its `parent`. This is the only way to finish-and-chain in one turn.
 
-- `to` labels the child (an agent name pins it, a scope label routes it); `task` is its plain-text instruction; an optional `schema` rides along to validate the child's result.
-- Pass your own answer alongside `to`/`task`: an object `schema` takes its fields directly, otherwise use `result`.
+- `to` labels the child (an agent name pins it, a scope label routes it); `task` is its plain-text instruction.
+- Pass your own answer alongside `to`/`task`: when this ticket's own schema is an object, its fields go directly, otherwise use `result`.
 
 ## When NOT to use
 
@@ -29,10 +29,6 @@ Finish the current ticket and hand follow-up work to another agent in one atomic
     },
     "result": {
       "description": "Final answer for the current ticket before the handover: any JSON value, validated against this ticket's own schema. A plain-text summary when this ticket has no schema. `null` or an empty string is rejected."
-    },
-    "schema": {
-      "type": "object",
-      "description": "Optional JSON Schema document attached to the child ticket. When set, the receiving agent's final result must validate against it; failures count toward `max_schema_retries`."
     }
   },
   "required": [

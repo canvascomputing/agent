@@ -294,6 +294,8 @@ let schema = Schema::parse(json!({
 tickets.ticket(Ticket::new("Write a report.").schema(schema));
 ```
 
+Register a schema per label with `tickets.schema_for_label(label, schema)`: every ticket of that label validates against it (unless built with its own), so work reached by `handover_ticket` is checked like anything submitted directly.
+
 ### Compaction
 
 agentwerk compacts the transcript automatically when the model's context window is near full; observe progress via the `Compaction*` variants on [`EventKind`](https://docs.rs/agentwerk/latest/agentwerk/event/enum.EventKind.html).

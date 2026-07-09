@@ -18,6 +18,7 @@ use tokio::task::JoinHandle;
 
 use crate::event::{default_logger, Event, EventKind, FinishReason};
 use crate::persistence::Persist;
+use crate::schemas::Schema;
 
 use super::super::agent::{Agent, TicketSystemRef};
 use super::super::policy::Policies;
@@ -107,6 +108,11 @@ pub struct TicketSystem {
     /// an agent off a ticket whose label lands here mid-flight, stopping one
     /// pool while the rest of the run continues.
     pub(crate) cancelled_labels: Mutex<HashSet<String>>,
+    /// Result schema stamped onto every ticket carrying a registered label
+    /// that was created without a schema of its own. Set via `schema_for_label`
+    /// and applied at insert time, so a ticket's result contract follows its
+    /// label no matter how the ticket was created.
+    pub(crate) label_schemas: Mutex<HashMap<String, Schema>>,
     /// Reason the most recent `finish()` returned. `None` before the
     /// first `finish()` and between `start()` and the next `finish()`.
     pub(crate) finish_reason: Mutex<Option<FinishReason>>,
@@ -138,6 +144,7 @@ impl TicketSystem {
             stop_signal: Mutex::new(Arc::new(AtomicBool::new(false))),
             cancel_signal: Mutex::new(Arc::new(AtomicBool::new(false))),
             cancelled_labels: Mutex::new(HashSet::new()),
+            label_schemas: Mutex::new(HashMap::new()),
             finish_reason: Mutex::new(None),
             stats: Stats::new(),
             event_handlers: Mutex::new(Vec::new()),
@@ -207,6 +214,7 @@ impl TicketSystem {
             stop_signal: Mutex::new(Arc::new(AtomicBool::new(false))),
             cancel_signal: Mutex::new(Arc::new(AtomicBool::new(false))),
             cancelled_labels: Mutex::new(HashSet::new()),
+            label_schemas: Mutex::new(HashMap::new()),
             finish_reason: Mutex::new(None),
             stats,
             event_handlers: Mutex::new(Vec::new()),
@@ -392,6 +400,19 @@ impl TicketSystem {
 
     pub(crate) fn dir_value(&self) -> PathBuf {
         self.dir.lock().unwrap().clone()
+    }
+
+    /// Register the result schema every ticket carrying `label` validates
+    /// against, unless the ticket was created with a schema of its own. The
+    /// schema is stamped at creation, so the contract follows the label whether
+    /// the ticket came from `task_labeled`, `ticket`, or a `handover_ticket`
+    /// child. Mirrors `Stats::stats_for_label`.
+    pub fn schema_for_label(&self, label: impl Into<String>, schema: Schema) -> &Self {
+        self.label_schemas
+            .lock()
+            .unwrap()
+            .insert(label.into(), schema);
+        self
     }
 
     // ---- ticket-creation API mirrored on Agent ----
