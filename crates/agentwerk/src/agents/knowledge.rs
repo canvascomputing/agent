@@ -15,7 +15,7 @@ use crate::persistence::{write_atomic, Persist};
 
 const INDEX_FILE: &str = "index.md";
 const PAGES_DIR: &str = "pages";
-const DEFAULT_INDEX_CHAR_LIMIT: usize = 4000;
+const DEFAULT_INDEX_CHAR_LIMIT: usize = 12000;
 const DEFAULT_PAGE_TYPE: &str = "Knowledge";
 const LEGACY_MEMORY_FILE: &str = "memory.jsonl";
 const MIGRATED_SUFFIX: &str = ".migrated";
@@ -915,7 +915,7 @@ mod tests {
         let (store, _dir) = fresh_store();
         let store = store.index_char_limit(80);
 
-        // 80-char budget rejects what the default 4000-char budget would accept.
+        // 80-char budget rejects what the default 12000-char budget would accept.
         let long_description = "x".repeat(200);
         let err = store
             .pages()

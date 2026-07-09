@@ -82,9 +82,7 @@ impl ToolLike for ManageKnowledgeTool {
                     let description = match input.get("description").and_then(Value::as_str) {
                         Some(s) => s,
                         None => {
-                            return Ok(ToolResult::error(
-                                "Missing required parameter: description",
-                            ))
+                            return Ok(ToolResult::error("Missing required parameter: description"))
                         }
                     };
                     let content = match input.get("content").and_then(Value::as_str) {
