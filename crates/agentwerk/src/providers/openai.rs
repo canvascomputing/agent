@@ -283,12 +283,10 @@ impl StreamState {
         let mut sorted: Vec<_> = self.tool_calls.into_iter().collect();
         sorted.sort_by_key(|(idx, _)| *idx);
         for (_, acc) in sorted {
-            let input =
-                serde_json::from_str(&acc.arguments).unwrap_or(Value::Object(Default::default()));
             content.push(ContentBlock::ToolUse {
                 id: acc.id,
                 name: acc.name,
-                input,
+                input: parse_tool_arguments(acc.arguments),
             });
         }
         ModelResponse {
@@ -302,6 +300,16 @@ impl StreamState {
             },
         }
     }
+}
+
+/// Parse a tool call's `arguments` string into JSON. An empty string is a
+/// no-argument call (`{}`); a non-empty but unparseable string is kept verbatim
+/// so the schema decode reports the real problem, not a fabricated `{}`.
+fn parse_tool_arguments(arguments: String) -> Value {
+    if arguments.trim().is_empty() {
+        return Value::Object(Default::default());
+    }
+    serde_json::from_str(&arguments).unwrap_or(Value::String(arguments))
 }
 
 fn ingest_chunk(
@@ -532,6 +540,26 @@ mod tests {
         assert_eq!(p.request_timeout(), DEFAULT_REQUEST_TIMEOUT);
         let p = p.timeout(Duration::from_secs(42));
         assert_eq!(p.request_timeout(), Duration::from_secs(42));
+    }
+
+    #[test]
+    fn parse_tool_arguments_parses_valid_json_object() {
+        let input = parse_tool_arguments(r#"{"pattern":"foo"}"#.into());
+        assert_eq!(input, serde_json::json!({"pattern": "foo"}));
+    }
+
+    #[test]
+    fn parse_tool_arguments_empty_string_is_no_args_object() {
+        assert_eq!(parse_tool_arguments(String::new()), serde_json::json!({}));
+        assert_eq!(parse_tool_arguments("   ".into()), serde_json::json!({}));
+    }
+
+    #[test]
+    fn parse_tool_arguments_keeps_malformed_string_verbatim() {
+        // A non-empty, unparseable arguments string is preserved rather than
+        // blanked to `{}`, so the schema decode reports the real problem.
+        let raw = r#"{"pattern": "foo""#;
+        assert_eq!(parse_tool_arguments(raw.into()), Value::String(raw.into()));
     }
 
     #[test]
