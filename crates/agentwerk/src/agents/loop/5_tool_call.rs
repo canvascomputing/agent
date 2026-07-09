@@ -1,4 +1,4 @@
-//! Tool execution: dispatches tool calls, offloads large outputs, and enforces schema-retry budget.
+//! Tool execution: dispatches tool calls, offloads large outputs, and counts consecutive tool failures toward the retry budget.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use crate::event::{EventKind, PolicyKind, ToolFailureKind};
 use crate::prompts::{retry_directive, schema_retry_detail};
 use crate::providers::ContentBlock;
-use crate::tools::{ToolContext, ToolError, TICKET_FINISH_TOOLS};
+use crate::tools::{ToolContext, ToolError};
 
 use super::turn::LoopContext;
 use super::Action;
@@ -51,9 +51,8 @@ pub(super) async fn run(context: &mut LoopContext<'_>, reply: Reply) -> Action<(
                 let tool_name = call.map(|c| c.name.clone()).unwrap_or_default();
                 match tool_result {
                     Ok(output) => {
-                        if call.is_some_and(|c| TICKET_FINISH_TOOLS.contains(&c.name.as_str())) {
-                            context.consecutive_schema_failures = 0;
-                        }
+                        // Any successful tool call is progress: clear the counter.
+                        context.consecutive_schema_failures = 0;
                         context.ticket_system.emit(
                             &context.ticket_key,
                             context.agent.get_name(),
@@ -65,12 +64,15 @@ pub(super) async fn run(context: &mut LoopContext<'_>, reply: Reply) -> Action<(
                         );
                     }
                     Err(err) => {
-                        if matches!(err, ToolError::SchemaValidationFailed { .. }) {
-                            context.consecutive_schema_failures =
-                                context.consecutive_schema_failures.saturating_add(1);
-                            if schema_failure_message.is_none() {
-                                schema_failure_message = Some(err.message());
-                            }
+                        // Any tool failure (bad arguments, unknown tool, schema
+                        // mismatch) counts toward the budget, so a stuck agent
+                        // fails its ticket instead of looping until the time limit.
+                        context.consecutive_schema_failures =
+                            context.consecutive_schema_failures.saturating_add(1);
+                        if matches!(err, ToolError::SchemaValidationFailed { .. })
+                            && schema_failure_message.is_none()
+                        {
+                            schema_failure_message = Some(err.message());
                         }
                         let failure_kind = match err {
                             ToolError::ToolNotFound { .. } => ToolFailureKind::ToolNotFound,
@@ -235,6 +237,131 @@ mod tests {
         });
         assert!(policy_violated, "expected MaxSchemaRetries PolicyViolated");
         assert_eq!(ticket.status, Status::Failed);
+    }
+
+    // Repeated failed tool calls (not just schema failures) count toward the budget.
+
+    #[tokio::test]
+    async fn repeated_unknown_tool_calls_trip_the_budget_and_fail_the_ticket() {
+        // The tester agent has no `ghost_tool`, so every call is ToolNotFound;
+        // three of them exhaust a budget of three and fail the ticket.
+        let provider = MockProvider::with_results(vec![
+            Ok(tool_call_response("ghost_tool")),
+            Ok(tool_call_response("ghost_tool")),
+            Ok(tool_call_response("ghost_tool")),
+        ]);
+        let (events, _, ticket) = run_one(provider, 0, 3, None).await;
+
+        assert!(
+            events.iter().any(|e| matches!(
+                &e.kind,
+                EventKind::PolicyViolated {
+                    kind: PolicyKind::MaxSchemaRetries,
+                    limit: 3,
+                },
+            )),
+            "expected MaxSchemaRetries PolicyViolated",
+        );
+        assert_eq!(ticket.status, Status::Failed);
+    }
+
+    #[tokio::test]
+    async fn repeated_execution_failures_trip_the_budget_and_fail_the_ticket() {
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        use crate::agents::agent::Agent;
+        use crate::agents::tickets::TicketSystem;
+        use crate::providers::Provider;
+        use crate::tools::{Tool, ToolResult};
+
+        let provider = MockProvider::with_results(vec![
+            Ok(tool_call_response("boom")),
+            Ok(tool_call_response("boom")),
+        ]);
+        let boom = Tool::new("boom", "Always fails")
+            .handler(|_, _| async move { Ok(ToolResult::error("boom")) })
+            .build();
+
+        let results_dir = crate::test_util::TempDir::new().unwrap();
+        let tickets = TicketSystem::new();
+        tickets
+            .dir(results_dir.path().to_path_buf())
+            .max_request_retries(0)
+            .request_retry_delay(Duration::from_millis(1))
+            .max_schema_retries(2)
+            .max_time(Duration::from_millis(500));
+        let collected = collect_events(&tickets);
+        tickets.agent(
+            Agent::new()
+                .name("tester")
+                .provider(provider as Arc<dyn Provider>)
+                .model("mock")
+                .role("test")
+                .tool(boom)
+                .build(),
+        );
+        tickets.task("go");
+        let _ = tickets.finish().await;
+
+        assert_eq!(tickets.first_ticket().unwrap().status, Status::Failed);
+        let events = collected.lock().unwrap().clone();
+        assert!(events.iter().any(|e| matches!(
+            &e.kind,
+            EventKind::PolicyViolated {
+                kind: PolicyKind::MaxSchemaRetries,
+                limit: 2,
+            },
+        )));
+    }
+
+    #[tokio::test]
+    async fn a_successful_tool_call_resets_the_failure_budget() {
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        use crate::agents::agent::Agent;
+        use crate::agents::tickets::TicketSystem;
+        use crate::providers::Provider;
+        use crate::tools::{Tool, ToolResult};
+
+        // boom, ping, boom, finish: a budget of two would trip on the second
+        // boom if the ping success did not reset the counter in between.
+        let provider = MockProvider::with_results(vec![
+            Ok(tool_call_response("boom")),
+            Ok(tool_call_response("ping")),
+            Ok(tool_call_response("boom")),
+            Ok(write_result_value(serde_json::json!("done"))),
+        ]);
+        let boom = Tool::new("boom", "Always fails")
+            .handler(|_, _| async move { Ok(ToolResult::error("boom")) })
+            .build();
+        let ping = Tool::new("ping", "Always succeeds")
+            .handler(|_, _| async move { Ok(ToolResult::success("pong")) })
+            .build();
+
+        let results_dir = crate::test_util::TempDir::new().unwrap();
+        let tickets = TicketSystem::new();
+        tickets
+            .dir(results_dir.path().to_path_buf())
+            .max_request_retries(0)
+            .request_retry_delay(Duration::from_millis(1))
+            .max_schema_retries(2)
+            .max_time(Duration::from_millis(500));
+        tickets.agent(
+            Agent::new()
+                .name("tester")
+                .provider(provider as Arc<dyn Provider>)
+                .model("mock")
+                .role("test")
+                .tool(boom)
+                .tool(ping)
+                .build(),
+        );
+        tickets.task("go");
+        let _ = tickets.finish().await;
+
+        assert_eq!(tickets.first_ticket().unwrap().status, Status::Finished);
     }
 
     #[tokio::test]
