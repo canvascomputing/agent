@@ -371,12 +371,12 @@ mod tests {
 
     /// Insert one Todo ticket, claim it for `agent` (atomically labels +
     /// transitions to InProgress), so `sys.find_ticket(...)` resolves it
-    /// as the current ticket for `agent`. The system is rooted at a shared
-    /// per-module temp directory so the default `.agentwerk` writes
-    /// never leak into the source tree.
+    /// as the current ticket for `agent`. The system is rooted at its own
+    /// isolated temp directory so the default `.agentwerk` writes never
+    /// leak into the source tree.
     fn shared_with_one_ticket(agent: &str) -> (Arc<TicketSystem>, String) {
         let sys = TicketSystem::new();
-        sys.dir(shared_test_dir().to_path_buf());
+        sys.dir(isolated_test_dir());
         sys.insert(Ticket::new("body").label(agent), "tester".into());
         let key = sys
             .claim(|t| t.status == Status::Todo, agent)
@@ -384,14 +384,18 @@ mod tests {
         (sys, key)
     }
 
-    /// Process-lifetime tempdir used as the default `TicketSystem` root
-    /// for tests in this module. Tests that need an isolated workspace
-    /// still call `sys.dir(...)` explicitly to override.
-    fn shared_test_dir() -> &'static std::path::Path {
+    /// A fresh directory for each `TicketSystem` under a process-lifetime,
+    /// self-deleting temp root. Per-call isolation matters because `insert`
+    /// numbers new keys past the highest `TICKET-<N>` folder already on disk,
+    /// so a shared directory would leak ticket ids between tests.
+    fn isolated_test_dir() -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
         use std::sync::OnceLock;
-        static DIR: OnceLock<crate::test_util::TempDir> = OnceLock::new();
-        DIR.get_or_init(|| crate::test_util::TempDir::new().unwrap())
-            .path()
+        static ROOT: OnceLock<crate::test_util::TempDir> = OnceLock::new();
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let root = ROOT.get_or_init(|| crate::test_util::TempDir::new().unwrap());
+        root.path()
+            .join(format!("sys-{}", COUNTER.fetch_add(1, Ordering::Relaxed)))
     }
 
     async fn call(tool: &dyn ToolLike, input: serde_json::Value, ctx: &ToolContext) -> ToolResult {
@@ -416,7 +420,7 @@ mod tests {
     #[tokio::test]
     async fn read_list_filters_by_status() {
         let sys = TicketSystem::new();
-        sys.dir(shared_test_dir().to_path_buf());
+        sys.dir(isolated_test_dir());
         sys.insert(Ticket::new("a"), "tester".into());
         sys.insert(Ticket::new("b"), "tester".into());
         sys.claim(|t| t.key == "TICKET-1", "alice");
@@ -436,7 +440,7 @@ mod tests {
     #[tokio::test]
     async fn manage_create_stamps_reporter_from_agent_name() {
         let sys = TicketSystem::new();
-        sys.dir(shared_test_dir().to_path_buf());
+        sys.dir(isolated_test_dir());
         let ctx = ctx_with(Arc::clone(&sys), "alice");
         let result = call(
             &ManageTicketsTool,
@@ -453,7 +457,7 @@ mod tests {
     #[tokio::test]
     async fn manage_create_with_labels_attaches_them() {
         let sys = TicketSystem::new();
-        sys.dir(shared_test_dir().to_path_buf());
+        sys.dir(isolated_test_dir());
         let ctx = ctx_with(Arc::clone(&sys), "alice");
         let result = call(
             &ManageTicketsTool,
@@ -474,7 +478,7 @@ mod tests {
     #[tokio::test]
     async fn manage_create_with_named_label_routes_to_agent() {
         let sys = TicketSystem::new();
-        sys.dir(shared_test_dir().to_path_buf());
+        sys.dir(isolated_test_dir());
         let ctx = ctx_with(Arc::clone(&sys), "alice");
         let result = call(
             &ManageTicketsTool,
@@ -495,7 +499,7 @@ mod tests {
     #[tokio::test]
     async fn manage_create_with_schema_field_stores_schema() {
         let sys = TicketSystem::new();
-        sys.dir(shared_test_dir().to_path_buf());
+        sys.dir(isolated_test_dir());
         let ctx = ctx_with(Arc::clone(&sys), "alice");
         let result = call(
             &ManageTicketsTool,

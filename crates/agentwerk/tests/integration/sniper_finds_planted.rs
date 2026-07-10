@@ -257,10 +257,7 @@ async fn sniper_pool_finds_planted_indicators(
         }
     }
 
-    assert!(
-        !calls.is_empty(),
-        "the Sniper made no codegrep_tool calls"
-    );
+    assert!(!calls.is_empty(), "the Sniper made no codegrep_tool calls");
     assert!(
         found > 0,
         "agents surfaced none of the planted indicators; codegrep output: {all_text}"

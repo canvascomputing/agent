@@ -177,19 +177,9 @@ mod tests {
             .agent_name(agent.to_string())
     }
 
-    /// Process-lifetime tempdir used as the default `TicketSystem` root
-    /// for tests in this module. Tests that need an isolated workspace
-    /// still call `sys.dir(...)` explicitly to override.
-    fn shared_test_dir() -> &'static std::path::Path {
-        use std::sync::OnceLock;
-        static DIR: OnceLock<crate::test_util::TempDir> = OnceLock::new();
-        DIR.get_or_init(|| crate::test_util::TempDir::new().unwrap())
-            .path()
-    }
-
-    fn one_ticket(agent: &str) -> (Arc<TicketSystem>, String) {
+    fn one_ticket(agent: &str, dir: PathBuf) -> (Arc<TicketSystem>, String) {
         let sys = TicketSystem::new();
-        sys.dir(shared_test_dir().to_path_buf());
+        sys.dir(dir);
         sys.insert(Ticket::new("parent body").label(agent), "tester".into());
         let key = sys
             .claim(|t| t.status == Status::Todo, agent)
@@ -200,8 +190,7 @@ mod tests {
     #[tokio::test]
     async fn happy_path_finishes_parent_creates_child_with_parent_link() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (sys, parent_key) = one_ticket("alice");
-        sys.dir(dir.path().to_path_buf());
+        let (sys, parent_key) = one_ticket("alice", dir.path().to_path_buf());
         let ctx = ctx_with(Arc::clone(&sys), "alice", dir.path().to_path_buf());
 
         let outcome = HandoverTicketTool
@@ -234,8 +223,7 @@ mod tests {
     #[tokio::test]
     async fn appends_one_ndjson_line_for_parent_result() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (sys, parent_key) = one_ticket("alice");
-        sys.dir(dir.path().to_path_buf());
+        let (sys, parent_key) = one_ticket("alice", dir.path().to_path_buf());
         let ctx = ctx_with(Arc::clone(&sys), "alice", dir.path().to_path_buf());
 
         HandoverTicketTool
@@ -265,7 +253,6 @@ mod tests {
         // type check, so we exercise the schema-validation abort path.
         let dir = crate::test_util::TempDir::new().unwrap();
         let sys = TicketSystem::new();
-        sys.dir(shared_test_dir().to_path_buf());
         sys.dir(dir.path().to_path_buf());
         let schema = Schema::parse(serde_json::json!({
             "type": "string",
@@ -423,7 +410,7 @@ mod tests {
     #[tokio::test]
     async fn rejects_missing_to() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (sys, _key) = one_ticket("alice");
+        let (sys, _key) = one_ticket("alice", dir.path().to_path_buf());
         let ctx = ctx_with(Arc::clone(&sys), "alice", dir.path().to_path_buf());
         let outcome = HandoverTicketTool
             .call(serde_json::json!({"task": "x", "result": "y"}), &ctx)
@@ -435,7 +422,7 @@ mod tests {
     #[tokio::test]
     async fn rejects_empty_to() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (sys, _key) = one_ticket("alice");
+        let (sys, _key) = one_ticket("alice", dir.path().to_path_buf());
         let ctx = ctx_with(Arc::clone(&sys), "alice", dir.path().to_path_buf());
         let outcome = HandoverTicketTool
             .call(
@@ -450,7 +437,7 @@ mod tests {
     #[tokio::test]
     async fn rejects_missing_task() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (sys, _key) = one_ticket("alice");
+        let (sys, _key) = one_ticket("alice", dir.path().to_path_buf());
         let ctx = ctx_with(Arc::clone(&sys), "alice", dir.path().to_path_buf());
         let outcome = HandoverTicketTool
             .call(serde_json::json!({"to": "bob", "result": "y"}), &ctx)
@@ -462,7 +449,7 @@ mod tests {
     #[tokio::test]
     async fn rejects_missing_result() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (sys, _key) = one_ticket("alice");
+        let (sys, _key) = one_ticket("alice", dir.path().to_path_buf());
         let ctx = ctx_with(Arc::clone(&sys), "alice", dir.path().to_path_buf());
         let outcome = HandoverTicketTool
             .call(serde_json::json!({"to": "bob", "task": "x"}), &ctx)
@@ -474,8 +461,7 @@ mod tests {
     #[tokio::test]
     async fn rejects_null_or_empty_result() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (sys, _key) = one_ticket("alice");
-        sys.dir(dir.path().to_path_buf());
+        let (sys, _key) = one_ticket("alice", dir.path().to_path_buf());
         let ctx = ctx_with(Arc::clone(&sys), "alice", dir.path().to_path_buf());
         for body in [
             serde_json::json!({"to": "bob", "task": "x", "result": null}),
@@ -496,8 +482,7 @@ mod tests {
             serde_json::json!({"k": "v"}),
         ] {
             let dir = crate::test_util::TempDir::new().unwrap();
-            let (sys, parent_key) = one_ticket("alice");
-            sys.dir(dir.path().to_path_buf());
+            let (sys, parent_key) = one_ticket("alice", dir.path().to_path_buf());
             let ctx = ctx_with(Arc::clone(&sys), "alice", dir.path().to_path_buf());
 
             let outcome = HandoverTicketTool
@@ -519,7 +504,7 @@ mod tests {
     #[tokio::test]
     async fn rejects_non_string_task() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (sys, _key) = one_ticket("alice");
+        let (sys, _key) = one_ticket("alice", dir.path().to_path_buf());
         let ctx = ctx_with(Arc::clone(&sys), "alice", dir.path().to_path_buf());
         let outcome = HandoverTicketTool
             .call(
@@ -535,7 +520,7 @@ mod tests {
     async fn errors_when_no_current_ticket() {
         let dir = crate::test_util::TempDir::new().unwrap();
         let sys = TicketSystem::new();
-        sys.dir(shared_test_dir().to_path_buf());
+        sys.dir(dir.path().to_path_buf());
         let ctx = ctx_with(Arc::clone(&sys), "alice", dir.path().to_path_buf());
         let outcome = HandoverTicketTool
             .call(
@@ -550,8 +535,7 @@ mod tests {
     #[tokio::test]
     async fn substitutes_parent_key_and_result_in_task() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (sys, parent_key) = one_ticket("alice");
-        sys.dir(dir.path().to_path_buf());
+        let (sys, parent_key) = one_ticket("alice", dir.path().to_path_buf());
         let ctx = ctx_with(Arc::clone(&sys), "alice", dir.path().to_path_buf());
 
         HandoverTicketTool
@@ -576,8 +560,7 @@ mod tests {
     #[tokio::test]
     async fn unknown_placeholders_pass_through() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (sys, parent_key) = one_ticket("alice");
-        sys.dir(dir.path().to_path_buf());
+        let (sys, parent_key) = one_ticket("alice", dir.path().to_path_buf());
         let ctx = ctx_with(Arc::clone(&sys), "alice", dir.path().to_path_buf());
 
         HandoverTicketTool
@@ -605,8 +588,7 @@ mod tests {
         // must NOT be re-expanded — the substitution pass runs once
         // per placeholder, not recursively.
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (sys, parent_key) = one_ticket("alice");
-        sys.dir(dir.path().to_path_buf());
+        let (sys, parent_key) = one_ticket("alice", dir.path().to_path_buf());
         let ctx = ctx_with(Arc::clone(&sys), "alice", dir.path().to_path_buf());
 
         HandoverTicketTool
