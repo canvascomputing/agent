@@ -1186,11 +1186,13 @@ mod tests {
         let key = sys.claim(|t| t.has_label("L"), "agent").unwrap();
         sys.set_result(&key, serde_json::json!({"status": "malicious"}))
             .unwrap();
-        sys.cancel_on_result(|r| {
-            r.get("status").and_then(|v| v.as_str()) == Some("malicious")
-        });
+        sys.cancel_on_result(|r| r.get("status").and_then(|v| v.as_str()) == Some("malicious"));
         assert!(!sys.is_cancelled());
-        sys.emit(&key, "agent", EventKind::TicketFinished { key: key.clone() });
+        sys.emit(
+            &key,
+            "agent",
+            EventKind::TicketFinished { key: key.clone() },
+        );
         assert!(sys.is_cancelled());
     }
 
@@ -1201,10 +1203,12 @@ mod tests {
         let key = sys.claim(|t| t.has_label("L"), "agent").unwrap();
         sys.set_result(&key, serde_json::json!({"status": "benign"}))
             .unwrap();
-        sys.cancel_on_result(|r| {
-            r.get("status").and_then(|v| v.as_str()) == Some("malicious")
-        });
-        sys.emit(&key, "agent", EventKind::TicketFinished { key: key.clone() });
+        sys.cancel_on_result(|r| r.get("status").and_then(|v| v.as_str()) == Some("malicious"));
+        sys.emit(
+            &key,
+            "agent",
+            EventKind::TicketFinished { key: key.clone() },
+        );
         assert!(!sys.is_cancelled());
     }
 
