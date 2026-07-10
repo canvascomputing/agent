@@ -414,6 +414,52 @@ impl TicketSystem {
         })
     }
 
+    /// Enqueue a ticket whenever `make` turns an event into one. Runs as
+    /// one more entry on the [`Self::on_event`] chain; return `None` to
+    /// spawn nothing for that event. The result-scoped sibling
+    /// [`Self::create_ticket_on_result`] covers the common "a ticket
+    /// finished, mint a follow-up" case.
+    pub fn create_ticket_on_event<F>(&self, make: F) -> &Self
+    where
+        F: Fn(&Event) -> Option<Ticket> + Send + Sync + 'static,
+    {
+        let supervisor = self.weak_self.clone();
+        self.on_event(move |event| {
+            let Some(ticket) = make(&event) else {
+                return;
+            };
+            if let Some(system) = supervisor.upgrade() {
+                system.ticket(ticket);
+            }
+        })
+    }
+
+    /// Enqueue a follow-up ticket whenever a finished ticket makes `make`
+    /// return one. Fires on `TicketFinished`, passing the finished ticket
+    /// so `make` reads its key, labels, task, and schema-validated result,
+    /// and can chain the follow-up via `Ticket::parent`. Guard against a
+    /// follow-up that itself re-triggers `make`, or the run never drains.
+    pub fn create_ticket_on_result<F>(&self, make: F) -> &Self
+    where
+        F: Fn(&Ticket) -> Option<Ticket> + Send + Sync + 'static,
+    {
+        let supervisor = self.weak_self.clone();
+        self.on_event(move |event| {
+            let EventKind::TicketFinished { key } = &event.kind else {
+                return;
+            };
+            let Some(system) = supervisor.upgrade() else {
+                return;
+            };
+            let Some(finished) = system.get_ticket(key) else {
+                return;
+            };
+            if let Some(ticket) = make(&finished) {
+                system.ticket(ticket);
+            }
+        })
+    }
+
     /// Override the directory under which the system writes
     /// `results.jsonl`, `tickets.jsonl`, and per-ticket
     /// `tickets/<key>/ticket.<ts>.json` files. Defaults to `./.agentwerk`.
@@ -1210,6 +1256,80 @@ mod tests {
             EventKind::TicketFinished { key: key.clone() },
         );
         assert!(!sys.is_cancelled());
+    }
+
+    #[test]
+    fn create_ticket_on_event_enqueues_when_make_returns_ticket() {
+        let (sys, _tmp) = test_system();
+        sys.create_ticket_on_event(|e| match &e.kind {
+            EventKind::TicketFailed { key } => {
+                Some(Ticket::new(format!("triage {key}")).label("triage"))
+            }
+            _ => None,
+        });
+        sys.emit(
+            "TICKET-1",
+            "agent",
+            EventKind::TicketFailed {
+                key: "TICKET-1".into(),
+            },
+        );
+        let spawned = sys.find_ticket(|t| t.has_label("triage")).unwrap();
+        assert_eq!(spawned.task, serde_json::json!("triage TICKET-1"));
+    }
+
+    #[test]
+    fn create_ticket_on_event_skips_when_make_returns_none() {
+        let (sys, _tmp) = test_system();
+        sys.create_ticket_on_event(|_| None);
+        sys.emit("KEY", "agent", EventKind::TurnStarted);
+        assert!(sys.tickets().is_empty());
+    }
+
+    #[test]
+    fn create_ticket_on_result_enqueues_follow_up_for_finished_ticket() {
+        let (sys, _tmp) = test_system();
+        sys.ticket(Ticket::new("scout").label("scout"));
+        let key = sys.claim(|t| t.has_label("scout"), "agent").unwrap();
+        sys.set_result(&key, serde_json::json!("lead")).unwrap();
+        sys.set_finished(&key).unwrap();
+        sys.create_ticket_on_result(|done| {
+            done.has_label("scout")
+                .then(|| Ticket::new("hunt").label("sniper"))
+        });
+        sys.emit(
+            &key,
+            "agent",
+            EventKind::TicketFinished { key: key.clone() },
+        );
+        assert_eq!(sys.count_tickets(|t| t.has_label("sniper")), 1);
+    }
+
+    #[test]
+    fn create_ticket_on_result_links_follow_up_to_finished_parent() {
+        let (sys, _tmp) = test_system();
+        sys.ticket(Ticket::new("scout").label("scout"));
+        let key = sys.claim(|t| t.has_label("scout"), "agent").unwrap();
+        sys.set_result(&key, serde_json::json!("lead")).unwrap();
+        sys.set_finished(&key).unwrap();
+        sys.create_ticket_on_result(|done| {
+            Some(Ticket::new("hunt").label("sniper").parent(&done.key))
+        });
+        sys.emit(
+            &key,
+            "agent",
+            EventKind::TicketFinished { key: key.clone() },
+        );
+        let spawned = sys.find_ticket(|t| t.has_label("sniper")).unwrap();
+        assert_eq!(spawned.parent, Some(key));
+    }
+
+    #[test]
+    fn create_ticket_on_result_ignores_unfinished_events() {
+        let (sys, _tmp) = test_system();
+        sys.create_ticket_on_result(|_| Some(Ticket::new("follow-up").label("next")));
+        sys.emit("KEY", "agent", EventKind::TurnStarted);
+        assert!(sys.tickets().is_empty());
     }
 
     #[test]
