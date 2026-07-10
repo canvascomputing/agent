@@ -5,7 +5,7 @@
 <h1 align="center">agentwerk</h1>
 
 <p align="center">
-  <strong>A minimal Rust crate for running many agents in parallel on a shared ticket queue.</strong>
+  <strong>A minimal Rust crate for running many agents in parallel.</strong>
 </p>
 
 <p align="center">
@@ -17,7 +17,7 @@
   <a href="#development">Development</a>
 </p>
 
-<p align="center">agentwerk runs many agents in parallel on a shared ticket queue. Tickets carry the work, labels assign it to matching agents, and agentwerk handles concurrency, built-in tools, a knowledge store, schema validation, retries, limits, and multi-provider support.</p>
+<p align="center">agentwerk is designed to tackle complex problems with fleets of agents through the simplest interface possible. It provides a ticket system which distributes tasks across agents running in parallel, validates results, retries on failure, and reports every step as an event.</p>
 
 <p align="center"><em>agentwerk pairs "agent" with the German "Werk", a word for both factory and artwork: machinery for building agentic systems.</em></p>
 
@@ -78,17 +78,17 @@ make use_case name=<name>    # run one
 # API
 
 - [Agents](#agents): Pick up tickets and produce results.
-- [Tickets](#tickets): Ticket system allowing to orchestrate complex work.
+- [Tickets](#tickets): Coordinate complex work across agents.
 - [Prompting](#prompting): Role, context, and task shaping the work of an agent.
 - [Tools](#tools): Capabilities agents use to solve a ticket.
-- [Knowledge](#knowledge): Knowledge base an agent creates during a run.
+- [Knowledge](#knowledge): Durable memory agents share across tickets and runs.
 - [Sessions](#sessions): Working directory layout and how to reopen a run.
 - [Events](#events): Lifecycle events emitted while agents work.
 - [Stats](#stats): Metrics about tickets, tokens and time.
 
 ## Agents
 
-An `Agent` picks up **tickets**, uses assigned tools to solve them, and writes the result back onto each ticket.
+An `Agent` picks up **tickets**, uses tools to solve them, and writes the result back onto each ticket.
 
 ```rust
 use agentwerk::tools::ReadFileTool;
@@ -104,6 +104,9 @@ let agent = Agent::new()
 | `name(s)` | Set an identifier for assigning tickets. |
 | `label(l)` / `labels([..])` | Restrict the agent to tickets carrying matching labels. |
 | `tool(t)` / `tools([..])` | Register a tool the agent may call. |
+| `dir(d)` | Set the directory the agent works in. |
+
+`role` and `context` are covered under [Prompting](#prompting); `knowledge(&store)` under [Knowledge](#knowledge).
 
 ### Providers
 
@@ -147,7 +150,7 @@ let agent = Agent::new()
   <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/tickets.jpg" width="400" />
 </p>
 
-The `TicketSystem` is the core data structure of agentwerk to orchestrate complex collaboration between agents. A `task` is the work itself, a `ticket` wraps it with additional metadata, like labels and schemas. Labels assign work to matching agents.
+The `TicketSystem` coordinates collaboration between agents. A `task` is the work itself; a `ticket` wraps it with metadata like labels and schemas. Labels assign work to matching agents.
 
 ```rust
 use agentwerk::{Agent, Ticket, TicketSystem};
@@ -214,7 +217,35 @@ let answer = tickets.last_result();
 | `cancel()` | Cancel the run. |
 | `finish_reason()` | Return why the most recent `finish()` returned: `Drained`, `PolicyViolated(kind)`, or `Cancelled`. |
 
-`cancel_on(trigger)`, `cancel_on_event(p)`, and `cancel_on_result(p)` end the run when a future resolves, an event matches, or a finished result matches. `create_ticket_on_result(make)` and `create_ticket_on_event(make)` enqueue a follow-up ticket from a finished ticket (chain it with `Ticket::parent`) or from any event. `wait_for_ticket(p).await` blocks for one matching ticket instead of draining the queue. `is_cancelled()` reports external cancel only: a clean drain or policy stop leaves it false, and every exit rides `EventKind::RunFinished { reason }` on `on_event`. See [`TicketSystem`](https://docs.rs/agentwerk/latest/agentwerk/agents/tickets/struct.TicketSystem.html).
+### Reacting to the run
+
+Steer a run from the outside while agents work: end it early, call off one label's agents, or enqueue follow-up work.
+
+```rust
+// Fail fast: end the run at the first malicious verdict.
+tickets.cancel_on_result(|result| result["verdict"] == "malicious");
+
+// Verify every analysis finding with a follow-up ticket for the review pool.
+tickets.create_ticket_on_result(|ticket| {
+    ticket.has_label("analysis").then(|| {
+        Ticket::new("Verify this finding.")
+            .parent(&ticket.key)
+            .label("review")
+    })
+});
+```
+
+| Method | Description |
+|--------|-------------|
+| `cancel_on(trigger)` | End the run when another task finishes. |
+| `cancel_on_event(p)` | End the run when an event matches. |
+| `cancel_on_result(p)` | End the run when a finished result matches. |
+| `cancel_label_on_event(l, p)` | Call off one label's agents while the rest keep working. |
+| `create_ticket_on_result(make)` | Enqueue a follow-up ticket from a finished ticket. |
+| `create_ticket_on_event(make)` | Enqueue a follow-up ticket from any event. |
+| `wait_for_ticket(p)` | Wait for one matching ticket instead of draining the queue. |
+
+See [`TicketSystem`](https://docs.rs/agentwerk/latest/agentwerk/agents/tickets/struct.TicketSystem.html).
 
 ### Reading results
 
@@ -333,7 +364,7 @@ You work within a ticket system. Each task arrives as a ticket; you process one 
 
 ## Tools
 
-Give agents access to tools helping them to solve a given task. Each tool exposes an action the agent can choose to take. agentwerk provides minimal baseline tools:
+Give agents access to tools. Each tool exposes an action the agent can choose to take. agentwerk provides minimal baseline tools:
 
 | | Tool | Description |
 |-|------|-------------|
@@ -438,7 +469,7 @@ Layout:
 
 ## Events
 
-Events report everything that happens while your agents work and give you deep insights into behavior or failures.
+Events report everything that happens while your agents work. Log them, display them, or react to them.
 
 ```rust
 use agentwerk::event::{Event, EventKind};
@@ -467,7 +498,7 @@ Also: `RequestStarted`, `RequestFailed`, `TextChunkReceived`, `ToolCallStarted`,
 
 ## Stats
 
-`Stats` contain metrics about the progress of your agents' work, allowing to optimize your agentic system and identify bottlenecks.
+`Stats` contain metrics about the progress of your agents' work, allowing you to optimize your agentic system and identify bottlenecks.
 
 ```rust
 let s = tickets.stats();
