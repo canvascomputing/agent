@@ -214,7 +214,7 @@ let answer = tickets.last_result();
 | `cancel()` | Cancel the run. |
 | `finish_reason()` | Return why the most recent `finish()` returned: `Drained`, `PolicyViolated(kind)`, or `Cancelled`. |
 
-To cancel when another task finishes, use `cancel_on(trigger)`. To cancel when an event matches a condition you supply, use `cancel_on_event(p)`. To block until one ticket matches a predicate rather than draining the whole queue, use `wait_for_ticket(p).await`. `is_cancelled()` reports external cancel only; a clean drain or a policy stop leaves it false. The same outcome is announced as `EventKind::RunFinished { reason }` for subscribers attached via `on_event`. See [`TicketSystem`](https://docs.rs/agentwerk/latest/agentwerk/agents/tickets/struct.TicketSystem.html).
+To cancel when another task finishes, use `cancel_on(trigger)`. To cancel when an event matches a condition you supply, use `cancel_on_event(p)`. To cancel when a finished ticket's result matches a condition, use `cancel_on_result(p)`. To block until one ticket matches a predicate rather than draining the whole queue, use `wait_for_ticket(p).await`. `is_cancelled()` reports external cancel only; a clean drain or a policy stop leaves it false. The same outcome is announced as `EventKind::RunFinished { reason }` for subscribers attached via `on_event`. See [`TicketSystem`](https://docs.rs/agentwerk/latest/agentwerk/agents/tickets/struct.TicketSystem.html).
 
 ### Reading results
 

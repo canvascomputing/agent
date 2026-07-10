@@ -388,6 +388,32 @@ impl TicketSystem {
         })
     }
 
+    /// Cancel the run when a finished ticket's result matches `predicate`.
+    /// Fires on `TicketFinished`, so the value passed is the stored,
+    /// schema-validated result: callers never reach into the finish tool's
+    /// input shape. Fail-fast for "stop the whole run on the first result
+    /// that means stop".
+    pub fn cancel_on_result<F>(&self, predicate: F) -> &Self
+    where
+        F: Fn(&serde_json::Value) -> bool + Send + Sync + 'static,
+    {
+        let supervisor = self.weak_self.clone();
+        self.on_event(move |event| {
+            let EventKind::TicketFinished { key } = &event.kind else {
+                return;
+            };
+            let Some(system) = supervisor.upgrade() else {
+                return;
+            };
+            let Some(result) = system.get_ticket(key).and_then(|t| t.result) else {
+                return;
+            };
+            if predicate(&result) {
+                system.cancel();
+            }
+        })
+    }
+
     /// Override the directory under which the system writes
     /// `results.jsonl`, `tickets.jsonl`, and per-ticket
     /// `tickets/<key>/ticket.<ts>.json` files. Defaults to `./.agentwerk`.
@@ -1151,6 +1177,35 @@ mod tests {
         sys.emit("KEY", "agent", EventKind::TurnStarted);
         assert_eq!(count.load(Ordering::Relaxed), 1, "user handler should fire");
         assert!(sys.is_cancelled(), "predicate should trip cancel");
+    }
+
+    #[test]
+    fn cancel_on_result_trips_when_finished_result_matches() {
+        let (sys, _tmp) = test_system();
+        sys.ticket(Ticket::new("x").label("L"));
+        let key = sys.claim(|t| t.has_label("L"), "agent").unwrap();
+        sys.set_result(&key, serde_json::json!({"status": "malicious"}))
+            .unwrap();
+        sys.cancel_on_result(|r| {
+            r.get("status").and_then(|v| v.as_str()) == Some("malicious")
+        });
+        assert!(!sys.is_cancelled());
+        sys.emit(&key, "agent", EventKind::TicketFinished { key: key.clone() });
+        assert!(sys.is_cancelled());
+    }
+
+    #[test]
+    fn cancel_on_result_ignores_nonmatching_result() {
+        let (sys, _tmp) = test_system();
+        sys.ticket(Ticket::new("x").label("L"));
+        let key = sys.claim(|t| t.has_label("L"), "agent").unwrap();
+        sys.set_result(&key, serde_json::json!({"status": "benign"}))
+            .unwrap();
+        sys.cancel_on_result(|r| {
+            r.get("status").and_then(|v| v.as_str()) == Some("malicious")
+        });
+        sys.emit(&key, "agent", EventKind::TicketFinished { key: key.clone() });
+        assert!(!sys.is_cancelled());
     }
 
     #[test]

@@ -86,7 +86,7 @@ Two layers of state exist. The per-ticket transcript lives on `Ticket::replies`:
 **Two `Arc<AtomicBool>` signals separate "stop the workers" from "external cancel was requested." Both flip on cancel; only the stop signal flips on policy or drain.**
 
 - `TicketSystem::stop_signal` is what workers and tools poll. `finish()` flips it on cancel, on policy violation, and on clean drain so the worker loop, in-flight tools, and the join handle all wind down.
-- `TicketSystem::cancel_signal` is flipped only by `cancel()`, `cancel_on(trigger)`, and `cancel_on_event(predicate)`. `is_cancelled()` reads it; a clean drain leaves it untouched so observers can tell the three exit paths apart.
+- `TicketSystem::cancel_signal` is flipped only by `cancel()`, `cancel_on(trigger)`, `cancel_on_event(predicate)`, and `cancel_on_result(predicate)`. `is_cancelled()` reads it; a clean drain leaves it untouched so observers can tell the three exit paths apart.
 - `cancel()` flips both atomics in sync. `cancel_on*` route through `cancel()` so cancellation triggers compose with the rest of the run's lifecycle.
 - Tools observe the stop signal through `ToolContext::interrupt_signal` and `wait_for_cancel`; pair with `tokio::select!` so cancel drops the losing branch promptly.
 - Dropping the `TicketSystem` while agents still reference it via `Weak` is the public way to abort: the upgrade fails and each task panics out cleanly.
