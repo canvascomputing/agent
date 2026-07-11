@@ -5,8 +5,9 @@ read_only: false
 
 Finish the current ticket and hand follow-up work to another agent in one atomic call: it writes this ticket's `result`, marks it `Finished` (terminal), and creates a `Todo` child pinned to `to` with this ticket as its `parent`. This is the only way to finish-and-chain in one turn.
 
-- `to` labels the child (an agent name pins it, a scope label routes it); `task` is its plain-text instruction.
-- Pass your own answer alongside `to`/`task`: when this ticket's own schema is an object, its fields go directly, otherwise use `result`.
+- `to` labels the child (an agent name pins it, a scope label routes it).
+- Pass your own answer alongside `to`: when this ticket's own schema is an object, its fields go directly, otherwise use `result`.
+- The child's body defaults to your `result`; pass `task` only when the receiving agent needs an instruction beyond it.
 
 ## When NOT to use
 
@@ -25,7 +26,7 @@ Finish the current ticket and hand follow-up work to another agent in one atomic
     },
     "task": {
       "type": "string",
-      "description": "Body of the child ticket as a plain-text instruction. MUST be a non-empty string. Describe what the receiving agent should do next. Reserved placeholders `{parent_key}` and `{parent_result}` are substituted at handover time with the finishing ticket's key and result string; unknown `{name}` placeholders pass through verbatim."
+      "description": "Optional body of the child ticket as a plain-text instruction; when omitted, the child's body is your `result`. Pass it only to tell the receiving agent something beyond the result. Reserved placeholders `{parent_key}` and `{parent_result}` are substituted at handover time with the finishing ticket's key and result string; unknown `{name}` placeholders pass through verbatim."
     },
     "result": {
       "description": "Final answer for the current ticket before the handover: any JSON value, validated against this ticket's own schema. A plain-text summary when this ticket has no schema. `null` or an empty string is rejected."
@@ -33,7 +34,6 @@ Finish the current ticket and hand follow-up work to another agent in one atomic
   },
   "required": [
     "to",
-    "task",
     "result"
   ]
 }

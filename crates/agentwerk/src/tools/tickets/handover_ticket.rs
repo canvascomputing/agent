@@ -91,14 +91,14 @@ impl ToolLike for HandoverTicketTool {
                 Some(s) if !s.trim().is_empty() => s.trim().to_string(),
                 _ => return Ok(ToolResult::error("Missing required parameter: to")),
             };
+            // An omitted `task` defaults to the parent result below: the
+            // common handoff forwards the finding verbatim.
             let task = match input.get("task") {
-                Some(Value::String(s)) if !s.is_empty() => Value::String(s.clone()),
+                Some(Value::String(s)) if !s.is_empty() => Some(Value::String(s.clone())),
                 Some(Value::String(_)) => {
                     return Ok(ToolResult::error("`task` must not be an empty string"))
                 }
-                Some(Value::Null) | None => {
-                    return Ok(ToolResult::error("Missing required parameter: task"))
-                }
+                Some(Value::Null) | None => None,
                 Some(_) => return Ok(ToolResult::error("`task` must be a string")),
             };
             let parent_key = match resolve_current_key(&ticket_system, ctx) {
@@ -141,7 +141,10 @@ impl ToolLike for HandoverTicketTool {
                 other => serde_json::to_string(other).unwrap_or_default(),
             };
 
-            let task = apply_handover_templates(task, &parent_key, &parent_result_str);
+            let task = match task {
+                Some(task) => apply_handover_templates(task, &parent_key, &parent_result_str),
+                None => Value::String(parent_result_str.clone()),
+            };
             let child = Ticket::new(task).label(&to).parent(&parent_key);
 
             // Insert the child BEFORE finishing the parent: the child is
@@ -435,15 +438,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rejects_missing_task() {
+    async fn omitted_task_defaults_child_body_to_the_parent_result() {
         let dir = crate::test_util::TempDir::new().unwrap();
         let (sys, _key) = one_ticket("alice", dir.path().to_path_buf());
         let ctx = ctx_with(Arc::clone(&sys), "alice", dir.path().to_path_buf());
         let outcome = HandoverTicketTool
-            .call(serde_json::json!({"to": "bob", "result": "y"}), &ctx)
+            .call(serde_json::json!({"to": "bob", "result": "alice's findings"}), &ctx)
             .await
             .unwrap();
-        assert!(matches!(outcome, ToolResult::Error(_)));
+        assert!(matches!(outcome, ToolResult::Success(_)), "{outcome:?}");
+
+        let child = sys.get_ticket("TICKET-2").unwrap();
+        assert_eq!(
+            child.task,
+            serde_json::Value::String("alice's findings".to_string()),
+        );
     }
 
     #[tokio::test]
