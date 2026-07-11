@@ -7,9 +7,9 @@ Read or write pages in the shared knowledge base: durable facts injected into ev
 
 - Save a durable fact future tickets need; one topic per page, with a descriptive slug (`deployment-config`, `pkg-utils-py`).
 - `description` is a one-sentence index line under 80 chars. Cross-link pages with `[text](/pages/slug.md)`.
-- `type` is a short concept kind (`Overview`, `Verdict`); optional, defaults to `Knowledge`.
 - `write` overwrites the page and requires `slug`, `description`, and `content`: omitting any is the most common error. Read first if you mean to append.
 - Only `read` a slug already shown in `## Knowledge` or `list`; an unseen slug does not exist.
+- `remove` is a rarely needed cleanup for a page that turned out wrong; prefer `write` to correct it in place.
 
 ## When NOT to use
 
@@ -30,15 +30,11 @@ Read or write pages in the shared knowledge base: durable facts injected into ev
         "remove",
         "list"
       ],
-      "description": "The operation to perform. 'write' creates or replaces a page (requires slug + description + content). 'read' returns the full page body (requires slug; only valid for slugs in the index). 'remove' deletes a page (requires slug). 'list' returns the current index."
+      "description": "The operation to perform. 'write' creates or replaces a page (requires slug + description + content). 'read' returns the full page body (requires slug; only valid for slugs in the index). 'list' returns the current index. 'remove' deletes a page (requires slug); rarely needed, prefer 'write' to correct a page."
     },
     "slug": {
       "type": "string",
       "description": "Page identifier (lowercase, hyphens, max 60 chars). Required for write, read, and remove; omitting it returns an error. For file paths, replace dots and slashes with hyphens (e.g. pkg/utils.py \u2192 pkg-utils-py)."
-    },
-    "type": {
-      "type": "string",
-      "description": "OKF concept type: a short kind such as Overview or Verdict. Optional; defaults to Knowledge."
     },
     "description": {
       "type": "string",
@@ -47,13 +43,6 @@ Read or write pages in the shared knowledge base: durable facts injected into ev
     "content": {
       "type": "string",
       "description": "Full page body in markdown. Required for write. Cross-link other pages with [text](/pages/slug.md)."
-    },
-    "tags": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      },
-      "description": "Optional tags for the page."
     }
   },
   "required": [

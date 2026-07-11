@@ -91,28 +91,14 @@ impl ToolLike for ManageKnowledgeTool {
                             return Ok(ToolResult::error("Missing required parameter: content"))
                         }
                     };
-                    let kind = input
-                        .get("type")
-                        .and_then(Value::as_str)
-                        .unwrap_or("")
-                        .to_string();
-                    let tags: Vec<String> = input
-                        .get("tags")
-                        .and_then(Value::as_array)
-                        .map(|arr| {
-                            arr.iter()
-                                .filter_map(Value::as_str)
-                                .map(String::from)
-                                .collect()
-                        })
-                        .unwrap_or_default();
-
+                    // Kind and tags stay host-side concerns set through the
+                    // Page API; the model only names, describes, and fills a page.
                     let page = crate::agents::knowledge::Page {
                         slug: slug.to_string(),
-                        kind,
+                        kind: String::new(),
                         description: description.to_string(),
                         content: content.to_string(),
-                        tags,
+                        tags: Vec::new(),
                     };
                     match self.store.pages().save(page) {
                         Ok(out) => {
