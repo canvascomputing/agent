@@ -9,7 +9,7 @@ use serde_json::Value;
 
 use super::tool::{ToolContext, ToolLike, ToolResult};
 use super::tool_file::ToolFile;
-use super::util::glob_match;
+use super::util::glob_matches_file;
 use crate::codegrep::{self, Conf, Pattern};
 use crate::providers::ProviderResult as Result;
 
@@ -27,7 +27,7 @@ use crate::providers::ProviderResult as Result;
 /// ```
 pub struct CodegrepTool;
 
-const DEFAULT_MAX_RESULTS: u64 = 100;
+const MAX_RESULTS: usize = 100;
 const MAX_LINE_DISPLAY: usize = 200;
 const SKIP_DIRS: &[&str] = &[".git", "target", "node_modules", "vendor"];
 
@@ -66,14 +66,6 @@ impl ToolLike for CodegrepTool {
         tool_file().read_only
     }
 
-    fn opened_paths(&self, input: &Value) -> Vec<String> {
-        input
-            .get("path")
-            .and_then(|v| v.as_str())
-            .map(|s| vec![s.to_string()])
-            .unwrap_or_default()
-    }
-
     fn call<'a>(
         &'a self,
         input: Value,
@@ -85,16 +77,11 @@ impl ToolLike for CodegrepTool {
                 None => return Ok(ToolResult::error("Missing required parameter: pattern")),
             };
 
-            let base = ctx.dir.join(input["path"].as_str().unwrap_or("."));
+            let base = ctx.dir.clone();
             let glob_filter = input["glob"].as_str().map(|s| s.to_string());
-            let mode = input["mode"].as_str().unwrap_or("multiline");
             let caseless = input["caseless"].as_bool().unwrap_or(false);
-            let max_results = input["max_results"].as_u64().unwrap_or(DEFAULT_MAX_RESULTS) as usize;
 
-            let mut conf = match mode {
-                "singleline" => Conf::default_singleline(),
-                _ => Conf::default_multiline(),
-            };
+            let mut conf = Conf::default_multiline();
             conf.caseless = caseless;
 
             let pattern = match Pattern::parse(pattern_source, &conf) {
@@ -112,7 +99,7 @@ impl ToolLike for CodegrepTool {
             };
 
             let mut files = Vec::new();
-            collect_files(&base, &glob_filter, &mut files);
+            collect_files(&base, &base, &glob_filter, &mut files);
             files.sort();
 
             let mut output: Vec<String> = Vec::new();
@@ -136,7 +123,7 @@ impl ToolLike for CodegrepTool {
                         format!("{rel}:{line}:{col}: {summary} {captures}")
                     };
                     output.push(row);
-                    if output.len() >= max_results {
+                    if output.len() >= MAX_RESULTS {
                         break 'outer;
                     }
                 }
@@ -192,7 +179,7 @@ which no code contains. Write the real identifier instead, e.g. `{word}(...)`."
     None
 }
 
-fn collect_files(dir: &Path, glob_filter: &Option<String>, results: &mut Vec<PathBuf>) {
+fn collect_files(dir: &Path, base: &Path, glob_filter: &Option<String>, results: &mut Vec<PathBuf>) {
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
         Err(_) => return,
@@ -202,12 +189,12 @@ fn collect_files(dir: &Path, glob_filter: &Option<String>, results: &mut Vec<Pat
         let name = entry.file_name().to_string_lossy().to_string();
         if path.is_dir() {
             if !SKIP_DIRS.contains(&name.as_str()) {
-                collect_files(&path, glob_filter, results);
+                collect_files(&path, base, glob_filter, results);
             }
             continue;
         }
         if let Some(ref filter) = glob_filter {
-            if !glob_match(filter, &name) {
+            if !glob_matches_file(filter, &path, base) {
                 continue;
             }
         }
@@ -479,17 +466,17 @@ mod tests {
     async fn caps_match_count_at_max_results() {
         let tmp = crate::test_util::TempDir::new().unwrap();
         let mut content = String::new();
-        for i in 0..10 {
+        for i in 0..(MAX_RESULTS + 10) {
             content.push_str(&format!("fn fn_{i}() {{}}\n"));
         }
         fs::write(tmp.path().join("many.rs"), content).unwrap();
         let output = run(
             &CodegrepTool,
             &test_ctx(tmp.path()),
-            serde_json::json!({"pattern": "fn $N()", "max_results": 3}),
+            serde_json::json!({"pattern": "fn $N()"}),
         )
         .await;
-        assert_eq!(output.lines().count(), 3, "output: {output}");
+        assert_eq!(output.lines().count(), MAX_RESULTS, "output: {output}");
     }
 
     #[tokio::test]
@@ -515,7 +502,7 @@ mod tests {
         let output = run(
             &CodegrepTool,
             &test_ctx(tmp.path()),
-            serde_json::json!({"pattern": "a....b", "mode": "singleline"}),
+            serde_json::json!({"pattern": "a....b"}),
         )
         .await;
         assert!(

@@ -9,12 +9,12 @@ use serde_json::Value;
 
 use super::tool::{ToolContext, ToolLike, ToolResult};
 use super::tool_file::ToolFile;
-use super::util::glob_match;
+use super::util::glob_matches_file;
 use crate::providers::ProviderResult as Result;
 
 /// Search file contents by substring under the working directory. Read-only.
 /// Returns matching line snippets with file paths and line numbers; capped
-/// at 100 hits by default.
+/// at 100 hits.
 ///
 /// # Examples
 ///
@@ -26,14 +26,14 @@ use crate::providers::ProviderResult as Result;
 /// ```
 pub struct GrepTool;
 
-const DEFAULT_MAX_RESULTS: u64 = 100;
+const MAX_RESULTS: usize = 100;
 const SKIP_DIRS: &[&str] = &[".git", "target", "node_modules", "vendor"];
 
 /// Maximum bytes of a source line to include in content-mode output. Lines
 /// longer than this (common in minified bundles) are sliced to a window
 /// around the match column so a single hit never dumps megabytes into the
 /// tool result. The agent can follow up with `read_file_tool` and
-/// `col_offset`/`col_limit` for the full context.
+/// `column`/`length` for the full context.
 const MAX_LINE_DISPLAY: usize = 200;
 
 fn tool_file() -> &'static ToolFile {
@@ -63,14 +63,6 @@ impl ToolLike for GrepTool {
         tool_file().read_only
     }
 
-    fn opened_paths(&self, input: &Value) -> Vec<String> {
-        input
-            .get("path")
-            .and_then(|v| v.as_str())
-            .map(|s| vec![s.to_string()])
-            .unwrap_or_default()
-    }
-
     fn call<'a>(
         &'a self,
         input: Value,
@@ -82,12 +74,10 @@ impl ToolLike for GrepTool {
                 None => return Ok(ToolResult::error("Missing required parameter: pattern")),
             };
 
-            let base = ctx.dir.join(input["path"].as_str().unwrap_or("."));
+            let base = ctx.dir.clone();
             let glob_filter = input["glob"].as_str().map(|s| s.to_string());
-            let output_mode = input["output_mode"].as_str().unwrap_or("files");
-            let context_lines = input["context_lines"].as_u64().unwrap_or(0) as usize;
+            let output_mode = input["output_mode"].as_str().unwrap_or("content");
             let case_insensitive = input["case_insensitive"].as_bool().unwrap_or(false);
-            let max_results = input["max_results"].as_u64().unwrap_or(DEFAULT_MAX_RESULTS) as usize;
 
             let needle = if case_insensitive {
                 pattern.to_lowercase()
@@ -96,19 +86,11 @@ impl ToolLike for GrepTool {
             };
 
             let mut files = Vec::new();
-            collect_files(&base, &glob_filter, &mut files);
+            collect_files(&base, &base, &glob_filter, &mut files);
 
             let result = match output_mode {
-                "content" => search_content(
-                    &files,
-                    &base,
-                    &needle,
-                    case_insensitive,
-                    context_lines,
-                    max_results,
-                ),
-                "count" => search_count(&files, &base, &needle, case_insensitive, max_results),
-                _ => search_files(&files, &base, &needle, case_insensitive, max_results),
+                "files" => search_files(&files, &base, &needle, case_insensitive),
+                _ => search_content(&files, &base, &needle, case_insensitive),
             };
 
             Ok(ToolResult::success(result))
@@ -116,14 +98,7 @@ impl ToolLike for GrepTool {
     }
 }
 
-fn search_content(
-    files: &[PathBuf],
-    base: &Path,
-    needle: &str,
-    case_insensitive: bool,
-    context_lines: usize,
-    max_results: usize,
-) -> String {
+fn search_content(files: &[PathBuf], base: &Path, needle: &str, case_insensitive: bool) -> String {
     let mut output = Vec::new();
 
     'outer: for file_path in files {
@@ -131,35 +106,13 @@ fn search_content(
             Ok(c) => c,
             Err(_) => continue,
         };
-        let lines: Vec<&str> = content.lines().collect();
         let rel = relative_path(file_path, base);
 
-        let match_map: std::collections::BTreeMap<usize, usize> = lines
-            .iter()
-            .enumerate()
-            .filter_map(|(i, line)| {
-                line_matches(line, needle, case_insensitive).map(|col| (i, col))
-            })
-            .collect();
-
-        let match_indices: Vec<usize> = match_map.keys().copied().collect();
-
-        let mut emitted = std::collections::BTreeSet::new();
-        for &idx in &match_indices {
-            let start = idx.saturating_sub(context_lines);
-            let end = (idx + context_lines + 1).min(lines.len());
-            for (li, line) in lines.iter().enumerate().take(end).skip(start) {
-                if !emitted.insert(li) {
-                    continue;
-                }
-                if let Some(&col) = match_map.get(&li) {
-                    let snippet = truncate_around(line, col.saturating_sub(1), MAX_LINE_DISPLAY);
-                    output.push(format!("{}:{}:{}: {}", rel, li + 1, col, snippet));
-                } else {
-                    let snippet = truncate_line(line, MAX_LINE_DISPLAY);
-                    output.push(format!("{}:{}: {}", rel, li + 1, snippet));
-                }
-                if output.len() >= max_results {
+        for (i, line) in content.lines().enumerate() {
+            if let Some(col) = line_matches(line, needle, case_insensitive) {
+                let snippet = truncate_around(line, col.saturating_sub(1), MAX_LINE_DISPLAY);
+                output.push(format!("{}:{}:{}: {}", rel, i + 1, col, snippet));
+                if output.len() >= MAX_RESULTS {
                     break 'outer;
                 }
             }
@@ -169,43 +122,7 @@ fn search_content(
     output.join("\n")
 }
 
-fn search_count(
-    files: &[PathBuf],
-    base: &Path,
-    needle: &str,
-    case_insensitive: bool,
-    max_results: usize,
-) -> String {
-    let mut counts = Vec::new();
-
-    for file_path in files {
-        let content = match std::fs::read_to_string(file_path) {
-            Ok(c) => c,
-            Err(_) => continue,
-        };
-
-        let n = content
-            .lines()
-            .filter(|line| line_matches(line, needle, case_insensitive).is_some())
-            .count();
-        if n > 0 {
-            counts.push(format!("{}: {n} matches", relative_path(file_path, base)));
-        }
-        if counts.len() >= max_results {
-            break;
-        }
-    }
-
-    counts.join("\n")
-}
-
-fn search_files(
-    files: &[PathBuf],
-    base: &Path,
-    needle: &str,
-    case_insensitive: bool,
-    max_results: usize,
-) -> String {
+fn search_files(files: &[PathBuf], base: &Path, needle: &str, case_insensitive: bool) -> String {
     let mut matched = Vec::new();
 
     for file_path in files {
@@ -219,25 +136,13 @@ fn search_files(
             .any(|line| line_matches(line, needle, case_insensitive).is_some())
         {
             matched.push(relative_path(file_path, base));
-            if matched.len() >= max_results {
+            if matched.len() >= MAX_RESULTS {
                 break;
             }
         }
     }
 
     matched.join("\n")
-}
-
-/// Truncate a line to `max` bytes from the start, snapping to a char boundary.
-fn truncate_line(line: &str, max: usize) -> &str {
-    if line.len() <= max {
-        return line;
-    }
-    let mut end = max;
-    while end < line.len() && !line.is_char_boundary(end) {
-        end += 1;
-    }
-    &line[..end]
 }
 
 /// Return a window of up to `max` bytes centred on `byte_offset`, snapping
@@ -278,7 +183,7 @@ fn relative_path(path: &Path, base: &Path) -> String {
         .to_string()
 }
 
-fn collect_files(dir: &Path, glob_filter: &Option<String>, results: &mut Vec<PathBuf>) {
+fn collect_files(dir: &Path, base: &Path, glob_filter: &Option<String>, results: &mut Vec<PathBuf>) {
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
         Err(_) => return,
@@ -290,13 +195,13 @@ fn collect_files(dir: &Path, glob_filter: &Option<String>, results: &mut Vec<Pat
 
         if path.is_dir() {
             if !SKIP_DIRS.contains(&name.as_str()) {
-                collect_files(&path, glob_filter, results);
+                collect_files(&path, base, glob_filter, results);
             }
             continue;
         }
 
         if let Some(ref filter) = glob_filter {
-            if !glob_match(filter, &name) {
+            if !glob_matches_file(filter, &path, base) {
                 continue;
             }
         }
@@ -381,38 +286,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn context_lines_included() {
-        let tmp = setup_test_dir();
-        let tool = GrepTool;
-        let ctx = test_ctx(tmp.path());
-
-        let result = tool
-            .call(
-                serde_json::json!({
-                    "pattern": "Hello world",
-                    "output_mode": "content",
-                    "context_lines": 1
-                }),
-                &ctx,
-            )
-            .await
-            .unwrap();
-
-        let (ToolResult::Success(content)
-        | ToolResult::Error(content)
-        | ToolResult::SchemaError(content)) = &result;
-        // Should include the matching line with column info
-        assert!(content.contains("Hello world"));
-        // "Hello world" starts at column 15 in `    println!("Hello world");`
-        assert!(
-            content.contains(":2:15: "),
-            "Expected match line to include :2:15: but got:\n{content}"
-        );
-        // With 1 context line, should also include fn main() line (line before)
-        assert!(content.contains("fn main()"));
-    }
-
-    #[tokio::test]
     async fn content_mode_includes_column_of_first_match() {
         let tmp = setup_test_dir();
         let tool = GrepTool;
@@ -440,54 +313,6 @@ mod tests {
         let parts: Vec<&str> = line.splitn(4, ':').collect();
         assert_eq!(parts.len(), 4, "Expected path:line:col: content");
         assert_eq!(parts[2], "15", "Column of 'Hello world' should be 15");
-    }
-
-    #[tokio::test]
-    async fn context_lines_omit_column() {
-        let tmp = setup_test_dir();
-        let tool = GrepTool;
-        let ctx = test_ctx(tmp.path());
-
-        let result = tool
-            .call(
-                serde_json::json!({
-                    "pattern": "Hello world",
-                    "output_mode": "content",
-                    "context_lines": 1
-                }),
-                &ctx,
-            )
-            .await
-            .unwrap();
-
-        let (ToolResult::Success(content)
-        | ToolResult::Error(content)
-        | ToolResult::SchemaError(content)) = &result;
-        for line in content.lines() {
-            if line.contains("Hello world") {
-                // Match line: 4-part format
-                let parts: Vec<&str> = line.splitn(4, ':').collect();
-                assert_eq!(
-                    parts.len(),
-                    4,
-                    "Match line should be path:line:col: content, got: {line}"
-                );
-            } else {
-                // Context line: 3-part format (path:line: content)
-                let parts: Vec<&str> = line.splitn(3, ':').collect();
-                assert_eq!(
-                    parts.len(),
-                    3,
-                    "Context line should be path:line: content, got: {line}"
-                );
-                // The second part should be a valid line number
-                assert!(
-                    parts[1].trim().parse::<usize>().is_ok(),
-                    "Second part of context line should be a line number, got: {}",
-                    parts[1]
-                );
-            }
-        }
     }
 
     #[tokio::test]
@@ -545,18 +370,15 @@ mod tests {
         // Should find matches in main.rs, lib.rs, and readme.md
         assert!(file_lines.len() >= 2);
 
-        // content mode
+        // content mode is the default
         let result = tool
-            .call(
-                serde_json::json!({"pattern": "Hello", "output_mode": "content"}),
-                &ctx,
-            )
+            .call(serde_json::json!({"pattern": "Hello"}), &ctx)
             .await
             .unwrap();
         let (ToolResult::Success(content)
         | ToolResult::Error(content)
         | ToolResult::SchemaError(content)) = &result;
-        // Match lines (no context) have format "file:line_no:col: content"
+        // Match lines have format "file:line_no:col: content"
         for line in content.lines() {
             let parts: Vec<&str> = line.splitn(4, ':').collect();
             assert!(
@@ -564,25 +386,31 @@ mod tests {
                 "Expected 4-part format (path:line:col: content) but got: {line}"
             );
         }
+    }
 
-        // count mode
+    #[tokio::test]
+    async fn glob_with_directory_matches_relative_path() {
+        let tmp = setup_test_dir();
+        let tool = GrepTool;
+        let ctx = test_ctx(tmp.path());
+
         let result = tool
             .call(
-                serde_json::json!({"pattern": "Hello", "output_mode": "count"}),
+                serde_json::json!({"pattern": "Hello", "glob": "src/*.rs", "output_mode": "files"}),
                 &ctx,
             )
             .await
             .unwrap();
+
         let (ToolResult::Success(content)
         | ToolResult::Error(content)
         | ToolResult::SchemaError(content)) = &result;
-        // Count lines have format "file: N matches"
-        for line in content.lines() {
-            assert!(
-                line.contains("matches"),
-                "Expected 'matches' in count line: {line}"
-            );
-        }
+        assert!(content.contains("src/main.rs"), "got {content:?}");
+        assert!(content.contains("src/lib.rs"), "got {content:?}");
+        assert!(
+            !content.contains("readme.md"),
+            "readme.md lies outside src/, got {content:?}"
+        );
     }
 
     #[tokio::test]

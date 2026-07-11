@@ -186,8 +186,6 @@ mod tests {
             Box::new(ReadFileTool),
             Box::new(WriteFileTool),
             Box::new(EditFileTool),
-            Box::new(GrepTool),
-            Box::new(CodegrepTool),
         ];
         for tool in &openers {
             assert_eq!(
@@ -198,9 +196,11 @@ mod tests {
             );
         }
 
-        // Directory and pattern tools open no file.
+        // Directory, pattern, and content-search tools open no file.
         assert!(ListDirectoryTool.opened_paths(&input).is_empty());
         assert!(GlobTool.opened_paths(&input).is_empty());
+        assert!(GrepTool.opened_paths(&input).is_empty());
+        assert!(CodegrepTool.opened_paths(&input).is_empty());
     }
 
     #[tokio::test]

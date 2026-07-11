@@ -9,8 +9,8 @@ To list things whose names you do not know in advance, capture them: the pattern
 
 Each match prints `<path>:<line>:<col>: <matched_text>` plus `[$NAME=value]` for captures (newlines shown as `\n`, long matches truncated); skips `.git`, `target`, `node_modules`, `vendor`. A pattern that matches nothing reports `No matches` with a reminder of the syntax.
 
-- Use when the match must ignore identifier names, whitespace, or argument shape; use `grep_tool` for a byte-for-byte literal. Restrict to a file or folder with `path`, or to a name pattern with `glob` (`*.rs`, `*.ts`); never put a file name in `pattern`.
-- `$NAME` captures one word, `$...NAME` a span; reusing a name back-references it exactly. `...` spans tokens at one bracket level and stops at newlines; `....` crosses them. A metavariable's name is a label for what it captures, never a search term (`$...SECRET` matches any span, not the word `secret`), so anchor every pattern on literal code.
+- Use when the match must ignore identifier names, whitespace, or argument shape; use `grep_tool` for a byte-for-byte literal. Restrict to a name pattern with `glob` (`*.rs`, `src/*.ts`); never put a file name in `pattern`.
+- `$NAME` captures one word, `$...NAME` a span; reusing a name back-references it exactly. `...` spans tokens at one bracket level; newlines count as ordinary whitespace, like a formatter would treat them (`....` is an accepted equivalent). A metavariable's name is a label for what it captures, never a search term (`$...SECRET` matches any span, not the word `secret`), so anchor every pattern on literal code.
 - Not a regex: a backslash, character class (`[a-z]`), quantifier (`*`, `+`, `?`), or wildcard `.` is a plain character here, matched literally. Pass the pattern exactly as written, like `fn $NAME(...)`.
 - Put a regex only in `constraints`, which keeps a match when a named capture matches it (anchor with `^...$`); the pattern itself never applies one.
 
@@ -49,27 +49,15 @@ Each matches nothing or everything; the fix follows the dash.
   "properties": {
     "pattern": {
       "type": "string",
-      "description": "The code shape to match, written literally with metavariables for the parts that vary: `$NAME` for one word (captured), `$...NAME` for a span, `...` for any token sequence, `....` for one that crosses newlines. Not a regex, and never backslash-escaped: send `fn $NAME(...)` verbatim. Must be non-empty."
-    },
-    "path": {
-      "type": "string",
-      "description": "Directory or file to search under (default: `.`)."
+      "description": "The code shape to match, written literally with metavariables for the parts that vary: `$NAME` for one word (captured), `$...NAME` for a span, `...` for any token sequence (crossing newlines). Not a regex, and never backslash-escaped: send `fn $NAME(...)` verbatim. Must be non-empty."
     },
     "glob": {
       "type": "string",
-      "description": "File-name filter (e.g. `*.rs`, `*.{ts,tsx}`). Applied before content search."
-    },
-    "mode": {
-      "type": "string",
-      "description": "`multiline` (default) treats newlines as whitespace, like a formatter would. `singleline` makes `...` stop at newlines so a pattern stays within one line; use `....` to span lines."
+      "description": "File filter supporting `*` and `?`. A bare pattern matches file names (`*.rs`); one with a `/` matches paths relative to the working directory (`src/*.rs`, with `*` crossing directories)."
     },
     "caseless": {
       "type": "boolean",
       "description": "Match identifiers without regard to letter case (default: false)."
-    },
-    "max_results": {
-      "type": "integer",
-      "description": "Maximum number of matches to return (default: 100)."
     },
     "constraints": {
       "type": "array",
