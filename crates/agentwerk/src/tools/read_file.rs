@@ -121,8 +121,8 @@ impl ToolLike for ReadFileTool {
                 .map(|l| l as usize)
                 .unwrap_or(lines.len().saturating_sub(offset - 1));
 
-            let col_offset = input["col_offset"].as_u64().map(|c| c.max(1) as usize);
-            let col_limit = input["col_limit"].as_u64().map(|c| c as usize);
+            let column = input["column"].as_u64().map(|c| c.max(1) as usize);
+            let length = input["length"].as_u64().map(|c| c as usize);
 
             let start = (offset - 1).min(lines.len());
             let end = (start + limit).min(lines.len());
@@ -133,12 +133,12 @@ impl ToolLike for ReadFileTool {
                 if !result.is_empty() {
                     result.push('\n');
                 }
-                match col_offset {
+                match column {
                     Some(col) => {
                         let byte_start = snap_to_char_boundary(line, (col - 1).min(line.len()));
-                        let byte_end = match col_limit {
-                            Some(cl) => {
-                                snap_to_char_boundary(line, (byte_start + cl).min(line.len()))
+                        let byte_end = match length {
+                            Some(len) => {
+                                snap_to_char_boundary(line, (byte_start + len).min(line.len()))
                             }
                             None => line.len(),
                         };
@@ -236,26 +236,26 @@ mod tests {
                 expect_contains: "File does not exist",
             },
             Case {
-                name: "col_offset slices from byte position",
-                input: serde_json::json!({ "path": "test.txt", "offset": 1, "limit": 1, "col_offset": 3 }),
+                name: "column slices from byte position",
+                input: serde_json::json!({ "path": "test.txt", "offset": 1, "limit": 1, "column": 3 }),
                 expect_error: false,
                 expect_contains: "1:3\tpha",
             },
             Case {
-                name: "col_offset with col_limit bounds the slice",
-                input: serde_json::json!({ "path": "test.txt", "offset": 2, "limit": 1, "col_offset": 2, "col_limit": 3 }),
+                name: "column with length bounds the slice",
+                input: serde_json::json!({ "path": "test.txt", "offset": 2, "limit": 1, "column": 2, "length": 3 }),
                 expect_error: false,
                 expect_contains: "2:2\teta",
             },
             Case {
-                name: "col_offset beyond line returns empty",
-                input: serde_json::json!({ "path": "test.txt", "offset": 1, "limit": 1, "col_offset": 100 }),
+                name: "column beyond line returns empty",
+                input: serde_json::json!({ "path": "test.txt", "offset": 1, "limit": 1, "column": 100 }),
                 expect_error: false,
                 expect_contains: "1:6\t",
             },
             Case {
-                name: "col_limit past end of line clamps to EOL",
-                input: serde_json::json!({ "path": "test.txt", "offset": 2, "limit": 1, "col_offset": 2, "col_limit": 100 }),
+                name: "length past end of line clamps to EOL",
+                input: serde_json::json!({ "path": "test.txt", "offset": 2, "limit": 1, "column": 2, "length": 100 }),
                 expect_error: false,
                 expect_contains: "2:2\teta",
             },
@@ -436,14 +436,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn col_offset_snaps_to_char_boundary() {
+    async fn column_snaps_to_char_boundary() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        // 'é' is two bytes; col_offset 5 lands on its second byte.
+        // 'é' is two bytes; column 5 lands on its second byte.
         std::fs::write(dir.path().join("test.txt"), "caféx\n").unwrap();
 
         let result = ReadFileTool
             .call(
-                serde_json::json!({ "path": "test.txt", "col_offset": 5 }),
+                serde_json::json!({ "path": "test.txt", "column": 5 }),
                 &test_ctx(dir.path()),
             )
             .await
