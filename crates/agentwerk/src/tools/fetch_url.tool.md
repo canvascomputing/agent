@@ -24,10 +24,6 @@ Fetch a URL over HTTPS and return its content as text: HTML becomes readable pla
       "type": "string",
       "description": "The URL to fetch. HTTP is upgraded to HTTPS. Max length 2000 characters."
     },
-    "prompt": {
-      "type": "string",
-      "description": "What to extract or focus on. Hint shown alongside the body; does not change what is fetched."
-    },
     "max_length": {
       "type": "integer",
       "description": "Max response length in characters (default: 100000). Increase only if the content is known to exceed the default."

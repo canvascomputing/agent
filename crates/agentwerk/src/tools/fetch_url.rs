@@ -66,7 +66,6 @@ impl ToolLike for FetchUrlTool {
             let Some(url) = input["url"].as_str() else {
                 return Ok(ToolResult::error("Missing required parameter: url"));
             };
-            let prompt = input["prompt"].as_str().unwrap_or("");
             let max_length = input["max_length"]
                 .as_u64()
                 .map(|n| n as usize)
@@ -107,7 +106,7 @@ impl ToolLike for FetchUrlTool {
             };
 
             let output =
-                format_output(url, prompt, &body, status, &content_type, bytes, max_length);
+                format_output(url, &body, status, &content_type, bytes, max_length);
             Ok(ToolResult::success(output))
         })
     }
@@ -190,7 +189,6 @@ async fn fetch_url(url: &str) -> std::result::Result<FetchedContent, String> {
 
 fn format_output(
     url: &str,
-    prompt: &str,
     body: &str,
     status: u16,
     content_type: &str,
@@ -199,9 +197,6 @@ fn format_output(
 ) -> String {
     let mut output = String::new();
 
-    if !prompt.is_empty() {
-        output.push_str(&format!("Prompt: {prompt}\n\n"));
-    }
     output.push_str(&format!(
         "URL: {url}\nStatus: {status}\nContent-Type: {content_type}\nSize: {bytes} bytes\n\n",
     ));
