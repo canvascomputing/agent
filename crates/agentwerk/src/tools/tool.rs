@@ -221,6 +221,12 @@ pub trait ToolLike: Send + Sync {
         false
     }
 
+    /// The file paths this call opens. Feeds the per-file open tally in
+    /// [`Stats`](crate::Stats). Default: empty (the tool opens no file).
+    fn opened_paths(&self, _input: &Value) -> Vec<String> {
+        Vec::new()
+    }
+
     /// Run the tool. The future is held by the agent loop and dropped on
     /// cancellation; pair long-running work with [`ToolContext::wait_for_cancel`]
     /// in a `tokio::select!` to drop the losing branch promptly.

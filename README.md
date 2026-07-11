@@ -511,6 +511,7 @@ let scan = s.stats_for_label("scan");
 | `tickets_success_rate()` | Return `finished / (finished + failed)`. |
 | `input_tokens()` / `output_tokens()` | Return token totals across responses. |
 | `tool_stats()` | Return per-tool call and failure counts, broken down by failure kind. |
+| `file_stats()` | Return per-path open and failure counts for the files tools opened. |
 | `stats_for_label(label)` | Return a stats slice scoped to one label. |
 
 More statistics on [`Stats`](https://docs.rs/agentwerk/latest/agentwerk/agents/stats/struct.Stats.html): work and ticket durations, per-ticket counts, turns, requests, tool calls, provider errors, and per-tool errors.

@@ -49,10 +49,25 @@ pub(super) async fn run(context: &mut LoopContext<'_>, reply: Reply) -> Action<(
                 };
                 let call = calls.iter().find(|c| &c.id == tool_use_id);
                 let tool_name = call.map(|c| c.name.clone()).unwrap_or_default();
+                // The files this call opened. Feeds the per-path open tally;
+                // empty for tools that open no file.
+                let opened_paths = call
+                    .map(|c| {
+                        context
+                            .agent
+                            .tool_registry()
+                            .get(&c.name)
+                            .map(|tool| tool.opened_paths(&c.input))
+                            .unwrap_or_default()
+                    })
+                    .unwrap_or_default();
                 match tool_result {
                     Ok(output) => {
                         // Any successful tool call is progress: clear the counter.
                         context.consecutive_schema_failures = 0;
+                        for path in &opened_paths {
+                            context.ticket_system.stats().record_file_open(path);
+                        }
                         context.ticket_system.emit(
                             &context.ticket_key,
                             context.agent.get_name(),
@@ -69,6 +84,9 @@ pub(super) async fn run(context: &mut LoopContext<'_>, reply: Reply) -> Action<(
                         // fails its ticket instead of looping until the time limit.
                         context.consecutive_schema_failures =
                             context.consecutive_schema_failures.saturating_add(1);
+                        for path in &opened_paths {
+                            context.ticket_system.stats().record_file_open_error(path);
+                        }
                         if matches!(err, ToolError::SchemaValidationFailed { .. })
                             && schema_failure_message.is_none()
                         {

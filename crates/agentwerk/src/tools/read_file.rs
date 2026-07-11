@@ -52,6 +52,14 @@ impl ToolLike for ReadFileTool {
         tool_file().read_only
     }
 
+    fn opened_paths(&self, input: &Value) -> Vec<String> {
+        input
+            .get("path")
+            .and_then(|v| v.as_str())
+            .map(|s| vec![s.to_string()])
+            .unwrap_or_default()
+    }
+
     fn call<'a>(
         &'a self,
         input: Value,
@@ -165,6 +173,34 @@ mod tests {
 
     fn test_ctx(dir: &std::path::Path) -> ToolContext {
         ToolContext::new(PathBuf::from(dir))
+    }
+
+    #[test]
+    fn opened_paths_reports_the_file_argument_for_file_tools() {
+        use crate::tools::{
+            CodegrepTool, EditFileTool, GlobTool, GrepTool, ListDirectoryTool, WriteFileTool,
+        };
+
+        let input = serde_json::json!({"path": "src/lib.rs"});
+        let openers: Vec<Box<dyn ToolLike>> = vec![
+            Box::new(ReadFileTool),
+            Box::new(WriteFileTool),
+            Box::new(EditFileTool),
+            Box::new(GrepTool),
+            Box::new(CodegrepTool),
+        ];
+        for tool in &openers {
+            assert_eq!(
+                tool.opened_paths(&input),
+                vec!["src/lib.rs".to_string()],
+                "{} should report its path",
+                tool.name(),
+            );
+        }
+
+        // Directory and pattern tools open no file.
+        assert!(ListDirectoryTool.opened_paths(&input).is_empty());
+        assert!(GlobTool.opened_paths(&input).is_empty());
     }
 
     #[tokio::test]

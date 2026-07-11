@@ -40,10 +40,12 @@ update:
 # Run a use_case binary
 # Usage: make use_case name=deep-research args="Should we use Rust or Go?"
 # Note: use args= not -- to pass arguments
+# Exit 2 is the malware-scanner's malicious-verdict signal under --fail-fast,
+# not a build failure, so it is tolerated; every other non-zero code still fails.
 use_case:
 ifdef name
 	@if [ -f .env ]; then set -a; . ./.env; set +a; fi; \
-	cargo run -p use-cases --bin $(name) -- $(args)
+	cargo run -p use-cases --bin $(name) -- $(args) || [ $$? -eq 2 ]
 else
 	@echo "Available use cases:"
 	@grep -A1 '^\[\[bin\]\]' crates/use-cases/Cargo.toml | grep 'name' | sed 's/.*"\(.*\)"/  \1/'

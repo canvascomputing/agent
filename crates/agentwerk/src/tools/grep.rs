@@ -63,6 +63,14 @@ impl ToolLike for GrepTool {
         tool_file().read_only
     }
 
+    fn opened_paths(&self, input: &Value) -> Vec<String> {
+        input
+            .get("path")
+            .and_then(|v| v.as_str())
+            .map(|s| vec![s.to_string()])
+            .unwrap_or_default()
+    }
+
     fn call<'a>(
         &'a self,
         input: Value,

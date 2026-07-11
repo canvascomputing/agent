@@ -93,6 +93,9 @@ pub struct Stats {
     /// Per-tool call and failure tallies keyed by tool name. Populated
     /// only on the run-wide `Stats`; always empty on a label slice.
     tool_stats: Mutex<HashMap<String, ToolCounters>>,
+    /// Per-path open and failure tallies keyed by the file a tool opened.
+    /// Populated only on the run-wide `Stats`; always empty on a label slice.
+    file_stats: Mutex<HashMap<String, FileCounters>>,
 }
 
 /// Raw per-tool tallies behind the `tool_stats` map. `errors` is derived
@@ -103,6 +106,13 @@ struct ToolCounters {
     not_found: u64,
     execution_failed: u64,
     schema_failed: u64,
+}
+
+/// Raw per-path tallies behind the `file_stats` map.
+#[derive(Default, Clone)]
+struct FileCounters {
+    opens: u64,
+    failed: u64,
 }
 
 /// Call and failure tallies for one tool, broken down by failure kind.
@@ -150,6 +160,29 @@ impl From<&ToolCounters> for ToolStat {
     }
 }
 
+/// Open and failure tallies for one path, returned by
+/// [`Stats::file_stats`]. Records how often a file-opening tool named this
+/// path: `opens` counts successful opens, `failed` counts attempts that
+/// errored. For the search tools (`grep`, `codegrep`) the path may be a
+/// directory rather than a file, since their `path` argument searches under
+/// a directory or file.
+#[derive(Debug, Clone, Serialize)]
+pub struct FileStat {
+    /// Calls that opened this path successfully.
+    pub opens: u64,
+    /// Calls that named this path and errored.
+    pub failed: u64,
+}
+
+impl From<&FileCounters> for FileStat {
+    fn from(c: &FileCounters) -> Self {
+        Self {
+            opens: c.opens,
+            failed: c.failed,
+        }
+    }
+}
+
 impl Stats {
     pub(crate) fn new() -> Self {
         Self {
@@ -169,6 +202,7 @@ impl Stats {
             label_stats: Mutex::new(HashMap::new()),
             usage_history: Mutex::new(HashMap::new()),
             tool_stats: Mutex::new(HashMap::new()),
+            file_stats: Mutex::new(HashMap::new()),
         }
     }
 
@@ -240,6 +274,38 @@ impl Stats {
             ToolFailureKind::ExecutionFailed => counters.execution_failed += 1,
             ToolFailureKind::SchemaValidationFailed => counters.schema_failed += 1,
         }
+    }
+
+    /// Per-path open and failure tallies, sorted by path. Empty on a label
+    /// slice. Entries are the paths file-opening tools named; for the search
+    /// tools a path may be a directory rather than a file.
+    pub fn file_stats(&self) -> BTreeMap<String, FileStat> {
+        self.file_stats
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(path, counters)| (path.clone(), counters.into()))
+            .collect()
+    }
+
+    /// Count one successful open of `path`.
+    pub(crate) fn record_file_open(&self, path: &str) {
+        self.file_stats
+            .lock()
+            .unwrap()
+            .entry(path.to_string())
+            .or_default()
+            .opens += 1;
+    }
+
+    /// Count one failed open naming `path`.
+    pub(crate) fn record_file_open_error(&self, path: &str) {
+        self.file_stats
+            .lock()
+            .unwrap()
+            .entry(path.to_string())
+            .or_default()
+            .failed += 1;
     }
 
     pub(crate) fn record_turn_for(&self, labels: &[String]) {
@@ -528,6 +594,19 @@ impl crate::persistence::Persist for Stats {
                 );
             }
         }
+        if let Some(files) = value.get("files").and_then(|v| v.as_object()) {
+            let mut map = stats.file_stats.lock().unwrap();
+            for (path, body) in files {
+                let get = |key: &str| body.get(key).and_then(|v| v.as_u64()).unwrap_or(0);
+                map.insert(
+                    path.clone(),
+                    FileCounters {
+                        opens: get("opens"),
+                        failed: get("failed"),
+                    },
+                );
+            }
+        }
         Ok(stats)
     }
 }
@@ -536,7 +615,11 @@ impl Serialize for Stats {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let labels = self.label_stats.lock().unwrap();
         let tools = self.tool_stats();
-        let len = 17 + usize::from(!labels.is_empty()) + usize::from(!tools.is_empty());
+        let files = self.file_stats();
+        let len = 17
+            + usize::from(!labels.is_empty())
+            + usize::from(!tools.is_empty())
+            + usize::from(!files.is_empty());
         let mut st = serializer.serialize_struct("Stats", len)?;
         st.serialize_field("turns", &self.turns())?;
         st.serialize_field("requests", &self.requests())?;
@@ -595,6 +678,9 @@ impl Serialize for Stats {
                 })
                 .collect();
             st.serialize_field("tools", &nested)?;
+        }
+        if !files.is_empty() {
+            st.serialize_field("files", &files)?;
         }
         st.end()
     }
@@ -1076,5 +1162,68 @@ mod tests {
         s.record_tool_call_named("edit_file");
         let slice = s.stats_for_label("scan");
         assert!(slice.tool_stats().is_empty());
+    }
+
+    #[test]
+    fn file_stats_records_opens_and_failures_per_path() {
+        let s = Stats::new();
+        s.record_file_open("src/lib.rs");
+        s.record_file_open("src/lib.rs");
+        s.record_file_open("src/main.rs");
+        s.record_file_open_error("src/missing.rs");
+        s.record_file_open_error("src/missing.rs");
+
+        let files = s.file_stats();
+        assert_eq!(files["src/lib.rs"].opens, 2);
+        assert_eq!(files["src/lib.rs"].failed, 0);
+        assert_eq!(files["src/main.rs"].opens, 1);
+        assert_eq!(files["src/missing.rs"].opens, 0);
+        assert_eq!(files["src/missing.rs"].failed, 2);
+    }
+
+    #[test]
+    fn file_stats_empty_on_label_slice() {
+        let s = Stats::new();
+        s.record_file_open("src/lib.rs");
+        let slice = s.stats_for_label("scan");
+        assert!(slice.file_stats().is_empty());
+    }
+
+    #[test]
+    fn file_stats_round_trips_through_save_load() {
+        let dir = crate::test_util::TempDir::new().unwrap();
+
+        let s = Stats::new();
+        s.record_file_open("src/lib.rs");
+        s.record_file_open("src/lib.rs");
+        s.record_file_open_error("src/missing.rs");
+
+        use crate::persistence::Persist;
+        s.save(dir.path()).unwrap();
+        let restored = Stats::load(dir.path()).unwrap();
+
+        let files = restored.file_stats();
+        assert_eq!(files["src/lib.rs"].opens, 2);
+        assert_eq!(files["src/missing.rs"].failed, 1);
+    }
+
+    #[test]
+    fn stats_serializes_files_as_nested_object() {
+        let s = Stats::new();
+        s.record_file_open("src/lib.rs");
+        s.record_file_open("src/lib.rs");
+        s.record_file_open_error("src/lib.rs");
+
+        let value = serde_json::to_value(&s).unwrap();
+        let files = value["files"].as_object().unwrap();
+        assert_eq!(files["src/lib.rs"]["opens"], 2);
+        assert_eq!(files["src/lib.rs"]["failed"], 1);
+    }
+
+    #[test]
+    fn stats_omits_files_when_empty() {
+        let s = Stats::new();
+        let value = serde_json::to_value(&s).unwrap();
+        assert!(value.get("files").is_none());
     }
 }
