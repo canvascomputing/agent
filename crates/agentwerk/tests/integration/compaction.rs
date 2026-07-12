@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex};
 
 use super::common;
 
+use agentwerk::agents::tickets::Author;
 use agentwerk::event::EventKind;
 use agentwerk::providers::Model;
 use agentwerk::{Agent, Event, Ticket, TicketSystem};
@@ -184,7 +185,7 @@ async fn summariser_produces_text_when_compaction_fires_against_live_llm() {
         .flat_map(|t| {
             t.replies
                 .iter()
-                .filter(|c| c.author == "user")
+                .filter(|c| c.author == Author::User)
                 .flat_map(|c| {
                     serde_json::to_value(c)
                         .ok()
