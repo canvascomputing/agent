@@ -70,9 +70,10 @@ impl ToolLike for FinishTicketTool {
                 Err(e) => return Ok(e),
             };
             let schema = ticket_system.get_ticket(&key).and_then(|t| t.schema);
+            let agent = ctx.agent_name_str().unwrap_or_default().to_string();
             let result =
                 super::result_shape::parse_result("finish_ticket", schema.as_ref(), &input);
-            Ok(write_result(&ticket_system, &key, result))
+            Ok(write_result(&ticket_system, &key, result, &agent))
         })
     }
 }

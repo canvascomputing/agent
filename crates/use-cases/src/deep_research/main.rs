@@ -104,15 +104,8 @@ async fn main() {
             .label("researcher_1"),
     );
 
-    // Drive the run manually instead of via `finish`. The chain's
-    // handover step has a brief window between marking the parent
-    // `Done` and inserting the child, during which the queue is
-    // empty; `finish` would race against that window and exit
-    // prematurely. Polling for the report ticket directly, with a
-    // grace period when the queue settles, is race-free.
-    tickets.start();
-    let outcome = wait_for_outcome(&tickets).await;
-    tickets.cancel();
+    tickets.finish().await;
+    let outcome = classify_outcome(&tickets);
 
     print_chain_summary(&tickets);
     print_stats(&tickets);
@@ -183,36 +176,17 @@ enum Outcome {
     Stalled,
 }
 
-async fn wait_for_outcome(tickets: &TicketSystem) -> Outcome {
-    use std::time::Duration;
-
-    let report_ticket = || tickets.find_ticket(|t| t.has_label("report") && t.is_finished());
-    let pending = || tickets.find_tickets(|t| t.is_pending()).len();
-
-    loop {
-        if tickets.is_cancelled() {
-            return Outcome::Cancelled;
-        }
-        if let Some(ticket) = report_ticket() {
-            return Outcome::Report(Box::new(ticket));
-        }
-        if pending() == 0 {
-            // Queue is empty — but a handover may be mid-flight,
-            // between parent-Done and child-Insert. Give it a beat
-            // before declaring the chain stalled.
-            tokio::time::sleep(Duration::from_millis(250)).await;
-            if tickets.is_cancelled() {
-                return Outcome::Cancelled;
-            }
-            if let Some(ticket) = report_ticket() {
-                return Outcome::Report(Box::new(ticket));
-            }
-            if pending() == 0 {
-                return Outcome::Stalled;
-            }
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
+/// Read the run's outcome off the drained system: a finished report
+/// ticket wins, an external cancel is surfaced, anything else means the
+/// chain stopped without reaching the report step.
+fn classify_outcome(tickets: &TicketSystem) -> Outcome {
+    if let Some(ticket) = tickets.find_ticket(|t| t.has_label("report") && t.is_finished()) {
+        return Outcome::Report(Box::new(ticket));
     }
+    if tickets.is_cancelled() {
+        return Outcome::Cancelled;
+    }
+    Outcome::Stalled
 }
 
 fn print_chain_summary(tickets: &TicketSystem) {

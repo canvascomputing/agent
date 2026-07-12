@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::io;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
@@ -113,6 +113,11 @@ pub struct TicketSystem {
     /// and applied at insert time, so a ticket's result contract follows its
     /// label no matter how the ticket was created.
     pub(crate) label_schemas: Mutex<HashMap<String, Schema>>,
+    /// Count of `set_final_status` calls between their status flip and
+    /// the return of the terminal event's handlers. The drain check in
+    /// `finish()` treats a non-zero count as pending work, so a handler
+    /// minting a follow-up ticket always beats the drain.
+    pub(crate) terminal_transitions_in_flight: AtomicUsize,
     /// Reason the most recent `finish()` returned. `None` before the
     /// first `finish()` and between `start()` and the next `finish()`.
     pub(crate) finish_reason: Mutex<Option<FinishReason>>,
@@ -145,6 +150,7 @@ impl TicketSystem {
             cancel_signal: Mutex::new(Arc::new(AtomicBool::new(false))),
             cancelled_labels: Mutex::new(HashSet::new()),
             label_schemas: Mutex::new(HashMap::new()),
+            terminal_transitions_in_flight: AtomicUsize::new(0),
             finish_reason: Mutex::new(None),
             stats: Stats::new(),
             event_handlers: Mutex::new(Vec::new()),
@@ -215,6 +221,7 @@ impl TicketSystem {
             cancel_signal: Mutex::new(Arc::new(AtomicBool::new(false))),
             cancelled_labels: Mutex::new(HashSet::new()),
             label_schemas: Mutex::new(HashMap::new()),
+            terminal_transitions_in_flight: AtomicUsize::new(0),
             finish_reason: Mutex::new(None),
             stats,
             event_handlers: Mutex::new(Vec::new()),
@@ -682,7 +689,8 @@ impl TicketSystem {
                 stop.store(true, Ordering::Relaxed);
                 break FinishReason::PolicyViolated(kind);
             }
-            if self.pending_count() == 0 {
+            let transitions_in_flight = self.terminal_transitions_in_flight.load(Ordering::SeqCst);
+            if self.pending_count() == 0 && transitions_in_flight == 0 {
                 stop.store(true, Ordering::Relaxed);
                 break FinishReason::Drained;
             }
@@ -918,7 +926,7 @@ mod tests {
         sys.task("b");
         let key_a = sys.claim(|t| t.key == "TICKET-1", "agent").unwrap();
         let key_b = sys.claim(|t| t.key == "TICKET-2", "agent").unwrap();
-        sys.set_finished(&key_a).unwrap();
+        sys.set_finished(&key_a, "agent").unwrap();
         sys.set_failed(&key_b).unwrap();
         assert_eq!(sys.pending_count(), 0);
     }
@@ -972,10 +980,10 @@ mod tests {
             .unwrap();
         sys.set_result(&key_a, serde_json::json!({"score": 7}))
             .unwrap();
-        sys.set_finished(&key_a).unwrap();
+        sys.set_finished(&key_a, "agent").unwrap();
         sys.set_result(&key_b, serde_json::json!({"score": 99}))
             .unwrap();
-        sys.set_finished(&key_b).unwrap();
+        sys.set_finished(&key_b, "agent").unwrap();
         assert_eq!(
             sys.results_for_label("analysis"),
             vec![serde_json::json!({"score": 7})]
@@ -988,7 +996,7 @@ mod tests {
         sys.ticket(Ticket::new("x").label("other"));
         let key = sys.claim(|t| t.has_label("other"), "agent").unwrap();
         sys.set_result(&key, serde_json::json!({"n": 1})).unwrap();
-        sys.set_finished(&key).unwrap();
+        sys.set_finished(&key, "agent").unwrap();
         assert!(sys.results_for_label("missing").is_empty());
     }
 
@@ -1084,7 +1092,7 @@ mod tests {
         sys.ticket(Ticket::new("scout").label("scout"));
         let key = sys.claim(|t| t.has_label("scout"), "agent").unwrap();
         sys.set_result(&key, serde_json::json!("lead")).unwrap();
-        sys.set_finished(&key).unwrap();
+        sys.set_finished(&key, "agent").unwrap();
         sys.create_ticket_on_result(|done| {
             done.has_label("scout")
                 .then(|| Ticket::new("hunt").label("sniper"))
@@ -1103,7 +1111,7 @@ mod tests {
         sys.ticket(Ticket::new("scout").label("scout"));
         let key = sys.claim(|t| t.has_label("scout"), "agent").unwrap();
         sys.set_result(&key, serde_json::json!("lead")).unwrap();
-        sys.set_finished(&key).unwrap();
+        sys.set_finished(&key, "agent").unwrap();
         sys.create_ticket_on_result(|done| {
             Some(Ticket::new("hunt").label("sniper").parent(&done.key))
         });
@@ -1122,6 +1130,22 @@ mod tests {
         sys.create_ticket_on_result(|_| Some(Ticket::new("follow-up").label("next")));
         sys.emit("KEY", "agent", EventKind::TurnStarted);
         assert!(sys.tickets().is_empty());
+    }
+
+    #[test]
+    fn create_ticket_on_result_inserts_follow_up_before_drain_is_observable() {
+        let (sys, _tmp) = test_system();
+        sys.create_ticket_on_result(|done| {
+            done.has_label("scout")
+                .then(|| Ticket::new("hunt").label("sniper"))
+        });
+        sys.ticket(Ticket::new("scout").label("scout"));
+        let key = sys.claim(|t| t.has_label("scout"), "agent").unwrap();
+        sys.set_result(&key, serde_json::json!("lead")).unwrap();
+        sys.set_finished(&key, "agent").unwrap();
+        // The handler ran inside `set_finished`, so the queue is never
+        // observably empty between the parent finishing and the follow-up.
+        assert_eq!(sys.pending_count(), 1);
     }
 
     #[test]

@@ -347,11 +347,16 @@ fn action_edit(ticket_system: &TicketSystem, input: &Value, ctx: &ToolContext) -
 /// `{ticket, result}` line to the configured results directory, attach
 /// the payload to the ticket, and transition the ticket to `Finished`.
 /// The `ticket` field is the resolved key. Called by `FinishTicketTool`.
-pub(super) fn write_result(ticket_system: &TicketSystem, key: &str, result: Value) -> ToolResult {
+pub(super) fn write_result(
+    ticket_system: &TicketSystem,
+    key: &str,
+    result: Value,
+    agent: &str,
+) -> ToolResult {
     if let Err(violations) = ticket_system.set_result(key, result) {
         return ToolResult::schema_error(violations.to_string());
     }
-    match ticket_system.set_finished(key) {
+    match ticket_system.set_finished(key, agent) {
         Ok(()) => ToolResult::success(format!("Ticket {key} marked finished")),
         Err(e) => ToolResult::error(ticket_error_message(e)),
     }

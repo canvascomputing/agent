@@ -153,8 +153,8 @@ impl ToolLike for HandoverTicketTool {
             // cannot drain the chain mid-handover. `parent_key` is resolved
             // and `InProgress`, so `set_finished` cannot miss it and leave
             // the inserted child orphaned.
-            let child_key = ticket_system.insert(child, agent);
-            if let Err(e) = ticket_system.set_finished(&parent_key) {
+            let child_key = ticket_system.insert(child, agent.clone());
+            if let Err(e) = ticket_system.set_finished(&parent_key, &agent) {
                 return Ok(ToolResult::error(super::ticket_error_message(e)));
             }
 

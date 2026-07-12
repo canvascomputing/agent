@@ -100,7 +100,8 @@ impl Event {
 /// Most variants are emitted by a per-agent loop and carry that agent's
 /// name on the wrapping [`Event`]. Two run-lifecycle variants
 /// (`RunStarted`, `RunFinished`) are emitted by the `TicketSystem`
-/// itself and arrive with an empty `agent_name`.
+/// itself and arrive with an empty `agent_name`, as does `TicketFailed`
+/// when the host fails a ticket through `TicketSystem::set_failed`.
 #[derive(Debug, Clone)]
 pub enum EventKind {
     /// The `TicketSystem`'s background work loop has been spawned and

@@ -4,6 +4,7 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::event::EventKind;
 use crate::persistence::{Append, Persist, Results, TicketEvents};
 use crate::schemas::SchemaViolations;
 
@@ -175,19 +176,42 @@ impl TicketSystem {
         let _ = Replies::append(&self.dir_value(), key, &reply);
     }
 
-    /// Transition a ticket to `Finished`.
-    pub(crate) fn set_finished(&self, key: &str) -> Result<(), TicketError> {
-        self.set_final_status(key, Status::Finished)
+    /// Transition a ticket to `Finished`, emitting `TicketFinished`
+    /// under `agent`'s name.
+    pub(crate) fn set_finished(&self, key: &str, agent: &str) -> Result<(), TicketError> {
+        self.set_final_status(key, Status::Finished, agent)
     }
 
     /// Transition a ticket to `Failed`. The one host-facing status
     /// mutation: finishing is reserved for the agent's finish tools,
-    /// which validate and record the result before the transition.
+    /// which validate and record the result before the transition. The
+    /// emitted `TicketFailed` carries an empty agent name, like the
+    /// run-level events no single agent causes.
     pub fn set_failed(&self, key: &str) -> Result<(), TicketError> {
-        self.set_final_status(key, Status::Failed)
+        self.set_final_status(key, Status::Failed, "")
     }
 
-    fn set_final_status(&self, key: &str, status: Status) -> Result<(), TicketError> {
+    /// Transition a ticket to `Failed`, emitting `TicketFailed` under
+    /// `agent`'s name. The loop's failure paths route through this.
+    pub(crate) fn set_failed_by(&self, key: &str, agent: &str) -> Result<(), TicketError> {
+        self.set_final_status(key, Status::Failed, agent)
+    }
+
+    fn set_final_status(&self, key: &str, status: Status, agent: &str) -> Result<(), TicketError> {
+        // Increment BEFORE the status flip and decrement only after the
+        // terminal event has been emitted: the drain check in `finish()`
+        // must never observe (empty queue, zero counter) mid-transition,
+        // or it drains before an event handler can enqueue follow-up work.
+        struct InFlight<'a>(&'a std::sync::atomic::AtomicUsize);
+        impl Drop for InFlight<'_> {
+            fn drop(&mut self) {
+                self.0.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+        self.terminal_transitions_in_flight
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let _in_flight = InFlight(&self.terminal_transitions_in_flight);
+
         let now = now_millis();
         let (prev, durations, labels) = {
             let mut store = self.tickets.lock().unwrap();
@@ -205,6 +229,17 @@ impl TicketSystem {
         };
         self.record_transition(key, prev, status, now, durations, &labels);
         self.save_ticket(key);
+        if prev != status && !matches!(prev, Status::Finished | Status::Failed) {
+            let kind = match status {
+                Status::Finished => EventKind::TicketFinished {
+                    key: key.to_string(),
+                },
+                _ => EventKind::TicketFailed {
+                    key: key.to_string(),
+                },
+            };
+            self.emit(key, agent, kind);
+        }
         Ok(())
     }
 
@@ -470,7 +505,7 @@ mod tests {
         sys.task("oops");
         sys.task("pending");
         sys.claim(|t| t.key == "TICKET-1", "agent");
-        sys.set_finished("TICKET-1").unwrap();
+        sys.set_finished("TICKET-1", "agent").unwrap();
         sys.set_failed("TICKET-2").unwrap();
         let done = sys.find_tickets(|t| t.status == Status::Finished);
         let failed = sys.find_tickets(|t| t.status == Status::Failed);
@@ -488,7 +523,7 @@ mod tests {
         sys.task("c");
         assert_eq!(sys.stats().tickets_created(), 3);
         sys.claim(|t| t.key == "TICKET-1", "agent");
-        sys.set_finished("TICKET-1").unwrap();
+        sys.set_finished("TICKET-1", "agent").unwrap();
         sys.claim(|t| t.key == "TICKET-2", "agent");
         sys.set_failed("TICKET-2").unwrap();
         assert_eq!(sys.stats().tickets_finished(), 1);
@@ -514,7 +549,7 @@ mod tests {
         sys.ticket(Ticket::new("a").labels(["scan", "high"]));
         sys.ticket(Ticket::new("b").label("scan"));
         sys.claim(|t| t.key == "TICKET-1", "agent");
-        sys.set_finished("TICKET-1").unwrap();
+        sys.set_finished("TICKET-1", "agent").unwrap();
         sys.claim(|t| t.key == "TICKET-2", "agent");
         sys.set_failed("TICKET-2").unwrap();
         let stats = sys.stats();
@@ -539,7 +574,7 @@ mod tests {
         let (sys, _tmp) = test_system();
         sys.ticket(Ticket::new("a"));
         sys.claim(|t| t.key == "TICKET-1", "agent");
-        sys.set_finished("TICKET-1").unwrap();
+        sys.set_finished("TICKET-1", "agent").unwrap();
         assert_eq!(sys.stats().tickets_finished(), 1);
         assert_eq!(sys.stats().stats_for_label("scan").tickets_finished(), 0);
         assert_eq!(sys.stats().stats_for_label("scan").tickets_created(), 0);
@@ -550,7 +585,7 @@ mod tests {
         let (sys, dir) = test_system();
         sys.task("hello");
         sys.claim(|t| t.key == "TICKET-1", "agent");
-        sys.set_finished("TICKET-1").unwrap();
+        sys.set_finished("TICKET-1", "agent").unwrap();
         let lines = read_tickets_log(dir.path());
         assert_eq!(lines.len(), 3);
         assert_eq!(lines[0]["event"], "created");
@@ -594,7 +629,7 @@ mod tests {
         sys.task("a");
         sys.task("b");
         sys.claim(|t| t.key == "TICKET-1", "agent");
-        sys.set_finished("TICKET-1").unwrap();
+        sys.set_finished("TICKET-1", "agent").unwrap();
         sys.claim(|t| t.key == "TICKET-2", "agent");
         sys.set_failed("TICKET-2").unwrap();
         let lines = read_tickets_log(dir.path());
@@ -661,7 +696,7 @@ mod tests {
         let (sys, _tmp) = test_system();
         sys.task("hello");
         sys.claim(|t| t.status == Status::Todo, "alice");
-        sys.set_finished("TICKET-1").unwrap();
+        sys.set_finished("TICKET-1", "agent").unwrap();
         let t = sys.get_ticket("TICKET-1").unwrap();
         assert_eq!(t.status, Status::Finished);
         assert!(t.finished_at.is_some());
@@ -744,7 +779,7 @@ mod tests {
         original
             .set_result("TICKET-1", serde_json::json!({"ok": true}))
             .unwrap();
-        original.set_finished("TICKET-1").unwrap();
+        original.set_finished("TICKET-1", "agent").unwrap();
         drop(original);
 
         let resumed = TicketSystem::load(dir.path()).unwrap();
@@ -826,7 +861,7 @@ mod tests {
         original
             .set_result("TICKET-1", serde_json::Value::Null)
             .unwrap();
-        original.set_finished("TICKET-1").unwrap();
+        original.set_finished("TICKET-1", "agent").unwrap();
         original.set_failed("TICKET-2").unwrap();
         drop(original);
 
@@ -1060,7 +1095,7 @@ mod tests {
         sys.task("seed");
         sys.claim(|t| t.status == Status::Todo, "alice").unwrap();
         sys.set_result("TICKET-1", serde_json::Value::Null).unwrap();
-        sys.set_finished("TICKET-1").unwrap();
+        sys.set_finished("TICKET-1", "agent").unwrap();
 
         let bytes = std::fs::read(dir.path().join("stats.json")).expect("stats file written");
         let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
@@ -1093,7 +1128,7 @@ mod tests {
         original
             .set_result("TICKET-1", serde_json::Value::Null)
             .unwrap();
-        original.set_finished("TICKET-1").unwrap();
+        original.set_finished("TICKET-1", "agent").unwrap();
         drop(original);
 
         std::fs::write(dir.path().join("stats.json"), "not json").unwrap();

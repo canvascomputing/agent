@@ -61,10 +61,9 @@ impl<'a> LoopContext<'a> {
 
     fn fail_with(&self, kind: RequestErrorKind, message: String) {
         self.emit(EventKind::RequestFailed { kind, message });
-        self.emit(EventKind::TicketFailed {
-            key: self.ticket_key.clone(),
-        });
-        let _ = self.ticket_system.set_failed(&self.ticket_key);
+        let _ = self
+            .ticket_system
+            .set_failed_by(&self.ticket_key, self.agent.get_name());
     }
 }
 
@@ -171,17 +170,9 @@ pub(super) async fn start_turn<'a>(
         *context = None;
         return Action::Replay;
     }
-    let status = match ticket.status {
-        Status::Finished => Some(EventKind::TicketFinished {
-            key: context_ref.ticket_key.clone(),
-        }),
-        Status::Failed => Some(EventKind::TicketFailed {
-            key: context_ref.ticket_key.clone(),
-        }),
-        _ => None,
-    };
-    if let Some(kind) = status {
-        context_ref.emit(kind);
+    // The transition itself already emitted the terminal event; here the
+    // loop only releases the context so the agent claims fresh work.
+    if ticket.is_resolved() {
         *context = None;
         return Action::Replay;
     }
@@ -199,7 +190,7 @@ pub(super) async fn start_turn<'a>(
             });
             let _ = context_ref
                 .ticket_system
-                .set_failed(&context_ref.ticket_key);
+                .set_failed_by(&context_ref.ticket_key, context_ref.agent.get_name());
             return Action::Replay;
         }
         context_ref.emit(EventKind::SchemaRetried {
@@ -435,6 +426,84 @@ mod tests {
             tickets.get_ticket("TICKET-2").unwrap().status,
             Status::Finished
         );
+    }
+
+    #[tokio::test]
+    async fn finish_waits_through_create_ticket_on_result_follow_up() {
+        // The handler mints a follow-up when TICKET-1 finishes. finish()
+        // must not drain in the window between the finish transition and
+        // the handler's insert.
+        let results_dir = crate::test_util::TempDir::new().unwrap();
+        let provider = MockProvider::with_results(vec![
+            Ok(write_result_response("first-done")),
+            Ok(write_result_response("follow-up-done")),
+        ]);
+        let tickets = TicketSystem::new();
+        tickets
+            .dir(results_dir.path().to_path_buf())
+            .max_request_retries(0)
+            .request_retry_delay(Duration::from_millis(1));
+        tickets.create_ticket_on_result(|done| {
+            (done.key == "TICKET-1").then(|| Ticket::new("follow up").label("alice"))
+        });
+        tickets.agent(
+            Agent::new()
+                .name("alice")
+                .provider(Arc::clone(&provider) as Arc<dyn Provider>)
+                .model("mock")
+                .role("test")
+                .build(),
+        );
+
+        tickets.start();
+        tickets.ticket(Ticket::new("a").label("alice"));
+
+        tokio::time::timeout(Duration::from_secs(5), tickets.finish())
+            .await
+            .expect("finish did not finish within 5s");
+
+        assert_eq!(tickets.results().len(), 2);
+        assert_eq!(
+            tickets.get_ticket("TICKET-2").unwrap().status,
+            Status::Finished
+        );
+    }
+
+    #[tokio::test]
+    async fn ticket_finished_event_fires_exactly_once_per_ticket() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let results_dir = crate::test_util::TempDir::new().unwrap();
+        let provider = MockProvider::with_results(vec![Ok(write_result_response("done"))]);
+        let tickets = TicketSystem::new();
+        tickets
+            .dir(results_dir.path().to_path_buf())
+            .max_request_retries(0)
+            .request_retry_delay(Duration::from_millis(1));
+        let finished_events = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&finished_events);
+        tickets.on_event(move |e| {
+            if matches!(e.kind, crate::event::EventKind::TicketFinished { .. }) {
+                counter.fetch_add(1, Ordering::Relaxed);
+            }
+        });
+        tickets.agent(
+            Agent::new()
+                .name("alice")
+                .provider(Arc::clone(&provider) as Arc<dyn Provider>)
+                .model("mock")
+                .role("test")
+                .build(),
+        );
+
+        tickets.start();
+        tickets.ticket(Ticket::new("a").label("alice"));
+
+        tokio::time::timeout(Duration::from_secs(5), tickets.finish())
+            .await
+            .expect("finish did not finish within 5s");
+
+        assert_eq!(finished_events.load(Ordering::Relaxed), 1);
     }
 
     #[tokio::test]

@@ -28,7 +28,7 @@ pub(super) fn test_system() -> (Arc<TicketSystem>, crate::test_util::TempDir) {
 pub(super) fn attach_done_result(sys: &TicketSystem, key: &str, result: &str) {
     sys.set_result(key, serde_json::Value::String(result.into()))
         .unwrap();
-    sys.set_finished(key).unwrap();
+    sys.set_finished(key, "agent").unwrap();
 }
 
 pub(super) fn read_tickets_log(dir: &Path) -> Vec<serde_json::Value> {
