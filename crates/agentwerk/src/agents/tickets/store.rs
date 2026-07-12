@@ -50,7 +50,7 @@ impl TicketSystem {
         ticket.status = Status::Todo;
         // A ticket without its own schema inherits the default registered for the
         // first of its labels, so a result contract follows the label regardless
-        // of how the ticket was created (direct, `task_labeled`, or handover).
+        // of how the ticket was created (direct, labeled, or handover).
         if ticket.schema.is_none() {
             let defaults = self.label_schemas.lock().unwrap();
             if let Some(schema) = ticket.labels.iter().find_map(|l| defaults.get(l)) {
@@ -180,7 +180,9 @@ impl TicketSystem {
         self.set_final_status(key, Status::Finished)
     }
 
-    /// Transition a ticket to `Failed`.
+    /// Transition a ticket to `Failed`. The one host-facing status
+    /// mutation: finishing is reserved for the agent's finish tools,
+    /// which validate and record the result before the transition.
     pub fn set_failed(&self, key: &str) -> Result<(), TicketError> {
         self.set_final_status(key, Status::Failed)
     }
@@ -389,9 +391,9 @@ mod tests {
     }
 
     #[test]
-    fn task_labeled_attaches_label_and_leaves_status_todo() {
+    fn labeled_ticket_attaches_label_and_leaves_status_todo() {
         let (sys, _tmp) = test_system();
-        sys.task_labeled("hello", "research");
+        sys.ticket(Ticket::new("hello").label("research"));
         let t = sys.get_ticket("TICKET-1").unwrap();
         assert_eq!(t.labels, vec!["research".to_string()]);
         assert_eq!(t.status, Status::Todo);
@@ -818,9 +820,9 @@ mod tests {
         let dir = crate::test_util::TempDir::new().unwrap();
         let original = TicketSystem::new();
         original.dir(dir.path().to_path_buf());
-        original.task_labeled("a", "scan");
-        original.task_labeled("b", "scan");
-        original.task_labeled("c", "scan");
+        original.ticket(Ticket::new("a").label("scan"));
+        original.ticket(Ticket::new("b").label("scan"));
+        original.ticket(Ticket::new("c").label("scan"));
         original
             .set_result("TICKET-1", serde_json::Value::Null)
             .unwrap();
@@ -950,12 +952,14 @@ mod tests {
             sys.task("hello");
             sys.reply("TICKET-1", "first");
         }
+        use super::super::reply::Author;
+
         // Drop a stray `replies.<ts>.jsonl` with NO paired `ticket.<ts>.json`.
         // The loader's paired-check rule must ignore it and fall back to the
         // running `replies.jsonl`.
         let key_dir = dir.path().join("tickets").join("TICKET-1");
         let orphan = Reply {
-            author: "user".into(),
+            author: Author::User,
             content: vec![ReplyContent::Text("orphan".into())],
             created_at: 9_999_999_999_999,
         };

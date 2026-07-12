@@ -35,7 +35,7 @@ type EventHandler = dyn Fn(Event) + Send + Sync;
 /// assign work to the right agent.
 ///
 /// ```no_run
-/// use agentwerk::{Agent, TicketSystem};
+/// use agentwerk::{Agent, Ticket, TicketSystem};
 /// use agentwerk::tools::FetchUrlTool;
 ///
 /// # async fn run() {
@@ -50,7 +50,7 @@ type EventHandler = dyn Fn(Event) + Send + Sync;
 ///             .build(),
 ///     );
 /// }
-/// tickets.task_labeled("Summarize https://canvascomputing.org", "research");
+/// tickets.ticket(Ticket::new("Summarize https://canvascomputing.org").label("research"));
 /// tickets.finish().await;
 /// # }
 /// ```
@@ -414,26 +414,6 @@ impl TicketSystem {
         })
     }
 
-    /// Enqueue a ticket whenever `make` turns an event into one. Runs as
-    /// one more entry on the [`Self::on_event`] chain; return `None` to
-    /// spawn nothing for that event. The result-scoped sibling
-    /// [`Self::create_ticket_on_result`] covers the common "a ticket
-    /// finished, mint a follow-up" case.
-    pub fn create_ticket_on_event<F>(&self, make: F) -> &Self
-    where
-        F: Fn(&Event) -> Option<Ticket> + Send + Sync + 'static,
-    {
-        let supervisor = self.weak_self.clone();
-        self.on_event(move |event| {
-            let Some(ticket) = make(&event) else {
-                return;
-            };
-            if let Some(system) = supervisor.upgrade() {
-                system.ticket(ticket);
-            }
-        })
-    }
-
     /// Enqueue a follow-up ticket whenever a finished ticket makes `make`
     /// return one. Fires on `TicketFinished`, passing the finished ticket
     /// so `make` reads its key, labels, task, and schema-validated result,
@@ -477,7 +457,7 @@ impl TicketSystem {
     /// Register the result schema every ticket carrying `label` validates
     /// against, unless the ticket was created with a schema of its own. The
     /// schema is stamped at creation, so the contract follows the label whether
-    /// the ticket came from `task_labeled`, `ticket`, or a `handover_ticket`
+    /// the ticket came from `task`, `ticket`, or a `handover_ticket`
     /// child. Mirrors `Stats::stats_for_label`.
     pub fn schema_for_label(&self, label: impl Into<String>, schema: Schema) -> &Self {
         self.label_schemas
@@ -493,12 +473,6 @@ impl TicketSystem {
     /// ticket's key.
     pub fn task<T: Serialize>(&self, task: T) -> String {
         self.dispatch(Ticket::new(task))
-    }
-
-    /// Enqueue a ticket carrying `task`, attached to `label` for Path B
-    /// assignment. Returns the new ticket's key.
-    pub fn task_labeled<T: Serialize>(&self, task: T, label: impl Into<String>) -> String {
-        self.dispatch(Ticket::new(task).label(label))
     }
 
     /// Enqueue a fully-built `Ticket`. System-managed fields (key,
@@ -539,32 +513,6 @@ impl TicketSystem {
         out
     }
 
-    /// Earliest ticket by creation time, if any.
-    pub fn first_ticket(&self) -> Option<Ticket> {
-        self.tickets().into_iter().next()
-    }
-
-    /// Latest ticket by creation time, if any.
-    pub fn last_ticket(&self) -> Option<Ticket> {
-        self.tickets().into_iter().next_back()
-    }
-
-    /// Substring search over the task body, case-insensitive.
-    pub fn search_tickets(&self, query: &str) -> Vec<Ticket> {
-        let needle = query.to_lowercase();
-        let store = self.tickets.lock().unwrap();
-        let mut out: Vec<Ticket> = store
-            .values()
-            .filter(|t| match &t.task {
-                serde_json::Value::String(s) => s.to_lowercase().contains(&needle),
-                other => other.to_string().to_lowercase().contains(&needle),
-            })
-            .cloned()
-            .collect();
-        out.sort_by_key(|t| (t.created_at, numeric_id(&t.key)));
-        out
-    }
-
     /// Tickets matching `predicate`, sorted by creation time then numeric key.
     ///
     /// The predicate runs while `self.tickets` is locked. It MUST NOT call
@@ -593,28 +541,13 @@ impl TicketSystem {
         matching.into_iter().next().cloned()
     }
 
-    /// Count of tickets matching `predicate`. Does not allocate.
-    ///
-    /// The predicate runs while `self.tickets` is locked. It MUST NOT call
-    /// other `TicketSystem` methods that lock the same `Mutex`: deadlock.
-    pub fn count_tickets<F>(&self, predicate: F) -> usize
-    where
-        F: Fn(&Ticket) -> bool,
-    {
-        self.tickets
-            .lock()
-            .unwrap()
-            .values()
-            .filter(|t| predicate(t))
-            .count()
-    }
-
     /// Call off the pool carrying `label`: the loop stops claiming or resuming its
     /// tickets and walks any agent off one it already holds, leaving that ticket
     /// `InProgress` (abandoned), just as [`Self::cancel`] leaves in-flight tickets.
     /// Stops one pool while the rest of the run continues.
-    pub fn cancel_label(&self, label: impl Into<String>) {
+    pub fn cancel_label(&self, label: impl Into<String>) -> &Self {
         self.cancelled_labels.lock().unwrap().insert(label.into());
+        self
     }
 
     /// True when any of `labels` names a pool called off via [`Self::cancel_label`].
@@ -679,15 +612,16 @@ impl TicketSystem {
 
     /// Bind `agent` to this system: drain any tickets it queued in its
     /// default system into this one and push a clone onto this system's
-    /// agents list. Returns the wired agent for chaining (`.task(...)`
-    /// etc.).
+    /// agents list. Returns `&self` so registration chains with
+    /// `.task(...)` and the policy builders. To keep a bound handle to
+    /// the agent itself, use [`Agent::ticket_system`] instead.
     ///
     /// May be called before or after `run()` / `finish()`. When called
     /// after `run()`, the new agent starts polling for tickets within
     /// roughly one `IDLE_POLL_INTERVAL` (~100 ms).
-    pub fn agent(&self, mut agent: Agent) -> Agent {
+    pub fn agent(&self, mut agent: Agent) -> &Self {
         self.bind_agent(&mut agent);
-        agent
+        self
     }
 
     // ---- run lifecycle ----
@@ -765,7 +699,7 @@ impl TicketSystem {
     /// signal (read by [`Self::is_cancelled`]) and the stop signal
     /// (read by every worker and tool). [`Self::finish`] returns
     /// shortly after with `FinishReason::Cancelled`.
-    pub fn cancel(&self) {
+    pub fn cancel(&self) -> &Self {
         self.cancel_signal
             .lock()
             .unwrap()
@@ -774,6 +708,7 @@ impl TicketSystem {
             .lock()
             .unwrap()
             .store(true, Ordering::Relaxed);
+        self
     }
 
     async fn take_join_handle(&self) {
@@ -889,51 +824,11 @@ mod tests {
 
     #[test]
     fn repeated_task_calls_route_to_shared_queue_after_rebind() {
-        let alice = minimal_agent("alice");
         let (sys, _tmp) = test_system();
-        let alice = sys.agent(alice);
+        let alice = minimal_agent("alice").ticket_system(&sys);
         alice.task("first");
         alice.task("second");
-        assert_eq!(sys.count_tickets(|t| t.status == Status::Todo), 2);
-    }
-
-    #[test]
-    fn search_matches_string_task_case_insensitively() {
-        let (sys, _tmp) = test_system();
-        sys.task("Fix Login");
-        sys.task("Other thing");
-        let hits = sys.search_tickets("login");
-        assert_eq!(hits.len(), 1);
-    }
-
-    #[test]
-    fn first_returns_none_on_empty_system() {
-        let (sys, _tmp) = test_system();
-        assert!(sys.first_ticket().is_none());
-        assert!(sys.tickets().is_empty());
-    }
-
-    #[test]
-    fn first_returns_earliest_ticket_by_creation() {
-        let (sys, _tmp) = test_system();
-        sys.task("first");
-        sys.task("second");
-        sys.task("third");
-        let first = sys.first_ticket().unwrap();
-        assert_eq!(first.key, "TICKET-1");
-        assert_eq!(first.task, serde_json::Value::String("first".into()));
-    }
-
-    #[test]
-    fn last_returns_latest_ticket_by_creation() {
-        let (sys, _tmp) = test_system();
-        assert!(sys.last_ticket().is_none());
-        sys.task("first");
-        sys.task("second");
-        sys.task("third");
-        let last = sys.last_ticket().unwrap();
-        assert_eq!(last.key, "TICKET-3");
-        assert_eq!(last.task, serde_json::Value::String("third".into()));
+        assert_eq!(sys.find_tickets(|t| t.status == Status::Todo).len(), 2);
     }
 
     #[test]
@@ -1259,34 +1154,6 @@ mod tests {
     }
 
     #[test]
-    fn create_ticket_on_event_enqueues_when_make_returns_ticket() {
-        let (sys, _tmp) = test_system();
-        sys.create_ticket_on_event(|e| match &e.kind {
-            EventKind::TicketFailed { key } => {
-                Some(Ticket::new(format!("triage {key}")).label("triage"))
-            }
-            _ => None,
-        });
-        sys.emit(
-            "TICKET-1",
-            "agent",
-            EventKind::TicketFailed {
-                key: "TICKET-1".into(),
-            },
-        );
-        let spawned = sys.find_ticket(|t| t.has_label("triage")).unwrap();
-        assert_eq!(spawned.task, serde_json::json!("triage TICKET-1"));
-    }
-
-    #[test]
-    fn create_ticket_on_event_skips_when_make_returns_none() {
-        let (sys, _tmp) = test_system();
-        sys.create_ticket_on_event(|_| None);
-        sys.emit("KEY", "agent", EventKind::TurnStarted);
-        assert!(sys.tickets().is_empty());
-    }
-
-    #[test]
     fn create_ticket_on_result_enqueues_follow_up_for_finished_ticket() {
         let (sys, _tmp) = test_system();
         sys.ticket(Ticket::new("scout").label("scout"));
@@ -1302,7 +1169,7 @@ mod tests {
             "agent",
             EventKind::TicketFinished { key: key.clone() },
         );
-        assert_eq!(sys.count_tickets(|t| t.has_label("sniper")), 1);
+        assert_eq!(sys.find_tickets(|t| t.has_label("sniper")).len(), 1);
     }
 
     #[test]

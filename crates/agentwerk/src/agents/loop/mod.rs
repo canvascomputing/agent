@@ -38,7 +38,7 @@ pub(crate) mod test_util;
 #[cfg(test)]
 mod tests {
     use crate::agents::r#loop::test_util::*;
-    use crate::agents::tickets::ReplyContent;
+    use crate::agents::tickets::{Author, ReplyContent};
 
     // Reply transcript
 
@@ -50,28 +50,28 @@ mod tests {
         let replies = &ticket.replies;
         assert_eq!(replies.len(), 5, "got {replies:?}");
 
-        assert_eq!(replies[0].author, "system");
+        assert_eq!(replies[0].author, Author::System);
         assert!(matches!(&replies[0].content[..], [ReplyContent::Text(_)]));
 
-        assert_eq!(replies[1].author, "user");
+        assert_eq!(replies[1].author, Author::User);
         assert!(
             matches!(&replies[1].content[..], [ReplyContent::Text(t)] if t.starts_with("## Context")),
             "second reply must be the auto-injected context prelude",
         );
 
-        assert_eq!(replies[2].author, "user");
+        assert_eq!(replies[2].author, Author::User);
         assert!(
             matches!(&replies[2].content[..], [ReplyContent::Text(t)] if t == "go"),
             "third reply must carry the task body",
         );
 
-        assert_eq!(replies[3].author, "assistant");
+        assert_eq!(replies[3].author, Author::Assistant);
         assert!(
             matches!(&replies[3].content[..], [ReplyContent::ToolUse { name, .. }] if name == "finish_ticket"),
             "assistant reply must mirror the model's ToolUse block",
         );
 
-        assert_eq!(replies[4].author, "user");
+        assert_eq!(replies[4].author, Author::User);
         assert!(
             matches!(&replies[4].content[..], [ReplyContent::ToolResult { .. }]),
             "tool-result reply must carry a ToolResult block",
@@ -102,12 +102,12 @@ mod tests {
 
         let replies = &ticket.replies;
 
-        assert_eq!(replies[0].author, "system");
+        assert_eq!(replies[0].author, Author::System);
 
         let summary_idx = replies
             .iter()
             .position(|r| {
-                r.author == "user"
+                r.author == Author::User
                     && matches!(&r.content[..], [ReplyContent::Text(t)] if t == "SUMMARY")
             })
             .expect("expected a `user` reply carrying the summariser text");

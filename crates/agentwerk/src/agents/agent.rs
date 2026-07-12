@@ -542,14 +542,6 @@ impl Agent {
         self
     }
 
-    /// Enqueue a ticket carrying `task` and attached to `label` for Path B
-    /// assignment. Returns `&self` so the call can chain into `.finish().await`.
-    pub fn task_labeled<T: Serialize>(&self, task: T, label: impl Into<String>) -> &Self {
-        let ticket = Ticket::new(task).label(label);
-        self.dispatch(ticket);
-        self
-    }
-
     /// Enqueue a fully-built `Ticket`. Returns `&self` so the call can chain
     /// into `.finish().await`.
     pub fn ticket(&self, ticket: Ticket) -> &Self {
@@ -819,7 +811,9 @@ mod tests {
         let agent = built(Agent::new().template_variable("topic", "rust")).ticket_system(&sys);
         agent.task("Search {topic} forums.");
         let stored = sys
-            .first_ticket()
+            .tickets()
+            .into_iter()
+            .next()
             .expect("ticket should have been enqueued");
         assert_eq!(
             stored.task,
@@ -836,7 +830,9 @@ mod tests {
         let value = serde_json::json!({"q": "Find {topic}"});
         agent.ticket(Ticket::new(value.clone()));
         let stored = sys
-            .first_ticket()
+            .tickets()
+            .into_iter()
+            .next()
             .expect("ticket should have been enqueued");
         assert_eq!(stored.task, value);
     }

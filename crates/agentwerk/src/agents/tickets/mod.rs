@@ -20,7 +20,7 @@ mod ticket_system;
 pub(super) mod test_util;
 
 pub use error::TicketError;
-pub use reply::{Reply, ReplyContent};
+pub use reply::{Author, Reply, ReplyContent};
 pub use ticket::{Status, Ticket};
 pub use ticket_system::TicketSystem;
 

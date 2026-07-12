@@ -183,7 +183,12 @@ fn relative_path(path: &Path, base: &Path) -> String {
         .to_string()
 }
 
-fn collect_files(dir: &Path, base: &Path, glob_filter: &Option<String>, results: &mut Vec<PathBuf>) {
+fn collect_files(
+    dir: &Path,
+    base: &Path,
+    glob_filter: &Option<String>,
+    results: &mut Vec<PathBuf>,
+) {
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
         Err(_) => return,

@@ -85,7 +85,7 @@ impl BashTool {
     }
 
     /// Override the auto-generated description.
-    pub fn with_description(mut self, description: &str) -> Self {
+    pub fn description(mut self, description: &str) -> Self {
         self.description = description.to_string();
         self
     }
@@ -146,7 +146,7 @@ impl ToolLike for BashTool {
 impl BashTool {
     /// Create an unrestricted bash tool with the standard description.
     pub fn unrestricted() -> Self {
-        Self::new("bash_tool", "*").with_description(&format!(
+        Self::new("bash_tool", "*").description(&format!(
             "\
 Executes a bash command in the working directory and returns its output.
 
@@ -213,8 +213,8 @@ mod tests {
 
     #[test]
     fn glob_tool_custom_description() {
-        let tool = BashTool::new("git", "git *").with_description("Run git commands.");
-        assert_eq!(tool.description(), "Run git commands.");
+        let tool = BashTool::new("git", "git *").description("Run git commands.");
+        assert_eq!(ToolLike::description(&tool), "Run git commands.");
     }
 
     #[tokio::test]

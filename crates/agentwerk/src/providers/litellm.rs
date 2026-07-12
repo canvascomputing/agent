@@ -49,12 +49,14 @@ impl LiteLlmProvider {
         Self(OpenAiProvider::raw(api_key, DEFAULT_BASE_URL))
     }
 
-    pub fn base_url(self, url: impl Into<String>) -> Self {
-        Self(self.0.base_url(url))
+    pub fn base_url(mut self, url: impl Into<String>) -> Self {
+        self.0 = self.0.base_url(url);
+        self
     }
 
-    pub fn timeout(self, d: Duration) -> Self {
-        Self(self.0.timeout(d))
+    pub fn timeout(mut self, d: Duration) -> Self {
+        self.0 = self.0.timeout(d);
+        self
     }
 
     pub(crate) fn from_env() -> ProviderResult<Self> {

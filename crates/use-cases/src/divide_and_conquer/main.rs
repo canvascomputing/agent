@@ -156,7 +156,7 @@ fn aggregate_and_report(
 /// against the `idx=` line in the task body so a misrouted result
 /// can't quietly slot into the wrong partition.
 fn extract_partial(ticket: &Ticket, total: usize) -> Result<(usize, i128), String> {
-    if ticket.status.to_string() != "finished" {
+    if !ticket.is_finished() {
         return Err(ticket.status.to_string());
     }
     let attached = ticket.result.as_ref().ok_or("no result attached")?;

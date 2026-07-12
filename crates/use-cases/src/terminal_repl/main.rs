@@ -26,7 +26,7 @@ use std::io::{self, IsTerminal, Write};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
-use agentwerk::agents::tickets::ReplyContent;
+use agentwerk::agents::tickets::{Author, ReplyContent};
 use agentwerk::event::{Event, EventKind};
 use agentwerk::providers::{context_window_from_env, model_from_env, Model};
 use agentwerk::tools::{
@@ -55,7 +55,7 @@ async fn main() {
     let real_window = context_window_from_env().or_else(|| {
         model_from_env()
             .ok()
-            .and_then(|name| Model::from_name(&name).context_window)
+            .and_then(|name| Model::from_name(&name).get_context_window())
     });
     let effective_window = test_window.or(real_window);
     match (test_window, real_window) {
@@ -291,19 +291,15 @@ async fn main() {
 
         let stats = tickets.stats();
         let outcome = {
-            let status = chat_key.as_deref().and_then(|k| {
-                tickets
-                    .tickets()
-                    .into_iter()
-                    .find(|t| t.key == k)
-                    .map(|t| t.status.to_string())
-            });
-            match status.as_deref() {
-                Some("done") => {
+            let chat = chat_key
+                .as_deref()
+                .and_then(|k| tickets.tickets().into_iter().find(|t| t.key == k));
+            match chat {
+                Some(t) if t.is_finished() => {
                     chat_key = None;
                     "completed"
                 }
-                Some("failed") => {
+                Some(t) if t.is_failed() => {
                     chat_key = None;
                     "failed"
                 }
@@ -499,7 +495,8 @@ async fn wait_for_assistant_pause(tickets: &TicketSystem, key: &str) {
 
 fn is_paused_on_text(ticket: &Ticket) -> bool {
     ticket.replies.last().is_some_and(|r| {
-        r.author == "assistant" && r.content.iter().all(|c| matches!(c, ReplyContent::Text(_)))
+        r.author == Author::Assistant
+            && r.content.iter().all(|c| matches!(c, ReplyContent::Text(_)))
     })
 }
 

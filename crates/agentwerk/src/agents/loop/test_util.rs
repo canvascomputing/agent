@@ -306,7 +306,11 @@ pub async fn run_one(
 
     let _ = tickets.finish().await;
     let events = collected.lock().unwrap().clone();
-    let ticket = tickets.first_ticket().expect("ticket must exist");
+    let ticket = tickets
+        .tickets()
+        .into_iter()
+        .next()
+        .expect("ticket must exist");
     (events, provider, ticket)
 }
 
@@ -344,7 +348,11 @@ pub async fn run_with_context_window(
 
     let _ = tickets.finish().await;
     let events = collected.lock().unwrap().clone();
-    let ticket = tickets.first_ticket().expect("ticket must exist");
+    let ticket = tickets
+        .tickets()
+        .into_iter()
+        .next()
+        .expect("ticket must exist");
     (events, provider, ticket)
 }
 
@@ -382,7 +390,11 @@ pub async fn run_compaction(
 
     let _ = tickets.finish().await;
     let events = collected.lock().unwrap().clone();
-    let ticket = tickets.first_ticket().expect("ticket must exist");
+    let ticket = tickets
+        .tickets()
+        .into_iter()
+        .next()
+        .expect("ticket must exist");
     (events, provider, ticket)
 }
 

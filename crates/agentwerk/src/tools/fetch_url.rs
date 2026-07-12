@@ -105,8 +105,7 @@ impl ToolLike for FetchUrlTool {
                 unreachable!()
             };
 
-            let output =
-                format_output(url, &body, status, &content_type, bytes, max_length);
+            let output = format_output(url, &body, status, &content_type, bytes, max_length);
             Ok(ToolResult::success(output))
         })
     }

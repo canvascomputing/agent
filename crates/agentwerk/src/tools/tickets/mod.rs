@@ -242,7 +242,11 @@ fn action_search(ticket_system: &TicketSystem, input: &Value) -> ToolResult {
         Some(q) => q,
         None => return ToolResult::error("Missing required parameter: query"),
     };
-    let hits = ticket_system.search_tickets(query);
+    let needle = query.to_lowercase();
+    let hits = ticket_system.find_tickets(|t| match &t.task {
+        Value::String(s) => s.to_lowercase().contains(&needle),
+        other => other.to_string().to_lowercase().contains(&needle),
+    });
     if hits.is_empty() {
         return ToolResult::success("(no matching tickets)".to_string());
     }

@@ -11,7 +11,7 @@ use super::{AnthropicProvider, MistralProvider, OpenAiProvider};
 #[derive(Debug, Clone)]
 pub struct Model {
     pub name: String,
-    pub context_window: Option<u64>,
+    context_window: Option<u64>,
 }
 
 impl Model {
@@ -34,6 +34,12 @@ impl Model {
     pub fn context_window(mut self, size: u64) -> Self {
         self.context_window = Some(size);
         self
+    }
+
+    /// Known context window size, `None` when the name is in no registry
+    /// and no override was set.
+    pub fn get_context_window(&self) -> Option<u64> {
+        self.context_window
     }
 }
 

@@ -255,7 +255,7 @@ pub(super) async fn compact(context: &mut LoopContext<'_>, reason: CompactReason
     let Some(ticket) = context.ticket_system.get_ticket(&context.ticket_key) else {
         return Action::Stop;
     };
-    let window = context.model.context_window;
+    let window = context.model.get_context_window();
     let messages = ticket.to_messages();
     let chunks_total = algo::chunks_for_window(&messages, window).len() as u32;
     context.emit(EventKind::CompactionStarted {
@@ -322,7 +322,7 @@ pub(super) async fn proactive_compact(
     mut messages: Vec<Message>,
 ) -> Action<Vec<Message>> {
     let tools = context.agent.tool_definitions();
-    let window = context.model.context_window;
+    let window = context.model.get_context_window();
     let history = context
         .ticket_system
         .stats()
@@ -353,7 +353,7 @@ mod tests {
 
     use crate::agents::agent::Agent;
     use crate::agents::r#loop::test_util::*;
-    use crate::agents::tickets::{Status, TicketSystem};
+    use crate::agents::tickets::{Author, Status, Ticket, TicketSystem};
     use crate::agents::Knowledge;
     use crate::providers::Provider;
     use crate::tools::{FinishTicketTool, HandoverTicketTool, ManageTicketsTool};
@@ -424,7 +424,7 @@ mod tests {
         }
 
         tickets.start();
-        tickets.task_labeled("a", "alice");
+        tickets.ticket(Ticket::new("a").label("alice"));
 
         tokio::time::timeout(Duration::from_secs(5), tickets.finish())
             .await
@@ -456,8 +456,10 @@ mod tests {
         let inject = async move {
             for _ in 0..200 {
                 let last_is_assistant = tickets_for_inject
-                    .first_ticket()
-                    .and_then(|t| t.replies.last().map(|r| r.author == "assistant"))
+                    .tickets()
+                    .into_iter()
+                    .next()
+                    .and_then(|t| t.replies.last().map(|r| r.author == Author::Assistant))
                     .unwrap_or(false);
                 if last_is_assistant {
                     break;
@@ -465,12 +467,14 @@ mod tests {
                 tokio::time::sleep(Duration::from_millis(5)).await;
             }
             let ticket = tickets_for_inject
-                .first_ticket()
+                .tickets()
+                .into_iter()
+                .next()
                 .expect("ticket must exist");
             assert_eq!(ticket.status, Status::InProgress);
             assert_eq!(
-                ticket.replies.last().map(|r| r.author.clone()),
-                Some("assistant".into()),
+                ticket.replies.last().map(|r| r.author),
+                Some(Author::Assistant),
                 "gate must pause on the assistant text reply",
             );
             tickets_for_inject.reply(&key, "what next?");
@@ -482,7 +486,11 @@ mod tests {
         .await
         .expect("test did not finish within 5s");
 
-        let ticket = tickets.first_ticket().expect("ticket must exist");
+        let ticket = tickets
+            .tickets()
+            .into_iter()
+            .next()
+            .expect("ticket must exist");
         assert_eq!(ticket.status, Status::Finished);
     }
 
@@ -539,7 +547,7 @@ mod tests {
             for _ in 0..200 {
                 let paused = tickets_for_drive
                     .get_ticket(&first_key)
-                    .and_then(|t| t.replies.last().map(|r| r.author == "assistant"))
+                    .and_then(|t| t.replies.last().map(|r| r.author == Author::Assistant))
                     .unwrap_or(false);
                 if paused {
                     break;
@@ -598,7 +606,11 @@ mod tests {
             .await
             .expect("test did not finish within 5s");
 
-        let ticket = tickets.first_ticket().expect("ticket must exist");
+        let ticket = tickets
+            .tickets()
+            .into_iter()
+            .next()
+            .expect("ticket must exist");
         assert_eq!(ticket.status, Status::Failed);
 
         let events = collected.lock().unwrap().clone();
@@ -638,7 +650,11 @@ mod tests {
             .await
             .expect("test did not finish within 5s");
 
-        let ticket = tickets.first_ticket().expect("ticket must exist");
+        let ticket = tickets
+            .tickets()
+            .into_iter()
+            .next()
+            .expect("ticket must exist");
         assert_eq!(ticket.status, Status::Finished);
         assert_eq!(tickets.last_result().as_deref(), Some("done"));
     }
@@ -734,8 +750,8 @@ mod tests {
         // enqueue both tickets; the analysis pool runs on.
         tickets.start();
         tickets.cancel_label("research");
-        tickets.task_labeled("hunt", "research");
-        tickets.task_labeled("triage", "analysis");
+        tickets.ticket(Ticket::new("hunt").label("research"));
+        tickets.ticket(Ticket::new("triage").label("analysis"));
 
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
         loop {
@@ -886,7 +902,11 @@ mod tests {
 
         let _ = tickets.finish().await;
         let events = collected.lock().unwrap().clone();
-        let ticket = tickets.first_ticket().expect("ticket must exist");
+        let ticket = tickets
+            .tickets()
+            .into_iter()
+            .next()
+            .expect("ticket must exist");
 
         assert_eq!(provider.requests(), 2);
         assert!(failures_in(&events).is_empty());
@@ -901,7 +921,9 @@ mod tests {
 
         let tool_result_path = ticket.replies.iter().find_map(|r| {
             r.content.iter().find_map(|b| match b {
-                ReplyContent::ToolResult { id, path, .. } if id == "call-1" => path.clone(),
+                ReplyContent::ToolResult {
+                    tool_use_id, path, ..
+                } if tool_use_id == "call-1" => path.clone(),
                 _ => None,
             })
         });
@@ -995,7 +1017,11 @@ mod tests {
         tickets.task("go");
 
         let _ = tickets.finish().await;
-        let ticket = tickets.first_ticket().expect("ticket must exist");
+        let ticket = tickets
+            .tickets()
+            .into_iter()
+            .next()
+            .expect("ticket must exist");
         assert_eq!(ticket.status, Status::Finished);
 
         let second = &provider.received()[1];
@@ -1223,11 +1249,11 @@ mod tests {
                 .build(),
         );
 
-        tickets.task_labeled("alice work", "a");
+        tickets.ticket(Ticket::new("alice work").label("a"));
         let _ = tickets.finish().await;
         assert!(store.index().contains("alice-note"));
 
-        tickets.task_labeled("bob work", "b");
+        tickets.ticket(Ticket::new("bob work").label("b"));
         let _ = tickets.finish().await;
 
         let bob_prompts = p_b.received_system_prompts();

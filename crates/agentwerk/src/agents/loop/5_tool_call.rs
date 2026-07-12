@@ -322,7 +322,10 @@ mod tests {
         tickets.task("go");
         let _ = tickets.finish().await;
 
-        assert_eq!(tickets.first_ticket().unwrap().status, Status::Failed);
+        assert_eq!(
+            tickets.tickets().into_iter().next().unwrap().status,
+            Status::Failed
+        );
         let events = collected.lock().unwrap().clone();
         assert!(events.iter().any(|e| matches!(
             &e.kind,
@@ -379,7 +382,10 @@ mod tests {
         tickets.task("go");
         let _ = tickets.finish().await;
 
-        assert_eq!(tickets.first_ticket().unwrap().status, Status::Finished);
+        assert_eq!(
+            tickets.tickets().into_iter().next().unwrap().status,
+            Status::Finished
+        );
     }
 
     #[tokio::test]
@@ -441,7 +447,10 @@ mod tests {
         };
 
         tokio::join!(tickets.finish(), unblock);
-        assert_eq!(tickets.first_ticket().unwrap().status, Status::Finished);
+        assert_eq!(
+            tickets.tickets().into_iter().next().unwrap().status,
+            Status::Finished
+        );
     }
 
     fn schema_for_partial_sum() -> Schema {

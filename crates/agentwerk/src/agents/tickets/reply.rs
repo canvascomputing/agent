@@ -9,14 +9,22 @@ use crate::providers::{ContentBlock, Message};
 
 use super::now_millis;
 
+/// Originator of a transcript entry. The agent loop writes `System`
+/// entries for the system prompt and for compaction boundaries; those
+/// are filtered when projecting replies back into `Message` values for
+/// the provider.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Author {
+    System,
+    User,
+    Assistant,
+}
+
 /// One entry in a ticket's transcript.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Reply {
-    /// Role of the originating message: `"user"` or `"assistant"`. The
-    /// agent loop also writes `"system"` entries for the system prompt
-    /// and for compaction boundaries; those are filtered when
-    /// projecting replies back into `Message` values for the provider.
-    pub author: String,
+    pub author: Author,
     pub content: Vec<ReplyContent>,
     /// Millis since epoch.
     pub created_at: u64,
@@ -34,11 +42,11 @@ pub enum ReplyContent {
         input: serde_json::Value,
     },
     ToolResult {
-        id: String,
-        output: String,
+        tool_use_id: String,
+        content: String,
         succeeded: bool,
         /// Absolute path of the offloaded full payload when the inline
-        /// `output` carries only a preview. `None` when the full output
+        /// `content` carries only a preview. `None` when the full output
         /// fit inline.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         path: Option<PathBuf>,
@@ -46,12 +54,12 @@ pub enum ReplyContent {
 }
 
 impl Reply {
-    /// Build a `"user"` reply from the provider blocks the loop sent.
+    /// Build a user reply from the provider blocks the loop sent.
     /// `paths` maps `tool_use_id → absolute path` for tool results whose
     /// full output was offloaded to disk; empty when nothing was offloaded.
     pub(crate) fn user(blocks: &[ContentBlock], paths: &HashMap<String, PathBuf>) -> Self {
         Self {
-            author: "user".into(),
+            author: Author::User,
             content: blocks
                 .iter()
                 .map(|b| ReplyContent::from_block(b, paths))
@@ -60,22 +68,22 @@ impl Reply {
         }
     }
 
-    /// Build a `"user"` reply carrying a single text payload.
+    /// Build a user reply carrying a single text payload.
     pub(crate) fn user_text(text: impl Into<String>) -> Self {
         Self {
-            author: "user".into(),
+            author: Author::User,
             content: vec![ReplyContent::Text(text.into())],
             created_at: now_millis(),
         }
     }
 
-    /// Build an `"assistant"` reply from the model's response content.
+    /// Build an assistant reply from the model's response content.
     /// Assistant content never carries tool-result blocks, so no paths
     /// map is needed.
     pub(crate) fn assistant(blocks: &[ContentBlock]) -> Self {
         let empty = HashMap::new();
         Self {
-            author: "assistant".into(),
+            author: Author::Assistant,
             content: blocks
                 .iter()
                 .map(|b| ReplyContent::from_block(b, &empty))
@@ -84,26 +92,26 @@ impl Reply {
         }
     }
 
-    /// Build a `"system"` reply carrying a single text payload. Used
+    /// Build a system reply carrying a single text payload. Used
     /// for the leading system-prompt entry and compaction boundaries.
     pub(crate) fn system_text(text: impl Into<String>) -> Self {
         Self {
-            author: "system".into(),
+            author: Author::System,
             content: vec![ReplyContent::Text(text.into())],
             created_at: now_millis(),
         }
     }
 
     /// Project this reply back into a provider [`Message`]. Returns
-    /// `None` for `"system"` entries: the system prompt is passed via
+    /// `None` for `System` entries: the system prompt is passed via
     /// `request.system_prompt`, and compaction-boundary replies are
     /// audit markers only.
     pub(crate) fn as_message(&self) -> Option<Message> {
         let content = self.content.iter().map(ReplyContent::to_block).collect();
-        match self.author.as_str() {
-            "user" => Some(Message::User { content }),
-            "assistant" => Some(Message::Assistant { content }),
-            _ => None,
+        match self.author {
+            Author::User => Some(Message::User { content }),
+            Author::Assistant => Some(Message::Assistant { content }),
+            Author::System => None,
         }
     }
 }
@@ -122,8 +130,8 @@ impl ReplyContent {
                 content,
                 succeeded,
             } => ReplyContent::ToolResult {
-                id: tool_use_id.clone(),
-                output: content.clone(),
+                tool_use_id: tool_use_id.clone(),
+                content: content.clone(),
                 succeeded: *succeeded,
                 path: paths.get(tool_use_id).cloned(),
             },
@@ -139,13 +147,13 @@ impl ReplyContent {
                 input: input.clone(),
             },
             ReplyContent::ToolResult {
-                id,
-                output,
+                tool_use_id,
+                content,
                 succeeded,
                 path: _,
             } => ContentBlock::ToolResult {
-                tool_use_id: id.clone(),
-                content: output.clone(),
+                tool_use_id: tool_use_id.clone(),
+                content: content.clone(),
                 succeeded: *succeeded,
             },
         }

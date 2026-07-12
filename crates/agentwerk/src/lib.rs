@@ -31,7 +31,7 @@
 //! # Many agents working together
 //!
 //! ```no_run
-//! use agentwerk::{Agent, TicketSystem};
+//! use agentwerk::{Agent, Ticket, TicketSystem};
 //! use agentwerk::tools::FetchUrlTool;
 //!
 //! # async fn run() {
@@ -54,7 +54,7 @@
 //!     "https://canvascomputing.org/products",
 //!     "https://canvascomputing.org/blog",
 //! ] {
-//!     tickets.task_labeled(format!("Summarize {url}"), "research");
+//!     tickets.ticket(Ticket::new(format!("Summarize {url}")).label("research"));
 //! }
 //!
 //! tickets.finish().await;
@@ -91,6 +91,7 @@ pub(crate) mod test_util;
 
 // Workshop: agents pull tickets from the system
 pub use agents::Agent;
+pub use agents::Status;
 pub use agents::Ticket;
 pub use agents::TicketSystem;
 
@@ -98,5 +99,10 @@ pub use agents::TicketSystem;
 pub use agents::Knowledge;
 pub use agents::Stats;
 
+// Validation
+pub use schemas::Schema;
+
 // Observation
 pub use event::Event;
+pub use event::EventKind;
+pub use event::FinishReason;

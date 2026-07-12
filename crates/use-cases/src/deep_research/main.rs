@@ -187,7 +187,7 @@ async fn wait_for_outcome(tickets: &TicketSystem) -> Outcome {
     use std::time::Duration;
 
     let report_ticket = || tickets.find_ticket(|t| t.has_label("report") && t.is_finished());
-    let pending = || tickets.count_tickets(|t| t.is_pending());
+    let pending = || tickets.find_tickets(|t| t.is_pending()).len();
 
     loop {
         if tickets.is_cancelled() {

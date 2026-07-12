@@ -179,7 +179,12 @@ which no code contains. Write the real identifier instead, e.g. `{word}(...)`."
     None
 }
 
-fn collect_files(dir: &Path, base: &Path, glob_filter: &Option<String>, results: &mut Vec<PathBuf>) {
+fn collect_files(
+    dir: &Path,
+    base: &Path,
+    glob_filter: &Option<String>,
+    results: &mut Vec<PathBuf>,
+) {
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
         Err(_) => return,

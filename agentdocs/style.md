@@ -4,11 +4,12 @@ Naming and comment rules, plus README structure. Skim the section matching what 
 
 ## Crate root
 
-**A type earns a `pub use` at `lib.rs` only when it names a concept in the one-sentence description of the crate.**
+**A type earns a `pub use` at `lib.rs` only when it names a concept in the one-sentence description of the crate, or when root-level signatures hand it to the caller.**
 
-- The current root: `Agent`, `TicketSystem`, `Ticket`, `Knowledge`, `Policies`, `Stats`, `Event`.
-- Discriminants, sub-enums, errors, and conversion traits do not earn a root slot. They live in their domain module.
-- Builder parameters and run outputs do earn one when callers name them in their own code.
+- The current root: `Agent`, `TicketSystem`, `Ticket`, `Knowledge`, `Policies`, `Stats`, `Event`, `Status`, `EventKind`, `FinishReason`, `Schema`.
+- Discriminants callers match on in their own code earn a root slot: `Status` (on `Ticket.status`), `EventKind` (on `Event.kind`), `FinishReason` (from `finish_reason()`).
+- Errors and conversion traits do not earn a root slot. They live in their domain module.
+- Builder parameters and run outputs do earn one when callers name them in their own code: `Schema` (on `Ticket::schema`).
 - Free functions at the root are forbidden: convert to an associated function or move to the domain module.
 - Name collisions at the root are forbidden; `ToolResult` next to `Result` is not acceptable.
 

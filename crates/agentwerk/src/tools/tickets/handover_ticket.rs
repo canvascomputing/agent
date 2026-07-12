@@ -443,7 +443,10 @@ mod tests {
         let (sys, _key) = one_ticket("alice", dir.path().to_path_buf());
         let ctx = ctx_with(Arc::clone(&sys), "alice", dir.path().to_path_buf());
         let outcome = HandoverTicketTool
-            .call(serde_json::json!({"to": "bob", "result": "alice's findings"}), &ctx)
+            .call(
+                serde_json::json!({"to": "bob", "result": "alice's findings"}),
+                &ctx,
+            )
             .await
             .unwrap();
         assert!(matches!(outcome, ToolResult::Success(_)), "{outcome:?}");

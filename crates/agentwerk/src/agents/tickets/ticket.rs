@@ -10,7 +10,7 @@ use serde::Serialize;
 
 use crate::providers::{AsUserMessage, Message};
 
-use super::reply::Reply;
+use super::reply::{Author, Reply};
 
 /// A task plus the metadata that assigns it. Caller-settable fields:
 /// `task`, `labels`, `schema`, `parent`. System-managed fields (`key`,
@@ -125,9 +125,19 @@ impl Ticket {
         self.labels.iter().any(|l| l == label)
     }
 
+    /// True while the ticket sits unclaimed in the queue.
+    pub fn is_todo(&self) -> bool {
+        self.status == Status::Todo
+    }
+
     /// True when this ticket has reached `Status::Finished`.
     pub fn is_finished(&self) -> bool {
         self.status == Status::Finished
+    }
+
+    /// True when this ticket has reached `Status::Failed`.
+    pub fn is_failed(&self) -> bool {
+        self.status == Status::Failed
     }
 
     /// True while an agent holds the ticket.
@@ -155,7 +165,7 @@ impl Ticket {
     /// empty, which is never true after compaction. Used by the loop
     /// after a successful compaction.
     pub(crate) fn summarize(&mut self, summary_text: String) {
-        self.replies.retain(|r| r.author == "system");
+        self.replies.retain(|r| r.author == Author::System);
         self.replies.push(Reply::user_text(summary_text.clone()));
         self.task = serde_json::Value::String(summary_text);
     }
@@ -164,7 +174,9 @@ impl Ticket {
     /// next non-assistant reply lands (a tool-result append or an
     /// external caller reply via [`TicketSystem::reply`]).
     pub(crate) fn is_waiting_for_response(&self) -> bool {
-        self.replies.last().is_none_or(|r| r.author != "assistant")
+        self.replies
+            .last()
+            .is_none_or(|r| r.author != Author::Assistant)
     }
 
     /// Project this ticket's transcript into the provider's
@@ -463,10 +475,31 @@ mod tests {
     }
 
     #[test]
+    fn is_todo_true_only_while_unclaimed() {
+        let mut t = Ticket::new("x");
+        assert!(t.is_todo());
+        for status in [Status::InProgress, Status::Finished, Status::Failed] {
+            t.status = status;
+            assert!(!t.is_todo(), "expected !is_todo for {status:?}");
+        }
+    }
+
+    #[test]
     fn is_finished_true_for_finished_status() {
         let mut t = Ticket::new("x");
         t.status = Status::Finished;
         assert!(t.is_finished());
+    }
+
+    #[test]
+    fn is_failed_true_only_for_failed_status() {
+        let mut t = Ticket::new("x");
+        t.status = Status::Failed;
+        assert!(t.is_failed());
+        for status in [Status::Todo, Status::InProgress, Status::Finished] {
+            t.status = status;
+            assert!(!t.is_failed(), "expected !is_failed for {status:?}");
+        }
     }
 
     #[test]
