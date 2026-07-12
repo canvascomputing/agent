@@ -92,16 +92,17 @@ Two layers of state exist. The per-ticket transcript lives on `Ticket::replies`:
 - Dropping the `TicketSystem` while agents still reference it via `Weak` is the public way to abort: the upgrade fails and each task panics out cleanly.
 - `finish()` announces its exit reason as `FinishReason::Drained`, `FinishReason::PolicyViolated(kind)`, or `FinishReason::Cancelled`, in that precedence. The reason is stashed for `TicketSystem::finish_reason()` and emitted as `EventKind::RunFinished { reason }`.
 
-## Stats are per-system, write-only-by-domain
+## Stats are event-derived, one writer
 
-**`Stats` is one struct of atomic counters; each domain interacts through its own write-only protocol.**
+**`Stats::record_event` is the single writer for event-derived stats: every `EventKind` is counted automatically by its name; only ticket lifecycle writes directly.**
 
-- `LoopStats` is what the per-agent loop sees: `record_turn`, `record_request`, `record_tool_call`, `record_error`.
-- `TicketStats` is what the ticket lifecycle sees: `record_created`, `record_started`, `record_done`, `record_failed`.
-- Reads happen on `Stats` directly through inherent accessors (`turns()`, `tickets_finished()`, `run_duration()`, `success_rate()`, ...), never through the recorder traits.
-- Lock-free for increments; readers do one atomic load per call.
-- `Stats::stats_for_label(label)` returns a nested `Stats` slice scoped to one label. The loop and ticket lifecycle bump each slice alongside the global counters; `run_duration()` is `None` on a slice (elapsed run duration stays global).
-- `Stats::tool_stats()` returns per-tool call and failure counts keyed by tool name, broken down by failure kind. It is recorded global-only (no per-label slices, like `usage_history`): `emit()` consumes `ToolCallStarted` for the call count and `ToolCallFailed` for the kind-split failures. The aggregate `tool_calls`/`errors` counters are unaffected; `errors()` stays provider-only.
+- `TicketSystem::emit` forwards every event to `Stats::record_event(kind, key, labels)` before firing observers. The event's `EventKind::name()` keys a per-kind count map, so a new variant is counted the moment it names itself in that exhaustive match — no stats code to add.
+- The named accessors are lookups into that map: `turns()` reads `turn_started`, `requests()` reads `request_finished`, `tool_calls()` reads `tool_call_started`, `errors()` reads `request_failed`. `event_counts()` exposes the whole map.
+- Payload-bearing measures keep explicit arms in `record_event`: token sums and usage history from `RequestFinished`, per-tool tallies from `ToolCallStarted`/`ToolCallFailed`, per-path tallies from `FileOpened`/`FileOpenFailed`, knowledge tallies from `KnowledgeUsed`.
+- Ticket lifecycle (`record_created`, `record_started`, `record_finished`, `record_failed`) is written directly by the store: transitions carry durations events do not, and host-side mutations have no agent loop attached.
+- Reads happen on `Stats` directly through inherent accessors (`turns()`, `tickets_finished()`, `run_duration()`, `tickets_success_rate()`, ...).
+- `Stats::stats_for_label(label)` returns a nested `Stats` slice scoped to one label. `record_event` mirrors the count and token measures onto each slice the ticket carries; `run_duration()` is `None` on a slice (elapsed run duration stays global).
+- The subject maps (`tool_stats()`, `file_stats()`, `knowledge_stats()`) are recorded global-only, like `usage_history`; per-label slices stay empty there.
 
 ## Persistence routes through two traits
 

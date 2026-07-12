@@ -66,7 +66,11 @@ pub(super) async fn run(context: &mut LoopContext<'_>, reply: Reply) -> Action<(
                         // Any successful tool call is progress: clear the counter.
                         context.consecutive_schema_failures = 0;
                         for path in &opened_paths {
-                            context.ticket_system.stats().record_file_open(path);
+                            context.ticket_system.emit(
+                                &context.ticket_key,
+                                context.agent.get_name(),
+                                EventKind::FileOpened { path: path.clone() },
+                            );
                         }
                         context.ticket_system.emit(
                             &context.ticket_key,
@@ -85,7 +89,11 @@ pub(super) async fn run(context: &mut LoopContext<'_>, reply: Reply) -> Action<(
                         context.consecutive_schema_failures =
                             context.consecutive_schema_failures.saturating_add(1);
                         for path in &opened_paths {
-                            context.ticket_system.stats().record_file_open_error(path);
+                            context.ticket_system.emit(
+                                &context.ticket_key,
+                                context.agent.get_name(),
+                                EventKind::FileOpenFailed { path: path.clone() },
+                            );
                         }
                         if matches!(err, ToolError::SchemaValidationFailed { .. })
                             && schema_failure_message.is_none()

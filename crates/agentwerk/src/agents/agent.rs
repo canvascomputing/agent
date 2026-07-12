@@ -587,8 +587,8 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::agents::stats::LoopStats;
-    use crate::providers::Provider;
+    use crate::event::EventKind;
+    use crate::providers::{Provider, TokenUsage};
 
     fn built(builder: AgentBuilder<(), ()>) -> Agent {
         use crate::agents::r#loop::test_util::MockProvider;
@@ -684,8 +684,18 @@ mod tests {
             ..Policies::default()
         };
         let stats = Stats::new();
-        stats.record_turn();
-        stats.record_request(250, 0);
+        stats.record_event(&EventKind::TurnStarted, "", &[]);
+        stats.record_event(
+            &EventKind::RequestFinished {
+                model: "m".into(),
+                usage: TokenUsage {
+                    input_tokens: 250,
+                    output_tokens: 0,
+                },
+            },
+            "",
+            &[],
+        );
 
         let rendered = agent
             .context_message(&policies, &stats, None)
@@ -712,7 +722,7 @@ mod tests {
             ..Policies::default()
         };
         let stats = Stats::new();
-        stats.record_turn();
+        stats.record_event(&EventKind::TurnStarted, "", &[]);
         assert_eq!(
             agent.context_message(&policies, &stats, None).as_deref(),
             Some("## Context\n\n- Note: custom"),

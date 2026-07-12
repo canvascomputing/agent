@@ -18,7 +18,7 @@ Naming and comment rules, plus README structure. Skim the section matching what 
 **Types live next to the abstraction, owner, or protocol they belong to.**
 
 - Concrete implementations live with their abstraction: `AnthropicProvider` under `providers::`, `BashTool` under `tools::`.
-- Companion types and handles live with their owner: `Ticket`, `Status`, `TicketError`, `Reply`, and `ReplyContent` under `agents::tickets`; `Stats` and `LoopStats` under `agents::stats`.
+- Companion types and handles live with their owner: `Ticket`, `Status`, `TicketError`, `Reply`, and `ReplyContent` under `agents::tickets`; `Stats` and `ToolStat` under `agents::stats`.
 - Domain errors live with their domain: `ProviderError`, `ToolError`.
 - Provider request and response types live with the protocol: `ModelRequest`, `Message`, `TokenUsage` under `providers::`.
 - Free functions live in their module, never at the crate root: `from_env()` in `providers::environment`, helpers in `tools::util`.
@@ -27,7 +27,7 @@ Naming and comment rules, plus README structure. Skim the section matching what 
 
 **Names are disambiguated through content, not through redundant prefixes.**
 
-- Specific compound names stand alone: `TicketSystem`, `LoopStats`, `PolicyKind`.
+- Specific compound names stand alone: `TicketSystem`, `ToolStat`, `PolicyKind`.
 - Vendor prefixes are used only to distinguish concrete providers or tools: `AnthropicProvider`, `OpenAiProvider`, `LiteLlmProvider`.
 - Acronyms follow Rust API guidelines: `OpenAi`, not `OpenAI`.
 - Two structs may not share a bare name within one module; both stay qualified.

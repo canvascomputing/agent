@@ -1,9 +1,13 @@
-//! Run-time stats. One [`Stats`] struct of atomic counters records every
-//! observable event and exposes inherent read accessors. Callers reach
-//! it through `TicketSystem::stats()`.
+//! Run-time stats. One [`Stats`] struct records every observable event and
+//! exposes inherent read accessors. Callers reach it through
+//! `TicketSystem::stats()`.
 //!
-//! Lock-free for counter increments; readers do one atomic load per
-//! call.
+//! [`Stats::record_event`] is the single writer for event-derived stats:
+//! every [`EventKind`] is counted by its name automatically, so new events
+//! are covered without touching this file; only payload-bearing measures
+//! (token sums, per-subject maps) have explicit arms. Ticket lifecycle
+//! counters are written directly by the store, since transitions carry
+//! duration data events do not.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -14,31 +18,8 @@ use serde::ser::{SerializeStruct, Serializer};
 use serde::Serialize;
 
 use crate::agents::tickets::Status;
-use crate::event::ToolFailureKind;
+use crate::event::{EventKind, KnowledgeOp, ToolFailureKind};
 use crate::providers::types::TokenUsage;
-
-/// Recorder protocol for the agent loop. Each agent holds an
-/// `Arc<dyn LoopStats + Send + Sync>` and reports loop events through
-/// it. Write-only; reads happen on `Stats` directly.
-pub(crate) trait LoopStats: Send + Sync {
-    fn record_turn(&self);
-    fn record_request(&self, input_tokens: u64, output_tokens: u64);
-    fn record_tool_call(&self);
-    fn record_error(&self);
-}
-
-/// Recorder protocol for the ticket system. The ticket system holds an
-/// `Arc<Stats>` directly but only exercises these methods, so by
-/// convention the ticket-domain surface is narrow.
-pub(crate) trait TicketStats: Send + Sync {
-    fn record_created(&self);
-    /// First call wins (CAS into `started_at`); later calls are no-ops.
-    fn record_started(&self, when: u64);
-    /// Adds `ticket_duration.as_secs()` and `work_duration.as_secs()` to
-    /// the corresponding atomic sums.
-    fn record_finished(&self, ticket_duration: Duration, work_duration: Duration);
-    fn record_failed(&self, ticket_duration: Duration, work_duration: Duration);
-}
 
 /// Run-time statistics for tickets, tokens, and activity. Reached
 /// through [`TicketSystem::stats()`](crate::TicketSystem::stats);
@@ -60,10 +41,10 @@ pub(crate) trait TicketStats: Send + Sync {
 /// # }
 /// ```
 pub struct Stats {
-    turns: AtomicU64,
-    requests: AtomicU64,
-    tool_calls: AtomicU64,
-    errors: AtomicU64,
+    /// Count per event kind, keyed by [`EventKind::name`]. Every emitted
+    /// event lands here automatically; the named accessors (`turns()`,
+    /// `requests()`, …) are lookups into this map.
+    event_counts: Mutex<HashMap<String, u64>>,
     input_tokens: AtomicU64,
     output_tokens: AtomicU64,
     tickets_created: AtomicU64,
@@ -126,16 +107,6 @@ struct KnowledgeCounters {
     removes: u64,
     lists: u64,
     misses: u64,
-}
-
-/// One Knowledge-store operation, reported by the `manage_knowledge` tool.
-pub(crate) enum KnowledgeOp {
-    Write,
-    Read,
-    Remove,
-    List,
-    /// A `read` or `remove` naming a slug the store does not have.
-    Miss,
 }
 
 /// Call and failure tallies for one tool, broken down by failure kind.
@@ -239,10 +210,7 @@ impl From<&KnowledgeCounters> for KnowledgeStat {
 impl Stats {
     pub(crate) fn new() -> Self {
         Self {
-            turns: AtomicU64::new(0),
-            requests: AtomicU64::new(0),
-            tool_calls: AtomicU64::new(0),
-            errors: AtomicU64::new(0),
+            event_counts: Mutex::new(HashMap::new()),
             input_tokens: AtomicU64::new(0),
             output_tokens: AtomicU64::new(0),
             tickets_created: AtomicU64::new(0),
@@ -380,38 +348,51 @@ impl Stats {
         }
     }
 
-    pub(crate) fn record_turn_for(&self, labels: &[String]) {
-        self.record_turn();
-        for label in labels {
-            self.stats_for_label(label).record_turn();
+    /// Record an event: every kind is counted by name automatically, so a
+    /// future variant needs no arm here; only payload-bearing measures do.
+    pub(crate) fn record_event(&self, kind: &EventKind, key: &str, labels: &[String]) {
+        self.record_scoped(labels, |s| s.count_event(kind.name()));
+        match kind {
+            EventKind::RequestFinished { usage, .. } => {
+                self.record_scoped(labels, |s| {
+                    s.record_tokens(usage.input_tokens, usage.output_tokens)
+                });
+                self.record_usage(key, usage.clone());
+            }
+            EventKind::ToolCallStarted { tool_name, .. } => self.record_tool_call_named(tool_name),
+            EventKind::ToolCallFailed {
+                tool_name, kind, ..
+            } => self.record_tool_error_named(tool_name, *kind),
+            EventKind::FileOpened { path } => self.record_file_open(path),
+            EventKind::FileOpenFailed { path } => self.record_file_open_error(path),
+            EventKind::KnowledgeUsed { op } => self.record_knowledge(*op),
+            _ => {}
         }
     }
 
-    pub(crate) fn record_request_for(
-        &self,
-        labels: &[String],
-        input_tokens: u64,
-        output_tokens: u64,
-    ) {
-        self.record_request(input_tokens, output_tokens);
+    /// Apply `f` to the run-wide stats and to each per-label slice.
+    fn record_scoped(&self, labels: &[String], f: impl Fn(&Stats)) {
+        f(self);
         for label in labels {
-            self.stats_for_label(label)
-                .record_request(input_tokens, output_tokens);
+            f(&self.stats_for_label(label));
         }
     }
 
-    pub(crate) fn record_tool_call_for(&self, labels: &[String]) {
-        self.record_tool_call();
-        for label in labels {
-            self.stats_for_label(label).record_tool_call();
-        }
+    /// Bump the per-name event count by one.
+    fn count_event(&self, name: &str) {
+        *self
+            .event_counts
+            .lock()
+            .unwrap()
+            .entry(name.to_string())
+            .or_default() += 1;
     }
 
-    pub(crate) fn record_error_for(&self, labels: &[String]) {
-        self.record_error();
-        for label in labels {
-            self.stats_for_label(label).record_error();
-        }
+    /// Add a response's token counts to the running sums.
+    fn record_tokens(&self, input_tokens: u64, output_tokens: u64) {
+        self.input_tokens.fetch_add(input_tokens, Ordering::Relaxed);
+        self.output_tokens
+            .fetch_add(output_tokens, Ordering::Relaxed);
     }
 
     /// Dispatch the run-wide recorders that match a ticket transition.
@@ -462,22 +443,42 @@ impl Stats {
 
     /// Count of times an agent picked up a ticket to process.
     pub fn turns(&self) -> u64 {
-        self.turns.load(Ordering::Relaxed)
+        self.event_count("turn_started")
     }
 
     /// Total provider responses received.
     pub fn requests(&self) -> u64 {
-        self.requests.load(Ordering::Relaxed)
+        self.event_count("request_finished")
     }
 
     /// Total tool calls.
     pub fn tool_calls(&self) -> u64 {
-        self.tool_calls.load(Ordering::Relaxed)
+        self.event_count("tool_call_started")
     }
 
     /// Total provider errors.
     pub fn errors(&self) -> u64 {
-        self.errors.load(Ordering::Relaxed)
+        self.event_count("request_failed")
+    }
+
+    /// Count of one event kind, by its snake_case name.
+    fn event_count(&self, name: &str) -> u64 {
+        self.event_counts
+            .lock()
+            .unwrap()
+            .get(name)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// All per-event counts recorded so far, sorted by event name.
+    pub fn event_counts(&self) -> BTreeMap<String, u64> {
+        self.event_counts
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(name, count)| (name.clone(), *count))
+            .collect()
     }
 
     /// Total input tokens across all provider responses.
@@ -587,32 +588,15 @@ impl Stats {
     pub(crate) fn derive(tickets: &HashMap<String, crate::agents::tickets::Ticket>) -> Self {
         let stats = Stats::new();
         for t in tickets.values() {
-            TicketStats::record_created(&stats);
-            for label in t.labels.iter() {
-                TicketStats::record_created(&*stats.stats_for_label(label));
-            }
+            stats.record_scoped(&t.labels, |s| s.record_created());
             let ticket_dur = ticket_duration(t).unwrap_or_default();
             let work_dur = work_duration(t).unwrap_or_default();
             match t.status {
                 Status::Finished => {
-                    TicketStats::record_finished(&stats, ticket_dur, work_dur);
-                    for label in t.labels.iter() {
-                        TicketStats::record_finished(
-                            &*stats.stats_for_label(label),
-                            ticket_dur,
-                            work_dur,
-                        );
-                    }
+                    stats.record_scoped(&t.labels, |s| s.record_finished(ticket_dur, work_dur));
                 }
                 Status::Failed => {
-                    TicketStats::record_failed(&stats, ticket_dur, work_dur);
-                    for label in t.labels.iter() {
-                        TicketStats::record_failed(
-                            &*stats.stats_for_label(label),
-                            ticket_dur,
-                            work_dur,
-                        );
-                    }
+                    stats.record_scoped(&t.labels, |s| s.record_failed(ticket_dur, work_dur));
                 }
                 Status::Todo | Status::InProgress => {}
             }
@@ -695,6 +679,7 @@ impl crate::persistence::Persist for Stats {
 
 impl Serialize for Stats {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let events = self.event_counts();
         let labels = self.label_stats.lock().unwrap();
         let tools = self.tool_stats();
         let files = self.file_stats();
@@ -706,6 +691,7 @@ impl Serialize for Stats {
             + knowledge.misses
             > 0;
         let len = 17
+            + usize::from(!events.is_empty())
             + usize::from(!labels.is_empty())
             + usize::from(!tools.is_empty())
             + usize::from(!files.is_empty())
@@ -743,6 +729,9 @@ impl Serialize for Stats {
         )?;
         st.serialize_field("ticket_duration_secs", &self.ticket_duration().as_secs())?;
         st.serialize_field("work_duration_secs", &self.work_duration().as_secs())?;
+        if !events.is_empty() {
+            st.serialize_field("events", &events)?;
+        }
         if !labels.is_empty() {
             let nested: BTreeMap<&String, &Stats> =
                 labels.iter().map(|(k, v)| (k, v.as_ref())).collect();
@@ -782,10 +771,16 @@ impl Serialize for Stats {
 impl Stats {
     fn load_fields(&self, value: &serde_json::Value) {
         let get = |key: &str| value.get(key).and_then(|v| v.as_u64()).unwrap_or(0);
-        self.turns.store(get("turns"), Ordering::Relaxed);
-        self.requests.store(get("requests"), Ordering::Relaxed);
-        self.tool_calls.store(get("tool_calls"), Ordering::Relaxed);
-        self.errors.store(get("errors"), Ordering::Relaxed);
+        // The named loop counters ("turns", "requests", ...) are derived
+        // views of this map; only the map round-trips.
+        if let Some(events) = value.get("events").and_then(|v| v.as_object()) {
+            let mut map = self.event_counts.lock().unwrap();
+            for (name, count) in events {
+                if let Some(count) = count.as_u64() {
+                    map.insert(name.clone(), count);
+                }
+            }
+        }
         self.input_tokens
             .store(get("input_tokens"), Ordering::Relaxed);
         self.output_tokens
@@ -820,41 +815,22 @@ impl Default for Stats {
     }
 }
 
-impl LoopStats for Stats {
-    fn record_turn(&self) {
-        self.turns.fetch_add(1, Ordering::Relaxed);
-    }
-
-    fn record_request(&self, input_tokens: u64, output_tokens: u64) {
-        self.requests.fetch_add(1, Ordering::Relaxed);
-        self.input_tokens.fetch_add(input_tokens, Ordering::Relaxed);
-        self.output_tokens
-            .fetch_add(output_tokens, Ordering::Relaxed);
-    }
-
-    fn record_tool_call(&self) {
-        self.tool_calls.fetch_add(1, Ordering::Relaxed);
-    }
-
-    fn record_error(&self) {
-        self.errors.fetch_add(1, Ordering::Relaxed);
-    }
-}
-
-impl TicketStats for Stats {
-    fn record_created(&self) {
+/// Ticket-lifecycle recorders. Driven by the store on ticket mutations, not
+/// by events: transitions carry duration data events do not.
+impl Stats {
+    pub(crate) fn record_created(&self) {
         self.tickets_created.fetch_add(1, Ordering::Relaxed);
     }
 
-    fn record_started(&self, when: u64) {
-        // First call wins. Subsequent claims (Path A reclaim, late
-        // bind) leave the original run-start untouched.
+    /// First call wins (CAS into `started_at`); later claims (Path A
+    /// reclaim, late bind) leave the original run-start untouched.
+    pub(crate) fn record_started(&self, when: u64) {
         let _ = self
             .started_at
             .compare_exchange(0, when, Ordering::Relaxed, Ordering::Relaxed);
     }
 
-    fn record_finished(&self, ticket_duration: Duration, work_duration: Duration) {
+    pub(crate) fn record_finished(&self, ticket_duration: Duration, work_duration: Duration) {
         self.tickets_finished.fetch_add(1, Ordering::Relaxed);
         self.total_ticket_duration
             .fetch_add(ticket_duration.as_secs(), Ordering::Relaxed);
@@ -862,7 +838,7 @@ impl TicketStats for Stats {
             .fetch_add(work_duration.as_secs(), Ordering::Relaxed);
     }
 
-    fn record_failed(&self, ticket_duration: Duration, work_duration: Duration) {
+    pub(crate) fn record_failed(&self, ticket_duration: Duration, work_duration: Duration) {
         self.tickets_failed.fetch_add(1, Ordering::Relaxed);
         self.total_ticket_duration
             .fetch_add(ticket_duration.as_secs(), Ordering::Relaxed);
@@ -874,6 +850,35 @@ impl TicketStats for Stats {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn turn() -> EventKind {
+        EventKind::TurnStarted
+    }
+
+    fn request(input_tokens: u64, output_tokens: u64) -> EventKind {
+        EventKind::RequestFinished {
+            model: "m".into(),
+            usage: TokenUsage {
+                input_tokens,
+                output_tokens,
+            },
+        }
+    }
+
+    fn tool_call() -> EventKind {
+        EventKind::ToolCallStarted {
+            tool_name: "bash".into(),
+            call_id: "c1".into(),
+            input: serde_json::Value::Null,
+        }
+    }
+
+    fn provider_error() -> EventKind {
+        EventKind::RequestFailed {
+            kind: crate::providers::RequestErrorKind::ConnectionFailed,
+            message: "boom".into(),
+        }
+    }
 
     #[test]
     fn fresh_stats_are_zero() {
@@ -896,14 +901,14 @@ mod tests {
     }
 
     #[test]
-    fn loop_stats_writes_show_up_in_reads() {
+    fn event_counts_show_up_in_reads() {
         let s = Stats::new();
-        s.record_turn();
-        s.record_turn();
-        s.record_request(10, 5);
-        s.record_request(2, 1);
-        s.record_tool_call();
-        s.record_error();
+        s.record_event(&turn(), "KEY", &[]);
+        s.record_event(&turn(), "KEY", &[]);
+        s.record_event(&request(10, 5), "KEY", &[]);
+        s.record_event(&request(2, 1), "KEY", &[]);
+        s.record_event(&tool_call(), "KEY", &[]);
+        s.record_event(&provider_error(), "KEY", &[]);
 
         assert_eq!(s.turns(), 2);
         assert_eq!(s.requests(), 2);
@@ -911,6 +916,7 @@ mod tests {
         assert_eq!(s.errors(), 1);
         assert_eq!(s.input_tokens(), 12);
         assert_eq!(s.output_tokens(), 6);
+        assert_eq!(s.event_counts()["turn_started"], 2);
     }
 
     #[test]
@@ -993,16 +999,18 @@ mod tests {
     }
 
     #[test]
-    fn stats_for_label_slice_records_independently() {
+    fn record_event_mirrors_onto_label_slices() {
         let s = Stats::new();
+        s.record_event(&turn(), "KEY", &["scan".into()]);
+        s.record_event(&request(10, 5), "KEY", &["scan".into()]);
         let slice = s.stats_for_label("scan");
-        slice.record_turn();
-        slice.record_request(10, 5);
         assert_eq!(slice.turns(), 1);
         assert_eq!(slice.input_tokens(), 10);
         assert_eq!(slice.output_tokens(), 5);
-        assert_eq!(s.turns(), 0);
-        assert_eq!(s.input_tokens(), 0);
+        assert_eq!(s.turns(), 1);
+        assert_eq!(s.input_tokens(), 10);
+        // A label the events never named stays empty.
+        assert_eq!(s.stats_for_label("other").turns(), 0);
     }
 
     #[test]
@@ -1032,18 +1040,18 @@ mod tests {
         let dir = crate::test_util::TempDir::new().unwrap();
 
         let s = Stats::new();
-        s.record_turn();
-        s.record_turn();
-        s.record_request(100, 50);
-        s.record_tool_call();
-        s.record_error();
+        s.record_event(&turn(), "KEY", &[]);
+        s.record_event(&turn(), "KEY", &[]);
+        s.record_event(&request(100, 50), "KEY", &[]);
+        s.record_event(&tool_call(), "KEY", &[]);
+        s.record_event(&provider_error(), "KEY", &[]);
         s.record_created();
         s.record_finished(Duration::from_secs(7), Duration::from_secs(5));
         s.record_failed(Duration::from_secs(3), Duration::from_secs(2));
 
         let slice = s.stats_for_label("scan");
-        slice.record_turn();
-        slice.record_request(40, 20);
+        slice.record_event(&turn(), "KEY", &[]);
+        slice.record_event(&request(40, 20), "KEY", &[]);
         slice.record_created();
         slice.record_finished(Duration::from_secs(4), Duration::from_secs(3));
 
@@ -1072,10 +1080,10 @@ mod tests {
     #[test]
     fn stats_serializes_raw_counter_fields() {
         let s = Stats::new();
-        s.record_turn();
-        s.record_request(100, 50);
-        s.record_tool_call();
-        s.record_error();
+        s.record_event(&turn(), "KEY", &[]);
+        s.record_event(&request(100, 50), "KEY", &[]);
+        s.record_event(&tool_call(), "KEY", &[]);
+        s.record_event(&provider_error(), "KEY", &[]);
         s.record_created();
         s.record_finished(Duration::from_secs(7), Duration::from_secs(5));
 
@@ -1090,6 +1098,15 @@ mod tests {
         assert_eq!(value["tickets_finished"], 1);
         assert_eq!(value["total_ticket_duration_secs"], 7);
         assert_eq!(value["total_work_duration_secs"], 5);
+        assert_eq!(value["events"]["turn_started"], 1);
+        assert_eq!(value["events"]["request_finished"], 1);
+    }
+
+    #[test]
+    fn stats_omits_events_when_empty() {
+        let s = Stats::new();
+        let value = serde_json::to_value(&s).unwrap();
+        assert!(value.get("events").is_none());
     }
 
     #[test]
@@ -1123,9 +1140,8 @@ mod tests {
     #[test]
     fn stats_serializes_labels_as_nested_object() {
         let s = Stats::new();
-        let slice = s.stats_for_label("scan");
-        slice.record_turn();
-        slice.record_request(40, 20);
+        s.record_event(&turn(), "KEY", &["scan".into()]);
+        s.record_event(&request(40, 20), "KEY", &["scan".into()]);
         let value = serde_json::to_value(&s).unwrap();
         let labels = value["labels"].as_object().unwrap();
         assert_eq!(labels["scan"]["turns"], 1);

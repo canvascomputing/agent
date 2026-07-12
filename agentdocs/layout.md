@@ -34,7 +34,7 @@ Where code lives and the rules that govern placement.
 - `loop.rs` holds the `Runnable` trait (implemented by `TicketSystem`) and the per-agent loop driver.
 - `knowledge.rs` holds `Knowledge`: the cross-ticket store, an OKF v0.1 bundle backed by a `pages/` directory of concept files and a derived `index.md`. Pages are curated through the `pages()` handle (`save` / `load` / `remove`) plus `clear`; failures are typed as `KnowledgeError`.
 - `policy.rs` holds `Policies` and the limit checks the loop applies on each turn.
-- `stats.rs` holds `Stats`, `LoopStats`, and the run-wide counters and timings.
+- `stats.rs` holds `Stats` and the run-wide counters and timings.
 
 ## The `providers/` module
 

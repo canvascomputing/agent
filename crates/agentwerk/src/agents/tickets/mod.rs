@@ -78,7 +78,6 @@ pub(crate) fn numeric_id(key: &str) -> u32 {
 mod tests {
     use std::time::Duration;
 
-    use super::super::stats::TicketStats;
     use super::*;
 
     #[test]

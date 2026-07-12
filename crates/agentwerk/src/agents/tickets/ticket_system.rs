@@ -248,26 +248,7 @@ impl TicketSystem {
     }
 
     pub(crate) fn emit(&self, key: &str, agent: &str, kind: EventKind) {
-        let labels = self.labels_for(key);
-        match &kind {
-            EventKind::TurnStarted => self.stats.record_turn_for(&labels),
-            EventKind::ToolCallsRecorded { count } => {
-                (0..*count).for_each(|_| self.stats.record_tool_call_for(&labels))
-            }
-            EventKind::RequestFinished { usage, .. } => {
-                self.stats
-                    .record_request_for(&labels, usage.input_tokens, usage.output_tokens);
-                self.stats.record_usage(key, usage.clone());
-            }
-            EventKind::RequestFailed { .. } => self.stats.record_error_for(&labels),
-            EventKind::ToolCallStarted { tool_name, .. } => {
-                self.stats.record_tool_call_named(tool_name)
-            }
-            EventKind::ToolCallFailed {
-                tool_name, kind, ..
-            } => self.stats.record_tool_error_named(tool_name, *kind),
-            _ => {}
-        }
+        self.stats.record_event(&kind, key, &self.labels_for(key));
         let handlers: Vec<Arc<EventHandler>> = self.event_handlers.lock().unwrap().clone();
         let event = Event::new(agent, kind);
         if handlers.is_empty() {

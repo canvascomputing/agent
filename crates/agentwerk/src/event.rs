@@ -61,6 +61,17 @@ pub enum ToolFailureKind {
     SchemaValidationFailed,
 }
 
+/// One Knowledge-store operation, carried by [`EventKind::KnowledgeUsed`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KnowledgeOp {
+    Write,
+    Read,
+    Remove,
+    List,
+    /// A `read` or `remove` naming a slug the store does not have.
+    Miss,
+}
+
 /// Observation emitted as agents work. Carries the name of the agent
 /// that produced it plus a typed [`EventKind`].
 ///
@@ -161,6 +172,13 @@ pub enum EventKind {
         message: String,
         kind: ToolFailureKind,
     },
+    /// A file-opening tool opened `path` successfully.
+    FileOpened { path: String },
+    /// A file-opening tool failed on `path`.
+    FileOpenFailed { path: String },
+    /// The knowledge tool performed `op`. The tool self-reports, since a
+    /// `read`/`remove` miss returns Ok and the tool-call loop cannot see it.
+    KnowledgeUsed { op: KnowledgeOp },
     /// A configured policy was exceeded; the run is about to stop.
     PolicyViolated { kind: PolicyKind, limit: u64 },
     /// A `done`-side schema validation failed; agentwerk is about to
@@ -197,6 +215,40 @@ pub enum EventKind {
         reason: CompactReason,
         message: String,
     },
+}
+
+impl EventKind {
+    /// Stable snake_case discriminant name; keys the per-event counts in
+    /// `Stats`. Exhaustive on purpose: a new variant must name itself here,
+    /// and that one line is its whole stats integration.
+    pub(crate) fn name(&self) -> &'static str {
+        match self {
+            EventKind::RunStarted => "run_started",
+            EventKind::RunFinished { .. } => "run_finished",
+            EventKind::TicketStarted { .. } => "ticket_started",
+            EventKind::TicketFinished { .. } => "ticket_finished",
+            EventKind::TicketFailed { .. } => "ticket_failed",
+            EventKind::TurnStarted => "turn_started",
+            EventKind::ToolCallsRecorded { .. } => "tool_calls_recorded",
+            EventKind::RequestStarted { .. } => "request_started",
+            EventKind::RequestFinished { .. } => "request_finished",
+            EventKind::RequestFailed { .. } => "request_failed",
+            EventKind::RequestRetried { .. } => "request_retried",
+            EventKind::TextChunkReceived { .. } => "text_chunk_received",
+            EventKind::ToolCallStarted { .. } => "tool_call_started",
+            EventKind::ToolCallFinished { .. } => "tool_call_finished",
+            EventKind::ToolCallFailed { .. } => "tool_call_failed",
+            EventKind::FileOpened { .. } => "file_opened",
+            EventKind::FileOpenFailed { .. } => "file_open_failed",
+            EventKind::KnowledgeUsed { .. } => "knowledge_used",
+            EventKind::PolicyViolated { .. } => "policy_violated",
+            EventKind::SchemaRetried { .. } => "schema_retried",
+            EventKind::CompactionStarted { .. } => "compaction_started",
+            EventKind::CompactionProgress { .. } => "compaction_progress",
+            EventKind::CompactionFinished { .. } => "compaction_finished",
+            EventKind::CompactionFailed { .. } => "compaction_failed",
+        }
+    }
 }
 
 /// Default observer. Prints ticket lifecycle, tool activity, policy
@@ -355,6 +407,15 @@ mod tests {
                 message: "Schema validation failed".into(),
                 kind: ToolFailureKind::SchemaValidationFailed,
             },
+            EventKind::FileOpened {
+                path: "src/lib.rs".into(),
+            },
+            EventKind::FileOpenFailed {
+                path: "src/missing.rs".into(),
+            },
+            EventKind::KnowledgeUsed {
+                op: KnowledgeOp::Write,
+            },
             EventKind::PolicyViolated {
                 kind: PolicyKind::Turns,
                 limit: 10,
@@ -391,6 +452,22 @@ mod tests {
         let logger = default_logger();
         for kind in all_variants() {
             logger(Event::new("agent", kind));
+        }
+    }
+
+    #[test]
+    fn stats_counts_every_variant() {
+        let stats = crate::agents::stats::Stats::new();
+        for kind in all_variants() {
+            stats.record_event(&kind, "KEY", &[]);
+        }
+        let counts = stats.event_counts();
+        for kind in all_variants() {
+            assert!(
+                counts.get(kind.name()).copied().unwrap_or(0) > 0,
+                "{} missing from event counts",
+                kind.name(),
+            );
         }
     }
 }

@@ -156,9 +156,24 @@ fn format_current_date() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agents::stats::{LoopStats, TicketStats};
+    use crate::event::EventKind;
+    use crate::providers::TokenUsage;
     use std::path::PathBuf;
     use std::time::Duration;
+
+    fn turn() -> EventKind {
+        EventKind::TurnStarted
+    }
+
+    fn request(input_tokens: u64, output_tokens: u64) -> EventKind {
+        EventKind::RequestFinished {
+            model: "m".into(),
+            usage: TokenUsage {
+                input_tokens,
+                output_tokens,
+            },
+        }
+    }
 
     #[test]
     fn schema_directive_for_an_object_asks_for_top_level_arguments() {
@@ -235,9 +250,9 @@ mod tests {
             ..Policies::default()
         };
         let stats = Stats::new();
-        stats.record_turn();
-        stats.record_turn();
-        stats.record_request(5_000, 8_000);
+        stats.record_event(&turn(), "", &[]);
+        stats.record_event(&turn(), "", &[]);
+        stats.record_event(&request(5_000, 8_000), "", &[]);
 
         let rendered = default_context(&working_dir, &policies, &stats);
 
@@ -262,7 +277,7 @@ mod tests {
             ..Policies::default()
         };
         let stats = Stats::new();
-        stats.record_turn();
+        stats.record_event(&turn(), "", &[]);
 
         let rendered = default_context(&working_dir, &policies, &stats);
 
@@ -285,7 +300,7 @@ mod tests {
         };
         let stats = Stats::new();
         for _ in 0..5 {
-            stats.record_turn();
+            stats.record_event(&turn(), "", &[]);
         }
 
         let rendered = default_context(&working_dir, &policies, &stats);

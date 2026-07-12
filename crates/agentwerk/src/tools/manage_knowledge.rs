@@ -9,7 +9,7 @@ use std::sync::{Arc, OnceLock};
 use serde_json::Value;
 
 use crate::agents::knowledge::Knowledge;
-use crate::agents::stats::KnowledgeOp;
+use crate::event::{EventKind, KnowledgeOp};
 use crate::providers::ProviderResult;
 
 use super::tool::{ToolContext, ToolLike, ToolResult};
@@ -83,7 +83,9 @@ impl ToolLike for ManageKnowledgeTool {
             // miss, which returns Ok, so the shared tool-call loop cannot.
             let record = |op: KnowledgeOp| {
                 if let Some(system) = ctx.ticket_system_handle() {
-                    system.stats().record_knowledge(op);
+                    let key = ctx.ticket_key.as_deref().unwrap_or_default();
+                    let agent = ctx.agent_name_str().unwrap_or_default();
+                    system.emit(key, agent, EventKind::KnowledgeUsed { op });
                 }
             };
 

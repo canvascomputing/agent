@@ -8,7 +8,6 @@ use crate::event::EventKind;
 use crate::persistence::{Append, Persist, Results, TicketEvents};
 use crate::schemas::SchemaViolations;
 
-use super::super::stats::TicketStats;
 use super::error::TicketError;
 use super::reply::Reply;
 use super::ticket::{Status, Ticket};
@@ -67,10 +66,9 @@ impl TicketSystem {
         store.insert(key.clone(), ticket);
         drop(store);
         self.save_ticket(&key);
-        TicketStats::record_created(&self.stats);
+        self.stats.record_created();
         for l in &labels {
-            let slice = self.stats.stats_for_label(l);
-            TicketStats::record_created(&*slice);
+            self.stats.stats_for_label(l).record_created();
         }
         let mut event = serde_json::json!({
             "event": "created",
@@ -1107,7 +1105,9 @@ mod tests {
     fn load_prefers_stats_file_over_derivation() {
         let dir = crate::test_util::TempDir::new().unwrap();
         std::fs::create_dir_all(dir.path().join("tickets")).unwrap();
-        let body = serde_json::json!({ "turns": 42, "requests": 7 });
+        let body = serde_json::json!({
+            "events": { "turn_started": 42, "request_finished": 7 }
+        });
         std::fs::write(
             dir.path().join("stats.json"),
             serde_json::to_vec(&body).unwrap(),
