@@ -131,7 +131,7 @@ async fn writes_capturing_pattern_to_list_unknown_function_names(
     );
 
     // The model's final answer should report the names it discovered.
-    let answer = results.last_result().unwrap_or_default();
+    let answer = common::last_result_text(results);
     assert!(
         answer.contains("area") && answer.contains("perimeter") && answer.contains("clamp"),
         "model should report all three function names; got: {answer:?}"

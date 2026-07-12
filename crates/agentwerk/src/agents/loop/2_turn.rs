@@ -392,7 +392,7 @@ mod tests {
             .expect("finish did not finish within 5s");
 
         assert_eq!(tickets.results().len(), 2);
-        assert_eq!(tickets.last_result().as_deref(), Some("b-done"));
+        assert_eq!(tickets.last_result(), Some(serde_json::json!("b-done")));
     }
 
     #[tokio::test]
@@ -656,7 +656,7 @@ mod tests {
             .next()
             .expect("ticket must exist");
         assert_eq!(ticket.status, Status::Finished);
-        assert_eq!(tickets.last_result().as_deref(), Some("done"));
+        assert_eq!(tickets.last_result(), Some(serde_json::json!("done")));
     }
 
     #[tokio::test]
@@ -811,13 +811,13 @@ mod tests {
 
         tickets.task("first");
         tickets.finish().await;
-        assert_eq!(tickets.last_result().as_deref(), Some("first"));
+        assert_eq!(tickets.last_result(), Some(serde_json::json!("first")));
 
         tickets.task("second");
         tokio::time::timeout(Duration::from_secs(5), tickets.finish())
             .await
             .expect("second finish did not finish within 5s");
-        assert_eq!(tickets.last_result().as_deref(), Some("second"));
+        assert_eq!(tickets.last_result(), Some(serde_json::json!("second")));
     }
 
     #[tokio::test]
@@ -843,7 +843,7 @@ mod tests {
         let sys = tokio::time::timeout(Duration::from_secs(5), agent.finish())
             .await
             .expect("agent.finish did not finish within 5s");
-        assert_eq!(sys.last_result().as_deref(), Some("forwarded"));
+        assert_eq!(sys.last_result(), Some(serde_json::json!("forwarded")));
     }
 
     // Tool result offloading

@@ -14,6 +14,14 @@ pub fn build_provider() -> (Arc<dyn Provider>, String) {
     (provider, model)
 }
 
+/// The most recent result's text body, empty when absent or non-string.
+pub fn last_result_text(tickets: &TicketSystem) -> String {
+    tickets
+        .last_result()
+        .and_then(|v| v.as_str().map(str::to_owned))
+        .unwrap_or_default()
+}
+
 pub fn print_result(tickets: &TicketSystem, stats: &Stats) {
     let json = serde_json::json!({
         "response": tickets.last_result().unwrap_or_default(),

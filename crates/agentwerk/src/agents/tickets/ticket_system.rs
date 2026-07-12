@@ -733,50 +733,27 @@ impl TicketSystem {
         *self.finish_reason.lock().unwrap()
     }
 
-    /// Most recent finished ticket's result rendered as a String.
-    pub fn last_result(&self) -> Option<String> {
-        self.results().into_iter().next_back()
+    /// Most recent finished ticket's result. Deserialize structured
+    /// results with `serde_json::from_value`.
+    pub fn last_result(&self) -> Option<serde_json::Value> {
+        self.results().pop()
     }
 
-    /// Every finished ticket's result rendered as a String, in creation
-    /// order.
-    pub fn results(&self) -> Vec<String> {
+    /// Every finished ticket's result, in creation order.
+    pub fn results(&self) -> Vec<serde_json::Value> {
         self.find_tickets(|t| t.status == Status::Finished && t.result.is_some())
-            .iter()
-            .filter_map(|t| {
-                t.result.as_ref().map(|v| match v {
-                    serde_json::Value::String(s) => s.clone(),
-                    other => other.to_string(),
-                })
-            })
+            .into_iter()
+            .filter_map(|t| t.result)
             .collect()
     }
 
-    /// Finished tickets carrying `label`, with each result deserialized
-    /// into `T`. Tickets whose result fails to deserialize are silently
-    /// skipped — matches the precedent of [`Self::results`], which drops
-    /// rows without an attached result.
-    pub fn collect_results_by_label<T>(&self, label: &str) -> Vec<T>
-    where
-        T: serde::de::DeserializeOwned,
-    {
+    /// Every finished ticket carrying `label`'s result, in creation
+    /// order. Mirrors [`Self::schema_for_label`] and `Stats::stats_for_label`.
+    pub fn results_for_label(&self, label: &str) -> Vec<serde_json::Value> {
         self.find_tickets(|t| t.is_finished() && t.has_label(label))
             .into_iter()
-            .filter_map(|t| t.result.and_then(|v| serde_json::from_value(v).ok()))
+            .filter_map(|t| t.result)
             .collect()
-    }
-
-    /// Earliest finished ticket carrying `label`, with its result
-    /// deserialized into `T`. `None` when no finished ticket has the
-    /// label or the result fails to deserialize — matches the
-    /// skip-on-mismatch precedent of [`Self::collect_results_by_label`].
-    pub fn result_by_label<T>(&self, label: &str) -> Option<T>
-    where
-        T: serde::de::DeserializeOwned,
-    {
-        self.find_ticket(|t| t.is_finished() && t.has_label(label))
-            .and_then(|t| t.result)
-            .and_then(|v| serde_json::from_value(v).ok())
     }
 
     /// Resolve to the earliest ticket matching `predicate`, polling every
@@ -852,7 +829,10 @@ mod tests {
         sys.task("c");
         attach_done_result(&sys, "TICKET-1", "first");
         attach_done_result(&sys, "TICKET-3", "third");
-        assert_eq!(sys.results(), vec!["first", "third"]);
+        assert_eq!(
+            sys.results(),
+            vec![serde_json::json!("first"), serde_json::json!("third")]
+        );
     }
 
     #[test]
@@ -862,7 +842,7 @@ mod tests {
         sys.task("b");
         attach_done_result(&sys, "TICKET-2", "second");
         attach_done_result(&sys, "TICKET-1", "first");
-        assert_eq!(sys.last_result().as_deref(), Some("second"));
+        assert_eq!(sys.last_result(), Some(serde_json::json!("second")));
     }
 
     #[test]
@@ -874,7 +854,14 @@ mod tests {
         attach_done_result(&sys, "TICKET-3", "third");
         attach_done_result(&sys, "TICKET-1", "first");
         attach_done_result(&sys, "TICKET-2", "second");
-        assert_eq!(sys.results(), vec!["first", "second", "third"]);
+        assert_eq!(
+            sys.results(),
+            vec![
+                serde_json::json!("first"),
+                serde_json::json!("second"),
+                serde_json::json!("third")
+            ]
+        );
     }
 
     #[test]
@@ -973,7 +960,7 @@ mod tests {
     }
 
     #[test]
-    fn collect_results_by_label_returns_only_matching_label() {
+    fn results_for_label_returns_only_matching_label() {
         let (sys, _tmp) = test_system();
         sys.ticket(Ticket::new("a").label("analysis"));
         sys.ticket(Ticket::new("b").label("other"));
@@ -989,82 +976,20 @@ mod tests {
         sys.set_result(&key_b, serde_json::json!({"score": 99}))
             .unwrap();
         sys.set_finished(&key_b).unwrap();
-        #[derive(serde::Deserialize, Debug, PartialEq)]
-        struct Finding {
-            score: i32,
-        }
-        let hits: Vec<Finding> = sys.collect_results_by_label("analysis");
-        assert_eq!(hits, vec![Finding { score: 7 }]);
+        assert_eq!(
+            sys.results_for_label("analysis"),
+            vec![serde_json::json!({"score": 7})]
+        );
     }
 
     #[test]
-    fn collect_results_by_label_skips_unparseable_payloads() {
-        let (sys, _tmp) = test_system();
-        sys.ticket(Ticket::new("good").label("L"));
-        sys.ticket(Ticket::new("bad").label("L"));
-        let key_good = sys
-            .claim(|t| t.task == serde_json::json!("good"), "agent")
-            .unwrap();
-        let key_bad = sys
-            .claim(|t| t.task == serde_json::json!("bad"), "agent")
-            .unwrap();
-        sys.set_result(&key_good, serde_json::json!({"n": 1}))
-            .unwrap();
-        sys.set_finished(&key_good).unwrap();
-        sys.set_result(&key_bad, serde_json::json!("not an object"))
-            .unwrap();
-        sys.set_finished(&key_bad).unwrap();
-        #[derive(serde::Deserialize)]
-        struct N {
-            n: i32,
-        }
-        let hits: Vec<N> = sys.collect_results_by_label("L");
-        assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].n, 1);
-    }
-
-    #[test]
-    fn collect_results_by_label_empty_when_no_label_match() {
+    fn results_for_label_empty_when_no_label_match() {
         let (sys, _tmp) = test_system();
         sys.ticket(Ticket::new("x").label("other"));
         let key = sys.claim(|t| t.has_label("other"), "agent").unwrap();
         sys.set_result(&key, serde_json::json!({"n": 1})).unwrap();
         sys.set_finished(&key).unwrap();
-        let hits: Vec<serde_json::Value> = sys.collect_results_by_label("missing");
-        assert!(hits.is_empty());
-    }
-
-    #[test]
-    fn result_by_label_returns_earliest_finished_match() {
-        let (sys, _tmp) = test_system();
-        sys.ticket(Ticket::new("a").label("analysis"));
-        sys.ticket(Ticket::new("b").label("analysis"));
-        let key_a = sys
-            .claim(|t| t.task == serde_json::json!("a"), "agent")
-            .unwrap();
-        sys.set_result(&key_a, serde_json::json!({"score": 7}))
-            .unwrap();
-        sys.set_finished(&key_a).unwrap();
-        let key_b = sys
-            .claim(|t| t.task == serde_json::json!("b"), "agent")
-            .unwrap();
-        sys.set_result(&key_b, serde_json::json!({"score": 9}))
-            .unwrap();
-        sys.set_finished(&key_b).unwrap();
-        #[derive(serde::Deserialize, Debug, PartialEq)]
-        struct Finding {
-            score: i32,
-        }
-        let hit: Option<Finding> = sys.result_by_label("analysis");
-        assert_eq!(hit, Some(Finding { score: 7 }));
-    }
-
-    #[test]
-    fn result_by_label_none_when_no_finished_label() {
-        let (sys, _tmp) = test_system();
-        sys.ticket(Ticket::new("x").label("other"));
-        let hit: Option<serde_json::Value> = sys.result_by_label("analysis");
-        assert!(hit.is_none());
+        assert!(sys.results_for_label("missing").is_empty());
     }
 
     #[tokio::test]

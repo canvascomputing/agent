@@ -533,23 +533,21 @@ impl Agent {
         self
     }
 
-    /// Enqueue a ticket carrying `task` as its body. Returns `&self` so
-    /// the call can chain into `.finish().await`. Callers who need the
-    /// ticket's key go through [`TicketSystem::task`] instead.
-    pub fn task<T: Serialize>(&self, task: T) -> &Self {
-        let ticket = Ticket::new(task);
-        self.dispatch(ticket);
-        self
+    /// Enqueue a ticket carrying `task` as its body on the bound system.
+    /// Returns the new ticket's key, mirroring [`TicketSystem::task`].
+    /// Chain lifecycle calls on [`Agent::finish`], which returns the
+    /// bound system.
+    pub fn task<T: Serialize>(&self, task: T) -> String {
+        self.dispatch(Ticket::new(task))
     }
 
-    /// Enqueue a fully-built `Ticket`. Returns `&self` so the call can chain
-    /// into `.finish().await`.
-    pub fn ticket(&self, ticket: Ticket) -> &Self {
-        self.dispatch(ticket);
-        self
+    /// Enqueue a fully-built `Ticket` on the bound system. Returns the
+    /// new ticket's key, mirroring [`TicketSystem::ticket`].
+    pub fn ticket(&self, ticket: Ticket) -> String {
+        self.dispatch(ticket)
     }
 
-    fn dispatch(&self, mut ticket: Ticket) {
+    fn dispatch(&self, mut ticket: Ticket) -> String {
         let sys = self
             .ticket_system
             .upgrade()
@@ -557,7 +555,7 @@ impl Agent {
         if let serde_json::Value::String(s) = &ticket.task {
             ticket.task = serde_json::Value::String(self.interpolate(s));
         }
-        sys.insert(ticket, self.name.clone());
+        sys.insert(ticket, self.name.clone())
     }
 
     /// Start the agent loop on a background tokio task. Returns the bound

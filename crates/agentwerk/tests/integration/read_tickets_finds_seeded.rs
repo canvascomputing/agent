@@ -53,7 +53,7 @@ async fn reports_a_secret_from_another_ticket(
         "agent must call the ticket-reading tool at least once"
     );
 
-    let answer = results.last_result().unwrap_or_default();
+    let answer = common::last_result_text(results);
     assert!(
         answer.contains(&secret.to_string()),
         "final result must quote the combination {secret} found only in the \

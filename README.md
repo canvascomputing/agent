@@ -44,12 +44,11 @@ async fn main() {
         .tool(GrepTool)
         .build();
 
-    let work = agent
-        .task("Find every `pub trait` defined under src/ and explain each in one sentence.")
-        .finish()
-        .await;
+    agent.task("Find every `pub trait` defined under src/ and explain each in one sentence.");
+    let work = agent.finish().await;
 
-    println!("{}", work.last_result().unwrap());
+    let result = work.last_result().unwrap();
+    println!("{}", result.as_str().unwrap_or_default());
 }
 ```
 
@@ -265,12 +264,13 @@ for ticket in tickets.tickets() {
 
 | Method | Description |
 |--------|-------------|
-| `last_result()` | Return the most recent finished ticket's payload as a string. |
-| `results()` | Return every finished ticket's payload as a string. |
+| `last_result()` | Return the most recent finished ticket's result as JSON. |
+| `results()` | Return every finished ticket's result as JSON, in creation order. |
+| `results_for_label(l)` | Return every finished ticket carrying the label's result as JSON. |
 | `tickets()` | Return every ticket in creation order, with status, payload, and metadata. |
 | `find_ticket(predicate)` | Return the earliest ticket matching the predicate. |
 
-More query methods on [`TicketSystem`](https://docs.rs/agentwerk/latest/agentwerk/agents/tickets/struct.TicketSystem.html): `get_ticket`, `first_ticket`, `last_ticket`, `search_tickets`, `find_tickets`, `count_tickets`, `collect_results_by_label`, `result_by_label`, `is_cancelled`.
+More query methods on [`TicketSystem`](https://docs.rs/agentwerk/latest/agentwerk/agents/tickets/struct.TicketSystem.html): `get_ticket`, `find_tickets`, `is_cancelled`.
 
 ### Inspecting tickets
 

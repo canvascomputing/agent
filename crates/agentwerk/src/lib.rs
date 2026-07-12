@@ -19,12 +19,11 @@
 //!     .tool(GrepTool)
 //!     .build();
 //!
-//! let work = agent
-//!     .task("Find every `pub trait` defined under src/ and explain each in one sentence.")
-//!     .finish()
-//!     .await;
+//! agent.task("Find every `pub trait` defined under src/ and explain each in one sentence.");
+//! let work = agent.finish().await;
 //!
-//! println!("{}", work.last_result().unwrap());
+//! let result = work.last_result().unwrap();
+//! println!("{}", result.as_str().unwrap_or_default());
 //! # }
 //! ```
 //!

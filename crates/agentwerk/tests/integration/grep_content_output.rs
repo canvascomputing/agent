@@ -161,7 +161,7 @@ async fn finds_string_buried_deep_in_line() -> std::result::Result<(), Box<dyn s
     }
 
     // The agent's final answer should name config.rs.
-    let answer = results.last_result().unwrap_or_default();
+    let answer = common::last_result_text(results);
     assert!(
         answer.contains("config.rs"),
         "agent should report config.rs; got: {answer:?}"
@@ -278,7 +278,7 @@ async fn reads_column_slice_after_grep_locates_needle(
     );
 
     // The agent's final answer should name bundle.min.js.
-    let answer = results.last_result().unwrap_or_default();
+    let answer = common::last_result_text(results);
     assert!(
         answer.contains("bundle.min.js"),
         "agent should report bundle.min.js; got: {answer:?}"

@@ -116,8 +116,7 @@ async fn traces_three_hop_call_path() -> std::result::Result<(), Box<dyn std::er
         "tracing a call path requires at least two read-only tool calls"
     );
 
-    let response = results.last_result().unwrap_or_default();
-    let json: serde_json::Value = serde_json::from_str(&response)?;
+    let json = results.last_result().unwrap_or_default();
     let chain = json["call_path"]
         .as_array()
         .expect("call_path must be an array");
