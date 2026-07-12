@@ -4,6 +4,7 @@
 //! is a thin wrapper in `tools::knowledge` that holds an
 //! `Arc<Knowledge>` from this module.
 
+use std::fmt;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -33,14 +34,55 @@ struct IndexEntry {
     path: String,
 }
 
-/// Returned by [`Pages::save`] and [`Pages::remove`] on success so the tool
-/// layer can show the model how much of the index budget is consumed.
+/// Errors raised by knowledge-store reads and mutations. `Display`
+/// renders the message `ManageKnowledgeTool` shows the model verbatim.
 #[derive(Debug)]
-pub struct KnowledgeOutcome {
-    pub message: &'static str,
-    pub index_chars_used: usize,
-    pub index_char_limit: usize,
-    pub pages: usize,
+pub enum KnowledgeError {
+    /// A slug, description, or content value was rejected.
+    PageRejected { message: String },
+    /// No page exists at `slug`.
+    PageMissing { slug: String },
+    /// The write would push the rendered index past its char limit.
+    IndexLimitExceeded {
+        used: usize,
+        limit: usize,
+        attempted: usize,
+    },
+    /// The underlying file operation failed.
+    IoFailed { message: String, source: io::Error },
+}
+
+impl fmt::Display for KnowledgeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::PageRejected { message } => write!(f, "{message}"),
+            Self::PageMissing { slug } => write!(f, "Page `{slug}` not found"),
+            Self::IndexLimitExceeded {
+                used,
+                limit,
+                attempted,
+            } => write!(
+                f,
+                "Index at {used}/{limit} chars. This write would push it to \
+                 {attempted} chars. Consolidate or remove pages first.",
+            ),
+            Self::IoFailed { message, source } => write!(f, "{message}: {source}"),
+        }
+    }
+}
+
+impl std::error::Error for KnowledgeError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::IoFailed { source, .. } => Some(source),
+            _ => None,
+        }
+    }
+}
+
+fn io_failed(message: impl Into<String>) -> impl FnOnce(io::Error) -> KnowledgeError {
+    let message = message.into();
+    |source| KnowledgeError::IoFailed { message, source }
 }
 
 /// Durable memory the agent curates and shares across tickets and other
@@ -140,26 +182,39 @@ impl Knowledge {
     }
 
     /// Remove every page file and the index.
-    pub fn clear(&self) -> Result<(), String> {
+    pub fn clear(&self) -> Result<(), KnowledgeError> {
         let _w = self.write_lock.lock().unwrap();
 
         let pages_dir = self.knowledge_dir.join(PAGES_DIR);
         if pages_dir.exists() {
-            for entry in fs::read_dir(&pages_dir).map_err(|e| e.to_string())? {
-                let entry = entry.map_err(|e| e.to_string())?;
+            for entry in fs::read_dir(&pages_dir).map_err(io_failed("Failed to list pages"))? {
+                let entry = entry.map_err(io_failed("Failed to list pages"))?;
                 if entry.path().extension().is_some_and(|ext| ext == "md") {
-                    fs::remove_file(entry.path()).map_err(|e| e.to_string())?;
+                    fs::remove_file(entry.path())
+                        .map_err(io_failed("Failed to remove page file"))?;
                 }
             }
         }
 
         let index_path = self.knowledge_dir.join(INDEX_FILE);
         if index_path.exists() {
-            fs::remove_file(&index_path).map_err(|e| e.to_string())?;
+            fs::remove_file(&index_path).map_err(io_failed("Failed to remove index"))?;
         }
 
         *self.index.lock().unwrap() = Vec::new();
         Ok(())
+    }
+
+    /// Index usage: rendered chars, the char budget, and the page count.
+    /// Read by `ManageKnowledgeTool` to show the model how much of the
+    /// budget a mutation consumed.
+    pub(crate) fn index_usage(&self) -> (usize, usize, usize) {
+        let index = self.index.lock().unwrap();
+        (
+            render_index(&index).len(),
+            self.index_char_limit.load(Ordering::Relaxed),
+            index.len(),
+        )
     }
 }
 
@@ -205,17 +260,20 @@ pub struct Pages<'a> {
 }
 
 impl Pages<'_> {
-    /// Upsert `page` and its index entry. Creates or overwrites the
-    /// page file and refreshes the index. Returns the outcome with
-    /// the new char usage so the tool layer can show progress.
-    pub fn save(&self, page: Page) -> Result<KnowledgeOutcome, String> {
+    /// Create or replace `page` and its index entry, refreshing the
+    /// index file.
+    pub fn save(&self, page: Page) -> Result<(), KnowledgeError> {
         let slug = normalize_slug(&page.slug)?;
         let description = page.description.trim();
         if description.is_empty() {
-            return Err("Description must not be empty".into());
+            return Err(KnowledgeError::PageRejected {
+                message: "Description must not be empty".into(),
+            });
         }
         if page.content.trim().is_empty() {
-            return Err("Content must not be empty".into());
+            return Err(KnowledgeError::PageRejected {
+                message: "Content must not be empty".into(),
+            });
         }
         let kind = match page.kind.trim() {
             "" => DEFAULT_PAGE_TYPE.to_string(),
@@ -239,13 +297,11 @@ impl Pages<'_> {
         let limit = self.inner.index_char_limit.load(Ordering::Relaxed);
         let rendered = render_index(&index);
         if rendered.len() > limit {
-            return Err(format!(
-                "Index at {}/{} chars. This write would push it to {} chars. \
-                 Consolidate or remove pages first.",
-                render_index(&self.inner.index.lock().unwrap()).len(),
+            return Err(KnowledgeError::IndexLimitExceeded {
+                used: render_index(&self.inner.index.lock().unwrap()).len(),
                 limit,
-                rendered.len(),
-            ));
+                attempted: rendered.len(),
+            });
         }
 
         let normalized = Page {
@@ -257,30 +313,23 @@ impl Pages<'_> {
         };
         normalized
             .save(&self.inner.knowledge_dir)
-            .map_err(|e| format!("Failed to write page: {e}"))?;
+            .map_err(io_failed("Failed to write page"))?;
 
         let index_body = render_index_file(&index);
         write_atomic(
             &self.inner.knowledge_dir.join(INDEX_FILE),
             index_body.as_bytes(),
         )
-        .map_err(|e| format!("Failed to write index: {e}"))?;
+        .map_err(io_failed("Failed to write index"))?;
 
-        let chars_used = rendered.len();
-        let page_count = index.len();
         *self.inner.index.lock().unwrap() = index;
-        Ok(KnowledgeOutcome {
-            message: "page written",
-            index_chars_used: chars_used,
-            index_char_limit: limit,
-            pages: page_count,
-        })
+        Ok(())
     }
 
     /// Read the page at `slug`. Returns the full [`Page`] struct. Resolves
     /// the file through the index so a seeded page outside `pages/` is still
     /// readable; falls back to `pages/<slug>.md`.
-    pub fn load(&self, slug: &str) -> Result<Page, String> {
+    pub fn load(&self, slug: &str) -> Result<Page, KnowledgeError> {
         let slug = normalize_slug(slug)?;
         let relative = self
             .inner
@@ -295,10 +344,10 @@ impl Pages<'_> {
             None => page_path(&self.inner.knowledge_dir, &slug),
         };
         if !path.exists() {
-            return Err(format!("Page `{slug}` not found"));
+            return Err(KnowledgeError::PageMissing { slug });
         }
-        let raw =
-            fs::read_to_string(&path).map_err(|e| format!("Failed to read page `{slug}`: {e}"))?;
+        let raw = fs::read_to_string(&path)
+            .map_err(io_failed(format!("Failed to read page `{slug}`")))?;
         let (kind, description, tags, content) = parse_page(&raw);
         Ok(Page {
             slug,
@@ -310,7 +359,7 @@ impl Pages<'_> {
     }
 
     /// Delete the page file at `slug` and its index entry.
-    pub fn remove(&self, slug: &str) -> Result<KnowledgeOutcome, String> {
+    pub fn remove(&self, slug: &str) -> Result<(), KnowledgeError> {
         let slug = normalize_slug(slug)?;
         let _w = self.inner.write_lock.lock().unwrap();
         let mut index = self.inner.index.lock().unwrap().clone();
@@ -318,12 +367,12 @@ impl Pages<'_> {
         let pos = index
             .iter()
             .position(|e| e.slug == slug)
-            .ok_or_else(|| format!("Page `{slug}` not found in index"))?;
+            .ok_or(KnowledgeError::PageMissing { slug })?;
         let removed = index.remove(pos);
 
         let page_file = self.inner.knowledge_dir.join(&removed.path);
         if page_file.exists() {
-            fs::remove_file(&page_file).map_err(|e| format!("Failed to remove page file: {e}"))?;
+            fs::remove_file(&page_file).map_err(io_failed("Failed to remove page file"))?;
         }
 
         let index_body = render_index_file(&index);
@@ -331,17 +380,10 @@ impl Pages<'_> {
             &self.inner.knowledge_dir.join(INDEX_FILE),
             index_body.as_bytes(),
         )
-        .map_err(|e| format!("Failed to write index: {e}"))?;
+        .map_err(io_failed("Failed to write index"))?;
 
-        let chars_used = render_index(&index).len();
-        let page_count = index.len();
         *self.inner.index.lock().unwrap() = index;
-        Ok(KnowledgeOutcome {
-            message: "page removed",
-            index_chars_used: chars_used,
-            index_char_limit: self.inner.index_char_limit.load(Ordering::Relaxed),
-            pages: page_count,
-        })
+        Ok(())
     }
 }
 
@@ -356,7 +398,7 @@ fn page_path(knowledge_dir: &Path, slug: &str) -> PathBuf {
 /// Slashes, dots, underscores, spaces, and other non-alphanumeric
 /// characters are replaced with hyphens; consecutive hyphens are
 /// collapsed; file extensions are stripped.
-pub(crate) fn normalize_slug(raw: &str) -> Result<String, String> {
+pub(crate) fn normalize_slug(raw: &str) -> Result<String, KnowledgeError> {
     let slug: String = raw
         .to_ascii_lowercase()
         .chars()
@@ -389,7 +431,9 @@ pub(crate) fn normalize_slug(raw: &str) -> Result<String, String> {
     }
 
     if collapsed.is_empty() {
-        return Err("Slug must not be empty".into());
+        return Err(KnowledgeError::PageRejected {
+            message: "Slug must not be empty".into(),
+        });
     }
 
     // Truncate to 60 chars on a hyphen boundary when possible.
@@ -404,7 +448,9 @@ pub(crate) fn normalize_slug(raw: &str) -> Result<String, String> {
     }
 
     if collapsed.is_empty() {
-        return Err("Slug must not be empty".into());
+        return Err(KnowledgeError::PageRejected {
+            message: "Slug must not be empty".into(),
+        });
     }
 
     Ok(collapsed)
@@ -588,7 +634,7 @@ fn is_reserved(file_name: &str) -> bool {
 
 /// Slug for a concept file: its bundle-relative path minus `.md`, with a
 /// leading `pages/` stripped so a native page keeps `slug == file stem`.
-fn bundle_slug(root: &Path, path: &Path) -> Result<String, String> {
+fn bundle_slug(root: &Path, path: &Path) -> Result<String, KnowledgeError> {
     let relative = path.strip_prefix(root).unwrap_or(path).with_extension("");
     let mut text = relative.to_string_lossy().replace('\\', "/");
     if let Some(stripped) = text.strip_prefix(&format!("{PAGES_DIR}/")) {
@@ -709,13 +755,7 @@ mod tests {
         (store, dir)
     }
 
-    fn save_page(
-        store: &Knowledge,
-        slug: &str,
-        description: &str,
-        content: &str,
-        tags: &[&str],
-    ) -> KnowledgeOutcome {
+    fn save_page(store: &Knowledge, slug: &str, description: &str, content: &str, tags: &[&str]) {
         let page = Page {
             slug: slug.to_string(),
             kind: String::new(),
@@ -791,7 +831,8 @@ mod tests {
     fn load_page_not_found() {
         let (store, _dir) = fresh_store();
         let err = store.pages().load("nonexistent").unwrap_err();
-        assert!(err.contains("not found"));
+        assert!(matches!(err, KnowledgeError::PageMissing { .. }));
+        assert!(err.to_string().contains("not found"));
     }
 
     #[test]
@@ -808,7 +849,8 @@ mod tests {
     fn remove_page_errors_when_not_in_index() {
         let (store, _dir) = fresh_store();
         let err = store.pages().remove("nonexistent").unwrap_err();
-        assert!(err.contains("not found"));
+        assert!(matches!(err, KnowledgeError::PageMissing { .. }));
+        assert!(err.to_string().contains("not found"));
     }
 
     #[test]
@@ -907,7 +949,10 @@ mod tests {
                 tags: vec![],
             })
             .unwrap_err();
-        assert!(err.contains("chars"), "{err}");
+        assert!(
+            matches!(err, KnowledgeError::IndexLimitExceeded { .. }),
+            "{err}"
+        );
     }
 
     #[test]
@@ -927,21 +972,25 @@ mod tests {
                 tags: vec![],
             })
             .unwrap_err();
-        assert!(err.contains("chars"), "{err}");
+        assert!(
+            matches!(err, KnowledgeError::IndexLimitExceeded { limit: 80, .. }),
+            "{err}"
+        );
 
-        // Outcome reports the custom limit.
-        let out = save_page(&store, "small", "ok", "# Small", &[]);
-        assert_eq!(out.index_char_limit, 80);
+        // Usage reports the custom limit.
+        save_page(&store, "small", "ok", "# Small", &[]);
+        let (_, limit, _) = store.index_usage();
+        assert_eq!(limit, 80);
     }
 
     #[test]
-    fn outcome_reports_usage() {
+    fn index_usage_reports_chars_limit_and_pages() {
         let (store, _dir) = fresh_store();
-        let out = save_page(&store, "test", "A test", "# Test\n\nContent.", &[]);
-        assert_eq!(out.message, "page written");
-        assert_eq!(out.pages, 1);
-        assert_eq!(out.index_char_limit, DEFAULT_INDEX_CHAR_LIMIT);
-        assert!(out.index_chars_used > 0);
+        save_page(&store, "test", "A test", "# Test\n\nContent.", &[]);
+        let (used, limit, pages) = store.index_usage();
+        assert!(used > 0);
+        assert_eq!(limit, DEFAULT_INDEX_CHAR_LIMIT);
+        assert_eq!(pages, 1);
     }
 
     #[test]
@@ -1050,7 +1099,7 @@ mod tests {
                 tags: vec![],
             })
             .unwrap_err();
-        assert!(err.contains("Description"));
+        assert!(err.to_string().contains("Description"));
     }
 
     #[test]
@@ -1066,16 +1115,17 @@ mod tests {
                 tags: vec![],
             })
             .unwrap_err();
-        assert!(err.contains("Content"));
+        assert!(err.to_string().contains("Content"));
     }
 
     #[test]
-    fn remove_page_returns_outcome() {
+    fn remove_page_empties_index_usage() {
         let (store, _dir) = fresh_store();
         save_page(&store, "temp", "Temp", "# Temp", &[]);
-        let out = store.pages().remove("temp").unwrap();
-        assert_eq!(out.message, "page removed");
-        assert_eq!(out.pages, 0);
+        store.pages().remove("temp").unwrap();
+        let (used, _, pages) = store.index_usage();
+        assert_eq!(used, 0);
+        assert_eq!(pages, 0);
     }
 
     #[test]

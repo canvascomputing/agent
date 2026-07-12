@@ -47,6 +47,14 @@ fn description() -> &'static str {
     DESC.get_or_init(|| tool_file().render_markdown())
 }
 
+/// Progress line shown to the model after a mutation: how much of the
+/// index budget is consumed.
+fn usage_line(message: &str, store: &Knowledge) -> String {
+    let (used, limit, pages) = store.index_usage();
+    let pct = if limit > 0 { (used * 100) / limit } else { 0 };
+    format!("{message} ({pages} pages, {pct}% — {used}/{limit} chars)")
+}
+
 impl ToolLike for ManageKnowledgeTool {
     fn name(&self) -> &str {
         &tool_file().name
@@ -107,23 +115,11 @@ impl ToolLike for ManageKnowledgeTool {
                         tags: Vec::new(),
                     };
                     match self.store.pages().save(page) {
-                        Ok(out) => {
+                        Ok(()) => {
                             record(KnowledgeOp::Write);
-                            let pct = if out.index_char_limit > 0 {
-                                (out.index_chars_used * 100) / out.index_char_limit
-                            } else {
-                                0
-                            };
-                            Ok(ToolResult::success(format!(
-                                "{} ({} pages, {}% — {}/{} chars)",
-                                out.message,
-                                out.pages,
-                                pct,
-                                out.index_chars_used,
-                                out.index_char_limit,
-                            )))
+                            Ok(ToolResult::success(usage_line("page written", &self.store)))
                         }
-                        Err(why) => Ok(ToolResult::error(why)),
+                        Err(why) => Ok(ToolResult::error(why.to_string())),
                     }
                 }
 
@@ -152,25 +148,13 @@ impl ToolLike for ManageKnowledgeTool {
                         None => return Ok(ToolResult::error("Missing required parameter: slug")),
                     };
                     match self.store.pages().remove(slug) {
-                        Ok(out) => {
+                        Ok(()) => {
                             record(KnowledgeOp::Remove);
-                            let pct = if out.index_char_limit > 0 {
-                                (out.index_chars_used * 100) / out.index_char_limit
-                            } else {
-                                0
-                            };
-                            Ok(ToolResult::success(format!(
-                                "{} ({} pages, {}% — {}/{} chars)",
-                                out.message,
-                                out.pages,
-                                pct,
-                                out.index_chars_used,
-                                out.index_char_limit,
-                            )))
+                            Ok(ToolResult::success(usage_line("page removed", &self.store)))
                         }
                         Err(why) => {
                             record(KnowledgeOp::Miss);
-                            Ok(ToolResult::error(why))
+                            Ok(ToolResult::error(why.to_string()))
                         }
                     }
                 }
