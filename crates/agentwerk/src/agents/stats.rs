@@ -96,6 +96,9 @@ pub struct Stats {
     /// Per-path open and failure tallies keyed by the file a tool opened.
     /// Populated only on the run-wide `Stats`; always empty on a label slice.
     file_stats: Mutex<HashMap<String, FileCounters>>,
+    /// Run-wide Knowledge-store operation tally. Populated only on the run-wide
+    /// `Stats`; a label slice never records here, so it stays zero.
+    knowledge_stats: Mutex<KnowledgeCounters>,
 }
 
 /// Raw per-tool tallies behind the `tool_stats` map. `errors` is derived
@@ -113,6 +116,26 @@ struct ToolCounters {
 struct FileCounters {
     opens: u64,
     failed: u64,
+}
+
+/// Raw run-wide tallies behind the `knowledge` field.
+#[derive(Default, Clone)]
+struct KnowledgeCounters {
+    writes: u64,
+    reads: u64,
+    removes: u64,
+    lists: u64,
+    misses: u64,
+}
+
+/// One Knowledge-store operation, reported by the `manage_knowledge` tool.
+pub(crate) enum KnowledgeOp {
+    Write,
+    Read,
+    Remove,
+    List,
+    /// A `read` or `remove` naming a slug the store does not have.
+    Miss,
 }
 
 /// Call and failure tallies for one tool, broken down by failure kind.
@@ -183,6 +206,36 @@ impl From<&FileCounters> for FileStat {
     }
 }
 
+/// Run-wide Knowledge-store usage, returned by [`Stats::knowledge_stats`].
+/// Counts successful operations by action; `misses` is a `read` or `remove`
+/// that named a slug the store does not have. A high `misses` count points at
+/// a stale index or a prompt that over-promises what knowledge holds.
+#[derive(Debug, Clone, Serialize)]
+pub struct KnowledgeStat {
+    /// Successful `write` operations.
+    pub writes: u64,
+    /// Successful `read` operations that returned a page.
+    pub reads: u64,
+    /// Successful `remove` operations.
+    pub removes: u64,
+    /// `list` operations.
+    pub lists: u64,
+    /// `read`/`remove` operations naming a slug not in the store.
+    pub misses: u64,
+}
+
+impl From<&KnowledgeCounters> for KnowledgeStat {
+    fn from(c: &KnowledgeCounters) -> Self {
+        Self {
+            writes: c.writes,
+            reads: c.reads,
+            removes: c.removes,
+            lists: c.lists,
+            misses: c.misses,
+        }
+    }
+}
+
 impl Stats {
     pub(crate) fn new() -> Self {
         Self {
@@ -203,6 +256,7 @@ impl Stats {
             usage_history: Mutex::new(HashMap::new()),
             tool_stats: Mutex::new(HashMap::new()),
             file_stats: Mutex::new(HashMap::new()),
+            knowledge_stats: Mutex::new(KnowledgeCounters::default()),
         }
     }
 
@@ -306,6 +360,24 @@ impl Stats {
             .entry(path.to_string())
             .or_default()
             .failed += 1;
+    }
+
+    /// Run-wide Knowledge-store usage. Zero on a label slice.
+    pub fn knowledge_stats(&self) -> KnowledgeStat {
+        (&*self.knowledge_stats.lock().unwrap()).into()
+    }
+
+    /// Count one Knowledge-store operation, reported by the `manage_knowledge`
+    /// tool as it runs.
+    pub(crate) fn record_knowledge(&self, op: KnowledgeOp) {
+        let mut counters = self.knowledge_stats.lock().unwrap();
+        match op {
+            KnowledgeOp::Write => counters.writes += 1,
+            KnowledgeOp::Read => counters.reads += 1,
+            KnowledgeOp::Remove => counters.removes += 1,
+            KnowledgeOp::List => counters.lists += 1,
+            KnowledgeOp::Miss => counters.misses += 1,
+        }
     }
 
     pub(crate) fn record_turn_for(&self, labels: &[String]) {
@@ -607,6 +679,16 @@ impl crate::persistence::Persist for Stats {
                 );
             }
         }
+        if let Some(knowledge) = value.get("knowledge") {
+            let get = |key: &str| knowledge.get(key).and_then(|v| v.as_u64()).unwrap_or(0);
+            *stats.knowledge_stats.lock().unwrap() = KnowledgeCounters {
+                writes: get("writes"),
+                reads: get("reads"),
+                removes: get("removes"),
+                lists: get("lists"),
+                misses: get("misses"),
+            };
+        }
         Ok(stats)
     }
 }
@@ -616,10 +698,18 @@ impl Serialize for Stats {
         let labels = self.label_stats.lock().unwrap();
         let tools = self.tool_stats();
         let files = self.file_stats();
+        let knowledge = self.knowledge_stats();
+        let knowledge_used = knowledge.writes
+            + knowledge.reads
+            + knowledge.removes
+            + knowledge.lists
+            + knowledge.misses
+            > 0;
         let len = 17
             + usize::from(!labels.is_empty())
             + usize::from(!tools.is_empty())
-            + usize::from(!files.is_empty());
+            + usize::from(!files.is_empty())
+            + usize::from(knowledge_used);
         let mut st = serializer.serialize_struct("Stats", len)?;
         st.serialize_field("turns", &self.turns())?;
         st.serialize_field("requests", &self.requests())?;
@@ -681,6 +771,9 @@ impl Serialize for Stats {
         }
         if !files.is_empty() {
             st.serialize_field("files", &files)?;
+        }
+        if knowledge_used {
+            st.serialize_field("knowledge", &knowledge)?;
         }
         st.end()
     }
@@ -1225,5 +1318,72 @@ mod tests {
         let s = Stats::new();
         let value = serde_json::to_value(&s).unwrap();
         assert!(value.get("files").is_none());
+    }
+
+    #[test]
+    fn knowledge_records_each_operation() {
+        let s = Stats::new();
+        s.record_knowledge(KnowledgeOp::Write);
+        s.record_knowledge(KnowledgeOp::Read);
+        s.record_knowledge(KnowledgeOp::Read);
+        s.record_knowledge(KnowledgeOp::Remove);
+        s.record_knowledge(KnowledgeOp::List);
+        s.record_knowledge(KnowledgeOp::Miss);
+
+        let k = s.knowledge_stats();
+        assert_eq!(k.writes, 1);
+        assert_eq!(k.reads, 2);
+        assert_eq!(k.removes, 1);
+        assert_eq!(k.lists, 1);
+        assert_eq!(k.misses, 1);
+    }
+
+    #[test]
+    fn knowledge_is_zero_on_label_slice() {
+        let s = Stats::new();
+        s.record_knowledge(KnowledgeOp::Write);
+        let slice = s.stats_for_label("scan");
+        let k = slice.knowledge_stats();
+        assert_eq!(k.writes, 0);
+        assert_eq!(k.reads, 0);
+    }
+
+    #[test]
+    fn knowledge_round_trips_through_save_load() {
+        let dir = crate::test_util::TempDir::new().unwrap();
+
+        let s = Stats::new();
+        s.record_knowledge(KnowledgeOp::Write);
+        s.record_knowledge(KnowledgeOp::Read);
+        s.record_knowledge(KnowledgeOp::Miss);
+
+        use crate::persistence::Persist;
+        s.save(dir.path()).unwrap();
+        let restored = Stats::load(dir.path()).unwrap();
+
+        let k = restored.knowledge_stats();
+        assert_eq!(k.writes, 1);
+        assert_eq!(k.reads, 1);
+        assert_eq!(k.misses, 1);
+    }
+
+    #[test]
+    fn stats_serializes_knowledge_as_nested_object() {
+        let s = Stats::new();
+        s.record_knowledge(KnowledgeOp::Write);
+        s.record_knowledge(KnowledgeOp::Miss);
+
+        let value = serde_json::to_value(&s).unwrap();
+        let knowledge = value["knowledge"].as_object().unwrap();
+        assert_eq!(knowledge["writes"], 1);
+        assert_eq!(knowledge["misses"], 1);
+        assert_eq!(knowledge["reads"], 0);
+    }
+
+    #[test]
+    fn stats_omits_knowledge_when_unused() {
+        let s = Stats::new();
+        let value = serde_json::to_value(&s).unwrap();
+        assert!(value.get("knowledge").is_none());
     }
 }
