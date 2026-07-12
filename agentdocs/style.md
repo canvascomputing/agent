@@ -108,7 +108,7 @@ Naming and comment rules, plus README structure. Skim the section matching what 
 **Builder methods are bare nouns. No `with_` prefix.**
 
 - Examples: `.name()`, `.model()`, `.tool()`, `.label()`, `.read_only()`.
-- The `with_` prefix is used only when a bare name clashes with a trait method, such as `with_description` on `BashTool`.
+- The `with_` prefix is reserved for a bare name that would be ambiguous even with an inherent/trait split; no current builder needs it.
 
 ## Constructors
 
@@ -163,14 +163,13 @@ Naming: `snake_case`. Tool structs keep the `{Name}Tool` suffix: `ReadFileTool`,
 - Do not list the contents of the file.
 - The `//!` stays even when the filename is already descriptive.
 
-## Hiding implementor-only types
+## Hiding internal types
 
-**Types that are `pub` only because they appear in a public trait signature get `#[doc(hidden)]`.**
+**A type a public trait or extension point hands to callers is documented; a genuinely internal type is `pub(crate)`.**
 
-- Examples: the request and response types under `providers::` (`Message`, `ContentBlock`, `ModelRequest`, `ProviderToolDefinition`, `ToolChoice`, `StreamEvent`, `ModelResponse`, `ResponseStatus`). Forced public by `Provider::respond`; irrelevant to anyone who is not implementing a `Provider`.
-- `#[doc(hidden)]` keeps them reachable for implementors (`use agentwerk::providers::Message;` still works) while removing them from the rustdoc index.
-- The standard Rust idiom: `tokio`, `serde`, and `tracing` do the same for items that exist only to satisfy a trait or a macro.
-- A type that is genuinely internal (no public trait forces it `pub`) becomes `pub(crate)` instead. `tools::ToolFile` is the example: callers go through `Tool::from_tool_file(definition: &str)` and never name the struct.
+- The request and response types under `providers::` (`Message`, `ContentBlock`, `ModelRequest`, `ProviderToolDefinition`, `ToolChoice`, `StreamEvent`, `ModelResponse`, `ResponseStatus`) are documented: implementing `Provider` is supported, and implementors name them.
+- A type that is genuinely internal becomes `pub(crate)` instead. `tools::ToolFile` is the example: callers go through `Tool::from_tool_file(definition: &str)` and never name the struct.
+- `#[doc(hidden)]` is reserved for items a macro or trait forces `pub` that are useless even to implementors; there are currently none.
 
 ## Line comments (`//`)
 

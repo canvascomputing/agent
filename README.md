@@ -177,9 +177,9 @@ tickets.agent(
 );
 
 for url in pricing_pages {
-    tickets.task_labeled(
-        format!("Fetch {url} and extract pricing tiers, limits, and features."),
-        "research",
+    tickets.ticket(
+        Ticket::new(format!("Fetch {url} and extract pricing tiers, limits, and features."))
+            .label("research"),
     );
 }
 
@@ -194,7 +194,6 @@ tickets.ticket(
 |--------|-------------|
 | `agent(agent)` | Add an agent to this ticket system. |
 | `task(t)` | Submit a task and return its ticket key. |
-| `task_labeled(t, l)` | Submit a task tagged with `l` for label-scoped assignment. Shorthand for `ticket(Ticket::new(t).label(l))`. |
 | `ticket(t)` | Submit a `Ticket` with custom labels, a schema, or a parent link. |
 
 Also on [`TicketSystem`](https://docs.rs/agentwerk/latest/agentwerk/agents/tickets/struct.TicketSystem.html): `dir(d)` to relocate persisted state, `reply(key, c)` to continue a multi-turn conversation on one ticket.
@@ -241,7 +240,6 @@ tickets.create_ticket_on_result(|ticket| {
 | `cancel_on_result(p)` | End the run when a finished result matches. |
 | `cancel_label_on_event(l, p)` | Call off one label's agents while the rest keep working. |
 | `create_ticket_on_result(make)` | Enqueue a follow-up ticket from a finished ticket. |
-| `create_ticket_on_event(make)` | Enqueue a follow-up ticket from any event. |
 | `wait_for_ticket(p)` | Wait for one matching ticket instead of draining the queue. |
 
 See [`TicketSystem`](https://docs.rs/agentwerk/latest/agentwerk/agents/tickets/struct.TicketSystem.html).
@@ -284,7 +282,7 @@ let ticket = tickets.find_ticket(|t| t.has_label("analysis")).unwrap();
 let report: Report = serde_json::from_value(ticket.result.clone().unwrap()).unwrap();
 ```
 
-See [`Ticket`](https://docs.rs/agentwerk/latest/agentwerk/agents/tickets/struct.Ticket.html) for the full field list (`key`, `status`, `result`, `replies`, `labels`, `parent`, and the four lifecycle timestamps) and the status predicates that read better than comparing `status` directly: `is_finished`, `is_in_progress`, `is_pending`, `is_resolved`, `has_label`.
+See [`Ticket`](https://docs.rs/agentwerk/latest/agentwerk/agents/tickets/struct.Ticket.html) for the full field list (`key`, `status`, `result`, `replies`, `labels`, `parent`, and the four lifecycle timestamps) and the status predicates that read better than comparing `status` directly: `is_todo`, `is_in_progress`, `is_finished`, `is_failed`, `is_pending`, `is_resolved`, `has_label`.
 
 ### Policies
 
@@ -380,7 +378,7 @@ Give agents access to tools. Each tool exposes an action the agent can choose to
 | | `HandoverTicketTool` | Write the result, mark the ticket finished, and hand follow-up work to another agent. |
 | | `ManageTicketsTool` | Read the ticket queue and create or edit tickets. |
 | | `ReadTicketsTool` | Read the ticket queue. |
-| **Knowledge** | `ManageKnowledgeTool` | Write, read, remove, or list pages in the agent's knowledge store. |
+| **Knowledge** | `ManageKnowledgeTool` | Write, read, remove, or list pages in the agent's knowledge store. Registered automatically on every agent. |
 
 ### Bash
 
@@ -434,8 +432,8 @@ let store = Knowledge::load("./.agentwerk")?;
 let alice = Agent::new().knowledge(&store);
 let bob = Agent::new().knowledge(&store);
 
-// Raise the rendered-index char budget (default 4000):
-let store = Knowledge::load("./.agentwerk")?.index_char_limit(12_000);
+// Raise the rendered-index char budget (default 12 000):
+let store = Knowledge::load("./.agentwerk")?.index_char_limit(24_000);
 let agent = Agent::new().knowledge(&store);
 ```
 

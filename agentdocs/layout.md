@@ -14,7 +14,7 @@ Where code lives and the rules that govern placement.
 
 **Each top-level source file is one concern the caller observes directly.**
 
-- `lib.rs` holds public re-exports only. The crate root lands the orchestration surface: `Agent`, `TicketSystem`, `Ticket`, `Knowledge`, `Policies`, `Stats`, `Event`. Extension types live in `tools::`; validation types live in `schemas::`; event discriminants and `default_logger` live in `event::`. Callers reach into a sub-module when they need anything below the orchestration level.
+- `lib.rs` holds public re-exports only. The crate root lands the orchestration surface plus the types its own signatures hand to callers: `Agent`, `TicketSystem`, `Ticket`, `Status`, `Knowledge`, `Policies`, `Stats`, `Schema`, `Event`, `EventKind`, `FinishReason`. Extension types live in `tools::`; `default_logger` lives in `event::`. Callers reach into a sub-module when they need anything below the orchestration level.
 - `event.rs` defines `Event`, `EventKind`, `PolicyKind`, `FinishReason`, `ToolFailureKind`, `CompactReason`, and `default_logger`.
 - `persistence.rs` holds the `Persist` and `Append` traits, the log types (`Results`, `TicketEvents`), and the shared `write_atomic` / `append_line` / `latest_path` / `parse_filename_ts` / `output_path` helpers. Every persistable type and the results-log writer (in `tools/tickets`) route through it. Internal (`pub(crate)`); not re-exported from `lib.rs`.
 - The `agents/`, `prompts/`, `providers/`, `schemas/`, and `tools/` modules each own their domain. The `agents/` and `tools/` modules also re-export their headline types so `use agentwerk::agents::{Agent, TicketSystem}` and `use agentwerk::tools::BashTool` work without descending into leaf files.
@@ -25,14 +25,14 @@ Where code lives and the rules that govern placement.
 
 - `agent.rs` holds the `Agent` builder and ticket-dispatch helpers; an `Agent` carries a `Weak<TicketSystem>` bound at `bind_agent` time.
 - `tickets/` holds the ticket value types and the orchestrator. `Reply` is the per-ticket transcript entry; `ReplyContent` mirrors `providers::ContentBlock` so the ticket surface stays free of provider types. Split by concern:
-  - `tickets/mod.rs`: re-exports `Status`, `Ticket`, `TicketError`, `TicketSystem`; hosts free helpers `policy_violated`, `policy_violated_kind`, `now_millis`, `numeric_id`.
+  - `tickets/mod.rs`: re-exports `Author`, `Reply`, `ReplyContent`, `Status`, `Ticket`, `TicketError`, `TicketSystem`; hosts free helpers `policy_violated`, `policy_violated_kind`, `now_millis`, `numeric_id`.
   - `tickets/ticket.rs`: `Ticket`, `Status`, the `Replies` transcript-log helper, and the `tickets/<key>/...` path helpers.
-  - `tickets/reply.rs`: `Reply`, `ReplyContent`, and their conversions to and from `providers::Message` / `ContentBlock`.
+  - `tickets/reply.rs`: `Author`, `Reply`, `ReplyContent`, and their conversions to and from `providers::Message` / `ContentBlock`.
   - `tickets/error.rs`: `TicketError`.
   - `tickets/ticket_system.rs`: the `TicketSystem` struct, constructors, configuration, policy builders, ticket-creation API, agent binding, run lifecycle, results, and queries.
   - `tickets/store.rs`: the `impl TicketSystem` block for store mutations (`insert`, `claim`, `set_finished`, `summarize`, transition recording, etc.).
 - `loop.rs` holds the `Runnable` trait (implemented by `TicketSystem`) and the per-agent loop driver.
-- `knowledge.rs` holds `Knowledge`: the cross-ticket store, an OKF v0.1 bundle backed by a `pages/` directory of concept files and a derived `index.md`. Pages are curated through the `pages()` handle (`save` / `load` / `remove`) plus `clear`.
+- `knowledge.rs` holds `Knowledge`: the cross-ticket store, an OKF v0.1 bundle backed by a `pages/` directory of concept files and a derived `index.md`. Pages are curated through the `pages()` handle (`save` / `load` / `remove`) plus `clear`; failures are typed as `KnowledgeError`.
 - `policy.rs` holds `Policies` and the limit checks the loop applies on each turn.
 - `stats.rs` holds `Stats`, `LoopStats`, and the run-wide counters and timings.
 

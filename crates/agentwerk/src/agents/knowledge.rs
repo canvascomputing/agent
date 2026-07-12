@@ -155,7 +155,7 @@ impl Knowledge {
         }))
     }
 
-    /// Override the rendered-index char budget. Default is 4000. Page
+    /// Override the rendered-index char budget. Default is 12 000. Page
     /// bodies are never capped; only the bullet list injected into the
     /// system prompt is bounded. Chain after `load` before binding the
     /// store to any agent:
