@@ -31,7 +31,13 @@ Where code lives and the rules that govern placement.
   - `tickets/error.rs`: `TicketError`.
   - `tickets/ticket_system.rs`: the `TicketSystem` struct, constructors, configuration, policy builders, ticket-creation API, agent binding, run lifecycle, results, and queries.
   - `tickets/store.rs`: the `impl TicketSystem` block for store mutations (`insert`, `claim`, `set_finished`, `summarize`, transition recording, etc.).
-- `loop.rs` holds the `Runnable` trait (implemented by `TicketSystem`) and the per-agent loop driver.
+- `loop/` holds the multi-agent loop, split by state:
+  - `loop/mod.rs`: module wiring and the `Step` enum naming each state of the per-ticket state machine.
+  - `loop/main.rs`: `run_main_loop`, which spawns one tokio task per registered agent and joins them on shutdown.
+  - `loop/agent.rs`: `run_agent` (outer claim loop plus the inner `Step` match), `TicketContext`, the ticket check, and the silence retry.
+  - `loop/compact.rs`: proactive and reactive transcript compaction.
+  - `loop/request.rs`: the provider round-trip with retry and backoff.
+  - `loop/tool_call.rs`: tool dispatch, output offloading, and the tool-failure budget.
 - `knowledge.rs` holds `Knowledge`: the cross-ticket store, an OKF v0.1 bundle backed by a `pages/` directory of concept files and a derived `index.md`. Pages are curated through the `pages()` handle (`save` / `load` / `remove`) plus `clear`; failures are typed as `KnowledgeError`.
 - `policy.rs` holds `Policies` and the limit checks the loop applies on each turn.
 - `stats.rs` holds `Stats` and the run-wide counters and timings.

@@ -1,34 +1,33 @@
-//! LLM turn: sends messages to the provider, handles retries, and triggers reactive compaction on overflow.
+//! Provider round-trip: sends the transcript, retries transient errors, and
+//! routes overflow to reactive compaction.
 
 use std::sync::Arc;
 
 use crate::agents::retry::{ExponentialRetry, Retry};
 use crate::event::{CompactReason, EventKind};
 use crate::providers::types::{ResponseStatus, StreamEvent};
-use crate::providers::{
-    ContentBlock, Message, ModelRequest, ProviderError, ProviderToolDefinition,
-};
+use crate::providers::{ContentBlock, ModelRequest, ProviderError, ProviderToolDefinition};
+use crate::schemas::Schema;
 use crate::tools::ToolCall;
 
-use super::turn;
-use super::turn::LoopContext;
+use super::agent::TicketContext;
 use super::wait_for_signal;
-use super::{Action, Reply};
+use super::Step;
 
-pub(super) async fn run(context: &mut LoopContext<'_>, messages: Vec<Message>) -> Action<Reply> {
-    let tools = finish_tools_with_ticket_schema(context, context.agent.tool_definitions());
+pub(super) async fn run(context: &mut TicketContext<'_>) -> Step {
+    let Some(ticket) = context.ticket() else {
+        return Step::NextTicket;
+    };
+    let tools =
+        finish_tools_with_ticket_schema(ticket.schema.as_ref(), context.agent.tool_definitions());
     let model_name = context.model.name.clone();
-    context.ticket_system.emit(
-        &context.ticket_key,
-        context.agent.get_name(),
-        EventKind::RequestStarted {
-            model: model_name.clone(),
-        },
-    );
+    context.emit(EventKind::RequestStarted {
+        model: model_name.clone(),
+    });
     let request = ModelRequest {
         model: model_name,
         system_prompt: context.system_prompt.clone(),
-        messages,
+        messages: ticket.to_messages(),
         tools,
         max_request_tokens: context.policies.max_request_tokens,
         tool_choice: None,
@@ -43,10 +42,10 @@ pub(super) async fn run(context: &mut LoopContext<'_>, messages: Vec<Message>) -
             let provider = context.agent.provider();
             let agent_name = context.agent.get_name().to_string();
             let ticket_key = context.ticket_key.clone();
-            let ts = Arc::clone(context.ticket_system);
+            let ticket_system = Arc::clone(context.ticket_system);
             let emit_stream: Arc<dyn Fn(StreamEvent) + Send + Sync> = Arc::new(move |event| {
                 if let StreamEvent::TextDelta { text, .. } = event {
-                    ts.emit(
+                    ticket_system.emit(
                         &ticket_key,
                         &agent_name,
                         EventKind::TextChunkReceived { content: text },
@@ -56,91 +55,58 @@ pub(super) async fn run(context: &mut LoopContext<'_>, messages: Vec<Message>) -
             let interrupt = &context.stop_signal;
             tokio::select! {
                 biased;
-                _ = wait_for_signal(interrupt) => return Action::Stop,
+                _ = wait_for_signal(interrupt) => return Step::Stop,
                 result = provider.respond(request.clone(), emit_stream) => result,
             }
         };
         match outcome {
-            Ok(resp) => break resp,
+            Ok(response) => break response,
             Err(ProviderError::ContextWindowExceeded { .. }) => {
-                match turn::compact(context, CompactReason::Reactive).await {
-                    Action::Stop => return Action::Stop,
-                    Action::Replay => return Action::Replay,
-                    Action::Pause => unreachable!("compact() never returns Pause"),
-                    Action::Proceed(()) => {}
-                }
+                return Step::Compact(CompactReason::Reactive);
             }
-            Err(e) if e.is_retryable() => match retry.try_consume() {
+            Err(error) if error.is_retryable() => match retry.try_consume() {
                 Some(attempt) => {
-                    let delay = retry.delay(e.retry_delay());
-                    context.ticket_system.emit(
-                        &context.ticket_key,
-                        context.agent.get_name(),
-                        EventKind::RequestRetried {
-                            model: request.model.clone(),
-                            attempt,
-                            max_attempts: retry.max_attempts(),
-                            kind: e.kind(),
-                            message: e.to_string(),
-                        },
-                    );
+                    let delay = retry.delay(error.retry_delay());
+                    context.emit(EventKind::RequestRetried {
+                        model: request.model.clone(),
+                        attempt,
+                        max_attempts: retry.max_attempts(),
+                        kind: error.kind(),
+                        message: error.to_string(),
+                    });
                     let interrupt = &context.stop_signal;
                     tokio::select! {
                         biased;
-                        _ = wait_for_signal(interrupt) => return Action::Stop,
+                        _ = wait_for_signal(interrupt) => return Step::Stop,
                         _ = tokio::time::sleep(delay) => {}
                     }
                 }
                 None => {
-                    context.ticket_system.emit(
-                        &context.ticket_key,
-                        context.agent.get_name(),
-                        EventKind::RequestFailed {
-                            model: request.model.clone(),
-                            kind: e.kind(),
-                            message: e.to_string(),
-                        },
-                    );
-                    let _ = context
-                        .ticket_system
-                        .set_failed_by(&context.ticket_key, context.agent.get_name());
-                    return Action::Replay;
+                    context.fail_with(error.kind(), error.to_string());
+                    return Step::NextTicket;
                 }
             },
-            Err(e) => {
-                context.ticket_system.emit(
-                    &context.ticket_key,
-                    context.agent.get_name(),
-                    EventKind::RequestFailed {
-                        model: request.model.clone(),
-                        kind: e.kind(),
-                        message: e.to_string(),
-                    },
-                );
-                let _ = context
-                    .ticket_system
-                    .set_failed_by(&context.ticket_key, context.agent.get_name());
-                return Action::Replay;
+            Err(error) => {
+                context.fail_with(error.kind(), error.to_string());
+                return Step::NextTicket;
             }
         }
     };
 
-    context.ticket_system.emit(
-        &context.ticket_key,
-        context.agent.get_name(),
-        EventKind::RequestFinished {
-            model: response.model.clone(),
-            usage: response.usage.clone(),
-        },
-    );
+    context.emit(EventKind::RequestFinished {
+        model: response.model.clone(),
+        usage: response.usage.clone(),
+    });
 
-    let overflowed = response.status == ResponseStatus::ContextWindowExceeded;
-    if !overflowed {
-        context.ticket_system.add_reply(
-            &context.ticket_key,
-            crate::agents::tickets::Reply::assistant(&response.content),
-        );
+    // The overflowed reply is discarded: compaction rewrites the transcript
+    // and the next request regenerates it.
+    if response.status == ResponseStatus::ContextWindowExceeded {
+        return Step::Compact(CompactReason::Reactive);
     }
+    context.ticket_system.add_reply(
+        &context.ticket_key,
+        crate::agents::tickets::Reply::assistant(&response.content),
+    );
 
     let calls: Vec<ToolCall> = response
         .content
@@ -154,23 +120,11 @@ pub(super) async fn run(context: &mut LoopContext<'_>, messages: Vec<Message>) -
             _ => None,
         })
         .collect();
-
-    let reply = if calls.is_empty() {
-        Reply::TextOnly
+    if calls.is_empty() {
+        Step::CheckTicket
     } else {
-        Reply::Calls(calls)
-    };
-
-    if overflowed {
-        match turn::compact(context, CompactReason::Reactive).await {
-            Action::Stop => return Action::Stop,
-            Action::Replay => return Action::Replay,
-            Action::Pause => unreachable!("compact() never returns Pause"),
-            Action::Proceed(()) => {}
-        }
+        Step::ToolCalls(calls)
     }
-
-    Action::Proceed(reply)
 }
 
 /// Advertise each finish tool's arguments in the shape the current ticket expects:
@@ -178,19 +132,15 @@ pub(super) async fn run(context: &mut LoopContext<'_>, messages: Vec<Message>) -
 /// `result` envelope. Shares `finish_tool_input_schema` with `finish_ticket` /
 /// `handover_ticket` so the advertised shape and the parsed shape always agree.
 fn finish_tools_with_ticket_schema(
-    context: &LoopContext<'_>,
+    schema: Option<&Schema>,
     mut tools: Vec<ProviderToolDefinition>,
 ) -> Vec<ProviderToolDefinition> {
-    let schema = context
-        .ticket_system
-        .get_ticket(&context.ticket_key)
-        .and_then(|t| t.schema);
     for definition in &mut tools {
         if crate::tools::TICKET_FINISH_TOOLS.contains(&definition.name.as_str()) {
             definition.input_schema = crate::tools::finish_tool_input_schema(
                 &definition.name,
                 definition.input_schema.clone(),
-                schema.as_ref(),
+                schema,
             );
         }
     }

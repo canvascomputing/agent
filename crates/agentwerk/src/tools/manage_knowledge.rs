@@ -118,7 +118,9 @@ impl ToolLike for ManageKnowledgeTool {
                     };
                     match self.store.pages().save(page) {
                         Ok(()) => {
-                            record(EventKind::KnowledgeUsed { op: KnowledgeOp::Write });
+                            record(EventKind::KnowledgeUsed {
+                                op: KnowledgeOp::Write,
+                            });
                             Ok(ToolResult::success(usage_line("page written", &self.store)))
                         }
                         Err(why) => Ok(ToolResult::error(why.to_string())),
@@ -132,7 +134,9 @@ impl ToolLike for ManageKnowledgeTool {
                     };
                     match self.store.pages().load(slug) {
                         Ok(page) => {
-                            record(EventKind::KnowledgeUsed { op: KnowledgeOp::Read });
+                            record(EventKind::KnowledgeUsed {
+                                op: KnowledgeOp::Read,
+                            });
                             Ok(ToolResult::success(page.content))
                         }
                         Err(_) => {
@@ -151,7 +155,9 @@ impl ToolLike for ManageKnowledgeTool {
                     };
                     match self.store.pages().remove(slug) {
                         Ok(()) => {
-                            record(EventKind::KnowledgeUsed { op: KnowledgeOp::Remove });
+                            record(EventKind::KnowledgeUsed {
+                                op: KnowledgeOp::Remove,
+                            });
                             Ok(ToolResult::success(usage_line("page removed", &self.store)))
                         }
                         Err(why) => {
@@ -162,7 +168,9 @@ impl ToolLike for ManageKnowledgeTool {
                 }
 
                 "list" => {
-                    record(EventKind::KnowledgeUsed { op: KnowledgeOp::List });
+                    record(EventKind::KnowledgeUsed {
+                        op: KnowledgeOp::List,
+                    });
                     let idx = self.store.index();
                     let body = if idx.is_empty() {
                         "(no pages)".to_string()

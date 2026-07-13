@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use crate::agents::tickets::TicketSystem;
 
-use super::turn::run_agent;
+use super::agent::run_agent;
 use super::POLL_INTERVAL;
 
 pub(in crate::agents) async fn run_main_loop(ticket_system: &TicketSystem) {

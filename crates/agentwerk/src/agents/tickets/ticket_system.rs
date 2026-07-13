@@ -1013,11 +1013,7 @@ mod tests {
         sys.cancel_on_event(|e| matches!(e.kind, EventKind::TicketFailed));
         sys.emit("KEY", "agent", EventKind::TurnStarted);
         assert!(!sys.is_cancelled());
-        sys.emit(
-            "KEY",
-            "agent",
-            EventKind::TicketFailed,
-        );
+        sys.emit("KEY", "agent", EventKind::TicketFailed);
         assert!(sys.is_cancelled());
     }
 
@@ -1045,11 +1041,7 @@ mod tests {
             .unwrap();
         sys.cancel_on_result(|r| r.get("status").and_then(|v| v.as_str()) == Some("malicious"));
         assert!(!sys.is_cancelled());
-        sys.emit(
-            &key,
-            "agent",
-            EventKind::TicketFinished,
-        );
+        sys.emit(&key, "agent", EventKind::TicketFinished);
         assert!(sys.is_cancelled());
     }
 
@@ -1061,11 +1053,7 @@ mod tests {
         sys.set_result(&key, serde_json::json!({"status": "benign"}))
             .unwrap();
         sys.cancel_on_result(|r| r.get("status").and_then(|v| v.as_str()) == Some("malicious"));
-        sys.emit(
-            &key,
-            "agent",
-            EventKind::TicketFinished,
-        );
+        sys.emit(&key, "agent", EventKind::TicketFinished);
         assert!(!sys.is_cancelled());
     }
 
@@ -1080,11 +1068,7 @@ mod tests {
             done.has_label("scout")
                 .then(|| Ticket::new("hunt").label("sniper"))
         });
-        sys.emit(
-            &key,
-            "agent",
-            EventKind::TicketFinished,
-        );
+        sys.emit(&key, "agent", EventKind::TicketFinished);
         assert_eq!(sys.find_tickets(|t| t.has_label("sniper")).len(), 1);
     }
 
@@ -1098,11 +1082,7 @@ mod tests {
         sys.create_ticket_on_result(|done| {
             Some(Ticket::new("hunt").label("sniper").parent(&done.key))
         });
-        sys.emit(
-            &key,
-            "agent",
-            EventKind::TicketFinished,
-        );
+        sys.emit(&key, "agent", EventKind::TicketFinished);
         let spawned = sys.find_ticket(|t| t.has_label("sniper")).unwrap();
         assert_eq!(spawned.parent, Some(key));
     }
