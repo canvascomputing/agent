@@ -229,12 +229,8 @@ impl TicketSystem {
         self.save_ticket(key);
         if prev != status && !matches!(prev, Status::Finished | Status::Failed) {
             let kind = match status {
-                Status::Finished => EventKind::TicketFinished {
-                    key: key.to_string(),
-                },
-                _ => EventKind::TicketFailed {
-                    key: key.to_string(),
-                },
+                Status::Finished => EventKind::TicketFinished,
+                _ => EventKind::TicketFailed,
             };
             self.emit(key, agent, kind);
         }

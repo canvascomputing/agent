@@ -69,7 +69,7 @@ pub(super) async fn run(context: &mut LoopContext<'_>, reply: Reply) -> Action<(
                             context.ticket_system.emit(
                                 &context.ticket_key,
                                 context.agent.get_name(),
-                                EventKind::FileOpened { path: path.clone() },
+                                EventKind::FileOpenFinished { path: path.clone() },
                             );
                         }
                         context.ticket_system.emit(
@@ -113,8 +113,8 @@ pub(super) async fn run(context: &mut LoopContext<'_>, reply: Reply) -> Action<(
                             EventKind::ToolCallFailed {
                                 tool_name,
                                 call_id: tool_use_id.clone(),
-                                message: err.message(),
                                 kind: failure_kind,
+                                message: err.message(),
                             },
                         );
                     }
@@ -154,12 +154,6 @@ pub(super) async fn run(context: &mut LoopContext<'_>, reply: Reply) -> Action<(
                 crate::agents::tickets::Reply::user(&blocks, &paths),
             );
 
-            context.ticket_system.emit(
-                &context.ticket_key,
-                context.agent.get_name(),
-                EventKind::ToolCallsRecorded { count: calls.len() },
-            );
-
             if context.consecutive_schema_failures >= max_schema_retries {
                 context.ticket_system.emit(
                     &context.ticket_key,
@@ -195,11 +189,11 @@ mod tests {
         assert_eq!(provider.requests(), 1);
         let done = events
             .iter()
-            .filter(|e| matches!(e.kind, EventKind::TicketFinished { .. }))
+            .filter(|e| matches!(e.kind, EventKind::TicketFinished))
             .count();
         let failed = events
             .iter()
-            .filter(|e| matches!(e.kind, EventKind::TicketFailed { .. }))
+            .filter(|e| matches!(e.kind, EventKind::TicketFailed))
             .count();
         assert_eq!(done, 1);
         assert_eq!(failed, 0);

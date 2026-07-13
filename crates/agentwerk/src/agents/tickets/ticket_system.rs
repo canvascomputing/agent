@@ -250,7 +250,7 @@ impl TicketSystem {
     pub(crate) fn emit(&self, key: &str, agent: &str, kind: EventKind) {
         self.stats.record_event(&kind, key, &self.labels_for(key));
         let handlers: Vec<Arc<EventHandler>> = self.event_handlers.lock().unwrap().clone();
-        let event = Event::new(agent, kind);
+        let event = Event::new(agent, key, kind);
         if handlers.is_empty() {
             default_logger()(event);
             return;
@@ -387,9 +387,10 @@ impl TicketSystem {
     {
         let supervisor = self.weak_self.clone();
         self.on_event(move |event| {
-            let EventKind::TicketFinished { key } = &event.kind else {
+            if !matches!(event.kind, EventKind::TicketFinished) {
                 return;
-            };
+            }
+            let key = &event.ticket_key;
             let Some(system) = supervisor.upgrade() else {
                 return;
             };
@@ -413,9 +414,10 @@ impl TicketSystem {
     {
         let supervisor = self.weak_self.clone();
         self.on_event(move |event| {
-            let EventKind::TicketFinished { key } = &event.kind else {
+            if !matches!(event.kind, EventKind::TicketFinished) {
                 return;
-            };
+            }
+            let key = &event.ticket_key;
             let Some(system) = supervisor.upgrade() else {
                 return;
             };
@@ -1008,13 +1010,13 @@ mod tests {
     fn cancel_on_event_trips_signal_when_predicate_matches() {
         let (sys, _tmp) = test_system();
         assert!(!sys.is_cancelled());
-        sys.cancel_on_event(|e| matches!(e.kind, EventKind::TicketFailed { .. }));
+        sys.cancel_on_event(|e| matches!(e.kind, EventKind::TicketFailed));
         sys.emit("KEY", "agent", EventKind::TurnStarted);
         assert!(!sys.is_cancelled());
         sys.emit(
             "KEY",
             "agent",
-            EventKind::TicketFailed { key: "KEY".into() },
+            EventKind::TicketFailed,
         );
         assert!(sys.is_cancelled());
     }
@@ -1046,7 +1048,7 @@ mod tests {
         sys.emit(
             &key,
             "agent",
-            EventKind::TicketFinished { key: key.clone() },
+            EventKind::TicketFinished,
         );
         assert!(sys.is_cancelled());
     }
@@ -1062,7 +1064,7 @@ mod tests {
         sys.emit(
             &key,
             "agent",
-            EventKind::TicketFinished { key: key.clone() },
+            EventKind::TicketFinished,
         );
         assert!(!sys.is_cancelled());
     }
@@ -1081,7 +1083,7 @@ mod tests {
         sys.emit(
             &key,
             "agent",
-            EventKind::TicketFinished { key: key.clone() },
+            EventKind::TicketFinished,
         );
         assert_eq!(sys.find_tickets(|t| t.has_label("sniper")).len(), 1);
     }
@@ -1099,7 +1101,7 @@ mod tests {
         sys.emit(
             &key,
             "agent",
-            EventKind::TicketFinished { key: key.clone() },
+            EventKind::TicketFinished,
         );
         let spawned = sys.find_ticket(|t| t.has_label("sniper")).unwrap();
         assert_eq!(spawned.parent, Some(key));

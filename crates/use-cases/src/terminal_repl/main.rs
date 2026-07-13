@@ -394,13 +394,10 @@ fn print_event(
                 );
             }
         }
-        EventKind::CompactionStarted {
-            reason,
-            chunks_total,
-        } => {
+        EventKind::CompactionStarted { reason, total } => {
             break_stream();
             eprintln!(
-                "{}… compacting context ({reason:?}): {chunks_total} chunks{}{}",
+                "{}… compacting context ({reason:?}): {total} chunks{}{}",
                 style.dim,
                 window_usage_suffix(window, last_input),
                 style.reset,
@@ -433,7 +430,7 @@ fn print_event(
             );
             print_indented_detail(message, style);
         }
-        EventKind::RequestFailed { kind, message } => {
+        EventKind::RequestFailed { kind, message, .. } => {
             break_stream();
             eprintln!("{}✗ request failed ({kind:?}){}", style.red, style.reset);
             print_indented_detail(message, style);
@@ -443,6 +440,7 @@ fn print_event(
             max_attempts,
             kind,
             message,
+            ..
         } => {
             break_stream();
             eprintln!(

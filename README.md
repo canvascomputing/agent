@@ -473,8 +473,8 @@ Events report everything that happens while your agents work. Log them, display 
 use agentwerk::event::{Event, EventKind};
 
 tickets.on_event(|event: Event| {
-    if let EventKind::TicketFinished { key } = &event.kind {
-        eprintln!("[{}] done {key}", event.agent_name);
+    if let EventKind::TicketFinished = &event.kind {
+        eprintln!("[{}] done {}", event.agent_name, event.ticket_key);
     }
 });
 ```
@@ -492,7 +492,7 @@ tickets.on_event(|event: Event| {
 | | `CompactionFinished` | Compaction finished and replaced the tail with a summary. |
 | **Run** | `PolicyViolated` | A policy limit was breached and execution stopped. |
 
-Also: `RequestStarted`, `RequestFailed`, `TextChunkReceived`, `ToolCallStarted`, `SchemaRetried`, `CompactionProgress`, `CompactionFailed`. Full enum on [`EventKind`](https://docs.rs/agentwerk/latest/agentwerk/event/enum.EventKind.html).
+Also: `RequestStarted`, `RequestFailed`, `TextChunkReceived`, `ToolCallStarted`, `FileOpenFinished`, `FileOpenFailed`, `KnowledgeUsed`, `KnowledgeMissed`, `SchemaRetried`, `CompactionProgress`, `CompactionFailed`. Full enum on [`EventKind`](https://docs.rs/agentwerk/latest/agentwerk/event/enum.EventKind.html).
 
 ## Stats
 

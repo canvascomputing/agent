@@ -691,7 +691,7 @@ mod tests {
         assert!(progress.len() >= 2, "expected ≥2 chunks, got {progress:?}");
         let total = progress[0].1;
         for (i, (completed, t)) in progress.iter().enumerate() {
-            assert_eq!(*t, total, "chunks_total must stay constant across events");
+            assert_eq!(*t, total, "total must stay constant across events");
             assert_eq!(
                 *completed,
                 (i as u32) + 1,

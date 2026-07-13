@@ -81,11 +81,11 @@ impl ToolLike for ManageKnowledgeTool {
             let action = input.get("action").and_then(Value::as_str).unwrap_or("");
             // The tool self-reports each outcome: only it can see a read/remove
             // miss, which returns Ok, so the shared tool-call loop cannot.
-            let record = |op: KnowledgeOp| {
+            let record = |kind: EventKind| {
                 if let Some(system) = ctx.ticket_system_handle() {
                     let key = ctx.ticket_key.as_deref().unwrap_or_default();
                     let agent = ctx.agent_name_str().unwrap_or_default();
-                    system.emit(key, agent, EventKind::KnowledgeUsed { op });
+                    system.emit(key, agent, kind);
                 }
             };
 
@@ -118,7 +118,7 @@ impl ToolLike for ManageKnowledgeTool {
                     };
                     match self.store.pages().save(page) {
                         Ok(()) => {
-                            record(KnowledgeOp::Write);
+                            record(EventKind::KnowledgeUsed { op: KnowledgeOp::Write });
                             Ok(ToolResult::success(usage_line("page written", &self.store)))
                         }
                         Err(why) => Ok(ToolResult::error(why.to_string())),
@@ -132,11 +132,11 @@ impl ToolLike for ManageKnowledgeTool {
                     };
                     match self.store.pages().load(slug) {
                         Ok(page) => {
-                            record(KnowledgeOp::Read);
+                            record(EventKind::KnowledgeUsed { op: KnowledgeOp::Read });
                             Ok(ToolResult::success(page.content))
                         }
                         Err(_) => {
-                            record(KnowledgeOp::Miss);
+                            record(EventKind::KnowledgeMissed);
                             Ok(ToolResult::success(format!(
                                 "No page found for `{slug}`. Check the knowledge index before reading — only slugs listed there exist."
                             )))
@@ -151,18 +151,18 @@ impl ToolLike for ManageKnowledgeTool {
                     };
                     match self.store.pages().remove(slug) {
                         Ok(()) => {
-                            record(KnowledgeOp::Remove);
+                            record(EventKind::KnowledgeUsed { op: KnowledgeOp::Remove });
                             Ok(ToolResult::success(usage_line("page removed", &self.store)))
                         }
                         Err(why) => {
-                            record(KnowledgeOp::Miss);
+                            record(EventKind::KnowledgeMissed);
                             Ok(ToolResult::error(why.to_string()))
                         }
                     }
                 }
 
                 "list" => {
-                    record(KnowledgeOp::List);
+                    record(EventKind::KnowledgeUsed { op: KnowledgeOp::List });
                     let idx = self.store.index();
                     let body = if idx.is_empty() {
                         "(no pages)".to_string()

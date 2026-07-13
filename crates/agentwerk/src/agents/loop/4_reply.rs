@@ -77,6 +77,7 @@ pub(super) async fn run(context: &mut LoopContext<'_>, messages: Vec<Message>) -
                         &context.ticket_key,
                         context.agent.get_name(),
                         EventKind::RequestRetried {
+                            model: request.model.clone(),
                             attempt,
                             max_attempts: retry.max_attempts(),
                             kind: e.kind(),
@@ -95,6 +96,7 @@ pub(super) async fn run(context: &mut LoopContext<'_>, messages: Vec<Message>) -
                         &context.ticket_key,
                         context.agent.get_name(),
                         EventKind::RequestFailed {
+                            model: request.model.clone(),
                             kind: e.kind(),
                             message: e.to_string(),
                         },
@@ -110,6 +112,7 @@ pub(super) async fn run(context: &mut LoopContext<'_>, messages: Vec<Message>) -
                     &context.ticket_key,
                     context.agent.get_name(),
                     EventKind::RequestFailed {
+                        model: request.model.clone(),
                         kind: e.kind(),
                         message: e.to_string(),
                     },

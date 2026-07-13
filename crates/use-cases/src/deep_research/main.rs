@@ -341,8 +341,9 @@ async fn brave_search(api_key: &str, input: &serde_json::Value) -> ProviderResul
 
 fn log_event(event: &Event) {
     let agent = &event.agent_name;
+    let key = &event.ticket_key;
     match &event.kind {
-        EventKind::TicketStarted { key } => {
+        EventKind::TicketStarted => {
             eprintln!("\n┌─ [{agent}] picked up {key}");
         }
         EventKind::ToolCallStarted {
@@ -373,10 +374,10 @@ fn log_event(event: &Event) {
         EventKind::PolicyViolated { kind, limit } => {
             eprintln!("│  ⚠ policy: {kind:?} limit={limit}");
         }
-        EventKind::TicketFinished { key } => {
+        EventKind::TicketFinished => {
             eprintln!("└─ ✓ finished {key}");
         }
-        EventKind::TicketFailed { key } => {
+        EventKind::TicketFailed => {
             eprintln!("└─ ✗ failed {key}");
         }
         _ => {}

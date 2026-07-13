@@ -68,12 +68,11 @@ pub enum KnowledgeOp {
     Read,
     Remove,
     List,
-    /// A `read` or `remove` naming a slug the store does not have.
-    Miss,
 }
 
 /// Observation emitted as agents work. Carries the name of the agent
-/// that produced it plus a typed [`EventKind`].
+/// that produced it, the key of the ticket it concerns, plus a typed
+/// [`EventKind`].
 ///
 /// ```no_run
 /// use agentwerk::TicketSystem;
@@ -82,8 +81,8 @@ pub enum KnowledgeOp {
 /// # async fn run() {
 /// let tickets = TicketSystem::new();
 /// tickets.on_event(|event| {
-///     if let EventKind::TicketFinished { key } = &event.kind {
-///         eprintln!("[{}] done {key}", event.agent_name);
+///     if let EventKind::TicketFinished = &event.kind {
+///         eprintln!("[{}] done {}", event.agent_name, event.ticket_key);
 ///     }
 /// });
 /// tickets.finish().await;
@@ -93,14 +92,22 @@ pub enum KnowledgeOp {
 pub struct Event {
     /// Name of the agent that produced this event.
     pub agent_name: String,
+    /// Key of the ticket this event concerns. Empty for run-lifecycle
+    /// events (`RunStarted`, `RunFinished`), which no ticket owns.
+    pub ticket_key: String,
     /// What happened.
     pub kind: EventKind,
 }
 
 impl Event {
-    pub(crate) fn new(agent_name: impl Into<String>, kind: EventKind) -> Self {
+    pub(crate) fn new(
+        agent_name: impl Into<String>,
+        ticket_key: impl Into<String>,
+        kind: EventKind,
+    ) -> Self {
         Self {
             agent_name: agent_name.into(),
+            ticket_key: ticket_key.into(),
             kind,
         }
     }
@@ -123,15 +130,13 @@ pub enum EventKind {
     /// worker tasks have joined.
     RunFinished { reason: FinishReason },
     /// Agent claimed a ticket and began working on it.
-    TicketStarted { key: String },
-    /// Ticket settled with `Status::Finished`.
-    TicketFinished { key: String },
-    /// Ticket settled with `Status::Failed`.
-    TicketFailed { key: String },
+    TicketStarted,
+    /// Ticket finished with `Status::Finished`.
+    TicketFinished,
+    /// Ticket failed with `Status::Failed`.
+    TicketFailed,
     /// Agent loop started a new turn.
     TurnStarted,
-    /// A batch of tool calls finished; carries the call count.
-    ToolCallsRecorded { count: usize },
     /// Provider request began.
     RequestStarted { model: String },
     /// Provider request finished successfully. Carries the model and the
@@ -139,12 +144,14 @@ pub enum EventKind {
     RequestFinished { model: String, usage: TokenUsage },
     /// Provider request failed. The run is about to stop for this ticket.
     RequestFailed {
+        model: String,
         kind: RequestErrorKind,
         message: String,
     },
     /// Provider request failed transiently; agentwerk is about to sleep
     /// and retry. `attempt` is 1-based.
     RequestRetried {
+        model: String,
         attempt: u32,
         max_attempts: u32,
         kind: RequestErrorKind,
@@ -169,16 +176,20 @@ pub enum EventKind {
     ToolCallFailed {
         tool_name: String,
         call_id: String,
-        message: String,
         kind: ToolFailureKind,
+        message: String,
     },
     /// A file-opening tool opened `path` successfully.
-    FileOpened { path: String },
+    FileOpenFinished { path: String },
     /// A file-opening tool failed on `path`.
     FileOpenFailed { path: String },
-    /// The knowledge tool performed `op`. The tool self-reports, since a
-    /// `read`/`remove` miss returns Ok and the tool-call loop cannot see it.
+    /// The knowledge tool performed `op`. The tool self-reports, since
+    /// only it sees which operation ran.
     KnowledgeUsed { op: KnowledgeOp },
+    /// A knowledge `read` or `remove` named a slug the store does not
+    /// have. Self-reported like `KnowledgeUsed`: the miss returns Ok, so
+    /// the tool-call loop cannot see it.
+    KnowledgeMissed,
     /// A configured policy was exceeded; the run is about to stop.
     PolicyViolated { kind: PolicyKind, limit: u64 },
     /// A `done`-side schema validation failed; agentwerk is about to
@@ -190,16 +201,13 @@ pub enum EventKind {
         message: String,
     },
     /// Compaction is about to run: agentwerk is about to call the
-    /// summarizer to collapse the message tail. `chunks_total` is the
-    /// number of summariser calls the algorithm intends to make.
-    CompactionStarted {
-        reason: CompactReason,
-        chunks_total: u32,
-    },
+    /// summarizer to collapse the message tail. `total` is the number
+    /// of summariser calls the algorithm intends to make.
+    CompactionStarted { reason: CompactReason, total: u32 },
     /// One summariser call finished. Fires once per chunk processed by
     /// the algorithm; `completed` is the running count (1-based) and
     /// `total` is the same value as the matching `CompactionStarted`'s
-    /// `chunks_total`.
+    /// `total`.
     CompactionProgress {
         reason: CompactReason,
         completed: u32,
@@ -225,11 +233,10 @@ impl EventKind {
         match self {
             EventKind::RunStarted => "run_started",
             EventKind::RunFinished { .. } => "run_finished",
-            EventKind::TicketStarted { .. } => "ticket_started",
-            EventKind::TicketFinished { .. } => "ticket_finished",
-            EventKind::TicketFailed { .. } => "ticket_failed",
+            EventKind::TicketStarted => "ticket_started",
+            EventKind::TicketFinished => "ticket_finished",
+            EventKind::TicketFailed => "ticket_failed",
             EventKind::TurnStarted => "turn_started",
-            EventKind::ToolCallsRecorded { .. } => "tool_calls_recorded",
             EventKind::RequestStarted { .. } => "request_started",
             EventKind::RequestFinished { .. } => "request_finished",
             EventKind::RequestFailed { .. } => "request_failed",
@@ -238,9 +245,10 @@ impl EventKind {
             EventKind::ToolCallStarted { .. } => "tool_call_started",
             EventKind::ToolCallFinished { .. } => "tool_call_finished",
             EventKind::ToolCallFailed { .. } => "tool_call_failed",
-            EventKind::FileOpened { .. } => "file_opened",
+            EventKind::FileOpenFinished { .. } => "file_open_finished",
             EventKind::FileOpenFailed { .. } => "file_open_failed",
             EventKind::KnowledgeUsed { .. } => "knowledge_used",
+            EventKind::KnowledgeMissed => "knowledge_missed",
             EventKind::PolicyViolated { .. } => "policy_violated",
             EventKind::SchemaRetried { .. } => "schema_retried",
             EventKind::CompactionStarted { .. } => "compaction_started",
@@ -264,14 +272,14 @@ pub fn default_logger() -> Arc<dyn Fn(Event) + Send + Sync> {
             EventKind::RunFinished { reason } => {
                 eprintln!("run finished: {reason:?}");
             }
-            EventKind::TicketStarted { key } => {
-                eprintln!("[{agent}] started {key}");
+            EventKind::TicketStarted => {
+                eprintln!("[{agent}] started {}", event.ticket_key);
             }
-            EventKind::TicketFinished { key } => {
-                eprintln!("[{agent}] finished {key}");
+            EventKind::TicketFinished => {
+                eprintln!("[{agent}] finished {}", event.ticket_key);
             }
-            EventKind::TicketFailed { key } => {
-                eprintln!("[{agent}] failed {key}");
+            EventKind::TicketFailed => {
+                eprintln!("[{agent}] failed {}", event.ticket_key);
             }
             EventKind::ToolCallStarted {
                 tool_name, input, ..
@@ -307,11 +315,8 @@ pub fn default_logger() -> Arc<dyn Fn(Event) + Send + Sync> {
             EventKind::PolicyViolated { kind, limit } => {
                 eprintln!("[{agent}] policy violated: {kind:?} limit={limit}");
             }
-            EventKind::CompactionStarted {
-                reason,
-                chunks_total,
-            } => {
-                eprintln!("[{agent}] compacting context ({reason:?}): {chunks_total} chunks");
+            EventKind::CompactionStarted { reason, total } => {
+                eprintln!("[{agent}] compacting context ({reason:?}): {total} chunks");
             }
             EventKind::CompactionProgress {
                 reason,
@@ -359,19 +364,22 @@ mod tests {
             EventKind::RunFinished {
                 reason: FinishReason::Cancelled,
             },
-            EventKind::TicketStarted { key: "T-1".into() },
-            EventKind::TicketFinished { key: "T-1".into() },
-            EventKind::TicketFailed { key: "T-1".into() },
+            EventKind::TicketStarted,
+            EventKind::TicketFinished,
+            EventKind::TicketFailed,
+            EventKind::TurnStarted,
             EventKind::RequestStarted { model: "m".into() },
             EventKind::RequestFinished {
                 model: "m".into(),
                 usage: TokenUsage::default(),
             },
             EventKind::RequestFailed {
+                model: "m".into(),
                 kind: RequestErrorKind::ConnectionFailed,
                 message: "timeout".into(),
             },
             EventKind::RequestRetried {
+                model: "m".into(),
                 attempt: 1,
                 max_attempts: 10,
                 kind: RequestErrorKind::ConnectionFailed,
@@ -398,16 +406,16 @@ mod tests {
             EventKind::ToolCallFailed {
                 tool_name: "bash".into(),
                 call_id: "c1".into(),
-                message: "not found".into(),
                 kind: ToolFailureKind::ToolNotFound,
+                message: "not found".into(),
             },
             EventKind::ToolCallFailed {
                 tool_name: "manage_tickets_tool".into(),
                 call_id: "c2".into(),
-                message: "Schema validation failed".into(),
                 kind: ToolFailureKind::SchemaValidationFailed,
+                message: "Schema validation failed".into(),
             },
-            EventKind::FileOpened {
+            EventKind::FileOpenFinished {
                 path: "src/lib.rs".into(),
             },
             EventKind::FileOpenFailed {
@@ -416,6 +424,7 @@ mod tests {
             EventKind::KnowledgeUsed {
                 op: KnowledgeOp::Write,
             },
+            EventKind::KnowledgeMissed,
             EventKind::PolicyViolated {
                 kind: PolicyKind::Turns,
                 limit: 10,
@@ -430,7 +439,7 @@ mod tests {
             },
             EventKind::CompactionStarted {
                 reason: CompactReason::Proactive,
-                chunks_total: 3,
+                total: 3,
             },
             EventKind::CompactionProgress {
                 reason: CompactReason::Proactive,
@@ -451,7 +460,7 @@ mod tests {
     fn default_logger_handles_every_variant() {
         let logger = default_logger();
         for kind in all_variants() {
-            logger(Event::new("agent", kind));
+            logger(Event::new("agent", "T-1", kind));
         }
     }
 

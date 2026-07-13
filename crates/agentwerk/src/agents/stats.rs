@@ -178,9 +178,10 @@ impl From<&FileCounters> for FileStat {
 }
 
 /// Run-wide Knowledge-store usage, returned by [`Stats::knowledge_stats`].
-/// Counts successful operations by action; `misses` is a `read` or `remove`
-/// that named a slug the store does not have. A high `misses` count points at
-/// a stale index or a prompt that over-promises what knowledge holds.
+/// Counts successful operations by action; `misses` counts `KnowledgeMissed`
+/// events: a `read` or `remove` that named a slug the store does not have. A
+/// high `misses` count points at a stale index or a prompt that over-promises
+/// what knowledge holds.
 #[derive(Debug, Clone, Serialize)]
 pub struct KnowledgeStat {
     /// Successful `write` operations.
@@ -344,8 +345,12 @@ impl Stats {
             KnowledgeOp::Read => counters.reads += 1,
             KnowledgeOp::Remove => counters.removes += 1,
             KnowledgeOp::List => counters.lists += 1,
-            KnowledgeOp::Miss => counters.misses += 1,
         }
+    }
+
+    /// Count one `read`/`remove` that named a slug the store does not have.
+    pub(crate) fn record_knowledge_miss(&self) {
+        self.knowledge_stats.lock().unwrap().misses += 1;
     }
 
     /// Record an event: every kind is counted by name automatically, so a
@@ -363,9 +368,10 @@ impl Stats {
             EventKind::ToolCallFailed {
                 tool_name, kind, ..
             } => self.record_tool_error_named(tool_name, *kind),
-            EventKind::FileOpened { path } => self.record_file_open(path),
+            EventKind::FileOpenFinished { path } => self.record_file_open(path),
             EventKind::FileOpenFailed { path } => self.record_file_open_error(path),
             EventKind::KnowledgeUsed { op } => self.record_knowledge(*op),
+            EventKind::KnowledgeMissed => self.record_knowledge_miss(),
             _ => {}
         }
     }
@@ -875,6 +881,7 @@ mod tests {
 
     fn provider_error() -> EventKind {
         EventKind::RequestFailed {
+            model: "m".into(),
             kind: crate::providers::RequestErrorKind::ConnectionFailed,
             message: "boom".into(),
         }
@@ -1344,7 +1351,7 @@ mod tests {
         s.record_knowledge(KnowledgeOp::Read);
         s.record_knowledge(KnowledgeOp::Remove);
         s.record_knowledge(KnowledgeOp::List);
-        s.record_knowledge(KnowledgeOp::Miss);
+        s.record_knowledge_miss();
 
         let k = s.knowledge_stats();
         assert_eq!(k.writes, 1);
@@ -1371,7 +1378,7 @@ mod tests {
         let s = Stats::new();
         s.record_knowledge(KnowledgeOp::Write);
         s.record_knowledge(KnowledgeOp::Read);
-        s.record_knowledge(KnowledgeOp::Miss);
+        s.record_knowledge_miss();
 
         use crate::persistence::Persist;
         s.save(dir.path()).unwrap();
@@ -1387,7 +1394,7 @@ mod tests {
     fn stats_serializes_knowledge_as_nested_object() {
         let s = Stats::new();
         s.record_knowledge(KnowledgeOp::Write);
-        s.record_knowledge(KnowledgeOp::Miss);
+        s.record_knowledge_miss();
 
         let value = serde_json::to_value(&s).unwrap();
         let knowledge = value["knowledge"].as_object().unwrap();

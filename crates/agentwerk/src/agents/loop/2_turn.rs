@@ -60,7 +60,11 @@ impl<'a> LoopContext<'a> {
     }
 
     fn fail_with(&self, kind: RequestErrorKind, message: String) {
-        self.emit(EventKind::RequestFailed { kind, message });
+        self.emit(EventKind::RequestFailed {
+            model: self.model.name.clone(),
+            kind,
+            message,
+        });
         let _ = self
             .ticket_system
             .set_failed_by(&self.ticket_key, self.agent.get_name());
@@ -133,13 +137,7 @@ pub(super) async fn start_turn<'a>(
                 unreachable!("Ticket::as_user_message returns Message::User");
             };
             ticket_system.add_reply(&ticket_key, Reply::user(&task_blocks, &HashMap::new()));
-            ticket_system.emit(
-                &ticket_key,
-                agent_name,
-                EventKind::TicketStarted {
-                    key: ticket_key.clone(),
-                },
-            );
+            ticket_system.emit(&ticket_key, agent_name, EventKind::TicketStarted);
         }
 
         let model = &agent.model;
@@ -248,11 +246,8 @@ pub(super) async fn compact(context: &mut LoopContext<'_>, reason: CompactReason
     };
     let window = context.model.get_context_window();
     let messages = ticket.to_messages();
-    let chunks_total = algo::chunks_for_window(&messages, window).len() as u32;
-    context.emit(EventKind::CompactionStarted {
-        reason,
-        chunks_total,
-    });
+    let total = algo::chunks_for_window(&messages, window).len() as u32;
+    context.emit(EventKind::CompactionStarted { reason, total });
 
     let on_progress: Arc<dyn Fn(u32, u32) + Send + Sync> = {
         let ticket_system = Arc::clone(context.ticket_system);
@@ -483,7 +478,7 @@ mod tests {
         let finished_events = Arc::new(AtomicUsize::new(0));
         let counter = Arc::clone(&finished_events);
         tickets.on_event(move |e| {
-            if matches!(e.kind, crate::event::EventKind::TicketFinished { .. }) {
+            if matches!(e.kind, crate::event::EventKind::TicketFinished) {
                 counter.fetch_add(1, Ordering::Relaxed);
             }
         });
@@ -695,7 +690,7 @@ mod tests {
         assert!(policy_violated, "expected PolicyViolated MaxSchemaRetries");
         let ticket_failed = events
             .iter()
-            .any(|e| matches!(&e.kind, EventKind::TicketFailed { .. }));
+            .any(|e| matches!(&e.kind, EventKind::TicketFailed));
         assert!(ticket_failed, "expected TicketFailed");
     }
 
@@ -1632,7 +1627,7 @@ mod tests {
         );
         let ticket_failed_count = events
             .iter()
-            .filter(|e| matches!(&e.kind, crate::event::EventKind::TicketFailed { .. }))
+            .filter(|e| matches!(&e.kind, crate::event::EventKind::TicketFailed))
             .count();
         assert_eq!(ticket_failed_count, 1);
     }
@@ -1652,7 +1647,7 @@ mod tests {
         );
         let ticket_failed_count = events
             .iter()
-            .filter(|e| matches!(&e.kind, crate::event::EventKind::TicketFailed { .. }))
+            .filter(|e| matches!(&e.kind, crate::event::EventKind::TicketFailed))
             .count();
         assert_eq!(ticket_failed_count, 1);
     }

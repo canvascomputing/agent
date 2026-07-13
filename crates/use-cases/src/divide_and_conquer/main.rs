@@ -265,15 +265,16 @@ fn build_event_handler(
     let width = digit_width(total);
     Arc::new(move |event: Event| {
         let agent = &event.agent_name;
+        let key = &event.ticket_key;
         match &event.kind {
-            EventKind::TicketStarted { key } => eprintln!(
+            EventKind::TicketStarted => eprintln!(
                 "{dim}│       ▶ {agent:<10} {key} dispatched{reset}",
                 dim = style.dim,
                 reset = style.reset,
             ),
-            EventKind::TicketFinished { key } | EventKind::TicketFailed { key } => {
+            EventKind::TicketFinished | EventKind::TicketFailed => {
                 let n = done.fetch_add(1, Ordering::Relaxed) + 1;
-                let outcome = if matches!(event.kind, EventKind::TicketFinished { .. }) {
+                let outcome = if matches!(event.kind, EventKind::TicketFinished) {
                     "done"
                 } else {
                     "failed"

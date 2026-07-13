@@ -98,7 +98,7 @@ Two layers of state exist. The per-ticket transcript lives on `Ticket::replies`:
 
 - `TicketSystem::emit` forwards every event to `Stats::record_event(kind, key, labels)` before firing observers. The event's `EventKind::name()` keys a per-kind count map, so a new variant is counted the moment it names itself in that exhaustive match — no stats code to add.
 - The named accessors are lookups into that map: `turns()` reads `turn_started`, `requests()` reads `request_finished`, `tool_calls()` reads `tool_call_started`, `errors()` reads `request_failed`. `event_counts()` exposes the whole map.
-- Payload-bearing measures keep explicit arms in `record_event`: token sums and usage history from `RequestFinished`, per-tool tallies from `ToolCallStarted`/`ToolCallFailed`, per-path tallies from `FileOpened`/`FileOpenFailed`, knowledge tallies from `KnowledgeUsed`.
+- Payload-bearing measures keep explicit arms in `record_event`: token sums and usage history from `RequestFinished`, per-tool tallies from `ToolCallStarted`/`ToolCallFailed`, per-path tallies from `FileOpenFinished`/`FileOpenFailed`, knowledge tallies from `KnowledgeUsed`/`KnowledgeMissed`.
 - Ticket lifecycle (`record_created`, `record_started`, `record_finished`, `record_failed`) is written directly by the store: transitions carry durations events do not, and host-side mutations have no agent loop attached.
 - Reads happen on `Stats` directly through inherent accessors (`turns()`, `tickets_finished()`, `run_duration()`, `tickets_success_rate()`, ...).
 - `Stats::stats_for_label(label)` returns a nested `Stats` slice scoped to one label. `record_event` mirrors the count and token measures onto each slice the ticket carries; `run_duration()` is `None` on a slice (elapsed run duration stays global).
