@@ -15,6 +15,7 @@ mod reply;
 mod store;
 mod ticket;
 mod ticket_system;
+mod trajectory;
 
 #[cfg(test)]
 pub(super) mod test_util;
@@ -23,6 +24,7 @@ pub use error::TicketError;
 pub use reply::{Author, Reply, ReplyContent};
 pub use ticket::{Status, Ticket};
 pub use ticket_system::TicketSystem;
+pub use trajectory::Trajectory;
 
 pub(crate) use ticket::Replies;
 

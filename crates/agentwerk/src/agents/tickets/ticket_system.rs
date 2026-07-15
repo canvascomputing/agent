@@ -25,7 +25,7 @@ use super::super::policy::Policies;
 use super::super::r#loop::run_main_loop;
 use super::super::stats::Stats;
 use super::ticket::{Status, Ticket};
-use super::{now_millis, numeric_id, policy_violated_kind, Reply};
+use super::{now_millis, numeric_id, policy_violated_kind, Reply, Trajectory};
 
 type EventHandler = dyn Fn(Event) + Send + Sync;
 
@@ -427,6 +427,31 @@ impl TicketSystem {
             if let Some(ticket) = make(&finished) {
                 system.ticket(ticket);
             }
+        })
+    }
+
+    /// Save a ticket's transcript as `trajectories/<agent>-<key>.json` under
+    /// the system's output dir each time `predicate(&event)` returns true.
+    /// One more entry on the [`Self::on_event`] chain, like
+    /// [`Self::cancel_on_event`]. The write is observational: a failed write
+    /// is dropped, matching the ticket lifecycle log. Events with an empty
+    /// `ticket_key` (run lifecycle) name no ticket and are skipped.
+    pub fn save_trajectory_on_event<F>(&self, predicate: F) -> &Self
+    where
+        F: Fn(&Event) -> bool + Send + Sync + 'static,
+    {
+        let supervisor = self.weak_self.clone();
+        self.on_event(move |event| {
+            if !predicate(&event) {
+                return;
+            }
+            let Some(system) = supervisor.upgrade() else {
+                return;
+            };
+            let Some(ticket) = system.get_ticket(&event.ticket_key) else {
+                return;
+            };
+            let _ = Trajectory::from_ticket(&event.agent_name, &ticket).save(&system.dir_value());
         })
     }
 
@@ -1109,6 +1134,35 @@ mod tests {
         // The handler ran inside `set_finished`, so the queue is never
         // observably empty between the parent finishing and the follow-up.
         assert_eq!(sys.pending_count(), 1);
+    }
+
+    #[test]
+    fn save_trajectory_on_event_writes_on_matching_event() {
+        let (sys, tmp) = test_system();
+        sys.save_trajectory_on_event(|e| matches!(e.kind, EventKind::TicketFinished));
+        sys.ticket(Ticket::new("scan").label("scan"));
+        let key = sys.claim(|t| t.has_label("scan"), "analyst").unwrap();
+        sys.add_reply(&key, Reply::user_text("hello"));
+        sys.set_result(&key, serde_json::json!("done")).unwrap();
+        sys.set_finished(&key, "analyst").unwrap();
+
+        let path = tmp
+            .path()
+            .join("trajectories")
+            .join(format!("analyst-{key}.json"));
+        assert!(path.exists());
+        let trajectory: Trajectory =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(trajectory.key, format!("analyst-{key}"));
+        assert!(!trajectory.messages.is_empty());
+    }
+
+    #[test]
+    fn save_trajectory_on_event_skips_non_matching_events() {
+        let (sys, tmp) = test_system();
+        sys.save_trajectory_on_event(|e| matches!(e.kind, EventKind::TicketFinished));
+        sys.emit("KEY", "analyst", EventKind::TurnStarted);
+        assert!(!tmp.path().join("trajectories").exists());
     }
 
     #[test]
