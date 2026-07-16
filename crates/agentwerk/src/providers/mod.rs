@@ -21,7 +21,7 @@ pub use litellm::LiteLlmProvider;
 pub use mistral::MistralProvider;
 pub use model::Model;
 pub use openai::OpenAiProvider;
-pub use provider::{ModelRequest, Provider, ProviderToolDefinition, ToolChoice};
+pub use provider::{ModelRequest, Provider, ProviderToolDefinition, ReasoningEffort, ToolChoice};
 pub use types::{
     AsUserMessage, ContentBlock, Message, ModelResponse, ResponseStatus, StreamEvent, TokenUsage,
 };

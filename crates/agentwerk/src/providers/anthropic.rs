@@ -108,6 +108,16 @@ impl AnthropicProvider {
         if let Some(ref choice) = request.tool_choice {
             body["tool_choice"] = serialize_tool_choice(choice);
         }
+        // Request thinking only when an effort is set and the model accepts the
+        // adaptive form. Older Anthropic models used a different request field we
+        // no longer send, so they get none; parsing still keeps the thinking of
+        // any model that returns it.
+        if let Some(effort) = request.reasoning_effort.label() {
+            if supports_adaptive_thinking(&request.model) {
+                body["thinking"] = serde_json::json!({"type": "adaptive", "display": "summarized"});
+                body["output_config"] = serde_json::json!({"effort": effort});
+            }
+        }
         body
     }
 
@@ -245,6 +255,13 @@ enum BlockAcc {
         name: String,
         input: String,
     },
+    Thinking {
+        thinking: String,
+        signature: String,
+    },
+    Redacted {
+        data: String,
+    },
 }
 
 #[derive(Default)]
@@ -309,6 +326,13 @@ fn handle_block_start(json: &Value, state: &mut StreamState) {
             name: block["name"].as_str().unwrap_or("").to_string(),
             input: String::new(),
         },
+        "thinking" => BlockAcc::Thinking {
+            thinking: String::new(),
+            signature: String::new(),
+        },
+        "redacted_thinking" => BlockAcc::Redacted {
+            data: block["data"].as_str().unwrap_or("").to_string(),
+        },
         _ => BlockAcc::Text(String::new()),
     };
     *state.slot(idx) = Some(acc);
@@ -339,6 +363,16 @@ fn handle_block_delta(
                 partial_json: partial.to_string(),
             });
         }
+        "thinking_delta" => {
+            if let Some(Some(BlockAcc::Thinking { thinking, .. })) = state.blocks.get_mut(idx) {
+                thinking.push_str(delta["thinking"].as_str().unwrap_or(""));
+            }
+        }
+        "signature_delta" => {
+            if let Some(Some(BlockAcc::Thinking { signature, .. })) = state.blocks.get_mut(idx) {
+                signature.push_str(delta["signature"].as_str().unwrap_or(""));
+            }
+        }
         _ => {}
     }
 }
@@ -357,6 +391,16 @@ fn handle_block_stop(
                 .content_blocks
                 .push(ContentBlock::ToolUse { id, name, input });
         }
+        Some(BlockAcc::Thinking {
+            thinking,
+            signature,
+        }) => state.content_blocks.push(ContentBlock::Thinking {
+            thinking,
+            signature,
+        }),
+        Some(BlockAcc::Redacted { data }) => state
+            .content_blocks
+            .push(ContentBlock::RedactedThinking { data }),
         None => {}
     }
     on_event(StreamEvent::ContentBlockStop { index: idx });
@@ -393,11 +437,11 @@ fn serialize_messages(messages: &[Message]) -> Vec<Value> {
 }
 
 fn serialize_content_blocks(blocks: &[ContentBlock]) -> Vec<Value> {
-    blocks.iter().map(serialize_content_block).collect()
+    blocks.iter().filter_map(serialize_content_block).collect()
 }
 
-fn serialize_content_block(block: &ContentBlock) -> Value {
-    match block {
+fn serialize_content_block(block: &ContentBlock) -> Option<Value> {
+    let value = match block {
         ContentBlock::Text { text } => {
             serde_json::json!({"type": "text", "text": text})
         }
@@ -411,7 +455,19 @@ fn serialize_content_block(block: &ContentBlock) -> Value {
         } => {
             serde_json::json!({"type": "tool_result", "tool_use_id": tool_use_id, "content": content, "is_error": !succeeded})
         }
-    }
+        // A thinking block replays only with its signature; without one (an
+        // aborted stream) the API rejects it, so omit it. It stays in the
+        // transcript regardless.
+        ContentBlock::Thinking { signature, .. } if signature.is_empty() => return None,
+        ContentBlock::Thinking {
+            thinking,
+            signature,
+        } => serde_json::json!({"type": "thinking", "thinking": thinking, "signature": signature}),
+        ContentBlock::RedactedThinking { data } => {
+            serde_json::json!({"type": "redacted_thinking", "data": data})
+        }
+    };
+    Some(value)
 }
 
 fn serialize_tool_definition(tool: &ProviderToolDefinition) -> Value {
@@ -427,6 +483,22 @@ fn serialize_tool_choice(choice: &ToolChoice) -> Value {
         ToolChoice::Auto => serde_json::json!({"type": "auto"}),
         ToolChoice::Specific { name } => serde_json::json!({"type": "tool", "name": name}),
     }
+}
+
+/// True for the Anthropic generation that takes `thinking:{type:"adaptive"}`
+/// plus `output_config.effort` (Opus/Sonnet 4.6 and later, Fable, Mythos). The
+/// `[1m]` context suffix rides on the base name, so `opus-4-8[1m]` matches.
+fn supports_adaptive_thinking(model: &str) -> bool {
+    const ADAPTIVE: &[&str] = &[
+        "opus-4-6",
+        "opus-4-7",
+        "opus-4-8",
+        "sonnet-4-6",
+        "sonnet-5",
+        "fable",
+        "mythos",
+    ];
+    ADAPTIVE.iter().any(|family| model.contains(family))
 }
 
 fn parse_status_str(raw: &str) -> ResponseStatus {
@@ -445,6 +517,116 @@ fn parse_status_str(raw: &str) -> ResponseStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::providers::ReasoningEffort;
+
+    fn noop_events() -> Arc<dyn Fn(StreamEvent) + Send + Sync> {
+        Arc::new(|_| {})
+    }
+
+    #[test]
+    fn parses_thinking_and_signature_into_one_block() {
+        let mut state = StreamState::default();
+        let sink = noop_events();
+        handle_stream_event(
+            &serde_json::json!({"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}),
+            &mut state,
+            &sink,
+        );
+        handle_stream_event(
+            &serde_json::json!({"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"weigh it"}}),
+            &mut state,
+            &sink,
+        );
+        handle_stream_event(
+            &serde_json::json!({"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"sig-abc"}}),
+            &mut state,
+            &sink,
+        );
+        handle_stream_event(
+            &serde_json::json!({"type":"content_block_stop","index":0}),
+            &mut state,
+            &sink,
+        );
+        assert!(matches!(
+            &state.into_response().content[..],
+            [ContentBlock::Thinking { thinking, signature }]
+                if thinking == "weigh it" && signature == "sig-abc"
+        ));
+    }
+
+    #[test]
+    fn parses_redacted_thinking_block() {
+        let mut state = StreamState::default();
+        let sink = noop_events();
+        handle_stream_event(
+            &serde_json::json!({"type":"content_block_start","index":0,"content_block":{"type":"redacted_thinking","data":"enc-xyz"}}),
+            &mut state,
+            &sink,
+        );
+        handle_stream_event(
+            &serde_json::json!({"type":"content_block_stop","index":0}),
+            &mut state,
+            &sink,
+        );
+        assert!(matches!(
+            &state.into_response().content[..],
+            [ContentBlock::RedactedThinking { data }] if data == "enc-xyz"
+        ));
+    }
+
+    #[test]
+    fn serializes_thinking_block_with_signature() {
+        let value = serialize_content_block(&ContentBlock::Thinking {
+            thinking: "why".into(),
+            signature: "sig".into(),
+        })
+        .unwrap();
+        assert_eq!(value["type"], "thinking");
+        assert_eq!(value["thinking"], "why");
+        assert_eq!(value["signature"], "sig");
+    }
+
+    #[test]
+    fn omits_thinking_block_without_signature() {
+        assert!(serialize_content_block(&ContentBlock::Thinking {
+            thinking: "why".into(),
+            signature: String::new(),
+        })
+        .is_none());
+    }
+
+    #[test]
+    fn serializes_redacted_thinking_block() {
+        let value = serialize_content_block(&ContentBlock::RedactedThinking { data: "enc".into() })
+            .unwrap();
+        assert_eq!(value["type"], "redacted_thinking");
+        assert_eq!(value["data"], "enc");
+    }
+
+    #[test]
+    fn serialize_request_adds_adaptive_thinking_for_current_model() {
+        let mut req = simple_request();
+        req.model = "claude-opus-4-8".into();
+        req.reasoning_effort = ReasoningEffort::High;
+        let body = provider().serialize_request(&req);
+        assert_eq!(body["thinking"]["type"], "adaptive");
+        assert_eq!(body["output_config"]["effort"], "high");
+    }
+
+    #[test]
+    fn serialize_request_omits_thinking_when_off() {
+        let body = provider().serialize_request(&simple_request());
+        assert!(body.get("thinking").is_none());
+    }
+
+    #[test]
+    fn serialize_request_omits_thinking_for_legacy_model() {
+        let mut req = simple_request();
+        req.model = "claude-sonnet-4-20250514".into();
+        req.reasoning_effort = ReasoningEffort::High;
+        let body = provider().serialize_request(&req);
+        assert!(body.get("thinking").is_none());
+    }
 
     fn simple_request() -> ModelRequest {
         ModelRequest {
@@ -456,6 +638,7 @@ mod tests {
             tools: vec![],
             max_request_tokens: Some(1024),
             tool_choice: None,
+            reasoning_effort: Default::default(),
         }
     }
 

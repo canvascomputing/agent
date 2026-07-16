@@ -31,6 +31,7 @@ pub(super) async fn run(context: &mut TicketContext<'_>) -> Step {
         tools,
         max_request_tokens: context.policies.max_request_tokens,
         tool_choice: None,
+        reasoning_effort: context.model.get_reasoning_effort(),
     };
 
     let mut retry = ExponentialRetry::new(

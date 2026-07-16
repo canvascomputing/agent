@@ -68,6 +68,11 @@ fn block_bytes(block: &ContentBlock) -> usize {
         ContentBlock::Text { text } => text.len(),
         ContentBlock::ToolUse { name, input, .. } => name.len() + input.to_string().len(),
         ContentBlock::ToolResult { content, .. } => content.len(),
+        ContentBlock::Thinking {
+            thinking,
+            signature,
+        } => thinking.len() + signature.len(),
+        ContentBlock::RedactedThinking { data } => data.len(),
     }
 }
 
@@ -164,6 +169,8 @@ async fn summarize_chunk(
         tools: Vec::new(),
         max_request_tokens: None,
         tool_choice: None,
+        // The summarizer does not think; capture only the summary text.
+        reasoning_effort: Default::default(),
     };
     let on_stream: Arc<dyn Fn(StreamEvent) + Send + Sync> = Arc::new(|_| {});
     let response = provider.respond(request, on_stream).await?;
@@ -180,6 +187,8 @@ async fn summarize_chunk(
                     ContentBlock::Text { .. } => "text",
                     ContentBlock::ToolUse { .. } => "tool_use",
                     ContentBlock::ToolResult { .. } => "tool_result",
+                    ContentBlock::Thinking { .. } => "thinking",
+                    ContentBlock::RedactedThinking { .. } => "redacted_thinking",
                 }
             }
             let kinds: Vec<&str> = response.content.iter().map(kind).collect();

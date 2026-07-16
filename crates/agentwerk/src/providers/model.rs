@@ -1,6 +1,6 @@
 //! Per-model knowledge of context window size and compaction thresholds. agentwerk consults this to decide when a conversation must be shrunk.
 
-use super::{AnthropicProvider, MistralProvider, OpenAiProvider};
+use super::{AnthropicProvider, MistralProvider, OpenAiProvider, ReasoningEffort};
 
 /// Model metadata: the name plus anything we know about its capabilities.
 ///
@@ -12,6 +12,7 @@ use super::{AnthropicProvider, MistralProvider, OpenAiProvider};
 pub struct Model {
     pub name: String,
     context_window: Option<u64>,
+    reasoning_effort: ReasoningEffort,
 }
 
 impl Model {
@@ -26,6 +27,7 @@ impl Model {
         Self {
             name,
             context_window,
+            reasoning_effort: ReasoningEffort::Off,
         }
     }
 
@@ -36,10 +38,22 @@ impl Model {
         self
     }
 
+    /// Ask this model for extended thinking at the given depth. Off by
+    /// default. See [`ReasoningEffort`](super::ReasoningEffort).
+    pub fn reasoning_effort(mut self, effort: ReasoningEffort) -> Self {
+        self.reasoning_effort = effort;
+        self
+    }
+
     /// Known context window size, `None` when the name is in no registry
     /// and no override was set.
     pub fn get_context_window(&self) -> Option<u64> {
         self.context_window
+    }
+
+    /// Requested extended-thinking depth for this model.
+    pub fn get_reasoning_effort(&self) -> ReasoningEffort {
+        self.reasoning_effort
     }
 }
 
@@ -58,6 +72,12 @@ impl From<String> for Model {
 impl From<&String> for Model {
     fn from(name: &String) -> Self {
         Self::from_name(name.as_str())
+    }
+}
+
+impl From<&Model> for Model {
+    fn from(model: &Model) -> Self {
+        model.clone()
     }
 }
 
@@ -97,5 +117,15 @@ mod tests {
     fn context_window_overrides() {
         let m = Model::from_name("unknown").context_window(50_000);
         assert_eq!(m.context_window, Some(50_000));
+    }
+
+    #[test]
+    fn reasoning_effort_defaults_off_and_is_settable() {
+        assert_eq!(
+            Model::from_name("gpt-5").get_reasoning_effort(),
+            ReasoningEffort::Off
+        );
+        let m = Model::from_name("gpt-5").reasoning_effort(ReasoningEffort::High);
+        assert_eq!(m.get_reasoning_effort(), ReasoningEffort::High);
     }
 }

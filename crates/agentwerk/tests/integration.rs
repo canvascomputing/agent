@@ -51,3 +51,6 @@ mod manage_tickets_creates_ticket;
 
 #[path = "integration/read_tickets_finds_seeded.rs"]
 mod read_tickets_finds_seeded;
+
+#[path = "integration/thinking_capture.rs"]
+mod thinking_capture;

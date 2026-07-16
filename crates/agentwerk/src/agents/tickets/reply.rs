@@ -51,6 +51,13 @@ pub enum ReplyContent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         path: Option<PathBuf>,
     },
+    Thinking {
+        thinking: String,
+        signature: String,
+    },
+    RedactedThinking {
+        data: String,
+    },
 }
 
 impl Reply {
@@ -135,6 +142,16 @@ impl ReplyContent {
                 succeeded: *succeeded,
                 path: paths.get(tool_use_id).cloned(),
             },
+            ContentBlock::Thinking {
+                thinking,
+                signature,
+            } => ReplyContent::Thinking {
+                thinking: thinking.clone(),
+                signature: signature.clone(),
+            },
+            ContentBlock::RedactedThinking { data } => {
+                ReplyContent::RedactedThinking { data: data.clone() }
+            }
         }
     }
 
@@ -156,6 +173,61 @@ impl ReplyContent {
                 content: content.clone(),
                 succeeded: *succeeded,
             },
+            ReplyContent::Thinking {
+                thinking,
+                signature,
+            } => ContentBlock::Thinking {
+                thinking: thinking.clone(),
+                signature: signature.clone(),
+            },
+            ReplyContent::RedactedThinking { data } => {
+                ContentBlock::RedactedThinking { data: data.clone() }
+            }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn thinking_block_round_trips_through_reply_content() {
+        let block = ContentBlock::Thinking {
+            thinking: "reason".into(),
+            signature: "sig".into(),
+        };
+        let reply = ReplyContent::from_block(&block, &HashMap::new());
+        assert!(matches!(
+            reply.to_block(),
+            ContentBlock::Thinking { thinking, signature } if thinking == "reason" && signature == "sig"
+        ));
+    }
+
+    #[test]
+    fn redacted_thinking_round_trips_through_reply_content() {
+        let block = ContentBlock::RedactedThinking { data: "enc".into() };
+        let reply = ReplyContent::from_block(&block, &HashMap::new());
+        assert!(matches!(
+            reply.to_block(),
+            ContentBlock::RedactedThinking { data } if data == "enc"
+        ));
+    }
+
+    #[test]
+    fn reply_with_thinking_survives_serde_round_trip() {
+        let reply = Reply {
+            author: Author::Assistant,
+            content: vec![ReplyContent::Thinking {
+                thinking: "r".into(),
+                signature: "s".into(),
+            }],
+            created_at: 0,
+        };
+        let back: Reply = serde_json::from_str(&serde_json::to_string(&reply).unwrap()).unwrap();
+        assert!(matches!(
+            &back.content[..],
+            [ReplyContent::Thinking { thinking, signature }] if thinking == "r" && signature == "s"
+        ));
     }
 }

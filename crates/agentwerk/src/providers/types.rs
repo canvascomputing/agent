@@ -70,6 +70,17 @@ pub enum ContentBlock {
         #[serde(default = "default_true")]
         succeeded: bool,
     },
+    /// Extended-thinking the model produced before its answer. `signature`
+    /// is the provider's opaque replay token, echoed back on the next turn so
+    /// the provider will accept the block; empty for the OpenAI-compatible
+    /// endpoints, which carry no such token and regenerate reasoning instead.
+    #[serde(rename = "thinking")]
+    Thinking { thinking: String, signature: String },
+    /// Extended-thinking the provider returned encrypted, when Anthropic's
+    /// safety systems redact the reasoning. `data` is opaque and echoed back
+    /// unchanged to replay the turn.
+    #[serde(rename = "redacted_thinking")]
+    RedactedThinking { data: String },
 }
 
 fn default_true() -> bool {

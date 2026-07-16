@@ -143,6 +143,15 @@ let agent = Agent::new()
     .model(Model::from_name("my-local-model").context_window(128_000));
 ```
 
+Set `reasoning_effort` on a reasoning-capable model to make it think before answering. The thinking is recorded in the ticket transcript alongside the answer. It is off unless you set it, and any reasoning the model returns is captured regardless:
+
+```rust
+use agentwerk::providers::{Model, ReasoningEffort};
+
+let agent = Agent::new()
+    .model(Model::from_name("claude-sonnet-4-6").reasoning_effort(ReasoningEffort::High));
+```
+
 ## Tickets
 
 <p align="left">

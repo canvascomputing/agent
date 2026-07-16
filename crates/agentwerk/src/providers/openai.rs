@@ -267,6 +267,7 @@ struct ToolCallAccumulator {
 
 #[derive(Default)]
 struct StreamState {
+    reasoning: String,
     text: String,
     tool_calls: HashMap<usize, ToolCallAccumulator>,
     status: ResponseStatus,
@@ -277,6 +278,15 @@ struct StreamState {
 impl StreamState {
     fn into_response(self) -> ModelResponse {
         let mut content = Vec::new();
+        // Reasoning precedes the visible answer, matching the order the model
+        // produced it. The signature is empty: these endpoints stream no replay
+        // token, and the reasoning is not echoed back on the next turn.
+        if !self.reasoning.is_empty() {
+            content.push(ContentBlock::Thinking {
+                thinking: self.reasoning,
+                signature: String::new(),
+            });
+        }
         if !self.text.is_empty() {
             content.push(ContentBlock::Text { text: self.text });
         }
@@ -321,6 +331,7 @@ fn ingest_chunk(
         state.model = m.to_string();
     }
     let choice = &json["choices"][0];
+    update_reasoning(&choice["delta"], state);
     update_text(&choice["delta"], state, on_event);
     update_tool_calls(&choice["delta"], state, on_event);
     if let Some(reason) = choice["finish_reason"].as_str() {
@@ -328,6 +339,19 @@ fn ingest_chunk(
     }
     if let Some(u) = json.get("usage").filter(|u| !u.is_null()) {
         parse_streaming_usage(u, &mut state.usage);
+    }
+}
+
+/// Accumulate a reasoning delta. Endpoints disagree on the field name:
+/// `reasoning_content` (deepseek, qwen, llama.cpp) and `reasoning` (other
+/// OpenAI-compatible proxies) both appear; take whichever is present.
+fn update_reasoning(delta: &Value, state: &mut StreamState) {
+    let reasoning = delta["reasoning_content"]
+        .as_str()
+        .or_else(|| delta["reasoning"].as_str())
+        .filter(|s| !s.is_empty());
+    if let Some(reasoning) = reasoning {
+        state.reasoning.push_str(reasoning);
     }
 }
 
@@ -396,6 +420,11 @@ fn serialize_request(request: &ModelRequest) -> Value {
     }
     if let Some(ref choice) = request.tool_choice {
         body["tool_choice"] = serialize_tool_choice(choice);
+    }
+    // The OpenAI-standard reasoning knob; the litellm proxy maps it to the
+    // backend's own thinking switch.
+    if let Some(effort) = request.reasoning_effort.label() {
+        body["reasoning_effort"] = Value::from(effort);
     }
     body
 }
@@ -470,7 +499,10 @@ fn serialize_assistant_message(blocks: &[ContentBlock]) -> Value {
                     "function": {"name": name, "arguments": input.to_string()},
                 }));
             }
-            _ => {}
+            // Reasoning is regenerated each turn on these endpoints, so it is
+            // kept in the transcript but not sent back in the assistant message.
+            ContentBlock::Thinking { .. } | ContentBlock::RedactedThinking { .. } => {}
+            ContentBlock::ToolResult { .. } => {}
         }
     }
 
@@ -518,6 +550,72 @@ fn parse_status_str(raw: &str) -> ResponseStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::providers::ReasoningEffort;
+
+    #[test]
+    fn parses_reasoning_content_into_thinking_before_text() {
+        let mut state = StreamState::default();
+        let sink: Arc<dyn Fn(StreamEvent) + Send + Sync> = Arc::new(|_| {});
+        ingest_chunk(
+            &serde_json::json!({"choices":[{"delta":{"reasoning_content":"let me think"}}]}),
+            &mut state,
+            &sink,
+        );
+        ingest_chunk(
+            &serde_json::json!({"choices":[{"delta":{"content":"the answer"}}]}),
+            &mut state,
+            &sink,
+        );
+        assert!(matches!(
+            &state.into_response().content[..],
+            [ContentBlock::Thinking { thinking, signature }, ContentBlock::Text { text }]
+                if thinking == "let me think" && signature.is_empty() && text == "the answer"
+        ));
+    }
+
+    #[test]
+    fn parses_reasoning_field_alias() {
+        let mut state = StreamState::default();
+        let sink: Arc<dyn Fn(StreamEvent) + Send + Sync> = Arc::new(|_| {});
+        ingest_chunk(
+            &serde_json::json!({"choices":[{"delta":{"reasoning":"alt field"}}]}),
+            &mut state,
+            &sink,
+        );
+        assert!(matches!(
+            &state.into_response().content[..],
+            [ContentBlock::Thinking { thinking, .. }] if thinking == "alt field"
+        ));
+    }
+
+    #[test]
+    fn serialize_request_sets_reasoning_effort() {
+        let mut req = dummy_request();
+        req.reasoning_effort = ReasoningEffort::High;
+        assert_eq!(serialize_request(&req)["reasoning_effort"], "high");
+    }
+
+    #[test]
+    fn serialize_request_omits_reasoning_effort_when_off() {
+        assert!(serialize_request(&dummy_request())
+            .get("reasoning_effort")
+            .is_none());
+    }
+
+    #[test]
+    fn assistant_message_drops_thinking() {
+        let msg = serialize_assistant_message(&[
+            ContentBlock::Thinking {
+                thinking: "hidden".into(),
+                signature: String::new(),
+            },
+            ContentBlock::Text {
+                text: "shown".into(),
+            },
+        ]);
+        assert_eq!(msg["content"], "shown");
+        assert!(msg.get("reasoning_content").is_none());
+    }
 
     fn dummy_request() -> ModelRequest {
         ModelRequest {
@@ -531,6 +629,7 @@ mod tests {
             tools: vec![],
             max_request_tokens: Some(1024),
             tool_choice: None,
+            reasoning_effort: Default::default(),
         }
     }
 
@@ -599,6 +698,7 @@ mod tests {
             }],
             max_request_tokens: Some(1024),
             tool_choice: Some(ToolChoice::Auto),
+            reasoning_effort: Default::default(),
         };
         let body = serialize_request(&request);
         let tools = body["tools"].as_array().unwrap();
@@ -618,6 +718,7 @@ mod tests {
             tool_choice: Some(ToolChoice::Specific {
                 name: "read_file".into(),
             }),
+            reasoning_effort: Default::default(),
         };
         let body = serialize_request(&request);
         assert_eq!(body["tool_choice"]["type"], "function");

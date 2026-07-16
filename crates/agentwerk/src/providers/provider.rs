@@ -22,6 +22,35 @@ pub struct ProviderToolDefinition {
     pub input_schema: Value,
 }
 
+/// How much extended thinking to ask the model for. Each provider maps this
+/// to its own request field: Anthropic's `thinking` + `output_config.effort`,
+/// the OpenAI-compatible `reasoning_effort`. `Off` sends no such field and
+/// leaves thinking to the model's default. This controls only the request;
+/// reasoning the model returns is always captured as a `Thinking`
+/// [`ContentBlock`](super::ContentBlock).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ReasoningEffort {
+    #[default]
+    Off,
+    Low,
+    Medium,
+    High,
+}
+
+impl ReasoningEffort {
+    /// The request string (`"low"` / `"medium"` / `"high"`), or `None` when
+    /// off. Both the Anthropic `output_config.effort` and the OpenAI
+    /// `reasoning_effort` take these same strings.
+    pub(crate) fn label(self) -> Option<&'static str> {
+        match self {
+            ReasoningEffort::Off => None,
+            ReasoningEffort::Low => Some("low"),
+            ReasoningEffort::Medium => Some("medium"),
+            ReasoningEffort::High => Some("high"),
+        }
+    }
+}
+
 /// One request to a provider. Built by the agent loop from the agent's
 /// configuration and the running conversation; passed to [`Provider::respond`]
 /// together with a streaming event callback.
@@ -40,6 +69,9 @@ pub struct ModelRequest {
     pub max_request_tokens: Option<u32>,
     /// Constraint on which tool the model may pick this turn.
     pub tool_choice: Option<ToolChoice>,
+    /// Extended-thinking depth to request. Carried from the [`Model`](super::Model).
+    #[serde(default)]
+    pub reasoning_effort: ReasoningEffort,
 }
 
 /// Constraint on which tool the model may pick on a given turn.
