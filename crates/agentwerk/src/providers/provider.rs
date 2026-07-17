@@ -114,6 +114,25 @@ pub trait Provider: Send + Sync {
     fn prewarm(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
         Box::pin(async {})
     }
+
+    /// Confirm the API key, model, and endpoint work by sending one minimal
+    /// request before any real traffic. On failure the classified `ProviderError`
+    /// (`AuthenticationFailed`, `ModelNotFound`, `ConnectionFailed`, ...) lets a
+    /// caller stop with a clear message instead of failing every downstream
+    /// request. One probe is enough: a wrong key, model, or endpoint fails the
+    /// same way on every call.
+    fn verify(&self, model: &str) -> Pin<Box<dyn Future<Output = ProviderResult<()>> + Send + '_>> {
+        let request = ModelRequest {
+            model: model.to_string(),
+            system_prompt: String::new(),
+            messages: vec![Message::user("ping")],
+            tools: Vec::new(),
+            max_request_tokens: Some(16),
+            tool_choice: None,
+            reasoning_effort: ReasoningEffort::Off,
+        };
+        Box::pin(async move { self.respond(request, Arc::new(|_| {})).await.map(|_| ()) })
+    }
 }
 
 pub(crate) const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(600);
@@ -139,9 +158,61 @@ pub(crate) async fn prewarm_with(client: &reqwest::Client, base_url: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::providers::error::ProviderError;
+    use crate::providers::types::{ResponseStatus, TokenUsage};
 
     #[test]
     fn default_request_timeout_is_ten_minutes() {
         assert_eq!(DEFAULT_REQUEST_TIMEOUT, Duration::from_secs(600));
+    }
+
+    /// Answers every request with a fixed outcome, so `verify`'s default impl
+    /// can be exercised without a live endpoint.
+    struct FixedProvider(fn() -> ProviderResult<ModelResponse>);
+
+    impl Provider for FixedProvider {
+        fn respond(
+            &self,
+            _request: ModelRequest,
+            _on_event: Arc<dyn Fn(StreamEvent) + Send + Sync>,
+        ) -> Pin<Box<dyn Future<Output = ProviderResult<ModelResponse>> + Send + '_>> {
+            let outcome = (self.0)();
+            Box::pin(async move { outcome })
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_passes_a_bad_key_through_as_authentication_failed() {
+        let provider = FixedProvider(|| {
+            Err(ProviderError::AuthenticationFailed {
+                message: "invalid api key".into(),
+            })
+        });
+        let error = provider.verify("any-model").await.unwrap_err();
+        assert!(error.to_string().contains("Authentication failed"));
+    }
+
+    #[tokio::test]
+    async fn verify_passes_a_wrong_model_through_as_model_not_found() {
+        let provider = FixedProvider(|| {
+            Err(ProviderError::ModelNotFound {
+                message: "no such model".into(),
+            })
+        });
+        let error = provider.verify("does-not-exist").await.unwrap_err();
+        assert!(error.to_string().contains("Model not found"));
+    }
+
+    #[tokio::test]
+    async fn verify_returns_ok_when_the_probe_succeeds() {
+        let provider = FixedProvider(|| {
+            Ok(ModelResponse {
+                content: Vec::new(),
+                status: ResponseStatus::EndTurn,
+                usage: TokenUsage::default(),
+                model: "mock".into(),
+            })
+        });
+        assert!(provider.verify("any-model").await.is_ok());
     }
 }
