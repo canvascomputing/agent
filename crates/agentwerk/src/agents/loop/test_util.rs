@@ -233,6 +233,23 @@ pub fn schema_retries_in(events: &[Event]) -> Vec<(u32, u32, String)> {
         .collect()
 }
 
+/// Concatenated text of every user-role message, one block per line.
+/// Reveals the corrective directive the loop injected on the prior turn.
+pub fn user_text(messages: &[Message]) -> String {
+    let mut out = String::new();
+    for message in messages {
+        if let Message::User { content } = message {
+            for block in content {
+                if let ContentBlock::Text { text } = block {
+                    out.push_str(text);
+                    out.push('\n');
+                }
+            }
+        }
+    }
+    out
+}
+
 // ---- agent / event builders ----
 
 pub fn interactive_chatbot(provider: &Arc<MockProvider>) -> Agent {

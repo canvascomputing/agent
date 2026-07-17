@@ -27,6 +27,9 @@ fn default_agent_name() -> String {
     format!("agent-{n}")
 }
 
+/// Caller hook that rewrites a corrective directive; see [`AgentBuilder::on_failure`].
+pub(crate) type FailureHook = dyn Fn(&str) -> Option<String> + Send + Sync;
+
 // --- builder ---
 
 /// Builder for [`Agent`]. Configures the LLM provider, model, role,
@@ -44,6 +47,7 @@ pub struct AgentBuilder<P, M> {
     tools: ToolRegistry,
     dir: PathBuf,
     knowledge: Arc<Knowledge>,
+    on_failure: Option<Arc<FailureHook>>,
 }
 
 impl AgentBuilder<(), ()> {
@@ -64,6 +68,7 @@ impl AgentBuilder<(), ()> {
             tools,
             dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             knowledge,
+            on_failure: None,
         }
     }
 
@@ -89,6 +94,7 @@ impl AgentBuilder<(), ()> {
             tools,
             dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             knowledge,
+            on_failure: None,
         }
     }
 
@@ -114,6 +120,7 @@ impl<M> AgentBuilder<(), M> {
             tools: self.tools,
             dir: self.dir,
             knowledge: self.knowledge,
+            on_failure: self.on_failure,
         }
     }
 
@@ -140,6 +147,7 @@ impl<P> AgentBuilder<P, ()> {
             tools: self.tools,
             dir: self.dir,
             knowledge: self.knowledge,
+            on_failure: self.on_failure,
         }
     }
 
@@ -247,6 +255,20 @@ impl<P, M> AgentBuilder<P, M> {
         self.knowledge = Arc::clone(store);
         self
     }
+
+    /// Rewrite the corrective directive agentwerk injects when a turn
+    /// ends without an accepted result: the model called no tool, or a
+    /// finish tool's output failed the ticket schema. The closure
+    /// receives the default reason and returns the replacement message,
+    /// or `None` to keep the built-in directive. Called inline per
+    /// failure, so keep it cheap.
+    pub fn on_failure(
+        mut self,
+        hook: impl Fn(&str) -> Option<String> + Send + Sync + 'static,
+    ) -> Self {
+        self.on_failure = Some(Arc::new(hook));
+        self
+    }
 }
 
 // Inline-test inspectors. Production callers go through `Agent`, which
@@ -341,6 +363,7 @@ impl AgentBuilder<Arc<dyn Provider>, Model> {
             tools: self.tools,
             dir: self.dir,
             knowledge: self.knowledge,
+            on_failure: self.on_failure,
         };
         let private = TicketSystem::new();
         private.bind_agent(&mut agent);
@@ -403,6 +426,7 @@ pub struct Agent {
     tools: ToolRegistry,
     dir: PathBuf,
     knowledge: Arc<Knowledge>,
+    on_failure: Option<Arc<FailureHook>>,
 }
 
 impl Clone for Agent {
@@ -426,6 +450,7 @@ impl Clone for Agent {
             tools: self.tools.clone(),
             dir: self.dir.clone(),
             knowledge: Arc::clone(&self.knowledge),
+            on_failure: self.on_failure.clone(),
         }
     }
 }
@@ -472,6 +497,10 @@ impl Agent {
 
     pub(super) fn provider(&self) -> Arc<dyn Provider> {
         Arc::clone(&self.provider)
+    }
+
+    pub(super) fn on_failure(&self) -> Option<&Arc<FailureHook>> {
+        self.on_failure.as_ref()
     }
 
     pub(super) fn knowledge(&self) -> Arc<Knowledge> {

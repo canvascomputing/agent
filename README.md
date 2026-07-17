@@ -104,6 +104,7 @@ let agent = Agent::new()
 | `label(l)` / `labels([..])` | Restrict the agent to tickets carrying matching labels. |
 | `tool(t)` / `tools([..])` | Register a tool the agent may call. |
 | `dir(d)` | Set the directory the agent works in. |
+| `on_failure(f)` | Reword the retry message agentwerk sends when the model stalls or returns invalid output. |
 
 `role` and `context` are covered under [Prompting](#prompting); `knowledge(&store)` under [Knowledge](#knowledge).
 

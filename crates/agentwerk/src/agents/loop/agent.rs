@@ -40,6 +40,17 @@ impl<'a> TicketContext<'a> {
         self.ticket_system.get_ticket(&self.ticket_key)
     }
 
+    /// The corrective directive to inject for `detail`: the agent's
+    /// `on_failure` hook if it returns a replacement, else the default.
+    pub(super) fn failure_directive(&self, detail: &str) -> String {
+        if let Some(hook) = self.agent.on_failure() {
+            if let Some(text) = hook(detail) {
+                return text;
+            }
+        }
+        crate::prompts::retry_directive(detail)
+    }
+
     pub(super) fn fail_with(&self, kind: RequestErrorKind, message: String) {
         self.emit(EventKind::RequestFailed {
             model: self.model.name.clone(),
@@ -209,7 +220,7 @@ fn silence_retry(context: &mut TicketContext<'_>) -> Step {
     });
     context.ticket_system.add_reply(
         &context.ticket_key,
-        Reply::user_text(crate::prompts::retry_directive(RESUME_OR_FINISH_DETAIL)),
+        Reply::user_text(context.failure_directive(RESUME_OR_FINISH_DETAIL)),
     );
     Step::CheckTicket
 }
@@ -261,6 +272,82 @@ mod tests {
 
         assert_eq!(tickets.results().len(), 2);
         assert_eq!(tickets.last_result(), Some(serde_json::json!("b-done")));
+    }
+
+    // on_failure hook
+
+    #[tokio::test]
+    async fn on_failure_hook_replaces_the_silence_directive() {
+        let results_dir = crate::test_util::TempDir::new().unwrap();
+        let provider = MockProvider::with_results(vec![
+            Ok(text_response("just thinking, no tool call")),
+            Ok(write_result_response("done")),
+        ]);
+        let tickets = TicketSystem::new();
+        tickets
+            .dir(results_dir.path().to_path_buf())
+            .max_request_retries(0)
+            .request_retry_delay(Duration::from_millis(1));
+        tickets.agent(
+            Agent::new()
+                .name("agent")
+                .provider(provider.clone() as Arc<dyn Provider>)
+                .model("mock")
+                .role("test")
+                .on_failure(|_| Some("PLEASE CALL A TOOL NOW".into()))
+                .build(),
+        );
+
+        tickets.start();
+        tickets.task("go");
+        tokio::time::timeout(Duration::from_secs(5), tickets.finish())
+            .await
+            .expect("finish did not finish within 5s");
+
+        let injected = user_text(&provider.received()[1]);
+        assert!(
+            injected.contains("PLEASE CALL A TOOL NOW"),
+            "hook directive must be injected: {injected:?}",
+        );
+        assert!(
+            !injected.contains("was not accepted"),
+            "default framing must be suppressed: {injected:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn on_failure_hook_returning_none_keeps_the_default_directive() {
+        let results_dir = crate::test_util::TempDir::new().unwrap();
+        let provider = MockProvider::with_results(vec![
+            Ok(text_response("just thinking, no tool call")),
+            Ok(write_result_response("done")),
+        ]);
+        let tickets = TicketSystem::new();
+        tickets
+            .dir(results_dir.path().to_path_buf())
+            .max_request_retries(0)
+            .request_retry_delay(Duration::from_millis(1));
+        tickets.agent(
+            Agent::new()
+                .name("agent")
+                .provider(provider.clone() as Arc<dyn Provider>)
+                .model("mock")
+                .role("test")
+                .on_failure(|_| None)
+                .build(),
+        );
+
+        tickets.start();
+        tickets.task("go");
+        tokio::time::timeout(Duration::from_secs(5), tickets.finish())
+            .await
+            .expect("finish did not finish within 5s");
+
+        let injected = user_text(&provider.received()[1]);
+        assert!(
+            injected.contains("was not accepted"),
+            "None must fall back to the built-in directive: {injected:?}",
+        );
     }
 
     #[tokio::test]

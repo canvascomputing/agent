@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::event::{EventKind, PolicyKind, ToolFailureKind};
-use crate::prompts::{retry_directive, schema_retry_detail};
+use crate::prompts::schema_retry_detail;
 use crate::providers::ContentBlock;
 use crate::tools::{ToolCall, ToolContext, ToolError};
 
@@ -118,7 +118,7 @@ pub(super) async fn run(context: &mut TicketContext<'_>, calls: Vec<ToolCall>) -
             message: schema_detail.clone(),
         });
         blocks.push(ContentBlock::Text {
-            text: retry_directive(&schema_detail),
+            text: context.failure_directive(&schema_detail),
         });
     }
     context.ticket_system.add_reply(
@@ -146,7 +146,7 @@ mod tests {
 
     use crate::agents::agent::Agent;
     use crate::agents::r#loop::test_util::*;
-    use crate::agents::tickets::{Status, TicketSystem};
+    use crate::agents::tickets::{Status, Ticket, TicketSystem};
     use crate::event::{EventKind, PolicyKind};
     use crate::providers::Provider;
     use crate::schemas::Schema;
@@ -207,6 +207,45 @@ mod tests {
             schema_retries[0].2.contains("Schema validation failed"),
             "retry message must carry validator detail: {:?}",
             schema_retries[0].2,
+        );
+    }
+
+    #[tokio::test]
+    async fn on_failure_hook_replaces_the_schema_retry_directive() {
+        let results_dir = crate::test_util::TempDir::new().unwrap();
+        let provider = MockProvider::with_results(vec![
+            Ok(write_result_response("not json")),
+            Ok(write_result_value(serde_json::json!({"partial_sum": 1}))),
+        ]);
+        let tickets = TicketSystem::new();
+        tickets
+            .dir(results_dir.path().to_path_buf())
+            .max_request_retries(0)
+            .request_retry_delay(Duration::from_millis(1))
+            .max_schema_retries(10)
+            .max_time(Duration::from_millis(500));
+        tickets.agent(
+            Agent::new()
+                .name("tester")
+                .provider(provider.clone() as Arc<dyn Provider>)
+                .model("mock")
+                .role("test")
+                .on_failure(|detail| Some(format!("REDO NOW. {detail}")))
+                .build(),
+        );
+        tickets.ticket(Ticket::new("go").schema(schema_for_partial_sum()));
+
+        let _ = tickets.finish().await;
+
+        let injected = user_text(&provider.received()[1]);
+        assert!(
+            injected.contains("REDO NOW."),
+            "hook directive must be injected: {injected:?}",
+        );
+        // The hook received the real validator detail to build on.
+        assert!(
+            injected.contains("Schema validation failed"),
+            "hook must receive the validator detail: {injected:?}",
         );
     }
 
