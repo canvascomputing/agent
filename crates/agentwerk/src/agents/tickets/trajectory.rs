@@ -66,8 +66,8 @@ impl Trajectory {
                         escape(thinking)
                     )),
                     ReplyContent::ToolUse { name, input, .. } => {
-                        let json =
-                            serde_json::to_string_pretty(input).unwrap_or_else(|_| input.to_string());
+                        let json = serde_json::to_string_pretty(input)
+                            .unwrap_or_else(|_| input.to_string());
                         out.push_str(&format!(
                             "<details><summary>&rarr; {}</summary><pre>{}</pre></details>\n",
                             escape(name),
@@ -191,7 +191,10 @@ mod tests {
         });
         trajectory.save(dir.path()).unwrap();
 
-        let path = dir.path().join("trajectories").join("analyst-TICKET-1.html");
+        let path = dir
+            .path()
+            .join("trajectories")
+            .join("analyst-TICKET-1.html");
         let html = std::fs::read_to_string(&path).unwrap();
         assert!(html.contains("<div class=\"turn user\">"));
         assert!(html.contains("hello"));
@@ -208,7 +211,9 @@ mod tests {
         trajectory.save(dir.path()).unwrap();
 
         let html = std::fs::read_to_string(
-            dir.path().join("trajectories").join("analyst-TICKET-1.html"),
+            dir.path()
+                .join("trajectories")
+                .join("analyst-TICKET-1.html"),
         )
         .unwrap();
         assert!(html.contains("&lt;script&gt;alert(1)&lt;/script&gt;"));
