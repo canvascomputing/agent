@@ -1,0 +1,7 @@
+# Build artifacts placed by `maturin develop` and Python
+__pycache__/
+*.pyc
+*.so
+*.abi3.so
+.pytest_cache/
+target/

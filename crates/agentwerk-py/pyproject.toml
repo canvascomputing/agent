@@ -1,0 +1,24 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "agentwerk"
+version = "0.1.17"
+description = "Python bindings for agentwerk, a minimal crate for building LLM agents"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
+
+[project.urls]
+Repository = "https://github.com/canvascomputing/agentwerk"
+
+[tool.maturin]
+python-source = "python"
+module-name = "agentwerk._agentwerk"
+features = ["pyo3/extension-module"]
