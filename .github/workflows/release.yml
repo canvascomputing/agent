@@ -35,6 +35,9 @@ jobs:
           target: ${{ matrix.platform.target }}
           args: --release --out dist
           manylinux: auto
+          # The aarch64 cross-gcc does not define __ARM_ARCH, which ring's ARM
+          # assembly requires. Define it so the crypto backend cross-compiles.
+          docker-options: -e CFLAGS_aarch64_unknown_linux_gnu=-D__ARM_ARCH=8
       - uses: actions/upload-artifact@v4
         with:
           name: wheels-${{ matrix.platform.runner }}-${{ matrix.platform.target }}
