@@ -220,7 +220,7 @@ impl PyAgentBuilder {
 /// then drive with `finish()`.
 #[pyclass(name = "BuiltAgent")]
 pub struct PyAgent {
-    inner: Agent,
+    pub(crate) inner: Agent,
 }
 
 #[pymethods]

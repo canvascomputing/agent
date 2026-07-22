@@ -45,6 +45,24 @@ def test_tool_decorator_attaches_metadata():
     assert sample._agentwerk_read_only is True
 
 
+def test_ticket_builder_and_schema():
+    schema = aw.Schema({"type": "object", "properties": {"n": {"type": "integer"}}})
+    ticket = aw.Ticket({"ask": "x"}).label("scan").labels(["b"]).schema(schema)
+    assert isinstance(ticket, aw.Ticket)
+
+
+def test_schema_rejects_invalid_document():
+    with pytest.raises(Exception):
+        aw.Schema({"type": "not-a-real-type"})
+
+
+def test_ticket_system_chaining_and_queries():
+    sys = aw.TicketSystem().max_turns(5).max_time(30.0).dir(".")
+    assert isinstance(sys, aw.TicketSystem)
+    assert sys.tickets() == []
+    assert sys.last_result() is None
+
+
 def _has_provider() -> bool:
     return any(
         os.environ.get(key)
