@@ -9,10 +9,11 @@ use std::sync::Arc;
 
 use agentwerk::providers::Provider;
 use agentwerk::tools::ToolLike;
-use agentwerk::Agent;
+use agentwerk::{Agent, Knowledge};
 use pyo3::prelude::*;
 
 use crate::convert::{py_to_value, runtime_error};
+use crate::knowledge::PyKnowledge;
 use crate::providers::PyProvider;
 use crate::ticket_system::PyTicketSystem;
 use crate::tools::{extract_tool, BoxedTool};
@@ -44,6 +45,7 @@ pub struct PyAgentBuilder {
     provider: ProviderSpec,
     model: ModelSpec,
     tools: Vec<Arc<dyn ToolLike>>,
+    knowledge: Option<Arc<Knowledge>>,
 }
 
 #[pymethods]
@@ -61,6 +63,7 @@ impl PyAgentBuilder {
             provider: ProviderSpec::Unset,
             model: ModelSpec::Unset,
             tools: Vec::new(),
+            knowledge: None,
         }
     }
 
@@ -145,6 +148,16 @@ impl PyAgentBuilder {
         slf
     }
 
+    /// Share a knowledge store for durable, cross-ticket memory. Bind the same
+    /// store to several agents to share their memory.
+    fn knowledge<'py>(
+        mut slf: PyRefMut<'py, Self>,
+        store: PyRef<'_, PyKnowledge>,
+    ) -> PyRefMut<'py, Self> {
+        slf.knowledge = Some(Arc::clone(&store.inner));
+        slf
+    }
+
     /// Register a tool the agent may call: a built-in handle (e.g.
     /// `ReadFileTool()`) or, from M2, a `@tool`-decorated function.
     fn tool<'py>(
@@ -205,6 +218,9 @@ impl PyAgentBuilder {
         }
         if let Some(dir) = &self.dir {
             builder = builder.dir(std::path::PathBuf::from(dir));
+        }
+        if let Some(store) = &self.knowledge {
+            builder = builder.knowledge(store);
         }
         for tool in &self.tools {
             builder = builder.tool(BoxedTool(Arc::clone(tool)));

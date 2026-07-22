@@ -7,6 +7,7 @@ use pyo3::prelude::*;
 mod agent;
 mod convert;
 mod event;
+mod knowledge;
 mod providers;
 mod schema;
 mod ticket;
@@ -21,6 +22,7 @@ fn _agentwerk(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<ticket::PyTicket>()?;
     m.add_class::<schema::PySchema>()?;
     m.add_class::<event::PyEvent>()?;
+    m.add_class::<knowledge::PyKnowledge>()?;
     providers::register(m)?;
     tools::register(m)?;
     Ok(())
