@@ -7,14 +7,14 @@
 
 use std::sync::Arc;
 
-use agentwerk::providers::Provider;
+use agentwerk::providers::{Model, Provider};
 use agentwerk::tools::ToolLike;
 use agentwerk::{Agent, Knowledge};
 use pyo3::prelude::*;
 
 use crate::convert::{py_to_value, runtime_error};
 use crate::knowledge::PyKnowledge;
-use crate::providers::PyProvider;
+use crate::providers::{PyModel, PyProvider};
 use crate::ticket_system::PyTicketSystem;
 use crate::tools::{extract_tool, BoxedTool};
 
@@ -29,7 +29,7 @@ enum ProviderSpec {
 enum ModelSpec {
     Unset,
     Env,
-    Explicit(String),
+    Explicit(Model),
 }
 
 /// Collects agent configuration; `build()` turns it into a real `Agent`.
@@ -89,10 +89,19 @@ impl PyAgentBuilder {
         slf
     }
 
-    /// Set the model by name (e.g. `"gpt-4o"`).
-    fn model(mut slf: PyRefMut<'_, Self>, model: String) -> PyRefMut<'_, Self> {
-        slf.model = ModelSpec::Explicit(model);
-        slf
+    /// Set the model, either by name (e.g. `"gpt-4o"`) or with a `Model`
+    /// carrying context-window and reasoning-effort overrides.
+    fn model<'py>(
+        mut slf: PyRefMut<'py, Self>,
+        model: &Bound<'_, PyAny>,
+    ) -> PyResult<PyRefMut<'py, Self>> {
+        let resolved = if let Ok(name) = model.extract::<String>() {
+            Model::from_name(name)
+        } else {
+            model.extract::<PyRef<PyModel>>()?.inner.clone()
+        };
+        slf.model = ModelSpec::Explicit(resolved);
+        Ok(slf)
     }
 
     /// Detect the model name from environment variables.
