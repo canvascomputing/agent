@@ -204,6 +204,70 @@ impl PyTicketSystem {
             .collect()
     }
 
+    /// Every ticket for which `predicate(ticket)` is truthy, as dicts.
+    fn find_tickets<'py>(
+        &self,
+        py: Python<'py>,
+        predicate: Py<PyAny>,
+    ) -> PyResult<Vec<Bound<'py, PyAny>>> {
+        self.inner
+            .find_tickets(|ticket| ticket_predicate(&predicate, ticket))
+            .iter()
+            .map(|ticket| value_to_py(py, &ticket_to_value(ticket)))
+            .collect()
+    }
+
+    /// The first ticket for which `predicate(ticket)` is truthy, or `None`.
+    fn find_ticket<'py>(
+        &self,
+        py: Python<'py>,
+        predicate: Py<PyAny>,
+    ) -> PyResult<Option<Bound<'py, PyAny>>> {
+        match self
+            .inner
+            .find_ticket(|ticket| ticket_predicate(&predicate, ticket))
+        {
+            Some(ticket) => Ok(Some(value_to_py(py, &ticket_to_value(&ticket))?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Await the first ticket for which `predicate(ticket)` is truthy. Resolves
+    /// to the ticket dict, or `None` if the run ends first.
+    fn wait_for_ticket<'py>(
+        &self,
+        py: Python<'py>,
+        predicate: Py<PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let inner = Arc::clone(&self.inner);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let found = inner
+                .wait_for_ticket(|ticket| ticket_predicate(&predicate, ticket))
+                .await;
+            Python::attach(|py| match found {
+                Some(ticket) => Ok(Some(value_to_py(py, &ticket_to_value(&ticket))?.unbind())),
+                None => Ok::<_, PyErr>(None),
+            })
+        })
+    }
+
+    /// Write a ticket's trajectory to disk when `predicate(event)` is truthy.
+    fn save_trajectory_on_event<'py>(
+        slf: PyRef<'py, Self>,
+        predicate: Py<PyAny>,
+    ) -> PyRef<'py, Self> {
+        slf.inner.save_trajectory_on_event(move |event: &Event| {
+            Python::attach(|py| {
+                predicate
+                    .bind(py)
+                    .call1((to_py_event(event),))
+                    .and_then(|value| value.is_truthy())
+                    .unwrap_or(false)
+            })
+        });
+        slf
+    }
+
     fn start<'py>(slf: PyRef<'py, Self>) -> PyRef<'py, Self> {
         slf.inner.start();
         slf
@@ -267,4 +331,16 @@ impl PyTicketSystem {
 /// so this carries only the observable state (key, status, task, result, ...).
 fn ticket_to_value(ticket: &Ticket) -> Value {
     serde_json::to_value(ticket).unwrap_or(Value::Null)
+}
+
+/// Call a Python predicate with a ticket dict, reading back its truthiness. A
+/// conversion or Python error reads as `false` so a bad predicate never panics
+/// a worker thread.
+fn ticket_predicate(predicate: &Py<PyAny>, ticket: &Ticket) -> bool {
+    Python::attach(|py| {
+        value_to_py(py, &ticket_to_value(ticket))
+            .and_then(|view| predicate.bind(py).call1((view,)))
+            .and_then(|value| value.is_truthy())
+            .unwrap_or(false)
+    })
 }

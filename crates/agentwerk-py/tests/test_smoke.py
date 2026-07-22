@@ -63,6 +63,17 @@ def test_ticket_system_chaining_and_queries():
     assert sys.last_result() is None
 
 
+def test_ticket_queries_filter_by_predicate():
+    sys = aw.TicketSystem()
+    sys.ticket(aw.Ticket("alpha").label("a"))
+    sys.ticket(aw.Ticket("beta").label("b"))
+    assert len(sys.tickets()) == 2
+    a_only = sys.find_tickets(lambda t: "a" in t["labels"])
+    assert [t["task"] for t in a_only] == ["alpha"]
+    todo = sys.find_ticket(lambda t: t["status"] == "Todo")
+    assert todo is not None
+
+
 def _has_provider() -> bool:
     return any(
         os.environ.get(key)
