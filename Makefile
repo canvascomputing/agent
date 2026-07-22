@@ -1,4 +1,4 @@
-.PHONY: build test test_integration fmt clean update use_case litellm bump doc hooks
+.PHONY: build test test_integration fmt clean update use_case litellm bump doc hooks python python_test
 
 # Build the project (warnings are errors)
 build: fmt
@@ -19,6 +19,15 @@ else
 	@if [ -f .env ]; then set -a; . ./.env; set +a; fi; \
 	RUSTFLAGS="-D warnings" cargo test --test integration -- --nocapture --test-threads=1
 endif
+
+# Build and install the Python bindings into the active environment
+python:
+	cd crates/agentwerk-py && maturin develop
+
+# Run the Python binding tests (live tests skip without a provider in .env)
+python_test: python
+	@if [ -f .env ]; then set -a; . ./.env; set +a; fi; \
+	cd crates/agentwerk-py && python3 -m pytest tests -q
 
 # Build rustdoc (warnings are errors; broken intra-doc links fail)
 doc:
@@ -67,6 +76,8 @@ bump: test
 	esac; \
 	new="$$major.$$minor.$$patch"; \
 	sed -i '' "s/^version = \"$$current\"/version = \"$$new\"/" crates/agentwerk/Cargo.toml; \
+	sed -i '' "s/^version = \"$$current\"/version = \"$$new\"/" crates/agentwerk-py/Cargo.toml; \
+	sed -i '' "s/^version = \"$$current\"/version = \"$$new\"/" crates/agentwerk-py/pyproject.toml; \
 	cargo check --workspace --quiet; \
 	git add -A && git commit -m "v$$new" && \
 	git tag "v$$new" && \
