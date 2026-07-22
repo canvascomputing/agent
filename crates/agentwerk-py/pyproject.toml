@@ -17,8 +17,18 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 
+[project.optional-dependencies]
+test = ["pytest>=7", "pytest-asyncio>=0.23"]
+
 [project.urls]
 Repository = "https://github.com/canvascomputing/agentwerk"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+markers = [
+    "live: exercises a real LLM provider; skipped unless one is configured",
+]
 
 [tool.maturin]
 python-source = "python"

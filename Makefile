@@ -1,4 +1,4 @@
-.PHONY: build test test_integration fmt clean update use_case litellm bump doc hooks python python_test
+.PHONY: build test test_integration fmt clean update use_case litellm bump doc hooks python python_test python_test_integration
 
 # Build the project (warnings are errors)
 build: fmt
@@ -24,10 +24,16 @@ endif
 python:
 	cd crates/agentwerk-py && maturin develop
 
-# Run the Python binding tests (live tests skip without a provider in .env)
+# Run the offline Python binding tests (no network, no .env)
 python_test: python
+	@cd crates/agentwerk-py && python3 -m pip install -q pytest pytest-asyncio && \
+	  python3 -m pytest tests -q -m "not live"
+
+# Run the live Python binding tests against a real provider (sources .env)
+python_test_integration: python
 	@if [ -f .env ]; then set -a; . ./.env; set +a; fi; \
-	cd crates/agentwerk-py && python3 -m pytest tests -q
+	cd crates/agentwerk-py && python3 -m pip install -q pytest pytest-asyncio && \
+	  python3 -m pytest tests -q -m live
 
 # Build rustdoc (warnings are errors; broken intra-doc links fail)
 doc:
