@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "agentwerk"
-version = "0.1.17"
+version = "0.1.18"
 dependencies = [
  "regex",
  "reqwest",
@@ -15,7 +15,7 @@ dependencies = [
 
 [[package]]
 name = "agentwerk-py"
-version = "0.1.17"
+version = "0.1.18"
 dependencies = [
  "agentwerk",
  "pyo3",
