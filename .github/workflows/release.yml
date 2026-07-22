@@ -3,19 +3,6 @@ on:
   push:
     tags: ['v*']
 jobs:
-  publish-crate:
-    runs-on: ubuntu-latest
-    environment: release
-    permissions:
-      id-token: write
-    steps:
-      - uses: actions/checkout@v6
-      - uses: rust-lang/crates-io-auth-action@v1
-        id: auth
-      - run: cargo publish -p agentwerk
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
-
   wheels:
     name: wheels ${{ matrix.platform.runner }} ${{ matrix.platform.target }}
     runs-on: ${{ matrix.platform.runner }}
@@ -71,3 +58,20 @@ jobs:
       - uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist
+
+  # Publish the crate only after PyPI succeeds: crates.io versions are
+  # immutable, so gating on the brittler wheel/PyPI release keeps a failed run
+  # from burning the version — the same tag can be retried.
+  publish-crate:
+    needs: publish-wheels
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: rust-lang/crates-io-auth-action@v1
+        id: auth
+      - run: cargo publish -p agentwerk
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
