@@ -25,12 +25,19 @@
 
 ## Installation
 
+### Rust
+
 ```bash
-cargo add agentwerk   # Rust
-pip install agentwerk  # Python
+cargo add agentwerk
 ```
 
-> 🐍 **Python?** agentwerk ships first-class Python bindings that mirror this API one to one. Head to the **[Python guide →](crates/agentwerk-py/README.md)** for the full documentation in Python.
+### Python
+
+**👉 [Python README](crates/agentwerk-py/README.md)**
+
+```bash
+pip install agentwerk
+```
 
 ## Quick Start
 
