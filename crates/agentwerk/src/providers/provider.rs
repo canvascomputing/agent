@@ -8,6 +8,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use super::environment;
 use super::error::ProviderResult;
 use super::types::{Message, ModelResponse, StreamEvent};
 
@@ -141,11 +142,57 @@ pub(crate) const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(600);
 /// whole-request timeout makes a hung endpoint surface as a retryable
 /// `ConnectionFailed` instead of blocking indefinitely. The 10-minute default
 /// mirrors Anthropic's own reference agent (`claude-code`).
+///
+/// Trusts custom certificate authorities the way OpenSSL and curl do: when
+/// `SSL_CERT_FILE` or `SSL_CERT_DIR` is set, the built-in root store is
+/// replaced entirely by the certificates loaded from them.
 pub(crate) fn build_client(timeout: Duration) -> reqwest::Client {
-    reqwest::Client::builder()
-        .timeout(timeout)
+    let mut builder = reqwest::Client::builder().timeout(timeout);
+    let file = environment::env_opt("SSL_CERT_FILE");
+    let dir = environment::env_opt("SSL_CERT_DIR");
+    if file.is_some() || dir.is_some() {
+        builder = builder.tls_built_in_root_certs(false);
+        for cert in root_certificates_from(file.as_deref(), dir.as_deref()) {
+            builder = builder.add_root_certificate(cert);
+        }
+    }
+    builder
         .build()
         .expect("reqwest::Client with timeout should build")
+}
+
+/// Load CA certificates from a PEM bundle file, a directory of PEM files, or
+/// both. Panics if either path is unreadable, contains invalid PEM data, or
+/// if the combined result is empty — with built-in roots disabled, an empty
+/// trust store would silently reject every connection.
+fn root_certificates_from(file: Option<&str>, dir: Option<&str>) -> Vec<reqwest::Certificate> {
+    let mut certs = Vec::new();
+    if let Some(path) = file {
+        let pem = std::fs::read(path).unwrap_or_else(|e| panic!("SSL_CERT_FILE {path}: {e}"));
+        certs.extend(
+            reqwest::Certificate::from_pem_bundle(&pem)
+                .unwrap_or_else(|e| panic!("SSL_CERT_FILE {path}: {e}")),
+        );
+    }
+    if let Some(path) = dir {
+        let entries =
+            std::fs::read_dir(path).unwrap_or_else(|e| panic!("SSL_CERT_DIR {path}: {e}"));
+        for entry in entries {
+            let entry = entry.unwrap_or_else(|e| panic!("SSL_CERT_DIR {path}: {e}"));
+            let Ok(pem) = std::fs::read(entry.path()) else {
+                continue;
+            };
+            // c-rehash directories mix certs with symlinks/hashes; skip what doesn't parse
+            if let Ok(found) = reqwest::Certificate::from_pem_bundle(&pem) {
+                certs.extend(found);
+            }
+        }
+    }
+    assert!(
+        !certs.is_empty(),
+        "SSL_CERT_FILE/SSL_CERT_DIR set but no certificates loaded — every connection would be rejected"
+    );
+    certs
 }
 
 /// Fire-and-forget HEAD request to warm the TCP+TLS connection pool. Helper
@@ -164,6 +211,76 @@ mod tests {
     #[test]
     fn default_request_timeout_is_ten_minutes() {
         assert_eq!(DEFAULT_REQUEST_TIMEOUT, Duration::from_secs(600));
+    }
+
+    /// Generates a throwaway self-signed cert at `cert_path` via the `openssl` CLI.
+    /// Returns `false` when `openssl` isn't on `PATH`, so callers can skip
+    /// gracefully instead of failing on a machine without it installed.
+    fn generate_self_signed_cert(cert_path: &std::path::Path) -> bool {
+        let key_path = cert_path.with_extension("key");
+        let output = match std::process::Command::new("openssl")
+            .args([
+                "req",
+                "-x509",
+                "-newkey",
+                "rsa:2048",
+                "-nodes",
+                "-days",
+                "1",
+                "-subj",
+                "/CN=agentwerk-test",
+                "-keyout",
+                key_path.to_str().unwrap(),
+                "-out",
+                cert_path.to_str().unwrap(),
+            ])
+            .output()
+        {
+            Ok(output) => output,
+            Err(_) => return false,
+        };
+        std::fs::remove_file(&key_path).ok();
+        assert!(
+            output.status.success(),
+            "openssl failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        true
+    }
+
+    #[test]
+    fn root_certificates_from_pem_bundle_loads_all_certs_in_file() {
+        let path = std::env::temp_dir().join("agentwerk-test-ssl-cert-file.pem");
+        if !generate_self_signed_cert(&path) {
+            eprintln!("skipping: openssl not found on PATH");
+            return;
+        }
+        let certs = root_certificates_from(Some(path.to_str().unwrap()), None);
+        assert_eq!(certs.len(), 1);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn root_certificates_from_dir_skips_files_that_are_not_certificates() {
+        let dir = std::env::temp_dir().join("agentwerk-test-ssl-cert-dir");
+        std::fs::create_dir_all(&dir).unwrap();
+        if !generate_self_signed_cert(&dir.join("cert.pem")) {
+            eprintln!("skipping: openssl not found on PATH");
+            std::fs::remove_dir_all(&dir).unwrap();
+            return;
+        }
+        std::fs::write(dir.join("not-a-cert.txt"), "not pem data").unwrap();
+        let certs = root_certificates_from(None, Some(dir.to_str().unwrap()));
+        assert_eq!(certs.len(), 1);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "no certificates loaded")]
+    fn root_certificates_from_panics_when_nothing_loads() {
+        let dir = std::env::temp_dir().join("agentwerk-test-ssl-cert-dir-empty");
+        std::fs::create_dir_all(&dir).unwrap();
+        root_certificates_from(None, Some(dir.to_str().unwrap()));
     }
 
     /// Answers every request with a fixed outcome, so `verify`'s default impl

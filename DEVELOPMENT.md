@@ -78,6 +78,8 @@ Use cases and integration tests use the following environment variables:
 |----------|-------------|
 | `MODEL` | Generic model override for `model_from_env()`. |
 | `BRAVE_API_KEY` | Required by the `deep-research` example. |
+| `SSL_CERT_FILE` | PEM bundle of CA certificates to trust instead of the built-in root store. |
+| `SSL_CERT_DIR` | Directory of PEM CA certificate files to trust instead of the built-in root store. |
 
 **Anthropic**
 
