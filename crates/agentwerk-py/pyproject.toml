@@ -4,7 +4,9 @@ build-backend = "maturin"
 
 [project]
 name = "agentwerk"
-version = "0.1.17"
+# Version is read from crates/agentwerk-py/Cargo.toml by maturin, which `make
+# bump` keeps in lockstep with the agentwerk crate. One source per side.
+dynamic = ["version"]
 description = "Python bindings for agentwerk, a minimal crate for building LLM agents"
 readme = "README.md"
 license = { text = "MIT" }

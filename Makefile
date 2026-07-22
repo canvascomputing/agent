@@ -77,7 +77,6 @@ bump: test
 	new="$$major.$$minor.$$patch"; \
 	sed -i '' "s/^version = \"$$current\"/version = \"$$new\"/" crates/agentwerk/Cargo.toml; \
 	sed -i '' "s/^version = \"$$current\"/version = \"$$new\"/" crates/agentwerk-py/Cargo.toml; \
-	sed -i '' "s/^version = \"$$current\"/version = \"$$new\"/" crates/agentwerk-py/pyproject.toml; \
 	cargo check --workspace --quiet; \
 	git add -A && git commit -m "v$$new" && \
 	git tag "v$$new" && \
