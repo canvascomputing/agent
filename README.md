@@ -30,6 +30,8 @@ cargo add agentwerk   # Rust
 pip install agentwerk  # Python
 ```
 
+> 🐍 **Python?** agentwerk ships first-class Python bindings that mirror this API one to one. Head to the **[Python guide →](crates/agentwerk-py/README.md)** for the full documentation in Python.
+
 ## Quick Start
 
 ```rust
@@ -52,8 +54,6 @@ async fn main() {
     println!("{}", result.as_str().unwrap_or_default());
 }
 ```
-
-> **Using Python?** agentwerk ships Python bindings that mirror this API one to one. See the [Python guide](crates/agentwerk-py/README.md) for the full documentation in Python.
 
 ## Demo (Malware Scan)
 
