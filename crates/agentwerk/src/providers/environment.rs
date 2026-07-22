@@ -32,6 +32,11 @@ pub(crate) fn env_required(name: &'static str) -> ProviderResult<String> {
         })
 }
 
+/// Read an optional env var, treating empty values as unset. Returns `None` if missing or empty.
+pub(crate) fn env_opt(name: &str) -> Option<String> {
+    std::env::var(name).ok().filter(|v| !v.is_empty())
+}
+
 /// Detect an LLM provider from environment variables and construct it from
 /// API key + base URL. Does not resolve a model — pair with
 /// [`model_from_env`] or set one explicitly on the agent.
