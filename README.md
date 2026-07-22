@@ -5,7 +5,7 @@
 <h1 align="center">agentwerk</h1>
 
 <p align="center">
-  <strong>A minimal Rust crate for running many agents in parallel.</strong>
+  <strong>A minimal Rust crate with Python bindings for running many agents in parallel.</strong>
 </p>
 
 <p align="center">
@@ -26,7 +26,8 @@
 ## Installation
 
 ```bash
-cargo add agentwerk
+cargo add agentwerk   # Rust
+pip install agentwerk  # Python
 ```
 
 ## Quick Start
@@ -51,6 +52,8 @@ async fn main() {
     println!("{}", result.as_str().unwrap_or_default());
 }
 ```
+
+> **Using Python?** agentwerk ships Python bindings that mirror this API one to one. See the [Python guide](crates/agentwerk-py/README.md) for the full documentation in Python.
 
 ## Demo (Malware Scan)
 
