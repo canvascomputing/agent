@@ -80,6 +80,9 @@ pub struct Stats {
     /// Run-wide Knowledge-store operation tally. Populated only on the run-wide
     /// `Stats`; a label slice never records here, so it stays zero.
     knowledge_stats: Mutex<KnowledgeCounters>,
+    /// Per-model request and token tallies keyed by model name. Populated
+    /// only on the run-wide `Stats`; always empty on a label slice.
+    model_stats: Mutex<HashMap<String, ModelCounters>>,
 }
 
 /// Raw per-tool tallies behind the `tool_stats` map. `errors` is derived
@@ -107,6 +110,14 @@ struct KnowledgeCounters {
     removes: u64,
     lists: u64,
     misses: u64,
+}
+
+/// Raw per-model tallies behind the `model_stats` map.
+#[derive(Default, Clone)]
+struct ModelCounters {
+    requests: u64,
+    input_tokens: u64,
+    output_tokens: u64,
 }
 
 /// Call and failure tallies for one tool, broken down by failure kind.
@@ -207,6 +218,29 @@ impl From<&KnowledgeCounters> for KnowledgeStat {
     }
 }
 
+/// Request and token tallies for one model, returned by
+/// [`Stats::model_stats`]. Lets a run using several models (one per agent)
+/// compare their request volume and token cost.
+#[derive(Debug, Clone, Serialize)]
+pub struct ModelStat {
+    /// Provider responses received for this model.
+    pub requests: u64,
+    /// Input tokens summed across this model's responses.
+    pub input_tokens: u64,
+    /// Output tokens summed across this model's responses.
+    pub output_tokens: u64,
+}
+
+impl From<&ModelCounters> for ModelStat {
+    fn from(c: &ModelCounters) -> Self {
+        Self {
+            requests: c.requests,
+            input_tokens: c.input_tokens,
+            output_tokens: c.output_tokens,
+        }
+    }
+}
+
 impl Stats {
     pub(crate) fn new() -> Self {
         Self {
@@ -225,6 +259,7 @@ impl Stats {
             tool_stats: Mutex::new(HashMap::new()),
             file_stats: Mutex::new(HashMap::new()),
             knowledge_stats: Mutex::new(KnowledgeCounters::default()),
+            model_stats: Mutex::new(HashMap::new()),
         }
     }
 
@@ -352,16 +387,37 @@ impl Stats {
         self.knowledge_stats.lock().unwrap().misses += 1;
     }
 
+    /// Per-model request and token tallies, sorted by model name. Empty on
+    /// a label slice.
+    pub fn model_stats(&self) -> BTreeMap<String, ModelStat> {
+        self.model_stats
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(name, counters)| (name.clone(), counters.into()))
+            .collect()
+    }
+
+    /// Count one provider response against `model`.
+    pub(crate) fn record_model_request(&self, model: &str, usage: &TokenUsage) {
+        let mut map = self.model_stats.lock().unwrap();
+        let counters = map.entry(model.to_string()).or_default();
+        counters.requests += 1;
+        counters.input_tokens += usage.input_tokens;
+        counters.output_tokens += usage.output_tokens;
+    }
+
     /// Record an event: every kind is counted by name automatically, so a
     /// future variant needs no arm here; only payload-bearing measures do.
     pub(crate) fn record_event(&self, kind: &EventKind, key: &str, labels: &[String]) {
         self.record_scoped(labels, |s| s.count_event(kind.name()));
         match kind {
-            EventKind::RequestFinished { usage, .. } => {
+            EventKind::RequestFinished { model, usage } => {
                 self.record_scoped(labels, |s| {
                     s.record_tokens(usage.input_tokens, usage.output_tokens)
                 });
                 self.record_usage(key, usage.clone());
+                self.record_model_request(model, usage);
             }
             EventKind::ToolCallStarted { tool_name, .. } => self.record_tool_call_named(tool_name),
             EventKind::ToolCallFailed {
@@ -678,6 +734,20 @@ impl crate::persistence::Persist for Stats {
                 misses: get("misses"),
             };
         }
+        if let Some(models) = value.get("models").and_then(|v| v.as_object()) {
+            let mut map = stats.model_stats.lock().unwrap();
+            for (name, body) in models {
+                let get = |key: &str| body.get(key).and_then(|v| v.as_u64()).unwrap_or(0);
+                map.insert(
+                    name.clone(),
+                    ModelCounters {
+                        requests: get("requests"),
+                        input_tokens: get("input_tokens"),
+                        output_tokens: get("output_tokens"),
+                    },
+                );
+            }
+        }
         Ok(stats)
     }
 }
@@ -689,6 +759,7 @@ impl Serialize for Stats {
         let tools = self.tool_stats();
         let files = self.file_stats();
         let knowledge = self.knowledge_stats();
+        let models = self.model_stats();
         let knowledge_used = knowledge.writes
             + knowledge.reads
             + knowledge.removes
@@ -700,7 +771,8 @@ impl Serialize for Stats {
             + usize::from(!labels.is_empty())
             + usize::from(!tools.is_empty())
             + usize::from(!files.is_empty())
-            + usize::from(knowledge_used);
+            + usize::from(knowledge_used)
+            + usize::from(!models.is_empty());
         let mut st = serializer.serialize_struct("Stats", len)?;
         st.serialize_field("turns", &self.turns())?;
         st.serialize_field("requests", &self.requests())?;
@@ -768,6 +840,9 @@ impl Serialize for Stats {
         }
         if knowledge_used {
             st.serialize_field("knowledge", &knowledge)?;
+        }
+        if !models.is_empty() {
+            st.serialize_field("models", &models)?;
         }
         st.end()
     }
@@ -1407,5 +1482,62 @@ mod tests {
         let s = Stats::new();
         let value = serde_json::to_value(&s).unwrap();
         assert!(value.get("knowledge").is_none());
+    }
+
+    #[test]
+    fn model_stats_records_requests_and_tokens_per_model() {
+        let s = Stats::new();
+        s.record_event(&request(10, 5), "KEY", &[]);
+        s.record_event(&request(2, 1), "KEY", &[]);
+
+        let models = s.model_stats();
+        let m = &models["m"];
+        assert_eq!(m.requests, 2);
+        assert_eq!(m.input_tokens, 12);
+        assert_eq!(m.output_tokens, 6);
+    }
+
+    #[test]
+    fn model_stats_empty_on_label_slice() {
+        let s = Stats::new();
+        s.record_event(&request(10, 5), "KEY", &["scan".into()]);
+        let slice = s.stats_for_label("scan");
+        assert!(slice.model_stats().is_empty());
+    }
+
+    #[test]
+    fn model_stats_round_trips_through_save_load() {
+        let dir = crate::test_util::TempDir::new().unwrap();
+
+        let s = Stats::new();
+        s.record_event(&request(10, 5), "KEY", &[]);
+
+        use crate::persistence::Persist;
+        s.save(dir.path()).unwrap();
+        let restored = Stats::load(dir.path()).unwrap();
+
+        let models = restored.model_stats();
+        assert_eq!(models["m"].requests, 1);
+        assert_eq!(models["m"].input_tokens, 10);
+        assert_eq!(models["m"].output_tokens, 5);
+    }
+
+    #[test]
+    fn stats_serializes_models_as_nested_object() {
+        let s = Stats::new();
+        s.record_event(&request(10, 5), "KEY", &[]);
+
+        let value = serde_json::to_value(&s).unwrap();
+        let models = value["models"].as_object().unwrap();
+        assert_eq!(models["m"]["requests"], 1);
+        assert_eq!(models["m"]["input_tokens"], 10);
+        assert_eq!(models["m"]["output_tokens"], 5);
+    }
+
+    #[test]
+    fn stats_omits_models_when_empty() {
+        let s = Stats::new();
+        let value = serde_json::to_value(&s).unwrap();
+        assert!(value.get("models").is_none());
     }
 }
