@@ -296,6 +296,13 @@ impl PyTicketSystem {
             .map(|reason| format!("{reason:?}"))
     }
 
+    /// A snapshot of run statistics — requests, tokens, ticket counts, and
+    /// (when present) per-tool/-file/-label/-model breakdowns — as a dict.
+    fn stats<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let value = serde_json::to_value(self.inner.stats()).map_err(runtime_error)?;
+        value_to_py(py, &value)
+    }
+
     /// The most recent finished ticket's result, or `None`.
     fn last_result<'py>(&self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyAny>>> {
         match self.inner.last_result() {

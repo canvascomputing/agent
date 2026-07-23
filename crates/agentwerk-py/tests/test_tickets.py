@@ -65,3 +65,9 @@ def test_cancel_marks_the_system_cancelled(system):
 
 def test_finish_reason_is_none_before_a_run(system):
     assert system.finish_reason() is None
+
+
+def test_stats_reports_zero_counts_before_a_run(system):
+    stats = system.stats()
+    assert stats["requests"] == 0
+    assert stats["tickets_created"] == 0
