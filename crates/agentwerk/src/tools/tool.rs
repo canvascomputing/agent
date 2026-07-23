@@ -819,7 +819,10 @@ fn format_oversized_tool_result(original_len: usize, path: &Path, preview: &str)
 /// slicing there would panic.
 fn truncate_preview(content: &str) -> &str {
     let window = utf8_boundary_floor(content, PREVIEW_CHARS.min(content.len()));
-    let cut = content[..window].rfind('\n').map(|i| i + 1).unwrap_or(window);
+    let cut = content[..window]
+        .rfind('\n')
+        .map(|i| i + 1)
+        .unwrap_or(window);
     &content[..cut]
 }
 

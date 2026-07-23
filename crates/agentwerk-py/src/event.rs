@@ -29,7 +29,10 @@ impl PyEvent {
     }
 
     fn __repr__(&self) -> String {
-        format!("Event(kind={:?}, ticket_key={:?})", self.kind, self.ticket_key)
+        format!(
+            "Event(kind={:?}, ticket_key={:?})",
+            self.kind, self.ticket_key
+        )
     }
 }
 

@@ -210,10 +210,7 @@ async fn sniper_pool_finds_planted_indicators(
     // Every grep call the agents made: the raw material for tuning the prompt.
     eprintln!("\n--- grep calls ({}) ---", calls.len());
     for (agent, input) in &calls {
-        eprintln!(
-            "[{agent}] grep({})",
-            serde_json::to_string(input).unwrap()
-        );
+        eprintln!("[{agent}] grep({})", serde_json::to_string(input).unwrap());
     }
 
     // Coverage breakdown: report every planted indicator, found or missed.

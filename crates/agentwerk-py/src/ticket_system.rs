@@ -100,7 +100,8 @@ impl PyTicketSystem {
 
     /// Delay between request retries, in seconds.
     fn request_retry_delay(slf: PyRef<'_, Self>, seconds: f64) -> PyRef<'_, Self> {
-        slf.inner.request_retry_delay(Duration::from_secs_f64(seconds));
+        slf.inner
+            .request_retry_delay(Duration::from_secs_f64(seconds));
         slf
     }
 
@@ -163,10 +164,7 @@ impl PyTicketSystem {
 
     /// After each finished ticket, call `make(ticket)`; a returned `Ticket`
     /// is enqueued, `None` enqueues nothing.
-    fn create_ticket_on_result<'py>(
-        slf: PyRef<'py, Self>,
-        make: Py<PyAny>,
-    ) -> PyRef<'py, Self> {
+    fn create_ticket_on_result<'py>(slf: PyRef<'py, Self>, make: Py<PyAny>) -> PyRef<'py, Self> {
         slf.inner.create_ticket_on_result(move |ticket: &Ticket| {
             Python::attach(|py| {
                 let view = value_to_py(py, &ticket_to_value(ticket)).ok()?;
@@ -293,7 +291,9 @@ impl PyTicketSystem {
     /// How the run ended (`"Drained"`, `"Cancelled"`, `"PolicyViolated(..)"`),
     /// or `None` if it has not finished.
     fn finish_reason(&self) -> Option<String> {
-        self.inner.finish_reason().map(|reason| format!("{reason:?}"))
+        self.inner
+            .finish_reason()
+            .map(|reason| format!("{reason:?}"))
     }
 
     /// The most recent finished ticket's result, or `None`.

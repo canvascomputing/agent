@@ -9,7 +9,9 @@ use std::time::Instant;
 
 use serde_json::Value;
 
-use super::grep::{render_content, render_count, render_files, OutputMode, Query, MAX_LINE_COLUMNS};
+use super::grep::{
+    render_content, render_count, render_files, OutputMode, Query, MAX_LINE_COLUMNS,
+};
 use super::tool::ToolResult;
 use crate::codegrep::{self, Conf, Pattern};
 
@@ -179,10 +181,13 @@ fn parse_constraints(
             return Err("each constraint needs a metavariable and a regex".to_string());
         }
         if !names.contains(name) {
-            return Err(format!("constraint references unknown metavariable ${name}"));
+            return Err(format!(
+                "constraint references unknown metavariable ${name}"
+            ));
         }
-        let regex = regex::Regex::new(source)
-            .map_err(|error| format!("invalid metavariable-regex constraint for ${name}: {error}"))?;
+        let regex = regex::Regex::new(source).map_err(|error| {
+            format!("invalid metavariable-regex constraint for ${name}: {error}")
+        })?;
         compiled.push((name.to_string(), regex));
     }
     Ok(compiled)
@@ -190,10 +195,7 @@ fn parse_constraints(
 
 /// Keep a match only when every constraint's named capture is present and its text
 /// matches the regex. An absent capture fails the match.
-fn satisfies_constraints(
-    found: &codegrep::Match,
-    constraints: &[(String, regex::Regex)],
-) -> bool {
+fn satisfies_constraints(found: &codegrep::Match, constraints: &[(String, regex::Regex)]) -> bool {
     constraints.iter().all(|(name, regex)| {
         found
             .captures
@@ -245,11 +247,7 @@ mod tests {
     #[tokio::test]
     async fn constraints_filter_by_capture_regex() {
         let tmp = crate::test_util::TempDir::new().unwrap();
-        fs::write(
-            tmp.path().join("a.php"),
-            "include('x');\nprint('y');\n",
-        )
-        .unwrap();
+        fs::write(tmp.path().join("a.php"), "include('x');\nprint('y');\n").unwrap();
         let out = search(
             &test_ctx(tmp.path()),
             serde_json::json!({
@@ -287,7 +285,9 @@ mod tests {
         )
         .await;
         assert!(
-            out.as_str().unwrap_or_default().contains("invalid code pattern"),
+            out.as_str()
+                .unwrap_or_default()
+                .contains("invalid code pattern"),
             "got {out}"
         );
     }
@@ -316,6 +316,9 @@ mod tests {
             serde_json::json!({"pattern": "\\$NAME", "output_mode": "content"}),
         )
         .await;
-        assert!(out["content"].as_str().unwrap().contains("f.txt:1:"), "got {out}");
+        assert!(
+            out["content"].as_str().unwrap().contains("f.txt:1:"),
+            "got {out}"
+        );
     }
 }
