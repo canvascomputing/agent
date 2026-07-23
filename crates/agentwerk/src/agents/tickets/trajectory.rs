@@ -19,17 +19,22 @@ use super::{Author, Reply, ReplyContent, Ticket};
 pub struct Trajectory {
     /// Example id `<agent>-<ticket>`; also the on-disk filename.
     pub key: String,
+    /// Name of the model that produced the transcript. `None` when the
+    /// producing agent could not be resolved at capture time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
     /// The transcript exchanged with the model.
     pub messages: Vec<Reply>,
 }
 
 impl Trajectory {
-    /// Capture `ticket`'s transcript as an example produced by `agent`.
-    /// Keeps every reply, including the system prompt: a trainer wants it,
-    /// where `Ticket::to_messages` would drop it.
-    pub(crate) fn from_ticket(agent: &str, ticket: &Ticket) -> Self {
+    /// Capture `ticket`'s transcript as an example produced by `agent`
+    /// using `model`. Keeps every reply, including the system prompt: a
+    /// trainer wants it, where `Ticket::to_messages` would drop it.
+    pub(crate) fn from_ticket(agent: &str, model: Option<&str>, ticket: &Ticket) -> Self {
         Self {
             key: format!("{agent}-{}", ticket.key),
+            model: model.map(str::to_string),
             messages: ticket.replies.clone(),
         }
     }
@@ -47,6 +52,12 @@ impl Trajectory {
         }
 
         let mut out = format!("{HTML_HEAD}<h1>{}</h1>\n", escape(&self.key));
+        if let Some(model) = &self.model {
+            out.push_str(&format!(
+                "<p class=\"model\">model: {}</p>\n",
+                escape(model)
+            ));
+        }
         for reply in &self.messages {
             let role = match reply.author {
                 Author::System => "system",
@@ -155,15 +166,16 @@ mod tests {
 
     #[test]
     fn from_ticket_carries_replies() {
-        let trajectory = Trajectory::from_ticket("analyst", &ticket_with_reply());
+        let trajectory = Trajectory::from_ticket("analyst", Some("gpt-4"), &ticket_with_reply());
         assert_eq!(trajectory.key, "analyst-TICKET-1");
+        assert_eq!(trajectory.model.as_deref(), Some("gpt-4"));
         assert_eq!(trajectory.messages.len(), 1);
     }
 
     #[test]
     fn save_then_load_round_trips() {
         let dir = TempDir::new().unwrap();
-        let trajectory = Trajectory::from_ticket("analyst", &ticket_with_reply());
+        let trajectory = Trajectory::from_ticket("analyst", Some("gpt-4"), &ticket_with_reply());
         trajectory.save(dir.path()).unwrap();
 
         let path = dir
@@ -173,13 +185,15 @@ mod tests {
         assert!(path.exists());
         let loaded = Trajectory::load(dir.path(), &trajectory.key).unwrap();
         assert_eq!(loaded.key, trajectory.key);
+        assert_eq!(loaded.model.as_deref(), Some("gpt-4"));
         assert_eq!(loaded.messages.len(), 1);
     }
 
     #[test]
     fn save_writes_html_sibling() {
         let dir = TempDir::new().unwrap();
-        let mut trajectory = Trajectory::from_ticket("analyst", &ticket_with_reply());
+        let mut trajectory =
+            Trajectory::from_ticket("analyst", Some("gpt-4"), &ticket_with_reply());
         trajectory.messages.push(Reply {
             author: Author::Assistant,
             content: vec![ReplyContent::ToolUse {
@@ -199,12 +213,28 @@ mod tests {
         assert!(html.contains("<div class=\"turn user\">"));
         assert!(html.contains("hello"));
         assert!(html.contains("<summary>&rarr; read_file</summary>"));
+        assert!(html.contains("<p class=\"model\">model: gpt-4</p>"));
+    }
+
+    #[test]
+    fn save_writes_html_without_model_line_when_model_is_none() {
+        let dir = TempDir::new().unwrap();
+        let trajectory = Trajectory::from_ticket("analyst", None, &ticket_with_reply());
+        trajectory.save(dir.path()).unwrap();
+
+        let path = dir
+            .path()
+            .join("trajectories")
+            .join("analyst-TICKET-1.html");
+        let html = std::fs::read_to_string(&path).unwrap();
+        assert!(!html.contains("class=\"model\""));
     }
 
     #[test]
     fn html_escapes_message_text() {
         let dir = TempDir::new().unwrap();
-        let mut trajectory = Trajectory::from_ticket("analyst", &ticket_with_reply());
+        let mut trajectory =
+            Trajectory::from_ticket("analyst", Some("gpt-4"), &ticket_with_reply());
         trajectory
             .messages
             .push(Reply::user_text("<script>alert(1)</script>"));

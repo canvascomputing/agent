@@ -270,6 +270,17 @@ impl TicketSystem {
             .unwrap_or_default()
     }
 
+    /// Name of the model the currently bound agent named `agent_name`
+    /// runs. `None` when no such agent is bound.
+    fn model_for_agent(&self, agent_name: &str) -> Option<String> {
+        self.agents
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|a| a.name == agent_name)
+            .map(|a| a.model.name.clone())
+    }
+
     pub(crate) fn policies(&self) -> Policies {
         self.policies.lock().unwrap().clone()
     }
@@ -452,7 +463,9 @@ impl TicketSystem {
             let Some(ticket) = system.get_ticket(&event.ticket_key) else {
                 return;
             };
-            let _ = Trajectory::from_ticket(&event.agent_name, &ticket).save(&system.dir_value());
+            let model = system.model_for_agent(&event.agent_name);
+            let _ = Trajectory::from_ticket(&event.agent_name, model.as_deref(), &ticket)
+                .save(&system.dir_value());
         })
     }
 
