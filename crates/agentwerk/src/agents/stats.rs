@@ -157,9 +157,8 @@ impl From<&ToolCounters> for ToolStat {
 /// Open and failure tallies for one path, returned by
 /// [`Stats::file_stats`]. Records how often a file-opening tool named this
 /// path: `opens` counts successful opens, `failed` counts attempts that
-/// errored. For the search tools (`grep`, `codegrep`) the path may be a
-/// directory rather than a file, since their `path` argument searches under
-/// a directory or file.
+/// errored. For `grep` the path may be a directory rather than a file, since
+/// its `path` argument searches under a directory or file.
 #[derive(Debug, Clone, Serialize)]
 pub struct FileStat {
     /// Calls that opened this path successfully.

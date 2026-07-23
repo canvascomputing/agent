@@ -10,8 +10,8 @@ mod test_util;
 #[path = "integration/bash_usage.rs"]
 mod bash_usage;
 
-#[path = "integration/codegrep_finds_by_shape.rs"]
-mod codegrep_finds_by_shape;
+#[path = "integration/grep_finds_by_shape.rs"]
+mod grep_finds_by_shape;
 
 #[path = "integration/sniper_finds_planted.rs"]
 mod sniper_finds_planted;

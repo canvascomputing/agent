@@ -8,7 +8,7 @@ Read tickets from the queue: `get` by key (defaults to your current ticket), `li
 ## When NOT to use
 
 - Create or edit tickets, or need read AND write in one flow: use `manage_tickets_tool`.
-- Find code or files: use `grep_tool` / `glob_tool`.
+- Find code or files: use `grep` / `glob_tool`.
 
 ## Schema
 

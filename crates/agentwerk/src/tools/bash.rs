@@ -152,7 +152,7 @@ Executes a bash command in the working directory and returns its output.
 
 IMPORTANT: Avoid using this tool when a dedicated tool exists:
 - File search: Use glob_tool (NOT find or ls)
-- Content search: Use grep_tool (NOT grep or rg via bash_tool)
+- Content search: Use the grep tool (NOT shell grep/rg via bash_tool)
 - Read files: Use read_file_tool (NOT cat/head/tail)
 - Edit files: Use edit_file_tool (NOT sed/awk)
 - Write files: Use write_file_tool (NOT echo/heredoc)

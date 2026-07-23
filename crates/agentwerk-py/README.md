@@ -1,14 +1,12 @@
 <h1 align="center">agentwerk (Python)</h1>
 
 <p align="center">
-  <strong>Python bindings for agentwerk: a minimal library for running many agents in parallel.</strong>
+  <strong>agentwerk: A minimal library for running many agents in parallel.</strong>
 </p>
 
-<p align="center">
-  agentwerk is a Rust crate; this package is a thin veneer over it, so the Python
-  API mirrors the Rust API one to one. See the <a href="../../README.md">main README</a>
-  for the project overview.
-</p>
+<p align="center">agentwerk is designed to tackle complex problems with fleets of agents through the simplest interface possible. It provides a ticket system which distributes tasks across agents running in parallel, validates results, retries on failure, and reports every step as an event.</p>
+
+<p align="center"><em>agentwerk pairs "agent" with the German "Werk", a word for both factory and artwork: machinery for building agentic systems.</em></p>
 
 ---
 
@@ -372,9 +370,8 @@ take. Built-in tools are constructed and passed to `.tool(...)`:
 | | `WriteFileTool()` | Create or overwrite a file. |
 | | `EditFileTool()` | Replace text in a file. |
 | **Search** | `GlobTool()` | Find files by pattern. |
-| | `GrepTool()` | Search file contents. |
+| | `GrepTool()` | Search file contents by regex or code shape. |
 | | `ListDirectoryTool()` | List files and directories. |
-| | `CodegrepTool()` | Structural code search. |
 | **Shell** | `BashTool(name, pattern)` | Run a shell command matching an allowed pattern. |
 | **Web** | `FetchUrlTool()` | Fetch a URL and read its body. |
 | **Tickets** | `ManageTicketsTool()` | Read the ticket queue and create or edit tickets. |

@@ -11,7 +11,6 @@ BUILTIN_FACTORIES = [
     aw.GrepTool,
     aw.GlobTool,
     aw.ListDirectoryTool,
-    aw.CodegrepTool,
     aw.FetchUrlTool,
     aw.ReadTicketsTool,
     aw.ManageTicketsTool,

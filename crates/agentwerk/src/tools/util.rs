@@ -54,26 +54,6 @@ pub(crate) fn glob_match(pattern: &str, text: &str) -> bool {
     glob_match_bytes(pattern.as_bytes(), text.as_bytes())
 }
 
-/// True when `path` passes the content-search glob filter. A filter with a
-/// `/` matches the path relative to `base` (separators normalized to `/`,
-/// with `*` crossing them); a bare filter matches the file name only.
-pub(crate) fn glob_matches_file(filter: &str, path: &Path, base: &Path) -> bool {
-    if filter.contains('/') {
-        let relative = path
-            .strip_prefix(base)
-            .unwrap_or(path)
-            .to_string_lossy()
-            .replace('\\', "/");
-        glob_match(filter, &relative)
-    } else {
-        let name = path
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        glob_match(filter, &name)
-    }
-}
-
 fn glob_match_bytes(pattern: &[u8], text: &[u8]) -> bool {
     if pattern.is_empty() {
         return text.is_empty();

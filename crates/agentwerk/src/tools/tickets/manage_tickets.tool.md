@@ -12,7 +12,7 @@ Read and mutate the ticket queue from one tool: `get` / `list` / `search` to rea
 
 - Reads only: register `read_tickets_tool` (smaller surface, fewer mistakes); write-only: register `write_tickets_tool` to block listing.
 - Finish your current ticket: call `finish`.
-- Find code or files: use `grep_tool` / `glob_tool`.
+- Find code or files: use `grep` / `glob_tool`.
 
 ## Schema
 

@@ -8,9 +8,8 @@ use std::sync::Arc;
 
 use agentwerk::providers::ProviderResult;
 use agentwerk::tools::{
-    BashTool, CodegrepTool, EditFileTool, FetchUrlTool, GlobTool, GrepTool, ListDirectoryTool,
-    ManageTicketsTool, ReadFileTool, ReadTicketsTool, ToolContext, ToolLike, ToolResult,
-    WriteFileTool,
+    BashTool, EditFileTool, FetchUrlTool, GlobTool, GrepTool, ListDirectoryTool, ManageTicketsTool,
+    ReadFileTool, ReadTicketsTool, ToolContext, ToolLike, ToolResult, WriteFileTool,
 };
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -196,6 +195,7 @@ fn edit_file_tool() -> PyTool {
     handle(Arc::new(EditFileTool))
 }
 
+/// Search file contents by regex, or a code shape via `syntax="code"`.
 #[pyfunction]
 #[pyo3(name = "GrepTool")]
 fn grep_tool() -> PyTool {
@@ -212,12 +212,6 @@ fn glob_tool() -> PyTool {
 #[pyo3(name = "ListDirectoryTool")]
 fn list_directory_tool() -> PyTool {
     handle(Arc::new(ListDirectoryTool))
-}
-
-#[pyfunction]
-#[pyo3(name = "CodegrepTool")]
-fn codegrep_tool() -> PyTool {
-    handle(Arc::new(CodegrepTool))
 }
 
 #[pyfunction]
@@ -265,7 +259,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(grep_tool, m)?)?;
     m.add_function(wrap_pyfunction!(glob_tool, m)?)?;
     m.add_function(wrap_pyfunction!(list_directory_tool, m)?)?;
-    m.add_function(wrap_pyfunction!(codegrep_tool, m)?)?;
     m.add_function(wrap_pyfunction!(fetch_url_tool, m)?)?;
     m.add_function(wrap_pyfunction!(read_tickets_tool, m)?)?;
     m.add_function(wrap_pyfunction!(manage_tickets_tool, m)?)?;
