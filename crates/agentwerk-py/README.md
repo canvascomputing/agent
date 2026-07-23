@@ -265,6 +265,7 @@ for ticket in tickets.tickets():
 | `find_ticket(p)` | Return the earliest ticket matching the predicate. |
 | `find_tickets(p)` | Return every ticket matching the predicate. |
 | `get_ticket(key)` | Return one ticket by key, or `None`. |
+| `stats()` | Return run statistics (requests, tokens, ticket counts, per-tool/-file/-label/-model breakdowns) as a dict. |
 
 ### Inspecting tickets
 
@@ -512,9 +513,9 @@ Also: `run_started`, `run_finished`, `turn_started`, `request_started`,
 ## Not yet in the Python bindings
 
 The bindings cover the full agent, ticket, tool, provider, knowledge, and event
-surface. A few Rust-only pieces are not exposed yet: run `Stats`
-(`tickets.stats()`), the `on_failure` retry-message hook, `cancel_on(future)`,
-and `cancel_label_on_event`. Open an issue if you need one.
+surface. A few Rust-only pieces are not exposed yet: the `on_failure`
+retry-message hook, `cancel_on(future)`, and `cancel_label_on_event`. Open an
+issue if you need one.
 
 ## Development
 
