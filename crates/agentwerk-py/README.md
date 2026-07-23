@@ -83,6 +83,7 @@ agent = (
 | `label(l)` / `labels([..])` | Restrict the agent to tickets carrying matching labels. |
 | `tool(t)` | Register a tool the agent may call. |
 | `dir(d)` | Set the directory the agent works in. |
+| `on_failure(hook)` | Rewrite the corrective directive sent after an unaccepted turn. |
 
 `role` and `context` are covered under [Prompting](#prompting); `knowledge(store)`
 under [Knowledge](#knowledge).
@@ -235,7 +236,9 @@ tickets.create_ticket_on_result(review_finding)
 |--------|-------------|
 | `cancel_on_event(p)` | End the run when an event matches. |
 | `cancel_on_result(p)` | End the run when a finished result matches. |
+| `cancel_on(awaitable)` | End the run when an awaitable resolves. |
 | `cancel_label(l)` | Call off one label's agents. |
+| `cancel_label_on_event(l, p)` | Call off one label's agents when an event matches. |
 | `create_ticket_on_result(make)` | Enqueue a follow-up ticket from a finished ticket. |
 | `save_trajectory_on_event(p)` | Write a ticket's trajectory to disk on a matching event. |
 | `await wait_for_ticket(p)` | Wait for one matching ticket instead of draining the queue. |
@@ -265,7 +268,7 @@ for ticket in tickets.tickets():
 | `find_ticket(p)` | Return the earliest ticket matching the predicate. |
 | `find_tickets(p)` | Return every ticket matching the predicate. |
 | `get_ticket(key)` | Return one ticket by key, or `None`. |
-| `stats()` | Return run statistics (requests, tokens, ticket counts, per-tool/-file/-label/-model breakdowns) as a dict. |
+| `stats()` | Return run statistics (requests, tokens, ticket counts, and per-tool, per-file, per-label, and per-model breakdowns) as a dict. |
 
 ### Inspecting tickets
 
@@ -509,13 +512,6 @@ Also: `run_started`, `run_finished`, `turn_started`, `request_started`,
 `request_failed`, `text_chunk_received`, `tool_call_started`,
 `file_open_finished`, `file_open_failed`, `knowledge_used`, `knowledge_missed`,
 `schema_retried`, `compaction_progress`, `compaction_failed`.
-
-## Not yet in the Python bindings
-
-The bindings cover the full agent, ticket, tool, provider, knowledge, and event
-surface. A few Rust-only pieces are not exposed yet: the `on_failure`
-retry-message hook, `cancel_on(future)`, and `cancel_label_on_event`. Open an
-issue if you need one.
 
 ## Development
 

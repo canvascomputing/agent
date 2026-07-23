@@ -46,6 +46,7 @@ pub struct PyAgentBuilder {
     model: ModelSpec,
     tools: Vec<Arc<dyn ToolLike>>,
     knowledge: Option<Arc<Knowledge>>,
+    on_failure: Option<Py<PyAny>>,
 }
 
 #[pymethods]
@@ -64,6 +65,7 @@ impl PyAgentBuilder {
             model: ModelSpec::Unset,
             tools: Vec::new(),
             knowledge: None,
+            on_failure: None,
         }
     }
 
@@ -178,6 +180,15 @@ impl PyAgentBuilder {
         Ok(slf)
     }
 
+    /// Rewrite the corrective directive injected when a turn ends without an
+    /// accepted result. The callback receives the default reason and returns
+    /// the replacement message, or `None` to keep the built-in directive.
+    /// Called inline per failure, so keep it cheap.
+    fn on_failure(mut slf: PyRefMut<'_, Self>, hook: Py<PyAny>) -> PyRefMut<'_, Self> {
+        slf.on_failure = Some(hook);
+        slf
+    }
+
     /// Assemble the real `Agent`. Errors if provider or model is unset, or if
     /// environment detection fails.
     fn build(&self) -> PyResult<PyAgent> {
@@ -233,6 +244,18 @@ impl PyAgentBuilder {
         }
         for tool in &self.tools {
             builder = builder.tool(BoxedTool(Arc::clone(tool)));
+        }
+        if let Some(hook) = &self.on_failure {
+            let hook = Python::attach(|py| hook.clone_ref(py));
+            builder = builder.on_failure(move |detail: &str| {
+                Python::attach(|py| {
+                    let result = hook.bind(py).call1((detail,)).ok()?;
+                    if result.is_none() {
+                        return None;
+                    }
+                    result.extract::<String>().ok()
+                })
+            });
         }
 
         Ok(PyAgent {

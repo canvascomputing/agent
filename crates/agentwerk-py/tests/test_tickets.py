@@ -1,5 +1,7 @@
 """Tickets, schemas, and ticket-system state, exercised through the public API."""
 
+import asyncio
+
 import pytest
 
 import agentwerk as aw
@@ -71,3 +73,13 @@ def test_stats_reports_zero_counts_before_a_run(system):
     stats = system.stats()
     assert stats["requests"] == 0
     assert stats["tickets_created"] == 0
+
+
+async def test_cancel_on_accepts_an_awaitable_and_chains(system):
+    configured = system.cancel_on(asyncio.sleep(0))
+    assert isinstance(configured, aw.TicketSystem)
+
+
+def test_cancel_label_on_event_chains(system):
+    configured = system.cancel_label_on_event("scan", lambda event: True)
+    assert isinstance(configured, aw.TicketSystem)
