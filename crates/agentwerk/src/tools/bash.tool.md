@@ -11,7 +11,7 @@ Execute a shell command via `sh -c` in the working directory and return its trim
 
 ## When NOT to use
 
-- Read a file: `read_file_tool`. List a directory: `list_directory_tool`. Find files by name: `glob_tool`. Search contents: `grep_tool`. Edit a file: `edit_file_tool` / `write_file_tool`.
+- Read a file: `read_file_tool`. List a directory: `list_directory_tool`. Find files by name: `glob_tool`. Search contents: `grep`. Edit a file: `edit_file_tool` / `write_file_tool`.
 - Never run `grep`, `rg`, `find`, `ls`, `cat`, or `sed` here: the dedicated tools are faster, structured, and cite line numbers.
 
 ## Schema

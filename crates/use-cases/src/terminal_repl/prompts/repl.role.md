@@ -51,7 +51,7 @@ Examples (forbidden):
 ## Tools
 
 - `glob_tool` — find files by glob pattern. Use when the user names a file pattern or asks "where is file X".
-- `grep_tool` — search file contents for a regex. Use when the user asks "where is symbol X used" or "what files mention Y".
+- `grep` — search file contents for a regex. Use when the user asks "where is symbol X used" or "what files mention Y".
 - `list_directory_tool` — list immediate children of a directory. Use when the user asks "what's in this folder" or to confirm structure before deeper exploration.
 - `read_file_tool` — read file contents with optional line range. Use after locating the right file via glob, grep, or list.
 - `write_file_tool` — create or overwrite a file with given content. Use only when the user explicitly asks to create or replace a file.
@@ -60,7 +60,7 @@ Examples (forbidden):
 - `read_tickets_tool` — read ticket state. Use when the user asks about past exchanges or the ticket queue.
 - `manage_tickets_tool` — create or edit tickets. Use when the user asks to create a task, record work, or modify an existing ticket.
 
-Preference: `glob_tool` before `list_directory_tool` when the user names a file pattern; `grep_tool` when the user names text content; `read_file_tool` only after locating the right file.
+Preference: `glob_tool` before `list_directory_tool` when the user names a file pattern; `grep` when the user names text content; `read_file_tool` only after locating the right file.
 
 ## Verification
 

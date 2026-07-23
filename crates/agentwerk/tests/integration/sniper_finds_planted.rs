@@ -3,10 +3,10 @@
 //! language, over a directory seeded with planted malicious indicators across
 //! secrets, networking, and dynamic-execution categories.
 //!
-//! It prints every `codegrep_tool` call the agents made and a found / missed
+//! It prints every `grep` call the agents made and a found / missed
 //! coverage breakdown, then asserts (tolerantly) that the pool surfaced at least
 //! one planted indicator. The printed calls are the point: they show how the live
-//! model turns a named threat into codegrep queries, which is what the prompt
+//! model turns a named threat into regex queries, which is what the prompt
 //! and tool docs are tuned against.
 
 use std::fs;
@@ -17,7 +17,7 @@ use super::common;
 
 use agentwerk::agents::knowledge::Page;
 use agentwerk::event::{default_logger, Event, EventKind};
-use agentwerk::tools::CodegrepTool;
+use agentwerk::tools::GrepTool;
 use agentwerk::{Agent, Knowledge, Ticket, TicketSystem};
 
 const SNIPER_AGENT: &str = include_str!("../../../use-cases/src/malware_scanner/agents/sniper.md");
@@ -26,7 +26,7 @@ const SNIPER_LABEL: &str = "sniper_hunt";
 const ANALYSIS_LABEL: &str = "security_analysis";
 const TIME_BUDGET: Duration = Duration::from_secs(60);
 
-/// A planted indicator: a distinctive substring that appears in `codegrep_tool`
+/// A planted indicator: a distinctive substring that appears in `grep`
 /// matched output when the shape is found, plus a category for the breakdown.
 struct Indicator {
     marker: &'static str,
@@ -122,7 +122,7 @@ async fn sniper_pool_finds_planted_indicators(
         tags: vec![],
     }).map_err(|e| format!("seed page: {e}"))?;
 
-    // Capture each codegrep_tool call (agent + input) and each output.
+    // Capture each grep call (agent + input) and each output.
     let calls: Arc<Mutex<Vec<(String, serde_json::Value)>>> = Arc::new(Mutex::new(Vec::new()));
     let outputs: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let calls_c = Arc::clone(&calls);
@@ -132,7 +132,7 @@ async fn sniper_pool_finds_planted_indicators(
         match &e.kind {
             EventKind::ToolCallStarted {
                 tool_name, input, ..
-            } if tool_name == "codegrep_tool" => {
+            } if tool_name == "grep" => {
                 calls_c
                     .lock()
                     .unwrap()
@@ -140,7 +140,7 @@ async fn sniper_pool_finds_planted_indicators(
             }
             EventKind::ToolCallFinished {
                 tool_name, output, ..
-            } if tool_name == "codegrep_tool" => {
+            } if tool_name == "grep" => {
                 outputs_c.lock().unwrap().push(output.clone());
             }
             _ => {}
@@ -166,7 +166,7 @@ async fn sniper_pool_finds_planted_indicators(
                 .label(SNIPER_LABEL)
                 .dir(root.to_path_buf())
                 .knowledge(&knowledge)
-                .tool(CodegrepTool)
+                .tool(GrepTool)
                 .build(),
         );
     }
@@ -207,38 +207,14 @@ async fn sniper_pool_finds_planted_indicators(
     let outputs = outputs.lock().unwrap().clone();
     let all_text = outputs.join("\n");
 
-    // Every codegrep call the agents made: the raw material for tuning the prompt.
-    eprintln!("\n--- codegrep calls ({}) ---", calls.len());
+    // Every grep call the agents made: the raw material for tuning the prompt.
+    eprintln!("\n--- grep calls ({}) ---", calls.len());
     for (agent, input) in &calls {
         eprintln!(
-            "[{agent}] codegrep_tool({})",
+            "[{agent}] grep({})",
             serde_json::to_string(input).unwrap()
         );
     }
-
-    // Query-quality breakdown: the two shapes that dominate a bad run. A placeholder
-    // leak (`<call>(...)`) or an unanchored pattern (only metavariables and
-    // punctuation) matches nothing or everything. The test asserts nothing on these;
-    // the counts make a prompt regression visible without making the run flaky.
-    let patterns: Vec<&str> = calls
-        .iter()
-        .filter_map(|(_, input)| input["pattern"].as_str())
-        .collect();
-    let placeholder = patterns.iter().filter(|p| has_angle_placeholder(p)).count();
-    let no_anchor = patterns
-        .iter()
-        .filter(|p| !has_angle_placeholder(p) && !has_literal_anchor(p))
-        .count();
-    eprintln!(
-        "\n--- codegrep query quality ({} patterns) ---",
-        patterns.len()
-    );
-    eprintln!("placeholder (<word> leak): {placeholder}");
-    eprintln!("no literal anchor:         {no_anchor}");
-    eprintln!(
-        "well-formed:               {}",
-        patterns.len() - placeholder - no_anchor
-    );
 
     // Coverage breakdown: report every planted indicator, found or missed.
     eprintln!("\n--- planted indicator coverage ---");
@@ -256,69 +232,11 @@ async fn sniper_pool_finds_planted_indicators(
         }
     }
 
-    assert!(!calls.is_empty(), "the Sniper made no codegrep_tool calls");
+    assert!(!calls.is_empty(), "the Sniper made no grep calls");
     assert!(
         found > 0,
-        "agents surfaced none of the planted indicators; codegrep output: {all_text}"
+        "agents surfaced none of the planted indicators; grep output: {all_text}"
     );
 
     Ok(())
-}
-
-/// True when the pattern carries a lowercase-led `<word>` placeholder the writer
-/// meant to fill with a real identifier; codegrep matches the literal `<`, the
-/// word, `>`, so the query finds nothing.
-fn has_angle_placeholder(pattern: &str) -> bool {
-    let chars: Vec<char> = pattern.chars().collect();
-    for (i, &c) in chars.iter().enumerate() {
-        if c != '<' {
-            continue;
-        }
-        let start = i + 1;
-        if !chars
-            .get(start)
-            .is_some_and(|first| first.is_ascii_lowercase())
-        {
-            continue;
-        }
-        let mut end = start;
-        while chars
-            .get(end)
-            .is_some_and(|w| w.is_ascii_lowercase() || w.is_ascii_digit() || *w == '_')
-        {
-            end += 1;
-        }
-        if chars.get(end) == Some(&'>') {
-            return true;
-        }
-    }
-    false
-}
-
-/// True when the pattern contains at least one literal identifier to anchor on,
-/// skipping metavariables (`$NAME`, `$...NAME`). A pattern of only metavariables
-/// and punctuation has no anchor and matches every construct.
-fn has_literal_anchor(pattern: &str) -> bool {
-    let chars: Vec<char> = pattern.chars().collect();
-    let mut i = 0;
-    while i < chars.len() {
-        if chars[i] == '$' {
-            i += 1;
-            while chars.get(i) == Some(&'.') {
-                i += 1;
-            }
-            while chars
-                .get(i)
-                .is_some_and(|w| w.is_ascii_alphanumeric() || *w == '_')
-            {
-                i += 1;
-            }
-            continue;
-        }
-        if chars[i].is_ascii_alphabetic() {
-            return true;
-        }
-        i += 1;
-    }
-    false
 }

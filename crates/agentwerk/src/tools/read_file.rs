@@ -178,7 +178,7 @@ mod tests {
     #[test]
     fn opened_paths_reports_the_file_argument_for_file_tools() {
         use crate::tools::{
-            CodegrepTool, EditFileTool, GlobTool, GrepTool, ListDirectoryTool, WriteFileTool,
+            EditFileTool, GlobTool, GrepTool, ListDirectoryTool, WriteFileTool,
         };
 
         let input = serde_json::json!({"path": "src/lib.rs"});
@@ -200,7 +200,6 @@ mod tests {
         assert!(ListDirectoryTool.opened_paths(&input).is_empty());
         assert!(GlobTool.opened_paths(&input).is_empty());
         assert!(GrepTool.opened_paths(&input).is_empty());
-        assert!(CodegrepTool.opened_paths(&input).is_empty());
     }
 
     #[tokio::test]

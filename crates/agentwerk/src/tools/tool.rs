@@ -812,15 +812,14 @@ fn format_oversized_tool_result(original_len: usize, path: &Path, preview: &str)
     )
 }
 
-/// Return a leading slice of `content` up to `PREVIEW_CHARS` bytes,
-/// snapped to the last newline within that window. Falls back to a
-/// UTF-8 boundary floor when no newline is present.
+/// Return a leading slice of `content` up to `PREVIEW_CHARS` bytes, snapped to
+/// the last newline within that window, or to a UTF-8 char boundary when no
+/// newline is present. The window is floored to a char boundary first, since
+/// `PREVIEW_CHARS` can land inside a multibyte char (binary tool output) and
+/// slicing there would panic.
 fn truncate_preview(content: &str) -> &str {
-    let window = PREVIEW_CHARS.min(content.len());
-    let cut = content[..window]
-        .rfind('\n')
-        .map(|i| i + 1)
-        .unwrap_or_else(|| utf8_boundary_floor(content, window));
+    let window = utf8_boundary_floor(content, PREVIEW_CHARS.min(content.len()));
+    let cut = content[..window].rfind('\n').map(|i| i + 1).unwrap_or(window);
     &content[..cut]
 }
 
@@ -863,7 +862,6 @@ mod tests {
             Box::new(crate::tools::EditFileTool),
             Box::new(crate::tools::GlobTool),
             Box::new(crate::tools::GrepTool),
-            Box::new(crate::tools::CodegrepTool),
             Box::new(crate::tools::ListDirectoryTool),
             Box::new(crate::tools::FetchUrlTool),
             Box::new(crate::tools::FindToolsTool),
@@ -1378,6 +1376,18 @@ Do the demo thing.
         let preview = truncate_preview(&content);
         assert_eq!(preview.len(), PREVIEW_CHARS);
         assert!(content.is_char_boundary(preview.len()));
+    }
+
+    #[test]
+    fn truncate_preview_does_not_split_a_multibyte_char_at_the_window() {
+        // A 3-byte char straddling PREVIEW_CHARS must not be sliced through: the
+        // window floors to the char boundary below 2000 instead of panicking.
+        let mut content = "x".repeat(PREVIEW_CHARS - 1);
+        content.push('世'); // occupies bytes 1999..2002, crossing the 2000 window
+        content.push_str(&"y".repeat(500));
+        let preview = truncate_preview(&content);
+        assert!(content.is_char_boundary(preview.len()));
+        assert!(preview.len() <= PREVIEW_CHARS);
     }
 
     #[test]

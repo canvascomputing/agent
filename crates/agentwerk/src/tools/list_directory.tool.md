@@ -8,7 +8,7 @@ List a directory's entries to survey an unfamiliar layout. Output is one entry p
 ## When NOT to use
 
 - Find files by pattern across the tree: use `glob_tool`.
-- Search file contents: use `grep_tool`.
+- Search file contents: use `grep`.
 - Read one file: use `read_file_tool`.
 
 ## Schema

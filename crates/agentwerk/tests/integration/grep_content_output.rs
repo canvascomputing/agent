@@ -1,7 +1,7 @@
 //! End-to-end: a real LLM agent is asked to locate a unique string
 //! buried deep inside a long line — past column 100. The role does NOT
 //! hint at grep or content mode. Proves the agent can find the match
-//! and that `grep_tool` reports the correct column position.
+//! and that `grep` reports the correct column position.
 
 use std::fs;
 use std::sync::{Arc, Mutex};
@@ -110,11 +110,11 @@ async fn finds_string_buried_deep_in_line() -> std::result::Result<(), Box<dyn s
 
     let recorded = calls.lock().unwrap().clone();
 
-    // The agent must have called grep_tool with the needle.
+    // The agent must have called grep with the needle.
     let grep_call = recorded
         .iter()
         .find(|c| {
-            c.name == "grep_tool"
+            c.name == "grep"
                 && c.input
                     .get("pattern")
                     .and_then(|v| v.as_str())
@@ -122,7 +122,7 @@ async fn finds_string_buried_deep_in_line() -> std::result::Result<(), Box<dyn s
         })
         .unwrap_or_else(|| {
             panic!(
-                "agent should call `grep_tool` with `{NEEDLE}` in pattern; \
+                "agent should call `grep` with `{NEEDLE}` in pattern; \
                  instead called: {:?}",
                 recorded
                     .iter()
@@ -134,9 +134,9 @@ async fn finds_string_buried_deep_in_line() -> std::result::Result<(), Box<dyn s
     let output = grep_call
         .output
         .as_deref()
-        .expect("grep_tool call should have produced output");
+        .expect("grep call should have produced output");
 
-    // Grep must find the needle in config.rs, not in any decoy.
+    // grep must find the needle in config.rs, not in any decoy.
     assert!(
         output.contains("config.rs"),
         "grep should find the needle in config.rs; got: {output:?}"
@@ -251,14 +251,14 @@ async fn reads_column_slice_after_grep_locates_needle(
 
     let recorded = calls.lock().unwrap().clone();
 
-    // The agent must have called grep_tool with the needle.
+    // The agent must have called grep with the needle.
     assert!(
-        recorded.iter().any(|c| c.name == "grep_tool"
+        recorded.iter().any(|c| c.name == "grep"
             && c.input
                 .get("pattern")
                 .and_then(|v| v.as_str())
                 .is_some_and(|p| p.contains(NEEDLE))),
-        "agent should call grep_tool with the needle; calls: {:?}",
+        "agent should call grep with the needle; calls: {:?}",
         recorded
             .iter()
             .map(|c| (&c.name, &c.input))

@@ -7,7 +7,7 @@ Find files in the working directory tree by glob pattern. Returns paths relative
 
 ## When NOT to use
 
-- Search file contents: use `grep_tool`.
+- Search file contents: use `grep`.
 - List one directory non-recursively: use `list_directory_tool`.
 - Open-ended exploration over multiple rounds: delegate to `agent_tool`.
 

@@ -1,10 +1,11 @@
 //! End-to-end: a real LLM is asked to find the file that contains a
 //! specific code pattern with regex-special characters (`<`, `>`, `(`,
-//! `)`, `,`, `:`). The role does NOT name `grep_tool`, does NOT describe
-//! its argument shape, and does NOT mention literal-vs-regex semantics.
-//! Proves the tool's *description* is good enough for a model to pick
-//! content search and pass code as a literal substring (no regex escaping
-//! that would zero out the match).
+//! `)`, `,`, `:`). The role does NOT name `grep`, does NOT describe
+//! its argument shape, and does NOT mention regex semantics. `grep` treats
+//! `pattern` as a regular expression, so the `(` and `)` in the signature
+//! must be escaped to match literally; left raw they act as groups and the
+//! search zeroes out. Proves the tool's *description* is good enough for a
+//! model to pick content search and escape the metacharacters correctly.
 
 use std::fs;
 use std::sync::{Arc, Mutex};
@@ -16,8 +17,8 @@ use agentwerk::tools::{GlobTool, GrepTool, ListDirectoryTool, ReadFileTool};
 use agentwerk::{Agent, TicketSystem};
 
 /// The exact substring the model must locate. Contains regex metachars
-/// (`<`, `>`, `(`, `)`, `,`) so any regex-style escaping by the model
-/// turns the search into a no-match.
+/// (`(`, `)`) that the model must escape to match literally; left raw they
+/// act as groups and the search finds nothing.
 const TARGET_SIGNATURE: &str = "fn calculate(items: Vec<(String, i32)>)";
 
 #[derive(Clone)]
@@ -121,21 +122,21 @@ async fn finds_code_pattern_with_special_chars(
 
     let recorded = calls.lock().unwrap().clone();
 
-    // The model must have called grep_tool and passed the signature literally
-    // (no `\(`, `\<`, etc. — those would make substring search miss).
-    let grep_call = recorded
+    // The model must have located the signature with `grep`: a call whose output
+    // names calc.rs. Under a regex `pattern`, that hit is only reachable if the
+    // model escaped the `(` and `)` — left raw they are groups and match nothing.
+    let grep_hit = recorded
         .iter()
         .find(|c| {
-            c.name == "grep_tool"
-                && c.input
-                    .get("pattern")
-                    .and_then(|v| v.as_str())
-                    .is_some_and(|p| p.contains("Vec<(String, i32)>"))
+            c.name == "grep"
+                && c.output
+                    .as_deref()
+                    .is_some_and(|out| out.contains("calc.rs"))
         })
         .unwrap_or_else(|| {
             panic!(
-                "model should call `grep_tool` with the literal signature in `pattern` \
-                 (no regex escaping); instead called: {:?}",
+                "model should locate the signature with `grep` (its output naming \
+                 calc.rs); instead called: {:?}",
                 recorded
                     .iter()
                     .map(|c| (&c.name, &c.input))
@@ -143,27 +144,21 @@ async fn finds_code_pattern_with_special_chars(
             )
         });
 
-    let pattern = grep_call.input["pattern"].as_str().unwrap_or("");
-    assert!(
-        !pattern.contains('\\'),
-        "model regex-escaped the pattern, but `grep_tool` is literal substring \
-         (description says 'Literal match; not a regex'); pattern was: {pattern:?}"
-    );
-
-    let output = grep_call
-        .output
-        .as_deref()
-        .expect("grep_tool call should have produced output");
-    assert!(
-        output.contains("calc.rs"),
-        "grep_tool output should locate the signature in `src/calc.rs`; \
-         got: {output:?}"
-    );
+    // The signature is unique to calc.rs, so a correct search excludes the
+    // look-alikes: a raw-paren regex would instead match none or the wrong tuple.
+    let output = grep_hit.output.as_deref().unwrap_or("");
     assert!(
         !output.contains("merge.rs")
             && !output.contains("process.rs")
             && !output.contains("render.rs"),
-        "grep_tool output should NOT match the look-alike signatures; got: {output:?}"
+        "grep output should NOT match the look-alike signatures; got: {output:?}"
+    );
+
+    // The agent's final answer should name calc.rs.
+    let answer = common::last_result_text(results);
+    assert!(
+        answer.contains("calc.rs"),
+        "agent should report calc.rs; got: {answer:?}"
     );
 
     Ok(())

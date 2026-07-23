@@ -1,19 +1,33 @@
 ---
-name: grep_tool
+name: grep
 read_only: true
 ---
 
-Search file contents for a literal substring (not a regex) under the working directory. Skips `.git`, `target`, `node_modules`, `vendor`. ALWAYS use this for content search; never run `grep`/`rg` via `bash_tool`.
+Search file contents under the working directory. `pattern` is a regular expression by default; set `syntax: "code"` to match a call or code shape without escaping. Searches every file, including hidden and gitignored ones — narrow with `path`, `glob`, or `type`.
 
-- Scope with `glob` (`*.rs`, `src/*.py`) to search fewer files.
-- `output_mode`: `content` (default) gives `<path>:<line>:<col>: <line>`; `files` lists matching paths.
-- In `content` mode long lines truncate to ~200 bytes around the match; read full context with `read_file_tool` and `column`/`length`.
-- Results cap at 100; narrow `pattern` or `glob` rather than re-running.
+- Prefer a few narrow parallel searches over one broad one.
+- `output_mode`: `files_with_matches` (default) returns file names; `content` returns `path:line:col: text` lines; `count` returns per-file counts.
+- Case-sensitive unless `-i`. Results cap at `head_limit` (default 250); page with `offset`.
+
+## Regex vs code
+
+**Regex (default)** — for text that varies:
+- `TODO|FIXME` — either marker
+- `https?://\S+` — a URL
+- `v\d+\.\d+\.\d+` — a version like `v1.2.3`
+
+**Code (`"syntax": "code"`)** — for a call or code shape. No escaping, whitespace ignored; `...` = any arguments, `$NAME` captures a name, `$...NAME` a multi-token span:
+- `console.log(...)` — JS: every call to one method
+- `$FN(...)` with `"constraints": [{"metavariable": "FN", "regex": "^(min|max|abs)$"}]` — a family of calls, capture pinned to a set
+- `func $NAME(...)` with `"constraints": [{"metavariable": "NAME", "regex": "^Test"}]` — Go: name each test function; shows as `[$NAME=value]` in content mode
+- `Box::new(vec![...])` — Rust: a nested shape, mixing `::` and `[]`
+
+In code mode `[a-z]`, `*`, `.`, `\` are literal, and `<word>` is plain text (not a placeholder). `-A`/`-B`/`-C`/`context`/`multiline` are regex-only.
 
 ## When NOT to use
 
-- Find files by name, not contents: use `glob_tool`.
-- Open-ended searches needing multiple rounds: delegate to `agent_tool`.
+- Find files by name: use `glob_tool`.
+- Read a known file: use `read_file_tool`.
 
 ## Schema
 
@@ -23,19 +37,83 @@ Search file contents for a literal substring (not a regex) under the working dir
   "properties": {
     "pattern": {
       "type": "string",
-      "description": "Substring to search for. Literal match; not a regex."
+      "description": "Regular expression over file contents. For a fixed call or code shape, use `syntax: \"code\"` instead of escaping."
+    },
+    "path": {
+      "type": "string",
+      "description": "File or directory to search under, relative to the working directory. Omit for the whole tree."
     },
     "glob": {
       "type": "string",
-      "description": "File filter supporting `*` and `?`. A bare pattern matches file names (`*.rs`); one with a `/` matches paths relative to the working directory (`src/*.rs`, with `*` crossing directories)."
+      "description": "Glob filter, e.g. `*.rs` or `*.{ts,tsx}`. A `/` makes it match paths, not just file names."
     },
     "output_mode": {
       "type": "string",
-      "description": "What to return: `content` (default) gives matching lines with file path, line number, and column; `files` gives distinct paths that contain the match."
+      "enum": ["content", "files_with_matches", "count"],
+      "description": "`files_with_matches` (default), `content` (lines with path/line/column), or `count` (per-file counts)."
     },
-    "case_insensitive": {
+    "-A": {
+      "type": "integer",
+      "description": "Context lines after each match (content mode)."
+    },
+    "-B": {
+      "type": "integer",
+      "description": "Context lines before each match (content mode)."
+    },
+    "-C": {
+      "type": "integer",
+      "description": "Context lines before and after each match (content mode). Alias for `context`."
+    },
+    "context": {
+      "type": "integer",
+      "description": "Context lines before and after each match (content mode)."
+    },
+    "-n": {
       "type": "boolean",
-      "description": "Match without regard to case (default: false)."
+      "description": "Show line numbers in content mode (default true)."
+    },
+    "-i": {
+      "type": "boolean",
+      "description": "Case-insensitive (default false)."
+    },
+    "type": {
+      "type": "string",
+      "description": "File-type filter, e.g. `rust`, `py`, `js`."
+    },
+    "head_limit": {
+      "type": "integer",
+      "description": "Max results (default 250; `0` means unlimited)."
+    },
+    "offset": {
+      "type": "integer",
+      "description": "Skip the first N results (default 0), to page through more."
+    },
+    "multiline": {
+      "type": "boolean",
+      "description": "Let `.` match newlines (default false). Regex mode only."
+    },
+    "syntax": {
+      "type": "string",
+      "enum": ["regex", "code"],
+      "description": "`regex` (default), or `code` for code-shape matching with `$NAME`, `$...NAME`, and `...` metavariables."
+    },
+    "constraints": {
+      "type": "array",
+      "description": "Code mode only: keep a match only when each named capture matches its regex.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "metavariable": {
+            "type": "string",
+            "description": "Capture name to test, e.g. `FUNC` (leading `$` optional)."
+          },
+          "regex": {
+            "type": "string",
+            "description": "Regex the capture must match. Anchor with `^...$`."
+          }
+        },
+        "required": ["metavariable", "regex"]
+      }
     }
   },
   "required": [
