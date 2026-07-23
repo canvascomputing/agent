@@ -20,8 +20,8 @@ struct CapturedCall {
 }
 
 #[tokio::test]
-async fn grep_lists_unknown_function_names(
-) -> std::result::Result<(), Box<dyn std::error::Error>> {
+async fn grep_lists_unknown_function_names() -> std::result::Result<(), Box<dyn std::error::Error>>
+{
     let (provider, model) = common::build_provider();
 
     let dir = crate::test_util::TempDir::new()?;

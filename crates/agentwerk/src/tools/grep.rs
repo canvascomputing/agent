@@ -91,8 +91,9 @@ impl ToolLike for GrepTool {
             let dir = ctx.dir.clone();
             let interrupt = ctx.interrupt_signal.clone();
             let deadline = Instant::now() + SEARCH_TIMEOUT;
-            let handle =
-                tokio::task::spawn_blocking(move || search_corpus(&dir, &query, &interrupt, deadline));
+            let handle = tokio::task::spawn_blocking(move || {
+                search_corpus(&dir, &query, &interrupt, deadline)
+            });
 
             Ok(tokio::select! {
                 biased;
@@ -219,7 +220,12 @@ fn string(input: &Value, key: &str) -> Option<String> {
 /// every file, hidden and gitignored included, so the scan never makes a payload
 /// invisible; narrow with `path`/`glob` instead. Runs on a blocking thread; the
 /// interrupt flag and deadline let a long or cancelled search bail between files.
-fn search_corpus(dir: &Path, query: &Query, interrupt: &AtomicBool, deadline: Instant) -> ToolResult {
+fn search_corpus(
+    dir: &Path,
+    query: &Query,
+    interrupt: &AtomicBool,
+    deadline: Instant,
+) -> ToolResult {
     let root = match &query.path {
         Some(path) => dir.join(path),
         None => dir.to_path_buf(),
@@ -244,7 +250,9 @@ fn search_corpus(dir: &Path, query: &Query, interrupt: &AtomicBool, deadline: In
             Ok(types) => {
                 walk.types(types);
             }
-            Err(error) => return ToolResult::error(format!("Unknown file type `{file_type}`: {error}")),
+            Err(error) => {
+                return ToolResult::error(format!("Unknown file type `{file_type}`: {error}"))
+            }
         }
     }
 
@@ -292,7 +300,9 @@ fn run_regex(
     // The files/count sinks read the line number off each match, so line counting
     // stays on for them; content mode alone honours `-n` (`line_numbers`).
     let line_numbers = query.output_mode != OutputMode::Content || query.line_numbers;
-    searcher.line_number(line_numbers).multi_line(query.multiline);
+    searcher
+        .line_number(line_numbers)
+        .multi_line(query.multiline);
     // Stop at the first NUL, as `rg` does, so a binary blob (a `.git` pack, an
     // image) never dumps raw bytes into the result. Hidden/gitignored *text* stays
     // searchable; only binary content is skipped.
@@ -306,7 +316,10 @@ fn run_regex(
 
     // Enough results to fill the requested page (`offset..offset+head_limit`) plus
     // one to prove more exist; used to bound per-file and stop the walk early.
-    let page_bound = query.offset.saturating_add(query.head_limit).saturating_add(1);
+    let page_bound = query
+        .offset
+        .saturating_add(query.head_limit)
+        .saturating_add(1);
 
     match query.output_mode {
         OutputMode::Content => {
@@ -392,7 +405,10 @@ fn collect_files(
             break;
         }
         let Ok(entry) = result else { continue };
-        if !entry.file_type().is_some_and(|file_type| file_type.is_file()) {
+        if !entry
+            .file_type()
+            .is_some_and(|file_type| file_type.is_file())
+        {
             continue;
         }
         let display = entry
@@ -500,7 +516,11 @@ mod tests {
             "pub fn greet() {\n    println!(\"Hello\");\n}\n",
         )
         .unwrap();
-        fs::write(tmp.path().join("readme.md"), "# Hello Project\nThis is a test.\n").unwrap();
+        fs::write(
+            tmp.path().join("readme.md"),
+            "# Hello Project\nThis is a test.\n",
+        )
+        .unwrap();
         tmp
     }
 
@@ -588,7 +608,11 @@ mod tests {
     async fn case_insensitive_flag_matches_regardless_of_case() {
         let tmp = setup_test_dir();
         let ctx = test_ctx(tmp.path());
-        let out = search(&ctx, serde_json::json!({"pattern": "hello world", "-i": true})).await;
+        let out = search(
+            &ctx,
+            serde_json::json!({"pattern": "hello world", "-i": true}),
+        )
+        .await;
         assert_eq!(out["numFiles"], 1, "got {out}");
         // Default is case-sensitive, so the lowercase pattern misses.
         let sensitive = search(&ctx, serde_json::json!({"pattern": "hello world"})).await;
@@ -680,9 +704,16 @@ mod tests {
     async fn type_filter_selects_by_language() {
         let tmp = setup_test_dir();
         let ctx = test_ctx(tmp.path());
-        let out = search(&ctx, serde_json::json!({"pattern": "Hello", "type": "rust"})).await;
+        let out = search(
+            &ctx,
+            serde_json::json!({"pattern": "Hello", "type": "rust"}),
+        )
+        .await;
         let files = out["filenames"].as_array().unwrap();
-        assert!(files.iter().all(|f| f.as_str().unwrap().ends_with(".rs")), "got {out}");
+        assert!(
+            files.iter().all(|f| f.as_str().unwrap().ends_with(".rs")),
+            "got {out}"
+        );
     }
 
     #[tokio::test]
@@ -694,8 +725,14 @@ mod tests {
         let ctx = test_ctx(tmp.path());
         let out = search(&ctx, serde_json::json!({"pattern": "needle"})).await;
         let files = out["filenames"].as_array().unwrap();
-        assert!(files.iter().any(|f| f == "code.txt"), "text file matched: {out}");
-        assert!(!files.iter().any(|f| f == "blob.bin"), "binary file skipped: {out}");
+        assert!(
+            files.iter().any(|f| f == "code.txt"),
+            "text file matched: {out}"
+        );
+        assert!(
+            !files.iter().any(|f| f == "blob.bin"),
+            "binary file skipped: {out}"
+        );
     }
 
     #[tokio::test]
@@ -703,7 +740,11 @@ mod tests {
         let tmp = crate::test_util::TempDir::new().unwrap();
         let prefix = "x".repeat(1000);
         let suffix = "y".repeat(1000);
-        fs::write(tmp.path().join("big.txt"), format!("{prefix}NEEDLE{suffix}")).unwrap();
+        fs::write(
+            tmp.path().join("big.txt"),
+            format!("{prefix}NEEDLE{suffix}"),
+        )
+        .unwrap();
         let ctx = test_ctx(tmp.path());
         let out = search(
             &ctx,
@@ -711,6 +752,10 @@ mod tests {
         )
         .await;
         let line = out["content"].as_str().unwrap().lines().next().unwrap();
-        assert!(line.len() < 400, "long line truncated, got {} bytes", line.len());
+        assert!(
+            line.len() < 400,
+            "long line truncated, got {} bytes",
+            line.len()
+        );
     }
 }

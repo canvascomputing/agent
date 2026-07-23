@@ -177,9 +177,7 @@ mod tests {
 
     #[test]
     fn opened_paths_reports_the_file_argument_for_file_tools() {
-        use crate::tools::{
-            EditFileTool, GlobTool, GrepTool, ListDirectoryTool, WriteFileTool,
-        };
+        use crate::tools::{EditFileTool, GlobTool, GrepTool, ListDirectoryTool, WriteFileTool};
 
         let input = serde_json::json!({"path": "src/lib.rs"});
         let openers: Vec<Box<dyn ToolLike>> = vec![
