@@ -162,6 +162,20 @@ impl PyTicketSystem {
         slf
     }
 
+    /// Cancel the run when `awaitable` resolves. Its result is discarded;
+    /// only completion matters.
+    fn cancel_on<'py>(slf: PyRef<'py, Self>, awaitable: Py<PyAny>) -> PyResult<PyRef<'py, Self>> {
+        let future = Python::attach(|py| {
+            pyo3_async_runtimes::tokio::into_future(awaitable.bind(py).clone())
+        })?;
+        // `TicketSystem::cancel_on` spawns onto the ambient Tokio runtime; a
+        // pymethod call has no runtime entered on its own thread, so enter
+        // the shared one pyo3-async-runtimes already uses for `finish()`.
+        let _guard = pyo3_async_runtimes::tokio::get_runtime().enter();
+        slf.inner.cancel_on(future);
+        Ok(slf)
+    }
+
     /// After each finished ticket, call `make(ticket)`; a returned `Ticket`
     /// is enqueued, `None` enqueues nothing.
     fn create_ticket_on_result<'py>(slf: PyRef<'py, Self>, make: Py<PyAny>) -> PyRef<'py, Self> {
@@ -182,6 +196,26 @@ impl PyTicketSystem {
     /// Cancel every ticket carrying `label`.
     fn cancel_label<'py>(slf: PyRef<'py, Self>, label: &str) -> PyRef<'py, Self> {
         slf.inner.cancel_label(label);
+        slf
+    }
+
+    /// Call off `label`'s agents when `predicate(event)` first returns
+    /// truthy. Only that pool stops; other labels keep going.
+    fn cancel_label_on_event<'py>(
+        slf: PyRef<'py, Self>,
+        label: &str,
+        predicate: Py<PyAny>,
+    ) -> PyRef<'py, Self> {
+        slf.inner
+            .cancel_label_on_event(label, move |event: &Event| {
+                Python::attach(|py| {
+                    predicate
+                        .bind(py)
+                        .call1((to_py_event(event),))
+                        .and_then(|value| value.is_truthy())
+                        .unwrap_or(false)
+                })
+            });
         slf
     }
 
@@ -297,7 +331,8 @@ impl PyTicketSystem {
     }
 
     /// A snapshot of run statistics — requests, tokens, ticket counts, and
-    /// (when present) per-tool/-file/-label/-model breakdowns — as a dict.
+    /// (when present) per-tool, per-file, per-label, and per-model
+    /// breakdowns — as a dict.
     fn stats<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let value = serde_json::to_value(self.inner.stats()).map_err(runtime_error)?;
         value_to_py(py, &value)
