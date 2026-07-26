@@ -38,7 +38,7 @@ Where code lives and the rules that govern placement.
   - `loop/compact.rs`: proactive and reactive transcript compaction.
   - `loop/request.rs`: the provider round-trip with retry and backoff.
   - `loop/tool_call.rs`: tool dispatch, output offloading, and the tool-failure budget.
-- `knowledge.rs` holds `Knowledge`: the cross-ticket store, an OKF v0.1 bundle backed by a `pages/` directory of concept files and a derived `index.md`. Pages are curated through the `pages()` handle (`save` / `load` / `remove`) plus `clear`; failures are typed as `KnowledgeError`.
+- `knowledge.rs` holds `Knowledge`: the cross-ticket store, an OKF v0.1 bundle in `<dir>/knowledge/` backed by a `pages/` directory of concept files and a derived `index.md`. Pages are curated through the `pages()` handle (`save` / `load` / `remove`) plus `clear`; failures are typed as `KnowledgeError`.
 - `policy.rs` holds `Policies` and the limit checks the loop applies on each turn.
 - `stats.rs` holds `Stats` and the run-wide counters and timings.
 

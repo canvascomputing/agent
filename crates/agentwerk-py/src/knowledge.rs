@@ -17,7 +17,7 @@ pub struct PyKnowledge {
 
 #[pymethods]
 impl PyKnowledge {
-    /// Open (or seed from) an Open Knowledge Format bundle at `dir`.
+    /// Open (or seed from) an Open Knowledge Format bundle at `dir/knowledge`.
     #[staticmethod]
     fn load(dir: &str) -> PyResult<Self> {
         let inner = Knowledge::load(dir).map_err(runtime_error)?;

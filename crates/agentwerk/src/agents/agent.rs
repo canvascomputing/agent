@@ -904,7 +904,12 @@ mod tests {
                 tags: vec![],
             })
             .unwrap();
-        assert!(dir.path().join("pages").join("from-store.md").exists());
+        assert!(dir
+            .path()
+            .join("knowledge")
+            .join("pages")
+            .join("from-store.md")
+            .exists());
     }
 
     #[test]

@@ -1,8 +1,8 @@
 //! File-backed knowledge store that persists across tickets and runs.
-//! Pages are markdown files addressed by slug; a compact index is
-//! injected into the system prompt. The model-facing `ManageKnowledgeTool`
-//! is a thin wrapper in `tools::knowledge` that holds an
-//! `Arc<Knowledge>` from this module.
+//! Pages are markdown files addressed by slug, held in a `knowledge/`
+//! bundle under the store directory; a compact index is injected into the
+//! system prompt. The model-facing `ManageKnowledgeTool` is a thin wrapper
+//! in `tools::knowledge` that holds an `Arc<Knowledge>` from this module.
 
 use std::fmt;
 use std::fs;
@@ -15,6 +15,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::persistence::{write_atomic, Persist};
 
 const INDEX_FILE: &str = "index.md";
+const BUNDLE_DIR: &str = "knowledge";
 const PAGES_DIR: &str = "pages";
 const DEFAULT_INDEX_CHAR_LIMIT: usize = 12000;
 const DEFAULT_PAGE_TYPE: &str = "Knowledge";
@@ -87,10 +88,11 @@ fn io_failed(message: impl Into<String>) -> impl FnOnce(io::Error) -> KnowledgeE
 
 /// Durable memory the agent curates and shares across tickets and other
 /// agents, stored on disk as an Open Knowledge Format (OKF) v0.1 bundle and
-/// curated through `ManageKnowledgeTool`. Each page is a markdown concept file
-/// under `<dir>/pages/<slug>.md` with `type`/`description`/`timestamp`
-/// frontmatter; `<dir>/index.md` is a derived index of one-line descriptions
-/// injected into the system prompt.
+/// curated through `ManageKnowledgeTool`. The bundle lives in
+/// `<dir>/knowledge/`: each page is a markdown concept file under
+/// `<dir>/knowledge/pages/<slug>.md` with `type`/`description`/`timestamp`
+/// frontmatter, and `<dir>/knowledge/index.md` is a derived index of one-line
+/// descriptions injected into the system prompt.
 ///
 /// Two agents bound to one store share it:
 ///
@@ -107,12 +109,13 @@ fn io_failed(message: impl Into<String>) -> impl FnOnce(io::Error) -> KnowledgeE
 /// ```
 ///
 /// Because the store is a plain OKF bundle, an agent can be seeded from one a
-/// human or another tool authored:
+/// human or another tool authored by placing it at `<dir>/knowledge/`:
 ///
 /// ```no_run
 /// use agentwerk::{Agent, Knowledge};
 ///
 /// # fn run() -> Result<(), Box<dyn std::error::Error>> {
+/// // Reads the bundle in `./known-signatures/knowledge/`.
 /// let seeded = Knowledge::load("./known-signatures")?;
 /// let scanner = Agent::new().knowledge(&seeded);
 /// # let _ = scanner;
@@ -127,22 +130,24 @@ pub struct Knowledge {
 }
 
 impl Knowledge {
-    /// Open or create a knowledge store rooted at `knowledge_dir`, treated as
-    /// an OKF v0.1 bundle. Creates `<dir>/pages/` if missing. The index is
-    /// rebuilt by walking the concept files under the root, so pointing this
-    /// at an existing OKF bundle seeds the store from it. A `memory.jsonl` left
-    /// by an older version is migrated once into `pages/legacy-notes.md`.
-    pub fn load(knowledge_dir: impl Into<PathBuf>) -> io::Result<Arc<Self>> {
-        let knowledge_dir = knowledge_dir.into();
+    /// Open or create a knowledge store under `store_dir`, holding an OKF v0.1
+    /// bundle in `<store_dir>/knowledge/`. Creates the bundle's `pages/` if
+    /// missing. The index is rebuilt by walking the concept files under the
+    /// bundle, so placing an existing OKF bundle there seeds the store from it.
+    /// A `memory.jsonl` left by an older version next to the bundle is migrated
+    /// once into `knowledge/pages/legacy-notes.md`.
+    pub fn load(store_dir: impl Into<PathBuf>) -> io::Result<Arc<Self>> {
+        let store_dir = store_dir.into();
+        let knowledge_dir = store_dir.join(BUNDLE_DIR);
         fs::create_dir_all(knowledge_dir.join(PAGES_DIR))?;
 
-        let legacy_path = knowledge_dir.join(LEGACY_MEMORY_FILE);
+        let legacy_path = store_dir.join(LEGACY_MEMORY_FILE);
 
         // Page frontmatter is the source of truth: rebuild the in-memory index
         // by walking the bundle and regenerate the derived `index.md`. A legacy
         // migration runs first, made idempotent by its own `.migrated` rename.
         let index = if legacy_path.exists() {
-            migrate_memory_jsonl(&knowledge_dir)?
+            migrate_memory_jsonl(&store_dir, &knowledge_dir)?
         } else {
             rebuild_index_from_pages(&knowledge_dir)?
         };
@@ -219,7 +224,7 @@ impl Knowledge {
 }
 
 /// One knowledge page: an OKF v0.1 concept document stored under
-/// `<dir>/pages/<slug>.md`. The frontmatter carries `type` (from `kind`),
+/// `<dir>/knowledge/pages/<slug>.md`. The frontmatter carries `type` (from `kind`),
 /// `description`, and `timestamp`; the markdown body follows.
 #[derive(Debug, Clone)]
 pub struct Page {
@@ -562,8 +567,8 @@ fn render_index_file(entries: &[IndexEntry]) -> String {
 
 /// Rebuild the in-memory index by walking the bundle for concept files, then
 /// regenerate the derived `index.md`. The page frontmatter is the source of
-/// truth (OKF: `index.md` is a derived view), so pointing this at an external
-/// OKF bundle seeds the store from it.
+/// truth (OKF: `index.md` is a derived view), so an external OKF bundle left
+/// in the bundle directory seeds the store from it.
 fn rebuild_index_from_pages(knowledge_dir: &Path) -> io::Result<Vec<IndexEntry>> {
     let mut entries = Vec::new();
     collect_pages(knowledge_dir, knowledge_dir, &mut entries)?;
@@ -662,8 +667,8 @@ struct LegacyMemoryRecord {
     added_at: u64,
 }
 
-fn migrate_memory_jsonl(knowledge_dir: &Path) -> io::Result<Vec<IndexEntry>> {
-    let legacy_path = knowledge_dir.join(LEGACY_MEMORY_FILE);
+fn migrate_memory_jsonl(store_dir: &Path, knowledge_dir: &Path) -> io::Result<Vec<IndexEntry>> {
+    let legacy_path = store_dir.join(LEGACY_MEMORY_FILE);
     let raw = fs::read_to_string(&legacy_path)?;
 
     let mut contents: Vec<String> = Vec::new();
@@ -708,7 +713,7 @@ fn migrate_memory_jsonl(knowledge_dir: &Path) -> io::Result<Vec<IndexEntry>> {
     write_atomic(&knowledge_dir.join(INDEX_FILE), index_body.as_bytes())?;
 
     // Rename the legacy file.
-    let migrated_path = knowledge_dir.join(format!("{LEGACY_MEMORY_FILE}{MIGRATED_SUFFIX}"));
+    let migrated_path = store_dir.join(format!("{LEGACY_MEMORY_FILE}{MIGRATED_SUFFIX}"));
     fs::rename(&legacy_path, &migrated_path)?;
 
     Ok(entries)
@@ -755,6 +760,10 @@ mod tests {
         (store, dir)
     }
 
+    fn bundle(dir: &crate::test_util::TempDir) -> PathBuf {
+        dir.path().join(BUNDLE_DIR)
+    }
+
     fn save_page(store: &Knowledge, slug: &str, description: &str, content: &str, tags: &[&str]) {
         let page = Page {
             slug: slug.to_string(),
@@ -767,11 +776,25 @@ mod tests {
     }
 
     #[test]
-    fn load_creates_pages_directory() {
+    fn load_creates_pages_directory_inside_the_bundle() {
         let dir = crate::test_util::TempDir::new().unwrap();
         let nested = dir.path().join("not-yet-there");
         let _ = Knowledge::load(&nested).unwrap();
-        assert!(nested.join(PAGES_DIR).exists());
+        assert!(nested.join(BUNDLE_DIR).join(PAGES_DIR).exists());
+        assert!(!nested.join(PAGES_DIR).exists());
+    }
+
+    #[test]
+    fn pages_beside_the_bundle_are_not_indexed() {
+        let dir = crate::test_util::TempDir::new().unwrap();
+        fs::create_dir_all(dir.path().join(PAGES_DIR)).unwrap();
+        fs::write(
+            dir.path().join(PAGES_DIR).join("stray.md"),
+            "---\ndescription: Beside the bundle.\n---\n# Stray\n\nBody.",
+        )
+        .unwrap();
+        let store = Knowledge::load(dir.path()).unwrap();
+        assert!(store.index().is_empty());
     }
 
     #[test]
@@ -790,8 +813,11 @@ mod tests {
             "# Deploy\n\nPort 8080.",
             &[],
         );
-        assert!(dir.path().join(PAGES_DIR).join("deploy-config.md").exists());
-        assert!(dir.path().join(INDEX_FILE).exists());
+        assert!(bundle(&dir)
+            .join(PAGES_DIR)
+            .join("deploy-config.md")
+            .exists());
+        assert!(bundle(&dir).join(INDEX_FILE).exists());
         let idx = store.index();
         assert!(idx.contains("deploy-config"));
         assert!(idx.contains("Staging on port 8080"));
@@ -839,9 +865,9 @@ mod tests {
     fn remove_page_clears_file_and_index_entry() {
         let (store, dir) = fresh_store();
         save_page(&store, "temp", "Temporary", "# Temp\n\nWill delete.", &[]);
-        assert!(dir.path().join(PAGES_DIR).join("temp.md").exists());
+        assert!(bundle(&dir).join(PAGES_DIR).join("temp.md").exists());
         store.pages().remove("temp").unwrap();
-        assert!(!dir.path().join(PAGES_DIR).join("temp.md").exists());
+        assert!(!bundle(&dir).join(PAGES_DIR).join("temp.md").exists());
         assert!(store.index().is_empty());
     }
 
@@ -860,10 +886,10 @@ mod tests {
         save_page(&store, "b", "Page B", "# B", &[]);
         store.clear().unwrap();
         assert!(store.index().is_empty());
-        assert!(!dir.path().join(INDEX_FILE).exists());
+        assert!(!bundle(&dir).join(INDEX_FILE).exists());
         // Pages directory exists but is empty.
-        assert!(dir.path().join(PAGES_DIR).exists());
-        let page_count = fs::read_dir(dir.path().join(PAGES_DIR)).unwrap().count();
+        assert!(bundle(&dir).join(PAGES_DIR).exists());
+        let page_count = fs::read_dir(bundle(&dir).join(PAGES_DIR)).unwrap().count();
         assert_eq!(page_count, 0);
     }
 
@@ -1027,7 +1053,7 @@ mod tests {
     #[test]
     fn rebuild_index_from_pages_when_index_missing() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let pages_dir = dir.path().join(PAGES_DIR);
+        let pages_dir = bundle(&dir).join(PAGES_DIR);
         fs::create_dir_all(&pages_dir).unwrap();
         fs::write(
             pages_dir.join("my-page.md"),
@@ -1062,7 +1088,10 @@ mod tests {
             .join(format!("{LEGACY_MEMORY_FILE}{MIGRATED_SUFFIX}"))
             .exists());
         // The page should exist.
-        assert!(dir.path().join(PAGES_DIR).join("legacy-notes.md").exists());
+        assert!(bundle(&dir)
+            .join(PAGES_DIR)
+            .join("legacy-notes.md")
+            .exists());
         let body = store
             .pages()
             .load("legacy-notes")
@@ -1082,7 +1111,7 @@ mod tests {
             "# Tagged\n\nWith tags.",
             &["config", "deploy"],
         );
-        let raw = fs::read_to_string(dir.path().join(PAGES_DIR).join("tagged.md")).unwrap();
+        let raw = fs::read_to_string(bundle(&dir).join(PAGES_DIR).join("tagged.md")).unwrap();
         assert!(raw.contains("tags: [config, deploy]"));
     }
 
@@ -1132,7 +1161,7 @@ mod tests {
     fn page_frontmatter_uses_okf_keys() {
         let (store, dir) = fresh_store();
         save_page(&store, "cfg", "Config page", "# Config\n\nBody.", &[]);
-        let raw = fs::read_to_string(dir.path().join(PAGES_DIR).join("cfg.md")).unwrap();
+        let raw = fs::read_to_string(bundle(&dir).join(PAGES_DIR).join("cfg.md")).unwrap();
         assert!(raw.contains("type: Knowledge"));
         assert!(raw.contains("description: Config page"));
         assert!(raw.contains("timestamp: "));
@@ -1142,7 +1171,7 @@ mod tests {
     fn index_file_is_okf_progressive_disclosure() {
         let (store, dir) = fresh_store();
         save_page(&store, "cfg", "Config page", "# Config", &[]);
-        let index = fs::read_to_string(dir.path().join(INDEX_FILE)).unwrap();
+        let index = fs::read_to_string(bundle(&dir).join(INDEX_FILE)).unwrap();
         assert!(index.contains("* [cfg](pages/cfg.md) - Config page"));
         assert!(!index.contains("---"));
     }
@@ -1169,7 +1198,7 @@ mod tests {
     #[test]
     fn loads_external_okf_bundle_flattening_nested_slugs() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let tables = dir.path().join("tables");
+        let tables = bundle(&dir).join("tables");
         fs::create_dir_all(&tables).unwrap();
         fs::write(
             tables.join("orders.md"),
@@ -1189,7 +1218,7 @@ mod tests {
     #[test]
     fn seeded_page_without_type_loads_as_knowledge() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let pages = dir.path().join(PAGES_DIR);
+        let pages = bundle(&dir).join(PAGES_DIR);
         fs::create_dir_all(&pages).unwrap();
         fs::write(
             pages.join("bare.md"),

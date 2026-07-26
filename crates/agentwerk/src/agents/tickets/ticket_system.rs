@@ -87,8 +87,9 @@ type EventHandler = dyn Fn(Event) + Send + Sync;
 /// │       ├── replies.jsonl                 pre-compaction transcript
 /// │       ├── replies.<ts>.jsonl            post-compaction transcript
 /// │       └── outputs/<tool_use_id>.txt     full tool outputs spilled out of the transcript
-/// ├── pages/<slug>.md                       knowledge pages
-/// └── index.md                              knowledge index
+/// └── knowledge/
+///     ├── pages/<slug>.md                   knowledge pages
+///     └── index.md                          knowledge index
 /// ```
 pub struct TicketSystem {
     pub(super) weak_self: Weak<TicketSystem>,
@@ -169,8 +170,8 @@ impl TicketSystem {
     /// malformed, by deriving from the loaded tickets) so success rate
     /// and counters stay continuous across restarts.
     ///
-    /// Pointing this and `Knowledge::load` at the same dir co-locates
-    /// knowledge pages with `results.jsonl` and `tickets.jsonl`.
+    /// Pointing this and `Knowledge::load` at the same dir co-locates the
+    /// `knowledge/` bundle with `results.jsonl` and `tickets.jsonl`.
     ///
     /// `InProgress` tickets keep their status and their transcript; the
     /// loop's resume path (`agents/loop.rs`) picks them back up under

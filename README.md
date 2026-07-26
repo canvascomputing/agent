@@ -480,8 +480,9 @@ Layout:
 │       ├── replies.jsonl                 pre-compaction transcript
 │       ├── replies.<ts>.jsonl            post-compaction transcript
 │       └── outputs/<tool_use_id>.txt     full tool outputs spilled out of the transcript
-├── pages/<slug>.md                       knowledge pages
-└── index.md                              knowledge index
+└── knowledge/
+    ├── pages/<slug>.md                   knowledge pages
+    └── index.md                          knowledge index
 ```
 
 ## Events
