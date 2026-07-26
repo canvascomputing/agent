@@ -13,7 +13,6 @@ BUILTIN_FACTORIES = [
     aw.ListDirectoryTool,
     aw.CodegrepTool,
     aw.FetchUrlTool,
-    aw.HandoverTicketTool,
     aw.ReadTicketsTool,
     aw.ManageTicketsTool,
     aw.UnrestrictedBashTool,

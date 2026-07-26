@@ -92,7 +92,7 @@ async fn finds_string_buried_deep_in_line() -> std::result::Result<(), Box<dyn s
                 "Investigate the working directory and answer the user's question. \
                  Use the available tools — pick whichever one fits. \
                  When you have the answer, settle the ticket via \
-                 `finish_ticket`.",
+                 `finish`.",
             )
             .tool(GrepTool)
             .tool(GlobTool)
@@ -233,7 +233,7 @@ async fn reads_column_slice_after_grep_locates_needle(
                 "Investigate the working directory and answer the user's question. \
                  Use the available tools — pick whichever one fits. \
                  When you have the answer, settle the ticket via \
-                 `finish_ticket`.",
+                 `finish`.",
             )
             .tool(GrepTool)
             .tool(ReadFileTool)

@@ -1,8 +1,8 @@
 //! Ticket tools: give an agent a call surface for reading and mutating
 //! the surrounding `TicketSystem`. Two multi-action tools share one
 //! dispatch helper: `ReadTicketsTool` (read-only) and `ManageTicketsTool`
-//! (read + write). `FinishTicketTool` (`finish_ticket`) is the sole way for
-//! an agent to finish its current ticket.
+//! (read + write). `FinishTool` (`finish`) is the sole way for an agent to
+//! finish its current ticket, with or without chaining a follow-up.
 
 use serde_json::Value;
 
@@ -11,14 +11,12 @@ use crate::schemas::Schema;
 
 use super::tool::{ToolContext, ToolResult};
 
-mod finish_ticket;
-mod handover_ticket;
+mod finish;
 mod manage_tickets;
 mod read_tickets;
 mod result_shape;
 
-pub use finish_ticket::FinishTicketTool;
-pub use handover_ticket::HandoverTicketTool;
+pub use finish::FinishTool;
 pub use manage_tickets::ManageTicketsTool;
 pub use read_tickets::ReadTicketsTool;
 pub(crate) use result_shape::finish_tool_input_schema;
@@ -29,11 +27,9 @@ pub(crate) use result_shape::finish_tool_input_schema;
 pub(super) const READ_ACTIONS: &[&str] = &["get", "list", "search"];
 pub(super) const WRITE_ACTIONS: &[&str] = &["create", "edit"];
 
-/// Wire names of the tools that finish a ticket. The loop reads this to
-/// classify successful tool calls (resetting the schema-retry counter) and to
-/// build the missing-`finish_ticket` directive against the agent's actual tool
-/// registry.
-pub(crate) const TICKET_FINISH_TOOLS: &[&str] = &["finish_ticket", "handover_ticket"];
+/// Name of the tool that finishes a ticket. The request builder matches tool
+/// definitions against it to advertise the ticket's schema on its arguments.
+pub(crate) const TICKET_FINISH_TOOL: &str = "finish";
 
 pub(super) fn dispatch(input: Value, ctx: &ToolContext, allowed: &[&str]) -> ToolResult {
     let action = match input["action"].as_str() {
@@ -346,7 +342,8 @@ fn action_edit(ticket_system: &TicketSystem, input: &Value, ctx: &ToolContext) -
 /// Validate `result` against the ticket's schema, append an NDJSON
 /// `{ticket, result}` line to the configured results directory, attach
 /// the payload to the ticket, and transition the ticket to `Finished`.
-/// The `ticket` field is the resolved key. Called by `FinishTicketTool`.
+/// The `ticket` field is the resolved key. Called by `FinishTool` when no
+/// `handover` was requested.
 pub(super) fn write_result(
     ticket_system: &TicketSystem,
     key: &str,

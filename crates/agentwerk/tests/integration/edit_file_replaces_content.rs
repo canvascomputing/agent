@@ -30,7 +30,7 @@ async fn replaces_substring_in_place() -> std::result::Result<(), Box<dyn std::e
         .role(
             "Step 1: call `edit_file_tool` to perform an exact substring \
              replacement in the existing file. Do not rewrite the whole file. \
-             Step 2: immediately call `finish_ticket` to settle the \
+             Step 2: immediately call `finish` to settle the \
              ticket. Do not write any prose — your only output must be tool \
              calls.",
         )

@@ -80,7 +80,7 @@ pub fn write_result_response(result: &str) -> ModelResponse {
     ModelResponse {
         content: vec![ContentBlock::ToolUse {
             id: "call-1".into(),
-            name: "finish_ticket".into(),
+            name: "finish".into(),
             input: serde_json::json!({ "result": result }),
         }],
         status: ResponseStatus::ToolUse,
@@ -93,7 +93,7 @@ pub fn write_result_value(result: serde_json::Value) -> ModelResponse {
     ModelResponse {
         content: vec![ContentBlock::ToolUse {
             id: "call-1".into(),
-            name: "finish_ticket".into(),
+            name: "finish".into(),
             input: serde_json::json!({ "result": result }),
         }],
         status: ResponseStatus::ToolUse,
@@ -106,8 +106,8 @@ pub fn handover_response(to: &str, task: &str, result: &str) -> ModelResponse {
     ModelResponse {
         content: vec![ContentBlock::ToolUse {
             id: "call-1".into(),
-            name: "handover_ticket".into(),
-            input: serde_json::json!({ "to": to, "task": task, "result": result }),
+            name: "finish".into(),
+            input: serde_json::json!({ "handover": to, "task": task, "result": result }),
         }],
         status: ResponseStatus::ToolUse,
         usage: TokenUsage::default(),

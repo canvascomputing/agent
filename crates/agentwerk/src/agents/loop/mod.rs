@@ -71,7 +71,7 @@ mod tests {
 
         assert_eq!(replies[3].author, Author::Assistant);
         assert!(
-            matches!(&replies[3].content[..], [ReplyContent::ToolUse { name, .. }] if name == "finish_ticket"),
+            matches!(&replies[3].content[..], [ReplyContent::ToolUse { name, .. }] if name == "finish"),
             "assistant reply must mirror the model's ToolUse block",
         );
 

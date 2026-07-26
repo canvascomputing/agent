@@ -17,7 +17,7 @@ use super::common;
 
 use agentwerk::agents::knowledge::Page;
 use agentwerk::event::{default_logger, Event, EventKind};
-use agentwerk::tools::{CodegrepTool, HandoverTicketTool};
+use agentwerk::tools::CodegrepTool;
 use agentwerk::{Agent, Knowledge, Ticket, TicketSystem};
 
 const SNIPER_AGENT: &str = include_str!("../../../use-cases/src/malware_scanner/agents/sniper.md");
@@ -167,7 +167,6 @@ async fn sniper_pool_finds_planted_indicators(
                 .dir(root.to_path_buf())
                 .knowledge(&knowledge)
                 .tool(CodegrepTool)
-                .tool(HandoverTicketTool)
                 .build(),
         );
     }
@@ -179,7 +178,7 @@ async fn sniper_pool_finds_planted_indicators(
             .provider(Arc::clone(&provider))
             .model(&model)
             .role(
-                "You receive one security finding. Immediately call `finish_ticket` with a \
+                "You receive one security finding. Immediately call `finish` with a \
                  one-word summary such as \"noted\". Do not call any other tool.",
             )
             .label(ANALYSIS_LABEL)

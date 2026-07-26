@@ -3,11 +3,11 @@
 //! One `TicketSystem` holds the whole pipeline. The driver enqueues a
 //! single starter ticket pinned to `researcher_1`. Each researcher
 //! calls `brave_search`, reads its parent ticket via
-//! `read_tickets_tool` to build on prior findings, and hands off via
-//! `handover_ticket` to the next agent. The final researcher
+//! `read_tickets_tool` to build on prior findings, and hands off to
+//! the next agent via `finish` with a `handover`. The final researcher
 //! attaches the report schema to its handover so the report writer's
 //! result is validated by the framework. The report writer finishes
-//! the chain with `finish_ticket`.
+//! the chain with a plain `finish`.
 //!
 //! Usage: deep-research <QUESTION>
 //!
@@ -20,7 +20,7 @@ use std::sync::Arc;
 use agentwerk::event::{Event, EventKind};
 use agentwerk::providers::{provider_from_env, ProviderResult};
 use agentwerk::schemas::Schema;
-use agentwerk::tools::{HandoverTicketTool, ReadTicketsTool, Tool, ToolResult};
+use agentwerk::tools::{ReadTicketsTool, Tool, ToolResult};
 use agentwerk::{Agent, Ticket, TicketSystem};
 
 const RESEARCHER_1_ROLE: &str = include_str!("prompts/researcher_1.role.md");
@@ -48,7 +48,7 @@ async fn main() {
         .dir(workdir.clone());
     tickets.on_event(move |e| event_handler(e));
 
-    let researcher_1 = Agent::empty()
+    let researcher_1 = Agent::new()
         .name("researcher_1")
         .provider(Arc::clone(&provider))
         .model_from_env()
@@ -56,10 +56,9 @@ async fn main() {
         .label("researcher_1")
         .tool(brave_search_tool(brave_key.clone()))
         .tool(ReadTicketsTool)
-        .tool(HandoverTicketTool)
         .build();
 
-    let researcher_2 = Agent::empty()
+    let researcher_2 = Agent::new()
         .name("researcher_2")
         .provider(Arc::clone(&provider))
         .model_from_env()
@@ -68,7 +67,6 @@ async fn main() {
         .template_variable("schema_json", schema_json_pretty.clone())
         .tool(brave_search_tool(brave_key.clone()))
         .tool(ReadTicketsTool)
-        .tool(HandoverTicketTool)
         .build();
 
     let report_writer = Agent::new()
@@ -89,10 +87,11 @@ async fn main() {
          one angle and produce evidence with sources. The next two researchers will \
          extend the coverage."
     );
-    // The schema-bound starter forces researcher_1 down the
-    // `handover_ticket` path: a text-only reply leaves no result
-    // attached, and the loop's terminal-reply path then transitions
-    // the ticket to `Failed` rather than silently `Done`.
+    // The schema-bound starter forces researcher_1 to produce a real
+    // result: a text-only reply leaves none attached, and the loop's
+    // terminal-reply path then transitions the ticket to `Failed`
+    // rather than silently `Done`. The role prompt is what keeps the
+    // chain going by requiring a `handover`.
     let starter_schema = Schema::parse(serde_json::json!({
         "type": "string",
         "minLength": 100
@@ -400,25 +399,28 @@ fn format_tool_call(tool_name: &str, input: &serde_json::Value) -> Vec<String> {
             };
             vec![format!("📖 read tickets {action}{suffix}")]
         }
-        "handover_ticket" => {
-            let to = input["to"].as_str().unwrap_or("?");
-            let task = preview_value(input.get("task"), 70);
-            let result = preview_value(input.get("result"), 70);
-            let schema_note = if input.get("schema").is_some() && !input["schema"].is_null() {
-                " (+schema)"
-            } else {
-                ""
-            };
-            vec![
-                format!("📤 handoff → {to}{schema_note}"),
-                format!("      · task    : {task}"),
-                format!("      · findings: {result}"),
-            ]
-        }
-        "finish_ticket" => {
-            let result = preview_value(input.get("result"), 80);
-            vec![format!("✅ final result: {result}")]
-        }
+        // A `handover` in the arguments is what tells a chaining finish
+        // apart from the terminal one that ends the run.
+        "finish" => match input.get("handover").and_then(|v| v.as_str()) {
+            Some(to) => {
+                let task = preview_value(input.get("task"), 70);
+                let result = preview_value(input.get("result"), 70);
+                let schema_note = if input.get("schema").is_some() && !input["schema"].is_null() {
+                    " (+schema)"
+                } else {
+                    ""
+                };
+                vec![
+                    format!("📤 handoff → {to}{schema_note}"),
+                    format!("      · task    : {task}"),
+                    format!("      · findings: {result}"),
+                ]
+            }
+            None => {
+                let result = preview_value(input.get("result"), 80);
+                vec![format!("✅ final result: {result}")]
+            }
+        },
         _ => vec![format!(
             "{tool_name}: {}",
             serde_json::to_string(input).unwrap_or_default()

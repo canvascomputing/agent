@@ -77,7 +77,7 @@ async fn surfaces_a_deferred_tool_definition() -> std::result::Result<(), Box<dy
             .model(&model)
             .role(
                 "Do exactly what the user asks, one tool call per step, then call \
-                 `finish_ticket`. Output tool calls only, never prose.",
+                 `finish`. Output tool calls only, never prose.",
             )
             .tool(FindToolsTool)
             .tool(vault)
@@ -85,7 +85,7 @@ async fn surfaces_a_deferred_tool_definition() -> std::result::Result<(), Box<dy
     );
     tickets.task(
         "Step 1: call `find_tools` with `query` set to `vault` to reveal the \
-         hidden vault tool. Step 2: call `finish_ticket`.",
+         hidden vault tool. Step 2: call `finish`.",
     );
 
     let results = tickets.finish().await;

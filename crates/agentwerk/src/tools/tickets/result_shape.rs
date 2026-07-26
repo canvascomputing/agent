@@ -14,11 +14,11 @@ pub(crate) enum ResultShape {
 }
 
 /// Top-level keys a finish tool owns; stripped from the arguments to recover the
-/// result. A result schema must not reuse these names: `handover_ticket` would
-/// mistake such a field for a control key. No schema in the tree does.
+/// result. A result schema must not reuse these names: `finish` would mistake
+/// such a field for a control key. No schema in the tree does.
 fn control_keys(tool_name: &str) -> &'static [&'static str] {
     match tool_name {
-        "handover_ticket" => &["to", "task"],
+        "finish" => &["handover", "task"],
         _ => &[],
     }
 }
@@ -44,7 +44,7 @@ pub(crate) fn result_shape(schema: Option<&Schema>) -> ResultShape {
 }
 
 /// Recover the result value from a finish tool call's arguments. Callers still read
-/// their own control keys (`to`/`task`/`schema`) off `input` separately.
+/// their own control keys (`handover`/`task`) off `input` separately.
 pub(crate) fn parse_result(tool_name: &str, schema: Option<&Schema>, input: &Value) -> Value {
     match result_shape(schema) {
         ResultShape::Enveloped => input.get("result").cloned().unwrap_or(Value::Null),
@@ -74,8 +74,8 @@ fn unwrap_accidental_result(value: Value, schema: Option<&Schema>) -> Value {
 }
 
 /// The model-facing arguments schema for a finish tool. Inlined: the object schema
-/// (with `handover_ticket`'s control keys merged back in). Enveloped: the tool's
-/// static schema with the ticket schema grafted onto its `result` property.
+/// (with the tool's control keys merged back in). Enveloped: the tool's static
+/// schema with the ticket schema grafted onto its `result` property.
 pub(crate) fn finish_tool_input_schema(
     tool_name: &str,
     static_schema: Value,
@@ -109,8 +109,9 @@ fn graft_onto_result(mut static_schema: Value, schema: &Schema) -> Value {
     static_schema
 }
 
-/// Add the finish tool's control-key property definitions and required entries
-/// (taken from its static schema) onto the inlined object schema.
+/// Add the finish tool's control-key property definitions (taken from its static
+/// schema) onto the inlined object schema. They stay optional: a plain finish
+/// passes neither.
 fn merge_controls(mut document: Value, static_schema: &Value, tool_name: &str) -> Value {
     let static_properties = static_schema.get("properties").and_then(Value::as_object);
     let properties = document.as_object_mut().and_then(|object| {
@@ -124,16 +125,6 @@ fn merge_controls(mut document: Value, static_schema: &Value, tool_name: &str) -
             if let Some(definition) = static_properties.get(*key) {
                 properties.insert((*key).to_string(), definition.clone());
             }
-        }
-    }
-    if let Some(required) = document.as_object_mut().and_then(|object| {
-        object
-            .entry("required")
-            .or_insert_with(|| Value::Array(Vec::new()))
-            .as_array_mut()
-    }) {
-        for key in control_keys(tool_name) {
-            required.push(Value::String((*key).to_string()));
         }
     }
     document
@@ -182,17 +173,30 @@ mod tests {
         assert!(matches!(result_shape(None), ResultShape::Enveloped));
     }
 
+    /// The `finish` tool's own static schema: `result` plus the two
+    /// optional control keys, none of them required.
+    fn static_finish_schema() -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "result": {},
+                "handover": { "type": "string" },
+                "task": { "type": "string" },
+            },
+        })
+    }
+
     #[test]
     fn finish_inlined_takes_the_whole_arguments_object() {
         let input = json!({ "status": "malicious", "note": "x" });
-        let result = parse_result("finish_ticket", Some(&object_schema()), &input);
+        let result = parse_result("finish", Some(&object_schema()), &input);
         assert_eq!(result, json!({ "status": "malicious", "note": "x" }));
     }
 
     #[test]
     fn finish_inlined_unwraps_an_accidental_result_wrapper() {
         let input = json!({ "result": { "status": "malicious" } });
-        let result = parse_result("finish_ticket", Some(&object_schema()), &input);
+        let result = parse_result("finish", Some(&object_schema()), &input);
         assert_eq!(result, json!({ "status": "malicious" }));
     }
 
@@ -205,69 +209,48 @@ mod tests {
         }))
         .unwrap();
         let input = json!({ "result": "the answer" });
-        let result = parse_result("finish_ticket", Some(&schema), &input);
+        let result = parse_result("finish", Some(&schema), &input);
         assert_eq!(result, json!({ "result": "the answer" }));
     }
 
     #[test]
-    fn handover_inlined_strips_control_keys() {
-        let input = json!({ "status": "malicious", "to": "analysis", "task": "go" });
-        let result = parse_result("handover_ticket", Some(&object_schema()), &input);
+    fn finish_inlined_strips_control_keys() {
+        let input = json!({ "status": "malicious", "handover": "analysis", "task": "go" });
+        let result = parse_result("finish", Some(&object_schema()), &input);
         assert_eq!(result, json!({ "status": "malicious" }));
     }
 
     #[test]
     fn enveloped_reads_the_result_field() {
-        let input = json!({ "to": "a", "task": "t", "result": "the overview" });
-        let result = parse_result("handover_ticket", Some(&string_schema()), &input);
+        let input = json!({ "handover": "a", "task": "t", "result": "the overview" });
+        let result = parse_result("finish", Some(&string_schema()), &input);
         assert_eq!(result, json!("the overview"));
     }
 
     #[test]
-    fn finish_inlined_schema_is_the_object_schema() {
-        let advertised = finish_tool_input_schema(
-            "finish_ticket",
-            json!({ "type": "object", "properties": { "result": {} } }),
-            Some(&object_schema()),
-        );
-        assert_eq!(
-            advertised["properties"]["status"],
-            json!({ "type": "string" })
-        );
-        assert!(advertised["properties"].get("result").is_none());
-    }
-
-    #[test]
-    fn handover_inlined_schema_has_result_fields_flat_plus_control_keys() {
-        let static_schema = json!({
-            "type": "object",
-            "properties": {
-                "to": { "type": "string" },
-                "task": { "type": "string" },
-                "result": {},
-            },
-            "required": ["to", "task", "result"],
-        });
+    fn finish_inlined_schema_has_result_fields_flat_plus_optional_control_keys() {
         let advertised =
-            finish_tool_input_schema("handover_ticket", static_schema, Some(&object_schema()));
+            finish_tool_input_schema("finish", static_finish_schema(), Some(&object_schema()));
         assert_eq!(
             advertised["properties"]["status"],
             json!({ "type": "string" })
         );
-        assert_eq!(advertised["properties"]["to"], json!({ "type": "string" }));
+        assert_eq!(
+            advertised["properties"]["handover"],
+            json!({ "type": "string" })
+        );
         assert!(advertised["properties"].get("result").is_none());
         let required = advertised["required"].as_array().unwrap();
-        assert!(required.contains(&json!("to")) && required.contains(&json!("task")));
+        assert!(
+            !required.contains(&json!("handover")) && !required.contains(&json!("task")),
+            "control keys stay optional: {required:?}"
+        );
     }
 
     #[test]
     fn enveloped_schema_grafts_the_ticket_schema_onto_result() {
-        let static_schema = json!({
-            "type": "object",
-            "properties": { "result": { "description": "any value" } },
-        });
         let advertised =
-            finish_tool_input_schema("finish_ticket", static_schema, Some(&string_schema()));
+            finish_tool_input_schema("finish", static_finish_schema(), Some(&string_schema()));
         assert_eq!(
             advertised["properties"]["result"],
             json!({ "type": "string" })

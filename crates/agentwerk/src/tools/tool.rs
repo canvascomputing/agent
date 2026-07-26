@@ -869,8 +869,7 @@ mod tests {
             Box::new(crate::tools::FindToolsTool),
             Box::new(crate::tools::ManageKnowledgeTool::new(store)),
             Box::new(crate::tools::BashTool::new("git", "git *")),
-            Box::new(crate::tools::FinishTicketTool),
-            Box::new(crate::tools::HandoverTicketTool),
+            Box::new(crate::tools::FinishTool),
             Box::new(crate::tools::ManageTicketsTool),
             Box::new(crate::tools::ReadTicketsTool),
         ];

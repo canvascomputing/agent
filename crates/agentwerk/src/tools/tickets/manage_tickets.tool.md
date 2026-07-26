@@ -5,13 +5,13 @@ read_only: false
 
 Read and mutate the ticket queue from one tool: `get` / `list` / `search` to read, `create` / `edit` to write. One `action` per call; a `key` defaults to your current ticket when omitted, and `create` stamps `reporter` from the calling agent. `list` and `search` cap at 50 tickets.
 
-- This tool cannot transition status: finish with `finish_ticket` (`Failed` is reserved for system outcomes like a schema-retry trip or policy violation).
-- ALWAYS finish your current ticket with `finish_ticket` before the response ends, or it stays `InProgress` and the loop re-picks it.
+- This tool cannot transition status: finish with `finish` (`Failed` is reserved for system outcomes like a schema-retry trip or policy violation).
+- ALWAYS finish your current ticket with `finish` before the response ends, or it stays `InProgress` and the loop re-picks it.
 
 ## When NOT to use
 
 - Reads only: register `read_tickets_tool` (smaller surface, fewer mistakes); write-only: register `write_tickets_tool` to block listing.
-- Finish your current ticket: call `finish_ticket`.
+- Finish your current ticket: call `finish`.
 - Find code or files: use `grep_tool` / `glob_tool`.
 
 ## Schema
@@ -52,7 +52,7 @@ Read and mutate the ticket queue from one tool: `get` / `list` / `search` to rea
     },
     "schema": {
       "type": "object",
-      "description": "For `create` or `edit` (optional): a JSON Schema document. When set, the agent's final answer must validate against it: an object schema is passed as `finish_ticket`'s top-level arguments, any other shape via the `result` field. Failures count toward `max_schema_retries`."
+      "description": "For `create` or `edit` (optional): a JSON Schema document. When set, the agent's final answer must validate against it: an object schema is passed as `finish`'s top-level arguments, any other shape via the `result` field. Failures count toward `max_schema_retries`."
     }
   },
   "required": [

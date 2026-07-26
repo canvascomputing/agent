@@ -13,7 +13,7 @@ use serde::Serialize;
 
 use crate::prompts::{default_context, PromptBuilder, Section};
 use crate::providers::{Model, Provider, ProviderToolDefinition};
-use crate::tools::{FinishTicketTool, ManageKnowledgeTool, ToolLike, ToolRegistry};
+use crate::tools::{FinishTool, ManageKnowledgeTool, ToolLike, ToolRegistry};
 
 use super::knowledge::Knowledge;
 use super::policy::Policies;
@@ -54,7 +54,7 @@ impl AgentBuilder<(), ()> {
     pub fn new() -> Self {
         let knowledge = Knowledge::load(".agentwerk").expect("open knowledge store");
         let mut tools = ToolRegistry::default();
-        tools.register(FinishTicketTool);
+        tools.register(FinishTool);
         tools.register(ManageKnowledgeTool::new(Arc::clone(&knowledge)));
         Self {
             name: default_agent_name(),
@@ -72,12 +72,11 @@ impl AgentBuilder<(), ()> {
         }
     }
 
-    /// Construct an `Agent` with no tools pre-registered. Use this
-    /// when the agent must not have `FinishTicketTool` available: for
-    /// example, a researcher in a chain that should only ever call
-    /// `HandoverTicketTool`. The caller is responsible for registering
-    /// at least one finish tool (`FinishTicketTool` or
-    /// `HandoverTicketTool`) via [`Self::tool`].
+    /// Construct an `Agent` with no tools pre-registered, for callers
+    /// that want to compose the whole registry themselves. The caller is
+    /// responsible for registering `FinishTool` via [`Self::tool`]:
+    /// without it the agent cannot finish its ticket and the loop
+    /// re-runs it.
     pub fn empty() -> Self {
         let knowledge = Knowledge::load(".agentwerk").expect("open knowledge store");
         let mut tools = ToolRegistry::default();
@@ -394,8 +393,7 @@ impl TicketSystemRef {
 
 /// Bound to a [`TicketSystem`]. Claims tickets assigned by name or
 /// label, calls the LLM provider and runs the tools it requests, then
-/// writes the result back through `FinishTicketTool` or
-/// `HandoverTicketTool`.
+/// writes the result back through `FinishTool`.
 ///
 /// ```no_run
 /// use agentwerk::Agent;
@@ -781,14 +779,14 @@ mod tests {
     }
 
     #[test]
-    fn new_agent_has_finish_ticket_registered() {
+    fn new_agent_has_finish_registered() {
         let agent = Agent::new();
         let names: Vec<String> = agent
             .tool_definitions()
             .into_iter()
             .map(|d| d.name)
             .collect();
-        assert!(names.iter().any(|n| n == "finish_ticket"));
+        assert!(names.iter().any(|n| n == "finish"));
     }
 
     #[test]

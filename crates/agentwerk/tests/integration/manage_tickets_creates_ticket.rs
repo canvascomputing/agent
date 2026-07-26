@@ -19,7 +19,7 @@ async fn creates_a_followup_ticket() -> std::result::Result<(), Box<dyn std::err
     let instruction = format!(
         "Create one brand-new ticket in the queue: call the ticket tool with its \
          create action, setting the new ticket's task to exactly `{body}`. Do not \
-         list or search. After the new ticket exists, call `finish_ticket`."
+         list or search. After the new ticket exists, call `finish`."
     );
 
     let tickets = TicketSystem::new();
@@ -31,7 +31,7 @@ async fn creates_a_followup_ticket() -> std::result::Result<(), Box<dyn std::err
             .model(&model)
             .role(
                 "Carry out the user's request using the ticket tools, then call \
-                 `finish_ticket`. Create new tickets with the appropriate tool \
+                 `finish`. Create new tickets with the appropriate tool \
                  action; do not try to finish tickets other than your own.",
             )
             .tool(ManageTicketsTool)
