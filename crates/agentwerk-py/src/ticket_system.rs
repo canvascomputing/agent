@@ -6,6 +6,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use agentwerk::agents::tickets::Reply;
 use agentwerk::event::Event;
 use agentwerk::{Ticket, TicketSystem};
 use pyo3::prelude::*;
@@ -300,6 +301,60 @@ impl PyTicketSystem {
         slf
     }
 
+    /// Rewrite or drop a ticket's messages before its next request.
+    /// `editor(events, messages)` receives the events since the ticket's
+    /// previous request and the current transcript as a list of message
+    /// dicts, and returns the new list (or `None` to leave it unchanged).
+    /// The editor must keep tool_use/tool_result pairs matched. The edit
+    /// persists across resumption.
+    fn edit_messages_on_event<'py>(slf: PyRef<'py, Self>, editor: Py<PyAny>) -> PyRef<'py, Self> {
+        slf.inner
+            .edit_messages_on_event(move |events: &[Event], messages: &mut Vec<Reply>| {
+                Python::attach(|py| {
+                    let outcome = (|| -> PyResult<Option<Vec<Reply>>> {
+                        let py_events: Vec<_> = events.iter().map(to_py_event).collect();
+                        let py_messages = replies_to_py(py, messages)?;
+                        let returned = editor.bind(py).call1((py_events, py_messages))?;
+                        if returned.is_none() {
+                            return Ok(None);
+                        }
+                        Ok(Some(py_to_replies(&returned)?))
+                    })();
+                    match outcome {
+                        Ok(Some(edited)) => *messages = edited,
+                        Ok(None) => {}
+                        Err(err) => err.print(py),
+                    }
+                });
+            });
+        slf
+    }
+
+    /// Rewrite or drop a ticket's messages now, without triggering a
+    /// request. `editor(messages)` receives the transcript as a list of
+    /// message dicts and returns the new list (or `None` to leave it
+    /// unchanged). Persists the edit in place; a missing ticket is a no-op.
+    fn edit_messages<'py>(slf: PyRef<'py, Self>, key: &str, editor: Py<PyAny>) -> PyRef<'py, Self> {
+        slf.inner.edit_messages(key, |messages: &mut Vec<Reply>| {
+            Python::attach(|py| {
+                let outcome = (|| -> PyResult<Option<Vec<Reply>>> {
+                    let py_messages = replies_to_py(py, messages)?;
+                    let returned = editor.bind(py).call1((py_messages,))?;
+                    if returned.is_none() {
+                        return Ok(None);
+                    }
+                    Ok(Some(py_to_replies(&returned)?))
+                })();
+                match outcome {
+                    Ok(Some(edited)) => *messages = edited,
+                    Ok(None) => {}
+                    Err(err) => err.print(py),
+                }
+            });
+        });
+        slf
+    }
+
     fn start<'py>(slf: PyRef<'py, Self>) -> PyRef<'py, Self> {
         slf.inner.start();
         slf
@@ -373,6 +428,19 @@ impl PyTicketSystem {
 /// so this carries only the observable state (key, status, task, result, ...).
 fn ticket_to_value(ticket: &Ticket) -> Value {
     serde_json::to_value(ticket).unwrap_or(Value::Null)
+}
+
+/// Render each reply as a Python dict for a message editor to inspect.
+fn replies_to_py<'py>(py: Python<'py>, replies: &[Reply]) -> PyResult<Vec<Bound<'py, PyAny>>> {
+    replies
+        .iter()
+        .map(|reply| value_to_py(py, &serde_json::to_value(reply).map_err(runtime_error)?))
+        .collect()
+}
+
+/// Read a message editor's returned list of dicts back into replies.
+fn py_to_replies(obj: &Bound<'_, PyAny>) -> PyResult<Vec<Reply>> {
+    serde_json::from_value(py_to_value(obj)?).map_err(runtime_error)
 }
 
 /// Call a Python predicate with a ticket dict, reading back its truthiness. A

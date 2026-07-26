@@ -1,6 +1,6 @@
 //! Store mutations for [`TicketSystem`]: insertion, claiming,
-//! status transitions, transcript appends, result attachment,
-//! compaction-pair writes, and the matching observational events.
+//! status transitions, reply appends, result attachment,
+//! in-place reply rewrites, and the matching observational events.
 
 use std::path::{Path, PathBuf};
 
@@ -106,8 +106,8 @@ impl TicketSystem {
 
     /// Write a tool's full output to `<dir>/tickets/<key>/outputs/<tool_use_id>.txt`.
     /// Returns the path relative to the configured `dir` on success,
-    /// `None` when the write fails. The relative form keeps the reply
-    /// transcript portable across moves of the tickets dir; join with
+    /// `None` when the write fails. The relative form keeps the
+    /// replies portable across moves of the tickets dir; join with
     /// [`Self::dir_value`] to recover the on-disk path. Best-effort,
     /// matching the surrounding observational-persistence contract.
     pub(crate) fn write_tool_output(
@@ -161,10 +161,10 @@ impl TicketSystem {
         Some(key)
     }
 
-    /// Append `reply` to the ticket's transcript. No-op when the
+    /// Append `reply` to the ticket's replies. No-op when the
     /// ticket is missing: the loop drops out shortly afterwards on the
-    /// same condition. The header file is not rewritten; the transcript
-    /// lives only in `replies.jsonl`.
+    /// same condition. The ticket record is not rewritten; the replies
+    /// live only in `replies.jsonl`.
     pub(crate) fn add_reply(&self, key: &str, reply: Reply) {
         {
             let mut store = self.tickets.lock().unwrap();
@@ -234,6 +234,9 @@ impl TicketSystem {
             };
             self.emit(key, agent, kind);
         }
+        // The ticket will never request again, so drop any events buffered
+        // for its message editors instead of leaking them for the run.
+        self.message_editing.lock().unwrap().pending.remove(key);
         Ok(())
     }
 
@@ -333,8 +336,10 @@ impl TicketSystem {
         Ok(result)
     }
 
-    /// Collapse the ticket's transcript to `summary` and write the
-    /// compaction pair. No-op when the ticket is missing.
+    /// Collapse the ticket's replies to `summary` and rewrite them in
+    /// place. No-op when the ticket is missing. Persists like an edit: the
+    /// `replies.jsonl` file is overwritten (no superseded file) and the
+    /// shrunk task is saved to `ticket.json`.
     pub(crate) fn summarize(&self, key: &str, summary: String) {
         let ticket_copy = {
             let mut store = self.tickets.lock().unwrap();
@@ -344,32 +349,43 @@ impl TicketSystem {
             ticket.summarize(summary);
             ticket.clone()
         };
-        self.save_compaction(key, &ticket_copy);
+        let replies = Replies {
+            key: key.to_string(),
+            entries: ticket_copy.replies,
+        };
+        let _ = replies.save(&self.dir_value());
+        self.save_ticket(key);
         self.stats.reset_usage(key);
     }
 
-    /// Replies file first, then header as commit marker. A crash in
-    /// between leaves an orphan `replies.<ts>.jsonl` that `Replies::load`
-    /// skips via the paired-check rule.
-    fn save_compaction(&self, key: &str, ticket: &Ticket) {
-        let dir = self.dir_value();
-        let at = now_millis();
-        let ticket_dir = dir.join("tickets").join(key);
-
-        let replies_path = ticket_dir.join(format!("replies.{at}.jsonl"));
-        let mut replies_body = String::new();
-        for reply in &ticket.replies {
-            if let Ok(line) = serde_json::to_string(reply) {
-                replies_body.push_str(&line);
-                replies_body.push('\n');
+    /// Apply `edit` to ticket `key`'s replies now, then rewrite them
+    /// in place so the change survives resumption. The on-demand
+    /// sibling of [`Self::edit_messages_on_event`]; triggers no request.
+    /// No-op when the ticket is missing. The edit must keep the messages
+    /// well-formed (matched tool_use/tool_result pairs); they are sent
+    /// as-is. Unlike `summarize`, leaves the task and token accounting
+    /// untouched.
+    pub fn edit_messages(&self, key: &str, edit: impl FnOnce(&mut Vec<Reply>)) -> &Self {
+        let ticket_copy = {
+            let mut store = self.tickets.lock().unwrap();
+            let Some(ticket) = store.get_mut(key) else {
+                return self;
+            };
+            let before = ticket.replies.clone();
+            edit(&mut ticket.replies);
+            // An editor that inspected without changing anything must not
+            // trigger a rewrite: leave the on-disk files alone.
+            if ticket.replies == before {
+                return self;
             }
-        }
-        let _ = crate::persistence::write_atomic(&replies_path, replies_body.as_bytes());
-
-        let header_path = ticket_dir.join(format!("ticket.{at}.json"));
-        if let Ok(header_body) = serde_json::to_vec_pretty(ticket) {
-            let _ = crate::persistence::write_atomic(&header_path, &header_body);
-        }
+            ticket.clone()
+        };
+        let replies = Replies {
+            key: key.to_string(),
+            entries: ticket_copy.replies,
+        };
+        let _ = replies.save(&self.dir_value());
+        self
     }
 
     /// Edit caller-settable fields. Each `Some` overwrites; `None`
@@ -403,8 +419,6 @@ impl TicketSystem {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
-
     use super::super::test_util::*;
     use super::*;
     use crate::providers::ContentBlock;
@@ -828,7 +842,7 @@ mod tests {
     }
 
     #[test]
-    fn load_restores_in_progress_transcript() {
+    fn load_restores_in_progress_replies() {
         let dir = crate::test_util::TempDir::new().unwrap();
         let original = TicketSystem::new();
         original.dir(dir.path().to_path_buf());
@@ -972,118 +986,6 @@ mod tests {
     }
 
     #[test]
-    fn compaction_pair_without_ticket_header_is_ignored_on_load() {
-        use super::super::reply::ReplyContent;
-        let dir = crate::test_util::TempDir::new().unwrap();
-        {
-            let sys = TicketSystem::new();
-            sys.dir(dir.path().to_path_buf());
-            sys.task("hello");
-            sys.reply("TICKET-1", "first");
-        }
-        use super::super::reply::Author;
-
-        // Drop a stray `replies.<ts>.jsonl` with NO paired `ticket.<ts>.json`.
-        // The loader's paired-check rule must ignore it and fall back to the
-        // running `replies.jsonl`.
-        let key_dir = dir.path().join("tickets").join("TICKET-1");
-        let orphan = Reply {
-            author: Author::User,
-            content: vec![ReplyContent::Text("orphan".into())],
-            created_at: 9_999_999_999_999,
-        };
-        std::fs::write(
-            key_dir.join("replies.9999999999999.jsonl"),
-            format!("{}\n", serde_json::to_string(&orphan).unwrap()),
-        )
-        .unwrap();
-
-        let resumed = TicketSystem::load(dir.path()).unwrap();
-        let t = resumed.get_ticket("TICKET-1").unwrap();
-        let texts: Vec<_> = t
-            .replies
-            .iter()
-            .filter_map(|r| match r.content.first()? {
-                ReplyContent::Text(s) => Some(s.as_str()),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(texts, vec!["first"]);
-        assert!(
-            !texts.contains(&"orphan"),
-            "orphan compaction file must not be selected as base"
-        );
-    }
-
-    #[test]
-    fn load_replays_via_newest_compaction_pair_plus_tail() {
-        use super::super::reply::ReplyContent;
-        let dir = crate::test_util::TempDir::new().unwrap();
-        let key_dir = dir.path().join("tickets").join("TICKET-1");
-        std::fs::create_dir_all(&key_dir).unwrap();
-
-        // Active header.
-        let header = serde_json::json!({
-            "task": "hello", "labels": [], "key": "TICKET-1",
-            "status": "Todo", "reporter": "user", "created_at": 1,
-            "started_at": null, "finished_at": null, "failed_at": null,
-            "result": null, "parent": null
-        });
-        std::fs::write(
-            key_dir.join("ticket.json"),
-            serde_json::to_string(&header).unwrap(),
-        )
-        .unwrap();
-
-        // Running log carries the full history including pre-compaction entries.
-        for c in [50, 150, 250, 350].iter() {
-            let line = serde_json::json!({
-                "author": "user",
-                "content": [{ "Text": format!("c{c}") }],
-                "created_at": c,
-            });
-            crate::persistence::append_line(
-                &key_dir.join("replies.jsonl"),
-                &serde_json::to_string(&line).unwrap(),
-            )
-            .unwrap();
-        }
-
-        // Compaction file pair captured at ts=200 contains only the summary.
-        let summary = serde_json::json!({
-            "author": "user",
-            "content": [{ "Text": "summary" }],
-            "created_at": 200,
-        });
-        std::fs::write(
-            key_dir.join("replies.200.jsonl"),
-            format!("{}\n", serde_json::to_string(&summary).unwrap()),
-        )
-        .unwrap();
-        std::fs::write(
-            key_dir.join("ticket.200.json"),
-            serde_json::to_string(&header).unwrap(),
-        )
-        .unwrap();
-
-        let sys = TicketSystem::load(dir.path()).unwrap();
-        let t = sys.get_ticket("TICKET-1").unwrap();
-        let texts: Vec<_> = t
-            .replies
-            .iter()
-            .filter_map(|r| match r.content.first()? {
-                ReplyContent::Text(s) => Some(s.clone()),
-                _ => None,
-            })
-            .collect();
-        // Base = "summary"; tail = entries with created_at > 200 → c250, c350.
-        assert_eq!(
-            texts,
-            vec!["summary".to_string(), "c250".into(), "c350".into()]
-        );
-    }
-
-    #[test]
     fn ticket_lifecycle_event_writes_stats_file() {
         let (sys, dir) = test_system();
         sys.task("seed");
@@ -1156,53 +1058,7 @@ mod tests {
     }
 
     #[test]
-    fn summarize_writes_compaction_pair_with_matching_timestamps() {
-        let (sys, _tmp) = test_system();
-        let key = sys.task("hello");
-        sys.add_reply(&key, Reply::user_text("turn one"));
-        sys.add_reply(
-            &key,
-            Reply::assistant(&[ContentBlock::Text {
-                text: "first reply".into(),
-            }]),
-        );
-
-        sys.summarize(&key, "SUMMARY-TEXT".into());
-
-        let ticket_dir = sys.dir_value().join("tickets").join(&key);
-        let mut header_ts: Option<u64> = None;
-        let mut replies_ts: Option<u64> = None;
-        for entry in std::fs::read_dir(&ticket_dir).unwrap().flatten() {
-            let name = entry.file_name().into_string().unwrap();
-            if let Some(rest) = name
-                .strip_prefix("ticket.")
-                .and_then(|s| s.strip_suffix(".json"))
-            {
-                if let Ok(ts) = rest.parse::<u64>() {
-                    header_ts = Some(ts);
-                }
-            }
-            if let Some(rest) = name
-                .strip_prefix("replies.")
-                .and_then(|s| s.strip_suffix(".jsonl"))
-            {
-                if let Ok(ts) = rest.parse::<u64>() {
-                    replies_ts = Some(ts);
-                }
-            }
-        }
-        assert!(
-            header_ts.is_some() && replies_ts.is_some(),
-            "save_compaction must write both ticket.<ts>.json and replies.<ts>.jsonl",
-        );
-        assert_eq!(
-            header_ts, replies_ts,
-            "pair timestamps must match so Replies::load picks them up as a committed pair",
-        );
-    }
-
-    #[test]
-    fn summarize_pair_round_trips_through_replies_load() {
+    fn summarize_round_trips_through_replies_load() {
         use super::super::reply::ReplyContent;
         let (sys, _tmp) = test_system();
         let key = sys.task("hello");
@@ -1216,225 +1072,185 @@ mod tests {
 
         sys.summarize(&key, "SUMMARY-TEXT".into());
 
-        let reloaded = Replies::load(&sys.dir_value(), &key).unwrap();
-        let texts: Vec<String> = reloaded
-            .iter()
-            .filter_map(|r| match &r.content[..] {
-                [ReplyContent::Text(t)] => Some(t.clone()),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(
-            texts,
-            vec!["SUMMARY-TEXT".to_string()],
-            "Replies::load must reconstruct the post-compaction transcript from the pair",
-        );
-    }
-
-    #[test]
-    fn replies_load_skips_orphan_replies_file_without_matching_header() {
-        use super::super::reply::ReplyContent;
-        let (sys, _tmp) = test_system();
-        let key = sys.task("hello");
-        sys.add_reply(&key, Reply::user_text("running entry"));
-
+        // The collapsed replies land in replies.jsonl; no snapshot file.
         let ticket_dir = sys.dir_value().join("tickets").join(&key);
-        let orphan = ticket_dir.join("replies.42.jsonl");
-        std::fs::write(
-            &orphan,
-            b"{\"author\":\"user\",\"content\":[{\"Text\":\"GHOST\"}],\"created_at\":1}\n",
-        )
-        .unwrap();
-
-        let reloaded = Replies::load(&sys.dir_value(), &key).unwrap();
-        let texts: Vec<String> = reloaded
-            .iter()
-            .filter_map(|r| match &r.content[..] {
-                [ReplyContent::Text(t)] => Some(t.clone()),
-                _ => None,
-            })
-            .collect();
-        assert!(
-            !texts.iter().any(|t| t == "GHOST"),
-            "Replies::load must skip a replies.<ts>.jsonl with no matching ticket.<ts>.json commit marker",
-        );
-        assert!(
-            texts.iter().any(|t| t == "running entry"),
-            "the running log must still be returned even when an orphan pair half exists",
-        );
-    }
-
-    fn jsonl_line_count(path: &Path) -> usize {
-        std::fs::read_to_string(path)
-            .unwrap_or_default()
-            .lines()
-            .filter(|l| !l.is_empty())
-            .count()
-    }
-
-    fn latest_compaction_at(ticket_dir: &Path) -> u64 {
-        std::fs::read_dir(ticket_dir)
+        let names: Vec<String> = std::fs::read_dir(&ticket_dir)
             .unwrap()
             .flatten()
-            .filter_map(|e| {
-                e.file_name()
-                    .into_string()
-                    .ok()?
-                    .strip_prefix("replies.")?
-                    .strip_suffix(".jsonl")?
-                    .parse::<u64>()
-                    .ok()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(names.contains(&"replies.jsonl".to_string()));
+        assert!(!names
+            .iter()
+            .any(|n| n.starts_with("replies.") && n != "replies.jsonl"));
+
+        let reloaded = Replies::load(&sys.dir_value(), &key).unwrap().entries;
+        let texts: Vec<String> = reloaded
+            .iter()
+            .filter_map(|r| match &r.content[..] {
+                [ReplyContent::Text(t)] => Some(t.clone()),
+                _ => None,
             })
-            .max()
-            .expect("expected a replies.<ts>.jsonl file in the ticket dir")
+            .collect();
+        assert_eq!(texts, vec!["SUMMARY-TEXT".to_string()]);
     }
 
     #[test]
-    fn add_reply_after_compaction_appends_to_current_replies_file_not_initial() {
-        let (sys, _tmp) = test_system();
-        let key = sys.task("hello");
-        sys.add_reply(&key, Reply::user_text("pre-1"));
-        sys.add_reply(&key, Reply::user_text("pre-2"));
-
-        let ticket_dir = sys.dir_value().join("tickets").join(&key);
-        let initial = ticket_dir.join("replies.jsonl");
-        let initial_before = jsonl_line_count(&initial);
-
-        sys.summarize(&key, "SUMMARY".into());
-        let at = latest_compaction_at(&ticket_dir);
-        let compaction_replies = ticket_dir.join(format!("replies.{at}.jsonl"));
-        let compaction_before = jsonl_line_count(&compaction_replies);
-
-        sys.add_reply(&key, Reply::user_text("post-1"));
-
-        assert_eq!(
-            jsonl_line_count(&initial),
-            initial_before,
-            "post-compaction append must not grow the initial replies.jsonl",
-        );
-        assert_eq!(
-            jsonl_line_count(&compaction_replies),
-            compaction_before + 1,
-            "post-compaction append must grow the current compaction's replies file by one line",
-        );
-        let body = std::fs::read_to_string(&compaction_replies).unwrap();
-        assert!(
-            body.contains("post-1"),
-            "the appended payload must land in the current compaction's replies file, got: {body}",
-        );
-    }
-
-    #[test]
-    fn second_compaction_redirects_appends_to_newest_compaction_replies_file() {
-        let (sys, _tmp) = test_system();
-        let key = sys.task("hello");
-        sys.add_reply(&key, Reply::user_text("turn one"));
-
-        sys.summarize(&key, "SUMMARY-1".into());
-        let ticket_dir = sys.dir_value().join("tickets").join(&key);
-        let at1 = latest_compaction_at(&ticket_dir);
-
-        sys.add_reply(&key, Reply::user_text("between"));
-
-        // Force the second compaction onto a different millisecond so
-        // the pair gets a distinct timestamp.
-        std::thread::sleep(std::time::Duration::from_millis(2));
-        sys.summarize(&key, "SUMMARY-2".into());
-
-        let at2 = latest_compaction_at(&ticket_dir);
-        assert!(
-            at2 > at1,
-            "second compaction must produce a strictly later timestamp (got at1={at1}, at2={at2})",
-        );
-
-        sys.add_reply(&key, Reply::user_text("after-2"));
-
-        let first_compaction =
-            std::fs::read_to_string(ticket_dir.join(format!("replies.{at1}.jsonl"))).unwrap();
-        let second_compaction =
-            std::fs::read_to_string(ticket_dir.join(format!("replies.{at2}.jsonl"))).unwrap();
-        let initial = std::fs::read_to_string(ticket_dir.join("replies.jsonl")).unwrap();
-
-        assert!(
-            second_compaction.contains("after-2"),
-            "post-second-compaction append must land in replies.<at2>.jsonl",
-        );
-        assert!(
-            !first_compaction.contains("after-2"),
-            "post-second-compaction append must NOT land in the older compaction's replies file",
-        );
-        assert!(
-            !initial.contains("after-2"),
-            "post-second-compaction append must NOT land in the initial replies file",
-        );
-    }
-
-    #[test]
-    fn summarize_rewrites_task_to_summary_and_shrinks_persisted_header() {
+    fn summarize_shrinks_the_persisted_task_and_survives_reload() {
         let (sys, _tmp) = test_system();
         let huge = "x".repeat(500_000);
         let key = sys.task(&huge);
         sys.add_reply(&key, Reply::user_text("turn one"));
 
         let ticket_dir = sys.dir_value().join("tickets").join(&key);
-        let header_before = std::fs::metadata(ticket_dir.join("ticket.json"))
+        let before = std::fs::metadata(ticket_dir.join("ticket.json"))
             .unwrap()
             .len();
         assert!(
-            header_before > 500_000,
-            "pre-compaction header should carry the huge task ({header_before} bytes)",
+            before > 500_000,
+            "pre-compaction ticket.json carries the huge task"
         );
 
         sys.summarize(&key, "SUMMARY".into());
 
-        let ticket = sys.get_ticket(&key).unwrap();
+        // The base ticket.json now carries the summary, not the huge task.
+        let after = std::fs::metadata(ticket_dir.join("ticket.json"))
+            .unwrap()
+            .len();
+        assert!(
+            after < 2_000,
+            "post-compaction ticket.json must be small (got {after} bytes)",
+        );
         assert_eq!(
-            ticket.task,
+            sys.get_ticket(&key).unwrap().task,
             serde_json::Value::String("SUMMARY".into()),
-            "summarize must rewrite task to the summary text",
         );
 
-        let at = latest_compaction_at(&ticket_dir);
-        let compaction_header = ticket_dir.join(format!("ticket.{at}.json"));
-        let compaction_size = std::fs::metadata(&compaction_header).unwrap().len();
-        assert!(
-            compaction_size < 2_000,
-            "compaction header must be small (got {compaction_size} bytes): it should reflect post-compaction state, not duplicate the original task",
-        );
-        let body = std::fs::read_to_string(&compaction_header).unwrap();
-        assert!(
-            body.contains("SUMMARY"),
-            "compaction header must carry the summary as task, got: {body}",
-        );
-        assert!(
-            !body.contains(&huge),
-            "compaction header must NOT contain the original task body",
+        // Reload restores the summary task, not the original.
+        let reloaded = TicketSystem::load(sys.dir_value()).unwrap();
+        assert_eq!(
+            reloaded.get_ticket(&key).unwrap().task,
+            serde_json::Value::String("SUMMARY".into()),
+            "the summarized task must survive reload",
         );
     }
 
     #[test]
-    fn orphan_compaction_replies_without_header_does_not_divert_appends() {
+    fn edit_messages_rewrites_replies_without_touching_task() {
+        use crate::agents::tickets::ReplyContent;
         let (sys, _tmp) = test_system();
-        let key = sys.task("hello");
+        let key = sys.task("original task");
+        sys.add_reply(&key, Reply::user_text("keep me"));
+        sys.add_reply(&key, Reply::user_text("drop me"));
 
-        // Drop a stray replies.<ts>.jsonl with no matching ticket.<ts>.json
-        // commit marker. The writer must apply the same paired-check rule
-        // Replies::load uses on the read side and ignore the orphan.
-        let ticket_dir = sys.dir_value().join("tickets").join(&key);
-        let orphan = ticket_dir.join("replies.42.jsonl");
-        std::fs::write(&orphan, b"").unwrap();
+        sys.edit_messages(&key, |replies| {
+            replies.retain(|reply| {
+                !matches!(reply.content.first(), Some(ReplyContent::Text(t)) if t == "drop me")
+            });
+        });
 
-        sys.add_reply(&key, Reply::user_text("first"));
-
-        let initial = std::fs::read_to_string(ticket_dir.join("replies.jsonl")).unwrap();
-        let orphan_body = std::fs::read_to_string(&orphan).unwrap();
-        assert!(
-            initial.contains("first"),
-            "append must go to the initial replies file when no committed compaction exists",
+        // Unlike summarize, the task is left as it was.
+        let ticket = sys.get_ticket(&key).unwrap();
+        assert_eq!(
+            ticket.task,
+            serde_json::Value::String("original task".into())
         );
+
+        // The drop is committed and reloads from disk.
+        let reloaded = TicketSystem::load(sys.dir_value()).unwrap();
+        let replies = reloaded.get_ticket(&key).unwrap().replies;
+        assert!(replies
+            .iter()
+            .any(|r| matches!(r.content.first(), Some(ReplyContent::Text(t)) if t == "keep me")));
+        assert!(replies
+            .iter()
+            .all(|r| !matches!(r.content.first(), Some(ReplyContent::Text(t)) if t == "drop me")));
+    }
+
+    #[test]
+    fn edit_messages_that_changes_nothing_writes_nothing() {
+        let (sys, _tmp) = test_system();
+        let key = sys.task("go");
+        sys.add_reply(&key, Reply::user_text("keep me"));
+        let ticket_dir = sys.dir_value().join("tickets").join(&key);
+
+        sys.edit_messages(&key, |_replies| {}); // inspect, change nothing
+
+        let rewrites = std::fs::read_dir(&ticket_dir)
+            .unwrap()
+            .flatten()
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .strip_prefix("replies.")
+                    .and_then(|rest| rest.strip_suffix(".jsonl"))
+                    .is_some()
+            })
+            .count();
+        assert_eq!(rewrites, 0, "a no-op edit must not rewrite replies.jsonl");
+    }
+
+    #[test]
+    fn edit_rewrites_replies_in_place_without_a_snapshot_file() {
+        use crate::agents::tickets::ReplyContent;
+        let (sys, _tmp) = test_system();
+        let key = sys.task("go");
+        sys.add_reply(&key, Reply::user_text("keep me"));
+        sys.add_reply(&key, Reply::user_text("drop me"));
+        let ticket_dir = sys.dir_value().join("tickets").join(&key);
+
+        sys.edit_messages(&key, |replies| {
+            replies.retain(|reply| {
+                !matches!(reply.content.first(), Some(ReplyContent::Text(t)) if t == "drop me")
+            });
+        });
+
+        // The edit landed in the base file, and minted no replies.<ts>.jsonl.
+        let names: Vec<String> = std::fs::read_dir(&ticket_dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(names.contains(&"replies.jsonl".to_string()));
         assert!(
-            !orphan_body.contains("first"),
-            "append must NOT land in an orphan replies file without a paired header",
+            !names
+                .iter()
+                .any(|n| n.starts_with("replies.") && n != "replies.jsonl"),
+            "no snapshot file expected, found: {names:?}",
+        );
+        let body = std::fs::read_to_string(ticket_dir.join("replies.jsonl")).unwrap();
+        assert!(body.contains("keep me"));
+        assert!(!body.contains("drop me"));
+    }
+
+    #[test]
+    fn compaction_then_edit_leaves_one_replies_file_and_no_leak() {
+        use crate::agents::tickets::ReplyContent;
+        let (sys, _tmp) = test_system();
+        let key = sys.task("go");
+        sys.add_reply(&key, Reply::user_text("SECRET"));
+        sys.summarize(&key, "summary".into()); // rewrites replies.jsonl in place
+        sys.add_reply(&key, Reply::user_text("after"));
+        sys.edit_messages(&key, |replies| {
+            replies.retain(|reply| {
+                !matches!(reply.content.first(), Some(ReplyContent::Text(t)) if t == "after")
+            });
+        });
+
+        // One replies file, no snapshots, and neither dropped string survives.
+        let ticket_dir = sys.dir_value().join("tickets").join(&key);
+        let replies_files: Vec<String> = std::fs::read_dir(&ticket_dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.starts_with("replies."))
+            .collect();
+        assert_eq!(replies_files, vec!["replies.jsonl".to_string()]);
+        let body = std::fs::read_to_string(ticket_dir.join("replies.jsonl")).unwrap();
+        assert!(
+            !body.contains("SECRET") && !body.contains("after"),
+            "leaked: {body}"
         );
     }
 }

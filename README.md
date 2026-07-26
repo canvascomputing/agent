@@ -5,7 +5,7 @@
 <h1 align="center">agentwerk</h1>
 
 <p align="center">
-  <strong>A minimal Rust crate with Python bindings for running many agents in parallel.</strong>
+  <strong>A minimal Rust crate for running many agents in parallel.</strong>
 </p>
 
 <p align="center">

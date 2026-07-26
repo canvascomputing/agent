@@ -83,3 +83,8 @@ async def test_cancel_on_accepts_an_awaitable_and_chains(system):
 def test_cancel_label_on_event_chains(system):
     configured = system.cancel_label_on_event("scan", lambda event: True)
     assert isinstance(configured, aw.TicketSystem)
+
+
+def test_edit_messages_on_event_chains(system):
+    configured = system.edit_messages_on_event(lambda events, messages: messages)
+    assert isinstance(configured, aw.TicketSystem)
