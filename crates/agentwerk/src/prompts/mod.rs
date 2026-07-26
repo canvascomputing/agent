@@ -47,9 +47,11 @@ pub(crate) fn compaction_directive() -> &'static str {
 pub(crate) fn schema_directive(schema: &Value) -> String {
     let pretty = serde_json::to_string_pretty(schema).unwrap_or_default();
     if is_object_schema(schema) {
-        format!("\n\nCall `finish_ticket` with these fields as its top-level arguments, not wrapped in `result`, matching this schema:\n{pretty}")
+        format!("\n\nCall `finish` with these fields as its top-level arguments, not wrapped in `result`, matching this schema:\n{pretty}")
     } else {
-        format!("\n\nRecord your `result` via `finish_ticket` as a JSON value matching this schema:\n{pretty}")
+        format!(
+            "\n\nRecord your `result` via `finish` as a JSON value matching this schema:\n{pretty}"
+        )
     }
 }
 
@@ -63,10 +65,10 @@ pub(crate) fn schema_directive(schema: &Value) -> String {
 pub(crate) fn schema_retry_detail(validator_message: &str, schema: Option<&Value>) -> String {
     let shape = schema.map(schema_directive).unwrap_or_default();
     let lead = if schema.is_some_and(is_object_schema) {
-        "The arguments you passed did not match the ticket's schema. Call `finish_ticket` \
+        "The arguments you passed did not match the ticket's schema. Call `finish` \
          again with the fields as its top-level arguments that match it."
     } else {
-        "The `result` you passed did not match the ticket's schema. Call `finish_ticket` \
+        "The `result` you passed did not match the ticket's schema. Call `finish` \
          again with `result` set to a JSON value that matches it."
     };
     format!("{lead} Validator said: {validator_message}{shape}")
@@ -191,7 +193,7 @@ mod tests {
     fn schema_directive_for_a_scalar_keeps_the_result_envelope() {
         let directive = schema_directive(&serde_json::json!({ "type": "string" }));
         assert!(directive.contains("`result`"));
-        assert!(directive.contains("finish_ticket"));
+        assert!(directive.contains("finish"));
     }
 
     #[test]

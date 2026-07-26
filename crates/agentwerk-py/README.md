@@ -328,8 +328,7 @@ tickets.ticket(Ticket("Write a report.").schema(schema))
 ```
 
 Register a schema per label with `tickets.schema_for_label(label, schema)`: every
-ticket of that label validates against it (unless built with its own), so work
-reached by a handover is checked like anything submitted directly.
+ticket of that label validates against it.
 
 ### Compaction
 
@@ -378,12 +377,12 @@ take. Built-in tools are constructed and passed to `.tool(...)`:
 | | `CodegrepTool()` | Structural code search. |
 | **Shell** | `BashTool(name, pattern)` | Run a shell command matching an allowed pattern. |
 | **Web** | `FetchUrlTool()` | Fetch a URL and read its body. |
-| **Tickets** | `HandoverTicketTool()` | Write the result, mark the ticket finished, and hand follow-up work to another agent. |
-| | `ManageTicketsTool()` | Read the ticket queue and create or edit tickets. |
+| **Tickets** | `ManageTicketsTool()` | Read the ticket queue and create or edit tickets. |
 | | `ReadTicketsTool()` | Read the ticket queue. |
 
-`FinishTicketTool` and `ManageKnowledgeTool` are registered automatically on
-every agent.
+`FinishTool` and `ManageKnowledgeTool` are registered automatically on every
+agent. `FinishTool` writes the result for the current ticket and marks it
+finished, optionally handing follow-up work to another agent.
 
 ### Bash
 

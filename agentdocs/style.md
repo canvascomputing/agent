@@ -280,7 +280,7 @@ counter += 1;
 - "worker" is not used as a role noun. The type is `Agent`; the noun is "agent".
 - "routed" / "routing" is replaced with "assigned" / "assignment".
 - Bare "provider" in caller-facing prose is spelled "LLM provider". Identifier names (`Provider`, `AnthropicProvider`, the `providers::` module) stay unqualified.
-- "finisher" is banned outright, in agent-facing prompts (role files, `*.tool.md`, directives) as much as in caller-facing prose. It names nothing an agent can call: name the concrete tool, `finish_ticket` or `handover_ticket` (rustdoc names the types `FinishTicketTool` / `HandoverTicketTool`). For the pair, say "the finish tools" or list both. Identifiers may carry "finish" (`TICKET_FINISH_TOOLS`), never "finisher".
+- "finisher" is banned outright, in agent-facing prompts (role files, `*.tool.md`, directives) as much as in caller-facing prose. It names nothing an agent can call: name the tool, `finish` (rustdoc names the type `FinishTool`).
 - Internal mechanics do not appear in caller-facing rustdoc: no `Weak<Self>` / `Arc<Self>` references, no "stamps", no "recorder protocol", no `record_*` / `mark_finished`. They live in `agentdocs/architecture.md`.
 - "caps" is replaced with "limits" everywhere it is used as a noun. Imperative cells say "Limit X" not "Cap X".
 - "snapshot" does not appear in caller-facing prose. Say what the value is, not that it is a snapshot.

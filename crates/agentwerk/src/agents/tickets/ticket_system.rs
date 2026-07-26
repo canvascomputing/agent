@@ -472,7 +472,7 @@ impl TicketSystem {
     /// Register the result schema every ticket carrying `label` validates
     /// against, unless the ticket was created with a schema of its own. The
     /// schema is stamped at creation, so the contract follows the label whether
-    /// the ticket came from `task`, `ticket`, or a `handover_ticket`
+    /// the ticket came from `task`, `ticket`, or a `finish` handover
     /// child. Mirrors `Stats::stats_for_label`.
     pub fn schema_for_label(&self, label: impl Into<String>, schema: Schema) -> &Self {
         self.label_schemas

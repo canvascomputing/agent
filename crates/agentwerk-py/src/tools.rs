@@ -8,9 +8,9 @@ use std::sync::Arc;
 
 use agentwerk::providers::ProviderResult;
 use agentwerk::tools::{
-    BashTool, CodegrepTool, EditFileTool, FetchUrlTool, GlobTool, GrepTool, HandoverTicketTool,
-    ListDirectoryTool, ManageTicketsTool, ReadFileTool, ReadTicketsTool, ToolContext, ToolLike,
-    ToolResult, WriteFileTool,
+    BashTool, CodegrepTool, EditFileTool, FetchUrlTool, GlobTool, GrepTool, ListDirectoryTool,
+    ManageTicketsTool, ReadFileTool, ReadTicketsTool, ToolContext, ToolLike, ToolResult,
+    WriteFileTool,
 };
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -227,12 +227,6 @@ fn fetch_url_tool() -> PyTool {
 }
 
 #[pyfunction]
-#[pyo3(name = "HandoverTicketTool")]
-fn handover_ticket_tool() -> PyTool {
-    handle(Arc::new(HandoverTicketTool))
-}
-
-#[pyfunction]
 #[pyo3(name = "ReadTicketsTool")]
 fn read_tickets_tool() -> PyTool {
     handle(Arc::new(ReadTicketsTool))
@@ -273,7 +267,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(list_directory_tool, m)?)?;
     m.add_function(wrap_pyfunction!(codegrep_tool, m)?)?;
     m.add_function(wrap_pyfunction!(fetch_url_tool, m)?)?;
-    m.add_function(wrap_pyfunction!(handover_ticket_tool, m)?)?;
     m.add_function(wrap_pyfunction!(read_tickets_tool, m)?)?;
     m.add_function(wrap_pyfunction!(manage_tickets_tool, m)?)?;
     m.add_function(wrap_pyfunction!(bash_tool, m)?)?;

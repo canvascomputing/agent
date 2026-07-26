@@ -19,7 +19,7 @@ pub(super) async fn run(context: &mut TicketContext<'_>) -> Step {
         return Step::NextTicket;
     };
     let tools =
-        finish_tools_with_ticket_schema(ticket.schema.as_ref(), context.agent.tool_definitions());
+        finish_tool_with_ticket_schema(ticket.schema.as_ref(), context.agent.tool_definitions());
     let model_name = context.model.name.clone();
     context.emit(EventKind::RequestStarted {
         model: model_name.clone(),
@@ -128,16 +128,16 @@ pub(super) async fn run(context: &mut TicketContext<'_>) -> Step {
     }
 }
 
-/// Advertise each finish tool's arguments in the shape the current ticket expects:
+/// Advertise the finish tool's arguments in the shape the current ticket expects:
 /// an object schema inlines to top-level arguments, everything else keeps the
-/// `result` envelope. Shares `finish_tool_input_schema` with `finish_ticket` /
-/// `handover_ticket` so the advertised shape and the parsed shape always agree.
-fn finish_tools_with_ticket_schema(
+/// `result` envelope. Shares `finish_tool_input_schema` with the `finish` tool
+/// so the advertised shape and the parsed shape always agree.
+fn finish_tool_with_ticket_schema(
     schema: Option<&Schema>,
     mut tools: Vec<ProviderToolDefinition>,
 ) -> Vec<ProviderToolDefinition> {
     for definition in &mut tools {
-        if crate::tools::TICKET_FINISH_TOOLS.contains(&definition.name.as_str()) {
+        if definition.name == crate::tools::TICKET_FINISH_TOOL {
             definition.input_schema = crate::tools::finish_tool_input_schema(
                 &definition.name,
                 definition.input_schema.clone(),

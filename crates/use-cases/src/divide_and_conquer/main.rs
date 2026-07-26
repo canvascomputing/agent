@@ -2,7 +2,7 @@
 //!
 //! Partitions `[1, N]` into K subranges and creates one ticket per
 //! subrange. Agents share the labelled queue, call the `python` tool
-//! for an exact integer, and finish via `finish_ticket` with a
+//! for an exact integer, and finish via `finish` with a
 //! schema-validated `{"idx", "partial_sum"}`. The driver aggregates
 //! after `finish` returns and verifies the total against the
 //! closed-form `N(N+1)(2N+1)/6`.
@@ -328,7 +328,7 @@ fn print_intro(n: u64, partitions: usize, agents: usize, style: &Style) {
     eprintln!("  Split [1, {n}] into {partitions} contiguous subranges and enqueue one ticket per");
     eprintln!("  subrange. {agents} agent(s) share the queue, each calling a `python` tool");
     eprintln!("  to compute its partial sum exactly. Agents finish their tickets via");
-    eprintln!("  `finish_ticket` with `{{\"idx\", \"partial_sum\"}}`; the driver aggregates");
+    eprintln!("  `finish` with `{{\"idx\", \"partial_sum\"}}`; the driver aggregates");
     eprintln!("  once every ticket is finished and verifies against the closed-form total.\n");
     eprintln!(
         "{dim}┌ {partitions} partitions · {agents} agent(s) sharing the queue{reset}",

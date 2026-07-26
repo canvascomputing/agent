@@ -14,7 +14,7 @@ use crate::providers::{AsUserMessage, Message, Model, RequestErrorKind};
 use super::{compact, request, tool_call, Step, POLL_INTERVAL};
 
 const RESUME_OR_FINISH_DETAIL: &str =
-    "Your last reply contained no tool call. Call `finish_ticket` with your result if the work is complete, or another tool to continue.";
+    "Your last reply contained no tool call. Call `finish` with your result if the work is complete, or another tool to continue.";
 
 pub(super) struct TicketContext<'a> {
     pub(super) agent: &'a Agent,
@@ -235,7 +235,7 @@ mod tests {
     use crate::agents::tickets::{Author, Status, Ticket, TicketSystem};
     use crate::agents::Knowledge;
     use crate::providers::Provider;
-    use crate::tools::{FinishTicketTool, HandoverTicketTool, ManageTicketsTool};
+    use crate::tools::{FinishTool, ManageTicketsTool};
 
     // Run lifecycle
 
@@ -372,8 +372,7 @@ mod tests {
                     .provider(Arc::clone(&provider) as Arc<dyn Provider>)
                     .model("mock")
                     .role("test")
-                    .tool(HandoverTicketTool)
-                    .tool(FinishTicketTool)
+                    .tool(FinishTool)
                     .build(),
             );
         }

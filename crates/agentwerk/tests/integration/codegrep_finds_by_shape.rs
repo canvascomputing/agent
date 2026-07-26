@@ -81,7 +81,7 @@ async fn writes_capturing_pattern_to_list_unknown_function_names(
             .role(
                 "Investigate the working directory and answer the user's question. \
                  Use the available tools. When you have the answer, finish the ticket \
-                 via `finish_ticket`.",
+                 via `finish`.",
             )
             .tool(CodegrepTool)
             .build(),
