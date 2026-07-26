@@ -1,5 +1,5 @@
 //! The [`Ticket`] value type, its disk persistence, and the
-//! [`Replies`] transcript-log helper.
+//! [`Replies`] reply-log helper.
 
 use std::fmt;
 use std::io;
@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use serde::Serialize;
 
+use crate::persistence::Persist;
 use crate::providers::{AsUserMessage, Message};
 
 use super::reply::{Author, Reply};
@@ -61,7 +62,7 @@ pub struct Ticket {
     /// Back-reference to another ticket, or `None` when the ticket
     /// has no parent. Caller-settable via [`Ticket::parent`].
     pub parent: Option<String>,
-    /// Transcript of messages exchanged with the model.
+    /// Messages exchanged with the model.
     #[serde(skip)]
     pub replies: Vec<Reply>,
 }
@@ -155,15 +156,14 @@ impl Ticket {
         matches!(self.status, Status::Finished | Status::Failed)
     }
 
-    /// Reduce the transcript to just `summary_text`: every non-system
+    /// Reduce the replies to just `summary_text`: every non-system
     /// reply is dropped and a single `user` reply carrying
     /// `summary_text` is appended. System-author replies (the system
-    /// prompt) survive unchanged. `task` is rewritten to the summary
-    /// too, so the persisted ticket header reflects the post-compaction
-    /// state alongside the paired `replies.<at>.jsonl`. Safe because
-    /// `task` is read for the seed user message only when `replies` is
-    /// empty, which is never true after compaction. Used by the loop
-    /// after a successful compaction.
+    /// prompt) survive unchanged. `task` is rewritten to the summary too,
+    /// so the persisted `ticket.json` reflects the post-compaction state.
+    /// Safe because `task` is read for the seed user message only when
+    /// `replies` is empty, which is never true after compaction. Used by
+    /// the loop after a successful compaction.
     pub(crate) fn summarize(&mut self, summary_text: String) {
         self.replies.retain(|r| r.author == Author::System);
         self.replies.push(Reply::user_text(summary_text.clone()));
@@ -227,109 +227,79 @@ impl crate::persistence::Persist for Ticket {
     type Key = String;
 
     fn save(&self, dir: &Path) -> io::Result<()> {
-        let path = ticket_header_path(dir, &self.key);
+        let path = ticket_record_path(dir, &self.key);
         let body = serde_json::to_vec_pretty(self).map_err(io::Error::other)?;
         crate::persistence::write_atomic(&path, &body)
     }
 
     fn load(dir: &Path, key: &Self::Key) -> io::Result<Self> {
-        let bytes = std::fs::read(ticket_header_path(dir, key))?;
+        let bytes = std::fs::read(ticket_record_path(dir, key))?;
         let mut ticket: Ticket = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
-        ticket.replies = Replies::load(dir, key)?;
+        ticket.replies = Replies::load(dir, key)?.entries;
         Ok(ticket)
     }
 }
 
-/// Per-ticket transcript files on disk. `tickets/<key>/replies.jsonl`
-/// is the initial replies file: pre-first-compaction appends land
-/// there. Each compaction event creates an immutable pair
-/// `(ticket.<ts>.json, replies.<ts>.jsonl)`; subsequent appends grow
-/// `replies.<ts>.jsonl` rather than the initial file. On load the
-/// newest committed pair's replies file becomes the base and any
-/// initial-file entries with a strictly greater `created_at` are
-/// merged on top (legacy data recovery).
-pub(crate) struct Replies;
+/// A ticket's replies on disk: one `tickets/<key>/replies.jsonl`, a JSON
+/// reply per line. [`Persist::save`] rewrites the whole file in place
+/// (compaction and edits); [`Replies::append`] adds a single line without
+/// loading the file.
+pub(crate) struct Replies {
+    pub(crate) key: String,
+    pub(crate) entries: Vec<Reply>,
+}
 
 impl Replies {
-    /// Append one reply as a single JSON line. Writes to the latest
-    /// committed compaction's `replies.<at>.jsonl` when one exists, so
-    /// post-compaction replies grow that file rather than the initial
-    /// `replies.jsonl`. Falls back to `replies.jsonl` before the first
-    /// compaction.
+    /// Append one reply as a single JSON line to `replies.jsonl`, without
+    /// loading or rewriting the file. Keyed by ticket, so it fits neither
+    /// [`Persist::save`] nor [`Append`](crate::persistence::Append), and
+    /// stays a free function.
     pub(crate) fn append(dir: &Path, key: &str, reply: &Reply) -> io::Result<()> {
         let line = serde_json::to_string(reply).map_err(io::Error::other)?;
-        crate::persistence::append_line(&current_replies_path(dir, key), &line)
-    }
-
-    /// Reconstruct the transcript for `key` per the rule on the type doc.
-    pub(crate) fn load(dir: &Path, key: &str) -> io::Result<Vec<Reply>> {
-        fn read_jsonl(path: &Path) -> io::Result<Vec<Reply>> {
-            let body = std::fs::read_to_string(path)?;
-            body.lines()
-                .filter(|l| !l.is_empty())
-                .map(|l| serde_json::from_str::<Reply>(l).map_err(io::Error::other))
-                .collect()
-        }
-
-        let ticket_dir = dir.join("tickets").join(key);
-        let restart_at = last_committed_compaction_at(&ticket_dir);
-        let mut replies = match restart_at {
-            Some(at) => read_jsonl(&ticket_dir.join(format!("replies.{at}.jsonl")))?,
-            None => Vec::new(),
-        };
-        let initial = initial_replies_path(dir, key);
-        if initial.exists() {
-            let mut tail = read_jsonl(&initial)?;
-            tail.retain(|c| restart_at.is_none_or(|at| c.created_at > at));
-            replies.extend(tail);
-        }
-        Ok(replies)
+        crate::persistence::append_line(&replies_path(dir, key), &line)
     }
 }
 
-/// Path of the active header file for `key`: `tickets/<key>/ticket.json`.
-pub(super) fn ticket_header_path(dir: &Path, key: &str) -> PathBuf {
+impl Persist for Replies {
+    type Key = String;
+
+    /// Overwrite `replies.jsonl` with all entries, so a dropped or
+    /// redacted reply leaves nothing behind on disk.
+    fn save(&self, dir: &Path) -> io::Result<()> {
+        let mut body = String::new();
+        for reply in &self.entries {
+            body.push_str(&serde_json::to_string(reply).map_err(io::Error::other)?);
+            body.push('\n');
+        }
+        crate::persistence::write_atomic(&replies_path(dir, &self.key), body.as_bytes())
+    }
+
+    fn load(dir: &Path, key: &String) -> io::Result<Self> {
+        let path = replies_path(dir, key);
+        let entries = if path.exists() {
+            std::fs::read_to_string(&path)?
+                .lines()
+                .filter(|l| !l.is_empty())
+                .map(|l| serde_json::from_str::<Reply>(l).map_err(io::Error::other))
+                .collect::<io::Result<Vec<_>>>()?
+        } else {
+            Vec::new()
+        };
+        Ok(Replies {
+            key: key.clone(),
+            entries,
+        })
+    }
+}
+
+/// Path of the ticket's record file for `key`: `tickets/<key>/ticket.json`.
+pub(super) fn ticket_record_path(dir: &Path, key: &str) -> PathBuf {
     dir.join("tickets").join(key).join("ticket.json")
 }
 
-/// Path of the initial replies file for `key`: `tickets/<key>/replies.jsonl`.
-/// Receives appends before the first compaction; also holds pre-fix
-/// legacy data for old tickets.
-fn initial_replies_path(dir: &Path, key: &str) -> PathBuf {
+/// Path of the transcript file for `key`: `tickets/<key>/replies.jsonl`.
+fn replies_path(dir: &Path, key: &str) -> PathBuf {
     dir.join("tickets").join(key).join("replies.jsonl")
-}
-
-/// Path of the replies file new replies must be appended to: the
-/// `replies.<at>.jsonl` of the latest committed compaction when one
-/// exists, else the initial replies file. `Replies::append` and
-/// `Replies::load` use the same paired-check rule via
-/// [`last_committed_compaction_at`], so the writer's destination and
-/// the reader's base file always agree.
-fn current_replies_path(dir: &Path, key: &str) -> PathBuf {
-    let ticket_dir = dir.join("tickets").join(key);
-    match last_committed_compaction_at(&ticket_dir) {
-        Some(at) => ticket_dir.join(format!("replies.{at}.jsonl")),
-        None => initial_replies_path(dir, key),
-    }
-}
-
-/// Most recent compaction timestamp whose pair is committed:
-/// `replies.<at>.jsonl` exists AND its sibling `ticket.<at>.json`
-/// commit marker exists. An orphan replies file from a mid-compaction
-/// crash is ignored. `None` when no committed compaction has happened.
-fn last_committed_compaction_at(ticket_dir: &Path) -> Option<u64> {
-    std::fs::read_dir(ticket_dir)
-        .ok()?
-        .flatten()
-        .filter_map(|e| {
-            let name = e.file_name().into_string().ok()?;
-            name.strip_prefix("ticket.")?
-                .strip_suffix(".json")?
-                .parse::<u64>()
-                .ok()
-        })
-        .filter(|at| ticket_dir.join(format!("replies.{at}.jsonl")).is_file())
-        .max()
 }
 
 impl AsUserMessage for Ticket {
