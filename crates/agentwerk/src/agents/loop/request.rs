@@ -15,6 +15,12 @@ use super::wait_for_signal;
 use super::Step;
 
 pub(super) async fn run(context: &mut TicketContext<'_>) -> Step {
+    // Let registered editors rewrite or drop messages before the request
+    // is assembled; the re-read below then projects the edited transcript.
+    context
+        .ticket_system
+        .run_message_editors(&context.ticket_key);
+
     let Some(ticket) = context.ticket() else {
         return Step::NextTicket;
     };
@@ -488,5 +494,178 @@ mod tests {
         let events = collected.lock().unwrap().clone();
         assert_eq!(retries_in(&events).len(), 1);
         assert!(failures_in(&events).is_empty());
+    }
+
+    // Message editing via edit_messages_on_event
+
+    use std::sync::Arc;
+
+    use crate::agents::agent::Agent;
+    use crate::agents::tickets::{Reply, ReplyContent, TicketSystem};
+    use crate::event::{Event, EventKind};
+    use crate::providers::{ContentBlock, Message, Provider};
+    use crate::tools::{Tool, ToolResult};
+
+    type BoomEditor = Box<dyn Fn(&[Event], &mut Vec<Reply>) + Send + Sync>;
+
+    /// Run a ticket whose first turn calls a tool that always fails, then
+    /// writes a result. Registers `editor` when one is given. Returns the
+    /// provider and temp dir so callers can inspect the requests and reload.
+    async fn run_boom(
+        editor: Option<BoomEditor>,
+    ) -> (
+        Arc<MockProvider>,
+        Arc<TicketSystem>,
+        crate::test_util::TempDir,
+    ) {
+        let provider = MockProvider::with_results(vec![
+            Ok(tool_call_response("boom")),
+            Ok(write_result_response("done")),
+        ]);
+        let boom = Tool::new("boom", "Always fails")
+            .handler(|_, _| async move { Ok(ToolResult::error("boom")) })
+            .build();
+        let results_dir = crate::test_util::TempDir::new().unwrap();
+        let tickets = TicketSystem::new();
+        tickets
+            .dir(results_dir.path().to_path_buf())
+            .max_request_retries(0)
+            .request_retry_delay(Duration::from_millis(1))
+            .max_schema_retries(10)
+            .max_time(Duration::from_millis(500));
+        if let Some(editor) = editor {
+            tickets.edit_messages_on_event(editor);
+        }
+        tickets.agent(
+            Agent::new()
+                .name("tester")
+                .provider(provider.clone() as Arc<dyn Provider>)
+                .model("mock")
+                .role("test")
+                .tool(boom)
+                .build(),
+        );
+        tickets.task("go");
+        let _ = tickets.finish().await;
+        (provider, tickets, results_dir)
+    }
+
+    /// Editor that drops the whole failed tool exchange once a tool call
+    /// fails: both the assistant's tool_use and the failed tool_result, so
+    /// no unpaired block is left behind.
+    fn drop_failed_exchange(events: &[Event], messages: &mut Vec<Reply>) {
+        if events
+            .iter()
+            .any(|e| matches!(e.kind, EventKind::ToolCallFailed { .. }))
+        {
+            messages.retain(|reply| {
+                !reply.content.iter().any(|b| {
+                    matches!(
+                        b,
+                        ReplyContent::ToolUse { .. }
+                            | ReplyContent::ToolResult {
+                                succeeded: false,
+                                ..
+                            }
+                    )
+                })
+            });
+        }
+    }
+
+    fn has_tool_blocks(messages: &[Message]) -> bool {
+        messages.iter().any(|message| match message {
+            Message::User { content } | Message::Assistant { content } => content.iter().any(|b| {
+                matches!(
+                    b,
+                    ContentBlock::ToolUse { .. } | ContentBlock::ToolResult { .. }
+                )
+            }),
+            Message::System { .. } => false,
+        })
+    }
+
+    #[tokio::test]
+    async fn editor_drops_the_failed_tool_exchange() {
+        let (provider, tickets, _dir) = run_boom(Some(Box::new(drop_failed_exchange))).await;
+
+        // The editor dropped both sides of the boom exchange, so the second
+        // request carries no tool blocks.
+        assert!(
+            !has_tool_blocks(&provider.received()[1]),
+            "boom exchange must be gone: {:?}",
+            provider.received()[1],
+        );
+        assert_eq!(tickets.tickets()[0].status, Status::Finished);
+    }
+
+    #[tokio::test]
+    async fn editor_injects_message_into_next_request() {
+        let (provider, _tickets, _dir) = run_boom(Some(Box::new(|events, messages| {
+            if events
+                .iter()
+                .any(|e| matches!(e.kind, EventKind::ToolCallFailed { .. }))
+            {
+                messages.push(Reply::user_text("EDITOR HINT: change approach"));
+            }
+        })))
+        .await;
+
+        assert!(user_text(&provider.received()[1]).contains("EDITOR HINT"));
+    }
+
+    #[tokio::test]
+    async fn editor_can_rewrite_a_message_in_place() {
+        let (provider, _tickets, _dir) = run_boom(Some(Box::new(|events, messages| {
+            if !events
+                .iter()
+                .any(|e| matches!(e.kind, EventKind::ToolCallFailed { .. }))
+            {
+                return;
+            }
+            for reply in messages.iter_mut() {
+                for block in reply.content.iter_mut() {
+                    if let ReplyContent::ToolResult { content, .. } = block {
+                        *content = "REWRITTEN".into();
+                    }
+                }
+            }
+        })))
+        .await;
+
+        let rewritten = provider.received()[1].iter().any(|message| match message {
+            Message::User { content } => content.iter().any(
+                |b| matches!(b, ContentBlock::ToolResult { content, .. } if content == "REWRITTEN"),
+            ),
+            _ => false,
+        });
+        assert!(rewritten, "{:?}", provider.received()[1]);
+    }
+
+    #[tokio::test]
+    async fn edit_survives_reload() {
+        let (_provider, _tickets, dir) = run_boom(Some(Box::new(drop_failed_exchange))).await;
+
+        let reloaded = TicketSystem::load(dir.path()).unwrap();
+        let ticket = reloaded.tickets().into_iter().next().unwrap();
+        // The boom exchange is gone; the later finish_ticket call remains.
+        let keeps_boom = ticket.replies.iter().any(|reply| {
+            reply.content.iter().any(|b| match b {
+                ReplyContent::ToolUse { name, .. } => name == "boom",
+                ReplyContent::ToolResult { succeeded, .. } => !succeeded,
+                _ => false,
+            })
+        });
+        assert!(!keeps_boom, "reloaded transcript must reflect the edit");
+    }
+
+    #[tokio::test]
+    async fn no_editor_leaves_the_boom_exchange_in_the_transcript() {
+        let (provider, _tickets, _dir) = run_boom(None).await;
+
+        assert!(
+            has_tool_blocks(&provider.received()[1]),
+            "without an editor the boom exchange must remain",
+        );
     }
 }

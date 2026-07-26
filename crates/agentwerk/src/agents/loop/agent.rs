@@ -470,6 +470,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn interactive_pause_holds_when_a_message_editor_is_registered() {
+        // A registered no-op editor must not perturb the interactive gate:
+        // the ticket pauses on the assistant text reply, and no second
+        // request fires. Exhausting the single mock response would fail the
+        // ticket, so `requests == 1` and `InProgress` prove the gate held.
+        let results_dir = crate::test_util::TempDir::new().unwrap();
+        let provider = MockProvider::with_results(vec![Ok(text_response("hi"))]);
+        let tickets = TicketSystem::new();
+        tickets
+            .dir(results_dir.path().to_path_buf())
+            .max_request_retries(0)
+            .request_retry_delay(Duration::from_millis(1));
+        tickets.edit_messages_on_event(|_events, _messages| {});
+        tickets.agent(interactive_chatbot(&provider));
+        tickets.task("hello");
+        tickets.start();
+
+        for _ in 0..200 {
+            let last_is_assistant = tickets
+                .tickets()
+                .into_iter()
+                .next()
+                .and_then(|t| t.replies.last().map(|r| r.author == Author::Assistant))
+                .unwrap_or(false);
+            if last_is_assistant {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        // Give the loop room to (wrongly) fire another request if buggy.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let ticket = tickets.tickets().into_iter().next().unwrap();
+        assert_eq!(ticket.status, Status::InProgress);
+        assert_eq!(
+            ticket.replies.last().map(|r| r.author),
+            Some(Author::Assistant),
+        );
+        assert_eq!(
+            provider.requests(),
+            1,
+            "editor must not trigger a re-request"
+        );
+
+        tickets.cancel();
+        tickets.finish().await;
+    }
+
+    #[tokio::test]
     async fn loop_pauses_after_text_reply_then_resumes_when_caller_replies() {
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let provider = MockProvider::with_results(vec![

@@ -22,7 +22,7 @@ pub enum Author {
 }
 
 /// One entry in a ticket's transcript.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Reply {
     pub author: Author,
     pub content: Vec<ReplyContent>,
@@ -33,7 +33,7 @@ pub struct Reply {
 /// Ticket-side mirror of [`ContentBlock`]. Keeps the public ticket
 /// surface free of provider types while still recording every payload
 /// shape the agent loop sends.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum ReplyContent {
     Text(String),
     ToolUse {
@@ -76,7 +76,7 @@ impl Reply {
     }
 
     /// Build a user reply carrying a single text payload.
-    pub(crate) fn user_text(text: impl Into<String>) -> Self {
+    pub fn user_text(text: impl Into<String>) -> Self {
         Self {
             author: Author::User,
             content: vec![ReplyContent::Text(text.into())],

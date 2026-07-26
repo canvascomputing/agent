@@ -12,6 +12,8 @@
 //! `/stats` prints run counters, `/clear` resets knowledge,
 //! `/bible [N]` injects N repetitions of Genesis (KJV) as a reply to
 //! drive context compaction (default N=1, ~52k tokens per repetition).
+//! `/scrub <word>` redacts that word from the transcript in place (via
+//! `edit_messages`) with no model turn; the word is gone on disk too.
 //! Ctrl-C at the prompt exits with code 130; Ctrl-D exits with
 //! code 0; Ctrl-C during a turn cancels that turn (a second Ctrl-C
 //! while the cancel is still draining force-quits with exit code 130).
@@ -26,7 +28,7 @@ use std::io::{self, IsTerminal, Write};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
-use agentwerk::agents::tickets::{Author, ReplyContent};
+use agentwerk::agents::tickets::{Author, Reply, ReplyContent};
 use agentwerk::event::{Event, EventKind};
 use agentwerk::providers::{context_window_from_env, model_from_env, Model};
 use agentwerk::tools::{
@@ -43,7 +45,7 @@ const BIBLE_DEFAULT_REPETITIONS: usize = 1;
 async fn main() {
     let style = Style::detect();
     eprintln!(
-        "{}agentwerk REPL: /new /list /stats /clear /bible, Ctrl-C to cancel.{}",
+        "{}agentwerk REPL: /new /list /stats /clear /bible /scrub, Ctrl-C to cancel.{}",
         style.dim, style.reset,
     );
 
@@ -215,6 +217,24 @@ async fn main() {
         if line == "/clear" {
             knowledge.clear().ok();
             eprintln!("{}knowledge cleared{}", style.dim, style.reset);
+            continue;
+        }
+        if line == "/scrub" {
+            eprintln!("{}usage: /scrub <word>{}", style.dim, style.reset);
+            continue;
+        }
+        if let Some(word) = line.strip_prefix("/scrub ") {
+            let word = word.trim().to_string();
+            match chat_key.as_deref() {
+                Some(_) if word.is_empty() => {
+                    eprintln!("{}usage: /scrub <word>{}", style.dim, style.reset);
+                }
+                Some(k) => {
+                    tickets.edit_messages(k, move |messages| redact(messages, &word));
+                    eprintln!("{}scrubbed{}", style.dim, style.reset);
+                }
+                None => eprintln!("{}no active chat{}", style.dim, style.reset),
+            }
             continue;
         }
         let payload = if line == "/bible" || line.starts_with("/bible ") {
@@ -481,20 +501,38 @@ fn window_usage_suffix(window: Option<u64>, last_input: &AtomicU64) -> String {
     }
 }
 
+/// Replace every occurrence of `word` with `[redacted]` across the transcript.
+fn redact(messages: &mut [Reply], word: &str) {
+    for reply in messages.iter_mut() {
+        for block in &mut reply.content {
+            if let ReplyContent::Text(text) = block {
+                *text = text.replace(word, "[redacted]");
+            }
+        }
+    }
+}
+
 /// Block until the chat ticket is either terminal (`finished`/`failed`)
-/// or sitting at the gate's text-only pause. A mid-turn assistant reply
-/// carrying a tool call doesn't count: tool execution is still pending
-/// and the prompt would race the user against the loop.
+/// or paused for input. A mid-turn assistant reply carrying a tool call
+/// doesn't count: tool execution is still pending and the prompt would
+/// race the user against the loop.
 async fn wait_for_assistant_pause(tickets: &TicketSystem, key: &str) {
     tickets
-        .wait_for_ticket(|t| t.key == key && (t.is_resolved() || is_paused_on_text(t)))
+        .wait_for_ticket(|t| t.key == key && (t.is_resolved() || is_paused_for_input(t)))
         .await;
 }
 
-fn is_paused_on_text(ticket: &Ticket) -> bool {
+/// The loop has paused for the next input when the last reply is an
+/// assistant turn that called no tool. Reasoning models add `Thinking`
+/// blocks alongside the text, so the pause turns on the absence of a
+/// tool call, not on the reply being text-only.
+fn is_paused_for_input(ticket: &Ticket) -> bool {
     ticket.replies.last().is_some_and(|r| {
         r.author == Author::Assistant
-            && r.content.iter().all(|c| matches!(c, ReplyContent::Text(_)))
+            && !r
+                .content
+                .iter()
+                .any(|c| matches!(c, ReplyContent::ToolUse { .. }))
     })
 }
 
@@ -582,5 +620,88 @@ mod tests {
         let tickets = TicketSystem::new();
         let n = fail_stale_chats(&tickets, "orchestrator");
         assert_eq!(n, 0);
+    }
+
+    fn assistant(content: Vec<ReplyContent>) -> Ticket {
+        let mut ticket = Ticket::new("chat");
+        ticket.replies.push(Reply {
+            author: Author::Assistant,
+            content,
+            created_at: 0,
+        });
+        ticket
+    }
+
+    #[test]
+    fn paused_for_input_when_a_reasoning_reply_carries_thinking_then_text() {
+        // Regression: reasoning models add a Thinking block, which the
+        // old text-only check rejected, hanging the REPL turn forever.
+        let ticket = assistant(vec![
+            ReplyContent::Thinking {
+                thinking: "hmm".into(),
+                signature: "s".into(),
+            },
+            ReplyContent::Text("Hi.".into()),
+        ]);
+        assert!(is_paused_for_input(&ticket));
+    }
+
+    #[test]
+    fn not_paused_while_the_reply_still_carries_a_tool_call() {
+        let ticket = assistant(vec![ReplyContent::ToolUse {
+            id: "c1".into(),
+            name: "read_file".into(),
+            input: serde_json::json!({}),
+        }]);
+        assert!(!is_paused_for_input(&ticket));
+    }
+
+    #[test]
+    fn not_paused_when_the_last_reply_is_the_user() {
+        let mut ticket = Ticket::new("chat");
+        ticket.replies.push(Reply {
+            author: Author::User,
+            content: vec![ReplyContent::Text("hey".into())],
+            created_at: 0,
+        });
+        assert!(!is_paused_for_input(&ticket));
+    }
+
+    fn user_text(text: &str) -> Reply {
+        Reply {
+            author: Author::User,
+            content: vec![ReplyContent::Text(text.into())],
+            created_at: 0,
+        }
+    }
+
+    #[test]
+    fn redact_replaces_the_word_in_every_reply() {
+        let mut messages = vec![
+            user_text("my token is hunter2"),
+            Reply {
+                author: Author::Assistant,
+                content: vec![ReplyContent::Text("noted, hunter2".into())],
+                created_at: 0,
+            },
+        ];
+
+        redact(&mut messages, "hunter2");
+
+        for reply in &messages {
+            for block in &reply.content {
+                if let ReplyContent::Text(text) = block {
+                    assert!(!text.contains("hunter2"), "leaked: {text}");
+                    assert!(text.contains("[redacted]"));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn redact_leaves_text_without_the_word_untouched() {
+        let mut messages = vec![user_text("just chatting")];
+        redact(&mut messages, "hunter2");
+        assert!(matches!(&messages[0].content[0], ReplyContent::Text(t) if t == "just chatting"));
     }
 }
