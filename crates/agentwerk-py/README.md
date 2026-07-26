@@ -434,8 +434,7 @@ knowledge tool.
 
 Each page is an Open Knowledge Format (OKF) v0.1 concept file. A compact index of
 one-line descriptions goes into the system prompt, so the agent picks which pages
-to read. Because the store is a plain OKF bundle, `Knowledge.load` can open one
-authored elsewhere to seed an agent.
+to read.
 
 ```python
 from agentwerk import Agent, Knowledge
@@ -475,8 +474,9 @@ Layout:
 │       ├── ticket.json                   the ticket without its transcript
 │       ├── replies.jsonl                 transcript
 │       └── outputs/<tool_use_id>.txt     full tool outputs spilled out of the transcript
-├── pages/<slug>.md                       knowledge pages
-└── index.md                              knowledge index
+└── knowledge/
+    ├── pages/<slug>.md                   knowledge pages
+    └── index.md                          knowledge index
 ```
 
 ## Events
