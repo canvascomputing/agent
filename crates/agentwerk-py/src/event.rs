@@ -14,9 +14,9 @@ pub struct PyEvent {
     #[pyo3(get)]
     kind: String,
     #[pyo3(get)]
-    agent_name: String,
+    pub(crate) agent_name: String,
     #[pyo3(get)]
-    ticket_key: String,
+    pub(crate) ticket_key: String,
     data: Value,
 }
 

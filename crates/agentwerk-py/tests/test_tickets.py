@@ -10,17 +10,27 @@ import agentwerk as aw
 def test_enqueued_ticket_appears_with_its_status_and_labels(system):
     assert system.tickets() == []
 
-    system.ticket(aw.Ticket("scan the corpus").label("scan"))
+    system.ticket(aw.Ticket("scan the corpus").with_label("scan"))
 
     (ticket,) = system.tickets()
-    assert ticket["task"] == "scan the corpus"
-    assert ticket["status"] == "Todo"
-    assert "scan" in ticket["labels"]
+    assert ticket.task == "scan the corpus"
+    assert ticket.status == "Todo"
+    assert ticket.has_label("scan")
+
+
+def test_unstarted_ticket_carries_its_key_and_no_messages(system):
+    key = system.ticket(aw.Ticket("scan the corpus").with_label("scan"))
+
+    ticket = system.get_ticket(key)
+    assert ticket.key == key
+    assert ticket.result is None
+    assert ticket.started_at is None
+    assert ticket.replies == []
 
 
 def test_valid_schema_parses():
     schema = aw.Schema({"type": "object", "properties": {"n": {"type": "integer"}}})
-    ticket = aw.Ticket("write a report").schema(schema)
+    ticket = aw.Ticket("write a report").with_schema(schema)
     assert isinstance(ticket, aw.Ticket)
 
 
@@ -40,19 +50,19 @@ def test_policy_setters_chain(system):
 
 
 def test_find_tickets_filters_by_predicate(system):
-    system.ticket(aw.Ticket("alpha").label("a"))
-    system.ticket(aw.Ticket("beta").label("b"))
+    system.ticket(aw.Ticket("alpha").with_label("a"))
+    system.ticket(aw.Ticket("beta").with_label("b"))
 
-    matches = system.find_tickets(lambda t: "a" in t["labels"])
-    assert [t["task"] for t in matches] == ["alpha"]
+    matches = system.find_tickets(lambda t: t.has_label("a"))
+    assert [t.task for t in matches] == ["alpha"]
 
 
 def test_find_ticket_returns_the_first_match(system):
-    system.ticket(aw.Ticket("alpha").label("a"))
-    system.ticket(aw.Ticket("beta").label("b"))
+    system.ticket(aw.Ticket("alpha").with_label("a"))
+    system.ticket(aw.Ticket("beta").with_label("b"))
 
-    found = system.find_ticket(lambda t: t["status"] == "Todo")
-    assert found["task"] == "alpha"
+    found = system.find_ticket(lambda t: t.status == "Todo")
+    assert found.task == "alpha"
 
 
 def test_get_ticket_returns_none_for_unknown_key(system):
