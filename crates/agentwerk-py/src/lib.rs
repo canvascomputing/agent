@@ -13,6 +13,7 @@ mod schema;
 mod ticket;
 mod ticket_system;
 mod tools;
+mod trajectory;
 
 #[pymodule]
 fn _agentwerk(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -20,6 +21,7 @@ fn _agentwerk(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<agent::PyAgent>()?;
     m.add_class::<ticket_system::PyTicketSystem>()?;
     m.add_class::<ticket::PyTicket>()?;
+    m.add_class::<trajectory::PyTrajectory>()?;
     m.add_class::<schema::PySchema>()?;
     m.add_class::<event::PyEvent>()?;
     m.add_class::<knowledge::PyKnowledge>()?;

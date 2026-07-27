@@ -177,13 +177,14 @@ tickets.agent(
 
 for url in pricing_pages:
     tickets.ticket(
-        Ticket(f"Fetch {url} and extract pricing tiers, limits, and features.").label("research")
+        Ticket(f"Fetch {url} and extract pricing tiers, limits, and features.")
+        .with_label("research")
     )
 
 tickets.ticket(
     Ticket("Rank all products by value for a 10-person engineering team.")
-    .label("analysis")
-    .schema(comparison_schema)
+    .with_label("analysis")
+    .with_schema(comparison_schema)
 )
 ```
 
@@ -213,11 +214,11 @@ answer = tickets.last_result()
 | `cancel()` | Cancel the run. |
 | `finish_reason()` | Return why the most recent `finish()` returned, as a string: `"Drained"`, `"PolicyViolated(..)"`, or `"Cancelled"`. |
 
-### Reacting to the run
+### Reacting to events
 
-Steer a run from the outside while agents work: end it early, or enqueue
-follow-up work. Predicates receive the finished ticket (or result, or event) and
-return a truthy value.
+React to events as they arrive: stop early, call off one label's agents, queue
+follow-up work, or read each ticket as it finishes. Predicates receive the
+finished ticket (or result, or event) and return a truthy value.
 
 ```python
 # Fail fast: end the run at the first malicious verdict.
@@ -225,11 +226,19 @@ tickets.cancel_on_result(lambda result: result["verdict"] == "malicious")
 
 # Verify every analysis finding with a follow-up ticket for the review pool.
 def review_finding(ticket):
-    if "analysis" in ticket["labels"]:
-        return Ticket("Verify this finding.").parent(ticket["key"]).label("review")
+    if ticket.has_label("analysis"):
+        return Ticket("Verify this finding.").with_parent(ticket.key).with_label("review")
     return None
 
 tickets.create_ticket_on_result(review_finding)
+
+# Keep the messages of every finished ticket as a training example.
+def capture(event, ticket):
+    if event.kind == "ticket_finished":
+        model = tickets.model_for_agent(event.agent_name)
+        Trajectory.from_ticket(event.agent_name, model, ticket).save("datasets")
+
+tickets.on_ticket(capture)
 ```
 
 | Method | Description |
@@ -240,7 +249,7 @@ tickets.create_ticket_on_result(review_finding)
 | `cancel_label(l)` | Call off one label's agents. |
 | `cancel_label_on_event(l, p)` | Call off one label's agents when an event matches. |
 | `create_ticket_on_result(make)` | Enqueue a follow-up ticket from a finished ticket. |
-| `save_trajectory_on_event(p)` | Write a ticket's trajectory to disk on a matching event. |
+| `on_ticket(h)` | Read a ticket when it starts, finishes, or fails. |
 | `await wait_for_ticket(p)` | Wait for one matching ticket instead of draining the queue. |
 
 ### Reading results
@@ -264,27 +273,31 @@ for ticket in tickets.tickets():
 | `last_result()` | Return the most recent finished ticket's result, or `None`. |
 | `results()` | Return every finished ticket's result, in creation order. |
 | `results_for_label(l)` | Return every finished ticket carrying the label's result. |
-| `tickets()` | Return every ticket as a dict, in creation order. |
+| `tickets()` | Return every ticket, in creation order. |
 | `find_ticket(p)` | Return the earliest ticket matching the predicate. |
 | `find_tickets(p)` | Return every ticket matching the predicate. |
 | `get_ticket(key)` | Return one ticket by key, or `None`. |
+| `model_for_agent(name)` | Return the model that agent runs, or `None`. |
 | `stats()` | Return run statistics (requests, tokens, ticket counts, and per-tool, per-file, per-label, and per-model breakdowns) as a dict. |
 
 ### Inspecting tickets
 
-Each ticket is returned as a dict carrying its recorded result, labels, and
-lifecycle timestamps. The `status` field is one of `"Todo"`, `"InProgress"`,
-`"Finished"`, or `"Failed"` (matching the persisted `tickets.jsonl`):
+Each `Ticket` carries the recorded result, its messages, and lifecycle
+timestamps as attributes. Read them directly; a structured result is already a
+dict:
 
 ```python
-ticket = tickets.find_ticket(lambda t: "analysis" in t["labels"])
-report = ticket["result"]          # already a dict; no JSON parsing needed
-print(report["title"])
+ticket = tickets.find_ticket(lambda t: t.has_label("analysis"))
+print(ticket.result["title"])
 ```
 
-Ticket dict fields: `key`, `status`, `task`, `result`, `labels`, `parent`,
-`reporter`, and the four lifecycle timestamps (`created_at`, `started_at`,
-`finished_at`, `failed_at`).
+Attributes: `key`, `status`, `task`, `result`, `labels`, `parent`, `reporter`,
+`replies`, and the four lifecycle timestamps (`created_at`, `started_at`,
+`finished_at`, `failed_at`). `status` is `"Todo"`, `"InProgress"`,
+`"Finished"`, or `"Failed"`, matching the persisted `tickets.jsonl`;
+`has_label(l)` reads better than testing `labels` directly. The `with_*`
+methods build a ticket to enqueue: `Ticket(task).with_label(l)`,
+`.with_labels(ls)`, `.with_schema(s)`, `.with_parent(key)`.
 
 ### Policies
 
@@ -326,7 +339,7 @@ schema = Schema({
     "required": ["title"],
 })
 
-tickets.ticket(Ticket("Write a report.").schema(schema))
+tickets.ticket(Ticket("Write a report.").with_schema(schema))
 ```
 
 Register a schema per label with `tickets.schema_for_label(label, schema)`: every

@@ -182,7 +182,7 @@ impl PyTicketSystem {
     fn create_ticket_on_result<'py>(slf: PyRef<'py, Self>, make: Py<PyAny>) -> PyRef<'py, Self> {
         slf.inner.create_ticket_on_result(move |ticket: &Ticket| {
             Python::attach(|py| {
-                let view = value_to_py(py, &ticket_to_value(ticket)).ok()?;
+                let view = Py::new(py, PyTicket::from_ticket(ticket)).ok()?;
                 let produced = make.bind(py).call1((view,)).ok()?;
                 if produced.is_none() {
                     return None;
@@ -220,53 +220,51 @@ impl PyTicketSystem {
         slf
     }
 
-    /// The ticket with `key`, as a dict, or `None`.
-    fn get_ticket<'py>(&self, py: Python<'py>, key: &str) -> PyResult<Option<Bound<'py, PyAny>>> {
+    /// Name of the model the bound agent named `agent_name` runs, or `None`.
+    /// `Trajectory.from_ticket` wants it.
+    fn model_for_agent(&self, agent_name: &str) -> Option<String> {
+        self.inner.model_for_agent(agent_name)
+    }
+
+    /// The ticket with `key`, or `None`.
+    fn get_ticket(&self, py: Python<'_>, key: &str) -> PyResult<Option<Py<PyTicket>>> {
         match self.inner.get_ticket(key) {
-            Some(ticket) => Ok(Some(value_to_py(py, &ticket_to_value(&ticket))?)),
+            Some(ticket) => Ok(Some(Py::new(py, PyTicket::from_ticket(&ticket))?)),
             None => Ok(None),
         }
     }
 
-    /// Every ticket, as dicts.
-    fn tickets<'py>(&self, py: Python<'py>) -> PyResult<Vec<Bound<'py, PyAny>>> {
+    /// Every ticket, in creation order.
+    fn tickets(&self, py: Python<'_>) -> PyResult<Vec<Py<PyTicket>>> {
         self.inner
             .tickets()
             .iter()
-            .map(|ticket| value_to_py(py, &ticket_to_value(ticket)))
+            .map(|ticket| Py::new(py, PyTicket::from_ticket(ticket)))
             .collect()
     }
 
-    /// Every ticket for which `predicate(ticket)` is truthy, as dicts.
-    fn find_tickets<'py>(
-        &self,
-        py: Python<'py>,
-        predicate: Py<PyAny>,
-    ) -> PyResult<Vec<Bound<'py, PyAny>>> {
+    /// Every ticket for which `predicate(ticket)` is truthy.
+    fn find_tickets(&self, py: Python<'_>, predicate: Py<PyAny>) -> PyResult<Vec<Py<PyTicket>>> {
         self.inner
             .find_tickets(|ticket| ticket_predicate(&predicate, ticket))
             .iter()
-            .map(|ticket| value_to_py(py, &ticket_to_value(ticket)))
+            .map(|ticket| Py::new(py, PyTicket::from_ticket(ticket)))
             .collect()
     }
 
     /// The first ticket for which `predicate(ticket)` is truthy, or `None`.
-    fn find_ticket<'py>(
-        &self,
-        py: Python<'py>,
-        predicate: Py<PyAny>,
-    ) -> PyResult<Option<Bound<'py, PyAny>>> {
+    fn find_ticket(&self, py: Python<'_>, predicate: Py<PyAny>) -> PyResult<Option<Py<PyTicket>>> {
         match self
             .inner
             .find_ticket(|ticket| ticket_predicate(&predicate, ticket))
         {
-            Some(ticket) => Ok(Some(value_to_py(py, &ticket_to_value(&ticket))?)),
+            Some(ticket) => Ok(Some(Py::new(py, PyTicket::from_ticket(&ticket))?)),
             None => Ok(None),
         }
     }
 
     /// Await the first ticket for which `predicate(ticket)` is truthy. Resolves
-    /// to the ticket dict, or `None` if the run ends first.
+    /// to the ticket, or `None` if the run ends first.
     fn wait_for_ticket<'py>(
         &self,
         py: Python<'py>,
@@ -278,25 +276,24 @@ impl PyTicketSystem {
                 .wait_for_ticket(|ticket| ticket_predicate(&predicate, ticket))
                 .await;
             Python::attach(|py| match found {
-                Some(ticket) => Ok(Some(value_to_py(py, &ticket_to_value(&ticket))?.unbind())),
+                Some(ticket) => Ok(Some(Py::new(py, PyTicket::from_ticket(&ticket))?)),
                 None => Ok::<_, PyErr>(None),
             })
         })
     }
 
-    /// Write a ticket's trajectory to disk when `predicate(event)` is truthy.
-    fn save_trajectory_on_event<'py>(
-        slf: PyRef<'py, Self>,
-        predicate: Py<PyAny>,
-    ) -> PyRef<'py, Self> {
-        slf.inner.save_trajectory_on_event(move |event: &Event| {
+    /// Call `callback(event, ticket)` when a ticket starts, finishes, or
+    /// fails. The ticket arrives with its messages, so a handler can hand it
+    /// straight to `Trajectory.from_ticket`.
+    fn on_ticket<'py>(slf: PyRef<'py, Self>, callback: Py<PyAny>) -> PyRef<'py, Self> {
+        slf.inner.on_ticket(move |event: &Event, ticket: &Ticket| {
             Python::attach(|py| {
-                predicate
-                    .bind(py)
-                    .call1((to_py_event(event),))
-                    .and_then(|value| value.is_truthy())
-                    .unwrap_or(false)
-            })
+                let handled = Py::new(py, PyTicket::from_ticket(ticket))
+                    .and_then(|view| callback.bind(py).call1((to_py_event(event), view)));
+                if let Err(err) = handled {
+                    err.print(py);
+                }
+            });
         });
         slf
     }
@@ -424,12 +421,6 @@ impl PyTicketSystem {
     }
 }
 
-/// Serialize a ticket to JSON for the Python side. `replies` is `#[serde(skip)]`,
-/// so this carries only the observable state (key, status, task, result, ...).
-fn ticket_to_value(ticket: &Ticket) -> Value {
-    serde_json::to_value(ticket).unwrap_or(Value::Null)
-}
-
 /// Render each reply as a Python dict for a message editor to inspect.
 fn replies_to_py<'py>(py: Python<'py>, replies: &[Reply]) -> PyResult<Vec<Bound<'py, PyAny>>> {
     replies
@@ -443,12 +434,12 @@ fn py_to_replies(obj: &Bound<'_, PyAny>) -> PyResult<Vec<Reply>> {
     serde_json::from_value(py_to_value(obj)?).map_err(runtime_error)
 }
 
-/// Call a Python predicate with a ticket dict, reading back its truthiness. A
+/// Call a Python predicate with a ticket, reading back its truthiness. A
 /// conversion or Python error reads as `false` so a bad predicate never panics
 /// a worker thread.
 fn ticket_predicate(predicate: &Py<PyAny>, ticket: &Ticket) -> bool {
     Python::attach(|py| {
-        value_to_py(py, &ticket_to_value(ticket))
+        Py::new(py, PyTicket::from_ticket(ticket))
             .and_then(|view| predicate.bind(py).call1((view,)))
             .and_then(|value| value.is_truthy())
             .unwrap_or(false)

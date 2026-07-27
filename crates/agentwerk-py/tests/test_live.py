@@ -68,13 +68,39 @@ async def test_runs_two_labeled_agents_with_events_and_chaining():
     )
 
     def chain(ticket):
-        if "a" in ticket["labels"]:
-            return aw.Ticket("Reply beta").label("b")
+        if ticket.has_label("a"):
+            return aw.Ticket("Reply beta").with_label("b")
         return None
 
     system.create_ticket_on_result(chain)
-    system.ticket(aw.Ticket("Reply alpha").label("a"))
+    system.ticket(aw.Ticket("Reply alpha").with_label("a"))
     await system.finish()
 
     assert len(system.results()) == 2
     assert "ticket_finished" in kinds
+
+
+async def test_saves_the_messages_of_a_finished_ticket(tmp_path):
+    system = aw.TicketSystem().max_turns(10)
+    system.agent(
+        aw.Agent().name("scribe").from_env().role("Reply with one word: pong").build()
+    )
+
+    captured = []
+
+    def capture(event, ticket):
+        if event.kind == "ticket_finished":
+            model = system.model_for_agent(event.agent_name)
+            trajectory = aw.Trajectory.from_ticket(event.agent_name, model, ticket)
+            trajectory.save(str(tmp_path))
+            captured.append((len(trajectory.messages), trajectory.model))
+
+    system.on_ticket(capture)
+    key = system.task("Reply with exactly the word: pong")
+    await system.finish()
+
+    written = sorted(p.name for p in (tmp_path / "trajectories").iterdir())
+    assert written == [f"scribe-{key}.html", f"scribe-{key}.json"]
+    (messages, model), = captured
+    assert messages > 0
+    assert model
