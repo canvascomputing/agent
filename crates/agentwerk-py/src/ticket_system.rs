@@ -16,6 +16,7 @@ use crate::agent::PyAgent;
 use crate::convert::{py_to_value, runtime_error, value_to_py};
 use crate::event::to_py_event;
 use crate::schema::PySchema;
+use crate::stats::PyStats;
 use crate::ticket::PyTicket;
 
 /// A shared queue one or more agents work. Wraps `Arc<TicketSystem>`.
@@ -42,9 +43,9 @@ impl PyTicketSystem {
 
     /// Register an agent. Drains any work it had queued privately into this
     /// system and adds it to the dispatch set.
-    fn agent<'py>(slf: PyRef<'py, Self>, agent: PyRef<'_, PyAgent>) -> PyRef<'py, Self> {
-        slf.inner.agent(agent.inner.clone());
-        slf
+    fn agent<'py>(slf: PyRef<'py, Self>, agent: PyRef<'_, PyAgent>) -> PyResult<PyRef<'py, Self>> {
+        slf.inner.agent(agent.built()?.clone());
+        Ok(slf)
     }
 
     /// Enqueue a task (any JSON-serializable value) and return its ticket key.
@@ -61,6 +62,12 @@ impl PyTicketSystem {
     fn reply<'py>(slf: PyRef<'py, Self>, key: &str, content: &str) -> PyRef<'py, Self> {
         slf.inner.reply(key, content);
         slf
+    }
+
+    /// Fail a ticket from outside the run. Raises when the key is unknown or
+    /// the ticket already reached a terminal status.
+    fn set_failed(&self, key: &str) -> PyResult<()> {
+        self.inner.set_failed(key).map_err(runtime_error)
     }
 
     fn max_turns(slf: PyRef<'_, Self>, n: u32) -> PyRef<'_, Self> {
@@ -117,10 +124,9 @@ impl PyTicketSystem {
         slf: PyRef<'py, Self>,
         label: &str,
         schema: PyRef<'_, PySchema>,
-    ) -> PyResult<PyRef<'py, Self>> {
-        let parsed = agentwerk::Schema::parse(schema.source.clone()).map_err(runtime_error)?;
-        slf.inner.schema_for_label(label, parsed);
-        Ok(slf)
+    ) -> PyRef<'py, Self> {
+        slf.inner.schema_for_label(label, schema.inner.clone());
+        slf
     }
 
     /// Install an event handler. Replaces the default stderr logger.
@@ -374,20 +380,16 @@ impl PyTicketSystem {
         self.inner.is_cancelled()
     }
 
-    /// How the run ended (`"Drained"`, `"Cancelled"`, `"PolicyViolated(..)"`),
+    /// How the run ended (`"drained"`, `"cancelled"`, `"policy_violated(..)"`),
     /// or `None` if it has not finished.
     fn finish_reason(&self) -> Option<String> {
-        self.inner
-            .finish_reason()
-            .map(|reason| format!("{reason:?}"))
+        self.inner.finish_reason().map(|reason| reason.to_string())
     }
 
-    /// A snapshot of run statistics — requests, tokens, ticket counts, and
-    /// (when present) per-tool, per-file, per-label, and per-model
-    /// breakdowns — as a dict.
-    fn stats<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let value = serde_json::to_value(self.inner.stats()).map_err(runtime_error)?;
-        value_to_py(py, &value)
+    /// Run statistics: requests, tokens, ticket counts, and the per-tool,
+    /// per-file, per-label, and per-model breakdowns.
+    fn stats(&self) -> PyStats {
+        PyStats::for_run(Arc::clone(&self.inner))
     }
 
     /// The most recent finished ticket's result, or `None`.

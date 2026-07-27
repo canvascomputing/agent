@@ -28,7 +28,12 @@ def test_per_vendor_constructors_build_a_provider(constructor):
 
 def test_model_chains_context_window_and_reasoning_effort():
     model = aw.Model("my-local-model").context_window(128_000).reasoning_effort("high")
-    assert isinstance(model, aw.Model)
+    assert model.get_context_window() == 128_000
+    assert model.get_reasoning_effort() == "high"
+
+
+def test_model_reasoning_effort_is_off_by_default():
+    assert aw.Model("my-local-model").get_reasoning_effort() == "off"
 
 
 def test_unknown_reasoning_effort_is_rejected():
@@ -43,6 +48,21 @@ def test_provider_from_env_without_env_is_rejected(monkeypatch):
         aw.provider_from_env()
 
 
+def test_model_from_env_reads_the_model_variable(monkeypatch):
+    monkeypatch.setenv("MODEL", "my-local-model")
+    assert aw.model_from_env() == "my-local-model"
+
+
+def test_context_window_from_env_is_none_when_unset(monkeypatch):
+    monkeypatch.delenv("MODEL_CONTEXT_WINDOW", raising=False)
+    assert aw.context_window_from_env() is None
+
+
+def test_context_window_from_env_reads_a_positive_integer(monkeypatch):
+    monkeypatch.setenv("MODEL_CONTEXT_WINDOW", "64000")
+    assert aw.context_window_from_env() == 64_000
+
+
 def test_knowledge_load_creates_an_empty_index(knowledge_dir):
     store = aw.Knowledge.load(knowledge_dir)
     assert store.index() == ""
@@ -53,12 +73,59 @@ def test_index_char_limit_chains(knowledge_dir):
     assert isinstance(store, aw.Knowledge)
 
 
+def test_saved_page_is_readable_and_indexed(knowledge_dir):
+    store = aw.Knowledge.load(knowledge_dir)
+
+    store.pages().save(
+        aw.Page(
+            "build-command",
+            "How the project is built.",
+            "Run `make` to compile with warnings denied.",
+            tags=["build"],
+        )
+    )
+
+    page = store.pages().load("build-command")
+    assert page.description == "How the project is built."
+    assert page.tags == ["build"]
+    assert "build-command" in store.index()
+
+
+def test_page_kind_defaults_to_the_store_default(knowledge_dir):
+    store = aw.Knowledge.load(knowledge_dir)
+    page = aw.Page("scratch", "A note.", "Some content.")
+
+    store.pages().save(page)
+
+    assert page.kind == "Knowledge"
+    assert store.pages().load("scratch").kind == "Knowledge"
+
+
+def test_removed_page_leaves_the_index_empty(knowledge_dir):
+    store = aw.Knowledge.load(knowledge_dir)
+    store.pages().save(aw.Page("scratch", "A note.", "Some content."))
+
+    store.pages().remove("scratch")
+
+    assert store.index() == ""
+
+
+def test_loading_an_unknown_page_is_rejected(knowledge_dir):
+    store = aw.Knowledge.load(knowledge_dir)
+    with pytest.raises(RuntimeError):
+        store.pages().load("does-not-exist")
+
+
 def test_clear_empties_the_store(knowledge_dir):
     store = aw.Knowledge.load(knowledge_dir)
+    store.pages().save(aw.Page("scratch", "A note.", "Some content."))
+
     store.clear()
+
     assert store.index() == ""
 
 
 def test_agent_binds_a_knowledge_store(knowledge_dir):
     store = aw.Knowledge.load(knowledge_dir)
-    assert isinstance(aw.Agent().knowledge(store), aw.Agent)
+    agent = aw.Agent()
+    assert agent.knowledge(store) is agent

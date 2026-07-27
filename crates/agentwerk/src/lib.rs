@@ -90,6 +90,8 @@ pub(crate) mod test_util;
 
 // Workshop: agents pull tickets from the system
 pub use agents::Agent;
+pub use agents::AgentBuilder;
+pub use agents::Reply;
 pub use agents::Status;
 pub use agents::Ticket;
 pub use agents::TicketSystem;
@@ -97,6 +99,7 @@ pub use agents::TicketSystem;
 // Tuning, telemetry, durable state
 pub use agents::Knowledge;
 pub use agents::Stats;
+pub use agents::Trajectory;
 
 // Validation
 pub use schemas::Schema;

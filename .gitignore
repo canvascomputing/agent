@@ -1,5 +1,13 @@
 /target
 
+# Python build artefacts: the virtualenv `maturin develop` installs into, plus
+# what the interpreter and pytest leave behind.
+/.venv
+**/__pycache__/
+**/*.pyc
+**/*.so
+**/.pytest_cache/
+
 # Default knowledge store directory created by every bound agent.
 **/.agentwerk
 

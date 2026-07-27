@@ -1,6 +1,7 @@
 //! Structured events agentwerk emits so callers can observe a run
 //! without wrapping the agent.
 
+use std::fmt;
 use std::sync::Arc;
 
 use crate::providers::{RequestErrorKind, TokenUsage};
@@ -15,6 +16,15 @@ pub enum CompactReason {
     /// a `ProviderError::ContextWindowExceeded` or via
     /// `ResponseStatus::ContextWindowExceeded` on a successful reply.
     Reactive,
+}
+
+impl fmt::Display for CompactReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            CompactReason::Proactive => "proactive",
+            CompactReason::Reactive => "reactive",
+        })
+    }
 }
 
 /// Which configured policy a [`EventKind::PolicyViolated`] refers to.
@@ -36,6 +46,18 @@ pub enum PolicyKind {
     Time,
 }
 
+impl fmt::Display for PolicyKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            PolicyKind::Turns => "turns",
+            PolicyKind::InputTokens => "input_tokens",
+            PolicyKind::OutputTokens => "output_tokens",
+            PolicyKind::MaxSchemaRetries => "max_schema_retries",
+            PolicyKind::Time => "time",
+        })
+    }
+}
+
 /// Why a run ended. Carried by [`EventKind::RunFinished`] and readable
 /// after `finish().await` via `TicketSystem::finish_reason()`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,6 +69,18 @@ pub enum FinishReason {
     /// An external party requested cancellation through `cancel()`,
     /// `cancel_on`, or `cancel_on_event`.
     Cancelled,
+}
+
+impl fmt::Display for FinishReason {
+    /// The violated limit is named inside the parentheses, as in
+    /// `policy_violated(turns)`.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            FinishReason::Drained => f.write_str("drained"),
+            FinishReason::PolicyViolated(kind) => write!(f, "policy_violated({kind})"),
+            FinishReason::Cancelled => f.write_str("cancelled"),
+        }
+    }
 }
 
 /// Categorical discriminant for [`EventKind::ToolCallFailed`].
@@ -61,6 +95,16 @@ pub enum ToolFailureKind {
     SchemaValidationFailed,
 }
 
+impl fmt::Display for ToolFailureKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            ToolFailureKind::ToolNotFound => "tool_not_found",
+            ToolFailureKind::ExecutionFailed => "execution_failed",
+            ToolFailureKind::SchemaValidationFailed => "schema_validation_failed",
+        })
+    }
+}
+
 /// One Knowledge-store operation, carried by [`EventKind::KnowledgeUsed`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KnowledgeOp {
@@ -68,6 +112,17 @@ pub enum KnowledgeOp {
     Read,
     Remove,
     List,
+}
+
+impl fmt::Display for KnowledgeOp {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            KnowledgeOp::Write => "write",
+            KnowledgeOp::Read => "read",
+            KnowledgeOp::Remove => "remove",
+            KnowledgeOp::List => "list",
+        })
+    }
 }
 
 /// Observation emitted as agents work. Carries the name of the agent
@@ -259,6 +314,12 @@ impl EventKind {
     }
 }
 
+impl fmt::Display for EventKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
 /// Default observer. Prints ticket lifecycle, tool activity, policy
 /// violations, and request failures to stderr. Quiet variants
 /// (token counts, streaming chunks, request start/finish) are dropped.
@@ -270,7 +331,7 @@ pub fn default_logger() -> Arc<dyn Fn(Event) + Send + Sync> {
                 eprintln!("run started");
             }
             EventKind::RunFinished { reason } => {
-                eprintln!("run finished: {reason:?}");
+                eprintln!("run finished: {reason}");
             }
             EventKind::TicketStarted => {
                 eprintln!("[{agent}] started {}", event.ticket_key);
@@ -292,7 +353,7 @@ pub fn default_logger() -> Arc<dyn Fn(Event) + Send + Sync> {
                 kind,
                 ..
             } => {
-                eprintln!("[{agent}] {tool_name} failed ({kind:?}): {message}");
+                eprintln!("[{agent}] {tool_name} failed ({kind}): {message}");
             }
             EventKind::RequestFailed { message, .. } => {
                 eprintln!("[{agent}] request failed: {message}");
@@ -313,23 +374,23 @@ pub fn default_logger() -> Arc<dyn Fn(Event) + Send + Sync> {
                 eprintln!("[{agent}] schema retry {attempt}/{max_attempts}: {message}");
             }
             EventKind::PolicyViolated { kind, limit } => {
-                eprintln!("[{agent}] policy violated: {kind:?} limit={limit}");
+                eprintln!("[{agent}] policy violated: {kind} limit={limit}");
             }
             EventKind::CompactionStarted { reason, total } => {
-                eprintln!("[{agent}] compacting context ({reason:?}): {total} chunks");
+                eprintln!("[{agent}] compacting context ({reason}): {total} chunks");
             }
             EventKind::CompactionProgress {
                 reason,
                 completed,
                 total,
             } => {
-                eprintln!("[{agent}] compaction progress ({reason:?}): {completed}/{total}");
+                eprintln!("[{agent}] compaction progress ({reason}): {completed}/{total}");
             }
             EventKind::CompactionFinished { reason } => {
-                eprintln!("[{agent}] context compacted ({reason:?})");
+                eprintln!("[{agent}] context compacted ({reason})");
             }
             EventKind::CompactionFailed { reason, message } => {
-                eprintln!("[{agent}] compaction failed ({reason:?}): {message}");
+                eprintln!("[{agent}] compaction failed ({reason}): {message}");
             }
             _ => {}
         }

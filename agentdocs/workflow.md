@@ -18,6 +18,15 @@ Commands used to build, test, release, and run example agents.
 - `make test` runs `cargo test --workspace --lib` (every crate's inline `#[cfg(test)] mod tests`).
 - `make test_integration` runs the live-provider tests bundled by `tests/integration.rs`.
 
+## Python bindings
+
+**`make python` builds the extension; the two test targets split on whether an LLM provider is needed.**
+
+- `make python` runs `maturin develop` in `crates/agentwerk-py/`, building the extension into the active virtualenv. Create one first with `python3 -m venv .venv` at the repo root and activate it: maturin fails without a virtualenv, and the test targets resolve `python3` off the PATH, so an unactivated one imports the system interpreter instead.
+- `make python_test` runs the offline pytest suite. It needs no network and no `.env`.
+- `make python_test_integration` sources `.env` and runs the tests marked `live`, which call a real LLM provider.
+- Both test targets depend on `make python`, so an edit to the binding crate is picked up automatically.
+
 ## Integration env
 
 **Integration tests read provider config from a `.env` file at the repo root.**

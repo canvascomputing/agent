@@ -9,7 +9,7 @@ pub(crate) mod retry;
 pub mod stats;
 pub mod tickets;
 
-pub use agent::Agent;
+pub use agent::{Agent, AgentBuilder};
 pub use knowledge::Knowledge;
 pub use stats::Stats;
-pub use tickets::{Status, Ticket, TicketError, TicketSystem, Trajectory};
+pub use tickets::{Reply, Status, Ticket, TicketError, TicketSystem, Trajectory};

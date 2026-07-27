@@ -6,10 +6,10 @@ Naming and comment rules, plus README structure. Skim the section matching what 
 
 **A type earns a `pub use` at `lib.rs` only when it names a concept in the one-sentence description of the crate, or when root-level signatures hand it to the caller.**
 
-- The current root: `Agent`, `TicketSystem`, `Ticket`, `Knowledge`, `Policies`, `Stats`, `Event`, `Status`, `EventKind`, `FinishReason`, `Schema`.
+- The current root: `Agent`, `AgentBuilder`, `TicketSystem`, `Ticket`, `Knowledge`, `Stats`, `Trajectory`, `Reply`, `Event`, `Status`, `EventKind`, `FinishReason`, `Schema`.
 - Discriminants callers match on in their own code earn a root slot: `Status` (on `Ticket.status`), `EventKind` (on `Event.kind`), `FinishReason` (from `finish_reason()`).
 - Errors and conversion traits do not earn a root slot. They live in their domain module.
-- Builder parameters and run outputs do earn one when callers name them in their own code: `Schema` (on `Ticket::schema`).
+- Builder parameters and run outputs do earn one when callers name them in their own code: `Schema` (on `Ticket::schema`), `AgentBuilder` (from `Agent::new`), `Reply` (on `Ticket.replies`), `Trajectory` (built from a ticket an `on_ticket` handler receives).
 - Free functions at the root are forbidden: convert to an associated function or move to the domain module.
 - Name collisions at the root are forbidden; `ToolResult` next to `Result` is not acceptable.
 
@@ -123,6 +123,16 @@ Naming and comment rules, plus README structure. Skim the section matching what 
 
 - Example: `set_extension()`, `get_extension()`.
 - Builder methods remain unprefixed.
+
+## Python bindings
+
+**Every public Rust item has a Python counterpart of the same name. Four transforms are permitted; nothing else.**
+
+- Type-state collapses: `AgentBuilder<P, M>` and `ToolBuilder<H>` fold into the class they build and take its name, so the builder type has no Python counterpart. The collapsed class validates at `build()`.
+- `Duration` becomes float seconds: the parameter keeps its name and the unit moves into the docstring.
+- An enum becomes its snake_case `Display` string. That `Display` impl is the single source, so the binding never formats a variant with `{:?}`.
+- A builder method whose name collides with a reader on the same Python class becomes a constructor keyword argument, because a Python class cannot carry both. `Ticket` needs this for `labels`, `schema`, and `parent`; nothing else does.
+- IMPORTANT: no `with_` prefix in either language, and no fifth transform.
 
 ## Free functions
 

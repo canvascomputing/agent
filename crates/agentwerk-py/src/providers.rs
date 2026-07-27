@@ -5,6 +5,7 @@
 use std::sync::Arc;
 
 use agentwerk::providers::{
+    context_window_from_env as detect_context_window, model_from_env as detect_model,
     provider_from_env as detect_provider, AnthropicProvider, LiteLlmProvider, MistralProvider,
     Model, OpenAiProvider, Provider, ReasoningEffort,
 };
@@ -59,6 +60,16 @@ impl PyModel {
         slf.inner = slf.inner.clone().reasoning_effort(parsed);
         Ok(slf)
     }
+
+    /// The context window in tokens: the registry default, or the override.
+    fn get_context_window(&self) -> Option<u64> {
+        self.inner.get_context_window()
+    }
+
+    /// `"off"`, `"low"`, `"medium"`, or `"high"`.
+    fn get_reasoning_effort(&self) -> String {
+        self.inner.get_reasoning_effort().to_string()
+    }
 }
 
 /// Detect and construct a provider from environment variables
@@ -68,6 +79,22 @@ impl PyModel {
 fn provider_from_env() -> PyResult<PyProvider> {
     let inner = detect_provider().map_err(runtime_error)?;
     Ok(PyProvider { inner })
+}
+
+/// Read the model name from `MODEL`, `<PROVIDER>_MODEL`, or the detected
+/// provider's default.
+#[pyfunction]
+#[pyo3(name = "model_from_env")]
+fn model_from_env() -> PyResult<String> {
+    detect_model().map_err(runtime_error)
+}
+
+/// Read `MODEL_CONTEXT_WINDOW`, or `None` when it is unset or not a positive
+/// integer.
+#[pyfunction]
+#[pyo3(name = "context_window_from_env")]
+fn context_window_from_env() -> Option<u64> {
+    detect_context_window()
 }
 
 #[pyfunction]
@@ -122,6 +149,8 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyProvider>()?;
     m.add_class::<PyModel>()?;
     m.add_function(wrap_pyfunction!(provider_from_env, m)?)?;
+    m.add_function(wrap_pyfunction!(model_from_env, m)?)?;
+    m.add_function(wrap_pyfunction!(context_window_from_env, m)?)?;
     m.add_function(wrap_pyfunction!(anthropic_provider, m)?)?;
     m.add_function(wrap_pyfunction!(openai_provider, m)?)?;
     m.add_function(wrap_pyfunction!(mistral_provider, m)?)?;

@@ -8,14 +8,16 @@ use std::sync::Arc;
 
 use agentwerk::providers::ProviderResult;
 use agentwerk::tools::{
-    BashTool, EditFileTool, FetchUrlTool, GlobTool, GrepTool, ListDirectoryTool, ManageTicketsTool,
-    ReadFileTool, ReadTicketsTool, ToolContext, ToolLike, ToolResult, WriteFileTool,
+    BashTool, EditFileTool, FetchUrlTool, FindToolsTool, FinishTool, GlobTool, GrepTool,
+    ListDirectoryTool, ManageKnowledgeTool, ManageTicketsTool, ReadFileTool, ReadTicketsTool,
+    ToolContext, ToolLike, ToolResult, WriteFileTool,
 };
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use serde_json::Value;
 
 use crate::convert::{py_to_value, value_to_py};
+use crate::knowledge::PyKnowledge;
 
 /// Forwards `ToolLike` through an already-`Arc`'d trait object. The agent
 /// builder's `.tool(...)` takes `impl ToolLike` by value and re-wraps it in an
@@ -73,6 +75,8 @@ struct PyToolAdapter {
     description: String,
     schema: Value,
     read_only: bool,
+    defer: bool,
+    paths: Vec<String>,
 }
 
 impl ToolLike for PyToolAdapter {
@@ -90,6 +94,18 @@ impl ToolLike for PyToolAdapter {
 
     fn is_read_only(&self) -> bool {
         self.read_only
+    }
+
+    fn should_defer(&self) -> bool {
+        self.defer
+    }
+
+    fn opened_paths(&self, input: &Value) -> Vec<String> {
+        self.paths
+            .iter()
+            .filter_map(|field| input.get(field).and_then(|v| v.as_str()))
+            .map(str::to_string)
+            .collect()
     }
 
     fn call<'a>(
@@ -139,11 +155,50 @@ fn invoke_python(py: Python<'_>, func: &Py<PyAny>, input: &Value) -> PyResult<To
     if result.is_none() {
         return Ok(ToolResult::success(String::new()));
     }
+    if let Ok(explicit) = result.extract::<PyRef<PyToolResult>>() {
+        return Ok(explicit.inner.clone());
+    }
     if let Ok(text) = result.extract::<String>() {
         return Ok(ToolResult::success(text));
     }
     let value = py_to_value(&result)?;
     Ok(ToolResult::success(value.to_string()))
+}
+
+/// What a tool reports back. Returning a plain string or dict is the same as
+/// `ToolResult.success(...)`; the other two say the call failed without ending
+/// the run.
+#[pyclass(name = "ToolResult")]
+pub struct PyToolResult {
+    inner: ToolResult,
+}
+
+#[pymethods]
+impl PyToolResult {
+    /// The tool did its work; `content` goes back to the model.
+    #[staticmethod]
+    fn success(content: String) -> Self {
+        PyToolResult {
+            inner: ToolResult::success(content),
+        }
+    }
+
+    /// The tool failed; `content` explains why so the model can adjust.
+    #[staticmethod]
+    fn error(content: String) -> Self {
+        PyToolResult {
+            inner: ToolResult::error(content),
+        }
+    }
+
+    /// The input did not match the tool's schema. Counted against
+    /// `max_schema_retries`.
+    #[staticmethod]
+    fn schema_error(content: String) -> Self {
+        PyToolResult {
+            inner: ToolResult::schema_error(content),
+        }
+    }
 }
 
 /// Pull an `Arc<dyn ToolLike>` out of whatever Python passed to `.tool(...)`:
@@ -156,6 +211,8 @@ pub fn extract_tool(obj: &Bound<'_, PyAny>) -> PyResult<Arc<dyn ToolLike>> {
         let name = obj.getattr("_agentwerk_name")?.extract()?;
         let description = obj.getattr("_agentwerk_description")?.extract()?;
         let read_only = obj.getattr("_agentwerk_read_only")?.extract()?;
+        let defer = obj.getattr("_agentwerk_defer")?.extract()?;
+        let paths = obj.getattr("_agentwerk_paths")?.extract()?;
         let schema = py_to_value(&obj.getattr("_agentwerk_schema")?)?;
         return Ok(Arc::new(PyToolAdapter {
             func: obj.clone().unbind(),
@@ -163,6 +220,8 @@ pub fn extract_tool(obj: &Bound<'_, PyAny>) -> PyResult<Arc<dyn ToolLike>> {
             description,
             schema,
             read_only,
+            defer,
+            paths,
         }));
     }
     Err(pyo3::exceptions::PyTypeError::new_err(
@@ -220,10 +279,34 @@ fn fetch_url_tool() -> PyTool {
     handle(Arc::new(FetchUrlTool))
 }
 
+/// Discover the tools an agent deferred until they are needed.
+#[pyfunction]
+#[pyo3(name = "FindToolsTool")]
+fn find_tools_tool() -> PyTool {
+    handle(Arc::new(FindToolsTool))
+}
+
+/// Bind the knowledge tool to `store` without making it the agent's own
+/// knowledge. `Agent.knowledge(store)` is the usual route: it does this
+/// and also renders the store's index into the system prompt.
+#[pyfunction]
+#[pyo3(name = "ManageKnowledgeTool")]
+fn manage_knowledge_tool(store: PyRef<'_, PyKnowledge>) -> PyTool {
+    handle(Arc::new(ManageKnowledgeTool::new(Arc::clone(&store.inner))))
+}
+
 #[pyfunction]
 #[pyo3(name = "ReadTicketsTool")]
 fn read_tickets_tool() -> PyTool {
     handle(Arc::new(ReadTicketsTool))
+}
+
+/// Finish a ticket with a result, optionally handing work to a child ticket.
+/// Registered on every agent built with `Agent()`.
+#[pyfunction]
+#[pyo3(name = "FinishTool")]
+fn finish_tool() -> PyTool {
+    handle(Arc::new(FinishTool))
 }
 
 #[pyfunction]
@@ -253,6 +336,7 @@ fn unrestricted_bash_tool() -> PyTool {
 
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyTool>()?;
+    m.add_class::<PyToolResult>()?;
     m.add_function(wrap_pyfunction!(read_file_tool, m)?)?;
     m.add_function(wrap_pyfunction!(write_file_tool, m)?)?;
     m.add_function(wrap_pyfunction!(edit_file_tool, m)?)?;
@@ -260,7 +344,10 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(glob_tool, m)?)?;
     m.add_function(wrap_pyfunction!(list_directory_tool, m)?)?;
     m.add_function(wrap_pyfunction!(fetch_url_tool, m)?)?;
+    m.add_function(wrap_pyfunction!(find_tools_tool, m)?)?;
+    m.add_function(wrap_pyfunction!(manage_knowledge_tool, m)?)?;
     m.add_function(wrap_pyfunction!(read_tickets_tool, m)?)?;
+    m.add_function(wrap_pyfunction!(finish_tool, m)?)?;
     m.add_function(wrap_pyfunction!(manage_tickets_tool, m)?)?;
     m.add_function(wrap_pyfunction!(bash_tool, m)?)?;
     m.add_function(wrap_pyfunction!(unrestricted_bash_tool, m)?)?;

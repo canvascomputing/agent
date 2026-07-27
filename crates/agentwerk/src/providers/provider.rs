@@ -1,5 +1,6 @@
 //! The `Provider` trait every backend implements, plus the request shape callers pass in. The one seam between the agent loop and any particular vendor API.
 
+use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -49,6 +50,12 @@ impl ReasoningEffort {
             ReasoningEffort::Medium => Some("medium"),
             ReasoningEffort::High => Some("high"),
         }
+    }
+}
+
+impl fmt::Display for ReasoningEffort {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.label().unwrap_or("off"))
     }
 }
 

@@ -244,11 +244,11 @@ impl<P, M> AgentBuilder<P, M> {
     }
 
     /// Knowledge store the agent uses for its long-term memory. Replaces
-    /// the default store opened at construction and re-registers
-    /// `ManageKnowledgeTool` backed by `store`. Share one store across
-    /// multiple agents the same way `ticket_system(&shared)` shares a queue.
+    /// the default store opened at construction, both as the store rendered
+    /// into the system prompt and as the one `ManageKnowledgeTool` writes to.
+    /// Share one store across multiple agents the same way
+    /// `ticket_system(&shared)` shares a queue.
     pub fn knowledge(mut self, store: &Arc<Knowledge>) -> Self {
-        self.tools.deregister("manage_knowledge");
         self.tools
             .register(ManageKnowledgeTool::new(Arc::clone(store)));
         self.knowledge = Arc::clone(store);

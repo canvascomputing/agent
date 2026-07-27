@@ -38,110 +38,79 @@ impl PyEvent {
 
 /// Build a `PyEvent` from a crate `Event`.
 pub fn to_py_event(event: &Event) -> PyEvent {
-    let (kind, data) = describe(&event.kind);
     PyEvent {
-        kind: kind.to_string(),
+        kind: event.kind.to_string(),
         agent_name: event.agent_name.clone(),
         ticket_key: event.ticket_key.clone(),
-        data,
+        data: payload(&event.kind),
     }
 }
 
-/// Map an `EventKind` to its stable name and a JSON payload. Enum-typed fields
-/// (error kinds, policy kinds, reasons) are rendered as their debug string.
-fn describe(kind: &EventKind) -> (&'static str, Value) {
+/// The variant's payload as JSON. Enum-typed fields (error kinds, policy kinds,
+/// reasons) render through their `Display` impl, so every string Python sees is
+/// snake_case and named in one place on the crate side.
+fn payload(kind: &EventKind) -> Value {
     use EventKind::*;
     match kind {
-        RunStarted => ("run_started", json!({})),
-        RunFinished { reason } => ("run_finished", json!({ "reason": format!("{reason:?}") })),
-        TicketStarted => ("ticket_started", json!({})),
-        TicketFinished => ("ticket_finished", json!({})),
-        TicketFailed => ("ticket_failed", json!({})),
-        TurnStarted => ("turn_started", json!({})),
-        RequestStarted { model } => ("request_started", json!({ "model": model })),
-        RequestFinished { model, usage } => (
-            "request_finished",
-            json!({ "model": model, "usage": serde_json::to_value(usage).unwrap_or(Value::Null) }),
-        ),
+        RunStarted | TicketStarted | TicketFinished | TicketFailed | TurnStarted
+        | KnowledgeMissed => json!({}),
+        RunFinished { reason } => json!({ "reason": reason.to_string() }),
+        RequestStarted { model } => json!({ "model": model }),
+        RequestFinished { model, usage } => {
+            json!({ "model": model, "usage": serde_json::to_value(usage).unwrap_or(Value::Null) })
+        }
         RequestFailed {
             model,
             kind,
             message,
-        } => (
-            "request_failed",
-            json!({ "model": model, "kind": format!("{kind:?}"), "message": message }),
-        ),
+        } => json!({ "model": model, "kind": kind.to_string(), "message": message }),
         RequestRetried {
             model,
             attempt,
             max_attempts,
             kind,
             message,
-        } => (
-            "request_retried",
-            json!({ "model": model, "attempt": attempt, "max_attempts": max_attempts, "kind": format!("{kind:?}"), "message": message }),
-        ),
-        TextChunkReceived { content } => ("text_chunk_received", json!({ "content": content })),
+        } => {
+            json!({ "model": model, "attempt": attempt, "max_attempts": max_attempts, "kind": kind.to_string(), "message": message })
+        }
+        TextChunkReceived { content } => json!({ "content": content }),
         ToolCallStarted {
             tool_name,
             call_id,
             input,
-        } => (
-            "tool_call_started",
-            json!({ "tool_name": tool_name, "call_id": call_id, "input": input }),
-        ),
+        } => json!({ "tool_name": tool_name, "call_id": call_id, "input": input }),
         ToolCallFinished {
             tool_name,
             call_id,
             output,
-        } => (
-            "tool_call_finished",
-            json!({ "tool_name": tool_name, "call_id": call_id, "output": output }),
-        ),
+        } => json!({ "tool_name": tool_name, "call_id": call_id, "output": output }),
         ToolCallFailed {
             tool_name,
             call_id,
             kind,
             message,
-        } => (
-            "tool_call_failed",
-            json!({ "tool_name": tool_name, "call_id": call_id, "kind": format!("{kind:?}"), "message": message }),
-        ),
-        FileOpenFinished { path } => ("file_open_finished", json!({ "path": path })),
-        FileOpenFailed { path } => ("file_open_failed", json!({ "path": path })),
-        KnowledgeUsed { op } => ("knowledge_used", json!({ "op": format!("{op:?}") })),
-        KnowledgeMissed => ("knowledge_missed", json!({})),
-        PolicyViolated { kind, limit } => (
-            "policy_violated",
-            json!({ "kind": format!("{kind:?}"), "limit": limit }),
-        ),
+        } => {
+            json!({ "tool_name": tool_name, "call_id": call_id, "kind": kind.to_string(), "message": message })
+        }
+        FileOpenFinished { path } | FileOpenFailed { path } => json!({ "path": path }),
+        KnowledgeUsed { op } => json!({ "op": op.to_string() }),
+        PolicyViolated { kind, limit } => json!({ "kind": kind.to_string(), "limit": limit }),
         SchemaRetried {
             attempt,
             max_attempts,
             message,
-        } => (
-            "schema_retried",
-            json!({ "attempt": attempt, "max_attempts": max_attempts, "message": message }),
-        ),
-        CompactionStarted { reason, total } => (
-            "compaction_started",
-            json!({ "reason": format!("{reason:?}"), "total": total }),
-        ),
+        } => json!({ "attempt": attempt, "max_attempts": max_attempts, "message": message }),
+        CompactionStarted { reason, total } => {
+            json!({ "reason": reason.to_string(), "total": total })
+        }
         CompactionProgress {
             reason,
             completed,
             total,
-        } => (
-            "compaction_progress",
-            json!({ "reason": format!("{reason:?}"), "completed": completed, "total": total }),
-        ),
-        CompactionFinished { reason } => (
-            "compaction_finished",
-            json!({ "reason": format!("{reason:?}") }),
-        ),
-        CompactionFailed { reason, message } => (
-            "compaction_failed",
-            json!({ "reason": format!("{reason:?}"), "message": message }),
-        ),
+        } => json!({ "reason": reason.to_string(), "completed": completed, "total": total }),
+        CompactionFinished { reason } => json!({ "reason": reason.to_string() }),
+        CompactionFailed { reason, message } => {
+            json!({ "reason": reason.to_string(), "message": message })
+        }
     }
 }
