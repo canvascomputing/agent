@@ -235,9 +235,9 @@ let answer = tickets.last_result();
 | `cancel()` | Cancel the run. |
 | `finish_reason()` | Return why the most recent `finish()` returned: `Drained`, `PolicyViolated(kind)`, or `Cancelled`. |
 
-### Reacting to the run
+### Reacting to events
 
-Steer a run from the outside while agents work: end it early, call off one label's agents, or enqueue follow-up work.
+React to events as they arrive: stop early, call off one label's agents, queue follow-up work, or read each ticket as it finishes.
 
 ```rust
 // Fail fast: end the run at the first malicious verdict.
@@ -251,6 +251,16 @@ tickets.create_ticket_on_result(|ticket| {
             .label("review")
     })
 });
+
+// Keep the messages of every finished ticket as a training example.
+let system = Arc::clone(&tickets);
+tickets.on_ticket(move |event, ticket| {
+    if matches!(event.kind, EventKind::TicketFinished) {
+        let model = system.model_for_agent(&event.agent_name);
+        let _ = Trajectory::from_ticket(&event.agent_name, model.as_deref(), ticket)
+            .save("datasets");
+    }
+});
 ```
 
 | Method | Description |
@@ -260,6 +270,7 @@ tickets.create_ticket_on_result(|ticket| {
 | `cancel_on_result(p)` | End the run when a finished result matches. |
 | `cancel_label_on_event(l, p)` | Call off one label's agents while the rest keep working. |
 | `create_ticket_on_result(make)` | Enqueue a follow-up ticket from a finished ticket. |
+| `on_ticket(h)` | Read a ticket as it starts, finishes, or fails. |
 | `wait_for_ticket(p)` | Wait for one matching ticket instead of draining the queue. |
 
 See [`TicketSystem`](https://docs.rs/agentwerk/latest/agentwerk/agents/tickets/struct.TicketSystem.html).
@@ -288,7 +299,7 @@ for ticket in tickets.tickets() {
 | `tickets()` | Return every ticket in creation order, with status, payload, and metadata. |
 | `find_ticket(predicate)` | Return the earliest ticket matching the predicate. |
 
-More query methods on [`TicketSystem`](https://docs.rs/agentwerk/latest/agentwerk/agents/tickets/struct.TicketSystem.html): `get_ticket`, `find_tickets`, `is_cancelled`.
+More query methods on [`TicketSystem`](https://docs.rs/agentwerk/latest/agentwerk/agents/tickets/struct.TicketSystem.html): `get_ticket`, `find_tickets`, `is_cancelled`, `model_for_agent`.
 
 ### Inspecting tickets
 

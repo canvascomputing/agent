@@ -7,11 +7,13 @@ use std::path::{Path, PathBuf};
 use super::{Author, Reply, ReplyContent, Ticket};
 
 /// A finished agent run reduced to the one thing a training example needs:
-/// the message transcript, in agentwerk's own [`Reply`] shape. Written
-/// selectively by [`TicketSystem::save_trajectory_on_event`], leaving any
-/// ShareGPT / chat_template conversion to a downstream step.
+/// the message transcript, in agentwerk's own [`Reply`] shape. Build one with
+/// [`Trajectory::from_ticket`] from an [`on_ticket`] handler and [`save`] it
+/// where the dataset belongs, leaving any ShareGPT / chat_template conversion
+/// to a downstream step.
 ///
-/// [`TicketSystem::save_trajectory_on_event`]: super::TicketSystem::save_trajectory_on_event
+/// [`on_ticket`]: super::TicketSystem::on_ticket
+/// [`save`]: Trajectory::save
 ///
 /// Each save also writes an `.html` sibling rendering the transcript for
 /// debugging.
@@ -31,12 +33,18 @@ impl Trajectory {
     /// Capture `ticket`'s transcript as an example produced by `agent`
     /// using `model`. Keeps every reply, including the system prompt: a
     /// trainer wants it, where `Ticket::to_messages` would drop it.
-    pub(crate) fn from_ticket(agent: &str, model: Option<&str>, ticket: &Ticket) -> Self {
+    pub fn from_ticket(agent: &str, model: Option<&str>, ticket: &Ticket) -> Self {
         Self {
             key: format!("{agent}-{}", ticket.key),
             model: model.map(str::to_string),
             messages: ticket.replies.clone(),
         }
+    }
+
+    /// Write the example under `dir` as `trajectories/<key>.json`, plus the
+    /// `.html` sibling.
+    pub fn save(&self, dir: impl AsRef<Path>) -> io::Result<()> {
+        <Self as crate::persistence::Persist>::save(self, dir.as_ref())
     }
 
     /// Render the transcript as a self-contained, debug-readable HTML page:
@@ -147,7 +155,7 @@ impl crate::persistence::Persist for Trajectory {
 }
 
 /// Path of the trajectory file for `key`: `trajectories/<key>.json`.
-pub(super) fn trajectory_path(dir: &Path, key: &str) -> PathBuf {
+fn trajectory_path(dir: &Path, key: &str) -> PathBuf {
     dir.join("trajectories").join(format!("{key}.json"))
 }
 
