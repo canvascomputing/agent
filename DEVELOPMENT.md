@@ -3,6 +3,7 @@
 ## Workspace
 
 - `crates/agentwerk/`: the library.
+- `crates/agentwerk-py/`: the Python bindings, built with maturin.
 - `crates/use-cases/`: runnable example binaries that depend on the library.
 
 ## Building and testing
@@ -14,6 +15,20 @@ make fmt            # format code
 make clean          # remove build artifacts
 make update         # update dependencies
 make hooks          # install Claude Code hooks
+```
+
+## Python bindings
+
+Create a virtualenv at the repo root and activate it; maturin installs into it,
+and the test targets call the `python3` on your PATH.
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+
+make python                    # maturin develop
+make python_test               # offline pytest suite
+make python_test_integration   # the tests marked live
 ```
 
 ## Integration tests

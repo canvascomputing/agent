@@ -1,11 +1,11 @@
-//! The ticket as Python sees it. One class in both directions: `with_*` builds
-//! a ticket to enqueue, mirroring `Ticket::new(...).label(...).schema(...)
-//! .parent(...)`, and the same class comes back out of queries and callbacks
-//! with its recorded state and messages as attributes. The prefix is what
-//! keeps the two apart: Python cannot carry a `labels` method and a `labels`
-//! attribute on one class.
+//! The ticket as Python sees it. One class in both directions: the constructor
+//! takes the caller-settable fields, and the same class comes back out of
+//! queries and callbacks with its recorded state and messages as attributes.
+//! Rust spells those fields as chained builders (`Ticket::new(...).label(...)
+//! .schema(...).parent(...)`); a Python class cannot carry a `labels` method
+//! and a `labels` attribute, so they arrive as keyword arguments instead.
 
-use agentwerk::{Status, Ticket};
+use agentwerk::Ticket;
 use pyo3::prelude::*;
 
 use crate::convert::{py_to_value, value_to_py};
@@ -20,37 +20,28 @@ pub struct PyTicket {
 
 #[pymethods]
 impl PyTicket {
-    /// Create a ticket carrying `task` (any JSON-serializable value).
+    /// Create a ticket carrying `task` (any JSON-serializable value). `labels`
+    /// assign it to agents, `schema` is validated against the result, and
+    /// `parent` records a handover audit trail.
     #[new]
-    fn new(task: &Bound<'_, PyAny>) -> PyResult<Self> {
-        Ok(PyTicket {
-            inner: Ticket::new(py_to_value(task)?),
-        })
-    }
-
-    fn with_label(mut slf: PyRefMut<'_, Self>, label: String) -> PyRefMut<'_, Self> {
-        slf.inner.labels.push(label);
-        slf
-    }
-
-    fn with_labels(mut slf: PyRefMut<'_, Self>, labels: Vec<String>) -> PyRefMut<'_, Self> {
-        slf.inner.labels.extend(labels);
-        slf
-    }
-
-    /// Attach a result schema the finisher validates against.
-    fn with_schema<'py>(
-        mut slf: PyRefMut<'py, Self>,
-        schema: PyRef<'_, PySchema>,
-    ) -> PyRefMut<'py, Self> {
-        slf.inner.schema = Some(schema.inner.clone());
-        slf
-    }
-
-    /// Record a parent ticket key, forming a handover audit trail.
-    fn with_parent(mut slf: PyRefMut<'_, Self>, key: String) -> PyRefMut<'_, Self> {
-        slf.inner.parent = Some(key);
-        slf
+    #[pyo3(signature = (task, *, labels=None, schema=None, parent=None))]
+    fn new(
+        task: &Bound<'_, PyAny>,
+        labels: Option<Vec<String>>,
+        schema: Option<PyRef<'_, PySchema>>,
+        parent: Option<String>,
+    ) -> PyResult<Self> {
+        let mut inner = Ticket::new(py_to_value(task)?);
+        if let Some(labels) = labels {
+            inner = inner.labels(labels);
+        }
+        if let Some(schema) = schema {
+            inner = inner.schema(schema.inner.clone());
+        }
+        if let Some(parent) = parent {
+            inner = inner.parent(parent);
+        }
+        Ok(PyTicket { inner })
     }
 
     /// True when the ticket carries `label`.
@@ -58,20 +49,45 @@ impl PyTicket {
         self.inner.has_label(label)
     }
 
+    /// True while the ticket is created but not yet claimed.
+    fn is_todo(&self) -> bool {
+        self.inner.is_todo()
+    }
+
+    /// True once the ticket produced an accepted result.
+    fn is_finished(&self) -> bool {
+        self.inner.is_finished()
+    }
+
+    /// True once the ticket gave up without a result.
+    fn is_failed(&self) -> bool {
+        self.inner.is_failed()
+    }
+
+    /// True while an agent is working the ticket.
+    fn is_in_progress(&self) -> bool {
+        self.inner.is_in_progress()
+    }
+
+    /// True while the ticket still has work left: todo or in progress.
+    fn is_pending(&self) -> bool {
+        self.inner.is_pending()
+    }
+
+    /// True once the ticket reached a terminal status: finished or failed.
+    fn is_resolved(&self) -> bool {
+        self.inner.is_resolved()
+    }
+
     #[getter]
     fn key(&self) -> &str {
         &self.inner.key
     }
 
-    /// `"Todo"`, `"InProgress"`, `"Finished"`, or `"Failed"`.
+    /// `"todo"`, `"in_progress"`, `"finished"`, or `"failed"`.
     #[getter]
-    fn status(&self) -> &'static str {
-        match self.inner.status {
-            Status::Todo => "Todo",
-            Status::InProgress => "InProgress",
-            Status::Finished => "Finished",
-            Status::Failed => "Failed",
-        }
+    fn status(&self) -> String {
+        self.inner.status.to_string()
     }
 
     #[getter]
@@ -90,6 +106,14 @@ impl PyTicket {
     #[getter]
     fn labels(&self) -> Vec<String> {
         self.inner.labels.clone()
+    }
+
+    /// The schema the result is validated against, when the ticket carries one.
+    #[getter]
+    fn schema(&self) -> Option<PySchema> {
+        self.inner.schema.as_ref().map(|schema| PySchema {
+            inner: schema.clone(),
+        })
     }
 
     #[getter]
@@ -124,7 +148,7 @@ impl PyTicket {
     }
 
     /// The messages exchanged with the model, as dicts. Converted on access,
-    /// so a callback that never asks never pays for the transcript.
+    /// so a callback that never asks never pays for them.
     #[getter]
     fn replies<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let value =
@@ -142,7 +166,7 @@ impl PyTicket {
 }
 
 impl PyTicket {
-    /// Wrap a ticket the system owns, transcript included.
+    /// Wrap a ticket the system owns, messages included.
     pub fn from_ticket(ticket: &Ticket) -> Self {
         PyTicket {
             inner: ticket.clone(),
@@ -152,7 +176,7 @@ impl PyTicket {
     /// Build the ticket to enqueue. Copies the caller-settable fields only:
     /// `insert` stamps key, status, reporter, and result but leaves the
     /// messages and lifecycle timestamps, so a ticket that came back out of
-    /// the system would otherwise carry its transcript into the new one.
+    /// the system would otherwise carry its messages into the new one.
     pub fn to_ticket(&self) -> Ticket {
         let mut ticket = Ticket::new(self.inner.task.clone()).labels(self.inner.labels.clone());
         if let Some(schema) = &self.inner.schema {

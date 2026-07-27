@@ -59,12 +59,16 @@ asyncio.run(main())
 - [Knowledge](#knowledge): Durable memory agents share across tickets and runs.
 - [Sessions](#sessions): Working directory layout and how to reopen a run.
 - [Events](#events): Lifecycle events emitted while agents work.
+- [Stats](#stats): Statistics for tickets, tokens, and activity.
+- [Differences](DIFFS.md): Where this API and the Rust one do not line up.
 
 ## Agents
 
 An `Agent` picks up **tickets**, uses tools to solve them, and writes the result
-back onto each ticket. The builder is fluent: each call returns the builder, and
-`build()` produces the agent.
+back onto each ticket. `Agent()` opens the fluent configuration: each call
+returns the agent, and `build()` arms it. Configuring an agent after `build()`,
+or building it twice, is rejected. Rust splits this across `AgentBuilder` and
+`Agent`, one of the [differences](DIFFS.md) between the two APIs.
 
 ```python
 from agentwerk import Agent, ReadFileTool
@@ -81,9 +85,9 @@ agent = (
 |--------|-------------|
 | `name(s)` | Set an identifier for assigning tickets. |
 | `label(l)` / `labels([..])` | Restrict the agent to tickets carrying matching labels. |
-| `tool(t)` | Register a tool the agent may call. |
+| `tool(t)` / `tools([..])` | Register a tool the agent may call. |
 | `dir(d)` | Set the directory the agent works in. |
-| `on_failure(hook)` | Rewrite the corrective directive sent after an unaccepted turn. |
+| `on_failure(hook)` | Reword the retry message agentwerk sends when the model stalls or returns invalid output. |
 
 `role` and `context` are covered under [Prompting](#prompting); `knowledge(store)`
 under [Knowledge](#knowledge).
@@ -124,7 +128,7 @@ provider = OpenAiProvider(key, "https://my-endpoint.example/v1")
 
 To read only the provider from the environment (and set the model explicitly),
 or only the model (and set the provider explicitly), use `provider_from_env()`
-or `model_from_env()` on the builder.
+or `model_from_env()` on the agent.
 
 ### Models
 
@@ -177,14 +181,18 @@ tickets.agent(
 
 for url in pricing_pages:
     tickets.ticket(
-        Ticket(f"Fetch {url} and extract pricing tiers, limits, and features.")
-        .with_label("research")
+        Ticket(
+            f"Fetch {url} and extract pricing tiers, limits, and features.",
+            labels=["research"],
+        )
     )
 
 tickets.ticket(
-    Ticket("Rank all products by value for a 10-person engineering team.")
-    .with_label("analysis")
-    .with_schema(comparison_schema)
+    Ticket(
+        "Rank all products by value for a 10-person engineering team.",
+        labels=["analysis"],
+        schema=comparison_schema,
+    )
 )
 ```
 
@@ -195,7 +203,8 @@ tickets.ticket(
 | `ticket(t)` | Submit a `Ticket` with custom labels, a schema, or a parent link. |
 
 Also on `TicketSystem`: `dir(d)` to relocate persisted state, `reply(key, c)`
-to continue a multi-turn conversation on one ticket.
+to continue a multi-turn conversation on one ticket, and `set_failed(key)` to
+fail a ticket from outside the run.
 
 ### Execution
 
@@ -212,7 +221,7 @@ answer = tickets.last_result()
 | `start()` | Begin processing tickets in the background. |
 | `await finish()` | Process every queued ticket and return. |
 | `cancel()` | Cancel the run. |
-| `finish_reason()` | Return why the most recent `finish()` returned, as a string: `"Drained"`, `"PolicyViolated(..)"`, or `"Cancelled"`. |
+| `finish_reason()` | Return why the most recent `finish()` returned, as a string: `"drained"`, `"policy_violated(..)"`, or `"cancelled"`. |
 
 ### Reacting to events
 
@@ -227,7 +236,7 @@ tickets.cancel_on_result(lambda result: result["verdict"] == "malicious")
 # Verify every analysis finding with a follow-up ticket for the review pool.
 def review_finding(ticket):
     if ticket.has_label("analysis"):
-        return Ticket("Verify this finding.").with_parent(ticket.key).with_label("review")
+        return Ticket("Verify this finding.", labels=["review"], parent=ticket.key)
     return None
 
 tickets.create_ticket_on_result(review_finding)
@@ -251,6 +260,12 @@ tickets.on_ticket(capture)
 | `create_ticket_on_result(make)` | Enqueue a follow-up ticket from a finished ticket. |
 | `on_ticket(h)` | Read a ticket when it starts, finishes, or fails. |
 | `await wait_for_ticket(p)` | Wait for one matching ticket instead of draining the queue. |
+| `edit_messages_on_event(f)` | Rewrite a ticket's messages before its next request. |
+| `edit_messages(key, f)` | Rewrite one ticket's messages now. |
+
+An editor receives the messages as a list of dicts and returns the new list, or
+`None` to leave them alone. Keep each tool call paired with its result: the
+model rejects a conversation missing one half.
 
 ### Reading results
 
@@ -265,7 +280,7 @@ if answer is not None:
     print(answer)
 
 for ticket in tickets.tickets():
-    print(f"{ticket['key']}: {ticket['status']}")
+    print(f"{ticket.key}: {ticket.status}")
 ```
 
 | Method | Description |
@@ -278,7 +293,7 @@ for ticket in tickets.tickets():
 | `find_tickets(p)` | Return every ticket matching the predicate. |
 | `get_ticket(key)` | Return one ticket by key, or `None`. |
 | `model_for_agent(name)` | Return the model that agent runs, or `None`. |
-| `stats()` | Return run statistics (requests, tokens, ticket counts, and per-tool, per-file, per-label, and per-model breakdowns) as a dict. |
+| `stats()` | Return the run statistics described under [Stats](#stats). |
 
 ### Inspecting tickets
 
@@ -291,13 +306,17 @@ ticket = tickets.find_ticket(lambda t: t.has_label("analysis"))
 print(ticket.result["title"])
 ```
 
-Attributes: `key`, `status`, `task`, `result`, `labels`, `parent`, `reporter`,
-`replies`, and the four lifecycle timestamps (`created_at`, `started_at`,
-`finished_at`, `failed_at`). `status` is `"Todo"`, `"InProgress"`,
-`"Finished"`, or `"Failed"`, matching the persisted `tickets.jsonl`;
-`has_label(l)` reads better than testing `labels` directly. The `with_*`
-methods build a ticket to enqueue: `Ticket(task).with_label(l)`,
-`.with_labels(ls)`, `.with_schema(s)`, `.with_parent(key)`.
+Attributes: `key`, `status`, `task`, `result`, `labels`, `schema`, `parent`,
+`reporter`, `replies`, and the four lifecycle timestamps (`created_at`,
+`started_at`, `finished_at`, `failed_at`). `status` is `"todo"`,
+`"in_progress"`, `"finished"`, or `"failed"`, matching the persisted
+`tickets.jsonl`. Six predicates read better than comparing that string:
+`is_todo()`, `is_in_progress()`, `is_finished()`, `is_failed()`,
+`is_pending()` (todo or in progress), and `is_resolved()` (finished or
+failed). `has_label(l)` does the same for `labels`.
+
+To build a ticket, pass the settable fields to the constructor:
+`Ticket(task, labels=[..], schema=s, parent=key)`.
 
 ### Policies
 
@@ -339,7 +358,7 @@ schema = Schema({
     "required": ["title"],
 })
 
-tickets.ticket(Ticket("Write a report.").with_schema(schema))
+tickets.ticket(Ticket("Write a report.", schema=schema))
 ```
 
 Register a schema per label with `tickets.schema_for_label(label, schema)`: every
@@ -391,12 +410,20 @@ take. Built-in tools are constructed and passed to `.tool(...)`:
 | | `ListDirectoryTool()` | List files and directories. |
 | **Shell** | `BashTool(name, pattern)` | Run a shell command matching an allowed pattern. |
 | **Web** | `FetchUrlTool()` | Fetch a URL and read its body. |
-| **Tickets** | `ManageTicketsTool()` | Read the ticket queue and create or edit tickets. |
+| **Tickets** | `FinishTool()` | Write the result for the current ticket and mark it finished, optionally handing follow-up work to another agent. |
+| | `ManageTicketsTool()` | Read the ticket queue and create or edit tickets. |
 | | `ReadTicketsTool()` | Read the ticket queue. |
+| **Knowledge** | `ManageKnowledgeTool(store)` | Write, read, remove, or list pages in a knowledge store. |
+| **Discovery** | `FindToolsTool()` | Look up the tools held back until they are needed. |
 
-`FinishTool` and `ManageKnowledgeTool` are registered automatically on every
-agent. `FinishTool` writes the result for the current ticket and marks it
-finished, optionally handing follow-up work to another agent.
+`FinishTool()` and `ManageKnowledgeTool(store)` are registered automatically on
+every agent built with `Agent()`. `knowledge(store)` is the usual way to
+choose the store, since it also renders the store's index into the system prompt.
+`Agent.empty()` opens an agent without the finish tool, for agents that only
+read.
+
+Registering a tool replaces any tool already registered under the same name, so
+a later `tool(...)` wins over an automatic one.
 
 ### Bash
 
@@ -437,8 +464,17 @@ agent = Agent().tool(greet)
 ```
 
 `read_only=True` allows the agent to run a tool concurrently with other read-only
-calls in the same turn. A raised exception is reported back to the model as a
-recoverable error, and the run continues. Async functions (`async def`) work too.
+calls in the same turn. `defer=True` holds the tool back until the agent looks it
+up with `FindToolsTool()`, which keeps a large tool set out of every request.
+`paths=["path"]` names the input fields carrying a file path, so the files the
+tool opens show up in `Stats.file_stats()`. Async functions (`async def`) work
+too.
+
+A raised exception is reported back to the model as a recoverable error and the
+run continues. Return a `ToolResult` to say so without raising:
+`ToolResult.error(msg)` for a failure the model should work around, or
+`ToolResult.schema_error(msg)` for input that did not match the tool's schema,
+which counts against `max_schema_retries`.
 
 ## Knowledge
 
@@ -463,6 +499,27 @@ store = Knowledge.load("./.agentwerk").index_char_limit(24_000)
 agent = Agent().knowledge(store)
 ```
 
+Seed or inspect the store yourself through `pages()`:
+
+```python
+from agentwerk import Knowledge, Page
+
+store = Knowledge.load("./.agentwerk")
+store.pages().save(
+    Page("build-command", "How the project is built.", "Run `make` to compile.")
+)
+
+page = store.pages().load("build-command")
+store.pages().remove("build-command")
+```
+
+| Method | Description |
+|--------|-------------|
+| `index()` | Return the rendered index the agent sees. |
+| `index_char_limit(n)` | Limit the rendered index, in characters. |
+| `pages()` | Return the page collection for reading and writing pages. |
+| `clear()` | Remove every page from the store. |
+
 ## Sessions
 
 A `TicketSystem` writes every ticket, transcript, statistic, and lifecycle event
@@ -485,9 +542,11 @@ Layout:
 ├── results.jsonl                         finished results (one per line)
 ├── tickets/
 │   └── TICKET-1/
-│       ├── ticket.json                   the ticket without its transcript
-│       ├── replies.jsonl                 transcript
-│       └── outputs/<tool_use_id>.txt     full tool outputs spilled out of the transcript
+│       ├── ticket.json                   the ticket without its messages (key, status, labels, timestamps, result)
+│       ├── ticket.<ts>.json              the ticket saved at each compaction; the timestamp matches `replies.<ts>.jsonl`
+│       ├── replies.jsonl                 pre-compaction messages
+│       ├── replies.<ts>.jsonl            post-compaction messages
+│       └── outputs/<tool_use_id>.txt     full tool outputs spilled out of the messages
 └── knowledge/
     ├── pages/<slug>.md                   knowledge pages
     └── index.md                          knowledge index
@@ -526,6 +585,48 @@ Also: `run_started`, `run_finished`, `turn_started`, `request_started`,
 `file_open_finished`, `file_open_failed`, `knowledge_used`, `knowledge_missed`,
 `schema_retried`, `compaction_progress`, `compaction_failed`.
 
+Every category the bindings turn into a string uses the same snake_case form,
+whether it names an event, a status, or a payload field:
+
+| Where | Values |
+|-------|--------|
+| `event.kind` | The names listed above. |
+| `ticket.status` | `"todo"`, `"in_progress"`, `"finished"`, `"failed"`. |
+| `finish_reason()` | `"drained"`, `"cancelled"`, `"policy_violated(kind)"`. |
+| `data["kind"]` on `policy_violated` | `"turns"`, `"input_tokens"`, `"output_tokens"`, `"max_schema_retries"`, `"time"`. |
+| `data["kind"]` on a request or tool failure | `"rate_limited"`, `"connection_failed"`, `"tool_not_found"`, and their siblings. |
+| `data["reason"]` on compaction | `"proactive"`, `"reactive"`. |
+| `data["op"]` on `knowledge_used` | `"write"`, `"read"`, `"remove"`, `"list"`. |
+
+## Stats
+
+`tickets.stats()` reports what a run did. Every duration is in seconds.
+
+```python
+stats = tickets.stats()
+print(stats.requests(), stats.input_tokens(), stats.tickets_success_rate())
+
+for name, stat in stats.tool_stats().items():
+    print(name, stat.calls, stat.error_rate())
+```
+
+| Method | Description |
+|--------|-------------|
+| `run_duration()` | Return the run's elapsed duration. |
+| `tickets_success_rate()` | Return `finished / (finished + failed)`. |
+| `input_tokens()` / `output_tokens()` | Return token totals across responses. |
+| `tool_stats()` | Return per-tool call and failure counts, broken down by failure kind. |
+| `file_stats()` | Return per-path open and failure counts for the files tools opened. |
+| `knowledge_stats()` | Return Knowledge-store usage: write, read, remove, list, and miss counts. |
+| `event_counts()` | Return per-event counts keyed by event name. |
+| `stats_for_label(label)` | Return a statistics slice scoped to one label. |
+| `to_dict()` | Return the same numbers as one dict, matching `stats.json`. |
+
+Also: `turns()`, `requests()`, `tool_calls()`, `errors()`, `tickets_created()`,
+`tickets_finished()`, `tickets_failed()`, `ticket_duration()`,
+`avg_ticket_duration()`, `work_duration()`, `avg_work_duration()`, and
+`usage_history(ticket_key)`.
+
 ## Development
 
 Build and install the bindings from source with maturin:
@@ -533,6 +634,14 @@ Build and install the bindings from source with maturin:
 ```bash
 make python        # maturin develop, from the repo root
 make python_test   # build, then run the pytest suite
+```
+
+`examples/divide_and_conquer.py` runs a full multi-agent workflow against a real
+provider: labelled tickets, a schema-validated result, a custom `@tool`, and the
+run statistics at the end.
+
+```bash
+python examples/divide_and_conquer.py 200 4 2
 ```
 
 See the [main README](../../README.md) for the project overview and

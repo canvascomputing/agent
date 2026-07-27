@@ -268,10 +268,15 @@ tickets.on_ticket(move |event, ticket| {
 | `cancel_on(trigger)` | End the run when another task finishes. |
 | `cancel_on_event(p)` | End the run when an event matches. |
 | `cancel_on_result(p)` | End the run when a finished result matches. |
+| `cancel_label(l)` | Call off one label's agents. |
 | `cancel_label_on_event(l, p)` | Call off one label's agents while the rest keep working. |
 | `create_ticket_on_result(make)` | Enqueue a follow-up ticket from a finished ticket. |
 | `on_ticket(h)` | Read a ticket as it starts, finishes, or fails. |
 | `wait_for_ticket(p)` | Wait for one matching ticket instead of draining the queue. |
+| `edit_messages_on_event(f)` | Rewrite a ticket's messages before its next request. |
+| `edit_messages(key, f)` | Rewrite one ticket's messages now. |
+
+An editor rewrites the messages in place. Keep each tool call paired with its result: the model rejects a conversation missing one half.
 
 See [`TicketSystem`](https://docs.rs/agentwerk/latest/agentwerk/agents/tickets/struct.TicketSystem.html).
 
@@ -298,8 +303,12 @@ for ticket in tickets.tickets() {
 | `results_for_label(l)` | Return every finished ticket carrying the label's result as JSON. |
 | `tickets()` | Return every ticket in creation order, with status, payload, and metadata. |
 | `find_ticket(predicate)` | Return the earliest ticket matching the predicate. |
+| `find_tickets(predicate)` | Return every ticket matching the predicate. |
+| `get_ticket(key)` | Return one ticket by key. |
+| `model_for_agent(name)` | Return the model that agent runs. |
+| `stats()` | Return the run statistics described under [Stats](#stats). |
 
-More query methods on [`TicketSystem`](https://docs.rs/agentwerk/latest/agentwerk/agents/tickets/struct.TicketSystem.html): `get_ticket`, `find_tickets`, `is_cancelled`, `model_for_agent`.
+More on [`TicketSystem`](https://docs.rs/agentwerk/latest/agentwerk/agents/tickets/struct.TicketSystem.html): `is_cancelled`, and `set_failed` to fail a ticket from outside the run.
 
 ### Inspecting tickets
 
@@ -408,7 +417,10 @@ Give agents access to tools. Each tool exposes an action the agent can choose to
 | **Tickets** | `FinishTool` | Write the result for the current ticket and mark it finished, optionally handing follow-up work to another agent. |
 | | `ManageTicketsTool` | Read the ticket queue and create or edit tickets. |
 | | `ReadTicketsTool` | Read the ticket queue. |
-| **Knowledge** | `ManageKnowledgeTool` | Write, read, remove, or list pages in the agent's knowledge store. Registered automatically on every agent. |
+| **Knowledge** | `ManageKnowledgeTool` | Write, read, remove, or list pages in a knowledge store. |
+| **Discovery** | `FindToolsTool` | Look up the tools held back until they are needed. |
+
+`FinishTool` and `ManageKnowledgeTool` are registered automatically on every agent. `knowledge(&store)` is the usual way to choose the store, since it also renders the store's index into the system prompt. Registering a tool replaces any tool already registered under the same name, so a later `tool(...)` wins over an automatic one.
 
 ### Bash
 
@@ -446,7 +458,7 @@ let greet = Tool::new("greet", "Say hello")
     .build();
 ```
 
-`.read_only(true)` allows the agent to run a tool concurrently with other read-only calls in the same turn.
+`.read_only(true)` allows the agent to run a tool concurrently with other read-only calls in the same turn. `.defer(true)` holds the tool back until the agent looks it up with `FindToolsTool`. `.paths(["path"])` names the input fields carrying a file path, so the files the tool opens show up in `Stats::file_stats`.
 
 ## Knowledge
 
@@ -467,6 +479,30 @@ let store = Knowledge::load("./.agentwerk")?.index_char_limit(24_000);
 let agent = Agent::new().knowledge(&store);
 ```
 
+Seed or inspect the store yourself through `pages()`:
+
+```rust
+use agentwerk::agents::knowledge::Page;
+
+store.pages().save(Page {
+    slug: "build-command".into(),
+    kind: String::new(),
+    description: "How the project is built.".into(),
+    content: "Run `make` to compile.".into(),
+    tags: vec!["build".into()],
+})?;
+
+let page = store.pages().load("build-command")?;
+store.pages().remove("build-command")?;
+```
+
+| Method | Description |
+|--------|-------------|
+| `index()` | Return the rendered index the agent sees. |
+| `index_char_limit(n)` | Limit the rendered index, in characters. |
+| `pages()` | Return the page collection for reading and writing pages. |
+| `clear()` | Remove every page from the store. |
+
 ## Sessions
 
 A `TicketSystem` writes every ticket, transcript, statistic, and lifecycle event to its working directory (default `./.agentwerk`). That directory is the session: stop the process, and `TicketSystem::load(dir)` reopens it from disk and continues from where it stopped.
@@ -486,11 +522,11 @@ Layout:
 ├── results.jsonl                         finished results (one per line)
 ├── tickets/
 │   └── TICKET-1/
-│       ├── ticket.json                   the ticket without its transcript (key, status, labels, timestamps, result)
+│       ├── ticket.json                   the ticket without its messages (key, status, labels, timestamps, result)
 │       ├── ticket.<ts>.json              the ticket saved at each compaction; the timestamp matches `replies.<ts>.jsonl`
-│       ├── replies.jsonl                 pre-compaction transcript
-│       ├── replies.<ts>.jsonl            post-compaction transcript
-│       └── outputs/<tool_use_id>.txt     full tool outputs spilled out of the transcript
+│       ├── replies.jsonl                 pre-compaction messages
+│       ├── replies.<ts>.jsonl            post-compaction messages
+│       └── outputs/<tool_use_id>.txt     full tool outputs spilled out of the messages
 └── knowledge/
     ├── pages/<slug>.md                   knowledge pages
     └── index.md                          knowledge index

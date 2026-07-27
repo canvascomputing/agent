@@ -1,7 +1,7 @@
 # CLAUDE.md
 
 > Keep these files up to date when the project structure or conventions change.
-> Update `README.md` when the public API changes.
+> Update `README.md` when the public API changes, and `crates/agentwerk-py/DIFFS.md` when the Python and Rust surfaces diverge.
 
 - agentwerk is a minimal Rust crate that gives any application agentic capabilities
 - It provides minimal set of features necessary for building agentic workflows

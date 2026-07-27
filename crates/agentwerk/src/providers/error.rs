@@ -159,6 +159,24 @@ pub enum RequestErrorKind {
     ProviderUnrecognized,
 }
 
+impl fmt::Display for RequestErrorKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            RequestErrorKind::AuthenticationFailed => "authentication_failed",
+            RequestErrorKind::PermissionDenied => "permission_denied",
+            RequestErrorKind::ModelNotFound => "model_not_found",
+            RequestErrorKind::ContextWindowExceeded => "context_window_exceeded",
+            RequestErrorKind::SafetyFilterTriggered => "safety_filter_triggered",
+            RequestErrorKind::RateLimited => "rate_limited",
+            RequestErrorKind::StatusUnclassified => "status_unclassified",
+            RequestErrorKind::ConnectionFailed => "connection_failed",
+            RequestErrorKind::StreamInterrupted => "stream_interrupted",
+            RequestErrorKind::ResponseMalformed => "response_malformed",
+            RequestErrorKind::ProviderUnrecognized => "provider_unrecognized",
+        })
+    }
+}
+
 /// Result alias for [`Provider`](super::Provider) calls.
 pub type ProviderResult<T> = std::result::Result<T, ProviderError>;
 

@@ -12,8 +12,10 @@ BUILTIN_FACTORIES = [
     aw.GlobTool,
     aw.ListDirectoryTool,
     aw.FetchUrlTool,
+    aw.FindToolsTool,
     aw.ReadTicketsTool,
     aw.ManageTicketsTool,
+    aw.FinishTool,
     aw.UnrestrictedBashTool,
 ]
 
@@ -36,10 +38,46 @@ def test_tool_decorator_records_name_doc_and_read_only():
     assert sample._agentwerk_name == "sample"
     assert sample._agentwerk_description == "Describe the sample."
     assert sample._agentwerk_read_only is True
+    assert sample._agentwerk_defer is False
+
+
+def test_tool_decorator_records_defer():
+    @aw.tool(defer=True)
+    def deep(query: str) -> str:
+        """Search deeply."""
+        return query
+
+    assert deep._agentwerk_defer is True
+
+
+def test_tool_decorator_records_path_fields():
+    @aw.tool(read_only=True, paths=["path"])
+    def cat(path: str) -> str:
+        """Read a file."""
+        return path
+
+    assert cat._agentwerk_paths == ["path"]
+    agent = aw.Agent()
+    assert agent.tool(cat) is agent
+
+
+def test_manage_knowledge_tool_binds_a_store(knowledge_dir):
+    store = aw.Knowledge.load(knowledge_dir)
+    assert isinstance(aw.ManageKnowledgeTool(store), aw.Tool)
+
+
+def test_tool_result_constructors_produce_a_tool_result():
+    for result in (
+        aw.ToolResult.success("done"),
+        aw.ToolResult.error("nope"),
+        aw.ToolResult.schema_error("bad input"),
+    ):
+        assert isinstance(result, aw.ToolResult)
 
 
 def test_agent_accepts_a_builtin_tool():
-    assert isinstance(aw.Agent().tool(aw.ReadFileTool()), aw.Agent)
+    agent = aw.Agent()
+    assert agent.tool(aw.ReadFileTool()) is agent
 
 
 def test_agent_accepts_a_decorated_function():
@@ -47,7 +85,13 @@ def test_agent_accepts_a_decorated_function():
     def noop(x: str) -> str:
         return x
 
-    assert isinstance(aw.Agent().tool(noop), aw.Agent)
+    agent = aw.Agent()
+    assert agent.tool(noop) is agent
+
+
+def test_agent_accepts_several_tools_at_once():
+    agent = aw.Agent()
+    assert agent.tools([aw.ReadFileTool(), aw.GrepTool()]) is agent
 
 
 def test_agent_rejects_a_non_tool_with_type_error():

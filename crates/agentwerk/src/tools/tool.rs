@@ -264,12 +264,13 @@ impl Default for ToolRegistry {
 }
 
 impl ToolRegistry {
+    /// Add `tool`, replacing any tool already registered under its name. A
+    /// provider rejects a request carrying the same tool name twice, so the
+    /// last registration of a name is the one that counts.
     pub(crate) fn register(&mut self, tool: impl ToolLike + 'static) {
-        self.tools.push(Arc::new(tool));
-    }
-
-    pub(crate) fn deregister(&mut self, name: &str) {
-        self.tools.retain(|t| t.name() != name);
+        let tool: Arc<dyn ToolLike> = Arc::new(tool);
+        self.tools.retain(|t| t.name() != tool.name());
+        self.tools.push(tool);
     }
 
     pub(crate) fn get(&self, name: &str) -> Option<Arc<dyn ToolLike>> {
@@ -444,6 +445,7 @@ pub struct ToolBuilder<H> {
     schema: Value,
     read_only: bool,
     defer: bool,
+    paths: Vec<String>,
     handler: H,
 }
 
@@ -478,6 +480,7 @@ pub struct Tool {
     schema: Value,
     read_only: bool,
     defer: bool,
+    paths: Vec<String>,
     handler: ToolHandler,
 }
 
@@ -492,6 +495,7 @@ impl Tool {
             schema: serde_json::json!({"type": "object", "properties": {}}),
             read_only: false,
             defer: false,
+            paths: Vec::new(),
             handler: (),
         }
     }
@@ -527,6 +531,18 @@ impl<H> ToolBuilder<H> {
         self.defer = defer;
         self
     }
+
+    /// Name the input fields holding a file path, so the files this tool opens
+    /// reach [`Stats::file_stats`](crate::Stats::file_stats). A field missing
+    /// from the input, or holding anything but a string, is skipped.
+    pub fn paths<I, S>(mut self, fields: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.paths = fields.into_iter().map(Into::into).collect();
+        self
+    }
 }
 
 impl ToolBuilder<()> {
@@ -544,6 +560,7 @@ impl ToolBuilder<()> {
             schema: self.schema,
             read_only: self.read_only,
             defer: self.defer,
+            paths: self.paths,
             handler: Box::new(move |v, c| Box::pin(f(v, c.clone()))),
         }
     }
@@ -558,6 +575,7 @@ impl ToolBuilder<ToolHandler> {
             schema: self.schema,
             read_only: self.read_only,
             defer: self.defer,
+            paths: self.paths,
             handler: self.handler,
         }
     }
@@ -582,6 +600,14 @@ impl ToolLike for Tool {
 
     fn should_defer(&self) -> bool {
         self.defer
+    }
+
+    fn opened_paths(&self, input: &Value) -> Vec<String> {
+        self.paths
+            .iter()
+            .filter_map(|field| input.get(field).and_then(|v| v.as_str()))
+            .map(str::to_string)
+            .collect()
     }
 
     fn call<'a>(
@@ -887,6 +913,28 @@ mod tests {
                 tool.name(),
             );
         }
+    }
+
+    #[test]
+    fn registering_a_name_twice_leaves_the_later_tool() {
+        let mut registry = ToolRegistry::default();
+        registry.register(MockTool::new("echo", true, "first"));
+        registry.register(MockTool::new("echo", true, "second"));
+
+        let definitions = registry.definitions();
+        assert_eq!(definitions.len(), 1);
+        assert_eq!(definitions[0].name, "echo");
+    }
+
+    #[test]
+    fn paths_reports_the_named_input_fields() {
+        let tool = Tool::new("cat", "Read a file.")
+            .paths(["path", "into"])
+            .handler(|_input, _ctx| async move { Ok(ToolResult::success("ok")) })
+            .build();
+
+        let input = serde_json::json!({"path": "src/lib.rs", "limit": 20});
+        assert_eq!(tool.opened_paths(&input), vec!["src/lib.rs".to_string()]);
     }
 
     /// Tiny mock used across registry tests.

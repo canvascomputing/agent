@@ -4,17 +4,29 @@ Where code lives and the rules that govern placement.
 
 ## Crates
 
-**Two crates: one library, one example set.**
+**Three crates: one library, one binding layer, one example set.**
 
 - `crates/agentwerk/` is the library.
+- `crates/agentwerk-py/` is the Python binding layer, described below.
 - `crates/use-cases/` holds runnable example binaries that depend on the library.
 - Nothing in `use-cases` is re-exported by the library.
+
+## The `agentwerk-py` crate
+
+**One file per bound concept, mirroring the library. Naming rules live in [style.md](style.md).**
+
+- `src/lib.rs` is the `#[pymodule]` and registers every class and function; `agent.rs`, `ticket.rs`, `ticket_system.rs`, `trajectory.rs`, `knowledge.rs`, `stats.rs`, `schema.rs`, `event.rs`, `providers.rs`, and `tools.rs` each bind the library module of the same name.
+- `src/convert.rs` holds the only JSON boundary: `py_to_value` and `value_to_py` over `pythonize`, plus `runtime_error`.
+- The compiled extension is `_agentwerk`; `python/agentwerk/__init__.py` re-exports it and holds the `@tool` decorator, the one piece of pure-Python logic. `__init__.pyi` declares the surface and MUST match the module, which `tests/test_parity.py` enforces.
+- `examples/` holds runnable Python scripts, the counterpart of `crates/use-cases/` on the Rust side.
+- `DIFFS.md` records every place the Python API and the Rust one do not line up. A divergence that is not in it is a bug in one of the two.
+- The crate is a workspace member but not a default member: `cargo build` and `cargo test` skip it because it links against a Python interpreter. Its commands live in [workflow.md](workflow.md).
 
 ## Top-level files
 
 **Each top-level source file is one concern the caller observes directly.**
 
-- `lib.rs` holds public re-exports only. The crate root lands the orchestration surface plus the types its own signatures hand to callers: `Agent`, `TicketSystem`, `Ticket`, `Status`, `Knowledge`, `Policies`, `Stats`, `Schema`, `Event`, `EventKind`, `FinishReason`. Extension types live in `tools::`; `default_logger` lives in `event::`. Callers reach into a sub-module when they need anything below the orchestration level.
+- `lib.rs` holds public re-exports only. The crate root lands the orchestration surface plus the types its own signatures hand to callers: `Agent`, `AgentBuilder`, `TicketSystem`, `Ticket`, `Status`, `Reply`, `Trajectory`, `Knowledge`, `Stats`, `Schema`, `Event`, `EventKind`, `FinishReason`. Extension types live in `tools::`; `default_logger` lives in `event::`. Callers reach into a sub-module when they need anything below the orchestration level.
 - `event.rs` defines `Event`, `EventKind`, `PolicyKind`, `FinishReason`, `ToolFailureKind`, `CompactReason`, and `default_logger`.
 - `persistence.rs` holds the `Persist` and `Append` traits, the log types (`Results`, `TicketEvents`), and the shared `write_atomic` / `append_line` / `latest_path` / `parse_filename_ts` / `output_path` helpers. Every persistable type and the results-log writer (in `tools/tickets`) route through it. Internal (`pub(crate)`); not re-exported from `lib.rs`.
 - The `agents/`, `prompts/`, `providers/`, `schemas/`, and `tools/` modules each own their domain. The `agents/` and `tools/` modules also re-export their headline types so `use agentwerk::agents::{Agent, TicketSystem}` and `use agentwerk::tools::BashTool` work without descending into leaf files.

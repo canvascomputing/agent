@@ -15,7 +15,7 @@ async def test_runs_a_single_task_to_a_result(live_agent):
     live_agent.task("Reply with exactly the word: pong")
     work = await live_agent.finish()
     assert work.last_result() is not None
-    assert work.finish_reason() == "Drained"
+    assert work.finish_reason() == "drained"
 
 
 async def test_invokes_a_builtin_tool(tmp_path):
@@ -33,25 +33,28 @@ async def test_invokes_a_builtin_tool(tmp_path):
     assert "THE-TOKEN-IS-42" in str(work.last_result())
 
 
-async def test_invokes_a_python_tool():
+async def test_invokes_a_python_tool_and_records_the_file_it_opened(tmp_path):
+    (tmp_path / "note.txt").write_text("THE-TOKEN-IS-42\n")
     calls = []
 
-    @aw.tool(read_only=True)
-    def echo(text: str) -> str:
-        """Return the text unchanged."""
-        calls.append(text)
-        return text
+    @aw.tool(read_only=True, paths=["path"])
+    def slurp(path: str) -> str:
+        """Return the contents of the file at `path`."""
+        calls.append(path)
+        return (tmp_path / path).read_text()
 
     agent = (
         aw.Agent()
         .from_env()
-        .role("Call the echo tool with the word 'ping', then finish.")
-        .tool(echo)
+        .role("Call the slurp tool on the given file, then finish.")
+        .tool(slurp)
         .build()
     )
-    agent.task("Echo the word ping using the tool.")
-    await agent.finish()
+    agent.task("Read note.txt with the slurp tool and report the token it contains.")
+    work = await agent.finish()
+
     assert calls, "the python tool was never invoked"
+    assert "note.txt" in work.stats().file_stats()
 
 
 async def test_runs_two_labeled_agents_with_events_and_chaining():
@@ -69,11 +72,11 @@ async def test_runs_two_labeled_agents_with_events_and_chaining():
 
     def chain(ticket):
         if ticket.has_label("a"):
-            return aw.Ticket("Reply beta").with_label("b")
+            return aw.Ticket("Reply beta", labels=["b"])
         return None
 
     system.create_ticket_on_result(chain)
-    system.ticket(aw.Ticket("Reply alpha").with_label("a"))
+    system.ticket(aw.Ticket("Reply alpha", labels=["a"]))
     await system.finish()
 
     assert len(system.results()) == 2
