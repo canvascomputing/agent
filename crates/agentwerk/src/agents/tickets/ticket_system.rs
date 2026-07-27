@@ -25,7 +25,7 @@ use super::super::policy::Policies;
 use super::super::r#loop::run_main_loop;
 use super::super::stats::Stats;
 use super::ticket::{Status, Ticket};
-use super::{now_millis, numeric_id, policy_violated_kind, Reply, Trajectory};
+use super::{now_millis, numeric_id, policy_violated_kind, Reply};
 
 type EventHandler = dyn Fn(Event) + Send + Sync;
 type MessageEditor = dyn Fn(&[Event], &mut Vec<Reply>) + Send + Sync;
@@ -399,8 +399,12 @@ impl TicketSystem {
     }
 
     /// Name of the model the currently bound agent named `agent_name`
-    /// runs. `None` when no such agent is bound.
-    fn model_for_agent(&self, agent_name: &str) -> Option<String> {
+    /// runs. `None` when no such agent is bound. Pairs with
+    /// [`Self::on_ticket`]: the event names the agent, this names its model,
+    /// and [`Trajectory::from_ticket`] wants both.
+    ///
+    /// [`Trajectory::from_ticket`]: super::Trajectory::from_ticket
+    pub fn model_for_agent(&self, agent_name: &str) -> Option<String> {
         self.agents
             .lock()
             .unwrap()
@@ -570,19 +574,25 @@ impl TicketSystem {
         })
     }
 
-    /// Save a ticket's transcript as `trajectories/<agent>-<key>.json` under
-    /// the system's output dir each time `predicate(&event)` returns true.
-    /// One more entry on the [`Self::on_event`] chain, like
-    /// [`Self::cancel_on_event`]. The write is observational: a failed write
-    /// is dropped, matching the ticket lifecycle log. Events with an empty
-    /// `ticket_key` (run lifecycle) name no ticket and are skipped.
-    pub fn save_trajectory_on_event<F>(&self, predicate: F) -> &Self
+    /// Observe a ticket at each of its lifecycle transitions: `TicketStarted`,
+    /// `TicketFinished`, `TicketFailed`. The handler receives the event plus
+    /// the ticket it names, already resolved, so it reads the result, labels,
+    /// and replies without a second lookup. One more entry on the
+    /// [`Self::on_event`] chain, like [`Self::cancel_on_event`].
+    ///
+    /// No other kind reaches the handler: resolving a ticket copies its
+    /// transcript, which on `TextChunkReceived` would cost once per streamed
+    /// chunk.
+    pub fn on_ticket<F>(&self, handler: F) -> &Self
     where
-        F: Fn(&Event) -> bool + Send + Sync + 'static,
+        F: Fn(&Event, &Ticket) + Send + Sync + 'static,
     {
         let supervisor = self.weak_self.clone();
         self.on_event(move |event| {
-            if !predicate(&event) {
+            if !matches!(
+                event.kind,
+                EventKind::TicketStarted | EventKind::TicketFinished | EventKind::TicketFailed
+            ) {
                 return;
             }
             let Some(system) = supervisor.upgrade() else {
@@ -591,9 +601,7 @@ impl TicketSystem {
             let Some(ticket) = system.get_ticket(&event.ticket_key) else {
                 return;
             };
-            let model = system.model_for_agent(&event.agent_name);
-            let _ = Trajectory::from_ticket(&event.agent_name, model.as_deref(), &ticket)
-                .save(&system.dir_value());
+            handler(&event, &ticket);
         })
     }
 
@@ -1425,32 +1433,76 @@ mod tests {
     }
 
     #[test]
-    fn save_trajectory_on_event_writes_on_matching_event() {
-        let (sys, tmp) = test_system();
-        sys.save_trajectory_on_event(|e| matches!(e.kind, EventKind::TicketFinished));
+    fn on_ticket_hands_the_handler_the_finished_ticket() {
+        let (sys, _tmp) = test_system();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let record = Arc::clone(&seen);
+        sys.on_ticket(move |event, ticket| {
+            if matches!(event.kind, EventKind::TicketFinished) {
+                record.lock().unwrap().push((
+                    event.agent_name.clone(),
+                    ticket.key.clone(),
+                    ticket.replies.len(),
+                    ticket.result.clone(),
+                ));
+            }
+        });
         sys.ticket(Ticket::new("scan").label("scan"));
         let key = sys.claim(|t| t.has_label("scan"), "analyst").unwrap();
         sys.add_reply(&key, Reply::user_text("hello"));
         sys.set_result(&key, serde_json::json!("done")).unwrap();
         sys.set_finished(&key, "analyst").unwrap();
 
-        let path = tmp
-            .path()
-            .join("trajectories")
-            .join(format!("analyst-{key}.json"));
-        assert!(path.exists());
-        let trajectory: Trajectory =
-            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-        assert_eq!(trajectory.key, format!("analyst-{key}"));
-        assert!(!trajectory.messages.is_empty());
+        // `replies` is `#[serde(skip)]`, so a transcript here proves the
+        // handler holds the in-memory ticket, not a disk round-trip.
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec![(
+                "analyst".to_string(),
+                key,
+                1,
+                Some(serde_json::json!("done"))
+            )]
+        );
     }
 
     #[test]
-    fn save_trajectory_on_event_skips_non_matching_events() {
-        let (sys, tmp) = test_system();
-        sys.save_trajectory_on_event(|e| matches!(e.kind, EventKind::TicketFinished));
-        sys.emit("KEY", "analyst", EventKind::TurnStarted);
-        assert!(!tmp.path().join("trajectories").exists());
+    fn on_ticket_skips_events_that_are_not_lifecycle_transitions() {
+        let (sys, _tmp) = test_system();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let record = Arc::clone(&seen);
+        sys.on_ticket(move |_, ticket| record.lock().unwrap().push(ticket.key.clone()));
+        sys.ticket(Ticket::new("scan").label("scan"));
+        let key = sys.claim(|t| t.has_label("scan"), "analyst").unwrap();
+        sys.emit(&key, "analyst", EventKind::TurnStarted);
+        assert!(seen.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn on_ticket_skips_events_that_name_no_ticket() {
+        let (sys, _tmp) = test_system();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let record = Arc::clone(&seen);
+        sys.on_ticket(move |_, ticket| record.lock().unwrap().push(ticket.key.clone()));
+        sys.emit("", "", EventKind::RunStarted);
+        assert!(seen.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn on_ticket_coexists_with_a_user_handler() {
+        let (sys, _tmp) = test_system();
+        let logged = Arc::new(Mutex::new(Vec::new()));
+        let log = Arc::clone(&logged);
+        sys.on_event(move |e| log.lock().unwrap().push(e.kind.name()));
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let record = Arc::clone(&seen);
+        sys.on_ticket(move |_, ticket| record.lock().unwrap().push(ticket.key.clone()));
+        sys.ticket(Ticket::new("scan").label("scan"));
+        let key = sys.claim(|t| t.has_label("scan"), "analyst").unwrap();
+        sys.emit(&key, "analyst", EventKind::TicketStarted);
+
+        assert_eq!(*seen.lock().unwrap(), vec![key]);
+        assert!(logged.lock().unwrap().contains(&"ticket_started"));
     }
 
     #[test]

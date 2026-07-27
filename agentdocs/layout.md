@@ -25,12 +25,13 @@ Where code lives and the rules that govern placement.
 
 - `agent.rs` holds the `Agent` builder and ticket-dispatch helpers; an `Agent` carries a `Weak<TicketSystem>` bound at `bind_agent` time.
 - `tickets/` holds the ticket value types and the orchestrator. `Reply` is the per-ticket transcript entry; `ReplyContent` mirrors `providers::ContentBlock` so the ticket surface stays free of provider types. Split by concern:
-  - `tickets/mod.rs`: re-exports `Author`, `Reply`, `ReplyContent`, `Status`, `Ticket`, `TicketError`, `TicketSystem`; hosts free helpers `policy_violated`, `policy_violated_kind`, `now_millis`, `numeric_id`.
+  - `tickets/mod.rs`: re-exports `Author`, `Reply`, `ReplyContent`, `Status`, `Ticket`, `TicketError`, `TicketSystem`, `Trajectory`; hosts free helpers `policy_violated`, `policy_violated_kind`, `now_millis`, `numeric_id`.
   - `tickets/ticket.rs`: `Ticket`, `Status`, the `Replies` transcript-log helper, and the `tickets/<key>/...` path helpers.
   - `tickets/reply.rs`: `Author`, `Reply`, `ReplyContent`, and their conversions to and from `providers::Message` / `ContentBlock`.
   - `tickets/error.rs`: `TicketError`.
   - `tickets/ticket_system.rs`: the `TicketSystem` struct, constructors, configuration, policy builders, ticket-creation API, agent binding, run lifecycle, results, and queries.
   - `tickets/store.rs`: the `impl TicketSystem` block for store mutations (`insert`, `claim`, `set_finished`, `summarize`, transition recording, etc.).
+  - `tickets/trajectory.rs`: `Trajectory`, a ticket's messages captured as a training example, its `trajectories/<key>.json` write, and the `.html` rendering written beside it.
 - `loop/` holds the multi-agent loop, split by state:
   - `loop/mod.rs`: module wiring and the `Step` enum naming each state of the per-ticket state machine.
   - `loop/main.rs`: `run_main_loop`, which spawns one tokio task per registered agent and joins them on shutdown.
