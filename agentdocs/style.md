@@ -143,8 +143,7 @@ Naming and comment rules, plus README structure. Skim the section matching what 
 
 - `on_<subject>(handler)` observes: the handler sees every `<subject>` and returns nothing, as in `on_event` and `on_ticket`.
 - `<action>_on_<trigger>(..)` reacts whenever `<trigger>` matches: `cancel_on_event`, `cancel_on_result`, `cancel_label_on_event`, `create_ticket_on_result`, `edit_replies_on_event`. The action may be more than one word, so `create_ticket_on_result` reads as `create_ticket` plus `on_result`.
-- A bare `<action>(..)` acts once, now: `cancel`, `cancel_label`, `edit_replies`. On a type that has both, the `_on_` infix is the only thing separating a standing rule from an immediate call, so it is never dropped for brevity.
-- The suffix is dropped where the type has nothing immediate to be confused with, or where the trigger names no choice. `AgentBuilder` only configures, and its directive exists solely for a failed turn, so `edit_directive` carries neither.
+- A bare `<action>(..)` acts once, now: `cancel`, `cancel_label`, `edit_replies`. The `_on_` infix is the only thing separating a standing rule from an immediate call, so it is never dropped for brevity, including on a type that holds only standing ones.
 - Scope crosses all three forms and lives in the prefix: `cancel*` ends the run, `cancel_label*` ends one label's pool and leaves the others running.
 - `<action>_on(value)` names no trigger, because the caller supplies the trigger whole instead of a condition over something agentwerk produces. `cancel_on` is the only one, and it is not renamed after a cancellation signal: `signal` already names the `AtomicBool` pair on `TicketSystem`.
 - A reaction exists for the trigger carrying what it needs, not for every trigger. `create_ticket_on_result` has no `_on_event` sibling and `edit_replies_on_event` has no `_on_result` sibling, because neither would have anything to act on.
@@ -153,7 +152,7 @@ Naming and comment rules, plus README structure. Skim the section matching what 
 
 **An editor is `edit_<noun>`. Its last parameter is the `&mut` value it rewrites; anything before it is read-only context.**
 
-- `edit_replies(key, FnOnce(&mut Vec<Reply>))`, `edit_replies_on_event(Fn(&[Event], &mut Vec<Reply>))`, `edit_directive(Fn(&str, &mut String))`.
+- `edit_replies(key, FnOnce(&mut Vec<Reply>))`, `edit_replies_on_event(Fn(&[Event], &mut Vec<Reply>))`, `edit_directive_on_failure(Fn(&str, &mut String))`.
 - A stored editor is typed through `agents::editor::Editor<C, T>`, never by restating the bound. The public method signature still spells out its own `impl Fn(..)`, so a caller reads the concrete shape.
 - The value arrives holding what agentwerk would otherwise have used, so an editor that writes nothing keeps the default. No editor returns `Option<T>`: there is nothing left to signal.
 - A hook that rewrites a value is named for that value, not for its trigger alone. Naming it `on_<trigger>` alone reads as an observer and hides what it changes.

@@ -161,16 +161,17 @@ impl PyAgent {
         }
         if let Some(editor) = &self.directive_editor {
             let editor = Python::attach(|py| editor.clone_ref(py));
-            builder = builder.edit_directive(move |detail: &str, directive: &mut String| {
-                Python::attach(|py| {
-                    let Ok(result) = editor.bind(py).call1((detail, directive.as_str())) else {
-                        return;
-                    };
-                    if let Ok(replacement) = result.extract::<String>() {
-                        *directive = replacement;
-                    }
-                })
-            });
+            builder =
+                builder.edit_directive_on_failure(move |detail: &str, directive: &mut String| {
+                    Python::attach(|py| {
+                        let Ok(result) = editor.bind(py).call1((detail, directive.as_str())) else {
+                            return;
+                        };
+                        if let Ok(replacement) = result.extract::<String>() {
+                            *directive = replacement;
+                        }
+                    })
+                });
         }
 
         Ok(builder.build())
@@ -344,7 +345,7 @@ impl PyAgent {
     /// accepted result. The editor receives the bare reason and the default
     /// directive, and returns the replacement, or `None` to keep the default.
     /// Called inline per failure, so keep it cheap.
-    fn edit_directive(
+    fn edit_directive_on_failure(
         mut slf: PyRefMut<'_, Self>,
         editor: Py<PyAny>,
     ) -> PyResult<PyRefMut<'_, Self>> {
