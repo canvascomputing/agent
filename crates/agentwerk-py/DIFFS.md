@@ -39,7 +39,7 @@ Seven rules the surface table below never repeats.
 | `AgentBuilder::tools(iter)` | `Agent.tools(tools)` |
 | `AgentBuilder::dir(p)` | `Agent.dir(dir)` |
 | `AgentBuilder::knowledge(store)` | `Agent.knowledge(store)` |
-| `AgentBuilder::edit_directive_on_failure(editor)` | `Agent.edit_directive_on_failure(editor)`: the editor returns the replacement, or `None` to keep the default, where Rust rewrites in place. |
+| `AgentBuilder::edit_directive(editor)` | `Agent.edit_directive(editor)`: the editor returns the replacement, or `None` to keep the default, where Rust rewrites in place. |
 | `AgentBuilder::build(self) -> Agent` | `Agent.build() -> Agent`: returns the same object, armed. Configuring after it, or building twice, raises. |
 | `Agent::ticket_system(sys)` | `Agent.ticket_system(system)` |
 | `Agent::task(task) -> String` | `Agent.task(task) -> str` |
