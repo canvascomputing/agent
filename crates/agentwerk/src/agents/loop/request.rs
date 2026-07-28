@@ -17,9 +17,7 @@ use super::Step;
 pub(super) async fn run(context: &mut TicketContext<'_>) -> Step {
     // Let registered editors rewrite or drop messages before the request
     // is assembled; the re-read below then projects the edited transcript.
-    context
-        .ticket_system
-        .run_reply_editors(&context.ticket_key);
+    context.ticket_system.run_reply_editors(&context.ticket_key);
 
     let Some(ticket) = context.ticket() else {
         return Step::NextTicket;

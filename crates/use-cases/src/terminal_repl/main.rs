@@ -450,7 +450,9 @@ fn print_event(
             );
             print_indented_detail(message, style);
         }
-        EventKind::RequestFailed { reason, message, .. } => {
+        EventKind::RequestFailed {
+            reason, message, ..
+        } => {
             break_stream();
             eprintln!("{}✗ request failed ({reason:?}){}", style.red, style.reset);
             print_indented_detail(message, style);

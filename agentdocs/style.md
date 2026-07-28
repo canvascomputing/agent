@@ -147,6 +147,14 @@ Naming and comment rules, plus README structure. Skim the section matching what 
 - `<action>_on(value)` names no trigger, because the caller supplies the trigger whole instead of a condition over something agentwerk produces. `cancel_on` is the only one, and it is not renamed after a cancellation signal: `signal` already names the `AtomicBool` pair on `TicketSystem`.
 - A reaction exists for the trigger carrying what it needs, not for every trigger. `create_ticket_on_result` has no `_on_event` sibling and `edit_replies_on_event` has no `_on_result` sibling, because neither would have anything to act on.
 
+## Editors
+
+**An editor is `edit_<noun>`. Its last parameter is the `&mut` value it rewrites; anything before it is read-only context.**
+
+- `edit_replies(key, FnOnce(&mut Vec<Reply>))`, `edit_replies_on_event(Fn(&[Event], &mut Vec<Reply>))`, `edit_directive_on_failure(Fn(&str, &mut String))`.
+- The value arrives holding what agentwerk would otherwise have used, so an editor that writes nothing keeps the default. No editor returns `Option<T>`: there is nothing left to signal.
+- A hook that rewrites a value is named for that value, not for its trigger alone. `on_failure` read as an observer and became `edit_directive_on_failure`.
+
 ## Python bindings
 
 **Every public Rust item has a Python counterpart of the same name. Four transforms are permitted; nothing else.**

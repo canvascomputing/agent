@@ -54,7 +54,7 @@ pub struct PyAgent {
     model: ModelSpec,
     tools: Vec<Arc<dyn ToolLike>>,
     knowledge: Option<Arc<Knowledge>>,
-    on_failure: Option<Py<PyAny>>,
+    directive_editor: Option<Py<PyAny>>,
     /// True when the agent came from `Agent.empty()`, which leaves the finish
     /// tool unregistered.
     empty: bool,
@@ -76,7 +76,7 @@ impl PyAgent {
             model: ModelSpec::Unset,
             tools: Vec::new(),
             knowledge: None,
-            on_failure: None,
+            directive_editor: None,
             empty,
             agent: None,
         }
@@ -159,17 +159,19 @@ impl PyAgent {
         for tool in &self.tools {
             builder = builder.tool(BoxedTool(Arc::clone(tool)));
         }
-        if let Some(hook) = &self.on_failure {
-            let hook = Python::attach(|py| hook.clone_ref(py));
-            builder = builder.on_failure(move |detail: &str| {
-                Python::attach(|py| {
-                    let result = hook.bind(py).call1((detail,)).ok()?;
-                    if result.is_none() {
-                        return None;
-                    }
-                    result.extract::<String>().ok()
-                })
-            });
+        if let Some(editor) = &self.directive_editor {
+            let editor = Python::attach(|py| editor.clone_ref(py));
+            builder =
+                builder.edit_directive_on_failure(move |detail: &str, directive: &mut String| {
+                    Python::attach(|py| {
+                        let Ok(result) = editor.bind(py).call1((detail, directive.as_str())) else {
+                            return;
+                        };
+                        if let Ok(replacement) = result.extract::<String>() {
+                            *directive = replacement;
+                        }
+                    })
+                });
         }
 
         Ok(builder.build())
@@ -340,12 +342,15 @@ impl PyAgent {
     }
 
     /// Rewrite the corrective directive injected when a turn ends without an
-    /// accepted result. The callback receives the default reason and returns
-    /// the replacement message, or `None` to keep the built-in directive.
+    /// accepted result. The editor receives the bare reason and the default
+    /// directive, and returns the replacement, or `None` to keep the default.
     /// Called inline per failure, so keep it cheap.
-    fn on_failure(mut slf: PyRefMut<'_, Self>, hook: Py<PyAny>) -> PyResult<PyRefMut<'_, Self>> {
+    fn edit_directive_on_failure(
+        mut slf: PyRefMut<'_, Self>,
+        editor: Py<PyAny>,
+    ) -> PyResult<PyRefMut<'_, Self>> {
         slf.ensure_unbuilt()?;
-        slf.on_failure = Some(hook);
+        slf.directive_editor = Some(editor);
         Ok(slf)
     }
 

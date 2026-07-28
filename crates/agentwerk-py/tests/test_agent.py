@@ -77,12 +77,12 @@ def test_from_env_without_provider_env_is_rejected(monkeypatch):
         aw.Agent().from_env().build()
 
 
-def test_on_failure_hook_is_accepted_and_builds():
+def test_directive_editor_is_accepted_and_builds():
     agent = (
         aw.Agent()
         .provider(aw.AnthropicProvider("test-key"))
         .model("claude-sonnet-4-20250514")
-        .on_failure(lambda detail: "replacement")
+        .edit_directive_on_failure(lambda detail, directive: "replacement")
         .build()
     )
     assert agent.task("go").startswith("TICKET-")

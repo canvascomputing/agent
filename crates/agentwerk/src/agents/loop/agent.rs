@@ -40,15 +40,14 @@ impl<'a> TicketContext<'a> {
         self.ticket_system.get_ticket(&self.ticket_key)
     }
 
-    /// The corrective directive to inject for `detail`: the agent's
-    /// `on_failure` hook if it returns a replacement, else the default.
+    /// The corrective directive to inject for `detail`: the built-in text,
+    /// passed through the agent's directive editor when one is installed.
     pub(super) fn failure_directive(&self, detail: &str) -> String {
-        if let Some(hook) = self.agent.on_failure() {
-            if let Some(text) = hook(detail) {
-                return text;
-            }
+        let mut directive = crate::prompts::retry_directive(detail);
+        if let Some(editor) = self.agent.directive_editor() {
+            editor(detail, &mut directive);
         }
-        crate::prompts::retry_directive(detail)
+        directive
     }
 
     pub(super) fn fail_with(&self, reason: RequestErrorKind, message: String) {
@@ -274,10 +273,10 @@ mod tests {
         assert_eq!(tickets.last_result(), Some(serde_json::json!("b-done")));
     }
 
-    // on_failure hook
+    // directive editor
 
     #[tokio::test]
-    async fn on_failure_hook_replaces_the_silence_directive() {
+    async fn directive_editor_replaces_the_silence_directive() {
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let provider = MockProvider::with_results(vec![
             Ok(text_response("just thinking, no tool call")),
@@ -294,7 +293,9 @@ mod tests {
                 .provider(provider.clone() as Arc<dyn Provider>)
                 .model("mock")
                 .role("test")
-                .on_failure(|_| Some("PLEASE CALL A TOOL NOW".into()))
+                .edit_directive_on_failure(|_, directive| {
+                    *directive = "PLEASE CALL A TOOL NOW".into()
+                })
                 .build(),
         );
 
@@ -316,7 +317,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn on_failure_hook_returning_none_keeps_the_default_directive() {
+    async fn directive_editor_that_writes_nothing_keeps_the_default_directive() {
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let provider = MockProvider::with_results(vec![
             Ok(text_response("just thinking, no tool call")),
@@ -333,7 +334,7 @@ mod tests {
                 .provider(provider.clone() as Arc<dyn Provider>)
                 .model("mock")
                 .role("test")
-                .on_failure(|_| None)
+                .edit_directive_on_failure(|_, _| {})
                 .build(),
         );
 

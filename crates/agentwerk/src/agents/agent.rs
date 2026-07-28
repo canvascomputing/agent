@@ -27,8 +27,9 @@ fn default_agent_name() -> String {
     format!("agent-{n}")
 }
 
-/// Caller hook that rewrites a corrective directive; see [`AgentBuilder::on_failure`].
-pub(crate) type FailureHook = dyn Fn(&str) -> Option<String> + Send + Sync;
+/// Caller hook that rewrites a corrective directive in place; see
+/// [`AgentBuilder::edit_directive_on_failure`].
+pub(crate) type DirectiveEditor = dyn Fn(&str, &mut String) + Send + Sync;
 
 // --- builder ---
 
@@ -47,7 +48,7 @@ pub struct AgentBuilder<P, M> {
     tools: ToolRegistry,
     dir: PathBuf,
     knowledge: Arc<Knowledge>,
-    on_failure: Option<Arc<FailureHook>>,
+    directive_editor: Option<Arc<DirectiveEditor>>,
 }
 
 impl AgentBuilder<(), ()> {
@@ -68,7 +69,7 @@ impl AgentBuilder<(), ()> {
             tools,
             dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             knowledge,
-            on_failure: None,
+            directive_editor: None,
         }
     }
 
@@ -93,7 +94,7 @@ impl AgentBuilder<(), ()> {
             tools,
             dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             knowledge,
-            on_failure: None,
+            directive_editor: None,
         }
     }
 
@@ -119,7 +120,7 @@ impl<M> AgentBuilder<(), M> {
             tools: self.tools,
             dir: self.dir,
             knowledge: self.knowledge,
-            on_failure: self.on_failure,
+            directive_editor: self.directive_editor,
         }
     }
 
@@ -146,7 +147,7 @@ impl<P> AgentBuilder<P, ()> {
             tools: self.tools,
             dir: self.dir,
             knowledge: self.knowledge,
-            on_failure: self.on_failure,
+            directive_editor: self.directive_editor,
         }
     }
 
@@ -257,15 +258,15 @@ impl<P, M> AgentBuilder<P, M> {
 
     /// Rewrite the corrective directive agentwerk injects when a turn
     /// ends without an accepted result: the model called no tool, or a
-    /// finish tool's output failed the ticket schema. The closure
-    /// receives the default reason and returns the replacement message,
-    /// or `None` to keep the built-in directive. Called inline per
-    /// failure, so keep it cheap.
-    pub fn on_failure(
+    /// finish tool's output failed the ticket schema. The editor reads
+    /// the bare reason and rewrites the directive in place, which arrives
+    /// holding the built-in text, so an editor that writes nothing keeps
+    /// the default. Called inline per failure, so keep it cheap.
+    pub fn edit_directive_on_failure(
         mut self,
-        hook: impl Fn(&str) -> Option<String> + Send + Sync + 'static,
+        editor: impl Fn(&str, &mut String) + Send + Sync + 'static,
     ) -> Self {
-        self.on_failure = Some(Arc::new(hook));
+        self.directive_editor = Some(Arc::new(editor));
         self
     }
 }
@@ -362,7 +363,7 @@ impl AgentBuilder<Arc<dyn Provider>, Model> {
             tools: self.tools,
             dir: self.dir,
             knowledge: self.knowledge,
-            on_failure: self.on_failure,
+            directive_editor: self.directive_editor,
         };
         let private = TicketSystem::new();
         private.bind_agent(&mut agent);
@@ -424,7 +425,7 @@ pub struct Agent {
     tools: ToolRegistry,
     dir: PathBuf,
     knowledge: Arc<Knowledge>,
-    on_failure: Option<Arc<FailureHook>>,
+    directive_editor: Option<Arc<DirectiveEditor>>,
 }
 
 impl Clone for Agent {
@@ -448,7 +449,7 @@ impl Clone for Agent {
             tools: self.tools.clone(),
             dir: self.dir.clone(),
             knowledge: Arc::clone(&self.knowledge),
-            on_failure: self.on_failure.clone(),
+            directive_editor: self.directive_editor.clone(),
         }
     }
 }
@@ -497,8 +498,8 @@ impl Agent {
         Arc::clone(&self.provider)
     }
 
-    pub(super) fn on_failure(&self) -> Option<&Arc<FailureHook>> {
-        self.on_failure.as_ref()
+    pub(super) fn directive_editor(&self) -> Option<&Arc<DirectiveEditor>> {
+        self.directive_editor.as_ref()
     }
 
     pub(super) fn knowledge(&self) -> Arc<Knowledge> {
