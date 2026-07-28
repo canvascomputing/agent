@@ -156,7 +156,7 @@ Seven rules the surface table below never repeats.
 | `Event { agent_name, ticket_key, kind }` | `Event.agent_name`, `.ticket_key`, `.kind` |
 | `EventKind` variant payload | `Event.data`: a dict of that variant's fields. |
 | `EventKind`, `FinishReason` | Strings. |
-| `CompactReason`, `PolicyKind`, `ToolFailureKind`, `KnowledgeOp` | Strings inside `Event.data`. |
+| `CompactReason`, `PolicyKind`, `ToolFailureKind`, `KnowledgeOp` | Strings inside `Event.data`, under the field's own name: `data["policy"]`, `data["reason"]`, `data["op"]`. |
 | `default_logger()` | `TicketSystem.on_event(handler)`, in both languages. |
 | **LLM providers** | |
 | `AnthropicProvider::new(key).base_url(url)` | `AnthropicProvider(api_key, base_url=..)` |

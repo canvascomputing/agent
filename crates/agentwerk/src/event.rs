@@ -200,7 +200,7 @@ pub enum EventKind {
     /// Provider request failed. The run is about to stop for this ticket.
     RequestFailed {
         model: String,
-        kind: RequestErrorKind,
+        reason: RequestErrorKind,
         message: String,
     },
     /// Provider request failed transiently; agentwerk is about to sleep
@@ -209,7 +209,7 @@ pub enum EventKind {
         model: String,
         attempt: u32,
         max_attempts: u32,
-        kind: RequestErrorKind,
+        reason: RequestErrorKind,
         message: String,
     },
     /// A streamed text chunk arrived from the provider.
@@ -231,7 +231,7 @@ pub enum EventKind {
     ToolCallFailed {
         tool_name: String,
         call_id: String,
-        kind: ToolFailureKind,
+        reason: ToolFailureKind,
         message: String,
     },
     /// A file-opening tool opened `path` successfully.
@@ -246,7 +246,7 @@ pub enum EventKind {
     /// the tool-call loop cannot see it.
     KnowledgeMissed,
     /// A configured policy was exceeded; the run is about to stop.
-    PolicyViolated { kind: PolicyKind, limit: u64 },
+    PolicyViolated { policy: PolicyKind, limit: u64 },
     /// A `done`-side schema validation failed; agentwerk is about to
     /// re-prompt the model with a corrective directive. `attempt` is
     /// 1-based.
@@ -350,10 +350,10 @@ pub fn default_logger() -> Arc<dyn Fn(Event) + Send + Sync> {
             EventKind::ToolCallFailed {
                 tool_name,
                 message,
-                kind,
+                reason,
                 ..
             } => {
-                eprintln!("[{agent}] {tool_name} failed ({kind}): {message}");
+                eprintln!("[{agent}] {tool_name} failed ({reason}): {message}");
             }
             EventKind::RequestFailed { message, .. } => {
                 eprintln!("[{agent}] request failed: {message}");
@@ -373,8 +373,8 @@ pub fn default_logger() -> Arc<dyn Fn(Event) + Send + Sync> {
             } => {
                 eprintln!("[{agent}] schema retry {attempt}/{max_attempts}: {message}");
             }
-            EventKind::PolicyViolated { kind, limit } => {
-                eprintln!("[{agent}] policy violated: {kind} limit={limit}");
+            EventKind::PolicyViolated { policy, limit } => {
+                eprintln!("[{agent}] policy violated: {policy} limit={limit}");
             }
             EventKind::CompactionStarted { reason, total } => {
                 eprintln!("[{agent}] compacting context ({reason}): {total} chunks");
@@ -436,14 +436,14 @@ mod tests {
             },
             EventKind::RequestFailed {
                 model: "m".into(),
-                kind: RequestErrorKind::ConnectionFailed,
+                reason: RequestErrorKind::ConnectionFailed,
                 message: "timeout".into(),
             },
             EventKind::RequestRetried {
                 model: "m".into(),
                 attempt: 1,
                 max_attempts: 10,
-                kind: RequestErrorKind::ConnectionFailed,
+                reason: RequestErrorKind::ConnectionFailed,
                 message: "transient".into(),
             },
             EventKind::SchemaRetried {
@@ -467,13 +467,13 @@ mod tests {
             EventKind::ToolCallFailed {
                 tool_name: "bash".into(),
                 call_id: "c1".into(),
-                kind: ToolFailureKind::ToolNotFound,
+                reason: ToolFailureKind::ToolNotFound,
                 message: "not found".into(),
             },
             EventKind::ToolCallFailed {
                 tool_name: "manage_tickets_tool".into(),
                 call_id: "c2".into(),
-                kind: ToolFailureKind::SchemaValidationFailed,
+                reason: ToolFailureKind::SchemaValidationFailed,
                 message: "Schema validation failed".into(),
             },
             EventKind::FileOpenFinished {
@@ -487,15 +487,15 @@ mod tests {
             },
             EventKind::KnowledgeMissed,
             EventKind::PolicyViolated {
-                kind: PolicyKind::Turns,
+                policy: PolicyKind::Turns,
                 limit: 10,
             },
             EventKind::PolicyViolated {
-                kind: PolicyKind::MaxSchemaRetries,
+                policy: PolicyKind::MaxSchemaRetries,
                 limit: 10,
             },
             EventKind::PolicyViolated {
-                kind: PolicyKind::Time,
+                policy: PolicyKind::Time,
                 limit: 60_000,
             },
             EventKind::CompactionStarted {

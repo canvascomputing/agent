@@ -421,8 +421,8 @@ impl Stats {
             }
             EventKind::ToolCallStarted { tool_name, .. } => self.record_tool_call_named(tool_name),
             EventKind::ToolCallFailed {
-                tool_name, kind, ..
-            } => self.record_tool_error_named(tool_name, *kind),
+                tool_name, reason, ..
+            } => self.record_tool_error_named(tool_name, *reason),
             EventKind::FileOpenFinished { path } => self.record_file_open(path),
             EventKind::FileOpenFailed { path } => self.record_file_open_error(path),
             EventKind::KnowledgeUsed { op } => self.record_knowledge(*op),
@@ -954,7 +954,7 @@ mod tests {
     fn provider_error() -> EventKind {
         EventKind::RequestFailed {
             model: "m".into(),
-            kind: crate::providers::RequestErrorKind::ConnectionFailed,
+            reason: crate::providers::RequestErrorKind::ConnectionFailed,
             message: "boom".into(),
         }
     }

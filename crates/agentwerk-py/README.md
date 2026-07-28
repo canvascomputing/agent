@@ -591,8 +591,8 @@ whether it names an event, a status, or a payload field:
 | `event.kind` | The names listed above. |
 | `ticket.status` | `"todo"`, `"in_progress"`, `"finished"`, `"failed"`. |
 | `finish_reason()` | `"drained"`, `"cancelled"`, `"policy_violated(kind)"`. |
-| `data["kind"]` on `policy_violated` | `"turns"`, `"input_tokens"`, `"output_tokens"`, `"max_schema_retries"`, `"time"`. |
-| `data["kind"]` on a request or tool failure | `"rate_limited"`, `"connection_failed"`, `"tool_not_found"`, and their siblings. |
+| `data["policy"]` on `policy_violated` | `"turns"`, `"input_tokens"`, `"output_tokens"`, `"max_schema_retries"`, `"time"`. |
+| `data["reason"]` on a request or tool failure | `"rate_limited"`, `"connection_failed"`, `"tool_not_found"`, and their siblings. |
 | `data["reason"]` on compaction | `"proactive"`, `"reactive"`. |
 | `data["op"]` on `knowledge_used` | `"write"`, `"read"`, `"remove"`, `"list"`. |
 

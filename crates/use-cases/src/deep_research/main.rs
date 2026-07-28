@@ -355,10 +355,10 @@ fn log_event(event: &Event) {
         EventKind::ToolCallFailed {
             tool_name,
             message,
-            kind,
+            reason,
             ..
         } => {
-            eprintln!("│  ✗ {tool_name} ({kind:?}): {message}");
+            eprintln!("│  ✗ {tool_name} ({reason:?}): {message}");
         }
         EventKind::SchemaRetried {
             attempt,
@@ -370,8 +370,8 @@ fn log_event(event: &Event) {
                 truncate(message, 110)
             );
         }
-        EventKind::PolicyViolated { kind, limit } => {
-            eprintln!("│  ⚠ policy: {kind:?} limit={limit}");
+        EventKind::PolicyViolated { policy, limit } => {
+            eprintln!("│  ⚠ policy: {policy:?} limit={limit}");
         }
         EventKind::TicketFinished => {
             eprintln!("└─ ✓ finished {key}");

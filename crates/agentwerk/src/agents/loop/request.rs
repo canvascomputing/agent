@@ -78,7 +78,7 @@ pub(super) async fn run(context: &mut TicketContext<'_>) -> Step {
                         model: request.model.clone(),
                         attempt,
                         max_attempts: retry.max_attempts(),
-                        kind: error.kind(),
+                        reason: error.kind(),
                         message: error.to_string(),
                     });
                     let interrupt = &context.stop_signal;
