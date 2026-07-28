@@ -155,6 +155,7 @@ Naming and comment rules, plus README structure. Skim the section matching what 
 - `edit_replies(key, FnOnce(&mut Vec<Reply>))`, `edit_replies_on_event(Fn(&[Event], &mut Vec<Reply>))`, `edit_directive_on_failure(Fn(&str, &mut String))`.
 - The value arrives holding what agentwerk would otherwise have used, so an editor that writes nothing keeps the default. No editor returns `Option<T>`: there is nothing left to signal.
 - A hook that rewrites a value is named for that value, not for its trigger alone. Naming it `on_<trigger>` alone reads as an observer and hides what it changes.
+- IMPORTANT: an observer composes, an editor is singular. Every handler on the `on_event` chain runs, and agentwerk stacks `cancel_on_event`, `on_ticket` and the rest there; installing a second editor replaces the first, like `dir` or `max_turns`. Two rewriters of one value would each see the other's output, so stack edits inside a single editor.
 
 ## Python bindings
 

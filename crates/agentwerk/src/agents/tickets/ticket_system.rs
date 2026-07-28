@@ -30,13 +30,13 @@ use super::{now_millis, numeric_id, policy_violated_kind, Reply};
 type EventHandler = dyn Fn(Event) + Send + Sync;
 type ReplyEditor = dyn Fn(&[Event], &mut Vec<Reply>) + Send + Sync;
 
-/// The message-editing state, always touched together: the registered
-/// editors and the per-ticket events buffered for them since each ticket's
+/// The reply-editing state, always touched together: the registered
+/// editor and the per-ticket events buffered for it since each ticket's
 /// previous request. An `on_event` handler installed with the first editor
-/// fills `pending`; `run_reply_editors` drains it.
+/// fills `pending`; `run_reply_editor` drains it.
 #[derive(Default)]
 pub(super) struct ReplyEditing {
-    pub(super) editors: Vec<Arc<ReplyEditor>>,
+    pub(super) editor: Option<Arc<ReplyEditor>>,
     pub(super) pending: HashMap<String, Vec<Event>>,
 }
 
@@ -133,9 +133,9 @@ pub struct TicketSystem {
     pub(crate) finish_reason: Mutex<Option<FinishReason>>,
     pub(crate) stats: Stats,
     pub(super) event_handlers: Mutex<Vec<Arc<EventHandler>>>,
-    /// Editors that rewrite a ticket's transcript before each provider
-    /// request, plus the per-ticket events buffered for them; see
-    /// `edit_replies_on_event`. Empty editors short-circuits buffering.
+    /// The editor that rewrites a ticket's transcript before each provider
+    /// request, plus the per-ticket events buffered for it; see
+    /// `edit_replies_on_event`. No editor short-circuits buffering.
     pub(super) reply_editing: Mutex<ReplyEditing>,
     pub(super) dir: Mutex<PathBuf>,
     pub(super) tickets_log_lock: Mutex<()>,
@@ -290,10 +290,15 @@ impl TicketSystem {
     /// span two replies, so drop both sides together or the provider
     /// rejects the unpaired block.
     ///
-    /// Editors run in registration order over the same transcript. The
-    /// editor should be event-gated: on a reactive-compaction retry the
-    /// request is reassembled, so an editor that ignores the (now empty)
-    /// event batch would act twice.
+    /// One editor is held at a time: installing a second replaces the
+    /// first, the way [`Self::dir`] or [`Self::max_turns`] replace. Two
+    /// rewriters of one transcript would each see the other's output, so
+    /// stack edits inside a single editor instead. Observers compose;
+    /// editors do not.
+    ///
+    /// The editor should be event-gated: on a reactive-compaction retry
+    /// the request is reassembled, so an editor that ignores the (now
+    /// empty) event batch would act twice.
     ///
     /// ```no_run
     /// use agentwerk::TicketSystem;
@@ -326,13 +331,11 @@ impl TicketSystem {
         &self,
         editor: impl Fn(&[Event], &mut Vec<Reply>) + Send + Sync + 'static,
     ) -> &Self {
-        let is_first_editor = {
+        let had_editor = {
             let mut editing = self.reply_editing.lock().unwrap();
-            let was_empty = editing.editors.is_empty();
-            editing.editors.push(Arc::new(editor));
-            was_empty
+            editing.editor.replace(Arc::new(editor)).is_some()
         };
-        if !is_first_editor {
+        if had_editor {
             return self;
         }
 
@@ -376,28 +379,23 @@ impl TicketSystem {
         }
     }
 
-    /// Apply the registered editors to `key`'s transcript, handing them
-    /// the events buffered since the ticket's previous request and
-    /// draining that batch. Called at the top of the request round-trip;
-    /// a no-op until an editor is registered or when no events are
-    /// pending.
-    pub(crate) fn run_reply_editors(&self, key: &str) {
-        let (editors, events) = {
+    /// Apply the registered editor to `key`'s transcript, handing it the
+    /// events buffered since the ticket's previous request and draining
+    /// that batch. Called at the top of the request round-trip; a no-op
+    /// until an editor is registered or when no events are pending.
+    pub(crate) fn run_reply_editor(&self, key: &str) {
+        let (editor, events) = {
             let mut editing = self.reply_editing.lock().unwrap();
-            if editing.editors.is_empty() {
+            let Some(editor) = editing.editor.clone() else {
                 return;
-            }
+            };
             let events = editing.pending.remove(key).unwrap_or_default();
-            (editing.editors.clone(), events)
+            (editor, events)
         };
         if events.is_empty() {
             return;
         }
-        self.edit_replies(key, |replies| {
-            for editor in &editors {
-                editor(&events, replies);
-            }
-        });
+        self.edit_replies(key, |replies| editor(&events, replies));
     }
 
     fn labels_for(&self, key: &str) -> Vec<String> {
@@ -1234,7 +1232,7 @@ mod tests {
                 message: "boom".into(),
             },
         );
-        sys.run_reply_editors(&key);
+        sys.run_reply_editor(&key);
 
         let events = seen.lock().unwrap();
         assert!(events
@@ -1260,15 +1258,17 @@ mod tests {
         });
 
         sys.emit(&key, "agent", EventKind::TurnStarted);
-        sys.run_reply_editors(&key);
+        sys.run_reply_editor(&key);
         // The batch is drained, so a second run has nothing to react to.
-        sys.run_reply_editors(&key);
+        sys.run_reply_editor(&key);
 
         assert_eq!(*runs.lock().unwrap(), 1);
     }
 
+    /// One editor at a time, the way `dir` or `max_turns` replace. Two
+    /// rewriters of one transcript would each see the other's output.
     #[test]
-    fn message_editors_run_in_registration_order() {
+    fn a_second_reply_editor_replaces_the_first() {
         use crate::agents::tickets::ReplyContent;
         let (sys, _tmp) = test_system();
         let key = sys.task("go");
@@ -1280,7 +1280,7 @@ mod tests {
         });
 
         sys.emit(&key, "agent", EventKind::TurnStarted);
-        sys.run_reply_editors(&key);
+        sys.run_reply_editor(&key);
 
         let texts: Vec<String> = sys
             .get_ticket(&key)
@@ -1292,11 +1292,13 @@ mod tests {
                 _ => None,
             })
             .collect();
-        let first = texts.iter().position(|t| t == "first");
-        let second = texts.iter().position(|t| t == "second");
         assert!(
-            first < second,
-            "editors must run in registration order: {texts:?}"
+            texts.contains(&"second".to_string()),
+            "the last editor installed must run: {texts:?}"
+        );
+        assert!(
+            !texts.contains(&"first".to_string()),
+            "the replaced editor must not run: {texts:?}"
         );
     }
 
@@ -1314,7 +1316,7 @@ mod tests {
 
         sys.emit(&a, "agent", EventKind::TurnStarted);
         sys.emit(&b, "agent", EventKind::TicketFailed);
-        sys.run_reply_editors(&a);
+        sys.run_reply_editor(&a);
 
         let events = seen.lock().unwrap();
         assert!(

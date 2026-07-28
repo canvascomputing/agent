@@ -260,7 +260,7 @@ tickets.on_ticket(capture)
 | `create_ticket_on_result(make)` | Enqueue a follow-up ticket from a finished ticket. |
 | `on_ticket(h)` | Read a ticket when it starts, finishes, or fails. |
 | `await wait_for_ticket(p)` | Wait for one matching ticket instead of draining the queue. |
-| `edit_replies_on_event(f)` | Rewrite a ticket's replies before its next request. |
+| `edit_replies_on_event(f)` | Rewrite a ticket's replies before its next request. One editor at a time: a second replaces it. |
 | `edit_replies(key, f)` | Rewrite one ticket's replies now. |
 
 An editor receives a list of `Reply` and returns the new list, or `None` to
