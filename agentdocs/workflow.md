@@ -15,7 +15,7 @@ Commands used to build, test, release, and run example agents.
 
 **Test layout and writing rules live in [testing.md](testing.md).**
 
-- `make test` runs `cargo test --workspace --lib` (every crate's inline `#[cfg(test)] mod tests`).
+- `make test` runs three passes: `--lib` (every crate's inline `#[cfg(test)] mod tests`), `--doc` (the examples in `///` comments), and `-p use-cases --bins` (the tests inside the use-case binaries). `--lib` alone reaches neither of the last two.
 - `make test_integration` runs the live-provider tests bundled by `tests/integration.rs`.
 
 ## Python bindings
