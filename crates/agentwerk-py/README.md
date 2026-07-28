@@ -60,7 +60,7 @@ asyncio.run(main())
 - [Sessions](#sessions): Working directory layout and how to reopen a run.
 - [Events](#events): Lifecycle events emitted while agents work.
 - [Stats](#stats): Statistics for tickets, tokens, and activity.
-- [Differences](DIFFS.md): Where this API and the Rust one do not line up.
+- [Differences](DIFFS.md): The Rust API and this one, side by side.
 
 ## Agents
 
