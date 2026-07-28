@@ -28,7 +28,7 @@ Where code lives and the rules that govern placement.
 
 - `lib.rs` holds public re-exports only. The crate root lands the orchestration surface plus the types its own signatures hand to callers: `Agent`, `AgentBuilder`, `TicketSystem`, `Ticket`, `Status`, `Reply`, `Trajectory`, `Knowledge`, `Stats`, `Schema`, `Event`, `EventKind`, `FinishReason`. Extension types live in `tools::`; `default_logger` lives in `event::`. Callers reach into a sub-module when they need anything below the orchestration level.
 - `event.rs` defines `Event`, `EventKind`, `PolicyKind`, `FinishReason`, `ToolFailureKind`, `CompactReason`, and `default_logger`.
-- `persistence.rs` holds the `Persist` and `Append` traits, the log types (`Results`, `TicketEvents`), and the shared `write_atomic` / `append_line` / `latest_path` / `parse_filename_ts` / `output_path` helpers. Every persistable type and the results-log writer (in `tools/tickets`) route through it. Internal (`pub(crate)`); not re-exported from `lib.rs`.
+- `persistence.rs` holds the `Persist` and `Append` traits, the log types (`Results`, `TicketEvents`), and the shared `write_atomic` / `append_line` / `output_path` helpers. Every persistable type and the results-log writer (in `tools/tickets`) route through it. Internal (`pub(crate)`); not re-exported from `lib.rs`.
 - The `agents/`, `prompts/`, `providers/`, `schemas/`, and `tools/` modules each own their domain. The `agents/` and `tools/` modules also re-export their headline types so `use agentwerk::agents::{Agent, TicketSystem}` and `use agentwerk::tools::BashTool` work without descending into leaf files.
 
 ## The `agents/` module

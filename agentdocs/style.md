@@ -228,7 +228,7 @@ Doc comment `///`:
 
 ```rust
 // GOOD: purpose and invariant
-/// A ticket. Caller-settable fields: `task`, `labels`, `schema`, `assignee`. System-managed fields are set at insertion time.
+/// A ticket. Caller-settable fields: `task`, `labels`, `schema`, `parent`. System-managed fields are set at insertion time.
 pub struct Ticket { ... }
 
 // BAD: restates the name
