@@ -310,9 +310,9 @@ impl PyTicketSystem {
     /// dicts, and returns the new list (or `None` to leave it unchanged).
     /// The editor must keep tool_use/tool_result pairs matched. The edit
     /// persists across resumption.
-    fn edit_messages_on_event<'py>(slf: PyRef<'py, Self>, editor: Py<PyAny>) -> PyRef<'py, Self> {
+    fn edit_replies_on_event<'py>(slf: PyRef<'py, Self>, editor: Py<PyAny>) -> PyRef<'py, Self> {
         slf.inner
-            .edit_messages_on_event(move |events: &[Event], messages: &mut Vec<Reply>| {
+            .edit_replies_on_event(move |events: &[Event], messages: &mut Vec<Reply>| {
                 Python::attach(|py| {
                     let outcome = (|| -> PyResult<Option<Vec<Reply>>> {
                         let py_events: Vec<_> = events.iter().map(to_py_event).collect();
@@ -337,8 +337,8 @@ impl PyTicketSystem {
     /// request. `editor(messages)` receives the transcript as a list of
     /// message dicts and returns the new list (or `None` to leave it
     /// unchanged). Persists the edit in place; a missing ticket is a no-op.
-    fn edit_messages<'py>(slf: PyRef<'py, Self>, key: &str, editor: Py<PyAny>) -> PyRef<'py, Self> {
-        slf.inner.edit_messages(key, |messages: &mut Vec<Reply>| {
+    fn edit_replies<'py>(slf: PyRef<'py, Self>, key: &str, editor: Py<PyAny>) -> PyRef<'py, Self> {
+        slf.inner.edit_replies(key, |messages: &mut Vec<Reply>| {
             Python::attach(|py| {
                 let outcome = (|| -> PyResult<Option<Vec<Reply>>> {
                     let py_messages = replies_to_py(py, messages)?;

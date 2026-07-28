@@ -72,8 +72,8 @@ Seven rules the surface table below never repeats.
 | `TicketSystem::cancel_label(label)` | `TicketSystem.cancel_label(label)` |
 | `TicketSystem::cancel_label_on_event(label, predicate)` | `TicketSystem.cancel_label_on_event(label, predicate)` |
 | `TicketSystem::create_ticket_on_result(make)` | `TicketSystem.create_ticket_on_result(make)` |
-| `TicketSystem::edit_messages(key, edit)` | `TicketSystem.edit_messages(key, editor)`: the editor returns the new list, or `None` to keep the old one, where Rust mutates in place. |
-| `TicketSystem::edit_messages_on_event(editor)` | `TicketSystem.edit_messages_on_event(editor)`: same return-instead-of-mutate shape. |
+| `TicketSystem::edit_replies(key, edit)` | `TicketSystem.edit_replies(key, editor)`: the editor returns the new list, or `None` to keep the old one, where Rust mutates in place. |
+| `TicketSystem::edit_replies_on_event(editor)` | `TicketSystem.edit_replies_on_event(editor)`: same return-instead-of-mutate shape. |
 | `TicketSystem::model_for_agent(name)` | `TicketSystem.model_for_agent(agent_name)` |
 | `TicketSystem::get_ticket(key)` | `TicketSystem.get_ticket(key)` |
 | `TicketSystem::tickets()` | `TicketSystem.tickets()` |

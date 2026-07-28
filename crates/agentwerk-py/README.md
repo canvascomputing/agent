@@ -260,8 +260,8 @@ tickets.on_ticket(capture)
 | `create_ticket_on_result(make)` | Enqueue a follow-up ticket from a finished ticket. |
 | `on_ticket(h)` | Read a ticket when it starts, finishes, or fails. |
 | `await wait_for_ticket(p)` | Wait for one matching ticket instead of draining the queue. |
-| `edit_messages_on_event(f)` | Rewrite a ticket's messages before its next request. |
-| `edit_messages(key, f)` | Rewrite one ticket's messages now. |
+| `edit_replies_on_event(f)` | Rewrite a ticket's replies before its next request. |
+| `edit_replies(key, f)` | Rewrite one ticket's replies now. |
 
 An editor receives the messages as a list of dicts and returns the new list, or
 `None` to leave them alone. Keep each tool call paired with its result: the

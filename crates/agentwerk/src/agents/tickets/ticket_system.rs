@@ -28,15 +28,15 @@ use super::ticket::{Status, Ticket};
 use super::{now_millis, numeric_id, policy_violated_kind, Reply};
 
 type EventHandler = dyn Fn(Event) + Send + Sync;
-type MessageEditor = dyn Fn(&[Event], &mut Vec<Reply>) + Send + Sync;
+type ReplyEditor = dyn Fn(&[Event], &mut Vec<Reply>) + Send + Sync;
 
 /// The message-editing state, always touched together: the registered
 /// editors and the per-ticket events buffered for them since each ticket's
 /// previous request. An `on_event` handler installed with the first editor
-/// fills `pending`; `run_message_editors` drains it.
+/// fills `pending`; `run_reply_editors` drains it.
 #[derive(Default)]
-pub(super) struct MessageEditing {
-    pub(super) editors: Vec<Arc<MessageEditor>>,
+pub(super) struct ReplyEditing {
+    pub(super) editors: Vec<Arc<ReplyEditor>>,
     pub(super) pending: HashMap<String, Vec<Event>>,
 }
 
@@ -135,8 +135,8 @@ pub struct TicketSystem {
     pub(super) event_handlers: Mutex<Vec<Arc<EventHandler>>>,
     /// Editors that rewrite a ticket's transcript before each provider
     /// request, plus the per-ticket events buffered for them; see
-    /// `edit_messages_on_event`. Empty editors short-circuits buffering.
-    pub(super) message_editing: Mutex<MessageEditing>,
+    /// `edit_replies_on_event`. Empty editors short-circuits buffering.
+    pub(super) reply_editing: Mutex<ReplyEditing>,
     pub(super) dir: Mutex<PathBuf>,
     pub(super) tickets_log_lock: Mutex<()>,
     pub(super) results_log_lock: Mutex<()>,
@@ -168,7 +168,7 @@ impl TicketSystem {
             finish_reason: Mutex::new(None),
             stats: Stats::new(),
             event_handlers: Mutex::new(Vec::new()),
-            message_editing: Mutex::new(MessageEditing::default()),
+            reply_editing: Mutex::new(ReplyEditing::default()),
             dir: Mutex::new(PathBuf::from(".agentwerk")),
             tickets_log_lock: Mutex::new(()),
             results_log_lock: Mutex::new(()),
@@ -240,7 +240,7 @@ impl TicketSystem {
             finish_reason: Mutex::new(None),
             stats,
             event_handlers: Mutex::new(Vec::new()),
-            message_editing: Mutex::new(MessageEditing::default()),
+            reply_editing: Mutex::new(ReplyEditing::default()),
             dir: Mutex::new(tickets_dir),
             tickets_log_lock: Mutex::new(()),
             results_log_lock: Mutex::new(()),
@@ -263,7 +263,7 @@ impl TicketSystem {
         self
     }
 
-    /// Register an editor that rewrites or drops a ticket's messages
+    /// Register an editor that rewrites or drops a ticket's replies
     /// before its next provider request. The editor receives the events
     /// emitted for that ticket since its previous request and a mutable
     /// view of its full transcript, and mutates the `Vec` in place: drop
@@ -290,7 +290,7 @@ impl TicketSystem {
     /// use agentwerk::agents::tickets::{Reply, ReplyContent};
     ///
     /// let tickets = TicketSystem::new();
-    /// tickets.edit_messages_on_event(|events, messages| {
+    /// tickets.edit_replies_on_event(|events, replies| {
     ///     let failed = events
     ///         .iter()
     ///         .any(|e| matches!(e.kind, EventKind::ToolCallFailed { .. }));
@@ -299,7 +299,7 @@ impl TicketSystem {
     ///     }
     ///     // Drop both sides of the failed exchange: the assistant's tool_use
     ///     // and the failed tool_result, so no unpaired block is left behind.
-    ///     messages.retain(|reply| {
+    ///     replies.retain(|reply| {
     ///         !reply.content.iter().any(|b| {
     ///             matches!(
     ///                 b,
@@ -308,15 +308,15 @@ impl TicketSystem {
     ///             )
     ///         })
     ///     });
-    ///     messages.push(Reply::user_text("That approach failed. Re-read the file first."));
+    ///     replies.push(Reply::user_text("That approach failed. Re-read the file first."));
     /// });
     /// ```
-    pub fn edit_messages_on_event(
+    pub fn edit_replies_on_event(
         &self,
         editor: impl Fn(&[Event], &mut Vec<Reply>) + Send + Sync + 'static,
     ) -> &Self {
         let is_first_editor = {
-            let mut editing = self.message_editing.lock().unwrap();
+            let mut editing = self.reply_editing.lock().unwrap();
             let was_empty = editing.editors.is_empty();
             editing.editors.push(Arc::new(editor));
             was_empty
@@ -340,7 +340,7 @@ impl TicketSystem {
                 return;
             };
             system
-                .message_editing
+                .reply_editing
                 .lock()
                 .unwrap()
                 .pending
@@ -370,9 +370,9 @@ impl TicketSystem {
     /// draining that batch. Called at the top of the request round-trip;
     /// a no-op until an editor is registered or when no events are
     /// pending.
-    pub(crate) fn run_message_editors(&self, key: &str) {
+    pub(crate) fn run_reply_editors(&self, key: &str) {
         let (editors, events) = {
-            let mut editing = self.message_editing.lock().unwrap();
+            let mut editing = self.reply_editing.lock().unwrap();
             if editing.editors.is_empty() {
                 return;
             }
@@ -382,7 +382,7 @@ impl TicketSystem {
         if events.is_empty() {
             return;
         }
-        self.edit_messages(key, |replies| {
+        self.edit_replies(key, |replies| {
             for editor in &editors {
                 editor(&events, replies);
             }
@@ -808,7 +808,7 @@ impl TicketSystem {
             .unwrap()
             .store(false, Ordering::Relaxed);
         self.cancelled_labels.lock().unwrap().clear();
-        self.message_editing.lock().unwrap().pending.clear();
+        self.reply_editing.lock().unwrap().pending.clear();
         self.finish_reason.lock().unwrap().take();
         let supervisor = self
             .weak_self
@@ -1201,7 +1201,7 @@ mod tests {
 
         let seen: Arc<Mutex<Vec<Event>>> = Arc::new(Mutex::new(Vec::new()));
         let recorder = Arc::clone(&seen);
-        sys.edit_messages_on_event(move |events, _messages| {
+        sys.edit_replies_on_event(move |events, _replies| {
             recorder.lock().unwrap().extend(events.iter().cloned());
         });
 
@@ -1223,7 +1223,7 @@ mod tests {
                 message: "boom".into(),
             },
         );
-        sys.run_message_editors(&key);
+        sys.run_reply_editors(&key);
 
         let events = seen.lock().unwrap();
         assert!(events
@@ -1244,14 +1244,14 @@ mod tests {
 
         let runs = Arc::new(Mutex::new(0u32));
         let counter = Arc::clone(&runs);
-        sys.edit_messages_on_event(move |_events, _messages| {
+        sys.edit_replies_on_event(move |_events, _replies| {
             *counter.lock().unwrap() += 1;
         });
 
         sys.emit(&key, "agent", EventKind::TurnStarted);
-        sys.run_message_editors(&key);
+        sys.run_reply_editors(&key);
         // The batch is drained, so a second run has nothing to react to.
-        sys.run_message_editors(&key);
+        sys.run_reply_editors(&key);
 
         assert_eq!(*runs.lock().unwrap(), 1);
     }
@@ -1261,15 +1261,15 @@ mod tests {
         use crate::agents::tickets::ReplyContent;
         let (sys, _tmp) = test_system();
         let key = sys.task("go");
-        sys.edit_messages_on_event(|_events, messages| {
-            messages.push(Reply::user_text("first"));
+        sys.edit_replies_on_event(|_events, replies| {
+            replies.push(Reply::user_text("first"));
         });
-        sys.edit_messages_on_event(|_events, messages| {
-            messages.push(Reply::user_text("second"));
+        sys.edit_replies_on_event(|_events, replies| {
+            replies.push(Reply::user_text("second"));
         });
 
         sys.emit(&key, "agent", EventKind::TurnStarted);
-        sys.run_message_editors(&key);
+        sys.run_reply_editors(&key);
 
         let texts: Vec<String> = sys
             .get_ticket(&key)
@@ -1297,13 +1297,13 @@ mod tests {
 
         let seen: Arc<Mutex<Vec<Event>>> = Arc::new(Mutex::new(Vec::new()));
         let recorder = Arc::clone(&seen);
-        sys.edit_messages_on_event(move |events, _messages| {
+        sys.edit_replies_on_event(move |events, _replies| {
             recorder.lock().unwrap().extend(events.iter().cloned());
         });
 
         sys.emit(&a, "agent", EventKind::TurnStarted);
         sys.emit(&b, "agent", EventKind::TicketFailed);
-        sys.run_message_editors(&a);
+        sys.run_reply_editors(&a);
 
         let events = seen.lock().unwrap();
         assert!(
@@ -1316,15 +1316,15 @@ mod tests {
     }
 
     #[test]
-    fn edit_messages_edits_the_transcript_on_demand() {
+    fn edit_replies_edits_the_transcript_on_demand() {
         use crate::agents::tickets::ReplyContent;
         let (sys, _tmp) = test_system();
         let key = sys.task("go");
         sys.add_reply(&key, Reply::user_text("keep me"));
         sys.add_reply(&key, Reply::user_text("drop me"));
 
-        sys.edit_messages(&key, |messages| {
-            messages.retain(|reply| {
+        sys.edit_replies(&key, |replies| {
+            replies.retain(|reply| {
                 !matches!(reply.content.first(), Some(ReplyContent::Text(t)) if t == "drop me")
             });
         });

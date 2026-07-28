@@ -13,7 +13,7 @@
 //! `/bible [N]` injects N repetitions of Genesis (KJV) as a reply to
 //! drive context compaction (default N=1, ~52k tokens per repetition).
 //! `/scrub <word>` redacts that word from the transcript in place (via
-//! `edit_messages`) with no model turn; the word is gone on disk too.
+//! `edit_replies`) with no model turn; the word is gone on disk too.
 //! Ctrl-C at the prompt exits with code 130; Ctrl-D exits with
 //! code 0; Ctrl-C during a turn cancels that turn (a second Ctrl-C
 //! while the cancel is still draining force-quits with exit code 130).
@@ -230,7 +230,7 @@ async fn main() {
                     eprintln!("{}usage: /scrub <word>{}", style.dim, style.reset);
                 }
                 Some(k) => {
-                    tickets.edit_messages(k, move |messages| redact(messages, &word));
+                    tickets.edit_replies(k, move |messages| redact(messages, &word));
                     eprintln!("{}scrubbed{}", style.dim, style.reset);
                 }
                 None => eprintln!("{}no active chat{}", style.dim, style.reset),
