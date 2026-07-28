@@ -236,7 +236,7 @@ impl TicketSystem {
         }
         // The ticket will never request again, so drop any events buffered
         // for its message editors instead of leaking them for the run.
-        self.message_editing.lock().unwrap().pending.remove(key);
+        self.reply_editing.lock().unwrap().pending.remove(key);
         Ok(())
     }
 
@@ -360,12 +360,12 @@ impl TicketSystem {
 
     /// Apply `edit` to ticket `key`'s replies now, then rewrite them
     /// in place so the change survives resumption. The on-demand
-    /// sibling of [`Self::edit_messages_on_event`]; triggers no request.
-    /// No-op when the ticket is missing. The edit must keep the messages
+    /// sibling of [`Self::edit_replies_on_event`]; triggers no request.
+    /// No-op when the ticket is missing. The edit must keep the replies
     /// well-formed (matched tool_use/tool_result pairs); they are sent
     /// as-is. Unlike `summarize`, leaves the task and token accounting
     /// untouched.
-    pub fn edit_messages(&self, key: &str, edit: impl FnOnce(&mut Vec<Reply>)) -> &Self {
+    pub fn edit_replies(&self, key: &str, edit: impl FnOnce(&mut Vec<Reply>)) -> &Self {
         let ticket_copy = {
             let mut store = self.tickets.lock().unwrap();
             let Some(ticket) = store.get_mut(key) else {
@@ -1136,14 +1136,14 @@ mod tests {
     }
 
     #[test]
-    fn edit_messages_rewrites_replies_without_touching_task() {
+    fn edit_replies_rewrites_replies_without_touching_task() {
         use crate::agents::tickets::ReplyContent;
         let (sys, _tmp) = test_system();
         let key = sys.task("original task");
         sys.add_reply(&key, Reply::user_text("keep me"));
         sys.add_reply(&key, Reply::user_text("drop me"));
 
-        sys.edit_messages(&key, |replies| {
+        sys.edit_replies(&key, |replies| {
             replies.retain(|reply| {
                 !matches!(reply.content.first(), Some(ReplyContent::Text(t)) if t == "drop me")
             });
@@ -1168,13 +1168,13 @@ mod tests {
     }
 
     #[test]
-    fn edit_messages_that_changes_nothing_writes_nothing() {
+    fn edit_replies_that_changes_nothing_writes_nothing() {
         let (sys, _tmp) = test_system();
         let key = sys.task("go");
         sys.add_reply(&key, Reply::user_text("keep me"));
         let ticket_dir = sys.dir_value().join("tickets").join(&key);
 
-        sys.edit_messages(&key, |_replies| {}); // inspect, change nothing
+        sys.edit_replies(&key, |_replies| {}); // inspect, change nothing
 
         let rewrites = std::fs::read_dir(&ticket_dir)
             .unwrap()
@@ -1200,7 +1200,7 @@ mod tests {
         sys.add_reply(&key, Reply::user_text("drop me"));
         let ticket_dir = sys.dir_value().join("tickets").join(&key);
 
-        sys.edit_messages(&key, |replies| {
+        sys.edit_replies(&key, |replies| {
             replies.retain(|reply| {
                 !matches!(reply.content.first(), Some(ReplyContent::Text(t)) if t == "drop me")
             });
@@ -1232,7 +1232,7 @@ mod tests {
         sys.add_reply(&key, Reply::user_text("SECRET"));
         sys.summarize(&key, "summary".into()); // rewrites replies.jsonl in place
         sys.add_reply(&key, Reply::user_text("after"));
-        sys.edit_messages(&key, |replies| {
+        sys.edit_replies(&key, |replies| {
             replies.retain(|reply| {
                 !matches!(reply.content.first(), Some(ReplyContent::Text(t)) if t == "after")
             });

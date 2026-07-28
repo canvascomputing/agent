@@ -19,7 +19,7 @@ pub(super) async fn run(context: &mut TicketContext<'_>) -> Step {
     // is assembled; the re-read below then projects the edited transcript.
     context
         .ticket_system
-        .run_message_editors(&context.ticket_key);
+        .run_reply_editors(&context.ticket_key);
 
     let Some(ticket) = context.ticket() else {
         return Step::NextTicket;
@@ -496,7 +496,7 @@ mod tests {
         assert!(failures_in(&events).is_empty());
     }
 
-    // Message editing via edit_messages_on_event
+    // Message editing via edit_replies_on_event
 
     use std::sync::Arc;
 
@@ -534,7 +534,7 @@ mod tests {
             .max_schema_retries(10)
             .max_time(Duration::from_millis(500));
         if let Some(editor) = editor {
-            tickets.edit_messages_on_event(editor);
+            tickets.edit_replies_on_event(editor);
         }
         tickets.agent(
             Agent::new()

@@ -190,15 +190,15 @@ def test_cancel_label_on_event_chains(system):
     assert isinstance(configured, aw.TicketSystem)
 
 
-def test_edit_messages_on_event_chains(system):
-    configured = system.edit_messages_on_event(lambda events, messages: messages)
+def test_edit_replies_on_event_chains(system):
+    configured = system.edit_replies_on_event(lambda events, replies: replies)
     assert isinstance(configured, aw.TicketSystem)
 
 
-def test_edit_messages_on_an_unstarted_ticket_is_a_no_op(system):
+def test_edit_replies_on_an_unstarted_ticket_is_a_no_op(system):
     key = system.ticket(aw.Ticket("scan the corpus"))
 
-    system.edit_messages(key, lambda messages: messages)
+    system.edit_replies(key, lambda replies: replies)
 
     assert system.get_ticket(key).replies == []
 

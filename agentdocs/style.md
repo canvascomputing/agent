@@ -136,6 +136,17 @@ Naming and comment rules, plus README structure. Skim the section matching what 
 - Example: `set_extension()`, `get_extension()`.
 - Builder methods remain unprefixed.
 
+## Hooks
+
+**A hook's name says when it runs and how much it stops. Trigger and scope are separate axes, and both are spelled out.**
+
+- `on_<subject>(handler)` observes: the handler sees every `<subject>` and returns nothing, as in `on_event` and `on_ticket`.
+- `<action>_on_<trigger>(..)` reacts whenever `<trigger>` matches: `cancel_on_event`, `cancel_on_result`, `cancel_label_on_event`, `create_ticket_on_result`, `edit_replies_on_event`. The action may be more than one word, so `create_ticket_on_result` reads as `create_ticket` plus `on_result`.
+- A bare `<action>(..)` acts once, now: `cancel`, `cancel_label`, `edit_replies`. The `_on_` infix is the only thing separating a standing rule from an immediate call, so it is never dropped for brevity.
+- Scope crosses all three forms and lives in the prefix: `cancel*` ends the run, `cancel_label*` ends one label's pool and leaves the others running.
+- `<action>_on(value)` names no trigger, because the caller supplies the trigger whole instead of a condition over something agentwerk produces. `cancel_on` is the only one, and it is not renamed after a cancellation signal: `signal` already names the `AtomicBool` pair on `TicketSystem`.
+- A reaction exists for the trigger carrying what it needs, not for every trigger. `create_ticket_on_result` has no `_on_event` sibling and `edit_replies_on_event` has no `_on_result` sibling, because neither would have anything to act on.
+
 ## Python bindings
 
 **Every public Rust item has a Python counterpart of the same name. Four transforms are permitted; nothing else.**

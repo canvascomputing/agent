@@ -482,7 +482,7 @@ mod tests {
             .dir(results_dir.path().to_path_buf())
             .max_request_retries(0)
             .request_retry_delay(Duration::from_millis(1));
-        tickets.edit_messages_on_event(|_events, _messages| {});
+        tickets.edit_replies_on_event(|_events, _messages| {});
         tickets.agent(interactive_chatbot(&provider));
         tickets.task("hello");
         tickets.start();
