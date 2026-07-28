@@ -21,6 +21,7 @@ use crate::persistence::Persist;
 use crate::schemas::Schema;
 
 use super::super::agent::{Agent, TicketSystemRef};
+use super::super::editor::Editor;
 use super::super::policy::Policies;
 use super::super::r#loop::run_main_loop;
 use super::super::stats::Stats;
@@ -28,7 +29,11 @@ use super::ticket::{Status, Ticket};
 use super::{now_millis, numeric_id, policy_violated_kind, Reply};
 
 type EventHandler = dyn Fn(Event) + Send + Sync;
-type ReplyEditor = dyn Fn(&[Event], &mut Vec<Reply>) + Send + Sync;
+
+/// Caller hook that rewrites a ticket's replies in place, reading the
+/// events buffered since its previous request as context; see
+/// [`TicketSystem::edit_replies_on_event`].
+type ReplyEditor = Editor<[Event], Vec<Reply>>;
 
 /// The reply-editing state, always touched together: the registered
 /// editor and the per-ticket events buffered for it since each ticket's
