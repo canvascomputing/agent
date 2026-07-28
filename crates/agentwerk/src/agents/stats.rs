@@ -2,7 +2,7 @@
 //! exposes inherent read accessors. Callers reach it through
 //! `TicketSystem::stats()`.
 //!
-//! [`Stats::record_event`] is the single writer for event-derived stats:
+//! `Stats::record_event` is the single writer for event-derived stats:
 //! every [`EventKind`] is counted by its name automatically, so new events
 //! are covered without touching this file; only payload-bearing measures
 //! (token sums, per-subject maps) have explicit arms. Ticket lifecycle

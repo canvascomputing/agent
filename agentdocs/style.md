@@ -154,7 +154,7 @@ Naming and comment rules, plus README structure. Skim the section matching what 
 
 - `edit_replies(key, FnOnce(&mut Vec<Reply>))`, `edit_replies_on_event(Fn(&[Event], &mut Vec<Reply>))`, `edit_directive_on_failure(Fn(&str, &mut String))`.
 - The value arrives holding what agentwerk would otherwise have used, so an editor that writes nothing keeps the default. No editor returns `Option<T>`: there is nothing left to signal.
-- A hook that rewrites a value is named for that value, not for its trigger alone. `on_failure` read as an observer and became `edit_directive_on_failure`.
+- A hook that rewrites a value is named for that value, not for its trigger alone. Naming it `on_<trigger>` alone reads as an observer and hides what it changes.
 
 ## Python bindings
 
