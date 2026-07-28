@@ -4,9 +4,13 @@
 build: fmt
 	RUSTFLAGS="-D warnings" cargo build
 
-# Run unit tests (warnings are errors) — inline `#[cfg(test)] mod tests` blocks
+# Run unit tests (warnings are errors) — inline `#[cfg(test)] mod tests` blocks,
+# the doctests in `///` examples, and the tests inside the use-case binaries,
+# which `--lib` alone reaches none of.
 test:
 	RUSTFLAGS="-D warnings" cargo test --workspace --lib
+	RUSTFLAGS="-D warnings" cargo test --workspace --exclude agentwerk-py --doc
+	RUSTFLAGS="-D warnings" cargo test -p use-cases --bins
 
 # Run integration tests (requires a live LLM LITELLM_PROVIDER)
 # Usage: make test_integration              (run all)
