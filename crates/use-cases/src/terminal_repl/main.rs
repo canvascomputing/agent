@@ -450,30 +450,30 @@ fn print_event(
             );
             print_indented_detail(message, style);
         }
-        EventKind::RequestFailed { kind, message, .. } => {
+        EventKind::RequestFailed { reason, message, .. } => {
             break_stream();
-            eprintln!("{}✗ request failed ({kind:?}){}", style.red, style.reset);
+            eprintln!("{}✗ request failed ({reason:?}){}", style.red, style.reset);
             print_indented_detail(message, style);
         }
         EventKind::RequestRetried {
             attempt,
             max_attempts,
-            kind,
+            reason,
             message,
             ..
         } => {
             break_stream();
             eprintln!(
-                "{}↻ retry {attempt}/{max_attempts} ({kind:?}){}",
+                "{}↻ retry {attempt}/{max_attempts} ({reason:?}){}",
                 style.dim, style.reset,
             );
             print_indented_detail(message, style);
         }
         EventKind::SchemaRetried { .. } => {}
-        EventKind::PolicyViolated { kind, limit } => {
+        EventKind::PolicyViolated { policy, limit } => {
             break_stream();
             eprintln!(
-                "{}✗ policy {kind:?} (limit {limit}){}",
+                "{}✗ policy {policy:?} (limit {limit}){}",
                 style.red, style.reset,
             );
         }

@@ -91,7 +91,7 @@ pub(super) async fn run(context: &mut TicketContext<'_>, calls: Vec<ToolCall>) -
                 context.emit(EventKind::ToolCallFailed {
                     tool_name,
                     call_id: tool_use_id.clone(),
-                    kind: failure_kind,
+                    reason: failure_kind,
                     message: error.message(),
                 });
             }
@@ -128,7 +128,7 @@ pub(super) async fn run(context: &mut TicketContext<'_>, calls: Vec<ToolCall>) -
 
     if context.consecutive_schema_failures >= max_schema_retries {
         context.emit(EventKind::PolicyViolated {
-            kind: PolicyKind::MaxSchemaRetries,
+            policy: PolicyKind::MaxSchemaRetries,
             limit: u64::from(max_schema_retries),
         });
         let _ = context
@@ -262,7 +262,7 @@ mod tests {
             matches!(
                 &e.kind,
                 EventKind::PolicyViolated {
-                    kind: PolicyKind::MaxSchemaRetries,
+                    policy: PolicyKind::MaxSchemaRetries,
                     limit: 2,
                 },
             )
@@ -288,7 +288,7 @@ mod tests {
             events.iter().any(|e| matches!(
                 &e.kind,
                 EventKind::PolicyViolated {
-                    kind: PolicyKind::MaxSchemaRetries,
+                    policy: PolicyKind::MaxSchemaRetries,
                     limit: 3,
                 },
             )),
@@ -344,7 +344,7 @@ mod tests {
         assert!(events.iter().any(|e| matches!(
             &e.kind,
             EventKind::PolicyViolated {
-                kind: PolicyKind::MaxSchemaRetries,
+                policy: PolicyKind::MaxSchemaRetries,
                 limit: 2,
             },
         )));

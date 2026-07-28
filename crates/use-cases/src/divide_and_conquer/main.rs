@@ -313,8 +313,8 @@ fn build_event_handler(
                 red = style.red,
                 reset = style.reset,
             ),
-            EventKind::PolicyViolated { kind, limit } => eprintln!(
-                "{red}│    {agent} ✗ policy {kind:?} (limit {limit}){reset}",
+            EventKind::PolicyViolated { policy, limit } => eprintln!(
+                "{red}│    {agent} ✗ policy {policy:?} (limit {limit}){reset}",
                 red = style.red,
                 reset = style.reset,
             ),

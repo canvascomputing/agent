@@ -58,6 +58,8 @@ Naming and comment rules, plus README structure. Skim the section matching what 
 - Human-readable strings MUST be named `message: String`, never `error`.
 - Wrapped underlying errors MUST be named `source`, as in `FooFailed { source: io::Error }`.
 - Typed metadata uses descriptive names: `status`, `retryable`, `retry_delay`, `tool_name`, `retries`, `after_ms`.
+- A discriminant explaining why something happened is `reason`: `RunFinished`, `RequestFailed`, `RequestRetried`, `ToolCallFailed`, and the `Compaction*` variants all use it. `PolicyViolated` names its field `policy` instead, because `reason` next to `limit` reads as the limit's justification.
+- IMPORTANT: never name such a field `kind`. `Event` already carries `kind`, so `event.data["kind"]` and `event.kind` would be unrelated values one word apart. The type may still be named `PolicyKind` or `ToolFailureKind`; only the field is constrained.
 
 ## RAII guard fields
 

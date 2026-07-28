@@ -1219,7 +1219,7 @@ mod tests {
             EventKind::ToolCallFailed {
                 tool_name: "boom".into(),
                 call_id: "c1".into(),
-                kind: ToolFailureKind::ExecutionFailed,
+                reason: ToolFailureKind::ExecutionFailed,
                 message: "boom".into(),
             },
         );

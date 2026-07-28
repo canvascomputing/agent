@@ -61,17 +61,17 @@ fn payload(kind: &EventKind) -> Value {
         }
         RequestFailed {
             model,
-            kind,
+            reason,
             message,
-        } => json!({ "model": model, "kind": kind.to_string(), "message": message }),
+        } => json!({ "model": model, "reason": reason.to_string(), "message": message }),
         RequestRetried {
             model,
             attempt,
             max_attempts,
-            kind,
+            reason,
             message,
         } => {
-            json!({ "model": model, "attempt": attempt, "max_attempts": max_attempts, "kind": kind.to_string(), "message": message })
+            json!({ "model": model, "attempt": attempt, "max_attempts": max_attempts, "reason": reason.to_string(), "message": message })
         }
         TextChunkReceived { content } => json!({ "content": content }),
         ToolCallStarted {
@@ -87,14 +87,14 @@ fn payload(kind: &EventKind) -> Value {
         ToolCallFailed {
             tool_name,
             call_id,
-            kind,
+            reason,
             message,
         } => {
-            json!({ "tool_name": tool_name, "call_id": call_id, "kind": kind.to_string(), "message": message })
+            json!({ "tool_name": tool_name, "call_id": call_id, "reason": reason.to_string(), "message": message })
         }
         FileOpenFinished { path } | FileOpenFailed { path } => json!({ "path": path }),
         KnowledgeUsed { op } => json!({ "op": op.to_string() }),
-        PolicyViolated { kind, limit } => json!({ "kind": kind.to_string(), "limit": limit }),
+        PolicyViolated { policy, limit } => json!({ "policy": policy.to_string(), "limit": limit }),
         SchemaRetried {
             attempt,
             max_attempts,

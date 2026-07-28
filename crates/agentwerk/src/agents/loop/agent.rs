@@ -51,10 +51,10 @@ impl<'a> TicketContext<'a> {
         crate::prompts::retry_directive(detail)
     }
 
-    pub(super) fn fail_with(&self, kind: RequestErrorKind, message: String) {
+    pub(super) fn fail_with(&self, reason: RequestErrorKind, message: String) {
         self.emit(EventKind::RequestFailed {
             model: self.model.name.clone(),
-            kind,
+            reason,
             message,
         });
         let _ = self
@@ -99,11 +99,11 @@ fn should_stop(agent: &Agent, ticket_system: &TicketSystem) -> bool {
         return true;
     }
     let policies = ticket_system.policies();
-    if let Some((kind, limit)) = policy_violated_kind(&policies, &ticket_system.stats) {
+    if let Some((policy, limit)) = policy_violated_kind(&policies, &ticket_system.stats) {
         ticket_system.emit(
             "",
             agent.get_name(),
-            EventKind::PolicyViolated { kind, limit },
+            EventKind::PolicyViolated { policy, limit },
         );
         return true;
     }
@@ -205,7 +205,7 @@ fn silence_retry(context: &mut TicketContext<'_>) -> Step {
     context.consecutive_schema_failures = context.consecutive_schema_failures.saturating_add(1);
     if context.consecutive_schema_failures >= max {
         context.emit(EventKind::PolicyViolated {
-            kind: PolicyKind::MaxSchemaRetries,
+            policy: PolicyKind::MaxSchemaRetries,
             limit: u64::from(max),
         });
         let _ = context
@@ -699,7 +699,7 @@ mod tests {
             matches!(
                 &e.kind,
                 EventKind::PolicyViolated {
-                    kind: PolicyKind::MaxSchemaRetries,
+                    policy: PolicyKind::MaxSchemaRetries,
                     limit: 1,
                 },
             )
