@@ -507,7 +507,7 @@ fn window_usage_suffix(window: Option<u64>, last_input: &AtomicU64) -> String {
 fn redact(messages: &mut [Reply], word: &str) {
     for reply in messages.iter_mut() {
         for block in &mut reply.content {
-            if let ReplyContent::Text(text) = block {
+            if let ReplyContent::Text { text } = block {
                 *text = text.replace(word, "[redacted]");
             }
         }
@@ -643,7 +643,7 @@ mod tests {
                 thinking: "hmm".into(),
                 signature: "s".into(),
             },
-            ReplyContent::Text("Hi.".into()),
+            ReplyContent::Text { text: "Hi.".into() },
         ]);
         assert!(is_paused_for_input(&ticket));
     }
@@ -663,7 +663,7 @@ mod tests {
         let mut ticket = Ticket::new("chat");
         ticket.replies.push(Reply {
             author: Author::User,
-            content: vec![ReplyContent::Text("hey".into())],
+            content: vec![ReplyContent::Text { text: "hey".into() }],
             created_at: 0,
         });
         assert!(!is_paused_for_input(&ticket));
@@ -672,7 +672,7 @@ mod tests {
     fn user_text(text: &str) -> Reply {
         Reply {
             author: Author::User,
-            content: vec![ReplyContent::Text(text.into())],
+            content: vec![ReplyContent::Text { text: text.into() }],
             created_at: 0,
         }
     }
@@ -683,7 +683,9 @@ mod tests {
             user_text("my token is hunter2"),
             Reply {
                 author: Author::Assistant,
-                content: vec![ReplyContent::Text("noted, hunter2".into())],
+                content: vec![ReplyContent::Text {
+                    text: "noted, hunter2".into(),
+                }],
                 created_at: 0,
             },
         ];
@@ -692,7 +694,7 @@ mod tests {
 
         for reply in &messages {
             for block in &reply.content {
-                if let ReplyContent::Text(text) = block {
+                if let ReplyContent::Text { text } = block {
                     assert!(!text.contains("hunter2"), "leaked: {text}");
                     assert!(text.contains("[redacted]"));
                 }
@@ -704,6 +706,8 @@ mod tests {
     fn redact_leaves_text_without_the_word_untouched() {
         let mut messages = vec![user_text("just chatting")];
         redact(&mut messages, "hunter2");
-        assert!(matches!(&messages[0].content[0], ReplyContent::Text(t) if t == "just chatting"));
+        assert!(
+            matches!(&messages[0].content[0], ReplyContent::Text { text: t } if t == "just chatting")
+        );
     }
 }

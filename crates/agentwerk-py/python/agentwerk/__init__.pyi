@@ -115,7 +115,7 @@ class Ticket:
 class Trajectory:
     key: str
     model: Optional[str]
-    messages: list[dict]
+    replies: list[dict]
 
     @staticmethod
     def from_ticket(
