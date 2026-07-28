@@ -52,6 +52,7 @@ Where code lives and the rules that govern placement.
   - `loop/request.rs`: the provider round-trip with retry and backoff.
   - `loop/tool_call.rs`: tool dispatch, output offloading, and the tool-failure budget.
 - `knowledge.rs` holds `Knowledge`: the cross-ticket store, an OKF v0.1 bundle in `<dir>/knowledge/` backed by a `pages/` directory of concept files and a derived `index.md`. Pages are curated through the `pages()` handle (`save` / `load` / `remove`) plus `clear`; failures are typed as `KnowledgeError`.
+- `editor.rs` holds `Editor<C, T>`, the alias every editor hook is written in terms of. `DirectiveEditor` (in `agent.rs`) and `ReplyEditor` (in `tickets/ticket_system.rs`) are the two, so the family is one type rather than two restatements of the same bound.
 - `policy.rs` holds `Policies` and the limit checks the loop applies on each turn.
 - `stats.rs` holds `Stats` and the run-wide counters and timings.
 
