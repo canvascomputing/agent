@@ -293,9 +293,7 @@ mod tests {
                 .provider(provider.clone() as Arc<dyn Provider>)
                 .model("mock")
                 .role("test")
-                .edit_directive_on_failure(|_, directive| {
-                    *directive = "PLEASE CALL A TOOL NOW".into()
-                })
+                .edit_directive(|_, directive| *directive = "PLEASE CALL A TOOL NOW".into())
                 .build(),
         );
 
@@ -334,7 +332,7 @@ mod tests {
                 .provider(provider.clone() as Arc<dyn Provider>)
                 .model("mock")
                 .role("test")
-                .edit_directive_on_failure(|_, _| {})
+                .edit_directive(|_, _| {})
                 .build(),
         );
 
