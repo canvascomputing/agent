@@ -144,8 +144,8 @@ impl PyStats {
     }
 
     /// Total seconds tickets spent between creation and a terminal status.
-    fn ticket_duration(&self) -> f64 {
-        self.get().ticket_duration().as_secs_f64()
+    fn total_ticket_duration(&self) -> f64 {
+        self.get().total_ticket_duration().as_secs_f64()
     }
 
     fn avg_ticket_duration(&self) -> Option<f64> {
@@ -153,8 +153,8 @@ impl PyStats {
     }
 
     /// Total seconds tickets spent between being claimed and a terminal status.
-    fn work_duration(&self) -> f64 {
-        self.get().work_duration().as_secs_f64()
+    fn total_work_duration(&self) -> f64 {
+        self.get().total_work_duration().as_secs_f64()
     }
 
     fn avg_work_duration(&self) -> Option<f64> {

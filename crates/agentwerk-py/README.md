@@ -621,8 +621,8 @@ for name, stat in stats.tool_stats().items():
 | `to_dict()` | Return the same numbers as one dict, matching `stats.json`. |
 
 Also: `turns()`, `requests()`, `tool_calls()`, `errors()`, `tickets_created()`,
-`tickets_finished()`, `tickets_failed()`, `ticket_duration()`,
-`avg_ticket_duration()`, `work_duration()`, `avg_work_duration()`, and
+`tickets_finished()`, `tickets_failed()`, `total_ticket_duration()`,
+`avg_ticket_duration()`, `total_work_duration()`, `avg_work_duration()`, and
 `usage_history(ticket_key)`.
 
 ## Development

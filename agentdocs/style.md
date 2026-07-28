@@ -95,6 +95,15 @@ Naming and comment rules, plus README structure. Skim the section matching what 
 - The `_count` suffix is reserved for the rare case where the plural would clash with a sibling collection field on the same type.
 - The ban is on scalars: a map keyed by subject is named for what its values are, `<subject>_counts()` for a bare count (`event_counts()`) and `<subject>_stats()` for a struct (`tool_stats()`). Bare `<subject>s()` stays reserved for a collection of the subject itself, so the count map is not `Stats::events()`.
 
+## Optional returns
+
+**A value undefined over an empty population returns `Option`. A sum returns its zero.**
+
+- `Option`: `avg_ticket_duration()`, `tickets_success_rate()`, `ToolStat::error_rate()`, and `run_duration()`, which has no answer until a run starts.
+- Not `Option`: `total_ticket_duration()`, `turns()`, `requests()`. Zero is the honest answer for a sum over nothing.
+- One sentence covers averages, rates, and not-yet-started values, so per-accessor exceptions are not added.
+- A sum is named `total_<noun>`: the bare noun reads as one subject's value, not the population's.
+
 ## Persistence verbs
 
 **Two traits cover every read/write in the crate. The trait dictates the verb; the implementer's type name binds the file location.**
