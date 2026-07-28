@@ -543,9 +543,7 @@ Layout:
 ├── tickets/
 │   └── TICKET-1/
 │       ├── ticket.json                   the ticket without its messages (key, status, labels, timestamps, result)
-│       ├── ticket.<ts>.json              the ticket saved at each compaction; the timestamp matches `replies.<ts>.jsonl`
-│       ├── replies.jsonl                 pre-compaction messages
-│       ├── replies.<ts>.jsonl            post-compaction messages
+│       ├── replies.jsonl                 every message exchanged with the model, one per line
 │       └── outputs/<tool_use_id>.txt     full tool outputs spilled out of the messages
 └── knowledge/
     ├── pages/<slug>.md                   knowledge pages

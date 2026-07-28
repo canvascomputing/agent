@@ -7,7 +7,7 @@ The invariants that shape how code fits together. Layout says where code lives; 
 **A run has three stages: build the `Agent`, bind it to a `TicketSystem`, drive the system with `start` (long-lived) or `finish` (process a fixed batch and return).**
 
 - The `Agent` builder carries identity, prompt parts, provider/model, tools, working dir, event handler, and a `Weak<TicketSystem>` (dangling by default).
-- `TicketSystem::add(agent)` (or `agent.ticket_system(&shared)`) sets the system's `Weak<Self>` on the agent, drains any tickets the agent had queued in its private default system into the shared one, and pushes a clone of the agent onto the system's agents list.
+- `TicketSystem::agent(a)` (or `agent.ticket_system(&shared)`) sets the system's `Weak<Self>` on the agent, drains any tickets the agent had queued in its private default system into the shared one, and pushes a clone of the agent onto the system's agents list.
 - `TicketSystem::start` / `finish` spawn one tokio task per registered agent; each task upgrades its `Weak` once at the start and reads the shared store, policies, stats, and stop signal from the resulting `Arc<TicketSystem>`.
 - `tickets.task(value)` creates a new ticket and returns its key as `String`. `tickets.reply(&key, content)` appends a user-side text reply to an existing ticket: the agent loop's wait-for-input branch picks the reply up and drives the next turn on the same transcript. Use `task` to start a conversation, `reply` to continue it; this is how multi-turn chat is built on top of one ticket.
 
@@ -20,14 +20,14 @@ The invariants that shape how code fits together. Layout says where code lives; 
 - Multiple agents share one queue; a ticket is claimed exactly once.
 - Sub-systems are not nested: a single `TicketSystem` is the unit of orchestration.
 
-## Path A and Path B assignment
+## Assignment is labels, and a name is a label
 
-**Tickets reach agents either by direct assignment (Path A) or by label scope (Path B).**
+**Labels are the only assignment mechanism. An agent's own name counts as one of its labels, which is what makes direct assignment a special case of label scope rather than a second path.**
 
-- A ticket built with `Ticket::new(...).assign_to(name)` is born `Status::InProgress` and pinned to the named agent; only that agent can pick it up.
-- A ticket built with `.label(...)` is `Status::Todo` and picked up by any agent whose `label` scope intersects.
-- An agent with empty labels handles only tickets with no labels; that is the "default scope".
-- The system never auto-resolves a name against the registered-agent set: callers know which assignment path they want.
+- `Agent::handles_labels` answers three ways, in order: a ticket label equal to the agent's name matches; otherwise a labelled agent matches when its labels intersect the ticket's; otherwise an agent with no labels matches only tickets with no labels, which is the "default scope".
+- Direct assignment is therefore `Ticket::new(...).label(agent_name)`. The ticket is born `Status::Todo` like any other; nothing is born `InProgress`.
+- `TicketSystem::claim` pushes the claiming agent's name onto the ticket's labels. That is what pins a resumed ticket: the `resumable` predicate in `loop/agent.rs` requires a label equal to the agent's name, so no other agent picks up work already started.
+- The system never auto-resolves a name against the registered-agent set. A label naming an agent that was never registered simply never matches.
 
 ## Finishing is a tool call
 
@@ -41,7 +41,7 @@ The invariants that shape how code fits together. Layout says where code lives; 
 - `Ticket::schema(...)` attaches a `Schema` to the ticket; `finish` validates the result and the loop applies `max_schema_retries` on mismatch. A schema can also be registered as a per-label default via `TicketSystem::schema_for_label`, stamped onto a schemaless ticket at creation, so a result contract follows its label however the ticket was created (direct, labeled, or a handover child). A handover validates its `result` against the parent ticket's own schema, exactly as a plain finish does; it carries no schema for the child, which inherits one only through its label. A schema mismatch aborts before the child is inserted, so neither the parent's finish nor the child happens: the operation stays atomic.
 - `handover` and `task` are reserved argument names for `finish`. A ticket whose schema is an object has its fields passed as `finish`'s top-level arguments, so such a schema must not declare a `handover` or `task` property: those names are stripped as control keys before the result is recovered.
 - A successful finish appends one NDJSON record `{ticket, result}` to `<dir>/results.jsonl` (configured via `TicketSystem::dir(d)`; defaults to `./.agentwerk`) and attaches the same `result` value to the ticket. The value is surfaced through `Ticket::result()`; `last_result()` returns its serialized form for the most recent `Finished` ticket.
-- The system also appends one JSON line to `<dir>/tickets.jsonl` per lifecycle event (`created`, `started`, `done`, `failed`) and writes the full ticket state to `<dir>/tickets/<key>/ticket.<ts>.json`. The `created` event carries the optional `parent` key when set, giving the log a complete handover audit trail. The log is observational: errors are swallowed. The result payload stays in `results.jsonl`; `tickets.jsonl` carries only the transition.
+- The system also appends one JSON line to `<dir>/tickets.jsonl` per lifecycle event (`created`, `started`, `done`, `failed`) and writes the full ticket state to `<dir>/tickets/<key>/ticket.json`. The `created` event carries the optional `parent` key when set, giving the log a complete handover audit trail. The log is observational: errors are swallowed. The result payload stays in `results.jsonl`; `tickets.jsonl` carries only the transition.
 
 ## Knowledge is opt-in and shareable across agents
 
@@ -112,9 +112,9 @@ Two layers of state exist. The per-ticket transcript lives on `Ticket::replies`:
 
 - `Persist` defines `save(&self, dir) -> io::Result<()>` and `load(dir, &Self::Key) -> io::Result<Self>`. `Stats`, `Ticket`, `Replies`, `Page`, and `Trajectory` implement it; each owns its own path layout (`stats.json`, `tickets/<key>/ticket.json`, `tickets/<key>/replies.jsonl`, `pages/<slug>.md`, `trajectories/<key>.json`). A value type the caller stores itself reaches its file through an inherent method that delegates to its own impl, never by publishing the trait: `Trajectory::save(dir)` and `Knowledge::pages().save(page)` are the two. Service bootstrap (`TicketSystem::load`, `Knowledge::load`) uses the same `load` verb for its dir-to-`Arc<Self>` entry by convention.
 - `Append` defines `append(dir, &Self::Record) -> io::Result<()>`. `Results` writes `results.jsonl`; `TicketEvents` writes `tickets.jsonl`. The wrong type cannot reach the wrong file: each implementer's `append` body hardcodes the filename.
-- The per-ticket transcript is the one shape that does not fit either trait. `Replies` (in `agents::tickets`) is a free type with `append(dir, key, &Reply)` and `load(dir, key) -> Vec<Reply>`. It writes one JSON line per `Reply` to `tickets/<key>/replies.jsonl`; `load` reconstructs the in-memory transcript by picking the newest `(ticket.<ts>.json, replies.<ts>.jsonl)` compaction-pair (paired check: `ticket.<ts>.json` is the commit marker) as the base and merging running-log entries with strictly greater `created_at` on top. The pattern is per-key, so the single-fixed-filename `Append` trait does not generalize cleanly; promote to a trait only when a second per-key transcript appears.
-- One agent processes one ticket at a time (claim is atomic), so `add_reply` and the compaction-pair write for one key are sequential within a single loop task. No per-key lock is needed for either path.
-- Crate-internal helpers `write_atomic` (tmp+rename) and `append_line` (`O_APPEND` + newline) are the only places that touch the filesystem. They are `pub(crate)` so trait impls colocated with their types can call them; by convention nothing outside a `Persist` or `Append` impl reaches for them. Two documented exceptions: `TicketSystem::write_tool_output` writes single-shot flat files that don't fit either trait; `TicketSystem::summarize` (called from `agents::compaction::run`) invokes `write_atomic` twice via its `save_compaction` helper (replies file first, then the header file as commit marker) because the pair is a two-file atomic-ish operation that no single in-memory value owns.
+- The per-ticket transcript is the one shape that does not fit either trait. `Replies` (in `agents::tickets`) is a free type with `append(dir, key, &Reply)` and `load(dir, key) -> Vec<Reply>`. It writes one JSON line per `Reply` to `tickets/<key>/replies.jsonl`; `load` reads that one file back, one `Reply` per line. `Replies` also implements `Persist`, whose `save` overwrites the file wholesale so a dropped or redacted reply leaves nothing behind. The `append` half is per-key, so the single-fixed-filename `Append` trait does not generalize cleanly; promote to a trait only when a second per-key transcript appears.
+- One agent processes one ticket at a time (claim is atomic), so `add_reply` and the rewrite for one key are sequential within a single loop task. No per-key lock is needed for either path.
+- Crate-internal helpers `write_atomic` (tmp+rename) and `append_line` (`O_APPEND` + newline) are the only places that touch the filesystem. They are `pub(crate)` so trait impls colocated with their types can call them; by convention nothing outside a `Persist` or `Append` impl reaches for them. Two documented exceptions: `TicketSystem::write_tool_output` writes single-shot flat files that don't fit either trait; `TicketSystem::summarize` (called from `agents::compaction::run`) writes two files rather than one, calling `Replies::save` and then `save_ticket`, because the pair is a two-file operation that no single in-memory value owns.
 - Vocabulary is fixed: `save`, `load`, `append`. Bootstrap verbs other than `load` (e.g. `open`) are not used. Domain words (`checkpoint`, `snapshot`, `counter`, `persist`) do not appear in identifiers or test names.
 
 ## Policies are per-system, checked at turn boundaries
