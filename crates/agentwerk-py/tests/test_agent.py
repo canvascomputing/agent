@@ -82,7 +82,7 @@ def test_directive_editor_is_accepted_and_builds():
         aw.Agent()
         .provider(aw.AnthropicProvider("test-key"))
         .model("claude-sonnet-4-20250514")
-        .edit_directive(lambda detail, directive: "replacement")
+        .edit_directive_on_failure(lambda detail, directive: "replacement")
         .build()
     )
     assert agent.task("go").startswith("TICKET-")

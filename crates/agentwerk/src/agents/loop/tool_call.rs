@@ -230,7 +230,7 @@ mod tests {
                 .provider(provider.clone() as Arc<dyn Provider>)
                 .model("mock")
                 .role("test")
-                .edit_directive(|detail, directive| {
+                .edit_directive_on_failure(|detail, directive| {
                     *directive = format!("REDO NOW. {detail}\n{directive}")
                 })
                 .build(),

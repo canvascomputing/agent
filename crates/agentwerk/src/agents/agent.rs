@@ -30,7 +30,7 @@ fn default_agent_name() -> String {
 
 /// Caller hook that rewrites a corrective directive in place, reading the
 /// bare failure reason as context; see
-/// [`AgentBuilder::edit_directive`].
+/// [`AgentBuilder::edit_directive_on_failure`].
 pub(crate) type DirectiveEditor = Editor<str, String>;
 
 // --- builder ---
@@ -264,7 +264,7 @@ impl<P, M> AgentBuilder<P, M> {
     /// the bare reason and rewrites the directive in place, which arrives
     /// holding the built-in text, so an editor that writes nothing keeps
     /// the default. Called inline per failure, so keep it cheap.
-    pub fn edit_directive(
+    pub fn edit_directive_on_failure(
         mut self,
         editor: impl Fn(&str, &mut String) + Send + Sync + 'static,
     ) -> Self {
