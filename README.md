@@ -475,7 +475,8 @@ let alice = Agent::new().knowledge(&store);
 let bob = Agent::new().knowledge(&store);
 
 // Raise the rendered-index char budget (default 12 000):
-let store = Knowledge::load("./.agentwerk")?.index_char_limit(24_000);
+let store = Knowledge::load("./.agentwerk")?;
+store.index_char_limit(24_000);
 let agent = Agent::new().knowledge(&store);
 ```
 

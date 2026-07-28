@@ -162,10 +162,10 @@ impl Knowledge {
 
     /// Override the rendered-index char budget. Default is 12 000. Page
     /// bodies are never capped; only the bullet list injected into the
-    /// system prompt is bounded. Chain after `load` before binding the
-    /// store to any agent:
-    /// `Knowledge::load(dir)?.index_char_limit(12_000)`.
-    pub fn index_char_limit(self: Arc<Self>, n: usize) -> Arc<Self> {
+    /// system prompt is bounded. Call it on the loaded store before
+    /// binding the store to any agent:
+    /// `let store = Knowledge::load(dir)?; store.index_char_limit(12_000);`.
+    pub fn index_char_limit(&self, n: usize) -> &Self {
         self.index_char_limit.store(n, Ordering::Relaxed);
         self
     }

@@ -28,7 +28,7 @@ impl PyKnowledge {
 
     /// Cap the rendered index injected into the system prompt, in characters.
     fn index_char_limit<'py>(slf: PyRef<'py, Self>, n: usize) -> PyRef<'py, Self> {
-        Arc::clone(&slf.inner).index_char_limit(n);
+        slf.inner.index_char_limit(n);
         slf
     }
 
