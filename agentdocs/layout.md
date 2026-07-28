@@ -15,7 +15,7 @@ Where code lives and the rules that govern placement.
 
 **One file per bound concept, mirroring the library. Naming rules live in [style.md](style.md).**
 
-- `src/lib.rs` is the `#[pymodule]` and registers every class and function; `agent.rs`, `ticket.rs`, `ticket_system.rs`, `trajectory.rs`, `knowledge.rs`, `stats.rs`, `schema.rs`, `event.rs`, `providers.rs`, and `tools.rs` each bind the library module of the same name.
+- `src/lib.rs` is the `#[pymodule]` and registers every class and function; `agent.rs`, `ticket.rs`, `ticket_system.rs`, `reply.rs`, `trajectory.rs`, `knowledge.rs`, `stats.rs`, `schema.rs`, `event.rs`, `providers.rs`, and `tools.rs` each bind the library module of the same name. `reply.rs` also owns the two reply converters the editors on `TicketSystem` use.
 - `src/convert.rs` holds the only JSON boundary: `py_to_value` and `value_to_py` over `pythonize`, plus `runtime_error`.
 - The compiled extension is `_agentwerk`; `python/agentwerk/__init__.py` re-exports it and holds the `@tool` decorator, the one piece of pure-Python logic. `__init__.pyi` declares the surface and MUST match the module, which `tests/test_parity.py` enforces.
 - `examples/` holds runnable Python scripts, the counterpart of `crates/use-cases/` on the Rust side.

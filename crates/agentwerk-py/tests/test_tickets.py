@@ -203,6 +203,48 @@ def test_edit_replies_on_an_unstarted_ticket_is_a_no_op(system):
     assert system.get_ticket(key).replies == []
 
 
+def test_edit_replies_drops_a_reply_from_a_non_empty_list(system):
+    key = system.task("scan the corpus")
+    system.reply(key, "keep me")
+    system.reply(key, "drop me")
+
+    system.edit_replies(
+        key, lambda replies: [r for r in replies if r.content[0].data["text"] != "drop me"]
+    )
+
+    remaining = [r.content[0].data["text"] for r in system.get_ticket(key).replies]
+    assert remaining == ["keep me"]
+
+
+def test_edit_replies_appends_a_reply_built_in_python(system):
+    key = system.task("scan the corpus")
+    system.reply(key, "first")
+
+    system.edit_replies(key, lambda replies: replies + [aw.Reply.user_text("second")])
+
+    texts = [r.content[0].data["text"] for r in system.get_ticket(key).replies]
+    assert texts == ["first", "second"]
+
+
+def test_edit_replies_raises_when_the_editor_raises(system):
+    key = system.task("scan the corpus")
+    system.reply(key, "first")
+
+    def editor(replies):
+        raise ValueError("no good")
+
+    with pytest.raises(ValueError, match="no good"):
+        system.edit_replies(key, editor)
+
+
+def test_edit_replies_raises_when_the_editor_returns_dicts(system):
+    key = system.task("scan the corpus")
+    system.reply(key, "first")
+
+    with pytest.raises(RuntimeError, match="list of Reply objects"):
+        system.edit_replies(key, lambda replies: [{"author": "user", "content": []}])
+
+
 async def test_wait_for_ticket_returns_none_when_nothing_matches(system):
     system.cancel()
     assert await system.wait_for_ticket(lambda t: t.is_finished()) is None

@@ -15,6 +15,7 @@ use serde_json::Value;
 use crate::agent::PyAgent;
 use crate::convert::{py_to_value, runtime_error, value_to_py};
 use crate::event::to_py_event;
+use crate::reply::{py_to_replies, replies_to_py};
 use crate::schema::PySchema;
 use crate::stats::PyStats;
 use crate::ticket::PyTicket;
@@ -304,27 +305,29 @@ impl PyTicketSystem {
         slf
     }
 
-    /// Rewrite or drop a ticket's messages before its next request.
-    /// `editor(events, messages)` receives the events since the ticket's
-    /// previous request and the current transcript as a list of message
-    /// dicts, and returns the new list (or `None` to leave it unchanged).
-    /// The editor must keep tool_use/tool_result pairs matched. The edit
-    /// persists across resumption.
+    /// Rewrite or drop a ticket's replies before its next request.
+    /// `editor(events, replies)` receives the events since the ticket's
+    /// previous request and the current `Reply` list, and returns the new
+    /// list (or `None` to leave it unchanged). The editor must keep
+    /// tool_use/tool_result pairs matched. The edit persists across
+    /// resumption. An editor that raises prints its traceback and leaves the
+    /// replies untouched: this runs on an agent's worker thread, with no
+    /// Python frame to raise into.
     fn edit_replies_on_event<'py>(slf: PyRef<'py, Self>, editor: Py<PyAny>) -> PyRef<'py, Self> {
         slf.inner
-            .edit_replies_on_event(move |events: &[Event], messages: &mut Vec<Reply>| {
+            .edit_replies_on_event(move |events: &[Event], replies: &mut Vec<Reply>| {
                 Python::attach(|py| {
                     let outcome = (|| -> PyResult<Option<Vec<Reply>>> {
                         let py_events: Vec<_> = events.iter().map(to_py_event).collect();
-                        let py_messages = replies_to_py(py, messages)?;
-                        let returned = editor.bind(py).call1((py_events, py_messages))?;
+                        let returned =
+                            editor.bind(py).call1((py_events, replies_to_py(replies)))?;
                         if returned.is_none() {
                             return Ok(None);
                         }
                         Ok(Some(py_to_replies(&returned)?))
                     })();
                     match outcome {
-                        Ok(Some(edited)) => *messages = edited,
+                        Ok(Some(edited)) => *replies = edited,
                         Ok(None) => {}
                         Err(err) => err.print(py),
                     }
@@ -333,29 +336,38 @@ impl PyTicketSystem {
         slf
     }
 
-    /// Rewrite or drop a ticket's messages now, without triggering a
-    /// request. `editor(messages)` receives the transcript as a list of
-    /// message dicts and returns the new list (or `None` to leave it
-    /// unchanged). Persists the edit in place; a missing ticket is a no-op.
-    fn edit_replies<'py>(slf: PyRef<'py, Self>, key: &str, editor: Py<PyAny>) -> PyRef<'py, Self> {
-        slf.inner.edit_replies(key, |messages: &mut Vec<Reply>| {
+    /// Rewrite or drop a ticket's replies now, without triggering a
+    /// request. `editor(replies)` receives the current `Reply` list and
+    /// returns the new one (or `None` to leave it unchanged). Persists the
+    /// edit in place; a missing ticket is a no-op. An editor that raises,
+    /// or returns something other than a list of `Reply`, raises here: this
+    /// call has a Python frame to unwind into, so it does not guess.
+    fn edit_replies<'py>(
+        slf: PyRef<'py, Self>,
+        key: &str,
+        editor: Py<PyAny>,
+    ) -> PyResult<PyRef<'py, Self>> {
+        let mut failure: Option<PyErr> = None;
+        slf.inner.edit_replies(key, |replies: &mut Vec<Reply>| {
             Python::attach(|py| {
                 let outcome = (|| -> PyResult<Option<Vec<Reply>>> {
-                    let py_messages = replies_to_py(py, messages)?;
-                    let returned = editor.bind(py).call1((py_messages,))?;
+                    let returned = editor.bind(py).call1((replies_to_py(replies),))?;
                     if returned.is_none() {
                         return Ok(None);
                     }
                     Ok(Some(py_to_replies(&returned)?))
                 })();
                 match outcome {
-                    Ok(Some(edited)) => *messages = edited,
+                    Ok(Some(edited)) => *replies = edited,
                     Ok(None) => {}
-                    Err(err) => err.print(py),
+                    Err(err) => failure = Some(err),
                 }
             });
         });
-        slf
+        match failure {
+            Some(err) => Err(err),
+            None => Ok(slf),
+        }
     }
 
     fn start<'py>(slf: PyRef<'py, Self>) -> PyRef<'py, Self> {
@@ -421,19 +433,6 @@ impl PyTicketSystem {
             .map(|value| value_to_py(py, value))
             .collect()
     }
-}
-
-/// Render each reply as a Python dict for a message editor to inspect.
-fn replies_to_py<'py>(py: Python<'py>, replies: &[Reply]) -> PyResult<Vec<Bound<'py, PyAny>>> {
-    replies
-        .iter()
-        .map(|reply| value_to_py(py, &serde_json::to_value(reply).map_err(runtime_error)?))
-        .collect()
-}
-
-/// Read a message editor's returned list of dicts back into replies.
-fn py_to_replies(obj: &Bound<'_, PyAny>) -> PyResult<Vec<Reply>> {
-    serde_json::from_value(py_to_value(obj)?).map_err(runtime_error)
 }
 
 /// Call a Python predicate with a ticket, reading back its truthiness. A
