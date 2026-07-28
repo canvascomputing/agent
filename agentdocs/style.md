@@ -93,6 +93,7 @@ Naming and comment rules, plus README structure. Skim the section matching what 
 - Event payloads follow suit: `usage` on `RequestFinished` carries token counts, not a `token_count`.
 - Accessor methods mirror the field form: `Stats::requests()` returns the count of recorded requests.
 - The `_count` suffix is reserved for the rare case where the plural would clash with a sibling collection field on the same type.
+- The ban is on scalars: a map keyed by subject is named for what its values are, `<subject>_counts()` for a bare count (`event_counts()`) and `<subject>_stats()` for a struct (`tool_stats()`). Bare `<subject>s()` stays reserved for a collection of the subject itself, so the count map is not `Stats::events()`.
 
 ## Persistence verbs
 
