@@ -599,7 +599,7 @@ impl Stats {
     }
 
     /// Sum of finished tickets' creation→terminal spans.
-    pub fn ticket_duration(&self) -> Duration {
+    pub fn total_ticket_duration(&self) -> Duration {
         Duration::from_secs(self.total_ticket_duration.load(Ordering::Relaxed))
     }
 
@@ -619,7 +619,7 @@ impl Stats {
     /// Sum of finished tickets' started→terminal spans. With
     /// concurrent agents this aggregates work across all of them, so
     /// it can exceed `run_duration`.
-    pub fn work_duration(&self) -> Duration {
+    pub fn total_work_duration(&self) -> Duration {
         Duration::from_secs(self.total_work_duration.load(Ordering::Relaxed))
     }
 
@@ -766,7 +766,7 @@ impl Serialize for Stats {
             + knowledge.lists
             + knowledge.misses
             > 0;
-        let len = 17
+        let len = 15
             + usize::from(!events.is_empty())
             + usize::from(!labels.is_empty())
             + usize::from(!tools.is_empty())
@@ -804,8 +804,6 @@ impl Serialize for Stats {
             "avg_work_duration_secs",
             &self.avg_work_duration().map(|d| d.as_secs_f64()),
         )?;
-        st.serialize_field("ticket_duration_secs", &self.ticket_duration().as_secs())?;
-        st.serialize_field("work_duration_secs", &self.work_duration().as_secs())?;
         if !events.is_empty() {
             st.serialize_field("events", &events)?;
         }
@@ -973,8 +971,8 @@ mod tests {
         assert_eq!(s.tickets_created(), 0);
         assert_eq!(s.tickets_finished(), 0);
         assert_eq!(s.tickets_failed(), 0);
-        assert_eq!(s.ticket_duration(), Duration::ZERO);
-        assert_eq!(s.work_duration(), Duration::ZERO);
+        assert_eq!(s.total_ticket_duration(), Duration::ZERO);
+        assert_eq!(s.total_work_duration(), Duration::ZERO);
         assert!(s.run_duration().is_none());
         assert!(s.avg_ticket_duration().is_none());
         assert!(s.avg_work_duration().is_none());
@@ -1011,8 +1009,8 @@ mod tests {
         assert_eq!(s.tickets_created(), 2);
         assert_eq!(s.tickets_finished(), 1);
         assert_eq!(s.tickets_failed(), 1);
-        assert_eq!(s.ticket_duration(), Duration::from_secs(8));
-        assert_eq!(s.work_duration(), Duration::from_secs(6));
+        assert_eq!(s.total_ticket_duration(), Duration::from_secs(8));
+        assert_eq!(s.total_work_duration(), Duration::from_secs(6));
     }
 
     #[test]
@@ -1104,7 +1102,7 @@ mod tests {
     }
 
     #[test]
-    fn work_duration_can_exceed_run_duration_with_concurrency() {
+    fn total_work_duration_can_exceed_run_duration_with_concurrency() {
         // Two tickets, each 5s of work, finished in a 6s window —
         // models 2 agents working in parallel.
         let s = Stats::new();
@@ -1113,7 +1111,7 @@ mod tests {
         s.record_finished(Duration::from_secs(5), Duration::from_secs(5));
         s.mark_finished(7_000);
         assert_eq!(s.run_duration(), Some(Duration::from_secs(6)));
-        assert_eq!(s.work_duration(), Duration::from_secs(10));
+        assert_eq!(s.total_work_duration(), Duration::from_secs(10));
     }
 
     #[test]
@@ -1148,14 +1146,14 @@ mod tests {
         assert_eq!(restored.tickets_created(), 1);
         assert_eq!(restored.tickets_finished(), 1);
         assert_eq!(restored.tickets_failed(), 1);
-        assert_eq!(restored.ticket_duration(), Duration::from_secs(10));
-        assert_eq!(restored.work_duration(), Duration::from_secs(7));
+        assert_eq!(restored.total_ticket_duration(), Duration::from_secs(10));
+        assert_eq!(restored.total_work_duration(), Duration::from_secs(7));
 
         let restored_slice = restored.stats_for_label("scan");
         assert_eq!(restored_slice.turns(), 1);
         assert_eq!(restored_slice.input_tokens(), 40);
         assert_eq!(restored_slice.tickets_finished(), 1);
-        assert_eq!(restored_slice.ticket_duration(), Duration::from_secs(4));
+        assert_eq!(restored_slice.total_ticket_duration(), Duration::from_secs(4));
     }
 
     #[test]
@@ -1181,6 +1179,17 @@ mod tests {
         assert_eq!(value["total_work_duration_secs"], 5);
         assert_eq!(value["events"]["turn_started"], 1);
         assert_eq!(value["events"]["request_finished"], 1);
+    }
+
+    #[test]
+    fn stats_writes_each_duration_sum_once() {
+        let s = Stats::new();
+        s.record_created();
+        s.record_finished(Duration::from_secs(7), Duration::from_secs(5));
+
+        let value = serde_json::to_value(&s).unwrap();
+        assert!(value.get("ticket_duration_secs").is_none());
+        assert!(value.get("work_duration_secs").is_none());
     }
 
     #[test]

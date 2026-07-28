@@ -230,7 +230,7 @@ fn print_stats(tickets: &TicketSystem) {
         "  Duration : {:?}",
         stats.run_duration().unwrap_or_default()
     );
-    eprintln!("  Work time: {:?}", stats.work_duration());
+    eprintln!("  Work time: {:?}", stats.total_work_duration());
     eprintln!(
         "  Tickets  : {} done, {} failed ({:.0}%)",
         stats.tickets_finished(),

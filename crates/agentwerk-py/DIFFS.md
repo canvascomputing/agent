@@ -140,8 +140,8 @@ Seven rules the surface table below never repeats.
 | `Stats::tickets_created()`, `::tickets_finished()`, `::tickets_failed()` | Same names. |
 | `Stats::tickets_success_rate()` | `Stats.tickets_success_rate()` |
 | `Stats::run_duration()` | `Stats.run_duration()` |
-| `Stats::ticket_duration()`, `::avg_ticket_duration()` | Same names. |
-| `Stats::work_duration()`, `::avg_work_duration()` | Same names. |
+| `Stats::total_ticket_duration()`, `::avg_ticket_duration()` | Same names. |
+| `Stats::total_work_duration()`, `::avg_work_duration()` | Same names. |
 | `serde_json::to_value(&stats)` | `Stats.to_dict()`: Python cannot call `serde`, so reaching the `stats.json` shape needs a method. |
 | `ToolStat { calls, not_found, execution_failed, schema_failed }` | Same fields, plus the same `errors()` and `error_rate()` methods. |
 | `FileStat { opens, failed }` | Same fields. |
