@@ -26,9 +26,7 @@ pub enum Author {
 pub struct Reply {
     pub author: Author,
     pub content: Vec<ReplyContent>,
-    /// Millis since epoch. Defaulted on read so a hand-written reply
-    /// need not carry a timestamp it has no way to pick.
-    #[serde(default)]
+    /// Millis since epoch.
     pub created_at: u64,
 }
 
@@ -271,14 +269,5 @@ mod tests {
                 "{content:?} must serialize like the block it mirrors",
             );
         }
-    }
-
-    #[test]
-    fn reply_without_a_timestamp_deserializes() {
-        let reply: Reply =
-            serde_json::from_str(r#"{"author":"user","content":[{"type":"text","text":"hi"}]}"#)
-                .unwrap();
-        assert_eq!(reply.created_at, 0);
-        assert!(matches!(&reply.content[..], [ReplyContent::Text { text }] if text == "hi"));
     }
 }
