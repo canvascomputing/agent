@@ -1,79 +1,199 @@
-# Differences from the Rust API
+# The Rust API next to the Python one
 
-These bindings wrap the `agentwerk` crate, and almost every name carries over unchanged.
-This file lists the places where the two APIs do not line up, so a reader of the
-[Python README](README.md) or the [Rust one](../../README.md) can predict the other.
-`agentdocs/style.md` holds the rule that keeps this list short; the list is what the rule
-allows.
+## Type conversions
 
-## Everywhere
+Seven rules the surface table below never repeats.
 
-These apply across the whole surface, so the tables below do not repeat them.
+| Rust | Python |
+|------|--------|
+| `tickets.max_time(Duration::from_secs(30))` | `tickets.max_time(30.0)`: every `Duration` becomes float seconds, under the same parameter name. |
+| `ticket.status == Status::InProgress` | `ticket.status == "in_progress"`: every enum becomes its lowercase string. |
+| `Err(TicketError::TicketMissing { key })` | `RuntimeError("Ticket TICKET-1 not found")`: every error type collapses to one exception. |
+| `agent.knowledge(&store)` where `store: Arc<Knowledge>` | `agent.knowledge(store)`: every `Arc<T>` becomes a plain object, shared by passing it to several agents. |
+| `agent.finish().await` | `await agent.finish()`: every `async fn` becomes awaitable. |
+| `agent.task(MyTask { goal, url })` | `agent.task({"goal": .., "url": ..})`: an argument Rust takes by `Serialize` takes any JSON-serializable value. |
+| `work.last_result() -> Option<serde_json::Value>` | `work.last_result()`: a JSON return value becomes a dict, list, or scalar. |
 
-- A `Duration` becomes float seconds. The parameter keeps its name: `max_time(30.0)`,
-  `request_retry_delay(0.25)`, `Stats.run_duration()`.
-- An enum becomes its lowercase string: `ticket.status`, `event.kind`, `finish_reason()`,
-  and the `kind`, `reason`, and `op` fields of `event.data`.
-- Every error type collapses to `RuntimeError`. There is no typed exception surface.
-- An `Arc<T>` becomes a plain object. `Knowledge` and `TicketSystem` are shared by passing
-  the same object to several agents.
-- An `async fn` becomes awaitable: `await agent.finish()`.
-- A `Serialize` argument becomes any JSON-serializable Python value, and a `Deserialize`
-  return becomes a dict or list.
+## The full surface
 
-## Agent
-
-| Rust | Python | Why |
-|------|--------|-----|
-| `Agent::new() -> AgentBuilder` | `Agent()` | Python constructs with `__init__`, and PyO3 cannot return another class from it. |
-| `AgentBuilder<P, M>` | Folded into `Agent` | The type changes as the provider and model slots fill, which Python cannot hold across calls. |
-| `AgentBuilder::build(self) -> Agent` | `Agent.build() -> Agent` | Returns the same object, armed. Configuring after it, or building twice, raises. |
-| `Agent::empty()` | `Agent.empty()` | Same meaning. Returns an unbuilt agent rather than a builder. |
-
-Rust gets the one-way transition for free: `build(self)` consumes the builder. Python has
-to reject the second call, because the agent object owns its private ticket system and
-rebuilding would orphan the queue.
-
-## Tickets
-
-| Rust | Python | Why |
-|------|--------|-----|
-| `Ticket::new(t).labels(..).schema(..).parent(..)` | `Ticket(task, labels=.., schema=.., parent=..)` | A Python class cannot carry a `labels` method and a `labels` attribute. |
-| `Reply` | A dict | `ticket.replies` converts on access, so a callback that never asks never pays. |
-| `Status` | A string | See the enum rule above. `is_todo()` and its five siblings read better than comparing it. |
-
-## Tools
-
-| Rust | Python | Why |
-|------|--------|-----|
-| `Tool::new(..).schema(..).handler(..).build()` | The `@tool` decorator | A decorated function carries the name, description, and schema a `ToolBuilder` collects. |
-| `ToolLike` | A `@tool`-decorated callable | Python cannot implement a Rust trait. |
-| `BashTool::unrestricted()` | `UnrestrictedBashTool()` | A second constructor on one class becomes a second function. |
-| `ToolBuilder::paths([..])` | `@tool(paths=[..])` | Same for `read_only` and `defer`. |
-
-## Knowledge
-
-| Rust | Python | Why |
-|------|--------|-----|
-| `Page { slug, kind, description, content, tags }` | `Page(slug, description, content, kind=.., tags=..)` | A struct literal becomes a constructor, so the optional fields move last. |
-
-## Statistics
-
-| Rust | Python | Why |
-|------|--------|-----|
-| `serde_json::to_value(stats)` | `Stats.to_dict()` | Python cannot call `serde`, so reaching the `stats.json` shape needs a method. |
-
-## Not bound
-
-Rust items with no Python counterpart, and what to use instead.
-
-- `AgentBuilder`, `ToolBuilder`: folded into the class they build, as above.
-- `Status`, `EventKind`, `FinishReason`: strings, as above.
-- `ToolError`, `ProviderError`, `RequestErrorKind`: `RuntimeError`, as above.
-- `ToolContext`: a `@tool` function receives its input as keyword arguments only.
-- `ModelRequest`, `ProviderToolDefinition`, `ToolChoice`, `ReasoningEffort`, `Message`,
-  `AsUserMessage`, `ContentBlock`, `ModelResponse`, `ResponseStatus`, `StreamEvent`,
-  `TokenUsage`: the shapes an LLM provider is built from. Python binds the four providers,
-  not what they are built out of. Write a new one in Rust.
-- `default_logger`: `TicketSystem.on_event(handler)` replaces it, in both languages.
-- `Provider`: a trait in Rust, an opaque handle in Python.
+| Rust | Python |
+|------|--------|
+| **Agent** | |
+| `Agent::new() -> AgentBuilder<(), ()>` | `Agent()` |
+| `Agent::empty() -> AgentBuilder<(), ()>` | `Agent.empty()` |
+| `AgentBuilder<P, M>` | Folded into `Agent`: the type changes as the provider and model slots fill, which Python cannot hold across calls. |
+| `AgentBuilder::from_env()` | `Agent.from_env()` |
+| `AgentBuilder::provider(p)` | `Agent.provider(provider)` |
+| `AgentBuilder::provider_from_env()` | `Agent.provider_from_env()` |
+| `AgentBuilder::model(m)` | `Agent.model(model)` |
+| `AgentBuilder::model_from_env()` | `Agent.model_from_env()` |
+| `AgentBuilder::name(n)` | `Agent.name(name)` |
+| `AgentBuilder::role(r)` | `Agent.role(role)` |
+| `AgentBuilder::context(c)` | `Agent.context(context)` |
+| `AgentBuilder::label(l)` | `Agent.label(label)` |
+| `AgentBuilder::labels(iter)` | `Agent.labels(labels)` |
+| `AgentBuilder::interactive()` | `Agent.interactive()` |
+| `AgentBuilder::template_variable(key, value)` | `Agent.template_variable(key, value)` |
+| `AgentBuilder::template_variables(vars)` | `Agent.template_variables(variables)` |
+| `AgentBuilder::tool(t)` | `Agent.tool(tool)` |
+| `AgentBuilder::tools(iter)` | `Agent.tools(tools)` |
+| `AgentBuilder::dir(p)` | `Agent.dir(dir)` |
+| `AgentBuilder::knowledge(store)` | `Agent.knowledge(store)` |
+| `AgentBuilder::on_failure(hook)` | `Agent.on_failure(hook)` |
+| `AgentBuilder::build(self) -> Agent` | `Agent.build() -> Agent`: returns the same object, armed. Configuring after it, or building twice, raises. |
+| `Agent::ticket_system(sys)` | `Agent.ticket_system(system)` |
+| `Agent::task(task) -> String` | `Agent.task(task) -> str` |
+| `Agent::ticket(ticket) -> String` | `Agent.ticket(ticket) -> str` |
+| `Agent::start() -> Arc<TicketSystem>` | `Agent.start()` |
+| `Agent::finish().await` | `await Agent.finish()` |
+| **TicketSystem** | |
+| `TicketSystem::new() -> Arc<Self>` | `TicketSystem()` |
+| `TicketSystem::load(dir)` | `TicketSystem.load(dir)` |
+| `TicketSystem::agent(a)` | `TicketSystem.agent(agent)` |
+| `TicketSystem::task(task)` | `TicketSystem.task(task)` |
+| `TicketSystem::ticket(t)` | `TicketSystem.ticket(ticket)` |
+| `TicketSystem::reply(key, content)` | `TicketSystem.reply(key, content)` |
+| `TicketSystem::set_failed(key)` | `TicketSystem.set_failed(key)` |
+| `TicketSystem::max_turns(n)` | `TicketSystem.max_turns(n)` |
+| `TicketSystem::max_input_tokens(n)` | `TicketSystem.max_input_tokens(n)` |
+| `TicketSystem::max_output_tokens(n)` | `TicketSystem.max_output_tokens(n)` |
+| `TicketSystem::max_request_tokens(n)` | `TicketSystem.max_request_tokens(n)` |
+| `TicketSystem::max_schema_retries(n)` | `TicketSystem.max_schema_retries(n)` |
+| `TicketSystem::max_request_retries(n)` | `TicketSystem.max_request_retries(n)` |
+| `TicketSystem::max_time(d)` | `TicketSystem.max_time(seconds)` |
+| `TicketSystem::request_retry_delay(d)` | `TicketSystem.request_retry_delay(seconds)` |
+| `TicketSystem::dir(dir)` | `TicketSystem.dir(dir)` |
+| `TicketSystem::schema_for_label(label, schema)` | `TicketSystem.schema_for_label(label, schema)` |
+| `TicketSystem::on_event(h)` | `TicketSystem.on_event(callback)` |
+| `TicketSystem::on_ticket(handler)` | `TicketSystem.on_ticket(callback)` |
+| `TicketSystem::cancel_on(trigger)` | `TicketSystem.cancel_on(awaitable)` |
+| `TicketSystem::cancel_on_event(predicate)` | `TicketSystem.cancel_on_event(predicate)` |
+| `TicketSystem::cancel_on_result(predicate)` | `TicketSystem.cancel_on_result(predicate)` |
+| `TicketSystem::cancel_label(label)` | `TicketSystem.cancel_label(label)` |
+| `TicketSystem::cancel_label_on_event(label, predicate)` | `TicketSystem.cancel_label_on_event(label, predicate)` |
+| `TicketSystem::create_ticket_on_result(make)` | `TicketSystem.create_ticket_on_result(make)` |
+| `TicketSystem::edit_messages(key, edit)` | `TicketSystem.edit_messages(key, editor)`: the editor returns the new list, or `None` to keep the old one, where Rust mutates in place. |
+| `TicketSystem::edit_messages_on_event(editor)` | `TicketSystem.edit_messages_on_event(editor)`: same return-instead-of-mutate shape. |
+| `TicketSystem::model_for_agent(name)` | `TicketSystem.model_for_agent(agent_name)` |
+| `TicketSystem::get_ticket(key)` | `TicketSystem.get_ticket(key)` |
+| `TicketSystem::tickets()` | `TicketSystem.tickets()` |
+| `TicketSystem::find_tickets(predicate)` | `TicketSystem.find_tickets(predicate)` |
+| `TicketSystem::find_ticket(predicate)` | `TicketSystem.find_ticket(predicate)` |
+| `TicketSystem::wait_for_ticket(predicate).await` | `await TicketSystem.wait_for_ticket(predicate)` |
+| `TicketSystem::start()` | `TicketSystem.start()` |
+| `TicketSystem::finish().await` | `await TicketSystem.finish()` |
+| `TicketSystem::cancel()` | `TicketSystem.cancel()` |
+| `TicketSystem::is_cancelled()` | `TicketSystem.is_cancelled()` |
+| `TicketSystem::finish_reason()` | `TicketSystem.finish_reason()` |
+| `TicketSystem::stats()` | `TicketSystem.stats()` |
+| `TicketSystem::last_result()` | `TicketSystem.last_result()` |
+| `TicketSystem::results()` | `TicketSystem.results()` |
+| `TicketSystem::results_for_label(label)` | `TicketSystem.results_for_label(label)` |
+| **Ticket** | |
+| `Ticket::new(task)` | `Ticket(task)` |
+| `Ticket::label(l)` | `Ticket(task, labels=[l])` |
+| `Ticket::labels(iter)` | `Ticket(task, labels=[..])` |
+| `Ticket::schema(s)` | `Ticket(task, schema=s)` |
+| `Ticket::parent(key)` | `Ticket(task, parent=key)` |
+| `Ticket::has_label(label)` | `Ticket.has_label(label)` |
+| `Ticket::is_todo()` | `Ticket.is_todo()` |
+| `Ticket::is_in_progress()` | `Ticket.is_in_progress()` |
+| `Ticket::is_finished()` | `Ticket.is_finished()` |
+| `Ticket::is_failed()` | `Ticket.is_failed()` |
+| `Ticket::is_pending()` | `Ticket.is_pending()` |
+| `Ticket::is_resolved()` | `Ticket.is_resolved()` |
+| `Ticket.key`, `.status`, `.task`, `.result`, `.labels`, `.schema`, `.parent`, `.reporter` | Same names, same meaning. |
+| `Ticket.created_at`, `.started_at`, `.finished_at`, `.failed_at` | Same names, same meaning. |
+| `Ticket.replies` | `Ticket.replies`: a list of dicts, converted on access. |
+| `Status` | A string. The six `is_*` predicates read better than comparing it. |
+| `TicketError` | `RuntimeError` |
+| **Replies** | |
+| `Reply { author, content, created_at }` | A dict with the same keys. |
+| `Author` | The `author` string: `"system"`, `"user"`, or `"assistant"`. |
+| `ReplyContent` | A dict in `content`, keyed by the variant name: `{"Text": ".."}`, `{"ToolUse": {..}}`. |
+| `Reply::user_text(text)` | `{"author": "user", "content": [{"Text": text}]}` |
+| **Trajectory** | |
+| `Trajectory::from_ticket(agent, model, ticket)` | `Trajectory.from_ticket(agent, model, ticket)` |
+| `Trajectory::save(dir)` | `Trajectory.save(dir)` |
+| `Trajectory.key`, `.model`, `.messages` | Same names. `messages` is a list of dicts. |
+| **Knowledge** | |
+| `Knowledge::load(dir)` | `Knowledge.load(dir)` |
+| `Knowledge::index_char_limit(n)` | `Knowledge.index_char_limit(n)` |
+| `Knowledge::index()` | `Knowledge.index()` |
+| `Knowledge::pages()` | `Knowledge.pages()` |
+| `Knowledge::clear()` | `Knowledge.clear()` |
+| `Pages::save(page)` | `Pages.save(page)` |
+| `Pages::load(slug)` | `Pages.load(slug)` |
+| `Pages::remove(slug)` | `Pages.remove(slug)` |
+| `Page { slug, kind, description, content, tags }` | `Page(slug, description, content, kind=.., tags=..)`: a struct literal becomes a constructor, so the optional fields move last. |
+| `KnowledgeError` | `RuntimeError` |
+| **Statistics** | |
+| `Stats::stats_for_label(label)` | `Stats.stats_for_label(label)` |
+| `Stats::usage_history(key)` | `Stats.usage_history(ticket_key)` |
+| `Stats::tool_stats()` | `Stats.tool_stats()` |
+| `Stats::file_stats()` | `Stats.file_stats()` |
+| `Stats::knowledge_stats()` | `Stats.knowledge_stats()` |
+| `Stats::model_stats()` | `Stats.model_stats()` |
+| `Stats::turns()`, `::requests()`, `::tool_calls()`, `::errors()` | Same names. |
+| `Stats::event_counts()` | `Stats.event_counts()` |
+| `Stats::input_tokens()`, `::output_tokens()` | Same names. |
+| `Stats::tickets_created()`, `::tickets_finished()`, `::tickets_failed()` | Same names. |
+| `Stats::tickets_success_rate()` | `Stats.tickets_success_rate()` |
+| `Stats::run_duration()` | `Stats.run_duration()` |
+| `Stats::ticket_duration()`, `::avg_ticket_duration()` | Same names. |
+| `Stats::work_duration()`, `::avg_work_duration()` | Same names. |
+| `serde_json::to_value(&stats)` | `Stats.to_dict()`: Python cannot call `serde`, so reaching the `stats.json` shape needs a method. |
+| `ToolStat { calls, not_found, execution_failed, schema_failed }` | Same fields, plus `errors()` and `error_rate()`. |
+| `FileStat { opens, failed }` | Same fields. |
+| `KnowledgeStat { writes, reads, removes, lists, misses }` | Same fields. |
+| `ModelStat { requests, input_tokens, output_tokens }` | Same fields. |
+| `TokenUsage` | A dict, as returned by `Stats.usage_history()`. |
+| **Schema** | |
+| `Schema::parse(document)` | `Schema(document)` |
+| `Schema::validate(value)` | `Schema.validate(value)` |
+| `SchemaViolation`, `SchemaViolations`, `SchemaParseError` | `RuntimeError` |
+| **Events** | |
+| `Event { agent_name, ticket_key, kind }` | `Event.agent_name`, `.ticket_key`, `.kind` |
+| `EventKind` variant payload | `Event.data`: a dict of that variant's fields. |
+| `EventKind`, `FinishReason` | Strings. |
+| `CompactReason`, `PolicyKind`, `ToolFailureKind`, `KnowledgeOp` | Strings inside `Event.data`. |
+| `default_logger()` | `TicketSystem.on_event(handler)`, in both languages. |
+| **LLM providers** | |
+| `AnthropicProvider::new(key).base_url(url)` | `AnthropicProvider(api_key, base_url=..)` |
+| `OpenAiProvider::new(key).base_url(url)` | `OpenAiProvider(api_key, base_url=..)` |
+| `MistralProvider::new(key).base_url(url)` | `MistralProvider(api_key, base_url=..)` |
+| `LiteLlmProvider::new(key).base_url(url)` | `LiteLlmProvider(api_key, base_url=..)` |
+| `Provider` | An opaque handle. Write a new LLM provider in Rust. |
+| `provider_from_env()` | `provider_from_env()` |
+| `model_from_env()` | `model_from_env()` |
+| `context_window_from_env()` | `context_window_from_env()` |
+| `Model::from_name(name)` | `Model(name)` |
+| `Model::context_window(size)` | `Model.context_window(size)` |
+| `Model::reasoning_effort(effort)` | `Model.reasoning_effort(effort)` |
+| `Model::get_context_window()` | `Model.get_context_window()` |
+| `Model::get_reasoning_effort()` | `Model.get_reasoning_effort()` |
+| `ReasoningEffort` | A string. |
+| `ProviderError`, `ProviderResult`, `RequestErrorKind` | `RuntimeError` |
+| `ModelRequest`, `ProviderToolDefinition`, `ToolChoice`, `Message`, `AsUserMessage`, `ContentBlock`, `ModelResponse`, `ResponseStatus`, `StreamEvent` | Not bound: the shapes an LLM provider is built from. Python binds the four providers, not what they are built out of. |
+| **Tools** | |
+| `Tool::new(name, description).schema(..).handler(..).build()` | The `@tool` decorator: a decorated function carries the name, description, and schema a `ToolBuilder` collects. |
+| `ToolBuilder<H>` | Folded into the `@tool` decorator: the type changes once a handler is attached, which Python cannot hold across calls. |
+| `Tool` | `Tool`: an opaque handle the built-in tool functions return. An ad-hoc tool is a decorated function, not a `Tool`. |
+| `Tool::from_tool_file(definition)` | Not bound: write the name, description, and schema on the Python function instead. |
+| `ToolBuilder::read_only(b)` | `@tool(read_only=..)` |
+| `ToolBuilder::defer(b)` | `@tool(defer=..)` |
+| `ToolBuilder::paths(fields)` | `@tool(paths=[..])` |
+| `ToolLike` | A `@tool`-decorated callable. Python cannot implement a Rust trait. |
+| `ToolContext` | Not bound: a `@tool` function receives its input as keyword arguments only. |
+| `ToolResult::success(c)`, `::error(c)`, `::schema_error(c)` | `ToolResult.success(content)`, `.error(content)`, `.schema_error(content)` |
+| `ToolError` | `RuntimeError` |
+| `ReadFileTool` | `ReadFileTool()`: a unit struct becomes a function returning a handle. |
+| `WriteFileTool`, `EditFileTool` | `WriteFileTool()`, `EditFileTool()` |
+| `GrepTool`, `GlobTool`, `ListDirectoryTool` | `GrepTool()`, `GlobTool()`, `ListDirectoryTool()` |
+| `FetchUrlTool`, `FindToolsTool` | `FetchUrlTool()`, `FindToolsTool()` |
+| `ReadTicketsTool`, `ManageTicketsTool`, `FinishTool` | `ReadTicketsTool()`, `ManageTicketsTool()`, `FinishTool()` |
+| `ManageKnowledgeTool::new(store)` | `ManageKnowledgeTool(store)` |
+| `BashTool::new(name, pattern).description(..).read_only(..)` | `BashTool(name, pattern, description=.., read_only=..)` |
+| `BashTool::unrestricted()` | `UnrestrictedBashTool()`: a second constructor on one class becomes a second function. |
+| **Code search** | |
+| `codegrep::{Pattern, Conf, search, tokenize_pattern, ..}` | Not bound: reachable through `GrepTool()` with `syntax="code"`. |

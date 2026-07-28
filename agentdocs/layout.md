@@ -19,7 +19,7 @@ Where code lives and the rules that govern placement.
 - `src/convert.rs` holds the only JSON boundary: `py_to_value` and `value_to_py` over `pythonize`, plus `runtime_error`.
 - The compiled extension is `_agentwerk`; `python/agentwerk/__init__.py` re-exports it and holds the `@tool` decorator, the one piece of pure-Python logic. `__init__.pyi` declares the surface and MUST match the module, which `tests/test_parity.py` enforces.
 - `examples/` holds runnable Python scripts, the counterpart of `crates/use-cases/` on the Rust side.
-- `DIFFS.md` records every place the Python API and the Rust one do not line up. A divergence that is not in it is a bug in one of the two.
+- `DIFFS.md` lists the whole public surface of both languages in one table, Rust next to Python. A public item missing from it, or a divergence its cells do not state, is a bug in one of the two.
 - The crate is a workspace member but not a default member: `cargo build` and `cargo test` skip it because it links against a Python interpreter. Its commands live in [workflow.md](workflow.md).
 
 ## Top-level files
