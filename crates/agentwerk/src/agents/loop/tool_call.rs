@@ -211,7 +211,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn on_failure_hook_replaces_the_schema_retry_directive() {
+    async fn directive_editor_reads_the_reason_and_amends_the_default_directive() {
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let provider = MockProvider::with_results(vec![
             Ok(write_result_response("not json")),
@@ -230,7 +230,9 @@ mod tests {
                 .provider(provider.clone() as Arc<dyn Provider>)
                 .model("mock")
                 .role("test")
-                .on_failure(|detail| Some(format!("REDO NOW. {detail}")))
+                .edit_directive_on_failure(|detail, directive| {
+                    *directive = format!("REDO NOW. {detail}\n{directive}")
+                })
                 .build(),
         );
         tickets.ticket(Ticket::new("go").schema(schema_for_partial_sum()));
@@ -240,12 +242,16 @@ mod tests {
         let injected = user_text(&provider.received()[1]);
         assert!(
             injected.contains("REDO NOW."),
-            "hook directive must be injected: {injected:?}",
+            "editor's text must be injected: {injected:?}",
         );
-        // The hook received the real validator detail to build on.
         assert!(
             injected.contains("Schema validation failed"),
-            "hook must receive the validator detail: {injected:?}",
+            "editor must receive the bare validator reason: {injected:?}",
+        );
+        // The directive arrives pre-filled, so amending it keeps the framing.
+        assert!(
+            injected.contains("was not accepted"),
+            "default directive must survive an editor that only prepends: {injected:?}",
         );
     }
 

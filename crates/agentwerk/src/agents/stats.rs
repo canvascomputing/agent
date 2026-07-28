@@ -1153,7 +1153,10 @@ mod tests {
         assert_eq!(restored_slice.turns(), 1);
         assert_eq!(restored_slice.input_tokens(), 40);
         assert_eq!(restored_slice.tickets_finished(), 1);
-        assert_eq!(restored_slice.total_ticket_duration(), Duration::from_secs(4));
+        assert_eq!(
+            restored_slice.total_ticket_duration(),
+            Duration::from_secs(4)
+        );
     }
 
     #[test]
