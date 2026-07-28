@@ -121,6 +121,7 @@ Naming and comment rules, plus README structure. Skim the section matching what 
 
 - Examples: `.name()`, `.model()`, `.tool()`, `.label()`, `.read_only()`.
 - The `with_` prefix is reserved for a bare name that would be ambiguous even with an inherent/trait split; no current builder needs it.
+- Two chaining shapes exist, picked by whether the type is shared. A value the caller owns before the run consumes itself: `AgentBuilder` takes `mut self` and returns `Self`, which is also what lets its type-state track the filled provider and model slots. A type handed out as `Arc` configures through `&self` and returns `&Self`: `TicketSystem` and `Knowledge`. A third shape, `self: Arc<Self> -> Arc<Self>`, is not used.
 
 ## Constructors
 
