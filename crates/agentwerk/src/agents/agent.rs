@@ -15,7 +15,6 @@ use crate::prompts::{default_context, PromptBuilder, Section};
 use crate::providers::{Model, Provider, ProviderToolDefinition};
 use crate::tools::{FinishTool, ManageKnowledgeTool, ToolLike, ToolRegistry};
 
-use super::editor::Editor;
 use super::knowledge::Knowledge;
 use super::policy::Policies;
 use super::stats::Stats;
@@ -31,7 +30,7 @@ fn default_agent_name() -> String {
 /// Caller hook that rewrites a corrective directive in place, reading the
 /// bare failure reason as context; see
 /// [`AgentBuilder::edit_directive_on_failure`].
-pub(crate) type DirectiveEditor = Editor<str, String>;
+pub(crate) type DirectiveEditor = dyn Fn(&str, &mut String) + Send + Sync;
 
 // --- builder ---
 

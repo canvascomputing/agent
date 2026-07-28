@@ -2,7 +2,6 @@
 
 pub mod agent;
 pub(crate) mod compaction;
-pub(crate) mod editor;
 pub mod knowledge;
 pub mod r#loop;
 pub(crate) mod policy;
