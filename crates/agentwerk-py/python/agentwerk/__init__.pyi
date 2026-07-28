@@ -80,6 +80,40 @@ class Schema:
     def __init__(self, document: Any) -> None: ...
     def validate(self, value: Any) -> Any: ...
 
+class ReplyContent:
+    """One payload block inside a reply."""
+
+    kind: str
+    data: dict
+
+    @staticmethod
+    def text(text: str) -> "ReplyContent": ...
+    @staticmethod
+    def tool_use(id: str, name: str, input: Any) -> "ReplyContent": ...
+    @staticmethod
+    def tool_result(
+        tool_use_id: str,
+        content: str,
+        succeeded: bool = ...,
+        path: Optional[str] = ...,
+    ) -> "ReplyContent": ...
+    @staticmethod
+    def thinking(thinking: str, signature: str) -> "ReplyContent": ...
+    @staticmethod
+    def redacted_thinking(data: str) -> "ReplyContent": ...
+    def __repr__(self) -> str: ...
+
+class Reply:
+    """One entry in a ticket's replies."""
+
+    author: str
+    content: list[ReplyContent]
+    created_at: int
+
+    @staticmethod
+    def user_text(text: str) -> "Reply": ...
+    def __repr__(self) -> str: ...
+
 class Ticket:
     key: str
     status: str
@@ -93,7 +127,7 @@ class Ticket:
     started_at: Optional[int]
     finished_at: Optional[int]
     failed_at: Optional[int]
-    replies: list[dict]
+    replies: list[Reply]
 
     def __init__(
         self,
@@ -115,7 +149,7 @@ class Ticket:
 class Trajectory:
     key: str
     model: Optional[str]
-    replies: list[dict]
+    replies: list[Reply]
 
     @staticmethod
     def from_ticket(
@@ -285,10 +319,10 @@ class TicketSystem:
         self, callback: Callable[[Event, Ticket], Any]
     ) -> "TicketSystem": ...
     def edit_replies_on_event(
-        self, editor: Callable[[list[Event], list[dict]], Optional[list[dict]]]
+        self, editor: Callable[[list[Event], list[Reply]], Optional[list[Reply]]]
     ) -> "TicketSystem": ...
     def edit_replies(
-        self, key: str, editor: Callable[[list[dict]], Optional[list[dict]]]
+        self, key: str, editor: Callable[[list[Reply]], Optional[list[Reply]]]
     ) -> "TicketSystem": ...
     def cancel_label(self, label: str) -> "TicketSystem": ...
     def cancel_label_on_event(

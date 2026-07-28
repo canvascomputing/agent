@@ -1,6 +1,6 @@
-//! Python bindings for agentwerk: a thin PyO3 veneer over the Rust agent loop.
-//! The Rust crate stays the single source of truth; this module exposes its
-//! builder, tools, providers, and ticket system to Python.
+//! Python bindings for agentwerk: a thin PyO3 layer wrapping the Rust crate,
+//! which stays the single source of truth. This module exposes its builder,
+//! tools, providers, and ticket system to Python.
 
 use pyo3::prelude::*;
 
@@ -9,6 +9,7 @@ mod convert;
 mod event;
 mod knowledge;
 mod providers;
+mod reply;
 mod schema;
 mod stats;
 mod ticket;
@@ -21,6 +22,8 @@ fn _agentwerk(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<agent::PyAgent>()?;
     m.add_class::<ticket_system::PyTicketSystem>()?;
     m.add_class::<ticket::PyTicket>()?;
+    m.add_class::<reply::PyReply>()?;
+    m.add_class::<reply::PyReplyContent>()?;
     m.add_class::<trajectory::PyTrajectory>()?;
     m.add_class::<schema::PySchema>()?;
     m.add_class::<event::PyEvent>()?;

@@ -4,7 +4,7 @@
 use agentwerk::agents::Trajectory;
 use pyo3::prelude::*;
 
-use crate::convert::{runtime_error, value_to_py};
+use crate::convert::runtime_error;
 use crate::ticket::PyTicket;
 
 /// A finished agent run reduced to its messages.
@@ -44,9 +44,8 @@ impl PyTrajectory {
     }
 
     #[getter]
-    fn replies<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let value = serde_json::to_value(&self.inner.replies).map_err(runtime_error)?;
-        value_to_py(py, &value)
+    fn replies(&self) -> Vec<crate::reply::PyReply> {
+        crate::reply::replies_to_py(&self.inner.replies)
     }
 
     fn __repr__(&self) -> String {

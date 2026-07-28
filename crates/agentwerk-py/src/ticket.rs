@@ -147,13 +147,11 @@ impl PyTicket {
         self.inner.failed_at
     }
 
-    /// The messages exchanged with the model, as dicts. Converted on access,
-    /// so a callback that never asks never pays for them.
+    /// The messages exchanged with the model. Converted on access, so a
+    /// callback that never asks never pays for them.
     #[getter]
-    fn replies<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let value =
-            serde_json::to_value(&self.inner.replies).map_err(crate::convert::runtime_error)?;
-        value_to_py(py, &value)
+    fn replies(&self) -> Vec<crate::reply::PyReply> {
+        crate::reply::replies_to_py(&self.inner.replies)
     }
 
     fn __repr__(&self) -> String {

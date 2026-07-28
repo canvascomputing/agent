@@ -158,13 +158,15 @@ Naming and comment rules, plus README structure. Skim the section matching what 
 
 ## Python bindings
 
-**Every public Rust item has a Python counterpart of the same name. Four transforms are permitted; nothing else.**
+**Every public Rust item has a Python counterpart of the same name. Six transforms are permitted; nothing else.**
 
 - Type-state collapses: `AgentBuilder<P, M>` and `ToolBuilder<H>` fold into the class they build and take its name, so the builder type has no Python counterpart. The collapsed class validates at `build()`.
 - `Duration` becomes float seconds: the parameter keeps its name and the unit moves into the docstring.
-- An enum becomes its snake_case `Display` string. That `Display` impl is the single source, so the binding never formats a variant with `{:?}`.
+- A fieldless enum becomes its snake_case `Display` string. That `Display` impl is the single source, so the binding never formats a variant with `{:?}`.
+- An enum whose variants carry fields becomes a class with a `kind` string, a `data` dict, and one static constructor per variant. `Event` and `ReplyContent` are the two; a bare dict would make callers hand-build a tagged shape.
 - A builder method whose name collides with a reader on the same Python class becomes a constructor keyword argument, because a Python class cannot carry both. `Ticket` needs this for `labels`, `schema`, and `parent`; nothing else does.
-- IMPORTANT: no `with_` prefix in either language, and no fifth transform.
+- A `&mut` editor becomes a callable that returns the replacement, or `None` to keep the current value, since Python cannot take a Rust `&mut`.
+- IMPORTANT: no `with_` prefix in either language, and no seventh transform.
 
 ## Free functions
 

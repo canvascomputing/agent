@@ -263,9 +263,17 @@ tickets.on_ticket(capture)
 | `edit_replies_on_event(f)` | Rewrite a ticket's replies before its next request. |
 | `edit_replies(key, f)` | Rewrite one ticket's replies now. |
 
-An editor receives the messages as a list of dicts and returns the new list, or
-`None` to leave them alone. Keep each tool call paired with its result: the
-model rejects a conversation missing one half.
+An editor receives a list of `Reply` and returns the new list, or `None` to
+leave them alone. Build a new one with `Reply.user_text(text)`. Each `Reply` has
+`author`, `created_at`, and a `content` list whose entries carry a `kind` and a
+`data` dict. Keep each tool call paired with its result: the model rejects a
+conversation missing one half.
+
+```python
+from agentwerk import Reply
+
+tickets.edit_replies(key, lambda replies: replies + [Reply.user_text("Try again.")])
+```
 
 ### Reading results
 

@@ -72,8 +72,8 @@ Seven rules the surface table below never repeats.
 | `TicketSystem::cancel_label(label)` | `TicketSystem.cancel_label(label)` |
 | `TicketSystem::cancel_label_on_event(label, predicate)` | `TicketSystem.cancel_label_on_event(label, predicate)` |
 | `TicketSystem::create_ticket_on_result(make)` | `TicketSystem.create_ticket_on_result(make)` |
-| `TicketSystem::edit_replies(key, edit)` | `TicketSystem.edit_replies(key, editor)`: the editor returns the new list, or `None` to keep the old one, where Rust mutates in place. |
-| `TicketSystem::edit_replies_on_event(editor)` | `TicketSystem.edit_replies_on_event(editor)`: same return-instead-of-mutate shape. |
+| `TicketSystem::edit_replies(key, edit)` | `TicketSystem.edit_replies(key, editor)`: the editor returns the new list, or `None` to keep the old one, where Rust mutates in place. An editor that raises, or returns anything but `Reply` objects, raises here. |
+| `TicketSystem::edit_replies_on_event(editor)` | `TicketSystem.edit_replies_on_event(editor)`: same return-instead-of-mutate shape. An editor that raises prints its traceback and changes nothing: it runs on an agent thread with no Python frame to raise into. |
 | `TicketSystem::model_for_agent(name)` | `TicketSystem.model_for_agent(agent_name)` |
 | `TicketSystem::get_ticket(key)` | `TicketSystem.get_ticket(key)` |
 | `TicketSystem::tickets()` | `TicketSystem.tickets()` |
@@ -104,18 +104,18 @@ Seven rules the surface table below never repeats.
 | `Ticket::is_resolved()` | `Ticket.is_resolved()` |
 | `Ticket.key`, `.status`, `.task`, `.result`, `.labels`, `.schema`, `.parent`, `.reporter` | Same names, same meaning. |
 | `Ticket.created_at`, `.started_at`, `.finished_at`, `.failed_at` | Same names, same meaning. |
-| `Ticket.replies` | `Ticket.replies`: a list of dicts, converted on access. |
+| `Ticket.replies` | `Ticket.replies`: a list of `Reply`, converted on access. |
 | `Status` | A string. The six `is_*` predicates read better than comparing it. |
 | `TicketError` | `RuntimeError` |
 | **Replies** | |
-| `Reply { author, content, created_at }` | A dict with the same keys. |
+| `Reply { author, content, created_at }` | `Reply.author`, `.content`, `.created_at` |
 | `Author` | The `author` string: `"system"`, `"user"`, or `"assistant"`. |
-| `ReplyContent` | A dict in `content`, tagged like a provider content block: `{"type": "text", "text": ".."}`, `{"type": "tool_use", ..}`. |
-| `Reply::user_text(text)` | `{"author": "user", "content": [{"type": "text", "text": text}]}` |
+| `ReplyContent` | `ReplyContent.kind` plus `.data`, like `Event`. Built with `ReplyContent.text(..)`, `.tool_use(..)`, `.tool_result(..)`, `.thinking(..)`, `.redacted_thinking(..)`. |
+| `Reply::user_text(text)` | `Reply.user_text(text)`: the only way to build a reply, since any other carries no timestamp the store would trust. |
 | **Trajectory** | |
 | `Trajectory::from_ticket(agent, model, ticket)` | `Trajectory.from_ticket(agent, model, ticket)` |
 | `Trajectory::save(dir)` | `Trajectory.save(dir)` |
-| `Trajectory.key`, `.model`, `.replies` | Same names. `replies` is a list of dicts. |
+| `Trajectory.key`, `.model`, `.replies` | Same names. `replies` is a list of `Reply`. |
 | **Knowledge** | |
 | `Knowledge::load(dir)` | `Knowledge.load(dir)` |
 | `Knowledge::index_char_limit(n)` | `Knowledge.index_char_limit(n)` |
