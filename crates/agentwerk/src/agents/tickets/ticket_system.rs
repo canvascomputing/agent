@@ -196,10 +196,11 @@ impl TicketSystem {
     /// loop's resume path (`agents/loop.rs`) picks them back up under
     /// the agent whose name is already in the ticket's `labels`.
     ///
-    /// A ticket directory that cannot be read fails the whole load,
-    /// naming the ticket: its `ticket.json` and `replies.jsonl` are one
-    /// value, and returning the store without it would lose that
-    /// ticket's status and result with no way for a caller to notice.
+    /// A ticket that cannot be read stops the load, and the returned
+    /// error names it. Leaving it out instead would hand back a store
+    /// quietly missing that ticket, its status, and its result. Files
+    /// written by an older version are the usual cause: delete the
+    /// session directory, or migrate it, and load again.
     ///
     /// Caller contracts:
     /// - Agent names must stay stable across restarts; agentwerk
@@ -222,9 +223,9 @@ impl TicketSystem {
                 else {
                     continue;
                 };
-                // An unreadable ticket fails the load. Skipping it would drop
-                // its status, result and timestamps too, leaving a silently
-                // short store that `Stats::derive` would then re-derive from.
+                // Skipping an unreadable ticket would drop its status, result
+                // and timestamps with it, and `Stats::derive` would then
+                // recompute the run's counters from whatever did load.
                 let ticket = Ticket::load(&tickets_dir, &key).map_err(|source| {
                     io::Error::new(
                         source.kind(),
