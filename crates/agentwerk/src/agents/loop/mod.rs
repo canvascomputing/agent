@@ -55,17 +55,20 @@ mod tests {
         assert_eq!(replies.len(), 5, "got {replies:?}");
 
         assert_eq!(replies[0].author, Author::System);
-        assert!(matches!(&replies[0].content[..], [ReplyContent::Text(_)]));
+        assert!(matches!(
+            &replies[0].content[..],
+            [ReplyContent::Text { text: _ }]
+        ));
 
         assert_eq!(replies[1].author, Author::User);
         assert!(
-            matches!(&replies[1].content[..], [ReplyContent::Text(t)] if t.starts_with("## Context")),
+            matches!(&replies[1].content[..], [ReplyContent::Text { text: t }] if t.starts_with("## Context")),
             "second reply must be the auto-injected context prelude",
         );
 
         assert_eq!(replies[2].author, Author::User);
         assert!(
-            matches!(&replies[2].content[..], [ReplyContent::Text(t)] if t == "go"),
+            matches!(&replies[2].content[..], [ReplyContent::Text { text: t }] if t == "go"),
             "third reply must carry the task body",
         );
 
@@ -112,15 +115,15 @@ mod tests {
             .iter()
             .position(|r| {
                 r.author == Author::User
-                    && matches!(&r.content[..], [ReplyContent::Text(t)] if t == "SUMMARY")
+                    && matches!(&r.content[..], [ReplyContent::Text { text: t }] if t == "SUMMARY")
             })
             .expect("expected a `user` reply carrying the summariser text");
         assert!(summary_idx >= 1, "summary must follow the system prompt");
 
         assert!(
-            !replies
-                .iter()
-                .any(|r| { matches!(&r.content[..], [ReplyContent::Text(t)] if t == "go") }),
+            !replies.iter().any(|r| {
+                matches!(&r.content[..], [ReplyContent::Text { text: t }] if t == "go")
+            }),
             "compaction must drop pre-compaction non-system replies",
         );
     }

@@ -25,8 +25,8 @@ pub struct Trajectory {
     /// producing agent could not be resolved at capture time.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
-    /// The transcript exchanged with the model.
-    pub messages: Vec<Reply>,
+    /// Every reply exchanged with the model.
+    pub replies: Vec<Reply>,
 }
 
 impl Trajectory {
@@ -37,7 +37,7 @@ impl Trajectory {
         Self {
             key: format!("{agent}-{}", ticket.key),
             model: model.map(str::to_string),
-            messages: ticket.replies.clone(),
+            replies: ticket.replies.clone(),
         }
     }
 
@@ -66,7 +66,7 @@ impl Trajectory {
                 escape(model)
             ));
         }
-        for reply in &self.messages {
+        for reply in &self.replies {
             let role = match reply.author {
                 Author::System => "system",
                 Author::User => "user",
@@ -77,7 +77,7 @@ impl Trajectory {
             ));
             for block in &reply.content {
                 match block {
-                    ReplyContent::Text(text) => {
+                    ReplyContent::Text { text } => {
                         out.push_str(&format!("<pre>{}</pre>\n", escape(text)))
                     }
                     ReplyContent::Thinking { thinking, .. } => out.push_str(&format!(
@@ -177,7 +177,7 @@ mod tests {
         let trajectory = Trajectory::from_ticket("analyst", Some("gpt-4"), &ticket_with_reply());
         assert_eq!(trajectory.key, "analyst-TICKET-1");
         assert_eq!(trajectory.model.as_deref(), Some("gpt-4"));
-        assert_eq!(trajectory.messages.len(), 1);
+        assert_eq!(trajectory.replies.len(), 1);
     }
 
     #[test]
@@ -194,7 +194,7 @@ mod tests {
         let loaded = Trajectory::load(dir.path(), &trajectory.key).unwrap();
         assert_eq!(loaded.key, trajectory.key);
         assert_eq!(loaded.model.as_deref(), Some("gpt-4"));
-        assert_eq!(loaded.messages.len(), 1);
+        assert_eq!(loaded.replies.len(), 1);
     }
 
     #[test]
@@ -202,7 +202,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let mut trajectory =
             Trajectory::from_ticket("analyst", Some("gpt-4"), &ticket_with_reply());
-        trajectory.messages.push(Reply {
+        trajectory.replies.push(Reply {
             author: Author::Assistant,
             content: vec![ReplyContent::ToolUse {
                 id: "t1".into(),
@@ -244,7 +244,7 @@ mod tests {
         let mut trajectory =
             Trajectory::from_ticket("analyst", Some("gpt-4"), &ticket_with_reply());
         trajectory
-            .messages
+            .replies
             .push(Reply::user_text("<script>alert(1)</script>"));
         trajectory.save(dir.path()).unwrap();
 

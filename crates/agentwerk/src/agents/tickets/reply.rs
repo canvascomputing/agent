@@ -26,16 +26,23 @@ pub enum Author {
 pub struct Reply {
     pub author: Author,
     pub content: Vec<ReplyContent>,
-    /// Millis since epoch.
+    /// Millis since epoch. Defaulted on read so a hand-written reply
+    /// need not carry a timestamp it has no way to pick.
+    #[serde(default)]
     pub created_at: u64,
 }
 
 /// Ticket-side mirror of [`ContentBlock`]. Keeps the public ticket
 /// surface free of provider types while still recording every payload
-/// shape the agent loop sends.
+/// shape the agent loop sends. Carries the same tags as `ContentBlock`
+/// so both serialize alike; `ToolResult::path` is the one ticket-side
+/// field the provider block has no counterpart for.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum ReplyContent {
-    Text(String),
+    Text {
+        text: String,
+    },
     ToolUse {
         id: String,
         name: String,
@@ -79,7 +86,7 @@ impl Reply {
     pub fn user_text(text: impl Into<String>) -> Self {
         Self {
             author: Author::User,
-            content: vec![ReplyContent::Text(text.into())],
+            content: vec![ReplyContent::Text { text: text.into() }],
             created_at: now_millis(),
         }
     }
@@ -104,7 +111,7 @@ impl Reply {
     pub(crate) fn system_text(text: impl Into<String>) -> Self {
         Self {
             author: Author::System,
-            content: vec![ReplyContent::Text(text.into())],
+            content: vec![ReplyContent::Text { text: text.into() }],
             created_at: now_millis(),
         }
     }
@@ -126,7 +133,7 @@ impl Reply {
 impl ReplyContent {
     fn from_block(b: &ContentBlock, paths: &HashMap<String, PathBuf>) -> Self {
         match b {
-            ContentBlock::Text { text } => ReplyContent::Text(text.clone()),
+            ContentBlock::Text { text } => ReplyContent::Text { text: text.clone() },
             ContentBlock::ToolUse { id, name, input } => ReplyContent::ToolUse {
                 id: id.clone(),
                 name: name.clone(),
@@ -157,7 +164,7 @@ impl ReplyContent {
 
     fn to_block(&self) -> ContentBlock {
         match self {
-            ReplyContent::Text(text) => ContentBlock::Text { text: text.clone() },
+            ReplyContent::Text { text } => ContentBlock::Text { text: text.clone() },
             ReplyContent::ToolUse { id, name, input } => ContentBlock::ToolUse {
                 id: id.clone(),
                 name: name.clone(),
@@ -229,5 +236,49 @@ mod tests {
             &back.content[..],
             [ReplyContent::Thinking { thinking, signature }] if thinking == "r" && signature == "s"
         ));
+    }
+
+    /// Every variant must serialize exactly like the `ContentBlock` it
+    /// mirrors, so one shape reaches callers whether they read a ticket's
+    /// replies or a provider message. `Text` is the trap: as a newtype
+    /// variant it cannot carry the `type` tag at all, and serde only
+    /// discovers that at run time.
+    #[test]
+    fn every_reply_content_serializes_like_its_content_block() {
+        let paths = HashMap::new();
+        for block in [
+            ContentBlock::Text { text: "hi".into() },
+            ContentBlock::ToolUse {
+                id: "c1".into(),
+                name: "bash".into(),
+                input: serde_json::json!({"cmd": "ls"}),
+            },
+            ContentBlock::ToolResult {
+                tool_use_id: "c1".into(),
+                content: "out".into(),
+                succeeded: true,
+            },
+            ContentBlock::Thinking {
+                thinking: "r".into(),
+                signature: "s".into(),
+            },
+            ContentBlock::RedactedThinking { data: "enc".into() },
+        ] {
+            let content = ReplyContent::from_block(&block, &paths);
+            assert_eq!(
+                serde_json::to_value(&content).unwrap(),
+                serde_json::to_value(&block).unwrap(),
+                "{content:?} must serialize like the block it mirrors",
+            );
+        }
+    }
+
+    #[test]
+    fn reply_without_a_timestamp_deserializes() {
+        let reply: Reply =
+            serde_json::from_str(r#"{"author":"user","content":[{"type":"text","text":"hi"}]}"#)
+                .unwrap();
+        assert_eq!(reply.created_at, 0);
+        assert!(matches!(&reply.content[..], [ReplyContent::Text { text }] if text == "hi"));
     }
 }

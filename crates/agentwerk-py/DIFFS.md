@@ -110,12 +110,12 @@ Seven rules the surface table below never repeats.
 | **Replies** | |
 | `Reply { author, content, created_at }` | A dict with the same keys. |
 | `Author` | The `author` string: `"system"`, `"user"`, or `"assistant"`. |
-| `ReplyContent` | A dict in `content`, keyed by the variant name: `{"Text": ".."}`, `{"ToolUse": {..}}`. |
-| `Reply::user_text(text)` | `{"author": "user", "content": [{"Text": text}]}` |
+| `ReplyContent` | A dict in `content`, tagged like a provider content block: `{"type": "text", "text": ".."}`, `{"type": "tool_use", ..}`. |
+| `Reply::user_text(text)` | `{"author": "user", "content": [{"type": "text", "text": text}]}` |
 | **Trajectory** | |
 | `Trajectory::from_ticket(agent, model, ticket)` | `Trajectory.from_ticket(agent, model, ticket)` |
 | `Trajectory::save(dir)` | `Trajectory.save(dir)` |
-| `Trajectory.key`, `.model`, `.messages` | Same names. `messages` is a list of dicts. |
+| `Trajectory.key`, `.model`, `.replies` | Same names. `replies` is a list of dicts. |
 | **Knowledge** | |
 | `Knowledge::load(dir)` | `Knowledge.load(dir)` |
 | `Knowledge::index_char_limit(n)` | `Knowledge.index_char_limit(n)` |

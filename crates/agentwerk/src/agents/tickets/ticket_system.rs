@@ -191,6 +191,11 @@ impl TicketSystem {
     /// loop's resume path (`agents/loop.rs`) picks them back up under
     /// the agent whose name is already in the ticket's `labels`.
     ///
+    /// A ticket directory that cannot be read fails the whole load,
+    /// naming the ticket: its `ticket.json` and `replies.jsonl` are one
+    /// value, and returning the store without it would lose that
+    /// ticket's status and result with no way for a caller to notice.
+    ///
     /// Caller contracts:
     /// - Agent names must stay stable across restarts; agentwerk
     ///   matches `InProgress` tickets by name via the ticket's labels.
@@ -212,9 +217,15 @@ impl TicketSystem {
                 else {
                     continue;
                 };
-                let Ok(ticket) = Ticket::load(&tickets_dir, &key) else {
-                    continue;
-                };
+                // An unreadable ticket fails the load. Skipping it would drop
+                // its status, result and timestamps too, leaving a silently
+                // short store that `Stats::derive` would then re-derive from.
+                let ticket = Ticket::load(&tickets_dir, &key).map_err(|source| {
+                    io::Error::new(
+                        source.kind(),
+                        format!("ticket {key} could not be read: {source}"),
+                    )
+                })?;
                 tickets.insert(ticket.key.clone(), ticket);
             }
         }
@@ -1277,7 +1288,7 @@ mod tests {
             .replies
             .iter()
             .filter_map(|r| match r.content.first() {
-                Some(ReplyContent::Text(t)) => Some(t.clone()),
+                Some(ReplyContent::Text { text: t }) => Some(t.clone()),
                 _ => None,
             })
             .collect();
@@ -1325,17 +1336,17 @@ mod tests {
 
         sys.edit_replies(&key, |replies| {
             replies.retain(|reply| {
-                !matches!(reply.content.first(), Some(ReplyContent::Text(t)) if t == "drop me")
+                !matches!(reply.content.first(), Some(ReplyContent::Text { text: t }) if t == "drop me")
             });
         });
 
         let replies = sys.get_ticket(&key).unwrap().replies;
-        assert!(replies
-            .iter()
-            .any(|r| matches!(r.content.first(), Some(ReplyContent::Text(t)) if t == "keep me")));
-        assert!(replies
-            .iter()
-            .all(|r| !matches!(r.content.first(), Some(ReplyContent::Text(t)) if t == "drop me")));
+        assert!(replies.iter().any(
+            |r| matches!(r.content.first(), Some(ReplyContent::Text { text: t }) if t == "keep me")
+        ));
+        assert!(replies.iter().all(
+            |r| !matches!(r.content.first(), Some(ReplyContent::Text { text: t }) if t == "drop me")
+        ));
     }
 
     #[test]

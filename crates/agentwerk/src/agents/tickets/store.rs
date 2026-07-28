@@ -778,6 +778,35 @@ mod tests {
         assert!(dir.path().join("tickets").is_dir());
     }
 
+    /// A replies file written by an older version no longer parses. The
+    /// ticket must not be skipped: its status and result would vanish with
+    /// it, and the caller would receive a short store reporting success.
+    #[test]
+    fn load_reports_a_ticket_whose_replies_cannot_be_read() {
+        let dir = crate::test_util::TempDir::new().unwrap();
+        let original = TicketSystem::new();
+        original.dir(dir.path().to_path_buf());
+        original.task("seed work");
+        original.add_reply("TICKET-1", Reply::user_text("hello"));
+        original.set_finished("TICKET-1", "agent").unwrap();
+        drop(original);
+
+        let replies = dir.path().join("tickets/TICKET-1/replies.jsonl");
+        std::fs::write(
+            &replies,
+            "{\"author\":\"user\",\"content\":[{\"Text\":\"hello\"}]}\n",
+        )
+        .unwrap();
+
+        let Err(error) = TicketSystem::load(dir.path()) else {
+            panic!("load must fail when a ticket's replies cannot be read");
+        };
+        assert!(
+            error.to_string().contains("TICKET-1"),
+            "the failure must name the ticket: {error}",
+        );
+    }
+
     #[test]
     fn load_restores_done_ticket_with_result_and_replies() {
         let dir = crate::test_util::TempDir::new().unwrap();
@@ -906,7 +935,7 @@ mod tests {
     }
 
     #[test]
-    fn load_skips_dir_with_malformed_ticket_json() {
+    fn load_reports_a_malformed_ticket_json() {
         let dir = crate::test_util::TempDir::new().unwrap();
         std::fs::create_dir_all(dir.path().join("tickets").join("TICKET-7")).unwrap();
         std::fs::write(
@@ -917,8 +946,13 @@ mod tests {
             "not json",
         )
         .unwrap();
-        let sys = TicketSystem::load(dir.path()).unwrap();
-        assert!(sys.get_ticket("TICKET-7").is_none());
+        let Err(error) = TicketSystem::load(dir.path()) else {
+            panic!("load must fail on a malformed ticket.json");
+        };
+        assert!(
+            error.to_string().contains("TICKET-7"),
+            "the failure must name the ticket: {error}",
+        );
     }
 
     #[test]
@@ -978,7 +1012,7 @@ mod tests {
             .replies
             .iter()
             .filter_map(|r| match r.content.first()? {
-                ReplyContent::Text(s) => Some(s.as_str()),
+                ReplyContent::Text { text: s } => Some(s.as_str()),
                 _ => None,
             })
             .collect();
@@ -1088,7 +1122,7 @@ mod tests {
         let texts: Vec<String> = reloaded
             .iter()
             .filter_map(|r| match &r.content[..] {
-                [ReplyContent::Text(t)] => Some(t.clone()),
+                [ReplyContent::Text { text: t }] => Some(t.clone()),
                 _ => None,
             })
             .collect();
@@ -1145,7 +1179,7 @@ mod tests {
 
         sys.edit_replies(&key, |replies| {
             replies.retain(|reply| {
-                !matches!(reply.content.first(), Some(ReplyContent::Text(t)) if t == "drop me")
+                !matches!(reply.content.first(), Some(ReplyContent::Text { text: t }) if t == "drop me")
             });
         });
 
@@ -1159,12 +1193,12 @@ mod tests {
         // The drop is committed and reloads from disk.
         let reloaded = TicketSystem::load(sys.dir_value()).unwrap();
         let replies = reloaded.get_ticket(&key).unwrap().replies;
-        assert!(replies
-            .iter()
-            .any(|r| matches!(r.content.first(), Some(ReplyContent::Text(t)) if t == "keep me")));
-        assert!(replies
-            .iter()
-            .all(|r| !matches!(r.content.first(), Some(ReplyContent::Text(t)) if t == "drop me")));
+        assert!(replies.iter().any(
+            |r| matches!(r.content.first(), Some(ReplyContent::Text { text: t }) if t == "keep me")
+        ));
+        assert!(replies.iter().all(
+            |r| !matches!(r.content.first(), Some(ReplyContent::Text { text: t }) if t == "drop me")
+        ));
     }
 
     #[test]
@@ -1202,7 +1236,7 @@ mod tests {
 
         sys.edit_replies(&key, |replies| {
             replies.retain(|reply| {
-                !matches!(reply.content.first(), Some(ReplyContent::Text(t)) if t == "drop me")
+                !matches!(reply.content.first(), Some(ReplyContent::Text { text: t }) if t == "drop me")
             });
         });
 
@@ -1234,7 +1268,7 @@ mod tests {
         sys.add_reply(&key, Reply::user_text("after"));
         sys.edit_replies(&key, |replies| {
             replies.retain(|reply| {
-                !matches!(reply.content.first(), Some(ReplyContent::Text(t)) if t == "after")
+                !matches!(reply.content.first(), Some(ReplyContent::Text { text: t }) if t == "after")
             });
         });
 

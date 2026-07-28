@@ -37,23 +37,23 @@ impl PyTrajectory {
         &self.inner.key
     }
 
-    /// Name of the model that produced the messages, when it was known.
+    /// Name of the model that produced the replies, when it was known.
     #[getter]
     fn model(&self) -> Option<&str> {
         self.inner.model.as_deref()
     }
 
     #[getter]
-    fn messages<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let value = serde_json::to_value(&self.inner.messages).map_err(runtime_error)?;
+    fn replies<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let value = serde_json::to_value(&self.inner.replies).map_err(runtime_error)?;
         value_to_py(py, &value)
     }
 
     fn __repr__(&self) -> String {
         format!(
-            "Trajectory(key={:?}, messages={})",
+            "Trajectory(key={:?}, replies={})",
             self.inner.key,
-            self.inner.messages.len()
+            self.inner.replies.len()
         )
     }
 }
