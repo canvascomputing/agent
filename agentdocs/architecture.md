@@ -83,6 +83,7 @@ Two layers of state exist. The per-ticket transcript lives on `Ticket::replies`:
 - Could not fulfil a contract: typed error in the matching domain.
 - Both at once (terminal request failure, policy trip): define both. Share the payload type when observer-friendly (`PolicyKind`); introduce a stripped `Kind` enum when the error carries observer-hostile detail (`RequestErrorKind`, `ToolFailureKind`).
 - Model-fixable failure: `ToolResult::Error(String)`; still fires `ToolCallFailed` but is recoverable.
+- A public error enum carries `#[non_exhaustive]`, so a later variant is not a breaking change for callers that match on it. `ProviderError` and `ToolError` both do. The attribute covers new variants only: adding a field to an existing struct variant still breaks a caller that matches it without `..`, so prefer a new variant to widening an old one.
 
 ## Providers own their client
 

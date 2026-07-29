@@ -7,6 +7,7 @@ use std::fmt;
 /// timeouts) flow through [`ToolResult::Error`](super::ToolResult::Error)
 /// instead; those reach the model as tool-result messages.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum ToolError {
     /// Registry has no tool with this name. agentwerk forwards the failure to
     /// the model as a tool-result error naming the registered tools, so it can
