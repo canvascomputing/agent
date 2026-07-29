@@ -207,6 +207,13 @@ impl PyTicketSystem {
         slf
     }
 
+    /// True when `label` names a pool called off via `cancel_label`. Ask before
+    /// minting follow-up work: a ticket carrying a cancelled label is never
+    /// claimed.
+    fn label_cancelled(&self, label: &str) -> bool {
+        self.inner.label_cancelled(label)
+    }
+
     /// Call off `label`'s agents when `predicate(event)` first returns
     /// truthy. Only that pool stops; other labels keep going.
     fn cancel_label_on_event<'py>(

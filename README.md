@@ -270,6 +270,7 @@ tickets.on_ticket(move |event, ticket| {
 | `cancel_on_result(p)` | End the run when a finished result matches. |
 | `cancel_label(l)` | Call off one label's agents. |
 | `cancel_label_on_event(l, p)` | Call off one label's agents while the rest keep working. |
+| `label_cancelled(l)` | Report whether one label's agents have been called off. |
 | `create_ticket_on_result(make)` | Enqueue a follow-up ticket from a finished ticket. |
 | `on_ticket(h)` | Read a ticket as it starts, finishes, or fails. |
 | `wait_for_ticket(p)` | Wait for one matching ticket instead of draining the queue. |
