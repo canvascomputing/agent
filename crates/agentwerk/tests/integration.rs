@@ -13,8 +13,8 @@ mod bash_usage;
 #[path = "integration/grep_finds_by_shape.rs"]
 mod grep_finds_by_shape;
 
-#[path = "integration/sniper_finds_planted.rs"]
-mod sniper_finds_planted;
+#[path = "integration/seeker_finds_planted.rs"]
+mod seeker_finds_planted;
 
 #[path = "integration/compaction.rs"]
 mod compaction;

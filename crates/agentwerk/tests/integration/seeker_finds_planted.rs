@@ -1,4 +1,4 @@
-//! End-to-end: the real Sniper role (used verbatim) is run for a fixed time
+//! End-to-end: the real Seeker role (used verbatim) is run for a fixed time
 //! budget, each ticket already naming one observed construct per planted
 //! language, over a directory seeded with planted malicious indicators across
 //! secrets, networking, and dynamic-execution categories.
@@ -20,9 +20,9 @@ use agentwerk::event::{default_logger, Event, EventKind};
 use agentwerk::tools::GrepTool;
 use agentwerk::{Agent, Knowledge, Ticket, TicketSystem};
 
-const SNIPER_AGENT: &str = include_str!("../../../use-cases/src/malware_scanner/agents/sniper.md");
+const SEEKER_AGENT: &str = include_str!("../../../use-cases/src/malware_scanner/agents/seeker.md");
 
-const SNIPER_LABEL: &str = "sniper_hunt";
+const SEEKER_LABEL: &str = "seeking";
 const ANALYSIS_LABEL: &str = "security_analysis";
 const TIME_BUDGET: Duration = Duration::from_secs(60);
 
@@ -102,7 +102,7 @@ fn plant_fixture(root: &std::path::Path) {
 }
 
 #[tokio::test]
-async fn sniper_pool_finds_planted_indicators(
+async fn seeker_pool_finds_planted_indicators(
 ) -> std::result::Result<(), Box<dyn std::error::Error>> {
     let (provider, model) = common::build_provider();
 
@@ -110,7 +110,7 @@ async fn sniper_pool_finds_planted_indicators(
     let root = dir.path();
     plant_fixture(root);
 
-    // A real Sniper always has one bound (see main.rs); a couple of
+    // A real Seeker always has one bound (see main.rs); a couple of
     // representative pages are enough to exercise `manage_knowledge` here
     // without duplicating the full attack-pattern catalogue.
     let knowledge = Knowledge::load(root.join(".knowledge"))?;
@@ -118,7 +118,7 @@ async fn sniper_pool_finds_planted_indicators(
         slug: "eval-atob-loader".to_string(),
         kind: "AttackPattern".to_string(),
         description: "JavaScript decode-then-eval loader: eval(atob(...)) reconstructs code from a base64 string at runtime.".to_string(),
-        content: "## Huntable signal\n`eval(atob(...))` or an equivalent decode-then-eval chain.".to_string(),
+        content: "## Detectable signal\n`eval(atob(...))` or an equivalent decode-then-eval chain.".to_string(),
         tags: vec![],
     }).map_err(|e| format!("seed page: {e}"))?;
 
@@ -153,17 +153,17 @@ async fn sniper_pool_finds_planted_indicators(
     tickets.max_turns(80);
     tickets.on_event(move |e| event_handler(e));
 
-    // The Sniper no longer derives a threat itself; each ticket already names one
-    // observed construct per planted language, the way a Scout would hand it off.
+    // The Seeker no longer derives a threat itself; each ticket already names one
+    // observed construct per planted language, the way a Tracer would hand it off.
     for i in 0..2 {
         tickets.agent(
             Agent::new()
-                .name(format!("Sniper {}", i + 1))
+                .name(format!("Seeker {}", i + 1))
                 .provider(Arc::clone(&provider))
                 .model(&model)
-                .role(SNIPER_AGENT.trim())
+                .role(SEEKER_AGENT.trim())
                 .template_variable("instruction", "")
-                .label(SNIPER_LABEL)
+                .label(SEEKER_LABEL)
                 .dir(root.to_path_buf())
                 .knowledge(&knowledge)
                 .tool(GrepTool)
@@ -197,7 +197,7 @@ async fn sniper_pool_finds_planted_indicators(
          network exfiltration from a compiled binary",
     ];
     for threat in named_threats {
-        tickets.ticket(Ticket::new(threat).label(SNIPER_LABEL));
+        tickets.ticket(Ticket::new(threat).label(SEEKER_LABEL));
     }
 
     let results = tickets.finish().await;
@@ -229,7 +229,7 @@ async fn sniper_pool_finds_planted_indicators(
         }
     }
 
-    assert!(!calls.is_empty(), "the Sniper made no grep calls");
+    assert!(!calls.is_empty(), "the Seeker made no grep calls");
     assert!(
         found > 0,
         "agents surfaced none of the planted indicators; grep output: {all_text}"
