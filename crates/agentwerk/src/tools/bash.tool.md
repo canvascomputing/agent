@@ -3,9 +3,9 @@ name: bash_tool
 read_only: false
 ---
 
-Execute a shell command via `sh -c` in the working directory and return its trimmed stdout and stderr. The tool is registered with a glob pattern; a non-matching command is rejected and nothing runs.
+Execute a shell command via `sh -c` in the working directory and return its trimmed stdout and stderr. Registration pins a glob pattern; a command that does not match is rejected and nothing runs.
 
-- One command family per registration (e.g. `git *`); the pattern and read-only status are operator choices, not the model's.
+- One command family per registration (e.g. `git *`). The pattern and the read-only status are the operator's choice, not yours.
 - Default timeout is 120 000 ms; request up to 600 000 ms via `timeout_ms`.
 - Treat as destructive by default: side effects depend on the registered pattern (`git status` is read-only, `git push` is not).
 
