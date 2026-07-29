@@ -11,7 +11,7 @@ Discover tools withheld from the initial system prompt to keep context small. Re
 ## When NOT to use
 
 - A tool already in your definitions: call it directly.
-- Search file contents: use `grep`. Find files by name: use `glob_tool`.
+- Search file contents: use `grep`. Find files by name: use `glob`.
 
 ## Schema
 

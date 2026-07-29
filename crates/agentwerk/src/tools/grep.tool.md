@@ -3,7 +3,7 @@ name: grep
 read_only: true
 ---
 
-Search file contents under the working directory. `pattern` is a regular expression by default; set `syntax: "code"` to match a call or code shape without escaping. Every file is searched, including hidden and gitignored ones, so narrow with `path`, `glob`, or `type`.
+Search file contents under the working directory. `pattern` is a regular expression by default; set `syntax: "code"` to match a call or code shape without escaping. Every file is searched, including hidden and gitignored ones, so narrow with the `path`, `glob`, or `type` arguments.
 
 - Prefer a few narrow parallel searches over one broad one.
 - `output_mode`: `files_with_matches` (default) returns file names, `content` returns `path:line:col: text` lines, `count` returns per-file counts.
@@ -23,8 +23,8 @@ In code mode `[a-z]`, `*`, `.`, and `\` are literal, and `<word>` is plain text,
 
 ## When NOT to use
 
-- Find files by name: use `glob_tool`.
-- Read a known file: use `read_file_tool`.
+- Find files by name: use `glob`.
+- Read a known file: use `read_file`.
 
 ## Schema
 

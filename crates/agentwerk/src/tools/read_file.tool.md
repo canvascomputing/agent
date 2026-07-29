@@ -1,5 +1,5 @@
 ---
-name: read_file_tool
+name: read_file
 read_only: true
 ---
 
@@ -8,12 +8,12 @@ Read a file's contents, returning line-numbered text so you can cite `file:line`
 - For large files, pass `offset` and `limit` to read only the slice you need.
 - To read around a `grep` hit, set `column`/`length` (e.g. `column = hit_col - 50`); output then becomes `<line_no>:<col>\t<slice>`.
 - A directory `path` returns its entries instead of file lines: read one of them next.
-- ALWAYS read a file before editing it; `edit_file_tool` refuses otherwise.
+- ALWAYS read a file before editing it; `edit_file` refuses otherwise.
 
 ## When NOT to use
 
-- List a directory: use `list_directory_tool`.
-- Find files by name: use `glob_tool`.
+- List a directory: use `list_directory`.
+- Find files by name: use `glob`.
 - Search many files: use `grep`.
 
 ## Schema

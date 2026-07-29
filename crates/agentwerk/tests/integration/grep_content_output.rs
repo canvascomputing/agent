@@ -241,7 +241,7 @@ async fn reads_column_slice_after_grep_locates_needle(
     );
     tickets.task(format!(
         "Find the string `{NEEDLE}` in the working directory. \
-         Use grep to locate it, then use read_file_tool with column \
+         Use grep to locate it, then use read_file with column \
          and length to read just the surrounding context (not the \
          entire line). Report the file name.",
     ));
@@ -265,12 +265,12 @@ async fn reads_column_slice_after_grep_locates_needle(
             .collect::<Vec<_>>()
     );
 
-    // The agent must have called read_file_tool with column set.
+    // The agent must have called read_file with column set.
     assert!(
         recorded
             .iter()
-            .any(|c| c.name == "read_file_tool" && c.input.get("column").is_some()),
-        "agent should call read_file_tool with column; calls: {:?}",
+            .any(|c| c.name == "read_file" && c.input.get("column").is_some()),
+        "agent should call read_file with column; calls: {:?}",
         recorded
             .iter()
             .map(|c| (&c.name, &c.input))

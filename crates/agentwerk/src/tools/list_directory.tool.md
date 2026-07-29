@@ -1,5 +1,5 @@
 ---
-name: list_directory_tool
+name: list_directory
 read_only: true
 ---
 
@@ -10,9 +10,9 @@ List a directory's entries to survey an unfamiliar layout. Output is one entry p
 
 ## When NOT to use
 
-- Find files by pattern across the tree: use `glob_tool`.
+- Find files by pattern across the tree: use `glob`.
 - Search file contents: use `grep`.
-- Read one file: use `read_file_tool`.
+- Read one file: use `read_file`.
 
 ## Schema
 
@@ -26,7 +26,7 @@ List a directory's entries to survey an unfamiliar layout. Output is one entry p
     },
     "recursive": {
       "type": "boolean",
-      "description": "Walk subdirectories and list every entry beneath `path` (default: false). Use sparingly: on a large tree `glob_tool` with a pattern returns far less."
+      "description": "Walk subdirectories and list every entry beneath `path` (default: false). Use sparingly: on a large tree `glob` with a pattern returns far less."
     }
   }
 }

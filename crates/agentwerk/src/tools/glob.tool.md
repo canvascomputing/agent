@@ -1,5 +1,5 @@
 ---
-name: glob_tool
+name: glob
 read_only: true
 ---
 
@@ -11,7 +11,7 @@ Find files in the working directory tree by glob pattern. Returns paths relative
 ## When NOT to use
 
 - Search file contents: use `grep`.
-- List one directory non-recursively: use `list_directory_tool`.
+- List one directory non-recursively: use `list_directory`.
 
 ## Schema
 

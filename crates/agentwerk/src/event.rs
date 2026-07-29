@@ -471,7 +471,7 @@ mod tests {
                 message: "not found".into(),
             },
             EventKind::ToolCallFailed {
-                tool_name: "manage_tickets_tool".into(),
+                tool_name: "manage_tickets".into(),
                 call_id: "c2".into(),
                 reason: ToolFailureKind::SchemaValidationFailed,
                 message: "Schema validation failed".into(),

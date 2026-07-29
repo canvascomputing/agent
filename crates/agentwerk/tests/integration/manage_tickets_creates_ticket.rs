@@ -1,4 +1,4 @@
-//! End-to-end: a real LLM uses `manage_tickets_tool` with `action: "create"`
+//! End-to-end: a real LLM uses `manage_tickets` with `action: "create"`
 //! to add a new ticket to the queue. We verify a fresh ticket landed carrying
 //! the requested body — the queue state is the assertion. The role does not
 //! name the action shape; the tool's description must carry it.

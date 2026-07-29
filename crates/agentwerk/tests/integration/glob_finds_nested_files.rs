@@ -1,5 +1,5 @@
 //! End-to-end: a real LLM is asked to find every `lib.rs` anywhere in a
-//! nested project tree. The role does NOT name `glob_tool` and does NOT
+//! nested project tree. The role does NOT name `glob` and does NOT
 //! describe its argument shape. Proves the tool's *description* is good
 //! enough for a model to (1) pick filename pattern matching, and (2)
 //! produce a recursive `**/lib.rs` pattern instead of a flat `*.rs` —
@@ -111,14 +111,14 @@ async fn finds_every_lib_rs_in_nested_tree() -> std::result::Result<(), Box<dyn 
 
     let recorded = calls.lock().unwrap().clone();
 
-    // The model must call glob_tool with a recursive pattern (`**`) — a
+    // The model must call glob with a recursive pattern (`**`) — a
     // flat `*.rs` would miss every nested file. Either `**/lib.rs` (tight)
     // or `**/*.rs` (broad, then filter) is acceptable; both prove the
     // model picked up `**` semantics from the description.
     let glob_call = recorded
         .iter()
         .find(|c| {
-            c.name == "glob_tool"
+            c.name == "glob"
                 && c.input
                     .get("pattern")
                     .and_then(|v| v.as_str())
@@ -126,7 +126,7 @@ async fn finds_every_lib_rs_in_nested_tree() -> std::result::Result<(), Box<dyn 
         })
         .unwrap_or_else(|| {
             panic!(
-                "model should call `glob_tool` with a recursive (`**`) pattern \
+                "model should call `glob` with a recursive (`**`) pattern \
                  over Rust files; instead called: {:?}",
                 recorded
                     .iter()
@@ -141,7 +141,7 @@ async fn finds_every_lib_rs_in_nested_tree() -> std::result::Result<(), Box<dyn 
     let output = glob_call
         .output
         .as_deref()
-        .expect("glob_tool call should have produced output");
+        .expect("glob call should have produced output");
     for expected in [
         "crate_a/src/lib.rs",
         "crate_b/src/lib.rs",
@@ -149,7 +149,7 @@ async fn finds_every_lib_rs_in_nested_tree() -> std::result::Result<(), Box<dyn 
     ] {
         assert!(
             output.contains(expected),
-            "glob_tool output should reach nested `{expected}`; got: {output:?}"
+            "glob output should reach nested `{expected}`; got: {output:?}"
         );
     }
     let _ = results;
