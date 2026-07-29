@@ -273,9 +273,27 @@ impl ToolRegistry {
         self.tools.push(tool);
     }
 
+    /// Look up the tool a call names. An exact name wins; failing that, a
+    /// spelling that folds onto the same key as exactly one registered tool
+    /// resolves to it, so a model that adds a `_tool` suffix still lands.
     pub(crate) fn get(&self, name: &str) -> Option<Arc<dyn ToolLike>> {
         let name = name.trim();
-        self.tools.iter().find(|t| t.name() == name).cloned()
+        if let Some(tool) = self.tools.iter().find(|t| t.name() == name) {
+            return Some(Arc::clone(tool));
+        }
+        let key = lookup_key(name);
+        let mut folded = self.tools.iter().filter(|t| lookup_key(t.name()) == key);
+        let tool = folded.next()?;
+        // A key two tools share is ambiguous: refuse rather than guess.
+        folded.next().is_none().then(|| Arc::clone(tool))
+    }
+
+    /// Registered names, sorted, for the error that names what the model could
+    /// have called instead.
+    fn tool_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = self.tools.iter().map(|t| t.name().to_string()).collect();
+        names.sort();
+        names
     }
 
     pub(crate) fn mark_discovered(&self, name: &str) {
@@ -379,13 +397,15 @@ impl ToolRegistry {
                         let sem = semaphore.clone();
                         let ctx = ctx.clone();
                         let tool_arc = self.get(&call.name);
+                        let available = tool_arc.is_none().then(|| self.tool_names());
                         let call_id = call.id.clone();
                         let call_name = call.name.clone();
                         let input = call.input.clone();
 
                         set.spawn(async move {
                             let _permit = sem.acquire().await.unwrap();
-                            let outcome = invoke(tool_arc, &call_name, input, &ctx).await;
+                            let outcome =
+                                invoke(tool_arc, available, &call_name, input, &ctx).await;
                             let outcome = replace_empty_output(outcome, &call_name);
                             let (outcome, path) =
                                 cap_oversized_result(outcome, &ctx, &call_id, PER_TOOL_CAP);
@@ -401,8 +421,10 @@ impl ToolRegistry {
                     }
                 }
                 ToolBatch::Serial(call) => {
+                    let tool_arc = self.get(&call.name);
+                    let available = tool_arc.is_none().then(|| self.tool_names());
                     let outcome =
-                        invoke(self.get(&call.name), &call.name, call.input.clone(), ctx).await;
+                        invoke(tool_arc, available, &call.name, call.input.clone(), ctx).await;
                     let outcome = replace_empty_output(outcome, &call.name);
                     let (outcome, path) =
                         cap_oversized_result(outcome, ctx, &call.id, PER_TOOL_CAP);
@@ -424,6 +446,18 @@ impl Clone for ToolRegistry {
             tools: self.tools.clone(),
             discovered: Mutex::new(HashSet::new()),
         }
+    }
+}
+
+/// Fold a tool name onto the key dispatch matches on, so a model that
+/// capitalizes, hyphenates, or appends `_tool` still reaches the tool. The fold
+/// only ever removes information, so it cannot invent a name that was not asked
+/// for; where two tools share a key, [`ToolRegistry::get`] refuses instead.
+fn lookup_key(name: &str) -> String {
+    let key = name.trim().to_lowercase().replace('-', "_");
+    match key.strip_suffix("_tool") {
+        Some(stem) if !stem.is_empty() => stem.to_string(),
+        _ => key,
     }
 }
 
@@ -621,6 +655,7 @@ impl ToolLike for Tool {
 
 async fn invoke(
     tool: Option<Arc<dyn ToolLike>>,
+    available: Option<Vec<String>>,
     name: &str,
     input: Value,
     ctx: &ToolContext,
@@ -628,6 +663,7 @@ async fn invoke(
     let Some(t) = tool else {
         return Err(ToolError::ToolNotFound {
             tool_name: name.into(),
+            available: available.unwrap_or_default(),
         });
     };
     match t.call(input, ctx).await {
@@ -1022,6 +1058,38 @@ mod tests {
     }
 
     #[test]
+    fn resolves_a_name_carrying_a_tool_suffix() {
+        let mut registry = ToolRegistry::default();
+        registry.register(MockTool::new("grep", true, "matches"));
+
+        let tool = registry.get("grep_tool").expect("suffix should fold away");
+        assert_eq!(tool.name(), "grep");
+    }
+
+    #[test]
+    fn resolves_a_name_the_model_hyphenated() {
+        let mut registry = ToolRegistry::default();
+        registry.register(MockTool::new("read_file", true, "file contents"));
+
+        let tool = registry
+            .get("Read-File")
+            .expect("case and hyphen should fold");
+        assert_eq!(tool.name(), "read_file");
+    }
+
+    #[test]
+    fn refuses_a_name_two_tools_share_a_key() {
+        let mut registry = ToolRegistry::default();
+        registry.register(MockTool::new("grep", true, "builtin"));
+        registry.register(MockTool::new("grep_tool", true, "host tool"));
+
+        assert!(registry.get("Grep").is_none());
+        // Each registered name still reaches its own tool: exact match wins.
+        assert_eq!(registry.get("grep").unwrap().name(), "grep");
+        assert_eq!(registry.get("grep_tool").unwrap().name(), "grep_tool");
+    }
+
+    #[test]
     fn from_tool_file_populates_name_description_schema_read_only() {
         let definition = r#"---
 name: demo_tool
@@ -1124,6 +1192,28 @@ Do the demo thing.
             }
             other => panic!("Expected ToolResult, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn unknown_tool_error_names_the_registered_tools() {
+        let mut registry = ToolRegistry::default();
+        registry.register(MockTool::new("grep", true, "matches"));
+        registry.register(MockTool::new("read_file", true, "file contents"));
+        let ctx = test_ctx();
+        let calls = vec![ToolCall {
+            id: "c1".into(),
+            name: "ripgrep".into(),
+            input: serde_json::json!({}),
+        }];
+
+        let results = registry.execute(&calls, &ctx).await;
+        let ContentBlock::ToolResult { content, .. } = &results[0].0 else {
+            panic!("Expected ToolResult");
+        };
+        assert_eq!(
+            content,
+            "Unknown tool: ripgrep. Available tools: grep, read_file"
+        );
     }
 
     #[tokio::test]

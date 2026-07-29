@@ -12,8 +12,16 @@ use crate::tools::{ToolCall, ToolContext, ToolError};
 use super::agent::TicketContext;
 use super::Step;
 
-pub(super) async fn run(context: &mut TicketContext<'_>, calls: Vec<ToolCall>) -> Step {
+pub(super) async fn run(context: &mut TicketContext<'_>, mut calls: Vec<ToolCall>) -> Step {
     let max_schema_retries = context.policies.max_schema_retries.unwrap_or(u32::MAX);
+
+    // Report the registered name, so a model alternating spellings of one tool
+    // does not split its row in `tool_stats()`.
+    for call in &mut calls {
+        if let Some(tool) = context.agent.tool_registry().get(&call.name) {
+            call.name = tool.name().to_string();
+        }
+    }
 
     for call in &calls {
         context.emit(EventKind::ToolCallStarted {
@@ -301,6 +309,25 @@ mod tests {
             "expected MaxSchemaRetries PolicyViolated",
         );
         assert_eq!(ticket.status, Status::Failed);
+    }
+
+    #[tokio::test]
+    async fn a_hallucinated_tool_name_finishes_the_ticket_under_the_registered_name() {
+        let provider = MockProvider::with_results(vec![Ok(write_result_response_named(
+            "finish_tool",
+            "done",
+        ))]);
+        let (events, _, ticket) = run_one(provider, 0, 3, None).await;
+
+        assert_eq!(ticket.status, Status::Finished);
+        let names: Vec<&str> = events
+            .iter()
+            .filter_map(|e| match &e.kind {
+                EventKind::ToolCallStarted { tool_name, .. } => Some(tool_name.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(names, vec!["finish"]);
     }
 
     #[tokio::test]

@@ -9,8 +9,12 @@ use std::fmt;
 #[derive(Debug)]
 pub enum ToolError {
     /// Registry has no tool with this name. agentwerk forwards the failure to
-    /// the model as a tool-result error so it can pick a different tool.
-    ToolNotFound { tool_name: String },
+    /// the model as a tool-result error naming the registered tools, so it can
+    /// pick a different one rather than guess again and burn the retry budget.
+    ToolNotFound {
+        tool_name: String,
+        available: Vec<String>,
+    },
     /// The tool was invoked but its execution raised an error. Covers harness
     /// wiring gaps, persistence/IO failures, and anything else a tool returns
     /// via `Err(...)`.
@@ -26,7 +30,7 @@ impl ToolError {
     /// Name of the tool that raised the error.
     pub fn tool_name(&self) -> &str {
         match self {
-            ToolError::ToolNotFound { tool_name } => tool_name,
+            ToolError::ToolNotFound { tool_name, .. } => tool_name,
             ToolError::ExecutionFailed { tool_name, .. } => tool_name,
             ToolError::SchemaValidationFailed { tool_name, .. } => tool_name,
         }
@@ -36,7 +40,17 @@ impl ToolError {
     /// model-visible tool-result block.
     pub fn message(&self) -> String {
         match self {
-            ToolError::ToolNotFound { tool_name } => format!("Unknown tool: {tool_name}"),
+            ToolError::ToolNotFound {
+                tool_name,
+                available,
+            } if available.is_empty() => format!("Unknown tool: {tool_name}"),
+            ToolError::ToolNotFound {
+                tool_name,
+                available,
+            } => format!(
+                "Unknown tool: {tool_name}. Available tools: {}",
+                available.join(", ")
+            ),
             ToolError::ExecutionFailed { message, .. } => message.clone(),
             ToolError::SchemaValidationFailed { message, .. } => message.clone(),
         }
@@ -46,7 +60,7 @@ impl ToolError {
 impl fmt::Display for ToolError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ToolError::ToolNotFound { tool_name } => write!(f, "Tool {tool_name} not found"),
+            ToolError::ToolNotFound { tool_name, .. } => write!(f, "Tool {tool_name} not found"),
             ToolError::ExecutionFailed { tool_name, message } => {
                 write!(f, "Tool {tool_name} failed: {message}")
             }
