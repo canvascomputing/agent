@@ -21,7 +21,7 @@ Discover tools withheld from the initial system prompt to keep context small. Re
   "properties": {
     "query": {
       "type": "string",
-      "description": "Search terms \u2014 match against tool names and descriptions. Keywords work better than full sentences (e.g. `csv parse`, not `how do I parse a csv file`)."
+      "description": "Search terms, matched against tool names and descriptions. Keywords work better than full sentences (e.g. `csv parse`, not `how do I parse a csv file`)."
     }
   },
   "required": [

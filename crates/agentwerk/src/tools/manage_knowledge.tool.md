@@ -3,13 +3,13 @@ name: manage_knowledge
 read_only: false
 ---
 
-Read or write pages in the shared knowledge base: durable facts injected into every ticket's system prompt. The store is an Open Knowledge Format (OKF) bundle. Existing pages' one-line descriptions appear under `## Knowledge`; no such section means the store is empty. `write` creates or replaces a whole page, `read` loads one body, `list` shows the index.
+Read or write pages in your knowledge: durable facts shared across tickets and agents, injected into every ticket's system prompt. The store is an Open Knowledge Format (OKF) bundle. `write` creates or replaces a whole page, `read` loads one body, `list` shows every page with its one-line description.
 
-- Save a durable fact future tickets need; one topic per page, with a descriptive slug (`deployment-config`, `pkg-utils-py`).
+- Save a durable fact later tickets need; one topic per page, with a descriptive slug (`deployment-config`, `pkg-utils-py`).
 - `description` is a one-sentence index line under 80 chars. Cross-link pages with `[text](/pages/slug.md)`.
 - `write` overwrites the page and requires `slug`, `description`, and `content`: omitting any is the most common error. Read first if you mean to append.
-- Only `read` a slug already shown in `## Knowledge` or `list`; an unseen slug does not exist.
-- `remove` is a rarely needed cleanup for a page that turned out wrong; prefer `write` to correct it in place.
+- Only `read` a slug you have already seen listed: an unseen slug does not exist and the call fails.
+- `remove` is a rarely needed cleanup for a page that turned out wrong. Prefer `write` to correct it in place, since removing it takes the page from every other agent too.
 
 ## When NOT to use
 
