@@ -257,6 +257,7 @@ tickets.on_ticket(capture)
 | `cancel_on(awaitable)` | End the run when an awaitable resolves. |
 | `cancel_label(l)` | Call off one label's agents. |
 | `cancel_label_on_event(l, p)` | Call off one label's agents when an event matches. |
+| `label_cancelled(l)` | Report whether one label's agents have been called off. |
 | `create_ticket_on_result(make)` | Enqueue a follow-up ticket from a finished ticket. |
 | `on_ticket(h)` | Read a ticket when it starts, finishes, or fails. |
 | `await wait_for_ticket(p)` | Wait for one matching ticket instead of draining the queue. |

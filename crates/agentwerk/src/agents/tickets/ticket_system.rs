@@ -726,6 +726,26 @@ impl TicketSystem {
         self
     }
 
+    /// True when `label` names a pool called off via [`Self::cancel_label`]. Ask
+    /// before minting follow-up work: a ticket carrying a cancelled label is
+    /// never claimed. Locks only `cancelled_labels`, so it is safe to call from
+    /// a predicate that already holds the `tickets` lock.
+    ///
+    /// ```no_run
+    /// # use agentwerk::{Ticket, TicketSystem};
+    /// let tickets = TicketSystem::new();
+    /// let system = std::sync::Arc::downgrade(&tickets);
+    /// tickets.create_ticket_on_result(move |done| {
+    ///     if !done.has_label("research") || system.upgrade()?.label_cancelled("research") {
+    ///         return None;
+    ///     }
+    ///     Some(Ticket::new("search again").label("research"))
+    /// });
+    /// ```
+    pub fn label_cancelled(&self, label: &str) -> bool {
+        self.cancelled_labels.lock().unwrap().contains(label)
+    }
+
     /// True when any of `labels` names a pool called off via [`Self::cancel_label`].
     /// The loop's claim/resume path reads this to keep a cancelled pool's tickets
     /// off the queue. Locks only `cancelled_labels`, so it is safe to call from a
@@ -1114,6 +1134,18 @@ mod tests {
             "other pools are untouched",
         );
         assert!(!sys.labels_cancelled(&[]));
+    }
+
+    #[test]
+    fn label_cancelled_reads_back_the_pool_cancel_label_called_off() {
+        let (sys, _tmp) = test_system();
+        assert!(!sys.label_cancelled("research"));
+        sys.cancel_label("research");
+        assert!(sys.label_cancelled("research"));
+        assert!(
+            !sys.label_cancelled("analysis"),
+            "other pools stay claimable",
+        );
     }
 
     #[test]
