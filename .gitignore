@@ -17,3 +17,6 @@
 # Per-contributor integration-test env (see agentdocs/workflow.md).
 .env
 .env-local
+
+# Downloaded packages under analysis (malware-scanner corpus).
+/data
