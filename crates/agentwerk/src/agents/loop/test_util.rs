@@ -77,10 +77,16 @@ impl Provider for MockProvider {
 // ---- response builders ----
 
 pub fn write_result_response(result: &str) -> ModelResponse {
+    write_result_response_named("finish", result)
+}
+
+/// A finish call under a caller-chosen spelling, for tests that exercise how a
+/// misnamed tool call is resolved.
+pub fn write_result_response_named(tool_name: &str, result: &str) -> ModelResponse {
     ModelResponse {
         content: vec![ContentBlock::ToolUse {
             id: "call-1".into(),
-            name: "finish".into(),
+            name: tool_name.into(),
             input: serde_json::json!({ "result": result }),
         }],
         status: ResponseStatus::ToolUse,
