@@ -18,7 +18,7 @@ async fn test() -> std::result::Result<(), Box<dyn std::error::Error>> {
         .model(&model)
         .role(
             "Explore the repository to answer the task. When you have an answer, \
-             settle the ticket via `manage_tickets_tool` with `action: \"done\"` \
+             settle the ticket via `manage_tickets` with `action: \"done\"` \
              and `result` set to your answer.",
         )
         .tool(ReadFileTool)

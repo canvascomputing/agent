@@ -3,7 +3,7 @@
 //! One `TicketSystem` holds the whole pipeline. The driver enqueues a
 //! single starter ticket pinned to `researcher_1`. Each researcher
 //! calls `brave_search`, reads its parent ticket via
-//! `read_tickets_tool` to build on prior findings, and hands off to
+//! `read_tickets` to build on prior findings, and hands off to
 //! the next agent via `finish` with a `handover`. The final researcher
 //! attaches the report schema to its handover so the report writer's
 //! result is validated by the framework. The report writer finishes
@@ -389,7 +389,7 @@ fn format_tool_call(tool_name: &str, input: &serde_json::Value) -> Vec<String> {
             "🔎 search: {}",
             truncate(input["query"].as_str().unwrap_or(""), 70),
         )],
-        "read_tickets_tool" => {
+        "read_tickets" => {
             let action = input["action"].as_str().unwrap_or("?");
             let key = input.get("key").and_then(|v| v.as_str()).unwrap_or("");
             let suffix = if key.is_empty() {

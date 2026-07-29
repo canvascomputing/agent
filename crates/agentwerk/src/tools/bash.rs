@@ -146,16 +146,16 @@ impl ToolLike for BashTool {
 impl BashTool {
     /// Create an unrestricted bash tool with the standard description.
     pub fn unrestricted() -> Self {
-        Self::new("bash_tool", "*").description(&format!(
+        Self::new(&tool_file().name, "*").description(&format!(
             "\
 Executes a bash command in the working directory and returns its output.
 
 IMPORTANT: Avoid using this tool when a dedicated tool exists:
-- File search: Use glob_tool (NOT find or ls)
-- Content search: Use the grep tool (NOT shell grep/rg via bash_tool)
-- Read files: Use read_file_tool (NOT cat/head/tail)
-- Edit files: Use edit_file_tool (NOT sed/awk)
-- Write files: Use write_file_tool (NOT echo/heredoc)
+- File search: Use glob (NOT find or ls)
+- Content search: Use grep (NOT shell grep/rg via bash)
+- Read files: Use read_file (NOT cat/head/tail)
+- Edit files: Use edit_file (NOT sed/awk)
+- Write files: Use write_file (NOT echo/heredoc)
 
 # Instructions
 - Always quote file paths that contain spaces with double quotes.
@@ -188,12 +188,12 @@ mod tests {
     #[test]
     fn bash_tool_defaults() {
         let tool = BashTool::unrestricted();
-        assert_eq!(tool.name(), "bash_tool");
+        assert_eq!(tool.name(), "bash");
         assert!(!tool.is_read_only());
     }
 
     #[test]
-    fn glob_tool_sets_name() {
+    fn bash_tool_takes_its_name_from_the_first_argument() {
         let tool = BashTool::new("echo", "echo *");
         assert_eq!(tool.name(), "echo");
         assert!(!tool.is_read_only());
@@ -201,18 +201,18 @@ mod tests {
 
     #[test]
     #[should_panic(expected = "Pattern must not be empty")]
-    fn glob_tool_empty_pattern_panics() {
+    fn bash_tool_empty_pattern_panics() {
         BashTool::new("empty", "");
     }
 
     #[test]
-    fn glob_tool_read_only() {
+    fn bash_tool_can_be_marked_read_only() {
         let tool = BashTool::new("echo", "echo *").read_only(true);
         assert!(tool.is_read_only());
     }
 
     #[test]
-    fn glob_tool_custom_description() {
+    fn bash_tool_custom_description_replaces_the_default() {
         let tool = BashTool::new("git", "git *").description("Run git commands.");
         assert_eq!(ToolLike::description(&tool), "Run git commands.");
     }

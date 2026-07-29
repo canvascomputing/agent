@@ -190,6 +190,8 @@ Forbidden:
 
 Naming: `snake_case`. Tool structs keep the `{Name}Tool` suffix: `ReadFileTool`, `BashTool`, `ManageTicketsTool`.
 
+The name the model calls is a separate namespace and takes no suffix: `read_file`, `bash`, `manage_tickets`. It lives in the tool's `.tool.md` frontmatter, never as a Rust literal at a call site. A `_tool` suffix there restates what the tools array already says.
+
 ## Doc comments (`///`)
 
 **State the purpose in one sentence. No "This function…" or "Returns…".**

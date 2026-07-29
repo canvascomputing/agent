@@ -11,7 +11,7 @@ Record your final answer and mark your current ticket `Finished`. Call it once, 
 
 ## When NOT to use
 
-- Create or edit other tickets without finishing this one: use `manage_tickets_tool`.
+- Create or edit other tickets without finishing this one: use `manage_tickets`.
 
 ## Schema
 

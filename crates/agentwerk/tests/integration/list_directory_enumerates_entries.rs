@@ -49,7 +49,7 @@ async fn separates_files_and_directories() -> std::result::Result<(), Box<dyn st
         .model(&model)
         .dir(root)
         .role(
-            "Step 1: call `list_directory_tool` with `path: \".\"` to see the \
+            "Step 1: call `list_directory` with `path: \".\"` to see the \
              working directory's top level. \
              Step 2: immediately call `finish` with `files` and \
              `directories` as its top-level arguments in exactly this shape: \

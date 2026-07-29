@@ -1,4 +1,4 @@
-//! End-to-end: a real LLM uses `read_tickets_tool` to locate a ticket it does
+//! End-to-end: a real LLM uses `read_tickets` to locate a ticket it does
 //! not own and report a secret recorded only in that ticket's body. The secret
 //! is absent from the agent's own task, so a correct answer proves the model
 //! read the queue. The seeded ticket carries a label the agent does not handle,
