@@ -182,6 +182,14 @@ impl AnthropicProvider {
         if m.contains("[1m]") {
             return Some(1_000_000);
         }
+        // The Claude 5 family is natively 1M, with no [1m] opt-in.
+        if m.contains("claude-fable-5")
+            || m.contains("claude-mythos-5")
+            || m.contains("claude-opus-5")
+            || m.contains("claude-sonnet-5")
+        {
+            return Some(1_000_000);
+        }
         if m.contains("claude-opus-4")
             || m.contains("claude-sonnet-4")
             || m.contains("claude-haiku-4")
@@ -764,6 +772,15 @@ mod tests {
         assert_eq!(lookup("claude-sonnet-4-20250514"), Some(200_000));
         assert_eq!(lookup("claude-opus-4-20250101"), Some(200_000));
         assert_eq!(lookup("claude-haiku-4-5-20251001"), Some(200_000));
+    }
+
+    #[test]
+    fn lookup_claude_5_family_returns_1m() {
+        let lookup = AnthropicProvider::lookup_context_window_size;
+        assert_eq!(lookup("claude-fable-5"), Some(1_000_000));
+        assert_eq!(lookup("claude-opus-5"), Some(1_000_000));
+        assert_eq!(lookup("claude-sonnet-5"), Some(1_000_000));
+        assert_eq!(lookup("claude-mythos-5"), Some(1_000_000));
     }
 
     #[test]
