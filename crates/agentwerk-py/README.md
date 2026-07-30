@@ -58,7 +58,9 @@ async def main():
         .build()
     )
 
-    agent.task("Find every `pub trait` defined under src/ and explain each in one sentence.")
+    agent.task(
+        "Find every `pub trait` defined under src/ and explain each in one sentence."
+    )
     work = await agent.finish()
 
     print(work.last_result())
@@ -83,7 +85,9 @@ for i in range(4):
         Agent()
         .name(f"scout_{i}")
         .label("scan")
-        .role("Find code that can panic. File a `report` ticket per finding, and note what you learn.")
+        .role(
+            "Find code that can panic. File a `report` ticket per finding, and note what you learn."
+        )
         .knowledge(store)
         .from_env()
         .tool(GrepTool())
@@ -209,11 +213,7 @@ Connect to a `Provider` to give agents access to LLMs. agentwerk supports: Anthr
 ```python
 from agentwerk import Agent, AnthropicProvider
 
-agent = (
-    Agent()
-    .provider(AnthropicProvider(key))
-    .model("claude-sonnet-4-20250514")
-)
+agent = Agent().provider(AnthropicProvider(key)).model("claude-sonnet-4-20250514")
 
 # Or read both from the environment.
 agent = Agent().from_env()
@@ -240,9 +240,7 @@ You can configure models to set a custom context window size or the applied reas
 from agentwerk import Agent, Model
 
 agent = Agent().model(
-    Model("my-local-model")
-    .context_window(128_000)
-    .reasoning_effort("high")
+    Model("my-local-model").context_window(128_000).reasoning_effort("high")
 )
 ```
 
@@ -380,11 +378,13 @@ A `Schema` constrains the result an agent produces for a ticket. A violation tri
 ```python
 from agentwerk import Schema, Ticket
 
-schema = Schema({
-    "type": "object",
-    "properties": {"title": {"type": "string"}},
-    "required": ["title"],
-})
+schema = Schema(
+    {
+        "type": "object",
+        "properties": {"title": {"type": "string"}},
+        "required": ["title"],
+    }
+)
 
 tickets.ticket(Ticket("Write a report.", schema=schema))
 ```
@@ -400,21 +400,18 @@ tickets.ticket(Ticket("Write a report.", schema=schema))
 
 </details>
 
-### Limits
+### Policies
 
-A breach stops execution and reports which limit was hit.
+Policies allow you to define execution limits:
 
 ```python
 (
-    tickets
-    .max_turns(40)
+    tickets.max_turns(40)
     .max_time(300.0)
     .max_input_tokens(200_000)
     .max_output_tokens(50_000)
 )
 ```
-
-agentwerk compacts the messages automatically when the model's context window is near full, so a long run stays inside it. The compaction events report progress.
 
 <details>
 <summary>All limits</summary>
@@ -430,26 +427,21 @@ agentwerk compacts the messages automatically when the model's context window is
 | `max_request_retries(count)` | Limit how often a failing request is retried. |
 | `request_retry_delay(seconds)` | Wait this long between retries. |
 
-A breach emits a `policy_violated` event carrying the limit that was hit. See [`EventKind`](https://docs.rs/agentwerk/latest/agentwerk/event/enum.EventKind.html) for that and the compaction events.
+A violation emits a `policy_violated` event, see [`EventKind`](https://docs.rs/agentwerk/latest/agentwerk/event/enum.EventKind.html).
 
 </details>
 
 ## Tools
 
-Give agents access to tools. Each tool exposes an action the agent can choose to take.
+Tools allow agents to perform their work.
 
 ```python
 from agentwerk import Agent, BashTool, GrepTool, ReadFileTool
 
-agent = (
-    Agent()
-    .tool(ReadFileTool())
-    .tool(GrepTool())
-    .tool(BashTool("git", "git *"))
-)
+agent = Agent().tool(ReadFileTool()).tool(GrepTool()).tool(BashTool("git", "git *"))
 ```
 
-`FinishTool()` and `ManageKnowledgeTool(store)` are registered automatically on every agent. Registering a tool replaces any tool already registered under the same name, so a later `tool(...)` wins over an automatic one.
+`FinishTool()` and `ManageKnowledgeTool(store)` are special tools, registered automatically on every agent. They are used for interacting with the `TicketSystem`.
 
 <details>
 <summary>All built-in tools</summary>
@@ -470,12 +462,6 @@ agent = (
 | **Knowledge** | `ManageKnowledgeTool(store)` | Write, read, remove, or list pages in a knowledge store. |
 | **Discovery** | `FindToolsTool()` | Look up the tools held back until they are needed. |
 
-`FinishTool()` can also hand follow-up work to another agent as it finishes.
-
-`BashTool(name, pattern)` takes the name the model sees and the pattern a command must match. `UnrestrictedBashTool()` removes the pattern check.
-
-`knowledge(store)` is the usual way to choose the knowledge store, since it also renders the store's index into the system prompt. `Agent.empty()` starts with nothing registered at all.
-
 </details>
 
 ### Custom tools
@@ -485,11 +471,15 @@ Define custom tools for specific needs. Each tool declares a JSON-Schema for its
 ```python
 from agentwerk import tool
 
-@tool(read_only=True, schema={
-    "type": "object",
-    "properties": {"name": {"type": "string"}},
-    "required": ["name"],
-})
+
+@tool(
+    read_only=True,
+    schema={
+        "type": "object",
+        "properties": {"name": {"type": "string"}},
+        "required": ["name"],
+    },
+)
 def greet(name: str) -> str:
     """Say hello."""
     return f"Hello, {name}!"
@@ -520,6 +510,7 @@ Events report everything that happens while your agents work. Log them, display 
 def log(event):
     if event.kind == "ticket_finished":
         print(f"[{event.agent_name}] done {event.ticket_key}")
+
 
 tickets.on_event(log)
 
@@ -583,6 +574,7 @@ def capture(event, ticket):
     if event.kind == "ticket_finished":
         model = tickets.model_for_agent(event.agent_name)
         Trajectory.from_ticket(event.agent_name, model, ticket).save("datasets")
+
 
 tickets.on_ticket(capture)
 ```
@@ -649,7 +641,12 @@ Programmatically create entries:
 from agentwerk import Page
 
 store.pages().save(
-    Page("build-command", "How the project is built.", "Run `make` to compile.", tags=["build"])
+    Page(
+        "build-command",
+        "How the project is built.",
+        "Run `make` to compile.",
+        tags=["build"],
+    )
 )
 
 page = store.pages().load("build-command")

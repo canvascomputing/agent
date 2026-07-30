@@ -399,9 +399,9 @@ tickets.ticket(Ticket::new("Write a report.").schema(schema));
 
 </details>
 
-### Limits
+### Policies
 
-A breach stops execution and reports which limit was hit.
+Policies allow you to define execution limits:
 
 ```rust
 tickets
@@ -410,8 +410,6 @@ tickets
     .max_input_tokens(200_000)
     .max_output_tokens(50_000);
 ```
-
-agentwerk compacts the messages automatically when the model's context window is near full, so a long run stays inside it. The compaction events report progress.
 
 <details>
 <summary>All limits</summary>
@@ -427,7 +425,7 @@ agentwerk compacts the messages automatically when the model's context window is
 | `max_request_retries(count)` | Limit how often a failing request is retried. |
 | `request_retry_delay(duration)` | Wait this long between retries. |
 
-A breach emits `EventKind::PolicyViolated` carrying the limit that was hit. See [`EventKind`](https://docs.rs/agentwerk/latest/agentwerk/event/enum.EventKind.html) for that and the compaction events.
+A violation emits `EventKind::PolicyViolated`, see [`EventKind`](https://docs.rs/agentwerk/latest/agentwerk/event/enum.EventKind.html).
 
 </details>
 
