@@ -157,12 +157,12 @@ Seven rules the surface table below never repeats.
 | `EventKind` variant payload | `Event.data`: a dict of that variant's fields. |
 | `EventKind`, `FinishReason` | Strings. |
 | `CompactReason`, `PolicyKind`, `ToolFailureKind`, `KnowledgeOp` | Strings inside `Event.data`, under the field's own name: `data["policy"]`, `data["reason"]`, `data["op"]`. |
-| `default_logger()` | `TicketSystem.on_event(handler)`, in both languages. |
+| `default_logger()` | Not bound: pass your own handler to `TicketSystem.on_event(handler)`. |
 | **LLM providers** | |
-| `AnthropicProvider::new(key).base_url(url)` | `AnthropicProvider(api_key, base_url=..)` |
-| `OpenAiProvider::new(key).base_url(url)` | `OpenAiProvider(api_key, base_url=..)` |
-| `MistralProvider::new(key).base_url(url)` | `MistralProvider(api_key, base_url=..)` |
-| `LiteLlmProvider::new(key).base_url(url)` | `LiteLlmProvider(api_key, base_url=..)` |
+| `AnthropicProvider::new(key).base_url(url).timeout(d)` | `AnthropicProvider(api_key, base_url=..)`: the request timeout is not bound. |
+| `OpenAiProvider::new(key).base_url(url).timeout(d)` | `OpenAiProvider(api_key, base_url=..)`: the request timeout is not bound. |
+| `MistralProvider::new(key).base_url(url).timeout(d)` | `MistralProvider(api_key, base_url=..)`: the request timeout is not bound. |
+| `LiteLlmProvider::new(key).base_url(url).timeout(d)` | `LiteLlmProvider(api_key, base_url=..)`: the request timeout is not bound. |
 | `Provider` | An opaque handle. Write a new LLM provider in Rust. |
 | `provider_from_env()` | `provider_from_env()` |
 | `model_from_env()` | `model_from_env()` |

@@ -306,10 +306,43 @@ counter += 1;
 
 **Terse, example-driven, scannable.**
 
-- Fixed section order: Installation, Quick Start, Use Cases, API, Development.
-- Every subsection leads with a minimal example, then explains.
-- Enumerations use bullets or grouped bullets; tables are not used.
+- Fixed section order: Why use agentwerk?, Installation, Quick Start, Agent Swarms, Demo, Use Cases, the API sections, Development.
+- The opening section is one bullet per reason to reach for the crate: `**Reason:** one short sentence` saying what agentwerk does to deliver it. A reason with nothing behind it is marketing and is cut.
+- That section runs before the reader has met a single agentwerk concept, so it carries no identifier, no type or function name, no counted-surface claim, and none of the domain vocabulary the API sections introduce. "Task" and "agent" are the only nouns assumed.
+- API sections run in the order a new reader needs them: Agents, Tickets, Tools, Events, Stats, Knowledge, Sessions.
+- Prompting has no section of its own. `role`, `task`, and the template bindings configure an agent, so they live in Agents next to `name` and `tool`; a separate section only forced a forward reference out of the Agents lead.
+- Every section leads with one minimal example, then at most three sentences.
 - Facts live in one place; other sections cross-link rather than repeat.
+
+## README folds
+
+**Above the fold is what a reader needs. The exhaustive reference goes inside a `<details>` block at the end of the section.**
+
+- Nothing is deleted, only folded. A method that exists is documented somewhere, or the fold is not doing its job.
+- Folds are the last thing in a section. The `<summary>` names what it holds: `All event kinds`, `All statistics`. A section takes a second fold only when it covers two separate catalogues, as Events does with the kinds and the hooks that react to them.
+- IMPORTANT: a blank line after `</summary>` and before `</details>`. `details` opens a raw-HTML block, so without the blank line every table inside renders as literal pipe characters on GitHub, crates.io, and PyPI alike.
+- Snippet budgets: eight lines for a section lead, five for a subsection lead. Quick Start gets sixteen.
+- Agent Swarms is the one exception and runs long, because it is the only place a whole system is shown at once: a pool working in parallel, a second pool the first hands tickets to, and one knowledge store between them. Every line there earns its place by carrying one of those three, and anything that does not belongs in a section below.
+
+## README mechanics
+
+**Formatting choices that are not about either language.**
+
+- Prose is not hard-wrapped. Wrapping reflows a whole paragraph when one word changes.
+- One `h1` per file, the title. Every section is `h2`, every subsection `h3`. No wrapper heading above a group of sections.
+- `h2` is Title Case, `h3` is Sentence case.
+- A method placeholder is spelled as what the caller passes, never a single letter: `max_turns(count)`, `cancel_on_event(condition)`, `results_for_label(label)`. In a bullet list the bare method name carries no parentheses at all, since the description says what it takes.
+- Centered blocks use `<div align="center">`. `align` is not allowed on `<p>` by the crates.io sanitizer, so `<p align="center">` renders left-aligned there.
+- No emoji.
+
+## Rust and Python READMEs
+
+**The Python README mirrors the Rust one section for section, carrying the same examples.**
+
+- The heading lists of the two files match. A section in one is a section in the other.
+- A snippet is a translation of its twin: same variable names, same string literals, same order of operations.
+- A difference that is real belongs in `crates/agentwerk-py/DIFFS.md`, and the README shows it in the same place in both files.
+- Only the Installation cross-links and the Development section differ in substance.
 
 ## README voice
 
@@ -340,7 +373,17 @@ counter += 1;
 - "ships" / "ships with" is empty filler; so are "sensible defaults", "tuning", "various options". State one concrete fact, list the identifiers and point at docs.rs, or do both. Do not dump every default value into prose either; those numbers belong on docs.rs.
 - Rust async primitive nouns ("future", "closure", "predicate", "callback") are jargon in caller-facing prose. Say "another task that finishes", "a condition you supply", "your function". The Rust identifiers stay as identifiers (parameter names, type names); only the prose changes.
 - Abstract pronouns and fractions ("one half", "the other", "either side") leave the reader guessing. Name the subject directly: not "detect one half from the environment and override the other", but "read only the provider from the environment, or only the model".
-- "header" / "ticket header" is project-internal jargon for the on-disk file holding a `Ticket` without its `replies`. In caller-facing prose say "the ticket" or "the ticket without its transcript"; the internal helpers `ticket_header_path` and architecture.md may keep the term since the codebase audience knows what it means.
+- "header" / "ticket header" is project-internal jargon for the on-disk file holding a `Ticket` without its `replies`. In caller-facing prose say "the ticket" or "the ticket without its messages"; the internal helpers `ticket_header_path` and architecture.md may keep the term since the codebase audience knows what it means.
+- "transcript" is replaced with "messages" or "replies". The field is `replies`, so name it.
+
+## README tables
+
+**No table above a fold. Every enumeration inside a fold is a table.**
+
+- Above the fold there is prose and one example, so a table there is a sign the section is doing reference work it should have folded.
+- Inside a fold the content is the reference, and a two-column grid is what a reader scans. Bullets there only hide the second column.
+- A catalogue with categories takes a third column on the left holding the bold group label: the built-in tools and the event kinds.
+- Prose still belongs in a fold when it is a caveat rather than an entry, as does a snippet showing how one of the entries is called.
 
 ## README table shape
 
@@ -348,7 +391,7 @@ counter += 1;
 
 - Builder rows lead with an imperative verb describing the configuration effect: `Set the LLM provider.`, `Register a tool.`, `Restrict the agent to matching labels.`
 - Action rows lead with an imperative verb describing the effect: `Create a task.`, `Run until interrupted.`
-- Accessor rows lead with `Return ...`: `Return every finished ticket's result.`
+- Accessor rows lead with `Get ...`: `Get every finished ticket's result.` The prose verb `Return` stays for instructions to the caller, as in "Return `ToolResult::error(message)` for a failure the model should work around".
 - Tool rows lead with an imperative verb describing the action the tool exposes: `Read a file with line numbers.`, `Fetch a URL and read its body.` The tool itself does not act; the agent does. The table intro carries that framing once so individual rows stay terse.
 - Event rows are past-tense state sentences: `A ticket finished successfully.`
 

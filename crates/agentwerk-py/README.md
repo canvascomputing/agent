@@ -1,30 +1,51 @@
+<div align="center">
+  <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/logo.png" width="200" />
+</div>
+
 <h1 align="center">agentwerk (Python)</h1>
 
-<p align="center">
-  <strong>agentwerk: A minimal library for running many agents in parallel.</strong>
-</p>
+<div align="center">
+  <strong>A minimal Python library for running many agents in parallel.</strong>
+</div>
 
-<p align="center">agentwerk is designed to tackle complex problems with fleets of agents through the simplest interface possible. It provides a ticket system which distributes tasks across agents running in parallel, validates results, retries on failure, and reports every step as an event.</p>
+<div align="center">
+  <a href="#installation">Installation</a> •
+  <a href="#quick-start">Quick Start</a> •
+  <a href="#agent-swarms">Agent Swarms</a> •
+  <a href="#demo">Demo</a> •
+  <a href="#use-cases">Use Cases</a> •
+  <a href="#development">Development</a>
+</div>
 
-<p align="center"><em>agentwerk pairs "agent" with the German "Werk", a word for both factory and artwork: machinery for building agentic systems.</em></p>
+<div align="center">agentwerk is designed to tackle complex problems with fleets of agents through the simplest interface possible. It provides a ticket system which distributes tasks across agents running in parallel, validates results, retries on failure, and reports every step as an event.</div>
+
+<div align="center"><em>agentwerk pairs "agent" with the German "Werk", a word for both factory and artwork: machinery for building agentic systems.</em></div>
 
 ---
 
+## Why use agentwerk?
+
+- **Minimal interface:** create agents with a few lines of code.
+- **Complex workflows:** allow agents to interact through shared knowledge and tickets.
+- **Deep observability:** inspect every request, message and failure.
+- **Ease of integration:** apply agents as simple as HTTP calls.
+- **Facilitate training:** collect trajectories for fine-tuning models.
+
 ## Installation
+
+### Python
 
 ```bash
 pip install agentwerk
 ```
 
-Configure an LLM provider through environment variables (`ANTHROPIC_API_KEY`,
-`OPENAI_API_KEY`, `MISTRAL_API_KEY`, or `LITELLM_API_KEY`), the same as the Rust
-crate.
+Also see: [Rust implementation](../../README.md).
 
 ## Quick Start
 
 ```python
 import asyncio
-from agentwerk import Agent, ReadFileTool, GrepTool
+from agentwerk import Agent, GrepTool, ReadFileTool
 
 
 async def main():
@@ -46,29 +67,85 @@ async def main():
 asyncio.run(main())
 ```
 
-> The run is driven by `await agent.finish()`, so every snippet below that calls
-> `finish()`, `wait_for_ticket()`, or reads results runs inside an `async`
-> function like this one.
+## Agent Swarms
 
-# API
+Run many agents in parallel and let them share what they learn:
 
-- [Agents](#agents): Pick up tickets and produce results.
+```python
+from agentwerk import Agent, Knowledge, Ticket, TicketSystem
+from agentwerk import GrepTool, ManageTicketsTool, ReadFileTool
+
+tickets = TicketSystem()
+store = Knowledge.load("./notes")
+
+for i in range(4):
+    tickets.agent(
+        Agent()
+        .name(f"scout_{i}")
+        .label("scan")
+        .role("Find code that can panic. File a `report` ticket per finding, and note what you learn.")
+        .knowledge(store)
+        .from_env()
+        .tool(GrepTool())
+        .tool(ReadFileTool())
+        .tool(ManageTicketsTool())
+        .build()
+    )
+
+tickets.agent(
+    Agent()
+    .name("writer")
+    .label("report")
+    .role("Read the cited file and explain the fix in two sentences.")
+    .knowledge(store)
+    .from_env()
+    .tool(ReadFileTool())
+    .build()
+)
+
+for dir in ["src/api", "src/db", "src/web", "src/cli"]:
+    tickets.ticket(Ticket(f"Audit {dir}.", labels=["scan"]))
+
+await tickets.finish()
+
+for fix in tickets.results_for_label("report"):
+    print(fix)
+```
+
+## Demo
+
+<div align="left">
+  <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/demo.gif" width="600" />
+</div>
+
+## Use Cases
+
+Example projects built with agentwerk:
+
+- [Terminal REPL](../use-cases/src/terminal_repl/): minimal interactive chat
+- [Divide and Conquer](../use-cases/src/divide_and_conquer/): arithmetic problem shared across agents
+- [Deep Research](../use-cases/src/deep_research/): deep research pipeline (requires `BRAVE_API_KEY`)
+- [Malware Scanner](../use-cases/src/malware_scanner/): identify indicators of compromise in a software package
+
+> Configure an LLM provider first (see [Environment](../../DEVELOPMENT.md#environment)).
+
+```bash
+python examples/divide_and_conquer.py 200 4 2
+```
+
+The API, section by section:
+
+- [Agents](#agents): Define roles, behavior and actions.
 - [Tickets](#tickets): Coordinate complex work across agents.
-- [Prompting](#prompting): Role and task shaping the work of an agent.
-- [Tools](#tools): Capabilities agents use to solve a ticket.
-- [Knowledge](#knowledge): Durable memory agents share across tickets and runs.
-- [Sessions](#sessions): Working directory layout and how to reopen a run.
-- [Events](#events): Lifecycle events emitted while agents work.
-- [Stats](#stats): Statistics for tickets, tokens, and activity.
-- [Differences](DIFFS.md): The Rust API and this one, side by side.
+- [Tools](#tools): Define accessible tooling.
+- [Events](#events): Requests, tool usage, failures and more.
+- [Stats](#stats): Metrics about tickets, tokens and time.
+- [Knowledge](#knowledge): Notes agents can share for collaboration.
+- [Sessions](#sessions): Directory layout of data agents create.
 
 ## Agents
 
-An `Agent` picks up **tickets**, uses tools to solve them, and writes the result
-back onto each ticket. `Agent()` opens the fluent configuration: each call
-returns the agent, and `build()` arms it. Configuring an agent after `build()`,
-or building it twice, is rejected. Rust splits this across `AgentBuilder` and
-`Agent`, one of the [differences](DIFFS.md) between the two APIs.
+An `Agent` is the core entity of agentwerk. It has access to tools for solving tasks in the form of tickets.
 
 ```python
 from agentwerk import Agent, ReadFileTool
@@ -77,332 +154,34 @@ agent = (
     Agent()
     .name("agent_0")
     .label("math")
+    .role("You are an arithmetic agent. Compute step by step and show your work.")
     .tool(ReadFileTool())
-)
-```
-
-| Method | Description |
-|--------|-------------|
-| `name(s)` | Set an identifier for assigning tickets. |
-| `label(l)` / `labels([..])` | Restrict the agent to tickets carrying matching labels. |
-| `tool(t)` / `tools([..])` | Register a tool the agent may call. |
-| `dir(d)` | Set the directory the agent works in. |
-| `edit_directive_on_failure(f)` | Reword the retry message agentwerk sends when the model stalls or returns invalid output. |
-
-`role` is covered under [Prompting](#prompting); `knowledge(store)`
-under [Knowledge](#knowledge).
-
-### Providers
-
-A `Provider` connects the agent to an LLM service. agentwerk ships providers for
-Anthropic, OpenAI, Mistral, and a LiteLLM proxy.
-
-```python
-from agentwerk import Agent, AnthropicProvider
-
-agent = (
-    Agent()
-    .provider(AnthropicProvider(key))
-    .model("claude-sonnet-4-20250514")
-)
-
-# Or pick from environment variables.
-agent = Agent().from_env()
-```
-
-Each provider constructor takes the API key and an optional `base_url` to
-override the endpoint (useful for proxied or self-hosted OpenAI-compatible
-models):
-
-```python
-from agentwerk import OpenAiProvider
-
-provider = OpenAiProvider(key, "https://my-endpoint.example/v1")
-```
-
-| Method | Description |
-|--------|-------------|
-| `provider(p)` | Set the LLM provider. |
-| `model(m)` | Set the model the provider runs. |
-| `from_env()` | Detect provider and model in one call. |
-
-To read only the provider from the environment (and set the model explicitly),
-or only the model (and set the provider explicitly), use `provider_from_env()`
-or `model_from_env()` on the agent.
-
-### Models
-
-`.model(m)` accepts a model name or a `Model`. Names registered with a known
-provider resolve to a context window automatically. For private or proxied
-models, build a `Model` and pass an explicit window so automatic compaction
-stays active:
-
-```python
-from agentwerk import Agent, Model
-
-agent = Agent().model(Model("my-local-model").context_window(128_000))
-```
-
-Set `reasoning_effort` on a reasoning-capable model to make it think before
-answering. The thinking is recorded in the ticket transcript alongside the
-answer. It is off unless you set it. Effort is one of `"off"`, `"low"`,
-`"medium"`, or `"high"`:
-
-```python
-from agentwerk import Agent, Model
-
-agent = Agent().model(Model("claude-sonnet-4-6").reasoning_effort("high"))
-```
-
-## Tickets
-
-The `TicketSystem` coordinates collaboration between agents. A `task` is the work
-itself; a `Ticket` wraps it with metadata like labels and schemas. Labels assign
-work to matching agents.
-
-```python
-from agentwerk import Agent, Ticket, TicketSystem, FetchUrlTool
-
-tickets = TicketSystem()
-
-for i in range(4):
-    tickets.agent(
-        Agent()
-        .name(f"researcher_{i}")
-        .label("research")
-        .from_env()
-        .tool(FetchUrlTool())
-        .build()
-    )
-
-tickets.agent(
-    Agent().name("analyst").label("analysis").from_env().build()
-)
-
-for url in pricing_pages:
-    tickets.ticket(
-        Ticket(
-            f"Fetch {url} and extract pricing tiers, limits, and features.",
-            labels=["research"],
-        )
-    )
-
-tickets.ticket(
-    Ticket(
-        "Rank all products by value for a 10-person engineering team.",
-        labels=["analysis"],
-        schema=comparison_schema,
-    )
-)
-```
-
-| Method | Description |
-|--------|-------------|
-| `agent(agent)` | Add an agent to this ticket system. |
-| `task(t)` | Submit a task and return its ticket key. |
-| `ticket(t)` | Submit a `Ticket` with custom labels, a schema, or a parent link. |
-
-Also on `TicketSystem`: `dir(d)` to relocate persisted state, `reply(key, c)`
-to continue a multi-turn conversation on one ticket, and `set_failed(key)` to
-fail a ticket from outside the run.
-
-### Execution
-
-Start, wait, and cancel a run:
-
-```python
-tickets.start()
-await tickets.finish()
-answer = tickets.last_result()
-```
-
-| Method | Description |
-|--------|-------------|
-| `start()` | Begin processing tickets in the background. |
-| `await finish()` | Process every queued ticket and return. |
-| `cancel()` | Cancel the run. |
-| `finish_reason()` | Return why the most recent `finish()` returned, as a string: `"drained"`, `"policy_violated(..)"`, or `"cancelled"`. |
-
-### Reacting to events
-
-React to events as they arrive: stop early, call off one label's agents, queue
-follow-up work, or read each ticket as it finishes. Predicates receive the
-finished ticket (or result, or event) and return a truthy value.
-
-```python
-# Fail fast: end the run at the first malicious verdict.
-tickets.cancel_on_result(lambda result: result["verdict"] == "malicious")
-
-# Verify every analysis finding with a follow-up ticket for the review pool.
-def review_finding(ticket):
-    if ticket.has_label("analysis"):
-        return Ticket("Verify this finding.", labels=["review"], parent=ticket.key)
-    return None
-
-tickets.create_ticket_on_result(review_finding)
-
-# Keep the messages of every finished ticket as a training example.
-def capture(event, ticket):
-    if event.kind == "ticket_finished":
-        model = tickets.model_for_agent(event.agent_name)
-        Trajectory.from_ticket(event.agent_name, model, ticket).save("datasets")
-
-tickets.on_ticket(capture)
-```
-
-| Method | Description |
-|--------|-------------|
-| `cancel_on_event(p)` | End the run when an event matches. |
-| `cancel_on_result(p)` | End the run when a finished result matches. |
-| `cancel_on(awaitable)` | End the run when an awaitable resolves. |
-| `cancel_label(l)` | Call off one label's agents. |
-| `cancel_label_on_event(l, p)` | Call off one label's agents when an event matches. |
-| `label_cancelled(l)` | Report whether one label's agents have been called off. |
-| `create_ticket_on_result(make)` | Enqueue a follow-up ticket from a finished ticket. |
-| `on_ticket(h)` | Read a ticket when it starts, finishes, or fails. |
-| `await wait_for_ticket(p)` | Wait for one matching ticket instead of draining the queue. |
-| `edit_replies_on_event(f)` | Rewrite a ticket's replies before its next request. One editor at a time: a second replaces it. |
-| `edit_replies(key, f)` | Rewrite one ticket's replies now. |
-
-An editor receives a list of `Reply` and returns the new list, or `None` to
-leave them alone. Build a new one with `Reply.user_text(text)`. Each `Reply` has
-`author`, `created_at`, and a `content` list whose entries carry a `kind` and a
-`data` dict. Keep each tool call paired with its result: the model rejects a
-conversation missing one half.
-
-```python
-from agentwerk import Reply
-
-tickets.edit_replies(key, lambda replies: replies + [Reply.user_text("Try again.")])
-```
-
-### Reading results
-
-Query the system after `await finish()` returns. Results are native Python values
-(`dict`, `list`, `str`, ...), not JSON strings:
-
-```python
-await tickets.finish()
-
-answer = tickets.last_result()
-if answer is not None:
-    print(answer)
-
-for ticket in tickets.tickets():
-    print(f"{ticket.key}: {ticket.status}")
-```
-
-| Method | Description |
-|--------|-------------|
-| `last_result()` | Return the most recent finished ticket's result, or `None`. |
-| `results()` | Return every finished ticket's result, in creation order. |
-| `results_for_label(l)` | Return every finished ticket carrying the label's result. |
-| `tickets()` | Return every ticket, in creation order. |
-| `find_ticket(p)` | Return the earliest ticket matching the predicate. |
-| `find_tickets(p)` | Return every ticket matching the predicate. |
-| `get_ticket(key)` | Return one ticket by key, or `None`. |
-| `model_for_agent(name)` | Return the model that agent runs, or `None`. |
-| `stats()` | Return the run statistics described under [Stats](#stats). |
-
-### Inspecting tickets
-
-Each `Ticket` carries the recorded result, its messages, and lifecycle
-timestamps as attributes. Read them directly; a structured result is already a
-dict:
-
-```python
-ticket = tickets.find_ticket(lambda t: t.has_label("analysis"))
-print(ticket.result["title"])
-```
-
-Attributes: `key`, `status`, `task`, `result`, `labels`, `schema`, `parent`,
-`reporter`, `replies`, and the four lifecycle timestamps (`created_at`,
-`started_at`, `finished_at`, `failed_at`). `status` is `"todo"`,
-`"in_progress"`, `"finished"`, or `"failed"`, matching the persisted
-`tickets.jsonl`. Six predicates read better than comparing that string:
-`is_todo()`, `is_in_progress()`, `is_finished()`, `is_failed()`,
-`is_pending()` (todo or in progress), and `is_resolved()` (finished or
-failed). `has_label(l)` does the same for `labels`.
-
-To build a ticket, pass the settable fields to the constructor:
-`Ticket(task, labels=[..], schema=s, parent=key)`.
-
-### Policies
-
-Configure execution policies on a ticket system. A breach emits a
-`policy_violated` event and halts execution. Durations are in seconds:
-
-```python
-tickets = TicketSystem()
-(
-    tickets
-    .max_turns(40)
-    .max_time(300.0)
-    .max_input_tokens(200_000)
-    .max_output_tokens(50_000)
-)
-```
-
-| Method | Description |
-|--------|-------------|
-| `max_turns(n)` | Limit the total number of turns. |
-| `max_time(seconds)` | Limit the total elapsed duration, in seconds. |
-| `max_input_tokens(n)` | Limit the total input tokens. |
-| `max_output_tokens(n)` | Limit the total output tokens. |
-
-Also on `TicketSystem` for retry and per-request limits: `max_schema_retries`,
-`max_request_retries`, `request_retry_delay` (seconds), `max_request_tokens`.
-
-### Schemas
-
-A `Schema` constrains the result an agent must produce for a ticket. A violation
-triggers a retry until `max_schema_retries` is exhausted.
-
-```python
-from agentwerk import Schema, Ticket
-
-schema = Schema({
-    "type": "object",
-    "properties": {"title": {"type": "string"}},
-    "required": ["title"],
-})
-
-tickets.ticket(Ticket("Write a report.", schema=schema))
-```
-
-Register a schema per label with `tickets.schema_for_label(label, schema)`: every
-ticket of that label validates against it.
-
-### Compaction
-
-agentwerk compacts the transcript automatically when the model's context window
-is near full; observe progress via the `compaction_started`,
-`compaction_progress`, `compaction_finished`, and `compaction_failed` event
-kinds.
-
-## Prompting
-
-Every prompt has two parts: `role` (who the agent is) and `task` (work it should
-perform).
-
-```python
-ROLE = """
-{context}
-
-You are an arithmetic agent in stage 2. Compute step by step and show your work.
-"""
-
-agent = (
-    Agent()
-    .role(ROLE)
-    .template("divisor", "8")
     .from_env()
     .build()
 )
 
 tickets.agent(agent)
-tickets.task("Compute (47 * 92) / {divisor}, then round to the nearest integer.")
+tickets.task("Compute (47 * 92) / 8, then round to the nearest integer.")
 ```
+
+<details>
+<summary>All agent builder methods</summary>
+
+| Method | Description |
+|--------|-------------|
+| `name(name)` | Set a name or identifier for assigning tickets. |
+| `role(role)` | Define who the agent is and how it should work. |
+| `label(label)` / `labels(labels)` | Restrict the agent to tickets carrying a matching label. |
+| `tool(tool)` / `tools(tools)` | Register a tool the agent may call. |
+| `template(key, value)` | Inject data into prompts with template strings. |
+| `templates(pairs)` | Inject more than one entry into prompts. |
+| `dir(dir)` | Set the directory the agent has access to. |
+| `interactive()` | Let the agent wait for new instructions to keep a ticket in-progress. |
+| `edit_directive_on_failure(editor)` | Override failure prompts for correcting an agent's behavior. |
+| `build()` | Create the agent. |
+| `ticket_system(system)` | Attach a built agent to a ticket system. |
+
+You can use the `{context}` variable to inject contextual information:
 
 ```markdown
 You work within a ticket system. Each task arrives as a ticket; each reply you generate is one turn.
@@ -416,13 +195,264 @@ You work within a ticket system. Each task arrives as a ticket; each reply you g
 - Output tokens remaining: 12000
 - Time remaining: 240s
 
-The run stops when any budget reaches zero, mid-ticket. Finish before then.
+Execution stops when any budget reaches zero, mid-ticket. Finish before then.
 ```
+
+See more: [`AgentBuilder`](https://docs.rs/agentwerk/latest/agentwerk/agents/agent/struct.AgentBuilder.html).
+
+</details>
+
+### Providers
+
+Connect to a `Provider` to give agents access to LLMs. agentwerk supports: Anthropic, OpenAI, Mistral, and a LiteLLM proxy.
+
+```python
+from agentwerk import Agent, AnthropicProvider
+
+agent = (
+    Agent()
+    .provider(AnthropicProvider(key))
+    .model("claude-sonnet-4-20250514")
+)
+
+# Or read both from the environment.
+agent = Agent().from_env()
+```
+
+<details>
+<summary>Provider selection and endpoints</summary>
+
+| Method | Description |
+|--------|-------------|
+| `provider(provider)` | Define the LLM provider. |
+| `model(model)` | Set the model. |
+| `from_env()` | Read environment variables for configuration (see [DEVELOPMENT.md](../../DEVELOPMENT.md)). |
+
+You can explicitly read the model or provider from environment variables with: `provider_from_env()` or `model_from_env()`.
+
+</details>
+
+### Models
+
+You can configure models to set a custom context window size or the applied reasoning:
+
+```python
+from agentwerk import Agent, Model
+
+agent = Agent().model(
+    Model("my-local-model")
+    .context_window(128_000)
+    .reasoning_effort("high")
+)
+```
+
+Claude, GPT, Mistral, and Qwen families are pre-configured.
+
+<details>
+<summary>Model settings</summary>
+
+| Method | Description |
+|--------|-------------|
+| `context_window(size)` | Set the context window size for a model. |
+| `get_context_window()` | Get the configured window size. |
+| `reasoning_effort(effort)` | Set the reasoning level. |
+| `get_reasoning_effort()` | Get the configured effort. |
+
+You can use `context_window_from_env()` to read the context window size from environment variables, see [DEVELOPMENT.md](../../DEVELOPMENT.md).
+
+</details>
+
+## Tickets
+
+<div align="left">
+  <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/tickets.jpg" width="600" />
+</div>
+
+The `TicketSystem` is the core data structure of agentwerk allowing to coordinate complex interactions.
+
+```python
+tickets.agent(Agent().name("analyst").label("analysis").from_env().build())
+
+tickets.ticket(
+    Ticket(
+        "Rank all products by value for a 10-person engineering team.",
+        labels=["analysis"],
+        schema=comparison_schema,
+    )
+)
+```
+
+<details>
+<summary>All ticket entry points</summary>
+
+| Method | Description |
+|--------|-------------|
+| `agent(agent)` | Add an agent to this ticket system. |
+| `task(task)` | Submit a task and return its ticket key. |
+| `ticket(ticket)` | Submit a `Ticket` with custom labels or schema. |
+| `reply(key, content)` | Add a reply to a ticket. |
+| `edit_replies(key, editor)` | Rewrite one ticket's replies now. |
+| `set_failed(key)` | Fail a ticket. |
+| `dir(dir)` | Define where a session is stored. |
+| `schema_for_label(label, schema)` | Register a schema every ticket of that label validates against. |
+
+See [`TicketSystem`](https://docs.rs/agentwerk/latest/agentwerk/agents/tickets/struct.TicketSystem.html).
+
+</details>
+
+### Execution
+
+```python
+tickets.start()
+await tickets.finish()
+answer = tickets.last_result()
+```
+
+<details>
+<summary>Lifecycle</summary>
+
+| Method | Description |
+|--------|-------------|
+| `start()` | Begin processing tickets. |
+| `await finish()` | Process every queued ticket. |
+| `cancel()` | Cancel the execution. |
+| `is_cancelled()` | Check whether the execution was cancelled. |
+| `finish_reason()` | Check the reason for the finishing. |
+| `cancel_label(label)` | Call off one label's agents. |
+| `label_cancelled(label)` | Check whether one label's agents have been called off. |
+
+</details>
+
+### Results
+
+Access the results of the agents' work:
+
+```python
+await tickets.finish()
+
+answer = tickets.last_result()
+if answer is not None:
+    print(answer)
+
+for ticket in tickets.tickets():
+    print(f"{ticket.key}: {ticket.status}")
+```
+
+Each `Ticket` carries a result as free text or JSON validated by schemas:
+
+```python
+ticket = tickets.find_ticket(lambda t: t.has_label("analysis"))
+print(ticket.result["title"])
+```
+
+<details>
+<summary>Working with results</summary>
+
+| Method | Description |
+|--------|-------------|
+| `last_result()` | Get the most recent ticket result. |
+| `results()` | Get every ticket's result in creation order. |
+| `results_for_label(label)` | Get every ticket's result carrying a specific label. |
+| `tickets()` | Get every ticket in creation order. |
+| `find_ticket(condition)` | Get the earliest ticket matching a condition. |
+| `find_tickets(condition)` | Get every ticket matching a condition. |
+| `get_ticket(key)` | Get one ticket by key. |
+| `await wait_for_ticket(condition)` | Wait for one matching ticket instead of draining the queue. |
+| `model_for_agent(name)` | Get the model that agent runs. |
+| `stats()` | Get execution statistics, see [Stats](#stats). |
+
+Ticket fields:
+
+| | Fields |
+|-|--------|
+| **Identity** | `key`, `task`, `labels`, `parent`, `reporter` |
+| **Outcome** | `status`, `result`, `replies`, `schema` |
+| **Timestamps** | `created_at`, `started_at`, `finished_at`, `failed_at` |
+
+See [`Ticket`](https://docs.rs/agentwerk/latest/agentwerk/agents/tickets/struct.Ticket.html).
+
+</details>
+
+### Schemas
+
+A `Schema` constrains the result an agent produces for a ticket. A violation triggers a retry until `max_schema_retries` is exhausted.
+
+```python
+from agentwerk import Schema, Ticket
+
+schema = Schema({
+    "type": "object",
+    "properties": {"title": {"type": "string"}},
+    "required": ["title"],
+})
+
+tickets.ticket(Ticket("Write a report.", schema=schema))
+```
+
+<details>
+<summary>Schema validation and retries</summary>
+
+| Method | Description |
+|--------|-------------|
+| `Schema(document)` | Create a schema. |
+| `Schema.validate(value)` | Validate content. |
+| `tickets.schema_for_label(label, schema)` | Register a schema for all tickets with a certain label. |
+
+</details>
+
+### Limits
+
+A breach stops execution and reports which limit was hit.
+
+```python
+(
+    tickets
+    .max_turns(40)
+    .max_time(300.0)
+    .max_input_tokens(200_000)
+    .max_output_tokens(50_000)
+)
+```
+
+agentwerk compacts the messages automatically when the model's context window is near full, so a long run stays inside it. The compaction events report progress.
+
+<details>
+<summary>All limits</summary>
+
+| Method | Description |
+|--------|-------------|
+| `max_turns(count)` | Limit the total number of turns. |
+| `max_time(seconds)` | Limit the total elapsed duration. |
+| `max_input_tokens(count)` | Limit the total input tokens. |
+| `max_output_tokens(count)` | Limit the total output tokens. |
+| `max_request_tokens(count)` | Limit the output tokens of a single request. |
+| `max_schema_retries(count)` | Limit how often a result may fail its schema before the ticket fails. |
+| `max_request_retries(count)` | Limit how often a failing request is retried. |
+| `request_retry_delay(seconds)` | Wait this long between retries. |
+
+A breach emits a `policy_violated` event carrying the limit that was hit. See [`EventKind`](https://docs.rs/agentwerk/latest/agentwerk/event/enum.EventKind.html) for that and the compaction events.
+
+</details>
 
 ## Tools
 
-Give agents access to tools. Each tool exposes an action the agent can choose to
-take. Built-in tools are constructed and passed to `.tool(...)`:
+Give agents access to tools. Each tool exposes an action the agent can choose to take.
+
+```python
+from agentwerk import Agent, BashTool, GrepTool, ReadFileTool
+
+agent = (
+    Agent()
+    .tool(ReadFileTool())
+    .tool(GrepTool())
+    .tool(BashTool("git", "git *"))
+)
+```
+
+`FinishTool()` and `ManageKnowledgeTool(store)` are registered automatically on every agent. Registering a tool replaces any tool already registered under the same name, so a later `tool(...)` wins over an automatic one.
+
+<details>
+<summary>All built-in tools</summary>
 
 | | Tool | Description |
 |-|------|-------------|
@@ -430,47 +460,27 @@ take. Built-in tools are constructed and passed to `.tool(...)`:
 | | `WriteFileTool()` | Create or overwrite a file. |
 | | `EditFileTool()` | Replace text in a file. |
 | **Search** | `GlobTool()` | Find files by pattern. |
-| | `GrepTool()` | Search file contents by regex or code shape. |
+| | `GrepTool()` | Search file contents by regular expression, or by code shape with `syntax: "code"`. |
 | | `ListDirectoryTool()` | List files and directories. |
 | **Shell** | `BashTool(name, pattern)` | Run a shell command matching an allowed pattern. |
 | **Web** | `FetchUrlTool()` | Fetch a URL and read its body. |
-| **Tickets** | `FinishTool()` | Write the result for the current ticket and mark it finished, optionally handing follow-up work to another agent. |
+| **Tickets** | `FinishTool()` | Write the result for the current ticket and mark it finished. |
 | | `ManageTicketsTool()` | Read the ticket queue and create or edit tickets. |
 | | `ReadTicketsTool()` | Read the ticket queue. |
 | **Knowledge** | `ManageKnowledgeTool(store)` | Write, read, remove, or list pages in a knowledge store. |
 | **Discovery** | `FindToolsTool()` | Look up the tools held back until they are needed. |
 
-`FinishTool()` and `ManageKnowledgeTool(store)` are registered automatically on
-every agent built with `Agent()`. `knowledge(store)` is the usual way to
-choose the store, since it also renders the store's index into the system prompt.
-`Agent.empty()` opens an agent without the finish tool, for agents that only
-read.
+`FinishTool()` can also hand follow-up work to another agent as it finishes.
 
-Registering a tool replaces any tool already registered under the same name, so
-a later `tool(...)` wins over an automatic one.
+`BashTool(name, pattern)` takes the name the model sees and the pattern a command must match. `UnrestrictedBashTool()` removes the pattern check.
 
-### Bash
+`knowledge(store)` is the usual way to choose the knowledge store, since it also renders the store's index into the system prompt. `Agent.empty()` starts with nothing registered at all.
 
-`BashTool` restricts execution to commands matching a glob pattern. The first
-argument names the tool the model sees; the second is the allowed pattern.
-
-```python
-from agentwerk import Agent, BashTool, UnrestrictedBashTool
-
-agent = (
-    Agent()
-    .tool(BashTool("git", "git *"))
-    .tool(UnrestrictedBashTool())
-)
-```
-
-`UnrestrictedBashTool()` removes the pattern check.
+</details>
 
 ### Custom tools
 
-Define custom tools with the `@tool` decorator. The tool input object is passed to
-the function as keyword arguments; the return value is sent back to the model.
-Declare a JSON-Schema for the inputs with `schema=`:
+Define custom tools for specific needs. Each tool declares a JSON-Schema for its inputs.
 
 ```python
 from agentwerk import tool
@@ -483,73 +493,174 @@ from agentwerk import tool
 def greet(name: str) -> str:
     """Say hello."""
     return f"Hello, {name}!"
-
-agent = Agent().tool(greet)
 ```
 
-`read_only=True` allows the agent to run a tool concurrently with other read-only
-calls in the same turn. `defer=True` holds the tool back until the agent looks it
-up with `FindToolsTool()`, which keeps a large tool set out of every request.
-`paths=["path"]` names the input fields carrying a file path, so the files the
-tool opens show up in `Stats.file_stats()`. Async functions (`async def`) work
-too.
+<details>
+<summary>Tool options and failure results</summary>
 
-A raised exception is reported back to the model as a recoverable error and the
-run continues. Return a `ToolResult` to say so without raising:
-`ToolResult.error(msg)` for a failure the model should work around, or
-`ToolResult.schema_error(msg)` for input that did not match the tool's schema,
-which counts against `max_schema_retries`.
+| Method | Description |
+|--------|-------------|
+| `read_only=True` | Let the agent run this tool concurrently with other read-only calls in the same turn. |
+| `defer=True` | Hold the tool back until the agent looks it up with `FindToolsTool()`. |
+| `paths=["path"]` | Name the input fields carrying a file path, so the files show up in `Stats.file_stats()`. |
+
+Deferring keeps a large tool set out of every request.
+
+A handler receives the tool input as keyword arguments.
+
+Return `ToolResult.error(message)` for a failure the model should work around, or `ToolResult.schema_error(message)` for input that did not match the tool's schema, which counts against `max_schema_retries`.
+
+</details>
+
+## Events
+
+Events report everything that happens while your agents work. Log them, display them, or hook them to stop execution early, call off one label's agents, or queue follow-up work.
+
+```python
+def log(event):
+    if event.kind == "ticket_finished":
+        print(f"[{event.agent_name}] done {event.ticket_key}")
+
+tickets.on_event(log)
+
+# Stop execution at the first malicious verdict.
+tickets.cancel_on_result(lambda result: result["verdict"] == "malicious")
+```
+
+
+<details>
+<summary>All event kinds</summary>
+
+| | Kind | Description |
+|-|------|-------------|
+| **Run** | `run_started` | Execution began. |
+| | `run_finished` | Execution ended, carrying the reason. |
+| | `policy_violated` | A limit was breached and execution stopped. |
+| **Ticket** | `ticket_started` | An agent claimed a ticket. |
+| | `ticket_finished` | A ticket finished successfully. |
+| | `ticket_failed` | A ticket failed. |
+| | `turn_started` | The agent began another turn on its ticket. |
+| | `schema_retried` | A result missed its schema and the agent was asked again. |
+| **LLM provider** | `request_started` | A request went out to the model. |
+| | `request_finished` | A request finished and reported its token usage. |
+| | `request_failed` | A request failed and was not retried. |
+| | `request_retried` | A transient provider error triggered a retry. |
+| | `text_chunk_received` | A piece of the reply arrived. |
+| **Tool** | `tool_call_started` | A tool invocation began. |
+| | `tool_call_finished` | A tool invocation finished. |
+| | `tool_call_failed` | A tool invocation failed but the ticket continues. |
+| **File** | `file_open_finished` | A tool opened a file. |
+| | `file_open_failed` | A tool could not open a file. |
+| **Knowledge** | `knowledge_used` | A page was written, read, removed, or listed. |
+| | `knowledge_missed` | A page the agent asked for was not there. |
+| **Compaction** | `compaction_started` | Compaction is about to summarize the older messages. |
+| | `compaction_progress` | Compaction finished part of the work. |
+| | `compaction_finished` | Compaction replaced the older messages with a summary. |
+| | `compaction_failed` | Compaction could not finish. |
+
+See [`EventKind`](https://docs.rs/agentwerk/latest/agentwerk/event/enum.EventKind.html).
+
+</details>
+
+<details>
+<summary>Event hooks</summary>
+
+| Method | Description |
+|--------|-------------|
+| `on_event(handler)` | Read every event as it is emitted. |
+| `on_ticket(handler)` | Read a ticket as it starts, finishes, or fails. |
+| `cancel_on(awaitable)` | Stop execution when an awaitable resolves. |
+| `cancel_on_event(condition)` | Stop execution when an event matches. |
+| `cancel_on_result(condition)` | Stop execution when a finished result matches. |
+| `cancel_label_on_event(label, condition)` | Call off one label's agents while the rest keep working. |
+| `create_ticket_on_result(make)` | Enqueue a follow-up ticket from a finished ticket. |
+| `edit_replies_on_event(editor)` | Rewrite a ticket's replies before its next request. |
+
+Save replies of every finished ticket as a training example:
+
+```python
+def capture(event, ticket):
+    if event.kind == "ticket_finished":
+        model = tickets.model_for_agent(event.agent_name)
+        Trajectory.from_ticket(event.agent_name, model, ticket).save("datasets")
+
+tickets.on_ticket(capture)
+```
+
+</details>
+
+## Stats
+
+Statistics give you deep insights into behavior of your agents: working time, tickets, failure rates, bottlenecks etc.
+
+```python
+stats = tickets.stats()
+print(stats.requests(), stats.input_tokens())
+
+for name, stat in stats.tool_stats().items():
+    print(name, stat.calls)
+```
+
+<details>
+<summary>All statistics</summary>
+
+| Method | Description |
+|--------|-------------|
+| `run_duration()` | Get the elapsed duration. |
+| `tickets_success_rate()` | Get `finished / (finished + failed)`. |
+| `input_tokens()` / `output_tokens()` | Get token counts across requests. |
+| `tool_stats()` | Get per-tool call and failure counts. |
+| `file_stats()` | Get per-filepath open and failure counts. |
+| `knowledge_stats()` | Get Knowledge usage: write, read, remove, list, and miss counts. |
+| `model_stats()` | Get per-model requests and token usage. |
+| `usage_history(ticket_key)` | Get a ticket's token usage. |
+| `event_counts()` | Get per-event counts. |
+| `stats_for_label(label)` | Get statistics scoped to one label. |
+
+See [`Stats`](https://docs.rs/agentwerk/latest/agentwerk/agents/stats/struct.Stats.html).
+
+</details>
 
 ## Knowledge
 
-A `Knowledge` store is the agent's long-term memory. It is written to disk, can
-be shared across multiple agents, and is curated by the agent through its
-knowledge tool.
-
-Each page is an Open Knowledge Format (OKF) v0.1 concept file. A compact index of
-one-line descriptions goes into the system prompt, so the agent picks which pages
-to read.
+`Knowledge` allows agents to share insights or learnings. Knowledge pages are created in the Open Knowledge Format (OKF).
 
 ```python
 from agentwerk import Agent, Knowledge
 
-# Open a store and share it across agents:
-store = Knowledge.load("./.agentwerk")
+store = Knowledge.load("./notes")
 alice = Agent().knowledge(store)
 bob = Agent().knowledge(store)
-
-# Raise the rendered-index char budget (default 12 000):
-store = Knowledge.load("./.agentwerk").index_char_limit(24_000)
-agent = Agent().knowledge(store)
 ```
 
-Seed or inspect the store yourself through `pages()`:
+<details>
+<summary>Reading and writing pages</summary>
+
+| Method | Description |
+|--------|-------------|
+| `index()` | Get the index, which is injected into the agent prompt. |
+| `index_char_limit(count)` | Limit the index size. |
+| `pages()` | Get the page collection for reading and writing pages. |
+| `clear()` | Remove every page from the store. |
+
+Programmatically create entries:
 
 ```python
-from agentwerk import Knowledge, Page
+from agentwerk import Page
 
-store = Knowledge.load("./.agentwerk")
 store.pages().save(
-    Page("build-command", "How the project is built.", "Run `make` to compile.")
+    Page("build-command", "How the project is built.", "Run `make` to compile.", tags=["build"])
 )
 
 page = store.pages().load("build-command")
 store.pages().remove("build-command")
 ```
 
-| Method | Description |
-|--------|-------------|
-| `index()` | Return the rendered index the agent sees. |
-| `index_char_limit(n)` | Limit the rendered index, in characters. |
-| `pages()` | Return the page collection for reading and writing pages. |
-| `clear()` | Remove every page from the store. |
+</details>
 
 ## Sessions
 
-A `TicketSystem` writes every ticket, transcript, statistic, and lifecycle event
-to its working directory (default `./.agentwerk`). That directory is the session:
-stop the process, and `TicketSystem.load(dir)` reopens it from disk and continues
-from where it stopped.
+A `TicketSystem` writes every ticket, reply, statistic, and lifecycle event to its working directory (default `./.agentwerk`). You can continue a session from that directory.
 
 ```python
 tickets = TicketSystem.load(".agentwerk")
@@ -557,11 +668,12 @@ tickets.agent(my_agent)
 tickets.start()
 ```
 
-Layout:
+<details>
+<summary>Session directory layout</summary>
 
 ```
 .agentwerk/
-├── stats.json                            run statistics
+├── stats.json                            execution statistics
 ├── tickets.jsonl                         lifecycle events (one per line)
 ├── results.jsonl                         finished results (one per line)
 ├── tickets/
@@ -574,97 +686,8 @@ Layout:
     └── index.md                          knowledge index
 ```
 
-## Events
-
-Events report everything that happens while your agents work. Log them, display
-them, or react to them. An `Event` carries `kind` (a snake_case string like
-`"ticket_finished"`), `agent_name`, `ticket_key`, and a `data` dict with the
-variant's payload.
-
-```python
-def log(event):
-    if event.kind == "ticket_finished":
-        print(f"[{event.agent_name}] done {event.ticket_key}")
-
-tickets.on_event(log)
-```
-
-| | Kind | Description |
-|-|------|-------------|
-| **Ticket** | `ticket_started` | An agent claimed a ticket. |
-| | `ticket_finished` | A ticket finished successfully. |
-| | `ticket_failed` | A ticket failed. |
-| **Provider** | `request_finished` | A provider request finished and reported its token usage. |
-| | `request_retried` | A transient provider error triggered a retry. |
-| **Tool** | `tool_call_finished` | A tool invocation finished. |
-| | `tool_call_failed` | A tool invocation failed but the ticket continues. |
-| **Compaction** | `compaction_started` | Compaction is about to summarize the conversation tail. |
-| | `compaction_finished` | Compaction finished and replaced the tail with a summary. |
-| **Run** | `policy_violated` | A policy limit was breached and execution stopped. |
-
-Also: `run_started`, `run_finished`, `turn_started`, `request_started`,
-`request_failed`, `text_chunk_received`, `tool_call_started`,
-`file_open_finished`, `file_open_failed`, `knowledge_used`, `knowledge_missed`,
-`schema_retried`, `compaction_progress`, `compaction_failed`.
-
-Every category the bindings turn into a string uses the same snake_case form,
-whether it names an event, a status, or a payload field:
-
-| Where | Values |
-|-------|--------|
-| `event.kind` | The names listed above. |
-| `ticket.status` | `"todo"`, `"in_progress"`, `"finished"`, `"failed"`. |
-| `finish_reason()` | `"drained"`, `"cancelled"`, `"policy_violated(kind)"`. |
-| `data["policy"]` on `policy_violated` | `"turns"`, `"input_tokens"`, `"output_tokens"`, `"max_schema_retries"`, `"time"`. |
-| `data["reason"]` on a request or tool failure | `"rate_limited"`, `"connection_failed"`, `"tool_not_found"`, and their siblings. |
-| `data["reason"]` on compaction | `"proactive"`, `"reactive"`. |
-| `data["op"]` on `knowledge_used` | `"write"`, `"read"`, `"remove"`, `"list"`. |
-
-## Stats
-
-`tickets.stats()` reports what a run did. Every duration is in seconds.
-
-```python
-stats = tickets.stats()
-print(stats.requests(), stats.input_tokens(), stats.tickets_success_rate())
-
-for name, stat in stats.tool_stats().items():
-    print(name, stat.calls, stat.error_rate())
-```
-
-| Method | Description |
-|--------|-------------|
-| `run_duration()` | Return the run's elapsed duration. |
-| `tickets_success_rate()` | Return `finished / (finished + failed)`. |
-| `input_tokens()` / `output_tokens()` | Return token totals across responses. |
-| `tool_stats()` | Return per-tool call and failure counts, broken down by failure kind. |
-| `file_stats()` | Return per-path open and failure counts for the files tools opened. |
-| `knowledge_stats()` | Return Knowledge-store usage: write, read, remove, list, and miss counts. |
-| `event_counts()` | Return per-event counts keyed by event name. |
-| `stats_for_label(label)` | Return a statistics slice scoped to one label. |
-| `to_dict()` | Return the same numbers as one dict, matching `stats.json`. |
-
-Also: `turns()`, `requests()`, `tool_calls()`, `errors()`, `tickets_created()`,
-`tickets_finished()`, `tickets_failed()`, `total_ticket_duration()`,
-`avg_ticket_duration()`, `total_work_duration()`, `avg_work_duration()`, and
-`usage_history(ticket_key)`.
+</details>
 
 ## Development
 
-Build and install the bindings from source with maturin:
-
-```bash
-make python        # maturin develop, from the repo root
-make python_test   # build, then run the pytest suite
-```
-
-`examples/divide_and_conquer.py` runs a full multi-agent workflow against a real
-provider: labelled tickets, a schema-validated result, a custom `@tool`, and the
-run statistics at the end.
-
-```bash
-python examples/divide_and_conquer.py 200 4 2
-```
-
-See the [main README](../../README.md) for the project overview and
-[DEVELOPMENT.md](../../DEVELOPMENT.md) for the workspace layout.
+See [DEVELOPMENT.md](../../DEVELOPMENT.md).

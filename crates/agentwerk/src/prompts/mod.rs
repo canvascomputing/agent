@@ -113,7 +113,7 @@ pub(crate) fn context_body(
 /// Closes the budget bullets. A bare number is telemetry; the
 /// consequence is what makes the model pace against it.
 const BUDGET_CONSEQUENCE: &str =
-    "The run stops when any budget reaches zero, mid-ticket. Finish before then.";
+    "Execution stops when any budget reaches zero, mid-ticket. Finish before then.";
 
 /// Bullets for each configured budget plus [`BUDGET_CONSEQUENCE`], joined
 /// by `\n`. `None` when no budget is set, so the caller can skip the join.
