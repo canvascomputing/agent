@@ -129,20 +129,20 @@ fn claim<'a>(agent: &'a Agent, ticket_system: &'a Arc<TicketSystem>) -> Option<T
     let ticket = ticket_system.get_ticket(&ticket_key)?;
 
     let knowledge_index = agent.knowledge().index();
-    // Lets the model see what knowledge pages it can read.
-    let system_prompt = agent.system_prompt(Some(&knowledge_index));
     let policies = ticket_system.policies();
+    // Lets the model see what knowledge pages it can read.
+    let system_prompt = agent.system_prompt(
+        Some(&knowledge_index),
+        &policies,
+        &ticket_system.stats,
+        &ticket_key,
+    );
     let agent_name = agent.get_name();
 
     ticket_system.emit(&ticket_key, agent_name, EventKind::TurnStarted);
 
     if ticket.replies.is_empty() {
         ticket_system.add_reply(&ticket_key, Reply::system_text(system_prompt.clone()));
-        if let Some(context_message) =
-            agent.context_message(&policies, &ticket_system.stats, Some(&ticket_key))
-        {
-            ticket_system.add_reply(&ticket_key, Reply::user_text(context_message));
-        }
         let Message::User {
             content: task_blocks,
         } = ticket.as_user_message()
@@ -942,7 +942,6 @@ mod tests {
                 }
                 _ => None,
             })
-            .filter(|text| !text.starts_with("## Context\n\n"))
             .collect()
     }
 

@@ -1,5 +1,5 @@
-//! Default context block, and the `Section` / `PromptBuilder` that
-//! composes the role prompt and (caller-supplied) directives.
+//! The body `{context}` expands to, and the `Section` / `PromptBuilder`
+//! that composes the role prompt and (caller-supplied) directives.
 
 mod builder;
 mod section;
@@ -10,12 +10,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde_json::Value;
 
 pub(crate) use builder::PromptBuilder;
-pub(crate) use section::Section;
 
 use crate::agents::policy::Policies;
 use crate::agents::stats::Stats;
 
-const DEFAULT_CONTEXT_TEMPLATE: &str = include_str!("default.context.md");
+const CONTEXT_TEMPLATE: &str = include_str!("context.md");
 
 const RETRY_TEMPLATE: &str = include_str!("retry.directive.md");
 
@@ -78,12 +77,17 @@ fn is_object_schema(schema: &Value) -> bool {
     schema.get("type").and_then(Value::as_str) == Some("object")
 }
 
-/// Build the default context body: a `## Context` markdown block with the
-/// working directory, platform, OS version, and date, plus a `… remaining`
+/// Build the body `{context}` expands to: the ticket key, working
+/// directory, platform, OS version, and date, plus a `… remaining`
 /// bullet for each `Policies` budget that is `Some(_)`. Budgets left as
 /// `None` (unlimited) stay invisible. Pass empty `Policies::default()` and
 /// `Stats::new()` when you only want the static facts.
-pub(crate) fn default_context(dir: &Path, policies: &Policies, stats: &Stats) -> String {
+pub(crate) fn context_body(
+    dir: &Path,
+    policies: &Policies,
+    stats: &Stats,
+    ticket_key: &str,
+) -> String {
     let dir_str = dir.display().to_string();
     let platform = std::env::consts::OS;
     let os_version = std::process::Command::new("uname")
@@ -92,7 +96,9 @@ pub(crate) fn default_context(dir: &Path, policies: &Policies, stats: &Stats) ->
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
         .unwrap_or_default();
     let date = format_current_date();
-    let mut body = DEFAULT_CONTEXT_TEMPLATE
+    let mut body = CONTEXT_TEMPLATE
+        .trim_matches('\n')
+        .replace("{ticket}", ticket_key)
         .replace("{dir}", &dir_str)
         .replace("{platform}", platform)
         .replace("{os_version}", &os_version)
@@ -101,11 +107,16 @@ pub(crate) fn default_context(dir: &Path, policies: &Policies, stats: &Stats) ->
         body.push('\n');
         body.push_str(&extra);
     }
-    Section::context(body).render()
+    body
 }
 
-/// Bullets for each configured budget, joined by `\n`. `None` when no
-/// budget is set, so the caller can skip the join.
+/// Closes the budget bullets. A bare number is telemetry; the
+/// consequence is what makes the model pace against it.
+const BUDGET_CONSEQUENCE: &str =
+    "The run stops when any budget reaches zero, mid-ticket. Finish before then.";
+
+/// Bullets for each configured budget plus [`BUDGET_CONSEQUENCE`], joined
+/// by `\n`. `None` when no budget is set, so the caller can skip the join.
 fn runtime_budgets(policies: &Policies, stats: &Stats) -> Option<String> {
     let mut lines: Vec<String> = Vec::new();
     if let Some(limit) = policies.max_turns {
@@ -127,10 +138,10 @@ fn runtime_budgets(policies: &Policies, stats: &Stats) -> Option<String> {
         }
     }
     if lines.is_empty() {
-        None
-    } else {
-        Some(lines.join("\n"))
+        return None;
     }
+    lines.push(format!("\n{BUDGET_CONSEQUENCE}"));
+    Some(lines.join("\n"))
 }
 
 /// Today's date as `YYYY-MM-DD`, via the civil-from-days algorithm.
@@ -225,25 +236,37 @@ mod tests {
     }
 
     #[test]
-    fn default_context_renders_markdown_block_with_substituted_values() {
-        let rendered = default_context(
+    fn context_body_renders_bare_bullets_with_substituted_values() {
+        let rendered = context_body(
             &PathBuf::from("/tmp/check"),
             &Policies::default(),
             &Stats::new(),
+            "TICKET-7",
         );
         let lines: Vec<&str> = rendered.lines().collect();
-        assert_eq!(lines[0], "## Context");
+        assert!(lines[0].starts_with("You work within a ticket system."));
         assert_eq!(lines[1], "");
-        assert!(lines[2].starts_with("You work within a ticket system."));
-        assert_eq!(lines[3], "");
-        assert!(lines[4].starts_with("- Date: "));
-        assert_eq!(lines[5], "- Working directory: /tmp/check");
-        assert!(lines[6].starts_with("- Platform: "));
+        assert_eq!(lines[2], "- Ticket: TICKET-7");
+        assert!(lines[3].starts_with("- Date: "));
+        assert_eq!(lines[4], "- Working directory: /tmp/check");
+        assert!(lines[5].starts_with("- Platform: "));
         assert!(!rendered.contains('{'), "no unsubstituted placeholders");
     }
 
     #[test]
-    fn default_context_lists_each_set_turn_and_token_budget() {
+    fn context_body_carries_no_heading_of_its_own() {
+        let rendered = context_body(
+            &PathBuf::from("/tmp/check"),
+            &Policies::default(),
+            &Stats::new(),
+            "TICKET-7",
+        );
+        // The role prompt places the block and owns any heading above it.
+        assert!(!rendered.contains("## "));
+    }
+
+    #[test]
+    fn context_body_lists_each_set_turn_and_token_budget() {
         let working_dir = PathBuf::from("/tmp/check");
         let policies = Policies {
             max_turns: Some(10),
@@ -256,7 +279,7 @@ mod tests {
         stats.record_event(&turn(), "", &[]);
         stats.record_event(&request(5_000, 8_000), "", &[]);
 
-        let rendered = default_context(&working_dir, &policies, &stats);
+        let rendered = context_body(&working_dir, &policies, &stats, "T-1");
 
         // Visualizes the exact appended block. Static prefix (date, directory,
         // platform) is rebuilt with empty policy/stats
@@ -265,14 +288,15 @@ mod tests {
             "{static_prefix}\n\
              - Turns remaining: 8\n\
              - Input tokens remaining: 95000\n\
-             - Output tokens remaining: 12000",
-            static_prefix = default_context(&working_dir, &Policies::default(), &Stats::new()),
+             - Output tokens remaining: 12000\n\
+             \n{BUDGET_CONSEQUENCE}",
+            static_prefix = context_body(&working_dir, &Policies::default(), &Stats::new(), "T-1"),
         );
         assert_eq!(rendered, expected);
     }
 
     #[test]
-    fn default_context_only_shows_configured_budgets() {
+    fn context_body_only_shows_configured_budgets() {
         let working_dir = PathBuf::from("/tmp/check");
         let policies = Policies {
             max_turns: Some(5),
@@ -281,11 +305,11 @@ mod tests {
         let stats = Stats::new();
         stats.record_event(&turn(), "", &[]);
 
-        let rendered = default_context(&working_dir, &policies, &stats);
+        let rendered = context_body(&working_dir, &policies, &stats, "T-1");
 
         let expected = format!(
-            "{static_prefix}\n- Turns remaining: 4",
-            static_prefix = default_context(&working_dir, &Policies::default(), &Stats::new()),
+            "{static_prefix}\n- Turns remaining: 4\n\n{BUDGET_CONSEQUENCE}",
+            static_prefix = context_body(&working_dir, &Policies::default(), &Stats::new(), "T-1"),
         );
         assert_eq!(rendered, expected);
         assert!(!rendered.contains("Input tokens"));
@@ -294,7 +318,7 @@ mod tests {
     }
 
     #[test]
-    fn default_context_saturates_remaining_at_zero() {
+    fn context_body_saturates_remaining_at_zero() {
         let working_dir = PathBuf::from("/tmp/check");
         let policies = Policies {
             max_turns: Some(2),
@@ -305,17 +329,17 @@ mod tests {
             stats.record_event(&turn(), "", &[]);
         }
 
-        let rendered = default_context(&working_dir, &policies, &stats);
+        let rendered = context_body(&working_dir, &policies, &stats, "T-1");
 
         let expected = format!(
-            "{static_prefix}\n- Turns remaining: 0",
-            static_prefix = default_context(&working_dir, &Policies::default(), &Stats::new()),
+            "{static_prefix}\n- Turns remaining: 0\n\n{BUDGET_CONSEQUENCE}",
+            static_prefix = context_body(&working_dir, &Policies::default(), &Stats::new(), "T-1"),
         );
         assert_eq!(rendered, expected);
     }
 
     #[test]
-    fn default_context_omits_time_when_run_not_started() {
+    fn context_body_omits_time_when_run_not_started() {
         let working_dir = PathBuf::from("/tmp/check");
         let policies = Policies {
             max_time: Some(Duration::from_secs(300)),
@@ -323,17 +347,17 @@ mod tests {
         };
         let stats = Stats::new();
 
-        let rendered = default_context(&working_dir, &policies, &stats);
+        let rendered = context_body(&working_dir, &policies, &stats, "T-1");
 
         // No `record_started` call: `Stats::run_duration` is `None`,
         // so the time bullet must not appear.
-        let baseline = default_context(&working_dir, &Policies::default(), &Stats::new());
+        let baseline = context_body(&working_dir, &Policies::default(), &Stats::new(), "T-1");
         assert_eq!(rendered, baseline);
         assert!(!rendered.contains("Time remaining"));
     }
 
     #[test]
-    fn default_context_includes_time_bullet_once_started() {
+    fn context_body_includes_time_bullet_once_started() {
         use std::time::{SystemTime, UNIX_EPOCH};
         let working_dir = PathBuf::from("/tmp/check");
         let policies = Policies {
@@ -347,17 +371,18 @@ mod tests {
             .as_millis() as u64;
         stats.record_started(now_ms);
 
-        let rendered = default_context(&working_dir, &policies, &stats);
+        let rendered = context_body(&working_dir, &policies, &stats, "T-1");
 
         // Exact remaining seconds depend on millisecond-level timing
         // (truncating elapsed > 0ms drops one second), so assert the
         // bullet shape and that the value is within the tight live
         // window (3599 or 3600 seconds).
-        let baseline = default_context(&working_dir, &Policies::default(), &Stats::new());
+        let baseline = context_body(&working_dir, &Policies::default(), &Stats::new(), "T-1");
         assert!(rendered.starts_with(&baseline));
         let trailing = &rendered[baseline.len()..];
+        let expected = |seconds| format!("\n- Time remaining: {seconds}s\n\n{BUDGET_CONSEQUENCE}");
         assert!(
-            trailing == "\n- Time remaining: 3600s" || trailing == "\n- Time remaining: 3599s",
+            trailing == expected(3600) || trailing == expected(3599),
             "unexpected runtime block: {trailing:?}",
         );
     }

@@ -11,7 +11,7 @@ use std::sync::{Arc, Weak};
 
 use serde::Serialize;
 
-use crate::prompts::{default_context, PromptBuilder, Section};
+use crate::prompts::{context_body, PromptBuilder};
 use crate::providers::{Model, Provider, ProviderToolDefinition};
 use crate::tools::{FinishTool, ManageKnowledgeTool, ToolLike, ToolRegistry};
 
@@ -42,10 +42,9 @@ pub struct AgentBuilder<P, M> {
     provider: P,
     model: M,
     role: String,
-    context: String,
     labels: Vec<String>,
     interactive: bool,
-    template_variables: Vec<(String, String)>,
+    templates: Vec<(String, String)>,
     tools: ToolRegistry,
     dir: PathBuf,
     knowledge: Arc<Knowledge>,
@@ -63,10 +62,9 @@ impl AgentBuilder<(), ()> {
             provider: (),
             model: (),
             role: String::new(),
-            context: String::new(),
             labels: Vec::new(),
             interactive: false,
-            template_variables: Vec::new(),
+            templates: Vec::new(),
             tools,
             dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             knowledge,
@@ -88,10 +86,9 @@ impl AgentBuilder<(), ()> {
             provider: (),
             model: (),
             role: String::new(),
-            context: String::new(),
             labels: Vec::new(),
             interactive: false,
-            template_variables: Vec::new(),
+            templates: Vec::new(),
             tools,
             dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             knowledge,
@@ -114,10 +111,9 @@ impl<M> AgentBuilder<(), M> {
             provider: p,
             model: self.model,
             role: self.role,
-            context: self.context,
             labels: self.labels,
             interactive: self.interactive,
-            template_variables: self.template_variables,
+            templates: self.templates,
             tools: self.tools,
             dir: self.dir,
             knowledge: self.knowledge,
@@ -141,10 +137,9 @@ impl<P> AgentBuilder<P, ()> {
             provider: self.provider,
             model: m.into(),
             role: self.role,
-            context: self.context,
             labels: self.labels,
             interactive: self.interactive,
-            template_variables: self.template_variables,
+            templates: self.templates,
             tools: self.tools,
             dir: self.dir,
             knowledge: self.knowledge,
@@ -165,13 +160,13 @@ impl<P, M> AgentBuilder<P, M> {
         self
     }
 
+    /// The agent's system prompt. A `{context}` placeholder anywhere in
+    /// it expands to the run's facts — ticket key, date, working
+    /// directory, platform, and a bullet per configured budget. Nothing
+    /// is added when the placeholder is absent, so the role owns both
+    /// whether the facts appear and where.
     pub fn role(mut self, r: impl Into<String>) -> Self {
         self.role = r.into();
-        self
-    }
-
-    pub fn context(mut self, c: impl Into<String>) -> Self {
-        self.context = c.into();
         self
     }
 
@@ -200,22 +195,23 @@ impl<P, M> AgentBuilder<P, M> {
     }
 
     /// Bind `{key}` to `value`. The placeholder is substituted in the
-    /// agent's `role`, `context`, and any string-typed `Ticket::task`
-    /// enqueued through this agent. Unresolved placeholders are left
-    /// verbatim.
-    pub fn template_variable(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
-        self.template_variables.push((key.into(), value.into()));
+    /// agent's `role` and in any string-typed `Ticket::task` enqueued
+    /// through this agent. Unresolved placeholders are left verbatim.
+    /// Binding `context` shadows the built-in block described on
+    /// [`Self::role`].
+    pub fn template(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.templates.push((key.into(), value.into()));
         self
     }
 
     /// Bind many `{key} → value` pairs at once.
-    pub fn template_variables<I, K, V>(mut self, vars: I) -> Self
+    pub fn templates<I, K, V>(mut self, vars: I) -> Self
     where
         I: IntoIterator<Item = (K, V)>,
         K: Into<String>,
         V: Into<String>,
     {
-        self.template_variables
+        self.templates
             .extend(vars.into_iter().map(|(k, v)| (k.into(), v.into())));
         self
     }
@@ -303,10 +299,17 @@ impl<P, M> AgentBuilder<P, M> {
         self.tools.definitions()
     }
 
-    pub(super) fn system_prompt(&self, knowledge: Option<&str>) -> String {
+    pub(super) fn system_prompt(
+        &self,
+        knowledge: Option<&str>,
+        policies: &Policies,
+        stats: &Stats,
+        ticket_key: &str,
+    ) -> String {
         let mut b = PromptBuilder::default();
         if !self.role.is_empty() {
-            b = b.role(self.interpolate(&self.role));
+            let role = self.interpolate(&self.role);
+            b = b.role(self.expand_context(role, policies, stats, ticket_key));
         }
         if let Some(snap) = knowledge.filter(|s| !s.is_empty()) {
             b = b.knowledge(snap.to_string());
@@ -314,31 +317,32 @@ impl<P, M> AgentBuilder<P, M> {
         b.build().system
     }
 
-    pub(super) fn context_message(
+    /// Substitute the built-in `{context}` block. Runs after
+    /// [`Self::interpolate`], so a caller-bound `context` has already
+    /// consumed the placeholder and wins. Guarded on `contains` because
+    /// building the block spawns `uname`.
+    fn expand_context(
         &self,
+        role: String,
         policies: &Policies,
         stats: &Stats,
-        ticket_key: Option<&str>,
-    ) -> Option<String> {
-        let base = if !self.context.is_empty() {
-            Section::context(self.interpolate(&self.context)).render()
-        } else {
-            default_context(&self.dir, policies, stats)
-        };
-        let Some(key) = ticket_key else {
-            return Some(base);
-        };
-        const PREFIX: &str = "## Context\n\n";
-        let body = base.strip_prefix(PREFIX).unwrap_or(&base);
-        Some(format!("{PREFIX}- Ticket: {key}\n{body}"))
+        ticket_key: &str,
+    ) -> String {
+        if !role.contains("{context}") {
+            return role;
+        }
+        role.replace(
+            "{context}",
+            &context_body(&self.dir, policies, stats, ticket_key),
+        )
     }
 
     fn interpolate(&self, s: &str) -> String {
-        if self.template_variables.is_empty() {
+        if self.templates.is_empty() {
             return s.to_string();
         }
         let mut out = s.to_string();
-        for (key, value) in &self.template_variables {
+        for (key, value) in &self.templates {
             out = out.replace(&format!("{{{key}}}"), value);
         }
         out
@@ -359,8 +363,7 @@ impl AgentBuilder<Arc<dyn Provider>, Model> {
             ticket_system: TicketSystemRef::Shared(Weak::new()),
             provider: self.provider,
             role: self.role,
-            context: self.context,
-            template_variables: self.template_variables,
+            templates: self.templates,
             tools: self.tools,
             dir: self.dir,
             knowledge: self.knowledge,
@@ -421,8 +424,7 @@ pub struct Agent {
     // private: accessed through methods within agents::
     provider: Arc<dyn Provider>,
     role: String,
-    context: String,
-    template_variables: Vec<(String, String)>,
+    templates: Vec<(String, String)>,
     tools: ToolRegistry,
     dir: PathBuf,
     knowledge: Arc<Knowledge>,
@@ -445,8 +447,7 @@ impl Clone for Agent {
             ticket_system,
             provider: Arc::clone(&self.provider),
             role: self.role.clone(),
-            context: self.context.clone(),
-            template_variables: self.template_variables.clone(),
+            templates: self.templates.clone(),
             tools: self.tools.clone(),
             dir: self.dir.clone(),
             knowledge: Arc::clone(&self.knowledge),
@@ -511,10 +512,17 @@ impl Agent {
         self.dir.clone()
     }
 
-    pub(super) fn system_prompt(&self, knowledge: Option<&str>) -> String {
+    pub(super) fn system_prompt(
+        &self,
+        knowledge: Option<&str>,
+        policies: &Policies,
+        stats: &Stats,
+        ticket_key: &str,
+    ) -> String {
         let mut b = PromptBuilder::default();
         if !self.role.is_empty() {
-            b = b.role(self.interpolate(&self.role));
+            let role = self.interpolate(&self.role);
+            b = b.role(self.expand_context(role, policies, stats, ticket_key));
         }
         if let Some(snap) = knowledge.filter(|s| !s.is_empty()) {
             b = b.knowledge(snap.to_string());
@@ -522,31 +530,32 @@ impl Agent {
         b.build().system
     }
 
-    pub(super) fn context_message(
+    /// Substitute the built-in `{context}` block. Runs after
+    /// [`Self::interpolate`], so a caller-bound `context` has already
+    /// consumed the placeholder and wins. Guarded on `contains` because
+    /// building the block spawns `uname`.
+    fn expand_context(
         &self,
+        role: String,
         policies: &Policies,
         stats: &Stats,
-        ticket_key: Option<&str>,
-    ) -> Option<String> {
-        let base = if !self.context.is_empty() {
-            Section::context(self.interpolate(&self.context)).render()
-        } else {
-            default_context(&self.dir, policies, stats)
-        };
-        let Some(key) = ticket_key else {
-            return Some(base);
-        };
-        const PREFIX: &str = "## Context\n\n";
-        let body = base.strip_prefix(PREFIX).unwrap_or(&base);
-        Some(format!("{PREFIX}- Ticket: {key}\n{body}"))
+        ticket_key: &str,
+    ) -> String {
+        if !role.contains("{context}") {
+            return role;
+        }
+        role.replace(
+            "{context}",
+            &context_body(&self.dir, policies, stats, ticket_key),
+        )
     }
 
     fn interpolate(&self, s: &str) -> String {
-        if self.template_variables.is_empty() {
+        if self.templates.is_empty() {
             return s.to_string();
         }
         let mut out = s.to_string();
-        for (key, value) in &self.template_variables {
+        for (key, value) in &self.templates {
             out = out.replace(&format!("{{{key}}}"), value);
         }
         out
@@ -679,34 +688,31 @@ mod tests {
         assert!(b.get_name().starts_with("agent-"));
     }
 
-    #[test]
-    fn context_message_falls_back_to_default_when_unset() {
-        let agent = Agent::new().role("R");
-        let policies = Policies::default();
-        let stats = Stats::new();
-        let rendered = agent
-            .context_message(&policies, &stats, None)
-            .expect("default context");
-        assert!(rendered.starts_with("## Context\n\n"));
-        assert!(rendered.contains("- Working directory: "));
-        assert!(rendered.contains("- Platform: "));
-        assert!(rendered.contains("- Date: "));
+    /// `system_prompt` with empty runtime state and a fixed ticket key.
+    fn system_prompt<P, M>(agent: &AgentBuilder<P, M>, knowledge: Option<&str>) -> String {
+        agent.system_prompt(knowledge, &Policies::default(), &Stats::new(), "T-1")
     }
 
     #[test]
-    fn context_message_renders_h2_heading_when_set() {
-        let agent = Agent::new().context("- Note: /tmp");
-        let policies = Policies::default();
-        let stats = Stats::new();
-        assert_eq!(
-            agent.context_message(&policies, &stats, None).as_deref(),
-            Some("## Context\n\n- Note: /tmp"),
-        );
+    fn a_role_without_the_placeholder_gets_no_context_block() {
+        let agent = Agent::new().role("ROLE");
+        assert_eq!(system_prompt(&agent, None), "ROLE");
     }
 
     #[test]
-    fn context_message_appends_runtime_lines_when_policy_budgets_are_set() {
-        let agent = Agent::new().dir("/tmp/check");
+    fn system_prompt_expands_the_context_placeholder() {
+        let agent = Agent::new().role("ROLE\n\n{context}").dir("/tmp/check");
+        let prompt = system_prompt(&agent, None);
+        assert!(prompt.starts_with("ROLE\n\n"));
+        assert!(prompt.contains("- Ticket: T-1"));
+        assert!(prompt.contains("- Working directory: /tmp/check"));
+        assert!(prompt.contains("- Platform: "));
+        assert!(prompt.contains("- Date: "));
+    }
+
+    #[test]
+    fn the_context_block_lists_the_remaining_budgets() {
+        let agent = Agent::new().role("{context}").dir("/tmp/check");
         let policies = Policies {
             max_turns: Some(3),
             max_input_tokens: Some(1_000),
@@ -726,58 +732,26 @@ mod tests {
             &[],
         );
 
-        let rendered = agent
-            .context_message(&policies, &stats, None)
-            .expect("default context");
+        // The exact rendering is pinned in `prompts`; what matters here is
+        // that the role's placeholder sees the live policies and stats.
+        let rendered = agent.system_prompt(None, &policies, &stats, "T-1");
 
-        let expected = format!(
-            "{static_prefix}\n\
-             - Turns remaining: 2\n\
-             - Input tokens remaining: 750",
-            static_prefix = default_context(
-                &PathBuf::from("/tmp/check"),
-                &Policies::default(),
-                &Stats::new()
-            ),
-        );
-        assert_eq!(rendered, expected);
+        assert!(rendered.contains("- Turns remaining: 2"));
+        assert!(rendered.contains("- Input tokens remaining: 750"));
     }
 
     #[test]
-    fn context_message_ignores_runtime_args_for_custom_context() {
-        let agent = Agent::new().context("- Note: custom");
-        let policies = Policies {
-            max_turns: Some(3),
-            ..Policies::default()
-        };
-        let stats = Stats::new();
-        stats.record_event(&EventKind::TurnStarted, "", &[]);
-        assert_eq!(
-            agent.context_message(&policies, &stats, None).as_deref(),
-            Some("## Context\n\n- Note: custom"),
-        );
-    }
-
-    #[test]
-    fn system_prompt_does_not_include_context() {
-        let agent = Agent::new().role("ROLE").context("CTX");
-        let prompt = agent.system_prompt(None);
-        assert!(prompt.contains("ROLE"));
-        assert!(!prompt.contains("CTX"));
-        assert!(!prompt.contains("## Context"));
-    }
-
-    #[test]
-    fn system_prompt_is_role_only() {
-        let agent = Agent::new().role("ROLE");
-        let prompt = agent.system_prompt(None);
-        assert_eq!(prompt, "ROLE");
+    fn a_bound_context_variable_shadows_the_built_in_block() {
+        let agent = Agent::new()
+            .role("{context}")
+            .template("context", "- Note: mine");
+        assert_eq!(system_prompt(&agent, None), "- Note: mine");
     }
 
     #[test]
     fn system_prompt_empty_when_role_unset() {
         let agent = Agent::new();
-        assert!(agent.system_prompt(None).is_empty());
+        assert!(system_prompt(&agent, None).is_empty());
     }
 
     #[test]
@@ -795,49 +769,28 @@ mod tests {
     fn system_prompt_interpolates_role_placeholders() {
         let agent = Agent::new()
             .role("You are {persona}.")
-            .template_variable("persona", "a senior reviewer");
-        assert_eq!(agent.system_prompt(None), "You are a senior reviewer.");
-    }
-
-    #[test]
-    fn context_message_interpolates_context_placeholders() {
-        let agent = Agent::new()
-            .context("- Topic: {topic}")
-            .template_variable("topic", "Rust generics");
-        let policies = Policies::default();
-        let stats = Stats::new();
-        assert_eq!(
-            agent.context_message(&policies, &stats, None).as_deref(),
-            Some("## Context\n\n- Topic: Rust generics"),
-        );
+            .template("persona", "a senior reviewer");
+        assert_eq!(system_prompt(&agent, None), "You are a senior reviewer.");
     }
 
     #[test]
     fn unresolved_placeholders_pass_through() {
-        let agent = Agent::new()
-            .role("Hi {missing}.")
-            .context("- Note: {also_missing}");
-        let policies = Policies::default();
-        let stats = Stats::new();
-        assert_eq!(agent.system_prompt(None), "Hi {missing}.");
-        assert_eq!(
-            agent.context_message(&policies, &stats, None).as_deref(),
-            Some("## Context\n\n- Note: {also_missing}"),
-        );
+        let agent = Agent::new().role("Hi {missing}.");
+        assert_eq!(system_prompt(&agent, None), "Hi {missing}.");
     }
 
     #[test]
     fn multiple_variables_substitute_independently() {
         let agent = Agent::new()
             .role("{greeting}, {name}.")
-            .template_variables([("greeting", "Hello"), ("name", "Alice")]);
-        assert_eq!(agent.system_prompt(None), "Hello, Alice.");
+            .templates([("greeting", "Hello"), ("name", "Alice")]);
+        assert_eq!(system_prompt(&agent, None), "Hello, Alice.");
     }
 
     #[test]
     fn no_variables_renders_role_unchanged() {
         let agent = Agent::new().role("You are a senior reviewer.");
-        assert_eq!(agent.system_prompt(None), "You are a senior reviewer.");
+        assert_eq!(system_prompt(&agent, None), "You are a senior reviewer.");
     }
 
     #[tokio::test]
@@ -845,7 +798,7 @@ mod tests {
         let dir = crate::test_util::TempDir::new().unwrap();
         let sys = crate::agents::TicketSystem::new();
         sys.dir(dir.path().to_path_buf());
-        let agent = built(Agent::new().template_variable("topic", "rust")).ticket_system(&sys);
+        let agent = built(Agent::new().template("topic", "rust")).ticket_system(&sys);
         agent.task("Search {topic} forums.");
         let stored = sys
             .tickets()
@@ -859,11 +812,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_task_body_keeps_the_context_placeholder_verbatim() {
+        let dir = crate::test_util::TempDir::new().unwrap();
+        let sys = crate::agents::TicketSystem::new();
+        sys.dir(dir.path().to_path_buf());
+        // The block needs a ticket key and live budgets, neither of which
+        // exists yet at dispatch. Only the role expands it.
+        let agent = built(Agent::new()).ticket_system(&sys);
+        agent.task("Work on {context}.");
+        let stored = sys
+            .tickets()
+            .into_iter()
+            .next()
+            .expect("ticket should have been enqueued");
+        assert_eq!(
+            stored.task,
+            serde_json::Value::String("Work on {context}.".into()),
+        );
+    }
+
+    #[tokio::test]
     async fn dispatch_leaves_object_task_unchanged() {
         let dir = crate::test_util::TempDir::new().unwrap();
         let sys = crate::agents::TicketSystem::new();
         sys.dir(dir.path().to_path_buf());
-        let agent = built(Agent::new().template_variable("topic", "rust")).ticket_system(&sys);
+        let agent = built(Agent::new().template("topic", "rust")).ticket_system(&sys);
         let value = serde_json::json!({"q": "Find {topic}"});
         agent.ticket(Ticket::new(value.clone()));
         let stored = sys
@@ -957,7 +930,7 @@ mod tests {
     #[test]
     fn system_prompt_renders_knowledge_section_when_body_present() {
         let agent = Agent::new().role("R");
-        let prompt = agent.system_prompt(Some("- **config** — Port 8080"));
+        let prompt = system_prompt(&agent, Some("- **config** — Port 8080"));
         assert!(prompt.contains("R"));
         assert!(prompt.contains("## Knowledge\n\n- **config** — Port 8080"));
     }
@@ -965,7 +938,7 @@ mod tests {
     #[test]
     fn system_prompt_omits_knowledge_when_body_empty() {
         let agent = Agent::new().role("R");
-        assert_eq!(agent.system_prompt(Some("")), "R");
+        assert_eq!(system_prompt(&agent, Some("")), "R");
     }
 
     #[test]

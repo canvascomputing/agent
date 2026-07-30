@@ -548,7 +548,6 @@ mod tests {
                 .provider(provider.clone() as Arc<dyn Provider>)
                 .model("claude-sonnet-4-20250514")
                 .role("test")
-                .context("static")
                 .tool(dump)
                 .build(),
         );

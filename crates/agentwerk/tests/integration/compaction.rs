@@ -135,7 +135,7 @@ async fn summariser_produces_text_when_compaction_fires_against_live_llm() {
         Agent::new()
             .provider(provider)
             .model(Model::from_name(&model).context_window(LOCAL_CTX))
-            .role("Answer the question in plain text. Do not call any tools.")
+            .role("{context}\n\nAnswer the question in plain text. Do not call any tools.")
             .build(),
     );
     tickets.ticket(Ticket::new(TASK));

@@ -3,7 +3,7 @@
 use std::borrow::Cow;
 
 /// One section of an assembled prompt. Knows whether it should render under a
-/// `## Heading` (Context) or as bare body (Role, Directive). Keeping
+/// `## Heading` (Knowledge) or as bare body (Role, Directive). Keeping
 /// this concern here means the source `.md` files contain only body content —
 /// the structural markdown is added by the builder.
 #[derive(Debug, Clone)]
@@ -16,13 +16,6 @@ impl Section {
     pub fn role(body: impl Into<Cow<'static, str>>) -> Self {
         Self {
             heading: None,
-            body: body.into(),
-        }
-    }
-
-    pub fn context(body: impl Into<Cow<'static, str>>) -> Self {
-        Self {
-            heading: Some("Context"),
             body: body.into(),
         }
     }
@@ -70,12 +63,6 @@ mod tests {
     fn role_renders_body_without_heading() {
         let s = Section::role("You are a senior reviewer.");
         assert_eq!(s.render(), "You are a senior reviewer.");
-    }
-
-    #[test]
-    fn context_wraps_body_in_h2_heading() {
-        let s = Section::context("- Working directory: /tmp/test");
-        assert_eq!(s.render(), "## Context\n\n- Working directory: /tmp/test");
     }
 
     #[test]

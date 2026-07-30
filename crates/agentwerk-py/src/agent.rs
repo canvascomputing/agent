@@ -45,9 +45,8 @@ enum ModelSpec {
 pub struct PyAgent {
     name: Option<String>,
     role: Option<String>,
-    context: Option<String>,
     labels: Vec<String>,
-    template_variables: Vec<(String, String)>,
+    templates: Vec<(String, String)>,
     dir: Option<String>,
     interactive: bool,
     provider: ProviderSpec,
@@ -67,9 +66,8 @@ impl PyAgent {
         PyAgent {
             name: None,
             role: None,
-            context: None,
             labels: Vec::new(),
-            template_variables: Vec::new(),
+            templates: Vec::new(),
             dir: None,
             interactive: false,
             provider: ProviderSpec::Unset,
@@ -138,17 +136,14 @@ impl PyAgent {
         if let Some(role) = &self.role {
             builder = builder.role(role.clone());
         }
-        if let Some(context) = &self.context {
-            builder = builder.context(context.clone());
-        }
         if !self.labels.is_empty() {
             builder = builder.labels(self.labels.clone());
         }
         if self.interactive {
             builder = builder.interactive();
         }
-        for (key, value) in &self.template_variables {
-            builder = builder.template_variable(key.clone(), value.clone());
+        for (key, value) in &self.templates {
+            builder = builder.template(key.clone(), value.clone());
         }
         if let Some(dir) = &self.dir {
             builder = builder.dir(std::path::PathBuf::from(dir));
@@ -252,12 +247,6 @@ impl PyAgent {
         Ok(slf)
     }
 
-    fn context(mut slf: PyRefMut<'_, Self>, context: String) -> PyResult<PyRefMut<'_, Self>> {
-        slf.ensure_unbuilt()?;
-        slf.context = Some(context);
-        Ok(slf)
-    }
-
     fn label(mut slf: PyRefMut<'_, Self>, label: String) -> PyResult<PyRefMut<'_, Self>> {
         slf.ensure_unbuilt()?;
         slf.labels.push(label);
@@ -277,24 +266,25 @@ impl PyAgent {
         Ok(slf)
     }
 
-    /// Bind `{key}` to `value` in the role, context, and string tasks.
-    fn template_variable(
+    /// Bind `{key}` to `value` in the role and in string tasks. Binding
+    /// `context` shadows the built-in block the role expands.
+    fn template(
         mut slf: PyRefMut<'_, Self>,
         key: String,
         value: String,
     ) -> PyResult<PyRefMut<'_, Self>> {
         slf.ensure_unbuilt()?;
-        slf.template_variables.push((key, value));
+        slf.templates.push((key, value));
         Ok(slf)
     }
 
     /// Bind every `{key}` in the mapping at once.
-    fn template_variables(
+    fn templates(
         mut slf: PyRefMut<'_, Self>,
         variables: BTreeMap<String, String>,
     ) -> PyResult<PyRefMut<'_, Self>> {
         slf.ensure_unbuilt()?;
-        slf.template_variables.extend(variables);
+        slf.templates.extend(variables);
         Ok(slf)
     }
 

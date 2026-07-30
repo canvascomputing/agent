@@ -85,7 +85,8 @@ async fn traces_three_hop_call_path() -> std::result::Result<(), Box<dyn std::er
         .model(&model)
         .dir(root)
         .role(
-            "Investigate the working directory to answer the task. Use the \
+            "{context}\n\n\
+             Investigate the working directory to answer the task. Use the \
              available read-only tools as you see fit. Multiple functions in \
              this codebase share names: rely on the source of each function, \
              not just its name, to decide what calls what. When you have the \

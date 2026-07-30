@@ -64,7 +64,7 @@ async fn main() {
         .model_from_env()
         .role(RESEARCHER_2_ROLE)
         .label("researcher_2")
-        .template_variable("schema_json", schema_json_pretty.clone())
+        .template("schema_json", schema_json_pretty.clone())
         .tool(brave_search_tool(brave_key.clone()))
         .tool(ReadTicketsTool)
         .build();

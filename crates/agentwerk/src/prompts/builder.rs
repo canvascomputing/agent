@@ -1,21 +1,18 @@
 //! Builder that assembles a prompt envelope from typed sections,
-//! mirroring `Agent::context/role` and the canonical Context → Role →
-//! Tools → Task order.
+//! mirroring `Agent::role` and the canonical Role → Tools → Task order.
 
 use std::borrow::Cow;
 
 use super::section::Section;
 
 /// Assembled prompt envelope. Field order follows the canonical spec
-/// section order: context first, then the system message (role +
-/// appended directives), then task. Tools are not present here — they
-/// reach the model as structured data via the registry, not as a
-/// section in the prompt envelope.
+/// section order: the system message (role + appended directives)
+/// first, then task. Tools are not present here — they reach the model
+/// as structured data via the registry, not as a section in the prompt
+/// envelope.
 #[allow(dead_code)]
 #[derive(Debug, Clone, Default)]
 pub struct Prompt {
-    /// First user message; `None` means "no context block sent".
-    pub context: Option<String>,
     /// Assembled system message: role + appended directives, joined by
     /// blank lines. May be empty when no role is set.
     pub system: String,
@@ -23,12 +20,10 @@ pub struct Prompt {
     pub task: Option<String>,
 }
 
-/// Inverse of `Agent::{context, role}`. Owns spacing rules and the
-/// canonical section order; call sites never concatenate strings by
-/// hand.
+/// Inverse of `Agent::role`. Owns spacing rules and the canonical
+/// section order; call sites never concatenate strings by hand.
 #[derive(Default)]
 pub struct PromptBuilder {
-    context: Option<Section>,
     role: Option<Section>,
     knowledge: Option<Section>,
     task: Option<Section>,
@@ -36,12 +31,6 @@ pub struct PromptBuilder {
 }
 
 impl PromptBuilder {
-    #[allow(dead_code)]
-    pub fn context(mut self, body: impl Into<Cow<'static, str>>) -> Self {
-        self.context = Some(Section::context(body));
-        self
-    }
-
     pub fn role(mut self, body: impl Into<Cow<'static, str>>) -> Self {
         self.role = Some(Section::role(body));
         self
@@ -67,7 +56,6 @@ impl PromptBuilder {
     }
 
     pub fn build(self) -> Prompt {
-        let context = self.context.map(|s| s.render()).filter(|s| !s.is_empty());
         let task = self.task.map(|s| s.render()).filter(|s| !s.is_empty());
 
         let mut system_parts: Vec<String> = Vec::new();
@@ -91,7 +79,6 @@ impl PromptBuilder {
         }
 
         Prompt {
-            context,
             system: system_parts.join("\n\n"),
             task,
         }
@@ -108,7 +95,6 @@ mod tests {
             .role("You are a senior reviewer.")
             .build();
         assert_eq!(p.system, "You are a senior reviewer.");
-        assert!(p.context.is_none());
         assert!(p.task.is_none());
     }
 
@@ -119,19 +105,6 @@ mod tests {
             .append_directive("- MUST return JSON.")
             .build();
         assert_eq!(p.system, "You answer with JSON.\n\n- MUST return JSON.");
-    }
-
-    #[test]
-    fn context_renders_with_h2_heading() {
-        let p = PromptBuilder::default()
-            .context("- Working directory: /tmp/test")
-            .role("R")
-            .build();
-        assert_eq!(
-            p.context.as_deref(),
-            Some("## Context\n\n- Working directory: /tmp/test"),
-        );
-        assert_eq!(p.system, "R");
     }
 
     #[test]

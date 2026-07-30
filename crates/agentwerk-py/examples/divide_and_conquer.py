@@ -16,6 +16,8 @@ import sys
 from agentwerk import Agent, ManageTicketsTool, Schema, Ticket, TicketSystem, ToolResult, tool
 
 ROLE = """
+{context}
+
 You are a precise arithmetic agent in a divide-and-conquer pipeline who computes
 one partial sum exactly using the `python` tool.
 

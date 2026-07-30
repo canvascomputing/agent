@@ -91,7 +91,8 @@ async fn finds_every_lib_rs_in_nested_tree() -> std::result::Result<(), Box<dyn 
             .model(&model)
             .dir(root)
             .role(
-                "Investigate the working directory and answer the user's question. \
+                "{context}\n\n\
+                 Investigate the working directory and answer the user's question. \
                  Use the available tools — pick whichever one fits the question. \
                  When you have the answer, settle the ticket via \
                  `finish`.",

@@ -17,7 +17,8 @@ async fn test() -> std::result::Result<(), Box<dyn std::error::Error>> {
         .provider(provider)
         .model(&model)
         .role(
-            "Explore the repository to answer the task. When you have an answer, \
+            "{context}\n\n\
+             Explore the repository to answer the task. When you have an answer, \
              settle the ticket via `manage_tickets` with `action: \"done\"` \
              and `result` set to your answer.",
         )

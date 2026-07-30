@@ -39,7 +39,8 @@ async fn test() -> std::result::Result<(), Box<dyn std::error::Error>> {
         .provider(provider)
         .model(&model)
         .role(
-            "Step 1: call `ls`, `cat Cargo.toml`, and `wc -l Cargo.toml` to \
+            "{context}\n\n\
+             Step 1: call `ls`, `cat Cargo.toml`, and `wc -l Cargo.toml` to \
              gather the file list and Cargo.toml line count. \
              Step 2: immediately call `finish` with `result` \
              set to a JSON object in exactly this shape: \

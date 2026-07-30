@@ -124,6 +124,9 @@ mod tests {
     #[tokio::test]
     async fn first_overflow_attempts_compaction_before_request_failed() {
         let provider = MockProvider::with_results(vec![
+            // A single-message transcript collapses to a no-op, so prime
+            // one turn before the overflow to give compaction something.
+            Ok(tool_call_response("primer")),
             Err(crate::providers::ProviderError::ContextWindowExceeded {
                 message: "prompt is 250000 tokens, exceeds 200000".into(),
             }),
@@ -173,7 +176,7 @@ mod tests {
         assert_eq!(ticket.status, Status::Finished);
 
         let fourth = &provider.received()[3];
-        assert_eq!(user_texts_filter(fourth), vec!["SUMMARY".to_string()]);
+        assert_eq!(user_texts(fourth), vec!["SUMMARY".to_string()]);
     }
 
     #[tokio::test]
@@ -515,7 +518,7 @@ mod tests {
         crate::schemas::Schema::parse(serde_json::json!({"type": "string"})).expect("valid schema")
     }
 
-    fn user_texts_filter(messages: &[crate::providers::Message]) -> Vec<String> {
+    fn user_texts(messages: &[crate::providers::Message]) -> Vec<String> {
         messages
             .iter()
             .filter_map(|m| match m {
@@ -527,7 +530,6 @@ mod tests {
                 }
                 _ => None,
             })
-            .filter(|text| !text.starts_with("## Context\n\n"))
             .collect()
     }
 }
