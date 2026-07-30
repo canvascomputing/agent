@@ -29,12 +29,11 @@ Seven rules the surface table below never repeats.
 | `AgentBuilder::model_from_env()` | `Agent.model_from_env()` |
 | `AgentBuilder::name(n)` | `Agent.name(name)` |
 | `AgentBuilder::role(r)` | `Agent.role(role)` |
-| `AgentBuilder::context(c)` | `Agent.context(context)` |
 | `AgentBuilder::label(l)` | `Agent.label(label)` |
 | `AgentBuilder::labels(iter)` | `Agent.labels(labels)` |
 | `AgentBuilder::interactive()` | `Agent.interactive()` |
-| `AgentBuilder::template_variable(key, value)` | `Agent.template_variable(key, value)` |
-| `AgentBuilder::template_variables(vars)` | `Agent.template_variables(variables)` |
+| `AgentBuilder::template(key, value)` | `Agent.template(key, value)` |
+| `AgentBuilder::templates(vars)` | `Agent.templates(variables)`: a mapping, so the bulk bind applies in key order where Rust preserves insertion order. |
 | `AgentBuilder::tool(t)` | `Agent.tool(tool)` |
 | `AgentBuilder::tools(iter)` | `Agent.tools(tools)` |
 | `AgentBuilder::dir(p)` | `Agent.dir(dir)` |

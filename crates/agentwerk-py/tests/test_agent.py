@@ -23,16 +23,14 @@ def test_chaining_returns_the_same_agent():
     assert agent.role("r").label("x").labels(["y", "z"]).dir(".") is agent
 
 
-def test_context_and_interactive_chain():
+def test_interactive_chains():
     agent = aw.Agent()
-    assert agent.context("You work in a monorepo.").interactive() is agent
+    assert agent.interactive() is agent
 
 
-def test_template_variables_chain_singly_and_in_bulk():
+def test_templates_chain_singly_and_in_bulk():
     agent = aw.Agent()
-    configured = agent.template_variable("one", "1").template_variables(
-        {"two": "2", "three": "3"}
-    )
+    configured = agent.template("one", "1").templates({"two": "2", "three": "3"})
     assert configured is agent
 
 

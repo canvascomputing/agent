@@ -83,7 +83,7 @@ Where code lives and the rules that govern placement.
 
 **Composable prompt assembly and JSON-Schema validation.**
 
-- `prompts/builder.rs` and `prompts/section.rs` hold `PromptBuilder` and `Section`, which assemble role/context blocks.
+- `prompts/builder.rs` and `prompts/section.rs` hold `PromptBuilder` and `Section`, which assemble role and knowledge blocks.
 - `schemas/mod.rs` holds `Schema`, `SchemaParseError`, and `SchemaViolation`.
 
 ## Tests

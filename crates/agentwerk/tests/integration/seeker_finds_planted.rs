@@ -162,7 +162,7 @@ async fn seeker_pool_finds_planted_indicators(
                 .provider(Arc::clone(&provider))
                 .model(&model)
                 .role(SEEKER_AGENT.trim())
-                .template_variable("instruction", "")
+                .template("instruction", "")
                 .label(SEEKER_LABEL)
                 .dir(root.to_path_buf())
                 .knowledge(&knowledge)
@@ -178,7 +178,8 @@ async fn seeker_pool_finds_planted_indicators(
             .provider(Arc::clone(&provider))
             .model(&model)
             .role(
-                "You receive one security finding. Immediately call `finish` with a \
+                "{context}\n\n\
+                 You receive one security finding. Immediately call `finish` with a \
                  one-word summary such as \"noted\". Do not call any other tool.",
             )
             .label(ANALYSIS_LABEL)

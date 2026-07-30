@@ -404,7 +404,6 @@ pub async fn run_compaction(
             .provider(provider.clone() as Arc<dyn Provider>)
             .model("claude-sonnet-4-20250514")
             .role("test")
-            .context("static")
             .tool(ManageTicketsTool)
             .build(),
     );

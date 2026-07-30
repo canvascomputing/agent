@@ -33,7 +33,8 @@ async fn reports_a_secret_from_another_ticket(
             .provider(provider)
             .model(&model)
             .role(
-                "Answer the user by inspecting the ticket queue with the \
+                "{context}\n\n\
+                 Answer the user by inspecting the ticket queue with the \
                  available ticket tool, then call `finish` with the \
                  answer. Do not guess: read the relevant ticket and quote it.",
             )

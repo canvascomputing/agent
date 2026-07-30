@@ -76,7 +76,8 @@ async fn surfaces_a_deferred_tool_definition() -> std::result::Result<(), Box<dy
             .provider(provider)
             .model(&model)
             .role(
-                "Do exactly what the user asks, one tool call per step, then call \
+                "{context}\n\n\
+                 Do exactly what the user asks, one tool call per step, then call \
                  `finish`. Output tool calls only, never prose.",
             )
             .tool(FindToolsTool)

@@ -30,7 +30,8 @@ async fn creates_a_followup_ticket() -> std::result::Result<(), Box<dyn std::err
             .provider(provider)
             .model(&model)
             .role(
-                "Carry out the user's request using the ticket tools, then call \
+                "{context}\n\n\
+                 Carry out the user's request using the ticket tools, then call \
                  `finish`. Create new tickets with the appropriate tool \
                  action; do not try to finish tickets other than your own.",
             )

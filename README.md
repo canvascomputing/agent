@@ -88,7 +88,7 @@ make use_case name=<name>    # run one
 
 - [Agents](#agents): Pick up tickets and produce results.
 - [Tickets](#tickets): Coordinate complex work across agents.
-- [Prompting](#prompting): Role, context, and task shaping the work of an agent.
+- [Prompting](#prompting): Role and task shaping the work of an agent.
 - [Tools](#tools): Capabilities agents use to solve a ticket.
 - [Knowledge](#knowledge): Durable memory agents share across tickets and runs.
 - [Sessions](#sessions): Working directory layout and how to reopen a run.
@@ -116,7 +116,7 @@ let agent = Agent::new()
 | `dir(d)` | Set the directory the agent works in. |
 | `edit_directive_on_failure(f)` | Reword the retry message agentwerk sends when the model stalls or returns invalid output. |
 
-`role` and `context` are covered under [Prompting](#prompting); `knowledge(&store)` under [Knowledge](#knowledge).
+`role` is covered under [Prompting](#prompting); `knowledge(&store)` under [Knowledge](#knowledge).
 
 ### Providers
 
@@ -372,13 +372,12 @@ agentwerk compacts the transcript automatically when the model's context window 
 
 ## Prompting
 
-Every prompt has three parts: `role` (who the agent is), `context` (the situation it operates in), and `task` (work it should perform). `role` and `context` are set on the agent; the task body arrives per ticket via `tickets.task()`. The structure follows the [prompting guide](https://github.com/canvascomputing/prompting).
+Every prompt has two parts: `role` (who the agent is) and `task` (work it should perform).
 
 ```rust
 let agent = Agent::new()
-    .role("You are an arithmetic agent. Compute step by step and show your work.")
-    .context("- Stage 2 of a math-tutor pipeline.\n- Attempts remaining: 2.")
-    .template_variable("divisor", "8")
+    .role("{context}\n\nYou are an arithmetic agent in stage 2. Compute step by step and show your work.")
+    .template("divisor", "8")
     .from_env()
     .build();
 
@@ -386,19 +385,19 @@ tickets.agent(agent);
 tickets.task("Compute (47 * 92) / {divisor}, then round to the nearest integer.");
 ```
 
-When `context(...)` is not set, agentwerk supplies a default block. When the agent processes a ticket, the ticket key is prepended automatically:
-
 ```markdown
-You work within a ticket system. Each task arrives as a ticket; you process one at a time. Each reply you generate is one turn.
+You work within a ticket system. Each task arrives as a ticket; each reply you generate is one turn.
 
 - Ticket: TICKET-7
 - Date: 2026-05-06
-- Directory: /Users/caro
+- Working directory: /Users/caro
 - Platform: darwin 25.1.0
 - Turns remaining: 8
 - Input tokens remaining: 95000
 - Output tokens remaining: 12000
 - Time remaining: 240s
+
+The run stops when any budget reaches zero, mid-ticket. Finish before then.
 ```
 
 ## Tools

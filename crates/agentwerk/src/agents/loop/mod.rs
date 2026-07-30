@@ -52,7 +52,7 @@ mod tests {
         let (_, _, ticket) = run_one(provider, 3, 10, None).await;
 
         let replies = &ticket.replies;
-        assert_eq!(replies.len(), 5, "got {replies:?}");
+        assert_eq!(replies.len(), 4, "got {replies:?}");
 
         assert_eq!(replies[0].author, Author::System);
         assert!(matches!(
@@ -62,25 +62,19 @@ mod tests {
 
         assert_eq!(replies[1].author, Author::User);
         assert!(
-            matches!(&replies[1].content[..], [ReplyContent::Text { text: t }] if t.starts_with("## Context")),
-            "second reply must be the auto-injected context prelude",
+            matches!(&replies[1].content[..], [ReplyContent::Text { text: t }] if t == "go"),
+            "second reply must carry the task body",
         );
 
-        assert_eq!(replies[2].author, Author::User);
+        assert_eq!(replies[2].author, Author::Assistant);
         assert!(
-            matches!(&replies[2].content[..], [ReplyContent::Text { text: t }] if t == "go"),
-            "third reply must carry the task body",
-        );
-
-        assert_eq!(replies[3].author, Author::Assistant);
-        assert!(
-            matches!(&replies[3].content[..], [ReplyContent::ToolUse { name, .. }] if name == "finish"),
+            matches!(&replies[2].content[..], [ReplyContent::ToolUse { name, .. }] if name == "finish"),
             "assistant reply must mirror the model's ToolUse block",
         );
 
-        assert_eq!(replies[4].author, Author::User);
+        assert_eq!(replies[3].author, Author::User);
         assert!(
-            matches!(&replies[4].content[..], [ReplyContent::ToolResult { .. }]),
+            matches!(&replies[3].content[..], [ReplyContent::ToolResult { .. }]),
             "tool-result reply must carry a ToolResult block",
         );
 
