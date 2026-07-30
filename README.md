@@ -1,27 +1,35 @@
-<p align="center">
+<div align="center">
   <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/logo.png" width="200" />
-</p>
+</div>
 
 <h1 align="center">agentwerk</h1>
 
-<p align="center">
+<div align="center">
   <strong>A minimal Rust crate for running many agents in parallel.</strong>
-</p>
+</div>
 
-<p align="center">
+<div align="center">
   <a href="#installation">Installation</a> •
   <a href="#quick-start">Quick Start</a> •
+  <a href="#agent-swarms">Agent Swarms</a> •
   <a href="#demo">Demo</a> •
   <a href="#use-cases">Use Cases</a> •
-  <a href="#api">API</a> •
   <a href="#development">Development</a>
-</p>
+</div>
 
-<p align="center">agentwerk is designed to tackle complex problems with fleets of agents through the simplest interface possible. It provides a ticket system which distributes tasks across agents running in parallel, validates results, retries on failure, and reports every step as an event.</p>
+<div align="center">agentwerk is designed to tackle complex problems with fleets of agents through the simplest interface possible. It provides a ticket system which distributes tasks across agents running in parallel, validates results, retries on failure, and reports every step as an event.</div>
 
-<p align="center"><em>agentwerk pairs "agent" with the German "Werk", a word for both factory and artwork: machinery for building agentic systems.</em></p>
+<div align="center"><em>agentwerk pairs "agent" with the German "Werk", a word for both factory and artwork: machinery for building agentic systems.</em></div>
 
 ---
+
+## Why use agentwerk?
+
+- **Minimal interface:** create agents with a few lines of code.
+- **Complex workflows:** allow agents to interact through shared knowledge and tickets.
+- **Deep observability:** inspect every request, message and failure.
+- **Ease of integration:** apply agents as simple as HTTP calls.
+- **Facilitate training:** collect trajectories for fine-tuning models.
 
 ## Installation
 
@@ -31,13 +39,7 @@
 cargo add agentwerk
 ```
 
-### Python
-
-**👉 [Python README](crates/agentwerk-py/README.md)**
-
-```bash
-pip install agentwerk
-```
+Also see: [Python implementation](crates/agentwerk-py/README.md).
 
 ## Quick Start
 
@@ -62,11 +64,59 @@ async fn main() {
 }
 ```
 
-## Demo (Malware Scan)
+## Agent Swarms
 
-<p align="left">
+Run many agents in parallel and let them share what they learn:
+
+```rust
+use agentwerk::{Agent, Knowledge, Ticket, TicketSystem};
+use agentwerk::tools::{GrepTool, ManageTicketsTool, ReadFileTool};
+
+let tickets = TicketSystem::new();
+let store = Knowledge::load("./notes")?;
+
+for i in 0..4 {
+    tickets.agent(
+        Agent::new()
+            .name(format!("scout_{i}"))
+            .label("scan")
+            .role("Find code that can panic. File a `report` ticket per finding, and note what you learn.")
+            .knowledge(&store)
+            .from_env()
+            .tool(GrepTool)
+            .tool(ReadFileTool)
+            .tool(ManageTicketsTool)
+            .build(),
+    );
+}
+
+tickets.agent(
+    Agent::new()
+        .name("writer")
+        .label("report")
+        .role("Read the cited file and explain the fix in two sentences.")
+        .knowledge(&store)
+        .from_env()
+        .tool(ReadFileTool)
+        .build(),
+);
+
+for dir in ["src/api", "src/db", "src/web", "src/cli"] {
+    tickets.ticket(Ticket::new(format!("Audit {dir}.")).label("scan"));
+}
+
+tickets.finish().await;
+
+for fix in tickets.results_for_label("report") {
+    println!("{fix}");
+}
+```
+
+## Demo
+
+<div align="left">
   <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/demo.gif" width="600" />
-</p>
+</div>
 
 ## Use Cases
 
@@ -84,20 +134,19 @@ make use_case                # list available names
 make use_case name=<name>    # run one
 ```
 
-# API
+The API, section by section:
 
-- [Agents](#agents): Pick up tickets and produce results.
+- [Agents](#agents): Define roles, behavior and actions.
 - [Tickets](#tickets): Coordinate complex work across agents.
-- [Prompting](#prompting): Role and task shaping the work of an agent.
-- [Tools](#tools): Capabilities agents use to solve a ticket.
-- [Knowledge](#knowledge): Durable memory agents share across tickets and runs.
-- [Sessions](#sessions): Working directory layout and how to reopen a run.
-- [Events](#events): Lifecycle events emitted while agents work.
+- [Tools](#tools): Define accessible tooling.
+- [Events](#events): Requests, tool usage, failures and more.
 - [Stats](#stats): Metrics about tickets, tokens and time.
+- [Knowledge](#knowledge): Notes agents can share for collaboration.
+- [Sessions](#sessions): Directory layout of data agents create.
 
 ## Agents
 
-An `Agent` picks up **tickets**, uses tools to solve them, and writes the result back onto each ticket.
+An `Agent` is the core entity of agentwerk. It has access to tools for solving tasks in the form of tickets.
 
 ```rust
 use agentwerk::tools::ReadFileTool;
@@ -105,285 +154,33 @@ use agentwerk::tools::ReadFileTool;
 let agent = Agent::new()
     .name("agent_0")
     .label("math")
+    .role("You are an arithmetic agent. Compute step by step and show your work.")
     .tool(ReadFileTool)
-```
-
-| Method | Description |
-|--------|-------------|
-| `name(s)` | Set an identifier for assigning tickets. |
-| `label(l)` / `labels([..])` | Restrict the agent to tickets carrying matching labels. |
-| `tool(t)` / `tools([..])` | Register a tool the agent may call. |
-| `dir(d)` | Set the directory the agent works in. |
-| `edit_directive_on_failure(f)` | Reword the retry message agentwerk sends when the model stalls or returns invalid output. |
-
-`role` is covered under [Prompting](#prompting); `knowledge(&store)` under [Knowledge](#knowledge).
-
-### Providers
-
-A `Provider` connects the agent to an LLM service. agentwerk ships providers for Anthropic, OpenAI, Mistral, and a LiteLLM proxy.
-
-```rust
-use agentwerk::providers::AnthropicProvider;
-
-let agent = Agent::new()
-    .provider(AnthropicProvider::new(key))
-    .model("claude-sonnet-4-20250514");
-
-// Or pick from environment variables (see DEVELOPMENT.md).
-let agent = Agent::new().from_env();
-```
-
-Each provider exposes `.base_url(url)` and `.timeout(duration)` to override the endpoint and request timeout.
-
-| Method | Description |
-|--------|-------------|
-| `provider(p)` | Set the LLM provider. |
-| `model(m)` | Set the model the provider runs. |
-| `from_env()` | Detect provider and model in one call. |
-
-To read only the provider from the environment (and set the model explicitly), or only the model (and set the provider explicitly), use `provider_from_env()` or `model_from_env()` (see [`AgentBuilder`](https://docs.rs/agentwerk/latest/agentwerk/agents/agent/struct.AgentBuilder.html)).
-
-### Models
-
-`.model(m)` accepts a model name or a `Model`. Names registered with a known provider resolve to a context window automatically. For private or proxied models, build a `Model` and pass an explicit window so automatic compaction stays active:
-
-```rust
-use agentwerk::providers::Model;
-
-let agent = Agent::new()
-    .model(Model::from_name("my-local-model").context_window(128_000));
-```
-
-Set `reasoning_effort` on a reasoning-capable model to make it think before answering. The thinking is recorded in the ticket transcript alongside the answer. It is off unless you set it, and any reasoning the model returns is captured regardless:
-
-```rust
-use agentwerk::providers::{Model, ReasoningEffort};
-
-let agent = Agent::new()
-    .model(Model::from_name("claude-sonnet-4-6").reasoning_effort(ReasoningEffort::High));
-```
-
-## Tickets
-
-<p align="left">
-  <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/tickets.jpg" width="400" />
-</p>
-
-The `TicketSystem` coordinates collaboration between agents. A `task` is the work itself; a `ticket` wraps it with metadata like labels and schemas. Labels assign work to matching agents.
-
-```rust
-use agentwerk::{Agent, Ticket, TicketSystem};
-use agentwerk::tools::FetchUrlTool;
-
-let tickets = TicketSystem::new();
-
-for i in 0..4 {
-    tickets.agent(
-        Agent::new()
-            .name(format!("researcher_{i}"))
-            .label("research")
-            .from_env()
-            .tool(FetchUrlTool)
-            .build(),
-    );
-}
-
-tickets.agent(
-    Agent::new()
-        .name("analyst")
-        .label("analysis")
-        .from_env()
-        .build()
-);
-
-for url in pricing_pages {
-    tickets.ticket(
-        Ticket::new(format!("Fetch {url} and extract pricing tiers, limits, and features."))
-            .label("research"),
-    );
-}
-
-tickets.ticket(
-    Ticket::new("Rank all products by value for a 10-person engineering team.")
-        .label("analysis")
-        .schema(comparison_schema)
-);
-```
-
-| Method | Description |
-|--------|-------------|
-| `agent(agent)` | Add an agent to this ticket system. |
-| `task(t)` | Submit a task and return its ticket key. |
-| `ticket(t)` | Submit a `Ticket` with custom labels, a schema, or a parent link. |
-
-Also on [`TicketSystem`](https://docs.rs/agentwerk/latest/agentwerk/agents/tickets/struct.TicketSystem.html): `dir(d)` to relocate persisted state, `reply(key, c)` to continue a multi-turn conversation on one ticket.
-
-### Execution
-
-Start, wait, and cancel a run:
-
-```rust
-tickets.start();
-tickets.finish().await;
-let answer = tickets.last_result();
-```
-
-| Method | Description |
-|--------|-------------|
-| `start()` | Begin processing tickets in the background. |
-| `finish().await` | Process every queued ticket and return. |
-| `cancel()` | Cancel the run. |
-| `finish_reason()` | Return why the most recent `finish()` returned: `Drained`, `PolicyViolated(kind)`, or `Cancelled`. |
-
-### Reacting to events
-
-React to events as they arrive: stop early, call off one label's agents, queue follow-up work, or read each ticket as it finishes.
-
-```rust
-// Fail fast: end the run at the first malicious verdict.
-tickets.cancel_on_result(|result| result["verdict"] == "malicious");
-
-// Verify every analysis finding with a follow-up ticket for the review pool.
-tickets.create_ticket_on_result(|ticket| {
-    ticket.has_label("analysis").then(|| {
-        Ticket::new("Verify this finding.")
-            .parent(&ticket.key)
-            .label("review")
-    })
-});
-
-// Keep the messages of every finished ticket as a training example.
-let system = Arc::clone(&tickets);
-tickets.on_ticket(move |event, ticket| {
-    if matches!(event.kind, EventKind::TicketFinished) {
-        let model = system.model_for_agent(&event.agent_name);
-        let _ = Trajectory::from_ticket(&event.agent_name, model.as_deref(), ticket)
-            .save("datasets");
-    }
-});
-```
-
-| Method | Description |
-|--------|-------------|
-| `cancel_on(trigger)` | End the run when another task finishes. |
-| `cancel_on_event(p)` | End the run when an event matches. |
-| `cancel_on_result(p)` | End the run when a finished result matches. |
-| `cancel_label(l)` | Call off one label's agents. |
-| `cancel_label_on_event(l, p)` | Call off one label's agents while the rest keep working. |
-| `label_cancelled(l)` | Report whether one label's agents have been called off. |
-| `create_ticket_on_result(make)` | Enqueue a follow-up ticket from a finished ticket. |
-| `on_ticket(h)` | Read a ticket as it starts, finishes, or fails. |
-| `wait_for_ticket(p)` | Wait for one matching ticket instead of draining the queue. |
-| `edit_replies_on_event(f)` | Rewrite a ticket's replies before its next request. One editor at a time: a second replaces it. |
-| `edit_replies(key, f)` | Rewrite one ticket's replies now. |
-
-An editor rewrites the messages in place. Keep each tool call paired with its result: the model rejects a conversation missing one half.
-
-See [`TicketSystem`](https://docs.rs/agentwerk/latest/agentwerk/agents/tickets/struct.TicketSystem.html).
-
-### Reading results
-
-Query the system after `finish().await` returns:
-
-```rust
-tickets.finish().await;
-
-if let Some(answer) = tickets.last_result() {
-    println!("{answer}");
-}
-
-for ticket in tickets.tickets() {
-    println!("{}: {}", ticket.key, ticket.status);
-}
-```
-
-| Method | Description |
-|--------|-------------|
-| `last_result()` | Return the most recent finished ticket's result as JSON. |
-| `results()` | Return every finished ticket's result as JSON, in creation order. |
-| `results_for_label(l)` | Return every finished ticket carrying the label's result as JSON. |
-| `tickets()` | Return every ticket in creation order, with status, payload, and metadata. |
-| `find_ticket(predicate)` | Return the earliest ticket matching the predicate. |
-| `find_tickets(predicate)` | Return every ticket matching the predicate. |
-| `get_ticket(key)` | Return one ticket by key. |
-| `model_for_agent(name)` | Return the model that agent runs. |
-| `stats()` | Return the run statistics described under [Stats](#stats). |
-
-More on [`TicketSystem`](https://docs.rs/agentwerk/latest/agentwerk/agents/tickets/struct.TicketSystem.html): `is_cancelled`, and `set_failed` to fail a ticket from outside the run.
-
-### Inspecting tickets
-
-Each `Ticket` carries the recorded result, its transcript, and lifecycle timestamps as `pub` fields. Reach in directly; deserialize structured results with `serde_json::from_value`:
-
-```rust
-#[derive(serde::Deserialize)]
-struct Report { title: String }
-
-let ticket = tickets.find_ticket(|t| t.has_label("analysis")).unwrap();
-let report: Report = serde_json::from_value(ticket.result.clone().unwrap()).unwrap();
-```
-
-See [`Ticket`](https://docs.rs/agentwerk/latest/agentwerk/agents/tickets/struct.Ticket.html) for the full field list (`key`, `status`, `result`, `replies`, `labels`, `parent`, and the four lifecycle timestamps) and the status predicates that read better than comparing `status` directly: `is_todo`, `is_in_progress`, `is_finished`, `is_failed`, `is_pending`, `is_resolved`, `has_label`.
-
-### Policies
-
-Configure execution policies on a ticket system. A breach fires `EventKind::PolicyViolated` and halts execution.
-
-```rust
-let tickets = TicketSystem::new();
-tickets
-    .max_turns(40)
-    .max_time(std::time::Duration::from_secs(300))
-    .max_input_tokens(200_000)
-    .max_output_tokens(50_000);
-```
-
-| Method | Description |
-|--------|-------------|
-| `max_turns(n)` | Limit the total number of turns. |
-| `max_time(d)` | Limit the total elapsed duration. |
-| `max_input_tokens(n)` | Limit the total input tokens. |
-| `max_output_tokens(n)` | Limit the total output tokens. |
-
-See [`TicketSystem`](https://docs.rs/agentwerk/latest/agentwerk/agents/tickets/struct.TicketSystem.html) for the retry and per-request limits: `max_schema_retries`, `max_request_retries`, `request_retry_delay`, `max_request_tokens`.
-
-### Schemas
-
-A `Schema` constrains the result an agent must produce for a ticket. A violation triggers a retry until `max_schema_retries` is exhausted.
-
-```rust
-use agentwerk::schemas::Schema;
-use agentwerk::Ticket;
-
-let schema = Schema::parse(json!({
-    "type": "object",
-    "properties": { "title": { "type": "string" } },
-    "required": ["title"]
-}))?;
-
-tickets.ticket(Ticket::new("Write a report.").schema(schema));
-```
-
-Register a schema per label with `tickets.schema_for_label(label, schema)`: every ticket of that label validates against it.
-
-### Compaction
-
-agentwerk compacts the transcript automatically when the model's context window is near full; observe progress via the `Compaction*` variants on [`EventKind`](https://docs.rs/agentwerk/latest/agentwerk/event/enum.EventKind.html).
-
-## Prompting
-
-Every prompt has two parts: `role` (who the agent is) and `task` (work it should perform).
-
-```rust
-let agent = Agent::new()
-    .role("{context}\n\nYou are an arithmetic agent in stage 2. Compute step by step and show your work.")
-    .template("divisor", "8")
     .from_env()
     .build();
 
 tickets.agent(agent);
-tickets.task("Compute (47 * 92) / {divisor}, then round to the nearest integer.");
+tickets.task("Compute (47 * 92) / 8, then round to the nearest integer.");
 ```
+
+<details>
+<summary>All agent builder methods</summary>
+
+| Method | Description |
+|--------|-------------|
+| `name(name)` | Set a name or identifier for assigning tickets. |
+| `role(role)` | Define who the agent is and how it should work. |
+| `label(label)` / `labels(labels)` | Restrict the agent to tickets carrying a matching label. |
+| `tool(tool)` / `tools(tools)` | Register a tool the agent may call. |
+| `template(key, value)` | Inject data into prompts with template strings. |
+| `templates(pairs)` | Inject more than one entry into prompts. |
+| `dir(dir)` | Set the directory the agent has access to. |
+| `interactive()` | Let the agent wait for new instructions to keep a ticket in-progress. |
+| `edit_directive_on_failure(editor)` | Override failure prompts for correcting an agent's behavior. |
+| `build()` | Create the agent. |
+| `ticket_system(system)` | Attach a built agent to a ticket system. |
+
+You can use the `{context}` variable to inject contextual information:
 
 ```markdown
 You work within a ticket system. Each task arrives as a ticket; each reply you generate is one turn.
@@ -397,12 +194,260 @@ You work within a ticket system. Each task arrives as a ticket; each reply you g
 - Output tokens remaining: 12000
 - Time remaining: 240s
 
-The run stops when any budget reaches zero, mid-ticket. Finish before then.
+Execution stops when any budget reaches zero, mid-ticket. Finish before then.
 ```
+
+See more: [`AgentBuilder`](https://docs.rs/agentwerk/latest/agentwerk/agents/agent/struct.AgentBuilder.html).
+
+</details>
+
+### Providers
+
+Connect to a `Provider` to give agents access to LLMs. agentwerk supports: Anthropic, OpenAI, Mistral, and a LiteLLM proxy.
+
+```rust
+use agentwerk::providers::AnthropicProvider;
+
+let agent = Agent::new()
+    .provider(AnthropicProvider::new(key))
+    .model("claude-sonnet-4-20250514");
+
+// Or read both from the environment.
+let agent = Agent::new().from_env();
+```
+
+<details>
+<summary>Provider selection and endpoints</summary>
+
+| Method | Description |
+|--------|-------------|
+| `provider(provider)` | Define the LLM provider. |
+| `model(model)` | Set the model. |
+| `from_env()` | Read environment variables for configuration (see [DEVELOPMENT.md](DEVELOPMENT.md)). |
+
+You can explicitly read the model or provider from environment variables with: `provider_from_env()` or `model_from_env()`.
+
+</details>
+
+### Models
+
+You can configure models to set a custom context window size or the applied reasoning:
+
+```rust
+use agentwerk::providers::{Model, ReasoningEffort};
+
+let agent = Agent::new().model(
+    Model::from_name("my-local-model")
+        .context_window(128_000)
+        .reasoning_effort(ReasoningEffort::High),
+);
+```
+
+Claude, GPT, Mistral, and Qwen families are pre-configured.
+
+<details>
+<summary>Model settings</summary>
+
+| Method | Description |
+|--------|-------------|
+| `context_window(size)` | Set the context window size for a model. |
+| `get_context_window()` | Get the configured window size. |
+| `reasoning_effort(effort)` | Set the reasoning level. |
+| `get_reasoning_effort()` | Get the configured effort. |
+
+You can use `context_window_from_env()` to read the context window size from environment variables, see [DEVELOPMENT.md](DEVELOPMENT.md).
+
+</details>
+
+## Tickets
+
+<div align="left">
+  <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/tickets.jpg" width="600" />
+</div>
+
+The `TicketSystem` is the core data structure of agentwerk allowing to coordinate complex interactions.
+
+```rust
+tickets.agent(Agent::new().name("analyst").label("analysis").from_env().build());
+
+tickets.ticket(
+    Ticket::new("Rank all products by value for a 10-person engineering team.")
+        .label("analysis")
+        .schema(comparison_schema),
+);
+```
+
+<details>
+<summary>All ticket entry points</summary>
+
+| Method | Description |
+|--------|-------------|
+| `agent(agent)` | Add an agent to this ticket system. |
+| `task(task)` | Submit a task and return its ticket key. |
+| `ticket(ticket)` | Submit a `Ticket` with custom labels or schema. |
+| `reply(key, content)` | Add a reply to a ticket. |
+| `edit_replies(key, editor)` | Rewrite one ticket's replies now. |
+| `set_failed(key)` | Fail a ticket. |
+| `dir(dir)` | Define where a session is stored. |
+| `schema_for_label(label, schema)` | Register a schema every ticket of that label validates against. |
+
+See [`TicketSystem`](https://docs.rs/agentwerk/latest/agentwerk/agents/tickets/struct.TicketSystem.html).
+
+</details>
+
+### Execution
+
+```rust
+tickets.start();
+tickets.finish().await;
+let answer = tickets.last_result();
+```
+
+<details>
+<summary>Lifecycle</summary>
+
+| Method | Description |
+|--------|-------------|
+| `start()` | Begin processing tickets. |
+| `finish().await` | Process every queued ticket. |
+| `cancel()` | Cancel the execution. |
+| `is_cancelled()` | Check whether the execution was cancelled. |
+| `finish_reason()` | Check the reason for the finishing. |
+| `cancel_label(label)` | Call off one label's agents. |
+| `label_cancelled(label)` | Check whether one label's agents have been called off. |
+
+</details>
+
+### Results
+
+Access the results of the agents' work:
+
+```rust
+tickets.finish().await;
+
+if let Some(answer) = tickets.last_result() {
+    println!("{answer}");
+}
+
+for ticket in tickets.tickets() {
+    println!("{}: {}", ticket.key, ticket.status);
+}
+```
+
+Each `Ticket` carries a result as free text or JSON validated by schemas:
+
+```rust
+#[derive(serde::Deserialize)]
+struct Report { title: String }
+
+let ticket = tickets.find_ticket(|t| t.has_label("analysis")).unwrap();
+let report: Report = serde_json::from_value(ticket.result.clone().unwrap())?;
+```
+
+<details>
+<summary>Working with results</summary>
+
+| Method | Description |
+|--------|-------------|
+| `last_result()` | Get the most recent ticket result. |
+| `results()` | Get every ticket's result in creation order. |
+| `results_for_label(label)` | Get every ticket's result carrying a specific label. |
+| `tickets()` | Get every ticket in creation order. |
+| `find_ticket(condition)` | Get the earliest ticket matching a condition. |
+| `find_tickets(condition)` | Get every ticket matching a condition. |
+| `get_ticket(key)` | Get one ticket by key. |
+| `wait_for_ticket(condition)` | Wait for one matching ticket instead of draining the queue. |
+| `model_for_agent(name)` | Get the model that agent runs. |
+| `stats()` | Get execution statistics, see [Stats](#stats). |
+
+Ticket fields:
+
+| | Fields |
+|-|--------|
+| **Identity** | `key`, `task`, `labels`, `parent`, `reporter` |
+| **Outcome** | `status`, `result`, `replies`, `schema` |
+| **Timestamps** | `created_at`, `started_at`, `finished_at`, `failed_at` |
+
+See [`Ticket`](https://docs.rs/agentwerk/latest/agentwerk/agents/tickets/struct.Ticket.html).
+
+</details>
+
+### Schemas
+
+A `Schema` constrains the result an agent produces for a ticket. A violation triggers a retry until `max_schema_retries` is exhausted.
+
+```rust
+use agentwerk::schemas::Schema;
+
+let schema = Schema::parse(json!({
+    "type": "object",
+    "properties": { "title": { "type": "string" } },
+    "required": ["title"]
+}))?;
+
+tickets.ticket(Ticket::new("Write a report.").schema(schema));
+```
+
+<details>
+<summary>Schema validation and retries</summary>
+
+| Method | Description |
+|--------|-------------|
+| `Schema::parse(document)` | Create a schema. |
+| `Schema::validate(value)` | Validate content. |
+| `tickets.schema_for_label(label, schema)` | Register a schema for all tickets with a certain label. |
+
+</details>
+
+### Limits
+
+A breach stops execution and reports which limit was hit.
+
+```rust
+tickets
+    .max_turns(40)
+    .max_time(std::time::Duration::from_secs(300))
+    .max_input_tokens(200_000)
+    .max_output_tokens(50_000);
+```
+
+agentwerk compacts the messages automatically when the model's context window is near full, so a long run stays inside it. The compaction events report progress.
+
+<details>
+<summary>All limits</summary>
+
+| Method | Description |
+|--------|-------------|
+| `max_turns(count)` | Limit the total number of turns. |
+| `max_time(duration)` | Limit the total elapsed duration. |
+| `max_input_tokens(count)` | Limit the total input tokens. |
+| `max_output_tokens(count)` | Limit the total output tokens. |
+| `max_request_tokens(count)` | Limit the output tokens of a single request. |
+| `max_schema_retries(count)` | Limit how often a result may fail its schema before the ticket fails. |
+| `max_request_retries(count)` | Limit how often a failing request is retried. |
+| `request_retry_delay(duration)` | Wait this long between retries. |
+
+A breach emits `EventKind::PolicyViolated` carrying the limit that was hit. See [`EventKind`](https://docs.rs/agentwerk/latest/agentwerk/event/enum.EventKind.html) for that and the compaction events.
+
+</details>
 
 ## Tools
 
-Give agents access to tools. Each tool exposes an action the agent can choose to take. agentwerk provides minimal baseline tools:
+Give agents access to tools. Each tool exposes an action the agent can choose to take.
+
+```rust
+use agentwerk::tools::{BashTool, GrepTool, ReadFileTool};
+
+let agent = Agent::new()
+    .tool(ReadFileTool)
+    .tool(GrepTool)
+    .tool(BashTool::new("git", "git *"));
+```
+
+`FinishTool` and `ManageKnowledgeTool` are registered automatically on every agent. Registering a tool replaces any tool already registered under the same name, so a later `tool(...)` wins over an automatic one.
+
+<details>
+<summary>All built-in tools</summary>
 
 | | Tool | Description |
 |-|------|-------------|
@@ -410,39 +455,30 @@ Give agents access to tools. Each tool exposes an action the agent can choose to
 | | `WriteFileTool` | Create or overwrite a file. |
 | | `EditFileTool` | Replace text in a file. |
 | **Search** | `GlobTool` | Find files by pattern. |
-| | `GrepTool` | Search file contents. |
+| | `GrepTool` | Search file contents by regular expression, or by code shape with `syntax: "code"`. |
 | | `ListDirectoryTool` | List files and directories. |
 | **Shell** | `BashTool` | Run a shell command matching an allowed pattern. |
 | **Web** | `FetchUrlTool` | Fetch a URL and read its body. |
-| **Tickets** | `FinishTool` | Write the result for the current ticket and mark it finished, optionally handing follow-up work to another agent. |
+| **Tickets** | `FinishTool` | Write the result for the current ticket and mark it finished. |
 | | `ManageTicketsTool` | Read the ticket queue and create or edit tickets. |
 | | `ReadTicketsTool` | Read the ticket queue. |
 | **Knowledge** | `ManageKnowledgeTool` | Write, read, remove, or list pages in a knowledge store. |
 | **Discovery** | `FindToolsTool` | Look up the tools held back until they are needed. |
 
-`FinishTool` and `ManageKnowledgeTool` are registered automatically on every agent. `knowledge(&store)` is the usual way to choose the store, since it also renders the store's index into the system prompt. Registering a tool replaces any tool already registered under the same name, so a later `tool(...)` wins over an automatic one.
+`FinishTool` can also hand follow-up work to another agent as it finishes.
 
-### Bash
+`BashTool::new(name, pattern)` takes the name the model sees and the pattern a command must match. `BashTool::unrestricted()` removes the pattern check.
 
-`BashTool` restricts execution to commands matching a glob pattern. The first argument names the tool the model sees; the second is the allowed pattern.
+`knowledge(&store)` is the usual way to choose the knowledge store, since it also renders the store's index into the system prompt. `Agent::empty()` starts with nothing registered at all.
 
-```rust
-use agentwerk::tools::BashTool;
-
-let agent = Agent::new()
-    .tool(BashTool::new("git", "git *"))
-    .tool(BashTool::unrestricted());
-```
-
-`BashTool::unrestricted()` removes the pattern check.
+</details>
 
 ### Custom tools
 
-Define custom tools for specific needs. Each tool declares a JSON-Schema for its inputs:
+Define custom tools for specific needs. Each tool declares a JSON-Schema for its inputs.
 
 ```rust
 use agentwerk::tools::{Tool, ToolResult};
-use serde_json::json;
 
 let greet = Tool::new("greet", "Say hello")
     .schema(json!({
@@ -451,36 +487,170 @@ let greet = Tool::new("greet", "Say hello")
         "required": ["name"]
     }))
     .read_only(true)
-    .handler(|input, _ctx| async move {
+    .handler(|input, _context| async move {
         let name = input["name"].as_str().unwrap_or("world");
         Ok(ToolResult::success(format!("Hello, {name}!")))
     })
     .build();
 ```
 
-`.read_only(true)` allows the agent to run a tool concurrently with other read-only calls in the same turn. `.defer(true)` holds the tool back until the agent looks it up with `FindToolsTool`. `.paths(["path"])` names the input fields carrying a file path, so the files the tool opens show up in `Stats::file_stats`.
+<details>
+<summary>Tool options and failure results</summary>
+
+| Method | Description |
+|--------|-------------|
+| `read_only(true)` | Let the agent run this tool concurrently with other read-only calls in the same turn. |
+| `defer(true)` | Hold the tool back until the agent looks it up with `FindToolsTool`. |
+| `paths(["path"])` | Name the input fields carrying a file path, so the files show up in `Stats::file_stats`. |
+
+Deferring keeps a large tool set out of every request.
+
+A handler receives the input and a `ToolContext` carrying the working directory and the cancellation signal.
+
+Return `ToolResult::error(message)` for a failure the model should work around, or `ToolResult::schema_error(message)` for input that did not match the tool's schema, which counts against `max_schema_retries`.
+
+`Tool::from_tool_file(definition)` seeds a builder from a `.tool.md` file, taking the name, description, input schema, and read-only flag from the markdown. Install a handler and call `build()`.
+
+</details>
+
+## Events
+
+Events report everything that happens while your agents work. Log them, display them, or hook them to stop execution early, call off one label's agents, or queue follow-up work.
+
+```rust
+use agentwerk::event::{Event, EventKind};
+
+tickets.on_event(|event: Event| {
+    if let EventKind::TicketFinished = &event.kind {
+        eprintln!("[{}] done {}", event.agent_name, event.ticket_key);
+    }
+});
+
+// Stop execution at the first malicious verdict.
+tickets.cancel_on_result(|result| result["verdict"] == "malicious");
+```
+
+`default_logger()` returns a ready-made handler that prints ticket lifecycle, tool activity, limit breaches, and request failures to stderr.
+
+<details>
+<summary>All event kinds</summary>
+
+| | Kind | Description |
+|-|------|-------------|
+| **Run** | `RunStarted` | Execution began. |
+| | `RunFinished` | Execution ended, carrying the reason. |
+| | `PolicyViolated` | A limit was breached and execution stopped. |
+| **Ticket** | `TicketStarted` | An agent claimed a ticket. |
+| | `TicketFinished` | A ticket finished successfully. |
+| | `TicketFailed` | A ticket failed. |
+| | `TurnStarted` | The agent began another turn on its ticket. |
+| | `SchemaRetried` | A result missed its schema and the agent was asked again. |
+| **LLM provider** | `RequestStarted` | A request went out to the model. |
+| | `RequestFinished` | A request finished and reported its token usage. |
+| | `RequestFailed` | A request failed and was not retried. |
+| | `RequestRetried` | A transient provider error triggered a retry. |
+| | `TextChunkReceived` | A piece of the reply arrived. |
+| **Tool** | `ToolCallStarted` | A tool invocation began. |
+| | `ToolCallFinished` | A tool invocation finished. |
+| | `ToolCallFailed` | A tool invocation failed but the ticket continues. |
+| **File** | `FileOpenFinished` | A tool opened a file. |
+| | `FileOpenFailed` | A tool could not open a file. |
+| **Knowledge** | `KnowledgeUsed` | A page was written, read, removed, or listed. |
+| | `KnowledgeMissed` | A page the agent asked for was not there. |
+| **Compaction** | `CompactionStarted` | Compaction is about to summarize the older messages. |
+| | `CompactionProgress` | Compaction finished part of the work. |
+| | `CompactionFinished` | Compaction replaced the older messages with a summary. |
+| | `CompactionFailed` | Compaction could not finish. |
+
+See [`EventKind`](https://docs.rs/agentwerk/latest/agentwerk/event/enum.EventKind.html).
+
+</details>
+
+<details>
+<summary>Event hooks</summary>
+
+| Method | Description |
+|--------|-------------|
+| `on_event(handler)` | Read every event as it is emitted. |
+| `on_ticket(handler)` | Read a ticket as it starts, finishes, or fails. |
+| `cancel_on(trigger)` | Stop execution when another task finishes. |
+| `cancel_on_event(condition)` | Stop execution when an event matches. |
+| `cancel_on_result(condition)` | Stop execution when a finished result matches. |
+| `cancel_label_on_event(label, condition)` | Call off one label's agents while the rest keep working. |
+| `create_ticket_on_result(make)` | Enqueue a follow-up ticket from a finished ticket. |
+| `edit_replies_on_event(editor)` | Rewrite a ticket's replies before its next request. |
+
+Save replies of every finished ticket as a training example:
+
+```rust
+let system = Arc::clone(&tickets);
+tickets.on_ticket(move |event, ticket| {
+    if matches!(event.kind, EventKind::TicketFinished) {
+        let model = system.model_for_agent(&event.agent_name);
+        let _ = Trajectory::from_ticket(&event.agent_name, model.as_deref(), ticket)
+            .save("datasets");
+    }
+});
+```
+
+</details>
+
+## Stats
+
+Statistics give you deep insights into behavior of your agents: working time, tickets, failure rates, bottlenecks etc.
+
+```rust
+let stats = tickets.stats();
+println!("{} requests, {} input tokens", stats.requests(), stats.input_tokens());
+
+for (name, stat) in stats.tool_stats() {
+    println!("{name}: {} calls", stat.calls);
+}
+```
+
+<details>
+<summary>All statistics</summary>
+
+| Method | Description |
+|--------|-------------|
+| `run_duration()` | Get the elapsed duration. |
+| `tickets_success_rate()` | Get `finished / (finished + failed)`. |
+| `input_tokens()` / `output_tokens()` | Get token counts across requests. |
+| `tool_stats()` | Get per-tool call and failure counts. |
+| `file_stats()` | Get per-filepath open and failure counts. |
+| `knowledge_stats()` | Get Knowledge usage: write, read, remove, list, and miss counts. |
+| `model_stats()` | Get per-model requests and token usage. |
+| `usage_history(ticket_key)` | Get a ticket's token usage. |
+| `event_counts()` | Get per-event counts. |
+| `stats_for_label(label)` | Get statistics scoped to one label. |
+
+See [`Stats`](https://docs.rs/agentwerk/latest/agentwerk/agents/stats/struct.Stats.html).
+
+</details>
 
 ## Knowledge
 
-A `Knowledge` store is the agent's long-term memory. It is written to disk, can be shared across multiple agents, and is curated by the agent through `ManageKnowledgeTool`.
-
-Each page is an Open Knowledge Format (OKF) v0.1 concept file with `type`, `description`, and `timestamp` frontmatter. A compact index of one-line descriptions goes into the system prompt, so the agent picks which pages to read. Because the store is a plain OKF bundle, `Knowledge::load` can open one authored elsewhere to seed an agent.
+`Knowledge` allows agents to share insights or learnings. Knowledge pages are created in the Open Knowledge Format (OKF).
 
 ```rust
 use agentwerk::Knowledge;
 
-// Open a store and share it across agents:
-let store = Knowledge::load("./.agentwerk")?;
+let store = Knowledge::load("./notes")?;
 let alice = Agent::new().knowledge(&store);
 let bob = Agent::new().knowledge(&store);
-
-// Raise the rendered-index char budget (default 12 000):
-let store = Knowledge::load("./.agentwerk")?;
-store.index_char_limit(24_000);
-let agent = Agent::new().knowledge(&store);
 ```
 
-Seed or inspect the store yourself through `pages()`:
+<details>
+<summary>Reading and writing pages</summary>
+
+| Method | Description |
+|--------|-------------|
+| `index()` | Get the index, which is injected into the agent prompt. |
+| `index_char_limit(count)` | Limit the index size. |
+| `pages()` | Get the page collection for reading and writing pages. |
+| `clear()` | Remove every page from the store. |
+
+Programmatically create entries:
 
 ```rust
 use agentwerk::agents::knowledge::Page;
@@ -497,16 +667,11 @@ let page = store.pages().load("build-command")?;
 store.pages().remove("build-command")?;
 ```
 
-| Method | Description |
-|--------|-------------|
-| `index()` | Return the rendered index the agent sees. |
-| `index_char_limit(n)` | Limit the rendered index, in characters. |
-| `pages()` | Return the page collection for reading and writing pages. |
-| `clear()` | Remove every page from the store. |
+</details>
 
 ## Sessions
 
-A `TicketSystem` writes every ticket, transcript, statistic, and lifecycle event to its working directory (default `./.agentwerk`). That directory is the session: stop the process, and `TicketSystem::load(dir)` reopens it from disk and continues from where it stopped.
+A `TicketSystem` writes every ticket, reply, statistic, and lifecycle event to its working directory (default `./.agentwerk`). You can continue a session from that directory.
 
 ```rust
 let tickets = TicketSystem::load(".agentwerk")?;
@@ -514,11 +679,12 @@ tickets.agent(my_agent);
 tickets.start();
 ```
 
-Layout:
+<details>
+<summary>Session directory layout</summary>
 
 ```
 .agentwerk/
-├── stats.json                            run statistics
+├── stats.json                            execution statistics
 ├── tickets.jsonl                         lifecycle events (one per line)
 ├── results.jsonl                         finished results (one per line)
 ├── tickets/
@@ -531,57 +697,8 @@ Layout:
     └── index.md                          knowledge index
 ```
 
-## Events
+</details>
 
-Events report everything that happens while your agents work. Log them, display them, or react to them.
+## Development
 
-```rust
-use agentwerk::event::{Event, EventKind};
-
-tickets.on_event(|event: Event| {
-    if let EventKind::TicketFinished = &event.kind {
-        eprintln!("[{}] done {}", event.agent_name, event.ticket_key);
-    }
-});
-```
-
-| | Kind | Description |
-|-|------|-------------|
-| **Ticket** | `TicketStarted` | An agent claimed a ticket. |
-| | `TicketFinished` | A ticket finished successfully. |
-| | `TicketFailed` | A ticket failed. |
-| **Provider** | `RequestFinished` | A provider request finished and reported its token usage. |
-| | `RequestRetried` | A transient provider error triggered a retry. |
-| **Tool** | `ToolCallFinished` | A tool invocation finished. |
-| | `ToolCallFailed` | A tool invocation failed but the ticket continues. |
-| **Compaction** | `CompactionStarted` | Compaction is about to summarize the conversation tail. |
-| | `CompactionFinished` | Compaction finished and replaced the tail with a summary. |
-| **Run** | `PolicyViolated` | A policy limit was breached and execution stopped. |
-
-Also: `RequestStarted`, `RequestFailed`, `TextChunkReceived`, `ToolCallStarted`, `FileOpenFinished`, `FileOpenFailed`, `KnowledgeUsed`, `KnowledgeMissed`, `SchemaRetried`, `CompactionProgress`, `CompactionFailed`. Full enum on [`EventKind`](https://docs.rs/agentwerk/latest/agentwerk/event/enum.EventKind.html).
-
-## Stats
-
-`Stats` contain metrics about the progress of your agents' work, allowing you to optimize your agentic system and identify bottlenecks.
-
-```rust
-let s = tickets.stats();
-let scan = s.stats_for_label("scan");
-```
-
-| Method | Description |
-|--------|-------------|
-| `run_duration()` | Return the run's elapsed duration. |
-| `tickets_success_rate()` | Return `finished / (finished + failed)`. |
-| `input_tokens()` / `output_tokens()` | Return token totals across responses. |
-| `tool_stats()` | Return per-tool call and failure counts, broken down by failure kind. |
-| `file_stats()` | Return per-path open and failure counts for the files tools opened. |
-| `knowledge_stats()` | Return Knowledge-store usage: write, read, remove, list, and miss counts. |
-| `event_counts()` | Return per-event counts keyed by event name. |
-| `stats_for_label(label)` | Return a stats slice scoped to one label. |
-
-More statistics on [`Stats`](https://docs.rs/agentwerk/latest/agentwerk/agents/stats/struct.Stats.html): work and ticket durations, per-ticket counts, turns, requests, tool calls, provider errors, and per-tool errors.
-
-# Development
-
-See [DEVELOPMENT.md](DEVELOPMENT.md) for the workspace layout, build commands, integration tests, publishing flow, the LiteLLM proxy setup, and environment variables.
+See [DEVELOPMENT.md](DEVELOPMENT.md).
