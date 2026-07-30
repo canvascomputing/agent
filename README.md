@@ -431,7 +431,7 @@ A violation emits `EventKind::PolicyViolated`, see [`EventKind`](https://docs.rs
 
 ## Tools
 
-Give agents access to tools. Each tool exposes an action the agent can choose to take.
+Tools allow agents to perform their work.
 
 ```rust
 use agentwerk::tools::{BashTool, GrepTool, ReadFileTool};
@@ -442,7 +442,7 @@ let agent = Agent::new()
     .tool(BashTool::new("git", "git *"));
 ```
 
-`FinishTool` and `ManageKnowledgeTool` are registered automatically on every agent. Registering a tool replaces any tool already registered under the same name, so a later `tool(...)` wins over an automatic one.
+`FinishTool` and `ManageKnowledgeTool` are special tools, registered automatically on every agent. They are used for interacting with the `TicketSystem`.
 
 <details>
 <summary>All built-in tools</summary>
@@ -463,17 +463,11 @@ let agent = Agent::new()
 | **Knowledge** | `ManageKnowledgeTool` | Write, read, remove, or list pages in a knowledge store. |
 | **Discovery** | `FindToolsTool` | Look up the tools held back until they are needed. |
 
-`FinishTool` can also hand follow-up work to another agent as it finishes.
-
-`BashTool::new(name, pattern)` takes the name the model sees and the pattern a command must match. `BashTool::unrestricted()` removes the pattern check.
-
-`knowledge(&store)` is the usual way to choose the knowledge store, since it also renders the store's index into the system prompt. `Agent::empty()` starts with nothing registered at all.
-
 </details>
 
 ### Custom tools
 
-Define custom tools for specific needs. Each tool declares a JSON-Schema for its inputs.
+You can define custom tools for specific needs:
 
 ```rust
 use agentwerk::tools::{Tool, ToolResult};
@@ -493,27 +487,21 @@ let greet = Tool::new("greet", "Say hello")
 ```
 
 <details>
-<summary>Tool options and failure results</summary>
+<summary>Tool options</summary>
 
 | Method | Description |
 |--------|-------------|
 | `read_only(true)` | Let the agent run this tool concurrently with other read-only calls in the same turn. |
 | `defer(true)` | Hold the tool back until the agent looks it up with `FindToolsTool`. |
-| `paths(["path"])` | Name the input fields carrying a file path, so the files show up in `Stats::file_stats`. |
+| `paths(["path"])` | Name file path used for a tool call, so the files are included in statistics. |
 
-Deferring keeps a large tool set out of every request.
-
-A handler receives the input and a `ToolContext` carrying the working directory and the cancellation signal.
-
-Return `ToolResult::error(message)` for a failure the model should work around, or `ToolResult::schema_error(message)` for input that did not match the tool's schema, which counts against `max_schema_retries`.
-
-`Tool::from_tool_file(definition)` seeds a builder from a `.tool.md` file, taking the name, description, input schema, and read-only flag from the markdown. Install a handler and call `build()`.
+Return `ToolResult::error(message)` for a failure the model should work around.
 
 </details>
 
 ## Events
 
-Events report everything that happens while your agents work. Log them, display them, or hook them to stop execution early, call off one label's agents, or queue follow-up work.
+Events give you insights to the lifecycle and activities of your agents' work.
 
 ```rust
 use agentwerk::event::{Event, EventKind};
@@ -527,8 +515,6 @@ tickets.on_event(|event: Event| {
 // Stop execution at the first malicious verdict.
 tickets.cancel_on_result(|result| result["verdict"] == "malicious");
 ```
-
-`default_logger()` returns a ready-made handler that prints ticket lifecycle, tool activity, limit breaches, and request failures to stderr.
 
 <details>
 <summary>All event kinds</summary>
