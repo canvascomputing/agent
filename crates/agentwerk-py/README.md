@@ -466,7 +466,7 @@ agent = Agent().tool(ReadFileTool()).tool(GrepTool()).tool(BashTool("git", "git 
 
 ### Custom tools
 
-Define custom tools for specific needs. Each tool declares a JSON-Schema for its inputs.
+You can define custom tools for specific needs:
 
 ```python
 from agentwerk import tool
@@ -486,25 +486,21 @@ def greet(name: str) -> str:
 ```
 
 <details>
-<summary>Tool options and failure results</summary>
+<summary>Tool options</summary>
 
 | Method | Description |
 |--------|-------------|
 | `read_only=True` | Let the agent run this tool concurrently with other read-only calls in the same turn. |
 | `defer=True` | Hold the tool back until the agent looks it up with `FindToolsTool()`. |
-| `paths=["path"]` | Name the input fields carrying a file path, so the files show up in `Stats.file_stats()`. |
+| `paths=["path"]` | Name file path used for a tool call, so the files are included in statistics. |
 
-Deferring keeps a large tool set out of every request.
-
-A handler receives the tool input as keyword arguments.
-
-Return `ToolResult.error(message)` for a failure the model should work around, or `ToolResult.schema_error(message)` for input that did not match the tool's schema, which counts against `max_schema_retries`.
+Return `ToolResult.error(message)` for a failure the model should work around.
 
 </details>
 
 ## Events
 
-Events report everything that happens while your agents work. Log them, display them, or hook them to stop execution early, call off one label's agents, or queue follow-up work.
+Events give you insights to the lifecycle and activities of your agents' work.
 
 ```python
 def log(event):
@@ -517,7 +513,6 @@ tickets.on_event(log)
 # Stop execution at the first malicious verdict.
 tickets.cancel_on_result(lambda result: result["verdict"] == "malicious")
 ```
-
 
 <details>
 <summary>All event kinds</summary>
