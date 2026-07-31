@@ -156,10 +156,10 @@ Seven rules the surface table below never repeats.
 | `Page { slug, kind, description, content, tags }` | `Page(slug, description, content, kind=.., tags=..)`: a struct literal becomes a constructor, so the optional fields move last. |
 | `KnowledgeError` | `RuntimeError` |
 | **Statistics** | |
-| `Stats::label_stats()`, `::agent_stats()` | Same names. Values are `Stats`. |
+| `Stats::stats_by_label()`, `::stats_by_agent()` | Same names. Values are `Stats`. |
 | `Stats::stats_for_label(label)` | `Stats.stats_for_label(label)` |
 | `Stats::stats_for_agent(agent_name)` | `Stats.stats_for_agent(agent_name)` |
-| `Stats::token_usage(key)` | `Stats.token_usage(ticket_key)` |
+| `Stats::usage_for_ticket(key)` | `Stats.usage_for_ticket(ticket_key)` |
 | `Stats::tool_stats()` | `Stats.tool_stats()` |
 | `Stats::file_stats()` | `Stats.file_stats()` |
 | `Stats::knowledge_stats()` | `Stats.knowledge_stats()` |
@@ -177,7 +177,7 @@ Seven rules the surface table below never repeats.
 | `FileStat { opens, failed }` | Same, including `errors()` and `error_rate()`. |
 | `KnowledgeStat { writes, reads, removes, lists, failed }` | Same, including `errors()` and `error_rate()`. |
 | `ModelStat { requests, failed, input_tokens, output_tokens }` | Same, including `errors()` and `error_rate()`. |
-| `TokenUsage` | A dict, as returned by `Stats.token_usage()`. |
+| `TokenUsage` | A dict, as returned by `Stats.usage_for_ticket()`. |
 | **Schema** | |
 | `Schema::parse(document)` | `Schema(document)` |
 | `Schema::validate(value)` | `Schema.validate(value)` |
