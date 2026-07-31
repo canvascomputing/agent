@@ -3,18 +3,18 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use crate::agents::tickets::TicketSystem;
+use crate::agents::tickets::TicketQueue;
 
 use super::agent::run_agent;
 use super::POLL_INTERVAL;
 
-pub(in crate::agents) async fn run_main_loop(ticket_system: &TicketSystem) {
-    let shutdown_requested = Arc::clone(&ticket_system.stop_signal.lock().unwrap());
+pub(in crate::agents) async fn run_main_loop(ticket_queue: &TicketQueue) {
+    let shutdown_requested = Arc::clone(&ticket_queue.stop_signal.lock().unwrap());
     let mut running_agents: Vec<tokio::task::JoinHandle<()>> = Vec::new();
     let mut agents_already_started: usize = 0;
 
     while !shutdown_requested.load(Ordering::Relaxed) {
-        let registry = ticket_system.clone_agents();
+        let registry = ticket_queue.clone_agents();
         for newly_registered_agent in registry.into_iter().skip(agents_already_started) {
             running_agents.push(tokio::spawn(run_agent(newly_registered_agent)));
             agents_already_started += 1;
@@ -43,7 +43,7 @@ mod tests {
 
     use crate::agents::agent::Agent;
     use crate::agents::r#loop::test_util::*;
-    use crate::agents::tickets::{Status, Ticket, TicketSystem};
+    use crate::agents::tickets::{Status, Ticket, TicketQueue};
     use crate::providers::Provider;
     use crate::tools::ManageTicketsTool;
 
@@ -52,7 +52,7 @@ mod tests {
     #[tokio::test]
     async fn add_after_run_spawns_new_agent() {
         let results_dir = crate::test_util::TempDir::new().unwrap();
-        let tickets = TicketSystem::new();
+        let tickets = TicketQueue::new();
         tickets
             .dir(results_dir.path().to_path_buf())
             .max_request_retries(0)
@@ -98,7 +98,7 @@ mod tests {
     #[tokio::test]
     async fn host_finish_mid_run_walks_the_agent_off_and_still_drains() {
         let results_dir = crate::test_util::TempDir::new().unwrap();
-        let tickets = TicketSystem::new();
+        let tickets = TicketQueue::new();
         tickets
             .dir(results_dir.path().to_path_buf())
             .max_request_retries(0)
@@ -146,7 +146,7 @@ mod tests {
     #[tokio::test]
     async fn late_added_agent_joined_on_shutdown() {
         let results_dir = crate::test_util::TempDir::new().unwrap();
-        let tickets = TicketSystem::new();
+        let tickets = TicketQueue::new();
         tickets
             .dir(results_dir.path().to_path_buf())
             .max_request_retries(0)

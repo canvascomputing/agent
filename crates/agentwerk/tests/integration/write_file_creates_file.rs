@@ -8,7 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use super::common;
 
 use agentwerk::tools::WriteFileTool;
-use agentwerk::{Agent, TicketSystem};
+use agentwerk::{Agent, TicketQueue};
 
 #[tokio::test]
 async fn creates_file_with_token() -> std::result::Result<(), Box<dyn std::error::Error>> {
@@ -18,7 +18,7 @@ async fn creates_file_with_token() -> std::result::Result<(), Box<dyn std::error
     let dir = crate::test_util::TempDir::new()?;
     let root = dir.path();
 
-    let tickets = TicketSystem::new();
+    let tickets = TicketQueue::new();
 
     tickets.max_turns(10);
     let agent = Agent::new()

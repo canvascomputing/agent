@@ -12,4 +12,4 @@ pub mod tickets;
 pub use agent::{Agent, AgentBuilder};
 pub use knowledge::Knowledge;
 pub use stats::Stats;
-pub use tickets::{Reply, Status, Ticket, TicketError, TicketSystem, Trajectory};
+pub use tickets::{Reply, Status, Ticket, TicketError, TicketQueue, Trajectory};

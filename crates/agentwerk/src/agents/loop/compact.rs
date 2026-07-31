@@ -21,11 +21,11 @@ pub(super) async fn run(context: &mut TicketContext<'_>, reason: CompactReason) 
     context.emit(EventKind::CompactionStarted { reason, total });
 
     let on_progress: Arc<dyn Fn(u32, u32) + Send + Sync> = {
-        let ticket_system = Arc::clone(context.ticket_system);
+        let ticket_queue = Arc::clone(context.ticket_queue);
         let agent_name = context.agent.get_name().to_string();
         let ticket_key = context.ticket_key.clone();
         Arc::new(move |completed, total| {
-            ticket_system.emit(
+            ticket_queue.emit(
                 &ticket_key,
                 &agent_name,
                 EventKind::CompactionProgress {
@@ -42,7 +42,7 @@ pub(super) async fn run(context: &mut TicketContext<'_>, reason: CompactReason) 
         &context.model.name,
         messages,
         window,
-        context.ticket_system,
+        context.ticket_queue,
         &context.ticket_key,
         on_progress,
     )
@@ -78,7 +78,7 @@ pub(super) fn proactive_compaction_needed(context: &TicketContext<'_>, ticket: &
     let tools = context.agent.tool_definitions();
     let window = context.model.get_context_window();
     let history = context
-        .ticket_system
+        .ticket_queue
         .stats()
         .usage_history(&context.ticket_key);
 

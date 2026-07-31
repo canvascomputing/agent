@@ -6,7 +6,7 @@ Naming, comment, and prose rules, plus README structure. Skim the section matchi
 
 **A type earns a `pub use` at `lib.rs` only when it names a concept in the one-sentence description of the crate, or when root-level signatures hand it to the caller.**
 
-`Agent`, `AgentBuilder`, `TicketSystem`, `Ticket`, `Knowledge`, `Stats`, `Trajectory`, `Reply`, `Event`, `Status`, `EventKind`, `FinishReason`, `Schema`
+`Agent`, `AgentBuilder`, `TicketQueue`, `Ticket`, `Knowledge`, `Stats`, `Trajectory`, `Reply`, `Event`, `Status`, `EventKind`, `FinishReason`, `Schema`
 
 - Discriminants callers match on in their own code earn a root slot: `Status` (on `Ticket.status`), `EventKind` (on `Event.kind`), `FinishReason` (from `finish_reason()`).
 - Errors and conversion traits do not earn a root slot. They live in their domain module.
@@ -28,7 +28,7 @@ Naming, comment, and prose rules, plus README structure. Skim the section matchi
 
 **Names are disambiguated through content, not through redundant prefixes.**
 
-- Specific compound names stand alone: `TicketSystem`, `ToolStat`, `PolicyKind`.
+- Specific compound names stand alone: `TicketQueue`, `ToolStat`, `PolicyKind`.
 - Vendor prefixes are used only to distinguish concrete LLM providers or tools: `AnthropicProvider`, `OpenAiProvider`, `LiteLlmProvider`.
 - Acronyms follow Rust API guidelines: `OpenAi`, not `OpenAI`.
 - Two structs may not share a bare name within one module; both stay qualified.
@@ -116,7 +116,7 @@ InvalidRequest, UnexpectedStatus, MissingKey, RequestError               // reje
 
 **Two traits cover every read and write in the crate. The trait dictates the verb; the implementer's type name binds the file location.**
 
-- `Persist` (in `persistence`): `save(&self, dir)` and `load(dir, &Self::Key)`. Implemented by `Stats`, `Ticket`, `Page`. Service bootstrap (`TicketSystem::load`, `Knowledge::load`) uses the same `load` verb by convention.
+- `Persist` (in `persistence`): `save(&self, dir)` and `load(dir, &Self::Key)`. Implemented by `Stats`, `Ticket`, `Page`. Service bootstrap (`TicketQueue::load`, `Knowledge::load`) uses the same `load` verb by convention.
 - `Append` (in `persistence`): `append(dir, &Self::Record)`. Implemented by `Results` (`results.jsonl`) and `TicketEvents` (`tickets.jsonl`). Each implementer encodes its own filename, so the wrong file cannot be reached through the wrong type.
 - No `open` for bootstrap, no `write_X_to_dir`, no `to_json` or `from_json`, and no `checkpoint`, `snapshot`, `persist`, or `counter` in names. The jargon these replaced is what the convention exists to keep out.
 - Function names do not embed the type names of their arguments: `Stats::derive(&tickets)`, not `derive_from_tickets`. The argument type carries the meaning.
@@ -129,7 +129,7 @@ InvalidRequest, UnexpectedStatus, MissingKey, RequestError               // reje
 
 - The `with_` prefix is reserved for a bare name that would be ambiguous even with an inherent and trait split; no current builder needs it.
 - Two chaining shapes exist, picked by whether the type is shared. A value the caller owns before execution consumes itself: `AgentBuilder` takes `mut self` and returns `Self`, which is also what lets its type-state track the filled provider and model slots.
-- A type handed out as `Arc` configures through `&self` and returns `&Self`: `TicketSystem` and `Knowledge`. A third shape, `self: Arc<Self> -> Arc<Self>`, is not used.
+- A type handed out as `Arc` configures through `&self` and returns `&Self`: `TicketQueue` and `Knowledge`. A third shape, `self: Arc<Self> -> Arc<Self>`, is not used.
 
 ## Constructors
 
@@ -162,7 +162,7 @@ cancel_label_on_event(label, cond)   // react, scoped to one label
 - Scope crosses all three forms and lives in the prefix: `cancel*` ends execution, `cancel_label*` ends one label's pool and leaves the others running.
 - IMPORTANT: the trigger fixes the handler's parameters, the action fixes its return type. A caller who knows one hook in a column knows them all: `_on_event` hands over `&Event`, `_on_result` a `&Ticket` and its validated `&Value`, `_on_failure` the `&Event` and the `&Ticket` it happened in. Observing returns `()`, `cancel*` returns `bool`, `create_ticket*` returns `Option<Ticket>`.
 - Every trigger carries a reaction for every action, so the grid has no holes to explain. The three triggers cross `cancel`, `cancel_label`, and `create_ticket`; `on_ticket` sits outside it, observing a lifecycle transition rather than naming a trigger.
-- `<action>_on(value)` names no trigger, because the caller supplies the trigger whole instead of a condition over something agentwerk produces. `cancel_on` is the only one, and it is not renamed after a cancellation signal: `signal` already names the `AtomicBool` pair on `TicketSystem`.
+- `<action>_on(value)` names no trigger, because the caller supplies the trigger whole instead of a condition over something agentwerk produces. `cancel_on` is the only one, and it is not renamed after a cancellation signal: `signal` already names the `AtomicBool` pair on `TicketQueue`.
 - The editor row is the one exception, and `edit_replies_on_event` is its only member. An editor runs once per request over the batch of events since the previous one, so an `_on_result` sibling would have no next request to act on and an `_on_failure` sibling would be a second rewriter of one ticket's replies, which the singular-editor rule below forbids. A failure is already reachable by matching `EventKind::ToolCallFailed` inside the batch.
 
 ## Editors

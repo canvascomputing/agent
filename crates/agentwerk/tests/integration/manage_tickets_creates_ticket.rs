@@ -8,7 +8,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use super::common;
 
 use agentwerk::tools::ManageTicketsTool;
-use agentwerk::{Agent, TicketSystem};
+use agentwerk::{Agent, TicketQueue};
 
 #[tokio::test]
 async fn creates_a_followup_ticket() -> std::result::Result<(), Box<dyn std::error::Error>> {
@@ -22,7 +22,7 @@ async fn creates_a_followup_ticket() -> std::result::Result<(), Box<dyn std::err
          list or search. After the new ticket exists, call `finish`."
     );
 
-    let tickets = TicketSystem::new();
+    let tickets = TicketQueue::new();
     tickets.max_turns(10);
     tickets.max_time(Duration::from_secs(45));
     tickets.agent(

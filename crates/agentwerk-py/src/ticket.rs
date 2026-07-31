@@ -164,7 +164,7 @@ impl PyTicket {
 }
 
 impl PyTicket {
-    /// Hand over a ticket the system owns, messages included.
+    /// Hand over a ticket the queue owns, messages included.
     pub fn from_ticket(ticket: &Ticket) -> Self {
         PyTicket {
             inner: ticket.clone(),
@@ -174,7 +174,7 @@ impl PyTicket {
     /// Build the ticket to submit, copying only the fields you own.
     ///
     /// Submitting sets key, status, reporter, and result, but leaves the
-    /// messages and timestamps, so a ticket that came back out of the system
+    /// messages and timestamps, so a ticket that came back out of the queue
     /// would otherwise carry its messages into the new one.
     pub fn to_ticket(&self) -> Ticket {
         let mut ticket = Ticket::new(self.inner.task.clone()).labels(self.inner.labels.clone());

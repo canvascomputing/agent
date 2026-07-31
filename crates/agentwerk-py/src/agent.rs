@@ -3,7 +3,7 @@
 //!
 //! Rust splits those phases across two types, which Python cannot hold, so they
 //! collapse into one class here. That is why `build()` runs once: the Python
-//! object owns the agent's own ticket system, and rebuilding would leave the
+//! object owns the agent's own ticket queue, and rebuilding would leave the
 //! queue that its copies still point at with nothing reading it.
 
 use std::collections::BTreeMap;
@@ -18,7 +18,7 @@ use crate::convert::{py_to_value, runtime_error};
 use crate::knowledge::PyKnowledge;
 use crate::providers::{PyModel, PyProvider};
 use crate::ticket::PyTicket;
-use crate::ticket_system::PyTicketSystem;
+use crate::ticket_queue::PyTicketQueue;
 use crate::tools::{extract_tool, BoxedTool};
 
 /// Which LLM provider the agent will use, decided at `build()`.
@@ -369,25 +369,25 @@ impl PyAgent {
         Ok(self.built()?.ticket(ticket.to_ticket()))
     }
 
-    /// Attach a built agent to a ticket system, moving any tickets it queued on
+    /// Attach a built agent to a ticket queue, moving any tickets it queued on
     /// its own across first.
-    fn ticket_system<'py>(
+    fn ticket_queue<'py>(
         mut slf: PyRefMut<'py, Self>,
-        system: PyRef<'_, PyTicketSystem>,
+        queue: PyRef<'_, PyTicketQueue>,
     ) -> PyResult<PyRefMut<'py, Self>> {
-        let rebound = slf.built()?.clone().ticket_system(&system.inner);
+        let rebound = slf.built()?.clone().ticket_queue(&queue.inner);
         slf.agent = Some(rebound);
         Ok(slf)
     }
 
-    /// Begin processing tickets, and hand back the ticket system.
-    fn start(&self) -> PyResult<PyTicketSystem> {
-        Ok(PyTicketSystem {
+    /// Begin processing tickets, and hand back the ticket queue.
+    fn start(&self) -> PyResult<PyTicketQueue> {
+        Ok(PyTicketQueue {
             inner: self.built()?.start(),
         })
     }
 
-    /// Process every queued ticket, then hand back the ticket system so results
+    /// Process every queued ticket, then hand back the ticket queue so results
     /// can be read from it. Awaitable.
     ///
     /// An agent that was never built raises when this is called, not when it is
@@ -396,7 +396,7 @@ impl PyAgent {
         let agent = self.built()?.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let inner = agent.finish().await;
-            Ok::<_, PyErr>(PyTicketSystem { inner })
+            Ok::<_, PyErr>(PyTicketQueue { inner })
         })
     }
 }

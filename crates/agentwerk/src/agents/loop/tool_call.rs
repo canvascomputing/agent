@@ -33,7 +33,7 @@ pub(super) async fn run(context: &mut TicketContext<'_>, mut calls: Vec<ToolCall
     let tool_context = ToolContext::new(context.agent.dir())
         .interrupt_signal(std::sync::Arc::clone(&context.stop_signal))
         .registry(std::sync::Arc::new(context.agent.tool_registry().clone()))
-        .ticket_system(std::sync::Arc::clone(context.ticket_system))
+        .ticket_queue(std::sync::Arc::clone(context.ticket_queue))
         .agent_name(context.agent.get_name().to_string())
         .ticket_key(context.ticket_key.clone())
         .knowledge(context.agent.knowledge());
@@ -129,7 +129,7 @@ pub(super) async fn run(context: &mut TicketContext<'_>, mut calls: Vec<ToolCall
             text: context.retry_directive(&schema_detail),
         });
     }
-    context.ticket_system.add_reply(
+    context.ticket_queue.add_reply(
         &context.ticket_key,
         crate::agents::tickets::Reply::user(&blocks, &paths),
     );
@@ -140,7 +140,7 @@ pub(super) async fn run(context: &mut TicketContext<'_>, mut calls: Vec<ToolCall
             limit: u64::from(max_schema_retries),
         });
         let _ = context
-            .ticket_system
+            .ticket_queue
             .set_failed_by(&context.ticket_key, context.agent.get_name());
         return Step::NextTicket;
     }
@@ -154,7 +154,7 @@ mod tests {
 
     use crate::agents::agent::Agent;
     use crate::agents::r#loop::test_util::*;
-    use crate::agents::tickets::{Status, Ticket, TicketSystem};
+    use crate::agents::tickets::{Status, Ticket, TicketQueue};
     use crate::event::{EventKind, PolicyKind};
     use crate::providers::Provider;
     use crate::schemas::Schema;
@@ -225,7 +225,7 @@ mod tests {
             Ok(write_result_response("not json")),
             Ok(write_result_value(serde_json::json!({"partial_sum": 1}))),
         ]);
-        let tickets = TicketSystem::new();
+        let tickets = TicketQueue::new();
         tickets
             .dir(results_dir.path().to_path_buf())
             .max_request_retries(0)
@@ -336,7 +336,7 @@ mod tests {
         use std::time::Duration;
 
         use crate::agents::agent::Agent;
-        use crate::agents::tickets::TicketSystem;
+        use crate::agents::tickets::TicketQueue;
         use crate::providers::Provider;
         use crate::tools::{Tool, ToolResult};
 
@@ -349,7 +349,7 @@ mod tests {
             .build();
 
         let results_dir = crate::test_util::TempDir::new().unwrap();
-        let tickets = TicketSystem::new();
+        let tickets = TicketQueue::new();
         tickets
             .dir(results_dir.path().to_path_buf())
             .max_request_retries(0)
@@ -389,7 +389,7 @@ mod tests {
         use std::time::Duration;
 
         use crate::agents::agent::Agent;
-        use crate::agents::tickets::TicketSystem;
+        use crate::agents::tickets::TicketQueue;
         use crate::providers::Provider;
         use crate::tools::{Tool, ToolResult};
 
@@ -409,7 +409,7 @@ mod tests {
             .build();
 
         let results_dir = crate::test_util::TempDir::new().unwrap();
-        let tickets = TicketSystem::new();
+        let tickets = TicketQueue::new();
         tickets
             .dir(results_dir.path().to_path_buf())
             .max_request_retries(0)
@@ -442,7 +442,7 @@ mod tests {
         use tokio::sync::Notify;
 
         use crate::agents::agent::Agent;
-        use crate::agents::tickets::TicketSystem;
+        use crate::agents::tickets::TicketQueue;
         use crate::providers::Provider;
         use crate::tools::{ManageTicketsTool, Tool, ToolResult};
 
@@ -469,7 +469,7 @@ mod tests {
             .build();
 
         let results_dir = crate::test_util::TempDir::new().unwrap();
-        let tickets = TicketSystem::new();
+        let tickets = TicketQueue::new();
         tickets
             .dir(results_dir.path().to_path_buf())
             .max_request_retries(0)
@@ -529,7 +529,7 @@ mod tests {
         };
 
         let results_dir = crate::test_util::TempDir::new().unwrap();
-        let tickets = TicketSystem::new();
+        let tickets = TicketQueue::new();
         tickets
             .dir(results_dir.path().to_path_buf())
             .max_request_retries(0)
@@ -637,7 +637,7 @@ mod tests {
         ]);
 
         let results_dir = crate::test_util::TempDir::new().unwrap();
-        let tickets = TicketSystem::new();
+        let tickets = TicketQueue::new();
         tickets
             .dir(results_dir.path().to_path_buf())
             .max_request_retries(0)

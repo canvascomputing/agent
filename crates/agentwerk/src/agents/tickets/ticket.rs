@@ -167,7 +167,7 @@ impl Ticket {
 
     /// False once the model has spoken. The agent then waits for the next
     /// reply, whether a tool result or one you add with
-    /// [`TicketSystem::reply`].
+    /// [`TicketQueue::reply`].
     pub(crate) fn is_waiting_for_response(&self) -> bool {
         self.replies
             .last()

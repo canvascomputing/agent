@@ -4,13 +4,13 @@
 use super::common;
 
 use agentwerk::tools::{GlobTool, ManageTicketsTool, ReadFileTool};
-use agentwerk::{Agent, TicketSystem};
+use agentwerk::{Agent, TicketQueue};
 
 #[tokio::test]
 async fn test() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let (provider, model) = common::build_provider();
 
-    let tickets = TicketSystem::new();
+    let tickets = TicketQueue::new();
 
     tickets.max_turns(10);
     let agent = Agent::new()

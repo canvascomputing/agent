@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use crate::agents::tickets::TicketSystem;
+use crate::agents::tickets::TicketQueue;
 use crate::prompts::compaction_directive;
 use crate::providers::types::StreamEvent;
 use crate::providers::{
@@ -104,7 +104,7 @@ pub(crate) fn should_compact_proactively(
 
 /// Run one compaction round-trip for the ticket at `ticket_key`: read
 /// the current messages, summarise them through [`compact`], and apply the
-/// result through [`TicketSystem::summarize`]. Returns `Ok(true)` when a
+/// result through [`TicketQueue::summarize`]. Returns `Ok(true)` when a
 /// summary was applied, `Ok(false)` when the ticket is missing or the
 /// messages collapse to nothing worth replacing.
 pub(crate) async fn run(
@@ -112,14 +112,14 @@ pub(crate) async fn run(
     model: &str,
     messages: Vec<Message>,
     window: Option<u64>,
-    ticket_system: &TicketSystem,
+    ticket_queue: &TicketQueue,
     ticket_key: &str,
     on_progress: Arc<dyn Fn(u32, u32) + Send + Sync>,
 ) -> ProviderResult<bool> {
     let Some(summary) = compact(provider, model, &messages, window, on_progress).await? else {
         return Ok(false);
     };
-    ticket_system.summarize(ticket_key, summary);
+    ticket_queue.summarize(ticket_key, summary);
     Ok(true)
 }
 

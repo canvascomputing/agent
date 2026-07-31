@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 /// Execution limits and retry tuning the loop reads from the ticket
-/// system. Set on a `TicketSystem` via `.max_turns(...)`,
+/// queue. Set on a `TicketQueue` via `.max_turns(...)`,
 /// `.max_time(...)`, `.max_input_tokens(...)`, etc. A breach emits
 /// `EventKind::PolicyViolated` and halts execution.
 #[derive(Clone, Debug)]

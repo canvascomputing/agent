@@ -1,6 +1,6 @@
 //! Deep Research with handover chain.
 //!
-//! One `TicketSystem` holds the whole pipeline. The driver enqueues a
+//! One `TicketQueue` holds the whole pipeline. The driver enqueues a
 //! single starter ticket pinned to `researcher_1`. Each researcher
 //! calls `brave_search`, reads its parent ticket via
 //! `read_tickets` to build on prior findings, and hands off to
@@ -21,7 +21,7 @@ use agentwerk::event::{Event, EventKind};
 use agentwerk::providers::{provider_from_env, ProviderResult};
 use agentwerk::schemas::Schema;
 use agentwerk::tools::{ReadTicketsTool, Tool, ToolResult};
-use agentwerk::{Agent, Ticket, TicketSystem};
+use agentwerk::{Agent, Ticket, TicketQueue};
 
 const RESEARCHER_1_ROLE: &str = include_str!("prompts/researcher_1.role.md");
 const RESEARCHER_2_ROLE: &str = include_str!("prompts/researcher_2.role.md");
@@ -42,7 +42,7 @@ async fn main() {
 
     let workdir = prepare_workdir();
 
-    let tickets = TicketSystem::new();
+    let tickets = TicketQueue::new();
     tickets
         .cancel_on(tokio::signal::ctrl_c())
         .dir(workdir.clone());
@@ -117,7 +117,7 @@ async fn main() {
     }
 }
 
-fn print_research_outcome(tickets: &TicketSystem, outcome: &Outcome) {
+fn print_research_outcome(tickets: &TicketQueue, outcome: &Outcome) {
     eprintln!("\n══════════════════════════════════════════════════════════");
     match outcome {
         Outcome::Report(ticket) => {
@@ -171,10 +171,10 @@ enum Outcome {
     Stalled,
 }
 
-/// Read the run's outcome off the drained system: a finished report
+/// Read the run's outcome off the drained queue: a finished report
 /// ticket wins, an external cancel is surfaced, anything else means the
 /// chain stopped without reaching the report step.
-fn classify_outcome(tickets: &TicketSystem) -> Outcome {
+fn classify_outcome(tickets: &TicketQueue) -> Outcome {
     if let Some(ticket) = tickets.find_ticket(|t| t.has_label("report") && t.is_finished()) {
         return Outcome::Report(Box::new(ticket));
     }
@@ -184,7 +184,7 @@ fn classify_outcome(tickets: &TicketSystem) -> Outcome {
     Outcome::Stalled
 }
 
-fn print_chain_summary(tickets: &TicketSystem) {
+fn print_chain_summary(tickets: &TicketQueue) {
     eprintln!("\nChain summary:");
     let all = tickets.tickets();
     if all.is_empty() {
@@ -219,7 +219,7 @@ fn print_chain_summary(tickets: &TicketSystem) {
     }
 }
 
-fn print_stats(tickets: &TicketSystem) {
+fn print_stats(tickets: &TicketQueue) {
     let stats = tickets.stats();
     eprintln!("\nStats:");
     eprintln!(

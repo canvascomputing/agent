@@ -17,7 +17,7 @@
   <a href="#development">Development</a>
 </div>
 
-<div align="center">agentwerk is designed to tackle complex problems with fleets of agents through the simplest interface possible. It provides a ticket system which distributes tasks across agents running in parallel, validates results, retries on failure, and reports every step as an event.</div>
+<div align="center">agentwerk is designed to tackle complex problems with fleets of agents through the simplest interface possible. It provides a ticket queue which distributes tasks across agents running in parallel, validates results, retries on failure, and reports every step as an event.</div>
 
 <div align="center"><em>agentwerk pairs "agent" with the German "Werk", a word for both factory and artwork: machinery for building agentic systems.</em></div>
 
@@ -69,10 +69,10 @@ async fn main() {
 Run many agents in parallel and let them share what they learn:
 
 ```rust
-use agentwerk::{Agent, Knowledge, Ticket, TicketSystem};
+use agentwerk::{Agent, Knowledge, Ticket, TicketQueue};
 use agentwerk::tools::{GrepTool, ManageTicketsTool, ReadFileTool};
 
-let tickets = TicketSystem::new();
+let tickets = TicketQueue::new();
 let store = Knowledge::load("./notes")?;
 
 for i in 0..4 {
@@ -181,12 +181,12 @@ tickets.task("Compute (47 * 92) / 8, then round to the nearest integer.");
 | `interactive()` | Let the agent wait for new instructions to keep a ticket in-progress. |
 | `edit_directive_on_retry(editor)` | Override the prompt that corrects an agent asked to try again. |
 | `build()` | Create the agent. |
-| `ticket_system(system)` | Attach a built agent to a ticket system. |
+| `ticket_queue(queue)` | Attach a built agent to a ticket queue. |
 
 You can use the `{context}` variable to inject contextual information:
 
 ```markdown
-You work within a ticket system. Each task arrives as a ticket; each reply you generate is one turn.
+You work within a ticket queue. Each task arrives as a ticket; each reply you generate is one turn.
 
 - Ticket: TICKET-7
 - Date: 2026-05-06
@@ -268,7 +268,7 @@ You can use `context_window_from_env()` to read the context window size from env
   <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/tickets.jpg" width="600" />
 </div>
 
-The `TicketSystem` is the core data structure of agentwerk allowing to coordinate complex interactions.
+The `TicketQueue` is the core data structure of agentwerk allowing to coordinate complex interactions.
 
 ```rust
 tickets.agent(Agent::new().name("analyst").label("analysis").from_env().build());
@@ -285,7 +285,7 @@ tickets.ticket(
 
 | Method | Description |
 |--------|-------------|
-| `agent(agent)` | Add an agent to this ticket system. |
+| `agent(agent)` | Add an agent to this ticket queue. |
 | `task(task)` | Submit a task and return its ticket key. |
 | `ticket(ticket)` | Submit a `Ticket` with custom labels or schema. |
 | `reply(key, content)` | Add a reply to a ticket. |
@@ -296,7 +296,7 @@ tickets.ticket(
 | `get_dir()` | Get the session directory. |
 | `schema_for_label(label, schema)` | Register a schema every ticket of that label validates against. |
 
-See [`TicketSystem`](https://docs.rs/agentwerk/latest/agentwerk/agents/tickets/struct.TicketSystem.html).
+See [`TicketQueue`](https://docs.rs/agentwerk/latest/agentwerk/agents/tickets/struct.TicketQueue.html).
 
 </details>
 
@@ -449,7 +449,7 @@ let agent = Agent::new()
     .tool(BashTool::new("git", "git *"));
 ```
 
-`FinishTool` and `ManageKnowledgeTool` are special tools, registered automatically on every agent. They are used for interacting with the `TicketSystem`.
+`FinishTool` and `ManageKnowledgeTool` are special tools, registered automatically on every agent. They are used for interacting with the `TicketQueue`.
 
 <details>
 <summary>All built-in tools</summary>
@@ -581,10 +581,10 @@ See [`EventKind`](https://docs.rs/agentwerk/latest/agentwerk/event/enum.EventKin
 Save replies of every finished ticket as a training example:
 
 ```rust
-let system = Arc::clone(&tickets);
+let queue = Arc::clone(&tickets);
 tickets.on_ticket(move |event, ticket| {
     if matches!(event.kind, EventKind::TicketFinished) {
-        let model = system.model_for_agent(&event.agent_name);
+        let model = queue.model_for_agent(&event.agent_name);
         let _ = Trajectory::from_ticket(&event.agent_name, model.as_deref(), ticket)
             .save("datasets");
     }
@@ -677,10 +677,10 @@ store.pages().remove("build-command")?;
 
 ## Sessions
 
-A `TicketSystem` writes every ticket, reply, statistic, and lifecycle event to its working directory (default `./.agentwerk`). You can continue a session from that directory.
+A `TicketQueue` writes every ticket, reply, statistic, and lifecycle event to its working directory (default `./.agentwerk`). You can continue a session from that directory.
 
 ```rust
-let tickets = TicketSystem::load(".agentwerk")?;
+let tickets = TicketQueue::load(".agentwerk")?;
 tickets.agent(my_agent);
 tickets.start();
 ```

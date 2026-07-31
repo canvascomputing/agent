@@ -1,4 +1,4 @@
-You work within a ticket system. Each task arrives as a ticket; each reply you generate is one turn.
+You work within a ticket queue. Each task arrives as a ticket; each reply you generate is one turn.
 
 - Ticket: {ticket}
 - Date: {date}

@@ -75,9 +75,9 @@ impl ToolLike for FinishTool {
         ctx: &'a ToolContext,
     ) -> Pin<Box<dyn Future<Output = ProviderResult<ToolResult>> + Send + 'a>> {
         Box::pin(async move {
-            let Some(ticket_system) = ctx.ticket_system_handle().cloned() else {
+            let Some(ticket_queue) = ctx.ticket_queue_handle().cloned() else {
                 return Ok(ToolResult::error(
-                    "Ticket system unavailable in this context",
+                    "Ticket queue unavailable in this context",
                 ));
             };
 
@@ -91,18 +91,18 @@ impl ToolLike for FinishTool {
                 Some(_) => return Ok(ToolResult::error("`handover` must be a string")),
             };
 
-            let parent_key = match resolve_current_key(&ticket_system, ctx) {
+            let parent_key = match resolve_current_key(&ticket_queue, ctx) {
                 Ok(k) => k,
                 Err(e) => return Ok(e),
             };
-            let schema = ticket_system.get_ticket(&parent_key).and_then(|t| t.schema);
+            let schema = ticket_queue.get_ticket(&parent_key).and_then(|t| t.schema);
             let agent = ctx.agent_name_str().unwrap_or_default().to_string();
             // The ticket's own schema decides whether the result rode in as
             // the top-level arguments (object schema) or under `result`.
             let result = super::result_shape::parse_result("finish", schema.as_ref(), &input);
 
             let Some(handover) = handover else {
-                return Ok(write_result(&ticket_system, &parent_key, result, &agent));
+                return Ok(write_result(&ticket_queue, &parent_key, result, &agent));
             };
 
             // An omitted `task` defaults to the parent result below: the
@@ -129,7 +129,7 @@ impl ToolLike for FinishTool {
             // not finish the ticket, so the child is inserted and the
             // parent finished below. A schema failure returns here before
             // any child exists.
-            let validated_result = match ticket_system.set_result(&parent_key, result) {
+            let validated_result = match ticket_queue.set_result(&parent_key, result) {
                 Ok(value) => value,
                 Err(violations) => return Ok(ToolResult::schema_error(violations.to_string())),
             };
@@ -153,8 +153,8 @@ impl ToolLike for FinishTool {
             // cannot drain the chain mid-handover. `parent_key` is resolved
             // and `InProgress`, so `set_finished_by` cannot miss it and leave
             // the inserted child orphaned.
-            let child_key = ticket_system.insert(child, agent.clone());
-            if let Err(e) = ticket_system.set_finished_by(&parent_key, &agent) {
+            let child_key = ticket_queue.insert(child, agent.clone());
+            if let Err(e) = ticket_queue.set_finished_by(&parent_key, &agent) {
                 return Ok(ToolResult::error(super::ticket_error_message(e)));
             }
 
@@ -171,28 +171,28 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::agents::tickets::{Status, Ticket, TicketSystem};
+    use crate::agents::tickets::{Status, Ticket, TicketQueue};
     use crate::schemas::Schema;
 
-    fn ctx_with(ticket_system: Arc<TicketSystem>, agent: &str, dir: PathBuf) -> ToolContext {
+    fn ctx_with(ticket_queue: Arc<TicketQueue>, agent: &str, dir: PathBuf) -> ToolContext {
         ToolContext::new(dir)
-            .ticket_system(ticket_system)
+            .ticket_queue(ticket_queue)
             .agent_name(agent.to_string())
     }
 
-    fn one_ticket(agent: &str) -> (Arc<TicketSystem>, String) {
-        let sys = TicketSystem::new();
-        sys.dir(shared_test_dir().to_path_buf());
-        sys.insert(Ticket::new("body").label(agent), "tester".into());
-        let key = sys
+    fn one_ticket(agent: &str) -> (Arc<TicketQueue>, String) {
+        let queue = TicketQueue::new();
+        queue.dir(shared_test_dir().to_path_buf());
+        queue.insert(Ticket::new("body").label(agent), "tester".into());
+        let key = queue
             .claim(|t| t.status == Status::Todo, agent)
             .expect("claim must succeed");
-        (sys, key)
+        (queue, key)
     }
 
-    /// Process-lifetime tempdir used as the default `TicketSystem` root
+    /// Process-lifetime tempdir used as the default `TicketQueue` root
     /// for tests in this module. Tests that need an isolated workspace
-    /// still call `sys.dir(...)` explicitly to override.
+    /// still call `queue.dir(...)` explicitly to override.
     fn shared_test_dir() -> &'static std::path::Path {
         use std::sync::OnceLock;
         static DIR: OnceLock<crate::test_util::TempDir> = OnceLock::new();
@@ -203,15 +203,15 @@ mod tests {
     #[tokio::test]
     async fn writes_string_result_and_marks_finished() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (sys, key) = one_ticket("alice");
-        sys.dir(dir.path().to_path_buf());
-        let ctx = ctx_with(Arc::clone(&sys), "alice", dir.path().to_path_buf());
+        let (queue, key) = one_ticket("alice");
+        queue.dir(dir.path().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
         let outcome = FinishTool
             .call(serde_json::json!({"result": "the answer"}), &ctx)
             .await
             .unwrap();
         assert!(matches!(outcome, ToolResult::Success(_)));
-        let t = sys.get_ticket(&key).unwrap();
+        let t = queue.get_ticket(&key).unwrap();
         assert_eq!(t.status, Status::Finished);
         assert_eq!(
             t.result.as_ref().and_then(|v| v.as_str()),
@@ -234,9 +234,9 @@ mod tests {
             serde_json::json!([]),
         ] {
             let dir = crate::test_util::TempDir::new().unwrap();
-            let (sys, key) = one_ticket("alice");
-            sys.dir(dir.path().to_path_buf());
-            let ctx = ctx_with(Arc::clone(&sys), "alice", dir.path().to_path_buf());
+            let (queue, key) = one_ticket("alice");
+            queue.dir(dir.path().to_path_buf());
+            let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
             let outcome = FinishTool
                 .call(serde_json::json!({"result": value}), &ctx)
                 .await
@@ -245,7 +245,7 @@ mod tests {
                 matches!(outcome, ToolResult::Success(_)),
                 "expected success for {value:?}"
             );
-            let t = sys.get_ticket(&key).unwrap();
+            let t = queue.get_ticket(&key).unwrap();
             assert_eq!(t.status, Status::Finished);
         }
     }
@@ -253,15 +253,15 @@ mod tests {
     #[tokio::test]
     async fn accepts_structured_value_when_no_schema() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (sys, key) = one_ticket("alice");
-        sys.dir(dir.path().to_path_buf());
-        let ctx = ctx_with(Arc::clone(&sys), "alice", dir.path().to_path_buf());
+        let (queue, key) = one_ticket("alice");
+        queue.dir(dir.path().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
         let outcome = FinishTool
             .call(serde_json::json!({"result": {"x": 1, "y": [2, 3]}}), &ctx)
             .await
             .unwrap();
         assert!(matches!(outcome, ToolResult::Success(_)));
-        let t = sys.get_ticket(&key).unwrap();
+        let t = queue.get_ticket(&key).unwrap();
         assert_eq!(t.status, Status::Finished);
         assert_eq!(t.result.as_ref().unwrap()["x"], 1);
 
@@ -279,23 +279,23 @@ mod tests {
     #[tokio::test]
     async fn validates_against_schema() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let sys = TicketSystem::new();
-        sys.dir(shared_test_dir().to_path_buf());
-        sys.dir(dir.path().to_path_buf());
+        let queue = TicketQueue::new();
+        queue.dir(shared_test_dir().to_path_buf());
+        queue.dir(dir.path().to_path_buf());
         let schema = Schema::parse(serde_json::json!({
             "type": "object",
             "properties": {"x": {"type": "string"}},
             "required": ["x"]
         }))
         .unwrap();
-        sys.insert(
+        queue.insert(
             Ticket::new("hi").schema(schema).label("alice"),
             "tester".into(),
         );
-        let key = sys
+        let key = queue
             .claim(|t| t.status == Status::Todo, "alice")
             .expect("claim must succeed");
-        let ctx = ctx_with(Arc::clone(&sys), "alice", dir.path().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
 
         // wrong shape
         let outcome = FinishTool
@@ -303,7 +303,7 @@ mod tests {
             .await
             .unwrap();
         assert!(matches!(outcome, ToolResult::SchemaError(_)));
-        let t = sys.get_ticket(&key).unwrap();
+        let t = queue.get_ticket(&key).unwrap();
         assert_eq!(t.status, Status::InProgress);
 
         // valid shape
@@ -312,7 +312,7 @@ mod tests {
             .await
             .unwrap();
         assert!(matches!(outcome, ToolResult::Success(_)));
-        let t = sys.get_ticket(&key).unwrap();
+        let t = queue.get_ticket(&key).unwrap();
         assert_eq!(t.status, Status::Finished);
         assert_eq!(t.result.as_ref().unwrap()["x"], "ok");
     }
@@ -320,23 +320,23 @@ mod tests {
     #[tokio::test]
     async fn object_schema_takes_flat_arguments_as_the_result() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let sys = TicketSystem::new();
-        sys.dir(shared_test_dir().to_path_buf());
-        sys.dir(dir.path().to_path_buf());
+        let queue = TicketQueue::new();
+        queue.dir(shared_test_dir().to_path_buf());
+        queue.dir(dir.path().to_path_buf());
         let schema = Schema::parse(serde_json::json!({
             "type": "object",
             "properties": {"x": {"type": "string"}},
             "required": ["x"]
         }))
         .unwrap();
-        sys.insert(
+        queue.insert(
             Ticket::new("hi").schema(schema).label("alice"),
             "tester".into(),
         );
-        let key = sys
+        let key = queue
             .claim(|t| t.status == Status::Todo, "alice")
             .expect("claim must succeed");
-        let ctx = ctx_with(Arc::clone(&sys), "alice", dir.path().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
 
         // Fields at the top level, no `result` wrapper.
         let outcome = FinishTool
@@ -344,7 +344,7 @@ mod tests {
             .await
             .unwrap();
         assert!(matches!(outcome, ToolResult::Success(_)));
-        let t = sys.get_ticket(&key).unwrap();
+        let t = queue.get_ticket(&key).unwrap();
         assert_eq!(t.status, Status::Finished);
         assert_eq!(t.result.as_ref().unwrap(), &serde_json::json!({"x": "ok"}));
     }
@@ -352,23 +352,23 @@ mod tests {
     #[tokio::test]
     async fn stores_a_string_encoded_result_as_the_decoded_object() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let sys = TicketSystem::new();
-        sys.dir(shared_test_dir().to_path_buf());
-        sys.dir(dir.path().to_path_buf());
+        let queue = TicketQueue::new();
+        queue.dir(shared_test_dir().to_path_buf());
+        queue.dir(dir.path().to_path_buf());
         let schema = Schema::parse(serde_json::json!({
             "type": "object",
             "properties": {"x": {"type": "string"}},
             "required": ["x"]
         }))
         .unwrap();
-        sys.insert(
+        queue.insert(
             Ticket::new("hi").schema(schema).label("alice"),
             "tester".into(),
         );
-        let key = sys
+        let key = queue
             .claim(|t| t.status == Status::Todo, "alice")
             .expect("claim must succeed");
-        let ctx = ctx_with(Arc::clone(&sys), "alice", dir.path().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
 
         // The agent double-encoded the conforming object as a JSON string.
         let outcome = FinishTool
@@ -377,7 +377,7 @@ mod tests {
             .unwrap();
         assert!(matches!(outcome, ToolResult::Success(_)));
 
-        let t = sys.get_ticket(&key).unwrap();
+        let t = queue.get_ticket(&key).unwrap();
         assert_eq!(t.status, Status::Finished);
         // Stored as the decoded object, not the raw string.
         assert!(t.result.as_ref().unwrap().is_object());
@@ -392,9 +392,9 @@ mod tests {
     #[tokio::test]
     async fn errors_when_no_current_ticket() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let sys = TicketSystem::new();
-        sys.dir(shared_test_dir().to_path_buf());
-        let ctx = ctx_with(Arc::clone(&sys), "alice", dir.path().to_path_buf());
+        let queue = TicketQueue::new();
+        queue.dir(shared_test_dir().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
         let outcome = FinishTool
             .call(serde_json::json!({"result": "x"}), &ctx)
             .await
@@ -405,25 +405,25 @@ mod tests {
     #[tokio::test]
     async fn appends_one_line_per_completed_ticket() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let sys = TicketSystem::new();
-        sys.dir(shared_test_dir().to_path_buf());
-        sys.dir(dir.path().to_path_buf());
+        let queue = TicketQueue::new();
+        queue.dir(shared_test_dir().to_path_buf());
+        queue.dir(dir.path().to_path_buf());
 
-        sys.insert(Ticket::new("a").label("alice"), "tester".into());
-        let key1 = sys
+        queue.insert(Ticket::new("a").label("alice"), "tester".into());
+        let key1 = queue
             .claim(|t| t.key == "TICKET-1", "alice")
             .expect("claim must succeed");
-        let ctx_alice = ctx_with(Arc::clone(&sys), "alice", dir.path().to_path_buf());
+        let ctx_alice = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
         FinishTool
             .call(serde_json::json!({"result": "from alice"}), &ctx_alice)
             .await
             .unwrap();
 
-        sys.insert(Ticket::new("b").label("bob"), "tester".into());
-        let key2 = sys
+        queue.insert(Ticket::new("b").label("bob"), "tester".into());
+        let key2 = queue
             .claim(|t| t.key == "TICKET-2", "bob")
             .expect("claim must succeed");
-        let ctx_bob = ctx_with(Arc::clone(&sys), "bob", dir.path().to_path_buf());
+        let ctx_bob = ctx_with(Arc::clone(&queue), "bob", dir.path().to_path_buf());
         FinishTool
             .call(serde_json::json!({"result": "from bob"}), &ctx_bob)
             .await
@@ -444,18 +444,18 @@ mod tests {
     async fn concurrent_writes_produce_one_intact_line_per_ticket() {
         const N: usize = 32;
         let dir = crate::test_util::TempDir::new().unwrap();
-        let sys = TicketSystem::new();
-        sys.dir(shared_test_dir().to_path_buf());
-        sys.dir(dir.path().to_path_buf());
+        let queue = TicketQueue::new();
+        queue.dir(shared_test_dir().to_path_buf());
+        queue.dir(dir.path().to_path_buf());
 
         let mut expected = Vec::with_capacity(N);
         for i in 0..N {
             let agent = format!("agent_{i}");
-            sys.insert(
+            queue.insert(
                 Ticket::new(format!("body_{i}")).label(&agent),
                 "tester".into(),
             );
-            let key = sys
+            let key = queue
                 .claim(
                     |t| t.status == Status::Todo && t.labels.iter().any(|l| l == &agent),
                     &agent,
@@ -466,11 +466,11 @@ mod tests {
 
         let mut handles = Vec::with_capacity(N);
         for (i, (agent, _)) in expected.iter().enumerate() {
-            let sys = Arc::clone(&sys);
+            let queue = Arc::clone(&queue);
             let dir_path = dir.path().to_path_buf();
             let agent = agent.clone();
             handles.push(tokio::spawn(async move {
-                let ctx = ctx_with(sys, &agent, dir_path);
+                let ctx = ctx_with(queue, &agent, dir_path);
                 FinishTool
                     .call(serde_json::json!({"result": format!("payload_{i}")}), &ctx)
                     .await
@@ -499,21 +499,21 @@ mod tests {
 
     // Handover
 
-    fn one_ticket_in(agent: &str, dir: PathBuf) -> (Arc<TicketSystem>, String) {
-        let sys = TicketSystem::new();
-        sys.dir(dir);
-        sys.insert(Ticket::new("parent body").label(agent), "tester".into());
-        let key = sys
+    fn one_ticket_in(agent: &str, dir: PathBuf) -> (Arc<TicketQueue>, String) {
+        let queue = TicketQueue::new();
+        queue.dir(dir);
+        queue.insert(Ticket::new("parent body").label(agent), "tester".into());
+        let key = queue
             .claim(|t| t.status == Status::Todo, agent)
             .expect("claim must succeed");
-        (sys, key)
+        (queue, key)
     }
 
     #[tokio::test]
     async fn handover_finishes_parent_creates_child_with_parent_link() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (sys, parent_key) = one_ticket_in("alice", dir.path().to_path_buf());
-        let ctx = ctx_with(Arc::clone(&sys), "alice", dir.path().to_path_buf());
+        let (queue, parent_key) = one_ticket_in("alice", dir.path().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
 
         let outcome = FinishTool
             .call(
@@ -528,14 +528,14 @@ mod tests {
             .unwrap();
         assert!(matches!(outcome, ToolResult::Success(_)));
 
-        let parent = sys.get_ticket(&parent_key).unwrap();
+        let parent = queue.get_ticket(&parent_key).unwrap();
         assert_eq!(parent.status, Status::Finished);
         assert_eq!(
             parent.result.as_ref().and_then(|v| v.as_str()),
             Some("summary of alice's work")
         );
 
-        let child = sys.get_ticket("TICKET-2").unwrap();
+        let child = queue.get_ticket("TICKET-2").unwrap();
         assert_eq!(child.status, Status::Todo);
         assert_eq!(child.parent.as_deref(), Some(parent_key.as_str()));
         assert_eq!(child.labels, vec!["bob".to_string()]);
@@ -545,8 +545,8 @@ mod tests {
     #[tokio::test]
     async fn handover_appends_one_ndjson_line_for_parent_result() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (sys, parent_key) = one_ticket_in("alice", dir.path().to_path_buf());
-        let ctx = ctx_with(Arc::clone(&sys), "alice", dir.path().to_path_buf());
+        let (queue, parent_key) = one_ticket_in("alice", dir.path().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
 
         FinishTool
             .call(
@@ -574,21 +574,21 @@ mod tests {
         // a short string, which violates the schema but passes the
         // type check, so we exercise the schema-validation abort path.
         let dir = crate::test_util::TempDir::new().unwrap();
-        let sys = TicketSystem::new();
-        sys.dir(dir.path().to_path_buf());
+        let queue = TicketQueue::new();
+        queue.dir(dir.path().to_path_buf());
         let schema = Schema::parse(serde_json::json!({
             "type": "string",
             "minLength": 50
         }))
         .unwrap();
-        sys.insert(
+        queue.insert(
             Ticket::new("strict parent").schema(schema).label("alice"),
             "tester".into(),
         );
-        let parent_key = sys
+        let parent_key = queue
             .claim(|t| t.status == Status::Todo, "alice")
             .expect("claim must succeed");
-        let ctx = ctx_with(Arc::clone(&sys), "alice", dir.path().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
 
         let outcome = FinishTool
             .call(
@@ -599,11 +599,11 @@ mod tests {
             .unwrap();
         assert!(matches!(outcome, ToolResult::SchemaError(_)));
 
-        let parent = sys.get_ticket(&parent_key).unwrap();
+        let parent = queue.get_ticket(&parent_key).unwrap();
         assert_eq!(parent.status, Status::InProgress);
         assert!(parent.result.is_none());
         assert!(
-            sys.get_ticket("TICKET-2").is_none(),
+            queue.get_ticket("TICKET-2").is_none(),
             "no child created on schema failure"
         );
         assert!(!dir.path().join("results.jsonl").exists());
@@ -611,29 +611,29 @@ mod tests {
 
     /// Build a claimed parent whose own schema requires an object with a
     /// `status` field, so the handover result is validated structurally.
-    fn one_ticket_with_object_schema(agent: &str, dir: PathBuf) -> (Arc<TicketSystem>, String) {
-        let sys = TicketSystem::new();
-        sys.dir(dir);
+    fn one_ticket_with_object_schema(agent: &str, dir: PathBuf) -> (Arc<TicketQueue>, String) {
+        let queue = TicketQueue::new();
+        queue.dir(dir);
         let schema = Schema::parse(serde_json::json!({
             "type": "object",
             "required": ["status"]
         }))
         .unwrap();
-        sys.insert(
+        queue.insert(
             Ticket::new("strict parent").schema(schema).label(agent),
             "tester".into(),
         );
-        let key = sys
+        let key = queue
             .claim(|t| t.status == Status::Todo, agent)
             .expect("claim must succeed");
-        (sys, key)
+        (queue, key)
     }
 
     #[tokio::test]
     async fn handover_structured_result_validated_against_parent_schema_is_stored_as_object() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (sys, parent_key) = one_ticket_with_object_schema("alice", dir.path().to_path_buf());
-        let ctx = ctx_with(Arc::clone(&sys), "alice", dir.path().to_path_buf());
+        let (queue, parent_key) = one_ticket_with_object_schema("alice", dir.path().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
 
         let outcome = FinishTool
             .call(
@@ -644,13 +644,13 @@ mod tests {
             .unwrap();
         assert!(matches!(outcome, ToolResult::Success(_)));
 
-        let parent = sys.get_ticket(&parent_key).unwrap();
+        let parent = queue.get_ticket(&parent_key).unwrap();
         assert_eq!(parent.status, Status::Finished);
         assert_eq!(
             parent.result.as_ref(),
             Some(&serde_json::json!({"status": "done"}))
         );
-        assert!(sys.get_ticket("TICKET-2").is_some());
+        assert!(queue.get_ticket("TICKET-2").is_some());
 
         let log = std::fs::read_to_string(dir.path().join("results.jsonl")).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(log.lines().next().unwrap()).unwrap();
@@ -660,8 +660,8 @@ mod tests {
     #[tokio::test]
     async fn handover_object_schema_takes_result_fields_flat_alongside_control_keys() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (sys, parent_key) = one_ticket_with_object_schema("alice", dir.path().to_path_buf());
-        let ctx = ctx_with(Arc::clone(&sys), "alice", dir.path().to_path_buf());
+        let (queue, parent_key) = one_ticket_with_object_schema("alice", dir.path().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
 
         // `status` sits at the top level next to `handover`/`task`, no `result` wrapper.
         let outcome = FinishTool
@@ -673,7 +673,7 @@ mod tests {
             .unwrap();
         assert!(matches!(outcome, ToolResult::Success(_)));
 
-        let parent = sys.get_ticket(&parent_key).unwrap();
+        let parent = queue.get_ticket(&parent_key).unwrap();
         assert_eq!(parent.status, Status::Finished);
         assert_eq!(
             parent.result.as_ref(),
@@ -686,8 +686,8 @@ mod tests {
         // The agent double-encodes the object as a JSON string; the parent
         // schema's validation decodes it so the stored value is the object.
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (sys, parent_key) = one_ticket_with_object_schema("alice", dir.path().to_path_buf());
-        let ctx = ctx_with(Arc::clone(&sys), "alice", dir.path().to_path_buf());
+        let (queue, parent_key) = one_ticket_with_object_schema("alice", dir.path().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
 
         FinishTool
             .call(
@@ -697,7 +697,7 @@ mod tests {
             .await
             .unwrap();
 
-        let parent = sys.get_ticket(&parent_key).unwrap();
+        let parent = queue.get_ticket(&parent_key).unwrap();
         assert_eq!(
             parent.result.as_ref(),
             Some(&serde_json::json!({"status": "done"}))
@@ -707,8 +707,8 @@ mod tests {
     #[tokio::test]
     async fn handover_object_schema_violation_aborts_atomically() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (sys, parent_key) = one_ticket_with_object_schema("alice", dir.path().to_path_buf());
-        let ctx = ctx_with(Arc::clone(&sys), "alice", dir.path().to_path_buf());
+        let (queue, parent_key) = one_ticket_with_object_schema("alice", dir.path().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
 
         let outcome = FinishTool
             .call(
@@ -719,11 +719,11 @@ mod tests {
             .unwrap();
         assert!(matches!(outcome, ToolResult::SchemaError(_)));
 
-        let parent = sys.get_ticket(&parent_key).unwrap();
+        let parent = queue.get_ticket(&parent_key).unwrap();
         assert_eq!(parent.status, Status::InProgress);
         assert!(parent.result.is_none());
         assert!(
-            sys.get_ticket("TICKET-2").is_none(),
+            queue.get_ticket("TICKET-2").is_none(),
             "no child created on schema failure"
         );
         assert!(!dir.path().join("results.jsonl").exists());
@@ -732,8 +732,8 @@ mod tests {
     #[tokio::test]
     async fn rejects_empty_handover() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (sys, _key) = one_ticket_in("alice", dir.path().to_path_buf());
-        let ctx = ctx_with(Arc::clone(&sys), "alice", dir.path().to_path_buf());
+        let (queue, _key) = one_ticket_in("alice", dir.path().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
         let outcome = FinishTool
             .call(
                 serde_json::json!({"handover": "  ", "task": "x", "result": "y"}),
@@ -747,25 +747,25 @@ mod tests {
     #[tokio::test]
     async fn omitted_handover_finishes_without_a_child() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (sys, parent_key) = one_ticket_in("alice", dir.path().to_path_buf());
-        let ctx = ctx_with(Arc::clone(&sys), "alice", dir.path().to_path_buf());
+        let (queue, parent_key) = one_ticket_in("alice", dir.path().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
         let outcome = FinishTool
             .call(serde_json::json!({"result": "done"}), &ctx)
             .await
             .unwrap();
         assert!(matches!(outcome, ToolResult::Success(_)));
         assert_eq!(
-            sys.get_ticket(&parent_key).unwrap().status,
+            queue.get_ticket(&parent_key).unwrap().status,
             Status::Finished
         );
-        assert!(sys.get_ticket("TICKET-2").is_none());
+        assert!(queue.get_ticket("TICKET-2").is_none());
     }
 
     #[tokio::test]
     async fn omitted_task_defaults_child_body_to_the_parent_result() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (sys, _key) = one_ticket_in("alice", dir.path().to_path_buf());
-        let ctx = ctx_with(Arc::clone(&sys), "alice", dir.path().to_path_buf());
+        let (queue, _key) = one_ticket_in("alice", dir.path().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
         let outcome = FinishTool
             .call(
                 serde_json::json!({"handover": "bob", "result": "alice's findings"}),
@@ -775,7 +775,7 @@ mod tests {
             .unwrap();
         assert!(matches!(outcome, ToolResult::Success(_)), "{outcome:?}");
 
-        let child = sys.get_ticket("TICKET-2").unwrap();
+        let child = queue.get_ticket("TICKET-2").unwrap();
         assert_eq!(
             child.task,
             serde_json::Value::String("alice's findings".to_string()),
@@ -785,8 +785,8 @@ mod tests {
     #[tokio::test]
     async fn handover_rejects_missing_result() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (sys, _key) = one_ticket_in("alice", dir.path().to_path_buf());
-        let ctx = ctx_with(Arc::clone(&sys), "alice", dir.path().to_path_buf());
+        let (queue, _key) = one_ticket_in("alice", dir.path().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
         let outcome = FinishTool
             .call(serde_json::json!({"handover": "bob", "task": "x"}), &ctx)
             .await
@@ -797,8 +797,8 @@ mod tests {
     #[tokio::test]
     async fn handover_rejects_null_or_empty_result() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (sys, _key) = one_ticket_in("alice", dir.path().to_path_buf());
-        let ctx = ctx_with(Arc::clone(&sys), "alice", dir.path().to_path_buf());
+        let (queue, _key) = one_ticket_in("alice", dir.path().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
         for body in [
             serde_json::json!({"handover": "bob", "task": "x", "result": null}),
             serde_json::json!({"handover": "bob", "task": "x", "result": ""}),
@@ -818,8 +818,8 @@ mod tests {
             serde_json::json!({"k": "v"}),
         ] {
             let dir = crate::test_util::TempDir::new().unwrap();
-            let (sys, parent_key) = one_ticket_in("alice", dir.path().to_path_buf());
-            let ctx = ctx_with(Arc::clone(&sys), "alice", dir.path().to_path_buf());
+            let (queue, parent_key) = one_ticket_in("alice", dir.path().to_path_buf());
+            let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
 
             let outcome = FinishTool
                 .call(
@@ -830,18 +830,18 @@ mod tests {
                 .unwrap();
             assert!(matches!(outcome, ToolResult::Success(_)));
 
-            let parent = sys.get_ticket(&parent_key).unwrap();
+            let parent = queue.get_ticket(&parent_key).unwrap();
             assert_eq!(parent.status, Status::Finished);
             assert_eq!(parent.result.as_ref(), Some(&result_value));
-            assert!(sys.get_ticket("TICKET-2").is_some());
+            assert!(queue.get_ticket("TICKET-2").is_some());
         }
     }
 
     #[tokio::test]
     async fn handover_rejects_non_string_task() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (sys, _key) = one_ticket_in("alice", dir.path().to_path_buf());
-        let ctx = ctx_with(Arc::clone(&sys), "alice", dir.path().to_path_buf());
+        let (queue, _key) = one_ticket_in("alice", dir.path().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
         let outcome = FinishTool
             .call(
                 serde_json::json!({"handover": "bob", "task": 42, "result": "ok"}),
@@ -855,9 +855,9 @@ mod tests {
     #[tokio::test]
     async fn handover_errors_when_no_current_ticket() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let sys = TicketSystem::new();
-        sys.dir(dir.path().to_path_buf());
-        let ctx = ctx_with(Arc::clone(&sys), "alice", dir.path().to_path_buf());
+        let queue = TicketQueue::new();
+        queue.dir(dir.path().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
         let outcome = FinishTool
             .call(
                 serde_json::json!({"handover": "bob", "task": "x", "result": "y"}),
@@ -871,8 +871,8 @@ mod tests {
     #[tokio::test]
     async fn substitutes_parent_key_and_result_in_task() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (sys, parent_key) = one_ticket_in("alice", dir.path().to_path_buf());
-        let ctx = ctx_with(Arc::clone(&sys), "alice", dir.path().to_path_buf());
+        let (queue, parent_key) = one_ticket_in("alice", dir.path().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
 
         FinishTool
             .call(
@@ -886,7 +886,7 @@ mod tests {
             .await
             .unwrap();
 
-        let child = sys.get_ticket("TICKET-2").unwrap();
+        let child = queue.get_ticket("TICKET-2").unwrap();
         assert_eq!(
             child.task,
             serde_json::Value::String(format!("Continue {parent_key}: alice's findings")),
@@ -896,8 +896,8 @@ mod tests {
     #[tokio::test]
     async fn unknown_placeholders_pass_through() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (sys, parent_key) = one_ticket_in("alice", dir.path().to_path_buf());
-        let ctx = ctx_with(Arc::clone(&sys), "alice", dir.path().to_path_buf());
+        let (queue, parent_key) = one_ticket_in("alice", dir.path().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
 
         FinishTool
             .call(
@@ -911,7 +911,7 @@ mod tests {
             .await
             .unwrap();
 
-        let child = sys.get_ticket("TICKET-2").unwrap();
+        let child = queue.get_ticket("TICKET-2").unwrap();
         assert_eq!(
             child.task,
             serde_json::Value::String(format!("See {parent_key} and {{unknown}}")),
@@ -924,8 +924,8 @@ mod tests {
         // must NOT be re-expanded: the substitution pass runs once
         // per placeholder, not recursively.
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (sys, parent_key) = one_ticket_in("alice", dir.path().to_path_buf());
-        let ctx = ctx_with(Arc::clone(&sys), "alice", dir.path().to_path_buf());
+        let (queue, parent_key) = one_ticket_in("alice", dir.path().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
 
         FinishTool
             .call(
@@ -939,7 +939,7 @@ mod tests {
             .await
             .unwrap();
 
-        let child = sys.get_ticket("TICKET-2").unwrap();
+        let child = queue.get_ticket("TICKET-2").unwrap();
         assert_eq!(
             child.task,
             serde_json::Value::String("[{parent_key}]".to_string()),

@@ -85,10 +85,10 @@ impl ToolLike for ManageKnowledgeTool {
             // The tool self-reports each outcome: only it can see a read/remove
             // miss, which returns Ok, so the shared tool-call loop cannot.
             let record = |kind: EventKind| {
-                if let Some(system) = ctx.ticket_system_handle() {
+                if let Some(queue) = ctx.ticket_queue_handle() {
                     let key = ctx.ticket_key.as_deref().unwrap_or_default();
                     let agent = ctx.agent_name_str().unwrap_or_default();
-                    system.emit(key, agent, kind);
+                    queue.emit(key, agent, kind);
                 }
             };
 
@@ -404,13 +404,13 @@ mod tests {
 
     #[tokio::test]
     async fn self_reports_each_action_to_stats() {
-        use crate::agents::tickets::TicketSystem;
+        use crate::agents::tickets::TicketQueue;
 
         let (store, _dir) = fresh_store();
         let tool = ManageKnowledgeTool::new(Arc::clone(&store));
-        let tickets = TicketSystem::new();
+        let tickets = TicketQueue::new();
         let ctx =
-            ToolContext::new(std::env::current_dir().unwrap()).ticket_system(Arc::clone(&tickets));
+            ToolContext::new(std::env::current_dir().unwrap()).ticket_queue(Arc::clone(&tickets));
 
         tool.call(
             serde_json::json!({

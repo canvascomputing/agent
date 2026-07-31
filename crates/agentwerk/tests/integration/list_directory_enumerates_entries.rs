@@ -8,7 +8,7 @@ use super::common;
 
 use agentwerk::schemas::Schema;
 use agentwerk::tools::ListDirectoryTool;
-use agentwerk::{Agent, Ticket, TicketSystem};
+use agentwerk::{Agent, Ticket, TicketQueue};
 
 #[tokio::test]
 async fn separates_files_and_directories() -> std::result::Result<(), Box<dyn std::error::Error>> {
@@ -41,7 +41,7 @@ async fn separates_files_and_directories() -> std::result::Result<(), Box<dyn st
         "required": ["files", "directories"]
     }))?;
 
-    let tickets = TicketSystem::new();
+    let tickets = TicketQueue::new();
 
     tickets.max_turns(10);
     let agent = Agent::new()

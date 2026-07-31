@@ -17,7 +17,7 @@ use super::Step;
 pub(super) async fn run(context: &mut TicketContext<'_>) -> Step {
     // Let registered editors rewrite or drop messages before the request
     // is assembled; the re-read below then projects the edited transcript.
-    context.ticket_system.run_reply_editor(&context.ticket_key);
+    context.ticket_queue.run_reply_editor(&context.ticket_key);
 
     let Some(ticket) = context.ticket() else {
         return Step::NextTicket;
@@ -47,10 +47,10 @@ pub(super) async fn run(context: &mut TicketContext<'_>) -> Step {
             let provider = context.agent.provider();
             let agent_name = context.agent.get_name().to_string();
             let ticket_key = context.ticket_key.clone();
-            let ticket_system = Arc::clone(context.ticket_system);
+            let ticket_queue = Arc::clone(context.ticket_queue);
             let emit_stream: Arc<dyn Fn(StreamEvent) + Send + Sync> = Arc::new(move |event| {
                 if let StreamEvent::TextDelta { text, .. } = event {
-                    ticket_system.emit(
+                    ticket_queue.emit(
                         &ticket_key,
                         &agent_name,
                         EventKind::TextChunkReceived { content: text },
@@ -108,7 +108,7 @@ pub(super) async fn run(context: &mut TicketContext<'_>) -> Step {
     if response.status == ResponseStatus::ContextWindowExceeded {
         return Step::Compact(CompactReason::Reactive);
     }
-    context.ticket_system.add_reply(
+    context.ticket_queue.add_reply(
         &context.ticket_key,
         crate::agents::tickets::Reply::assistant(&response.content),
     );
@@ -373,7 +373,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn request_retried_fires_after_backoff_sleep_not_before() {
         use crate::agents::agent::Agent;
-        use crate::agents::tickets::TicketSystem;
+        use crate::agents::tickets::TicketQueue;
         use crate::event::EventKind;
         use crate::providers::Provider;
         use std::sync::{Arc, Mutex};
@@ -393,7 +393,7 @@ mod tests {
         };
 
         let results_dir = crate::test_util::TempDir::new().unwrap();
-        let tickets = TicketSystem::new();
+        let tickets = TicketQueue::new();
         tickets
             .dir(results_dir.path().to_path_buf())
             .max_request_retries(3)
@@ -443,7 +443,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn cancel_during_backoff_sleep_aborts_immediately() {
         use crate::agents::agent::Agent;
-        use crate::agents::tickets::TicketSystem;
+        use crate::agents::tickets::TicketQueue;
         use crate::providers::Provider;
         use std::sync::{Arc, Mutex};
 
@@ -459,7 +459,7 @@ mod tests {
             Arc::new(move |e: &crate::event::Event| c.lock().unwrap().push(e.clone()))
         };
         let results_dir = crate::test_util::TempDir::new().unwrap();
-        let tickets = TicketSystem::new();
+        let tickets = TicketQueue::new();
         tickets
             .dir(results_dir.path().to_path_buf())
             .max_request_retries(3)
@@ -499,7 +499,7 @@ mod tests {
     use std::sync::Arc;
 
     use crate::agents::agent::Agent;
-    use crate::agents::tickets::{Reply, ReplyContent, TicketSystem};
+    use crate::agents::tickets::{Reply, ReplyContent, TicketQueue};
     use crate::event::{Event, EventKind};
     use crate::providers::{ContentBlock, Message, Provider};
     use crate::tools::{Tool, ToolResult};
@@ -513,7 +513,7 @@ mod tests {
         editor: Option<BoomEditor>,
     ) -> (
         Arc<MockProvider>,
-        Arc<TicketSystem>,
+        Arc<TicketQueue>,
         crate::test_util::TempDir,
     ) {
         let provider = MockProvider::with_results(vec![
@@ -524,7 +524,7 @@ mod tests {
             .handler(|_, _| async move { Ok(ToolResult::error("boom")) })
             .build();
         let results_dir = crate::test_util::TempDir::new().unwrap();
-        let tickets = TicketSystem::new();
+        let tickets = TicketQueue::new();
         tickets
             .dir(results_dir.path().to_path_buf())
             .max_request_retries(0)
@@ -644,7 +644,7 @@ mod tests {
     async fn edit_survives_reload() {
         let (_provider, _tickets, dir) = run_boom(Some(Box::new(drop_failed_exchange))).await;
 
-        let reloaded = TicketSystem::load(dir.path()).unwrap();
+        let reloaded = TicketQueue::load(dir.path()).unwrap();
         let ticket = reloaded.tickets().into_iter().next().unwrap();
         // The boom exchange is gone; the later finish_ticket call remains.
         let keeps_boom = ticket.replies.iter().any(|reply| {

@@ -13,7 +13,7 @@ import asyncio
 import subprocess
 import sys
 
-from agentwerk import Agent, ManageTicketsTool, Schema, Ticket, TicketSystem, ToolResult, tool
+from agentwerk import Agent, ManageTicketsTool, Schema, Ticket, TicketQueue, ToolResult, tool
 
 ROLE = """
 {context}
@@ -97,7 +97,7 @@ async def main(n, partitions, agents):
     agents = min(agents, len(bounds))
     print(f"sum_{{k=1}}^{{{n}}} k^2 over {len(bounds)} partitions, {agents} agent(s)\n")
 
-    tickets = TicketSystem().max_turns(20 * len(bounds))
+    tickets = TicketQueue().max_turns(20 * len(bounds))
     tickets.on_event(
         lambda event: print(f"  {event.kind:<20} {event.agent_name:<10} {event.ticket_key}")
         if event.kind in ("ticket_started", "ticket_finished", "ticket_failed")

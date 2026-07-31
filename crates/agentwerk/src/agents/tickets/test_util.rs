@@ -3,7 +3,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use super::ticket_system::TicketSystem;
+use super::ticket_queue::TicketQueue;
 use crate::agents::agent::Agent;
 
 pub(super) fn minimal_agent(name: &str) -> Agent {
@@ -15,20 +15,21 @@ pub(super) fn minimal_agent(name: &str) -> Agent {
         .build()
 }
 
-/// Build a `TicketSystem` rooted at a fresh `TempDir` so the default
+/// Build a `TicketQueue` rooted at a fresh `TempDir` so the default
 /// `.agentwerk` directory never lands in the source tree during tests.
 /// Hold the returned `TempDir` for the test's lifetime.
-pub(super) fn test_system() -> (Arc<TicketSystem>, crate::test_util::TempDir) {
+pub(super) fn test_queue() -> (Arc<TicketQueue>, crate::test_util::TempDir) {
     let dir = crate::test_util::TempDir::new().unwrap();
-    let built = TicketSystem::new();
+    let built = TicketQueue::new();
     built.dir(dir.path().to_path_buf());
     (built, dir)
 }
 
-pub(super) fn attach_done_result(sys: &TicketSystem, key: &str, result: &str) {
-    sys.set_result(key, serde_json::Value::String(result.into()))
+pub(super) fn attach_done_result(queue: &TicketQueue, key: &str, result: &str) {
+    queue
+        .set_result(key, serde_json::Value::String(result.into()))
         .unwrap();
-    sys.set_finished_by(key, "agent").unwrap();
+    queue.set_finished_by(key, "agent").unwrap();
 }
 
 pub(super) fn read_tickets_log(dir: &Path) -> Vec<serde_json::Value> {

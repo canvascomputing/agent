@@ -11,7 +11,7 @@ use super::common;
 use agentwerk::agents::tickets::Author;
 use agentwerk::event::EventKind;
 use agentwerk::providers::Model;
-use agentwerk::{Agent, Event, Ticket, TicketSystem};
+use agentwerk::{Agent, Event, Ticket, TicketQueue};
 
 // Compaction threshold = max(0, 4 096 − 33 000) = 0, so any non-empty
 // transcript trips the proactive guard between turns. The task itself
@@ -125,7 +125,7 @@ async fn summariser_produces_text_when_compaction_fires_against_live_llm() {
 
     eprintln!("\n=== BEFORE COMPACTION ===\n{TASK}\n");
 
-    let tickets = TicketSystem::new();
+    let tickets = TicketQueue::new();
     // Two iterations: turn 1 lets the model respond once (appending one
     // entry to `usage_history`); turn 2's proactive guard then trips
     // because `compaction_threshold(LOCAL_CTX)` saturates to 0.

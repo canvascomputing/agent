@@ -2,9 +2,9 @@
 
 The invariants that shape how code fits together. Layout says where code lives; this file says why the boundaries are where they are.
 
-## Builder, System, Loop
+## Builder, Queue, Loop
 
-**A run has three stages: build the `Agent`, bind it to a `TicketSystem`, drive the system with `start` (long-lived) or `finish` (process a fixed batch and return).**
+**A run has three stages: build the `Agent`, bind it to a `TicketQueue`, drive the queue with `start` (long-lived) or `finish` (process a fixed batch and return).**
 
 ```rust
 let agent = Agent::new().from_env().build();
@@ -12,21 +12,21 @@ tickets.agent(agent);
 tickets.finish().await;
 ```
 
-- The `Agent` builder carries identity, prompt parts, provider and model, tools, working directory, event handler, and a `Weak<TicketSystem>` (dangling by default).
-- `TicketSystem::new` captures its own `Weak<Self>` through `Arc::new_cyclic`, so binding can hand every agent the back-reference it needs at run time.
-- `TicketSystem::agent(a)` (or `agent.ticket_system(&shared)`) sets that `Weak<Self>` on the agent, drains any tickets the agent had queued in its private default system into the shared one, and pushes a clone of the agent onto the system's agents list.
-- `TicketSystem::start` and `finish` spawn one tokio task per registered agent. Each task upgrades its `Weak` once at the start and reads the shared store, policies, stats, and stop signal from the resulting `Arc<TicketSystem>`.
+- The `Agent` builder carries identity, prompt parts, provider and model, tools, working directory, event handler, and a `Weak<TicketQueue>` (dangling by default).
+- `TicketQueue::new` captures its own `Weak<Self>` through `Arc::new_cyclic`, so binding can hand every agent the back-reference it needs at run time.
+- `TicketQueue::agent(a)` (or `agent.ticket_queue(&shared)`) sets that `Weak<Self>` on the agent, drains any tickets the agent had queued in its private default queue into the shared one, and pushes a clone of the agent onto the queue's agents list.
+- `TicketQueue::start` and `finish` spawn one tokio task per registered agent. Each task upgrades its `Weak` once at the start and reads the shared store, policies, stats, and stop signal from the resulting `Arc<TicketQueue>`.
 - `tickets.task(value)` creates a new ticket and returns its key as `String`. `tickets.reply(&key, content)` appends a text reply to an existing ticket, and the loop's wait-for-input branch picks it up and drives the next turn on the same replies.
 - Use `task` to start a conversation and `reply` to continue it. That is how multi-turn chat is built on top of one ticket.
 
-## Shared System, Per-Agent Task
+## Shared Queue, Per-Agent Task
 
-**Agents read shared state through one `Arc<TicketSystem>`. Locks are held only around queue and metric operations, never across `provider.respond().await`.**
+**Agents read shared state through one `Arc<TicketQueue>`. Locks are held only around queue and metric operations, never across `provider.respond().await`.**
 
-- The ticket store, policies, stats, stop and cancel signals, and registered-agent list live on `TicketSystem`.
+- The ticket store, policies, stats, stop and cancel signals, and registered-agent list live on `TicketQueue`.
 - The per-agent loop in `agents/loop.rs` claims one ticket, drives it through one or more provider and tool turns, and releases locks before each await.
 - Multiple agents share one queue; a ticket is claimed exactly once.
-- Sub-systems are not nested: a single `TicketSystem` is the unit of orchestration.
+- Nested queues are not supported: a single `TicketQueue` is the unit of orchestration.
 
 ## Assignment Is Labels, and a Name Is a Label
 
@@ -39,8 +39,8 @@ tickets.ticket(Ticket::new("Audit src/db.").label("scan"));     // by scope
 
 - `Agent::handles_labels` answers three ways, in order: a ticket label equal to the agent's name matches; otherwise a labelled agent matches when its labels intersect the ticket's; otherwise an agent with no labels matches only tickets with no labels, which is the default scope.
 - Direct assignment is therefore `Ticket::new(...).label(agent_name)`. The ticket is born `Status::Todo` like any other; nothing is born `InProgress`.
-- `TicketSystem::claim` pushes the claiming agent's name onto the ticket's labels. That is what pins a resumed ticket: the `resumable` check in `loop/agent.rs` requires a label equal to the agent's name, so no other agent picks up work already started.
-- The system never auto-resolves a name against the registered-agent set. A label naming an agent that was never registered simply never matches.
+- `TicketQueue::claim` pushes the claiming agent's name onto the ticket's labels. That is what pins a resumed ticket: the `resumable` check in `loop/agent.rs` requires a label equal to the agent's name, so no other agent picks up work already started.
+- The queue never auto-resolves a name against the registered-agent set. A label naming an agent that was never registered simply never matches.
 
 ## A Tool Call Resolves by Exact Name, Then by Folded Key
 
@@ -57,7 +57,7 @@ tickets.ticket(Ticket::new("Audit src/db.").label("scan"));     // by scope
 
 **Agents finish tickets through one tool, `finish`. An optional `handover` argument additionally creates a child ticket; its presence is the only discriminator, so there is no second tool and no mode field.**
 
-`finish` records the result through `TicketSystem::set_result`, which owns the result-validation-and-logging contract, then transitions the ticket to `Finished`. The loop enforces the rule: a turn that ends without a `finish` call is rejected and retried.
+`finish` records the result through `TicketQueue::set_result`, which owns the result-validation-and-logging contract, then transitions the ticket to `Finished`. The loop enforces the rule: a turn that ends without a `finish` call is rejected and retried.
 
 - Without `handover`, `finish` writes a `result`, attaches it to the current ticket, and transitions to `Finished` through the `write_result` helper. This is terminal work.
 - With `handover`, it does the same and then inserts a child ticket pinned to that agent or label, with the current ticket recorded as its `parent`.
@@ -71,11 +71,11 @@ tickets.ticket(Ticket::new("Audit src/db.").label("scan"));     // by scope
 Schemas and results:
 
 - `Ticket::schema(...)` attaches a `Schema` to the ticket; `finish` validates the result and the loop applies `max_schema_retries` on mismatch.
-- A schema can also be registered as a per-label default through `TicketSystem::schema_for_label`, applied to a schemaless ticket at creation, so a result contract follows its label however the ticket was created: direct, labelled, or as a handover child.
+- A schema can also be registered as a per-label default through `TicketQueue::schema_for_label`, applied to a schemaless ticket at creation, so a result contract follows its label however the ticket was created: direct, labelled, or as a handover child.
 - A handover validates its `result` against the parent ticket's own schema, exactly as a plain finish does. It carries no schema for the child, which inherits one only through its label. A schema mismatch aborts before the child is inserted, so neither the parent's finish nor the child happens and the operation stays atomic.
 - `handover` and `task` are reserved argument names for `finish`. A ticket whose schema is an object has its fields passed as `finish`'s top-level arguments, so such a schema must not declare a `handover` or `task` property: those names are stripped as control keys before the result is recovered.
-- A successful finish appends one NDJSON record `{ticket, result}` to `<dir>/results.jsonl` (configured through `TicketSystem::dir(d)`, default `./.agentwerk`) and attaches the same `result` value to the ticket. The value is surfaced through `Ticket::result()`; `last_result()` returns its serialized form for the most recent `Finished` ticket.
-- The system also appends one JSON line to `<dir>/tickets.jsonl` per lifecycle event (`created`, `started`, `done`, `failed`) and writes the full ticket state to `<dir>/tickets/<key>/ticket.json`. The `created` event carries the optional `parent` key when set, giving the log a complete handover audit trail. The log is observational: errors are swallowed. The result payload stays in `results.jsonl`; `tickets.jsonl` carries only the transition.
+- A successful finish appends one NDJSON record `{ticket, result}` to `<dir>/results.jsonl` (configured through `TicketQueue::dir(d)`, default `./.agentwerk`) and attaches the same `result` value to the ticket. The value is surfaced through `Ticket::result()`; `last_result()` returns its serialized form for the most recent `Finished` ticket.
+- The queue also appends one JSON line to `<dir>/tickets.jsonl` per lifecycle event (`created`, `started`, `done`, `failed`) and writes the full ticket state to `<dir>/tickets/<key>/ticket.json`. The `created` event carries the optional `parent` key when set, giving the log a complete handover audit trail. The log is observational: errors are swallowed. The result payload stays in `results.jsonl`; `tickets.jsonl` carries only the transition.
 
 ## Knowledge Is Opt-In and Shareable Across Agents
 
@@ -84,8 +84,8 @@ Schemas and results:
 Two layers of state exist. The per-ticket replies live on `Ticket::replies`: every message the loop sends to the provider is appended as a `Reply`, and the loop derives the request's `Vec<Message>` from those replies through `Ticket::to_messages` each turn. `Agent::knowledge(&store)` adds a separate cross-ticket layer: a `Knowledge` store rooted at a caller-supplied directory, surfaced to the model through `ManageKnowledgeTool` and rendered into the system prompt.
 
 - The store is constructed through `Knowledge::load(store_dir)` and passed to one or more agents through `Agent::knowledge(&store)`. Two agents bound to the same `Arc<Knowledge>` share the same `index.md` and `pages/` directory; two agents bound to different stores see independent knowledge.
-- The pattern mirrors `Agent::ticket_system(&Arc<TicketSystem>)`. Pointing `Knowledge::load` at the same directory as `TicketSystem::dir` co-locates the `knowledge/` bundle with `results.jsonl` and `tickets.jsonl`.
-- The store is an Open Knowledge Format (OKF) v0.1 bundle held in `<dir>/knowledge/` (`BUNDLE_DIR`), which keeps it out of a co-located `TicketSystem`'s files and keeps the recursive page walk inside the bundle.
+- The pattern mirrors `Agent::ticket_queue(&Arc<TicketQueue>)`. Pointing `Knowledge::load` at the same directory as `TicketQueue::dir` co-locates the `knowledge/` bundle with `results.jsonl` and `tickets.jsonl`.
+- The store is an Open Knowledge Format (OKF) v0.1 bundle held in `<dir>/knowledge/` (`BUNDLE_DIR`), which keeps it out of a co-located `TicketQueue`'s files and keeps the recursive page walk inside the bundle.
 - `<dir>/knowledge/pages/<slug>.md` holds each concept with `type`, `description`, and `timestamp` frontmatter, and pages cross-link with standard markdown links (`[text](/pages/slug.md)`). `<dir>/knowledge/index.md` is a derived progressive-disclosure view with a clickable link per page.
 - Only the compact index is injected into the system prompt; the agent reads full pages on demand through the `read` action. `index.md` is written but never parsed back: on load the in-memory index is rebuilt by walking the page frontmatter (`rebuild_index_from_pages`), so an OKF bundle placed in `<dir>/knowledge/` seeds the store from it.
 - The loop reads `Knowledge::index()` once at the top of `process_ticket` and feeds the result to `Agent::system_prompt(knowledge: Option<&str>)`. The system prompt stays byte-stable across every turn of the ticket so the provider's prefix cache survives mid-ticket knowledge writes; cross-ticket and cross-agent writes become visible at the top of the next ticket.
@@ -101,13 +101,13 @@ Two layers of state exist. The per-ticket replies live on `Ticket::replies`: eve
 - A model-fixable failure (wrong arguments, schema mismatch, missing file) goes back to the model as a `ToolResult::Error` content block. It still fires `ToolCallFailed` but does not stop the run.
 - Handlers MUST be cheap and non-blocking; the loop does not await them.
 
-`TicketSystem::on_event(h)` pushes a handler onto an ordered chain. Every installed handler fires on every event, in installation order, and each is handed the same `&Event` rather than its own copy. When no handler is installed, `default_logger` runs in its place.
+`TicketQueue::on_event(h)` pushes a handler onto an ordered chain. Every installed handler fires on every event, in installation order, and each is handed the same `&Event` rather than its own copy. When no handler is installed, `default_logger` runs in its place.
 
 - That composition is what `cancel_on_event(condition)` is built on: it pushes a handler that calls `cancel()` when the condition matches, so a host's logger and the cancel trigger coexist. Every other hook is one more entry on this chain.
 - `on_result` filters to `TicketFinished` and unwraps the stored result, `on_failure` filters on `EventKind::is_failure`, and `on_ticket` filters to the three lifecycle kinds.
 - Each of those three resolves `event.ticket_key` to a cloned `Ticket` first, which is why none of them fires on every kind: resolving on `TextChunkReceived` would copy a ticket's whole replies once per chunk.
 - The `_on_result` and `_on_failure` reactors are in turn built on `on_result` and `on_failure`, so the resolve happens in one place.
-- `EventKind::RunStarted` and `EventKind::RunFinished { reason }` ride the same chain. They are emitted by the `TicketSystem` itself and arrive with an empty `agent_name`, as does `TicketFailed` from a host-driven `set_failed`.
+- `EventKind::RunStarted` and `EventKind::RunFinished { reason }` ride the same chain. They are emitted by the `TicketQueue` itself and arrive with an empty `agent_name`, as does `TicketFailed` from a host-driven `set_failed`.
 
 ## New Observables Pick a Channel
 
@@ -133,19 +133,19 @@ Two layers of state exist. The per-ticket replies live on `Ticket::replies`: eve
 
 **Two `Arc<AtomicBool>` signals separate "stop the agent tasks" from "external cancel was requested". Both flip on cancel; only the stop signal flips on a policy violation or a clean drain.**
 
-- `TicketSystem::stop_signal` is what the agent tasks and the tools poll. `finish()` flips it on cancel, on policy violation, and on clean drain so the per-agent loop, the in-flight tools, and the join handle all wind down.
-- `TicketSystem::cancel_signal` is flipped only by `cancel()`, `cancel_on(trigger)`, and the three `cancel_on_*` reactors. `is_cancelled()` reads it; a clean drain leaves it untouched so observers can tell the three exit paths apart.
-- The `cancel_label_on_*` reactors leave `cancel_signal` alone: they stop one pool, not the run. `TicketSystem::cancelled_labels` holds those labels, and the loop neither claims nor resumes a ticket carrying one.
+- `TicketQueue::stop_signal` is what the agent tasks and the tools poll. `finish()` flips it on cancel, on policy violation, and on clean drain so the per-agent loop, the in-flight tools, and the join handle all wind down.
+- `TicketQueue::cancel_signal` is flipped only by `cancel()`, `cancel_on(trigger)`, and the three `cancel_on_*` reactors. `is_cancelled()` reads it; a clean drain leaves it untouched so observers can tell the three exit paths apart.
+- The `cancel_label_on_*` reactors leave `cancel_signal` alone: they stop one pool, not the run. `TicketQueue::cancelled_labels` holds those labels, and the loop neither claims nor resumes a ticket carrying one.
 - `cancel()` flips both atomics in sync. `cancel_on*` route through `cancel()` so cancellation triggers compose with the rest of the run's lifecycle.
 - Tools observe the stop signal through `ToolContext::interrupt_signal` and `wait_for_cancel`; pair them with `tokio::select!` so cancel drops the losing branch promptly.
-- Dropping the `TicketSystem` while agents still reference it through `Weak` is the public way to abort: the upgrade fails and each task panics out cleanly.
-- `finish()` announces its exit reason as `FinishReason::Drained`, `FinishReason::PolicyViolated(kind)`, or `FinishReason::Cancelled`, in that precedence. The reason is kept for `TicketSystem::finish_reason()` and emitted as `EventKind::RunFinished { reason }`.
+- Dropping the `TicketQueue` while agents still reference it through `Weak` is the public way to abort: the upgrade fails and each task panics out cleanly.
+- `finish()` announces its exit reason as `FinishReason::Drained`, `FinishReason::PolicyViolated(kind)`, or `FinishReason::Cancelled`, in that precedence. The reason is kept for `TicketQueue::finish_reason()` and emitted as `EventKind::RunFinished { reason }`.
 
 ## Stats Are Event-Derived, One Writer
 
 **`Stats::record_event` is the single writer for event-derived statistics: every `EventKind` is counted automatically by its name; only the ticket lifecycle writes directly.**
 
-- `TicketSystem::emit` forwards every event to `Stats::record_event(kind, key, labels)` before firing observers. The event's `EventKind::name()` keys a per-kind count map, so a new variant is counted the moment it names itself in that exhaustive match, with no statistics code to add.
+- `TicketQueue::emit` forwards every event to `Stats::record_event(kind, key, labels)` before firing observers. The event's `EventKind::name()` keys a per-kind count map, so a new variant is counted the moment it names itself in that exhaustive match, with no statistics code to add.
 - The named accessors are lookups into that map: `turns()` reads `turn_started`, `requests()` reads `request_finished`, `tool_calls()` reads `tool_call_started`, `errors()` reads `request_failed`. `event_counts()` exposes the whole map.
 - Payload-bearing measures keep explicit arms in `record_event`: token sums and usage history from `RequestFinished`, per-tool tallies from `ToolCallStarted` and `ToolCallFailed`, per-path tallies from `FileOpenFinished` and `FileOpenFailed`, knowledge tallies from `KnowledgeUsed` and `KnowledgeMissed`.
 - The ticket lifecycle (`record_created`, `record_started`, `record_finished`, `record_failed`) is written directly by the store: transitions carry durations that events do not, and host-side mutations have no agent loop attached.
@@ -158,17 +158,17 @@ Two layers of state exist. The per-ticket replies live on `Ticket::replies`: eve
 **Every read and write in the crate goes through `Persist` (state files) or `Append` (jsonl logs) in `persistence`. No domain module hand-rolls file IO; no module knows its file's name except the implementer.**
 
 - `Persist` defines `save(&self, dir) -> io::Result<()>` and `load(dir, &Self::Key) -> io::Result<Self>`. `Stats`, `Ticket`, `Replies`, `Page`, and `Trajectory` implement it; each owns its own path layout (`stats.json`, `tickets/<key>/ticket.json`, `tickets/<key>/replies.jsonl`, `pages/<slug>.md`, `trajectories/<key>.json`).
-- A value type the caller stores itself reaches its file through an inherent method that delegates to its own impl, never by publishing the trait: `Trajectory::save(dir)` and `Knowledge::pages().save(page)` are the two. Service bootstrap (`TicketSystem::load`, `Knowledge::load`) uses the same `load` verb for its directory-to-`Arc<Self>` entry by convention.
+- A value type the caller stores itself reaches its file through an inherent method that delegates to its own impl, never by publishing the trait: `Trajectory::save(dir)` and `Knowledge::pages().save(page)` are the two. Service bootstrap (`TicketQueue::load`, `Knowledge::load`) uses the same `load` verb for its directory-to-`Arc<Self>` entry by convention.
 - `Append` defines `append(dir, &Self::Record) -> io::Result<()>`. `Results` writes `results.jsonl`; `TicketEvents` writes `tickets.jsonl`. The wrong type cannot reach the wrong file: each implementer's `append` body hardcodes the filename.
 - The per-ticket replies are the one shape that does not fit either trait. `Replies` (in `agents::tickets`) is a free type with `append(dir, key, &Reply)` and `load(dir, key) -> Vec<Reply>`, writing one JSON line per `Reply` to `tickets/<key>/replies.jsonl`.
 - `Replies` also implements `Persist`, whose `save` overwrites the file wholesale so a dropped or redacted reply leaves nothing behind. The `append` half is per-key, so the single-fixed-filename `Append` trait does not generalize cleanly; promote it to a trait only when a second per-key log appears.
-- `TICKET-<N>` keys are handed out in order. `load()` seeds the next key from the tickets it just read off disk; a system built with `new()` scans for the highest existing key at the first insert instead, since `new()` never reads the directory itself.
+- `TICKET-<N>` keys are handed out in order. `load()` seeds the next key from the tickets it just read off disk; a queue built with `new()` scans for the highest existing key at the first insert instead, since `new()` never reads the directory itself.
 - One agent processes one ticket at a time (claim is atomic), so `add_reply` and the rewrite for one key are sequential within a single loop task. No per-key lock is needed for either path.
 - Crate-internal helpers `write_atomic` (tmp plus rename) and `append_line` (`O_APPEND` plus newline) are the only places that touch the filesystem. They are `pub(crate)` so trait impls colocated with their types can call them; by convention nothing outside a `Persist` or `Append` impl reaches for them.
-- Two documented exceptions: `TicketSystem::write_tool_output` writes single-shot flat files that fit neither trait, and `TicketSystem::summarize` (called from `agents::compaction::run`) writes two files rather than one, calling `Replies::save` and then `save_ticket`, because the pair is a two-file operation that no single in-memory value owns.
+- Two documented exceptions: `TicketQueue::write_tool_output` writes single-shot flat files that fit neither trait, and `TicketQueue::summarize` (called from `agents::compaction::run`) writes two files rather than one, calling `Replies::save` and then `save_ticket`, because the pair is a two-file operation that no single in-memory value owns.
 - Vocabulary is fixed: `save`, `load`, `append`. Bootstrap verbs other than `load` (such as `open`) are not used. Domain words (`checkpoint`, `snapshot`, `counter`, `persist`) do not appear in identifiers or test names.
 
-## Policies Are Per-System, Checked at Turn Boundaries
+## Policies Are Per-Queue, Checked at Turn Boundaries
 
 **A run stops cleanly when any limit on `Policies` is breached. The check fires `EventKind::PolicyViolated` and exits the per-agent task.**
 

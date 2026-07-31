@@ -1,4 +1,4 @@
-//! Interactive terminal chat. One `TicketSystem` + `Agent` + `Knowledge`
+//! Interactive terminal chat. One `TicketQueue` + `Agent` + `Knowledge`
 //! lives for the whole session, and one chat ticket spans every turn:
 //! the first input creates the ticket via `tickets.task(...)`, every
 //! subsequent input lands as a user reply via `tickets.reply(&key, ...)`.
@@ -35,7 +35,7 @@ use agentwerk::tools::{
     GlobTool, GrepTool, ListDirectoryTool, ManageTicketsTool, ReadFileTool, ReadTicketsTool,
     WriteFileTool,
 };
-use agentwerk::{Agent, Knowledge, Ticket, TicketSystem};
+use agentwerk::{Agent, Knowledge, Ticket, TicketQueue};
 
 const ROLE: &str = include_str!("prompts/repl.role.md");
 const BIBLE_PASSAGE: &str = include_str!("prompts/bible.txt");
@@ -97,7 +97,7 @@ async fn main() {
 
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let store_dir = cwd.join(".agentwerk");
-    let tickets = TicketSystem::load(&store_dir).expect("open ticket store");
+    let tickets = TicketQueue::load(&store_dir).expect("open ticket store");
     tickets.max_turns(40);
 
     let knowledge = Knowledge::load(&store_dir).expect("open knowledge store");
@@ -518,7 +518,7 @@ fn redact(messages: &mut [Reply], word: &str) {
 /// or paused for input. A mid-turn assistant reply carrying a tool call
 /// doesn't count: tool execution is still pending and the prompt would
 /// race the user against the loop.
-async fn wait_for_assistant_pause(tickets: &TicketSystem, key: &str) {
+async fn wait_for_assistant_pause(tickets: &TicketQueue, key: &str) {
     tickets
         .wait_for_ticket(|t| t.key == key && (t.is_resolved() || is_paused_for_input(t)))
         .await;
@@ -581,7 +581,7 @@ impl Style {
 /// Transition every non-terminal ticket carrying `label` to Failed.
 /// Catches both the active InProgress chat from the prior session and
 /// any orphan Todo left by an interrupted `/new <message>`.
-fn fail_stale_chats(tickets: &TicketSystem, label: &str) -> usize {
+fn fail_stale_chats(tickets: &TicketQueue, label: &str) -> usize {
     let stale: Vec<String> = tickets
         .find_tickets(|t| t.is_pending() && t.has_label(label))
         .iter()
@@ -600,7 +600,7 @@ mod tests {
 
     #[test]
     fn fail_stale_chats_marks_every_matching_pending_ticket_as_failed() {
-        let tickets = TicketSystem::new();
+        let tickets = TicketQueue::new();
         let mut keys = Vec::new();
         for body in ["one", "two", "three"] {
             let k = tickets.ticket(Ticket::new(body).label("orchestrator"));
@@ -619,7 +619,7 @@ mod tests {
 
     #[test]
     fn fail_stale_chats_returns_zero_when_no_matching_tickets_exist() {
-        let tickets = TicketSystem::new();
+        let tickets = TicketQueue::new();
         let n = fail_stale_chats(&tickets, "orchestrator");
         assert_eq!(n, 0);
     }

@@ -9,7 +9,7 @@ use super::common;
 
 use agentwerk::schemas::Schema;
 use agentwerk::tools::{GlobTool, GrepTool, ListDirectoryTool, ReadFileTool};
-use agentwerk::{Agent, Ticket, TicketSystem};
+use agentwerk::{Agent, Ticket, TicketQueue};
 
 #[tokio::test]
 async fn traces_three_hop_call_path() -> std::result::Result<(), Box<dyn std::error::Error>> {
@@ -77,7 +77,7 @@ async fn traces_three_hop_call_path() -> std::result::Result<(), Box<dyn std::er
         "required": ["call_path"]
     }))?;
 
-    let tickets = TicketSystem::new();
+    let tickets = TicketQueue::new();
 
     tickets.max_turns(15);
     let agent = Agent::new()

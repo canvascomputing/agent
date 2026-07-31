@@ -15,7 +15,7 @@ use crate::event::{default_logger, Event, EventKind, FinishReason};
 use crate::persistence::Persist;
 use crate::schemas::Schema;
 
-use super::super::agent::{Agent, TicketSystemRef};
+use super::super::agent::{Agent, TicketQueueRef};
 use super::super::policy::Policies;
 use super::super::r#loop::run_main_loop;
 use super::super::stats::Stats;
@@ -35,15 +35,15 @@ pub(super) struct ReplyEditing {
 }
 
 /// The core data structure of agentwerk, coordinating complex work across
-/// agents. Many agents share one `TicketSystem` and pick up tickets
+/// agents. Many agents share one `TicketQueue` and pick up tickets
 /// concurrently; labels and names assign work to the right agent.
 ///
 /// ```no_run
-/// use agentwerk::{Agent, Ticket, TicketSystem};
+/// use agentwerk::{Agent, Ticket, TicketQueue};
 /// use agentwerk::tools::FetchUrlTool;
 ///
 /// # async fn run() {
-/// let tickets = TicketSystem::new();
+/// let tickets = TicketQueue::new();
 /// for i in 0..4 {
 ///     tickets.agent(
 ///         Agent::new()
@@ -61,16 +61,16 @@ pub(super) struct ReplyEditing {
 ///
 /// # Sessions
 ///
-/// A `TicketSystem` writes every ticket, reply, statistic, and lifecycle
+/// A `TicketQueue` writes every ticket, reply, statistic, and lifecycle
 /// event to its working directory (default `./.agentwerk`). That directory is
-/// the session: stop the process, and `TicketSystem::load(dir)` reopens it
+/// the session: stop the process, and `TicketQueue::load(dir)` reopens it
 /// from disk and continues from where it stopped.
 ///
 /// ```no_run
-/// use agentwerk::TicketSystem;
+/// use agentwerk::TicketQueue;
 ///
 /// # fn run() -> Result<(), Box<dyn std::error::Error>> {
-/// let tickets = TicketSystem::load(".agentwerk")?;
+/// let tickets = TicketQueue::load(".agentwerk")?;
 /// // Re-register the agents, then call .start() or .finish().await.
 /// # let _ = tickets;
 /// # Ok(())
@@ -93,8 +93,8 @@ pub(super) struct ReplyEditing {
 ///     ├── pages/<slug>.md                   knowledge pages
 ///     └── index.md                          knowledge index
 /// ```
-pub struct TicketSystem {
-    pub(super) weak_self: Weak<TicketSystem>,
+pub struct TicketQueue {
+    pub(super) weak_self: Weak<TicketQueue>,
     pub(crate) tickets: Mutex<HashMap<String, Ticket>>,
     pub(super) agents: Mutex<Vec<Agent>>,
     pub(super) policies: Mutex<Policies>,
@@ -138,8 +138,8 @@ pub struct TicketSystem {
     pub(super) next_ticket_id: Mutex<Option<u64>>,
 }
 
-impl TicketSystem {
-    /// Create an empty ticket system, shared through an `Arc`.
+impl TicketQueue {
+    /// Create an empty ticket queue, shared through an `Arc`.
     pub fn new() -> Arc<Self> {
         Arc::new_cyclic(|weak| Self {
             weak_self: weak.clone(),
@@ -266,10 +266,10 @@ impl TicketSystem {
             if !matches!(event.kind, EventKind::TicketFinished) {
                 return;
             }
-            let Some(system) = supervisor.upgrade() else {
+            let Some(queue) = supervisor.upgrade() else {
                 return;
             };
-            let Some(finished) = system.get_ticket(&event.ticket_key) else {
+            let Some(finished) = queue.get_ticket(&event.ticket_key) else {
                 return;
             };
             let Some(result) = finished.result.clone() else {
@@ -295,10 +295,10 @@ impl TicketSystem {
             if !event.kind.is_failure() {
                 return;
             }
-            let Some(system) = supervisor.upgrade() else {
+            let Some(queue) = supervisor.upgrade() else {
                 return;
             };
-            let Some(ticket) = system.get_ticket(&event.ticket_key) else {
+            let Some(ticket) = queue.get_ticket(&event.ticket_key) else {
                 return;
             };
             handler(event, &ticket);
@@ -330,11 +330,11 @@ impl TicketSystem {
     /// would edit the same replies twice.
     ///
     /// ```no_run
-    /// use agentwerk::TicketSystem;
+    /// use agentwerk::TicketQueue;
     /// use agentwerk::event::EventKind;
     /// use agentwerk::agents::tickets::{Reply, ReplyContent};
     ///
-    /// let tickets = TicketSystem::new();
+    /// let tickets = TicketQueue::new();
     /// tickets.edit_replies_on_event(|events, replies| {
     ///     let failed = events
     ///         .iter()
@@ -379,10 +379,10 @@ impl TicketSystem {
             {
                 return;
             }
-            let Some(system) = supervisor.upgrade() else {
+            let Some(queue) = supervisor.upgrade() else {
                 return;
             };
-            system
+            queue
                 .reply_editing
                 .lock()
                 .unwrap()
@@ -559,7 +559,7 @@ impl TicketSystem {
         let supervisor = self
             .weak_self
             .upgrade()
-            .expect("TicketSystem dropped during cancel_on");
+            .expect("TicketQueue dropped during cancel_on");
         tokio::spawn(async move {
             let _ = trigger.await;
             supervisor.cancel();
@@ -620,8 +620,8 @@ impl TicketSystem {
             let Some(ticket) = make(event) else {
                 return;
             };
-            if let Some(system) = supervisor.upgrade() {
-                system.ticket(ticket);
+            if let Some(queue) = supervisor.upgrade() {
+                queue.ticket(ticket);
             }
         })
     }
@@ -653,8 +653,8 @@ impl TicketSystem {
     /// how [`Self::cancel_label_on_event`] behaves too.
     ///
     /// ```no_run
-    /// # use agentwerk::TicketSystem;
-    /// let tickets = TicketSystem::new();
+    /// # use agentwerk::TicketQueue;
+    /// let tickets = TicketQueue::new();
     /// tickets.cancel_label_on_result("scan", |_, result| result["verdict"] == "malicious");
     /// ```
     pub fn cancel_label_on_result<F>(&self, label: impl Into<String>, predicate: F) -> &Self
@@ -688,8 +688,8 @@ impl TicketSystem {
             let Some(ticket) = make(finished, result) else {
                 return;
             };
-            if let Some(system) = supervisor.upgrade() {
-                system.ticket(ticket);
+            if let Some(queue) = supervisor.upgrade() {
+                queue.ticket(ticket);
             }
         })
     }
@@ -741,9 +741,9 @@ impl TicketSystem {
     /// yourself, or a ticket that fails every time re-queues itself forever.
     ///
     /// ```no_run
-    /// # use agentwerk::{Ticket, TicketSystem};
+    /// # use agentwerk::{Ticket, TicketQueue};
     /// # use agentwerk::event::EventKind;
-    /// let tickets = TicketSystem::new();
+    /// let tickets = TicketQueue::new();
     /// tickets.create_ticket_on_failure(|event, failed| {
     ///     if !matches!(event.kind, EventKind::TicketFailed) || failed.parent.is_some() {
     ///         return None;
@@ -760,8 +760,8 @@ impl TicketSystem {
             let Some(ticket) = make(event, failed) else {
                 return;
             };
-            if let Some(system) = supervisor.upgrade() {
-                system.ticket(ticket);
+            if let Some(queue) = supervisor.upgrade() {
+                queue.ticket(ticket);
             }
         })
     }
@@ -785,10 +785,10 @@ impl TicketSystem {
             ) {
                 return;
             }
-            let Some(system) = supervisor.upgrade() else {
+            let Some(queue) = supervisor.upgrade() else {
                 return;
             };
-            let Some(ticket) = system.get_ticket(&event.ticket_key) else {
+            let Some(ticket) = queue.get_ticket(&event.ticket_key) else {
                 return;
             };
             handler(event, &ticket);
@@ -865,7 +865,7 @@ impl TicketSystem {
 
     /// Get every ticket matching a condition, in creation order.
     ///
-    /// Your condition MUST NOT call another `TicketSystem` method that reads
+    /// Your condition MUST NOT call another `TicketQueue` method that reads
     /// the ticket store, or the call deadlocks.
     pub fn find_tickets<F>(&self, predicate: F) -> Vec<Ticket>
     where
@@ -879,7 +879,7 @@ impl TicketSystem {
 
     /// Get the earliest ticket matching a condition.
     ///
-    /// Your condition MUST NOT call another `TicketSystem` method that reads
+    /// Your condition MUST NOT call another `TicketQueue` method that reads
     /// the ticket store, or the call deadlocks.
     pub fn find_ticket<F>(&self, predicate: F) -> Option<Ticket>
     where
@@ -908,11 +908,11 @@ impl TicketSystem {
     /// condition passed to [`Self::find_ticket`] or [`Self::find_tickets`].
     ///
     /// ```no_run
-    /// # use agentwerk::{Ticket, TicketSystem};
-    /// let tickets = TicketSystem::new();
-    /// let system = std::sync::Arc::downgrade(&tickets);
+    /// # use agentwerk::{Ticket, TicketQueue};
+    /// let tickets = TicketQueue::new();
+    /// let queue = std::sync::Arc::downgrade(&tickets);
     /// tickets.create_ticket_on_result(move |done, _| {
-    ///     if !done.has_label("research") || system.upgrade()?.label_cancelled("research") {
+    ///     if !done.has_label("research") || queue.upgrade()?.label_cancelled("research") {
     ///         return None;
     ///     }
     ///     Some(Ticket::new("search again").label("research"))
@@ -940,11 +940,11 @@ impl TicketSystem {
             .count()
     }
 
-    /// Attach `agent` to this system, moving any tickets it queued in its own
-    /// private system across first. The prior system is freed once nothing else
+    /// Attach `agent` to this queue, moving any tickets it queued in its own
+    /// private queue across first. The prior queue is freed once nothing else
     /// holds it.
     pub(crate) fn bind_agent(&self, agent: &mut Agent) {
-        if let Some(prior) = agent.ticket_system.upgrade() {
+        if let Some(prior) = agent.ticket_queue.upgrade() {
             if !Arc::ptr_eq(
                 &prior,
                 &self
@@ -962,7 +962,7 @@ impl TicketSystem {
                 }
             }
         }
-        agent.ticket_system = TicketSystemRef::Shared(self.weak_self.clone());
+        agent.ticket_queue = TicketQueueRef::Shared(self.weak_self.clone());
         self.agents.lock().unwrap().push(agent.clone());
     }
 
@@ -976,10 +976,10 @@ impl TicketSystem {
         self.agents.lock().unwrap().clone()
     }
 
-    /// Add an agent to this ticket system.
+    /// Add an agent to this ticket queue.
     ///
-    /// Any tickets the agent queued on its own move into this system. To keep a
-    /// handle on the agent itself, use [`Agent::ticket_system`] instead. An
+    /// Any tickets the agent queued on its own move into this queue. To keep a
+    /// handle on the agent itself, use [`Agent::ticket_queue`] instead. An
     /// agent added while execution is under way picks up its first ticket
     /// within about 100 ms.
     pub fn agent(&self, mut agent: Agent) -> &Self {
@@ -993,7 +993,7 @@ impl TicketSystem {
     /// with [`Self::finish`] to wait for the queue to empty, or with
     /// [`Self::cancel`] to stop early.
     pub fn start(&self) -> &Self {
-        // Reset both signals so a system can be re-started after a
+        // Reset both signals so a queue can be re-started after a
         // previous finish left flags set, and clear the prior reason so
         // `finish_reason()` returns None during the live run.
         self.stop_signal
@@ -1010,7 +1010,7 @@ impl TicketSystem {
         let supervisor = self
             .weak_self
             .upgrade()
-            .expect("TicketSystem dropped during start");
+            .expect("TicketQueue dropped during start");
         self.emit("", "", EventKind::RunStarted);
         let join = tokio::spawn(async move {
             run_main_loop(&supervisor).await;
@@ -1129,7 +1129,7 @@ impl TicketSystem {
     ///
     /// Call it after [`Self::start`]. It gives back `None` when execution stops
     /// before any ticket matches. Your condition MUST NOT call another
-    /// `TicketSystem` method that reads the ticket store, or the call deadlocks.
+    /// `TicketQueue` method that reads the ticket store, or the call deadlocks.
     pub async fn wait_for_ticket<F>(&self, predicate: F) -> Option<Ticket>
     where
         F: Fn(&Ticket) -> bool,
@@ -1153,13 +1153,13 @@ mod tests {
     use crate::event::ToolFailureKind;
 
     #[test]
-    fn ticket_system_handle_is_shared_between_caller_and_added_agent() {
-        let (sys, _tmp) = test_system();
-        let alice = sys.agent(minimal_agent("alice"));
+    fn ticket_queue_handle_is_shared_between_caller_and_added_agent() {
+        let (queue, _tmp) = test_queue();
+        let alice = queue.agent(minimal_agent("alice"));
         // Alice's task lands in the same queue.
         alice.task("from alice");
-        sys.task("from system");
-        let all_keys: Vec<String> = sys
+        queue.task("from queue");
+        let all_keys: Vec<String> = queue
             .find_tickets(|t| t.status == Status::Todo)
             .iter()
             .map(|t| t.key.clone())
@@ -1169,20 +1169,20 @@ mod tests {
 
     #[test]
     fn repeated_task_calls_route_to_shared_queue_after_rebind() {
-        let (sys, _tmp) = test_system();
-        let alice = minimal_agent("alice").ticket_system(&sys);
+        let (queue, _tmp) = test_queue();
+        let alice = minimal_agent("alice").ticket_queue(&queue);
         alice.task("first");
         alice.task("second");
-        assert_eq!(sys.find_tickets(|t| t.status == Status::Todo).len(), 2);
+        assert_eq!(queue.find_tickets(|t| t.status == Status::Todo).len(), 2);
     }
 
     #[test]
     fn tickets_returns_all_in_creation_order() {
-        let (sys, _tmp) = test_system();
-        sys.task("a");
-        sys.task("b");
-        sys.task("c");
-        let all = sys.tickets();
+        let (queue, _tmp) = test_queue();
+        queue.task("a");
+        queue.task("b");
+        queue.task("c");
+        let all = queue.tickets();
         assert_eq!(all.len(), 3);
         assert_eq!(all[0].key, "TICKET-1");
         assert_eq!(all[1].key, "TICKET-2");
@@ -1191,39 +1191,39 @@ mod tests {
 
     #[test]
     fn results_return_done_payloads_in_creation_order() {
-        let (sys, _tmp) = test_system();
-        sys.task("a");
-        sys.task("b");
-        sys.task("c");
-        attach_done_result(&sys, "TICKET-1", "first");
-        attach_done_result(&sys, "TICKET-3", "third");
+        let (queue, _tmp) = test_queue();
+        queue.task("a");
+        queue.task("b");
+        queue.task("c");
+        attach_done_result(&queue, "TICKET-1", "first");
+        attach_done_result(&queue, "TICKET-3", "third");
         assert_eq!(
-            sys.results(),
+            queue.results(),
             vec![serde_json::json!("first"), serde_json::json!("third")]
         );
     }
 
     #[test]
     fn last_result_returns_last_done_payload() {
-        let (sys, _tmp) = test_system();
-        sys.task("a");
-        sys.task("b");
-        attach_done_result(&sys, "TICKET-2", "second");
-        attach_done_result(&sys, "TICKET-1", "first");
-        assert_eq!(sys.last_result(), Some(serde_json::json!("second")));
+        let (queue, _tmp) = test_queue();
+        queue.task("a");
+        queue.task("b");
+        attach_done_result(&queue, "TICKET-2", "second");
+        attach_done_result(&queue, "TICKET-1", "first");
+        assert_eq!(queue.last_result(), Some(serde_json::json!("second")));
     }
 
     #[test]
     fn results_order_by_creation_regardless_of_done_order() {
-        let (sys, _tmp) = test_system();
-        sys.task("a");
-        sys.task("b");
-        sys.task("c");
-        attach_done_result(&sys, "TICKET-3", "third");
-        attach_done_result(&sys, "TICKET-1", "first");
-        attach_done_result(&sys, "TICKET-2", "second");
+        let (queue, _tmp) = test_queue();
+        queue.task("a");
+        queue.task("b");
+        queue.task("c");
+        attach_done_result(&queue, "TICKET-3", "third");
+        attach_done_result(&queue, "TICKET-1", "first");
+        attach_done_result(&queue, "TICKET-2", "second");
         assert_eq!(
-            sys.results(),
+            queue.results(),
             vec![
                 serde_json::json!("first"),
                 serde_json::json!("second"),
@@ -1234,67 +1234,68 @@ mod tests {
 
     #[test]
     fn results_are_empty_when_nothing_finished() {
-        let (sys, _tmp) = test_system();
-        sys.task("pending");
-        assert!(sys.last_result().is_none());
-        assert!(sys.results().is_empty());
+        let (queue, _tmp) = test_queue();
+        queue.task("pending");
+        assert!(queue.last_result().is_none());
+        assert!(queue.results().is_empty());
     }
 
     #[test]
     fn pending_count_counts_todo() {
-        let (sys, _tmp) = test_system();
-        sys.task("a");
-        sys.task("b");
-        assert_eq!(sys.pending_count(), 2);
+        let (queue, _tmp) = test_queue();
+        queue.task("a");
+        queue.task("b");
+        assert_eq!(queue.pending_count(), 2);
     }
 
     #[test]
     fn pending_count_counts_inprogress_waiting_for_response() {
-        let (sys, _tmp) = test_system();
-        sys.task("x");
-        sys.claim(|t| t.status == Status::Todo, "agent").unwrap();
-        assert_eq!(sys.pending_count(), 1);
+        let (queue, _tmp) = test_queue();
+        queue.task("x");
+        queue.claim(|t| t.status == Status::Todo, "agent").unwrap();
+        assert_eq!(queue.pending_count(), 1);
     }
 
     #[test]
     fn pending_count_counts_inprogress_with_text_only_last_reply() {
-        let (sys, _tmp) = test_system();
-        sys.task("x");
-        let key = sys.claim(|t| t.status == Status::Todo, "agent").unwrap();
-        sys.add_reply(
+        let (queue, _tmp) = test_queue();
+        queue.task("x");
+        let key = queue.claim(|t| t.status == Status::Todo, "agent").unwrap();
+        queue.add_reply(
             &key,
             Reply::assistant(&[crate::providers::ContentBlock::Text {
                 text: "hello".into(),
             }]),
         );
-        assert_eq!(sys.pending_count(), 1);
+        assert_eq!(queue.pending_count(), 1);
     }
 
     #[test]
     fn pending_count_counts_inprogress_with_empty_content_last_reply() {
-        let (sys, _tmp) = test_system();
-        sys.task("x");
-        let key = sys.claim(|t| t.status == Status::Todo, "agent").unwrap();
-        sys.add_reply(&key, Reply::assistant(&[]));
-        assert_eq!(sys.pending_count(), 1);
+        let (queue, _tmp) = test_queue();
+        queue.task("x");
+        let key = queue.claim(|t| t.status == Status::Todo, "agent").unwrap();
+        queue.add_reply(&key, Reply::assistant(&[]));
+        assert_eq!(queue.pending_count(), 1);
     }
 
     #[test]
     fn pending_count_excludes_finished_and_failed() {
-        let (sys, _tmp) = test_system();
-        sys.task("a");
-        sys.task("b");
-        let key_a = sys.claim(|t| t.key == "TICKET-1", "agent").unwrap();
-        let key_b = sys.claim(|t| t.key == "TICKET-2", "agent").unwrap();
-        sys.set_finished_by(&key_a, "agent").unwrap();
-        sys.set_failed(&key_b).unwrap();
-        assert_eq!(sys.pending_count(), 0);
+        let (queue, _tmp) = test_queue();
+        queue.task("a");
+        queue.task("b");
+        let key_a = queue.claim(|t| t.key == "TICKET-1", "agent").unwrap();
+        let key_b = queue.claim(|t| t.key == "TICKET-2", "agent").unwrap();
+        queue.set_finished_by(&key_a, "agent").unwrap();
+        queue.set_failed(&key_b).unwrap();
+        assert_eq!(queue.pending_count(), 0);
     }
 
     #[test]
     fn policy_readers_return_the_limits_that_were_set() {
-        let (sys, _tmp) = test_system();
-        sys.max_turns(40)
+        let (queue, _tmp) = test_queue();
+        queue
+            .max_turns(40)
             .max_input_tokens(200_000)
             .max_output_tokens(50_000)
             .max_request_tokens(8_000)
@@ -1303,58 +1304,58 @@ mod tests {
             .request_retry_delay(Duration::from_millis(250))
             .max_time(Duration::from_secs(300));
 
-        assert_eq!(sys.get_max_turns(), Some(40));
-        assert_eq!(sys.get_max_input_tokens(), Some(200_000));
-        assert_eq!(sys.get_max_output_tokens(), Some(50_000));
-        assert_eq!(sys.get_max_request_tokens(), Some(8_000));
-        assert_eq!(sys.get_max_schema_retries(), Some(3));
-        assert_eq!(sys.get_max_request_retries(), 5);
-        assert_eq!(sys.get_request_retry_delay(), Duration::from_millis(250));
-        assert_eq!(sys.get_max_time(), Some(Duration::from_secs(300)));
+        assert_eq!(queue.get_max_turns(), Some(40));
+        assert_eq!(queue.get_max_input_tokens(), Some(200_000));
+        assert_eq!(queue.get_max_output_tokens(), Some(50_000));
+        assert_eq!(queue.get_max_request_tokens(), Some(8_000));
+        assert_eq!(queue.get_max_schema_retries(), Some(3));
+        assert_eq!(queue.get_max_request_retries(), 5);
+        assert_eq!(queue.get_request_retry_delay(), Duration::from_millis(250));
+        assert_eq!(queue.get_max_time(), Some(Duration::from_secs(300)));
     }
 
     #[test]
     fn policy_readers_return_the_defaults_before_any_limit_is_set() {
-        let (sys, _tmp) = test_system();
-        assert_eq!(sys.get_max_turns(), None);
-        assert_eq!(sys.get_max_input_tokens(), None);
-        assert_eq!(sys.get_max_output_tokens(), None);
-        assert_eq!(sys.get_max_request_tokens(), None);
-        assert_eq!(sys.get_max_time(), None);
-        assert_eq!(sys.get_max_schema_retries(), Some(10));
-        assert_eq!(sys.get_max_request_retries(), 10);
-        assert_eq!(sys.get_request_retry_delay(), Duration::from_millis(500));
+        let (queue, _tmp) = test_queue();
+        assert_eq!(queue.get_max_turns(), None);
+        assert_eq!(queue.get_max_input_tokens(), None);
+        assert_eq!(queue.get_max_output_tokens(), None);
+        assert_eq!(queue.get_max_request_tokens(), None);
+        assert_eq!(queue.get_max_time(), None);
+        assert_eq!(queue.get_max_schema_retries(), Some(10));
+        assert_eq!(queue.get_max_request_retries(), 10);
+        assert_eq!(queue.get_request_retry_delay(), Duration::from_millis(500));
     }
 
     #[test]
     fn get_dir_reads_back_the_configured_directory() {
-        let (sys, tmp) = test_system();
-        assert_eq!(sys.get_dir(), tmp.path());
+        let (queue, tmp) = test_queue();
+        assert_eq!(queue.get_dir(), tmp.path());
     }
 
     #[test]
     fn cancel_label_flags_only_that_label() {
-        let (sys, _tmp) = test_system();
-        sys.cancel_label("research");
+        let (queue, _tmp) = test_queue();
+        queue.cancel_label("research");
 
-        assert!(sys.labels_cancelled(&["research".into()]));
+        assert!(queue.labels_cancelled(&["research".into()]));
         // A ticket carries its agent name too once claimed; the pool label still hits.
-        assert!(sys.labels_cancelled(&["research".into(), "Threat Researcher 1".into()]));
+        assert!(queue.labels_cancelled(&["research".into(), "Threat Researcher 1".into()]));
         assert!(
-            !sys.labels_cancelled(&["analysis".into()]),
+            !queue.labels_cancelled(&["analysis".into()]),
             "other pools are untouched",
         );
-        assert!(!sys.labels_cancelled(&[]));
+        assert!(!queue.labels_cancelled(&[]));
     }
 
     #[test]
     fn label_cancelled_reads_back_the_pool_cancel_label_called_off() {
-        let (sys, _tmp) = test_system();
-        assert!(!sys.label_cancelled("research"));
-        sys.cancel_label("research");
-        assert!(sys.label_cancelled("research"));
+        let (queue, _tmp) = test_queue();
+        assert!(!queue.label_cancelled("research"));
+        queue.cancel_label("research");
+        assert!(queue.label_cancelled("research"));
         assert!(
-            !sys.label_cancelled("analysis"),
+            !queue.label_cancelled("analysis"),
             "other pools stay claimable",
         );
     }
@@ -1362,13 +1363,13 @@ mod tests {
     #[test]
     fn on_event_appends_handlers_in_installation_order() {
         use std::sync::Mutex;
-        let (sys, _tmp) = test_system();
+        let (queue, _tmp) = test_queue();
         let log: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
         let l1 = Arc::clone(&log);
         let l2 = Arc::clone(&log);
-        sys.on_event(move |_| l1.lock().unwrap().push(1));
-        sys.on_event(move |_| l2.lock().unwrap().push(2));
-        sys.emit("KEY", "agent", EventKind::TurnStarted);
+        queue.on_event(move |_| l1.lock().unwrap().push(1));
+        queue.on_event(move |_| l2.lock().unwrap().push(2));
+        queue.emit("KEY", "agent", EventKind::TurnStarted);
         assert_eq!(*log.lock().unwrap(), vec![1, 2]);
     }
 
@@ -1376,44 +1377,46 @@ mod tests {
     fn on_event_falls_back_to_default_logger_when_empty() {
         // No assertion target beyond "does not panic": with no installed
         // handlers, emit() must run default_logger without crashing.
-        let (sys, _tmp) = test_system();
-        sys.emit("KEY", "agent", EventKind::TurnStarted);
+        let (queue, _tmp) = test_queue();
+        queue.emit("KEY", "agent", EventKind::TurnStarted);
     }
 
     #[test]
     fn results_for_label_returns_only_matching_label() {
-        let (sys, _tmp) = test_system();
-        sys.ticket(Ticket::new("a").label("analysis"));
-        sys.ticket(Ticket::new("b").label("other"));
-        let key_a = sys
+        let (queue, _tmp) = test_queue();
+        queue.ticket(Ticket::new("a").label("analysis"));
+        queue.ticket(Ticket::new("b").label("other"));
+        let key_a = queue
             .claim(|t| t.task == serde_json::json!("a"), "agent")
             .unwrap();
-        let key_b = sys
+        let key_b = queue
             .claim(|t| t.task == serde_json::json!("b"), "agent")
             .unwrap();
-        sys.set_result(&key_a, serde_json::json!({"score": 7}))
+        queue
+            .set_result(&key_a, serde_json::json!({"score": 7}))
             .unwrap();
-        sys.set_finished_by(&key_a, "agent").unwrap();
-        sys.set_result(&key_b, serde_json::json!({"score": 99}))
+        queue.set_finished_by(&key_a, "agent").unwrap();
+        queue
+            .set_result(&key_b, serde_json::json!({"score": 99}))
             .unwrap();
-        sys.set_finished_by(&key_b, "agent").unwrap();
+        queue.set_finished_by(&key_b, "agent").unwrap();
         assert_eq!(
-            sys.results_for_label("analysis"),
+            queue.results_for_label("analysis"),
             vec![serde_json::json!({"score": 7})]
         );
     }
 
     #[test]
     fn tickets_for_label_returns_every_status_not_just_finished() {
-        let (sys, _tmp) = test_system();
-        sys.ticket(Ticket::new("done").label("analysis"));
-        sys.ticket(Ticket::new("todo").label("analysis"));
-        let key = sys
+        let (queue, _tmp) = test_queue();
+        queue.ticket(Ticket::new("done").label("analysis"));
+        queue.ticket(Ticket::new("todo").label("analysis"));
+        let key = queue
             .claim(|t| t.task == serde_json::json!("done"), "agent")
             .unwrap();
-        attach_done_result(&sys, &key, "answer");
+        attach_done_result(&queue, &key, "answer");
 
-        let tasks: Vec<serde_json::Value> = sys
+        let tasks: Vec<serde_json::Value> = queue
             .tickets_for_label("analysis")
             .into_iter()
             .map(|t| t.task)
@@ -1422,119 +1425,119 @@ mod tests {
             tasks,
             vec![serde_json::json!("done"), serde_json::json!("todo")]
         );
-        assert_eq!(sys.results_for_label("analysis").len(), 1);
+        assert_eq!(queue.results_for_label("analysis").len(), 1);
     }
 
     #[test]
     fn stats_for_agent_counts_only_the_tickets_that_agent_worked() {
-        let (sys, _tmp) = test_system();
-        sys.ticket(Ticket::new("a").label("scan"));
-        sys.ticket(Ticket::new("b").label("scan"));
-        let key_a = sys
+        let (queue, _tmp) = test_queue();
+        queue.ticket(Ticket::new("a").label("scan"));
+        queue.ticket(Ticket::new("b").label("scan"));
+        let key_a = queue
             .claim(|t| t.task == serde_json::json!("a"), "scout")
             .unwrap();
-        let key_b = sys
+        let key_b = queue
             .claim(|t| t.task == serde_json::json!("b"), "writer")
             .unwrap();
-        sys.set_result(&key_a, serde_json::json!("done")).unwrap();
-        sys.set_finished_by(&key_a, "scout").unwrap();
-        sys.set_failed_by(&key_b, "writer").unwrap();
+        queue.set_result(&key_a, serde_json::json!("done")).unwrap();
+        queue.set_finished_by(&key_a, "scout").unwrap();
+        queue.set_failed_by(&key_b, "writer").unwrap();
 
-        let scout = sys.stats().stats_for_agent("scout");
+        let scout = queue.stats().stats_for_agent("scout");
         assert_eq!(scout.tickets_finished(), 1);
         assert_eq!(scout.tickets_failed(), 0);
-        let writer = sys.stats().stats_for_agent("writer");
+        let writer = queue.stats().stats_for_agent("writer");
         assert_eq!(writer.tickets_finished(), 0);
         assert_eq!(writer.tickets_failed(), 1);
     }
 
     #[test]
     fn stats_for_agent_counts_the_tickets_that_agent_reported() {
-        let (sys, _tmp) = test_system();
-        sys.insert(Ticket::new("filed by scout"), "scout".into());
-        sys.task("filed by the host");
+        let (queue, _tmp) = test_queue();
+        queue.insert(Ticket::new("filed by scout"), "scout".into());
+        queue.task("filed by the host");
 
-        assert_eq!(sys.stats().stats_for_agent("scout").tickets_created(), 1);
-        assert_eq!(sys.stats().tickets_created(), 2);
+        assert_eq!(queue.stats().stats_for_agent("scout").tickets_created(), 1);
+        assert_eq!(queue.stats().tickets_created(), 2);
     }
 
     #[test]
     fn cancel_label_on_result_calls_off_one_pool_without_cancelling_the_run() {
-        let (sys, _tmp) = test_system();
-        sys.cancel_label_on_result("scan", |_, result| result.as_str() == Some("stop"));
-        sys.ticket(Ticket::new("a").label("scan"));
-        let key = sys.claim(|t| t.has_label("scan"), "agent").unwrap();
-        attach_done_result(&sys, &key, "stop");
+        let (queue, _tmp) = test_queue();
+        queue.cancel_label_on_result("scan", |_, result| result.as_str() == Some("stop"));
+        queue.ticket(Ticket::new("a").label("scan"));
+        let key = queue.claim(|t| t.has_label("scan"), "agent").unwrap();
+        attach_done_result(&queue, &key, "stop");
 
-        assert!(sys.label_cancelled("scan"));
-        assert!(!sys.is_cancelled(), "the other pools keep working");
+        assert!(queue.label_cancelled("scan"));
+        assert!(!queue.is_cancelled(), "the other pools keep working");
     }
 
     #[test]
     fn results_for_label_empty_when_no_label_match() {
-        let (sys, _tmp) = test_system();
-        sys.ticket(Ticket::new("x").label("other"));
-        let key = sys.claim(|t| t.has_label("other"), "agent").unwrap();
-        sys.set_result(&key, serde_json::json!({"n": 1})).unwrap();
-        sys.set_finished_by(&key, "agent").unwrap();
-        assert!(sys.results_for_label("missing").is_empty());
+        let (queue, _tmp) = test_queue();
+        queue.ticket(Ticket::new("x").label("other"));
+        let key = queue.claim(|t| t.has_label("other"), "agent").unwrap();
+        queue.set_result(&key, serde_json::json!({"n": 1})).unwrap();
+        queue.set_finished_by(&key, "agent").unwrap();
+        assert!(queue.results_for_label("missing").is_empty());
     }
 
     #[tokio::test]
     async fn wait_for_ticket_resolves_when_ticket_matches() {
-        let (sys, _tmp) = test_system();
-        let key = sys.task("work");
-        let writer = Arc::clone(&sys);
+        let (queue, _tmp) = test_queue();
+        let key = queue.task("work");
+        let writer = Arc::clone(&queue);
         let claimed = key.clone();
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(30)).await;
             attach_done_result(&writer, &claimed, "done");
         });
-        let found = sys.wait_for_ticket(|t| t.is_finished()).await;
+        let found = queue.wait_for_ticket(|t| t.is_finished()).await;
         assert_eq!(found.map(|t| t.key), Some(key));
     }
 
     #[tokio::test]
     async fn wait_for_ticket_none_after_cancel() {
-        let (sys, _tmp) = test_system();
-        sys.task("never matches");
-        sys.cancel();
-        let found = sys.wait_for_ticket(|t| t.is_finished()).await;
+        let (queue, _tmp) = test_queue();
+        queue.task("never matches");
+        queue.cancel();
+        let found = queue.wait_for_ticket(|t| t.is_finished()).await;
         assert!(found.is_none());
     }
 
     #[test]
     fn cancel_on_event_trips_signal_when_predicate_matches() {
-        let (sys, _tmp) = test_system();
-        assert!(!sys.is_cancelled());
-        sys.cancel_on_event(|e| matches!(e.kind, EventKind::TicketFailed));
-        sys.emit("KEY", "agent", EventKind::TurnStarted);
-        assert!(!sys.is_cancelled());
-        sys.emit("KEY", "agent", EventKind::TicketFailed);
-        assert!(sys.is_cancelled());
+        let (queue, _tmp) = test_queue();
+        assert!(!queue.is_cancelled());
+        queue.cancel_on_event(|e| matches!(e.kind, EventKind::TicketFailed));
+        queue.emit("KEY", "agent", EventKind::TurnStarted);
+        assert!(!queue.is_cancelled());
+        queue.emit("KEY", "agent", EventKind::TicketFailed);
+        assert!(queue.is_cancelled());
     }
 
     #[test]
     fn message_editor_receives_buffered_events_excluding_text_chunks() {
         use crate::event::ToolFailureKind;
-        let (sys, _tmp) = test_system();
-        let key = sys.task("go");
+        let (queue, _tmp) = test_queue();
+        let key = queue.task("go");
 
         let seen: Arc<Mutex<Vec<Event>>> = Arc::new(Mutex::new(Vec::new()));
         let recorder = Arc::clone(&seen);
-        sys.edit_replies_on_event(move |events, _replies| {
+        queue.edit_replies_on_event(move |events, _replies| {
             recorder.lock().unwrap().extend(events.iter().cloned());
         });
 
-        sys.emit(&key, "agent", EventKind::TurnStarted);
-        sys.emit(
+        queue.emit(&key, "agent", EventKind::TurnStarted);
+        queue.emit(
             &key,
             "agent",
             EventKind::TextChunkReceived {
                 content: "hi".into(),
             },
         );
-        sys.emit(
+        queue.emit(
             &key,
             "agent",
             EventKind::ToolCallFailed {
@@ -1544,7 +1547,7 @@ mod tests {
                 message: "boom".into(),
             },
         );
-        sys.run_reply_editor(&key);
+        queue.run_reply_editor(&key);
 
         let events = seen.lock().unwrap();
         assert!(events
@@ -1560,19 +1563,19 @@ mod tests {
 
     #[test]
     fn message_editor_batch_drains_after_it_runs() {
-        let (sys, _tmp) = test_system();
-        let key = sys.task("go");
+        let (queue, _tmp) = test_queue();
+        let key = queue.task("go");
 
         let runs = Arc::new(Mutex::new(0u32));
         let counter = Arc::clone(&runs);
-        sys.edit_replies_on_event(move |_events, _replies| {
+        queue.edit_replies_on_event(move |_events, _replies| {
             *counter.lock().unwrap() += 1;
         });
 
-        sys.emit(&key, "agent", EventKind::TurnStarted);
-        sys.run_reply_editor(&key);
+        queue.emit(&key, "agent", EventKind::TurnStarted);
+        queue.run_reply_editor(&key);
         // The batch is drained, so a second run has nothing to react to.
-        sys.run_reply_editor(&key);
+        queue.run_reply_editor(&key);
 
         assert_eq!(*runs.lock().unwrap(), 1);
     }
@@ -1582,19 +1585,19 @@ mod tests {
     #[test]
     fn a_second_reply_editor_replaces_the_first() {
         use crate::agents::tickets::ReplyContent;
-        let (sys, _tmp) = test_system();
-        let key = sys.task("go");
-        sys.edit_replies_on_event(|_events, replies| {
+        let (queue, _tmp) = test_queue();
+        let key = queue.task("go");
+        queue.edit_replies_on_event(|_events, replies| {
             replies.push(Reply::user_text("first"));
         });
-        sys.edit_replies_on_event(|_events, replies| {
+        queue.edit_replies_on_event(|_events, replies| {
             replies.push(Reply::user_text("second"));
         });
 
-        sys.emit(&key, "agent", EventKind::TurnStarted);
-        sys.run_reply_editor(&key);
+        queue.emit(&key, "agent", EventKind::TurnStarted);
+        queue.run_reply_editor(&key);
 
-        let texts: Vec<String> = sys
+        let texts: Vec<String> = queue
             .get_ticket(&key)
             .unwrap()
             .replies
@@ -1616,19 +1619,19 @@ mod tests {
 
     #[test]
     fn message_editor_sees_only_the_events_of_the_ticket_it_edits() {
-        let (sys, _tmp) = test_system();
-        let a = sys.task("a");
-        let b = sys.task("b");
+        let (queue, _tmp) = test_queue();
+        let a = queue.task("a");
+        let b = queue.task("b");
 
         let seen: Arc<Mutex<Vec<Event>>> = Arc::new(Mutex::new(Vec::new()));
         let recorder = Arc::clone(&seen);
-        sys.edit_replies_on_event(move |events, _replies| {
+        queue.edit_replies_on_event(move |events, _replies| {
             recorder.lock().unwrap().extend(events.iter().cloned());
         });
 
-        sys.emit(&a, "agent", EventKind::TurnStarted);
-        sys.emit(&b, "agent", EventKind::TicketFailed);
-        sys.run_reply_editor(&a);
+        queue.emit(&a, "agent", EventKind::TurnStarted);
+        queue.emit(&b, "agent", EventKind::TicketFailed);
+        queue.run_reply_editor(&a);
 
         let events = seen.lock().unwrap();
         assert!(
@@ -1643,18 +1646,18 @@ mod tests {
     #[test]
     fn edit_replies_edits_the_transcript_on_demand() {
         use crate::agents::tickets::ReplyContent;
-        let (sys, _tmp) = test_system();
-        let key = sys.task("go");
-        sys.add_reply(&key, Reply::user_text("keep me"));
-        sys.add_reply(&key, Reply::user_text("drop me"));
+        let (queue, _tmp) = test_queue();
+        let key = queue.task("go");
+        queue.add_reply(&key, Reply::user_text("keep me"));
+        queue.add_reply(&key, Reply::user_text("drop me"));
 
-        sys.edit_replies(&key, |replies| {
+        queue.edit_replies(&key, |replies| {
             replies.retain(|reply| {
                 !matches!(reply.content.first(), Some(ReplyContent::Text { text: t }) if t == "drop me")
             });
         });
 
-        let replies = sys.get_ticket(&key).unwrap().replies;
+        let replies = queue.get_ticket(&key).unwrap().replies;
         assert!(replies.iter().any(
             |r| matches!(r.content.first(), Some(ReplyContent::Text { text: t }) if t == "keep me")
         ));
@@ -1666,33 +1669,33 @@ mod tests {
     #[test]
     fn cancel_on_event_coexists_with_user_handler() {
         use std::sync::atomic::AtomicU32;
-        let (sys, _tmp) = test_system();
+        let (queue, _tmp) = test_queue();
         let count = Arc::new(AtomicU32::new(0));
         let c = Arc::clone(&count);
-        sys.on_event(move |_| {
+        queue.on_event(move |_| {
             c.fetch_add(1, Ordering::Relaxed);
         });
-        sys.cancel_on_event(|e| matches!(e.kind, EventKind::TurnStarted));
-        sys.emit("KEY", "agent", EventKind::TurnStarted);
+        queue.cancel_on_event(|e| matches!(e.kind, EventKind::TurnStarted));
+        queue.emit("KEY", "agent", EventKind::TurnStarted);
         assert_eq!(count.load(Ordering::Relaxed), 1, "user handler should fire");
-        assert!(sys.is_cancelled(), "predicate should trip cancel");
+        assert!(queue.is_cancelled(), "predicate should trip cancel");
     }
 
     #[test]
     fn on_result_receives_the_finished_ticket_and_its_result() {
-        let (sys, _tmp) = test_system();
+        let (queue, _tmp) = test_queue();
         let seen = Arc::new(Mutex::new(Vec::new()));
         let record = Arc::clone(&seen);
-        sys.on_result(move |ticket, result| {
+        queue.on_result(move |ticket, result| {
             record
                 .lock()
                 .unwrap()
                 .push((ticket.key.clone(), result.clone()))
         });
-        sys.ticket(Ticket::new("x").label("L"));
-        let key = sys.claim(|t| t.has_label("L"), "agent").unwrap();
+        queue.ticket(Ticket::new("x").label("L"));
+        let key = queue.claim(|t| t.has_label("L"), "agent").unwrap();
 
-        attach_done_result(&sys, &key, "lead");
+        attach_done_result(&queue, &key, "lead");
 
         assert_eq!(
             *seen.lock().unwrap(),
@@ -1702,19 +1705,19 @@ mod tests {
 
     #[test]
     fn on_failure_fires_for_a_tool_call_failure_not_only_a_failed_ticket() {
-        let (sys, _tmp) = test_system();
+        let (queue, _tmp) = test_queue();
         let seen = Arc::new(Mutex::new(Vec::new()));
         let record = Arc::clone(&seen);
-        sys.on_failure(move |event, ticket| {
+        queue.on_failure(move |event, ticket| {
             record
                 .lock()
                 .unwrap()
                 .push((event.kind.name(), ticket.key.clone()))
         });
-        let key = sys.task("work");
+        let key = queue.task("work");
 
-        sys.emit(&key, "agent", EventKind::TurnStarted);
-        sys.emit(
+        queue.emit(&key, "agent", EventKind::TurnStarted);
+        queue.emit(
             &key,
             "agent",
             EventKind::ToolCallFailed {
@@ -1724,7 +1727,7 @@ mod tests {
                 message: "no such directory".into(),
             },
         );
-        sys.set_failed(&key).unwrap();
+        queue.set_failed(&key).unwrap();
 
         assert_eq!(
             *seen.lock().unwrap(),
@@ -1737,43 +1740,43 @@ mod tests {
 
     #[test]
     fn cancel_on_failure_trips_signal_when_predicate_matches() {
-        let (sys, _tmp) = test_system();
-        sys.cancel_on_failure(|event, _| matches!(event.kind, EventKind::TicketFailed));
-        let key = sys.task("work");
-        assert!(!sys.is_cancelled());
+        let (queue, _tmp) = test_queue();
+        queue.cancel_on_failure(|event, _| matches!(event.kind, EventKind::TicketFailed));
+        let key = queue.task("work");
+        assert!(!queue.is_cancelled());
 
-        sys.set_failed(&key).unwrap();
+        queue.set_failed(&key).unwrap();
 
-        assert!(sys.is_cancelled());
+        assert!(queue.is_cancelled());
     }
 
     #[test]
     fn cancel_label_on_failure_calls_off_one_pool_without_cancelling_the_run() {
-        let (sys, _tmp) = test_system();
-        sys.cancel_label_on_failure("scan", |_, _| true);
-        sys.ticket(Ticket::new("a").label("scan"));
-        let key = sys.claim(|t| t.has_label("scan"), "agent").unwrap();
+        let (queue, _tmp) = test_queue();
+        queue.cancel_label_on_failure("scan", |_, _| true);
+        queue.ticket(Ticket::new("a").label("scan"));
+        let key = queue.claim(|t| t.has_label("scan"), "agent").unwrap();
 
-        sys.set_failed_by(&key, "agent").unwrap();
+        queue.set_failed_by(&key, "agent").unwrap();
 
-        assert!(sys.label_cancelled("scan"));
-        assert!(!sys.is_cancelled(), "the other pools keep working");
+        assert!(queue.label_cancelled("scan"));
+        assert!(!queue.is_cancelled(), "the other pools keep working");
     }
 
     #[test]
     fn create_ticket_on_failure_enqueues_a_retry_for_the_failed_ticket() {
-        let (sys, _tmp) = test_system();
-        sys.create_ticket_on_failure(|_, failed| {
+        let (queue, _tmp) = test_queue();
+        queue.create_ticket_on_failure(|_, failed| {
             failed
                 .parent
                 .is_none()
                 .then(|| Ticket::new(failed.task.clone()).parent(&failed.key))
         });
-        let key = sys.task("work");
+        let key = queue.task("work");
 
-        sys.set_failed(&key).unwrap();
+        queue.set_failed(&key).unwrap();
 
-        let retry = sys
+        let retry = queue
             .find_ticket(|t| t.parent.as_deref() == Some(&key))
             .unwrap();
         assert_eq!(retry.task, serde_json::json!("work"));
@@ -1781,103 +1784,107 @@ mod tests {
 
     #[test]
     fn create_ticket_on_event_enqueues_a_follow_up_for_any_event() {
-        let (sys, _tmp) = test_system();
-        sys.create_ticket_on_event(|event| {
+        let (queue, _tmp) = test_queue();
+        queue.create_ticket_on_event(|event| {
             matches!(event.kind, EventKind::TurnStarted)
                 .then(|| Ticket::new("report").label("report"))
         });
-        let key = sys.task("work");
+        let key = queue.task("work");
 
-        sys.emit(&key, "agent", EventKind::TurnStarted);
+        queue.emit(&key, "agent", EventKind::TurnStarted);
 
-        assert_eq!(sys.find_tickets(|t| t.has_label("report")).len(), 1);
+        assert_eq!(queue.find_tickets(|t| t.has_label("report")).len(), 1);
     }
 
     #[test]
     fn cancel_on_result_trips_when_finished_result_matches() {
-        let (sys, _tmp) = test_system();
-        sys.ticket(Ticket::new("x").label("L"));
-        let key = sys.claim(|t| t.has_label("L"), "agent").unwrap();
-        sys.set_result(&key, serde_json::json!({"status": "malicious"}))
+        let (queue, _tmp) = test_queue();
+        queue.ticket(Ticket::new("x").label("L"));
+        let key = queue.claim(|t| t.has_label("L"), "agent").unwrap();
+        queue
+            .set_result(&key, serde_json::json!({"status": "malicious"}))
             .unwrap();
-        sys.cancel_on_result(|_, r| r.get("status").and_then(|v| v.as_str()) == Some("malicious"));
-        assert!(!sys.is_cancelled());
-        sys.emit(&key, "agent", EventKind::TicketFinished);
-        assert!(sys.is_cancelled());
+        queue
+            .cancel_on_result(|_, r| r.get("status").and_then(|v| v.as_str()) == Some("malicious"));
+        assert!(!queue.is_cancelled());
+        queue.emit(&key, "agent", EventKind::TicketFinished);
+        assert!(queue.is_cancelled());
     }
 
     #[test]
     fn cancel_on_result_ignores_nonmatching_result() {
-        let (sys, _tmp) = test_system();
-        sys.ticket(Ticket::new("x").label("L"));
-        let key = sys.claim(|t| t.has_label("L"), "agent").unwrap();
-        sys.set_result(&key, serde_json::json!({"status": "benign"}))
+        let (queue, _tmp) = test_queue();
+        queue.ticket(Ticket::new("x").label("L"));
+        let key = queue.claim(|t| t.has_label("L"), "agent").unwrap();
+        queue
+            .set_result(&key, serde_json::json!({"status": "benign"}))
             .unwrap();
-        sys.cancel_on_result(|_, r| r.get("status").and_then(|v| v.as_str()) == Some("malicious"));
-        sys.emit(&key, "agent", EventKind::TicketFinished);
-        assert!(!sys.is_cancelled());
+        queue
+            .cancel_on_result(|_, r| r.get("status").and_then(|v| v.as_str()) == Some("malicious"));
+        queue.emit(&key, "agent", EventKind::TicketFinished);
+        assert!(!queue.is_cancelled());
     }
 
     #[test]
     fn create_ticket_on_result_enqueues_follow_up_for_finished_ticket() {
-        let (sys, _tmp) = test_system();
-        sys.ticket(Ticket::new("scout").label("scout"));
-        let key = sys.claim(|t| t.has_label("scout"), "agent").unwrap();
-        sys.set_result(&key, serde_json::json!("lead")).unwrap();
-        sys.set_finished_by(&key, "agent").unwrap();
-        sys.create_ticket_on_result(|done, _| {
+        let (queue, _tmp) = test_queue();
+        queue.ticket(Ticket::new("scout").label("scout"));
+        let key = queue.claim(|t| t.has_label("scout"), "agent").unwrap();
+        queue.set_result(&key, serde_json::json!("lead")).unwrap();
+        queue.set_finished_by(&key, "agent").unwrap();
+        queue.create_ticket_on_result(|done, _| {
             done.has_label("scout")
                 .then(|| Ticket::new("hunt").label("sniper"))
         });
-        sys.emit(&key, "agent", EventKind::TicketFinished);
-        assert_eq!(sys.find_tickets(|t| t.has_label("sniper")).len(), 1);
+        queue.emit(&key, "agent", EventKind::TicketFinished);
+        assert_eq!(queue.find_tickets(|t| t.has_label("sniper")).len(), 1);
     }
 
     #[test]
     fn create_ticket_on_result_links_follow_up_to_finished_parent() {
-        let (sys, _tmp) = test_system();
-        sys.ticket(Ticket::new("scout").label("scout"));
-        let key = sys.claim(|t| t.has_label("scout"), "agent").unwrap();
-        sys.set_result(&key, serde_json::json!("lead")).unwrap();
-        sys.set_finished_by(&key, "agent").unwrap();
-        sys.create_ticket_on_result(|done, _| {
+        let (queue, _tmp) = test_queue();
+        queue.ticket(Ticket::new("scout").label("scout"));
+        let key = queue.claim(|t| t.has_label("scout"), "agent").unwrap();
+        queue.set_result(&key, serde_json::json!("lead")).unwrap();
+        queue.set_finished_by(&key, "agent").unwrap();
+        queue.create_ticket_on_result(|done, _| {
             Some(Ticket::new("hunt").label("sniper").parent(&done.key))
         });
-        sys.emit(&key, "agent", EventKind::TicketFinished);
-        let spawned = sys.find_ticket(|t| t.has_label("sniper")).unwrap();
+        queue.emit(&key, "agent", EventKind::TicketFinished);
+        let spawned = queue.find_ticket(|t| t.has_label("sniper")).unwrap();
         assert_eq!(spawned.parent, Some(key));
     }
 
     #[test]
     fn create_ticket_on_result_ignores_unfinished_events() {
-        let (sys, _tmp) = test_system();
-        sys.create_ticket_on_result(|_, _| Some(Ticket::new("follow-up").label("next")));
-        sys.emit("KEY", "agent", EventKind::TurnStarted);
-        assert!(sys.tickets().is_empty());
+        let (queue, _tmp) = test_queue();
+        queue.create_ticket_on_result(|_, _| Some(Ticket::new("follow-up").label("next")));
+        queue.emit("KEY", "agent", EventKind::TurnStarted);
+        assert!(queue.tickets().is_empty());
     }
 
     #[test]
     fn create_ticket_on_result_inserts_follow_up_before_drain_is_observable() {
-        let (sys, _tmp) = test_system();
-        sys.create_ticket_on_result(|done, _| {
+        let (queue, _tmp) = test_queue();
+        queue.create_ticket_on_result(|done, _| {
             done.has_label("scout")
                 .then(|| Ticket::new("hunt").label("sniper"))
         });
-        sys.ticket(Ticket::new("scout").label("scout"));
-        let key = sys.claim(|t| t.has_label("scout"), "agent").unwrap();
-        sys.set_result(&key, serde_json::json!("lead")).unwrap();
-        sys.set_finished_by(&key, "agent").unwrap();
+        queue.ticket(Ticket::new("scout").label("scout"));
+        let key = queue.claim(|t| t.has_label("scout"), "agent").unwrap();
+        queue.set_result(&key, serde_json::json!("lead")).unwrap();
+        queue.set_finished_by(&key, "agent").unwrap();
         // The handler ran inside `set_finished_by`, so the queue is never
         // observably empty between the parent finishing and the follow-up.
-        assert_eq!(sys.pending_count(), 1);
+        assert_eq!(queue.pending_count(), 1);
     }
 
     #[test]
     fn on_ticket_hands_the_handler_the_finished_ticket() {
-        let (sys, _tmp) = test_system();
+        let (queue, _tmp) = test_queue();
         let seen = Arc::new(Mutex::new(Vec::new()));
         let record = Arc::clone(&seen);
-        sys.on_ticket(move |event, ticket| {
+        queue.on_ticket(move |event, ticket| {
             if matches!(event.kind, EventKind::TicketFinished) {
                 record.lock().unwrap().push((
                     event.agent_name.clone(),
@@ -1887,11 +1894,11 @@ mod tests {
                 ));
             }
         });
-        sys.ticket(Ticket::new("scan").label("scan"));
-        let key = sys.claim(|t| t.has_label("scan"), "analyst").unwrap();
-        sys.add_reply(&key, Reply::user_text("hello"));
-        sys.set_result(&key, serde_json::json!("done")).unwrap();
-        sys.set_finished_by(&key, "analyst").unwrap();
+        queue.ticket(Ticket::new("scan").label("scan"));
+        let key = queue.claim(|t| t.has_label("scan"), "analyst").unwrap();
+        queue.add_reply(&key, Reply::user_text("hello"));
+        queue.set_result(&key, serde_json::json!("done")).unwrap();
+        queue.set_finished_by(&key, "analyst").unwrap();
 
         // `replies` is `#[serde(skip)]`, so a transcript here proves the
         // handler holds the in-memory ticket, not a disk round-trip.
@@ -1908,38 +1915,38 @@ mod tests {
 
     #[test]
     fn on_ticket_skips_events_that_are_not_lifecycle_transitions() {
-        let (sys, _tmp) = test_system();
+        let (queue, _tmp) = test_queue();
         let seen = Arc::new(Mutex::new(Vec::new()));
         let record = Arc::clone(&seen);
-        sys.on_ticket(move |_, ticket| record.lock().unwrap().push(ticket.key.clone()));
-        sys.ticket(Ticket::new("scan").label("scan"));
-        let key = sys.claim(|t| t.has_label("scan"), "analyst").unwrap();
-        sys.emit(&key, "analyst", EventKind::TurnStarted);
+        queue.on_ticket(move |_, ticket| record.lock().unwrap().push(ticket.key.clone()));
+        queue.ticket(Ticket::new("scan").label("scan"));
+        let key = queue.claim(|t| t.has_label("scan"), "analyst").unwrap();
+        queue.emit(&key, "analyst", EventKind::TurnStarted);
         assert!(seen.lock().unwrap().is_empty());
     }
 
     #[test]
     fn on_ticket_skips_events_that_name_no_ticket() {
-        let (sys, _tmp) = test_system();
+        let (queue, _tmp) = test_queue();
         let seen = Arc::new(Mutex::new(Vec::new()));
         let record = Arc::clone(&seen);
-        sys.on_ticket(move |_, ticket| record.lock().unwrap().push(ticket.key.clone()));
-        sys.emit("", "", EventKind::RunStarted);
+        queue.on_ticket(move |_, ticket| record.lock().unwrap().push(ticket.key.clone()));
+        queue.emit("", "", EventKind::RunStarted);
         assert!(seen.lock().unwrap().is_empty());
     }
 
     #[test]
     fn on_ticket_coexists_with_a_user_handler() {
-        let (sys, _tmp) = test_system();
+        let (queue, _tmp) = test_queue();
         let logged = Arc::new(Mutex::new(Vec::new()));
         let log = Arc::clone(&logged);
-        sys.on_event(move |e| log.lock().unwrap().push(e.kind.name()));
+        queue.on_event(move |e| log.lock().unwrap().push(e.kind.name()));
         let seen = Arc::new(Mutex::new(Vec::new()));
         let record = Arc::clone(&seen);
-        sys.on_ticket(move |_, ticket| record.lock().unwrap().push(ticket.key.clone()));
-        sys.ticket(Ticket::new("scan").label("scan"));
-        let key = sys.claim(|t| t.has_label("scan"), "analyst").unwrap();
-        sys.emit(&key, "analyst", EventKind::TicketStarted);
+        queue.on_ticket(move |_, ticket| record.lock().unwrap().push(ticket.key.clone()));
+        queue.ticket(Ticket::new("scan").label("scan"));
+        let key = queue.claim(|t| t.has_label("scan"), "analyst").unwrap();
+        queue.emit(&key, "analyst", EventKind::TicketStarted);
 
         assert_eq!(*seen.lock().unwrap(), vec![key]);
         assert!(logged.lock().unwrap().contains(&"ticket_started"));
@@ -1948,61 +1955,61 @@ mod tests {
     #[test]
     fn on_event_fires_every_handler_per_event() {
         use std::sync::atomic::AtomicU32;
-        let (sys, _tmp) = test_system();
+        let (queue, _tmp) = test_queue();
         let count = Arc::new(AtomicU32::new(0));
         let c1 = Arc::clone(&count);
         let c2 = Arc::clone(&count);
-        sys.on_event(move |_| {
+        queue.on_event(move |_| {
             c1.fetch_add(1, Ordering::Relaxed);
         });
-        sys.on_event(move |_| {
+        queue.on_event(move |_| {
             c2.fetch_add(10, Ordering::Relaxed);
         });
-        sys.emit("KEY", "agent", EventKind::TurnStarted);
-        sys.emit("KEY", "agent", EventKind::TurnStarted);
+        queue.emit("KEY", "agent", EventKind::TurnStarted);
+        queue.emit("KEY", "agent", EventKind::TurnStarted);
         assert_eq!(count.load(Ordering::Relaxed), 22);
     }
 
     #[test]
     fn finish_reason_is_none_before_first_finish() {
-        let (sys, _tmp) = test_system();
-        assert_eq!(sys.finish_reason(), None);
+        let (queue, _tmp) = test_queue();
+        assert_eq!(queue.finish_reason(), None);
     }
 
     #[tokio::test]
     async fn finish_reason_drained_on_empty_queue() {
-        let (sys, _tmp) = test_system();
-        sys.finish().await;
-        assert_eq!(sys.finish_reason(), Some(FinishReason::Drained));
+        let (queue, _tmp) = test_queue();
+        queue.finish().await;
+        assert_eq!(queue.finish_reason(), Some(FinishReason::Drained));
     }
 
     #[tokio::test]
     async fn is_cancelled_stays_false_after_clean_drain() {
-        let (sys, _tmp) = test_system();
-        sys.finish().await;
+        let (queue, _tmp) = test_queue();
+        queue.finish().await;
         assert!(
-            !sys.is_cancelled(),
+            !queue.is_cancelled(),
             "clean drain must not flip the cancel signal",
         );
     }
 
     #[tokio::test]
     async fn finish_reason_cancelled_when_cancel_fires_during_run() {
-        let (sys, _tmp) = test_system();
-        sys.start();
-        sys.cancel();
-        sys.finish().await;
-        assert_eq!(sys.finish_reason(), Some(FinishReason::Cancelled));
-        assert!(sys.is_cancelled());
+        let (queue, _tmp) = test_queue();
+        queue.start();
+        queue.cancel();
+        queue.finish().await;
+        assert_eq!(queue.finish_reason(), Some(FinishReason::Cancelled));
+        assert!(queue.is_cancelled());
     }
 
     #[tokio::test]
     async fn finish_reason_policy_violated_when_max_turns_zero() {
-        let (sys, _tmp) = test_system();
-        sys.max_turns(0);
-        sys.finish().await;
+        let (queue, _tmp) = test_queue();
+        queue.max_turns(0);
+        queue.finish().await;
         assert_eq!(
-            sys.finish_reason(),
+            queue.finish_reason(),
             Some(FinishReason::PolicyViolated(
                 crate::event::PolicyKind::Turns
             )),
@@ -2011,21 +2018,21 @@ mod tests {
 
     #[tokio::test]
     async fn finish_reason_resets_after_restart() {
-        let (sys, _tmp) = test_system();
-        sys.finish().await;
-        assert_eq!(sys.finish_reason(), Some(FinishReason::Drained));
-        sys.start();
-        assert_eq!(sys.finish_reason(), None);
-        sys.finish().await;
-        assert_eq!(sys.finish_reason(), Some(FinishReason::Drained));
+        let (queue, _tmp) = test_queue();
+        queue.finish().await;
+        assert_eq!(queue.finish_reason(), Some(FinishReason::Drained));
+        queue.start();
+        assert_eq!(queue.finish_reason(), None);
+        queue.finish().await;
+        assert_eq!(queue.finish_reason(), Some(FinishReason::Drained));
     }
 
     #[tokio::test]
     async fn run_started_emitted_before_run_finished() {
-        let (sys, _tmp) = test_system();
+        let (queue, _tmp) = test_queue();
         let log = Arc::new(Mutex::new(Vec::new()));
         let sink = Arc::clone(&log);
-        sys.on_event(move |e| {
+        queue.on_event(move |e| {
             if matches!(
                 e.kind,
                 EventKind::RunStarted | EventKind::RunFinished { .. }
@@ -2033,7 +2040,7 @@ mod tests {
                 sink.lock().unwrap().push(format!("{:?}", e.kind));
             }
         });
-        sys.finish().await;
+        queue.finish().await;
         let entries = log.lock().unwrap();
         assert_eq!(entries.len(), 2, "expected RunStarted then RunFinished");
         assert!(entries[0].starts_with("RunStarted"));

@@ -11,7 +11,7 @@ use super::common;
 
 use agentwerk::event::{Event, EventKind};
 use agentwerk::tools::{FindToolsTool, Tool, ToolResult};
-use agentwerk::{Agent, TicketSystem};
+use agentwerk::{Agent, TicketQueue};
 use serde_json::json;
 use std::time::Duration;
 
@@ -47,7 +47,7 @@ async fn surfaces_a_deferred_tool_definition() -> std::result::Result<(), Box<dy
     let calls: Arc<Mutex<Vec<CapturedCall>>> = Arc::new(Mutex::new(Vec::new()));
     let sink = Arc::clone(&calls);
 
-    let tickets = TicketSystem::new();
+    let tickets = TicketQueue::new();
     tickets.max_turns(6);
     tickets.max_time(Duration::from_secs(45));
     tickets.on_event(move |e: &Event| match &e.kind {
