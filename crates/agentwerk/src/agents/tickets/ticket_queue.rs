@@ -785,7 +785,7 @@ impl TicketQueue {
 
     /// Stop execution when a failure matches.
     ///
-    /// Built on [`Self::on_failure`], so your condition sees all five failure
+    /// Built on [`Self::on_failure`], so your condition sees all six failure
     /// kinds. Narrow it on `event.kind` to stop on a failed ticket only, or
     /// leave it broad to stop on the first tool or LLM provider error.
     pub fn cancel_on_failure<F>(&self, predicate: F) -> &Self
