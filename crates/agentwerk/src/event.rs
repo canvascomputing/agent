@@ -312,6 +312,20 @@ impl EventKind {
             EventKind::CompactionFailed { .. } => "compaction_failed",
         }
     }
+
+    /// Whether this kind reports something that went wrong. Names the
+    /// five kinds `TicketSystem::on_failure` fires on, so a handler on
+    /// the plain event chain can ask the same question.
+    pub fn is_failure(&self) -> bool {
+        matches!(
+            self,
+            EventKind::TicketFailed
+                | EventKind::RequestFailed { .. }
+                | EventKind::ToolCallFailed { .. }
+                | EventKind::FileOpenFailed { .. }
+                | EventKind::CompactionFailed { .. }
+        )
+    }
 }
 
 impl fmt::Display for EventKind {
@@ -323,8 +337,8 @@ impl fmt::Display for EventKind {
 /// Default observer. Prints ticket lifecycle, tool activity, policy
 /// violations, and request failures to stderr. Quiet variants
 /// (token counts, streaming chunks, request start/finish) are dropped.
-pub fn default_logger() -> Arc<dyn Fn(Event) + Send + Sync> {
-    Arc::new(|event: Event| {
+pub fn default_logger() -> Arc<dyn Fn(&Event) + Send + Sync> {
+    Arc::new(|event: &Event| {
         let agent = &event.agent_name;
         match &event.kind {
             EventKind::RunStarted => {
@@ -412,6 +426,7 @@ fn compact_input(input: &serde_json::Value) -> String {
 mod tests {
     use super::*;
     use crate::providers::TokenUsage;
+    use std::collections::BTreeSet;
 
     fn all_variants() -> Vec<EventKind> {
         vec![
@@ -521,8 +536,27 @@ mod tests {
     fn default_logger_handles_every_variant() {
         let logger = default_logger();
         for kind in all_variants() {
-            logger(Event::new("agent", "T-1", kind));
+            logger(&Event::new("agent", "T-1", kind));
         }
+    }
+
+    #[test]
+    fn is_failure_covers_every_failed_kind() {
+        let failures: BTreeSet<&str> = all_variants()
+            .iter()
+            .filter(|kind| kind.is_failure())
+            .map(|kind| kind.name())
+            .collect();
+        assert_eq!(
+            failures,
+            BTreeSet::from([
+                "ticket_failed",
+                "request_failed",
+                "tool_call_failed",
+                "file_open_failed",
+                "compaction_failed",
+            ]),
+        );
     }
 
     #[test]

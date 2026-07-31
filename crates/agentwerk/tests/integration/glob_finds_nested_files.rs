@@ -53,7 +53,7 @@ async fn finds_every_lib_rs_in_nested_tree() -> std::result::Result<(), Box<dyn 
     let calls: Arc<Mutex<Vec<CapturedCall>>> = Arc::new(Mutex::new(Vec::new()));
     let collected = Arc::clone(&calls);
     let logger = default_logger();
-    let event_handler = Arc::new(move |e: Event| {
+    let event_handler = Arc::new(move |e: &Event| {
         match &e.kind {
             EventKind::ToolCallStarted {
                 tool_name, input, ..

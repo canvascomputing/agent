@@ -174,7 +174,7 @@ def test_tickets_for_label_returns_every_status_not_just_finished(system):
 
 def test_cancel_label_on_result_chains(system):
     assert isinstance(
-        system.cancel_label_on_result("scan", lambda result: False), aw.TicketSystem
+        system.cancel_label_on_result("scan", lambda ticket, result: False), aw.TicketSystem
     )
 
 
@@ -228,7 +228,7 @@ async def test_cancel_on_accepts_an_awaitable_and_chains(system):
 
 def test_cancel_on_event_and_cancel_on_result_chain(system):
     configured = system.cancel_on_event(lambda event: False).cancel_on_result(
-        lambda result: False
+        lambda ticket, result: False
     )
     assert isinstance(configured, aw.TicketSystem)
 
@@ -236,6 +236,73 @@ def test_cancel_on_event_and_cancel_on_result_chain(system):
 def test_cancel_label_on_event_chains(system):
     configured = system.cancel_label_on_event("scan", lambda event: True)
     assert isinstance(configured, aw.TicketSystem)
+
+
+def test_on_result_receives_the_finished_ticket_and_its_result(system):
+    seen = []
+    system.on_result(lambda ticket, result: seen.append((ticket.key, result)))
+    key = system.ticket(aw.Ticket("scan the corpus"))
+
+    system.set_finished(key, {"verdict": "clean"})
+
+    assert seen == [(key, {"verdict": "clean"})]
+
+
+def test_on_failure_receives_the_failed_ticket(system):
+    seen = []
+    system.on_failure(lambda event, ticket: seen.append((event.kind, ticket.key)))
+    key = system.ticket(aw.Ticket("scan the corpus"))
+
+    system.set_failed(key)
+
+    assert seen == [("ticket_failed", key)]
+
+
+def test_cancel_on_failure_stops_the_run(system):
+    system.cancel_on_failure(lambda event, ticket: True)
+    key = system.ticket(aw.Ticket("scan the corpus"))
+    assert not system.is_cancelled()
+
+    system.set_failed(key)
+
+    assert system.is_cancelled()
+
+
+def test_cancel_label_on_failure_calls_off_one_pool_only(system):
+    system.cancel_label_on_failure("scan", lambda event, ticket: True)
+    key = system.ticket(aw.Ticket("scan the corpus", labels=["scan"]))
+
+    system.set_failed(key)
+
+    assert system.label_cancelled("scan")
+    assert not system.is_cancelled()
+
+
+def test_create_ticket_on_failure_enqueues_a_retry(system):
+    system.create_ticket_on_failure(
+        lambda event, failed: None
+        if failed.parent
+        else aw.Ticket(failed.task, parent=failed.key)
+    )
+    key = system.ticket(aw.Ticket("scan the corpus"))
+
+    system.set_failed(key)
+
+    retry = system.find_ticket(lambda ticket: ticket.parent == key)
+    assert retry.task == "scan the corpus"
+
+
+def test_create_ticket_on_event_enqueues_a_follow_up(system):
+    system.create_ticket_on_event(
+        lambda event: aw.Ticket("report", labels=["report"])
+        if event.kind == "ticket_finished"
+        else None
+    )
+    key = system.ticket(aw.Ticket("scan the corpus"))
+
+    system.set_finished(key, {"verdict": "clean"})
+
+    assert [t.task for t in system.tickets_for_label("report")] == ["report"]
 
 
 def test_edit_replies_on_event_chains(system):

@@ -141,18 +141,20 @@ Naming and comment rules, plus README structure. Skim the section matching what 
 
 **A hook's name says when it runs and how much it stops. Trigger and scope are separate axes, and both are spelled out.**
 
-- `on_<subject>(handler)` observes: the handler sees every `<subject>` and returns nothing, as in `on_event` and `on_ticket`.
-- `<action>_on_<trigger>(..)` reacts whenever `<trigger>` matches: `cancel_on_event`, `cancel_on_result`, `cancel_label_on_event`, `create_ticket_on_result`, `edit_replies_on_event`. The action may be more than one word, so `create_ticket_on_result` reads as `create_ticket` plus `on_result`.
+- `on_<trigger>(handler)` observes: the handler sees every `<trigger>` and returns nothing, as in `on_event`, `on_result`, and `on_failure`.
+- `<action>_on_<trigger>(..)` reacts whenever `<trigger>` matches: `cancel_on_event`, `cancel_on_result`, `cancel_label_on_failure`, `create_ticket_on_result`, `edit_replies_on_event`. The action may be more than one word, so `create_ticket_on_result` reads as `create_ticket` plus `on_result`.
 - A bare `<action>(..)` acts once, now: `cancel`, `cancel_label`, `edit_replies`. The `_on_` infix is the only thing separating a standing rule from an immediate call, so it is never dropped for brevity, including on a type that holds only standing ones.
 - Scope crosses all three forms and lives in the prefix: `cancel*` ends the run, `cancel_label*` ends one label's pool and leaves the others running.
+- IMPORTANT: the trigger fixes the handler's parameters, the action fixes its return type. A caller who knows one hook in a column knows them all: `_on_event` hands over `&Event`, `_on_result` a `&Ticket` and its validated `&Value`, `_on_failure` the `&Event` and the `&Ticket` it happened in. Observing returns `()`, `cancel*` returns `bool`, `create_ticket*` returns `Option<Ticket>`.
+- Every trigger carries a reaction for every action, so the grid has no holes to explain. The three triggers cross `cancel`, `cancel_label`, and `create_ticket`; `on_ticket` sits outside it, observing a lifecycle transition rather than naming a trigger.
 - `<action>_on(value)` names no trigger, because the caller supplies the trigger whole instead of a condition over something agentwerk produces. `cancel_on` is the only one, and it is not renamed after a cancellation signal: `signal` already names the `AtomicBool` pair on `TicketSystem`.
-- A reaction exists for the trigger carrying what it needs, not for every trigger. `create_ticket_on_result` has no `_on_event` sibling and `edit_replies_on_event` has no `_on_result` sibling, because neither would have anything to act on.
+- The editor row is the one exception, and `edit_replies_on_event` is its only member. An editor runs once per request over the batch of events since the previous one, so an `_on_result` sibling would have no next request to act on and an `_on_failure` sibling would be a second rewriter of one transcript, which the singular-editor rule below forbids. A failure is already reachable by matching `EventKind::ToolCallFailed` inside the batch.
 
 ## Editors
 
 **An editor is `edit_<noun>`. Its last parameter is the `&mut` value it rewrites; anything before it is read-only context.**
 
-- `edit_replies(key, FnOnce(&mut Vec<Reply>))`, `edit_replies_on_event(Fn(&[Event], &mut Vec<Reply>))`, `edit_directive_on_failure(Fn(&str, &mut String))`.
+- `edit_replies(key, FnOnce(&mut Vec<Reply>))`, `edit_replies_on_event(Fn(&[Event], &mut Vec<Reply>))`, `edit_directive_on_retry(Fn(&str, &mut String))`.
 - The value arrives holding what agentwerk would otherwise have used, so an editor that writes nothing keeps the default. No editor returns `Option<T>`: there is nothing left to signal.
 - A hook that rewrites a value is named for that value, not for its trigger alone. Naming it `on_<trigger>` alone reads as an observer and hides what it changes.
 - IMPORTANT: an observer composes, an editor is singular. Every handler on the `on_event` chain runs, and agentwerk stacks `cancel_on_event`, `on_ticket` and the rest there; installing a second editor replaces the first, like `dir` or `max_turns`. Two rewriters of one value would each see the other's output, so stack edits inside a single editor.

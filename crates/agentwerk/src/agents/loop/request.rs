@@ -387,9 +387,9 @@ mod tests {
             Ok(write_result_response("ok")),
         ]);
         let collected: Arc<Mutex<Vec<crate::event::Event>>> = Arc::new(Mutex::new(Vec::new()));
-        let handler: Arc<dyn Fn(crate::event::Event) + Send + Sync> = {
+        let handler: Arc<dyn Fn(&crate::event::Event) + Send + Sync> = {
             let c = Arc::clone(&collected);
-            Arc::new(move |e| c.lock().unwrap().push(e))
+            Arc::new(move |e: &crate::event::Event| c.lock().unwrap().push(e.clone()))
         };
 
         let results_dir = crate::test_util::TempDir::new().unwrap();
@@ -454,9 +454,9 @@ mod tests {
                 retry_delay: Some(Duration::from_secs(60)),
             })]);
         let collected: Arc<Mutex<Vec<crate::event::Event>>> = Arc::new(Mutex::new(Vec::new()));
-        let handler: Arc<dyn Fn(crate::event::Event) + Send + Sync> = {
+        let handler: Arc<dyn Fn(&crate::event::Event) + Send + Sync> = {
             let c = Arc::clone(&collected);
-            Arc::new(move |e| c.lock().unwrap().push(e))
+            Arc::new(move |e: &crate::event::Event| c.lock().unwrap().push(e.clone()))
         };
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let tickets = TicketSystem::new();

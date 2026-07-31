@@ -130,7 +130,7 @@ async fn summariser_produces_text_when_compaction_fires_against_live_llm() {
     // entry to `usage_history`); turn 2's proactive guard then trips
     // because `compaction_threshold(LOCAL_CTX)` saturates to 0.
     tickets.max_turns(2);
-    tickets.on_event(move |e| log.lock().unwrap().push(e));
+    tickets.on_event(move |e| log.lock().unwrap().push(e.clone()));
     tickets.agent(
         Agent::new()
             .provider(provider)

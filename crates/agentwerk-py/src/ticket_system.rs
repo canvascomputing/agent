@@ -184,10 +184,37 @@ impl PyTicketSystem {
 
     /// Install an event handler. Replaces the default stderr logger.
     fn on_event<'py>(slf: PyRef<'py, Self>, callback: Py<PyAny>) -> PyRef<'py, Self> {
-        slf.inner.on_event(move |event: Event| {
+        slf.inner.on_event(move |event: &Event| {
             Python::attach(|py| {
-                let handled = callback.bind(py).call1((to_py_event(&event),));
+                let handled = callback.bind(py).call1((to_py_event(event),));
                 if let Err(err) = handled {
+                    err.print(py);
+                }
+            });
+        });
+        slf
+    }
+
+    /// Call `callback(ticket, result)` for every finished ticket, with the
+    /// result already validated against the ticket's schema.
+    fn on_result<'py>(slf: PyRef<'py, Self>, callback: Py<PyAny>) -> PyRef<'py, Self> {
+        slf.inner.on_result(move |ticket: &Ticket, result: &Value| {
+            Python::attach(|py| {
+                if let Err(err) = call_with_result(py, &callback, ticket, result) {
+                    err.print(py);
+                }
+            });
+        });
+        slf
+    }
+
+    /// Call `callback(event, ticket)` for every failure: a failed ticket, a
+    /// failed tool call, a failed request, a file that would not open, or
+    /// compaction that could not finish. Read `event.kind` to tell them apart.
+    fn on_failure<'py>(slf: PyRef<'py, Self>, callback: Py<PyAny>) -> PyRef<'py, Self> {
+        slf.inner.on_failure(move |event: &Event, ticket: &Ticket| {
+            Python::attach(|py| {
+                if let Err(err) = call_with_ticket(py, &callback, event, ticket) {
                     err.print(py);
                 }
             });
@@ -209,16 +236,31 @@ impl PyTicketSystem {
         slf
     }
 
-    /// Cancel the run when `predicate(result)` first returns truthy.
+    /// Cancel the run when `predicate(ticket, result)` first returns truthy
+    /// for a finished ticket.
     fn cancel_on_result<'py>(slf: PyRef<'py, Self>, predicate: Py<PyAny>) -> PyRef<'py, Self> {
-        slf.inner.cancel_on_result(move |result: &Value| {
-            Python::attach(|py| {
-                value_to_py(py, result)
-                    .and_then(|value| predicate.bind(py).call1((value,)))
-                    .and_then(|value| value.is_truthy())
-                    .unwrap_or(false)
-            })
-        });
+        slf.inner
+            .cancel_on_result(move |ticket: &Ticket, result: &Value| {
+                Python::attach(|py| {
+                    call_with_result(py, &predicate, ticket, result)
+                        .and_then(|value| value.is_truthy())
+                        .unwrap_or(false)
+                })
+            });
+        slf
+    }
+
+    /// Cancel the run when `predicate(event, ticket)` first returns truthy
+    /// for a failure.
+    fn cancel_on_failure<'py>(slf: PyRef<'py, Self>, predicate: Py<PyAny>) -> PyRef<'py, Self> {
+        slf.inner
+            .cancel_on_failure(move |event: &Event, ticket: &Ticket| {
+                Python::attach(|py| {
+                    call_with_ticket(py, &predicate, event, ticket)
+                        .and_then(|value| value.is_truthy())
+                        .unwrap_or(false)
+                })
+            });
         slf
     }
 
@@ -236,20 +278,42 @@ impl PyTicketSystem {
         Ok(slf)
     }
 
-    /// After each finished ticket, call `make(ticket)`; a returned `Ticket`
-    /// is enqueued, `None` enqueues nothing.
-    fn create_ticket_on_result<'py>(slf: PyRef<'py, Self>, make: Py<PyAny>) -> PyRef<'py, Self> {
-        slf.inner.create_ticket_on_result(move |ticket: &Ticket| {
+    /// After every event, call `make(event)`; a returned `Ticket` is
+    /// enqueued, `None` enqueues nothing.
+    fn create_ticket_on_event<'py>(slf: PyRef<'py, Self>, make: Py<PyAny>) -> PyRef<'py, Self> {
+        slf.inner.create_ticket_on_event(move |event: &Event| {
             Python::attach(|py| {
-                let view = Py::new(py, PyTicket::from_ticket(ticket)).ok()?;
-                let produced = make.bind(py).call1((view,)).ok()?;
-                if produced.is_none() {
-                    return None;
-                }
-                let built = produced.extract::<PyRef<PyTicket>>().ok()?;
-                Some(built.to_ticket())
+                let produced = make.bind(py).call1((to_py_event(event),)).ok()?;
+                built_ticket(&produced)
             })
         });
+        slf
+    }
+
+    /// After each finished ticket, call `make(ticket, result)`; a returned
+    /// `Ticket` is enqueued, `None` enqueues nothing.
+    fn create_ticket_on_result<'py>(slf: PyRef<'py, Self>, make: Py<PyAny>) -> PyRef<'py, Self> {
+        slf.inner
+            .create_ticket_on_result(move |ticket: &Ticket, result: &Value| {
+                Python::attach(|py| {
+                    let produced = call_with_result(py, &make, ticket, result).ok()?;
+                    built_ticket(&produced)
+                })
+            });
+        slf
+    }
+
+    /// After each failure, call `make(event, ticket)`; a returned `Ticket` is
+    /// enqueued, `None` enqueues nothing. The retry path: count the attempts
+    /// yourself, or a ticket that always fails re-queues itself forever.
+    fn create_ticket_on_failure<'py>(slf: PyRef<'py, Self>, make: Py<PyAny>) -> PyRef<'py, Self> {
+        slf.inner
+            .create_ticket_on_failure(move |event: &Event, ticket: &Ticket| {
+                Python::attach(|py| {
+                    let produced = call_with_ticket(py, &make, event, ticket).ok()?;
+                    built_ticket(&produced)
+                })
+            });
         slf
     }
 
@@ -286,19 +350,36 @@ impl PyTicketSystem {
         slf
     }
 
-    /// Call off `label`'s agents when a finished ticket's result makes
-    /// `predicate(result)` truthy. Only that pool stops; other labels keep
-    /// going.
+    /// Call off `label`'s agents when a finished ticket makes
+    /// `predicate(ticket, result)` truthy. Only that pool stops; other labels
+    /// keep going.
     fn cancel_label_on_result<'py>(
         slf: PyRef<'py, Self>,
         label: &str,
         predicate: Py<PyAny>,
     ) -> PyRef<'py, Self> {
         slf.inner
-            .cancel_label_on_result(label, move |result: &Value| {
+            .cancel_label_on_result(label, move |ticket: &Ticket, result: &Value| {
                 Python::attach(|py| {
-                    value_to_py(py, result)
-                        .and_then(|value| predicate.bind(py).call1((value,)))
+                    call_with_result(py, &predicate, ticket, result)
+                        .and_then(|value| value.is_truthy())
+                        .unwrap_or(false)
+                })
+            });
+        slf
+    }
+
+    /// Call off `label`'s agents when a failure makes `predicate(event,
+    /// ticket)` truthy. Only that pool stops; other labels keep going.
+    fn cancel_label_on_failure<'py>(
+        slf: PyRef<'py, Self>,
+        label: &str,
+        predicate: Py<PyAny>,
+    ) -> PyRef<'py, Self> {
+        slf.inner
+            .cancel_label_on_failure(label, move |event: &Event, ticket: &Ticket| {
+                Python::attach(|py| {
+                    call_with_ticket(py, &predicate, event, ticket)
                         .and_then(|value| value.is_truthy())
                         .unwrap_or(false)
                 })
@@ -521,6 +602,40 @@ impl PyTicketSystem {
             .map(|value| value_to_py(py, value))
             .collect()
     }
+}
+
+/// Call a Python callable with the `(ticket, result)` pair every `_on_result`
+/// hook hands over.
+fn call_with_result<'py>(
+    py: Python<'py>,
+    callable: &Py<PyAny>,
+    ticket: &Ticket,
+    result: &Value,
+) -> PyResult<Bound<'py, PyAny>> {
+    let view = Py::new(py, PyTicket::from_ticket(ticket))?;
+    let value = value_to_py(py, result)?;
+    callable.bind(py).call1((view, value))
+}
+
+/// Call a Python callable with the `(event, ticket)` pair every `_on_failure`
+/// hook hands over.
+fn call_with_ticket<'py>(
+    py: Python<'py>,
+    callable: &Py<PyAny>,
+    event: &Event,
+    ticket: &Ticket,
+) -> PyResult<Bound<'py, PyAny>> {
+    let view = Py::new(py, PyTicket::from_ticket(ticket))?;
+    callable.bind(py).call1((to_py_event(event), view))
+}
+
+/// Read a ticket back out of what a `create_ticket_*` callable returned.
+/// `None`, or anything that is not a `Ticket`, enqueues nothing.
+fn built_ticket(produced: &Bound<'_, PyAny>) -> Option<Ticket> {
+    if produced.is_none() {
+        return None;
+    }
+    Some(produced.extract::<PyRef<PyTicket>>().ok()?.to_ticket())
 }
 
 /// Call a Python predicate with a ticket, reading back its truthiness. A

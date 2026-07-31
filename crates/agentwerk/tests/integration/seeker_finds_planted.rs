@@ -128,7 +128,7 @@ async fn seeker_pool_finds_planted_indicators(
     let calls_c = Arc::clone(&calls);
     let outputs_c = Arc::clone(&outputs);
     let logger = default_logger();
-    let event_handler = Arc::new(move |e: Event| {
+    let event_handler = Arc::new(move |e: &Event| {
         match &e.kind {
             EventKind::ToolCallStarted {
                 tool_name, input, ..

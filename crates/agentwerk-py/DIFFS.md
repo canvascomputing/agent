@@ -38,7 +38,7 @@ Seven rules the surface table below never repeats.
 | `AgentBuilder::tools(iter)` | `Agent.tools(tools)` |
 | `AgentBuilder::dir(p)` | `Agent.dir(dir)` |
 | `AgentBuilder::knowledge(store)` | `Agent.knowledge(store)` |
-| `AgentBuilder::edit_directive_on_failure(editor)` | `Agent.edit_directive_on_failure(editor)`: the editor returns the replacement, or `None` to keep the default, where Rust rewrites in place. |
+| `AgentBuilder::edit_directive_on_retry(editor)` | `Agent.edit_directive_on_retry(editor)`: the editor returns the replacement, or `None` to keep the default, where Rust rewrites in place. |
 | `AgentBuilder::build(self) -> Agent` | `Agent.build() -> Agent`: returns the same object, armed. Configuring after it, or building twice, raises. |
 | `Agent::ticket_system(sys)` | `Agent.ticket_system(system)` |
 | `Agent::task(task) -> String` | `Agent.task(task) -> str` |
@@ -74,15 +74,21 @@ Seven rules the surface table below never repeats.
 | `TicketSystem::get_dir()` | `TicketSystem.get_dir()` |
 | `TicketSystem::schema_for_label(label, schema)` | `TicketSystem.schema_for_label(label, schema)` |
 | `TicketSystem::on_event(h)` | `TicketSystem.on_event(callback)` |
+| `TicketSystem::on_result(handler)` | `TicketSystem.on_result(callback)` |
+| `TicketSystem::on_failure(handler)` | `TicketSystem.on_failure(callback)` |
 | `TicketSystem::on_ticket(handler)` | `TicketSystem.on_ticket(callback)` |
 | `TicketSystem::cancel_on(trigger)` | `TicketSystem.cancel_on(awaitable)` |
 | `TicketSystem::cancel_on_event(predicate)` | `TicketSystem.cancel_on_event(predicate)` |
 | `TicketSystem::cancel_on_result(predicate)` | `TicketSystem.cancel_on_result(predicate)` |
+| `TicketSystem::cancel_on_failure(predicate)` | `TicketSystem.cancel_on_failure(predicate)` |
 | `TicketSystem::cancel_label(label)` | `TicketSystem.cancel_label(label)` |
 | `TicketSystem::cancel_label_on_event(label, predicate)` | `TicketSystem.cancel_label_on_event(label, predicate)` |
 | `TicketSystem::cancel_label_on_result(label, predicate)` | `TicketSystem.cancel_label_on_result(label, predicate)` |
+| `TicketSystem::cancel_label_on_failure(label, predicate)` | `TicketSystem.cancel_label_on_failure(label, predicate)` |
 | `TicketSystem::label_cancelled(label)` | `TicketSystem.label_cancelled(label)` |
+| `TicketSystem::create_ticket_on_event(make)` | `TicketSystem.create_ticket_on_event(make)` |
 | `TicketSystem::create_ticket_on_result(make)` | `TicketSystem.create_ticket_on_result(make)` |
+| `TicketSystem::create_ticket_on_failure(make)` | `TicketSystem.create_ticket_on_failure(make)` |
 | `TicketSystem::edit_replies(key, edit)` | `TicketSystem.edit_replies(key, editor)`: the editor returns the new list, or `None` to keep the old one, where Rust mutates in place. An editor that raises, or returns anything but `Reply` objects, raises here. |
 | `TicketSystem::edit_replies_on_event(editor)` | `TicketSystem.edit_replies_on_event(editor)`: same return-instead-of-mutate shape. An editor that raises prints its traceback and changes nothing: it runs on an agent thread with no Python frame to raise into. |
 | `TicketSystem::model_for_agent(name)` | `TicketSystem.model_for_agent(agent_name)` |
@@ -171,6 +177,7 @@ Seven rules the surface table below never repeats.
 | `Event { agent_name, ticket_key, kind }` | `Event.agent_name`, `.ticket_key`, `.kind` |
 | `EventKind` variant payload | `Event.data`: a dict of that variant's fields. |
 | `EventKind`, `FinishReason` | Strings. |
+| `EventKind::is_failure()` | Not bound: `Event.kind` is a string, so ask `TicketSystem.on_failure(handler)` for the same five kinds. |
 | `CompactReason`, `PolicyKind`, `ToolFailureKind`, `KnowledgeOp` | Strings inside `Event.data`, under the field's own name: `data["policy"]`, `data["reason"]`, `data["op"]`. |
 | `default_logger()` | Not bound: pass your own handler to `TicketSystem.on_event(handler)`. |
 | **LLM providers** | |

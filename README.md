@@ -134,6 +134,8 @@ make use_case                # list available names
 make use_case name=<name>    # run one
 ```
 
+## API
+
 The API, section by section:
 
 - [Agents](#agents): Define roles, behavior and actions.
@@ -177,7 +179,7 @@ tickets.task("Compute (47 * 92) / 8, then round to the nearest integer.");
 | `templates(pairs)` | Inject more than one entry into prompts. |
 | `dir(dir)` | Set the directory the agent has access to. |
 | `interactive()` | Let the agent wait for new instructions to keep a ticket in-progress. |
-| `edit_directive_on_failure(editor)` | Override failure prompts for correcting an agent's behavior. |
+| `edit_directive_on_retry(editor)` | Override the prompt that corrects an agent asked to try again. |
 | `build()` | Create the agent. |
 | `ticket_system(system)` | Attach a built agent to a ticket system. |
 
@@ -316,8 +318,8 @@ let answer = tickets.last_result();
 | `cancel()` | Cancel the execution. |
 | `is_cancelled()` | Check whether the execution was cancelled. |
 | `finish_reason()` | Check the reason for the finishing. |
-| `cancel_label(label)` | Call off one label's agents. |
-| `label_cancelled(label)` | Check whether one label's agents have been called off. |
+| `cancel_label(label)` | Stop one label's agents. |
+| `label_cancelled(label)` | Check whether one label's agents have been stopped. |
 
 </details>
 
@@ -518,7 +520,7 @@ tickets.on_event(|event: Event| {
 });
 
 // Stop execution at the first malicious verdict.
-tickets.cancel_on_result(|result| result["verdict"] == "malicious");
+tickets.cancel_on_result(|_, result| result["verdict"] == "malicious");
 ```
 
 <details>
@@ -558,18 +560,23 @@ See [`EventKind`](https://docs.rs/agentwerk/latest/agentwerk/event/enum.EventKin
 <details>
 <summary>Event hooks</summary>
 
-| Method | Description |
-|--------|-------------|
-| `on_event(handler)` | Read every event as it is emitted. |
-| `default_logger()` | Print events to stderr when no handler is installed. |
-| `on_ticket(handler)` | Read a ticket as it starts, finishes, or fails. |
-| `cancel_on(trigger)` | Stop execution when the given future completes. |
-| `cancel_on_event(condition)` | Stop execution when an event matches. |
-| `cancel_on_result(condition)` | Stop execution when a finished result matches. |
-| `cancel_label_on_event(label, condition)` | Call off one label's agents while the rest keep working. |
-| `cancel_label_on_result(label, condition)` | Call off one label's agents when a finished result matches. |
-| `create_ticket_on_result(make)` | Enqueue a follow-up ticket from a finished ticket. |
-| `edit_replies_on_event(editor)` | Rewrite a ticket's replies before its next request. |
+| | Method | Description |
+|-|--------|-------------|
+| **Observe** | `on_event(handler)` | Read every event as it is emitted. |
+| | `on_result(handler)` | Read every finished ticket together with its result. |
+| | `on_failure(handler)` | Read every failure together with the ticket it happened in. |
+| | `on_ticket(handler)` | Read a ticket as it starts, finishes, or fails. |
+| **Stop the run** | `cancel_on(trigger)` | Stop execution when the given future completes. |
+| | `cancel_on_event(condition)` | Stop execution when an event matches. |
+| | `cancel_on_result(condition)` | Stop execution when a finished result matches. |
+| | `cancel_on_failure(condition)` | Stop execution when a failure matches. |
+| **Stop one label** | `cancel_label_on_event(label, condition)` | Stop one label's agents while the rest keep working. |
+| | `cancel_label_on_result(label, condition)` | Stop one label's agents when a finished result matches. |
+| | `cancel_label_on_failure(label, condition)` | Stop one label's agents when a failure matches. |
+| **Add work** | `create_ticket_on_event(make)` | Enqueue a follow-up ticket from any event. |
+| | `create_ticket_on_result(make)` | Enqueue a follow-up ticket from a finished ticket. |
+| | `create_ticket_on_failure(make)` | Enqueue a retry for a ticket that failed. |
+| **Rewrite replies** | `edit_replies_on_event(editor)` | Rewrite a ticket's replies before its next request. |
 
 Save replies of every finished ticket as a training example:
 

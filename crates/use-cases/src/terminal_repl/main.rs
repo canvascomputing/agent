@@ -85,7 +85,7 @@ async fn main() {
     let handler_midstream = Arc::clone(&midstream);
     let last_input = Arc::new(AtomicU64::new(0));
     let handler_last_input = Arc::clone(&last_input);
-    let handler: Arc<dyn Fn(Event) + Send + Sync> = Arc::new(move |e: Event| {
+    let handler: Arc<dyn Fn(&Event) + Send + Sync> = Arc::new(move |e: &Event| {
         print_event(
             &e,
             &event_style,

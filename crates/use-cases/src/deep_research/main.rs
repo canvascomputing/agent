@@ -35,8 +35,8 @@ async fn main() {
     eprintln!("Question: {question}\n");
 
     let provider = provider_from_env().expect("LLM provider required");
-    let event_handler: Arc<dyn Fn(Event) + Send + Sync> =
-        Arc::new(|event: Event| log_event(&event));
+    let event_handler: Arc<dyn Fn(&Event) + Send + Sync> =
+        Arc::new(|event: &Event| log_event(event));
 
     let schema_json_pretty = serde_json::to_string_pretty(&final_report_schema_value()).unwrap();
 

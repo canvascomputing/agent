@@ -42,7 +42,7 @@ impl<'a> TicketContext<'a> {
 
     /// The corrective directive to inject for `detail`: the built-in text,
     /// passed through the agent's directive editor when one is installed.
-    pub(super) fn failure_directive(&self, detail: &str) -> String {
+    pub(super) fn retry_directive(&self, detail: &str) -> String {
         let mut directive = crate::prompts::retry_directive(detail);
         if let Some(editor) = self.agent.directive_editor() {
             editor(detail, &mut directive);
@@ -219,7 +219,7 @@ fn silence_retry(context: &mut TicketContext<'_>) -> Step {
     });
     context.ticket_system.add_reply(
         &context.ticket_key,
-        Reply::user_text(context.failure_directive(RESUME_OR_FINISH_DETAIL)),
+        Reply::user_text(context.retry_directive(RESUME_OR_FINISH_DETAIL)),
     );
     Step::CheckTicket
 }
@@ -293,7 +293,7 @@ mod tests {
                 .provider(provider.clone() as Arc<dyn Provider>)
                 .model("mock")
                 .role("test")
-                .edit_directive_on_failure(|_, directive| {
+                .edit_directive_on_retry(|_, directive| {
                     *directive = "PLEASE CALL A TOOL NOW".into()
                 })
                 .build(),
@@ -334,7 +334,7 @@ mod tests {
                 .provider(provider.clone() as Arc<dyn Provider>)
                 .model("mock")
                 .role("test")
-                .edit_directive_on_failure(|_, _| {})
+                .edit_directive_on_retry(|_, _| {})
                 .build(),
         );
 
@@ -407,7 +407,7 @@ mod tests {
             .dir(results_dir.path().to_path_buf())
             .max_request_retries(0)
             .request_retry_delay(Duration::from_millis(1));
-        tickets.create_ticket_on_result(|done| {
+        tickets.create_ticket_on_result(|done, _| {
             (done.key == "TICKET-1").then(|| Ticket::new("follow up").label("alice"))
         });
         tickets.agent(

@@ -279,9 +279,9 @@ pub fn task_agent(provider: &Arc<MockProvider>) -> Agent {
 
 pub fn collect_events(tickets: &TicketSystem) -> Arc<Mutex<Vec<Event>>> {
     let collected: Arc<Mutex<Vec<Event>>> = Arc::new(Mutex::new(Vec::new()));
-    let handler: Arc<dyn Fn(Event) + Send + Sync> = {
+    let handler: Arc<dyn Fn(&Event) + Send + Sync> = {
         let c = Arc::clone(&collected);
-        Arc::new(move |e| c.lock().unwrap().push(e))
+        Arc::new(move |e: &Event| c.lock().unwrap().push(e.clone()))
     };
     tickets.on_event(move |e| handler(e));
     collected
@@ -296,9 +296,9 @@ pub async fn run_one(
     schema: Option<Schema>,
 ) -> (Vec<Event>, Arc<MockProvider>, Ticket) {
     let collected: Arc<Mutex<Vec<Event>>> = Arc::new(Mutex::new(Vec::new()));
-    let handler: Arc<dyn Fn(Event) + Send + Sync> = {
+    let handler: Arc<dyn Fn(&Event) + Send + Sync> = {
         let c = Arc::clone(&collected);
-        Arc::new(move |e| c.lock().unwrap().push(e))
+        Arc::new(move |e: &Event| c.lock().unwrap().push(e.clone()))
     };
 
     let results_dir = crate::test_util::TempDir::new().unwrap();
@@ -345,9 +345,9 @@ pub async fn run_with_context_window(
     let task: String = task.into();
     use crate::providers::Model;
     let collected: Arc<Mutex<Vec<Event>>> = Arc::new(Mutex::new(Vec::new()));
-    let handler: Arc<dyn Fn(Event) + Send + Sync> = {
+    let handler: Arc<dyn Fn(&Event) + Send + Sync> = {
         let c = Arc::clone(&collected);
-        Arc::new(move |e| c.lock().unwrap().push(e))
+        Arc::new(move |e: &Event| c.lock().unwrap().push(e.clone()))
     };
 
     let results_dir = crate::test_util::TempDir::new().unwrap();
@@ -383,9 +383,9 @@ pub async fn run_compaction(
     provider: Arc<MockProvider>,
 ) -> (Vec<Event>, Arc<MockProvider>, Ticket) {
     let collected: Arc<Mutex<Vec<Event>>> = Arc::new(Mutex::new(Vec::new()));
-    let handler: Arc<dyn Fn(Event) + Send + Sync> = {
+    let handler: Arc<dyn Fn(&Event) + Send + Sync> = {
         let c = Arc::clone(&collected);
-        Arc::new(move |e| c.lock().unwrap().push(e))
+        Arc::new(move |e: &Event| c.lock().unwrap().push(e.clone()))
     };
 
     let results_dir = crate::test_util::TempDir::new().unwrap();
