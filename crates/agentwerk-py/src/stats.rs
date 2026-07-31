@@ -63,6 +63,38 @@ impl PyStats {
         }
     }
 
+    /// Get every label slice, keyed by label.
+    fn label_stats(&self) -> BTreeMap<String, PyStats> {
+        self.get()
+            .label_stats()
+            .into_iter()
+            .map(|(name, slice)| {
+                (
+                    name,
+                    PyStats {
+                        source: Source::Slice(slice),
+                    },
+                )
+            })
+            .collect()
+    }
+
+    /// Get every agent slice, keyed by agent name.
+    fn agent_stats(&self) -> BTreeMap<String, PyStats> {
+        self.get()
+            .agent_stats()
+            .into_iter()
+            .map(|(name, slice)| {
+                (
+                    name,
+                    PyStats {
+                        source: Source::Slice(slice),
+                    },
+                )
+            })
+            .collect()
+    }
+
     /// Get a ticket's token usage, oldest first.
     fn token_usage<'py>(&self, py: Python<'py>, ticket_key: &str) -> PyResult<Bound<'py, PyAny>> {
         let history = self.get().token_usage(ticket_key);

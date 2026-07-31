@@ -333,6 +333,30 @@ impl Stats {
             .unwrap_or_default()
     }
 
+    /// Get every label slice, sorted by label.
+    ///
+    /// Empty on a slice, which holds no slices of its own.
+    pub fn label_stats(&self) -> BTreeMap<String, Arc<Stats>> {
+        self.label_stats
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(name, slice)| (name.clone(), Arc::clone(slice)))
+            .collect()
+    }
+
+    /// Get every agent slice, sorted by agent name.
+    ///
+    /// Empty on a slice, which holds no slices of its own.
+    pub fn agent_stats(&self) -> BTreeMap<String, Arc<Stats>> {
+        self.agent_stats
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(name, slice)| (name.clone(), Arc::clone(slice)))
+            .collect()
+    }
+
     /// The label's slice, created on first use. Reading through
     /// `stats_for_label` must not add one, or a misspelled lookup would
     /// leave a zeroed section in `stats.json` for good.
@@ -1237,6 +1261,25 @@ mod tests {
         let a = s.stats_for_label("scan");
         let b = s.stats_for_label("scan");
         assert!(Arc::ptr_eq(&a, &b));
+    }
+
+    #[test]
+    fn label_stats_and_agent_stats_list_every_slice() {
+        let s = Stats::new();
+        s.record_event(&turn(), "KEY", &["scan".into()], "scout");
+        s.record_event(&turn(), "KEY", &["audit".into()], "writer");
+
+        assert_eq!(
+            s.label_stats().keys().collect::<Vec<_>>(),
+            vec!["audit", "scan"],
+        );
+        assert_eq!(
+            s.agent_stats().keys().collect::<Vec<_>>(),
+            vec!["scout", "writer"],
+        );
+        assert_eq!(s.label_stats()["scan"].turns(), 1);
+        // A slice holds no slices of its own.
+        assert!(s.stats_for_label("scan").label_stats().is_empty());
     }
 
     #[test]

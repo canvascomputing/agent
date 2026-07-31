@@ -156,6 +156,7 @@ Seven rules the surface table below never repeats.
 | `Page { slug, kind, description, content, tags }` | `Page(slug, description, content, kind=.., tags=..)`: a struct literal becomes a constructor, so the optional fields move last. |
 | `KnowledgeError` | `RuntimeError` |
 | **Statistics** | |
+| `Stats::label_stats()`, `::agent_stats()` | Same names. Values are `Stats`. |
 | `Stats::stats_for_label(label)` | `Stats.stats_for_label(label)` |
 | `Stats::stats_for_agent(name)` | `Stats.stats_for_agent(agent_name)` |
 | `Stats::token_usage(key)` | `Stats.token_usage(ticket_key)` |
