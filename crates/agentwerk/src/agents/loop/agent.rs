@@ -50,15 +50,24 @@ impl<'a> TicketContext<'a> {
         directive
     }
 
+    /// Fail the ticket without naming a cause. The caller has already emitted
+    /// the event that does.
+    pub(super) fn fail_ticket(&self) {
+        let _ = self
+            .ticket_queue
+            .set_failed_by(&self.ticket_key, self.agent.get_name());
+    }
+
+    /// Fail the ticket because a request did not come back. Reserved for the
+    /// request path, so `RequestFailed` never reports a request that was
+    /// never made.
     pub(super) fn fail_with(&self, reason: RequestErrorKind, message: String) {
         self.emit(EventKind::RequestFailed {
             model: self.model.name.clone(),
             reason,
             message,
         });
-        let _ = self
-            .ticket_queue
-            .set_failed_by(&self.ticket_key, self.agent.get_name());
+        self.fail_ticket();
     }
 }
 
