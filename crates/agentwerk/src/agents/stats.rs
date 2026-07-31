@@ -310,8 +310,7 @@ impl Stats {
     /// against reads as zero.
     ///
     /// Every accessor answers the same question it answers run-wide, except
-    /// two: `run_duration()` is `None`, since timing stays global, and
-    /// `usage_for_ticket()` is empty.
+    /// `run_duration()`, which is `None` because timing stays global.
     pub fn stats_for_label(&self, label: &str) -> Arc<Stats> {
         self.label_stats
             .lock()
@@ -333,30 +332,6 @@ impl Stats {
             .get(agent_name)
             .cloned()
             .unwrap_or_default()
-    }
-
-    /// Get every label slice, sorted by label.
-    ///
-    /// Empty on a slice, which holds no slices of its own.
-    pub fn stats_by_label(&self) -> BTreeMap<String, Arc<Stats>> {
-        self.label_stats
-            .lock()
-            .unwrap()
-            .iter()
-            .map(|(name, slice)| (name.clone(), Arc::clone(slice)))
-            .collect()
-    }
-
-    /// Get every agent slice, sorted by agent name.
-    ///
-    /// Empty on a slice, which holds no slices of its own.
-    pub fn stats_by_agent(&self) -> BTreeMap<String, Arc<Stats>> {
-        self.agent_stats
-            .lock()
-            .unwrap()
-            .iter()
-            .map(|(name, slice)| (name.clone(), Arc::clone(slice)))
-            .collect()
     }
 
     /// The label's slice, created on first use. Reading through
@@ -381,12 +356,13 @@ impl Stats {
             .clone()
     }
 
-    /// Get a ticket's token usage, oldest first.
+    /// A ticket's token usage, oldest first, for the compaction estimator.
     ///
-    /// This is what the compaction estimator reads, not a cumulative figure:
-    /// it is cleared when a ticket is compacted, `stats.json` never carries
-    /// it, and unlike every other measure it is not mirrored onto a slice.
-    pub fn usage_for_ticket(&self, ticket_key: &str) -> Vec<TokenUsage> {
+    /// Crate-internal: it is cleared when a ticket is compacted, so a caller
+    /// reading it would get a silently truncated series. A host that wants
+    /// the figures reads `EventKind::RequestFinished`, which reports every
+    /// one as it happens and is never cleared.
+    pub(crate) fn usage_for_ticket(&self, ticket_key: &str) -> Vec<TokenUsage> {
         self.token_usage
             .lock()
             .unwrap()
@@ -1259,25 +1235,6 @@ mod tests {
         let a = s.stats_for_label("scan");
         let b = s.stats_for_label("scan");
         assert!(Arc::ptr_eq(&a, &b));
-    }
-
-    #[test]
-    fn stats_by_label_and_stats_by_agent_list_every_slice() {
-        let s = Stats::new();
-        s.record_event(&turn(), "KEY", &["scan".into()], "scout");
-        s.record_event(&turn(), "KEY", &["audit".into()], "writer");
-
-        assert_eq!(
-            s.stats_by_label().keys().collect::<Vec<_>>(),
-            vec!["audit", "scan"],
-        );
-        assert_eq!(
-            s.stats_by_agent().keys().collect::<Vec<_>>(),
-            vec!["scout", "writer"],
-        );
-        assert_eq!(s.stats_by_label()["scan"].turns(), 1);
-        // A slice holds no slices of its own.
-        assert!(s.stats_for_label("scan").stats_by_label().is_empty());
     }
 
     #[test]
