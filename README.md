@@ -168,6 +168,7 @@ tickets.task("Compute (47 * 92) / 8, then round to the nearest integer.");
 
 | Method | Description |
 |--------|-------------|
+| `Agent::empty()` | Create an agent with no tools pre-registered. |
 | `name(name)` | Set a name or identifier for assigning tickets. |
 | `role(role)` | Define who the agent is and how it should work. |
 | `label(label)` / `labels(labels)` | Restrict the agent to tickets carrying a matching label. |
@@ -287,8 +288,10 @@ tickets.ticket(
 | `ticket(ticket)` | Submit a `Ticket` with custom labels or schema. |
 | `reply(key, content)` | Add a reply to a ticket. |
 | `edit_replies(key, editor)` | Rewrite one ticket's replies now. |
+| `set_finished(key, result)` | Finish a ticket with a result. |
 | `set_failed(key)` | Fail a ticket. |
 | `dir(dir)` | Define where a session is stored. |
+| `get_dir()` | Get the session directory. |
 | `schema_for_label(label, schema)` | Register a schema every ticket of that label validates against. |
 
 See [`TicketSystem`](https://docs.rs/agentwerk/latest/agentwerk/agents/tickets/struct.TicketSystem.html).
@@ -353,6 +356,7 @@ let report: Report = serde_json::from_value(ticket.result.clone().unwrap())?;
 | `results()` | Get every ticket's result in creation order. |
 | `results_for_label(label)` | Get every ticket's result carrying a specific label. |
 | `tickets()` | Get every ticket in creation order. |
+| `tickets_for_label(label)` | Get every ticket carrying a specific label. |
 | `find_ticket(condition)` | Get the earliest ticket matching a condition. |
 | `find_tickets(condition)` | Get every ticket matching a condition. |
 | `get_ticket(key)` | Get one ticket by key. |
@@ -360,13 +364,14 @@ let report: Report = serde_json::from_value(ticket.result.clone().unwrap())?;
 | `model_for_agent(name)` | Get the model that agent runs. |
 | `stats()` | Get execution statistics, see [Stats](#stats). |
 
-Ticket fields:
+Ticket members:
 
-| | Fields |
-|-|--------|
+| | Members |
+|-|---------|
 | **Identity** | `key`, `task`, `labels`, `parent`, `reporter` |
 | **Outcome** | `status`, `result`, `replies`, `schema` |
 | **Timestamps** | `created_at`, `started_at`, `finished_at`, `failed_at` |
+| **Checks** | `has_label(label)`, `is_todo()`, `is_in_progress()`, `is_finished()`, `is_failed()`, `is_pending()`, `is_resolved()` |
 
 See [`Ticket`](https://docs.rs/agentwerk/latest/agentwerk/agents/tickets/struct.Ticket.html).
 
@@ -416,14 +421,14 @@ tickets
 
 | Method | Description |
 |--------|-------------|
-| `max_turns(count)` | Limit the total number of turns. |
-| `max_time(duration)` | Limit the total elapsed duration. |
-| `max_input_tokens(count)` | Limit the total input tokens. |
-| `max_output_tokens(count)` | Limit the total output tokens. |
-| `max_request_tokens(count)` | Limit the output tokens of a single request. |
-| `max_schema_retries(count)` | Limit how often a result may fail its schema before the ticket fails. |
-| `max_request_retries(count)` | Limit how often a failing request is retried. |
-| `request_retry_delay(duration)` | Wait this long between retries. |
+| `max_turns(count)` / `get_max_turns()` | Limit the total number of turns. |
+| `max_time(duration)` / `get_max_time()` | Limit the total elapsed duration. |
+| `max_input_tokens(count)` / `get_max_input_tokens()` | Limit the total input tokens. |
+| `max_output_tokens(count)` / `get_max_output_tokens()` | Limit the total output tokens. |
+| `max_request_tokens(count)` / `get_max_request_tokens()` | Limit the output tokens of a single request. |
+| `max_schema_retries(count)` / `get_max_schema_retries()` | Limit how often a result may fail its schema before the ticket fails. |
+| `max_request_retries(count)` / `get_max_request_retries()` | Limit how often a failing request is retried. |
+| `request_retry_delay(duration)` / `get_request_retry_delay()` | Wait this long between retries. |
 
 A violation emits `EventKind::PolicyViolated`, see [`EventKind`](https://docs.rs/agentwerk/latest/agentwerk/event/enum.EventKind.html).
 
@@ -556,11 +561,13 @@ See [`EventKind`](https://docs.rs/agentwerk/latest/agentwerk/event/enum.EventKin
 | Method | Description |
 |--------|-------------|
 | `on_event(handler)` | Read every event as it is emitted. |
+| `default_logger()` | Print events to stderr when no handler is installed. |
 | `on_ticket(handler)` | Read a ticket as it starts, finishes, or fails. |
-| `cancel_on(trigger)` | Stop execution when another task finishes. |
+| `cancel_on(trigger)` | Stop execution when the given future completes. |
 | `cancel_on_event(condition)` | Stop execution when an event matches. |
 | `cancel_on_result(condition)` | Stop execution when a finished result matches. |
 | `cancel_label_on_event(label, condition)` | Call off one label's agents while the rest keep working. |
+| `cancel_label_on_result(label, condition)` | Call off one label's agents when a finished result matches. |
 | `create_ticket_on_result(make)` | Enqueue a follow-up ticket from a finished ticket. |
 | `edit_replies_on_event(editor)` | Rewrite a ticket's replies before its next request. |
 
@@ -598,7 +605,12 @@ for (name, stat) in stats.tool_stats() {
 | Method | Description |
 |--------|-------------|
 | `run_duration()` | Get the elapsed duration. |
+| `total_ticket_duration()` / `avg_ticket_duration()` | Get the total and average time from creation to resolution. |
+| `total_work_duration()` / `avg_work_duration()` | Get the total and average time an agent held a ticket. |
+| `tickets_created()` / `tickets_finished()` / `tickets_failed()` | Get the ticket counts by outcome. |
 | `tickets_success_rate()` | Get `finished / (finished + failed)`. |
+| `turns()` / `requests()` | Get how many turns ran and how many responses arrived. |
+| `tool_calls()` / `errors()` | Get the tool-call count and the failed-request count. |
 | `input_tokens()` / `output_tokens()` | Get token counts across requests. |
 | `tool_stats()` | Get per-tool call and failure counts. |
 | `file_stats()` | Get per-filepath open and failure counts. |
@@ -607,6 +619,7 @@ for (name, stat) in stats.tool_stats() {
 | `usage_history(ticket_key)` | Get a ticket's token usage. |
 | `event_counts()` | Get per-event counts. |
 | `stats_for_label(label)` | Get statistics scoped to one label. |
+| `stats_for_agent(name)` | Get statistics scoped to one agent. |
 
 See [`Stats`](https://docs.rs/agentwerk/latest/agentwerk/agents/stats/struct.Stats.html).
 
@@ -631,7 +644,9 @@ let bob = Agent::new().knowledge(&store);
 |--------|-------------|
 | `index()` | Get the index, which is injected into the agent prompt. |
 | `index_char_limit(count)` | Limit the index size. |
+| `get_index_char_limit()` | Get the index size limit in force. |
 | `pages()` | Get the page collection for reading and writing pages. |
+| `pages().list()` | Get every page in the store. |
 | `clear()` | Remove every page from the store. |
 
 Programmatically create entries:

@@ -353,7 +353,7 @@ pub(super) fn write_result(
     if let Err(violations) = ticket_system.set_result(key, result) {
         return ToolResult::schema_error(violations.to_string());
     }
-    match ticket_system.set_finished(key, agent) {
+    match ticket_system.set_finished_by(key, agent) {
         Ok(()) => ToolResult::success(format!("Ticket {key} marked finished")),
         Err(e) => ToolResult::error(ticket_error_message(e)),
     }

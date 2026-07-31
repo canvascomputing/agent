@@ -32,6 +32,11 @@ impl PyKnowledge {
         slf
     }
 
+    /// Rendered-index char budget in force, 12 000 until it is overridden.
+    fn get_index_char_limit(&self) -> usize {
+        self.inner.get_index_char_limit()
+    }
+
     /// The current rendered index (the bullet list), or an empty string.
     fn index(&self) -> String {
         self.inner.index()
@@ -75,6 +80,12 @@ impl PyPages {
     fn load(&self, slug: &str) -> PyResult<PyPage> {
         let page = self.pages().load(slug).map_err(runtime_error)?;
         Ok(PyPage { inner: page })
+    }
+
+    /// Every page in the store, in index order.
+    fn list(&self) -> PyResult<Vec<PyPage>> {
+        let pages = self.pages().list().map_err(runtime_error)?;
+        Ok(pages.into_iter().map(|inner| PyPage { inner }).collect())
     }
 
     /// Drop a page and its index entry.

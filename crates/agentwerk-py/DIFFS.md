@@ -52,6 +52,7 @@ Seven rules the surface table below never repeats.
 | `TicketSystem::task(task)` | `TicketSystem.task(task)` |
 | `TicketSystem::ticket(t)` | `TicketSystem.ticket(ticket)` |
 | `TicketSystem::reply(key, content)` | `TicketSystem.reply(key, content)` |
+| `TicketSystem::set_finished(key, result)` | `TicketSystem.set_finished(key, result)` |
 | `TicketSystem::set_failed(key)` | `TicketSystem.set_failed(key)` |
 | `TicketSystem::max_turns(n)` | `TicketSystem.max_turns(n)` |
 | `TicketSystem::max_input_tokens(n)` | `TicketSystem.max_input_tokens(n)` |
@@ -61,7 +62,16 @@ Seven rules the surface table below never repeats.
 | `TicketSystem::max_request_retries(n)` | `TicketSystem.max_request_retries(n)` |
 | `TicketSystem::max_time(d)` | `TicketSystem.max_time(seconds)` |
 | `TicketSystem::request_retry_delay(d)` | `TicketSystem.request_retry_delay(seconds)` |
+| `TicketSystem::get_max_turns()` | `TicketSystem.get_max_turns()` |
+| `TicketSystem::get_max_input_tokens()` | `TicketSystem.get_max_input_tokens()` |
+| `TicketSystem::get_max_output_tokens()` | `TicketSystem.get_max_output_tokens()` |
+| `TicketSystem::get_max_request_tokens()` | `TicketSystem.get_max_request_tokens()` |
+| `TicketSystem::get_max_schema_retries()` | `TicketSystem.get_max_schema_retries()` |
+| `TicketSystem::get_max_request_retries()` | `TicketSystem.get_max_request_retries()` |
+| `TicketSystem::get_max_time()` | `TicketSystem.get_max_time()` |
+| `TicketSystem::get_request_retry_delay()` | `TicketSystem.get_request_retry_delay()` |
 | `TicketSystem::dir(dir)` | `TicketSystem.dir(dir)` |
+| `TicketSystem::get_dir()` | `TicketSystem.get_dir()` |
 | `TicketSystem::schema_for_label(label, schema)` | `TicketSystem.schema_for_label(label, schema)` |
 | `TicketSystem::on_event(h)` | `TicketSystem.on_event(callback)` |
 | `TicketSystem::on_ticket(handler)` | `TicketSystem.on_ticket(callback)` |
@@ -70,6 +80,7 @@ Seven rules the surface table below never repeats.
 | `TicketSystem::cancel_on_result(predicate)` | `TicketSystem.cancel_on_result(predicate)` |
 | `TicketSystem::cancel_label(label)` | `TicketSystem.cancel_label(label)` |
 | `TicketSystem::cancel_label_on_event(label, predicate)` | `TicketSystem.cancel_label_on_event(label, predicate)` |
+| `TicketSystem::cancel_label_on_result(label, predicate)` | `TicketSystem.cancel_label_on_result(label, predicate)` |
 | `TicketSystem::label_cancelled(label)` | `TicketSystem.label_cancelled(label)` |
 | `TicketSystem::create_ticket_on_result(make)` | `TicketSystem.create_ticket_on_result(make)` |
 | `TicketSystem::edit_replies(key, edit)` | `TicketSystem.edit_replies(key, editor)`: the editor returns the new list, or `None` to keep the old one, where Rust mutates in place. An editor that raises, or returns anything but `Reply` objects, raises here. |
@@ -77,6 +88,7 @@ Seven rules the surface table below never repeats.
 | `TicketSystem::model_for_agent(name)` | `TicketSystem.model_for_agent(agent_name)` |
 | `TicketSystem::get_ticket(key)` | `TicketSystem.get_ticket(key)` |
 | `TicketSystem::tickets()` | `TicketSystem.tickets()` |
+| `TicketSystem::tickets_for_label(label)` | `TicketSystem.tickets_for_label(label)` |
 | `TicketSystem::find_tickets(predicate)` | `TicketSystem.find_tickets(predicate)` |
 | `TicketSystem::find_ticket(predicate)` | `TicketSystem.find_ticket(predicate)` |
 | `TicketSystem::wait_for_ticket(predicate).await` | `await TicketSystem.wait_for_ticket(predicate)` |
@@ -119,16 +131,19 @@ Seven rules the surface table below never repeats.
 | **Knowledge** | |
 | `Knowledge::load(dir)` | `Knowledge.load(dir)` |
 | `Knowledge::index_char_limit(n)` | `Knowledge.index_char_limit(n)` |
+| `Knowledge::get_index_char_limit()` | `Knowledge.get_index_char_limit()` |
 | `Knowledge::index()` | `Knowledge.index()` |
 | `Knowledge::pages()` | `Knowledge.pages()` |
 | `Knowledge::clear()` | `Knowledge.clear()` |
 | `Pages::save(page)` | `Pages.save(page)` |
 | `Pages::load(slug)` | `Pages.load(slug)` |
+| `Pages::list()` | `Pages.list()` |
 | `Pages::remove(slug)` | `Pages.remove(slug)` |
 | `Page { slug, kind, description, content, tags }` | `Page(slug, description, content, kind=.., tags=..)`: a struct literal becomes a constructor, so the optional fields move last. |
 | `KnowledgeError` | `RuntimeError` |
 | **Statistics** | |
 | `Stats::stats_for_label(label)` | `Stats.stats_for_label(label)` |
+| `Stats::stats_for_agent(name)` | `Stats.stats_for_agent(agent_name)` |
 | `Stats::usage_history(key)` | `Stats.usage_history(ticket_key)` |
 | `Stats::tool_stats()` | `Stats.tool_stats()` |
 | `Stats::file_stats()` | `Stats.file_stats()` |
@@ -159,10 +174,10 @@ Seven rules the surface table below never repeats.
 | `CompactReason`, `PolicyKind`, `ToolFailureKind`, `KnowledgeOp` | Strings inside `Event.data`, under the field's own name: `data["policy"]`, `data["reason"]`, `data["op"]`. |
 | `default_logger()` | Not bound: pass your own handler to `TicketSystem.on_event(handler)`. |
 | **LLM providers** | |
-| `AnthropicProvider::new(key).base_url(url).timeout(d)` | `AnthropicProvider(api_key, base_url=..)`: the request timeout is not bound. |
-| `OpenAiProvider::new(key).base_url(url).timeout(d)` | `OpenAiProvider(api_key, base_url=..)`: the request timeout is not bound. |
-| `MistralProvider::new(key).base_url(url).timeout(d)` | `MistralProvider(api_key, base_url=..)`: the request timeout is not bound. |
-| `LiteLlmProvider::new(key).base_url(url).timeout(d)` | `LiteLlmProvider(api_key, base_url=..)`: the request timeout is not bound. |
+| `AnthropicProvider::new(key).base_url(url).timeout(d)` | `AnthropicProvider(api_key, base_url=.., timeout=..)` |
+| `OpenAiProvider::new(key).base_url(url).timeout(d)` | `OpenAiProvider(api_key, base_url=.., timeout=..)` |
+| `MistralProvider::new(key).base_url(url).timeout(d)` | `MistralProvider(api_key, base_url=.., timeout=..)` |
+| `LiteLlmProvider::new(key).base_url(url).timeout(d)` | `LiteLlmProvider(api_key, base_url=.., timeout=..)` |
 | `Provider` | An opaque handle. Write a new LLM provider in Rust. |
 | `provider_from_env()` | `provider_from_env()` |
 | `model_from_env()` | `model_from_env()` |

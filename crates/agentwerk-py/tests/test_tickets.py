@@ -121,6 +121,31 @@ def test_set_failed_resolves_a_ticket_from_outside_the_run(system):
     assert system.get_ticket(key).status == "failed"
 
 
+def test_set_finished_resolves_a_ticket_with_its_result(system):
+    key = system.ticket(aw.Ticket("scan the corpus"))
+
+    system.set_finished(key, {"verdict": "clean"})
+
+    assert system.get_ticket(key).status == "finished"
+    assert system.last_result() == {"verdict": "clean"}
+
+
+def test_set_finished_rejects_a_result_that_misses_the_schema(system):
+    schema = aw.Schema(
+        {
+            "type": "object",
+            "properties": {"title": {"type": "string"}},
+            "required": ["title"],
+        }
+    )
+    key = system.ticket(aw.Ticket("write a report", schema=schema))
+
+    with pytest.raises(RuntimeError):
+        system.set_finished(key, {"body": "no title"})
+
+    assert system.get_ticket(key).status == "todo"
+
+
 def test_set_failed_rejects_an_unknown_key(system):
     with pytest.raises(RuntimeError):
         system.set_failed("TICKET-does-not-exist")
@@ -137,6 +162,29 @@ def test_results_are_empty_before_a_run(system):
     assert system.results() == []
     assert system.results_for_label("a") == []
     assert system.last_result() is None
+
+
+def test_tickets_for_label_returns_every_status_not_just_finished(system):
+    system.ticket(aw.Ticket("alpha", labels=["a"]))
+    system.ticket(aw.Ticket("beta", labels=["b"]))
+
+    tasks = [ticket.task for ticket in system.tickets_for_label("a")]
+    assert tasks == ["alpha"]
+
+
+def test_cancel_label_on_result_chains(system):
+    assert isinstance(
+        system.cancel_label_on_result("scan", lambda result: False), aw.TicketSystem
+    )
+
+
+def test_policy_readers_return_the_limits_that_were_set(system):
+    system.max_turns(40).max_time(300.0)
+
+    assert system.get_max_turns() == 40
+    assert system.get_max_time() == 300.0
+    assert system.get_max_input_tokens() is None
+    assert system.get_max_request_retries() == 10
 
 
 def test_cancel_marks_the_system_cancelled(system):
