@@ -625,7 +625,7 @@ for name, stat in stats.tool_stats().items():
 | `event_counts()` | Get per-event counts. |
 | `label_stats()` / `agent_stats()` | Get every label and agent slice, keyed by name. |
 | `stats_for_label(label)` | Get statistics scoped to one label. |
-| `stats_for_agent(name)` | Get statistics scoped to one agent. |
+| `stats_for_agent(agent_name)` | Get statistics scoped to one agent. |
 
 See [`Stats`](https://docs.rs/agentwerk/latest/agentwerk/agents/stats/struct.Stats.html).
 

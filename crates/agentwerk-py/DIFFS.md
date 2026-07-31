@@ -158,7 +158,7 @@ Seven rules the surface table below never repeats.
 | **Statistics** | |
 | `Stats::label_stats()`, `::agent_stats()` | Same names. Values are `Stats`. |
 | `Stats::stats_for_label(label)` | `Stats.stats_for_label(label)` |
-| `Stats::stats_for_agent(name)` | `Stats.stats_for_agent(agent_name)` |
+| `Stats::stats_for_agent(agent_name)` | `Stats.stats_for_agent(agent_name)` |
 | `Stats::token_usage(key)` | `Stats.token_usage(ticket_key)` |
 | `Stats::tool_stats()` | `Stats.tool_stats()` |
 | `Stats::file_stats()` | `Stats.file_stats()` |
@@ -186,7 +186,7 @@ Seven rules the surface table below never repeats.
 | `Event { agent_name, ticket_key, kind }` | `Event.agent_name`, `.ticket_key`, `.kind` |
 | `EventKind` variant payload | `Event.data`: a dict of that variant's fields. |
 | `EventKind`, `FinishReason` | Strings. |
-| `EventKind::is_failure()` | Not bound: `Event.kind` is a string, so ask `TicketQueue.on_failure(handler)` for the same five kinds. |
+| `EventKind::is_failure()` | Not bound: `Event.kind` is a string, so ask `TicketQueue.on_failure(handler)` for the same six kinds. |
 | `CompactReason`, `PolicyKind`, `ToolFailureKind`, `KnowledgeOp` | Strings inside `Event.data`, under the field's own name: `data["policy"]`, `data["reason"]`, `data["op"]`. |
 | `default_logger()` | Not bound: pass your own handler to `TicketQueue.on_event(handler)`. |
 | **LLM providers** | |
