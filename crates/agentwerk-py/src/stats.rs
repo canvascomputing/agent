@@ -64,9 +64,9 @@ impl PyStats {
     }
 
     /// Get every label slice, keyed by label.
-    fn label_stats(&self) -> BTreeMap<String, PyStats> {
+    fn stats_by_label(&self) -> BTreeMap<String, PyStats> {
         self.get()
-            .label_stats()
+            .stats_by_label()
             .into_iter()
             .map(|(name, slice)| {
                 (
@@ -80,9 +80,9 @@ impl PyStats {
     }
 
     /// Get every agent slice, keyed by agent name.
-    fn agent_stats(&self) -> BTreeMap<String, PyStats> {
+    fn stats_by_agent(&self) -> BTreeMap<String, PyStats> {
         self.get()
-            .agent_stats()
+            .stats_by_agent()
             .into_iter()
             .map(|(name, slice)| {
                 (
@@ -96,8 +96,12 @@ impl PyStats {
     }
 
     /// Get a ticket's token usage, oldest first.
-    fn token_usage<'py>(&self, py: Python<'py>, ticket_key: &str) -> PyResult<Bound<'py, PyAny>> {
-        let history = self.get().token_usage(ticket_key);
+    fn usage_for_ticket<'py>(
+        &self,
+        py: Python<'py>,
+        ticket_key: &str,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let history = self.get().usage_for_ticket(ticket_key);
         let value = serde_json::to_value(&history).map_err(runtime_error)?;
         value_to_py(py, &value)
     }

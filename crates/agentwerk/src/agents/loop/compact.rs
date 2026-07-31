@@ -103,7 +103,7 @@ pub(super) fn proactive_compaction_needed(context: &TicketContext<'_>, ticket: &
     let history = context
         .ticket_queue
         .stats()
-        .token_usage(&context.ticket_key);
+        .usage_for_ticket(&context.ticket_key);
 
     algo::should_compact_proactively(
         window,
@@ -700,7 +700,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn compaction_clears_the_ticket_token_usage() {
+    async fn compaction_clears_the_ticket_usage() {
         let provider = provider_that_overflows_then_finishes();
         let queue_handle: std::sync::Arc<std::sync::Mutex<Option<_>>> =
             std::sync::Arc::new(std::sync::Mutex::new(None));
@@ -716,7 +716,7 @@ mod tests {
         // The 180 000-token anchor that tripped the trigger described replies
         // the ticket no longer holds, so it must not survive compaction.
         let tickets = queue_handle.lock().unwrap().take().expect("queue captured");
-        let history = tickets.stats().token_usage(&ticket.key);
+        let history = tickets.stats().usage_for_ticket(&ticket.key);
         assert!(
             history.len() <= 1,
             "expected the pre-compaction usage to be dropped, got {history:?}",

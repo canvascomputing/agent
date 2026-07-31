@@ -211,7 +211,7 @@ async fn summariser_produces_text_when_compaction_fires_against_live_llm() {
     // (turn 2's reply). Without the reset, the pre-compaction entry
     // would still be there too, length would be 2.
     for ticket in tickets.tickets() {
-        let history = tickets.stats().token_usage(&ticket.key);
+        let history = tickets.stats().usage_for_ticket(&ticket.key);
         assert!(
             history.len() <= 1,
             "{}: token_usage should be cleared on compaction, found {} entries",

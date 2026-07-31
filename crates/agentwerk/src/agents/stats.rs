@@ -311,7 +311,7 @@ impl Stats {
     ///
     /// Every accessor answers the same question it answers run-wide, except
     /// two: `run_duration()` is `None`, since timing stays global, and
-    /// `token_usage()` is empty.
+    /// `usage_for_ticket()` is empty.
     pub fn stats_for_label(&self, label: &str) -> Arc<Stats> {
         self.label_stats
             .lock()
@@ -338,7 +338,7 @@ impl Stats {
     /// Get every label slice, sorted by label.
     ///
     /// Empty on a slice, which holds no slices of its own.
-    pub fn label_stats(&self) -> BTreeMap<String, Arc<Stats>> {
+    pub fn stats_by_label(&self) -> BTreeMap<String, Arc<Stats>> {
         self.label_stats
             .lock()
             .unwrap()
@@ -350,7 +350,7 @@ impl Stats {
     /// Get every agent slice, sorted by agent name.
     ///
     /// Empty on a slice, which holds no slices of its own.
-    pub fn agent_stats(&self) -> BTreeMap<String, Arc<Stats>> {
+    pub fn stats_by_agent(&self) -> BTreeMap<String, Arc<Stats>> {
         self.agent_stats
             .lock()
             .unwrap()
@@ -386,7 +386,7 @@ impl Stats {
     /// This is what the compaction estimator reads, not a cumulative figure:
     /// it is cleared when a ticket is compacted, `stats.json` never carries
     /// it, and unlike every other measure it is not mirrored onto a slice.
-    pub fn token_usage(&self, ticket_key: &str) -> Vec<TokenUsage> {
+    pub fn usage_for_ticket(&self, ticket_key: &str) -> Vec<TokenUsage> {
         self.token_usage
             .lock()
             .unwrap()
@@ -1262,22 +1262,22 @@ mod tests {
     }
 
     #[test]
-    fn label_stats_and_agent_stats_list_every_slice() {
+    fn stats_by_label_and_stats_by_agent_list_every_slice() {
         let s = Stats::new();
         s.record_event(&turn(), "KEY", &["scan".into()], "scout");
         s.record_event(&turn(), "KEY", &["audit".into()], "writer");
 
         assert_eq!(
-            s.label_stats().keys().collect::<Vec<_>>(),
+            s.stats_by_label().keys().collect::<Vec<_>>(),
             vec!["audit", "scan"],
         );
         assert_eq!(
-            s.agent_stats().keys().collect::<Vec<_>>(),
+            s.stats_by_agent().keys().collect::<Vec<_>>(),
             vec!["scout", "writer"],
         );
-        assert_eq!(s.label_stats()["scan"].turns(), 1);
+        assert_eq!(s.stats_by_label()["scan"].turns(), 1);
         // A slice holds no slices of its own.
-        assert!(s.stats_for_label("scan").label_stats().is_empty());
+        assert!(s.stats_for_label("scan").stats_by_label().is_empty());
     }
 
     #[test]
@@ -1553,8 +1553,8 @@ mod tests {
 
         s.reset_usage("TICKET-1");
 
-        assert!(s.token_usage("TICKET-1").is_empty());
-        let t2 = s.token_usage("TICKET-2");
+        assert!(s.usage_for_ticket("TICKET-1").is_empty());
+        let t2 = s.usage_for_ticket("TICKET-2");
         assert_eq!(t2.len(), 1);
         assert_eq!(t2[0].input_tokens, 200);
     }
@@ -1841,14 +1841,14 @@ mod tests {
     }
 
     #[test]
-    fn token_usage_stays_run_wide() {
+    fn usage_for_ticket_stays_run_wide() {
         let s = Stats::new();
         s.record_event(&request(10, 5), "KEY", &["scan".into()], "");
 
-        assert_eq!(s.token_usage("KEY").len(), 1);
+        assert_eq!(s.usage_for_ticket("KEY").len(), 1);
         // The compaction estimator reads the run-wide series only, so
         // mirroring it onto a slice would buy nothing.
-        assert!(s.stats_for_label("scan").token_usage("KEY").is_empty());
+        assert!(s.stats_for_label("scan").usage_for_ticket("KEY").is_empty());
     }
 
     #[test]
