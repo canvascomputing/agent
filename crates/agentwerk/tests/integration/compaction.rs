@@ -1,8 +1,7 @@
-//! Core check on summarizing: the configured 4 096-token window makes
-//! `compaction_threshold` saturate to 0, so proactive compaction fires
-//! between turns. The loop calls compact and the summariser must return
-//! non-empty text. The ticket does not need to complete: verifying the
-//! summariser is the sole purpose of this test.
+//! Core check on summarizing: `compact_at(0.0)` puts the threshold at zero, so
+//! proactive compaction fires between turns. The loop calls compact and the
+//! summariser must return non-empty text. The ticket does not need to
+//! complete: verifying the summariser is the sole purpose of this test.
 
 use std::sync::{Arc, Mutex};
 
@@ -13,10 +12,10 @@ use agentwerk::event::EventKind;
 use agentwerk::providers::Model;
 use agentwerk::{Agent, Event, Ticket, TicketQueue};
 
-// Compaction threshold = max(0, 4 096 − 33 000) = 0, so any non-empty
-// transcript trips the proactive guard between turns. The task itself
-// is ~2 400 tokens; the first model response appends to `usage_history`
-// and the next iteration's proactive check fires.
+// Pins a known context window: the trigger stays quiet on a model whose window
+// it cannot look up, and the model here comes from the environment. The first
+// response appends to `usage_history` and the next iteration's proactive check
+// fires against the zero threshold `compact_at(0.0)` sets.
 const LOCAL_CTX: u64 = 4_096;
 
 // A realistic debugging scenario: ~1 500 tokens, with enough structure
@@ -126,10 +125,11 @@ async fn summariser_produces_text_when_compaction_fires_against_live_llm() {
     eprintln!("\n=== BEFORE COMPACTION ===\n{TASK}\n");
 
     let tickets = TicketQueue::new();
-    // Two iterations: turn 1 lets the model respond once (appending one
-    // entry to `usage_history`); turn 2's proactive guard then trips
-    // because `compaction_threshold(LOCAL_CTX)` saturates to 0.
+    // Two iterations: turn 1 lets the model respond once (appending one entry
+    // to `usage_history`); turn 2's proactive guard then trips because a
+    // threshold of zero is always crossed.
     tickets.max_turns(2);
+    tickets.compact_at(0.0);
     tickets.on_event(move |e| log.lock().unwrap().push(e.clone()));
     tickets.agent(
         Agent::new()
@@ -192,7 +192,10 @@ async fn summariser_produces_text_when_compaction_fires_against_live_llm() {
                         .and_then(|v| v["content"].as_array().map(|a| a.to_owned()))
                         .unwrap_or_default()
                         .into_iter()
-                        .filter_map(|block| block["Text"].as_str().map(|s| s.len()))
+                        // `ReplyContent` is tagged, so a text block is
+                        // `{"type": "text", "text": ...}`; no other block
+                        // carries a `text` field.
+                        .filter_map(|block| block["text"].as_str().map(|s| s.len()))
                         .collect::<Vec<_>>()
                 })
                 .collect::<Vec<_>>()
@@ -203,7 +206,7 @@ async fn summariser_produces_text_when_compaction_fires_against_live_llm() {
         "compaction summary must be at least 200 chars, got {summary_chars}"
     );
 
-    // `reset_usage` runs inside `summarize`, so the per-ticket history
+    // `reset_usage` runs once compaction applies, so the per-ticket history
     // can hold at most the entries recorded *after* compaction committed
     // (turn 2's reply). Without the reset, the pre-compaction entry
     // would still be there too, length would be 2.

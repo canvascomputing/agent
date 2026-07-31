@@ -11,6 +11,7 @@ use pyo3::prelude::*;
 use serde_json::Value;
 
 use crate::agent::PyAgent;
+use crate::compaction::invoke_editor;
 use crate::convert::{py_to_value, runtime_error, value_to_py};
 use crate::event::to_py_event;
 use crate::reply::{py_to_replies, replies_to_py};
@@ -121,6 +122,16 @@ impl PyTicketQueue {
         slf
     }
 
+    /// Compact once the model's context window is this full.
+    ///
+    /// Unset, a built-in fraction applies. The value is clamped to `0.0` through
+    /// `1.0`, and a fraction near zero compacts every turn. Nothing happens on a
+    /// model whose window is unknown.
+    fn compact_at(slf: PyRef<'_, Self>, fraction: f64) -> PyRef<'_, Self> {
+        slf.inner.compact_at(fraction);
+        slf
+    }
+
     /// Wait this long between retries, in seconds.
     fn request_retry_delay(slf: PyRef<'_, Self>, seconds: f64) -> PyRef<'_, Self> {
         slf.inner
@@ -161,6 +172,12 @@ impl PyTicketQueue {
     /// Get the elapsed-duration limit in seconds, or `None` when there is none.
     fn get_max_time(&self) -> Option<f64> {
         self.inner.get_max_time().map(|d| d.as_secs_f64())
+    }
+
+    /// Get how full the context window may get before compaction fires, or
+    /// `None` when the built-in default applies.
+    fn get_compact_at(&self) -> Option<f64> {
+        self.inner.get_compact_at()
     }
 
     /// Get the delay between retries, in seconds.
@@ -510,6 +527,52 @@ impl PyTicketQueue {
                         Err(err) => err.print(py),
                     }
                 });
+            });
+        slf
+    }
+
+    /// Decide what compaction does with a ticket's replies.
+    ///
+    /// Your function receives the `Compaction` and the current replies, and
+    /// returns the new list, or `None` to leave them alone. Define it with
+    /// `async def` to await `compaction.summarize(replies)`; a plain function
+    /// cannot await and has to rewrite the replies on its own.
+    ///
+    /// Handing the replies back unchanged says compaction found nothing to
+    /// drop, and after an overflow the ticket then fails. One editor is held at
+    /// a time, and installing a second replaces the first.
+    ///
+    /// Raising prints the traceback and leaves the replies alone: this runs on
+    /// an agent's own thread, with no Python frame to raise into.
+    fn edit_replies_on_compaction<'py>(
+        slf: PyRef<'py, Self>,
+        editor: Py<PyAny>,
+    ) -> PyRef<'py, Self> {
+        slf.inner
+            .edit_replies_on_compaction(move |compaction, replies: Vec<Reply>| {
+                let editor = Python::attach(|py| editor.clone_ref(py));
+                let unchanged = replies.clone();
+                async move {
+                    // The editor may await `Compaction.summarize`, whose future
+                    // the tokio runtime drives. Running `asyncio.run` on an
+                    // async worker would block the thread that has to poll it.
+                    let edited = tokio::task::spawn_blocking(move || {
+                        Python::attach(|py| {
+                            match invoke_editor(py, &editor, compaction, &replies) {
+                                Ok(Some(edited)) => edited,
+                                Ok(None) => replies,
+                                Err(err) => {
+                                    err.print(py);
+                                    replies
+                                }
+                            }
+                        })
+                    })
+                    .await;
+                    // A panicked editor thread carries no replies back, so hand
+                    // over the originals: compaction changed nothing.
+                    Ok(edited.unwrap_or(unchanged))
+                }
             });
         slf
     }

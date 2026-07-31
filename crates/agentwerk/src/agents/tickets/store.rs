@@ -374,35 +374,13 @@ impl TicketQueue {
         Ok(result)
     }
 
-    /// Collapse the ticket's replies to `summary` and rewrite them in
-    /// place. No-op when the ticket is missing. Persists like an edit: the
-    /// `replies.jsonl` file is overwritten (no superseded file) and the
-    /// shrunk task is saved to `ticket.json`.
-    pub(crate) fn summarize(&self, key: &str, summary: String) {
-        let ticket_copy = {
-            let mut store = self.tickets.lock().unwrap();
-            let Some(ticket) = store.get_mut(key) else {
-                return;
-            };
-            ticket.summarize(summary);
-            ticket.clone()
-        };
-        let replies = Replies {
-            key: key.to_string(),
-            entries: ticket_copy.replies,
-        };
-        let _ = replies.save(&self.get_dir());
-        self.save_ticket(key);
-        self.stats.reset_usage(key);
-    }
-
     /// Apply `edit` to ticket `key`'s replies now, then rewrite them
     /// in place so the change survives resumption. The on-demand
     /// sibling of [`Self::edit_replies_on_event`]; triggers no request.
     /// No-op when the ticket is missing. The edit must keep the replies
     /// well-formed (matched tool_use/tool_result pairs); they are sent
-    /// as-is. Unlike `summarize`, leaves the task and token accounting
-    /// untouched.
+    /// as-is. Leaves the task and the token accounting untouched, which
+    /// is why compaction resets the usage history itself.
     pub fn edit_replies(&self, key: &str, edit: impl FnOnce(&mut Vec<Reply>)) -> &Self {
         let ticket_copy = {
             let mut store = self.tickets.lock().unwrap();
@@ -459,7 +437,6 @@ impl TicketQueue {
 mod tests {
     use super::super::test_util::*;
     use super::*;
-    use crate::providers::ContentBlock;
 
     #[test]
     fn task_creates_ticket_with_user_reporter() {
@@ -1172,84 +1149,6 @@ mod tests {
     }
 
     #[test]
-    fn summarize_round_trips_through_replies_load() {
-        use super::super::reply::ReplyContent;
-        let (queue, _tmp) = test_queue();
-        let key = queue.task("hello");
-        queue.add_reply(&key, Reply::user_text("noise that gets compacted"));
-        queue.add_reply(
-            &key,
-            Reply::assistant(&[ContentBlock::Text {
-                text: "more noise".into(),
-            }]),
-        );
-
-        queue.summarize(&key, "SUMMARY-TEXT".into());
-
-        // The collapsed replies land in replies.jsonl; no snapshot file.
-        let ticket_dir = queue.get_dir().join("tickets").join(&key);
-        let names: Vec<String> = std::fs::read_dir(&ticket_dir)
-            .unwrap()
-            .flatten()
-            .map(|e| e.file_name().to_string_lossy().into_owned())
-            .collect();
-        assert!(names.contains(&"replies.jsonl".to_string()));
-        assert!(!names
-            .iter()
-            .any(|n| n.starts_with("replies.") && n != "replies.jsonl"));
-
-        let reloaded = Replies::load(&queue.get_dir(), &key).unwrap().entries;
-        let texts: Vec<String> = reloaded
-            .iter()
-            .filter_map(|r| match &r.content[..] {
-                [ReplyContent::Text { text: t }] => Some(t.clone()),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(texts, vec!["SUMMARY-TEXT".to_string()]);
-    }
-
-    #[test]
-    fn summarize_shrinks_the_persisted_task_and_survives_reload() {
-        let (queue, _tmp) = test_queue();
-        let huge = "x".repeat(500_000);
-        let key = queue.task(&huge);
-        queue.add_reply(&key, Reply::user_text("turn one"));
-
-        let ticket_dir = queue.get_dir().join("tickets").join(&key);
-        let before = std::fs::metadata(ticket_dir.join("ticket.json"))
-            .unwrap()
-            .len();
-        assert!(
-            before > 500_000,
-            "pre-compaction ticket.json carries the huge task"
-        );
-
-        queue.summarize(&key, "SUMMARY".into());
-
-        // The base ticket.json now carries the summary, not the huge task.
-        let after = std::fs::metadata(ticket_dir.join("ticket.json"))
-            .unwrap()
-            .len();
-        assert!(
-            after < 2_000,
-            "post-compaction ticket.json must be small (got {after} bytes)",
-        );
-        assert_eq!(
-            queue.get_ticket(&key).unwrap().task,
-            serde_json::Value::String("SUMMARY".into()),
-        );
-
-        // Reload restores the summary task, not the original.
-        let reloaded = TicketQueue::load(queue.get_dir()).unwrap();
-        assert_eq!(
-            reloaded.get_ticket(&key).unwrap().task,
-            serde_json::Value::String("SUMMARY".into()),
-            "the summarized task must survive reload",
-        );
-    }
-
-    #[test]
     fn edit_replies_rewrites_replies_without_touching_task() {
         use crate::agents::tickets::ReplyContent;
         let (queue, _tmp) = test_queue();
@@ -1344,7 +1243,8 @@ mod tests {
         let (queue, _tmp) = test_queue();
         let key = queue.task("go");
         queue.add_reply(&key, Reply::user_text("SECRET"));
-        queue.summarize(&key, "summary".into()); // rewrites replies.jsonl in place
+        // What compaction applies: the replies wholesale, rewritten in place.
+        queue.edit_replies(&key, |replies| *replies = vec![Reply::user_text("summary")]);
         queue.add_reply(&key, Reply::user_text("after"));
         queue.edit_replies(&key, |replies| {
             replies.retain(|reply| {

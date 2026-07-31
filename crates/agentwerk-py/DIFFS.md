@@ -62,6 +62,7 @@ Seven rules the surface table below never repeats.
 | `TicketQueue::max_request_retries(n)` | `TicketQueue.max_request_retries(n)` |
 | `TicketQueue::max_time(d)` | `TicketQueue.max_time(seconds)` |
 | `TicketQueue::request_retry_delay(d)` | `TicketQueue.request_retry_delay(seconds)` |
+| `TicketQueue::compact_at(fraction)` | `TicketQueue.compact_at(fraction)` |
 | `TicketQueue::get_max_turns()` | `TicketQueue.get_max_turns()` |
 | `TicketQueue::get_max_input_tokens()` | `TicketQueue.get_max_input_tokens()` |
 | `TicketQueue::get_max_output_tokens()` | `TicketQueue.get_max_output_tokens()` |
@@ -70,6 +71,7 @@ Seven rules the surface table below never repeats.
 | `TicketQueue::get_max_request_retries()` | `TicketQueue.get_max_request_retries()` |
 | `TicketQueue::get_max_time()` | `TicketQueue.get_max_time()` |
 | `TicketQueue::get_request_retry_delay()` | `TicketQueue.get_request_retry_delay()` |
+| `TicketQueue::get_compact_at()` | `TicketQueue.get_compact_at()` |
 | `TicketQueue::dir(dir)` | `TicketQueue.dir(dir)` |
 | `TicketQueue::get_dir()` | `TicketQueue.get_dir()` |
 | `TicketQueue::schema_for_label(label, schema)` | `TicketQueue.schema_for_label(label, schema)` |
@@ -91,6 +93,7 @@ Seven rules the surface table below never repeats.
 | `TicketQueue::create_ticket_on_failure(make)` | `TicketQueue.create_ticket_on_failure(make)` |
 | `TicketQueue::edit_replies(key, edit)` | `TicketQueue.edit_replies(key, editor)`: the editor returns the new list, or `None` to keep the old one, where Rust mutates in place. An editor that raises, or returns anything but `Reply` objects, raises here. |
 | `TicketQueue::edit_replies_on_event(editor)` | `TicketQueue.edit_replies_on_event(editor)`: same return-instead-of-mutate shape. An editor that raises prints its traceback and changes nothing: it runs on an agent thread with no Python frame to raise into. |
+| `TicketQueue::edit_replies_on_compaction(editor)` | `TicketQueue.edit_replies_on_compaction(editor)`: the editor returns the new list, or `None` to keep the current one, where Rust returns a `Result`. Define it with `async def` to await `Compaction.summarize`; a coroutine is driven on a worker thread of its own. An editor that raises prints its traceback and changes nothing, like the event editor. |
 | `TicketQueue::model_for_agent(name)` | `TicketQueue.model_for_agent(agent_name)` |
 | `TicketQueue::get_ticket(key)` | `TicketQueue.get_ticket(key)` |
 | `TicketQueue::tickets()` | `TicketQueue.tickets()` |
@@ -130,6 +133,11 @@ Seven rules the surface table below never repeats.
 | `Author` | The `author` string: `"system"`, `"user"`, or `"assistant"`. |
 | `ReplyContent` | `ReplyContent.kind` plus `.data`, like `Event`. Built with `ReplyContent.text(..)`, `.tool_use(..)`, `.tool_result(..)`, `.thinking(..)`, `.redacted_thinking(..)`. |
 | `Reply::user_text(text)` | `Reply.user_text(text)`: the only way to build a reply, since any other carries no timestamp the store would trust. |
+| **Compaction** | |
+| `Compaction::reason()` | `Compaction.reason()`: the string `"proactive"` or `"reactive"`. |
+| `Compaction::ticket()` | `Compaction.ticket()` |
+| `Compaction::window()` | `Compaction.window()` |
+| `Compaction::summarize(replies).await` | `await Compaction.summarize(replies)` |
 | **Trajectory** | |
 | `Trajectory::from_ticket(agent, model, ticket)` | `Trajectory.from_ticket(agent, model, ticket)` |
 | `Trajectory::save(dir)` | `Trajectory.save(dir)` |

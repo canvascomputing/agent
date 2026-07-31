@@ -4,8 +4,10 @@ use std::time::Duration;
 
 /// Execution limits and retry tuning the loop reads from the ticket
 /// queue. Set on a `TicketQueue` via `.max_turns(...)`,
-/// `.max_time(...)`, `.max_input_tokens(...)`, etc. A breach emits
-/// `EventKind::PolicyViolated` and halts execution.
+/// `.max_time(...)`, `.max_input_tokens(...)`, etc. A breached limit emits
+/// `EventKind::PolicyViolated` and halts execution. `compact_at` is the one
+/// entry that cannot be breached: it moves a trigger rather than limiting
+/// anything.
 #[derive(Clone, Debug)]
 pub(crate) struct Policies {
     /// Limit on the total number of turns. `None` for no limit.
@@ -24,6 +26,9 @@ pub(crate) struct Policies {
     pub request_retry_delay: Duration,
     /// Limit on the total elapsed duration. `None` for no limit.
     pub max_time: Option<Duration>,
+    /// Fraction of the context window at which compaction fires. `None` uses the
+    /// built-in default fraction.
+    pub compact_at: Option<f64>,
 }
 
 impl Policies {
@@ -43,6 +48,7 @@ impl Default for Policies {
             max_request_retries: Self::DEFAULT_MAX_REQUEST_RETRIES,
             request_retry_delay: Self::DEFAULT_REQUEST_RETRY_DELAY,
             max_time: None,
+            compact_at: None,
         }
     }
 }
@@ -62,5 +68,6 @@ mod tests {
         assert_eq!(p.max_request_retries, 10);
         assert_eq!(p.request_retry_delay, Duration::from_millis(500));
         assert_eq!(p.max_time, None);
+        assert_eq!(p.compact_at, None);
     }
 }

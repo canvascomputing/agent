@@ -1,7 +1,7 @@
 //! Agents, the tickets they work from, and the loop that drives them.
 
 pub mod agent;
-pub(crate) mod compaction;
+pub mod compaction;
 pub mod knowledge;
 pub mod r#loop;
 pub(crate) mod policy;
@@ -10,6 +10,7 @@ pub mod stats;
 pub mod tickets;
 
 pub use agent::{Agent, AgentBuilder};
+pub use compaction::Compaction;
 pub use knowledge::Knowledge;
 pub use stats::Stats;
 pub use tickets::{Reply, Status, Ticket, TicketError, TicketQueue, Trajectory};

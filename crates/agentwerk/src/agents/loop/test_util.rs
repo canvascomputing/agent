@@ -379,8 +379,12 @@ pub async fn run_with_context_window(
     (events, provider, ticket)
 }
 
+/// Drive one ticket on a model with a 200 000-token window, so the proactive
+/// threshold is reachable. `configure` runs before the agents start: for
+/// installing a compaction editor, or moving the trigger.
 pub async fn run_compaction(
     provider: Arc<MockProvider>,
+    configure: impl FnOnce(&Arc<TicketQueue>),
 ) -> (Vec<Event>, Arc<MockProvider>, Ticket) {
     let collected: Arc<Mutex<Vec<Event>>> = Arc::new(Mutex::new(Vec::new()));
     let handler: Arc<dyn Fn(&Event) + Send + Sync> = {
@@ -407,6 +411,7 @@ pub async fn run_compaction(
             .tool(ManageTicketsTool)
             .build(),
     );
+    configure(&tickets);
     let schema = Schema::parse(serde_json::json!({"type": "string"})).unwrap();
     tickets.ticket(Ticket::new("go").schema(schema));
 
