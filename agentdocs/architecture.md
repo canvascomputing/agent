@@ -165,7 +165,7 @@ Two layers of state exist. The per-ticket replies live on `Ticket::replies`: eve
 - `TICKET-<N>` keys are handed out in order. `load()` seeds the next key from the tickets it just read off disk; a queue built with `new()` scans for the highest existing key at the first insert instead, since `new()` never reads the directory itself.
 - One agent processes one ticket at a time (claim is atomic), so `add_reply` and the rewrite for one key are sequential within a single loop task. No per-key lock is needed for either path.
 - Crate-internal helpers `write_atomic` (tmp plus rename) and `append_line` (`O_APPEND` plus newline) are the only places that touch the filesystem. They are `pub(crate)` so trait impls colocated with their types can call them; by convention nothing outside a `Persist` or `Append` impl reaches for them.
-- Two documented exceptions: `TicketQueue::write_tool_output` writes single-shot flat files that fit neither trait, and `TicketQueue::summarize` (called from `agents::compaction::run`) writes two files rather than one, calling `Replies::save` and then `save_ticket`, because the pair is a two-file operation that no single in-memory value owns.
+- One documented exception: `TicketQueue::write_tool_output` writes single-shot flat files that fit neither trait.
 - Vocabulary is fixed: `save`, `load`, `append`. Bootstrap verbs other than `load` (such as `open`) are not used. Domain words (`checkpoint`, `snapshot`, `counter`, `persist`) do not appear in identifiers or test names.
 
 ## Policies Are Per-Queue, Checked at Turn Boundaries
@@ -175,3 +175,4 @@ Two layers of state exist. The per-ticket replies live on `Ticket::replies`: eve
 - The loop calls `policy_violated_kind` at each iteration; a non-`None` return takes the agent off the queue.
 - Token budgets read from `Stats`; `max_time` reads from `Policies` and from `Stats::run_duration()`. All limits, including `max_time`, route through `policy_violated_kind` and emit `PolicyViolated`; `finish()` carries the matching `FinishReason::PolicyViolated(kind)` back to the caller.
 - The schema-retry budget is applied per-ticket inside the result-writing path, not at the top of the loop.
+- `compact_at` rides on `Policies` for the same per-queue snapshot every limit gets, but it is a trigger rather than a limit: `policy_violated_kind` ignores it, and reaching it costs a compaction, not the run.

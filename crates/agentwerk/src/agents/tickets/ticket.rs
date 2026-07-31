@@ -154,17 +154,6 @@ impl Ticket {
         matches!(self.status, Status::Finished | Status::Failed)
     }
 
-    /// Replace the replies with one summary, keeping the system prompt.
-    ///
-    /// `task` is rewritten to the summary too, so the stored ticket matches. It
-    /// is only read to seed the first message, which cannot happen once replies
-    /// exist.
-    pub(crate) fn summarize(&mut self, summary_text: String) {
-        self.replies.retain(|r| r.author == Author::System);
-        self.replies.push(Reply::user_text(summary_text.clone()));
-        self.task = serde_json::Value::String(summary_text);
-    }
-
     /// False once the model has spoken. The agent then waits for the next
     /// reply, whether a tool result or one you add with
     /// [`TicketQueue::reply`].

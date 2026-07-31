@@ -4,6 +4,7 @@
 use pyo3::prelude::*;
 
 mod agent;
+mod compaction;
 mod convert;
 mod event;
 mod knowledge;
@@ -24,6 +25,7 @@ fn _agentwerk(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<reply::PyReply>()?;
     m.add_class::<reply::PyReplyContent>()?;
     m.add_class::<trajectory::PyTrajectory>()?;
+    m.add_class::<compaction::PyCompaction>()?;
     m.add_class::<schema::PySchema>()?;
     m.add_class::<event::PyEvent>()?;
     m.add_class::<knowledge::PyKnowledge>()?;

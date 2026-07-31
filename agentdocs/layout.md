@@ -45,7 +45,8 @@ crates/
 
 - `agent.rs` holds the `Agent` builder and ticket-dispatch helpers; an `Agent` carries a `Weak<TicketQueue>` bound at `bind_agent` time.
 - `knowledge.rs` holds `Knowledge`: the cross-ticket store, an OKF v0.1 bundle in `<dir>/knowledge/` backed by a `pages/` directory of concept files and a derived `index.md`. Pages are curated through the `pages()` handle (`save`, `load`, `remove`) plus `clear`; failures are typed as `KnowledgeError`.
-- `policy.rs` holds `Policies` and the limit checks the loop applies on each turn.
+- `policy.rs` holds `Policies` and the limit checks the loop applies on each turn, plus `compact_at`, the one entry that moves a trigger rather than limiting anything.
+- `compaction.rs` holds the public `Compaction` handed to a compaction editor, the built-in summarizer that runs without one, and the threshold and chunking arithmetic behind both.
 - `stats.rs` holds `Stats` and the run-wide statistics and timings.
 
 `tickets/` holds the ticket value types and the orchestrator. `Reply` is one entry in a ticket's replies; `ReplyContent` mirrors `providers::ContentBlock` and carries the same serde tags, so both serialize alike and the ticket surface stays free of provider types.
@@ -55,7 +56,7 @@ crates/
 - `tickets/reply.rs`: `Author`, `Reply`, `ReplyContent`, and their conversions to and from `providers::Message` and `ContentBlock`.
 - `tickets/error.rs`: `TicketError`.
 - `tickets/ticket_queue.rs`: the `TicketQueue` struct, constructors, configuration, policy builders, ticket-creation API, agent binding, run lifecycle, results, and queries.
-- `tickets/store.rs`: the `impl TicketQueue` block for store mutations (`insert`, `claim`, `set_finished`, `summarize`, transition recording).
+- `tickets/store.rs`: the `impl TicketQueue` block for store mutations (`insert`, `claim`, `set_finished`, `edit_replies`, transition recording).
 - `tickets/trajectory.rs`: `Trajectory`, a ticket's replies captured as a training example, its `trajectories/<key>.json` write, and the `.html` rendering written beside it.
 
 `loop/` holds the multi-agent loop, split by state:
@@ -63,7 +64,7 @@ crates/
 - `loop/mod.rs`: module wiring and the `Step` enum naming each state of the per-ticket state machine.
 - `loop/main.rs`: `run_main_loop`, which spawns one tokio task per registered agent and joins them on shutdown.
 - `loop/agent.rs`: `run_agent` (outer claim loop plus the inner `Step` match), `TicketContext`, the ticket check, and the silence retry.
-- `loop/compact.rs`: proactive and reactive compaction of a ticket's replies.
+- `loop/compact.rs`: proactive and reactive compaction of a ticket's replies, dispatched to the installed editor or the built-in summarizer.
 - `loop/request.rs`: the provider round-trip with retry and backoff.
 - `loop/tool_call.rs`: tool dispatch, output offloading, and the tool-failure budget.
 

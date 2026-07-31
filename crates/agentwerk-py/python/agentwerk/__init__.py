@@ -6,6 +6,7 @@ re-exports them so `from agentwerk import Agent, ReadFileTool` works.
 
 from ._agentwerk import (
     Agent,
+    Compaction,
     Event,
     FileStat,
     Knowledge,
@@ -85,6 +86,7 @@ def tool(
 __all__ = [
     "tool",
     "Agent",
+    "Compaction",
     "Event",
     "FileStat",
     "Knowledge",

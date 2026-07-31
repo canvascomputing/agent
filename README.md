@@ -431,8 +431,9 @@ tickets
 | `max_schema_retries(count)` / `get_max_schema_retries()` | Limit how often a result may fail its schema before the ticket fails. |
 | `max_request_retries(count)` / `get_max_request_retries()` | Limit how often a failing request is retried. |
 | `request_retry_delay(duration)` / `get_request_retry_delay()` | Wait this long between retries. |
+| `compact_at(fraction)` / `get_compact_at()` | Compact once the context window is this full. |
 
-A violation emits `EventKind::PolicyViolated`, see [`EventKind`](https://docs.rs/agentwerk/latest/agentwerk/event/enum.EventKind.html).
+A violated limit emits `EventKind::PolicyViolated`, see [`EventKind`](https://docs.rs/agentwerk/latest/agentwerk/event/enum.EventKind.html). `compact_at` is the exception: reaching it compacts the ticket and execution continues.
 
 </details>
 
@@ -548,9 +549,9 @@ tickets.cancel_on_result(|_, result| result["verdict"] == "malicious");
 | | `FileOpenFailed` | A tool could not open a file. |
 | **Knowledge** | `KnowledgeUsed` | A page was written, read, removed, or listed. |
 | | `KnowledgeMissed` | A page the agent asked for was not there. |
-| **Compaction** | `CompactionStarted` | Compaction is about to summarize the older messages. |
+| **Compaction** | `CompactionStarted` | Compaction is about to rewrite the older messages. |
 | | `CompactionProgress` | Compaction finished part of the work. |
-| | `CompactionFinished` | Compaction replaced the older messages with a summary. |
+| | `CompactionFinished` | Compaction replaced the older messages. |
 | | `CompactionFailed` | Compaction could not finish. |
 
 See [`EventKind`](https://docs.rs/agentwerk/latest/agentwerk/event/enum.EventKind.html).
@@ -558,7 +559,7 @@ See [`EventKind`](https://docs.rs/agentwerk/latest/agentwerk/event/enum.EventKin
 </details>
 
 <details>
-<summary>Event hooks</summary>
+<summary>Hooks</summary>
 
 | | Method | Description |
 |-|--------|-------------|
@@ -577,6 +578,7 @@ See [`EventKind`](https://docs.rs/agentwerk/latest/agentwerk/event/enum.EventKin
 | | `create_ticket_on_result(make)` | Enqueue a follow-up ticket from a finished ticket. |
 | | `create_ticket_on_failure(make)` | Enqueue a retry for a ticket that failed. |
 | **Rewrite replies** | `edit_replies_on_event(editor)` | Rewrite a ticket's replies before its next request. |
+| | `edit_replies_on_compaction(editor)` | Decide what compaction does with a ticket's replies. |
 
 Save replies of every finished ticket as a training example:
 

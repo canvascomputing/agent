@@ -1,9 +1,11 @@
-//! Context-window compaction: collapse a ticket's older messages into
-//! a single summary message before the next request would overflow.
+//! Context-window compaction: rewrite a ticket's replies before the next
+//! request would overflow. Summarizing them into one message is the default;
+//! `TicketQueue::edit_replies_on_compaction` replaces it.
 
 use std::sync::Arc;
 
-use crate::agents::tickets::TicketQueue;
+use crate::agents::tickets::{Author, Reply, Ticket};
+use crate::event::CompactReason;
 use crate::prompts::compaction_directive;
 use crate::providers::types::StreamEvent;
 use crate::providers::{
@@ -11,15 +13,18 @@ use crate::providers::{
     ProviderToolDefinition, TokenUsage,
 };
 
-/// Distance below the window at which compaction fires. Covers the
-/// model's response budget (~20 k) and a safety margin (~13 k) because
-/// the `bytes / 4` token estimate under-counts code and JSON.
-const COMPACTION_HEADROOM_TOKENS: u64 = 33_000;
+/// How full the context window gets before compaction fires, when the host
+/// sets no fraction of its own. What is left over covers the model's response
+/// budget and the slack the `bytes / 4` token estimate needs because it
+/// under-counts code and JSON. A share rather than a fixed count, so it holds
+/// from the smallest window to the largest.
+const DEFAULT_COMPACT_AT: f64 = 0.85;
 
-/// Token count at which compaction fires for a model with context
-/// window `window`. `None` when the window is unknown.
-pub(crate) fn compaction_threshold(window: Option<u64>) -> Option<u64> {
-    window.map(|size| size.saturating_sub(COMPACTION_HEADROOM_TOKENS))
+/// Token count at which compaction fires for a model with context window
+/// `window`, at `compact_at` of it or at [`DEFAULT_COMPACT_AT`] when that is
+/// unset. `None` when the window is unknown.
+pub(crate) fn compaction_threshold(window: Option<u64>, compact_at: Option<f64>) -> Option<u64> {
+    Some((window? as f64 * compact_at.unwrap_or(DEFAULT_COMPACT_AT)) as u64)
 }
 
 /// Estimate of the next request's input-token count: the last response's
@@ -87,12 +92,13 @@ fn tool_definition_bytes(tool: &ProviderToolDefinition) -> usize {
 /// before a request that would otherwise overflow.
 pub(crate) fn should_compact_proactively(
     window: Option<u64>,
+    compact_at: Option<f64>,
     history: &[TokenUsage],
     messages: &[Message],
     system_prompt: &str,
     tools: &[ProviderToolDefinition],
 ) -> bool {
-    let Some(threshold) = compaction_threshold(window) else {
+    let Some(threshold) = compaction_threshold(window, compact_at) else {
         return false;
     };
     if history.is_empty() {
@@ -102,108 +108,140 @@ pub(crate) fn should_compact_proactively(
     estimate.saturating_add(next_delta(history)) >= threshold
 }
 
-/// Run one compaction round-trip for the ticket at `ticket_key`: read
-/// the current messages, summarise them through [`compact`], and apply the
-/// result through [`TicketQueue::summarize`]. Returns `Ok(true)` when a
-/// summary was applied, `Ok(false)` when the ticket is missing or the
-/// messages collapse to nothing worth replacing.
-pub(crate) async fn run(
-    provider: &Arc<dyn Provider>,
-    model: &str,
-    messages: Vec<Message>,
+/// One compaction round-trip, handed to the editor installed with
+/// [`TicketQueue::edit_replies_on_compaction`]. It owns everything it needs, so
+/// it can cross an await: the ticket is a copy taken when compaction started.
+///
+/// [`TicketQueue::edit_replies_on_compaction`]: crate::TicketQueue::edit_replies_on_compaction
+pub struct Compaction {
+    reason: CompactReason,
+    ticket: Ticket,
+    provider: Arc<dyn Provider>,
+    model: String,
     window: Option<u64>,
-    ticket_queue: &TicketQueue,
-    ticket_key: &str,
     on_progress: Arc<dyn Fn(u32, u32) + Send + Sync>,
-) -> ProviderResult<bool> {
-    let Some(summary) = compact(provider, model, &messages, window, on_progress).await? else {
-        return Ok(false);
-    };
-    ticket_queue.summarize(ticket_key, summary);
-    Ok(true)
 }
 
-/// Compact `messages` into a single summary by sending them to the
-/// provider with no tools and the compaction directive as the system
-/// prompt. When `window` is set and the messages would overflow it,
-/// split the largest splittable message in half (recursively until
-/// every chunk fits) and summarise each chunk separately; the resulting
-/// partial summaries are joined with a blank line. Returns `Ok(None)`
-/// when the messages collapse to nothing worth replacing (a single message that
-/// already fits, or nothing to summarise); the caller treats that as a
-/// no-op.
-pub(crate) async fn compact(
-    provider: &Arc<dyn Provider>,
-    model: &str,
-    messages: &[Message],
-    window: Option<u64>,
-    on_progress: Arc<dyn Fn(u32, u32) + Send + Sync>,
-) -> ProviderResult<Option<String>> {
-    let chunks = chunks_for_window(messages, window);
-    if messages.len() <= 1 && chunks.len() <= 1 {
-        return Ok(None);
-    }
-    let total = chunks.len() as u32;
-    let mut summaries = Vec::with_capacity(chunks.len());
-    for (i, chunk) in chunks.iter().enumerate() {
-        if let Some(text) = summarize_chunk(provider, model, chunk).await? {
-            summaries.push(text);
+impl Compaction {
+    pub(crate) fn new(
+        reason: CompactReason,
+        ticket: Ticket,
+        provider: Arc<dyn Provider>,
+        model: String,
+        window: Option<u64>,
+        on_progress: Arc<dyn Fn(u32, u32) + Send + Sync>,
+    ) -> Self {
+        Self {
+            reason,
+            ticket,
+            provider,
+            model,
+            window,
+            on_progress,
         }
-        on_progress((i as u32) + 1, total);
     }
-    if summaries.is_empty() {
-        return Ok(None);
+
+    /// Get why compaction fired: ahead of an overflow, or after one.
+    pub fn reason(&self) -> CompactReason {
+        self.reason
     }
-    Ok(Some(summaries.join("\n\n")))
+
+    /// Get the ticket being compacted: its key, labels, task, and status as
+    /// they stood when compaction started. `replies` is empty here, because the
+    /// replies travel to the editor as their own argument rather than as a
+    /// second copy on the ticket.
+    pub fn ticket(&self) -> &Ticket {
+        &self.ticket
+    }
+
+    /// Get the model's context window, or `None` when it is unknown.
+    pub fn window(&self) -> Option<u64> {
+        self.window
+    }
+
+    /// Summarize `replies`: one tool-less request per chunk, with the answers
+    /// joined by a blank line. Replies that would overflow the window are split
+    /// first, so a single oversized reply still gets through. Replies the model
+    /// would not see, an empty slice or system replies alone, summarize to an
+    /// empty string without a request.
+    pub async fn summarize(&self, replies: &[Reply]) -> ProviderResult<String> {
+        let messages: Vec<Message> = replies.iter().filter_map(Reply::as_message).collect();
+        // Chunking hands back one empty chunk here, and an LLM provider rejects
+        // a request carrying no messages.
+        if messages.is_empty() {
+            return Ok(String::new());
+        }
+        let chunks = chunks_for_window(&messages, self.window);
+        let total = chunks.len() as u32;
+        let mut summaries = Vec::with_capacity(chunks.len());
+        for (index, chunk) in chunks.iter().enumerate() {
+            let request = ModelRequest {
+                model: self.model.clone(),
+                system_prompt: compaction_directive().to_string(),
+                messages: chunk.clone(),
+                tools: Vec::new(),
+                max_request_tokens: None,
+                tool_choice: None,
+                // The summarizer does not think; capture only the summary text.
+                reasoning_effort: Default::default(),
+            };
+            let on_stream: Arc<dyn Fn(StreamEvent) + Send + Sync> = Arc::new(|_| {});
+            let response = self.provider.respond(request, on_stream).await?;
+            let summary = response
+                .content
+                .iter()
+                .find_map(|block| match block {
+                    ContentBlock::Text { text } => Some(text.clone()),
+                    _ => None,
+                })
+                .ok_or_else(|| {
+                    fn kind(block: &ContentBlock) -> &'static str {
+                        match block {
+                            ContentBlock::Text { .. } => "text",
+                            ContentBlock::ToolUse { .. } => "tool_use",
+                            ContentBlock::ToolResult { .. } => "tool_result",
+                            ContentBlock::Thinking { .. } => "thinking",
+                            ContentBlock::RedactedThinking { .. } => "redacted_thinking",
+                        }
+                    }
+                    let kinds: Vec<&str> = response.content.iter().map(kind).collect();
+                    ProviderError::ResponseMalformed {
+                        message: format!(
+                            "compaction reply contained no text (status={:?}, model={}, blocks={}, kinds=[{}], usage={:?})",
+                            response.status,
+                            response.model,
+                            response.content.len(),
+                            kinds.join(", "),
+                            response.usage,
+                        ),
+                    }
+                })?;
+            summaries.push(summary);
+            (self.on_progress)((index as u32) + 1, total);
+        }
+        Ok(summaries.join("\n\n"))
+    }
 }
 
-async fn summarize_chunk(
-    provider: &Arc<dyn Provider>,
-    model: &str,
-    messages: &[Message],
-) -> ProviderResult<Option<String>> {
-    let request = ModelRequest {
-        model: model.to_string(),
-        system_prompt: compaction_directive().to_string(),
-        messages: messages.to_vec(),
-        tools: Vec::new(),
-        max_request_tokens: None,
-        tool_choice: None,
-        // The summarizer does not think; capture only the summary text.
-        reasoning_effort: Default::default(),
-    };
-    let on_stream: Arc<dyn Fn(StreamEvent) + Send + Sync> = Arc::new(|_| {});
-    let response = provider.respond(request, on_stream).await?;
-    let summary = response
-        .content
-        .iter()
-        .find_map(|block| match block {
-            ContentBlock::Text { text } => Some(text.clone()),
-            _ => None,
-        })
-        .ok_or_else(|| {
-            fn kind(block: &ContentBlock) -> &'static str {
-                match block {
-                    ContentBlock::Text { .. } => "text",
-                    ContentBlock::ToolUse { .. } => "tool_use",
-                    ContentBlock::ToolResult { .. } => "tool_result",
-                    ContentBlock::Thinking { .. } => "thinking",
-                    ContentBlock::RedactedThinking { .. } => "redacted_thinking",
-                }
-            }
-            let kinds: Vec<&str> = response.content.iter().map(kind).collect();
-            ProviderError::ResponseMalformed {
-                message: format!(
-                    "compaction reply contained no text (status={:?}, model={}, blocks={}, kinds=[{}], usage={:?})",
-                    response.status,
-                    response.model,
-                    response.content.len(),
-                    kinds.join(", "),
-                    response.usage,
-                ),
-            }
-        })?;
-    Ok(Some(summary))
+/// What compaction does when no editor is installed: collapse everything the
+/// model would see into one summary, keeping the system reply that carries the
+/// system prompt. Replies that already hold nothing to collapse come back
+/// unchanged, which the loop reads as a no-op.
+pub(crate) async fn default_editor(
+    compaction: Compaction,
+    replies: Vec<Reply>,
+) -> ProviderResult<Vec<Reply>> {
+    let messages: Vec<Message> = replies.iter().filter_map(Reply::as_message).collect();
+    if messages.len() <= 1 && chunks_for_window(&messages, compaction.window()).len() <= 1 {
+        return Ok(replies);
+    }
+    let summary = compaction.summarize(&replies).await?;
+    let mut kept: Vec<Reply> = replies
+        .into_iter()
+        .filter(|reply| reply.author == Author::System)
+        .collect();
+    kept.push(Reply::user_text(summary));
+    Ok(kept)
 }
 
 pub(crate) fn chunks_for_window(messages: &[Message], window: Option<u64>) -> Vec<Vec<Message>> {
@@ -282,14 +320,31 @@ mod tests {
     use super::*;
 
     #[test]
-    fn compaction_threshold_saturates_on_tiny_or_zero_window() {
-        assert_eq!(compaction_threshold(Some(100)), Some(0));
-        assert_eq!(compaction_threshold(Some(0)), Some(0));
+    fn the_default_fraction_applies_when_none_is_set() {
+        assert_eq!(compaction_threshold(Some(200_000), None), Some(170_000));
+    }
+
+    #[test]
+    fn the_default_fraction_scales_down_to_a_tiny_window() {
+        // The rule this replaced subtracted a fixed 33 000 tokens, which left
+        // any window under that compacting from the first turn.
+        assert_eq!(compaction_threshold(Some(32_000), None), Some(27_200));
+        assert_eq!(compaction_threshold(Some(100), None), Some(85));
+        assert_eq!(compaction_threshold(Some(0), None), Some(0));
     }
 
     #[test]
     fn compaction_threshold_is_none_for_unknown_window() {
-        assert_eq!(compaction_threshold(None), None);
+        assert_eq!(compaction_threshold(None, None), None);
+        assert_eq!(compaction_threshold(None, Some(0.8)), None);
+    }
+
+    #[test]
+    fn the_threshold_is_the_configured_fraction_of_the_window() {
+        assert_eq!(
+            compaction_threshold(Some(200_000), Some(0.8)),
+            Some(160_000)
+        );
     }
 
     #[test]
@@ -338,6 +393,7 @@ mod tests {
         let messages = [Message::user("hi")];
         assert!(!should_compact_proactively(
             None,
+            None,
             &history,
             &messages,
             "",
@@ -352,6 +408,7 @@ mod tests {
         let messages = [Message::user("hi")];
         assert!(!should_compact_proactively(
             Some(200_000),
+            None,
             &[],
             &messages,
             "",
@@ -368,6 +425,7 @@ mod tests {
         let messages = [Message::user("hi")];
         assert!(!should_compact_proactively(
             Some(200_000),
+            None,
             &history,
             &messages,
             "",
@@ -377,15 +435,16 @@ mod tests {
 
     #[test]
     fn should_compact_proactively_is_true_when_estimate_crosses_threshold() {
-        // Threshold = 200_000 - 33_000 = 167_000; single-entry history
-        // gives delta = 0, so estimate alone (170_000 + tiny msg) crosses.
+        // Threshold = 200_000 * 0.85 = 170_000; single-entry history gives
+        // delta = 0, so the estimate alone (175_000 + tiny msg) crosses.
         let history = [TokenUsage {
-            input_tokens: 170_000,
+            input_tokens: 175_000,
             output_tokens: 0,
         }];
         let messages = [Message::user("hi")];
         assert!(should_compact_proactively(
             Some(200_000),
+            None,
             &history,
             &messages,
             "",
@@ -395,23 +454,24 @@ mod tests {
 
     #[test]
     fn should_compact_proactively_uses_last_delta_to_fire_one_turn_early() {
-        // Threshold = 200_000 - 33_000 = 167_000. The current estimate
-        // sits at 160_000 (under threshold), but the last per-turn delta
-        // was 10_000: the next request after this one would land at
-        // ~170_000 and overflow. Trigger must fire now, not next turn.
+        // Threshold = 200_000 * 0.85 = 170_000. The current estimate sits at
+        // 165_000 (under threshold), but the last per-turn delta was 10_000:
+        // the next request after this one would land at ~175_000 and overflow.
+        // Trigger must fire now, not next turn.
         let history = [
             TokenUsage {
-                input_tokens: 150_000,
+                input_tokens: 155_000,
                 output_tokens: 0,
             },
             TokenUsage {
-                input_tokens: 160_000,
+                input_tokens: 165_000,
                 output_tokens: 0,
             },
         ];
         let messages = [Message::user("hi")];
         assert!(should_compact_proactively(
             Some(200_000),
+            None,
             &history,
             &messages,
             "",
@@ -421,7 +481,7 @@ mod tests {
 
     #[test]
     fn should_compact_proactively_ignores_shrinking_series() {
-        // Threshold = 167_000. Latest entry is 160_000 (under), and the
+        // Threshold = 170_000. Latest entry is 160_000 (under), and the
         // delta is negative, so saturating_sub clamps it to 0 and the
         // trigger behaves like a single-sample history and stays quiet.
         let history = [
@@ -437,11 +497,28 @@ mod tests {
         let messages = [Message::user("hi")];
         assert!(!should_compact_proactively(
             Some(200_000),
+            None,
             &history,
             &messages,
             "",
             &[],
         ));
+    }
+
+    #[test]
+    fn should_compact_proactively_follows_the_configured_fraction() {
+        // 100_000 sits under the default threshold of 170_000 but over the
+        // 80_000 that two fifths of the window asks for.
+        let history = [TokenUsage {
+            input_tokens: 100_000,
+            output_tokens: 0,
+        }];
+        let messages = [Message::user("hi")];
+        let fires = |compact_at| {
+            should_compact_proactively(Some(200_000), compact_at, &history, &messages, "", &[])
+        };
+        assert!(!fires(None));
+        assert!(fires(Some(0.4)));
     }
 
     // Compact
@@ -505,60 +582,129 @@ mod tests {
         Arc::new(|_, _| {})
     }
 
-    #[tokio::test]
-    async fn compact_returns_the_provider_summary() {
-        let provider: Arc<dyn Provider> =
-            ScriptedProvider::new(vec![Ok(summary_response("SUMMARY"))]);
-        let messages = vec![
-            Message::user("task"),
-            Message::assistant("turn 0"),
-            Message::user("turn 1 result"),
-        ];
+    fn compaction_for(provider: Arc<dyn Provider>, window: Option<u64>) -> Compaction {
+        compaction_reporting_to(provider, window, noop_progress())
+    }
 
-        let summary = compact(&provider, "mock", &messages, None, noop_progress())
-            .await
-            .expect("compact should succeed");
+    fn compaction_reporting_to(
+        provider: Arc<dyn Provider>,
+        window: Option<u64>,
+        on_progress: Arc<dyn Fn(u32, u32) + Send + Sync>,
+    ) -> Compaction {
+        Compaction::new(
+            CompactReason::Proactive,
+            Ticket::new("task"),
+            provider,
+            "mock".into(),
+            window,
+            on_progress,
+        )
+    }
 
-        assert_eq!(summary.as_deref(), Some("SUMMARY"));
+    /// The replies a ticket carries after one turn: the system prompt, the
+    /// task, and an exchange with the model.
+    fn worked_replies() -> Vec<Reply> {
+        vec![
+            Reply::system_text("system prompt"),
+            Reply::user_text("task"),
+            Reply::assistant(&[ContentBlock::Text {
+                text: "turn 0".into(),
+            }]),
+            Reply::user_text("turn 1 result"),
+        ]
     }
 
     #[tokio::test]
-    async fn compact_is_a_noop_when_messages_are_too_short() {
-        for len in [0, 1] {
+    async fn summarize_returns_the_provider_summary() {
+        let provider = ScriptedProvider::new(vec![Ok(summary_response("SUMMARY"))]);
+        let compaction = compaction_for(provider, None);
+
+        let summary = compaction
+            .summarize(&worked_replies())
+            .await
+            .expect("summarize should succeed");
+
+        assert_eq!(summary, "SUMMARY");
+    }
+
+    #[tokio::test]
+    async fn summarize_makes_no_request_for_replies_the_model_would_not_see() {
+        // An editor summarizing the head of a short ticket hands over a slice
+        // that maps to no messages, which an LLM provider would reject.
+        for replies in [Vec::new(), vec![Reply::system_text("system prompt")]] {
             let provider = ScriptedProvider::new(Vec::new());
-            let provider_handle: Arc<dyn Provider> = provider.clone();
-            let messages: Vec<Message> = (0..len).map(|i| Message::user(format!("m{i}"))).collect();
+            let compaction = compaction_for(provider.clone(), None);
 
-            let summary = compact(&provider_handle, "mock", &messages, None, noop_progress())
+            let summary = compaction
+                .summarize(&replies)
                 .await
-                .expect("no-op should succeed");
+                .expect("an empty summary should succeed");
 
-            assert!(summary.is_none(), "len={len}: must short-circuit");
-            assert_eq!(
-                provider.call_count(),
-                0,
-                "len={len}: provider must not be called"
-            );
+            assert_eq!(summary, "");
+            assert_eq!(provider.call_count(), 0, "the provider must not be called");
         }
     }
 
     #[tokio::test]
-    async fn compact_propagates_provider_error() {
-        let provider: Arc<dyn Provider> =
-            ScriptedProvider::new(vec![Err(ProviderError::ConnectionFailed {
-                message: "dns".into(),
-            })]);
-        let messages = vec![Message::user("task"), Message::assistant("turn 0")];
+    async fn the_default_editor_keeps_the_system_reply_and_appends_the_summary() {
+        let provider = ScriptedProvider::new(vec![Ok(summary_response("SUMMARY"))]);
+        let compaction = compaction_for(provider, None);
 
-        let err = compact(&provider, "mock", &messages, None, noop_progress())
+        let kept = default_editor(compaction, worked_replies())
             .await
-            .expect_err("should propagate the connection failure");
+            .expect("the default handler should succeed");
 
-        assert!(matches!(err, ProviderError::ConnectionFailed { .. }));
+        assert_eq!(kept.len(), 2);
+        assert_eq!(kept[0].author, Author::System);
+        assert_eq!(kept[1].author, Author::User);
+        assert!(
+            matches!(&kept[1].content[..], [crate::agents::tickets::ReplyContent::Text { text }] if text == "SUMMARY"),
+            "the summary must replace everything but the system reply, got {:?}",
+            kept[1].content,
+        );
     }
 
     #[tokio::test]
-    async fn compact_rejects_text_less_reply() {
+    async fn the_default_editor_returns_the_replies_unchanged_when_there_is_nothing_to_collapse() {
+        // The system reply is not sent to the model, so one message is all
+        // these replies amount to: there is nothing to collapse into a summary.
+        for replies in [
+            Vec::new(),
+            vec![Reply::user_text("only one")],
+            vec![
+                Reply::system_text("system prompt"),
+                Reply::user_text("task"),
+            ],
+        ] {
+            let provider = ScriptedProvider::new(Vec::new());
+            let compaction = compaction_for(provider.clone(), None);
+
+            let kept = default_editor(compaction, replies.clone())
+                .await
+                .expect("a no-op should succeed");
+
+            assert_eq!(kept, replies, "must hand the replies back untouched");
+            assert_eq!(provider.call_count(), 0, "the provider must not be called");
+        }
+    }
+
+    #[tokio::test]
+    async fn summarize_propagates_a_provider_error() {
+        let provider = ScriptedProvider::new(vec![Err(ProviderError::ConnectionFailed {
+            message: "dns".into(),
+        })]);
+        let compaction = compaction_for(provider, None);
+
+        let error = compaction
+            .summarize(&worked_replies())
+            .await
+            .expect_err("should propagate the connection failure");
+
+        assert!(matches!(error, ProviderError::ConnectionFailed { .. }));
+    }
+
+    #[tokio::test]
+    async fn summarize_rejects_a_text_less_reply() {
         let no_text = ModelResponse {
             content: vec![ContentBlock::ToolUse {
                 id: "x".into(),
@@ -569,14 +715,15 @@ mod tests {
             usage: TokenUsage::default(),
             model: "mock".into(),
         };
-        let provider: Arc<dyn Provider> = ScriptedProvider::new(vec![Ok(no_text)]);
-        let messages = vec![Message::user("task"), Message::assistant("turn 0")];
+        let provider = ScriptedProvider::new(vec![Ok(no_text)]);
+        let compaction = compaction_for(provider, None);
 
-        let err = compact(&provider, "mock", &messages, None, noop_progress())
+        let error = compaction
+            .summarize(&worked_replies())
             .await
-            .expect_err("text-less reply must fail");
+            .expect_err("a text-less reply must fail");
 
-        assert!(matches!(err, ProviderError::ResponseMalformed { .. }));
+        assert!(matches!(error, ProviderError::ResponseMalformed { .. }));
     }
 
     // Chunking
@@ -652,38 +799,33 @@ mod tests {
         }
     }
 
-    // Compact (continued)
+    // Summarize (continued)
 
     #[tokio::test]
-    async fn compact_builds_a_tool_less_request() {
+    async fn summarize_builds_a_tool_less_request() {
         let provider = ScriptedProvider::new(vec![Ok(summary_response("SUMMARY"))]);
-        let provider_handle: Arc<dyn Provider> = provider.clone();
-        let messages = vec![
-            Message::user("task"),
-            Message::assistant("turn 0"),
-            Message::user("turn 1 result"),
-        ];
+        let compaction = compaction_for(provider.clone(), None);
+        let replies = worked_replies();
 
-        compact(&provider_handle, "mock", &messages, None, noop_progress())
-            .await
-            .unwrap();
+        compaction.summarize(&replies).await.unwrap();
 
-        let req = provider.last_request().expect("provider was called");
-        assert!(req.tools.is_empty(), "tools must be disabled");
-        assert!(req.tool_choice.is_none(), "tool_choice must be unset");
-        assert_eq!(req.messages.len(), messages.len());
-        assert_eq!(req.system_prompt, compaction_directive());
+        let request = provider.last_request().expect("provider was called");
+        assert!(request.tools.is_empty(), "tools must be disabled");
+        assert!(request.tool_choice.is_none(), "tool_choice must be unset");
+        // The system reply carries the system prompt, which travels in its own
+        // field rather than as a message.
+        assert_eq!(request.messages.len(), replies.len() - 1);
+        assert_eq!(request.system_prompt, compaction_directive());
     }
 
     #[tokio::test]
-    async fn compact_fires_one_progress_event_per_chunk() {
-        let provider: Arc<dyn Provider> = ScriptedProvider::new(vec![
+    async fn summarize_fires_one_progress_event_per_chunk() {
+        let provider = ScriptedProvider::new(vec![
             Ok(summary_response("PART_A")),
             Ok(summary_response("PART_B")),
             Ok(summary_response("PART_C")),
             Ok(summary_response("PART_D")),
         ]);
-        let messages = vec![Message::user("x\n".repeat(2_000))];
         let captured: Arc<StdMutex<Vec<(u32, u32)>>> = Arc::new(StdMutex::new(Vec::new()));
         let on_progress: Arc<dyn Fn(u32, u32) + Send + Sync> = {
             let captured = Arc::clone(&captured);
@@ -691,10 +833,12 @@ mod tests {
                 captured.lock().unwrap().push((completed, total));
             })
         };
+        let compaction = compaction_reporting_to(provider, Some(1_000), on_progress);
 
-        compact(&provider, "mock", &messages, Some(1_000), on_progress)
+        compaction
+            .summarize(&[Reply::user_text("x\n".repeat(2_000))])
             .await
-            .expect("chunked compaction should succeed");
+            .expect("chunked summarizing should succeed");
 
         let progress = captured.lock().unwrap().clone();
         assert!(progress.len() >= 2, "expected ≥2 chunks, got {progress:?}");
@@ -711,9 +855,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn compact_emits_no_progress_when_short_circuiting() {
-        let provider: Arc<dyn Provider> = ScriptedProvider::new(Vec::new());
-        let messages = vec![Message::user("only one")];
+    async fn the_default_editor_emits_no_progress_when_there_is_nothing_to_collapse() {
+        let provider = ScriptedProvider::new(Vec::new());
         let captured: Arc<StdMutex<Vec<(u32, u32)>>> = Arc::new(StdMutex::new(Vec::new()));
         let on_progress: Arc<dyn Fn(u32, u32) + Send + Sync> = {
             let captured = Arc::clone(&captured);
@@ -721,12 +864,12 @@ mod tests {
                 captured.lock().unwrap().push((completed, total));
             })
         };
+        let compaction = compaction_reporting_to(provider, None, on_progress);
 
-        let summary = compact(&provider, "mock", &messages, None, on_progress)
+        default_editor(compaction, vec![Reply::user_text("only one")])
             .await
-            .expect("short-circuit must succeed");
+            .expect("a no-op should succeed");
 
-        assert!(summary.is_none());
         assert!(captured.lock().unwrap().is_empty());
     }
 }

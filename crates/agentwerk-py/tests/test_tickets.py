@@ -310,6 +310,28 @@ def test_edit_replies_on_event_chains(queue):
     assert isinstance(configured, aw.TicketQueue)
 
 
+def test_edit_replies_on_compaction_chains(queue):
+    async def keep_the_tail(compaction, replies):
+        return replies[-2:]
+
+    configured = queue.edit_replies_on_compaction(keep_the_tail)
+    assert isinstance(configured, aw.TicketQueue)
+
+
+def test_compact_at_round_trips_through_get_compact_at(queue):
+    assert queue.get_compact_at() is None
+
+    queue.compact_at(0.8)
+
+    assert queue.get_compact_at() == 0.8
+
+
+def test_compact_at_clamps_a_fraction_above_one(queue):
+    queue.compact_at(1.5)
+
+    assert queue.get_compact_at() == 1.0
+
+
 def test_edit_replies_on_an_unstarted_ticket_is_a_no_op(queue):
     key = queue.ticket(aw.Ticket("scan the corpus"))
 

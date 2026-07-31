@@ -97,6 +97,7 @@ pub use agents::Ticket;
 pub use agents::TicketQueue;
 
 // Tuning, telemetry, durable state
+pub use agents::Compaction;
 pub use agents::Knowledge;
 pub use agents::Stats;
 pub use agents::Trajectory;

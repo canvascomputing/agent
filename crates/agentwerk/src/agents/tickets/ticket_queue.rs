@@ -4,6 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::io;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
@@ -13,9 +14,11 @@ use tokio::task::JoinHandle;
 
 use crate::event::{default_logger, Event, EventKind, FinishReason};
 use crate::persistence::Persist;
+use crate::providers::ProviderResult;
 use crate::schemas::Schema;
 
 use super::super::agent::{Agent, TicketQueueRef};
+use super::super::compaction::Compaction;
 use super::super::policy::Policies;
 use super::super::r#loop::run_main_loop;
 use super::super::stats::Stats;
@@ -25,6 +28,11 @@ use super::{now_millis, numeric_id, policy_violated_kind, Reply};
 type EventHandler = dyn Fn(&Event) + Send + Sync;
 
 type ReplyEditor = dyn Fn(&[Event], &mut Vec<Reply>) + Send + Sync;
+
+type CompactionEditor = dyn Fn(Compaction, Vec<Reply>) -> EditedReplies + Send + Sync;
+
+/// The replies an editor hands back, once its work finishes.
+type EditedReplies = Pin<Box<dyn Future<Output = ProviderResult<Vec<Reply>>> + Send>>;
 
 /// The registered reply editor and the per-ticket events buffered for it since
 /// each ticket's previous request. The two are always touched together.
@@ -127,6 +135,8 @@ pub struct TicketQueue {
     /// per-ticket events buffered for it. Buffering runs whether or not an
     /// editor is installed.
     pub(super) reply_editing: Mutex<ReplyEditing>,
+    /// What compaction does with a ticket's replies. `None` summarizes them.
+    pub(super) compaction_editor: Mutex<Option<Arc<CompactionEditor>>>,
     pub(super) dir: Mutex<PathBuf>,
     pub(super) tickets_log_lock: Mutex<()>,
     pub(super) results_log_lock: Mutex<()>,
@@ -155,6 +165,7 @@ impl TicketQueue {
             stats: Stats::new(),
             event_handlers: Mutex::new(Vec::new()),
             reply_editing: Mutex::new(ReplyEditing::default()),
+            compaction_editor: Mutex::new(None),
             dir: Mutex::new(PathBuf::from(".agentwerk")),
             tickets_log_lock: Mutex::new(()),
             results_log_lock: Mutex::new(()),
@@ -230,6 +241,7 @@ impl TicketQueue {
             stats,
             event_handlers: Mutex::new(Vec::new()),
             reply_editing: Mutex::new(ReplyEditing::default()),
+            compaction_editor: Mutex::new(None),
             dir: Mutex::new(tickets_dir),
             tickets_log_lock: Mutex::new(()),
             results_log_lock: Mutex::new(()),
@@ -395,6 +407,58 @@ impl TicketQueue {
         self
     }
 
+    /// Decide what compaction does with a ticket's replies.
+    ///
+    /// Compaction fires when the next request would not fit the model's context
+    /// window, from [`Self::compact_at`] or the built-in distance below it. Your
+    /// function receives the [`Compaction`] and the replies as they stand, and
+    /// returns the ones to keep. Summarizing them into a single message is what
+    /// happens without this hook, and [`Compaction::summarize`] is that
+    /// summarizer, so an editor can call it for part of the replies and handle
+    /// the rest itself.
+    ///
+    /// Returning the replies unchanged says compaction found nothing to drop.
+    /// After an overflow the ticket then fails, because the next request would
+    /// overflow again. Returning an error fails the ticket and emits
+    /// `EventKind::CompactionFailed`.
+    ///
+    /// The edit is permanent, like [`Self::edit_replies_on_event`]: it rewrites
+    /// the stored replies on disk. Keep them well-formed, since a `tool_use` and
+    /// its `tool_result` span two replies and the LLM provider rejects an
+    /// unpaired block.
+    ///
+    /// One editor is held at a time, and installing a second replaces the first.
+    ///
+    /// ```no_run
+    /// use agentwerk::TicketQueue;
+    ///
+    /// let tickets = TicketQueue::new();
+    /// // Summarize what falls off, keep the last two turns as they were.
+    /// tickets.edit_replies_on_compaction(|compaction, replies| async move {
+    ///     let cut = replies.len().saturating_sub(4);
+    ///     let summary = compaction.summarize(&replies[..cut]).await?;
+    ///     let mut kept = vec![agentwerk::Reply::user_text(summary)];
+    ///     kept.extend_from_slice(&replies[cut..]);
+    ///     Ok(kept)
+    /// });
+    /// ```
+    pub fn edit_replies_on_compaction<F, Fut>(&self, editor: F) -> &Self
+    where
+        F: Fn(Compaction, Vec<Reply>) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = ProviderResult<Vec<Reply>>> + Send + 'static,
+    {
+        let boxed: Arc<CompactionEditor> =
+            Arc::new(move |compaction, replies| Box::pin(editor(compaction, replies)));
+        *self.compaction_editor.lock().unwrap() = Some(boxed);
+        self
+    }
+
+    /// The installed compaction editor, cloned out so the lock is released
+    /// before the loop awaits it.
+    pub(crate) fn compaction_editor(&self) -> Option<Arc<CompactionEditor>> {
+        self.compaction_editor.lock().unwrap().clone()
+    }
+
     pub(crate) fn emit(&self, key: &str, agent: &str, kind: EventKind) {
         self.stats
             .record_event(&kind, key, &self.labels_for(key), agent);
@@ -507,6 +571,25 @@ impl TicketQueue {
         self
     }
 
+    /// Compact once the model's context window is this full.
+    ///
+    /// Unset, a built-in fraction applies. The value is clamped to `0.0..=1.0`,
+    /// and a fraction near zero compacts every turn. Nothing happens on a model
+    /// whose window is unknown.
+    ///
+    /// This is a trigger, not a limit: reaching it costs a summary, not the run.
+    pub fn compact_at(&self, fraction: f64) -> &Self {
+        // NaN survives `clamp` and would put the threshold at zero, compacting
+        // every turn. A full window is the harmless reading of nonsense.
+        let fraction = if fraction.is_nan() {
+            1.0
+        } else {
+            fraction.clamp(0.0, 1.0)
+        };
+        self.policies.lock().unwrap().compact_at = Some(fraction);
+        self
+    }
+
     /// Get the turn limit, or `None` when there is none.
     pub fn get_max_turns(&self) -> Option<u32> {
         self.policies.lock().unwrap().max_turns
@@ -545,6 +628,12 @@ impl TicketQueue {
     /// Get the elapsed-duration limit, or `None` when there is none.
     pub fn get_max_time(&self) -> Option<Duration> {
         self.policies.lock().unwrap().max_time
+    }
+
+    /// Get how full the context window may get before compaction fires, or
+    /// `None` when the built-in default applies.
+    pub fn get_compact_at(&self) -> Option<f64> {
+        self.policies.lock().unwrap().compact_at
     }
 
     /// Stop execution when another task you supply finishes.
@@ -1302,7 +1391,8 @@ mod tests {
             .max_schema_retries(3)
             .max_request_retries(5)
             .request_retry_delay(Duration::from_millis(250))
-            .max_time(Duration::from_secs(300));
+            .max_time(Duration::from_secs(300))
+            .compact_at(0.75);
 
         assert_eq!(queue.get_max_turns(), Some(40));
         assert_eq!(queue.get_max_input_tokens(), Some(200_000));
@@ -1312,6 +1402,7 @@ mod tests {
         assert_eq!(queue.get_max_request_retries(), 5);
         assert_eq!(queue.get_request_retry_delay(), Duration::from_millis(250));
         assert_eq!(queue.get_max_time(), Some(Duration::from_secs(300)));
+        assert_eq!(queue.get_compact_at(), Some(0.75));
     }
 
     #[test]
@@ -1325,6 +1416,16 @@ mod tests {
         assert_eq!(queue.get_max_schema_retries(), Some(10));
         assert_eq!(queue.get_max_request_retries(), 10);
         assert_eq!(queue.get_request_retry_delay(), Duration::from_millis(500));
+        assert_eq!(queue.get_compact_at(), None);
+    }
+
+    #[test]
+    fn compact_at_clamps_a_fraction_outside_the_unit_range() {
+        let (queue, _tmp) = test_queue();
+        for (given, expected) in [(1.5, 1.0), (-0.2, 0.0), (f64::NAN, 1.0)] {
+            queue.compact_at(given);
+            assert_eq!(queue.get_compact_at(), Some(expected), "given {given}");
+        }
     }
 
     #[test]

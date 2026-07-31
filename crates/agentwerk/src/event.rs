@@ -240,8 +240,9 @@ pub enum EventKind {
         max_attempts: u32,
         message: String,
     },
-    /// Compaction is about to summarize the older messages. `total` is how many
-    /// summaries it intends to ask for.
+    /// Compaction is about to rewrite the older messages. `total` is how many
+    /// summaries the built-in summarizer intends to ask for, and `1` when an
+    /// editor is installed, since only the summarizer works in chunks.
     CompactionStarted { reason: CompactReason, total: u32 },
     /// Compaction finished part of the work. `completed` counts from one and
     /// `total` repeats the matching `CompactionStarted`.
