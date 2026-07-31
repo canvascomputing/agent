@@ -621,7 +621,7 @@ for name, stat in stats.tool_stats().items():
 | `file_stats()` | Get per-filepath open and failure counts. |
 | `knowledge_stats()` | Get Knowledge usage: write, read, remove, list, and miss counts. |
 | `model_stats()` | Get per-model requests and token usage. |
-| `usage_history(ticket_key)` | Get a ticket's token usage. |
+| `token_usage(ticket_key)` | Get a ticket's token usage, oldest first. |
 | `event_counts()` | Get per-event counts. |
 | `stats_for_label(label)` | Get statistics scoped to one label. |
 | `stats_for_agent(name)` | Get statistics scoped to one agent. |

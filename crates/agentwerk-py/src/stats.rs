@@ -64,8 +64,8 @@ impl PyStats {
     }
 
     /// Get a ticket's token usage, oldest first.
-    fn usage_history<'py>(&self, py: Python<'py>, ticket_key: &str) -> PyResult<Bound<'py, PyAny>> {
-        let history = self.get().usage_history(ticket_key);
+    fn token_usage<'py>(&self, py: Python<'py>, ticket_key: &str) -> PyResult<Bound<'py, PyAny>> {
+        let history = self.get().token_usage(ticket_key);
         let value = serde_json::to_value(&history).map_err(runtime_error)?;
         value_to_py(py, &value)
     }

@@ -14,7 +14,7 @@ use agentwerk::{Agent, Event, Ticket, TicketQueue};
 
 // Pins a known context window: the trigger stays quiet on a model whose window
 // it cannot look up, and the model here comes from the environment. The first
-// response appends to `usage_history` and the next iteration's proactive check
+// response appends to `token_usage` and the next iteration's proactive check
 // fires against the zero threshold `compact_at(0.0)` sets.
 const LOCAL_CTX: u64 = 4_096;
 
@@ -126,7 +126,7 @@ async fn summariser_produces_text_when_compaction_fires_against_live_llm() {
 
     let tickets = TicketQueue::new();
     // Two iterations: turn 1 lets the model respond once (appending one entry
-    // to `usage_history`); turn 2's proactive guard then trips because a
+    // to `token_usage`); turn 2's proactive guard then trips because a
     // threshold of zero is always crossed.
     tickets.max_turns(2);
     tickets.compact_at(0.0);
@@ -211,10 +211,10 @@ async fn summariser_produces_text_when_compaction_fires_against_live_llm() {
     // (turn 2's reply). Without the reset, the pre-compaction entry
     // would still be there too, length would be 2.
     for ticket in tickets.tickets() {
-        let history = tickets.stats().usage_history(&ticket.key);
+        let history = tickets.stats().token_usage(&ticket.key);
         assert!(
             history.len() <= 1,
-            "{}: usage_history should be cleared on compaction, found {} entries",
+            "{}: token_usage should be cleared on compaction, found {} entries",
             ticket.key,
             history.len(),
         );

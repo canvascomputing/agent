@@ -62,7 +62,7 @@ pub struct Stats {
     agent_stats: Mutex<HashMap<String, Arc<Stats>>>,
     /// Token usage per ticket, oldest first. It feeds the estimate that decides
     /// when to compact, and is cleared once that happens.
-    usage_history: Mutex<HashMap<String, Vec<TokenUsage>>>,
+    token_usage: Mutex<HashMap<String, Vec<TokenUsage>>>,
     /// Call and failure tallies keyed by tool name, run-wide only.
     tool_stats: Mutex<HashMap<String, ToolCounters>>,
     /// Open and failure tallies keyed by the path a tool opened, run-wide only.
@@ -242,7 +242,7 @@ impl Stats {
             total_work_duration: AtomicU64::new(0),
             label_stats: Mutex::new(HashMap::new()),
             agent_stats: Mutex::new(HashMap::new()),
-            usage_history: Mutex::new(HashMap::new()),
+            token_usage: Mutex::new(HashMap::new()),
             tool_stats: Mutex::new(HashMap::new()),
             file_stats: Mutex::new(HashMap::new()),
             knowledge_stats: Mutex::new(KnowledgeCounters::default()),
@@ -273,8 +273,12 @@ impl Stats {
     }
 
     /// Get a ticket's token usage, oldest first.
-    pub fn usage_history(&self, ticket_key: &str) -> Vec<TokenUsage> {
-        self.usage_history
+    ///
+    /// This is what the compaction estimator reads, not a cumulative figure:
+    /// it is cleared when a ticket is compacted, and `stats.json` never
+    /// carries it.
+    pub fn token_usage(&self, ticket_key: &str) -> Vec<TokenUsage> {
+        self.token_usage
             .lock()
             .unwrap()
             .get(ticket_key)
@@ -284,7 +288,7 @@ impl Stats {
 
     /// Append `usage` to the per-ticket series.
     pub(crate) fn record_usage(&self, ticket_key: &str, usage: TokenUsage) {
-        self.usage_history
+        self.token_usage
             .lock()
             .unwrap()
             .entry(ticket_key.to_string())
@@ -292,10 +296,10 @@ impl Stats {
             .push(usage);
     }
 
-    /// Drop a ticket's usage history, once its older messages are summarized
+    /// Drop a ticket's token usage, once its older messages are summarized
     /// and the earlier trend no longer predicts the next request.
     pub(crate) fn reset_usage(&self, ticket_key: &str) {
-        self.usage_history.lock().unwrap().remove(ticket_key);
+        self.token_usage.lock().unwrap().remove(ticket_key);
     }
 
     /// Get per-tool call and failure counts, sorted by tool name.
@@ -1336,8 +1340,8 @@ mod tests {
 
         s.reset_usage("TICKET-1");
 
-        assert!(s.usage_history("TICKET-1").is_empty());
-        let t2 = s.usage_history("TICKET-2");
+        assert!(s.token_usage("TICKET-1").is_empty());
+        let t2 = s.token_usage("TICKET-2");
         assert_eq!(t2.len(), 1);
         assert_eq!(t2[0].input_tokens, 200);
     }
