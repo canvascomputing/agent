@@ -63,49 +63,6 @@ impl PyStats {
         }
     }
 
-    /// Get every label slice, keyed by label.
-    fn stats_by_label(&self) -> BTreeMap<String, PyStats> {
-        self.get()
-            .stats_by_label()
-            .into_iter()
-            .map(|(name, slice)| {
-                (
-                    name,
-                    PyStats {
-                        source: Source::Slice(slice),
-                    },
-                )
-            })
-            .collect()
-    }
-
-    /// Get every agent slice, keyed by agent name.
-    fn stats_by_agent(&self) -> BTreeMap<String, PyStats> {
-        self.get()
-            .stats_by_agent()
-            .into_iter()
-            .map(|(name, slice)| {
-                (
-                    name,
-                    PyStats {
-                        source: Source::Slice(slice),
-                    },
-                )
-            })
-            .collect()
-    }
-
-    /// Get a ticket's token usage, oldest first.
-    fn usage_for_ticket<'py>(
-        &self,
-        py: Python<'py>,
-        ticket_key: &str,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let history = self.get().usage_for_ticket(ticket_key);
-        let value = serde_json::to_value(&history).map_err(runtime_error)?;
-        value_to_py(py, &value)
-    }
-
     /// Get per-tool call and failure counts, keyed by tool name.
     fn tool_stats(&self) -> BTreeMap<String, PyToolStat> {
         self.get()
