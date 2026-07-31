@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crate::agents::agent::Agent;
-use crate::agents::tickets::{Ticket, TicketSystem};
+use crate::agents::tickets::{Ticket, TicketQueue};
 use crate::event::Event;
 use crate::providers::types::{ModelResponse, ResponseStatus, TokenUsage};
 use crate::providers::{ContentBlock, Message, Provider, ProviderError, ProviderResult};
@@ -277,7 +277,7 @@ pub fn task_agent(provider: &Arc<MockProvider>) -> Agent {
         .build()
 }
 
-pub fn collect_events(tickets: &TicketSystem) -> Arc<Mutex<Vec<Event>>> {
+pub fn collect_events(tickets: &TicketQueue) -> Arc<Mutex<Vec<Event>>> {
     let collected: Arc<Mutex<Vec<Event>>> = Arc::new(Mutex::new(Vec::new()));
     let handler: Arc<dyn Fn(&Event) + Send + Sync> = {
         let c = Arc::clone(&collected);
@@ -302,7 +302,7 @@ pub async fn run_one(
     };
 
     let results_dir = crate::test_util::TempDir::new().unwrap();
-    let tickets = TicketSystem::new();
+    let tickets = TicketQueue::new();
     tickets
         .dir(results_dir.path().to_path_buf())
         .max_request_retries(max_request_retries)
@@ -351,7 +351,7 @@ pub async fn run_with_context_window(
     };
 
     let results_dir = crate::test_util::TempDir::new().unwrap();
-    let tickets = TicketSystem::new();
+    let tickets = TicketQueue::new();
     tickets
         .dir(results_dir.path().to_path_buf())
         .max_request_retries(0)
@@ -389,7 +389,7 @@ pub async fn run_compaction(
     };
 
     let results_dir = crate::test_util::TempDir::new().unwrap();
-    let tickets = TicketSystem::new();
+    let tickets = TicketQueue::new();
     tickets
         .dir(results_dir.path().to_path_buf())
         .max_request_retries(0)

@@ -34,9 +34,9 @@ def pytest_collection_modifyitems(config, items):
 
 
 @pytest.fixture
-def system():
-    """A fresh, empty ticket system."""
-    return aw.TicketSystem()
+def queue():
+    """A fresh, empty ticket queue."""
+    return aw.TicketQueue()
 
 
 @pytest.fixture

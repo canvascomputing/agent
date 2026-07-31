@@ -101,20 +101,20 @@ def test_building_twice_is_rejected(offline_agent):
         offline_agent.build()
 
 
-def test_registering_an_unbuilt_agent_is_rejected(system):
+def test_registering_an_unbuilt_agent_is_rejected(queue):
     with pytest.raises(RuntimeError):
-        system.agent(aw.Agent())
+        queue.agent(aw.Agent())
 
 
-def test_agent_enqueues_a_ticket_on_its_private_system(offline_agent):
+def test_agent_enqueues_a_ticket_on_its_private_queue(offline_agent):
     key = offline_agent.ticket(aw.Ticket("scan the corpus", labels=["scan"]))
     assert key.startswith("TICKET-")
 
 
-def test_binding_an_agent_drains_its_queue_into_the_shared_system(
-    offline_agent, system
+def test_binding_an_agent_drains_its_queue_into_the_shared_queue(
+    offline_agent, queue
 ):
     offline_agent.task("count to three")
-    offline_agent.ticket_system(system)
+    offline_agent.ticket_queue(queue)
 
-    assert [t.task for t in system.tickets()] == ["count to three"]
+    assert [t.task for t in queue.tickets()] == ["count to three"]

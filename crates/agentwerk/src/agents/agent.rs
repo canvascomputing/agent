@@ -14,7 +14,7 @@ use crate::tools::{FinishTool, ManageKnowledgeTool, ToolLike, ToolRegistry};
 use super::knowledge::Knowledge;
 use super::policy::Policies;
 use super::stats::Stats;
-use super::tickets::{Ticket, TicketSystem};
+use super::tickets::{Ticket, TicketQueue};
 
 static AGENT_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -185,7 +185,7 @@ impl<P, M> AgentBuilder<P, M> {
     /// Let the agent wait for new instructions to keep a ticket in-progress.
     ///
     /// The agent stops after a reply that calls no tool, and
-    /// `TicketSystem::reply` drives the next turn.
+    /// `TicketQueue::reply` drives the next turn.
     pub fn interactive(mut self) -> Self {
         self.interactive = true;
         self
@@ -243,7 +243,7 @@ impl<P, M> AgentBuilder<P, M> {
     ///
     /// It replaces the store opened by default, both for what the prompt shows
     /// and for what `ManageKnowledgeTool` writes to. Hand the same store to
-    /// several agents the way `ticket_system(&shared)` shares a queue.
+    /// several agents the way `ticket_queue(&shared)` shares a queue.
     pub fn knowledge(mut self, store: &Arc<Knowledge>) -> Self {
         self.tools
             .register(ManageKnowledgeTool::new(Arc::clone(store)));
@@ -351,16 +351,16 @@ impl<P, M> AgentBuilder<P, M> {
 impl AgentBuilder<Arc<dyn Provider>, Model> {
     /// Create the agent.
     ///
-    /// It starts with a ticket system of its own, so `.task(...).finish().await`
-    /// works without one being set up. `TicketSystem::agent(...)` later moves
-    /// those tickets into the shared system.
+    /// It starts with a ticket queue of its own, so `.task(...).finish().await`
+    /// works without one being set up. `TicketQueue::agent(...)` later moves
+    /// those tickets into the shared queue.
     pub fn build(self) -> Agent {
         let mut agent = Agent {
             name: self.name,
             model: self.model,
             labels: self.labels,
             interactive: self.interactive,
-            ticket_system: TicketSystemRef::Shared(Weak::new()),
+            ticket_queue: TicketQueueRef::Shared(Weak::new()),
             provider: self.provider,
             role: self.role,
             templates: self.templates,
@@ -369,24 +369,24 @@ impl AgentBuilder<Arc<dyn Provider>, Model> {
             knowledge: self.knowledge,
             directive_editor: self.directive_editor,
         };
-        let private = TicketSystem::new();
+        let private = TicketQueue::new();
         private.bind_agent(&mut agent);
-        agent.ticket_system = TicketSystemRef::Private(private);
+        agent.ticket_queue = TicketQueueRef::Private(private);
         agent
     }
 }
 
 // Agent
 
-/// How an `Agent` reaches its `TicketSystem`. A freshly built agent carries
-/// `Private` until it is added to a system; everything else carries `Shared`.
-pub(crate) enum TicketSystemRef {
-    Shared(Weak<TicketSystem>),
-    Private(Arc<TicketSystem>),
+/// How an `Agent` reaches its `TicketQueue`. A freshly built agent carries
+/// `Private` until it is added to a queue; everything else carries `Shared`.
+pub(crate) enum TicketQueueRef {
+    Shared(Weak<TicketQueue>),
+    Private(Arc<TicketQueue>),
 }
 
-impl TicketSystemRef {
-    pub(crate) fn upgrade(&self) -> Option<Arc<TicketSystem>> {
+impl TicketQueueRef {
+    pub(crate) fn upgrade(&self) -> Option<Arc<TicketQueue>> {
         match self {
             Self::Shared(w) => w.upgrade(),
             Self::Private(a) => Some(Arc::clone(a)),
@@ -415,12 +415,12 @@ impl TicketSystemRef {
 /// # }
 /// ```
 pub struct Agent {
-    // pub(crate): read by loop, TicketSystem, or routing code
+    // pub(crate): read by loop, TicketQueue, or routing code
     pub(crate) name: String,
     pub(crate) model: Model,
     pub(crate) labels: Vec<String>,
     pub(crate) interactive: bool,
-    pub(crate) ticket_system: TicketSystemRef,
+    pub(crate) ticket_queue: TicketQueueRef,
     // private: accessed through methods within agents::
     provider: Arc<dyn Provider>,
     role: String,
@@ -432,19 +432,19 @@ pub struct Agent {
 }
 
 impl Clone for Agent {
-    /// A clone points at the shared system, so rebinding the original cannot
+    /// A clone points at the shared queue, so rebinding the original cannot
     /// leave the clone filing tickets into a queue nothing reads.
     fn clone(&self) -> Self {
-        let ticket_system = match &self.ticket_system {
-            TicketSystemRef::Shared(w) => TicketSystemRef::Shared(w.clone()),
-            TicketSystemRef::Private(a) => TicketSystemRef::Shared(Arc::downgrade(a)),
+        let ticket_queue = match &self.ticket_queue {
+            TicketQueueRef::Shared(w) => TicketQueueRef::Shared(w.clone()),
+            TicketQueueRef::Private(a) => TicketQueueRef::Shared(Arc::downgrade(a)),
         };
         Self {
             name: self.name.clone(),
             model: self.model.clone(),
             labels: self.labels.clone(),
             interactive: self.interactive,
-            ticket_system,
+            ticket_queue,
             provider: Arc::clone(&self.provider),
             role: self.role.clone(),
             templates: self.templates.clone(),
@@ -561,12 +561,12 @@ impl Agent {
         out
     }
 
-    /// Attach a built agent to a ticket system.
+    /// Attach a built agent to a ticket queue.
     ///
     /// Any tickets the agent already queued move across, and the agent starts
     /// reading the shared queue.
-    pub fn ticket_system(mut self, sys: &Arc<TicketSystem>) -> Self {
-        sys.bind_agent(&mut self);
+    pub fn ticket_queue(mut self, queue: &Arc<TicketQueue>) -> Self {
+        queue.bind_agent(&mut self);
         self
     }
 
@@ -583,36 +583,36 @@ impl Agent {
     }
 
     fn dispatch(&self, mut ticket: Ticket) -> String {
-        let sys = self
-            .ticket_system
+        let queue = self
+            .ticket_queue
             .upgrade()
-            .expect("Agent::task requires a bound TicketSystem");
+            .expect("Agent::task requires a bound TicketQueue");
         if let serde_json::Value::String(s) = &ticket.task {
             ticket.task = serde_json::Value::String(self.interpolate(s));
         }
-        sys.insert(ticket, self.name.clone())
+        queue.insert(ticket, self.name.clone())
     }
 
-    /// Begin processing tickets, and hand back the ticket system so results and
+    /// Begin processing tickets, and hand back the ticket queue so results and
     /// cancellation stay one call away.
-    pub fn start(&self) -> Arc<TicketSystem> {
-        let sys = self
-            .ticket_system
+    pub fn start(&self) -> Arc<TicketQueue> {
+        let queue = self
+            .ticket_queue
             .upgrade()
-            .expect("Agent::start requires a bound TicketSystem");
-        sys.start();
-        sys
+            .expect("Agent::start requires a bound TicketQueue");
+        queue.start();
+        queue
     }
 
-    /// Process every queued ticket, then hand back the ticket system so results
+    /// Process every queued ticket, then hand back the ticket queue so results
     /// can be read from it.
-    pub async fn finish(&self) -> Arc<TicketSystem> {
-        let sys = self
-            .ticket_system
+    pub async fn finish(&self) -> Arc<TicketQueue> {
+        let queue = self
+            .ticket_queue
             .upgrade()
-            .expect("Agent::finish requires a bound TicketSystem");
-        let _ = sys.finish().await;
-        sys
+            .expect("Agent::finish requires a bound TicketQueue");
+        let _ = queue.finish().await;
+        queue
     }
 }
 
@@ -793,11 +793,11 @@ mod tests {
     #[tokio::test]
     async fn dispatch_interpolates_string_task_body() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let sys = crate::agents::TicketSystem::new();
-        sys.dir(dir.path().to_path_buf());
-        let agent = built(Agent::new().template("topic", "rust")).ticket_system(&sys);
+        let queue = crate::agents::TicketQueue::new();
+        queue.dir(dir.path().to_path_buf());
+        let agent = built(Agent::new().template("topic", "rust")).ticket_queue(&queue);
         agent.task("Search {topic} forums.");
-        let stored = sys
+        let stored = queue
             .tickets()
             .into_iter()
             .next()
@@ -811,13 +811,13 @@ mod tests {
     #[tokio::test]
     async fn a_task_body_keeps_the_context_placeholder_verbatim() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let sys = crate::agents::TicketSystem::new();
-        sys.dir(dir.path().to_path_buf());
+        let queue = crate::agents::TicketQueue::new();
+        queue.dir(dir.path().to_path_buf());
         // The block needs a ticket key and live budgets, neither of which
         // exists yet at dispatch. Only the role expands it.
-        let agent = built(Agent::new()).ticket_system(&sys);
+        let agent = built(Agent::new()).ticket_queue(&queue);
         agent.task("Work on {context}.");
-        let stored = sys
+        let stored = queue
             .tickets()
             .into_iter()
             .next()
@@ -831,12 +831,12 @@ mod tests {
     #[tokio::test]
     async fn dispatch_leaves_object_task_unchanged() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let sys = crate::agents::TicketSystem::new();
-        sys.dir(dir.path().to_path_buf());
-        let agent = built(Agent::new().template("topic", "rust")).ticket_system(&sys);
+        let queue = crate::agents::TicketQueue::new();
+        queue.dir(dir.path().to_path_buf());
+        let agent = built(Agent::new().template("topic", "rust")).ticket_queue(&queue);
         let value = serde_json::json!({"q": "Find {topic}"});
         agent.ticket(Ticket::new(value.clone()));
-        let stored = sys
+        let stored = queue
             .tickets()
             .into_iter()
             .next()
@@ -956,8 +956,8 @@ mod tests {
     async fn binding_agent_with_explicit_knowledge_keeps_explicit_store() {
         let dir = crate::test_util::TempDir::new().unwrap();
         let store = Knowledge::load(dir.path()).unwrap();
-        let sys = crate::agents::TicketSystem::new();
-        let agent = built(Agent::new().knowledge(&store)).ticket_system(&sys);
+        let queue = crate::agents::TicketQueue::new();
+        let agent = built(Agent::new().knowledge(&store)).ticket_queue(&queue);
         assert!(Arc::ptr_eq(&store, &agent.knowledge));
     }
 }

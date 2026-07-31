@@ -244,7 +244,7 @@ mod tests {
             "TICKET-7",
         );
         let lines: Vec<&str> = rendered.lines().collect();
-        assert!(lines[0].starts_with("You work within a ticket system."));
+        assert!(lines[0].starts_with("You work within a ticket queue."));
         assert_eq!(lines[1], "");
         assert_eq!(lines[2], "- Ticket: TICKET-7");
         assert!(lines[3].starts_with("- Date: "));

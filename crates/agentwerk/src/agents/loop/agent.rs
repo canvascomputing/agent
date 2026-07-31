@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use crate::agents::agent::Agent;
 use crate::agents::policy::Policies;
-use crate::agents::tickets::{policy_violated_kind, Reply, Status, Ticket, TicketSystem};
+use crate::agents::tickets::{policy_violated_kind, Reply, Status, Ticket, TicketQueue};
 use crate::event::{CompactReason, EventKind, PolicyKind};
 use crate::providers::{AsUserMessage, Message, Model, RequestErrorKind};
 
@@ -19,7 +19,7 @@ const RESUME_OR_FINISH_DETAIL: &str =
 pub(super) struct TicketContext<'a> {
     pub(super) agent: &'a Agent,
     pub(super) model: &'a Model,
-    pub(super) ticket_system: &'a Arc<TicketSystem>,
+    pub(super) ticket_queue: &'a Arc<TicketQueue>,
     pub(super) stop_signal: Arc<AtomicBool>,
 
     pub(super) ticket_key: String,
@@ -32,12 +32,12 @@ pub(super) struct TicketContext<'a> {
 
 impl<'a> TicketContext<'a> {
     pub(super) fn emit(&self, kind: EventKind) {
-        self.ticket_system
+        self.ticket_queue
             .emit(&self.ticket_key, self.agent.get_name(), kind);
     }
 
     pub(super) fn ticket(&self) -> Option<Ticket> {
-        self.ticket_system.get_ticket(&self.ticket_key)
+        self.ticket_queue.get_ticket(&self.ticket_key)
     }
 
     /// The corrective directive to inject for `detail`: the built-in text,
@@ -57,22 +57,22 @@ impl<'a> TicketContext<'a> {
             message,
         });
         let _ = self
-            .ticket_system
+            .ticket_queue
             .set_failed_by(&self.ticket_key, self.agent.get_name());
     }
 }
 
 pub(super) async fn run_agent(agent: Agent) {
-    let ticket_system = agent
-        .ticket_system
+    let ticket_queue = agent
+        .ticket_queue
         .upgrade()
-        .expect("Agent's TicketSystem was dropped before run() finished");
+        .expect("Agent's TicketQueue was dropped before run() finished");
 
     loop {
-        if should_stop(&agent, &ticket_system) {
+        if should_stop(&agent, &ticket_queue) {
             return;
         }
-        let Some(mut context) = claim(&agent, &ticket_system) else {
+        let Some(mut context) = claim(&agent, &ticket_queue) else {
             tokio::time::sleep(POLL_INTERVAL).await;
             continue;
         };
@@ -90,16 +90,16 @@ pub(super) async fn run_agent(agent: Agent) {
     }
 }
 
-fn should_stop(agent: &Agent, ticket_system: &TicketSystem) -> bool {
+fn should_stop(agent: &Agent, ticket_queue: &TicketQueue) -> bool {
     // finish() swaps in a fresh signal per run, so a snapshot taken once per
     // agent task would miss the reset; re-read the current signal every check.
-    let stop_signal = Arc::clone(&ticket_system.stop_signal.lock().unwrap());
+    let stop_signal = Arc::clone(&ticket_queue.stop_signal.lock().unwrap());
     if stop_signal.load(Ordering::Relaxed) {
         return true;
     }
-    let policies = ticket_system.policies();
-    if let Some((policy, limit)) = policy_violated_kind(&policies, &ticket_system.stats) {
-        ticket_system.emit(
+    let policies = ticket_queue.policies();
+    if let Some((policy, limit)) = policy_violated_kind(&policies, &ticket_queue.stats) {
+        ticket_queue.emit(
             "",
             agent.get_name(),
             EventKind::PolicyViolated { policy, limit },
@@ -111,53 +111,53 @@ fn should_stop(agent: &Agent, ticket_system: &TicketSystem) -> bool {
 
 /// Claim a `Todo` ticket for this agent, or resume one of its `InProgress`
 /// tickets; write the first message when there is none.
-fn claim<'a>(agent: &'a Agent, ticket_system: &'a Arc<TicketSystem>) -> Option<TicketContext<'a>> {
+fn claim<'a>(agent: &'a Agent, ticket_queue: &'a Arc<TicketQueue>) -> Option<TicketContext<'a>> {
     let claimable = |t: &Ticket| {
         t.status == Status::Todo
             && agent.handles_labels(&t.labels)
-            && !ticket_system.labels_cancelled(&t.labels)
+            && !ticket_queue.labels_cancelled(&t.labels)
     };
     let resumable = |t: &Ticket| {
         t.status == Status::InProgress
             && t.labels.iter().any(|l| l == agent.get_name())
             && (t.is_waiting_for_response() || !agent.is_interactive())
-            && !ticket_system.labels_cancelled(&t.labels)
+            && !ticket_queue.labels_cancelled(&t.labels)
     };
-    let ticket_key = ticket_system
+    let ticket_key = ticket_queue
         .claim(claimable, agent.get_name())
-        .or_else(|| ticket_system.find_ticket(resumable).map(|t| t.key.clone()))?;
-    let ticket = ticket_system.get_ticket(&ticket_key)?;
+        .or_else(|| ticket_queue.find_ticket(resumable).map(|t| t.key.clone()))?;
+    let ticket = ticket_queue.get_ticket(&ticket_key)?;
 
     let knowledge_index = agent.knowledge().index();
-    let policies = ticket_system.policies();
+    let policies = ticket_queue.policies();
     // Lets the model see what knowledge pages it can read.
     let system_prompt = agent.system_prompt(
         Some(&knowledge_index),
         &policies,
-        &ticket_system.stats,
+        &ticket_queue.stats,
         &ticket_key,
     );
     let agent_name = agent.get_name();
 
-    ticket_system.emit(&ticket_key, agent_name, EventKind::TurnStarted);
+    ticket_queue.emit(&ticket_key, agent_name, EventKind::TurnStarted);
 
     if ticket.replies.is_empty() {
-        ticket_system.add_reply(&ticket_key, Reply::system_text(system_prompt.clone()));
+        ticket_queue.add_reply(&ticket_key, Reply::system_text(system_prompt.clone()));
         let Message::User {
             content: task_blocks,
         } = ticket.as_user_message()
         else {
             unreachable!("Ticket::as_user_message returns Message::User");
         };
-        ticket_system.add_reply(&ticket_key, Reply::user(&task_blocks, &HashMap::new()));
-        ticket_system.emit(&ticket_key, agent_name, EventKind::TicketStarted);
+        ticket_queue.add_reply(&ticket_key, Reply::user(&task_blocks, &HashMap::new()));
+        ticket_queue.emit(&ticket_key, agent_name, EventKind::TicketStarted);
     }
 
-    let stop_signal = Arc::clone(&ticket_system.stop_signal.lock().unwrap());
+    let stop_signal = Arc::clone(&ticket_queue.stop_signal.lock().unwrap());
     Some(TicketContext {
         agent,
         model: &agent.model,
-        ticket_system,
+        ticket_queue,
         stop_signal,
 
         ticket_key,
@@ -170,13 +170,13 @@ fn claim<'a>(agent: &'a Agent, ticket_system: &'a Arc<TicketSystem>) -> Option<T
 
 /// Re-read the ticket and decide the next step.
 fn check_ticket(context: &mut TicketContext<'_>) -> Step {
-    if should_stop(context.agent, context.ticket_system) {
+    if should_stop(context.agent, context.ticket_queue) {
         return Step::Stop;
     }
     let Some(ticket) = context.ticket() else {
         return Step::NextTicket;
     };
-    if context.ticket_system.labels_cancelled(&ticket.labels) {
+    if context.ticket_queue.labels_cancelled(&ticket.labels) {
         return Step::Cancel;
     }
     // The transition itself already emitted the terminal event; the agent
@@ -208,7 +208,7 @@ fn silence_retry(context: &mut TicketContext<'_>) -> Step {
             limit: u64::from(max),
         });
         let _ = context
-            .ticket_system
+            .ticket_queue
             .set_failed_by(&context.ticket_key, context.agent.get_name());
         return Step::NextTicket;
     }
@@ -217,7 +217,7 @@ fn silence_retry(context: &mut TicketContext<'_>) -> Step {
         max_attempts: max,
         message: RESUME_OR_FINISH_DETAIL.to_string(),
     });
-    context.ticket_system.add_reply(
+    context.ticket_queue.add_reply(
         &context.ticket_key,
         Reply::user_text(context.retry_directive(RESUME_OR_FINISH_DETAIL)),
     );
@@ -231,7 +231,7 @@ mod tests {
 
     use crate::agents::agent::Agent;
     use crate::agents::r#loop::test_util::*;
-    use crate::agents::tickets::{Author, Status, Ticket, TicketSystem};
+    use crate::agents::tickets::{Author, Status, Ticket, TicketQueue};
     use crate::agents::Knowledge;
     use crate::providers::Provider;
     use crate::tools::{FinishTool, ManageTicketsTool};
@@ -245,7 +245,7 @@ mod tests {
             Ok(write_result_response("a-done")),
             Ok(write_result_response("b-done")),
         ]);
-        let tickets = TicketSystem::new();
+        let tickets = TicketQueue::new();
         tickets
             .dir(results_dir.path().to_path_buf())
             .max_request_retries(0)
@@ -282,7 +282,7 @@ mod tests {
             Ok(text_response("just thinking, no tool call")),
             Ok(write_result_response("done")),
         ]);
-        let tickets = TicketSystem::new();
+        let tickets = TicketQueue::new();
         tickets
             .dir(results_dir.path().to_path_buf())
             .max_request_retries(0)
@@ -323,7 +323,7 @@ mod tests {
             Ok(text_response("just thinking, no tool call")),
             Ok(write_result_response("done")),
         ]);
-        let tickets = TicketSystem::new();
+        let tickets = TicketQueue::new();
         tickets
             .dir(results_dir.path().to_path_buf())
             .max_request_retries(0)
@@ -361,7 +361,7 @@ mod tests {
             Ok(handover_response("bob", "continue", "alice-done")),
             Ok(write_result_response("bob-done")),
         ]);
-        let tickets = TicketSystem::new();
+        let tickets = TicketQueue::new();
         tickets
             .dir(results_dir.path().to_path_buf())
             .max_request_retries(0)
@@ -402,7 +402,7 @@ mod tests {
             Ok(write_result_response("first-done")),
             Ok(write_result_response("follow-up-done")),
         ]);
-        let tickets = TicketSystem::new();
+        let tickets = TicketQueue::new();
         tickets
             .dir(results_dir.path().to_path_buf())
             .max_request_retries(0)
@@ -439,7 +439,7 @@ mod tests {
 
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let provider = MockProvider::with_results(vec![Ok(write_result_response("done"))]);
-        let tickets = TicketSystem::new();
+        let tickets = TicketQueue::new();
         tickets
             .dir(results_dir.path().to_path_buf())
             .max_request_retries(0)
@@ -478,7 +478,7 @@ mod tests {
         // ticket, so `requests == 1` and `InProgress` prove the gate held.
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let provider = MockProvider::with_results(vec![Ok(text_response("hi"))]);
-        let tickets = TicketSystem::new();
+        let tickets = TicketQueue::new();
         tickets
             .dir(results_dir.path().to_path_buf())
             .max_request_retries(0)
@@ -526,7 +526,7 @@ mod tests {
             Ok(text_response("hi")),
             Ok(write_result_response("done")),
         ]);
-        let tickets = TicketSystem::new();
+        let tickets = TicketQueue::new();
         tickets
             .dir(results_dir.path().to_path_buf())
             .max_request_retries(0)
@@ -582,7 +582,7 @@ mod tests {
 
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let provider = MockProvider::with_results(vec![Ok(text_response("hi"))]);
-        let tickets = TicketSystem::new();
+        let tickets = TicketQueue::new();
         tickets
             .dir(results_dir.path().to_path_buf())
             .max_request_retries(0)
@@ -614,7 +614,7 @@ mod tests {
             Ok(text_response("hi")),
             Ok(write_result_response("second-done")),
         ]);
-        let tickets = TicketSystem::new();
+        let tickets = TicketQueue::new();
         tickets
             .dir(results_dir.path().to_path_buf())
             .max_request_retries(0)
@@ -674,7 +674,7 @@ mod tests {
 
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let provider = MockProvider::with_results(vec![Ok(text_response("hi"))]);
-        let tickets = TicketSystem::new();
+        let tickets = TicketQueue::new();
         tickets
             .dir(results_dir.path().to_path_buf())
             .max_request_retries(0)
@@ -719,7 +719,7 @@ mod tests {
             Ok(text_response("hi")),
             Ok(write_result_response("done")),
         ]);
-        let tickets = TicketSystem::new();
+        let tickets = TicketQueue::new();
         tickets
             .dir(results_dir.path().to_path_buf())
             .max_request_retries(0)
@@ -750,7 +750,7 @@ mod tests {
             Ok(text_response("hi")),
             Ok(write_result_response("done")),
         ]);
-        let tickets = TicketSystem::new();
+        let tickets = TicketQueue::new();
         tickets
             .dir(results_dir.path().to_path_buf())
             .max_request_retries(0)
@@ -784,7 +784,7 @@ mod tests {
     #[tokio::test]
     async fn cancel_stops_a_running_workshop() {
         let results_dir = crate::test_util::TempDir::new().unwrap();
-        let tickets = TicketSystem::new();
+        let tickets = TicketQueue::new();
         tickets
             .dir(results_dir.path().to_path_buf())
             .max_request_retries(0)
@@ -801,7 +801,7 @@ mod tests {
     #[tokio::test]
     async fn cancel_label_keeps_that_pool_off_the_queue_while_others_run() {
         let results_dir = crate::test_util::TempDir::new().unwrap();
-        let tickets = TicketSystem::new();
+        let tickets = TicketQueue::new();
         tickets
             .dir(results_dir.path().to_path_buf())
             .max_request_retries(0)
@@ -876,7 +876,7 @@ mod tests {
             Ok(write_result_response("first")),
             Ok(write_result_response("second")),
         ]);
-        let tickets = TicketSystem::new();
+        let tickets = TicketQueue::new();
         tickets
             .dir(results_dir.path().to_path_buf())
             .max_request_retries(0)
@@ -903,10 +903,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn agent_finish_forwards_to_bound_system() {
+    async fn agent_finish_forwards_to_bound_queue() {
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let provider = MockProvider::with_results(vec![Ok(write_result_response("forwarded"))]);
-        let tickets = TicketSystem::new();
+        let tickets = TicketQueue::new();
         tickets
             .dir(results_dir.path().to_path_buf())
             .max_request_retries(0)
@@ -922,10 +922,10 @@ mod tests {
         );
 
         agent.task("hello");
-        let sys = tokio::time::timeout(Duration::from_secs(5), agent.finish())
+        let queue = tokio::time::timeout(Duration::from_secs(5), agent.finish())
             .await
             .expect("agent.finish did not finish within 5s");
-        assert_eq!(sys.last_result(), Some(serde_json::json!("forwarded")));
+        assert_eq!(queue.last_result(), Some(serde_json::json!("forwarded")));
     }
 
     // Cross-ticket memory
@@ -952,7 +952,7 @@ mod tests {
             Ok(write_result_response("ok")),
         ]);
         let results_dir = crate::test_util::TempDir::new().unwrap();
-        let tickets = TicketSystem::new();
+        let tickets = TicketQueue::new();
         tickets
             .dir(results_dir.path().to_path_buf())
             .max_request_retries(0)
@@ -993,7 +993,7 @@ mod tests {
         let knowledge_dir = crate::test_util::TempDir::new().unwrap();
         let store = Knowledge::load(knowledge_dir.path()).unwrap();
 
-        let tickets = TicketSystem::new();
+        let tickets = TicketQueue::new();
         tickets
             .dir(results_dir.path().to_path_buf())
             .max_request_retries(0)
@@ -1045,7 +1045,7 @@ mod tests {
         let knowledge_dir = crate::test_util::TempDir::new().unwrap();
         let store = Knowledge::load(knowledge_dir.path()).unwrap();
 
-        let tickets = TicketSystem::new();
+        let tickets = TicketQueue::new();
         tickets
             .dir(results_dir.path().to_path_buf())
             .max_request_retries(0)
@@ -1088,7 +1088,7 @@ mod tests {
         let knowledge_dir = crate::test_util::TempDir::new().unwrap();
         let store = Knowledge::load(knowledge_dir.path()).unwrap();
 
-        let tickets = TicketSystem::new();
+        let tickets = TicketQueue::new();
         tickets
             .dir(results_dir.path().to_path_buf())
             .max_request_retries(0)
@@ -1149,7 +1149,7 @@ mod tests {
         let knowledge_dir = crate::test_util::TempDir::new().unwrap();
         let store = Knowledge::load(knowledge_dir.path()).unwrap();
 
-        let tickets = TicketSystem::new();
+        let tickets = TicketQueue::new();
         tickets
             .dir(results_dir.path().to_path_buf())
             .max_request_retries(0)

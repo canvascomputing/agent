@@ -14,7 +14,7 @@ use super::common;
 
 use agentwerk::event::{default_logger, Event, EventKind};
 use agentwerk::tools::{GlobTool, GrepTool, ListDirectoryTool, ReadFileTool};
-use agentwerk::{Agent, TicketSystem};
+use agentwerk::{Agent, TicketQueue};
 
 /// The exact substring the model must locate. Contains regex metachars
 /// (`(`, `)`) that the model must escape to match literally; left raw they
@@ -91,7 +91,7 @@ async fn finds_code_pattern_with_special_chars(
         logger(e);
     });
 
-    let tickets = TicketSystem::new();
+    let tickets = TicketQueue::new();
 
     tickets.max_turns(10);
     tickets.on_event(move |e| event_handler(e));

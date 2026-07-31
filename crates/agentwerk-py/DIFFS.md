@@ -40,73 +40,73 @@ Seven rules the surface table below never repeats.
 | `AgentBuilder::knowledge(store)` | `Agent.knowledge(store)` |
 | `AgentBuilder::edit_directive_on_retry(editor)` | `Agent.edit_directive_on_retry(editor)`: the editor returns the replacement, or `None` to keep the default, where Rust rewrites in place. |
 | `AgentBuilder::build(self) -> Agent` | `Agent.build() -> Agent`: returns the same object, armed. Configuring after it, or building twice, raises. |
-| `Agent::ticket_system(sys)` | `Agent.ticket_system(system)` |
+| `Agent::ticket_queue(queue)` | `Agent.ticket_queue(queue)` |
 | `Agent::task(task) -> String` | `Agent.task(task) -> str` |
 | `Agent::ticket(ticket) -> String` | `Agent.ticket(ticket) -> str` |
-| `Agent::start() -> Arc<TicketSystem>` | `Agent.start()` |
+| `Agent::start() -> Arc<TicketQueue>` | `Agent.start()` |
 | `Agent::finish().await` | `await Agent.finish()` |
-| **TicketSystem** | |
-| `TicketSystem::new() -> Arc<Self>` | `TicketSystem()` |
-| `TicketSystem::load(dir)` | `TicketSystem.load(dir)` |
-| `TicketSystem::agent(a)` | `TicketSystem.agent(agent)` |
-| `TicketSystem::task(task)` | `TicketSystem.task(task)` |
-| `TicketSystem::ticket(t)` | `TicketSystem.ticket(ticket)` |
-| `TicketSystem::reply(key, content)` | `TicketSystem.reply(key, content)` |
-| `TicketSystem::set_finished(key, result)` | `TicketSystem.set_finished(key, result)` |
-| `TicketSystem::set_failed(key)` | `TicketSystem.set_failed(key)` |
-| `TicketSystem::max_turns(n)` | `TicketSystem.max_turns(n)` |
-| `TicketSystem::max_input_tokens(n)` | `TicketSystem.max_input_tokens(n)` |
-| `TicketSystem::max_output_tokens(n)` | `TicketSystem.max_output_tokens(n)` |
-| `TicketSystem::max_request_tokens(n)` | `TicketSystem.max_request_tokens(n)` |
-| `TicketSystem::max_schema_retries(n)` | `TicketSystem.max_schema_retries(n)` |
-| `TicketSystem::max_request_retries(n)` | `TicketSystem.max_request_retries(n)` |
-| `TicketSystem::max_time(d)` | `TicketSystem.max_time(seconds)` |
-| `TicketSystem::request_retry_delay(d)` | `TicketSystem.request_retry_delay(seconds)` |
-| `TicketSystem::get_max_turns()` | `TicketSystem.get_max_turns()` |
-| `TicketSystem::get_max_input_tokens()` | `TicketSystem.get_max_input_tokens()` |
-| `TicketSystem::get_max_output_tokens()` | `TicketSystem.get_max_output_tokens()` |
-| `TicketSystem::get_max_request_tokens()` | `TicketSystem.get_max_request_tokens()` |
-| `TicketSystem::get_max_schema_retries()` | `TicketSystem.get_max_schema_retries()` |
-| `TicketSystem::get_max_request_retries()` | `TicketSystem.get_max_request_retries()` |
-| `TicketSystem::get_max_time()` | `TicketSystem.get_max_time()` |
-| `TicketSystem::get_request_retry_delay()` | `TicketSystem.get_request_retry_delay()` |
-| `TicketSystem::dir(dir)` | `TicketSystem.dir(dir)` |
-| `TicketSystem::get_dir()` | `TicketSystem.get_dir()` |
-| `TicketSystem::schema_for_label(label, schema)` | `TicketSystem.schema_for_label(label, schema)` |
-| `TicketSystem::on_event(h)` | `TicketSystem.on_event(callback)` |
-| `TicketSystem::on_result(handler)` | `TicketSystem.on_result(callback)` |
-| `TicketSystem::on_failure(handler)` | `TicketSystem.on_failure(callback)` |
-| `TicketSystem::on_ticket(handler)` | `TicketSystem.on_ticket(callback)` |
-| `TicketSystem::cancel_on(trigger)` | `TicketSystem.cancel_on(awaitable)` |
-| `TicketSystem::cancel_on_event(predicate)` | `TicketSystem.cancel_on_event(predicate)` |
-| `TicketSystem::cancel_on_result(predicate)` | `TicketSystem.cancel_on_result(predicate)` |
-| `TicketSystem::cancel_on_failure(predicate)` | `TicketSystem.cancel_on_failure(predicate)` |
-| `TicketSystem::cancel_label(label)` | `TicketSystem.cancel_label(label)` |
-| `TicketSystem::cancel_label_on_event(label, predicate)` | `TicketSystem.cancel_label_on_event(label, predicate)` |
-| `TicketSystem::cancel_label_on_result(label, predicate)` | `TicketSystem.cancel_label_on_result(label, predicate)` |
-| `TicketSystem::cancel_label_on_failure(label, predicate)` | `TicketSystem.cancel_label_on_failure(label, predicate)` |
-| `TicketSystem::label_cancelled(label)` | `TicketSystem.label_cancelled(label)` |
-| `TicketSystem::create_ticket_on_event(make)` | `TicketSystem.create_ticket_on_event(make)` |
-| `TicketSystem::create_ticket_on_result(make)` | `TicketSystem.create_ticket_on_result(make)` |
-| `TicketSystem::create_ticket_on_failure(make)` | `TicketSystem.create_ticket_on_failure(make)` |
-| `TicketSystem::edit_replies(key, edit)` | `TicketSystem.edit_replies(key, editor)`: the editor returns the new list, or `None` to keep the old one, where Rust mutates in place. An editor that raises, or returns anything but `Reply` objects, raises here. |
-| `TicketSystem::edit_replies_on_event(editor)` | `TicketSystem.edit_replies_on_event(editor)`: same return-instead-of-mutate shape. An editor that raises prints its traceback and changes nothing: it runs on an agent thread with no Python frame to raise into. |
-| `TicketSystem::model_for_agent(name)` | `TicketSystem.model_for_agent(agent_name)` |
-| `TicketSystem::get_ticket(key)` | `TicketSystem.get_ticket(key)` |
-| `TicketSystem::tickets()` | `TicketSystem.tickets()` |
-| `TicketSystem::tickets_for_label(label)` | `TicketSystem.tickets_for_label(label)` |
-| `TicketSystem::find_tickets(predicate)` | `TicketSystem.find_tickets(predicate)` |
-| `TicketSystem::find_ticket(predicate)` | `TicketSystem.find_ticket(predicate)` |
-| `TicketSystem::wait_for_ticket(predicate).await` | `await TicketSystem.wait_for_ticket(predicate)` |
-| `TicketSystem::start()` | `TicketSystem.start()` |
-| `TicketSystem::finish().await` | `await TicketSystem.finish()` |
-| `TicketSystem::cancel()` | `TicketSystem.cancel()` |
-| `TicketSystem::is_cancelled()` | `TicketSystem.is_cancelled()` |
-| `TicketSystem::finish_reason()` | `TicketSystem.finish_reason()` |
-| `TicketSystem::stats()` | `TicketSystem.stats()` |
-| `TicketSystem::last_result()` | `TicketSystem.last_result()` |
-| `TicketSystem::results()` | `TicketSystem.results()` |
-| `TicketSystem::results_for_label(label)` | `TicketSystem.results_for_label(label)` |
+| **TicketQueue** | |
+| `TicketQueue::new() -> Arc<Self>` | `TicketQueue()` |
+| `TicketQueue::load(dir)` | `TicketQueue.load(dir)` |
+| `TicketQueue::agent(a)` | `TicketQueue.agent(agent)` |
+| `TicketQueue::task(task)` | `TicketQueue.task(task)` |
+| `TicketQueue::ticket(t)` | `TicketQueue.ticket(ticket)` |
+| `TicketQueue::reply(key, content)` | `TicketQueue.reply(key, content)` |
+| `TicketQueue::set_finished(key, result)` | `TicketQueue.set_finished(key, result)` |
+| `TicketQueue::set_failed(key)` | `TicketQueue.set_failed(key)` |
+| `TicketQueue::max_turns(n)` | `TicketQueue.max_turns(n)` |
+| `TicketQueue::max_input_tokens(n)` | `TicketQueue.max_input_tokens(n)` |
+| `TicketQueue::max_output_tokens(n)` | `TicketQueue.max_output_tokens(n)` |
+| `TicketQueue::max_request_tokens(n)` | `TicketQueue.max_request_tokens(n)` |
+| `TicketQueue::max_schema_retries(n)` | `TicketQueue.max_schema_retries(n)` |
+| `TicketQueue::max_request_retries(n)` | `TicketQueue.max_request_retries(n)` |
+| `TicketQueue::max_time(d)` | `TicketQueue.max_time(seconds)` |
+| `TicketQueue::request_retry_delay(d)` | `TicketQueue.request_retry_delay(seconds)` |
+| `TicketQueue::get_max_turns()` | `TicketQueue.get_max_turns()` |
+| `TicketQueue::get_max_input_tokens()` | `TicketQueue.get_max_input_tokens()` |
+| `TicketQueue::get_max_output_tokens()` | `TicketQueue.get_max_output_tokens()` |
+| `TicketQueue::get_max_request_tokens()` | `TicketQueue.get_max_request_tokens()` |
+| `TicketQueue::get_max_schema_retries()` | `TicketQueue.get_max_schema_retries()` |
+| `TicketQueue::get_max_request_retries()` | `TicketQueue.get_max_request_retries()` |
+| `TicketQueue::get_max_time()` | `TicketQueue.get_max_time()` |
+| `TicketQueue::get_request_retry_delay()` | `TicketQueue.get_request_retry_delay()` |
+| `TicketQueue::dir(dir)` | `TicketQueue.dir(dir)` |
+| `TicketQueue::get_dir()` | `TicketQueue.get_dir()` |
+| `TicketQueue::schema_for_label(label, schema)` | `TicketQueue.schema_for_label(label, schema)` |
+| `TicketQueue::on_event(h)` | `TicketQueue.on_event(callback)` |
+| `TicketQueue::on_result(handler)` | `TicketQueue.on_result(callback)` |
+| `TicketQueue::on_failure(handler)` | `TicketQueue.on_failure(callback)` |
+| `TicketQueue::on_ticket(handler)` | `TicketQueue.on_ticket(callback)` |
+| `TicketQueue::cancel_on(trigger)` | `TicketQueue.cancel_on(awaitable)` |
+| `TicketQueue::cancel_on_event(predicate)` | `TicketQueue.cancel_on_event(predicate)` |
+| `TicketQueue::cancel_on_result(predicate)` | `TicketQueue.cancel_on_result(predicate)` |
+| `TicketQueue::cancel_on_failure(predicate)` | `TicketQueue.cancel_on_failure(predicate)` |
+| `TicketQueue::cancel_label(label)` | `TicketQueue.cancel_label(label)` |
+| `TicketQueue::cancel_label_on_event(label, predicate)` | `TicketQueue.cancel_label_on_event(label, predicate)` |
+| `TicketQueue::cancel_label_on_result(label, predicate)` | `TicketQueue.cancel_label_on_result(label, predicate)` |
+| `TicketQueue::cancel_label_on_failure(label, predicate)` | `TicketQueue.cancel_label_on_failure(label, predicate)` |
+| `TicketQueue::label_cancelled(label)` | `TicketQueue.label_cancelled(label)` |
+| `TicketQueue::create_ticket_on_event(make)` | `TicketQueue.create_ticket_on_event(make)` |
+| `TicketQueue::create_ticket_on_result(make)` | `TicketQueue.create_ticket_on_result(make)` |
+| `TicketQueue::create_ticket_on_failure(make)` | `TicketQueue.create_ticket_on_failure(make)` |
+| `TicketQueue::edit_replies(key, edit)` | `TicketQueue.edit_replies(key, editor)`: the editor returns the new list, or `None` to keep the old one, where Rust mutates in place. An editor that raises, or returns anything but `Reply` objects, raises here. |
+| `TicketQueue::edit_replies_on_event(editor)` | `TicketQueue.edit_replies_on_event(editor)`: same return-instead-of-mutate shape. An editor that raises prints its traceback and changes nothing: it runs on an agent thread with no Python frame to raise into. |
+| `TicketQueue::model_for_agent(name)` | `TicketQueue.model_for_agent(agent_name)` |
+| `TicketQueue::get_ticket(key)` | `TicketQueue.get_ticket(key)` |
+| `TicketQueue::tickets()` | `TicketQueue.tickets()` |
+| `TicketQueue::tickets_for_label(label)` | `TicketQueue.tickets_for_label(label)` |
+| `TicketQueue::find_tickets(predicate)` | `TicketQueue.find_tickets(predicate)` |
+| `TicketQueue::find_ticket(predicate)` | `TicketQueue.find_ticket(predicate)` |
+| `TicketQueue::wait_for_ticket(predicate).await` | `await TicketQueue.wait_for_ticket(predicate)` |
+| `TicketQueue::start()` | `TicketQueue.start()` |
+| `TicketQueue::finish().await` | `await TicketQueue.finish()` |
+| `TicketQueue::cancel()` | `TicketQueue.cancel()` |
+| `TicketQueue::is_cancelled()` | `TicketQueue.is_cancelled()` |
+| `TicketQueue::finish_reason()` | `TicketQueue.finish_reason()` |
+| `TicketQueue::stats()` | `TicketQueue.stats()` |
+| `TicketQueue::last_result()` | `TicketQueue.last_result()` |
+| `TicketQueue::results()` | `TicketQueue.results()` |
+| `TicketQueue::results_for_label(label)` | `TicketQueue.results_for_label(label)` |
 | **Ticket** | |
 | `Ticket::new(task)` | `Ticket(task)` |
 | `Ticket::label(l)` | `Ticket(task, labels=[l])` |
@@ -177,9 +177,9 @@ Seven rules the surface table below never repeats.
 | `Event { agent_name, ticket_key, kind }` | `Event.agent_name`, `.ticket_key`, `.kind` |
 | `EventKind` variant payload | `Event.data`: a dict of that variant's fields. |
 | `EventKind`, `FinishReason` | Strings. |
-| `EventKind::is_failure()` | Not bound: `Event.kind` is a string, so ask `TicketSystem.on_failure(handler)` for the same five kinds. |
+| `EventKind::is_failure()` | Not bound: `Event.kind` is a string, so ask `TicketQueue.on_failure(handler)` for the same five kinds. |
 | `CompactReason`, `PolicyKind`, `ToolFailureKind`, `KnowledgeOp` | Strings inside `Event.data`, under the field's own name: `data["policy"]`, `data["reason"]`, `data["op"]`. |
-| `default_logger()` | Not bound: pass your own handler to `TicketSystem.on_event(handler)`. |
+| `default_logger()` | Not bound: pass your own handler to `TicketQueue.on_event(handler)`. |
 | **LLM providers** | |
 | `AnthropicProvider::new(key).base_url(url).timeout(d)` | `AnthropicProvider(api_key, base_url=.., timeout=..)` |
 | `OpenAiProvider::new(key).base_url(url).timeout(d)` | `OpenAiProvider(api_key, base_url=.., timeout=..)` |

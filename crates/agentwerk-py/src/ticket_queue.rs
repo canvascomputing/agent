@@ -1,4 +1,4 @@
-//! The ticket system as Python sees it: add agents, submit work, set limits,
+//! The ticket queue as Python sees it: add agents, submit work, set limits,
 //! install handlers, drive execution, and read results.
 
 use std::sync::Arc;
@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use agentwerk::agents::tickets::Reply;
 use agentwerk::event::Event;
-use agentwerk::{Ticket, TicketSystem};
+use agentwerk::{Ticket, TicketQueue};
 use pyo3::prelude::*;
 use serde_json::Value;
 
@@ -20,28 +20,28 @@ use crate::ticket::PyTicket;
 
 /// The core data structure of agentwerk, coordinating complex work across
 /// agents.
-#[pyclass(name = "TicketSystem")]
-pub struct PyTicketSystem {
-    pub inner: Arc<TicketSystem>,
+#[pyclass(name = "TicketQueue")]
+pub struct PyTicketQueue {
+    pub inner: Arc<TicketQueue>,
 }
 
 #[pymethods]
-impl PyTicketSystem {
+impl PyTicketQueue {
     #[new]
     fn new() -> Self {
-        PyTicketSystem {
-            inner: TicketSystem::new(),
+        PyTicketQueue {
+            inner: TicketQueue::new(),
         }
     }
 
     /// Continue a session from a directory written earlier.
     #[staticmethod]
     fn load(dir: &str) -> PyResult<Self> {
-        let inner = TicketSystem::load(dir).map_err(runtime_error)?;
-        Ok(PyTicketSystem { inner })
+        let inner = TicketQueue::load(dir).map_err(runtime_error)?;
+        Ok(PyTicketQueue { inner })
     }
 
-    /// Add an agent to this ticket system, moving any tickets it queued on its
+    /// Add an agent to this ticket queue, moving any tickets it queued on its
     /// own across first.
     fn agent<'py>(slf: PyRef<'py, Self>, agent: PyRef<'_, PyAgent>) -> PyResult<PyRef<'py, Self>> {
         slf.inner.agent(agent.built()?.clone());
@@ -276,7 +276,7 @@ impl PyTicketSystem {
         let future = Python::attach(|py| {
             pyo3_async_runtimes::tokio::into_future(awaitable.bind(py).clone())
         })?;
-        // `TicketSystem::cancel_on` spawns onto the ambient Tokio runtime; a
+        // `TicketQueue::cancel_on` spawns onto the ambient Tokio runtime; a
         // pymethod call has no runtime entered on its own thread, so enter
         // the shared one pyo3-async-runtimes already uses for `finish()`.
         let _guard = pyo3_async_runtimes::tokio::get_runtime().enter();
@@ -558,7 +558,7 @@ impl PyTicketSystem {
         let inner = Arc::clone(&self.inner);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             inner.finish().await;
-            Ok::<_, PyErr>(PyTicketSystem { inner })
+            Ok::<_, PyErr>(PyTicketQueue { inner })
         })
     }
 

@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::agents::knowledge::Knowledge;
-use crate::agents::tickets::TicketSystem;
+use crate::agents::tickets::TicketQueue;
 use crate::providers::types::ContentBlock;
 use crate::providers::{ProviderResult, ProviderToolDefinition};
 
@@ -46,7 +46,7 @@ pub struct ToolContext {
     pub dir: PathBuf,
     pub interrupt_signal: Arc<AtomicBool>,
     pub(crate) tool_registry: Option<Arc<ToolRegistry>>,
-    pub(crate) ticket_system: Option<Arc<TicketSystem>>,
+    pub(crate) ticket_queue: Option<Arc<TicketQueue>>,
     pub(crate) agent_name: Option<String>,
     pub(crate) ticket_key: Option<String>,
     pub(crate) knowledge: Option<Arc<Knowledge>>,
@@ -61,14 +61,14 @@ impl ToolContext {
             dir,
             interrupt_signal: Arc::new(AtomicBool::new(false)),
             tool_registry: None,
-            ticket_system: None,
+            ticket_queue: None,
             agent_name: None,
             ticket_key: None,
             knowledge: None,
         }
     }
 
-    /// Use a different cancel signal, usually the one the `TicketSystem`
+    /// Use a different cancel signal, usually the one the `TicketQueue`
     /// shares, so the tool stops when execution does.
     pub fn interrupt_signal(mut self, signal: Arc<AtomicBool>) -> Self {
         self.interrupt_signal = signal;
@@ -80,8 +80,8 @@ impl ToolContext {
         self
     }
 
-    pub(crate) fn ticket_system(mut self, system: Arc<TicketSystem>) -> Self {
-        self.ticket_system = Some(system);
+    pub(crate) fn ticket_queue(mut self, queue: Arc<TicketQueue>) -> Self {
+        self.ticket_queue = Some(queue);
         self
     }
 
@@ -100,8 +100,8 @@ impl ToolContext {
         self
     }
 
-    pub(crate) fn ticket_system_handle(&self) -> Option<&Arc<TicketSystem>> {
-        self.ticket_system.as_ref()
+    pub(crate) fn ticket_queue_handle(&self) -> Option<&Arc<TicketQueue>> {
+        self.ticket_queue.as_ref()
     }
 
     pub(crate) fn agent_name_str(&self) -> Option<&str> {
@@ -136,7 +136,7 @@ impl std::fmt::Debug for ToolContext {
         f.debug_struct("ToolContext")
             .field("dir", &self.dir)
             .field("has_registry", &self.tool_registry.is_some())
-            .field("has_ticket_system", &self.ticket_system.is_some())
+            .field("has_ticket_queue", &self.ticket_queue.is_some())
             .finish()
     }
 }
@@ -821,13 +821,13 @@ fn cap_aggregate_outputs(
 /// Write `content` under the ticket's outputs directory, reporting both the
 /// path relative to the session and the path on disk.
 ///
-/// `None` when the context names no ticket, no ticket system is attached, or
+/// `None` when the context names no ticket, no ticket queue is attached, or
 /// the write fails. Like the rest of the logging, it is best effort.
 fn persist_output(ctx: &ToolContext, tool_use_id: &str, content: &str) -> Option<PersistedOutput> {
-    let system = ctx.ticket_system.as_ref()?;
+    let queue = ctx.ticket_queue.as_ref()?;
     let key = ctx.ticket_key.as_deref()?;
-    let rel = system.write_tool_output(key, tool_use_id, content)?;
-    let display = system.get_dir().join(&rel);
+    let rel = queue.write_tool_output(key, tool_use_id, content)?;
+    let display = queue.get_dir().join(&rel);
     Some(PersistedOutput { rel, display })
 }
 
@@ -1272,19 +1272,19 @@ Do the demo thing.
 
     fn ticket_ctx() -> (
         ToolContext,
-        Arc<TicketSystem>,
+        Arc<TicketQueue>,
         String,
         crate::test_util::TempDir,
     ) {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let system = TicketSystem::new();
-        system.dir(dir.path().to_path_buf());
-        system.task("seed");
+        let queue = TicketQueue::new();
+        queue.dir(dir.path().to_path_buf());
+        queue.task("seed");
         let key = "TICKET-1".to_string();
         let ctx = test_ctx()
-            .ticket_system(Arc::clone(&system))
+            .ticket_queue(Arc::clone(&queue))
             .ticket_key(key.clone());
-        (ctx, system, key, dir)
+        (ctx, queue, key, dir)
     }
 
     fn tool_result_block(id: &str, content: &str) -> ContentBlock {
@@ -1308,7 +1308,7 @@ Do the demo thing.
 
     #[test]
     fn write_tool_output_stores_relative_path_in_comment() {
-        let (ctx, _system, key, _dir) = ticket_ctx();
+        let (ctx, _queue, key, _dir) = ticket_ctx();
         let (_outcome, path) = cap_oversized_result(Ok("z".repeat(500)), &ctx, "call-rel", 100);
         let stored = path.expect("offload happened");
         assert_eq!(stored, relative_outputs_path(&key, "call-rel"));
@@ -1321,7 +1321,7 @@ Do the demo thing.
 
     #[test]
     fn persisted_output_renders_absolute_path_for_model() {
-        let (ctx, _system, key, dir) = ticket_ctx();
+        let (ctx, _queue, key, dir) = ticket_ctx();
         let (outcome, _path) = cap_oversized_result(Ok("y".repeat(500)), &ctx, "call-abs", 100);
         let stub = outcome.unwrap();
         let absolute = absolute_outputs_path(dir.path(), &key, "call-abs");
@@ -1341,7 +1341,7 @@ Do the demo thing.
 
     #[test]
     fn cap_oversized_result_replaces_oversized_ok_with_stub() {
-        let (ctx, _system, key, dir) = ticket_ctx();
+        let (ctx, _queue, key, dir) = ticket_ctx();
         let (outcome, path) = cap_oversized_result(Ok("a".repeat(500)), &ctx, "call-xyz", 100);
         let stub = outcome.unwrap();
         assert!(stub.starts_with("<persisted-output>"));
@@ -1387,7 +1387,7 @@ Do the demo thing.
 
     #[test]
     fn cap_aggregate_offloads_largest_first() {
-        let (ctx, _system, key, dir) = ticket_ctx();
+        let (ctx, _queue, key, dir) = ticket_ctx();
         // Sizes chosen so the stub's own bytes (~200) don't dominate.
         let small = "a".repeat(40_000);
         let big = "b".repeat(80_000);
@@ -1425,7 +1425,7 @@ Do the demo thing.
 
     #[test]
     fn cap_aggregate_stops_when_only_small_results_remain() {
-        let (ctx, _system, _key, _dir) = ticket_ctx();
+        let (ctx, _queue, _key, _dir) = ticket_ctx();
         // Many small results whose total far exceeds the cap, but
         // each is already a stub-marked block. Aggregate should bail
         // rather than spin: stubs are skipped, so no candidates.

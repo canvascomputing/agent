@@ -7,7 +7,7 @@ use std::fs;
 use super::common;
 
 use agentwerk::tools::EditFileTool;
-use agentwerk::{Agent, TicketSystem};
+use agentwerk::{Agent, TicketQueue};
 
 const ORIGINAL: &str = "setting=old_value\nother=keep_me\n";
 
@@ -20,7 +20,7 @@ async fn replaces_substring_in_place() -> std::result::Result<(), Box<dyn std::e
     let path = root.join("config.txt");
     fs::write(&path, ORIGINAL)?;
 
-    let tickets = TicketSystem::new();
+    let tickets = TicketQueue::new();
 
     tickets.max_turns(10);
     let agent = Agent::new()

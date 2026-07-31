@@ -16,7 +16,7 @@ pub struct PyTrajectory {
 #[pymethods]
 impl PyTrajectory {
     /// Capture `ticket`'s messages as an example produced by `agent` using
-    /// `model`, whose name `TicketSystem.model_for_agent` gives you.
+    /// `model`, whose name `TicketQueue.model_for_agent` gives you.
     #[staticmethod]
     fn from_ticket(agent: &str, model: Option<&str>, ticket: PyRef<'_, PyTicket>) -> Self {
         PyTrajectory {

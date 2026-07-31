@@ -14,14 +14,14 @@ use crate::event::{EventKind, KnowledgeOp, ToolFailureKind};
 use crate::providers::types::TokenUsage;
 
 /// `Stats` holds the metrics about tickets, tokens, and time. Reach it through
-/// [`TicketSystem::stats()`](crate::TicketSystem::stats), during execution or
+/// [`TicketQueue::stats()`](crate::TicketQueue::stats), during execution or
 /// after it finishes.
 ///
 /// ```no_run
-/// use agentwerk::TicketSystem;
+/// use agentwerk::TicketQueue;
 ///
 /// # async fn run() {
-/// let tickets = TicketSystem::new();
+/// let tickets = TicketQueue::new();
 /// tickets.finish().await;
 ///
 /// let stats = tickets.stats();
@@ -265,7 +265,7 @@ impl Stats {
     ///
     /// `tickets_created()` counts the tickets that agent filed; the rest count
     /// the tickets it claimed. Like the per-label slices, these are written to
-    /// `stats.json` for readers and not restored by `TicketSystem::load`.
+    /// `stats.json` for readers and not restored by `TicketQueue::load`.
     pub fn stats_for_agent(&self, agent_name: &str) -> Arc<Stats> {
         let mut map = self.agent_stats.lock().unwrap();
         map.entry(agent_name.to_string())

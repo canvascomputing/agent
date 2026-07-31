@@ -1,5 +1,5 @@
 //! The Python bindings wrap the Rust crate, which stays the one source of
-//! truth, and expose its agents, tools, LLM providers, and ticket system.
+//! truth, and expose its agents, tools, LLM providers, and ticket queue.
 
 use pyo3::prelude::*;
 
@@ -12,14 +12,14 @@ mod reply;
 mod schema;
 mod stats;
 mod ticket;
-mod ticket_system;
+mod ticket_queue;
 mod tools;
 mod trajectory;
 
 #[pymodule]
 fn _agentwerk(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<agent::PyAgent>()?;
-    m.add_class::<ticket_system::PyTicketSystem>()?;
+    m.add_class::<ticket_queue::PyTicketQueue>()?;
     m.add_class::<ticket::PyTicket>()?;
     m.add_class::<reply::PyReply>()?;
     m.add_class::<reply::PyReplyContent>()?;

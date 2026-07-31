@@ -1,7 +1,7 @@
 //! Run agentic workflows where many agents work in parallel on a shared
-//! ticket queue. An [`Agent`] picks up tickets from a [`TicketSystem`],
+//! ticket queue. An [`Agent`] picks up tickets from a [`TicketQueue`],
 //! calls the LLM provider, runs the tools it requests, and writes results
-//! back. Tickets are assigned to agents by name or label; the system
+//! back. Tickets are assigned to agents by name or label; the queue
 //! handles concurrency, automatic context compaction, schema validation,
 //! retries, and limits.
 //!
@@ -30,11 +30,11 @@
 //! # Many agents working together
 //!
 //! ```no_run
-//! use agentwerk::{Agent, Ticket, TicketSystem};
+//! use agentwerk::{Agent, Ticket, TicketQueue};
 //! use agentwerk::tools::FetchUrlTool;
 //!
 //! # async fn run() {
-//! let tickets = TicketSystem::new();
+//! let tickets = TicketQueue::new();
 //!
 //! for i in 0..4 {
 //!     tickets.agent(
@@ -69,7 +69,7 @@
 //! # Main types
 //!
 //! - [`Agent`]: picks up tickets and produces results.
-//! - [`TicketSystem`]: coordinates complex work across agents.
+//! - [`TicketQueue`]: coordinates complex work across agents.
 //! - [`Ticket`]: a task plus the labels and schema that assign and validate it.
 //! - [`Knowledge`]: durable memory the agent shares across tickets and other agents.
 //! - [`Stats`]: statistics about tickets, tokens, and time.
@@ -88,13 +88,13 @@ pub mod tools;
 #[cfg(test)]
 pub(crate) mod test_util;
 
-// Workshop: agents pull tickets from the system
+// Workshop: agents pull tickets from the queue
 pub use agents::Agent;
 pub use agents::AgentBuilder;
 pub use agents::Reply;
 pub use agents::Status;
 pub use agents::Ticket;
-pub use agents::TicketSystem;
+pub use agents::TicketQueue;
 
 // Tuning, telemetry, durable state
 pub use agents::Knowledge;

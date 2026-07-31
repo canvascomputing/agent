@@ -6,7 +6,7 @@ use super::common;
 
 use agentwerk::schemas::Schema;
 use agentwerk::tools::BashTool;
-use agentwerk::{Agent, Ticket, TicketSystem};
+use agentwerk::{Agent, Ticket, TicketQueue};
 
 #[tokio::test]
 async fn test() -> std::result::Result<(), Box<dyn std::error::Error>> {
@@ -32,7 +32,7 @@ async fn test() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let cat = BashTool::new("cat", "cat *").read_only(true);
     let wc = BashTool::new("wc", "wc *").read_only(true);
 
-    let tickets = TicketSystem::new();
+    let tickets = TicketQueue::new();
 
     tickets.max_turns(10);
     let agent = Agent::new()

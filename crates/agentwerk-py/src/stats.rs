@@ -8,16 +8,16 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use agentwerk::agents::stats::{FileStat, KnowledgeStat, ModelStat, ToolStat};
-use agentwerk::{Stats, TicketSystem};
+use agentwerk::{Stats, TicketQueue};
 use pyo3::prelude::*;
 
 use crate::convert::{runtime_error, value_to_py};
 
 /// Where the numbers come from. The run-wide statistics live inside the ticket
-/// system, so holding the system is what keeps them alive. A slice scoped to one
+/// queue, so holding the queue is what keeps them alive. A slice scoped to one
 /// label or agent is its own shared value.
 enum Source {
-    Run(Arc<TicketSystem>),
+    Run(Arc<TicketQueue>),
     Slice(Arc<Stats>),
 }
 
@@ -29,15 +29,15 @@ pub struct PyStats {
 }
 
 impl PyStats {
-    pub(crate) fn for_run(system: Arc<TicketSystem>) -> Self {
+    pub(crate) fn for_run(queue: Arc<TicketQueue>) -> Self {
         PyStats {
-            source: Source::Run(system),
+            source: Source::Run(queue),
         }
     }
 
     fn get(&self) -> &Stats {
         match &self.source {
-            Source::Run(system) => system.stats(),
+            Source::Run(queue) => queue.stats(),
             Source::Slice(stats) => stats,
         }
     }

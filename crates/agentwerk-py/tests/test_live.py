@@ -58,15 +58,15 @@ async def test_invokes_a_python_tool_and_records_the_file_it_opened(tmp_path):
 
 
 async def test_runs_two_labeled_agents_with_events_and_chaining():
-    system = aw.TicketSystem().max_turns(30)
+    queue = aw.TicketQueue().max_turns(30)
 
     kinds = []
-    system.on_event(lambda event: kinds.append(event.kind))
+    queue.on_event(lambda event: kinds.append(event.kind))
 
-    system.agent(
+    queue.agent(
         aw.Agent().name("A").label("a").from_env().role("Reply with one word: alpha").build()
     )
-    system.agent(
+    queue.agent(
         aw.Agent().name("B").label("b").from_env().role("Reply with one word: beta").build()
     )
 
@@ -75,17 +75,17 @@ async def test_runs_two_labeled_agents_with_events_and_chaining():
             return aw.Ticket("Reply beta", labels=["b"])
         return None
 
-    system.create_ticket_on_result(chain)
-    system.ticket(aw.Ticket("Reply alpha", labels=["a"]))
-    await system.finish()
+    queue.create_ticket_on_result(chain)
+    queue.ticket(aw.Ticket("Reply alpha", labels=["a"]))
+    await queue.finish()
 
-    assert len(system.results()) == 2
+    assert len(queue.results()) == 2
     assert "ticket_finished" in kinds
 
 
 async def test_saves_the_messages_of_a_finished_ticket(tmp_path):
-    system = aw.TicketSystem().max_turns(10)
-    system.agent(
+    queue = aw.TicketQueue().max_turns(10)
+    queue.agent(
         aw.Agent().name("scribe").from_env().role("Reply with one word: pong").build()
     )
 
@@ -93,14 +93,14 @@ async def test_saves_the_messages_of_a_finished_ticket(tmp_path):
 
     def capture(event, ticket):
         if event.kind == "ticket_finished":
-            model = system.model_for_agent(event.agent_name)
+            model = queue.model_for_agent(event.agent_name)
             trajectory = aw.Trajectory.from_ticket(event.agent_name, model, ticket)
             trajectory.save(str(tmp_path))
             captured.append((len(trajectory.messages), trajectory.model))
 
-    system.on_ticket(capture)
-    key = system.task("Reply with exactly the word: pong")
-    await system.finish()
+    queue.on_ticket(capture)
+    key = queue.task("Reply with exactly the word: pong")
+    await queue.finish()
 
     written = sorted(p.name for p in (tmp_path / "trajectories").iterdir())
     assert written == [f"scribe-{key}.html", f"scribe-{key}.json"]

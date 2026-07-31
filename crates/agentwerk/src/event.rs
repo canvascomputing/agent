@@ -56,7 +56,7 @@ impl fmt::Display for PolicyKind {
 /// Why execution ended.
 ///
 /// Carried by [`EventKind::RunFinished`] and readable after `finish().await`
-/// through `TicketSystem::finish_reason()`.
+/// through `TicketQueue::finish_reason()`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FinishReason {
     /// The queue emptied; nothing more to do.
@@ -125,11 +125,11 @@ impl fmt::Display for KnowledgeOp {
 /// agent that produced it, the ticket it concerns, and what happened.
 ///
 /// ```no_run
-/// use agentwerk::TicketSystem;
+/// use agentwerk::TicketQueue;
 /// use agentwerk::event::EventKind;
 ///
 /// # async fn run() {
-/// let tickets = TicketSystem::new();
+/// let tickets = TicketQueue::new();
 /// tickets.on_event(|event| {
 ///     if let EventKind::TicketFinished = &event.kind {
 ///         eprintln!("[{}] done {}", event.agent_name, event.ticket_key);
@@ -166,9 +166,9 @@ impl Event {
 /// What an [`Event`] reports.
 ///
 /// Most kinds name the agent they came from on the wrapping [`Event`].
-/// `RunStarted` and `RunFinished` come from the `TicketSystem` itself and
+/// `RunStarted` and `RunFinished` come from the `TicketQueue` itself and
 /// arrive with an empty `agent_name`, as does `TicketFailed` when the host
-/// fails a ticket through `TicketSystem::set_failed`.
+/// fails a ticket through `TicketQueue::set_failed`.
 #[derive(Debug, Clone)]
 pub enum EventKind {
     /// Execution began.
@@ -295,7 +295,7 @@ impl EventKind {
     }
 
     /// Whether this kind reports something that went wrong. Names the
-    /// five kinds `TicketSystem::on_failure` fires on, so a handler on
+    /// five kinds `TicketQueue::on_failure` fires on, so a handler on
     /// the plain event chain can ask the same question.
     pub fn is_failure(&self) -> bool {
         matches!(

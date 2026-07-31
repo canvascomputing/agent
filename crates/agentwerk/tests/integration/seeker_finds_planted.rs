@@ -18,7 +18,7 @@ use super::common;
 use agentwerk::agents::knowledge::Page;
 use agentwerk::event::{default_logger, Event, EventKind};
 use agentwerk::tools::GrepTool;
-use agentwerk::{Agent, Knowledge, Ticket, TicketSystem};
+use agentwerk::{Agent, Knowledge, Ticket, TicketQueue};
 
 const SEEKER_AGENT: &str = include_str!("../../../use-cases/src/malware_scanner/agents/seeker.md");
 
@@ -148,7 +148,7 @@ async fn seeker_pool_finds_planted_indicators(
         logger(e);
     });
 
-    let tickets = TicketSystem::new();
+    let tickets = TicketQueue::new();
     tickets.max_time(TIME_BUDGET);
     tickets.max_turns(80);
     tickets.on_event(move |e| event_handler(e));

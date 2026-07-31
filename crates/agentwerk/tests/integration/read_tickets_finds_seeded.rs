@@ -9,7 +9,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use super::common;
 
 use agentwerk::tools::ReadTicketsTool;
-use agentwerk::{Agent, Ticket, TicketSystem};
+use agentwerk::{Agent, Ticket, TicketQueue};
 
 #[tokio::test]
 async fn reports_a_secret_from_another_ticket(
@@ -18,7 +18,7 @@ async fn reports_a_secret_from_another_ticket(
 
     let secret = ten_digit_token();
 
-    let tickets = TicketSystem::new();
+    let tickets = TicketQueue::new();
     tickets.max_turns(10);
     tickets.max_time(Duration::from_secs(45));
     // Seeded under a label the agent does not carry, so it is never claimed.

@@ -22,7 +22,7 @@ use agentwerk::event::{Event, EventKind};
 use agentwerk::providers::{model_from_env, provider_from_env};
 use agentwerk::schemas::Schema;
 use agentwerk::tools::{ManageTicketsTool, Tool, ToolResult};
-use agentwerk::{Agent, Ticket, TicketSystem};
+use agentwerk::{Agent, Ticket, TicketQueue};
 use serde_json::{json, Value};
 
 const ROLE: &str = include_str!("prompts/agent.role.md");
@@ -39,7 +39,7 @@ async fn main() {
     print_intro(args.n, partitions.len(), agents, &style);
 
     let schema = partial_sum_schema();
-    let tickets = TicketSystem::new();
+    let tickets = TicketQueue::new();
     tickets.cancel_on(tokio::signal::ctrl_c());
     if let Some(n) = args.max_turns {
         tickets.max_turns(n);
@@ -77,7 +77,7 @@ async fn main() {
 }
 
 fn aggregate_and_report(
-    tickets: &TicketSystem,
+    tickets: &TicketQueue,
     partitions: &[(u64, u64)],
     n: u64,
     elapsed: f64,
@@ -468,7 +468,7 @@ impl CliArgs {
         eprintln!("Options:");
         eprintln!("  -p, --partitions <K>   Number of ticket partitions (default: 16)");
         eprintln!("  -c, --concurrency <N>  Number of agents sharing the queue (default: 8)");
-        eprintln!("      --max-turns <N>    Per-system turn limit (default: unlimited)");
+        eprintln!("      --max-turns <N>    Per-queue turn limit (default: unlimited)");
         eprintln!("  -v, --verbose          Print per-agent tool calls as they happen");
         eprintln!("  -h, --help             Show this help\n");
         eprintln!("Examples:");
