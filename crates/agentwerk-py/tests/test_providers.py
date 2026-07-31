@@ -26,6 +26,11 @@ def test_per_vendor_constructors_build_a_provider(constructor):
     assert isinstance(constructor("key", "https://endpoint.example/v1"), aw.Provider)
 
 
+@pytest.mark.parametrize("constructor", VENDOR_CONSTRUCTORS)
+def test_provider_accepts_a_request_timeout_in_seconds(constructor):
+    assert isinstance(constructor("key", timeout=30.0), aw.Provider)
+
+
 def test_model_chains_context_window_and_reasoning_effort():
     model = aw.Model("my-local-model").context_window(128_000).reasoning_effort("high")
     assert model.get_context_window() == 128_000
@@ -99,6 +104,24 @@ def test_page_kind_defaults_to_the_store_default(knowledge_dir):
 
     assert page.kind == "Knowledge"
     assert store.pages().load("scratch").kind == "Knowledge"
+
+
+def test_list_returns_every_saved_page_in_index_order(knowledge_dir):
+    store = aw.Knowledge.load(knowledge_dir)
+    store.pages().save(aw.Page("build", "How to build.", "Run make."))
+    store.pages().save(aw.Page("deploy", "How to deploy.", "Push the tag."))
+
+    pages = store.pages().list()
+
+    assert [page.slug for page in pages] == ["build", "deploy"]
+    assert pages[0].description == "How to build."
+
+
+def test_get_index_char_limit_returns_the_default_until_it_is_set(knowledge_dir):
+    store = aw.Knowledge.load(knowledge_dir)
+    assert store.get_index_char_limit() == 12_000
+    store.index_char_limit(80)
+    assert store.get_index_char_limit() == 80
 
 
 def test_removed_page_leaves_the_index_empty(knowledge_dir):

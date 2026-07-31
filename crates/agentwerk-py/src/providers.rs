@@ -3,6 +3,7 @@
 //! cover local endpoints and non-default context windows or reasoning effort.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use agentwerk::providers::{
     context_window_from_env as detect_context_window, model_from_env as detect_model,
@@ -98,47 +99,59 @@ fn context_window_from_env() -> Option<u64> {
 }
 
 #[pyfunction]
-#[pyo3(name = "AnthropicProvider", signature = (api_key, base_url=None))]
-fn anthropic_provider(api_key: &str, base_url: Option<&str>) -> PyProvider {
+#[pyo3(name = "AnthropicProvider", signature = (api_key, base_url=None, timeout=None))]
+fn anthropic_provider(api_key: &str, base_url: Option<&str>, timeout: Option<f64>) -> PyProvider {
     let mut provider = AnthropicProvider::new(api_key);
     if let Some(url) = base_url {
         provider = provider.base_url(url);
     }
+    if let Some(seconds) = timeout {
+        provider = provider.timeout(Duration::from_secs_f64(seconds));
+    }
     PyProvider {
         inner: Arc::new(provider),
     }
 }
 
 #[pyfunction]
-#[pyo3(name = "OpenAiProvider", signature = (api_key, base_url=None))]
-fn openai_provider(api_key: &str, base_url: Option<&str>) -> PyProvider {
+#[pyo3(name = "OpenAiProvider", signature = (api_key, base_url=None, timeout=None))]
+fn openai_provider(api_key: &str, base_url: Option<&str>, timeout: Option<f64>) -> PyProvider {
     let mut provider = OpenAiProvider::new(api_key);
     if let Some(url) = base_url {
         provider = provider.base_url(url);
     }
+    if let Some(seconds) = timeout {
+        provider = provider.timeout(Duration::from_secs_f64(seconds));
+    }
     PyProvider {
         inner: Arc::new(provider),
     }
 }
 
 #[pyfunction]
-#[pyo3(name = "MistralProvider", signature = (api_key, base_url=None))]
-fn mistral_provider(api_key: &str, base_url: Option<&str>) -> PyProvider {
+#[pyo3(name = "MistralProvider", signature = (api_key, base_url=None, timeout=None))]
+fn mistral_provider(api_key: &str, base_url: Option<&str>, timeout: Option<f64>) -> PyProvider {
     let mut provider = MistralProvider::new(api_key);
     if let Some(url) = base_url {
         provider = provider.base_url(url);
     }
+    if let Some(seconds) = timeout {
+        provider = provider.timeout(Duration::from_secs_f64(seconds));
+    }
     PyProvider {
         inner: Arc::new(provider),
     }
 }
 
 #[pyfunction]
-#[pyo3(name = "LiteLlmProvider", signature = (api_key, base_url=None))]
-fn litellm_provider(api_key: &str, base_url: Option<&str>) -> PyProvider {
+#[pyo3(name = "LiteLlmProvider", signature = (api_key, base_url=None, timeout=None))]
+fn litellm_provider(api_key: &str, base_url: Option<&str>, timeout: Option<f64>) -> PyProvider {
     let mut provider = LiteLlmProvider::new(api_key);
     if let Some(url) = base_url {
         provider = provider.base_url(url);
+    }
+    if let Some(seconds) = timeout {
+        provider = provider.timeout(Duration::from_secs_f64(seconds));
     }
     PyProvider {
         inner: Arc::new(provider),

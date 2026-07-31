@@ -38,7 +38,7 @@ impl TicketSystem {
     pub(crate) fn insert(&self, mut ticket: Ticket, reporter: String) -> String {
         let id = {
             let mut next = self.next_ticket_id.lock().unwrap();
-            let base = next.get_or_insert_with(|| max_existing_ticket_id(&self.dir_value()));
+            let base = next.get_or_insert_with(|| max_existing_ticket_id(&self.get_dir()));
             *base += 1;
             *base
         };
@@ -70,6 +70,8 @@ impl TicketSystem {
         for l in &labels {
             self.stats.stats_for_label(l).record_created();
         }
+        // Creation emits no event, so the reporter's slice is fed here.
+        self.stats.stats_for_agent(&reporter).record_created();
         let mut event = serde_json::json!({
             "event": "created",
             "ts": created_at,
@@ -88,7 +90,7 @@ impl TicketSystem {
     /// Write the ticket at `key` to disk. No-op when the ticket is missing.
     fn save_ticket(&self, key: &str) {
         if let Some(t) = self.get_ticket(key) {
-            let _ = t.save(&self.dir_value());
+            let _ = t.save(&self.get_dir());
         }
     }
 
@@ -98,7 +100,7 @@ impl TicketSystem {
     /// observational state. Errors are swallowed: persistence is
     /// best-effort, not load-bearing for run correctness.
     pub(crate) fn append_ticket_event(&self, event: serde_json::Value) {
-        let dir = self.dir_value();
+        let dir = self.get_dir();
         let _guard = self.tickets_log_lock.lock().unwrap();
         let _ = TicketEvents::append(&dir, &event);
         let _ = self.stats.save(&dir);
@@ -108,7 +110,7 @@ impl TicketSystem {
     /// Returns the path relative to the configured `dir` on success,
     /// `None` when the write fails. The relative form keeps the
     /// replies portable across moves of the tickets dir; join with
-    /// [`Self::dir_value`] to recover the on-disk path. Best-effort,
+    /// [`Self::get_dir`] to recover the on-disk path. Best-effort,
     /// matching the surrounding observational-persistence contract.
     pub(crate) fn write_tool_output(
         &self,
@@ -117,7 +119,7 @@ impl TicketSystem {
         content: &str,
     ) -> Option<PathBuf> {
         let rel = crate::persistence::output_path(key, tool_use_id);
-        let absolute = self.dir_value().join(&rel);
+        let absolute = self.get_dir().join(&rel);
         crate::persistence::write_atomic(&absolute, content.as_bytes())
             .ok()
             .map(|_| rel)
@@ -156,7 +158,15 @@ impl TicketSystem {
             let labels = ticket.labels.clone();
             (key, prev, durations, labels)
         };
-        self.record_transition(&key, prev, Status::InProgress, now, durations, &labels);
+        self.record_transition(
+            &key,
+            prev,
+            Status::InProgress,
+            now,
+            durations,
+            &labels,
+            agent_name,
+        );
         self.save_ticket(&key);
         Some(key)
     }
@@ -171,20 +181,47 @@ impl TicketSystem {
             let Some(t) = store.get_mut(key) else { return };
             t.replies.push(reply.clone());
         }
-        let _ = Replies::append(&self.dir_value(), key, &reply);
+        let _ = Replies::append(&self.get_dir(), key, &reply);
     }
 
     /// Transition a ticket to `Finished`, emitting `TicketFinished`
     /// under `agent`'s name.
-    pub(crate) fn set_finished(&self, key: &str, agent: &str) -> Result<(), TicketError> {
+    pub(crate) fn set_finished_by(&self, key: &str, agent: &str) -> Result<(), TicketError> {
         self.set_final_status(key, Status::Finished, agent)
     }
 
-    /// Transition a ticket to `Failed`. The one host-facing status
-    /// mutation: finishing is reserved for the agent's finish tools,
-    /// which validate and record the result before the transition. The
-    /// emitted `TicketFailed` carries an empty agent name, like the
-    /// run-level events no single agent causes.
+    /// Attach `result` to the ticket and transition it to `Finished`,
+    /// resolving it from outside the run. Validates against the ticket's
+    /// schema first, so a host finish and an agent finish record the same
+    /// contract. The emitted `TicketFinished` carries an empty agent name,
+    /// like the run-level events no single agent causes.
+    ///
+    /// ```no_run
+    /// # use agentwerk::TicketSystem;
+    /// # fn run() -> Result<(), Box<dyn std::error::Error>> {
+    /// let tickets = TicketSystem::new();
+    /// let key = tickets.task("Look up the cached answer.");
+    /// tickets.set_finished(&key, "42")?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn set_finished(
+        &self,
+        key: &str,
+        result: impl serde::Serialize,
+    ) -> Result<(), TicketError> {
+        let value = serde_json::to_value(result).expect("result is serializable");
+        self.set_result(key, value)
+            .map_err(|violations| TicketError::ResultRejected {
+                message: violations.to_string(),
+            })?;
+        self.set_final_status(key, Status::Finished, "")
+    }
+
+    /// Transition a ticket to `Failed`. No result argument, unlike
+    /// [`Self::set_finished`]: a failed ticket has none. The emitted
+    /// `TicketFailed` carries an empty agent name, like the run-level
+    /// events no single agent causes.
     pub fn set_failed(&self, key: &str) -> Result<(), TicketError> {
         self.set_final_status(key, Status::Failed, "")
     }
@@ -225,7 +262,7 @@ impl TicketSystem {
             let labels = ticket.labels.clone();
             (prev, durations, labels)
         };
-        self.record_transition(key, prev, status, now, durations, &labels);
+        self.record_transition(key, prev, status, now, durations, &labels, agent);
         self.save_ticket(key);
         if prev != status && !matches!(prev, Status::Finished | Status::Failed) {
             let kind = match status {
@@ -249,9 +286,11 @@ impl TicketSystem {
         now: u64,
         durations: (std::time::Duration, std::time::Duration),
         labels: &[String],
+        agent: &str,
     ) {
         self.stats.record_transition(prev, next, now, durations);
-        self.stats.record_transition_for(labels, next, durations);
+        self.stats
+            .record_transition_for(labels, agent, next, durations);
         self.log_transition(key, prev, next, now, durations, labels);
     }
 
@@ -330,8 +369,8 @@ impl TicketSystem {
             let _guard = self.results_log_lock.lock().unwrap();
             // Both writes are best-effort: the result is already attached in
             // memory, so a failed log or save is observational, not load-bearing.
-            let _ = Results::append(&self.dir_value(), &log_line);
-            let _ = ticket_copy.save(&self.dir_value());
+            let _ = Results::append(&self.get_dir(), &log_line);
+            let _ = ticket_copy.save(&self.get_dir());
         }
         Ok(result)
     }
@@ -353,7 +392,7 @@ impl TicketSystem {
             key: key.to_string(),
             entries: ticket_copy.replies,
         };
-        let _ = replies.save(&self.dir_value());
+        let _ = replies.save(&self.get_dir());
         self.save_ticket(key);
         self.stats.reset_usage(key);
     }
@@ -384,7 +423,7 @@ impl TicketSystem {
             key: key.to_string(),
             entries: ticket_copy.replies,
         };
-        let _ = replies.save(&self.dir_value());
+        let _ = replies.save(&self.get_dir());
         self
     }
 
@@ -513,7 +552,7 @@ mod tests {
         sys.task("oops");
         sys.task("pending");
         sys.claim(|t| t.key == "TICKET-1", "agent");
-        sys.set_finished("TICKET-1", "agent").unwrap();
+        sys.set_finished_by("TICKET-1", "agent").unwrap();
         sys.set_failed("TICKET-2").unwrap();
         let done = sys.find_tickets(|t| t.status == Status::Finished);
         let failed = sys.find_tickets(|t| t.status == Status::Failed);
@@ -531,7 +570,7 @@ mod tests {
         sys.task("c");
         assert_eq!(sys.stats().tickets_created(), 3);
         sys.claim(|t| t.key == "TICKET-1", "agent");
-        sys.set_finished("TICKET-1", "agent").unwrap();
+        sys.set_finished_by("TICKET-1", "agent").unwrap();
         sys.claim(|t| t.key == "TICKET-2", "agent");
         sys.set_failed("TICKET-2").unwrap();
         assert_eq!(sys.stats().tickets_finished(), 1);
@@ -557,7 +596,7 @@ mod tests {
         sys.ticket(Ticket::new("a").labels(["scan", "high"]));
         sys.ticket(Ticket::new("b").label("scan"));
         sys.claim(|t| t.key == "TICKET-1", "agent");
-        sys.set_finished("TICKET-1", "agent").unwrap();
+        sys.set_finished_by("TICKET-1", "agent").unwrap();
         sys.claim(|t| t.key == "TICKET-2", "agent");
         sys.set_failed("TICKET-2").unwrap();
         let stats = sys.stats();
@@ -582,7 +621,7 @@ mod tests {
         let (sys, _tmp) = test_system();
         sys.ticket(Ticket::new("a"));
         sys.claim(|t| t.key == "TICKET-1", "agent");
-        sys.set_finished("TICKET-1", "agent").unwrap();
+        sys.set_finished_by("TICKET-1", "agent").unwrap();
         assert_eq!(sys.stats().tickets_finished(), 1);
         assert_eq!(sys.stats().stats_for_label("scan").tickets_finished(), 0);
         assert_eq!(sys.stats().stats_for_label("scan").tickets_created(), 0);
@@ -593,7 +632,7 @@ mod tests {
         let (sys, dir) = test_system();
         sys.task("hello");
         sys.claim(|t| t.key == "TICKET-1", "agent");
-        sys.set_finished("TICKET-1", "agent").unwrap();
+        sys.set_finished_by("TICKET-1", "agent").unwrap();
         let lines = read_tickets_log(dir.path());
         assert_eq!(lines.len(), 3);
         assert_eq!(lines[0]["event"], "created");
@@ -637,7 +676,7 @@ mod tests {
         sys.task("a");
         sys.task("b");
         sys.claim(|t| t.key == "TICKET-1", "agent");
-        sys.set_finished("TICKET-1", "agent").unwrap();
+        sys.set_finished_by("TICKET-1", "agent").unwrap();
         sys.claim(|t| t.key == "TICKET-2", "agent");
         sys.set_failed("TICKET-2").unwrap();
         let lines = read_tickets_log(dir.path());
@@ -704,7 +743,7 @@ mod tests {
         let (sys, _tmp) = test_system();
         sys.task("hello");
         sys.claim(|t| t.status == Status::Todo, "alice");
-        sys.set_finished("TICKET-1", "agent").unwrap();
+        sys.set_finished_by("TICKET-1", "agent").unwrap();
         let t = sys.get_ticket("TICKET-1").unwrap();
         assert_eq!(t.status, Status::Finished);
         assert!(t.finished_at.is_some());
@@ -719,6 +758,43 @@ mod tests {
         let t = sys.get_ticket("TICKET-1").unwrap();
         assert_eq!(t.status, Status::Failed);
         assert!(t.failed_at.is_some());
+    }
+
+    #[test]
+    fn set_finished_stores_the_result_and_resolves_the_ticket() {
+        let (sys, _tmp) = test_system();
+        sys.task("hello");
+        sys.set_finished("TICKET-1", serde_json::json!({"answer": 42}))
+            .unwrap();
+        let t = sys.get_ticket("TICKET-1").unwrap();
+        assert_eq!(t.status, Status::Finished);
+        assert_eq!(t.result, Some(serde_json::json!({"answer": 42})));
+        assert_eq!(sys.last_result(), Some(serde_json::json!({"answer": 42})));
+    }
+
+    #[test]
+    fn set_finished_rejects_a_result_that_misses_the_ticket_schema() {
+        let (sys, _tmp) = test_system();
+        let schema = crate::schemas::Schema::parse(serde_json::json!({
+            "type": "object",
+            "properties": {"title": {"type": "string"}},
+            "required": ["title"],
+        }))
+        .unwrap();
+        sys.ticket(Ticket::new("write a report").schema(schema));
+
+        let err = sys
+            .set_finished("TICKET-1", serde_json::json!({"body": "no title"}))
+            .unwrap_err();
+        assert!(matches!(err, TicketError::ResultRejected { .. }));
+        assert_eq!(sys.get_ticket("TICKET-1").unwrap().status, Status::Todo);
+    }
+
+    #[test]
+    fn set_finished_errors_on_an_unknown_key() {
+        let (sys, _tmp) = test_system();
+        let err = sys.set_finished("TICKET-9", "done").unwrap_err();
+        assert!(matches!(err, TicketError::TicketMissing { .. }));
     }
 
     #[test]
@@ -788,7 +864,7 @@ mod tests {
         original.dir(dir.path().to_path_buf());
         original.task("seed work");
         original.add_reply("TICKET-1", Reply::user_text("hello"));
-        original.set_finished("TICKET-1", "agent").unwrap();
+        original.set_finished_by("TICKET-1", "agent").unwrap();
         drop(original);
 
         let replies = dir.path().join("tickets/TICKET-1/replies.jsonl");
@@ -816,7 +892,7 @@ mod tests {
         original
             .set_result("TICKET-1", serde_json::json!({"ok": true}))
             .unwrap();
-        original.set_finished("TICKET-1", "agent").unwrap();
+        original.set_finished_by("TICKET-1", "agent").unwrap();
         drop(original);
 
         let resumed = TicketSystem::load(dir.path()).unwrap();
@@ -898,7 +974,7 @@ mod tests {
         original
             .set_result("TICKET-1", serde_json::Value::Null)
             .unwrap();
-        original.set_finished("TICKET-1", "agent").unwrap();
+        original.set_finished_by("TICKET-1", "agent").unwrap();
         original.set_failed("TICKET-2").unwrap();
         drop(original);
 
@@ -1025,7 +1101,7 @@ mod tests {
         sys.task("seed");
         sys.claim(|t| t.status == Status::Todo, "alice").unwrap();
         sys.set_result("TICKET-1", serde_json::Value::Null).unwrap();
-        sys.set_finished("TICKET-1", "agent").unwrap();
+        sys.set_finished_by("TICKET-1", "agent").unwrap();
 
         let bytes = std::fs::read(dir.path().join("stats.json")).expect("stats file written");
         let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
@@ -1060,7 +1136,7 @@ mod tests {
         original
             .set_result("TICKET-1", serde_json::Value::Null)
             .unwrap();
-        original.set_finished("TICKET-1", "agent").unwrap();
+        original.set_finished_by("TICKET-1", "agent").unwrap();
         drop(original);
 
         std::fs::write(dir.path().join("stats.json"), "not json").unwrap();
@@ -1107,7 +1183,7 @@ mod tests {
         sys.summarize(&key, "SUMMARY-TEXT".into());
 
         // The collapsed replies land in replies.jsonl; no snapshot file.
-        let ticket_dir = sys.dir_value().join("tickets").join(&key);
+        let ticket_dir = sys.get_dir().join("tickets").join(&key);
         let names: Vec<String> = std::fs::read_dir(&ticket_dir)
             .unwrap()
             .flatten()
@@ -1118,7 +1194,7 @@ mod tests {
             .iter()
             .any(|n| n.starts_with("replies.") && n != "replies.jsonl"));
 
-        let reloaded = Replies::load(&sys.dir_value(), &key).unwrap().entries;
+        let reloaded = Replies::load(&sys.get_dir(), &key).unwrap().entries;
         let texts: Vec<String> = reloaded
             .iter()
             .filter_map(|r| match &r.content[..] {
@@ -1136,7 +1212,7 @@ mod tests {
         let key = sys.task(&huge);
         sys.add_reply(&key, Reply::user_text("turn one"));
 
-        let ticket_dir = sys.dir_value().join("tickets").join(&key);
+        let ticket_dir = sys.get_dir().join("tickets").join(&key);
         let before = std::fs::metadata(ticket_dir.join("ticket.json"))
             .unwrap()
             .len();
@@ -1161,7 +1237,7 @@ mod tests {
         );
 
         // Reload restores the summary task, not the original.
-        let reloaded = TicketSystem::load(sys.dir_value()).unwrap();
+        let reloaded = TicketSystem::load(sys.get_dir()).unwrap();
         assert_eq!(
             reloaded.get_ticket(&key).unwrap().task,
             serde_json::Value::String("SUMMARY".into()),
@@ -1191,7 +1267,7 @@ mod tests {
         );
 
         // The drop is committed and reloads from disk.
-        let reloaded = TicketSystem::load(sys.dir_value()).unwrap();
+        let reloaded = TicketSystem::load(sys.get_dir()).unwrap();
         let replies = reloaded.get_ticket(&key).unwrap().replies;
         assert!(replies.iter().any(
             |r| matches!(r.content.first(), Some(ReplyContent::Text { text: t }) if t == "keep me")
@@ -1206,7 +1282,7 @@ mod tests {
         let (sys, _tmp) = test_system();
         let key = sys.task("go");
         sys.add_reply(&key, Reply::user_text("keep me"));
-        let ticket_dir = sys.dir_value().join("tickets").join(&key);
+        let ticket_dir = sys.get_dir().join("tickets").join(&key);
 
         sys.edit_replies(&key, |_replies| {}); // inspect, change nothing
 
@@ -1232,7 +1308,7 @@ mod tests {
         let key = sys.task("go");
         sys.add_reply(&key, Reply::user_text("keep me"));
         sys.add_reply(&key, Reply::user_text("drop me"));
-        let ticket_dir = sys.dir_value().join("tickets").join(&key);
+        let ticket_dir = sys.get_dir().join("tickets").join(&key);
 
         sys.edit_replies(&key, |replies| {
             replies.retain(|reply| {
@@ -1273,7 +1349,7 @@ mod tests {
         });
 
         // One replies file, no snapshots, and neither dropped string survives.
-        let ticket_dir = sys.dir_value().join("tickets").join(&key);
+        let ticket_dir = sys.get_dir().join("tickets").join(&key);
         let replies_files: Vec<String> = std::fs::read_dir(&ticket_dir)
             .unwrap()
             .flatten()

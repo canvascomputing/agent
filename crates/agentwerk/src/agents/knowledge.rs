@@ -170,6 +170,12 @@ impl Knowledge {
         self
     }
 
+    /// Rendered-index char budget in force, 12 000 until
+    /// [`Self::index_char_limit`] overrides it.
+    pub fn get_index_char_limit(&self) -> usize {
+        self.index_char_limit.load(Ordering::Relaxed)
+    }
+
     /// Rendered index content for the system prompt. Returns the body
     /// of `index.md` (the bullet list), or an empty string when no
     /// pages exist.
@@ -178,7 +184,7 @@ impl Knowledge {
         render_index(&index)
     }
 
-    /// Sub-handle for the page collection. Save, load, and remove
+    /// Sub-handle for the page collection. Save, load, list, and remove
     /// pages through `knowledge.pages()` so the verb pair stays bare
     /// `save` / `load` and the bootstrap `Knowledge::load(dir)` does
     /// not collide with per-slug loads.
@@ -217,7 +223,7 @@ impl Knowledge {
         let index = self.index.lock().unwrap();
         (
             render_index(&index).len(),
-            self.index_char_limit.load(Ordering::Relaxed),
+            self.get_index_char_limit(),
             index.len(),
         )
     }
@@ -258,8 +264,8 @@ impl Persist for Page {
 }
 
 /// Sub-handle returned by [`Knowledge::pages`]. Hosts the verb-bare
-/// `save` / `load` / `remove` over the page collection while keeping
-/// the index updated and the char budget enforced.
+/// `save` / `load` / `list` / `remove` over the page collection while
+/// keeping the index updated and the char budget enforced.
 pub struct Pages<'a> {
     inner: &'a Knowledge,
 }
@@ -299,7 +305,7 @@ impl Pages<'_> {
             index.push(entry);
         }
 
-        let limit = self.inner.index_char_limit.load(Ordering::Relaxed);
+        let limit = self.inner.get_index_char_limit();
         let rendered = render_index(&index);
         if rendered.len() > limit {
             return Err(KnowledgeError::IndexLimitExceeded {
@@ -361,6 +367,20 @@ impl Pages<'_> {
             content,
             tags,
         })
+    }
+
+    /// Read every page in the store, in index order. Collects the slugs
+    /// before reading so the index lock is not held across the file reads.
+    pub fn list(&self) -> Result<Vec<Page>, KnowledgeError> {
+        let slugs: Vec<String> = self
+            .inner
+            .index
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|e| e.slug.clone())
+            .collect();
+        slugs.iter().map(|slug| self.load(slug)).collect()
     }
 
     /// Delete the page file at `slug` and its index entry.
@@ -859,6 +879,33 @@ mod tests {
         let err = store.pages().load("nonexistent").unwrap_err();
         assert!(matches!(err, KnowledgeError::PageMissing { .. }));
         assert!(err.to_string().contains("not found"));
+    }
+
+    #[test]
+    fn list_returns_every_saved_page_in_index_order() {
+        let (store, _dir) = fresh_store();
+        save_page(&store, "build", "How to build", "# Build\n\nRun make.", &[]);
+        save_page(&store, "deploy", "How to deploy", "# Deploy\n\nPush.", &[]);
+
+        let pages = store.pages().list().unwrap();
+        let slugs: Vec<&str> = pages.iter().map(|p| p.slug.as_str()).collect();
+        assert_eq!(slugs, vec!["build", "deploy"]);
+        assert_eq!(pages[0].description, "How to build");
+        assert!(pages[0].content.contains("Run make."));
+    }
+
+    #[test]
+    fn get_index_char_limit_returns_the_default_until_it_is_set() {
+        let (store, _dir) = fresh_store();
+        assert_eq!(store.get_index_char_limit(), DEFAULT_INDEX_CHAR_LIMIT);
+        store.index_char_limit(80);
+        assert_eq!(store.get_index_char_limit(), 80);
+    }
+
+    #[test]
+    fn list_is_empty_on_a_fresh_store() {
+        let (store, _dir) = fresh_store();
+        assert!(store.pages().list().unwrap().is_empty());
     }
 
     #[test]

@@ -65,8 +65,15 @@ impl PyTicketSystem {
         slf
     }
 
-    /// Fail a ticket from outside the run. Raises when the key is unknown or
-    /// the ticket already reached a terminal status.
+    /// Attach a result and finish a ticket from outside the run. Raises when
+    /// the key is unknown or the result misses the ticket's schema.
+    fn set_finished(&self, key: &str, result: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.inner
+            .set_finished(key, py_to_value(result)?)
+            .map_err(runtime_error)
+    }
+
+    /// Fail a ticket from outside the run. Raises when the key is unknown.
     fn set_failed(&self, key: &str) -> PyResult<()> {
         self.inner.set_failed(key).map_err(runtime_error)
     }
@@ -114,10 +121,55 @@ impl PyTicketSystem {
         slf
     }
 
+    /// Turn cap in force, or `None` when the run is unlimited.
+    fn get_max_turns(&self) -> Option<u32> {
+        self.inner.get_max_turns()
+    }
+
+    /// Total input-token cap in force, or `None`.
+    fn get_max_input_tokens(&self) -> Option<u64> {
+        self.inner.get_max_input_tokens()
+    }
+
+    /// Total output-token cap in force, or `None`.
+    fn get_max_output_tokens(&self) -> Option<u64> {
+        self.inner.get_max_output_tokens()
+    }
+
+    /// Per-request output-token cap in force, or `None`.
+    fn get_max_request_tokens(&self) -> Option<u32> {
+        self.inner.get_max_request_tokens()
+    }
+
+    /// Schema-retry cap in force, 10 until it is overridden.
+    fn get_max_schema_retries(&self) -> Option<u32> {
+        self.inner.get_max_schema_retries()
+    }
+
+    /// Request-retry cap in force, 10 until it is overridden.
+    fn get_max_request_retries(&self) -> u32 {
+        self.inner.get_max_request_retries()
+    }
+
+    /// Total elapsed-time cap in force, in seconds, or `None`.
+    fn get_max_time(&self) -> Option<f64> {
+        self.inner.get_max_time().map(|d| d.as_secs_f64())
+    }
+
+    /// Delay between request retries in force, in seconds.
+    fn get_request_retry_delay(&self) -> f64 {
+        self.inner.get_request_retry_delay().as_secs_f64()
+    }
+
     /// Directory the session's logs and state are written to.
     fn dir<'py>(slf: PyRef<'py, Self>, dir: &str) -> PyRef<'py, Self> {
         slf.inner.dir(dir);
         slf
+    }
+
+    /// Directory the system writes to, `./.agentwerk` until `dir` overrides it.
+    fn get_dir(&self) -> String {
+        self.inner.get_dir().display().to_string()
     }
 
     /// Register a default result schema for every ticket carrying `label`.
@@ -234,6 +286,26 @@ impl PyTicketSystem {
         slf
     }
 
+    /// Call off `label`'s agents when a finished ticket's result makes
+    /// `predicate(result)` truthy. Only that pool stops; other labels keep
+    /// going.
+    fn cancel_label_on_result<'py>(
+        slf: PyRef<'py, Self>,
+        label: &str,
+        predicate: Py<PyAny>,
+    ) -> PyRef<'py, Self> {
+        slf.inner
+            .cancel_label_on_result(label, move |result: &Value| {
+                Python::attach(|py| {
+                    value_to_py(py, result)
+                        .and_then(|value| predicate.bind(py).call1((value,)))
+                        .and_then(|value| value.is_truthy())
+                        .unwrap_or(false)
+                })
+            });
+        slf
+    }
+
     /// Name of the model the bound agent named `agent_name` runs, or `None`.
     /// `Trajectory.from_ticket` wants it.
     fn model_for_agent(&self, agent_name: &str) -> Option<String> {
@@ -252,6 +324,15 @@ impl PyTicketSystem {
     fn tickets(&self, py: Python<'_>) -> PyResult<Vec<Py<PyTicket>>> {
         self.inner
             .tickets()
+            .iter()
+            .map(|ticket| Py::new(py, PyTicket::from_ticket(ticket)))
+            .collect()
+    }
+
+    /// Every ticket carrying `label`, in creation order, whatever its status.
+    fn tickets_for_label(&self, py: Python<'_>, label: &str) -> PyResult<Vec<Py<PyTicket>>> {
+        self.inner
+            .tickets_for_label(label)
             .iter()
             .map(|ticket| Py::new(py, PyTicket::from_ticket(ticket)))
             .collect()

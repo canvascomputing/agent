@@ -96,6 +96,54 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn host_finish_mid_run_walks_the_agent_off_and_still_drains() {
+        let results_dir = crate::test_util::TempDir::new().unwrap();
+        let tickets = TicketSystem::new();
+        tickets
+            .dir(results_dir.path().to_path_buf())
+            .max_request_retries(0)
+            .request_retry_delay(Duration::from_millis(1));
+
+        // The agent never calls its finish tool, so the ticket stays in
+        // progress until the host resolves it out of band.
+        let provider = MockProvider::with_results(
+            (0..50)
+                .map(|_| Ok(text_response("still working")))
+                .collect(),
+        );
+        tickets.agent(
+            Agent::new()
+                .name("slow")
+                .provider(provider.clone() as Arc<dyn Provider>)
+                .model("mock")
+                .role("test")
+                .build(),
+        );
+        let key = tickets.ticket(Ticket::new("hello").label("slow"));
+
+        let run_handle = tickets.start();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while tickets.get_ticket(&key).unwrap().status != Status::InProgress {
+            if tokio::time::Instant::now() > deadline {
+                run_handle.cancel();
+                run_handle.finish().await;
+                panic!("agent never claimed the ticket");
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        tickets.set_finished(&key, "resolved by the host").unwrap();
+        run_handle.finish().await;
+
+        let ticket = tickets.get_ticket(&key).unwrap();
+        assert_eq!(ticket.status, Status::Finished);
+        assert_eq!(
+            ticket.result,
+            Some(serde_json::json!("resolved by the host"))
+        );
+    }
+
+    #[tokio::test]
     async fn late_added_agent_joined_on_shutdown() {
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let tickets = TicketSystem::new();

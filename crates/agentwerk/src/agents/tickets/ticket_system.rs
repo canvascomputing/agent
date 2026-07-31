@@ -2,7 +2,7 @@
 //! registered agents, policies, cancellation signals, and run stats.
 //! This file holds construction, configuration, the ticket-creation
 //! API, agent binding, the background-run lifecycle, and queries.
-//! Mutation impls (`claim`, `set_finished`, `summarize`, etc.) live
+//! Mutation impls (`claim`, `set_finished_by`, `summarize`, etc.) live
 //! next door in `store.rs`.
 
 use std::collections::{HashMap, HashSet};
@@ -369,7 +369,8 @@ impl TicketSystem {
     }
 
     pub(crate) fn emit(&self, key: &str, agent: &str, kind: EventKind) {
-        self.stats.record_event(&kind, key, &self.labels_for(key));
+        self.stats
+            .record_event(&kind, key, &self.labels_for(key), agent);
         let event = Event::new(agent, key, kind);
         let handlers: Vec<Arc<EventHandler>> = self.event_handlers.lock().unwrap().clone();
         if handlers.is_empty() {
@@ -474,6 +475,42 @@ impl TicketSystem {
         self
     }
 
+    // ---- policy readers ----
+    // `None` reads as "no limit"; the two that always hold a value carry
+    // the default from `Policies::default` until the caller overrides it.
+
+    pub fn get_max_turns(&self) -> Option<u32> {
+        self.policies.lock().unwrap().max_turns
+    }
+
+    pub fn get_max_input_tokens(&self) -> Option<u64> {
+        self.policies.lock().unwrap().max_input_tokens
+    }
+
+    pub fn get_max_output_tokens(&self) -> Option<u64> {
+        self.policies.lock().unwrap().max_output_tokens
+    }
+
+    pub fn get_max_request_tokens(&self) -> Option<u32> {
+        self.policies.lock().unwrap().max_request_tokens
+    }
+
+    pub fn get_max_schema_retries(&self) -> Option<u32> {
+        self.policies.lock().unwrap().max_schema_retries
+    }
+
+    pub fn get_max_request_retries(&self) -> u32 {
+        self.policies.lock().unwrap().max_request_retries
+    }
+
+    pub fn get_request_retry_delay(&self) -> Duration {
+        self.policies.lock().unwrap().request_retry_delay
+    }
+
+    pub fn get_max_time(&self) -> Option<Duration> {
+        self.policies.lock().unwrap().max_time
+    }
+
     /// Cancel the run when `trigger` resolves. The future's output is
     /// discarded; only completion matters. Composes with any cancellation
     /// source: ctrl-c, a deadline, a channel receive, an external signal.
@@ -558,6 +595,41 @@ impl TicketSystem {
         })
     }
 
+    /// Call off the `label` pool when a finished ticket's result matches
+    /// `predicate`. The label-scoped sibling of [`Self::cancel_on_result`]:
+    /// instead of stopping the whole run it invokes [`Self::cancel_label`],
+    /// so the other pools keep going. Any matching result calls off `label`,
+    /// whether or not the finished ticket carried it, matching
+    /// [`Self::cancel_label_on_event`].
+    ///
+    /// ```no_run
+    /// # use agentwerk::TicketSystem;
+    /// let tickets = TicketSystem::new();
+    /// tickets.cancel_label_on_result("scan", |result| result["verdict"] == "malicious");
+    /// ```
+    pub fn cancel_label_on_result<F>(&self, label: impl Into<String>, predicate: F) -> &Self
+    where
+        F: Fn(&serde_json::Value) -> bool + Send + Sync + 'static,
+    {
+        let supervisor = self.weak_self.clone();
+        let label = label.into();
+        self.on_event(move |event| {
+            if !matches!(event.kind, EventKind::TicketFinished) {
+                return;
+            }
+            let key = &event.ticket_key;
+            let Some(system) = supervisor.upgrade() else {
+                return;
+            };
+            let Some(result) = system.get_ticket(key).and_then(|t| t.result) else {
+                return;
+            };
+            if predicate(&result) {
+                system.cancel_label(label.clone());
+            }
+        })
+    }
+
     /// Enqueue a follow-up ticket whenever a finished ticket makes `make`
     /// return one. Fires on `TicketFinished`, passing the finished ticket
     /// so `make` reads its key, labels, task, and schema-validated result,
@@ -626,7 +698,9 @@ impl TicketSystem {
         self
     }
 
-    pub(crate) fn dir_value(&self) -> PathBuf {
+    /// Directory the system writes to, `./.agentwerk` until [`Self::dir`]
+    /// overrides it.
+    pub fn get_dir(&self) -> PathBuf {
         self.dir.lock().unwrap().clone()
     }
 
@@ -945,6 +1019,13 @@ impl TicketSystem {
             .collect()
     }
 
+    /// Every ticket carrying `label`, in creation order, whatever its
+    /// status. [`Self::results_for_label`] narrows the same set to the
+    /// finished ones and hands back their results.
+    pub fn tickets_for_label(&self, label: &str) -> Vec<Ticket> {
+        self.find_tickets(|t| t.has_label(label))
+    }
+
     /// Every finished ticket carrying `label`'s result, in creation
     /// order. Mirrors [`Self::schema_for_label`] and `Stats::stats_for_label`.
     pub fn results_for_label(&self, label: &str) -> Vec<serde_json::Value> {
@@ -1116,9 +1197,50 @@ mod tests {
         sys.task("b");
         let key_a = sys.claim(|t| t.key == "TICKET-1", "agent").unwrap();
         let key_b = sys.claim(|t| t.key == "TICKET-2", "agent").unwrap();
-        sys.set_finished(&key_a, "agent").unwrap();
+        sys.set_finished_by(&key_a, "agent").unwrap();
         sys.set_failed(&key_b).unwrap();
         assert_eq!(sys.pending_count(), 0);
+    }
+
+    #[test]
+    fn policy_readers_return_the_limits_that_were_set() {
+        let (sys, _tmp) = test_system();
+        sys.max_turns(40)
+            .max_input_tokens(200_000)
+            .max_output_tokens(50_000)
+            .max_request_tokens(8_000)
+            .max_schema_retries(3)
+            .max_request_retries(5)
+            .request_retry_delay(Duration::from_millis(250))
+            .max_time(Duration::from_secs(300));
+
+        assert_eq!(sys.get_max_turns(), Some(40));
+        assert_eq!(sys.get_max_input_tokens(), Some(200_000));
+        assert_eq!(sys.get_max_output_tokens(), Some(50_000));
+        assert_eq!(sys.get_max_request_tokens(), Some(8_000));
+        assert_eq!(sys.get_max_schema_retries(), Some(3));
+        assert_eq!(sys.get_max_request_retries(), 5);
+        assert_eq!(sys.get_request_retry_delay(), Duration::from_millis(250));
+        assert_eq!(sys.get_max_time(), Some(Duration::from_secs(300)));
+    }
+
+    #[test]
+    fn policy_readers_return_the_defaults_before_any_limit_is_set() {
+        let (sys, _tmp) = test_system();
+        assert_eq!(sys.get_max_turns(), None);
+        assert_eq!(sys.get_max_input_tokens(), None);
+        assert_eq!(sys.get_max_output_tokens(), None);
+        assert_eq!(sys.get_max_request_tokens(), None);
+        assert_eq!(sys.get_max_time(), None);
+        assert_eq!(sys.get_max_schema_retries(), Some(10));
+        assert_eq!(sys.get_max_request_retries(), 10);
+        assert_eq!(sys.get_request_retry_delay(), Duration::from_millis(500));
+    }
+
+    #[test]
+    fn get_dir_reads_back_the_configured_directory() {
+        let (sys, tmp) = test_system();
+        assert_eq!(sys.get_dir(), tmp.path());
     }
 
     #[test]
@@ -1182,14 +1304,81 @@ mod tests {
             .unwrap();
         sys.set_result(&key_a, serde_json::json!({"score": 7}))
             .unwrap();
-        sys.set_finished(&key_a, "agent").unwrap();
+        sys.set_finished_by(&key_a, "agent").unwrap();
         sys.set_result(&key_b, serde_json::json!({"score": 99}))
             .unwrap();
-        sys.set_finished(&key_b, "agent").unwrap();
+        sys.set_finished_by(&key_b, "agent").unwrap();
         assert_eq!(
             sys.results_for_label("analysis"),
             vec![serde_json::json!({"score": 7})]
         );
+    }
+
+    #[test]
+    fn tickets_for_label_returns_every_status_not_just_finished() {
+        let (sys, _tmp) = test_system();
+        sys.ticket(Ticket::new("done").label("analysis"));
+        sys.ticket(Ticket::new("todo").label("analysis"));
+        let key = sys
+            .claim(|t| t.task == serde_json::json!("done"), "agent")
+            .unwrap();
+        attach_done_result(&sys, &key, "answer");
+
+        let tasks: Vec<serde_json::Value> = sys
+            .tickets_for_label("analysis")
+            .into_iter()
+            .map(|t| t.task)
+            .collect();
+        assert_eq!(
+            tasks,
+            vec![serde_json::json!("done"), serde_json::json!("todo")]
+        );
+        assert_eq!(sys.results_for_label("analysis").len(), 1);
+    }
+
+    #[test]
+    fn stats_for_agent_counts_only_the_tickets_that_agent_worked() {
+        let (sys, _tmp) = test_system();
+        sys.ticket(Ticket::new("a").label("scan"));
+        sys.ticket(Ticket::new("b").label("scan"));
+        let key_a = sys
+            .claim(|t| t.task == serde_json::json!("a"), "scout")
+            .unwrap();
+        let key_b = sys
+            .claim(|t| t.task == serde_json::json!("b"), "writer")
+            .unwrap();
+        sys.set_result(&key_a, serde_json::json!("done")).unwrap();
+        sys.set_finished_by(&key_a, "scout").unwrap();
+        sys.set_failed_by(&key_b, "writer").unwrap();
+
+        let scout = sys.stats().stats_for_agent("scout");
+        assert_eq!(scout.tickets_finished(), 1);
+        assert_eq!(scout.tickets_failed(), 0);
+        let writer = sys.stats().stats_for_agent("writer");
+        assert_eq!(writer.tickets_finished(), 0);
+        assert_eq!(writer.tickets_failed(), 1);
+    }
+
+    #[test]
+    fn stats_for_agent_counts_the_tickets_that_agent_reported() {
+        let (sys, _tmp) = test_system();
+        sys.insert(Ticket::new("filed by scout"), "scout".into());
+        sys.task("filed by the host");
+
+        assert_eq!(sys.stats().stats_for_agent("scout").tickets_created(), 1);
+        assert_eq!(sys.stats().tickets_created(), 2);
+    }
+
+    #[test]
+    fn cancel_label_on_result_calls_off_one_pool_without_cancelling_the_run() {
+        let (sys, _tmp) = test_system();
+        sys.cancel_label_on_result("scan", |result| result.as_str() == Some("stop"));
+        sys.ticket(Ticket::new("a").label("scan"));
+        let key = sys.claim(|t| t.has_label("scan"), "agent").unwrap();
+        attach_done_result(&sys, &key, "stop");
+
+        assert!(sys.label_cancelled("scan"));
+        assert!(!sys.is_cancelled(), "the other pools keep working");
     }
 
     #[test]
@@ -1198,7 +1387,7 @@ mod tests {
         sys.ticket(Ticket::new("x").label("other"));
         let key = sys.claim(|t| t.has_label("other"), "agent").unwrap();
         sys.set_result(&key, serde_json::json!({"n": 1})).unwrap();
-        sys.set_finished(&key, "agent").unwrap();
+        sys.set_finished_by(&key, "agent").unwrap();
         assert!(sys.results_for_label("missing").is_empty());
     }
 
@@ -1431,7 +1620,7 @@ mod tests {
         sys.ticket(Ticket::new("scout").label("scout"));
         let key = sys.claim(|t| t.has_label("scout"), "agent").unwrap();
         sys.set_result(&key, serde_json::json!("lead")).unwrap();
-        sys.set_finished(&key, "agent").unwrap();
+        sys.set_finished_by(&key, "agent").unwrap();
         sys.create_ticket_on_result(|done| {
             done.has_label("scout")
                 .then(|| Ticket::new("hunt").label("sniper"))
@@ -1446,7 +1635,7 @@ mod tests {
         sys.ticket(Ticket::new("scout").label("scout"));
         let key = sys.claim(|t| t.has_label("scout"), "agent").unwrap();
         sys.set_result(&key, serde_json::json!("lead")).unwrap();
-        sys.set_finished(&key, "agent").unwrap();
+        sys.set_finished_by(&key, "agent").unwrap();
         sys.create_ticket_on_result(|done| {
             Some(Ticket::new("hunt").label("sniper").parent(&done.key))
         });
@@ -1473,8 +1662,8 @@ mod tests {
         sys.ticket(Ticket::new("scout").label("scout"));
         let key = sys.claim(|t| t.has_label("scout"), "agent").unwrap();
         sys.set_result(&key, serde_json::json!("lead")).unwrap();
-        sys.set_finished(&key, "agent").unwrap();
-        // The handler ran inside `set_finished`, so the queue is never
+        sys.set_finished_by(&key, "agent").unwrap();
+        // The handler ran inside `set_finished_by`, so the queue is never
         // observably empty between the parent finishing and the follow-up.
         assert_eq!(sys.pending_count(), 1);
     }
@@ -1498,7 +1687,7 @@ mod tests {
         let key = sys.claim(|t| t.has_label("scan"), "analyst").unwrap();
         sys.add_reply(&key, Reply::user_text("hello"));
         sys.set_result(&key, serde_json::json!("done")).unwrap();
-        sys.set_finished(&key, "analyst").unwrap();
+        sys.set_finished_by(&key, "analyst").unwrap();
 
         // `replies` is `#[serde(skip)]`, so a transcript here proves the
         // handler holds the in-memory ticket, not a disk round-trip.

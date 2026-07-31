@@ -6,11 +6,15 @@ use super::ticket::Status;
 
 /// Errors raised by ticket-store mutations.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum TicketError {
     /// No ticket exists at `key`.
     TicketMissing { key: String },
     /// Status transition `from → to` is not allowed.
     TransitionRejected { from: Status, to: Status },
+    /// The result failed the ticket's schema. The message lists the
+    /// violations.
+    ResultRejected { message: String },
 }
 
 impl fmt::Display for TicketError {
@@ -20,6 +24,7 @@ impl fmt::Display for TicketError {
             Self::TransitionRejected { from, to } => {
                 write!(f, "Illegal transition {from:?} -> {to:?}")
             }
+            Self::ResultRejected { message } => write!(f, "{message}"),
         }
     }
 }

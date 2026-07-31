@@ -67,6 +67,11 @@ pub struct Stats {
     /// Always empty on a slice itself; populated only on the run-wide
     /// `Stats` owned by `TicketSystem`.
     label_stats: Mutex<HashMap<String, Arc<Stats>>>,
+    /// Lazy-init map of nested counter slices keyed by agent name. Kept
+    /// apart from `label_stats` because a claim stamps the agent's name
+    /// onto the ticket's labels, so one map would merge an agent with a
+    /// label that happens to share its name.
+    agent_stats: Mutex<HashMap<String, Arc<Stats>>>,
     /// Per-ticket append-only series of provider-reported token usages.
     /// Feeds the proactive-compaction predictor; cleared on compaction.
     /// Always empty on a label slice.
@@ -255,6 +260,7 @@ impl Stats {
             total_ticket_duration: AtomicU64::new(0),
             total_work_duration: AtomicU64::new(0),
             label_stats: Mutex::new(HashMap::new()),
+            agent_stats: Mutex::new(HashMap::new()),
             usage_history: Mutex::new(HashMap::new()),
             tool_stats: Mutex::new(HashMap::new()),
             file_stats: Mutex::new(HashMap::new()),
@@ -269,6 +275,19 @@ impl Stats {
     pub fn stats_for_label(&self, label: &str) -> Arc<Stats> {
         let mut map = self.label_stats.lock().unwrap();
         map.entry(label.to_string())
+            .or_insert_with(|| Arc::new(Stats::new()))
+            .clone()
+    }
+
+    /// Statistics scoped to one agent, by the name it was registered
+    /// under. `tickets_created()` counts the tickets that agent filed.
+    /// The rest count the tickets it claimed. Tickets the host filed
+    /// report as `user`, matching `Ticket::reporter`.
+    /// Like the per-label slices, these are written to `stats.json` for
+    /// readers and not restored by `TicketSystem::load`.
+    pub fn stats_for_agent(&self, agent_name: &str) -> Arc<Stats> {
+        let mut map = self.agent_stats.lock().unwrap();
+        map.entry(agent_name.to_string())
             .or_insert_with(|| Arc::new(Stats::new()))
             .clone()
     }
@@ -409,11 +428,11 @@ impl Stats {
 
     /// Record an event: every kind is counted by name automatically, so a
     /// future variant needs no arm here; only payload-bearing measures do.
-    pub(crate) fn record_event(&self, kind: &EventKind, key: &str, labels: &[String]) {
-        self.record_scoped(labels, |s| s.count_event(kind.name()));
+    pub(crate) fn record_event(&self, kind: &EventKind, key: &str, labels: &[String], agent: &str) {
+        self.record_scoped(labels, agent, |s| s.count_event(kind.name()));
         match kind {
             EventKind::RequestFinished { model, usage } => {
-                self.record_scoped(labels, |s| {
+                self.record_scoped(labels, agent, |s| {
                     s.record_tokens(usage.input_tokens, usage.output_tokens)
                 });
                 self.record_usage(key, usage.clone());
@@ -431,11 +450,15 @@ impl Stats {
         }
     }
 
-    /// Apply `f` to the run-wide stats and to each per-label slice.
-    fn record_scoped(&self, labels: &[String], f: impl Fn(&Stats)) {
+    /// Apply `f` to the run-wide stats, to each per-label slice, and to
+    /// the agent's slice. Run-level events carry no agent name.
+    fn record_scoped(&self, labels: &[String], agent: &str, f: impl Fn(&Stats)) {
         f(self);
         for label in labels {
             f(&self.stats_for_label(label));
+        }
+        if !agent.is_empty() {
+            f(&self.stats_for_agent(agent));
         }
     }
 
@@ -486,14 +509,18 @@ impl Stats {
     pub(crate) fn record_transition_for(
         &self,
         labels: &[String],
+        agent: &str,
         next: Status,
         (ticket_duration, work_duration): (Duration, Duration),
     ) {
         if !matches!(next, Status::Finished | Status::Failed) {
             return;
         }
-        for label in labels {
-            let slice = self.stats_for_label(label);
+        let slices = labels
+            .iter()
+            .map(|label| self.stats_for_label(label))
+            .chain((!agent.is_empty()).then(|| self.stats_for_agent(agent)));
+        for slice in slices {
             match next {
                 Status::Finished => slice.record_finished(ticket_duration, work_duration),
                 Status::Failed => slice.record_failed(ticket_duration, work_duration),
@@ -649,15 +676,17 @@ impl Stats {
     pub(crate) fn derive(tickets: &HashMap<String, crate::agents::tickets::Ticket>) -> Self {
         let stats = Stats::new();
         for t in tickets.values() {
-            stats.record_scoped(&t.labels, |s| s.record_created());
+            // No agent scope: a rebuilt ticket cannot say which agent
+            // worked it, and an empty slice beats a half-filled one.
+            stats.record_scoped(&t.labels, "", |s| s.record_created());
             let ticket_dur = ticket_duration(t).unwrap_or_default();
             let work_dur = work_duration(t).unwrap_or_default();
             match t.status {
                 Status::Finished => {
-                    stats.record_scoped(&t.labels, |s| s.record_finished(ticket_dur, work_dur));
+                    stats.record_scoped(&t.labels, "", |s| s.record_finished(ticket_dur, work_dur));
                 }
                 Status::Failed => {
-                    stats.record_scoped(&t.labels, |s| s.record_failed(ticket_dur, work_dur));
+                    stats.record_scoped(&t.labels, "", |s| s.record_failed(ticket_dur, work_dur));
                 }
                 Status::Todo | Status::InProgress => {}
             }
@@ -756,6 +785,7 @@ impl Serialize for Stats {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let events = self.event_counts();
         let labels = self.label_stats.lock().unwrap();
+        let agents = self.agent_stats.lock().unwrap();
         let tools = self.tool_stats();
         let files = self.file_stats();
         let knowledge = self.knowledge_stats();
@@ -769,6 +799,7 @@ impl Serialize for Stats {
         let len = 15
             + usize::from(!events.is_empty())
             + usize::from(!labels.is_empty())
+            + usize::from(!agents.is_empty())
             + usize::from(!tools.is_empty())
             + usize::from(!files.is_empty())
             + usize::from(knowledge_used)
@@ -811,6 +842,11 @@ impl Serialize for Stats {
             let nested: BTreeMap<&String, &Stats> =
                 labels.iter().map(|(k, v)| (k, v.as_ref())).collect();
             st.serialize_field("labels", &nested)?;
+        }
+        if !agents.is_empty() {
+            let nested: BTreeMap<&String, &Stats> =
+                agents.iter().map(|(k, v)| (k, v.as_ref())).collect();
+            st.serialize_field("agents", &nested)?;
         }
         if !tools.is_empty() {
             // Raw counters round-trip through load; errors/error_rate are
@@ -982,12 +1018,12 @@ mod tests {
     #[test]
     fn event_counts_show_up_in_reads() {
         let s = Stats::new();
-        s.record_event(&turn(), "KEY", &[]);
-        s.record_event(&turn(), "KEY", &[]);
-        s.record_event(&request(10, 5), "KEY", &[]);
-        s.record_event(&request(2, 1), "KEY", &[]);
-        s.record_event(&tool_call(), "KEY", &[]);
-        s.record_event(&provider_error(), "KEY", &[]);
+        s.record_event(&turn(), "KEY", &[], "");
+        s.record_event(&turn(), "KEY", &[], "");
+        s.record_event(&request(10, 5), "KEY", &[], "");
+        s.record_event(&request(2, 1), "KEY", &[], "");
+        s.record_event(&tool_call(), "KEY", &[], "");
+        s.record_event(&provider_error(), "KEY", &[], "");
 
         assert_eq!(s.turns(), 2);
         assert_eq!(s.requests(), 2);
@@ -1080,8 +1116,8 @@ mod tests {
     #[test]
     fn record_event_mirrors_onto_label_slices() {
         let s = Stats::new();
-        s.record_event(&turn(), "KEY", &["scan".into()]);
-        s.record_event(&request(10, 5), "KEY", &["scan".into()]);
+        s.record_event(&turn(), "KEY", &["scan".into()], "");
+        s.record_event(&request(10, 5), "KEY", &["scan".into()], "");
         let slice = s.stats_for_label("scan");
         assert_eq!(slice.turns(), 1);
         assert_eq!(slice.input_tokens(), 10);
@@ -1090,6 +1126,39 @@ mod tests {
         assert_eq!(s.input_tokens(), 10);
         // A label the events never named stays empty.
         assert_eq!(s.stats_for_label("other").turns(), 0);
+    }
+
+    #[test]
+    fn record_event_mirrors_onto_the_agent_slice() {
+        let s = Stats::new();
+        s.record_event(&turn(), "KEY", &["scan".into()], "scout");
+        s.record_event(&request(10, 5), "KEY", &["scan".into()], "scout");
+        let slice = s.stats_for_agent("scout");
+        assert_eq!(slice.turns(), 1);
+        assert_eq!(slice.input_tokens(), 10);
+        assert_eq!(s.stats_for_agent("writer").turns(), 0);
+    }
+
+    #[test]
+    fn stats_for_agent_and_stats_for_label_do_not_share_a_slice() {
+        // A claim stamps the agent's name onto the ticket's labels, so the
+        // two namespaces collide unless the maps stay separate.
+        let s = Stats::new();
+        s.record_event(&turn(), "KEY", &["scout".into()], "scout");
+        assert_eq!(s.stats_for_label("scout").turns(), 1);
+        assert_eq!(s.stats_for_agent("scout").turns(), 1);
+        assert!(!Arc::ptr_eq(
+            &s.stats_for_label("scout"),
+            &s.stats_for_agent("scout"),
+        ));
+    }
+
+    #[test]
+    fn run_level_events_reach_no_agent_slice() {
+        let s = Stats::new();
+        s.record_event(&turn(), "KEY", &[], "");
+        assert_eq!(s.turns(), 1);
+        assert_eq!(s.stats_for_agent("").turns(), 0);
     }
 
     #[test]
@@ -1119,18 +1188,18 @@ mod tests {
         let dir = crate::test_util::TempDir::new().unwrap();
 
         let s = Stats::new();
-        s.record_event(&turn(), "KEY", &[]);
-        s.record_event(&turn(), "KEY", &[]);
-        s.record_event(&request(100, 50), "KEY", &[]);
-        s.record_event(&tool_call(), "KEY", &[]);
-        s.record_event(&provider_error(), "KEY", &[]);
+        s.record_event(&turn(), "KEY", &[], "");
+        s.record_event(&turn(), "KEY", &[], "");
+        s.record_event(&request(100, 50), "KEY", &[], "");
+        s.record_event(&tool_call(), "KEY", &[], "");
+        s.record_event(&provider_error(), "KEY", &[], "");
         s.record_created();
         s.record_finished(Duration::from_secs(7), Duration::from_secs(5));
         s.record_failed(Duration::from_secs(3), Duration::from_secs(2));
 
         let slice = s.stats_for_label("scan");
-        slice.record_event(&turn(), "KEY", &[]);
-        slice.record_event(&request(40, 20), "KEY", &[]);
+        slice.record_event(&turn(), "KEY", &[], "");
+        slice.record_event(&request(40, 20), "KEY", &[], "");
         slice.record_created();
         slice.record_finished(Duration::from_secs(4), Duration::from_secs(3));
 
@@ -1162,10 +1231,10 @@ mod tests {
     #[test]
     fn stats_serializes_raw_counter_fields() {
         let s = Stats::new();
-        s.record_event(&turn(), "KEY", &[]);
-        s.record_event(&request(100, 50), "KEY", &[]);
-        s.record_event(&tool_call(), "KEY", &[]);
-        s.record_event(&provider_error(), "KEY", &[]);
+        s.record_event(&turn(), "KEY", &[], "");
+        s.record_event(&request(100, 50), "KEY", &[], "");
+        s.record_event(&tool_call(), "KEY", &[], "");
+        s.record_event(&provider_error(), "KEY", &[], "");
         s.record_created();
         s.record_finished(Duration::from_secs(7), Duration::from_secs(5));
 
@@ -1233,8 +1302,8 @@ mod tests {
     #[test]
     fn stats_serializes_labels_as_nested_object() {
         let s = Stats::new();
-        s.record_event(&turn(), "KEY", &["scan".into()]);
-        s.record_event(&request(40, 20), "KEY", &["scan".into()]);
+        s.record_event(&turn(), "KEY", &["scan".into()], "");
+        s.record_event(&request(40, 20), "KEY", &["scan".into()], "");
         let value = serde_json::to_value(&s).unwrap();
         let labels = value["labels"].as_object().unwrap();
         assert_eq!(labels["scan"]["turns"], 1);
@@ -1499,8 +1568,8 @@ mod tests {
     #[test]
     fn model_stats_records_requests_and_tokens_per_model() {
         let s = Stats::new();
-        s.record_event(&request(10, 5), "KEY", &[]);
-        s.record_event(&request(2, 1), "KEY", &[]);
+        s.record_event(&request(10, 5), "KEY", &[], "");
+        s.record_event(&request(2, 1), "KEY", &[], "");
 
         let models = s.model_stats();
         let m = &models["m"];
@@ -1512,7 +1581,7 @@ mod tests {
     #[test]
     fn model_stats_empty_on_label_slice() {
         let s = Stats::new();
-        s.record_event(&request(10, 5), "KEY", &["scan".into()]);
+        s.record_event(&request(10, 5), "KEY", &["scan".into()], "");
         let slice = s.stats_for_label("scan");
         assert!(slice.model_stats().is_empty());
     }
@@ -1522,7 +1591,7 @@ mod tests {
         let dir = crate::test_util::TempDir::new().unwrap();
 
         let s = Stats::new();
-        s.record_event(&request(10, 5), "KEY", &[]);
+        s.record_event(&request(10, 5), "KEY", &[], "");
 
         use crate::persistence::Persist;
         s.save(dir.path()).unwrap();
@@ -1537,7 +1606,7 @@ mod tests {
     #[test]
     fn stats_serializes_models_as_nested_object() {
         let s = Stats::new();
-        s.record_event(&request(10, 5), "KEY", &[]);
+        s.record_event(&request(10, 5), "KEY", &[], "");
 
         let value = serde_json::to_value(&s).unwrap();
         let models = value["models"].as_object().unwrap();

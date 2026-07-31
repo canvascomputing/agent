@@ -847,7 +847,7 @@ fn persist_output(ctx: &ToolContext, tool_use_id: &str, content: &str) -> Option
     let system = ctx.ticket_system.as_ref()?;
     let key = ctx.ticket_key.as_deref()?;
     let rel = system.write_tool_output(key, tool_use_id, content)?;
-    let display = system.dir_value().join(&rel);
+    let display = system.get_dir().join(&rel);
     Some(PersistedOutput { rel, display })
 }
 

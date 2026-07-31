@@ -39,7 +39,7 @@
 pip install agentwerk
 ```
 
-Also see: [Rust implementation](../../README.md).
+Also see: [Rust implementation](https://github.com/canvascomputing/agentwerk/blob/main/README.md).
 
 ## Quick Start
 
@@ -126,12 +126,12 @@ for fix in tickets.results_for_label("report"):
 
 Example projects built with agentwerk:
 
-- [Terminal REPL](../use-cases/src/terminal_repl/): minimal interactive chat
-- [Divide and Conquer](../use-cases/src/divide_and_conquer/): arithmetic problem shared across agents
-- [Deep Research](../use-cases/src/deep_research/): deep research pipeline (requires `BRAVE_API_KEY`)
-- [Malware Scanner](../use-cases/src/malware_scanner/): identify indicators of compromise in a software package
+- [Terminal REPL](https://github.com/canvascomputing/agentwerk/tree/main/crates/use-cases/src/terminal_repl/): minimal interactive chat
+- [Divide and Conquer](https://github.com/canvascomputing/agentwerk/tree/main/crates/use-cases/src/divide_and_conquer/): arithmetic problem shared across agents, ported in [examples/divide_and_conquer.py](https://github.com/canvascomputing/agentwerk/blob/main/crates/agentwerk-py/examples/divide_and_conquer.py)
+- [Deep Research](https://github.com/canvascomputing/agentwerk/tree/main/crates/use-cases/src/deep_research/): deep research pipeline (requires `BRAVE_API_KEY`)
+- [Malware Scanner](https://github.com/canvascomputing/agentwerk/tree/main/crates/use-cases/src/malware_scanner/): identify indicators of compromise in a software package
 
-> Configure an LLM provider first (see [Environment](../../DEVELOPMENT.md#environment)).
+> Configure an LLM provider first (see [Environment](https://github.com/canvascomputing/agentwerk/blob/main/DEVELOPMENT.md#environment)).
 
 ```bash
 python examples/divide_and_conquer.py 200 4 2
@@ -173,6 +173,7 @@ tickets.task("Compute (47 * 92) / 8, then round to the nearest integer.")
 
 | Method | Description |
 |--------|-------------|
+| `Agent.empty()` | Create an agent with no tools pre-registered. |
 | `name(name)` | Set a name or identifier for assigning tickets. |
 | `role(role)` | Define who the agent is and how it should work. |
 | `label(label)` / `labels(labels)` | Restrict the agent to tickets carrying a matching label. |
@@ -226,7 +227,7 @@ agent = Agent().from_env()
 |--------|-------------|
 | `provider(provider)` | Define the LLM provider. |
 | `model(model)` | Set the model. |
-| `from_env()` | Read environment variables for configuration (see [DEVELOPMENT.md](../../DEVELOPMENT.md)). |
+| `from_env()` | Read environment variables for configuration (see [DEVELOPMENT.md](https://github.com/canvascomputing/agentwerk/blob/main/DEVELOPMENT.md)). |
 
 You can explicitly read the model or provider from environment variables with: `provider_from_env()` or `model_from_env()`.
 
@@ -256,7 +257,7 @@ Claude, GPT, Mistral, and Qwen families are pre-configured.
 | `reasoning_effort(effort)` | Set the reasoning level. |
 | `get_reasoning_effort()` | Get the configured effort. |
 
-You can use `context_window_from_env()` to read the context window size from environment variables, see [DEVELOPMENT.md](../../DEVELOPMENT.md).
+You can use `context_window_from_env()` to read the context window size from environment variables, see [DEVELOPMENT.md](https://github.com/canvascomputing/agentwerk/blob/main/DEVELOPMENT.md).
 
 </details>
 
@@ -290,8 +291,10 @@ tickets.ticket(
 | `ticket(ticket)` | Submit a `Ticket` with custom labels or schema. |
 | `reply(key, content)` | Add a reply to a ticket. |
 | `edit_replies(key, editor)` | Rewrite one ticket's replies now. |
+| `set_finished(key, result)` | Finish a ticket with a result. |
 | `set_failed(key)` | Fail a ticket. |
 | `dir(dir)` | Define where a session is stored. |
+| `get_dir()` | Get the session directory. |
 | `schema_for_label(label, schema)` | Register a schema every ticket of that label validates against. |
 
 See [`TicketSystem`](https://docs.rs/agentwerk/latest/agentwerk/agents/tickets/struct.TicketSystem.html).
@@ -352,6 +355,7 @@ print(ticket.result["title"])
 | `results()` | Get every ticket's result in creation order. |
 | `results_for_label(label)` | Get every ticket's result carrying a specific label. |
 | `tickets()` | Get every ticket in creation order. |
+| `tickets_for_label(label)` | Get every ticket carrying a specific label. |
 | `find_ticket(condition)` | Get the earliest ticket matching a condition. |
 | `find_tickets(condition)` | Get every ticket matching a condition. |
 | `get_ticket(key)` | Get one ticket by key. |
@@ -359,13 +363,14 @@ print(ticket.result["title"])
 | `model_for_agent(name)` | Get the model that agent runs. |
 | `stats()` | Get execution statistics, see [Stats](#stats). |
 
-Ticket fields:
+Ticket members:
 
-| | Fields |
-|-|--------|
+| | Members |
+|-|---------|
 | **Identity** | `key`, `task`, `labels`, `parent`, `reporter` |
 | **Outcome** | `status`, `result`, `replies`, `schema` |
 | **Timestamps** | `created_at`, `started_at`, `finished_at`, `failed_at` |
+| **Checks** | `has_label(label)`, `is_todo()`, `is_in_progress()`, `is_finished()`, `is_failed()`, `is_pending()`, `is_resolved()` |
 
 See [`Ticket`](https://docs.rs/agentwerk/latest/agentwerk/agents/tickets/struct.Ticket.html).
 
@@ -418,14 +423,14 @@ Policies allow you to define execution limits:
 
 | Method | Description |
 |--------|-------------|
-| `max_turns(count)` | Limit the total number of turns. |
-| `max_time(seconds)` | Limit the total elapsed duration. |
-| `max_input_tokens(count)` | Limit the total input tokens. |
-| `max_output_tokens(count)` | Limit the total output tokens. |
-| `max_request_tokens(count)` | Limit the output tokens of a single request. |
-| `max_schema_retries(count)` | Limit how often a result may fail its schema before the ticket fails. |
-| `max_request_retries(count)` | Limit how often a failing request is retried. |
-| `request_retry_delay(seconds)` | Wait this long between retries. |
+| `max_turns(count)` / `get_max_turns()` | Limit the total number of turns. |
+| `max_time(seconds)` / `get_max_time()` | Limit the total elapsed duration. |
+| `max_input_tokens(count)` / `get_max_input_tokens()` | Limit the total input tokens. |
+| `max_output_tokens(count)` / `get_max_output_tokens()` | Limit the total output tokens. |
+| `max_request_tokens(count)` / `get_max_request_tokens()` | Limit the output tokens of a single request. |
+| `max_schema_retries(count)` / `get_max_schema_retries()` | Limit how often a result may fail its schema before the ticket fails. |
+| `max_request_retries(count)` / `get_max_request_retries()` | Limit how often a failing request is retried. |
+| `request_retry_delay(seconds)` / `get_request_retry_delay()` | Wait this long between retries. |
 
 A violation emits a `policy_violated` event, see [`EventKind`](https://docs.rs/agentwerk/latest/agentwerk/event/enum.EventKind.html).
 
@@ -555,10 +560,11 @@ See [`EventKind`](https://docs.rs/agentwerk/latest/agentwerk/event/enum.EventKin
 |--------|-------------|
 | `on_event(handler)` | Read every event as it is emitted. |
 | `on_ticket(handler)` | Read a ticket as it starts, finishes, or fails. |
-| `cancel_on(awaitable)` | Stop execution when an awaitable resolves. |
+| `cancel_on(awaitable)` | Stop execution when the given awaitable completes. |
 | `cancel_on_event(condition)` | Stop execution when an event matches. |
 | `cancel_on_result(condition)` | Stop execution when a finished result matches. |
 | `cancel_label_on_event(label, condition)` | Call off one label's agents while the rest keep working. |
+| `cancel_label_on_result(label, condition)` | Call off one label's agents when a finished result matches. |
 | `create_ticket_on_result(make)` | Enqueue a follow-up ticket from a finished ticket. |
 | `edit_replies_on_event(editor)` | Rewrite a ticket's replies before its next request. |
 
@@ -594,7 +600,12 @@ for name, stat in stats.tool_stats().items():
 | Method | Description |
 |--------|-------------|
 | `run_duration()` | Get the elapsed duration. |
+| `total_ticket_duration()` / `avg_ticket_duration()` | Get the total and average time from creation to resolution. |
+| `total_work_duration()` / `avg_work_duration()` | Get the total and average time an agent held a ticket. |
+| `tickets_created()` / `tickets_finished()` / `tickets_failed()` | Get the ticket counts by outcome. |
 | `tickets_success_rate()` | Get `finished / (finished + failed)`. |
+| `turns()` / `requests()` | Get how many turns ran and how many responses arrived. |
+| `tool_calls()` / `errors()` | Get the tool-call count and the failed-request count. |
 | `input_tokens()` / `output_tokens()` | Get token counts across requests. |
 | `tool_stats()` | Get per-tool call and failure counts. |
 | `file_stats()` | Get per-filepath open and failure counts. |
@@ -603,6 +614,7 @@ for name, stat in stats.tool_stats().items():
 | `usage_history(ticket_key)` | Get a ticket's token usage. |
 | `event_counts()` | Get per-event counts. |
 | `stats_for_label(label)` | Get statistics scoped to one label. |
+| `stats_for_agent(name)` | Get statistics scoped to one agent. |
 
 See [`Stats`](https://docs.rs/agentwerk/latest/agentwerk/agents/stats/struct.Stats.html).
 
@@ -627,7 +639,9 @@ bob = Agent().knowledge(store)
 |--------|-------------|
 | `index()` | Get the index, which is injected into the agent prompt. |
 | `index_char_limit(count)` | Limit the index size. |
+| `get_index_char_limit()` | Get the index size limit in force. |
 | `pages()` | Get the page collection for reading and writing pages. |
+| `pages().list()` | Get every page in the store. |
 | `clear()` | Remove every page from the store. |
 
 Programmatically create entries:
@@ -682,4 +696,4 @@ tickets.start()
 
 ## Development
 
-See [DEVELOPMENT.md](../../DEVELOPMENT.md).
+See [DEVELOPMENT.md](https://github.com/canvascomputing/agentwerk/blob/main/DEVELOPMENT.md).

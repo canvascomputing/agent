@@ -13,14 +13,14 @@ use pyo3::prelude::*;
 use crate::convert::{runtime_error, value_to_py};
 
 /// Where the numbers come from. The run-wide statistics live inside the ticket
-/// system, so holding the system is what keeps them alive; a label slice is its
-/// own shared value.
+/// system, so holding the system is what keeps them alive; a nested slice is
+/// its own shared value.
 enum Source {
     Run(Arc<TicketSystem>),
-    Label(Arc<Stats>),
+    Slice(Arc<Stats>),
 }
 
-/// Statistics for a run, or for one label within it.
+/// Statistics for a run, or for one label or agent within it.
 #[pyclass(name = "Stats")]
 pub struct PyStats {
     source: Source,
@@ -36,7 +36,7 @@ impl PyStats {
     fn get(&self) -> &Stats {
         match &self.source {
             Source::Run(system) => system.stats(),
-            Source::Label(stats) => stats,
+            Source::Slice(stats) => stats,
         }
     }
 }
@@ -47,7 +47,16 @@ impl PyStats {
     /// on a slice, since run timing stays global.
     fn stats_for_label(&self, label: &str) -> PyStats {
         PyStats {
-            source: Source::Label(self.get().stats_for_label(label)),
+            source: Source::Slice(self.get().stats_for_label(label)),
+        }
+    }
+
+    /// Statistics scoped to one agent, by the name it was registered under.
+    /// `tickets_created()` counts the tickets that agent filed. The rest count
+    /// the tickets it claimed. Tickets the host filed report as `user`.
+    fn stats_for_agent(&self, agent_name: &str) -> PyStats {
+        PyStats {
+            source: Source::Slice(self.get().stats_for_agent(agent_name)),
         }
     }
 

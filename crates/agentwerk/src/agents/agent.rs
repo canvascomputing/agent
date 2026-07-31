@@ -719,7 +719,7 @@ mod tests {
             ..Policies::default()
         };
         let stats = Stats::new();
-        stats.record_event(&EventKind::TurnStarted, "", &[]);
+        stats.record_event(&EventKind::TurnStarted, "", &[], "");
         stats.record_event(
             &EventKind::RequestFinished {
                 model: "m".into(),
@@ -730,6 +730,7 @@ mod tests {
             },
             "",
             &[],
+            "",
         );
 
         // The exact rendering is pinned in `prompts`; what matters here is

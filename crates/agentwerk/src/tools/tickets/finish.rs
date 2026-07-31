@@ -155,10 +155,10 @@ impl ToolLike for FinishTool {
             // already `Todo` when the parent leaves the queue, so a
             // concurrent `pending_count()` poll never reads 0 and `finish()`
             // cannot drain the chain mid-handover. `parent_key` is resolved
-            // and `InProgress`, so `set_finished` cannot miss it and leave
+            // and `InProgress`, so `set_finished_by` cannot miss it and leave
             // the inserted child orphaned.
             let child_key = ticket_system.insert(child, agent.clone());
-            if let Err(e) = ticket_system.set_finished(&parent_key, &agent) {
+            if let Err(e) = ticket_system.set_finished_by(&parent_key, &agent) {
                 return Ok(ToolResult::error(super::ticket_error_message(e)));
             }
 
