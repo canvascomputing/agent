@@ -163,7 +163,7 @@ Seven rules the surface table below never repeats.
 | `Stats::file_stats()` | `Stats.file_stats()` |
 | `Stats::knowledge_stats()` | `Stats.knowledge_stats()` |
 | `Stats::model_stats()` | `Stats.model_stats()` |
-| `Stats::turns()`, `::requests()`, `::tool_calls()`, `::errors()` | Same names. |
+| `Stats::turns()`, `::requests()`, `::tool_calls()`, `::requests_failed()` | Same names. |
 | `Stats::event_counts()` | `Stats.event_counts()` |
 | `Stats::input_tokens()`, `::output_tokens()` | Same names. |
 | `Stats::tickets_created()`, `::tickets_finished()`, `::tickets_failed()` | Same names. |
@@ -173,9 +173,9 @@ Seven rules the surface table below never repeats.
 | `Stats::total_work_duration()`, `::avg_work_duration()` | Same names. |
 | `serde_json::to_value(&stats)` | `Stats.to_dict()`: Python cannot call `serde`, so reaching the `stats.json` shape needs a method. |
 | `ToolStat { calls, not_found, execution_failed, schema_failed }` | Same fields, plus the same `errors()` and `error_rate()` methods. |
-| `FileStat { opens, failed }` | Same fields. |
-| `KnowledgeStat { writes, reads, removes, lists, misses }` | Same fields. |
-| `ModelStat { requests, input_tokens, output_tokens }` | Same fields. |
+| `FileStat { opens, failed }` | Same, including `errors()` and `error_rate()`. |
+| `KnowledgeStat { writes, reads, removes, lists, failed }` | Same, including `errors()` and `error_rate()`. |
+| `ModelStat { requests, failed, input_tokens, output_tokens }` | Same, including `errors()` and `error_rate()`. |
 | `TokenUsage` | A dict, as returned by `Stats.token_usage()`. |
 | **Schema** | |
 | `Schema::parse(document)` | `Schema(document)` |

@@ -615,12 +615,12 @@ for name, stat in stats.tool_stats().items():
 | `tickets_created()` / `tickets_finished()` / `tickets_failed()` | Get the ticket counts by outcome. |
 | `tickets_success_rate()` | Get `finished / (finished + failed)`. |
 | `turns()` / `requests()` | Get how many turns ran and how many responses arrived. |
-| `tool_calls()` / `errors()` | Get the tool-call count and the failed-request count. |
+| `tool_calls()` / `requests_failed()` | Get the tool-call count and the failed-request count. |
 | `input_tokens()` / `output_tokens()` | Get token counts across requests. |
 | `tool_stats()` | Get per-tool call and failure counts. |
 | `file_stats()` | Get per-filepath open and failure counts. |
-| `knowledge_stats()` | Get Knowledge usage: write, read, remove, list, and miss counts. |
-| `model_stats()` | Get per-model requests and token usage. |
+| `knowledge_stats()` | Get Knowledge usage: write, read, remove, list, and failure counts. |
+| `model_stats()` | Get per-model requests, failures, and token usage. |
 | `token_usage(ticket_key)` | Get a ticket's token usage, oldest first. |
 | `event_counts()` | Get per-event counts. |
 | `stats_for_label(label)` | Get statistics scoped to one label. |

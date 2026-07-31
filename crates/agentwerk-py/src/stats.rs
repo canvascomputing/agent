@@ -116,8 +116,8 @@ impl PyStats {
         self.get().tool_calls()
     }
 
-    fn errors(&self) -> u64 {
-        self.get().errors()
+    fn requests_failed(&self) -> u64 {
+        self.get().requests_failed()
     }
 
     /// Get per-event counts, keyed by event name.
@@ -257,6 +257,16 @@ impl PyFileStat {
         self.inner.failed
     }
 
+    /// Get the total failures.
+    fn errors(&self) -> u64 {
+        self.inner.errors()
+    }
+
+    /// Get `errors / opens`, or `None` when the path was never named.
+    fn error_rate(&self) -> Option<f64> {
+        self.inner.error_rate()
+    }
+
     fn __repr__(&self) -> String {
         format!(
             "FileStat(opens={}, failed={})",
@@ -293,10 +303,20 @@ impl PyKnowledgeStat {
         self.inner.lists
     }
 
-    /// Reads and removes naming a page the store does not have.
+    /// Attempts that did not go through, across the other four counts.
     #[getter]
-    fn misses(&self) -> u64 {
-        self.inner.misses
+    fn failed(&self) -> u64 {
+        self.inner.failed
+    }
+
+    /// Get the total failures.
+    fn errors(&self) -> u64 {
+        self.inner.errors()
+    }
+
+    /// Get `errors / attempts`, or `None` when the pages were never touched.
+    fn error_rate(&self) -> Option<f64> {
+        self.inner.error_rate()
     }
 
     fn __repr__(&self) -> String {
@@ -320,6 +340,12 @@ impl PyModelStat {
         self.inner.requests
     }
 
+    /// Requests that came back as a failure and were not retried.
+    #[getter]
+    fn failed(&self) -> u64 {
+        self.inner.failed
+    }
+
     #[getter]
     fn input_tokens(&self) -> u64 {
         self.inner.input_tokens
@@ -328,6 +354,16 @@ impl PyModelStat {
     #[getter]
     fn output_tokens(&self) -> u64 {
         self.inner.output_tokens
+    }
+
+    /// Get the total failures.
+    fn errors(&self) -> u64 {
+        self.inner.errors()
+    }
+
+    /// Get `errors / requests`, or `None` when the model was never asked.
+    fn error_rate(&self) -> Option<f64> {
+        self.inner.error_rate()
     }
 
     fn __repr__(&self) -> String {

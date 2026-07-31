@@ -246,10 +246,10 @@ fn print_stats(tickets: &TicketQueue) {
         stats.output_tokens(),
     );
     eprintln!(
-        "  Activity : {} requests · {} tool calls · {} errors",
+        "  Activity : {} requests · {} tool calls · {} failed requests",
         stats.requests(),
         stats.tool_calls(),
-        stats.errors(),
+        stats.requests_failed(),
     );
 }
 

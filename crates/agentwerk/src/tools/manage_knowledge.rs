@@ -126,7 +126,12 @@ impl ToolLike for ManageKnowledgeTool {
                             });
                             Ok(ToolResult::success(usage_line("page written", &self.store)))
                         }
-                        Err(why) => Ok(ToolResult::error(why.to_string())),
+                        Err(why) => {
+                            record(EventKind::KnowledgeFailed {
+                                op: KnowledgeOp::Write,
+                            });
+                            Ok(ToolResult::error(why.to_string()))
+                        }
                     }
                 }
 
@@ -143,7 +148,9 @@ impl ToolLike for ManageKnowledgeTool {
                             Ok(ToolResult::success(page.content))
                         }
                         Err(_) => {
-                            record(EventKind::KnowledgeMissed);
+                            record(EventKind::KnowledgeFailed {
+                                op: KnowledgeOp::Read,
+                            });
                             Ok(ToolResult::success(format!(
                                 "No page found for `{slug}`. Check the knowledge index before reading: only slugs listed there exist."
                             )))
@@ -164,7 +171,9 @@ impl ToolLike for ManageKnowledgeTool {
                             Ok(ToolResult::success(usage_line("page removed", &self.store)))
                         }
                         Err(why) => {
-                            record(EventKind::KnowledgeMissed);
+                            record(EventKind::KnowledgeFailed {
+                                op: KnowledgeOp::Remove,
+                            });
                             Ok(ToolResult::error(why.to_string()))
                         }
                     }
@@ -440,8 +449,9 @@ mod tests {
         let k = tickets.stats().knowledge_stats();
         assert_eq!(k.writes, 1);
         assert_eq!(k.lists, 1);
-        assert_eq!(k.reads, 1, "only the present slug counts as a read");
-        assert_eq!(k.misses, 1, "the read of an absent slug is a miss");
+        assert_eq!(k.reads, 2, "both slugs were read, present or not");
+        assert_eq!(k.failed, 1, "the read of an absent slug did not go through");
         assert_eq!(k.removes, 1);
+        assert_eq!(k.errors(), 1);
     }
 }

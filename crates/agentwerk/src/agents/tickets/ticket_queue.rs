@@ -293,7 +293,7 @@ impl TicketQueue {
 
     /// Read every failure together with the ticket it happened in:
     /// `TicketFailed`, `RequestFailed`, `ToolCallFailed`, `FileOpenFailed`,
-    /// and `CompactionFailed`.
+    /// `KnowledgeFailed`, and `CompactionFailed`.
     ///
     /// Match on `event.kind` to tell a failure that ends the ticket from one
     /// the agent works around. Each call copies the ticket's replies, so an
