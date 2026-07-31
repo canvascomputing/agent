@@ -147,11 +147,11 @@ Two layers of state exist. The per-ticket replies live on `Ticket::replies`: eve
 
 - `TicketQueue::emit` forwards every event to `Stats::record_event(kind, key, labels)` before firing observers. The event's `EventKind::name()` keys a per-kind count map, so a new variant is counted the moment it names itself in that exhaustive match, with no statistics code to add.
 - The named accessors are lookups into that map: `turns()` reads `turn_started`, `requests()` reads `request_finished`, `tool_calls()` reads `tool_call_started`, `errors()` reads `request_failed`. `event_counts()` exposes the whole map.
-- Payload-bearing measures keep explicit arms in `record_event`: token sums and usage history from `RequestFinished`, per-tool tallies from `ToolCallStarted` and `ToolCallFailed`, per-path tallies from `FileOpenFinished` and `FileOpenFailed`, knowledge tallies from `KnowledgeUsed` and `KnowledgeMissed`.
+- Payload-bearing measures keep explicit arms in `record_event`: token sums and the per-ticket token usage from `RequestFinished`, per-tool tallies from `ToolCallStarted` and `ToolCallFailed`, per-path tallies from `FileOpenFinished` and `FileOpenFailed`, knowledge tallies from `KnowledgeUsed` and `KnowledgeMissed`.
 - The ticket lifecycle (`record_created`, `record_started`, `record_finished`, `record_failed`) is written directly by the store: transitions carry durations that events do not, and host-side mutations have no agent loop attached.
 - Reads happen on `Stats` directly through inherent accessors such as `turns()`, `tickets_finished()`, `run_duration()`, and `tickets_success_rate()`.
 - `Stats::stats_for_label(label)` returns a nested `Stats` slice scoped to one label. `record_event` mirrors the count and token measures onto each slice the ticket carries; `run_duration()` is `None` on a slice, since elapsed run duration stays global.
-- The subject maps (`tool_stats()`, `file_stats()`, `knowledge_stats()`) are recorded global-only, like `usage_history`; per-label slices stay empty there.
+- The subject maps (`tool_stats()`, `file_stats()`, `knowledge_stats()`, `model_stats()`) are recorded global-only, like `token_usage()`; per-label slices stay empty there.
 
 ## Persistence Routes Through Two Traits
 

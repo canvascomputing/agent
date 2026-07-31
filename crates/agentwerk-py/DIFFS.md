@@ -158,7 +158,7 @@ Seven rules the surface table below never repeats.
 | **Statistics** | |
 | `Stats::stats_for_label(label)` | `Stats.stats_for_label(label)` |
 | `Stats::stats_for_agent(name)` | `Stats.stats_for_agent(agent_name)` |
-| `Stats::usage_history(key)` | `Stats.usage_history(ticket_key)` |
+| `Stats::token_usage(key)` | `Stats.token_usage(ticket_key)` |
 | `Stats::tool_stats()` | `Stats.tool_stats()` |
 | `Stats::file_stats()` | `Stats.file_stats()` |
 | `Stats::knowledge_stats()` | `Stats.knowledge_stats()` |
@@ -176,7 +176,7 @@ Seven rules the surface table below never repeats.
 | `FileStat { opens, failed }` | Same fields. |
 | `KnowledgeStat { writes, reads, removes, lists, misses }` | Same fields. |
 | `ModelStat { requests, input_tokens, output_tokens }` | Same fields. |
-| `TokenUsage` | A dict, as returned by `Stats.usage_history()`. |
+| `TokenUsage` | A dict, as returned by `Stats.token_usage()`. |
 | **Schema** | |
 | `Schema::parse(document)` | `Schema(document)` |
 | `Schema::validate(value)` | `Schema.validate(value)` |
