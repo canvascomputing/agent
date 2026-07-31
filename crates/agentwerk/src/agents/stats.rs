@@ -1501,6 +1501,29 @@ mod tests {
         let labels = value["labels"].as_object().unwrap();
         assert_eq!(labels["scan"]["turns"], 1);
         assert_eq!(labels["scan"]["input_tokens"], 40);
+        // A slice carries its own subject sections, and `load` reads them
+        // back through the same path the run-wide statistics use.
+        assert_eq!(labels["scan"]["models"]["m"]["requests"], 1);
+    }
+
+    #[test]
+    fn slice_subject_maps_round_trip_through_save_load() {
+        let dir = crate::test_util::TempDir::new().unwrap();
+
+        let s = Stats::new();
+        s.record_event(&tool_call(), "KEY", &["scan".into()], "scout");
+        s.record_event(&provider_error(), "KEY", &["scan".into()], "scout");
+
+        use crate::persistence::Persist;
+        s.save(dir.path()).unwrap();
+        let restored = Stats::load(dir.path()).unwrap();
+
+        let label = restored.stats_for_label("scan");
+        assert_eq!(label.tool_stats()["bash"].calls, 1);
+        assert_eq!(label.model_stats()["m"].failed, 1);
+        let agent = restored.stats_for_agent("scout");
+        assert_eq!(agent.tool_stats()["bash"].calls, 1);
+        assert_eq!(agent.model_stats()["m"].failed, 1);
     }
 
     #[test]
