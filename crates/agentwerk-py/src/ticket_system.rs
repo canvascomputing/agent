@@ -1,7 +1,5 @@
-//! The ticket system as Python sees it: register agents, enqueue work, set
-//! policies, install callbacks, drive the run, and read results. The Rust
-//! surface is `&self -> &Self` on a shared `Arc`, so these methods take
-//! `PyRef<Self>` and return it for chaining.
+//! The ticket system as Python sees it: add agents, submit work, set limits,
+//! install handlers, drive execution, and read results.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -20,7 +18,8 @@ use crate::schema::PySchema;
 use crate::stats::PyStats;
 use crate::ticket::PyTicket;
 
-/// A shared queue one or more agents work. Wraps `Arc<TicketSystem>`.
+/// The core data structure of agentwerk, coordinating complex work across
+/// agents.
 #[pyclass(name = "TicketSystem")]
 pub struct PyTicketSystem {
     pub inner: Arc<TicketSystem>,
@@ -35,144 +34,152 @@ impl PyTicketSystem {
         }
     }
 
-    /// Reopen a session directory written by a prior run.
+    /// Continue a session from a directory written earlier.
     #[staticmethod]
     fn load(dir: &str) -> PyResult<Self> {
         let inner = TicketSystem::load(dir).map_err(runtime_error)?;
         Ok(PyTicketSystem { inner })
     }
 
-    /// Register an agent. Drains any work it had queued privately into this
-    /// system and adds it to the dispatch set.
+    /// Add an agent to this ticket system, moving any tickets it queued on its
+    /// own across first.
     fn agent<'py>(slf: PyRef<'py, Self>, agent: PyRef<'_, PyAgent>) -> PyResult<PyRef<'py, Self>> {
         slf.inner.agent(agent.built()?.clone());
         Ok(slf)
     }
 
-    /// Enqueue a task (any JSON-serializable value) and return its ticket key.
+    /// Submit a task and return its ticket key.
     fn task(slf: PyRef<'_, Self>, task: &Bound<'_, PyAny>) -> PyResult<String> {
         Ok(slf.inner.task(py_to_value(task)?))
     }
 
-    /// Enqueue a fully-built ticket and return its key.
+    /// Submit a `Ticket` with custom labels or schema, and return its key.
     fn ticket(slf: PyRef<'_, Self>, ticket: PyRef<'_, PyTicket>) -> String {
         slf.inner.ticket(ticket.to_ticket())
     }
 
-    /// Append a reply to a paused ticket, driving its next turn.
+    /// Add a reply to a ticket, which drives its next turn.
     fn reply<'py>(slf: PyRef<'py, Self>, key: &str, content: &str) -> PyRef<'py, Self> {
         slf.inner.reply(key, content);
         slf
     }
 
-    /// Attach a result and finish a ticket from outside the run. Raises when
-    /// the key is unknown or the result misses the ticket's schema.
+    /// Finish a ticket with a result, from outside the execution.
+    ///
+    /// Raises when the key is unknown, or when the result misses the ticket's
+    /// schema.
     fn set_finished(&self, key: &str, result: &Bound<'_, PyAny>) -> PyResult<()> {
         self.inner
             .set_finished(key, py_to_value(result)?)
             .map_err(runtime_error)
     }
 
-    /// Fail a ticket from outside the run. Raises when the key is unknown.
+    /// Fail a ticket, from outside the execution. Raises when the key is unknown.
     fn set_failed(&self, key: &str) -> PyResult<()> {
         self.inner.set_failed(key).map_err(runtime_error)
     }
 
+    /// Limit the total number of turns.
     fn max_turns(slf: PyRef<'_, Self>, n: u32) -> PyRef<'_, Self> {
         slf.inner.max_turns(n);
         slf
     }
 
+    /// Limit the total input tokens.
     fn max_input_tokens(slf: PyRef<'_, Self>, n: u64) -> PyRef<'_, Self> {
         slf.inner.max_input_tokens(n);
         slf
     }
 
+    /// Limit the total output tokens.
     fn max_output_tokens(slf: PyRef<'_, Self>, n: u64) -> PyRef<'_, Self> {
         slf.inner.max_output_tokens(n);
         slf
     }
 
+    /// Limit the output tokens of a single request.
     fn max_request_tokens(slf: PyRef<'_, Self>, n: u32) -> PyRef<'_, Self> {
         slf.inner.max_request_tokens(n);
         slf
     }
 
+    /// Limit how often a result may fail its schema before the ticket fails.
     fn max_schema_retries(slf: PyRef<'_, Self>, n: u32) -> PyRef<'_, Self> {
         slf.inner.max_schema_retries(n);
         slf
     }
 
+    /// Limit how often a failing request is retried.
     fn max_request_retries(slf: PyRef<'_, Self>, n: u32) -> PyRef<'_, Self> {
         slf.inner.max_request_retries(n);
         slf
     }
 
-    /// Total elapsed-time cap, in seconds.
+    /// Limit the total elapsed duration, in seconds.
     fn max_time(slf: PyRef<'_, Self>, seconds: f64) -> PyRef<'_, Self> {
         slf.inner.max_time(Duration::from_secs_f64(seconds));
         slf
     }
 
-    /// Delay between request retries, in seconds.
+    /// Wait this long between retries, in seconds.
     fn request_retry_delay(slf: PyRef<'_, Self>, seconds: f64) -> PyRef<'_, Self> {
         slf.inner
             .request_retry_delay(Duration::from_secs_f64(seconds));
         slf
     }
 
-    /// Turn cap in force, or `None` when the run is unlimited.
+    /// Get the turn limit, or `None` when there is none.
     fn get_max_turns(&self) -> Option<u32> {
         self.inner.get_max_turns()
     }
 
-    /// Total input-token cap in force, or `None`.
+    /// Get the input-token limit, or `None` when there is none.
     fn get_max_input_tokens(&self) -> Option<u64> {
         self.inner.get_max_input_tokens()
     }
 
-    /// Total output-token cap in force, or `None`.
+    /// Get the output-token limit, or `None` when there is none.
     fn get_max_output_tokens(&self) -> Option<u64> {
         self.inner.get_max_output_tokens()
     }
 
-    /// Per-request output-token cap in force, or `None`.
+    /// Get the per-request output-token limit, or `None` when there is none.
     fn get_max_request_tokens(&self) -> Option<u32> {
         self.inner.get_max_request_tokens()
     }
 
-    /// Schema-retry cap in force, 10 until it is overridden.
+    /// Get the schema-retry limit, 10 until it is changed.
     fn get_max_schema_retries(&self) -> Option<u32> {
         self.inner.get_max_schema_retries()
     }
 
-    /// Request-retry cap in force, 10 until it is overridden.
+    /// Get the request-retry limit, 10 until it is changed.
     fn get_max_request_retries(&self) -> u32 {
         self.inner.get_max_request_retries()
     }
 
-    /// Total elapsed-time cap in force, in seconds, or `None`.
+    /// Get the elapsed-duration limit in seconds, or `None` when there is none.
     fn get_max_time(&self) -> Option<f64> {
         self.inner.get_max_time().map(|d| d.as_secs_f64())
     }
 
-    /// Delay between request retries in force, in seconds.
+    /// Get the delay between retries, in seconds.
     fn get_request_retry_delay(&self) -> f64 {
         self.inner.get_request_retry_delay().as_secs_f64()
     }
 
-    /// Directory the session's logs and state are written to.
+    /// Define where a session is stored.
     fn dir<'py>(slf: PyRef<'py, Self>, dir: &str) -> PyRef<'py, Self> {
         slf.inner.dir(dir);
         slf
     }
 
-    /// Directory the system writes to, `./.agentwerk` until `dir` overrides it.
+    /// Get the session directory, `./.agentwerk` until `dir` changes it.
     fn get_dir(&self) -> String {
         self.inner.get_dir().display().to_string()
     }
 
-    /// Register a default result schema for every ticket carrying `label`.
+    /// Register a schema every ticket of that label validates against.
     fn schema_for_label<'py>(
         slf: PyRef<'py, Self>,
         label: &str,
@@ -182,7 +189,8 @@ impl PyTicketSystem {
         slf
     }
 
-    /// Install an event handler. Replaces the default stderr logger.
+    /// Read every event as it is emitted. It replaces the handler that prints to
+    /// stderr.
     fn on_event<'py>(slf: PyRef<'py, Self>, callback: Py<PyAny>) -> PyRef<'py, Self> {
         slf.inner.on_event(move |event: &Event| {
             Python::attach(|py| {
@@ -195,8 +203,8 @@ impl PyTicketSystem {
         slf
     }
 
-    /// Call `callback(ticket, result)` for every finished ticket, with the
-    /// result already validated against the ticket's schema.
+    /// Read every finished ticket together with its result, already validated
+    /// against the ticket's schema.
     fn on_result<'py>(slf: PyRef<'py, Self>, callback: Py<PyAny>) -> PyRef<'py, Self> {
         slf.inner.on_result(move |ticket: &Ticket, result: &Value| {
             Python::attach(|py| {
@@ -208,9 +216,9 @@ impl PyTicketSystem {
         slf
     }
 
-    /// Call `callback(event, ticket)` for every failure: a failed ticket, a
-    /// failed tool call, a failed request, a file that would not open, or
-    /// compaction that could not finish. Read `event.kind` to tell them apart.
+    /// Read every failure together with the ticket it happened in: a failed
+    /// ticket, tool call, or request, a file that would not open, or compaction
+    /// that could not finish. Read `event.kind` to tell them apart.
     fn on_failure<'py>(slf: PyRef<'py, Self>, callback: Py<PyAny>) -> PyRef<'py, Self> {
         slf.inner.on_failure(move |event: &Event, ticket: &Ticket| {
             Python::attach(|py| {
@@ -222,7 +230,7 @@ impl PyTicketSystem {
         slf
     }
 
-    /// Cancel the run when `predicate(event)` first returns truthy.
+    /// Stop execution when an event matches.
     fn cancel_on_event<'py>(slf: PyRef<'py, Self>, predicate: Py<PyAny>) -> PyRef<'py, Self> {
         slf.inner.cancel_on_event(move |event: &Event| {
             Python::attach(|py| {
@@ -236,8 +244,7 @@ impl PyTicketSystem {
         slf
     }
 
-    /// Cancel the run when `predicate(ticket, result)` first returns truthy
-    /// for a finished ticket.
+    /// Stop execution when a finished result matches.
     fn cancel_on_result<'py>(slf: PyRef<'py, Self>, predicate: Py<PyAny>) -> PyRef<'py, Self> {
         slf.inner
             .cancel_on_result(move |ticket: &Ticket, result: &Value| {
@@ -250,8 +257,7 @@ impl PyTicketSystem {
         slf
     }
 
-    /// Cancel the run when `predicate(event, ticket)` first returns truthy
-    /// for a failure.
+    /// Stop execution when a failure matches.
     fn cancel_on_failure<'py>(slf: PyRef<'py, Self>, predicate: Py<PyAny>) -> PyRef<'py, Self> {
         slf.inner
             .cancel_on_failure(move |event: &Event, ticket: &Ticket| {
@@ -264,8 +270,8 @@ impl PyTicketSystem {
         slf
     }
 
-    /// Cancel the run when `awaitable` resolves. Its result is discarded;
-    /// only completion matters.
+    /// Stop execution when another task you supply finishes. Its result is
+    /// discarded; only finishing matters.
     fn cancel_on<'py>(slf: PyRef<'py, Self>, awaitable: Py<PyAny>) -> PyResult<PyRef<'py, Self>> {
         let future = Python::attach(|py| {
             pyo3_async_runtimes::tokio::into_future(awaitable.bind(py).clone())
@@ -278,8 +284,8 @@ impl PyTicketSystem {
         Ok(slf)
     }
 
-    /// After every event, call `make(event)`; a returned `Ticket` is
-    /// enqueued, `None` enqueues nothing.
+    /// Enqueue a follow-up ticket from any event. Returning `None` adds
+    /// nothing.
     fn create_ticket_on_event<'py>(slf: PyRef<'py, Self>, make: Py<PyAny>) -> PyRef<'py, Self> {
         slf.inner.create_ticket_on_event(move |event: &Event| {
             Python::attach(|py| {
@@ -290,8 +296,8 @@ impl PyTicketSystem {
         slf
     }
 
-    /// After each finished ticket, call `make(ticket, result)`; a returned
-    /// `Ticket` is enqueued, `None` enqueues nothing.
+    /// Enqueue a follow-up ticket from a finished ticket. Returning `None` adds
+    /// nothing.
     fn create_ticket_on_result<'py>(slf: PyRef<'py, Self>, make: Py<PyAny>) -> PyRef<'py, Self> {
         slf.inner
             .create_ticket_on_result(move |ticket: &Ticket, result: &Value| {
@@ -303,9 +309,10 @@ impl PyTicketSystem {
         slf
     }
 
-    /// After each failure, call `make(event, ticket)`; a returned `Ticket` is
-    /// enqueued, `None` enqueues nothing. The retry path: count the attempts
-    /// yourself, or a ticket that always fails re-queues itself forever.
+    /// Enqueue a retry for a ticket that failed. Returning `None` adds nothing.
+    ///
+    /// Count the attempts yourself, or a ticket that fails every time re-queues
+    /// itself forever.
     fn create_ticket_on_failure<'py>(slf: PyRef<'py, Self>, make: Py<PyAny>) -> PyRef<'py, Self> {
         slf.inner
             .create_ticket_on_failure(move |event: &Event, ticket: &Ticket| {
@@ -317,21 +324,22 @@ impl PyTicketSystem {
         slf
     }
 
-    /// Cancel every ticket carrying `label`.
+    /// Stop one label's agents while the rest keep working.
     fn cancel_label<'py>(slf: PyRef<'py, Self>, label: &str) -> PyRef<'py, Self> {
         slf.inner.cancel_label(label);
         slf
     }
 
-    /// True when `label` names a pool called off via `cancel_label`. Ask before
-    /// minting follow-up work: a ticket carrying a cancelled label is never
-    /// claimed.
+    /// Check whether one label's agents have been stopped.
+    ///
+    /// Ask before creating follow-up work: a ticket carrying a stopped label is
+    /// never claimed.
     fn label_cancelled(&self, label: &str) -> bool {
         self.inner.label_cancelled(label)
     }
 
-    /// Call off `label`'s agents when `predicate(event)` first returns
-    /// truthy. Only that pool stops; other labels keep going.
+    /// Stop one label's agents when an event matches, while the rest keep
+    /// working.
     fn cancel_label_on_event<'py>(
         slf: PyRef<'py, Self>,
         label: &str,
@@ -350,9 +358,8 @@ impl PyTicketSystem {
         slf
     }
 
-    /// Call off `label`'s agents when a finished ticket makes
-    /// `predicate(ticket, result)` truthy. Only that pool stops; other labels
-    /// keep going.
+    /// Stop one label's agents when a finished result matches, while the rest
+    /// keep working.
     fn cancel_label_on_result<'py>(
         slf: PyRef<'py, Self>,
         label: &str,
@@ -369,8 +376,8 @@ impl PyTicketSystem {
         slf
     }
 
-    /// Call off `label`'s agents when a failure makes `predicate(event,
-    /// ticket)` truthy. Only that pool stops; other labels keep going.
+    /// Stop one label's agents when a failure matches, while the rest keep
+    /// working.
     fn cancel_label_on_failure<'py>(
         slf: PyRef<'py, Self>,
         label: &str,
@@ -387,13 +394,13 @@ impl PyTicketSystem {
         slf
     }
 
-    /// Name of the model the bound agent named `agent_name` runs, or `None`.
-    /// `Trajectory.from_ticket` wants it.
+    /// Get the model that agent runs, or `None` when no agent of that name is
+    /// added. `Trajectory.from_ticket` needs it.
     fn model_for_agent(&self, agent_name: &str) -> Option<String> {
         self.inner.model_for_agent(agent_name)
     }
 
-    /// The ticket with `key`, or `None`.
+    /// Get one ticket by key.
     fn get_ticket(&self, py: Python<'_>, key: &str) -> PyResult<Option<Py<PyTicket>>> {
         match self.inner.get_ticket(key) {
             Some(ticket) => Ok(Some(Py::new(py, PyTicket::from_ticket(&ticket))?)),
@@ -401,7 +408,7 @@ impl PyTicketSystem {
         }
     }
 
-    /// Every ticket, in creation order.
+    /// Get every ticket in creation order.
     fn tickets(&self, py: Python<'_>) -> PyResult<Vec<Py<PyTicket>>> {
         self.inner
             .tickets()
@@ -410,7 +417,7 @@ impl PyTicketSystem {
             .collect()
     }
 
-    /// Every ticket carrying `label`, in creation order, whatever its status.
+    /// Get every ticket carrying a specific label, whatever its status.
     fn tickets_for_label(&self, py: Python<'_>, label: &str) -> PyResult<Vec<Py<PyTicket>>> {
         self.inner
             .tickets_for_label(label)
@@ -419,7 +426,7 @@ impl PyTicketSystem {
             .collect()
     }
 
-    /// Every ticket for which `predicate(ticket)` is truthy.
+    /// Get every ticket matching a condition.
     fn find_tickets(&self, py: Python<'_>, predicate: Py<PyAny>) -> PyResult<Vec<Py<PyTicket>>> {
         self.inner
             .find_tickets(|ticket| ticket_predicate(&predicate, ticket))
@@ -428,7 +435,7 @@ impl PyTicketSystem {
             .collect()
     }
 
-    /// The first ticket for which `predicate(ticket)` is truthy, or `None`.
+    /// Get the earliest ticket matching a condition.
     fn find_ticket(&self, py: Python<'_>, predicate: Py<PyAny>) -> PyResult<Option<Py<PyTicket>>> {
         match self
             .inner
@@ -439,8 +446,8 @@ impl PyTicketSystem {
         }
     }
 
-    /// Await the first ticket for which `predicate(ticket)` is truthy. Resolves
-    /// to the ticket, or `None` if the run ends first.
+    /// Wait for one matching ticket instead of draining the queue. Gives back
+    /// `None` when execution ends first.
     fn wait_for_ticket<'py>(
         &self,
         py: Python<'py>,
@@ -458,9 +465,10 @@ impl PyTicketSystem {
         })
     }
 
-    /// Call `callback(event, ticket)` when a ticket starts, finishes, or
-    /// fails. The ticket arrives with its messages, so a handler can hand it
-    /// straight to `Trajectory.from_ticket`.
+    /// Read a ticket as it starts, finishes, or fails.
+    ///
+    /// It arrives with its messages, so a handler can pass it straight to
+    /// `Trajectory.from_ticket`.
     fn on_ticket<'py>(slf: PyRef<'py, Self>, callback: Py<PyAny>) -> PyRef<'py, Self> {
         slf.inner.on_ticket(move |event: &Event, ticket: &Ticket| {
             Python::attach(|py| {
@@ -474,14 +482,15 @@ impl PyTicketSystem {
         slf
     }
 
-    /// Rewrite or drop a ticket's replies before its next request.
-    /// `editor(events, replies)` receives the events since the ticket's
-    /// previous request and the current `Reply` list, and returns the new
-    /// list (or `None` to leave it unchanged). The editor must keep
-    /// tool_use/tool_result pairs matched. The edit persists across
-    /// resumption. An editor that raises prints its traceback and leaves the
-    /// replies untouched: this runs on an agent's worker thread, with no
-    /// Python frame to raise into.
+    /// Rewrite a ticket's replies before its next request.
+    ///
+    /// Your function receives the events since the ticket's previous request and
+    /// the current replies, and returns the new list, or `None` to change
+    /// nothing. Keep each `tool_use` paired with its `tool_result`. The edit is
+    /// permanent and survives the session being continued.
+    ///
+    /// Raising prints the traceback and leaves the replies alone: this runs on
+    /// an agent's own thread, with no Python frame to raise into.
     fn edit_replies_on_event<'py>(slf: PyRef<'py, Self>, editor: Py<PyAny>) -> PyRef<'py, Self> {
         slf.inner
             .edit_replies_on_event(move |events: &[Event], replies: &mut Vec<Reply>| {
@@ -505,11 +514,11 @@ impl PyTicketSystem {
         slf
     }
 
-    /// Rewrite or drop a ticket's replies now, without triggering a
-    /// request. `editor(replies)` receives the current `Reply` list and
-    /// returns the new one (or `None` to leave it unchanged). Persists the
-    /// edit in place; a missing ticket is a no-op. An editor that raises,
-    /// or returns something other than a list of `Reply`, raises here: this
+    /// Rewrite one ticket's replies now, without sending a request.
+    ///
+    /// Your function receives the current replies and returns the new ones, or
+    /// `None` to change nothing. A ticket that does not exist changes nothing.
+    /// Raising, or returning anything but a list of `Reply`, raises here: this
     /// call has a Python frame to unwind into, so it does not guess.
     fn edit_replies<'py>(
         slf: PyRef<'py, Self>,
@@ -544,7 +553,7 @@ impl PyTicketSystem {
         slf
     }
 
-    /// Run every queued ticket to completion. Awaitable.
+    /// Process every queued ticket, then return. Awaitable.
     fn finish<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = Arc::clone(&self.inner);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
@@ -561,19 +570,19 @@ impl PyTicketSystem {
         self.inner.is_cancelled()
     }
 
-    /// How the run ended (`"drained"`, `"cancelled"`, `"policy_violated(..)"`),
-    /// or `None` if it has not finished.
+    /// Check the reason for the finishing: `"drained"`, `"cancelled"`, or
+    /// `"policy_violated(..)"`. `None` until execution ends.
     fn finish_reason(&self) -> Option<String> {
         self.inner.finish_reason().map(|reason| reason.to_string())
     }
 
-    /// Run statistics: requests, tokens, ticket counts, and the per-tool,
-    /// per-file, per-label, and per-model breakdowns.
+    /// Get the execution statistics: requests, tokens, ticket counts, and the
+    /// per-tool, per-file, per-label, and per-model figures.
     fn stats(&self) -> PyStats {
         PyStats::for_run(Arc::clone(&self.inner))
     }
 
-    /// The most recent finished ticket's result, or `None`.
+    /// Get the most recent ticket result.
     fn last_result<'py>(&self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyAny>>> {
         match self.inner.last_result() {
             Some(value) => Ok(Some(value_to_py(py, &value)?)),
@@ -581,7 +590,7 @@ impl PyTicketSystem {
         }
     }
 
-    /// Every finished ticket's result, in creation order.
+    /// Get every ticket's result in creation order.
     fn results<'py>(&self, py: Python<'py>) -> PyResult<Vec<Bound<'py, PyAny>>> {
         self.inner
             .results()
@@ -590,7 +599,7 @@ impl PyTicketSystem {
             .collect()
     }
 
-    /// Finished results scoped to one label.
+    /// Get every ticket's result carrying a specific label.
     fn results_for_label<'py>(
         &self,
         py: Python<'py>,
@@ -604,8 +613,8 @@ impl PyTicketSystem {
     }
 }
 
-/// Call a Python callable with the `(ticket, result)` pair every `_on_result`
-/// hook hands over.
+/// Call a Python function with the ticket and result every `_on_result` hook
+/// hands over.
 fn call_with_result<'py>(
     py: Python<'py>,
     callable: &Py<PyAny>,
@@ -617,8 +626,8 @@ fn call_with_result<'py>(
     callable.bind(py).call1((view, value))
 }
 
-/// Call a Python callable with the `(event, ticket)` pair every `_on_failure`
-/// hook hands over.
+/// Call a Python function with the event and ticket every `_on_failure` hook
+/// hands over.
 fn call_with_ticket<'py>(
     py: Python<'py>,
     callable: &Py<PyAny>,
@@ -629,8 +638,8 @@ fn call_with_ticket<'py>(
     callable.bind(py).call1((to_py_event(event), view))
 }
 
-/// Read a ticket back out of what a `create_ticket_*` callable returned.
-/// `None`, or anything that is not a `Ticket`, enqueues nothing.
+/// Read a ticket back out of what a `create_ticket_*` function returned. `None`,
+/// or anything that is not a `Ticket`, adds nothing.
 fn built_ticket(produced: &Bound<'_, PyAny>) -> Option<Ticket> {
     if produced.is_none() {
         return None;
@@ -638,9 +647,8 @@ fn built_ticket(produced: &Bound<'_, PyAny>) -> Option<Ticket> {
     Some(produced.extract::<PyRef<PyTicket>>().ok()?.to_ticket())
 }
 
-/// Call a Python predicate with a ticket, reading back its truthiness. A
-/// conversion or Python error reads as `false` so a bad predicate never panics
-/// a worker thread.
+/// Ask a Python condition about a ticket. A conversion or Python error reads as
+/// false, so a broken condition never brings down an agent's thread.
 fn ticket_predicate(predicate: &Py<PyAny>, ticket: &Ticket) -> bool {
     Python::attach(|py| {
         Py::new(py, PyTicket::from_ticket(ticket))

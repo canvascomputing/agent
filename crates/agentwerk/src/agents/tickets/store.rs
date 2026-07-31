@@ -1,6 +1,5 @@
-//! Store mutations for [`TicketSystem`]: insertion, claiming,
-//! status transitions, reply appends, result attachment,
-//! in-place reply rewrites, and the matching observational events.
+//! Every change a [`TicketSystem`] makes to its tickets, and the events each
+//! change emits.
 
 use std::path::{Path, PathBuf};
 
@@ -32,7 +31,7 @@ fn max_existing_ticket_id(dir: &Path) -> u64 {
 }
 
 impl TicketSystem {
-    /// Insert `ticket`, stamping system fields. The ticket is always born
+    /// Insert `ticket`, filling in the fields agentwerk owns. The ticket is always born
     /// `Todo`; to pin it to a specific agent, label it with the agent's
     /// name. Returns the inserted ticket's key.
     pub(crate) fn insert(&self, mut ticket: Ticket, reporter: String) -> String {
@@ -95,7 +94,7 @@ impl TicketSystem {
     }
 
     /// Append one JSON line to `<dir>/tickets.jsonl` and refresh
-    /// `<dir>/stats.json` from the current counters. Both writes happen
+    /// `<dir>/stats.json` from the current statistics. Both writes happen
     /// under the same lock so a concurrent reader sees consistent
     /// observational state. Errors are swallowed: persistence is
     /// best-effort, not load-bearing for run correctness.
@@ -844,7 +843,7 @@ mod tests {
         assert_eq!(lines[1]["parent"], "TICKET-1");
     }
 
-    // ---- resumption: TicketSystem::load ----
+    // Resumption: TicketSystem::load
 
     #[test]
     fn load_creates_tickets_dir_when_missing() {

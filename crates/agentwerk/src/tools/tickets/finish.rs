@@ -1,9 +1,5 @@
-//! Single-purpose tool for finishing a ticket. Validates the agent's
-//! result against the ticket's schema (when set), appends an NDJSON
-//! line to `<dir>/results.jsonl`, attaches the `TicketResult`
-//! to the ticket, and transitions the ticket to `Finished`. An optional
-//! `handover` additionally inserts a child ticket pinned to the named
-//! agent or scope, so finishing and chaining happen in one call.
+//! Lets an agent write the result for its ticket and mark it finished, handing
+//! the work on to another agent in the same call when it needs to.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -501,7 +497,7 @@ mod tests {
         assert_eq!(seen_tickets, expected_keys);
     }
 
-    // ---- handover ----
+    // Handover
 
     fn one_ticket_in(agent: &str, dir: PathBuf) -> (Arc<TicketSystem>, String) {
         let sys = TicketSystem::new();
@@ -925,7 +921,7 @@ mod tests {
     #[tokio::test]
     async fn substitution_is_single_pass() {
         // A `result` that itself contains the literal text `{parent_key}`
-        // must NOT be re-expanded — the substitution pass runs once
+        // must NOT be re-expanded: the substitution pass runs once
         // per placeholder, not recursively.
         let dir = crate::test_util::TempDir::new().unwrap();
         let (sys, parent_key) = one_ticket_in("alice", dir.path().to_path_buf());

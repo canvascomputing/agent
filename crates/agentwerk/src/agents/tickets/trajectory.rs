@@ -1,4 +1,4 @@
-//! The [`Trajectory`] value type: a ticket's transcript captured as a
+//! The [`Trajectory`] value type: a ticket's replies captured as a
 //! single training example, plus its disk persistence.
 
 use std::io;
@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use super::{Author, Reply, ReplyContent, Ticket};
 
 /// A finished agent run reduced to the one thing a training example needs:
-/// the message transcript, in agentwerk's own [`Reply`] shape. Build one with
+/// the messages, in agentwerk's own [`Reply`] shape. Build one with
 /// [`Trajectory::from_ticket`] from an [`on_ticket`] handler and [`save`] it
 /// where the dataset belongs, leaving any ShareGPT / chat_template conversion
 /// to a downstream step.
@@ -15,13 +15,13 @@ use super::{Author, Reply, ReplyContent, Ticket};
 /// [`on_ticket`]: super::TicketSystem::on_ticket
 /// [`save`]: Trajectory::save
 ///
-/// Each save also writes an `.html` sibling rendering the transcript for
+/// Each save also writes an `.html` sibling rendering the messages for
 /// debugging.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Trajectory {
     /// Example id `<agent>-<ticket>`; also the on-disk filename.
     pub key: String,
-    /// Name of the model that produced the transcript. `None` when the
+    /// Name of the model that produced the replies. `None` when the
     /// producing agent could not be resolved at capture time.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
@@ -30,7 +30,7 @@ pub struct Trajectory {
 }
 
 impl Trajectory {
-    /// Capture `ticket`'s transcript as an example produced by `agent`
+    /// Capture `ticket`'s replies as an example produced by `agent`
     /// using `model`. Keeps every reply, including the system prompt: a
     /// trainer wants it, where `Ticket::to_messages` would drop it.
     pub fn from_ticket(agent: &str, model: Option<&str>, ticket: &Ticket) -> Self {
@@ -47,10 +47,10 @@ impl Trajectory {
         <Self as crate::persistence::Persist>::save(self, dir.as_ref())
     }
 
-    /// Render the transcript as a self-contained, debug-readable HTML page:
+    /// Render the messages as a self-contained, readable HTML page:
     /// one role-colored card per turn, tool input and output folded into
     /// `<details>`. Message text is escaped, not parsed as markdown, so the
-    /// page stays dependency-free and shows the transcript verbatim.
+    /// page needs nothing else and shows every message as it was.
     fn to_html(&self) -> String {
         // Entity-escape so a payload containing `<script>` renders as text.
         fn escape(text: &str) -> String {

@@ -188,12 +188,12 @@ async fn seeker_pool_finds_planted_indicators(
     );
 
     let named_threats = [
-        "technology: Python\nobserved: app.py — a request handler evals a caller-supplied \
+        "technology: Python\nobserved: app.py, a request handler evals a caller-supplied \
          argument, execs a base64-decoded blob, and posts to a raw IP over HTTP\nhypothesis: \
          dynamic code execution chained into network exfiltration",
-        "technology: JavaScript\nobserved: index.js — a function evals its own input parameter \
+        "technology: JavaScript\nobserved: index.js, a function evals its own input parameter \
          and beacons to a raw IP\nhypothesis: dynamic code execution paired with C2 beaconing",
-        "technology: Rust\nobserved: lib.rs — a function spawns an external command against a \
+        "technology: Rust\nobserved: lib.rs, a function spawns an external command against a \
          remote URL and opens a raw TCP connection\nhypothesis: process spawning chained into \
          network exfiltration from a compiled binary",
     ];

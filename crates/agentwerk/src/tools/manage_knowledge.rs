@@ -1,6 +1,5 @@
-//! `ManageKnowledgeTool`: the model's interface to a `Knowledge` store.
-//! The store lives in `agents::knowledge`; this file only wraps it
-//! with a `ToolLike` impl driven by the declarative `manage_knowledge.tool.md`.
+//! Lets an agent write, read, remove, and list the knowledge it shares across
+//! tickets and with other agents.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -56,7 +55,7 @@ fn description() -> &'static str {
 fn usage_line(message: &str, store: &Knowledge) -> String {
     let (used, limit, pages) = store.index_usage();
     let pct = if limit > 0 { (used * 100) / limit } else { 0 };
-    format!("{message} ({pages} pages, {pct}% — {used}/{limit} chars)")
+    format!("{message} ({pages} pages, {pct}%, {used}/{limit} chars)")
 }
 
 impl ToolLike for ManageKnowledgeTool {
@@ -146,7 +145,7 @@ impl ToolLike for ManageKnowledgeTool {
                         Err(_) => {
                             record(EventKind::KnowledgeMissed);
                             Ok(ToolResult::success(format!(
-                                "No page found for `{slug}`. Check the knowledge index before reading — only slugs listed there exist."
+                                "No page found for `{slug}`. Check the knowledge index before reading: only slugs listed there exist."
                             )))
                         }
                     }

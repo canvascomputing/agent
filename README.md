@@ -566,7 +566,7 @@ See [`EventKind`](https://docs.rs/agentwerk/latest/agentwerk/event/enum.EventKin
 | | `on_result(handler)` | Read every finished ticket together with its result. |
 | | `on_failure(handler)` | Read every failure together with the ticket it happened in. |
 | | `on_ticket(handler)` | Read a ticket as it starts, finishes, or fails. |
-| **Stop the run** | `cancel_on(trigger)` | Stop execution when the given future completes. |
+| **Stop the run** | `cancel_on(trigger)` | Stop execution when another task you supply finishes. |
 | | `cancel_on_event(condition)` | Stop execution when an event matches. |
 | | `cancel_on_result(condition)` | Stop execution when a finished result matches. |
 | | `cancel_on_failure(condition)` | Stop execution when a failure matches. |

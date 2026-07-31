@@ -1,5 +1,4 @@
-//! Policy bundle: limits and retry tuning the loop reads through the
-//! ticket system state.
+//! The execution limits, read by the loop before each turn.
 
 use std::time::Duration;
 

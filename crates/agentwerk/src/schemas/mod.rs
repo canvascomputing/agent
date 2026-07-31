@@ -1,15 +1,11 @@
-//! Hand-rolled JSON Schema validator for the keyword subset agentwerk
-//! needs to constrain agent replies. The public surface is
-//! [`Schema::parse`] and [`Schema::validate`].
+//! Constrains the result an agent produces for a ticket.
 //!
-//! The subset is deliberately small: structural keywords, the scalar
-//! value bounds the model APIs do not enforce, the logical and
-//! conditional applicators, and `pattern`. Any keyword outside the
-//! supported set is rejected at parse time rather than silently ignored,
-//! so a caller learns the limit instead of trusting a constraint that
-//! never ran. `pattern` compiles with the `regex` crate, whose dialect
-//! lacks the ECMA-262 backreferences, lookahead, and lookbehind that
-//! JSON Schema nominally allows.
+//! The supported subset of JSON Schema is deliberately small: structure, the
+//! scalar bounds the model APIs do not enforce, the logical and conditional
+//! keywords, and `pattern`. Anything outside it is rejected when the schema is
+//! parsed, so you learn the limit instead of trusting a constraint that never
+//! ran. `pattern` uses the `regex` crate, which has no backreferences,
+//! lookahead, or lookbehind.
 //!
 //! ```
 //! use agentwerk::schemas::Schema;
@@ -37,10 +33,11 @@ use std::sync::Arc;
 
 use serde_json::{Map, Number, Value};
 
-/// A compiled schema. Cheap to clone (Arc-backed); validation is
-/// read-only. Constructed via [`Schema::parse`] from a JSON-Schema
-/// document (the hand-rolled subset documented at the top of this
-/// module).
+/// A `Schema` constrains the result an agent produces for a ticket. A violation
+/// triggers a retry until `max_schema_retries` is exhausted.
+///
+/// Build one with [`Schema::parse`]. Copying it is cheap, and validating
+/// changes nothing.
 #[derive(Clone)]
 pub struct Schema {
     inner: Arc<SchemaBody>,
@@ -52,10 +49,11 @@ struct SchemaBody {
 }
 
 impl Schema {
-    /// Parse and compile a schema document. Compilation failures
-    /// (malformed schema, unsupported keyword, …) come back as
-    /// [`SchemaParseError`] and never feed the retry budget — they
-    /// are programming errors, not content violations.
+    /// Create a schema.
+    ///
+    /// A malformed document or an unsupported keyword comes back as a
+    /// [`SchemaParseError`] and never counts against the retry budget: it is a
+    /// mistake in your code, not in what an agent produced.
     ///
     /// ```
     /// use agentwerk::schemas::Schema;
@@ -77,11 +75,12 @@ impl Schema {
         })
     }
 
-    /// Validate `value` and return the value to keep. A conforming value is
-    /// returned unchanged; a JSON string an agent double-encoded (`"{...}"`
-    /// instead of `{...}`) is decoded once and returned if the decoded value
-    /// conforms. Otherwise the original violations are returned, so a retry
-    /// points at the real problem, not the decoding.
+    /// Validate content and give back the value to keep.
+    ///
+    /// A value that satisfies the schema comes back unchanged. A value an agent
+    /// wrote as a JSON string is decoded once and kept when the decoded form
+    /// satisfies the schema. Otherwise the original violations are reported, so
+    /// a retry points at the real problem rather than at the decoding.
     ///
     /// ```
     /// use agentwerk::schemas::Schema;
@@ -117,8 +116,8 @@ impl Schema {
         }
     }
 
-    /// Pure structural check against the compiled schema: `Ok(())`, or every
-    /// violation found, each tagged with its instance path.
+    /// Check `value` against the schema and report every violation, each
+    /// naming where in the value it occurred.
     fn check(&self, instance: &Value) -> Result<(), Vec<SchemaViolation>> {
         let mut violations = Vec::new();
         self.inner.compiled.check(instance, "", &mut violations);
@@ -149,16 +148,15 @@ impl<'de> serde::Deserialize<'de> for Schema {
     }
 }
 
-/// A single violation reported by [`Schema::validate`].
+/// One thing wrong with a value, reported by [`Schema::validate`].
 #[derive(Debug, Clone)]
 pub struct SchemaViolation {
-    /// JSON Pointer into the instance (e.g. `/items/0/name`).
-    /// Empty string means "the root value itself".
+    /// Where in the value the problem is, as a JSON Pointer such as
+    /// `/items/0/name`. Empty means the value itself.
     pub instance_path: String,
-    /// JSON Pointer into the schema (e.g.
-    /// `/properties/items/items/properties/name/type`).
+    /// Which part of the schema was violated, as a JSON Pointer.
     pub schema_path: String,
-    /// One-line message describing the violation.
+    /// What went wrong, in one line.
     pub message: String,
 }
 
@@ -174,10 +172,8 @@ impl fmt::Display for SchemaViolation {
     }
 }
 
-/// Every violation from one [`Schema::validate`] call. Its `Display` is
-/// the agent-facing feedback a tool returns on a schema failure: a
-/// header followed by one line per violation. Derefs to the underlying
-/// slice for inspection.
+/// Everything wrong with one value. Its `Display` is what the agent reads back:
+/// a header and one line per violation.
 #[derive(Debug, Clone)]
 pub struct SchemaViolations(Vec<SchemaViolation>);
 
@@ -200,9 +196,8 @@ impl fmt::Display for SchemaViolations {
 
 impl std::error::Error for SchemaViolations {}
 
-/// Schema compilation failure — the caller-supplied schema is itself
-/// invalid. Distinct from [`SchemaViolation`] (an instance failing a
-/// valid schema).
+/// The schema itself is invalid. A [`SchemaViolation`] is the other case: a
+/// value failing a schema that is fine.
 #[derive(Debug, Clone)]
 pub struct SchemaParseError {
     pub message: String,
@@ -216,7 +211,7 @@ impl fmt::Display for SchemaParseError {
 
 impl std::error::Error for SchemaParseError {}
 
-// ---------- compiled schema tree ----------
+// Compiled schema tree
 
 #[derive(Debug, Default)]
 struct Node {
@@ -253,10 +248,10 @@ struct Node {
 
 #[derive(Debug, Default)]
 enum AdditionalProperties {
-    /// `additionalProperties` not set or `true` — extra keys are permitted.
+    /// `additionalProperties` unset or `true`: extra keys are allowed.
     #[default]
     Allowed,
-    /// `additionalProperties: false` — extra keys produce a violation.
+    /// `additionalProperties: false`: an extra key is a violation.
     Forbidden,
 }
 
@@ -321,9 +316,9 @@ fn is_integer(n: &Number) -> bool {
         .is_some_and(|f| f.is_finite() && f.fract() == 0.0)
 }
 
-/// The keywords this validator understands. Anything outside this list is
-/// rejected at parse time, so an unsupported constraint surfaces as an
-/// error instead of passing silently.
+/// The keywords agentwerk understands. Anything else is rejected when the
+/// schema is parsed, so an unsupported constraint is reported rather than
+/// quietly ignored.
 const SUPPORTED_KEYWORDS: &[&str] = &[
     // assertions
     "type",
@@ -348,7 +343,7 @@ const SUPPORTED_KEYWORDS: &[&str] = &[
     "if",
     "then",
     "else",
-    // informational — accepted but not evaluated
+    // informational: accepted but not evaluated
     "$schema",
     "$id",
     "$comment",
@@ -574,7 +569,7 @@ fn compile(value: &Value, schema_path: &str) -> Result<Node, SchemaParseError> {
     })
 }
 
-/// Parse a single subschema keyword (object or boolean schema).
+/// Read one nested schema, written either as an object or as a boolean.
 fn parse_subschema(
     obj: &Map<String, Value>,
     key: &str,
@@ -595,7 +590,8 @@ fn parse_subschema(
     }
 }
 
-/// Parse a non-empty array of subschemas (`allOf`, `anyOf`, `oneOf`).
+/// Read the nested schemas of `allOf`, `anyOf`, or `oneOf`, of which there must
+/// be at least one.
 fn parse_subschema_array(
     obj: &Map<String, Value>,
     key: &str,
@@ -706,7 +702,7 @@ fn escape_pointer(segment: &str) -> String {
     segment.replace('~', "~0").replace('/', "~1")
 }
 
-// ---------- validation ----------
+// Validation
 
 impl Node {
     fn check(&self, instance: &Value, instance_path: &str, out: &mut Vec<SchemaViolation>) {
@@ -994,7 +990,7 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    // ---------- parse errors ----------
+    // Parse errors
 
     #[test]
     fn parse_rejects_malformed_schema() {
@@ -1048,7 +1044,7 @@ mod tests {
         assert!(err.message.contains("oneOf"));
     }
 
-    // ---------- type ----------
+    // Type
 
     #[test]
     fn validate_type_rejects_wrong_kind() {
@@ -1086,7 +1082,7 @@ mod tests {
         assert!(schema.validate(json!("anything")).is_err());
     }
 
-    // ---------- enum / const ----------
+    // Enum / const
 
     #[test]
     fn validate_enum_rejects_value_not_in_list() {
@@ -1102,7 +1098,7 @@ mod tests {
         assert!(schema.validate(json!(43)).is_err());
     }
 
-    // ---------- object ----------
+    // Object
 
     #[test]
     fn validate_passes_conforming_object() {
@@ -1161,7 +1157,7 @@ mod tests {
         assert!(violations.iter().any(|v| v.message.contains("`y`")));
     }
 
-    // ---------- array ----------
+    // Array
 
     #[test]
     fn validate_items_schema_validates_each_element() {
@@ -1193,7 +1189,7 @@ mod tests {
             .any(|v| v.schema_path.ends_with("/maxItems")));
     }
 
-    // ---------- string ----------
+    // String
 
     #[test]
     fn validate_string_length_bounds() {
@@ -1226,7 +1222,7 @@ mod tests {
         assert!(schema.validate(json!(42)).is_ok());
     }
 
-    // ---------- number ----------
+    // Number
 
     #[test]
     fn validate_minimum_and_maximum_bounds() {
@@ -1236,7 +1232,7 @@ mod tests {
         assert!(schema.validate(json!(11)).is_err());
     }
 
-    // ---------- logical combinators ----------
+    // Logical combinators
 
     #[test]
     fn validate_all_of_passes_when_all_schemas_match() {
@@ -1316,7 +1312,7 @@ mod tests {
         assert!(violations.iter().any(|v| v.schema_path.ends_with("/not")));
     }
 
-    // ---------- if / then / else ----------
+    // If / then / else
 
     #[test]
     fn validate_if_then_applies_then_when_if_passes() {
@@ -1351,7 +1347,7 @@ mod tests {
         assert!(schema.validate(json!(42)).is_ok());
     }
 
-    // ---------- decode fallback ----------
+    // Decode fallback
 
     #[test]
     fn validate_returns_a_conforming_value_unchanged() {
@@ -1396,7 +1392,7 @@ mod tests {
         assert!(schema.validate(json!(42)).is_err());
     }
 
-    // ---------- serde / clone ----------
+    // Serde / clone
 
     #[test]
     fn clone_shares_compiled_state() {
@@ -1436,7 +1432,7 @@ mod tests {
         assert!(none.is_none());
     }
 
-    // ---------- SchemaViolations display (agent-facing feedback) ----------
+    // SchemaViolations display (agent-facing feedback)
 
     #[test]
     fn violations_display_renders_one_line_per_violation() {

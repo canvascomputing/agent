@@ -7,7 +7,7 @@ use pyo3::prelude::*;
 use crate::convert::runtime_error;
 use crate::ticket::PyTicket;
 
-/// A finished agent run reduced to its messages.
+/// A `Trajectory` is one finished ticket kept as a training example.
 #[pyclass(name = "Trajectory")]
 pub struct PyTrajectory {
     inner: Trajectory,
@@ -16,8 +16,7 @@ pub struct PyTrajectory {
 #[pymethods]
 impl PyTrajectory {
     /// Capture `ticket`'s messages as an example produced by `agent` using
-    /// `model`. Read the model name from
-    /// `TicketSystem.model_for_agent(event.agent_name)`.
+    /// `model`, whose name `TicketSystem.model_for_agent` gives you.
     #[staticmethod]
     fn from_ticket(agent: &str, model: Option<&str>, ticket: PyRef<'_, PyTicket>) -> Self {
         PyTrajectory {
@@ -25,13 +24,14 @@ impl PyTrajectory {
         }
     }
 
-    /// Write the example under `dir` as `trajectories/<key>.json`, plus an
-    /// `.html` sibling rendering the messages for reading.
+    /// Save the example under `dir` as `trajectories/<key>.json`, with an
+    /// `.html` beside it for reading.
     fn save(&self, dir: &str) -> PyResult<()> {
         self.inner.save(dir).map_err(runtime_error)
     }
 
-    /// Example id `<agent>-<ticket>`; also the file name.
+    /// The example's identifier, `<agent>-<ticket>`, which is also its file
+    /// name.
     #[getter]
     fn key(&self) -> &str {
         &self.inner.key

@@ -1,7 +1,7 @@
 //! End-to-end: a tool is deferred, so the model sees only its name (empty
 //! description, empty schema) in its definitions. A real LLM calls `find_tools`
 //! to surface it, and we assert the tool's *output* carries the deferred tool's
-//! full definition — name, the description (with its passphrase), and the
+//! full definition: name, the description (with its passphrase), and the
 //! `passphrase` schema field that were all hidden until discovery. Tests that
 //! `find_tools` renders a deferred definition the model could not otherwise see.
 
@@ -28,7 +28,7 @@ async fn surfaces_a_deferred_tool_definition() -> std::result::Result<(), Box<dy
 
     // Deferred: the model sees only the name `vault_unlock_tool` until it runs
     // `find_tools`. The passphrase lives in the description and the `passphrase`
-    // field lives in the schema — both hidden until surfaced.
+    // field lives in the schema: both hidden until surfaced.
     let vault = Tool::new(
         "vault_unlock_tool",
         "Unlock the vault. Required: pass `passphrase` set to exactly `open-sesame`.",

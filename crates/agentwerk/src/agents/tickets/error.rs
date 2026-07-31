@@ -1,4 +1,4 @@
-//! Errors raised by ticket-store mutations.
+//! What can go wrong changing a ticket.
 
 use std::fmt;
 

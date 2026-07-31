@@ -1,6 +1,6 @@
 //! End-to-end: a real LLM uses `manage_tickets` with `action: "create"`
 //! to add a new ticket to the queue. We verify a fresh ticket landed carrying
-//! the requested body — the queue state is the assertion. The role does not
+//! the requested body: the queue state is the assertion. The role does not
 //! name the action shape; the tool's description must carry it.
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -49,8 +49,8 @@ async fn creates_a_followup_ticket() -> std::result::Result<(), Box<dyn std::err
     );
 
     // A new ticket must carry the token. The agent's own ticket holds the
-    // instruction; the created one is any other ticket whose task — string or
-    // structured JSON — mentions the token. The exact body shape is the
+    // instruction; the created one is any other ticket whose task, string or
+    // structured JSON, mentions the token. The exact body shape is the
     // model's choice and not what this test pins down.
     let created = tickets.tickets().into_iter().find(|t| {
         t.task.as_str() != Some(instruction.as_str()) && t.task.to_string().contains(&body)

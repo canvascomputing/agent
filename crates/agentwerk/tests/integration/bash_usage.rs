@@ -1,5 +1,5 @@
 //! End-to-end: a real LLM drives three pattern-restricted `BashTool`
-//! commands (`ls`, `cat`, `wc`) and settles its ticket with a
+//! commands (`ls`, `cat`, `wc`) and finishes its ticket with a
 //! JSON result validated against the ticket schema.
 
 use super::common;

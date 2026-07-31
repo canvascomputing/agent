@@ -69,12 +69,12 @@
 //! # Main types
 //!
 //! - [`Agent`]: picks up tickets and produces results.
-//! - [`TicketSystem`]: orchestrates work across one or more agents.
-//! - [`Ticket`]: a task plus labels and schema for assignment and validation.
-//! - [`Knowledge`]: durable memory the agent curates and shares across tickets and other agents.
-//! - [`Stats`]: statistics for tickets, tokens, and activity.
-//! - [`Event`]: lifecycle events emitted as agents work.
-//! - [`tools`]: built-in tools agents call: file I/O, search, shell, web, knowledge, ticket finish tools.
+//! - [`TicketSystem`]: coordinates complex work across agents.
+//! - [`Ticket`]: a task plus the labels and schema that assign and validate it.
+//! - [`Knowledge`]: durable memory the agent shares across tickets and other agents.
+//! - [`Stats`]: statistics about tickets, tokens, and time.
+//! - [`Event`]: requests, tool usage, failures and more.
+//! - [`tools`]: the built-in tools agents call, for files, search, shell, web, knowledge, and tickets.
 
 pub mod agents;
 pub mod codegrep;

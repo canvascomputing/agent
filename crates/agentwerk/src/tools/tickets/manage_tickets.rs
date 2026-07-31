@@ -1,5 +1,4 @@
-//! Read + write access to the surrounding ticket queue:
-//! `get`, `list`, `search`, `create`, `edit`.
+//! Lets an agent read the ticket queue and create or edit tickets in it.
 
 use std::future::Future;
 use std::pin::Pin;

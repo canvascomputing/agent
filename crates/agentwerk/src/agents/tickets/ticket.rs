@@ -1,5 +1,4 @@
-//! The [`Ticket`] value type, its disk persistence, and the
-//! [`Replies`] reply-log helper.
+//! One unit of work an agent picks up, and how it is stored.
 
 use std::fmt;
 use std::io;
@@ -13,10 +12,10 @@ use crate::providers::{AsUserMessage, Message};
 
 use super::reply::{Author, Reply};
 
-/// A task plus the metadata that assigns it. Caller-settable fields:
-/// `task`, `labels`, `schema`, `parent`. System-managed fields (`key`,
-/// `status`, `reporter`, the lifecycle timestamps, `result`, `replies`)
-/// are set by the ticket system and the agent loop.
+/// A `Ticket` is a task plus what assigns and validates it.
+///
+/// You set `task`, `labels`, `schema`, and `parent`. The rest is set for you at
+/// insertion time and as the agent works.
 ///
 /// ```no_run
 /// use agentwerk::Ticket;
@@ -34,33 +33,32 @@ use super::reply::{Author, Reply};
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Ticket {
-    /// Task body the agent is asked to perform, as arbitrary JSON.
+    /// What the agent is asked to do, as any JSON value.
     pub task: serde_json::Value,
     /// Labels carried by the ticket.
     pub labels: Vec<String>,
-    /// Schema the result must conform to, when set.
+    /// Schema the result must satisfy, when there is one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub schema: Option<crate::schemas::Schema>,
-    /// Stable identifier (`TICKET-N`).
+    /// Stable key, of the form `TICKET-N`.
     pub key: String,
-    /// Lifecycle status (`Todo`, `InProgress`, `Finished`, `Failed`).
+    /// Where the ticket is in its lifecycle.
     pub status: Status,
     /// Name of the agent that opened the ticket.
     pub reporter: String,
-    /// Millisecond timestamp at which the ticket was created.
+    /// When the ticket was created, in milliseconds.
     pub created_at: u64,
-    /// Millisecond timestamp at which an agent claimed the ticket.
+    /// When an agent claimed the ticket, in milliseconds.
     pub started_at: Option<u64>,
-    /// Millisecond timestamp at which the ticket was marked finished.
-    /// Mutually exclusive with `failed_at`.
+    /// When the ticket finished, in milliseconds. Never set together with
+    /// `failed_at`.
     pub finished_at: Option<u64>,
-    /// Millisecond timestamp at which the ticket failed. Mutually
-    /// exclusive with `finished_at`.
+    /// When the ticket failed, in milliseconds. Never set together with
+    /// `finished_at`.
     pub failed_at: Option<u64>,
-    /// Raw JSON result payload.
+    /// What the agent produced.
     pub result: Option<serde_json::Value>,
-    /// Back-reference to another ticket, or `None` when the ticket
-    /// has no parent. Caller-settable via [`Ticket::parent`].
+    /// The ticket this one came from, when there is one.
     pub parent: Option<String>,
     /// Messages exchanged with the model.
     #[serde(skip)]
@@ -68,10 +66,10 @@ pub struct Ticket {
 }
 
 impl Ticket {
-    /// New ticket carrying `task` as its body. Use the chainable helpers
-    /// (`label`, `labels`, `schema`) to populate caller-settable fields.
-    /// System-managed fields are set by the ticket system at insertion
-    /// time; the placeholders set here are overwritten.
+    /// Create a ticket carrying `task`.
+    ///
+    /// Add labels and a schema with the chainable methods. Everything else is
+    /// filled in when the ticket is submitted.
     pub fn new<T: Serialize>(task: T) -> Self {
         let value = serde_json::to_value(task).expect("Ticket::new: value must serialize to JSON");
         Self {
@@ -91,13 +89,13 @@ impl Ticket {
         }
     }
 
-    /// Add a single label. Use [`Self::labels`] to add several at once.
+    /// Add one label.
     pub fn label(mut self, l: impl Into<String>) -> Self {
         self.labels.push(l.into());
         self
     }
 
-    /// Add many labels at once.
+    /// Add several labels.
     pub fn labels<I, S>(mut self, iter: I) -> Self
     where
         I: IntoIterator<Item = S>,
@@ -112,84 +110,79 @@ impl Ticket {
         self
     }
 
-    /// Record a back-reference to another ticket. The meaning is
-    /// caller-defined: a `finish` handover uses it to chain a
-    /// child to the ticket that handed off, but any code building a
-    /// ticket may set it to express a parent relationship.
+    /// Name the ticket this one came from.
+    ///
+    /// What the relationship means is up to you. A `finish` handover uses it to
+    /// chain a child to the ticket that handed off.
     pub fn parent(mut self, key: impl Into<String>) -> Self {
         self.parent = Some(key.into());
         self
     }
 
-    /// True when `label` is present on this ticket.
+    /// Check whether the ticket carries a label.
     pub fn has_label(&self, label: &str) -> bool {
         self.labels.iter().any(|l| l == label)
     }
 
-    /// True while the ticket sits unclaimed in the queue.
+    /// Check whether the ticket is still waiting to be claimed.
     pub fn is_todo(&self) -> bool {
         self.status == Status::Todo
     }
 
-    /// True when this ticket has reached `Status::Finished`.
+    /// Check whether the ticket finished.
     pub fn is_finished(&self) -> bool {
         self.status == Status::Finished
     }
 
-    /// True when this ticket has reached `Status::Failed`.
+    /// Check whether the ticket failed.
     pub fn is_failed(&self) -> bool {
         self.status == Status::Failed
     }
 
-    /// True while an agent holds the ticket.
+    /// Check whether an agent is working on the ticket.
     pub fn is_in_progress(&self) -> bool {
         self.status == Status::InProgress
     }
 
-    /// True while the ticket is still in flight: `Todo` or `InProgress`.
+    /// Check whether the ticket is still open, either `Todo` or `InProgress`.
     pub fn is_pending(&self) -> bool {
         matches!(self.status, Status::Todo | Status::InProgress)
     }
 
-    /// True once the ticket reached a terminal state: `Finished` or `Failed`.
+    /// Check whether the ticket is resolved, either `Finished` or `Failed`.
     pub fn is_resolved(&self) -> bool {
         matches!(self.status, Status::Finished | Status::Failed)
     }
 
-    /// Reduce the replies to just `summary_text`: every non-system
-    /// reply is dropped and a single `user` reply carrying
-    /// `summary_text` is appended. System-author replies (the system
-    /// prompt) survive unchanged. `task` is rewritten to the summary too,
-    /// so the persisted `ticket.json` reflects the post-compaction state.
-    /// Safe because `task` is read for the seed user message only when
-    /// `replies` is empty, which is never true after compaction. Used by
-    /// the loop after a successful compaction.
+    /// Replace the replies with one summary, keeping the system prompt.
+    ///
+    /// `task` is rewritten to the summary too, so the stored ticket matches. It
+    /// is only read to seed the first message, which cannot happen once replies
+    /// exist.
     pub(crate) fn summarize(&mut self, summary_text: String) {
         self.replies.retain(|r| r.author == Author::System);
         self.replies.push(Reply::user_text(summary_text.clone()));
         self.task = serde_json::Value::String(summary_text);
     }
 
-    /// False once the assistant has spoken: the loop pauses until the
-    /// next non-assistant reply lands (a tool-result append or an
-    /// external caller reply via [`TicketSystem::reply`]).
+    /// False once the model has spoken. The agent then waits for the next
+    /// reply, whether a tool result or one you add with
+    /// [`TicketSystem::reply`].
     pub(crate) fn is_waiting_for_response(&self) -> bool {
         self.replies
             .last()
             .is_none_or(|r| r.author != Author::Assistant)
     }
 
-    /// Project this ticket's transcript into the provider's
-    /// [`Message`] values. Skips `system`-author replies: the system
-    /// prompt is passed via `request.system_prompt`, and
-    /// compaction-boundary replies are audit markers only.
+    /// Turn this ticket's replies into the messages sent to the model.
+    ///
+    /// System-author replies are left out: the system prompt travels in its own
+    /// field, and a compaction marker is there for the record only.
     pub(crate) fn to_messages(&self) -> Vec<Message> {
         self.replies.iter().filter_map(Reply::as_message).collect()
     }
 
-    /// Stamp `started_at` / `finished_at` / `failed_at` on a ticket
-    /// whose status is about to flip to `next`. Called inside the
-    /// locked critical section before `self.status` is overwritten.
+    /// Record the timestamp for the status a ticket is about to reach.
     pub(crate) fn stamp_transition(&mut self, next: Status, now: u64) {
         if self.status == Status::Todo && next == Status::InProgress {
             self.started_at = Some(now);
@@ -205,10 +198,8 @@ impl Ticket {
         }
     }
 
-    /// Compute (ticket_duration, work_duration) for a ticket that just
-    /// reached a terminal status. `ticket_duration` is creation→terminal;
-    /// `work_duration` is started→terminal. Both default to zero if the
-    /// relevant timestamps aren't both set.
+    /// The time from creation to resolution, and the time an agent held the
+    /// ticket. Either is zero when its timestamps are not both set.
     pub(crate) fn terminal_durations(&self) -> (Duration, Duration) {
         let terminal = self.finished_at.or(self.failed_at);
         let ticket_duration = match terminal {
@@ -240,20 +231,21 @@ impl crate::persistence::Persist for Ticket {
     }
 }
 
-/// A ticket's replies on disk: one `tickets/<key>/replies.jsonl`, a JSON
-/// reply per line. [`Persist::save`] rewrites the whole file in place
-/// (compaction and edits); [`Replies::append`] adds a single line without
-/// loading the file.
+/// A ticket's replies on disk, one JSON reply per line in
+/// `tickets/<key>/replies.jsonl`.
+///
+/// [`Persist::save`] rewrites the whole file, and [`Replies::append`] adds one
+/// line without reading it.
 pub(crate) struct Replies {
     pub(crate) key: String,
     pub(crate) entries: Vec<Reply>,
 }
 
 impl Replies {
-    /// Append one reply as a single JSON line to `replies.jsonl`, without
-    /// loading or rewriting the file. Keyed by ticket, so it fits neither
-    /// [`Persist::save`] nor [`Append`](crate::persistence::Append), and
-    /// stays a free function.
+    /// Add one reply as a single line, without reading the file.
+    ///
+    /// It is keyed by ticket, so it fits neither [`Persist::save`] nor
+    /// [`Append`](crate::persistence::Append).
     pub(crate) fn append(dir: &Path, key: &str, reply: &Reply) -> io::Result<()> {
         let line = serde_json::to_string(reply).map_err(io::Error::other)?;
         crate::persistence::append_line(&replies_path(dir, key), &line)
@@ -263,8 +255,8 @@ impl Replies {
 impl Persist for Replies {
     type Key = String;
 
-    /// Overwrite `replies.jsonl` with all entries, so a dropped or
-    /// redacted reply leaves nothing behind on disk.
+    /// Rewrite `replies.jsonl` whole, so a dropped or redacted reply leaves
+    /// nothing behind.
     fn save(&self, dir: &Path) -> io::Result<()> {
         let mut body = String::new();
         for reply in &self.entries {
@@ -292,12 +284,12 @@ impl Persist for Replies {
     }
 }
 
-/// Path of the ticket's record file for `key`: `tickets/<key>/ticket.json`.
+/// Where `key`'s ticket is stored: `tickets/<key>/ticket.json`.
 pub(super) fn ticket_record_path(dir: &Path, key: &str) -> PathBuf {
     dir.join("tickets").join(key).join("ticket.json")
 }
 
-/// Path of the transcript file for `key`: `tickets/<key>/replies.jsonl`.
+/// Where `key`'s replies are stored: `tickets/<key>/replies.jsonl`.
 fn replies_path(dir: &Path, key: &str) -> PathBuf {
     dir.join("tickets").join(key).join("replies.jsonl")
 }
@@ -320,24 +312,25 @@ impl AsUserMessage for Ticket {
     }
 }
 
-/// Lifecycle status of a ticket.
+/// Where a ticket is in its lifecycle.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Status {
-    /// Created but not yet claimed by an agent.
+    /// Created, waiting for an agent.
     Todo,
-    /// Claimed by an agent and running.
+    /// Claimed by an agent and under way.
     InProgress,
-    /// Finished with a result.
+    /// Finished, carrying a result.
     Finished,
-    /// Failed after a schema-retry trip, missing-finish-tool exhaustion,
-    /// or policy violation.
+    /// Failed after exhausted schema retries, exhausted missing-`finish`
+    /// retries, or a limit being breached.
     Failed,
 }
 
 impl fmt::Display for Status {
-    /// Lowercase wire form: `"todo"`, `"in_progress"`, `"finished"`, `"failed"`.
-    /// Single source of truth for the string rendering used by the
-    /// `tickets.jsonl` event log and any caller that prints a status.
+    /// The lowercase form: `"todo"`, `"in_progress"`, `"finished"`, `"failed"`.
+    ///
+    /// It is the one source for that spelling, used by the event log and by
+    /// anyone printing a status.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let s = match self {
             Status::Todo => "todo",

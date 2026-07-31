@@ -6,7 +6,7 @@ How tests are organized and written. Commands used to run them live in [workflow
 
 **Two layers: integration and inline.**
 
-- `tests/integration/` uses a real provider; bundled by `tests/integration.rs`.
+- `tests/integration/` uses a real LLM provider; bundled by `tests/integration.rs`.
 - Inline `#[cfg(test)] mod tests` lives next to the code it covers and runs without a network.
 - Shared integration helpers live in `tests/integration/common.rs`.
 
@@ -17,46 +17,51 @@ How tests are organized and written. Commands used to run them live in [workflow
 - A test exists because a single contract would otherwise go undemonstrated.
 - A failure points to one cause: no grab-bag assertions across unrelated concerns.
 - A sibling that already covers the same behavior with different inputs is merged or removed.
-- Behaviour is tested at the layer where it lives: unit, integration, or inline.
+- Behavior is tested at the layer where it lives: unit, integration, or inline.
 
 ## Naming
 
 **The name states the behavior, not the method called.**
 
-- Accepted: `rejects_submit_when_cart_is_empty`, `deposit_increases_balance`.
-- Rejected: `test_submit`, `test_submit_works`, `test_balance`.
+```rust
+add_reply_appends_one_line_to_replies_jsonl        // accepted
+an_explicit_ticket_schema_overrides_the_label_default
+test_add_reply                                     // rejected
+test_schema_works
+```
+
 - The body verifies what the name claims, with no surprise assertions.
 - The name is the first line of the documentation the test provides.
 
-## API focus
+## API Focus
 
 **Tests exercise the public surface the way callers hold it.**
 
 - Call the public entry point; do not poke at private fields, patched internals, or field assignments.
 - Mock at trust boundaries (network, clock, disk), never at the subject under test.
 - Assert observable outcomes, not call logs or the order internal methods ran in.
-- The arrange/act/assert shape mirrors how a real caller would use the API.
+- The arrange, act, and assert shape mirrors how a real caller would use the API.
 
-## State transitions
+## State Transitions
 
 **Actions and the resulting state MUST be visible through the public API.**
 
-- Build starting state by calling real actions, not by field assignment that bypasses invariants.
-- Read resulting state back through a public query, not by peeking at private fields.
-- Assert both starting and final state so the transition is shown, not implied.
+- Build the starting state by calling real actions, not by field assignment that bypasses invariants.
+- Read the resulting state back through a public query, not by peeking at private fields.
+- Assert both the starting and the final state so the transition is shown, not implied.
 - Cover illegal transitions and verify state is unchanged after a rejection.
-- One transition per test so a failure locates the exact broken action.
+- One transition per test, so a failure locates the exact broken action.
 
 ## Clarity
 
 **Setup is hidden. Intent is highlighted.**
 
 - Push scaffolding into factories, builders, and fixtures so the body reads as a short story.
-- Name literals that carry meaning: `EXPIRED_COUPON`, not `42`; `ADMIN_USER`, not `"foo"`.
+- Name literals that carry meaning: `EXPIRED_COUPON`, not `42`.
 - Keep the act step a single visible line; do not bury it in setup.
 - Comments are justified only to pin an architectural invariant the test guards.
 
-## Coverage shape
+## Coverage Shape
 
 **Every public operation has a test that demonstrates intended usage.**
 

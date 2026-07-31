@@ -1,4 +1,4 @@
-//! Main supervisor loop: spawns one tokio task per registered agent and joins them on shutdown.
+//! Starts one tokio task per registered agent and waits for them on shutdown.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;

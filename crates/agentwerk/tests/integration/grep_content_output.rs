@@ -1,5 +1,5 @@
 //! End-to-end: a real LLM agent is asked to locate a unique string
-//! buried deep inside a long line — past column 100. The role does NOT
+//! buried deep inside a long line, past column 100. The role does NOT
 //! hint at grep or content mode. Proves the agent can find the match
 //! and that `grep` reports the correct column position.
 
@@ -29,7 +29,7 @@ async fn finds_string_buried_deep_in_line() -> std::result::Result<(), Box<dyn s
     let root = dir.path();
     fs::create_dir_all(root.join("src"))?;
 
-    // Decoy files — none containing the needle.
+    // Decoy files, none containing the needle.
     fs::write(root.join("src/main.rs"), "fn main() { run(); }\n")?;
     fs::write(root.join("src/server.rs"), "pub fn run() { loop {} }\n")?;
 
@@ -91,7 +91,7 @@ async fn finds_string_buried_deep_in_line() -> std::result::Result<(), Box<dyn s
             .role(
                 "{context}\n\n\
                  Investigate the working directory and answer the user's question. \
-                 Use the available tools — pick whichever one fits. \
+                 Use the available tools: pick whichever one fits. \
                  When you have the answer, settle the ticket via \
                  `finish`.",
             )
@@ -233,7 +233,7 @@ async fn reads_column_slice_after_grep_locates_needle(
             .role(
                 "{context}\n\n\
                  Investigate the working directory and answer the user's question. \
-                 Use the available tools — pick whichever one fits. \
+                 Use the available tools: pick whichever one fits. \
                  When you have the answer, settle the ticket via \
                  `finish`.",
             )

@@ -1,5 +1,5 @@
-//! Provider round-trip: sends the transcript, retries transient errors, and
-//! routes overflow to reactive compaction.
+//! One round-trip to the LLM provider: sends the messages, retries a transient
+//! error, and summarizes the older messages when the context window overflows.
 
 use std::sync::Arc;
 

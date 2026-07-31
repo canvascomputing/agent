@@ -7,9 +7,8 @@ use super::section::Section;
 
 /// Assembled prompt envelope. Field order follows the canonical spec
 /// section order: the system message (role + appended directives)
-/// first, then task. Tools are not present here — they reach the model
-/// as structured data via the registry, not as a section in the prompt
-/// envelope.
+/// first, then task. Tools are absent: they reach the model as structured data
+/// from the registry, not as a section of the prompt.
 #[allow(dead_code)]
 #[derive(Debug, Clone, Default)]
 pub struct Prompt {
@@ -120,19 +119,19 @@ mod tests {
     fn knowledge_appends_after_role_in_system() {
         let p = PromptBuilder::default()
             .role("You are an agent.")
-            .knowledge("- **config** — Port 8080")
+            .knowledge("- **config**: Port 8080")
             .build();
         assert_eq!(
             p.system,
-            "You are an agent.\n\n## Knowledge\n\n- **config** — Port 8080"
+            "You are an agent.\n\n## Knowledge\n\n- **config**: Port 8080"
         );
     }
 
     #[test]
     fn knowledge_alone_renders_in_system() {
         let p = PromptBuilder::default()
-            .knowledge("- **config** — Port 8080")
+            .knowledge("- **config**: Port 8080")
             .build();
-        assert_eq!(p.system, "## Knowledge\n\n- **config** — Port 8080");
+        assert_eq!(p.system, "## Knowledge\n\n- **config**: Port 8080");
     }
 }

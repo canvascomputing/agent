@@ -1,4 +1,5 @@
-//! Per-model knowledge of context window size and compaction thresholds. agentwerk consults this to decide when a conversation must be shrunk.
+//! What agentwerk knows about each model's context window, and when a
+//! conversation has to be summarized to fit.
 
 use super::{AnthropicProvider, MistralProvider, OpenAiProvider, ReasoningEffort};
 
@@ -17,8 +18,8 @@ pub struct Model {
 
 impl Model {
     /// Build a `Model` by asking each provider in turn for its known context
-    /// window. Unknown names produce a `Model` with `context_window: None`
-    /// — compaction stays dormant, no error.
+    /// window. An unknown name leaves `context_window` at `None`, so nothing is
+    /// compacted and nothing fails.
     pub fn from_name(name: impl Into<String>) -> Self {
         let name = name.into();
         let context_window = AnthropicProvider::lookup_context_window_size(&name)
@@ -31,7 +32,7 @@ impl Model {
         }
     }
 
-    /// Explicit override — skips the registry. Useful for local proxies or
+    /// Set the context window size for a model, skipping the known names. Useful for local proxies or
     /// private deployments whose name isn't in any provider's table.
     pub fn context_window(mut self, size: u64) -> Self {
         self.context_window = Some(size);

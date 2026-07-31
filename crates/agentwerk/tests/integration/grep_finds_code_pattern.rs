@@ -103,7 +103,7 @@ async fn finds_code_pattern_with_special_chars(
             .role(
                 "{context}\n\n\
                  Investigate the working directory and answer the user's question. \
-                 Use the available tools — pick whichever one fits the question. \
+                 Use the available tools: pick whichever one fits the question. \
                  When you have the answer, settle the ticket via \
                  `finish`.",
             )
@@ -125,7 +125,7 @@ async fn finds_code_pattern_with_special_chars(
 
     // The model must have located the signature with `grep`: a call whose output
     // names calc.rs. Under a regex `pattern`, that hit is only reachable if the
-    // model escaped the `(` and `)` — left raw they are groups and match nothing.
+    // model escaped the `(` and `)`: left raw they are groups and match nothing.
     let grep_hit = recorded
         .iter()
         .find(|c| {

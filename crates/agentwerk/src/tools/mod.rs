@@ -1,5 +1,4 @@
-//! Tool system: the `ToolLike` trait, the ad-hoc `Tool` struct, and the
-//! registry agentwerk consults before each provider call.
+//! The actions agents can take to perform their work.
 
 mod error;
 mod tool;

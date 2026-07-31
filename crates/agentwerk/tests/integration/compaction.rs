@@ -1,4 +1,4 @@
-//! Summariser smoke-test: the configured 4 096-token window makes
+//! Core check on summarizing: the configured 4 096-token window makes
 //! `compaction_threshold` saturate to 0, so proactive compaction fires
 //! between turns. The loop calls compact and the summariser must return
 //! non-empty text. The ticket does not need to complete: verifying the
@@ -68,7 +68,7 @@ pub async fn process_order(order: Order, ctx: Arc<AppContext>) -> Result<Receipt
     // Write receipt to DB.
     let receipt = ctx.db.insert_receipt(&charge).await?;
 
-    // Notify audit log — fire and forget.
+    // Notify audit log, fire and forget.
     let audit_tx = ctx.audit_tx.clone();
     tokio::spawn(async move {
         // BUG CANDIDATE: audit_tx is an unbounded channel created once at
@@ -88,7 +88,7 @@ pub async fn run_loop(mut rx: mpsc::Receiver<AuditEvent>) {
         // Writes to Postgres. Under load this blocks the receiver.
         if let Err(e) = db_write_audit(&event).await {
             error!('audit write failed: {e}');
-            // ERROR: receiver just fell behind — channel keeps filling.
+            // ERROR: receiver just fell behind, channel keeps filling.
         }
     }
 }
@@ -173,7 +173,7 @@ async fn summariser_produces_text_when_compaction_fires_against_live_llm() {
     );
     assert!(
         compaction_succeeded,
-        "CompactionFinished must fire — summariser must return text"
+        "CompactionFinished must fire: summariser must return text"
     );
 
     // The summary replaces all non-system comments in the ticket. Verify
@@ -206,7 +206,7 @@ async fn summariser_produces_text_when_compaction_fires_against_live_llm() {
     // `reset_usage` runs inside `summarize`, so the per-ticket history
     // can hold at most the entries recorded *after* compaction committed
     // (turn 2's reply). Without the reset, the pre-compaction entry
-    // would still be there too — length would be 2.
+    // would still be there too, length would be 2.
     for ticket in tickets.tickets() {
         let history = tickets.stats().usage_history(&ticket.key);
         assert!(

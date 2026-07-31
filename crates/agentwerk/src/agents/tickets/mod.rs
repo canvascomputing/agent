@@ -1,7 +1,4 @@
-//! Ticket queue and run orchestration. Exposes the value types
-//! ([`Ticket`], [`Status`], [`Reply`], [`ReplyContent`], [`TicketError`])
-//! and the [`TicketSystem`] orchestrator that owns the shared queue,
-//! registered agents, policies, cancellation signals, and run stats.
+//! The ticket queue agents coordinate through, and the tickets themselves.
 
 use std::time::{SystemTime, UNIX_EPOCH};
 

@@ -1,4 +1,4 @@
-//! Read-only access to the surrounding ticket queue.
+//! Lets an agent read the ticket queue.
 
 use std::future::Future;
 use std::pin::Pin;

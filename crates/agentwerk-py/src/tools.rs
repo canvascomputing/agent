@@ -1,6 +1,5 @@
-//! Built-in tools exposed to Python, plus the extraction seam that turns a
-//! Python-visible tool object back into an `Arc<dyn ToolLike>` the agent
-//! builder can register.
+//! The built-in tools as Python sees them, and how a Python tool object becomes
+//! one the agent builder can register.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -59,16 +58,17 @@ impl ToolLike for BoxedTool {
     }
 }
 
-/// A tool handle Python holds and passes to `Agent.tool(...)`. Every built-in
-/// factory returns one; the extraction seam reads its inner trait object.
+/// A tool handle Python passes to `Agent.tool(...)`. Every built-in returns
+/// one.
 #[pyclass(name = "Tool")]
 pub struct PyTool {
     pub inner: Arc<dyn ToolLike>,
 }
 
-/// Wraps a `@tool`-decorated Python callable as a first-class `ToolLike`. The
-/// five sync methods read cached metadata; `call` runs the callable on a
-/// blocking thread under the GIL so it never stalls the async executor.
+/// Turns a `@tool`-decorated Python function into a tool agentwerk can call.
+///
+/// The name, description, and schema are read once and kept. The function
+/// itself runs on its own thread, so it never holds up the rest of the work.
 struct PyToolAdapter {
     func: Py<PyAny>,
     name: String,
@@ -132,9 +132,8 @@ impl ToolLike for PyToolAdapter {
     }
 }
 
-/// Call the Python tool and turn its return value into a `ToolResult`. The tool
-/// input object is passed as keyword arguments; a coroutine result is driven to
-/// completion so async tool bodies work too.
+/// Call the Python tool and turn what it returns into a `ToolResult`. The input
+/// arrives as keyword arguments, and an async function is awaited.
 fn invoke_python(py: Python<'_>, func: &Py<PyAny>, input: &Value) -> PyResult<ToolResult> {
     let arg = value_to_py(py, input)?;
     let bound = func.bind(py);
@@ -165,9 +164,8 @@ fn invoke_python(py: Python<'_>, func: &Py<PyAny>, input: &Value) -> PyResult<To
     Ok(ToolResult::success(value.to_string()))
 }
 
-/// What a tool reports back. Returning a plain string or dict is the same as
-/// `ToolResult.success(...)`; the other two say the call failed without ending
-/// the run.
+/// What a tool reports back when a bare return value is not enough. Returning a
+/// plain string or dict is the same as `ToolResult.success(...)`.
 #[pyclass(name = "ToolResult")]
 pub struct PyToolResult {
     inner: ToolResult,
@@ -175,7 +173,7 @@ pub struct PyToolResult {
 
 #[pymethods]
 impl PyToolResult {
-    /// The tool did its work; `content` goes back to the model.
+    /// The tool did its work, and `content` goes back to the model.
     #[staticmethod]
     fn success(content: String) -> Self {
         PyToolResult {
@@ -183,7 +181,7 @@ impl PyToolResult {
         }
     }
 
-    /// The tool failed; `content` explains why so the model can adjust.
+    /// The tool failed, and `content` says why so the model can work around it.
     #[staticmethod]
     fn error(content: String) -> Self {
         PyToolResult {
@@ -191,8 +189,7 @@ impl PyToolResult {
         }
     }
 
-    /// The input did not match the tool's schema. Counted against
-    /// `max_schema_retries`.
+    /// The input was malformed. It counts against `max_schema_retries`.
     #[staticmethod]
     fn schema_error(content: String) -> Self {
         PyToolResult {
@@ -201,8 +198,8 @@ impl PyToolResult {
     }
 }
 
-/// Pull an `Arc<dyn ToolLike>` out of whatever Python passed to `.tool(...)`:
-/// a built-in `Tool` handle, or a `@tool`-decorated callable.
+/// Read a usable tool out of whatever Python passed to `.tool(...)`: a built-in
+/// handle, or a `@tool`-decorated function.
 pub fn extract_tool(obj: &Bound<'_, PyAny>) -> PyResult<Arc<dyn ToolLike>> {
     if let Ok(handle) = obj.extract::<PyRef<PyTool>>() {
         return Ok(Arc::clone(&handle.inner));
@@ -233,7 +230,7 @@ fn handle(inner: Arc<dyn ToolLike>) -> PyTool {
     PyTool { inner }
 }
 
-// --- built-in factories ---
+// Built-in factories
 // Each reads as a constructor at the Python call site (e.g. `ReadFileTool()`).
 
 #[pyfunction]
@@ -254,7 +251,8 @@ fn edit_file_tool() -> PyTool {
     handle(Arc::new(EditFileTool))
 }
 
-/// Search file contents by regex, or a code shape via `syntax="code"`.
+/// Search file contents by regular expression, or by code shape with
+/// `syntax="code"`.
 #[pyfunction]
 #[pyo3(name = "GrepTool")]
 fn grep_tool() -> PyTool {
@@ -279,16 +277,17 @@ fn fetch_url_tool() -> PyTool {
     handle(Arc::new(FetchUrlTool))
 }
 
-/// Discover the tools an agent deferred until they are needed.
+/// Look up the tools held back until they are needed.
 #[pyfunction]
 #[pyo3(name = "FindToolsTool")]
 fn find_tools_tool() -> PyTool {
     handle(Arc::new(FindToolsTool))
 }
 
-/// Bind the knowledge tool to `store` without making it the agent's own
-/// knowledge. `Agent.knowledge(store)` is the usual route: it does this
-/// and also renders the store's index into the system prompt.
+/// Point the knowledge tool at `store` without making it the agent's own.
+///
+/// `Agent.knowledge(store)` is the usual route, and also shows the store's index
+/// in the prompt.
 #[pyfunction]
 #[pyo3(name = "ManageKnowledgeTool")]
 fn manage_knowledge_tool(store: PyRef<'_, PyKnowledge>) -> PyTool {
@@ -301,8 +300,8 @@ fn read_tickets_tool() -> PyTool {
     handle(Arc::new(ReadTicketsTool))
 }
 
-/// Finish a ticket with a result, optionally handing work to a child ticket.
-/// Registered on every agent built with `Agent()`.
+/// Write the result for the current ticket and mark it finished, handing work
+/// on to a child ticket when needed. Registered on every agent.
 #[pyfunction]
 #[pyo3(name = "FinishTool")]
 fn finish_tool() -> PyTool {
@@ -315,7 +314,7 @@ fn manage_tickets_tool() -> PyTool {
     handle(Arc::new(ManageTicketsTool))
 }
 
-/// Shell tool restricted to commands matching `pattern` (e.g. `"git *"`).
+/// Run a shell command matching an allowed pattern, such as `"git *"`.
 #[pyfunction]
 #[pyo3(name = "BashTool", signature = (name, pattern, description=None, read_only=false))]
 fn bash_tool(name: &str, pattern: &str, description: Option<&str>, read_only: bool) -> PyTool {
@@ -327,7 +326,7 @@ fn bash_tool(name: &str, pattern: &str, description: Option<&str>, read_only: bo
     handle(Arc::new(tool))
 }
 
-/// Shell tool with no command restriction. Only for trusted inputs.
+/// Run any shell command. Only for input you trust.
 #[pyfunction]
 #[pyo3(name = "UnrestrictedBashTool")]
 fn unrestricted_bash_tool() -> PyTool {

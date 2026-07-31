@@ -1,4 +1,5 @@
-//! Server-Sent Events parser for LLM streaming responses. Reassembles the byte stream into complete `data:` events regardless of where chunk boundaries fall.
+//! Reads Server-Sent Events from an LLM provider, reassembling whole `data:`
+//! events however the bytes arrive.
 
 use serde_json::Value;
 

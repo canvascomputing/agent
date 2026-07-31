@@ -1,8 +1,5 @@
-//! Ticket tools: give an agent a call surface for reading and mutating
-//! the surrounding `TicketSystem`. Two multi-action tools share one
-//! dispatch helper: `ReadTicketsTool` (read-only) and `ManageTicketsTool`
-//! (read + write). `FinishTool` (`finish`) is the sole way for an agent to
-//! finish its current ticket, with or without chaining a follow-up.
+//! The tools an agent reaches its own ticket queue through: reading it, adding
+//! to it, and finishing the ticket it holds.
 
 use serde_json::Value;
 
@@ -169,7 +166,7 @@ fn render_summary_list(tickets: &[SummaryRow<'_>]) -> String {
             format!("[{}] ", labels.join(","))
         };
         out.push_str(&format!(
-            "- {key} [{status}] {labels_label}— {task_preview}\n",
+            "- {key} [{status}] {labels_label}{task_preview}\n",
             status = status_label(*status),
         ));
     }

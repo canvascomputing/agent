@@ -1,4 +1,4 @@
-//! Per-ticket transcript entries and their projection back into
+//! One ticket's replies and how they become
 //! provider [`Message`] values. [`ReplyContent`] mirrors
 //! [`ContentBlock`] so the ticket surface stays free of provider types.
 
@@ -9,7 +9,7 @@ use crate::providers::{ContentBlock, Message};
 
 use super::now_millis;
 
-/// Originator of a transcript entry. The agent loop writes `System`
+/// Who wrote a reply. The agent loop writes `System`
 /// entries for the system prompt and for compaction boundaries; those
 /// are filtered when projecting replies back into `Message` values for
 /// the provider.
@@ -21,7 +21,7 @@ pub enum Author {
     Assistant,
 }
 
-/// One entry in a ticket's transcript.
+/// One entry in a ticket's replies.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Reply {
     pub author: Author,

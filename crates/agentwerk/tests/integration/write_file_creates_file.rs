@@ -1,6 +1,6 @@
 //! End-to-end: a real LLM uses `WriteFileTool` to create a file containing
 //! a fresh random token, and we verify the file landed on disk with the
-//! expected contents. No JSON schema — the disk state is the assertion.
+//! expected contents. No JSON schema: the disk state is the assertion.
 
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -30,7 +30,7 @@ async fn creates_file_with_token() -> std::result::Result<(), Box<dyn std::error
              Step 1: call `write_file` to create exactly the file the user \
              asks for, with exactly the content they specify (and nothing else). \
              Step 2: immediately call `finish` to settle the \
-             ticket. Do not write any prose — your only output must be tool \
+             ticket. Do not write any prose: your only output must be tool \
              calls.",
         )
         .tool(WriteFileTool)

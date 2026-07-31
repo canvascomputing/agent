@@ -1,5 +1,5 @@
-//! Tool execution: dispatches tool calls, offloads large outputs, and counts
-//! consecutive tool failures toward the retry budget.
+//! Runs the tools a model asks for, writes out oversized results, and counts
+//! consecutive failures against the retry budget.
 
 use std::collections::HashMap;
 use std::path::PathBuf;

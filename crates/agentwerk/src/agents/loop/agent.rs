@@ -1,5 +1,5 @@
-//! Per-agent driver: an outer loop claims tickets, an inner state machine
-//! drives each claimed ticket through requests, tool calls, and compaction.
+//! Drives one agent: it claims a ticket, then works it through requests, tool
+//! calls, and summarizing until the ticket is resolved.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -110,7 +110,7 @@ fn should_stop(agent: &Agent, ticket_system: &TicketSystem) -> bool {
 }
 
 /// Claim a `Todo` ticket for this agent, or resume one of its `InProgress`
-/// tickets; seed the transcript on first contact.
+/// tickets; write the first message when there is none.
 fn claim<'a>(agent: &'a Agent, ticket_system: &'a Arc<TicketSystem>) -> Option<TicketContext<'a>> {
     let claimable = |t: &Ticket| {
         t.status == Status::Todo

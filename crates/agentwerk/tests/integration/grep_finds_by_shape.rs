@@ -1,6 +1,6 @@
 //! End-to-end: a real LLM is given only `grep` and asked to list function
 //! names it cannot know in advance. Proves `grep` answers a find-by-shape
-//! question end-to-end — the model locates the definitions and reports the
+//! question end-to-end: the model locates the definitions and reports the
 //! names. (The code `syntax` is exercised directly in the unit tests; a
 //! live model tends to reach for a regex `grep` here, and that is fine.)
 

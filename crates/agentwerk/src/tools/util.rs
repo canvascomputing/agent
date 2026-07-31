@@ -1,4 +1,4 @@
-//! Shared helpers for the file and shell tools — glob matching and process invocation.
+//! Glob matching and process invocation, shared by the file and shell tools.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -71,7 +71,7 @@ fn glob_match_bytes(pattern: &[u8], text: &[u8]) -> bool {
     }
 }
 
-/// Cap on entries listed for a directory. A package dir can hold thousands of
+/// Limit on entries listed for a directory. A package directory can hold thousands of
 /// files; an unbounded list would flood the model's context.
 pub(crate) const MAX_DIR_ENTRIES: usize = 100;
 
@@ -106,8 +106,8 @@ fn nearest_existing_dir(path: &Path) -> Option<&Path> {
 }
 
 /// Recovery tail appended to a not-found error from a file tool. Prefers listing
-/// the directory the model is guessing into — when it lies within the working
-/// directory — so a wrong guess becomes the real directory contents next turn.
+/// the directory the model is guessing into, when that lies within the working
+/// directory, so a wrong guess becomes the real directory contents next turn.
 /// Falls back to echoing the working directory plus a dropped-folder suggestion
 /// for paths that escape it.
 pub(crate) fn not_found_hint(ctx_dir: &Path, resolved: &Path) -> String {

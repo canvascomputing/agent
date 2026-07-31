@@ -1,4 +1,4 @@
-//! The `Provider` trait every backend implements, plus the request shape callers pass in. The one seam between the agent loop and any particular vendor API.
+//! Connects agents to LLMs, and the request they send.
 
 use std::fmt;
 use std::future::Future;
@@ -13,22 +13,22 @@ use super::environment;
 use super::error::ProviderResult;
 use super::types::{Message, ModelResponse, StreamEvent};
 
-/// Tool description sent to the provider as the `tools` parameter.
+/// One tool as the model is told about it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderToolDefinition {
-    /// Unique name the model uses when calling the tool.
+    /// The name the model calls the tool by.
     pub name: String,
-    /// Human-readable description shown to the model.
+    /// What the tool does, in the words the model reads.
     pub description: String,
-    /// JSON Schema describing the tool's arguments.
+    /// What the tool accepts, as JSON Schema.
     pub input_schema: Value,
 }
 
-/// How much extended thinking to ask the model for. Each provider maps this
-/// to its own request field: Anthropic's `thinking` + `output_config.effort`,
-/// the OpenAI-compatible `reasoning_effort`. `Off` sends no such field and
-/// leaves thinking to the model's default. This controls only the request;
-/// reasoning the model returns is always captured as a `Thinking`
+/// How much reasoning to ask the model for.
+///
+/// Each LLM provider has its own field for it. `Off` sends none, leaving the
+/// model's own default. This shapes only the request: whatever reasoning comes
+/// back is always kept as a `Thinking`
 /// [`ContentBlock`](super::ContentBlock).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ReasoningEffort {
@@ -40,9 +40,8 @@ pub enum ReasoningEffort {
 }
 
 impl ReasoningEffort {
-    /// The request string (`"low"` / `"medium"` / `"high"`), or `None` when
-    /// off. Both the Anthropic `output_config.effort` and the OpenAI
-    /// `reasoning_effort` take these same strings.
+    /// The value sent with the request, `"low"`, `"medium"`, or `"high"`, or
+    /// `None` when off. Every supported LLM provider takes these same words.
     pub(crate) fn label(self) -> Option<&'static str> {
         match self {
             ReasoningEffort::Off => None,
@@ -59,51 +58,52 @@ impl fmt::Display for ReasoningEffort {
     }
 }
 
-/// One request to a provider. Built by the agent loop from the agent's
-/// configuration and the running conversation; passed to [`Provider::respond`]
-/// together with a streaming event callback.
+/// One request to an LLM provider, assembled from the agent's configuration and
+/// the conversation so far.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelRequest {
-    /// Model name (e.g. `claude-sonnet-4-20250514`).
+    /// Which model to ask, such as `claude-sonnet-4-20250514`.
     pub model: String,
-    /// System prompt assembled from role, behavior, and environment.
+    /// The system prompt, assembled from the role, the behavior, and the
+    /// facts of the moment.
     pub system_prompt: String,
-    /// Conversation history including the latest user input.
+    /// Everything said so far, ending with the latest input.
     pub messages: Vec<Message>,
-    /// Tool definitions available to the model this turn.
+    /// The tools the model may call this turn.
     pub tools: Vec<ProviderToolDefinition>,
-    /// Cap on output tokens for this single request. `None` lets the
-    /// provider apply its default.
+    /// Limit on this request's output tokens, or `None` for the LLM provider's
+    /// own default.
     pub max_request_tokens: Option<u32>,
-    /// Constraint on which tool the model may pick this turn.
+    /// Which tool the model may pick this turn.
     pub tool_choice: Option<ToolChoice>,
-    /// Extended-thinking depth to request. Carried from the [`Model`](super::Model).
+    /// How much reasoning to ask for, taken from the [`Model`](super::Model).
     #[serde(default)]
     pub reasoning_effort: ReasoningEffort,
 }
 
-/// Constraint on which tool the model may pick on a given turn.
+/// Which tool the model may pick on one turn.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ToolChoice {
-    /// The model picks freely (or replies without a tool call).
+    /// The model picks freely, or replies without calling a tool.
     Auto,
-    /// Force the model to call this tool.
+    /// The model must call this tool.
     Specific { name: String },
 }
 
-/// Core provider trait every backend implements. Object-safe via boxed futures.
+/// Connect to a `Provider` to give agents access to LLMs.
 ///
-/// Build a provider with one of the vendor constructors
-/// ([`AnthropicProvider`](crate::providers::AnthropicProvider),
+/// agentwerk supports [`AnthropicProvider`](crate::providers::AnthropicProvider),
 /// [`OpenAiProvider`](crate::providers::OpenAiProvider),
-/// [`MistralProvider`](crate::providers::MistralProvider),
-/// [`LiteLlmProvider`](crate::providers::LiteLlmProvider)) or pick one from the
+/// [`MistralProvider`](crate::providers::MistralProvider), and
+/// [`LiteLlmProvider`](crate::providers::LiteLlmProvider), or read one from the
 /// environment with [`provider_from_env`](crate::providers::provider_from_env).
+/// Implement the trait for anything else.
 pub trait Provider: Send + Sync {
-    /// Drive one model turn. Emits incremental [`StreamEvent`]s via the
-    /// callback as the model generates, then returns the assembled reply.
-    /// Callers that don't care about incremental events pass a no-op closure
-    /// and wait for the final [`ModelResponse`].
+    /// Run one turn: send the request, forward each [`StreamEvent`] as it
+    /// arrives, and give back the assembled reply.
+    ///
+    /// Pass a handler that does nothing to wait only for the final
+    /// [`ModelResponse`].
     fn respond(
         &self,
         request: ModelRequest,
@@ -170,8 +170,8 @@ pub(crate) fn build_client(timeout: Duration) -> reqwest::Client {
 
 /// Load CA certificates from a PEM bundle file, a directory of PEM files, or
 /// both. Panics if either path is unreadable, contains invalid PEM data, or
-/// if the combined result is empty — with built-in roots disabled, an empty
-/// trust store would silently reject every connection.
+/// if the combined result is empty: with the built-in roots off, an empty trust
+/// store would quietly reject every connection.
 fn root_certificates_from(file: Option<&str>, dir: Option<&str>) -> Vec<reqwest::Certificate> {
     let mut certs = Vec::new();
     if let Some(path) = file {
@@ -197,13 +197,13 @@ fn root_certificates_from(file: Option<&str>, dir: Option<&str>) -> Vec<reqwest:
     }
     assert!(
         !certs.is_empty(),
-        "SSL_CERT_FILE/SSL_CERT_DIR set but no certificates loaded — every connection would be rejected"
+        "SSL_CERT_FILE/SSL_CERT_DIR set but no certificates loaded: every connection would be rejected"
     );
     certs
 }
 
 /// Fire-and-forget HEAD request to warm the TCP+TLS connection pool. Helper
-/// for `Provider::prewarm` overrides — call this with the provider's own
+/// for a `Provider::prewarm` of your own. Pass it that provider's
 /// `reqwest::Client` and base URL.
 pub(crate) async fn prewarm_with(client: &reqwest::Client, base_url: &str) {
     let _ = tokio::time::timeout(Duration::from_secs(10), client.head(base_url).send()).await;

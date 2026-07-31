@@ -1,8 +1,5 @@
-//! Content search across a corpus, powered by ripgrep's engine (the `grep` and
-//! `ignore` crates) in-process. The `pattern` is a regular expression, matched
-//! the same way `rg pattern` would. The primary locate-where primitive: find
-//! where a pattern is mentioned before opening any single item. Read-only,
-//! bounded, and parallel-callable.
+//! Lets an agent search file contents by regular expression, so it can find
+//! where something is mentioned before opening any one file.
 
 use std::future::Future;
 use std::path::{Path, PathBuf};

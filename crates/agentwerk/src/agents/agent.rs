@@ -1,9 +1,5 @@
-//! Agent: identity + prompt parts + provider/model + a bound ticket system.
-//! `AgentBuilder::build()` produces the final agent, which
-//! `tickets.agent(agent)` binds to the system. agentwerk upgrades the
-//! bound reference once at the start of `run_agent` and accesses
-//! `tickets`, `policies`, `stats`, and `stop_signal` through the
-//! resulting `Arc<TicketSystem>`.
+//! The core entity of agentwerk: who an agent is, what it may call, and which
+//! queue it works from.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -27,15 +23,14 @@ fn default_agent_name() -> String {
     format!("agent-{n}")
 }
 
-/// Caller hook that rewrites a corrective directive in place, reading the
-/// bare failure reason as context; see
-/// [`AgentBuilder::edit_directive_on_retry`].
+/// Your function for rewriting the prompt that corrects an agent asked to try
+/// again. See [`AgentBuilder::edit_directive_on_retry`].
 pub(crate) type DirectiveEditor = dyn Fn(&str, &mut String) + Send + Sync;
 
-// --- builder ---
+// Builder
 
-/// Builder for [`Agent`]. Configures the LLM provider, model, role,
-/// tools, labels, and the working directory.
+/// An `AgentBuilder` collects who the agent is, what it may call, and where it
+/// works, then hands back the finished [`Agent`].
 #[derive(Clone)]
 pub struct AgentBuilder<P, M> {
     name: String,
@@ -72,11 +67,10 @@ impl AgentBuilder<(), ()> {
         }
     }
 
-    /// Construct an `Agent` with no tools pre-registered, for callers
-    /// that want to compose the whole registry themselves. The caller is
-    /// responsible for registering `FinishTool` via [`Self::tool`]:
-    /// without it the agent cannot finish its ticket and the loop
-    /// re-runs it.
+    /// Create an agent with no tools pre-registered.
+    ///
+    /// Register `FinishTool` yourself through [`Self::tool`]. Without it the
+    /// agent cannot finish a ticket, and the same ticket is tried again.
     pub fn empty() -> Self {
         let knowledge = Knowledge::load(".agentwerk").expect("open knowledge store");
         let mut tools = ToolRegistry::default();
@@ -96,9 +90,10 @@ impl AgentBuilder<(), ()> {
         }
     }
 
-    /// Detect both the provider and the model from environment variables.
-    /// Equivalent to `provider_from_env().model_from_env()`. Panics if no
-    /// provider env var is set.
+    /// Read environment variables for configuration.
+    ///
+    /// The same as `provider_from_env().model_from_env()`. Panics when no LLM
+    /// provider variable is set.
     pub fn from_env(self) -> AgentBuilder<Arc<dyn Provider>, Model> {
         self.provider_from_env().model_from_env()
     }
@@ -121,7 +116,7 @@ impl<M> AgentBuilder<(), M> {
         }
     }
 
-    /// Detect the provider from environment variables. Panics if no provider env var is set.
+    /// Read only the LLM provider from environment variables. Panics when none is set.
     pub fn provider_from_env(self) -> AgentBuilder<Arc<dyn Provider>, M> {
         let p = crate::providers::provider_from_env().expect(
             "LLM provider required: set ANTHROPIC_API_KEY, OPENAI_API_KEY, MISTRAL_API_KEY, or LITELLM_API_KEY",
@@ -147,7 +142,7 @@ impl<P> AgentBuilder<P, ()> {
         }
     }
 
-    /// Read the model name from environment variables. Panics if no model can be detected.
+    /// Read only the model from environment variables. Panics when none is set.
     pub fn model_from_env(self) -> AgentBuilder<P, Model> {
         let model = crate::providers::model_from_env().expect("model name required");
         self.model(model)
@@ -160,24 +155,24 @@ impl<P, M> AgentBuilder<P, M> {
         self
     }
 
-    /// The agent's system prompt. A `{context}` placeholder anywhere in
-    /// it expands to the run's facts — ticket key, date, working
-    /// directory, platform, and a bullet per configured budget. Nothing
-    /// is added when the placeholder is absent, so the role owns both
-    /// whether the facts appear and where.
+    /// Define who the agent is and how it should work.
+    ///
+    /// A `{context}` placeholder anywhere in the text expands to the facts of
+    /// the moment: ticket key, date, working directory, platform, and one line
+    /// per configured limit. Leave the placeholder out and nothing is added, so
+    /// the role decides both whether those facts appear and where.
     pub fn role(mut self, r: impl Into<String>) -> Self {
         self.role = r.into();
         self
     }
 
-    /// Add a single label to the agent's scope. Use [`Self::labels`] to
-    /// add several at once.
+    /// Restrict the agent to tickets carrying a matching label.
     pub fn label(mut self, l: impl Into<String>) -> Self {
         self.labels.push(l.into());
         self
     }
 
-    /// Add many labels at once.
+    /// Restrict the agent to tickets carrying any of these labels.
     pub fn labels<I, S>(mut self, iter: I) -> Self
     where
         I: IntoIterator<Item = S>,
@@ -187,24 +182,27 @@ impl<P, M> AgentBuilder<P, M> {
         self
     }
 
-    /// Pause on assistant replies that carry no tool calls, for REPL
-    /// hosts that drive subsequent turns via `TicketSystem::reply`.
+    /// Let the agent wait for new instructions to keep a ticket in-progress.
+    ///
+    /// The agent stops after a reply that calls no tool, and
+    /// `TicketSystem::reply` drives the next turn.
     pub fn interactive(mut self) -> Self {
         self.interactive = true;
         self
     }
 
-    /// Bind `{key}` to `value`. The placeholder is substituted in the
-    /// agent's `role` and in any string-typed `Ticket::task` enqueued
-    /// through this agent. Unresolved placeholders are left verbatim.
-    /// Binding `context` shadows the built-in block described on
+    /// Inject data into prompts with template strings.
+    ///
+    /// `{key}` is replaced in the agent's role and in any text task submitted
+    /// through this agent. A placeholder with no value is left as it is.
+    /// Binding `context` replaces the built-in block described on
     /// [`Self::role`].
     pub fn template(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.templates.push((key.into(), value.into()));
         self
     }
 
-    /// Bind many `{key} → value` pairs at once.
+    /// Inject more than one entry into prompts.
     pub fn templates<I, K, V>(mut self, vars: I) -> Self
     where
         I: IntoIterator<Item = (K, V)>,
@@ -216,13 +214,13 @@ impl<P, M> AgentBuilder<P, M> {
         self
     }
 
-    /// Register a single tool the agent may call.
+    /// Register a tool the agent may call.
     pub fn tool(mut self, tool: impl ToolLike + 'static) -> Self {
         self.tools.register(tool);
         self
     }
 
-    /// Register many tools at once.
+    /// Register several tools the agent may call.
     pub fn tools<I, T>(mut self, tools: I) -> Self
     where
         I: IntoIterator<Item = T>,
@@ -234,18 +232,18 @@ impl<P, M> AgentBuilder<P, M> {
         self
     }
 
-    /// Directory tools resolve filesystem paths against. Defaults to the
-    /// process's current directory at construction time.
+    /// Set the directory the agent has access to, the current one by default.
     pub fn dir(mut self, p: impl Into<PathBuf>) -> Self {
         self.dir = p.into();
         self
     }
 
-    /// Knowledge store the agent uses for its long-term memory. Replaces
-    /// the default store opened at construction, both as the store rendered
-    /// into the system prompt and as the one `ManageKnowledgeTool` writes to.
-    /// Share one store across multiple agents the same way
-    /// `ticket_system(&shared)` shares a queue.
+    /// Share a knowledge store, the durable memory the agent carries across
+    /// tickets and shares with other agents.
+    ///
+    /// It replaces the store opened by default, both for what the prompt shows
+    /// and for what `ManageKnowledgeTool` writes to. Hand the same store to
+    /// several agents the way `ticket_system(&shared)` shares a queue.
     pub fn knowledge(mut self, store: &Arc<Knowledge>) -> Self {
         self.tools
             .register(ManageKnowledgeTool::new(Arc::clone(store)));
@@ -253,12 +251,13 @@ impl<P, M> AgentBuilder<P, M> {
         self
     }
 
-    /// Rewrite the corrective directive agentwerk injects when it asks the
-    /// agent again after a turn ended without an accepted result: the model
-    /// called no tool, or a finish tool's output failed the ticket schema.
-    /// The editor reads the bare reason and rewrites the directive in place,
-    /// which arrives holding the built-in text, so an editor that writes
-    /// nothing keeps the default. Called inline per retry, so keep it cheap.
+    /// Override the prompt that corrects an agent asked to try again.
+    ///
+    /// agentwerk asks again when a turn ends without an accepted result: the
+    /// model called no tool, or its result missed the ticket's schema. Your
+    /// function reads the reason and rewrites the prompt, which arrives holding
+    /// the built-in text, so writing nothing keeps the default. It runs once per
+    /// retry, so keep it cheap.
     pub fn edit_directive_on_retry(
         mut self,
         editor: impl Fn(&str, &mut String) + Send + Sync + 'static,
@@ -350,10 +349,11 @@ impl<P, M> AgentBuilder<P, M> {
 }
 
 impl AgentBuilder<Arc<dyn Provider>, Model> {
-    /// Produce the final `Agent`. The agent is born bound to a private
-    /// `TicketSystem` so `.task(...).finish().await` works without an
-    /// external system; `TicketSystem::agent(...)` later drains the private
-    /// queue into a shared system.
+    /// Create the agent.
+    ///
+    /// It starts with a ticket system of its own, so `.task(...).finish().await`
+    /// works without one being set up. `TicketSystem::agent(...)` later moves
+    /// those tickets into the shared system.
     pub fn build(self) -> Agent {
         let mut agent = Agent {
             name: self.name,
@@ -376,12 +376,10 @@ impl AgentBuilder<Arc<dyn Provider>, Model> {
     }
 }
 
-// --- agent ---
+// Agent
 
-/// Handle from an `Agent` to its `TicketSystem`. `Private` is what a
-/// freshly-built agent carries until `bind_agent` adopts it; `Shared` is
-/// what every other agent (rebound ones, clones, agents inside
-/// `TicketSystem::agents`) carries.
+/// How an `Agent` reaches its `TicketSystem`. A freshly built agent carries
+/// `Private` until it is added to a system; everything else carries `Shared`.
 pub(crate) enum TicketSystemRef {
     Shared(Weak<TicketSystem>),
     Private(Arc<TicketSystem>),
@@ -396,9 +394,11 @@ impl TicketSystemRef {
     }
 }
 
-/// Bound to a [`TicketSystem`]. Claims tickets assigned by name or
-/// label, calls the LLM provider and runs the tools it requests, then
-/// writes the result back through `FinishTool`.
+/// An `Agent` is the core entity of agentwerk. It has access to tools for
+/// solving tasks in the form of tickets.
+///
+/// It claims the tickets its name or labels match, calls the LLM provider, runs
+/// the tools the model asks for, and writes the result back.
 ///
 /// ```no_run
 /// use agentwerk::Agent;
@@ -432,8 +432,8 @@ pub struct Agent {
 }
 
 impl Clone for Agent {
-    /// Convert `Private` to `Shared(Weak)` on clone so rebinding the
-    /// original cannot leave a stale clone enqueuing into an orphaned queue.
+    /// A clone points at the shared system, so rebinding the original cannot
+    /// leave the clone filing tickets into a queue nothing reads.
     fn clone(&self) -> Self {
         let ticket_system = match &self.ticket_system {
             TicketSystemRef::Shared(w) => TicketSystemRef::Shared(w.clone()),
@@ -457,12 +457,12 @@ impl Clone for Agent {
 }
 
 impl Agent {
-    /// Entry point for the fluent builder.
+    /// Start building an agent.
     pub fn new() -> AgentBuilder<(), ()> {
         AgentBuilder::new()
     }
 
-    /// Entry point for a builder with no tools pre-registered.
+    /// Start building an agent with no tools pre-registered.
     pub fn empty() -> AgentBuilder<(), ()> {
         AgentBuilder::empty()
     }
@@ -561,26 +561,23 @@ impl Agent {
         out
     }
 
-    /// Bind this agent to a shared `TicketSystem`. Drains any tickets
-    /// the agent had already enqueued in its prior store into `sys`,
-    /// binds `sys` to the agent so it reads the shared queue, and
-    /// registers a clone of `self` into `sys`'s agents list so the
-    /// loop will dispatch this agent at `run` / `finish` time.
+    /// Attach a built agent to a ticket system.
+    ///
+    /// Any tickets the agent already queued move across, and the agent starts
+    /// reading the shared queue.
     pub fn ticket_system(mut self, sys: &Arc<TicketSystem>) -> Self {
         sys.bind_agent(&mut self);
         self
     }
 
-    /// Enqueue a ticket carrying `task` as its body on the bound system.
-    /// Returns the new ticket's key, mirroring [`TicketSystem::task`].
-    /// Chain lifecycle calls on [`Agent::finish`], which returns the
-    /// bound system.
+    /// Submit a task and return its ticket key.
+    ///
+    /// Call it as often as you like: one agent can drive many tickets.
     pub fn task<T: Serialize>(&self, task: T) -> String {
         self.dispatch(Ticket::new(task))
     }
 
-    /// Enqueue a fully-built `Ticket` on the bound system. Returns the
-    /// new ticket's key, mirroring [`TicketSystem::ticket`].
+    /// Submit a `Ticket` with custom labels or schema, and return its key.
     pub fn ticket(&self, ticket: Ticket) -> String {
         self.dispatch(ticket)
     }
@@ -596,8 +593,8 @@ impl Agent {
         sys.insert(ticket, self.name.clone())
     }
 
-    /// Start the agent loop on a background tokio task. Returns the bound
-    /// system so callers can `cancel()` or read results on the same value.
+    /// Begin processing tickets, and hand back the ticket system so results and
+    /// cancellation stay one call away.
     pub fn start(&self) -> Arc<TicketSystem> {
         let sys = self
             .ticket_system
@@ -607,9 +604,8 @@ impl Agent {
         sys
     }
 
-    /// Start a background run and wait for every queued ticket to finish.
-    /// Returns the bound system so the caller can read results via
-    /// [`TicketSystem::last_result`] etc.
+    /// Process every queued ticket, then hand back the ticket system so results
+    /// can be read from it.
     pub async fn finish(&self) -> Arc<TicketSystem> {
         let sys = self
             .ticket_system
@@ -688,7 +684,7 @@ mod tests {
         assert!(b.get_name().starts_with("agent-"));
     }
 
-    /// `system_prompt` with empty runtime state and a fixed ticket key.
+    /// The system prompt with no live state and a fixed ticket key.
     fn system_prompt<P, M>(agent: &AgentBuilder<P, M>, knowledge: Option<&str>) -> String {
         agent.system_prompt(knowledge, &Policies::default(), &Stats::new(), "T-1")
     }
@@ -931,9 +927,9 @@ mod tests {
     #[test]
     fn system_prompt_renders_knowledge_section_when_body_present() {
         let agent = Agent::new().role("R");
-        let prompt = system_prompt(&agent, Some("- **config** — Port 8080"));
+        let prompt = system_prompt(&agent, Some("- **config**: Port 8080"));
         assert!(prompt.contains("R"));
-        assert!(prompt.contains("## Knowledge\n\n- **config** — Port 8080"));
+        assert!(prompt.contains("## Knowledge\n\n- **config**: Port 8080"));
     }
 
     #[test]

@@ -1,11 +1,12 @@
-//! View-model for one section of an assembled prompt: a body of markdown plus an optional `## Heading` the builder injects at render time.
+//! One section of a prompt: its markdown body, and the heading the builder puts
+//! above it.
 
 use std::borrow::Cow;
 
 /// One section of an assembled prompt. Knows whether it should render under a
 /// `## Heading` (Knowledge) or as bare body (Role, Directive). Keeping
-/// this concern here means the source `.md` files contain only body content —
-/// the structural markdown is added by the builder.
+/// this concern here means the source `.md` files hold body content only, and
+/// the builder adds the surrounding markdown.
 #[derive(Debug, Clone)]
 pub(crate) struct Section {
     pub heading: Option<&'static str>,
@@ -44,8 +45,8 @@ impl Section {
     }
 
     /// Trim leading and trailing newlines off the body so the builder controls
-    /// section spacing — empty leading/trailing lines in source files do not
-    /// leak into the final prompt.
+    /// section spacing, so blank lines at either end of a source file do not
+    /// reach the final prompt.
     pub fn render(&self) -> String {
         let body = self.body.trim_matches('\n');
         match self.heading {
@@ -67,8 +68,8 @@ mod tests {
 
     #[test]
     fn knowledge_wraps_body_in_h2_heading() {
-        let s = Section::knowledge("- **config** — Port 8080");
-        assert_eq!(s.render(), "## Knowledge\n\n- **config** — Port 8080");
+        let s = Section::knowledge("- **config**: Port 8080");
+        assert_eq!(s.render(), "## Knowledge\n\n- **config**: Port 8080");
     }
 
     #[test]

@@ -1,7 +1,5 @@
-//! Single-file tool definition in markdown: `---` frontmatter (`name`,
-//! `read_only`), a free-form prose body shown to the model, and a `## Schema`
-//! section whose ` ```json ` fence holds the JSON Schema. Parsed once and
-//! handed to the `ToolLike` impl that includes it.
+//! Reads a tool's whole definition out of one markdown file: its name, what the
+//! model is told it does, and what it accepts.
 
 use serde_json::Value;
 

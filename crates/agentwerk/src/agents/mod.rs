@@ -1,4 +1,4 @@
-//! Agent implementations.
+//! Agents, the tickets they work from, and the loop that drives them.
 
 pub mod agent;
 pub(crate) mod compaction;
