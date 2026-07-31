@@ -260,10 +260,10 @@ fn build_event_handler(
     verbose: bool,
     style: Style,
     total: usize,
-) -> Arc<dyn Fn(Event) + Send + Sync> {
+) -> Arc<dyn Fn(&Event) + Send + Sync> {
     let done = Arc::new(AtomicUsize::new(0));
     let width = digit_width(total);
-    Arc::new(move |event: Event| {
+    Arc::new(move |event: &Event| {
         let agent = &event.agent_name;
         let key = &event.ticket_key;
         match &event.kind {

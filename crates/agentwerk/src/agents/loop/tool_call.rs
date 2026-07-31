@@ -126,7 +126,7 @@ pub(super) async fn run(context: &mut TicketContext<'_>, mut calls: Vec<ToolCall
             message: schema_detail.clone(),
         });
         blocks.push(ContentBlock::Text {
-            text: context.failure_directive(&schema_detail),
+            text: context.retry_directive(&schema_detail),
         });
     }
     context.ticket_system.add_reply(
@@ -238,7 +238,7 @@ mod tests {
                 .provider(provider.clone() as Arc<dyn Provider>)
                 .model("mock")
                 .role("test")
-                .edit_directive_on_failure(|detail, directive| {
+                .edit_directive_on_retry(|detail, directive| {
                     *directive = format!("REDO NOW. {detail}\n{directive}")
                 })
                 .build(),
@@ -523,9 +523,9 @@ mod tests {
 
         let collected: Arc<std::sync::Mutex<Vec<crate::event::Event>>> =
             Arc::new(std::sync::Mutex::new(Vec::new()));
-        let handler: Arc<dyn Fn(crate::event::Event) + Send + Sync> = {
+        let handler: Arc<dyn Fn(&crate::event::Event) + Send + Sync> = {
             let c = Arc::clone(&collected);
-            Arc::new(move |e| c.lock().unwrap().push(e))
+            Arc::new(move |e: &crate::event::Event| c.lock().unwrap().push(e.clone()))
         };
 
         let results_dir = crate::test_util::TempDir::new().unwrap();

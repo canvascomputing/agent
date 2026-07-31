@@ -50,7 +50,7 @@ async fn surfaces_a_deferred_tool_definition() -> std::result::Result<(), Box<dy
     let tickets = TicketSystem::new();
     tickets.max_turns(6);
     tickets.max_time(Duration::from_secs(45));
-    tickets.on_event(move |e: Event| match &e.kind {
+    tickets.on_event(move |e: &Event| match &e.kind {
         EventKind::ToolCallStarted { tool_name, .. } => {
             sink.lock().unwrap().push(CapturedCall {
                 name: tool_name.clone(),

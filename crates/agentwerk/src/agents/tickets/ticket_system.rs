@@ -27,7 +27,7 @@ use super::super::stats::Stats;
 use super::ticket::{Status, Ticket};
 use super::{now_millis, numeric_id, policy_violated_kind, Reply};
 
-type EventHandler = dyn Fn(Event) + Send + Sync;
+type EventHandler = dyn Fn(&Event) + Send + Sync;
 
 type ReplyEditor = dyn Fn(&[Event], &mut Vec<Reply>) + Send + Sync;
 
@@ -271,9 +271,65 @@ impl TicketSystem {
     /// handler fires on every event, in installation order. Handlers
     /// must be cheap and non-blocking. When no handler has been
     /// installed, [`default_logger`] runs in its place.
-    pub fn on_event(&self, h: impl Fn(Event) + Send + Sync + 'static) -> &Self {
+    pub fn on_event(&self, h: impl Fn(&Event) + Send + Sync + 'static) -> &Self {
         self.event_handlers.lock().unwrap().push(Arc::new(h));
         self
+    }
+
+    /// Observe every finished ticket together with its result. Fires on
+    /// `TicketFinished`, so the value handed over is the stored,
+    /// schema-validated result, already out of its `Option`: handlers never
+    /// reach into the finish tool's input shape. One more entry on the
+    /// [`Self::on_event`] chain, and the base every `_on_result` reactor
+    /// below is built from.
+    pub fn on_result<F>(&self, handler: F) -> &Self
+    where
+        F: Fn(&Ticket, &serde_json::Value) + Send + Sync + 'static,
+    {
+        let supervisor = self.weak_self.clone();
+        self.on_event(move |event| {
+            if !matches!(event.kind, EventKind::TicketFinished) {
+                return;
+            }
+            let Some(system) = supervisor.upgrade() else {
+                return;
+            };
+            let Some(finished) = system.get_ticket(&event.ticket_key) else {
+                return;
+            };
+            let Some(result) = finished.result.clone() else {
+                return;
+            };
+            handler(&finished, &result);
+        })
+    }
+
+    /// Observe every failure together with the ticket it happened in:
+    /// `TicketFailed`, `RequestFailed`, `ToolCallFailed`, `FileOpenFailed`,
+    /// `CompactionFailed`. Match on `event.kind` to tell a failure that ends
+    /// the ticket from one the agent works around. One more entry on the
+    /// [`Self::on_event`] chain, and the base every `_on_failure` reactor
+    /// below is built from.
+    ///
+    /// Resolving the ticket copies its replies, so an agent that fails many
+    /// tool calls pays that copy once per failure.
+    pub fn on_failure<F>(&self, handler: F) -> &Self
+    where
+        F: Fn(&Event, &Ticket) + Send + Sync + 'static,
+    {
+        let supervisor = self.weak_self.clone();
+        self.on_event(move |event| {
+            if !event.kind.is_failure() {
+                return;
+            }
+            let Some(system) = supervisor.upgrade() else {
+                return;
+            };
+            let Some(ticket) = system.get_ticket(&event.ticket_key) else {
+                return;
+            };
+            handler(event, &ticket);
+        })
     }
 
     /// Register an editor that rewrites or drops a ticket's replies
@@ -344,7 +400,7 @@ impl TicketSystem {
         // Buffer each ticket's events for the editors as one more `on_event`
         // handler (like `cancel_on_event`), installed once with the first editor.
         let supervisor = self.weak_self.clone();
-        let buffer_event = move |event: Event| {
+        let buffer_event = move |event: &Event| {
             // Streaming chunks carry no editing signal; run-lifecycle events
             // (empty key) belong to no ticket.
             if event.ticket_key.is_empty()
@@ -362,7 +418,7 @@ impl TicketSystem {
                 .pending
                 .entry(event.ticket_key.clone())
                 .or_default()
-                .push(event);
+                .push(event.clone());
         };
         self.on_event(buffer_event);
         self
@@ -374,11 +430,11 @@ impl TicketSystem {
         let event = Event::new(agent, key, kind);
         let handlers: Vec<Arc<EventHandler>> = self.event_handlers.lock().unwrap().clone();
         if handlers.is_empty() {
-            default_logger()(event);
+            default_logger()(&event);
             return;
         }
         for h in &handlers {
-            h(event.clone());
+            h(&event);
         }
     }
 
@@ -530,7 +586,7 @@ impl TicketSystem {
         self
     }
 
-    /// Cancel the run when `predicate(&event)` first returns true.
+    /// Cancel the run when `predicate` first returns true for an event.
     /// Implemented as one more entry on the [`Self::on_event`] chain;
     /// composes with any logger the caller installed.
     pub fn cancel_on_event<F>(&self, predicate: F) -> &Self
@@ -539,7 +595,7 @@ impl TicketSystem {
     {
         let supervisor = self.weak_self.clone();
         self.on_event(move |event| {
-            if !predicate(&event) {
+            if !predicate(event) {
                 return;
             }
             if let Some(s) = supervisor.upgrade() {
@@ -548,10 +604,10 @@ impl TicketSystem {
         })
     }
 
-    /// Call off the `label` pool when `predicate(&event)` first returns true.
-    /// The label-scoped sibling of [`Self::cancel_on_event`]: instead of stopping
-    /// the whole run it invokes [`Self::cancel_label`], so the other pools keep
-    /// going. Implemented as one more entry on the [`Self::on_event`] chain.
+    /// Call off the `label` pool when `predicate` first returns true for an
+    /// event. The label-scoped sibling of [`Self::cancel_on_event`]: instead of
+    /// stopping the whole run it invokes [`Self::cancel_label`], so the other
+    /// pools keep going. One more entry on the [`Self::on_event`] chain.
     pub fn cancel_label_on_event<F>(&self, label: impl Into<String>, predicate: F) -> &Self
     where
         F: Fn(&Event) -> bool + Send + Sync + 'static,
@@ -559,7 +615,7 @@ impl TicketSystem {
         let supervisor = self.weak_self.clone();
         let label = label.into();
         self.on_event(move |event| {
-            if !predicate(&event) {
+            if !predicate(event) {
                 return;
             }
             if let Some(s) = supervisor.upgrade() {
@@ -568,29 +624,40 @@ impl TicketSystem {
         })
     }
 
-    /// Cancel the run when a finished ticket's result matches `predicate`.
-    /// Fires on `TicketFinished`, so the value passed is the stored,
-    /// schema-validated result: callers never reach into the finish tool's
-    /// input shape. Fail-fast for "stop the whole run on the first result
-    /// that means stop".
-    pub fn cancel_on_result<F>(&self, predicate: F) -> &Self
+    /// Enqueue a follow-up ticket whenever an event makes `make` return one.
+    /// The broadest of the three: `make` sees every kind, including the
+    /// streamed chunks, so match on `event.kind` first. Guard against a
+    /// follow-up that itself re-triggers `make`, or the run never drains.
+    pub fn create_ticket_on_event<F>(&self, make: F) -> &Self
     where
-        F: Fn(&serde_json::Value) -> bool + Send + Sync + 'static,
+        F: Fn(&Event) -> Option<Ticket> + Send + Sync + 'static,
     {
         let supervisor = self.weak_self.clone();
         self.on_event(move |event| {
-            if !matches!(event.kind, EventKind::TicketFinished) {
+            let Some(ticket) = make(event) else {
+                return;
+            };
+            if let Some(system) = supervisor.upgrade() {
+                system.ticket(ticket);
+            }
+        })
+    }
+
+    /// Cancel the run when a finished ticket's result matches `predicate`.
+    /// Fail-fast for "stop the whole run on the first result that means stop".
+    /// Built on [`Self::on_result`], so the value passed is the stored,
+    /// schema-validated result.
+    pub fn cancel_on_result<F>(&self, predicate: F) -> &Self
+    where
+        F: Fn(&Ticket, &serde_json::Value) -> bool + Send + Sync + 'static,
+    {
+        let supervisor = self.weak_self.clone();
+        self.on_result(move |ticket, result| {
+            if !predicate(ticket, result) {
                 return;
             }
-            let key = &event.ticket_key;
-            let Some(system) = supervisor.upgrade() else {
-                return;
-            };
-            let Some(result) = system.get_ticket(key).and_then(|t| t.result) else {
-                return;
-            };
-            if predicate(&result) {
-                system.cancel();
+            if let Some(s) = supervisor.upgrade() {
+                s.cancel();
             }
         })
     }
@@ -605,53 +672,110 @@ impl TicketSystem {
     /// ```no_run
     /// # use agentwerk::TicketSystem;
     /// let tickets = TicketSystem::new();
-    /// tickets.cancel_label_on_result("scan", |result| result["verdict"] == "malicious");
+    /// tickets.cancel_label_on_result("scan", |_, result| result["verdict"] == "malicious");
     /// ```
     pub fn cancel_label_on_result<F>(&self, label: impl Into<String>, predicate: F) -> &Self
     where
-        F: Fn(&serde_json::Value) -> bool + Send + Sync + 'static,
+        F: Fn(&Ticket, &serde_json::Value) -> bool + Send + Sync + 'static,
     {
         let supervisor = self.weak_self.clone();
         let label = label.into();
-        self.on_event(move |event| {
-            if !matches!(event.kind, EventKind::TicketFinished) {
+        self.on_result(move |ticket, result| {
+            if !predicate(ticket, result) {
                 return;
             }
-            let key = &event.ticket_key;
-            let Some(system) = supervisor.upgrade() else {
-                return;
-            };
-            let Some(result) = system.get_ticket(key).and_then(|t| t.result) else {
-                return;
-            };
-            if predicate(&result) {
-                system.cancel_label(label.clone());
+            if let Some(s) = supervisor.upgrade() {
+                s.cancel_label(label.clone());
             }
         })
     }
 
     /// Enqueue a follow-up ticket whenever a finished ticket makes `make`
-    /// return one. Fires on `TicketFinished`, passing the finished ticket
-    /// so `make` reads its key, labels, task, and schema-validated result,
-    /// and can chain the follow-up via `Ticket::parent`. Guard against a
-    /// follow-up that itself re-triggers `make`, or the run never drains.
+    /// return one. `make` reads the finished ticket's key, labels, and task
+    /// alongside its result, and can chain the follow-up via `Ticket::parent`.
+    /// Guard against a follow-up that itself re-triggers `make`, or the run
+    /// never drains.
     pub fn create_ticket_on_result<F>(&self, make: F) -> &Self
     where
-        F: Fn(&Ticket) -> Option<Ticket> + Send + Sync + 'static,
+        F: Fn(&Ticket, &serde_json::Value) -> Option<Ticket> + Send + Sync + 'static,
     {
         let supervisor = self.weak_self.clone();
-        self.on_event(move |event| {
-            if !matches!(event.kind, EventKind::TicketFinished) {
+        self.on_result(move |finished, result| {
+            let Some(ticket) = make(finished, result) else {
+                return;
+            };
+            if let Some(system) = supervisor.upgrade() {
+                system.ticket(ticket);
+            }
+        })
+    }
+
+    /// Cancel the run when a failure matches `predicate`. Built on
+    /// [`Self::on_failure`], so the predicate sees all five failure kinds:
+    /// narrow it on `event.kind` to stop on a failed ticket only, or leave it
+    /// broad to stop on the first tool or provider error.
+    pub fn cancel_on_failure<F>(&self, predicate: F) -> &Self
+    where
+        F: Fn(&Event, &Ticket) -> bool + Send + Sync + 'static,
+    {
+        let supervisor = self.weak_self.clone();
+        self.on_failure(move |event, ticket| {
+            if !predicate(event, ticket) {
                 return;
             }
-            let key = &event.ticket_key;
-            let Some(system) = supervisor.upgrade() else {
+            if let Some(s) = supervisor.upgrade() {
+                s.cancel();
+            }
+        })
+    }
+
+    /// Call off the `label` pool when a failure matches `predicate`. The
+    /// label-scoped sibling of [`Self::cancel_on_failure`]: instead of stopping
+    /// the whole run it invokes [`Self::cancel_label`], so the other pools keep
+    /// going.
+    pub fn cancel_label_on_failure<F>(&self, label: impl Into<String>, predicate: F) -> &Self
+    where
+        F: Fn(&Event, &Ticket) -> bool + Send + Sync + 'static,
+    {
+        let supervisor = self.weak_self.clone();
+        let label = label.into();
+        self.on_failure(move |event, ticket| {
+            if !predicate(event, ticket) {
+                return;
+            }
+            if let Some(s) = supervisor.upgrade() {
+                s.cancel_label(label.clone());
+            }
+        })
+    }
+
+    /// Enqueue a follow-up ticket whenever a failure makes `make` return one.
+    /// The retry path: `make` reads the failed ticket's task and labels and
+    /// hands back a fresh attempt, chained via `Ticket::parent`. Count the
+    /// attempts in the closure, or a ticket that fails every time re-queues
+    /// itself forever.
+    ///
+    /// ```no_run
+    /// # use agentwerk::{Ticket, TicketSystem};
+    /// # use agentwerk::event::EventKind;
+    /// let tickets = TicketSystem::new();
+    /// tickets.create_ticket_on_failure(|event, failed| {
+    ///     if !matches!(event.kind, EventKind::TicketFailed) || failed.parent.is_some() {
+    ///         return None;
+    ///     }
+    ///     Some(Ticket::new(failed.task.clone()).parent(&failed.key))
+    /// });
+    /// ```
+    pub fn create_ticket_on_failure<F>(&self, make: F) -> &Self
+    where
+        F: Fn(&Event, &Ticket) -> Option<Ticket> + Send + Sync + 'static,
+    {
+        let supervisor = self.weak_self.clone();
+        self.on_failure(move |event, failed| {
+            let Some(ticket) = make(event, failed) else {
                 return;
             };
-            let Some(finished) = system.get_ticket(key) else {
-                return;
-            };
-            if let Some(ticket) = make(&finished) {
+            if let Some(system) = supervisor.upgrade() {
                 system.ticket(ticket);
             }
         })
@@ -684,7 +808,7 @@ impl TicketSystem {
             let Some(ticket) = system.get_ticket(&event.ticket_key) else {
                 return;
             };
-            handler(&event, &ticket);
+            handler(event, &ticket);
         })
     }
 
@@ -809,7 +933,7 @@ impl TicketSystem {
     /// # use agentwerk::{Ticket, TicketSystem};
     /// let tickets = TicketSystem::new();
     /// let system = std::sync::Arc::downgrade(&tickets);
-    /// tickets.create_ticket_on_result(move |done| {
+    /// tickets.create_ticket_on_result(move |done, _| {
     ///     if !done.has_label("research") || system.upgrade()?.label_cancelled("research") {
     ///         return None;
     ///     }
@@ -1062,6 +1186,7 @@ impl TicketSystem {
 mod tests {
     use super::super::test_util::*;
     use super::*;
+    use crate::event::ToolFailureKind;
 
     #[test]
     fn ticket_system_handle_is_shared_between_caller_and_added_agent() {
@@ -1372,7 +1497,7 @@ mod tests {
     #[test]
     fn cancel_label_on_result_calls_off_one_pool_without_cancelling_the_run() {
         let (sys, _tmp) = test_system();
-        sys.cancel_label_on_result("scan", |result| result.as_str() == Some("stop"));
+        sys.cancel_label_on_result("scan", |_, result| result.as_str() == Some("stop"));
         sys.ticket(Ticket::new("a").label("scan"));
         let key = sys.claim(|t| t.has_label("scan"), "agent").unwrap();
         attach_done_result(&sys, &key, "stop");
@@ -1590,13 +1715,128 @@ mod tests {
     }
 
     #[test]
+    fn on_result_receives_the_finished_ticket_and_its_result() {
+        let (sys, _tmp) = test_system();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let record = Arc::clone(&seen);
+        sys.on_result(move |ticket, result| {
+            record
+                .lock()
+                .unwrap()
+                .push((ticket.key.clone(), result.clone()))
+        });
+        sys.ticket(Ticket::new("x").label("L"));
+        let key = sys.claim(|t| t.has_label("L"), "agent").unwrap();
+
+        attach_done_result(&sys, &key, "lead");
+
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec![(key, serde_json::json!("lead"))]
+        );
+    }
+
+    #[test]
+    fn on_failure_fires_for_a_tool_call_failure_not_only_a_failed_ticket() {
+        let (sys, _tmp) = test_system();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let record = Arc::clone(&seen);
+        sys.on_failure(move |event, ticket| {
+            record
+                .lock()
+                .unwrap()
+                .push((event.kind.name(), ticket.key.clone()))
+        });
+        let key = sys.task("work");
+
+        sys.emit(&key, "agent", EventKind::TurnStarted);
+        sys.emit(
+            &key,
+            "agent",
+            EventKind::ToolCallFailed {
+                tool_name: "grep".into(),
+                call_id: "c1".into(),
+                reason: ToolFailureKind::ExecutionFailed,
+                message: "no such directory".into(),
+            },
+        );
+        sys.set_failed(&key).unwrap();
+
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec![
+                ("tool_call_failed", key.clone()),
+                ("ticket_failed", key.clone()),
+            ]
+        );
+    }
+
+    #[test]
+    fn cancel_on_failure_trips_signal_when_predicate_matches() {
+        let (sys, _tmp) = test_system();
+        sys.cancel_on_failure(|event, _| matches!(event.kind, EventKind::TicketFailed));
+        let key = sys.task("work");
+        assert!(!sys.is_cancelled());
+
+        sys.set_failed(&key).unwrap();
+
+        assert!(sys.is_cancelled());
+    }
+
+    #[test]
+    fn cancel_label_on_failure_calls_off_one_pool_without_cancelling_the_run() {
+        let (sys, _tmp) = test_system();
+        sys.cancel_label_on_failure("scan", |_, _| true);
+        sys.ticket(Ticket::new("a").label("scan"));
+        let key = sys.claim(|t| t.has_label("scan"), "agent").unwrap();
+
+        sys.set_failed_by(&key, "agent").unwrap();
+
+        assert!(sys.label_cancelled("scan"));
+        assert!(!sys.is_cancelled(), "the other pools keep working");
+    }
+
+    #[test]
+    fn create_ticket_on_failure_enqueues_a_retry_for_the_failed_ticket() {
+        let (sys, _tmp) = test_system();
+        sys.create_ticket_on_failure(|_, failed| {
+            failed
+                .parent
+                .is_none()
+                .then(|| Ticket::new(failed.task.clone()).parent(&failed.key))
+        });
+        let key = sys.task("work");
+
+        sys.set_failed(&key).unwrap();
+
+        let retry = sys
+            .find_ticket(|t| t.parent.as_deref() == Some(&key))
+            .unwrap();
+        assert_eq!(retry.task, serde_json::json!("work"));
+    }
+
+    #[test]
+    fn create_ticket_on_event_enqueues_a_follow_up_for_any_event() {
+        let (sys, _tmp) = test_system();
+        sys.create_ticket_on_event(|event| {
+            matches!(event.kind, EventKind::TurnStarted)
+                .then(|| Ticket::new("report").label("report"))
+        });
+        let key = sys.task("work");
+
+        sys.emit(&key, "agent", EventKind::TurnStarted);
+
+        assert_eq!(sys.find_tickets(|t| t.has_label("report")).len(), 1);
+    }
+
+    #[test]
     fn cancel_on_result_trips_when_finished_result_matches() {
         let (sys, _tmp) = test_system();
         sys.ticket(Ticket::new("x").label("L"));
         let key = sys.claim(|t| t.has_label("L"), "agent").unwrap();
         sys.set_result(&key, serde_json::json!({"status": "malicious"}))
             .unwrap();
-        sys.cancel_on_result(|r| r.get("status").and_then(|v| v.as_str()) == Some("malicious"));
+        sys.cancel_on_result(|_, r| r.get("status").and_then(|v| v.as_str()) == Some("malicious"));
         assert!(!sys.is_cancelled());
         sys.emit(&key, "agent", EventKind::TicketFinished);
         assert!(sys.is_cancelled());
@@ -1609,7 +1849,7 @@ mod tests {
         let key = sys.claim(|t| t.has_label("L"), "agent").unwrap();
         sys.set_result(&key, serde_json::json!({"status": "benign"}))
             .unwrap();
-        sys.cancel_on_result(|r| r.get("status").and_then(|v| v.as_str()) == Some("malicious"));
+        sys.cancel_on_result(|_, r| r.get("status").and_then(|v| v.as_str()) == Some("malicious"));
         sys.emit(&key, "agent", EventKind::TicketFinished);
         assert!(!sys.is_cancelled());
     }
@@ -1621,7 +1861,7 @@ mod tests {
         let key = sys.claim(|t| t.has_label("scout"), "agent").unwrap();
         sys.set_result(&key, serde_json::json!("lead")).unwrap();
         sys.set_finished_by(&key, "agent").unwrap();
-        sys.create_ticket_on_result(|done| {
+        sys.create_ticket_on_result(|done, _| {
             done.has_label("scout")
                 .then(|| Ticket::new("hunt").label("sniper"))
         });
@@ -1636,7 +1876,7 @@ mod tests {
         let key = sys.claim(|t| t.has_label("scout"), "agent").unwrap();
         sys.set_result(&key, serde_json::json!("lead")).unwrap();
         sys.set_finished_by(&key, "agent").unwrap();
-        sys.create_ticket_on_result(|done| {
+        sys.create_ticket_on_result(|done, _| {
             Some(Ticket::new("hunt").label("sniper").parent(&done.key))
         });
         sys.emit(&key, "agent", EventKind::TicketFinished);
@@ -1647,7 +1887,7 @@ mod tests {
     #[test]
     fn create_ticket_on_result_ignores_unfinished_events() {
         let (sys, _tmp) = test_system();
-        sys.create_ticket_on_result(|_| Some(Ticket::new("follow-up").label("next")));
+        sys.create_ticket_on_result(|_, _| Some(Ticket::new("follow-up").label("next")));
         sys.emit("KEY", "agent", EventKind::TurnStarted);
         assert!(sys.tickets().is_empty());
     }
@@ -1655,7 +1895,7 @@ mod tests {
     #[test]
     fn create_ticket_on_result_inserts_follow_up_before_drain_is_observable() {
         let (sys, _tmp) = test_system();
-        sys.create_ticket_on_result(|done| {
+        sys.create_ticket_on_result(|done, _| {
             done.has_label("scout")
                 .then(|| Ticket::new("hunt").label("sniper"))
         });

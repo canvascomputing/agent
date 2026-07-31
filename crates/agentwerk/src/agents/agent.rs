@@ -29,7 +29,7 @@ fn default_agent_name() -> String {
 
 /// Caller hook that rewrites a corrective directive in place, reading the
 /// bare failure reason as context; see
-/// [`AgentBuilder::edit_directive_on_failure`].
+/// [`AgentBuilder::edit_directive_on_retry`].
 pub(crate) type DirectiveEditor = dyn Fn(&str, &mut String) + Send + Sync;
 
 // --- builder ---
@@ -253,13 +253,13 @@ impl<P, M> AgentBuilder<P, M> {
         self
     }
 
-    /// Rewrite the corrective directive agentwerk injects when a turn
-    /// ends without an accepted result: the model called no tool, or a
-    /// finish tool's output failed the ticket schema. The editor reads
-    /// the bare reason and rewrites the directive in place, which arrives
-    /// holding the built-in text, so an editor that writes nothing keeps
-    /// the default. Called inline per failure, so keep it cheap.
-    pub fn edit_directive_on_failure(
+    /// Rewrite the corrective directive agentwerk injects when it asks the
+    /// agent again after a turn ended without an accepted result: the model
+    /// called no tool, or a finish tool's output failed the ticket schema.
+    /// The editor reads the bare reason and rewrites the directive in place,
+    /// which arrives holding the built-in text, so an editor that writes
+    /// nothing keeps the default. Called inline per retry, so keep it cheap.
+    pub fn edit_directive_on_retry(
         mut self,
         editor: impl Fn(&str, &mut String) + Send + Sync + 'static,
     ) -> Self {

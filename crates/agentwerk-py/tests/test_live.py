@@ -70,7 +70,7 @@ async def test_runs_two_labeled_agents_with_events_and_chaining():
         aw.Agent().name("B").label("b").from_env().role("Reply with one word: beta").build()
     )
 
-    def chain(ticket):
+    def chain(ticket, result):
         if ticket.has_label("a"):
             return aw.Ticket("Reply beta", labels=["b"])
         return None
