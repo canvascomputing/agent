@@ -372,7 +372,7 @@ A `Schema` constrains the result an agent produces for a ticket.
 
 - The reader may be new to agent concepts: write for them.
 - Internal type names, private field names, and enum variant names do not belong in the README. The reference lives in the API docs.
-- Internal mechanics do not appear in caller-facing rustdoc either: no `Weak<Self>` or `Arc<Self>` references, no "stamps", no "recorder protocol", no `record_*` or `mark_finished`, no lock ordering, no drain counts. They live in `agentdocs/architecture.md`.
+- Internal mechanics do not appear in caller-facing rustdoc either: no `Weak<Self>` or `Arc<Self>` references, no "stamps", no "recorder protocol", no `record_*`, no lock ordering, no drain counts. They live in `agentdocs/architecture.md`.
 - Accepted: `// run the task once and return the result`, "Transient provider error triggered a retry".
 - Rejected: `// drive the loop`, `// one-shot`, "(carries typed `kind: RequestErrorKind`)", "`InBand` is model-fixable, `Infrastructure` is harness-level".
 - Jargon and internal terms are cut even when they are shorter.

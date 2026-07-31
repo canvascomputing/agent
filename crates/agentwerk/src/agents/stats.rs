@@ -315,7 +315,7 @@ impl Stats {
     }
 
     /// Count one call against `name`.
-    pub(crate) fn record_tool_call_named(&self, name: &str) {
+    pub(crate) fn record_tool_call(&self, name: &str) {
         self.tool_stats
             .lock()
             .unwrap()
@@ -325,7 +325,7 @@ impl Stats {
     }
 
     /// Count one failure of `kind` against `name`.
-    pub(crate) fn record_tool_error_named(&self, name: &str, kind: ToolFailureKind) {
+    pub(crate) fn record_tool_error(&self, name: &str, kind: ToolFailureKind) {
         let mut map = self.tool_stats.lock().unwrap();
         let counters = map.entry(name.to_string()).or_default();
         match kind {
@@ -359,7 +359,7 @@ impl Stats {
     }
 
     /// Count one failed open naming `path`.
-    pub(crate) fn record_file_open_error(&self, path: &str) {
+    pub(crate) fn record_file_open_failed(&self, path: &str) {
         self.file_stats
             .lock()
             .unwrap()
@@ -426,12 +426,12 @@ impl Stats {
                 self.record_usage(key, usage.clone());
                 self.record_model_request(model, usage);
             }
-            EventKind::ToolCallStarted { tool_name, .. } => self.record_tool_call_named(tool_name),
+            EventKind::ToolCallStarted { tool_name, .. } => self.record_tool_call(tool_name),
             EventKind::ToolCallFailed {
                 tool_name, reason, ..
-            } => self.record_tool_error_named(tool_name, *reason),
+            } => self.record_tool_error(tool_name, *reason),
             EventKind::FileOpenFinished { path } => self.record_file_open(path),
-            EventKind::FileOpenFailed { path } => self.record_file_open_error(path),
+            EventKind::FileOpenFailed { path } => self.record_file_open_failed(path),
             EventKind::KnowledgeUsed { op } => self.record_knowledge(*op),
             EventKind::KnowledgeMissed => self.record_knowledge_miss(),
             _ => {}
@@ -650,7 +650,7 @@ impl Stats {
     }
 
     /// Record when execution ended. A later call overwrites the earlier one.
-    pub(crate) fn mark_finished(&self, when: u64) {
+    pub(crate) fn record_run_finished(&self, when: u64) {
         self.finished_at.store(when, Ordering::Relaxed);
     }
 
@@ -1043,7 +1043,7 @@ mod tests {
         s.record_started(1_000);
         s.record_started(2_000);
         s.record_started(3_000);
-        s.mark_finished(4_500);
+        s.record_run_finished(4_500);
         assert_eq!(s.run_duration(), Some(Duration::from_millis(3500)));
     }
 
@@ -1055,7 +1055,7 @@ mod tests {
         // Live before finish: anchored at started_at = 1_000ms epoch, so the
         // delta to "now" is enormous. We just check it's some duration.
         assert!(s.run_duration().is_some());
-        s.mark_finished(2_500);
+        s.record_run_finished(2_500);
         assert_eq!(s.run_duration(), Some(Duration::from_millis(1500)));
         // Stays frozen on a subsequent call.
         assert_eq!(s.run_duration(), Some(Duration::from_millis(1500)));
@@ -1166,7 +1166,7 @@ mod tests {
         s.record_started(1_000);
         s.record_finished(Duration::from_secs(5), Duration::from_secs(5));
         s.record_finished(Duration::from_secs(5), Duration::from_secs(5));
-        s.mark_finished(7_000);
+        s.record_run_finished(7_000);
         assert_eq!(s.run_duration(), Some(Duration::from_secs(6)));
         assert_eq!(s.total_work_duration(), Duration::from_secs(10));
     }
@@ -1278,7 +1278,7 @@ mod tests {
     fn stats_serializes_derived_run_duration_seconds() {
         let s = Stats::new();
         s.record_started(1_000);
-        s.mark_finished(3_500);
+        s.record_run_finished(3_500);
         let value = serde_json::to_value(&s).unwrap();
         assert_eq!(value["run_duration_secs"].as_f64().unwrap(), 2.5);
     }
@@ -1349,12 +1349,12 @@ mod tests {
     #[test]
     fn tool_stats_records_calls_and_errors_per_tool() {
         let s = Stats::new();
-        s.record_tool_call_named("edit_file");
-        s.record_tool_call_named("edit_file");
-        s.record_tool_call_named("bash");
-        s.record_tool_error_named("edit_file", ToolFailureKind::SchemaValidationFailed);
-        s.record_tool_error_named("bash", ToolFailureKind::ExecutionFailed);
-        s.record_tool_error_named("ghost", ToolFailureKind::ToolNotFound);
+        s.record_tool_call("edit_file");
+        s.record_tool_call("edit_file");
+        s.record_tool_call("bash");
+        s.record_tool_error("edit_file", ToolFailureKind::SchemaValidationFailed);
+        s.record_tool_error("bash", ToolFailureKind::ExecutionFailed);
+        s.record_tool_error("ghost", ToolFailureKind::ToolNotFound);
 
         let tools = s.tool_stats();
         let edit = &tools["edit_file"];
@@ -1368,11 +1368,11 @@ mod tests {
     #[test]
     fn tool_stat_error_rate_is_errors_over_calls() {
         let s = Stats::new();
-        s.record_tool_call_named("edit_file");
-        s.record_tool_call_named("edit_file");
-        s.record_tool_call_named("edit_file");
-        s.record_tool_call_named("edit_file");
-        s.record_tool_error_named("edit_file", ToolFailureKind::SchemaValidationFailed);
+        s.record_tool_call("edit_file");
+        s.record_tool_call("edit_file");
+        s.record_tool_call("edit_file");
+        s.record_tool_call("edit_file");
+        s.record_tool_error("edit_file", ToolFailureKind::SchemaValidationFailed);
 
         let tools = s.tool_stats();
         assert_eq!(tools["edit_file"].error_rate(), Some(0.25));
@@ -1383,7 +1383,7 @@ mod tests {
         // A failure can be recorded for a name that never logged a call only
         // in malformed cases; the rate is then undefined rather than infinite.
         let s = Stats::new();
-        s.record_tool_error_named("ghost", ToolFailureKind::ToolNotFound);
+        s.record_tool_error("ghost", ToolFailureKind::ToolNotFound);
         assert!(s.tool_stats()["ghost"].error_rate().is_none());
     }
 
@@ -1392,11 +1392,11 @@ mod tests {
         let dir = crate::test_util::TempDir::new().unwrap();
 
         let s = Stats::new();
-        s.record_tool_call_named("edit_file");
-        s.record_tool_call_named("edit_file");
-        s.record_tool_error_named("edit_file", ToolFailureKind::SchemaValidationFailed);
-        s.record_tool_call_named("bash");
-        s.record_tool_error_named("bash", ToolFailureKind::ExecutionFailed);
+        s.record_tool_call("edit_file");
+        s.record_tool_call("edit_file");
+        s.record_tool_error("edit_file", ToolFailureKind::SchemaValidationFailed);
+        s.record_tool_call("bash");
+        s.record_tool_error("bash", ToolFailureKind::ExecutionFailed);
 
         use crate::persistence::Persist;
         s.save(dir.path()).unwrap();
@@ -1411,9 +1411,9 @@ mod tests {
     #[test]
     fn stats_serializes_tools_as_nested_object() {
         let s = Stats::new();
-        s.record_tool_call_named("edit_file");
-        s.record_tool_call_named("edit_file");
-        s.record_tool_error_named("edit_file", ToolFailureKind::SchemaValidationFailed);
+        s.record_tool_call("edit_file");
+        s.record_tool_call("edit_file");
+        s.record_tool_error("edit_file", ToolFailureKind::SchemaValidationFailed);
 
         let value = serde_json::to_value(&s).unwrap();
         let tools = value["tools"].as_object().unwrap();
@@ -1433,7 +1433,7 @@ mod tests {
     #[test]
     fn tool_stats_empty_on_label_slice() {
         let s = Stats::new();
-        s.record_tool_call_named("edit_file");
+        s.record_tool_call("edit_file");
         let slice = s.stats_for_label("scan");
         assert!(slice.tool_stats().is_empty());
     }
@@ -1444,8 +1444,8 @@ mod tests {
         s.record_file_open("src/lib.rs");
         s.record_file_open("src/lib.rs");
         s.record_file_open("src/main.rs");
-        s.record_file_open_error("src/missing.rs");
-        s.record_file_open_error("src/missing.rs");
+        s.record_file_open_failed("src/missing.rs");
+        s.record_file_open_failed("src/missing.rs");
 
         let files = s.file_stats();
         assert_eq!(files["src/lib.rs"].opens, 2);
@@ -1470,7 +1470,7 @@ mod tests {
         let s = Stats::new();
         s.record_file_open("src/lib.rs");
         s.record_file_open("src/lib.rs");
-        s.record_file_open_error("src/missing.rs");
+        s.record_file_open_failed("src/missing.rs");
 
         use crate::persistence::Persist;
         s.save(dir.path()).unwrap();
@@ -1486,7 +1486,7 @@ mod tests {
         let s = Stats::new();
         s.record_file_open("src/lib.rs");
         s.record_file_open("src/lib.rs");
-        s.record_file_open_error("src/lib.rs");
+        s.record_file_open_failed("src/lib.rs");
 
         let value = serde_json::to_value(&s).unwrap();
         let files = value["files"].as_object().unwrap();
