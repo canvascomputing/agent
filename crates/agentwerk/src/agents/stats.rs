@@ -264,8 +264,7 @@ impl Stats {
     /// Get statistics scoped to one agent, by the name it was registered under.
     ///
     /// `tickets_created()` counts the tickets that agent filed; the rest count
-    /// the tickets it claimed. Like the per-label slices, these are written to
-    /// `stats.json` for readers and not restored by `TicketQueue::load`.
+    /// the tickets it claimed.
     pub fn stats_for_agent(&self, agent_name: &str) -> Arc<Stats> {
         let mut map = self.agent_stats.lock().unwrap();
         map.entry(agent_name.to_string())
@@ -701,60 +700,12 @@ impl crate::persistence::Persist for Stats {
         stats.load_fields(&value);
         if let Some(labels) = value.get("labels").and_then(|v| v.as_object()) {
             for (name, body) in labels {
-                let slice = stats.stats_for_label(name);
-                slice.load_fields(body);
+                stats.stats_for_label(name).load_fields(body);
             }
         }
-        if let Some(tools) = value.get("tools").and_then(|v| v.as_object()) {
-            let mut map = stats.tool_stats.lock().unwrap();
-            for (name, body) in tools {
-                let get = |key: &str| body.get(key).and_then(|v| v.as_u64()).unwrap_or(0);
-                map.insert(
-                    name.clone(),
-                    ToolCounters {
-                        calls: get("calls"),
-                        not_found: get("not_found"),
-                        execution_failed: get("execution_failed"),
-                        schema_failed: get("schema_failed"),
-                    },
-                );
-            }
-        }
-        if let Some(files) = value.get("files").and_then(|v| v.as_object()) {
-            let mut map = stats.file_stats.lock().unwrap();
-            for (path, body) in files {
-                let get = |key: &str| body.get(key).and_then(|v| v.as_u64()).unwrap_or(0);
-                map.insert(
-                    path.clone(),
-                    FileCounters {
-                        opens: get("opens"),
-                        failed: get("failed"),
-                    },
-                );
-            }
-        }
-        if let Some(knowledge) = value.get("knowledge") {
-            let get = |key: &str| knowledge.get(key).and_then(|v| v.as_u64()).unwrap_or(0);
-            *stats.knowledge_stats.lock().unwrap() = KnowledgeCounters {
-                writes: get("writes"),
-                reads: get("reads"),
-                removes: get("removes"),
-                lists: get("lists"),
-                misses: get("misses"),
-            };
-        }
-        if let Some(models) = value.get("models").and_then(|v| v.as_object()) {
-            let mut map = stats.model_stats.lock().unwrap();
-            for (name, body) in models {
-                let get = |key: &str| body.get(key).and_then(|v| v.as_u64()).unwrap_or(0);
-                map.insert(
-                    name.clone(),
-                    ModelCounters {
-                        requests: get("requests"),
-                        input_tokens: get("input_tokens"),
-                        output_tokens: get("output_tokens"),
-                    },
-                );
+        if let Some(agents) = value.get("agents").and_then(|v| v.as_object()) {
+            for (name, body) in agents {
+                stats.stats_for_agent(name).load_fields(body);
             }
         }
         Ok(stats)
@@ -889,6 +840,59 @@ impl Stats {
             .store(get("total_ticket_duration_secs"), Ordering::Relaxed);
         self.total_work_duration
             .store(get("total_work_duration_secs"), Ordering::Relaxed);
+
+        if let Some(tools) = value.get("tools").and_then(|v| v.as_object()) {
+            let mut map = self.tool_stats.lock().unwrap();
+            for (name, body) in tools {
+                let get = |key: &str| body.get(key).and_then(|v| v.as_u64()).unwrap_or(0);
+                map.insert(
+                    name.clone(),
+                    ToolCounters {
+                        calls: get("calls"),
+                        not_found: get("not_found"),
+                        execution_failed: get("execution_failed"),
+                        schema_failed: get("schema_failed"),
+                    },
+                );
+            }
+        }
+        if let Some(files) = value.get("files").and_then(|v| v.as_object()) {
+            let mut map = self.file_stats.lock().unwrap();
+            for (path, body) in files {
+                let get = |key: &str| body.get(key).and_then(|v| v.as_u64()).unwrap_or(0);
+                map.insert(
+                    path.clone(),
+                    FileCounters {
+                        opens: get("opens"),
+                        failed: get("failed"),
+                    },
+                );
+            }
+        }
+        if let Some(knowledge) = value.get("knowledge") {
+            let get = |key: &str| knowledge.get(key).and_then(|v| v.as_u64()).unwrap_or(0);
+            *self.knowledge_stats.lock().unwrap() = KnowledgeCounters {
+                writes: get("writes"),
+                reads: get("reads"),
+                removes: get("removes"),
+                lists: get("lists"),
+                misses: get("misses"),
+            };
+        }
+        if let Some(models) = value.get("models").and_then(|v| v.as_object()) {
+            let mut map = self.model_stats.lock().unwrap();
+            for (name, body) in models {
+                let get = |key: &str| body.get(key).and_then(|v| v.as_u64()).unwrap_or(0);
+                map.insert(
+                    name.clone(),
+                    ModelCounters {
+                        requests: get("requests"),
+                        input_tokens: get("input_tokens"),
+                        output_tokens: get("output_tokens"),
+                    },
+                );
+            }
+        }
     }
 }
 
@@ -1183,6 +1187,12 @@ mod tests {
         slice.record_created();
         slice.record_finished(Duration::from_secs(4), Duration::from_secs(3));
 
+        let agent_slice = s.stats_for_agent("seeker");
+        agent_slice.record_event(&turn(), "KEY", &[], "");
+        agent_slice.record_event(&request(30, 10), "KEY", &[], "");
+        agent_slice.record_created();
+        agent_slice.record_failed(Duration::from_secs(6), Duration::from_secs(2));
+
         use crate::persistence::Persist;
         s.save(dir.path()).unwrap();
         let restored = Stats::load(dir.path()).unwrap();
@@ -1205,6 +1215,15 @@ mod tests {
         assert_eq!(
             restored_slice.total_ticket_duration(),
             Duration::from_secs(4)
+        );
+
+        let restored_agent = restored.stats_for_agent("seeker");
+        assert_eq!(restored_agent.turns(), 1);
+        assert_eq!(restored_agent.input_tokens(), 30);
+        assert_eq!(restored_agent.tickets_failed(), 1);
+        assert_eq!(
+            restored_agent.total_ticket_duration(),
+            Duration::from_secs(6)
         );
     }
 
