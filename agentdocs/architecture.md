@@ -150,8 +150,9 @@ Two layers of state exist. The per-ticket replies live on `Ticket::replies`: eve
 - Payload-bearing measures keep explicit arms in `record_event`: token sums and the per-ticket token usage from `RequestFinished`, per-tool tallies from `ToolCallStarted` and `ToolCallFailed`, per-path tallies from `FileOpenFinished` and `FileOpenFailed`, knowledge tallies from `KnowledgeUsed` and `KnowledgeFailed`, per-model tallies from `RequestFinished` and `RequestFailed`.
 - The ticket lifecycle (`record_created`, `record_started`, `record_finished`, `record_failed`) is written directly by the store: transitions carry durations that events do not, and host-side mutations have no agent loop attached.
 - Reads happen on `Stats` directly through inherent accessors such as `turns()`, `tickets_finished()`, `run_duration()`, and `tickets_success_rate()`.
-- `Stats::stats_for_label(label)` returns a nested `Stats` slice scoped to one label. `record_event` mirrors the count and token measures onto each slice the ticket carries; `run_duration()` is `None` on a slice, since elapsed run duration stays global.
-- The subject maps (`tool_stats()`, `file_stats()`, `knowledge_stats()`, `model_stats()`) are recorded global-only, like `token_usage()`; per-label slices stay empty there.
+- `Stats::stats_for_label(label)` returns a nested `Stats` slice scoped to one label, and `stats_for_agent(name)` does the same per agent. `label_stats()` and `agent_stats()` list them. Reading a slice does not create one: `record_scoped` and the store use the `pub(crate)` `slice_for_label` and `slice_for_agent` for that, so a misspelled lookup leaves nothing behind in `stats.json`.
+- `record_event` mirrors every measure onto each slice the ticket carries, in one walk of the labels: the counts, the token sums, and the subject maps (`tool_stats()`, `file_stats()`, `knowledge_stats()`, `model_stats()`). An accessor therefore answers the same question whichever `Stats` holds it.
+- Two measures stay run-wide by design. `run_duration()` is `None` on a slice, since elapsed run duration is global, and `token_usage()` is empty there, since it is the compaction estimator's per-ticket series rather than a figure about the run.
 
 ## Persistence Routes Through Two Traits
 
