@@ -61,15 +61,16 @@ pub struct Stats {
     /// labels, so one map would merge an agent with a label of the same name.
     agent_stats: Mutex<HashMap<String, Arc<Stats>>>,
     /// Token usage per ticket, oldest first. It feeds the estimate that decides
-    /// when to compact, and is cleared once that happens.
+    /// when to compact, and is cleared once that happens. The one measure the
+    /// run-wide `Stats` keeps to itself.
     token_usage: Mutex<HashMap<String, Vec<TokenUsage>>>,
-    /// Call and failure tallies keyed by tool name, run-wide only.
+    /// Call and failure tallies keyed by tool name.
     tool_stats: Mutex<HashMap<String, ToolCounters>>,
-    /// Open and failure tallies keyed by the path a tool opened, run-wide only.
+    /// Open and failure tallies keyed by the path a tool opened.
     file_stats: Mutex<HashMap<String, FileCounters>>,
-    /// Knowledge usage tallies, run-wide only.
+    /// Knowledge usage tallies.
     knowledge_stats: Mutex<KnowledgeCounters>,
-    /// Request and token tallies keyed by model name, run-wide only.
+    /// Request, failure, and token tallies keyed by model name.
     model_stats: Mutex<HashMap<String, ModelCounters>>,
 }
 
@@ -308,8 +309,9 @@ impl Stats {
     /// Get statistics scoped to one label. A label nothing was recorded
     /// against reads as zero.
     ///
-    /// Reads use the same accessors as the run-wide `Stats`. `run_duration()`
-    /// is always `None` here, since timing stays global.
+    /// Every accessor answers the same question it answers run-wide, except
+    /// two: `run_duration()` is `None`, since timing stays global, and
+    /// `token_usage()` is empty.
     pub fn stats_for_label(&self, label: &str) -> Arc<Stats> {
         self.label_stats
             .lock()
@@ -382,8 +384,8 @@ impl Stats {
     /// Get a ticket's token usage, oldest first.
     ///
     /// This is what the compaction estimator reads, not a cumulative figure:
-    /// it is cleared when a ticket is compacted, and `stats.json` never
-    /// carries it.
+    /// it is cleared when a ticket is compacted, `stats.json` never carries
+    /// it, and unlike every other measure it is not mirrored onto a slice.
     pub fn token_usage(&self, ticket_key: &str) -> Vec<TokenUsage> {
         self.token_usage
             .lock()
@@ -410,8 +412,6 @@ impl Stats {
     }
 
     /// Get per-tool call and failure counts, sorted by tool name.
-    ///
-    /// Empty on a label slice.
     pub fn tool_stats(&self) -> BTreeMap<String, ToolStat> {
         self.tool_stats
             .lock()
@@ -445,7 +445,7 @@ impl Stats {
     /// Get per-path open and failure counts, sorted by path.
     ///
     /// A path may name a directory rather than a file, since the search tools
-    /// accept either. Empty on a label slice.
+    /// accept either.
     pub fn file_stats(&self) -> BTreeMap<String, FileStat> {
         self.file_stats
             .lock()
@@ -474,9 +474,7 @@ impl Stats {
         counters.failed += 1;
     }
 
-    /// Get knowledge usage: write, read, remove, list, and miss counts.
-    ///
-    /// Zero on a label slice.
+    /// Get knowledge usage: write, read, remove, list, and failure counts.
     pub fn knowledge_stats(&self) -> KnowledgeStat {
         (&*self.knowledge_stats.lock().unwrap()).into()
     }
@@ -499,9 +497,8 @@ impl Stats {
         self.knowledge_stats.lock().unwrap().failed += 1;
     }
 
-    /// Get per-model requests and token usage, sorted by model name.
-    ///
-    /// Empty on a label slice.
+    /// Get per-model requests, failures, and token usage, sorted by model
+    /// name.
     pub fn model_stats(&self) -> BTreeMap<String, ModelStat> {
         self.model_stats
             .lock()
@@ -534,30 +531,31 @@ impl Stats {
     /// Every kind is counted by its name, so a new variant needs no arm here.
     /// Only the measures that read an event's payload do.
     pub(crate) fn record_event(&self, kind: &EventKind, key: &str, labels: &[String], agent: &str) {
-        // One walk of the labels, not one per measure: the token sums ride
-        // along with the count rather than scoping a second time.
+        // The per-ticket series belongs to the compaction estimator rather
+        // than to the figures, so it is the one measure that stays run-wide.
+        if let EventKind::RequestFinished { usage, .. } = kind {
+            self.record_usage(key, usage.clone());
+        }
+        // One walk of the labels for every measure, not one walk per measure.
         self.record_scoped(labels, agent, |s| {
             s.count_event(kind.name());
-            if let EventKind::RequestFinished { usage, .. } = kind {
-                s.record_tokens(usage.input_tokens, usage.output_tokens);
+            match kind {
+                EventKind::RequestFinished { model, usage } => {
+                    s.record_tokens(usage.input_tokens, usage.output_tokens);
+                    s.record_model_request(model, usage);
+                }
+                EventKind::RequestFailed { model, .. } => s.record_model_request_failed(model),
+                EventKind::ToolCallStarted { tool_name, .. } => s.record_tool_call(tool_name),
+                EventKind::ToolCallFailed {
+                    tool_name, reason, ..
+                } => s.record_tool_error(tool_name, *reason),
+                EventKind::FileOpenFinished { path } => s.record_file_open(path),
+                EventKind::FileOpenFailed { path } => s.record_file_open_failed(path),
+                EventKind::KnowledgeUsed { op } => s.record_knowledge(*op),
+                EventKind::KnowledgeFailed { op } => s.record_knowledge_failed(*op),
+                _ => {}
             }
         });
-        match kind {
-            EventKind::RequestFinished { model, usage } => {
-                self.record_usage(key, usage.clone());
-                self.record_model_request(model, usage);
-            }
-            EventKind::RequestFailed { model, .. } => self.record_model_request_failed(model),
-            EventKind::ToolCallStarted { tool_name, .. } => self.record_tool_call(tool_name),
-            EventKind::ToolCallFailed {
-                tool_name, reason, ..
-            } => self.record_tool_error(tool_name, *reason),
-            EventKind::FileOpenFinished { path } => self.record_file_open(path),
-            EventKind::FileOpenFailed { path } => self.record_file_open_failed(path),
-            EventKind::KnowledgeUsed { op } => self.record_knowledge(*op),
-            EventKind::KnowledgeFailed { op } => self.record_knowledge_failed(*op),
-            _ => {}
-        }
     }
 
     /// Apply `f` to the run-wide statistics, to each label slice, and to the
@@ -1623,11 +1621,13 @@ mod tests {
     }
 
     #[test]
-    fn tool_stats_empty_on_label_slice() {
+    fn tool_stats_reach_the_label_and_agent_slices() {
         let s = Stats::new();
-        s.record_tool_call("edit_file");
-        let slice = s.stats_for_label("scan");
-        assert!(slice.tool_stats().is_empty());
+        s.record_event(&tool_call(), "KEY", &["scan".into()], "scout");
+
+        assert_eq!(s.stats_for_label("scan").tool_stats()["bash"].calls, 1);
+        assert_eq!(s.stats_for_agent("scout").tool_stats()["bash"].calls, 1);
+        assert!(s.stats_for_label("audit").tool_stats().is_empty());
     }
 
     #[test]
@@ -1652,11 +1652,18 @@ mod tests {
     }
 
     #[test]
-    fn file_stats_empty_on_label_slice() {
+    fn file_stats_reach_the_label_slice() {
         let s = Stats::new();
-        s.record_file_open("src/lib.rs");
-        let slice = s.stats_for_label("scan");
-        assert!(slice.file_stats().is_empty());
+        let open = EventKind::FileOpenFinished {
+            path: "src/lib.rs".into(),
+        };
+        s.record_event(&open, "KEY", &["scan".into()], "");
+
+        assert_eq!(
+            s.stats_for_label("scan").file_stats()["src/lib.rs"].opens,
+            1
+        );
+        assert!(s.stats_for_label("audit").file_stats().is_empty());
     }
 
     #[test]
@@ -1720,13 +1727,15 @@ mod tests {
     }
 
     #[test]
-    fn knowledge_is_zero_on_label_slice() {
+    fn knowledge_reaches_the_label_slice() {
         let s = Stats::new();
-        s.record_knowledge(KnowledgeOp::Write);
-        let slice = s.stats_for_label("scan");
-        let k = slice.knowledge_stats();
-        assert_eq!(k.writes, 0);
-        assert_eq!(k.reads, 0);
+        let used = EventKind::KnowledgeUsed {
+            op: KnowledgeOp::Write,
+        };
+        s.record_event(&used, "KEY", &["scan".into()], "");
+
+        assert_eq!(s.stats_for_label("scan").knowledge_stats().writes, 1);
+        assert_eq!(s.stats_for_label("audit").knowledge_stats().writes, 0);
     }
 
     #[test]
@@ -1800,11 +1809,23 @@ mod tests {
     }
 
     #[test]
-    fn model_stats_empty_on_label_slice() {
+    fn model_stats_reach_the_label_slice() {
         let s = Stats::new();
         s.record_event(&request(10, 5), "KEY", &["scan".into()], "");
-        let slice = s.stats_for_label("scan");
-        assert!(slice.model_stats().is_empty());
+
+        assert_eq!(s.stats_for_label("scan").model_stats()["m"].requests, 1);
+        assert!(s.stats_for_label("audit").model_stats().is_empty());
+    }
+
+    #[test]
+    fn token_usage_stays_run_wide() {
+        let s = Stats::new();
+        s.record_event(&request(10, 5), "KEY", &["scan".into()], "");
+
+        assert_eq!(s.token_usage("KEY").len(), 1);
+        // The compaction estimator reads the run-wide series only, so
+        // mirroring it onto a slice would buy nothing.
+        assert!(s.stats_for_label("scan").token_usage("KEY").is_empty());
     }
 
     #[test]
