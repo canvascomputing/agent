@@ -229,8 +229,9 @@ pub enum EventKind {
     FileOpenFailed { path: String },
     /// A page was written, read, removed, or listed.
     KnowledgeUsed { op: KnowledgeOp },
-    /// A page the agent asked for was not there.
-    KnowledgeMissed,
+    /// A page operation did not go through: the page was not there, or the
+    /// store refused the write.
+    KnowledgeFailed { op: KnowledgeOp },
     /// A limit was breached and execution stopped.
     PolicyViolated { policy: PolicyKind, limit: u64 },
     /// A result missed its schema and the agent was asked again. `attempt`
@@ -285,7 +286,7 @@ impl EventKind {
             EventKind::FileOpenFinished { .. } => "file_open_finished",
             EventKind::FileOpenFailed { .. } => "file_open_failed",
             EventKind::KnowledgeUsed { .. } => "knowledge_used",
-            EventKind::KnowledgeMissed => "knowledge_missed",
+            EventKind::KnowledgeFailed { .. } => "knowledge_failed",
             EventKind::PolicyViolated { .. } => "policy_violated",
             EventKind::SchemaRetried { .. } => "schema_retried",
             EventKind::CompactionStarted { .. } => "compaction_started",
@@ -296,7 +297,7 @@ impl EventKind {
     }
 
     /// Whether this kind reports something that went wrong. Names the
-    /// five kinds `TicketQueue::on_failure` fires on, so a handler on
+    /// six kinds `TicketQueue::on_failure` fires on, so a handler on
     /// the plain event chain can ask the same question.
     pub fn is_failure(&self) -> bool {
         matches!(
@@ -305,6 +306,7 @@ impl EventKind {
                 | EventKind::RequestFailed { .. }
                 | EventKind::ToolCallFailed { .. }
                 | EventKind::FileOpenFailed { .. }
+                | EventKind::KnowledgeFailed { .. }
                 | EventKind::CompactionFailed { .. }
         )
     }
@@ -483,7 +485,9 @@ mod tests {
             EventKind::KnowledgeUsed {
                 op: KnowledgeOp::Write,
             },
-            EventKind::KnowledgeMissed,
+            EventKind::KnowledgeFailed {
+                op: KnowledgeOp::Read,
+            },
             EventKind::PolicyViolated {
                 policy: PolicyKind::Turns,
                 limit: 10,
@@ -537,6 +541,7 @@ mod tests {
                 "request_failed",
                 "tool_call_failed",
                 "file_open_failed",
+                "knowledge_failed",
                 "compaction_failed",
             ]),
         );

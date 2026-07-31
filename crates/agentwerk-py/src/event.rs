@@ -51,8 +51,7 @@ pub fn to_py_event(event: &Event) -> PyEvent {
 fn payload(kind: &EventKind) -> Value {
     use EventKind::*;
     match kind {
-        RunStarted | TicketStarted | TicketFinished | TicketFailed | TurnStarted
-        | KnowledgeMissed => json!({}),
+        RunStarted | TicketStarted | TicketFinished | TicketFailed | TurnStarted => json!({}),
         RunFinished { reason } => json!({ "reason": reason.to_string() }),
         RequestStarted { model } => json!({ "model": model }),
         RequestFinished { model, usage } => {
@@ -92,7 +91,7 @@ fn payload(kind: &EventKind) -> Value {
             json!({ "tool_name": tool_name, "call_id": call_id, "reason": reason.to_string(), "message": message })
         }
         FileOpenFinished { path } | FileOpenFailed { path } => json!({ "path": path }),
-        KnowledgeUsed { op } => json!({ "op": op.to_string() }),
+        KnowledgeUsed { op } | KnowledgeFailed { op } => json!({ "op": op.to_string() }),
         PolicyViolated { policy, limit } => json!({ "policy": policy.to_string(), "limit": limit }),
         SchemaRetried {
             attempt,

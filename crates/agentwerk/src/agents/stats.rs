@@ -90,20 +90,22 @@ struct FileCounters {
     failed: u64,
 }
 
-/// The stored knowledge tallies.
+/// The stored knowledge tallies. `failed` is a subset of the four op counts,
+/// never a category of its own.
 #[derive(Default, Clone)]
 struct KnowledgeCounters {
     writes: u64,
     reads: u64,
     removes: u64,
     lists: u64,
-    misses: u64,
+    failed: u64,
 }
 
-/// The stored per-model tallies.
+/// The stored per-model tallies. `failed` is a subset of `requests`.
 #[derive(Default, Clone)]
 struct ModelCounters {
     requests: u64,
+    failed: u64,
     input_tokens: u64,
     output_tokens: u64,
 }
@@ -159,10 +161,26 @@ impl From<&ToolCounters> for ToolStat {
 /// under either.
 #[derive(Debug, Clone, Serialize)]
 pub struct FileStat {
-    /// Calls that opened this path.
+    /// Every call that named this path, including the ones that failed.
     pub opens: u64,
     /// Calls that named this path and failed.
     pub failed: u64,
+}
+
+impl FileStat {
+    /// Get the total failures.
+    pub fn errors(&self) -> u64 {
+        self.failed
+    }
+
+    /// Get `errors / opens`, or `None` when the path was never named.
+    pub fn error_rate(&self) -> Option<f64> {
+        if self.opens == 0 {
+            None
+        } else {
+            Some(self.errors() as f64 / self.opens as f64)
+        }
+    }
 }
 
 impl From<&FileCounters> for FileStat {
@@ -177,20 +195,38 @@ impl From<&FileCounters> for FileStat {
 /// A `KnowledgeStat` counts what agents did to the knowledge pages. Returned by
 /// [`Stats::knowledge_stats`].
 ///
-/// A high `misses` count points at a stale index, or at a prompt promising more
+/// A high error rate points at a stale index, or at a prompt promising more
 /// than the store holds.
 #[derive(Debug, Clone, Serialize)]
 pub struct KnowledgeStat {
-    /// Pages written.
+    /// Every attempt to write a page, including writes the store refused.
     pub writes: u64,
-    /// Pages read.
+    /// Every attempt to read a page, including reads that named a page the
+    /// store does not have.
     pub reads: u64,
-    /// Pages removed.
+    /// Every attempt to remove a page, on the same terms as `reads`.
     pub removes: u64,
-    /// Times the pages were listed.
+    /// Times the pages were listed. Listing cannot fail.
     pub lists: u64,
-    /// Reads and removes naming a page the store does not have.
-    pub misses: u64,
+    /// Attempts that did not go through, across the other four counts.
+    pub failed: u64,
+}
+
+impl KnowledgeStat {
+    /// Get the total failures.
+    pub fn errors(&self) -> u64 {
+        self.failed
+    }
+
+    /// Get `errors / attempts`, or `None` when the pages were never touched.
+    pub fn error_rate(&self) -> Option<f64> {
+        let attempts = self.writes + self.reads + self.removes + self.lists;
+        if attempts == 0 {
+            None
+        } else {
+            Some(self.errors() as f64 / attempts as f64)
+        }
+    }
 }
 
 impl From<&KnowledgeCounters> for KnowledgeStat {
@@ -200,7 +236,7 @@ impl From<&KnowledgeCounters> for KnowledgeStat {
             reads: c.reads,
             removes: c.removes,
             lists: c.lists,
-            misses: c.misses,
+            failed: c.failed,
         }
     }
 }
@@ -209,18 +245,37 @@ impl From<&KnowledgeCounters> for KnowledgeStat {
 /// [`Stats::model_stats`], so agents running different models can be compared.
 #[derive(Debug, Clone, Serialize)]
 pub struct ModelStat {
-    /// Responses received for this model.
+    /// Every request to this model, including the ones that failed.
     pub requests: u64,
+    /// Requests that came back as a failure and were not retried.
+    pub failed: u64,
     /// Input tokens across this model's responses.
     pub input_tokens: u64,
     /// Output tokens across this model's responses.
     pub output_tokens: u64,
 }
 
+impl ModelStat {
+    /// Get the total failures.
+    pub fn errors(&self) -> u64 {
+        self.failed
+    }
+
+    /// Get `errors / requests`, or `None` when the model was never asked.
+    pub fn error_rate(&self) -> Option<f64> {
+        if self.requests == 0 {
+            None
+        } else {
+            Some(self.errors() as f64 / self.requests as f64)
+        }
+    }
+}
+
 impl From<&ModelCounters> for ModelStat {
     fn from(c: &ModelCounters) -> Self {
         Self {
             requests: c.requests,
+            failed: c.failed,
             input_tokens: c.input_tokens,
             output_tokens: c.output_tokens,
         }
@@ -386,14 +441,13 @@ impl Stats {
             .opens += 1;
     }
 
-    /// Count one failed open naming `path`.
+    /// Count one failed open naming `path`. It counts as an open as well, so
+    /// `opens` is the attempt count and `error_rate` divides by it.
     pub(crate) fn record_file_open_failed(&self, path: &str) {
-        self.file_stats
-            .lock()
-            .unwrap()
-            .entry(path.to_string())
-            .or_default()
-            .failed += 1;
+        let mut map = self.file_stats.lock().unwrap();
+        let counters = map.entry(path.to_string()).or_default();
+        counters.opens += 1;
+        counters.failed += 1;
     }
 
     /// Get knowledge usage: write, read, remove, list, and miss counts.
@@ -414,9 +468,11 @@ impl Stats {
         }
     }
 
-    /// Count one read or remove naming a page the store does not have.
-    pub(crate) fn record_knowledge_miss(&self) {
-        self.knowledge_stats.lock().unwrap().misses += 1;
+    /// Count one operation that did not go through. It counts against its op
+    /// as well, so every op count is the attempt count.
+    pub(crate) fn record_knowledge_failed(&self, op: KnowledgeOp) {
+        self.record_knowledge(op);
+        self.knowledge_stats.lock().unwrap().failed += 1;
     }
 
     /// Get per-model requests and token usage, sorted by model name.
@@ -440,20 +496,34 @@ impl Stats {
         counters.output_tokens += usage.output_tokens;
     }
 
+    /// Count one failed request against `model`. It counts as a request as
+    /// well, so `requests` is the attempt count.
+    pub(crate) fn record_model_request_failed(&self, model: &str) {
+        let mut map = self.model_stats.lock().unwrap();
+        let counters = map.entry(model.to_string()).or_default();
+        counters.requests += 1;
+        counters.failed += 1;
+    }
+
     /// Record an event.
     ///
     /// Every kind is counted by its name, so a new variant needs no arm here.
     /// Only the measures that read an event's payload do.
     pub(crate) fn record_event(&self, kind: &EventKind, key: &str, labels: &[String], agent: &str) {
-        self.record_scoped(labels, agent, |s| s.count_event(kind.name()));
+        // One walk of the labels, not one per measure: the token sums ride
+        // along with the count rather than scoping a second time.
+        self.record_scoped(labels, agent, |s| {
+            s.count_event(kind.name());
+            if let EventKind::RequestFinished { usage, .. } = kind {
+                s.record_tokens(usage.input_tokens, usage.output_tokens);
+            }
+        });
         match kind {
             EventKind::RequestFinished { model, usage } => {
-                self.record_scoped(labels, agent, |s| {
-                    s.record_tokens(usage.input_tokens, usage.output_tokens)
-                });
                 self.record_usage(key, usage.clone());
                 self.record_model_request(model, usage);
             }
+            EventKind::RequestFailed { model, .. } => self.record_model_request_failed(model),
             EventKind::ToolCallStarted { tool_name, .. } => self.record_tool_call(tool_name),
             EventKind::ToolCallFailed {
                 tool_name, reason, ..
@@ -461,7 +531,7 @@ impl Stats {
             EventKind::FileOpenFinished { path } => self.record_file_open(path),
             EventKind::FileOpenFailed { path } => self.record_file_open_failed(path),
             EventKind::KnowledgeUsed { op } => self.record_knowledge(*op),
-            EventKind::KnowledgeMissed => self.record_knowledge_miss(),
+            EventKind::KnowledgeFailed { op } => self.record_knowledge_failed(*op),
             _ => {}
         }
     }
@@ -560,7 +630,7 @@ impl Stats {
     }
 
     /// Get the failed-request count.
-    pub fn errors(&self) -> u64 {
+    pub fn requests_failed(&self) -> u64 {
         self.event_count("request_failed")
     }
 
@@ -753,12 +823,8 @@ impl Serialize for Stats {
         let files = self.file_stats();
         let knowledge = self.knowledge_stats();
         let models = self.model_stats();
-        let knowledge_used = knowledge.writes
-            + knowledge.reads
-            + knowledge.removes
-            + knowledge.lists
-            + knowledge.misses
-            > 0;
+        let knowledge_used =
+            knowledge.writes + knowledge.reads + knowledge.removes + knowledge.lists > 0;
         let len = 15
             + usize::from(!events.is_empty())
             + usize::from(!labels.is_empty())
@@ -771,7 +837,7 @@ impl Serialize for Stats {
         st.serialize_field("turns", &self.turns())?;
         st.serialize_field("requests", &self.requests())?;
         st.serialize_field("tool_calls", &self.tool_calls())?;
-        st.serialize_field("errors", &self.errors())?;
+        st.serialize_field("requests_failed", &self.requests_failed())?;
         st.serialize_field("input_tokens", &self.input_tokens())?;
         st.serialize_field("output_tokens", &self.output_tokens())?;
         st.serialize_field("tickets_created", &self.tickets_created())?;
@@ -785,7 +851,7 @@ impl Serialize for Stats {
             "total_work_duration_secs",
             &self.total_work_duration.load(Ordering::Relaxed),
         )?;
-        st.serialize_field("success_rate", &self.tickets_success_rate())?;
+        st.serialize_field("tickets_success_rate", &self.tickets_success_rate())?;
         st.serialize_field(
             "run_duration_secs",
             &self.run_duration().map(|d| d.as_secs_f64()),
@@ -812,7 +878,8 @@ impl Serialize for Stats {
             st.serialize_field("agents", &nested)?;
         }
         if !tools.is_empty() {
-            // Raw counters round-trip through load; errors/error_rate are
+            // The four subject sections are hand-built the same way: raw
+            // counters round-trip through load, while errors/error_rate are
             // derived, emitted for readers, and ignored on load.
             let nested: BTreeMap<&String, serde_json::Value> = tools
                 .iter()
@@ -833,13 +900,54 @@ impl Serialize for Stats {
             st.serialize_field("tools", &nested)?;
         }
         if !files.is_empty() {
-            st.serialize_field("files", &files)?;
+            let nested: BTreeMap<&String, serde_json::Value> = files
+                .iter()
+                .map(|(path, stat)| {
+                    (
+                        path,
+                        serde_json::json!({
+                            "opens": stat.opens,
+                            "failed": stat.failed,
+                            "errors": stat.errors(),
+                            "error_rate": stat.error_rate(),
+                        }),
+                    )
+                })
+                .collect();
+            st.serialize_field("files", &nested)?;
         }
         if knowledge_used {
-            st.serialize_field("knowledge", &knowledge)?;
+            st.serialize_field(
+                "knowledge",
+                &serde_json::json!({
+                    "writes": knowledge.writes,
+                    "reads": knowledge.reads,
+                    "removes": knowledge.removes,
+                    "lists": knowledge.lists,
+                    "failed": knowledge.failed,
+                    "errors": knowledge.errors(),
+                    "error_rate": knowledge.error_rate(),
+                }),
+            )?;
         }
         if !models.is_empty() {
-            st.serialize_field("models", &models)?;
+            let nested: BTreeMap<&String, serde_json::Value> = models
+                .iter()
+                .map(|(name, stat)| {
+                    (
+                        name,
+                        serde_json::json!({
+                            "requests": stat.requests,
+                            "failed": stat.failed,
+                            "input_tokens": stat.input_tokens,
+                            "output_tokens": stat.output_tokens,
+                            "errors": stat.errors(),
+                            "error_rate": stat.error_rate(),
+                        }),
+                    )
+                })
+                .collect();
+            st.serialize_field("models", &nested)?;
         }
         st.end()
     }
@@ -908,7 +1016,7 @@ impl Stats {
                 reads: get("reads"),
                 removes: get("removes"),
                 lists: get("lists"),
-                misses: get("misses"),
+                failed: get("failed"),
             };
         }
         if let Some(models) = value.get("models").and_then(|v| v.as_object()) {
@@ -919,6 +1027,7 @@ impl Stats {
                     name.clone(),
                     ModelCounters {
                         requests: get("requests"),
+                        failed: get("failed"),
                         input_tokens: get("input_tokens"),
                         output_tokens: get("output_tokens"),
                     },
@@ -1017,7 +1126,7 @@ mod tests {
         assert_eq!(s.turns(), 0);
         assert_eq!(s.requests(), 0);
         assert_eq!(s.tool_calls(), 0);
-        assert_eq!(s.errors(), 0);
+        assert_eq!(s.requests_failed(), 0);
         assert_eq!(s.input_tokens(), 0);
         assert_eq!(s.output_tokens(), 0);
         assert_eq!(s.tickets_created(), 0);
@@ -1044,7 +1153,7 @@ mod tests {
         assert_eq!(s.turns(), 2);
         assert_eq!(s.requests(), 2);
         assert_eq!(s.tool_calls(), 1);
-        assert_eq!(s.errors(), 1);
+        assert_eq!(s.requests_failed(), 1);
         assert_eq!(s.input_tokens(), 12);
         assert_eq!(s.output_tokens(), 6);
         assert_eq!(s.event_counts()["turn_started"], 2);
@@ -1243,7 +1352,7 @@ mod tests {
         assert_eq!(restored.turns(), 2);
         assert_eq!(restored.requests(), 1);
         assert_eq!(restored.tool_calls(), 1);
-        assert_eq!(restored.errors(), 1);
+        assert_eq!(restored.requests_failed(), 1);
         assert_eq!(restored.input_tokens(), 100);
         assert_eq!(restored.output_tokens(), 50);
         assert_eq!(restored.tickets_created(), 1);
@@ -1285,7 +1394,7 @@ mod tests {
         assert_eq!(value["turns"], 1);
         assert_eq!(value["requests"], 1);
         assert_eq!(value["tool_calls"], 1);
-        assert_eq!(value["errors"], 1);
+        assert_eq!(value["requests_failed"], 1);
         assert_eq!(value["input_tokens"], 100);
         assert_eq!(value["output_tokens"], 50);
         assert_eq!(value["tickets_created"], 1);
@@ -1331,14 +1440,14 @@ mod tests {
     }
 
     #[test]
-    fn stats_serializes_success_rate_when_tickets_present() {
+    fn stats_serializes_tickets_success_rate_when_tickets_present() {
         let s = Stats::new();
         s.record_finished(Duration::from_secs(1), Duration::from_secs(1));
         s.record_finished(Duration::from_secs(1), Duration::from_secs(1));
         s.record_finished(Duration::from_secs(1), Duration::from_secs(1));
         s.record_failed(Duration::from_secs(1), Duration::from_secs(1));
         let value = serde_json::to_value(&s).unwrap();
-        let rate = value["success_rate"].as_f64().unwrap();
+        let rate = value["tickets_success_rate"].as_f64().unwrap();
         assert!((rate - 0.75).abs() < 1e-9, "got {rate}");
     }
 
@@ -1490,9 +1599,13 @@ mod tests {
         let files = s.file_stats();
         assert_eq!(files["src/lib.rs"].opens, 2);
         assert_eq!(files["src/lib.rs"].failed, 0);
+        assert_eq!(files["src/lib.rs"].error_rate(), Some(0.0));
         assert_eq!(files["src/main.rs"].opens, 1);
-        assert_eq!(files["src/missing.rs"].opens, 0);
+        // A failed open is an open too, so the rate divides by every attempt.
+        assert_eq!(files["src/missing.rs"].opens, 2);
         assert_eq!(files["src/missing.rs"].failed, 2);
+        assert_eq!(files["src/missing.rs"].errors(), 2);
+        assert_eq!(files["src/missing.rs"].error_rate(), Some(1.0));
     }
 
     #[test]
@@ -1518,6 +1631,7 @@ mod tests {
 
         let files = restored.file_stats();
         assert_eq!(files["src/lib.rs"].opens, 2);
+        assert_eq!(files["src/missing.rs"].opens, 1);
         assert_eq!(files["src/missing.rs"].failed, 1);
     }
 
@@ -1530,8 +1644,9 @@ mod tests {
 
         let value = serde_json::to_value(&s).unwrap();
         let files = value["files"].as_object().unwrap();
-        assert_eq!(files["src/lib.rs"]["opens"], 2);
+        assert_eq!(files["src/lib.rs"]["opens"], 3);
         assert_eq!(files["src/lib.rs"]["failed"], 1);
+        assert_eq!(files["src/lib.rs"]["errors"], 1);
     }
 
     #[test]
@@ -1549,14 +1664,16 @@ mod tests {
         s.record_knowledge(KnowledgeOp::Read);
         s.record_knowledge(KnowledgeOp::Remove);
         s.record_knowledge(KnowledgeOp::List);
-        s.record_knowledge_miss();
+        s.record_knowledge_failed(KnowledgeOp::Read);
 
         let k = s.knowledge_stats();
         assert_eq!(k.writes, 1);
-        assert_eq!(k.reads, 2);
+        // The failed read counts as a read as well.
+        assert_eq!(k.reads, 3);
         assert_eq!(k.removes, 1);
         assert_eq!(k.lists, 1);
-        assert_eq!(k.misses, 1);
+        assert_eq!(k.failed, 1);
+        assert_eq!(k.errors(), 1);
     }
 
     #[test]
@@ -1576,7 +1693,7 @@ mod tests {
         let s = Stats::new();
         s.record_knowledge(KnowledgeOp::Write);
         s.record_knowledge(KnowledgeOp::Read);
-        s.record_knowledge_miss();
+        s.record_knowledge_failed(KnowledgeOp::Read);
 
         use crate::persistence::Persist;
         s.save(dir.path()).unwrap();
@@ -1584,21 +1701,22 @@ mod tests {
 
         let k = restored.knowledge_stats();
         assert_eq!(k.writes, 1);
-        assert_eq!(k.reads, 1);
-        assert_eq!(k.misses, 1);
+        assert_eq!(k.reads, 2);
+        assert_eq!(k.failed, 1);
     }
 
     #[test]
     fn stats_serializes_knowledge_as_nested_object() {
         let s = Stats::new();
         s.record_knowledge(KnowledgeOp::Write);
-        s.record_knowledge_miss();
+        s.record_knowledge_failed(KnowledgeOp::Read);
 
         let value = serde_json::to_value(&s).unwrap();
         let knowledge = value["knowledge"].as_object().unwrap();
         assert_eq!(knowledge["writes"], 1);
-        assert_eq!(knowledge["misses"], 1);
-        assert_eq!(knowledge["reads"], 0);
+        assert_eq!(knowledge["failed"], 1);
+        assert_eq!(knowledge["errors"], 1);
+        assert_eq!(knowledge["reads"], 1);
     }
 
     #[test]
@@ -1619,6 +1737,23 @@ mod tests {
         assert_eq!(m.requests, 2);
         assert_eq!(m.input_tokens, 12);
         assert_eq!(m.output_tokens, 6);
+        assert_eq!(m.failed, 0);
+        assert_eq!(m.error_rate(), Some(0.0));
+    }
+
+    #[test]
+    fn model_stats_records_failures_per_model() {
+        let s = Stats::new();
+        s.record_event(&request(10, 5), "KEY", &[], "");
+        s.record_event(&provider_error(), "KEY", &[], "");
+
+        let m = &s.model_stats()["m"];
+        // A failed request is a request too, so the rate divides by both.
+        assert_eq!(m.requests, 2);
+        assert_eq!(m.failed, 1);
+        assert_eq!(m.errors(), 1);
+        assert_eq!(m.error_rate(), Some(0.5));
+        assert_eq!(s.requests_failed(), 1);
     }
 
     #[test]
@@ -1635,13 +1770,15 @@ mod tests {
 
         let s = Stats::new();
         s.record_event(&request(10, 5), "KEY", &[], "");
+        s.record_event(&provider_error(), "KEY", &[], "");
 
         use crate::persistence::Persist;
         s.save(dir.path()).unwrap();
         let restored = Stats::load(dir.path()).unwrap();
 
         let models = restored.model_stats();
-        assert_eq!(models["m"].requests, 1);
+        assert_eq!(models["m"].requests, 2);
+        assert_eq!(models["m"].failed, 1);
         assert_eq!(models["m"].input_tokens, 10);
         assert_eq!(models["m"].output_tokens, 5);
     }
@@ -1654,6 +1791,8 @@ mod tests {
         let value = serde_json::to_value(&s).unwrap();
         let models = value["models"].as_object().unwrap();
         assert_eq!(models["m"]["requests"], 1);
+        assert_eq!(models["m"]["failed"], 0);
+        assert_eq!(models["m"]["errors"], 0);
         assert_eq!(models["m"]["input_tokens"], 10);
         assert_eq!(models["m"]["output_tokens"], 5);
     }
