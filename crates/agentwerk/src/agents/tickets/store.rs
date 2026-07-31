@@ -67,10 +67,10 @@ impl TicketQueue {
         self.save_ticket(&key);
         self.stats.record_created();
         for l in &labels {
-            self.stats.stats_for_label(l).record_created();
+            self.stats.slice_for_label(l).record_created();
         }
         // Creation emits no event, so the reporter's slice is fed here.
-        self.stats.stats_for_agent(&reporter).record_created();
+        self.stats.slice_for_agent(&reporter).record_created();
         let mut event = serde_json::json!({
             "event": "created",
             "ts": created_at,

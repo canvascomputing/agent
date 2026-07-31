@@ -250,24 +250,52 @@ impl Stats {
         }
     }
 
-    /// Get statistics scoped to one label.
+    /// Get statistics scoped to one label. A label nothing was recorded
+    /// against reads as zero.
     ///
     /// Reads use the same accessors as the run-wide `Stats`. `run_duration()`
     /// is always `None` here, since timing stays global.
     pub fn stats_for_label(&self, label: &str) -> Arc<Stats> {
-        let mut map = self.label_stats.lock().unwrap();
-        map.entry(label.to_string())
-            .or_insert_with(|| Arc::new(Stats::new()))
-            .clone()
+        self.label_stats
+            .lock()
+            .unwrap()
+            .get(label)
+            .cloned()
+            .unwrap_or_default()
     }
 
-    /// Get statistics scoped to one agent, by the name it was registered under.
+    /// Get statistics scoped to one agent, by the name it was registered
+    /// under. An agent nothing was recorded against reads as zero.
     ///
     /// `tickets_created()` counts the tickets that agent filed; the rest count
     /// the tickets it claimed.
     pub fn stats_for_agent(&self, agent_name: &str) -> Arc<Stats> {
-        let mut map = self.agent_stats.lock().unwrap();
-        map.entry(agent_name.to_string())
+        self.agent_stats
+            .lock()
+            .unwrap()
+            .get(agent_name)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// The label's slice, created on first use. Reading through
+    /// `stats_for_label` must not add one, or a misspelled lookup would
+    /// leave a zeroed section in `stats.json` for good.
+    pub(crate) fn slice_for_label(&self, label: &str) -> Arc<Stats> {
+        self.label_stats
+            .lock()
+            .unwrap()
+            .entry(label.to_string())
+            .or_insert_with(|| Arc::new(Stats::new()))
+            .clone()
+    }
+
+    /// The agent's slice, created on first use.
+    pub(crate) fn slice_for_agent(&self, agent_name: &str) -> Arc<Stats> {
+        self.agent_stats
+            .lock()
+            .unwrap()
+            .entry(agent_name.to_string())
             .or_insert_with(|| Arc::new(Stats::new()))
             .clone()
     }
@@ -443,10 +471,10 @@ impl Stats {
     fn record_scoped(&self, labels: &[String], agent: &str, f: impl Fn(&Stats)) {
         f(self);
         for label in labels {
-            f(&self.stats_for_label(label));
+            f(&self.slice_for_label(label));
         }
         if !agent.is_empty() {
-            f(&self.stats_for_agent(agent));
+            f(&self.slice_for_agent(agent));
         }
     }
 
@@ -505,8 +533,8 @@ impl Stats {
         }
         let slices = labels
             .iter()
-            .map(|label| self.stats_for_label(label))
-            .chain((!agent.is_empty()).then(|| self.stats_for_agent(agent)));
+            .map(|label| self.slice_for_label(label))
+            .chain((!agent.is_empty()).then(|| self.slice_for_agent(agent)));
         for slice in slices {
             match next {
                 Status::Finished => slice.record_finished(ticket_duration, work_duration),
@@ -704,12 +732,12 @@ impl crate::persistence::Persist for Stats {
         stats.load_fields(&value);
         if let Some(labels) = value.get("labels").and_then(|v| v.as_object()) {
             for (name, body) in labels {
-                stats.stats_for_label(name).load_fields(body);
+                stats.slice_for_label(name).load_fields(body);
             }
         }
         if let Some(agents) = value.get("agents").and_then(|v| v.as_object()) {
             for (name, body) in agents {
-                stats.stats_for_agent(name).load_fields(body);
+                stats.slice_for_agent(name).load_fields(body);
             }
         }
         Ok(stats)
@@ -1096,9 +1124,21 @@ mod tests {
     #[test]
     fn stats_for_label_returns_same_slice_on_repeat_access() {
         let s = Stats::new();
+        s.record_event(&turn(), "KEY", &["scan".into()], "");
         let a = s.stats_for_label("scan");
         let b = s.stats_for_label("scan");
         assert!(Arc::ptr_eq(&a, &b));
+    }
+
+    #[test]
+    fn reading_an_unrecorded_label_or_agent_creates_no_slice() {
+        let s = Stats::new();
+        assert_eq!(s.stats_for_label("typo").turns(), 0);
+        assert_eq!(s.stats_for_agent("typo").turns(), 0);
+
+        let value = serde_json::to_value(&s).unwrap();
+        assert!(value.get("labels").is_none());
+        assert!(value.get("agents").is_none());
     }
 
     #[test]
@@ -1185,13 +1225,13 @@ mod tests {
         s.record_finished(Duration::from_secs(7), Duration::from_secs(5));
         s.record_failed(Duration::from_secs(3), Duration::from_secs(2));
 
-        let slice = s.stats_for_label("scan");
+        let slice = s.slice_for_label("scan");
         slice.record_event(&turn(), "KEY", &[], "");
         slice.record_event(&request(40, 20), "KEY", &[], "");
         slice.record_created();
         slice.record_finished(Duration::from_secs(4), Duration::from_secs(3));
 
-        let agent_slice = s.stats_for_agent("seeker");
+        let agent_slice = s.slice_for_agent("seeker");
         agent_slice.record_event(&turn(), "KEY", &[], "");
         agent_slice.record_event(&request(30, 10), "KEY", &[], "");
         agent_slice.record_created();
