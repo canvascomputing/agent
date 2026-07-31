@@ -14,6 +14,6 @@ The project's conventions are split across the following files. Read the one mat
 - [agentdocs/workflow.md](agentdocs/workflow.md): build, test, release commands.
 - [agentdocs/layout.md](agentdocs/layout.md): where code lives.
 - [agentdocs/architecture.md](agentdocs/architecture.md): rules that shape how code is organized.
-- [agentdocs/style.md](agentdocs/style.md): naming, comment, and README style.
+- [agentdocs/style.md](agentdocs/style.md): naming, comment, and prose style, plus README structure.
 - [agentdocs/testing.md](agentdocs/testing.md): how tests are organized and written.
 - [agentdocs/this.md](agentdocs/this.md): how the agentdocs files themselves are written.

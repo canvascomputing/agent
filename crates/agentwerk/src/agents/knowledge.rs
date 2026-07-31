@@ -1,8 +1,5 @@
-//! File-backed knowledge store that persists across tickets and runs.
-//! Pages are markdown files addressed by slug, held in a `knowledge/`
-//! bundle under the store directory; a compact index is injected into the
-//! system prompt. The model-facing `ManageKnowledgeTool` is a thin wrapper
-//! in `tools::knowledge` that holds an `Arc<Knowledge>` from this module.
+//! Durable memory an agent shares across tickets and with other agents, stored
+//! as markdown pages on disk.
 
 use std::fmt;
 use std::fs;
@@ -21,8 +18,8 @@ const DEFAULT_INDEX_CHAR_LIMIT: usize = 12000;
 const DEFAULT_PAGE_TYPE: &str = "Knowledge";
 const LEGACY_MEMORY_FILE: &str = "memory.jsonl";
 const MIGRATED_SUFFIX: &str = ".migrated";
-/// OKF changelog file. We never write one, but reserve the name so a seed
-/// bundle's `log.md` is not walked in as a concept page.
+/// The OKF changelog filename. agentwerk never writes one, but the name is
+/// reserved so a seeded bundle's `log.md` is not read in as a page.
 const LOG_FILE: &str = "log.md";
 
 /// One entry in the in-memory index.
@@ -35,15 +32,15 @@ struct IndexEntry {
     path: String,
 }
 
-/// Errors raised by knowledge-store reads and mutations. `Display`
-/// renders the message `ManageKnowledgeTool` shows the model verbatim.
+/// What can go wrong reading or writing knowledge pages. `Display` renders the
+/// message the agent sees.
 #[derive(Debug)]
 pub enum KnowledgeError {
     /// A slug, description, or content value was rejected.
     PageRejected { message: String },
     /// No page exists at `slug`.
     PageMissing { slug: String },
-    /// The write would push the rendered index past its char limit.
+    /// The write would push the index past its character limit.
     IndexLimitExceeded {
         used: usize,
         limit: usize,
@@ -86,13 +83,13 @@ fn io_failed(message: impl Into<String>) -> impl FnOnce(io::Error) -> KnowledgeE
     |source| KnowledgeError::IoFailed { message, source }
 }
 
-/// Durable memory the agent curates and shares across tickets and other
-/// agents, stored on disk as an Open Knowledge Format (OKF) v0.1 bundle and
-/// curated through `ManageKnowledgeTool`. The bundle lives in
-/// `<dir>/knowledge/`: each page is a markdown concept file under
-/// `<dir>/knowledge/pages/<slug>.md` with `type`/`description`/`timestamp`
-/// frontmatter, and `<dir>/knowledge/index.md` is a derived index of one-line
-/// descriptions injected into the system prompt.
+/// `Knowledge` allows agents to share insights or learnings, kept on disk so
+/// they outlive the ticket that produced them.
+///
+/// Pages are created in the Open Knowledge Format (OKF) v0.1 under
+/// `<dir>/knowledge/pages/<slug>.md`, each carrying `type`, `description`, and
+/// `timestamp` frontmatter. `<dir>/knowledge/index.md` lists them in one line
+/// each, and that list is what the agent's prompt shows.
 ///
 /// Two agents bound to one store share it:
 ///
@@ -130,12 +127,12 @@ pub struct Knowledge {
 }
 
 impl Knowledge {
-    /// Open or create a knowledge store under `store_dir`, holding an OKF v0.1
-    /// bundle in `<store_dir>/knowledge/`. Creates the bundle's `pages/` if
-    /// missing. The index is rebuilt by walking the concept files under the
-    /// bundle, so placing an existing OKF bundle there seeds the store from it.
-    /// A `memory.jsonl` left by an older version next to the bundle is migrated
-    /// once into `knowledge/pages/legacy-notes.md`.
+    /// Open a knowledge store under `store_dir`, or create one there.
+    ///
+    /// The index is rebuilt from the pages themselves, so dropping an existing
+    /// OKF bundle at `<store_dir>/knowledge/` seeds the store from it. A
+    /// `memory.jsonl` left by an older version is moved once into
+    /// `knowledge/pages/legacy-notes.md`.
     pub fn load(store_dir: impl Into<PathBuf>) -> io::Result<Arc<Self>> {
         let store_dir = store_dir.into();
         let knowledge_dir = store_dir.join(BUNDLE_DIR);
@@ -160,39 +157,37 @@ impl Knowledge {
         }))
     }
 
-    /// Override the rendered-index char budget. Default is 12 000. Page
-    /// bodies are never capped; only the bullet list injected into the
-    /// system prompt is bounded. Call it on the loaded store before
-    /// binding the store to any agent:
-    /// `let store = Knowledge::load(dir)?; store.index_char_limit(12_000);`.
+    /// Limit the index size, 12 000 characters by default.
+    ///
+    /// Only the list shown in the prompt is limited; page bodies are not. Set it
+    /// on the loaded store before handing the store to any agent.
     pub fn index_char_limit(&self, n: usize) -> &Self {
         self.index_char_limit.store(n, Ordering::Relaxed);
         self
     }
 
-    /// Rendered-index char budget in force, 12 000 until
-    /// [`Self::index_char_limit`] overrides it.
+    /// Get the index size limit in force, 12 000 until
+    /// [`Self::index_char_limit`] changes it.
     pub fn get_index_char_limit(&self) -> usize {
         self.index_char_limit.load(Ordering::Relaxed)
     }
 
-    /// Rendered index content for the system prompt. Returns the body
-    /// of `index.md` (the bullet list), or an empty string when no
-    /// pages exist.
+    /// Get the index, which is injected into the agent prompt. Empty while the
+    /// store holds no pages.
     pub fn index(&self) -> String {
         let index = self.index.lock().unwrap();
         render_index(&index)
     }
 
-    /// Sub-handle for the page collection. Save, load, list, and remove
-    /// pages through `knowledge.pages()` so the verb pair stays bare
-    /// `save` / `load` and the bootstrap `Knowledge::load(dir)` does
-    /// not collide with per-slug loads.
+    /// Get the page collection for reading and writing pages.
+    ///
+    /// Going through `pages()` keeps `save` and `load` bare, so opening the
+    /// store and loading one page do not share a name.
     pub fn pages(&self) -> Pages<'_> {
         Pages { inner: self }
     }
 
-    /// Remove every page file and the index.
+    /// Remove every page from the store.
     pub fn clear(&self) -> Result<(), KnowledgeError> {
         let _w = self.write_lock.lock().unwrap();
 
@@ -216,9 +211,8 @@ impl Knowledge {
         Ok(())
     }
 
-    /// Index usage: rendered chars, the char budget, and the page count.
-    /// Read by `ManageKnowledgeTool` to show the model how much of the
-    /// budget a mutation consumed.
+    /// How large the index is, how large it may get, and how many pages it
+    /// holds. `ManageKnowledgeTool` shows the agent what a write consumed.
     pub(crate) fn index_usage(&self) -> (usize, usize, usize) {
         let index = self.index.lock().unwrap();
         (
@@ -229,13 +223,12 @@ impl Knowledge {
     }
 }
 
-/// One knowledge page: an OKF v0.1 concept document stored under
-/// `<dir>/knowledge/pages/<slug>.md`. The frontmatter carries `type` (from `kind`),
-/// `description`, and `timestamp`; the markdown body follows.
+/// A `Page` is one thing an agent learned, stored as markdown under
+/// `<dir>/knowledge/pages/<slug>.md` with its frontmatter above the body.
 #[derive(Debug, Clone)]
 pub struct Page {
     pub slug: String,
-    /// OKF `type`: a short concept kind. Defaults to `Knowledge`.
+    /// What kind of page this is, `Knowledge` by default.
     pub kind: String,
     pub description: String,
     pub content: String,
@@ -263,16 +256,14 @@ impl Persist for Page {
     }
 }
 
-/// Sub-handle returned by [`Knowledge::pages`]. Hosts the verb-bare
-/// `save` / `load` / `list` / `remove` over the page collection while
-/// keeping the index updated and the char budget enforced.
+/// The page collection, returned by [`Knowledge::pages`]. Every write through
+/// it updates the index and respects the size limit.
 pub struct Pages<'a> {
     inner: &'a Knowledge,
 }
 
 impl Pages<'_> {
-    /// Create or replace `page` and its index entry, refreshing the
-    /// index file.
+    /// Create or replace a page, and its entry in the index.
     pub fn save(&self, page: Page) -> Result<(), KnowledgeError> {
         let slug = normalize_slug(&page.slug)?;
         let description = page.description.trim();
@@ -337,9 +328,10 @@ impl Pages<'_> {
         Ok(())
     }
 
-    /// Read the page at `slug`. Returns the full [`Page`] struct. Resolves
-    /// the file through the index so a seeded page outside `pages/` is still
-    /// readable; falls back to `pages/<slug>.md`.
+    /// Read one page by its slug.
+    ///
+    /// The index says where the file is, so a seeded page kept outside `pages/`
+    /// is still readable.
     pub fn load(&self, slug: &str) -> Result<Page, KnowledgeError> {
         let slug = normalize_slug(slug)?;
         let relative = self
@@ -369,8 +361,7 @@ impl Pages<'_> {
         })
     }
 
-    /// Read every page in the store, in index order. Collects the slugs
-    /// before reading so the index lock is not held across the file reads.
+    /// Get every page in the store, in index order.
     pub fn list(&self) -> Result<Vec<Page>, KnowledgeError> {
         let slugs: Vec<String> = self
             .inner
@@ -383,7 +374,7 @@ impl Pages<'_> {
         slugs.iter().map(|slug| self.load(slug)).collect()
     }
 
-    /// Delete the page file at `slug` and its index entry.
+    /// Remove one page and its entry in the index.
     pub fn remove(&self, slug: &str) -> Result<(), KnowledgeError> {
         let slug = normalize_slug(slug)?;
         let _w = self.inner.write_lock.lock().unwrap();
@@ -416,13 +407,13 @@ fn page_path(knowledge_dir: &Path, slug: &str) -> PathBuf {
     knowledge_dir.join(PAGES_DIR).join(format!("{slug}.md"))
 }
 
-// ---- slug validation ----
+// Slug validation
 
-/// Normalize an arbitrary string into a valid slug: lowercase
-/// `[a-z0-9-]`, no leading/trailing hyphens, max 60 chars.
-/// Slashes, dots, underscores, spaces, and other non-alphanumeric
-/// characters are replaced with hyphens; consecutive hyphens are
-/// collapsed; file extensions are stripped.
+/// Turn any string into a slug: lowercase `[a-z0-9-]`, no hyphen at either
+/// end, at most 60 characters.
+///
+/// Every other character becomes a hyphen, runs of hyphens collapse, and a file
+/// extension is dropped.
 pub(crate) fn normalize_slug(raw: &str) -> Result<String, KnowledgeError> {
     let slug: String = raw
         .to_ascii_lowercase()
@@ -481,7 +472,7 @@ pub(crate) fn normalize_slug(raw: &str) -> Result<String, KnowledgeError> {
     Ok(collapsed)
 }
 
-// ---- frontmatter ----
+// Frontmatter
 
 fn render_page(kind: &str, description: &str, content: &str, tags: &[String]) -> String {
     let now = format_iso8601_now();
@@ -500,9 +491,9 @@ fn render_page(kind: &str, description: &str, content: &str, tags: &[String]) ->
     format!("---\ntype: {kind}\ndescription: {description}\ntimestamp: {now}{tags_str}\n---\n{content}\n")
 }
 
-/// Parse a page file into `(kind, description, tags, content)`. A missing
-/// `type` defaults to `Knowledge`; the legacy `summary` key is still read as
-/// `description` so older stores load.
+/// Read a page file into `(kind, description, tags, content)`. A missing `type`
+/// reads as `Knowledge`, and the older `summary` key still reads as
+/// `description`.
 fn parse_page(raw: &str) -> (String, String, Vec<String>, String) {
     let trimmed = raw.trim_start();
     if !trimmed.starts_with("---") {
@@ -558,10 +549,10 @@ fn strip_frontmatter(raw: &str) -> String {
     parse_page(raw).3
 }
 
-// ---- index rendering / parsing ----
+// Index rendering / parsing
 
-/// Compact index injected into the system prompt. The model reads a page by
-/// its slug, so the slug stays visible here.
+/// The index the prompt shows. The agent reads a page by its slug, so each slug
+/// stays visible.
 fn render_index(entries: &[IndexEntry]) -> String {
     entries
         .iter()
@@ -570,9 +561,8 @@ fn render_index(entries: &[IndexEntry]) -> String {
         .join("\n")
 }
 
-/// The on-disk `index.md`: an OKF progressive-disclosure view. Frontmatter-free,
-/// with a clickable link to each concept file. Written as a derived artifact and
-/// never parsed back; the page frontmatter is the source of truth.
+/// The `index.md` written to disk, one clickable link per page. It is derived
+/// and never read back: the pages themselves are the source of truth.
 fn render_index_file(entries: &[IndexEntry]) -> String {
     if entries.is_empty() {
         return String::new();
@@ -585,10 +575,8 @@ fn render_index_file(entries: &[IndexEntry]) -> String {
     format!("{body}\n")
 }
 
-/// Rebuild the in-memory index by walking the bundle for concept files, then
-/// regenerate the derived `index.md`. The page frontmatter is the source of
-/// truth (OKF: `index.md` is a derived view), so an external OKF bundle left
-/// in the bundle directory seeds the store from it.
+/// Rebuild the index from the pages on disk, then write `index.md` again. This
+/// is what lets a bundle authored elsewhere seed the store.
 fn rebuild_index_from_pages(knowledge_dir: &Path) -> io::Result<Vec<IndexEntry>> {
     let mut entries = Vec::new();
     collect_pages(knowledge_dir, knowledge_dir, &mut entries)?;
@@ -601,9 +589,9 @@ fn rebuild_index_from_pages(knowledge_dir: &Path) -> io::Result<Vec<IndexEntry>>
     Ok(entries)
 }
 
-/// Walk `dir` recursively, turning every non-reserved markdown file into an
-/// index entry. The description comes from page frontmatter, falling back to
-/// the body H1 for a frontmatter-less page.
+/// Turn every markdown file under `dir` into an index entry, taking the
+/// description from the frontmatter or, without one, from the body's first
+/// heading.
 fn collect_pages(root: &Path, dir: &Path, entries: &mut Vec<IndexEntry>) -> io::Result<()> {
     if !dir.exists() {
         return Ok(());
@@ -657,8 +645,8 @@ fn is_reserved(file_name: &str) -> bool {
     file_name == INDEX_FILE || file_name == LOG_FILE || file_name.ends_with(MIGRATED_SUFFIX)
 }
 
-/// Slug for a concept file: its bundle-relative path minus `.md`, with a
-/// leading `pages/` stripped so a native page keeps `slug == file stem`.
+/// The slug for a page file: its path without `.md`, and without a leading
+/// `pages/`, so a page written by an agent keeps the file's own name.
 fn bundle_slug(root: &Path, path: &Path) -> Result<String, KnowledgeError> {
     let relative = path.strip_prefix(root).unwrap_or(path).with_extension("");
     let mut text = relative.to_string_lossy().replace('\\', "/");
@@ -678,7 +666,7 @@ fn extract_h1_summary(body: &str) -> String {
     "(no summary)".to_string()
 }
 
-// ---- migration from memory.jsonl ----
+// Migration from memory.jsonl
 
 #[derive(serde::Deserialize)]
 struct LegacyMemoryRecord {
@@ -739,11 +727,10 @@ fn migrate_memory_jsonl(store_dir: &Path, knowledge_dir: &Path) -> io::Result<Ve
     Ok(entries)
 }
 
-// ---- timestamp ----
+// Timestamp
 
-/// ISO 8601 UTC timestamp without external dependencies. Uses the same
-/// civil-from-days algorithm as `prompts::format_current_date`, extended
-/// with hours, minutes, and seconds.
+/// An ISO 8601 UTC timestamp, computed the same way as
+/// `prompts::format_current_date` and extended with the time of day.
 fn format_iso8601_now() -> String {
     let epoch_secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)

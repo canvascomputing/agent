@@ -1,9 +1,9 @@
-//! The ticket as Python sees it. One class in both directions: the constructor
-//! takes the caller-settable fields, and the same class comes back out of
-//! queries and callbacks with its recorded state and messages as attributes.
-//! Rust spells those fields as chained builders (`Ticket::new(...).label(...)
-//! .schema(...).parent(...)`); a Python class cannot carry a `labels` method
-//! and a `labels` attribute, so they arrive as keyword arguments instead.
+//! The ticket as Python sees it. One class in both directions: you set the
+//! fields you own, and the same class comes back with its status and messages.
+//!
+//! Rust sets those fields with chained methods. A Python class cannot carry a
+//! `labels` method and a `labels` attribute, so they are keyword arguments
+//! here.
 
 use agentwerk::Ticket;
 use pyo3::prelude::*;
@@ -11,8 +11,7 @@ use pyo3::prelude::*;
 use crate::convert::{py_to_value, value_to_py};
 use crate::schema::PySchema;
 
-/// A ticket to enqueue on a `TicketSystem`, and the ticket the system hands
-/// back.
+/// A `Ticket` is a task plus what assigns and validates it.
 #[pyclass(name = "Ticket")]
 pub struct PyTicket {
     pub inner: Ticket,
@@ -20,9 +19,10 @@ pub struct PyTicket {
 
 #[pymethods]
 impl PyTicket {
-    /// Create a ticket carrying `task` (any JSON-serializable value). `labels`
-    /// assign it to agents, `schema` is validated against the result, and
-    /// `parent` records a handover audit trail.
+    /// Create a ticket carrying `task`.
+    ///
+    /// `labels` assign it to agents, `schema` is what the result must satisfy,
+    /// and `parent` names the ticket it came from.
     #[new]
     #[pyo3(signature = (task, *, labels=None, schema=None, parent=None))]
     fn new(
@@ -44,37 +44,37 @@ impl PyTicket {
         Ok(PyTicket { inner })
     }
 
-    /// True when the ticket carries `label`.
+    /// Check whether the ticket carries a label.
     fn has_label(&self, label: &str) -> bool {
         self.inner.has_label(label)
     }
 
-    /// True while the ticket is created but not yet claimed.
+    /// Check whether the ticket is still waiting to be claimed.
     fn is_todo(&self) -> bool {
         self.inner.is_todo()
     }
 
-    /// True once the ticket produced an accepted result.
+    /// Check whether the ticket finished.
     fn is_finished(&self) -> bool {
         self.inner.is_finished()
     }
 
-    /// True once the ticket gave up without a result.
+    /// Check whether the ticket failed.
     fn is_failed(&self) -> bool {
         self.inner.is_failed()
     }
 
-    /// True while an agent is working the ticket.
+    /// Check whether an agent is working on the ticket.
     fn is_in_progress(&self) -> bool {
         self.inner.is_in_progress()
     }
 
-    /// True while the ticket still has work left: todo or in progress.
+    /// Check whether the ticket is still open, either todo or in progress.
     fn is_pending(&self) -> bool {
         self.inner.is_pending()
     }
 
-    /// True once the ticket reached a terminal status: finished or failed.
+    /// Check whether the ticket is resolved, either finished or failed.
     fn is_resolved(&self) -> bool {
         self.inner.is_resolved()
     }
@@ -108,7 +108,7 @@ impl PyTicket {
         self.inner.labels.clone()
     }
 
-    /// The schema the result is validated against, when the ticket carries one.
+    /// Schema the result must satisfy, when there is one.
     #[getter]
     fn schema(&self) -> Option<PySchema> {
         self.inner.schema.as_ref().map(|schema| PySchema {
@@ -147,8 +147,8 @@ impl PyTicket {
         self.inner.failed_at
     }
 
-    /// The messages exchanged with the model. Converted on access, so a
-    /// callback that never asks never pays for them.
+    /// The messages exchanged with the model, built on access so a handler that
+    /// never asks never pays for them.
     #[getter]
     fn replies(&self) -> Vec<crate::reply::PyReply> {
         crate::reply::replies_to_py(&self.inner.replies)
@@ -164,17 +164,18 @@ impl PyTicket {
 }
 
 impl PyTicket {
-    /// Wrap a ticket the system owns, messages included.
+    /// Hand over a ticket the system owns, messages included.
     pub fn from_ticket(ticket: &Ticket) -> Self {
         PyTicket {
             inner: ticket.clone(),
         }
     }
 
-    /// Build the ticket to enqueue. Copies the caller-settable fields only:
-    /// `insert` stamps key, status, reporter, and result but leaves the
-    /// messages and lifecycle timestamps, so a ticket that came back out of
-    /// the system would otherwise carry its messages into the new one.
+    /// Build the ticket to submit, copying only the fields you own.
+    ///
+    /// Submitting sets key, status, reporter, and result, but leaves the
+    /// messages and timestamps, so a ticket that came back out of the system
+    /// would otherwise carry its messages into the new one.
     pub fn to_ticket(&self) -> Ticket {
         let mut ticket = Ticket::new(self.inner.task.clone()).labels(self.inner.labels.clone());
         if let Some(schema) = &self.inner.schema {

@@ -1,20 +1,17 @@
-//! Structured events agentwerk emits so callers can observe a run
-//! without wrapping the agent.
+//! Insights into the lifecycle and activities of an agent's work.
 
 use std::fmt;
 use std::sync::Arc;
 
 use crate::providers::{RequestErrorKind, TokenUsage};
 
-/// Why the context-window compaction seam fired.
+/// Why the older messages were summarized.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompactReason {
-    /// The next-request token estimate crossed the model's compaction
-    /// threshold before sending; the warning fired ahead of any failure.
+    /// The next request was estimated to be too long for the model, ahead of
+    /// any failure.
     Proactive,
-    /// The provider itself reported a context-window overflow, either as
-    /// a `ProviderError::ContextWindowExceeded` or via
-    /// `ResponseStatus::ContextWindowExceeded` on a successful reply.
+    /// The LLM provider reported the context window exceeded.
     Reactive,
 }
 
@@ -27,22 +24,20 @@ impl fmt::Display for CompactReason {
     }
 }
 
-/// Which configured policy a [`EventKind::PolicyViolated`] refers to.
+/// Which limit a [`EventKind::PolicyViolated`] refers to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PolicyKind {
-    /// `max_turns` — the turn cap across all agents.
+    /// `max_turns`: the turn limit across all agents.
     Turns,
-    /// `max_input_tokens` — cumulative request-side token cap.
+    /// `max_input_tokens`: the total input-token limit.
     InputTokens,
-    /// `max_output_tokens` — cumulative reply-side token cap.
+    /// `max_output_tokens`: the total output-token limit.
     OutputTokens,
-    /// `max_schema_retries` — consecutive schema-validation failures
-    /// while processing one ticket. Resets after every successful
-    /// schema-checked tool call.
+    /// `max_schema_retries`: consecutive schema failures on one ticket. The
+    /// count resets after every result that validates.
     MaxSchemaRetries,
-    /// `max_time`: total elapsed-duration limit. The `limit` field on
-    /// the matching [`EventKind::PolicyViolated`] is reported in
-    /// milliseconds.
+    /// `max_time`: the elapsed-duration limit. The matching event reports its
+    /// `limit` in milliseconds.
     Time,
 }
 
@@ -58,16 +53,18 @@ impl fmt::Display for PolicyKind {
     }
 }
 
-/// Why a run ended. Carried by [`EventKind::RunFinished`] and readable
-/// after `finish().await` via `TicketSystem::finish_reason()`.
+/// Why execution ended.
+///
+/// Carried by [`EventKind::RunFinished`] and readable after `finish().await`
+/// through `TicketSystem::finish_reason()`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FinishReason {
-    /// No tickets remained pending; nothing more to do.
+    /// The queue emptied; nothing more to do.
     Drained,
-    /// A `Policies` limit was exceeded.
+    /// A limit was breached.
     PolicyViolated(PolicyKind),
-    /// An external party requested cancellation through `cancel()`,
-    /// `cancel_on`, or `cancel_on_event`.
+    /// Cancellation was requested through `cancel()`, `cancel_on`, or
+    /// `cancel_on_event`.
     Cancelled,
 }
 
@@ -83,15 +80,14 @@ impl fmt::Display for FinishReason {
     }
 }
 
-/// Categorical discriminant for [`EventKind::ToolCallFailed`].
+/// How a tool call failed, carried by [`EventKind::ToolCallFailed`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolFailureKind {
-    /// The registry had no tool with that name.
+    /// No tool of that name is registered.
     ToolNotFound,
-    /// The tool was invoked but its execution raised an error.
+    /// The tool ran and returned an error.
     ExecutionFailed,
-    /// A schema-checked tool rejected its input. Counted against
-    /// `policies.max_schema_retries`.
+    /// The tool rejected its input. Counted against `max_schema_retries`.
     SchemaValidationFailed,
 }
 
@@ -105,7 +101,7 @@ impl fmt::Display for ToolFailureKind {
     }
 }
 
-/// One Knowledge-store operation, carried by [`EventKind::KnowledgeUsed`].
+/// What was done to a knowledge page, carried by [`EventKind::KnowledgeUsed`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KnowledgeOp {
     Write,
@@ -125,9 +121,8 @@ impl fmt::Display for KnowledgeOp {
     }
 }
 
-/// Observation emitted as agents work. Carries the name of the agent
-/// that produced it, the key of the ticket it concerns, plus a typed
-/// [`EventKind`].
+/// An `Event` reports one thing that happened as agents work. It names the
+/// agent that produced it, the ticket it concerns, and what happened.
 ///
 /// ```no_run
 /// use agentwerk::TicketSystem;
@@ -147,8 +142,8 @@ impl fmt::Display for KnowledgeOp {
 pub struct Event {
     /// Name of the agent that produced this event.
     pub agent_name: String,
-    /// Key of the ticket this event concerns. Empty for run-lifecycle
-    /// events (`RunStarted`, `RunFinished`), which no ticket owns.
+    /// Key of the ticket this event concerns. Empty on `RunStarted` and
+    /// `RunFinished`, which no ticket owns.
     pub ticket_key: String,
     /// What happened.
     pub kind: EventKind,
@@ -168,43 +163,37 @@ impl Event {
     }
 }
 
-/// Categorical discriminant of [`Event`].
+/// What an [`Event`] reports.
 ///
-/// Most variants are emitted by a per-agent loop and carry that agent's
-/// name on the wrapping [`Event`]. Two run-lifecycle variants
-/// (`RunStarted`, `RunFinished`) are emitted by the `TicketSystem`
-/// itself and arrive with an empty `agent_name`, as does `TicketFailed`
-/// when the host fails a ticket through `TicketSystem::set_failed`.
+/// Most kinds name the agent they came from on the wrapping [`Event`].
+/// `RunStarted` and `RunFinished` come from the `TicketSystem` itself and
+/// arrive with an empty `agent_name`, as does `TicketFailed` when the host
+/// fails a ticket through `TicketSystem::set_failed`.
 #[derive(Debug, Clone)]
 pub enum EventKind {
-    /// The `TicketSystem`'s background work loop has been spawned and
-    /// the run is live. Emitted by `TicketSystem::start`.
+    /// Execution began.
     RunStarted,
-    /// The `TicketSystem`'s run has stopped. Carries the reason
-    /// `finish()` returned. Emitted by `TicketSystem::finish` after the
-    /// worker tasks have joined.
+    /// Execution ended, carrying the reason.
     RunFinished { reason: FinishReason },
-    /// Agent claimed a ticket and began working on it.
+    /// An agent claimed a ticket.
     TicketStarted,
-    /// Ticket finished with `Status::Finished`.
+    /// A ticket finished successfully.
     TicketFinished,
-    /// Ticket failed with `Status::Failed`.
+    /// A ticket failed.
     TicketFailed,
-    /// Agent loop started a new turn.
+    /// The agent began another turn on its ticket.
     TurnStarted,
-    /// Provider request began.
+    /// A request went out to the model.
     RequestStarted { model: String },
-    /// Provider request finished successfully. Carries the model and the
-    /// token counts the provider reported for the response.
+    /// A request finished and reported its token usage.
     RequestFinished { model: String, usage: TokenUsage },
-    /// Provider request failed. The run is about to stop for this ticket.
+    /// A request failed and was not retried. The ticket is about to fail.
     RequestFailed {
         model: String,
         reason: RequestErrorKind,
         message: String,
     },
-    /// Provider request failed transiently; agentwerk is about to sleep
-    /// and retry. `attempt` is 1-based.
+    /// A transient provider error triggered a retry. `attempt` counts from one.
     RequestRetried {
         model: String,
         attempt: u32,
@@ -212,68 +201,59 @@ pub enum EventKind {
         reason: RequestErrorKind,
         message: String,
     },
-    /// A streamed text chunk arrived from the provider.
+    /// A piece of the reply arrived.
     TextChunkReceived { content: String },
-    /// Tool invocation began.
+    /// A tool invocation began.
     ToolCallStarted {
         tool_name: String,
         call_id: String,
         input: serde_json::Value,
     },
-    /// Tool invocation succeeded.
+    /// A tool invocation finished.
     ToolCallFinished {
         tool_name: String,
         call_id: String,
         output: String,
     },
-    /// Tool invocation failed. The error is sent back to the model as a
-    /// tool-result message; the run continues.
+    /// A tool invocation failed but the ticket continues. The message goes back
+    /// to the model as a tool result.
     ToolCallFailed {
         tool_name: String,
         call_id: String,
         reason: ToolFailureKind,
         message: String,
     },
-    /// A file-opening tool opened `path` successfully.
+    /// A tool opened a file.
     FileOpenFinished { path: String },
-    /// A file-opening tool failed on `path`.
+    /// A tool could not open a file.
     FileOpenFailed { path: String },
-    /// The knowledge tool performed `op`. The tool self-reports, since
-    /// only it sees which operation ran.
+    /// A page was written, read, removed, or listed.
     KnowledgeUsed { op: KnowledgeOp },
-    /// A knowledge `read` or `remove` named a slug the store does not
-    /// have. Self-reported like `KnowledgeUsed`: the miss returns Ok, so
-    /// the tool-call loop cannot see it.
+    /// A page the agent asked for was not there.
     KnowledgeMissed,
-    /// A configured policy was exceeded; the run is about to stop.
+    /// A limit was breached and execution stopped.
     PolicyViolated { policy: PolicyKind, limit: u64 },
-    /// A `done`-side schema validation failed; agentwerk is about to
-    /// re-prompt the model with a corrective directive. `attempt` is
-    /// 1-based.
+    /// A result missed its schema and the agent was asked again. `attempt`
+    /// counts from one.
     SchemaRetried {
         attempt: u32,
         max_attempts: u32,
         message: String,
     },
-    /// Compaction is about to run: agentwerk is about to call the
-    /// summarizer to collapse the message tail. `total` is the number
-    /// of summariser calls the algorithm intends to make.
+    /// Compaction is about to summarize the older messages. `total` is how many
+    /// summaries it intends to ask for.
     CompactionStarted { reason: CompactReason, total: u32 },
-    /// One summariser call finished. Fires once per chunk processed by
-    /// the algorithm; `completed` is the running count (1-based) and
-    /// `total` is the same value as the matching `CompactionStarted`'s
-    /// `total`.
+    /// Compaction finished part of the work. `completed` counts from one and
+    /// `total` repeats the matching `CompactionStarted`.
     CompactionProgress {
         reason: CompactReason,
         completed: u32,
         total: u32,
     },
-    /// Compaction finished successfully; the message tail has been
-    /// replaced with the model's summary.
+    /// Compaction replaced the older messages with a summary.
     CompactionFinished { reason: CompactReason },
-    /// Compaction failed: the summarizer call returned a provider
-    /// error. The ticket is about to fail via the usual
-    /// `RequestFailed` path.
+    /// Compaction could not finish. The ticket is about to fail the same way a
+    /// failed request ends it.
     CompactionFailed {
         reason: CompactReason,
         message: String,
@@ -281,9 +261,10 @@ pub enum EventKind {
 }
 
 impl EventKind {
-    /// Stable snake_case discriminant name; keys the per-event counts in
-    /// `Stats`. Exhaustive on purpose: a new variant must name itself here,
-    /// and that one line is its whole stats integration.
+    /// The stable snake_case name that keys the per-event counts in `Stats`.
+    ///
+    /// The match is exhaustive on purpose: a new variant must name itself here,
+    /// and that one line is everything its statistics need.
     pub(crate) fn name(&self) -> &'static str {
         match self {
             EventKind::RunStarted => "run_started",
@@ -334,9 +315,10 @@ impl fmt::Display for EventKind {
     }
 }
 
-/// Default observer. Prints ticket lifecycle, tool activity, policy
-/// violations, and request failures to stderr. Quiet variants
-/// (token counts, streaming chunks, request start/finish) are dropped.
+/// The handler that runs when you install none of your own.
+///
+/// It prints ticket lifecycle, tool activity, limit breaches, and failed
+/// requests to stderr, and drops the rest.
 pub fn default_logger() -> Arc<dyn Fn(&Event) + Send + Sync> {
     Arc::new(|event: &Event| {
         let agent = &event.agent_name;

@@ -1,5 +1,5 @@
-//! The body `{context}` expands to, and the `Section` / `PromptBuilder`
-//! that composes the role prompt and (caller-supplied) directives.
+//! Assembles what an agent is told: the role, the directives, and the facts
+//! `{context}` expands to.
 
 mod builder;
 mod section;

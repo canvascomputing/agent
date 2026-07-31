@@ -9,8 +9,7 @@ use serde_json::Value;
 
 use crate::convert::{py_to_value, runtime_error, value_to_py};
 
-/// One entry in a ticket's replies. Extractable, since a reply editor
-/// hands these back.
+/// One entry in a ticket's replies, which an editor hands back.
 #[pyclass(name = "Reply", from_py_object)]
 #[derive(Clone)]
 pub struct PyReply {
@@ -19,7 +18,7 @@ pub struct PyReply {
 
 #[pymethods]
 impl PyReply {
-    /// A reply carrying one text block, as the agent loop writes them.
+    /// A reply carrying one block of text.
     #[staticmethod]
     fn user_text(text: &str) -> Self {
         PyReply {
@@ -47,7 +46,8 @@ impl PyReply {
             .collect()
     }
 
-    /// Millis since epoch. Zero on a reply built here, until it is stored.
+    /// Milliseconds since the epoch, zero on a reply built here until it is
+    /// stored.
     #[getter]
     fn created_at(&self) -> u64 {
         self.inner.created_at
@@ -62,8 +62,8 @@ impl PyReply {
     }
 }
 
-/// One payload block inside a reply: text, a tool call, a tool result, or
-/// the model's reasoning.
+/// One block inside a reply: text, a tool call, a tool result, or the model's
+/// reasoning.
 #[pyclass(name = "ReplyContent", skip_from_py_object)]
 #[derive(Clone)]
 pub struct PyReplyContent {
@@ -134,7 +134,7 @@ impl PyReplyContent {
         .into()
     }
 
-    /// The block's fields as a dict, without the `kind` tag.
+    /// The block's fields as a dict, without `kind`.
     #[getter]
     fn data<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let mut value = serde_json::to_value(&self.inner).map_err(runtime_error)?;
@@ -149,7 +149,7 @@ impl PyReplyContent {
     }
 }
 
-/// Render replies as Python objects for an editor to inspect.
+/// Hand the replies to Python for an editor to read.
 pub(crate) fn replies_to_py(replies: &[Reply]) -> Vec<PyReply> {
     replies
         .iter()
@@ -158,9 +158,10 @@ pub(crate) fn replies_to_py(replies: &[Reply]) -> Vec<PyReply> {
         .collect()
 }
 
-/// Read an editor's returned list back into replies. Takes the `Reply`
-/// objects the editor was handed, so a dict built by hand is rejected by
-/// name rather than failing on a missing field.
+/// Read an editor's returned list back into replies.
+///
+/// It takes the `Reply` objects the editor was handed, so a dict built by hand
+/// is rejected by name rather than failing on a missing field.
 pub(crate) fn py_to_replies(obj: &Bound<'_, PyAny>) -> PyResult<Vec<Reply>> {
     let replies: Vec<PyReply> = obj.extract().map_err(|_| {
         runtime_error(

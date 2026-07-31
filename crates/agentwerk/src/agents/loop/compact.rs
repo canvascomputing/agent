@@ -1,4 +1,5 @@
-//! Transcript compaction: proactive before the window fills, reactive after the provider reports overflow.
+//! Summarizing a ticket's older messages: ahead of the context window filling
+//! up, and after the LLM provider reports it has.
 
 use std::sync::Arc;
 

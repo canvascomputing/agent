@@ -1,6 +1,8 @@
 //! The `Provider` trait and the vendor-specific implementations that speak to Anthropic, OpenAI-compatible APIs, Mistral, and LiteLLM.
 //!
-//! The request and response types passed across the `Provider` trait (`Message`, `ContentBlock`, `ModelRequest`, `ModelResponse`, `StreamEvent`, ...) are reachable by name but hidden from the rustdoc index: they only matter when implementing a custom [`Provider`].
+//! The types a request and a response are made of (`Message`, `ContentBlock`,
+//! `ModelRequest`, `ModelResponse`, `StreamEvent`) are reachable by name but
+//! kept out of the index: they matter only when implementing a [`Provider`].
 
 mod anthropic;
 pub mod environment;

@@ -1,13 +1,5 @@
-//! Run-time stats. One [`Stats`] struct records every observable event and
-//! exposes inherent read accessors. Callers reach it through
-//! `TicketSystem::stats()`.
-//!
-//! `Stats::record_event` is the single writer for event-derived stats:
-//! every [`EventKind`] is counted by its name automatically, so new events
-//! are covered without touching this file; only payload-bearing measures
-//! (token sums, per-subject maps) have explicit arms. Ticket lifecycle
-//! counters are written directly by the store, since transitions carry
-//! duration data events do not.
+//! Deep insights into how agents behave: working time, tickets, failure rates,
+//! and bottlenecks.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -21,9 +13,9 @@ use crate::agents::tickets::Status;
 use crate::event::{EventKind, KnowledgeOp, ToolFailureKind};
 use crate::providers::types::TokenUsage;
 
-/// Run-time statistics for tickets, tokens, and activity. Reached
-/// through [`TicketSystem::stats()`](crate::TicketSystem::stats);
-/// available during the run and after it finishes.
+/// `Stats` holds the metrics about tickets, tokens, and time. Reach it through
+/// [`TicketSystem::stats()`](crate::TicketSystem::stats), during execution or
+/// after it finishes.
 ///
 /// ```no_run
 /// use agentwerk::TicketSystem;
@@ -41,9 +33,8 @@ use crate::providers::types::TokenUsage;
 /// # }
 /// ```
 pub struct Stats {
-    /// Count per event kind, keyed by [`EventKind::name`]. Every emitted
-    /// event lands here automatically; the named accessors (`turns()`,
-    /// `requests()`, …) are lookups into this map.
+    /// Count per event kind, keyed by [`EventKind::name`]. Every emitted event
+    /// lands here, and the named accessors are lookups into this map.
     event_counts: Mutex<HashMap<String, u64>>,
     input_tokens: AtomicU64,
     output_tokens: AtomicU64,
@@ -51,47 +42,39 @@ pub struct Stats {
     tickets_finished: AtomicU64,
     tickets_failed: AtomicU64,
 
-    /// Run-start wall clock (millis since epoch). 0 = unset; first
-    /// `record_started` wins via CAS.
+    /// When execution started, in milliseconds since the epoch. 0 until then,
+    /// and the first writer wins.
     started_at: AtomicU64,
-    /// Run-end wall clock (millis since epoch). 0 = still running;
-    /// `mark_finished` stamps it when the watcher fires.
+    /// When execution ended, in milliseconds since the epoch. 0 while it is
+    /// still running.
     finished_at: AtomicU64,
-    /// Sum of finished tickets' creation→terminal durations, seconds.
+    /// Sum of finished tickets' time from creation to resolution, in seconds.
     total_ticket_duration: AtomicU64,
-    /// Sum of finished tickets' started→terminal durations, seconds.
-    /// With concurrent agents this can exceed the run's wall-clock
-    /// duration.
+    /// Sum of finished tickets' time from claim to resolution, in seconds. With
+    /// agents working in parallel this can exceed the elapsed duration.
     total_work_duration: AtomicU64,
-    /// Lazy-init map of nested counter slices keyed by ticket label.
-    /// Always empty on a slice itself; populated only on the run-wide
-    /// `Stats` owned by `TicketSystem`.
+    /// Nested slices keyed by ticket label, filled on demand. Only the run-wide
+    /// `Stats` holds them; a slice's own map stays empty.
     label_stats: Mutex<HashMap<String, Arc<Stats>>>,
-    /// Lazy-init map of nested counter slices keyed by agent name. Kept
-    /// apart from `label_stats` because a claim stamps the agent's name
-    /// onto the ticket's labels, so one map would merge an agent with a
-    /// label that happens to share its name.
+    /// Nested slices keyed by agent name, filled on demand. Kept apart from
+    /// `label_stats` because claiming a ticket adds the agent's name to its
+    /// labels, so one map would merge an agent with a label of the same name.
     agent_stats: Mutex<HashMap<String, Arc<Stats>>>,
-    /// Per-ticket append-only series of provider-reported token usages.
-    /// Feeds the proactive-compaction predictor; cleared on compaction.
-    /// Always empty on a label slice.
+    /// Token usage per ticket, oldest first. It feeds the estimate that decides
+    /// when to compact, and is cleared once that happens.
     usage_history: Mutex<HashMap<String, Vec<TokenUsage>>>,
-    /// Per-tool call and failure tallies keyed by tool name. Populated
-    /// only on the run-wide `Stats`; always empty on a label slice.
+    /// Call and failure tallies keyed by tool name, run-wide only.
     tool_stats: Mutex<HashMap<String, ToolCounters>>,
-    /// Per-path open and failure tallies keyed by the file a tool opened.
-    /// Populated only on the run-wide `Stats`; always empty on a label slice.
+    /// Open and failure tallies keyed by the path a tool opened, run-wide only.
     file_stats: Mutex<HashMap<String, FileCounters>>,
-    /// Run-wide Knowledge-store operation tally. Populated only on the run-wide
-    /// `Stats`; a label slice never records here, so it stays zero.
+    /// Knowledge usage tallies, run-wide only.
     knowledge_stats: Mutex<KnowledgeCounters>,
-    /// Per-model request and token tallies keyed by model name. Populated
-    /// only on the run-wide `Stats`; always empty on a label slice.
+    /// Request and token tallies keyed by model name, run-wide only.
     model_stats: Mutex<HashMap<String, ModelCounters>>,
 }
 
-/// Raw per-tool tallies behind the `tool_stats` map. `errors` is derived
-/// from the three kinds, never stored.
+/// The stored per-tool tallies. `errors` is derived from the three failure
+/// kinds, never stored.
 #[derive(Default, Clone)]
 struct ToolCounters {
     calls: u64,
@@ -100,14 +83,14 @@ struct ToolCounters {
     schema_failed: u64,
 }
 
-/// Raw per-path tallies behind the `file_stats` map.
+/// The stored per-path tallies.
 #[derive(Default, Clone)]
 struct FileCounters {
     opens: u64,
     failed: u64,
 }
 
-/// Raw run-wide tallies behind the `knowledge` field.
+/// The stored knowledge tallies.
 #[derive(Default, Clone)]
 struct KnowledgeCounters {
     writes: u64,
@@ -117,7 +100,7 @@ struct KnowledgeCounters {
     misses: u64,
 }
 
-/// Raw per-model tallies behind the `model_stats` map.
+/// The stored per-model tallies.
 #[derive(Default, Clone)]
 struct ModelCounters {
     requests: u64,
@@ -125,31 +108,30 @@ struct ModelCounters {
     output_tokens: u64,
 }
 
-/// Call and failure tallies for one tool, broken down by failure kind.
-/// Returned by [`Stats::tool_stats`] to measure how often the model
-/// misuses a given tool: a high error rate or `schema_failed`/`not_found`
-/// count points at the tool's description or input schema.
+/// A `ToolStat` counts one tool's calls and failures, split by how each failed.
+///
+/// Returned by [`Stats::tool_stats`]. A high error rate, or many `schema_failed`
+/// or `not_found` calls, points at the tool's description or its input schema.
 #[derive(Debug, Clone, Serialize)]
 pub struct ToolStat {
-    /// Every invocation attempt, including calls that named an unknown tool.
+    /// Every call, including calls that named an unknown tool.
     pub calls: u64,
-    /// Model named a tool the registry does not have.
+    /// Calls naming a tool that is not registered.
     pub not_found: u64,
-    /// The tool ran but returned an error (bad arguments, non-zero exit, IO).
+    /// Calls where the tool ran and returned an error.
     pub execution_failed: u64,
-    /// The tool rejected the input on schema validation. Overlaps the
-    /// `SchemaRetried` event and the `max_schema_retries` policy: this is
-    /// the same population the retry budget governs, surfaced per tool.
+    /// Calls the tool rejected as malformed. This is the same population
+    /// `max_schema_retries` governs, reported per tool.
     pub schema_failed: u64,
 }
 
 impl ToolStat {
-    /// Total failures across the three kinds.
+    /// Get the total failures across the three kinds.
     pub fn errors(&self) -> u64 {
         self.not_found + self.execution_failed + self.schema_failed
     }
 
-    /// `errors / calls`. `None` when the tool was never called.
+    /// Get `errors / calls`, or `None` when the tool was never called.
     pub fn error_rate(&self) -> Option<f64> {
         if self.calls == 0 {
             None
@@ -170,16 +152,16 @@ impl From<&ToolCounters> for ToolStat {
     }
 }
 
-/// Open and failure tallies for one path, returned by
-/// [`Stats::file_stats`]. Records how often a file-opening tool named this
-/// path: `opens` counts successful opens, `failed` counts attempts that
-/// errored. For `grep` the path may be a directory rather than a file, since
-/// its `path` argument searches under a directory or file.
+/// A `FileStat` counts how often a tool opened one path, and how often it could
+/// not. Returned by [`Stats::file_stats`].
+///
+/// The path may name a directory rather than a file, since `grep` searches
+/// under either.
 #[derive(Debug, Clone, Serialize)]
 pub struct FileStat {
-    /// Calls that opened this path successfully.
+    /// Calls that opened this path.
     pub opens: u64,
-    /// Calls that named this path and errored.
+    /// Calls that named this path and failed.
     pub failed: u64,
 }
 
@@ -192,22 +174,22 @@ impl From<&FileCounters> for FileStat {
     }
 }
 
-/// Run-wide Knowledge-store usage, returned by [`Stats::knowledge_stats`].
-/// Counts successful operations by action; `misses` counts `KnowledgeMissed`
-/// events: a `read` or `remove` that named a slug the store does not have. A
-/// high `misses` count points at a stale index or a prompt that over-promises
-/// what knowledge holds.
+/// A `KnowledgeStat` counts what agents did to the knowledge pages. Returned by
+/// [`Stats::knowledge_stats`].
+///
+/// A high `misses` count points at a stale index, or at a prompt promising more
+/// than the store holds.
 #[derive(Debug, Clone, Serialize)]
 pub struct KnowledgeStat {
-    /// Successful `write` operations.
+    /// Pages written.
     pub writes: u64,
-    /// Successful `read` operations that returned a page.
+    /// Pages read.
     pub reads: u64,
-    /// Successful `remove` operations.
+    /// Pages removed.
     pub removes: u64,
-    /// `list` operations.
+    /// Times the pages were listed.
     pub lists: u64,
-    /// `read`/`remove` operations naming a slug not in the store.
+    /// Reads and removes naming a page the store does not have.
     pub misses: u64,
 }
 
@@ -223,16 +205,15 @@ impl From<&KnowledgeCounters> for KnowledgeStat {
     }
 }
 
-/// Request and token tallies for one model, returned by
-/// [`Stats::model_stats`]. Lets a run using several models (one per agent)
-/// compare their request volume and token cost.
+/// A `ModelStat` counts one model's requests and token usage. Returned by
+/// [`Stats::model_stats`], so agents running different models can be compared.
 #[derive(Debug, Clone, Serialize)]
 pub struct ModelStat {
-    /// Provider responses received for this model.
+    /// Responses received for this model.
     pub requests: u64,
-    /// Input tokens summed across this model's responses.
+    /// Input tokens across this model's responses.
     pub input_tokens: u64,
-    /// Output tokens summed across this model's responses.
+    /// Output tokens across this model's responses.
     pub output_tokens: u64,
 }
 
@@ -269,9 +250,10 @@ impl Stats {
         }
     }
 
-    /// Statistics scoped to one ticket label. Reads use the same
-    /// accessors as the run-wide `Stats`; `run_duration()` is always
-    /// `None` on a slice (run timing stays global).
+    /// Get statistics scoped to one label.
+    ///
+    /// Reads use the same accessors as the run-wide `Stats`. `run_duration()`
+    /// is always `None` here, since timing stays global.
     pub fn stats_for_label(&self, label: &str) -> Arc<Stats> {
         let mut map = self.label_stats.lock().unwrap();
         map.entry(label.to_string())
@@ -279,12 +261,11 @@ impl Stats {
             .clone()
     }
 
-    /// Statistics scoped to one agent, by the name it was registered
-    /// under. `tickets_created()` counts the tickets that agent filed.
-    /// The rest count the tickets it claimed. Tickets the host filed
-    /// report as `user`, matching `Ticket::reporter`.
-    /// Like the per-label slices, these are written to `stats.json` for
-    /// readers and not restored by `TicketSystem::load`.
+    /// Get statistics scoped to one agent, by the name it was registered under.
+    ///
+    /// `tickets_created()` counts the tickets that agent filed; the rest count
+    /// the tickets it claimed. Like the per-label slices, these are written to
+    /// `stats.json` for readers and not restored by `TicketSystem::load`.
     pub fn stats_for_agent(&self, agent_name: &str) -> Arc<Stats> {
         let mut map = self.agent_stats.lock().unwrap();
         map.entry(agent_name.to_string())
@@ -292,7 +273,7 @@ impl Stats {
             .clone()
     }
 
-    /// Cloned per-ticket usage series, oldest first.
+    /// Get a ticket's token usage, oldest first.
     pub fn usage_history(&self, ticket_key: &str) -> Vec<TokenUsage> {
         self.usage_history
             .lock()
@@ -312,16 +293,15 @@ impl Stats {
             .push(usage);
     }
 
-    /// Drop the per-ticket series. Called after a compaction commits,
-    /// since the post-summary transcript breaks the pre-summary trend.
+    /// Drop a ticket's usage history, once its older messages are summarized
+    /// and the earlier trend no longer predicts the next request.
     pub(crate) fn reset_usage(&self, ticket_key: &str) {
         self.usage_history.lock().unwrap().remove(ticket_key);
     }
 
-    /// Per-tool call and failure tallies, sorted by tool name. Empty on a
-    /// label slice. The `schema_failed` field overlaps the `SchemaRetried`
-    /// event and `max_schema_retries` policy: it counts the same population
-    /// the retry budget governs, surfaced per tool.
+    /// Get per-tool call and failure counts, sorted by tool name.
+    ///
+    /// Empty on a label slice.
     pub fn tool_stats(&self) -> BTreeMap<String, ToolStat> {
         self.tool_stats
             .lock()
@@ -331,7 +311,7 @@ impl Stats {
             .collect()
     }
 
-    /// Count one invocation attempt against `name`.
+    /// Count one call against `name`.
     pub(crate) fn record_tool_call_named(&self, name: &str) {
         self.tool_stats
             .lock()
@@ -352,9 +332,10 @@ impl Stats {
         }
     }
 
-    /// Per-path open and failure tallies, sorted by path. Empty on a label
-    /// slice. Entries are the paths file-opening tools named; for the search
-    /// tools a path may be a directory rather than a file.
+    /// Get per-path open and failure counts, sorted by path.
+    ///
+    /// A path may name a directory rather than a file, since the search tools
+    /// accept either. Empty on a label slice.
     pub fn file_stats(&self) -> BTreeMap<String, FileStat> {
         self.file_stats
             .lock()
@@ -384,13 +365,14 @@ impl Stats {
             .failed += 1;
     }
 
-    /// Run-wide Knowledge-store usage. Zero on a label slice.
+    /// Get knowledge usage: write, read, remove, list, and miss counts.
+    ///
+    /// Zero on a label slice.
     pub fn knowledge_stats(&self) -> KnowledgeStat {
         (&*self.knowledge_stats.lock().unwrap()).into()
     }
 
-    /// Count one Knowledge-store operation, reported by the `manage_knowledge`
-    /// tool as it runs.
+    /// Count one knowledge operation, as `manage_knowledge` reports it.
     pub(crate) fn record_knowledge(&self, op: KnowledgeOp) {
         let mut counters = self.knowledge_stats.lock().unwrap();
         match op {
@@ -401,13 +383,14 @@ impl Stats {
         }
     }
 
-    /// Count one `read`/`remove` that named a slug the store does not have.
+    /// Count one read or remove naming a page the store does not have.
     pub(crate) fn record_knowledge_miss(&self) {
         self.knowledge_stats.lock().unwrap().misses += 1;
     }
 
-    /// Per-model request and token tallies, sorted by model name. Empty on
-    /// a label slice.
+    /// Get per-model requests and token usage, sorted by model name.
+    ///
+    /// Empty on a label slice.
     pub fn model_stats(&self) -> BTreeMap<String, ModelStat> {
         self.model_stats
             .lock()
@@ -417,7 +400,7 @@ impl Stats {
             .collect()
     }
 
-    /// Count one provider response against `model`.
+    /// Count one response against `model`.
     pub(crate) fn record_model_request(&self, model: &str, usage: &TokenUsage) {
         let mut map = self.model_stats.lock().unwrap();
         let counters = map.entry(model.to_string()).or_default();
@@ -426,8 +409,10 @@ impl Stats {
         counters.output_tokens += usage.output_tokens;
     }
 
-    /// Record an event: every kind is counted by name automatically, so a
-    /// future variant needs no arm here; only payload-bearing measures do.
+    /// Record an event.
+    ///
+    /// Every kind is counted by its name, so a new variant needs no arm here.
+    /// Only the measures that read an event's payload do.
     pub(crate) fn record_event(&self, kind: &EventKind, key: &str, labels: &[String], agent: &str) {
         self.record_scoped(labels, agent, |s| s.count_event(kind.name()));
         match kind {
@@ -450,8 +435,8 @@ impl Stats {
         }
     }
 
-    /// Apply `f` to the run-wide stats, to each per-label slice, and to
-    /// the agent's slice. Run-level events carry no agent name.
+    /// Apply `f` to the run-wide statistics, to each label slice, and to the
+    /// agent's slice. An event about execution itself carries no agent name.
     fn record_scoped(&self, labels: &[String], agent: &str, f: impl Fn(&Stats)) {
         f(self);
         for label in labels {
@@ -462,7 +447,7 @@ impl Stats {
         }
     }
 
-    /// Bump the per-name event count by one.
+    /// Add one to this event kind's count.
     fn count_event(&self, name: &str) {
         *self
             .event_counts
@@ -472,16 +457,15 @@ impl Stats {
             .or_default() += 1;
     }
 
-    /// Add a response's token counts to the running sums.
+    /// Add a response's token counts to the totals.
     fn record_tokens(&self, input_tokens: u64, output_tokens: u64) {
         self.input_tokens.fetch_add(input_tokens, Ordering::Relaxed);
         self.output_tokens
             .fetch_add(output_tokens, Ordering::Relaxed);
     }
 
-    /// Dispatch the run-wide recorders that match a ticket transition.
-    /// `prev → next` of `Todo → InProgress` stamps `started_at`;
-    /// terminal transitions add to the duration totals.
+    /// Record a ticket transition. Going from `Todo` to `InProgress` sets the
+    /// start time, and reaching a terminal status adds to the duration totals.
     pub(crate) fn record_transition(
         &self,
         prev: Status,
@@ -502,10 +486,10 @@ impl Stats {
         }
     }
 
-    /// Mirror a terminal transition onto every per-label slice the
-    /// ticket carries. `record_started` is intentionally not mirrored:
-    /// per-label `started_at` stays zero so `elapsed()` reads `None` on
-    /// a slice.
+    /// Mirror a terminal transition onto every label slice the ticket carries.
+    ///
+    /// The start time is deliberately not mirrored, so `run_duration()` reads
+    /// `None` on a slice.
     pub(crate) fn record_transition_for(
         &self,
         labels: &[String],
@@ -529,27 +513,27 @@ impl Stats {
         }
     }
 
-    /// Count of times an agent picked up a ticket to process.
+    /// Get how many turns ran.
     pub fn turns(&self) -> u64 {
         self.event_count("turn_started")
     }
 
-    /// Total provider responses received.
+    /// Get how many responses arrived.
     pub fn requests(&self) -> u64 {
         self.event_count("request_finished")
     }
 
-    /// Total tool calls.
+    /// Get the tool-call count.
     pub fn tool_calls(&self) -> u64 {
         self.event_count("tool_call_started")
     }
 
-    /// Total provider errors.
+    /// Get the failed-request count.
     pub fn errors(&self) -> u64 {
         self.event_count("request_failed")
     }
 
-    /// Count of one event kind, by its snake_case name.
+    /// Get one event kind's count, by its snake_case name.
     fn event_count(&self, name: &str) -> u64 {
         self.event_counts
             .lock()
@@ -559,7 +543,7 @@ impl Stats {
             .unwrap_or(0)
     }
 
-    /// All per-event counts recorded so far, sorted by event name.
+    /// Get per-event counts, sorted by event name.
     pub fn event_counts(&self) -> BTreeMap<String, u64> {
         self.event_counts
             .lock()
@@ -569,33 +553,33 @@ impl Stats {
             .collect()
     }
 
-    /// Total input tokens across all provider responses.
+    /// Get the input tokens across requests.
     pub fn input_tokens(&self) -> u64 {
         self.input_tokens.load(Ordering::Relaxed)
     }
 
-    /// Total output tokens across all provider responses.
+    /// Get the output tokens across requests.
     pub fn output_tokens(&self) -> u64 {
         self.output_tokens.load(Ordering::Relaxed)
     }
 
-    /// Count of tickets created.
+    /// Get how many tickets were created.
     pub fn tickets_created(&self) -> u64 {
         self.tickets_created.load(Ordering::Relaxed)
     }
 
-    /// Count of tickets that finished successfully.
+    /// Get how many tickets finished successfully.
     pub fn tickets_finished(&self) -> u64 {
         self.tickets_finished.load(Ordering::Relaxed)
     }
 
-    /// Count of tickets that failed.
+    /// Get how many tickets failed.
     pub fn tickets_failed(&self) -> u64 {
         self.tickets_failed.load(Ordering::Relaxed)
     }
 
-    /// Elapsed duration of the run, live while agents work and frozen
-    /// once the run finishes. `None` until the first ticket starts.
+    /// Get the elapsed duration, which keeps growing while agents work and
+    /// stops when execution ends. `None` until the first ticket starts.
     pub fn run_duration(&self) -> Option<Duration> {
         let s = self.started_at.load(Ordering::Relaxed);
         if s == 0 {
@@ -612,8 +596,8 @@ impl Stats {
         Some(Duration::from_millis(now.saturating_sub(s)))
     }
 
-    /// `tickets_finished / (tickets_finished + tickets_failed)`. `None` when
-    /// no ticket has reached a terminal state.
+    /// Get `finished / (finished + failed)`, or `None` before any ticket is
+    /// resolved.
     pub fn tickets_success_rate(&self) -> Option<f64> {
         let done = self.tickets_finished.load(Ordering::Relaxed);
         let failed = self.tickets_failed.load(Ordering::Relaxed);
@@ -625,13 +609,13 @@ impl Stats {
         }
     }
 
-    /// Sum of finished tickets' creation→terminal spans.
+    /// Get the total time from creation to resolution.
     pub fn total_ticket_duration(&self) -> Duration {
         Duration::from_secs(self.total_ticket_duration.load(Ordering::Relaxed))
     }
 
-    /// Mean of finished tickets' creation→terminal spans. `None`
-    /// while no ticket has finished.
+    /// Get the average time from creation to resolution, or `None` before any
+    /// ticket finishes.
     pub fn avg_ticket_duration(&self) -> Option<Duration> {
         let n = self.tickets_finished.load(Ordering::Relaxed)
             + self.tickets_failed.load(Ordering::Relaxed);
@@ -643,15 +627,14 @@ impl Stats {
         }
     }
 
-    /// Sum of finished tickets' started→terminal spans. With
-    /// concurrent agents this aggregates work across all of them, so
-    /// it can exceed `run_duration`.
+    /// Get the total time agents held tickets. With agents working in
+    /// parallel this can exceed the elapsed duration.
     pub fn total_work_duration(&self) -> Duration {
         Duration::from_secs(self.total_work_duration.load(Ordering::Relaxed))
     }
 
-    /// Mean of finished tickets' started→terminal spans. `None` while
-    /// no ticket has finished.
+    /// Get the average time an agent held a ticket, or `None` before any
+    /// ticket finishes.
     pub fn avg_work_duration(&self) -> Option<Duration> {
         let n = self.tickets_finished.load(Ordering::Relaxed)
             + self.tickets_failed.load(Ordering::Relaxed);
@@ -663,16 +646,13 @@ impl Stats {
         }
     }
 
-    /// Stamp the run's finish wall-clock. Idempotent in practice
-    /// (the watcher fires once); successive calls overwrite, which
-    /// is fine.
+    /// Record when execution ended. A later call overwrites the earlier one.
     pub(crate) fn mark_finished(&self, when: u64) {
         self.finished_at.store(when, Ordering::Relaxed);
     }
 
-    /// Rebuild from already-loaded tickets. Used as the fallback when
-    /// the stats file is absent or unreadable; otherwise `Stats::load`
-    /// is preferred to keep observability continuous across restarts.
+    /// Rebuild the statistics from tickets already read off disk, for when
+    /// `stats.json` is missing or unreadable.
     pub(crate) fn derive(tickets: &HashMap<String, crate::agents::tickets::Ticket>) -> Self {
         let stats = Stats::new();
         for t in tickets.values() {
@@ -694,7 +674,7 @@ impl Stats {
         stats
     }
 
-    /// Sugar over the `Persist` impl for the keyless case.
+    /// Save to `<dir>/stats.json`.
     pub(crate) fn load(dir: &std::path::Path) -> std::io::Result<Self> {
         <Self as crate::persistence::Persist>::load(dir, &())
     }
@@ -929,15 +909,15 @@ impl Default for Stats {
     }
 }
 
-/// Ticket-lifecycle recorders. Driven by the store on ticket mutations, not
-/// by events: transitions carry duration data events do not.
+/// Ticket lifecycle. The store writes these directly rather than through
+/// events, since a transition carries a duration no event reports.
 impl Stats {
     pub(crate) fn record_created(&self) {
         self.tickets_created.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// First call wins (CAS into `started_at`); later claims (Path A
-    /// reclaim, late bind) leave the original run-start untouched.
+    /// The first call wins. A later claim leaves the original start time
+    /// untouched.
     pub(crate) fn record_started(&self, when: u64) {
         let _ = self
             .started_at
@@ -1172,7 +1152,7 @@ mod tests {
 
     #[test]
     fn total_work_duration_can_exceed_run_duration_with_concurrency() {
-        // Two tickets, each 5s of work, finished in a 6s window —
+        // Two tickets, each 5s of work, finished in a 6s window:
         // models 2 agents working in parallel.
         let s = Stats::new();
         s.record_started(1_000);

@@ -1,4 +1,5 @@
-//! LiteLLM proxy provider. Points the OpenAI-compatible wire format at a local LiteLLM instance so callers can switch backend providers without touching agent code.
+//! The LiteLLM provider, which sends OpenAI-shaped requests to a local LiteLLM
+//! instance, so switching LLM providers changes no agent code.
 
 use std::future::Future;
 use std::pin::Pin;

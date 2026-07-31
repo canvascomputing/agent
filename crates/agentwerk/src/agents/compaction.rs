@@ -1,4 +1,4 @@
-//! Context-window compaction: collapse an over-long transcript into
+//! Context-window compaction: collapse a ticket's older messages into
 //! a single summary message before the next request would overflow.
 
 use std::sync::Arc;
@@ -103,10 +103,10 @@ pub(crate) fn should_compact_proactively(
 }
 
 /// Run one compaction round-trip for the ticket at `ticket_key`: read
-/// the current transcript, summarise it via [`compact`], and apply the
+/// the current messages, summarise them through [`compact`], and apply the
 /// result through [`TicketSystem::summarize`]. Returns `Ok(true)` when a
 /// summary was applied, `Ok(false)` when the ticket is missing or the
-/// transcript collapses to a no-op.
+/// messages collapse to nothing worth replacing.
 pub(crate) async fn run(
     provider: &Arc<dyn Provider>,
     model: &str,
@@ -125,11 +125,11 @@ pub(crate) async fn run(
 
 /// Compact `messages` into a single summary by sending them to the
 /// provider with no tools and the compaction directive as the system
-/// prompt. When `window` is set and the transcript would overflow it,
+/// prompt. When `window` is set and the messages would overflow it,
 /// split the largest splittable message in half (recursively until
 /// every chunk fits) and summarise each chunk separately; the resulting
 /// partial summaries are joined with a blank line. Returns `Ok(None)`
-/// when the transcript collapses to a no-op (a single message that
+/// when the messages collapse to nothing worth replacing (a single message that
 /// already fits, or nothing to summarise); the caller treats that as a
 /// no-op.
 pub(crate) async fn compact(
@@ -397,7 +397,7 @@ mod tests {
     fn should_compact_proactively_uses_last_delta_to_fire_one_turn_early() {
         // Threshold = 200_000 - 33_000 = 167_000. The current estimate
         // sits at 160_000 (under threshold), but the last per-turn delta
-        // was 10_000 — the next request after this one would land at
+        // was 10_000: the next request after this one would land at
         // ~170_000 and overflow. Trigger must fire now, not next turn.
         let history = [
             TokenUsage {
@@ -422,7 +422,7 @@ mod tests {
     #[test]
     fn should_compact_proactively_ignores_shrinking_series() {
         // Threshold = 167_000. Latest entry is 160_000 (under), and the
-        // delta is negative — saturating_sub clamps it to 0, so the
+        // delta is negative, so saturating_sub clamps it to 0 and the
         // trigger behaves like a single-sample history and stays quiet.
         let history = [
             TokenUsage {
@@ -444,7 +444,7 @@ mod tests {
         ));
     }
 
-    // ---- compact ----
+    // Compact
 
     use crate::providers::types::{ModelResponse, ResponseStatus};
     use std::future::Future;
@@ -579,7 +579,7 @@ mod tests {
         assert!(matches!(err, ProviderError::ResponseMalformed { .. }));
     }
 
-    // ---- chunking ----
+    // Chunking
 
     #[test]
     fn binary_split_at_newline_preserves_total_text() {
@@ -652,7 +652,7 @@ mod tests {
         }
     }
 
-    // ---- compact (continued) ----
+    // Compact (continued)
 
     #[tokio::test]
     async fn compact_builds_a_tool_less_request() {

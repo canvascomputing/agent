@@ -1,4 +1,5 @@
-//! OpenAI's Chat Completions API. The sibling `mistral` and `litellm` providers reuse this wire format against different base URLs.
+//! OpenAI's Chat Completions API. The `mistral` and `litellm` providers send
+//! the same shape to a different base URL.
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -750,7 +751,7 @@ mod tests {
 
     #[test]
     fn context_window_exceeded_by_message_fallback() {
-        // Mistral / LiteLLM path — `code` absent, classifier falls back to
+        // Mistral / LiteLLM path: `code` absent, classifier falls back to
         // matching the message text.
         let body = serde_json::json!({
             "error": {

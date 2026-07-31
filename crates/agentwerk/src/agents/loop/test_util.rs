@@ -13,7 +13,7 @@ use crate::providers::{ContentBlock, Message, Provider, ProviderError, ProviderR
 use crate::schemas::Schema;
 use crate::tools::ManageTicketsTool;
 
-// ---- mock provider ----
+// Mock provider
 
 pub struct MockProvider {
     results: Mutex<Vec<ProviderResult<ModelResponse>>>,
@@ -74,7 +74,7 @@ impl Provider for MockProvider {
     }
 }
 
-// ---- response builders ----
+// Response builders
 
 pub fn write_result_response(result: &str) -> ModelResponse {
     write_result_response_named("finish", result)
@@ -182,7 +182,7 @@ pub fn text_response_with_usage(text: &str, usage: TokenUsage) -> ModelResponse 
     }
 }
 
-// ---- error builders ----
+// Error builders
 
 pub fn rate_limit() -> ProviderError {
     ProviderError::RateLimited {
@@ -198,7 +198,7 @@ pub fn connection_failed(message: &str) -> ProviderError {
     }
 }
 
-// ---- event filters ----
+// Event filters
 
 pub fn retries_in(events: &[Event]) -> Vec<(u32, u32, String)> {
     events
@@ -256,7 +256,7 @@ pub fn user_text(messages: &[Message]) -> String {
     out
 }
 
-// ---- agent / event builders ----
+// Agent / event builders
 
 pub fn interactive_chatbot(provider: &Arc<MockProvider>) -> Agent {
     Agent::new()
@@ -287,7 +287,7 @@ pub fn collect_events(tickets: &TicketSystem) -> Arc<Mutex<Vec<Event>>> {
     collected
 }
 
-// ---- harnesses ----
+// Harnesses
 
 pub async fn run_one(
     provider: Arc<MockProvider>,

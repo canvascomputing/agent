@@ -133,12 +133,8 @@ fn print_research_outcome(tickets: &TicketSystem, outcome: &Outcome) {
         }
         Outcome::Cancelled | Outcome::Stalled => {
             let label = match outcome {
-                Outcome::Cancelled => {
-                    "PARTIAL RESEARCH — run cancelled before report writer finished"
-                }
-                Outcome::Stalled => {
-                    "PARTIAL RESEARCH — chain stalled before report writer finished"
-                }
+                Outcome::Cancelled => "PARTIAL RESEARCH: cancelled before report writer finished",
+                Outcome::Stalled => "PARTIAL RESEARCH: chain stalled before report writer finished",
                 Outcome::Report(_) => unreachable!(),
             };
             eprintln!(" {label}");

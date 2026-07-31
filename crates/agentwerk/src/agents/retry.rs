@@ -1,7 +1,6 @@
-//! Retry strategy: exponential backoff for transient provider errors.
-//! The strategy owns its own attempt counter; callers consume one
-//! attempt at a time via [`Retry::try_consume`] and never track the
-//! count themselves.
+//! Growing waits between retries of a transient LLM provider error.
+//!
+//! [`Retry`] tracks the attempts, so callers never have to.
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -25,13 +24,13 @@ pub(crate) trait Retry {
     }
 }
 
-/// Cap on per-attempt backoff so exponential growth doesn't run away
+/// Limit on the wait before one attempt, so it cannot grow without bound
 /// past a few attempts. Matches claude-code's `maxDelayMs` default.
 const MAX_RETRY_DELAY: Duration = Duration::from_millis(32_000);
 
 /// Exponential backoff `base_delay * 2^attempt`, clamped at 32 s,
 /// extended by additive jitter in `[0, 25%]` of the clamped value. A
-/// `server_hint` bypasses the cap and jitter: the server is explicit
+/// `server_hint` skips the limit and the jitter: the server is explicit
 /// about what it wants.
 pub(crate) struct ExponentialRetry {
     base_delay: Duration,

@@ -153,7 +153,7 @@ fn aggregate_and_report(
 
 /// Pull a `(idx, partial_sum)` pair off a finished ticket. The schema
 /// already guarantees the field shape; this also cross-checks `idx`
-/// against the `idx=` line in the task body so a misrouted result
+/// against the `idx=` line in the task body so a wrongly assigned result
 /// can't quietly slot into the wrong partition.
 fn extract_partial(ticket: &Ticket, total: usize) -> Result<(usize, i128), String> {
     if !ticket.is_finished() {

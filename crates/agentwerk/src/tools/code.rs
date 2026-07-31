@@ -1,4 +1,4 @@
-//! Grep's code-shape matcher — the `syntax: "code"` mode. Matches by the
+//! Grep's code-shape matcher, the `syntax: "code"` mode. Matches by the
 //! shape of code (`fn $NAME(...)`) rather than by regex, driving the `codegrep`
 //! engine while reusing grep's file walk, output modes, and structured output.
 //! `run` is handed the already-collected file list by `grep::search_corpus`.
@@ -121,7 +121,7 @@ fn line_and_byte_column(content: &str, byte_offset: usize) -> (usize, usize) {
     (line, clamped - line_start + 1)
 }
 
-/// Collapse a matched span onto one line (escaping control chars) and cap it with
+/// Collapse a matched span onto one line (escaping control chars) and limit it with
 /// `grep`'s preview width so code and regex hits truncate alike.
 fn render_summary(substring: &str) -> String {
     let escaped: String = substring

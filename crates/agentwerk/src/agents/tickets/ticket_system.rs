@@ -1,9 +1,4 @@
-//! The [`TicketSystem`] orchestrator: owns the shared ticket store,
-//! registered agents, policies, cancellation signals, and run stats.
-//! This file holds construction, configuration, the ticket-creation
-//! API, agent binding, the background-run lifecycle, and queries.
-//! Mutation impls (`claim`, `set_finished_by`, `summarize`, etc.) live
-//! next door in `store.rs`.
+//! The shared queue agents claim tickets from, and the lifecycle that drives them.
 
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
@@ -31,20 +26,17 @@ type EventHandler = dyn Fn(&Event) + Send + Sync;
 
 type ReplyEditor = dyn Fn(&[Event], &mut Vec<Reply>) + Send + Sync;
 
-/// The reply-editing state, always touched together: the registered
-/// editor and the per-ticket events buffered for it since each ticket's
-/// previous request. An `on_event` handler installed with the first editor
-/// fills `pending`; `run_reply_editor` drains it.
+/// The registered reply editor and the per-ticket events buffered for it since
+/// each ticket's previous request. The two are always touched together.
 #[derive(Default)]
 pub(super) struct ReplyEditing {
     pub(super) editor: Option<Arc<ReplyEditor>>,
     pub(super) pending: HashMap<String, Vec<Event>>,
 }
 
-/// The shared work queue. Owns the ticket store, the registered
-/// agents, the policies, and the run statistics. Many agents share one
-/// `TicketSystem` and pick up tickets concurrently; labels and names
-/// assign work to the right agent.
+/// The core data structure of agentwerk, coordinating complex work across
+/// agents. Many agents share one `TicketSystem` and pick up tickets
+/// concurrently; labels and names assign work to the right agent.
 ///
 /// ```no_run
 /// use agentwerk::{Agent, Ticket, TicketSystem};
@@ -69,10 +61,10 @@ pub(super) struct ReplyEditing {
 ///
 /// # Sessions
 ///
-/// A `TicketSystem` writes every ticket, transcript, statistic, and
-/// lifecycle event to its working directory (default `./.agentwerk`).
-/// That directory is the session: stop the process, and `TicketSystem::load(dir)`
-/// reopens it from disk and continues from where it stopped.
+/// A `TicketSystem` writes every ticket, reply, statistic, and lifecycle
+/// event to its working directory (default `./.agentwerk`). That directory is
+/// the session: stop the process, and `TicketSystem::load(dir)` reopens it
+/// from disk and continues from where it stopped.
 ///
 /// ```no_run
 /// use agentwerk::TicketSystem;
@@ -89,14 +81,14 @@ pub(super) struct ReplyEditing {
 ///
 /// ```text
 /// .agentwerk/
-/// ├── stats.json                            run statistics
+/// ├── stats.json                            execution statistics
 /// ├── tickets.jsonl                         lifecycle events (one per line)
 /// ├── results.jsonl                         finished results (one per line)
 /// ├── tickets/
 /// │   └── TICKET-1/
-/// │       ├── ticket.json                   the ticket without its transcript
-/// │       ├── replies.jsonl                 the messages, one reply per line
-/// │       └── outputs/<tool_use_id>.txt     full tool outputs spilled out of the transcript
+/// │       ├── ticket.json                   the ticket without its messages
+/// │       ├── replies.jsonl                 every message exchanged with the model, one per line
+/// │       └── outputs/<tool_use_id>.txt     full tool outputs spilled out of the messages
 /// └── knowledge/
 ///     ├── pages/<slug>.md                   knowledge pages
 ///     └── index.md                          knowledge index
@@ -107,54 +99,47 @@ pub struct TicketSystem {
     pub(super) agents: Mutex<Vec<Agent>>,
     pub(super) policies: Mutex<Policies>,
     /// Set when `finish()` should stop polling: external cancel, policy
-    /// trip, or clean drain. Workers and tools also poll this; flipping
-    /// it walks them off the queue.
+    /// violation, or clean drain. The agent tasks and the tools poll it too,
+    /// and flipping it takes them off the queue.
     pub(crate) stop_signal: Mutex<Arc<AtomicBool>>,
     /// Set only by `cancel()`, `cancel_on`, and `cancel_on_event`. Read
     /// by `is_cancelled()` so observers can tell external cancel apart
     /// from policy stops and clean drains.
     pub(crate) cancel_signal: Mutex<Arc<AtomicBool>>,
-    /// Labels whose pool has been called off via `cancel_label`. The loop
-    /// skips claiming or resuming a ticket carrying one of these, and walks
-    /// an agent off a ticket whose label lands here mid-flight, stopping one
-    /// pool while the rest of the run continues.
+    /// Labels whose pool `cancel_label` has stopped. A ticket carrying one is
+    /// neither claimed nor resumed, and an agent already holding one is taken
+    /// off it, while the rest of the run continues.
     pub(crate) cancelled_labels: Mutex<HashSet<String>>,
-    /// Result schema stamped onto every ticket carrying a registered label
-    /// that was created without a schema of its own. Set via `schema_for_label`
-    /// and applied at insert time, so a ticket's result contract follows its
-    /// label no matter how the ticket was created.
+    /// Result schema applied at insert time to every ticket that carries a
+    /// registered label and no schema of its own, so a result contract follows
+    /// its label no matter how the ticket was created.
     pub(crate) label_schemas: Mutex<HashMap<String, Schema>>,
-    /// Count of `set_final_status` calls between their status flip and
-    /// the return of the terminal event's handlers. The drain check in
-    /// `finish()` treats a non-zero count as pending work, so a handler
-    /// minting a follow-up ticket always beats the drain.
+    /// How many terminal status transitions are between their status change and
+    /// the return of their event handlers. `finish()` counts a non-zero value as
+    /// pending work, so a handler creating a follow-up ticket always beats the drain.
     pub(crate) terminal_transitions_in_flight: AtomicUsize,
     /// Reason the most recent `finish()` returned. `None` before the
     /// first `finish()` and between `start()` and the next `finish()`.
     pub(crate) finish_reason: Mutex<Option<FinishReason>>,
     pub(crate) stats: Stats,
     pub(super) event_handlers: Mutex<Vec<Arc<EventHandler>>>,
-    /// The editor that rewrites a ticket's transcript before each provider
-    /// request, plus the per-ticket events buffered for it; see
-    /// `edit_replies_on_event`. No editor short-circuits buffering.
+    /// The editor that rewrites a ticket's replies before each request, plus the
+    /// per-ticket events buffered for it. Buffering runs whether or not an
+    /// editor is installed.
     pub(super) reply_editing: Mutex<ReplyEditing>,
     pub(super) dir: Mutex<PathBuf>,
     pub(super) tickets_log_lock: Mutex<()>,
     pub(super) results_log_lock: Mutex<()>,
     pub(super) join_handle: Mutex<Option<JoinHandle<()>>>,
-    /// Next `TICKET-<N>` id to hand out, or `None` until it's known.
-    /// `load()` seeds it directly from the tickets it just read off disk.
-    /// A system built via `new()` (with or without a later `.dir(path)`)
-    /// leaves it `None`; the first `insert()` scans for the highest
-    /// existing id then, since `new()` never reads the directory itself.
+    /// Next `TICKET-<N>` key to hand out, or `None` until it is known.
+    /// `load()` seeds it from the tickets it just read off disk. `new()` leaves
+    /// it `None` and the first `insert()` scans for the highest existing key,
+    /// since `new()` never reads the directory itself.
     pub(super) next_ticket_id: Mutex<Option<u64>>,
 }
 
 impl TicketSystem {
-    /// Build a fresh `TicketSystem` and return it inside an `Arc`. The
-    /// system captures its own `Weak<Self>` via `Arc::new_cyclic` so
-    /// `bind_agent` can hand out the back-reference each `Agent` needs
-    /// at run time.
+    /// Create an empty ticket system, shared through an `Arc`.
     pub fn new() -> Arc<Self> {
         Arc::new_cyclic(|weak| Self {
             weak_self: weak.clone(),
@@ -178,29 +163,20 @@ impl TicketSystem {
         })
     }
 
-    /// Open or create a ticket system rooted at `tickets_dir`. Loads each
-    /// `ticket.json` under `<tickets_dir>/tickets/` into the in-memory
-    /// store and seeds `Stats` from
-    /// `<tickets_dir>/stats.json` (or, when that file is missing or
-    /// malformed, by deriving from the loaded tickets) so success rate
-    /// and counters stay continuous across restarts.
+    /// Continue a session from `tickets_dir`, or start one there when it is empty.
     ///
-    /// Pointing this and `Knowledge::load` at the same dir co-locates the
-    /// `knowledge/` bundle with `results.jsonl` and `tickets.jsonl`.
+    /// Every ticket is read back with its status, result, and messages, and the
+    /// statistics resume from `stats.json`, so success rate and totals stay
+    /// continuous across restarts. Pointing this and `Knowledge::load` at the
+    /// same directory keeps the knowledge pages beside the session.
     ///
-    /// `InProgress` tickets keep their status and their transcript; the
-    /// loop's resume path (`agents/loop.rs`) picks them back up under
-    /// the agent whose name is already in the ticket's `labels`.
+    /// An unfinished ticket is picked up again by the agent whose name it
+    /// carries, so agent names must stay the same across restarts.
     ///
-    /// A ticket that cannot be read stops the load, and the returned
-    /// error names it. Leaving it out instead would hand back a store
-    /// quietly missing that ticket, its status, and its result. Files
-    /// written by an older version are the usual cause: delete the
-    /// session directory, or migrate it, and load again.
-    ///
-    /// Caller contracts:
-    /// - Agent names must stay stable across restarts; agentwerk
-    ///   matches `InProgress` tickets by name via the ticket's labels.
+    /// A ticket that cannot be read stops the load and the returned error names
+    /// it, rather than handing back a store quietly missing that ticket. Files
+    /// written by an older version are the usual cause: delete the session
+    /// directory, or migrate it, and load again.
     pub fn load(tickets_dir: impl Into<PathBuf>) -> io::Result<Arc<Self>> {
         let tickets_dir = tickets_dir.into();
         std::fs::create_dir_all(tickets_dir.join("tickets"))?;
@@ -262,7 +238,7 @@ impl TicketSystem {
         }))
     }
 
-    /// Run-time counters. Read after `run` / `finish` returns.
+    /// Get the execution statistics, available during execution and after it finishes.
     pub fn stats(&self) -> &Stats {
         &self.stats
     }
@@ -276,12 +252,11 @@ impl TicketSystem {
         self
     }
 
-    /// Observe every finished ticket together with its result. Fires on
-    /// `TicketFinished`, so the value handed over is the stored,
-    /// schema-validated result, already out of its `Option`: handlers never
-    /// reach into the finish tool's input shape. One more entry on the
-    /// [`Self::on_event`] chain, and the base every `_on_result` reactor
-    /// below is built from.
+    /// Read every finished ticket together with its result.
+    ///
+    /// The value handed over is the stored, schema-validated result, so a
+    /// handler never reaches into the finish tool's input shape. This is one
+    /// more entry on the [`Self::on_event`] chain.
     pub fn on_result<F>(&self, handler: F) -> &Self
     where
         F: Fn(&Ticket, &serde_json::Value) + Send + Sync + 'static,
@@ -304,15 +279,13 @@ impl TicketSystem {
         })
     }
 
-    /// Observe every failure together with the ticket it happened in:
+    /// Read every failure together with the ticket it happened in:
     /// `TicketFailed`, `RequestFailed`, `ToolCallFailed`, `FileOpenFailed`,
-    /// `CompactionFailed`. Match on `event.kind` to tell a failure that ends
-    /// the ticket from one the agent works around. One more entry on the
-    /// [`Self::on_event`] chain, and the base every `_on_failure` reactor
-    /// below is built from.
+    /// and `CompactionFailed`.
     ///
-    /// Resolving the ticket copies its replies, so an agent that fails many
-    /// tool calls pays that copy once per failure.
+    /// Match on `event.kind` to tell a failure that ends the ticket from one
+    /// the agent works around. Each call copies the ticket's replies, so an
+    /// agent that fails many tool calls pays that copy once per failure.
     pub fn on_failure<F>(&self, handler: F) -> &Self
     where
         F: Fn(&Event, &Ticket) + Send + Sync + 'static,
@@ -332,31 +305,29 @@ impl TicketSystem {
         })
     }
 
-    /// Register an editor that rewrites or drops a ticket's replies
-    /// before its next provider request. The editor receives the events
-    /// emitted for that ticket since its previous request and a mutable
-    /// view of its full transcript, and mutates the `Vec` in place: drop
-    /// a reply, rewrite one, or push a new one. Match on `event.kind` to
-    /// act only on the triggers you care about (a tool failure, a stalled
-    /// turn); keep the editor cheap, it runs inline in the loop.
+    /// Rewrite a ticket's replies before its next request.
     ///
-    /// The edit is persistent: it mutates the stored transcript and
-    /// rewrites the on-disk transcript in place, so a dropped message
-    /// stays gone from the model's transcript, now and across resumption,
-    /// and is left behind in no superseded file on disk. The editor must
-    /// keep the transcript well-formed: a `tool_use` and its `tool_result`
-    /// span two replies, so drop both sides together or the provider
+    /// Your function receives the events emitted for that ticket since its
+    /// previous request and the replies themselves, and changes them in place:
+    /// drop a reply, rewrite one, or add one. Match on `event.kind` to act only
+    /// on what you care about, such as a tool failure or a stalled turn, and
+    /// keep the work cheap, since it runs between requests.
+    ///
+    /// The edit is permanent. It changes the stored replies and rewrites them
+    /// on disk, so a dropped message stays gone from what the model sees, now
+    /// and after the session is continued, and no superseded file is left
+    /// behind. Keep the replies well-formed: a `tool_use` and its `tool_result`
+    /// span two replies, so drop both sides together or the LLM provider
     /// rejects the unpaired block.
     ///
-    /// One editor is held at a time: installing a second replaces the
-    /// first, the way [`Self::dir`] or [`Self::max_turns`] replace. Two
-    /// rewriters of one transcript would each see the other's output, so
-    /// stack edits inside a single editor instead. Observers compose;
-    /// editors do not.
+    /// One editor is held at a time, and installing a second replaces the
+    /// first, the way [`Self::dir`] or [`Self::max_turns`] do. Two rewriters of
+    /// one ticket's replies would each see the other's output, so stack edits
+    /// inside a single editor instead.
     ///
-    /// The editor should be event-gated: on a reactive-compaction retry
-    /// the request is reassembled, so an editor that ignores the (now
-    /// empty) event batch would act twice.
+    /// Act only when the event batch says so. A retry after compaction
+    /// reassembles the request, so an editor that ignores the now empty batch
+    /// would edit the same replies twice.
     ///
     /// ```no_run
     /// use agentwerk::TicketSystem;
@@ -438,10 +409,9 @@ impl TicketSystem {
         }
     }
 
-    /// Apply the registered editor to `key`'s transcript, handing it the
-    /// events buffered since the ticket's previous request and draining
-    /// that batch. Called at the top of the request round-trip; a no-op
-    /// until an editor is registered or when no events are pending.
+    /// Apply the registered editor to `key`'s replies, handing it the events
+    /// buffered since the ticket's previous request and draining that batch.
+    /// Does nothing until an editor is registered, or while no events are pending.
     pub(crate) fn run_reply_editor(&self, key: &str) {
         let (editor, events) = {
             let mut editing = self.reply_editing.lock().unwrap();
@@ -466,10 +436,10 @@ impl TicketSystem {
             .unwrap_or_default()
     }
 
-    /// Name of the model the currently bound agent named `agent_name`
-    /// runs. `None` when no such agent is bound. Pairs with
-    /// [`Self::on_ticket`]: the event names the agent, this names its model,
-    /// and [`Trajectory::from_ticket`] wants both.
+    /// Get the model that agent runs, or `None` when no agent of that name is bound.
+    ///
+    /// Pairs with [`Self::on_ticket`]: the event names the agent, this names
+    /// its model, and [`Trajectory::from_ticket`] needs both.
     ///
     /// [`Trajectory::from_ticket`]: super::Trajectory::from_ticket
     pub fn model_for_agent(&self, agent_name: &str) -> Option<String> {
@@ -485,91 +455,102 @@ impl TicketSystem {
         self.policies.lock().unwrap().clone()
     }
 
-    // ---- policy builders ----
-
+    /// Limit the total number of turns.
     pub fn max_turns(&self, n: u32) -> &Self {
         self.policies.lock().unwrap().max_turns = Some(n);
         self
     }
 
+    /// Limit the total input tokens.
     pub fn max_input_tokens(&self, n: u64) -> &Self {
         self.policies.lock().unwrap().max_input_tokens = Some(n);
         self
     }
 
+    /// Limit the total output tokens.
     pub fn max_output_tokens(&self, n: u64) -> &Self {
         self.policies.lock().unwrap().max_output_tokens = Some(n);
         self
     }
 
+    /// Limit the output tokens of a single request.
     pub fn max_request_tokens(&self, n: u32) -> &Self {
         self.policies.lock().unwrap().max_request_tokens = Some(n);
         self
     }
 
+    /// Limit how often a result may fail its schema before the ticket fails.
     pub fn max_schema_retries(&self, n: u32) -> &Self {
         self.policies.lock().unwrap().max_schema_retries = Some(n);
         self
     }
 
+    /// Limit how often a failing request is retried.
     pub fn max_request_retries(&self, n: u32) -> &Self {
         self.policies.lock().unwrap().max_request_retries = n;
         self
     }
 
+    /// Wait this long between retries.
     pub fn request_retry_delay(&self, d: Duration) -> &Self {
         self.policies.lock().unwrap().request_retry_delay = d;
         self
     }
 
-    /// Maximum elapsed duration the run is allowed to span. When the
-    /// elapsed duration reaches the limit, `finish` stops with
-    /// `FinishReason::PolicyViolated(PolicyKind::Time)` and emits the
-    /// matching `PolicyViolated` event.
+    /// Limit the total elapsed duration.
+    ///
+    /// On reaching it, `finish` stops with
+    /// `FinishReason::PolicyViolated(PolicyKind::Time)` and emits the matching
+    /// `PolicyViolated` event.
     pub fn max_time(&self, d: Duration) -> &Self {
         self.policies.lock().unwrap().max_time = Some(d);
         self
     }
 
-    // ---- policy readers ----
-    // `None` reads as "no limit"; the two that always hold a value carry
-    // the default from `Policies::default` until the caller overrides it.
-
+    /// Get the turn limit, or `None` when there is none.
     pub fn get_max_turns(&self) -> Option<u32> {
         self.policies.lock().unwrap().max_turns
     }
 
+    /// Get the input-token limit, or `None` when there is none.
     pub fn get_max_input_tokens(&self) -> Option<u64> {
         self.policies.lock().unwrap().max_input_tokens
     }
 
+    /// Get the output-token limit, or `None` when there is none.
     pub fn get_max_output_tokens(&self) -> Option<u64> {
         self.policies.lock().unwrap().max_output_tokens
     }
 
+    /// Get the per-request output-token limit, or `None` when there is none.
     pub fn get_max_request_tokens(&self) -> Option<u32> {
         self.policies.lock().unwrap().max_request_tokens
     }
 
+    /// Get the schema-retry limit, or `None` when there is none.
     pub fn get_max_schema_retries(&self) -> Option<u32> {
         self.policies.lock().unwrap().max_schema_retries
     }
 
+    /// Get the request-retry limit, which always holds a value.
     pub fn get_max_request_retries(&self) -> u32 {
         self.policies.lock().unwrap().max_request_retries
     }
 
+    /// Get the delay between retries, which always holds a value.
     pub fn get_request_retry_delay(&self) -> Duration {
         self.policies.lock().unwrap().request_retry_delay
     }
 
+    /// Get the elapsed-duration limit, or `None` when there is none.
     pub fn get_max_time(&self) -> Option<Duration> {
         self.policies.lock().unwrap().max_time
     }
 
-    /// Cancel the run when `trigger` resolves. The future's output is
-    /// discarded; only completion matters. Composes with any cancellation
-    /// source: ctrl-c, a deadline, a channel receive, an external signal.
+    /// Stop execution when another task you supply finishes.
+    ///
+    /// Its output is discarded; only finishing matters. Any source works:
+    /// ctrl-c, a deadline, a channel receive, an external signal.
     pub fn cancel_on<F>(&self, trigger: F) -> &Self
     where
         F: Future + Send + 'static,
@@ -586,9 +567,10 @@ impl TicketSystem {
         self
     }
 
-    /// Cancel the run when `predicate` first returns true for an event.
-    /// Implemented as one more entry on the [`Self::on_event`] chain;
-    /// composes with any logger the caller installed.
+    /// Stop execution when an event matches.
+    ///
+    /// This is one more entry on the [`Self::on_event`] chain, so it works
+    /// alongside any logger you installed.
     pub fn cancel_on_event<F>(&self, predicate: F) -> &Self
     where
         F: Fn(&Event) -> bool + Send + Sync + 'static,
@@ -604,10 +586,10 @@ impl TicketSystem {
         })
     }
 
-    /// Call off the `label` pool when `predicate` first returns true for an
-    /// event. The label-scoped sibling of [`Self::cancel_on_event`]: instead of
-    /// stopping the whole run it invokes [`Self::cancel_label`], so the other
-    /// pools keep going. One more entry on the [`Self::on_event`] chain.
+    /// Stop one label's agents when an event matches, while the rest keep working.
+    ///
+    /// The label-scoped counterpart of [`Self::cancel_on_event`]: it calls
+    /// [`Self::cancel_label`] rather than ending execution.
     pub fn cancel_label_on_event<F>(&self, label: impl Into<String>, predicate: F) -> &Self
     where
         F: Fn(&Event) -> bool + Send + Sync + 'static,
@@ -624,10 +606,11 @@ impl TicketSystem {
         })
     }
 
-    /// Enqueue a follow-up ticket whenever an event makes `make` return one.
-    /// The broadest of the three: `make` sees every kind, including the
-    /// streamed chunks, so match on `event.kind` first. Guard against a
-    /// follow-up that itself re-triggers `make`, or the run never drains.
+    /// Enqueue a follow-up ticket from any event.
+    ///
+    /// The broadest of the three: your function sees every kind, including each
+    /// piece of a reply as it arrives, so match on `event.kind` first. Guard
+    /// against a follow-up that triggers itself, or execution never ends.
     pub fn create_ticket_on_event<F>(&self, make: F) -> &Self
     where
         F: Fn(&Event) -> Option<Ticket> + Send + Sync + 'static,
@@ -643,8 +626,8 @@ impl TicketSystem {
         })
     }
 
-    /// Cancel the run when a finished ticket's result matches `predicate`.
-    /// Fail-fast for "stop the whole run on the first result that means stop".
+    /// Stop execution when a finished result matches.
+    ///
     /// Built on [`Self::on_result`], so the value passed is the stored,
     /// schema-validated result.
     pub fn cancel_on_result<F>(&self, predicate: F) -> &Self
@@ -662,12 +645,12 @@ impl TicketSystem {
         })
     }
 
-    /// Call off the `label` pool when a finished ticket's result matches
-    /// `predicate`. The label-scoped sibling of [`Self::cancel_on_result`]:
-    /// instead of stopping the whole run it invokes [`Self::cancel_label`],
-    /// so the other pools keep going. Any matching result calls off `label`,
-    /// whether or not the finished ticket carried it, matching
-    /// [`Self::cancel_label_on_event`].
+    /// Stop one label's agents when a finished result matches.
+    ///
+    /// The label-scoped counterpart of [`Self::cancel_on_result`]: it calls
+    /// [`Self::cancel_label`] rather than ending execution. Any matching result
+    /// stops `label`, whether or not the finished ticket carried it, which is
+    /// how [`Self::cancel_label_on_event`] behaves too.
     ///
     /// ```no_run
     /// # use agentwerk::TicketSystem;
@@ -690,11 +673,12 @@ impl TicketSystem {
         })
     }
 
-    /// Enqueue a follow-up ticket whenever a finished ticket makes `make`
-    /// return one. `make` reads the finished ticket's key, labels, and task
-    /// alongside its result, and can chain the follow-up via `Ticket::parent`.
-    /// Guard against a follow-up that itself re-triggers `make`, or the run
-    /// never drains.
+    /// Enqueue a follow-up ticket from a finished ticket.
+    ///
+    /// Your function reads the finished ticket's key, labels, and task
+    /// alongside its result, and can chain the follow-up through
+    /// `Ticket::parent`. Guard against a follow-up that triggers itself, or
+    /// execution never ends.
     pub fn create_ticket_on_result<F>(&self, make: F) -> &Self
     where
         F: Fn(&Ticket, &serde_json::Value) -> Option<Ticket> + Send + Sync + 'static,
@@ -710,10 +694,11 @@ impl TicketSystem {
         })
     }
 
-    /// Cancel the run when a failure matches `predicate`. Built on
-    /// [`Self::on_failure`], so the predicate sees all five failure kinds:
-    /// narrow it on `event.kind` to stop on a failed ticket only, or leave it
-    /// broad to stop on the first tool or provider error.
+    /// Stop execution when a failure matches.
+    ///
+    /// Built on [`Self::on_failure`], so your condition sees all five failure
+    /// kinds. Narrow it on `event.kind` to stop on a failed ticket only, or
+    /// leave it broad to stop on the first tool or LLM provider error.
     pub fn cancel_on_failure<F>(&self, predicate: F) -> &Self
     where
         F: Fn(&Event, &Ticket) -> bool + Send + Sync + 'static,
@@ -729,10 +714,10 @@ impl TicketSystem {
         })
     }
 
-    /// Call off the `label` pool when a failure matches `predicate`. The
-    /// label-scoped sibling of [`Self::cancel_on_failure`]: instead of stopping
-    /// the whole run it invokes [`Self::cancel_label`], so the other pools keep
-    /// going.
+    /// Stop one label's agents when a failure matches.
+    ///
+    /// The label-scoped counterpart of [`Self::cancel_on_failure`]: it calls
+    /// [`Self::cancel_label`] rather than ending execution.
     pub fn cancel_label_on_failure<F>(&self, label: impl Into<String>, predicate: F) -> &Self
     where
         F: Fn(&Event, &Ticket) -> bool + Send + Sync + 'static,
@@ -749,11 +734,11 @@ impl TicketSystem {
         })
     }
 
-    /// Enqueue a follow-up ticket whenever a failure makes `make` return one.
-    /// The retry path: `make` reads the failed ticket's task and labels and
-    /// hands back a fresh attempt, chained via `Ticket::parent`. Count the
-    /// attempts in the closure, or a ticket that fails every time re-queues
-    /// itself forever.
+    /// Enqueue a retry for a ticket that failed.
+    ///
+    /// Your function reads the failed ticket's task and labels and hands back a
+    /// fresh attempt, chained through `Ticket::parent`. Count the attempts
+    /// yourself, or a ticket that fails every time re-queues itself forever.
     ///
     /// ```no_run
     /// # use agentwerk::{Ticket, TicketSystem};
@@ -781,15 +766,13 @@ impl TicketSystem {
         })
     }
 
-    /// Observe a ticket at each of its lifecycle transitions: `TicketStarted`,
-    /// `TicketFinished`, `TicketFailed`. The handler receives the event plus
-    /// the ticket it names, already resolved, so it reads the result, labels,
-    /// and replies without a second lookup. One more entry on the
-    /// [`Self::on_event`] chain, like [`Self::cancel_on_event`].
+    /// Read a ticket as it starts, finishes, or fails.
     ///
-    /// No other kind reaches the handler: resolving a ticket copies its
-    /// transcript, which on `TextChunkReceived` would cost once per streamed
-    /// chunk.
+    /// The handler receives the event plus the ticket it names, already
+    /// resolved, so it reads the result, labels, and replies without a second
+    /// lookup. No other kind reaches the handler: resolving a ticket copies its
+    /// replies, which on `TextChunkReceived` would cost once per piece of the
+    /// reply.
     pub fn on_ticket<F>(&self, handler: F) -> &Self
     where
         F: Fn(&Event, &Ticket) + Send + Sync + 'static,
@@ -812,27 +795,25 @@ impl TicketSystem {
         })
     }
 
-    /// Override the directory under which the system writes
-    /// `results.jsonl`, `tickets.jsonl`, and per-ticket
-    /// `tickets/<key>/{ticket.json,replies.jsonl}`. Defaults to `./.agentwerk`.
-    /// Knowledge co-locates with these files when `Knowledge::open`
-    /// points at the same directory.
+    /// Define where a session is stored, `./.agentwerk` by default.
+    ///
+    /// Pointing `Knowledge::load` at the same directory keeps the knowledge
+    /// pages beside the session.
     pub fn dir(&self, dir: impl Into<PathBuf>) -> &Self {
         *self.dir.lock().unwrap() = dir.into();
         self
     }
 
-    /// Directory the system writes to, `./.agentwerk` until [`Self::dir`]
-    /// overrides it.
+    /// Get the session directory.
     pub fn get_dir(&self) -> PathBuf {
         self.dir.lock().unwrap().clone()
     }
 
-    /// Register the result schema every ticket carrying `label` validates
-    /// against, unless the ticket was created with a schema of its own. The
-    /// schema is stamped at creation, so the contract follows the label whether
-    /// the ticket came from `task`, `ticket`, or a `finish` handover
-    /// child. Mirrors `Stats::stats_for_label`.
+    /// Register a schema every ticket of that label validates against.
+    ///
+    /// A ticket created with a schema of its own keeps it. Otherwise the schema
+    /// is applied at creation, so the contract follows the label whether the
+    /// ticket came from `task`, from `ticket`, or from a `finish` handover.
     pub fn schema_for_label(&self, label: impl Into<String>, schema: Schema) -> &Self {
         self.label_schemas
             .lock()
@@ -841,28 +822,25 @@ impl TicketSystem {
         self
     }
 
-    // ---- ticket-creation API mirrored on Agent ----
-
-    /// Enqueue a ticket carrying `task` as its body. Returns the new
-    /// ticket's key.
+    /// Submit a task and return its ticket key.
     pub fn task<T: Serialize>(&self, task: T) -> String {
         self.dispatch(Ticket::new(task))
     }
 
-    /// Enqueue a fully-built `Ticket`. System-managed fields (key,
-    /// reporter, created_at, status, result) are overwritten. To pin the
-    /// ticket to a specific agent, label it with the agent's name.
-    /// Compose schema and label via `Ticket::new(...).schema(...).label(...)`.
-    /// Returns the inserted ticket's key.
+    /// Submit a `Ticket` with custom labels or schema, and return its key.
+    ///
+    /// Key, reporter, creation time, status, and result are set at insertion
+    /// and overwrite whatever the ticket carried. To pin the ticket to one
+    /// agent, label it with that agent's name.
     pub fn ticket(&self, ticket: Ticket) -> String {
         self.dispatch(ticket)
     }
 
-    /// Append a user-side text reply to an existing ticket. After the
-    /// assistant has spoken, the agent pauses on the ticket; this call
-    /// flips the gate by appending a non-assistant reply, and the next
-    /// turn is sent to the provider. Use this to continue multi-turn
-    /// chats on one ticket instead of creating a new ticket per turn.
+    /// Add a reply to a ticket.
+    ///
+    /// An agent that has just spoken waits on the ticket, and this reply is
+    /// what sends the next turn. Use it to continue a conversation on one
+    /// ticket instead of creating a new ticket per turn.
     pub fn reply(&self, key: &str, content: impl Into<String>) -> &Self {
         self.add_reply(key, Reply::user_text(content));
         self
@@ -872,14 +850,12 @@ impl TicketSystem {
         self.insert(ticket, "user".to_string())
     }
 
-    // ---- query methods ----
-
-    /// Clone of the ticket at `key`, if any.
+    /// Get one ticket by key.
     pub fn get_ticket(&self, key: &str) -> Option<Ticket> {
         self.tickets.lock().unwrap().get(key).cloned()
     }
 
-    /// Every ticket, sorted by creation time then numeric key.
+    /// Get every ticket in creation order.
     pub fn tickets(&self) -> Vec<Ticket> {
         let tickets = self.tickets.lock().unwrap();
         let mut out: Vec<Ticket> = tickets.values().cloned().collect();
@@ -887,10 +863,10 @@ impl TicketSystem {
         out
     }
 
-    /// Tickets matching `predicate`, sorted by creation time then numeric key.
+    /// Get every ticket matching a condition, in creation order.
     ///
-    /// The predicate runs while `self.tickets` is locked. It MUST NOT call
-    /// other `TicketSystem` methods that lock the same `Mutex`: deadlock.
+    /// Your condition MUST NOT call another `TicketSystem` method that reads
+    /// the ticket store, or the call deadlocks.
     pub fn find_tickets<F>(&self, predicate: F) -> Vec<Ticket>
     where
         F: Fn(&Ticket) -> bool,
@@ -901,10 +877,10 @@ impl TicketSystem {
         out
     }
 
-    /// First ticket matching `predicate`, by creation order. Short-circuits.
+    /// Get the earliest ticket matching a condition.
     ///
-    /// The predicate runs while `self.tickets` is locked. It MUST NOT call
-    /// other `TicketSystem` methods that lock the same `Mutex`: deadlock.
+    /// Your condition MUST NOT call another `TicketSystem` method that reads
+    /// the ticket store, or the call deadlocks.
     pub fn find_ticket<F>(&self, predicate: F) -> Option<Ticket>
     where
         F: Fn(&Ticket) -> bool,
@@ -915,19 +891,21 @@ impl TicketSystem {
         matching.into_iter().next().cloned()
     }
 
-    /// Call off the pool carrying `label`: the loop stops claiming or resuming its
-    /// tickets and walks any agent off one it already holds, leaving that ticket
-    /// `InProgress` (abandoned), just as [`Self::cancel`] leaves in-flight tickets.
-    /// Stops one pool while the rest of the run continues.
+    /// Stop one label's agents while the rest keep working.
+    ///
+    /// Its tickets are neither claimed nor resumed, and an agent already
+    /// holding one is taken off it. That ticket stays `InProgress`, exactly as
+    /// [`Self::cancel`] leaves the tickets in flight.
     pub fn cancel_label(&self, label: impl Into<String>) -> &Self {
         self.cancelled_labels.lock().unwrap().insert(label.into());
         self
     }
 
-    /// True when `label` names a pool called off via [`Self::cancel_label`]. Ask
-    /// before minting follow-up work: a ticket carrying a cancelled label is
-    /// never claimed. Locks only `cancelled_labels`, so it is safe to call from
-    /// a predicate that already holds the `tickets` lock.
+    /// Check whether one label's agents have been stopped.
+    ///
+    /// Ask before creating follow-up work: a ticket carrying a stopped label is
+    /// never claimed. It reads no ticket state, so it is safe to call from a
+    /// condition passed to [`Self::find_ticket`] or [`Self::find_tickets`].
     ///
     /// ```no_run
     /// # use agentwerk::{Ticket, TicketSystem};
@@ -944,17 +922,15 @@ impl TicketSystem {
         self.cancelled_labels.lock().unwrap().contains(label)
     }
 
-    /// True when any of `labels` names a pool called off via [`Self::cancel_label`].
-    /// The loop's claim/resume path reads this to keep a cancelled pool's tickets
-    /// off the queue. Locks only `cancelled_labels`, so it is safe to call from a
-    /// claim predicate that already holds the `tickets` lock.
+    /// True when any of `labels` has been stopped by [`Self::cancel_label`]. The
+    /// claim and resume path reads this to keep a stopped pool's tickets off the
+    /// queue. It reads no ticket state, so a claim check may call it.
     pub(crate) fn labels_cancelled(&self, labels: &[String]) -> bool {
         let cancelled = self.cancelled_labels.lock().unwrap();
         labels.iter().any(|l| cancelled.contains(l))
     }
 
-    /// Count of tickets the run watcher still considers in flight: every
-    /// ticket whose status is `Todo` or `InProgress`.
+    /// How many tickets are still `Todo` or `InProgress`.
     pub(crate) fn pending_count(&self) -> usize {
         self.tickets
             .lock()
@@ -964,13 +940,9 @@ impl TicketSystem {
             .count()
     }
 
-    // ---- agent binding ----
-
-    /// Wire `agent` to this system. Drains any tickets the agent had
-    /// queued in a prior private system into this one, then switches the
-    /// agent's `TicketSystemRef` to `Shared(weak_self)`. Any prior
-    /// `Private` arm is dropped at the reassignment, so the prior system
-    /// is freed once no other strong reference holds it.
+    /// Attach `agent` to this system, moving any tickets it queued in its own
+    /// private system across first. The prior system is freed once nothing else
+    /// holds it.
     pub(crate) fn bind_agent(&self, agent: &mut Agent) {
         if let Some(prior) = agent.ticket_system.upgrade() {
             if !Arc::ptr_eq(
@@ -994,36 +966,32 @@ impl TicketSystem {
         self.agents.lock().unwrap().push(agent.clone());
     }
 
-    /// Clone of the currently registered agent list. The list is
-    /// append-only by invariant: `bind_agent` is the sole mutator and
-    /// only calls `push`. `run_main_loop` relies on element indices
-    /// being stable across calls. Any new mutator that removes or
-    /// reorders entries would silently break late-add detection: route
-    /// additions through `bind_agent` only.
+    /// A copy of the registered agents.
+    ///
+    /// The list is append-only, and `bind_agent` is its only writer.
+    /// `run_main_loop` needs the positions to stay stable, so a writer that
+    /// removed or reordered entries would silently break detection of agents
+    /// added while execution is under way.
     pub(crate) fn clone_agents(&self) -> Vec<Agent> {
         self.agents.lock().unwrap().clone()
     }
 
-    /// Bind `agent` to this system: drain any tickets it queued in its
-    /// default system into this one and push a clone onto this system's
-    /// agents list. Returns `&self` so registration chains with
-    /// `.task(...)` and the policy builders. To keep a bound handle to
-    /// the agent itself, use [`Agent::ticket_system`] instead.
+    /// Add an agent to this ticket system.
     ///
-    /// May be called before or after `run()` / `finish()`. When called
-    /// after `run()`, the new agent starts polling for tickets within
-    /// roughly one `IDLE_POLL_INTERVAL` (~100 ms).
+    /// Any tickets the agent queued on its own move into this system. To keep a
+    /// handle on the agent itself, use [`Agent::ticket_system`] instead. An
+    /// agent added while execution is under way picks up its first ticket
+    /// within about 100 ms.
     pub fn agent(&self, mut agent: Agent) -> &Self {
         self.bind_agent(&mut agent);
         self
     }
 
-    // ---- run lifecycle ----
-
-    /// Start the agent loop on a background tokio task. Tickets queued
-    /// afterwards are picked up within ~`IDLE_POLL_INTERVAL`. Pair with
-    /// [`Self::finish`] to wait for the queue to empty, or with
-    /// [`Self::cancel`] to signal an early exit.
+    /// Begin processing tickets, on a background task.
+    ///
+    /// A ticket queued afterwards is picked up within about 100 ms. Pair this
+    /// with [`Self::finish`] to wait for the queue to empty, or with
+    /// [`Self::cancel`] to stop early.
     pub fn start(&self) -> &Self {
         // Reset both signals so a system can be re-started after a
         // previous finish left flags set, and clear the prior reason so
@@ -1052,14 +1020,12 @@ impl TicketSystem {
         self
     }
 
-    /// Process every queued ticket, then return. Starts a run if none
-    /// is in flight; otherwise watches the in-flight one. Polls every
-    /// 20 ms; the loop exits on cancel, policy violation, or clean
-    /// drain, in that precedence. The chosen reason is stashed for
-    /// [`Self::finish_reason`] and announced via
-    /// [`EventKind::RunFinished`]. Returns `&self` so callers can chain
-    /// [`Self::last_result`], [`Self::results`], or
-    /// [`Self::tickets`] without rebinding.
+    /// Process every queued ticket, then return.
+    ///
+    /// Execution begins here when it has not already, and otherwise this waits
+    /// on what is already running. It ends on cancel, on a policy violation, or
+    /// once the queue is empty, in that precedence. The reason is kept for
+    /// [`Self::finish_reason`] and announced as [`EventKind::RunFinished`].
     pub async fn finish(&self) -> &Self {
         if self.join_handle.lock().unwrap().is_none() {
             self.start();
@@ -1090,11 +1056,11 @@ impl TicketSystem {
         self
     }
 
-    /// Request cancellation. Sync, so it composes with ctrl-c handlers,
-    /// drop guards, and other sync callers. Flips both the cancel
-    /// signal (read by [`Self::is_cancelled`]) and the stop signal
-    /// (read by every worker and tool). [`Self::finish`] returns
-    /// shortly after with `FinishReason::Cancelled`.
+    /// Cancel the execution.
+    ///
+    /// This is not async, so it can be called from a ctrl-c handler, a drop
+    /// guard, or anywhere else. Every agent and tool stops shortly after, and
+    /// [`Self::finish`] returns with `FinishReason::Cancelled`.
     pub fn cancel(&self) -> &Self {
         self.cancel_signal
             .lock()
@@ -1114,28 +1080,31 @@ impl TicketSystem {
         }
     }
 
-    /// True once external cancellation has been requested through
-    /// [`Self::cancel`], [`Self::cancel_on`], or
-    /// [`Self::cancel_on_event`]. Clean drains and policy stops do not
-    /// flip this signal.
+    /// Check whether the execution was cancelled.
+    ///
+    /// True only after [`Self::cancel`], [`Self::cancel_on`], or
+    /// [`Self::cancel_on_event`]. An empty queue or a policy violation does not
+    /// count as cancelled.
     pub fn is_cancelled(&self) -> bool {
         self.cancel_signal.lock().unwrap().load(Ordering::Relaxed)
     }
 
-    /// Reason the most recent `finish()` returned. `None` before the
-    /// first `finish()` call and between `start()` and the next
+    /// Check the reason for the finishing.
+    ///
+    /// `None` before the first `finish()`, and between `start()` and the next
     /// `finish()`.
     pub fn finish_reason(&self) -> Option<FinishReason> {
         *self.finish_reason.lock().unwrap()
     }
 
-    /// Most recent finished ticket's result. Deserialize structured
-    /// results with `serde_json::from_value`.
+    /// Get the most recent ticket result.
+    ///
+    /// Read a structured result back with `serde_json::from_value`.
     pub fn last_result(&self) -> Option<serde_json::Value> {
         self.results().pop()
     }
 
-    /// Every finished ticket's result, in creation order.
+    /// Get every ticket's result in creation order.
     pub fn results(&self) -> Vec<serde_json::Value> {
         self.find_tickets(|t| t.status == Status::Finished && t.result.is_some())
             .into_iter()
@@ -1143,15 +1112,12 @@ impl TicketSystem {
             .collect()
     }
 
-    /// Every ticket carrying `label`, in creation order, whatever its
-    /// status. [`Self::results_for_label`] narrows the same set to the
-    /// finished ones and hands back their results.
+    /// Get every ticket carrying a specific label, whatever its status.
     pub fn tickets_for_label(&self, label: &str) -> Vec<Ticket> {
         self.find_tickets(|t| t.has_label(label))
     }
 
-    /// Every finished ticket carrying `label`'s result, in creation
-    /// order. Mirrors [`Self::schema_for_label`] and `Stats::stats_for_label`.
+    /// Get every ticket's result carrying a specific label.
     pub fn results_for_label(&self, label: &str) -> Vec<serde_json::Value> {
         self.find_tickets(|t| t.is_finished() && t.has_label(label))
             .into_iter()
@@ -1159,13 +1125,11 @@ impl TicketSystem {
             .collect()
     }
 
-    /// Resolve to the earliest ticket matching `predicate`, polling every
-    /// ~50 ms. Resolves to `None` if the run stops (cancel, policy, or
-    /// clean drain) before any ticket matches. Call after [`Self::start`].
+    /// Wait for one matching ticket instead of draining the queue.
     ///
-    /// The predicate runs while `self.tickets` is locked (via
-    /// `find_ticket`); it MUST NOT call other `TicketSystem` methods that
-    /// lock the same `Mutex`: deadlock.
+    /// Call it after [`Self::start`]. It gives back `None` when execution stops
+    /// before any ticket matches. Your condition MUST NOT call another
+    /// `TicketSystem` method that reads the ticket store, or the call deadlocks.
     pub async fn wait_for_ticket<F>(&self, predicate: F) -> Option<Ticket>
     where
         F: Fn(&Ticket) -> bool,
@@ -1614,7 +1578,7 @@ mod tests {
     }
 
     /// One editor at a time, the way `dir` or `max_turns` replace. Two
-    /// rewriters of one transcript would each see the other's output.
+    /// rewriters of one ticket's replies would each see the other's output.
     #[test]
     fn a_second_reply_editor_replaces_the_first() {
         use crate::agents::tickets::ReplyContent;

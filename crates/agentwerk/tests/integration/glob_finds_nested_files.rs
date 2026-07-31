@@ -2,7 +2,7 @@
 //! nested project tree. The role does NOT name `glob` and does NOT
 //! describe its argument shape. Proves the tool's *description* is good
 //! enough for a model to (1) pick filename pattern matching, and (2)
-//! produce a recursive `**/lib.rs` pattern instead of a flat `*.rs` —
+//! produce a recursive `**/lib.rs` pattern instead of a flat `*.rs`,
 //! which would miss every nested file.
 
 use std::fs;
@@ -93,7 +93,7 @@ async fn finds_every_lib_rs_in_nested_tree() -> std::result::Result<(), Box<dyn 
             .role(
                 "{context}\n\n\
                  Investigate the working directory and answer the user's question. \
-                 Use the available tools — pick whichever one fits the question. \
+                 Use the available tools: pick whichever one fits the question. \
                  When you have the answer, settle the ticket via \
                  `finish`.",
             )
@@ -112,7 +112,7 @@ async fn finds_every_lib_rs_in_nested_tree() -> std::result::Result<(), Box<dyn 
 
     let recorded = calls.lock().unwrap().clone();
 
-    // The model must call glob with a recursive pattern (`**`) — a
+    // The model must call glob with a recursive pattern (`**`), since a
     // flat `*.rs` would miss every nested file. Either `**/lib.rs` (tight)
     // or `**/*.rs` (broad, then filter) is acceptable; both prove the
     // model picked up `**` semantics from the description.
@@ -136,7 +136,7 @@ async fn finds_every_lib_rs_in_nested_tree() -> std::result::Result<(), Box<dyn 
             )
         });
 
-    // The tool's output must contain every nested `lib.rs` — proves the
+    // The tool's output must contain every nested `lib.rs`, which proves the
     // model's `**` pattern actually exercised the recursion through two
     // levels of nesting (`crate_b/src/internal/lib.rs`).
     let output = glob_call

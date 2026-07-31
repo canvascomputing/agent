@@ -2,7 +2,7 @@
 //! not own and report a secret recorded only in that ticket's body. The secret
 //! is absent from the agent's own task, so a correct answer proves the model
 //! read the queue. The seeded ticket carries a label the agent does not handle,
-//! so it stays `Todo` and unclaimed — readable but never executed.
+//! so it stays `Todo` and unclaimed: readable but never executed.
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 

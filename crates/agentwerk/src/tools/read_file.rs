@@ -89,7 +89,7 @@ impl ToolLike for ReadFileTool {
             let content = match std::fs::read(&resolved) {
                 Ok(bytes) => {
                     // A NUL byte marks a true binary (image, archive, compiled
-                    // object); text — even minified or lightly obfuscated — never
+                    // object); text, even minified or lightly obfuscated, never
                     // contains one. Report it concisely instead of dumping decoded
                     // garbage that floods the transcript and breaks strict chat
                     // templates. Otherwise decode lossily so odd-encoded source

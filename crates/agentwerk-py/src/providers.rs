@@ -1,6 +1,6 @@
-//! Provider and model handles for Python. Environment detection covers the
-//! common case; explicit per-vendor constructors and a `Model` tuning object
-//! cover local endpoints and non-default context windows or reasoning effort.
+//! The LLM providers and models as Python sees them. Reading the environment
+//! covers the common case; the per-vendor constructors and `Model` cover a local
+//! endpoint, a different context window, or a different reasoning level.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -14,13 +14,13 @@ use pyo3::prelude::*;
 
 use crate::convert::runtime_error;
 
-/// An LLM provider the agent builder can be pointed at with `.provider(...)`.
+/// An LLM provider, passed to `.provider(...)`.
 #[pyclass(name = "Provider")]
 pub struct PyProvider {
     pub inner: Arc<dyn Provider>,
 }
 
-/// A model name plus optional context-window and reasoning-effort overrides,
+/// A model name, with an optional context window size and reasoning level,
 /// passed to `.model(...)`.
 #[pyclass(name = "Model")]
 pub struct PyModel {
@@ -36,13 +36,13 @@ impl PyModel {
         }
     }
 
-    /// Override the model's context window, in tokens.
+    /// Set the context window size for a model, in tokens.
     fn context_window(mut slf: PyRefMut<'_, Self>, size: u64) -> PyRefMut<'_, Self> {
         slf.inner = slf.inner.clone().context_window(size);
         slf
     }
 
-    /// Set reasoning effort: `"off"`, `"low"`, `"medium"`, or `"high"`.
+    /// Set the reasoning level: `"off"`, `"low"`, `"medium"`, or `"high"`.
     fn reasoning_effort<'py>(
         mut slf: PyRefMut<'py, Self>,
         effort: &str,
@@ -62,19 +62,19 @@ impl PyModel {
         Ok(slf)
     }
 
-    /// The context window in tokens: the registry default, or the override.
+    /// Get the configured window size, in tokens.
     fn get_context_window(&self) -> Option<u64> {
         self.inner.get_context_window()
     }
 
-    /// `"off"`, `"low"`, `"medium"`, or `"high"`.
+    /// Get the configured effort.
     fn get_reasoning_effort(&self) -> String {
         self.inner.get_reasoning_effort().to_string()
     }
 }
 
-/// Detect and construct a provider from environment variables
-/// (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `MISTRAL_API_KEY`, `LITELLM_API_KEY`).
+/// Read the LLM provider from `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`,
+/// `MISTRAL_API_KEY`, or `LITELLM_API_KEY`.
 #[pyfunction]
 #[pyo3(name = "provider_from_env")]
 fn provider_from_env() -> PyResult<PyProvider> {
@@ -82,16 +82,16 @@ fn provider_from_env() -> PyResult<PyProvider> {
     Ok(PyProvider { inner })
 }
 
-/// Read the model name from `MODEL`, `<PROVIDER>_MODEL`, or the detected
-/// provider's default.
+/// Read the model name from `MODEL`, from `<PROVIDER>_MODEL`, or from the
+/// detected provider's own default.
 #[pyfunction]
 #[pyo3(name = "model_from_env")]
 fn model_from_env() -> PyResult<String> {
     detect_model().map_err(runtime_error)
 }
 
-/// Read `MODEL_CONTEXT_WINDOW`, or `None` when it is unset or not a positive
-/// integer.
+/// Read the context window size from `MODEL_CONTEXT_WINDOW`, or `None` when it
+/// is unset or not a positive integer.
 #[pyfunction]
 #[pyo3(name = "context_window_from_env")]
 fn context_window_from_env() -> Option<u64> {

@@ -1,4 +1,5 @@
-//! Tool-system errors raised via `Err(...)` — distinct from the in-band `ToolResult::Error(String)` that most tool failures use to signal recoverable problems back to the model.
+//! Errors a tool raises with `Err(...)`, as opposed to the `ToolResult::Error`
+//! most failures use to tell the model what to fix.
 
 use std::fmt;
 

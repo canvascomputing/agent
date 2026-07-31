@@ -169,7 +169,7 @@ When issuing multiple commands:
 
 # Anti-patterns
 - Do not sleep between commands that can run immediately.
-- Do not retry failing commands in a sleep loop — diagnose the root cause.
+- Do not retry failing commands in a sleep loop: diagnose the root cause.
 - Do not use interactive flags (-i) as they require input which is not supported.",
             default = Self::DEFAULT_TIMEOUT.as_millis(),
             max = Self::MAX_TIMEOUT.as_millis(),

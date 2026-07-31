@@ -2,23 +2,39 @@
 
 How every file under `agentdocs/` is written. This file is itself an example of the format.
 
-## File shape
+## File Shape
 
 **One topic per file. Start with a title and a one-sentence description.**
 
+```markdown
+# Style
+
+Naming and comment rules, plus README structure. Skim the section matching what is being written.
+```
+
 - `# Title`: one word or short phrase, no trailing punctuation.
-- One sentence under the title that states what the file covers.
+- One sentence under the title states what the file covers.
 - Sections use plain headings: `## Title Cased Heading`. No numbers: adding a section must not force renumbering.
-- Each section is self-contained; a reader can skip to it directly.
+- Each section is self-contained, so a reader can skip straight to it.
 
-## Section shape
+## Section Shape
 
-**Bold rule first. Bullets second. A closing sentence is optional.**
+**Bold rule first. One example second. Bullets last.**
 
-- The first line after the heading is a bold one-liner stating the rule.
-- The rule is an instruction, not a description.
-- Bullets follow, optionally preceded by a one-line framing sentence.
-- A closing sentence is added only when it carries information the bullets do not.
+```markdown
+## Builders
+
+**Builder methods are bare nouns. No `with_` prefix.**
+
+`.name()`, `.model()`, `.tool()`, `.label()`, `.read_only()`
+
+- The `with_` prefix is reserved for a bare name that would be ambiguous.
+```
+
+- The first line after the heading is a bold one-liner stating the rule as an instruction.
+- An example follows whenever the rule is about code or about the shape of text. Use the smallest form that shows the rule: a fence, a line of identifiers, or a good and bad pair.
+- A section whose own text already demonstrates the rule needs no separate example.
+- Bullets carry what the rule and the example do not. A closing sentence is added only when it carries information the bullets cannot.
 
 ## Bullets
 
@@ -33,10 +49,15 @@ How every file under `agentdocs/` is written. This file is itself an example of 
 
 **Use bullets, not tables.**
 
+```markdown
+- `Persist`: `save(&self, dir)` and `load(dir, &Self::Key)`.
+- `Append`: `append(dir, &Self::Record)`.
+```
+
 - Tables produce wide rows that are hard to compare.
 - For `name: description` pairs, write `` `Name`: description. ``
 - Group related bullets under a one-line header ending in a colon.
-- Code fences are acceptable for commands and small code examples.
+- Tables belong in the README, where a `<details>` fold gives them a place to sit. These files have no folds.
 
 ## Punctuation
 
@@ -50,6 +71,11 @@ How every file under `agentdocs/` is written. This file is itself an example of 
 
 **Direct and neutral. No marketing language. No unnecessary jargon.**
 
+```markdown
+GOOD: `Stats` records every event and exposes read accessors.
+BAD:  `Stats` seamlessly wires a powerful metrics plane into the kernel.
+```
+
 - State the rule; justify only when the rule is not obvious on its own.
 - Prefer present tense and second person over passive voice.
 - Avoid adjectives that do not carry information ("powerful", "clean", "seamless").
@@ -59,12 +85,12 @@ How every file under `agentdocs/` is written. This file is itself an example of 
 
 **Use MUST for non-negotiable rules. Use IMPORTANT for easy-to-miss gotchas.**
 
-- MUST: correctness-critical rules where a violation breaks compilation, the request and response shape exchanged with providers, or an architectural invariant.
+- MUST: correctness-critical rules where a violation breaks compilation, the shape exchanged with LLM providers, or an architectural invariant.
 - IMPORTANT: prefixes a bullet that a reader skimming would miss and regret later.
 - Most rules need neither: the bold one-liner is already the rule.
 - SHOULD, MAY, and CAN are not used: RFC-2119 without the full spec is noise.
 
-## Code grounding
+## Code Grounding
 
 **Rules name identifiers that exist in the crate. No invented vocabulary.**
 
@@ -73,11 +99,11 @@ How every file under `agentdocs/` is written. This file is itself an example of 
 - A rule that cannot point at code is opinion, not architecture: drop it or move it to the consuming application.
 - When a name changes in code, the docs change in the same commit.
 
-## Cross-linking
+## Cross-Linking
 
 **Each fact lives in one file. Other files link to it.**
 
-- Commands belong in `workflow.md`; other files link to it rather than restating commands.
+- Commands belong in `workflow.md`; other files link there rather than restating them.
 - File and module placement belongs in `layout.md`; `architecture.md` describes invariants and assumes placement is known.
 - Naming and comment rules belong in `style.md`; `testing.md` covers test-specific naming and links out for the rest.
 - A duplicated fact is a future inconsistency: when two files would say the same thing, one of them links instead.

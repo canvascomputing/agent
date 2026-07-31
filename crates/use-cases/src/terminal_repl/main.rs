@@ -3,16 +3,16 @@
 //! the first input creates the ticket via `tickets.task(...)`, every
 //! subsequent input lands as a user reply via `tickets.reply(&key, ...)`.
 //! The agent loop's wait-for-input branch picks each comment up and
-//! drives the next model turn on the same growing transcript. Tickets
+//! drives the next model turn on the same growing set of replies. Tickets
 //! and knowledge both persist to `./.agentwerk/`, so an existing chat
 //! resumes across process restarts.
 //! The model's response streams to stdout via
 //! `EventKind::TextChunkReceived`. Slash commands:
 //! `/new` starts a fresh chat ticket, `/list` lists every ticket,
-//! `/stats` prints run counters, `/clear` resets knowledge,
+//! `/stats` prints the statistics, `/clear` resets knowledge,
 //! `/bible [N]` injects N repetitions of Genesis (KJV) as a reply to
 //! drive context compaction (default N=1, ~52k tokens per repetition).
-//! `/scrub <word>` redacts that word from the transcript in place (via
+//! `/scrub <word>` redacts that word from the replies in place (via
 //! `edit_replies`) with no model turn; the word is gone on disk too.
 //! Ctrl-C at the prompt exits with code 130; Ctrl-D exits with
 //! code 0; Ctrl-C during a turn cancels that turn (a second Ctrl-C
@@ -20,7 +20,7 @@
 //!
 //! Every exit path goes through `std::process::exit` rather than a
 //! plain `return`: the stdin reader runs on a tokio blocking thread
-//! parked in `read(2)`, which the runtime can't cancel on shutdown.
+//! blocked in `read(2)`, which the runtime cannot cancel on shutdown.
 //! Exiting the process directly bypasses the runtime drop and avoids
 //! a hang on outstanding blocking tasks.
 
@@ -503,7 +503,7 @@ fn window_usage_suffix(window: Option<u64>, last_input: &AtomicU64) -> String {
     }
 }
 
-/// Replace every occurrence of `word` with `[redacted]` across the transcript.
+/// Replace every occurrence of `word` with `[redacted]` across the replies.
 fn redact(messages: &mut [Reply], word: &str) {
     for reply in messages.iter_mut() {
         for block in &mut reply.content {

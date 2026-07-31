@@ -1,4 +1,5 @@
-//! Provider-agnostic shape of a chat exchange — messages, content blocks, token usage, stop reasons, streaming events. The lingua franca between agentwerk and every provider.
+//! What agentwerk and every LLM provider exchange: messages, content blocks,
+//! token usage, stop reasons, and the pieces of a reply as they arrive.
 
 use serde::{Deserialize, Serialize};
 
@@ -41,9 +42,8 @@ impl Message {
 }
 
 /// Render this value as a user-role `Message`. Implemented by anything
-/// that can sensibly become a single user turn — `Ticket` (the task
-/// seed agentwerk sends on the first turn), and future sources like
-/// `Comment` or peer-message notifications.
+/// that becomes one turn's input, such as `Ticket`, whose task agentwerk sends
+/// on the first turn.
 pub trait AsUserMessage {
     fn as_user_message(&self) -> Message;
 }

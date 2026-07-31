@@ -111,7 +111,7 @@ impl ToolLike for FetchUrlTool {
     }
 }
 
-// -- Fetching -----------------------------------------------------------------
+// Fetching
 
 enum FetchedContent {
     Page {
@@ -211,7 +211,7 @@ fn format_output(
     output
 }
 
-// -- Redirect safety ----------------------------------------------------------
+// Redirect safety
 
 enum FollowResult {
     Ok(reqwest::Response),
@@ -336,7 +336,7 @@ fn resolve_redirect_location(base_url: &str, location: &str) -> String {
     }
 }
 
-// -- URL validation -----------------------------------------------------------
+// URL validation
 
 fn validate_url(url: &str) -> std::result::Result<String, String> {
     if url.len() > MAX_URL_LENGTH {
@@ -370,7 +370,7 @@ fn validate_url(url: &str) -> std::result::Result<String, String> {
     Ok(url.to_string())
 }
 
-// -- HTML-to-text -------------------------------------------------------------
+// HTML-to-text
 
 fn strip_html(html: &str) -> String {
     let mut text = String::with_capacity(html.len());
@@ -471,13 +471,13 @@ fn collapse_whitespace(text: &str) -> String {
     result.trim().to_string()
 }
 
-// -- Tests --------------------------------------------------------------------
+// Tests
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    // -- URL validation -------------------------------------------------------
+    // URL validation
 
     #[test]
     fn validate_url_valid_https() {
@@ -541,7 +541,7 @@ mod tests {
         assert!(err.contains("Unsupported scheme"));
     }
 
-    // -- Redirect safety ------------------------------------------------------
+    // Redirect safety
 
     #[test]
     fn redirect_same_host_permitted() {
@@ -623,7 +623,7 @@ mod tests {
         ));
     }
 
-    // -- Redirect resolution --------------------------------------------------
+    // Redirect resolution
 
     #[test]
     fn resolve_absolute_redirect() {
@@ -665,7 +665,7 @@ mod tests {
         );
     }
 
-    // -- HTML stripping -------------------------------------------------------
+    // HTML stripping
 
     #[test]
     fn strip_html_basic() {

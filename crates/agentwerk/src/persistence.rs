@@ -1,8 +1,7 @@
-//! Persistence contracts used by every value that reads or writes a
-//! file in agentwerk. `Persist` covers whole-value state files;
-//! `Append` covers jsonl append-only logs. Each implementer encodes
-//! its own file location, so the wrong file cannot be reached through
-//! the wrong type.
+//! How every value in agentwerk reads and writes its file.
+//!
+//! Each type encodes its own location, so the wrong file cannot be reached
+//! through the wrong type.
 
 use std::fs;
 use std::io::{self, Write};
@@ -82,7 +81,7 @@ pub(crate) fn append_line(path: &Path, line: &str) -> io::Result<()> {
 
 /// Relative path of a tool's output file under a tickets dir:
 /// `tickets/<key>/outputs/<id>.txt`. Callers join with the tickets dir
-/// to write; storing the relative form keeps comment transcripts portable.
+/// to write; storing the relative form keeps the recorded paths portable.
 pub(crate) fn output_path(key: &str, id: &str) -> PathBuf {
     PathBuf::from("tickets")
         .join(key)

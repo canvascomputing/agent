@@ -1,6 +1,6 @@
-"""agentwerk: Python bindings for the agentwerk Rust agent loop.
+"""agentwerk: a minimal Python library for running many agents in parallel.
 
-The compiled extension (`._agentwerk`) holds the real types; this package
+The compiled extension (`._agentwerk`) holds the real types, and this package
 re-exports them so `from agentwerk import Agent, ReadFileTool` works.
 """
 
@@ -59,14 +59,13 @@ def tool(
     name=None,
     description=None,
 ):
-    """Mark a Python callable as an agent tool.
+    """Turn a Python function into a tool an agent may call.
 
-    Usage: ``@tool`` or ``@tool(read_only=True, schema={...})``. The name
-    defaults to the function name and the description to its docstring. The
-    tool input object is passed to the callable as keyword arguments. A
-    ``defer``red tool stays hidden until the agent finds it with
-    ``FindToolsTool``. ``paths`` names the input fields holding a file path, so
-    the files the tool opens reach ``Stats.file_stats()``.
+    Write ``@tool`` or ``@tool(read_only=True, schema={...})``. The name
+    defaults to the function's, and the description to its docstring. The input
+    arrives as keyword arguments. ``defer`` holds the tool back until the agent
+    looks it up with ``FindToolsTool``. ``paths`` names the input fields holding
+    a file path, so the files a call opens are included in statistics.
     """
 
     def decorate(fn):

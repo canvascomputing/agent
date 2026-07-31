@@ -1,14 +1,10 @@
-//! The agent as Python sees it. One class in two phases: `Agent()` collects
-//! configuration, `build()` assembles the real agent, and the methods that drive
-//! a run work from there on.
+//! The agent as Python sees it. One class in two phases: `Agent()` collects the
+//! configuration, `build()` creates the agent, and the rest drives it.
 //!
-//! Rust splits the phases across two types, because `AgentBuilder<P, M>` changes
-//! type as the provider and model slots fill and `build(self)` consumes it.
-//! Python can hold neither, so the two collapse into the built type's name and
-//! the config is assembled in one shot at `build()`. That collapse is why
-//! `build()` runs once: the Python object owns the private ticket system, so
-//! rebuilding would orphan the queue that clones already handed out still point
-//! at.
+//! Rust splits those phases across two types, which Python cannot hold, so they
+//! collapse into one class here. That is why `build()` runs once: the Python
+//! object owns the agent's own ticket system, and rebuilding would leave the
+//! queue that its copies still point at with nothing reading it.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -25,22 +21,22 @@ use crate::ticket::PyTicket;
 use crate::ticket_system::PyTicketSystem;
 use crate::tools::{extract_tool, BoxedTool};
 
-/// Which provider the built agent should use. Resolved at `build()`.
+/// Which LLM provider the agent will use, decided at `build()`.
 enum ProviderSpec {
     Unset,
     Env,
     Explicit(Arc<dyn Provider>),
 }
 
-/// Which model the built agent should use. Resolved at `build()`.
+/// Which model the agent will use, decided at `build()`.
 enum ModelSpec {
     Unset,
     Env,
     Explicit(Model),
 }
 
-/// An agent: configured with the fluent methods, armed by `build()`, then
-/// driven with `task(...)` and `finish()`.
+/// An `Agent` is the core entity of agentwerk. It has access to tools for
+/// solving tasks in the form of tickets.
 #[pyclass(name = "Agent")]
 pub struct PyAgent {
     name: Option<String>,
@@ -54,10 +50,10 @@ pub struct PyAgent {
     tools: Vec<Arc<dyn ToolLike>>,
     knowledge: Option<Arc<Knowledge>>,
     directive_editor: Option<Py<PyAny>>,
-    /// True when the agent came from `Agent.empty()`, which leaves the finish
-    /// tool unregistered.
+    /// True when the agent came from `Agent.empty()`, which registers no finish
+    /// tool.
     empty: bool,
-    /// Filled by `build()`. Every method that reaches the queue needs it.
+    /// Set by `build()`. Every method that reaches the queue needs it.
     agent: Option<Agent>,
 }
 
@@ -80,15 +76,15 @@ impl PyAgent {
         }
     }
 
-    /// The built agent, for callers that drive a run.
+    /// The built agent, for the methods that drive it.
     pub(crate) fn built(&self) -> PyResult<&Agent> {
         self.agent
             .as_ref()
             .ok_or_else(|| runtime_error("agent not built: call build() first"))
     }
 
-    /// Guards every configuration method. Rust gets this from `build(self)`
-    /// consuming the builder; Python has to check.
+    /// Guards every configuration method. Rust prevents this at compile time;
+    /// Python has to check.
     fn ensure_unbuilt(&self) -> PyResult<()> {
         match self.agent {
             Some(_) => Err(runtime_error(
@@ -98,7 +94,7 @@ impl PyAgent {
         }
     }
 
-    /// Turn the collected configuration into a real `Agent`.
+    /// Turn the collected configuration into an `Agent`.
     fn assemble(&self) -> PyResult<Agent> {
         let base = if self.empty {
             Agent::empty()
@@ -180,14 +176,15 @@ impl PyAgent {
         PyAgent::create(false)
     }
 
-    /// An agent with no finish tool pre-registered, for callers that compose the
-    /// whole tool set themselves.
+    /// Create an agent with no tools pre-registered.
+    ///
+    /// Register a finish tool yourself, or the agent cannot finish a ticket.
     #[staticmethod]
     fn empty() -> Self {
         PyAgent::create(true)
     }
 
-    /// Detect both provider and model from environment variables.
+    /// Read environment variables for configuration.
     fn from_env(mut slf: PyRefMut<'_, Self>) -> PyResult<PyRefMut<'_, Self>> {
         slf.ensure_unbuilt()?;
         slf.provider = ProviderSpec::Env;
@@ -195,14 +192,14 @@ impl PyAgent {
         Ok(slf)
     }
 
-    /// Detect the provider from environment variables.
+    /// Read only the LLM provider from environment variables.
     fn provider_from_env(mut slf: PyRefMut<'_, Self>) -> PyResult<PyRefMut<'_, Self>> {
         slf.ensure_unbuilt()?;
         slf.provider = ProviderSpec::Env;
         Ok(slf)
     }
 
-    /// Use an explicit provider handle.
+    /// Define the LLM provider.
     fn provider<'py>(
         mut slf: PyRefMut<'py, Self>,
         provider: PyRef<'_, PyProvider>,
@@ -212,8 +209,8 @@ impl PyAgent {
         Ok(slf)
     }
 
-    /// Set the model, either by name (e.g. `"gpt-4o"`) or with a `Model`
-    /// carrying context-window and reasoning-effort overrides.
+    /// Set the model, by name or as a `Model` carrying a context window size
+    /// and a reasoning level.
     fn model<'py>(
         mut slf: PyRefMut<'py, Self>,
         model: &Bound<'_, PyAny>,
@@ -228,7 +225,7 @@ impl PyAgent {
         Ok(slf)
     }
 
-    /// Detect the model name from environment variables.
+    /// Read only the model from environment variables.
     fn model_from_env(mut slf: PyRefMut<'_, Self>) -> PyResult<PyRefMut<'_, Self>> {
         slf.ensure_unbuilt()?;
         slf.model = ModelSpec::Env;
@@ -259,15 +256,17 @@ impl PyAgent {
         Ok(slf)
     }
 
-    /// Pause on assistant replies that carry no tool calls, for REPL hosts.
+    /// Let the agent wait for new instructions to keep a ticket in-progress.
     fn interactive(mut slf: PyRefMut<'_, Self>) -> PyResult<PyRefMut<'_, Self>> {
         slf.ensure_unbuilt()?;
         slf.interactive = true;
         Ok(slf)
     }
 
-    /// Bind `{key}` to `value` in the role and in string tasks. Binding
-    /// `context` shadows the built-in block the role expands.
+    /// Inject data into prompts with template strings.
+    ///
+    /// `{key}` is replaced in the role and in any text task. Binding `context`
+    /// replaces the built-in block the role expands.
     fn template(
         mut slf: PyRefMut<'_, Self>,
         key: String,
@@ -278,7 +277,7 @@ impl PyAgent {
         Ok(slf)
     }
 
-    /// Bind every `{key}` in the mapping at once.
+    /// Inject more than one entry into prompts.
     fn templates(
         mut slf: PyRefMut<'_, Self>,
         variables: BTreeMap<String, String>,
@@ -288,15 +287,15 @@ impl PyAgent {
         Ok(slf)
     }
 
-    /// Directory tools resolve filesystem paths against.
+    /// Set the directory the agent has access to.
     fn dir(mut slf: PyRefMut<'_, Self>, dir: String) -> PyResult<PyRefMut<'_, Self>> {
         slf.ensure_unbuilt()?;
         slf.dir = Some(dir);
         Ok(slf)
     }
 
-    /// Share a knowledge store for durable, cross-ticket memory. Bind the same
-    /// store to several agents to share their memory.
+    /// Share a knowledge store, the durable memory the agent carries across
+    /// tickets and shares with other agents.
     fn knowledge<'py>(
         mut slf: PyRefMut<'py, Self>,
         store: PyRef<'_, PyKnowledge>,
@@ -306,8 +305,8 @@ impl PyAgent {
         Ok(slf)
     }
 
-    /// Register a tool the agent may call: a built-in handle (e.g.
-    /// `ReadFileTool()`) or a `@tool`-decorated function.
+    /// Register a tool the agent may call, either a built-in such as
+    /// `ReadFileTool()` or a `@tool`-decorated function.
     fn tool<'py>(
         mut slf: PyRefMut<'py, Self>,
         tool: &Bound<'_, PyAny>,
@@ -318,7 +317,7 @@ impl PyAgent {
         Ok(slf)
     }
 
-    /// Register several tools at once, each of the shapes `tool(...)` accepts.
+    /// Register several tools the agent may call.
     fn tools<'py>(
         mut slf: PyRefMut<'py, Self>,
         tools: &Bound<'_, PyAny>,
@@ -331,10 +330,11 @@ impl PyAgent {
         Ok(slf)
     }
 
-    /// Rewrite the corrective directive injected when a turn ends without an
-    /// accepted result. The editor receives the bare reason and the default
-    /// directive, and returns the replacement, or `None` to keep the default.
-    /// Called inline per failure, so keep it cheap.
+    /// Override the prompt that corrects an agent asked to try again.
+    ///
+    /// Your function receives the reason and the built-in text, and returns the
+    /// replacement, or `None` to keep it. It runs once per retry, so keep it
+    /// cheap.
     fn edit_directive_on_retry(
         mut slf: PyRefMut<'_, Self>,
         editor: Py<PyAny>,
@@ -344,9 +344,11 @@ impl PyAgent {
         Ok(slf)
     }
 
-    /// Arm the agent from the configuration collected so far. Runs once: after
-    /// it, the configuration methods and a second `build()` are rejected. Errors
-    /// if provider or model is unset, or if environment detection fails.
+    /// Create the agent.
+    ///
+    /// It runs once: afterwards the configuration methods and a second `build()`
+    /// are rejected. Raises when the LLM provider or the model is unset, or when
+    /// neither can be read from the environment.
     fn build(mut slf: PyRefMut<'_, Self>) -> PyResult<PyRefMut<'_, Self>> {
         slf.ensure_unbuilt()?;
         let agent = slf.assemble()?;
@@ -354,19 +356,21 @@ impl PyAgent {
         Ok(slf)
     }
 
-    /// Enqueue a task (any JSON-serializable value) and return its ticket key.
+    /// Submit a task and return its ticket key.
+    ///
+    /// Call it as often as you like: one agent can drive many tickets.
     fn task(&self, task: &Bound<'_, PyAny>) -> PyResult<String> {
         let value = py_to_value(task)?;
         Ok(self.built()?.task(value))
     }
 
-    /// Enqueue a fully-built ticket on the bound system and return its key.
+    /// Submit a `Ticket` with custom labels or schema, and return its key.
     fn ticket(&self, ticket: PyRef<'_, PyTicket>) -> PyResult<String> {
         Ok(self.built()?.ticket(ticket.to_ticket()))
     }
 
-    /// Bind the agent to a shared ticket system, draining any work it had
-    /// queued privately into that system.
+    /// Attach a built agent to a ticket system, moving any tickets it queued on
+    /// its own across first.
     fn ticket_system<'py>(
         mut slf: PyRefMut<'py, Self>,
         system: PyRef<'_, PyTicketSystem>,
@@ -376,16 +380,18 @@ impl PyAgent {
         Ok(slf)
     }
 
-    /// Start the loop on a background task and return the bound system.
+    /// Begin processing tickets, and hand back the ticket system.
     fn start(&self) -> PyResult<PyTicketSystem> {
         Ok(PyTicketSystem {
             inner: self.built()?.start(),
         })
     }
 
-    /// Run every queued ticket to completion. Awaitable; returns the bound
-    /// `TicketSystem` so results are read off it. Raises at call time, not on
-    /// await, when the agent is not built.
+    /// Process every queued ticket, then hand back the ticket system so results
+    /// can be read from it. Awaitable.
+    ///
+    /// An agent that was never built raises when this is called, not when it is
+    /// awaited.
     fn finish<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let agent = self.built()?.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {

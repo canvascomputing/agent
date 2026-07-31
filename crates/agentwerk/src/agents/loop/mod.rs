@@ -1,6 +1,6 @@
 //! Multi-agent loop driver. One tokio task per registered agent,
 //! reading the shared `TicketSystem` through the upgraded
-//! `Weak<TicketSystem>` stamped at `bind_agent`.
+//! `Weak<TicketSystem>` set when the agent was added.
 
 use std::time::Duration;
 

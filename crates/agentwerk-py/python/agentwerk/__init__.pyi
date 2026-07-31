@@ -3,10 +3,10 @@
 from typing import Any, Awaitable, Callable, Optional, overload
 
 class Provider:
-    """An LLM provider handle."""
+    """An LLM provider, passed to ``Agent.provider(...)``."""
 
 class Model:
-    """A model name with optional context-window and reasoning-effort tuning."""
+    """A model name, with an optional context window size and reasoning level."""
 
     def __init__(self, name: str) -> None: ...
     def context_window(self, size: int) -> "Model": ...
@@ -15,13 +15,13 @@ class Model:
     def get_reasoning_effort(self) -> str: ...
 
 def provider_from_env() -> Provider:
-    """Detect and construct a provider from environment variables."""
+    """Read the LLM provider from environment variables."""
 
 def model_from_env() -> str:
-    """Read the model name from the environment."""
+    """Read the model name from environment variables."""
 
 def context_window_from_env() -> Optional[int]:
-    """Read ``MODEL_CONTEXT_WINDOW``, or ``None`` when it is unset."""
+    """Read the context window size from ``MODEL_CONTEXT_WINDOW``, or ``None``."""
 
 def AnthropicProvider(
     api_key: str, base_url: Optional[str] = ..., timeout: Optional[float] = ...
@@ -37,7 +37,7 @@ def LiteLlmProvider(
 ) -> Provider: ...
 
 class Tool:
-    """A built-in tool handle passed to Agent.tool(...)."""
+    """A tool an agent may call, passed to ``Agent.tool(...)``."""
 
 class ToolResult:
     """What a tool reports back when a bare return value is not enough."""
@@ -53,7 +53,7 @@ def ReadFileTool() -> Tool: ...
 def WriteFileTool() -> Tool: ...
 def EditFileTool() -> Tool: ...
 def GrepTool() -> Tool:
-    """Search file contents by regex, or a code shape via ``syntax="code"``."""
+    """Search file contents by regular expression, or by code shape with ``syntax="code"``."""
     ...
 def GlobTool() -> Tool: ...
 def ListDirectoryTool() -> Tool: ...
@@ -89,7 +89,7 @@ class Schema:
     def validate(self, value: Any) -> Any: ...
 
 class ReplyContent:
-    """One payload block inside a reply."""
+    """One block inside a reply: text, a tool call, a tool result, or reasoning."""
 
     kind: str
     data: dict
@@ -239,7 +239,8 @@ class ModelStat:
     def __repr__(self) -> str: ...
 
 class Stats:
-    """Statistics for a run, or one label or agent within it. Durations are seconds."""
+    """The metrics about tickets, tokens, and time, for the whole execution or for
+    one label or agent within it. Every duration is in seconds."""
 
     def stats_for_label(self, label: str) -> "Stats": ...
     def stats_for_agent(self, agent_name: str) -> "Stats": ...
@@ -268,7 +269,8 @@ class Stats:
     def __repr__(self) -> str: ...
 
 class Agent:
-    """Configured with the fluent methods, armed by ``build()``, then driven."""
+    """The core entity of agentwerk. It has access to tools for solving tasks in
+    the form of tickets."""
 
     def __init__(self) -> None: ...
     @staticmethod

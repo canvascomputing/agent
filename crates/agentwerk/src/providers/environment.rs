@@ -38,8 +38,8 @@ pub(crate) fn env_opt(name: &str) -> Option<String> {
 }
 
 /// Detect an LLM provider from environment variables and construct it from
-/// API key + base URL. Does not resolve a model — pair with
-/// [`model_from_env`] or set one explicitly on the agent.
+/// API key and base URL. It picks no model: pair it with [`model_from_env`], or
+/// set one on the agent.
 ///
 /// Detection order:
 ///   0. `LITELLM_PROVIDER` → explicit selection (`anthropic`, `mistral`, `openai`, `litellm`)
@@ -62,10 +62,10 @@ pub fn provider_from_env() -> ProviderResult<Arc<dyn Provider>> {
 /// Resolve a model name from environment variables.
 ///
 /// Priority:
-///   1. `MODEL`        — generic override, wins regardless of provider.
-///   2. `*_MODEL`      — provider-prefixed, selected by the same detection
-///      matrix as [`provider_from_env`] (e.g. `OPENAI_MODEL`).
-///   3. hosted default — the vendor's canonical model for the detected provider.
+///   1. `MODEL`: a generic override that wins whatever the LLM provider is.
+///   2. `*_MODEL`: named after the provider, chosen the same way
+///      [`provider_from_env`] chooses one, as in `OPENAI_MODEL`.
+///   3. The vendor's own default model for the detected provider.
 pub fn model_from_env() -> ProviderResult<String> {
     model_from_env_with(|name| std::env::var(name).ok())
 }

@@ -1,4 +1,5 @@
-//! Errors a provider raises before producing a `ModelResponse`. Anything that maps to a valid response-with-status belongs on `ResponseStatus`, not here.
+//! What can go wrong before an LLM provider produces a response. A response
+//! that did arrive reports through `ResponseStatus` instead.
 
 use std::fmt;
 use std::time::Duration;
@@ -38,8 +39,8 @@ pub enum ProviderError {
     /// `ConnectionFailed` (pre-response) and `ResponseMalformed` (structurally
     /// broken payload): the transport broke while chunks were still in flight.
     StreamInterrupted { message: String },
-    /// The response arrived but its body couldn't be parsed — malformed
-    /// JSON, unexpected shape, or a broken SSE frame.
+    /// The response arrived but its body could not be read: malformed JSON, an
+    /// unexpected shape, or a broken frame.
     ResponseMalformed { message: String },
     /// Provider construction failed to resolve a provider from the
     /// environment: no provider was detected, a required env var was unset,

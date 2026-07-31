@@ -1,4 +1,4 @@
-//! Core tool infrastructure: the `ToolLike` trait, the ad-hoc `Tool` struct, and the registry agentwerk consults before each provider call.
+//! The actions agents can take, and the registry an agent's tools live in.
 
 use std::collections::HashSet;
 use std::future::Future;
@@ -17,36 +17,32 @@ use crate::providers::{ProviderResult, ProviderToolDefinition};
 
 use super::error::ToolError;
 
-/// Per-tool ceiling on tool-result bytes. Outputs larger than this are
-/// offloaded to `<ticket-dir>/outputs/<tool_use_id>.txt` and replaced
-/// with a stub. ~12.5K tokens at the `bytes/4` estimator.
+/// The largest result one tool may return. Anything longer is written to
+/// `<ticket-dir>/outputs/<tool_use_id>.txt` and replaced with a short stub.
+/// Roughly 12 500 tokens.
 const PER_TOOL_CAP: usize = 50_000;
 
-/// Aggregate ceiling on a single turn's tool-result bytes. When parallel
-/// tools each return moderate but legal sizes, this cap offloads the
-/// largest until the turn is under budget. ~50K tokens.
+/// The largest total one turn's tool results may reach. When several tools each
+/// return an acceptable size, the largest are written out until the turn fits.
+/// Roughly 50 000 tokens.
 const PER_TURN_CAP: usize = 200_000;
 
-/// Bytes of original output retained in the stub preview. Snapped to
-/// the last newline within the window when one exists, otherwise
-/// floored to a UTF-8 boundary so multi-byte code points are never
-/// split.
+/// How much of the original output the stub still shows. It ends at the last
+/// newline in that window, or at a character boundary, so a multi-byte
+/// character is never cut in half.
 const PREVIEW_CHARS: usize = 2_000;
 
-/// Runtime context passed to a tool handler.
+/// What a tool receives when it runs.
 ///
-/// External tool authors use exactly three things:
+/// Writing your own tool, you need three of these:
 /// - `dir`: the agent's working directory.
-/// - `interrupt_signal`: set to true when agentwerk is shutting down.
-/// - `wait_for_cancel()`: resolves when the current call is cancelled.
+/// - `interrupt_signal`: true once agentwerk is shutting down.
+/// - `wait_for_cancel()`: finishes when the current call is cancelled.
 ///
-/// The remaining fields (`tool_registry`, ticket-side state, knowledge handle)
-/// are wired by agentwerk and consumed only by the built-in `FindToolsTool`
-/// and the ticket tools.
+/// agentwerk fills in the rest for the built-in tools.
 #[derive(Clone)]
 pub struct ToolContext {
-    /// Directory the tool runs in. Tools that touch the filesystem
-    /// should resolve relative paths against this.
+    /// Directory the tool runs in. Resolve a relative path against it.
     pub dir: PathBuf,
     pub interrupt_signal: Arc<AtomicBool>,
     pub(crate) tool_registry: Option<Arc<ToolRegistry>>,
@@ -57,10 +53,9 @@ pub struct ToolContext {
 }
 
 impl ToolContext {
-    /// A fresh context rooted at `dir`, with no registry handle and
-    /// a fresh never-firing cancel signal. Tools that search the registry
-    /// need a context agentwerk installs at call time; bare contexts are
-    /// for standalone use and tests.
+    /// A context rooted at `dir` that is never cancelled and knows about no
+    /// other tools. Use it standalone or in tests; agentwerk installs its own at
+    /// call time.
     pub fn new(dir: PathBuf) -> Self {
         Self {
             dir,
@@ -73,8 +68,8 @@ impl ToolContext {
         }
     }
 
-    /// Override the cancel signal — typically the one shared by the
-    /// `TicketSystem` so tools cooperate with run-level cancellation.
+    /// Use a different cancel signal, usually the one the `TicketSystem`
+    /// shares, so the tool stops when execution does.
     pub fn interrupt_signal(mut self, signal: Arc<AtomicBool>) -> Self {
         self.interrupt_signal = signal;
         self
@@ -113,11 +108,12 @@ impl ToolContext {
         self.agent_name.as_deref()
     }
 
-    /// Future that resolves once the current run is cancelled. Pair with
-    /// `tokio::select!` to drop the losing branch on cancel; dropped futures
-    /// cascade to `reqwest` aborts and (with `kill_on_drop(true)`) subprocess
-    /// kills. With a fresh context the future stays pending forever and the
-    /// `select!` degrades to a plain await.
+    /// Finishes once execution is cancelled.
+    ///
+    /// Pair it with `tokio::select!` so the losing branch is dropped, which
+    /// aborts an in-flight HTTP request and, with `kill_on_drop(true)`, ends a
+    /// subprocess. On a standalone context it never finishes, and the `select!`
+    /// behaves like a plain await.
     pub async fn wait_for_cancel(&self) {
         const POLL: std::time::Duration = std::time::Duration::from_millis(50);
         loop {
@@ -145,91 +141,87 @@ impl std::fmt::Debug for ToolContext {
     }
 }
 
-/// A tool call extracted from a provider response.
+/// One tool call the model asked for.
 #[derive(Debug, Clone)]
 pub struct ToolCall {
-    /// Provider-assigned call id, echoed back in the tool result block.
+    /// Identifier for this call, sent back with the result.
     pub id: String,
     /// Name of the tool the model chose.
     pub name: String,
-    /// Arguments the model supplied, conforming to the tool's input schema.
+    /// Arguments the model supplied, matching the tool's input schema.
     pub input: Value,
 }
 
-/// Outcome of a tool execution: a success payload, a generic error
-/// message, or a schema-validation failure. All three flow back to
-/// the model as ordinary content blocks; the [`SchemaError`] variant
-/// is distinguished so agentwerk can apply
-/// `policies.max_schema_retries` to it specifically.
+/// What a tool reports back: a result, an error the model should work around,
+/// or a rejection of its input.
+///
+/// All three reach the model the same way. The [`SchemaError`] variant is kept
+/// apart so `max_schema_retries` can govern it.
 ///
 /// [`SchemaError`]: ToolResult::SchemaError
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ToolResult {
-    /// Tool ran and produced this text payload.
+    /// The tool ran and produced this text.
     Success(String),
-    /// Tool failed; the message is shown to the model so it can recover.
+    /// The tool failed, and the message tells the model how to recover.
     Error(String),
-    /// Tool rejected the input because it failed schema validation.
-    /// The message lists the violations so the model can fix them.
+    /// The tool rejected its input, and the message names what was wrong.
     SchemaError(String),
 }
 
 impl ToolResult {
-    /// Build a successful result from a text payload.
+    /// Report a result.
     pub fn success(content: impl Into<String>) -> Self {
         Self::Success(content.into())
     }
 
-    /// Build an error result. The message is visible to the model.
+    /// Report a failure the model should work around.
     pub fn error(content: impl Into<String>) -> Self {
         Self::Error(content.into())
     }
 
-    /// Build a schema-validation failure. Mapped into
-    /// [`ToolError::SchemaValidationFailed`] by the registry and
-    /// counted against `policies.max_schema_retries`.
+    /// Report malformed input. It counts against `max_schema_retries`.
     pub fn schema_error(content: impl Into<String>) -> Self {
         Self::SchemaError(content.into())
     }
 }
 
-/// The core tool interface. Object-safe via boxed futures.
+/// What every tool implements.
 ///
-/// Implement this on any type you want an agent to be able to invoke. For
-/// ad-hoc tools defined inline, use the [`Tool`] struct's builder
-/// (`Tool::new(name, description).schema(...).handler(...)`).
+/// Implement it on any type an agent should be able to call. For a tool defined
+/// inline, use [`Tool`] and its builder instead.
 pub trait ToolLike: Send + Sync {
-    /// Unique name the model uses to call the tool.
+    /// The name the model calls the tool by.
     fn name(&self) -> &str;
 
-    /// Human-readable description shown to the model.
+    /// What the tool does, in the words the model reads.
     fn description(&self) -> &str;
 
     /// JSON Schema describing the tool's arguments.
     fn input_schema(&self) -> Value;
 
-    /// Whether this tool has no side effects. Read-only tools in the same
-    /// turn run concurrently; non-read-only tools run serially. Default: `false`.
+    /// Whether the tool changes nothing. Read-only tools in one turn run at the
+    /// same time; the rest run one after another. `false` by default.
     fn is_read_only(&self) -> bool {
         false
     }
 
-    /// Whether the tool's full definition is hidden until it is discovered
-    /// via `FindToolsTool`. Deferred tools appear to the model as
-    /// name-only stubs. Default: `false`.
+    /// Whether the tool is held back until the agent looks it up with
+    /// `FindToolsTool`, showing only its name until then. `false` by default.
     fn should_defer(&self) -> bool {
         false
     }
 
-    /// The file paths this call opens. Feeds the per-file open tally in
-    /// [`Stats`](crate::Stats). Default: empty (the tool opens no file).
+    /// The file paths this call opens, so they reach
+    /// [`Stats`](crate::Stats). Empty by default.
     fn opened_paths(&self, _input: &Value) -> Vec<String> {
         Vec::new()
     }
 
-    /// Run the tool. The future is held by the agent loop and dropped on
-    /// cancellation; pair long-running work with [`ToolContext::wait_for_cancel`]
-    /// in a `tokio::select!` to drop the losing branch promptly.
+    /// Run the tool.
+    ///
+    /// Cancellation drops the work in progress, so pair anything long-running
+    /// with [`ToolContext::wait_for_cancel`] in a `tokio::select!`.
     fn call<'a>(
         &'a self,
         input: Value,
@@ -237,9 +229,8 @@ pub trait ToolLike: Send + Sync {
     ) -> Pin<Box<dyn Future<Output = ProviderResult<ToolResult>> + Send + 'a>>;
 }
 
-/// Registry of tools available to an agent. Also owns the set of deferred
-/// tools discovered during the run: cloning the registry starts with an
-/// empty set.
+/// The tools one agent may call, plus the held-back tools it has looked up so
+/// far. A copy of the registry starts with none looked up.
 pub(crate) struct ToolRegistry {
     pub(crate) tools: Vec<Arc<dyn ToolLike>>,
     pub(crate) discovered: Mutex<HashSet<String>>,
@@ -264,18 +255,21 @@ impl Default for ToolRegistry {
 }
 
 impl ToolRegistry {
-    /// Add `tool`, replacing any tool already registered under its name. A
-    /// provider rejects a request carrying the same tool name twice, so the
-    /// last registration of a name is the one that counts.
+    /// Register a tool, replacing one already registered under that name.
+    ///
+    /// A request carrying one name twice is rejected, so the last registration
+    /// is the one that counts.
     pub(crate) fn register(&mut self, tool: impl ToolLike + 'static) {
         let tool: Arc<dyn ToolLike> = Arc::new(tool);
         self.tools.retain(|t| t.name() != tool.name());
         self.tools.push(tool);
     }
 
-    /// Look up the tool a call names. An exact name wins; failing that, a
-    /// spelling that folds onto the same key as exactly one registered tool
-    /// resolves to it, so a model that adds a `_tool` suffix still lands.
+    /// Find the tool a call names.
+    ///
+    /// An exact match wins. Otherwise a spelling that reduces to the same key as
+    /// exactly one registered tool resolves to it, so a model that adds a
+    /// `_tool` suffix still reaches the right tool.
     pub(crate) fn get(&self, name: &str) -> Option<Arc<dyn ToolLike>> {
         let name = name.trim();
         if let Some(tool) = self.tools.iter().find(|t| t.name() == name) {
@@ -288,8 +282,8 @@ impl ToolRegistry {
         folded.next().is_none().then(|| Arc::clone(tool))
     }
 
-    /// Registered names, sorted, for the error that names what the model could
-    /// have called instead.
+    /// The registered names, sorted, for the error that tells the model what it
+    /// could have called.
     fn tool_names(&self) -> Vec<String> {
         let mut names: Vec<String> = self.tools.iter().map(|t| t.name().to_string()).collect();
         names.sort();
@@ -300,9 +294,8 @@ impl ToolRegistry {
         self.discovered.lock().unwrap().insert(name.to_string());
     }
 
-    /// Tool definitions sent to the provider. Deferred tools that haven't
-    /// been discovered yet get name-only stubs; all others get full
-    /// definitions.
+    /// The tool definitions sent to the model. A held-back tool the agent has
+    /// not looked up yet appears as its name alone.
     pub(crate) fn definitions(&self) -> Vec<ProviderToolDefinition> {
         let discovered = self.discovered.lock().unwrap();
         self.tools
@@ -325,8 +318,7 @@ impl ToolRegistry {
             .collect()
     }
 
-    /// Search tools by query string. Returns matches sorted by relevance
-    /// (highest first).
+    /// Find tools matching a query, best match first.
     pub(crate) fn search(&self, query: &str) -> Vec<ProviderToolDefinition> {
         let query_lower = query.to_lowercase();
         let mut scored: Vec<(ProviderToolDefinition, u32)> = self
@@ -366,12 +358,10 @@ impl ToolRegistry {
         scored.into_iter().map(|(def, _)| def).collect()
     }
 
-    /// Execute tool calls with concurrent read-only batching and serial
-    /// write execution.
+    /// Run the calls, read-only ones together and the rest one at a time.
     ///
-    /// Returns `(ContentBlock, Result<String, ToolError>, Option<PathBuf>)`
-    /// triples so the caller can read the model-visible result block,
-    /// the typed verdict, and the offload path for oversized outputs.
+    /// Each result carries the block the model sees, the typed outcome, and the
+    /// file an oversized output was written to.
     pub(crate) async fn execute(
         &self,
         calls: &[ToolCall],
@@ -449,10 +439,11 @@ impl Clone for ToolRegistry {
     }
 }
 
-/// Fold a tool name onto the key dispatch matches on, so a model that
-/// capitalizes, hyphenates, or appends `_tool` still reaches the tool. The fold
-/// only ever removes information, so it cannot invent a name that was not asked
-/// for; where two tools share a key, [`ToolRegistry::get`] refuses instead.
+/// Reduce a tool name to the key lookups match on, so capitalization, hyphens,
+/// or a trailing `_tool` still reach the tool.
+///
+/// The reduction only removes information, so it cannot invent a name nobody
+/// asked for. Where two tools share a key, [`ToolRegistry::get`] refuses.
 fn lookup_key(name: &str) -> String {
     let key = name.trim().to_lowercase().replace('-', "_");
     match key.strip_suffix("_tool") {
@@ -470,9 +461,8 @@ type ToolHandler = Box<
         + Sync,
 >;
 
-/// Type-state builder for [`Tool`]. The `<H>` parameter tracks whether a
-/// handler has been installed: `.build()` is only available on
-/// `ToolBuilder<ToolHandler>`, so a handlerless tool cannot reach an agent.
+/// Collects what a [`Tool`] needs. `.build()` exists only once a handler is
+/// installed, so a tool that does nothing cannot reach an agent.
 pub struct ToolBuilder<H> {
     name: String,
     description: String,
@@ -483,8 +473,8 @@ pub struct ToolBuilder<H> {
     handler: H,
 }
 
-/// Ad-hoc tool defined inline with a closure handler. For tools with
-/// complex state, implement [`ToolLike`] directly on your own type instead.
+/// A `Tool` you define inline, for when a whole type would be too much. With
+/// state to carry, implement [`ToolLike`] on your own type instead.
 ///
 /// # Examples
 ///
@@ -519,9 +509,8 @@ pub struct Tool {
 }
 
 impl Tool {
-    /// Entry point for the fluent builder. The returned `ToolBuilder<()>` has
-    /// an empty-object input schema and no handler; install one with
-    /// `.handler(...)` and finalize with `.build()`.
+    /// Start building a tool. Add what it accepts with `.schema(...)`, what it
+    /// does with `.handler(...)`, and finish with `.build()`.
     pub fn new(name: impl Into<String>, description: impl Into<String>) -> ToolBuilder<()> {
         ToolBuilder {
             name: name.into(),
@@ -534,10 +523,9 @@ impl Tool {
         }
     }
 
-    /// Entry point for a builder seeded from a `.tool.md` definition. The
-    /// returned builder has its name, prose description, input schema, and
-    /// read-only flag populated from the markdown; install a handler with
-    /// `.handler(...)` and finalize with `.build()`. Panics on a malformed file.
+    /// Start building a tool from a `.tool.md` definition, which supplies its
+    /// name, description, input schema, and whether it is read-only. Panics when
+    /// the file is malformed.
     pub fn from_tool_file(definition: &str) -> ToolBuilder<()> {
         let tf = super::tool_file::ToolFile::parse(definition);
         Tool::new(tf.name.clone(), tf.render_markdown())
@@ -547,28 +535,28 @@ impl Tool {
 }
 
 impl<H> ToolBuilder<H> {
-    /// Replace the input schema (JSON Schema). Defaults to an empty-object schema.
+    /// Define what the tool accepts, as JSON Schema.
     pub fn schema(mut self, schema: Value) -> Self {
         self.schema = schema;
         self
     }
 
-    /// Mark the tool read-only so agentwerk runs it concurrently with
-    /// other read-only calls in the same turn.
+    /// Let the agent run this tool concurrently with other read-only calls in
+    /// the same turn.
     pub fn read_only(mut self, read_only: bool) -> Self {
         self.read_only = read_only;
         self
     }
 
-    /// Hide the tool's full definition until it is discovered via `FindToolsTool`.
+    /// Hold the tool back until the agent looks it up with `FindToolsTool`.
     pub fn defer(mut self, defer: bool) -> Self {
         self.defer = defer;
         self
     }
 
-    /// Name the input fields holding a file path, so the files this tool opens
-    /// reach [`Stats::file_stats`](crate::Stats::file_stats). A field missing
-    /// from the input, or holding anything but a string, is skipped.
+    /// Name the input fields holding a file path, so the files a call opens are
+    /// included in statistics. A field that is absent or not a string is
+    /// skipped.
     pub fn paths<I, S>(mut self, fields: I) -> Self
     where
         I: IntoIterator<Item = S>,
@@ -580,9 +568,8 @@ impl<H> ToolBuilder<H> {
 }
 
 impl ToolBuilder<()> {
-    /// Install the closure that runs when the model calls this tool. The
-    /// closure may be a bare `async` block: the builder boxes the returned
-    /// future internally.
+    /// Define what runs when the model calls this tool. A bare `async` block
+    /// works.
     pub fn handler<F, Fut>(self, f: F) -> ToolBuilder<ToolHandler>
     where
         F: Fn(Value, ToolContext) -> Fut + Send + Sync + 'static,
@@ -601,7 +588,7 @@ impl ToolBuilder<()> {
 }
 
 impl ToolBuilder<ToolHandler> {
-    /// Produce the final `Tool` ready for `Agent::tool(...)`.
+    /// Create the tool, ready for `Agent::tool(...)`.
     pub fn build(self) -> Tool {
         Tool {
             name: self.name,
@@ -683,10 +670,8 @@ async fn invoke(
     }
 }
 
-/// Substitute a placeholder when a tool returns an empty success
-/// payload. Empty `tool_result.content` has triggered provider sampling
-/// edge cases; the placeholder keeps the assistant turn well-formed.
-/// Errors and non-empty successes pass through.
+/// Put a placeholder in place of an empty result, since empty content has upset
+/// LLM providers. Everything else passes through.
 fn replace_empty_output(
     outcome: std::result::Result<String, ToolError>,
     tool_name: &str,
@@ -741,13 +726,11 @@ fn partition_tool_calls(calls: &[ToolCall], registry: &ToolRegistry) -> Vec<Tool
     batches
 }
 
-/// Replace `Ok(s)` with a stub when `s.len()` exceeds `per_tool_cap`,
-/// persisting the original output under the ticket's outputs folder.
-/// Returns the outcome plus the persisted file path (when offload
-/// happened). `Err(_)` outcomes pass through: tool errors are short by
-/// construction and never need offloading. When persistence fails (no
-/// ticket bound, write error), the raw content passes through
-/// unstubbed.
+/// Replace an oversized result with a stub, writing the original under the
+/// ticket's outputs directory and reporting where it went.
+///
+/// An error passes through, being short by construction, and so does the raw
+/// content when the write fails.
 fn cap_oversized_result(
     outcome: std::result::Result<String, ToolError>,
     ctx: &ToolContext,
@@ -768,11 +751,9 @@ fn cap_oversized_result(
     }
 }
 
-/// Aggregate-cap pass: while the total `ContentBlock::ToolResult` bytes
-/// in `results` exceed `per_turn_cap`, replace the largest non-stub
-/// result with a stub. Stops when no further offload would help (either
-/// the cap is met or persistence has failed for every remaining
-/// candidate).
+/// While one turn's results are too large together, write out the largest that
+/// is not already a stub. It stops once the turn fits, or once nothing left can
+/// be written out.
 fn cap_aggregate_outputs(
     results: &mut [(
         ContentBlock,
@@ -837,12 +818,11 @@ fn cap_aggregate_outputs(
     }
 }
 
-/// Offload `content` to the ticket's outputs folder via the bound
-/// `TicketSystem`. Returns the path relative to the tickets dir (for
-/// the comment transcript) and the on-disk path (for the model-facing
-/// stub); `None` when no ticket key is present on the context, no
-/// ticket system is bound, or the write fails. Best-effort, matching
-/// the surrounding observational-persistence contract.
+/// Write `content` under the ticket's outputs directory, reporting both the
+/// path relative to the session and the path on disk.
+///
+/// `None` when the context names no ticket, no ticket system is attached, or
+/// the write fails. Like the rest of the logging, it is best effort.
 fn persist_output(ctx: &ToolContext, tool_use_id: &str, content: &str) -> Option<PersistedOutput> {
     let system = ctx.ticket_system.as_ref()?;
     let key = ctx.ticket_key.as_deref()?;
@@ -859,9 +839,8 @@ struct PersistedOutput {
 const OVERSIZED_STUB_TAG_OPEN: &str = "<persisted-output>";
 const OVERSIZED_STUB_TAG_CLOSE: &str = "</persisted-output>";
 
-/// Render the stub the model sees in place of an oversized tool result.
-/// Wraps the size summary, the offload path, and a leading preview in
-/// `<persisted-output>...</persisted-output>` tags.
+/// Build the stub the model sees in place of an oversized result: how large it
+/// was, where it went, and how it starts.
 fn format_oversized_tool_result(original_len: usize, path: &Path, preview: &str) -> String {
     let size = format_bytes(original_len);
     let preview_size = format_bytes(preview.len());
@@ -874,11 +853,11 @@ fn format_oversized_tool_result(original_len: usize, path: &Path, preview: &str)
     )
 }
 
-/// Return a leading slice of `content` up to `PREVIEW_CHARS` bytes, snapped to
-/// the last newline within that window, or to a UTF-8 char boundary when no
-/// newline is present. The window is floored to a char boundary first, since
-/// `PREVIEW_CHARS` can land inside a multibyte char (binary tool output) and
-/// slicing there would panic.
+/// The first `PREVIEW_CHARS` bytes of `content`, ending at the last newline in
+/// that window or at a character boundary.
+///
+/// The window is moved to a character boundary first: `PREVIEW_CHARS` can land
+/// inside a multi-byte character, and slicing there would panic.
 fn truncate_preview(content: &str) -> &str {
     let window = utf8_boundary_floor(content, PREVIEW_CHARS.min(content.len()));
     let cut = content[..window]
@@ -900,9 +879,7 @@ fn format_bytes(n: usize) -> String {
     }
 }
 
-/// Floor an index to the largest UTF-8 char boundary `<= i`. Cheap when
-/// `i` already lands on a boundary; otherwise scans back at most three
-/// bytes.
+/// Move an index back to the nearest character boundary, at most three bytes.
 fn utf8_boundary_floor(s: &str, mut i: usize) -> usize {
     while i > 0 && !s.is_char_boundary(i) {
         i -= 1;
@@ -914,9 +891,8 @@ fn utf8_boundary_floor(s: &str, mut i: usize) -> usize {
 mod tests {
     use super::*;
 
-    /// Every built-in `.tool.md` must parse. Instantiating each tool and
-    /// reading its name, description, and schema forces `ToolFile::parse`, so
-    /// a malformed definition fails here rather than at the first model call.
+    /// Every built-in `.tool.md` must parse. Reading each tool's name,
+    /// description, and schema forces that here, rather than at the first call.
     #[test]
     fn every_builtin_tool_definition_parses() {
         let dir = crate::test_util::TempDir::new().unwrap();
@@ -973,7 +949,7 @@ mod tests {
         assert_eq!(tool.opened_paths(&input), vec!["src/lib.rs".to_string()]);
     }
 
-    /// Tiny mock used across registry tests.
+    /// The mock the registry tests share.
     struct MockTool {
         name: String,
         read_only: bool,
@@ -1292,7 +1268,7 @@ Do the demo thing.
         assert!(tool.should_defer());
     }
 
-    // ---- Layer 1: result-cap helpers ----
+    // Layer 1: result-cap helpers
 
     fn ticket_ctx() -> (
         ToolContext,

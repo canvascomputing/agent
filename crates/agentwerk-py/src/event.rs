@@ -1,6 +1,6 @@
-//! Events as Python sees them. An `Event` is flattened to a small object with
-//! `kind`, `agent_name`, `ticket_key`, and a `data` dict carrying the variant's
-//! payload, so a Python handler can inspect any event without a class per kind.
+//! Events as Python sees them: one object with `kind`, `agent_name`,
+//! `ticket_key`, and a `data` dict, so a handler reads any event without a class
+//! per kind.
 
 use agentwerk::event::{Event, EventKind};
 use pyo3::prelude::*;
@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 
 use crate::convert::value_to_py;
 
-/// One observation from a run.
+/// An `Event` reports one thing that happened as agents work.
 #[pyclass(name = "Event")]
 pub struct PyEvent {
     #[pyo3(get)]
@@ -22,7 +22,7 @@ pub struct PyEvent {
 
 #[pymethods]
 impl PyEvent {
-    /// The variant payload (model, tokens, tool name, message, ...) as a dict.
+    /// What the event carries: model, tokens, tool name, message.
     #[getter]
     fn data<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         value_to_py(py, &self.data)
@@ -46,9 +46,8 @@ pub fn to_py_event(event: &Event) -> PyEvent {
     }
 }
 
-/// The variant's payload as JSON. Enum-typed fields (error kinds, policy kinds,
-/// reasons) render through their `Display` impl, so every string Python sees is
-/// snake_case and named in one place on the crate side.
+/// What the event carries, as JSON. A typed field renders through its `Display`,
+/// so every string Python sees is snake_case and spelled in one place.
 fn payload(kind: &EventKind) -> Value {
     use EventKind::*;
     match kind {

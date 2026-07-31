@@ -1,7 +1,8 @@
-//! Run statistics as Python sees them. The Rust accessors are computed, not
-//! stored, so serialising the struct would hand Python the field layout instead
-//! of the numbers callers ask for. This class exposes the accessors themselves,
-//! under their Rust names, with every duration in seconds.
+//! The statistics as Python sees them: the same accessors under the same names,
+//! with every duration in seconds.
+//!
+//! The numbers are computed rather than stored, so handing over the struct
+//! itself would expose the layout instead of the figures.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -13,14 +14,15 @@ use pyo3::prelude::*;
 use crate::convert::{runtime_error, value_to_py};
 
 /// Where the numbers come from. The run-wide statistics live inside the ticket
-/// system, so holding the system is what keeps them alive; a nested slice is
-/// its own shared value.
+/// system, so holding the system is what keeps them alive. A slice scoped to one
+/// label or agent is its own shared value.
 enum Source {
     Run(Arc<TicketSystem>),
     Slice(Arc<Stats>),
 }
 
-/// Statistics for a run, or for one label or agent within it.
+/// `Stats` holds the metrics about tickets, tokens, and time, for the whole
+/// execution or for one label or agent within it.
 #[pyclass(name = "Stats")]
 pub struct PyStats {
     source: Source,
@@ -43,31 +45,32 @@ impl PyStats {
 
 #[pymethods]
 impl PyStats {
-    /// Statistics scoped to one ticket label. `run_duration()` is always `None`
-    /// on a slice, since run timing stays global.
+    /// Get statistics scoped to one label. `run_duration()` is always `None`
+    /// here, since timing stays global.
     fn stats_for_label(&self, label: &str) -> PyStats {
         PyStats {
             source: Source::Slice(self.get().stats_for_label(label)),
         }
     }
 
-    /// Statistics scoped to one agent, by the name it was registered under.
-    /// `tickets_created()` counts the tickets that agent filed. The rest count
-    /// the tickets it claimed. Tickets the host filed report as `user`.
+    /// Get statistics scoped to one agent, by the name it was added under.
+    ///
+    /// `tickets_created()` counts the tickets that agent filed; the rest count
+    /// the tickets it claimed.
     fn stats_for_agent(&self, agent_name: &str) -> PyStats {
         PyStats {
             source: Source::Slice(self.get().stats_for_agent(agent_name)),
         }
     }
 
-    /// The token usage recorded for one ticket, oldest first.
+    /// Get a ticket's token usage, oldest first.
     fn usage_history<'py>(&self, py: Python<'py>, ticket_key: &str) -> PyResult<Bound<'py, PyAny>> {
         let history = self.get().usage_history(ticket_key);
         let value = serde_json::to_value(&history).map_err(runtime_error)?;
         value_to_py(py, &value)
     }
 
-    /// Per-tool call and failure tallies, keyed by tool name.
+    /// Get per-tool call and failure counts, keyed by tool name.
     fn tool_stats(&self) -> BTreeMap<String, PyToolStat> {
         self.get()
             .tool_stats()
@@ -76,7 +79,7 @@ impl PyStats {
             .collect()
     }
 
-    /// Per-path open and failure counts for the files tools opened.
+    /// Get per-path open and failure counts for the files tools opened.
     fn file_stats(&self) -> BTreeMap<String, PyFileStat> {
         self.get()
             .file_stats()
@@ -85,14 +88,14 @@ impl PyStats {
             .collect()
     }
 
-    /// Knowledge-store usage across the run.
+    /// Get knowledge usage: write, read, remove, list, and miss counts.
     fn knowledge_stats(&self) -> PyKnowledgeStat {
         PyKnowledgeStat {
             inner: self.get().knowledge_stats(),
         }
     }
 
-    /// Per-model request and token totals, keyed by model name.
+    /// Get per-model requests and token usage, keyed by model name.
     fn model_stats(&self) -> BTreeMap<String, PyModelStat> {
         self.get()
             .model_stats()
@@ -117,7 +120,7 @@ impl PyStats {
         self.get().errors()
     }
 
-    /// Per-event counts, keyed by event name.
+    /// Get per-event counts, keyed by event name.
     fn event_counts(&self) -> BTreeMap<String, u64> {
         self.get().event_counts()
     }
@@ -142,17 +145,18 @@ impl PyStats {
         self.get().tickets_failed()
     }
 
-    /// How long the run has been going, in seconds. `None` before it starts.
+    /// Get the elapsed duration in seconds, or `None` before execution starts.
     fn run_duration(&self) -> Option<f64> {
         self.get().run_duration().map(|d| d.as_secs_f64())
     }
 
-    /// `finished / (finished + failed)`, or `None` when nothing resolved.
+    /// Get `finished / (finished + failed)`, or `None` before any ticket is
+    /// resolved.
     fn tickets_success_rate(&self) -> Option<f64> {
         self.get().tickets_success_rate()
     }
 
-    /// Total seconds tickets spent between creation and a terminal status.
+    /// Get the total time from creation to resolution, in seconds.
     fn total_ticket_duration(&self) -> f64 {
         self.get().total_ticket_duration().as_secs_f64()
     }
@@ -161,7 +165,7 @@ impl PyStats {
         self.get().avg_ticket_duration().map(|d| d.as_secs_f64())
     }
 
-    /// Total seconds tickets spent between being claimed and a terminal status.
+    /// Get the total time agents held tickets, in seconds.
     fn total_work_duration(&self) -> f64 {
         self.get().total_work_duration().as_secs_f64()
     }
@@ -170,7 +174,7 @@ impl PyStats {
         self.get().avg_work_duration().map(|d| d.as_secs_f64())
     }
 
-    /// The same numbers as one dict, matching the on-disk `stats.json`.
+    /// Get every figure as one dict, the same shape as `stats.json`.
     fn to_dict<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let value = serde_json::to_value(self.get()).map_err(runtime_error)?;
         value_to_py(py, &value)
@@ -186,7 +190,7 @@ impl PyStats {
     }
 }
 
-/// Call and failure tallies for one tool.
+/// A `ToolStat` counts one tool's calls and failures.
 #[pyclass(name = "ToolStat")]
 pub struct PyToolStat {
     inner: ToolStat,
@@ -194,7 +198,7 @@ pub struct PyToolStat {
 
 #[pymethods]
 impl PyToolStat {
-    /// Every attempt, including calls naming a tool that is not registered.
+    /// Every call, including calls naming a tool that is not registered.
     #[getter]
     fn calls(&self) -> u64 {
         self.inner.calls
@@ -215,12 +219,12 @@ impl PyToolStat {
         self.inner.schema_failed
     }
 
-    /// The three failure counts added together.
+    /// Get the total failures across the three kinds.
     fn errors(&self) -> u64 {
         self.inner.errors()
     }
 
-    /// Failures over calls, or `None` when the tool was never called.
+    /// Get `errors / calls`, or `None` when the tool was never called.
     fn error_rate(&self) -> Option<f64> {
         self.inner.error_rate()
     }
@@ -234,7 +238,8 @@ impl PyToolStat {
     }
 }
 
-/// Open and failure counts for one path.
+/// A `FileStat` counts how often a tool opened one path, and how often it could
+/// not.
 #[pyclass(name = "FileStat")]
 pub struct PyFileStat {
     inner: FileStat,
@@ -260,7 +265,7 @@ impl PyFileStat {
     }
 }
 
-/// Knowledge-store operation counts.
+/// A `KnowledgeStat` counts what agents did to the knowledge pages.
 #[pyclass(name = "KnowledgeStat")]
 pub struct PyKnowledgeStat {
     inner: KnowledgeStat,
@@ -288,7 +293,7 @@ impl PyKnowledgeStat {
         self.inner.lists
     }
 
-    /// Reads that found no page.
+    /// Reads and removes naming a page the store does not have.
     #[getter]
     fn misses(&self) -> u64 {
         self.inner.misses
@@ -302,7 +307,7 @@ impl PyKnowledgeStat {
     }
 }
 
-/// Request and token totals for one model.
+/// A `ModelStat` counts one model's requests and token usage.
 #[pyclass(name = "ModelStat")]
 pub struct PyModelStat {
     inner: ModelStat,
