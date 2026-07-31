@@ -7,7 +7,6 @@ use std::sync::Arc;
 use crate::agents::compaction::{self as algo, Compaction};
 use crate::agents::tickets::Ticket;
 use crate::event::{CompactReason, EventKind};
-use crate::providers::RequestErrorKind;
 
 use super::agent::TicketContext;
 use super::Step;
@@ -67,7 +66,7 @@ pub(super) async fn run(context: &mut TicketContext<'_>, reason: CompactReason) 
                 reason,
                 message: error.to_string(),
             });
-            context.fail_with(error.kind(), error.to_string());
+            context.fail_ticket();
             return Step::Stop;
         }
     };
@@ -83,10 +82,11 @@ pub(super) async fn run(context: &mut TicketContext<'_>, reason: CompactReason) 
     }
 
     if !applied && matches!(reason, CompactReason::Reactive) {
-        context.fail_with(
-            RequestErrorKind::ContextWindowExceeded,
-            "context still exceeds window after compaction".into(),
-        );
+        context.emit(EventKind::CompactionFailed {
+            reason,
+            message: "context still exceeds window after compaction".into(),
+        });
+        context.fail_ticket();
         return Step::Stop;
     }
 
@@ -665,6 +665,12 @@ mod tests {
         assert!(failures_in(&events)
             .iter()
             .any(|message| message.contains("context still exceeds window")));
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(&e.kind, crate::event::EventKind::RequestFailed { .. })),
+            "no request was made here, so none may be reported as failed",
+        );
     }
 
     #[tokio::test]
@@ -685,6 +691,12 @@ mod tests {
             if message.contains("editor could not reach its own service"),
         )));
         assert_eq!(ticket.status, Status::Failed);
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(&e.kind, crate::event::EventKind::RequestFailed { .. })),
+            "the editor failed, not a request, and one failure reports once",
+        );
     }
 
     #[tokio::test]

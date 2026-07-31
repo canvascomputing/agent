@@ -219,7 +219,8 @@ pub fn failures_in(events: &[Event]) -> Vec<String> {
     events
         .iter()
         .filter_map(|e| match &e.kind {
-            crate::event::EventKind::RequestFailed { message, .. } => Some(message.clone()),
+            crate::event::EventKind::RequestFailed { message, .. }
+            | crate::event::EventKind::CompactionFailed { message, .. } => Some(message.clone()),
             _ => None,
         })
         .collect()
