@@ -10,7 +10,7 @@ use serde::ser::{SerializeStruct, Serializer};
 use serde::Serialize;
 
 use crate::agents::tickets::Status;
-use crate::event::{EventKind, KnowledgeOp, ToolFailureKind};
+use crate::event::{EventKind, Measure};
 use crate::providers::types::TokenUsage;
 
 /// `Stats` holds the metrics about tickets, tokens, and time. Reach it through
@@ -36,8 +36,6 @@ pub struct Stats {
     /// Count per event kind, keyed by [`EventKind::name`]. Every emitted event
     /// lands here, and the named accessors are lookups into this map.
     event_counts: Mutex<HashMap<String, u64>>,
-    input_tokens: AtomicU64,
-    output_tokens: AtomicU64,
     tickets_created: AtomicU64,
     tickets_finished: AtomicU64,
     tickets_failed: AtomicU64,
@@ -64,48 +62,52 @@ pub struct Stats {
     /// when to compact, and is cleared once that happens. The one measure the
     /// run-wide `Stats` keeps to itself.
     token_usage: Mutex<HashMap<String, Vec<TokenUsage>>>,
-    /// Call and failure tallies keyed by tool name.
-    tool_stats: Mutex<HashMap<String, ToolCounters>>,
-    /// Open and failure tallies keyed by the path a tool opened.
-    file_stats: Mutex<HashMap<String, FileCounters>>,
-    /// Attempt and failure tallies keyed by knowledge operation.
-    knowledge_stats: Mutex<HashMap<String, KnowledgeCounters>>,
-    /// Request, failure, and token tallies keyed by model name.
-    model_stats: Mutex<HashMap<String, ModelCounters>>,
+    /// Counters per subject: category -> name -> counter -> count. Every
+    /// measure an event declares lands here, and the four `*_stats()`
+    /// accessors are views onto one category.
+    counters: Mutex<HashMap<&'static str, HashMap<String, Counters>>>,
 }
 
-/// The stored per-tool tallies. `errors` is derived from the three failure
-/// kinds, never stored.
-#[derive(Default, Clone)]
-struct ToolCounters {
-    calls: u64,
-    not_found: u64,
-    execution_failed: u64,
-    schema_failed: u64,
+/// The stored counters of one subject, such as `bash` under `tools`.
+type Counters = HashMap<&'static str, u64>;
+
+/// Every subject category, in the order `stats.json` writes them: the counters
+/// it stores, then which of those count attempts and which count failures.
+/// `errors` and `error_rate` are derived from the last two for readers, and
+/// never stored, so `load` skips them by not listing them.
+struct Category {
+    name: &'static str,
+    counters: &'static [&'static str],
+    attempts: &'static [&'static str],
+    failures: &'static [&'static str],
 }
 
-/// The stored per-path tallies.
-#[derive(Default, Clone)]
-struct FileCounters {
-    opens: u64,
-    failed: u64,
-}
-
-/// The stored per-operation tallies.
-#[derive(Default, Clone)]
-struct KnowledgeCounters {
-    attempts: u64,
-    failed: u64,
-}
-
-/// The stored per-model tallies. `failed` is a subset of `requests`.
-#[derive(Default, Clone)]
-struct ModelCounters {
-    requests: u64,
-    failed: u64,
-    input_tokens: u64,
-    output_tokens: u64,
-}
+const CATEGORIES: &[Category] = &[
+    Category {
+        name: "tools",
+        counters: &["calls", "not_found", "execution_failed", "schema_failed"],
+        attempts: &["calls"],
+        failures: &["not_found", "execution_failed", "schema_failed"],
+    },
+    Category {
+        name: "files",
+        counters: &["opens", "failed"],
+        attempts: &["opens"],
+        failures: &["failed"],
+    },
+    Category {
+        name: "models",
+        counters: &["requests", "failed", "input_tokens", "output_tokens"],
+        attempts: &["requests"],
+        failures: &["failed"],
+    },
+    Category {
+        name: "knowledge",
+        counters: &["attempts", "failed"],
+        attempts: &["attempts"],
+        failures: &["failed"],
+    },
+];
 
 /// A `ToolStat` counts one tool's calls and failures, split by how each failed.
 ///
@@ -140,13 +142,13 @@ impl ToolStat {
     }
 }
 
-impl From<&ToolCounters> for ToolStat {
-    fn from(c: &ToolCounters) -> Self {
+impl From<&Counters> for ToolStat {
+    fn from(counters: &Counters) -> Self {
         Self {
-            calls: c.calls,
-            not_found: c.not_found,
-            execution_failed: c.execution_failed,
-            schema_failed: c.schema_failed,
+            calls: count(counters, "calls"),
+            not_found: count(counters, "not_found"),
+            execution_failed: count(counters, "execution_failed"),
+            schema_failed: count(counters, "schema_failed"),
         }
     }
 }
@@ -180,11 +182,11 @@ impl FileStat {
     }
 }
 
-impl From<&FileCounters> for FileStat {
-    fn from(c: &FileCounters) -> Self {
+impl From<&Counters> for FileStat {
+    fn from(counters: &Counters) -> Self {
         Self {
-            opens: c.opens,
-            failed: c.failed,
+            opens: count(counters, "opens"),
+            failed: count(counters, "failed"),
         }
     }
 }
@@ -219,11 +221,11 @@ impl KnowledgeStat {
     }
 }
 
-impl From<&KnowledgeCounters> for KnowledgeStat {
-    fn from(c: &KnowledgeCounters) -> Self {
+impl From<&Counters> for KnowledgeStat {
+    fn from(counters: &Counters) -> Self {
         Self {
-            attempts: c.attempts,
-            failed: c.failed,
+            attempts: count(counters, "attempts"),
+            failed: count(counters, "failed"),
         }
     }
 }
@@ -258,23 +260,26 @@ impl ModelStat {
     }
 }
 
-impl From<&ModelCounters> for ModelStat {
-    fn from(c: &ModelCounters) -> Self {
+impl From<&Counters> for ModelStat {
+    fn from(counters: &Counters) -> Self {
         Self {
-            requests: c.requests,
-            failed: c.failed,
-            input_tokens: c.input_tokens,
-            output_tokens: c.output_tokens,
+            requests: count(counters, "requests"),
+            failed: count(counters, "failed"),
+            input_tokens: count(counters, "input_tokens"),
+            output_tokens: count(counters, "output_tokens"),
         }
     }
+}
+
+/// Read one counter, absent meaning zero.
+fn count(counters: &Counters, counter: &str) -> u64 {
+    counters.get(counter).copied().unwrap_or(0)
 }
 
 impl Stats {
     pub(crate) fn new() -> Self {
         Self {
             event_counts: Mutex::new(HashMap::new()),
-            input_tokens: AtomicU64::new(0),
-            output_tokens: AtomicU64::new(0),
             tickets_created: AtomicU64::new(0),
             tickets_finished: AtomicU64::new(0),
             tickets_failed: AtomicU64::new(0),
@@ -285,10 +290,7 @@ impl Stats {
             label_stats: Mutex::new(HashMap::new()),
             agent_stats: Mutex::new(HashMap::new()),
             token_usage: Mutex::new(HashMap::new()),
-            tool_stats: Mutex::new(HashMap::new()),
-            file_stats: Mutex::new(HashMap::new()),
-            knowledge_stats: Mutex::new(HashMap::new()),
-            model_stats: Mutex::new(HashMap::new()),
+            counters: Mutex::new(HashMap::new()),
         }
     }
 
@@ -375,33 +377,7 @@ impl Stats {
 
     /// Get per-tool call and failure counts, sorted by tool name.
     pub fn tool_stats(&self) -> BTreeMap<String, ToolStat> {
-        self.tool_stats
-            .lock()
-            .unwrap()
-            .iter()
-            .map(|(name, counters)| (name.clone(), counters.into()))
-            .collect()
-    }
-
-    /// Count one call against `name`.
-    pub(crate) fn record_tool_call(&self, name: &str) {
-        self.tool_stats
-            .lock()
-            .unwrap()
-            .entry(name.to_string())
-            .or_default()
-            .calls += 1;
-    }
-
-    /// Count one failure of `kind` against `name`.
-    pub(crate) fn record_tool_error(&self, name: &str, kind: ToolFailureKind) {
-        let mut map = self.tool_stats.lock().unwrap();
-        let counters = map.entry(name.to_string()).or_default();
-        match kind {
-            ToolFailureKind::ToolNotFound => counters.not_found += 1,
-            ToolFailureKind::ExecutionFailed => counters.execution_failed += 1,
-            ToolFailureKind::SchemaValidationFailed => counters.schema_failed += 1,
-        }
+        self.category_stats("tools")
     }
 
     /// Get per-path open and failure counts, sorted by path.
@@ -409,119 +385,92 @@ impl Stats {
     /// A path may name a directory rather than a file, since the search tools
     /// accept either.
     pub fn file_stats(&self) -> BTreeMap<String, FileStat> {
-        self.file_stats
-            .lock()
-            .unwrap()
-            .iter()
-            .map(|(path, counters)| (path.clone(), counters.into()))
-            .collect()
-    }
-
-    /// Count one successful open of `path`.
-    pub(crate) fn record_file_open(&self, path: &str) {
-        self.file_stats
-            .lock()
-            .unwrap()
-            .entry(path.to_string())
-            .or_default()
-            .opens += 1;
-    }
-
-    /// Count one failed open naming `path`. It counts as an open as well, so
-    /// `opens` is the attempt count and `error_rate` divides by it.
-    pub(crate) fn record_file_open_failed(&self, path: &str) {
-        let mut map = self.file_stats.lock().unwrap();
-        let counters = map.entry(path.to_string()).or_default();
-        counters.opens += 1;
-        counters.failed += 1;
+        self.category_stats("files")
     }
 
     /// Get per-operation attempt and failure counts, sorted by operation.
     pub fn knowledge_stats(&self) -> BTreeMap<String, KnowledgeStat> {
-        self.knowledge_stats
-            .lock()
-            .unwrap()
-            .iter()
-            .map(|(op, counters)| (op.clone(), counters.into()))
-            .collect()
-    }
-
-    /// Count one knowledge operation, as `manage_knowledge` reports it.
-    pub(crate) fn record_knowledge(&self, op: KnowledgeOp) {
-        self.knowledge_stats
-            .lock()
-            .unwrap()
-            .entry(op.to_string())
-            .or_default()
-            .attempts += 1;
-    }
-
-    /// Count one operation that did not go through. It counts as an attempt as
-    /// well, so `attempts` is the attempt count and `error_rate` divides by it.
-    pub(crate) fn record_knowledge_failed(&self, op: KnowledgeOp) {
-        let mut map = self.knowledge_stats.lock().unwrap();
-        let counters = map.entry(op.to_string()).or_default();
-        counters.attempts += 1;
-        counters.failed += 1;
+        self.category_stats("knowledge")
     }
 
     /// Get per-model requests, failures, and token usage, sorted by model
     /// name.
     pub fn model_stats(&self) -> BTreeMap<String, ModelStat> {
-        self.model_stats
-            .lock()
-            .unwrap()
+        self.category_stats("models")
+    }
+
+    /// One category as the `*Stat` view its accessor returns, sorted by name.
+    fn category_stats<T: for<'a> From<&'a Counters>>(&self, category: &str) -> BTreeMap<String, T> {
+        self.category_counters(category)
             .iter()
             .map(|(name, counters)| (name.clone(), counters.into()))
             .collect()
     }
 
-    /// Count one response against `model`.
-    pub(crate) fn record_model_request(&self, model: &str, usage: &TokenUsage) {
-        let mut map = self.model_stats.lock().unwrap();
-        let counters = map.entry(model.to_string()).or_default();
-        counters.requests += 1;
-        counters.input_tokens += usage.input_tokens;
-        counters.output_tokens += usage.output_tokens;
+    /// One category's stored counters, sorted by name.
+    fn category_counters(&self, category: &str) -> BTreeMap<String, Counters> {
+        self.counters
+            .lock()
+            .unwrap()
+            .get(category)
+            .map(|entries| {
+                entries
+                    .iter()
+                    .map(|(name, counters)| (name.clone(), counters.clone()))
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
-    /// Count one failed request against `model`. It counts as a request as
-    /// well, so `requests` is the attempt count.
-    pub(crate) fn record_model_request_failed(&self, model: &str) {
-        let mut map = self.model_stats.lock().unwrap();
-        let counters = map.entry(model.to_string()).or_default();
-        counters.requests += 1;
-        counters.failed += 1;
+    /// Sum one counter across a whole category.
+    fn total(&self, category: &str, counter: &str) -> u64 {
+        self.counters
+            .lock()
+            .unwrap()
+            .get(category)
+            .map(|entries| entries.values().map(|c| count(c, counter)).sum())
+            .unwrap_or(0)
+    }
+
+    /// Add one measure an event declared.
+    fn add(&self, measure: &Measure) {
+        self.add_count(
+            measure.subject.category(),
+            measure.subject.name(),
+            measure.counter,
+            measure.amount,
+        );
+    }
+
+    fn add_count(&self, category: &'static str, name: &str, counter: &'static str, amount: u64) {
+        *self
+            .counters
+            .lock()
+            .unwrap()
+            .entry(category)
+            .or_default()
+            .entry(name.to_string())
+            .or_default()
+            .entry(counter)
+            .or_default() += amount;
     }
 
     /// Record an event.
     ///
-    /// Every kind is counted by its name, so a new variant needs no arm here.
-    /// Only the measures that read an event's payload do.
+    /// Every kind is counted by its name and adds the measures it declares, so
+    /// a new variant needs no arm here.
     pub(crate) fn record_event(&self, kind: &EventKind, key: &str, labels: &[String], agent: &str) {
         // The per-ticket series belongs to the compaction estimator rather
         // than to the figures, so it is the one measure that stays run-wide.
         if let EventKind::RequestFinished { usage, .. } = kind {
             self.record_usage(key, usage.clone());
         }
+        let measures = kind.measures();
         // One walk of the labels for every measure, not one walk per measure.
         self.record_scoped(labels, agent, |s| {
             s.count_event(kind.name());
-            match kind {
-                EventKind::RequestFinished { model, usage } => {
-                    s.record_tokens(usage.input_tokens, usage.output_tokens);
-                    s.record_model_request(model, usage);
-                }
-                EventKind::RequestFailed { model, .. } => s.record_model_request_failed(model),
-                EventKind::ToolCallStarted { tool_name, .. } => s.record_tool_call(tool_name),
-                EventKind::ToolCallFailed {
-                    tool_name, reason, ..
-                } => s.record_tool_error(tool_name, *reason),
-                EventKind::FileOpenFinished { path } => s.record_file_open(path),
-                EventKind::FileOpenFailed { path } => s.record_file_open_failed(path),
-                EventKind::KnowledgeUsed { op } => s.record_knowledge(*op),
-                EventKind::KnowledgeFailed { op } => s.record_knowledge_failed(*op),
-                _ => {}
+            for measure in &measures {
+                s.add(measure);
             }
         });
     }
@@ -546,13 +495,6 @@ impl Stats {
             .unwrap()
             .entry(name.to_string())
             .or_default() += 1;
-    }
-
-    /// Add a response's token counts to the totals.
-    fn record_tokens(&self, input_tokens: u64, output_tokens: u64) {
-        self.input_tokens.fetch_add(input_tokens, Ordering::Relaxed);
-        self.output_tokens
-            .fetch_add(output_tokens, Ordering::Relaxed);
     }
 
     /// Record a ticket transition. Going from `Todo` to `InProgress` sets the
@@ -644,14 +586,15 @@ impl Stats {
             .collect()
     }
 
-    /// Get the input tokens across requests.
+    /// Get the input tokens across requests, summed over the models. Every
+    /// response names the model it came from, so the sum is the total.
     pub fn input_tokens(&self) -> u64 {
-        self.input_tokens.load(Ordering::Relaxed)
+        self.total("models", "input_tokens")
     }
 
-    /// Get the output tokens across requests.
+    /// Get the output tokens across requests, summed over the models.
     pub fn output_tokens(&self) -> u64 {
-        self.output_tokens.load(Ordering::Relaxed)
+        self.total("models", "output_tokens")
     }
 
     /// Get how many tickets were created.
@@ -809,18 +752,16 @@ impl Serialize for Stats {
         let events = self.event_counts();
         let labels = self.label_stats.lock().unwrap();
         let agents = self.agent_stats.lock().unwrap();
-        let tools = self.tool_stats();
-        let files = self.file_stats();
-        let knowledge = self.knowledge_stats();
-        let models = self.model_stats();
+        let categories: Vec<(&Category, BTreeMap<String, Counters>)> = CATEGORIES
+            .iter()
+            .map(|category| (category, self.category_counters(category.name)))
+            .filter(|(_, entries)| !entries.is_empty())
+            .collect();
         let len = 15
             + usize::from(!events.is_empty())
             + usize::from(!labels.is_empty())
             + usize::from(!agents.is_empty())
-            + usize::from(!tools.is_empty())
-            + usize::from(!files.is_empty())
-            + usize::from(!knowledge.is_empty())
-            + usize::from(!models.is_empty());
+            + categories.len();
         let mut st = serializer.serialize_struct("Stats", len)?;
         st.serialize_field("turns", &self.turns())?;
         st.serialize_field("requests", &self.requests())?;
@@ -865,80 +806,15 @@ impl Serialize for Stats {
                 agents.iter().map(|(k, v)| (k, v.as_ref())).collect();
             st.serialize_field("agents", &nested)?;
         }
-        if !tools.is_empty() {
-            // The four subject sections are hand-built the same way: raw
-            // counters round-trip through load, while errors/error_rate are
-            // derived, emitted for readers, and ignored on load.
-            let nested: BTreeMap<&String, serde_json::Value> = tools
+        // Every category is written the same way: its stored counters
+        // round-trip through load, while errors and error_rate are derived,
+        // emitted for readers, and skipped on load.
+        for (category, entries) in &categories {
+            let nested: BTreeMap<&String, serde_json::Value> = entries
                 .iter()
-                .map(|(name, stat)| {
-                    (
-                        name,
-                        serde_json::json!({
-                            "calls": stat.calls,
-                            "not_found": stat.not_found,
-                            "execution_failed": stat.execution_failed,
-                            "schema_failed": stat.schema_failed,
-                            "errors": stat.errors(),
-                            "error_rate": stat.error_rate(),
-                        }),
-                    )
-                })
+                .map(|(name, counters)| (name, category.body(counters)))
                 .collect();
-            st.serialize_field("tools", &nested)?;
-        }
-        if !files.is_empty() {
-            let nested: BTreeMap<&String, serde_json::Value> = files
-                .iter()
-                .map(|(path, stat)| {
-                    (
-                        path,
-                        serde_json::json!({
-                            "opens": stat.opens,
-                            "failed": stat.failed,
-                            "errors": stat.errors(),
-                            "error_rate": stat.error_rate(),
-                        }),
-                    )
-                })
-                .collect();
-            st.serialize_field("files", &nested)?;
-        }
-        if !knowledge.is_empty() {
-            let nested: BTreeMap<&String, serde_json::Value> = knowledge
-                .iter()
-                .map(|(op, stat)| {
-                    (
-                        op,
-                        serde_json::json!({
-                            "attempts": stat.attempts,
-                            "failed": stat.failed,
-                            "errors": stat.errors(),
-                            "error_rate": stat.error_rate(),
-                        }),
-                    )
-                })
-                .collect();
-            st.serialize_field("knowledge", &nested)?;
-        }
-        if !models.is_empty() {
-            let nested: BTreeMap<&String, serde_json::Value> = models
-                .iter()
-                .map(|(name, stat)| {
-                    (
-                        name,
-                        serde_json::json!({
-                            "requests": stat.requests,
-                            "failed": stat.failed,
-                            "input_tokens": stat.input_tokens,
-                            "output_tokens": stat.output_tokens,
-                            "errors": stat.errors(),
-                            "error_rate": stat.error_rate(),
-                        }),
-                    )
-                })
-                .collect();
-            st.serialize_field("models", &nested)?;
+            st.serialize_field(category.name, &nested)?;
         }
         st.end()
     }
@@ -957,10 +833,6 @@ impl Stats {
                 }
             }
         }
-        self.input_tokens
-            .store(get("input_tokens"), Ordering::Relaxed);
-        self.output_tokens
-            .store(get("output_tokens"), Ordering::Relaxed);
         self.tickets_created
             .store(get("tickets_created"), Ordering::Relaxed);
         self.tickets_finished
@@ -972,62 +844,37 @@ impl Stats {
         self.total_work_duration
             .store(get("total_work_duration_secs"), Ordering::Relaxed);
 
-        if let Some(tools) = value.get("tools").and_then(|v| v.as_object()) {
-            let mut map = self.tool_stats.lock().unwrap();
-            for (name, body) in tools {
-                let get = |key: &str| body.get(key).and_then(|v| v.as_u64()).unwrap_or(0);
-                map.insert(
-                    name.clone(),
-                    ToolCounters {
-                        calls: get("calls"),
-                        not_found: get("not_found"),
-                        execution_failed: get("execution_failed"),
-                        schema_failed: get("schema_failed"),
-                    },
-                );
+        for category in CATEGORIES {
+            let Some(entries) = value.get(category.name).and_then(|v| v.as_object()) else {
+                continue;
+            };
+            for (name, body) in entries {
+                for counter in category.counters {
+                    if let Some(count) = body.get(*counter).and_then(|v| v.as_u64()) {
+                        self.add_count(category.name, name, counter, count);
+                    }
+                }
             }
         }
-        if let Some(files) = value.get("files").and_then(|v| v.as_object()) {
-            let mut map = self.file_stats.lock().unwrap();
-            for (path, body) in files {
-                let get = |key: &str| body.get(key).and_then(|v| v.as_u64()).unwrap_or(0);
-                map.insert(
-                    path.clone(),
-                    FileCounters {
-                        opens: get("opens"),
-                        failed: get("failed"),
-                    },
-                );
-            }
+    }
+}
+
+impl Category {
+    /// One subject's `stats.json` body: the stored counters plus the derived
+    /// pair every category reports.
+    fn body(&self, counters: &Counters) -> serde_json::Value {
+        let mut body = serde_json::Map::new();
+        for counter in self.counters {
+            body.insert((*counter).to_string(), count(counters, counter).into());
         }
-        if let Some(knowledge) = value.get("knowledge").and_then(|v| v.as_object()) {
-            let mut map = self.knowledge_stats.lock().unwrap();
-            for (op, body) in knowledge {
-                let get = |key: &str| body.get(key).and_then(|v| v.as_u64()).unwrap_or(0);
-                map.insert(
-                    op.clone(),
-                    KnowledgeCounters {
-                        attempts: get("attempts"),
-                        failed: get("failed"),
-                    },
-                );
-            }
-        }
-        if let Some(models) = value.get("models").and_then(|v| v.as_object()) {
-            let mut map = self.model_stats.lock().unwrap();
-            for (name, body) in models {
-                let get = |key: &str| body.get(key).and_then(|v| v.as_u64()).unwrap_or(0);
-                map.insert(
-                    name.clone(),
-                    ModelCounters {
-                        requests: get("requests"),
-                        failed: get("failed"),
-                        input_tokens: get("input_tokens"),
-                        output_tokens: get("output_tokens"),
-                    },
-                );
-            }
-        }
+        let errors: u64 = self.failures.iter().map(|c| count(counters, c)).sum();
+        let attempts: u64 = self.attempts.iter().map(|c| count(counters, c)).sum();
+        body.insert("errors".to_string(), errors.into());
+        body.insert(
+            "error_rate".to_string(),
+            serde_json::json!((attempts > 0).then(|| errors as f64 / attempts as f64)),
+        );
+        serde_json::Value::Object(body)
     }
 }
 
@@ -1083,6 +930,7 @@ impl Stats {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::event::{KnowledgeOp, ToolFailureKind};
 
     fn turn() -> EventKind {
         EventKind::TurnStarted
@@ -1098,12 +946,37 @@ mod tests {
         }
     }
 
-    fn tool_call() -> EventKind {
+    fn tool_call(tool_name: &str) -> EventKind {
         EventKind::ToolCallStarted {
-            tool_name: "bash".into(),
+            tool_name: tool_name.into(),
             call_id: "c1".into(),
             input: serde_json::Value::Null,
         }
+    }
+
+    fn tool_failure(tool_name: &str, reason: ToolFailureKind) -> EventKind {
+        EventKind::ToolCallFailed {
+            tool_name: tool_name.into(),
+            call_id: "c1".into(),
+            reason,
+            message: "boom".into(),
+        }
+    }
+
+    fn file_open(path: &str) -> EventKind {
+        EventKind::FileOpenFinished { path: path.into() }
+    }
+
+    fn file_open_failed(path: &str) -> EventKind {
+        EventKind::FileOpenFailed { path: path.into() }
+    }
+
+    fn knowledge(op: KnowledgeOp) -> EventKind {
+        EventKind::KnowledgeUsed { op }
+    }
+
+    fn knowledge_failed(op: KnowledgeOp) -> EventKind {
+        EventKind::KnowledgeFailed { op }
     }
 
     fn provider_error() -> EventKind {
@@ -1141,7 +1014,7 @@ mod tests {
         s.record_event(&turn(), "KEY", &[], "");
         s.record_event(&request(10, 5), "KEY", &[], "");
         s.record_event(&request(2, 1), "KEY", &[], "");
-        s.record_event(&tool_call(), "KEY", &[], "");
+        s.record_event(&tool_call("bash"), "KEY", &[], "");
         s.record_event(&provider_error(), "KEY", &[], "");
 
         assert_eq!(s.turns(), 2);
@@ -1322,7 +1195,7 @@ mod tests {
         s.record_event(&turn(), "KEY", &[], "");
         s.record_event(&turn(), "KEY", &[], "");
         s.record_event(&request(100, 50), "KEY", &[], "");
-        s.record_event(&tool_call(), "KEY", &[], "");
+        s.record_event(&tool_call("bash"), "KEY", &[], "");
         s.record_event(&provider_error(), "KEY", &[], "");
         s.record_created();
         s.record_finished(Duration::from_secs(7), Duration::from_secs(5));
@@ -1379,7 +1252,7 @@ mod tests {
         let s = Stats::new();
         s.record_event(&turn(), "KEY", &[], "");
         s.record_event(&request(100, 50), "KEY", &[], "");
-        s.record_event(&tool_call(), "KEY", &[], "");
+        s.record_event(&tool_call("bash"), "KEY", &[], "");
         s.record_event(&provider_error(), "KEY", &[], "");
         s.record_created();
         s.record_finished(Duration::from_secs(7), Duration::from_secs(5));
@@ -1464,7 +1337,7 @@ mod tests {
         let dir = crate::test_util::TempDir::new().unwrap();
 
         let s = Stats::new();
-        s.record_event(&tool_call(), "KEY", &["scan".into()], "scout");
+        s.record_event(&tool_call("bash"), "KEY", &["scan".into()], "scout");
         s.record_event(&provider_error(), "KEY", &["scan".into()], "scout");
 
         use crate::persistence::Persist;
@@ -1515,12 +1388,16 @@ mod tests {
     #[test]
     fn tool_stats_records_calls_and_errors_per_tool() {
         let s = Stats::new();
-        s.record_tool_call("edit_file");
-        s.record_tool_call("edit_file");
-        s.record_tool_call("bash");
-        s.record_tool_error("edit_file", ToolFailureKind::SchemaValidationFailed);
-        s.record_tool_error("bash", ToolFailureKind::ExecutionFailed);
-        s.record_tool_error("ghost", ToolFailureKind::ToolNotFound);
+        for kind in [
+            tool_call("edit_file"),
+            tool_call("edit_file"),
+            tool_call("bash"),
+            tool_failure("edit_file", ToolFailureKind::SchemaValidationFailed),
+            tool_failure("bash", ToolFailureKind::ExecutionFailed),
+            tool_failure("ghost", ToolFailureKind::ToolNotFound),
+        ] {
+            s.record_event(&kind, "KEY", &[], "");
+        }
 
         let tools = s.tool_stats();
         let edit = &tools["edit_file"];
@@ -1534,11 +1411,15 @@ mod tests {
     #[test]
     fn tool_stat_error_rate_is_errors_over_calls() {
         let s = Stats::new();
-        s.record_tool_call("edit_file");
-        s.record_tool_call("edit_file");
-        s.record_tool_call("edit_file");
-        s.record_tool_call("edit_file");
-        s.record_tool_error("edit_file", ToolFailureKind::SchemaValidationFailed);
+        for _ in 0..4 {
+            s.record_event(&tool_call("edit_file"), "KEY", &[], "");
+        }
+        s.record_event(
+            &tool_failure("edit_file", ToolFailureKind::SchemaValidationFailed),
+            "KEY",
+            &[],
+            "",
+        );
 
         let tools = s.tool_stats();
         assert_eq!(tools["edit_file"].error_rate(), Some(0.25));
@@ -1549,7 +1430,12 @@ mod tests {
         // A failure can be recorded for a name that never logged a call only
         // in malformed cases; the rate is then undefined rather than infinite.
         let s = Stats::new();
-        s.record_tool_error("ghost", ToolFailureKind::ToolNotFound);
+        s.record_event(
+            &tool_failure("ghost", ToolFailureKind::ToolNotFound),
+            "KEY",
+            &[],
+            "",
+        );
         assert!(s.tool_stats()["ghost"].error_rate().is_none());
     }
 
@@ -1558,11 +1444,15 @@ mod tests {
         let dir = crate::test_util::TempDir::new().unwrap();
 
         let s = Stats::new();
-        s.record_tool_call("edit_file");
-        s.record_tool_call("edit_file");
-        s.record_tool_error("edit_file", ToolFailureKind::SchemaValidationFailed);
-        s.record_tool_call("bash");
-        s.record_tool_error("bash", ToolFailureKind::ExecutionFailed);
+        for kind in [
+            tool_call("edit_file"),
+            tool_call("edit_file"),
+            tool_failure("edit_file", ToolFailureKind::SchemaValidationFailed),
+            tool_call("bash"),
+            tool_failure("bash", ToolFailureKind::ExecutionFailed),
+        ] {
+            s.record_event(&kind, "KEY", &[], "");
+        }
 
         use crate::persistence::Persist;
         s.save(dir.path()).unwrap();
@@ -1577,9 +1467,13 @@ mod tests {
     #[test]
     fn stats_serializes_tools_as_nested_object() {
         let s = Stats::new();
-        s.record_tool_call("edit_file");
-        s.record_tool_call("edit_file");
-        s.record_tool_error("edit_file", ToolFailureKind::SchemaValidationFailed);
+        for kind in [
+            tool_call("edit_file"),
+            tool_call("edit_file"),
+            tool_failure("edit_file", ToolFailureKind::SchemaValidationFailed),
+        ] {
+            s.record_event(&kind, "KEY", &[], "");
+        }
 
         let value = serde_json::to_value(&s).unwrap();
         let tools = value["tools"].as_object().unwrap();
@@ -1599,7 +1493,7 @@ mod tests {
     #[test]
     fn tool_stats_reach_the_label_and_agent_slices() {
         let s = Stats::new();
-        s.record_event(&tool_call(), "KEY", &["scan".into()], "scout");
+        s.record_event(&tool_call("bash"), "KEY", &["scan".into()], "scout");
 
         assert_eq!(s.stats_for_label("scan").tool_stats()["bash"].calls, 1);
         assert_eq!(s.stats_for_agent("scout").tool_stats()["bash"].calls, 1);
@@ -1609,11 +1503,15 @@ mod tests {
     #[test]
     fn file_stats_records_opens_and_failures_per_path() {
         let s = Stats::new();
-        s.record_file_open("src/lib.rs");
-        s.record_file_open("src/lib.rs");
-        s.record_file_open("src/main.rs");
-        s.record_file_open_failed("src/missing.rs");
-        s.record_file_open_failed("src/missing.rs");
+        for kind in [
+            file_open("src/lib.rs"),
+            file_open("src/lib.rs"),
+            file_open("src/main.rs"),
+            file_open_failed("src/missing.rs"),
+            file_open_failed("src/missing.rs"),
+        ] {
+            s.record_event(&kind, "KEY", &[], "");
+        }
 
         let files = s.file_stats();
         assert_eq!(files["src/lib.rs"].opens, 2);
@@ -1630,10 +1528,7 @@ mod tests {
     #[test]
     fn file_stats_reach_the_label_slice() {
         let s = Stats::new();
-        let open = EventKind::FileOpenFinished {
-            path: "src/lib.rs".into(),
-        };
-        s.record_event(&open, "KEY", &["scan".into()], "");
+        s.record_event(&file_open("src/lib.rs"), "KEY", &["scan".into()], "");
 
         assert_eq!(
             s.stats_for_label("scan").file_stats()["src/lib.rs"].opens,
@@ -1647,9 +1542,13 @@ mod tests {
         let dir = crate::test_util::TempDir::new().unwrap();
 
         let s = Stats::new();
-        s.record_file_open("src/lib.rs");
-        s.record_file_open("src/lib.rs");
-        s.record_file_open_failed("src/missing.rs");
+        for kind in [
+            file_open("src/lib.rs"),
+            file_open("src/lib.rs"),
+            file_open_failed("src/missing.rs"),
+        ] {
+            s.record_event(&kind, "KEY", &[], "");
+        }
 
         use crate::persistence::Persist;
         s.save(dir.path()).unwrap();
@@ -1664,9 +1563,13 @@ mod tests {
     #[test]
     fn stats_serializes_files_as_nested_object() {
         let s = Stats::new();
-        s.record_file_open("src/lib.rs");
-        s.record_file_open("src/lib.rs");
-        s.record_file_open_failed("src/lib.rs");
+        for kind in [
+            file_open("src/lib.rs"),
+            file_open("src/lib.rs"),
+            file_open_failed("src/lib.rs"),
+        ] {
+            s.record_event(&kind, "KEY", &[], "");
+        }
 
         let value = serde_json::to_value(&s).unwrap();
         let files = value["files"].as_object().unwrap();
@@ -1685,12 +1588,16 @@ mod tests {
     #[test]
     fn knowledge_records_attempts_and_failures_per_operation() {
         let s = Stats::new();
-        s.record_knowledge(KnowledgeOp::Write);
-        s.record_knowledge(KnowledgeOp::Read);
-        s.record_knowledge(KnowledgeOp::Read);
-        s.record_knowledge(KnowledgeOp::Remove);
-        s.record_knowledge(KnowledgeOp::List);
-        s.record_knowledge_failed(KnowledgeOp::Read);
+        for kind in [
+            knowledge(KnowledgeOp::Write),
+            knowledge(KnowledgeOp::Read),
+            knowledge(KnowledgeOp::Read),
+            knowledge(KnowledgeOp::Remove),
+            knowledge(KnowledgeOp::List),
+            knowledge_failed(KnowledgeOp::Read),
+        ] {
+            s.record_event(&kind, "KEY", &[], "");
+        }
 
         let k = s.knowledge_stats();
         assert_eq!(k["write"].attempts, 1);
@@ -1705,8 +1612,8 @@ mod tests {
     #[test]
     fn knowledge_stats_attribute_a_failure_to_its_operation() {
         let s = Stats::new();
-        s.record_knowledge(KnowledgeOp::Write);
-        s.record_knowledge_failed(KnowledgeOp::Read);
+        s.record_event(&knowledge(KnowledgeOp::Write), "KEY", &[], "");
+        s.record_event(&knowledge_failed(KnowledgeOp::Read), "KEY", &[], "");
 
         let k = s.knowledge_stats();
         assert_eq!(k["read"].failed, 1);
@@ -1718,10 +1625,7 @@ mod tests {
     #[test]
     fn knowledge_reaches_the_label_slice() {
         let s = Stats::new();
-        let used = EventKind::KnowledgeUsed {
-            op: KnowledgeOp::Write,
-        };
-        s.record_event(&used, "KEY", &["scan".into()], "");
+        s.record_event(&knowledge(KnowledgeOp::Write), "KEY", &["scan".into()], "");
 
         assert_eq!(
             s.stats_for_label("scan").knowledge_stats()["write"].attempts,
@@ -1735,9 +1639,13 @@ mod tests {
         let dir = crate::test_util::TempDir::new().unwrap();
 
         let s = Stats::new();
-        s.record_knowledge(KnowledgeOp::Write);
-        s.record_knowledge(KnowledgeOp::Read);
-        s.record_knowledge_failed(KnowledgeOp::Read);
+        for kind in [
+            knowledge(KnowledgeOp::Write),
+            knowledge(KnowledgeOp::Read),
+            knowledge_failed(KnowledgeOp::Read),
+        ] {
+            s.record_event(&kind, "KEY", &[], "");
+        }
 
         use crate::persistence::Persist;
         s.save(dir.path()).unwrap();
@@ -1752,16 +1660,16 @@ mod tests {
     #[test]
     fn stats_serializes_knowledge_as_nested_object() {
         let s = Stats::new();
-        s.record_knowledge(KnowledgeOp::Write);
-        s.record_knowledge_failed(KnowledgeOp::Read);
+        s.record_event(&knowledge(KnowledgeOp::Write), "KEY", &[], "");
+        s.record_event(&knowledge_failed(KnowledgeOp::Read), "KEY", &[], "");
 
         let value = serde_json::to_value(&s).unwrap();
-        let knowledge = value["knowledge"].as_object().unwrap();
-        assert_eq!(knowledge["write"]["attempts"], 1);
-        assert_eq!(knowledge["read"]["attempts"], 1);
-        assert_eq!(knowledge["read"]["failed"], 1);
-        assert_eq!(knowledge["read"]["errors"], 1);
-        assert_eq!(knowledge["read"]["error_rate"].as_f64().unwrap(), 1.0);
+        let pages = value["knowledge"].as_object().unwrap();
+        assert_eq!(pages["write"]["attempts"], 1);
+        assert_eq!(pages["read"]["attempts"], 1);
+        assert_eq!(pages["read"]["failed"], 1);
+        assert_eq!(pages["read"]["errors"], 1);
+        assert_eq!(pages["read"]["error_rate"].as_f64().unwrap(), 1.0);
     }
 
     #[test]
@@ -1852,6 +1760,21 @@ mod tests {
         assert_eq!(models["m"]["errors"], 0);
         assert_eq!(models["m"]["input_tokens"], 10);
         assert_eq!(models["m"]["output_tokens"], 5);
+    }
+
+    #[test]
+    fn category_attempts_and_failures_are_stored_counters() {
+        // `load` reads only what `counters` lists, so a derived pair built
+        // from a counter outside it would not survive a save and load.
+        for category in CATEGORIES {
+            for counter in category.attempts.iter().chain(category.failures) {
+                assert!(
+                    category.counters.contains(counter),
+                    "{}: {counter} is not a stored counter",
+                    category.name,
+                );
+            }
+        }
     }
 
     #[test]
