@@ -168,10 +168,10 @@ Seven rules the surface table below never repeats.
 | `Stats::execution_duration()` | `Stats.execution_duration()` |
 | `Stats::ticket_duration()`, `::agent_duration()` | Same names. |
 | `serde_json::to_value(&stats)` | `Stats.to_dict()`: Python cannot call `serde`, so reaching the `stats.json` shape needs a method. |
-| `ToolStat { calls, not_found, execution_failed, schema_failed }` | Same fields, plus the same `errors()` and `error_rate()` methods. |
-| `FileStat { opens, failed }` | Same, including `errors()` and `error_rate()`. |
-| `KnowledgeStat { attempts, failed }` | Same, including `errors()` and `error_rate()`. |
-| `ModelStat { requests, failed, input_tokens, output_tokens }` | Same, including `errors()` and `error_rate()`. |
+| `ToolStat { calls, failures }` | Same, including `errors()` and `error_rate()`. `failures` is keyed by the reason as a string, where Rust keys it by `ToolFailureKind`. |
+| `FileStat { opens, failures }` | Same, on the same terms. |
+| `KnowledgeStat { attempts, failures }` | Same, on the same terms. |
+| `ModelStat { requests, input_tokens, output_tokens, failures }` | Same, on the same terms. |
 | `TimeStat { total, average }` | Same fields, both in seconds. |
 | **Schema** | |
 | `Schema::parse(document)` | `Schema(document)` |
@@ -183,7 +183,7 @@ Seven rules the surface table below never repeats.
 | `EventKind`, `FinishReason` | Strings. |
 | `EventName` | `EventName`: string constants, so `Event.kind == EventName.TURN_STARTED`. |
 | `EventKind::is_failure()` | Not bound: `Event.kind` is a string, so ask `TicketQueue.on_failure(handler)` for the same six kinds. |
-| `CompactReason`, `PolicyKind`, `ToolFailureKind`, `KnowledgeOp` | Strings inside `Event.data`, under the field's own name: `data["policy"]`, `data["reason"]`, `data["op"]`. |
+| `CompactReason`, `PolicyKind`, `ToolFailureKind`, `KnowledgeFailureKind`, `KnowledgeOp` | Strings inside `Event.data`, under the field's own name: `data["policy"]`, `data["reason"]`, `data["op"]`. |
 | `default_logger()` | Not bound: pass your own handler to `TicketQueue.on_event(handler)`. |
 | **LLM providers** | |
 | `AnthropicProvider::new(key).base_url(url).timeout(d)` | `AnthropicProvider(api_key, base_url=.., timeout=..)` |
