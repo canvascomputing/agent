@@ -162,8 +162,8 @@ Seven rules the surface table below never repeats.
 | `Stats::file_stats()` | `Stats.file_stats()` |
 | `Stats::knowledge_stats()` | `Stats.knowledge_stats()` |
 | `Stats::model_stats()` | `Stats.model_stats()` |
-| `Stats::event_count(event)` | `Stats.event_count(name)`: `EventName.TURN_STARTED` and friends are strings there, the same spelling `Event.kind` reports, so one value serves both. An unknown name raises. |
-| `Stats::event_counts()` | `Stats.event_counts()`: keyed by that same string rather than by `EventName`. |
+| `Stats::event_count(event)` | `Stats.event_count(name)`: the name as a string; an unknown one raises. |
+| `Stats::event_counts()` | `Stats.event_counts()`: keyed by that string. |
 | `Stats::input_tokens()`, `::output_tokens()` | Same names. |
 | `Stats::execution_duration()` | `Stats.execution_duration()` |
 | `Stats::ticket_duration()`, `::agent_duration()` | Same names. |
@@ -181,7 +181,7 @@ Seven rules the surface table below never repeats.
 | `Event { agent_name, ticket_key, kind }` | `Event.agent_name`, `.ticket_key`, `.kind` |
 | `EventKind` variant payload | `Event.data`: a dict of that variant's fields. |
 | `EventKind`, `FinishReason` | Strings. |
-| `EventName` | `EventName`, a class of string constants built from the crate's own list, so `Event.kind == EventName.TURN_STARTED` holds. |
+| `EventName` | `EventName`: string constants, so `Event.kind == EventName.TURN_STARTED`. |
 | `EventKind::is_failure()` | Not bound: `Event.kind` is a string, so ask `TicketQueue.on_failure(handler)` for the same six kinds. |
 | `CompactReason`, `PolicyKind`, `ToolFailureKind`, `KnowledgeOp` | Strings inside `Event.data`, under the field's own name: `data["policy"]`, `data["reason"]`, `data["op"]`. |
 | `default_logger()` | Not bound: pass your own handler to `TicketQueue.on_event(handler)`. |
