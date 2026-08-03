@@ -165,7 +165,7 @@ Seven rules the surface table below never repeats.
 | `Stats::event_count(event)` | `Stats.event_count(name)`: `EventName.TURN_STARTED` and friends are strings there, the same spelling `Event.kind` reports, so one value serves both. An unknown name raises. |
 | `Stats::event_counts()` | `Stats.event_counts()`: keyed by that same string rather than by `EventName`. |
 | `Stats::input_tokens()`, `::output_tokens()` | Same names. |
-| `Stats::run_duration()` | `Stats.run_duration()` |
+| `Stats::execution_duration()` | `Stats.execution_duration()` |
 | `Stats::ticket_duration()`, `::agent_duration()` | Same names. |
 | `serde_json::to_value(&stats)` | `Stats.to_dict()`: Python cannot call `serde`, so reaching the `stats.json` shape needs a method. |
 | `ToolStat { calls, not_found, execution_failed, schema_failed }` | Same fields, plus the same `errors()` and `error_rate()` methods. |

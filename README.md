@@ -619,7 +619,7 @@ for (name, stat) in stats.tool_stats() {
 
 | Method | Description |
 |--------|-------------|
-| `run_duration()` | Get the elapsed duration. |
+| `execution_duration()` | Get the elapsed execution duration. |
 | `ticket_duration()` | Get the total and average time from creation to resolution. |
 | `agent_duration()` | Get the total and average time agents spent working. |
 | `event_count(event)` | Get how many events of one kind were recorded, such as `EventName::TurnStarted`. |

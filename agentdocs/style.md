@@ -107,7 +107,7 @@ InvalidRequest, UnexpectedStatus, MissingKey, RequestError               // reje
 
 **A value undefined over an empty population returns `Option`. A sum returns its zero.**
 
-- `Option`: `TimeStat::average`, `ToolStat::error_rate()`, and `run_duration()`, which has no answer until execution starts.
+- `Option`: `TimeStat::average`, `ToolStat::error_rate()`, and `execution_duration()`, which has no answer until execution starts.
 - Not `Option`: `TimeStat::total`, `input_tokens()`, `event_count(event)`. Zero is the honest answer for a sum over nothing.
 - One sentence covers averages, rates, and not-yet-started values, so per-accessor exceptions are not added.
 - A sum is named `total`: the bare noun reads as one subject's value, not the population's. When a sum and its mean travel together they are the two fields of one struct, `TimeStat { total, average }`, rather than two accessors prefixed `total_` and `avg_`.
@@ -394,7 +394,7 @@ A `Schema` constrains the result an agent produces for a ticket.
 - "user" is not a domain concept. It names one thing only, the `Message::User` role in the exchange with the model.
 - "routed" and "routing" are replaced with "assigned" and "assignment".
 - "replies" or "messages" replace "transcript". The field is `replies`, so name it.
-- "execution" is the word for a run in prose. `run` stays in identifiers: `run_duration()`, `EventKind::RunStarted`.
+- "execution" is the word for a run, in prose and in identifiers: `Stats::execution_duration()`. `run` survives only where it names the event itself, `EventKind::RunStarted` and `RunFinished`.
 - Bare "provider" in caller-facing prose is spelled "LLM provider". Identifier names (`Provider`, `AnthropicProvider`, the `providers::` module) stay unqualified.
 - "finisher" is banned outright, in agent-facing prompts (role files, `*.tool.md`, directives) as much as in caller-facing prose. It names nothing an agent can call: name the tool, `finish` (rustdoc names the type `FinishTool`).
 - "caps" is replaced with "limits" everywhere it is used as a noun. Imperative cells say "Limit X", not "Cap X".
