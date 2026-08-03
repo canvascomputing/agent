@@ -162,19 +162,17 @@ Seven rules the surface table below never repeats.
 | `Stats::file_stats()` | `Stats.file_stats()` |
 | `Stats::knowledge_stats()` | `Stats.knowledge_stats()` |
 | `Stats::model_stats()` | `Stats.model_stats()` |
-| `Stats::event_count(event)` | `Stats.event_count(name)`: Python names the kind with the same string `Event.kind` reports, since the `EventName` enum has no Python counterpart. An unknown name raises. |
+| `Stats::event_count(event)` | `Stats.event_count(name)`: `EventName.TURN_STARTED` and friends are strings there, the same spelling `Event.kind` reports, so one value serves both. An unknown name raises. |
 | `Stats::event_counts()` | `Stats.event_counts()`: keyed by that same string rather than by `EventName`. |
 | `Stats::input_tokens()`, `::output_tokens()` | Same names. |
-| `Stats::tickets_created()`, `::tickets_finished()`, `::tickets_failed()` | Same names. |
-| `Stats::tickets_success_rate()` | `Stats.tickets_success_rate()` |
 | `Stats::run_duration()` | `Stats.run_duration()` |
-| `Stats::total_ticket_duration()`, `::avg_ticket_duration()` | Same names. |
-| `Stats::total_work_duration()`, `::avg_work_duration()` | Same names. |
+| `Stats::ticket_duration()`, `::agent_duration()` | Same names. |
 | `serde_json::to_value(&stats)` | `Stats.to_dict()`: Python cannot call `serde`, so reaching the `stats.json` shape needs a method. |
 | `ToolStat { calls, not_found, execution_failed, schema_failed }` | Same fields, plus the same `errors()` and `error_rate()` methods. |
 | `FileStat { opens, failed }` | Same, including `errors()` and `error_rate()`. |
 | `KnowledgeStat { attempts, failed }` | Same, including `errors()` and `error_rate()`. |
 | `ModelStat { requests, failed, input_tokens, output_tokens }` | Same, including `errors()` and `error_rate()`. |
+| `TimeStat { total, average }` | Same fields, both in seconds. |
 | **Schema** | |
 | `Schema::parse(document)` | `Schema(document)` |
 | `Schema::validate(value)` | `Schema.validate(value)` |
@@ -182,7 +180,8 @@ Seven rules the surface table below never repeats.
 | **Events** | |
 | `Event { agent_name, ticket_key, kind }` | `Event.agent_name`, `.ticket_key`, `.kind` |
 | `EventKind` variant payload | `Event.data`: a dict of that variant's fields. |
-| `EventKind`, `EventName`, `FinishReason` | Strings. |
+| `EventKind`, `FinishReason` | Strings. |
+| `EventName` | `EventName`, a class of string constants built from the crate's own list, so `Event.kind == EventName.TURN_STARTED` holds. |
 | `EventKind::is_failure()` | Not bound: `Event.kind` is a string, so ask `TicketQueue.on_failure(handler)` for the same six kinds. |
 | `CompactReason`, `PolicyKind`, `ToolFailureKind`, `KnowledgeOp` | Strings inside `Event.data`, under the field's own name: `data["policy"]`, `data["reason"]`, `data["op"]`. |
 | `default_logger()` | Not bound: pass your own handler to `TicketQueue.on_event(handler)`. |
