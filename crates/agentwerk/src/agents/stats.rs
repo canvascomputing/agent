@@ -10,8 +10,9 @@ use serde::ser::{SerializeStruct, Serializer};
 use serde::Serialize;
 
 use crate::agents::tickets::Status;
-use crate::event::{EventKind, EventName, Measure};
+use crate::event::{EventKind, EventName, KnowledgeFailureKind, Measure, ToolFailureKind};
 use crate::providers::types::TokenUsage;
+use crate::providers::RequestErrorKind;
 
 /// `Stats` holds the metrics about tickets, tokens, and time. Reach it through
 /// [`TicketQueue::stats()`](crate::TicketQueue::stats), during execution or
@@ -80,63 +81,90 @@ struct Category {
     failures: &'static [&'static str],
 }
 
+/// The counters a category's failures split into, one per reason its events
+/// carry. `counters` below is the attempt counter plus these.
+const TOOL_FAILURES: &[&str] = &["not_found", "execution_failed", "schema_failed"];
+const REQUEST_FAILURES: &[&str] = &[
+    "authentication_failed",
+    "permission_denied",
+    "model_not_found",
+    "context_window_exceeded",
+    "safety_filter_triggered",
+    "rate_limited",
+    "status_unclassified",
+    "connection_failed",
+    "stream_interrupted",
+    "response_malformed",
+    "provider_unrecognized",
+];
+const KNOWLEDGE_FAILURES: &[&str] = &["page_missing", "store_refused"];
+
 const CATEGORIES: &[Category] = &[
     Category {
         name: "tools",
         counters: &["calls", "not_found", "execution_failed", "schema_failed"],
         attempts: &["calls"],
-        failures: &["not_found", "execution_failed", "schema_failed"],
+        failures: TOOL_FAILURES,
     },
+    // A path fails with the call that named it, so it splits by the same
+    // reasons a tool call does.
     Category {
         name: "files",
-        counters: &["opens", "failed"],
+        counters: &["opens", "not_found", "execution_failed", "schema_failed"],
         attempts: &["opens"],
-        failures: &["failed"],
+        failures: TOOL_FAILURES,
     },
     Category {
         name: "models",
-        counters: &["requests", "failed", "input_tokens", "output_tokens"],
+        counters: &[
+            "requests",
+            "input_tokens",
+            "output_tokens",
+            "authentication_failed",
+            "permission_denied",
+            "model_not_found",
+            "context_window_exceeded",
+            "safety_filter_triggered",
+            "rate_limited",
+            "status_unclassified",
+            "connection_failed",
+            "stream_interrupted",
+            "response_malformed",
+            "provider_unrecognized",
+        ],
         attempts: &["requests"],
-        failures: &["failed"],
+        failures: REQUEST_FAILURES,
     },
     Category {
         name: "knowledge",
-        counters: &["attempts", "failed"],
+        counters: &["attempts", "page_missing", "store_refused"],
         attempts: &["attempts"],
-        failures: &["failed"],
+        failures: KNOWLEDGE_FAILURES,
     },
 ];
 
-/// A `ToolStat` counts one tool's calls and failures, split by how each failed.
+/// A `ToolStat` counts one tool's calls and the failures they ended in.
 ///
-/// Returned by [`Stats::tool_stats`]. A high error rate, or many `schema_failed`
-/// or `not_found` calls, points at the tool's description or its input schema.
+/// Returned by [`Stats::tool_stats`]. A high error rate, or many failures
+/// under `SchemaValidationFailed` or `ToolNotFound`, points at the tool's
+/// description or its input schema.
 #[derive(Debug, Clone, Serialize)]
 pub struct ToolStat {
     /// Every call, including calls that named an unknown tool.
     pub calls: u64,
-    /// Calls naming a tool that is not registered.
-    pub not_found: u64,
-    /// Calls where the tool ran and returned an error.
-    pub execution_failed: u64,
-    /// Calls the tool rejected as malformed. This is the same population
-    /// `max_schema_retries` governs, reported per tool.
-    pub schema_failed: u64,
+    /// Those calls that failed, by the reason the event carried.
+    pub failures: BTreeMap<ToolFailureKind, u64>,
 }
 
 impl ToolStat {
-    /// Get the total failures across the three kinds.
+    /// Get the total failures across the kinds.
     pub fn errors(&self) -> u64 {
-        self.not_found + self.execution_failed + self.schema_failed
+        self.failures.values().sum()
     }
 
     /// Get `errors / calls`, or `None` when the tool was never called.
     pub fn error_rate(&self) -> Option<f64> {
-        if self.calls == 0 {
-            None
-        } else {
-            Some(self.errors() as f64 / self.calls as f64)
-        }
+        rate(self.errors(), self.calls)
     }
 }
 
@@ -144,39 +172,34 @@ impl From<&Counters> for ToolStat {
     fn from(counters: &Counters) -> Self {
         Self {
             calls: count(counters, "calls"),
-            not_found: count(counters, "not_found"),
-            execution_failed: count(counters, "execution_failed"),
-            schema_failed: count(counters, "schema_failed"),
+            failures: failures(counters, ToolFailureKind::ALL, ToolFailureKind::as_str),
         }
     }
 }
 
-/// A `FileStat` counts how often a tool opened one path, and how often it could
-/// not. Returned by [`Stats::file_stats`].
+/// A `FileStat` counts how often a tool opened one path, and the failures it
+/// ended in. Returned by [`Stats::file_stats`].
 ///
 /// The path may name a directory rather than a file, since `grep` searches
-/// under either.
+/// under either. A path fails with the call that named it, so the reasons are
+/// a tool call's.
 #[derive(Debug, Clone, Serialize)]
 pub struct FileStat {
     /// Every call that named this path, including the ones that failed.
     pub opens: u64,
-    /// Calls that named this path and failed.
-    pub failed: u64,
+    /// Those calls that failed, by the reason the event carried.
+    pub failures: BTreeMap<ToolFailureKind, u64>,
 }
 
 impl FileStat {
-    /// Get the total failures.
+    /// Get the total failures across the kinds.
     pub fn errors(&self) -> u64 {
-        self.failed
+        self.failures.values().sum()
     }
 
     /// Get `errors / opens`, or `None` when the path was never named.
     pub fn error_rate(&self) -> Option<f64> {
-        if self.opens == 0 {
-            None
-        } else {
-            Some(self.errors() as f64 / self.opens as f64)
-        }
+        rate(self.errors(), self.opens)
     }
 }
 
@@ -184,38 +207,35 @@ impl From<&Counters> for FileStat {
     fn from(counters: &Counters) -> Self {
         Self {
             opens: count(counters, "opens"),
-            failed: count(counters, "failed"),
+            failures: failures(counters, ToolFailureKind::ALL, ToolFailureKind::as_str),
         }
     }
 }
 
-/// A `KnowledgeStat` counts one knowledge operation's attempts and failures.
-/// Returned by [`Stats::knowledge_stats`], keyed by operation.
+/// A `KnowledgeStat` counts one knowledge operation's attempts and the
+/// failures they ended in. Returned by [`Stats::knowledge_stats`], keyed by
+/// operation.
 ///
 /// A high error rate points at a stale index, or at a prompt promising more
 /// than the store holds.
 #[derive(Debug, Clone, Serialize)]
 pub struct KnowledgeStat {
-    /// Every attempt at this operation, including the ones the store refused
-    /// and the ones that named a page it does not have.
+    /// Every attempt at this operation, including the ones that did not go
+    /// through.
     pub attempts: u64,
-    /// Attempts that did not go through.
-    pub failed: u64,
+    /// Those attempts that failed, by the reason the event carried.
+    pub failures: BTreeMap<KnowledgeFailureKind, u64>,
 }
 
 impl KnowledgeStat {
-    /// Get the total failures.
+    /// Get the total failures across the kinds.
     pub fn errors(&self) -> u64 {
-        self.failed
+        self.failures.values().sum()
     }
 
     /// Get `errors / attempts`, or `None` when the operation was never tried.
     pub fn error_rate(&self) -> Option<f64> {
-        if self.attempts == 0 {
-            None
-        } else {
-            Some(self.errors() as f64 / self.attempts as f64)
-        }
+        rate(self.errors(), self.attempts)
     }
 }
 
@@ -223,38 +243,39 @@ impl From<&Counters> for KnowledgeStat {
     fn from(counters: &Counters) -> Self {
         Self {
             attempts: count(counters, "attempts"),
-            failed: count(counters, "failed"),
+            failures: failures(
+                counters,
+                KnowledgeFailureKind::ALL,
+                KnowledgeFailureKind::as_str,
+            ),
         }
     }
 }
 
-/// A `ModelStat` counts one model's requests and token usage. Returned by
-/// [`Stats::model_stats`], so agents running different models can be compared.
+/// A `ModelStat` counts one model's requests, token usage, and the failures
+/// its requests ended in. Returned by [`Stats::model_stats`], so agents
+/// running different models can be compared.
 #[derive(Debug, Clone, Serialize)]
 pub struct ModelStat {
     /// Every request to this model, including the ones that failed.
     pub requests: u64,
-    /// Requests that came back as a failure and were not retried.
-    pub failed: u64,
     /// Input tokens across this model's responses.
     pub input_tokens: u64,
     /// Output tokens across this model's responses.
     pub output_tokens: u64,
+    /// Those requests that failed, by the reason the event carried.
+    pub failures: BTreeMap<RequestErrorKind, u64>,
 }
 
 impl ModelStat {
-    /// Get the total failures.
+    /// Get the total failures across the kinds.
     pub fn errors(&self) -> u64 {
-        self.failed
+        self.failures.values().sum()
     }
 
     /// Get `errors / requests`, or `None` when the model was never asked.
     pub fn error_rate(&self) -> Option<f64> {
-        if self.requests == 0 {
-            None
-        } else {
-            Some(self.errors() as f64 / self.requests as f64)
-        }
+        rate(self.errors(), self.requests)
     }
 }
 
@@ -262,11 +283,31 @@ impl From<&Counters> for ModelStat {
     fn from(counters: &Counters) -> Self {
         Self {
             requests: count(counters, "requests"),
-            failed: count(counters, "failed"),
             input_tokens: count(counters, "input_tokens"),
             output_tokens: count(counters, "output_tokens"),
+            failures: failures(counters, RequestErrorKind::ALL, RequestErrorKind::as_str),
         }
     }
+}
+
+/// The failures of one subject, keyed by the reason its events carry. A kind
+/// nothing failed under is left out, so an empty map reads as "nothing failed".
+fn failures<K: Copy + Ord>(
+    counters: &Counters,
+    all: &[K],
+    as_str: fn(&K) -> &'static str,
+) -> BTreeMap<K, u64> {
+    all.iter()
+        .filter_map(|kind| match count(counters, as_str(kind)) {
+            0 => None,
+            n => Some((*kind, n)),
+        })
+        .collect()
+}
+
+/// Get `errors / attempts`, or `None` over an empty population.
+fn rate(errors: u64, attempts: u64) -> Option<f64> {
+    (attempts > 0).then(|| errors as f64 / attempts as f64)
 }
 
 /// Read one counter, absent meaning zero.
@@ -886,7 +927,10 @@ mod tests {
     }
 
     fn file_open_failed(path: &str) -> EventKind {
-        EventKind::FileOpenFailed { path: path.into() }
+        EventKind::FileOpenFailed {
+            path: path.into(),
+            reason: ToolFailureKind::ExecutionFailed,
+        }
     }
 
     fn knowledge(op: KnowledgeOp) -> EventKind {
@@ -894,7 +938,15 @@ mod tests {
     }
 
     fn knowledge_failed(op: KnowledgeOp) -> EventKind {
-        EventKind::KnowledgeFailed { op }
+        EventKind::KnowledgeFailed {
+            op,
+            reason: KnowledgeFailureKind::PageMissing,
+        }
+    }
+
+    /// One failure count out of a `*Stat`, absent meaning zero.
+    fn failed<K: Ord>(failures: &BTreeMap<K, u64>, kind: K) -> u64 {
+        failures.get(&kind).copied().unwrap_or(0)
     }
 
     /// File one ticket against `stats`, the way the store does.
@@ -1343,10 +1395,22 @@ mod tests {
 
         let label = restored.stats_for_label("scan");
         assert_eq!(label.tool_stats()["bash"].calls, 1);
-        assert_eq!(label.model_stats()["m"].failed, 1);
+        assert_eq!(
+            failed(
+                &label.model_stats()["m"].failures,
+                RequestErrorKind::ConnectionFailed
+            ),
+            1
+        );
         let agent = restored.stats_for_agent("scout");
         assert_eq!(agent.tool_stats()["bash"].calls, 1);
-        assert_eq!(agent.model_stats()["m"].failed, 1);
+        assert_eq!(
+            failed(
+                &agent.model_stats()["m"].failures,
+                RequestErrorKind::ConnectionFailed
+            ),
+            1
+        );
     }
 
     #[test]
@@ -1399,10 +1463,19 @@ mod tests {
         let tools = s.tool_stats();
         let edit = &tools["edit_file"];
         assert_eq!(edit.calls, 2);
-        assert_eq!(edit.schema_failed, 1);
+        assert_eq!(
+            failed(&edit.failures, ToolFailureKind::SchemaValidationFailed),
+            1
+        );
         assert_eq!(edit.errors(), 1);
-        assert_eq!(tools["bash"].execution_failed, 1);
-        assert_eq!(tools["ghost"].not_found, 1);
+        assert_eq!(
+            failed(&tools["bash"].failures, ToolFailureKind::ExecutionFailed),
+            1
+        );
+        assert_eq!(
+            failed(&tools["ghost"].failures, ToolFailureKind::ToolNotFound),
+            1
+        );
     }
 
     #[test]
@@ -1457,8 +1530,17 @@ mod tests {
 
         let tools = restored.tool_stats();
         assert_eq!(tools["edit_file"].calls, 2);
-        assert_eq!(tools["edit_file"].schema_failed, 1);
-        assert_eq!(tools["bash"].execution_failed, 1);
+        assert_eq!(
+            failed(
+                &tools["edit_file"].failures,
+                ToolFailureKind::SchemaValidationFailed
+            ),
+            1
+        );
+        assert_eq!(
+            failed(&tools["bash"].failures, ToolFailureKind::ExecutionFailed),
+            1
+        );
     }
 
     #[test]
@@ -1512,12 +1594,24 @@ mod tests {
 
         let files = s.file_stats();
         assert_eq!(files["src/lib.rs"].opens, 2);
-        assert_eq!(files["src/lib.rs"].failed, 0);
+        assert_eq!(
+            failed(
+                &files["src/lib.rs"].failures,
+                ToolFailureKind::ExecutionFailed
+            ),
+            0
+        );
         assert_eq!(files["src/lib.rs"].error_rate(), Some(0.0));
         assert_eq!(files["src/main.rs"].opens, 1);
         // A failed open is an open too, so the rate divides by every attempt.
         assert_eq!(files["src/missing.rs"].opens, 2);
-        assert_eq!(files["src/missing.rs"].failed, 2);
+        assert_eq!(
+            failed(
+                &files["src/missing.rs"].failures,
+                ToolFailureKind::ExecutionFailed
+            ),
+            2
+        );
         assert_eq!(files["src/missing.rs"].errors(), 2);
         assert_eq!(files["src/missing.rs"].error_rate(), Some(1.0));
     }
@@ -1554,7 +1648,13 @@ mod tests {
         let files = restored.file_stats();
         assert_eq!(files["src/lib.rs"].opens, 2);
         assert_eq!(files["src/missing.rs"].opens, 1);
-        assert_eq!(files["src/missing.rs"].failed, 1);
+        assert_eq!(
+            failed(
+                &files["src/missing.rs"].failures,
+                ToolFailureKind::ExecutionFailed
+            ),
+            1
+        );
     }
 
     #[test]
@@ -1571,7 +1671,7 @@ mod tests {
         let value = serde_json::to_value(&s).unwrap();
         let files = value["files"].as_object().unwrap();
         assert_eq!(files["src/lib.rs"]["opens"], 3);
-        assert_eq!(files["src/lib.rs"]["failed"], 1);
+        assert_eq!(files["src/lib.rs"]["execution_failed"], 1);
         assert_eq!(files["src/lib.rs"]["errors"], 1);
     }
 
@@ -1602,7 +1702,10 @@ mod tests {
         assert_eq!(k["read"].attempts, 3);
         assert_eq!(k["remove"].attempts, 1);
         assert_eq!(k["list"].attempts, 1);
-        assert_eq!(k["read"].failed, 1);
+        assert_eq!(
+            failed(&k["read"].failures, KnowledgeFailureKind::PageMissing),
+            1
+        );
         assert_eq!(k["read"].errors(), 1);
     }
 
@@ -1613,9 +1716,15 @@ mod tests {
         s.record_event(&knowledge_failed(KnowledgeOp::Read), "KEY", &[], "");
 
         let k = s.knowledge_stats();
-        assert_eq!(k["read"].failed, 1);
+        assert_eq!(
+            failed(&k["read"].failures, KnowledgeFailureKind::PageMissing),
+            1
+        );
         assert_eq!(k["read"].error_rate(), Some(1.0));
-        assert_eq!(k["write"].failed, 0);
+        assert_eq!(
+            failed(&k["write"].failures, KnowledgeFailureKind::PageMissing),
+            0
+        );
         assert_eq!(k["write"].error_rate(), Some(0.0));
     }
 
@@ -1651,7 +1760,10 @@ mod tests {
         let k = restored.knowledge_stats();
         assert_eq!(k["write"].attempts, 1);
         assert_eq!(k["read"].attempts, 2);
-        assert_eq!(k["read"].failed, 1);
+        assert_eq!(
+            failed(&k["read"].failures, KnowledgeFailureKind::PageMissing),
+            1
+        );
     }
 
     #[test]
@@ -1664,7 +1776,7 @@ mod tests {
         let pages = value["knowledge"].as_object().unwrap();
         assert_eq!(pages["write"]["attempts"], 1);
         assert_eq!(pages["read"]["attempts"], 1);
-        assert_eq!(pages["read"]["failed"], 1);
+        assert_eq!(pages["read"]["page_missing"], 1);
         assert_eq!(pages["read"]["errors"], 1);
         assert_eq!(pages["read"]["error_rate"].as_f64().unwrap(), 1.0);
     }
@@ -1687,7 +1799,7 @@ mod tests {
         assert_eq!(m.requests, 2);
         assert_eq!(m.input_tokens, 12);
         assert_eq!(m.output_tokens, 6);
-        assert_eq!(m.failed, 0);
+        assert_eq!(failed(&m.failures, RequestErrorKind::ConnectionFailed), 0);
         assert_eq!(m.error_rate(), Some(0.0));
     }
 
@@ -1700,7 +1812,7 @@ mod tests {
         let m = &s.model_stats()["m"];
         // A failed request is a request too, so the rate divides by both.
         assert_eq!(m.requests, 2);
-        assert_eq!(m.failed, 1);
+        assert_eq!(failed(&m.failures, RequestErrorKind::ConnectionFailed), 1);
         assert_eq!(m.errors(), 1);
         assert_eq!(m.error_rate(), Some(0.5));
         assert_eq!(s.event_count(EventName::RequestFailed), 1);
@@ -1740,7 +1852,10 @@ mod tests {
 
         let models = restored.model_stats();
         assert_eq!(models["m"].requests, 2);
-        assert_eq!(models["m"].failed, 1);
+        assert_eq!(
+            failed(&models["m"].failures, RequestErrorKind::ConnectionFailed),
+            1
+        );
         assert_eq!(models["m"].input_tokens, 10);
         assert_eq!(models["m"].output_tokens, 5);
     }
@@ -1753,7 +1868,7 @@ mod tests {
         let value = serde_json::to_value(&s).unwrap();
         let models = value["models"].as_object().unwrap();
         assert_eq!(models["m"]["requests"], 1);
-        assert_eq!(models["m"]["failed"], 0);
+        assert_eq!(models["m"]["connection_failed"], 0);
         assert_eq!(models["m"]["errors"], 0);
         assert_eq!(models["m"]["input_tokens"], 10);
         assert_eq!(models["m"]["output_tokens"], 5);
@@ -1772,6 +1887,53 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn every_category_splits_its_failures_by_reason() {
+        let s = Stats::new();
+        s.record_event(
+            &tool_failure("bash", ToolFailureKind::ExecutionFailed),
+            "KEY",
+            &[],
+            "",
+        );
+        s.record_event(&file_open_failed("src/lib.rs"), "KEY", &[], "");
+        s.record_event(&provider_error(), "KEY", &[], "");
+        s.record_event(&knowledge_failed(KnowledgeOp::Read), "KEY", &[], "");
+
+        // Each failure lands under its own reason, and no category keeps a
+        // bare `failed` column beside them.
+        let value = serde_json::to_value(&s).unwrap();
+        assert_eq!(value["tools"]["bash"]["execution_failed"], 1);
+        assert_eq!(value["files"]["src/lib.rs"]["execution_failed"], 1);
+        assert_eq!(value["models"]["m"]["connection_failed"], 1);
+        assert_eq!(value["knowledge"]["read"]["page_missing"], 1);
+        for category in ["tools", "files", "models", "knowledge"] {
+            assert!(
+                !value[category].to_string().contains("\"failed\""),
+                "{category} still carries a bare failed",
+            );
+        }
+    }
+
+    #[test]
+    fn a_reason_nothing_failed_under_is_left_out() {
+        let s = Stats::new();
+        s.record_event(&tool_call("bash"), "KEY", &[], "");
+        s.record_event(&tool_call("bash"), "KEY", &[], "");
+        s.record_event(
+            &tool_failure("bash", ToolFailureKind::ExecutionFailed),
+            "KEY",
+            &[],
+            "",
+        );
+
+        let bash = &s.tool_stats()["bash"];
+        assert_eq!(bash.failures.len(), 1);
+        assert_eq!(bash.failures[&ToolFailureKind::ExecutionFailed], 1);
+        assert_eq!(bash.errors(), 1);
+        assert_eq!(bash.error_rate(), Some(0.5));
     }
 
     #[test]

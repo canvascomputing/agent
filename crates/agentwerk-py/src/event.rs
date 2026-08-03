@@ -98,8 +98,14 @@ fn payload(kind: &EventKind) -> Value {
         } => {
             json!({ "tool_name": tool_name, "call_id": call_id, "reason": reason.to_string(), "message": message })
         }
-        FileOpenFinished { path } | FileOpenFailed { path } => json!({ "path": path }),
-        KnowledgeUsed { op } | KnowledgeFailed { op } => json!({ "op": op.to_string() }),
+        FileOpenFinished { path } => json!({ "path": path }),
+        FileOpenFailed { path, reason } => {
+            json!({ "path": path, "reason": reason.to_string() })
+        }
+        KnowledgeUsed { op } => json!({ "op": op.to_string() }),
+        KnowledgeFailed { op, reason } => {
+            json!({ "op": op.to_string(), "reason": reason.to_string() })
+        }
         PolicyViolated { policy, limit } => json!({ "policy": policy.to_string(), "limit": limit }),
         SchemaRetried {
             attempt,
