@@ -611,7 +611,7 @@ for name, stat in stats.tool_stats().items():
 |--------|-------------|
 | `run_duration()` | Get the elapsed duration. |
 | `ticket_duration()` | Get the total and average time from creation to resolution. |
-| `agent_duration()` | Get the total and average time agents spent working, from claim to resolution. |
+| `agent_duration()` | Get the total and average time agents spent working. |
 | `event_count(name)` | Get how many events of one kind were recorded, such as `"turn_started"`. |
 | `input_tokens()` / `output_tokens()` | Get token counts across requests. |
 | `tool_stats()` | Get per-tool call and failure counts. |
