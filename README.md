@@ -623,7 +623,7 @@ for (name, stat) in stats.tool_stats() {
 | `input_tokens()` / `output_tokens()` | Get token counts across requests. |
 | `tool_stats()` | Get per-tool call and failure counts. |
 | `file_stats()` | Get per-filepath open and failure counts. |
-| `knowledge_stats()` | Get Knowledge usage: write, read, remove, list, and failure counts. |
+| `knowledge_stats()` | Get per-operation attempt and failure counts. |
 | `model_stats()` | Get per-model requests, failures, and token usage. |
 | `event_counts()` | Get per-event counts. |
 | `stats_for_label(label)` | Get statistics scoped to one label. |
