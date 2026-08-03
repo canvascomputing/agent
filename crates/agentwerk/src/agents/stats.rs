@@ -305,7 +305,7 @@ impl Stats {
     /// against reads as zero.
     ///
     /// Every accessor answers the same question it answers run-wide, except
-    /// `run_duration()`, which is `None` because timing stays global.
+    /// `execution_duration()`, which is `None` because timing stays global.
     pub fn stats_for_label(&self, label: &str) -> Arc<Stats> {
         self.label_stats
             .lock()
@@ -521,7 +521,7 @@ impl Stats {
 
     /// Mirror a terminal transition onto every label slice the ticket carries.
     ///
-    /// The start time is deliberately not mirrored, so `run_duration()` reads
+    /// The start time is deliberately not mirrored, so `execution_duration()` reads
     /// `None` on a slice.
     pub(crate) fn record_transition_for(
         &self,
@@ -576,7 +576,7 @@ impl Stats {
 
     /// Get the elapsed duration, which keeps growing while agents work and
     /// stops when execution ends. `None` until the first ticket starts.
-    pub fn run_duration(&self) -> Option<Duration> {
+    pub fn execution_duration(&self) -> Option<Duration> {
         let s = self.started_at.load(Ordering::Relaxed);
         if s == 0 {
             return None;
@@ -620,7 +620,7 @@ impl Stats {
     }
 
     /// Record when execution ended. A later call overwrites the earlier one.
-    pub(crate) fn record_run_finished(&self, when: u64) {
+    pub(crate) fn record_execution_finished(&self, when: u64) {
         self.finished_at.store(when, Ordering::Relaxed);
     }
 
@@ -705,8 +705,8 @@ impl Serialize for Stats {
         st.serialize_field("input_tokens", &self.input_tokens())?;
         st.serialize_field("output_tokens", &self.output_tokens())?;
         st.serialize_field(
-            "run_duration_secs",
-            &self.run_duration().map(|d| d.as_secs_f64()),
+            "execution_duration_secs",
+            &self.execution_duration().map(|d| d.as_secs_f64()),
         )?;
         // `average_secs` is derived for readers and skipped on load, the same
         // contract `errors` and `error_rate` have inside a category.
@@ -949,7 +949,7 @@ mod tests {
         assert_eq!(s.event_count(EventName::TicketFailed), 0);
         assert_eq!(s.ticket_duration().total, Duration::ZERO);
         assert_eq!(s.agent_duration().total, Duration::ZERO);
-        assert!(s.run_duration().is_none());
+        assert!(s.execution_duration().is_none());
         assert!(s.ticket_duration().average.is_none());
         assert!(s.agent_duration().average.is_none());
     }
@@ -994,22 +994,22 @@ mod tests {
         s.record_started(1_000);
         s.record_started(2_000);
         s.record_started(3_000);
-        s.record_run_finished(4_500);
-        assert_eq!(s.run_duration(), Some(Duration::from_millis(3500)));
+        s.record_execution_finished(4_500);
+        assert_eq!(s.execution_duration(), Some(Duration::from_millis(3500)));
     }
 
     #[test]
-    fn run_duration_freezes_at_finish() {
+    fn execution_duration_freezes_at_finish() {
         let s = Stats::new();
-        assert!(s.run_duration().is_none());
+        assert!(s.execution_duration().is_none());
         s.record_started(1_000);
         // Live before finish: anchored at started_at = 1_000ms epoch, so the
         // delta to "now" is enormous. We just check it's some duration.
-        assert!(s.run_duration().is_some());
-        s.record_run_finished(2_500);
-        assert_eq!(s.run_duration(), Some(Duration::from_millis(1500)));
+        assert!(s.execution_duration().is_some());
+        s.record_execution_finished(2_500);
+        assert_eq!(s.execution_duration(), Some(Duration::from_millis(1500)));
         // Stays frozen on a subsequent call.
-        assert_eq!(s.run_duration(), Some(Duration::from_millis(1500)));
+        assert_eq!(s.execution_duration(), Some(Duration::from_millis(1500)));
     }
 
     #[test]
@@ -1121,24 +1121,24 @@ mod tests {
     }
 
     #[test]
-    fn stats_for_label_slice_run_duration_is_none() {
+    fn stats_for_label_slice_execution_duration_is_none() {
         let s = Stats::new();
         let slice = s.stats_for_label("scan");
         finish(&slice, 2, 1);
-        assert!(slice.run_duration().is_none());
+        assert!(slice.execution_duration().is_none());
         assert_eq!(slice.event_count(EventName::TicketFinished), 1);
     }
 
     #[test]
-    fn total_work_duration_can_exceed_run_duration_with_concurrency() {
+    fn agent_duration_can_exceed_execution_duration_with_concurrency() {
         // Two tickets, each 5s of work, finished in a 6s window:
         // models 2 agents working in parallel.
         let s = Stats::new();
         s.record_started(1_000);
         finish(&s, 5, 5);
         finish(&s, 5, 5);
-        s.record_run_finished(7_000);
-        assert_eq!(s.run_duration(), Some(Duration::from_secs(6)));
+        s.record_execution_finished(7_000);
+        assert_eq!(s.execution_duration(), Some(Duration::from_secs(6)));
         assert_eq!(s.agent_duration().total, Duration::from_secs(10));
     }
 
@@ -1300,19 +1300,19 @@ mod tests {
     }
 
     #[test]
-    fn stats_serializes_derived_run_duration_seconds() {
+    fn stats_serializes_derived_execution_duration_seconds() {
         let s = Stats::new();
         s.record_started(1_000);
-        s.record_run_finished(3_500);
+        s.record_execution_finished(3_500);
         let value = serde_json::to_value(&s).unwrap();
-        assert_eq!(value["run_duration_secs"].as_f64().unwrap(), 2.5);
+        assert_eq!(value["execution_duration_secs"].as_f64().unwrap(), 2.5);
     }
 
     #[test]
-    fn stats_serializes_run_duration_secs_as_null_when_unstarted() {
+    fn stats_serializes_execution_duration_secs_as_null_when_unstarted() {
         let s = Stats::new();
         let value = serde_json::to_value(&s).unwrap();
-        assert!(value["run_duration_secs"].is_null());
+        assert!(value["execution_duration_secs"].is_null());
     }
 
     #[test]

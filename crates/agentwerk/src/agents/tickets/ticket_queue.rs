@@ -1103,7 +1103,7 @@ impl TicketQueue {
         self.emit("", "", EventKind::RunStarted);
         let join = tokio::spawn(async move {
             run_main_loop(&supervisor).await;
-            supervisor.stats.record_run_finished(now_millis());
+            supervisor.stats.record_execution_finished(now_millis());
         });
         *self.join_handle.lock().unwrap() = Some(join);
         self
@@ -1139,7 +1139,7 @@ impl TicketQueue {
             }
         };
         self.take_join_handle().await;
-        self.stats.record_run_finished(now_millis());
+        self.stats.record_execution_finished(now_millis());
         *self.finish_reason.lock().unwrap() = Some(reason);
         self.emit("", "", EventKind::RunFinished { reason });
         self

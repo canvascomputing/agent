@@ -54,7 +54,7 @@ impl PyStats {
 
 #[pymethods]
 impl PyStats {
-    /// Get statistics scoped to one label. `run_duration()` is always `None`
+    /// Get statistics scoped to one label. `execution_duration()` is always `None`
     /// here, since timing stays global.
     fn stats_for_label(&self, label: &str) -> PyStats {
         PyStats {
@@ -132,8 +132,8 @@ impl PyStats {
     }
 
     /// Get the elapsed duration in seconds, or `None` before execution starts.
-    fn run_duration(&self) -> Option<f64> {
-        self.get().run_duration().map(|d| d.as_secs_f64())
+    fn execution_duration(&self) -> Option<f64> {
+        self.get().execution_duration().map(|d| d.as_secs_f64())
     }
 
     /// Get the time from creation to resolution, over every resolved ticket.

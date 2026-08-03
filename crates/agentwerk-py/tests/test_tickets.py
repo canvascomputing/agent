@@ -206,7 +206,7 @@ def test_stats_reports_zero_counts_before_a_run(queue):
     assert stats.event_count(aw.EventName.REQUEST_FINISHED) == 0
     assert stats.event_count(aw.EventName.TICKET_CREATED) == 0
     assert stats.tool_stats() == {}
-    assert stats.run_duration() is None
+    assert stats.execution_duration() is None
 
 
 def test_event_count_rejects_a_name_no_event_carries(queue):

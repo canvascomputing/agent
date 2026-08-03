@@ -133,7 +133,7 @@ fn runtime_budgets(policies: &Policies, stats: &Stats) -> Option<String> {
         lines.push(format!("- Output tokens remaining: {remaining}"));
     }
     if let Some(limit) = policies.max_time {
-        if let Some(elapsed) = stats.run_duration() {
+        if let Some(elapsed) = stats.execution_duration() {
             let remaining = limit.saturating_sub(elapsed);
             lines.push(format!("- Time remaining: {}s", remaining.as_secs()));
         }
@@ -350,7 +350,7 @@ mod tests {
 
         let rendered = context_body(&working_dir, &policies, &stats, "T-1");
 
-        // No `record_started` call: `Stats::run_duration` is `None`,
+        // No `record_started` call: `Stats::execution_duration` is `None`,
         // so the time bullet must not appear.
         let baseline = context_body(&working_dir, &Policies::default(), &Stats::new(), "T-1");
         assert_eq!(rendered, baseline);

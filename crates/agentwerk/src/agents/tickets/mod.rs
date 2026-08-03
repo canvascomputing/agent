@@ -50,7 +50,7 @@ pub(crate) fn policy_violated_kind(
         }
     }
     if let Some(limit) = policies.max_time {
-        if stats.run_duration().is_some_and(|d| d >= limit) {
+        if stats.execution_duration().is_some_and(|d| d >= limit) {
             return Some((PolicyKind::Time, limit.as_millis() as u64));
         }
     }
@@ -86,7 +86,7 @@ mod tests {
             ..Policies::default()
         };
         let stats = Stats::new();
-        // Stamp started_at far in the past so run_duration trivially
+        // Stamp started_at far in the past so execution_duration trivially
         // exceeds the 1ms limit. `record_started` first-call-wins.
         stats.record_started(1);
         let trip = policy_violated_kind(&policies, &stats);
@@ -100,7 +100,7 @@ mod tests {
             ..Policies::default()
         };
         let stats = Stats::new();
-        // started_at == 0 so run_duration is None; the time limit must
+        // started_at == 0 so execution_duration is None; the time limit must
         // not trip until a ticket has actually started.
         assert!(policy_violated_kind(&policies, &stats).is_none());
     }
