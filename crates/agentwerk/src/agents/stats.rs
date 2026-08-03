@@ -44,11 +44,11 @@ pub struct Stats {
     /// When execution ended, in milliseconds since the epoch. 0 while it is
     /// still running.
     finished_at: AtomicU64,
-    /// Sum of finished tickets' time from creation to resolution, in seconds.
-    total_ticket_duration: AtomicU64,
-    /// Sum of finished tickets' time from claim to resolution, in seconds. With
+    /// Sum of resolved tickets' time from creation to resolution, in seconds.
+    ticket_duration: AtomicU64,
+    /// Sum of resolved tickets' time from claim to resolution, in seconds. With
     /// agents working in parallel this can exceed the elapsed duration.
-    total_work_duration: AtomicU64,
+    agent_duration: AtomicU64,
     /// Nested slices keyed by ticket label, filled on demand. Only the run-wide
     /// `Stats` holds them; a slice's own map stays empty.
     label_stats: Mutex<HashMap<String, Arc<Stats>>>,
@@ -274,14 +274,26 @@ fn count(counters: &Counters, counter: &str) -> u64 {
     counters.get(counter).copied().unwrap_or(0)
 }
 
+/// A `TimeStat` is one duration summed over the tickets that reached it, and
+/// its mean. Returned by [`Stats::ticket_duration`] and
+/// [`Stats::agent_duration`].
+///
+/// `average` has no answer until the first ticket resolves, while `total` is
+/// zero, the honest sum over nothing.
+#[derive(Debug, Clone, Serialize)]
+pub struct TimeStat {
+    pub total: Duration,
+    pub average: Option<Duration>,
+}
+
 impl Stats {
     pub(crate) fn new() -> Self {
         Self {
             event_counts: Mutex::new(HashMap::new()),
             started_at: AtomicU64::new(0),
             finished_at: AtomicU64::new(0),
-            total_ticket_duration: AtomicU64::new(0),
-            total_work_duration: AtomicU64::new(0),
+            ticket_duration: AtomicU64::new(0),
+            agent_duration: AtomicU64::new(0),
             label_stats: Mutex::new(HashMap::new()),
             agent_stats: Mutex::new(HashMap::new()),
             token_usage: Mutex::new(HashMap::new()),
@@ -586,38 +598,24 @@ impl Stats {
         self.event_count(EventName::TicketFinished) + self.event_count(EventName::TicketFailed)
     }
 
-    /// Get the total time from creation to resolution.
-    pub fn total_ticket_duration(&self) -> Duration {
-        Duration::from_secs(self.total_ticket_duration.load(Ordering::Relaxed))
+    /// Get the time from creation to resolution, over every resolved ticket.
+    pub fn ticket_duration(&self) -> TimeStat {
+        self.time_stat(&self.ticket_duration)
     }
 
-    /// Get the average time from creation to resolution, or `None` before any
-    /// ticket finishes.
-    pub fn avg_ticket_duration(&self) -> Option<Duration> {
-        let n = self.tickets_resolved();
-        if n == 0 {
-            None
-        } else {
-            let secs = self.total_ticket_duration.load(Ordering::Relaxed);
-            Some(Duration::from_secs(secs / n))
-        }
+    /// Get the time agents held tickets, over the same tickets. With agents
+    /// working in parallel the total can exceed the elapsed duration.
+    pub fn agent_duration(&self) -> TimeStat {
+        self.time_stat(&self.agent_duration)
     }
 
-    /// Get the total time agents held tickets. With agents working in
-    /// parallel this can exceed the elapsed duration.
-    pub fn total_work_duration(&self) -> Duration {
-        Duration::from_secs(self.total_work_duration.load(Ordering::Relaxed))
-    }
-
-    /// Get the average time an agent held a ticket, or `None` before any
-    /// ticket finishes.
-    pub fn avg_work_duration(&self) -> Option<Duration> {
-        let n = self.tickets_resolved();
-        if n == 0 {
-            None
-        } else {
-            let secs = self.total_work_duration.load(Ordering::Relaxed);
-            Some(Duration::from_secs(secs / n))
+    /// One stored sum of whole seconds, over the tickets that reached it.
+    fn time_stat(&self, secs: &AtomicU64) -> TimeStat {
+        let total = secs.load(Ordering::Relaxed);
+        let resolved = self.tickets_resolved();
+        TimeStat {
+            total: Duration::from_secs(total),
+            average: (resolved > 0).then(|| Duration::from_secs(total / resolved)),
         }
     }
 
@@ -698,7 +696,7 @@ impl Serialize for Stats {
             .map(|category| (category, self.category_counters(category.name)))
             .filter(|(_, entries)| !entries.is_empty())
             .collect();
-        let len = 7
+        let len = 5
             + usize::from(!events.is_empty())
             + usize::from(!labels.is_empty())
             + usize::from(!agents.is_empty())
@@ -707,25 +705,13 @@ impl Serialize for Stats {
         st.serialize_field("input_tokens", &self.input_tokens())?;
         st.serialize_field("output_tokens", &self.output_tokens())?;
         st.serialize_field(
-            "total_ticket_duration_secs",
-            &self.total_ticket_duration.load(Ordering::Relaxed),
-        )?;
-        st.serialize_field(
-            "total_work_duration_secs",
-            &self.total_work_duration.load(Ordering::Relaxed),
-        )?;
-        st.serialize_field(
             "run_duration_secs",
             &self.run_duration().map(|d| d.as_secs_f64()),
         )?;
-        st.serialize_field(
-            "avg_ticket_duration_secs",
-            &self.avg_ticket_duration().map(|d| d.as_secs_f64()),
-        )?;
-        st.serialize_field(
-            "avg_work_duration_secs",
-            &self.avg_work_duration().map(|d| d.as_secs_f64()),
-        )?;
+        // `average_secs` is derived for readers and skipped on load, the same
+        // contract `errors` and `error_rate` have inside a category.
+        st.serialize_field("ticket_duration", &seconds(&self.ticket_duration()))?;
+        st.serialize_field("agent_duration", &seconds(&self.agent_duration()))?;
         if !events.is_empty() {
             st.serialize_field("events", &events)?;
         }
@@ -755,7 +741,6 @@ impl Serialize for Stats {
 
 impl Stats {
     fn load_fields(&self, value: &serde_json::Value) {
-        let get = |key: &str| value.get(key).and_then(|v| v.as_u64()).unwrap_or(0);
         if let Some(events) = value.get("events").and_then(|v| v.as_object()) {
             let mut map = self.event_counts.lock().unwrap();
             for (name, count) in events {
@@ -767,10 +752,17 @@ impl Stats {
                 }
             }
         }
-        self.total_ticket_duration
-            .store(get("total_ticket_duration_secs"), Ordering::Relaxed);
-        self.total_work_duration
-            .store(get("total_work_duration_secs"), Ordering::Relaxed);
+        let total_secs = |key: &str| {
+            value
+                .get(key)
+                .and_then(|v| v.get("total_secs"))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0)
+        };
+        self.ticket_duration
+            .store(total_secs("ticket_duration"), Ordering::Relaxed);
+        self.agent_duration
+            .store(total_secs("agent_duration"), Ordering::Relaxed);
 
         for category in CATEGORIES {
             let Some(entries) = value.get(category.name).and_then(|v| v.as_object()) else {
@@ -806,6 +798,14 @@ impl Category {
     }
 }
 
+/// One `TimeStat` as `stats.json` writes it, both figures in seconds.
+fn seconds(stat: &TimeStat) -> serde_json::Value {
+    serde_json::json!({
+        "total_secs": stat.total.as_secs(),
+        "average_secs": stat.average.map(|d| d.as_secs_f64()),
+    })
+}
+
 fn ticket_duration(t: &crate::agents::tickets::Ticket) -> Option<Duration> {
     let end = t.finished_at.or(t.failed_at)?;
     Some(Duration::from_millis(end.saturating_sub(t.created_at)))
@@ -838,9 +838,9 @@ impl Stats {
     /// Add one resolved ticket's two spans to the sums. Finished and failed
     /// tickets add alike; which outcome it was, the event count answers.
     pub(crate) fn record_durations(&self, ticket: Duration, agent: Duration) {
-        self.total_ticket_duration
+        self.ticket_duration
             .fetch_add(ticket.as_secs(), Ordering::Relaxed);
-        self.total_work_duration
+        self.agent_duration
             .fetch_add(agent.as_secs(), Ordering::Relaxed);
     }
 }
@@ -947,11 +947,11 @@ mod tests {
         assert_eq!(s.event_count(EventName::TicketCreated), 0);
         assert_eq!(s.event_count(EventName::TicketFinished), 0);
         assert_eq!(s.event_count(EventName::TicketFailed), 0);
-        assert_eq!(s.total_ticket_duration(), Duration::ZERO);
-        assert_eq!(s.total_work_duration(), Duration::ZERO);
+        assert_eq!(s.ticket_duration().total, Duration::ZERO);
+        assert_eq!(s.agent_duration().total, Duration::ZERO);
         assert!(s.run_duration().is_none());
-        assert!(s.avg_ticket_duration().is_none());
-        assert!(s.avg_work_duration().is_none());
+        assert!(s.ticket_duration().average.is_none());
+        assert!(s.agent_duration().average.is_none());
     }
 
     #[test]
@@ -984,8 +984,8 @@ mod tests {
         assert_eq!(s.event_count(EventName::TicketCreated), 2);
         assert_eq!(s.event_count(EventName::TicketFinished), 1);
         assert_eq!(s.event_count(EventName::TicketFailed), 1);
-        assert_eq!(s.total_ticket_duration(), Duration::from_secs(8));
-        assert_eq!(s.total_work_duration(), Duration::from_secs(6));
+        assert_eq!(s.ticket_duration().total, Duration::from_secs(8));
+        assert_eq!(s.agent_duration().total, Duration::from_secs(6));
     }
 
     #[test]
@@ -1017,7 +1017,7 @@ mod tests {
         let s = Stats::new();
         finish(&s, 2, 2);
         fail(&s, 4, 4);
-        assert_eq!(s.avg_ticket_duration(), Some(Duration::from_secs(3)));
+        assert_eq!(s.ticket_duration().average, Some(Duration::from_secs(3)));
     }
 
     #[test]
@@ -1025,7 +1025,7 @@ mod tests {
         let s = Stats::new();
         finish(&s, 3, 2);
         fail(&s, 5, 4);
-        assert_eq!(s.avg_work_duration(), Some(Duration::from_secs(3)));
+        assert_eq!(s.agent_duration().average, Some(Duration::from_secs(3)));
     }
 
     #[test]
@@ -1139,7 +1139,7 @@ mod tests {
         finish(&s, 5, 5);
         s.record_run_finished(7_000);
         assert_eq!(s.run_duration(), Some(Duration::from_secs(6)));
-        assert_eq!(s.total_work_duration(), Duration::from_secs(10));
+        assert_eq!(s.agent_duration().total, Duration::from_secs(10));
     }
 
     #[test]
@@ -1180,15 +1180,15 @@ mod tests {
         assert_eq!(restored.event_count(EventName::TicketCreated), 1);
         assert_eq!(restored.event_count(EventName::TicketFinished), 1);
         assert_eq!(restored.event_count(EventName::TicketFailed), 1);
-        assert_eq!(restored.total_ticket_duration(), Duration::from_secs(10));
-        assert_eq!(restored.total_work_duration(), Duration::from_secs(7));
+        assert_eq!(restored.ticket_duration().total, Duration::from_secs(10));
+        assert_eq!(restored.agent_duration().total, Duration::from_secs(7));
 
         let restored_slice = restored.stats_for_label("scan");
         assert_eq!(restored_slice.event_count(EventName::TurnStarted), 1);
         assert_eq!(restored_slice.input_tokens(), 40);
         assert_eq!(restored_slice.event_count(EventName::TicketFinished), 1);
         assert_eq!(
-            restored_slice.total_ticket_duration(),
+            restored_slice.ticket_duration().total,
             Duration::from_secs(4)
         );
 
@@ -1197,7 +1197,7 @@ mod tests {
         assert_eq!(restored_agent.input_tokens(), 30);
         assert_eq!(restored_agent.event_count(EventName::TicketFailed), 1);
         assert_eq!(
-            restored_agent.total_ticket_duration(),
+            restored_agent.ticket_duration().total,
             Duration::from_secs(6)
         );
     }
@@ -1217,8 +1217,8 @@ mod tests {
         assert_eq!(value["output_tokens"], 50);
         assert_eq!(value["events"]["ticket_created"], 1);
         assert_eq!(value["events"]["ticket_finished"], 1);
-        assert_eq!(value["total_ticket_duration_secs"], 7);
-        assert_eq!(value["total_work_duration_secs"], 5);
+        assert_eq!(value["ticket_duration"]["total_secs"], 7);
+        assert_eq!(value["agent_duration"]["total_secs"], 5);
         assert_eq!(value["events"]["turn_started"], 1);
         assert_eq!(value["events"]["request_finished"], 1);
         assert_eq!(value["events"]["tool_call_started"], 1);
@@ -1236,6 +1236,43 @@ mod tests {
         let value = serde_json::to_value(&s).unwrap();
         assert!(value.get("ticket_duration_secs").is_none());
         assert!(value.get("work_duration_secs").is_none());
+    }
+
+    #[test]
+    fn duration_average_is_none_until_a_ticket_resolves() {
+        let s = Stats::new();
+        create(&s);
+
+        assert_eq!(s.ticket_duration().total, Duration::ZERO);
+        assert!(s.ticket_duration().average.is_none());
+
+        finish(&s, 4, 3);
+
+        assert_eq!(s.ticket_duration().total, Duration::from_secs(4));
+        assert_eq!(s.ticket_duration().average, Some(Duration::from_secs(4)));
+        assert_eq!(s.agent_duration().average, Some(Duration::from_secs(3)));
+    }
+
+    #[test]
+    fn stats_serializes_each_duration_as_a_total_and_an_average() {
+        let dir = crate::test_util::TempDir::new().unwrap();
+
+        let s = Stats::new();
+        finish(&s, 6, 4);
+        finish(&s, 2, 2);
+
+        let value = serde_json::to_value(&s).unwrap();
+        assert_eq!(value["ticket_duration"]["total_secs"], 8);
+        assert_eq!(value["ticket_duration"]["average_secs"], 4.0);
+        assert_eq!(value["agent_duration"]["total_secs"], 6);
+        assert_eq!(value["agent_duration"]["average_secs"], 3.0);
+
+        use crate::persistence::Persist;
+        s.save(dir.path()).unwrap();
+        let restored = Stats::load(dir.path()).unwrap();
+        // The average is derived on both sides, so only the sum round-trips.
+        assert_eq!(restored.ticket_duration().total, Duration::from_secs(8));
+        assert_eq!(restored.agent_duration().total, Duration::from_secs(6));
     }
 
     #[test]

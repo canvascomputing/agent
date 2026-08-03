@@ -7,7 +7,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use agentwerk::agents::stats::{FileStat, KnowledgeStat, ModelStat, ToolStat};
+use agentwerk::agents::stats::{FileStat, KnowledgeStat, ModelStat, TimeStat, ToolStat};
 use agentwerk::event::EventName;
 use agentwerk::{Stats, TicketQueue};
 use pyo3::prelude::*;
@@ -64,8 +64,8 @@ impl PyStats {
 
     /// Get statistics scoped to one agent, by the name it was added under.
     ///
-    /// `tickets_created()` counts the tickets that agent filed; the rest count
-    /// the tickets it claimed.
+    /// `event_count("ticket_created")` counts the tickets that agent filed; the
+    /// rest count the tickets it claimed.
     fn stats_for_agent(&self, agent_name: &str) -> PyStats {
         PyStats {
             source: Source::Slice(self.get().stats_for_agent(agent_name)),
@@ -90,7 +90,7 @@ impl PyStats {
             .collect()
     }
 
-    /// Get knowledge usage: write, read, remove, list, and miss counts.
+    /// Get per-operation attempt and failure counts for the knowledge pages.
     fn knowledge_stats(&self) -> BTreeMap<String, PyKnowledgeStat> {
         self.get()
             .knowledge_stats()
@@ -136,22 +136,18 @@ impl PyStats {
         self.get().run_duration().map(|d| d.as_secs_f64())
     }
 
-    /// Get the total time from creation to resolution, in seconds.
-    fn total_ticket_duration(&self) -> f64 {
-        self.get().total_ticket_duration().as_secs_f64()
+    /// Get the time from creation to resolution, over every resolved ticket.
+    fn ticket_duration(&self) -> PyTimeStat {
+        PyTimeStat {
+            inner: self.get().ticket_duration(),
+        }
     }
 
-    fn avg_ticket_duration(&self) -> Option<f64> {
-        self.get().avg_ticket_duration().map(|d| d.as_secs_f64())
-    }
-
-    /// Get the total time agents held tickets, in seconds.
-    fn total_work_duration(&self) -> f64 {
-        self.get().total_work_duration().as_secs_f64()
-    }
-
-    fn avg_work_duration(&self) -> Option<f64> {
-        self.get().avg_work_duration().map(|d| d.as_secs_f64())
+    /// Get the time agents held tickets, over the same tickets.
+    fn agent_duration(&self) -> PyTimeStat {
+        PyTimeStat {
+            inner: self.get().agent_duration(),
+        }
     }
 
     /// Get every figure as one dict, the same shape as `stats.json`.
@@ -166,6 +162,35 @@ impl PyStats {
             "Stats(requests={}, tickets_finished={})",
             stats.event_count(EventName::RequestFinished),
             stats.event_count(EventName::TicketFinished)
+        )
+    }
+}
+
+/// A `TimeStat` is one duration summed over the tickets that reached it, and
+/// its mean. Both are in seconds.
+#[pyclass(name = "TimeStat")]
+pub struct PyTimeStat {
+    inner: TimeStat,
+}
+
+#[pymethods]
+impl PyTimeStat {
+    #[getter]
+    fn total(&self) -> f64 {
+        self.inner.total.as_secs_f64()
+    }
+
+    /// `None` until the first ticket resolves.
+    #[getter]
+    fn average(&self) -> Option<f64> {
+        self.inner.average.map(|d| d.as_secs_f64())
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "TimeStat(total={}, average={:?})",
+            self.total(),
+            self.average()
         )
     }
 }
