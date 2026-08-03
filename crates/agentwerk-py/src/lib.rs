@@ -37,6 +37,7 @@ fn _agentwerk(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<stats::PyFileStat>()?;
     m.add_class::<stats::PyKnowledgeStat>()?;
     m.add_class::<stats::PyModelStat>()?;
+    m.add_class::<stats::PyTimeStat>()?;
     providers::register(m)?;
     tools::register(m)?;
     Ok(())

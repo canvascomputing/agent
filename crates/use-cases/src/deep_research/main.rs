@@ -226,7 +226,7 @@ fn print_stats(tickets: &TicketQueue) {
         "  Duration : {:?}",
         stats.run_duration().unwrap_or_default()
     );
-    eprintln!("  Work time: {:?}", stats.total_work_duration());
+    eprintln!("  Work time: {:?}", stats.agent_duration().total);
     let done = stats.event_count(EventName::TicketFinished);
     let failed = stats.event_count(EventName::TicketFailed);
     let resolved = done + failed;
@@ -238,7 +238,7 @@ fn print_stats(tickets: &TicketQueue) {
     eprintln!("  Tickets  : {done} done, {failed} failed ({success:.0}%)");
     eprintln!(
         "  Avg time : {:?}",
-        stats.avg_ticket_duration().unwrap_or_default()
+        stats.ticket_duration().average.unwrap_or_default()
     );
     eprintln!(
         "  Tokens   : {} in, {} out",
