@@ -144,9 +144,9 @@ impl PyStats {
     }
 
     /// Get the time agents spent working, over the same tickets.
-    fn agent_duration(&self) -> PyTimeStat {
+    fn work_duration(&self) -> PyTimeStat {
         PyTimeStat {
-            inner: self.get().agent_duration(),
+            inner: self.get().work_duration(),
         }
     }
 
