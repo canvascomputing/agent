@@ -91,6 +91,17 @@ pub enum ToolFailureKind {
     SchemaValidationFailed,
 }
 
+impl ToolFailureKind {
+    /// The counter this failure adds to under `tools.<name>`.
+    pub(crate) fn counter(&self) -> &'static str {
+        match self {
+            ToolFailureKind::ToolNotFound => "not_found",
+            ToolFailureKind::ExecutionFailed => "execution_failed",
+            ToolFailureKind::SchemaValidationFailed => "schema_failed",
+        }
+    }
+}
+
 impl fmt::Display for ToolFailureKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
@@ -110,14 +121,67 @@ pub enum KnowledgeOp {
     List,
 }
 
-impl fmt::Display for KnowledgeOp {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
+impl KnowledgeOp {
+    /// The stable name that keys this operation in the knowledge statistics.
+    pub(crate) fn name(&self) -> &'static str {
+        match self {
             KnowledgeOp::Write => "write",
             KnowledgeOp::Read => "read",
             KnowledgeOp::Remove => "remove",
             KnowledgeOp::List => "list",
-        })
+        }
+    }
+}
+
+impl fmt::Display for KnowledgeOp {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
+/// What a [`Measure`] is about. The variant picks the `stats.json` category;
+/// the value inside is what that category is keyed on.
+pub(crate) enum Subject<'a> {
+    Tool(&'a str),
+    File(&'a str),
+    Model(&'a str),
+    Knowledge(KnowledgeOp),
+}
+
+impl Subject<'_> {
+    /// The `stats.json` category this lands in.
+    pub(crate) fn category(&self) -> &'static str {
+        match self {
+            Subject::Tool(_) => "tools",
+            Subject::File(_) => "files",
+            Subject::Model(_) => "models",
+            Subject::Knowledge(_) => "knowledge",
+        }
+    }
+
+    /// What that category is keyed on.
+    pub(crate) fn name(&self) -> &str {
+        match self {
+            Subject::Tool(name) | Subject::File(name) | Subject::Model(name) => name,
+            Subject::Knowledge(op) => op.name(),
+        }
+    }
+}
+
+/// One counter an [`EventKind`] adds to, and by how much.
+pub(crate) struct Measure<'a> {
+    pub(crate) subject: Subject<'a>,
+    pub(crate) counter: &'static str,
+    pub(crate) amount: u64,
+}
+
+impl<'a> Measure<'a> {
+    fn new(subject: Subject<'a>, counter: &'static str, amount: u64) -> Self {
+        Self {
+            subject,
+            counter,
+            amount,
+        }
     }
 }
 
@@ -293,6 +357,47 @@ impl EventKind {
             EventKind::CompactionProgress { .. } => "compaction_progress",
             EventKind::CompactionFinished { .. } => "compaction_finished",
             EventKind::CompactionFailed { .. } => "compaction_failed",
+        }
+    }
+
+    /// What this event adds to the statistics beyond its own count. A kind
+    /// whose payload no measure reads adds nothing: `name()` already counted
+    /// it.
+    pub(crate) fn measures(&self) -> Vec<Measure<'_>> {
+        match self {
+            EventKind::RequestFinished { model, usage } => vec![
+                Measure::new(Subject::Model(model), "requests", 1),
+                Measure::new(Subject::Model(model), "input_tokens", usage.input_tokens),
+                Measure::new(Subject::Model(model), "output_tokens", usage.output_tokens),
+            ],
+            // A failed request is a request too, so `requests` is the attempt
+            // count and `error_rate` divides by it. The same holds for a
+            // failed file open and a failed knowledge operation below.
+            EventKind::RequestFailed { model, .. } => vec![
+                Measure::new(Subject::Model(model), "requests", 1),
+                Measure::new(Subject::Model(model), "failed", 1),
+            ],
+            EventKind::ToolCallStarted { tool_name, .. } => {
+                vec![Measure::new(Subject::Tool(tool_name), "calls", 1)]
+            }
+            EventKind::ToolCallFailed {
+                tool_name, reason, ..
+            } => vec![Measure::new(Subject::Tool(tool_name), reason.counter(), 1)],
+            EventKind::FileOpenFinished { path } => {
+                vec![Measure::new(Subject::File(path), "opens", 1)]
+            }
+            EventKind::FileOpenFailed { path } => vec![
+                Measure::new(Subject::File(path), "opens", 1),
+                Measure::new(Subject::File(path), "failed", 1),
+            ],
+            EventKind::KnowledgeUsed { op } => {
+                vec![Measure::new(Subject::Knowledge(*op), "attempts", 1)]
+            }
+            EventKind::KnowledgeFailed { op } => vec![
+                Measure::new(Subject::Knowledge(*op), "attempts", 1),
+                Measure::new(Subject::Knowledge(*op), "failed", 1),
+            ],
+            _ => Vec::new(),
         }
     }
 
@@ -545,6 +650,28 @@ mod tests {
                 "compaction_failed",
             ]),
         );
+    }
+
+    #[test]
+    fn every_measure_a_variant_declares_reaches_stats_json() {
+        for kind in all_variants() {
+            if kind.measures().is_empty() {
+                continue;
+            }
+            let stats = crate::agents::stats::Stats::new();
+            stats.record_event(&kind, "KEY", &[], "");
+            let value = serde_json::to_value(&stats).unwrap();
+            for measure in kind.measures() {
+                let category = measure.subject.category();
+                let name = measure.subject.name();
+                assert!(
+                    value[category][name].get(measure.counter).is_some(),
+                    "{}: {category}.{name}.{} is missing",
+                    kind.name(),
+                    measure.counter,
+                );
+            }
+        }
     }
 
     #[test]
