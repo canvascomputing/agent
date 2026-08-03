@@ -119,7 +119,7 @@ impl PyStats {
         self.get()
             .event_counts()
             .into_iter()
-            .map(|(event, count)| (event.name().to_string(), count))
+            .map(|(event, count)| (event.as_str().to_string(), count))
             .collect()
     }
 

@@ -12,7 +12,7 @@ use crate::convert::value_to_py;
 /// Python side is built from this, so the two never carry different spellings.
 #[pyfunction]
 pub fn event_names() -> Vec<&'static str> {
-    EventName::ALL.iter().map(EventName::name).collect()
+    EventName::ALL.iter().map(EventName::as_str).collect()
 }
 
 /// An `Event` reports one thing that happened as agents work.
