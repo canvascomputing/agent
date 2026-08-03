@@ -624,10 +624,10 @@ for (name, stat) in stats.tool_stats() {
 | `agent_duration()` | Get the time agents spent working, summed across every agent and averaged per ticket. |
 | `event_count(event)` | Get how many events of one kind were recorded, such as `EventName::TurnStarted`. |
 | `input_tokens()` / `output_tokens()` | Get token counts across requests. |
-| `tool_stats()` | Get per-tool call counts and the failures they ended in, by reason. |
-| `file_stats()` | Get per-filepath open counts and the failures they ended in, by reason. |
-| `knowledge_stats()` | Get per-operation attempt counts and the failures they ended in, by reason. |
-| `model_stats()` | Get per-model requests, token usage, and the failures they ended in, by reason. |
+| `tool_stats()` | Get per-tool call counts and the failures they ended in. |
+| `file_stats()` | Get per-filepath open counts and the failures they ended in. |
+| `knowledge_stats()` | Get per-operation attempt counts and the failures they ended in. |
+| `model_stats()` | Get per-model requests, token usage, and the failures they ended in. |
 | `event_counts()` | Get per-event counts. |
 | `stats_for_label(label)` | Get statistics scoped to one label. |
 | `stats_for_agent(agent_name)` | Get statistics scoped to one agent. |
