@@ -137,13 +137,16 @@ impl PyStats {
     }
 
     /// Get the time from creation to resolution, over every resolved ticket.
+    /// It counts the wait before an agent claimed the ticket, which
+    /// `agent_duration` does not.
     fn ticket_duration(&self) -> PyTimeStat {
         PyTimeStat {
             inner: self.get().ticket_duration(),
         }
     }
 
-    /// Get the time agents held tickets, over the same tickets.
+    /// Get the time from claim to resolution, over the same tickets: what
+    /// agents spent working.
     fn agent_duration(&self) -> PyTimeStat {
         PyTimeStat {
             inner: self.get().agent_duration(),

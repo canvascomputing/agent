@@ -599,12 +599,15 @@ impl Stats {
     }
 
     /// Get the time from creation to resolution, over every resolved ticket.
+    /// It counts the wait before an agent claimed the ticket, which
+    /// [`Stats::agent_duration`] does not.
     pub fn ticket_duration(&self) -> TimeStat {
         self.time_stat(&self.ticket_duration)
     }
 
-    /// Get the time agents held tickets, over the same tickets. With agents
-    /// working in parallel the total can exceed the elapsed duration.
+    /// Get the time from claim to resolution, over the same tickets: what
+    /// agents spent working. With agents working in parallel the total can
+    /// exceed the elapsed duration.
     pub fn agent_duration(&self) -> TimeStat {
         self.time_stat(&self.agent_duration)
     }
