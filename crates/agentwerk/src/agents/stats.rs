@@ -10,7 +10,7 @@ use serde::ser::{SerializeStruct, Serializer};
 use serde::Serialize;
 
 use crate::agents::tickets::Status;
-use crate::event::{EventKind, Measure};
+use crate::event::{EventKind, EventName, Measure};
 use crate::providers::types::TokenUsage;
 
 /// `Stats` holds the metrics about tickets, tokens, and time. Reach it through
@@ -33,9 +33,9 @@ use crate::providers::types::TokenUsage;
 /// # }
 /// ```
 pub struct Stats {
-    /// Count per event kind, keyed by [`EventKind::name`]. Every emitted event
-    /// lands here, and the named accessors are lookups into this map.
-    event_counts: Mutex<HashMap<String, u64>>,
+    /// Count per event kind. Every emitted event lands here, and
+    /// [`Stats::event_count`] is a lookup into this map.
+    event_counts: Mutex<HashMap<EventName, u64>>,
     tickets_created: AtomicU64,
     tickets_finished: AtomicU64,
     tickets_failed: AtomicU64,
@@ -468,7 +468,7 @@ impl Stats {
         let measures = kind.measures();
         // One walk of the labels for every measure, not one walk per measure.
         self.record_scoped(labels, agent, |s| {
-            s.count_event(kind.name());
+            s.count_event(kind.event_name());
             for measure in &measures {
                 s.add(measure);
             }
@@ -488,13 +488,8 @@ impl Stats {
     }
 
     /// Add one to this event kind's count.
-    fn count_event(&self, name: &str) {
-        *self
-            .event_counts
-            .lock()
-            .unwrap()
-            .entry(name.to_string())
-            .or_default() += 1;
+    fn count_event(&self, event: EventName) {
+        *self.event_counts.lock().unwrap().entry(event).or_default() += 1;
     }
 
     /// Record a ticket transition. Going from `Todo` to `InProgress` sets the
@@ -546,43 +541,24 @@ impl Stats {
         }
     }
 
-    /// Get how many turns ran.
-    pub fn turns(&self) -> u64 {
-        self.event_count("turn_started")
-    }
-
-    /// Get how many responses arrived.
-    pub fn requests(&self) -> u64 {
-        self.event_count("request_finished")
-    }
-
-    /// Get the tool-call count.
-    pub fn tool_calls(&self) -> u64 {
-        self.event_count("tool_call_started")
-    }
-
-    /// Get the failed-request count.
-    pub fn requests_failed(&self) -> u64 {
-        self.event_count("request_failed")
-    }
-
-    /// Get one event kind's count, by its snake_case name.
-    fn event_count(&self, name: &str) -> u64 {
+    /// Get how many events of one kind were recorded. A kind that never
+    /// happened reads zero.
+    pub fn event_count(&self, event: EventName) -> u64 {
         self.event_counts
             .lock()
             .unwrap()
-            .get(name)
+            .get(&event)
             .copied()
             .unwrap_or(0)
     }
 
-    /// Get per-event counts, sorted by event name.
-    pub fn event_counts(&self) -> BTreeMap<String, u64> {
+    /// Get per-event counts, in the order the kinds are declared.
+    pub fn event_counts(&self) -> BTreeMap<EventName, u64> {
         self.event_counts
             .lock()
             .unwrap()
             .iter()
-            .map(|(name, count)| (name.clone(), *count))
+            .map(|(event, count)| (*event, *count))
             .collect()
     }
 
@@ -757,16 +733,12 @@ impl Serialize for Stats {
             .map(|category| (category, self.category_counters(category.name)))
             .filter(|(_, entries)| !entries.is_empty())
             .collect();
-        let len = 15
+        let len = 11
             + usize::from(!events.is_empty())
             + usize::from(!labels.is_empty())
             + usize::from(!agents.is_empty())
             + categories.len();
         let mut st = serializer.serialize_struct("Stats", len)?;
-        st.serialize_field("turns", &self.turns())?;
-        st.serialize_field("requests", &self.requests())?;
-        st.serialize_field("tool_calls", &self.tool_calls())?;
-        st.serialize_field("requests_failed", &self.requests_failed())?;
         st.serialize_field("input_tokens", &self.input_tokens())?;
         st.serialize_field("output_tokens", &self.output_tokens())?;
         st.serialize_field("tickets_created", &self.tickets_created())?;
@@ -823,13 +795,14 @@ impl Serialize for Stats {
 impl Stats {
     fn load_fields(&self, value: &serde_json::Value) {
         let get = |key: &str| value.get(key).and_then(|v| v.as_u64()).unwrap_or(0);
-        // The named loop counters ("turns", "requests", ...) are derived
-        // views of this map; only the map round-trips.
         if let Some(events) = value.get("events").and_then(|v| v.as_object()) {
             let mut map = self.event_counts.lock().unwrap();
             for (name, count) in events {
-                if let Some(count) = count.as_u64() {
-                    map.insert(name.clone(), count);
+                // One entry at a time, so a name this build does not know is
+                // skipped rather than costing us the rest of the map.
+                let event = serde_json::from_value(serde_json::Value::String(name.clone()));
+                if let (Ok(event), Some(count)) = (event, count.as_u64()) {
+                    map.insert(event, count);
                 }
             }
         }
@@ -990,10 +963,10 @@ mod tests {
     #[test]
     fn fresh_stats_are_zero() {
         let s = Stats::new();
-        assert_eq!(s.turns(), 0);
-        assert_eq!(s.requests(), 0);
-        assert_eq!(s.tool_calls(), 0);
-        assert_eq!(s.requests_failed(), 0);
+        assert_eq!(s.event_count(EventName::TurnStarted), 0);
+        assert_eq!(s.event_count(EventName::RequestFinished), 0);
+        assert_eq!(s.event_count(EventName::ToolCallStarted), 0);
+        assert_eq!(s.event_count(EventName::RequestFailed), 0);
         assert_eq!(s.input_tokens(), 0);
         assert_eq!(s.output_tokens(), 0);
         assert_eq!(s.tickets_created(), 0);
@@ -1017,13 +990,13 @@ mod tests {
         s.record_event(&tool_call("bash"), "KEY", &[], "");
         s.record_event(&provider_error(), "KEY", &[], "");
 
-        assert_eq!(s.turns(), 2);
-        assert_eq!(s.requests(), 2);
-        assert_eq!(s.tool_calls(), 1);
-        assert_eq!(s.requests_failed(), 1);
+        assert_eq!(s.event_count(EventName::TurnStarted), 2);
+        assert_eq!(s.event_count(EventName::RequestFinished), 2);
+        assert_eq!(s.event_count(EventName::ToolCallStarted), 1);
+        assert_eq!(s.event_count(EventName::RequestFailed), 1);
         assert_eq!(s.input_tokens(), 12);
         assert_eq!(s.output_tokens(), 6);
-        assert_eq!(s.event_counts()["turn_started"], 2);
+        assert_eq!(s.event_counts()[&EventName::TurnStarted], 2);
     }
 
     #[test]
@@ -1109,8 +1082,16 @@ mod tests {
     #[test]
     fn reading_an_unrecorded_label_or_agent_creates_no_slice() {
         let s = Stats::new();
-        assert_eq!(s.stats_for_label("typo").turns(), 0);
-        assert_eq!(s.stats_for_agent("typo").turns(), 0);
+        assert_eq!(
+            s.stats_for_label("typo")
+                .event_count(EventName::TurnStarted),
+            0
+        );
+        assert_eq!(
+            s.stats_for_agent("typo")
+                .event_count(EventName::TurnStarted),
+            0
+        );
 
         let value = serde_json::to_value(&s).unwrap();
         assert!(value.get("labels").is_none());
@@ -1123,13 +1104,17 @@ mod tests {
         s.record_event(&turn(), "KEY", &["scan".into()], "");
         s.record_event(&request(10, 5), "KEY", &["scan".into()], "");
         let slice = s.stats_for_label("scan");
-        assert_eq!(slice.turns(), 1);
+        assert_eq!(slice.event_count(EventName::TurnStarted), 1);
         assert_eq!(slice.input_tokens(), 10);
         assert_eq!(slice.output_tokens(), 5);
-        assert_eq!(s.turns(), 1);
+        assert_eq!(s.event_count(EventName::TurnStarted), 1);
         assert_eq!(s.input_tokens(), 10);
         // A label the events never named stays empty.
-        assert_eq!(s.stats_for_label("other").turns(), 0);
+        assert_eq!(
+            s.stats_for_label("other")
+                .event_count(EventName::TurnStarted),
+            0
+        );
     }
 
     #[test]
@@ -1138,9 +1123,13 @@ mod tests {
         s.record_event(&turn(), "KEY", &["scan".into()], "scout");
         s.record_event(&request(10, 5), "KEY", &["scan".into()], "scout");
         let slice = s.stats_for_agent("scout");
-        assert_eq!(slice.turns(), 1);
+        assert_eq!(slice.event_count(EventName::TurnStarted), 1);
         assert_eq!(slice.input_tokens(), 10);
-        assert_eq!(s.stats_for_agent("writer").turns(), 0);
+        assert_eq!(
+            s.stats_for_agent("writer")
+                .event_count(EventName::TurnStarted),
+            0
+        );
     }
 
     #[test]
@@ -1149,8 +1138,16 @@ mod tests {
         // two namespaces collide unless the maps stay separate.
         let s = Stats::new();
         s.record_event(&turn(), "KEY", &["scout".into()], "scout");
-        assert_eq!(s.stats_for_label("scout").turns(), 1);
-        assert_eq!(s.stats_for_agent("scout").turns(), 1);
+        assert_eq!(
+            s.stats_for_label("scout")
+                .event_count(EventName::TurnStarted),
+            1
+        );
+        assert_eq!(
+            s.stats_for_agent("scout")
+                .event_count(EventName::TurnStarted),
+            1
+        );
         assert!(!Arc::ptr_eq(
             &s.stats_for_label("scout"),
             &s.stats_for_agent("scout"),
@@ -1161,8 +1158,8 @@ mod tests {
     fn run_level_events_reach_no_agent_slice() {
         let s = Stats::new();
         s.record_event(&turn(), "KEY", &[], "");
-        assert_eq!(s.turns(), 1);
-        assert_eq!(s.stats_for_agent("").turns(), 0);
+        assert_eq!(s.event_count(EventName::TurnStarted), 1);
+        assert_eq!(s.stats_for_agent("").event_count(EventName::TurnStarted), 0);
     }
 
     #[test]
@@ -1216,10 +1213,10 @@ mod tests {
         use crate::persistence::Persist;
         s.save(dir.path()).unwrap();
         let restored = Stats::load(dir.path()).unwrap();
-        assert_eq!(restored.turns(), 2);
-        assert_eq!(restored.requests(), 1);
-        assert_eq!(restored.tool_calls(), 1);
-        assert_eq!(restored.requests_failed(), 1);
+        assert_eq!(restored.event_count(EventName::TurnStarted), 2);
+        assert_eq!(restored.event_count(EventName::RequestFinished), 1);
+        assert_eq!(restored.event_count(EventName::ToolCallStarted), 1);
+        assert_eq!(restored.event_count(EventName::RequestFailed), 1);
         assert_eq!(restored.input_tokens(), 100);
         assert_eq!(restored.output_tokens(), 50);
         assert_eq!(restored.tickets_created(), 1);
@@ -1229,7 +1226,7 @@ mod tests {
         assert_eq!(restored.total_work_duration(), Duration::from_secs(7));
 
         let restored_slice = restored.stats_for_label("scan");
-        assert_eq!(restored_slice.turns(), 1);
+        assert_eq!(restored_slice.event_count(EventName::TurnStarted), 1);
         assert_eq!(restored_slice.input_tokens(), 40);
         assert_eq!(restored_slice.tickets_finished(), 1);
         assert_eq!(
@@ -1238,7 +1235,7 @@ mod tests {
         );
 
         let restored_agent = restored.stats_for_agent("seeker");
-        assert_eq!(restored_agent.turns(), 1);
+        assert_eq!(restored_agent.event_count(EventName::TurnStarted), 1);
         assert_eq!(restored_agent.input_tokens(), 30);
         assert_eq!(restored_agent.tickets_failed(), 1);
         assert_eq!(
@@ -1258,10 +1255,6 @@ mod tests {
         s.record_finished(Duration::from_secs(7), Duration::from_secs(5));
 
         let value = serde_json::to_value(&s).unwrap();
-        assert_eq!(value["turns"], 1);
-        assert_eq!(value["requests"], 1);
-        assert_eq!(value["tool_calls"], 1);
-        assert_eq!(value["requests_failed"], 1);
         assert_eq!(value["input_tokens"], 100);
         assert_eq!(value["output_tokens"], 50);
         assert_eq!(value["tickets_created"], 1);
@@ -1270,6 +1263,10 @@ mod tests {
         assert_eq!(value["total_work_duration_secs"], 5);
         assert_eq!(value["events"]["turn_started"], 1);
         assert_eq!(value["events"]["request_finished"], 1);
+        assert_eq!(value["events"]["tool_call_started"], 1);
+        assert_eq!(value["events"]["request_failed"], 1);
+        // The counts live under `events` alone, never repeated at the top.
+        assert!(value.get("turns").is_none());
     }
 
     #[test]
@@ -1281,6 +1278,23 @@ mod tests {
         let value = serde_json::to_value(&s).unwrap();
         assert!(value.get("ticket_duration_secs").is_none());
         assert!(value.get("work_duration_secs").is_none());
+    }
+
+    #[test]
+    fn load_skips_an_event_name_the_build_does_not_know() {
+        let dir = crate::test_util::TempDir::new().unwrap();
+        let body = serde_json::json!({
+            "events": { "turn_started": 3, "hyperdrive_engaged": 9 }
+        });
+        std::fs::write(
+            dir.path().join(Stats::FILE),
+            serde_json::to_vec(&body).unwrap(),
+        )
+        .unwrap();
+
+        let restored = Stats::load(dir.path()).unwrap();
+        assert_eq!(restored.event_count(EventName::TurnStarted), 3);
+        assert_eq!(restored.event_counts().len(), 1);
     }
 
     #[test]
@@ -1325,7 +1339,7 @@ mod tests {
         s.record_event(&request(40, 20), "KEY", &["scan".into()], "");
         let value = serde_json::to_value(&s).unwrap();
         let labels = value["labels"].as_object().unwrap();
-        assert_eq!(labels["scan"]["turns"], 1);
+        assert_eq!(labels["scan"]["events"]["turn_started"], 1);
         assert_eq!(labels["scan"]["input_tokens"], 40);
         // A slice carries its own subject sections, and `load` reads them
         // back through the same path the run-wide statistics use.
@@ -1706,7 +1720,7 @@ mod tests {
         assert_eq!(m.failed, 1);
         assert_eq!(m.errors(), 1);
         assert_eq!(m.error_rate(), Some(0.5));
-        assert_eq!(s.requests_failed(), 1);
+        assert_eq!(s.event_count(EventName::RequestFailed), 1);
     }
 
     #[test]

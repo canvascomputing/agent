@@ -8,10 +8,19 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use agentwerk::agents::stats::{FileStat, KnowledgeStat, ModelStat, ToolStat};
+use agentwerk::event::EventName;
 use agentwerk::{Stats, TicketQueue};
 use pyo3::prelude::*;
 
 use crate::convert::{runtime_error, value_to_py};
+
+/// Resolve the name Python passed. Rust names the kind through `EventName`, so
+/// a misspelling is a compile error there; here it has to be an error at the
+/// call rather than a silent zero.
+fn event_name(name: &str) -> PyResult<EventName> {
+    serde_json::from_value(serde_json::Value::String(name.to_string()))
+        .map_err(|_| runtime_error(format!("unknown event name: {name}")))
+}
 
 /// Where the numbers come from. The run-wide statistics live inside the ticket
 /// queue, so holding the queue is what keeps them alive. A slice scoped to one
@@ -99,25 +108,19 @@ impl PyStats {
             .collect()
     }
 
-    fn turns(&self) -> u64 {
-        self.get().turns()
-    }
-
-    fn requests(&self) -> u64 {
-        self.get().requests()
-    }
-
-    fn tool_calls(&self) -> u64 {
-        self.get().tool_calls()
-    }
-
-    fn requests_failed(&self) -> u64 {
-        self.get().requests_failed()
+    /// Get how many events of one kind were recorded. `name` is spelled the way
+    /// `Event.kind` reports it, such as `"turn_started"`.
+    fn event_count(&self, name: &str) -> PyResult<u64> {
+        Ok(self.get().event_count(event_name(name)?))
     }
 
     /// Get per-event counts, keyed by event name.
     fn event_counts(&self) -> BTreeMap<String, u64> {
-        self.get().event_counts()
+        self.get()
+            .event_counts()
+            .into_iter()
+            .map(|(event, count)| (event.name().to_string(), count))
+            .collect()
     }
 
     fn input_tokens(&self) -> u64 {
@@ -179,7 +182,7 @@ impl PyStats {
         let stats = self.get();
         format!(
             "Stats(requests={}, tickets_finished={})",
-            stats.requests(),
+            stats.event_count(EventName::RequestFinished),
             stats.tickets_finished()
         )
     }

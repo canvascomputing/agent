@@ -6,6 +6,7 @@ use std::fs;
 
 use super::common;
 
+use agentwerk::event::EventName;
 use agentwerk::schemas::Schema;
 use agentwerk::tools::ListDirectoryTool;
 use agentwerk::{Agent, Ticket, TicketQueue};
@@ -72,7 +73,7 @@ async fn separates_files_and_directories() -> std::result::Result<(), Box<dyn st
     common::print_result(results, tickets.stats());
 
     assert!(
-        tickets.stats().tool_calls() >= 1,
+        tickets.stats().event_count(EventName::ToolCallStarted) >= 1,
         "agent must call at least one tool"
     );
 

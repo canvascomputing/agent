@@ -3,6 +3,8 @@
 use std::fmt;
 use std::sync::Arc;
 
+use serde::{Deserialize, Serialize};
+
 use crate::providers::{RequestErrorKind, TokenUsage};
 
 /// Why the older messages were summarized.
@@ -327,42 +329,42 @@ pub enum EventKind {
 }
 
 impl EventKind {
-    /// The stable snake_case name that keys the per-event counts in `Stats`.
+    /// Which count this event adds to.
     ///
     /// The match is exhaustive on purpose: a new variant must name itself here,
-    /// and that one line is everything its statistics need.
-    pub(crate) fn name(&self) -> &'static str {
+    /// and that one line is everything its count needs.
+    pub fn event_name(&self) -> EventName {
         match self {
-            EventKind::RunStarted => "run_started",
-            EventKind::RunFinished { .. } => "run_finished",
-            EventKind::TicketStarted => "ticket_started",
-            EventKind::TicketFinished => "ticket_finished",
-            EventKind::TicketFailed => "ticket_failed",
-            EventKind::TurnStarted => "turn_started",
-            EventKind::RequestStarted { .. } => "request_started",
-            EventKind::RequestFinished { .. } => "request_finished",
-            EventKind::RequestFailed { .. } => "request_failed",
-            EventKind::RequestRetried { .. } => "request_retried",
-            EventKind::TextChunkReceived { .. } => "text_chunk_received",
-            EventKind::ToolCallStarted { .. } => "tool_call_started",
-            EventKind::ToolCallFinished { .. } => "tool_call_finished",
-            EventKind::ToolCallFailed { .. } => "tool_call_failed",
-            EventKind::FileOpenFinished { .. } => "file_open_finished",
-            EventKind::FileOpenFailed { .. } => "file_open_failed",
-            EventKind::KnowledgeUsed { .. } => "knowledge_used",
-            EventKind::KnowledgeFailed { .. } => "knowledge_failed",
-            EventKind::PolicyViolated { .. } => "policy_violated",
-            EventKind::SchemaRetried { .. } => "schema_retried",
-            EventKind::CompactionStarted { .. } => "compaction_started",
-            EventKind::CompactionProgress { .. } => "compaction_progress",
-            EventKind::CompactionFinished { .. } => "compaction_finished",
-            EventKind::CompactionFailed { .. } => "compaction_failed",
+            EventKind::RunStarted => EventName::RunStarted,
+            EventKind::RunFinished { .. } => EventName::RunFinished,
+            EventKind::TicketStarted => EventName::TicketStarted,
+            EventKind::TicketFinished => EventName::TicketFinished,
+            EventKind::TicketFailed => EventName::TicketFailed,
+            EventKind::TurnStarted => EventName::TurnStarted,
+            EventKind::RequestStarted { .. } => EventName::RequestStarted,
+            EventKind::RequestFinished { .. } => EventName::RequestFinished,
+            EventKind::RequestFailed { .. } => EventName::RequestFailed,
+            EventKind::RequestRetried { .. } => EventName::RequestRetried,
+            EventKind::TextChunkReceived { .. } => EventName::TextChunkReceived,
+            EventKind::ToolCallStarted { .. } => EventName::ToolCallStarted,
+            EventKind::ToolCallFinished { .. } => EventName::ToolCallFinished,
+            EventKind::ToolCallFailed { .. } => EventName::ToolCallFailed,
+            EventKind::FileOpenFinished { .. } => EventName::FileOpenFinished,
+            EventKind::FileOpenFailed { .. } => EventName::FileOpenFailed,
+            EventKind::KnowledgeUsed { .. } => EventName::KnowledgeUsed,
+            EventKind::KnowledgeFailed { .. } => EventName::KnowledgeFailed,
+            EventKind::PolicyViolated { .. } => EventName::PolicyViolated,
+            EventKind::SchemaRetried { .. } => EventName::SchemaRetried,
+            EventKind::CompactionStarted { .. } => EventName::CompactionStarted,
+            EventKind::CompactionProgress { .. } => EventName::CompactionProgress,
+            EventKind::CompactionFinished { .. } => EventName::CompactionFinished,
+            EventKind::CompactionFailed { .. } => EventName::CompactionFailed,
         }
     }
 
     /// What this event adds to the statistics beyond its own count. A kind
-    /// whose payload no measure reads adds nothing: `name()` already counted
-    /// it.
+    /// whose payload no measure reads adds nothing: `event_name()` already
+    /// counted it.
     pub(crate) fn measures(&self) -> Vec<Measure<'_>> {
         match self {
             EventKind::RequestFinished { model, usage } => vec![
@@ -418,6 +420,76 @@ impl EventKind {
 }
 
 impl fmt::Display for EventKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.event_name().name())
+    }
+}
+
+/// Which [`EventKind`] a count belongs to, without the payload the kind
+/// carries. Pass one to [`Stats::event_count`](crate::Stats::event_count); the
+/// snake_case spelling is the one `stats.json` uses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EventName {
+    RunStarted,
+    RunFinished,
+    TicketStarted,
+    TicketFinished,
+    TicketFailed,
+    TurnStarted,
+    RequestStarted,
+    RequestFinished,
+    RequestFailed,
+    RequestRetried,
+    TextChunkReceived,
+    ToolCallStarted,
+    ToolCallFinished,
+    ToolCallFailed,
+    FileOpenFinished,
+    FileOpenFailed,
+    KnowledgeUsed,
+    KnowledgeFailed,
+    PolicyViolated,
+    SchemaRetried,
+    CompactionStarted,
+    CompactionProgress,
+    CompactionFinished,
+    CompactionFailed,
+}
+
+impl EventName {
+    /// The stable snake_case spelling, the same one serde reads and writes.
+    pub fn name(&self) -> &'static str {
+        match self {
+            EventName::RunStarted => "run_started",
+            EventName::RunFinished => "run_finished",
+            EventName::TicketStarted => "ticket_started",
+            EventName::TicketFinished => "ticket_finished",
+            EventName::TicketFailed => "ticket_failed",
+            EventName::TurnStarted => "turn_started",
+            EventName::RequestStarted => "request_started",
+            EventName::RequestFinished => "request_finished",
+            EventName::RequestFailed => "request_failed",
+            EventName::RequestRetried => "request_retried",
+            EventName::TextChunkReceived => "text_chunk_received",
+            EventName::ToolCallStarted => "tool_call_started",
+            EventName::ToolCallFinished => "tool_call_finished",
+            EventName::ToolCallFailed => "tool_call_failed",
+            EventName::FileOpenFinished => "file_open_finished",
+            EventName::FileOpenFailed => "file_open_failed",
+            EventName::KnowledgeUsed => "knowledge_used",
+            EventName::KnowledgeFailed => "knowledge_failed",
+            EventName::PolicyViolated => "policy_violated",
+            EventName::SchemaRetried => "schema_retried",
+            EventName::CompactionStarted => "compaction_started",
+            EventName::CompactionProgress => "compaction_progress",
+            EventName::CompactionFinished => "compaction_finished",
+            EventName::CompactionFailed => "compaction_failed",
+        }
+    }
+}
+
+impl fmt::Display for EventName {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.name())
     }
@@ -637,7 +709,7 @@ mod tests {
         let failures: BTreeSet<&str> = all_variants()
             .iter()
             .filter(|kind| kind.is_failure())
-            .map(|kind| kind.name())
+            .map(|kind| kind.event_name().name())
             .collect();
         assert_eq!(
             failures,
@@ -667,10 +739,22 @@ mod tests {
                 assert!(
                     value[category][name].get(measure.counter).is_some(),
                     "{}: {category}.{name}.{} is missing",
-                    kind.name(),
+                    kind.event_name().name(),
                     measure.counter,
                 );
             }
+        }
+    }
+
+    #[test]
+    fn every_event_name_matches_its_serde_spelling() {
+        // `name()` is hand-written and `stats.json` is written by serde's
+        // rename_all, so the two have to agree or a saved count reloads under
+        // a name nothing asks for.
+        for kind in all_variants() {
+            let event = kind.event_name();
+            let spelled = serde_json::to_value(event).unwrap();
+            assert_eq!(spelled.as_str(), Some(event.name()));
         }
     }
 
@@ -683,9 +767,9 @@ mod tests {
         let counts = stats.event_counts();
         for kind in all_variants() {
             assert!(
-                counts.get(kind.name()).copied().unwrap_or(0) > 0,
+                counts.get(&kind.event_name()).copied().unwrap_or(0) > 0,
                 "{} missing from event counts",
-                kind.name(),
+                kind.event_name(),
             );
         }
     }

@@ -437,6 +437,7 @@ impl TicketQueue {
 mod tests {
     use super::super::test_util::*;
     use super::*;
+    use crate::event::EventName;
 
     #[test]
     fn task_creates_ticket_with_user_reporter() {
@@ -1104,8 +1105,8 @@ mod tests {
         .unwrap();
 
         let queue = TicketQueue::load(dir.path()).unwrap();
-        assert_eq!(queue.stats().turns(), 42);
-        assert_eq!(queue.stats().requests(), 7);
+        assert_eq!(queue.stats().event_count(EventName::TurnStarted), 42);
+        assert_eq!(queue.stats().event_count(EventName::RequestFinished), 7);
     }
 
     #[test]

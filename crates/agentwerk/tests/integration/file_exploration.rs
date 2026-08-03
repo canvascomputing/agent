@@ -3,6 +3,7 @@
 
 use super::common;
 
+use agentwerk::event::EventName;
 use agentwerk::tools::{GlobTool, ManageTicketsTool, ReadFileTool};
 use agentwerk::{Agent, TicketQueue};
 
@@ -32,7 +33,7 @@ async fn test() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let results = tickets.finish().await;
     common::print_result(results, tickets.stats());
 
-    assert!(tickets.stats().tool_calls() >= 1);
+    assert!(tickets.stats().event_count(EventName::ToolCallStarted) >= 1);
 
     Ok(())
 }

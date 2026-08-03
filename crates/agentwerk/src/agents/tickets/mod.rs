@@ -2,7 +2,7 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::event::PolicyKind;
+use crate::event::{EventName, PolicyKind};
 
 use super::policy::Policies;
 use super::stats::Stats;
@@ -35,7 +35,7 @@ pub(crate) fn policy_violated_kind(
     stats: &Stats,
 ) -> Option<(PolicyKind, u64)> {
     if let Some(limit) = policies.max_turns {
-        if stats.turns() >= u64::from(limit) {
+        if stats.event_count(EventName::TurnStarted) >= u64::from(limit) {
             return Some((PolicyKind::Turns, u64::from(limit)));
         }
     }

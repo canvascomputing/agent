@@ -203,18 +203,23 @@ def test_finish_reason_is_none_before_a_run(queue):
 
 def test_stats_reports_zero_counts_before_a_run(queue):
     stats = queue.stats()
-    assert stats.requests() == 0
+    assert stats.event_count("request_finished") == 0
     assert stats.tickets_created() == 0
     assert stats.tool_stats() == {}
     assert stats.run_duration() is None
 
 
+def test_event_count_rejects_a_name_no_event_carries(queue):
+    with pytest.raises(RuntimeError):
+        queue.stats().event_count("request_finishd")
+
+
 def test_stats_to_dict_keeps_the_on_disk_shape(queue):
-    assert queue.stats().to_dict()["requests"] == 0
+    assert queue.stats().to_dict()["tickets_created"] == 0
 
 
 def test_stats_for_label_slices_the_run(queue):
-    assert queue.stats().stats_for_label("scan").requests() == 0
+    assert queue.stats().stats_for_label("scan").event_count("request_finished") == 0
 
 
 def test_model_for_agent_is_none_when_no_agent_is_bound(queue):
