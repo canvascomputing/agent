@@ -331,6 +331,11 @@ pub enum EventKind {
 }
 
 impl EventKind {
+    /// The stable snake_case spelling of this kind, as `stats.json` writes it.
+    pub fn name(&self) -> &'static str {
+        self.event_name().as_str()
+    }
+
     /// Which count this event adds to.
     ///
     /// The match is exhaustive on purpose: a new variant must name itself here,
@@ -424,7 +429,7 @@ impl EventKind {
 
 impl fmt::Display for EventKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.event_name().name())
+        f.write_str(self.name())
     }
 }
 
@@ -493,7 +498,7 @@ impl EventName {
     ];
 
     /// The stable snake_case spelling, the same one serde reads and writes.
-    pub fn name(&self) -> &'static str {
+    pub fn as_str(&self) -> &'static str {
         match self {
             EventName::RunStarted => "run_started",
             EventName::RunFinished => "run_finished",
@@ -526,7 +531,7 @@ impl EventName {
 
 impl fmt::Display for EventName {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.name())
+        f.write_str(self.as_str())
     }
 }
 
@@ -748,7 +753,7 @@ mod tests {
         let failures: BTreeSet<&str> = all_variants()
             .iter()
             .filter(|kind| kind.is_failure())
-            .map(|kind| kind.event_name().name())
+            .map(|kind| kind.name())
             .collect();
         assert_eq!(
             failures,
@@ -778,7 +783,7 @@ mod tests {
                 assert!(
                     value[category][name].get(measure.counter).is_some(),
                     "{}: {category}.{name}.{} is missing",
-                    kind.event_name().name(),
+                    kind.name(),
                     measure.counter,
                 );
             }
@@ -801,7 +806,7 @@ mod tests {
         for kind in all_variants() {
             let event = kind.event_name();
             let spelled = serde_json::to_value(event).unwrap();
-            assert_eq!(spelled.as_str(), Some(event.name()));
+            assert_eq!(spelled.as_str(), Some(event.as_str()));
         }
     }
 
