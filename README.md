@@ -620,7 +620,7 @@ for (name, stat) in stats.tool_stats() {
 | Method | Description |
 |--------|-------------|
 | `run_duration()` | Get the elapsed duration. |
-| `ticket_duration()` | Get the total and average time from creation to resolution, the wait in the queue included. |
+| `ticket_duration()` | Get the total and average time from creation to resolution. |
 | `agent_duration()` | Get the total and average time agents spent working, from claim to resolution. |
 | `event_count(event)` | Get how many events of one kind were recorded, such as `EventName::TurnStarted`. |
 | `input_tokens()` / `output_tokens()` | Get token counts across requests. |
