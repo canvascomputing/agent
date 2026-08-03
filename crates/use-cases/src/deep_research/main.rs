@@ -226,7 +226,7 @@ fn print_stats(tickets: &TicketQueue) {
         "  Duration : {:?}",
         stats.execution_duration().unwrap_or_default()
     );
-    eprintln!("  Work time: {:?}", stats.agent_duration().total);
+    eprintln!("  Work time: {:?}", stats.work_duration().total);
     let done = stats.event_count(EventName::TicketFinished);
     let failed = stats.event_count(EventName::TicketFailed);
     let resolved = done + failed;

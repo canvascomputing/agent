@@ -166,7 +166,7 @@ Seven rules the surface table below never repeats.
 | `Stats::event_counts()` | `Stats.event_counts()`: keyed by that string. |
 | `Stats::input_tokens()`, `::output_tokens()` | Same names. |
 | `Stats::execution_duration()` | `Stats.execution_duration()` |
-| `Stats::ticket_duration()`, `::agent_duration()` | Same names. |
+| `Stats::ticket_duration()`, `::work_duration()` | Same names. |
 | `serde_json::to_value(&stats)` | `Stats.to_dict()`: Python cannot call `serde`, so reaching the `stats.json` shape needs a method. |
 | `ToolStat { calls, failures }` | Same, including `errors()` and `error_rate()`. `failures` is keyed by the reason as a string, where Rust keys it by `ToolFailureKind`. |
 | `FileStat { opens, failures }` | Same, on the same terms. |
