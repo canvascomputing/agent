@@ -203,8 +203,8 @@ def test_finish_reason_is_none_before_a_run(queue):
 
 def test_stats_reports_zero_counts_before_a_run(queue):
     stats = queue.stats()
-    assert stats.event_count("request_finished") == 0
-    assert stats.tickets_created() == 0
+    assert stats.event_count(aw.EventName.REQUEST_FINISHED) == 0
+    assert stats.event_count(aw.EventName.TICKET_CREATED) == 0
     assert stats.tool_stats() == {}
     assert stats.run_duration() is None
 
@@ -214,8 +214,18 @@ def test_event_count_rejects_a_name_no_event_carries(queue):
         queue.stats().event_count("request_finishd")
 
 
+def test_event_name_spells_the_kind_an_event_reports(queue):
+    seen = []
+    queue.on_event(lambda event: seen.append(event.kind))
+
+    queue.task("seed")
+
+    assert aw.EventName.TICKET_CREATED in seen
+    assert queue.stats().event_count(aw.EventName.TICKET_CREATED) == 1
+
+
 def test_stats_to_dict_keeps_the_on_disk_shape(queue):
-    assert queue.stats().to_dict()["tickets_created"] == 0
+    assert queue.stats().to_dict()["input_tokens"] == 0
 
 
 def test_stats_for_label_slices_the_run(queue):

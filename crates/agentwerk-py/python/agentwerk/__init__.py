@@ -47,7 +47,18 @@ from ._agentwerk import (
     provider_from_env,
     model_from_env,
     context_window_from_env,
+    event_names,
 )
+
+# The names an `Event.kind` reports and `Stats.event_count` accepts, as
+# constants rather than literals. Built from the crate's list so the two
+# cannot end up spelling a kind differently.
+EventName = type(
+    "EventName",
+    (),
+    {name.upper(): name for name in event_names()},
+)
+EventName.__doc__ = "Every event kind's name, the spelling `Event.kind` reports."
 
 
 def tool(
@@ -88,6 +99,7 @@ __all__ = [
     "Agent",
     "Compaction",
     "Event",
+    "EventName",
     "FileStat",
     "Knowledge",
     "KnowledgeStat",

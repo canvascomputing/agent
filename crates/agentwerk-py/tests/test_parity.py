@@ -15,8 +15,9 @@ import agentwerk as aw
 STUB = pathlib.Path(aw.__file__).with_suffix(".pyi")
 
 # Dunders the interpreter adds to every class, plus the two PyO3 stamps on each
-# one. None of them belong in a hand-written stub.
-INHERITED = set(dir(object)) | {"__dict__", "__module__"}
+# one and the two more a Python-defined class carries. None of them belong in a
+# hand-written stub.
+INHERITED = set(dir(object)) | {"__dict__", "__module__", "__weakref__"}
 
 
 def stub_tree():

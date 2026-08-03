@@ -227,15 +227,15 @@ fn print_stats(tickets: &TicketQueue) {
         stats.run_duration().unwrap_or_default()
     );
     eprintln!("  Work time: {:?}", stats.total_work_duration());
-    eprintln!(
-        "  Tickets  : {} done, {} failed ({:.0}%)",
-        stats.tickets_finished(),
-        stats.tickets_failed(),
-        stats
-            .tickets_success_rate()
-            .map(|r| r * 100.0)
-            .unwrap_or(0.0),
-    );
+    let done = stats.event_count(EventName::TicketFinished);
+    let failed = stats.event_count(EventName::TicketFailed);
+    let resolved = done + failed;
+    let success = if resolved == 0 {
+        0.0
+    } else {
+        done as f64 / resolved as f64 * 100.0
+    };
+    eprintln!("  Tickets  : {done} done, {failed} failed ({success:.0}%)");
     eprintln!(
         "  Avg time : {:?}",
         stats.avg_ticket_duration().unwrap_or_default()

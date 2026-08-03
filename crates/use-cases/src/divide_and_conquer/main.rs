@@ -18,7 +18,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
-use agentwerk::event::{Event, EventKind};
+use agentwerk::event::{Event, EventKind, EventName};
 use agentwerk::providers::{model_from_env, provider_from_env};
 use agentwerk::schemas::Schema;
 use agentwerk::tools::{ManageTicketsTool, Tool, ToolResult};
@@ -117,7 +117,7 @@ fn aggregate_and_report(
 
     eprintln!(
         "{dim}└ aggregated in {elapsed:.1}s · {} done, {failures} failed · {} in / {} out tokens{reset}",
-        stats.tickets_finished(),
+        stats.event_count(EventName::TicketFinished),
         stats.input_tokens(),
         stats.output_tokens(),
         dim = style.dim,
