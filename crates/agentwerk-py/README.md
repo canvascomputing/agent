@@ -598,7 +598,7 @@ Statistics give you deep insights into behavior of your agents: working time, ti
 
 ```python
 stats = tickets.stats()
-print(stats.requests(), stats.input_tokens())
+print(stats.event_count("request_finished"), stats.input_tokens())
 
 for name, stat in stats.tool_stats().items():
     print(name, stat.calls)
@@ -614,8 +614,7 @@ for name, stat in stats.tool_stats().items():
 | `total_work_duration()` / `avg_work_duration()` | Get the total and average time an agent held a ticket. |
 | `tickets_created()` / `tickets_finished()` / `tickets_failed()` | Get the ticket counts by outcome. |
 | `tickets_success_rate()` | Get `finished / (finished + failed)`. |
-| `turns()` / `requests()` | Get how many turns ran and how many responses arrived. |
-| `tool_calls()` / `requests_failed()` | Get the tool-call count and the failed-request count. |
+| `event_count(name)` | Get how many events of one kind were recorded, such as `"turn_started"`. |
 | `input_tokens()` / `output_tokens()` | Get token counts across requests. |
 | `tool_stats()` | Get per-tool call and failure counts. |
 | `file_stats()` | Get per-filepath open and failure counts. |

@@ -600,8 +600,14 @@ tickets.on_ticket(move |event, ticket| {
 Statistics give you deep insights into behavior of your agents: working time, tickets, failure rates, bottlenecks etc.
 
 ```rust
+use agentwerk::event::EventName;
+
 let stats = tickets.stats();
-println!("{} requests, {} input tokens", stats.requests(), stats.input_tokens());
+println!(
+    "{} requests, {} input tokens",
+    stats.event_count(EventName::RequestFinished),
+    stats.input_tokens(),
+);
 
 for (name, stat) in stats.tool_stats() {
     println!("{name}: {} calls", stat.calls);
@@ -618,8 +624,7 @@ for (name, stat) in stats.tool_stats() {
 | `total_work_duration()` / `avg_work_duration()` | Get the total and average time an agent held a ticket. |
 | `tickets_created()` / `tickets_finished()` / `tickets_failed()` | Get the ticket counts by outcome. |
 | `tickets_success_rate()` | Get `finished / (finished + failed)`. |
-| `turns()` / `requests()` | Get how many turns ran and how many responses arrived. |
-| `tool_calls()` / `requests_failed()` | Get the tool-call count and the failed-request count. |
+| `event_count(event)` | Get how many events of one kind were recorded, such as `EventName::TurnStarted`. |
 | `input_tokens()` / `output_tokens()` | Get token counts across requests. |
 | `tool_stats()` | Get per-tool call and failure counts. |
 | `file_stats()` | Get per-filepath open and failure counts. |

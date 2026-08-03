@@ -162,8 +162,8 @@ Seven rules the surface table below never repeats.
 | `Stats::file_stats()` | `Stats.file_stats()` |
 | `Stats::knowledge_stats()` | `Stats.knowledge_stats()` |
 | `Stats::model_stats()` | `Stats.model_stats()` |
-| `Stats::turns()`, `::requests()`, `::tool_calls()`, `::requests_failed()` | Same names. |
-| `Stats::event_counts()` | `Stats.event_counts()` |
+| `Stats::event_count(event)` | `Stats.event_count(name)`: Python names the kind with the same string `Event.kind` reports, since the `EventName` enum has no Python counterpart. An unknown name raises. |
+| `Stats::event_counts()` | `Stats.event_counts()`: keyed by that same string rather than by `EventName`. |
 | `Stats::input_tokens()`, `::output_tokens()` | Same names. |
 | `Stats::tickets_created()`, `::tickets_finished()`, `::tickets_failed()` | Same names. |
 | `Stats::tickets_success_rate()` | `Stats.tickets_success_rate()` |
@@ -182,7 +182,7 @@ Seven rules the surface table below never repeats.
 | **Events** | |
 | `Event { agent_name, ticket_key, kind }` | `Event.agent_name`, `.ticket_key`, `.kind` |
 | `EventKind` variant payload | `Event.data`: a dict of that variant's fields. |
-| `EventKind`, `FinishReason` | Strings. |
+| `EventKind`, `EventName`, `FinishReason` | Strings. |
 | `EventKind::is_failure()` | Not bound: `Event.kind` is a string, so ask `TicketQueue.on_failure(handler)` for the same six kinds. |
 | `CompactReason`, `PolicyKind`, `ToolFailureKind`, `KnowledgeOp` | Strings inside `Event.data`, under the field's own name: `data["policy"]`, `data["reason"]`, `data["op"]`. |
 | `default_logger()` | Not bound: pass your own handler to `TicketQueue.on_event(handler)`. |
