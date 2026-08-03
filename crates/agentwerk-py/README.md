@@ -610,10 +610,8 @@ for name, stat in stats.tool_stats().items():
 | Method | Description |
 |--------|-------------|
 | `run_duration()` | Get the elapsed duration. |
-| `total_ticket_duration()` / `avg_ticket_duration()` | Get the total and average time from creation to resolution. |
-| `total_work_duration()` / `avg_work_duration()` | Get the total and average time an agent held a ticket. |
-| `tickets_created()` / `tickets_finished()` / `tickets_failed()` | Get the ticket counts by outcome. |
-| `tickets_success_rate()` | Get `finished / (finished + failed)`. |
+| `ticket_duration()` | Get the total and average time from creation to resolution. |
+| `agent_duration()` | Get the total and average time an agent held a ticket. |
 | `event_count(name)` | Get how many events of one kind were recorded, such as `"turn_started"`. |
 | `input_tokens()` / `output_tokens()` | Get token counts across requests. |
 | `tool_stats()` | Get per-tool call and failure counts. |

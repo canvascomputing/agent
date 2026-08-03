@@ -99,7 +99,7 @@ InvalidRequest, UnexpectedStatus, MissingKey, RequestError               // reje
 `requests`, `tool_calls`, `turns`, `input_tokens`, `output_tokens`
 
 - `Stats` sets the vocabulary; event payloads follow suit: `usage` on `RequestFinished` carries token counts, not a `token_count`.
-- Accessor methods mirror the field form: `Stats::requests()` returns how many requests were recorded.
+- Accessor methods mirror the field form: `Stats::input_tokens()` returns how many input tokens were recorded.
 - The `_count` suffix is reserved for the rare case where the plural would clash with a sibling collection field on the same type.
 - The ban is on scalars: a map keyed by subject is named for what its values are, `<subject>_counts()` for a bare count (`event_counts()`) and `<subject>_stats()` for a struct (`tool_stats()`). Bare `<subject>s()` stays reserved for a collection of the subject itself, so the map is not `Stats::events()`.
 
@@ -107,10 +107,10 @@ InvalidRequest, UnexpectedStatus, MissingKey, RequestError               // reje
 
 **A value undefined over an empty population returns `Option`. A sum returns its zero.**
 
-- `Option`: `avg_ticket_duration()`, `tickets_success_rate()`, `ToolStat::error_rate()`, and `run_duration()`, which has no answer until execution starts.
-- Not `Option`: `total_ticket_duration()`, `turns()`, `requests()`. Zero is the honest answer for a sum over nothing.
+- `Option`: `TimeStat::average`, `ToolStat::error_rate()`, and `run_duration()`, which has no answer until execution starts.
+- Not `Option`: `TimeStat::total`, `input_tokens()`, `event_count(event)`. Zero is the honest answer for a sum over nothing.
 - One sentence covers averages, rates, and not-yet-started values, so per-accessor exceptions are not added.
-- A sum is named `total_<noun>`: the bare noun reads as one subject's value, not the population's.
+- A sum is named `total`: the bare noun reads as one subject's value, not the population's. When a sum and its mean travel together they are the two fields of one struct, `TimeStat { total, average }`, rather than two accessors prefixed `total_` and `avg_`.
 
 ## Persistence Verbs
 
