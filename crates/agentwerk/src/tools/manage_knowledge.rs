@@ -7,8 +7,8 @@ use std::sync::{Arc, OnceLock};
 
 use serde_json::Value;
 
-use crate::agents::knowledge::Knowledge;
-use crate::event::{EventKind, KnowledgeOp};
+use crate::agents::knowledge::{Knowledge, KnowledgeError};
+use crate::event::{EventKind, KnowledgeFailureKind, KnowledgeOp};
 use crate::providers::ProviderResult;
 
 use super::tool::{ToolContext, ToolLike, ToolResult};
@@ -48,6 +48,15 @@ fn tool_file() -> &'static ToolFile {
 fn description() -> &'static str {
     static DESC: OnceLock<String> = OnceLock::new();
     DESC.get_or_init(|| tool_file().render_markdown())
+}
+
+/// Which failure the statistics count this under. Everything but a missing
+/// page is the store refusing: rejected values, the index limit, or IO.
+fn failure_kind(error: &KnowledgeError) -> KnowledgeFailureKind {
+    match error {
+        KnowledgeError::PageMissing { .. } => KnowledgeFailureKind::PageMissing,
+        _ => KnowledgeFailureKind::StoreRefused,
+    }
 }
 
 /// Progress line shown to the model after a mutation: how much of the
@@ -129,6 +138,7 @@ impl ToolLike for ManageKnowledgeTool {
                         Err(why) => {
                             record(EventKind::KnowledgeFailed {
                                 op: KnowledgeOp::Write,
+                                reason: failure_kind(&why),
                             });
                             Ok(ToolResult::error(why.to_string()))
                         }
@@ -147,9 +157,10 @@ impl ToolLike for ManageKnowledgeTool {
                             });
                             Ok(ToolResult::success(page.content))
                         }
-                        Err(_) => {
+                        Err(why) => {
                             record(EventKind::KnowledgeFailed {
                                 op: KnowledgeOp::Read,
+                                reason: failure_kind(&why),
                             });
                             Ok(ToolResult::success(format!(
                                 "No page found for `{slug}`. Check the knowledge index before reading: only slugs listed there exist."
@@ -173,6 +184,7 @@ impl ToolLike for ManageKnowledgeTool {
                         Err(why) => {
                             record(EventKind::KnowledgeFailed {
                                 op: KnowledgeOp::Remove,
+                                reason: failure_kind(&why),
                             });
                             Ok(ToolResult::error(why.to_string()))
                         }
@@ -454,7 +466,8 @@ mod tests {
             "both slugs were read, present or not"
         );
         assert_eq!(
-            k["read"].failed, 1,
+            k["read"].failures[&KnowledgeFailureKind::PageMissing],
+            1,
             "the read of an absent slug did not go through"
         );
         assert_eq!(k["remove"].attempts, 1);

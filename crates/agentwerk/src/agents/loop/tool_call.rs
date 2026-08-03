@@ -81,9 +81,6 @@ pub(super) async fn run(context: &mut TicketContext<'_>, mut calls: Vec<ToolCall
                 // fails its ticket instead of looping until the time limit.
                 context.consecutive_schema_failures =
                     context.consecutive_schema_failures.saturating_add(1);
-                for path in &opened_paths {
-                    context.emit(EventKind::FileOpenFailed { path: path.clone() });
-                }
                 if matches!(error, ToolError::SchemaValidationFailed { .. })
                     && schema_failure_message.is_none()
                 {
@@ -96,6 +93,14 @@ pub(super) async fn run(context: &mut TicketContext<'_>, mut calls: Vec<ToolCall
                         ToolFailureKind::SchemaValidationFailed
                     }
                 };
+                // A path fails with the call that named it, so it carries the
+                // call's reason.
+                for path in &opened_paths {
+                    context.emit(EventKind::FileOpenFailed {
+                        path: path.clone(),
+                        reason: failure_kind,
+                    });
+                }
                 context.emit(EventKind::ToolCallFailed {
                     tool_name,
                     call_id: tool_use_id.clone(),

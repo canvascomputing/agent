@@ -145,7 +145,7 @@ impl std::error::Error for ProviderError {}
 /// Categorical discriminant of [`ProviderError`] for event observers. Mirrors
 /// the variants of `ProviderError` without their payloads, so matching on
 /// `kind` is a stable branching point independent of the detail carried.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum RequestErrorKind {
     AuthenticationFailed,
     PermissionDenied,
@@ -160,9 +160,26 @@ pub enum RequestErrorKind {
     ProviderUnrecognized,
 }
 
-impl fmt::Display for RequestErrorKind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
+impl RequestErrorKind {
+    /// Every kind, in the order they are declared.
+    pub const ALL: &'static [RequestErrorKind] = &[
+        RequestErrorKind::AuthenticationFailed,
+        RequestErrorKind::PermissionDenied,
+        RequestErrorKind::ModelNotFound,
+        RequestErrorKind::ContextWindowExceeded,
+        RequestErrorKind::SafetyFilterTriggered,
+        RequestErrorKind::RateLimited,
+        RequestErrorKind::StatusUnclassified,
+        RequestErrorKind::ConnectionFailed,
+        RequestErrorKind::StreamInterrupted,
+        RequestErrorKind::ResponseMalformed,
+        RequestErrorKind::ProviderUnrecognized,
+    ];
+
+    /// The stable snake_case spelling, which is also the counter this failure
+    /// adds to under `models.<name>`.
+    pub fn as_str(&self) -> &'static str {
+        match self {
             RequestErrorKind::AuthenticationFailed => "authentication_failed",
             RequestErrorKind::PermissionDenied => "permission_denied",
             RequestErrorKind::ModelNotFound => "model_not_found",
@@ -174,7 +191,19 @@ impl fmt::Display for RequestErrorKind {
             RequestErrorKind::StreamInterrupted => "stream_interrupted",
             RequestErrorKind::ResponseMalformed => "response_malformed",
             RequestErrorKind::ProviderUnrecognized => "provider_unrecognized",
-        })
+        }
+    }
+}
+
+impl fmt::Display for RequestErrorKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl serde::Serialize for RequestErrorKind {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
     }
 }
 

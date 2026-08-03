@@ -249,9 +249,7 @@ class TimeStat:
 
 class ToolStat:
     calls: int
-    not_found: int
-    execution_failed: int
-    schema_failed: int
+    failures: dict[str, int]
 
     def errors(self) -> int: ...
     def error_rate(self) -> Optional[float]: ...
@@ -259,7 +257,7 @@ class ToolStat:
 
 class FileStat:
     opens: int
-    failed: int
+    failures: dict[str, int]
 
     def errors(self) -> int: ...
     def error_rate(self) -> Optional[float]: ...
@@ -267,7 +265,7 @@ class FileStat:
 
 class KnowledgeStat:
     attempts: int
-    failed: int
+    failures: dict[str, int]
 
     def errors(self) -> int: ...
     def error_rate(self) -> Optional[float]: ...
@@ -275,9 +273,9 @@ class KnowledgeStat:
 
 class ModelStat:
     requests: int
-    failed: int
     input_tokens: int
     output_tokens: int
+    failures: dict[str, int]
 
     def errors(self) -> int: ...
     def error_rate(self) -> Optional[float]: ...

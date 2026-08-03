@@ -195,7 +195,7 @@ impl PyTimeStat {
     }
 }
 
-/// A `ToolStat` counts one tool's calls and failures.
+/// A `ToolStat` counts one tool's calls and the failures they ended in.
 #[pyclass(name = "ToolStat")]
 pub struct PyToolStat {
     inner: ToolStat,
@@ -209,22 +209,14 @@ impl PyToolStat {
         self.inner.calls
     }
 
+    /// Those calls that failed, keyed by the reason `Event.data["reason"]`
+    /// reports. A reason nothing failed under is left out.
     #[getter]
-    fn not_found(&self) -> u64 {
-        self.inner.not_found
+    fn failures(&self) -> BTreeMap<String, u64> {
+        named(&self.inner.failures)
     }
 
-    #[getter]
-    fn execution_failed(&self) -> u64 {
-        self.inner.execution_failed
-    }
-
-    #[getter]
-    fn schema_failed(&self) -> u64 {
-        self.inner.schema_failed
-    }
-
-    /// Get the total failures across the three kinds.
+    /// Get the total failures across the kinds.
     fn errors(&self) -> u64 {
         self.inner.errors()
     }
@@ -243,8 +235,8 @@ impl PyToolStat {
     }
 }
 
-/// A `FileStat` counts how often a tool opened one path, and how often it could
-/// not.
+/// A `FileStat` counts how often a tool opened one path, and the failures it
+/// ended in.
 #[pyclass(name = "FileStat")]
 pub struct PyFileStat {
     inner: FileStat,
@@ -252,17 +244,19 @@ pub struct PyFileStat {
 
 #[pymethods]
 impl PyFileStat {
+    /// Every call that named this path, including the ones that failed.
     #[getter]
     fn opens(&self) -> u64 {
         self.inner.opens
     }
 
+    /// Those calls that failed, keyed by reason.
     #[getter]
-    fn failed(&self) -> u64 {
-        self.inner.failed
+    fn failures(&self) -> BTreeMap<String, u64> {
+        named(&self.inner.failures)
     }
 
-    /// Get the total failures.
+    /// Get the total failures across the kinds.
     fn errors(&self) -> u64 {
         self.inner.errors()
     }
@@ -274,13 +268,15 @@ impl PyFileStat {
 
     fn __repr__(&self) -> String {
         format!(
-            "FileStat(opens={}, failed={})",
-            self.inner.opens, self.inner.failed
+            "FileStat(opens={}, errors={})",
+            self.inner.opens,
+            self.inner.errors()
         )
     }
 }
 
-/// A `KnowledgeStat` counts one knowledge operation's attempts and failures.
+/// A `KnowledgeStat` counts one knowledge operation's attempts and the
+/// failures they ended in.
 #[pyclass(name = "KnowledgeStat")]
 pub struct PyKnowledgeStat {
     inner: KnowledgeStat,
@@ -293,13 +289,13 @@ impl PyKnowledgeStat {
         self.inner.attempts
     }
 
-    /// Attempts that did not go through.
+    /// Those attempts that failed, keyed by reason.
     #[getter]
-    fn failed(&self) -> u64 {
-        self.inner.failed
+    fn failures(&self) -> BTreeMap<String, u64> {
+        named(&self.inner.failures)
     }
 
-    /// Get the total failures.
+    /// Get the total failures across the kinds.
     fn errors(&self) -> u64 {
         self.inner.errors()
     }
@@ -311,13 +307,15 @@ impl PyKnowledgeStat {
 
     fn __repr__(&self) -> String {
         format!(
-            "KnowledgeStat(attempts={}, failed={})",
-            self.inner.attempts, self.inner.failed
+            "KnowledgeStat(attempts={}, errors={})",
+            self.inner.attempts,
+            self.inner.errors()
         )
     }
 }
 
-/// A `ModelStat` counts one model's requests and token usage.
+/// A `ModelStat` counts one model's requests, token usage, and the failures
+/// its requests ended in.
 #[pyclass(name = "ModelStat")]
 pub struct PyModelStat {
     inner: ModelStat,
@@ -330,12 +328,6 @@ impl PyModelStat {
         self.inner.requests
     }
 
-    /// Requests that came back as a failure and were not retried.
-    #[getter]
-    fn failed(&self) -> u64 {
-        self.inner.failed
-    }
-
     #[getter]
     fn input_tokens(&self) -> u64 {
         self.inner.input_tokens
@@ -346,7 +338,13 @@ impl PyModelStat {
         self.inner.output_tokens
     }
 
-    /// Get the total failures.
+    /// Those requests that failed, keyed by reason.
+    #[getter]
+    fn failures(&self) -> BTreeMap<String, u64> {
+        named(&self.inner.failures)
+    }
+
+    /// Get the total failures across the kinds.
     fn errors(&self) -> u64 {
         self.inner.errors()
     }
@@ -362,4 +360,13 @@ impl PyModelStat {
             self.inner.requests, self.inner.input_tokens, self.inner.output_tokens
         )
     }
+}
+
+/// A failure map as Python sees it: the reason spelled the way `Event.kind`
+/// and `stats.json` spell it.
+fn named<K: std::fmt::Display>(failures: &BTreeMap<K, u64>) -> BTreeMap<String, u64> {
+    failures
+        .iter()
+        .map(|(kind, count)| (kind.to_string(), *count))
+        .collect()
 }

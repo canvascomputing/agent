@@ -82,8 +82,10 @@ impl fmt::Display for FinishReason {
     }
 }
 
-/// How a tool call failed, carried by [`EventKind::ToolCallFailed`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// How a tool call failed, carried by [`EventKind::ToolCallFailed`] and by
+/// [`EventKind::FileOpenFailed`], since a path fails with the call that named
+/// it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ToolFailureKind {
     /// No tool of that name is registered.
     ToolNotFound,
@@ -94,8 +96,16 @@ pub enum ToolFailureKind {
 }
 
 impl ToolFailureKind {
-    /// The counter this failure adds to under `tools.<name>`.
-    pub(crate) fn counter(&self) -> &'static str {
+    /// Every kind, in the order they are declared.
+    pub const ALL: &'static [ToolFailureKind] = &[
+        ToolFailureKind::ToolNotFound,
+        ToolFailureKind::ExecutionFailed,
+        ToolFailureKind::SchemaValidationFailed,
+    ];
+
+    /// The stable snake_case spelling, which is also the counter this failure
+    /// adds to under `tools.<name>` and `files.<path>`.
+    pub fn as_str(&self) -> &'static str {
         match self {
             ToolFailureKind::ToolNotFound => "not_found",
             ToolFailureKind::ExecutionFailed => "execution_failed",
@@ -106,11 +116,53 @@ impl ToolFailureKind {
 
 impl fmt::Display for ToolFailureKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            ToolFailureKind::ToolNotFound => "tool_not_found",
-            ToolFailureKind::ExecutionFailed => "execution_failed",
-            ToolFailureKind::SchemaValidationFailed => "schema_validation_failed",
-        })
+        f.write_str(self.as_str())
+    }
+}
+
+impl Serialize for ToolFailureKind {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+/// Why a knowledge operation did not go through, carried by
+/// [`EventKind::KnowledgeFailed`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum KnowledgeFailureKind {
+    /// No page exists at that slug.
+    PageMissing,
+    /// The store refused it: the values were rejected, the write would push
+    /// the index past its limit, or the file operation underneath failed.
+    StoreRefused,
+}
+
+impl KnowledgeFailureKind {
+    /// Every kind, in the order they are declared.
+    pub const ALL: &'static [KnowledgeFailureKind] = &[
+        KnowledgeFailureKind::PageMissing,
+        KnowledgeFailureKind::StoreRefused,
+    ];
+
+    /// The stable snake_case spelling, which is also the counter this failure
+    /// adds to under `knowledge.<op>`.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            KnowledgeFailureKind::PageMissing => "page_missing",
+            KnowledgeFailureKind::StoreRefused => "store_refused",
+        }
+    }
+}
+
+impl fmt::Display for KnowledgeFailureKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl Serialize for KnowledgeFailureKind {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
     }
 }
 
@@ -293,13 +345,19 @@ pub enum EventKind {
     },
     /// A tool opened a file.
     FileOpenFinished { path: String },
-    /// A tool could not open a file.
-    FileOpenFailed { path: String },
+    /// A tool could not open a file. The reason is the enclosing call's, since
+    /// a path fails with the call that named it.
+    FileOpenFailed {
+        path: String,
+        reason: ToolFailureKind,
+    },
     /// A page was written, read, removed, or listed.
     KnowledgeUsed { op: KnowledgeOp },
-    /// A page operation did not go through: the page was not there, or the
-    /// store refused the write.
-    KnowledgeFailed { op: KnowledgeOp },
+    /// A page operation did not go through.
+    KnowledgeFailed {
+        op: KnowledgeOp,
+        reason: KnowledgeFailureKind,
+    },
     /// A limit was breached and execution stopped.
     PolicyViolated { policy: PolicyKind, limit: u64 },
     /// A result missed its schema and the agent was asked again. `attempt`
@@ -382,30 +440,32 @@ impl EventKind {
             ],
             // A failed request is a request too, so `requests` is the attempt
             // count and `error_rate` divides by it. The same holds for a
-            // failed file open and a failed knowledge operation below.
-            EventKind::RequestFailed { model, .. } => vec![
+            // failed file open and a failed knowledge operation below. Each
+            // failure counts under its own reason, never under a bare
+            // `failed`.
+            EventKind::RequestFailed { model, reason, .. } => vec![
                 Measure::new(Subject::Model(model), "requests", 1),
-                Measure::new(Subject::Model(model), "failed", 1),
+                Measure::new(Subject::Model(model), reason.as_str(), 1),
             ],
             EventKind::ToolCallStarted { tool_name, .. } => {
                 vec![Measure::new(Subject::Tool(tool_name), "calls", 1)]
             }
             EventKind::ToolCallFailed {
                 tool_name, reason, ..
-            } => vec![Measure::new(Subject::Tool(tool_name), reason.counter(), 1)],
+            } => vec![Measure::new(Subject::Tool(tool_name), reason.as_str(), 1)],
             EventKind::FileOpenFinished { path } => {
                 vec![Measure::new(Subject::File(path), "opens", 1)]
             }
-            EventKind::FileOpenFailed { path } => vec![
+            EventKind::FileOpenFailed { path, reason } => vec![
                 Measure::new(Subject::File(path), "opens", 1),
-                Measure::new(Subject::File(path), "failed", 1),
+                Measure::new(Subject::File(path), reason.as_str(), 1),
             ],
             EventKind::KnowledgeUsed { op } => {
                 vec![Measure::new(Subject::Knowledge(*op), "attempts", 1)]
             }
-            EventKind::KnowledgeFailed { op } => vec![
+            EventKind::KnowledgeFailed { op, reason } => vec![
                 Measure::new(Subject::Knowledge(*op), "attempts", 1),
-                Measure::new(Subject::Knowledge(*op), "failed", 1),
+                Measure::new(Subject::Knowledge(*op), reason.as_str(), 1),
             ],
             _ => Vec::new(),
         }
@@ -702,12 +762,14 @@ mod tests {
             },
             EventKind::FileOpenFailed {
                 path: "src/missing.rs".into(),
+                reason: ToolFailureKind::ExecutionFailed,
             },
             EventKind::KnowledgeUsed {
                 op: KnowledgeOp::Write,
             },
             EventKind::KnowledgeFailed {
                 op: KnowledgeOp::Read,
+                reason: KnowledgeFailureKind::PageMissing,
             },
             EventKind::PolicyViolated {
                 policy: PolicyKind::Turns,
