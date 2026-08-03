@@ -1239,7 +1239,7 @@ impl TicketQueue {
 mod tests {
     use super::super::test_util::*;
     use super::*;
-    use crate::event::ToolFailureKind;
+    use crate::event::{EventName, ToolFailureKind};
 
     #[test]
     fn ticket_queue_handle_is_shared_between_caller_and_added_agent() {
@@ -1545,11 +1545,11 @@ mod tests {
         queue.set_failed_by(&key_b, "writer").unwrap();
 
         let scout = queue.stats().stats_for_agent("scout");
-        assert_eq!(scout.tickets_finished(), 1);
-        assert_eq!(scout.tickets_failed(), 0);
+        assert_eq!(scout.event_count(EventName::TicketFinished), 1);
+        assert_eq!(scout.event_count(EventName::TicketFailed), 0);
         let writer = queue.stats().stats_for_agent("writer");
-        assert_eq!(writer.tickets_finished(), 0);
-        assert_eq!(writer.tickets_failed(), 1);
+        assert_eq!(writer.event_count(EventName::TicketFinished), 0);
+        assert_eq!(writer.event_count(EventName::TicketFailed), 1);
     }
 
     #[test]
@@ -1558,8 +1558,14 @@ mod tests {
         queue.insert(Ticket::new("filed by scout"), "scout".into());
         queue.task("filed by the host");
 
-        assert_eq!(queue.stats().stats_for_agent("scout").tickets_created(), 1);
-        assert_eq!(queue.stats().tickets_created(), 2);
+        assert_eq!(
+            queue
+                .stats()
+                .stats_for_agent("scout")
+                .event_count(EventName::TicketCreated),
+            1
+        );
+        assert_eq!(queue.stats().event_count(EventName::TicketCreated), 2);
     }
 
     #[test]

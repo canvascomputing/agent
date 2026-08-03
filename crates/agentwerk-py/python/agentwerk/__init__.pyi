@@ -212,6 +212,35 @@ class Event:
     def data(self) -> dict: ...
     def __repr__(self) -> str: ...
 
+class EventName:
+    """Every event kind's name, the spelling `Event.kind` reports."""
+
+    RUN_STARTED: str
+    RUN_FINISHED: str
+    TICKET_CREATED: str
+    TICKET_STARTED: str
+    TICKET_FINISHED: str
+    TICKET_FAILED: str
+    TURN_STARTED: str
+    REQUEST_STARTED: str
+    REQUEST_FINISHED: str
+    REQUEST_FAILED: str
+    REQUEST_RETRIED: str
+    TEXT_CHUNK_RECEIVED: str
+    TOOL_CALL_STARTED: str
+    TOOL_CALL_FINISHED: str
+    TOOL_CALL_FAILED: str
+    FILE_OPEN_FINISHED: str
+    FILE_OPEN_FAILED: str
+    KNOWLEDGE_USED: str
+    KNOWLEDGE_FAILED: str
+    POLICY_VIOLATED: str
+    SCHEMA_RETRIED: str
+    COMPACTION_STARTED: str
+    COMPACTION_PROGRESS: str
+    COMPACTION_FINISHED: str
+    COMPACTION_FAILED: str
+
 class ToolStat:
     calls: int
     not_found: int
@@ -262,11 +291,7 @@ class Stats:
     def event_counts(self) -> dict[str, int]: ...
     def input_tokens(self) -> int: ...
     def output_tokens(self) -> int: ...
-    def tickets_created(self) -> int: ...
-    def tickets_finished(self) -> int: ...
-    def tickets_failed(self) -> int: ...
     def run_duration(self) -> Optional[float]: ...
-    def tickets_success_rate(self) -> Optional[float]: ...
     def total_ticket_duration(self) -> float: ...
     def avg_ticket_duration(self) -> Optional[float]: ...
     def total_work_duration(self) -> float: ...

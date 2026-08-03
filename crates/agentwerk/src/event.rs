@@ -241,6 +241,8 @@ pub enum EventKind {
     RunStarted,
     /// Execution ended, carrying the reason.
     RunFinished { reason: FinishReason },
+    /// A ticket was filed. The agent name is its reporter.
+    TicketCreated,
     /// An agent claimed a ticket.
     TicketStarted,
     /// A ticket finished successfully.
@@ -337,6 +339,7 @@ impl EventKind {
         match self {
             EventKind::RunStarted => EventName::RunStarted,
             EventKind::RunFinished { .. } => EventName::RunFinished,
+            EventKind::TicketCreated => EventName::TicketCreated,
             EventKind::TicketStarted => EventName::TicketStarted,
             EventKind::TicketFinished => EventName::TicketFinished,
             EventKind::TicketFailed => EventName::TicketFailed,
@@ -433,6 +436,7 @@ impl fmt::Display for EventKind {
 pub enum EventName {
     RunStarted,
     RunFinished,
+    TicketCreated,
     TicketStarted,
     TicketFinished,
     TicketFailed,
@@ -458,11 +462,42 @@ pub enum EventName {
 }
 
 impl EventName {
+    /// Every name, in the order the kinds are declared. Lets a caller walk the
+    /// counts without knowing which kinds exist.
+    pub const ALL: &'static [EventName] = &[
+        EventName::RunStarted,
+        EventName::RunFinished,
+        EventName::TicketCreated,
+        EventName::TicketStarted,
+        EventName::TicketFinished,
+        EventName::TicketFailed,
+        EventName::TurnStarted,
+        EventName::RequestStarted,
+        EventName::RequestFinished,
+        EventName::RequestFailed,
+        EventName::RequestRetried,
+        EventName::TextChunkReceived,
+        EventName::ToolCallStarted,
+        EventName::ToolCallFinished,
+        EventName::ToolCallFailed,
+        EventName::FileOpenFinished,
+        EventName::FileOpenFailed,
+        EventName::KnowledgeUsed,
+        EventName::KnowledgeFailed,
+        EventName::PolicyViolated,
+        EventName::SchemaRetried,
+        EventName::CompactionStarted,
+        EventName::CompactionProgress,
+        EventName::CompactionFinished,
+        EventName::CompactionFailed,
+    ];
+
     /// The stable snake_case spelling, the same one serde reads and writes.
     pub fn name(&self) -> &'static str {
         match self {
             EventName::RunStarted => "run_started",
             EventName::RunFinished => "run_finished",
+            EventName::TicketCreated => "ticket_created",
             EventName::TicketStarted => "ticket_started",
             EventName::TicketFinished => "ticket_finished",
             EventName::TicketFailed => "ticket_failed",
@@ -508,6 +543,9 @@ pub fn default_logger() -> Arc<dyn Fn(&Event) + Send + Sync> {
             }
             EventKind::RunFinished { reason } => {
                 eprintln!("run finished: {reason}");
+            }
+            EventKind::TicketCreated => {
+                eprintln!("[{agent}] created {}", event.ticket_key);
             }
             EventKind::TicketStarted => {
                 eprintln!("[{agent}] started {}", event.ticket_key);
@@ -602,6 +640,7 @@ mod tests {
             EventKind::RunFinished {
                 reason: FinishReason::Cancelled,
             },
+            EventKind::TicketCreated,
             EventKind::TicketStarted,
             EventKind::TicketFinished,
             EventKind::TicketFailed,
@@ -744,6 +783,14 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn all_lists_the_name_of_every_event_kind() {
+        // The bindings build Python's EventName from ALL, so a variant missing
+        // here is a name Python never learns.
+        let named: BTreeSet<EventName> = all_variants().iter().map(EventKind::event_name).collect();
+        assert_eq!(named, EventName::ALL.iter().copied().collect());
     }
 
     #[test]

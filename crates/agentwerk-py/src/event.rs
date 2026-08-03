@@ -2,11 +2,18 @@
 //! `ticket_key`, and a `data` dict, so a handler reads any event without a class
 //! per kind.
 
-use agentwerk::event::{Event, EventKind};
+use agentwerk::event::{Event, EventKind, EventName};
 use pyo3::prelude::*;
 use serde_json::{json, Value};
 
 use crate::convert::value_to_py;
+
+/// Every event name, in the order the kinds are declared. `EventName` on the
+/// Python side is built from this, so the two never carry different spellings.
+#[pyfunction]
+pub fn event_names() -> Vec<&'static str> {
+    EventName::ALL.iter().map(EventName::name).collect()
+}
 
 /// An `Event` reports one thing that happened as agents work.
 #[pyclass(name = "Event")]
@@ -51,7 +58,8 @@ pub fn to_py_event(event: &Event) -> PyEvent {
 fn payload(kind: &EventKind) -> Value {
     use EventKind::*;
     match kind {
-        RunStarted | TicketStarted | TicketFinished | TicketFailed | TurnStarted => json!({}),
+        RunStarted | TicketCreated | TicketStarted | TicketFinished | TicketFailed
+        | TurnStarted => json!({}),
         RunFinished { reason } => json!({ "reason": reason.to_string() }),
         RequestStarted { model } => json!({ "model": model }),
         RequestFinished { model, usage } => {

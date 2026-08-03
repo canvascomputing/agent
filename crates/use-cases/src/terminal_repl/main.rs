@@ -207,9 +207,9 @@ async fn main() {
                 s.event_count(EventName::ToolCallStarted),
                 s.input_tokens(),
                 s.output_tokens(),
-                s.tickets_created(),
-                s.tickets_finished(),
-                s.tickets_failed(),
+                s.event_count(EventName::TicketCreated),
+                s.event_count(EventName::TicketFinished),
+                s.event_count(EventName::TicketFailed),
                 style.reset,
             );
             continue;

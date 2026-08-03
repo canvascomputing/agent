@@ -18,6 +18,7 @@ use crate::providers::types::TokenUsage;
 /// after it finishes.
 ///
 /// ```no_run
+/// use agentwerk::event::EventName;
 /// use agentwerk::TicketQueue;
 ///
 /// # async fn run() {
@@ -27,7 +28,7 @@ use crate::providers::types::TokenUsage;
 /// let stats = tickets.stats();
 /// println!(
 ///     "{} tickets, {} input tokens",
-///     stats.tickets_finished(),
+///     stats.event_count(EventName::TicketFinished),
 ///     stats.input_tokens(),
 /// );
 /// # }
@@ -36,9 +37,6 @@ pub struct Stats {
     /// Count per event kind. Every emitted event lands here, and
     /// [`Stats::event_count`] is a lookup into this map.
     event_counts: Mutex<HashMap<EventName, u64>>,
-    tickets_created: AtomicU64,
-    tickets_finished: AtomicU64,
-    tickets_failed: AtomicU64,
 
     /// When execution started, in milliseconds since the epoch. 0 until then,
     /// and the first writer wins.
@@ -280,9 +278,6 @@ impl Stats {
     pub(crate) fn new() -> Self {
         Self {
             event_counts: Mutex::new(HashMap::new()),
-            tickets_created: AtomicU64::new(0),
-            tickets_finished: AtomicU64::new(0),
-            tickets_failed: AtomicU64::new(0),
             started_at: AtomicU64::new(0),
             finished_at: AtomicU64::new(0),
             total_ticket_duration: AtomicU64::new(0),
@@ -311,8 +306,8 @@ impl Stats {
     /// Get statistics scoped to one agent, by the name it was registered
     /// under. An agent nothing was recorded against reads as zero.
     ///
-    /// `tickets_created()` counts the tickets that agent filed; the rest count
-    /// the tickets it claimed.
+    /// `event_count(EventName::TicketCreated)` counts the tickets that agent
+    /// filed; the rest count the tickets it claimed.
     pub fn stats_for_agent(&self, agent_name: &str) -> Arc<Stats> {
         self.agent_stats
             .lock()
@@ -507,10 +502,8 @@ impl Stats {
         if prev == Status::Todo && next == Status::InProgress {
             self.record_started(now);
         }
-        match next {
-            Status::Finished => self.record_finished(ticket_duration, work_duration),
-            Status::Failed => self.record_failed(ticket_duration, work_duration),
-            _ => {}
+        if matches!(next, Status::Finished | Status::Failed) {
+            self.record_durations(ticket_duration, work_duration);
         }
     }
 
@@ -533,11 +526,7 @@ impl Stats {
             .map(|label| self.slice_for_label(label))
             .chain((!agent.is_empty()).then(|| self.slice_for_agent(agent)));
         for slice in slices {
-            match next {
-                Status::Finished => slice.record_finished(ticket_duration, work_duration),
-                Status::Failed => slice.record_failed(ticket_duration, work_duration),
-                _ => unreachable!(),
-            }
+            slice.record_durations(ticket_duration, work_duration);
         }
     }
 
@@ -573,21 +562,6 @@ impl Stats {
         self.total("models", "output_tokens")
     }
 
-    /// Get how many tickets were created.
-    pub fn tickets_created(&self) -> u64 {
-        self.tickets_created.load(Ordering::Relaxed)
-    }
-
-    /// Get how many tickets finished successfully.
-    pub fn tickets_finished(&self) -> u64 {
-        self.tickets_finished.load(Ordering::Relaxed)
-    }
-
-    /// Get how many tickets failed.
-    pub fn tickets_failed(&self) -> u64 {
-        self.tickets_failed.load(Ordering::Relaxed)
-    }
-
     /// Get the elapsed duration, which keeps growing while agents work and
     /// stops when execution ends. `None` until the first ticket starts.
     pub fn run_duration(&self) -> Option<Duration> {
@@ -606,17 +580,10 @@ impl Stats {
         Some(Duration::from_millis(now.saturating_sub(s)))
     }
 
-    /// Get `finished / (finished + failed)`, or `None` before any ticket is
-    /// resolved.
-    pub fn tickets_success_rate(&self) -> Option<f64> {
-        let done = self.tickets_finished.load(Ordering::Relaxed);
-        let failed = self.tickets_failed.load(Ordering::Relaxed);
-        let total = done + failed;
-        if total == 0 {
-            None
-        } else {
-            Some(done as f64 / total as f64)
-        }
+    /// How many tickets reached a terminal status, the population both
+    /// duration averages divide by.
+    fn tickets_resolved(&self) -> u64 {
+        self.event_count(EventName::TicketFinished) + self.event_count(EventName::TicketFailed)
     }
 
     /// Get the total time from creation to resolution.
@@ -627,8 +594,7 @@ impl Stats {
     /// Get the average time from creation to resolution, or `None` before any
     /// ticket finishes.
     pub fn avg_ticket_duration(&self) -> Option<Duration> {
-        let n = self.tickets_finished.load(Ordering::Relaxed)
-            + self.tickets_failed.load(Ordering::Relaxed);
+        let n = self.tickets_resolved();
         if n == 0 {
             None
         } else {
@@ -646,8 +612,7 @@ impl Stats {
     /// Get the average time an agent held a ticket, or `None` before any
     /// ticket finishes.
     pub fn avg_work_duration(&self) -> Option<Duration> {
-        let n = self.tickets_finished.load(Ordering::Relaxed)
-            + self.tickets_failed.load(Ordering::Relaxed);
+        let n = self.tickets_resolved();
         if n == 0 {
             None
         } else {
@@ -668,18 +633,18 @@ impl Stats {
         for t in tickets.values() {
             // No agent scope: a rebuilt ticket cannot say which agent
             // worked it, and an empty slice beats a half-filled one.
-            stats.record_scoped(&t.labels, "", |s| s.record_created());
+            stats.record_scoped(&t.labels, "", |s| s.count_event(EventName::TicketCreated));
             let ticket_dur = ticket_duration(t).unwrap_or_default();
             let work_dur = work_duration(t).unwrap_or_default();
-            match t.status {
-                Status::Finished => {
-                    stats.record_scoped(&t.labels, "", |s| s.record_finished(ticket_dur, work_dur));
-                }
-                Status::Failed => {
-                    stats.record_scoped(&t.labels, "", |s| s.record_failed(ticket_dur, work_dur));
-                }
-                Status::Todo | Status::InProgress => {}
-            }
+            let resolved = match t.status {
+                Status::Finished => EventName::TicketFinished,
+                Status::Failed => EventName::TicketFailed,
+                Status::Todo | Status::InProgress => continue,
+            };
+            stats.record_scoped(&t.labels, "", |s| {
+                s.count_event(resolved);
+                s.record_durations(ticket_dur, work_dur);
+            });
         }
         stats
     }
@@ -733,7 +698,7 @@ impl Serialize for Stats {
             .map(|category| (category, self.category_counters(category.name)))
             .filter(|(_, entries)| !entries.is_empty())
             .collect();
-        let len = 11
+        let len = 7
             + usize::from(!events.is_empty())
             + usize::from(!labels.is_empty())
             + usize::from(!agents.is_empty())
@@ -741,9 +706,6 @@ impl Serialize for Stats {
         let mut st = serializer.serialize_struct("Stats", len)?;
         st.serialize_field("input_tokens", &self.input_tokens())?;
         st.serialize_field("output_tokens", &self.output_tokens())?;
-        st.serialize_field("tickets_created", &self.tickets_created())?;
-        st.serialize_field("tickets_finished", &self.tickets_finished())?;
-        st.serialize_field("tickets_failed", &self.tickets_failed())?;
         st.serialize_field(
             "total_ticket_duration_secs",
             &self.total_ticket_duration.load(Ordering::Relaxed),
@@ -752,7 +714,6 @@ impl Serialize for Stats {
             "total_work_duration_secs",
             &self.total_work_duration.load(Ordering::Relaxed),
         )?;
-        st.serialize_field("tickets_success_rate", &self.tickets_success_rate())?;
         st.serialize_field(
             "run_duration_secs",
             &self.run_duration().map(|d| d.as_secs_f64()),
@@ -806,12 +767,6 @@ impl Stats {
                 }
             }
         }
-        self.tickets_created
-            .store(get("tickets_created"), Ordering::Relaxed);
-        self.tickets_finished
-            .store(get("tickets_finished"), Ordering::Relaxed);
-        self.tickets_failed
-            .store(get("tickets_failed"), Ordering::Relaxed);
         self.total_ticket_duration
             .store(get("total_ticket_duration_secs"), Ordering::Relaxed);
         self.total_work_duration
@@ -868,13 +823,10 @@ impl Default for Stats {
     }
 }
 
-/// Ticket lifecycle. The store writes these directly rather than through
-/// events, since a transition carries a duration no event reports.
+/// Ticket timings. The store writes these directly rather than through events,
+/// since a transition carries a duration no event reports. The counts that used
+/// to live here are `EventName::Ticket*`.
 impl Stats {
-    pub(crate) fn record_created(&self) {
-        self.tickets_created.fetch_add(1, Ordering::Relaxed);
-    }
-
     /// The first call wins. A later claim leaves the original start time
     /// untouched.
     pub(crate) fn record_started(&self, when: u64) {
@@ -883,20 +835,13 @@ impl Stats {
             .compare_exchange(0, when, Ordering::Relaxed, Ordering::Relaxed);
     }
 
-    pub(crate) fn record_finished(&self, ticket_duration: Duration, work_duration: Duration) {
-        self.tickets_finished.fetch_add(1, Ordering::Relaxed);
+    /// Add one resolved ticket's two spans to the sums. Finished and failed
+    /// tickets add alike; which outcome it was, the event count answers.
+    pub(crate) fn record_durations(&self, ticket: Duration, agent: Duration) {
         self.total_ticket_duration
-            .fetch_add(ticket_duration.as_secs(), Ordering::Relaxed);
+            .fetch_add(ticket.as_secs(), Ordering::Relaxed);
         self.total_work_duration
-            .fetch_add(work_duration.as_secs(), Ordering::Relaxed);
-    }
-
-    pub(crate) fn record_failed(&self, ticket_duration: Duration, work_duration: Duration) {
-        self.tickets_failed.fetch_add(1, Ordering::Relaxed);
-        self.total_ticket_duration
-            .fetch_add(ticket_duration.as_secs(), Ordering::Relaxed);
-        self.total_work_duration
-            .fetch_add(work_duration.as_secs(), Ordering::Relaxed);
+            .fetch_add(agent.as_secs(), Ordering::Relaxed);
     }
 }
 
@@ -952,6 +897,36 @@ mod tests {
         EventKind::KnowledgeFailed { op }
     }
 
+    /// File one ticket against `stats`, the way the store does.
+    fn create(stats: &Stats) {
+        stats.record_event(&EventKind::TicketCreated, "KEY", &[], "");
+    }
+
+    /// Resolve one ticket: the event that counts the outcome, then the two
+    /// spans the store records alongside it.
+    fn resolve(stats: &Stats, outcome: EventKind, ticket: Duration, agent: Duration) {
+        stats.record_event(&outcome, "KEY", &[], "");
+        stats.record_durations(ticket, agent);
+    }
+
+    fn finish(stats: &Stats, ticket_secs: u64, agent_secs: u64) {
+        resolve(
+            stats,
+            EventKind::TicketFinished,
+            Duration::from_secs(ticket_secs),
+            Duration::from_secs(agent_secs),
+        );
+    }
+
+    fn fail(stats: &Stats, ticket_secs: u64, agent_secs: u64) {
+        resolve(
+            stats,
+            EventKind::TicketFailed,
+            Duration::from_secs(ticket_secs),
+            Duration::from_secs(agent_secs),
+        );
+    }
+
     fn provider_error() -> EventKind {
         EventKind::RequestFailed {
             model: "m".into(),
@@ -969,15 +944,14 @@ mod tests {
         assert_eq!(s.event_count(EventName::RequestFailed), 0);
         assert_eq!(s.input_tokens(), 0);
         assert_eq!(s.output_tokens(), 0);
-        assert_eq!(s.tickets_created(), 0);
-        assert_eq!(s.tickets_finished(), 0);
-        assert_eq!(s.tickets_failed(), 0);
+        assert_eq!(s.event_count(EventName::TicketCreated), 0);
+        assert_eq!(s.event_count(EventName::TicketFinished), 0);
+        assert_eq!(s.event_count(EventName::TicketFailed), 0);
         assert_eq!(s.total_ticket_duration(), Duration::ZERO);
         assert_eq!(s.total_work_duration(), Duration::ZERO);
         assert!(s.run_duration().is_none());
         assert!(s.avg_ticket_duration().is_none());
         assert!(s.avg_work_duration().is_none());
-        assert!(s.tickets_success_rate().is_none());
     }
 
     #[test]
@@ -1002,14 +976,14 @@ mod tests {
     #[test]
     fn ticket_stats_writes_show_up_in_reads() {
         let s = Stats::new();
-        s.record_created();
-        s.record_created();
-        s.record_finished(Duration::from_secs(3), Duration::from_secs(2));
-        s.record_failed(Duration::from_secs(5), Duration::from_secs(4));
+        create(&s);
+        create(&s);
+        finish(&s, 3, 2);
+        fail(&s, 5, 4);
 
-        assert_eq!(s.tickets_created(), 2);
-        assert_eq!(s.tickets_finished(), 1);
-        assert_eq!(s.tickets_failed(), 1);
+        assert_eq!(s.event_count(EventName::TicketCreated), 2);
+        assert_eq!(s.event_count(EventName::TicketFinished), 1);
+        assert_eq!(s.event_count(EventName::TicketFailed), 1);
         assert_eq!(s.total_ticket_duration(), Duration::from_secs(8));
         assert_eq!(s.total_work_duration(), Duration::from_secs(6));
     }
@@ -1039,34 +1013,18 @@ mod tests {
     }
 
     #[test]
-    fn tickets_success_rate_done_failed_mix() {
-        let s = Stats::new();
-        s.record_finished(Duration::from_secs(1), Duration::from_secs(1));
-        s.record_finished(Duration::from_secs(2), Duration::from_secs(2));
-        s.record_failed(Duration::from_secs(3), Duration::from_secs(3));
-        let rate = s.tickets_success_rate().unwrap();
-        assert!((rate - 2.0 / 3.0).abs() < 1e-9, "rate = {rate}");
-    }
-
-    #[test]
-    fn tickets_success_rate_none_when_nothing_finished() {
-        let s = Stats::new();
-        assert!(s.tickets_success_rate().is_none());
-    }
-
-    #[test]
     fn avg_ticket_duration_is_arithmetic_mean() {
         let s = Stats::new();
-        s.record_finished(Duration::from_secs(2), Duration::from_secs(2));
-        s.record_failed(Duration::from_secs(4), Duration::from_secs(4));
+        finish(&s, 2, 2);
+        fail(&s, 4, 4);
         assert_eq!(s.avg_ticket_duration(), Some(Duration::from_secs(3)));
     }
 
     #[test]
     fn avg_work_duration_is_arithmetic_mean() {
         let s = Stats::new();
-        s.record_finished(Duration::from_secs(3), Duration::from_secs(2));
-        s.record_failed(Duration::from_secs(5), Duration::from_secs(4));
+        finish(&s, 3, 2);
+        fail(&s, 5, 4);
         assert_eq!(s.avg_work_duration(), Some(Duration::from_secs(3)));
     }
 
@@ -1166,9 +1124,9 @@ mod tests {
     fn stats_for_label_slice_run_duration_is_none() {
         let s = Stats::new();
         let slice = s.stats_for_label("scan");
-        slice.record_finished(Duration::from_secs(2), Duration::from_secs(1));
+        finish(&slice, 2, 1);
         assert!(slice.run_duration().is_none());
-        assert_eq!(slice.tickets_finished(), 1);
+        assert_eq!(slice.event_count(EventName::TicketFinished), 1);
     }
 
     #[test]
@@ -1177,8 +1135,8 @@ mod tests {
         // models 2 agents working in parallel.
         let s = Stats::new();
         s.record_started(1_000);
-        s.record_finished(Duration::from_secs(5), Duration::from_secs(5));
-        s.record_finished(Duration::from_secs(5), Duration::from_secs(5));
+        finish(&s, 5, 5);
+        finish(&s, 5, 5);
         s.record_run_finished(7_000);
         assert_eq!(s.run_duration(), Some(Duration::from_secs(6)));
         assert_eq!(s.total_work_duration(), Duration::from_secs(10));
@@ -1194,21 +1152,21 @@ mod tests {
         s.record_event(&request(100, 50), "KEY", &[], "");
         s.record_event(&tool_call("bash"), "KEY", &[], "");
         s.record_event(&provider_error(), "KEY", &[], "");
-        s.record_created();
-        s.record_finished(Duration::from_secs(7), Duration::from_secs(5));
-        s.record_failed(Duration::from_secs(3), Duration::from_secs(2));
+        create(&s);
+        finish(&s, 7, 5);
+        fail(&s, 3, 2);
 
         let slice = s.slice_for_label("scan");
         slice.record_event(&turn(), "KEY", &[], "");
         slice.record_event(&request(40, 20), "KEY", &[], "");
-        slice.record_created();
-        slice.record_finished(Duration::from_secs(4), Duration::from_secs(3));
+        create(&slice);
+        finish(&slice, 4, 3);
 
         let agent_slice = s.slice_for_agent("seeker");
         agent_slice.record_event(&turn(), "KEY", &[], "");
         agent_slice.record_event(&request(30, 10), "KEY", &[], "");
-        agent_slice.record_created();
-        agent_slice.record_failed(Duration::from_secs(6), Duration::from_secs(2));
+        create(&agent_slice);
+        fail(&agent_slice, 6, 2);
 
         use crate::persistence::Persist;
         s.save(dir.path()).unwrap();
@@ -1219,16 +1177,16 @@ mod tests {
         assert_eq!(restored.event_count(EventName::RequestFailed), 1);
         assert_eq!(restored.input_tokens(), 100);
         assert_eq!(restored.output_tokens(), 50);
-        assert_eq!(restored.tickets_created(), 1);
-        assert_eq!(restored.tickets_finished(), 1);
-        assert_eq!(restored.tickets_failed(), 1);
+        assert_eq!(restored.event_count(EventName::TicketCreated), 1);
+        assert_eq!(restored.event_count(EventName::TicketFinished), 1);
+        assert_eq!(restored.event_count(EventName::TicketFailed), 1);
         assert_eq!(restored.total_ticket_duration(), Duration::from_secs(10));
         assert_eq!(restored.total_work_duration(), Duration::from_secs(7));
 
         let restored_slice = restored.stats_for_label("scan");
         assert_eq!(restored_slice.event_count(EventName::TurnStarted), 1);
         assert_eq!(restored_slice.input_tokens(), 40);
-        assert_eq!(restored_slice.tickets_finished(), 1);
+        assert_eq!(restored_slice.event_count(EventName::TicketFinished), 1);
         assert_eq!(
             restored_slice.total_ticket_duration(),
             Duration::from_secs(4)
@@ -1237,7 +1195,7 @@ mod tests {
         let restored_agent = restored.stats_for_agent("seeker");
         assert_eq!(restored_agent.event_count(EventName::TurnStarted), 1);
         assert_eq!(restored_agent.input_tokens(), 30);
-        assert_eq!(restored_agent.tickets_failed(), 1);
+        assert_eq!(restored_agent.event_count(EventName::TicketFailed), 1);
         assert_eq!(
             restored_agent.total_ticket_duration(),
             Duration::from_secs(6)
@@ -1251,14 +1209,14 @@ mod tests {
         s.record_event(&request(100, 50), "KEY", &[], "");
         s.record_event(&tool_call("bash"), "KEY", &[], "");
         s.record_event(&provider_error(), "KEY", &[], "");
-        s.record_created();
-        s.record_finished(Duration::from_secs(7), Duration::from_secs(5));
+        create(&s);
+        finish(&s, 7, 5);
 
         let value = serde_json::to_value(&s).unwrap();
         assert_eq!(value["input_tokens"], 100);
         assert_eq!(value["output_tokens"], 50);
-        assert_eq!(value["tickets_created"], 1);
-        assert_eq!(value["tickets_finished"], 1);
+        assert_eq!(value["events"]["ticket_created"], 1);
+        assert_eq!(value["events"]["ticket_finished"], 1);
         assert_eq!(value["total_ticket_duration_secs"], 7);
         assert_eq!(value["total_work_duration_secs"], 5);
         assert_eq!(value["events"]["turn_started"], 1);
@@ -1272,8 +1230,8 @@ mod tests {
     #[test]
     fn stats_writes_each_duration_sum_once() {
         let s = Stats::new();
-        s.record_created();
-        s.record_finished(Duration::from_secs(7), Duration::from_secs(5));
+        create(&s);
+        finish(&s, 7, 5);
 
         let value = serde_json::to_value(&s).unwrap();
         assert!(value.get("ticket_duration_secs").is_none());
@@ -1318,18 +1276,6 @@ mod tests {
         let s = Stats::new();
         let value = serde_json::to_value(&s).unwrap();
         assert!(value["run_duration_secs"].is_null());
-    }
-
-    #[test]
-    fn stats_serializes_tickets_success_rate_when_tickets_present() {
-        let s = Stats::new();
-        s.record_finished(Duration::from_secs(1), Duration::from_secs(1));
-        s.record_finished(Duration::from_secs(1), Duration::from_secs(1));
-        s.record_finished(Duration::from_secs(1), Duration::from_secs(1));
-        s.record_failed(Duration::from_secs(1), Duration::from_secs(1));
-        let value = serde_json::to_value(&s).unwrap();
-        let rate = value["tickets_success_rate"].as_f64().unwrap();
-        assert!((rate - 0.75).abs() < 1e-9, "got {rate}");
     }
 
     #[test]

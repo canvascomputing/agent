@@ -131,27 +131,9 @@ impl PyStats {
         self.get().output_tokens()
     }
 
-    fn tickets_created(&self) -> u64 {
-        self.get().tickets_created()
-    }
-
-    fn tickets_finished(&self) -> u64 {
-        self.get().tickets_finished()
-    }
-
-    fn tickets_failed(&self) -> u64 {
-        self.get().tickets_failed()
-    }
-
     /// Get the elapsed duration in seconds, or `None` before execution starts.
     fn run_duration(&self) -> Option<f64> {
         self.get().run_duration().map(|d| d.as_secs_f64())
-    }
-
-    /// Get `finished / (finished + failed)`, or `None` before any ticket is
-    /// resolved.
-    fn tickets_success_rate(&self) -> Option<f64> {
-        self.get().tickets_success_rate()
     }
 
     /// Get the total time from creation to resolution, in seconds.
@@ -183,7 +165,7 @@ impl PyStats {
         format!(
             "Stats(requests={}, tickets_finished={})",
             stats.event_count(EventName::RequestFinished),
-            stats.tickets_finished()
+            stats.event_count(EventName::TicketFinished)
         )
     }
 }
