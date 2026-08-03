@@ -82,10 +82,12 @@ impl PyStats {
     }
 
     /// Get knowledge usage: write, read, remove, list, and miss counts.
-    fn knowledge_stats(&self) -> PyKnowledgeStat {
-        PyKnowledgeStat {
-            inner: self.get().knowledge_stats(),
-        }
+    fn knowledge_stats(&self) -> BTreeMap<String, PyKnowledgeStat> {
+        self.get()
+            .knowledge_stats()
+            .into_iter()
+            .map(|(op, stat)| (op, PyKnowledgeStat { inner: stat }))
+            .collect()
     }
 
     /// Get per-model requests and token usage, keyed by model name.
@@ -268,7 +270,7 @@ impl PyFileStat {
     }
 }
 
-/// A `KnowledgeStat` counts what agents did to the knowledge pages.
+/// A `KnowledgeStat` counts one knowledge operation's attempts and failures.
 #[pyclass(name = "KnowledgeStat")]
 pub struct PyKnowledgeStat {
     inner: KnowledgeStat,
@@ -277,26 +279,11 @@ pub struct PyKnowledgeStat {
 #[pymethods]
 impl PyKnowledgeStat {
     #[getter]
-    fn writes(&self) -> u64 {
-        self.inner.writes
+    fn attempts(&self) -> u64 {
+        self.inner.attempts
     }
 
-    #[getter]
-    fn reads(&self) -> u64 {
-        self.inner.reads
-    }
-
-    #[getter]
-    fn removes(&self) -> u64 {
-        self.inner.removes
-    }
-
-    #[getter]
-    fn lists(&self) -> u64 {
-        self.inner.lists
-    }
-
-    /// Attempts that did not go through, across the other four counts.
+    /// Attempts that did not go through.
     #[getter]
     fn failed(&self) -> u64 {
         self.inner.failed
@@ -307,15 +294,15 @@ impl PyKnowledgeStat {
         self.inner.errors()
     }
 
-    /// Get `errors / attempts`, or `None` when the pages were never touched.
+    /// Get `errors / attempts`, or `None` when the operation was never tried.
     fn error_rate(&self) -> Option<f64> {
         self.inner.error_rate()
     }
 
     fn __repr__(&self) -> String {
         format!(
-            "KnowledgeStat(writes={}, reads={})",
-            self.inner.writes, self.inner.reads
+            "KnowledgeStat(attempts={}, failed={})",
+            self.inner.attempts, self.inner.failed
         )
     }
 }

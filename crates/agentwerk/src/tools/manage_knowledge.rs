@@ -447,11 +447,17 @@ mod tests {
         .unwrap();
 
         let k = tickets.stats().knowledge_stats();
-        assert_eq!(k.writes, 1);
-        assert_eq!(k.lists, 1);
-        assert_eq!(k.reads, 2, "both slugs were read, present or not");
-        assert_eq!(k.failed, 1, "the read of an absent slug did not go through");
-        assert_eq!(k.removes, 1);
-        assert_eq!(k.errors(), 1);
+        assert_eq!(k["write"].attempts, 1);
+        assert_eq!(k["list"].attempts, 1);
+        assert_eq!(
+            k["read"].attempts, 2,
+            "both slugs were read, present or not"
+        );
+        assert_eq!(
+            k["read"].failed, 1,
+            "the read of an absent slug did not go through"
+        );
+        assert_eq!(k["remove"].attempts, 1);
+        assert_eq!(k["read"].errors(), 1);
     }
 }

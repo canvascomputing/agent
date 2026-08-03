@@ -68,8 +68,8 @@ pub struct Stats {
     tool_stats: Mutex<HashMap<String, ToolCounters>>,
     /// Open and failure tallies keyed by the path a tool opened.
     file_stats: Mutex<HashMap<String, FileCounters>>,
-    /// Knowledge usage tallies.
-    knowledge_stats: Mutex<KnowledgeCounters>,
+    /// Attempt and failure tallies keyed by knowledge operation.
+    knowledge_stats: Mutex<HashMap<String, KnowledgeCounters>>,
     /// Request, failure, and token tallies keyed by model name.
     model_stats: Mutex<HashMap<String, ModelCounters>>,
 }
@@ -91,14 +91,10 @@ struct FileCounters {
     failed: u64,
 }
 
-/// The stored knowledge tallies. `failed` is a subset of the four op counts,
-/// never a category of its own.
+/// The stored per-operation tallies.
 #[derive(Default, Clone)]
 struct KnowledgeCounters {
-    writes: u64,
-    reads: u64,
-    removes: u64,
-    lists: u64,
+    attempts: u64,
     failed: u64,
 }
 
@@ -193,23 +189,17 @@ impl From<&FileCounters> for FileStat {
     }
 }
 
-/// A `KnowledgeStat` counts what agents did to the knowledge pages. Returned by
-/// [`Stats::knowledge_stats`].
+/// A `KnowledgeStat` counts one knowledge operation's attempts and failures.
+/// Returned by [`Stats::knowledge_stats`], keyed by operation.
 ///
 /// A high error rate points at a stale index, or at a prompt promising more
 /// than the store holds.
 #[derive(Debug, Clone, Serialize)]
 pub struct KnowledgeStat {
-    /// Every attempt to write a page, including writes the store refused.
-    pub writes: u64,
-    /// Every attempt to read a page, including reads that named a page the
-    /// store does not have.
-    pub reads: u64,
-    /// Every attempt to remove a page, on the same terms as `reads`.
-    pub removes: u64,
-    /// Times the pages were listed. Listing cannot fail.
-    pub lists: u64,
-    /// Attempts that did not go through, across the other four counts.
+    /// Every attempt at this operation, including the ones the store refused
+    /// and the ones that named a page it does not have.
+    pub attempts: u64,
+    /// Attempts that did not go through.
     pub failed: u64,
 }
 
@@ -219,13 +209,12 @@ impl KnowledgeStat {
         self.failed
     }
 
-    /// Get `errors / attempts`, or `None` when the pages were never touched.
+    /// Get `errors / attempts`, or `None` when the operation was never tried.
     pub fn error_rate(&self) -> Option<f64> {
-        let attempts = self.writes + self.reads + self.removes + self.lists;
-        if attempts == 0 {
+        if self.attempts == 0 {
             None
         } else {
-            Some(self.errors() as f64 / attempts as f64)
+            Some(self.errors() as f64 / self.attempts as f64)
         }
     }
 }
@@ -233,10 +222,7 @@ impl KnowledgeStat {
 impl From<&KnowledgeCounters> for KnowledgeStat {
     fn from(c: &KnowledgeCounters) -> Self {
         Self {
-            writes: c.writes,
-            reads: c.reads,
-            removes: c.removes,
-            lists: c.lists,
+            attempts: c.attempts,
             failed: c.failed,
         }
     }
@@ -301,7 +287,7 @@ impl Stats {
             token_usage: Mutex::new(HashMap::new()),
             tool_stats: Mutex::new(HashMap::new()),
             file_stats: Mutex::new(HashMap::new()),
-            knowledge_stats: Mutex::new(KnowledgeCounters::default()),
+            knowledge_stats: Mutex::new(HashMap::new()),
             model_stats: Mutex::new(HashMap::new()),
         }
     }
@@ -450,27 +436,33 @@ impl Stats {
         counters.failed += 1;
     }
 
-    /// Get knowledge usage: write, read, remove, list, and failure counts.
-    pub fn knowledge_stats(&self) -> KnowledgeStat {
-        (&*self.knowledge_stats.lock().unwrap()).into()
+    /// Get per-operation attempt and failure counts, sorted by operation.
+    pub fn knowledge_stats(&self) -> BTreeMap<String, KnowledgeStat> {
+        self.knowledge_stats
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(op, counters)| (op.clone(), counters.into()))
+            .collect()
     }
 
     /// Count one knowledge operation, as `manage_knowledge` reports it.
     pub(crate) fn record_knowledge(&self, op: KnowledgeOp) {
-        let mut counters = self.knowledge_stats.lock().unwrap();
-        match op {
-            KnowledgeOp::Write => counters.writes += 1,
-            KnowledgeOp::Read => counters.reads += 1,
-            KnowledgeOp::Remove => counters.removes += 1,
-            KnowledgeOp::List => counters.lists += 1,
-        }
+        self.knowledge_stats
+            .lock()
+            .unwrap()
+            .entry(op.to_string())
+            .or_default()
+            .attempts += 1;
     }
 
-    /// Count one operation that did not go through. It counts against its op
-    /// as well, so every op count is the attempt count.
+    /// Count one operation that did not go through. It counts as an attempt as
+    /// well, so `attempts` is the attempt count and `error_rate` divides by it.
     pub(crate) fn record_knowledge_failed(&self, op: KnowledgeOp) {
-        self.record_knowledge(op);
-        self.knowledge_stats.lock().unwrap().failed += 1;
+        let mut map = self.knowledge_stats.lock().unwrap();
+        let counters = map.entry(op.to_string()).or_default();
+        counters.attempts += 1;
+        counters.failed += 1;
     }
 
     /// Get per-model requests, failures, and token usage, sorted by model
@@ -821,15 +813,13 @@ impl Serialize for Stats {
         let files = self.file_stats();
         let knowledge = self.knowledge_stats();
         let models = self.model_stats();
-        let knowledge_used =
-            knowledge.writes + knowledge.reads + knowledge.removes + knowledge.lists > 0;
         let len = 15
             + usize::from(!events.is_empty())
             + usize::from(!labels.is_empty())
             + usize::from(!agents.is_empty())
             + usize::from(!tools.is_empty())
             + usize::from(!files.is_empty())
-            + usize::from(knowledge_used)
+            + usize::from(!knowledge.is_empty())
             + usize::from(!models.is_empty());
         let mut st = serializer.serialize_struct("Stats", len)?;
         st.serialize_field("turns", &self.turns())?;
@@ -914,19 +904,22 @@ impl Serialize for Stats {
                 .collect();
             st.serialize_field("files", &nested)?;
         }
-        if knowledge_used {
-            st.serialize_field(
-                "knowledge",
-                &serde_json::json!({
-                    "writes": knowledge.writes,
-                    "reads": knowledge.reads,
-                    "removes": knowledge.removes,
-                    "lists": knowledge.lists,
-                    "failed": knowledge.failed,
-                    "errors": knowledge.errors(),
-                    "error_rate": knowledge.error_rate(),
-                }),
-            )?;
+        if !knowledge.is_empty() {
+            let nested: BTreeMap<&String, serde_json::Value> = knowledge
+                .iter()
+                .map(|(op, stat)| {
+                    (
+                        op,
+                        serde_json::json!({
+                            "attempts": stat.attempts,
+                            "failed": stat.failed,
+                            "errors": stat.errors(),
+                            "error_rate": stat.error_rate(),
+                        }),
+                    )
+                })
+                .collect();
+            st.serialize_field("knowledge", &nested)?;
         }
         if !models.is_empty() {
             let nested: BTreeMap<&String, serde_json::Value> = models
@@ -1007,15 +1000,18 @@ impl Stats {
                 );
             }
         }
-        if let Some(knowledge) = value.get("knowledge") {
-            let get = |key: &str| knowledge.get(key).and_then(|v| v.as_u64()).unwrap_or(0);
-            *self.knowledge_stats.lock().unwrap() = KnowledgeCounters {
-                writes: get("writes"),
-                reads: get("reads"),
-                removes: get("removes"),
-                lists: get("lists"),
-                failed: get("failed"),
-            };
+        if let Some(knowledge) = value.get("knowledge").and_then(|v| v.as_object()) {
+            let mut map = self.knowledge_stats.lock().unwrap();
+            for (op, body) in knowledge {
+                let get = |key: &str| body.get(key).and_then(|v| v.as_u64()).unwrap_or(0);
+                map.insert(
+                    op.clone(),
+                    KnowledgeCounters {
+                        attempts: get("attempts"),
+                        failed: get("failed"),
+                    },
+                );
+            }
         }
         if let Some(models) = value.get("models").and_then(|v| v.as_object()) {
             let mut map = self.model_stats.lock().unwrap();
@@ -1687,7 +1683,7 @@ mod tests {
     }
 
     #[test]
-    fn knowledge_records_each_operation() {
+    fn knowledge_records_attempts_and_failures_per_operation() {
         let s = Stats::new();
         s.record_knowledge(KnowledgeOp::Write);
         s.record_knowledge(KnowledgeOp::Read);
@@ -1697,13 +1693,26 @@ mod tests {
         s.record_knowledge_failed(KnowledgeOp::Read);
 
         let k = s.knowledge_stats();
-        assert_eq!(k.writes, 1);
+        assert_eq!(k["write"].attempts, 1);
         // The failed read counts as a read as well.
-        assert_eq!(k.reads, 3);
-        assert_eq!(k.removes, 1);
-        assert_eq!(k.lists, 1);
-        assert_eq!(k.failed, 1);
-        assert_eq!(k.errors(), 1);
+        assert_eq!(k["read"].attempts, 3);
+        assert_eq!(k["remove"].attempts, 1);
+        assert_eq!(k["list"].attempts, 1);
+        assert_eq!(k["read"].failed, 1);
+        assert_eq!(k["read"].errors(), 1);
+    }
+
+    #[test]
+    fn knowledge_stats_attribute_a_failure_to_its_operation() {
+        let s = Stats::new();
+        s.record_knowledge(KnowledgeOp::Write);
+        s.record_knowledge_failed(KnowledgeOp::Read);
+
+        let k = s.knowledge_stats();
+        assert_eq!(k["read"].failed, 1);
+        assert_eq!(k["read"].error_rate(), Some(1.0));
+        assert_eq!(k["write"].failed, 0);
+        assert_eq!(k["write"].error_rate(), Some(0.0));
     }
 
     #[test]
@@ -1714,8 +1723,11 @@ mod tests {
         };
         s.record_event(&used, "KEY", &["scan".into()], "");
 
-        assert_eq!(s.stats_for_label("scan").knowledge_stats().writes, 1);
-        assert_eq!(s.stats_for_label("audit").knowledge_stats().writes, 0);
+        assert_eq!(
+            s.stats_for_label("scan").knowledge_stats()["write"].attempts,
+            1
+        );
+        assert!(s.stats_for_label("audit").knowledge_stats().is_empty());
     }
 
     #[test]
@@ -1732,9 +1744,9 @@ mod tests {
         let restored = Stats::load(dir.path()).unwrap();
 
         let k = restored.knowledge_stats();
-        assert_eq!(k.writes, 1);
-        assert_eq!(k.reads, 2);
-        assert_eq!(k.failed, 1);
+        assert_eq!(k["write"].attempts, 1);
+        assert_eq!(k["read"].attempts, 2);
+        assert_eq!(k["read"].failed, 1);
     }
 
     #[test]
@@ -1745,10 +1757,11 @@ mod tests {
 
         let value = serde_json::to_value(&s).unwrap();
         let knowledge = value["knowledge"].as_object().unwrap();
-        assert_eq!(knowledge["writes"], 1);
-        assert_eq!(knowledge["failed"], 1);
-        assert_eq!(knowledge["errors"], 1);
-        assert_eq!(knowledge["reads"], 1);
+        assert_eq!(knowledge["write"]["attempts"], 1);
+        assert_eq!(knowledge["read"]["attempts"], 1);
+        assert_eq!(knowledge["read"]["failed"], 1);
+        assert_eq!(knowledge["read"]["errors"], 1);
+        assert_eq!(knowledge["read"]["error_rate"].as_f64().unwrap(), 1.0);
     }
 
     #[test]
