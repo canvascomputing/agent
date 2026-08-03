@@ -13,6 +13,7 @@ pub(crate) use builder::PromptBuilder;
 
 use crate::agents::policy::Policies;
 use crate::agents::stats::Stats;
+use crate::event::EventName;
 
 const CONTEXT_TEMPLATE: &str = include_str!("context.md");
 
@@ -120,7 +121,7 @@ const BUDGET_CONSEQUENCE: &str =
 fn runtime_budgets(policies: &Policies, stats: &Stats) -> Option<String> {
     let mut lines: Vec<String> = Vec::new();
     if let Some(limit) = policies.max_turns {
-        let remaining = u64::from(limit).saturating_sub(stats.turns());
+        let remaining = u64::from(limit).saturating_sub(stats.event_count(EventName::TurnStarted));
         lines.push(format!("- Turns remaining: {remaining}"));
     }
     if let Some(limit) = policies.max_input_tokens {

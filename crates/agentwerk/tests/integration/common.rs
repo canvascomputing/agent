@@ -5,6 +5,7 @@
 
 use std::sync::Arc;
 
+use agentwerk::event::EventName;
 use agentwerk::providers::{model_from_env, provider_from_env, Provider};
 use agentwerk::{Stats, TicketQueue};
 
@@ -25,8 +26,8 @@ pub fn last_result_text(tickets: &TicketQueue) -> String {
 pub fn print_result(tickets: &TicketQueue, stats: &Stats) {
     let json = serde_json::json!({
         "response": tickets.last_result().unwrap_or_default(),
-        "turns": stats.turns(),
-        "tool_calls": stats.tool_calls(),
+        "turns": stats.event_count(EventName::TurnStarted),
+        "tool_calls": stats.event_count(EventName::ToolCallStarted),
         "tokens_in": stats.input_tokens(),
         "tokens_out": stats.output_tokens(),
     });

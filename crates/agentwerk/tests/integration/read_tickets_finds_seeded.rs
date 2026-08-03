@@ -8,6 +8,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::common;
 
+use agentwerk::event::EventName;
 use agentwerk::tools::ReadTicketsTool;
 use agentwerk::{Agent, Ticket, TicketQueue};
 
@@ -50,7 +51,7 @@ async fn reports_a_secret_from_another_ticket(
     common::print_result(results, tickets.stats());
 
     assert!(
-        tickets.stats().tool_calls() >= 1,
+        tickets.stats().event_count(EventName::ToolCallStarted) >= 1,
         "agent must call the ticket-reading tool at least once"
     );
 

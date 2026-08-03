@@ -29,7 +29,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use agentwerk::agents::tickets::{Author, Reply, ReplyContent};
-use agentwerk::event::{Event, EventKind};
+use agentwerk::event::{Event, EventKind, EventName};
 use agentwerk::providers::{context_window_from_env, model_from_env, Model};
 use agentwerk::tools::{
     GlobTool, GrepTool, ListDirectoryTool, ManageTicketsTool, ReadFileTool, ReadTicketsTool,
@@ -202,9 +202,9 @@ async fn main() {
             eprintln!(
                 "{}{} turns · {} requests · {} tools · {} in / {} out · {} created / {} done / {} failed{}",
                 style.dim,
-                s.turns(),
-                s.requests(),
-                s.tool_calls(),
+                s.event_count(EventName::TurnStarted),
+                s.event_count(EventName::RequestFinished),
+                s.event_count(EventName::ToolCallStarted),
                 s.input_tokens(),
                 s.output_tokens(),
                 s.tickets_created(),
@@ -328,14 +328,20 @@ async fn main() {
             }
         };
 
-        let turns = stats.turns().saturating_sub(prev_turns);
-        let requests = stats.requests().saturating_sub(prev_requests);
-        let tool_calls = stats.tool_calls().saturating_sub(prev_tool_calls);
+        let turns = stats
+            .event_count(EventName::TurnStarted)
+            .saturating_sub(prev_turns);
+        let requests = stats
+            .event_count(EventName::RequestFinished)
+            .saturating_sub(prev_requests);
+        let tool_calls = stats
+            .event_count(EventName::ToolCallStarted)
+            .saturating_sub(prev_tool_calls);
         let input = stats.input_tokens().saturating_sub(prev_input);
         let output = stats.output_tokens().saturating_sub(prev_output);
-        prev_turns = stats.turns();
-        prev_requests = stats.requests();
-        prev_tool_calls = stats.tool_calls();
+        prev_turns = stats.event_count(EventName::TurnStarted);
+        prev_requests = stats.event_count(EventName::RequestFinished);
+        prev_tool_calls = stats.event_count(EventName::ToolCallStarted);
         prev_input = stats.input_tokens();
         prev_output = stats.output_tokens();
 

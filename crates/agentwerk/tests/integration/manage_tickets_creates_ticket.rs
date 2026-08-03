@@ -7,6 +7,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::common;
 
+use agentwerk::event::EventName;
 use agentwerk::tools::ManageTicketsTool;
 use agentwerk::{Agent, TicketQueue};
 
@@ -44,7 +45,7 @@ async fn creates_a_followup_ticket() -> std::result::Result<(), Box<dyn std::err
     common::print_result(results, tickets.stats());
 
     assert!(
-        tickets.stats().tool_calls() >= 1,
+        tickets.stats().event_count(EventName::ToolCallStarted) >= 1,
         "agent must call at least one tool"
     );
 

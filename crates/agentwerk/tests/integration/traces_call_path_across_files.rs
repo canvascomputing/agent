@@ -7,6 +7,7 @@ use std::fs;
 
 use super::common;
 
+use agentwerk::event::EventName;
 use agentwerk::schemas::Schema;
 use agentwerk::tools::{GlobTool, GrepTool, ListDirectoryTool, ReadFileTool};
 use agentwerk::{Agent, Ticket, TicketQueue};
@@ -113,7 +114,7 @@ async fn traces_three_hop_call_path() -> std::result::Result<(), Box<dyn std::er
     common::print_result(results, tickets.stats());
 
     assert!(
-        tickets.stats().tool_calls() >= 2,
+        tickets.stats().event_count(EventName::ToolCallStarted) >= 2,
         "tracing a call path requires at least two read-only tool calls"
     );
 

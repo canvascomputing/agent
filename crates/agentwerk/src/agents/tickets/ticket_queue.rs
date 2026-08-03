@@ -1813,7 +1813,7 @@ mod tests {
             record
                 .lock()
                 .unwrap()
-                .push((event.kind.name(), ticket.key.clone()))
+                .push((event.kind.event_name().name(), ticket.key.clone()))
         });
         let key = queue.task("work");
 
@@ -2041,7 +2041,7 @@ mod tests {
         let (queue, _tmp) = test_queue();
         let logged = Arc::new(Mutex::new(Vec::new()));
         let log = Arc::clone(&logged);
-        queue.on_event(move |e| log.lock().unwrap().push(e.kind.name()));
+        queue.on_event(move |e| log.lock().unwrap().push(e.kind.event_name().name()));
         let seen = Arc::new(Mutex::new(Vec::new()));
         let record = Arc::clone(&seen);
         queue.on_ticket(move |_, ticket| record.lock().unwrap().push(ticket.key.clone()));

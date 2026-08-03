@@ -17,7 +17,7 @@
 
 use std::sync::Arc;
 
-use agentwerk::event::{Event, EventKind};
+use agentwerk::event::{Event, EventKind, EventName};
 use agentwerk::providers::{provider_from_env, ProviderResult};
 use agentwerk::schemas::Schema;
 use agentwerk::tools::{ReadTicketsTool, Tool, ToolResult};
@@ -247,9 +247,9 @@ fn print_stats(tickets: &TicketQueue) {
     );
     eprintln!(
         "  Activity : {} requests · {} tool calls · {} failed requests",
-        stats.requests(),
-        stats.tool_calls(),
-        stats.requests_failed(),
+        stats.event_count(EventName::RequestFinished),
+        stats.event_count(EventName::ToolCallStarted),
+        stats.event_count(EventName::RequestFailed),
     );
 }
 
