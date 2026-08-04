@@ -249,7 +249,8 @@ impl PyAgent {
     /// Inject data into prompts with template strings.
     ///
     /// `{key}` is replaced in the role and in any text task. Binding `context`
-    /// replaces the built-in block the role expands.
+    /// replaces the built-in block the role expands, and binding one of its
+    /// value names, such as `ticket` or `turns_remaining`, replaces that value.
     fn template(
         mut slf: PyRefMut<'_, Self>,
         key: String,

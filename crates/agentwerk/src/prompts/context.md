@@ -1,6 +1,8 @@
-You work within a ticket queue. Each task arrives as a ticket; each reply you generate is one turn.
-
 - Ticket: {ticket}
 - Date: {date}
 - Working directory: {dir}
 - Platform: {platform} {os_version}
+- Turns remaining: {turns_remaining}
+- Input tokens remaining: {input_tokens_remaining}
+- Output tokens remaining: {output_tokens_remaining}
+- Time remaining: {time_remaining}

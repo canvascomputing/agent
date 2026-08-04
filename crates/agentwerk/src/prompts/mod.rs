@@ -78,71 +78,80 @@ fn is_object_schema(schema: &Value) -> bool {
     schema.get("type").and_then(Value::as_str) == Some("object")
 }
 
-/// Build the body `{context}` expands to: the ticket key, working
-/// directory, platform, OS version, and date, plus a `… remaining`
-/// bullet for each `Policies` budget that is `Some(_)`. Budgets left as
-/// `None` (unlimited) stay invisible. Pass empty `Policies::default()` and
+/// Every fact the context knows, as `(placeholder, value)`: the ticket key,
+/// date, working directory, platform, OS version, and what is left of each
+/// `Policies` budget. A budget left as `None` (unlimited) carries an empty
+/// value, which drops its bullet in [`render_context`] and expands the
+/// standalone variable to nothing. Pass empty `Policies::default()` and
 /// `Stats::new()` when you only want the static facts.
-pub(crate) fn context_body(
+pub(crate) fn context_values(
     dir: &Path,
     policies: &Policies,
     stats: &Stats,
     ticket_key: &str,
-) -> String {
-    let dir_str = dir.display().to_string();
-    let platform = std::env::consts::OS;
+) -> Vec<(&'static str, String)> {
     let os_version = std::process::Command::new("uname")
         .arg("-r")
         .output()
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
         .unwrap_or_default();
-    let date = format_current_date();
-    let mut body = CONTEXT_TEMPLATE
-        .trim_matches('\n')
-        .replace("{ticket}", ticket_key)
-        .replace("{dir}", &dir_str)
-        .replace("{platform}", platform)
-        .replace("{os_version}", &os_version)
-        .replace("{date}", &date);
-    if let Some(extra) = runtime_budgets(policies, stats) {
-        body.push('\n');
-        body.push_str(&extra);
-    }
-    body
+    let turns = policies
+        .max_turns
+        .map(|limit| u64::from(limit).saturating_sub(stats.event_count(EventName::TurnStarted)));
+    let input_tokens = policies
+        .max_input_tokens
+        .map(|limit| limit.saturating_sub(stats.input_tokens()));
+    let output_tokens = policies
+        .max_output_tokens
+        .map(|limit| limit.saturating_sub(stats.output_tokens()));
+    let time = policies.max_time.zip(stats.execution_duration());
+    vec![
+        ("ticket", ticket_key.to_string()),
+        ("date", format_current_date()),
+        ("dir", dir.display().to_string()),
+        ("platform", std::env::consts::OS.to_string()),
+        ("os_version", os_version),
+        ("turns_remaining", optional(turns)),
+        ("input_tokens_remaining", optional(input_tokens)),
+        ("output_tokens_remaining", optional(output_tokens)),
+        (
+            "time_remaining",
+            optional(
+                time.map(|(limit, elapsed)| {
+                    format!("{}s", limit.saturating_sub(elapsed).as_secs())
+                }),
+            ),
+        ),
+    ]
 }
 
-/// Closes the budget bullets. A bare number is telemetry; the
-/// consequence is what makes the model pace against it.
-const BUDGET_CONSEQUENCE: &str =
-    "Execution stops when any budget reaches zero, mid-ticket. Finish before then.";
+/// An unset budget renders as no value at all, never as a bare `0`.
+fn optional(value: Option<impl ToString>) -> String {
+    value.map(|v| v.to_string()).unwrap_or_default()
+}
 
-/// Bullets for each configured budget plus [`BUDGET_CONSEQUENCE`], joined
-/// by `\n`. `None` when no budget is set, so the caller can skip the join.
-fn runtime_budgets(policies: &Policies, stats: &Stats) -> Option<String> {
-    let mut lines: Vec<String> = Vec::new();
-    if let Some(limit) = policies.max_turns {
-        let remaining = u64::from(limit).saturating_sub(stats.event_count(EventName::TurnStarted));
-        lines.push(format!("- Turns remaining: {remaining}"));
-    }
-    if let Some(limit) = policies.max_input_tokens {
-        let remaining = limit.saturating_sub(stats.input_tokens());
-        lines.push(format!("- Input tokens remaining: {remaining}"));
-    }
-    if let Some(limit) = policies.max_output_tokens {
-        let remaining = limit.saturating_sub(stats.output_tokens());
-        lines.push(format!("- Output tokens remaining: {remaining}"));
-    }
-    if let Some(limit) = policies.max_time {
-        if let Some(elapsed) = stats.execution_duration() {
-            let remaining = limit.saturating_sub(elapsed);
-            lines.push(format!("- Time remaining: {}s", remaining.as_secs()));
-        }
-    }
-    if lines.is_empty() {
-        return None;
-    }
-    lines.push(format!("\n{BUDGET_CONSEQUENCE}"));
-    Some(lines.join("\n"))
+/// Build the bullet list `{context}` expands to from [`context_values`]. Every
+/// label lives in `context.md`; a line whose placeholders all came back empty
+/// is left out, so an unconfigured budget shows no bullet. One empty value next
+/// to a filled one keeps the line: a failed `uname` still leaves a platform.
+pub(crate) fn render_context(values: &[(&'static str, String)]) -> String {
+    let lines: Vec<String> = CONTEXT_TEMPLATE
+        .trim_matches('\n')
+        .lines()
+        .filter_map(|line| {
+            let mut rendered = line.to_string();
+            let mut carries_value = false;
+            for (name, value) in values {
+                let placeholder = format!("{{{name}}}");
+                if rendered.contains(&placeholder) {
+                    carries_value |= !value.is_empty();
+                    rendered = rendered.replace(&placeholder, value);
+                }
+            }
+            carries_value.then(|| rendered.trim_end().to_string())
+        })
+        .collect();
+    lines.join("\n")
 }
 
 /// Today's date as `YYYY-MM-DD`, via the civil-from-days algorithm.
@@ -236,6 +245,15 @@ mod tests {
         assert!(rendered.contains("not accepted"));
     }
 
+    fn context_body(
+        dir: &std::path::Path,
+        policies: &Policies,
+        stats: &Stats,
+        ticket_key: &str,
+    ) -> String {
+        render_context(&context_values(dir, policies, stats, ticket_key))
+    }
+
     #[test]
     fn context_body_renders_bare_bullets_with_substituted_values() {
         let rendered = context_body(
@@ -245,25 +263,43 @@ mod tests {
             "TICKET-7",
         );
         let lines: Vec<&str> = rendered.lines().collect();
-        assert!(lines[0].starts_with("You work within a ticket queue."));
-        assert_eq!(lines[1], "");
-        assert_eq!(lines[2], "- Ticket: TICKET-7");
-        assert!(lines[3].starts_with("- Date: "));
-        assert_eq!(lines[4], "- Working directory: /tmp/check");
-        assert!(lines[5].starts_with("- Platform: "));
+        assert_eq!(lines[0], "- Ticket: TICKET-7");
+        assert!(lines[1].starts_with("- Date: "));
+        assert_eq!(lines[2], "- Working directory: /tmp/check");
+        assert!(lines[3].starts_with("- Platform: "));
         assert!(!rendered.contains('{'), "no unsubstituted placeholders");
     }
 
     #[test]
-    fn context_body_carries_no_heading_of_its_own() {
+    fn context_body_carries_no_prose_around_the_bullets() {
         let rendered = context_body(
             &PathBuf::from("/tmp/check"),
             &Policies::default(),
             &Stats::new(),
             "TICKET-7",
         );
-        // The role prompt places the block and owns any heading above it.
+        // The role prompt owns any framing and heading around the facts.
+        assert!(rendered.lines().all(|line| line.starts_with("- ")));
         assert!(!rendered.contains("## "));
+    }
+
+    #[test]
+    fn context_values_leave_an_unset_budget_empty() {
+        let values = context_values(
+            &PathBuf::from("/tmp/check"),
+            &Policies::default(),
+            &Stats::new(),
+            "TICKET-7",
+        );
+        let value = |name| {
+            values
+                .iter()
+                .find(|(key, _)| *key == name)
+                .map(|(_, value)| value.as_str())
+        };
+        assert_eq!(value("ticket"), Some("TICKET-7"));
+        assert_eq!(value("turns_remaining"), Some(""));
+        assert_eq!(value("time_remaining"), Some(""));
     }
 
     #[test]
@@ -289,8 +325,7 @@ mod tests {
             "{static_prefix}\n\
              - Turns remaining: 8\n\
              - Input tokens remaining: 95000\n\
-             - Output tokens remaining: 12000\n\
-             \n{BUDGET_CONSEQUENCE}",
+             - Output tokens remaining: 12000",
             static_prefix = context_body(&working_dir, &Policies::default(), &Stats::new(), "T-1"),
         );
         assert_eq!(rendered, expected);
@@ -309,7 +344,7 @@ mod tests {
         let rendered = context_body(&working_dir, &policies, &stats, "T-1");
 
         let expected = format!(
-            "{static_prefix}\n- Turns remaining: 4\n\n{BUDGET_CONSEQUENCE}",
+            "{static_prefix}\n- Turns remaining: 4",
             static_prefix = context_body(&working_dir, &Policies::default(), &Stats::new(), "T-1"),
         );
         assert_eq!(rendered, expected);
@@ -333,7 +368,7 @@ mod tests {
         let rendered = context_body(&working_dir, &policies, &stats, "T-1");
 
         let expected = format!(
-            "{static_prefix}\n- Turns remaining: 0\n\n{BUDGET_CONSEQUENCE}",
+            "{static_prefix}\n- Turns remaining: 0",
             static_prefix = context_body(&working_dir, &Policies::default(), &Stats::new(), "T-1"),
         );
         assert_eq!(rendered, expected);
@@ -381,7 +416,7 @@ mod tests {
         let baseline = context_body(&working_dir, &Policies::default(), &Stats::new(), "T-1");
         assert!(rendered.starts_with(&baseline));
         let trailing = &rendered[baseline.len()..];
-        let expected = |seconds| format!("\n- Time remaining: {seconds}s\n\n{BUDGET_CONSEQUENCE}");
+        let expected = |seconds| format!("\n- Time remaining: {seconds}s");
         assert!(
             trailing == expected(3600) || trailing == expected(3599),
             "unexpected runtime block: {trailing:?}",
