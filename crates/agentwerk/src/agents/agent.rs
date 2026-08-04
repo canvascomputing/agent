@@ -23,10 +23,6 @@ fn default_agent_name() -> String {
     format!("agent-{n}")
 }
 
-/// Your function for rewriting the prompt that corrects an agent asked to try
-/// again. See [`AgentBuilder::edit_directive_on_retry`].
-pub(crate) type DirectiveEditor = dyn Fn(&str, &mut String) + Send + Sync;
-
 // Builder
 
 /// An `AgentBuilder` collects who the agent is, what it may call, and where it
@@ -43,7 +39,6 @@ pub struct AgentBuilder<P, M> {
     tools: ToolRegistry,
     dir: PathBuf,
     knowledge: Arc<Knowledge>,
-    directive_editor: Option<Arc<DirectiveEditor>>,
 }
 
 impl AgentBuilder<(), ()> {
@@ -63,7 +58,6 @@ impl AgentBuilder<(), ()> {
             tools,
             dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             knowledge,
-            directive_editor: None,
         }
     }
 
@@ -86,7 +80,6 @@ impl AgentBuilder<(), ()> {
             tools,
             dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             knowledge,
-            directive_editor: None,
         }
     }
 
@@ -112,7 +105,6 @@ impl<M> AgentBuilder<(), M> {
             tools: self.tools,
             dir: self.dir,
             knowledge: self.knowledge,
-            directive_editor: self.directive_editor,
         }
     }
 
@@ -138,7 +130,6 @@ impl<P> AgentBuilder<P, ()> {
             tools: self.tools,
             dir: self.dir,
             knowledge: self.knowledge,
-            directive_editor: self.directive_editor,
         }
     }
 
@@ -250,21 +241,6 @@ impl<P, M> AgentBuilder<P, M> {
         self.knowledge = Arc::clone(store);
         self
     }
-
-    /// Override the prompt that corrects an agent asked to try again.
-    ///
-    /// agentwerk asks again when a turn ends without an accepted result: the
-    /// model called no tool, or its result missed the ticket's schema. Your
-    /// function reads the reason and rewrites the prompt, which arrives holding
-    /// the built-in text, so writing nothing keeps the default. It runs once per
-    /// retry, so keep it cheap.
-    pub fn edit_directive_on_retry(
-        mut self,
-        editor: impl Fn(&str, &mut String) + Send + Sync + 'static,
-    ) -> Self {
-        self.directive_editor = Some(Arc::new(editor));
-        self
-    }
 }
 
 // Inline-test inspectors. Production callers go through `Agent`, which
@@ -367,7 +343,6 @@ impl AgentBuilder<Arc<dyn Provider>, Model> {
             tools: self.tools,
             dir: self.dir,
             knowledge: self.knowledge,
-            directive_editor: self.directive_editor,
         };
         let private = TicketQueue::new();
         private.bind_agent(&mut agent);
@@ -428,7 +403,6 @@ pub struct Agent {
     tools: ToolRegistry,
     dir: PathBuf,
     knowledge: Arc<Knowledge>,
-    directive_editor: Option<Arc<DirectiveEditor>>,
 }
 
 impl Clone for Agent {
@@ -451,7 +425,6 @@ impl Clone for Agent {
             tools: self.tools.clone(),
             dir: self.dir.clone(),
             knowledge: Arc::clone(&self.knowledge),
-            directive_editor: self.directive_editor.clone(),
         }
     }
 }
@@ -498,10 +471,6 @@ impl Agent {
 
     pub(super) fn provider(&self) -> Arc<dyn Provider> {
         Arc::clone(&self.provider)
-    }
-
-    pub(super) fn directive_editor(&self) -> Option<&Arc<DirectiveEditor>> {
-        self.directive_editor.as_ref()
     }
 
     pub(super) fn knowledge(&self) -> Arc<Knowledge> {

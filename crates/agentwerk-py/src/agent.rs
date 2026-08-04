@@ -49,7 +49,6 @@ pub struct PyAgent {
     model: ModelSpec,
     tools: Vec<Arc<dyn ToolLike>>,
     knowledge: Option<Arc<Knowledge>>,
-    directive_editor: Option<Py<PyAny>>,
     /// True when the agent came from `Agent.empty()`, which registers no finish
     /// tool.
     empty: bool,
@@ -70,7 +69,6 @@ impl PyAgent {
             model: ModelSpec::Unset,
             tools: Vec::new(),
             knowledge: None,
-            directive_editor: None,
             empty,
             agent: None,
         }
@@ -150,21 +148,6 @@ impl PyAgent {
         for tool in &self.tools {
             builder = builder.tool(BoxedTool(Arc::clone(tool)));
         }
-        if let Some(editor) = &self.directive_editor {
-            let editor = Python::attach(|py| editor.clone_ref(py));
-            builder =
-                builder.edit_directive_on_retry(move |detail: &str, directive: &mut String| {
-                    Python::attach(|py| {
-                        let Ok(result) = editor.bind(py).call1((detail, directive.as_str())) else {
-                            return;
-                        };
-                        if let Ok(replacement) = result.extract::<String>() {
-                            *directive = replacement;
-                        }
-                    })
-                });
-        }
-
         Ok(builder.build())
     }
 }
@@ -327,20 +310,6 @@ impl PyAgent {
             let resolved = extract_tool(&tool?)?;
             slf.tools.push(resolved);
         }
-        Ok(slf)
-    }
-
-    /// Override the prompt that corrects an agent asked to try again.
-    ///
-    /// Your function receives the reason and the built-in text, and returns the
-    /// replacement, or `None` to keep it. It runs once per retry, so keep it
-    /// cheap.
-    fn edit_directive_on_retry(
-        mut slf: PyRefMut<'_, Self>,
-        editor: Py<PyAny>,
-    ) -> PyResult<PyRefMut<'_, Self>> {
-        slf.ensure_unbuilt()?;
-        slf.directive_editor = Some(editor);
         Ok(slf)
     }
 

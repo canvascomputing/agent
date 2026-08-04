@@ -8,7 +8,7 @@ use std::sync::Arc;
 use crate::agents::agent::Agent;
 use crate::agents::policy::Policies;
 use crate::agents::tickets::{policy_violated_kind, Reply, Status, Ticket, TicketQueue};
-use crate::event::{CompactReason, EventKind, PolicyKind};
+use crate::event::{CompactReason, Event, EventKind, PolicyKind};
 use crate::providers::{AsUserMessage, Message, Model, RequestErrorKind};
 
 use super::{compact, request, tool_call, Step, POLL_INTERVAL};
@@ -31,9 +31,9 @@ pub(super) struct TicketContext<'a> {
 }
 
 impl<'a> TicketContext<'a> {
-    pub(super) fn emit(&self, kind: EventKind) {
+    pub(super) fn emit(&self, kind: EventKind) -> Event {
         self.ticket_queue
-            .emit(&self.ticket_key, self.agent.get_name(), kind);
+            .emit(&self.ticket_key, self.agent.get_name(), kind)
     }
 
     pub(super) fn ticket(&self) -> Option<Ticket> {
@@ -41,12 +41,11 @@ impl<'a> TicketContext<'a> {
     }
 
     /// The corrective directive to inject for `detail`: the built-in text,
-    /// passed through the agent's directive editor when one is installed.
-    pub(super) fn retry_directive(&self, detail: &str) -> String {
+    /// passed through the queue's directive editor when one is installed.
+    /// `event` is the `SchemaRetried` the caller just emitted for this retry.
+    pub(super) fn retry_directive(&self, detail: &str, event: &Event) -> String {
         let mut directive = crate::prompts::retry_directive(detail);
-        if let Some(editor) = self.agent.directive_editor() {
-            editor(detail, &mut directive);
-        }
+        self.ticket_queue.edit_directive(event, &mut directive);
         directive
     }
 
@@ -221,14 +220,14 @@ fn silence_retry(context: &mut TicketContext<'_>) -> Step {
             .set_failed_by(&context.ticket_key, context.agent.get_name());
         return Step::NextTicket;
     }
-    context.emit(EventKind::SchemaRetried {
+    let retried = context.emit(EventKind::SchemaRetried {
         attempt: context.consecutive_schema_failures,
         max_attempts: max,
         message: RESUME_OR_FINISH_DETAIL.to_string(),
     });
     context.ticket_queue.add_reply(
         &context.ticket_key,
-        Reply::user_text(context.retry_directive(RESUME_OR_FINISH_DETAIL)),
+        Reply::user_text(context.retry_directive(RESUME_OR_FINISH_DETAIL, &retried)),
     );
     Step::CheckTicket
 }
@@ -295,16 +294,14 @@ mod tests {
         tickets
             .dir(results_dir.path().to_path_buf())
             .max_request_retries(0)
-            .request_retry_delay(Duration::from_millis(1));
+            .request_retry_delay(Duration::from_millis(1))
+            .edit_directive_on_retry(|_, directive| *directive = "PLEASE CALL A TOOL NOW".into());
         tickets.agent(
             Agent::new()
                 .name("agent")
                 .provider(provider.clone() as Arc<dyn Provider>)
                 .model("mock")
                 .role("test")
-                .edit_directive_on_retry(|_, directive| {
-                    *directive = "PLEASE CALL A TOOL NOW".into()
-                })
                 .build(),
         );
 
@@ -326,6 +323,63 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn directive_editor_rewrites_for_the_agent_it_names() {
+        let results_dir = crate::test_util::TempDir::new().unwrap();
+        let scout = MockProvider::with_results(vec![
+            Ok(text_response("just thinking, no tool call")),
+            Ok(write_result_response("scout-done")),
+        ]);
+        let worker = MockProvider::with_results(vec![
+            Ok(text_response("just thinking, no tool call")),
+            Ok(write_result_response("worker-done")),
+        ]);
+        let tickets = TicketQueue::new();
+        tickets
+            .dir(results_dir.path().to_path_buf())
+            .max_request_retries(0)
+            .request_retry_delay(Duration::from_millis(1))
+            .edit_directive_on_retry(|event, directive| {
+                if event.agent_name == "scout" {
+                    *directive = "SCOUT, CALL A TOOL".into();
+                }
+            });
+        tickets.agent(
+            Agent::new()
+                .name("scout")
+                .provider(scout.clone() as Arc<dyn Provider>)
+                .model("mock")
+                .role("test")
+                .build(),
+        );
+        tickets.agent(
+            Agent::new()
+                .name("worker")
+                .provider(worker.clone() as Arc<dyn Provider>)
+                .model("mock")
+                .role("test")
+                .build(),
+        );
+
+        tickets.start();
+        tickets.ticket(Ticket::new("go").label("scout"));
+        tickets.ticket(Ticket::new("go").label("worker"));
+        tokio::time::timeout(Duration::from_secs(5), tickets.finish())
+            .await
+            .expect("finish did not finish within 5s");
+
+        let scouted = user_text(&scout.received()[1]);
+        assert!(
+            scouted.contains("SCOUT, CALL A TOOL"),
+            "the named agent must get the rewritten directive: {scouted:?}",
+        );
+        let worked = user_text(&worker.received()[1]);
+        assert!(
+            worked.contains("was not accepted"),
+            "every other agent must keep the built-in directive: {worked:?}",
+        );
+    }
+
+    #[tokio::test]
     async fn directive_editor_that_writes_nothing_keeps_the_default_directive() {
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let provider = MockProvider::with_results(vec![
@@ -336,14 +390,14 @@ mod tests {
         tickets
             .dir(results_dir.path().to_path_buf())
             .max_request_retries(0)
-            .request_retry_delay(Duration::from_millis(1));
+            .request_retry_delay(Duration::from_millis(1))
+            .edit_directive_on_retry(|_, _| {});
         tickets.agent(
             Agent::new()
                 .name("agent")
                 .provider(provider.clone() as Arc<dyn Provider>)
                 .model("mock")
                 .role("test")
-                .edit_directive_on_retry(|_, _| {})
                 .build(),
         );
 

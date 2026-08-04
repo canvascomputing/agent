@@ -179,7 +179,6 @@ tickets.task("Compute (47 * 92) / 8, then round to the nearest integer.");
 | `templates(pairs)` | Inject more than one entry into prompts. |
 | `dir(dir)` | Set the directory the agent has access to. |
 | `interactive()` | Let the agent wait for new instructions to keep a ticket in-progress. |
-| `edit_directive_on_retry(editor)` | Override the prompt that corrects an agent asked to try again. |
 | `build()` | Create the agent. |
 | `ticket_queue(queue)` | Attach a built agent to a ticket queue. |
 
@@ -579,8 +578,9 @@ See [`EventKind`](https://docs.rs/agentwerk/latest/agentwerk/event/enum.EventKin
 | | `finish_on_result(condition)` | Get the first finished result that matches, and execution carries on. |
 | | `finish_on_failure(condition)` | Get the first failure that matches, and execution carries on. |
 | | `finish_on_ticket(condition)` | Get the first ticket that matches, and execution carries on. |
-| **Rewrite replies** | `edit_replies_on_event(editor)` | Rewrite a ticket's replies before its next request. |
+| **Rewrite** | `edit_replies_on_event(editor)` | Rewrite a ticket's replies before its next request. |
 | | `edit_replies_on_compaction(editor)` | Decide what compaction does with a ticket's replies. |
+| | `edit_directive_on_retry(editor)` | Override the prompt that corrects an agent's behavior. |
 
 Save replies of every finished ticket as a training example:
 

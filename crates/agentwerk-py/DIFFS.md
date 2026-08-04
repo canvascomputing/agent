@@ -38,7 +38,6 @@ Seven rules the surface table below never repeats.
 | `AgentBuilder::tools(iter)` | `Agent.tools(tools)` |
 | `AgentBuilder::dir(p)` | `Agent.dir(dir)` |
 | `AgentBuilder::knowledge(store)` | `Agent.knowledge(store)` |
-| `AgentBuilder::edit_directive_on_retry(editor)` | `Agent.edit_directive_on_retry(editor)`: the editor returns the replacement, or `None` to keep the default, where Rust rewrites in place. |
 | `AgentBuilder::build(self) -> Agent` | `Agent.build() -> Agent`: returns the same object, armed. Configuring after it, or building twice, raises. |
 | `Agent::ticket_queue(queue)` | `Agent.ticket_queue(queue)` |
 | `Agent::task(task) -> String` | `Agent.task(task) -> str` |
@@ -94,6 +93,7 @@ Seven rules the surface table below never repeats.
 | `TicketQueue::edit_replies(key, edit)` | `TicketQueue.edit_replies(key, editor)`: the editor returns the new list, or `None` to keep the old one, where Rust mutates in place. An editor that raises, or returns anything but `Reply` objects, raises here. |
 | `TicketQueue::edit_replies_on_event(editor)` | `TicketQueue.edit_replies_on_event(editor)`: same return-instead-of-mutate shape. An editor that raises prints its traceback and changes nothing: it runs on an agent thread with no Python frame to raise into. |
 | `TicketQueue::edit_replies_on_compaction(editor)` | `TicketQueue.edit_replies_on_compaction(editor)`: the editor returns the new list, or `None` to keep the current one, where Rust returns a `Result`. Define it with `async def` to await `Compaction.summarize`; a coroutine is driven on a worker thread of its own. An editor that raises prints its traceback and changes nothing, like the event editor. |
+| `TicketQueue::edit_directive_on_retry(editor)` | `TicketQueue.edit_directive_on_retry(editor)`: the editor returns the replacement, or `None` to keep the default, where Rust rewrites in place. An editor that raises prints its traceback and changes nothing, like the reply editors. |
 | `TicketQueue::model_for_agent(name)` | `TicketQueue.model_for_agent(agent_name)` |
 | `TicketQueue::get_ticket(key)` | `TicketQueue.get_ticket(key)` |
 | `TicketQueue::tickets()` | `TicketQueue.tickets()` |
