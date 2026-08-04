@@ -69,22 +69,20 @@ async fn main() {
 Run many agents in parallel and let them share what they learn:
 
 ```rust
-use agentwerk::{Agent, Knowledge, Ticket, TicketQueue};
 use agentwerk::tools::{GrepTool, ManageTicketsTool, ReadFileTool};
+use agentwerk::{Agent, Knowledge, Ticket, TicketQueue};
 
 let tickets = TicketQueue::new();
-let store = Knowledge::load("./notes")?;
+let notes = Knowledge::load("./notes")?;
 
-for i in 0..4 {
+for _ in 0..4 {
     tickets.agent(
         Agent::new()
-            .name(format!("scout_{i}"))
             .label("scan")
-            .role("Find code that can panic. File a `report` ticket per finding, and note what you learn.")
-            .knowledge(&store)
+            .role("Grep for code that can panic. File a `report` ticket per finding, and note what you learn.")
+            .knowledge(&notes)
             .from_env()
             .tool(GrepTool)
-            .tool(ReadFileTool)
             .tool(ManageTicketsTool)
             .build(),
     );
@@ -92,10 +90,9 @@ for i in 0..4 {
 
 tickets.agent(
     Agent::new()
-        .name("writer")
         .label("report")
         .role("Read the cited file and explain the fix in two sentences.")
-        .knowledge(&store)
+        .knowledge(&notes)
         .from_env()
         .tool(ReadFileTool)
         .build(),
@@ -166,7 +163,7 @@ tickets.task("Compute (47 * 92) / 8, then round to the nearest integer.");
 ```
 
 <details>
-<summary>All agent builder methods</summary>
+<summary>All builder methods</summary>
 
 | Method | Description |
 |--------|-------------|
@@ -217,7 +214,7 @@ let agent = Agent::new().from_env();
 ```
 
 <details>
-<summary>Provider selection and endpoints</summary>
+<summary>All provider settings</summary>
 
 | Method | Description |
 |--------|-------------|
@@ -246,7 +243,7 @@ let agent = Agent::new().model(
 Claude, GPT, Mistral, and Qwen families are pre-configured.
 
 <details>
-<summary>Model settings</summary>
+<summary>All model settings</summary>
 
 | Method | Description |
 |--------|-------------|
@@ -268,13 +265,14 @@ You can use `context_window_from_env()` to read the context window size from env
 The `TicketQueue` is the core data structure of agentwerk allowing to coordinate complex interactions.
 
 ```rust
-tickets.agent(Agent::new().name("analyst").label("analysis").from_env().build());
+let analyst = Agent::new()
+    .name("analyst")
+    .label("analysis")
+    .from_env()
+    .build();
 
-tickets.ticket(
-    Ticket::new("Rank all products by value for a 10-person engineering team.")
-        .label("analysis")
-        .schema(comparison_schema),
-);
+tickets.agent(analyst);
+tickets.ticket(Ticket::new("Rank all products by value.").label("analysis"));
 ```
 
 <details>
@@ -306,7 +304,7 @@ let answer = tickets.results().pop();
 ```
 
 <details>
-<summary>Lifecycle</summary>
+<summary>All execution methods</summary>
 
 | Method | Description |
 |--------|-------------|
@@ -346,7 +344,7 @@ let report: Report = serde_json::from_value(ticket.result.clone().unwrap())?;
 ```
 
 <details>
-<summary>Working with results</summary>
+<summary>All result and ticket accessors</summary>
 
 | Method | Description |
 |--------|-------------|
@@ -391,7 +389,7 @@ tickets.ticket(Ticket::new("Write a report.").schema(schema));
 ```
 
 <details>
-<summary>Schema validation and retries</summary>
+<summary>All schema methods</summary>
 
 | Method | Description |
 |--------|-------------|
@@ -490,7 +488,7 @@ let greet = Tool::new("greet", "Say hello")
 ```
 
 <details>
-<summary>Tool options</summary>
+<summary>All tool options</summary>
 
 | Method | Description |
 |--------|-------------|
@@ -507,16 +505,13 @@ Return `ToolResult::error(message)` for a failure the model should work around.
 Events give you insights to the lifecycle and activities of your agents' work.
 
 ```rust
-use agentwerk::event::{Event, EventKind};
+use agentwerk::event::EventKind;
 
-tickets.on_event(|event: Event| {
+tickets.on_event(|event| {
     if let EventKind::TicketFinished = &event.kind {
         eprintln!("[{}] done {}", event.agent_name, event.ticket_key);
     }
 });
-
-// Stop execution at the first malicious verdict.
-tickets.cancel_on_result(|_, result| result["verdict"] == "malicious");
 ```
 
 <details>
@@ -553,8 +548,20 @@ See [`EventKind`](https://docs.rs/agentwerk/latest/agentwerk/event/enum.EventKin
 
 </details>
 
+### Hooks
+
+Hooks allow you to react to events:
+
+```rust
+tickets.cancel_on_result(|_, result| result["verdict"] == "malicious");
+
+tickets.create_ticket_on_failure(|_, ticket| {
+    Some(Ticket::new(ticket.task.clone()).label("retry"))
+});
+```
+
 <details>
-<summary>Hooks</summary>
+<summary>All hooks</summary>
 
 | | Method | Description |
 |-|--------|-------------|
@@ -649,7 +656,7 @@ let bob = Agent::new().knowledge(&store);
 ```
 
 <details>
-<summary>Reading and writing pages</summary>
+<summary>All knowledge methods</summary>
 
 | Method | Description |
 |--------|-------------|
@@ -690,7 +697,7 @@ tickets.start();
 ```
 
 <details>
-<summary>Session directory layout</summary>
+<summary>All session files</summary>
 
 ```
 .agentwerk/

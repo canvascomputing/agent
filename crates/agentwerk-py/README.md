@@ -78,30 +78,27 @@ from agentwerk import Agent, Knowledge, Ticket, TicketQueue
 from agentwerk import GrepTool, ManageTicketsTool, ReadFileTool
 
 tickets = TicketQueue()
-store = Knowledge.load("./notes")
+notes = Knowledge.load("./notes")
 
-for i in range(4):
+for _ in range(4):
     tickets.agent(
         Agent()
-        .name(f"scout_{i}")
         .label("scan")
         .role(
-            "Find code that can panic. File a `report` ticket per finding, and note what you learn."
+            "Grep for code that can panic. File a `report` ticket per finding, and note what you learn."
         )
-        .knowledge(store)
+        .knowledge(notes)
         .from_env()
         .tool(GrepTool())
-        .tool(ReadFileTool())
         .tool(ManageTicketsTool())
         .build()
     )
 
 tickets.agent(
     Agent()
-    .name("writer")
     .label("report")
     .role("Read the cited file and explain the fix in two sentences.")
-    .knowledge(store)
+    .knowledge(notes)
     .from_env()
     .tool(ReadFileTool())
     .build()
@@ -171,7 +168,7 @@ tickets.task("Compute (47 * 92) / 8, then round to the nearest integer.")
 ```
 
 <details>
-<summary>All agent builder methods</summary>
+<summary>All builder methods</summary>
 
 | Method | Description |
 |--------|-------------|
@@ -213,14 +210,18 @@ Connect to a `Provider` to give agents access to LLMs. agentwerk supports: Anthr
 ```python
 from agentwerk import Agent, AnthropicProvider
 
-agent = Agent().provider(AnthropicProvider(key)).model("claude-sonnet-4-20250514")
+agent = (
+    Agent()
+    .provider(AnthropicProvider(key))
+    .model("claude-sonnet-4-20250514")
+)
 
 # Or read both from the environment.
 agent = Agent().from_env()
 ```
 
 <details>
-<summary>Provider selection and endpoints</summary>
+<summary>All provider settings</summary>
 
 | Method | Description |
 |--------|-------------|
@@ -247,7 +248,7 @@ agent = Agent().model(
 Claude, GPT, Mistral, and Qwen families are pre-configured.
 
 <details>
-<summary>Model settings</summary>
+<summary>All model settings</summary>
 
 | Method | Description |
 |--------|-------------|
@@ -269,15 +270,16 @@ You can use `context_window_from_env()` to read the context window size from env
 The `TicketQueue` is the core data structure of agentwerk allowing to coordinate complex interactions.
 
 ```python
-tickets.agent(Agent().name("analyst").label("analysis").from_env().build())
-
-tickets.ticket(
-    Ticket(
-        "Rank all products by value for a 10-person engineering team.",
-        labels=["analysis"],
-        schema=comparison_schema,
-    )
+analyst = (
+    Agent()
+    .name("analyst")
+    .label("analysis")
+    .from_env()
+    .build()
 )
+
+tickets.agent(analyst)
+tickets.ticket(Ticket("Rank all products by value.", labels=["analysis"]))
 ```
 
 <details>
@@ -309,7 +311,7 @@ answer = tickets.results()[-1]
 ```
 
 <details>
-<summary>Lifecycle</summary>
+<summary>All execution methods</summary>
 
 | Method | Description |
 |--------|-------------|
@@ -345,7 +347,7 @@ print(ticket.result["title"])
 ```
 
 <details>
-<summary>Working with results</summary>
+<summary>All result and ticket accessors</summary>
 
 | Method | Description |
 |--------|-------------|
@@ -392,7 +394,7 @@ tickets.ticket(Ticket("Write a report.", schema=schema))
 ```
 
 <details>
-<summary>Schema validation and retries</summary>
+<summary>All schema methods</summary>
 
 | Method | Description |
 |--------|-------------|
@@ -441,7 +443,12 @@ Tools allow agents to perform their work.
 ```python
 from agentwerk import Agent, BashTool, GrepTool, ReadFileTool
 
-agent = Agent().tool(ReadFileTool()).tool(GrepTool()).tool(BashTool("git", "git *"))
+agent = (
+    Agent()
+    .tool(ReadFileTool())
+    .tool(GrepTool())
+    .tool(BashTool("git", "git *"))
+)
 ```
 
 `FinishTool()` and `ManageKnowledgeTool(store)` are special tools, registered automatically on every agent. They are used for interacting with the `TicketQueue`.
@@ -489,7 +496,7 @@ def greet(name: str) -> str:
 ```
 
 <details>
-<summary>Tool options</summary>
+<summary>All tool options</summary>
 
 | Method | Description |
 |--------|-------------|
@@ -512,9 +519,6 @@ def log(event):
 
 
 tickets.on_event(log)
-
-# Stop execution at the first malicious verdict.
-tickets.cancel_on_result(lambda ticket, result: result["verdict"] == "malicious")
 ```
 
 <details>
@@ -551,8 +555,20 @@ See [`EventKind`](https://docs.rs/agentwerk/latest/agentwerk/event/enum.EventKin
 
 </details>
 
+### Hooks
+
+Hooks allow you to react to events:
+
+```python
+tickets.cancel_on_result(lambda ticket, result: result["verdict"] == "malicious")
+
+tickets.create_ticket_on_failure(
+    lambda event, ticket: Ticket(ticket.task, labels=["retry"])
+)
+```
+
 <details>
-<summary>Hooks</summary>
+<summary>All hooks</summary>
 
 | | Method | Description |
 |-|--------|-------------|
@@ -639,7 +655,7 @@ bob = Agent().knowledge(store)
 ```
 
 <details>
-<summary>Reading and writing pages</summary>
+<summary>All knowledge methods</summary>
 
 | Method | Description |
 |--------|-------------|
@@ -681,7 +697,7 @@ tickets.start()
 ```
 
 <details>
-<summary>Session directory layout</summary>
+<summary>All session files</summary>
 
 ```
 .agentwerk/
