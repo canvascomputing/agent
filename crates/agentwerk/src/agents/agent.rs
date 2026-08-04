@@ -7,7 +7,7 @@ use std::sync::{Arc, Weak};
 
 use serde::Serialize;
 
-use crate::prompts::{context_body, PromptBuilder};
+use crate::prompts::{context_values, render_context, PromptBuilder};
 use crate::providers::{Model, Provider, ProviderToolDefinition};
 use crate::tools::{FinishTool, ManageKnowledgeTool, ToolLike, ToolRegistry};
 
@@ -158,9 +158,15 @@ impl<P, M> AgentBuilder<P, M> {
     /// Define who the agent is and how it should work.
     ///
     /// A `{context}` placeholder anywhere in the text expands to the facts of
-    /// the moment: ticket key, date, working directory, platform, and one line
-    /// per configured limit. Leave the placeholder out and nothing is added, so
-    /// the role decides both whether those facts appear and where.
+    /// the moment as a bullet list: ticket key, date, working directory,
+    /// platform, and one line per configured limit. Each of those values is
+    /// also a placeholder of its own, so a role can place one without the list:
+    /// `{ticket}`, `{date}`, `{dir}`, `{platform}`, `{os_version}`,
+    /// `{turns_remaining}`, `{input_tokens_remaining}`,
+    /// `{output_tokens_remaining}`, and `{time_remaining}`. A limit left
+    /// unconfigured expands to nothing and shows no bullet. Leave the
+    /// placeholders out and nothing is added, so the role decides both whether
+    /// those facts appear and where.
     pub fn role(mut self, r: impl Into<String>) -> Self {
         self.role = r.into();
         self
@@ -195,8 +201,8 @@ impl<P, M> AgentBuilder<P, M> {
     ///
     /// `{key}` is replaced in the agent's role and in any text task submitted
     /// through this agent. A placeholder with no value is left as it is.
-    /// Binding `context` replaces the built-in block described on
-    /// [`Self::role`].
+    /// Binding `context`, or any of the single names described on
+    /// [`Self::role`], replaces that built-in value.
     pub fn template(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.templates.push((key.into(), value.into()));
         self
@@ -316,10 +322,10 @@ impl<P, M> AgentBuilder<P, M> {
         b.build().system
     }
 
-    /// Substitute the built-in `{context}` block. Runs after
-    /// [`Self::interpolate`], so a caller-bound `context` has already
-    /// consumed the placeholder and wins. Guarded on `contains` because
-    /// building the block spawns `uname`.
+    /// Substitute the built-in `{context}` block and the single value behind
+    /// each of its bullets. Runs after [`Self::interpolate`], so a caller-bound
+    /// name has already consumed its placeholder and wins. Guarded on a brace
+    /// because gathering the values spawns `uname`.
     fn expand_context(
         &self,
         role: String,
@@ -327,13 +333,15 @@ impl<P, M> AgentBuilder<P, M> {
         stats: &Stats,
         ticket_key: &str,
     ) -> String {
-        if !role.contains("{context}") {
+        if !role.contains('{') {
             return role;
         }
-        role.replace(
-            "{context}",
-            &context_body(&self.dir, policies, stats, ticket_key),
-        )
+        let values = context_values(&self.dir, policies, stats, ticket_key);
+        let mut out = role.replace("{context}", &render_context(&values));
+        for (name, value) in &values {
+            out = out.replace(&format!("{{{name}}}"), value);
+        }
+        out
     }
 
     fn interpolate(&self, s: &str) -> String {
@@ -530,10 +538,10 @@ impl Agent {
         b.build().system
     }
 
-    /// Substitute the built-in `{context}` block. Runs after
-    /// [`Self::interpolate`], so a caller-bound `context` has already
-    /// consumed the placeholder and wins. Guarded on `contains` because
-    /// building the block spawns `uname`.
+    /// Substitute the built-in `{context}` block and the single value behind
+    /// each of its bullets. Runs after [`Self::interpolate`], so a caller-bound
+    /// name has already consumed its placeholder and wins. Guarded on a brace
+    /// because gathering the values spawns `uname`.
     fn expand_context(
         &self,
         role: String,
@@ -541,13 +549,15 @@ impl Agent {
         stats: &Stats,
         ticket_key: &str,
     ) -> String {
-        if !role.contains("{context}") {
+        if !role.contains('{') {
             return role;
         }
-        role.replace(
-            "{context}",
-            &context_body(&self.dir, policies, stats, ticket_key),
-        )
+        let values = context_values(&self.dir, policies, stats, ticket_key);
+        let mut out = role.replace("{context}", &render_context(&values));
+        for (name, value) in &values {
+            out = out.replace(&format!("{{{name}}}"), value);
+        }
+        out
     }
 
     fn interpolate(&self, s: &str) -> String {
@@ -743,6 +753,35 @@ mod tests {
             .role("{context}")
             .template("context", "- Note: mine");
         assert_eq!(system_prompt(&agent, None), "- Note: mine");
+    }
+
+    #[test]
+    fn a_single_context_value_expands_without_the_block() {
+        let agent = Agent::new()
+            .role("Ticket {ticket} in {dir}, {turns_remaining} turns left.")
+            .dir("/tmp/check");
+        let policies = Policies {
+            max_turns: Some(3),
+            ..Policies::default()
+        };
+        let stats = Stats::new();
+        stats.record_event(&EventKind::TurnStarted, "", &[], "");
+
+        let rendered = agent.system_prompt(None, &policies, &stats, "T-1");
+
+        assert_eq!(rendered, "Ticket T-1 in /tmp/check, 2 turns left.");
+    }
+
+    #[test]
+    fn a_single_budget_value_expands_to_nothing_when_unconfigured() {
+        let agent = Agent::new().role("Turns left: {turns_remaining}.");
+        assert_eq!(system_prompt(&agent, None), "Turns left: .");
+    }
+
+    #[test]
+    fn a_bound_single_value_shadows_the_built_in_one() {
+        let agent = Agent::new().role("{ticket}").template("ticket", "mine");
+        assert_eq!(system_prompt(&agent, None), "mine");
     }
 
     #[test]

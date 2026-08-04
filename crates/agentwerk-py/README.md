@@ -191,8 +191,6 @@ tickets.task("Compute (47 * 92) / 8, then round to the nearest integer.")
 You can use the `{context}` variable to inject contextual information:
 
 ```markdown
-You work within a ticket queue. Each task arrives as a ticket; each reply you generate is one turn.
-
 - Ticket: TICKET-7
 - Date: 2026-05-06
 - Working directory: /Users/caro
@@ -201,9 +199,9 @@ You work within a ticket queue. Each task arrives as a ticket; each reply you ge
 - Input tokens remaining: 95000
 - Output tokens remaining: 12000
 - Time remaining: 240s
-
-Execution stops when any budget reaches zero, mid-ticket. Finish before then.
 ```
+
+Every value is a variable of its own: `{ticket}`, `{date}`, `{dir}`, `{platform}`, `{os_version}`, `{turns_remaining}`, `{input_tokens_remaining}`, `{output_tokens_remaining}`, and `{time_remaining}`.
 
 See more: [`AgentBuilder`](https://docs.rs/agentwerk/latest/agentwerk/agents/agent/struct.AgentBuilder.html).
 
