@@ -98,20 +98,26 @@ pub(super) async fn run(context: &mut TicketContext<'_>) -> Step {
         }
     };
 
+    // The overflowed reply is discarded: compaction rewrites the messages
+    // and the next request regenerates it.
+    let overflowed = response.status == ResponseStatus::ContextWindowExceeded;
+    if !overflowed {
+        context.ticket_queue.add_reply(
+            &context.ticket_key,
+            crate::agents::tickets::Reply::assistant(&response.content),
+        );
+    }
+
+    // Emitted after the reply lands: a handler or `finish_on_*` condition that
+    // resolves the ticket must see the reply the event announces.
     context.emit(EventKind::RequestFinished {
         model: response.model.clone(),
         usage: response.usage.clone(),
     });
 
-    // The overflowed reply is discarded: compaction rewrites the transcript
-    // and the next request regenerates it.
-    if response.status == ResponseStatus::ContextWindowExceeded {
+    if overflowed {
         return Step::Compact(CompactReason::Reactive);
     }
-    context.ticket_queue.add_reply(
-        &context.ticket_key,
-        crate::agents::tickets::Reply::assistant(&response.content),
-    );
 
     let calls: Vec<ToolCall> = response
         .content

@@ -145,6 +145,7 @@ impl TicketQueue {
             if !ticket.labels.iter().any(|l| l == agent_name) {
                 ticket.labels.push(agent_name.to_string());
             }
+            ticket.assignee = Some(agent_name.to_string());
             let prev = ticket.status;
             ticket.stamp_transition(Status::InProgress, now);
             ticket.status = Status::InProgress;
@@ -778,7 +779,10 @@ mod tests {
         let t = queue.get_ticket("TICKET-1").unwrap();
         assert_eq!(t.status, Status::Finished);
         assert_eq!(t.result, Some(serde_json::json!({"answer": 42})));
-        assert_eq!(queue.last_result(), Some(serde_json::json!({"answer": 42})));
+        assert_eq!(
+            queue.results().pop(),
+            Some(serde_json::json!({"answer": 42}))
+        );
     }
 
     #[test]

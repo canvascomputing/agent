@@ -1,10 +1,23 @@
 //! Shared `#[cfg(test)]` helpers for the inline `tickets::*` test modules.
 
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use super::ticket_queue::TicketQueue;
 use crate::agents::agent::Agent;
+use crate::event::{EventKind, FinishReason};
+
+/// Collect the reason from every `RunFinished`, since the queue keeps none.
+pub(super) fn collect_finish_reasons(queue: &TicketQueue) -> Arc<Mutex<Vec<FinishReason>>> {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&seen);
+    queue.on_event(move |event| {
+        if let EventKind::RunFinished { reason } = event.kind {
+            sink.lock().unwrap().push(reason);
+        }
+    });
+    seen
+}
 
 pub(super) fn minimal_agent(name: &str) -> Agent {
     use crate::agents::r#loop::test_util::MockProvider;

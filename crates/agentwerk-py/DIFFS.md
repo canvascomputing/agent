@@ -12,7 +12,7 @@ Seven rules the surface table below never repeats.
 | `agent.knowledge(&store)` where `store: Arc<Knowledge>` | `agent.knowledge(store)`: every `Arc<T>` becomes a plain object, shared by passing it to several agents. |
 | `agent.finish().await` | `await agent.finish()`: every `async fn` becomes awaitable. |
 | `agent.task(MyTask { goal, url })` | `agent.task({"goal": .., "url": ..})`: an argument Rust takes by `Serialize` takes any JSON-serializable value. |
-| `work.last_result() -> Option<serde_json::Value>` | `work.last_result()`: a JSON return value becomes a dict, list, or scalar. |
+| `ticket.result -> Option<serde_json::Value>` | `ticket.result`: a JSON value becomes a dict, list, or scalar. |
 
 ## The full surface
 
@@ -87,7 +87,7 @@ Seven rules the surface table below never repeats.
 | `TicketQueue::cancel_label_on_event(label, predicate)` | `TicketQueue.cancel_label_on_event(label, predicate)` |
 | `TicketQueue::cancel_label_on_result(label, predicate)` | `TicketQueue.cancel_label_on_result(label, predicate)` |
 | `TicketQueue::cancel_label_on_failure(label, predicate)` | `TicketQueue.cancel_label_on_failure(label, predicate)` |
-| `TicketQueue::label_cancelled(label)` | `TicketQueue.label_cancelled(label)` |
+| `TicketQueue::is_label_cancelled(label)` | `TicketQueue.is_label_cancelled(label)` |
 | `TicketQueue::create_ticket_on_event(make)` | `TicketQueue.create_ticket_on_event(make)` |
 | `TicketQueue::create_ticket_on_result(make)` | `TicketQueue.create_ticket_on_result(make)` |
 | `TicketQueue::create_ticket_on_failure(make)` | `TicketQueue.create_ticket_on_failure(make)` |
@@ -98,18 +98,22 @@ Seven rules the surface table below never repeats.
 | `TicketQueue::get_ticket(key)` | `TicketQueue.get_ticket(key)` |
 | `TicketQueue::tickets()` | `TicketQueue.tickets()` |
 | `TicketQueue::tickets_for_label(label)` | `TicketQueue.tickets_for_label(label)` |
+| `TicketQueue::tickets_for_agent(name)` | `TicketQueue.tickets_for_agent(agent_name)` |
 | `TicketQueue::find_tickets(predicate)` | `TicketQueue.find_tickets(predicate)` |
 | `TicketQueue::find_ticket(predicate)` | `TicketQueue.find_ticket(predicate)` |
-| `TicketQueue::wait_for_ticket(predicate).await` | `await TicketQueue.wait_for_ticket(predicate)` |
+| `TicketQueue::finish_on_event(condition).await` | `await TicketQueue.finish_on_event(condition)` |
+| `TicketQueue::finish_on_result(condition).await` | `await TicketQueue.finish_on_result(condition)`: the `(Ticket, Value)` pair becomes a tuple. |
+| `TicketQueue::finish_on_failure(condition).await` | `await TicketQueue.finish_on_failure(condition)`: the `(Event, Ticket)` pair becomes a tuple. |
+| `TicketQueue::finish_on_ticket(condition).await` | `await TicketQueue.finish_on_ticket(condition)` |
 | `TicketQueue::start()` | `TicketQueue.start()` |
 | `TicketQueue::finish().await` | `await TicketQueue.finish()` |
 | `TicketQueue::cancel()` | `TicketQueue.cancel()` |
 | `TicketQueue::is_cancelled()` | `TicketQueue.is_cancelled()` |
-| `TicketQueue::finish_reason()` | `TicketQueue.finish_reason()` |
 | `TicketQueue::stats()` | `TicketQueue.stats()` |
-| `TicketQueue::last_result()` | `TicketQueue.last_result()` |
 | `TicketQueue::results()` | `TicketQueue.results()` |
 | `TicketQueue::results_for_label(label)` | `TicketQueue.results_for_label(label)` |
+| `TicketQueue::results_for_agent(name)` | `TicketQueue.results_for_agent(agent_name)` |
+| `TicketQueue::result_for_ticket(key)` | `TicketQueue.result_for_ticket(key)` |
 | **Ticket** | |
 | `Ticket::new(task)` | `Ticket(task)` |
 | `Ticket::label(l)` | `Ticket(task, labels=[l])` |
@@ -123,7 +127,7 @@ Seven rules the surface table below never repeats.
 | `Ticket::is_failed()` | `Ticket.is_failed()` |
 | `Ticket::is_pending()` | `Ticket.is_pending()` |
 | `Ticket::is_resolved()` | `Ticket.is_resolved()` |
-| `Ticket.key`, `.status`, `.task`, `.result`, `.labels`, `.schema`, `.parent`, `.reporter` | Same names, same meaning. |
+| `Ticket.key`, `.status`, `.task`, `.result`, `.labels`, `.schema`, `.parent`, `.reporter`, `.assignee` | Same names, same meaning. |
 | `Ticket.created_at`, `.started_at`, `.finished_at`, `.failed_at` | Same names, same meaning. |
 | `Ticket.replies` | `Ticket.replies`: a list of `Reply`, converted on access. |
 | `Status` | A string. The six `is_*` predicates read better than comparing it. |

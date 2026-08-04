@@ -98,11 +98,16 @@ async def main(n, partitions, agents):
     print(f"sum_{{k=1}}^{{{n}}} k^2 over {len(bounds)} partitions, {agents} agent(s)\n")
 
     tickets = TicketQueue().max_turns(20 * len(bounds))
-    tickets.on_event(
-        lambda event: print(f"  {event.kind:<20} {event.agent_name:<10} {event.ticket_key}")
-        if event.kind in ("ticket_started", "ticket_finished", "ticket_failed")
-        else None
-    )
+    # The finish reason is announced once and not kept, so catch it here.
+    finish_reason = []
+
+    def trace(event):
+        if event.kind in ("ticket_started", "ticket_finished", "ticket_failed"):
+            print(f"  {event.kind:<20} {event.agent_name:<10} {event.ticket_key}")
+        elif event.kind == "run_finished":
+            finish_reason.append(event.data["reason"])
+
+    tickets.on_event(trace)
 
     for a in range(agents):
         tickets.agent(
@@ -140,7 +145,7 @@ async def main(n, partitions, agents):
         f"{stats.tickets_finished()} done, {stats.tickets_failed()} failed, "
         f"{stats.input_tokens()} in / {stats.output_tokens()} out tokens"
     )
-    print(f"finish reason  : {tickets.finish_reason()}")
+    print(f"finish reason  : {finish_reason[-1]}")
     for name, stat in stats.tool_stats().items():
         print(f"tool {name:<14}: {stat.calls} calls, error rate {stat.error_rate()}")
 

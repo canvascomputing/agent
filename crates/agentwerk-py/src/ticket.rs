@@ -127,6 +127,12 @@ impl PyTicket {
         &self.inner.reporter
     }
 
+    /// Name of the agent that claimed the ticket, once one has.
+    #[getter]
+    fn assignee(&self) -> Option<String> {
+        self.inner.assignee.clone()
+    }
+
     #[getter]
     fn created_at(&self) -> u64 {
         self.inner.created_at

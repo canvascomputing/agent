@@ -8,7 +8,7 @@ Naming, comment, and prose rules, plus README structure. Skim the section matchi
 
 `Agent`, `AgentBuilder`, `TicketQueue`, `Ticket`, `Knowledge`, `Stats`, `Trajectory`, `Reply`, `Event`, `Status`, `EventKind`, `FinishReason`, `Schema`
 
-- Discriminants callers match on in their own code earn a root slot: `Status` (on `Ticket.status`), `EventKind` (on `Event.kind`), `FinishReason` (from `finish_reason()`).
+- Discriminants callers match on in their own code earn a root slot: `Status` (on `Ticket.status`), `EventKind` (on `Event.kind`), `FinishReason` (on `EventKind::RunFinished`).
 - Errors and conversion traits do not earn a root slot. They live in their domain module.
 - Builder parameters and run outputs do earn one when callers name them in their own code: `Schema` (on `Ticket::schema`), `AgentBuilder` (from `Agent::new`), `Reply` (on `Ticket.replies`), `Trajectory` (built from a ticket an `on_ticket` handler receives).
 - Free functions at the root are forbidden: convert to an associated function or move to the domain module.
@@ -144,6 +144,8 @@ InvalidRequest, UnexpectedStatus, MissingKey, RequestError               // reje
 
 - Example: `set_extension()`, `get_extension()`.
 - Builder methods remain unprefixed.
+- A public method returning `bool` is `is_<state>` or `has_<thing>`: `is_finished`, `is_cancelled`, `is_label_cancelled`, `has_label`. A bare past participle such as `label_cancelled` reads as a field, not a question.
+- `get_<name>` is reserved for reading back a value a builder set. A lookup by key keeps it for the `HashMap::get` sense, which is why `get_ticket(key)` stands apart from `tickets_for_label(label)`.
 
 ## Hooks
 
@@ -158,10 +160,12 @@ cancel_label_on_event(label, cond)   // react, scoped to one label
 
 - `on_<trigger>(handler)` observes: the handler sees every `<trigger>` and returns nothing, as in `on_event`, `on_result`, and `on_failure`.
 - `<action>_on_<trigger>(..)` reacts whenever `<trigger>` matches. The action may be more than one word, so `create_ticket_on_result` reads as `create_ticket` plus `on_result`.
-- A bare `<action>(..)` acts once, now: `cancel`, `cancel_label`, `edit_replies`. The `_on_` infix is the only thing separating a standing rule from an immediate call, so it is never dropped for brevity.
+- A bare `<action>(..)` acts once, now: `cancel`, `cancel_label`, `edit_replies`. The `_on_` infix names the trigger, and the return type says whether the call installs a standing rule or resolves once: `&Self` registers a handler, a value awaits a single match. `cancel_on_event` is a standing rule, `finish_on_event` awaits.
+- `cancel_on_<trigger>` and `finish_on_<trigger>` are not synonyms. `cancel*` ends execution; `finish_on_*` hands back the first match and leaves execution running. Every `finish_on_*` row and doc comment closes on "and execution carries on", because the name alone suggests otherwise. The contrast is carried by the cells themselves, not by prose under the table.
 - Scope crosses all three forms and lives in the prefix: `cancel*` ends execution, `cancel_label*` ends one label's pool and leaves the others running.
 - IMPORTANT: the trigger fixes the handler's parameters, the action fixes its return type. A caller who knows one hook in a column knows them all: `_on_event` hands over `&Event`, `_on_result` a `&Ticket` and its validated `&Value`, `_on_failure` the `&Event` and the `&Ticket` it happened in. Observing returns `()`, `cancel*` returns `bool`, `create_ticket*` returns `Option<Ticket>`.
-- Every trigger carries a reaction for every action, so the grid has no holes to explain. The three triggers cross `cancel`, `cancel_label`, and `create_ticket`; `on_ticket` sits outside it, observing a lifecycle transition rather than naming a trigger.
+- Every trigger carries a reaction for every action, so the grid has no holes to explain. The three triggers cross `cancel`, `cancel_label`, `create_ticket`, and `finish_on`; `on_ticket` and `finish_on_ticket` sit outside it, keying on a ticket rather than naming a trigger.
+- `finish_on_ticket` takes only the `&Ticket`, where `on_ticket` takes the `&Event` too. It also answers before any event arrives, by reading the tickets already in the store, and there is no event to hand over at that moment. That check is what lets it resolve on a state no transition announces.
 - `<action>_on(value)` names no trigger, because the caller supplies the trigger whole instead of a condition over something agentwerk produces. `cancel_on` is the only one, and it is not renamed after a cancellation signal: `signal` already names the `AtomicBool` pair on `TicketQueue`.
 - The editor row is the one exception, and it holds two members: `edit_replies_on_event` and `edit_replies_on_compaction`. Compaction earns the second because it is the one moment agentwerk rewrites a ticket's replies on the host's behalf, so without a hook there the built-in summarizer is the only strategy anyone can have. No `_on_result` or `_on_failure` sibling follows: an editor runs once per request over the batch of events since the previous one, so an `_on_result` sibling would have no next request to act on and an `_on_failure` sibling would be a second rewriter of one ticket's replies, which the singular-editor rule below forbids. A failure is already reachable by matching `EventKind::ToolCallFailed` inside the batch.
 
@@ -470,6 +474,17 @@ A `Schema` constrains the result an agent produces for a ticket.
 - Every row is a description, not a constraint fragment. A cell that does not lead with a verb is a defect.
 - A tool does not act; the agent does. The table intro carries that framing once so individual rows stay terse.
 - The prose verb "Return" stays for instructions to the caller, as in "Return `ToolResult::error(message)` for a failure the model should work around".
+
+## README Table Order
+
+**Rows are grouped by subject, and one axis order is repeated in every group.**
+
+- Groups do not interleave. The result rows run before the ticket rows in Results; the observers run before the cancels in Hooks.
+- One axis order is chosen and held across every group. Hooks is the model: `event`, `result`, `failure`, in that order, in all of its groups.
+- Within a group, selectors run widest to narrowest: everything, then by label or agent, then by condition, then by key.
+- Singular leads plural where both exist, as `label(label)` and `labels(labels)` already do.
+- An action is followed by the query that reads it back: `cancel()` then `is_cancelled()`, `cancel_label(label)` then `is_label_cancelled(label)`.
+- One table holds one receiver. A method on another type goes in the fold's trailing prose, which is why `TicketQueue::model_for_agent` is prose under the Providers fold rather than a fourth `AgentBuilder` row.
 
 ## README Examples
 

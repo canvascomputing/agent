@@ -127,7 +127,7 @@ def test_set_finished_resolves_a_ticket_with_its_result(queue):
     queue.set_finished(key, {"verdict": "clean"})
 
     assert queue.get_ticket(key).status == "finished"
-    assert queue.last_result() == {"verdict": "clean"}
+    assert queue.results()[-1] == {"verdict": "clean"}
 
 
 def test_set_finished_rejects_a_result_that_misses_the_schema(queue):
@@ -161,7 +161,6 @@ def test_results_are_empty_before_a_run(queue):
 
     assert queue.results() == []
     assert queue.results_for_label("a") == []
-    assert queue.last_result() is None
 
 
 def test_tickets_for_label_returns_every_status_not_just_finished(queue):
@@ -195,10 +194,6 @@ def test_cancel_marks_the_queue_cancelled(queue):
 
 def test_cancel_label_chains(queue):
     assert isinstance(queue.cancel_label("scan"), aw.TicketQueue)
-
-
-def test_finish_reason_is_none_before_a_run(queue):
-    assert queue.finish_reason() is None
 
 
 def test_stats_reports_zero_counts_before_a_run(queue):
@@ -289,7 +284,7 @@ def test_cancel_label_on_failure_calls_off_one_pool_only(queue):
 
     queue.set_failed(key)
 
-    assert queue.label_cancelled("scan")
+    assert queue.is_label_cancelled("scan")
     assert not queue.is_cancelled()
 
 
@@ -397,9 +392,56 @@ def test_edit_replies_raises_when_the_editor_returns_dicts(queue):
         queue.edit_replies(key, lambda replies: [{"author": "user", "content": []}])
 
 
-async def test_wait_for_ticket_returns_none_when_nothing_matches(queue):
+async def test_run_finished_announces_why_execution_ended(queue):
+    reasons = []
+    queue.on_event(
+        lambda event: reasons.append(event.data["reason"])
+        if event.kind == "run_finished"
+        else None
+    )
+    await queue.finish()
+    assert reasons == ["drained"]
+
+
+async def test_finish_on_ticket_returns_none_when_nothing_matches(queue):
     queue.cancel()
-    assert await queue.wait_for_ticket(lambda t: t.is_finished()) is None
+    assert await queue.finish_on_ticket(lambda t: t.is_finished()) is None
+
+
+async def test_finish_on_ticket_resolves_on_a_ticket_that_already_matches(queue):
+    key = queue.task("work")
+    queue.set_finished(key, "done")
+    found = await queue.finish_on_ticket(lambda t: t.is_finished())
+    assert found.key == key
+
+
+async def test_finish_on_result_hands_back_the_ticket_and_its_result(queue):
+    key = queue.task("work")
+    queue.set_finished(key, {"verdict": "clean"})
+    ticket, result = await queue.finish_on_result(lambda t, r: r["verdict"] == "clean")
+    assert ticket.key == key
+    assert result == {"verdict": "clean"}
+
+
+async def test_finish_on_event_and_failure_return_none_after_cancel(queue):
+    queue.cancel()
+    assert await queue.finish_on_event(lambda e: True) is None
+    assert await queue.finish_on_failure(lambda e, t: True) is None
+
+
+def test_result_for_ticket_is_none_until_the_ticket_finishes(queue):
+    key = queue.task("work")
+    assert queue.result_for_ticket(key) is None
+    queue.set_finished(key, {"verdict": "clean"})
+    assert queue.result_for_ticket(key) == {"verdict": "clean"}
+    assert queue.result_for_ticket("TICKET-404") is None
+
+
+def test_assignee_is_unset_until_an_agent_claims_the_ticket(queue):
+    key = queue.task("work")
+    assert queue.get_ticket(key).assignee is None
+    assert queue.tickets_for_agent("scout") == []
+    assert queue.results_for_agent("scout") == []
 
 
 def test_load_reopens_a_session_directory(queue, tmp_path):

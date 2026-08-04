@@ -124,13 +124,13 @@ fn claim<'a>(agent: &'a Agent, ticket_queue: &'a Arc<TicketQueue>) -> Option<Tic
     let claimable = |t: &Ticket| {
         t.status == Status::Todo
             && agent.handles_labels(&t.labels)
-            && !ticket_queue.labels_cancelled(&t.labels)
+            && !ticket_queue.is_any_label_cancelled(&t.labels)
     };
     let resumable = |t: &Ticket| {
         t.status == Status::InProgress
             && t.labels.iter().any(|l| l == agent.get_name())
             && (t.is_waiting_for_response() || !agent.is_interactive())
-            && !ticket_queue.labels_cancelled(&t.labels)
+            && !ticket_queue.is_any_label_cancelled(&t.labels)
     };
     let ticket_key = ticket_queue
         .claim(claimable, agent.get_name())
@@ -185,7 +185,7 @@ fn check_ticket(context: &mut TicketContext<'_>) -> Step {
     let Some(ticket) = context.ticket() else {
         return Step::NextTicket;
     };
-    if context.ticket_queue.labels_cancelled(&ticket.labels) {
+    if context.ticket_queue.is_any_label_cancelled(&ticket.labels) {
         return Step::Cancel;
     }
     // The transition itself already emitted the terminal event; the agent
@@ -279,7 +279,7 @@ mod tests {
             .expect("finish did not finish within 5s");
 
         assert_eq!(tickets.results().len(), 2);
-        assert_eq!(tickets.last_result(), Some(serde_json::json!("b-done")));
+        assert_eq!(tickets.results().pop(), Some(serde_json::json!("b-done")));
     }
 
     // directive editor
@@ -586,6 +586,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn finish_on_ticket_sees_the_reply_the_request_event_announces() {
+        let results_dir = crate::test_util::TempDir::new().unwrap();
+        let provider = MockProvider::with_results(vec![Ok(text_response("hi"))]);
+        let tickets = TicketQueue::new();
+        tickets
+            .dir(results_dir.path().to_path_buf())
+            .max_request_retries(0)
+            .max_time(Duration::from_millis(500));
+        tickets.agent(interactive_chatbot(&provider));
+        let key = tickets.task("hello");
+        tickets.start();
+
+        // Pausing for input is no lifecycle transition, so this resolves only
+        // if `RequestFinished` reaches a waiter after its reply is in the store.
+        let paused = tokio::time::timeout(
+            Duration::from_secs(5),
+            tickets.finish_on_ticket(|t| {
+                t.replies
+                    .last()
+                    .is_some_and(|r| r.author == Author::Assistant)
+            }),
+        )
+        .await
+        .expect("finish_on_ticket did not resolve within 5s");
+        assert_eq!(paused.map(|t| t.key), Some(key));
+        tickets.cancel();
+    }
+
+    #[tokio::test]
     async fn paused_interactive_ticket_emits_turn_started_exactly_once() {
         use crate::event::EventKind;
 
@@ -747,7 +776,7 @@ mod tests {
             .next()
             .expect("ticket must exist");
         assert_eq!(ticket.status, Status::Finished);
-        assert_eq!(tickets.last_result(), Some(serde_json::json!("done")));
+        assert_eq!(tickets.results().pop(), Some(serde_json::json!("done")));
     }
 
     #[tokio::test]
@@ -902,13 +931,13 @@ mod tests {
 
         tickets.task("first");
         tickets.finish().await;
-        assert_eq!(tickets.last_result(), Some(serde_json::json!("first")));
+        assert_eq!(tickets.results().pop(), Some(serde_json::json!("first")));
 
         tickets.task("second");
         tokio::time::timeout(Duration::from_secs(5), tickets.finish())
             .await
             .expect("second finish did not finish within 5s");
-        assert_eq!(tickets.last_result(), Some(serde_json::json!("second")));
+        assert_eq!(tickets.results().pop(), Some(serde_json::json!("second")));
     }
 
     #[tokio::test]
@@ -934,7 +963,7 @@ mod tests {
         let queue = tokio::time::timeout(Duration::from_secs(5), agent.finish())
             .await
             .expect("agent.finish did not finish within 5s");
-        assert_eq!(queue.last_result(), Some(serde_json::json!("forwarded")));
+        assert_eq!(queue.results().pop(), Some(serde_json::json!("forwarded")));
     }
 
     // Cross-ticket memory

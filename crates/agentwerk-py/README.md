@@ -63,7 +63,7 @@ async def main():
     )
     work = await agent.finish()
 
-    print(work.last_result())
+    print(work.results()[-1])
 
 
 asyncio.run(main())
@@ -308,7 +308,7 @@ See [`TicketQueue`](https://docs.rs/agentwerk/latest/agentwerk/agents/tickets/st
 ```python
 tickets.start()
 await tickets.finish()
-answer = tickets.last_result()
+answer = tickets.results()[-1]
 ```
 
 <details>
@@ -320,9 +320,8 @@ answer = tickets.last_result()
 | `await finish()` | Process every queued ticket. |
 | `cancel()` | Cancel the execution. |
 | `is_cancelled()` | Check whether the execution was cancelled. |
-| `finish_reason()` | Check the reason for the finishing. |
 | `cancel_label(label)` | Stop one label's agents. |
-| `label_cancelled(label)` | Check whether one label's agents have been stopped. |
+| `is_label_cancelled(label)` | Check whether one label's agents have been stopped. |
 
 </details>
 
@@ -333,9 +332,9 @@ Access the results of the agents' work:
 ```python
 await tickets.finish()
 
-answer = tickets.last_result()
-if answer is not None:
-    print(answer)
+answers = tickets.results()
+if answers:
+    print(answers[-1])
 
 for ticket in tickets.tickets():
     print(f"{ticket.key}: {ticket.status}")
@@ -353,23 +352,22 @@ print(ticket.result["title"])
 
 | Method | Description |
 |--------|-------------|
-| `last_result()` | Get the most recent ticket result. |
-| `results()` | Get every ticket's result in creation order. |
-| `results_for_label(label)` | Get every ticket's result carrying a specific label. |
+| `results()` | Get the result of every finished ticket, in creation order. |
+| `results_for_label(label)` | Get the result of every finished ticket carrying a label. |
+| `results_for_agent(name)` | Get the result of every finished ticket claimed by an agent. |
+| `result_for_ticket(key)` | Get one ticket's result by key. |
 | `tickets()` | Get every ticket in creation order. |
-| `tickets_for_label(label)` | Get every ticket carrying a specific label. |
+| `tickets_for_label(label)` | Get every ticket carrying a label, in any status. |
+| `tickets_for_agent(name)` | Get every ticket claimed by an agent, in any status. |
 | `find_ticket(condition)` | Get the earliest ticket matching a condition. |
 | `find_tickets(condition)` | Get every ticket matching a condition. |
 | `get_ticket(key)` | Get one ticket by key. |
-| `await wait_for_ticket(condition)` | Wait for one matching ticket instead of draining the queue. |
-| `model_for_agent(name)` | Get the model that agent runs. |
-| `stats()` | Get execution statistics, see [Stats](#stats). |
 
 Ticket members:
 
 | | Members |
 |-|---------|
-| **Identity** | `key`, `task`, `labels`, `parent`, `reporter` |
+| **Identity** | `key`, `task`, `labels`, `parent`, `reporter`, `assignee` |
 | **Outcome** | `status`, `result`, `replies`, `schema` |
 | **Timestamps** | `created_at`, `started_at`, `finished_at`, `failed_at` |
 | **Checks** | `has_label(label)`, `is_todo()`, `is_in_progress()`, `is_finished()`, `is_failed()`, `is_pending()`, `is_resolved()` |
@@ -575,6 +573,10 @@ See [`EventKind`](https://docs.rs/agentwerk/latest/agentwerk/event/enum.EventKin
 | **Add work** | `create_ticket_on_event(make)` | Enqueue a follow-up ticket from any event. |
 | | `create_ticket_on_result(make)` | Enqueue a follow-up ticket from a finished ticket. |
 | | `create_ticket_on_failure(make)` | Enqueue a retry for a ticket that failed. |
+| **Return a match** | `await finish_on_event(condition)` | Get the first event that matches, and execution carries on. |
+| | `await finish_on_result(condition)` | Get the first finished result that matches, and execution carries on. |
+| | `await finish_on_failure(condition)` | Get the first failure that matches, and execution carries on. |
+| | `await finish_on_ticket(condition)` | Get the first ticket that matches, and execution carries on. |
 | **Rewrite replies** | `edit_replies_on_event(editor)` | Rewrite a ticket's replies before its next request. |
 | | `edit_replies_on_compaction(editor)` | Decide what compaction does with a ticket's replies. |
 
