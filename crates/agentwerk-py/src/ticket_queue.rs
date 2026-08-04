@@ -351,8 +351,8 @@ impl PyTicketQueue {
     ///
     /// Ask before creating follow-up work: a ticket carrying a stopped label is
     /// never claimed.
-    fn label_cancelled(&self, label: &str) -> bool {
-        self.inner.label_cancelled(label)
+    fn is_label_cancelled(&self, label: &str) -> bool {
+        self.inner.is_label_cancelled(label)
     }
 
     /// Stop one label's agents when an event matches, while the rest keep
@@ -434,10 +434,19 @@ impl PyTicketQueue {
             .collect()
     }
 
-    /// Get every ticket carrying a specific label, whatever its status.
+    /// Get every ticket carrying a label, in any status.
     fn tickets_for_label(&self, py: Python<'_>, label: &str) -> PyResult<Vec<Py<PyTicket>>> {
         self.inner
             .tickets_for_label(label)
+            .iter()
+            .map(|ticket| Py::new(py, PyTicket::from_ticket(ticket)))
+            .collect()
+    }
+
+    /// Get every ticket claimed by an agent, in any status.
+    fn tickets_for_agent(&self, py: Python<'_>, agent_name: &str) -> PyResult<Vec<Py<PyTicket>>> {
+        self.inner
+            .tickets_for_agent(agent_name)
             .iter()
             .map(|ticket| Py::new(py, PyTicket::from_ticket(ticket)))
             .collect()
@@ -463,20 +472,92 @@ impl PyTicketQueue {
         }
     }
 
-    /// Wait for one matching ticket instead of draining the queue. Gives back
+    /// Get the first ticket that matches, and execution carries on. Gives back
     /// `None` when execution ends first.
-    fn wait_for_ticket<'py>(
+    fn finish_on_ticket<'py>(
         &self,
         py: Python<'py>,
-        predicate: Py<PyAny>,
+        condition: Py<PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let inner = Arc::clone(&self.inner);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let found = inner
-                .wait_for_ticket(|ticket| ticket_predicate(&predicate, ticket))
+                .finish_on_ticket(|ticket| ticket_predicate(&condition, ticket))
                 .await;
             Python::attach(|py| match found {
                 Some(ticket) => Ok(Some(Py::new(py, PyTicket::from_ticket(&ticket))?)),
+                None => Ok::<_, PyErr>(None),
+            })
+        })
+    }
+
+    /// Get the first event that matches, and execution carries on. Gives back
+    /// `None` when execution ends first.
+    fn finish_on_event<'py>(
+        &self,
+        py: Python<'py>,
+        condition: Py<PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let inner = Arc::clone(&self.inner);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let found = inner
+                .finish_on_event(|event| event_predicate(&condition, event))
+                .await;
+            Ok::<_, PyErr>(found.as_ref().map(to_py_event))
+        })
+    }
+
+    /// Get the first finished result that matches, and execution carries on.
+    /// Gives back `None` when execution ends first.
+    fn finish_on_result<'py>(
+        &self,
+        py: Python<'py>,
+        condition: Py<PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let inner = Arc::clone(&self.inner);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let found = inner
+                .finish_on_result(|ticket, result| {
+                    Python::attach(|py| {
+                        call_with_result(py, &condition, ticket, result)
+                            .and_then(|value| value.is_truthy())
+                            .unwrap_or(false)
+                    })
+                })
+                .await;
+            Python::attach(|py| match found {
+                Some((ticket, result)) => Ok(Some((
+                    Py::new(py, PyTicket::from_ticket(&ticket))?,
+                    value_to_py(py, &result)?.unbind(),
+                ))),
+                None => Ok::<_, PyErr>(None),
+            })
+        })
+    }
+
+    /// Get the first failure that matches, and execution carries on. Gives back
+    /// `None` when execution ends first.
+    fn finish_on_failure<'py>(
+        &self,
+        py: Python<'py>,
+        condition: Py<PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let inner = Arc::clone(&self.inner);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let found = inner
+                .finish_on_failure(|event, ticket| {
+                    Python::attach(|py| {
+                        call_with_ticket(py, &condition, event, ticket)
+                            .and_then(|value| value.is_truthy())
+                            .unwrap_or(false)
+                    })
+                })
+                .await;
+            Python::attach(|py| match found {
+                Some((event, ticket)) => Ok(Some((
+                    to_py_event(&event),
+                    Py::new(py, PyTicket::from_ticket(&ticket))?,
+                ))),
                 None => Ok::<_, PyErr>(None),
             })
         })
@@ -633,27 +714,13 @@ impl PyTicketQueue {
         self.inner.is_cancelled()
     }
 
-    /// Check the reason for the finishing: `"drained"`, `"cancelled"`, or
-    /// `"policy_violated(..)"`. `None` until execution ends.
-    fn finish_reason(&self) -> Option<String> {
-        self.inner.finish_reason().map(|reason| reason.to_string())
-    }
-
     /// Get the execution statistics: requests, tokens, ticket counts, and the
     /// per-tool, per-file, per-label, and per-model figures.
     fn stats(&self) -> PyStats {
         PyStats::for_run(Arc::clone(&self.inner))
     }
 
-    /// Get the most recent ticket result.
-    fn last_result<'py>(&self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyAny>>> {
-        match self.inner.last_result() {
-            Some(value) => Ok(Some(value_to_py(py, &value)?)),
-            None => Ok(None),
-        }
-    }
-
-    /// Get every ticket's result in creation order.
+    /// Get the result of every finished ticket, in creation order.
     fn results<'py>(&self, py: Python<'py>) -> PyResult<Vec<Bound<'py, PyAny>>> {
         self.inner
             .results()
@@ -662,7 +729,7 @@ impl PyTicketQueue {
             .collect()
     }
 
-    /// Get every ticket's result carrying a specific label.
+    /// Get the result of every finished ticket carrying a label.
     fn results_for_label<'py>(
         &self,
         py: Python<'py>,
@@ -673,6 +740,31 @@ impl PyTicketQueue {
             .iter()
             .map(|value| value_to_py(py, value))
             .collect()
+    }
+
+    /// Get the result of every finished ticket claimed by an agent.
+    fn results_for_agent<'py>(
+        &self,
+        py: Python<'py>,
+        agent_name: &str,
+    ) -> PyResult<Vec<Bound<'py, PyAny>>> {
+        self.inner
+            .results_for_agent(agent_name)
+            .iter()
+            .map(|value| value_to_py(py, value))
+            .collect()
+    }
+
+    /// Get one ticket's result by key.
+    fn result_for_ticket<'py>(
+        &self,
+        py: Python<'py>,
+        key: &str,
+    ) -> PyResult<Option<Bound<'py, PyAny>>> {
+        match self.inner.result_for_ticket(key) {
+            Some(value) => Ok(Some(value_to_py(py, &value)?)),
+            None => Ok(None),
+        }
     }
 }
 
@@ -708,6 +800,18 @@ fn built_ticket(produced: &Bound<'_, PyAny>) -> Option<Ticket> {
         return None;
     }
     Some(produced.extract::<PyRef<PyTicket>>().ok()?.to_ticket())
+}
+
+/// Ask a Python condition about an event, on the same terms as
+/// [`ticket_predicate`].
+fn event_predicate(predicate: &Py<PyAny>, event: &Event) -> bool {
+    Python::attach(|py| {
+        predicate
+            .bind(py)
+            .call1((to_py_event(event),))
+            .and_then(|value| value.is_truthy())
+            .unwrap_or(false)
+    })
 }
 
 /// Ask a Python condition about a ticket. A conversion or Python error reads as

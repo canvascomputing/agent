@@ -140,7 +140,7 @@ async fn summariser_produces_text_when_compaction_fires_against_live_llm() {
     );
     tickets.ticket(Ticket::new(TASK));
     assert!(
-        tickets.last_result().is_none(),
+        tickets.results().pop().is_none(),
         "no result before run starts"
     );
 

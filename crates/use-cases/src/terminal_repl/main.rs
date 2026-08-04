@@ -526,7 +526,7 @@ fn redact(messages: &mut [Reply], word: &str) {
 /// race the user against the loop.
 async fn wait_for_assistant_pause(tickets: &TicketQueue, key: &str) {
     tickets
-        .wait_for_ticket(|t| t.key == key && (t.is_resolved() || is_paused_for_input(t)))
+        .finish_on_ticket(|t| t.key == key && (t.is_resolved() || is_paused_for_input(t)))
         .await;
 }
 

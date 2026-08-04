@@ -46,6 +46,12 @@ pub struct Ticket {
     pub status: Status,
     /// Name of the agent that opened the ticket.
     pub reporter: String,
+    /// Name of the agent that claimed the ticket, once one has.
+    ///
+    /// A label carrying an agent's name only makes the ticket eligible for it;
+    /// this names the agent that actually took it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assignee: Option<String>,
     /// When the ticket was created, in milliseconds.
     pub created_at: u64,
     /// When an agent claimed the ticket, in milliseconds.
@@ -79,6 +85,7 @@ impl Ticket {
             key: String::new(),
             status: Status::Todo,
             reporter: String::new(),
+            assignee: None,
             created_at: 0,
             started_at: None,
             finished_at: None,

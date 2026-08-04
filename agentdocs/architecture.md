@@ -74,7 +74,7 @@ Schemas and results:
 - A schema can also be registered as a per-label default through `TicketQueue::schema_for_label`, applied to a schemaless ticket at creation, so a result contract follows its label however the ticket was created: direct, labelled, or as a handover child.
 - A handover validates its `result` against the parent ticket's own schema, exactly as a plain finish does. It carries no schema for the child, which inherits one only through its label. A schema mismatch aborts before the child is inserted, so neither the parent's finish nor the child happens and the operation stays atomic.
 - `handover` and `task` are reserved argument names for `finish`. A ticket whose schema is an object has its fields passed as `finish`'s top-level arguments, so such a schema must not declare a `handover` or `task` property: those names are stripped as control keys before the result is recovered.
-- A successful finish appends one NDJSON record `{ticket, result}` to `<dir>/results.jsonl` (configured through `TicketQueue::dir(d)`, default `./.agentwerk`) and attaches the same `result` value to the ticket. The value is surfaced through `Ticket::result()`; `last_result()` returns its serialized form for the most recent `Finished` ticket.
+- A successful finish appends one NDJSON record `{ticket, result}` to `<dir>/results.jsonl` (configured through `TicketQueue::dir(d)`, default `./.agentwerk`) and attaches the same `result` value to the ticket. The value is surfaced through `Ticket::result()`.
 - The queue also appends one JSON line to `<dir>/tickets.jsonl` per lifecycle event (`created`, `started`, `done`, `failed`) and writes the full ticket state to `<dir>/tickets/<key>/ticket.json`. The `created` event carries the optional `parent` key when set, giving the log a complete handover audit trail. The log is observational: errors are swallowed. The result payload stays in `results.jsonl`; `tickets.jsonl` carries only the transition.
 
 ## Knowledge Is Opt-In and Shareable Across Agents
@@ -139,7 +139,7 @@ Two layers of state exist. The per-ticket replies live on `Ticket::replies`: eve
 - `cancel()` flips both atomics in sync. `cancel_on*` route through `cancel()` so cancellation triggers compose with the rest of the run's lifecycle.
 - Tools observe the stop signal through `ToolContext::interrupt_signal` and `wait_for_cancel`; pair them with `tokio::select!` so cancel drops the losing branch promptly.
 - Dropping the `TicketQueue` while agents still reference it through `Weak` is the public way to abort: the upgrade fails and each task panics out cleanly.
-- `finish()` announces its exit reason as `FinishReason::Drained`, `FinishReason::PolicyViolated(kind)`, or `FinishReason::Cancelled`, in that precedence. The reason is kept for `TicketQueue::finish_reason()` and emitted as `EventKind::RunFinished { reason }`.
+- `finish()` announces its exit reason as `FinishReason::Drained`, `FinishReason::PolicyViolated(kind)`, or `FinishReason::Cancelled`, in that precedence. The reason is emitted as `EventKind::RunFinished { reason }`.
 
 ## Stats Are Event-Derived, One Writer
 

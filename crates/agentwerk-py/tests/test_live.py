@@ -13,9 +13,17 @@ pytestmark = pytest.mark.live
 
 async def test_runs_a_single_task_to_a_result(live_agent):
     live_agent.task("Reply with exactly the word: pong")
-    work = await live_agent.finish()
-    assert work.last_result() is not None
-    assert work.finish_reason() == "drained"
+    # The reason is only announced, so the handler goes on before the run ends.
+    work = live_agent.start()
+    reasons = []
+    work.on_event(
+        lambda event: reasons.append(event.data["reason"])
+        if event.kind == "run_finished"
+        else None
+    )
+    await work.finish()
+    assert work.results()
+    assert reasons == ["drained"]
 
 
 async def test_invokes_a_builtin_tool(tmp_path):
@@ -30,7 +38,7 @@ async def test_invokes_a_builtin_tool(tmp_path):
     )
     agent.task("Read secret.txt and report the exact token it contains.")
     work = await agent.finish()
-    assert "THE-TOKEN-IS-42" in str(work.last_result())
+    assert "THE-TOKEN-IS-42" in str(work.results()[-1])
 
 
 async def test_invokes_a_python_tool_and_records_the_file_it_opened(tmp_path):

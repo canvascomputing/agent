@@ -22,7 +22,7 @@
 //! agent.task("Find every `pub trait` defined under src/ and explain each in one sentence.");
 //! let work = agent.finish().await;
 //!
-//! let result = work.last_result().unwrap();
+//! let result = work.results().pop().unwrap();
 //! println!("{}", result.as_str().unwrap_or_default());
 //! # }
 //! ```
