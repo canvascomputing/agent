@@ -658,6 +658,39 @@ impl PyTicketQueue {
         slf
     }
 
+    /// Rewrite the prompt that corrects an agent's behavior.
+    ///
+    /// Your function receives the `SchemaRetried` event that says why the retry
+    /// happened, in whose ticket, and for which agent, together with the
+    /// built-in prompt, and returns the replacement, or `None` to keep it. It
+    /// runs once per retry, so keep it cheap. One editor is held at a time, and
+    /// installing a second replaces the first.
+    ///
+    /// Raising prints the traceback and keeps the built-in prompt: this runs on
+    /// an agent's own thread, with no Python frame to raise into.
+    fn edit_directive_on_retry<'py>(slf: PyRef<'py, Self>, editor: Py<PyAny>) -> PyRef<'py, Self> {
+        slf.inner
+            .edit_directive_on_retry(move |event: &Event, directive: &mut String| {
+                Python::attach(|py| {
+                    let outcome = (|| -> PyResult<Option<String>> {
+                        let returned = editor
+                            .bind(py)
+                            .call1((to_py_event(event), directive.as_str()))?;
+                        if returned.is_none() {
+                            return Ok(None);
+                        }
+                        Ok(Some(returned.extract::<String>()?))
+                    })();
+                    match outcome {
+                        Ok(Some(replacement)) => *directive = replacement,
+                        Ok(None) => {}
+                        Err(err) => err.print(py),
+                    }
+                });
+            });
+        slf
+    }
+
     /// Rewrite one ticket's replies now, without sending a request.
     ///
     /// Your function receives the current replies and returns the new ones, or

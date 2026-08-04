@@ -37,6 +37,8 @@ type ReplyEditor = dyn Fn(&[Event], &mut Vec<Reply>) + Send + Sync;
 
 type CompactionEditor = dyn Fn(Compaction, Vec<Reply>) -> EditedReplies + Send + Sync;
 
+type DirectiveEditor = dyn Fn(&Event, &mut String) + Send + Sync;
+
 /// The replies an editor hands back, once its work finishes.
 type EditedReplies = Pin<Box<dyn Future<Output = ProviderResult<Vec<Reply>>> + Send>>;
 
@@ -149,6 +151,9 @@ pub struct TicketQueue {
     pub(super) reply_editing: Mutex<ReplyEditing>,
     /// What compaction does with a ticket's replies. `None` summarizes them.
     pub(super) compaction_editor: Mutex<Option<Arc<CompactionEditor>>>,
+    /// What corrects an agent asked to try again. `None` keeps the built-in
+    /// directive.
+    pub(super) directive_editor: Mutex<Option<Arc<DirectiveEditor>>>,
     pub(super) dir: Mutex<PathBuf>,
     pub(super) tickets_log_lock: Mutex<()>,
     pub(super) results_log_lock: Mutex<()>,
@@ -179,6 +184,7 @@ impl TicketQueue {
             stop_notice: Notify::new(),
             reply_editing: Mutex::new(ReplyEditing::default()),
             compaction_editor: Mutex::new(None),
+            directive_editor: Mutex::new(None),
             dir: Mutex::new(PathBuf::from(".agentwerk")),
             tickets_log_lock: Mutex::new(()),
             results_log_lock: Mutex::new(()),
@@ -256,6 +262,7 @@ impl TicketQueue {
             stop_notice: Notify::new(),
             reply_editing: Mutex::new(ReplyEditing::default()),
             compaction_editor: Mutex::new(None),
+            directive_editor: Mutex::new(None),
             dir: Mutex::new(tickets_dir),
             tickets_log_lock: Mutex::new(()),
             results_log_lock: Mutex::new(()),
@@ -473,7 +480,50 @@ impl TicketQueue {
         self.compaction_editor.lock().unwrap().clone()
     }
 
-    pub(crate) fn emit(&self, key: &str, agent: &str, kind: EventKind) {
+    /// Rewrite the prompt that corrects an agent's behavior.
+    ///
+    /// agentwerk asks again when a turn ends without an accepted result: the
+    /// model called no tool, or its result missed the ticket's schema. Your
+    /// function receives the `SchemaRetried` event that says which of the two
+    /// happened, in whose ticket, and for which agent, together with the prompt
+    /// itself. The prompt arrives holding the built-in text, so writing nothing
+    /// keeps the default. It runs once per retry, so keep it cheap.
+    ///
+    /// One editor is held at a time, and installing a second replaces the
+    /// first, the way [`Self::edit_replies_on_compaction`] does.
+    ///
+    /// ```no_run
+    /// use agentwerk::TicketQueue;
+    /// use agentwerk::event::EventKind;
+    ///
+    /// let tickets = TicketQueue::new();
+    /// tickets.edit_directive_on_retry(|event, directive| {
+    ///     let EventKind::SchemaRetried { message, .. } = &event.kind else {
+    ///         return;
+    ///     };
+    ///     *directive = format!("{message}\nCall `finish` with a result now.");
+    /// });
+    /// ```
+    pub fn edit_directive_on_retry(
+        &self,
+        editor: impl Fn(&Event, &mut String) + Send + Sync + 'static,
+    ) -> &Self {
+        *self.directive_editor.lock().unwrap() = Some(Arc::new(editor));
+        self
+    }
+
+    /// Apply the registered editor to the directive `event` calls for. Does
+    /// nothing until an editor is registered.
+    pub(crate) fn edit_directive(&self, event: &Event, directive: &mut String) {
+        let editor = self.directive_editor.lock().unwrap().clone();
+        if let Some(editor) = editor {
+            editor(event, directive);
+        }
+    }
+
+    /// Publish `kind` and hand back the event it became, so a caller that also
+    /// acts on it works from what every observer saw.
+    pub(crate) fn emit(&self, key: &str, agent: &str, kind: EventKind) -> Event {
         self.stats
             .record_event(&kind, key, &self.labels_for(key), agent);
         let event = Event::new(agent, key, kind);
@@ -487,11 +537,12 @@ impl TicketQueue {
         let handlers: Vec<Arc<EventHandler>> = self.event_handlers.lock().unwrap().clone();
         if handlers.is_empty() {
             default_logger()(&event);
-            return;
+            return event;
         }
         for h in &handlers {
             h(&event);
         }
+        event
     }
 
     /// Apply the registered editor to `key`'s replies, handing it the events
@@ -2056,6 +2107,28 @@ mod tests {
             !texts.contains(&"first".to_string()),
             "the replaced editor must not run: {texts:?}"
         );
+    }
+
+    /// One editor at a time, like the reply editors above.
+    #[test]
+    fn a_second_directive_editor_replaces_the_first() {
+        let (queue, _tmp) = test_queue();
+        queue.edit_directive_on_retry(|_event, directive| *directive = "first".into());
+        queue.edit_directive_on_retry(|_event, directive| *directive = "second".into());
+
+        let retried = queue.emit(
+            "KEY",
+            "agent",
+            EventKind::SchemaRetried {
+                attempt: 1,
+                max_attempts: 3,
+                message: "no tool call".into(),
+            },
+        );
+        let mut directive = String::from("built-in");
+        queue.edit_directive(&retried, &mut directive);
+
+        assert_eq!(directive, "second");
     }
 
     #[test]

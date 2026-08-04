@@ -320,6 +320,11 @@ def test_edit_replies_on_event_chains(queue):
     assert isinstance(configured, aw.TicketQueue)
 
 
+def test_edit_directive_on_retry_chains(queue):
+    configured = queue.edit_directive_on_retry(lambda event, directive: "replacement")
+    assert isinstance(configured, aw.TicketQueue)
+
+
 def test_edit_replies_on_compaction_chains(queue):
     async def keep_the_tail(compaction, replies):
         return replies[-2:]

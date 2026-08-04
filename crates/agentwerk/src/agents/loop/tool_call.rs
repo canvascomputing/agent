@@ -125,13 +125,13 @@ pub(super) async fn run(context: &mut TicketContext<'_>, mut calls: Vec<ToolCall
             .and_then(|ticket| ticket.schema)
             .and_then(|schema| serde_json::to_value(&schema).ok());
         let schema_detail = schema_retry_detail(validator_message, schema.as_ref());
-        context.emit(EventKind::SchemaRetried {
+        let retried = context.emit(EventKind::SchemaRetried {
             attempt: context.consecutive_schema_failures,
             max_attempts: max_schema_retries,
             message: schema_detail.clone(),
         });
         blocks.push(ContentBlock::Text {
-            text: context.retry_directive(&schema_detail),
+            text: context.retry_directive(&schema_detail, &retried),
         });
     }
     context.ticket_queue.add_reply(
@@ -236,16 +236,19 @@ mod tests {
             .max_request_retries(0)
             .request_retry_delay(Duration::from_millis(1))
             .max_schema_retries(10)
-            .max_time(Duration::from_millis(500));
+            .max_time(Duration::from_millis(500))
+            .edit_directive_on_retry(|event, directive| {
+                let EventKind::SchemaRetried { message, .. } = &event.kind else {
+                    return;
+                };
+                *directive = format!("REDO NOW. {message}\n{directive}");
+            });
         tickets.agent(
             Agent::new()
                 .name("tester")
                 .provider(provider.clone() as Arc<dyn Provider>)
                 .model("mock")
                 .role("test")
-                .edit_directive_on_retry(|detail, directive| {
-                    *directive = format!("REDO NOW. {detail}\n{directive}")
-                })
                 .build(),
         );
         tickets.ticket(Ticket::new("go").schema(schema_for_partial_sum()));

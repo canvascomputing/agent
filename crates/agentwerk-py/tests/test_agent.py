@@ -75,17 +75,6 @@ def test_from_env_without_provider_env_is_rejected(monkeypatch):
         aw.Agent().from_env().build()
 
 
-def test_directive_editor_is_accepted_and_builds():
-    agent = (
-        aw.Agent()
-        .provider(aw.AnthropicProvider("test-key"))
-        .model("claude-sonnet-4-20250514")
-        .edit_directive_on_retry(lambda detail, directive: "replacement")
-        .build()
-    )
-    assert agent.task("go").startswith("TICKET-")
-
-
 def test_using_an_unbuilt_agent_is_rejected():
     with pytest.raises(RuntimeError):
         aw.Agent().task("count to three")
