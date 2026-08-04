@@ -439,7 +439,7 @@ A `Schema` constrains the result an agent produces for a ticket.
 **Above the fold is what a reader needs. The exhaustive reference goes inside a `<details>` block at the end of the section.**
 
 - Nothing is deleted, only folded. A method that exists is documented somewhere, or the fold is not doing its job.
-- Folds are the last thing in a section. The `<summary>` names what it holds: `All event kinds`, `All statistics`. A section takes a second fold only when it covers two separate catalogues, as Events does with the kinds and the hooks that react to them.
+- Folds are the last thing in a section. Every `<summary>` reads `All <what the fold holds>`: `All event kinds`, `All hooks`, `All session files`. One section holds one fold; a second catalogue earns its own `h3` with its own lead example, as the hooks do under Events.
 - IMPORTANT: a blank line after `</summary>` and before `</details>`. `details` opens a raw-HTML block, so without the blank line every table inside renders as literal pipe characters on GitHub, crates.io, and PyPI alike.
 - Snippet budgets: eight lines for a section lead, five for a subsection lead. Quick Start gets sixteen.
 - Agent Swarms is the one exception and runs long, because it is the only place a whole system is shown at once: a pool working in parallel, a second pool the first hands tickets to, and one knowledge store between them. Every line there earns its place by carrying one of those three, and anything that does not belongs in a section below.
@@ -492,6 +492,7 @@ A `Schema` constrains the result an agent produces for a ticket.
 
 - Example models are `claude-haiku-4-5-20251001` or `claude-sonnet-4-20250514`.
 - Update triggers: a new builder method, a new tool, a new event kind, a new environment variable, or a changed default.
+- A chain of more than two calls breaks one call per line, even where it would fit the formatter's width. Packed onto one line the calls stop being scannable.
 - A code change edits only the doc sentences it made wrong. Surrounding prose is not rewritten unprompted.
 
 ## Rust and Python READMEs
