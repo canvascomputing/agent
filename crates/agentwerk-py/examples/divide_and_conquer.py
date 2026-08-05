@@ -142,7 +142,8 @@ async def main(n, partitions, agents):
     stats = tickets.stats()
     print(
         f"\nfinished in {stats.execution_duration():.1f}s: "
-        f"{stats.tickets_finished()} done, {stats.tickets_failed()} failed, "
+        f"{stats.event_count('ticket_finished')} done, "
+        f"{stats.event_count('ticket_failed')} failed, "
         f"{stats.input_tokens()} in / {stats.output_tokens()} out tokens"
     )
     print(f"finish reason  : {finish_reason[-1]}")

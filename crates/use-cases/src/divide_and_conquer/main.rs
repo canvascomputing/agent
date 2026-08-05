@@ -16,7 +16,6 @@
 use std::io::IsTerminal;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::Instant;
 
 use agentwerk::event::{Event, EventKind, EventName};
 use agentwerk::providers::{model_from_env, provider_from_env};
@@ -69,20 +68,12 @@ async fn main() {
         );
     }
 
-    let started = Instant::now();
     tickets.finish().await;
-    let elapsed = started.elapsed().as_secs_f64();
 
-    aggregate_and_report(&tickets, &partitions, args.n, elapsed, &style);
+    aggregate_and_report(&tickets, &partitions, args.n, &style);
 }
 
-fn aggregate_and_report(
-    tickets: &TicketQueue,
-    partitions: &[(u64, u64)],
-    n: u64,
-    elapsed: f64,
-    style: &Style,
-) {
+fn aggregate_and_report(tickets: &TicketQueue, partitions: &[(u64, u64)], n: u64, style: &Style) {
     let total = partitions.len();
     let mut partials: Vec<Option<i128>> = vec![None; total];
     let mut failures = 0usize;
@@ -114,6 +105,7 @@ fn aggregate_and_report(
     let total_sum: i128 = partials.iter().flatten().sum();
     let expected = closed_form(n);
     let stats = tickets.stats();
+    let elapsed = stats.execution_duration().unwrap_or_default().as_secs_f64();
 
     eprintln!(
         "{dim}└ aggregated in {elapsed:.1}s · {} done, {failures} failed · {} in / {} out tokens{reset}",

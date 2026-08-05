@@ -277,12 +277,7 @@ async fn main() {
         // breaks out before its own content.
         midstream.store(true, Ordering::Relaxed);
         let key = match chat_key.as_deref() {
-            Some(k)
-                if tickets
-                    .tickets()
-                    .iter()
-                    .any(|t| t.key == k && t.is_in_progress()) =>
-            {
+            Some(k) if tickets.get_ticket(k).is_some_and(|t| t.is_in_progress()) => {
                 tickets.reply(k, payload);
                 k.to_string()
             }
@@ -311,9 +306,7 @@ async fn main() {
 
         let stats = tickets.stats();
         let outcome = {
-            let chat = chat_key
-                .as_deref()
-                .and_then(|k| tickets.tickets().into_iter().find(|t| t.key == k));
+            let chat = chat_key.as_deref().and_then(|k| tickets.get_ticket(k));
             match chat {
                 Some(t) if t.is_finished() => {
                     chat_key = None;

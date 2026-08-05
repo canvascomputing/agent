@@ -120,13 +120,9 @@ async fn main() {
 fn print_research_outcome(tickets: &TicketQueue, outcome: &Outcome) {
     eprintln!("\n══════════════════════════════════════════════════════════");
     match outcome {
-        Outcome::Report(ticket) => {
-            let report_value = ticket
-                .result
-                .as_ref()
-                .expect("done ticket carries a result");
-            let title = report_value["title"].as_str().unwrap_or("(no title)");
-            let research = report_value["research"].as_str().unwrap_or("(no body)");
+        Outcome::Report(report) => {
+            let title = report["title"].as_str().unwrap_or("(no title)");
+            let research = report["research"].as_str().unwrap_or("(no body)");
             eprintln!(" REPORT");
             eprintln!("══════════════════════════════════════════════════════════\n");
             println!("## {title}\n\n{research}\n");
@@ -139,25 +135,15 @@ fn print_research_outcome(tickets: &TicketQueue, outcome: &Outcome) {
             };
             eprintln!(" {label}");
             eprintln!("══════════════════════════════════════════════════════════\n");
-            let all = tickets.tickets();
-            let researcher_findings: Vec<_> = all
+            let researched: Vec<(String, String)> = tickets
+                .find_tickets(|t| t.is_finished() && !t.has_label("report"))
                 .iter()
-                .filter(|t| t.is_finished())
-                .filter(|t| !t.labels.iter().any(|l| l == "report"))
-                .filter_map(|t| {
-                    t.result
-                        .as_ref()
-                        .map(|v| match v {
-                            serde_json::Value::String(s) => s.clone(),
-                            other => other.to_string(),
-                        })
-                        .map(|r| (t.key.to_string(), r))
-                })
+                .filter_map(|t| Some((t.key.clone(), plain_text(t.result.as_ref()?))))
                 .collect();
-            if researcher_findings.is_empty() {
+            if researched.is_empty() {
                 eprintln!("(no researcher produced findings)");
             } else {
-                for (key, findings) in researcher_findings {
+                for (key, findings) in researched {
                     println!("### {key}\n\n{findings}\n");
                 }
             }
@@ -166,7 +152,7 @@ fn print_research_outcome(tickets: &TicketQueue, outcome: &Outcome) {
 }
 
 enum Outcome {
-    Report(Box<agentwerk::Ticket>),
+    Report(serde_json::Value),
     Cancelled,
     Stalled,
 }
@@ -175,8 +161,8 @@ enum Outcome {
 /// ticket wins, an external cancel is surfaced, anything else means the
 /// chain stopped without reaching the report step.
 fn classify_outcome(tickets: &TicketQueue) -> Outcome {
-    if let Some(ticket) = tickets.find_ticket(|t| t.has_label("report") && t.is_finished()) {
-        return Outcome::Report(Box::new(ticket));
+    if let Some(result) = tickets.results_for_label("report").pop() {
+        return Outcome::Report(result);
     }
     if tickets.is_cancelled() {
         return Outcome::Cancelled;
@@ -205,11 +191,7 @@ fn print_chain_summary(tickets: &TicketQueue) {
         let preview = t
             .result
             .as_ref()
-            .map(|v| match v {
-                serde_json::Value::String(s) => s.clone(),
-                other => other.to_string(),
-            })
-            .map(|s| truncate(&s, 100))
+            .map(|v| truncate(&plain_text(v), 100))
             .unwrap_or_else(|| "(no result)".into());
         eprintln!(
             "  {key} {status}{labels}{parent}\n      → {preview}",
@@ -425,12 +407,16 @@ fn format_tool_call(tool_name: &str, input: &serde_json::Value) -> Vec<String> {
 }
 
 fn preview_value(value: Option<&serde_json::Value>, max: usize) -> String {
-    let raw = match value {
-        Some(serde_json::Value::String(s)) => s.clone(),
-        Some(other) => other.to_string(),
-        None => String::new(),
-    };
-    truncate(&raw, max)
+    truncate(&value.map(plain_text).unwrap_or_default(), max)
+}
+
+/// A result as prose: a JSON string loses its quotes, anything else keeps
+/// its JSON form.
+fn plain_text(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::String(s) => s.clone(),
+        other => other.to_string(),
+    }
 }
 
 fn truncate(s: &str, max: usize) -> String {
