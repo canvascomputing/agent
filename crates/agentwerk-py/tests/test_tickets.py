@@ -408,30 +408,36 @@ async def test_run_finished_announces_why_execution_ended(queue):
     assert reasons == ["drained"]
 
 
-async def test_finish_on_ticket_returns_none_when_nothing_matches(queue):
+async def test_get_finish_reason_reports_nothing_until_the_run_ends(queue):
+    assert queue.get_finish_reason() is None
+    await queue.finish()
+    assert queue.get_finish_reason() == "drained"
+
+
+async def test_wait_for_ticket_returns_none_when_nothing_matches(queue):
     queue.cancel()
-    assert await queue.finish_on_ticket(lambda t: t.is_finished()) is None
+    assert await queue.wait_for_ticket(lambda t: t.is_finished()) is None
 
 
-async def test_finish_on_ticket_resolves_on_a_ticket_that_already_matches(queue):
+async def test_wait_for_ticket_resolves_on_a_ticket_that_already_matches(queue):
     key = queue.task("work")
     queue.set_finished(key, "done")
-    found = await queue.finish_on_ticket(lambda t: t.is_finished())
+    found = await queue.wait_for_ticket(lambda t: t.is_finished())
     assert found.key == key
 
 
-async def test_finish_on_result_hands_back_the_ticket_and_its_result(queue):
+async def test_wait_for_result_hands_back_the_ticket_and_its_result(queue):
     key = queue.task("work")
     queue.set_finished(key, {"verdict": "clean"})
-    ticket, result = await queue.finish_on_result(lambda t, r: r["verdict"] == "clean")
+    ticket, result = await queue.wait_for_result(lambda t, r: r["verdict"] == "clean")
     assert ticket.key == key
     assert result == {"verdict": "clean"}
 
 
-async def test_finish_on_event_and_failure_return_none_after_cancel(queue):
+async def test_wait_for_event_and_failure_return_none_after_cancel(queue):
     queue.cancel()
-    assert await queue.finish_on_event(lambda e: True) is None
-    assert await queue.finish_on_failure(lambda e, t: True) is None
+    assert await queue.wait_for_event(lambda e: True) is None
+    assert await queue.wait_for_failure(lambda e, t: True) is None
 
 
 def test_result_for_ticket_is_none_until_the_ticket_finishes(queue):
