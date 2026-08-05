@@ -28,7 +28,7 @@ use super::{now_millis, numeric_id, policy_violated_kind, Reply};
 
 type EventHandler = dyn Fn(&Event) + Send + Sync;
 
-/// How many events a `finish_on_*` waiter may fall behind before it starts
+/// How many events a `wait_for_*` waiter may fall behind before it starts
 /// missing them. `TextChunkReceived` fires once per streaming delta and sets
 /// the volume this has to absorb.
 const EVENT_STREAM_CAPACITY: usize = 1024;
@@ -136,14 +136,14 @@ pub struct TicketQueue {
     pub(crate) terminal_transitions_in_flight: AtomicUsize,
     pub(crate) stats: Stats,
     pub(super) event_handlers: Mutex<Vec<Arc<EventHandler>>>,
-    /// Every emitted event, for the `finish_on_*` family to await. A separate
+    /// Every emitted event, for the `wait_for_*` family to await. A separate
     /// channel rather than one more `on_event` entry: a handler stays on the
     /// chain for the life of the queue, so one registered per call would grow
     /// without bound in a host that awaits in a loop.
     pub(super) event_stream: broadcast::Sender<Event>,
     /// Fires when `stop_signal` is set: the signal is the half you read, this
     /// is the half you await. `cancel()` emits no event, so without it a
-    /// `finish_on_*` waiter would never learn the run had stopped.
+    /// `wait_for_*` waiter would never learn the run had stopped.
     pub(super) stop_notice: Notify,
     /// The editor that rewrites a ticket's replies before each request, plus the
     /// per-ticket events buffered for it. Buffering runs whether or not an
@@ -158,6 +158,8 @@ pub struct TicketQueue {
     pub(super) tickets_log_lock: Mutex<()>,
     pub(super) results_log_lock: Mutex<()>,
     pub(super) join_handle: Mutex<Option<JoinHandle<()>>>,
+    /// Why the last `finish()` returned, or `None` while a run is under way.
+    pub(super) finish_reason: Mutex<Option<FinishReason>>,
     /// Next `TICKET-<N>` key to hand out, or `None` until it is known.
     /// `load()` seeds it from the tickets it just read off disk. `new()` leaves
     /// it `None` and the first `insert()` scans for the highest existing key,
@@ -189,6 +191,7 @@ impl TicketQueue {
             tickets_log_lock: Mutex::new(()),
             results_log_lock: Mutex::new(()),
             join_handle: Mutex::new(None),
+            finish_reason: Mutex::new(None),
             next_ticket_id: Mutex::new(None),
         })
     }
@@ -267,6 +270,7 @@ impl TicketQueue {
             tickets_log_lock: Mutex::new(()),
             results_log_lock: Mutex::new(()),
             join_handle: Mutex::new(None),
+            finish_reason: Mutex::new(None),
             next_ticket_id: Mutex::new(Some(next_id)),
         }))
     }
@@ -527,7 +531,7 @@ impl TicketQueue {
         self.stats
             .record_event(&kind, key, &self.labels_for(key), agent);
         let event = Event::new(agent, key, kind);
-        // Published before the handlers run: a `finish_on_*` waiter competes
+        // Published before the handlers run: a `wait_for_*` waiter competes
         // with them for nothing, and no handler can swallow the event. The
         // count is checked first so a run with no waiter never pays the clone,
         // which `TextChunkReceived` would otherwise charge per streamed token.
@@ -1166,6 +1170,7 @@ impl TicketQueue {
             .store(false, Ordering::Relaxed);
         self.cancelled_labels.lock().unwrap().clear();
         self.reply_editing.lock().unwrap().pending.clear();
+        *self.finish_reason.lock().unwrap() = None;
         let supervisor = self
             .weak_self
             .upgrade()
@@ -1184,7 +1189,7 @@ impl TicketQueue {
     /// Execution begins here when it has not already, and otherwise this waits
     /// on what is already running. It ends on cancel, on a policy violation, or
     /// once the queue is empty, in that precedence. The reason is announced as
-    /// [`EventKind::RunFinished`].
+    /// [`EventKind::RunFinished`] and kept for [`Self::get_finish_reason`].
     pub async fn finish(&self) -> &Self {
         if self.join_handle.lock().unwrap().is_none() {
             self.start();
@@ -1211,8 +1216,18 @@ impl TicketQueue {
         self.stop_notice.notify_waiters();
         self.take_join_handle().await;
         self.stats.record_execution_finished(now_millis());
+        // Stored before the emit so a handler and a later reader agree.
+        *self.finish_reason.lock().unwrap() = Some(reason);
         self.emit("", "", EventKind::RunFinished { reason });
         self
+    }
+
+    /// Get why execution ended, or `None` while it is still running.
+    ///
+    /// Set by [`Self::finish`] and cleared by [`Self::start`], so a re-started
+    /// queue does not report the previous run.
+    pub fn get_finish_reason(&self) -> Option<FinishReason> {
+        *self.finish_reason.lock().unwrap()
     }
 
     /// Cancel the execution.
@@ -1316,20 +1331,20 @@ impl TicketQueue {
         notified.await;
     }
 
-    /// Get the first event that matches, and execution carries on.
+    /// Get the first event that matches, waiting until one does.
     ///
     /// Call it after [`Self::start`]. It gives back `None` when execution stops
     /// before anything matches. To stop the run on a match instead, use
     /// [`Self::cancel_on_event`].
     ///
     /// A waiter that falls far enough behind loses the events it skipped, so a
-    /// match can go unseen under heavy streaming. [`Self::finish_on_ticket`]
-    /// and [`Self::finish_on_result`] re-read the store instead and cannot.
-    pub async fn finish_on_event<F>(&self, condition: F) -> Option<Event>
+    /// match can go unseen under heavy streaming. [`Self::wait_for_ticket`]
+    /// and [`Self::wait_for_result`] re-read the store instead and cannot.
+    pub async fn wait_for_event<F>(&self, condition: F) -> Option<Event>
     where
         F: Fn(&Event) -> bool,
     {
-        self.finish_on(|event| condition(event).then(|| event.clone()))
+        self.wait_for(|event| condition(event).then(|| event.clone()))
             .await
     }
 
@@ -1338,7 +1353,7 @@ impl TicketQueue {
     /// One subscription spans the whole wait. Taking a fresh one per rejected
     /// event would start at the tail and lose whatever was published in
     /// between, which no store re-read could recover.
-    async fn finish_on<T, F>(&self, pick: F) -> Option<T>
+    async fn wait_for<T, F>(&self, pick: F) -> Option<T>
     where
         F: Fn(&Event) -> Option<T>,
     {
@@ -1400,7 +1415,7 @@ impl TicketQueue {
         Some((found.clone(), result))
     }
 
-    /// Get the first finished result that matches, and execution carries on.
+    /// Get the first finished result that matches, waiting until one does.
     ///
     /// The value handed over is the stored, schema-validated result, as with
     /// [`Self::on_result`]. A ticket that finished before the call counts. To
@@ -1408,7 +1423,7 @@ impl TicketQueue {
     ///
     /// Your condition MUST NOT call another `TicketQueue` method that reads the
     /// ticket store, or the call deadlocks.
-    pub async fn finish_on_result<F>(&self, condition: F) -> Option<(Ticket, serde_json::Value)>
+    pub async fn wait_for_result<F>(&self, condition: F) -> Option<(Ticket, serde_json::Value)>
     where
         F: Fn(&Ticket, &serde_json::Value) -> bool,
     {
@@ -1423,17 +1438,17 @@ impl TicketQueue {
         }
     }
 
-    /// Get the first failure that matches, and execution carries on.
+    /// Get the first failure that matches, waiting until one does.
     ///
     /// Covers every failure [`Self::on_failure`] reports, so match on
     /// `event.kind` to tell one that ends the ticket from one the agent works
     /// around. To stop the run on a match instead, use
     /// [`Self::cancel_on_failure`].
-    pub async fn finish_on_failure<F>(&self, condition: F) -> Option<(Event, Ticket)>
+    pub async fn wait_for_failure<F>(&self, condition: F) -> Option<(Event, Ticket)>
     where
         F: Fn(&Event, &Ticket) -> bool,
     {
-        self.finish_on(|event| {
+        self.wait_for(|event| {
             if !event.kind.is_failure() {
                 return None;
             }
@@ -1443,14 +1458,14 @@ impl TicketQueue {
         .await
     }
 
-    /// Get the first ticket that matches, and execution carries on.
+    /// Get the first ticket that matches, waiting until one does.
     ///
     /// A ticket already matching when you call counts, and the condition is
     /// retried on every event, so it sees states no lifecycle transition
     /// announces, such as an agent waiting on the next reply. Your condition
     /// MUST NOT call another `TicketQueue` method that reads the ticket store,
     /// or the call deadlocks.
-    pub async fn finish_on_ticket<F>(&self, condition: F) -> Option<Ticket>
+    pub async fn wait_for_ticket<F>(&self, condition: F) -> Option<Ticket>
     where
         F: Fn(&Ticket) -> bool,
     {
@@ -1859,7 +1874,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn finish_on_ticket_resolves_when_ticket_matches() {
+    async fn wait_for_ticket_resolves_when_ticket_matches() {
         let (queue, _tmp) = test_queue();
         let key = queue.task("work");
         let writer = Arc::clone(&queue);
@@ -1868,37 +1883,37 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(30)).await;
             attach_done_result(&writer, &claimed, "done");
         });
-        let found = queue.finish_on_ticket(|t| t.is_finished()).await;
+        let found = queue.wait_for_ticket(|t| t.is_finished()).await;
         assert_eq!(found.map(|t| t.key), Some(key));
     }
 
     #[tokio::test]
-    async fn finish_on_ticket_none_after_cancel() {
+    async fn wait_for_ticket_none_after_cancel() {
         let (queue, _tmp) = test_queue();
         queue.task("never matches");
         queue.cancel();
-        let found = queue.finish_on_ticket(|t| t.is_finished()).await;
+        let found = queue.wait_for_ticket(|t| t.is_finished()).await;
         assert!(found.is_none());
     }
 
     #[tokio::test]
-    async fn finish_on_ticket_resolves_without_an_event_when_already_matching() {
+    async fn wait_for_ticket_resolves_without_an_event_when_already_matching() {
         let (queue, _tmp) = test_queue();
         let key = queue.task("work");
         attach_done_result(&queue, &key, "done");
         // Nothing emits from here on, so only the check before the wait can
         // resolve this.
-        let found = queue.finish_on_ticket(|t| t.is_finished()).await;
+        let found = queue.wait_for_ticket(|t| t.is_finished()).await;
         assert_eq!(found.map(|t| t.key), Some(key));
     }
 
     #[tokio::test]
-    async fn finish_on_ticket_leaves_execution_running() {
+    async fn wait_for_ticket_leaves_execution_running() {
         let (queue, _tmp) = test_queue();
         let reasons = collect_finish_reasons(&queue);
         let key = queue.task("work");
         attach_done_result(&queue, &key, "done");
-        queue.finish_on_ticket(|t| t.is_finished()).await;
+        queue.wait_for_ticket(|t| t.is_finished()).await;
         assert!(!queue.is_cancelled());
         assert!(
             reasons.lock().unwrap().is_empty(),
@@ -1907,7 +1922,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn finish_on_event_resolves_when_an_event_matches() {
+    async fn wait_for_event_resolves_when_an_event_matches() {
         let (queue, _tmp) = test_queue();
         let writer = Arc::clone(&queue);
         tokio::spawn(async move {
@@ -1916,42 +1931,42 @@ mod tests {
             attach_done_result(&writer, &key, "done");
         });
         let found = queue
-            .finish_on_event(|e| matches!(e.kind, EventKind::TicketFinished))
+            .wait_for_event(|e| matches!(e.kind, EventKind::TicketFinished))
             .await;
         assert!(found.is_some());
     }
 
     #[tokio::test]
-    async fn finish_on_event_none_after_cancel() {
+    async fn wait_for_event_none_after_cancel() {
         let (queue, _tmp) = test_queue();
         queue.cancel();
         let found = queue
-            .finish_on_event(|e| matches!(e.kind, EventKind::TicketFinished))
+            .wait_for_event(|e| matches!(e.kind, EventKind::TicketFinished))
             .await;
         assert!(found.is_none());
     }
 
     #[tokio::test]
-    async fn finish_on_result_hands_back_the_ticket_and_its_result() {
+    async fn wait_for_result_hands_back_the_ticket_and_its_result() {
         let (queue, _tmp) = test_queue();
         let key = queue.task("work");
         attach_done_result(&queue, &key, "done");
-        let found = queue.finish_on_result(|_, r| r == "done").await;
+        let found = queue.wait_for_result(|_, r| r == "done").await;
         let (ticket, result) = found.expect("the finished result matches");
         assert_eq!(ticket.key, key);
         assert_eq!(result, serde_json::json!("done"));
     }
 
     #[tokio::test]
-    async fn finish_on_result_none_after_cancel() {
+    async fn wait_for_result_none_after_cancel() {
         let (queue, _tmp) = test_queue();
         queue.task("never finishes");
         queue.cancel();
-        assert!(queue.finish_on_result(|_, _| true).await.is_none());
+        assert!(queue.wait_for_result(|_, _| true).await.is_none());
     }
 
     #[tokio::test]
-    async fn finish_on_failure_hands_back_the_event_and_its_ticket() {
+    async fn wait_for_failure_hands_back_the_event_and_its_ticket() {
         let (queue, _tmp) = test_queue();
         let key = queue.task("work");
         let writer = Arc::clone(&queue);
@@ -1960,14 +1975,14 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(30)).await;
             writer.set_failed(&failed).unwrap();
         });
-        let found = queue.finish_on_failure(|_, _| true).await;
+        let found = queue.wait_for_failure(|_, _| true).await;
         let (event, ticket) = found.expect("the failure matches");
         assert!(event.kind.is_failure());
         assert_eq!(ticket.key, key);
     }
 
     #[tokio::test]
-    async fn finish_on_failure_sees_a_match_that_follows_a_rejected_failure() {
+    async fn wait_for_failure_sees_a_match_that_follows_a_rejected_failure() {
         let (queue, _tmp) = test_queue();
         let rejected = queue.task("first");
         let wanted = queue.task("second");
@@ -1983,19 +1998,19 @@ mod tests {
         let target = wanted.clone();
         let found = tokio::time::timeout(
             Duration::from_secs(5),
-            queue.finish_on_failure(move |_, ticket| ticket.key == target),
+            queue.wait_for_failure(move |_, ticket| ticket.key == target),
         )
         .await
-        .expect("finish_on_failure did not resolve within 5s");
+        .expect("wait_for_failure did not resolve within 5s");
         assert_eq!(found.map(|(_, ticket)| ticket.key), Some(wanted));
     }
 
     #[tokio::test]
-    async fn finish_on_failure_none_after_cancel() {
+    async fn wait_for_failure_none_after_cancel() {
         let (queue, _tmp) = test_queue();
         queue.task("never fails");
         queue.cancel();
-        assert!(queue.finish_on_failure(|_, _| true).await.is_none());
+        assert!(queue.wait_for_failure(|_, _| true).await.is_none());
     }
 
     #[test]
@@ -2490,6 +2505,26 @@ mod tests {
         let reasons = collect_finish_reasons(&queue);
         queue.finish().await;
         assert_eq!(*reasons.lock().unwrap(), vec![FinishReason::Drained]);
+    }
+
+    #[tokio::test]
+    async fn get_finish_reason_reports_nothing_until_the_run_ends() {
+        let (queue, _tmp) = test_queue();
+        queue.start();
+        assert_eq!(queue.get_finish_reason(), None);
+        queue.finish().await;
+        assert_eq!(queue.get_finish_reason(), Some(FinishReason::Drained));
+    }
+
+    #[tokio::test]
+    async fn get_finish_reason_is_cleared_by_a_restart() {
+        let (queue, _tmp) = test_queue();
+        queue.start();
+        queue.cancel();
+        queue.finish().await;
+        assert_eq!(queue.get_finish_reason(), Some(FinishReason::Cancelled));
+        queue.start();
+        assert_eq!(queue.get_finish_reason(), None);
     }
 
     #[tokio::test]

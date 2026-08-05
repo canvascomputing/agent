@@ -472,9 +472,9 @@ impl PyTicketQueue {
         }
     }
 
-    /// Get the first ticket that matches, and execution carries on. Gives back
+    /// Get the first ticket that matches, waiting until one does. Gives back
     /// `None` when execution ends first.
-    fn finish_on_ticket<'py>(
+    fn wait_for_ticket<'py>(
         &self,
         py: Python<'py>,
         condition: Py<PyAny>,
@@ -482,7 +482,7 @@ impl PyTicketQueue {
         let inner = Arc::clone(&self.inner);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let found = inner
-                .finish_on_ticket(|ticket| ticket_predicate(&condition, ticket))
+                .wait_for_ticket(|ticket| ticket_predicate(&condition, ticket))
                 .await;
             Python::attach(|py| match found {
                 Some(ticket) => Ok(Some(Py::new(py, PyTicket::from_ticket(&ticket))?)),
@@ -491,9 +491,9 @@ impl PyTicketQueue {
         })
     }
 
-    /// Get the first event that matches, and execution carries on. Gives back
+    /// Get the first event that matches, waiting until one does. Gives back
     /// `None` when execution ends first.
-    fn finish_on_event<'py>(
+    fn wait_for_event<'py>(
         &self,
         py: Python<'py>,
         condition: Py<PyAny>,
@@ -501,15 +501,15 @@ impl PyTicketQueue {
         let inner = Arc::clone(&self.inner);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let found = inner
-                .finish_on_event(|event| event_predicate(&condition, event))
+                .wait_for_event(|event| event_predicate(&condition, event))
                 .await;
             Ok::<_, PyErr>(found.as_ref().map(to_py_event))
         })
     }
 
-    /// Get the first finished result that matches, and execution carries on.
+    /// Get the first finished result that matches, waiting until one does.
     /// Gives back `None` when execution ends first.
-    fn finish_on_result<'py>(
+    fn wait_for_result<'py>(
         &self,
         py: Python<'py>,
         condition: Py<PyAny>,
@@ -517,7 +517,7 @@ impl PyTicketQueue {
         let inner = Arc::clone(&self.inner);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let found = inner
-                .finish_on_result(|ticket, result| {
+                .wait_for_result(|ticket, result| {
                     Python::attach(|py| {
                         call_with_result(py, &condition, ticket, result)
                             .and_then(|value| value.is_truthy())
@@ -535,9 +535,9 @@ impl PyTicketQueue {
         })
     }
 
-    /// Get the first failure that matches, and execution carries on. Gives back
+    /// Get the first failure that matches, waiting until one does. Gives back
     /// `None` when execution ends first.
-    fn finish_on_failure<'py>(
+    fn wait_for_failure<'py>(
         &self,
         py: Python<'py>,
         condition: Py<PyAny>,
@@ -545,7 +545,7 @@ impl PyTicketQueue {
         let inner = Arc::clone(&self.inner);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let found = inner
-                .finish_on_failure(|event, ticket| {
+                .wait_for_failure(|event, ticket| {
                     Python::attach(|py| {
                         call_with_ticket(py, &condition, event, ticket)
                             .and_then(|value| value.is_truthy())
@@ -737,6 +737,13 @@ impl PyTicketQueue {
             inner.finish().await;
             Ok::<_, PyErr>(PyTicketQueue { inner })
         })
+    }
+
+    /// Get why execution ended, or `None` while it is still running.
+    fn get_finish_reason(&self) -> Option<String> {
+        self.inner
+            .get_finish_reason()
+            .map(|reason| reason.to_string())
     }
 
     fn cancel(&self) {

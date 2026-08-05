@@ -57,8 +57,8 @@ impl fmt::Display for PolicyKind {
 
 /// Why execution ended.
 ///
-/// Carried by [`EventKind::RunFinished`], so a handler installed before the
-/// run ends is what reads it.
+/// Carried by [`EventKind::RunFinished`], and kept on the queue for
+/// `TicketQueue::get_finish_reason` to read once the run is over.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FinishReason {
     /// The queue emptied; nothing more to do.

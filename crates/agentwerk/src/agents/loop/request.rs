@@ -108,7 +108,7 @@ pub(super) async fn run(context: &mut TicketContext<'_>) -> Step {
         );
     }
 
-    // Emitted after the reply lands: a handler or `finish_on_*` condition that
+    // Emitted after the reply lands: a handler or `wait_for_*` condition that
     // resolves the ticket must see the reply the event announces.
     context.emit(EventKind::RequestFinished {
         model: response.model.clone(),

@@ -640,7 +640,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn finish_on_ticket_sees_the_reply_the_request_event_announces() {
+    async fn wait_for_ticket_sees_the_reply_the_request_event_announces() {
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let provider = MockProvider::with_results(vec![Ok(text_response("hi"))]);
         let tickets = TicketQueue::new();
@@ -656,14 +656,14 @@ mod tests {
         // if `RequestFinished` reaches a waiter after its reply is in the store.
         let paused = tokio::time::timeout(
             Duration::from_secs(5),
-            tickets.finish_on_ticket(|t| {
+            tickets.wait_for_ticket(|t| {
                 t.replies
                     .last()
                     .is_some_and(|r| r.author == Author::Assistant)
             }),
         )
         .await
-        .expect("finish_on_ticket did not resolve within 5s");
+        .expect("wait_for_ticket did not resolve within 5s");
         assert_eq!(paused.map(|t| t.key), Some(key));
         tickets.cancel();
     }

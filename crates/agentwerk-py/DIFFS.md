@@ -101,12 +101,13 @@ Seven rules the surface table below never repeats.
 | `TicketQueue::tickets_for_agent(name)` | `TicketQueue.tickets_for_agent(agent_name)` |
 | `TicketQueue::find_tickets(predicate)` | `TicketQueue.find_tickets(predicate)` |
 | `TicketQueue::find_ticket(predicate)` | `TicketQueue.find_ticket(predicate)` |
-| `TicketQueue::finish_on_event(condition).await` | `await TicketQueue.finish_on_event(condition)` |
-| `TicketQueue::finish_on_result(condition).await` | `await TicketQueue.finish_on_result(condition)`: the `(Ticket, Value)` pair becomes a tuple. |
-| `TicketQueue::finish_on_failure(condition).await` | `await TicketQueue.finish_on_failure(condition)`: the `(Event, Ticket)` pair becomes a tuple. |
-| `TicketQueue::finish_on_ticket(condition).await` | `await TicketQueue.finish_on_ticket(condition)` |
+| `TicketQueue::wait_for_event(condition).await` | `await TicketQueue.wait_for_event(condition)` |
+| `TicketQueue::wait_for_result(condition).await` | `await TicketQueue.wait_for_result(condition)`: the `(Ticket, Value)` pair becomes a tuple. |
+| `TicketQueue::wait_for_failure(condition).await` | `await TicketQueue.wait_for_failure(condition)`: the `(Event, Ticket)` pair becomes a tuple. |
+| `TicketQueue::wait_for_ticket(condition).await` | `await TicketQueue.wait_for_ticket(condition)` |
 | `TicketQueue::start()` | `TicketQueue.start()` |
 | `TicketQueue::finish().await` | `await TicketQueue.finish()` |
+| `TicketQueue::get_finish_reason()` | `TicketQueue.get_finish_reason()`: the `FinishReason` becomes the string it prints as, such as `policy_violated(turns)`. |
 | `TicketQueue::cancel()` | `TicketQueue.cancel()` |
 | `TicketQueue::is_cancelled()` | `TicketQueue.is_cancelled()` |
 | `TicketQueue::stats()` | `TicketQueue.stats()` |

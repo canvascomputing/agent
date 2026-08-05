@@ -306,14 +306,20 @@ let answer = tickets.results().pop();
 <details>
 <summary>All execution methods</summary>
 
-| Method | Description |
-|--------|-------------|
-| `start()` | Begin processing tickets. |
-| `finish().await` | Process every queued ticket. |
-| `cancel()` | Cancel the execution. |
-| `is_cancelled()` | Check whether the execution was cancelled. |
-| `cancel_label(label)` | Stop one label's agents. |
-| `is_label_cancelled(label)` | Check whether one label's agents have been stopped. |
+| | Method | Description |
+|-|--------|-------------|
+| **Run** | `start()` | Begin processing tickets. |
+| | `finish().await` | Process every queued ticket. |
+| | `get_finish_reason()` | Get why execution ended, or nothing while it runs. |
+| **Wait** | `wait_for_event(condition)` | Get the first event that matches, waiting until one does. |
+| | `wait_for_result(condition)` | Get the first finished result that matches, waiting until one does. |
+| | `wait_for_failure(condition)` | Get the first failure that matches, waiting until one does. |
+| | `wait_for_ticket(condition)` | Get the first ticket that matches, waiting until one does. |
+| **Stop** | `cancel()` | Cancel the execution. |
+| | `is_cancelled()` | Check whether the execution was cancelled. |
+| | `cancel_on(trigger)` | Stop execution when another task you supply finishes. |
+| | `cancel_label(label)` | Stop one label's agents. |
+| | `is_label_cancelled(label)` | Check whether one label's agents have been stopped. |
 
 </details>
 
@@ -569,8 +575,7 @@ tickets.create_ticket_on_failure(|_, ticket| {
 | | `on_result(handler)` | Read every finished ticket together with its result. |
 | | `on_failure(handler)` | Read every failure together with the ticket it happened in. |
 | | `on_ticket(handler)` | Read a ticket as it starts, finishes, or fails. |
-| **Stop the run** | `cancel_on(trigger)` | Stop execution when another task you supply finishes. |
-| | `cancel_on_event(condition)` | Stop execution when an event matches. |
+| **Stop the run** | `cancel_on_event(condition)` | Stop execution when an event matches. |
 | | `cancel_on_result(condition)` | Stop execution when a finished result matches. |
 | | `cancel_on_failure(condition)` | Stop execution when a failure matches. |
 | **Stop one label** | `cancel_label_on_event(label, condition)` | Stop one label's agents while the rest keep working. |
@@ -579,10 +584,6 @@ tickets.create_ticket_on_failure(|_, ticket| {
 | **Add work** | `create_ticket_on_event(make)` | Enqueue a follow-up ticket from any event. |
 | | `create_ticket_on_result(make)` | Enqueue a follow-up ticket from a finished ticket. |
 | | `create_ticket_on_failure(make)` | Enqueue a retry for a ticket that failed. |
-| **Return a match** | `finish_on_event(condition)` | Get the first event that matches, and execution carries on. |
-| | `finish_on_result(condition)` | Get the first finished result that matches, and execution carries on. |
-| | `finish_on_failure(condition)` | Get the first failure that matches, and execution carries on. |
-| | `finish_on_ticket(condition)` | Get the first ticket that matches, and execution carries on. |
 | **Rewrite** | `edit_replies_on_event(editor)` | Rewrite a ticket's replies before its next request. |
 | | `edit_replies_on_compaction(editor)` | Decide what compaction does with a ticket's replies. |
 | | `edit_directive_on_retry(editor)` | Override the prompt that corrects an agent's behavior. |

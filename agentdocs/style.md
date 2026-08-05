@@ -160,12 +160,12 @@ cancel_label_on_event(label, cond)   // react, scoped to one label
 
 - `on_<trigger>(handler)` observes: the handler sees every `<trigger>` and returns nothing, as in `on_event`, `on_result`, and `on_failure`.
 - `<action>_on_<trigger>(..)` reacts whenever `<trigger>` matches. The action may be more than one word, so `create_ticket_on_result` reads as `create_ticket` plus `on_result`.
-- A bare `<action>(..)` acts once, now: `cancel`, `cancel_label`, `edit_replies`. The `_on_` infix names the trigger, and the return type says whether the call installs a standing rule or resolves once: `&Self` registers a handler, a value awaits a single match. `cancel_on_event` is a standing rule, `finish_on_event` awaits.
-- `cancel_on_<trigger>` and `finish_on_<trigger>` are not synonyms. `cancel*` ends execution; `finish_on_*` hands back the first match and leaves execution running. Every `finish_on_*` row and doc comment closes on "and execution carries on", because the name alone suggests otherwise. The contrast is carried by the cells themselves, not by prose under the table.
+- A bare `<action>(..)` acts once, now: `cancel`, `cancel_label`, `edit_replies`. The `_on_` infix names the trigger of a standing rule, and every method carrying it returns `&Self`.
+- `wait_for_<trigger>(condition)` awaits a single match and hands it back, leaving execution running. It takes no `_on_` infix precisely because it is not a standing rule, and the verb says up front that the call blocks: a reader should not have to know the return type to see that. `ToolContext::wait_for_cancel` sets the verb. The family was `finish_on_*` for one release, to cross the same triggers the hooks do, and that shared shape is what made the two confusable: `finish()` drains the queue, so `finish_on_*` read as "finish when", and every row had to close on "and execution carries on" to undo it.
 - Scope crosses all three forms and lives in the prefix: `cancel*` ends execution, `cancel_label*` ends one label's pool and leaves the others running.
 - IMPORTANT: the trigger fixes the handler's parameters, the action fixes its return type. A caller who knows one hook in a column knows them all: `_on_event` hands over `&Event`, `_on_result` a `&Ticket` and its validated `&Value`, `_on_failure` the `&Event` and the `&Ticket` it happened in. Observing returns `()`, `cancel*` returns `bool`, `create_ticket*` returns `Option<Ticket>`.
-- Every trigger carries a reaction for every action, so the grid has no holes to explain. The three triggers cross `cancel`, `cancel_label`, `create_ticket`, and `finish_on`; `on_ticket` and `finish_on_ticket` sit outside it, keying on a ticket rather than naming a trigger.
-- `finish_on_ticket` takes only the `&Ticket`, where `on_ticket` takes the `&Event` too. It also answers before any event arrives, by reading the tickets already in the store, and there is no event to hand over at that moment. That check is what lets it resolve on a state no transition announces.
+- Every trigger carries a reaction for every action, so the grid has no holes to explain. The three triggers cross `cancel`, `cancel_label`, `create_ticket`, and `wait_for`; `on_ticket` and `wait_for_ticket` sit outside it, keying on a ticket rather than naming a trigger.
+- `wait_for_ticket` takes only the `&Ticket`, where `on_ticket` takes the `&Event` too. It also answers before any event arrives, by reading the tickets already in the store, and there is no event to hand over at that moment. That check is what lets it resolve on a state no transition announces.
 - `<action>_on(value)` names no trigger, because the caller supplies the trigger whole instead of a condition over something agentwerk produces. `cancel_on` is the only one, and it is not renamed after a cancellation signal: `signal` already names the `AtomicBool` pair on `TicketQueue`.
 - The editor row is the one exception, and it holds three members: `edit_replies_on_event`, `edit_replies_on_compaction`, and `edit_directive_on_retry`. Compaction and the retry earn the last two because each is a moment agentwerk writes on the host's behalf, so without a hook there the built-in summarizer and the built-in directive are the only ones anyone can have. Both still hand over the `&Event` their trigger names, so the parameter rule above holds: `_on_retry` is the `SchemaRetried` that says which of the two retry paths ran. No `_on_result` or `_on_failure` sibling follows: an editor runs once per request over the batch of events since the previous one, so an `_on_result` sibling would have no next request to act on and an `_on_failure` sibling would be a second rewriter of one ticket's replies, which the singular-editor rule below forbids. A failure is already reachable by matching `EventKind::ToolCallFailed` inside the batch.
 
@@ -459,7 +459,7 @@ A `Schema` constrains the result an agent produces for a ticket.
 
 - Above the fold there is prose and one example, so a table there is a sign the section is doing reference work it should have folded.
 - Inside a fold the content is the reference, and a two-column grid is what a reader scans. Bullets there only hide the second column.
-- A catalogue with categories takes a third column on the left holding the bold group label: the built-in tools and the event kinds.
+- A catalogue with categories takes a third column on the left holding the bold group label: the built-in tools, the event kinds, the execution methods, and the hooks.
 - Prose still belongs in a fold when it is a caveat rather than an entry, as does a snippet showing how one of the entries is called.
 
 ## README Table Shape
@@ -485,6 +485,7 @@ A `Schema` constrains the result an agent produces for a ticket.
 - Singular leads plural where both exist, as `label(label)` and `labels(labels)` already do.
 - An action is followed by the query that reads it back: `cancel()` then `is_cancelled()`, `cancel_label(label)` then `is_label_cancelled(label)`.
 - One table holds one receiver. A method on another type goes in the fold's trailing prose, which is why `TicketQueue::model_for_agent` is prose under the Providers fold rather than a fourth `AgentBuilder` row.
+- The Execution fold holds everything that acts once over a run: `start`, `finish`, `get_finish_reason`, the `wait_for_*` family, and `cancel_on` beside the `cancel` it fires. The hooks fold holds only what registers a handler the queue calls back into on every matching event, which is why `cancel_on_event` is there and `cancel_on` is not.
 
 ## README Examples
 
