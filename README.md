@@ -662,7 +662,7 @@ let bob = Agent::new().knowledge(&store);
 | Method | Description |
 |--------|-------------|
 | `index()` | Get the index, which is injected into the agent prompt. |
-| `index_char_limit(count)` | Limit the index size. |
+| `index_char_limit(count)` | Limit how much of the index is injected into the prompt. |
 | `get_index_char_limit()` | Get the index size limit in force. |
 | `pages()` | Get the page collection for reading and writing pages. |
 | `pages().list()` | Get every page in the store. |

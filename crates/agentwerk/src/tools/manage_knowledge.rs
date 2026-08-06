@@ -51,7 +51,7 @@ fn description() -> &'static str {
 }
 
 /// Which failure the statistics count this under. Everything but a missing
-/// page is the store refusing: rejected values, the index limit, or IO.
+/// page is the store refusing: rejected values or IO.
 fn failure_kind(error: &KnowledgeError) -> KnowledgeFailureKind {
     match error {
         KnowledgeError::PageMissing { .. } => KnowledgeFailureKind::PageMissing,
@@ -163,7 +163,7 @@ impl ToolLike for ManageKnowledgeTool {
                                 reason: failure_kind(&why),
                             });
                             Ok(ToolResult::success(format!(
-                                "No page found for `{slug}`. Check the knowledge index before reading: only slugs listed there exist."
+                                "No page found for `{slug}`. The `list` action shows every page that exists: an unlisted slug cannot be read."
                             )))
                         }
                     }
@@ -195,11 +195,13 @@ impl ToolLike for ManageKnowledgeTool {
                     record(EventKind::KnowledgeUsed {
                         op: KnowledgeOp::List,
                     });
-                    let idx = self.store.index();
-                    let body = if idx.is_empty() {
+                    // Not the prompt's limited view: this is how the agent sees
+                    // the pages the prompt had no room for.
+                    let index = self.store.full_index();
+                    let body = if index.is_empty() {
                         "(no pages)".to_string()
                     } else {
-                        idx
+                        index
                     };
                     Ok(ToolResult::success(body))
                 }
@@ -349,6 +351,23 @@ mod tests {
             .await
             .unwrap();
         assert_success(&r, "config");
+    }
+
+    #[tokio::test]
+    async fn list_action_returns_every_page_past_the_index_limit() {
+        let (store, _dir) = fresh_store();
+        store.index_char_limit(60);
+        for i in 0..10 {
+            save_page(&store, &format!("page-{i}"), "A note", "# Note", &[]);
+        }
+        let tool = ManageKnowledgeTool::new(Arc::clone(&store));
+        let r = tool
+            .call(serde_json::json!({"action": "list"}), &ctx())
+            .await
+            .unwrap();
+
+        assert!(!store.index().contains("page-9"), "{}", store.index());
+        assert_success(&r, "page-9");
     }
 
     #[tokio::test]

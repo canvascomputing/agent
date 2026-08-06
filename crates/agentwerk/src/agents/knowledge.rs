@@ -40,12 +40,6 @@ pub enum KnowledgeError {
     PageRejected { message: String },
     /// No page exists at `slug`.
     PageMissing { slug: String },
-    /// The write would push the index past its character limit.
-    IndexLimitExceeded {
-        used: usize,
-        limit: usize,
-        attempted: usize,
-    },
     /// The underlying file operation failed.
     IoFailed { message: String, source: io::Error },
 }
@@ -55,15 +49,6 @@ impl fmt::Display for KnowledgeError {
         match self {
             Self::PageRejected { message } => write!(f, "{message}"),
             Self::PageMissing { slug } => write!(f, "Page `{slug}` not found"),
-            Self::IndexLimitExceeded {
-                used,
-                limit,
-                attempted,
-            } => write!(
-                f,
-                "Index at {used}/{limit} chars. This write would push it to \
-                 {attempted} chars. Consolidate or remove pages first.",
-            ),
             Self::IoFailed { message, source } => write!(f, "{message}: {source}"),
         }
     }
@@ -89,7 +74,8 @@ fn io_failed(message: impl Into<String>) -> impl FnOnce(io::Error) -> KnowledgeE
 /// Pages are created in the Open Knowledge Format (OKF) v0.1 under
 /// `<dir>/knowledge/pages/<slug>.md`, each carrying `type`, `description`, and
 /// `timestamp` frontmatter. `<dir>/knowledge/index.md` lists them in one line
-/// each, and that list is what the agent's prompt shows.
+/// each, and that list, or as much of it as fits, is what the agent's prompt
+/// shows.
 ///
 /// Two agents bound to one store share it:
 ///
@@ -157,10 +143,13 @@ impl Knowledge {
         }))
     }
 
-    /// Limit the index size, 12 000 characters by default.
+    /// Limit how much of the index is injected into the prompt, 12 000
+    /// characters by default.
     ///
-    /// Only the list shown in the prompt is limited; page bodies are not. Set it
-    /// on the loaded store before handing the store to any agent.
+    /// No write is refused for being too large: past the limit the prompt lists
+    /// the pages that fit and names `index.md` for the rest. Page bodies are
+    /// never limited. Set it on the loaded store before handing the store to any
+    /// agent.
     pub fn index_char_limit(&self, n: usize) -> &Self {
         self.index_char_limit.store(n, Ordering::Relaxed);
         self
@@ -174,9 +163,33 @@ impl Knowledge {
 
     /// Get the index, which is injected into the agent prompt. Empty while the
     /// store holds no pages.
+    ///
+    /// Past [`Self::index_char_limit`] the listing stops at the last page that
+    /// fits and a directive names `index.md` for the agent to read. That
+    /// directive is a floor: a limit too small to hold it still gets it.
     pub fn index(&self) -> String {
         let index = self.index.lock().unwrap();
+        let listing = render_index(&index);
+        let limit = self.get_index_char_limit();
+        if listing.len() <= limit {
+            return listing;
+        }
+        render_limited_index(&index, limit, &self.index_path())
+    }
+
+    /// The whole index, however long it runs. `ManageKnowledgeTool`'s `list`
+    /// shows every page even when the prompt only had room for some.
+    pub(crate) fn full_index(&self) -> String {
+        let index = self.index.lock().unwrap();
         render_index(&index)
+    }
+
+    /// Where `index.md` sits, absolute so the path resolves whatever directory
+    /// the agent's tools run in.
+    fn index_path(&self) -> PathBuf {
+        fs::canonicalize(&self.knowledge_dir)
+            .unwrap_or_else(|_| self.knowledge_dir.clone())
+            .join(INDEX_FILE)
     }
 
     /// Get the page collection for reading and writing pages.
@@ -257,7 +270,7 @@ impl Persist for Page {
 }
 
 /// The page collection, returned by [`Knowledge::pages`]. Every write through
-/// it updates the index and respects the size limit.
+/// it updates the index; none is refused for the size of that index.
 pub struct Pages<'a> {
     inner: &'a Knowledge,
 }
@@ -294,16 +307,6 @@ impl Pages<'_> {
             index[pos] = entry;
         } else {
             index.push(entry);
-        }
-
-        let limit = self.inner.get_index_char_limit();
-        let rendered = render_index(&index);
-        if rendered.len() > limit {
-            return Err(KnowledgeError::IndexLimitExceeded {
-                used: render_index(&self.inner.index.lock().unwrap()).len(),
-                limit,
-                attempted: rendered.len(),
-            });
         }
 
         let normalized = Page {
@@ -551,14 +554,57 @@ fn strip_frontmatter(raw: &str) -> String {
 
 // Index rendering / parsing
 
-/// The index the prompt shows. The agent reads a page by its slug, so each slug
-/// stays visible.
+/// One page in the index the prompt shows. The agent reads a page by its slug,
+/// so each slug stays visible.
+fn render_entry(entry: &IndexEntry) -> String {
+    format!("- **{}**: {}", entry.slug, entry.description)
+}
+
 fn render_index(entries: &[IndexEntry]) -> String {
     entries
         .iter()
-        .map(|e| format!("- **{}**: {}", e.slug, e.description))
+        .map(render_entry)
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// The pages that fit, closed by the directive naming the file that lists
+/// them all.
+fn render_limited_index(entries: &[IndexEntry], limit: usize, path: &Path) -> String {
+    // Charged at the whole store's count, which only shrinks as pages are
+    // listed, so the reservation cannot fall short.
+    let mut used = index_directive(entries.len(), path).len() + 1;
+
+    let mut listed = Vec::new();
+    for entry in entries {
+        let line = render_entry(entry);
+        let cost = line.len() + 1;
+        // Stop rather than cut: half a line names a slug the agent cannot read.
+        if used + cost > limit {
+            break;
+        }
+        used += cost;
+        listed.push(line);
+    }
+
+    let directive = index_directive(entries.len() - listed.len(), path);
+    if listed.is_empty() {
+        return directive;
+    }
+    format!("{}\n\n{directive}", listed.join("\n"))
+}
+
+/// Sends the agent to the file that does list every page.
+fn index_directive(remaining: usize, path: &Path) -> String {
+    let pages = if remaining == 1 {
+        "page is"
+    } else {
+        "pages are"
+    };
+    format!(
+        "{remaining} more {pages} not listed. Read the full index at {}.",
+        path.display()
+    )
 }
 
 /// The `index.md` written to disk, one clickable link per page. It is derived
@@ -994,35 +1040,54 @@ mod tests {
     }
 
     #[test]
-    fn index_char_limit_rejects_oversized_write() {
-        let dir = crate::test_util::TempDir::new().unwrap();
-        let store = Knowledge::load(dir.path()).unwrap();
-        // Write a very long description to push the index past the limit.
-        let long_description = "x".repeat(DEFAULT_INDEX_CHAR_LIMIT + 1);
-        let err = store
-            .pages()
-            .save(Page {
-                slug: "big".into(),
-                kind: String::new(),
-                description: long_description,
-                content: "# Big".into(),
-                tags: vec![],
-            })
-            .unwrap_err();
-        assert!(
-            matches!(err, KnowledgeError::IndexLimitExceeded { .. }),
-            "{err}"
-        );
+    fn index_under_the_limit_lists_every_page() {
+        let (store, _dir) = fresh_store();
+        save_page(&store, "alpha", "First note", "# Alpha", &[]);
+        save_page(&store, "beta", "Second note", "# Beta", &[]);
+
+        let index = store.index();
+        assert!(index.contains("alpha"), "{index}");
+        assert!(index.contains("beta"), "{index}");
+        assert!(!index.contains(INDEX_FILE), "{index}");
     }
 
     #[test]
-    fn index_char_limit_can_be_lowered_after_open() {
+    fn index_past_the_limit_lists_the_pages_that_fit_then_names_the_file() {
+        let (store, dir) = fresh_store();
+        // Room for the directive, which names an absolute path, plus a few pages.
+        let store = store.index_char_limit(500);
+        for i in 0..40 {
+            save_page(&store, &format!("page-{i:02}"), "A note", "# Note", &[]);
+        }
+
+        let index = store.index();
+        assert!(index.contains("page-00"), "{index}");
+        assert!(!index.contains("page-39"), "{index}");
+        let listed = index.matches("- **").count();
+        assert!(
+            index.contains(&format!("{} more pages are not listed", 40 - listed)),
+            "{index}"
+        );
+        let path = fs::canonicalize(bundle(&dir)).unwrap().join(INDEX_FILE);
+        assert!(index.contains(&path.display().to_string()), "{index}");
+    }
+
+    #[test]
+    fn index_names_the_file_when_no_page_fits() {
+        let (store, _dir) = fresh_store();
+        let store = store.index_char_limit(10);
+        save_page(&store, "alpha", "First note", "# Alpha", &[]);
+
+        let index = store.index();
+        assert!(index.starts_with("1 more page is not listed"), "{index}");
+    }
+
+    #[test]
+    fn a_write_past_the_limit_is_still_saved_and_listed_in_full() {
         let (store, _dir) = fresh_store();
         let store = store.index_char_limit(80);
-
-        // 80-char budget rejects what the default 12000-char budget would accept.
         let long_description = "x".repeat(200);
-        let err = store
+        store
             .pages()
             .save(Page {
                 slug: "big".into(),
@@ -1031,11 +1096,10 @@ mod tests {
                 content: "# Big".into(),
                 tags: vec![],
             })
-            .unwrap_err();
-        assert!(
-            matches!(err, KnowledgeError::IndexLimitExceeded { limit: 80, .. }),
-            "{err}"
-        );
+            .unwrap();
+
+        assert!(store.full_index().contains("big"));
+        assert_eq!(store.pages().load("big").unwrap().content, "# Big\n");
 
         // Usage reports the custom limit.
         save_page(&store, "small", "ok", "# Small", &[]);

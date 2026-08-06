@@ -29,7 +29,8 @@ impl PyKnowledge {
         Ok(PyKnowledge { inner })
     }
 
-    /// Limit the index size, in characters.
+    /// Limit how much of the index is injected into the prompt, in characters.
+    /// No write is ever refused for being too large.
     fn index_char_limit<'py>(slf: PyRef<'py, Self>, n: usize) -> PyRef<'py, Self> {
         slf.inner.index_char_limit(n);
         slf
