@@ -72,7 +72,7 @@ def test_from_env_without_provider_env_is_rejected(monkeypatch):
     for key in PROVIDER_KEYS:
         monkeypatch.delenv(key, raising=False)
     with pytest.raises(RuntimeError):
-        aw.Agent().from_env().build()
+        aw.Agent.from_env()
 
 
 def test_using_an_unbuilt_agent_is_rejected():

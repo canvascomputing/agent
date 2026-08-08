@@ -159,7 +159,7 @@ async fn seeker_pool_finds_planted_indicators(
         tickets.agent(
             Agent::new()
                 .name(format!("Seeker {}", i + 1))
-                .provider(Arc::clone(&provider))
+                .provider(provider.clone())
                 .model(&model)
                 .role(SEEKER_AGENT.trim())
                 .template("instruction", "")
@@ -175,7 +175,7 @@ async fn seeker_pool_finds_planted_indicators(
     tickets.agent(
         Agent::new()
             .name("Triage")
-            .provider(Arc::clone(&provider))
+            .provider(provider.clone())
             .model(&model)
             .role(
                 "{context}\n\n\

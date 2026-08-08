@@ -1,7 +1,5 @@
 //! Resolves an LLM provider, model name, and runtime overrides from environment variables so callers do not have to code the detection matrix or the override knobs themselves.
 
-use std::sync::Arc;
-
 use super::error::{ProviderError, ProviderResult};
 use super::{AnthropicProvider, LiteLlmProvider, MistralProvider, OpenAiProvider, Provider};
 
@@ -49,13 +47,13 @@ pub(crate) fn env_opt(name: &str) -> Option<String> {
 ///   4. `OPENAI_API_KEY`   → OpenAI
 ///
 /// Empty env vars are treated as unset.
-pub fn provider_from_env() -> ProviderResult<Arc<dyn Provider>> {
+pub(crate) fn provider_from_env() -> ProviderResult<Provider> {
     let detected = detect_provider_name(|name| std::env::var(name).ok().filter(|v| !v.is_empty()))?;
     Ok(match detected {
-        DetectedProvider::Anthropic => Arc::new(AnthropicProvider::from_env()?),
-        DetectedProvider::Mistral => Arc::new(MistralProvider::from_env()?),
-        DetectedProvider::OpenAi => Arc::new(OpenAiProvider::from_env()?),
-        DetectedProvider::LiteLlm => Arc::new(LiteLlmProvider::from_env()?),
+        DetectedProvider::Anthropic => Provider::new(AnthropicProvider::from_env()?),
+        DetectedProvider::Mistral => Provider::new(MistralProvider::from_env()?),
+        DetectedProvider::OpenAi => Provider::new(OpenAiProvider::from_env()?),
+        DetectedProvider::LiteLlm => Provider::new(LiteLlmProvider::from_env()?),
     })
 }
 
@@ -66,7 +64,7 @@ pub fn provider_from_env() -> ProviderResult<Arc<dyn Provider>> {
 ///   2. `*_MODEL`: named after the provider, chosen the same way
 ///      [`provider_from_env`] chooses one, as in `OPENAI_MODEL`.
 ///   3. The vendor's own default model for the detected provider.
-pub fn model_from_env() -> ProviderResult<String> {
+pub(crate) fn model_from_env() -> ProviderResult<String> {
     model_from_env_with(|name| std::env::var(name).ok())
 }
 
@@ -97,7 +95,7 @@ where
 /// match any registry entry, or a hosted model whose deployment was
 /// truncated below its native window. Returns `None` when the variable
 /// is unset, empty, or not a positive integer.
-pub fn context_window_from_env() -> Option<u64> {
+pub(crate) fn context_window_from_env() -> Option<u64> {
     context_window_from_env_with(|name| std::env::var(name).ok())
 }
 

@@ -82,21 +82,15 @@ impl AgentBuilder<(), ()> {
             knowledge,
         }
     }
-
-    /// Read environment variables for configuration.
-    ///
-    /// The same as `provider_from_env().model_from_env()`. Panics when no LLM
-    /// provider variable is set.
-    pub fn from_env(self) -> AgentBuilder<Arc<dyn Provider>, Model> {
-        self.provider_from_env().model_from_env()
-    }
 }
 
 impl<M> AgentBuilder<(), M> {
-    pub fn provider(self, p: Arc<dyn Provider>) -> AgentBuilder<Arc<dyn Provider>, M> {
+    /// Define the LLM provider. Takes a vendor provider directly, or a
+    /// [`Provider`] shared with other agents.
+    pub fn provider(self, p: impl Into<Provider>) -> AgentBuilder<Provider, M> {
         AgentBuilder {
             name: self.name,
-            provider: p,
+            provider: p.into(),
             model: self.model,
             role: self.role,
             labels: self.labels,
@@ -106,14 +100,6 @@ impl<M> AgentBuilder<(), M> {
             dir: self.dir,
             knowledge: self.knowledge,
         }
-    }
-
-    /// Read only the LLM provider from environment variables. Panics when none is set.
-    pub fn provider_from_env(self) -> AgentBuilder<Arc<dyn Provider>, M> {
-        let p = crate::providers::provider_from_env().expect(
-            "LLM provider required: set ANTHROPIC_API_KEY, OPENAI_API_KEY, MISTRAL_API_KEY, or LITELLM_API_KEY",
-        );
-        self.provider(p)
     }
 }
 
@@ -131,12 +117,6 @@ impl<P> AgentBuilder<P, ()> {
             dir: self.dir,
             knowledge: self.knowledge,
         }
-    }
-
-    /// Read only the model from environment variables. Panics when none is set.
-    pub fn model_from_env(self) -> AgentBuilder<P, Model> {
-        let model = crate::providers::model_from_env().expect("model name required");
-        self.model(model)
     }
 }
 
@@ -332,7 +312,7 @@ impl<P, M> AgentBuilder<P, M> {
     }
 }
 
-impl AgentBuilder<Arc<dyn Provider>, Model> {
+impl AgentBuilder<Provider, Model> {
     /// Create the agent.
     ///
     /// It starts with a ticket queue of its own, so `.task(...).finish().await`
@@ -388,9 +368,8 @@ impl TicketQueueRef {
 /// use agentwerk::tools::ReadFileTool;
 ///
 /// # async fn run() {
-/// let agent = Agent::new()
+/// let agent = Agent::from_env()
 ///     .name("reader")
-///     .from_env()
 ///     .role("Rust developer reading source files to answer questions.")
 ///     .tool(ReadFileTool)
 ///     .build();
@@ -405,7 +384,7 @@ pub struct Agent {
     pub(crate) interactive: bool,
     pub(crate) ticket_queue: TicketQueueRef,
     // private: accessed through methods within agents::
-    provider: Arc<dyn Provider>,
+    provider: Provider,
     role: String,
     templates: Vec<(String, String)>,
     tools: ToolRegistry,
@@ -427,7 +406,7 @@ impl Clone for Agent {
             labels: self.labels.clone(),
             interactive: self.interactive,
             ticket_queue,
-            provider: Arc::clone(&self.provider),
+            provider: self.provider.clone(),
             role: self.role.clone(),
             templates: self.templates.clone(),
             tools: self.tools.clone(),
@@ -446,6 +425,17 @@ impl Agent {
     /// Start building an agent with no tools pre-registered.
     pub fn empty() -> AgentBuilder<(), ()> {
         AgentBuilder::empty()
+    }
+
+    /// Start building an agent with the provider and model from the environment.
+    /// Panics when no LLM provider variable is set.
+    pub fn from_env() -> AgentBuilder<Provider, Model> {
+        let provider = Provider::from_env().expect(
+            "LLM provider required: set ANTHROPIC_API_KEY, OPENAI_API_KEY, MISTRAL_API_KEY, or LITELLM_API_KEY",
+        );
+        AgentBuilder::new()
+            .provider(provider)
+            .model(Model::from_env().expect("model name required"))
     }
 
     pub(super) fn get_name(&self) -> &str {
@@ -477,8 +467,8 @@ impl Agent {
         &self.tools
     }
 
-    pub(super) fn provider(&self) -> Arc<dyn Provider> {
-        Arc::clone(&self.provider)
+    pub(super) fn provider(&self) -> Provider {
+        self.provider.clone()
     }
 
     pub(super) fn knowledge(&self) -> Arc<Knowledge> {
@@ -601,12 +591,12 @@ mod tests {
 
     use super::*;
     use crate::event::EventKind;
-    use crate::providers::{Provider, TokenUsage};
+    use crate::providers::TokenUsage;
 
     fn built(builder: AgentBuilder<(), ()>) -> Agent {
         use crate::agents::r#loop::test_util::MockProvider;
         builder
-            .provider(MockProvider::with_results(vec![]) as Arc<dyn Provider>)
+            .provider(MockProvider::with_results(vec![]))
             .model("test")
             .build()
     }

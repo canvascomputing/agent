@@ -111,9 +111,8 @@ async def main(n, partitions, agents):
 
     for a in range(agents):
         tickets.agent(
-            Agent()
+            Agent.from_env()
             .name(f"agent_{a}")
-            .from_env()
             .role(ROLE.strip())
             .label("compute")
             .tools([python, ManageTicketsTool()])

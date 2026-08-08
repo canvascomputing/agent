@@ -1,11 +1,11 @@
-//! The `Provider` trait and the vendor-specific implementations that speak to Anthropic, OpenAI-compatible APIs, Mistral, and LiteLLM.
+//! The `Provider` handle, the `ProviderLike` trait behind it, and the vendor-specific implementations that speak to Anthropic, OpenAI-compatible APIs, Mistral, and LiteLLM.
 //!
 //! The types a request and a response are made of (`Message`, `ContentBlock`,
 //! `ModelRequest`, `ModelResponse`, `StreamEvent`) are reachable by name but
-//! kept out of the index: they matter only when implementing a [`Provider`].
+//! kept out of the index: they matter only when implementing [`ProviderLike`].
 
 mod anthropic;
-pub mod environment;
+pub(crate) mod environment;
 mod error;
 mod litellm;
 mod mistral;
@@ -17,13 +17,14 @@ pub(crate) mod stream;
 pub mod types;
 
 pub use anthropic::AnthropicProvider;
-pub use environment::{context_window_from_env, model_from_env, provider_from_env};
 pub use error::{ProviderError, ProviderResult, RequestErrorKind};
 pub use litellm::LiteLlmProvider;
 pub use mistral::MistralProvider;
 pub use model::Model;
 pub use openai::OpenAiProvider;
-pub use provider::{ModelRequest, Provider, ProviderToolDefinition, ReasoningEffort, ToolChoice};
+pub use provider::{
+    ModelRequest, Provider, ProviderLike, ProviderToolDefinition, ReasoningEffort, ToolChoice,
+};
 pub use types::{
     AsUserMessage, ContentBlock, Message, ModelResponse, ResponseStatus, StreamEvent, TokenUsage,
 };

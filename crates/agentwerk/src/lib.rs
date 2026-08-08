@@ -12,8 +12,7 @@
 //! use agentwerk::tools::{GrepTool, ReadFileTool};
 //!
 //! # async fn run() {
-//! let agent = Agent::new()
-//!     .from_env()
+//! let agent = Agent::from_env()
 //!     .role("You are a Rust developer who explores source files to answer questions.")
 //!     .tool(ReadFileTool)
 //!     .tool(GrepTool)
@@ -38,10 +37,9 @@
 //!
 //! for i in 0..4 {
 //!     tickets.agent(
-//!         Agent::new()
+//!         Agent::from_env()
 //!             .name(format!("agent_{i}"))
 //!             .label("research")
-//!             .from_env()
 //!             .tool(FetchUrlTool)
 //!             .build(),
 //!     );

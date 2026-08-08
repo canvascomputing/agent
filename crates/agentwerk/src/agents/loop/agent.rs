@@ -241,7 +241,6 @@ mod tests {
     use crate::agents::r#loop::test_util::*;
     use crate::agents::tickets::{Author, Status, Ticket, TicketQueue};
     use crate::agents::Knowledge;
-    use crate::providers::Provider;
     use crate::tools::{FinishTool, ManageTicketsTool};
 
     // Run lifecycle
@@ -261,7 +260,7 @@ mod tests {
         tickets.agent(
             Agent::new()
                 .name("agent")
-                .provider(provider as Arc<dyn Provider>)
+                .provider(provider)
                 .model("mock")
                 .role("test")
                 .tool(ManageTicketsTool)
@@ -299,7 +298,7 @@ mod tests {
         tickets.agent(
             Agent::new()
                 .name("agent")
-                .provider(provider.clone() as Arc<dyn Provider>)
+                .provider(provider.clone())
                 .model("mock")
                 .role("test")
                 .build(),
@@ -346,7 +345,7 @@ mod tests {
         tickets.agent(
             Agent::new()
                 .name("scout")
-                .provider(scout.clone() as Arc<dyn Provider>)
+                .provider(scout.clone())
                 .model("mock")
                 .role("test")
                 .build(),
@@ -354,7 +353,7 @@ mod tests {
         tickets.agent(
             Agent::new()
                 .name("worker")
-                .provider(worker.clone() as Arc<dyn Provider>)
+                .provider(worker.clone())
                 .model("mock")
                 .role("test")
                 .build(),
@@ -395,7 +394,7 @@ mod tests {
         tickets.agent(
             Agent::new()
                 .name("agent")
-                .provider(provider.clone() as Arc<dyn Provider>)
+                .provider(provider.clone())
                 .model("mock")
                 .role("test")
                 .build(),
@@ -433,7 +432,7 @@ mod tests {
             tickets.agent(
                 Agent::new()
                     .name(name)
-                    .provider(Arc::clone(&provider) as Arc<dyn Provider>)
+                    .provider(provider.clone())
                     .model("mock")
                     .role("test")
                     .tool(FinishTool)
@@ -476,7 +475,7 @@ mod tests {
         tickets.agent(
             Agent::new()
                 .name("alice")
-                .provider(Arc::clone(&provider) as Arc<dyn Provider>)
+                .provider(provider.clone())
                 .model("mock")
                 .role("test")
                 .build(),
@@ -517,7 +516,7 @@ mod tests {
         tickets.agent(
             Agent::new()
                 .name("alice")
-                .provider(Arc::clone(&provider) as Arc<dyn Provider>)
+                .provider(provider.clone())
                 .model("mock")
                 .role("test")
                 .build(),
@@ -905,7 +904,7 @@ mod tests {
             Agent::new()
                 .name("analyst")
                 .label("analysis")
-                .provider(analyst as Arc<dyn Provider>)
+                .provider(analyst)
                 .model("mock")
                 .role("test")
                 .build(),
@@ -914,7 +913,7 @@ mod tests {
             Agent::new()
                 .name("researcher")
                 .label("research")
-                .provider(Arc::clone(&researcher) as Arc<dyn Provider>)
+                .provider(researcher.clone())
                 .model("mock")
                 .role("test")
                 .build(),
@@ -976,7 +975,7 @@ mod tests {
         tickets.agent(
             Agent::new()
                 .name("agent")
-                .provider(provider as Arc<dyn Provider>)
+                .provider(provider)
                 .model("mock")
                 .role("test")
                 .tool(ManageTicketsTool)
@@ -1006,7 +1005,7 @@ mod tests {
         let agent = tickets.agent(
             Agent::new()
                 .name("agent")
-                .provider(provider as Arc<dyn Provider>)
+                .provider(provider)
                 .model("mock")
                 .role("test")
                 .tool(ManageTicketsTool)
@@ -1054,7 +1053,7 @@ mod tests {
         tickets.agent(
             Agent::new()
                 .name("tester")
-                .provider(provider.clone() as Arc<dyn Provider>)
+                .provider(provider.clone())
                 .model("mock")
                 .role("test")
                 .tool(crate::tools::ManageTicketsTool)
@@ -1094,7 +1093,7 @@ mod tests {
         tickets.agent(
             Agent::new()
                 .name("tester")
-                .provider(provider.clone() as Arc<dyn Provider>)
+                .provider(provider.clone())
                 .model("mock")
                 .role("test")
                 .knowledge(&store)
@@ -1146,7 +1145,7 @@ mod tests {
         tickets.agent(
             Agent::new()
                 .name("tester")
-                .provider(provider.clone() as Arc<dyn Provider>)
+                .provider(provider.clone())
                 .model("mock")
                 .role("test")
                 .knowledge(&store)
@@ -1191,7 +1190,7 @@ mod tests {
             Agent::new()
                 .name("alice")
                 .label("a")
-                .provider(p_a.clone() as Arc<dyn Provider>)
+                .provider(p_a.clone())
                 .model("mock")
                 .role("test")
                 .knowledge(&store)
@@ -1201,7 +1200,7 @@ mod tests {
             Agent::new()
                 .name("bob")
                 .label("b")
-                .provider(p_b.clone() as Arc<dyn Provider>)
+                .provider(p_b.clone())
                 .model("mock")
                 .role("test")
                 .knowledge(&store)
@@ -1250,7 +1249,7 @@ mod tests {
         tickets.agent(
             Agent::new()
                 .name("tester")
-                .provider(provider.clone() as Arc<dyn Provider>)
+                .provider(provider.clone())
                 .model("mock")
                 .role("test")
                 .knowledge(&store)

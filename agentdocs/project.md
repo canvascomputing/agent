@@ -25,7 +25,7 @@ agentwerk is a Rust crate for building LLM agents. An agent reads input, calls a
 **Many agents share one `TicketQueue` and pick up tickets concurrently.**
 
 ```rust
-tickets.agent(Agent::new().name("scout_0").label("scan").from_env().build());
+tickets.agent(Agent::from_env().name("scout_0").label("scan").build());
 tickets.ticket(Ticket::new("Audit src/db.").label("scan"));
 ```
 
@@ -41,7 +41,7 @@ tickets.ticket(Ticket::new("Audit src/db.").label("scan"));
 - Anthropic, OpenAI, Mistral, and LiteLLM are supported.
 - Switching providers changes only the `.model(...)` call.
 - All providers share one retry policy.
-- `from_env()` and `model_from_env()` (in `providers::environment`) select a provider and model from environment variables.
+- `Provider::from_env()` and `Model::from_env()` select a provider and model from environment variables.
 
 ## Observe, Do Not Prescribe
 

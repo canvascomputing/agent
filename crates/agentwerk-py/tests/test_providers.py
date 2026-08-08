@@ -46,26 +46,40 @@ def test_unknown_reasoning_effort_is_rejected():
         aw.Model("m").reasoning_effort("bogus")
 
 
+def test_provider_from_env_builds_a_provider(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    assert isinstance(aw.Provider.from_env(), aw.Provider)
+
+
 def test_provider_from_env_without_env_is_rejected(monkeypatch):
     for key in PROVIDER_KEYS:
         monkeypatch.delenv(key, raising=False)
     with pytest.raises(RuntimeError):
-        aw.provider_from_env()
+        aw.Provider.from_env()
 
 
 def test_model_from_env_reads_the_model_variable(monkeypatch):
     monkeypatch.setenv("MODEL", "my-local-model")
-    assert aw.model_from_env() == "my-local-model"
+    assert aw.Model.from_env().name == "my-local-model"
 
 
-def test_context_window_from_env_is_none_when_unset(monkeypatch):
-    monkeypatch.delenv("MODEL_CONTEXT_WINDOW", raising=False)
-    assert aw.context_window_from_env() is None
-
-
-def test_context_window_from_env_reads_a_positive_integer(monkeypatch):
+def test_model_from_env_applies_the_window_override(monkeypatch):
+    monkeypatch.setenv("MODEL", "my-local-model")
     monkeypatch.setenv("MODEL_CONTEXT_WINDOW", "64000")
-    assert aw.context_window_from_env() == 64_000
+    assert aw.Model.from_env().get_context_window() == 64_000
+
+
+def test_model_from_env_leaves_the_window_unset_without_the_override(monkeypatch):
+    monkeypatch.setenv("MODEL", "my-local-model")
+    monkeypatch.delenv("MODEL_CONTEXT_WINDOW", raising=False)
+    assert aw.Model.from_env().get_context_window() is None
+
+
+def test_model_from_env_without_provider_env_is_rejected(monkeypatch):
+    for key in (*PROVIDER_KEYS, "MODEL"):
+        monkeypatch.delenv(key, raising=False)
+    with pytest.raises(RuntimeError):
+        aw.Model.from_env()
 
 
 def test_knowledge_load_creates_an_empty_index(knowledge_dir):

@@ -3,16 +3,15 @@
 
 #![allow(dead_code)]
 
-use std::sync::Arc;
-
 use agentwerk::event::EventName;
-use agentwerk::providers::{model_from_env, provider_from_env, Provider};
+use agentwerk::providers::{Model, Provider};
 use agentwerk::{Stats, TicketQueue};
 
-pub fn build_provider() -> (Arc<dyn Provider>, String) {
-    let provider = provider_from_env().expect("LLM provider required for integration tests");
-    let model = model_from_env().expect("model name required for integration tests");
-    (provider, model)
+pub fn build_provider() -> (Provider, Model) {
+    (
+        Provider::from_env().expect("LLM provider required for integration tests"),
+        Model::from_env().expect("model name required for integration tests"),
+    )
 }
 
 /// The most recent result's text body, empty when absent or non-string.

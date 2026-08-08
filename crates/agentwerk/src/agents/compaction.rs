@@ -116,7 +116,7 @@ pub(crate) fn should_compact_proactively(
 pub struct Compaction {
     reason: CompactReason,
     ticket: Ticket,
-    provider: Arc<dyn Provider>,
+    provider: Provider,
     model: String,
     window: Option<u64>,
     on_progress: Arc<dyn Fn(u32, u32) + Send + Sync>,
@@ -126,7 +126,7 @@ impl Compaction {
     pub(crate) fn new(
         reason: CompactReason,
         ticket: Ticket,
-        provider: Arc<dyn Provider>,
+        provider: Provider,
         model: String,
         window: Option<u64>,
         on_progress: Arc<dyn Fn(u32, u32) + Send + Sync>,
@@ -553,7 +553,7 @@ mod tests {
         }
     }
 
-    impl Provider for ScriptedProvider {
+    impl crate::providers::ProviderLike for ScriptedProvider {
         fn respond(
             &self,
             request: ModelRequest,
@@ -582,19 +582,19 @@ mod tests {
         Arc::new(|_, _| {})
     }
 
-    fn compaction_for(provider: Arc<dyn Provider>, window: Option<u64>) -> Compaction {
+    fn compaction_for(provider: impl Into<Provider>, window: Option<u64>) -> Compaction {
         compaction_reporting_to(provider, window, noop_progress())
     }
 
     fn compaction_reporting_to(
-        provider: Arc<dyn Provider>,
+        provider: impl Into<Provider>,
         window: Option<u64>,
         on_progress: Arc<dyn Fn(u32, u32) + Send + Sync>,
     ) -> Compaction {
         Compaction::new(
             CompactReason::Proactive,
             Ticket::new("task"),
-            provider,
+            provider.into(),
             "mock".into(),
             window,
             on_progress,

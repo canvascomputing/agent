@@ -161,7 +161,6 @@ mod tests {
     use crate::agents::r#loop::test_util::*;
     use crate::agents::tickets::{Status, Ticket, TicketQueue};
     use crate::event::{EventKind, PolicyKind};
-    use crate::providers::Provider;
     use crate::schemas::Schema;
 
     #[tokio::test]
@@ -246,7 +245,7 @@ mod tests {
         tickets.agent(
             Agent::new()
                 .name("tester")
-                .provider(provider.clone() as Arc<dyn Provider>)
+                .provider(provider.clone())
                 .model("mock")
                 .role("test")
                 .build(),
@@ -340,12 +339,10 @@ mod tests {
 
     #[tokio::test]
     async fn repeated_execution_failures_trip_the_budget_and_fail_the_ticket() {
-        use std::sync::Arc;
         use std::time::Duration;
 
         use crate::agents::agent::Agent;
         use crate::agents::tickets::TicketQueue;
-        use crate::providers::Provider;
         use crate::tools::{Tool, ToolResult};
 
         let provider = MockProvider::with_results(vec![
@@ -368,7 +365,7 @@ mod tests {
         tickets.agent(
             Agent::new()
                 .name("tester")
-                .provider(provider as Arc<dyn Provider>)
+                .provider(provider)
                 .model("mock")
                 .role("test")
                 .tool(boom)
@@ -393,12 +390,10 @@ mod tests {
 
     #[tokio::test]
     async fn a_successful_tool_call_resets_the_failure_budget() {
-        use std::sync::Arc;
         use std::time::Duration;
 
         use crate::agents::agent::Agent;
         use crate::agents::tickets::TicketQueue;
-        use crate::providers::Provider;
         use crate::tools::{Tool, ToolResult};
 
         // boom, ping, boom, finish: a budget of two would trip on the second
@@ -427,7 +422,7 @@ mod tests {
         tickets.agent(
             Agent::new()
                 .name("tester")
-                .provider(provider as Arc<dyn Provider>)
+                .provider(provider)
                 .model("mock")
                 .role("test")
                 .tool(boom)
@@ -445,13 +440,11 @@ mod tests {
 
     #[tokio::test]
     async fn finish_awaits_completion_when_tool_call_is_in_flight() {
-        use std::sync::Arc;
         use std::time::Duration;
         use tokio::sync::Notify;
 
         use crate::agents::agent::Agent;
         use crate::agents::tickets::TicketQueue;
-        use crate::providers::Provider;
         use crate::tools::{ManageTicketsTool, Tool, ToolResult};
 
         let tool_started = Arc::new(Notify::new());
@@ -487,7 +480,7 @@ mod tests {
         tickets.agent(
             Agent::new()
                 .name("tester")
-                .provider(provider as Arc<dyn Provider>)
+                .provider(provider)
                 .model("mock")
                 .role("test")
                 .tool(ManageTicketsTool)
@@ -553,7 +546,7 @@ mod tests {
         tickets.agent(
             Agent::new()
                 .name("tester")
-                .provider(provider.clone() as Arc<dyn Provider>)
+                .provider(provider.clone())
                 .model("claude-sonnet-4-20250514")
                 .role("test")
                 .tool(dump)
@@ -669,7 +662,7 @@ mod tests {
         tickets.agent(
             Agent::new()
                 .name("tester")
-                .provider(provider.clone() as Arc<dyn Provider>)
+                .provider(provider.clone())
                 .model("mock")
                 .role("test")
                 .tool(size_tool)

@@ -32,6 +32,16 @@ impl Model {
         }
     }
 
+    /// Build a `Model` from the environment: the name, plus the context window
+    /// when `MODEL_CONTEXT_WINDOW` is set.
+    pub fn from_env() -> super::ProviderResult<Self> {
+        let model = Self::from_name(super::environment::model_from_env()?);
+        Ok(match super::environment::context_window_from_env() {
+            Some(size) => model.context_window(size),
+            None => model,
+        })
+    }
+
     /// Set the context window size for a model, skipping the known names. Useful for local proxies or
     /// private deployments whose name isn't in any provider's table.
     pub fn context_window(mut self, size: u64) -> Self {
@@ -118,6 +128,24 @@ mod tests {
     fn context_window_overrides() {
         let m = Model::from_name("unknown").context_window(50_000);
         assert_eq!(m.context_window, Some(50_000));
+    }
+
+    /// The only test that writes the process environment, so nothing races it.
+    #[test]
+    fn from_env_reads_the_name_and_prefers_the_window_override() {
+        std::env::set_var("ANTHROPIC_API_KEY", "key");
+        std::env::set_var("MODEL", "claude-sonnet-4-20250514");
+        std::env::set_var("MODEL_CONTEXT_WINDOW", "64000");
+
+        let m = Model::from_env().unwrap();
+        assert_eq!(m.name, "claude-sonnet-4-20250514");
+        assert_eq!(m.context_window, Some(64_000));
+
+        std::env::remove_var("MODEL_CONTEXT_WINDOW");
+        assert_eq!(Model::from_env().unwrap().context_window, Some(200_000));
+
+        std::env::remove_var("ANTHROPIC_API_KEY");
+        std::env::remove_var("MODEL");
     }
 
     #[test]

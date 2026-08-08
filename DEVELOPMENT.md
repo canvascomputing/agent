@@ -91,7 +91,8 @@ Use cases and integration tests use the following environment variables:
 
 | Variable | Description |
 |----------|-------------|
-| `MODEL` | Generic model override for `model_from_env()`. |
+| `MODEL` | Generic model override for `Model::from_env()`. |
+| `MODEL_CONTEXT_WINDOW` | Context window size in tokens, applied by `Model::from_env()` over the registry's value for the name. |
 | `BRAVE_API_KEY` | Required by the `deep-research` example. |
 | `SSL_CERT_FILE` | PEM bundle of CA certificates to trust instead of the built-in root store. |
 | `SSL_CERT_DIR` | Directory of PEM CA certificate files to trust instead of the built-in root store. |
@@ -125,6 +126,6 @@ Use cases and integration tests use the following environment variables:
 | Variable | Description |
 |----------|-------------|
 | `LITELLM_BASE_URL` | Proxy URL (default: `http://localhost:4000`) |
-| `LITELLM_API_KEY` | Auth key (required to select via `from_env()`) |
+| `LITELLM_API_KEY` | Auth key (required to select via `Provider::from_env()`) |
 | `LITELLM_MODEL` | Model (default: `claude-sonnet-4-20250514`) |
 | `LITELLM_PROVIDER` | LLM provider (`anthropic`, `mistral`, `openai`, `litellm`): explicit selection that overrides API-key auto-detection. |

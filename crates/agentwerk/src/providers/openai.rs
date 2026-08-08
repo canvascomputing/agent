@@ -11,7 +11,7 @@ use serde_json::Value;
 
 use super::error::{ProviderError, ProviderResult};
 use super::provider::{
-    build_client, ModelRequest, Provider, ProviderToolDefinition, ToolChoice,
+    build_client, ModelRequest, ProviderLike, ProviderToolDefinition, ToolChoice,
     DEFAULT_REQUEST_TIMEOUT,
 };
 use super::stream::{SseEvent, StreamParser};
@@ -21,7 +21,7 @@ use super::types::{ContentBlock, Message, ModelResponse, ResponseStatus, StreamE
 /// endpoint that speaks the same wire format.
 ///
 /// Reads `OPENAI_API_KEY` (and optional `OPENAI_BASE_URL`) when built via
-/// [`provider_from_env`]. Override the endpoint with [`base_url`] and the
+/// [`Provider::from_env`]. Override the endpoint with [`base_url`] and the
 /// per-request timeout with [`timeout`].
 ///
 /// # Examples
@@ -37,12 +37,12 @@ use super::types::{ContentBlock, Message, ModelResponse, ResponseStatus, StreamE
 /// Read the API key from the environment:
 ///
 /// ```no_run
-/// use agentwerk::providers::provider_from_env;
+/// use agentwerk::providers::Provider;
 ///
-/// let _provider = provider_from_env().expect("LLM provider required");
+/// let _provider = Provider::from_env().expect("LLM provider required");
 /// ```
 ///
-/// [`provider_from_env`]: crate::providers::provider_from_env
+/// [`Provider::from_env`]: crate::providers::Provider::from_env
 /// [`base_url`]: OpenAiProvider::base_url
 /// [`timeout`]: OpenAiProvider::timeout
 pub struct OpenAiProvider {
@@ -148,7 +148,7 @@ impl OpenAiProvider {
     }
 }
 
-impl Provider for OpenAiProvider {
+impl ProviderLike for OpenAiProvider {
     fn prewarm(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
         Box::pin(async { super::provider::prewarm_with(&self.client, &self.base_url).await })
     }

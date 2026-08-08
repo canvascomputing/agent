@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use super::error::ProviderResult;
 use super::openai::OpenAiProvider;
-use super::provider::{ModelRequest, Provider};
+use super::provider::{ModelRequest, ProviderLike};
 use super::types::{ModelResponse, StreamEvent};
 
 /// LLM provider for a LiteLLM proxy. Speaks the OpenAI-compatible wire
@@ -16,7 +16,7 @@ use super::types::{ModelResponse, StreamEvent};
 /// the request decides which upstream backend handles it.
 ///
 /// Reads `LITELLM_API_KEY` (optional) and `LITELLM_BASE_URL` (defaults to
-/// `http://localhost:4000`) when built via [`provider_from_env`]. Override
+/// `http://localhost:4000`) when built via [`Provider::from_env`]. Override
 /// the endpoint with [`base_url`] and the per-request timeout with
 /// [`timeout`].
 ///
@@ -33,12 +33,12 @@ use super::types::{ModelResponse, StreamEvent};
 /// Read configuration from the environment:
 ///
 /// ```no_run
-/// use agentwerk::providers::provider_from_env;
+/// use agentwerk::providers::Provider;
 ///
-/// let _provider = provider_from_env().expect("LLM provider required");
+/// let _provider = Provider::from_env().expect("LLM provider required");
 /// ```
 ///
-/// [`provider_from_env`]: crate::providers::provider_from_env
+/// [`Provider::from_env`]: crate::providers::Provider::from_env
 /// [`base_url`]: LiteLlmProvider::base_url
 /// [`timeout`]: LiteLlmProvider::timeout
 pub struct LiteLlmProvider(OpenAiProvider);
@@ -67,7 +67,7 @@ impl LiteLlmProvider {
     }
 }
 
-impl Provider for LiteLlmProvider {
+impl ProviderLike for LiteLlmProvider {
     fn respond(
         &self,
         request: ModelRequest,

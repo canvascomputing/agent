@@ -54,7 +54,7 @@ def offline_agent():
 @pytest.fixture
 def live_agent():
     """An agent resolved from the environment; only used by ``live`` tests."""
-    return aw.Agent().from_env().role("You answer in one short word.").build()
+    return aw.Agent.from_env().role("You answer in one short word.").build()
 
 
 @pytest.fixture

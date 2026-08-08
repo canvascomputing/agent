@@ -18,7 +18,7 @@
 use std::sync::Arc;
 
 use agentwerk::event::{Event, EventKind, EventName};
-use agentwerk::providers::{provider_from_env, ProviderResult};
+use agentwerk::providers::{Model, Provider, ProviderResult};
 use agentwerk::schemas::Schema;
 use agentwerk::tools::{ReadTicketsTool, Tool, ToolResult};
 use agentwerk::{Agent, Ticket, TicketQueue};
@@ -34,7 +34,7 @@ async fn main() {
 
     eprintln!("Question: {question}\n");
 
-    let provider = provider_from_env().expect("LLM provider required");
+    let provider = Provider::from_env().expect("LLM provider required");
     let event_handler: Arc<dyn Fn(&Event) + Send + Sync> =
         Arc::new(|event: &Event| log_event(event));
 
@@ -50,8 +50,8 @@ async fn main() {
 
     let researcher_1 = Agent::new()
         .name("researcher_1")
-        .provider(Arc::clone(&provider))
-        .model_from_env()
+        .provider(provider.clone())
+        .model(Model::from_env().expect("model name required"))
         .role(RESEARCHER_1_ROLE)
         .label("researcher_1")
         .tool(brave_search_tool(brave_key.clone()))
@@ -60,8 +60,8 @@ async fn main() {
 
     let researcher_2 = Agent::new()
         .name("researcher_2")
-        .provider(Arc::clone(&provider))
-        .model_from_env()
+        .provider(provider.clone())
+        .model(Model::from_env().expect("model name required"))
         .role(RESEARCHER_2_ROLE)
         .label("researcher_2")
         .template("schema_json", schema_json_pretty.clone())
@@ -71,8 +71,8 @@ async fn main() {
 
     let report_writer = Agent::new()
         .name("report_writer")
-        .provider(Arc::clone(&provider))
-        .model_from_env()
+        .provider(provider.clone())
+        .model(Model::from_env().expect("model name required"))
         .role(REPORT_WRITER_ROLE)
         .label("report")
         .tool(ReadTicketsTool)

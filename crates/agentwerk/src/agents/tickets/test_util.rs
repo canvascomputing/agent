@@ -23,7 +23,7 @@ pub(super) fn minimal_agent(name: &str) -> Agent {
     use crate::agents::r#loop::test_util::MockProvider;
     Agent::new()
         .name(name)
-        .provider(MockProvider::with_results(vec![]) as Arc<dyn crate::providers::Provider>)
+        .provider(MockProvider::with_results(vec![]))
         .model("mock")
         .build()
 }

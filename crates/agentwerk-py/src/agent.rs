@@ -21,20 +21,6 @@ use crate::ticket::PyTicket;
 use crate::ticket_queue::PyTicketQueue;
 use crate::tools::{extract_tool, BoxedTool};
 
-/// Which LLM provider the agent will use, decided at `build()`.
-enum ProviderSpec {
-    Unset,
-    Env,
-    Explicit(Arc<dyn Provider>),
-}
-
-/// Which model the agent will use, decided at `build()`.
-enum ModelSpec {
-    Unset,
-    Env,
-    Explicit(Model),
-}
-
 /// An `Agent` is the core entity of agentwerk. It has access to tools for
 /// solving tasks in the form of tickets.
 #[pyclass(name = "Agent")]
@@ -45,8 +31,8 @@ pub struct PyAgent {
     templates: Vec<(String, String)>,
     dir: Option<String>,
     interactive: bool,
-    provider: ProviderSpec,
-    model: ModelSpec,
+    provider: Option<Provider>,
+    model: Option<Model>,
     tools: Vec<Arc<dyn ToolLike>>,
     knowledge: Option<Arc<Knowledge>>,
     /// True when the agent came from `Agent.empty()`, which registers no finish
@@ -65,8 +51,8 @@ impl PyAgent {
             templates: Vec::new(),
             dir: None,
             interactive: false,
-            provider: ProviderSpec::Unset,
-            model: ModelSpec::Unset,
+            provider: None,
+            model: None,
             tools: Vec::new(),
             knowledge: None,
             empty,
@@ -100,29 +86,18 @@ impl PyAgent {
             Agent::new()
         };
 
-        let with_provider = match &self.provider {
-            ProviderSpec::Env => {
-                base.provider(agentwerk::providers::provider_from_env().map_err(runtime_error)?)
-            }
-            ProviderSpec::Explicit(provider) => base.provider(Arc::clone(provider)),
-            ProviderSpec::Unset => {
-                return Err(runtime_error(
-                    "provider not set: call from_env(), provider_from_env(), or provider(...)",
-                ))
-            }
-        };
+        let provider = self.provider.as_ref().ok_or_else(|| {
+            runtime_error(
+                "provider not set: use Agent.from_env(), or provider(Provider.from_env())",
+            )
+        })?;
+        let model = self.model.as_ref().ok_or_else(|| {
+            runtime_error(
+                "model not set: use Agent.from_env(), model(name), or model(Model.from_env())",
+            )
+        })?;
 
-        let mut builder = match &self.model {
-            ModelSpec::Env => {
-                with_provider.model(agentwerk::providers::model_from_env().map_err(runtime_error)?)
-            }
-            ModelSpec::Explicit(model) => with_provider.model(model.clone()),
-            ModelSpec::Unset => {
-                return Err(runtime_error(
-                    "model not set: call model(...), model_from_env(), or from_env()",
-                ))
-            }
-        };
+        let mut builder = base.provider(provider.clone()).model(model.clone());
 
         if let Some(name) = &self.name {
             builder = builder.name(name.clone());
@@ -167,19 +142,13 @@ impl PyAgent {
         PyAgent::create(true)
     }
 
-    /// Read environment variables for configuration.
-    fn from_env(mut slf: PyRefMut<'_, Self>) -> PyResult<PyRefMut<'_, Self>> {
-        slf.ensure_unbuilt()?;
-        slf.provider = ProviderSpec::Env;
-        slf.model = ModelSpec::Env;
-        Ok(slf)
-    }
-
-    /// Read only the LLM provider from environment variables.
-    fn provider_from_env(mut slf: PyRefMut<'_, Self>) -> PyResult<PyRefMut<'_, Self>> {
-        slf.ensure_unbuilt()?;
-        slf.provider = ProviderSpec::Env;
-        Ok(slf)
+    /// Create an agent with the provider and model from the environment.
+    #[staticmethod]
+    fn from_env() -> PyResult<Self> {
+        let mut agent = PyAgent::create(false);
+        agent.provider = Some(Provider::from_env().map_err(runtime_error)?);
+        agent.model = Some(Model::from_env().map_err(runtime_error)?);
+        Ok(agent)
     }
 
     /// Define the LLM provider.
@@ -188,7 +157,7 @@ impl PyAgent {
         provider: PyRef<'_, PyProvider>,
     ) -> PyResult<PyRefMut<'py, Self>> {
         slf.ensure_unbuilt()?;
-        slf.provider = ProviderSpec::Explicit(Arc::clone(&provider.inner));
+        slf.provider = Some(provider.inner.clone());
         Ok(slf)
     }
 
@@ -204,14 +173,7 @@ impl PyAgent {
         } else {
             model.extract::<PyRef<PyModel>>()?.inner.clone()
         };
-        slf.model = ModelSpec::Explicit(resolved);
-        Ok(slf)
-    }
-
-    /// Read only the model from environment variables.
-    fn model_from_env(mut slf: PyRefMut<'_, Self>) -> PyResult<PyRefMut<'_, Self>> {
-        slf.ensure_unbuilt()?;
-        slf.model = ModelSpec::Env;
+        slf.model = Some(resolved);
         Ok(slf)
     }
 

@@ -38,13 +38,11 @@ pub(super) async fn wait_for_signal(signal: &Arc<AtomicBool>) {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
     use std::time::Duration;
 
     use crate::agents::agent::Agent;
     use crate::agents::r#loop::test_util::*;
     use crate::agents::tickets::{Status, Ticket, TicketQueue};
-    use crate::providers::Provider;
     use crate::tools::ManageTicketsTool;
 
     // Late-add agent tests
@@ -66,7 +64,7 @@ mod tests {
         tickets.agent(
             Agent::new()
                 .name("late")
-                .provider(provider.clone() as Arc<dyn Provider>)
+                .provider(provider.clone())
                 .model("mock")
                 .role("test")
                 .tool(ManageTicketsTool)
@@ -114,7 +112,7 @@ mod tests {
         tickets.agent(
             Agent::new()
                 .name("slow")
-                .provider(provider.clone() as Arc<dyn Provider>)
+                .provider(provider.clone())
                 .model("mock")
                 .role("test")
                 .build(),
@@ -160,7 +158,7 @@ mod tests {
         tickets.agent(
             Agent::new()
                 .name("late")
-                .provider(provider as Arc<dyn Provider>)
+                .provider(provider)
                 .model("mock")
                 .role("test")
                 .tool(ManageTicketsTool)

@@ -62,10 +62,9 @@ pub(super) struct ReplyEditing {
 /// let tickets = TicketQueue::new();
 /// for i in 0..4 {
 ///     tickets.agent(
-///         Agent::new()
+///         Agent::from_env()
 ///             .name(format!("researcher_{i}"))
 ///             .label("research")
-///             .from_env()
 ///             .tool(FetchUrlTool)
 ///             .build(),
 ///     );

@@ -2,13 +2,11 @@
 //! covers the common case; the per-vendor constructors and `Model` cover a local
 //! endpoint, a different context window, or a different reasoning level.
 
-use std::sync::Arc;
 use std::time::Duration;
 
 use agentwerk::providers::{
-    context_window_from_env as detect_context_window, model_from_env as detect_model,
-    provider_from_env as detect_provider, AnthropicProvider, LiteLlmProvider, MistralProvider,
-    Model, OpenAiProvider, Provider, ReasoningEffort,
+    AnthropicProvider, LiteLlmProvider, MistralProvider, Model, OpenAiProvider, Provider,
+    ReasoningEffort,
 };
 use pyo3::prelude::*;
 
@@ -17,7 +15,17 @@ use crate::convert::runtime_error;
 /// An LLM provider, passed to `.provider(...)`.
 #[pyclass(name = "Provider")]
 pub struct PyProvider {
-    pub inner: Arc<dyn Provider>,
+    pub inner: Provider,
+}
+
+#[pymethods]
+impl PyProvider {
+    /// Detect the LLM provider from environment variables.
+    #[staticmethod]
+    fn from_env() -> PyResult<Self> {
+        let inner = Provider::from_env().map_err(runtime_error)?;
+        Ok(PyProvider { inner })
+    }
 }
 
 /// A model name, with an optional context window size and reasoning level,
@@ -34,6 +42,20 @@ impl PyModel {
         PyModel {
             inner: Model::from_name(name),
         }
+    }
+
+    /// Read the model name from the environment, plus the context window when
+    /// `MODEL_CONTEXT_WINDOW` is set.
+    #[staticmethod]
+    fn from_env() -> PyResult<Self> {
+        let inner = Model::from_env().map_err(runtime_error)?;
+        Ok(PyModel { inner })
+    }
+
+    /// The resolved model name.
+    #[getter]
+    fn name(&self) -> String {
+        self.inner.name.clone()
     }
 
     /// Set the context window size for a model, in tokens.
@@ -73,31 +95,6 @@ impl PyModel {
     }
 }
 
-/// Read the LLM provider from `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`,
-/// `MISTRAL_API_KEY`, or `LITELLM_API_KEY`.
-#[pyfunction]
-#[pyo3(name = "provider_from_env")]
-fn provider_from_env() -> PyResult<PyProvider> {
-    let inner = detect_provider().map_err(runtime_error)?;
-    Ok(PyProvider { inner })
-}
-
-/// Read the model name from `MODEL`, from `<PROVIDER>_MODEL`, or from the
-/// detected provider's own default.
-#[pyfunction]
-#[pyo3(name = "model_from_env")]
-fn model_from_env() -> PyResult<String> {
-    detect_model().map_err(runtime_error)
-}
-
-/// Read the context window size from `MODEL_CONTEXT_WINDOW`, or `None` when it
-/// is unset or not a positive integer.
-#[pyfunction]
-#[pyo3(name = "context_window_from_env")]
-fn context_window_from_env() -> Option<u64> {
-    detect_context_window()
-}
-
 #[pyfunction]
 #[pyo3(name = "AnthropicProvider", signature = (api_key, base_url=None, timeout=None))]
 fn anthropic_provider(api_key: &str, base_url: Option<&str>, timeout: Option<f64>) -> PyProvider {
@@ -109,7 +106,7 @@ fn anthropic_provider(api_key: &str, base_url: Option<&str>, timeout: Option<f64
         provider = provider.timeout(Duration::from_secs_f64(seconds));
     }
     PyProvider {
-        inner: Arc::new(provider),
+        inner: Provider::new(provider),
     }
 }
 
@@ -124,7 +121,7 @@ fn openai_provider(api_key: &str, base_url: Option<&str>, timeout: Option<f64>) 
         provider = provider.timeout(Duration::from_secs_f64(seconds));
     }
     PyProvider {
-        inner: Arc::new(provider),
+        inner: Provider::new(provider),
     }
 }
 
@@ -139,7 +136,7 @@ fn mistral_provider(api_key: &str, base_url: Option<&str>, timeout: Option<f64>)
         provider = provider.timeout(Duration::from_secs_f64(seconds));
     }
     PyProvider {
-        inner: Arc::new(provider),
+        inner: Provider::new(provider),
     }
 }
 
@@ -154,16 +151,13 @@ fn litellm_provider(api_key: &str, base_url: Option<&str>, timeout: Option<f64>)
         provider = provider.timeout(Duration::from_secs_f64(seconds));
     }
     PyProvider {
-        inner: Arc::new(provider),
+        inner: Provider::new(provider),
     }
 }
 
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyProvider>()?;
     m.add_class::<PyModel>()?;
-    m.add_function(wrap_pyfunction!(provider_from_env, m)?)?;
-    m.add_function(wrap_pyfunction!(model_from_env, m)?)?;
-    m.add_function(wrap_pyfunction!(context_window_from_env, m)?)?;
     m.add_function(wrap_pyfunction!(anthropic_provider, m)?)?;
     m.add_function(wrap_pyfunction!(openai_provider, m)?)?;
     m.add_function(wrap_pyfunction!(mistral_provider, m)?)?;

@@ -45,9 +45,6 @@ from ._agentwerk import (
     FinishTool,
     BashTool,
     UnrestrictedBashTool,
-    provider_from_env,
-    model_from_env,
-    context_window_from_env,
     event_names,
 )
 
@@ -138,7 +135,4 @@ __all__ = [
     "FinishTool",
     "BashTool",
     "UnrestrictedBashTool",
-    "provider_from_env",
-    "model_from_env",
-    "context_window_from_env",
 ]
