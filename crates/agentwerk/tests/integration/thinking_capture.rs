@@ -9,15 +9,19 @@ use std::sync::Arc;
 
 use super::common;
 
-use agentwerk::providers::{ContentBlock, Message, ModelRequest, ReasoningEffort, StreamEvent};
+use agentwerk::providers::{
+    ContentBlock, Message, Model, ModelRequest, ReasoningEffort, StreamEvent,
+};
 
 #[tokio::test]
 async fn test() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let (provider, default_model) = common::build_provider();
-    let model = std::env::var("THINKING_MODEL").unwrap_or(default_model);
+    let model = std::env::var("THINKING_MODEL")
+        .map(Model::from_name)
+        .unwrap_or(default_model);
 
     let request = ModelRequest {
-        model,
+        model: model.name,
         system_prompt: String::new(),
         messages: vec![Message::User {
             content: vec![ContentBlock::Text {

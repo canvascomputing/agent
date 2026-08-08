@@ -9,7 +9,7 @@ use serde_json::Value;
 
 use super::error::{ProviderError, ProviderResult};
 use super::provider::{
-    build_client, ModelRequest, Provider, ProviderToolDefinition, ToolChoice,
+    build_client, ModelRequest, ProviderLike, ProviderToolDefinition, ToolChoice,
     DEFAULT_REQUEST_TIMEOUT,
 };
 use super::types::{ContentBlock, Message, ModelResponse, ResponseStatus, StreamEvent, TokenUsage};
@@ -17,7 +17,7 @@ use super::types::{ContentBlock, Message, ModelResponse, ResponseStatus, StreamE
 /// LLM provider for the Anthropic Messages API.
 ///
 /// Reads `ANTHROPIC_API_KEY` (and optional `ANTHROPIC_BASE_URL`) when built
-/// via [`provider_from_env`]. Override the endpoint with [`base_url`] and
+/// via [`Provider::from_env`]. Override the endpoint with [`base_url`] and
 /// the per-request timeout with [`timeout`].
 ///
 /// # Examples
@@ -33,12 +33,12 @@ use super::types::{ContentBlock, Message, ModelResponse, ResponseStatus, StreamE
 /// Read the API key from the environment:
 ///
 /// ```no_run
-/// use agentwerk::providers::provider_from_env;
+/// use agentwerk::providers::Provider;
 ///
-/// let _provider = provider_from_env().expect("LLM provider required");
+/// let _provider = Provider::from_env().expect("LLM provider required");
 /// ```
 ///
-/// [`provider_from_env`]: crate::providers::provider_from_env
+/// [`Provider::from_env`]: crate::providers::Provider::from_env
 /// [`base_url`]: AnthropicProvider::base_url
 /// [`timeout`]: AnthropicProvider::timeout
 pub struct AnthropicProvider {
@@ -206,7 +206,7 @@ impl AnthropicProvider {
     }
 }
 
-impl Provider for AnthropicProvider {
+impl ProviderLike for AnthropicProvider {
     fn prewarm(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
         Box::pin(async { super::provider::prewarm_with(&self.client, &self.base_url).await })
     }

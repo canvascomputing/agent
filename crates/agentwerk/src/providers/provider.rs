@@ -2,6 +2,7 @@
 
 use std::fmt;
 use std::future::Future;
+use std::ops::Deref;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
@@ -90,15 +91,11 @@ pub enum ToolChoice {
     Specific { name: String },
 }
 
-/// Connect to a `Provider` to give agents access to LLMs.
+/// What every LLM provider implements.
 ///
-/// agentwerk supports [`AnthropicProvider`](crate::providers::AnthropicProvider),
-/// [`OpenAiProvider`](crate::providers::OpenAiProvider),
-/// [`MistralProvider`](crate::providers::MistralProvider), and
-/// [`LiteLlmProvider`](crate::providers::LiteLlmProvider), or read one from the
-/// environment with [`provider_from_env`](crate::providers::provider_from_env).
-/// Implement the trait for anything else.
-pub trait Provider: Send + Sync {
+/// Implement it on any type that can answer a [`ModelRequest`]. Callers hold
+/// the finished thing as a [`Provider`], which any implementer converts into.
+pub trait ProviderLike: Send + Sync {
     /// Run one turn: send the request, forward each [`StreamEvent`] as it
     /// arrives, and give back the assembled reply.
     ///
@@ -140,6 +137,80 @@ pub trait Provider: Send + Sync {
             reasoning_effort: ReasoningEffort::Off,
         };
         Box::pin(async move { self.respond(request, Arc::new(|_| {})).await.map(|_| ()) })
+    }
+}
+
+/// Lets a caller who already shares an implementer through an `Arc` hand it
+/// over without unwrapping it.
+impl<T: ProviderLike + ?Sized> ProviderLike for Arc<T> {
+    fn respond(
+        &self,
+        request: ModelRequest,
+        on_event: Arc<dyn Fn(StreamEvent) + Send + Sync>,
+    ) -> Pin<Box<dyn Future<Output = ProviderResult<ModelResponse>> + Send + '_>> {
+        (**self).respond(request, on_event)
+    }
+
+    fn prewarm(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        (**self).prewarm()
+    }
+
+    fn verify(&self, model: &str) -> Pin<Box<dyn Future<Output = ProviderResult<()>> + Send + '_>> {
+        (**self).verify(model)
+    }
+}
+
+/// Connect to a `Provider` to give agents access to LLMs.
+///
+/// agentwerk supports [`AnthropicProvider`](crate::providers::AnthropicProvider),
+/// [`OpenAiProvider`](crate::providers::OpenAiProvider),
+/// [`MistralProvider`](crate::providers::MistralProvider), and
+/// [`LiteLlmProvider`](crate::providers::LiteLlmProvider). Each converts into a
+/// `Provider`, so `.provider(AnthropicProvider::new(key))` needs no wrapping.
+/// Implement [`ProviderLike`] for anything else.
+///
+/// Cloning shares one connection pool, so several agents can hold the same
+/// provider.
+///
+/// ```no_run
+/// use agentwerk::Agent;
+/// use agentwerk::providers::{AnthropicProvider, Provider};
+///
+/// # fn run(key: &str) -> Result<(), Box<dyn std::error::Error>> {
+/// let shared = Provider::from_env()?;
+/// let reader = Agent::new().provider(shared.clone()).model("claude-sonnet-4-20250514");
+/// let writer = Agent::new().provider(AnthropicProvider::new(key)).model("claude-sonnet-4-20250514");
+/// # let _ = (reader, writer);
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Clone)]
+pub struct Provider(Arc<dyn ProviderLike>);
+
+impl Provider {
+    /// Wrap anything that implements [`ProviderLike`].
+    pub fn new(provider: impl ProviderLike + 'static) -> Self {
+        Self(Arc::new(provider))
+    }
+
+    /// Detect the LLM provider from environment variables.
+    pub fn from_env() -> ProviderResult<Self> {
+        super::environment::provider_from_env()
+    }
+}
+
+impl<P: ProviderLike + 'static> From<P> for Provider {
+    fn from(provider: P) -> Self {
+        Self::new(provider)
+    }
+}
+
+/// Lets `provider.respond(..)` reach the trait without naming it.
+impl Deref for Provider {
+    type Target = dyn ProviderLike;
+
+    fn deref(&self) -> &Self::Target {
+        &*self.0
     }
 }
 
@@ -220,6 +291,31 @@ mod tests {
         assert_eq!(DEFAULT_REQUEST_TIMEOUT, Duration::from_secs(600));
     }
 
+    #[tokio::test]
+    async fn a_clone_reaches_the_same_implementer() {
+        let provider = Provider::new(FixedProvider(|| {
+            Err(ProviderError::ProviderUnrecognized {
+                message: "probe".into(),
+            })
+        }));
+        let clone = provider.clone();
+
+        let err = clone.verify("mock").await.unwrap_err();
+        assert!(err.to_string().contains("probe"));
+    }
+
+    #[tokio::test]
+    async fn an_implementer_converts_without_wrapping() {
+        let provider: Provider = FixedProvider(|| {
+            Err(ProviderError::ProviderUnrecognized {
+                message: "probe".into(),
+            })
+        })
+        .into();
+
+        assert!(provider.verify("mock").await.is_err());
+    }
+
     /// Generates a throwaway self-signed cert at `cert_path` via the `openssl` CLI.
     /// Returns `false` when `openssl` isn't on `PATH`, so callers can skip
     /// gracefully instead of failing on a machine without it installed.
@@ -294,7 +390,7 @@ mod tests {
     /// can be exercised without a live endpoint.
     struct FixedProvider(fn() -> ProviderResult<ModelResponse>);
 
-    impl Provider for FixedProvider {
+    impl ProviderLike for FixedProvider {
         fn respond(
             &self,
             _request: ModelRequest,

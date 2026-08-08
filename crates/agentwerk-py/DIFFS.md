@@ -21,12 +21,10 @@ Seven rules the surface table below never repeats.
 | **Agent** | |
 | `Agent::new() -> AgentBuilder<(), ()>` | `Agent()` |
 | `Agent::empty() -> AgentBuilder<(), ()>` | `Agent.empty()` |
+| `Agent::from_env() -> AgentBuilder<Provider, Model>` | `Agent.from_env()`: raises `RuntimeError` where Rust panics. |
 | `AgentBuilder<P, M>` | Folded into `Agent`: the type changes as the provider and model slots fill, which Python cannot hold across calls. |
-| `AgentBuilder::from_env()` | `Agent.from_env()` |
 | `AgentBuilder::provider(p)` | `Agent.provider(provider)` |
-| `AgentBuilder::provider_from_env()` | `Agent.provider_from_env()` |
 | `AgentBuilder::model(m)` | `Agent.model(model)` |
-| `AgentBuilder::model_from_env()` | `Agent.model_from_env()` |
 | `AgentBuilder::name(n)` | `Agent.name(name)` |
 | `AgentBuilder::role(r)` | `Agent.role(role)` |
 | `AgentBuilder::label(l)` | `Agent.label(label)` |
@@ -195,11 +193,13 @@ Seven rules the surface table below never repeats.
 | `OpenAiProvider::new(key).base_url(url).timeout(d)` | `OpenAiProvider(api_key, base_url=.., timeout=..)` |
 | `MistralProvider::new(key).base_url(url).timeout(d)` | `MistralProvider(api_key, base_url=.., timeout=..)` |
 | `LiteLlmProvider::new(key).base_url(url).timeout(d)` | `LiteLlmProvider(api_key, base_url=.., timeout=..)` |
-| `Provider` | An opaque handle. Write a new LLM provider in Rust. |
-| `provider_from_env()` | `provider_from_env()` |
-| `model_from_env()` | `model_from_env()` |
-| `context_window_from_env()` | `context_window_from_env()` |
+| `Provider` | An opaque handle. |
+| `ProviderLike` | Not bound: implement it in Rust to write a new LLM provider. |
+| `Provider::from_env()` | `Provider.from_env()` |
+| `Provider::new(p)` | Not bound: the per-vendor constructors already hand back a `Provider`. |
 | `Model::from_name(name)` | `Model(name)` |
+| `Model::from_env()` | `Model.from_env()` |
+| `Model.name` | `Model.name` |
 | `Model::context_window(size)` | `Model.context_window(size)` |
 | `Model::reasoning_effort(effort)` | `Model.reasoning_effort(effort)` |
 | `Model::get_context_window()` | `Model.get_context_window()` |

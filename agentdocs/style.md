@@ -22,7 +22,7 @@ Naming, comment, and prose rules, plus README structure. Skim the section matchi
 - Companion types and handles live with their owner: `Ticket`, `Status`, `TicketError`, `Reply`, and `ReplyContent` under `agents::tickets`; `Stats` and `ToolStat` under `agents::stats`.
 - Domain errors live with their domain: `ProviderError`, `ToolError`.
 - Request and response types live with the protocol: `ModelRequest`, `Message`, `TokenUsage` under `providers::`.
-- Free functions live in their module, never at the crate root: `from_env()` in `providers::environment`, helpers in `tools::util`.
+- Free functions live in their module, never at the crate root: the env readers in `providers::environment`, helpers in `tools::util`.
 
 ## Name Disambiguation
 
@@ -32,6 +32,7 @@ Naming, comment, and prose rules, plus README structure. Skim the section matchi
 - Vendor prefixes are used only to distinguish concrete LLM providers or tools: `AnthropicProvider`, `OpenAiProvider`, `LiteLlmProvider`.
 - Acronyms follow Rust API guidelines: `OpenAi`, not `OpenAI`.
 - Two structs may not share a bare name within one module; both stay qualified.
+- When a trait and the concrete type callers hold want the same name, the bare noun goes to the type and the trait takes a `Like` suffix: `Tool` / `ToolLike`, `Provider` / `ProviderLike`.
 
 ## Failure Variants
 
@@ -199,7 +200,7 @@ Permitted:
 
 - **Ambient state** has no receiver: timestamp helpers and similar utilities in `tools::util` or a sibling helper module.
 - **Foreign-type constructors** cannot use an inherent `impl`: `build_client()` returns a `reqwest::Client`.
-- **Module entry points** drive multiple types: `run_main_loop()` in `agents::r#loop`, `from_env()` in `providers::environment`.
+- **Module entry points** drive multiple types: `run_main_loop()` in `agents::r#loop`.
 - **Higher-order utilities** take a function and wrap it: `with_file_lock(path, || ...)`.
 - **Shared algorithm helpers** are called by two or more sibling types in the same module: helpers in `tools::util` shared across filesystem tools, and provider-side helpers shared across concrete providers.
 
@@ -244,7 +245,7 @@ The name the model calls is a separate namespace and takes no suffix: `read_file
 
 **A type a public trait or extension point hands to callers is documented; a genuinely internal type is `pub(crate)`.**
 
-- The request and response types under `providers::` (`Message`, `ContentBlock`, `ModelRequest`, `ProviderToolDefinition`, `ToolChoice`, `StreamEvent`, `ModelResponse`, `ResponseStatus`) are documented: implementing `Provider` is supported, and implementors name them.
+- The request and response types under `providers::` (`Message`, `ContentBlock`, `ModelRequest`, `ProviderToolDefinition`, `ToolChoice`, `StreamEvent`, `ModelResponse`, `ResponseStatus`) are documented: implementing `ProviderLike` is supported, and implementors name them.
 - A type that is genuinely internal becomes `pub(crate)` instead. `tools::ToolFile` is the example: callers go through `Tool::from_tool_file(definition: &str)` and never name the struct.
 - `#[doc(hidden)]` is reserved for items a macro or trait forces `pub` that are useless even to implementors; there are currently none.
 

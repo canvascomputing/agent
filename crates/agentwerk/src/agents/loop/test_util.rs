@@ -9,7 +9,7 @@ use crate::agents::agent::Agent;
 use crate::agents::tickets::{Ticket, TicketQueue};
 use crate::event::Event;
 use crate::providers::types::{ModelResponse, ResponseStatus, TokenUsage};
-use crate::providers::{ContentBlock, Message, Provider, ProviderError, ProviderResult};
+use crate::providers::{ContentBlock, Message, ProviderError, ProviderResult};
 use crate::schemas::Schema;
 use crate::tools::ManageTicketsTool;
 
@@ -45,7 +45,7 @@ impl MockProvider {
     }
 }
 
-impl Provider for MockProvider {
+impl crate::providers::ProviderLike for MockProvider {
     fn respond(
         &self,
         request: crate::providers::ModelRequest,
@@ -263,7 +263,7 @@ pub fn interactive_chatbot(provider: &Arc<MockProvider>) -> Agent {
     Agent::new()
         .name("chatbot")
         .interactive()
-        .provider(provider.clone() as Arc<dyn Provider>)
+        .provider(provider.clone())
         .model("mock")
         .role("test")
         .build()
@@ -272,7 +272,7 @@ pub fn interactive_chatbot(provider: &Arc<MockProvider>) -> Agent {
 pub fn task_agent(provider: &Arc<MockProvider>) -> Agent {
     Agent::new()
         .name("agent")
-        .provider(provider.clone() as Arc<dyn Provider>)
+        .provider(provider.clone())
         .model("mock")
         .role("test")
         .build()
@@ -315,7 +315,7 @@ pub async fn run_one(
     tickets.agent(
         Agent::new()
             .name("tester")
-            .provider(provider.clone() as Arc<dyn Provider>)
+            .provider(provider.clone())
             .model("mock")
             .role("test")
             .tool(ManageTicketsTool)
@@ -363,7 +363,7 @@ pub async fn run_with_context_window(
     tickets.agent(
         Agent::new()
             .name("tester")
-            .provider(provider.clone() as Arc<dyn Provider>)
+            .provider(provider.clone())
             .model(Model::from_name("mock").context_window(context_window_size))
             .role("test")
             .build(),
@@ -406,7 +406,7 @@ pub async fn run_compaction(
     tickets.agent(
         Agent::new()
             .name("tester")
-            .provider(provider.clone() as Arc<dyn Provider>)
+            .provider(provider.clone())
             .model("claude-sonnet-4-20250514")
             .role("test")
             .tool(ManageTicketsTool)

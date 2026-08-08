@@ -18,7 +18,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use agentwerk::event::{Event, EventKind, EventName};
-use agentwerk::providers::{model_from_env, provider_from_env};
+use agentwerk::providers::{Model, Provider};
 use agentwerk::schemas::Schema;
 use agentwerk::tools::{ManageTicketsTool, Tool, ToolResult};
 use agentwerk::{Agent, Ticket, TicketQueue};
@@ -29,8 +29,8 @@ const ROLE: &str = include_str!("prompts/agent.role.md");
 #[tokio::main]
 async fn main() {
     let args = CliArgs::parse();
-    let provider = provider_from_env().expect("LLM provider required");
-    let model = model_from_env().expect("model name required");
+    let provider = Provider::from_env().expect("LLM provider required");
+    let model = Model::from_env().expect("model name required");
     let style = Style::detect();
 
     let partitions = partition(args.n, args.partitions);
@@ -58,7 +58,7 @@ async fn main() {
         tickets.agent(
             Agent::new()
                 .name(format!("agent_{a}"))
-                .provider(Arc::clone(&provider))
+                .provider(provider.clone())
                 .model(&model)
                 .role(ROLE.trim())
                 .label("compute")

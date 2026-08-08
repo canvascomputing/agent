@@ -30,7 +30,7 @@ use std::sync::Arc;
 
 use agentwerk::agents::tickets::{Author, Reply, ReplyContent};
 use agentwerk::event::{Event, EventKind, EventName};
-use agentwerk::providers::{context_window_from_env, model_from_env, Model};
+use agentwerk::providers::Model;
 use agentwerk::tools::{
     GlobTool, GrepTool, ListDirectoryTool, ManageTicketsTool, ReadFileTool, ReadTicketsTool,
     WriteFileTool,
@@ -54,11 +54,9 @@ async fn main() {
     // thresholds still derive from the model itself; this knob only
     // changes what the REPL prints.
     let test_window: Option<u64> = std::env::args().nth(1).and_then(|s| s.parse().ok());
-    let real_window = context_window_from_env().or_else(|| {
-        model_from_env()
-            .ok()
-            .and_then(|name| Model::from_name(&name).get_context_window())
-    });
+    let real_window = Model::from_env()
+        .expect("model name required")
+        .get_context_window();
     let effective_window = test_window.or(real_window);
     match (test_window, real_window) {
         (Some(w), _) => {
@@ -104,10 +102,9 @@ async fn main() {
 
     tickets.on_event(move |e| handler(e));
     let _agent = tickets.agent(
-        Agent::new()
+        Agent::from_env()
             .name("orchestrator")
             .interactive()
-            .from_env()
             .role(role)
             .dir(&cwd)
             .tool(GlobTool)

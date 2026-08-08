@@ -9,7 +9,6 @@ use super::common;
 
 use agentwerk::agents::tickets::Author;
 use agentwerk::event::EventKind;
-use agentwerk::providers::Model;
 use agentwerk::{Agent, Event, Ticket, TicketQueue};
 
 // Pins a known context window: the trigger stays quiet on a model whose window
@@ -134,7 +133,7 @@ async fn summariser_produces_text_when_compaction_fires_against_live_llm() {
     tickets.agent(
         Agent::new()
             .provider(provider)
-            .model(Model::from_name(&model).context_window(LOCAL_CTX))
+            .model(model.context_window(LOCAL_CTX))
             .role("{context}\n\nAnswer the question in plain text. Do not call any tools.")
             .build(),
     );

@@ -381,7 +381,6 @@ mod tests {
         use crate::agents::agent::Agent;
         use crate::agents::tickets::TicketQueue;
         use crate::event::EventKind;
-        use crate::providers::Provider;
         use std::sync::{Arc, Mutex};
 
         let provider = MockProvider::with_results(vec![
@@ -408,7 +407,7 @@ mod tests {
         tickets.agent(
             Agent::new()
                 .name("tester")
-                .provider(provider as Arc<dyn Provider>)
+                .provider(provider)
                 .model("mock")
                 .role("test")
                 .build(),
@@ -450,7 +449,6 @@ mod tests {
     async fn cancel_during_backoff_sleep_aborts_immediately() {
         use crate::agents::agent::Agent;
         use crate::agents::tickets::TicketQueue;
-        use crate::providers::Provider;
         use std::sync::{Arc, Mutex};
 
         let provider =
@@ -474,7 +472,7 @@ mod tests {
         tickets.agent(
             Agent::new()
                 .name("tester")
-                .provider(provider as Arc<dyn Provider>)
+                .provider(provider)
                 .model("mock")
                 .role("test")
                 .build(),
@@ -507,7 +505,7 @@ mod tests {
     use crate::agents::agent::Agent;
     use crate::agents::tickets::{Reply, ReplyContent, TicketQueue};
     use crate::event::{Event, EventKind};
-    use crate::providers::{ContentBlock, Message, Provider};
+    use crate::providers::{ContentBlock, Message};
     use crate::tools::{Tool, ToolResult};
 
     type BoomEditor = Box<dyn Fn(&[Event], &mut Vec<Reply>) + Send + Sync>;
@@ -543,7 +541,7 @@ mod tests {
         tickets.agent(
             Agent::new()
                 .name("tester")
-                .provider(provider.clone() as Arc<dyn Provider>)
+                .provider(provider.clone())
                 .model("mock")
                 .role("test")
                 .tool(boom)

@@ -7,7 +7,7 @@ The invariants that shape how code fits together. Layout says where code lives; 
 **A run has three stages: build the `Agent`, bind it to a `TicketQueue`, drive the queue with `start` (long-lived) or `finish` (process a fixed batch and return).**
 
 ```rust
-let agent = Agent::new().from_env().build();
+let agent = Agent::from_env().build();
 tickets.agent(agent);
 tickets.finish().await;
 ```
@@ -123,9 +123,9 @@ Two layers of state exist. The per-ticket replies live on `Ticket::replies`: eve
 
 **Each concrete provider owns a `reqwest::Client` directly. There is no transport abstraction.**
 
-- The `Provider` trait fulfils one contract: `respond` (drive one turn) plus per-vendor metadata.
+- The `ProviderLike` trait fulfils one contract: `respond` (drive one turn) plus per-vendor metadata. Callers hold it as a `Provider`, a cloneable handle any implementer converts into.
 - `ModelRequest`, `Message`, `ContentBlock`, and `TokenUsage` are the request and response types every provider converts to and from.
-- Those types, plus `ModelResponse`, `StreamEvent`, `ResponseStatus`, `ToolChoice`, and `ProviderToolDefinition`, are `pub` and documented: the `Provider` trait is a supported extension point, and its implementors name them.
+- Those types, plus `ModelResponse`, `StreamEvent`, `ResponseStatus`, `ToolChoice`, and `ProviderToolDefinition`, are `pub` and documented: the `ProviderLike` trait is a supported extension point, and its implementors name them.
 - HTTP error mapping is shared through `providers::map_http_errors` plus a provider-specific `classify_error`; SSE parsing lives in `providers::stream`.
 - Retry happens at the request level using `Policies::max_request_retries` and `request_retry_delay`; vendor code does not retry.
 

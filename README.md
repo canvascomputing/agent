@@ -5,15 +5,14 @@
 <h1 align="center">agentwerk</h1>
 
 <div align="center">
-  <strong>A minimal Rust crate for running many agents in parallel.</strong>
+  <strong>A minimal Rust & Python library for running many agents in parallel.</strong>
 </div>
 
 <div align="center">
   <a href="#installation">Installation</a> •
+  <a href="crates/agentwerk-py/README.md">Python</a> •
   <a href="#quick-start">Quick Start</a> •
-  <a href="#agent-swarms">Agent Swarms</a> •
-  <a href="#demo">Demo</a> •
-  <a href="#use-cases">Use Cases</a> •
+  <a href="#api">API</a> •
   <a href="#development">Development</a>
 </div>
 
@@ -49,8 +48,7 @@ use agentwerk::tools::{GrepTool, ReadFileTool};
 
 #[tokio::main]
 async fn main() {
-    let agent = Agent::new()
-        .from_env()
+    let agent = Agent::from_env()
         .role("You are a Rust developer who explores source files to answer questions.")
         .tool(ReadFileTool)
         .tool(GrepTool)
@@ -77,11 +75,10 @@ let notes = Knowledge::load("./notes")?;
 
 for _ in 0..4 {
     tickets.agent(
-        Agent::new()
+        Agent::from_env()
             .label("scan")
             .role("Grep for code that can panic. File a `report` ticket per finding, and note what you learn.")
             .knowledge(&notes)
-            .from_env()
             .tool(GrepTool)
             .tool(ManageTicketsTool)
             .build(),
@@ -89,11 +86,10 @@ for _ in 0..4 {
 }
 
 tickets.agent(
-    Agent::new()
+    Agent::from_env()
         .label("report")
         .role("Read the cited file and explain the fix in two sentences.")
         .knowledge(&notes)
-        .from_env()
         .tool(ReadFileTool)
         .build(),
 );
@@ -150,12 +146,11 @@ An `Agent` is the core entity of agentwerk. It has access to tools for solving t
 ```rust
 use agentwerk::tools::ReadFileTool;
 
-let agent = Agent::new()
+let agent = Agent::from_env()
     .name("agent_0")
     .label("math")
     .role("You are an arithmetic agent. Compute step by step and show your work.")
     .tool(ReadFileTool)
-    .from_env()
     .build();
 
 tickets.agent(agent);
@@ -210,7 +205,7 @@ let agent = Agent::new()
     .model("claude-sonnet-4-20250514");
 
 // Or read both from the environment.
-let agent = Agent::new().from_env();
+let agent = Agent::from_env();
 ```
 
 <details>
@@ -220,9 +215,16 @@ let agent = Agent::new().from_env();
 |--------|-------------|
 | `provider(provider)` | Define the LLM provider. |
 | `model(model)` | Set the model. |
-| `from_env()` | Read environment variables for configuration (see [DEVELOPMENT.md](DEVELOPMENT.md)). |
+| `Agent::from_env()` | Read the provider and the model from environment variables. |
 
-You can explicitly read the model or provider from environment variables with: `provider_from_env()` or `model_from_env()`.
+You can also read the model or provider individually: `.provider(Provider::from_env()?)` or `.model(Model::from_env()?)`.
+
+| Variable | Description |
+|----------|-------------|
+| `LITELLM_PROVIDER` | Choose `anthropic`, `mistral`, `openai`, or `litellm` outright, ahead of the keys below. |
+| `LITELLM_API_KEY`, `MISTRAL_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` | Authenticate against that vendor. The first one set picks the provider, in this order. |
+| `LITELLM_BASE_URL`, `MISTRAL_BASE_URL`, `ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL` | Point that vendor at a different endpoint. |
+| `SSL_CERT_FILE`, `SSL_CERT_DIR` | Trust these CA certificates instead of the built-in root store. |
 
 </details>
 
@@ -252,7 +254,11 @@ Claude, GPT, Mistral, and Qwen families are pre-configured.
 | `reasoning_effort(effort)` | Set the reasoning level. |
 | `get_reasoning_effort()` | Get the configured effort. |
 
-You can use `context_window_from_env()` to read the context window size from environment variables, see [DEVELOPMENT.md](DEVELOPMENT.md).
+| Variable | Description |
+|----------|-------------|
+| `MODEL` | Model name. |
+| `ANTHROPIC_MODEL`, `OPENAI_MODEL`, `MISTRAL_MODEL`, `LITELLM_MODEL` | Model name for the detected provider, read when `MODEL` is unset. |
+| `MODEL_CONTEXT_WINDOW` | Context window size in tokens. |
 
 </details>
 
@@ -265,10 +271,9 @@ You can use `context_window_from_env()` to read the context window size from env
 The `TicketQueue` is the core data structure of agentwerk allowing to coordinate complex interactions.
 
 ```rust
-let analyst = Agent::new()
+let analyst = Agent::from_env()
     .name("analyst")
     .label("analysis")
-    .from_env()
     .build();
 
 tickets.agent(analyst);
