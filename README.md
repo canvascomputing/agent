@@ -309,12 +309,7 @@ let report: Report = serde_json::from_value(ticket.result.clone().unwrap())?;
 | Method | Description |
 |--------|-------------|
 | `results()` | Get the result of every finished ticket, in creation order. |
-| `results_for_label(label)` | Get the result of every finished ticket carrying a label. |
-| `results_for_agent(name)` | Get the result of every finished ticket claimed by an agent. |
-| `result_for_ticket(key)` | Get one ticket's result by key. |
 | `tickets()` | Get every ticket in creation order. |
-| `tickets_for_label(label)` | Get every ticket carrying a label, in any status. |
-| `tickets_for_agent(name)` | Get every ticket claimed by an agent, in any status. |
 | `find_ticket(condition)` | Get the earliest ticket matching a condition. |
 | `find_tickets(condition)` | Get every ticket matching a condition. |
 | `get_ticket(key)` | Get one ticket by key. |

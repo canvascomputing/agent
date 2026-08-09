@@ -146,7 +146,7 @@ InvalidRequest, UnexpectedStatus, MissingKey, RequestError               // reje
 - Example: `set_extension()`, `get_extension()`.
 - Builder methods remain unprefixed.
 - A public method returning `bool` is `is_<state>` or `has_<thing>`: `is_finished`, `is_cancelled`, `has_label`. A bare past participle such as `label_cancelled` reads as a field, not a question.
-- `get_<name>` is reserved for reading back a value a builder set. A lookup by key keeps it for the `HashMap::get` sense, which is why `get_ticket(key)` stands apart from `tickets_for_label(label)`.
+- `get_<name>` is reserved for reading back a value a builder set. A lookup by key keeps it for the `HashMap::get` sense, which is why `get_ticket(key)` stands apart from `find_ticket(matches)`.
 
 ## Lifecycle
 
@@ -463,7 +463,7 @@ A `Schema` constrains the result an agent produces for a ticket.
 
 - One `h1` per file, the title. Every section is `h2`, every subsection `h3`. No wrapper heading above a group of sections.
 - `h2` is Title Case, `h3` is Sentence case.
-- A method placeholder is spelled as what the caller passes, never a single letter: `max_turns(count)`, `cancel(matches)`, `results_for_label(label)`. In a bullet list the bare method name carries no parentheses at all, since the description says what it takes.
+- A method placeholder is spelled as what the caller passes, never a single letter: `max_turns(count)`, `cancel(matches)`, `schema_for_label(label, schema)`. In a bullet list the bare method name carries no parentheses at all, since the description says what it takes.
 - Centered blocks use `<div align="center">`. `align` is not allowed on `<p>` by the crates.io sanitizer, so `<p align="center">` renders left-aligned there.
 
 ## README Tables

@@ -1272,43 +1272,6 @@ impl TicketQueue {
             .filter_map(|t| t.result)
             .collect()
     }
-
-    /// Get the result of every finished ticket carrying a label.
-    pub fn results_for_label(&self, label: &str) -> Vec<serde_json::Value> {
-        self.find_tickets(|t| t.is_finished() && t.has_label(label))
-            .into_iter()
-            .filter_map(|t| t.result)
-            .collect()
-    }
-
-    /// Get the result of every finished ticket claimed by an agent.
-    pub fn results_for_agent(&self, agent_name: &str) -> Vec<serde_json::Value> {
-        self.find_tickets(|t| t.is_finished() && t.assignee.as_deref() == Some(agent_name))
-            .into_iter()
-            .filter_map(|t| t.result)
-            .collect()
-    }
-
-    /// Get one ticket's result by key.
-    ///
-    /// `None` while the ticket is unfinished, so a handover child can read its
-    /// parent's result through `ticket.parent` without checking the status.
-    pub fn result_for_ticket(&self, key: &str) -> Option<serde_json::Value> {
-        self.get_ticket(key).filter(Ticket::is_finished)?.result
-    }
-
-    /// Get every ticket carrying a label, in any status.
-    pub fn tickets_for_label(&self, label: &str) -> Vec<Ticket> {
-        self.find_tickets(|t| t.has_label(label))
-    }
-
-    /// Get every ticket claimed by an agent, in any status.
-    ///
-    /// A ticket only labelled with the agent's name is not counted: a label
-    /// makes a ticket eligible, `assignee` records the agent that claimed it.
-    pub fn tickets_for_agent(&self, agent_name: &str) -> Vec<Ticket> {
-        self.find_tickets(|t| t.assignee.as_deref() == Some(agent_name))
-    }
 }
 
 #[cfg(test)]
@@ -1555,101 +1518,6 @@ mod tests {
     }
 
     #[test]
-    fn results_for_label_returns_only_matching_label() {
-        let (queue, _tmp) = test_queue();
-        queue.ticket(Ticket::new("a").label("analysis"));
-        queue.ticket(Ticket::new("b").label("other"));
-        let key_a = queue
-            .claim(|t| t.task == serde_json::json!("a"), "agent")
-            .unwrap();
-        let key_b = queue
-            .claim(|t| t.task == serde_json::json!("b"), "agent")
-            .unwrap();
-        queue
-            .set_result(&key_a, serde_json::json!({"score": 7}))
-            .unwrap();
-        queue.set_finished_by(&key_a, "agent").unwrap();
-        queue
-            .set_result(&key_b, serde_json::json!({"score": 99}))
-            .unwrap();
-        queue.set_finished_by(&key_b, "agent").unwrap();
-        assert_eq!(
-            queue.results_for_label("analysis"),
-            vec![serde_json::json!({"score": 7})]
-        );
-    }
-
-    #[test]
-    fn results_for_agent_returns_only_the_claiming_agents_results() {
-        let (queue, _tmp) = test_queue();
-        queue.task("a");
-        queue.task("b");
-        let key_a = queue
-            .claim(|t| t.task == serde_json::json!("a"), "scout")
-            .unwrap();
-        let key_b = queue
-            .claim(|t| t.task == serde_json::json!("b"), "writer")
-            .unwrap();
-        attach_done_result(&queue, &key_a, "from scout");
-        attach_done_result(&queue, &key_b, "from writer");
-        assert_eq!(
-            queue.results_for_agent("scout"),
-            vec![serde_json::json!("from scout")]
-        );
-    }
-
-    #[test]
-    fn result_for_ticket_is_none_until_the_ticket_finishes() {
-        let (queue, _tmp) = test_queue();
-        let key = queue.task("work");
-        queue.set_result(&key, serde_json::json!("early")).unwrap();
-        assert_eq!(queue.result_for_ticket(&key), None);
-        queue.set_finished_by(&key, "agent").unwrap();
-        assert_eq!(
-            queue.result_for_ticket(&key),
-            Some(serde_json::json!("early"))
-        );
-        assert_eq!(queue.result_for_ticket("TICKET-404"), None);
-    }
-
-    #[test]
-    fn tickets_for_agent_ignores_a_ticket_only_labelled_with_the_name() {
-        let (queue, _tmp) = test_queue();
-        queue.ticket(Ticket::new("targeted").label("scout"));
-        queue.task("claimed");
-        queue
-            .claim(|t| t.task == serde_json::json!("claimed"), "scout")
-            .unwrap();
-        // The label makes a ticket eligible; only a claim assigns it.
-        assert_eq!(queue.tickets_for_label("scout").len(), 2);
-        let worked = queue.tickets_for_agent("scout");
-        assert_eq!(worked.len(), 1);
-        assert_eq!(worked[0].task, serde_json::json!("claimed"));
-    }
-
-    #[test]
-    fn tickets_for_label_returns_every_status_not_just_finished() {
-        let (queue, _tmp) = test_queue();
-        queue.ticket(Ticket::new("done").label("analysis"));
-        queue.ticket(Ticket::new("todo").label("analysis"));
-        let key = queue
-            .claim(|t| t.task == serde_json::json!("done"), "agent")
-            .unwrap();
-        attach_done_result(&queue, &key, "answer");
-
-        let tasks: Vec<serde_json::Value> = queue
-            .tickets_for_label("analysis")
-            .into_iter()
-            .map(|t| t.task)
-            .collect();
-        assert_eq!(
-            tasks,
-            vec![serde_json::json!("done"), serde_json::json!("todo")]
-        );
-        assert_eq!(queue.results_for_label("analysis").len(), 1);
-    }
-
-    #[test]
     fn stats_for_agent_counts_only_the_tickets_that_agent_worked() {
         let (queue, _tmp) = test_queue();
         queue.ticket(Ticket::new("a").label("scan"));
@@ -1686,16 +1554,6 @@ mod tests {
             1
         );
         assert_eq!(queue.stats().event_count(EventName::TicketCreated), 2);
-    }
-
-    #[test]
-    fn results_for_label_empty_when_no_label_match() {
-        let (queue, _tmp) = test_queue();
-        queue.ticket(Ticket::new("x").label("other"));
-        let key = queue.claim(|t| t.has_label("other"), "agent").unwrap();
-        queue.set_result(&key, serde_json::json!({"n": 1})).unwrap();
-        queue.set_finished_by(&key, "agent").unwrap();
-        assert!(queue.results_for_label("missing").is_empty());
     }
 
     #[tokio::test]

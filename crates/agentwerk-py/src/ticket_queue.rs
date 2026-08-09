@@ -310,24 +310,6 @@ impl PyTicketQueue {
             .collect()
     }
 
-    /// Get every ticket carrying a label, in any status.
-    fn tickets_for_label(&self, py: Python<'_>, label: &str) -> PyResult<Vec<Py<PyTicket>>> {
-        self.inner
-            .tickets_for_label(label)
-            .iter()
-            .map(|ticket| Py::new(py, PyTicket::from_ticket(ticket)))
-            .collect()
-    }
-
-    /// Get every ticket claimed by an agent, in any status.
-    fn tickets_for_agent(&self, py: Python<'_>, agent_name: &str) -> PyResult<Vec<Py<PyTicket>>> {
-        self.inner
-            .tickets_for_agent(agent_name)
-            .iter()
-            .map(|ticket| Py::new(py, PyTicket::from_ticket(ticket)))
-            .collect()
-    }
-
     /// Get every ticket matching a condition.
     fn find_tickets(&self, py: Python<'_>, predicate: Py<PyAny>) -> PyResult<Vec<Py<PyTicket>>> {
         self.inner
@@ -573,44 +555,6 @@ impl PyTicketQueue {
             .iter()
             .map(|value| value_to_py(py, value))
             .collect()
-    }
-
-    /// Get the result of every finished ticket carrying a label.
-    fn results_for_label<'py>(
-        &self,
-        py: Python<'py>,
-        label: &str,
-    ) -> PyResult<Vec<Bound<'py, PyAny>>> {
-        self.inner
-            .results_for_label(label)
-            .iter()
-            .map(|value| value_to_py(py, value))
-            .collect()
-    }
-
-    /// Get the result of every finished ticket claimed by an agent.
-    fn results_for_agent<'py>(
-        &self,
-        py: Python<'py>,
-        agent_name: &str,
-    ) -> PyResult<Vec<Bound<'py, PyAny>>> {
-        self.inner
-            .results_for_agent(agent_name)
-            .iter()
-            .map(|value| value_to_py(py, value))
-            .collect()
-    }
-
-    /// Get one ticket's result by key.
-    fn result_for_ticket<'py>(
-        &self,
-        py: Python<'py>,
-        key: &str,
-    ) -> PyResult<Option<Bound<'py, PyAny>>> {
-        match self.inner.result_for_ticket(key) {
-            Some(value) => Ok(Some(value_to_py(py, &value)?)),
-            None => Ok(None),
-        }
     }
 }
 
