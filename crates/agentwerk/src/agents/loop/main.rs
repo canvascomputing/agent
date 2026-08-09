@@ -1,23 +1,28 @@
-//! Starts one tokio task per registered agent and waits for them on shutdown.
+//! Starts one tokio task per registered agent, decides when the run is over,
+//! and waits for them on shutdown.
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-
-use crate::agents::tickets::TicketQueue;
+use crate::agents::tickets::{now_millis, TicketQueue};
+use crate::event::{EventKind, FinishReason};
 
 use super::agent::run_agent;
 use super::POLL_INTERVAL;
 
+/// Runs until nothing is left to work on, then names the ending exactly once.
+/// Deciding here rather than in whichever caller happens to await means a
+/// limit breached while the host is busy elsewhere still ends the run.
 pub(in crate::agents) async fn run_main_loop(ticket_queue: &TicketQueue) {
-    let shutdown_requested = Arc::clone(&ticket_queue.stop_signal.lock().unwrap());
     let mut running_agents: Vec<tokio::task::JoinHandle<()>> = Vec::new();
     let mut agents_already_started: usize = 0;
 
-    while !shutdown_requested.load(Ordering::Relaxed) {
+    while ticket_queue.run.is_working() {
         let registry = ticket_queue.clone_agents();
         for newly_registered_agent in registry.into_iter().skip(agents_already_started) {
             running_agents.push(tokio::spawn(run_agent(newly_registered_agent)));
             agents_already_started += 1;
+        }
+        if let Some(reason) = ticket_queue.ending_reason() {
+            ticket_queue.run.set_draining(reason);
+            break;
         }
         tokio::time::sleep(POLL_INTERVAL).await;
     }
@@ -25,15 +30,11 @@ pub(in crate::agents) async fn run_main_loop(ticket_queue: &TicketQueue) {
     for agent in running_agents {
         let _ = agent.await;
     }
-}
-
-pub(super) async fn wait_for_signal(signal: &Arc<AtomicBool>) {
-    loop {
-        if signal.load(Ordering::Relaxed) {
-            return;
-        }
-        tokio::time::sleep(POLL_INTERVAL).await;
-    }
+    let reason = ticket_queue.run.reason().unwrap_or(FinishReason::Drained);
+    ticket_queue.stats.record_execution_finished(now_millis());
+    ticket_queue.emit("", "", EventKind::RunFinished { reason });
+    // Last, so a caller that starts another run never overlaps this one.
+    ticket_queue.run.set_finished();
 }
 
 #[cfg(test)]
@@ -82,13 +83,13 @@ mod tests {
                 break;
             }
             if tokio::time::Instant::now() > deadline {
-                run_handle.finish().await;
+                run_handle.finish(|_| true).await;
                 panic!("late-added agent did not finish ticket within 5s");
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
 
-        run_handle.finish().await;
+        run_handle.finish(|_| true).await;
 
         assert_eq!(provider.requests(), 1);
     }
@@ -123,15 +124,15 @@ mod tests {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
         while tickets.get_ticket(&key).unwrap().status != Status::InProgress {
             if tokio::time::Instant::now() > deadline {
-                run_handle.cancel();
-                run_handle.finish().await;
+                run_handle.cancel(|_| true);
+                run_handle.finish(|_| true).await;
                 panic!("agent never claimed the ticket");
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
 
         tickets.set_finished(&key, "resolved by the host").unwrap();
-        run_handle.finish().await;
+        run_handle.finish(|_| true).await;
 
         let ticket = tickets.get_ticket(&key).unwrap();
         assert_eq!(ticket.status, Status::Finished);
@@ -176,13 +177,13 @@ mod tests {
                 break;
             }
             if tokio::time::Instant::now() > deadline {
-                run_handle.finish().await;
+                run_handle.finish(|_| true).await;
                 panic!("late-added agent did not finish ticket within 5s");
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
 
-        tokio::time::timeout(Duration::from_secs(2), run_handle.finish())
+        tokio::time::timeout(Duration::from_secs(2), run_handle.finish(|_| true))
             .await
             .expect("start() did not return within 2s of signal flip");
     }

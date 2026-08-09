@@ -31,7 +31,7 @@ pub(super) async fn run(context: &mut TicketContext<'_>, mut calls: Vec<ToolCall
         });
     }
     let tool_context = ToolContext::new(context.agent.dir())
-        .interrupt_signal(std::sync::Arc::clone(&context.stop_signal))
+        .run(std::sync::Arc::clone(&context.run))
         .registry(std::sync::Arc::new(context.agent.tool_registry().clone()))
         .ticket_queue(std::sync::Arc::clone(context.ticket_queue))
         .agent_name(context.agent.get_name().to_string())
@@ -147,9 +147,9 @@ pub(super) async fn run(context: &mut TicketContext<'_>, mut calls: Vec<ToolCall
         let _ = context
             .ticket_queue
             .set_failed_by(&context.ticket_key, context.agent.get_name());
-        return Step::NextTicket;
+        return Step::ClaimTicket;
     }
-    Step::CheckTicket
+    Step::Evaluate
 }
 
 #[cfg(test)]
@@ -252,7 +252,7 @@ mod tests {
         );
         tickets.ticket(Ticket::new("go").schema(schema_for_partial_sum()));
 
-        let _ = tickets.finish().await;
+        let _ = tickets.finish(|_| true).await;
 
         let injected = user_text(&provider.received()[1]);
         assert!(
@@ -372,7 +372,7 @@ mod tests {
                 .build(),
         );
         tickets.task("go");
-        let _ = tickets.finish().await;
+        let _ = tickets.finish(|_| true).await;
 
         assert_eq!(
             tickets.tickets().into_iter().next().unwrap().status,
@@ -430,7 +430,7 @@ mod tests {
                 .build(),
         );
         tickets.task("go");
-        let _ = tickets.finish().await;
+        let _ = tickets.finish(|_| true).await;
 
         assert_eq!(
             tickets.tickets().into_iter().next().unwrap().status,
@@ -494,7 +494,7 @@ mod tests {
             tool_unblocked.notify_one();
         };
 
-        tokio::join!(tickets.finish(), unblock);
+        tokio::join!(tickets.finish(|_| true), unblock);
         assert_eq!(
             tickets.tickets().into_iter().next().unwrap().status,
             Status::Finished
@@ -554,7 +554,7 @@ mod tests {
         );
         tickets.task("go");
 
-        let _ = tickets.finish().await;
+        let _ = tickets.finish(|_| true).await;
         let events = collected.lock().unwrap().clone();
         let ticket = tickets
             .tickets()
@@ -670,7 +670,7 @@ mod tests {
         );
         tickets.task("go");
 
-        let _ = tickets.finish().await;
+        let _ = tickets.finish(|_| true).await;
         let ticket = tickets
             .tickets()
             .into_iter()

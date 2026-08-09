@@ -315,7 +315,7 @@ impl<P, M> AgentBuilder<P, M> {
 impl AgentBuilder<Provider, Model> {
     /// Create the agent.
     ///
-    /// It starts with a ticket queue of its own, so `.task(...).finish().await`
+    /// It starts with a ticket queue of its own, so `.task(...).finish(|_| true).await`
     /// works without one being set up. `TicketQueue::agent(...)` later moves
     /// those tickets into the shared queue.
     pub fn build(self) -> Agent {
@@ -562,25 +562,22 @@ impl Agent {
         queue.insert(ticket, self.name.clone())
     }
 
-    /// Begin processing tickets, and hand back the ticket queue so results and
-    /// cancellation stay one call away.
+    /// Begin processing tickets, and hand back the ticket queue so results,
+    /// waiting, and cancellation stay one call away.
+    ///
+    /// ```no_run
+    /// # use agentwerk::Agent;
+    /// # async fn run(agent: Agent) {
+    /// let work = agent.start();
+    /// work.finish(|_| true).await;
+    /// # }
+    /// ```
     pub fn start(&self) -> Arc<TicketQueue> {
         let queue = self
             .ticket_queue
             .upgrade()
             .expect("Agent::start requires a bound TicketQueue");
         queue.start();
-        queue
-    }
-
-    /// Process every queued ticket, then hand back the ticket queue so results
-    /// can be read from it.
-    pub async fn finish(&self) -> Arc<TicketQueue> {
-        let queue = self
-            .ticket_queue
-            .upgrade()
-            .expect("Agent::finish requires a bound TicketQueue");
-        let _ = queue.finish().await;
         queue
     }
 }

@@ -2,12 +2,11 @@
 //! calls, and summarizing until the ticket is resolved.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use crate::agents::agent::Agent;
 use crate::agents::policy::Policies;
-use crate::agents::tickets::{policy_violated_kind, Reply, Status, Ticket, TicketQueue};
+use crate::agents::tickets::{policy_violated_kind, Reply, Run, Status, Ticket, TicketQueue};
 use crate::event::{CompactReason, Event, EventKind, PolicyKind};
 use crate::providers::{AsUserMessage, Message, Model, RequestErrorKind};
 
@@ -20,7 +19,7 @@ pub(super) struct TicketContext<'a> {
     pub(super) agent: &'a Agent,
     pub(super) model: &'a Model,
     pub(super) ticket_queue: &'a Arc<TicketQueue>,
-    pub(super) stop_signal: Arc<AtomicBool>,
+    pub(super) run: Arc<Run>,
 
     pub(super) ticket_key: String,
     pub(super) system_prompt: String,
@@ -77,32 +76,31 @@ pub(super) async fn run_agent(agent: Agent) {
         .expect("Agent's TicketQueue was dropped before run() finished");
 
     loop {
-        if should_stop(&agent, &ticket_queue) {
+        if run_is_over(&agent, &ticket_queue) {
             return;
         }
         let Some(mut context) = claim(&agent, &ticket_queue) else {
             tokio::time::sleep(POLL_INTERVAL).await;
             continue;
         };
-        let mut step = Step::CheckTicket;
+        let mut step = Step::Evaluate;
         loop {
             step = match step {
-                Step::CheckTicket => check_ticket(&mut context),
+                Step::Evaluate => evaluate(&mut context),
                 Step::Compact(reason) => compact::run(&mut context, reason).await,
                 Step::Request => request::run(&mut context).await,
                 Step::ToolCalls(calls) => tool_call::run(&mut context, calls).await,
-                Step::NextTicket | Step::Cancel => break,
-                Step::Stop => return,
+                Step::ClaimTicket => break,
             };
         }
     }
 }
 
-fn should_stop(agent: &Agent, ticket_queue: &TicketQueue) -> bool {
-    // finish() swaps in a fresh signal per run, so a snapshot taken once per
-    // agent task would miss the reset; re-read the current signal every check.
-    let stop_signal = Arc::clone(&ticket_queue.stop_signal.lock().unwrap());
-    if stop_signal.load(Ordering::Relaxed) {
+/// True once the agent has no reason to claim again: the run has left
+/// `Working`, or a limit is breached. It emits the `PolicyViolated` for a
+/// breach, so only the outer loop calls it, once, on the way out.
+fn run_is_over(agent: &Agent, ticket_queue: &TicketQueue) -> bool {
+    if !ticket_queue.run.is_working() {
         return true;
     }
     let policies = ticket_queue.policies();
@@ -121,15 +119,13 @@ fn should_stop(agent: &Agent, ticket_queue: &TicketQueue) -> bool {
 /// tickets; write the first message when there is none.
 fn claim<'a>(agent: &'a Agent, ticket_queue: &'a Arc<TicketQueue>) -> Option<TicketContext<'a>> {
     let claimable = |t: &Ticket| {
-        t.status == Status::Todo
-            && agent.handles_labels(&t.labels)
-            && !ticket_queue.is_any_label_cancelled(&t.labels)
+        t.status == Status::Todo && agent.handles_labels(&t.labels) && !ticket_queue.is_cancelled(t)
     };
     let resumable = |t: &Ticket| {
         t.status == Status::InProgress
             && t.labels.iter().any(|l| l == agent.get_name())
             && (t.is_waiting_for_response() || !agent.is_interactive())
-            && !ticket_queue.is_any_label_cancelled(&t.labels)
+            && !ticket_queue.is_cancelled(t)
     };
     let ticket_key = ticket_queue
         .claim(claimable, agent.get_name())
@@ -161,12 +157,11 @@ fn claim<'a>(agent: &'a Agent, ticket_queue: &'a Arc<TicketQueue>) -> Option<Tic
         ticket_queue.emit(&ticket_key, agent_name, EventKind::TicketStarted);
     }
 
-    let stop_signal = Arc::clone(&ticket_queue.stop_signal.lock().unwrap());
     Some(TicketContext {
         agent,
         model: &agent.model,
         ticket_queue,
-        stop_signal,
+        run: Arc::clone(&ticket_queue.run),
 
         ticket_key,
         system_prompt,
@@ -177,25 +172,29 @@ fn claim<'a>(agent: &'a Agent, ticket_queue: &'a Arc<TicketQueue>) -> Option<Tic
 }
 
 /// Re-read the ticket and decide the next step.
-fn check_ticket(context: &mut TicketContext<'_>) -> Step {
-    if should_stop(context.agent, context.ticket_queue) {
-        return Step::Stop;
+fn evaluate(context: &mut TicketContext<'_>) -> Step {
+    // The pure check, not `run_is_over`: the outer loop emits the
+    // `PolicyViolated` a moment later, and emitting it twice would double-count.
+    if !context.ticket_queue.run.is_working()
+        || policy_violated_kind(&context.policies, &context.ticket_queue.stats).is_some()
+    {
+        return Step::ClaimTicket;
     }
     let Some(ticket) = context.ticket() else {
-        return Step::NextTicket;
+        return Step::ClaimTicket;
     };
-    if context.ticket_queue.is_any_label_cancelled(&ticket.labels) {
-        return Step::Cancel;
+    if context.ticket_queue.is_cancelled(&ticket) {
+        return Step::ClaimTicket;
     }
     // The transition itself already emitted the terminal event; the agent
     // only moves on to fresh work.
     if ticket.is_resolved() {
-        return Step::NextTicket;
+        return Step::ClaimTicket;
     }
     if !ticket.is_waiting_for_response() {
         if context.agent.is_interactive() {
             // Pause until a caller reply lands; the resume claim re-checks.
-            return Step::NextTicket;
+            return Step::ClaimTicket;
         }
         return silence_retry(context);
     }
@@ -218,7 +217,7 @@ fn silence_retry(context: &mut TicketContext<'_>) -> Step {
         let _ = context
             .ticket_queue
             .set_failed_by(&context.ticket_key, context.agent.get_name());
-        return Step::NextTicket;
+        return Step::ClaimTicket;
     }
     let retried = context.emit(EventKind::SchemaRetried {
         attempt: context.consecutive_schema_failures,
@@ -229,7 +228,7 @@ fn silence_retry(context: &mut TicketContext<'_>) -> Step {
         &context.ticket_key,
         Reply::user_text(context.retry_directive(RESUME_OR_FINISH_DETAIL, &retried)),
     );
-    Step::CheckTicket
+    Step::Evaluate
 }
 
 #[cfg(test)]
@@ -272,7 +271,7 @@ mod tests {
         tickets.task("a");
         tickets.task("b");
 
-        tokio::time::timeout(Duration::from_secs(5), tickets.finish())
+        tokio::time::timeout(Duration::from_secs(5), tickets.finish(|_| true))
             .await
             .expect("finish did not finish within 5s");
 
@@ -306,7 +305,7 @@ mod tests {
 
         tickets.start();
         tickets.task("go");
-        tokio::time::timeout(Duration::from_secs(5), tickets.finish())
+        tokio::time::timeout(Duration::from_secs(5), tickets.finish(|_| true))
             .await
             .expect("finish did not finish within 5s");
 
@@ -362,7 +361,7 @@ mod tests {
         tickets.start();
         tickets.ticket(Ticket::new("go").label("scout"));
         tickets.ticket(Ticket::new("go").label("worker"));
-        tokio::time::timeout(Duration::from_secs(5), tickets.finish())
+        tokio::time::timeout(Duration::from_secs(5), tickets.finish(|_| true))
             .await
             .expect("finish did not finish within 5s");
 
@@ -402,7 +401,7 @@ mod tests {
 
         tickets.start();
         tickets.task("go");
-        tokio::time::timeout(Duration::from_secs(5), tickets.finish())
+        tokio::time::timeout(Duration::from_secs(5), tickets.finish(|_| true))
             .await
             .expect("finish did not finish within 5s");
 
@@ -443,7 +442,7 @@ mod tests {
         tickets.start();
         tickets.ticket(Ticket::new("a").label("alice"));
 
-        tokio::time::timeout(Duration::from_secs(5), tickets.finish())
+        tokio::time::timeout(Duration::from_secs(5), tickets.finish(|_| true))
             .await
             .expect("finish did not finish within 5s");
 
@@ -484,7 +483,7 @@ mod tests {
         tickets.start();
         tickets.ticket(Ticket::new("a").label("alice"));
 
-        tokio::time::timeout(Duration::from_secs(5), tickets.finish())
+        tokio::time::timeout(Duration::from_secs(5), tickets.finish(|_| true))
             .await
             .expect("finish did not finish within 5s");
 
@@ -525,7 +524,7 @@ mod tests {
         tickets.start();
         tickets.ticket(Ticket::new("a").label("alice"));
 
-        tokio::time::timeout(Duration::from_secs(5), tickets.finish())
+        tokio::time::timeout(Duration::from_secs(5), tickets.finish(|_| true))
             .await
             .expect("finish did not finish within 5s");
 
@@ -577,8 +576,8 @@ mod tests {
             "editor must not trigger a re-request"
         );
 
-        tickets.cancel();
-        tickets.finish().await;
+        tickets.cancel(|_| true);
+        tickets.finish(|_| true).await;
     }
 
     #[tokio::test]
@@ -625,7 +624,11 @@ mod tests {
         };
 
         tokio::time::timeout(Duration::from_secs(5), async {
-            tokio::join!(tickets.finish(), inject);
+            tickets.start();
+            // The pause is not the end of the ticket, so the reply lands first
+            // and the finish then waits out the turn it sets off.
+            inject.await;
+            tickets.finish(|_| true).await;
         })
         .await
         .expect("test did not finish within 5s");
@@ -639,7 +642,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn wait_for_ticket_sees_the_reply_the_request_event_announces() {
+    async fn finish_returns_when_an_interactive_agent_pauses_for_input() {
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let provider = MockProvider::with_results(vec![Ok(text_response("hi"))]);
         let tickets = TicketQueue::new();
@@ -651,20 +654,23 @@ mod tests {
         let key = tickets.task("hello");
         tickets.start();
 
-        // Pausing for input is no lifecycle transition, so this resolves only
-        // if `RequestFinished` reaches a waiter after its reply is in the store.
-        let paused = tokio::time::timeout(
+        // Pausing for input is no lifecycle transition and leaves the ticket
+        // `InProgress`, so this returns only if `RequestFinished` reaches the
+        // waiter after the reply is in the store.
+        let waited = key.clone();
+        tokio::time::timeout(
             Duration::from_secs(5),
-            tickets.wait_for_ticket(|t| {
-                t.replies
-                    .last()
-                    .is_some_and(|r| r.author == Author::Assistant)
-            }),
+            tickets.finish(move |t| t.key == waited),
         )
         .await
-        .expect("wait_for_ticket did not resolve within 5s");
-        assert_eq!(paused.map(|t| t.key), Some(key));
-        tickets.cancel();
+        .expect("finish did not return within 5s");
+        let ticket = tickets.get_ticket(&key).unwrap();
+        assert_eq!(ticket.status, Status::InProgress);
+        assert!(ticket
+            .replies
+            .last()
+            .is_some_and(|r| r.author == Author::Assistant));
+        tickets.cancel(|_| true);
     }
 
     #[tokio::test]
@@ -683,7 +689,7 @@ mod tests {
         tickets.agent(interactive_chatbot(&provider));
         tickets.task("hello");
 
-        tokio::time::timeout(Duration::from_secs(5), tickets.finish())
+        tokio::time::timeout(Duration::from_secs(5), tickets.finish(|_| true))
             .await
             .expect("test did not finish within 5s");
 
@@ -753,7 +759,7 @@ mod tests {
         };
 
         tokio::time::timeout(Duration::from_secs(5), async {
-            tokio::join!(tickets.finish(), drive);
+            tokio::join!(tickets.finish(|_| true), drive);
         })
         .await
         .expect("test did not finish within 5s");
@@ -775,7 +781,7 @@ mod tests {
         tickets.agent(task_agent(&provider));
         tickets.task("go");
 
-        tokio::time::timeout(Duration::from_secs(5), tickets.finish())
+        tokio::time::timeout(Duration::from_secs(5), tickets.finish(|_| true))
             .await
             .expect("test did not finish within 5s");
 
@@ -819,7 +825,7 @@ mod tests {
         tickets.agent(task_agent(&provider));
         tickets.task("go");
 
-        tokio::time::timeout(Duration::from_secs(5), tickets.finish())
+        tokio::time::timeout(Duration::from_secs(5), tickets.finish(|_| true))
             .await
             .expect("test did not finish within 5s");
 
@@ -851,7 +857,7 @@ mod tests {
         tickets.agent(task_agent(&provider));
         tickets.task("go");
 
-        tokio::time::timeout(Duration::from_secs(5), tickets.finish())
+        tokio::time::timeout(Duration::from_secs(5), tickets.finish(|_| true))
             .await
             .expect("test did not finish within 5s");
 
@@ -882,15 +888,15 @@ mod tests {
             .request_retry_delay(Duration::from_millis(1));
 
         tickets.start();
-        tickets.cancel();
+        tickets.cancel(|_| true);
 
-        tokio::time::timeout(Duration::from_secs(2), tickets.finish())
+        tokio::time::timeout(Duration::from_secs(2), tickets.finish(|_| true))
             .await
             .expect("run did not exit within 2s of cancel()");
     }
 
     #[tokio::test]
-    async fn cancel_label_keeps_that_pool_off_the_queue_while_others_run() {
+    async fn cancel_keeps_the_matching_pool_off_the_queue_while_others_run() {
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let tickets = TicketQueue::new();
         tickets
@@ -922,7 +928,7 @@ mod tests {
         // Call off the research pool on the live run (start() resets signals), then
         // enqueue both tickets; the analysis pool runs on.
         tickets.start();
-        tickets.cancel_label("research");
+        tickets.cancel(|t| t.has_label("research"));
         tickets.ticket(Ticket::new("hunt").label("research"));
         tickets.ticket(Ticket::new("triage").label("analysis"));
 
@@ -936,7 +942,7 @@ mod tests {
                 break;
             }
             if tokio::time::Instant::now() > deadline {
-                tickets.cancel();
+                tickets.cancel(|_| true);
                 panic!("analysis ticket did not finish within 5s");
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
@@ -954,8 +960,8 @@ mod tests {
         );
         assert_eq!(researcher.requests(), 0, "the researcher never ran");
 
-        tickets.cancel();
-        tokio::time::timeout(Duration::from_secs(2), tickets.finish())
+        tickets.cancel(|_| true);
+        tokio::time::timeout(Duration::from_secs(2), tickets.finish(|_| true))
             .await
             .expect("finish returns after cancel()");
     }
@@ -983,11 +989,11 @@ mod tests {
         );
 
         tickets.task("first");
-        tickets.finish().await;
+        tickets.finish(|_| true).await;
         assert_eq!(tickets.results().pop(), Some(serde_json::json!("first")));
 
         tickets.task("second");
-        tokio::time::timeout(Duration::from_secs(5), tickets.finish())
+        tokio::time::timeout(Duration::from_secs(5), tickets.finish(|_| true))
             .await
             .expect("second finish did not finish within 5s");
         assert_eq!(tickets.results().pop(), Some(serde_json::json!("second")));
@@ -1013,9 +1019,10 @@ mod tests {
         );
 
         agent.task("hello");
-        let queue = tokio::time::timeout(Duration::from_secs(5), agent.finish())
+        let queue = agent.start();
+        tokio::time::timeout(Duration::from_secs(5), queue.finish(|_| true))
             .await
-            .expect("agent.finish did not finish within 5s");
+            .expect("the run did not end within 5s");
         assert_eq!(queue.results().pop(), Some(serde_json::json!("forwarded")));
     }
 
@@ -1061,7 +1068,7 @@ mod tests {
         );
         tickets.task("first");
         tickets.task("second");
-        let _ = tickets.finish().await;
+        let _ = tickets.finish(|_| true).await;
 
         let calls = provider.received();
         assert_eq!(calls.len(), 2);
@@ -1101,7 +1108,7 @@ mod tests {
         );
         tickets.task("first");
         tickets.task("second");
-        let _ = tickets.finish().await;
+        let _ = tickets.finish(|_| true).await;
 
         let prompts = provider.received_system_prompts();
         assert_eq!(prompts.len(), 3);
@@ -1152,7 +1159,7 @@ mod tests {
                 .build(),
         );
         tickets.task("hi");
-        let _ = tickets.finish().await;
+        let _ = tickets.finish(|_| true).await;
 
         let prompts = provider.received_system_prompts();
         assert_eq!(prompts.len(), 2);
@@ -1208,11 +1215,11 @@ mod tests {
         );
 
         tickets.ticket(Ticket::new("alice work").label("a"));
-        let _ = tickets.finish().await;
+        let _ = tickets.finish(|_| true).await;
         assert!(store.index().contains("alice-note"));
 
         tickets.ticket(Ticket::new("bob work").label("b"));
-        let _ = tickets.finish().await;
+        let _ = tickets.finish(|_| true).await;
 
         let bob_prompts = p_b.received_system_prompts();
         assert_eq!(bob_prompts.len(), 1, "bob processed exactly one ticket");
@@ -1257,7 +1264,7 @@ mod tests {
         );
         tickets.task("first");
         tickets.task("second");
-        let _ = tickets.finish().await;
+        let _ = tickets.finish(|_| true).await;
 
         let prompts = provider.received_system_prompts();
         assert_eq!(prompts.len(), 4);

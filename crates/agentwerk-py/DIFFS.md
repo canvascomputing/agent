@@ -10,7 +10,7 @@ Seven rules the surface table below never repeats.
 | `ticket.status == Status::InProgress` | `ticket.status == "in_progress"`: every enum becomes its lowercase string. |
 | `Err(TicketError::TicketMissing { key })` | `RuntimeError("Ticket TICKET-1 not found")`: every error type collapses to one exception. |
 | `agent.knowledge(&store)` where `store: Arc<Knowledge>` | `agent.knowledge(store)`: every `Arc<T>` becomes a plain object, shared by passing it to several agents. |
-| `agent.finish().await` | `await agent.finish()`: every `async fn` becomes awaitable. |
+| `tickets.finish(..).await` | `await tickets.finish(..)`: every `async fn` becomes awaitable. |
 | `agent.task(MyTask { goal, url })` | `agent.task({"goal": .., "url": ..})`: an argument Rust takes by `Serialize` takes any JSON-serializable value. |
 | `ticket.result -> Option<serde_json::Value>` | `ticket.result`: a JSON value becomes a dict, list, or scalar. |
 
@@ -41,7 +41,6 @@ Seven rules the surface table below never repeats.
 | `Agent::task(task) -> String` | `Agent.task(task) -> str` |
 | `Agent::ticket(ticket) -> String` | `Agent.ticket(ticket) -> str` |
 | `Agent::start() -> Arc<TicketQueue>` | `Agent.start()` |
-| `Agent::finish().await` | `await Agent.finish()` |
 | **TicketQueue** | |
 | `TicketQueue::new() -> Arc<Self>` | `TicketQueue()` |
 | `TicketQueue::load(dir)` | `TicketQueue.load(dir)` |
@@ -76,15 +75,6 @@ Seven rules the surface table below never repeats.
 | `TicketQueue::on_result(handler)` | `TicketQueue.on_result(callback)` |
 | `TicketQueue::on_failure(handler)` | `TicketQueue.on_failure(callback)` |
 | `TicketQueue::on_ticket(handler)` | `TicketQueue.on_ticket(callback)` |
-| `TicketQueue::cancel_on(trigger)` | `TicketQueue.cancel_on(awaitable)` |
-| `TicketQueue::cancel_on_event(predicate)` | `TicketQueue.cancel_on_event(predicate)` |
-| `TicketQueue::cancel_on_result(predicate)` | `TicketQueue.cancel_on_result(predicate)` |
-| `TicketQueue::cancel_on_failure(predicate)` | `TicketQueue.cancel_on_failure(predicate)` |
-| `TicketQueue::cancel_label(label)` | `TicketQueue.cancel_label(label)` |
-| `TicketQueue::cancel_label_on_event(label, predicate)` | `TicketQueue.cancel_label_on_event(label, predicate)` |
-| `TicketQueue::cancel_label_on_result(label, predicate)` | `TicketQueue.cancel_label_on_result(label, predicate)` |
-| `TicketQueue::cancel_label_on_failure(label, predicate)` | `TicketQueue.cancel_label_on_failure(label, predicate)` |
-| `TicketQueue::is_label_cancelled(label)` | `TicketQueue.is_label_cancelled(label)` |
 | `TicketQueue::create_ticket_on_event(make)` | `TicketQueue.create_ticket_on_event(make)` |
 | `TicketQueue::create_ticket_on_result(make)` | `TicketQueue.create_ticket_on_result(make)` |
 | `TicketQueue::create_ticket_on_failure(make)` | `TicketQueue.create_ticket_on_failure(make)` |
@@ -99,15 +89,11 @@ Seven rules the surface table below never repeats.
 | `TicketQueue::tickets_for_agent(name)` | `TicketQueue.tickets_for_agent(agent_name)` |
 | `TicketQueue::find_tickets(predicate)` | `TicketQueue.find_tickets(predicate)` |
 | `TicketQueue::find_ticket(predicate)` | `TicketQueue.find_ticket(predicate)` |
-| `TicketQueue::wait_for_event(condition).await` | `await TicketQueue.wait_for_event(condition)` |
-| `TicketQueue::wait_for_result(condition).await` | `await TicketQueue.wait_for_result(condition)`: the `(Ticket, Value)` pair becomes a tuple. |
-| `TicketQueue::wait_for_failure(condition).await` | `await TicketQueue.wait_for_failure(condition)`: the `(Event, Ticket)` pair becomes a tuple. |
-| `TicketQueue::wait_for_ticket(condition).await` | `await TicketQueue.wait_for_ticket(condition)` |
 | `TicketQueue::start()` | `TicketQueue.start()` |
-| `TicketQueue::finish().await` | `await TicketQueue.finish()` |
+| `TicketQueue::finish(matches).await` | `await TicketQueue.finish(matches)`: the results become a list. |
 | `TicketQueue::get_finish_reason()` | `TicketQueue.get_finish_reason()`: the `FinishReason` becomes the string it prints as, such as `policy_violated(turns)`. |
-| `TicketQueue::cancel()` | `TicketQueue.cancel()` |
-| `TicketQueue::is_cancelled()` | `TicketQueue.is_cancelled()` |
+| `TicketQueue::cancel(matches)` | `TicketQueue.cancel(matches)` |
+| `TicketQueue::is_cancelled(ticket)` | `TicketQueue.is_cancelled(ticket)` |
 | `TicketQueue::stats()` | `TicketQueue.stats()` |
 | `TicketQueue::results()` | `TicketQueue.results()` |
 | `TicketQueue::results_for_label(label)` | `TicketQueue.results_for_label(label)` |

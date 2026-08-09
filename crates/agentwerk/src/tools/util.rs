@@ -6,10 +6,9 @@ use std::time::Duration;
 use super::tool::{ToolContext, ToolResult};
 
 /// Execute a command via `sh -c`, returning combined stdout/stderr. Bounded by
-/// `timeout` and interruptible via the context's cancel signal: a fired
-/// cancel drops the pending output future, and `kill_on_drop(true)` cascades
-/// SIGKILL to the subprocess so a hanging `python3` / `sleep` doesn't outlive
-/// the cancel.
+/// `timeout` and interruptible via [`ToolContext::cancelled`]: it drops the
+/// pending output future, and `kill_on_drop(true)` cascades SIGKILL to the
+/// subprocess so a hanging `python3` / `sleep` doesn't outlive the run.
 pub(crate) async fn run_shell_command(
     command: &str,
     timeout: Duration,
@@ -24,7 +23,7 @@ pub(crate) async fn run_shell_command(
 
     let result = tokio::select! {
         biased;
-        _ = ctx.wait_for_cancel() => return ToolResult::error("Command cancelled"),
+        _ = ctx.cancelled() => return ToolResult::error("Command cancelled"),
         r = tokio::time::timeout(timeout, output_fut) => r,
     };
 
@@ -157,16 +156,19 @@ fn suggest_path(ctx_dir: &Path, resolved: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::Ordering;
+    use std::sync::Arc;
     use std::time::Instant;
+
+    use crate::agents::tickets::Run;
+    use crate::event::FinishReason;
 
     #[tokio::test]
     async fn cancel_interrupts_long_running_subprocess() {
-        let ctx = ToolContext::new(std::env::current_dir().unwrap());
-        let flag = ctx.interrupt_signal.clone();
+        let run = std::sync::Arc::new(Run::default());
+        let ctx = ToolContext::new(std::env::current_dir().unwrap()).run(Arc::clone(&run));
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(100)).await;
-            flag.store(true, Ordering::Relaxed);
+            run.set_draining(FinishReason::Cancelled);
         });
 
         let started = Instant::now();

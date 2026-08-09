@@ -328,7 +328,7 @@ pub async fn run_one(
         tickets.task("go");
     }
 
-    let _ = tickets.finish().await;
+    let _ = tickets.finish(|_| true).await;
     let events = collected.lock().unwrap().clone();
     let ticket = tickets
         .tickets()
@@ -370,7 +370,7 @@ pub async fn run_with_context_window(
     );
     tickets.task(task);
 
-    let _ = tickets.finish().await;
+    let _ = tickets.finish(|_| true).await;
     let events = collected.lock().unwrap().clone();
     let ticket = tickets
         .tickets()
@@ -416,7 +416,7 @@ pub async fn run_compaction(
     let schema = Schema::parse(serde_json::json!({"type": "string"})).unwrap();
     tickets.ticket(Ticket::new("go").schema(schema));
 
-    let _ = tickets.finish().await;
+    let _ = tickets.finish(|_| true).await;
     let events = collected.lock().unwrap().clone();
     let ticket = tickets
         .tickets()

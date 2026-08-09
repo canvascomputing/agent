@@ -118,8 +118,8 @@ async fn finds_code_pattern_with_special_chars(
          `{TARGET_SIGNATURE}`? Answer with the file's path."
     ));
 
-    let results = tickets.finish().await;
-    common::print_result(results, tickets.stats());
+    tickets.finish(|_| true).await;
+    common::print_result(&tickets, tickets.stats());
 
     let recorded = calls.lock().unwrap().clone();
 
@@ -156,7 +156,7 @@ async fn finds_code_pattern_with_special_chars(
     );
 
     // The agent's final answer should name calc.rs.
-    let answer = common::last_result_text(results);
+    let answer = common::last_result_text(&tickets);
     assert!(
         answer.contains("calc.rs"),
         "agent should report calc.rs; got: {answer:?}"

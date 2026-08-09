@@ -14,26 +14,18 @@ mod request;
 mod tool_call;
 
 pub(super) use self::main::run_main_loop;
-use self::main::wait_for_signal;
 
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 /// What the agent does next with its claimed ticket.
 enum Step {
-    /// Re-read the ticket and route: request, compact, move on, or stop.
-    CheckTicket,
-    // Proactive resumes at Request so the ticket check cannot re-trigger
-    // its own proactive threshold; Reactive re-checks like any replay.
+    /// Re-read the ticket: it may have been resolved or cancelled since.
+    Evaluate,
     Compact(CompactReason),
     Request,
     ToolCalls(Vec<ToolCall>),
-    /// Stop working this ticket; the outer loop claims the next one.
-    NextTicket,
-    /// The ticket's pool was called off: abandon the ticket where it
-    /// stands (it stays InProgress) and look for other work.
-    Cancel,
-    /// End the agent task.
-    Stop,
+    /// Nothing more to do on this ticket, whatever its status.
+    ClaimTicket,
 }
 
 #[cfg(test)]

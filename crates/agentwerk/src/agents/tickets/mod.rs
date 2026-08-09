@@ -24,12 +24,13 @@ pub use ticket_queue::TicketQueue;
 pub use trajectory::Trajectory;
 
 pub(crate) use ticket::Replies;
+pub(crate) use ticket_queue::Run;
 
 /// Whether the run-wide policies have been exceeded by the current
 /// stats reading. Returns the tripping `PolicyKind` and the
 /// configured limit so callers can emit `PolicyViolated` and assemble
-/// `FinishReason::PolicyViolated`. Used by the `finish` watcher and
-/// the per-agent loop's pre-claim check.
+/// `FinishReason::PolicyViolated`. Used by the main loop's ending check
+/// and the per-agent loop's pre-claim check.
 pub(crate) fn policy_violated_kind(
     policies: &Policies,
     stats: &Stats,

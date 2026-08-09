@@ -129,7 +129,7 @@ async def main(n, partitions, agents):
             )
         )
 
-    await tickets.finish()
+    await tickets.finish(lambda t: True)
 
     partials, failures = {}, []
     for ticket in tickets.tickets():

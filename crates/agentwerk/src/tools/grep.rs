@@ -95,7 +95,7 @@ impl ToolLike for GrepTool {
 
             let outcome = tokio::select! {
                 biased;
-                _ = ctx.wait_for_cancel() => ToolResult::error("Search cancelled"),
+                _ = ctx.cancelled() => ToolResult::error("Search cancelled"),
                 r = tokio::time::timeout(SEARCH_TIMEOUT, handle) => match r {
                     Err(_) => {
                         ToolResult::error(format!(

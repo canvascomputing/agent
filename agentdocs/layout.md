@@ -61,8 +61,8 @@ crates/
 
 `loop/` holds the multi-agent loop, split by state:
 
-- `loop/mod.rs`: module wiring and the `Step` enum naming each state of the per-ticket state machine.
-- `loop/main.rs`: `run_main_loop`, which spawns one tokio task per registered agent and joins them on shutdown.
+- `loop/mod.rs`: module wiring and the `Step` enum naming each action of the per-ticket state machine.
+- `loop/main.rs`: `run_main_loop`, which spawns one tokio task per registered agent, decides when the run is over, joins them, and emits `RunFinished`.
 - `loop/agent.rs`: `run_agent` (outer claim loop plus the inner `Step` match), `TicketContext`, the ticket check, and the silence retry.
 - `loop/compact.rs`: proactive and reactive compaction of a ticket's replies, dispatched to the installed editor or the built-in summarizer.
 - `loop/request.rs`: the provider round-trip with retry and backoff.

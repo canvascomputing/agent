@@ -149,8 +149,8 @@ impl ToolLike for FinishTool {
 
             // Insert the child BEFORE finishing the parent: the child is
             // already `Todo` when the parent leaves the queue, so a
-            // concurrent `pending_count()` poll never reads 0 and `finish()`
-            // cannot drain the chain mid-handover. `parent_key` is resolved
+            // concurrent `work_left` check never reads false and `finish`
+            // cannot end the chain mid-handover. `parent_key` is resolved
             // and `InProgress`, so `set_finished_by` cannot miss it and leave
             // the inserted child orphaned.
             let child_key = ticket_queue.insert(child, agent.clone());
