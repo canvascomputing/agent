@@ -10,7 +10,7 @@ use serde::Serialize;
 use crate::persistence::Persist;
 use crate::providers::{AsUserMessage, Message};
 
-use super::reply::{Author, Reply};
+use super::reply::{Author, Reply, ReplyContent};
 
 /// A `Ticket` is a task plus what assigns and validates it.
 ///
@@ -168,6 +168,21 @@ impl Ticket {
         self.replies
             .last()
             .is_none_or(|r| r.author != Author::Assistant)
+    }
+
+    /// True while the ticket waits on the caller: the model has spoken and
+    /// called no tool. Stricter than the negation of
+    /// [`Self::is_waiting_for_response`], which also holds in the window
+    /// between a tool-calling reply and its results, where the agent is still
+    /// working.
+    pub(crate) fn is_paused(&self) -> bool {
+        self.replies.last().is_some_and(|r| {
+            r.author == Author::Assistant
+                && !r
+                    .content
+                    .iter()
+                    .any(|c| matches!(c, ReplyContent::ToolUse { .. }))
+        })
     }
 
     /// Turn this ticket's replies into the messages sent to the model.
@@ -342,6 +357,51 @@ impl fmt::Display for Status {
 mod tests {
     use super::*;
     use crate::providers::ContentBlock;
+
+    fn assistant(content: Vec<ReplyContent>) -> Ticket {
+        let mut ticket = Ticket::new("chat");
+        ticket.replies.push(Reply {
+            author: Author::Assistant,
+            content,
+            created_at: 0,
+        });
+        ticket
+    }
+
+    #[test]
+    fn paused_when_a_reasoning_reply_carries_thinking_then_text() {
+        // Regression: reasoning models add a Thinking block, which a
+        // text-only check rejects, hanging an interactive turn forever.
+        let ticket = assistant(vec![
+            ReplyContent::Thinking {
+                thinking: "hmm".into(),
+                signature: "s".into(),
+            },
+            ReplyContent::Text { text: "Hi.".into() },
+        ]);
+        assert!(ticket.is_paused());
+    }
+
+    #[test]
+    fn not_paused_while_the_reply_still_carries_a_tool_call() {
+        let ticket = assistant(vec![ReplyContent::ToolUse {
+            id: "c1".into(),
+            name: "read_file".into(),
+            input: serde_json::json!({}),
+        }]);
+        assert!(!ticket.is_paused());
+    }
+
+    #[test]
+    fn not_paused_when_the_last_reply_is_the_caller() {
+        let mut ticket = Ticket::new("chat");
+        ticket.replies.push(Reply {
+            author: Author::User,
+            content: vec![ReplyContent::Text { text: "hey".into() }],
+            created_at: 0,
+        });
+        assert!(!ticket.is_paused());
+    }
 
     #[test]
     fn ticket_label_helpers_compose() {

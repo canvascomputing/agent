@@ -47,15 +47,15 @@ async fn reports_a_secret_from_another_ticket(
          ticket and report the exact combination number it contains.",
     );
 
-    let results = tickets.finish().await;
-    common::print_result(results, tickets.stats());
+    tickets.finish(|_| true).await;
+    common::print_result(&tickets, tickets.stats());
 
     assert!(
         tickets.stats().event_count(EventName::ToolCallStarted) >= 1,
         "agent must call the ticket-reading tool at least once"
     );
 
-    let answer = common::last_result_text(results);
+    let answer = common::last_result_text(&tickets);
     assert!(
         answer.contains(&secret.to_string()),
         "final result must quote the combination {secret} found only in the \

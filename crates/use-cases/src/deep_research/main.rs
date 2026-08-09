@@ -21,7 +21,7 @@ use agentwerk::event::{Event, EventKind, EventName};
 use agentwerk::providers::{Model, Provider, ProviderResult};
 use agentwerk::schemas::Schema;
 use agentwerk::tools::{ReadTicketsTool, Tool, ToolResult};
-use agentwerk::{Agent, Ticket, TicketQueue};
+use agentwerk::{Agent, FinishReason, Ticket, TicketQueue};
 
 const RESEARCHER_1_ROLE: &str = include_str!("prompts/researcher_1.role.md");
 const RESEARCHER_2_ROLE: &str = include_str!("prompts/researcher_2.role.md");
@@ -43,9 +43,13 @@ async fn main() {
     let workdir = prepare_workdir();
 
     let tickets = TicketQueue::new();
-    tickets
-        .cancel_on(tokio::signal::ctrl_c())
-        .dir(workdir.clone());
+    tickets.dir(workdir.clone());
+    let on_ctrl_c = Arc::clone(&tickets);
+    tokio::spawn(async move {
+        if tokio::signal::ctrl_c().await.is_ok() {
+            on_ctrl_c.cancel(|_| true);
+        }
+    });
     tickets.on_event(move |e| event_handler(e));
 
     let researcher_1 = Agent::new()
@@ -103,7 +107,7 @@ async fn main() {
             .label("researcher_1"),
     );
 
-    tickets.finish().await;
+    tickets.finish(|_| true).await;
     let outcome = classify_outcome(&tickets);
 
     print_chain_summary(&tickets);
@@ -164,7 +168,7 @@ fn classify_outcome(tickets: &TicketQueue) -> Outcome {
     if let Some(result) = tickets.results_for_label("report").pop() {
         return Outcome::Report(result);
     }
-    if tickets.is_cancelled() {
+    if tickets.get_finish_reason() == Some(FinishReason::Cancelled) {
         return Outcome::Cancelled;
     }
     Outcome::Stalled

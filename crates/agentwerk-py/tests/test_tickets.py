@@ -1,6 +1,5 @@
 """Tickets, schemas, and ticket-queue state, exercised through the public API."""
 
-import asyncio
 
 import pytest
 
@@ -171,12 +170,6 @@ def test_tickets_for_label_returns_every_status_not_just_finished(queue):
     assert tasks == ["alpha"]
 
 
-def test_cancel_label_on_result_chains(queue):
-    assert isinstance(
-        queue.cancel_label_on_result("scan", lambda ticket, result: False), aw.TicketQueue
-    )
-
-
 def test_policy_readers_return_the_limits_that_were_set(queue):
     queue.max_turns(40).max_time(300.0)
 
@@ -186,14 +179,15 @@ def test_policy_readers_return_the_limits_that_were_set(queue):
     assert queue.get_max_request_retries() == 10
 
 
-def test_cancel_marks_the_queue_cancelled(queue):
-    assert queue.is_cancelled() is False
-    queue.cancel()
-    assert queue.is_cancelled() is True
+def test_cancel_takes_the_matching_tickets_off_the_queue(queue):
+    scan = aw.Ticket("scan the corpus", labels=["scan"])
+    report = aw.Ticket("write it up", labels=["report"])
+    assert queue.is_cancelled(scan) is False
 
+    assert isinstance(queue.cancel(lambda t: t.has_label("scan")), aw.TicketQueue)
 
-def test_cancel_label_chains(queue):
-    assert isinstance(queue.cancel_label("scan"), aw.TicketQueue)
+    assert queue.is_cancelled(scan) is True
+    assert queue.is_cancelled(report) is False
 
 
 def test_stats_reports_zero_counts_before_a_run(queue):
@@ -231,23 +225,6 @@ def test_model_for_agent_is_none_when_no_agent_is_bound(queue):
     assert queue.model_for_agent("scribe") is None
 
 
-async def test_cancel_on_accepts_an_awaitable_and_chains(queue):
-    configured = queue.cancel_on(asyncio.sleep(0))
-    assert isinstance(configured, aw.TicketQueue)
-
-
-def test_cancel_on_event_and_cancel_on_result_chain(queue):
-    configured = queue.cancel_on_event(lambda event: False).cancel_on_result(
-        lambda ticket, result: False
-    )
-    assert isinstance(configured, aw.TicketQueue)
-
-
-def test_cancel_label_on_event_chains(queue):
-    configured = queue.cancel_label_on_event("scan", lambda event: True)
-    assert isinstance(configured, aw.TicketQueue)
-
-
 def test_on_result_receives_the_finished_ticket_and_its_result(queue):
     seen = []
     queue.on_result(lambda ticket, result: seen.append((ticket.key, result)))
@@ -266,26 +243,6 @@ def test_on_failure_receives_the_failed_ticket(queue):
     queue.set_failed(key)
 
     assert seen == [("ticket_failed", key)]
-
-
-def test_cancel_on_failure_stops_the_run(queue):
-    queue.cancel_on_failure(lambda event, ticket: True)
-    key = queue.ticket(aw.Ticket("scan the corpus"))
-    assert not queue.is_cancelled()
-
-    queue.set_failed(key)
-
-    assert queue.is_cancelled()
-
-
-def test_cancel_label_on_failure_calls_off_one_pool_only(queue):
-    queue.cancel_label_on_failure("scan", lambda event, ticket: True)
-    key = queue.ticket(aw.Ticket("scan the corpus", labels=["scan"]))
-
-    queue.set_failed(key)
-
-    assert queue.is_label_cancelled("scan")
-    assert not queue.is_cancelled()
 
 
 def test_create_ticket_on_failure_enqueues_a_retry(queue):
@@ -404,40 +361,23 @@ async def test_run_finished_announces_why_execution_ended(queue):
         if event.kind == "run_finished"
         else None
     )
-    await queue.finish()
+    await queue.finish(lambda t: True)
+    assert queue.get_finish_reason() == "drained"
     assert reasons == ["drained"]
 
 
-async def test_get_finish_reason_reports_nothing_until_the_run_ends(queue):
-    assert queue.get_finish_reason() is None
-    await queue.finish()
-    assert queue.get_finish_reason() == "drained"
-
-
-async def test_wait_for_ticket_returns_none_when_nothing_matches(queue):
-    queue.cancel()
-    assert await queue.wait_for_ticket(lambda t: t.is_finished()) is None
-
-
-async def test_wait_for_ticket_resolves_on_a_ticket_that_already_matches(queue):
-    key = queue.task("work")
-    queue.set_finished(key, "done")
-    found = await queue.wait_for_ticket(lambda t: t.is_finished())
-    assert found.key == key
-
-
-async def test_wait_for_result_hands_back_the_ticket_and_its_result(queue):
+async def test_finish_hands_back_the_results_its_filter_named(queue):
     key = queue.task("work")
     queue.set_finished(key, {"verdict": "clean"})
-    ticket, result = await queue.wait_for_result(lambda t, r: r["verdict"] == "clean")
-    assert ticket.key == key
-    assert result == {"verdict": "clean"}
+    assert await queue.finish(lambda t: t.key == key) == [{"verdict": "clean"}]
 
 
-async def test_wait_for_event_and_failure_return_none_after_cancel(queue):
-    queue.cancel()
-    assert await queue.wait_for_event(lambda e: True) is None
-    assert await queue.wait_for_failure(lambda e, t: True) is None
+async def test_a_cancelled_run_reports_its_reason(queue):
+    queue.start()
+    queue.task("work")
+    queue.cancel(lambda t: True)
+    await queue.finish(lambda t: True)
+    assert queue.get_finish_reason() == "cancelled"
 
 
 def test_result_for_ticket_is_none_until_the_ticket_finishes(queue):

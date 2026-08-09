@@ -42,8 +42,8 @@ async fn creates_file_with_token() -> std::result::Result<(), Box<dyn std::error
          exactly the line `token={token}`."
     ));
 
-    let results = tickets.finish().await;
-    common::print_result(results, tickets.stats());
+    tickets.finish(|_| true).await;
+    common::print_result(&tickets, tickets.stats());
 
     assert!(
         tickets.stats().event_count(EventName::ToolCallStarted) >= 1,

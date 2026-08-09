@@ -57,16 +57,15 @@ impl fmt::Display for PolicyKind {
 
 /// Why execution ended.
 ///
-/// Carried by [`EventKind::RunFinished`], and kept on the queue for
-/// `TicketQueue::get_finish_reason` to read once the run is over.
+/// Carried by [`EventKind::RunFinished`], and handed back by
+/// `TicketQueue::finish` once the wait is over.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FinishReason {
     /// The queue emptied; nothing more to do.
     Drained,
     /// A limit was breached.
     PolicyViolated(PolicyKind),
-    /// Cancellation was requested through `cancel()`, `cancel_on`, or
-    /// `cancel_on_event`.
+    /// A `cancel` left nothing claimable.
     Cancelled,
 }
 
@@ -253,7 +252,7 @@ impl<'a> Measure<'a> {
 ///         eprintln!("[{}] done {}", event.agent_name, event.ticket_key);
 ///     }
 /// });
-/// tickets.finish().await;
+/// tickets.finish(|_| true).await;
 /// # }
 /// ```
 #[derive(Debug, Clone)]

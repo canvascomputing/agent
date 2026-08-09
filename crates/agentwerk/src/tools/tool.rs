@@ -4,14 +4,13 @@ use std::collections::HashSet;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::agents::knowledge::Knowledge;
-use crate::agents::tickets::TicketQueue;
+use crate::agents::tickets::{Run, TicketQueue};
 use crate::providers::types::ContentBlock;
 use crate::providers::{ProviderResult, ProviderToolDefinition};
 
@@ -34,17 +33,16 @@ const PREVIEW_CHARS: usize = 2_000;
 
 /// What a tool receives when it runs.
 ///
-/// Writing your own tool, you need three of these:
+/// Writing your own tool, you need two of these:
 /// - `dir`: the agent's working directory.
-/// - `interrupt_signal`: true once agentwerk is shutting down.
-/// - `wait_for_cancel()`: finishes when the current call is cancelled.
+/// - `cancelled()`: resolves when the current call is given up on.
 ///
 /// agentwerk fills in the rest for the built-in tools.
 #[derive(Clone)]
 pub struct ToolContext {
     /// Directory the tool runs in. Resolve a relative path against it.
     pub dir: PathBuf,
-    pub interrupt_signal: Arc<AtomicBool>,
+    pub(crate) run: Option<Arc<Run>>,
     pub(crate) tool_registry: Option<Arc<ToolRegistry>>,
     pub(crate) ticket_queue: Option<Arc<TicketQueue>>,
     pub(crate) agent_name: Option<String>,
@@ -59,7 +57,7 @@ impl ToolContext {
     pub fn new(dir: PathBuf) -> Self {
         Self {
             dir,
-            interrupt_signal: Arc::new(AtomicBool::new(false)),
+            run: None,
             tool_registry: None,
             ticket_queue: None,
             agent_name: None,
@@ -68,10 +66,8 @@ impl ToolContext {
         }
     }
 
-    /// Use a different cancel signal, usually the one the `TicketQueue`
-    /// shares, so the tool stops when execution does.
-    pub fn interrupt_signal(mut self, signal: Arc<AtomicBool>) -> Self {
-        self.interrupt_signal = signal;
+    pub(crate) fn run(mut self, run: Arc<Run>) -> Self {
+        self.run = Some(run);
         self
     }
 
@@ -108,19 +104,17 @@ impl ToolContext {
         self.agent_name.as_deref()
     }
 
-    /// Finishes once execution is cancelled.
+    /// Resolves once the run starts to finish, whether the caller cancelled it
+    /// or a limit was breached: either way this call is being given up on.
     ///
     /// Pair it with `tokio::select!` so the losing branch is dropped, which
     /// aborts an in-flight HTTP request and, with `kill_on_drop(true)`, ends a
-    /// subprocess. On a standalone context it never finishes, and the `select!`
+    /// subprocess. On a standalone context it never resolves, and the `select!`
     /// behaves like a plain await.
-    pub async fn wait_for_cancel(&self) {
-        const POLL: std::time::Duration = std::time::Duration::from_millis(50);
-        loop {
-            if self.interrupt_signal.load(Ordering::Relaxed) {
-                return;
-            }
-            tokio::time::sleep(POLL).await;
+    pub async fn cancelled(&self) {
+        match &self.run {
+            Some(run) => run.until_draining().await,
+            None => std::future::pending::<()>().await,
         }
     }
 
@@ -221,7 +215,7 @@ pub trait ToolLike: Send + Sync {
     /// Run the tool.
     ///
     /// Cancellation drops the work in progress, so pair anything long-running
-    /// with [`ToolContext::wait_for_cancel`] in a `tokio::select!`.
+    /// with [`ToolContext::cancelled`] in a `tokio::select!`.
     fn call<'a>(
         &'a self,
         input: Value,

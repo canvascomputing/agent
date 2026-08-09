@@ -65,9 +65,10 @@ async def main():
     agent.task(
         "Find every `pub trait` defined under src/ and explain each in one sentence."
     )
-    work = await agent.finish()
+    work = agent.start()
+    results = await work.finish(lambda t: True)
 
-    print(work.results()[-1])
+    print(results[-1])
 
 
 asyncio.run(main())
@@ -270,8 +271,7 @@ See [`TicketQueue`](https://docs.rs/agentwerk/latest/agentwerk/agents/tickets/st
 
 ```python
 tickets.start()
-await tickets.finish()
-answer = tickets.results()[-1]
+answer = (await tickets.finish(lambda t: True))[-1]
 ```
 
 <details>
@@ -280,17 +280,10 @@ answer = tickets.results()[-1]
 | | Method | Description |
 |-|--------|-------------|
 | **Run** | `start()` | Begin processing tickets. |
-| | `await finish()` | Process every queued ticket. |
-| | `get_finish_reason()` | Get why execution ended, or nothing while it runs. |
-| **Wait** | `await wait_for_event(condition)` | Get the first event that matches, waiting until one does. |
-| | `await wait_for_result(condition)` | Get the first finished result that matches, waiting until one does. |
-| | `await wait_for_failure(condition)` | Get the first failure that matches, waiting until one does. |
-| | `await wait_for_ticket(condition)` | Get the first ticket that matches, waiting until one does. |
-| **Stop** | `cancel()` | Cancel the execution. |
-| | `is_cancelled()` | Check whether the execution was cancelled. |
-| | `cancel_on(awaitable)` | Stop execution when another task you supply finishes. |
-| | `cancel_label(label)` | Stop one label's agents. |
-| | `is_label_cancelled(label)` | Check whether one label's agents have been stopped. |
+| **Wait** | `await finish(matches)` | Wait for the matching tickets to be done and get their results. |
+| | `get_finish_reason()` | Get why the last run ended. |
+| **Stop** | `cancel(matches)` | Stop work on the matching tickets. |
+| | `is_cancelled(ticket)` | Check whether a ticket has been cancelled. |
 
 </details>
 
@@ -299,7 +292,7 @@ answer = tickets.results()[-1]
 Access the results of the agents' work:
 
 ```python
-await tickets.finish()
+await tickets.finish(lambda t: True)
 
 answers = tickets.results()
 if answers:
@@ -530,7 +523,6 @@ See [`EventKind`](https://docs.rs/agentwerk/latest/agentwerk/event/enum.EventKin
 Hooks allow you to react to events:
 
 ```python
-tickets.cancel_on_result(lambda ticket, result: result["verdict"] == "malicious")
 
 tickets.create_ticket_on_failure(
     lambda event, ticket: Ticket(ticket.task, labels=["retry"])
@@ -546,12 +538,6 @@ tickets.create_ticket_on_failure(
 | | `on_result(handler)` | Read every finished ticket together with its result. |
 | | `on_failure(handler)` | Read every failure together with the ticket it happened in. |
 | | `on_ticket(handler)` | Read a ticket as it starts, finishes, or fails. |
-| **Stop the run** | `cancel_on_event(condition)` | Stop execution when an event matches. |
-| | `cancel_on_result(condition)` | Stop execution when a finished result matches. |
-| | `cancel_on_failure(condition)` | Stop execution when a failure matches. |
-| **Stop one label** | `cancel_label_on_event(label, condition)` | Stop one label's agents while the rest keep working. |
-| | `cancel_label_on_result(label, condition)` | Stop one label's agents when a finished result matches. |
-| | `cancel_label_on_failure(label, condition)` | Stop one label's agents when a failure matches. |
 | **Add work** | `create_ticket_on_event(make)` | Enqueue a follow-up ticket from any event. |
 | | `create_ticket_on_result(make)` | Enqueue a follow-up ticket from a finished ticket. |
 | | `create_ticket_on_failure(make)` | Enqueue a retry for a ticket that failed. |

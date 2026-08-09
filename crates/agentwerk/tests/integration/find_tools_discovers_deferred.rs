@@ -89,8 +89,8 @@ async fn surfaces_a_deferred_tool_definition() -> std::result::Result<(), Box<dy
          hidden vault tool. Step 2: call `finish`.",
     );
 
-    let results = tickets.finish().await;
-    common::print_result(results, tickets.stats());
+    tickets.finish(|_| true).await;
+    common::print_result(&tickets, tickets.stats());
 
     let recorded = calls.lock().unwrap().clone();
     let find = recorded

@@ -247,60 +247,6 @@ impl PyTicketQueue {
         slf
     }
 
-    /// Stop execution when an event matches.
-    fn cancel_on_event<'py>(slf: PyRef<'py, Self>, predicate: Py<PyAny>) -> PyRef<'py, Self> {
-        slf.inner.cancel_on_event(move |event: &Event| {
-            Python::attach(|py| {
-                predicate
-                    .bind(py)
-                    .call1((to_py_event(event),))
-                    .and_then(|value| value.is_truthy())
-                    .unwrap_or(false)
-            })
-        });
-        slf
-    }
-
-    /// Stop execution when a finished result matches.
-    fn cancel_on_result<'py>(slf: PyRef<'py, Self>, predicate: Py<PyAny>) -> PyRef<'py, Self> {
-        slf.inner
-            .cancel_on_result(move |ticket: &Ticket, result: &Value| {
-                Python::attach(|py| {
-                    call_with_result(py, &predicate, ticket, result)
-                        .and_then(|value| value.is_truthy())
-                        .unwrap_or(false)
-                })
-            });
-        slf
-    }
-
-    /// Stop execution when a failure matches.
-    fn cancel_on_failure<'py>(slf: PyRef<'py, Self>, predicate: Py<PyAny>) -> PyRef<'py, Self> {
-        slf.inner
-            .cancel_on_failure(move |event: &Event, ticket: &Ticket| {
-                Python::attach(|py| {
-                    call_with_ticket(py, &predicate, event, ticket)
-                        .and_then(|value| value.is_truthy())
-                        .unwrap_or(false)
-                })
-            });
-        slf
-    }
-
-    /// Stop execution when another task you supply finishes. Its result is
-    /// discarded; only finishing matters.
-    fn cancel_on<'py>(slf: PyRef<'py, Self>, awaitable: Py<PyAny>) -> PyResult<PyRef<'py, Self>> {
-        let future = Python::attach(|py| {
-            pyo3_async_runtimes::tokio::into_future(awaitable.bind(py).clone())
-        })?;
-        // `TicketQueue::cancel_on` spawns onto the ambient Tokio runtime; a
-        // pymethod call has no runtime entered on its own thread, so enter
-        // the shared one pyo3-async-runtimes already uses for `finish()`.
-        let _guard = pyo3_async_runtimes::tokio::get_runtime().enter();
-        slf.inner.cancel_on(future);
-        Ok(slf)
-    }
-
     /// Enqueue a follow-up ticket from any event. Returning `None` adds
     /// nothing.
     fn create_ticket_on_event<'py>(slf: PyRef<'py, Self>, make: Py<PyAny>) -> PyRef<'py, Self> {
@@ -336,76 +282,6 @@ impl PyTicketQueue {
                 Python::attach(|py| {
                     let produced = call_with_ticket(py, &make, event, ticket).ok()?;
                     built_ticket(&produced)
-                })
-            });
-        slf
-    }
-
-    /// Stop one label's agents while the rest keep working.
-    fn cancel_label<'py>(slf: PyRef<'py, Self>, label: &str) -> PyRef<'py, Self> {
-        slf.inner.cancel_label(label);
-        slf
-    }
-
-    /// Check whether one label's agents have been stopped.
-    ///
-    /// Ask before creating follow-up work: a ticket carrying a stopped label is
-    /// never claimed.
-    fn is_label_cancelled(&self, label: &str) -> bool {
-        self.inner.is_label_cancelled(label)
-    }
-
-    /// Stop one label's agents when an event matches, while the rest keep
-    /// working.
-    fn cancel_label_on_event<'py>(
-        slf: PyRef<'py, Self>,
-        label: &str,
-        predicate: Py<PyAny>,
-    ) -> PyRef<'py, Self> {
-        slf.inner
-            .cancel_label_on_event(label, move |event: &Event| {
-                Python::attach(|py| {
-                    predicate
-                        .bind(py)
-                        .call1((to_py_event(event),))
-                        .and_then(|value| value.is_truthy())
-                        .unwrap_or(false)
-                })
-            });
-        slf
-    }
-
-    /// Stop one label's agents when a finished result matches, while the rest
-    /// keep working.
-    fn cancel_label_on_result<'py>(
-        slf: PyRef<'py, Self>,
-        label: &str,
-        predicate: Py<PyAny>,
-    ) -> PyRef<'py, Self> {
-        slf.inner
-            .cancel_label_on_result(label, move |ticket: &Ticket, result: &Value| {
-                Python::attach(|py| {
-                    call_with_result(py, &predicate, ticket, result)
-                        .and_then(|value| value.is_truthy())
-                        .unwrap_or(false)
-                })
-            });
-        slf
-    }
-
-    /// Stop one label's agents when a failure matches, while the rest keep
-    /// working.
-    fn cancel_label_on_failure<'py>(
-        slf: PyRef<'py, Self>,
-        label: &str,
-        predicate: Py<PyAny>,
-    ) -> PyRef<'py, Self> {
-        slf.inner
-            .cancel_label_on_failure(label, move |event: &Event, ticket: &Ticket| {
-                Python::attach(|py| {
-                    call_with_ticket(py, &predicate, event, ticket)
-                        .and_then(|value| value.is_truthy())
-                        .unwrap_or(false)
                 })
             });
         slf
@@ -470,97 +346,6 @@ impl PyTicketQueue {
             Some(ticket) => Ok(Some(Py::new(py, PyTicket::from_ticket(&ticket))?)),
             None => Ok(None),
         }
-    }
-
-    /// Get the first ticket that matches, waiting until one does. Gives back
-    /// `None` when execution ends first.
-    fn wait_for_ticket<'py>(
-        &self,
-        py: Python<'py>,
-        condition: Py<PyAny>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let inner = Arc::clone(&self.inner);
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let found = inner
-                .wait_for_ticket(|ticket| ticket_predicate(&condition, ticket))
-                .await;
-            Python::attach(|py| match found {
-                Some(ticket) => Ok(Some(Py::new(py, PyTicket::from_ticket(&ticket))?)),
-                None => Ok::<_, PyErr>(None),
-            })
-        })
-    }
-
-    /// Get the first event that matches, waiting until one does. Gives back
-    /// `None` when execution ends first.
-    fn wait_for_event<'py>(
-        &self,
-        py: Python<'py>,
-        condition: Py<PyAny>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let inner = Arc::clone(&self.inner);
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let found = inner
-                .wait_for_event(|event| event_predicate(&condition, event))
-                .await;
-            Ok::<_, PyErr>(found.as_ref().map(to_py_event))
-        })
-    }
-
-    /// Get the first finished result that matches, waiting until one does.
-    /// Gives back `None` when execution ends first.
-    fn wait_for_result<'py>(
-        &self,
-        py: Python<'py>,
-        condition: Py<PyAny>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let inner = Arc::clone(&self.inner);
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let found = inner
-                .wait_for_result(|ticket, result| {
-                    Python::attach(|py| {
-                        call_with_result(py, &condition, ticket, result)
-                            .and_then(|value| value.is_truthy())
-                            .unwrap_or(false)
-                    })
-                })
-                .await;
-            Python::attach(|py| match found {
-                Some((ticket, result)) => Ok(Some((
-                    Py::new(py, PyTicket::from_ticket(&ticket))?,
-                    value_to_py(py, &result)?.unbind(),
-                ))),
-                None => Ok::<_, PyErr>(None),
-            })
-        })
-    }
-
-    /// Get the first failure that matches, waiting until one does. Gives back
-    /// `None` when execution ends first.
-    fn wait_for_failure<'py>(
-        &self,
-        py: Python<'py>,
-        condition: Py<PyAny>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let inner = Arc::clone(&self.inner);
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let found = inner
-                .wait_for_failure(|event, ticket| {
-                    Python::attach(|py| {
-                        call_with_ticket(py, &condition, event, ticket)
-                            .and_then(|value| value.is_truthy())
-                            .unwrap_or(false)
-                    })
-                })
-                .await;
-            Python::attach(|py| match found {
-                Some((event, ticket)) => Ok(Some((
-                    to_py_event(&event),
-                    Py::new(py, PyTicket::from_ticket(&ticket))?,
-                ))),
-                None => Ok::<_, PyErr>(None),
-            })
-        })
     }
 
     /// Read a ticket as it starts, finishes, or fails.
@@ -725,33 +510,54 @@ impl PyTicketQueue {
         }
     }
 
-    fn start<'py>(slf: PyRef<'py, Self>) -> PyRef<'py, Self> {
+    /// Begin processing tickets, on a background task. An empty queue keeps the
+    /// run alive; calling this while one is under way does nothing.
+    fn start(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+        // `TicketQueue::start` spawns onto the ambient Tokio runtime; a pymethod
+        // call has no runtime entered on its own thread, so enter the shared
+        // one pyo3-async-runtimes already uses for `finish()`.
+        let _guard = pyo3_async_runtimes::tokio::get_runtime().enter();
         slf.inner.start();
         slf
     }
 
-    /// Process every queued ticket, then return. Awaitable.
-    fn finish<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+    /// Wait for the matching tickets to be done, then give back their results
+    /// in creation order. Pass `lambda t: True` to wait for the whole run, a
+    /// label to wait for one pool, or a key to wait for one ticket. Awaitable.
+    fn finish<'py>(&self, py: Python<'py>, matches: Py<PyAny>) -> PyResult<Bound<'py, PyAny>> {
         let inner = Arc::clone(&self.inner);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            inner.finish().await;
-            Ok::<_, PyErr>(PyTicketQueue { inner })
+            let results = inner
+                .finish(|ticket| ticket_predicate(&matches, ticket))
+                .await;
+            Python::attach(|py| {
+                results
+                    .iter()
+                    .map(|value| Ok(value_to_py(py, value)?.unbind()))
+                    .collect::<PyResult<Vec<_>>>()
+            })
         })
     }
 
-    /// Get why execution ended, or `None` while it is still running.
+    /// Get why the last run ended, or `None` while one is still going.
     fn get_finish_reason(&self) -> Option<String> {
         self.inner
             .get_finish_reason()
             .map(|reason| reason.to_string())
     }
 
-    fn cancel(&self) {
-        self.inner.cancel();
+    /// Take every matching ticket off the queue. Cancelling every ticket ends
+    /// the run.
+    fn cancel<'py>(slf: PyRef<'py, Self>, matches: Py<PyAny>) -> PyRef<'py, Self> {
+        slf.inner
+            .cancel(move |ticket| ticket_predicate(&matches, ticket));
+        slf
     }
 
-    fn is_cancelled(&self) -> bool {
-        self.inner.is_cancelled()
+    /// Check whether a ticket has been cancelled. Ask before creating follow-up
+    /// work: a cancelled ticket is never claimed.
+    fn is_cancelled(&self, ticket: &PyTicket) -> bool {
+        self.inner.is_cancelled(&ticket.to_ticket())
     }
 
     /// Get the execution statistics: requests, tokens, ticket counts, and the
@@ -840,18 +646,6 @@ fn built_ticket(produced: &Bound<'_, PyAny>) -> Option<Ticket> {
         return None;
     }
     Some(produced.extract::<PyRef<PyTicket>>().ok()?.to_ticket())
-}
-
-/// Ask a Python condition about an event, on the same terms as
-/// [`ticket_predicate`].
-fn event_predicate(predicate: &Py<PyAny>, event: &Event) -> bool {
-    Python::attach(|py| {
-        predicate
-            .bind(py)
-            .call1((to_py_event(event),))
-            .and_then(|value| value.is_truthy())
-            .unwrap_or(false)
-    })
 }
 
 /// Ask a Python condition about a ticket. A conversion or Python error reads as

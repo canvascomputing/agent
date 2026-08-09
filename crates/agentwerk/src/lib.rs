@@ -19,9 +19,10 @@
 //!     .build();
 //!
 //! agent.task("Find every `pub trait` defined under src/ and explain each in one sentence.");
-//! let work = agent.finish().await;
+//! let work = agent.start();
+//! let mut results = work.finish(|_| true).await;
 //!
-//! let result = work.results().pop().unwrap();
+//! let result = results.pop().unwrap();
 //! println!("{}", result.as_str().unwrap_or_default());
 //! # }
 //! ```
@@ -54,7 +55,7 @@
 //!     tickets.ticket(Ticket::new(format!("Summarize {url}")).label("research"));
 //! }
 //!
-//! tickets.finish().await;
+//! tickets.finish(|_| true).await;
 //!
 //! for ticket in tickets.tickets() {
 //!     if let Some(result) = ticket.result {

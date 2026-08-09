@@ -312,23 +312,16 @@ impl PyAgent {
         Ok(slf)
     }
 
-    /// Begin processing tickets, and hand back the ticket queue.
+    /// Begin processing tickets, and hand back the ticket queue so results,
+    /// waiting, and cancellation stay one call away.
+    ///
+    /// An agent that was never built raises here.
     fn start(&self) -> PyResult<PyTicketQueue> {
+        // The run spawns onto the ambient Tokio runtime, which a pymethod call
+        // does not have entered on its own thread.
+        let _guard = pyo3_async_runtimes::tokio::get_runtime().enter();
         Ok(PyTicketQueue {
             inner: self.built()?.start(),
-        })
-    }
-
-    /// Process every queued ticket, then hand back the ticket queue so results
-    /// can be read from it. Awaitable.
-    ///
-    /// An agent that was never built raises when this is called, not when it is
-    /// awaited.
-    fn finish<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let agent = self.built()?.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let inner = agent.finish().await;
-            Ok::<_, PyErr>(PyTicketQueue { inner })
         })
     }
 }

@@ -11,7 +11,6 @@ use crate::schemas::Schema;
 use crate::tools::ToolCall;
 
 use super::agent::TicketContext;
-use super::wait_for_signal;
 use super::Step;
 
 pub(super) async fn run(context: &mut TicketContext<'_>) -> Step {
@@ -20,7 +19,7 @@ pub(super) async fn run(context: &mut TicketContext<'_>) -> Step {
     context.ticket_queue.run_reply_editor(&context.ticket_key);
 
     let Some(ticket) = context.ticket() else {
-        return Step::NextTicket;
+        return Step::ClaimTicket;
     };
     let tools =
         finish_tool_with_ticket_schema(ticket.schema.as_ref(), context.agent.tool_definitions());
@@ -57,10 +56,9 @@ pub(super) async fn run(context: &mut TicketContext<'_>) -> Step {
                     );
                 }
             });
-            let interrupt = &context.stop_signal;
             tokio::select! {
                 biased;
-                _ = wait_for_signal(interrupt) => return Step::Stop,
+                _ = context.run.until_draining() => return Step::ClaimTicket,
                 result = provider.respond(request.clone(), emit_stream) => result,
             }
         };
@@ -79,21 +77,20 @@ pub(super) async fn run(context: &mut TicketContext<'_>) -> Step {
                         reason: error.kind(),
                         message: error.to_string(),
                     });
-                    let interrupt = &context.stop_signal;
                     tokio::select! {
                         biased;
-                        _ = wait_for_signal(interrupt) => return Step::Stop,
+                        _ = context.run.until_draining() => return Step::ClaimTicket,
                         _ = tokio::time::sleep(delay) => {}
                     }
                 }
                 None => {
                     context.fail_with(error.kind(), error.to_string());
-                    return Step::NextTicket;
+                    return Step::ClaimTicket;
                 }
             },
             Err(error) => {
                 context.fail_with(error.kind(), error.to_string());
-                return Step::NextTicket;
+                return Step::ClaimTicket;
             }
         }
     };
@@ -108,7 +105,7 @@ pub(super) async fn run(context: &mut TicketContext<'_>) -> Step {
         );
     }
 
-    // Emitted after the reply lands: a handler or `wait_for_*` condition that
+    // Emitted after the reply lands: a handler or a `finish` filter that
     // resolves the ticket must see the reply the event announces.
     context.emit(EventKind::RequestFinished {
         model: response.model.clone(),
@@ -132,7 +129,7 @@ pub(super) async fn run(context: &mut TicketContext<'_>) -> Step {
         })
         .collect();
     if calls.is_empty() {
-        Step::CheckTicket
+        Step::Evaluate
     } else {
         Step::ToolCalls(calls)
     }
@@ -414,7 +411,7 @@ mod tests {
         );
         tickets.task("go");
 
-        let run_fut = tickets.finish();
+        let run_fut = tickets.finish(|_| true);
         let check_fut = async {
             for _ in 0..20 {
                 tokio::task::yield_now().await;
@@ -479,13 +476,13 @@ mod tests {
         );
         tickets.task("go");
 
-        let run_fut = tickets.finish();
+        let run_fut = tickets.finish(|_| true);
         let cancel_handle = Arc::clone(&tickets);
         let cancel_fut = async {
             for _ in 0..20 {
                 tokio::task::yield_now().await;
             }
-            cancel_handle.cancel();
+            cancel_handle.cancel(|_| true);
             tokio::time::advance(Duration::from_millis(100)).await;
             for _ in 0..20 {
                 tokio::task::yield_now().await;
@@ -548,7 +545,7 @@ mod tests {
                 .build(),
         );
         tickets.task("go");
-        let _ = tickets.finish().await;
+        let _ = tickets.finish(|_| true).await;
         (provider, tickets, results_dir)
     }
 

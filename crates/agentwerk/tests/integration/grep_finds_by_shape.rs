@@ -75,8 +75,8 @@ async fn grep_lists_unknown_function_names() -> std::result::Result<(), Box<dyn 
          not known in advance. Answer with the names.",
     );
 
-    let results = tickets.finish().await;
-    common::print_result(results, tickets.stats());
+    tickets.finish(|_| true).await;
+    common::print_result(&tickets, tickets.stats());
 
     let recorded = calls.lock().unwrap().clone();
 
@@ -91,7 +91,7 @@ async fn grep_lists_unknown_function_names() -> std::result::Result<(), Box<dyn 
     );
 
     // The final answer should report every function name it discovered.
-    let answer = common::last_result_text(results);
+    let answer = common::last_result_text(&tickets);
     assert!(
         answer.contains("area") && answer.contains("perimeter") && answer.contains("clamp"),
         "model should report all three function names; got: {answer:?}"

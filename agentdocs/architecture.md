@@ -9,13 +9,13 @@ The invariants that shape how code fits together. Layout says where code lives; 
 ```rust
 let agent = Agent::from_env().build();
 tickets.agent(agent);
-tickets.finish().await;
+tickets.finish(|_| true).await;
 ```
 
 - The `Agent` builder carries identity, prompt parts, provider and model, tools, working directory, event handler, and a `Weak<TicketQueue>` (dangling by default).
 - `TicketQueue::new` captures its own `Weak<Self>` through `Arc::new_cyclic`, so binding can hand every agent the back-reference it needs at run time.
 - `TicketQueue::agent(a)` (or `agent.ticket_queue(&shared)`) sets that `Weak<Self>` on the agent, drains any tickets the agent had queued in its private default queue into the shared one, and pushes a clone of the agent onto the queue's agents list.
-- `TicketQueue::start` and `finish` spawn one tokio task per registered agent. Each task upgrades its `Weak` once at the start and reads the shared store, policies, stats, and stop signal from the resulting `Arc<TicketQueue>`.
+- `TicketQueue::start` and `finish` spawn one tokio task per registered agent. Each task upgrades its `Weak` once at the start and reads the shared store, policies, stats, and ending from the resulting `Arc<TicketQueue>`.
 - `tickets.task(value)` creates a new ticket and returns its key as `String`. `tickets.reply(&key, content)` appends a text reply to an existing ticket, and the loop's wait-for-input branch picks it up and drives the next turn on the same replies.
 - Use `task` to start a conversation and `reply` to continue it. That is how multi-turn chat is built on top of one ticket.
 
@@ -23,7 +23,7 @@ tickets.finish().await;
 
 **Agents read shared state through one `Arc<TicketQueue>`. Locks are held only around queue and metric operations, never across `provider.respond().await`.**
 
-- The ticket store, policies, stats, stop and cancel signals, and registered-agent list live on `TicketQueue`.
+- The ticket store, policies, stats, ending, cancel filters, and registered-agent list live on `TicketQueue`.
 - The per-agent loop in `agents/loop.rs` claims one ticket, drives it through one or more provider and tool turns, and releases locks before each await.
 - Multiple agents share one queue; a ticket is claimed exactly once.
 - Nested queues are not supported: a single `TicketQueue` is the unit of orchestration.
@@ -61,8 +61,8 @@ tickets.ticket(Ticket::new("Audit src/db.").label("scan"));     // by scope
 
 - Without `handover`, `finish` writes a `result`, attaches it to the current ticket, and transitions to `Finished` through the `write_result` helper. This is terminal work.
 - With `handover`, it does the same and then inserts a child ticket pinned to that agent or label, with the current ticket recorded as its `parent`.
-- The child is inserted BEFORE the parent finishes, so it is already `Todo` when the parent leaves the queue. A concurrent `pending_count()` poll can never see an empty queue between them, and `finish()` cannot drain the chain early.
-- `TicketFinished` and `TicketFailed` are emitted synchronously from the status transition itself, and a count of in-flight transitions holds the drain open until every handler returns, so a `create_ticket_on_result` follow-up is inserted before `finish()` can observe an empty queue.
+- The child is inserted BEFORE the parent finishes, so it is already `Todo` when the parent leaves the queue. A concurrent `work_left` check can never see an empty queue between them, and `finish` cannot end the chain early.
+- `TicketFinished` and `TicketFailed` are emitted synchronously from the status transition itself, and a count of in-flight transitions keeps `work_left` true until every handler returns, so a `create_ticket_on_result` follow-up is inserted before `finish` can observe an empty queue.
 - The alternative, a plain `finish` followed by `manage_tickets::create`, is order-sensitive the other way and leaves the current ticket re-claimed when the order is wrong.
 - An agent that must always chain can no longer be forced to by its tool registry, since every `finish` accepts an optional `handover`. Its role prompt carries that requirement instead, which makes those prompt lines load-bearing.
 - When a turn ends without a `finish` call and no result attached, the loop pushes a corrective directive and retries. This is the same retry path used for schema-validation failures, bounded by `max_schema_retries`; exhaustion emits `PolicyViolated { MaxSchemaRetries, .. }` and `TicketFailed`. Both paths emit `SchemaRetried` first and hand that event to `TicketQueue::edit_directive_on_retry`, so the hook, its budget, and the event a host reads all sit on the queue.
@@ -103,10 +103,10 @@ Two layers of state exist. The per-ticket replies live on `Ticket::replies`: eve
 
 `TicketQueue::on_event(h)` pushes a handler onto an ordered chain. Every installed handler fires on every event, in installation order, and each is handed the same `&Event` rather than its own copy. When no handler is installed, `default_logger` runs in its place.
 
-- That composition is what `cancel_on_event(condition)` is built on: it pushes a handler that calls `cancel()` when the condition matches, so a host's logger and the cancel trigger coexist. Every other hook is one more entry on this chain.
+- That composition is what every hook is built on: `create_ticket_on_event(make)` pushes a handler that files a follow-up when `make` returns one, so a host's logger and the hook coexist.
 - `on_result` filters to `TicketFinished` and unwraps the stored result, `on_failure` filters on `EventKind::is_failure`, and `on_ticket` filters to the three lifecycle kinds.
 - Each of those three resolves `event.ticket_key` to a cloned `Ticket` first, which is why none of them fires on every kind: resolving on `TextChunkReceived` would copy a ticket's whole replies once per chunk.
-- The `_on_result` and `_on_failure` reactors are in turn built on `on_result` and `on_failure`, so the resolve happens in one place.
+- The `create_ticket_on_result` and `create_ticket_on_failure` hooks are in turn built on `on_result` and `on_failure`, so the resolve happens in one place.
 - `EventKind::RunStarted` and `EventKind::RunFinished { reason }` ride the same chain. They are emitted by the `TicketQueue` itself and arrive with an empty `agent_name`, as does `TicketFailed` from a host-driven `set_failed`.
 
 ## New Observables Pick a Channel
@@ -129,17 +129,24 @@ Two layers of state exist. The per-ticket replies live on `Ticket::replies`: eve
 - HTTP error mapping is shared through `providers::map_http_errors` plus a provider-specific `classify_error`; SSE parsing lives in `providers::stream`.
 - Retry happens at the request level using `Policies::max_request_retries` and `request_retry_delay`; vendor code does not retry.
 
-## Cancellation Is Cooperative, Split Into Two Signals
+## The Lifecycle Is Three Verbs Over One Filter
 
-**Two `Arc<AtomicBool>` signals separate "stop the agent tasks" from "external cancel was requested". Both flip on cancel; only the stop signal flips on a policy violation or a clean drain.**
+**`start` starts, `finish(matches)` waits, `cancel(matches)` stops. Both filters are `Fn(&Ticket) -> bool`, so waiting for one pool, one ticket, or the whole run is the same call with a different filter.**
 
-- `TicketQueue::stop_signal` is what the agent tasks and the tools poll. `finish()` flips it on cancel, on policy violation, and on clean drain so the per-agent loop, the in-flight tools, and the join handle all wind down.
-- `TicketQueue::cancel_signal` is flipped only by `cancel()`, `cancel_on(trigger)`, and the three `cancel_on_*` reactors. `is_cancelled()` reads it; a clean drain leaves it untouched so observers can tell the three exit paths apart.
-- The `cancel_label_on_*` reactors leave `cancel_signal` alone: they stop one pool, not the run. `TicketQueue::cancelled_labels` holds those labels, and the loop neither claims nor resumes a ticket carrying one.
-- `cancel()` flips both atomics in sync. `cancel_on*` route through `cancel()` so cancellation triggers compose with the rest of the run's lifecycle.
-- Tools observe the stop signal through `ToolContext::interrupt_signal` and `wait_for_cancel`; pair them with `tokio::select!` so cancel drops the losing branch promptly.
+- `TicketQueue::work_left(matches)` is the one definition of "not done yet", and both the main loop and `finish` ask it. A ticket has work left while it is pending, uncancelled, and not paused for a caller reply.
+- `TicketQueue::cancel_filters` holds what `cancel` took off the queue. The claim and resume path reads it through `is_cancelled(ticket)`, so a cancelled ticket is neither claimed nor resumed and an agent already holding one is taken off it. The ticket stays `InProgress`.
+- A filter runs while the ticket store lock is held, so it MUST NOT call back into the queue: the same rule `find_ticket` and `find_tickets` carry.
+
+## The Run Names Its Own Ending
+
+**`run_main_loop` decides when a run is over and announces it once, rather than whichever caller happens to await. A limit breached while the host is busy elsewhere still ends the run.**
+
+- `TicketQueue::run` is one `Arc<Run>` over a `watch` channel of three phases: `Working`, `Draining(reason)` once the reason is known and the agents are stopping, and `Finished(reason)` once they have stopped and `RunFinished` has been announced. The channel is both the value and the wake, and its sender takes `&self`, so the cell needs neither a lock nor a flag, and a run complete without a reason cannot be written.
+- `TicketQueue::ending_reason()` names a `FinishReason::PolicyViolated(kind)` for a breached limit and `FinishReason::Cancelled` once a cancel leaves nothing claimable. An empty queue is not an ending: a host that called `start()` may still be filing work, and a paused ticket revives on the next reply.
+- `FinishReason::Drained` is named by the `finish` that waited for it, and only when no ticket at all is still open. That is what keeps an interactive chat alive between turns.
+- The main loop joins its agents and emits `EventKind::RunFinished { reason }` before `Run::set_finished`, so a caller that starts another run never overlaps the previous one.
+- Tools observe the ending through `ToolContext::cancelled`; pair it with `tokio::select!` so it drops the losing branch promptly.
 - Dropping the `TicketQueue` while agents still reference it through `Weak` is the public way to abort: the upgrade fails and each task panics out cleanly.
-- `finish()` announces its exit reason as `FinishReason::Drained`, `FinishReason::PolicyViolated(kind)`, or `FinishReason::Cancelled`, in that precedence. The reason is emitted as `EventKind::RunFinished { reason }`.
 
 ## Stats Are Event-Derived, One Writer
 
@@ -177,6 +184,6 @@ Two layers of state exist. The per-ticket replies live on `Ticket::replies`: eve
 **A run stops cleanly when any limit on `Policies` is breached. The check fires `EventKind::PolicyViolated` and exits the per-agent task.**
 
 - The loop calls `policy_violated_kind` at each iteration; a non-`None` return takes the agent off the queue.
-- Token budgets read from `Stats`; `max_time` reads from `Policies` and from `Stats::execution_duration()`. All limits, including `max_time`, route through `policy_violated_kind` and emit `PolicyViolated`; `finish()` carries the matching `FinishReason::PolicyViolated(kind)` back to the caller.
+- Token budgets read from `Stats`; `max_time` reads from `Policies` and from `Stats::execution_duration()`. All limits, including `max_time`, route through `policy_violated_kind` and emit `PolicyViolated`; `get_finish_reason` reports the matching `FinishReason::PolicyViolated(kind)` once the run has ended.
 - The schema-retry budget is applied per-ticket inside the result-writing path, not at the top of the loop.
 - `compact_at` rides on `Policies` for the same per-queue snapshot every limit gets, but it is a trigger rather than a limit: `policy_violated_kind` ignores it, and reaching it costs a compaction, not the run.

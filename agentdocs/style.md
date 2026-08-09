@@ -145,29 +145,41 @@ InvalidRequest, UnexpectedStatus, MissingKey, RequestError               // reje
 
 - Example: `set_extension()`, `get_extension()`.
 - Builder methods remain unprefixed.
-- A public method returning `bool` is `is_<state>` or `has_<thing>`: `is_finished`, `is_cancelled`, `is_label_cancelled`, `has_label`. A bare past participle such as `label_cancelled` reads as a field, not a question.
+- A public method returning `bool` is `is_<state>` or `has_<thing>`: `is_finished`, `is_cancelled`, `has_label`. A bare past participle such as `label_cancelled` reads as a field, not a question.
 - `get_<name>` is reserved for reading back a value a builder set. A lookup by key keeps it for the `HashMap::get` sense, which is why `get_ticket(key)` stands apart from `tickets_for_label(label)`.
+
+## Lifecycle
+
+**Three verbs over one filter: `start` starts, `finish(matches)` waits, `cancel(matches)` stops. A filter is `Fn(&Ticket) -> bool`, so the same call waits for one ticket, one pool, or the whole run.**
+
+```rust
+tickets.start();
+tickets.finish(|t| t.has_label("scan")).await;   // one pool
+tickets.finish(|_| true).await;                  // the whole run
+tickets.cancel(|t| t.has_label("scan"));        // one pool
+```
+
+- A verb takes a filter when it can mean part of the queue, and none when it cannot: `run` starts everything or nothing, so it takes no filter.
+- IMPORTANT: the filter says WHICH tickets, never WHAT to wait for. `finish(|t| t.is_finished())` is a mistake that returns at once: the filter selects the tickets, and "no work left" is the condition, fixed. Name the tickets by key, by label, or by `|_| true`.
+- Do not add a second spelling for the whole-run case. An `All` value or a no-argument overload would make two ways to say one thing, and the explicit `|_| true` is what keeps every call site the same shape.
+- The family was `start`, `finish`, `cancel`, `cancel_label`, `cancel_on`, six `cancel_*_on_*` reactors and four `wait_for_*` methods for several releases. They were one operation at three scopes: waiting for a subset, waiting for the run, and taking a pool off the queue. Adding a filter to the two verbs that can be scoped collapsed all of it; do not grow it back one convenience at a time.
 
 ## Hooks
 
-**A hook's name says when it runs and how much it stops. Trigger and scope are separate axes, and both are spelled out.**
+**A hook's name says when it runs. `on_<trigger>` observes, `<action>_on_<trigger>` reacts.**
 
 ```rust
 on_event(handler)                    // observe
-cancel_on_event(condition)           // react whenever the trigger matches
-cancel()                             // act once, now
-cancel_label_on_event(label, cond)   // react, scoped to one label
+create_ticket_on_result(make)        // react whenever the trigger matches
+edit_replies(key, editor)            // act once, now
 ```
 
 - `on_<trigger>(handler)` observes: the handler sees every `<trigger>` and returns nothing, as in `on_event`, `on_result`, and `on_failure`.
 - `<action>_on_<trigger>(..)` reacts whenever `<trigger>` matches. The action may be more than one word, so `create_ticket_on_result` reads as `create_ticket` plus `on_result`.
-- A bare `<action>(..)` acts once, now: `cancel`, `cancel_label`, `edit_replies`. The `_on_` infix names the trigger of a standing rule, and every method carrying it returns `&Self`.
-- `wait_for_<trigger>(condition)` awaits a single match and hands it back, leaving execution running. It takes no `_on_` infix precisely because it is not a standing rule, and the verb says up front that the call blocks: a reader should not have to know the return type to see that. `ToolContext::wait_for_cancel` sets the verb. The family was `finish_on_*` for one release, to cross the same triggers the hooks do, and that shared shape is what made the two confusable: `finish()` drains the queue, so `finish_on_*` read as "finish when", and every row had to close on "and execution carries on" to undo it.
-- Scope crosses all three forms and lives in the prefix: `cancel*` ends execution, `cancel_label*` ends one label's pool and leaves the others running.
-- IMPORTANT: the trigger fixes the handler's parameters, the action fixes its return type. A caller who knows one hook in a column knows them all: `_on_event` hands over `&Event`, `_on_result` a `&Ticket` and its validated `&Value`, `_on_failure` the `&Event` and the `&Ticket` it happened in. Observing returns `()`, `cancel*` returns `bool`, `create_ticket*` returns `Option<Ticket>`.
-- Every trigger carries a reaction for every action, so the grid has no holes to explain. The three triggers cross `cancel`, `cancel_label`, `create_ticket`, and `wait_for`; `on_ticket` and `wait_for_ticket` sit outside it, keying on a ticket rather than naming a trigger.
-- `wait_for_ticket` takes only the `&Ticket`, where `on_ticket` takes the `&Event` too. It also answers before any event arrives, by reading the tickets already in the store, and there is no event to hand over at that moment. That check is what lets it resolve on a state no transition announces.
-- `<action>_on(value)` names no trigger, because the caller supplies the trigger whole instead of a condition over something agentwerk produces. `cancel_on` is the only one, and it is not renamed after a cancellation signal: `signal` already names the `AtomicBool` pair on `TicketQueue`.
+- A bare `<action>(..)` acts once, now: `cancel`, `edit_replies`. The `_on_` infix names the trigger of a standing rule, and every method carrying it returns `&Self`.
+- IMPORTANT: the trigger fixes the handler's parameters, the action fixes its return type. A caller who knows one hook in a column knows them all: `_on_event` hands over `&Event`, `_on_result` a `&Ticket` and its validated `&Value`, `_on_failure` the `&Event` and the `&Ticket` it happened in. Observing returns `()`, `create_ticket*` returns `Option<Ticket>`.
+- A hook reacts to something agentwerk produces. Anything the caller already holds needs no hook: to stop a pool on a verdict, `finish` for it and `cancel`, rather than a `cancel_on_result` that hides one line of composition behind a method on two language surfaces.
+- `on_ticket` sits outside the trigger grid, keying on a ticket rather than naming a trigger.
 - The editor row is the one exception, and it holds three members: `edit_replies_on_event`, `edit_replies_on_compaction`, and `edit_directive_on_retry`. Compaction and the retry earn the last two because each is a moment agentwerk writes on the host's behalf, so without a hook there the built-in summarizer and the built-in directive are the only ones anyone can have. Both still hand over the `&Event` their trigger names, so the parameter rule above holds: `_on_retry` is the `SchemaRetried` that says which of the two retry paths ran. No `_on_result` or `_on_failure` sibling follows: an editor runs once per request over the batch of events since the previous one, so an `_on_result` sibling would have no next request to act on and an `_on_failure` sibling would be a second rewriter of one ticket's replies, which the singular-editor rule below forbids. A failure is already reachable by matching `EventKind::ToolCallFailed` inside the batch.
 
 ## Editors
@@ -178,7 +190,7 @@ cancel_label_on_event(label, cond)   // react, scoped to one label
 - The value arrives holding what agentwerk would otherwise have used, so an editor that writes nothing keeps the default. No editor returns `Option<T>`: there is nothing left to signal.
 - An async editor takes the value by move and returns the replacement instead: `edit_replies_on_compaction(Fn(Compaction, Vec<Reply>) -> Future<Output = ProviderResult<Vec<Reply>>>)`. Handing back what it was given is how it says it changed nothing, and the `Result` is there because an editor that calls the model can fail. A `&mut` would compile, the way `Tool::call` borrows across its await, but it forces a higher-ranked bound and a `Box::pin` at every call site, where by value a plain `async move` closure works. The Python transform is unchanged: return-the-replacement was already the sixth transform, so this needs no seventh.
 - A hook that rewrites a value is named for that value, not for its trigger alone. Naming it `on_<trigger>` alone reads as an observer and hides what it changes.
-- IMPORTANT: an observer composes, an editor is singular. Every handler on the `on_event` chain runs, and agentwerk stacks `cancel_on_event`, `on_ticket` and the rest there; installing a second editor replaces the first, like `dir` or `max_turns`. Two rewriters of one value would each see the other's output, so stack edits inside a single editor.
+- IMPORTANT: an observer composes, an editor is singular. Every handler on the `on_event` chain runs, and agentwerk stacks `on_ticket`, `create_ticket_on_result` and the rest there; installing a second editor replaces the first, like `dir` or `max_turns`. Two rewriters of one value would each see the other's output, so stack edits inside a single editor.
 
 ## Python Bindings
 
@@ -451,7 +463,7 @@ A `Schema` constrains the result an agent produces for a ticket.
 
 - One `h1` per file, the title. Every section is `h2`, every subsection `h3`. No wrapper heading above a group of sections.
 - `h2` is Title Case, `h3` is Sentence case.
-- A method placeholder is spelled as what the caller passes, never a single letter: `max_turns(count)`, `cancel_on_event(condition)`, `results_for_label(label)`. In a bullet list the bare method name carries no parentheses at all, since the description says what it takes.
+- A method placeholder is spelled as what the caller passes, never a single letter: `max_turns(count)`, `cancel(matches)`, `results_for_label(label)`. In a bullet list the bare method name carries no parentheses at all, since the description says what it takes.
 - Centered blocks use `<div align="center">`. `align` is not allowed on `<p>` by the crates.io sanitizer, so `<p align="center">` renders left-aligned there.
 
 ## README Tables
@@ -484,9 +496,9 @@ A `Schema` constrains the result an agent produces for a ticket.
 - One axis order is chosen and held across every group. Hooks is the model: `event`, `result`, `failure`, in that order, in all of its groups.
 - Within a group, selectors run widest to narrowest: everything, then by label or agent, then by condition, then by key.
 - Singular leads plural where both exist, as `label(label)` and `labels(labels)` already do.
-- An action is followed by the query that reads it back: `cancel()` then `is_cancelled()`, `cancel_label(label)` then `is_label_cancelled(label)`.
+- An action is followed by the query that reads it back: `cancel(matches)` then `is_cancelled(ticket)`.
 - One table holds one receiver. A method on another type goes in the fold's trailing prose, which is why `TicketQueue::model_for_agent` is prose under the Providers fold rather than a fourth `AgentBuilder` row.
-- The Execution fold holds everything that acts once over a run: `start`, `finish`, `get_finish_reason`, the `wait_for_*` family, and `cancel_on` beside the `cancel` it fires. The hooks fold holds only what registers a handler the queue calls back into on every matching event, which is why `cancel_on_event` is there and `cancel_on` is not.
+- The Execution fold holds everything that acts once over a run: `run`, `finish`, `cancel`, and `is_cancelled`. The hooks fold holds only what registers a handler the queue calls back into on every matching event.
 
 ## README Examples
 

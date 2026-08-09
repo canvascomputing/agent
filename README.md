@@ -62,9 +62,10 @@ async fn main() {
         .build();
 
     agent.task("Find every `pub trait` defined under src/ and explain each in one sentence.");
-    let work = agent.finish().await;
+    let work = agent.start();
+    let mut results = work.finish(|_| true).await;
 
-    let result = work.results().pop().unwrap();
+    let result = results.pop().unwrap();
     println!("{}", result.as_str().unwrap_or_default());
 }
 ```
@@ -262,8 +263,7 @@ See [`TicketQueue`](https://docs.rs/agentwerk/latest/agentwerk/agents/tickets/st
 
 ```rust
 tickets.start();
-tickets.finish().await;
-let answer = tickets.results().pop();
+let answer = tickets.finish(|_| true).await.pop();
 ```
 
 <details>
@@ -272,17 +272,10 @@ let answer = tickets.results().pop();
 | | Method | Description |
 |-|--------|-------------|
 | **Run** | `start()` | Begin processing tickets. |
-| | `finish().await` | Process every queued ticket. |
-| | `get_finish_reason()` | Get why execution ended, or nothing while it runs. |
-| **Wait** | `wait_for_event(condition)` | Get the first event that matches, waiting until one does. |
-| | `wait_for_result(condition)` | Get the first finished result that matches, waiting until one does. |
-| | `wait_for_failure(condition)` | Get the first failure that matches, waiting until one does. |
-| | `wait_for_ticket(condition)` | Get the first ticket that matches, waiting until one does. |
-| **Stop** | `cancel()` | Cancel the execution. |
-| | `is_cancelled()` | Check whether the execution was cancelled. |
-| | `cancel_on(trigger)` | Stop execution when another task you supply finishes. |
-| | `cancel_label(label)` | Stop one label's agents. |
-| | `is_label_cancelled(label)` | Check whether one label's agents have been stopped. |
+| **Wait** | `finish(matches).await` | Wait for the matching tickets to be done and get their results. |
+| | `get_finish_reason()` | Get why the last run ended. |
+| **Stop** | `cancel(matches)` | Stop work on the matching tickets. |
+| | `is_cancelled(ticket)` | Check whether a ticket has been cancelled. |
 
 </details>
 
@@ -291,9 +284,7 @@ let answer = tickets.results().pop();
 Access the results of the agents' work:
 
 ```rust
-tickets.finish().await;
-
-if let Some(answer) = tickets.results().pop() {
+if let Some(answer) = tickets.finish(|_| true).await.pop() {
     println!("{answer}");
 }
 
@@ -522,8 +513,6 @@ See [`EventKind`](https://docs.rs/agentwerk/latest/agentwerk/event/enum.EventKin
 Hooks allow you to react to events:
 
 ```rust
-tickets.cancel_on_result(|_, result| result["verdict"] == "malicious");
-
 tickets.create_ticket_on_failure(|_, ticket| {
     Some(Ticket::new(ticket.task.clone()).label("retry"))
 });
@@ -538,12 +527,6 @@ tickets.create_ticket_on_failure(|_, ticket| {
 | | `on_result(handler)` | Read every finished ticket together with its result. |
 | | `on_failure(handler)` | Read every failure together with the ticket it happened in. |
 | | `on_ticket(handler)` | Read a ticket as it starts, finishes, or fails. |
-| **Stop the run** | `cancel_on_event(condition)` | Stop execution when an event matches. |
-| | `cancel_on_result(condition)` | Stop execution when a finished result matches. |
-| | `cancel_on_failure(condition)` | Stop execution when a failure matches. |
-| **Stop one label** | `cancel_label_on_event(label, condition)` | Stop one label's agents while the rest keep working. |
-| | `cancel_label_on_result(label, condition)` | Stop one label's agents when a finished result matches. |
-| | `cancel_label_on_failure(label, condition)` | Stop one label's agents when a failure matches. |
 | **Add work** | `create_ticket_on_event(make)` | Enqueue a follow-up ticket from any event. |
 | | `create_ticket_on_result(make)` | Enqueue a follow-up ticket from a finished ticket. |
 | | `create_ticket_on_failure(make)` | Enqueue a retry for a ticket that failed. |

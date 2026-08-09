@@ -13,7 +13,7 @@ use super::Step;
 
 pub(super) async fn run(context: &mut TicketContext<'_>, reason: CompactReason) -> Step {
     let Some(mut ticket) = context.ticket() else {
-        return Step::Stop;
+        return Step::ClaimTicket;
     };
     let window = context.model.get_context_window();
     let editor = context.ticket_queue.compaction_editor();
@@ -67,7 +67,7 @@ pub(super) async fn run(context: &mut TicketContext<'_>, reason: CompactReason) 
                 message: error.to_string(),
             });
             context.fail_ticket();
-            return Step::Stop;
+            return Step::ClaimTicket;
         }
     };
 
@@ -87,13 +87,14 @@ pub(super) async fn run(context: &mut TicketContext<'_>, reason: CompactReason) 
             message: "context still exceeds window after compaction".into(),
         });
         context.fail_ticket();
-        return Step::Stop;
+        return Step::ClaimTicket;
     }
 
     context.emit(EventKind::CompactionFinished { reason });
     match reason {
+        // Proactive skips Evaluate, which would re-trigger its own threshold.
         CompactReason::Proactive => Step::Request,
-        CompactReason::Reactive => Step::CheckTicket,
+        CompactReason::Reactive => Step::Evaluate,
     }
 }
 

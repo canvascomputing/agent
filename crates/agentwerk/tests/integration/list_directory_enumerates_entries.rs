@@ -69,15 +69,15 @@ async fn separates_files_and_directories() -> std::result::Result<(), Box<dyn st
         .schema(schema),
     );
 
-    let results = tickets.finish().await;
-    common::print_result(results, tickets.stats());
+    tickets.finish(|_| true).await;
+    common::print_result(&tickets, tickets.stats());
 
     assert!(
         tickets.stats().event_count(EventName::ToolCallStarted) >= 1,
         "agent must call at least one tool"
     );
 
-    let json = results.results().pop().unwrap_or_default();
+    let json = tickets.results().pop().unwrap_or_default();
     let mut files = sorted_basenames(&json["files"]);
     let mut dirs = sorted_basenames(&json["directories"]);
     files.sort();

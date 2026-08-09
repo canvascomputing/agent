@@ -41,8 +41,8 @@ async fn creates_a_followup_ticket() -> std::result::Result<(), Box<dyn std::err
     );
     tickets.task(instruction.clone());
 
-    let results = tickets.finish().await;
-    common::print_result(results, tickets.stats());
+    tickets.finish(|_| true).await;
+    common::print_result(&tickets, tickets.stats());
 
     assert!(
         tickets.stats().event_count(EventName::ToolCallStarted) >= 1,

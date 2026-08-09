@@ -28,14 +28,14 @@ use std::io::{self, IsTerminal, Write};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
-use agentwerk::agents::tickets::{Author, Reply, ReplyContent};
+use agentwerk::agents::tickets::{Reply, ReplyContent};
 use agentwerk::event::{Event, EventKind, EventName};
 use agentwerk::providers::Model;
 use agentwerk::tools::{
     GlobTool, GrepTool, ListDirectoryTool, ManageTicketsTool, ReadFileTool, ReadTicketsTool,
     WriteFileTool,
 };
-use agentwerk::{Agent, Knowledge, Ticket, TicketQueue};
+use agentwerk::{Agent, Knowledge, TicketQueue};
 
 const ROLE: &str = include_str!("prompts/repl.role.md");
 const BIBLE_PASSAGE: &str = include_str!("prompts/bible.txt");
@@ -285,15 +285,15 @@ async fn main() {
         let cancelled = tokio::select! {
             _ = wait_for_assistant_pause(&tickets, &key) => false,
             _ = tokio::signal::ctrl_c() => {
-                tickets.cancel();
+                tickets.cancel(|_| true);
                 if midstream.swap(false, Ordering::Relaxed) {
                     eprintln!();
                 }
                 eprintln!("{}cancelling…{}", style.dim, style.reset);
-                let drain_fut = tickets.finish();
-                tokio::pin!(drain_fut);
+                let winding_down = tickets.finish(|_| true);
+                tokio::pin!(winding_down);
                 tokio::select! {
-                    _ = &mut drain_fut => {}
+                    _ = &mut winding_down => {}
                     _ = tokio::signal::ctrl_c() => std::process::exit(130),
                 }
                 tickets.start();
@@ -510,28 +510,13 @@ fn redact(messages: &mut [Reply], word: &str) {
     }
 }
 
-/// Block until the chat ticket is either terminal (`finished`/`failed`)
-/// or paused for input. A mid-turn assistant reply carrying a tool call
-/// doesn't count: tool execution is still pending and the prompt would
-/// race the user against the loop.
+/// Block until the chat ticket has no work left for the agent: it is
+/// terminal (`finished`/`failed`), or the assistant has spoken and called
+/// no tool. A mid-turn reply carrying a tool call doesn't count, so the
+/// prompt never races the user against the loop.
 async fn wait_for_assistant_pause(tickets: &TicketQueue, key: &str) {
-    tickets
-        .wait_for_ticket(|t| t.key == key && (t.is_resolved() || is_paused_for_input(t)))
-        .await;
-}
-
-/// The loop has paused for the next input when the last reply is an
-/// assistant turn that called no tool. Reasoning models add `Thinking`
-/// blocks alongside the text, so the pause turns on the absence of a
-/// tool call, not on the reply being text-only.
-fn is_paused_for_input(ticket: &Ticket) -> bool {
-    ticket.replies.last().is_some_and(|r| {
-        r.author == Author::Assistant
-            && !r
-                .content
-                .iter()
-                .any(|c| matches!(c, ReplyContent::ToolUse { .. }))
-    })
+    let waited = key.to_string();
+    tickets.finish(move |t| t.key == waited).await;
 }
 
 async fn read_line(prompt: &str) -> Option<String> {
@@ -592,7 +577,7 @@ fn fail_stale_chats(tickets: &TicketQueue, label: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agentwerk::agents::tickets::{Status, Ticket};
+    use agentwerk::agents::tickets::{Author, Status, Ticket};
 
     #[test]
     fn fail_stale_chats_marks_every_matching_pending_ticket_as_failed() {
@@ -618,51 +603,6 @@ mod tests {
         let tickets = TicketQueue::new();
         let n = fail_stale_chats(&tickets, "orchestrator");
         assert_eq!(n, 0);
-    }
-
-    fn assistant(content: Vec<ReplyContent>) -> Ticket {
-        let mut ticket = Ticket::new("chat");
-        ticket.replies.push(Reply {
-            author: Author::Assistant,
-            content,
-            created_at: 0,
-        });
-        ticket
-    }
-
-    #[test]
-    fn paused_for_input_when_a_reasoning_reply_carries_thinking_then_text() {
-        // Regression: reasoning models add a Thinking block, which the
-        // old text-only check rejected, hanging the REPL turn forever.
-        let ticket = assistant(vec![
-            ReplyContent::Thinking {
-                thinking: "hmm".into(),
-                signature: "s".into(),
-            },
-            ReplyContent::Text { text: "Hi.".into() },
-        ]);
-        assert!(is_paused_for_input(&ticket));
-    }
-
-    #[test]
-    fn not_paused_while_the_reply_still_carries_a_tool_call() {
-        let ticket = assistant(vec![ReplyContent::ToolUse {
-            id: "c1".into(),
-            name: "read_file".into(),
-            input: serde_json::json!({}),
-        }]);
-        assert!(!is_paused_for_input(&ticket));
-    }
-
-    #[test]
-    fn not_paused_when_the_last_reply_is_the_user() {
-        let mut ticket = Ticket::new("chat");
-        ticket.replies.push(Reply {
-            author: Author::User,
-            content: vec![ReplyContent::Text { text: "hey".into() }],
-            created_at: 0,
-        });
-        assert!(!is_paused_for_input(&ticket));
     }
 
     fn user_text(text: &str) -> Reply {

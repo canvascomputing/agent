@@ -39,7 +39,12 @@ async fn main() {
 
     let schema = partial_sum_schema();
     let tickets = TicketQueue::new();
-    tickets.cancel_on(tokio::signal::ctrl_c());
+    let on_ctrl_c = Arc::clone(&tickets);
+    tokio::spawn(async move {
+        if tokio::signal::ctrl_c().await.is_ok() {
+            on_ctrl_c.cancel(|_| true);
+        }
+    });
     if let Some(n) = args.max_turns {
         tickets.max_turns(n);
     }
@@ -68,7 +73,7 @@ async fn main() {
         );
     }
 
-    tickets.finish().await;
+    tickets.finish(|_| true).await;
 
     aggregate_and_report(&tickets, &partitions, args.n, &style);
 }
@@ -231,7 +236,7 @@ fn python_tool() -> Tool {
 
         tokio::select! {
             biased;
-            _ = ctx.wait_for_cancel() => Ok(ToolResult::error("cancelled")),
+            _ = ctx.cancelled() => Ok(ToolResult::error("cancelled")),
             result = output_fut => match result {
                 Err(e) => Ok(ToolResult::error(format!("failed to spawn python3: {e}"))),
                 Ok(out) if out.status.success() => {

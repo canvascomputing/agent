@@ -201,8 +201,8 @@ async fn seeker_pool_finds_planted_indicators(
         tickets.ticket(Ticket::new(threat).label(SEEKER_LABEL));
     }
 
-    let results = tickets.finish().await;
-    common::print_result(results, tickets.stats());
+    tickets.finish(|_| true).await;
+    common::print_result(&tickets, tickets.stats());
 
     let calls = calls.lock().unwrap().clone();
     let outputs = outputs.lock().unwrap().clone();
