@@ -274,12 +274,12 @@ async def main(pruefer, meister, monteur):
     )
     rulings = [
         ticket.result
-        for ticket in tickets.tickets_for_label("abnahme")
+        for ticket in tickets.find_tickets(lambda t: t.has_label("abnahme"))
         if ticket.is_finished() and isinstance(ticket.result, dict)
     ]
     fitted = [
         ticket.result
-        for ticket in tickets.tickets_for_label("montage")
+        for ticket in tickets.find_tickets(lambda t: t.has_label("montage"))
         if ticket.is_finished() and isinstance(ticket.result, dict) and ticket.result.get("eingebaut")
     ]
     scrap = [ruling for ruling in rulings if not ruling.get("passt")]

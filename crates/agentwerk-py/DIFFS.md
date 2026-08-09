@@ -85,8 +85,6 @@ Seven rules the surface table below never repeats.
 | `TicketQueue::model_for_agent(name)` | `TicketQueue.model_for_agent(agent_name)` |
 | `TicketQueue::get_ticket(key)` | `TicketQueue.get_ticket(key)` |
 | `TicketQueue::tickets()` | `TicketQueue.tickets()` |
-| `TicketQueue::tickets_for_label(label)` | `TicketQueue.tickets_for_label(label)` |
-| `TicketQueue::tickets_for_agent(name)` | `TicketQueue.tickets_for_agent(agent_name)` |
 | `TicketQueue::find_tickets(predicate)` | `TicketQueue.find_tickets(predicate)` |
 | `TicketQueue::find_ticket(predicate)` | `TicketQueue.find_ticket(predicate)` |
 | `TicketQueue::start()` | `TicketQueue.start()` |
@@ -96,9 +94,6 @@ Seven rules the surface table below never repeats.
 | `TicketQueue::is_cancelled(ticket)` | `TicketQueue.is_cancelled(ticket)` |
 | `TicketQueue::stats()` | `TicketQueue.stats()` |
 | `TicketQueue::results()` | `TicketQueue.results()` |
-| `TicketQueue::results_for_label(label)` | `TicketQueue.results_for_label(label)` |
-| `TicketQueue::results_for_agent(name)` | `TicketQueue.results_for_agent(agent_name)` |
-| `TicketQueue::result_for_ticket(key)` | `TicketQueue.result_for_ticket(key)` |
 | **Ticket** | |
 | `Ticket::new(task)` | `Ticket(task)` |
 | `Ticket::label(l)` | `Ticket(task, labels=[l])` |

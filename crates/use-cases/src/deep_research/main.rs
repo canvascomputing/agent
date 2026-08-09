@@ -165,7 +165,12 @@ enum Outcome {
 /// ticket wins, an external cancel is surfaced, anything else means the
 /// chain stopped without reaching the report step.
 fn classify_outcome(tickets: &TicketQueue) -> Outcome {
-    if let Some(result) = tickets.results_for_label("report").pop() {
+    let reported = tickets
+        .find_tickets(|t| t.is_finished() && t.has_label("report"))
+        .into_iter()
+        .filter_map(|t| t.result)
+        .next_back();
+    if let Some(result) = reported {
         return Outcome::Report(result);
     }
     if tickets.get_finish_reason() == Some(FinishReason::Cancelled) {

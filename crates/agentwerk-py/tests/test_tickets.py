@@ -159,14 +159,13 @@ def test_results_are_empty_before_a_run(queue):
     queue.ticket(aw.Ticket("alpha", labels=["a"]))
 
     assert queue.results() == []
-    assert queue.results_for_label("a") == []
 
 
-def test_tickets_for_label_returns_every_status_not_just_finished(queue):
+def test_find_tickets_returns_every_status_not_just_finished(queue):
     queue.ticket(aw.Ticket("alpha", labels=["a"]))
     queue.ticket(aw.Ticket("beta", labels=["b"]))
 
-    tasks = [ticket.task for ticket in queue.tickets_for_label("a")]
+    tasks = [ticket.task for ticket in queue.find_tickets(lambda t: t.has_label("a"))]
     assert tasks == ["alpha"]
 
 
@@ -269,7 +268,8 @@ def test_create_ticket_on_event_enqueues_a_follow_up(queue):
 
     queue.set_finished(key, {"verdict": "clean"})
 
-    assert [t.task for t in queue.tickets_for_label("report")] == ["report"]
+    filed = queue.find_tickets(lambda t: t.has_label("report"))
+    assert [t.task for t in filed] == ["report"]
 
 
 def test_edit_replies_on_event_chains(queue):
@@ -380,19 +380,10 @@ async def test_a_cancelled_run_reports_its_reason(queue):
     assert queue.get_finish_reason() == "cancelled"
 
 
-def test_result_for_ticket_is_none_until_the_ticket_finishes(queue):
-    key = queue.task("work")
-    assert queue.result_for_ticket(key) is None
-    queue.set_finished(key, {"verdict": "clean"})
-    assert queue.result_for_ticket(key) == {"verdict": "clean"}
-    assert queue.result_for_ticket("TICKET-404") is None
-
-
 def test_assignee_is_unset_until_an_agent_claims_the_ticket(queue):
     key = queue.task("work")
     assert queue.get_ticket(key).assignee is None
-    assert queue.tickets_for_agent("scout") == []
-    assert queue.results_for_agent("scout") == []
+    assert queue.find_tickets(lambda t: t.assignee == "scout") == []
 
 
 def test_load_reopens_a_session_directory(queue, tmp_path):
