@@ -1,0 +1,827 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>APPARAT FABRIK</title>
+<style>
+  /* The works are painted in the colours of the agentwerk mark: plaster and
+     steel, machine teal, vermilion warning paint, ochre for the stamp. */
+  :root {
+    --soot: #1b2225;
+    --plaster: #d7d7d9;
+    --mint: #cbd9d5;
+    --teal: #53b6c1;
+    --deep: #2a595d;
+    --vermilion: #c13f32;
+    --ochre: #d9bd6c;
+    --steel: #78888d;
+  --blau: #6ba3c4;
+    --panel: rgba(20, 28, 30, 0.88);
+    --wall: #33474b;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--soot);
+    color: var(--mint);
+    font: 11px/1.55 ui-monospace, "SF Mono", Menlo, monospace;
+    letter-spacing: 0.04em;
+    overflow: hidden;
+    text-transform: uppercase;
+    /* Every figure the same width, so a count going from 9 to 10 does not
+       shove the line it sits on. */
+    font-variant-numeric: tabular-nums;
+  }
+  /* The whole screen is drawn large, so it reads on a laptop and in a
+     recording of one. SCALE below does the same for the hall. */
+  .column, header, .scroll { zoom: 1.45; }
+  canvas { position: fixed; inset: 0; width: 100%; height: 100%; }
+
+  .scan, .tube { position: fixed; inset: 0; pointer-events: none; z-index: 40; }
+  .scan {
+    background: repeating-linear-gradient(to bottom,
+      rgba(0, 0, 0, 0.24) 0 1px, rgba(0, 0, 0, 0) 1px 3px);
+  }
+  .tube {
+    background: radial-gradient(ellipse at center,
+      rgba(0,0,0,0) 54%, rgba(0,0,0,0.5) 100%);
+  }
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--wall);
+    box-shadow: inset 0 0 0 1px rgba(83, 182, 193, 0.09);
+    padding: 8px 11px;
+  }
+  header {
+    position: fixed; top: 14px; left: 14px; right: 14px; z-index: 20;
+    display: flex; align-items: center; gap: 16px; overflow: hidden;
+  }
+  header b { color: var(--teal); font-weight: 600; letter-spacing: 0.3em; }
+  .shift { display: flex; align-items: center; gap: 8px; color: var(--steel); }
+  .bar { width: 128px; height: 8px; border: 1px solid var(--wall); padding: 1px; }
+  .bar i { display: block; height: 4px; background: var(--ochre); }
+  .tally { margin-left: auto; display: flex; gap: 16px; flex: 0 1 auto; }
+  .tally div { white-space: nowrap; }
+  .tally span { color: var(--steel); }
+  .tally b { color: var(--plaster); font-weight: 600; }
+
+  .column {
+    position: fixed; top: 62px; right: 14px; bottom: 14px; width: 300px; z-index: 20;
+    display: flex; flex-direction: column; gap: 12px;
+  }
+  h2 { margin: 0 0 6px; font-size: 10px; color: var(--steel); font-weight: 600; letter-spacing: 0.24em; }
+  /* Fixed columns for the slips and the score: the name takes what is left,
+     so nothing moves sideways when a worker is paid. */
+  .who { display: grid; grid-template-columns: 1fr 46px 30px; gap: 1px 8px; }
+  .who div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .who .slips, .who .score { text-align: right; }
+  .who .doing { color: var(--steel); text-transform: none; letter-spacing: 0; grid-column: 1 / -1; padding-bottom: 3px; }
+  .law { margin-top: 11px; padding-top: 8px; border-top: 1px solid var(--wall); color: var(--teal); }
+  .rule { color: var(--steel); font-style: italic; }
+
+  footer { flex: 1; min-height: 0; overflow: hidden;
+           mask-image: linear-gradient(#000 78%, transparent); }
+  footer div { color: var(--steel); text-transform: none; letter-spacing: 0; padding-bottom: 4px; }
+  footer div b { color: var(--plaster); font-weight: 600; }
+  .cursor { animation: blink 1.1s steps(1) infinite; color: var(--teal); }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  .scroll {
+    position: fixed; inset: 0; display: none; place-items: center; z-index: 30;
+    background: rgba(10, 14, 15, 0.84);
+  }
+  .scroll.up { display: grid; }
+  .scroll pre {
+    color: var(--mint); font: 12px/1.7 ui-monospace, Menlo, monospace;
+    border: 1px solid var(--wall); background: var(--panel); padding: 20px 30px;
+    box-shadow: inset 0 0 0 1px rgba(83, 182, 193, 0.1), 0 0 60px rgba(0,0,0,0.8);
+  }
+</style>
+</head>
+<body>
+<canvas id="hall"></canvas>
+
+<header class="panel">
+  <b>APPARAT FABRIK</b>
+  <div class="shift">SCHICHT <div class="bar"><i id="shift" style="width:100%"></i></div><span id="left">1:00</span></div>
+  <div class="tally">
+    <div><span>GEPRÜFT</span> <b id="ruled">0</b></div>
+    <div><span>EINGEBAUT</span> <b id="fitted">0</b></div>
+    <div><span>AUSSCHUSS</span> <b id="scrap">0</b></div>
+    <div><span>PRÜFBUCH</span> <b id="book">0</b></div>
+    <div><span>IN DER TASCHE</span> <b id="held">0</b></div>
+  </div>
+</header>
+
+<div class="column">
+<aside class="panel">
+  <h2>DIE BELEGSCHAFT</h2>
+  <div class="who" id="who"></div>
+  <h2 class="law">DIE WERKSORDNUNG</h2>
+  <div class="rule">Was in der Tasche bleibt, zählt nicht.<br />
+    Was ins Prüfbuch gestempelt ist, gehört dem Werk<br />
+    &mdash; und erst dann kennt die Zählung deinen Namen.</div>
+</aside>
+
+<footer class="panel">
+  <h2>DAS JOURNAL</h2>
+  <div id="log"><span class="cursor">&gt;</span> die schicht tritt an</div>
+</footer>
+</div>
+
+<div class="scroll" id="scroll"><pre id="scroll-text"></pre></div>
+
+<div class="scan"></div>
+<div class="tube"></div>
+
+<script>
+const COLOR = {
+  ink: "#cbd9d5", steel: "#78888d", wall: "#33474b", plaster: "#d7d7d9",
+  teal: "#53b6c1", deep: "#2a595d", vermilion: "#c13f32", ochre: "#d9bd6c",
+  blau: "#6ba3c4",
+};
+const POOL = { pruefer: COLOR.teal, meister: COLOR.ochre, monteur: COLOR.blau };
+const RANKS = ["LEHRLING", "GESELLE", "FACHARBEITER", "VORARBEITER", "WERKLEITER"];
+const PER_STAMP = 5;
+const BLOCK = 3;
+const SCALE = 1.45;   // how much larger than CSS pixels the hall is drawn
+// Movement runs at this share of real time. A recording of the hall is
+// sampled a few times a second, and slow movement is what keeps it smooth.
+const PACE = Number(new URLSearchParams(location.search).get("pace") || 1);
+
+// The same hooded figure as before, now in overalls and a cap.
+const FIGURE = [
+  [
+    "  ▓▓  ",
+    " ▓▓▓▓ ",
+    " ▓  ▓ ",
+    " ▓▓▓▓ ",
+    "▓▓▓▓▓▓",
+    " ▓▓▓▓ ",
+    " ▓  ▓ ",
+    " ▓  ▓ ",
+  ],
+  [
+    "  ▓▓  ",
+    " ▓▓▓▓ ",
+    " ▓  ▓ ",
+    " ▓▓▓▓ ",
+    "▓▓▓▓▓▓",
+    " ▓▓▓▓ ",
+    " ▓▓ ▓ ",
+    "▓▓   ▓",
+  ],
+];
+
+const canvas = document.getElementById("hall");
+const brush = canvas.getContext("2d");
+
+const state = {
+  stations: [],
+  stationOf: new Map(),
+  apparate: [],
+  agents: new Map(),
+  parts: new Map(),
+  places: {},
+  book: { entries: [], stamp: 0 },
+  log: [],
+  ruled: 0, fitted: 0, scrap: 0, score: 0,
+  shift: { total: 60, left: 60 },
+  elapsed: 0, seen: -1, over: false,
+};
+
+let width = 0, height = 0;
+
+function resize() {
+  const pixels = window.devicePixelRatio || 1;
+  width = window.innerWidth / SCALE;
+  height = window.innerHeight / SCALE;
+  canvas.width = window.innerWidth * pixels;
+  canvas.height = window.innerHeight * pixels;
+  brush.setTransform(pixels * SCALE, 0, 0, pixels * SCALE, 0, 0);
+  layout();
+}
+
+/** The belt runs the width of the hall; everything else hangs off it. */
+function layout() {
+  // The panels are laid out at the same scale the hall is drawn at, so their
+  // own CSS sizes are what the hall has to keep clear of.
+  const free = { left: 22, right: 300 + 14 + 12, top: 62 + 14, bottom: 26 };
+  const box = { w: width - free.left - free.right, h: height - free.top - free.bottom };
+  const belt = { y: free.top + box.h * 0.44, x0: free.left + 96, x1: free.left + box.w - 92 };
+  const floor = belt.y + 104;
+
+  state.belt = belt;
+  state.floor = floor;
+  // `stand` is where a worker waits at that place, kept apart from the next
+  // place's so two crowds never share a patch of floor.
+  state.places = {
+    wareneingang: { x: free.left + 46, y: belt.y, stand: 0, label: "WARENEINGANG" },
+    versand: { x: free.left + box.w - 44, y: belt.y, stand: 0, label: "VERSAND" },
+    pruefbuch: { x: free.left + box.w * 0.24, y: floor + 66, stand: 42, label: "PRÜFBUCH" },
+    lager: { x: free.left + box.w * 0.62, y: floor + 66, stand: 42, label: "LAGER" },
+    ausschuss: { x: free.left + box.w - 74, y: floor + 66, stand: 0, label: "AUSSCHUSS" },
+  };
+  state.stations.forEach((station, index) => {
+    const step = (index + 1) / (state.stations.length + 1);
+    station.x = belt.x0 + (belt.x1 - belt.x0) * step;
+    station.y = belt.y - 92;
+  });
+  for (const agent of state.agents.values()) {
+    const post = postOf(agent);
+    agent.x = agent.tx = post.x;
+    agent.y = agent.ty = post.y;
+  }
+}
+
+/** Where a worker stands: at their station, or wherever the work took them. */
+function postOf(agent) {
+  const place = agent.at && state.places[agent.at];
+  const station = state.stationOf.get(agent.pool);
+  const home = place ? place.x : (station ? station.x : (state.belt ? state.belt.x0 : 200));
+  // Whoever else stands here is counted first, so two at one place never end
+  // up on the same spot with their names on top of each other.
+  const mates = [...state.agents.values()].filter((other) => (other.at || null) === (agent.at || null)
+    && (other.at ? true : other.pool === agent.pool));
+  const rank = Math.max(0, mates.indexOf(agent));
+  const spread = (mates.length - 1) * 48;
+  return { x: home - spread / 2 + rank * 48, y: state.floor + (place ? place.stand : 0) };
+}
+
+function walk(agent, place) {
+  agent.at = place;
+  for (const other of state.agents.values()) {
+    const post = postOf(other);
+    other.tx = post.x;
+    other.ty = post.y;
+  }
+}
+
+function agentOf(name) {
+  return state.agents.get(name) || null;
+}
+
+function plain(text) {
+  return String(text == null ? "" : text)
+    .replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]));
+}
+
+function flash(agent, tone) {
+  agent.flash = { tone, t: 0 };
+}
+
+function tell(line) {
+  state.log.unshift(line);
+  if (state.log.length > 14) state.log.pop();
+  document.getElementById("log").innerHTML = state.log
+    .map((entry, index) => `<div style="opacity:${1 - index * 0.07}">${index ? "&nbsp;&nbsp;" : '<span class="cursor">&gt;</span> '}${entry}</div>`)
+    .join("");
+}
+
+function partOf(key, born) {
+  let part = state.parts.get(key);
+  if (part) return part;
+  const from = born || state.places.wareneingang;
+  part = { key, x: from.x, y: from.y, tx: from.x, ty: from.y, at: null, fall: 0, tone: COLOR.steel };
+  state.parts.set(key, part);
+  return part;
+}
+
+function partNumberIn(text) {
+  const found = String(text || "").match(/TEIL-\d+/);
+  return found ? found[0] : null;
+}
+
+const handle = {
+  world(frame) {
+    state.shift = { total: frame.shift, left: frame.shift };
+    state.stations = frame.stations.map((station) => ({ ...station, x: 0, y: 0, glow: 0 }));
+    state.stationOf = new Map(state.stations.map((station) => [station.pool, station]));
+    state.apparate = frame.apparate;
+    layout();
+  },
+
+  roster(frame) {
+    frame.agents.forEach((entry, index) => {
+      state.agents.set(entry.name, {
+        name: entry.name, pool: entry.pool, seat: index,
+        x: 0, y: 0, tx: 0, ty: 0, at: null,
+        pocket: [], score: 0, doing: "wartet", step: 0, flash: null, shake: 0, fetching: null, delivering: null,
+      });
+    });
+    layout();
+  },
+
+  run_started() {
+    tell("Die Schicht tritt an. Das Band läuft.");
+  },
+
+  ticket_created(frame) {
+    const part = partNumberIn(frame.task);
+    const reporter = agentOf(frame.reporter || frame.agent);
+    if (!part) {
+      // A plan, not a part: it waits at the intake until a Prüfer takes it.
+      const plan = partOf(frame.ticket, state.places.wareneingang);
+      plan.teil = (String(frame.task || "").match(/Bauplan ([^.]+)\./) || [0, "BAUPLAN"])[1];
+      plan.tone = COLOR.teal;
+      return;
+    }
+    const riding = [...state.parts.entries()].find(([, crate]) => crate.teil === part);
+    if (riding) {
+      // It is already on the belt: hand the same crate to the new ticket.
+      state.parts.delete(riding[0]);
+      state.parts.set(frame.ticket, riding[1]);
+      return;
+    }
+    const crate = partOf(frame.ticket, state.places.wareneingang);
+    crate.teil = part;
+    if (reporter) {
+      // Sending a part on is the Prüfer's piece of work, carried until the
+      // Prüfbuch is stamped.
+      // No bubble for this one: a Prüfer sends parts on all shift, and the
+      // Journal already says which. Bubbles are kept for what is worth a shout.
+      reporter.pocket.push({ teil: part });
+      tell(`<b>${reporter.name}</b> setzt ${plain(part)} aufs Band.`);
+    }
+  },
+
+  ticket_started(frame) {
+    const agent = agentOf(frame.agent);
+    if (!agent) return;
+    agent.doing = agent.pool === "pruefer" ? "am Bauplan"
+      : agent.pool === "monteur" ? "baut ein" : "an der Werkbank";
+    const station = state.stationOf.get(agent.pool);
+    if (station) station.glow = 1;
+    const crate = state.parts.get(frame.ticket);
+    if (crate) {
+      // Go to the belt where the piece is and take it off; `update` hands it
+      // over once the walk is done.
+      agent.fetching = frame.ticket;
+      agent.at = null;
+      agent.tx = crate.x;
+      agent.ty = state.floor;
+      tell(`<b>${agent.name}</b> nimmt ${plain(crate.teil || frame.ticket)} vom Band.`);
+    } else {
+      walk(agent, null);
+    }
+  },
+
+  tool_call_started(frame) {
+    const agent = agentOf(frame.agent);
+    if (!agent) return;
+    const tool = frame.data.tool_name;
+    const place = String(frame.data.place || "");
+    if (tool === "read_file" && place.includes("/lager/")) {
+      agent.doing = "holt die Karte";
+      walk(agent, "lager");
+    } else if (tool === "grep" || place.includes("baupl")) {
+      agent.doing = "am Bauplan";
+      walk(agent, "wareneingang");
+    } else if (tool === "manage_knowledge") {
+      agent.doing = "am Prüfbuch";
+      walk(agent, "pruefbuch");
+    } else if (tool === "manage_tickets") {
+      agent.doing = "schreibt den Laufzettel";
+    }
+  },
+
+  ruling(frame) {
+    const agent = agentOf(frame.agent);
+    const said = frame.result;
+    if (!agent || !said || typeof said !== "object" || !said.teil) return;
+    const crate = state.parts.get(frame.ticket);
+
+    if (said.eingebaut !== undefined) {          // a Monteur booked it
+      agent.pocket.push({ teil: said.teil, passt: said.eingebaut });
+      if (said.eingebaut) {
+        state.fitted++;
+        // Carry it back up to the belt by hand; it rides into Versand from there.
+        if (crate) {
+          crate.tone = COLOR.blau;
+          agent.delivering = { ticket: frame.ticket, to: "versand" };
+          agent.at = null;
+          agent.tx = state.belt.x1 - 70;
+          agent.ty = state.floor;
+        }
+        tell(`<b>${agent.name}</b> baut ${plain(said.teil)} in ${plain(said.apparat)} ein. Es fehlt: ${plain(said.fehlt)}`);
+      } else {
+        flash(agent, COLOR.vermilion);
+        tell(`<b>${agent.name}</b> baut ${plain(said.teil)} nicht ein: ${plain(said.vermerk)}`);
+      }
+      return;
+    }
+
+    state.ruled++;
+    agent.pocket.push({ teil: said.teil, passt: said.passt });
+    if (said.passt) {
+      const montage = state.stationOf.get("monteur");
+      if (crate) {
+        crate.tone = COLOR.ochre;
+        crate.held = null;
+        crate.tx = montage ? montage.x : state.places.versand.x;
+      }
+      tell(`<b>${agent.name}</b> gibt ${plain(said.teil)} frei: ${plain(said.befund)}`);
+    } else {
+      state.scrap++;
+      if (crate) {
+        // Rejects are walked to the bin, not thrown across the hall.
+        crate.tone = COLOR.vermilion;
+        agent.delivering = { ticket: frame.ticket, to: "ausschuss" };
+        agent.at = "ausschuss";
+        const bin = state.places.ausschuss;
+        agent.tx = bin.x;
+        agent.ty = state.floor + bin.stand;
+      }
+      flash(agent, COLOR.vermilion);
+      tell(`<b>${agent.name}</b> weist ${plain(said.teil)} zurück: ${plain(said.befund)}`);
+    }
+  },
+
+  knowledge_used(frame) {
+    const agent = agentOf(frame.agent);
+    if (!agent) return;
+    walk(agent, "pruefbuch");
+    if (frame.data.op === "write") {
+      const stamped = agent.pocket.length;
+      agent.pocket = [];
+      agent.score += stamped * PER_STAMP;
+      state.score += stamped * PER_STAMP;
+      state.book.stamp = 1;
+      agent.doing = "stempelt ins Prüfbuch";
+      if (stamped) {
+        flash(agent, COLOR.ochre);
+        tell(`<b>${agent.name}</b> stempelt ${stamped === 1 ? "einen Vorgang" : `${stamped} Vorgänge`} ins Prüfbuch.`);
+      }
+    } else {
+      state.book.stamp = 1;
+      agent.doing = "liest im Prüfbuch";
+    }
+  },
+
+  page(frame) {
+    state.book.entries.push(frame.slug);
+    state.book.stamp = 1;
+  },
+
+  ticket_finished(frame) {
+    const agent = agentOf(frame.agent);
+    if (agent) { agent.doing = "zurück an die Bank"; walk(agent, null); }
+    const crate = state.parts.get(frame.ticket);
+    if (crate && crate.held) { crate.held = null; crate.tx = state.places.versand.x; }
+  },
+
+  ticket_failed(frame) {
+    const agent = agentOf(frame.agent);
+    if (!agent) return;
+    agent.shake = 1;
+    agent.pocket.pop();
+    tell(`<b>${agent.name}</b> verliert einen Vorgang. Der Laufzettel ist hin.`);
+  },
+
+  schema_retried(frame) {
+    const agent = agentOf(frame.agent);
+    if (!agent) return;
+    agent.shake = 1;
+    flash(agent, COLOR.vermilion);
+    tell(`<b>${agent.name}</b> muss nacharbeiten. Das Maß stimmt nicht.`);
+  },
+
+  tool_call_failed(frame) {
+    const agent = agentOf(frame.agent);
+    if (agent) agent.shake = 1;
+  },
+
+  file_open_failed(frame) {
+    const agent = agentOf(frame.agent);
+    if (!agent) return;
+    agent.shake = 1;
+    flash(agent, COLOR.vermilion);
+    tell(`<b>${agent.name}</b> greift nach einer Karte, die nicht im Lager liegt.`);
+  },
+
+  request_started(frame) {
+    const agent = agentOf(frame.agent);
+    if (agent && agent.doing === "wartet") agent.doing = "denkt nach";
+  },
+
+  policy_violated(frame) {
+    tell(frame.data.policy === "time" ? "Die Schichtglocke geht." : "Dem Werk geht die Kraft aus.");
+  },
+
+  bell(frame) {
+    state.over = true;
+    closing(frame);
+  },
+};
+
+function receive(frame) {
+  if (frame.n !== undefined) {
+    if (frame.n <= state.seen) return;
+    state.seen = frame.n;
+  }
+  if (frame.t !== undefined) {
+    state.elapsed = frame.t;
+    state.shift.left = Math.max(0, state.shift.total - frame.t);
+  }
+  const step = handle[frame.kind];
+  if (step) step(frame);
+}
+
+/** How the shift ended, said the way the hall would say it. */
+function ending(reason) {
+  const said = String(reason || "");
+  if (said.startsWith("policy_violated(time")) return "die Schichtglocke ging";
+  if (said.startsWith("policy_violated")) return "dem Werk ging die Kraft aus";
+  if (said === "drained") return "jeder Bauplan war abgearbeitet";
+  if (said === "cancelled") return "die Schicht wurde abgebrochen";
+  return "das Band steht still";
+}
+
+function closing(frame) {
+  const crew = [...state.agents.values()]
+    .map((agent) => {
+      const rank = RANKS[Math.min(RANKS.length - 1, Math.floor(agent.score / 20))];
+      return `   ${agent.name.padEnd(9)}${rank.padEnd(14)}${String(agent.score).padStart(3)}` +
+        (agent.pocket.length ? `   (${agent.pocket.length} in der Tasche)` : "");
+    })
+    .join("\n");
+  document.getElementById("scroll-text").textContent =
+`        F E I E R A B E N D
+        ${ending(frame.reason)}
+
+   ${String(state.ruled).padStart(3)} Teile geprüft
+   ${String(state.fitted).padStart(3)} eingebaut
+   ${String(state.scrap).padStart(3)} in den Ausschuss
+   ${String(state.book.entries.length).padStart(3)} Einträge im Prüfbuch
+
+${crew}
+
+        DIE SCHICHT SCHAFFTE ${state.score} PUNKTE IN ${Math.round(state.elapsed)} SEKUNDEN.`;
+  document.getElementById("scroll").classList.add("up");
+}
+
+function readouts() {
+  const left = Math.max(0, state.shift.left);
+  document.getElementById("shift").style.width = `${(left / state.shift.total) * 100}%`;
+  document.getElementById("left").textContent =
+    `${Math.floor(left / 60)}:${String(Math.floor(left % 60)).padStart(2, "0")}`;
+  document.getElementById("ruled").textContent = state.ruled;
+  document.getElementById("fitted").textContent = state.fitted;
+  document.getElementById("scrap").textContent = state.scrap;
+  document.getElementById("book").textContent = state.book.entries.length;
+  let held = 0;
+  for (const agent of state.agents.values()) held += agent.pocket.length;
+  document.getElementById("held").textContent = held;
+
+  document.getElementById("who").innerHTML = [...state.agents.values()].map((agent) => {
+    const rank = RANKS[Math.min(RANKS.length - 1, Math.floor(agent.score / 20))];
+    const colour = POOL[agent.pool] || COLOR.steel;
+    const pocket = agent.pocket.length
+      ? `<span style="color:${COLOR.ochre}">${"▪".repeat(Math.min(5, agent.pocket.length))}</span>` : "";
+    return `<div style="color:${colour}">${agent.name} <span style="color:${COLOR.steel}">${rank}</span></div>
+            <div class="slips">${pocket}</div>
+            <div class="score">${agent.score}</div>
+            <div class="doing">${agent.doing}</div>`;
+  }).join("");
+}
+
+let last = performance.now();
+
+function frame(now) {
+  const step = Math.min((now - last) / 1000, 0.05);
+  last = now;
+  update(step * PACE, now);
+  draw(now);
+  readouts();
+  requestAnimationFrame(frame);
+}
+
+function update(step, now) {
+  for (const agent of state.agents.values()) {
+    const dx = agent.tx - agent.x, dy = agent.ty - agent.y;
+    const span = Math.hypot(dx, dy);
+    if (span > 1) {
+      const pace = Math.min(span, 130 * step);
+      agent.x += (dx / span) * pace;
+      agent.y += (dy / span) * pace;
+      agent.step = Math.floor(now / 120) % 2;
+      agent.walking = true;
+    } else {
+      agent.walking = false;
+      agent.step = 0;
+    }
+    agent.shake = Math.max(0, agent.shake - step * 1.6);
+    if (agent.flash && (agent.flash.t += step) > 1) agent.flash = null;
+  }
+  // A worker who has walked to the belt takes the piece off it, and one who
+  // has carried a piece to where it belongs sets it down there.
+  for (const agent of state.agents.values()) {
+    if (agent.fetching) {
+      const crate = state.parts.get(agent.fetching);
+      if (!crate) { agent.fetching = null; }
+      else if (Math.abs(agent.x - crate.x) < 26) {
+        crate.held = agent.name;
+        agent.fetching = null;
+      }
+    }
+    if (agent.delivering && Math.hypot(agent.tx - agent.x, agent.ty - agent.y) < 10) {
+      const crate = state.parts.get(agent.delivering.ticket);
+      if (crate) {
+        crate.held = null;
+        if (agent.delivering.to === "versand") {
+          crate.tx = state.places.versand.x;          // set on the belt, rides in
+        } else {
+          crate.fall = 0.001;
+          crate.tx = state.places.ausschuss.x;
+          crate.ty = state.places.ausschuss.y;
+        }
+      }
+      agent.delivering = null;
+      walk(agent, null);
+    }
+  }
+  for (const [key, part] of state.parts) {
+    const holder = part.held && state.agents.get(part.held);
+    if (holder) {
+      // Carried: it goes wherever the hands go, to the Lager and back.
+      part.tx = holder.x;
+      part.ty = holder.y - 30;
+    } else if (!part.fall) {
+      part.ty = state.belt.y;                 // otherwise it sits on the belt
+    }
+    // Along the belt first, then up or down: a part never cuts the corner,
+    // because on a line it cannot.
+    part.x += (part.tx - part.x) * (holder ? 0.18 : 0.07);
+    if (Math.abs(part.tx - part.x) < 8 || part.fall || holder) part.y += (part.ty - part.y) * 0.12;
+    if (part.fall) {
+      part.fall += step;
+      if (part.fall > 2.2) state.parts.delete(key);
+    } else if (part.tx === state.places.versand.x && Math.abs(part.x - part.tx) < 2) {
+      state.parts.delete(key);
+    }
+  }
+  for (const station of state.stations) station.glow = Math.max(0, station.glow - step * 0.7);
+  state.book.stamp = Math.max(0, state.book.stamp - step * 1.1);
+}
+
+function draw(now) {
+  brush.clearRect(0, 0, width, height);
+  drawBelt(now);
+  for (const station of state.stations) drawStation(station);
+  for (const name of ["wareneingang", "versand", "pruefbuch", "lager", "ausschuss"]) drawPlace(name);
+  for (const part of state.parts.values()) drawPart(part);
+  for (const agent of state.agents.values()) drawWorker(agent, now);
+}
+
+/** The Fließband: rails, rollers turning, and hazard paint running along it. */
+function drawBelt(now) {
+  const { x0, x1, y } = state.belt;
+  brush.fillStyle = "#141b1d";
+  brush.fillRect(x0 - 40, y - 13, x1 - x0 + 80, 26);
+  brush.strokeStyle = COLOR.steel;
+  brush.strokeRect(x0 - 40 + 0.5, y - 13 + 0.5, x1 - x0 + 79, 25);
+
+  const roll = (now / 26) % 22;
+  brush.fillStyle = "#2b3a3d";
+  for (let x = x0 - 40 - 22 + roll; x < x1 + 40; x += 22) {
+    brush.fillRect(x, y - 9, 12, 18);
+  }
+  brush.fillStyle = COLOR.ochre;
+  for (let x = x0 - 40 - 18 + ((now / 18) % 18); x < x1 + 40; x += 18) {
+    brush.fillRect(x, y + 10, 9, 3);
+  }
+  brush.fillStyle = COLOR.deep;
+  brush.fillRect(x0 - 40, y - 14, x1 - x0 + 80, 2);
+}
+
+function drawStation(station) {
+  const w = 122, h = 62;
+  const x = station.x - w / 2, y = station.y - h / 2;
+  brush.fillStyle = "rgba(28, 40, 42, 0.9)";
+  brush.strokeStyle = station.glow > 0.02 ? COLOR.teal : COLOR.wall;
+  brush.fillRect(x, y, w, h);
+  brush.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+
+  brush.fillStyle = station.glow > 0.02 ? COLOR.mint : COLOR.steel;
+  brush.font = "10px ui-monospace, Menlo, monospace";
+  brush.textAlign = "center";
+  brush.fillText(station.title.toUpperCase(), station.x, y + 17);
+  brush.textAlign = "left";
+
+  // A machine under the name: two dials and a run lamp.
+  brush.strokeStyle = COLOR.steel;
+  brush.beginPath(); brush.arc(x + 34, y + 40, 9, 0, Math.PI * 2); brush.stroke();
+  brush.beginPath(); brush.arc(x + 60, y + 40, 9, 0, Math.PI * 2); brush.stroke();
+  brush.fillStyle = station.glow > 0.02 ? COLOR.teal : COLOR.deep;
+  brush.fillRect(x + 88, y + 34, 12, 12);
+  brush.fillStyle = "#141b1d";
+  brush.fillRect(station.x - 5, y + h, 10, 8);
+}
+
+function drawPlace(name) {
+  const place = state.places[name];
+  const stamped = name === "pruefbuch" ? state.book.stamp : 0;
+  brush.strokeStyle = stamped > 0.02 ? COLOR.ochre : COLOR.wall;
+  brush.fillStyle = "rgba(24, 33, 35, 0.9)";
+  const w = 92, h = 44;
+  brush.fillRect(place.x - w / 2, place.y - h / 2, w, h);
+  brush.strokeRect(place.x - w / 2 + 0.5, place.y - h / 2 + 0.5, w - 1, h - 1);
+
+  brush.fillStyle = name === "ausschuss" ? COLOR.vermilion
+    : name === "pruefbuch" ? COLOR.ochre : COLOR.steel;
+  brush.font = "9px ui-monospace, Menlo, monospace";
+  brush.textAlign = "center";
+  brush.fillText(place.label, place.x, place.y + h / 2 + 13);
+
+  if (name === "pruefbuch") {
+    brush.fillStyle = COLOR.ochre;
+    state.book.entries.slice(-14).forEach((entry, index) => {
+      brush.fillRect(place.x - 34 + (index % 7) * 10, place.y - 8 + Math.floor(index / 7) * 9, 7, 5);
+    });
+    brush.fillStyle = COLOR.mint;
+    brush.fillText(`${state.book.entries.length}`, place.x, place.y - 12);
+  }
+  if (name === "versand") {
+    brush.fillStyle = COLOR.ochre;
+    brush.font = "13px ui-monospace, Menlo, monospace";
+    brush.fillText(String(state.fitted), place.x, place.y + 5);
+  }
+  if (name === "ausschuss") {
+    brush.fillStyle = COLOR.vermilion;
+    brush.font = "13px ui-monospace, Menlo, monospace";
+    brush.fillText(String(state.scrap), place.x, place.y + 5);
+  }
+  brush.textAlign = "left";
+}
+
+function drawPart(part) {
+  const drop = part.fall ? part.fall * part.fall * 60 : 0;
+  brush.save();
+  brush.globalAlpha = part.fall ? Math.max(0, 1 - part.fall / 2.2) : 1;
+  brush.fillStyle = part.tone;
+  brush.fillRect(part.x - 7, part.y - 6 + drop, 14, 12);
+  brush.fillStyle = "#141b1d";
+  brush.fillRect(part.x - 7, part.y - 1 + drop, 14, 2);
+  brush.restore();
+}
+
+function drawWorker(agent, now) {
+  const art = FIGURE[agent.walking ? agent.step : 0];
+  const colour = agent.shake > 0.02 ? COLOR.vermilion : (POOL[agent.pool] || COLOR.steel);
+  const jitter = agent.shake > 0.02 ? (Math.random() - 0.5) * 4 : 0;
+  const x = Math.round(agent.x + jitter) - (art[0].length * BLOCK) / 2;
+  const y = Math.round(agent.y) - art.length * BLOCK;
+
+  brush.fillStyle = colour;
+  art.forEach((row, line) => {
+    [...row].forEach((cell, column) => {
+      if (cell !== " ") brush.fillRect(x + column * BLOCK, y + line * BLOCK, BLOCK, BLOCK);
+    });
+  });
+
+  // The slips in the pocket. Tall enough that a scanline cannot hollow one
+  // out, which reads as an empty box rather than a piece of paper.
+  const carried = [...state.parts.values()].find((part) => part.held === agent.name);
+  if (carried) {
+    brush.strokeStyle = colour;
+    brush.beginPath();
+    brush.moveTo(agent.x, agent.y - 14);
+    brush.lineTo(carried.x, carried.y + 4);
+    brush.stroke();
+  }
+
+  agent.pocket.slice(0, 6).forEach((held, index) => {
+    const slip = x - 9 + index * 8;
+    brush.fillStyle = held.passt === false ? COLOR.vermilion : COLOR.ochre;
+    brush.fillRect(slip, y - 12, 6, 7);
+    brush.fillStyle = "#141b1d";
+    brush.fillRect(slip + 1, y - 10, 4, 1);
+    brush.fillRect(slip + 1, y - 8, 4, 1);
+  });
+
+  brush.fillStyle = colour;
+  brush.font = "9px ui-monospace, Menlo, monospace";
+  brush.textAlign = "center";
+  brush.fillText(agent.name.toUpperCase(), agent.x, agent.y + 12);
+  brush.textAlign = "left";
+
+  if (agent.flash) {
+    brush.strokeStyle = agent.flash.tone;
+    brush.globalAlpha = 1 - agent.flash.t;
+    brush.beginPath();
+    brush.arc(agent.x, agent.y - 12, 16 + agent.flash.t * 22, 0, Math.PI * 2);
+    brush.stroke();
+    brush.globalAlpha = 1;
+  }
+}
+
+window.addEventListener("resize", resize);
+resize();
+requestAnimationFrame(frame);
+
+const feed = new EventSource("/events");
+feed.onmessage = (message) => receive(JSON.parse(message.data));
+</script>
+</body>
+</html>
