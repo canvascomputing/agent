@@ -9,6 +9,7 @@
 </div>
 
 <div align="center">
+  <a href="#demo">Demo</a> •
   <a href="#installation">Installation</a> •
   <a href="crates/agentwerk-py/README.md">Python</a> •
   <a href="#quick-start">Quick Start</a> •
@@ -29,6 +30,14 @@
 - **Deep observability:** inspect every request, message and failure.
 - **Ease of integration:** apply agents as simple as HTTP calls.
 - **Facilitate training:** collect trajectories for fine-tuning models.
+
+## Demo
+
+<div align="left">
+  <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/demo.gif" width="600" />
+</div>
+
+The recording shows [Apparat Fabrik](https://github.com/canvascomputing/agentwerk/blob/main/crates/agentwerk-py/examples/apparat_fabrik.py), a shift on the line of an apparatus works.
 
 ## Installation
 
@@ -109,12 +118,6 @@ for fix in tickets.results_for_label("report"):
     print(fix)
 ```
 
-## Demo
-
-<div align="left">
-  <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/demo.gif" width="600" />
-</div>
-
 ## Use Cases
 
 Example projects built with agentwerk:
@@ -123,6 +126,7 @@ Example projects built with agentwerk:
 - [Divide and Conquer](https://github.com/canvascomputing/agentwerk/tree/main/crates/use-cases/src/divide_and_conquer/): arithmetic problem shared across agents, ported in [examples/divide_and_conquer.py](https://github.com/canvascomputing/agentwerk/blob/main/crates/agentwerk-py/examples/divide_and_conquer.py)
 - [Deep Research](https://github.com/canvascomputing/agentwerk/tree/main/crates/use-cases/src/deep_research/): deep research pipeline (requires `BRAVE_API_KEY`)
 - [Malware Scanner](https://github.com/canvascomputing/agentwerk/tree/main/crates/use-cases/src/malware_scanner/): identify indicators of compromise in a software package
+- [Apparat Fabrik](https://github.com/canvascomputing/agentwerk/blob/main/crates/agentwerk-py/examples/apparat_fabrik.py): a shift on the line of an apparatus works
 
 > Configure an LLM provider first (see [Environment](https://github.com/canvascomputing/agentwerk/blob/main/DEVELOPMENT.md#environment)).
 

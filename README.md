@@ -9,6 +9,7 @@
 </div>
 
 <div align="center">
+  <a href="#demo">Demo</a> •
   <a href="#installation">Installation</a> •
   <a href="crates/agentwerk-py/README.md">Python</a> •
   <a href="#quick-start">Quick Start</a> •
@@ -29,6 +30,14 @@
 - **Deep observability:** inspect every request, message and failure.
 - **Ease of integration:** apply agents as simple as HTTP calls.
 - **Facilitate training:** collect trajectories for fine-tuning models.
+
+## Demo
+
+<div align="left">
+  <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/demo.gif" width="600" />
+</div>
+
+The recording shows [Apparat Fabrik](crates/agentwerk-py/examples/apparat_fabrik.py), a shift on the line of an apparatus works.
 
 ## Installation
 
@@ -104,12 +113,6 @@ for fix in tickets.results_for_label("report") {
     println!("{fix}");
 }
 ```
-
-## Demo
-
-<div align="left">
-  <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/demo.gif" width="600" />
-</div>
 
 ## Use Cases
 
