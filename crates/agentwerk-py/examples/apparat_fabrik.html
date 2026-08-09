@@ -71,14 +71,6 @@
     display: flex; flex-direction: column; gap: 12px;
   }
   h2 { margin: 0 0 6px; font-size: 10px; color: var(--steel); font-weight: 600; letter-spacing: 0.24em; }
-  /* Fixed columns for the slips and the score: the name takes what is left,
-     so nothing moves sideways when a worker is paid. */
-  .who { display: grid; grid-template-columns: 1fr 46px 30px; gap: 1px 8px; }
-  .who div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .who .slips, .who .score { text-align: right; }
-  .who .doing { color: var(--steel); text-transform: none; letter-spacing: 0; grid-column: 1 / -1; padding-bottom: 3px; }
-  .law { margin-top: 11px; padding-top: 8px; border-top: 1px solid var(--wall); color: var(--teal); }
-  .rule { color: var(--steel); font-style: italic; }
 
   footer { flex: 1; min-height: 0; overflow: hidden;
            mask-image: linear-gradient(#000 78%, transparent); }
@@ -115,15 +107,6 @@
 </header>
 
 <div class="column">
-<aside class="panel">
-  <h2>DIE BELEGSCHAFT</h2>
-  <div class="who" id="who"></div>
-  <h2 class="law">DIE WERKSORDNUNG</h2>
-  <div class="rule">Was in der Tasche bleibt, zählt nicht.<br />
-    Was ins Prüfbuch gestempelt ist, gehört dem Werk<br />
-    &mdash; und erst dann kennt die Zählung deinen Namen.</div>
-</aside>
-
 <footer class="panel">
   <h2>DAS JOURNAL</h2>
   <div id="log"><span class="cursor">&gt;</span> die schicht tritt an</div>
@@ -139,12 +122,21 @@
 const COLOR = {
   ink: "#cbd9d5", steel: "#78888d", wall: "#33474b", plaster: "#d7d7d9",
   teal: "#53b6c1", deep: "#2a595d", vermilion: "#c13f32", ochre: "#d9bd6c",
-  blau: "#6ba3c4",
+  blau: "#6ba3c4", soot: "#1b2225",
 };
 const POOL = { pruefer: COLOR.teal, meister: COLOR.ochre, monteur: COLOR.blau };
 const RANKS = ["LEHRLING", "GESELLE", "FACHARBEITER", "VORARBEITER", "WERKLEITER"];
 const PER_STAMP = 5;
 const BLOCK = 3;
+const SPACING = 20;   // how far apart pieces stand on the belt when there is room
+const TIGHT = 17;     // and how close they pack when the line backs up
+// Two lanes, end to end at the same height. Baupläne have one of their own,
+// from the Wareneingang to the Prüfung, where it stops. The parts a Prüfer
+// writes are made up under the Ausgabe and issued from it onto the assembly
+// line, which carries them on to the Versand. One kind of traffic each, so no
+// queue ever runs into another. STOP is where the line's own stops stand.
+const PRUEFUNG_AT = 0.27;
+const STOP = { meister: 0.50, monteur: 0.79 };
 const SCALE = 1.45;   // how much larger than CSS pixels the hall is drawn
 // Movement runs at this share of real time. A recording of the hall is
 // sampled a few times a second, and slow movement is what keeps it smooth.
@@ -182,7 +174,11 @@ const state = {
   stationOf: new Map(),
   apparate: [],
   agents: new Map(),
+  // Crates are held under the part number stamped on them, not under a ticket:
+  // one piece travels through the Abnahme and the Montage under two tickets,
+  // and it is the same piece on the floor both times.
   parts: new Map(),
+  partOfTicket: new Map(),
   places: {},
   book: { entries: [], stamp: 0 },
   log: [],
@@ -209,30 +205,62 @@ function layout() {
   // own CSS sizes are what the hall has to keep clear of.
   const free = { left: 22, right: 300 + 14 + 12, top: 62 + 14, bottom: 26 };
   const box = { w: width - free.left - free.right, h: height - free.top - free.bottom };
-  const belt = { y: free.top + box.h * 0.44, x0: free.left + 96, x1: free.left + box.w - 92 };
-  const floor = belt.y + 104;
+  // The hall is 200 deep under the belt. The walking room between its floors
+  // takes what height there is, within a hand's breadth either way, and the
+  // whole of it is centred rather than left hanging in the top third.
+  const deep = Math.min(1.45, Math.max(0.85, (box.h - 40) / 200));
+  const belt = {
+    y: free.top + 30 + (box.h - 30 - 200 * deep) / 2,
+    x0: free.left + 96,
+    x1: free.left + box.w - 92,
+  };
 
   state.belt = belt;
-  state.floor = floor;
-  // `stand` is where a worker waits at that place, kept apart from the next
-  // place's so two crowds never share a patch of floor.
+  // The belt reaches back under the intake, so a piece is already on the line
+  // when it comes out of it.
+  state.head = belt.x0 - 96;
+  const pruefungAt = state.head + (belt.x1 - state.head) * PRUEFUNG_AT;
+  const issueAt = pruefungAt + 62;
+  state.feed = { y: belt.y, x0: state.head, x1: pruefungAt + 14 };
+  state.line = { y: belt.y, x0: issueAt - 26, x1: belt.x1 };
+  // The strip a worker steps onto to reach each lane, then the benches they
+  // work at and the places they walk off to.
+  state.lane = belt.y + 32;
+  state.floor = belt.y + 96 * deep;
+  state.deck = belt.y + 164 * deep;
   state.places = {
-    wareneingang: { x: free.left + 46, y: belt.y, stand: 0, label: "WARENEINGANG" },
-    versand: { x: free.left + box.w - 44, y: belt.y, stand: 0, label: "VERSAND" },
-    pruefbuch: { x: free.left + box.w * 0.24, y: floor + 66, stand: 42, label: "PRÜFBUCH" },
-    lager: { x: free.left + box.w * 0.62, y: floor + 66, stand: 42, label: "LAGER" },
-    ausschuss: { x: free.left + box.w - 74, y: floor + 66, stand: 0, label: "AUSSCHUSS" },
+    wareneingang: { x: state.head + 42, y: state.feed.y, band: true, wide: 64, label: "WARENEINGANG" },
+    // Parts are made up under the Ausgabe and come out of it onto the line, so
+    // a plan's worth is issued in a queue rather than appearing out of nothing.
+    ausgabe: { x: issueAt, y: belt.y, band: true, wide: 56, label: "AUSGABE" },
+    versand: { x: free.left + box.w - 44, y: belt.y, band: true, label: "VERSAND" },
+    // The floor places stand in the gaps between the machines, so a worker at
+    // one of them is never drawn on top of a worker at a bench.
+    pruefbuch: { x: free.left + box.w * 0.3, y: state.deck, label: "PRÜFBUCH" },
+    lager: { x: free.left + box.w * 0.55, y: state.deck, label: "LAGER" },
+    ausschuss: { x: free.left + box.w * 0.82, y: state.deck, label: "AUSSCHUSS" },
   };
   state.stations.forEach((station, index) => {
-    const step = (index + 1) / (state.stations.length + 1);
-    station.x = belt.x0 + (belt.x1 - belt.x0) * step;
-    station.y = belt.y - 92;
+    const along = STOP[station.pool];
+    // The Prüfung stands at the Wareneingang, where work comes in and the line
+    // begins. `back` is how far a stage's queue may reach down the belt.
+    station.x = along === undefined
+      ? pruefungAt
+      : state.line.x0 + (state.line.x1 - state.line.x0) * along;
+    station.back = along === undefined ? state.feed.x0
+      : index > 1 ? state.stations[index - 1].x + 30 : state.line.x0;
+    station.y = state.floor - 19;
   });
   for (const agent of state.agents.values()) {
     const post = postOf(agent);
     agent.x = agent.tx = post.x;
     agent.y = agent.ty = post.y;
   }
+}
+
+/** The floor a place is worked from: the belt is reached from the lane below. */
+function standAt(place) {
+  return place.band ? state.lane : place.y + 20;
 }
 
 /** Where a worker stands: at their station, or wherever the work took them. */
@@ -245,17 +273,59 @@ function postOf(agent) {
   const mates = [...state.agents.values()].filter((other) => (other.at || null) === (agent.at || null)
     && (other.at ? true : other.pool === agent.pool));
   const rank = Math.max(0, mates.indexOf(agent));
-  const spread = (mates.length - 1) * 48;
-  return { x: home - spread / 2 + rank * 48, y: state.floor + (place ? place.stand : 0) };
+  const spread = (mates.length - 1) * 56;
+  return { x: home - spread / 2 + rank * 56, y: place ? standAt(place) : state.floor };
 }
 
+/** Send a worker to a place, or back to their own bench when it is null. */
 function walk(agent, place) {
   agent.at = place;
+  agent.reaching = false;
+  const post = postOf(agent);
+  agent.tx = post.x;
+  agent.ty = post.y;
+  refit();
+}
+
+/** Step up to the belt: the one spot the floor plan does not give a worker.
+    Whoever stands here has business with a piece, so `refit` leaves them be,
+    and the errand on `at` is what they go back to afterwards. */
+function stepToBelt(agent, x, onFeed) {
+  const run = onFeed ? state.feed : state.line;
+  agent.reaching = true;
+  agent.tx = Math.min(Math.max(x, run.x0), run.x1 + 40);
+  agent.ty = state.lane;
+}
+
+/** Everyone else's spot, so a crowd at one place spreads out again. */
+function refit() {
   for (const other of state.agents.values()) {
+    if (other.reaching || other.delivering) continue;
     const post = postOf(other);
     other.tx = post.x;
     other.ty = post.y;
   }
+}
+
+/** Carry a piece somewhere and set it down; `update` walks it over and sets it
+    down, so a tool call that arrives mid-errand cannot cut the walk short. */
+function carry(agent, crate, to) {
+  agent.delivering = { key: crate.key, to };
+  walk(agent, to === "ausschuss" ? to : null);
+}
+
+/** Where a delivery ends: at the bin, or up at the belt beside the station. */
+function dropSpot(agent, to) {
+  if (to === "ausschuss") {
+    const bin = state.places.ausschuss;
+    return { x: bin.x, y: standAt(bin) };
+  }
+  // Everything else is set back on the belt just past the worker's own stop,
+  // where there is room for it: from there the line carries it on, to the next
+  // stop or out through the Versand. Nobody walks a piece down the hall.
+  const station = state.stationOf.get(agent.pool);
+  const nominal = (station ? station.x : state.line.x0) + 26;
+  return { x: Math.min(freeSpot(nominal, SPACING), state.line.x1 - 10), y: state.lane };
 }
 
 function agentOf(name) {
@@ -279,13 +349,121 @@ function tell(line) {
     .join("");
 }
 
-function partOf(key, born) {
-  let part = state.parts.get(key);
-  if (part) return part;
-  const from = born || state.places.wareneingang;
-  part = { key, x: from.x, y: from.y, tx: from.x, ty: from.y, at: null, fall: 0, tone: COLOR.steel };
-  state.parts.set(key, part);
-  return part;
+/** The piece standing at the stop is the next one worked there. A ticket takes
+    the crate at the head of its queue rather than the one it happened to file,
+    and the two tickets trade crates, so every piece is collected at the stop
+    and none is ever fetched out of the intake. Crates carry their number in the
+    Laufzettel, not on the lid, so trading them is only bookkeeping. */
+function claimAtStop(pool, ticket) {
+  // A piece another worker is already on their way to is not at the head of
+  // anything: it is spoken for.
+  const spoken = new Set([...state.agents.values()].map((worker) => worker.fetching));
+  const waiting = [...state.parts.values()]
+    .filter((part) => part.queue === pool && !part.held && !spoken.has(part.key));
+  if (!waiting.length) return null;
+  waiting.sort((first, second) => second.x - first.x);
+  const front = waiting[0];
+  const mine = state.partOfTicket.get(ticket);
+  if (!mine || mine === front.key) return front;
+  const other = [...state.partOfTicket.entries()].find(([, key]) => key === front.key);
+  if (other) state.partOfTicket.set(other[0], mine);
+  state.partOfTicket.set(ticket, front.key);
+  const swapped = state.parts.get(mine);
+  if (swapped) {
+    const number = swapped.teil, title = swapped.plan;
+    swapped.teil = front.teil;
+    swapped.plan = front.plan;
+    front.teil = number;
+    front.plan = title;
+  }
+  return front;
+}
+
+/** The crate a ticket is about, whichever ticket the piece travels under now. */
+function crateFor(ticket) {
+  const key = state.partOfTicket.get(ticket);
+  return key ? state.parts.get(key) || null : null;
+}
+
+function crateAt(key, born) {
+  let crate = state.parts.get(key);
+  if (crate) return crate;
+  crate = {
+    key, x: born.x, y: born.y, tx: born.x, ty: born.y,
+    queue: null, held: null, leaving: false, fall: 0, tone: COLOR.plaster,
+  };
+  state.parts.set(key, crate);
+  return crate;
+}
+
+/** Pieces waiting for a station queue up on the belt in front of it, and the
+    line creeps forward as the station takes one off. Whoever stands nearest
+    takes the first slot, because on a belt nothing overtakes anything. */
+function queueUp() {
+  state.stations.forEach((station, index) => {
+    const waiting = [...state.parts.values()].filter((part) => part.queue === station.pool && !part.held);
+    // A stage queues on its own stretch of conveyor and no further, so two
+    // stages never stand in each other's line.
+    const behind = station.back;
+    waiting.sort((first, second) => second.x - first.x);
+    // The first few wait on the open belt, the head of them at the machine
+    // itself; the rest hold in the intake and come out as slots free, so the
+    // line always reads as pieces travelling to a stop rather than as a jam
+    // packed back to the door. No slot is ever behind where a piece already
+    // stands: the belt runs one way.
+    waiting.forEach((part, place) => {
+      // No slot is ever behind where a piece already stands: the belt runs
+      // one way, and what will not fit waits further back.
+      part.tx = Math.max(part.x, Math.max(behind, station.x - place * SPACING));
+    });
+  });
+}
+
+/** Nothing advances into the piece ahead of it, whichever station each is
+    waiting for, and nothing is ever sent backwards to make room. */
+function keepClear() {
+  const line = [...state.parts.values()].filter((part) => !part.held && !part.fall && !part.leaving);
+  line.sort((first, second) => second.x - first.x);
+  for (let index = 1; index < line.length; index++) {
+    const ahead = line[index - 1];
+    line[index].tx = Math.max(line[index].x, Math.min(line[index].tx, ahead.x - TIGHT));
+  }
+}
+
+/** Where a piece goes on the belt: the first clear spot between `from` and the
+    stop it is bound for, and only behind `from` when that stretch is full. A
+    plan's worth of tickets then lands as a row running up to the machine
+    instead of as a tail hanging off the back of the line. */
+function joinQueue(from, stop, head) {
+  const ahead = freeSpot(from, SPACING);
+  if (ahead <= stop) return ahead;
+  const back = freeSpot(from, -SPACING);
+  // Back down its own stretch, never across the stop before it.
+  if (back >= head) return back;
+  // Full end to end: squeeze in from the head at the closest pitch the belt
+  // ever packs to, which still leaves a crate clear of its neighbour.
+  return freeSpot(head, TIGHT, TIGHT);
+}
+
+/** The first clear spot on the belt from `from`, stepping `step` at a time.
+    A piece set down looks forward for room; one joining a queue looks back
+    along it, which is where the end of a queue is. */
+function freeSpot(from, step, clear) {
+  const gap = clear || SPACING;
+  let spot = from;
+  const standing = [...state.parts.values()].filter((part) => !part.held);
+  // A spot another piece is already sliding into is not a free spot either.
+  while (standing.some((part) => Math.abs(part.x - spot) < gap
+    || Math.abs(part.tx - spot) < gap)) spot += step;
+  return spot;
+}
+
+/** Every piece comes onto the belt inside the intake and leaves inside the
+    outfeed; the belt is the only way between. More work than the line can take
+    stands in the intake, out of sight behind it, and `keepClear` lets it out
+    one crate at a time as the piece ahead moves off. */
+function entrySpot() {
+  return state.places.wareneingang.x;
 }
 
 function partNumberIn(text) {
@@ -307,7 +485,8 @@ const handle = {
       state.agents.set(entry.name, {
         name: entry.name, pool: entry.pool, seat: index,
         x: 0, y: 0, tx: 0, ty: 0, at: null,
-        pocket: [], score: 0, doing: "wartet", step: 0, flash: null, shake: 0, fetching: null, delivering: null,
+        pocket: [], score: 0, step: 0, flash: null, shake: 0,
+        reaching: false, fetching: null, delivering: null,
       });
     });
     layout();
@@ -321,26 +500,34 @@ const handle = {
     const part = partNumberIn(frame.task);
     const reporter = agentOf(frame.reporter || frame.agent);
     if (!part) {
-      // A plan, not a part: it waits at the intake until a Prüfer takes it.
-      const plan = partOf(frame.ticket, state.places.wareneingang);
-      plan.teil = (String(frame.task || "").match(/Bauplan ([^.]+)\./) || [0, "BAUPLAN"])[1];
+      // A plan, not a part: it comes in at the intake and rides down to the
+      // Prüfung, where a Prüfer takes it off.
+      const pruefung = state.stationOf.get("pruefer");
+      const plan = crateAt(frame.ticket, {
+        x: joinQueue(state.places.wareneingang.x, pruefung ? pruefung.x : state.feed.x1, state.feed.x0 + 10),
+        y: state.feed.y,
+      });
+      plan.queue = "pruefer";
+      plan.plan = (String(frame.task || "").match(/Bauplan ([^.]+)\./) || [0, "BAUPLAN"])[1];
       plan.tone = COLOR.teal;
+      state.partOfTicket.set(frame.ticket, frame.ticket);
       return;
     }
-    const riding = [...state.parts.entries()].find(([, crate]) => crate.teil === part);
-    if (riding) {
-      // It is already on the belt: hand the same crate to the new ticket.
-      state.parts.delete(riding[0]);
-      state.parts.set(frame.ticket, riding[1]);
-      return;
-    }
-    const crate = partOf(frame.ticket, state.places.wareneingang);
+    state.partOfTicket.set(frame.ticket, part);
+    if (state.parts.has(part)) return;   // already on the floor, under its first ticket
+    // The parts a plan names go on the belt just past the stop they were
+    // written at, and travel from there to the Abnahme.
+    const pruefung = state.stationOf.get("pruefer");
+    const abnahme = state.stationOf.get("meister");
+    // Parts are made up under the Ausgabe and come out of it onto the line one
+    // at a time, so a plan's worth is issued as a queue rather than appearing
+    // along the belt out of nothing.
+    const crate = crateAt(part, { x: state.places.ausgabe.x, y: state.line.y });
     crate.teil = part;
+    crate.queue = "meister";
     if (reporter) {
       // Sending a part on is the Prüfer's piece of work, carried until the
       // Prüfbuch is stamped.
-      // No bubble for this one: a Prüfer sends parts on all shift, and the
-      // Journal already says which. Bubbles are kept for what is worth a shout.
       reporter.pocket.push({ teil: part });
       tell(`<b>${reporter.name}</b> setzt ${plain(part)} aufs Band.`);
     }
@@ -349,21 +536,21 @@ const handle = {
   ticket_started(frame) {
     const agent = agentOf(frame.agent);
     if (!agent) return;
-    agent.doing = agent.pool === "pruefer" ? "am Bauplan"
-      : agent.pool === "monteur" ? "baut ein" : "an der Werkbank";
     const station = state.stationOf.get(agent.pool);
     if (station) station.glow = 1;
-    const crate = state.parts.get(frame.ticket);
-    if (crate) {
-      // Go to the belt where the piece is and take it off; `update` hands it
-      // over once the walk is done.
-      agent.fetching = frame.ticket;
-      agent.at = null;
-      agent.tx = crate.x;
-      agent.ty = state.floor;
-      tell(`<b>${agent.name}</b> nimmt ${plain(crate.teil || frame.ticket)} vom Band.`);
-    } else {
+    const crate = crateFor(frame.ticket);
+    if (!crate) {
       walk(agent, null);
+      return;
+    }
+    // `update` walks them up to where the piece stands and puts it in their
+    // hands, which is a walk that has to wait when someone else is carrying it.
+    walk(agent, null);
+    agent.fetching = crate.key;
+    if (crate.plan) {
+      tell(`<b>${agent.name}</b> nimmt den Bauplan ${plain(crate.plan)} vom Band.`);
+    } else {
+      tell(`<b>${agent.name}</b> nimmt ${plain(crate.teil)} vom Band.`);
     }
   },
 
@@ -373,16 +560,17 @@ const handle = {
     const tool = frame.data.tool_name;
     const place = String(frame.data.place || "");
     if (tool === "read_file" && place.includes("/lager/")) {
-      agent.doing = "holt die Karte";
       walk(agent, "lager");
-    } else if (tool === "grep" || place.includes("baupl")) {
-      agent.doing = "am Bauplan";
-      walk(agent, "wareneingang");
+    } else if (tool === "read_file" && place.includes("baupl")) {
+      // The plan is read at the bench: the intake is where work comes in, not
+      // a place to carry a piece back to.
+      walk(agent, null);
+    } else if (tool === "grep") {
+      walk(agent, null);
     } else if (tool === "manage_knowledge") {
-      agent.doing = "am Prüfbuch";
       walk(agent, "pruefbuch");
     } else if (tool === "manage_tickets") {
-      agent.doing = "schreibt den Laufzettel";
+      walk(agent, null);          // the Laufzettel is written at the bench
     }
   },
 
@@ -390,22 +578,24 @@ const handle = {
     const agent = agentOf(frame.agent);
     const said = frame.result;
     if (!agent || !said || typeof said !== "object" || !said.teil) return;
-    const crate = state.parts.get(frame.ticket);
+    const crate = crateFor(frame.ticket) || state.parts.get(said.teil);
 
     if (said.eingebaut !== undefined) {          // a Monteur booked it
       agent.pocket.push({ teil: said.teil, passt: said.eingebaut });
       if (said.eingebaut) {
         state.fitted++;
-        // Carry it back up to the belt by hand; it rides into Versand from there.
         if (crate) {
           crate.tone = COLOR.blau;
-          agent.delivering = { ticket: frame.ticket, to: "versand" };
-          agent.at = null;
-          agent.tx = state.belt.x1 - 70;
-          agent.ty = state.floor;
+          carry(agent, crate, "versand");
         }
         tell(`<b>${agent.name}</b> baut ${plain(said.teil)} in ${plain(said.apparat)} ein. Es fehlt: ${plain(said.fehlt)}`);
       } else {
+        // Not on the plan, and not the Abnahme's reject either: it goes back on
+        // the line, where it stands until the bell with no one to claim it.
+        if (crate) {
+          crate.tone = COLOR.vermilion;
+          carry(agent, crate, "line");
+        }
         flash(agent, COLOR.vermilion);
         tell(`<b>${agent.name}</b> baut ${plain(said.teil)} nicht ein: ${plain(said.vermerk)}`);
       }
@@ -415,11 +605,9 @@ const handle = {
     state.ruled++;
     agent.pocket.push({ teil: said.teil, passt: said.passt });
     if (said.passt) {
-      const montage = state.stationOf.get("monteur");
       if (crate) {
         crate.tone = COLOR.ochre;
-        crate.held = null;
-        crate.tx = montage ? montage.x : state.places.versand.x;
+        carry(agent, crate, "band");
       }
       tell(`<b>${agent.name}</b> gibt ${plain(said.teil)} frei: ${plain(said.befund)}`);
     } else {
@@ -427,11 +615,7 @@ const handle = {
       if (crate) {
         // Rejects are walked to the bin, not thrown across the hall.
         crate.tone = COLOR.vermilion;
-        agent.delivering = { ticket: frame.ticket, to: "ausschuss" };
-        agent.at = "ausschuss";
-        const bin = state.places.ausschuss;
-        agent.tx = bin.x;
-        agent.ty = state.floor + bin.stand;
+        carry(agent, crate, "ausschuss");
       }
       flash(agent, COLOR.vermilion);
       tell(`<b>${agent.name}</b> weist ${plain(said.teil)} zurück: ${plain(said.befund)}`);
@@ -448,14 +632,12 @@ const handle = {
       agent.score += stamped * PER_STAMP;
       state.score += stamped * PER_STAMP;
       state.book.stamp = 1;
-      agent.doing = "stempelt ins Prüfbuch";
       if (stamped) {
         flash(agent, COLOR.ochre);
         tell(`<b>${agent.name}</b> stempelt ${stamped === 1 ? "einen Vorgang" : `${stamped} Vorgänge`} ins Prüfbuch.`);
       }
     } else {
       state.book.stamp = 1;
-      agent.doing = "liest im Prüfbuch";
     }
   },
 
@@ -466,16 +648,31 @@ const handle = {
 
   ticket_finished(frame) {
     const agent = agentOf(frame.agent);
-    if (agent) { agent.doing = "zurück an die Bank"; walk(agent, null); }
-    const crate = state.parts.get(frame.ticket);
-    if (crate && crate.held) { crate.held = null; crate.tx = state.places.versand.x; }
+    const crate = crateFor(frame.ticket);
+    state.partOfTicket.delete(frame.ticket);
+    // A plan that is worked off is filed where it was read. Nothing travels
+    // back up the hall: the way through the works is the way the belt runs.
+    if (crate && crate.plan) state.parts.delete(crate.key);
+    // A worker still carrying a piece finishes that walk first; `update` sends
+    // them back to their bench once the piece is set down.
+    if (agent && !agent.delivering) walk(agent, null);
   },
 
   ticket_failed(frame) {
     const agent = agentOf(frame.agent);
+    const crate = crateFor(frame.ticket);
+    state.partOfTicket.delete(frame.ticket);
     if (!agent) return;
     agent.shake = 1;
     agent.pocket.pop();
+    // The errand is off, and whatever was in their hands is left standing.
+    if (crate && crate.held === agent.name) {
+      crate.held = null;
+      crate.x = crate.tx = freeSpot(crate.x, SPACING);   // set down clear, not on the line
+    }
+    agent.fetching = null;
+    agent.delivering = null;
+    walk(agent, null);
     tell(`<b>${agent.name}</b> verliert einen Vorgang. Der Laufzettel ist hin.`);
   },
 
@@ -498,11 +695,6 @@ const handle = {
     agent.shake = 1;
     flash(agent, COLOR.vermilion);
     tell(`<b>${agent.name}</b> greift nach einer Karte, die nicht im Lager liegt.`);
-  },
-
-  request_started(frame) {
-    const agent = agentOf(frame.agent);
-    if (agent && agent.doing === "wartet") agent.doing = "denkt nach";
   },
 
   policy_violated(frame) {
@@ -573,17 +765,6 @@ function readouts() {
   let held = 0;
   for (const agent of state.agents.values()) held += agent.pocket.length;
   document.getElementById("held").textContent = held;
-
-  document.getElementById("who").innerHTML = [...state.agents.values()].map((agent) => {
-    const rank = RANKS[Math.min(RANKS.length - 1, Math.floor(agent.score / 20))];
-    const colour = POOL[agent.pool] || COLOR.steel;
-    const pocket = agent.pocket.length
-      ? `<span style="color:${COLOR.ochre}">${"▪".repeat(Math.min(5, agent.pocket.length))}</span>` : "";
-    return `<div style="color:${colour}">${agent.name} <span style="color:${COLOR.steel}">${rank}</span></div>
-            <div class="slips">${pocket}</div>
-            <div class="score">${agent.score}</div>
-            <div class="doing">${agent.doing}</div>`;
-  }).join("");
 }
 
 let last = performance.now();
@@ -619,47 +800,96 @@ function update(step, now) {
   for (const agent of state.agents.values()) {
     if (agent.fetching) {
       const crate = state.parts.get(agent.fetching);
-      if (!crate) { agent.fetching = null; }
-      else if (Math.abs(agent.x - crate.x) < 26) {
-        crate.held = agent.name;
+      // A piece still in another pair of hands is waited for, not taken.
+      if (!crate) {
         agent.fetching = null;
-      }
-    }
-    if (agent.delivering && Math.hypot(agent.tx - agent.x, agent.ty - agent.y) < 10) {
-      const crate = state.parts.get(agent.delivering.ticket);
-      if (crate) {
-        crate.held = null;
-        if (agent.delivering.to === "versand") {
-          crate.tx = state.places.versand.x;          // set on the belt, rides in
-        } else {
-          crate.fall = 0.001;
-          crate.tx = state.places.ausschuss.x;
-          crate.ty = state.places.ausschuss.y;
+      } else if (!crate.held) {
+        // Claiming a ticket does not stop the belt. The piece keeps its place
+        // in the queue and runs on to the machine; the worker goes to the stop
+        // it is headed for and takes it off there.
+        stepToBelt(agent, crate.tx, crate.plan);
+        if (Math.abs(agent.x - crate.x) < 24 && Math.abs(agent.y - agent.ty) < 6) {
+          crate.held = agent.name;
+          crate.queue = null;
+          agent.fetching = null;
+          walk(agent, agent.at);      // on to whatever the work has since asked for
         }
       }
+    }
+    if (agent.delivering) {
+      const { key, to } = agent.delivering;
+      const crate = state.parts.get(key);
+      if (!crate) {
+        agent.delivering = null;
+        walk(agent, null);
+        continue;
+      }
+      // A ruling can land on a piece the worker never got their hands on. It
+      // is fetched before it is carried, so nothing ever flies across the hall.
+      if (crate.held !== agent.name) {
+        agent.fetching = key;
+        continue;
+      }
+      // The errand owns the walk until the piece is down, so a tool call that
+      // lands mid-carry cannot drop it halfway there.
+      const spot = dropSpot(agent, to);
+      agent.reaching = to !== "ausschuss";
+      agent.tx = spot.x;
+      agent.ty = spot.y;
+      if (Math.hypot(agent.x - spot.x, agent.y - spot.y) >= 8) continue;
+      crate.held = null;
+      if (to === "band") {
+        crate.queue = "monteur";                // set down, and the belt takes it on
+      } else if (to === "line") {
+        crate.tx = crate.x;                     // set down, and nobody comes for it
+      } else if (to === "ausschuss") {
+        crate.fall = 0.001;
+        crate.tx = state.places.ausschuss.x;
+        crate.ty = state.places.ausschuss.y;
+      } else {
+        crate.leaving = true;
+        crate.tx = state.places.versand.x;
+      }
       agent.delivering = null;
-      walk(agent, null);
+      walk(agent, agent.at === to ? null : agent.at);
     }
   }
+  queueUp();
+  keepClear();
   for (const [key, part] of state.parts) {
     const holder = part.held && state.agents.get(part.held);
     if (holder) {
-      // Carried: it goes wherever the hands go, to the Lager and back.
-      part.tx = holder.x;
-      part.ty = holder.y - 30;
-    } else if (!part.fall) {
-      part.ty = state.belt.y;                 // otherwise it sits on the belt
+      // Carried: the hand moves faster than the worker walks, so the piece is
+      // reached for once and then travels in it, neither snapping into place
+      // nor trailing behind.
+      part.tx = holder.x + 16;
+      part.ty = holder.y - 14;
+      const gap = Math.hypot(part.tx - part.x, part.ty - part.y);
+      if (gap > 0) {
+        const reach = Math.min(gap, 420 * step);
+        part.x += (part.tx - part.x) / gap * reach;
+        part.y += (part.ty - part.y) / gap * reach;
+      }
+      continue;
     }
-    // Along the belt first, then up or down: a part never cuts the corner,
-    // because on a line it cannot.
-    part.x += (part.tx - part.x) * (holder ? 0.18 : 0.07);
-    if (Math.abs(part.tx - part.x) < 8 || part.fall || holder) part.y += (part.ty - part.y) * 0.12;
     if (part.fall) {
       part.fall += step;
+      part.x += (part.tx - part.x) * 0.2;
+      part.y += (part.ty - part.y) * 0.2;
       if (part.fall > 2.2) state.parts.delete(key);
-    } else if (part.tx === state.places.versand.x && Math.abs(part.x - part.tx) < 2) {
-      state.parts.delete(key);
+      continue;
     }
+    // Back onto the belt first, and only then along it: a piece set down at
+    // the line does not cut the corner, because on a line it cannot.
+    part.ty = (part.plan ? state.feed.y : state.line.y) - 3;
+    part.y += (part.ty - part.y) * 0.16;
+    if (Math.abs(part.y - part.ty) < 6) {
+      // Rollers turn at one speed however far a piece still has to go, so a
+      // queue shuffling forward creeps rather than streaks.
+      const along = part.tx - part.x;
+      part.x += Math.sign(along) * Math.min(Math.abs(along) * 0.06, 110 * step);
+    }
+    if (part.leaving && Math.abs(part.x - part.tx) < 6) state.parts.delete(key);
   }
   for (const station of state.stations) station.glow = Math.max(0, station.glow - step * 0.7);
   state.book.stamp = Math.max(0, state.book.stamp - step * 1.1);
@@ -669,61 +899,82 @@ function draw(now) {
   brush.clearRect(0, 0, width, height);
   drawBelt(now);
   for (const station of state.stations) drawStation(station);
-  for (const name of ["wareneingang", "versand", "pruefbuch", "lager", "ausschuss"]) drawPlace(name);
+  // The Wareneingang is drawn under its lane, so the plans waiting on it show.
+  // The Ausgabe and the Versand are drawn over the line, so a part is made up
+  // out of sight under the one and vanishes into the other.
+  for (const name of ["pruefbuch", "lager", "ausschuss", "wareneingang"]) drawPlace(name);
   for (const part of state.parts.values()) drawPart(part);
+  for (const name of ["ausgabe", "versand"]) drawPlace(name);
   for (const agent of state.agents.values()) drawWorker(agent, now);
 }
 
 /** The Fließband: rails, rollers turning, and hazard paint running along it. */
 function drawBelt(now) {
-  const { x0, x1, y } = state.belt;
-  brush.fillStyle = "#141b1d";
-  brush.fillRect(x0 - 40, y - 13, x1 - x0 + 80, 26);
-  brush.strokeStyle = COLOR.steel;
-  brush.strokeRect(x0 - 40 + 0.5, y - 13 + 0.5, x1 - x0 + 79, 25);
+  drawRun(state.feed.x0, state.feed.x1, state.feed.y, now);
+  drawRun(state.line.x0, state.line.x1 + 40, state.line.y, now);
+}
 
-  const roll = (now / 26) % 22;
-  brush.fillStyle = "#2b3a3d";
-  for (let x = x0 - 40 - 22 + roll; x < x1 + 40; x += 22) {
-    brush.fillRect(x, y - 9, 12, 18);
+/** One mark on a run, cut off at its ends so nothing hangs over the edge. */
+function inRun(x, wide, head, tail, y, high) {
+  const left = Math.max(x, head), right = Math.min(x + wide, tail);
+  if (right > left) brush.fillRect(left, y, right - left, high);
+}
+
+function drawRun(head, tail, y, now) {
+  const run = tail - head;
+  brush.fillStyle = "#141b1d";
+  brush.fillRect(head, y - 13, run, 26);
+  brush.strokeStyle = COLOR.steel;
+  brush.strokeRect(head + 0.5, y - 13 + 0.5, run - 1, 25);
+
+  // The rollers are kept dark and low: they turn under everything, and a piece
+  // riding a belt has to read as a piece rather than as more machinery.
+  brush.fillStyle = "#1f292b";
+  for (let x = head - 22 + ((now / 26) % 22); x < tail; x += 22) {
+    inRun(x, 10, head, tail, y + 1, 11);
   }
   brush.fillStyle = COLOR.ochre;
-  for (let x = x0 - 40 - 18 + ((now / 18) % 18); x < x1 + 40; x += 18) {
-    brush.fillRect(x, y + 10, 9, 3);
+  for (let x = head - 18 + ((now / 18) % 18); x < tail; x += 18) {
+    inRun(x, 9, head, tail, y + 10, 3);
   }
   brush.fillStyle = COLOR.deep;
-  brush.fillRect(x0 - 40, y - 14, x1 - x0 + 80, 2);
+  brush.fillRect(head, y - 14, run, 2);
 }
 
 function drawStation(station) {
-  const w = 122, h = 62;
+  const w = 126, h = 42;
   const x = station.x - w / 2, y = station.y - h / 2;
+  const lit = station.glow > 0.02;
+
+  // The machine hangs off the line it works: a chute from the belt down to it.
+  brush.fillStyle = "#141b1d";
+  brush.fillRect(station.x - 6, state.belt.y + 13, 12, y - state.belt.y - 13);
   brush.fillStyle = "rgba(28, 40, 42, 0.9)";
-  brush.strokeStyle = station.glow > 0.02 ? COLOR.teal : COLOR.wall;
+  brush.strokeStyle = lit ? COLOR.teal : COLOR.wall;
   brush.fillRect(x, y, w, h);
   brush.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
 
-  brush.fillStyle = station.glow > 0.02 ? COLOR.mint : COLOR.steel;
+  // The name goes over the machine and to one side of it: the worker stands
+  // at the middle of the bench, and a name centred there would be under them.
+  brush.fillStyle = lit ? COLOR.plaster : COLOR.steel;
   brush.font = "10px ui-monospace, Menlo, monospace";
-  brush.textAlign = "center";
-  brush.fillText(station.title.toUpperCase(), station.x, y + 17);
-  brush.textAlign = "left";
+  brush.fillText(station.title.toUpperCase(), x + 2, y - 13);
 
-  // A machine under the name: two dials and a run lamp.
+  // Two dials and a run lamp, out at the edges the worker leaves clear.
   brush.strokeStyle = COLOR.steel;
-  brush.beginPath(); brush.arc(x + 34, y + 40, 9, 0, Math.PI * 2); brush.stroke();
-  brush.beginPath(); brush.arc(x + 60, y + 40, 9, 0, Math.PI * 2); brush.stroke();
-  brush.fillStyle = station.glow > 0.02 ? COLOR.teal : COLOR.deep;
-  brush.fillRect(x + 88, y + 34, 12, 12);
-  brush.fillStyle = "#141b1d";
-  brush.fillRect(station.x - 5, y + h, 10, 8);
+  brush.beginPath(); brush.arc(x + 16, y + 21, 8, 0, Math.PI * 2); brush.stroke();
+  brush.beginPath(); brush.arc(x + 34, y + 21, 8, 0, Math.PI * 2); brush.stroke();
+  brush.fillStyle = lit ? COLOR.teal : COLOR.deep;
+  brush.fillRect(x + w - 26, y + 15, 12, 12);
 }
 
 function drawPlace(name) {
   const place = state.places[name];
   const stamped = name === "pruefbuch" ? state.book.stamp : 0;
   brush.strokeStyle = stamped > 0.02 ? COLOR.ochre : COLOR.wall;
-  brush.fillStyle = "rgba(24, 33, 35, 0.9)";
+  // The intake and the outfeed are solid: a piece waiting inside one of them
+  // is inside it, not showing through the front.
+  brush.fillStyle = place.band ? "#182123" : "rgba(24, 33, 35, 0.9)";
   const w = 92, h = 44;
   brush.fillRect(place.x - w / 2, place.y - h / 2, w, h);
   brush.strokeRect(place.x - w / 2 + 0.5, place.y - h / 2 + 0.5, w - 1, h - 1);
@@ -731,16 +982,18 @@ function drawPlace(name) {
   brush.fillStyle = name === "ausschuss" ? COLOR.vermilion
     : name === "pruefbuch" ? COLOR.ochre : COLOR.steel;
   brush.font = "9px ui-monospace, Menlo, monospace";
+  // Every place is named over its left shoulder, clear of both the box and
+  // whoever is standing at it.
+  brush.fillText(place.label, place.x - w / 2 + 2, place.y - h / 2 - 7);
   brush.textAlign = "center";
-  brush.fillText(place.label, place.x, place.y + h / 2 + 13);
 
   if (name === "pruefbuch") {
     brush.fillStyle = COLOR.ochre;
     state.book.entries.slice(-14).forEach((entry, index) => {
-      brush.fillRect(place.x - 34 + (index % 7) * 10, place.y - 8 + Math.floor(index / 7) * 9, 7, 5);
+      brush.fillRect(place.x - 34 + (index % 7) * 10, place.y - 17 + Math.floor(index / 7) * 8, 7, 5);
     });
-    brush.fillStyle = COLOR.mint;
-    brush.fillText(`${state.book.entries.length}`, place.x, place.y - 12);
+    brush.fillStyle = COLOR.plaster;
+    brush.fillText(`${state.book.entries.length}`, place.x + 38, place.y - h / 2 - 7);
   }
   if (name === "versand") {
     brush.fillStyle = COLOR.ochre;
@@ -750,7 +1003,7 @@ function drawPlace(name) {
   if (name === "ausschuss") {
     brush.fillStyle = COLOR.vermilion;
     brush.font = "13px ui-monospace, Menlo, monospace";
-    brush.fillText(String(state.scrap), place.x, place.y + 5);
+    brush.fillText(String(state.scrap), place.x + 38, place.y - h / 2 - 5);
   }
   brush.textAlign = "left";
 }
@@ -760,9 +1013,22 @@ function drawPart(part) {
   brush.save();
   brush.globalAlpha = part.fall ? Math.max(0, 1 - part.fall / 2.2) : 1;
   brush.fillStyle = part.tone;
-  brush.fillRect(part.x - 7, part.y - 6 + drop, 14, 12);
-  brush.fillStyle = "#141b1d";
-  brush.fillRect(part.x - 7, part.y - 1 + drop, 14, 2);
+  if (part.plan) {
+    // A plan is a sheet, not a crate, so the two never read as the same thing.
+    brush.fillRect(part.x - 6, part.y - 9 + drop, 12, 18);
+    brush.fillStyle = "#141b1d";
+    for (let line = 0; line < 3; line++) brush.fillRect(part.x - 4, part.y - 5 + line * 5 + drop, 8, 1);
+  } else {
+    // A crate stands proud of the belt, banded and edged, so it is never taken
+    // for one of the rollers turning under it.
+    const top = part.y - 11 + drop;
+    brush.fillRect(part.x - 8, top, 16, 15);
+    brush.fillStyle = "#141b1d";
+    brush.fillRect(part.x - 6, top + 5, 12, 2);
+    brush.fillRect(part.x - 6, top + 10, 12, 2);
+    brush.strokeStyle = COLOR.soot;
+    brush.strokeRect(part.x - 8.5, top - 0.5, 17, 16);
+  }
   brush.restore();
 }
 
@@ -770,7 +1036,10 @@ function drawWorker(agent, now) {
   const art = FIGURE[agent.walking ? agent.step : 0];
   const colour = agent.shake > 0.02 ? COLOR.vermilion : (POOL[agent.pool] || COLOR.steel);
   const jitter = agent.shake > 0.02 ? (Math.random() - 0.5) * 4 : 0;
-  const x = Math.round(agent.x + jitter) - (art[0].length * BLOCK) / 2;
+  // A worker with nothing left to do is standing, not stopped: a slow shift of
+  // weight keeps an idle figure reading as a person rather than as a freeze.
+  const sway = agent.walking ? 0 : Math.sin(now / 620 + agent.seat * 2) * 1.4;
+  const x = Math.round(agent.x + jitter + sway) - (art[0].length * BLOCK) / 2;
   const y = Math.round(agent.y) - art.length * BLOCK;
 
   brush.fillStyle = colour;
@@ -780,17 +1049,15 @@ function drawWorker(agent, now) {
     });
   });
 
-  // The slips in the pocket. Tall enough that a scanline cannot hollow one
-  // out, which reads as an empty box rather than a piece of paper.
+  // The arm out to the piece in the hand, which `update` holds at hip height.
   const carried = [...state.parts.values()].find((part) => part.held === agent.name);
   if (carried) {
-    brush.strokeStyle = colour;
-    brush.beginPath();
-    brush.moveTo(agent.x, agent.y - 14);
-    brush.lineTo(carried.x, carried.y + 4);
-    brush.stroke();
+    brush.fillStyle = colour;
+    brush.fillRect(agent.x + 6, agent.y - 15, carried.x - agent.x - 6, BLOCK);
   }
 
+  // The slips in the pocket. Tall enough that a scanline cannot hollow one
+  // out, which reads as an empty box rather than a piece of paper.
   agent.pocket.slice(0, 6).forEach((held, index) => {
     const slip = x - 9 + index * 8;
     brush.fillStyle = held.passt === false ? COLOR.vermilion : COLOR.ochre;

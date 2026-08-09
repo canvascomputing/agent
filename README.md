@@ -22,7 +22,7 @@
 ---
 
 <div align="center">
-  <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/demo.gif" width="800" />
+  <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/tickets.gif" width="800" />
 </div>
 <div align="center"><a href="crates/agentwerk-py/examples/apparat_fabrik.py">Apparat Fabrik</a></div>
 <div align="center"><em>agentwerk pairs "agent" with the German "Werk", a word for both factory and artwork: machinery for building agentic systems.</em></div>
