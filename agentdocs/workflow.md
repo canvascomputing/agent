@@ -62,6 +62,13 @@ export OPENAI_BASE_URL=http://localhost:8095
 - Source files live in `hooks/` (tracked). `make hooks` copies them into `.claude/hooks/` (ignored) and merges the configuration.
 - `check-conventions.sh` injects `agentdocs/style.md` and `agentdocs/architecture.md` as context after each Rust file edit.
 
+## Skills
+
+**`make skills` symlinks every directory under `skills/` into `~/.claude/skills` and `~/.config/opencode/skills`.**
+
+- `skills/prompt` writes and rewrites the crate's agent-facing text: role files, `*.tool.md` definitions, directives.
+- IMPORTANT: the destinations are shared across every project. A skill of the same name already installed there is replaced, so `make skills` changes what `/prompt` means everywhere, not just here.
+
 ## Use Cases
 
 **Example agents live in a separate crate and run through `make use_case`.**
