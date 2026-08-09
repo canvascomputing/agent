@@ -49,7 +49,7 @@ impl PyTicket {
         self.inner.has_label(label)
     }
 
-    /// Check whether the ticket is still waiting to be claimed.
+    /// Check whether the ticket is waiting to be claimed.
     fn is_todo(&self) -> bool {
         self.inner.is_todo()
     }
@@ -69,14 +69,9 @@ impl PyTicket {
         self.inner.is_in_progress()
     }
 
-    /// Check whether the ticket is still open, either todo or in progress.
+    /// Check whether the ticket is still todo or in progress.
     fn is_pending(&self) -> bool {
         self.inner.is_pending()
-    }
-
-    /// Check whether the ticket is resolved, either finished or failed.
-    fn is_resolved(&self) -> bool {
-        self.inner.is_resolved()
     }
 
     #[getter]
@@ -108,7 +103,7 @@ impl PyTicket {
         self.inner.labels.clone()
     }
 
-    /// Schema the result must satisfy, when there is one.
+    /// Optional schema the result must satisfy.
     #[getter]
     fn schema(&self) -> Option<PySchema> {
         self.inner.schema.as_ref().map(|schema| PySchema {
@@ -121,13 +116,13 @@ impl PyTicket {
         self.inner.parent.clone()
     }
 
-    /// Name of the agent that opened the ticket.
+    /// Name of the agent that created the ticket.
     #[getter]
     fn reporter(&self) -> &str {
         &self.inner.reporter
     }
 
-    /// Name of the agent that claimed the ticket, once one has.
+    /// Name of the agent that claimed the ticket.
     #[getter]
     fn assignee(&self) -> Option<String> {
         self.inner.assignee.clone()

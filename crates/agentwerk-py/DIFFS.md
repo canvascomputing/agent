@@ -20,7 +20,6 @@ Seven rules the surface table below never repeats.
 |------|--------|
 | **Agent** | |
 | `Agent::new() -> AgentBuilder<(), ()>` | `Agent()` |
-| `Agent::empty() -> AgentBuilder<(), ()>` | `Agent.empty()` |
 | `Agent::from_env() -> AgentBuilder<Provider, Model>` | `Agent.from_env()`: raises `RuntimeError` where Rust panics. |
 | `AgentBuilder<P, M>` | Folded into `Agent`: the type changes as the provider and model slots fill, which Python cannot hold across calls. |
 | `AgentBuilder::provider(p)` | `Agent.provider(provider)` |
@@ -37,7 +36,6 @@ Seven rules the surface table below never repeats.
 | `AgentBuilder::dir(p)` | `Agent.dir(dir)` |
 | `AgentBuilder::knowledge(store)` | `Agent.knowledge(store)` |
 | `AgentBuilder::build(self) -> Agent` | `Agent.build() -> Agent`: returns the same object, armed. Configuring after it, or building twice, raises. |
-| `Agent::ticket_queue(queue)` | `Agent.ticket_queue(queue)` |
 | `Agent::task(task) -> String` | `Agent.task(task) -> str` |
 | `Agent::ticket(ticket) -> String` | `Agent.ticket(ticket) -> str` |
 | `Agent::start() -> Arc<TicketQueue>` | `Agent.start()` |
@@ -70,7 +68,6 @@ Seven rules the surface table below never repeats.
 | `TicketQueue::get_compact_at()` | `TicketQueue.get_compact_at()` |
 | `TicketQueue::dir(dir)` | `TicketQueue.dir(dir)` |
 | `TicketQueue::get_dir()` | `TicketQueue.get_dir()` |
-| `TicketQueue::schema_for_label(label, schema)` | `TicketQueue.schema_for_label(label, schema)` |
 | `TicketQueue::on_event(h)` | `TicketQueue.on_event(callback)` |
 | `TicketQueue::on_result(handler)` | `TicketQueue.on_result(callback)` |
 | `TicketQueue::on_failure(handler)` | `TicketQueue.on_failure(callback)` |
@@ -106,11 +103,10 @@ Seven rules the surface table below never repeats.
 | `Ticket::is_finished()` | `Ticket.is_finished()` |
 | `Ticket::is_failed()` | `Ticket.is_failed()` |
 | `Ticket::is_pending()` | `Ticket.is_pending()` |
-| `Ticket::is_resolved()` | `Ticket.is_resolved()` |
 | `Ticket.key`, `.status`, `.task`, `.result`, `.labels`, `.schema`, `.parent`, `.reporter`, `.assignee` | Same names, same meaning. |
 | `Ticket.created_at`, `.started_at`, `.finished_at`, `.failed_at` | Same names, same meaning. |
 | `Ticket.replies` | `Ticket.replies`: a list of `Reply`, converted on access. |
-| `Status` | A string. The six `is_*` predicates read better than comparing it. |
+| `Status` | A string. The five `is_*` predicates read better than comparing it. |
 | `TicketError` | `RuntimeError` |
 | **Replies** | |
 | `Reply { author, content, created_at }` | `Reply.author`, `.content`, `.created_at` |

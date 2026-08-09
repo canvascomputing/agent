@@ -33,38 +33,36 @@ use super::reply::{Author, Reply, ReplyContent};
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Ticket {
-    /// What the agent is asked to do, as any JSON value.
+    /// The work the agent is asked to do.
     pub task: serde_json::Value,
     /// Labels carried by the ticket.
     pub labels: Vec<String>,
-    /// Schema the result must satisfy, when there is one.
+    /// Optional schema the result must satisfy.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub schema: Option<crate::schemas::Schema>,
-    /// Stable key, of the form `TICKET-N`.
+    /// Ticket key, of the form `TICKET-N`.
     pub key: String,
-    /// Where the ticket is in its lifecycle.
+    /// The ticket lifecycle status.
     pub status: Status,
-    /// Name of the agent that opened the ticket.
+    /// Name of the agent that created the ticket.
     pub reporter: String,
-    /// Name of the agent that claimed the ticket, once one has.
+    /// Name of the agent that claimed the ticket.
     ///
     /// A label carrying an agent's name only makes the ticket eligible for it;
     /// this names the agent that actually took it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assignee: Option<String>,
-    /// When the ticket was created, in milliseconds.
+    /// Creation time, in milliseconds.
     pub created_at: u64,
-    /// When an agent claimed the ticket, in milliseconds.
+    /// Claim time, in milliseconds.
     pub started_at: Option<u64>,
-    /// When the ticket finished, in milliseconds. Never set together with
-    /// `failed_at`.
+    /// Finish time, in milliseconds. Never set together with `failed_at`.
     pub finished_at: Option<u64>,
-    /// When the ticket failed, in milliseconds. Never set together with
-    /// `finished_at`.
+    /// Failure time, in milliseconds. Never set together with `finished_at`.
     pub failed_at: Option<u64>,
-    /// What the agent produced.
+    /// The result the agent produced.
     pub result: Option<serde_json::Value>,
-    /// The ticket this one came from, when there is one.
+    /// The parent ticket if a handover was performed.
     pub parent: Option<String>,
     /// Messages exchanged with the model.
     #[serde(skip)]
@@ -112,6 +110,7 @@ impl Ticket {
         self
     }
 
+    /// Constrain the result to a schema.
     pub fn schema(mut self, schema: crate::schemas::Schema) -> Self {
         self.schema = Some(schema);
         self
@@ -131,7 +130,7 @@ impl Ticket {
         self.labels.iter().any(|l| l == label)
     }
 
-    /// Check whether the ticket is still waiting to be claimed.
+    /// Check whether the ticket is waiting to be claimed.
     pub fn is_todo(&self) -> bool {
         self.status == Status::Todo
     }
@@ -151,14 +150,9 @@ impl Ticket {
         self.status == Status::InProgress
     }
 
-    /// Check whether the ticket is still open, either `Todo` or `InProgress`.
+    /// Check whether the ticket is still todo or in progress.
     pub fn is_pending(&self) -> bool {
         matches!(self.status, Status::Todo | Status::InProgress)
-    }
-
-    /// Check whether the ticket is resolved, either `Finished` or `Failed`.
-    pub fn is_resolved(&self) -> bool {
-        matches!(self.status, Status::Finished | Status::Failed)
     }
 
     /// False once the model has spoken. The agent then waits for the next
@@ -554,19 +548,6 @@ mod tests {
         for status in [Status::Finished, Status::Failed] {
             t.status = status;
             assert!(!t.is_pending(), "expected !is_pending for {status:?}");
-        }
-    }
-
-    #[test]
-    fn is_resolved_true_for_finished_and_failed() {
-        let mut t = Ticket::new("x");
-        for status in [Status::Finished, Status::Failed] {
-            t.status = status;
-            assert!(t.is_resolved(), "expected is_resolved for {status:?}");
-        }
-        for status in [Status::Todo, Status::InProgress] {
-            t.status = status;
-            assert!(!t.is_resolved(), "expected !is_resolved for {status:?}");
         }
     }
 }

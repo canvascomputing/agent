@@ -36,7 +36,6 @@ def test_status_predicates_agree_with_the_status_string(queue):
     assert not ticket.is_in_progress()
     assert not ticket.is_finished()
     assert not ticket.is_failed()
-    assert not ticket.is_resolved()
 
 
 def test_parent_records_the_handover_trail(queue):
@@ -71,11 +70,6 @@ def test_schema_validate_rejects_a_violating_value():
 def test_invalid_schema_document_is_rejected_with_runtime_error():
     with pytest.raises(RuntimeError):
         aw.Schema({"type": "not-a-real-type"})
-
-
-def test_schema_for_label_chains(queue):
-    configured = queue.schema_for_label("scan", aw.Schema({"type": "object"}))
-    assert isinstance(configured, aw.TicketQueue)
 
 
 def test_policy_setters_chain(queue):

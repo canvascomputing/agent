@@ -35,15 +35,12 @@ pub struct PyAgent {
     model: Option<Model>,
     tools: Vec<Arc<dyn ToolLike>>,
     knowledge: Option<Arc<Knowledge>>,
-    /// True when the agent came from `Agent.empty()`, which registers no finish
-    /// tool.
-    empty: bool,
     /// Set by `build()`. Every method that reaches the queue needs it.
     agent: Option<Agent>,
 }
 
 impl PyAgent {
-    fn create(empty: bool) -> Self {
+    fn create() -> Self {
         PyAgent {
             name: None,
             role: None,
@@ -55,7 +52,6 @@ impl PyAgent {
             model: None,
             tools: Vec::new(),
             knowledge: None,
-            empty,
             agent: None,
         }
     }
@@ -80,12 +76,6 @@ impl PyAgent {
 
     /// Turn the collected configuration into an `Agent`.
     fn assemble(&self) -> PyResult<Agent> {
-        let base = if self.empty {
-            Agent::empty()
-        } else {
-            Agent::new()
-        };
-
         let provider = self.provider.as_ref().ok_or_else(|| {
             runtime_error(
                 "provider not set: use Agent.from_env(), or provider(Provider.from_env())",
@@ -97,7 +87,7 @@ impl PyAgent {
             )
         })?;
 
-        let mut builder = base.provider(provider.clone()).model(model.clone());
+        let mut builder = Agent::new().provider(provider.clone()).model(model.clone());
 
         if let Some(name) = &self.name {
             builder = builder.name(name.clone());
@@ -131,21 +121,13 @@ impl PyAgent {
 impl PyAgent {
     #[new]
     fn new() -> Self {
-        PyAgent::create(false)
-    }
-
-    /// Create an agent with no tools pre-registered.
-    ///
-    /// Register a finish tool yourself, or the agent cannot finish a ticket.
-    #[staticmethod]
-    fn empty() -> Self {
-        PyAgent::create(true)
+        PyAgent::create()
     }
 
     /// Create an agent with the provider and model from the environment.
     #[staticmethod]
     fn from_env() -> PyResult<Self> {
-        let mut agent = PyAgent::create(false);
+        let mut agent = PyAgent::create();
         agent.provider = Some(Provider::from_env().map_err(runtime_error)?);
         agent.model = Some(Model::from_env().map_err(runtime_error)?);
         Ok(agent)
@@ -299,17 +281,6 @@ impl PyAgent {
     /// Submit a `Ticket` with custom labels or schema, and return its key.
     fn ticket(&self, ticket: PyRef<'_, PyTicket>) -> PyResult<String> {
         Ok(self.built()?.ticket(ticket.to_ticket()))
-    }
-
-    /// Attach a built agent to a ticket queue, moving any tickets it queued on
-    /// its own across first.
-    fn ticket_queue<'py>(
-        mut slf: PyRefMut<'py, Self>,
-        queue: PyRef<'_, PyTicketQueue>,
-    ) -> PyResult<PyRefMut<'py, Self>> {
-        let rebound = slf.built()?.clone().ticket_queue(&queue.inner);
-        slf.agent = Some(rebound);
-        Ok(slf)
     }
 
     /// Begin processing tickets, and hand back the ticket queue so results,
