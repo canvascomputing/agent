@@ -13,13 +13,13 @@ use crate::tools::ToolCall;
 use super::agent::TicketContext;
 use super::Step;
 
-pub(super) async fn run(context: &mut TicketContext<'_>) -> Step {
+pub(super) async fn run(context: &mut TicketContext<'_>) -> Option<Step> {
     // Let registered editors rewrite or drop messages before the request
     // is assembled; the re-read below then projects the edited transcript.
     context.ticket_queue.run_reply_editor(&context.ticket_key);
 
     let Some(ticket) = context.ticket() else {
-        return Step::ClaimTicket;
+        return None;
     };
     let tools =
         finish_tool_with_ticket_schema(ticket.schema.as_ref(), context.agent.tool_definitions());
@@ -58,14 +58,14 @@ pub(super) async fn run(context: &mut TicketContext<'_>) -> Step {
             });
             tokio::select! {
                 biased;
-                _ = context.run.until_draining() => return Step::ClaimTicket,
+                _ = context.run.until_draining() => return None,
                 result = provider.respond(request.clone(), emit_stream) => result,
             }
         };
         match outcome {
             Ok(response) => break response,
             Err(ProviderError::ContextWindowExceeded { .. }) => {
-                return Step::Compact(CompactReason::Reactive);
+                return Some(Step::Compact(CompactReason::Reactive));
             }
             Err(error) if error.is_retryable() => match retry.try_consume() {
                 Some(attempt) => {
@@ -79,18 +79,18 @@ pub(super) async fn run(context: &mut TicketContext<'_>) -> Step {
                     });
                     tokio::select! {
                         biased;
-                        _ = context.run.until_draining() => return Step::ClaimTicket,
+                        _ = context.run.until_draining() => return None,
                         _ = tokio::time::sleep(delay) => {}
                     }
                 }
                 None => {
                     context.fail_with(error.kind(), error.to_string());
-                    return Step::ClaimTicket;
+                    return None;
                 }
             },
             Err(error) => {
                 context.fail_with(error.kind(), error.to_string());
-                return Step::ClaimTicket;
+                return None;
             }
         }
     };
@@ -113,7 +113,7 @@ pub(super) async fn run(context: &mut TicketContext<'_>) -> Step {
     });
 
     if overflowed {
-        return Step::Compact(CompactReason::Reactive);
+        return Some(Step::Compact(CompactReason::Reactive));
     }
 
     let calls: Vec<ToolCall> = response
@@ -129,9 +129,9 @@ pub(super) async fn run(context: &mut TicketContext<'_>) -> Step {
         })
         .collect();
     if calls.is_empty() {
-        Step::Evaluate
+        Some(Step::Evaluate)
     } else {
-        Step::ToolCalls(calls)
+        Some(Step::ToolCalls(calls))
     }
 }
 

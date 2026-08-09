@@ -11,9 +11,9 @@ use crate::event::{CompactReason, EventKind};
 use super::agent::TicketContext;
 use super::Step;
 
-pub(super) async fn run(context: &mut TicketContext<'_>, reason: CompactReason) -> Step {
+pub(super) async fn run(context: &mut TicketContext<'_>, reason: CompactReason) -> Option<Step> {
     let Some(mut ticket) = context.ticket() else {
-        return Step::ClaimTicket;
+        return None;
     };
     let window = context.model.get_context_window();
     let editor = context.ticket_queue.compaction_editor();
@@ -67,7 +67,7 @@ pub(super) async fn run(context: &mut TicketContext<'_>, reason: CompactReason) 
                 message: error.to_string(),
             });
             context.fail_ticket();
-            return Step::ClaimTicket;
+            return None;
         }
     };
 
@@ -87,14 +87,14 @@ pub(super) async fn run(context: &mut TicketContext<'_>, reason: CompactReason) 
             message: "context still exceeds window after compaction".into(),
         });
         context.fail_ticket();
-        return Step::ClaimTicket;
+        return None;
     }
 
     context.emit(EventKind::CompactionFinished { reason });
     match reason {
         // Proactive skips Evaluate, which would re-trigger its own threshold.
-        CompactReason::Proactive => Step::Request,
-        CompactReason::Reactive => Step::Evaluate,
+        CompactReason::Proactive => Some(Step::Request),
+        CompactReason::Reactive => Some(Step::Evaluate),
     }
 }
 

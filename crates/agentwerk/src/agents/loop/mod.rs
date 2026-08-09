@@ -17,15 +17,15 @@ pub(super) use self::main::run_main_loop;
 
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
 
-/// What the agent does next with its claimed ticket.
+/// What the agent does next with its claimed ticket. A step gives back `None`
+/// when there is nothing more to do, whatever the ticket's status, and the
+/// agent returns to claiming.
 enum Step {
     /// Re-read the ticket: it may have been resolved or cancelled since.
     Evaluate,
     Compact(CompactReason),
     Request,
     ToolCalls(Vec<ToolCall>),
-    /// Nothing more to do on this ticket, whatever its status.
-    ClaimTicket,
 }
 
 #[cfg(test)]
