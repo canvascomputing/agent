@@ -1,4 +1,9 @@
-.PHONY: build test test_integration fmt clean update use_case litellm bump doc hooks python python_test python_test_integration
+.PHONY: build test test_integration fmt clean update use_case litellm bump doc hooks skills python python_test python_test_integration
+
+CLAUDE_SKILLS_DIR := $(HOME)/.claude/skills
+OPENCODE_SKILLS_DIR := $(HOME)/.config/opencode/skills
+SKILL_DESTS := $(CLAUDE_SKILLS_DIR) $(OPENCODE_SKILLS_DIR)
+SKILL_NAMES := $(notdir $(shell find $(CURDIR)/skills -mindepth 1 -maxdepth 1 -type d))
 
 # Build the project (warnings are errors)
 build: fmt
@@ -100,6 +105,18 @@ hooks:
 	@jq -s '.[0] * .[1]' .claude/settings.local.json hooks/hooks.json > .claude/settings.local.tmp \
 		&& mv .claude/settings.local.tmp .claude/settings.local.json
 	@echo "Hooks installed into .claude/settings.local.json"
+
+# Symlink every skill under skills/ into each tool's skills directory
+# A skill of the same name already installed there is replaced
+skills:
+	@for dest in $(SKILL_DESTS); do \
+		mkdir -p "$$dest"; \
+		for name in $(SKILL_NAMES); do \
+			rm -rf "$$dest/$$name"; \
+			ln -s "$(CURDIR)/skills/$$name" "$$dest/$$name"; \
+			echo "$$name → $$dest/$$name"; \
+		done; \
+	done
 
 # Start a LiteLLM proxy on localhost:4000
 # Forwards the provider's API key from your environment (never leaked in commands)
