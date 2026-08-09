@@ -12,7 +12,7 @@ use crate::tools::{ToolCall, ToolContext, ToolError};
 use super::agent::TicketContext;
 use super::Step;
 
-pub(super) async fn run(context: &mut TicketContext<'_>, mut calls: Vec<ToolCall>) -> Step {
+pub(super) async fn run(context: &mut TicketContext<'_>, mut calls: Vec<ToolCall>) -> Option<Step> {
     let max_schema_retries = context.policies.max_schema_retries.unwrap_or(u32::MAX);
 
     // Report the registered name, so a model alternating spellings of one tool
@@ -147,9 +147,9 @@ pub(super) async fn run(context: &mut TicketContext<'_>, mut calls: Vec<ToolCall
         let _ = context
             .ticket_queue
             .set_failed_by(&context.ticket_key, context.agent.get_name());
-        return Step::ClaimTicket;
+        return None;
     }
-    Step::Evaluate
+    Some(Step::Evaluate)
 }
 
 #[cfg(test)]

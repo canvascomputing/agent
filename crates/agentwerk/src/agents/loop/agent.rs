@@ -83,14 +83,13 @@ pub(super) async fn run_agent(agent: Agent) {
             tokio::time::sleep(POLL_INTERVAL).await;
             continue;
         };
-        let mut step = Step::Evaluate;
-        loop {
-            step = match step {
+        let mut step = Some(Step::Evaluate);
+        while let Some(current) = step {
+            step = match current {
                 Step::Evaluate => evaluate(&mut context),
                 Step::Compact(reason) => compact::run(&mut context, reason).await,
                 Step::Request => request::run(&mut context).await,
                 Step::ToolCalls(calls) => tool_call::run(&mut context, calls).await,
-                Step::ClaimTicket => break,
             };
         }
     }
@@ -172,41 +171,41 @@ fn claim<'a>(agent: &'a Agent, ticket_queue: &'a Arc<TicketQueue>) -> Option<Tic
 }
 
 /// Re-read the ticket and decide the next step.
-fn evaluate(context: &mut TicketContext<'_>) -> Step {
+fn evaluate(context: &mut TicketContext<'_>) -> Option<Step> {
     // The pure check, not `run_is_over`: the outer loop emits the
     // `PolicyViolated` a moment later, and emitting it twice would double-count.
     if !context.ticket_queue.run.is_working()
         || policy_violated_kind(&context.policies, &context.ticket_queue.stats).is_some()
     {
-        return Step::ClaimTicket;
+        return None;
     }
     let Some(ticket) = context.ticket() else {
-        return Step::ClaimTicket;
+        return None;
     };
     if context.ticket_queue.is_cancelled(&ticket) {
-        return Step::ClaimTicket;
+        return None;
     }
     // The transition itself already emitted the terminal event; the agent
     // only moves on to fresh work.
     if ticket.is_resolved() {
-        return Step::ClaimTicket;
+        return None;
     }
     if !ticket.is_waiting_for_response() {
         if context.agent.is_interactive() {
             // Pause until a caller reply lands; the resume claim re-checks.
-            return Step::ClaimTicket;
+            return None;
         }
         return silence_retry(context);
     }
     if compact::proactive_compaction_needed(context, &ticket) {
-        return Step::Compact(CompactReason::Proactive);
+        return Some(Step::Compact(CompactReason::Proactive));
     }
-    Step::Request
+    Some(Step::Request)
 }
 
 /// The model replied without a tool call: prompt it to resume or finish,
 /// counting the silence toward the schema-retry budget.
-fn silence_retry(context: &mut TicketContext<'_>) -> Step {
+fn silence_retry(context: &mut TicketContext<'_>) -> Option<Step> {
     let max = context.policies.max_schema_retries.unwrap_or(u32::MAX);
     context.consecutive_schema_failures = context.consecutive_schema_failures.saturating_add(1);
     if context.consecutive_schema_failures >= max {
@@ -217,7 +216,7 @@ fn silence_retry(context: &mut TicketContext<'_>) -> Step {
         let _ = context
             .ticket_queue
             .set_failed_by(&context.ticket_key, context.agent.get_name());
-        return Step::ClaimTicket;
+        return None;
     }
     let retried = context.emit(EventKind::SchemaRetried {
         attempt: context.consecutive_schema_failures,
@@ -228,7 +227,7 @@ fn silence_retry(context: &mut TicketContext<'_>) -> Step {
         &context.ticket_key,
         Reply::user_text(context.retry_directive(RESUME_OR_FINISH_DETAIL, &retried)),
     );
-    Step::Evaluate
+    Some(Step::Evaluate)
 }
 
 #[cfg(test)]
