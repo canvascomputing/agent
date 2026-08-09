@@ -5,7 +5,7 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use grep::searcher::sinks::UTF8;
@@ -86,13 +86,14 @@ impl ToolLike for GrepTool {
             // a runtime worker. The interrupt flag and deadline let it bail between
             // files, since a spawn_blocking task cannot be force-killed.
             let dir = ctx.dir.clone();
-            let interrupt = ctx.interrupt_signal.clone();
+            let interrupt = Arc::new(AtomicBool::new(false));
+            let searching = Arc::clone(&interrupt);
             let deadline = Instant::now() + SEARCH_TIMEOUT;
             let handle = tokio::task::spawn_blocking(move || {
-                search_corpus(&dir, &query, &interrupt, deadline)
+                search_corpus(&dir, &query, &searching, deadline)
             });
 
-            Ok(tokio::select! {
+            let outcome = tokio::select! {
                 biased;
                 _ = ctx.wait_for_cancel() => ToolResult::error("Search cancelled"),
                 r = tokio::time::timeout(SEARCH_TIMEOUT, handle) => match r {
@@ -105,7 +106,10 @@ impl ToolLike for GrepTool {
                     Ok(Err(_)) => ToolResult::error("Search failed"),
                     Ok(Ok(result)) => result,
                 },
-            })
+            };
+            // Whichever branch lost, the blocking thread is still walking files.
+            interrupt.store(true, Ordering::Relaxed);
+            Ok(outcome)
         })
     }
 }
