@@ -9,7 +9,6 @@
 </div>
 
 <div align="center">
-  <a href="#demo">Demo</a> •
   <a href="#installation">Installation</a> •
   <a href="crates/agentwerk-py/README.md">Python</a> •
   <a href="#quick-start">Quick Start</a> •
@@ -19,6 +18,12 @@
 
 <div align="center">agentwerk is designed to tackle complex problems with fleets of agents through the simplest interface possible. It provides a ticket queue which distributes tasks across agents running in parallel, validates results, retries on failure, and reports every step as an event.</div>
 
+---
+
+<div align="center">
+  <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/demo.gif" width="800" />
+</div>
+<div align="center"><a href="https://github.com/canvascomputing/agentwerk/blob/main/crates/agentwerk-py/examples/apparat_fabrik.py">Apparat Fabrik</a></div>
 <div align="center"><em>agentwerk pairs "agent" with the German "Werk", a word for both factory and artwork: machinery for building agentic systems.</em></div>
 
 ---
@@ -30,14 +35,6 @@
 - **Deep observability:** inspect every request, message and failure.
 - **Ease of integration:** apply agents as simple as HTTP calls.
 - **Facilitate training:** collect trajectories for fine-tuning models.
-
-## Demo
-
-<div align="left">
-  <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/demo.gif" width="600" />
-</div>
-
-The recording shows [Apparat Fabrik](https://github.com/canvascomputing/agentwerk/blob/main/crates/agentwerk-py/examples/apparat_fabrik.py), a shift on the line of an apparatus works.
 
 ## Installation
 
@@ -74,48 +71,6 @@ async def main():
 
 
 asyncio.run(main())
-```
-
-## Agent Swarms
-
-Run many agents in parallel and let them share what they learn:
-
-```python
-from agentwerk import Agent, Knowledge, Ticket, TicketQueue
-from agentwerk import GrepTool, ManageTicketsTool, ReadFileTool
-
-tickets = TicketQueue()
-notes = Knowledge.load("./notes")
-
-for _ in range(4):
-    tickets.agent(
-        Agent.from_env()
-        .label("scan")
-        .role(
-            "Grep for code that can panic. File a `report` ticket per finding, and note what you learn."
-        )
-        .knowledge(notes)
-        .tool(GrepTool())
-        .tool(ManageTicketsTool())
-        .build()
-    )
-
-tickets.agent(
-    Agent.from_env()
-    .label("report")
-    .role("Read the cited file and explain the fix in two sentences.")
-    .knowledge(notes)
-    .tool(ReadFileTool())
-    .build()
-)
-
-for dir in ["src/api", "src/db", "src/web", "src/cli"]:
-    tickets.ticket(Ticket(f"Audit {dir}.", labels=["scan"]))
-
-await tickets.finish()
-
-for fix in tickets.results_for_label("report"):
-    print(fix)
 ```
 
 ## Use Cases
