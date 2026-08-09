@@ -16,7 +16,6 @@ use tokio::task::JoinHandle;
 use crate::event::{default_logger, Event, EventKind, FinishReason};
 use crate::persistence::Persist;
 use crate::providers::ProviderResult;
-use crate::schemas::Schema;
 
 use super::super::agent::{Agent, TicketQueueRef};
 use super::super::compaction::Compaction;
@@ -217,10 +216,6 @@ pub struct TicketQueue {
     /// claimed nor resumed, and an agent already holding one is taken off it,
     /// while the rest of the run continues.
     pub(crate) cancel_filters: Mutex<Vec<Arc<TicketFilter>>>,
-    /// Result schema applied at insert time to every ticket that carries a
-    /// registered label and no schema of its own, so a result contract follows
-    /// its label no matter how the ticket was created.
-    pub(crate) label_schemas: Mutex<HashMap<String, Schema>>,
     /// How many terminal status transitions are between their status change and
     /// the return of their event handlers. `work_left` counts a non-zero value as
     /// pending work, so a handler creating a follow-up ticket always beats the drain.
@@ -264,7 +259,6 @@ impl TicketQueue {
             policies: Mutex::new(Policies::default()),
             run: Arc::new(Run::default()),
             cancel_filters: Mutex::new(Vec::new()),
-            label_schemas: Mutex::new(HashMap::new()),
             terminal_transitions_in_flight: AtomicUsize::new(0),
             stats: Stats::new(),
             event_handlers: Mutex::new(Vec::new()),
@@ -340,7 +334,6 @@ impl TicketQueue {
             policies: Mutex::new(Policies::default()),
             run: Arc::new(Run::default()),
             cancel_filters: Mutex::new(Vec::new()),
-            label_schemas: Mutex::new(HashMap::new()),
             terminal_transitions_in_flight: AtomicUsize::new(0),
             stats,
             event_handlers: Mutex::new(Vec::new()),
@@ -909,19 +902,6 @@ impl TicketQueue {
         self.dir.lock().unwrap().clone()
     }
 
-    /// Register a schema every ticket of that label validates against.
-    ///
-    /// A ticket created with a schema of its own keeps it. Otherwise the schema
-    /// is applied at creation, so the contract follows the label whether the
-    /// ticket came from `task`, from `ticket`, or from a `finish` handover.
-    pub fn schema_for_label(&self, label: impl Into<String>, schema: Schema) -> &Self {
-        self.label_schemas
-            .lock()
-            .unwrap()
-            .insert(label.into(), schema);
-        self
-    }
-
     /// Submit a task and return its ticket key.
     pub fn task<T: Serialize>(&self, task: T) -> String {
         self.dispatch(Ticket::new(task))
@@ -1146,10 +1126,9 @@ impl TicketQueue {
 
     /// Add an agent to this ticket queue.
     ///
-    /// Any tickets the agent queued on its own move into this queue. To keep a
-    /// handle on the agent itself, use [`Agent::ticket_queue`] instead. An
-    /// agent added while execution is under way picks up its first ticket
-    /// within about 100 ms.
+    /// Any tickets the agent queued on its own move into this queue. An agent
+    /// added while execution is under way picks up its first ticket within
+    /// about 100 ms.
     pub fn agent(&self, mut agent: Agent) -> &Self {
         self.bind_agent(&mut agent);
         self
@@ -1298,7 +1277,8 @@ mod tests {
     #[test]
     fn repeated_task_calls_route_to_shared_queue_after_rebind() {
         let (queue, _tmp) = test_queue();
-        let alice = minimal_agent("alice").ticket_queue(&queue);
+        let mut alice = minimal_agent("alice");
+        queue.bind_agent(&mut alice);
         alice.task("first");
         alice.task("second");
         assert_eq!(queue.find_tickets(|t| t.status == Status::Todo).len(), 2);
@@ -1396,7 +1376,7 @@ mod tests {
     }
 
     #[test]
-    fn no_work_left_once_every_ticket_is_resolved() {
+    fn no_work_left_once_every_ticket_is_finished_or_failed() {
         let (queue, _tmp) = test_queue();
         queue.task("a");
         queue.task("b");

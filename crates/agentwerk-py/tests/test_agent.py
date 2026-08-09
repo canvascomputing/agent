@@ -38,16 +38,6 @@ def test_build_with_explicit_provider_and_model_succeeds(offline_agent):
     assert offline_agent.task("go").startswith("TICKET-")
 
 
-def test_empty_agent_builds_without_the_finish_tool():
-    agent = (
-        aw.Agent.empty()
-        .provider(aw.AnthropicProvider("test-key"))
-        .model("claude-sonnet-4-20250514")
-        .build()
-    )
-    assert agent.task("go").startswith("TICKET-")
-
-
 def test_model_accepts_a_tuned_model_object():
     agent = (
         aw.Agent()
@@ -104,6 +94,6 @@ def test_binding_an_agent_drains_its_queue_into_the_shared_queue(
     offline_agent, queue
 ):
     offline_agent.task("count to three")
-    offline_agent.ticket_queue(queue)
+    queue.agent(offline_agent)
 
     assert [t.task for t in queue.tickets()] == ["count to three"]

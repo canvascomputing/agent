@@ -60,28 +60,6 @@ impl AgentBuilder<(), ()> {
             knowledge,
         }
     }
-
-    /// Create an agent with no tools pre-registered.
-    ///
-    /// Register `FinishTool` yourself through [`Self::tool`]. Without it the
-    /// agent cannot finish a ticket, and the same ticket is tried again.
-    pub fn empty() -> Self {
-        let knowledge = Knowledge::load(".agentwerk").expect("open knowledge store");
-        let mut tools = ToolRegistry::default();
-        tools.register(ManageKnowledgeTool::new(Arc::clone(&knowledge)));
-        Self {
-            name: default_agent_name(),
-            provider: (),
-            model: (),
-            role: String::new(),
-            labels: Vec::new(),
-            interactive: false,
-            templates: Vec::new(),
-            tools,
-            dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-            knowledge,
-        }
-    }
 }
 
 impl<M> AgentBuilder<(), M> {
@@ -220,7 +198,7 @@ impl<P, M> AgentBuilder<P, M> {
     ///
     /// It replaces the store opened by default, both for what the prompt shows
     /// and for what `ManageKnowledgeTool` writes to. Hand the same store to
-    /// several agents the way `ticket_queue(&shared)` shares a queue.
+    /// several agents to share it between them.
     pub fn knowledge(mut self, store: &Arc<Knowledge>) -> Self {
         self.tools
             .register(ManageKnowledgeTool::new(Arc::clone(store)));
@@ -422,11 +400,6 @@ impl Agent {
         AgentBuilder::new()
     }
 
-    /// Start building an agent with no tools pre-registered.
-    pub fn empty() -> AgentBuilder<(), ()> {
-        AgentBuilder::empty()
-    }
-
     /// Start building an agent with the provider and model from the environment.
     /// Panics when no LLM provider variable is set.
     pub fn from_env() -> AgentBuilder<Provider, Model> {
@@ -528,15 +501,6 @@ impl Agent {
             out = out.replace(&format!("{{{key}}}"), value);
         }
         out
-    }
-
-    /// Attach a built agent to a ticket queue.
-    ///
-    /// Any tickets the agent already queued move across, and the agent starts
-    /// reading the shared queue.
-    pub fn ticket_queue(mut self, queue: &Arc<TicketQueue>) -> Self {
-        queue.bind_agent(&mut self);
-        self
     }
 
     /// Submit a task and return its ticket key.
@@ -790,7 +754,8 @@ mod tests {
         let dir = crate::test_util::TempDir::new().unwrap();
         let queue = crate::agents::TicketQueue::new();
         queue.dir(dir.path().to_path_buf());
-        let agent = built(Agent::new().template("topic", "rust")).ticket_queue(&queue);
+        let mut agent = built(Agent::new().template("topic", "rust"));
+        queue.bind_agent(&mut agent);
         agent.task("Search {topic} forums.");
         let stored = queue
             .tickets()
@@ -810,7 +775,8 @@ mod tests {
         queue.dir(dir.path().to_path_buf());
         // The block needs a ticket key and live budgets, neither of which
         // exists yet at dispatch. Only the role expands it.
-        let agent = built(Agent::new()).ticket_queue(&queue);
+        let mut agent = built(Agent::new());
+        queue.bind_agent(&mut agent);
         agent.task("Work on {context}.");
         let stored = queue
             .tickets()
@@ -828,7 +794,8 @@ mod tests {
         let dir = crate::test_util::TempDir::new().unwrap();
         let queue = crate::agents::TicketQueue::new();
         queue.dir(dir.path().to_path_buf());
-        let agent = built(Agent::new().template("topic", "rust")).ticket_queue(&queue);
+        let mut agent = built(Agent::new().template("topic", "rust"));
+        queue.bind_agent(&mut agent);
         let value = serde_json::json!({"q": "Find {topic}"});
         agent.ticket(Ticket::new(value.clone()));
         let stored = queue
@@ -952,7 +919,8 @@ mod tests {
         let dir = crate::test_util::TempDir::new().unwrap();
         let store = Knowledge::load(dir.path()).unwrap();
         let queue = crate::agents::TicketQueue::new();
-        let agent = built(Agent::new().knowledge(&store)).ticket_queue(&queue);
+        let mut agent = built(Agent::new().knowledge(&store));
+        queue.bind_agent(&mut agent);
         assert!(Arc::ptr_eq(&store, &agent.knowledge));
     }
 }

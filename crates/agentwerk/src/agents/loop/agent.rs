@@ -187,7 +187,7 @@ fn evaluate(context: &mut TicketContext<'_>) -> Option<Step> {
     }
     // The transition itself already emitted the terminal event; the agent
     // only moves on to fresh work.
-    if ticket.is_resolved() {
+    if !ticket.is_pending() {
         return None;
     }
     if !ticket.is_waiting_for_response() {

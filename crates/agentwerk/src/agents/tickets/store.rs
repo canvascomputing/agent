@@ -47,15 +47,6 @@ impl TicketQueue {
         ticket.reporter = reporter;
         ticket.result = None;
         ticket.status = Status::Todo;
-        // A ticket without its own schema inherits the default registered for the
-        // first of its labels, so a result contract follows the label regardless
-        // of how the ticket was created (direct, labeled, or handover).
-        if ticket.schema.is_none() {
-            let defaults = self.label_schemas.lock().unwrap();
-            if let Some(schema) = ticket.labels.iter().find_map(|l| defaults.get(l)) {
-                ticket.schema = Some(schema.clone());
-            }
-        }
         let key = ticket.key.clone();
         let labels = ticket.labels.clone();
         let reporter = ticket.reporter.clone();
@@ -473,34 +464,6 @@ mod tests {
         let t = queue.get_ticket("TICKET-1").unwrap();
         assert_eq!(t.labels, vec!["urgent".to_string()]);
         assert!(t.schema.is_some());
-    }
-
-    #[test]
-    fn label_default_schema_stamps_a_schemaless_ticket() {
-        let (queue, _tmp) = test_queue();
-        let schema = crate::schemas::Schema::parse(serde_json::json!({"type": "object"})).unwrap();
-        queue.schema_for_label("analysis", schema);
-        queue.ticket(Ticket::new("triage this").label("analysis"));
-        let t = queue.get_ticket("TICKET-1").unwrap();
-        assert!(
-            t.schema.is_some(),
-            "a schemaless ticket should inherit its label's default schema"
-        );
-    }
-
-    #[test]
-    fn an_explicit_ticket_schema_overrides_the_label_default() {
-        let (queue, _tmp) = test_queue();
-        let default = crate::schemas::Schema::parse(serde_json::json!({"type": "object"})).unwrap();
-        queue.schema_for_label("analysis", default);
-        let own = crate::schemas::Schema::parse(serde_json::json!({"type": "string"})).unwrap();
-        queue.ticket(Ticket::new("triage this").label("analysis").schema(own));
-        let t = queue.get_ticket("TICKET-1").unwrap();
-        let stored = serde_json::to_value(t.schema.unwrap()).unwrap();
-        assert_eq!(
-            stored["type"], "string",
-            "an explicitly attached schema must win over the label default"
-        );
     }
 
     #[test]

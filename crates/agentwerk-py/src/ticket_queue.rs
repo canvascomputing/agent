@@ -15,7 +15,6 @@ use crate::compaction::invoke_editor;
 use crate::convert::{py_to_value, runtime_error, value_to_py};
 use crate::event::to_py_event;
 use crate::reply::{py_to_replies, replies_to_py};
-use crate::schema::PySchema;
 use crate::stats::PyStats;
 use crate::ticket::PyTicket;
 
@@ -194,16 +193,6 @@ impl PyTicketQueue {
     /// Get the session directory, `./.agentwerk` until `dir` changes it.
     fn get_dir(&self) -> String {
         self.inner.get_dir().display().to_string()
-    }
-
-    /// Register a schema every ticket of that label validates against.
-    fn schema_for_label<'py>(
-        slf: PyRef<'py, Self>,
-        label: &str,
-        schema: PyRef<'_, PySchema>,
-    ) -> PyRef<'py, Self> {
-        slf.inner.schema_for_label(label, schema.inner.clone());
-        slf
     }
 
     /// Read every event as it is emitted. It replaces the handler that prints to

@@ -127,7 +127,6 @@ tickets.task("Compute (47 * 92) / 8, then round to the nearest integer.")
 
 | Method | Description |
 |--------|-------------|
-| `Agent.empty()` | Create an agent with no tools pre-registered. |
 | `name(name)` | Set a name or identifier for assigning tickets. |
 | `role(role)` | Define who the agent is and how it should work. |
 | `label(label)` / `labels(labels)` | Restrict the agent to tickets carrying a matching label. |
@@ -137,7 +136,6 @@ tickets.task("Compute (47 * 92) / 8, then round to the nearest integer.")
 | `dir(dir)` | Set the directory the agent has access to. |
 | `interactive()` | Let the agent wait for new instructions to keep a ticket in-progress. |
 | `build()` | Create the agent. |
-| `ticket_queue(queue)` | Attach a built agent to a ticket queue. |
 
 You can use the `{context}` variable to inject contextual information:
 
@@ -261,7 +259,6 @@ tickets.ticket(Ticket("Rank all products by value.", labels=["analysis"]))
 | `set_failed(key)` | Fail a ticket. |
 | `dir(dir)` | Define where a session is stored. |
 | `get_dir()` | Get the session directory. |
-| `schema_for_label(label, schema)` | Register a schema every ticket of that label validates against. |
 
 See [`TicketQueue`](https://docs.rs/agentwerk/latest/agentwerk/agents/tickets/struct.TicketQueue.html).
 
@@ -322,12 +319,28 @@ print(ticket.result["title"])
 
 Ticket members:
 
-| | Members |
-|-|---------|
-| **Identity** | `key`, `task`, `labels`, `parent`, `reporter`, `assignee` |
-| **Outcome** | `status`, `result`, `replies`, `schema` |
-| **Timestamps** | `created_at`, `started_at`, `finished_at`, `failed_at` |
-| **Checks** | `has_label(label)`, `is_todo()`, `is_in_progress()`, `is_finished()`, `is_failed()`, `is_pending()`, `is_resolved()` |
+| | Member | Description |
+|-|--------|-------------|
+| **Identity** | `key` | Ticket key, of the form `TICKET-N`. |
+| | `task` | The work the agent is asked to do. |
+| | `labels` | Labels carried by the ticket. |
+| | `parent` | The parent ticket if a handover was performed. |
+| | `reporter` | Name of the agent that created the ticket. |
+| | `assignee` | Name of the agent that claimed the ticket. |
+| **Outcome** | `status` | The ticket lifecycle status. |
+| | `result` | The result the agent produced. |
+| | `replies` | Messages exchanged with the model. |
+| | `schema` | Optional schema the result must satisfy. |
+| **Timestamps** | `created_at` | Creation time, in milliseconds. |
+| | `started_at` | Claim time, in milliseconds. |
+| | `finished_at` | Finish time, in milliseconds. |
+| | `failed_at` | Failure time, in milliseconds. |
+| **Checks** | `has_label(label)` | Check whether the ticket carries a label. |
+| | `is_todo()` | Check whether the ticket is waiting to be claimed. |
+| | `is_in_progress()` | Check whether an agent is working on the ticket. |
+| | `is_finished()` | Check whether the ticket finished. |
+| | `is_failed()` | Check whether the ticket failed. |
+| | `is_pending()` | Check whether the ticket is still todo or in progress. |
 
 See [`Ticket`](https://docs.rs/agentwerk/latest/agentwerk/agents/tickets/struct.Ticket.html).
 
@@ -358,7 +371,6 @@ tickets.ticket(Ticket("Write a report.", schema=schema))
 |--------|-------------|
 | `Schema(document)` | Create a schema. |
 | `Schema.validate(value)` | Validate content. |
-| `tickets.schema_for_label(label, schema)` | Register a schema for all tickets with a certain label. |
 
 </details>
 

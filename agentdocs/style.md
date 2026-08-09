@@ -137,7 +137,7 @@ InvalidRequest, UnexpectedStatus, MissingKey, RequestError               // reje
 **`new()` for the primary path. Named constructors carry semantics.**
 
 - `new()` is the primary constructor.
-- Named constructors: `load()`, `unrestricted()`, `success()`, `error()`, `empty()`, `from_id()`, `from_env()`.
+- Named constructors: `load()`, `unrestricted()`, `success()`, `error()`, `from_id()`, `from_env()`.
 
 ## Getters and Setters
 
@@ -463,7 +463,7 @@ A `Schema` constrains the result an agent produces for a ticket.
 
 - One `h1` per file, the title. Every section is `h2`, every subsection `h3`. No wrapper heading above a group of sections.
 - `h2` is Title Case, `h3` is Sentence case.
-- A method placeholder is spelled as what the caller passes, never a single letter: `max_turns(count)`, `cancel(matches)`, `schema_for_label(label, schema)`. In a bullet list the bare method name carries no parentheses at all, since the description says what it takes.
+- A method placeholder is spelled as what the caller passes, never a single letter: `max_turns(count)`, `cancel(matches)`, `edit_replies(key, editor)`. In a bullet list the bare method name carries no parentheses at all, since the description says what it takes.
 - Centered blocks use `<div align="center">`. `align` is not allowed on `<p>` by the crates.io sanitizer, so `<p align="center">` renders left-aligned there.
 
 ## README Tables

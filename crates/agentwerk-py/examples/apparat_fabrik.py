@@ -24,7 +24,6 @@ from agentwerk import (
     Agent,
     GrepTool,
     Knowledge,
-    ManageTicketsTool,
     ReadFileTool,
     Schema,
     Ticket,
@@ -55,15 +54,17 @@ part it names down the line, one ticket per part.
 - MUST call `grep` with `{"pattern": "TEIL-[0-9]+", "path": "<the plan named in
   the task>", "output_mode": "content", "-C": 1, "head_limit": 20}`. The plan is
   a table, so the matched line carries the part, its Sollmaß and its Toleranz.
-- Send each part on with `manage_tickets`: action `create`, labels
-  `["abnahme"]`, and a task body naming the part number, the part's name, the
-  Sollmaß, the Toleranz exactly as the plan writes them, and the path of the
-  plan itself, which the rest of the line needs to look the part up.
+- `teile` holds one entry per part the plan names, each carrying the part
+  number, the part's name, the Sollmaß and the Toleranz as the plan writes them.
+  Leave no part out: the line only ever sees the parts you list.
+- `bauplan` repeats the path of the plan itself, which the rest of the line
+  needs to look a part up.
 - NEVER rule on whether a part fits. Reading a card is not your work, and the
   plan alone cannot answer it.
 - Before you finish, write one page with `manage_knowledge` on what this plan
   asks for, so the next reader of the Prüfbuch has it.
-- Finish with one sentence naming the apparatus and how many parts you sent on.
+- Call `finish` exactly once with `apparat`, `bauplan`, and `teile` as its
+  top-level arguments, each as its native JSON type.
 """
 
 MEISTER_ROLE = """
@@ -108,6 +109,32 @@ You fit a cleared part into its apparatus and book it against the plan.
 - Call `finish` exactly once with `apparat`, `teil`, `eingebaut`, `fehlt`, and
   `vermerk` as its top-level arguments, each as its native JSON type.
 """
+
+PLAN = Schema(
+    {
+        "type": "object",
+        "properties": {
+            "apparat": {"type": "string", "description": "The apparatus the plan builds"},
+            "bauplan": {"type": "string", "description": "The path of the plan that was read"},
+            "teile": {
+                "type": "array",
+                "description": "One entry per part the plan names",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "teil": {"type": "string", "description": "The part number, such as TEIL-4471"},
+                        "name": {"type": "string", "description": "The part's name as the plan writes it"},
+                        "soll": {"type": "number", "description": "The nominal size from the plan, in millimetres"},
+                        "toleranz": {"type": "number", "description": "The tolerance from the plan, in millimetres"},
+                    },
+                    "required": ["teil", "name", "soll", "toleranz"],
+                },
+            },
+        },
+        "required": ["apparat", "bauplan", "teile"],
+        "additionalProperties": False,
+    }
+)
 
 RULING = Schema(
     {
@@ -159,7 +186,7 @@ def build_shift(tickets, book, pruefer, meister, monteur):
             .role(PRUEFER_ROLE.strip())
             .knowledge(book)
             .dir(str(REPO))
-            .tools([GrepTool(), ReadFileTool(), ManageTicketsTool()])
+            .tools([GrepTool(), ReadFileTool()])
             .build()
         )
     for name in MEISTER_NAMES[:meister]:
@@ -198,8 +225,23 @@ async def main(pruefer, meister, monteur):
     # Every request resends the context, so the input-token limit is what bounds
     # the bill; the shift bell is the time limit, and both end the run on screen.
     tickets = TicketQueue().max_time(SHIFT).max_input_tokens(2_000_000)
-    tickets.schema_for_label("abnahme", RULING)
-    tickets.schema_for_label("montage", FITTING)
+
+    # One read plan opens one Abnahme per part it names, which is the fan-out
+    # the line runs on.
+    def open_abnahme(ticket, result):
+        if not ticket.has_label("pruefung"):
+            return
+        for teil in result["teile"]:
+            tickets.ticket(
+                Ticket(
+                    f"Nimm {teil['teil']} ({teil['name']}) ab. Sollmaß {teil['soll']}, "
+                    f"Toleranz {teil['toleranz']}. Der Bauplan liegt in {result['bauplan']}.",
+                    labels=["abnahme"],
+                    schema=RULING,
+                )
+            )
+
+    tickets.on_result(open_abnahme)
 
     # A part that passes the Abnahme is not done: it goes on to be fitted, so
     # the work fans forward instead of ending at the second station.
@@ -207,6 +249,7 @@ async def main(pruefer, meister, monteur):
         lambda ticket, result: Ticket(
             f"Baue {result['teil']} ein und buche es. Der Laufzettel lautete: {ticket.task}",
             labels=["montage"],
+            schema=FITTING,
         )
         if ticket.has_label("abnahme") and result.get("passt")
         else None
@@ -256,6 +299,7 @@ async def main(pruefer, meister, monteur):
             Ticket(
                 f"Prüfe den Bauplan {apparat['title']}. Er liegt in {apparat['name']}.",
                 labels=["pruefung"],
+                schema=PLAN,
             )
         )
 
