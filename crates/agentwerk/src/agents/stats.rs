@@ -53,9 +53,9 @@ pub struct Stats {
     /// Nested slices keyed by ticket label, filled on demand. Only the run-wide
     /// `Stats` holds them; a slice's own map stays empty.
     label_stats: Mutex<HashMap<String, Arc<Stats>>>,
-    /// Nested slices keyed by agent name, filled on demand. Kept apart from
-    /// `label_stats` because claiming a ticket adds the agent's name to its
-    /// labels, so one map would merge an agent with a label of the same name.
+    /// Nested slices keyed by agent id, filled on demand. Kept apart from
+    /// `label_stats` because ids are the crate's strings and labels are the
+    /// host's, so one map would merge an agent with a label spelled like its id.
     agent_stats: Mutex<HashMap<String, Arc<Stats>>>,
     /// Token usage per ticket, oldest first. It feeds the estimate that decides
     /// when to compact, and is cleared once that happens. The one measure the
@@ -356,16 +356,18 @@ impl Stats {
             .unwrap_or_default()
     }
 
-    /// Get statistics scoped to one agent, by the name it was registered
-    /// under. An agent nothing was recorded against reads as zero.
+    /// Get statistics scoped to one agent, by the id [`Agent::get_id`] hands
+    /// back. An agent nothing was recorded against reads as zero.
+    ///
+    /// [`Agent::get_id`]: crate::Agent::get_id
     ///
     /// `event_count(EventName::TicketCreated)` counts the tickets that agent
     /// filed; the rest count the tickets it claimed.
-    pub fn stats_for_agent(&self, agent_name: &str) -> Arc<Stats> {
+    pub fn stats_for_agent(&self, agent_id: &str) -> Arc<Stats> {
         self.agent_stats
             .lock()
             .unwrap()
-            .get(agent_name)
+            .get(agent_id)
             .cloned()
             .unwrap_or_default()
     }
@@ -383,11 +385,11 @@ impl Stats {
     }
 
     /// The agent's slice, created on first use.
-    pub(crate) fn slice_for_agent(&self, agent_name: &str) -> Arc<Stats> {
+    pub(crate) fn slice_for_agent(&self, agent_id: &str) -> Arc<Stats> {
         self.agent_stats
             .lock()
             .unwrap()
-            .entry(agent_name.to_string())
+            .entry(agent_id.to_string())
             .or_insert_with(|| Arc::new(Stats::new()))
             .clone()
     }
@@ -524,7 +526,7 @@ impl Stats {
     }
 
     /// Apply `f` to the run-wide statistics, to each label slice, and to the
-    /// agent's slice. An event about execution itself carries no agent name.
+    /// agent's slice. An event about execution itself carries no agent id.
     fn record_scoped(&self, labels: &[String], agent: &str, f: impl Fn(&Stats)) {
         f(self);
         for label in labels {
@@ -1144,8 +1146,8 @@ mod tests {
 
     #[test]
     fn stats_for_agent_and_stats_for_label_do_not_share_a_slice() {
-        // A claim stamps the agent's name onto the ticket's labels, so the
-        // two namespaces collide unless the maps stay separate.
+        // Nothing stops a host from labelling tickets the way ids are spelled,
+        // so the two namespaces collide unless the maps stay separate.
         let s = Stats::new();
         s.record_event(&turn(), "KEY", &["scout".into()], "scout");
         assert_eq!(

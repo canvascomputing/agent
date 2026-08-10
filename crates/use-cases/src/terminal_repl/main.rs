@@ -103,7 +103,6 @@ async fn main() {
     tickets.on_event(move |e| handler(e));
     let _agent = tickets.agent(
         Agent::from_env()
-            .name("orchestrator")
             .interactive()
             .role(role)
             .dir(&cwd)

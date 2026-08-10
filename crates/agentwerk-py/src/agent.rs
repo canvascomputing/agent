@@ -25,9 +25,8 @@ use crate::tools::{extract_tool, BoxedTool};
 /// solving tasks in the form of tickets.
 #[pyclass(name = "Agent")]
 pub struct PyAgent {
-    name: Option<String>,
     role: Option<String>,
-    labels: Vec<String>,
+    label: Option<String>,
     templates: Vec<(String, String)>,
     dir: Option<String>,
     interactive: bool,
@@ -42,9 +41,8 @@ pub struct PyAgent {
 impl PyAgent {
     fn create() -> Self {
         PyAgent {
-            name: None,
             role: None,
-            labels: Vec::new(),
+            label: None,
             templates: Vec::new(),
             dir: None,
             interactive: false,
@@ -89,14 +87,11 @@ impl PyAgent {
 
         let mut builder = Agent::new().provider(provider.clone()).model(model.clone());
 
-        if let Some(name) = &self.name {
-            builder = builder.name(name.clone());
-        }
         if let Some(role) = &self.role {
             builder = builder.role(role.clone());
         }
-        if !self.labels.is_empty() {
-            builder = builder.labels(self.labels.clone());
+        if let Some(label) = &self.label {
+            builder = builder.label(label.clone());
         }
         if self.interactive {
             builder = builder.interactive();
@@ -159,28 +154,24 @@ impl PyAgent {
         Ok(slf)
     }
 
-    fn name(mut slf: PyRefMut<'_, Self>, name: String) -> PyResult<PyRefMut<'_, Self>> {
-        slf.ensure_unbuilt()?;
-        slf.name = Some(name);
-        Ok(slf)
-    }
-
     fn role(mut slf: PyRefMut<'_, Self>, role: String) -> PyResult<PyRefMut<'_, Self>> {
         slf.ensure_unbuilt()?;
         slf.role = Some(role);
         Ok(slf)
     }
 
+    /// Restrict the agent to tickets carrying this label, and name it after
+    /// the label. Calling it twice replaces the label.
     fn label(mut slf: PyRefMut<'_, Self>, label: String) -> PyResult<PyRefMut<'_, Self>> {
         slf.ensure_unbuilt()?;
-        slf.labels.push(label);
+        slf.label = Some(label);
         Ok(slf)
     }
 
-    fn labels(mut slf: PyRefMut<'_, Self>, labels: Vec<String>) -> PyResult<PyRefMut<'_, Self>> {
-        slf.ensure_unbuilt()?;
-        slf.labels.extend(labels);
-        Ok(slf)
+    /// The id the agent works under, once it is built.
+    #[getter]
+    fn id(&self) -> PyResult<&str> {
+        Ok(self.built()?.get_id())
     }
 
     /// Let the agent wait for new instructions to keep a ticket in-progress.

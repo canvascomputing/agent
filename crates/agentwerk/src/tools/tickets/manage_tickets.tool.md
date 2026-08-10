@@ -48,7 +48,7 @@ Read and mutate the ticket queue from one tool: `get` / `list` / `search` to rea
       "items": {
         "type": "string"
       },
-      "description": "For `create` or `edit` (optional): label scope. Determines which agents pick up the ticket. Including an agent's name as a label pins the ticket to that agent."
+      "description": "For `create` or `edit` (optional): label scope. Determines which agents pick up the ticket: every agent serving one of these labels may claim it."
     }
   },
   "required": [

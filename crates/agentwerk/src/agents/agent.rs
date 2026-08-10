@@ -1,9 +1,9 @@
 //! The core entity of agentwerk: who an agent is, what it may call, and which
 //! queue it works from.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Weak};
+use std::sync::{Arc, Mutex, Weak};
 
 use serde::Serialize;
 
@@ -16,11 +16,18 @@ use super::policy::Policies;
 use super::stats::Stats;
 use super::tickets::{Ticket, TicketQueue};
 
-static AGENT_COUNTER: AtomicU64 = AtomicU64::new(0);
+/// One counter per label, behind the ids [`AgentBuilder::build`] hands out.
+/// Numbering restarts at 1 for each label, so a host that builds the same
+/// agents in the same order gets the same ids after a restart, which is what
+/// [`TicketQueue::load`] needs to resume an unfinished ticket.
+static AGENT_IDS: Mutex<BTreeMap<String, u64>> = Mutex::new(BTreeMap::new());
 
-fn default_agent_name() -> String {
-    let n = AGENT_COUNTER.fetch_add(1, Ordering::Relaxed);
-    format!("agent-{n}")
+fn next_id(label: Option<&str>) -> String {
+    let prefix = label.unwrap_or("agent");
+    let mut counters = AGENT_IDS.lock().unwrap();
+    let count = counters.entry(prefix.to_string()).or_insert(0);
+    *count += 1;
+    format!("{prefix}-{count}")
 }
 
 // Builder
@@ -29,11 +36,10 @@ fn default_agent_name() -> String {
 /// works, then hands back the finished [`Agent`].
 #[derive(Clone)]
 pub struct AgentBuilder<P, M> {
-    name: String,
     provider: P,
     model: M,
     role: String,
-    labels: Vec<String>,
+    label: Option<String>,
     interactive: bool,
     templates: Vec<(String, String)>,
     tools: ToolRegistry,
@@ -48,11 +54,10 @@ impl AgentBuilder<(), ()> {
         tools.register(FinishTool);
         tools.register(ManageKnowledgeTool::new(Arc::clone(&knowledge)));
         Self {
-            name: default_agent_name(),
             provider: (),
             model: (),
             role: String::new(),
-            labels: Vec::new(),
+            label: None,
             interactive: false,
             templates: Vec::new(),
             tools,
@@ -67,11 +72,10 @@ impl<M> AgentBuilder<(), M> {
     /// [`Provider`] shared with other agents.
     pub fn provider(self, p: impl Into<Provider>) -> AgentBuilder<Provider, M> {
         AgentBuilder {
-            name: self.name,
             provider: p.into(),
             model: self.model,
             role: self.role,
-            labels: self.labels,
+            label: self.label,
             interactive: self.interactive,
             templates: self.templates,
             tools: self.tools,
@@ -84,11 +88,10 @@ impl<M> AgentBuilder<(), M> {
 impl<P> AgentBuilder<P, ()> {
     pub fn model(self, m: impl Into<Model>) -> AgentBuilder<P, Model> {
         AgentBuilder {
-            name: self.name,
             provider: self.provider,
             model: m.into(),
             role: self.role,
-            labels: self.labels,
+            label: self.label,
             interactive: self.interactive,
             templates: self.templates,
             tools: self.tools,
@@ -99,11 +102,6 @@ impl<P> AgentBuilder<P, ()> {
 }
 
 impl<P, M> AgentBuilder<P, M> {
-    pub fn name(mut self, n: impl Into<String>) -> Self {
-        self.name = n.into();
-        self
-    }
-
     /// Define who the agent is and how it should work.
     ///
     /// A `{context}` placeholder anywhere in the text expands to the facts of
@@ -121,19 +119,15 @@ impl<P, M> AgentBuilder<P, M> {
         self
     }
 
-    /// Restrict the agent to tickets carrying a matching label.
+    /// Restrict the agent to tickets carrying this label, and name it after
+    /// the label.
+    ///
+    /// An agent serves one label; a ticket carries as many as its filer gives
+    /// it, and the agents of every label it names may claim it. Calling this
+    /// twice replaces the label rather than adding a second one. The id
+    /// [`Agent::get_id`] hands back is built from it.
     pub fn label(mut self, l: impl Into<String>) -> Self {
-        self.labels.push(l.into());
-        self
-    }
-
-    /// Restrict the agent to tickets carrying any of these labels.
-    pub fn labels<I, S>(mut self, iter: I) -> Self
-    where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
-    {
-        self.labels.extend(iter.into_iter().map(Into::into));
+        self.label = Some(l.into());
         self
     }
 
@@ -213,24 +207,14 @@ impl<P, M> AgentBuilder<P, M> {
 // without first calling `.build()`.
 #[cfg(test)]
 impl<P, M> AgentBuilder<P, M> {
-    pub(super) fn get_name(&self) -> &str {
-        &self.name
-    }
-
     pub(super) fn is_interactive(&self) -> bool {
         self.interactive
     }
 
-    pub(super) fn handles_labels(&self, ticket_labels: &[String]) -> bool {
-        if ticket_labels.iter().any(|l| l == &self.name) {
-            return true;
-        }
-        if self.labels.is_empty() {
-            ticket_labels.is_empty()
-        } else {
-            self.labels
-                .iter()
-                .any(|l| ticket_labels.iter().any(|t| t == l))
+    pub(super) fn handles(&self, ticket_labels: &[String]) -> bool {
+        match &self.label {
+            Some(label) => ticket_labels.iter().any(|t| t == label),
+            None => ticket_labels.is_empty(),
         }
     }
 
@@ -291,16 +275,16 @@ impl<P, M> AgentBuilder<P, M> {
 }
 
 impl AgentBuilder<Provider, Model> {
-    /// Create the agent.
+    /// Create the agent, giving it the id it keeps for the rest of the run.
     ///
     /// It starts with a ticket queue of its own, so `.task(...).finish_all().await`
     /// works without one being set up. `TicketQueue::agent(...)` later moves
     /// those tickets into the shared queue.
     pub fn build(self) -> Agent {
         let mut agent = Agent {
-            name: self.name,
+            id: next_id(self.label.as_deref()),
             model: self.model,
-            labels: self.labels,
+            label: self.label,
             interactive: self.interactive,
             ticket_queue: TicketQueueRef::Shared(Weak::new()),
             provider: self.provider,
@@ -338,7 +322,7 @@ impl TicketQueueRef {
 /// An `Agent` is the core entity of agentwerk. It has access to tools for
 /// solving tasks in the form of tickets.
 ///
-/// It claims the tickets its name or labels match, calls the LLM provider, runs
+/// It claims the tickets its label matches, calls the LLM provider, runs
 /// the tools the model asks for, and writes the result back.
 ///
 /// ```no_run
@@ -347,7 +331,7 @@ impl TicketQueueRef {
 ///
 /// # async fn run() {
 /// let agent = Agent::from_env()
-///     .name("reader")
+///     .label("reader")
 ///     .role("Rust developer reading source files to answer questions.")
 ///     .tool(ReadFileTool)
 ///     .build();
@@ -355,10 +339,10 @@ impl TicketQueueRef {
 /// # }
 /// ```
 pub struct Agent {
-    // pub(crate): read by loop, TicketQueue, or routing code
-    pub(crate) name: String,
+    // pub(crate): read by loop, TicketQueue, or assignment code
+    pub(crate) id: String,
     pub(crate) model: Model,
-    pub(crate) labels: Vec<String>,
+    pub(crate) label: Option<String>,
     pub(crate) interactive: bool,
     pub(crate) ticket_queue: TicketQueueRef,
     // private: accessed through methods within agents::
@@ -371,17 +355,19 @@ pub struct Agent {
 }
 
 impl Clone for Agent {
-    /// A clone points at the shared queue, so rebinding the original cannot
-    /// leave the clone filing tickets into a queue nothing reads.
+    /// A clone is the same agent, id included: `bind_agent` keeps one, and the
+    /// two would otherwise disagree about which tickets are theirs. It points
+    /// at the shared queue, so rebinding the original cannot leave the clone
+    /// filing tickets into a queue nothing reads.
     fn clone(&self) -> Self {
         let ticket_queue = match &self.ticket_queue {
             TicketQueueRef::Shared(w) => TicketQueueRef::Shared(w.clone()),
             TicketQueueRef::Private(a) => TicketQueueRef::Shared(Arc::downgrade(a)),
         };
         Self {
-            name: self.name.clone(),
+            id: self.id.clone(),
             model: self.model.clone(),
-            labels: self.labels.clone(),
+            label: self.label.clone(),
             interactive: self.interactive,
             ticket_queue,
             provider: self.provider.clone(),
@@ -411,24 +397,25 @@ impl Agent {
             .model(Model::from_env().expect("model name required"))
     }
 
-    pub(super) fn get_name(&self) -> &str {
-        &self.name
+    /// The unique identifier this agent works under, `<label>-<n>` for a
+    /// labeled agent and `agent-<n>` for one without. It names the agent in
+    /// [`Event`], in [`Stats::stats_for_agent`], and in [`Ticket::assignee`].
+    ///
+    /// [`Event`]: crate::Event
+    /// [`Stats::stats_for_agent`]: crate::Stats::stats_for_agent
+    /// [`Ticket::assignee`]: crate::Ticket::assignee
+    pub fn get_id(&self) -> &str {
+        &self.id
     }
 
     pub(super) fn is_interactive(&self) -> bool {
         self.interactive
     }
 
-    pub(super) fn handles_labels(&self, ticket_labels: &[String]) -> bool {
-        if ticket_labels.iter().any(|l| l == &self.name) {
-            return true;
-        }
-        if self.labels.is_empty() {
-            ticket_labels.is_empty()
-        } else {
-            self.labels
-                .iter()
-                .any(|l| ticket_labels.iter().any(|t| t == l))
+    pub(super) fn handles(&self, ticket_labels: &[String]) -> bool {
+        match &self.label {
+            Some(label) => ticket_labels.iter().any(|t| t == label),
+            None => ticket_labels.is_empty(),
         }
     }
 
@@ -523,7 +510,7 @@ impl Agent {
         if let serde_json::Value::String(s) = &ticket.task {
             ticket.task = serde_json::Value::String(self.interpolate(s));
         }
-        queue.insert(ticket, self.name.clone())
+        queue.insert(ticket, self.id.clone())
     }
 
     /// Begin processing tickets, and hand back the ticket queue so results,
@@ -563,36 +550,26 @@ mod tests {
     }
 
     #[test]
-    fn handles_labels_default_scope_only_picks_unlabeled_tickets() {
+    fn handles_default_scope_only_picks_unlabeled_tickets() {
         let agent = Agent::new();
-        assert!(agent.handles_labels(&[]));
-        assert!(!agent.handles_labels(&["research".into()]));
+        assert!(agent.handles(&[]));
+        assert!(!agent.handles(&["research".into()]));
     }
 
     #[test]
-    fn handles_labels_with_labels_intersects_ticket_labels() {
-        let agent = Agent::new().label("research").label("urgent");
-        assert!(agent.handles_labels(&["research".into()]));
-        assert!(agent.handles_labels(&["urgent".into(), "other".into()]));
-        assert!(!agent.handles_labels(&["report".into()]));
-        assert!(!agent.handles_labels(&[]));
+    fn handles_a_ticket_carrying_the_agent_label_among_others() {
+        let agent = Agent::new().label("research");
+        assert!(agent.handles(&["research".into()]));
+        assert!(agent.handles(&["research".into(), "urgent".into()]));
+        assert!(!agent.handles(&["report".into()]));
+        assert!(!agent.handles(&[]));
     }
 
     #[test]
-    fn handles_labels_matches_when_ticket_label_equals_agent_name() {
-        let agent = Agent::new().name("alice");
-        assert!(agent.handles_labels(&["alice".into()]));
-        assert!(agent.handles_labels(&["alice".into(), "other".into()]));
-        let agent = Agent::new().name("alice").label("math");
-        assert!(agent.handles_labels(&["alice".into()]));
-        assert!(agent.handles_labels(&["math".into()]));
-        assert!(!agent.handles_labels(&["report".into()]));
-    }
-
-    #[test]
-    fn get_name_returns_configured_name() {
-        let agent = Agent::new().name("alice");
-        assert_eq!(agent.get_name(), "alice");
+    fn label_replaces_the_previous_one() {
+        let agent = Agent::new().label("research").label("math");
+        assert!(agent.handles(&["math".into()]));
+        assert!(!agent.handles(&["research".into()]));
     }
 
     #[test]
@@ -606,12 +583,27 @@ mod tests {
     }
 
     #[test]
-    fn default_name_is_unique_per_agent() {
-        let a = Agent::new();
-        let b = Agent::new();
-        assert_ne!(a.get_name(), b.get_name());
-        assert!(a.get_name().starts_with("agent-"));
-        assert!(b.get_name().starts_with("agent-"));
+    fn ids_are_numbered_per_label() {
+        let first = built(Agent::new().label("ids_per_label"));
+        let second = built(Agent::new().label("ids_per_label"));
+        assert_eq!(first.get_id(), "ids_per_label-1");
+        assert_eq!(second.get_id(), "ids_per_label-2");
+    }
+
+    #[test]
+    fn an_unlabeled_agent_is_numbered_under_agent() {
+        let agent = built(Agent::new());
+        assert!(
+            agent.get_id().starts_with("agent-"),
+            "unexpected id: {}",
+            agent.get_id()
+        );
+    }
+
+    #[test]
+    fn a_clone_keeps_the_id_of_the_agent_it_came_from() {
+        let agent = built(Agent::new().label("cloned_id"));
+        assert_eq!(agent.clone().get_id(), agent.get_id());
     }
 
     /// The system prompt with no live state and a fixed ticket key.

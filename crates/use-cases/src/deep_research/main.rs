@@ -56,7 +56,6 @@ async fn main() {
     tickets.on_event(move |e| event_handler(e));
 
     let researcher_1 = Agent::new()
-        .name("researcher_1")
         .provider(provider.clone())
         .model(Model::from_env().expect("model name required"))
         .role(RESEARCHER_1_ROLE)
@@ -66,7 +65,6 @@ async fn main() {
         .build();
 
     let researcher_2 = Agent::new()
-        .name("researcher_2")
         .provider(provider.clone())
         .model(Model::from_env().expect("model name required"))
         .role(RESEARCHER_2_ROLE)
@@ -76,7 +74,6 @@ async fn main() {
         .build();
 
     let report_writer = Agent::new()
-        .name("report_writer")
         .provider(provider.clone())
         .model(Model::from_env().expect("model name required"))
         .role(REPORT_WRITER_ROLE)
@@ -328,7 +325,7 @@ async fn brave_search(api_key: &str, input: &serde_json::Value) -> ProviderResul
 }
 
 fn log_event(event: &Event) {
-    let agent = &event.agent_name;
+    let agent = &event.agent_id;
     let key = &event.ticket_key;
     match &event.kind {
         EventKind::TicketStarted => {

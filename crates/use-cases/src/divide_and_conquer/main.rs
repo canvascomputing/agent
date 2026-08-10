@@ -59,10 +59,9 @@ async fn main() {
 
     let event_handler = build_event_handler(args.verbose, style.clone(), partitions.len());
     tickets.on_event(move |e| event_handler(e));
-    for a in 0..agents {
+    for _ in 0..agents {
         tickets.agent(
             Agent::new()
-                .name(format!("agent_{a}"))
                 .provider(provider.clone())
                 .model(&model)
                 .role(ROLE.trim())
@@ -261,7 +260,7 @@ fn build_event_handler(
     let done = Arc::new(AtomicUsize::new(0));
     let width = digit_width(total);
     Arc::new(move |event: &Event| {
-        let agent = &event.agent_name;
+        let agent = &event.agent_id;
         let key = &event.ticket_key;
         match &event.kind {
             EventKind::TicketStarted => eprintln!(

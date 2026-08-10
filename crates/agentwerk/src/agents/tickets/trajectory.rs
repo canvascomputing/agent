@@ -19,7 +19,7 @@ use super::{Author, Reply, ReplyContent, Ticket};
 /// debugging.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Trajectory {
-    /// Example id `<agent>-<ticket>`; also the on-disk filename.
+    /// Example id `<agent id>-<ticket>`; also the on-disk filename.
     pub key: String,
     /// Name of the model that produced the replies. `None` when the
     /// producing agent could not be resolved at capture time.
@@ -30,12 +30,12 @@ pub struct Trajectory {
 }
 
 impl Trajectory {
-    /// Capture `ticket`'s replies as an example produced by `agent`
+    /// Capture `ticket`'s replies as an example produced by `agent_id`
     /// using `model`. Keeps every reply, including the system prompt: a
     /// trainer wants it, where `Ticket::to_messages` would drop it.
-    pub fn from_ticket(agent: &str, model: Option<&str>, ticket: &Ticket) -> Self {
+    pub fn from_ticket(agent_id: &str, model: Option<&str>, ticket: &Ticket) -> Self {
         Self {
-            key: format!("{agent}-{}", ticket.key),
+            key: format!("{agent_id}-{}", ticket.key),
             model: model.map(str::to_string),
             replies: ticket.replies.clone(),
         }

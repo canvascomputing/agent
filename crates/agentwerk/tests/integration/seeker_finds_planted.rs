@@ -136,7 +136,7 @@ async fn seeker_pool_finds_planted_indicators(
                 calls_c
                     .lock()
                     .unwrap()
-                    .push((e.agent_name.clone(), input.clone()));
+                    .push((e.agent_id.clone(), input.clone()));
             }
             EventKind::ToolCallFinished {
                 tool_name, output, ..
@@ -155,10 +155,9 @@ async fn seeker_pool_finds_planted_indicators(
 
     // The Seeker no longer derives a threat itself; each ticket already names one
     // observed construct per planted language, the way a Tracer would hand it off.
-    for i in 0..2 {
+    for _ in 0..2 {
         tickets.agent(
             Agent::new()
-                .name(format!("Seeker {}", i + 1))
                 .provider(provider.clone())
                 .model(&model)
                 .role(SEEKER_AGENT.trim())
@@ -174,7 +173,6 @@ async fn seeker_pool_finds_planted_indicators(
     // Trivial consumer so handed-off `security_analysis` tickets resolve.
     tickets.agent(
         Agent::new()
-            .name("Triage")
             .provider(provider.clone())
             .model(&model)
             .role(

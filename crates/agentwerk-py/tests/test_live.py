@@ -72,10 +72,10 @@ async def test_runs_two_labeled_agents_with_events_and_chaining():
     queue.on_event(lambda event: kinds.append(event.kind))
 
     queue.agent(
-        aw.Agent.from_env().name("A").label("a").role("Reply with one word: alpha").build()
+        aw.Agent.from_env().label("a").role("Reply with one word: alpha").build()
     )
     queue.agent(
-        aw.Agent.from_env().name("B").label("b").role("Reply with one word: beta").build()
+        aw.Agent.from_env().label("b").role("Reply with one word: beta").build()
     )
 
     def chain(ticket, result):
@@ -94,15 +94,15 @@ async def test_runs_two_labeled_agents_with_events_and_chaining():
 async def test_saves_the_messages_of_a_finished_ticket(tmp_path):
     queue = aw.TicketQueue().max_turns(10)
     queue.agent(
-        aw.Agent.from_env().name("scribe").role("Reply with one word: pong").build()
+        aw.Agent.from_env().role("Reply with one word: pong").build()
     )
 
     captured = []
 
     def capture(event, ticket):
         if event.kind == "ticket_finished":
-            model = queue.model_for_agent(event.agent_name)
-            trajectory = aw.Trajectory.from_ticket(event.agent_name, model, ticket)
+            model = queue.model_for_agent(event.agent_id)
+            trajectory = aw.Trajectory.from_ticket(event.agent_id, model, ticket)
             trajectory.save(str(tmp_path))
             captured.append((len(trajectory.messages), trajectory.model))
 
@@ -133,7 +133,6 @@ async def test_an_async_compaction_editor_awaits_the_built_in_summarizer(tmp_pat
     queue.edit_replies_on_compaction(summarize_the_head)
     queue.agent(
         aw.Agent.from_env()
-        .name("worker")
         .role("Answer in plain text. Do not call any tools.")
         .build()
     )

@@ -32,7 +32,7 @@ pub(super) struct TicketContext<'a> {
 impl<'a> TicketContext<'a> {
     pub(super) fn emit(&self, kind: EventKind) -> Event {
         self.ticket_queue
-            .emit(&self.ticket_key, self.agent.get_name(), kind)
+            .emit(&self.ticket_key, self.agent.get_id(), kind)
     }
 
     pub(super) fn ticket(&self) -> Option<Ticket> {
@@ -53,7 +53,7 @@ impl<'a> TicketContext<'a> {
     pub(super) fn fail_ticket(&self) {
         let _ = self
             .ticket_queue
-            .set_failed_by(&self.ticket_key, self.agent.get_name());
+            .set_failed_by(&self.ticket_key, self.agent.get_id());
     }
 
     /// Fail the ticket because a request did not come back. Reserved for the
@@ -106,7 +106,7 @@ fn run_is_over(agent: &Agent, ticket_queue: &TicketQueue) -> bool {
     if let Some((policy, limit)) = policy_violated_kind(&policies, &ticket_queue.stats) {
         ticket_queue.emit(
             "",
-            agent.get_name(),
+            agent.get_id(),
             EventKind::PolicyViolated { policy, limit },
         );
         return true;
@@ -118,16 +118,18 @@ fn run_is_over(agent: &Agent, ticket_queue: &TicketQueue) -> bool {
 /// tickets; write the first message when there is none.
 fn claim<'a>(agent: &'a Agent, ticket_queue: &'a Arc<TicketQueue>) -> Option<TicketContext<'a>> {
     let claimable = |t: &Ticket| {
-        t.status == Status::Todo && agent.handles_labels(&t.labels) && !ticket_queue.is_cancelled(t)
+        t.status == Status::Todo && agent.handles(&t.labels) && !ticket_queue.is_cancelled(t)
     };
+    // On the id, not the label: agents sharing a label must not take over each
+    // other's started tickets.
     let resumable = |t: &Ticket| {
         t.status == Status::InProgress
-            && t.labels.iter().any(|l| l == agent.get_name())
+            && t.assignee.as_deref() == Some(agent.get_id())
             && (t.is_waiting_for_response() || !agent.is_interactive())
             && !ticket_queue.is_cancelled(t)
     };
     let ticket_key = ticket_queue
-        .claim(claimable, agent.get_name())
+        .claim(claimable, agent.get_id())
         .or_else(|| ticket_queue.find_ticket(resumable).map(|t| t.key.clone()))?;
     let ticket = ticket_queue.get_ticket(&ticket_key)?;
 
@@ -140,9 +142,9 @@ fn claim<'a>(agent: &'a Agent, ticket_queue: &'a Arc<TicketQueue>) -> Option<Tic
         &ticket_queue.stats,
         &ticket_key,
     );
-    let agent_name = agent.get_name();
+    let agent_id = agent.get_id();
 
-    ticket_queue.emit(&ticket_key, agent_name, EventKind::TurnStarted);
+    ticket_queue.emit(&ticket_key, agent_id, EventKind::TurnStarted);
 
     if ticket.replies.is_empty() {
         ticket_queue.add_reply(&ticket_key, Reply::system_text(system_prompt.clone()));
@@ -153,7 +155,7 @@ fn claim<'a>(agent: &'a Agent, ticket_queue: &'a Arc<TicketQueue>) -> Option<Tic
             unreachable!("Ticket::as_user_message returns Message::User");
         };
         ticket_queue.add_reply(&ticket_key, Reply::user(&task_blocks, &HashMap::new()));
-        ticket_queue.emit(&ticket_key, agent_name, EventKind::TicketStarted);
+        ticket_queue.emit(&ticket_key, agent_id, EventKind::TicketStarted);
     }
 
     Some(TicketContext {
@@ -215,7 +217,7 @@ fn silence_retry(context: &mut TicketContext<'_>) -> Option<Step> {
         });
         let _ = context
             .ticket_queue
-            .set_failed_by(&context.ticket_key, context.agent.get_name());
+            .set_failed_by(&context.ticket_key, context.agent.get_id());
         return None;
     }
     let retried = context.emit(EventKind::SchemaRetried {
@@ -235,6 +237,7 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
+    use super::claim;
     use crate::agents::agent::Agent;
     use crate::agents::r#loop::test_util::*;
     use crate::agents::tickets::{Author, Status, Ticket, TicketQueue};
@@ -257,7 +260,6 @@ mod tests {
             .request_retry_delay(Duration::from_millis(1));
         tickets.agent(
             Agent::new()
-                .name("agent")
                 .provider(provider)
                 .model("mock")
                 .role("test")
@@ -295,7 +297,6 @@ mod tests {
             .edit_directive_on_retry(|_, directive| *directive = "PLEASE CALL A TOOL NOW".into());
         tickets.agent(
             Agent::new()
-                .name("agent")
                 .provider(provider.clone())
                 .model("mock")
                 .role("test")
@@ -320,7 +321,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn directive_editor_rewrites_for_the_agent_it_names() {
+    async fn directive_editor_rewrites_for_the_agent_it_addresses() {
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let scout = MockProvider::with_results(vec![
             Ok(text_response("just thinking, no tool call")),
@@ -336,13 +337,14 @@ mod tests {
             .max_request_retries(0)
             .request_retry_delay(Duration::from_millis(1))
             .edit_directive_on_retry(|event, directive| {
-                if event.agent_name == "scout" {
+                // An id is `<label>-<n>`, and only this agent carries the label.
+                if event.agent_id.starts_with("scout") {
                     *directive = "SCOUT, CALL A TOOL".into();
                 }
             });
         tickets.agent(
             Agent::new()
-                .name("scout")
+                .label("scout")
                 .provider(scout.clone())
                 .model("mock")
                 .role("test")
@@ -350,7 +352,7 @@ mod tests {
         );
         tickets.agent(
             Agent::new()
-                .name("worker")
+                .label("worker")
                 .provider(worker.clone())
                 .model("mock")
                 .role("test")
@@ -391,7 +393,6 @@ mod tests {
             .edit_directive_on_retry(|_, _| {});
         tickets.agent(
             Agent::new()
-                .name("agent")
                 .provider(provider.clone())
                 .model("mock")
                 .role("test")
@@ -426,10 +427,10 @@ mod tests {
             .dir(results_dir.path().to_path_buf())
             .max_request_retries(0)
             .request_retry_delay(Duration::from_millis(1));
-        for name in ["alice", "bob"] {
+        for label in ["alice", "bob"] {
             tickets.agent(
                 Agent::new()
-                    .name(name)
+                    .label(label)
                     .provider(provider.clone())
                     .model("mock")
                     .role("test")
@@ -472,7 +473,7 @@ mod tests {
         });
         tickets.agent(
             Agent::new()
-                .name("alice")
+                .label("alice")
                 .provider(provider.clone())
                 .model("mock")
                 .role("test")
@@ -513,7 +514,7 @@ mod tests {
         });
         tickets.agent(
             Agent::new()
-                .name("alice")
+                .label("alice")
                 .provider(provider.clone())
                 .model("mock")
                 .role("test")
@@ -907,7 +908,6 @@ mod tests {
         let researcher = MockProvider::with_results(vec![Ok(write_result_response("hunted"))]);
         tickets.agent(
             Agent::new()
-                .name("analyst")
                 .label("analysis")
                 .provider(analyst)
                 .model("mock")
@@ -916,7 +916,6 @@ mod tests {
         );
         tickets.agent(
             Agent::new()
-                .name("researcher")
                 .label("research")
                 .provider(researcher.clone())
                 .model("mock")
@@ -979,7 +978,6 @@ mod tests {
             .request_retry_delay(Duration::from_millis(1));
         tickets.agent(
             Agent::new()
-                .name("agent")
                 .provider(provider)
                 .model("mock")
                 .role("test")
@@ -1009,7 +1007,6 @@ mod tests {
             .request_retry_delay(Duration::from_millis(1));
         let agent = tickets.agent(
             Agent::new()
-                .name("agent")
                 .provider(provider)
                 .model("mock")
                 .role("test")
@@ -1058,7 +1055,6 @@ mod tests {
             .max_time(Duration::from_millis(500));
         tickets.agent(
             Agent::new()
-                .name("tester")
                 .provider(provider.clone())
                 .model("mock")
                 .role("test")
@@ -1098,7 +1094,6 @@ mod tests {
             .max_time(Duration::from_millis(500));
         tickets.agent(
             Agent::new()
-                .name("tester")
                 .provider(provider.clone())
                 .model("mock")
                 .role("test")
@@ -1150,7 +1145,6 @@ mod tests {
             .max_time(Duration::from_millis(500));
         tickets.agent(
             Agent::new()
-                .name("tester")
                 .provider(provider.clone())
                 .model("mock")
                 .role("test")
@@ -1194,7 +1188,6 @@ mod tests {
 
         tickets.agent(
             Agent::new()
-                .name("alice")
                 .label("a")
                 .provider(p_a.clone())
                 .model("mock")
@@ -1204,7 +1197,6 @@ mod tests {
         );
         tickets.agent(
             Agent::new()
-                .name("bob")
                 .label("b")
                 .provider(p_b.clone())
                 .model("mock")
@@ -1255,7 +1247,6 @@ mod tests {
         tickets.schemas(&schemas);
         tickets.agent(
             Agent::new()
-                .name("tester")
                 .provider(provider.clone())
                 .model("mock")
                 .role("test")
@@ -1269,6 +1260,39 @@ mod tests {
         assert!(
             task_message.contains("verdict"),
             "the bound schema must be in the task message: {task_message:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn an_agent_leaves_a_ticket_its_label_mate_started_alone() {
+        let results_dir = crate::test_util::TempDir::new().unwrap();
+        let tickets = TicketQueue::new();
+        tickets.dir(results_dir.path().to_path_buf());
+        let mut first = Agent::new()
+            .label("resume_pool")
+            .provider(MockProvider::with_results(vec![]))
+            .model("mock")
+            .role("test")
+            .build();
+        let mut second = Agent::new()
+            .label("resume_pool")
+            .provider(MockProvider::with_results(vec![]))
+            .model("mock")
+            .role("test")
+            .build();
+        tickets.bind_agent(&mut first);
+        tickets.bind_agent(&mut second);
+        tickets.ticket(Ticket::new("work").label("resume_pool"));
+
+        claim(&first, &tickets).expect("the first agent claims the open ticket");
+
+        assert!(
+            claim(&second, &tickets).is_none(),
+            "a label mate must not take over a started ticket",
+        );
+        assert!(
+            claim(&first, &tickets).is_some(),
+            "the agent that started it resumes it",
         );
     }
 
@@ -1297,7 +1321,6 @@ mod tests {
             .max_time(Duration::from_millis(500));
         tickets.agent(
             Agent::new()
-                .name("tester")
                 .provider(provider.clone())
                 .model("mock")
                 .role("test")

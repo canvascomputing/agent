@@ -45,7 +45,7 @@ pub struct ToolContext {
     pub(crate) run: Option<Arc<Run>>,
     pub(crate) tool_registry: Option<Arc<ToolRegistry>>,
     pub(crate) ticket_queue: Option<Arc<TicketQueue>>,
-    pub(crate) agent_name: Option<String>,
+    pub(crate) agent_id: Option<String>,
     pub(crate) ticket_key: Option<String>,
     pub(crate) knowledge: Option<Arc<Knowledge>>,
 }
@@ -60,7 +60,7 @@ impl ToolContext {
             run: None,
             tool_registry: None,
             ticket_queue: None,
-            agent_name: None,
+            agent_id: None,
             ticket_key: None,
             knowledge: None,
         }
@@ -81,8 +81,8 @@ impl ToolContext {
         self
     }
 
-    pub(crate) fn agent_name(mut self, name: String) -> Self {
-        self.agent_name = Some(name);
+    pub(crate) fn agent_id(mut self, name: String) -> Self {
+        self.agent_id = Some(name);
         self
     }
 
@@ -100,8 +100,8 @@ impl ToolContext {
         self.ticket_queue.as_ref()
     }
 
-    pub(crate) fn agent_name_str(&self) -> Option<&str> {
-        self.agent_name.as_deref()
+    pub(crate) fn agent_id_str(&self) -> Option<&str> {
+        self.agent_id.as_deref()
     }
 
     /// Resolves once the run starts to finish, whether the caller cancelled it

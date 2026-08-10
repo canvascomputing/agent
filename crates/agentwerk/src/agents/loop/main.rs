@@ -64,7 +64,7 @@ mod tests {
         let provider = MockProvider::with_results(vec![Ok(write_result_response("ok"))]);
         tickets.agent(
             Agent::new()
-                .name("late")
+                .label("late")
                 .provider(provider.clone())
                 .model("mock")
                 .role("test")
@@ -112,7 +112,7 @@ mod tests {
         );
         tickets.agent(
             Agent::new()
-                .name("slow")
+                .label("slow")
                 .provider(provider.clone())
                 .model("mock")
                 .role("test")
@@ -158,7 +158,7 @@ mod tests {
         let provider = MockProvider::with_results(vec![Ok(write_result_response("ok"))]);
         tickets.agent(
             Agent::new()
-                .name("late")
+                .label("late")
                 .provider(provider)
                 .model("mock")
                 .role("test")

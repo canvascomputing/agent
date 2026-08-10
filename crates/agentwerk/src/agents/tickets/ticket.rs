@@ -44,12 +44,13 @@ pub struct Ticket {
     pub key: String,
     /// The ticket lifecycle status.
     pub status: Status,
-    /// Name of the agent that created the ticket.
+    /// Identifier of the agent that created the ticket.
     pub reporter: String,
-    /// Name of the agent that claimed the ticket.
+    /// Identifier of the agent that claimed the ticket.
     ///
-    /// A label carrying an agent's name only makes the ticket eligible for it;
-    /// this names the agent that actually took it.
+    /// A label makes the ticket eligible for every agent serving it; this names
+    /// the one that actually took it, and is what brings a resumed ticket back
+    /// to it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assignee: Option<String>,
     /// Creation time, in milliseconds.

@@ -249,7 +249,7 @@ impl<'a> Measure<'a> {
 /// let tickets = TicketQueue::new();
 /// tickets.on_event(|event| {
 ///     if let EventKind::TicketFinished = &event.kind {
-///         eprintln!("[{}] done {}", event.agent_name, event.ticket_key);
+///         eprintln!("[{}] done {}", event.agent_id, event.ticket_key);
 ///     }
 /// });
 /// tickets.finish_all().await;
@@ -258,7 +258,7 @@ impl<'a> Measure<'a> {
 #[derive(Debug, Clone)]
 pub struct Event {
     /// Name of the agent that produced this event.
-    pub agent_name: String,
+    pub agent_id: String,
     /// Key of the ticket this event concerns. Empty on `RunStarted` and
     /// `RunFinished`, which no ticket owns.
     pub ticket_key: String,
@@ -268,12 +268,12 @@ pub struct Event {
 
 impl Event {
     pub(crate) fn new(
-        agent_name: impl Into<String>,
+        agent_id: impl Into<String>,
         ticket_key: impl Into<String>,
         kind: EventKind,
     ) -> Self {
         Self {
-            agent_name: agent_name.into(),
+            agent_id: agent_id.into(),
             ticket_key: ticket_key.into(),
             kind,
         }
@@ -284,7 +284,7 @@ impl Event {
 ///
 /// Most kinds name the agent they came from on the wrapping [`Event`].
 /// `RunStarted` and `RunFinished` come from the `TicketQueue` itself and
-/// arrive with an empty `agent_name`, as does `TicketFailed` when the host
+/// arrive with an empty `agent_id`, as does `TicketFailed` when the host
 /// fails a ticket through `TicketQueue::set_failed`.
 #[derive(Debug, Clone)]
 pub enum EventKind {
@@ -292,7 +292,7 @@ pub enum EventKind {
     RunStarted,
     /// Execution ended, carrying the reason.
     RunFinished { reason: FinishReason },
-    /// A ticket was filed. The agent name is its reporter.
+    /// A ticket was filed. The agent id is its reporter.
     TicketCreated,
     /// An agent claimed a ticket.
     TicketStarted,
@@ -600,7 +600,7 @@ impl fmt::Display for EventName {
 /// requests to stderr, and drops the rest.
 pub fn default_logger() -> Arc<dyn Fn(&Event) + Send + Sync> {
     Arc::new(|event: &Event| {
-        let agent = &event.agent_name;
+        let agent = &event.agent_id;
         match &event.kind {
             EventKind::RunStarted => {
                 eprintln!("run started");

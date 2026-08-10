@@ -96,7 +96,7 @@ impl ToolLike for FinishTool {
                 Err(e) => return Ok(e),
             };
             let schema = ticket_queue.get_ticket(&parent_key).and_then(|t| t.schema);
-            let agent = ctx.agent_name_str().unwrap_or_default().to_string();
+            let agent = ctx.agent_id_str().unwrap_or_default().to_string();
             // The ticket's own schema decides whether the result rode in as
             // the top-level arguments (object schema) or under `result`.
             let result = super::result_shape::parse_result("finish", schema.as_ref(), &input);
@@ -177,7 +177,7 @@ mod tests {
     fn ctx_with(ticket_queue: Arc<TicketQueue>, agent: &str, dir: PathBuf) -> ToolContext {
         ToolContext::new(dir)
             .ticket_queue(ticket_queue)
-            .agent_name(agent.to_string())
+            .agent_id(agent.to_string())
     }
 
     fn one_ticket(agent: &str) -> (Arc<TicketQueue>, String) {

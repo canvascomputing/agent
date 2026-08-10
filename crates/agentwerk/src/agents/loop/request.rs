@@ -44,14 +44,14 @@ pub(super) async fn run(context: &mut TicketContext<'_>) -> Option<Step> {
     let response = loop {
         let outcome = {
             let provider = context.agent.provider();
-            let agent_name = context.agent.get_name().to_string();
+            let agent_id = context.agent.get_id().to_string();
             let ticket_key = context.ticket_key.clone();
             let ticket_queue = Arc::clone(context.ticket_queue);
             let emit_stream: Arc<dyn Fn(StreamEvent) + Send + Sync> = Arc::new(move |event| {
                 if let StreamEvent::TextDelta { text, .. } = event {
                     ticket_queue.emit(
                         &ticket_key,
-                        &agent_name,
+                        &agent_id,
                         EventKind::TextChunkReceived { content: text },
                     );
                 }
@@ -403,7 +403,6 @@ mod tests {
         tickets.on_event(move |e| handler(e));
         tickets.agent(
             Agent::new()
-                .name("tester")
                 .provider(provider)
                 .model("mock")
                 .role("test")
@@ -468,7 +467,6 @@ mod tests {
         tickets.on_event(move |e| handler(e));
         tickets.agent(
             Agent::new()
-                .name("tester")
                 .provider(provider)
                 .model("mock")
                 .role("test")
@@ -537,7 +535,6 @@ mod tests {
         }
         tickets.agent(
             Agent::new()
-                .name("tester")
                 .provider(provider.clone())
                 .model("mock")
                 .role("test")

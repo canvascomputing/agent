@@ -177,11 +177,23 @@ STATIONS = [
 ]
 
 
+def worker_names(pruefer, meister, monteur):
+    """Agent id to shift name: agentwerk numbers each label from 1 in build order."""
+    return {
+        f"{label}-{i + 1}": name
+        for label, names, count in (
+            ("pruefung", PRUEFER_NAMES, pruefer),
+            ("abnahme", MEISTER_NAMES, meister),
+            ("montage", MONTEUR_NAMES, monteur),
+        )
+        for i, name in enumerate(names[:count])
+    }
+
+
 def build_shift(tickets, book, pruefer, meister, monteur):
-    for name in PRUEFER_NAMES[:pruefer]:
+    for _ in range(pruefer):
         tickets.agent(
             Agent.from_env()
-            .name(name)
             .label("pruefung")
             .role(PRUEFER_ROLE.strip())
             .knowledge(book)
@@ -189,10 +201,9 @@ def build_shift(tickets, book, pruefer, meister, monteur):
             .tools([GrepTool(), ReadFileTool()])
             .build()
         )
-    for name in MEISTER_NAMES[:meister]:
+    for _ in range(meister):
         tickets.agent(
             Agent.from_env()
-            .name(name)
             .label("abnahme")
             .role(MEISTER_ROLE.strip())
             .knowledge(book)
@@ -200,10 +211,9 @@ def build_shift(tickets, book, pruefer, meister, monteur):
             .tool(ReadFileTool())
             .build()
         )
-    for name in MONTEUR_NAMES[:monteur]:
+    for _ in range(monteur):
         tickets.agent(
             Agent.from_env()
-            .name(name)
             .label("montage")
             .role(MONTEUR_ROLE.strip())
             .knowledge(book)
@@ -255,10 +265,13 @@ async def main(pruefer, meister, monteur):
         else None
     )
 
+    workers = worker_names(pruefer, meister, monteur)
+
     def publish(event):
         if event.kind == "text_chunk_received":
             return
         frame = frame_for(event, started_at, str(REPO))
+        frame["agent"] = workers.get(frame["agent"], frame["agent"])
         if frame["ticket"] and event.kind.startswith("ticket_"):
             ticket = tickets.get_ticket(frame["ticket"])
             if ticket is not None:
@@ -274,7 +287,7 @@ async def main(pruefer, meister, monteur):
                 "t": time.monotonic() - started_at,
                 "kind": "ruling",
                 "ticket": ticket.key,
-                "agent": ticket.assignee or "",
+                "agent": workers.get(ticket.assignee or "", ticket.assignee or ""),
                 "result": result,
             },
         )

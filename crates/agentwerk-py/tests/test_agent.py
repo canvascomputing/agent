@@ -20,7 +20,7 @@ def test_re_exports_every_name_in_all():
 
 def test_chaining_returns_the_same_agent():
     agent = aw.Agent()
-    assert agent.role("r").label("x").labels(["y", "z"]).dir(".") is agent
+    assert agent.role("r").label("x").dir(".") is agent
 
 
 def test_interactive_chains():
@@ -68,6 +68,22 @@ def test_from_env_without_provider_env_is_rejected(monkeypatch):
 def test_using_an_unbuilt_agent_is_rejected():
     with pytest.raises(RuntimeError):
         aw.Agent().task("count to three")
+
+
+def test_id_is_built_from_the_label():
+    agent = (
+        aw.Agent()
+        .label("id_from_label")
+        .provider(aw.AnthropicProvider("test-key"))
+        .model("claude-sonnet-4-20250514")
+        .build()
+    )
+    assert agent.id == "id_from_label-1"
+
+
+def test_reading_the_id_of_an_unbuilt_agent_is_rejected():
+    with pytest.raises(RuntimeError):
+        aw.Agent().id
 
 
 def test_configuring_after_build_is_rejected(offline_agent):

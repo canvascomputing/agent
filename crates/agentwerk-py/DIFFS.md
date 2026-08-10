@@ -24,10 +24,9 @@ Seven rules the surface table below never repeats.
 | `AgentBuilder<P, M>` | Folded into `Agent`: the type changes as the provider and model slots fill, which Python cannot hold across calls. |
 | `AgentBuilder::provider(p)` | `Agent.provider(provider)` |
 | `AgentBuilder::model(m)` | `Agent.model(model)` |
-| `AgentBuilder::name(n)` | `Agent.name(name)` |
 | `AgentBuilder::role(r)` | `Agent.role(role)` |
 | `AgentBuilder::label(l)` | `Agent.label(label)` |
-| `AgentBuilder::labels(iter)` | `Agent.labels(labels)` |
+| `Agent::get_id()` | `Agent.id`: a property, and a `RuntimeError` before `build()`. |
 | `AgentBuilder::interactive()` | `Agent.interactive()` |
 | `AgentBuilder::template(key, value)` | `Agent.template(key, value)` |
 | `AgentBuilder::templates(vars)` | `Agent.templates(variables)`: a mapping, so the bulk bind applies in key order where Rust preserves insertion order. |
@@ -80,7 +79,7 @@ Seven rules the surface table below never repeats.
 | `TicketQueue::edit_replies_on_event(editor)` | `TicketQueue.edit_replies_on_event(editor)`: same return-instead-of-mutate shape. An editor that raises prints its traceback and changes nothing: it runs on an agent thread with no Python frame to raise into. |
 | `TicketQueue::edit_replies_on_compaction(editor)` | `TicketQueue.edit_replies_on_compaction(editor)`: the editor returns the new list, or `None` to keep the current one, where Rust returns a `Result`. Define it with `async def` to await `Compaction.summarize`; a coroutine is driven on a worker thread of its own. An editor that raises prints its traceback and changes nothing, like the event editor. |
 | `TicketQueue::edit_directive_on_retry(editor)` | `TicketQueue.edit_directive_on_retry(editor)`: the editor returns the replacement, or `None` to keep the default, where Rust rewrites in place. An editor that raises prints its traceback and changes nothing, like the reply editors. |
-| `TicketQueue::model_for_agent(name)` | `TicketQueue.model_for_agent(agent_name)` |
+| `TicketQueue::model_for_agent(agent_id)` | `TicketQueue.model_for_agent(agent_id)` |
 | `TicketQueue::get_ticket(key)` | `TicketQueue.get_ticket(key)` |
 | `TicketQueue::tickets()` | `TicketQueue.tickets()` |
 | `TicketQueue::find_tickets(predicate)` | `TicketQueue.find_tickets(predicate)` |
@@ -122,7 +121,7 @@ Seven rules the surface table below never repeats.
 | `Compaction::window()` | `Compaction.window()` |
 | `Compaction::summarize(replies).await` | `await Compaction.summarize(replies)` |
 | **Trajectory** | |
-| `Trajectory::from_ticket(agent, model, ticket)` | `Trajectory.from_ticket(agent, model, ticket)` |
+| `Trajectory::from_ticket(agent_id, model, ticket)` | `Trajectory.from_ticket(agent_id, model, ticket)` |
 | `Trajectory::save(dir)` | `Trajectory.save(dir)` |
 | `Trajectory.key`, `.model`, `.replies` | Same names. `replies` is a list of `Reply`. |
 | **Knowledge** | |
@@ -140,7 +139,7 @@ Seven rules the surface table below never repeats.
 | `KnowledgeError` | `RuntimeError` |
 | **Statistics** | |
 | `Stats::stats_for_label(label)` | `Stats.stats_for_label(label)` |
-| `Stats::stats_for_agent(agent_name)` | `Stats.stats_for_agent(agent_name)` |
+| `Stats::stats_for_agent(agent_id)` | `Stats.stats_for_agent(agent_id)` |
 | `Stats::tool_stats()` | `Stats.tool_stats()` |
 | `Stats::file_stats()` | `Stats.file_stats()` |
 | `Stats::knowledge_stats()` | `Stats.knowledge_stats()` |
@@ -165,7 +164,7 @@ Seven rules the surface table below never repeats.
 | `SchemaStore::label(label, document)` | `SchemaStore.label(label, document)`: raises on a document that is not a schema, where Rust returns `SchemaParseError`. |
 | `SchemaStore::get(label)` | `SchemaStore.get(label)` |
 | **Events** | |
-| `Event { agent_name, ticket_key, kind }` | `Event.agent_name`, `.ticket_key`, `.kind` |
+| `Event { agent_id, ticket_key, kind }` | `Event.agent_id`, `.ticket_key`, `.kind` |
 | `EventKind` variant payload | `Event.data`: a dict of that variant's fields. |
 | `EventKind`, `FinishReason` | Strings. |
 | `EventName` | `EventName`: string constants, so `Event.kind == EventName.TURN_STARTED`. |

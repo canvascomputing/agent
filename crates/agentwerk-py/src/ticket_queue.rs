@@ -286,8 +286,8 @@ impl PyTicketQueue {
 
     /// Get the model that agent runs, or `None` when no agent of that name is
     /// added. `Trajectory.from_ticket` needs it.
-    fn model_for_agent(&self, agent_name: &str) -> Option<String> {
-        self.inner.model_for_agent(agent_name)
+    fn model_for_agent(&self, agent_id: &str) -> Option<String> {
+        self.inner.model_for_agent(agent_id)
     }
 
     /// Get one ticket by key.

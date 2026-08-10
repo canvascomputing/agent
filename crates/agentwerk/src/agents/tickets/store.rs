@@ -110,9 +110,9 @@ impl TicketQueue {
             .map(|_| rel)
     }
 
-    /// Atomically find a `Todo` ticket matching `predicate`, label it
-    /// with `agent_name`, and transition to `InProgress`.
-    pub(crate) fn claim<F>(&self, predicate: F, agent_name: &str) -> Option<String>
+    /// Atomically find a `Todo` ticket matching `predicate`, assign it to
+    /// `agent_id`, and transition to `InProgress`.
+    pub(crate) fn claim<F>(&self, predicate: F, agent_id: &str) -> Option<String>
     where
         F: Fn(&Ticket) -> bool,
     {
@@ -134,10 +134,7 @@ impl TicketQueue {
             if ticket.status != Status::Todo {
                 return None;
             }
-            if !ticket.labels.iter().any(|l| l == agent_name) {
-                ticket.labels.push(agent_name.to_string());
-            }
-            ticket.assignee = Some(agent_name.to_string());
+            ticket.assignee = Some(agent_id.to_string());
             if ticket.schema.is_none() {
                 let bound = schemas
                     .as_ref()
@@ -158,7 +155,7 @@ impl TicketQueue {
             now,
             durations,
             &labels,
-            agent_name,
+            agent_id,
         );
         self.save_ticket(&key);
         Some(key)
@@ -186,7 +183,7 @@ impl TicketQueue {
     /// Attach `result` to the ticket and transition it to `Finished`,
     /// resolving it from outside the run. Validates against the ticket's
     /// schema first, so a host finish and an agent finish record the same
-    /// contract. The emitted `TicketFinished` carries an empty agent name,
+    /// contract. The emitted `TicketFinished` carries an empty agent id,
     /// like the run-level events no single agent causes.
     ///
     /// ```no_run
@@ -213,7 +210,7 @@ impl TicketQueue {
 
     /// Transition a ticket to `Failed`. No result argument, unlike
     /// [`Self::set_finished`]: a failed ticket has none. The emitted
-    /// `TicketFailed` carries an empty agent name, like the run-level
+    /// `TicketFailed` carries an empty agent id, like the run-level
     /// events no single agent causes.
     pub fn set_failed(&self, key: &str) -> Result<(), TicketError> {
         self.set_final_status(key, Status::Failed, "")
@@ -659,15 +656,23 @@ mod tests {
     }
 
     #[test]
-    fn claim_transitions_todo_to_in_progress_and_adds_label() {
+    fn claim_transitions_todo_to_in_progress_and_sets_the_assignee() {
         let (queue, _tmp) = test_queue();
         queue.task("hello");
         let key = queue.claim(|t| t.status == Status::Todo, "alice").unwrap();
         assert_eq!(key, "TICKET-1");
         let t = queue.get_ticket(&key).unwrap();
         assert_eq!(t.status, Status::InProgress);
-        assert!(t.labels.iter().any(|l| l == "alice"));
+        assert_eq!(t.assignee.as_deref(), Some("alice"));
         assert!(t.started_at.is_some());
+    }
+
+    #[test]
+    fn claim_leaves_the_labels_the_ticket_was_filed_with() {
+        let (queue, _tmp) = test_queue();
+        queue.ticket(Ticket::new("hello").label("analysis"));
+        let key = queue.claim(|t| t.has_label("analysis"), "alice").unwrap();
+        assert_eq!(queue.get_ticket(&key).unwrap().labels, vec!["analysis"]);
     }
 
     #[test]
@@ -742,7 +747,7 @@ mod tests {
     }
 
     #[test]
-    fn claim_prefers_the_label_the_ticket_was_filed_under_to_the_agent_name() {
+    fn claim_prefers_the_label_the_ticket_was_filed_under_to_the_agent_id() {
         let (queue, _tmp) = test_queue();
         let schemas = crate::schemas::SchemaStore::new();
         schemas.label("analysis", document("by scope")).unwrap();
@@ -1041,7 +1046,7 @@ mod tests {
         let resumed = TicketQueue::load(dir.path()).unwrap();
         let t = resumed.get_ticket("TICKET-1").unwrap();
         assert_eq!(t.status, Status::InProgress);
-        assert!(t.labels.iter().any(|l| l == "alice"));
+        assert_eq!(t.assignee.as_deref(), Some("alice"));
     }
 
     #[test]

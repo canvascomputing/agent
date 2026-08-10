@@ -103,7 +103,7 @@ async def main(n, partitions, agents):
 
     def trace(event):
         if event.kind in ("ticket_started", "ticket_finished", "ticket_failed"):
-            print(f"  {event.kind:<20} {event.agent_name:<10} {event.ticket_key}")
+            print(f"  {event.kind:<20} {event.agent_id:<10} {event.ticket_key}")
         elif event.kind == "run_finished":
             finish_reason.append(event.data["reason"])
 
@@ -112,7 +112,6 @@ async def main(n, partitions, agents):
     for a in range(agents):
         tickets.agent(
             Agent.from_env()
-            .name(f"agent_{a}")
             .role(ROLE.strip())
             .label("compute")
             .tools([python, ManageTicketsTool()])

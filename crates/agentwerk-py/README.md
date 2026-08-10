@@ -115,7 +115,6 @@ from agentwerk import Agent, ReadFileTool
 
 agent = (
     Agent.from_env()
-    .name("agent_0")
     .label("math")
     .role("You are an arithmetic agent. Compute step by step and show your work.")
     .tool(ReadFileTool())
@@ -131,9 +130,9 @@ tickets.task("Compute (47 * 92) / 8, then round to the nearest integer.")
 
 | Method | Description |
 |--------|-------------|
-| `name(name)` | Set a name or identifier for assigning tickets. |
 | `role(role)` | Define who the agent is and how it should work. |
-| `label(label)` / `labels(labels)` | Restrict the agent to tickets carrying a matching label. |
+| `label(label)` | Restrict the agent to tickets carrying this label. |
+| `id` | Get the unique identifier of an agent. |
 | `tool(tool)` / `tools(tools)` | Register a tool the agent may call. |
 | `template(key, value)` | Inject data into prompts with template strings. |
 | `templates(pairs)` | Inject more than one entry into prompts. |
@@ -240,7 +239,6 @@ The `TicketQueue` is the core data structure of agentwerk allowing to coordinate
 ```python
 analyst = (
     Agent.from_env()
-    .name("analyst")
     .label("analysis")
     .build()
 )
@@ -332,8 +330,8 @@ Ticket members:
 | | `task` | The work the agent is asked to do. |
 | | `labels` | Labels carried by the ticket. |
 | | `parent` | The parent ticket if a handover was performed. |
-| | `reporter` | Name of the agent that created the ticket. |
-| | `assignee` | Name of the agent that claimed the ticket. |
+| | `reporter` | Identifier of the agent that created the ticket. |
+| | `assignee` | Identifier of the agent that claimed the ticket. |
 | **Outcome** | `status` | The ticket lifecycle status. |
 | | `result` | The result the agent produced. |
 | | `replies` | Messages exchanged with the model. |
@@ -514,7 +512,7 @@ Events give you insights to the lifecycle and activities of your agents' work.
 ```python
 def log(event):
     if event.kind == "ticket_finished":
-        print(f"[{event.agent_name}] done {event.ticket_key}")
+        print(f"[{event.agent_id}] done {event.ticket_key}")
 
 
 tickets.on_event(log)
@@ -586,8 +584,8 @@ Save replies of every finished ticket as a training example:
 ```python
 def capture(event, ticket):
     if event.kind == "ticket_finished":
-        model = tickets.model_for_agent(event.agent_name)
-        Trajectory.from_ticket(event.agent_name, model, ticket).save("datasets")
+        model = tickets.model_for_agent(event.agent_id)
+        Trajectory.from_ticket(event.agent_id, model, ticket).save("datasets")
 
 
 tickets.on_ticket(capture)
@@ -623,7 +621,7 @@ for name, stat in stats.tool_stats().items():
 | `model_stats()` | Get per-model requests, token usage, and the failures they ended in. |
 | `event_counts()` | Get per-event counts. |
 | `stats_for_label(label)` | Get statistics scoped to one label. |
-| `stats_for_agent(agent_name)` | Get statistics scoped to one agent. |
+| `stats_for_agent(agent_id)` | Get statistics scoped to one agent. |
 
 See [`Stats`](https://docs.rs/agentwerk/latest/agentwerk/agents/stats/struct.Stats.html).
 
