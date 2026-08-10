@@ -12,7 +12,7 @@ use agentwerk::{Agent, Ticket, TicketQueue};
 async fn test() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let (provider, model) = common::build_provider();
 
-    let schema = Schema::parse(serde_json::json!({
+    let schema = Schema::new(serde_json::json!({
         "type": "object",
         "properties": {
             "files": {

@@ -117,6 +117,7 @@ impl TicketQueue {
         F: Fn(&Ticket) -> bool,
     {
         let now = now_millis();
+        let schemas = self.schemas.lock().unwrap().clone();
         let (key, prev, durations, labels) = {
             let mut store = self.tickets.lock().unwrap();
             let mut candidates: Vec<&String> = store
@@ -137,6 +138,12 @@ impl TicketQueue {
                 ticket.labels.push(agent_name.to_string());
             }
             ticket.assignee = Some(agent_name.to_string());
+            if ticket.schema.is_none() {
+                let bound = schemas
+                    .as_ref()
+                    .and_then(|s| ticket.labels.iter().find_map(|label| s.get(label)));
+                ticket.schema = bound;
+            }
             let prev = ticket.status;
             ticket.stamp_transition(Status::InProgress, now);
             ticket.status = Status::InProgress;
@@ -394,14 +401,12 @@ impl TicketQueue {
     }
 
     /// Edit caller-settable fields. Each `Some` overwrites; `None`
-    /// leaves the field untouched. The `Option<Option<Schema>>` shape on
-    /// `schema` lets callers explicitly clear it via `Some(None)`.
+    /// leaves the field untouched.
     pub(crate) fn edit(
         &self,
         key: &str,
         task: Option<serde_json::Value>,
         labels: Option<Vec<String>>,
-        schema: Option<Option<crate::schemas::Schema>>,
     ) -> Result<(), TicketError> {
         let mut store = self.tickets.lock().unwrap();
         let ticket = store
@@ -414,9 +419,6 @@ impl TicketQueue {
         }
         if let Some(l) = labels {
             ticket.labels = l;
-        }
-        if let Some(s) = schema {
-            ticket.schema = s;
         }
         Ok(())
     }
@@ -459,7 +461,7 @@ mod tests {
     #[test]
     fn create_with_label_and_schema_is_stored_verbatim() {
         let (queue, _tmp) = test_queue();
-        let schema = crate::schemas::Schema::parse(serde_json::json!({"type": "string"})).unwrap();
+        let schema = crate::schemas::Schema::new(serde_json::json!({"type": "string"})).unwrap();
         queue.ticket(Ticket::new("x").label("urgent").schema(schema));
         let t = queue.get_ticket("TICKET-1").unwrap();
         assert_eq!(t.labels, vec!["urgent".to_string()]);
@@ -698,6 +700,108 @@ mod tests {
         assert_eq!(key, "TICKET-1");
     }
 
+    fn queue_with_analysis_schema() -> (std::sync::Arc<TicketQueue>, crate::test_util::TempDir) {
+        let (queue, dir) = test_queue();
+        let schemas = crate::schemas::SchemaStore::new();
+        schemas.label("analysis", document("verdict")).unwrap();
+        queue.schemas(&schemas);
+        (queue, dir)
+    }
+
+    /// A schema document the assertions can tell apart by its `title`.
+    fn document(title: &str) -> serde_json::Value {
+        serde_json::json!({ "type": "object", "title": title })
+    }
+
+    /// The `title` of the schema bound to a ticket, naming which one it took.
+    fn bound_title(queue: &TicketQueue, key: &str) -> Option<String> {
+        let schema = queue.get_ticket(key)?.schema?;
+        let document = serde_json::to_value(schema).ok()?;
+        Some(document["title"].as_str().unwrap_or_default().to_string())
+    }
+
+    #[test]
+    fn claim_takes_the_schema_bound_to_a_label_of_the_ticket() {
+        let (queue, _tmp) = queue_with_analysis_schema();
+        queue.ticket(Ticket::new("audit").label("analysis"));
+        assert_eq!(bound_title(&queue, "TICKET-1"), None);
+
+        queue.claim(|t| t.has_label("analysis"), "alice");
+        assert_eq!(bound_title(&queue, "TICKET-1").as_deref(), Some("verdict"));
+    }
+
+    #[test]
+    fn claim_leaves_a_schema_the_ticket_already_carries() {
+        let (queue, _tmp) = queue_with_analysis_schema();
+        let own = crate::schemas::Schema::new(document("its own")).unwrap();
+        queue.ticket(Ticket::new("audit").label("analysis").schema(own));
+        assert_eq!(bound_title(&queue, "TICKET-1").as_deref(), Some("its own"));
+
+        queue.claim(|t| t.has_label("analysis"), "alice");
+        assert_eq!(bound_title(&queue, "TICKET-1").as_deref(), Some("its own"));
+    }
+
+    #[test]
+    fn claim_prefers_the_label_the_ticket_was_filed_under_to_the_agent_name() {
+        let (queue, _tmp) = test_queue();
+        let schemas = crate::schemas::SchemaStore::new();
+        schemas.label("analysis", document("by scope")).unwrap();
+        schemas.label("alice", document("by agent")).unwrap();
+        queue.schemas(&schemas);
+        queue.ticket(Ticket::new("audit").label("analysis"));
+        assert_eq!(bound_title(&queue, "TICKET-1"), None);
+
+        queue.claim(|t| t.has_label("analysis"), "alice");
+        assert_eq!(bound_title(&queue, "TICKET-1").as_deref(), Some("by scope"));
+    }
+
+    #[test]
+    fn claim_binds_no_schema_when_no_label_of_the_ticket_has_one() {
+        let (queue, _tmp) = queue_with_analysis_schema();
+        queue.ticket(Ticket::new("search").label("discovery"));
+        assert_eq!(bound_title(&queue, "TICKET-1"), None);
+
+        queue.claim(|t| t.has_label("discovery"), "alice");
+        assert_eq!(bound_title(&queue, "TICKET-1"), None);
+    }
+
+    #[test]
+    fn a_ticket_already_in_progress_keeps_the_schema_its_claim_bound() {
+        let (queue, _tmp) = test_queue();
+        let schemas = crate::schemas::SchemaStore::new();
+        schemas.label("analysis", document("first")).unwrap();
+        queue.schemas(&schemas);
+        queue.ticket(Ticket::new("audit").label("analysis"));
+        queue.claim(|t| t.has_label("analysis"), "alice");
+        assert_eq!(bound_title(&queue, "TICKET-1").as_deref(), Some("first"));
+
+        schemas.label("analysis", document("second")).unwrap();
+
+        // The loop resumes an `InProgress` ticket through `find_ticket`, never
+        // through a second `claim`, so a later binding cannot reach it.
+        assert!(queue.claim(|t| t.has_label("analysis"), "alice").is_none());
+        assert_eq!(bound_title(&queue, "TICKET-1").as_deref(), Some("first"));
+    }
+
+    #[test]
+    fn a_schema_bound_at_claim_survives_load() {
+        let dir = crate::test_util::TempDir::new().unwrap();
+        let original = TicketQueue::new();
+        original.dir(dir.path().to_path_buf());
+        let schemas = crate::schemas::SchemaStore::new();
+        schemas.label("analysis", document("verdict")).unwrap();
+        original.schemas(&schemas);
+        original.ticket(Ticket::new("audit").label("analysis"));
+        original.claim(|t| t.has_label("analysis"), "alice");
+        drop(original);
+
+        let resumed = TicketQueue::load(dir.path()).unwrap();
+        assert_eq!(
+            bound_title(&resumed, "TICKET-1").as_deref(),
+            Some("verdict")
+        );
+    }
+
     #[test]
     fn claim_emits_started_event_in_workspace_log() {
         let (queue, dir) = test_queue();
@@ -751,7 +855,7 @@ mod tests {
     #[test]
     fn set_finished_rejects_a_result_that_misses_the_ticket_schema() {
         let (queue, _tmp) = test_queue();
-        let schema = crate::schemas::Schema::parse(serde_json::json!({
+        let schema = crate::schemas::Schema::new(serde_json::json!({
             "type": "object",
             "properties": {"title": {"type": "string"}},
             "required": ["title"],
@@ -1163,7 +1267,7 @@ mod tests {
             "properties": { "n": { "type": "integer" } },
             "required": ["n"],
         });
-        let schema = crate::schemas::Schema::parse(schema_doc.clone()).unwrap();
+        let schema = crate::schemas::Schema::new(schema_doc.clone()).unwrap();
         original.ticket(Ticket::new("counted").schema(schema));
         drop(original);
 

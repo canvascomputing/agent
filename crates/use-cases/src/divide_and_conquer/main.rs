@@ -183,7 +183,7 @@ fn parse_idx_from_body(task: &Value) -> Option<usize> {
 }
 
 fn partial_sum_schema() -> Schema {
-    Schema::parse(json!({
+    Schema::new(json!({
         "type": "object",
         "properties": {
             "idx": {

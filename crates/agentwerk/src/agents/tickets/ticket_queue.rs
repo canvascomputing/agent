@@ -16,6 +16,7 @@ use tokio::task::JoinHandle;
 use crate::event::{default_logger, Event, EventKind, FinishReason};
 use crate::persistence::Persist;
 use crate::providers::ProviderResult;
+use crate::schemas::SchemaStore;
 
 use super::super::agent::{Agent, TicketQueueRef};
 use super::super::compaction::Compaction;
@@ -236,6 +237,9 @@ pub struct TicketQueue {
     /// What corrects an agent asked to try again. `None` keeps the built-in
     /// directive.
     pub(super) directive_editor: Mutex<Option<Arc<DirectiveEditor>>>,
+    /// The result contracts bound to labels, read once per claim. `None` leaves
+    /// every ticket with whatever schema it was built with.
+    pub(super) schemas: Mutex<Option<Arc<SchemaStore>>>,
     pub(super) dir: Mutex<PathBuf>,
     pub(super) tickets_log_lock: Mutex<()>,
     pub(super) results_log_lock: Mutex<()>,
@@ -266,6 +270,7 @@ impl TicketQueue {
             reply_editing: Mutex::new(ReplyEditing::default()),
             compaction_editor: Mutex::new(None),
             directive_editor: Mutex::new(None),
+            schemas: Mutex::new(None),
             dir: Mutex::new(PathBuf::from(".agentwerk")),
             tickets_log_lock: Mutex::new(()),
             results_log_lock: Mutex::new(()),
@@ -341,6 +346,7 @@ impl TicketQueue {
             reply_editing: Mutex::new(ReplyEditing::default()),
             compaction_editor: Mutex::new(None),
             directive_editor: Mutex::new(None),
+            schemas: Mutex::new(None),
             dir: Mutex::new(tickets_dir),
             tickets_log_lock: Mutex::new(()),
             results_log_lock: Mutex::new(()),
@@ -900,6 +906,29 @@ impl TicketQueue {
     /// Get the session directory.
     pub fn get_dir(&self) -> PathBuf {
         self.dir.lock().unwrap().clone()
+    }
+
+    /// Enforce schemas for ticket results.
+    ///
+    /// A ticket claimed under a label the store knows takes that schema, unless
+    /// it already carries one of its own. It is how a ticket nobody could
+    /// attach a schema to gets one: a handover child, or a ticket the model
+    /// filed through `manage_tickets`.
+    ///
+    /// ```no_run
+    /// # use agentwerk::{SchemaStore, Ticket, TicketQueue};
+    /// # use serde_json::json;
+    /// let schemas = SchemaStore::new();
+    /// schemas.label("analysis", json!({ "type": "object" }))?;
+    ///
+    /// let tickets = TicketQueue::new();
+    /// tickets.schemas(&schemas);
+    /// tickets.ticket(Ticket::new("Audit src/db.").label("analysis"));
+    /// # Ok::<(), agentwerk::schemas::SchemaParseError>(())
+    /// ```
+    pub fn schemas(&self, store: &Arc<SchemaStore>) -> &Self {
+        *self.schemas.lock().unwrap() = Some(Arc::clone(store));
+        self
     }
 
     /// Submit a task and return its ticket key.

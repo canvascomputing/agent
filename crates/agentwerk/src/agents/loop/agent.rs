@@ -1230,6 +1230,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_schema_bound_to_a_label_reaches_the_first_message_of_its_ticket() {
+        let provider = MockProvider::with_results(vec![Ok(write_result_response("done"))]);
+        let results_dir = crate::test_util::TempDir::new().unwrap();
+
+        let schemas = crate::schemas::SchemaStore::new();
+        schemas
+            .label(
+                "analysis",
+                serde_json::json!({
+                    "type": "object",
+                    "properties": { "verdict": { "type": "string" } },
+                    "required": ["verdict"],
+                }),
+            )
+            .unwrap();
+
+        let tickets = TicketQueue::new();
+        tickets
+            .dir(results_dir.path().to_path_buf())
+            .max_request_retries(0)
+            .request_retry_delay(Duration::from_millis(1))
+            .max_time(Duration::from_millis(500));
+        tickets.schemas(&schemas);
+        tickets.agent(
+            Agent::new()
+                .name("tester")
+                .provider(provider.clone())
+                .model("mock")
+                .role("test")
+                .label("analysis")
+                .build(),
+        );
+        tickets.ticket(Ticket::new("audit").label("analysis"));
+        let _ = tickets.finish_all().await;
+
+        let task_message = &user_texts(&provider.received()[0])[0];
+        assert!(
+            task_message.contains("verdict"),
+            "the bound schema must be in the task message: {task_message:?}",
+        );
+    }
+
+    #[tokio::test]
     async fn knowledge_write_then_read_across_tickets() {
         let provider = MockProvider::with_results(vec![
             Ok(knowledge_write_response(

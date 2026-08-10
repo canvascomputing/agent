@@ -4,10 +4,10 @@
 //! single starter ticket pinned to `researcher_1`. Each researcher
 //! calls `brave_search`, reads its parent ticket via
 //! `read_tickets` to build on prior findings, and hands off to
-//! the next agent via `finish` with a `handover`. The final researcher
-//! attaches the report schema to its handover so the report writer's
-//! result is validated by the framework. The report writer finishes
-//! the chain with a plain `finish`.
+//! the next agent via `finish` with a `handover`. A handover carries no
+//! schema, so the report schema is bound to the `report` label and the
+//! report writer's ticket takes it when that agent claims it. The report
+//! writer finishes the chain with a plain `finish`.
 //!
 //! Usage: deep-research <QUESTION>
 //!
@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use agentwerk::event::{Event, EventKind, EventName};
 use agentwerk::providers::{Model, Provider, ProviderResult};
-use agentwerk::schemas::Schema;
+use agentwerk::schemas::{Schema, SchemaStore};
 use agentwerk::tools::{ReadTicketsTool, Tool, ToolResult};
 use agentwerk::{Agent, FinishReason, Ticket, TicketQueue};
 
@@ -38,12 +38,15 @@ async fn main() {
     let event_handler: Arc<dyn Fn(&Event) + Send + Sync> =
         Arc::new(|event: &Event| log_event(event));
 
-    let schema_json_pretty = serde_json::to_string_pretty(&final_report_schema_value()).unwrap();
-
     let workdir = prepare_workdir();
 
     let tickets = TicketQueue::new();
     tickets.dir(workdir.clone());
+    let schemas = SchemaStore::new();
+    schemas
+        .label("report", final_report_schema_value())
+        .expect("report schema is well-formed");
+    tickets.schemas(&schemas);
     let on_ctrl_c = Arc::clone(&tickets);
     tokio::spawn(async move {
         if tokio::signal::ctrl_c().await.is_ok() {
@@ -68,7 +71,6 @@ async fn main() {
         .model(Model::from_env().expect("model name required"))
         .role(RESEARCHER_2_ROLE)
         .label("researcher_2")
-        .template("schema_json", schema_json_pretty.clone())
         .tool(brave_search_tool(brave_key.clone()))
         .tool(ReadTicketsTool)
         .build();
@@ -96,7 +98,7 @@ async fn main() {
     // terminal-reply path then transitions the ticket to `Failed`
     // rather than silently `Done`. The role prompt is what keeps the
     // chain going by requiring a `handover`.
-    let starter_schema = Schema::parse(serde_json::json!({
+    let starter_schema = Schema::new(serde_json::json!({
         "type": "string",
         "minLength": 100
     }))
@@ -392,13 +394,8 @@ fn format_tool_call(tool_name: &str, input: &serde_json::Value) -> Vec<String> {
             Some(to) => {
                 let task = preview_value(input.get("task"), 70);
                 let result = preview_value(input.get("result"), 70);
-                let schema_note = if input.get("schema").is_some() && !input["schema"].is_null() {
-                    " (+schema)"
-                } else {
-                    ""
-                };
                 vec![
-                    format!("📤 handoff → {to}{schema_note}"),
+                    format!("📤 handoff → {to}"),
                     format!("      · task    : {task}"),
                     format!("      · findings: {result}"),
                 ]

@@ -27,6 +27,7 @@ fn _agentwerk(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<trajectory::PyTrajectory>()?;
     m.add_class::<compaction::PyCompaction>()?;
     m.add_class::<schema::PySchema>()?;
+    m.add_class::<schema::PySchemaStore>()?;
     m.add_class::<event::PyEvent>()?;
     m.add_function(wrap_pyfunction!(event::event_names, m)?)?;
     m.add_class::<knowledge::PyKnowledge>()?;

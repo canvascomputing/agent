@@ -282,7 +282,7 @@ mod tests {
         let queue = TicketQueue::new();
         queue.dir(shared_test_dir().to_path_buf());
         queue.dir(dir.path().to_path_buf());
-        let schema = Schema::parse(serde_json::json!({
+        let schema = Schema::new(serde_json::json!({
             "type": "object",
             "properties": {"x": {"type": "string"}},
             "required": ["x"]
@@ -323,7 +323,7 @@ mod tests {
         let queue = TicketQueue::new();
         queue.dir(shared_test_dir().to_path_buf());
         queue.dir(dir.path().to_path_buf());
-        let schema = Schema::parse(serde_json::json!({
+        let schema = Schema::new(serde_json::json!({
             "type": "object",
             "properties": {"x": {"type": "string"}},
             "required": ["x"]
@@ -355,7 +355,7 @@ mod tests {
         let queue = TicketQueue::new();
         queue.dir(shared_test_dir().to_path_buf());
         queue.dir(dir.path().to_path_buf());
-        let schema = Schema::parse(serde_json::json!({
+        let schema = Schema::new(serde_json::json!({
             "type": "object",
             "properties": {"x": {"type": "string"}},
             "required": ["x"]
@@ -543,6 +543,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn handover_child_takes_the_schema_bound_to_its_label() {
+        let dir = crate::test_util::TempDir::new().unwrap();
+        let (queue, _parent_key) = one_ticket_in("alice", dir.path().to_path_buf());
+        let schemas = crate::schemas::SchemaStore::new();
+        schemas
+            .label(
+                "bob",
+                serde_json::json!({"type": "object", "title": "verdict"}),
+            )
+            .unwrap();
+        queue.schemas(&schemas);
+        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
+
+        FinishTool
+            .call(
+                serde_json::json!({"handover": "bob", "result": "a lead worth tracing"}),
+                &ctx,
+            )
+            .await
+            .unwrap();
+
+        // `finish` cannot attach a schema to the child it inserts, so the
+        // child is born without one and picks the label's up at claim.
+        assert!(queue.get_ticket("TICKET-2").unwrap().schema.is_none());
+
+        queue.claim(|t| t.has_label("bob"), "bob");
+        let bound = queue.get_ticket("TICKET-2").unwrap().schema.unwrap();
+        assert_eq!(title_of(&bound), "verdict");
+    }
+
+    /// The `title` a schema was built with, which names it in an assertion.
+    fn title_of(schema: &Schema) -> String {
+        serde_json::to_value(schema).unwrap()["title"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string()
+    }
+
+    #[tokio::test]
     async fn handover_appends_one_ndjson_line_for_parent_result() {
         let dir = crate::test_util::TempDir::new().unwrap();
         let (queue, parent_key) = one_ticket_in("alice", dir.path().to_path_buf());
@@ -576,7 +615,7 @@ mod tests {
         let dir = crate::test_util::TempDir::new().unwrap();
         let queue = TicketQueue::new();
         queue.dir(dir.path().to_path_buf());
-        let schema = Schema::parse(serde_json::json!({
+        let schema = Schema::new(serde_json::json!({
             "type": "string",
             "minLength": 50
         }))
@@ -614,7 +653,7 @@ mod tests {
     fn one_ticket_with_object_schema(agent: &str, dir: PathBuf) -> (Arc<TicketQueue>, String) {
         let queue = TicketQueue::new();
         queue.dir(dir);
-        let schema = Schema::parse(serde_json::json!({
+        let schema = Schema::new(serde_json::json!({
             "type": "object",
             "required": ["status"]
         }))

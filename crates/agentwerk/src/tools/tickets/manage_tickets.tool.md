@@ -49,10 +49,6 @@ Read and mutate the ticket queue from one tool: `get` / `list` / `search` to rea
         "type": "string"
       },
       "description": "For `create` or `edit` (optional): label scope. Determines which agents pick up the ticket. Including an agent's name as a label pins the ticket to that agent."
-    },
-    "schema": {
-      "type": "object",
-      "description": "For `create` or `edit` (optional): a JSON Schema document. When set, the agent's final answer must validate against it: an object schema is passed as `finish`'s top-level arguments, any other shape via the `result` field. Failures count toward `max_schema_retries`."
     }
   },
   "required": [

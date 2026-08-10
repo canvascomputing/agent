@@ -53,7 +53,7 @@ async fn traces_three_hop_call_path() -> std::result::Result<(), Box<dyn std::er
         "# project\n\nNotes about the entry point and the handler module.\n",
     )?;
 
-    let schema = Schema::parse(serde_json::json!({
+    let schema = Schema::new(serde_json::json!({
         "type": "object",
         "properties": {
             "call_path": {

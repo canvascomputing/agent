@@ -23,7 +23,7 @@ use super::reply::{Author, Reply, ReplyContent};
 /// use serde_json::json;
 ///
 /// # fn run() -> Result<(), Box<dyn std::error::Error>> {
-/// let schema = Schema::parse(json!({"type": "object"}))?;
+/// let schema = Schema::new(json!({"type": "object"}))?;
 /// let ticket = Ticket::new("Summarize this URL.")
 ///     .label("research")
 ///     .schema(schema);
@@ -405,7 +405,7 @@ mod tests {
 
     #[test]
     fn as_user_message_appends_the_result_schema_when_set() {
-        let schema = crate::schemas::Schema::parse(serde_json::json!({
+        let schema = crate::schemas::Schema::new(serde_json::json!({
             "type": "object",
             "properties": {"summary": {"type": "string"}},
             "required": ["summary"],

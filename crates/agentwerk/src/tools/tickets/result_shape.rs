@@ -148,7 +148,7 @@ mod tests {
     use serde_json::json;
 
     fn object_schema() -> Schema {
-        Schema::parse(json!({
+        Schema::new(json!({
             "type": "object",
             "properties": { "status": { "type": "string" }, "note": { "type": "string" } },
             "required": ["status"],
@@ -157,7 +157,7 @@ mod tests {
     }
 
     fn string_schema() -> Schema {
-        Schema::parse(json!({ "type": "string" })).unwrap()
+        Schema::new(json!({ "type": "string" })).unwrap()
     }
 
     #[test]
@@ -202,7 +202,7 @@ mod tests {
 
     #[test]
     fn a_schema_that_declares_result_is_not_unwrapped() {
-        let schema = Schema::parse(json!({
+        let schema = Schema::new(json!({
             "type": "object",
             "properties": { "result": { "type": "string" } },
             "required": ["result"],

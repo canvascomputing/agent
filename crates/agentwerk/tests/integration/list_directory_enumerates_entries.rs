@@ -25,7 +25,7 @@ async fn separates_files_and_directories() -> std::result::Result<(), Box<dyn st
         fs::create_dir(root.join(name))?;
     }
 
-    let schema = Schema::parse(serde_json::json!({
+    let schema = Schema::new(serde_json::json!({
         "type": "object",
         "properties": {
             "files": {
