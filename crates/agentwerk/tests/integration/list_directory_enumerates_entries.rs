@@ -69,7 +69,7 @@ async fn separates_files_and_directories() -> std::result::Result<(), Box<dyn st
         .schema(schema),
     );
 
-    tickets.finish(|_| true).await;
+    tickets.finish_all().await;
     common::print_result(&tickets, tickets.stats());
 
     assert!(

@@ -166,7 +166,7 @@ impl Run {
 ///     );
 /// }
 /// tickets.ticket(Ticket::new("Summarize https://canvascomputing.org").label("research"));
-/// tickets.finish(|_| true).await;
+/// tickets.finish_all().await;
 /// # }
 /// ```
 ///
@@ -182,7 +182,7 @@ impl Run {
 ///
 /// # fn run() -> Result<(), Box<dyn std::error::Error>> {
 /// let tickets = TicketQueue::load(".agentwerk")?;
-/// // Re-register the agents, then call .start() or .finish(|_| true).await.
+/// // Re-register the agents, then call .start() or .finish_all().await.
 /// # let _ = tickets;
 /// # Ok(())
 /// # }
@@ -976,8 +976,7 @@ impl TicketQueue {
     /// A match is neither claimed nor resumed, and an agent already holding one
     /// is taken off it; the ticket stays `InProgress`. Nothing waits: this is
     /// not async, so it can be called from a ctrl-c handler, a drop guard, or
-    /// anywhere else. Cancelling every ticket ends the run, and
-    /// [`Self::finish`] then reports `FinishReason::Cancelled`.
+    /// anywhere else. Use [`Self::cancel_all`] to stop the whole run.
     ///
     /// Your filter MUST NOT call another `TicketQueue` method that reads the
     /// ticket store, or the claim path deadlocks.
@@ -986,7 +985,6 @@ impl TicketQueue {
     /// # use agentwerk::TicketQueue;
     /// let tickets = TicketQueue::new();
     /// tickets.cancel(|t| t.has_label("scan")); // one pool
-    /// tickets.cancel(|_| true); // the whole run
     /// ```
     pub fn cancel<F>(&self, matches: F) -> &Self
     where
@@ -994,6 +992,14 @@ impl TicketQueue {
     {
         self.cancel_filters.lock().unwrap().push(Arc::new(matches));
         self
+    }
+
+    /// Take every ticket off the queue, which ends the run.
+    ///
+    /// [`Self::finish_all`] then reports `FinishReason::Cancelled`. Like
+    /// [`Self::cancel`], nothing waits, so a ctrl-c handler can call it.
+    pub fn cancel_all(&self) -> &Self {
+        self.cancel(|_| true)
     }
 
     /// Check whether a ticket has been cancelled.
@@ -1161,10 +1167,10 @@ impl TicketQueue {
     /// Wait for the matching tickets to be done, then get their results in
     /// creation order.
     ///
-    /// Pass `|_| true` to wait for the whole run, a label to wait for one pool,
-    /// or a key to wait for one ticket. The wait ends once no matching ticket
-    /// has work left for an agent, which covers one that finished, failed, was
-    /// cancelled, or is paused awaiting your reply.
+    /// Name a label to wait for one pool, or a key to wait for one ticket;
+    /// [`Self::finish_all`] waits for the whole run. The wait ends once no
+    /// matching ticket has work left for an agent, which covers one that
+    /// finished, failed, was cancelled, or is paused awaiting your reply.
     ///
     /// A ticket contributes a result only when it finished with one, so this is
     /// shorter than the set the filter named rather than aligned with it, as
@@ -1215,6 +1221,27 @@ impl TicketQueue {
             .into_iter()
             .filter_map(|t| t.result)
             .collect()
+    }
+
+    /// Wait for every ticket to be done, then get every result in creation
+    /// order.
+    ///
+    /// This is how a host waits for work it started: it returns once no ticket
+    /// has work left for an agent. [`Self::finish`] waits for one pool or one
+    /// ticket instead, and everything it says about starting, restarting, and
+    /// which tickets contribute a result holds here too.
+    ///
+    /// ```no_run
+    /// # use agentwerk::TicketQueue;
+    /// # async fn run() {
+    /// let tickets = TicketQueue::new();
+    /// for finding in tickets.finish_all().await {
+    ///     println!("{finding}");
+    /// }
+    /// # }
+    /// ```
+    pub async fn finish_all(&self) -> Vec<serde_json::Value> {
+        self.finish(|_| true).await
     }
 
     /// Get why the last run ended, or `None` while one is still going.
@@ -1974,7 +2001,7 @@ mod tests {
     async fn run_finished_reports_drained_on_empty_queue() {
         let (queue, _tmp) = test_queue();
         let reasons = collect_finish_reasons(&queue);
-        queue.finish(|_| true).await;
+        queue.finish_all().await;
         assert_eq!(*reasons.lock().unwrap(), vec![FinishReason::Drained]);
     }
 
@@ -1983,7 +2010,7 @@ mod tests {
         let (queue, _tmp) = test_queue();
         queue.start();
         assert_eq!(queue.get_finish_reason(), None);
-        queue.finish(|_| true).await;
+        queue.finish_all().await;
         assert_eq!(queue.get_finish_reason(), Some(FinishReason::Drained));
     }
 
@@ -1991,8 +2018,8 @@ mod tests {
     async fn the_finish_reason_is_cleared_by_a_restart() {
         let (queue, _tmp) = test_queue();
         queue.start();
-        queue.cancel(|_| true);
-        queue.finish(|_| true).await;
+        queue.cancel_all();
+        queue.finish_all().await;
         assert_eq!(queue.get_finish_reason(), Some(FinishReason::Cancelled));
         queue.start();
         assert_eq!(queue.get_finish_reason(), None);
@@ -2001,7 +2028,7 @@ mod tests {
     #[tokio::test]
     async fn a_clean_drain_is_not_reported_as_cancelled() {
         let (queue, _tmp) = test_queue();
-        queue.finish(|_| true).await;
+        queue.finish_all().await;
         assert_eq!(queue.get_finish_reason(), Some(FinishReason::Drained));
     }
 
@@ -2020,12 +2047,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn finish_all_hands_back_the_results_of_every_pool() {
+        let (queue, _tmp) = test_queue();
+        queue.ticket(Ticket::new("a").label("scan"));
+        queue.ticket(Ticket::new("b").label("report"));
+        attach_done_result(&queue, "TICKET-1", "scanned");
+        attach_done_result(&queue, "TICKET-2", "reported");
+
+        assert_eq!(
+            queue.finish_all().await,
+            vec![serde_json::json!("scanned"), serde_json::json!("reported")]
+        );
+    }
+
+    #[tokio::test]
     async fn run_finished_reports_cancelled_when_cancel_fires_during_run() {
         let (queue, _tmp) = test_queue();
         let reasons = collect_finish_reasons(&queue);
         queue.start();
-        queue.cancel(|_| true);
-        queue.finish(|_| true).await;
+        queue.cancel_all();
+        queue.finish_all().await;
         assert_eq!(*reasons.lock().unwrap(), vec![FinishReason::Cancelled]);
         assert_eq!(queue.get_finish_reason(), Some(FinishReason::Cancelled));
     }
@@ -2035,7 +2076,7 @@ mod tests {
         let (queue, _tmp) = test_queue();
         let reasons = collect_finish_reasons(&queue);
         queue.max_turns(0);
-        queue.finish(|_| true).await;
+        queue.finish_all().await;
         assert_eq!(
             *reasons.lock().unwrap(),
             vec![FinishReason::PolicyViolated(
@@ -2048,9 +2089,9 @@ mod tests {
     async fn run_finished_is_emitted_again_after_a_restart() {
         let (queue, _tmp) = test_queue();
         let reasons = collect_finish_reasons(&queue);
-        queue.finish(|_| true).await;
+        queue.finish_all().await;
         queue.start();
-        queue.finish(|_| true).await;
+        queue.finish_all().await;
         assert_eq!(
             *reasons.lock().unwrap(),
             vec![FinishReason::Drained, FinishReason::Drained],
@@ -2070,7 +2111,7 @@ mod tests {
                 sink.lock().unwrap().push(format!("{:?}", e.kind));
             }
         });
-        queue.finish(|_| true).await;
+        queue.finish_all().await;
         let entries = log.lock().unwrap();
         assert_eq!(entries.len(), 2, "expected RunStarted then RunFinished");
         assert!(entries[0].starts_with("RunStarted"));

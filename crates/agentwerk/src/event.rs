@@ -252,7 +252,7 @@ impl<'a> Measure<'a> {
 ///         eprintln!("[{}] done {}", event.agent_name, event.ticket_key);
 ///     }
 /// });
-/// tickets.finish(|_| true).await;
+/// tickets.finish_all().await;
 /// # }
 /// ```
 #[derive(Debug, Clone)]

@@ -493,14 +493,29 @@ impl PyTicketQueue {
     }
 
     /// Wait for the matching tickets to be done, then give back their results
-    /// in creation order. Pass `lambda t: True` to wait for the whole run, a
-    /// label to wait for one pool, or a key to wait for one ticket. Awaitable.
+    /// in creation order. Name a label to wait for one pool, or a key to wait
+    /// for one ticket; `finish_all()` waits for the whole run. Awaitable.
     fn finish<'py>(&self, py: Python<'py>, matches: Py<PyAny>) -> PyResult<Bound<'py, PyAny>> {
         let inner = Arc::clone(&self.inner);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let results = inner
                 .finish(|ticket| ticket_predicate(&matches, ticket))
                 .await;
+            Python::attach(|py| {
+                results
+                    .iter()
+                    .map(|value| Ok(value_to_py(py, value)?.unbind()))
+                    .collect::<PyResult<Vec<_>>>()
+            })
+        })
+    }
+
+    /// Wait for every ticket to be done, then give back every result in
+    /// creation order. Awaitable.
+    fn finish_all<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let inner = Arc::clone(&self.inner);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let results = inner.finish_all().await;
             Python::attach(|py| {
                 results
                     .iter()
@@ -517,11 +532,16 @@ impl PyTicketQueue {
             .map(|reason| reason.to_string())
     }
 
-    /// Take every matching ticket off the queue. Cancelling every ticket ends
-    /// the run.
+    /// Take every matching ticket off the queue.
     fn cancel<'py>(slf: PyRef<'py, Self>, matches: Py<PyAny>) -> PyRef<'py, Self> {
         slf.inner
             .cancel(move |ticket| ticket_predicate(&matches, ticket));
+        slf
+    }
+
+    /// Take every ticket off the queue, which ends the run.
+    fn cancel_all(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+        slf.inner.cancel_all();
         slf
     }
 

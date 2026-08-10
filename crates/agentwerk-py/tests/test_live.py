@@ -21,7 +21,7 @@ async def test_runs_a_single_task_to_a_result(live_agent):
         if event.kind == "run_finished"
         else None
     )
-    await work.finish(lambda t: True)
+    await work.finish_all()
     assert work.results()
     assert reasons == ["drained"]
 
@@ -37,7 +37,7 @@ async def test_invokes_a_builtin_tool(tmp_path):
     )
     agent.task("Read secret.txt and report the exact token it contains.")
     work = agent.start()
-    await work.finish(lambda t: True)
+    await work.finish_all()
     assert "THE-TOKEN-IS-42" in str(work.results()[-1])
 
 
@@ -59,7 +59,7 @@ async def test_invokes_a_python_tool_and_records_the_file_it_opened(tmp_path):
     )
     agent.task("Read note.txt with the slurp tool and report the token it contains.")
     work = agent.start()
-    await work.finish(lambda t: True)
+    await work.finish_all()
 
     assert calls, "the python tool was never invoked"
     assert "note.txt" in work.stats().file_stats()
@@ -85,7 +85,7 @@ async def test_runs_two_labeled_agents_with_events_and_chaining():
 
     queue.create_ticket_on_result(chain)
     queue.ticket(aw.Ticket("Reply alpha", labels=["a"]))
-    await queue.finish(lambda t: True)
+    await queue.finish_all()
 
     assert len(queue.results()) == 2
     assert "ticket_finished" in kinds
@@ -108,7 +108,7 @@ async def test_saves_the_messages_of_a_finished_ticket(tmp_path):
 
     queue.on_ticket(capture)
     key = queue.task("Reply with exactly the word: pong")
-    await queue.finish(lambda t: True)
+    await queue.finish_all()
 
     written = sorted(p.name for p in (tmp_path / "trajectories").iterdir())
     assert written == [f"scribe-{key}.html", f"scribe-{key}.json"]
@@ -138,7 +138,7 @@ async def test_an_async_compaction_editor_awaits_the_built_in_summarizer(tmp_pat
         .build()
     )
     queue.task("Name one colour and say why you picked it.")
-    await queue.finish(lambda t: True)
+    await queue.finish_all()
 
     assert summaries, "the editor must have run and awaited the summarizer"
     assert summaries[0].strip()

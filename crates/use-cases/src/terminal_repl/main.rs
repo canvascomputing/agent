@@ -285,12 +285,12 @@ async fn main() {
         let cancelled = tokio::select! {
             _ = wait_for_assistant_pause(&tickets, &key) => false,
             _ = tokio::signal::ctrl_c() => {
-                tickets.cancel(|_| true);
+                tickets.cancel_all();
                 if midstream.swap(false, Ordering::Relaxed) {
                     eprintln!();
                 }
                 eprintln!("{}cancelling…{}", style.dim, style.reset);
-                let winding_down = tickets.finish(|_| true);
+                let winding_down = tickets.finish_all();
                 tokio::pin!(winding_down);
                 tokio::select! {
                     _ = &mut winding_down => {}

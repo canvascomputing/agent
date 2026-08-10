@@ -110,7 +110,7 @@ async fn traces_three_hop_call_path() -> std::result::Result<(), Box<dyn std::er
         .schema(schema),
     );
 
-    tickets.finish(|_| true).await;
+    tickets.finish_all().await;
     common::print_result(&tickets, tickets.stats());
 
     assert!(

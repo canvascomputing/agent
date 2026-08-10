@@ -41,7 +41,7 @@ async fn creates_a_followup_ticket() -> std::result::Result<(), Box<dyn std::err
     );
     tickets.task(instruction.clone());
 
-    tickets.finish(|_| true).await;
+    tickets.finish_all().await;
     common::print_result(&tickets, tickets.stats());
 
     assert!(

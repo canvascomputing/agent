@@ -75,7 +75,7 @@ async fn grep_lists_unknown_function_names() -> std::result::Result<(), Box<dyn 
          not known in advance. Answer with the names.",
     );
 
-    tickets.finish(|_| true).await;
+    tickets.finish_all().await;
     common::print_result(&tickets, tickets.stats());
 
     let recorded = calls.lock().unwrap().clone();

@@ -143,7 +143,7 @@ async fn summariser_produces_text_when_compaction_fires_against_live_llm() {
         "no result before run starts"
     );
 
-    tickets.finish(|_| true).await;
+    tickets.finish_all().await;
 
     let all_events = events.lock().unwrap();
 

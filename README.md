@@ -63,7 +63,7 @@ async fn main() {
 
     agent.task("Find every `pub trait` defined under src/ and explain each in one sentence.");
     let work = agent.start();
-    let mut results = work.finish(|_| true).await;
+    let mut results = work.finish_all().await;
 
     let result = results.pop().unwrap();
     println!("{}", result.as_str().unwrap_or_default());
@@ -264,7 +264,7 @@ See [`TicketQueue`](https://docs.rs/agentwerk/latest/agentwerk/agents/tickets/st
 
 ```rust
 tickets.start();
-let answer = tickets.finish(|_| true).await.pop();
+let answer = tickets.finish_all().await.pop();
 ```
 
 <details>
@@ -274,8 +274,10 @@ let answer = tickets.finish(|_| true).await.pop();
 |-|--------|-------------|
 | **Run** | `start()` | Begin processing tickets. |
 | **Wait** | `finish(matches).await` | Wait for the matching tickets to be done and get their results. |
+| | `finish_all().await` | Wait for every ticket to be finished and get every result. |
 | | `get_finish_reason()` | Get why the last run ended. |
 | **Stop** | `cancel(matches)` | Stop work on the matching tickets. |
+| | `cancel_all()` | Stop work on every ticket. |
 | | `is_cancelled(ticket)` | Check whether a ticket has been cancelled. |
 
 </details>
@@ -285,7 +287,7 @@ let answer = tickets.finish(|_| true).await.pop();
 Access the results of the agents' work:
 
 ```rust
-if let Some(answer) = tickets.finish(|_| true).await.pop() {
+if let Some(answer) = tickets.finish_all().await.pop() {
     println!("{answer}");
 }
 

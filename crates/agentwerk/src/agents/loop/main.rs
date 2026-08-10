@@ -83,13 +83,13 @@ mod tests {
                 break;
             }
             if tokio::time::Instant::now() > deadline {
-                run_handle.finish(|_| true).await;
+                run_handle.finish_all().await;
                 panic!("late-added agent did not finish ticket within 5s");
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
 
-        run_handle.finish(|_| true).await;
+        run_handle.finish_all().await;
 
         assert_eq!(provider.requests(), 1);
     }
@@ -124,15 +124,15 @@ mod tests {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
         while tickets.get_ticket(&key).unwrap().status != Status::InProgress {
             if tokio::time::Instant::now() > deadline {
-                run_handle.cancel(|_| true);
-                run_handle.finish(|_| true).await;
+                run_handle.cancel_all();
+                run_handle.finish_all().await;
                 panic!("agent never claimed the ticket");
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
 
         tickets.set_finished(&key, "resolved by the host").unwrap();
-        run_handle.finish(|_| true).await;
+        run_handle.finish_all().await;
 
         let ticket = tickets.get_ticket(&key).unwrap();
         assert_eq!(ticket.status, Status::Finished);
@@ -177,13 +177,13 @@ mod tests {
                 break;
             }
             if tokio::time::Instant::now() > deadline {
-                run_handle.finish(|_| true).await;
+                run_handle.finish_all().await;
                 panic!("late-added agent did not finish ticket within 5s");
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
 
-        tokio::time::timeout(Duration::from_secs(2), run_handle.finish(|_| true))
+        tokio::time::timeout(Duration::from_secs(2), run_handle.finish_all())
             .await
             .expect("start() did not return within 2s of signal flip");
     }

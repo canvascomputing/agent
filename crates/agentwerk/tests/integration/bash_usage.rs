@@ -61,7 +61,7 @@ async fn test() -> std::result::Result<(), Box<dyn std::error::Error>> {
         .schema(schema),
     );
 
-    tickets.finish(|_| true).await;
+    tickets.finish_all().await;
     common::print_result(&tickets, tickets.stats());
 
     let json = tickets.results().pop().unwrap_or_default();

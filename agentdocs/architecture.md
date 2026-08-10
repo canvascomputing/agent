@@ -9,7 +9,7 @@ The invariants that shape how code fits together. Layout says where code lives; 
 ```rust
 let agent = Agent::from_env().build();
 tickets.agent(agent);
-tickets.finish(|_| true).await;
+tickets.finish_all().await;
 ```
 
 - The `Agent` builder carries identity, prompt parts, provider and model, tools, working directory, event handler, and a `Weak<TicketQueue>` (dangling by default).
@@ -130,7 +130,7 @@ Two layers of state exist. The per-ticket replies live on `Ticket::replies`: eve
 
 ## The Lifecycle Is Three Verbs Over One Filter
 
-**`start` starts, `finish(matches)` waits, `cancel(matches)` stops. Both filters are `Fn(&Ticket) -> bool`, so waiting for one pool, one ticket, or the whole run is the same call with a different filter.**
+**`start` starts, `finish(matches)` waits, `cancel(matches)` stops. Both filters are `Fn(&Ticket) -> bool`, so waiting for one pool or one ticket is the same call with a different filter, and `finish_all()` and `cancel_all()` pass the filter that names every ticket.**
 
 - `TicketQueue::work_left(matches)` is the one definition of "not done yet", and both the main loop and `finish` ask it. A ticket has work left while it is pending, uncancelled, and not paused for a caller reply.
 - `TicketQueue::cancel_filters` holds what `cancel` took off the queue. The claim and resume path reads it through `is_cancelled(ticket)`, so a cancelled ticket is neither claimed nor resumed and an agent already holding one is taken off it. The ticket stays `InProgress`.

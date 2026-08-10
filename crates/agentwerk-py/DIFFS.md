@@ -86,8 +86,10 @@ Seven rules the surface table below never repeats.
 | `TicketQueue::find_ticket(predicate)` | `TicketQueue.find_ticket(predicate)` |
 | `TicketQueue::start()` | `TicketQueue.start()` |
 | `TicketQueue::finish(matches).await` | `await TicketQueue.finish(matches)`: the results become a list. |
+| `TicketQueue::finish_all().await` | `await TicketQueue.finish_all()`: the results become a list. |
 | `TicketQueue::get_finish_reason()` | `TicketQueue.get_finish_reason()`: the `FinishReason` becomes the string it prints as, such as `policy_violated(turns)`. |
 | `TicketQueue::cancel(matches)` | `TicketQueue.cancel(matches)` |
+| `TicketQueue::cancel_all()` | `TicketQueue.cancel_all()` |
 | `TicketQueue::is_cancelled(ticket)` | `TicketQueue.is_cancelled(ticket)` |
 | `TicketQueue::stats()` | `TicketQueue.stats()` |
 | `TicketQueue::results()` | `TicketQueue.results()` |

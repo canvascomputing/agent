@@ -270,7 +270,7 @@ mod tests {
         tickets.task("a");
         tickets.task("b");
 
-        tokio::time::timeout(Duration::from_secs(5), tickets.finish(|_| true))
+        tokio::time::timeout(Duration::from_secs(5), tickets.finish_all())
             .await
             .expect("finish did not finish within 5s");
 
@@ -304,7 +304,7 @@ mod tests {
 
         tickets.start();
         tickets.task("go");
-        tokio::time::timeout(Duration::from_secs(5), tickets.finish(|_| true))
+        tokio::time::timeout(Duration::from_secs(5), tickets.finish_all())
             .await
             .expect("finish did not finish within 5s");
 
@@ -360,7 +360,7 @@ mod tests {
         tickets.start();
         tickets.ticket(Ticket::new("go").label("scout"));
         tickets.ticket(Ticket::new("go").label("worker"));
-        tokio::time::timeout(Duration::from_secs(5), tickets.finish(|_| true))
+        tokio::time::timeout(Duration::from_secs(5), tickets.finish_all())
             .await
             .expect("finish did not finish within 5s");
 
@@ -400,7 +400,7 @@ mod tests {
 
         tickets.start();
         tickets.task("go");
-        tokio::time::timeout(Duration::from_secs(5), tickets.finish(|_| true))
+        tokio::time::timeout(Duration::from_secs(5), tickets.finish_all())
             .await
             .expect("finish did not finish within 5s");
 
@@ -441,7 +441,7 @@ mod tests {
         tickets.start();
         tickets.ticket(Ticket::new("a").label("alice"));
 
-        tokio::time::timeout(Duration::from_secs(5), tickets.finish(|_| true))
+        tokio::time::timeout(Duration::from_secs(5), tickets.finish_all())
             .await
             .expect("finish did not finish within 5s");
 
@@ -482,7 +482,7 @@ mod tests {
         tickets.start();
         tickets.ticket(Ticket::new("a").label("alice"));
 
-        tokio::time::timeout(Duration::from_secs(5), tickets.finish(|_| true))
+        tokio::time::timeout(Duration::from_secs(5), tickets.finish_all())
             .await
             .expect("finish did not finish within 5s");
 
@@ -523,7 +523,7 @@ mod tests {
         tickets.start();
         tickets.ticket(Ticket::new("a").label("alice"));
 
-        tokio::time::timeout(Duration::from_secs(5), tickets.finish(|_| true))
+        tokio::time::timeout(Duration::from_secs(5), tickets.finish_all())
             .await
             .expect("finish did not finish within 5s");
 
@@ -575,8 +575,8 @@ mod tests {
             "editor must not trigger a re-request"
         );
 
-        tickets.cancel(|_| true);
-        tickets.finish(|_| true).await;
+        tickets.cancel_all();
+        tickets.finish_all().await;
     }
 
     #[tokio::test]
@@ -627,7 +627,7 @@ mod tests {
             // The pause is not the end of the ticket, so the reply lands first
             // and the finish then waits out the turn it sets off.
             inject.await;
-            tickets.finish(|_| true).await;
+            tickets.finish_all().await;
         })
         .await
         .expect("test did not finish within 5s");
@@ -669,7 +669,7 @@ mod tests {
             .replies
             .last()
             .is_some_and(|r| r.author == Author::Assistant));
-        tickets.cancel(|_| true);
+        tickets.cancel_all();
     }
 
     #[tokio::test]
@@ -688,7 +688,7 @@ mod tests {
         tickets.agent(interactive_chatbot(&provider));
         tickets.task("hello");
 
-        tokio::time::timeout(Duration::from_secs(5), tickets.finish(|_| true))
+        tokio::time::timeout(Duration::from_secs(5), tickets.finish_all())
             .await
             .expect("test did not finish within 5s");
 
@@ -758,7 +758,7 @@ mod tests {
         };
 
         tokio::time::timeout(Duration::from_secs(5), async {
-            tokio::join!(tickets.finish(|_| true), drive);
+            tokio::join!(tickets.finish_all(), drive);
         })
         .await
         .expect("test did not finish within 5s");
@@ -780,7 +780,7 @@ mod tests {
         tickets.agent(task_agent(&provider));
         tickets.task("go");
 
-        tokio::time::timeout(Duration::from_secs(5), tickets.finish(|_| true))
+        tokio::time::timeout(Duration::from_secs(5), tickets.finish_all())
             .await
             .expect("test did not finish within 5s");
 
@@ -824,7 +824,7 @@ mod tests {
         tickets.agent(task_agent(&provider));
         tickets.task("go");
 
-        tokio::time::timeout(Duration::from_secs(5), tickets.finish(|_| true))
+        tokio::time::timeout(Duration::from_secs(5), tickets.finish_all())
             .await
             .expect("test did not finish within 5s");
 
@@ -856,7 +856,7 @@ mod tests {
         tickets.agent(task_agent(&provider));
         tickets.task("go");
 
-        tokio::time::timeout(Duration::from_secs(5), tickets.finish(|_| true))
+        tokio::time::timeout(Duration::from_secs(5), tickets.finish_all())
             .await
             .expect("test did not finish within 5s");
 
@@ -887,9 +887,9 @@ mod tests {
             .request_retry_delay(Duration::from_millis(1));
 
         tickets.start();
-        tickets.cancel(|_| true);
+        tickets.cancel_all();
 
-        tokio::time::timeout(Duration::from_secs(2), tickets.finish(|_| true))
+        tokio::time::timeout(Duration::from_secs(2), tickets.finish_all())
             .await
             .expect("run did not exit within 2s of cancel()");
     }
@@ -941,7 +941,7 @@ mod tests {
                 break;
             }
             if tokio::time::Instant::now() > deadline {
-                tickets.cancel(|_| true);
+                tickets.cancel_all();
                 panic!("analysis ticket did not finish within 5s");
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
@@ -959,8 +959,8 @@ mod tests {
         );
         assert_eq!(researcher.requests(), 0, "the researcher never ran");
 
-        tickets.cancel(|_| true);
-        tokio::time::timeout(Duration::from_secs(2), tickets.finish(|_| true))
+        tickets.cancel_all();
+        tokio::time::timeout(Duration::from_secs(2), tickets.finish_all())
             .await
             .expect("finish returns after cancel()");
     }
@@ -988,11 +988,11 @@ mod tests {
         );
 
         tickets.task("first");
-        tickets.finish(|_| true).await;
+        tickets.finish_all().await;
         assert_eq!(tickets.results().pop(), Some(serde_json::json!("first")));
 
         tickets.task("second");
-        tokio::time::timeout(Duration::from_secs(5), tickets.finish(|_| true))
+        tokio::time::timeout(Duration::from_secs(5), tickets.finish_all())
             .await
             .expect("second finish did not finish within 5s");
         assert_eq!(tickets.results().pop(), Some(serde_json::json!("second")));
@@ -1019,7 +1019,7 @@ mod tests {
 
         agent.task("hello");
         let queue = agent.start();
-        tokio::time::timeout(Duration::from_secs(5), queue.finish(|_| true))
+        tokio::time::timeout(Duration::from_secs(5), queue.finish_all())
             .await
             .expect("the run did not end within 5s");
         assert_eq!(queue.results().pop(), Some(serde_json::json!("forwarded")));
@@ -1067,7 +1067,7 @@ mod tests {
         );
         tickets.task("first");
         tickets.task("second");
-        let _ = tickets.finish(|_| true).await;
+        let _ = tickets.finish_all().await;
 
         let calls = provider.received();
         assert_eq!(calls.len(), 2);
@@ -1107,7 +1107,7 @@ mod tests {
         );
         tickets.task("first");
         tickets.task("second");
-        let _ = tickets.finish(|_| true).await;
+        let _ = tickets.finish_all().await;
 
         let prompts = provider.received_system_prompts();
         assert_eq!(prompts.len(), 3);
@@ -1158,7 +1158,7 @@ mod tests {
                 .build(),
         );
         tickets.task("hi");
-        let _ = tickets.finish(|_| true).await;
+        let _ = tickets.finish_all().await;
 
         let prompts = provider.received_system_prompts();
         assert_eq!(prompts.len(), 2);
@@ -1214,11 +1214,11 @@ mod tests {
         );
 
         tickets.ticket(Ticket::new("alice work").label("a"));
-        let _ = tickets.finish(|_| true).await;
+        let _ = tickets.finish_all().await;
         assert!(store.index().contains("alice-note"));
 
         tickets.ticket(Ticket::new("bob work").label("b"));
-        let _ = tickets.finish(|_| true).await;
+        let _ = tickets.finish_all().await;
 
         let bob_prompts = p_b.received_system_prompts();
         assert_eq!(bob_prompts.len(), 1, "bob processed exactly one ticket");
@@ -1263,7 +1263,7 @@ mod tests {
         );
         tickets.task("first");
         tickets.task("second");
-        let _ = tickets.finish(|_| true).await;
+        let _ = tickets.finish_all().await;
 
         let prompts = provider.received_system_prompts();
         assert_eq!(prompts.len(), 4);

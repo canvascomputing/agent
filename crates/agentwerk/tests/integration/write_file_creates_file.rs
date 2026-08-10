@@ -42,7 +42,7 @@ async fn creates_file_with_token() -> std::result::Result<(), Box<dyn std::error
          exactly the line `token={token}`."
     ));
 
-    tickets.finish(|_| true).await;
+    tickets.finish_all().await;
     common::print_result(&tickets, tickets.stats());
 
     assert!(
