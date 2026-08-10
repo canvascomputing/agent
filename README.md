@@ -255,6 +255,7 @@ tickets.ticket(Ticket::new("Rank all products by value.").label("analysis"));
 | `set_failed(key)` | Fail a ticket. |
 | `dir(dir)` | Define where a session is stored. |
 | `get_dir()` | Get the session directory. |
+| `schemas(store)` | Enforce schemas for ticket results. |
 
 See [`TicketQueue`](https://docs.rs/agentwerk/latest/agentwerk/agents/tickets/struct.TicketQueue.html).
 
@@ -353,7 +354,7 @@ A `Schema` constrains the result an agent produces for a ticket. A violation tri
 ```rust
 use agentwerk::schemas::Schema;
 
-let schema = Schema::parse(json!({
+let schema = Schema::new(json!({
     "type": "object",
     "properties": { "title": { "type": "string" } },
     "required": ["title"]
@@ -362,13 +363,32 @@ let schema = Schema::parse(json!({
 tickets.ticket(Ticket::new("Write a report.").schema(schema));
 ```
 
+Enforce schemas for all tickets with a certain label. Registering schemas centrally spares agents from passing complex schema structures during ticket creation (see `ManageTicketsTool`) and handovers (see `FinishTool`).
+
+```rust
+use agentwerk::SchemaStore;
+
+let schemas = SchemaStore::new();
+schemas.label("report", json!({
+    "type": "object",
+    "properties": { "title": { "type": "string" } },
+    "required": ["title"]
+}))?;
+
+tickets.schemas(&schemas);
+```
+
 <details>
 <summary>All schema methods</summary>
 
-| Method | Description |
-|--------|-------------|
-| `Schema::parse(document)` | Create a schema. |
-| `Schema::validate(value)` | Validate content. |
+| | Method | Description |
+|-|--------|-------------|
+| **Schema** | `Schema::new(document)` | Create a schema. |
+| | `validate(value)` | Validate content. |
+| **SchemaStore** | `SchemaStore::new()` | Create a store of schemas bound to labels. |
+| | `label(label, document)` | Bind a schema to a label. |
+| | `get(label)` | Read back the schema bound to a label. |
+| | `tickets.schemas(store)` | Enforce schemas for ticket results. |
 
 </details>
 

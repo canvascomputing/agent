@@ -263,6 +263,7 @@ tickets.ticket(Ticket("Rank all products by value.", labels=["analysis"]))
 | `set_failed(key)` | Fail a ticket. |
 | `dir(dir)` | Define where a session is stored. |
 | `get_dir()` | Get the session directory. |
+| `schemas(store)` | Enforce schemas for ticket results. |
 
 See [`TicketQueue`](https://docs.rs/agentwerk/latest/agentwerk/agents/tickets/struct.TicketQueue.html).
 
@@ -370,13 +371,35 @@ schema = Schema(
 tickets.ticket(Ticket("Write a report.", schema=schema))
 ```
 
+Enforce schemas for all tickets with a certain label. Registering schemas centrally spares agents from passing complex schema structures during ticket creation (see `ManageTicketsTool`) and handovers (see `FinishTool`).
+
+```python
+from agentwerk import SchemaStore
+
+schemas = SchemaStore()
+schemas.label(
+    "report",
+    {
+        "type": "object",
+        "properties": {"title": {"type": "string"}},
+        "required": ["title"],
+    },
+)
+
+tickets.schemas(schemas)
+```
+
 <details>
 <summary>All schema methods</summary>
 
-| Method | Description |
-|--------|-------------|
-| `Schema(document)` | Create a schema. |
-| `Schema.validate(value)` | Validate content. |
+| | Method | Description |
+|-|--------|-------------|
+| **Schema** | `Schema(document)` | Create a schema. |
+| | `validate(value)` | Validate content. |
+| **SchemaStore** | `SchemaStore()` | Create a store of schemas bound to labels. |
+| | `label(label, document)` | Bind a schema to a label. |
+| | `get(label)` | Read back the schema bound to a label. |
+| | `tickets.schemas(store)` | Enforce schemas for ticket results. |
 
 </details>
 

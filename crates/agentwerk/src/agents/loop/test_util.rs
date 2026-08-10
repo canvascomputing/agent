@@ -413,7 +413,7 @@ pub async fn run_compaction(
             .build(),
     );
     configure(&tickets);
-    let schema = Schema::parse(serde_json::json!({"type": "string"})).unwrap();
+    let schema = Schema::new(serde_json::json!({"type": "string"})).unwrap();
     tickets.ticket(Ticket::new("go").schema(schema));
 
     let _ = tickets.finish_all().await;
@@ -427,5 +427,5 @@ pub async fn run_compaction(
 }
 
 pub fn string_schema() -> Schema {
-    Schema::parse(serde_json::json!({"type": "string"})).expect("valid schema")
+    Schema::new(serde_json::json!({"type": "string"})).expect("valid schema")
 }

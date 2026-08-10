@@ -4,7 +4,6 @@
 use serde_json::Value;
 
 use crate::agents::tickets::{Status, Ticket, TicketError, TicketQueue};
-use crate::schemas::Schema;
 
 use super::tool::{ToolContext, ToolResult};
 
@@ -272,22 +271,7 @@ fn action_create(ticket_queue: &TicketQueue, input: &Value, ctx: &ToolContext) -
         Some(_) => return ToolResult::error("`labels` must be an array of strings"),
     };
 
-    let schema = match input.get("schema") {
-        Some(doc) if !doc.is_null() => match Schema::parse(doc.clone()) {
-            Ok(s) => Some(s),
-            Err(e) => {
-                return ToolResult::error(format!(
-                    "Cannot create: supplied `schema` is invalid: {e}"
-                ));
-            }
-        },
-        _ => None,
-    };
-
-    let mut ticket = Ticket::new(task).labels(labels);
-    if let Some(schema) = schema {
-        ticket = ticket.schema(schema);
-    }
+    let ticket = Ticket::new(task).labels(labels);
 
     let reporter = ctx
         .agent_name_str()
@@ -313,24 +297,11 @@ fn action_edit(ticket_queue: &TicketQueue, input: &Value, ctx: &ToolContext) -> 
         Some(Value::Null) | None => None,
         Some(_) => return ToolResult::error("`labels` must be an array of strings"),
     };
-    let new_schema: Option<Option<Schema>> = match input.get("schema") {
-        Some(Value::Null) => Some(None),
-        Some(doc) => match Schema::parse(doc.clone()) {
-            Ok(s) => Some(Some(s)),
-            Err(e) => {
-                return ToolResult::error(format!(
-                    "Cannot edit {key}: supplied `schema` is invalid: {e}"
-                ));
-            }
-        },
-        None => None,
-    };
-
-    if new_task.is_none() && new_labels.is_none() && new_schema.is_none() {
-        return ToolResult::error("Edit needs at least one of `task`, `labels`, or `schema`");
+    if new_task.is_none() && new_labels.is_none() {
+        return ToolResult::error("Edit needs at least one of `task` or `labels`");
     }
 
-    match ticket_queue.edit(&key, new_task, new_labels, new_schema) {
+    match ticket_queue.edit(&key, new_task, new_labels) {
         Ok(()) => ToolResult::success(format!("Edited ticket {key}")),
         Err(e) => ToolResult::error(ticket_error_message(e)),
     }
@@ -500,21 +471,30 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn manage_create_with_schema_field_stores_schema() {
+    async fn a_ticket_the_model_creates_takes_the_schema_bound_to_its_label() {
         let queue = TicketQueue::new();
         queue.dir(isolated_test_dir());
+        let schemas = crate::schemas::SchemaStore::new();
+        schemas
+            .label("analysis", serde_json::json!({"type": "string"}))
+            .unwrap();
+        queue.schemas(&schemas);
+
         let ctx = ctx_with(Arc::clone(&queue), "alice");
         let result = call(
             &ManageTicketsTool,
             serde_json::json!({
                 "action": "create",
                 "task": "new",
-                "schema": {"type": "string"}
+                "labels": ["analysis"]
             }),
             &ctx,
         )
         .await;
         assert!(matches!(result, ToolResult::Success(_)));
+        assert!(queue.get_ticket("TICKET-1").unwrap().schema.is_none());
+
+        queue.claim(|t| t.has_label("analysis"), "bob");
         assert!(queue.get_ticket("TICKET-1").unwrap().schema.is_some());
     }
 

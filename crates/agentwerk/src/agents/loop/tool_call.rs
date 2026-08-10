@@ -715,7 +715,7 @@ mod tests {
     }
 
     fn schema_for_partial_sum() -> Schema {
-        Schema::parse(serde_json::json!({
+        Schema::new(serde_json::json!({
             "type": "object",
             "properties": {
                 "partial_sum": { "type": "integer" }

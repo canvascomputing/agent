@@ -754,7 +754,7 @@ mod tests {
     }
 
     fn string_schema() -> crate::schemas::Schema {
-        crate::schemas::Schema::parse(serde_json::json!({"type": "string"})).expect("valid schema")
+        crate::schemas::Schema::new(serde_json::json!({"type": "string"})).expect("valid schema")
     }
 
     fn user_texts(messages: &[crate::providers::Message]) -> Vec<String> {

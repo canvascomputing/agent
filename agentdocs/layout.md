@@ -33,7 +33,7 @@ crates/
 
 **Each top-level source file is one concern the caller observes directly.**
 
-- `lib.rs` holds public re-exports only: `Agent`, `AgentBuilder`, `TicketQueue`, `Ticket`, `Status`, `Reply`, `Trajectory`, `Knowledge`, `Stats`, `Schema`, `Event`, `EventKind`, `FinishReason`.
+- `lib.rs` holds public re-exports only: `Agent`, `AgentBuilder`, `TicketQueue`, `Ticket`, `Status`, `Reply`, `Trajectory`, `Knowledge`, `Stats`, `Schema`, `SchemaStore`, `Event`, `EventKind`, `FinishReason`.
 - Extension types live in `tools::` and `default_logger` in `event::`. Callers reach into a sub-module when they need anything below the orchestration level.
 - `event.rs` defines `Event`, `EventKind`, `EventName`, `PolicyKind`, `FinishReason`, `ToolFailureKind`, `CompactReason`, and `default_logger`, plus the crate-internal `Subject` and `Measure` that `EventKind::measures` returns.
 - `persistence.rs` holds the `Persist` and `Append` traits, the log types (`Results`, `TicketEvents`), and the shared `write_atomic`, `append_line`, and `output_path` helpers. It is `pub(crate)` and not re-exported from `lib.rs`.
@@ -96,6 +96,7 @@ crates/
 
 - `prompts/builder.rs` and `prompts/section.rs` hold `PromptBuilder` and `Section`, which assemble role and knowledge blocks.
 - `schemas/mod.rs` holds `Schema`, `SchemaParseError`, and `SchemaViolation`.
+- `schemas/store.rs` holds `SchemaStore`, the label-keyed store a `TicketQueue` reads on each claim. It sits beside the compiler rather than inside it: binding a contract to a label is a separate concern from validating one.
 
 ## Tests
 

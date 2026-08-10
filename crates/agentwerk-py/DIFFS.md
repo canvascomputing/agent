@@ -68,6 +68,7 @@ Seven rules the surface table below never repeats.
 | `TicketQueue::get_compact_at()` | `TicketQueue.get_compact_at()` |
 | `TicketQueue::dir(dir)` | `TicketQueue.dir(dir)` |
 | `TicketQueue::get_dir()` | `TicketQueue.get_dir()` |
+| `TicketQueue::schemas(&store)` | `TicketQueue.schemas(store)` |
 | `TicketQueue::on_event(h)` | `TicketQueue.on_event(callback)` |
 | `TicketQueue::on_result(handler)` | `TicketQueue.on_result(callback)` |
 | `TicketQueue::on_failure(handler)` | `TicketQueue.on_failure(callback)` |
@@ -156,9 +157,13 @@ Seven rules the surface table below never repeats.
 | `ModelStat { requests, input_tokens, output_tokens, failures }` | Same, on the same terms. |
 | `TimeStat { total, average }` | Same fields, both in seconds. |
 | **Schema** | |
-| `Schema::parse(document)` | `Schema(document)` |
+| `Schema::new(document)` | `Schema(document)` |
 | `Schema::validate(value)` | `Schema.validate(value)` |
 | `SchemaViolation`, `SchemaViolations`, `SchemaParseError` | `RuntimeError` |
+| **SchemaStore** | |
+| `SchemaStore::new()` | `SchemaStore()` |
+| `SchemaStore::label(label, document)` | `SchemaStore.label(label, document)`: raises on a document that is not a schema, where Rust returns `SchemaParseError`. |
+| `SchemaStore::get(label)` | `SchemaStore.get(label)` |
 | **Events** | |
 | `Event { agent_name, ticket_key, kind }` | `Event.agent_name`, `.ticket_key`, `.kind` |
 | `EventKind` variant payload | `Event.data`: a dict of that variant's fields. |
