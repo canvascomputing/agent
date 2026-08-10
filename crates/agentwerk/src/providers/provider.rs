@@ -132,7 +132,7 @@ pub trait ProviderLike: Send + Sync {
             system_prompt: String::new(),
             messages: vec![Message::user("ping")],
             tools: Vec::new(),
-            max_request_tokens: Some(16),
+            max_request_tokens: None,
             tool_choice: None,
             reasoning_effort: ReasoningEffort::Off,
         };
