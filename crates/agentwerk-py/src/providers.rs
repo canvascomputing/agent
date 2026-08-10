@@ -26,6 +26,14 @@ impl PyProvider {
         let inner = Provider::from_env().map_err(runtime_error)?;
         Ok(PyProvider { inner })
     }
+
+    /// Fill the environment from a `.env` file in the current directory, then
+    /// detect the LLM provider. An exported value wins over the file.
+    #[staticmethod]
+    fn from_dot_env() -> PyResult<Self> {
+        let inner = Provider::from_dot_env().map_err(runtime_error)?;
+        Ok(PyProvider { inner })
+    }
 }
 
 /// A model name, with an optional context window size and reasoning level,
@@ -49,6 +57,14 @@ impl PyModel {
     #[staticmethod]
     fn from_env() -> PyResult<Self> {
         let inner = Model::from_env().map_err(runtime_error)?;
+        Ok(PyModel { inner })
+    }
+
+    /// Fill the environment from a `.env` file in the current directory, then
+    /// read the model name from it. An exported value wins over the file.
+    #[staticmethod]
+    fn from_dot_env() -> PyResult<Self> {
+        let inner = Model::from_dot_env().map_err(runtime_error)?;
         Ok(PyModel { inner })
     }
 
