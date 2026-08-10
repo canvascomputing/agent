@@ -44,8 +44,9 @@ pub enum ProviderError {
     ResponseMalformed { message: String },
     /// Provider construction failed to resolve a provider from the
     /// environment: no provider was detected, a required env var was unset,
-    /// or `LITELLM_PROVIDER` named an unknown provider. `message` states the
-    /// specific failure.
+    /// `LITELLM_PROVIDER` named an unknown provider, or a `.env` the caller
+    /// asked for was missing or malformed. `message` states the specific
+    /// failure.
     ProviderUnrecognized { message: String },
 }
 

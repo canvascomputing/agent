@@ -128,6 +128,16 @@ impl PyAgent {
         Ok(agent)
     }
 
+    /// Create an agent with the provider and model from a `.env` file in the
+    /// current directory. An exported value wins over the file.
+    #[staticmethod]
+    fn from_dot_env() -> PyResult<Self> {
+        let mut agent = PyAgent::create();
+        agent.provider = Some(Provider::from_dot_env().map_err(runtime_error)?);
+        agent.model = Some(Model::from_env().map_err(runtime_error)?);
+        Ok(agent)
+    }
+
     /// Define the LLM provider.
     fn provider<'py>(
         mut slf: PyRefMut<'py, Self>,
