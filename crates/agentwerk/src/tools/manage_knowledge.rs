@@ -96,7 +96,7 @@ impl ToolLike for ManageKnowledgeTool {
             let record = |kind: EventKind| {
                 if let Some(queue) = ctx.ticket_queue_handle() {
                     let key = ctx.ticket_key.as_deref().unwrap_or_default();
-                    let agent = ctx.agent_name_str().unwrap_or_default();
+                    let agent = ctx.agent_id_str().unwrap_or_default();
                     queue.emit(key, agent, kind);
                 }
             };

@@ -66,9 +66,9 @@ impl PyStats {
     ///
     /// `event_count("ticket_created")` counts the tickets that agent filed; the
     /// rest count the tickets it claimed.
-    fn stats_for_agent(&self, agent_name: &str) -> PyStats {
+    fn stats_for_agent(&self, agent_id: &str) -> PyStats {
         PyStats {
-            source: Source::Slice(self.get().stats_for_agent(agent_name)),
+            source: Source::Slice(self.get().stats_for_agent(agent_id)),
         }
     }
 

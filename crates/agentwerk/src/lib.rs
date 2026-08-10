@@ -36,10 +36,9 @@
 //! # async fn run() {
 //! let tickets = TicketQueue::new();
 //!
-//! for i in 0..4 {
+//! for _ in 0..4 {
 //!     tickets.agent(
 //!         Agent::from_env()
-//!             .name(format!("agent_{i}"))
 //!             .label("research")
 //!             .tool(FetchUrlTool)
 //!             .build(),

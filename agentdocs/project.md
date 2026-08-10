@@ -25,12 +25,12 @@ agentwerk is a Rust crate for building LLM agents. An agent reads input, calls a
 **Many agents share one `TicketQueue` and pick up tickets concurrently.**
 
 ```rust
-tickets.agent(Agent::from_env().name("scout_0").label("scan").build());
+tickets.agent(Agent::from_env().label("scan").build());
 tickets.ticket(Ticket::new("Audit src/db.").label("scan"));
 ```
 
 - Each agent runs on its own tokio task; the shared queue claims a ticket exactly once.
-- A label assigns work to every agent carrying it. An agent's own name is one of its labels, so naming a label pins the ticket to that one agent.
+- An agent serves one label; a ticket carries as many as its filer gives it. A label assigns work to every agent serving it, so a label only one agent serves pins the ticket to that agent.
 - Agents are cloned and modified, then bound to a `TicketQueue`. No global registration, no implicit state.
 - A ticket carries a `Schema`; the loop validates the agent's result against it.
 

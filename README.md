@@ -110,7 +110,6 @@ An `Agent` is the core entity of agentwerk. It has access to tools for solving t
 use agentwerk::tools::ReadFileTool;
 
 let agent = Agent::from_env()
-    .name("agent_0")
     .label("math")
     .role("You are an arithmetic agent. Compute step by step and show your work.")
     .tool(ReadFileTool)
@@ -125,9 +124,9 @@ tickets.task("Compute (47 * 92) / 8, then round to the nearest integer.");
 
 | Method | Description |
 |--------|-------------|
-| `name(name)` | Set a name or identifier for assigning tickets. |
 | `role(role)` | Define who the agent is and how it should work. |
-| `label(label)` / `labels(labels)` | Restrict the agent to tickets carrying a matching label. |
+| `label(label)` | Restrict the agent to tickets carrying this label. |
+| `get_id()` | Get the unique identifier of an agent. |
 | `tool(tool)` / `tools(tools)` | Register a tool the agent may call. |
 | `template(key, value)` | Inject data into prompts with template strings. |
 | `templates(pairs)` | Inject more than one entry into prompts. |
@@ -233,7 +232,6 @@ The `TicketQueue` is the core data structure of agentwerk allowing to coordinate
 
 ```rust
 let analyst = Agent::from_env()
-    .name("analyst")
     .label("analysis")
     .build();
 
@@ -326,8 +324,8 @@ Ticket members:
 | | `task` | The work the agent is asked to do. |
 | | `labels` | Labels carried by the ticket. |
 | | `parent` | The parent ticket if a handover was performed. |
-| | `reporter` | Name of the agent that created the ticket. |
-| | `assignee` | Name of the agent that claimed the ticket. |
+| | `reporter` | Identifier of the agent that created the ticket. |
+| | `assignee` | Identifier of the agent that claimed the ticket. |
 | **Outcome** | `status` | The ticket lifecycle status. |
 | | `result` | The result the agent produced. |
 | | `replies` | Messages exchanged with the model. |
@@ -502,7 +500,7 @@ use agentwerk::event::EventKind;
 
 tickets.on_event(|event| {
     if let EventKind::TicketFinished = &event.kind {
-        eprintln!("[{}] done {}", event.agent_name, event.ticket_key);
+        eprintln!("[{}] done {}", event.agent_id, event.ticket_key);
     }
 });
 ```
@@ -573,8 +571,8 @@ Save replies of every finished ticket as a training example:
 let queue = Arc::clone(&tickets);
 tickets.on_ticket(move |event, ticket| {
     if matches!(event.kind, EventKind::TicketFinished) {
-        let model = queue.model_for_agent(&event.agent_name);
-        let _ = Trajectory::from_ticket(&event.agent_name, model.as_deref(), ticket)
+        let model = queue.model_for_agent(&event.agent_id);
+        let _ = Trajectory::from_ticket(&event.agent_id, model.as_deref(), ticket)
             .save("datasets");
     }
 });
@@ -617,7 +615,7 @@ for (name, stat) in stats.tool_stats() {
 | `model_stats()` | Get per-model requests, token usage, and the failures they ended in. |
 | `event_counts()` | Get per-event counts. |
 | `stats_for_label(label)` | Get statistics scoped to one label. |
-| `stats_for_agent(agent_name)` | Get statistics scoped to one agent. |
+| `stats_for_agent(agent_id)` | Get statistics scoped to one agent. |
 
 See [`Stats`](https://docs.rs/agentwerk/latest/agentwerk/agents/stats/struct.Stats.html).
 

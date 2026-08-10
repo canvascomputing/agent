@@ -1,5 +1,5 @@
 //! A ticket's messages captured as a training example, as Python sees it.
-//! Mirrors `Trajectory::from_ticket(agent, ticket).save(dir)`.
+//! Mirrors `Trajectory::from_ticket(agent_id, ticket).save(dir)`.
 
 use agentwerk::agents::Trajectory;
 use pyo3::prelude::*;
@@ -18,9 +18,9 @@ impl PyTrajectory {
     /// Capture `ticket`'s messages as an example produced by `agent` using
     /// `model`, whose name `TicketQueue.model_for_agent` gives you.
     #[staticmethod]
-    fn from_ticket(agent: &str, model: Option<&str>, ticket: PyRef<'_, PyTicket>) -> Self {
+    fn from_ticket(agent_id: &str, model: Option<&str>, ticket: PyRef<'_, PyTicket>) -> Self {
         PyTrajectory {
-            inner: Trajectory::from_ticket(agent, model, &ticket.inner),
+            inner: Trajectory::from_ticket(agent_id, model, &ticket.inner),
         }
     }
 

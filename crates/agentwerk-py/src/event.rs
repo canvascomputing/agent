@@ -1,4 +1,4 @@
-//! Events as Python sees them: one object with `kind`, `agent_name`,
+//! Events as Python sees them: one object with `kind`, `agent_id`,
 //! `ticket_key`, and a `data` dict, so a handler reads any event without a class
 //! per kind.
 
@@ -21,7 +21,7 @@ pub struct PyEvent {
     #[pyo3(get)]
     kind: String,
     #[pyo3(get)]
-    pub(crate) agent_name: String,
+    pub(crate) agent_id: String,
     #[pyo3(get)]
     pub(crate) ticket_key: String,
     data: Value,
@@ -47,7 +47,7 @@ impl PyEvent {
 pub fn to_py_event(event: &Event) -> PyEvent {
     PyEvent {
         kind: event.kind.to_string(),
-        agent_name: event.agent_name.clone(),
+        agent_id: event.agent_id.clone(),
         ticket_key: event.ticket_key.clone(),
         data: payload(&event.kind),
     }

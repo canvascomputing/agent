@@ -149,7 +149,7 @@ impl Run {
 
 /// The core data structure of agentwerk, coordinating complex work across
 /// agents. Many agents share one `TicketQueue` and pick up tickets
-/// concurrently; labels and names assign work to the right agent.
+/// concurrently; labels assign work to the right agents.
 ///
 /// ```no_run
 /// use agentwerk::{Agent, Ticket, TicketQueue};
@@ -157,10 +157,9 @@ impl Run {
 ///
 /// # async fn run() {
 /// let tickets = TicketQueue::new();
-/// for i in 0..4 {
+/// for _ in 0..4 {
 ///     tickets.agent(
 ///         Agent::from_env()
-///             .name(format!("researcher_{i}"))
 ///             .label("research")
 ///             .tool(FetchUrlTool)
 ///             .build(),
@@ -286,8 +285,9 @@ impl TicketQueue {
     /// continuous across restarts. Pointing this and `Knowledge::load` at the
     /// same directory keeps the knowledge pages beside the session.
     ///
-    /// An unfinished ticket is picked up again by the agent whose name it
-    /// carries, so agent names must stay the same across restarts.
+    /// An unfinished ticket is picked up again by the agent whose id it carries
+    /// as its assignee. Ids are numbered per label as agents are built, so
+    /// build the same agents in the same order after a restart.
     ///
     /// A ticket that cannot be read stops the load and the returned error names
     /// it, rather than handing back a store quietly missing that ticket. Files
@@ -662,12 +662,12 @@ impl TicketQueue {
     /// its model, and [`Trajectory::from_ticket`] needs both.
     ///
     /// [`Trajectory::from_ticket`]: super::Trajectory::from_ticket
-    pub fn model_for_agent(&self, agent_name: &str) -> Option<String> {
+    pub fn model_for_agent(&self, agent_id: &str) -> Option<String> {
         self.agents
             .lock()
             .unwrap()
             .iter()
-            .find(|a| a.name == agent_name)
+            .find(|a| a.id == agent_id)
             .map(|a| a.model.name.clone())
     }
 
@@ -939,8 +939,8 @@ impl TicketQueue {
     /// Submit a `Ticket` with custom labels or schema, and return its key.
     ///
     /// Key, reporter, creation time, status, and result are set at insertion
-    /// and overwrite whatever the ticket carried. To pin the ticket to one
-    /// agent, label it with that agent's name.
+    /// and overwrite whatever the ticket carried. A label decides which agents
+    /// may claim it, so give an agent a label of its own to address it alone.
     pub fn ticket(&self, ticket: Ticket) -> String {
         self.dispatch(ticket)
     }
@@ -1119,7 +1119,7 @@ impl TicketQueue {
             .unwrap()
             .iter()
             .filter(|a| a.is_interactive())
-            .map(|a| a.get_name().to_string())
+            .map(|a| a.get_id().to_string())
             .collect()
     }
 
@@ -1139,7 +1139,7 @@ impl TicketQueue {
                     let mut old = prior.tickets.lock().unwrap();
                     std::mem::take(&mut *old).into_values().collect()
                 };
-                let reporter = agent.name.clone();
+                let reporter = agent.id.clone();
                 for ticket in drained {
                     self.insert(ticket, reporter.clone());
                 }
@@ -1511,8 +1511,8 @@ mod tests {
         queue.cancel(|t| t.has_label("research"));
 
         assert!(queue.is_cancelled(&Ticket::new("x").label("research")));
-        // A ticket carries its agent name too once claimed; the pool label still hits.
-        assert!(queue.is_cancelled(&Ticket::new("x").labels(["research", "Threat Researcher 1"])));
+        // One label of several is enough to match.
+        assert!(queue.is_cancelled(&Ticket::new("x").labels(["research", "urgent"])));
         assert!(
             !queue.is_cancelled(&Ticket::new("x").label("analysis")),
             "other pools are untouched",
@@ -1943,7 +1943,7 @@ mod tests {
         queue.on_ticket(move |event, ticket| {
             if matches!(event.kind, EventKind::TicketFinished) {
                 record.lock().unwrap().push((
-                    event.agent_name.clone(),
+                    event.agent_id.clone(),
                     ticket.key.clone(),
                     ticket.replies.len(),
                     ticket.result.clone(),

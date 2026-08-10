@@ -28,19 +28,21 @@ tickets.finish_all().await;
 - Multiple agents share one queue; a ticket is claimed exactly once.
 - Nested queues are not supported: a single `TicketQueue` is the unit of orchestration.
 
-## Assignment Is Labels, and a Name Is a Label
+## Assignment Is Labels, Identity Is an Id
 
-**Labels are the only assignment mechanism. An agent's own name counts as one of its labels, which is what makes direct assignment a special case of label scope rather than a second path.**
+**One label per agent, many labels per ticket: the label is the only assignment mechanism, and the id `build` derives from it is the only identity. Neither does the other's job.**
 
 ```rust
-tickets.ticket(Ticket::new("Audit src/db.").label("scout_0"));  // direct
-tickets.ticket(Ticket::new("Audit src/db.").label("scan"));     // by scope
+tickets.ticket(Ticket::new("Audit src/db.").label("scan"));            // one scope
+tickets.ticket(Ticket::new("Audit src/db.").labels(["scan", "urgent"])); // two
 ```
 
-- `Agent::handles_labels` answers three ways, in order: a ticket label equal to the agent's name matches; otherwise a labelled agent matches when its labels intersect the ticket's; otherwise an agent with no labels matches only tickets with no labels, which is the default scope.
-- Direct assignment is therefore `Ticket::new(...).label(agent_name)`. The ticket is born `Status::Todo` like any other; nothing is born `InProgress`.
-- `TicketQueue::claim` pushes the claiming agent's name onto the ticket's labels. That is what pins a resumed ticket: the `resumable` check in `loop/agent.rs` requires a label equal to the agent's name, so no other agent picks up work already started.
-- The queue never auto-resolves a name against the registered-agent set. A label naming an agent that was never registered simply never matches.
+- `Agent::handles` answers one way: a labeled agent matches a ticket carrying its label among its own; an agent with no label matches only tickets with no labels, which is the default scope.
+- Addressing one agent alone is therefore giving it a label no other agent serves. The ticket is born `Status::Todo` like any other; nothing is born `InProgress`.
+- `AgentBuilder::build` assigns `<label>-<n>`, numbering per label from 1 through the counters in `agent.rs`; an agent with no label gets `agent-<n>`. `Agent::clone` keeps the id, since `bind_agent` holds a clone and the two must agree about which tickets are theirs.
+- `TicketQueue::claim` writes the claiming agent's id to `Ticket::assignee` and leaves the labels as the filer set them. That is what pins a resumed ticket: the `resumable` check in `loop/agent.rs` requires `assignee` to equal the agent's id, so agents sharing a label never take over each other's started work.
+- Ids reproduce only as far as build order does. `TicketQueue::load` resumes an unfinished ticket by assignee, so a host that wants resumption builds the same agents, in the same order, after a restart.
+- The queue never auto-resolves a label against the registered-agent set. A label no agent serves simply never matches.
 
 ## A Tool Call Resolves by Exact Name, Then by Folded Key
 
@@ -72,7 +74,7 @@ Schemas and results:
 
 - `Ticket::schema(...)` attaches a `Schema` to the ticket; `finish` validates the result and the loop applies `max_schema_retries` on mismatch.
 - `TicketQueue::schemas(&store)` binds a shared `SchemaStore` to the queue, which holds one schema per label. `SchemaStore::label(label, document)` parses the document itself, so registering a contract never builds a `Schema`; `Schema::new` stays public for `Ticket::schema`, which takes the compiled value. `claim` reads the store once and writes the first match onto `Ticket::schema`, so `Ticket::schema` stays the single source every reader already uses: the prompt directive, the finish tool's advertised arguments, result validation, and the retry directive. A ticket that already carries a schema is left alone.
-- Resolution happens in `claim` rather than `insert` because only there is the label set final, with the claiming agent's name on it. The ticket's own label order decides, so a label it was filed under beats a registration under the agent's name. `claim` ends in `save_ticket`, so the bound schema is persisted and survives `load`. A resumed ticket never re-enters `claim` and keeps what its first claim bound.
+- Resolution happens in `claim` rather than `insert` because a ticket the model filed gets its labels there. The ticket's own label order decides, so the first label a store knows wins. `claim` ends in `save_ticket`, so the bound schema is persisted and survives `load`. A resumed ticket never re-enters `claim` and keeps what its first claim bound.
 - This is what gives a ticket nobody could build a contract: a handover child, or one the model filed through `manage_tickets`. No tool takes a schema document, since a small model does not write nested schemas reliably.
 - A handover validates its `result` against the parent ticket's own schema, exactly as a plain finish does. It carries no schema for the child, which takes one from its handover label when it is claimed. A schema mismatch aborts before the child is inserted, so neither the parent's finish nor the child happens and the operation stays atomic.
 - `handover` and `task` are reserved argument names for `finish`. A ticket whose schema is an object has its fields passed as `finish`'s top-level arguments, so such a schema must not declare a `handover` or `task` property: those names are stripped as control keys before the result is recovered.
@@ -109,7 +111,7 @@ Two layers of state exist. The per-ticket replies live on `Ticket::replies`: eve
 - `on_result` filters to `TicketFinished` and unwraps the stored result, `on_failure` filters on `EventKind::is_failure`, and `on_ticket` filters to the three lifecycle kinds.
 - Each of those three resolves `event.ticket_key` to a cloned `Ticket` first, which is why none of them fires on every kind: resolving on `TextChunkReceived` would copy a ticket's whole replies once per chunk.
 - The `create_ticket_on_result` and `create_ticket_on_failure` hooks are in turn built on `on_result` and `on_failure`, so the resolve happens in one place.
-- `EventKind::RunStarted` and `EventKind::RunFinished { reason }` ride the same chain. They are emitted by the `TicketQueue` itself and arrive with an empty `agent_name`, as does `TicketFailed` from a host-driven `set_failed`.
+- `EventKind::RunStarted` and `EventKind::RunFinished { reason }` ride the same chain. They are emitted by the `TicketQueue` itself and arrive with an empty `agent_id`, as does `TicketFailed` from a host-driven `set_failed`.
 
 ## New Observables Pick a Channel
 
@@ -161,7 +163,7 @@ Two layers of state exist. The per-ticket replies live on `Ticket::replies`: eve
 - No category carries a bare `failed`. Every failing event names a reason, and the category counts one column per reason: `ToolFailureKind` for `tools` and for `files`, since a path fails with the call that named it; `RequestErrorKind` for `models`; `KnowledgeFailureKind` for `knowledge`. The reason's `as_str()` is the column name, so the string an observer reads off `Event.data["reason"]` is the one `stats.json` counts under. The `*Stat` structs surface the split as `failures`, a map keyed by that category's reason enum, with a kind nothing failed under left out.
 - The ticket lifecycle is counted like everything else, through `EventKind::TicketCreated`, `TicketStarted`, `TicketFinished`, and `TicketFailed`. What the store still writes directly is the timing: `record_started` and `record_durations`, since a transition carries a duration no event reports.
 - Reads happen on `Stats` directly through inherent accessors such as `event_count(event)`, `input_tokens()`, `execution_duration()`, and `ticket_duration()`. A count is always an `event_count`; the rest are sums, spans, or scopes, and a ratio like the ticket success rate is the caller's division over two counts.
-- `Stats::stats_for_label(label)` returns a nested `Stats` slice scoped to one label, and `stats_for_agent(agent_name)` does the same per agent. The slice names are the host's own labels and agent names, so no accessor lists them. Reading a slice does not create one: `record_scoped` and the store use the `pub(crate)` `slice_for_label` and `slice_for_agent` for that, so a misspelled lookup leaves nothing behind in `stats.json`.
+- `Stats::stats_for_label(label)` returns a nested `Stats` slice scoped to one label, and `stats_for_agent(agent_id)` does the same per agent. The slice keys are the host's own labels and the ids `Agent::get_id` hands back, so no accessor lists them. The two maps stay apart because nothing stops a host from labelling tickets the way ids are spelled. Reading a slice does not create one: `record_scoped` and the store use the `pub(crate)` `slice_for_label` and `slice_for_agent` for that, so a misspelled lookup leaves nothing behind in `stats.json`.
 - `record_event` mirrors every measure onto each slice the ticket carries, in one walk of the labels: the counts and the subject categories behind `tool_stats()`, `file_stats()`, `knowledge_stats()`, and `model_stats()`. An accessor therefore answers the same question whichever `Stats` holds it.
 - `execution_duration()` is the one measure that stays run-wide: it is `None` on a slice, since the elapsed duration is global.
 - The per-ticket token series (`usage_for_ticket`) is `pub(crate)`. Compaction clears it on every compaction, so a caller would read a silently truncated series; a host that wants the figures reads `EventKind::RequestFinished`, which reports every one as it happens.

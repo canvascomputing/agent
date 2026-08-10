@@ -30,7 +30,7 @@ Read tickets from the queue: `get` by key (defaults to your current ticket), `li
     },
     "label": {
       "type": "string",
-      "description": "Filter for `list`: only tickets carrying this label (case-sensitive). Pass an agent's name to find that agent's pinned tickets."
+      "description": "Filter for `list`: only tickets carrying this label (case-sensitive). Pass a scope label to find the tickets the agents serving it work on."
     },
     "query": {
       "type": "string",

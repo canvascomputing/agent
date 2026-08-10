@@ -70,11 +70,11 @@ pub(super) fn resolve_current_key(
     if let Some(key) = ctx.ticket_key.as_deref() {
         return Ok(key.to_string());
     }
-    let agent_name = ctx.agent_name_str().ok_or_else(|| {
-        ToolResult::error("Missing `key` and no agent_name set on this tool context")
+    let agent_id = ctx.agent_id_str().ok_or_else(|| {
+        ToolResult::error("Missing `key` and no agent_id set on this tool context")
     })?;
     match ticket_queue
-        .find_ticket(|t| t.status == Status::InProgress && t.labels.iter().any(|l| l == agent_name))
+        .find_ticket(|t| t.status == Status::InProgress && t.assignee.as_deref() == Some(agent_id))
     {
         Some(t) => Ok(t.key.clone()),
         None => Err(ToolResult::error(
@@ -274,8 +274,8 @@ fn action_create(ticket_queue: &TicketQueue, input: &Value, ctx: &ToolContext) -
     let ticket = Ticket::new(task).labels(labels);
 
     let reporter = ctx
-        .agent_name_str()
-        .expect("agent_name on ToolContext")
+        .agent_id_str()
+        .expect("agent_id on ToolContext")
         .to_string();
     let key = ticket_queue.insert(ticket, reporter);
     ToolResult::success(format!("Created ticket {key}"))
@@ -340,7 +340,7 @@ mod tests {
     fn ctx_with(ticket_queue: Arc<TicketQueue>, agent: &str) -> ToolContext {
         ToolContext::new(PathBuf::from("/tmp"))
             .ticket_queue(ticket_queue)
-            .agent_name(agent.to_string())
+            .agent_id(agent.to_string())
     }
 
     /// Insert one Todo ticket, claim it for `agent` (atomically labels +
@@ -412,7 +412,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn manage_create_stamps_reporter_from_agent_name() {
+    async fn manage_create_stamps_reporter_from_agent_id() {
         let queue = TicketQueue::new();
         queue.dir(isolated_test_dir());
         let ctx = ctx_with(Arc::clone(&queue), "alice");

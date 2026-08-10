@@ -19,10 +19,10 @@ pub(super) fn collect_finish_reasons(queue: &TicketQueue) -> Arc<Mutex<Vec<Finis
     seen
 }
 
-pub(super) fn minimal_agent(name: &str) -> Agent {
+pub(super) fn minimal_agent(label: &str) -> Agent {
     use crate::agents::r#loop::test_util::MockProvider;
     Agent::new()
-        .name(name)
+        .label(label)
         .provider(MockProvider::with_results(vec![]))
         .model("mock")
         .build()

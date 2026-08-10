@@ -261,7 +261,6 @@ pub fn user_text(messages: &[Message]) -> String {
 
 pub fn interactive_chatbot(provider: &Arc<MockProvider>) -> Agent {
     Agent::new()
-        .name("chatbot")
         .interactive()
         .provider(provider.clone())
         .model("mock")
@@ -271,7 +270,6 @@ pub fn interactive_chatbot(provider: &Arc<MockProvider>) -> Agent {
 
 pub fn task_agent(provider: &Arc<MockProvider>) -> Agent {
     Agent::new()
-        .name("agent")
         .provider(provider.clone())
         .model("mock")
         .role("test")
@@ -314,7 +312,6 @@ pub async fn run_one(
     tickets.on_event(move |e| handler(e));
     tickets.agent(
         Agent::new()
-            .name("tester")
             .provider(provider.clone())
             .model("mock")
             .role("test")
@@ -362,7 +359,6 @@ pub async fn run_with_context_window(
     tickets.on_event(move |e| handler(e));
     tickets.agent(
         Agent::new()
-            .name("tester")
             .provider(provider.clone())
             .model(Model::from_name("mock").context_window(context_window_size))
             .role("test")
@@ -405,7 +401,6 @@ pub async fn run_compaction(
     tickets.on_event(move |e| handler(e));
     tickets.agent(
         Agent::new()
-            .name("tester")
             .provider(provider.clone())
             .model("claude-sonnet-4-20250514")
             .role("test")

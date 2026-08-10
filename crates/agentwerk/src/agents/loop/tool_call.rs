@@ -34,7 +34,7 @@ pub(super) async fn run(context: &mut TicketContext<'_>, mut calls: Vec<ToolCall
         .run(std::sync::Arc::clone(&context.run))
         .registry(std::sync::Arc::new(context.agent.tool_registry().clone()))
         .ticket_queue(std::sync::Arc::clone(context.ticket_queue))
-        .agent_name(context.agent.get_name().to_string())
+        .agent_id(context.agent.get_id().to_string())
         .ticket_key(context.ticket_key.clone())
         .knowledge(context.agent.knowledge());
     let outcomes = context
@@ -146,7 +146,7 @@ pub(super) async fn run(context: &mut TicketContext<'_>, mut calls: Vec<ToolCall
         });
         let _ = context
             .ticket_queue
-            .set_failed_by(&context.ticket_key, context.agent.get_name());
+            .set_failed_by(&context.ticket_key, context.agent.get_id());
         return None;
     }
     Some(Step::Evaluate)
@@ -244,7 +244,6 @@ mod tests {
             });
         tickets.agent(
             Agent::new()
-                .name("tester")
                 .provider(provider.clone())
                 .model("mock")
                 .role("test")
@@ -364,7 +363,6 @@ mod tests {
         let collected = collect_events(&tickets);
         tickets.agent(
             Agent::new()
-                .name("tester")
                 .provider(provider)
                 .model("mock")
                 .role("test")
@@ -421,7 +419,6 @@ mod tests {
             .max_time(Duration::from_millis(500));
         tickets.agent(
             Agent::new()
-                .name("tester")
                 .provider(provider)
                 .model("mock")
                 .role("test")
@@ -479,7 +476,6 @@ mod tests {
             .max_time(Duration::from_secs(5));
         tickets.agent(
             Agent::new()
-                .name("tester")
                 .provider(provider)
                 .model("mock")
                 .role("test")
@@ -545,7 +541,6 @@ mod tests {
         tickets.on_event(move |e| handler(e));
         tickets.agent(
             Agent::new()
-                .name("tester")
                 .provider(provider.clone())
                 .model("claude-sonnet-4-20250514")
                 .role("test")
@@ -661,7 +656,6 @@ mod tests {
 
         tickets.agent(
             Agent::new()
-                .name("tester")
                 .provider(provider.clone())
                 .model("mock")
                 .role("test")
