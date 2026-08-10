@@ -42,7 +42,7 @@ async fn main() {
     let on_ctrl_c = Arc::clone(&tickets);
     tokio::spawn(async move {
         if tokio::signal::ctrl_c().await.is_ok() {
-            on_ctrl_c.cancel(|_| true);
+            on_ctrl_c.cancel_all();
         }
     });
     if let Some(n) = args.max_turns {
@@ -73,7 +73,7 @@ async fn main() {
         );
     }
 
-    tickets.finish(|_| true).await;
+    tickets.finish_all().await;
 
     aggregate_and_report(&tickets, &partitions, args.n, &style);
 }

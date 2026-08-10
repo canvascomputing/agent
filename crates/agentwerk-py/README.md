@@ -66,7 +66,7 @@ async def main():
         "Find every `pub trait` defined under src/ and explain each in one sentence."
     )
     work = agent.start()
-    results = await work.finish(lambda t: True)
+    results = await work.finish_all()
 
     print(results[-1])
 
@@ -268,7 +268,7 @@ See [`TicketQueue`](https://docs.rs/agentwerk/latest/agentwerk/agents/tickets/st
 
 ```python
 tickets.start()
-answer = (await tickets.finish(lambda t: True))[-1]
+answer = (await tickets.finish_all())[-1]
 ```
 
 <details>
@@ -278,8 +278,10 @@ answer = (await tickets.finish(lambda t: True))[-1]
 |-|--------|-------------|
 | **Run** | `start()` | Begin processing tickets. |
 | **Wait** | `await finish(matches)` | Wait for the matching tickets to be done and get their results. |
+| | `await finish_all()` | Wait for every ticket to be finished and get every result. |
 | | `get_finish_reason()` | Get why the last run ended. |
 | **Stop** | `cancel(matches)` | Stop work on the matching tickets. |
+| | `cancel_all()` | Stop work on every ticket. |
 | | `is_cancelled(ticket)` | Check whether a ticket has been cancelled. |
 
 </details>
@@ -289,7 +291,7 @@ answer = (await tickets.finish(lambda t: True))[-1]
 Access the results of the agents' work:
 
 ```python
-await tickets.finish(lambda t: True)
+await tickets.finish_all()
 
 answers = tickets.results()
 if answers:

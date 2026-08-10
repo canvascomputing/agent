@@ -47,7 +47,7 @@ async fn main() {
     let on_ctrl_c = Arc::clone(&tickets);
     tokio::spawn(async move {
         if tokio::signal::ctrl_c().await.is_ok() {
-            on_ctrl_c.cancel(|_| true);
+            on_ctrl_c.cancel_all();
         }
     });
     tickets.on_event(move |e| event_handler(e));
@@ -107,7 +107,7 @@ async fn main() {
             .label("researcher_1"),
     );
 
-    tickets.finish(|_| true).await;
+    tickets.finish_all().await;
     let outcome = classify_outcome(&tickets);
 
     print_chain_summary(&tickets);

@@ -355,7 +355,7 @@ async def test_run_finished_announces_why_execution_ended(queue):
         if event.kind == "run_finished"
         else None
     )
-    await queue.finish(lambda t: True)
+    await queue.finish_all()
     assert queue.get_finish_reason() == "drained"
     assert reasons == ["drained"]
 
@@ -366,11 +366,20 @@ async def test_finish_hands_back_the_results_its_filter_named(queue):
     assert await queue.finish(lambda t: t.key == key) == [{"verdict": "clean"}]
 
 
+async def test_finish_all_hands_back_the_results_of_every_pool(queue):
+    scan = queue.ticket(aw.Ticket("scan the corpus", labels=["scan"]))
+    report = queue.ticket(aw.Ticket("write it up", labels=["report"]))
+    queue.set_finished(scan, {"verdict": "clean"})
+    queue.set_finished(report, {"pages": 2})
+
+    assert await queue.finish_all() == [{"verdict": "clean"}, {"pages": 2}]
+
+
 async def test_a_cancelled_run_reports_its_reason(queue):
     queue.start()
     queue.task("work")
-    queue.cancel(lambda t: True)
-    await queue.finish(lambda t: True)
+    queue.cancel_all()
+    await queue.finish_all()
     assert queue.get_finish_reason() == "cancelled"
 
 

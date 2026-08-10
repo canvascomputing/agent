@@ -252,7 +252,7 @@ mod tests {
         );
         tickets.ticket(Ticket::new("go").schema(schema_for_partial_sum()));
 
-        let _ = tickets.finish(|_| true).await;
+        let _ = tickets.finish_all().await;
 
         let injected = user_text(&provider.received()[1]);
         assert!(
@@ -372,7 +372,7 @@ mod tests {
                 .build(),
         );
         tickets.task("go");
-        let _ = tickets.finish(|_| true).await;
+        let _ = tickets.finish_all().await;
 
         assert_eq!(
             tickets.tickets().into_iter().next().unwrap().status,
@@ -430,7 +430,7 @@ mod tests {
                 .build(),
         );
         tickets.task("go");
-        let _ = tickets.finish(|_| true).await;
+        let _ = tickets.finish_all().await;
 
         assert_eq!(
             tickets.tickets().into_iter().next().unwrap().status,
@@ -494,7 +494,7 @@ mod tests {
             tool_unblocked.notify_one();
         };
 
-        tokio::join!(tickets.finish(|_| true), unblock);
+        tokio::join!(tickets.finish_all(), unblock);
         assert_eq!(
             tickets.tickets().into_iter().next().unwrap().status,
             Status::Finished
@@ -554,7 +554,7 @@ mod tests {
         );
         tickets.task("go");
 
-        let _ = tickets.finish(|_| true).await;
+        let _ = tickets.finish_all().await;
         let events = collected.lock().unwrap().clone();
         let ticket = tickets
             .tickets()
@@ -670,7 +670,7 @@ mod tests {
         );
         tickets.task("go");
 
-        let _ = tickets.finish(|_| true).await;
+        let _ = tickets.finish_all().await;
         let ticket = tickets
             .tickets()
             .into_iter()

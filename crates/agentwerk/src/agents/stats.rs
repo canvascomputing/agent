@@ -24,7 +24,7 @@ use crate::providers::RequestErrorKind;
 ///
 /// # async fn run() {
 /// let tickets = TicketQueue::new();
-/// tickets.finish(|_| true).await;
+/// tickets.finish_all().await;
 ///
 /// let stats = tickets.stats();
 /// println!(

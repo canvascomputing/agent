@@ -118,7 +118,7 @@ async fn finds_code_pattern_with_special_chars(
          `{TARGET_SIGNATURE}`? Answer with the file's path."
     ));
 
-    tickets.finish(|_| true).await;
+    tickets.finish_all().await;
     common::print_result(&tickets, tickets.stats());
 
     let recorded = calls.lock().unwrap().clone();

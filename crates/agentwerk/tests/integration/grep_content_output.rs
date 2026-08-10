@@ -106,7 +106,7 @@ async fn finds_string_buried_deep_in_line() -> std::result::Result<(), Box<dyn s
          Answer with the file path.",
     ));
 
-    tickets.finish(|_| true).await;
+    tickets.finish_all().await;
     common::print_result(&tickets, tickets.stats());
 
     let recorded = calls.lock().unwrap().clone();
@@ -248,7 +248,7 @@ async fn reads_column_slice_after_grep_locates_needle(
          entire line). Report the file name.",
     ));
 
-    tickets.finish(|_| true).await;
+    tickets.finish_all().await;
     common::print_result(&tickets, tickets.stats());
 
     let recorded = calls.lock().unwrap().clone();

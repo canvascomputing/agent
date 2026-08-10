@@ -411,7 +411,7 @@ mod tests {
         );
         tickets.task("go");
 
-        let run_fut = tickets.finish(|_| true);
+        let run_fut = tickets.finish_all();
         let check_fut = async {
             for _ in 0..20 {
                 tokio::task::yield_now().await;
@@ -476,13 +476,13 @@ mod tests {
         );
         tickets.task("go");
 
-        let run_fut = tickets.finish(|_| true);
+        let run_fut = tickets.finish_all();
         let cancel_handle = Arc::clone(&tickets);
         let cancel_fut = async {
             for _ in 0..20 {
                 tokio::task::yield_now().await;
             }
-            cancel_handle.cancel(|_| true);
+            cancel_handle.cancel_all();
             tokio::time::advance(Duration::from_millis(100)).await;
             for _ in 0..20 {
                 tokio::task::yield_now().await;
@@ -545,7 +545,7 @@ mod tests {
                 .build(),
         );
         tickets.task("go");
-        let _ = tickets.finish(|_| true).await;
+        let _ = tickets.finish_all().await;
         (provider, tickets, results_dir)
     }
 

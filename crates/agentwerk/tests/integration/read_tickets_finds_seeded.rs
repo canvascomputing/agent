@@ -47,7 +47,7 @@ async fn reports_a_secret_from_another_ticket(
          ticket and report the exact combination number it contains.",
     );
 
-    tickets.finish(|_| true).await;
+    tickets.finish_all().await;
     common::print_result(&tickets, tickets.stats());
 
     assert!(

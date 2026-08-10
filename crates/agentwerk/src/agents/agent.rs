@@ -293,7 +293,7 @@ impl<P, M> AgentBuilder<P, M> {
 impl AgentBuilder<Provider, Model> {
     /// Create the agent.
     ///
-    /// It starts with a ticket queue of its own, so `.task(...).finish(|_| true).await`
+    /// It starts with a ticket queue of its own, so `.task(...).finish_all().await`
     /// works without one being set up. `TicketQueue::agent(...)` later moves
     /// those tickets into the shared queue.
     pub fn build(self) -> Agent {
@@ -533,7 +533,7 @@ impl Agent {
     /// # use agentwerk::Agent;
     /// # async fn run(agent: Agent) {
     /// let work = agent.start();
-    /// work.finish(|_| true).await;
+    /// work.finish_all().await;
     /// # }
     /// ```
     pub fn start(&self) -> Arc<TicketQueue> {

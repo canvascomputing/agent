@@ -20,7 +20,7 @@
 //!
 //! agent.task("Find every `pub trait` defined under src/ and explain each in one sentence.");
 //! let work = agent.start();
-//! let mut results = work.finish(|_| true).await;
+//! let mut results = work.finish_all().await;
 //!
 //! let result = results.pop().unwrap();
 //! println!("{}", result.as_str().unwrap_or_default());
@@ -55,7 +55,7 @@
 //!     tickets.ticket(Ticket::new(format!("Summarize {url}")).label("research"));
 //! }
 //!
-//! tickets.finish(|_| true).await;
+//! tickets.finish_all().await;
 //!
 //! for ticket in tickets.tickets() {
 //!     if let Some(result) = ticket.result {

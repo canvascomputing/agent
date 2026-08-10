@@ -304,7 +304,7 @@ async def main(pruefer, meister, monteur):
         )
 
     pages = asyncio.create_task(watch_pages(book, feed, started_at))
-    await tickets.finish(lambda t: True)
+    await tickets.finish_all()
     pages.cancel()
 
     stats = tickets.stats()
