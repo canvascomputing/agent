@@ -104,6 +104,10 @@ The API, section by section:
 
 ## Agents
 
+<div align="left">
+  <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/agents.gif" width="600" />
+</div>
+
 An `Agent` is the core entity of agentwerk. It has access to tools for solving tasks in the form of tickets.
 
 ```python
