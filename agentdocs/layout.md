@@ -77,6 +77,7 @@ crates/
 - `anthropic.rs`, `openai.rs`, `mistral.rs`, and `litellm.rs` are concrete providers.
 - `environment.rs` reads the variables behind `Provider::from_env()` and `Model::from_env()`; its readers are crate-internal.
 - `stream.rs` holds the SSE parser; `error.rs` holds `ProviderError`, `ProviderResult`, and `RequestErrorKind`.
+- `tool_calls.rs` holds `repair`, which reads back the tool calls a model wrote as text rather than emitting through the tool channel; `openai.rs` is its only caller.
 
 ## The `tools/` Module
 

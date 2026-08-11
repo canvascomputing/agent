@@ -158,7 +158,7 @@ Seven rules the surface table below never repeats.
 | `EventKind`, `FinishReason` | Strings. |
 | `EventName` | `EventName`: string constants, so `Event.kind == EventName.TURN_STARTED`. |
 | `EventKind::is_failure()` | Not bound: `Event.kind` is a string, so ask `TicketQueue.on_failure(handler)` for the same six kinds. |
-| `CompactReason`, `PolicyKind`, `ToolFailureKind`, `KnowledgeFailureKind`, `KnowledgeOp` | Strings inside `Event.data`, under the field's own name: `data["policy"]`, `data["reason"]`, `data["op"]`. |
+| `CompactReason`, `PolicyKind`, `ToolFailureKind`, `ToolDeclineKind`, `KnowledgeFailureKind`, `KnowledgeOp` | Strings inside `Event.data`, under the field's own name: `data["policy"]`, `data["reason"]`, `data["op"]`. |
 | `default_logger()` | Not bound: pass your own handler to `TicketQueue.on_event(handler)`. |
 | **LLM providers** | |
 | `Anthropic::new(key).base_url(url).timeout(d)` | `Anthropic(api_key, base_url=.., timeout=..)` |

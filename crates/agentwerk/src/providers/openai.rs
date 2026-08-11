@@ -15,6 +15,7 @@ use super::provider::{
     DEFAULT_REQUEST_TIMEOUT,
 };
 use super::stream::{parse_tool_arguments, SseEvent, StreamParser};
+use super::tool_calls;
 use super::types::{ContentBlock, Message, ModelResponse, ResponseStatus, StreamEvent, TokenUsage};
 
 /// LLM provider for the OpenAI Chat Completions API and any compatible
@@ -165,7 +166,9 @@ impl ProviderLike for OpenAi {
 
         Box::pin(async move {
             let resp = self.send_raw(&url, body).await?;
-            stream_response(resp, &on_event).await
+            let mut response = stream_response(resp, &on_event).await?;
+            tool_calls::repair(&mut response, &request.tools, &on_event);
+            Ok(response)
         })
     }
 }

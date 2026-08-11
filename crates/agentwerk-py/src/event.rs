@@ -86,6 +86,10 @@ fn payload(kind: &EventKind) -> Value {
             json!({ "model": model, "attempt": attempt, "max_attempts": max_attempts, "reason": reason.to_string(), "message": message })
         }
         TextChunkReceived { content } => json!({ "content": content }),
+        ToolCallRecovered { tool_name } => json!({ "tool_name": tool_name }),
+        ToolCallDeclined { tool_name, reason } => {
+            json!({ "tool_name": tool_name, "reason": reason.as_str() })
+        }
         ToolCallStarted {
             tool_name,
             call_id,

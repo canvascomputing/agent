@@ -639,7 +639,9 @@ tickets.on_event(log)
 | | `request_failed` | A request failed and was not retried. |
 | | `request_retried` | A transient provider error triggered a retry. |
 | | `text_chunk_received` | A piece of the reply arrived. |
-| **Tool** | `tool_call_started` | A tool invocation began. |
+| **Tool** | `tool_call_recovered` | An invalidly written tool call was recovered. |
+| | `tool_call_declined` | An invalidly written tool call was not recovered. |
+| | `tool_call_started` | A tool invocation began. |
 | | `tool_call_finished` | A tool invocation finished. |
 | | `tool_call_failed` | A tool invocation failed but the ticket continues. |
 | **File** | `file_open_finished` | A tool opened a file. |

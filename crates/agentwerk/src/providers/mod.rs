@@ -14,6 +14,7 @@ mod openai;
 mod patterns;
 mod provider;
 pub(crate) mod stream;
+mod tool_calls;
 pub mod types;
 
 pub use anthropic::Anthropic;
@@ -27,6 +28,7 @@ pub use provider::{
 };
 pub use types::{
     AsUserMessage, ContentBlock, Message, ModelResponse, ResponseStatus, StreamEvent, TokenUsage,
+    ToolDeclineKind,
 };
 
 pub(crate) fn retry_delay_from_headers(resp: &reqwest::Response) -> Option<std::time::Duration> {

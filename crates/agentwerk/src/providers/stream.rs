@@ -1,6 +1,6 @@
 //! Reads Server-Sent Events from an LLM provider, reassembling whole `data:`
-//! events however the bytes arrive, and decoding the tool-call arguments they
-//! carry.
+//! events however the bytes arrive, and decodes the arguments of the tool calls
+//! they carry.
 
 use serde_json::Value;
 

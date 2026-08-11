@@ -48,13 +48,19 @@ pub(super) async fn run(context: &mut TicketContext<'_>) -> Option<Step> {
             let ticket_key = context.ticket_key.clone();
             let ticket_queue = Arc::clone(context.ticket_queue);
             let emit_stream: Arc<dyn Fn(StreamEvent) + Send + Sync> = Arc::new(move |event| {
-                if let StreamEvent::TextDelta { text, .. } = event {
-                    ticket_queue.emit(
-                        &ticket_key,
-                        &agent_id,
-                        EventKind::TextChunkReceived { content: text },
-                    );
-                }
+                let kind = match event {
+                    StreamEvent::TextDelta { text, .. } => {
+                        EventKind::TextChunkReceived { content: text }
+                    }
+                    StreamEvent::ToolCallRecovered { tool_name } => {
+                        EventKind::ToolCallRecovered { tool_name }
+                    }
+                    StreamEvent::ToolCallDeclined { tool_name, reason } => {
+                        EventKind::ToolCallDeclined { tool_name, reason }
+                    }
+                    _ => return,
+                };
+                ticket_queue.emit(&ticket_key, &agent_id, kind);
             });
             tokio::select! {
                 biased;

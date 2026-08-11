@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-use crate::providers::{RequestErrorKind, TokenUsage};
+use crate::providers::{RequestErrorKind, TokenUsage, ToolDeclineKind};
 
 /// Why the older messages were summarized.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -285,6 +285,15 @@ pub enum EventKind {
     },
     /// A piece of the reply arrived.
     TextChunkReceived { content: String },
+    /// A tool call the model wrote as text instead of emitting was read back
+    /// out and will run.
+    ToolCallRecovered { tool_name: String },
+    /// A framed tool call was found in the reply and left alone, with the
+    /// reason it was not promoted.
+    ToolCallDeclined {
+        tool_name: String,
+        reason: ToolDeclineKind,
+    },
     /// A tool invocation began.
     ToolCallStarted {
         tool_name: String,
@@ -374,6 +383,8 @@ impl EventKind {
             EventKind::RequestFailed { .. } => EventName::RequestFailed,
             EventKind::RequestRetried { .. } => EventName::RequestRetried,
             EventKind::TextChunkReceived { .. } => EventName::TextChunkReceived,
+            EventKind::ToolCallRecovered { .. } => EventName::ToolCallRecovered,
+            EventKind::ToolCallDeclined { .. } => EventName::ToolCallDeclined,
             EventKind::ToolCallStarted { .. } => EventName::ToolCallStarted,
             EventKind::ToolCallFinished { .. } => EventName::ToolCallFinished,
             EventKind::ToolCallFailed { .. } => EventName::ToolCallFailed,
@@ -430,6 +441,8 @@ pub enum EventName {
     RequestFailed,
     RequestRetried,
     TextChunkReceived,
+    ToolCallRecovered,
+    ToolCallDeclined,
     ToolCallStarted,
     ToolCallFinished,
     ToolCallFailed,
@@ -461,6 +474,8 @@ impl EventName {
         EventName::RequestFailed,
         EventName::RequestRetried,
         EventName::TextChunkReceived,
+        EventName::ToolCallRecovered,
+        EventName::ToolCallDeclined,
         EventName::ToolCallStarted,
         EventName::ToolCallFinished,
         EventName::ToolCallFailed,
@@ -491,6 +506,8 @@ impl EventName {
             EventName::RequestFailed => "request_failed",
             EventName::RequestRetried => "request_retried",
             EventName::TextChunkReceived => "text_chunk_received",
+            EventName::ToolCallRecovered => "tool_call_recovered",
+            EventName::ToolCallDeclined => "tool_call_declined",
             EventName::ToolCallStarted => "tool_call_started",
             EventName::ToolCallFinished => "tool_call_finished",
             EventName::ToolCallFailed => "tool_call_failed",
@@ -653,6 +670,13 @@ pub(crate) mod tests {
             },
             EventKind::TextChunkReceived {
                 content: "hello".into(),
+            },
+            EventKind::ToolCallRecovered {
+                tool_name: "grep".into(),
+            },
+            EventKind::ToolCallDeclined {
+                tool_name: "grep".into(),
+                reason: ToolDeclineKind::OutputTruncated,
             },
             EventKind::ToolCallStarted {
                 tool_name: "bash".into(),

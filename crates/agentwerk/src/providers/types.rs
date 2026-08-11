@@ -157,6 +157,46 @@ pub struct ModelResponse {
     pub model: String,
 }
 
+/// Why a tool call a model wrote as text was not promoted to a real call,
+/// carried by `EventKind::ToolCallDeclined`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ToolDeclineKind {
+    /// The reply ended on a length or filter limit, so a whole-looking block
+    /// may be one the model never finished committing to.
+    OutputTruncated,
+    /// The block named a tool the request never advertised.
+    ToolNotAdvertised,
+}
+
+impl ToolDeclineKind {
+    /// Every kind, in the order they are declared.
+    pub const ALL: &'static [ToolDeclineKind] = &[
+        ToolDeclineKind::OutputTruncated,
+        ToolDeclineKind::ToolNotAdvertised,
+    ];
+
+    /// The stable snake_case spelling, which is also the counter this decline
+    /// adds to under `tools.<name>`.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ToolDeclineKind::OutputTruncated => "output_truncated",
+            ToolDeclineKind::ToolNotAdvertised => "not_advertised",
+        }
+    }
+}
+
+impl std::fmt::Display for ToolDeclineKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl Serialize for ToolDeclineKind {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
 /// Incremental event emitted during SSE streaming.
 ///
 /// Events within a single response arrive in order and reference the content block they
@@ -177,6 +217,17 @@ pub enum StreamEvent {
     MessageDelta {
         status: ResponseStatus,
         usage: TokenUsage,
+    },
+
+    /// A tool call the model wrote as text rather than emitting was read back
+    /// out and added to the response; it will run.
+    ToolCallRecovered { tool_name: String },
+
+    /// A framed tool call was found in the reply and left alone, with the
+    /// reason it was not promoted.
+    ToolCallDeclined {
+        tool_name: String,
+        reason: ToolDeclineKind,
     },
 
     /// End of stream. No further events follow.
