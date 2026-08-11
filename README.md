@@ -17,7 +17,7 @@
 </div>
 
 
-<div align="center">agentwerk is a lightweight harness built for small LLMs: it splits work into tickets to keep each context short, runs them in parallel, validates results against a format you define, and reports every step as an event.</div>
+<div align="center">agentwerk is a lightweight harness built for small LLMs: it splits work into tickets to keep context windows short, runs agents in parallel, validates their results and reports every step as an event.</div>
 
 ---
 
