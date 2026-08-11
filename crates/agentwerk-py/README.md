@@ -5,7 +5,7 @@
 <h1 align="center">agentwerk (Python)</h1>
 
 <div align="center">
-  <strong>A minimal Rust & Python library for running many agents in parallel.</strong>
+  <strong>A minimal Rust & Python library for solving hard problems with many agents.</strong>
 </div>
 
 <div align="center">
@@ -16,7 +16,7 @@
   <a href="#development">Development</a>
 </div>
 
-<div align="center">agentwerk is designed to tackle complex problems with fleets of agents through the simplest interface possible. It provides a ticket queue which distributes tasks across agents running in parallel, validates results, retries on failure, and reports every step as an event.</div>
+<div align="center">agentwerk is a lightweight harness built for small LLMs: it splits work into tickets to keep each context short, runs them in parallel, validates results against a format you define, and reports every step as an event.</div>
 
 ---
 
@@ -31,9 +31,8 @@
 ## Why use agentwerk?
 
 - **Simple interface:** create agents with a few lines of code.
-- **Efficient harness:** optimized for LLMs below 30B parameters with low memory footprint.
+- **Efficient harness:** low memory footprint, even with many agents at work.
 - **Complex interactions:** allow agents to collaborate through queues and shared knowledge.
-- **Deep observability:** inspect every request, tool call, and failure.
 - **Facilitate training:** store trajectories based on granular events for fine-tuning models.
 
 ## Installation
