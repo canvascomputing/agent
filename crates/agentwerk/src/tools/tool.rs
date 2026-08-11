@@ -542,6 +542,22 @@ async fn invoke(
             available: available.unwrap_or_default(),
         });
     };
+    // Indexing a non-object `Value` yields null, so every tool would report its
+    // own first parameter missing rather than the arguments not being an object.
+    if !input.is_object() {
+        // Quote a string payload raw; `to_string` would escape and requote it.
+        let received = match input.as_str() {
+            Some(text) => text.to_string(),
+            None => input.to_string(),
+        };
+        return Err(ToolError::ExecutionFailed {
+            tool_name: name.into(),
+            message: format!(
+                "Tool arguments were not a JSON object. Send them as an object whose keys are this tool's parameters. Received: {}",
+                truncate_preview(&received)
+            ),
+        });
+    }
     match t.call(input, ctx).await {
         Ok(ToolResult::Success(s)) => Ok(s),
         Ok(ToolResult::Error(s)) => Err(ToolError::ExecutionFailed {
@@ -994,6 +1010,30 @@ Do the demo thing.
             }
             other => panic!("Expected ToolResult, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn non_object_input_is_reported_as_such_and_never_reaches_the_tool() {
+        let mut registry = ToolRegistry::default();
+        registry.register(MockTool::new("grep", true, "matches"));
+        let ctx = test_ctx();
+        let calls = vec![ToolCall {
+            id: "c1".into(),
+            name: "grep".into(),
+            input: Value::String(r#"{"pattern": "exec""#.into()),
+        }];
+
+        let results = registry.execute(&calls, &ctx).await;
+        let ContentBlock::ToolResult {
+            content, succeeded, ..
+        } = &results[0].0
+        else {
+            panic!("Expected ToolResult");
+        };
+        assert!(!succeeded);
+        assert!(content.contains("not a JSON object"));
+        assert!(content.contains(r#"{"pattern": "exec""#));
+        assert_ne!(content, "matches");
     }
 
     #[tokio::test]

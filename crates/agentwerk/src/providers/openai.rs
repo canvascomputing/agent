@@ -14,7 +14,7 @@ use super::provider::{
     build_client, ModelRequest, ProviderLike, ProviderToolDefinition, ToolChoice,
     DEFAULT_REQUEST_TIMEOUT,
 };
-use super::stream::{SseEvent, StreamParser};
+use super::stream::{parse_tool_arguments, SseEvent, StreamParser};
 use super::types::{ContentBlock, Message, ModelResponse, ResponseStatus, StreamEvent, TokenUsage};
 
 /// LLM provider for the OpenAI Chat Completions API and any compatible
@@ -313,16 +313,6 @@ impl StreamState {
     }
 }
 
-/// Parse a tool call's `arguments` string into JSON. An empty string is a
-/// no-argument call (`{}`); a non-empty but unparseable string is kept verbatim
-/// so the schema decode reports the real problem, not a fabricated `{}`.
-fn parse_tool_arguments(arguments: String) -> Value {
-    if arguments.trim().is_empty() {
-        return Value::Object(Default::default());
-    }
-    serde_json::from_str(&arguments).unwrap_or(Value::String(arguments))
-}
-
 fn ingest_chunk(
     json: &Value,
     state: &mut StreamState,
@@ -376,11 +366,26 @@ fn update_tool_calls(
     state: &mut StreamState,
     on_event: &Arc<dyn Fn(StreamEvent) + Send + Sync>,
 ) {
+    /// Pick which in-flight call a fragment belongs to. Defaulting a missing
+    /// index to 0 would splice a parallel call's arguments into the first call.
+    fn call_index(call: &Value, open: &HashMap<usize, ToolCallAccumulator>) -> usize {
+        if let Some(index) = call["index"].as_u64() {
+            return index as usize;
+        }
+        let Some(id) = call["id"].as_str().filter(|id| !id.is_empty()) else {
+            return open.keys().max().copied().unwrap_or(0);
+        };
+        match open.iter().find(|(_, acc)| acc.id == id) {
+            Some((slot, _)) => *slot,
+            None => open.len(),
+        }
+    }
+
     let Some(calls) = delta["tool_calls"].as_array() else {
         return;
     };
     for call in calls {
-        let idx = call["index"].as_u64().unwrap_or(0) as usize;
+        let idx = call_index(call, &state.tool_calls);
         let acc = state.tool_calls.entry(idx).or_default();
         if let Some(id) = call["id"].as_str() {
             acc.id = id.to_string();
@@ -389,11 +394,23 @@ fn update_tool_calls(
             acc.name = name.to_string();
         }
         if let Some(args) = call["function"]["arguments"].as_str() {
-            acc.arguments.push_str(args);
-            on_event(StreamEvent::InputJsonDelta {
-                index: idx,
-                partial_json: args.to_string(),
-            });
+            // Some endpoints re-send the whole payload after streaming a prefix
+            // of it; appending would leave `prefix + full`, parsing as neither.
+            let resent = !acc.arguments.is_empty() && args.starts_with(acc.arguments.as_str());
+            let delta = if resent {
+                let unseen = args[acc.arguments.len()..].to_string();
+                acc.arguments = args.to_string();
+                unseen
+            } else {
+                acc.arguments.push_str(args);
+                args.to_string()
+            };
+            if !delta.is_empty() {
+                on_event(StreamEvent::InputJsonDelta {
+                    index: idx,
+                    partial_json: delta,
+                });
+            }
         }
     }
 }
@@ -550,6 +567,8 @@ fn parse_status_str(raw: &str) -> ResponseStatus {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
     use super::*;
     use crate::providers::ReasoningEffort;
 
@@ -586,6 +605,137 @@ mod tests {
         assert!(matches!(
             &state.into_response().content[..],
             [ContentBlock::Thinking { thinking, .. }] if thinking == "alt field"
+        ));
+    }
+
+    /// Feed `chunks` through `ingest_chunk`, returning the finished blocks and
+    /// every `partial_json` the stream emitted.
+    fn ingest_all(chunks: &[Value]) -> (Vec<ContentBlock>, Vec<String>) {
+        let deltas = Arc::new(Mutex::new(Vec::new()));
+        let collected = Arc::clone(&deltas);
+        let sink: Arc<dyn Fn(StreamEvent) + Send + Sync> = Arc::new(move |event| {
+            if let StreamEvent::InputJsonDelta { partial_json, .. } = event {
+                collected.lock().unwrap().push(partial_json);
+            }
+        });
+        let mut state = StreamState::default();
+        for chunk in chunks {
+            ingest_chunk(chunk, &mut state, &sink);
+        }
+        let emitted = deltas.lock().unwrap().clone();
+        (state.into_response().content, emitted)
+    }
+
+    fn arguments_chunk(index: u64, arguments: &str) -> Value {
+        serde_json::json!({"choices":[{"delta":{"tool_calls":[
+            {"index": index, "function": {"arguments": arguments}}
+        ]}}]})
+    }
+
+    /// Verbatim from a cortecs.ai reply: a streamed prefix, then the whole
+    /// payload again in the next chunk.
+    const RESENT_PREFIX: &str = r#"{"pattern": "__import__""#;
+    const RESENT_FULL: &str =
+        r#"{"pattern": "__import__", "output_mode": "content", "type": "py"}"#;
+
+    #[test]
+    fn resent_argument_payload_replaces_the_streamed_prefix() {
+        let (content, _) = ingest_all(&[
+            serde_json::json!({"choices":[{"delta":{"tool_calls":[
+                {"index": 0, "id": "call_1", "function": {"name": "grep", "arguments": ""}}
+            ]}}]}),
+            arguments_chunk(0, RESENT_PREFIX),
+            arguments_chunk(0, RESENT_FULL),
+        ]);
+        assert!(matches!(
+            &content[..],
+            [ContentBlock::ToolUse { name, input, .. }]
+                if name == "grep" && *input == serde_json::json!({
+                    "pattern": "__import__",
+                    "output_mode": "content",
+                    "type": "py",
+                })
+        ));
+    }
+
+    #[test]
+    fn resent_payload_emits_only_the_unseen_suffix() {
+        let (_, emitted) = ingest_all(&[
+            arguments_chunk(0, RESENT_PREFIX),
+            arguments_chunk(0, RESENT_FULL),
+        ]);
+        assert_eq!(emitted.concat(), RESENT_FULL);
+    }
+
+    #[test]
+    fn argument_fragments_still_accumulate_as_deltas() {
+        let (content, emitted) = ingest_all(&[
+            arguments_chunk(0, r#"{"pattern":"#),
+            arguments_chunk(0, r#" "exec"}"#),
+        ]);
+        assert!(matches!(
+            &content[..],
+            [ContentBlock::ToolUse { input, .. }]
+                if *input == serde_json::json!({"pattern": "exec"})
+        ));
+        assert_eq!(emitted.concat(), r#"{"pattern": "exec"}"#);
+    }
+
+    #[test]
+    fn parallel_calls_keep_their_own_arguments() {
+        let (content, _) = ingest_all(&[
+            arguments_chunk(0, r#"{"pattern": "exec"}"#),
+            arguments_chunk(1, RESENT_PREFIX),
+            arguments_chunk(1, RESENT_FULL),
+        ]);
+        assert!(matches!(
+            &content[..],
+            [
+                ContentBlock::ToolUse { input: first, .. },
+                ContentBlock::ToolUse { input: second, .. },
+            ] if *first == serde_json::json!({"pattern": "exec"})
+                && *second == serde_json::json!({
+                    "pattern": "__import__",
+                    "output_mode": "content",
+                    "type": "py",
+                })
+        ));
+    }
+
+    #[test]
+    fn index_less_fragments_with_new_ids_stay_separate_calls() {
+        let (content, _) = ingest_all(&[
+            serde_json::json!({"choices":[{"delta":{"tool_calls":[
+                {"id": "call_1", "function": {"name": "grep", "arguments": r#"{"pattern": "a"}"#}}
+            ]}}]}),
+            serde_json::json!({"choices":[{"delta":{"tool_calls":[
+                {"id": "call_2", "function": {"name": "grep", "arguments": r#"{"pattern": "b"}"#}}
+            ]}}]}),
+        ]);
+        assert!(matches!(
+            &content[..],
+            [
+                ContentBlock::ToolUse { input: first, .. },
+                ContentBlock::ToolUse { input: second, .. },
+            ] if *first == serde_json::json!({"pattern": "a"})
+                && *second == serde_json::json!({"pattern": "b"})
+        ));
+    }
+
+    #[test]
+    fn index_less_fragments_without_an_id_continue_the_call_in_flight() {
+        let (content, _) = ingest_all(&[
+            serde_json::json!({"choices":[{"delta":{"tool_calls":[
+                {"id": "call_1", "function": {"name": "grep", "arguments": r#"{"pattern":"#}}
+            ]}}]}),
+            serde_json::json!({"choices":[{"delta":{"tool_calls":[
+                {"function": {"arguments": r#" "a"}"#}}
+            ]}}]}),
+        ]);
+        assert!(matches!(
+            &content[..],
+            [ContentBlock::ToolUse { input, .. }]
+                if *input == serde_json::json!({"pattern": "a"})
         ));
     }
 
@@ -640,26 +790,6 @@ mod tests {
         assert_eq!(p.request_timeout(), DEFAULT_REQUEST_TIMEOUT);
         let p = p.timeout(Duration::from_secs(42));
         assert_eq!(p.request_timeout(), Duration::from_secs(42));
-    }
-
-    #[test]
-    fn parse_tool_arguments_parses_valid_json_object() {
-        let input = parse_tool_arguments(r#"{"pattern":"foo"}"#.into());
-        assert_eq!(input, serde_json::json!({"pattern": "foo"}));
-    }
-
-    #[test]
-    fn parse_tool_arguments_empty_string_is_no_args_object() {
-        assert_eq!(parse_tool_arguments(String::new()), serde_json::json!({}));
-        assert_eq!(parse_tool_arguments("   ".into()), serde_json::json!({}));
-    }
-
-    #[test]
-    fn parse_tool_arguments_keeps_malformed_string_verbatim() {
-        // A non-empty, unparseable arguments string is preserved rather than
-        // blanked to `{}`, so the schema decode reports the real problem.
-        let raw = r#"{"pattern": "foo""#;
-        assert_eq!(parse_tool_arguments(raw.into()), Value::String(raw.into()));
     }
 
     #[test]

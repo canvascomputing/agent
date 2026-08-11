@@ -1,7 +1,18 @@
 //! Reads Server-Sent Events from an LLM provider, reassembling whole `data:`
-//! events however the bytes arrive.
+//! events however the bytes arrive, and decoding the tool-call arguments they
+//! carry.
 
 use serde_json::Value;
+
+/// Parse a tool call's accumulated `arguments` into JSON. An empty string is a
+/// no-argument call (`{}`); a non-empty but unparseable string is kept verbatim
+/// so the schema decode reports the real problem, not a fabricated `{}`.
+pub(crate) fn parse_tool_arguments(arguments: String) -> Value {
+    if arguments.trim().is_empty() {
+        return Value::Object(Default::default());
+    }
+    serde_json::from_str(&arguments).unwrap_or(Value::String(arguments))
+}
 
 /// A parsed stream event.
 pub(crate) enum SseEvent {
@@ -51,6 +62,24 @@ impl StreamParser {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_tool_arguments_parses_valid_json_object() {
+        let input = parse_tool_arguments(r#"{"pattern":"foo"}"#.into());
+        assert_eq!(input, serde_json::json!({"pattern": "foo"}));
+    }
+
+    #[test]
+    fn parse_tool_arguments_empty_string_is_no_args_object() {
+        assert_eq!(parse_tool_arguments(String::new()), serde_json::json!({}));
+        assert_eq!(parse_tool_arguments("   ".into()), serde_json::json!({}));
+    }
+
+    #[test]
+    fn parse_tool_arguments_keeps_malformed_string_verbatim() {
+        let raw = r#"{"pattern": "foo""#;
+        assert_eq!(parse_tool_arguments(raw.into()), Value::String(raw.into()));
+    }
 
     #[test]
     fn parse_data_line() {

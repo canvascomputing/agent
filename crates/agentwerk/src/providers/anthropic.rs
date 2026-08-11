@@ -12,6 +12,7 @@ use super::provider::{
     build_client, ModelRequest, ProviderLike, ProviderToolDefinition, ToolChoice,
     DEFAULT_REQUEST_TIMEOUT,
 };
+use super::stream::parse_tool_arguments;
 use super::types::{ContentBlock, Message, ModelResponse, ResponseStatus, StreamEvent, TokenUsage};
 
 /// LLM provider for the Anthropic Messages API.
@@ -394,7 +395,7 @@ fn handle_block_stop(
     match state.blocks.get_mut(idx).and_then(Option::take) {
         Some(BlockAcc::Text(text)) => state.content_blocks.push(ContentBlock::Text { text }),
         Some(BlockAcc::Tool { id, name, input }) => {
-            let input = serde_json::from_str(&input).unwrap_or(Value::Object(Default::default()));
+            let input = parse_tool_arguments(input);
             state
                 .content_blocks
                 .push(ContentBlock::ToolUse { id, name, input });
@@ -453,7 +454,11 @@ fn serialize_content_block(block: &ContentBlock) -> Option<Value> {
         ContentBlock::Text { text } => {
             serde_json::json!({"type": "text", "text": text})
         }
+        // An unparseable payload is kept verbatim in the reply so the dispatch
+        // can quote it back, but the API types `input` as an object: replaying
+        // the raw text would fail every later request in the ticket with a 400.
         ContentBlock::ToolUse { id, name, input } => {
+            let input = input.as_object().cloned().unwrap_or_default();
             serde_json::json!({"type": "tool_use", "id": id, "name": name, "input": input})
         }
         ContentBlock::ToolResult {
@@ -562,6 +567,57 @@ mod tests {
         ));
     }
 
+    /// Open a tool_use block, feed it `fragments`, close it.
+    fn stream_tool_use(fragments: &[&str]) -> Vec<ContentBlock> {
+        let mut state = StreamState::default();
+        let sink = noop_events();
+        handle_stream_event(
+            &serde_json::json!({"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"grep"}}),
+            &mut state,
+            &sink,
+        );
+        for fragment in fragments {
+            handle_stream_event(
+                &serde_json::json!({"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":fragment}}),
+                &mut state,
+                &sink,
+            );
+        }
+        handle_stream_event(
+            &serde_json::json!({"type":"content_block_stop","index":0}),
+            &mut state,
+            &sink,
+        );
+        state.into_response().content
+    }
+
+    #[test]
+    fn parses_tool_input_from_json_fragments() {
+        assert!(matches!(
+            &stream_tool_use(&[r#"{"pattern":"#, r#" "exec"}"#])[..],
+            [ContentBlock::ToolUse { name, input, .. }]
+                if name == "grep" && *input == serde_json::json!({"pattern": "exec"})
+        ));
+    }
+
+    #[test]
+    fn malformed_tool_input_is_kept_verbatim() {
+        // Blanking to `{}` would drop the call with no trace.
+        let raw = r#"{"pattern": "exec""#;
+        assert!(matches!(
+            &stream_tool_use(&[raw])[..],
+            [ContentBlock::ToolUse { input, .. }] if *input == Value::String(raw.into())
+        ));
+    }
+
+    #[test]
+    fn tool_use_without_argument_deltas_is_a_no_argument_call() {
+        assert!(matches!(
+            &stream_tool_use(&[])[..],
+            [ContentBlock::ToolUse { input, .. }] if *input == serde_json::json!({})
+        ));
+    }
+
     #[test]
     fn parses_redacted_thinking_block() {
         let mut state = StreamState::default();
@@ -592,6 +648,30 @@ mod tests {
         assert_eq!(value["type"], "thinking");
         assert_eq!(value["thinking"], "why");
         assert_eq!(value["signature"], "sig");
+    }
+
+    #[test]
+    fn serializes_tool_use_input_as_an_object() {
+        let value = serialize_content_block(&ContentBlock::ToolUse {
+            id: "toolu_1".into(),
+            name: "grep".into(),
+            input: serde_json::json!({"pattern": "exec"}),
+        })
+        .unwrap();
+        assert_eq!(value["input"], serde_json::json!({"pattern": "exec"}));
+    }
+
+    #[test]
+    fn replays_malformed_tool_input_as_an_empty_object() {
+        // The API rejects a non-object `input`, which would fail every later
+        // request in the ticket rather than just this call.
+        let value = serialize_content_block(&ContentBlock::ToolUse {
+            id: "toolu_1".into(),
+            name: "grep".into(),
+            input: Value::String(r#"{"pattern": "exec""#.into()),
+        })
+        .unwrap();
+        assert_eq!(value["input"], serde_json::json!({}));
     }
 
     #[test]
