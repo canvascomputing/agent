@@ -31,8 +31,9 @@
 ## Why use agentwerk?
 
 - **Simple interface:** create agents with a few lines of code.
-- **Efficient harness:** low memory footprint, even with many agents at work.
+- **Efficient harness:** optimized for LLMs below 30B parameters with low memory footprint.
 - **Complex interactions:** allow agents to collaborate through queues and shared knowledge.
+- **Deep observability:** inspect every request, tool call, and failure.
 - **Facilitate training:** store trajectories based on granular events for fine-tuning models.
 
 ## Installation
