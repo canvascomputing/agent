@@ -30,11 +30,11 @@
 
 ## Why use agentwerk?
 
-- **Minimal interface:** create agents with a few lines of code.
-- **Complex workflows:** allow agents to interact through shared knowledge and tickets.
-- **Deep observability:** inspect every request, message and failure.
-- **Ease of integration:** apply agents as simple as HTTP calls.
-- **Facilitate training:** collect trajectories for fine-tuning models.
+- **Simple interface:** create agents with a few lines of code.
+- **Efficient harness:** optimized for LLMs below 30B parameters with low memory footprint.
+- **Complex interactions:** allow agents to collaborate through queues and shared knowledge.
+- **Deep observability:** inspect every request, tool call, and failure.
+- **Facilitate training:** store trajectories based on granular events for fine-tuning models.
 
 ## Installation
 
@@ -115,14 +115,12 @@ from agentwerk import Agent, ReadFileTool
 
 agent = (
     Agent.from_env()
-    .label("math")
     .role("You are an arithmetic agent. Compute step by step and show your work.")
     .tool(ReadFileTool())
     .build()
 )
 
-tickets.agent(agent)
-tickets.task("Compute (47 * 92) / 8, then round to the nearest integer.")
+agent.task("Compute (47 * 92) / 8, then round to the nearest integer.")
 ```
 
 <details>
@@ -558,10 +556,13 @@ See [`EventKind`](https://docs.rs/agentwerk/latest/agentwerk/event/enum.EventKin
 Hooks allow you to react to events:
 
 ```python
+def retry_once(event, failed):
+    if failed.parent is not None:
+        return None
+    return Ticket(failed.task, labels=failed.labels, parent=failed.key)
 
-tickets.create_ticket_on_failure(
-    lambda event, ticket: Ticket(ticket.task, labels=["retry"])
-)
+
+tickets.create_ticket_on_failure(retry_once)
 ```
 
 <details>
