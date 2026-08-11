@@ -31,11 +31,11 @@
 
 ## Why use agentwerk?
 
-- **Minimal interface:** create agents with a few lines of code.
-- **Complex workflows:** allow agents to interact through shared knowledge and tickets.
-- **Deep observability:** inspect every request, message and failure.
-- **Ease of integration:** apply agents as simple as HTTP calls.
-- **Facilitate training:** collect trajectories for fine-tuning models.
+- **Simple interface:** create agents with a few lines of code.
+- **Efficient harness:** optimized for LLMs below 30B parameters with low memory footprint.
+- **Complex interactions:** allow agents to collaborate through queues and shared knowledge.
+- **Deep observability:** inspect every request, tool call, and failure.
+- **Facilitate training:** store trajectories based on granular events for fine-tuning models.
 
 ## Installation
 
@@ -110,13 +110,11 @@ An `Agent` is the core entity of agentwerk. It has access to tools for solving t
 use agentwerk::tools::ReadFileTool;
 
 let agent = Agent::from_env()
-    .label("math")
     .role("You are an arithmetic agent. Compute step by step and show your work.")
     .tool(ReadFileTool)
     .build();
 
-tickets.agent(agent);
-tickets.task("Compute (47 * 92) / 8, then round to the nearest integer.");
+agent.task("Compute (47 * 92) / 8, then round to the nearest integer.");
 ```
 
 <details>
@@ -545,8 +543,12 @@ See [`EventKind`](https://docs.rs/agentwerk/latest/agentwerk/event/enum.EventKin
 Hooks allow you to react to events:
 
 ```rust
-tickets.create_ticket_on_failure(|_, ticket| {
-    Some(Ticket::new(ticket.task.clone()).label("retry"))
+tickets.create_ticket_on_failure(|_, failed| {
+    failed.parent.is_none().then(|| {
+        Ticket::new(failed.task.clone())
+            .labels(failed.labels.clone())
+            .parent(&failed.key)
+    })
 });
 ```
 
