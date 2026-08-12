@@ -6,10 +6,10 @@ import pytest
 import agentwerk as aw
 
 
-def test_enqueued_ticket_appears_with_its_status_and_labels(queue):
+def test_enqueued_ticket_appears_with_its_status_and_label(queue):
     assert queue.tickets() == []
 
-    queue.ticket(aw.Ticket("scan the corpus", labels=["scan"]))
+    queue.ticket(aw.Ticket("scan the corpus", label="scan"))
 
     (ticket,) = queue.tickets()
     assert ticket.task == "scan the corpus"
@@ -18,7 +18,7 @@ def test_enqueued_ticket_appears_with_its_status_and_labels(queue):
 
 
 def test_unstarted_ticket_carries_its_key_and_no_messages(queue):
-    key = queue.ticket(aw.Ticket("scan the corpus", labels=["scan"]))
+    key = queue.ticket(aw.Ticket("scan the corpus", label="scan"))
 
     ticket = queue.get_ticket(key)
     assert ticket.key == key
@@ -87,16 +87,16 @@ def test_policy_setters_chain(queue):
 
 
 def test_find_tickets_filters_by_predicate(queue):
-    queue.ticket(aw.Ticket("alpha", labels=["a"]))
-    queue.ticket(aw.Ticket("beta", labels=["b"]))
+    queue.ticket(aw.Ticket("alpha", label="a"))
+    queue.ticket(aw.Ticket("beta", label="b"))
 
     matches = queue.find_tickets(lambda t: t.has_label("a"))
     assert [t.task for t in matches] == ["alpha"]
 
 
 def test_find_ticket_returns_the_first_match(queue):
-    queue.ticket(aw.Ticket("alpha", labels=["a"]))
-    queue.ticket(aw.Ticket("beta", labels=["b"]))
+    queue.ticket(aw.Ticket("alpha", label="a"))
+    queue.ticket(aw.Ticket("beta", label="b"))
 
     found = queue.find_ticket(lambda t: t.is_todo())
     assert found.task == "alpha"
@@ -150,14 +150,14 @@ def test_reply_chains(queue):
 
 
 def test_results_are_empty_before_a_run(queue):
-    queue.ticket(aw.Ticket("alpha", labels=["a"]))
+    queue.ticket(aw.Ticket("alpha", label="a"))
 
     assert queue.results() == []
 
 
 def test_find_tickets_returns_every_status_not_just_finished(queue):
-    queue.ticket(aw.Ticket("alpha", labels=["a"]))
-    queue.ticket(aw.Ticket("beta", labels=["b"]))
+    queue.ticket(aw.Ticket("alpha", label="a"))
+    queue.ticket(aw.Ticket("beta", label="b"))
 
     tasks = [ticket.task for ticket in queue.find_tickets(lambda t: t.has_label("a"))]
     assert tasks == ["alpha"]
@@ -173,8 +173,8 @@ def test_policy_readers_return_the_limits_that_were_set(queue):
 
 
 def test_cancel_takes_the_matching_tickets_off_the_queue(queue):
-    scan = aw.Ticket("scan the corpus", labels=["scan"])
-    report = aw.Ticket("write it up", labels=["report"])
+    scan = aw.Ticket("scan the corpus", label="scan")
+    report = aw.Ticket("write it up", label="report")
     assert queue.is_cancelled(scan) is False
 
     assert isinstance(queue.cancel(lambda t: t.has_label("scan")), aw.TicketQueue)
@@ -254,7 +254,7 @@ def test_create_ticket_on_failure_enqueues_a_retry(queue):
 
 def test_create_ticket_on_event_enqueues_a_follow_up(queue):
     queue.create_ticket_on_event(
-        lambda event: aw.Ticket("report", labels=["report"])
+        lambda event: aw.Ticket("report", label="report")
         if event.kind == "ticket_finished"
         else None
     )
@@ -367,8 +367,8 @@ async def test_finish_hands_back_the_results_its_filter_named(queue):
 
 
 async def test_finish_all_hands_back_the_results_of_every_pool(queue):
-    scan = queue.ticket(aw.Ticket("scan the corpus", labels=["scan"]))
-    report = queue.ticket(aw.Ticket("write it up", labels=["report"]))
+    scan = queue.ticket(aw.Ticket("scan the corpus", label="scan"))
+    report = queue.ticket(aw.Ticket("write it up", label="report"))
     queue.set_finished(scan, {"verdict": "clean"})
     queue.set_finished(report, {"pages": 2})
 
@@ -391,7 +391,7 @@ def test_assignee_is_unset_until_an_agent_claims_the_ticket(queue):
 
 def test_load_reopens_a_session_directory(queue, tmp_path):
     queue.dir(str(tmp_path))
-    key = queue.ticket(aw.Ticket("scan the corpus", labels=["scan"]))
+    key = queue.ticket(aw.Ticket("scan the corpus", label="scan"))
 
     reopened = aw.TicketQueue.load(str(tmp_path))
 

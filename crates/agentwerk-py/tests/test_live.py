@@ -80,11 +80,11 @@ async def test_runs_two_labeled_agents_with_events_and_chaining():
 
     def chain(ticket, result):
         if ticket.has_label("a"):
-            return aw.Ticket("Reply beta", labels=["b"])
+            return aw.Ticket("Reply beta", label="b")
         return None
 
     queue.create_ticket_on_result(chain)
-    queue.ticket(aw.Ticket("Reply alpha", labels=["a"]))
+    queue.ticket(aw.Ticket("Reply alpha", label="a"))
     await queue.finish_all()
 
     assert len(queue.results()) == 2

@@ -96,8 +96,7 @@ Seven rules the surface table below never repeats.
 | `TicketQueue::results()` | `TicketQueue.results()` |
 | **Ticket** | |
 | `Ticket::new(task)` | `Ticket(task)` |
-| `Ticket::label(l)` | `Ticket(task, labels=[l])` |
-| `Ticket::labels(iter)` | `Ticket(task, labels=[..])` |
+| `Ticket::label(l)` | `Ticket(task, label=l)` |
 | `Ticket::schema(s)` | `Ticket(task, schema=s)` |
 | `Ticket::parent(key)` | `Ticket(task, parent=key)` |
 | `Ticket::has_label(label)` | `Ticket.has_label(label)` |
@@ -106,7 +105,7 @@ Seven rules the surface table below never repeats.
 | `Ticket::is_finished()` | `Ticket.is_finished()` |
 | `Ticket::is_failed()` | `Ticket.is_failed()` |
 | `Ticket::is_pending()` | `Ticket.is_pending()` |
-| `Ticket.key`, `.status`, `.task`, `.result`, `.labels`, `.schema`, `.parent`, `.reporter`, `.assignee` | Same names, same meaning. |
+| `Ticket.key`, `.status`, `.task`, `.result`, `.label`, `.schema`, `.parent`, `.reporter`, `.assignee` | Same names, same meaning. |
 | `Ticket.created_at`, `.started_at`, `.finished_at`, `.failed_at` | Same names, same meaning. |
 | `Ticket.replies` | `Ticket.replies`: a list of `Reply`, converted on access. |
 | `Status` | A string. The five `is_*` predicates read better than comparing it. |

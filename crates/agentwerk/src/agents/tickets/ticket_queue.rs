@@ -149,7 +149,7 @@ impl Run {
 
 /// The core data structure of agentwerk, coordinating complex work across
 /// agents. Many agents share one `TicketQueue` and pick up tickets
-/// concurrently; labels assign work to the right agents.
+/// concurrently; a label assigns work to the right agents.
 ///
 /// ```no_run
 /// use agentwerk::{Agent, Ticket, TicketQueue};
@@ -609,7 +609,7 @@ impl TicketQueue {
     /// acts on it works from what every observer saw.
     pub(crate) fn emit(&self, key: &str, agent: &str, kind: EventKind) -> Event {
         self.stats
-            .record_event(&kind, key, &self.labels_for(key), agent);
+            .record_event(&kind, key, self.label_for(key).as_deref(), agent);
         let event = Event::new(agent, key, kind);
         // Published before the handlers run: a `finish` waiter competes
         // with them for nothing, and no handler can swallow the event. The
@@ -647,13 +647,12 @@ impl TicketQueue {
         self.edit_replies(key, |replies| editor(&events, replies));
     }
 
-    fn labels_for(&self, key: &str) -> Vec<String> {
+    fn label_for(&self, key: &str) -> Option<String> {
         self.tickets
             .lock()
             .unwrap()
             .get(key)
-            .map(|t| t.labels.clone())
-            .unwrap_or_default()
+            .and_then(|t| t.label.clone())
     }
 
     /// Get the model that agent runs, or `None` when no agent of that name is bound.
@@ -814,7 +813,7 @@ impl TicketQueue {
 
     /// Enqueue a follow-up ticket from a finished ticket.
     ///
-    /// Your function reads the finished ticket's key, labels, and task
+    /// Your function reads the finished ticket's key, label, and task
     /// alongside its result, and can chain the follow-up through
     /// `Ticket::parent`. Guard against a follow-up that triggers itself, or
     /// execution never ends.
@@ -835,7 +834,7 @@ impl TicketQueue {
 
     /// Enqueue a retry for a ticket that failed.
     ///
-    /// Your function reads the failed ticket's task and labels and hands back a
+    /// Your function reads the failed ticket's task and label and hands back a
     /// fresh attempt, chained through `Ticket::parent`. Count the attempts
     /// yourself, or a ticket that fails every time re-queues itself forever.
     ///
@@ -868,7 +867,7 @@ impl TicketQueue {
     /// Read a ticket as it starts, finishes, or fails.
     ///
     /// The handler receives the event plus the ticket it names, already
-    /// resolved, so it reads the result, labels, and replies without a second
+    /// resolved, so it reads the result, label, and replies without a second
     /// lookup. No other kind reaches the handler: resolving a ticket copies its
     /// replies, which on `TextChunkReceived` would cost once per piece of the
     /// reply.
@@ -936,7 +935,7 @@ impl TicketQueue {
         self.dispatch(Ticket::new(task))
     }
 
-    /// Submit a `Ticket` with custom labels or schema, and return its key.
+    /// Submit a `Ticket` with a custom label or schema, and return its key.
     ///
     /// Key, reporter, creation time, status, and result are set at insertion
     /// and overwrite whatever the ticket carried. A label decides which agents
@@ -1511,8 +1510,6 @@ mod tests {
         queue.cancel(|t| t.has_label("research"));
 
         assert!(queue.is_cancelled(&Ticket::new("x").label("research")));
-        // One label of several is enough to match.
-        assert!(queue.is_cancelled(&Ticket::new("x").labels(["research", "urgent"])));
         assert!(
             !queue.is_cancelled(&Ticket::new("x").label("analysis")),
             "other pools are untouched",

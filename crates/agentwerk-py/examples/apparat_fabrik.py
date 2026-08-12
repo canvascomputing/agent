@@ -246,7 +246,7 @@ async def main(pruefer, meister, monteur):
                 Ticket(
                     f"Nimm {teil['teil']} ({teil['name']}) ab. Sollmaß {teil['soll']}, "
                     f"Toleranz {teil['toleranz']}. Der Bauplan liegt in {result['bauplan']}.",
-                    labels=["abnahme"],
+                    label="abnahme",
                     schema=RULING,
                 )
             )
@@ -258,7 +258,7 @@ async def main(pruefer, meister, monteur):
     tickets.create_ticket_on_result(
         lambda ticket, result: Ticket(
             f"Baue {result['teil']} ein und buche es. Der Laufzettel lautete: {ticket.task}",
-            labels=["montage"],
+            label="montage",
             schema=FITTING,
         )
         if ticket.has_label("abnahme") and result.get("passt")
@@ -275,7 +275,7 @@ async def main(pruefer, meister, monteur):
         if frame["ticket"] and event.kind.startswith("ticket_"):
             ticket = tickets.get_ticket(frame["ticket"])
             if ticket is not None:
-                frame["labels"] = ticket.labels
+                frame["label"] = ticket.label
                 frame["reporter"] = ticket.reporter
                 frame["task"] = str(ticket.task)[:160]
         loop.call_soon_threadsafe(feed.push, frame)
@@ -311,7 +311,7 @@ async def main(pruefer, meister, monteur):
         tickets.ticket(
             Ticket(
                 f"Prüfe den Bauplan {apparat['title']}. Er liegt in {apparat['name']}.",
-                labels=["pruefung"],
+                label="pruefung",
                 schema=PLAN,
             )
         )

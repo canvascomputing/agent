@@ -836,7 +836,7 @@ mod tests {
                 continue;
             }
             let stats = crate::agents::stats::Stats::new();
-            stats.record_event(&kind, "KEY", &[], "");
+            stats.record_event(&kind, "KEY", None, "");
             let value = serde_json::to_value(&stats).unwrap();
             for measure in kind.measures() {
                 let category = measure.subject.category();
@@ -875,7 +875,7 @@ mod tests {
     fn stats_counts_every_variant() {
         let stats = crate::agents::stats::Stats::new();
         for kind in all_variants() {
-            stats.record_event(&kind, "KEY", &[], "");
+            stats.record_event(&kind, "KEY", None, "");
         }
         let counts = stats.event_counts();
         for kind in all_variants() {

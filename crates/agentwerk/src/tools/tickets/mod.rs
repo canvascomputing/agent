@@ -92,12 +92,10 @@ fn render_ticket(t: &Ticket) -> String {
     out.push_str(&format!("# {}\n", t.key));
     out.push_str(&format!("- status: {}\n", status_label(t.status)));
     out.push_str(&format!("- reporter: {}\n", t.reporter));
-    let labels_label = if t.labels.is_empty() {
-        "(none)".to_string()
-    } else {
-        t.labels.join(", ")
-    };
-    out.push_str(&format!("- labels: {labels_label}\n"));
+    out.push_str(&format!(
+        "- label: {}\n",
+        t.label.as_deref().unwrap_or("(none)")
+    ));
     if let Some(parent) = t.parent.as_deref() {
         out.push_str(&format!("- parent: {parent}\n"));
     }
@@ -154,18 +152,19 @@ fn truncate_for_preview(s: &str, max: usize) -> String {
     }
 }
 
-type SummaryRow<'a> = (&'a str, &'a str, Status, &'a [String]);
+type SummaryRow<'a> = (&'a str, &'a str, Status, Option<&'a str>);
 
 fn render_summary_list(tickets: &[SummaryRow<'_>]) -> String {
     let mut out = String::new();
-    for (key, task_preview, status, labels) in tickets {
-        let labels_label = if labels.is_empty() {
-            String::new()
-        } else {
-            format!("[{}] ", labels.join(","))
+    for (key, task_preview, status, label) in tickets {
+        // An unlabelled ticket prints no marker: a scan of up to 50 rows does
+        // not need "(none)" on every default-scope line.
+        let label = match label {
+            Some(l) => format!("[{l}] "),
+            None => String::new(),
         };
         out.push_str(&format!(
-            "- {key} [{status}] {labels_label}{task_preview}\n",
+            "- {key} [{status}] {label}{task_preview}\n",
             status = status_label(*status),
         ));
     }
@@ -206,7 +205,7 @@ fn action_list(ticket_queue: &TicketQueue, input: &Value) -> ToolResult {
             None => true,
         };
         let label_ok = match label.as_deref() {
-            Some(l) => t.labels.iter().any(|x| x == l),
+            Some(l) => t.has_label(l),
             None => true,
         };
         status_ok && label_ok
@@ -224,7 +223,7 @@ fn action_list(ticket_queue: &TicketQueue, input: &Value) -> ToolResult {
         .iter()
         .take(50)
         .zip(previews.iter())
-        .map(|(t, p)| (t.key.as_str(), p.as_str(), t.status, t.labels.as_slice()))
+        .map(|(t, p)| (t.key.as_str(), p.as_str(), t.status, t.label.as_deref()))
         .collect();
     ToolResult::success(render_summary_list(&rows))
 }
@@ -251,7 +250,7 @@ fn action_search(ticket_queue: &TicketQueue, input: &Value) -> ToolResult {
         .iter()
         .take(50)
         .zip(previews.iter())
-        .map(|(t, p)| (t.key.as_str(), p.as_str(), t.status, t.labels.as_slice()))
+        .map(|(t, p)| (t.key.as_str(), p.as_str(), t.status, t.label.as_deref()))
         .collect();
     ToolResult::success(render_summary_list(&rows))
 }
@@ -262,16 +261,15 @@ fn action_create(ticket_queue: &TicketQueue, input: &Value, ctx: &ToolContext) -
         None => return ToolResult::error("Missing required parameter: task"),
     };
 
-    let labels: Vec<String> = match input.get("labels") {
-        Some(Value::Array(arr)) => arr
-            .iter()
-            .filter_map(|v| v.as_str().map(|s| s.to_string()))
-            .collect(),
-        Some(Value::Null) | None => Vec::new(),
-        Some(_) => return ToolResult::error("`labels` must be an array of strings"),
+    let label = match parse_label(input) {
+        Ok(l) => l,
+        Err(e) => return e,
     };
 
-    let ticket = Ticket::new(task).labels(labels);
+    let mut ticket = Ticket::new(task);
+    if let Some(label) = label {
+        ticket = ticket.label(label);
+    }
 
     let reporter = ctx
         .agent_id_str()
@@ -288,22 +286,27 @@ fn action_edit(ticket_queue: &TicketQueue, input: &Value, ctx: &ToolContext) -> 
     };
 
     let new_task = input.get("task").cloned();
-    let new_labels: Option<Vec<String>> = match input.get("labels") {
-        Some(Value::Array(arr)) => Some(
-            arr.iter()
-                .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                .collect(),
-        ),
-        Some(Value::Null) | None => None,
-        Some(_) => return ToolResult::error("`labels` must be an array of strings"),
+    let new_label = match parse_label(input) {
+        Ok(l) => l,
+        Err(e) => return e,
     };
-    if new_task.is_none() && new_labels.is_none() {
-        return ToolResult::error("Edit needs at least one of `task` or `labels`");
+    if new_task.is_none() && new_label.is_none() {
+        return ToolResult::error("Edit needs at least one of `task` or `label`");
     }
 
-    match ticket_queue.edit(&key, new_task, new_labels) {
+    match ticket_queue.edit(&key, new_task, new_label) {
         Ok(()) => ToolResult::success(format!("Edited ticket {key}")),
         Err(e) => ToolResult::error(ticket_error_message(e)),
+    }
+}
+
+/// Read the `label` argument `create` and `edit` share. Absent or null means
+/// the caller said nothing about the label, never that it should be removed.
+fn parse_label(input: &Value) -> Result<Option<String>, ToolResult> {
+    match input.get("label") {
+        Some(Value::String(s)) => Ok(Some(s.clone())),
+        Some(Value::Null) | None => Ok(None),
+        Some(_) => Err(ToolResult::error("`label` must be a string")),
     }
 }
 
@@ -429,7 +432,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn manage_create_with_labels_attaches_them() {
+    async fn manage_create_with_a_label_attaches_it() {
         let queue = TicketQueue::new();
         queue.dir(isolated_test_dir());
         let ctx = ctx_with(Arc::clone(&queue), "alice");
@@ -438,14 +441,14 @@ mod tests {
             serde_json::json!({
                 "action": "create",
                 "task": "new",
-                "labels": ["research"]
+                "label": "research"
             }),
             &ctx,
         )
         .await;
         assert!(matches!(result, ToolResult::Success(_)));
         let t = queue.get_ticket("TICKET-1").unwrap();
-        assert_eq!(t.labels, vec!["research".to_string()]);
+        assert!(t.has_label("research"));
         assert_eq!(t.status, Status::Todo);
     }
 
@@ -459,14 +462,14 @@ mod tests {
             serde_json::json!({
                 "action": "create",
                 "task": "new",
-                "labels": ["alice"]
+                "label": "alice"
             }),
             &ctx,
         )
         .await;
         assert!(matches!(result, ToolResult::Success(_)));
         let t = queue.get_ticket("TICKET-1").unwrap();
-        assert!(t.labels.iter().any(|l| l == "alice"));
+        assert!(t.has_label("alice"));
         assert_eq!(t.status, Status::Todo);
     }
 
@@ -486,7 +489,7 @@ mod tests {
             serde_json::json!({
                 "action": "create",
                 "task": "new",
-                "labels": ["analysis"]
+                "label": "analysis"
             }),
             &ctx,
         )
@@ -499,7 +502,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn manage_edit_updates_task_and_labels() {
+    async fn manage_edit_replaces_the_task_and_the_label() {
         let (queue, key) = shared_with_one_ticket("alice");
         let ctx = ctx_with(Arc::clone(&queue), "alice");
         let result = call(
@@ -507,7 +510,7 @@ mod tests {
             serde_json::json!({
                 "action": "edit",
                 "task": "new body",
-                "labels": ["urgent", "review"]
+                "label": "urgent"
             }),
             &ctx,
         )
@@ -515,7 +518,7 @@ mod tests {
         assert!(matches!(result, ToolResult::Success(_)));
         let t = queue.get_ticket(&key).unwrap();
         assert_eq!(t.task, serde_json::Value::String("new body".into()));
-        assert_eq!(t.labels, vec!["urgent".to_string(), "review".to_string()]);
+        assert!(t.has_label("urgent"));
     }
 
     #[tokio::test]

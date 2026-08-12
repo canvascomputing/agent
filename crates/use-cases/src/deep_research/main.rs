@@ -191,10 +191,9 @@ fn print_chain_summary(tickets: &TicketQueue) {
             .as_deref()
             .map(|p| format!(" ⟵ {p}"))
             .unwrap_or_default();
-        let labels = if t.labels.is_empty() {
-            String::new()
-        } else {
-            format!(" [{}]", t.labels.join(","))
+        let label = match t.label.as_deref() {
+            Some(l) => format!(" [{l}]"),
+            None => String::new(),
         };
         let preview = t
             .result
@@ -202,7 +201,7 @@ fn print_chain_summary(tickets: &TicketQueue) {
             .map(|v| truncate(&plain_text(v), 100))
             .unwrap_or_else(|| "(no result)".into());
         eprintln!(
-            "  {key} {status}{labels}{parent}\n      → {preview}",
+            "  {key} {status}{label}{parent}\n      → {preview}",
             key = t.key,
             status = t.status,
         );

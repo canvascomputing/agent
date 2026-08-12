@@ -123,7 +123,7 @@ async def main(n, partitions, agents):
             Ticket(
                 f"Compute the partial sum S = sum_{{k={lo}}}^{{{hi}}} k^2.\n"
                 f"lo={lo}\nhi={hi}\nidx={idx}",
-                labels=["compute"],
+                label="compute",
                 schema=PARTIAL_SUM,
             )
         )

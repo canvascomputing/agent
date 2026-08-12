@@ -102,7 +102,7 @@ def test_registering_an_unbuilt_agent_is_rejected(queue):
 
 
 def test_agent_enqueues_a_ticket_on_its_private_queue(offline_agent):
-    key = offline_agent.ticket(aw.Ticket("scan the corpus", labels=["scan"]))
+    key = offline_agent.ticket(aw.Ticket("scan the corpus", label="scan"))
     assert key.startswith("TICKET-")
 
 

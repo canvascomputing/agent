@@ -34,7 +34,7 @@ Read and mutate the ticket queue from one tool: `get` / `list` / `search` to rea
     },
     "label": {
       "type": "string",
-      "description": "For `list`: filter to tickets carrying this label (case-sensitive)."
+      "description": "For `list`: filter to tickets carrying this label (case-sensitive). For `create` or `edit` (optional): the ticket's label scope, which decides who picks it up: every agent serving that label may claim it. A ticket carries at most one label, and on `edit` the new one replaces the current one."
     },
     "query": {
       "type": "string",
@@ -42,13 +42,6 @@ Read and mutate the ticket queue from one tool: `get` / `list` / `search` to rea
     },
     "task": {
       "description": "For `create` (required) or `edit` (optional): the task body, any JSON value (string, object, array, scalar)."
-    },
-    "labels": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      },
-      "description": "For `create` or `edit` (optional): label scope. Determines which agents pick up the ticket: every agent serving one of these labels may claim it."
     }
   },
   "required": [

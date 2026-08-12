@@ -509,15 +509,20 @@ impl Stats {
     ///
     /// Every kind is counted by its name and adds the measures it declares, so
     /// a new variant needs no arm here.
-    pub(crate) fn record_event(&self, kind: &EventKind, key: &str, labels: &[String], agent: &str) {
+    pub(crate) fn record_event(
+        &self,
+        kind: &EventKind,
+        key: &str,
+        label: Option<&str>,
+        agent: &str,
+    ) {
         // The per-ticket series belongs to the compaction estimator rather
         // than to the figures, so it is the one measure that stays run-wide.
         if let EventKind::RequestFinished { usage, .. } = kind {
             self.record_usage(key, usage.clone());
         }
         let measures = kind.measures();
-        // One walk of the labels for every measure, not one walk per measure.
-        self.record_scoped(labels, agent, |s| {
+        self.record_scoped(label, agent, |s| {
             s.count_event(kind.event_name());
             for measure in &measures {
                 s.add(measure);
@@ -525,11 +530,12 @@ impl Stats {
         });
     }
 
-    /// Apply `f` to the run-wide statistics, to each label slice, and to the
-    /// agent's slice. An event about execution itself carries no agent id.
-    fn record_scoped(&self, labels: &[String], agent: &str, f: impl Fn(&Stats)) {
+    /// Apply `f` to the run-wide statistics, to the label's slice, and to the
+    /// agent's slice. An event about execution itself carries no agent id, and
+    /// a ticket in the default scope carries no label.
+    fn record_scoped(&self, label: Option<&str>, agent: &str, f: impl Fn(&Stats)) {
         f(self);
-        for label in labels {
+        if let Some(label) = label {
             f(&self.slice_for_label(label));
         }
         if !agent.is_empty() {
@@ -568,7 +574,7 @@ impl Stats {
     /// `None` on a slice.
     pub(crate) fn record_transition_for(
         &self,
-        labels: &[String],
+        label: Option<&str>,
         agent: &str,
         next: Status,
         (ticket_duration, work_duration): (Duration, Duration),
@@ -576,9 +582,9 @@ impl Stats {
         if !matches!(next, Status::Finished | Status::Failed) {
             return;
         }
-        let slices = labels
-            .iter()
+        let slices = label
             .map(|label| self.slice_for_label(label))
+            .into_iter()
             .chain((!agent.is_empty()).then(|| self.slice_for_agent(agent)));
         for slice in slices {
             slice.record_durations(ticket_duration, work_duration);
@@ -674,7 +680,9 @@ impl Stats {
         for t in tickets.values() {
             // No agent scope: a rebuilt ticket cannot say which agent
             // worked it, and an empty slice beats a half-filled one.
-            stats.record_scoped(&t.labels, "", |s| s.count_event(EventName::TicketCreated));
+            stats.record_scoped(t.label.as_deref(), "", |s| {
+                s.count_event(EventName::TicketCreated)
+            });
             let ticket_dur = ticket_duration(t).unwrap_or_default();
             let work_dur = work_duration(t).unwrap_or_default();
             let resolved = match t.status {
@@ -682,7 +690,7 @@ impl Stats {
                 Status::Failed => EventName::TicketFailed,
                 Status::Todo | Status::InProgress => continue,
             };
-            stats.record_scoped(&t.labels, "", |s| {
+            stats.record_scoped(t.label.as_deref(), "", |s| {
                 s.count_event(resolved);
                 s.record_durations(ticket_dur, work_dur);
             });
@@ -953,13 +961,13 @@ mod tests {
 
     /// File one ticket against `stats`, the way the store does.
     fn create(stats: &Stats) {
-        stats.record_event(&EventKind::TicketCreated, "KEY", &[], "");
+        stats.record_event(&EventKind::TicketCreated, "KEY", None, "");
     }
 
     /// Resolve one ticket: the event that counts the outcome, then the two
     /// spans the store records alongside it.
     fn resolve(stats: &Stats, outcome: EventKind, ticket: Duration, agent: Duration) {
-        stats.record_event(&outcome, "KEY", &[], "");
+        stats.record_event(&outcome, "KEY", None, "");
         stats.record_durations(ticket, agent);
     }
 
@@ -1011,12 +1019,12 @@ mod tests {
     #[test]
     fn event_counts_show_up_in_reads() {
         let s = Stats::new();
-        s.record_event(&turn(), "KEY", &[], "");
-        s.record_event(&turn(), "KEY", &[], "");
-        s.record_event(&request(10, 5), "KEY", &[], "");
-        s.record_event(&request(2, 1), "KEY", &[], "");
-        s.record_event(&tool_call("bash"), "KEY", &[], "");
-        s.record_event(&provider_error(), "KEY", &[], "");
+        s.record_event(&turn(), "KEY", None, "");
+        s.record_event(&turn(), "KEY", None, "");
+        s.record_event(&request(10, 5), "KEY", None, "");
+        s.record_event(&request(2, 1), "KEY", None, "");
+        s.record_event(&tool_call("bash"), "KEY", None, "");
+        s.record_event(&provider_error(), "KEY", None, "");
 
         assert_eq!(s.event_count(EventName::TurnStarted), 2);
         assert_eq!(s.event_count(EventName::RequestFinished), 2);
@@ -1085,7 +1093,7 @@ mod tests {
     #[test]
     fn stats_for_label_returns_same_slice_on_repeat_access() {
         let s = Stats::new();
-        s.record_event(&turn(), "KEY", &["scan".into()], "");
+        s.record_event(&turn(), "KEY", Some("scan"), "");
         let a = s.stats_for_label("scan");
         let b = s.stats_for_label("scan");
         assert!(Arc::ptr_eq(&a, &b));
@@ -1113,8 +1121,8 @@ mod tests {
     #[test]
     fn record_event_mirrors_onto_label_slices() {
         let s = Stats::new();
-        s.record_event(&turn(), "KEY", &["scan".into()], "");
-        s.record_event(&request(10, 5), "KEY", &["scan".into()], "");
+        s.record_event(&turn(), "KEY", Some("scan"), "");
+        s.record_event(&request(10, 5), "KEY", Some("scan"), "");
         let slice = s.stats_for_label("scan");
         assert_eq!(slice.event_count(EventName::TurnStarted), 1);
         assert_eq!(slice.input_tokens(), 10);
@@ -1132,8 +1140,8 @@ mod tests {
     #[test]
     fn record_event_mirrors_onto_the_agent_slice() {
         let s = Stats::new();
-        s.record_event(&turn(), "KEY", &["scan".into()], "scout");
-        s.record_event(&request(10, 5), "KEY", &["scan".into()], "scout");
+        s.record_event(&turn(), "KEY", Some("scan"), "scout");
+        s.record_event(&request(10, 5), "KEY", Some("scan"), "scout");
         let slice = s.stats_for_agent("scout");
         assert_eq!(slice.event_count(EventName::TurnStarted), 1);
         assert_eq!(slice.input_tokens(), 10);
@@ -1149,7 +1157,7 @@ mod tests {
         // Nothing stops a host from labelling tickets the way ids are spelled,
         // so the two namespaces collide unless the maps stay separate.
         let s = Stats::new();
-        s.record_event(&turn(), "KEY", &["scout".into()], "scout");
+        s.record_event(&turn(), "KEY", Some("scout"), "scout");
         assert_eq!(
             s.stats_for_label("scout")
                 .event_count(EventName::TurnStarted),
@@ -1169,7 +1177,7 @@ mod tests {
     #[test]
     fn run_level_events_reach_no_agent_slice() {
         let s = Stats::new();
-        s.record_event(&turn(), "KEY", &[], "");
+        s.record_event(&turn(), "KEY", None, "");
         assert_eq!(s.event_count(EventName::TurnStarted), 1);
         assert_eq!(s.stats_for_agent("").event_count(EventName::TurnStarted), 0);
     }
@@ -1201,24 +1209,24 @@ mod tests {
         let dir = crate::test_util::TempDir::new().unwrap();
 
         let s = Stats::new();
-        s.record_event(&turn(), "KEY", &[], "");
-        s.record_event(&turn(), "KEY", &[], "");
-        s.record_event(&request(100, 50), "KEY", &[], "");
-        s.record_event(&tool_call("bash"), "KEY", &[], "");
-        s.record_event(&provider_error(), "KEY", &[], "");
+        s.record_event(&turn(), "KEY", None, "");
+        s.record_event(&turn(), "KEY", None, "");
+        s.record_event(&request(100, 50), "KEY", None, "");
+        s.record_event(&tool_call("bash"), "KEY", None, "");
+        s.record_event(&provider_error(), "KEY", None, "");
         create(&s);
         finish(&s, 7, 5);
         fail(&s, 3, 2);
 
         let slice = s.slice_for_label("scan");
-        slice.record_event(&turn(), "KEY", &[], "");
-        slice.record_event(&request(40, 20), "KEY", &[], "");
+        slice.record_event(&turn(), "KEY", None, "");
+        slice.record_event(&request(40, 20), "KEY", None, "");
         create(&slice);
         finish(&slice, 4, 3);
 
         let agent_slice = s.slice_for_agent("seeker");
-        agent_slice.record_event(&turn(), "KEY", &[], "");
-        agent_slice.record_event(&request(30, 10), "KEY", &[], "");
+        agent_slice.record_event(&turn(), "KEY", None, "");
+        agent_slice.record_event(&request(30, 10), "KEY", None, "");
         create(&agent_slice);
         fail(&agent_slice, 6, 2);
 
@@ -1259,10 +1267,10 @@ mod tests {
     #[test]
     fn stats_serializes_raw_counter_fields() {
         let s = Stats::new();
-        s.record_event(&turn(), "KEY", &[], "");
-        s.record_event(&request(100, 50), "KEY", &[], "");
-        s.record_event(&tool_call("bash"), "KEY", &[], "");
-        s.record_event(&provider_error(), "KEY", &[], "");
+        s.record_event(&turn(), "KEY", None, "");
+        s.record_event(&request(100, 50), "KEY", None, "");
+        s.record_event(&tool_call("bash"), "KEY", None, "");
+        s.record_event(&provider_error(), "KEY", None, "");
         create(&s);
         finish(&s, 7, 5);
 
@@ -1372,8 +1380,8 @@ mod tests {
     #[test]
     fn stats_serializes_labels_as_nested_object() {
         let s = Stats::new();
-        s.record_event(&turn(), "KEY", &["scan".into()], "");
-        s.record_event(&request(40, 20), "KEY", &["scan".into()], "");
+        s.record_event(&turn(), "KEY", Some("scan"), "");
+        s.record_event(&request(40, 20), "KEY", Some("scan"), "");
         let value = serde_json::to_value(&s).unwrap();
         let labels = value["labels"].as_object().unwrap();
         assert_eq!(labels["scan"]["events"]["turn_started"], 1);
@@ -1388,8 +1396,8 @@ mod tests {
         let dir = crate::test_util::TempDir::new().unwrap();
 
         let s = Stats::new();
-        s.record_event(&tool_call("bash"), "KEY", &["scan".into()], "scout");
-        s.record_event(&provider_error(), "KEY", &["scan".into()], "scout");
+        s.record_event(&tool_call("bash"), "KEY", Some("scan"), "scout");
+        s.record_event(&provider_error(), "KEY", Some("scan"), "scout");
 
         use crate::persistence::Persist;
         s.save(dir.path()).unwrap();
@@ -1459,7 +1467,7 @@ mod tests {
             tool_failure("bash", ToolFailureKind::ExecutionFailed),
             tool_failure("ghost", ToolFailureKind::ToolNotFound),
         ] {
-            s.record_event(&kind, "KEY", &[], "");
+            s.record_event(&kind, "KEY", None, "");
         }
 
         let tools = s.tool_stats();
@@ -1484,12 +1492,12 @@ mod tests {
     fn tool_stat_error_rate_is_errors_over_calls() {
         let s = Stats::new();
         for _ in 0..4 {
-            s.record_event(&tool_call("edit_file"), "KEY", &[], "");
+            s.record_event(&tool_call("edit_file"), "KEY", None, "");
         }
         s.record_event(
             &tool_failure("edit_file", ToolFailureKind::SchemaValidationFailed),
             "KEY",
-            &[],
+            None,
             "",
         );
 
@@ -1505,7 +1513,7 @@ mod tests {
         s.record_event(
             &tool_failure("ghost", ToolFailureKind::ToolNotFound),
             "KEY",
-            &[],
+            None,
             "",
         );
         assert!(s.tool_stats()["ghost"].error_rate().is_none());
@@ -1523,7 +1531,7 @@ mod tests {
             tool_call("bash"),
             tool_failure("bash", ToolFailureKind::ExecutionFailed),
         ] {
-            s.record_event(&kind, "KEY", &[], "");
+            s.record_event(&kind, "KEY", None, "");
         }
 
         use crate::persistence::Persist;
@@ -1553,7 +1561,7 @@ mod tests {
             tool_call("edit_file"),
             tool_failure("edit_file", ToolFailureKind::SchemaValidationFailed),
         ] {
-            s.record_event(&kind, "KEY", &[], "");
+            s.record_event(&kind, "KEY", None, "");
         }
 
         let value = serde_json::to_value(&s).unwrap();
@@ -1574,7 +1582,7 @@ mod tests {
     #[test]
     fn tool_stats_reach_the_label_and_agent_slices() {
         let s = Stats::new();
-        s.record_event(&tool_call("bash"), "KEY", &["scan".into()], "scout");
+        s.record_event(&tool_call("bash"), "KEY", Some("scan"), "scout");
 
         assert_eq!(s.stats_for_label("scan").tool_stats()["bash"].calls, 1);
         assert_eq!(s.stats_for_agent("scout").tool_stats()["bash"].calls, 1);
@@ -1591,7 +1599,7 @@ mod tests {
             file_open_failed("src/missing.rs"),
             file_open_failed("src/missing.rs"),
         ] {
-            s.record_event(&kind, "KEY", &[], "");
+            s.record_event(&kind, "KEY", None, "");
         }
 
         let files = s.file_stats();
@@ -1621,7 +1629,7 @@ mod tests {
     #[test]
     fn file_stats_reach_the_label_slice() {
         let s = Stats::new();
-        s.record_event(&file_open("src/lib.rs"), "KEY", &["scan".into()], "");
+        s.record_event(&file_open("src/lib.rs"), "KEY", Some("scan"), "");
 
         assert_eq!(
             s.stats_for_label("scan").file_stats()["src/lib.rs"].opens,
@@ -1640,7 +1648,7 @@ mod tests {
             file_open("src/lib.rs"),
             file_open_failed("src/missing.rs"),
         ] {
-            s.record_event(&kind, "KEY", &[], "");
+            s.record_event(&kind, "KEY", None, "");
         }
 
         use crate::persistence::Persist;
@@ -1667,7 +1675,7 @@ mod tests {
             file_open("src/lib.rs"),
             file_open_failed("src/lib.rs"),
         ] {
-            s.record_event(&kind, "KEY", &[], "");
+            s.record_event(&kind, "KEY", None, "");
         }
 
         let value = serde_json::to_value(&s).unwrap();
@@ -1695,7 +1703,7 @@ mod tests {
             knowledge(KnowledgeOp::List),
             knowledge_failed(KnowledgeOp::Read),
         ] {
-            s.record_event(&kind, "KEY", &[], "");
+            s.record_event(&kind, "KEY", None, "");
         }
 
         let k = s.knowledge_stats();
@@ -1714,8 +1722,8 @@ mod tests {
     #[test]
     fn knowledge_stats_attribute_a_failure_to_its_operation() {
         let s = Stats::new();
-        s.record_event(&knowledge(KnowledgeOp::Write), "KEY", &[], "");
-        s.record_event(&knowledge_failed(KnowledgeOp::Read), "KEY", &[], "");
+        s.record_event(&knowledge(KnowledgeOp::Write), "KEY", None, "");
+        s.record_event(&knowledge_failed(KnowledgeOp::Read), "KEY", None, "");
 
         let k = s.knowledge_stats();
         assert_eq!(
@@ -1733,7 +1741,7 @@ mod tests {
     #[test]
     fn knowledge_reaches_the_label_slice() {
         let s = Stats::new();
-        s.record_event(&knowledge(KnowledgeOp::Write), "KEY", &["scan".into()], "");
+        s.record_event(&knowledge(KnowledgeOp::Write), "KEY", Some("scan"), "");
 
         assert_eq!(
             s.stats_for_label("scan").knowledge_stats()["write"].attempts,
@@ -1752,7 +1760,7 @@ mod tests {
             knowledge(KnowledgeOp::Read),
             knowledge_failed(KnowledgeOp::Read),
         ] {
-            s.record_event(&kind, "KEY", &[], "");
+            s.record_event(&kind, "KEY", None, "");
         }
 
         use crate::persistence::Persist;
@@ -1771,8 +1779,8 @@ mod tests {
     #[test]
     fn stats_serializes_knowledge_as_nested_object() {
         let s = Stats::new();
-        s.record_event(&knowledge(KnowledgeOp::Write), "KEY", &[], "");
-        s.record_event(&knowledge_failed(KnowledgeOp::Read), "KEY", &[], "");
+        s.record_event(&knowledge(KnowledgeOp::Write), "KEY", None, "");
+        s.record_event(&knowledge_failed(KnowledgeOp::Read), "KEY", None, "");
 
         let value = serde_json::to_value(&s).unwrap();
         let pages = value["knowledge"].as_object().unwrap();
@@ -1793,8 +1801,8 @@ mod tests {
     #[test]
     fn model_stats_records_requests_and_tokens_per_model() {
         let s = Stats::new();
-        s.record_event(&request(10, 5), "KEY", &[], "");
-        s.record_event(&request(2, 1), "KEY", &[], "");
+        s.record_event(&request(10, 5), "KEY", None, "");
+        s.record_event(&request(2, 1), "KEY", None, "");
 
         let models = s.model_stats();
         let m = &models["m"];
@@ -1808,8 +1816,8 @@ mod tests {
     #[test]
     fn model_stats_records_failures_per_model() {
         let s = Stats::new();
-        s.record_event(&request(10, 5), "KEY", &[], "");
-        s.record_event(&provider_error(), "KEY", &[], "");
+        s.record_event(&request(10, 5), "KEY", None, "");
+        s.record_event(&provider_error(), "KEY", None, "");
 
         let m = &s.model_stats()["m"];
         // A failed request is a request too, so the rate divides by both.
@@ -1823,7 +1831,7 @@ mod tests {
     #[test]
     fn model_stats_reach_the_label_slice() {
         let s = Stats::new();
-        s.record_event(&request(10, 5), "KEY", &["scan".into()], "");
+        s.record_event(&request(10, 5), "KEY", Some("scan"), "");
 
         assert_eq!(s.stats_for_label("scan").model_stats()["m"].requests, 1);
         assert!(s.stats_for_label("audit").model_stats().is_empty());
@@ -1832,7 +1840,7 @@ mod tests {
     #[test]
     fn usage_for_ticket_stays_run_wide() {
         let s = Stats::new();
-        s.record_event(&request(10, 5), "KEY", &["scan".into()], "");
+        s.record_event(&request(10, 5), "KEY", Some("scan"), "");
 
         assert_eq!(s.usage_for_ticket("KEY").len(), 1);
         // The compaction estimator reads the run-wide series only, so
@@ -1845,8 +1853,8 @@ mod tests {
         let dir = crate::test_util::TempDir::new().unwrap();
 
         let s = Stats::new();
-        s.record_event(&request(10, 5), "KEY", &[], "");
-        s.record_event(&provider_error(), "KEY", &[], "");
+        s.record_event(&request(10, 5), "KEY", None, "");
+        s.record_event(&provider_error(), "KEY", None, "");
 
         use crate::persistence::Persist;
         s.save(dir.path()).unwrap();
@@ -1865,7 +1873,7 @@ mod tests {
     #[test]
     fn stats_serializes_models_as_nested_object() {
         let s = Stats::new();
-        s.record_event(&request(10, 5), "KEY", &[], "");
+        s.record_event(&request(10, 5), "KEY", None, "");
 
         let value = serde_json::to_value(&s).unwrap();
         let models = value["models"].as_object().unwrap();
@@ -1897,12 +1905,12 @@ mod tests {
         s.record_event(
             &tool_failure("bash", ToolFailureKind::ExecutionFailed),
             "KEY",
-            &[],
+            None,
             "",
         );
-        s.record_event(&file_open_failed("src/lib.rs"), "KEY", &[], "");
-        s.record_event(&provider_error(), "KEY", &[], "");
-        s.record_event(&knowledge_failed(KnowledgeOp::Read), "KEY", &[], "");
+        s.record_event(&file_open_failed("src/lib.rs"), "KEY", None, "");
+        s.record_event(&provider_error(), "KEY", None, "");
+        s.record_event(&knowledge_failed(KnowledgeOp::Read), "KEY", None, "");
 
         // Each failure lands under its own reason, and no category keeps a
         // bare `failed` column beside them.
@@ -1922,12 +1930,12 @@ mod tests {
     #[test]
     fn a_reason_nothing_failed_under_is_left_out() {
         let s = Stats::new();
-        s.record_event(&tool_call("bash"), "KEY", &[], "");
-        s.record_event(&tool_call("bash"), "KEY", &[], "");
+        s.record_event(&tool_call("bash"), "KEY", None, "");
+        s.record_event(&tool_call("bash"), "KEY", None, "");
         s.record_event(
             &tool_failure("bash", ToolFailureKind::ExecutionFailed),
             "KEY",
-            &[],
+            None,
             "",
         );
 

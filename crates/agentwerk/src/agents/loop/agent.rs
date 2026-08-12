@@ -118,7 +118,9 @@ fn run_is_over(agent: &Agent, ticket_queue: &TicketQueue) -> bool {
 /// tickets; write the first message when there is none.
 fn claim<'a>(agent: &'a Agent, ticket_queue: &'a Arc<TicketQueue>) -> Option<TicketContext<'a>> {
     let claimable = |t: &Ticket| {
-        t.status == Status::Todo && agent.handles(&t.labels) && !ticket_queue.is_cancelled(t)
+        t.status == Status::Todo
+            && agent.handles(t.label.as_deref())
+            && !ticket_queue.is_cancelled(t)
     };
     // On the id, not the label: agents sharing a label must not take over each
     // other's started tickets.

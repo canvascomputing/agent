@@ -245,7 +245,7 @@ tickets.ticket(Ticket::new("Rank all products by value.").label("analysis"));
 |--------|-------------|
 | `agent(agent)` | Add an agent to this ticket queue. |
 | `task(task)` | Submit a task and return its ticket key. |
-| `ticket(ticket)` | Submit a `Ticket` with custom labels or schema. |
+| `ticket(ticket)` | Submit a `Ticket` with a custom label or schema. |
 | `reply(key, content)` | Add a reply to a ticket. |
 | `edit_replies(key, editor)` | Rewrite one ticket's replies now. |
 | `set_finished(key, result)` | Finish a ticket with a result. |
@@ -321,7 +321,7 @@ Ticket members:
 |-|--------|-------------|
 | **Identity** | `key` | Ticket key, of the form `TICKET-N`. |
 | | `task` | The work the agent is asked to do. |
-| | `labels` | Labels carried by the ticket. |
+| | `label` | Label carried by the ticket. |
 | | `parent` | The parent ticket if a handover was performed. |
 | | `reporter` | Identifier of the agent that created the ticket. |
 | | `assignee` | Identifier of the agent that claimed the ticket. |
@@ -545,9 +545,7 @@ Hooks allow you to react to events:
 ```rust
 tickets.create_ticket_on_failure(|_, failed| {
     failed.parent.is_none().then(|| {
-        Ticket::new(failed.task.clone())
-            .labels(failed.labels.clone())
-            .parent(&failed.key)
+        Ticket::new(failed.task.clone()).parent(&failed.key)
     })
 });
 ```
@@ -687,7 +685,7 @@ tickets.start();
 ├── results.jsonl                         finished results (one per line)
 ├── tickets/
 │   └── TICKET-1/
-│       ├── ticket.json                   the ticket without its messages (key, status, labels, timestamps, result)
+│       ├── ticket.json                   the ticket without its messages (key, status, label, timestamps, result)
 │       ├── replies.jsonl                 every message exchanged with the model, one per line
 │       └── outputs/<tool_use_id>.txt     full tool outputs spilled out of the messages
 └── knowledge/
