@@ -12,11 +12,12 @@
   <a href="#installation">Installation</a> •
   <a href="crates/agentwerk-py/README.md">Python</a> •
   <a href="#quick-start">Quick Start</a> •
+  <a href="#use-cases">Use Cases</a> •
   <a href="#api">API</a> •
   <a href="#development">Development</a>
 </div>
 
-<div align="center">agentwerk is a lightweight harness built for small LLMs: it splits work into tickets to keep context windows short, runs agents in parallel, validates their results and reports every step as an event.</div>
+<div align="center">agentwerk is a lightweight harness optimized for small LLMs: it splits work into tickets to keep context windows short, runs agents in parallel, validates their results and reports every step as an event.</div>
 
 ---
 
@@ -65,6 +66,7 @@ async def main():
     agent.task(
         "Find every `pub trait` defined under src/ and explain each in one sentence."
     )
+
     work = agent.start()
     results = await work.finish_all()
 
@@ -92,8 +94,6 @@ python examples/divide_and_conquer.py 200 4 2
 
 ## API
 
-The API, section by section:
-
 - [Agents](#agents): Define roles, behavior and actions.
 - [Tickets](#tickets): Coordinate complex work across agents.
 - [Tools](#tools): Define accessible tooling.
@@ -115,28 +115,34 @@ from agentwerk import Agent, ReadFileTool
 
 agent = (
     Agent.from_env()
-    .role("You are an arithmetic agent. Compute step by step and show your work.")
+    .role("You are a release manager who prepares release notes.")
     .tool(ReadFileTool())
     .build()
 )
 
-agent.task("Compute (47 * 92) / 8, then round to the nearest integer.")
+agent.task("Read CHANGELOG.md and summarize the entries added since the last release.")
+
+agent.start()
 ```
 
 <details>
-<summary>All builder methods</summary>
+<summary>All agent methods</summary>
 
-| Method | Description |
-|--------|-------------|
-| `role(role)` | Define who the agent is and how it should work. |
-| `label(label)` | Restrict the agent to tickets carrying this label. |
-| `id` | Get the unique identifier of an agent. |
-| `tool(tool)` / `tools(tools)` | Register a tool the agent may call. |
-| `template(key, value)` | Inject data into prompts with template strings. |
-| `templates(pairs)` | Inject more than one entry into prompts. |
-| `dir(dir)` | Set the directory the agent has access to. |
-| `interactive()` | Let the agent wait for new instructions to keep a ticket in-progress. |
-| `build()` | Create the agent. |
+| | Method | Description |
+|-|--------|-------------|
+| **Configure** | `role(role)` | Define who the agent is and how it should work. |
+| | `tool(tool)` / `tools(tools)` | Register a tool the agent may call. |
+| | `label(label)` | Restrict the agent to tickets carrying this label. |
+| | `dir(dir)` | Set the directory the agent has access to. |
+| | `template(key, value)` | Inject data into prompts with template strings. |
+| | `templates(pairs)` | Inject more than one entry into prompts. |
+| | `knowledge(store)` | Share a knowledge store with the agent. |
+| | `interactive()` | Let the agent wait for new instructions to keep a ticket in-progress. |
+| | `build()` | Create the agent. |
+| **Work** | `task(task)` | Submit a task and return its ticket key. |
+| | `ticket(ticket)` | Submit a `Ticket` with a custom label or schema. |
+| | `start()` | Begin processing tickets. |
+| | `id` | Get the unique identifier of an agent. |
 
 You can use the `{context}` variable to inject contextual information:
 
@@ -159,7 +165,7 @@ See more: [`AgentBuilder`](https://docs.rs/agentwerk/latest/agentwerk/agents/age
 
 ### Providers
 
-Connect to a `Provider` to give agents access to LLMs. agentwerk supports: Anthropic, OpenAI, Mistral, and a LiteLLM proxy.
+A `Provider` gives agents access to LLMs: Anthropic, OpenAI, Mistral, and a LiteLLM proxy.
 
 ```python
 from agentwerk import Agent, AnthropicProvider
@@ -169,13 +175,10 @@ agent = (
     .provider(AnthropicProvider(key))
     .model("claude-sonnet-4-20250514")
 )
-
-# Or read both from the environment.
-agent = Agent.from_env()
 ```
 
 <details>
-<summary>All provider settings</summary>
+<summary>All provider and model settings</summary>
 
 | Method | Description |
 |--------|-------------|
@@ -193,24 +196,7 @@ You can also read the model or provider individually: `.provider(Provider.from_e
 | `LITELLM_BASE_URL`, `MISTRAL_BASE_URL`, `ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL` | Point that vendor at a different endpoint. |
 | `SSL_CERT_FILE`, `SSL_CERT_DIR` | Trust these CA certificates instead of the built-in root store. |
 
-</details>
-
-### Models
-
-You can configure models to set a custom context window size or the applied reasoning:
-
-```python
-from agentwerk import Agent, Model
-
-agent = Agent().model(
-    Model("my-local-model").context_window(128_000).reasoning_effort("high")
-)
-```
-
-Claude, GPT, Mistral, and Qwen families are pre-configured.
-
-<details>
-<summary>All model settings</summary>
+You can configure models to set a custom context window size or the applied reasoning. Claude, GPT, Mistral, and Qwen families are pre-configured.
 
 | Method | Description |
 |--------|-------------|
@@ -225,6 +211,16 @@ Claude, GPT, Mistral, and Qwen families are pre-configured.
 | `ANTHROPIC_MODEL`, `OPENAI_MODEL`, `MISTRAL_MODEL`, `LITELLM_MODEL` | Model name for the detected provider, read when `MODEL` is unset. |
 | `MODEL_CONTEXT_WINDOW` | Context window size in tokens. |
 
+Configure a custom model:
+
+```python
+from agentwerk import Agent, Model
+
+agent = Agent().model(
+    Model("my-local-model").context_window(128_000).reasoning_effort("high")
+)
+```
+
 </details>
 
 ## Tickets
@@ -233,17 +229,28 @@ Claude, GPT, Mistral, and Qwen families are pre-configured.
   <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/tickets.gif" width="600" />
 </div>
 
-The `TicketQueue` is the core data structure of agentwerk allowing to coordinate complex interactions.
+The `TicketQueue` is the core data structure of agentwerk for coordinating complex interactions. Every agent already builds a queue of its own, so create one yourself when several agents share the same tickets.
 
 ```python
+from agentwerk import Agent, Ticket, TicketQueue
+
 analyst = (
     Agent.from_env()
     .label("analysis")
     .build()
 )
 
-tickets.agent(analyst)
+writer = (
+    Agent.from_env()
+    .label("report")
+    .build()
+)
+
+tickets = TicketQueue()
+tickets.agent(analyst).agent(writer)
+
 tickets.ticket(Ticket("Rank all products by value.", label="analysis"))
+tickets.ticket(Ticket("Write up the ranking.", label="report"))
 ```
 
 <details>
@@ -268,13 +275,18 @@ See [`TicketQueue`](https://docs.rs/agentwerk/latest/agentwerk/agents/tickets/st
 
 ### Execution
 
+The queue runs your agents and returns the results they created.
+
 ```python
 tickets.start()
-answer = (await tickets.finish_all())[-1]
+
+answers = await tickets.finish_all()
+if answers:
+    print(answers[-1])
 ```
 
 <details>
-<summary>All execution methods</summary>
+<summary>All execution methods and result accessors</summary>
 
 | | Method | Description |
 |-|--------|-------------|
@@ -285,41 +297,11 @@ answer = (await tickets.finish_all())[-1]
 | **Stop** | `cancel(matches)` | Stop work on the matching tickets. |
 | | `cancel_all()` | Stop work on every ticket. |
 | | `is_cancelled(ticket)` | Check whether a ticket has been cancelled. |
-
-</details>
-
-### Results
-
-Access the results of the agents' work:
-
-```python
-await tickets.finish_all()
-
-answers = tickets.results()
-if answers:
-    print(answers[-1])
-
-for ticket in tickets.tickets():
-    print(f"{ticket.key}: {ticket.status}")
-```
-
-Each `Ticket` carries a result as free text or JSON validated by schemas:
-
-```python
-ticket = tickets.find_ticket(lambda t: t.has_label("analysis"))
-print(ticket.result["title"])
-```
-
-<details>
-<summary>All result and ticket accessors</summary>
-
-| Method | Description |
-|--------|-------------|
-| `results()` | Get the result of every finished ticket, in creation order. |
-| `tickets()` | Get every ticket in creation order. |
-| `find_ticket(condition)` | Get the earliest ticket matching a condition. |
-| `find_tickets(condition)` | Get every ticket matching a condition. |
-| `get_ticket(key)` | Get one ticket by key. |
+| **Read** | `results()` | Get the result of every finished ticket, in creation order. |
+| | `tickets()` | Get every ticket in creation order. |
+| | `find_ticket(condition)` | Get the earliest ticket matching a condition. |
+| | `find_tickets(condition)` | Get every ticket matching a condition. |
+| | `get_ticket(key)` | Get one ticket by key. |
 
 Ticket members:
 
@@ -346,6 +328,13 @@ Ticket members:
 | | `is_failed()` | Check whether the ticket failed. |
 | | `is_pending()` | Check whether the ticket is still todo or in progress. |
 
+Each `Ticket` carries a result as free text or JSON validated by schemas:
+
+```python
+ticket = tickets.find_ticket(lambda t: t.has_label("analysis"))
+print(ticket.result["title"])
+```
+
 See [`Ticket`](https://docs.rs/agentwerk/latest/agentwerk/agents/tickets/struct.Ticket.html).
 
 </details>
@@ -368,7 +357,19 @@ schema = Schema(
 tickets.ticket(Ticket("Write a report.", schema=schema))
 ```
 
-Enforce schemas for all tickets with a certain label. Registering schemas centrally spares agents from passing complex schema structures during ticket creation (see `ManageTicketsTool`) and handovers (see `FinishTool`).
+<details>
+<summary>All schema methods</summary>
+
+| | Method | Description |
+|-|--------|-------------|
+| **Schema** | `Schema(document)` | Create a schema. |
+| | `validate(value)` | Validate content. |
+| **SchemaStore** | `SchemaStore()` | Create a store of schemas bound to labels. |
+| | `label(label, document)` | Bind a schema to a label. |
+| | `get(label)` | Read back the schema bound to a label. |
+| | `tickets.schemas(store)` | Enforce schemas for ticket results. |
+
+A `SchemaStore` enforces schemas for all tickets with a certain label. Registering schemas centrally spares agents from passing complex schema structures during ticket creation (see `ManageTicketsTool`) and handovers (see `FinishTool`):
 
 ```python
 from agentwerk import SchemaStore
@@ -386,23 +387,11 @@ schemas.label(
 tickets.schemas(schemas)
 ```
 
-<details>
-<summary>All schema methods</summary>
-
-| | Method | Description |
-|-|--------|-------------|
-| **Schema** | `Schema(document)` | Create a schema. |
-| | `validate(value)` | Validate content. |
-| **SchemaStore** | `SchemaStore()` | Create a store of schemas bound to labels. |
-| | `label(label, document)` | Bind a schema to a label. |
-| | `get(label)` | Read back the schema bound to a label. |
-| | `tickets.schemas(store)` | Enforce schemas for ticket results. |
-
 </details>
 
 ### Policies
 
-Policies allow you to define execution limits:
+Policies allow you to define execution limits.
 
 ```python
 (
@@ -447,10 +436,8 @@ agent = (
 )
 ```
 
-`FinishTool()` and `ManageKnowledgeTool(store)` are special tools, registered automatically on every agent. They are used for interacting with the `TicketQueue`.
-
 <details>
-<summary>All built-in tools</summary>
+<summary>All built-in and custom tools</summary>
 
 | | Tool | Description |
 |-|------|-------------|
@@ -468,11 +455,17 @@ agent = (
 | **Knowledge** | `ManageKnowledgeTool(store)` | Write, read, remove, or list pages in a knowledge store. |
 | **Discovery** | `FindToolsTool()` | Look up the tools held back until they are needed. |
 
-</details>
-
-### Custom tools
+`FinishTool()` and `ManageKnowledgeTool(store)` are special tools, registered automatically on every agent. They are used for interacting with the `TicketQueue`.
 
 You can define custom tools for specific needs:
+
+| Method | Description |
+|--------|-------------|
+| `read_only=True` | Let the agent run this tool concurrently with other read-only calls in the same turn. |
+| `defer=True` | Hold the tool back until the agent looks it up with `FindToolsTool()`. |
+| `paths=["path"]` | Name file path used for a tool call, so the files are included in statistics. |
+
+Describe the tool, then hand it the code it runs:
 
 ```python
 from agentwerk import tool
@@ -490,15 +483,6 @@ def greet(name: str) -> str:
     """Say hello."""
     return f"Hello, {name}!"
 ```
-
-<details>
-<summary>All tool options</summary>
-
-| Method | Description |
-|--------|-------------|
-| `read_only=True` | Let the agent run this tool concurrently with other read-only calls in the same turn. |
-| `defer=True` | Hold the tool back until the agent looks it up with `FindToolsTool()`. |
-| `paths=["path"]` | Name file path used for a tool call, so the files are included in statistics. |
 
 Return `ToolResult.error(message)` for a failure the model should work around.
 
@@ -553,7 +537,7 @@ See [`EventKind`](https://docs.rs/agentwerk/latest/agentwerk/event/enum.EventKin
 
 ### Hooks
 
-Hooks allow you to react to events:
+Hooks allow you to react to events.
 
 ```python
 def retry_once(event, failed):
