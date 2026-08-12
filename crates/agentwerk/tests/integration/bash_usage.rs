@@ -28,9 +28,9 @@ async fn test() -> std::result::Result<(), Box<dyn std::error::Error>> {
         "required": ["files", "line_count"]
     }))?;
 
-    let ls = BashTool::new("ls", "ls*").read_only(true);
-    let cat = BashTool::new("cat", "cat *").read_only(true);
-    let wc = BashTool::new("wc", "wc *").read_only(true);
+    let ls = BashTool::new("ls").allow("ls*").read_only(true);
+    let cat = BashTool::new("cat").allow("cat *").read_only(true);
+    let wc = BashTool::new("wc").allow("wc *").read_only(true);
 
     let tickets = TicketQueue::new();
 

@@ -418,7 +418,7 @@ use agentwerk::tools::{BashTool, GrepTool, ReadFileTool};
 let agent = Agent::new()
     .tool(ReadFileTool)
     .tool(GrepTool)
-    .tool(BashTool::new("git", "git *"));
+    .tool(BashTool::new("git").allow("git *"));
 ```
 
 <details>
@@ -432,7 +432,7 @@ let agent = Agent::new()
 | **Search** | `GlobTool` | Find files by pattern. |
 | | `GrepTool` | Search file contents by regular expression, or by code shape with `syntax: "code"`. |
 | | `ListDirectoryTool` | List files and directories. |
-| **Shell** | `BashTool` | Run a shell command matching an allowed pattern. |
+| **Shell** | `BashTool` | Run a shell command from an allow-list of patterns. |
 | **Web** | `FetchUrlTool` | Fetch a URL and read its body. |
 | **Tickets** | `FinishTool` | Write the result for the current ticket and mark it finished. |
 | | `ManageTicketsTool` | Read the ticket queue and create or edit tickets. |
@@ -441,6 +441,15 @@ let agent = Agent::new()
 | **Discovery** | `FindToolsTool` | Look up the tools held back until they are needed. |
 
 `FinishTool` and `ManageKnowledgeTool` are special tools, registered automatically on every agent. They are used for interacting with the `TicketQueue`.
+
+A `BashTool` named `git` runs `git` and nothing else. Use `allow` to permit more commands, `deny` to block any of them, and `BashTool::unrestricted()` to run anything.
+
+```rust
+let git = BashTool::new("git")
+    .allow("git status")
+    .allow("git log *")
+    .deny("git push*");
+```
 
 You can define custom tools for specific needs:
 

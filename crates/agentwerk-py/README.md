@@ -432,7 +432,7 @@ agent = (
     Agent()
     .tool(ReadFileTool())
     .tool(GrepTool())
-    .tool(BashTool("git", "git *"))
+    .tool(BashTool("git").allow("git *"))
 )
 ```
 
@@ -447,7 +447,7 @@ agent = (
 | **Search** | `GlobTool()` | Find files by pattern. |
 | | `GrepTool()` | Search file contents by regular expression, or by code shape with `syntax: "code"`. |
 | | `ListDirectoryTool()` | List files and directories. |
-| **Shell** | `BashTool(name, pattern)` | Run a shell command matching an allowed pattern. |
+| **Shell** | `BashTool(name)` | Run a shell command from an allow-list of patterns. |
 | **Web** | `FetchUrlTool()` | Fetch a URL and read its body. |
 | **Tickets** | `FinishTool()` | Write the result for the current ticket and mark it finished. |
 | | `ManageTicketsTool()` | Read the ticket queue and create or edit tickets. |
@@ -456,6 +456,17 @@ agent = (
 | **Discovery** | `FindToolsTool()` | Look up the tools held back until they are needed. |
 
 `FinishTool()` and `ManageKnowledgeTool(store)` are special tools, registered automatically on every agent. They are used for interacting with the `TicketQueue`.
+
+A `BashTool` named `git` runs `git` and nothing else. Use `allow` to permit more commands, `deny` to block any of them, and `UnrestrictedBashTool()` to run anything.
+
+```python
+git = (
+    BashTool("git")
+    .allow("git status")
+    .allow("git log *")
+    .deny("git push*")
+)
+```
 
 You can define custom tools for specific needs:
 

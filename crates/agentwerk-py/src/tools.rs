@@ -204,6 +204,9 @@ pub fn extract_tool(obj: &Bound<'_, PyAny>) -> PyResult<Arc<dyn ToolLike>> {
     if let Ok(handle) = obj.extract::<PyRef<PyTool>>() {
         return Ok(Arc::clone(&handle.inner));
     }
+    if let Ok(bash) = obj.extract::<PyRef<PyBashTool>>() {
+        return Ok(Arc::new(bash.inner.clone()));
+    }
     if obj.hasattr("_agentwerk_tool")? {
         let name = obj.getattr("_agentwerk_name")?.extract()?;
         let description = obj.getattr("_agentwerk_description")?.extract()?;
@@ -314,27 +317,61 @@ fn manage_tickets_tool() -> PyTool {
     handle(Arc::new(ManageTicketsTool))
 }
 
-/// Run a shell command matching an allowed pattern, such as `"git *"`.
-#[pyfunction]
-#[pyo3(name = "BashTool", signature = (name, pattern, description=None, read_only=false))]
-fn bash_tool(name: &str, pattern: &str, description: Option<&str>, read_only: bool) -> PyTool {
-    let mut tool = BashTool::new(name, pattern);
-    if let Some(description) = description {
-        tool = tool.description(description);
+/// Run a shell command the model calls by `name`, passed to `Agent.tool(...)`.
+/// Until an `allow` pattern widens it, only the bare `name` runs.
+#[pyclass(name = "BashTool")]
+pub struct PyBashTool {
+    inner: BashTool,
+}
+
+#[pymethods]
+impl PyBashTool {
+    #[new]
+    fn new(name: &str) -> Self {
+        PyBashTool {
+            inner: BashTool::new(name),
+        }
     }
-    tool = tool.read_only(read_only);
-    handle(Arc::new(tool))
+
+    /// Permit commands matching `pattern`. The first call replaces the
+    /// bare-name default, so what is listed is what runs.
+    fn allow<'py>(mut slf: PyRefMut<'py, Self>, pattern: &str) -> PyRefMut<'py, Self> {
+        slf.inner = slf.inner.clone().allow(pattern);
+        slf
+    }
+
+    /// Refuse commands matching `pattern`, even when an allowed pattern
+    /// matches them too.
+    fn deny<'py>(mut slf: PyRefMut<'py, Self>, pattern: &str) -> PyRefMut<'py, Self> {
+        slf.inner = slf.inner.clone().deny(pattern);
+        slf
+    }
+
+    /// Override the auto-generated description.
+    fn description<'py>(mut slf: PyRefMut<'py, Self>, description: &str) -> PyRefMut<'py, Self> {
+        slf.inner = slf.inner.clone().description(description);
+        slf
+    }
+
+    /// Set whether this tool is considered read-only.
+    fn read_only<'py>(mut slf: PyRefMut<'py, Self>, read_only: bool) -> PyRefMut<'py, Self> {
+        slf.inner = slf.inner.clone().read_only(read_only);
+        slf
+    }
 }
 
 /// Run any shell command. Only for input you trust.
 #[pyfunction]
 #[pyo3(name = "UnrestrictedBashTool")]
-fn unrestricted_bash_tool() -> PyTool {
-    handle(Arc::new(BashTool::unrestricted()))
+fn unrestricted_bash_tool() -> PyBashTool {
+    PyBashTool {
+        inner: BashTool::unrestricted(),
+    }
 }
 
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyTool>()?;
+    m.add_class::<PyBashTool>()?;
     m.add_class::<PyToolResult>()?;
     m.add_function(wrap_pyfunction!(read_file_tool, m)?)?;
     m.add_function(wrap_pyfunction!(write_file_tool, m)?)?;
@@ -348,7 +385,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(read_tickets_tool, m)?)?;
     m.add_function(wrap_pyfunction!(finish_tool, m)?)?;
     m.add_function(wrap_pyfunction!(manage_tickets_tool, m)?)?;
-    m.add_function(wrap_pyfunction!(bash_tool, m)?)?;
     m.add_function(wrap_pyfunction!(unrestricted_bash_tool, m)?)?;
     Ok(())
 }
