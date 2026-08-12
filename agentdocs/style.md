@@ -19,7 +19,7 @@ Naming, comment, and prose rules, plus README structure. Skim the section matchi
 **Types live next to the abstraction, owner, or protocol they belong to.**
 
 - Concrete implementations live with their abstraction: `AnthropicProvider` under `providers::`, `BashTool` under `tools::`.
-- Companion types and handles live with their owner: `Ticket`, `Status`, `TicketError`, `Reply`, and `ReplyContent` under `agents::tickets`; `Stats` and `ToolStat` under `agents::stats`.
+- Companion types and handles live with their owner: `Ticket`, `Status`, `TicketError`, `Reply`, and `ReplyContent` under `agents::tickets`; `Stats` under `agents::stats`; `Compaction` under `agents::compaction`.
 - Domain errors live with their domain: `ProviderError`, `ToolError`.
 - Request and response types live with the protocol: `ModelRequest`, `Message`, `TokenUsage` under `providers::`.
 - Free functions live in their module, never at the crate root: the env readers in `providers::environment`, helpers in `tools::util`.
@@ -28,7 +28,7 @@ Naming, comment, and prose rules, plus README structure. Skim the section matchi
 
 **Names are disambiguated through content, not through redundant prefixes.**
 
-- Specific compound names stand alone: `TicketQueue`, `ToolStat`, `PolicyKind`.
+- Specific compound names stand alone: `TicketQueue`, `SchemaStore`, `PolicyKind`.
 - Vendor prefixes are used only to distinguish concrete LLM providers or tools: `AnthropicProvider`, `OpenAiProvider`, `LiteLlmProvider`.
 - Acronyms follow Rust API guidelines: `OpenAi`, not `OpenAI`.
 - Two structs may not share a bare name within one module; both stay qualified.
@@ -102,16 +102,16 @@ InvalidRequest, UnexpectedStatus, MissingKey, RequestError               // reje
 - `Stats` sets the vocabulary; event payloads follow suit: `usage` on `RequestFinished` carries token counts, not a `token_count`.
 - Accessor methods mirror the field form: `Stats::input_tokens()` returns how many input tokens were recorded.
 - The `_count` suffix is reserved for the rare case where the plural would clash with a sibling collection field on the same type.
-- The ban is on scalars: a map keyed by subject is named for what its values are, `<subject>_counts()` for a bare count (`event_counts()`) and `<subject>_stats()` for a struct (`tool_stats()`). Bare `<subject>s()` stays reserved for a collection of the subject itself, so the map is not `Stats::events()`.
+- The ban is on scalars: a map keyed by subject is named for what its values are, `<subject>_counts()` for a bare count (`event_counts()`) and `<subject>_stats()` for a struct. Bare `<subject>s()` stays reserved for a collection of the subject itself, so the map is not `Stats::events()`.
 
 ## Optional Returns
 
 **A value undefined over an empty population returns `Option`. A sum returns its zero.**
 
-- `Option`: `TimeStat::average`, `ToolStat::error_rate()`, and `execution_duration()`, which has no answer until execution starts.
-- Not `Option`: `TimeStat::total`, `input_tokens()`, `event_count(event)`. Zero is the honest answer for a sum over nothing.
+- `Option`: an average, a rate, and `execution_duration()`, which has no answer until execution starts.
+- Not `Option`: `input_tokens()`, `event_count(event)`. Zero is the honest answer for a sum over nothing.
 - One sentence covers averages, rates, and not-yet-started values, so per-accessor exceptions are not added.
-- A sum is named `total`: the bare noun reads as one subject's value, not the population's. When a sum and its mean travel together they are the two fields of one struct, `TimeStat { total, average }`, rather than two accessors prefixed `total_` and `avg_`.
+- A sum is named `total`: the bare noun reads as one subject's value, not the population's. When a sum and its mean travel together they are the two fields of one struct rather than two accessors prefixed `total_` and `avg_`.
 
 ## Persistence Verbs
 
@@ -382,7 +382,7 @@ A `Schema` constrains the result an agent produces for a ticket.
 
 - A second sentence is added only for a constraint: "A violation triggers a retry until `max_schema_retries` is exhausted."
 - The type's `///` and its README lead use the same shape, so the two read alike.
-- Name the type's job, not its implementation: not "the shared work queue holding an `Arc<Mutex<..>>`", but "the core data structure of agentwerk allowing to coordinate complex interactions".
+- Name the type's job, not its implementation: not "the shared work queue holding an `Arc<Mutex<..>>`", but "the core data structure of agentwerk for coordinating complex interactions".
 
 ## Abstraction Level
 

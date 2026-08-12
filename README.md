@@ -492,14 +492,14 @@ Return `ToolResult::error(message)` for a failure the model should work around.
 
 ## Events
 
-Events give you insights to the lifecycle and activities of your agents' work.
+Events allow you to follow the lifecycle and activities of your agents' work. Every event names the agent it came from, the ticket it concerns, and that ticket's label, so a handler counts whichever of those you care about.
 
 ```rust
 use agentwerk::event::EventKind;
 
 tickets.on_event(|event| {
     if let EventKind::TicketFinished = &event.kind {
-        eprintln!("[{}] done {}", event.agent_id, event.ticket_key);
+        eprintln!("[{}] done {} {:?}", event.agent_id, event.ticket_key, event.label);
     }
 });
 ```
@@ -583,7 +583,7 @@ tickets.on_ticket(move |event, ticket| {
 
 ## Stats
 
-Statistics give you deep insights into behavior of your agents: working time, tickets, failure rates, bottlenecks etc.
+Statistics allow you to measure execution time, token usage, and how often each event happened. Anything finer is a fold over the events.
 
 ```rust
 use agentwerk::event::EventName;
@@ -594,10 +594,6 @@ println!(
     stats.event_count(EventName::RequestFinished),
     stats.input_tokens(),
 );
-
-for (name, stat) in stats.tool_stats() {
-    println!("{name}: {} calls", stat.calls);
-}
 ```
 
 <details>
@@ -606,17 +602,9 @@ for (name, stat) in stats.tool_stats() {
 | Method | Description |
 |--------|-------------|
 | `execution_duration()` | Get the elapsed execution duration. |
-| `ticket_duration()` | Get the time from creation to resolution, summed and averaged over resolved tickets. |
-| `work_duration()` | Get the time agents spent working, summed across every agent and averaged per ticket. |
 | `event_count(event)` | Get how many events of one kind were recorded, such as `EventName::TurnStarted`. |
-| `input_tokens()` / `output_tokens()` | Get token counts across requests. |
-| `tool_stats()` | Get per-tool call counts and the failures they ended in. |
-| `file_stats()` | Get per-filepath open counts and the failures they ended in. |
-| `knowledge_stats()` | Get per-operation attempt counts and the failures they ended in. |
-| `model_stats()` | Get per-model requests, token usage, and the failures they ended in. |
 | `event_counts()` | Get per-event counts. |
-| `stats_for_label(label)` | Get statistics scoped to one label. |
-| `stats_for_agent(agent_id)` | Get statistics scoped to one agent. |
+| `input_tokens()` / `output_tokens()` | Get token counts across requests. |
 
 See [`Stats`](https://docs.rs/agentwerk/latest/agentwerk/agents/stats/struct.Stats.html).
 

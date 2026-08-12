@@ -146,7 +146,7 @@ impl Compaction {
         self.reason
     }
 
-    /// Get the ticket being compacted: its key, labels, task, and status as
+    /// Get the ticket being compacted: its key, label, task, and status as
     /// they stood when compaction started. `replies` is empty here, because the
     /// replies travel to the editor as their own argument rather than as a
     /// second copy on the ticket.

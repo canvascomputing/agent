@@ -54,7 +54,7 @@ impl PyTicketQueue {
         Ok(slf.inner.task(py_to_value(task)?))
     }
 
-    /// Submit a `Ticket` with custom labels or schema, and return its key.
+    /// Submit a `Ticket` with a custom label or schema, and return its key.
     fn ticket(slf: PyRef<'_, Self>, ticket: PyRef<'_, PyTicket>) -> String {
         slf.inner.ticket(ticket.to_ticket())
     }

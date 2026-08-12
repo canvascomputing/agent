@@ -608,9 +608,8 @@ impl TicketQueue {
     /// Publish `kind` and hand back the event it became, so a caller that also
     /// acts on it works from what every observer saw.
     pub(crate) fn emit(&self, key: &str, agent: &str, kind: EventKind) -> Event {
-        self.stats
-            .record_event(&kind, key, self.label_for(key).as_deref(), agent);
-        let event = Event::new(agent, key, kind);
+        self.stats.record_event(&kind, key);
+        let event = Event::new(agent, key, self.label_for(key), kind);
         // Published before the handlers run: a `finish` waiter competes
         // with them for nothing, and no handler can swallow the event. The
         // count is checked first so a run with no waiter never pays the clone,
@@ -1312,7 +1311,7 @@ impl TicketQueue {
 mod tests {
     use super::super::test_util::*;
     use super::*;
-    use crate::event::{EventName, ToolFailureKind};
+    use crate::event::ToolFailureKind;
 
     #[test]
     fn ticket_queue_handle_is_shared_between_caller_and_added_agent() {
@@ -1551,42 +1550,30 @@ mod tests {
     }
 
     #[test]
-    fn stats_for_agent_counts_only_the_tickets_that_agent_worked() {
+    fn an_event_names_the_agent_and_the_tickets_label() {
+        // What a handler needs to count per agent or per label, which is where
+        // those figures live now that `Stats` counts the run as a whole.
         let (queue, _tmp) = test_queue();
+        let outcomes = Arc::new(Mutex::new(Vec::new()));
+        let seen = Arc::clone(&outcomes);
+        queue.on_event(move |event| {
+            if matches!(event.kind, EventKind::TicketFinished) {
+                seen.lock()
+                    .unwrap()
+                    .push((event.agent_id.clone(), event.label.clone()));
+            }
+        });
         queue.ticket(Ticket::new("a").label("scan"));
-        queue.ticket(Ticket::new("b").label("scan"));
-        let key_a = queue
+        let key = queue
             .claim(|t| t.task == serde_json::json!("a"), "scout")
             .unwrap();
-        let key_b = queue
-            .claim(|t| t.task == serde_json::json!("b"), "writer")
-            .unwrap();
-        queue.set_result(&key_a, serde_json::json!("done")).unwrap();
-        queue.set_finished_by(&key_a, "scout").unwrap();
-        queue.set_failed_by(&key_b, "writer").unwrap();
-
-        let scout = queue.stats().stats_for_agent("scout");
-        assert_eq!(scout.event_count(EventName::TicketFinished), 1);
-        assert_eq!(scout.event_count(EventName::TicketFailed), 0);
-        let writer = queue.stats().stats_for_agent("writer");
-        assert_eq!(writer.event_count(EventName::TicketFinished), 0);
-        assert_eq!(writer.event_count(EventName::TicketFailed), 1);
-    }
-
-    #[test]
-    fn stats_for_agent_counts_the_tickets_that_agent_reported() {
-        let (queue, _tmp) = test_queue();
-        queue.insert(Ticket::new("filed by scout"), "scout".into());
-        queue.task("filed by the host");
+        queue.set_result(&key, serde_json::json!("done")).unwrap();
+        queue.set_finished_by(&key, "scout").unwrap();
 
         assert_eq!(
-            queue
-                .stats()
-                .stats_for_agent("scout")
-                .event_count(EventName::TicketCreated),
-            1
+            *outcomes.lock().unwrap(),
+            vec![("scout".to_string(), Some("scan".to_string()))],
         );
-        assert_eq!(queue.stats().event_count(EventName::TicketCreated), 2);
     }
 
     #[tokio::test]

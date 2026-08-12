@@ -1,6 +1,6 @@
 //! Events as Python sees them: one object with `kind`, `agent_id`,
-//! `ticket_key`, and a `data` dict, so a handler reads any event without a class
-//! per kind.
+//! `ticket_key`, `label`, and a `data` dict, so a handler reads any event
+//! without a class per kind.
 
 use agentwerk::event::{Event, EventKind, EventName};
 use pyo3::prelude::*;
@@ -24,6 +24,8 @@ pub struct PyEvent {
     pub(crate) agent_id: String,
     #[pyo3(get)]
     pub(crate) ticket_key: String,
+    #[pyo3(get)]
+    pub(crate) label: Option<String>,
     data: Value,
 }
 
@@ -49,6 +51,7 @@ pub fn to_py_event(event: &Event) -> PyEvent {
         kind: event.kind.to_string(),
         agent_id: event.agent_id.clone(),
         ticket_key: event.ticket_key.clone(),
+        label: event.label.clone(),
         data: payload(&event.kind),
     }
 }

@@ -409,10 +409,9 @@ impl Agent {
 
     /// The unique identifier this agent works under, `<label>-<n>` for a
     /// labeled agent and `agent-<n>` for one without. It names the agent in
-    /// [`Event`], in [`Stats::stats_for_agent`], and in [`Ticket::assignee`].
+    /// [`Event::agent_id`] and in [`Ticket::assignee`].
     ///
-    /// [`Event`]: crate::Event
-    /// [`Stats::stats_for_agent`]: crate::Stats::stats_for_agent
+    /// [`Event::agent_id`]: crate::Event::agent_id
     /// [`Ticket::assignee`]: crate::Ticket::assignee
     pub fn get_id(&self) -> &str {
         &self.id
@@ -504,7 +503,7 @@ impl Agent {
         self.dispatch(Ticket::new(task))
     }
 
-    /// Submit a `Ticket` with custom labels or schema, and return its key.
+    /// Submit a `Ticket` with a custom label or schema, and return its key.
     pub fn ticket(&self, ticket: Ticket) -> String {
         self.dispatch(ticket)
     }
@@ -643,7 +642,7 @@ mod tests {
             ..Policies::default()
         };
         let stats = Stats::new();
-        stats.record_event(&EventKind::TurnStarted, "", None, "");
+        stats.record_event(&EventKind::TurnStarted, "");
         stats.record_event(
             &EventKind::RequestFinished {
                 model: "m".into(),
@@ -652,8 +651,6 @@ mod tests {
                     output_tokens: 0,
                 },
             },
-            "",
-            None,
             "",
         );
 
@@ -683,7 +680,7 @@ mod tests {
             ..Policies::default()
         };
         let stats = Stats::new();
-        stats.record_event(&EventKind::TurnStarted, "", None, "");
+        stats.record_event(&EventKind::TurnStarted, "");
 
         let rendered = agent.system_prompt(None, &policies, &stats, "T-1");
 

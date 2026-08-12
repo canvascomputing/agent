@@ -279,7 +279,7 @@ impl PyAgent {
         Ok(self.built()?.task(value))
     }
 
-    /// Submit a `Ticket` with custom labels or schema, and return its key.
+    /// Submit a `Ticket` with a custom label or schema, and return its key.
     fn ticket(&self, ticket: PyRef<'_, PyTicket>) -> PyResult<String> {
         Ok(self.built()?.ticket(ticket.to_ticket()))
     }

@@ -59,10 +59,16 @@ async def test_invokes_a_python_tool_and_records_the_file_it_opened(tmp_path):
     )
     agent.task("Read note.txt with the slurp tool and report the token it contains.")
     work = agent.start()
+    opened = []
+    work.on_event(
+        lambda event: opened.append(event.data["path"])
+        if event.kind == aw.EventName.FILE_OPEN_FINISHED
+        else None
+    )
     await work.finish_all()
 
     assert calls, "the python tool was never invoked"
-    assert "note.txt" in work.stats().file_stats()
+    assert any("note.txt" in path for path in opened)
 
 
 async def test_runs_two_labeled_agents_with_events_and_chaining():

@@ -156,7 +156,6 @@ impl TicketQueue {
             now,
             durations,
             label.as_deref(),
-            agent_id,
         );
         self.save_ticket(&key);
         Some(key)
@@ -262,7 +261,7 @@ impl TicketQueue {
             };
             self.emit(key, agent, kind);
         }
-        self.record_transition(key, prev, status, now, durations, label.as_deref(), agent);
+        self.record_transition(key, prev, status, now, durations, label.as_deref());
         self.save_ticket(key);
         // The ticket will never request again, so drop any events buffered
         // for its message editors instead of leaking them for the run.
@@ -279,11 +278,8 @@ impl TicketQueue {
         now: u64,
         durations: (std::time::Duration, std::time::Duration),
         label: Option<&str>,
-        agent: &str,
     ) {
-        self.stats.record_transition(prev, next, now, durations);
-        self.stats
-            .record_transition_for(label, agent, next, durations);
+        self.stats.record_transition(prev, next, now);
         self.log_transition(key, prev, next, now, durations, label);
     }
 
@@ -427,6 +423,7 @@ mod tests {
     use super::super::test_util::*;
     use super::*;
     use crate::event::EventName;
+    use std::sync::{Arc, Mutex};
 
     #[test]
     fn task_creates_ticket_with_user_reporter() {
@@ -514,84 +511,6 @@ mod tests {
         queue.set_failed("TICKET-2").unwrap();
         assert_eq!(queue.stats().event_count(EventName::TicketFinished), 1);
         assert_eq!(queue.stats().event_count(EventName::TicketFailed), 1);
-    }
-
-    #[test]
-    fn stats_for_label_counts_creation_per_label() {
-        let (queue, _tmp) = test_queue();
-        queue.ticket(Ticket::new("a").label("scan"));
-        queue.ticket(Ticket::new("b").label("scan"));
-        queue.ticket(Ticket::new("c"));
-        let stats = queue.stats();
-        assert_eq!(stats.event_count(EventName::TicketCreated), 3);
-        assert_eq!(
-            stats
-                .stats_for_label("scan")
-                .event_count(EventName::TicketCreated),
-            2
-        );
-        assert_eq!(
-            stats
-                .stats_for_label("never-used")
-                .event_count(EventName::TicketCreated),
-            0
-        );
-    }
-
-    #[test]
-    fn stats_for_label_counts_terminal_transitions_per_label() {
-        let (queue, _tmp) = test_queue();
-        queue.ticket(Ticket::new("a").label("scan"));
-        queue.ticket(Ticket::new("b").label("scan"));
-        queue.ticket(Ticket::new("c").label("high"));
-        queue.claim(|t| t.key == "TICKET-1", "agent");
-        queue.set_finished_by("TICKET-1", "agent").unwrap();
-        queue.claim(|t| t.key == "TICKET-2", "agent");
-        queue.set_failed("TICKET-2").unwrap();
-        let stats = queue.stats();
-        let scan = stats.stats_for_label("scan");
-        let high = stats.stats_for_label("high");
-        assert_eq!(scan.event_count(EventName::TicketFinished), 1);
-        assert_eq!(scan.event_count(EventName::TicketFailed), 1);
-        assert_eq!(high.event_count(EventName::TicketFinished), 0);
-        assert_eq!(high.event_count(EventName::TicketFailed), 0);
-    }
-
-    #[test]
-    fn stats_for_label_set_failed_path_records_per_label() {
-        let (queue, _tmp) = test_queue();
-        queue.ticket(Ticket::new("a").label("scan"));
-        queue.set_failed("TICKET-1").unwrap();
-        assert_eq!(
-            queue
-                .stats()
-                .stats_for_label("scan")
-                .event_count(EventName::TicketFailed),
-            1
-        );
-    }
-
-    #[test]
-    fn stats_for_label_unaffected_by_no_label_ticket() {
-        let (queue, _tmp) = test_queue();
-        queue.ticket(Ticket::new("a"));
-        queue.claim(|t| t.key == "TICKET-1", "agent");
-        queue.set_finished_by("TICKET-1", "agent").unwrap();
-        assert_eq!(queue.stats().event_count(EventName::TicketFinished), 1);
-        assert_eq!(
-            queue
-                .stats()
-                .stats_for_label("scan")
-                .event_count(EventName::TicketFinished),
-            0
-        );
-        assert_eq!(
-            queue
-                .stats()
-                .stats_for_label("scan")
-                .event_count(EventName::TicketCreated),
-            0
-        );
     }
 
     #[test]
@@ -722,7 +641,7 @@ mod tests {
     }
 
     #[test]
-    fn claim_takes_the_schema_bound_to_a_label_of_the_ticket() {
+    fn claim_takes_the_schema_bound_to_the_tickets_label() {
         let (queue, _tmp) = queue_with_analysis_schema();
         queue.ticket(Ticket::new("audit").label("analysis"));
         assert_eq!(bound_title(&queue, "TICKET-1"), None);
@@ -757,7 +676,7 @@ mod tests {
     }
 
     #[test]
-    fn claim_binds_no_schema_when_no_label_of_the_ticket_has_one() {
+    fn claim_binds_no_schema_when_the_tickets_label_has_none() {
         let (queue, _tmp) = queue_with_analysis_schema();
         queue.ticket(Ticket::new("search").label("discovery"));
         assert_eq!(bound_title(&queue, "TICKET-1"), None);
@@ -1067,10 +986,6 @@ mod tests {
         assert_eq!(s.event_count(EventName::TicketCreated), 3);
         assert_eq!(s.event_count(EventName::TicketFinished), 1);
         assert_eq!(s.event_count(EventName::TicketFailed), 1);
-        let scan = s.stats_for_label("scan");
-        assert_eq!(scan.event_count(EventName::TicketCreated), 3);
-        assert_eq!(scan.event_count(EventName::TicketFinished), 1);
-        assert_eq!(scan.event_count(EventName::TicketFailed), 1);
     }
 
     #[test]
@@ -1090,6 +1005,39 @@ mod tests {
         let resumed = TicketQueue::load(dir.path()).unwrap();
         assert!(resumed.get_ticket("TICKET-1").is_some());
         assert!(resumed.get_ticket("TICKET-99").is_none());
+    }
+
+    #[test]
+    fn load_drops_the_label_of_a_ticket_written_before_it_was_singular() {
+        // The accepted cost of the clean break: a pre-singular `ticket.json`
+        // still loads, but its label is gone, so the ticket falls to the
+        // default scope instead of its pool. Documented in architecture.md.
+        let dir = crate::test_util::TempDir::new().unwrap();
+        let ticket_dir = dir.path().join("tickets").join("TICKET-1");
+        std::fs::create_dir_all(&ticket_dir).unwrap();
+        let body = serde_json::json!({
+            "task": "scan the tree",
+            "labels": ["scan"],
+            "key": "TICKET-1",
+            "status": "Todo",
+            "reporter": "user",
+            "created_at": 1,
+            "started_at": null,
+            "finished_at": null,
+            "failed_at": null,
+            "result": null,
+            "parent": null,
+        });
+        std::fs::write(
+            ticket_dir.join("ticket.json"),
+            serde_json::to_vec(&body).unwrap(),
+        )
+        .unwrap();
+
+        let resumed = TicketQueue::load(dir.path()).unwrap();
+        let ticket = resumed.get_ticket("TICKET-1").expect("the ticket loads");
+        assert_eq!(ticket.label, None);
+        assert!(!ticket.has_label("scan"));
     }
 
     #[test]
@@ -1194,18 +1142,20 @@ mod tests {
     }
 
     #[test]
-    fn creating_a_ticket_counts_it_against_the_reporter() {
+    fn creating_a_ticket_names_the_reporter_on_its_event() {
         let (queue, _tmp) = test_queue();
+        let reporters = Arc::new(Mutex::new(Vec::new()));
+        let seen = Arc::clone(&reporters);
+        queue.on_event(move |event| {
+            if matches!(event.kind, EventKind::TicketCreated) {
+                seen.lock().unwrap().push(event.agent_id.clone());
+            }
+        });
+
         queue.task("seed");
 
-        let stats = queue.stats();
-        assert_eq!(stats.event_count(EventName::TicketCreated), 1);
-        assert_eq!(
-            stats
-                .stats_for_agent("user")
-                .event_count(EventName::TicketCreated),
-            1
-        );
+        assert_eq!(queue.stats().event_count(EventName::TicketCreated), 1);
+        assert_eq!(*reporters.lock().unwrap(), vec!["user".to_string()]);
     }
 
     #[test]
@@ -1226,7 +1176,9 @@ mod tests {
         let dir = crate::test_util::TempDir::new().unwrap();
         std::fs::create_dir_all(dir.path().join("tickets")).unwrap();
         let body = serde_json::json!({
-            "events": { "turn_started": 42, "request_finished": 7 }
+            "events": { "turn_started": 42, "request_finished": 7 },
+            "input_tokens": 900,
+            "output_tokens": 120,
         });
         std::fs::write(
             dir.path().join("stats.json"),
@@ -1237,6 +1189,10 @@ mod tests {
         let queue = TicketQueue::load(dir.path()).unwrap();
         assert_eq!(queue.stats().event_count(EventName::TurnStarted), 42);
         assert_eq!(queue.stats().event_count(EventName::RequestFinished), 7);
+        // The token limits divide against these, so a resumed run that read
+        // them back as zero would silently start its budget over.
+        assert_eq!(queue.stats().input_tokens(), 900);
+        assert_eq!(queue.stats().output_tokens(), 120);
     }
 
     #[test]
