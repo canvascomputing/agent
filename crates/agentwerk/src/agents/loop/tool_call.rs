@@ -16,7 +16,7 @@ pub(super) async fn run(context: &mut TicketContext<'_>, mut calls: Vec<ToolCall
     let max_schema_retries = context.policies.max_schema_retries.unwrap_or(u32::MAX);
 
     // Report the registered name, so a model alternating spellings of one tool
-    // does not split its row in `tool_stats()`.
+    // still reports every call under the one name a handler counts by.
     for call in &mut calls {
         if let Some(tool) = context.agent.tool_registry().get(&call.name) {
             call.name = tool.name().to_string();

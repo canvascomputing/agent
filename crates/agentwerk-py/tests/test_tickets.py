@@ -1,5 +1,6 @@
 """Tickets, schemas, and ticket-queue state, exercised through the public API."""
 
+from collections import Counter
 
 import pytest
 
@@ -187,7 +188,6 @@ def test_stats_reports_zero_counts_before_a_run(queue):
     stats = queue.stats()
     assert stats.event_count(aw.EventName.REQUEST_FINISHED) == 0
     assert stats.event_count(aw.EventName.TICKET_CREATED) == 0
-    assert stats.tool_stats() == {}
     assert stats.execution_duration() is None
 
 
@@ -210,8 +210,20 @@ def test_stats_to_dict_keeps_the_on_disk_shape(queue):
     assert queue.stats().to_dict()["input_tokens"] == 0
 
 
-def test_stats_for_label_slices_the_run(queue):
-    assert queue.stats().stats_for_label("scan").event_count("request_finished") == 0
+def test_an_event_carries_the_label_of_the_ticket_it_concerns(queue):
+    created = Counter()
+
+    def count_per_label(event):
+        if event.kind == aw.EventName.TICKET_CREATED:
+            created[event.label] += 1
+
+    queue.on_event(count_per_label)
+
+    queue.ticket(aw.Ticket("scan the tree", label="scan"))
+    queue.ticket(aw.Ticket("scan the lockfile", label="scan"))
+    queue.ticket(aw.Ticket("write the report", label="report"))
+
+    assert created == Counter({"scan": 2, "report": 1})
 
 
 def test_model_for_agent_is_none_when_no_agent_is_bound(queue):

@@ -68,7 +68,7 @@
 //!
 //! - [`Agent`]: picks up tickets and produces results.
 //! - [`TicketQueue`]: coordinates complex work across agents.
-//! - [`Ticket`]: a task plus the labels and schema that assign and validate it.
+//! - [`Ticket`]: a task plus the label and schema that assign and validate it.
 //! - [`Knowledge`]: durable memory the agent shares across tickets and other agents.
 //! - [`Stats`]: statistics about tickets, tokens, and time.
 //! - [`Event`]: requests, tool usage, failures and more.

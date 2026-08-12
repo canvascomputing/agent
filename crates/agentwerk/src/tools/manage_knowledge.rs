@@ -443,12 +443,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn self_reports_each_action_to_stats() {
+    async fn self_reports_each_action_as_an_event() {
         use crate::agents::tickets::TicketQueue;
+        use crate::event::EventKind;
+        use std::sync::Mutex;
 
         let (store, _dir) = fresh_store();
         let tool = ManageKnowledgeTool::new(Arc::clone(&store));
         let tickets = TicketQueue::new();
+        let reported = Arc::new(Mutex::new(Vec::new()));
+        let seen = Arc::clone(&reported);
+        tickets.on_event(move |event| match &event.kind {
+            EventKind::KnowledgeUsed { op } => seen.lock().unwrap().push(op.to_string()),
+            EventKind::KnowledgeFailed { op, reason } => seen
+                .lock()
+                .unwrap()
+                .push(format!("{op}:{}", reason.as_str())),
+            _ => {}
+        });
         let ctx =
             ToolContext::new(std::env::current_dir().unwrap()).ticket_queue(Arc::clone(&tickets));
 
@@ -477,19 +489,11 @@ mod tests {
         .await
         .unwrap();
 
-        let k = tickets.stats().knowledge_stats();
-        assert_eq!(k["write"].attempts, 1);
-        assert_eq!(k["list"].attempts, 1);
+        // Every action reports itself, and the read of an absent slug reports
+        // the reason it did not go through.
         assert_eq!(
-            k["read"].attempts, 2,
-            "both slugs were read, present or not"
+            *reported.lock().unwrap(),
+            vec!["write", "list", "read", "read:page_missing", "remove"],
         );
-        assert_eq!(
-            k["read"].failures[&KnowledgeFailureKind::PageMissing],
-            1,
-            "the read of an absent slug did not go through"
-        );
-        assert_eq!(k["remove"].attempts, 1);
-        assert_eq!(k["read"].errors(), 1);
     }
 }

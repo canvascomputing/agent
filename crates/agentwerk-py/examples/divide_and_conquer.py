@@ -12,6 +12,7 @@ Usage: python divide_and_conquer.py [N] [PARTITIONS] [AGENTS]
 import asyncio
 import subprocess
 import sys
+from collections import Counter
 
 from agentwerk import Agent, ManageTicketsTool, Schema, Ticket, TicketQueue, ToolResult, tool
 
@@ -98,14 +99,21 @@ async def main(n, partitions, agents):
     print(f"sum_{{k=1}}^{{{n}}} k^2 over {len(bounds)} partitions, {agents} agent(s)\n")
 
     tickets = TicketQueue().max_turns(20 * len(bounds))
-    # The finish reason is announced once and not kept, so catch it here.
+    # The finish reason is announced once and not kept, so catch it here. The
+    # per-tool counts are the same story: the queue counts the run as a whole,
+    # so a breakdown is folded off the events.
     finish_reason = []
+    tool_calls, tool_errors = Counter(), Counter()
 
     def trace(event):
         if event.kind in ("ticket_started", "ticket_finished", "ticket_failed"):
             print(f"  {event.kind:<20} {event.agent_id:<10} {event.ticket_key}")
         elif event.kind == "run_finished":
             finish_reason.append(event.data["reason"])
+        elif event.kind == "tool_call_started":
+            tool_calls[event.data["tool_name"]] += 1
+        elif event.kind == "tool_call_failed":
+            tool_errors[event.data["tool_name"]] += 1
 
     tickets.on_event(trace)
 
@@ -145,8 +153,10 @@ async def main(n, partitions, agents):
         f"{stats.input_tokens()} in / {stats.output_tokens()} out tokens"
     )
     print(f"finish reason  : {finish_reason[-1]}")
-    for name, stat in stats.tool_stats().items():
-        print(f"tool {name:<14}: {stat.calls} calls, error rate {stat.error_rate()}")
+    for name in sorted(tool_calls):
+        errors = tool_errors[name]
+        rate = errors / tool_calls[name]
+        print(f"tool {name:<14}: {tool_calls[name]} calls, error rate {rate:.2f}")
 
     total, expected = sum(partials.values()), closed_form(n)
     print(f"\naggregated sum : {total}")

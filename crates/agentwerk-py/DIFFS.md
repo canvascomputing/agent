@@ -138,23 +138,11 @@ Seven rules the surface table below never repeats.
 | `Page { slug, kind, description, content, tags }` | `Page(slug, description, content, kind=.., tags=..)`: a struct literal becomes a constructor, so the optional fields move last. |
 | `KnowledgeError` | `RuntimeError` |
 | **Statistics** | |
-| `Stats::stats_for_label(label)` | `Stats.stats_for_label(label)` |
-| `Stats::stats_for_agent(agent_id)` | `Stats.stats_for_agent(agent_id)` |
-| `Stats::tool_stats()` | `Stats.tool_stats()` |
-| `Stats::file_stats()` | `Stats.file_stats()` |
-| `Stats::knowledge_stats()` | `Stats.knowledge_stats()` |
-| `Stats::model_stats()` | `Stats.model_stats()` |
 | `Stats::event_count(event)` | `Stats.event_count(name)`: the name as a string; an unknown one raises. |
 | `Stats::event_counts()` | `Stats.event_counts()`: keyed by that string. |
 | `Stats::input_tokens()`, `::output_tokens()` | Same names. |
 | `Stats::execution_duration()` | `Stats.execution_duration()` |
-| `Stats::ticket_duration()`, `::work_duration()` | Same names. |
 | `serde_json::to_value(&stats)` | `Stats.to_dict()`: Python cannot call `serde`, so reaching the `stats.json` shape needs a method. |
-| `ToolStat { calls, failures }` | Same, including `errors()` and `error_rate()`. `failures` is keyed by the reason as a string, where Rust keys it by `ToolFailureKind`. |
-| `FileStat { opens, failures }` | Same, on the same terms. |
-| `KnowledgeStat { attempts, failures }` | Same, on the same terms. |
-| `ModelStat { requests, input_tokens, output_tokens, failures }` | Same, on the same terms. |
-| `TimeStat { total, average }` | Same fields, both in seconds. |
 | **Schema** | |
 | `Schema::new(document)` | `Schema(document)` |
 | `Schema::validate(value)` | `Schema.validate(value)` |
@@ -164,7 +152,7 @@ Seven rules the surface table below never repeats.
 | `SchemaStore::label(label, document)` | `SchemaStore.label(label, document)`: raises on a document that is not a schema, where Rust returns `SchemaParseError`. |
 | `SchemaStore::get(label)` | `SchemaStore.get(label)` |
 | **Events** | |
-| `Event { agent_id, ticket_key, kind }` | `Event.agent_id`, `.ticket_key`, `.kind` |
+| `Event { agent_id, ticket_key, label, kind }` | `Event.agent_id`, `.ticket_key`, `.label`, `.kind` |
 | `EventKind` variant payload | `Event.data`: a dict of that variant's fields. |
 | `EventKind`, `FinishReason` | Strings. |
 | `EventName` | `EventName`: string constants, so `Event.kind == EventName.TURN_STARTED`. |
