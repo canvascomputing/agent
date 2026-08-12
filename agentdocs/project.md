@@ -30,7 +30,7 @@ tickets.ticket(Ticket::new("Audit src/db.").label("scan"));
 ```
 
 - Each agent runs on its own tokio task; the shared queue claims a ticket exactly once.
-- An agent serves one label; a ticket carries as many as its filer gives it. A label assigns work to every agent serving it, so a label only one agent serves pins the ticket to that agent.
+- An agent serves one label and a ticket carries one. A label assigns work to every agent serving it, so a label only one agent serves pins the ticket to that agent.
 - Agents are cloned and modified, then bound to a `TicketQueue`. No global registration, no implicit state.
 - A ticket carries a `Schema`; the loop validates the agent's result against it.
 

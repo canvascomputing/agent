@@ -24,7 +24,7 @@ Record your final answer and mark your current ticket `Finished`. Call it once, 
     },
     "handover": {
       "type": "string",
-      "description": "Who picks up the follow-up ticket: a scope label assigns it to the agents serving that label. Becomes a label on the new ticket. Omit to finish without passing work on to anyone."
+      "description": "Who picks up the follow-up ticket: a scope label assigns it to the agents serving that label. Becomes the new ticket's label. Omit to finish without passing work on to anyone."
     },
     "task": {
       "type": "string",

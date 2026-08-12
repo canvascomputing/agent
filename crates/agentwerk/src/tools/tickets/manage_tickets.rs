@@ -71,3 +71,27 @@ impl ToolLike for ManageTicketsTool {
         Box::pin(async move { Ok(dispatch(input, ctx, all_actions())) })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeSet;
+
+    #[test]
+    fn the_schema_advertises_exactly_the_arguments_dispatch_reads() {
+        // The schema is parsed from markdown at runtime, so a property the
+        // model is told about but `dispatch` never reads is silently dropped
+        // rather than caught by the compiler.
+        let schema = ManageTicketsTool.input_schema();
+        let advertised: BTreeSet<&str> = schema["properties"]
+            .as_object()
+            .expect("properties is an object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            advertised,
+            BTreeSet::from(["action", "key", "status", "label", "query", "task"]),
+        );
+    }
+}

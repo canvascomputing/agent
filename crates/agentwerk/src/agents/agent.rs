@@ -122,9 +122,9 @@ impl<P, M> AgentBuilder<P, M> {
     /// Restrict the agent to tickets carrying this label, and name it after
     /// the label.
     ///
-    /// An agent serves one label; a ticket carries as many as its filer gives
-    /// it, and the agents of every label it names may claim it. Calling this
-    /// twice replaces the label rather than adding a second one. The id
+    /// An agent serves one label and a ticket carries one, so an agent claims
+    /// a ticket when the two are equal, and every agent serving that label may
+    /// claim it. Calling this twice replaces the label. The id
     /// [`Agent::get_id`] hands back is built from it.
     pub fn label(mut self, l: impl Into<String>) -> Self {
         self.label = Some(l.into());
@@ -211,11 +211,8 @@ impl<P, M> AgentBuilder<P, M> {
         self.interactive
     }
 
-    pub(super) fn handles(&self, ticket_labels: &[String]) -> bool {
-        match &self.label {
-            Some(label) => ticket_labels.iter().any(|t| t == label),
-            None => ticket_labels.is_empty(),
-        }
+    pub(super) fn handles(&self, ticket_label: Option<&str>) -> bool {
+        self.label.as_deref() == ticket_label
     }
 
     pub(super) fn tool_definitions(&self) -> Vec<ProviderToolDefinition> {
@@ -425,11 +422,8 @@ impl Agent {
         self.interactive
     }
 
-    pub(super) fn handles(&self, ticket_labels: &[String]) -> bool {
-        match &self.label {
-            Some(label) => ticket_labels.iter().any(|t| t == label),
-            None => ticket_labels.is_empty(),
-        }
+    pub(super) fn handles(&self, ticket_label: Option<&str>) -> bool {
+        self.label.as_deref() == ticket_label
     }
 
     pub(super) fn tool_definitions(&self) -> Vec<ProviderToolDefinition> {
@@ -565,24 +559,23 @@ mod tests {
     #[test]
     fn handles_default_scope_only_picks_unlabeled_tickets() {
         let agent = Agent::new();
-        assert!(agent.handles(&[]));
-        assert!(!agent.handles(&["research".into()]));
+        assert!(agent.handles(None));
+        assert!(!agent.handles(Some("research")));
     }
 
     #[test]
-    fn handles_a_ticket_carrying_the_agent_label_among_others() {
+    fn handles_only_the_ticket_carrying_its_own_label() {
         let agent = Agent::new().label("research");
-        assert!(agent.handles(&["research".into()]));
-        assert!(agent.handles(&["research".into(), "urgent".into()]));
-        assert!(!agent.handles(&["report".into()]));
-        assert!(!agent.handles(&[]));
+        assert!(agent.handles(Some("research")));
+        assert!(!agent.handles(Some("report")));
+        assert!(!agent.handles(None));
     }
 
     #[test]
     fn label_replaces_the_previous_one() {
         let agent = Agent::new().label("research").label("math");
-        assert!(agent.handles(&["math".into()]));
-        assert!(!agent.handles(&["research".into()]));
+        assert!(agent.handles(Some("math")));
+        assert!(!agent.handles(Some("research")));
     }
 
     #[test]
@@ -650,7 +643,7 @@ mod tests {
             ..Policies::default()
         };
         let stats = Stats::new();
-        stats.record_event(&EventKind::TurnStarted, "", &[], "");
+        stats.record_event(&EventKind::TurnStarted, "", None, "");
         stats.record_event(
             &EventKind::RequestFinished {
                 model: "m".into(),
@@ -660,7 +653,7 @@ mod tests {
                 },
             },
             "",
-            &[],
+            None,
             "",
         );
 
@@ -690,7 +683,7 @@ mod tests {
             ..Policies::default()
         };
         let stats = Stats::new();
-        stats.record_event(&EventKind::TurnStarted, "", &[], "");
+        stats.record_event(&EventKind::TurnStarted, "", None, "");
 
         let rendered = agent.system_prompt(None, &policies, &stats, "T-1");
 

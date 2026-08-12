@@ -3,7 +3,7 @@ name: read_tickets
 read_only: true
 ---
 
-Read tickets from the queue: `get` by key (defaults to your current ticket), `list` by status or label, or `search` task bodies. `get` returns a markdown ticket block; `list`/`search` return a bullet summary and cap at 50 tickets, so tighten filters rather than re-running. `search` matches the task body only, not labels or results.
+Read tickets from the queue: `get` by key (defaults to your current ticket), `list` by status or label, or `search` task bodies. `get` returns a markdown ticket block; `list`/`search` return a bullet summary and cap at 50 tickets, so tighten filters rather than re-running. `search` matches the task body only, not the label or the result.
 
 ## When NOT to use
 

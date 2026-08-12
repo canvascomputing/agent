@@ -456,10 +456,7 @@ mod tests {
                 "tester".into(),
             );
             let key = queue
-                .claim(
-                    |t| t.status == Status::Todo && t.labels.iter().any(|l| l == &agent),
-                    &agent,
-                )
+                .claim(|t| t.status == Status::Todo && t.has_label(&agent), &agent)
                 .expect("claim must succeed");
             expected.push((agent, key));
         }
@@ -538,7 +535,7 @@ mod tests {
         let child = queue.get_ticket("TICKET-2").unwrap();
         assert_eq!(child.status, Status::Todo);
         assert_eq!(child.parent.as_deref(), Some(parent_key.as_str()));
-        assert_eq!(child.labels, vec!["bob".to_string()]);
+        assert!(child.has_label("bob"));
         assert_eq!(child.reporter, "alice");
     }
 

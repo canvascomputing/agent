@@ -312,9 +312,9 @@ mod tests {
             ..Policies::default()
         };
         let stats = Stats::new();
-        stats.record_event(&turn(), "", &[], "");
-        stats.record_event(&turn(), "", &[], "");
-        stats.record_event(&request(5_000, 8_000), "", &[], "");
+        stats.record_event(&turn(), "", None, "");
+        stats.record_event(&turn(), "", None, "");
+        stats.record_event(&request(5_000, 8_000), "", None, "");
 
         let rendered = context_body(&working_dir, &policies, &stats, "T-1");
 
@@ -339,7 +339,7 @@ mod tests {
             ..Policies::default()
         };
         let stats = Stats::new();
-        stats.record_event(&turn(), "", &[], "");
+        stats.record_event(&turn(), "", None, "");
 
         let rendered = context_body(&working_dir, &policies, &stats, "T-1");
 
@@ -362,7 +362,7 @@ mod tests {
         };
         let stats = Stats::new();
         for _ in 0..5 {
-            stats.record_event(&turn(), "", &[], "");
+            stats.record_event(&turn(), "", None, "");
         }
 
         let rendered = context_body(&working_dir, &policies, &stats, "T-1");

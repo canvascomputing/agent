@@ -2,8 +2,7 @@
 //! fields you own, and the same class comes back with its status and messages.
 //!
 //! Rust sets those fields with chained methods. A Python class cannot carry a
-//! `labels` method and a `labels` attribute, so they are keyword arguments
-//! here.
+//! `label` method and a `label` attribute, so they are keyword arguments here.
 
 use agentwerk::Ticket;
 use pyo3::prelude::*;
@@ -21,19 +20,19 @@ pub struct PyTicket {
 impl PyTicket {
     /// Create a ticket carrying `task`.
     ///
-    /// `labels` assign it to agents, `schema` is what the result must satisfy,
+    /// `label` assigns it to agents, `schema` is what the result must satisfy,
     /// and `parent` names the ticket it came from.
     #[new]
-    #[pyo3(signature = (task, *, labels=None, schema=None, parent=None))]
+    #[pyo3(signature = (task, *, label=None, schema=None, parent=None))]
     fn new(
         task: &Bound<'_, PyAny>,
-        labels: Option<Vec<String>>,
+        label: Option<String>,
         schema: Option<PyRef<'_, PySchema>>,
         parent: Option<String>,
     ) -> PyResult<Self> {
         let mut inner = Ticket::new(py_to_value(task)?);
-        if let Some(labels) = labels {
-            inner = inner.labels(labels);
+        if let Some(label) = label {
+            inner = inner.label(label);
         }
         if let Some(schema) = schema {
             inner = inner.schema(schema.inner.clone());
@@ -99,8 +98,8 @@ impl PyTicket {
     }
 
     #[getter]
-    fn labels(&self) -> Vec<String> {
-        self.inner.labels.clone()
+    fn label(&self) -> Option<String> {
+        self.inner.label.clone()
     }
 
     /// Optional schema the result must satisfy.
@@ -178,7 +177,10 @@ impl PyTicket {
     /// messages and timestamps, so a ticket that came back out of the queue
     /// would otherwise carry its messages into the new one.
     pub fn to_ticket(&self) -> Ticket {
-        let mut ticket = Ticket::new(self.inner.task.clone()).labels(self.inner.labels.clone());
+        let mut ticket = Ticket::new(self.inner.task.clone());
+        if let Some(label) = &self.inner.label {
+            ticket = ticket.label(label.clone());
+        }
         if let Some(schema) = &self.inner.schema {
             ticket = ticket.schema(schema.clone());
         }

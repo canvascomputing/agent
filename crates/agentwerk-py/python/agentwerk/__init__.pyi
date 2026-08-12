@@ -134,7 +134,7 @@ class Ticket:
     status: str
     task: Any
     result: Optional[Any]
-    labels: list[str]
+    label: Optional[str]
     schema: Optional[Schema]
     parent: Optional[str]
     reporter: str
@@ -149,7 +149,7 @@ class Ticket:
         self,
         task: Any,
         *,
-        labels: Optional[list[str]] = ...,
+        label: Optional[str] = ...,
         schema: Optional[Schema] = ...,
         parent: Optional[str] = ...,
     ) -> None: ...

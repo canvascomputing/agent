@@ -48,7 +48,7 @@ impl TicketQueue {
         ticket.result = None;
         ticket.status = Status::Todo;
         let key = ticket.key.clone();
-        let labels = ticket.labels.clone();
+        let label = ticket.label.clone();
         let reporter = ticket.reporter.clone();
         let task = ticket.task.clone();
         let created_at = ticket.created_at;
@@ -62,7 +62,7 @@ impl TicketQueue {
             "ts": created_at,
             "key": key,
             "reporter": reporter,
-            "labels": labels,
+            "label": label,
             "task": task,
         });
         if let Some(p) = &parent {
@@ -118,7 +118,7 @@ impl TicketQueue {
     {
         let now = now_millis();
         let schemas = self.schemas.lock().unwrap().clone();
-        let (key, prev, durations, labels) = {
+        let (key, prev, durations, label) = {
             let mut store = self.tickets.lock().unwrap();
             let mut candidates: Vec<&String> = store
                 .iter()
@@ -138,15 +138,16 @@ impl TicketQueue {
             if ticket.schema.is_none() {
                 let bound = schemas
                     .as_ref()
-                    .and_then(|s| ticket.labels.iter().find_map(|label| s.get(label)));
+                    .zip(ticket.label.as_deref())
+                    .and_then(|(s, label)| s.get(label));
                 ticket.schema = bound;
             }
             let prev = ticket.status;
             ticket.stamp_transition(Status::InProgress, now);
             ticket.status = Status::InProgress;
             let durations = ticket.terminal_durations();
-            let labels = ticket.labels.clone();
-            (key, prev, durations, labels)
+            let label = ticket.label.clone();
+            (key, prev, durations, label)
         };
         self.record_transition(
             &key,
@@ -154,7 +155,7 @@ impl TicketQueue {
             Status::InProgress,
             now,
             durations,
-            &labels,
+            label.as_deref(),
             agent_id,
         );
         self.save_ticket(&key);
@@ -238,7 +239,7 @@ impl TicketQueue {
         let _in_flight = InFlight(&self.terminal_transitions_in_flight);
 
         let now = now_millis();
-        let (prev, durations, labels) = {
+        let (prev, durations, label) = {
             let mut store = self.tickets.lock().unwrap();
             let ticket = store
                 .get_mut(key)
@@ -249,8 +250,8 @@ impl TicketQueue {
             ticket.stamp_transition(status, now);
             ticket.status = status;
             let durations = ticket.terminal_durations();
-            let labels = ticket.labels.clone();
-            (prev, durations, labels)
+            let label = ticket.label.clone();
+            (prev, durations, label)
         };
         // Emitted before the transition is recorded: the outcome is an event
         // count now, and `record_transition` ends by writing `stats.json`.
@@ -261,7 +262,7 @@ impl TicketQueue {
             };
             self.emit(key, agent, kind);
         }
-        self.record_transition(key, prev, status, now, durations, &labels, agent);
+        self.record_transition(key, prev, status, now, durations, label.as_deref(), agent);
         self.save_ticket(key);
         // The ticket will never request again, so drop any events buffered
         // for its message editors instead of leaking them for the run.
@@ -277,13 +278,13 @@ impl TicketQueue {
         next: Status,
         now: u64,
         durations: (std::time::Duration, std::time::Duration),
-        labels: &[String],
+        label: Option<&str>,
         agent: &str,
     ) {
         self.stats.record_transition(prev, next, now, durations);
         self.stats
-            .record_transition_for(labels, agent, next, durations);
-        self.log_transition(key, prev, next, now, durations, labels);
+            .record_transition_for(label, agent, next, durations);
+        self.log_transition(key, prev, next, now, durations, label);
     }
 
     /// Append a `started` / `finished` / `failed` line to `tickets.jsonl` if
@@ -296,7 +297,7 @@ impl TicketQueue {
         next: Status,
         ts: u64,
         (ticket_duration, work_duration): (std::time::Duration, std::time::Duration),
-        labels: &[String],
+        label: Option<&str>,
     ) {
         if prev == next {
             return;
@@ -306,7 +307,7 @@ impl TicketQueue {
                 "event": "started",
                 "ts": ts,
                 "key": key,
-                "labels": labels,
+                "label": label,
             }));
         }
         match next {
@@ -398,12 +399,12 @@ impl TicketQueue {
     }
 
     /// Edit caller-settable fields. Each `Some` overwrites; `None`
-    /// leaves the field untouched.
+    /// leaves the field untouched. A label can be replaced but not removed.
     pub(crate) fn edit(
         &self,
         key: &str,
         task: Option<serde_json::Value>,
-        labels: Option<Vec<String>>,
+        label: Option<String>,
     ) -> Result<(), TicketError> {
         let mut store = self.tickets.lock().unwrap();
         let ticket = store
@@ -414,8 +415,8 @@ impl TicketQueue {
         if let Some(t) = task {
             ticket.task = t;
         }
-        if let Some(l) = labels {
-            ticket.labels = l;
+        if let Some(l) = label {
+            ticket.label = Some(l);
         }
         Ok(())
     }
@@ -442,7 +443,7 @@ mod tests {
         let (queue, _tmp) = test_queue();
         queue.ticket(Ticket::new("hello").label("research"));
         let t = queue.get_ticket("TICKET-1").unwrap();
-        assert_eq!(t.labels, vec!["research".to_string()]);
+        assert!(t.has_label("research"));
         assert_eq!(t.status, Status::Todo);
     }
 
@@ -451,7 +452,7 @@ mod tests {
         let (queue, _tmp) = test_queue();
         queue.ticket(Ticket::new("specific work for alice").label("alice"));
         let t = queue.get_ticket("TICKET-1").unwrap();
-        assert!(t.labels.iter().any(|l| l == "alice"));
+        assert!(t.has_label("alice"));
         assert_eq!(t.status, Status::Todo);
     }
 
@@ -461,7 +462,7 @@ mod tests {
         let schema = crate::schemas::Schema::new(serde_json::json!({"type": "string"})).unwrap();
         queue.ticket(Ticket::new("x").label("urgent").schema(schema));
         let t = queue.get_ticket("TICKET-1").unwrap();
-        assert_eq!(t.labels, vec!["urgent".to_string()]);
+        assert!(t.has_label("urgent"));
         assert!(t.schema.is_some());
     }
 
@@ -518,7 +519,7 @@ mod tests {
     #[test]
     fn stats_for_label_counts_creation_per_label() {
         let (queue, _tmp) = test_queue();
-        queue.ticket(Ticket::new("a").labels(["scan", "high"]));
+        queue.ticket(Ticket::new("a").label("scan"));
         queue.ticket(Ticket::new("b").label("scan"));
         queue.ticket(Ticket::new("c"));
         let stats = queue.stats();
@@ -531,12 +532,6 @@ mod tests {
         );
         assert_eq!(
             stats
-                .stats_for_label("high")
-                .event_count(EventName::TicketCreated),
-            1
-        );
-        assert_eq!(
-            stats
                 .stats_for_label("never-used")
                 .event_count(EventName::TicketCreated),
             0
@@ -546,8 +541,9 @@ mod tests {
     #[test]
     fn stats_for_label_counts_terminal_transitions_per_label() {
         let (queue, _tmp) = test_queue();
-        queue.ticket(Ticket::new("a").labels(["scan", "high"]));
+        queue.ticket(Ticket::new("a").label("scan"));
         queue.ticket(Ticket::new("b").label("scan"));
+        queue.ticket(Ticket::new("c").label("high"));
         queue.claim(|t| t.key == "TICKET-1", "agent");
         queue.set_finished_by("TICKET-1", "agent").unwrap();
         queue.claim(|t| t.key == "TICKET-2", "agent");
@@ -557,7 +553,7 @@ mod tests {
         let high = stats.stats_for_label("high");
         assert_eq!(scan.event_count(EventName::TicketFinished), 1);
         assert_eq!(scan.event_count(EventName::TicketFailed), 1);
-        assert_eq!(high.event_count(EventName::TicketFinished), 1);
+        assert_eq!(high.event_count(EventName::TicketFinished), 0);
         assert_eq!(high.event_count(EventName::TicketFailed), 0);
     }
 
@@ -632,13 +628,13 @@ mod tests {
     }
 
     #[test]
-    fn workspace_created_event_carries_labels_when_pinned() {
+    fn workspace_created_event_carries_the_label_when_pinned() {
         let (queue, dir) = test_queue();
         queue.ticket(Ticket::new("specific").label("alice"));
         let lines = read_tickets_log(dir.path());
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0]["event"], "created");
-        assert_eq!(lines[0]["labels"], serde_json::json!(["alice"]));
+        assert_eq!(lines[0]["label"], "alice");
     }
 
     #[test]
@@ -668,11 +664,11 @@ mod tests {
     }
 
     #[test]
-    fn claim_leaves_the_labels_the_ticket_was_filed_with() {
+    fn claim_leaves_the_label_the_ticket_was_filed_with() {
         let (queue, _tmp) = test_queue();
         queue.ticket(Ticket::new("hello").label("analysis"));
         let key = queue.claim(|t| t.has_label("analysis"), "alice").unwrap();
-        assert_eq!(queue.get_ticket(&key).unwrap().labels, vec!["analysis"]);
+        assert!(queue.get_ticket(&key).unwrap().has_label("analysis"));
     }
 
     #[test]
@@ -680,7 +676,7 @@ mod tests {
         let (queue, _tmp) = test_queue();
         queue.task("hello");
         assert!(queue
-            .claim(|t| t.labels.iter().any(|l| l == "nonexistent"), "alice")
+            .claim(|t| t.has_label("nonexistent"), "alice")
             .is_none());
     }
 

@@ -201,7 +201,7 @@ edit_replies(key, editor)            // act once, now
 - `Duration` becomes float seconds: the parameter keeps its name and the unit moves into the docstring.
 - A fieldless enum becomes its snake_case `Display` string. That `Display` impl is the single source, so the binding never formats a variant with `{:?}`.
 - An enum whose variants carry fields becomes a class with a `kind` string, a `data` dict, and one static constructor per variant. `Event` and `ReplyContent` are the two; a bare dict would make callers hand-build a tagged shape.
-- A builder method whose name collides with a reader on the same Python class becomes a constructor keyword argument, because a Python class cannot carry both. `Ticket` needs this for `labels`, `schema`, and `parent`; nothing else does.
+- A builder method whose name collides with a reader on the same Python class becomes a constructor keyword argument, because a Python class cannot carry both. `Ticket` needs this for `label`, `schema`, and `parent`; nothing else does.
 - A `&mut` editor becomes a callable that returns the replacement, or `None` to keep the current value, since Python cannot take a Rust `&mut`.
 - IMPORTANT: no `with_` prefix in either language, and no seventh transform.
 
@@ -309,7 +309,7 @@ Doc comment `///`:
 
 ```rust
 // GOOD: purpose and invariant
-/// A ticket. Caller-settable fields: `task`, `labels`, `schema`, `parent`. System-managed fields are set at insertion time.
+/// A ticket. Caller-settable fields: `task`, `label`, `schema`, `parent`. System-managed fields are set at insertion time.
 pub struct Ticket { ... }
 
 // BAD: restates the name
@@ -496,7 +496,7 @@ A `Schema` constrains the result an agent produces for a ticket.
 - Groups do not interleave. The result rows run before the ticket rows in Results; the observers run before the cancels in Hooks.
 - One axis order is chosen and held across every group. Hooks is the model: `event`, `result`, `failure`, in that order, in all of its groups.
 - Within a group, selectors run widest to narrowest: everything, then by label or agent, then by condition, then by key.
-- Singular leads plural where both exist, as `label(label)` and `labels(labels)` already do.
+- Singular leads plural where both exist, as `tool(tool)` and `tools(tools)` already do.
 - An action is followed by the query that reads it back: `cancel(matches)` then `is_cancelled(ticket)`.
 - One table holds one receiver. A method on another type goes in the fold's trailing prose, which is why `TicketQueue::model_for_agent` is prose under the Providers fold rather than a fourth `AgentBuilder` row.
 - The Execution fold holds everything that acts once over a run: `run`, `finish`, `cancel`, and `is_cancelled`. The hooks fold holds only what registers a handler the queue calls back into on every matching event.

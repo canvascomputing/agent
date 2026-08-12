@@ -14,7 +14,7 @@ use super::reply::{Author, Reply, ReplyContent};
 
 /// A `Ticket` is a task plus what assigns and validates it.
 ///
-/// You set `task`, `labels`, `schema`, and `parent`. The rest is set for you at
+/// You set `task`, `label`, `schema`, and `parent`. The rest is set for you at
 /// insertion time and as the agent works.
 ///
 /// ```no_run
@@ -35,8 +35,10 @@ use super::reply::{Author, Reply, ReplyContent};
 pub struct Ticket {
     /// The work the agent is asked to do.
     pub task: serde_json::Value,
-    /// Labels carried by the ticket.
-    pub labels: Vec<String>,
+    /// Label carried by the ticket, naming the pool of agents that may claim
+    /// it. `None` is the default scope, which only an unlabelled agent serves.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
     /// Optional schema the result must satisfy.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub schema: Option<crate::schemas::Schema>,
@@ -73,13 +75,13 @@ pub struct Ticket {
 impl Ticket {
     /// Create a ticket carrying `task`.
     ///
-    /// Add labels and a schema with the chainable methods. Everything else is
+    /// Add a label and a schema with the chainable methods. Everything else is
     /// filled in when the ticket is submitted.
     pub fn new<T: Serialize>(task: T) -> Self {
         let value = serde_json::to_value(task).expect("Ticket::new: value must serialize to JSON");
         Self {
             task: value,
-            labels: Vec::new(),
+            label: None,
             schema: None,
             key: String::new(),
             status: Status::Todo,
@@ -95,19 +97,9 @@ impl Ticket {
         }
     }
 
-    /// Add one label.
-    pub fn label(mut self, l: impl Into<String>) -> Self {
-        self.labels.push(l.into());
-        self
-    }
-
-    /// Add several labels.
-    pub fn labels<I, S>(mut self, iter: I) -> Self
-    where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
-    {
-        self.labels.extend(iter.into_iter().map(Into::into));
+    /// Set the label, replacing any label already set.
+    pub fn label(mut self, label: impl Into<String>) -> Self {
+        self.label = Some(label.into());
         self
     }
 
@@ -128,7 +120,7 @@ impl Ticket {
 
     /// Check whether the ticket carries a label.
     pub fn has_label(&self, label: &str) -> bool {
-        self.labels.iter().any(|l| l == label)
+        self.label.as_deref() == Some(label)
     }
 
     /// Check whether the ticket is waiting to be claimed.
@@ -399,12 +391,6 @@ mod tests {
     }
 
     #[test]
-    fn ticket_label_helpers_compose() {
-        let t = Ticket::new("body").label("research").label("urgent");
-        assert_eq!(t.labels, vec!["research".to_string(), "urgent".to_string()]);
-    }
-
-    #[test]
     fn as_user_message_appends_the_result_schema_when_set() {
         let schema = crate::schemas::Schema::new(serde_json::json!({
             "type": "object",
@@ -470,10 +456,16 @@ mod tests {
     }
 
     #[test]
-    fn has_label_true_when_label_present() {
-        let t = Ticket::new("x").label("research").label("urgent");
-        assert!(t.has_label("research"));
+    fn label_replaces_the_previous_one() {
+        let t = Ticket::new("body").label("research").label("urgent");
         assert!(t.has_label("urgent"));
+        assert!(!t.has_label("research"));
+    }
+
+    #[test]
+    fn has_label_true_when_label_present() {
+        let t = Ticket::new("x").label("research");
+        assert!(t.has_label("research"));
     }
 
     #[test]
@@ -483,7 +475,7 @@ mod tests {
     }
 
     #[test]
-    fn has_label_false_on_empty_labels() {
+    fn has_label_false_when_the_ticket_carries_no_label() {
         let t = Ticket::new("x");
         assert!(!t.has_label("anything"));
     }
