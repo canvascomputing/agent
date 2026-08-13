@@ -3,7 +3,7 @@ name: manage_tickets
 read_only: false
 ---
 
-Read and mutate the ticket queue from one tool: `get` / `list` / `search` to read, `create` / `edit` to write. One `action` per call; a `key` defaults to your current ticket when omitted, and `create` stamps `reporter` from the calling agent. `list` and `search` cap at 50 tickets.
+Read and mutate the ticket queue from one tool: `ticket` / `result` / `list` / `search` to read, `create` / `edit` to write. One `action` per call; a `key` defaults to your current ticket, and `create` stamps `reporter` from the calling agent. `result` gives a finished ticket's result and the file holding it, which is how you pick up what another agent produced; `list` and `search` cap at 50 tickets.
 
 - This tool cannot transition status: finish with `finish` (`Failed` is reserved for system outcomes like a schema-retry trip or policy violation).
 - ALWAYS finish your current ticket with `finish` before the response ends, or it stays `InProgress` and the loop re-picks it.
@@ -22,11 +22,11 @@ Read and mutate the ticket queue from one tool: `get` / `list` / `search` to rea
   "properties": {
     "action": {
       "type": "string",
-      "description": "Read: `get`, `list`, `search`. Write: `create`, `edit`."
+      "description": "Read: `ticket`, `result`, `list`, `search`. Write: `create`, `edit`."
     },
     "key": {
       "type": "string",
-      "description": "Ticket key (e.g. `TICKET-3`). Used by `get`, `edit`. Defaults to the agent's current ticket. Ignored by `create`, `list`, `search`."
+      "description": "Ticket key (e.g. `TICKET-3`). Used by `ticket`, `result`, `edit`. Defaults to the agent's current ticket. Ignored by `create`, `list`, `search`."
     },
     "status": {
       "type": "string",

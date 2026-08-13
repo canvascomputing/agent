@@ -11,7 +11,7 @@ use super::error::TicketError;
 use super::reply::Reply;
 use super::ticket::{Status, Ticket};
 use super::ticket_queue::TicketQueue;
-use super::{now_millis, numeric_id, Replies};
+use super::{now_millis, numeric_id, Replies, TicketResult};
 
 /// Highest `TICKET-<N>` already on disk under `<dir>/tickets/`, or 0 if
 /// none. Only needed for a queue built via `new()`, which never reads
@@ -325,11 +325,11 @@ impl TicketQueue {
         }
     }
 
-    /// Validate `result` against the ticket's schema, append it to
-    /// `results.jsonl`, and store the validated result on the ticket,
-    /// which it returns. A result an agent double-encoded as a JSON
-    /// string is decoded so the stored value is the object. Does not
-    /// finish the ticket: the caller does.
+    /// Validate `result` against the ticket's schema, write it to the
+    /// ticket's `result.json`, append it to `results.jsonl`, and store the
+    /// validated result on the ticket, which it returns. A result an agent
+    /// double-encoded as a JSON string is decoded so the stored value is
+    /// the object. Does not finish the ticket: the caller does.
     pub(crate) fn set_result(
         &self,
         key: &str,
@@ -345,21 +345,25 @@ impl TicketQueue {
             Some(schema) => schema.validate(result)?,
             None => result,
         };
-        let ticket_copy = {
+        let attached = {
             let mut store = self.tickets.lock().unwrap();
-            store.get_mut(key).map(|ticket| {
-                ticket.result = Some(result.clone());
-                ticket.clone()
-            })
+            store
+                .get_mut(key)
+                .map(|ticket| ticket.result = Some(result.clone()))
+                .is_some()
         };
-        // A missing ticket records nothing: no phantom results line, no save.
-        if let Some(ticket_copy) = ticket_copy {
+        // A missing ticket records nothing: no phantom results line, no file.
+        if attached {
+            let record = TicketResult {
+                key: key.to_string(),
+                value: Some(result.clone()),
+            };
             let log_line = serde_json::json!({ "ticket": key, "result": result });
             let _guard = self.results_log_lock.lock().unwrap();
             // Both writes are best-effort: the result is already attached in
-            // memory, so a failed log or save is observational, not load-bearing.
+            // memory, so a failed file or log is observational, not load-bearing.
+            let _ = record.save(&self.get_dir());
             let _ = Results::append(&self.get_dir(), &log_line);
-            let _ = ticket_copy.save(&self.get_dir());
         }
         Ok(result)
     }

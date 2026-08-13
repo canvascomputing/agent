@@ -28,18 +28,26 @@ use super::{resolve_current_key, write_result};
 pub struct FinishTool;
 
 /// Reserved placeholders substituted into the child ticket's `task`
-/// string at handover time: `{parent_key}` and `{parent_result}`.
-/// Single-pass `str::replace` over each in turn; unknown `{name}`
-/// placeholders pass through verbatim. The non-string arm is
-/// defensive: input validation already rejects non-string `task`.
-fn apply_handover_templates(task: Value, parent_key: &str, parent_result: &str) -> Value {
-    match task {
-        Value::String(s) => Value::String(
-            s.replace("{parent_key}", parent_key)
-                .replace("{parent_result}", parent_result),
-        ),
-        other => other,
-    }
+/// string at handover time: `{parent_key}`, `{parent_result_path}`, and
+/// `{parent_result}`. Single-pass `str::replace` over each in turn, the
+/// result last so text it carries is never expanded again; unknown
+/// `{name}` placeholders pass through verbatim.
+fn apply_handover_templates(
+    task: &str,
+    parent_key: &str,
+    result_path: &str,
+    result: &str,
+) -> String {
+    task.replace("{parent_key}", parent_key)
+        .replace("{parent_result_path}", result_path)
+        .replace("{parent_result}", result)
+}
+
+/// End the child's body with where the work came from, so the receiving
+/// agent can read the whole result even when the body carries a summary
+/// of it or something else entirely.
+fn append_parent_reference(body: &str, parent_key: &str, result_path: &str) -> String {
+    format!("{body}\n\nHanded over from {parent_key}, result file: {result_path}")
 }
 
 fn tool_file() -> &'static ToolFile {
@@ -108,7 +116,7 @@ impl ToolLike for FinishTool {
             // An omitted `task` defaults to the parent result below: the
             // common handoff forwards the finding verbatim.
             let task = match input.get("task") {
-                Some(Value::String(s)) if !s.is_empty() => Some(Value::String(s.clone())),
+                Some(Value::String(s)) if !s.is_empty() => Some(s.clone()),
                 Some(Value::String(_)) => {
                     return Ok(ToolResult::error("`task` must not be an empty string"))
                 }
@@ -140,12 +148,17 @@ impl ToolLike for FinishTool {
                 Value::String(s) => s.clone(),
                 other => serde_json::to_string(other).unwrap_or_default(),
             };
+            let result_path = ticket_queue.result_path(&parent_key);
+            let result_path = result_path.display().to_string();
 
-            let task = match task {
-                Some(task) => apply_handover_templates(task, &parent_key, &parent_result_str),
-                None => Value::String(parent_result_str.clone()),
+            let body = match task {
+                Some(task) => {
+                    apply_handover_templates(&task, &parent_key, &result_path, &parent_result_str)
+                }
+                None => parent_result_str.clone(),
             };
-            let child = Ticket::new(task).label(&handover).parent(&parent_key);
+            let body = append_parent_reference(&body, &parent_key, &result_path);
+            let child = Ticket::new(body).label(&handover).parent(&parent_key);
 
             // Insert the child BEFORE finishing the parent: the child is
             // already `Todo` when the parent leaves the queue, so a
@@ -223,6 +236,50 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(line).unwrap();
         assert_eq!(parsed["ticket"], key.as_str());
         assert_eq!(parsed["result"], "the answer");
+    }
+
+    #[tokio::test]
+    async fn a_result_is_written_to_the_ticket_folder() {
+        let dir = crate::test_util::TempDir::new().unwrap();
+        let (queue, key) = one_ticket("alice");
+        queue.dir(dir.path().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
+        FinishTool
+            .call(serde_json::json!({"result": {"x": 1}}), &ctx)
+            .await
+            .unwrap();
+
+        let path = dir.path().join("tickets").join(&key).join("result.json");
+        let body = std::fs::read_to_string(&path).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(parsed, serde_json::json!({"x": 1}));
+
+        // One home on disk: the ticket record no longer carries the result.
+        let record =
+            std::fs::read_to_string(dir.path().join("tickets").join(&key).join("ticket.json"))
+                .unwrap();
+        let record: serde_json::Value = serde_json::from_str(&record).unwrap();
+        assert!(record.get("result").is_none(), "{record}");
+    }
+
+    #[tokio::test]
+    async fn a_reloaded_queue_reads_the_result_back() {
+        let dir = crate::test_util::TempDir::new().unwrap();
+        let (queue, key) = one_ticket("alice");
+        queue.dir(dir.path().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
+        FinishTool
+            .call(serde_json::json!({"result": "the answer"}), &ctx)
+            .await
+            .unwrap();
+
+        let reloaded = TicketQueue::load(dir.path()).unwrap();
+        let ticket = reloaded.get_ticket(&key).unwrap();
+        assert_eq!(
+            ticket.result.as_ref().and_then(|v| v.as_str()),
+            Some("the answer")
+        );
+        assert_eq!(ticket.status, Status::Finished);
     }
 
     #[tokio::test]
@@ -812,10 +869,62 @@ mod tests {
         assert!(matches!(outcome, ToolResult::Success(_)), "{outcome:?}");
 
         let child = queue.get_ticket("TICKET-2").unwrap();
-        assert_eq!(
-            child.task,
-            serde_json::Value::String("alice's findings".to_string()),
+        assert!(child_body(&child).starts_with("alice's findings"));
+    }
+
+    #[tokio::test]
+    async fn handover_ends_the_child_body_with_the_parent_key_and_result_file() {
+        let dir = crate::test_util::TempDir::new().unwrap();
+        let (queue, parent_key) = one_ticket_in("alice", dir.path().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
+
+        FinishTool
+            .call(
+                serde_json::json!({"handover": "bob", "result": "alice's findings"}),
+                &ctx,
+            )
+            .await
+            .unwrap();
+
+        let child = queue.get_ticket("TICKET-2").unwrap();
+        let body = child_body(&child);
+        assert!(body.contains(&parent_key), "{body}");
+        assert!(
+            body.contains(&queue.result_path(&parent_key).display().to_string()),
+            "{body}"
         );
+    }
+
+    #[tokio::test]
+    async fn handover_substitutes_the_parent_result_file_in_the_task() {
+        let dir = crate::test_util::TempDir::new().unwrap();
+        let (queue, parent_key) = one_ticket_in("alice", dir.path().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
+
+        FinishTool
+            .call(
+                serde_json::json!({
+                    "handover": "bob",
+                    "task": "Read {parent_result_path} and continue",
+                    "result": "alice's findings"
+                }),
+                &ctx,
+            )
+            .await
+            .unwrap();
+
+        let child = queue.get_ticket("TICKET-2").unwrap();
+        let path = queue.result_path(&parent_key);
+        assert!(
+            child_body(&child).starts_with(&format!("Read {} and continue", path.display())),
+            "{}",
+            child_body(&child)
+        );
+    }
+
+    /// The child's task as text, which every handover writes as a string.
+    fn child_body(child: &Ticket) -> String {
+        child.task.as_str().expect("a task string").to_string()
     }
 
     #[tokio::test]
@@ -923,10 +1032,7 @@ mod tests {
             .unwrap();
 
         let child = queue.get_ticket("TICKET-2").unwrap();
-        assert_eq!(
-            child.task,
-            serde_json::Value::String(format!("Continue {parent_key}: alice's findings")),
-        );
+        assert!(child_body(&child).starts_with(&format!("Continue {parent_key}: alice's findings")));
     }
 
     #[tokio::test]
@@ -948,10 +1054,7 @@ mod tests {
             .unwrap();
 
         let child = queue.get_ticket("TICKET-2").unwrap();
-        assert_eq!(
-            child.task,
-            serde_json::Value::String(format!("See {parent_key} and {{unknown}}")),
-        );
+        assert!(child_body(&child).starts_with(&format!("See {parent_key} and {{unknown}}")));
     }
 
     #[tokio::test]
@@ -976,9 +1079,8 @@ mod tests {
             .unwrap();
 
         let child = queue.get_ticket("TICKET-2").unwrap();
-        assert_eq!(
-            child.task,
-            serde_json::Value::String("[{parent_key}]".to_string()),
+        assert!(
+            child_body(&child).starts_with("[{parent_key}]"),
             "result containing `{{parent_key}}` should be inserted literally, \
              not recursively expanded (parent_key was {parent_key})",
         );

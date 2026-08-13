@@ -332,6 +332,67 @@ See [`Ticket`](https://docs.rs/agentwerk/latest/agentwerk/agents/tickets/struct.
 
 </details>
 
+### Handover
+
+Agents can share the results of their work in the following ways:
+
+1. **Create tickets**: the `finish` tool's `handover` option opens a child ticket carrying the result.
+2. **Read tickets**: the `read_tickets` tool allows reading any finished ticket's result, by key.
+3. **Read result file**: the `read_file` tool reads a ticket's `result.json` in the session directory.
+4. **Share knowledge**: the `manage_knowledge` tool allows sharing knowledge with other agents.
+
+<details>
+<summary>All ways agents pass data</summary>
+
+#### 1. Create tickets
+
+A handover can be performed through a single `finish` tool call, naming the label that picks the work up and, optionally, the body of the ticket it opens:
+
+```json
+{
+  "handover": "report",
+  "result": "Three products lead on value.",
+  "task": "Write the board report from {parent_key}."
+}
+```
+
+When `task` is not defined, the child ticket's body is the result itself. A `task` takes these template strings:
+
+- `{parent_key}`: the key of the ticket that was handed over.
+- `{parent_result}`: its result.
+- `{parent_result_path}`: the path of its result file.
+
+#### 2. Read tickets
+
+The `read_tickets` tool reads what any finished ticket produced, by key:
+
+```json
+{ "action": "result", "key": "TICKET-1" }
+```
+
+#### 3. Read result file
+
+The `read_file` tool reads the original result file when its path is known:
+
+```json
+{ "path": ".agentwerk/tickets/TICKET-1/result.json" }
+```
+
+#### 4. Share knowledge
+
+The `manage_knowledge` tool allows sharing knowledge with other agents:
+
+```json
+{
+  "action": "write",
+  "slug": "value-ranking",
+  "description": "How the products rank on value.",
+  "content": "Three products lead on value: ..."
+}
+```
+
+</details>
+
 ### Schemas
 
 A `Schema` constrains the result an agent produces for a ticket. A violation triggers a retry until `max_schema_retries` is exhausted.
@@ -665,7 +726,8 @@ tickets.start();
 ├── results.jsonl                         finished results (one per line)
 ├── tickets/
 │   └── TICKET-1/
-│       ├── ticket.json                   the ticket without its messages (key, status, label, timestamps, result)
+│       ├── ticket.json                   the ticket without its messages (key, status, label, timestamps)
+│       ├── result.json                   the result the agent produced
 │       ├── replies.jsonl                 every message exchanged with the model, one per line
 │       └── outputs/<tool_use_id>.txt     full tool outputs spilled out of the messages
 └── knowledge/

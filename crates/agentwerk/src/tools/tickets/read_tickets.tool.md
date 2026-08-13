@@ -3,7 +3,7 @@ name: read_tickets
 read_only: true
 ---
 
-Read tickets from the queue: `get` by key (defaults to your current ticket), `list` by status or label, or `search` task bodies. `get` returns a markdown ticket block; `list`/`search` return a bullet summary and cap at 50 tickets, so tighten filters rather than re-running. `search` matches the task body only, not the label or the result.
+Read tickets from the queue: `ticket` by key (defaults to your current ticket), `result` for what a finished ticket produced, `list` by status or label, or `search` task bodies. Each call answers with text: a markdown ticket block for `ticket`, the result and the file holding it for `result`, a bullet summary of up to 50 tickets for `list` and `search`, so tighten filters rather than re-running. `search` matches the task body only, not the label or the result.
 
 ## When NOT to use
 
@@ -18,11 +18,11 @@ Read tickets from the queue: `get` by key (defaults to your current ticket), `li
   "properties": {
     "action": {
       "type": "string",
-      "description": "Read mode: `get` (one ticket), `list` (filter by status / label), `search` (free-text)."
+      "description": "Read mode: `ticket` (one whole ticket), `result` (that ticket's result alone), `list` (filter by status / label), `search` (free-text)."
     },
     "key": {
       "type": "string",
-      "description": "Ticket key for `get` (e.g. `TICKET-3`). Defaults to the agent's current ticket. Ignored by `list` / `search`."
+      "description": "Ticket key for `ticket` / `result` (e.g. `TICKET-3`). Defaults to the agent's current ticket. Ignored by `list` / `search`."
     },
     "status": {
       "type": "string",

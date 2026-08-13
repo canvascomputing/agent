@@ -1,6 +1,8 @@
 //! The tools an agent reaches its own ticket queue through: reading it, adding
 //! to it, and finishing the ticket it holds.
 
+use std::path::Path;
+
 use serde_json::Value;
 
 use crate::agents::tickets::{Status, Ticket, TicketError, TicketQueue};
@@ -20,7 +22,7 @@ pub(crate) use result_shape::finish_tool_input_schema;
 /// Action sets each multi-action tool exposes. Keeps the dispatch logic
 /// in one place and lets each tool reject actions outside its
 /// allow-list with a uniform error message.
-pub(super) const READ_ACTIONS: &[&str] = &["get", "list", "search"];
+pub(super) const READ_ACTIONS: &[&str] = &["ticket", "result", "list", "search"];
 pub(super) const WRITE_ACTIONS: &[&str] = &["create", "edit"];
 
 /// Name of the tool that finishes a ticket. The request builder matches tool
@@ -43,7 +45,8 @@ pub(super) fn dispatch(input: Value, ctx: &ToolContext, allowed: &[&str]) -> Too
     };
 
     match action {
-        "get" => action_get(&ticket_queue, &input, ctx),
+        "ticket" => action_ticket(&ticket_queue, &input, ctx),
+        "result" => action_result(&ticket_queue, &input, ctx),
         "list" => action_list(&ticket_queue, &input),
         "search" => action_search(&ticket_queue, &input),
         "create" => action_create(&ticket_queue, &input, ctx),
@@ -100,8 +103,28 @@ fn render_ticket(t: &Ticket) -> String {
         out.push_str(&format!("- parent: {parent}\n"));
     }
     out.push('\n');
-    match &t.task {
-        serde_json::Value::String(s) => {
+    push_value(&mut out, &t.task);
+    out.push_str("\n## Result\n");
+    match t.result.as_ref() {
+        Some(result) => push_value(&mut out, result),
+        None => out.push_str("(no result)\n"),
+    }
+    out
+}
+
+/// The result of ticket `key`, with the file it is stored in, so the agent
+/// can read it again without asking for it.
+fn render_result(key: &str, path: &Path, result: &Value) -> String {
+    let mut out = format!("# {key} result\n- file: {}\n\n", path.display());
+    push_value(&mut out, result);
+    out
+}
+
+/// Add a value the way it reads best: a string as it stands, anything
+/// structured as pretty JSON in a fence.
+fn push_value(out: &mut String, value: &Value) {
+    match value {
+        Value::String(s) => {
             out.push_str(s);
             out.push('\n');
         }
@@ -111,14 +134,6 @@ fn render_ticket(t: &Ticket) -> String {
             out.push_str("\n```\n");
         }
     }
-    out.push_str("\n## Result\n");
-    match t.result.as_ref() {
-        Some(serde_json::Value::String(s)) => out.push_str(s),
-        Some(other) => out.push_str(&other.to_string()),
-        None => out.push_str("(no result)"),
-    }
-    out.push('\n');
-    out
 }
 
 fn status_label(s: Status) -> &'static str {
@@ -179,7 +194,7 @@ fn task_preview(task: &serde_json::Value) -> String {
     truncate_for_preview(&raw, 80)
 }
 
-fn action_get(ticket_queue: &TicketQueue, input: &Value, ctx: &ToolContext) -> ToolResult {
+fn action_ticket(ticket_queue: &TicketQueue, input: &Value, ctx: &ToolContext) -> ToolResult {
     let key = match resolve_key(ticket_queue, input, ctx) {
         Ok(k) => k,
         Err(e) => return e,
@@ -187,6 +202,25 @@ fn action_get(ticket_queue: &TicketQueue, input: &Value, ctx: &ToolContext) -> T
     match ticket_queue.get_ticket(&key) {
         Some(t) => ToolResult::success(render_ticket(&t)),
         None => ToolResult::error(format!("Ticket {key} not found")),
+    }
+}
+
+fn action_result(ticket_queue: &TicketQueue, input: &Value, ctx: &ToolContext) -> ToolResult {
+    let key = match resolve_key(ticket_queue, input, ctx) {
+        Ok(k) => k,
+        Err(e) => return e,
+    };
+    let Some(ticket) = ticket_queue.get_ticket(&key) else {
+        return ToolResult::error(format!("Ticket {key} not found"));
+    };
+    match ticket.result.as_ref() {
+        Some(result) => {
+            ToolResult::success(render_result(&key, &ticket_queue.result_path(&key), result))
+        }
+        None => ToolResult::error(format!(
+            "Ticket {key} has no result yet, it is {}",
+            status_label(ticket.status)
+        )),
     }
 }
 
@@ -385,13 +419,73 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn read_get_defaults_key_to_current_ticket() {
+    async fn read_ticket_defaults_key_to_current_ticket() {
         let (queue, key) = shared_with_one_ticket("alice");
         let ctx = ctx_with(Arc::clone(&queue), "alice");
-        let result = call(&ReadTicketsTool, serde_json::json!({"action": "get"}), &ctx).await;
+        let result = call(
+            &ReadTicketsTool,
+            serde_json::json!({"action": "ticket"}),
+            &ctx,
+        )
+        .await;
         let text = unwrap_text(&result);
         assert!(text.contains(&key), "expected key in output: {text}");
         assert!(text.contains("body"));
+    }
+
+    #[tokio::test]
+    async fn read_result_returns_the_result_of_another_agents_ticket() {
+        let (queue, key) = shared_with_one_ticket("alice");
+        queue
+            .set_result(&key, serde_json::json!({"finding": "a lead"}))
+            .unwrap();
+
+        let ctx = ctx_with(Arc::clone(&queue), "bob");
+        let result = call(
+            &ReadTicketsTool,
+            serde_json::json!({"action": "result", "key": key}),
+            &ctx,
+        )
+        .await;
+        let text = unwrap_text(&result);
+        assert!(matches!(result, ToolResult::Success(_)), "{text}");
+        assert!(text.contains("a lead"), "expected the result: {text}");
+        assert!(
+            text.contains("result.json"),
+            "expected the result file: {text}"
+        );
+    }
+
+    #[tokio::test]
+    async fn read_result_defaults_key_to_current_ticket() {
+        let (queue, key) = shared_with_one_ticket("alice");
+        queue
+            .set_result(&key, serde_json::json!("what alice found"))
+            .unwrap();
+
+        let ctx = ctx_with(Arc::clone(&queue), "alice");
+        let result = call(
+            &ReadTicketsTool,
+            serde_json::json!({"action": "result"}),
+            &ctx,
+        )
+        .await;
+        let text = unwrap_text(&result);
+        assert!(text.contains("what alice found"), "{text}");
+    }
+
+    #[tokio::test]
+    async fn read_result_errors_while_the_ticket_has_no_result() {
+        let (queue, key) = shared_with_one_ticket("alice");
+        let ctx = ctx_with(Arc::clone(&queue), "alice");
+        let result = call(
+            &ReadTicketsTool,
+            serde_json::json!({"action": "result", "key": key}),
+            &ctx,
+        )
+        .await;
+        assert!(matches!(result, ToolResult::Error(_)), "{result:?}");
+        assert!(unwrap_text(&result).contains("InProgress"));
     }
 
     #[tokio::test]

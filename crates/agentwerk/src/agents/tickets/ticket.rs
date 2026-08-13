@@ -63,7 +63,9 @@ pub struct Ticket {
     pub finished_at: Option<u64>,
     /// Failure time, in milliseconds. Never set together with `finished_at`.
     pub failed_at: Option<u64>,
-    /// The result the agent produced.
+    /// The result the agent produced. Stored in its own file, so it is not part
+    /// of the ticket record.
+    #[serde(skip)]
     pub result: Option<serde_json::Value>,
     /// The parent ticket if a handover was performed.
     pub parent: Option<String>,
@@ -225,7 +227,42 @@ impl crate::persistence::Persist for Ticket {
         let bytes = std::fs::read(ticket_record_path(dir, key))?;
         let mut ticket: Ticket = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
         ticket.replies = Replies::load(dir, key)?.entries;
+        ticket.result = TicketResult::load(dir, key)?.value;
         Ok(ticket)
+    }
+}
+
+/// A ticket's result on disk: the bare JSON value in
+/// `tickets/<key>/result.json`, so reading the file gives the result and
+/// nothing around it.
+pub(crate) struct TicketResult {
+    pub(crate) key: String,
+    pub(crate) value: Option<serde_json::Value>,
+}
+
+impl Persist for TicketResult {
+    type Key = String;
+
+    fn save(&self, dir: &Path) -> io::Result<()> {
+        let Some(value) = &self.value else {
+            return Ok(());
+        };
+        let body = serde_json::to_vec_pretty(value).map_err(io::Error::other)?;
+        crate::persistence::write_atomic(&result_path(dir, &self.key), &body)
+    }
+
+    fn load(dir: &Path, key: &String) -> io::Result<Self> {
+        let path = result_path(dir, key);
+        let value = if path.exists() {
+            let bytes = std::fs::read(&path)?;
+            Some(serde_json::from_slice(&bytes).map_err(io::Error::other)?)
+        } else {
+            None
+        };
+        Ok(TicketResult {
+            key: key.clone(),
+            value,
+        })
     }
 }
 
@@ -290,6 +327,11 @@ pub(super) fn ticket_record_path(dir: &Path, key: &str) -> PathBuf {
 /// Where `key`'s replies are stored: `tickets/<key>/replies.jsonl`.
 fn replies_path(dir: &Path, key: &str) -> PathBuf {
     dir.join("tickets").join(key).join("replies.jsonl")
+}
+
+/// Where `key`'s result is stored: `tickets/<key>/result.json`.
+pub(super) fn result_path(dir: &Path, key: &str) -> PathBuf {
+    dir.join("tickets").join(key).join("result.json")
 }
 
 impl AsUserMessage for Ticket {
