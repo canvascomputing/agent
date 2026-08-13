@@ -197,7 +197,8 @@ impl Run {
 /// ├── results.jsonl                         finished results (one per line)
 /// ├── tickets/
 /// │   └── TICKET-1/
-/// │       ├── ticket.json                   the ticket without its messages
+/// │       ├── ticket.json                   the ticket without its messages or result
+/// │       ├── result.json                   the result the agent produced
 /// │       ├── replies.jsonl                 every message exchanged with the model, one per line
 /// │       └── outputs/<tool_use_id>.txt     full tool outputs spilled out of the messages
 /// └── knowledge/
@@ -904,6 +905,12 @@ impl TicketQueue {
     /// Get the session directory.
     pub fn get_dir(&self) -> PathBuf {
         self.dir.lock().unwrap().clone()
+    }
+
+    /// Where ticket `key`'s result is stored. Named for agents, which read a
+    /// result through this path or hand it to the next ticket.
+    pub(crate) fn result_path(&self, key: &str) -> PathBuf {
+        super::ticket::result_path(&self.get_dir(), key)
     }
 
     /// Enforce schemas for ticket results.
