@@ -32,8 +32,7 @@ use agentwerk::agents::tickets::{Reply, ReplyContent};
 use agentwerk::event::{Event, EventKind, EventName};
 use agentwerk::providers::Model;
 use agentwerk::tools::{
-    GlobTool, GrepTool, ListDirectoryTool, ManageTicketsTool, ReadFileTool, ReadTicketsTool,
-    WriteFileTool,
+    GlobTool, GrepTool, ListDirectoryTool, ReadFileTool, TicketsTool, WriteFileTool,
 };
 use agentwerk::{Agent, Knowledge, TicketQueue};
 
@@ -111,8 +110,7 @@ async fn main() {
             .tool(ListDirectoryTool)
             .tool(ReadFileTool)
             .tool(WriteFileTool)
-            .tool(ReadTicketsTool)
-            .tool(ManageTicketsTool)
+            .tool(TicketsTool)
             .knowledge(&knowledge)
             .build(),
     );

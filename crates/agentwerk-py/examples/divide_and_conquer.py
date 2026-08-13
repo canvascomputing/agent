@@ -14,7 +14,7 @@ import subprocess
 import sys
 from collections import Counter
 
-from agentwerk import Agent, ManageTicketsTool, Schema, Ticket, TicketQueue, ToolResult, tool
+from agentwerk import Agent, Schema, Ticket, TicketQueue, TicketsTool, ToolResult, tool
 
 ROLE = """
 {context}
@@ -122,7 +122,7 @@ async def main(n, partitions, agents):
             Agent.from_env()
             .role(ROLE.strip())
             .label("compute")
-            .tools([python, ManageTicketsTool()])
+            .tools([python, TicketsTool()])
             .build()
         )
 

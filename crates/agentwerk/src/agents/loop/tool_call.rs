@@ -442,7 +442,7 @@ mod tests {
 
         use crate::agents::agent::Agent;
         use crate::agents::tickets::TicketQueue;
-        use crate::tools::{ManageTicketsTool, Tool, ToolResult};
+        use crate::tools::{TicketsTool, Tool, ToolResult};
 
         let tool_started = Arc::new(Notify::new());
         let tool_unblocked = Arc::new(Notify::new());
@@ -479,7 +479,7 @@ mod tests {
                 .provider(provider)
                 .model("mock")
                 .role("test")
-                .tool(ManageTicketsTool)
+                .tool(TicketsTool)
                 .tool(slow_tool)
                 .build(),
         );

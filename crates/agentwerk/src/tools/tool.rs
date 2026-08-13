@@ -903,8 +903,7 @@ mod tests {
             Box::new(crate::tools::ManageKnowledgeTool::new(store)),
             Box::new(crate::tools::BashTool::new("git").allow("git *")),
             Box::new(crate::tools::FinishTool),
-            Box::new(crate::tools::ManageTicketsTool),
-            Box::new(crate::tools::ReadTicketsTool),
+            Box::new(crate::tools::TicketsTool),
         ];
         for tool in &tools {
             assert!(!tool.name().is_empty(), "tool name is empty");

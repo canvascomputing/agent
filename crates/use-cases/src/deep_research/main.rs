@@ -3,7 +3,7 @@
 //! One `TicketQueue` holds the whole pipeline. The driver enqueues a
 //! single starter ticket pinned to `researcher_1`. Each researcher
 //! calls `brave_search`, reads its parent ticket via
-//! `read_tickets` to build on prior findings, and hands off to
+//! `tickets` to build on prior findings, and hands off to
 //! the next agent via `finish` with a `handover`. A handover carries no
 //! schema, so the report schema is bound to the `report` label and the
 //! report writer's ticket takes it when that agent claims it. The report
@@ -20,7 +20,7 @@ use std::sync::Arc;
 use agentwerk::event::{Event, EventKind, EventName};
 use agentwerk::providers::{Model, Provider, ProviderResult};
 use agentwerk::schemas::{Schema, SchemaStore};
-use agentwerk::tools::{ReadTicketsTool, Tool, ToolResult};
+use agentwerk::tools::{TicketsTool, Tool, ToolResult};
 use agentwerk::{Agent, FinishReason, Ticket, TicketQueue};
 
 const RESEARCHER_1_ROLE: &str = include_str!("prompts/researcher_1.role.md");
@@ -61,7 +61,7 @@ async fn main() {
         .role(RESEARCHER_1_ROLE)
         .label("researcher_1")
         .tool(brave_search_tool(brave_key.clone()))
-        .tool(ReadTicketsTool)
+        .tool(TicketsTool)
         .build();
 
     let researcher_2 = Agent::new()
@@ -70,7 +70,7 @@ async fn main() {
         .role(RESEARCHER_2_ROLE)
         .label("researcher_2")
         .tool(brave_search_tool(brave_key.clone()))
-        .tool(ReadTicketsTool)
+        .tool(TicketsTool)
         .build();
 
     let report_writer = Agent::new()
@@ -78,7 +78,7 @@ async fn main() {
         .model(Model::from_env().expect("model name required"))
         .role(REPORT_WRITER_ROLE)
         .label("report")
-        .tool(ReadTicketsTool)
+        .tool(TicketsTool)
         .build();
 
     tickets.agent(researcher_1);
@@ -369,7 +369,7 @@ fn format_tool_call(tool_name: &str, input: &serde_json::Value) -> Vec<String> {
             "🔎 search: {}",
             truncate(input["query"].as_str().unwrap_or(""), 70),
         )],
-        "read_tickets" => {
+        "tickets" => {
             let action = input["action"].as_str().unwrap_or("?");
             let key = input.get("key").and_then(|v| v.as_str()).unwrap_or("");
             let suffix = if key.is_empty() {

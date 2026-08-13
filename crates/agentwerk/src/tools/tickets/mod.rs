@@ -10,36 +10,22 @@ use crate::agents::tickets::{Status, Ticket, TicketError, TicketQueue};
 use super::tool::{ToolContext, ToolResult};
 
 mod finish;
-mod manage_tickets;
-mod read_tickets;
 mod result_shape;
+mod tickets;
 
 pub use finish::FinishTool;
-pub use manage_tickets::ManageTicketsTool;
-pub use read_tickets::ReadTicketsTool;
 pub(crate) use result_shape::finish_tool_input_schema;
-
-/// Action sets each multi-action tool exposes. Keeps the dispatch logic
-/// in one place and lets each tool reject actions outside its
-/// allow-list with a uniform error message.
-pub(super) const READ_ACTIONS: &[&str] = &["ticket", "result", "list", "search"];
-pub(super) const WRITE_ACTIONS: &[&str] = &["create", "edit"];
+pub use tickets::TicketsTool;
 
 /// Name of the tool that finishes a ticket. The request builder matches tool
 /// definitions against it to advertise the ticket's schema on its arguments.
 pub(crate) const TICKET_FINISH_TOOL: &str = "finish";
 
-pub(super) fn dispatch(input: Value, ctx: &ToolContext, allowed: &[&str]) -> ToolResult {
+pub(super) fn dispatch(input: Value, ctx: &ToolContext) -> ToolResult {
     let action = match input["action"].as_str() {
         Some(a) => a,
         None => return ToolResult::error("Missing required parameter: action"),
     };
-    if !allowed.contains(&action) {
-        return ToolResult::error(format!(
-            "Action `{action}` is not supported by this tool. Allowed: {}",
-            allowed.join(", ")
-        ));
-    }
     let Some(ticket_queue) = ctx.ticket_queue_handle().cloned() else {
         return ToolResult::error("Ticket queue unavailable in this context");
     };
@@ -51,7 +37,9 @@ pub(super) fn dispatch(input: Value, ctx: &ToolContext, allowed: &[&str]) -> Too
         "search" => action_search(&ticket_queue, &input),
         "create" => action_create(&ticket_queue, &input, ctx),
         "edit" => action_edit(&ticket_queue, &input, ctx),
-        other => ToolResult::error(format!("Unknown action `{other}`")),
+        other => ToolResult::error(format!(
+            "Unknown action `{other}`. Valid actions: ticket, result, list, search, create, edit"
+        )),
     }
 }
 
@@ -419,22 +407,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn read_ticket_defaults_key_to_current_ticket() {
+    async fn ticket_defaults_key_to_current_ticket() {
         let (queue, key) = shared_with_one_ticket("alice");
         let ctx = ctx_with(Arc::clone(&queue), "alice");
-        let result = call(
-            &ReadTicketsTool,
-            serde_json::json!({"action": "ticket"}),
-            &ctx,
-        )
-        .await;
+        let result = call(&TicketsTool, serde_json::json!({"action": "ticket"}), &ctx).await;
         let text = unwrap_text(&result);
         assert!(text.contains(&key), "expected key in output: {text}");
         assert!(text.contains("body"));
     }
 
     #[tokio::test]
-    async fn read_result_returns_the_result_of_another_agents_ticket() {
+    async fn result_returns_the_result_of_another_agents_ticket() {
         let (queue, key) = shared_with_one_ticket("alice");
         queue
             .set_result(&key, serde_json::json!({"finding": "a lead"}))
@@ -442,7 +425,7 @@ mod tests {
 
         let ctx = ctx_with(Arc::clone(&queue), "bob");
         let result = call(
-            &ReadTicketsTool,
+            &TicketsTool,
             serde_json::json!({"action": "result", "key": key}),
             &ctx,
         )
@@ -457,29 +440,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn read_result_defaults_key_to_current_ticket() {
+    async fn result_defaults_key_to_current_ticket() {
         let (queue, key) = shared_with_one_ticket("alice");
         queue
             .set_result(&key, serde_json::json!("what alice found"))
             .unwrap();
 
         let ctx = ctx_with(Arc::clone(&queue), "alice");
-        let result = call(
-            &ReadTicketsTool,
-            serde_json::json!({"action": "result"}),
-            &ctx,
-        )
-        .await;
+        let result = call(&TicketsTool, serde_json::json!({"action": "result"}), &ctx).await;
         let text = unwrap_text(&result);
         assert!(text.contains("what alice found"), "{text}");
     }
 
     #[tokio::test]
-    async fn read_result_errors_while_the_ticket_has_no_result() {
+    async fn result_errors_while_the_ticket_has_no_result() {
         let (queue, key) = shared_with_one_ticket("alice");
         let ctx = ctx_with(Arc::clone(&queue), "alice");
         let result = call(
-            &ReadTicketsTool,
+            &TicketsTool,
             serde_json::json!({"action": "result", "key": key}),
             &ctx,
         )
@@ -489,7 +467,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn read_list_filters_by_status() {
+    async fn list_filters_by_status() {
         let queue = TicketQueue::new();
         queue.dir(isolated_test_dir());
         queue.insert(Ticket::new("a"), "tester".into());
@@ -498,7 +476,7 @@ mod tests {
 
         let ctx = ctx_with(Arc::clone(&queue), "alice");
         let result = call(
-            &ReadTicketsTool,
+            &TicketsTool,
             serde_json::json!({"action": "list", "status": "InProgress"}),
             &ctx,
         )
@@ -509,12 +487,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn manage_create_stamps_reporter_from_agent_id() {
+    async fn create_stamps_reporter_from_agent_id() {
         let queue = TicketQueue::new();
         queue.dir(isolated_test_dir());
         let ctx = ctx_with(Arc::clone(&queue), "alice");
         let result = call(
-            &ManageTicketsTool,
+            &TicketsTool,
             serde_json::json!({"action": "create", "task": "new ticket"}),
             &ctx,
         )
@@ -526,12 +504,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn manage_create_with_a_label_attaches_it() {
+    async fn create_with_a_label_attaches_it() {
         let queue = TicketQueue::new();
         queue.dir(isolated_test_dir());
         let ctx = ctx_with(Arc::clone(&queue), "alice");
         let result = call(
-            &ManageTicketsTool,
+            &TicketsTool,
             serde_json::json!({
                 "action": "create",
                 "task": "new",
@@ -547,12 +525,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn manage_create_with_named_label_routes_to_agent() {
+    async fn create_with_named_label_routes_to_agent() {
         let queue = TicketQueue::new();
         queue.dir(isolated_test_dir());
         let ctx = ctx_with(Arc::clone(&queue), "alice");
         let result = call(
-            &ManageTicketsTool,
+            &TicketsTool,
             serde_json::json!({
                 "action": "create",
                 "task": "new",
@@ -579,7 +557,7 @@ mod tests {
 
         let ctx = ctx_with(Arc::clone(&queue), "alice");
         let result = call(
-            &ManageTicketsTool,
+            &TicketsTool,
             serde_json::json!({
                 "action": "create",
                 "task": "new",
@@ -596,11 +574,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn manage_edit_replaces_the_task_and_the_label() {
+    async fn edit_replaces_the_task_and_the_label() {
         let (queue, key) = shared_with_one_ticket("alice");
         let ctx = ctx_with(Arc::clone(&queue), "alice");
         let result = call(
-            &ManageTicketsTool,
+            &TicketsTool,
             serde_json::json!({
                 "action": "edit",
                 "task": "new body",
@@ -616,16 +594,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn manage_rejects_unsupported_actions() {
+    async fn unsupported_actions_are_rejected() {
         let (queue, _key) = shared_with_one_ticket("alice");
         let ctx = ctx_with(Arc::clone(&queue), "alice");
         for action in ["done", "transition", "comment", "assign", "attach"] {
-            let result = call(
-                &ManageTicketsTool,
-                serde_json::json!({"action": action}),
-                &ctx,
-            )
-            .await;
+            let result = call(&TicketsTool, serde_json::json!({"action": action}), &ctx).await;
             assert!(
                 matches!(result, ToolResult::Error(_)),
                 "{action}: {result:?}"

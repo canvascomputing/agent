@@ -44,7 +44,7 @@ mod tests {
     use crate::agents::agent::Agent;
     use crate::agents::r#loop::test_util::*;
     use crate::agents::tickets::{Status, Ticket, TicketQueue};
-    use crate::tools::ManageTicketsTool;
+    use crate::tools::TicketsTool;
 
     // Late-add agent tests
 
@@ -68,7 +68,7 @@ mod tests {
                 .provider(provider.clone())
                 .model("mock")
                 .role("test")
-                .tool(ManageTicketsTool)
+                .tool(TicketsTool)
                 .build(),
         );
         tickets.ticket(Ticket::new("hello").label("late"));
@@ -162,7 +162,7 @@ mod tests {
                 .provider(provider)
                 .model("mock")
                 .role("test")
-                .tool(ManageTicketsTool)
+                .tool(TicketsTool)
                 .build(),
         );
         tickets.ticket(Ticket::new("x").label("late"));
