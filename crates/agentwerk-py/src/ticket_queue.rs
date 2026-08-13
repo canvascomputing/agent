@@ -230,6 +230,63 @@ impl PyTicketQueue {
         slf
     }
 
+    /// Read every finished ticket together with its result, in an `async def`
+    /// that `finish` waits for before it returns. It runs on the event loop
+    /// awaiting `finish`, so work that has to stay serialized against the
+    /// caller's own, such as a commit, can be; `on_result` runs on an agent
+    /// thread and cannot await.
+    ///
+    /// Handlers run only while `finish` or `finish_all` is awaited, and MUST
+    /// NOT call either themselves: that waits forever on the handover the
+    /// handler is running inside.
+    fn on_result_async<'py>(slf: PyRef<'py, Self>, callback: Py<PyAny>) -> PyRef<'py, Self> {
+        slf.inner
+            .on_result_async(move |ticket: Ticket, result: Value| {
+                let coroutine = Python::attach(|py| {
+                    let produced = call_with_result(py, &callback, &ticket, &result)?;
+                    pyo3_async_runtimes::tokio::into_future(produced)
+                });
+                async move {
+                    match coroutine {
+                        Ok(future) => {
+                            if let Err(err) = future.await {
+                                Python::attach(|py| err.print(py));
+                            }
+                        }
+                        Err(err) => Python::attach(|py| err.print(py)),
+                    }
+                }
+            });
+        slf
+    }
+
+    /// Read every result the run has produced so far, each time one lands, in
+    /// an `async def` that `finish` waits for before it returns. Use it to act
+    /// on a condition across results with work that has to be awaited.
+    ///
+    /// Handlers run only while `finish` or `finish_all` is awaited, and MUST
+    /// NOT call either themselves: that waits forever on the handover the
+    /// handler is running inside.
+    fn on_results_async<'py>(slf: PyRef<'py, Self>, callback: Py<PyAny>) -> PyRef<'py, Self> {
+        slf.inner.on_results_async(move |results: Vec<Value>| {
+            let coroutine = Python::attach(|py| {
+                let produced = call_with_results(py, &callback, &results)?;
+                pyo3_async_runtimes::tokio::into_future(produced)
+            });
+            async move {
+                match coroutine {
+                    Ok(future) => {
+                        if let Err(err) = future.await {
+                            Python::attach(|py| err.print(py));
+                        }
+                    }
+                    Err(err) => Python::attach(|py| err.print(py)),
+                }
+            }
+        });
+        slf
+    }
+
     /// Read every result the run has produced so far, each time one lands. The
     /// same list `results()` gives after the run, in creation order, delivered
     /// while it is still going.

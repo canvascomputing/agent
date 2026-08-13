@@ -1,5 +1,7 @@
 """Tickets, schemas, and ticket-queue state, exercised through the public API."""
 
+import asyncio
+import sqlite3
 from collections import Counter
 
 import pytest
@@ -399,6 +401,101 @@ async def test_run_finished_announces_why_execution_ended(queue):
     await queue.finish_all()
     assert queue.get_finish_reason() == "drained"
     assert reasons == ["drained"]
+
+
+async def test_on_result_async_awaits_the_handler_before_finish_all_returns(queue):
+    seen = []
+
+    async def persist(ticket, result):
+        await asyncio.sleep(0)
+        seen.append((ticket.key, result))
+
+    queue.on_result_async(persist)
+    key = queue.task("scan the corpus")
+    queue.set_finished(key, {"verdict": "clean"})
+
+    await queue.finish_all()
+
+    assert seen == [(key, {"verdict": "clean"})]
+
+
+async def test_on_result_async_finishes_one_handler_before_starting_the_next(queue):
+    seen = []
+
+    async def persist(ticket, result):
+        seen.append(f"start {ticket.key}")
+        # A scheduled-only coroutine would let the next one start here.
+        await asyncio.sleep(0.01)
+        seen.append(f"end {ticket.key}")
+
+    queue.on_result_async(persist)
+    first = queue.task("scan a.py")
+    second = queue.task("scan b.py")
+    queue.set_finished(first, "clean")
+    queue.set_finished(second, "clean")
+
+    await queue.finish_all()
+
+    assert seen == [f"start {first}", f"end {first}", f"start {second}", f"end {second}"]
+
+
+async def test_on_result_async_writes_every_result_to_a_database(queue, tmp_path):
+    # `check_same_thread` off because `to_thread` runs the insert on a worker.
+    database = sqlite3.connect(tmp_path / "verdicts.db", check_same_thread=False)
+    database.execute("CREATE TABLE verdicts (ticket TEXT, verdict TEXT)")
+
+    def insert(key, verdict):
+        database.execute("INSERT INTO verdicts VALUES (?, ?)", (key, verdict))
+        database.commit()
+
+    async def persist(ticket, result):
+        await asyncio.to_thread(insert, ticket.key, result["verdict"])
+
+    queue.on_result_async(persist)
+    first = queue.task("scan a.py")
+    second = queue.task("scan b.py")
+    queue.set_finished(first, {"verdict": "clean"})
+    queue.set_finished(second, {"verdict": "malicious"})
+
+    await queue.finish_all()
+
+    # `finish_all` waited, so no write is still in flight here.
+    rows = database.execute("SELECT ticket, verdict FROM verdicts").fetchall()
+    assert rows == [(first, "clean"), (second, "malicious")]
+
+
+async def test_on_results_async_hands_over_every_result_so_far(queue):
+    seen = []
+
+    async def note(results):
+        await asyncio.sleep(0)
+        seen.append(results)
+
+    queue.on_results_async(note)
+    first = queue.task("scan a.py")
+    second = queue.task("scan b.py")
+    queue.set_finished(first, "clean")
+    queue.set_finished(second, "malicious")
+
+    await queue.finish_all()
+
+    assert seen == [["clean"], ["clean", "malicious"]]
+
+
+async def test_on_result_async_runs_the_handler_on_the_callers_event_loop(queue):
+    loops = []
+
+    async def persist(ticket, result):
+        loops.append(asyncio.get_running_loop())
+
+    queue.on_result_async(persist)
+    key = queue.task("scan the corpus")
+    queue.set_finished(key, "clean")
+
+    await queue.finish_all()
+
+    # The whole point: a commit here can be serialized against the caller's own.
+    assert loops == [asyncio.get_running_loop()]
 
 
 async def test_finish_hands_back_the_results_its_filter_named(queue):

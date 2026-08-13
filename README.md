@@ -639,7 +639,9 @@ tickets.create_ticket_on_failure(|_, failed| {
 |-|--------|-------------|
 | **Observe** | `on_event(handler)` | Read every event as it is emitted. |
 | | `on_result(handler)` | Read every finished ticket together with its result. |
+| | `on_result_async(handler)` | Read every finished ticket with its result, in an async handler. |
 | | `on_results(handler)` | Read every result the run has produced so far, each time one lands. |
+| | `on_results_async(handler)` | Read every result in an async handler. |
 | | `on_failure(handler)` | Read every failure together with the ticket it happened in. |
 | | `on_ticket(handler)` | Read a ticket as it starts, finishes, or fails. |
 | **Add work** | `create_ticket_on_event(make)` | Enqueue a follow-up ticket from any event. |
@@ -659,6 +661,20 @@ tickets.on_ticket(move |event, ticket| {
         let model = queue.model_for_agent(&event.agent_id);
         let _ = Trajectory::from_ticket(&event.agent_id, model.as_deref(), ticket)
             .save("datasets");
+    }
+});
+```
+
+#### Async handlers
+
+`on_result` is blocking and prevents an agent continuing its work till the hook is finished. If you perform time-consuming operations use `on_result_async` instead: storing results in a database, posting them to an HTTP API, or uploading them to object storage.
+
+```rust
+let findings = Arc::clone(&database);
+tickets.on_result_async(move |ticket, result| {
+    let findings = Arc::clone(&findings);
+    async move {
+        let _ = findings.insert(&ticket.key, &result).await;
     }
 });
 ```
