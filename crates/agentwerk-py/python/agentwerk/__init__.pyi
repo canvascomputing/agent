@@ -1,6 +1,6 @@
 """Type stubs for the agentwerk Python bindings."""
 
-from typing import Any, Callable, Optional, overload
+from typing import Any, Awaitable, Callable, Optional, overload
 
 class Provider:
     """An LLM provider, passed to ``Agent.provider(...)``."""
@@ -323,8 +323,14 @@ class TicketQueue:
     def on_result(
         self, callback: Callable[[Ticket, Any], Any]
     ) -> "TicketQueue": ...
+    def on_result_async(
+        self, callback: Callable[[Ticket, Any], Awaitable[Any]]
+    ) -> "TicketQueue": ...
     def on_results(
         self, callback: Callable[[list[Any]], Any]
+    ) -> "TicketQueue": ...
+    def on_results_async(
+        self, callback: Callable[[list[Any]], Awaitable[Any]]
     ) -> "TicketQueue": ...
     def on_failure(
         self, callback: Callable[[Event, Ticket], Any]

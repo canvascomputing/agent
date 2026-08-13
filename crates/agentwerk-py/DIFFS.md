@@ -71,7 +71,9 @@ Seven rules the surface table below never repeats.
 | `TicketQueue::schemas(&store)` | `TicketQueue.schemas(store)` |
 | `TicketQueue::on_event(h)` | `TicketQueue.on_event(callback)` |
 | `TicketQueue::on_result(handler)` | `TicketQueue.on_result(callback)` |
+| `TicketQueue::on_result_async(handler)` | `TicketQueue.on_result_async(callback)`: takes an `async def` where Rust takes a closure returning a future. It is awaited on the event loop awaiting `finish`, so a handler that raises prints its traceback and does not stop the run. |
 | `TicketQueue::on_results(handler)` | `TicketQueue.on_results(callback)`: the results arrive as a list. |
+| `TicketQueue::on_results_async(handler)` | `TicketQueue.on_results_async(callback)`: takes an `async def`, on the same terms as `on_result_async`. |
 | `TicketQueue::on_failure(handler)` | `TicketQueue.on_failure(callback)` |
 | `TicketQueue::on_ticket(handler)` | `TicketQueue.on_ticket(callback)` |
 | `TicketQueue::create_ticket_on_event(make)` | `TicketQueue.create_ticket_on_event(make)` |

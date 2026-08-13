@@ -663,7 +663,9 @@ tickets.create_ticket_on_failure(retry_once)
 |-|--------|-------------|
 | **Observe** | `on_event(handler)` | Read every event as it is emitted. |
 | | `on_result(handler)` | Read every finished ticket together with its result. |
+| | `on_result_async(handler)` | Read every finished ticket with its result, in an async handler. |
 | | `on_results(handler)` | Read every result the run has produced so far, each time one lands. |
+| | `on_results_async(handler)` | Read every result in an async handler. |
 | | `on_failure(handler)` | Read every failure together with the ticket it happened in. |
 | | `on_ticket(handler)` | Read a ticket as it starts, finishes, or fails. |
 | **Add work** | `create_ticket_on_event(make)` | Enqueue a follow-up ticket from any event. |
@@ -684,6 +686,18 @@ def capture(event, ticket):
 
 
 tickets.on_ticket(capture)
+```
+
+#### Async handlers
+
+`on_result` is blocking and prevents an agent continuing its work till the hook is finished. If you perform time-consuming operations use `on_result_async` instead: storing results in a database, posting them to an HTTP API, or uploading them to object storage. Both take an `async def` and run it on the event loop you await `finish` on.
+
+```python
+async def store(ticket, result):
+    await database.insert(ticket.key, result)
+
+
+tickets.on_result_async(store)
 ```
 
 See [`TicketQueue`](https://docs.rs/agentwerk/latest/agentwerk/agents/tickets/struct.TicketQueue.html).
