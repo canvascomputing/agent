@@ -81,7 +81,7 @@ mod tests {
     #[tokio::test]
     async fn replies_after_compaction_keep_only_system_and_summary() {
         let provider = MockProvider::with_results(vec![
-            Ok(tool_call_response("manage_tickets")),
+            Ok(tool_call_response("tickets")),
             Err(crate::providers::ProviderError::ContextWindowExceeded {
                 message: "exceeded".into(),
             }),

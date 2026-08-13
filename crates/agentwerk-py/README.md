@@ -344,7 +344,7 @@ See [`Ticket`](https://docs.rs/agentwerk/latest/agentwerk/agents/tickets/struct.
 Agents can share the results of their work in the following ways:
 
 1. **Create tickets**: the `finish` tool's `handover` option opens a child ticket carrying the result.
-2. **Read tickets**: the `read_tickets` tool allows reading any finished ticket's result, by key.
+2. **Read tickets**: the `tickets` tool allows reading any finished ticket's result, by key.
 3. **Read result file**: the `read_file` tool reads a ticket's `result.json` in the session directory.
 4. **Share knowledge**: the `manage_knowledge` tool allows sharing knowledge with other agents.
 
@@ -371,7 +371,7 @@ When `task` is not defined, the child ticket's body is the result itself. A `tas
 
 #### 2. Read tickets
 
-The `read_tickets` tool reads what any finished ticket produced, by key:
+The `tickets` tool reads what any finished ticket produced, by key:
 
 ```json
 { "action": "result", "key": "TICKET-1" }
@@ -430,7 +430,7 @@ tickets.ticket(Ticket("Write a report.", schema=schema))
 | | `get(label)` | Read back the schema bound to a label. |
 | | `tickets.schemas(store)` | Enforce schemas for ticket results. |
 
-A `SchemaStore` enforces schemas for all tickets with a certain label. Registering schemas centrally spares agents from passing complex schema structures during ticket creation (see `ManageTicketsTool`) and handovers (see `FinishTool`):
+A `SchemaStore` enforces schemas for all tickets with a certain label. Registering schemas centrally spares agents from passing complex schema structures during ticket creation (see `TicketsTool`) and handovers (see `FinishTool`):
 
 ```python
 from agentwerk import SchemaStore
@@ -511,8 +511,7 @@ agent = (
 | **Shell** | `BashTool(name)` | Run a shell command from an allow-list of patterns. |
 | **Web** | `FetchUrlTool()` | Fetch a URL and read its body. |
 | **Tickets** | `FinishTool()` | Write the result for the current ticket and mark it finished. |
-| | `ManageTicketsTool()` | Read the ticket queue and create or edit tickets. |
-| | `ReadTicketsTool()` | Read the ticket queue. |
+| | `TicketsTool()` | Read the ticket queue and create or edit tickets. |
 | **Knowledge** | `ManageKnowledgeTool(store)` | Write, read, remove, or list pages in a knowledge store. |
 | **Discovery** | `FindToolsTool()` | Look up the tools held back until they are needed. |
 

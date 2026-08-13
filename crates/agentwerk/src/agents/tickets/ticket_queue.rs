@@ -918,7 +918,7 @@ impl TicketQueue {
     /// A ticket claimed under a label the store knows takes that schema, unless
     /// it already carries one of its own. It is how a ticket nobody could
     /// attach a schema to gets one: a handover child, or a ticket the model
-    /// filed through `manage_tickets`.
+    /// filed through `tickets`.
     ///
     /// ```no_run
     /// # use agentwerk::{SchemaStore, Ticket, TicketQueue};

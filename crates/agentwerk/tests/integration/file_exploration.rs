@@ -4,7 +4,7 @@
 use super::common;
 
 use agentwerk::event::EventName;
-use agentwerk::tools::{GlobTool, ManageTicketsTool, ReadFileTool};
+use agentwerk::tools::{GlobTool, ReadFileTool, TicketsTool};
 use agentwerk::{Agent, TicketQueue};
 
 #[tokio::test]
@@ -20,12 +20,12 @@ async fn test() -> std::result::Result<(), Box<dyn std::error::Error>> {
         .role(
             "{context}\n\n\
              Explore the repository to answer the task. When you have an answer, \
-             settle the ticket via `manage_tickets` with `action: \"done\"` \
+             settle the ticket via `tickets` with `action: \"done\"` \
              and `result` set to your answer.",
         )
         .tool(ReadFileTool)
         .tool(GlobTool)
-        .tool(ManageTicketsTool)
+        .tool(TicketsTool)
         .build();
     tickets.agent(agent);
     tickets.task("Find all Rust source files and describe what this project does.");

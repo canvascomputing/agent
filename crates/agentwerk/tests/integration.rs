@@ -46,11 +46,8 @@ mod write_file_creates_file;
 #[path = "integration/find_tools_discovers_deferred.rs"]
 mod find_tools_discovers_deferred;
 
-#[path = "integration/manage_tickets_creates_ticket.rs"]
-mod manage_tickets_creates_ticket;
-
-#[path = "integration/read_tickets_finds_seeded.rs"]
-mod read_tickets_finds_seeded;
+#[path = "integration/tickets_all_actions.rs"]
+mod tickets_all_actions;
 
 #[path = "integration/thinking_capture.rs"]
 mod thinking_capture;

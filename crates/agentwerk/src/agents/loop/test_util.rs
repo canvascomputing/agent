@@ -11,7 +11,7 @@ use crate::event::Event;
 use crate::providers::types::{ModelResponse, ResponseStatus, TokenUsage};
 use crate::providers::{ContentBlock, Message, ProviderError, ProviderResult};
 use crate::schemas::Schema;
-use crate::tools::ManageTicketsTool;
+use crate::tools::TicketsTool;
 
 // Mock provider
 
@@ -315,7 +315,7 @@ pub async fn run_one(
             .provider(provider.clone())
             .model("mock")
             .role("test")
-            .tool(ManageTicketsTool)
+            .tool(TicketsTool)
             .build(),
     );
 
@@ -404,7 +404,7 @@ pub async fn run_compaction(
             .provider(provider.clone())
             .model("claude-sonnet-4-20250514")
             .role("test")
-            .tool(ManageTicketsTool)
+            .tool(TicketsTool)
             .build(),
     );
     configure(&tickets);

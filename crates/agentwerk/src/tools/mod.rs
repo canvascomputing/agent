@@ -32,5 +32,5 @@ pub use list_directory::ListDirectoryTool;
 pub use manage_knowledge::ManageKnowledgeTool;
 pub use read_file::ReadFileTool;
 pub(crate) use tickets::{finish_tool_input_schema, TICKET_FINISH_TOOL};
-pub use tickets::{FinishTool, ManageTicketsTool, ReadTicketsTool};
+pub use tickets::{FinishTool, TicketsTool};
 pub use write_file::WriteFileTool;

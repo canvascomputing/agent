@@ -86,7 +86,7 @@ crates/
 - `read_file.rs`, `write_file.rs`, `edit_file.rs`, `glob.rs`, `grep.rs`, and `list_directory.rs` are filesystem tools.
 - `code.rs` backs `grep`'s `syntax: "code"` shape matching, delegating to the `codegrep` engine.
 - `bash.rs` is the shell tool, restricted through `new()` and unrestricted through `unrestricted()`.
-- `tickets/` holds `ManageTicketsTool` and `ReadTicketsTool`; `manage_knowledge.rs` is the model-facing wrapper around `Knowledge`, whose store lives in `agents::knowledge`.
+- `tickets/` holds `TicketsTool` and `FinishTool`; `manage_knowledge.rs` is the model-facing wrapper around `Knowledge`, whose store lives in `agents::knowledge`.
 - `find_tools.rs` is the discovery surface for deferred tools; `fetch_url.rs` is the web fetch tool.
 - Each built-in tool pairs with a `<tool>.tool.md` definition: `---` frontmatter (`name`, `read_only`), a prose body shown to the model, and a `## Schema` section whose ` ```json ` fence holds the input schema. `tool_file.rs` parses it; `util.rs` is a shared helper; `error.rs` holds `ToolError`.
 

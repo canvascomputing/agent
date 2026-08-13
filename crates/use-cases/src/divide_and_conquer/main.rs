@@ -20,7 +20,7 @@ use std::sync::Arc;
 use agentwerk::event::{Event, EventKind, EventName};
 use agentwerk::providers::{Model, Provider};
 use agentwerk::schemas::Schema;
-use agentwerk::tools::{ManageTicketsTool, Tool, ToolResult};
+use agentwerk::tools::{TicketsTool, Tool, ToolResult};
 use agentwerk::{Agent, Ticket, TicketQueue};
 use serde_json::{json, Value};
 
@@ -67,7 +67,7 @@ async fn main() {
                 .role(ROLE.trim())
                 .label("compute")
                 .tool(python_tool())
-                .tool(ManageTicketsTool)
+                .tool(TicketsTool)
                 .build(),
         );
     }

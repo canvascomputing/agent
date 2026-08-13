@@ -244,7 +244,7 @@ mod tests {
     use crate::agents::r#loop::test_util::*;
     use crate::agents::tickets::{Author, Status, Ticket, TicketQueue};
     use crate::agents::Knowledge;
-    use crate::tools::{FinishTool, ManageTicketsTool};
+    use crate::tools::{FinishTool, TicketsTool};
 
     // Run lifecycle
 
@@ -265,7 +265,7 @@ mod tests {
                 .provider(provider)
                 .model("mock")
                 .role("test")
-                .tool(ManageTicketsTool)
+                .tool(TicketsTool)
                 .build(),
         );
 
@@ -983,7 +983,7 @@ mod tests {
                 .provider(provider)
                 .model("mock")
                 .role("test")
-                .tool(ManageTicketsTool)
+                .tool(TicketsTool)
                 .build(),
         );
 
@@ -1012,7 +1012,7 @@ mod tests {
                 .provider(provider)
                 .model("mock")
                 .role("test")
-                .tool(ManageTicketsTool)
+                .tool(TicketsTool)
                 .build(),
         );
 
@@ -1060,7 +1060,7 @@ mod tests {
                 .provider(provider.clone())
                 .model("mock")
                 .role("test")
-                .tool(crate::tools::ManageTicketsTool)
+                .tool(crate::tools::TicketsTool)
                 .build(),
         );
         tickets.task("first");

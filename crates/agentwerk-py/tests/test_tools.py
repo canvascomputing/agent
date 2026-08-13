@@ -13,8 +13,7 @@ BUILTIN_FACTORIES = [
     aw.ListDirectoryTool,
     aw.FetchUrlTool,
     aw.FindToolsTool,
-    aw.ReadTicketsTool,
-    aw.ManageTicketsTool,
+    aw.TicketsTool,
     aw.FinishTool,
 ]
 
