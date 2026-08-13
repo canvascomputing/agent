@@ -230,6 +230,20 @@ impl PyTicketQueue {
         slf
     }
 
+    /// Read every result the run has produced so far, each time one lands. The
+    /// same list `results()` gives after the run, in creation order, delivered
+    /// while it is still going.
+    fn on_results<'py>(slf: PyRef<'py, Self>, callback: Py<PyAny>) -> PyRef<'py, Self> {
+        slf.inner.on_results(move |results: &[Value]| {
+            Python::attach(|py| {
+                if let Err(err) = call_with_results(py, &callback, results) {
+                    err.print(py);
+                }
+            });
+        });
+        slf
+    }
+
     /// Read every failure together with the ticket it happened in: a failed
     /// ticket, tool call, or request, a file that would not open, or compaction
     /// that could not finish. Read `event.kind` to tell them apart.
@@ -264,6 +278,24 @@ impl PyTicketQueue {
                 Python::attach(|py| {
                     let produced = call_with_result(py, &make, ticket, result).ok()?;
                     built_ticket(&produced)
+                })
+            });
+        slf
+    }
+
+    /// Enqueue follow-up tickets once a condition across every result holds.
+    /// Your function is the condition: return an empty list or `None` until
+    /// the results call for the work, which is also what stops a follow-up
+    /// whose own result triggers it again.
+    fn create_tickets_on_results<'py>(slf: PyRef<'py, Self>, make: Py<PyAny>) -> PyRef<'py, Self> {
+        slf.inner
+            .create_tickets_on_results(move |results: &[Value]| {
+                Python::attach(|py| match call_with_results(py, &make, results) {
+                    Ok(produced) => built_tickets(&produced),
+                    Err(err) => {
+                        err.print(py);
+                        Vec::new()
+                    }
                 })
             });
         slf
@@ -600,6 +632,20 @@ fn call_with_ticket<'py>(
     callable.bind(py).call1((to_py_event(event), view))
 }
 
+/// Call a Python function with the parent and its children's results every
+/// `_on_results` hook hands over.
+fn call_with_results<'py>(
+    py: Python<'py>,
+    callable: &Py<PyAny>,
+    results: &[Value],
+) -> PyResult<Bound<'py, PyAny>> {
+    let values = results
+        .iter()
+        .map(|result| value_to_py(py, result))
+        .collect::<PyResult<Vec<_>>>()?;
+    callable.bind(py).call1((values,))
+}
+
 /// Read a ticket back out of what a `create_ticket_*` function returned. `None`,
 /// or anything that is not a `Ticket`, adds nothing.
 fn built_ticket(produced: &Bound<'_, PyAny>) -> Option<Ticket> {
@@ -607,6 +653,19 @@ fn built_ticket(produced: &Bound<'_, PyAny>) -> Option<Ticket> {
         return None;
     }
     Some(produced.extract::<PyRef<PyTicket>>().ok()?.to_ticket())
+}
+
+/// Read every ticket back out of what `create_tickets_on_results` returned.
+/// Anything that is not a sequence, `None` included, and any element that is
+/// not a `Ticket`, adds nothing.
+fn built_tickets(produced: &Bound<'_, PyAny>) -> Vec<Ticket> {
+    let Ok(items) = produced.try_iter() else {
+        return Vec::new();
+    };
+    items
+        .flatten()
+        .filter_map(|item| built_ticket(&item))
+        .collect()
 }
 
 /// Ask a Python condition about a ticket. A conversion or Python error reads as

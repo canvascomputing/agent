@@ -340,6 +340,7 @@ Agents can share the results of their work in the following ways:
 2. **Read tickets**: the `tickets` tool allows reading any finished ticket's result, by key.
 3. **Read result file**: the `read_file` tool reads a ticket's `result.json` in the session directory.
 4. **Share knowledge**: the `manage_knowledge` tool allows sharing knowledge with other agents.
+5. **Register hooks**: the `create_ticket_on_result` and `create_tickets_on_results` hooks allow creating follow-up tickets when results arrive.
 
 <details>
 <summary>All ways agents pass data</summary>
@@ -389,6 +390,24 @@ The `manage_knowledge` tool allows sharing knowledge with other agents:
   "description": "How the products rank on value.",
   "content": "Three products lead on value: ..."
 }
+```
+
+#### 5. Register hooks
+
+Use hooks to create new tickets when certain results arrived:
+
+```rust
+tickets.create_ticket_on_result(|done, result| {
+    done.has_label("research")
+        .then(|| Ticket::new(result.clone()).label("report"))
+});
+
+tickets.create_tickets_on_results(|results| {
+    match results.iter().filter(|r| r["scanned"] == true).count() == 3 {
+        true => vec![Ticket::new("Write the report.").label("report")],
+        false => Vec::new(),
+    }
+});
 ```
 
 </details>
@@ -609,10 +628,12 @@ tickets.create_ticket_on_failure(|_, failed| {
 |-|--------|-------------|
 | **Observe** | `on_event(handler)` | Read every event as it is emitted. |
 | | `on_result(handler)` | Read every finished ticket together with its result. |
+| | `on_results(handler)` | Read every result the run has produced so far, each time one lands. |
 | | `on_failure(handler)` | Read every failure together with the ticket it happened in. |
 | | `on_ticket(handler)` | Read a ticket as it starts, finishes, or fails. |
 | **Add work** | `create_ticket_on_event(make)` | Enqueue a follow-up ticket from any event. |
 | | `create_ticket_on_result(make)` | Enqueue a follow-up ticket from a finished ticket. |
+| | `create_tickets_on_results(make)` | Enqueue follow-up tickets once a condition across every result holds. |
 | | `create_ticket_on_failure(make)` | Enqueue a retry for a ticket that failed. |
 | **Rewrite** | `edit_replies_on_event(editor)` | Rewrite a ticket's replies before its next request. |
 | | `edit_replies_on_compaction(editor)` | Decide what compaction does with a ticket's replies. |

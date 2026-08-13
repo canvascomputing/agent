@@ -240,6 +240,35 @@ def test_on_result_receives_the_finished_ticket_and_its_result(queue):
     assert seen == [(key, {"verdict": "clean"})]
 
 
+def test_on_results_hands_over_every_result_so_far(queue):
+    seen = []
+    queue.on_results(lambda results: seen.append(results))
+    first = queue.ticket(aw.Ticket("scan a.py"))
+    second = queue.ticket(aw.Ticket("scan b.py"))
+
+    queue.set_finished(first, "clean")
+    queue.set_finished(second, "malicious")
+
+    assert seen == [["clean"], ["clean", "malicious"]]
+
+
+def test_create_tickets_on_results_waits_until_the_results_call_for_the_work(queue):
+    queue.create_tickets_on_results(
+        lambda results: [aw.Ticket(r, label="review") for r in results]
+        if len(results) == 2
+        else None
+    )
+    first = queue.ticket(aw.Ticket("scan a.py"))
+    second = queue.ticket(aw.Ticket("scan b.py"))
+
+    queue.set_finished(first, "clean")
+    assert queue.find_tickets(lambda t: t.label == "review") == []
+
+    queue.set_finished(second, "malicious")
+    filed = [t.task for t in queue.find_tickets(lambda t: t.label == "review")]
+    assert filed == ["clean", "malicious"]
+
+
 def test_on_failure_receives_the_failed_ticket(queue):
     seen = []
     queue.on_failure(lambda event, ticket: seen.append((event.kind, ticket.key)))
