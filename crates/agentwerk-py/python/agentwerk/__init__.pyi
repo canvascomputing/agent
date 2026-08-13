@@ -326,6 +326,9 @@ class TicketQueue:
     def on_result(
         self, callback: Callable[[Ticket, Any], Any]
     ) -> "TicketQueue": ...
+    def on_results(
+        self, callback: Callable[[list[Any]], Any]
+    ) -> "TicketQueue": ...
     def on_failure(
         self, callback: Callable[[Event, Ticket], Any]
     ) -> "TicketQueue": ...
@@ -334,6 +337,9 @@ class TicketQueue:
     ) -> "TicketQueue": ...
     def create_ticket_on_result(
         self, make: Callable[[Ticket, Any], Optional[Ticket]]
+    ) -> "TicketQueue": ...
+    def create_tickets_on_results(
+        self, make: Callable[[list[Any]], Optional[list[Ticket]]]
     ) -> "TicketQueue": ...
     def create_ticket_on_failure(
         self, make: Callable[[Event, Ticket], Optional[Ticket]]

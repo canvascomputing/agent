@@ -71,10 +71,12 @@ Seven rules the surface table below never repeats.
 | `TicketQueue::schemas(&store)` | `TicketQueue.schemas(store)` |
 | `TicketQueue::on_event(h)` | `TicketQueue.on_event(callback)` |
 | `TicketQueue::on_result(handler)` | `TicketQueue.on_result(callback)` |
+| `TicketQueue::on_results(handler)` | `TicketQueue.on_results(callback)`: the results arrive as a list. |
 | `TicketQueue::on_failure(handler)` | `TicketQueue.on_failure(callback)` |
 | `TicketQueue::on_ticket(handler)` | `TicketQueue.on_ticket(callback)` |
 | `TicketQueue::create_ticket_on_event(make)` | `TicketQueue.create_ticket_on_event(make)` |
 | `TicketQueue::create_ticket_on_result(make)` | `TicketQueue.create_ticket_on_result(make)` |
+| `TicketQueue::create_tickets_on_results(make)` | `TicketQueue.create_tickets_on_results(make)`: hand back any sequence of tickets. `None` adds nothing, where Rust has only the empty `Vec`. |
 | `TicketQueue::create_ticket_on_failure(make)` | `TicketQueue.create_ticket_on_failure(make)` |
 | `TicketQueue::edit_replies(key, edit)` | `TicketQueue.edit_replies(key, editor)`: the editor returns the new list, or `None` to keep the old one, where Rust mutates in place. An editor that raises, or returns anything but `Reply` objects, raises here. |
 | `TicketQueue::edit_replies_on_event(editor)` | `TicketQueue.edit_replies_on_event(editor)`: same return-instead-of-mutate shape. An editor that raises prints its traceback and changes nothing: it runs on an agent thread with no Python frame to raise into. |

@@ -397,6 +397,40 @@ impl TicketQueue {
         })
     }
 
+    /// Read every result the run has produced so far, each time one lands.
+    ///
+    /// Where [`Self::on_result`] hands over the one ticket that just finished,
+    /// this hands over all of them: the same [`Self::results`] a caller reads
+    /// after the run, in creation order, delivered while it is still going.
+    /// That is what lets a handler act on a condition across results rather
+    /// than on any single one, such as every result it was waiting for having
+    /// arrived.
+    ///
+    /// ```no_run
+    /// # use agentwerk::TicketQueue;
+    /// let tickets = TicketQueue::new();
+    /// tickets.on_results(|results| {
+    ///     if results.len() == 3 {
+    ///         println!("every scan landed");
+    ///     }
+    /// });
+    /// ```
+    pub fn on_results<H>(&self, handler: H) -> &Self
+    where
+        H: Fn(&[serde_json::Value]) + Send + Sync + 'static,
+    {
+        let supervisor = self.weak_self.clone();
+        self.on_event(move |event| {
+            if !matches!(event.kind, EventKind::TicketFinished) {
+                return;
+            }
+            let Some(queue) = supervisor.upgrade() else {
+                return;
+            };
+            handler(&queue.results());
+        })
+    }
+
     /// Read every failure together with the ticket it happened in:
     /// `TicketFailed`, `RequestFailed`, `ToolCallFailed`, `FileOpenFailed`,
     /// `KnowledgeFailed`, and `CompactionFailed`.
@@ -828,6 +862,43 @@ impl TicketQueue {
             };
             if let Some(queue) = supervisor.upgrade() {
                 queue.ticket(ticket);
+            }
+        })
+    }
+
+    /// Enqueue follow-up tickets once a condition across every result holds.
+    ///
+    /// The many-to-many counterpart to [`Self::create_ticket_on_result`], on
+    /// the terms [`Self::on_results`] sets: every result so far in, as many
+    /// follow-ups as you hand back out. Your function is the condition, so
+    /// hand back an empty `Vec` until the results call for the work, which is
+    /// how it waits for the ones it needs. That also guards against a
+    /// follow-up whose own result triggers it again, or execution never ends.
+    ///
+    /// ```no_run
+    /// # use agentwerk::{Ticket, TicketQueue};
+    /// let tickets = TicketQueue::new();
+    /// tickets.create_tickets_on_results(|results| {
+    ///     match results.iter().filter(|r| r["scanned"] == true).count() == 3 {
+    ///         true => vec![Ticket::new("Write the report.").label("report")],
+    ///         false => Vec::new(),
+    ///     }
+    /// });
+    /// ```
+    pub fn create_tickets_on_results<M>(&self, make: M) -> &Self
+    where
+        M: Fn(&[serde_json::Value]) -> Vec<Ticket> + Send + Sync + 'static,
+    {
+        let supervisor = self.weak_self.clone();
+        self.on_results(move |results| {
+            let follow_ups = make(results);
+            if follow_ups.is_empty() {
+                return;
+            }
+            if let Some(queue) = supervisor.upgrade() {
+                for ticket in follow_ups {
+                    queue.ticket(ticket);
+                }
             }
         })
     }
@@ -1908,6 +1979,86 @@ mod tests {
         queue.create_ticket_on_result(|_, _| Some(Ticket::new("follow-up").label("next")));
         queue.emit("KEY", "agent", EventKind::TurnStarted);
         assert!(queue.tickets().is_empty());
+    }
+
+    /// File `count` tickets labelled `scan`, all `Todo`.
+    fn scans(queue: &TicketQueue, count: usize) -> Vec<String> {
+        (0..count)
+            .map(|i| queue.ticket(Ticket::new(format!("scan {i}")).label("scan")))
+            .collect()
+    }
+
+    #[test]
+    fn on_results_hands_over_every_result_so_far_each_time_one_lands() {
+        let (queue, _tmp) = test_queue();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let record = Arc::clone(&seen);
+        queue.on_results(move |results| record.lock().unwrap().push(results.to_vec()));
+        let scans = scans(&queue, 2);
+
+        queue.set_finished(&scans[0], 1).unwrap();
+        queue.set_finished(&scans[1], 4).unwrap();
+
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec![
+                vec![serde_json::json!(1)],
+                vec![serde_json::json!(1), serde_json::json!(4)],
+            ]
+        );
+    }
+
+    #[test]
+    fn on_results_stays_quiet_for_a_ticket_that_failed() {
+        let (queue, _tmp) = test_queue();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let record = Arc::clone(&seen);
+        queue.on_results(move |results| record.lock().unwrap().push(results.to_vec()));
+        let scans = scans(&queue, 1);
+
+        queue.set_failed(&scans[0]).unwrap();
+
+        // A failed ticket produces no result, so nothing changed to report.
+        assert!(seen.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn create_tickets_on_results_waits_until_the_results_call_for_the_work() {
+        let (queue, _tmp) = test_queue();
+        queue.create_tickets_on_results(|results| match results.len() == 2 {
+            true => vec![Ticket::new("write the report").label("report")],
+            false => Vec::new(),
+        });
+        let scans = scans(&queue, 2);
+
+        queue.set_finished(&scans[0], "clean").unwrap();
+        assert!(queue.find_tickets(|t| t.has_label("report")).is_empty());
+
+        queue.set_finished(&scans[1], "clean").unwrap();
+        assert_eq!(queue.find_tickets(|t| t.has_label("report")).len(), 1);
+    }
+
+    #[test]
+    fn create_tickets_on_results_files_one_follow_up_per_result() {
+        let (queue, _tmp) = test_queue();
+        queue.create_tickets_on_results(|results| match results.len() == 2 {
+            true => results
+                .iter()
+                .map(|r| Ticket::new(r.clone()).label("review"))
+                .collect(),
+            false => Vec::new(),
+        });
+        let scans = scans(&queue, 2);
+
+        queue.set_finished(&scans[0], 1).unwrap();
+        queue.set_finished(&scans[1], 4).unwrap();
+
+        let filed: Vec<serde_json::Value> = queue
+            .find_tickets(|t| t.has_label("review"))
+            .into_iter()
+            .map(|t| t.task)
+            .collect();
+        assert_eq!(filed, vec![serde_json::json!(1), serde_json::json!(4)]);
     }
 
     #[test]
