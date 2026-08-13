@@ -33,8 +33,8 @@
 ## Why use agentwerk?
 
 - **Simple interface:** create agents with a few lines of code.
-- **Efficient harness:** optimized for LLMs below 30B parameters with low memory footprint.
-- **Complex interactions:** allow agents to collaborate through queues and shared knowledge.
+- **Efficient harness:** optimized for fast LLMs with low memory footprint.
+- **Complex interactions:** allow agents to collaborate through queues, event hooks and shared knowledge.
 - **Deep observability:** inspect every request, tool call, and failure.
 - **Facilitate training:** store trajectories based on granular events for fine-tuning models.
 
@@ -215,6 +215,8 @@ let agent = Agent::new().model(
 );
 ```
 
+See [`Provider`](https://docs.rs/agentwerk/latest/agentwerk/providers/struct.Provider.html) and [`Model`](https://docs.rs/agentwerk/latest/agentwerk/providers/struct.Model.html).
+
 </details>
 
 ## Tickets
@@ -223,7 +225,7 @@ let agent = Agent::new().model(
   <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/tickets.gif" width="600" />
 </div>
 
-The `TicketQueue` is the core data structure of agentwerk for coordinating complex interactions. Every agent already builds a queue of its own, so create one yourself when several agents share the same tickets.
+The `TicketQueue` is the core data structure of agentwerk for coordinating complex interactions.
 
 ```rust
 use agentwerk::{Agent, Ticket, TicketQueue};
@@ -265,7 +267,7 @@ See [`TicketQueue`](https://docs.rs/agentwerk/latest/agentwerk/agents/tickets/st
 
 ### Execution
 
-The queue runs your agents and returns the results they created.
+The ticket queue schedules the work of your agents and returns their results.
 
 ```rust
 tickets.start();
@@ -318,16 +320,6 @@ Ticket members:
 | | `is_failed()` | Check whether the ticket failed. |
 | | `is_pending()` | Check whether the ticket is still todo or in progress. |
 
-Each `Ticket` carries a result as free text or JSON validated by schemas:
-
-```rust
-#[derive(serde::Deserialize)]
-struct Report { title: String }
-
-let ticket = tickets.find_ticket(|t| t.has_label("analysis")).unwrap();
-let report: Report = serde_json::from_value(ticket.result.clone().unwrap())?;
-```
-
 See [`Ticket`](https://docs.rs/agentwerk/latest/agentwerk/agents/tickets/struct.Ticket.html).
 
 </details>
@@ -338,16 +330,16 @@ Agents can share the results of their work in the following ways:
 
 1. **Create tickets**: the `finish` tool's `handover` option opens a child ticket carrying the result.
 2. **Read tickets**: the `tickets` tool allows reading any finished ticket's result, by key.
-3. **Read result file**: the `read_file` tool reads a ticket's `result.json` in the session directory.
+3. **Read result file**: the `read_file` tool allows reading a ticket's `result.json` in the session directory.
 4. **Share knowledge**: the `manage_knowledge` tool allows sharing knowledge with other agents.
-5. **Register hooks**: the `create_ticket_on_result` and `create_tickets_on_results` hooks allow creating follow-up tickets when results arrive.
+5. **Register hooks**: the `create_ticket_on_result` and `create_tickets_on_results` hooks allow creating follow-up tickets.
 
 <details>
 <summary>All ways agents pass data</summary>
 
 #### 1. Create tickets
 
-A handover can be performed through a single `finish` tool call, naming the label that picks the work up and, optionally, the body of the ticket it opens:
+A handover can be performed through a single `finish` tool call:
 
 ```json
 {
@@ -357,7 +349,7 @@ A handover can be performed through a single `finish` tool call, naming the labe
 }
 ```
 
-When `task` is not defined, the child ticket's body is the result itself. A `task` takes these template strings:
+When `task` is not defined, the child ticket's body is the result itself. A `task` populates template variables:
 
 - `{parent_key}`: the key of the ticket that was handed over.
 - `{parent_result}`: its result.
@@ -455,6 +447,8 @@ schemas.label("report", json!({
 tickets.schemas(&schemas);
 ```
 
+See [`Schema`](https://docs.rs/agentwerk/latest/agentwerk/schemas/struct.Schema.html) and [`SchemaStore`](https://docs.rs/agentwerk/latest/agentwerk/schemas/struct.SchemaStore.html).
+
 </details>
 
 ### Policies
@@ -484,7 +478,7 @@ tickets
 | `request_retry_delay(duration)` / `get_request_retry_delay()` | Wait this long between retries. |
 | `compact_at(fraction)` / `get_compact_at()` | Compact once the context window is this full. |
 
-A violated limit emits `EventKind::PolicyViolated`, see [`EventKind`](https://docs.rs/agentwerk/latest/agentwerk/event/enum.EventKind.html). `compact_at` is the exception: reaching it compacts the ticket and execution continues.
+A violated limit emits `EventKind::PolicyViolated`, see [`EventKind`](https://docs.rs/agentwerk/latest/agentwerk/event/enum.EventKind.html).
 
 </details>
 
@@ -519,9 +513,13 @@ let agent = Agent::new()
 | **Knowledge** | `ManageKnowledgeTool` | Write, read, remove, or list pages in a knowledge store. |
 | **Discovery** | `FindToolsTool` | Look up the tools held back until they are needed. |
 
-`FinishTool` and `ManageKnowledgeTool` are special tools, registered automatically on every agent. They are used for interacting with the `TicketQueue`.
+#### `FinishTool` and `ManageKnowledgeTool`
 
-A `BashTool` named `git` runs `git` and nothing else. Use `allow` to permit more commands, `deny` to block any of them, and `BashTool::unrestricted()` to run anything.
+`FinishTool` and `ManageKnowledgeTool` are special tools, registered automatically on every agent. They are used for interacting with the `TicketQueue` or knowledge base.
+
+#### BashTool
+
+The `BashTool` allows you to granularly define what bash commands are allowed and what commands are denied.
 
 ```rust
 let git = BashTool::new("git")
@@ -530,7 +528,9 @@ let git = BashTool::new("git")
     .deny("git push*");
 ```
 
-You can define custom tools for specific needs:
+#### Custom Tools
+
+You can define custom tools for specific needs with the following parameters:
 
 | Method | Description |
 |--------|-------------|
@@ -559,11 +559,13 @@ let greet = Tool::new("greet", "Say hello")
 
 Return `ToolResult::error(message)` for a failure the model should work around.
 
+See [`Tool`](https://docs.rs/agentwerk/latest/agentwerk/tools/struct.Tool.html).
+
 </details>
 
 ## Events
 
-Events allow you to follow the lifecycle and activities of your agents' work. Every event names the agent it came from, the ticket it concerns, and that ticket's label, so a handler counts whichever of those you care about.
+Events allow you to inspect all activities of your agents.
 
 ```rust
 use agentwerk::event::EventKind;
@@ -652,6 +654,8 @@ tickets.on_ticket(move |event, ticket| {
 });
 ```
 
+See [`TicketQueue`](https://docs.rs/agentwerk/latest/agentwerk/agents/tickets/struct.TicketQueue.html).
+
 </details>
 
 ## Stats
@@ -723,6 +727,8 @@ store.pages().save(Page {
 let page = store.pages().load("build-command")?;
 store.pages().remove("build-command")?;
 ```
+
+See [`Knowledge`](https://docs.rs/agentwerk/latest/agentwerk/agents/knowledge/struct.Knowledge.html).
 
 </details>
 
