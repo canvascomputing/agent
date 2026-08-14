@@ -39,11 +39,13 @@ pub(in crate::agents) async fn run_main_loop(ticket_queue: &TicketQueue) {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
     use std::time::Duration;
 
     use crate::agents::agent::Agent;
     use crate::agents::r#loop::test_util::*;
     use crate::agents::tickets::{Status, Ticket, TicketQueue};
+    use crate::event::EventKind;
     use crate::tools::TicketsTool;
 
     // Late-add agent tests
@@ -103,13 +105,9 @@ mod tests {
             .max_request_retries(0)
             .request_retry_delay(Duration::from_millis(1));
 
-        // The agent never calls its finish tool, so the ticket stays in
-        // progress until the host resolves it out of band.
-        let provider = MockProvider::with_results(
-            (0..50)
-                .map(|_| Ok(text_response("still working")))
-                .collect(),
-        );
+        // The agent replies without calling its finish tool, so the ticket is
+        // still in progress when the host resolves it out of band.
+        let provider = MockProvider::with_results(vec![Ok(text_response("still working"))]);
         tickets.agent(
             Agent::new()
                 .label("slow")
@@ -120,19 +118,18 @@ mod tests {
         );
         let key = tickets.ticket(Ticket::new("hello").label("slow"));
 
-        let run_handle = tickets.start();
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-        while tickets.get_ticket(&key).unwrap().status != Status::InProgress {
-            if tokio::time::Instant::now() > deadline {
-                run_handle.cancel_all();
-                run_handle.finish_all().await;
-                panic!("agent never claimed the ticket");
+        // Resolved off the agent's own first turn rather than off a poll racing
+        // it: polling made the host's win depend on scheduling, and losing it
+        // left the agent's own outcome on the ticket instead.
+        let host = Arc::clone(&tickets);
+        let resolved = key.clone();
+        tickets.on_event(move |event| {
+            if matches!(event.kind, EventKind::RequestFinished { .. }) {
+                let _ = host.set_finished(&resolved, "resolved by the host");
             }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
+        });
 
-        tickets.set_finished(&key, "resolved by the host").unwrap();
-        run_handle.finish_all().await;
+        tickets.finish_all().await;
 
         let ticket = tickets.get_ticket(&key).unwrap();
         assert_eq!(ticket.status, Status::Finished);
@@ -140,6 +137,7 @@ mod tests {
             ticket.result,
             Some(serde_json::json!("resolved by the host"))
         );
+        assert_eq!(provider.requests(), 1);
     }
 
     #[tokio::test]

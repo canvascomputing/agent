@@ -238,7 +238,7 @@ impl TicketQueue {
         let _in_flight = InFlight(&self.terminal_transitions_in_flight);
 
         let now = now_millis();
-        let (prev, durations, label) = {
+        let Some((prev, durations, label)) = ({
             let mut store = self.tickets.lock().unwrap();
             let ticket = store
                 .get_mut(key)
@@ -246,21 +246,30 @@ impl TicketQueue {
                     key: key.to_string(),
                 })?;
             let prev = ticket.status;
-            ticket.stamp_transition(status, now);
-            ticket.status = status;
-            let durations = ticket.terminal_durations();
-            let label = ticket.label.clone();
-            (prev, durations, label)
+            // First outcome wins. The host resolving a ticket an agent is still
+            // turning, and the agent giving up on one the host just resolved,
+            // are the same race from either side; without this the loser's
+            // status overwrites the winner's and leaves, say, a `Failed` ticket
+            // carrying a result. Checked under the lock the write happens
+            // under, so two racing transitions cannot both pass it.
+            match prev {
+                Status::Finished | Status::Failed => None,
+                _ => {
+                    ticket.stamp_transition(status, now);
+                    ticket.status = status;
+                    Some((prev, ticket.terminal_durations(), ticket.label.clone()))
+                }
+            }
+        }) else {
+            return Ok(());
         };
         // Emitted before the transition is recorded: the outcome is an event
         // count now, and `record_transition` ends by writing `stats.json`.
-        if prev != status && !matches!(prev, Status::Finished | Status::Failed) {
-            let kind = match status {
-                Status::Finished => EventKind::TicketFinished,
-                _ => EventKind::TicketFailed,
-            };
-            self.emit(key, agent, kind);
-        }
+        let kind = match status {
+            Status::Finished => EventKind::TicketFinished,
+            _ => EventKind::TicketFailed,
+        };
+        self.emit(key, agent, kind);
         self.record_transition(key, prev, status, now, durations, label.as_deref());
         self.save_ticket(key);
         // The ticket will never request again, so drop any events buffered
@@ -347,10 +356,17 @@ impl TicketQueue {
         };
         let attached = {
             let mut store = self.tickets.lock().unwrap();
-            store
-                .get_mut(key)
-                .map(|ticket| ticket.result = Some(result.clone()))
-                .is_some()
+            // A ticket that already reached an outcome keeps the result that
+            // outcome carried, the way its status does: the agent's result
+            // arriving after the host resolved the ticket, or the reverse, is
+            // the same race, and either way the late one is not the answer.
+            match store.get_mut(key) {
+                Some(ticket) if ticket.is_pending() => {
+                    ticket.result = Some(result.clone());
+                    true
+                }
+                _ => false,
+            }
         };
         // A missing ticket records nothing: no phantom results line, no file.
         if attached {
@@ -741,10 +757,10 @@ mod tests {
     #[test]
     fn set_finished_transitions_to_finished() {
         let (queue, _tmp) = test_queue();
-        queue.task("hello");
+        let key = queue.task("hello");
         queue.claim(|t| t.status == Status::Todo, "alice");
-        queue.set_finished_by("TICKET-1", "agent").unwrap();
-        let t = queue.get_ticket("TICKET-1").unwrap();
+        queue.set_finished_by(&key, "alice").unwrap();
+        let t = queue.get_ticket(&key).unwrap();
         assert_eq!(t.status, Status::Finished);
         assert!(t.finished_at.is_some());
     }
@@ -752,12 +768,45 @@ mod tests {
     #[test]
     fn set_failed_transitions_to_failed() {
         let (queue, _tmp) = test_queue();
-        queue.task("hello");
+        let key = queue.task("hello");
         queue.claim(|t| t.status == Status::Todo, "alice");
-        queue.set_failed("TICKET-1").unwrap();
-        let t = queue.get_ticket("TICKET-1").unwrap();
+        queue.set_failed(&key).unwrap();
+        let t = queue.get_ticket(&key).unwrap();
         assert_eq!(t.status, Status::Failed);
         assert!(t.failed_at.is_some());
+    }
+
+    #[test]
+    fn a_finished_ticket_is_not_reopened_by_a_later_failure() {
+        let (queue, _tmp) = test_queue();
+        let key = queue.task("hello");
+        queue.claim(|t| t.status == Status::Todo, "alice");
+        queue.set_finished(&key, "host result").unwrap();
+
+        // Alice was still turning the ticket and gives up after the host
+        // resolved it.
+        queue.set_failed_by(&key, "alice").unwrap();
+
+        let ticket = queue.get_ticket(&key).unwrap();
+        assert_eq!(ticket.status, Status::Finished);
+        assert_eq!(ticket.result, Some(serde_json::json!("host result")));
+        assert!(ticket.failed_at.is_none());
+    }
+
+    #[test]
+    fn a_failed_ticket_is_not_reopened_by_a_later_finish() {
+        let (queue, _tmp) = test_queue();
+        let key = queue.task("hello");
+        queue.claim(|t| t.status == Status::Todo, "alice");
+        queue.set_failed_by(&key, "alice").unwrap();
+
+        queue.set_finished(&key, "late result").unwrap();
+
+        let ticket = queue.get_ticket(&key).unwrap();
+        assert_eq!(ticket.status, Status::Failed);
+        assert!(ticket.finished_at.is_none());
+        // The result too, or the ticket reads as failed while carrying an answer.
+        assert_eq!(ticket.result, None);
     }
 
     #[test]
@@ -1165,10 +1214,10 @@ mod tests {
     #[test]
     fn a_finished_ticket_failed_afterwards_is_not_counted_twice() {
         let (queue, _tmp) = test_queue();
-        queue.task("seed");
-        queue.set_finished_by("TICKET-1", "alice").unwrap();
-        // Refused by the emit guard, so the count never sees it either.
-        queue.set_failed("TICKET-1").unwrap();
+        let key = queue.task("seed");
+        queue.set_finished_by(&key, "alice").unwrap();
+        // Refused before the transition, so nothing is emitted to count.
+        queue.set_failed(&key).unwrap();
 
         let stats = queue.stats();
         assert_eq!(stats.event_count(EventName::TicketFinished), 1);
