@@ -80,6 +80,7 @@ make use_case name=<name>    # run one
 ```
 
 - Source is in `crates/use-cases/src/`.
+- `hello-world` is the smallest program the crate allows: one agent, one ticket, one printed answer.
 - `terminal-repl` is a per-turn interactive chat that prints output as it arrives.
 - `divide-and-conquer` partitions an arithmetic problem across agents sharing one ticket queue.
 - `deep-research` is a two-phase research pipeline with web search, and requires `BRAVE_API_KEY`.

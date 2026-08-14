@@ -76,6 +76,7 @@ async fn main() {
 
 Example projects built with agentwerk:
 
+- [Hello World](crates/use-cases/src/hello_world/): basic example
 - [Terminal REPL](crates/use-cases/src/terminal_repl/): minimal interactive chat
 - [Divide and Conquer](crates/use-cases/src/divide_and_conquer/): arithmetic problem shared across agents
 - [Deep Research](crates/use-cases/src/deep_research/): deep research pipeline (requires `BRAVE_API_KEY`)
