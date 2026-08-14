@@ -484,6 +484,10 @@ A violated limit emits `EventKind::PolicyViolated`, see [`EventKind`](https://do
 
 ## Tools
 
+<div align="left">
+  <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/tools.gif" width="600" />
+</div>
+
 Tools allow agents to perform their work.
 
 ```rust
@@ -564,6 +568,10 @@ See [`Tool`](https://docs.rs/agentwerk/latest/agentwerk/tools/struct.Tool.html).
 </details>
 
 ## Events
+
+<div align="left">
+  <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/events.gif" width="600" />
+</div>
 
 Events allow you to inspect all activities of your agents.
 
@@ -660,6 +668,10 @@ See [`TicketQueue`](https://docs.rs/agentwerk/latest/agentwerk/agents/tickets/st
 
 ## Stats
 
+<div align="left">
+  <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/stats.gif" width="600" />
+</div>
+
 Statistics allow you to measure execution time, token usage, and how often each event happened. Anything finer is a fold over the events.
 
 ```rust
@@ -688,6 +700,10 @@ See [`Stats`](https://docs.rs/agentwerk/latest/agentwerk/agents/stats/struct.Sta
 </details>
 
 ## Knowledge
+
+<div align="left">
+  <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/knowledge.gif" width="600" />
+</div>
 
 `Knowledge` allows agents to share insights or learnings. Knowledge pages are created in the Open Knowledge Format (OKF).
 
@@ -733,6 +749,10 @@ See [`Knowledge`](https://docs.rs/agentwerk/latest/agentwerk/agents/knowledge/st
 </details>
 
 ## Sessions
+
+<div align="left">
+  <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/sessions.gif" width="600" />
+</div>
 
 A `TicketQueue` writes every ticket, reply, statistic, and lifecycle event to its working directory (default `./.agentwerk`). You can continue a session from that directory.
 
