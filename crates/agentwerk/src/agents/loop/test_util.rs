@@ -125,7 +125,7 @@ pub fn knowledge_write_response(slug: &str, description: &str, content: &str) ->
     ModelResponse {
         content: vec![ContentBlock::ToolUse {
             id: "call-1".into(),
-            name: "manage_knowledge".into(),
+            name: "knowledge".into(),
             input: serde_json::json!({"action": "write", "slug": slug, "description": description, "content": content}),
         }],
         status: ResponseStatus::ToolUse,
@@ -138,7 +138,7 @@ pub fn knowledge_read_response(slug: &str) -> ModelResponse {
     ModelResponse {
         content: vec![ContentBlock::ToolUse {
             id: "call-2".into(),
-            name: "manage_knowledge".into(),
+            name: "knowledge".into(),
             input: serde_json::json!({"action": "read", "slug": slug}),
         }],
         status: ResponseStatus::ToolUse,

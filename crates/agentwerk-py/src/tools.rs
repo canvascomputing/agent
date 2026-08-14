@@ -8,8 +8,8 @@ use std::sync::Arc;
 use agentwerk::providers::ProviderResult;
 use agentwerk::tools::{
     BashTool, EditFileTool, FetchUrlTool, FindToolsTool, FinishTool, GlobTool, GrepTool,
-    ListDirectoryTool, ManageKnowledgeTool, ReadFileTool, TicketsTool, ToolContext, ToolLike,
-    ToolResult, WriteFileTool,
+    KnowledgeTool, ListDirectoryTool, ReadFileTool, TicketsTool, ToolContext, ToolLike, ToolResult,
+    WriteFileTool,
 };
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -292,9 +292,9 @@ fn find_tools_tool() -> PyTool {
 /// `Agent.knowledge(store)` is the usual route, and also shows the store's index
 /// in the prompt.
 #[pyfunction]
-#[pyo3(name = "ManageKnowledgeTool")]
-fn manage_knowledge_tool(store: PyRef<'_, PyKnowledge>) -> PyTool {
-    handle(Arc::new(ManageKnowledgeTool::new(Arc::clone(&store.inner))))
+#[pyo3(name = "KnowledgeTool")]
+fn knowledge_tool(store: PyRef<'_, PyKnowledge>) -> PyTool {
+    handle(Arc::new(KnowledgeTool::new(Arc::clone(&store.inner))))
 }
 
 /// Write the result for the current ticket and mark it finished, handing work
@@ -375,7 +375,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(list_directory_tool, m)?)?;
     m.add_function(wrap_pyfunction!(fetch_url_tool, m)?)?;
     m.add_function(wrap_pyfunction!(find_tools_tool, m)?)?;
-    m.add_function(wrap_pyfunction!(manage_knowledge_tool, m)?)?;
+    m.add_function(wrap_pyfunction!(knowledge_tool, m)?)?;
     m.add_function(wrap_pyfunction!(finish_tool, m)?)?;
     m.add_function(wrap_pyfunction!(tickets_tool, m)?)?;
     m.add_function(wrap_pyfunction!(unrestricted_bash_tool, m)?)?;

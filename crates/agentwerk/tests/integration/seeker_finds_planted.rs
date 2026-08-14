@@ -111,7 +111,7 @@ async fn seeker_pool_finds_planted_indicators(
     plant_fixture(root);
 
     // A real Seeker always has one bound (see main.rs); a couple of
-    // representative pages are enough to exercise `manage_knowledge` here
+    // representative pages are enough to exercise `knowledge` here
     // without duplicating the full attack-pattern catalogue.
     let knowledge = Knowledge::load(root.join(".knowledge"))?;
     knowledge.pages().save(Page {

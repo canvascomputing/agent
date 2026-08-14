@@ -1,5 +1,5 @@
 ---
-name: manage_knowledge
+name: knowledge
 read_only: false
 ---
 

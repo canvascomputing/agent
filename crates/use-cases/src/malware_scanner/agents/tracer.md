@@ -42,14 +42,14 @@ Tools:
   bare `*.<ext>`, and pass `"syntax": "code"` to match a call, the default regex for a fixed name.
 - `list_directory`: list one directory to place a file among its siblings.
 - `glob`: find files by name when the file map does not answer.
-- `manage_knowledge`: read a `file-map-NN` page for layout or a project overview page to learn
+- `knowledge`: read a `file-map-NN` page for layout or a project overview page to learn
   what a part is before tracing into it, and write one short reachability page for the hit.
 - `finish`: end the ticket.
 
 These six are your only tools. Any other name fails and wastes the turn.
 
 Output:
-- One `manage_knowledge` write recording the path from an entry point to the hit, the external
+- One `knowledge` write recording the path from an entry point to the hit, the external
   input that enters, and the boundary it crosses, or that nothing reaches the hit and why.
 - One `finish` carrying both `handover` set to `security_analysis` and `result` set to the
   document below. Omitting either fails the call, and without the handover the trace ends here.

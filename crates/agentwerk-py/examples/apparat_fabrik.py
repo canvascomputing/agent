@@ -61,7 +61,7 @@ part it names down the line, one ticket per part.
   needs to look a part up.
 - NEVER rule on whether a part fits. Reading a card is not your work, and the
   plan alone cannot answer it.
-- Before you finish, write one page with `manage_knowledge` on what this plan
+- Before you finish, write one page with `knowledge` on what this plan
   asks for, so the next reader of the Prüfbuch has it.
 - Call `finish` exactly once with `apparat`, `bauplan`, and `teile` as its
   top-level arguments, each as its native JSON type.
@@ -83,7 +83,7 @@ fitted to the apparatus.
 - `befund` states the finding in one sentence, naming both sizes.
 - `massnahme` says what the line should do with the part, in one sentence.
 - NEVER rule on a card you did not read.
-- Before you finish, record the ruling with `manage_knowledge` as one short
+- Before you finish, record the ruling with `knowledge` as one short
   page, which is what stamps it into the Prüfbuch.
 - Call `finish` exactly once with `teil`, `gemessen`, `soll`, `toleranz`,
   `passt`, `befund`, and `massnahme` as its top-level arguments, each as its
@@ -104,7 +104,7 @@ You fit a cleared part into its apparatus and book it against the plan.
   parts of this apparatus are already in.
 - `fehlt` names the parts of the plan that are still not booked, or `keine`.
 - `eingebaut` is true only when the part is on the plan and you booked it.
-- Before you finish, book the fitting with `manage_knowledge` as one short page,
+- Before you finish, book the fitting with `knowledge` as one short page,
   which is what puts it in the Prüfbuch.
 - Call `finish` exactly once with `apparat`, `teil`, `eingebaut`, `fehlt`, and
   `vermerk` as its top-level arguments, each as its native JSON type.

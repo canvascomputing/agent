@@ -72,9 +72,9 @@ def test_tool_decorator_records_path_fields():
     assert agent.tool(cat) is agent
 
 
-def test_manage_knowledge_tool_binds_a_store(knowledge_dir):
+def test_knowledge_tool_binds_a_store(knowledge_dir):
     store = aw.Knowledge.load(knowledge_dir)
-    assert isinstance(aw.ManageKnowledgeTool(store), aw.Tool)
+    assert isinstance(aw.KnowledgeTool(store), aw.Tool)
 
 
 def test_tool_result_constructors_produce_a_tool_result():

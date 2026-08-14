@@ -71,7 +71,7 @@ Common calls by language, for `"syntax": "code"`:
 
 Tools:
 - `grep`: search file contents, by regex or by code shape.
-- `manage_knowledge`: list the searches already run, and write this ticket's queries as one page
+- `knowledge`: list the searches already run, and write this ticket's queries as one page
   before you end. A page per query wastes turns better spent searching.
 - `finish`: end the ticket.
 

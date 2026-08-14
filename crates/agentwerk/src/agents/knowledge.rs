@@ -177,7 +177,7 @@ impl Knowledge {
         render_limited_index(&index, limit, &self.index_path())
     }
 
-    /// The whole index, however long it runs. `ManageKnowledgeTool`'s `list`
+    /// The whole index, however long it runs. `KnowledgeTool`'s `list`
     /// shows every page even when the prompt only had room for some.
     pub(crate) fn full_index(&self) -> String {
         let index = self.index.lock().unwrap();
@@ -225,7 +225,7 @@ impl Knowledge {
     }
 
     /// How large the index is, how large it may get, and how many pages it
-    /// holds. `ManageKnowledgeTool` shows the agent what a write consumed.
+    /// holds. `KnowledgeTool` shows the agent what a write consumed.
     pub(crate) fn index_usage(&self) -> (usize, usize, usize) {
         let index = self.index.lock().unwrap();
         (

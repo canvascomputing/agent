@@ -900,7 +900,7 @@ mod tests {
             Box::new(crate::tools::ListDirectoryTool),
             Box::new(crate::tools::FetchUrlTool),
             Box::new(crate::tools::FindToolsTool),
-            Box::new(crate::tools::ManageKnowledgeTool::new(store)),
+            Box::new(crate::tools::KnowledgeTool::new(store)),
             Box::new(crate::tools::BashTool::new("git").allow("git *")),
             Box::new(crate::tools::FinishTool),
             Box::new(crate::tools::TicketsTool),
