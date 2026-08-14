@@ -331,7 +331,7 @@ Agents can share the results of their work in the following ways:
 1. **Create tickets**: the `finish` tool's `handover` option opens a child ticket carrying the result.
 2. **Read tickets**: the `tickets` tool allows reading any finished ticket's result, by key.
 3. **Read result file**: the `read_file` tool allows reading a ticket's `result.json` in the session directory.
-4. **Share knowledge**: the `manage_knowledge` tool allows sharing knowledge with other agents.
+4. **Share knowledge**: the `knowledge` tool allows sharing knowledge with other agents.
 5. **Register hooks**: the `create_ticket_on_result` and `create_tickets_on_results` hooks allow creating follow-up tickets.
 
 <details>
@@ -373,7 +373,7 @@ The `read_file` tool reads the original result file when its path is known:
 
 #### 4. Share knowledge
 
-The `manage_knowledge` tool allows sharing knowledge with other agents:
+The `knowledge` tool allows sharing knowledge with other agents:
 
 ```json
 {
@@ -514,12 +514,12 @@ let agent = Agent::new()
 | **Web** | `FetchUrlTool` | Fetch a URL and read its body. |
 | **Tickets** | `FinishTool` | Write the result for the current ticket and mark it finished. |
 | | `TicketsTool` | Read the ticket queue and create or edit tickets. |
-| **Knowledge** | `ManageKnowledgeTool` | Write, read, remove, or list pages in a knowledge store. |
+| **Knowledge** | `KnowledgeTool` | Write, read, remove, or list pages in a knowledge store. |
 | **Discovery** | `FindToolsTool` | Look up the tools held back until they are needed. |
 
-#### `FinishTool` and `ManageKnowledgeTool`
+#### `FinishTool` and `KnowledgeTool`
 
-`FinishTool` and `ManageKnowledgeTool` are special tools, registered automatically on every agent. They are used for interacting with the `TicketQueue` or knowledge base.
+`FinishTool` and `KnowledgeTool` are special tools, registered automatically on every agent. They are used for interacting with the `TicketQueue` or knowledge base.
 
 #### BashTool
 

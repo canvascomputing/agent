@@ -75,7 +75,7 @@ Output:
 
 Tools:
 - `read_file`: open a cited `path` at its `line` to copy the exact code.
-- `manage_knowledge`: read a project overview page to ground the project's purpose and context.
+- `knowledge`: read a project overview page to ground the project's purpose and context.
 - `finish`: emit the report.
 
 These three are your only tools. Any other name fails and wastes the turn.

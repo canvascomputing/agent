@@ -9,7 +9,7 @@ use serde::Serialize;
 
 use crate::prompts::{context_values, render_context, PromptBuilder};
 use crate::providers::{Model, Provider, ProviderToolDefinition};
-use crate::tools::{FinishTool, ManageKnowledgeTool, ToolLike, ToolRegistry};
+use crate::tools::{FinishTool, KnowledgeTool, ToolLike, ToolRegistry};
 
 use super::knowledge::Knowledge;
 use super::policy::Policies;
@@ -52,7 +52,7 @@ impl AgentBuilder<(), ()> {
         let knowledge = Knowledge::load(".agentwerk").expect("open knowledge store");
         let mut tools = ToolRegistry::default();
         tools.register(FinishTool);
-        tools.register(ManageKnowledgeTool::new(Arc::clone(&knowledge)));
+        tools.register(KnowledgeTool::new(Arc::clone(&knowledge)));
         Self {
             provider: (),
             model: (),
@@ -191,11 +191,10 @@ impl<P, M> AgentBuilder<P, M> {
     /// tickets and shares with other agents.
     ///
     /// It replaces the store opened by default, both for what the prompt shows
-    /// and for what `ManageKnowledgeTool` writes to. Hand the same store to
+    /// and for what `KnowledgeTool` writes to. Hand the same store to
     /// several agents to share it between them.
     pub fn knowledge(mut self, store: &Arc<Knowledge>) -> Self {
-        self.tools
-            .register(ManageKnowledgeTool::new(Arc::clone(store)));
+        self.tools.register(KnowledgeTool::new(Arc::clone(store)));
         self.knowledge = Arc::clone(store);
         self
     }
@@ -802,7 +801,7 @@ mod tests {
     }
 
     #[test]
-    fn knowledge_registers_manage_knowledge_on_the_agent() {
+    fn knowledge_registers_the_knowledge_tool_on_the_agent() {
         let dir = crate::test_util::TempDir::new().unwrap();
         let store = Knowledge::load(dir.path()).unwrap();
         let agent = Agent::new().knowledge(&store);
@@ -812,8 +811,8 @@ mod tests {
             .map(|d| d.name)
             .collect();
         assert!(
-            names.iter().any(|n| n == "manage_knowledge"),
-            "manage_knowledge should be registered: {names:?}"
+            names.iter().any(|n| n == "knowledge"),
+            "knowledge should be registered: {names:?}"
         );
     }
 
@@ -896,7 +895,7 @@ mod tests {
     }
 
     #[test]
-    fn new_agent_has_manage_knowledge_registered() {
+    fn new_agent_has_the_knowledge_tool_registered() {
         let agent = Agent::new();
         let names: Vec<String> = agent
             .tool_definitions()
@@ -904,8 +903,8 @@ mod tests {
             .map(|d| d.name)
             .collect();
         assert!(
-            names.iter().any(|n| n == "manage_knowledge"),
-            "manage_knowledge must be registered on every new agent: {names:?}",
+            names.iter().any(|n| n == "knowledge"),
+            "knowledge must be registered on every new agent: {names:?}",
         );
     }
 

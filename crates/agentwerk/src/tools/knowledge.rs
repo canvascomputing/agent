@@ -26,11 +26,11 @@ use super::tool_file::ToolFile;
 /// let store = Knowledge::load(".agentwerk").expect("knowledge dir");
 /// Agent::new().knowledge(&store);
 /// ```
-pub struct ManageKnowledgeTool {
+pub struct KnowledgeTool {
     store: Arc<Knowledge>,
 }
 
-impl ManageKnowledgeTool {
+impl KnowledgeTool {
     /// Bind the tool to `store` without making it the agent's own knowledge.
     /// `AgentBuilder::knowledge` is the usual route: it does this and also
     /// renders the store's index into the system prompt. Reach for the
@@ -42,7 +42,7 @@ impl ManageKnowledgeTool {
 
 fn tool_file() -> &'static ToolFile {
     static FILE: OnceLock<ToolFile> = OnceLock::new();
-    FILE.get_or_init(|| ToolFile::parse(include_str!("manage_knowledge.tool.md")))
+    FILE.get_or_init(|| ToolFile::parse(include_str!("knowledge.tool.md")))
 }
 
 fn description() -> &'static str {
@@ -67,7 +67,7 @@ fn usage_line(message: &str, store: &Knowledge) -> String {
     format!("{message} ({pages} pages, {pct}%, {used}/{limit} chars)")
 }
 
-impl ToolLike for ManageKnowledgeTool {
+impl ToolLike for KnowledgeTool {
     fn name(&self) -> &str {
         &tool_file().name
     }
@@ -258,7 +258,7 @@ mod tests {
     #[tokio::test]
     async fn write_action_creates_page() {
         let (store, _dir) = fresh_store();
-        let tool = ManageKnowledgeTool::new(Arc::clone(&store));
+        let tool = KnowledgeTool::new(Arc::clone(&store));
         let r = tool
             .call(
                 serde_json::json!({
@@ -279,7 +279,7 @@ mod tests {
     async fn read_action_returns_page_body() {
         let (store, _dir) = fresh_store();
         save_page(&store, "test", "A test", "# Test\n\nHello.", &[]);
-        let tool = ManageKnowledgeTool::new(Arc::clone(&store));
+        let tool = KnowledgeTool::new(Arc::clone(&store));
         let r = tool
             .call(
                 serde_json::json!({"action": "read", "slug": "test"}),
@@ -293,7 +293,7 @@ mod tests {
     #[tokio::test]
     async fn read_action_missing_page_returns_soft_success() {
         let (store, _dir) = fresh_store();
-        let tool = ManageKnowledgeTool::new(Arc::clone(&store));
+        let tool = KnowledgeTool::new(Arc::clone(&store));
         let r = tool
             .call(
                 serde_json::json!({"action": "read", "slug": "nonexistent"}),
@@ -308,7 +308,7 @@ mod tests {
     async fn read_action_strips_frontmatter() {
         let (store, _dir) = fresh_store();
         save_page(&store, "test", "A test", "# Test\n\nHello.", &["tag"]);
-        let tool = ManageKnowledgeTool::new(Arc::clone(&store));
+        let tool = KnowledgeTool::new(Arc::clone(&store));
         let r = tool
             .call(
                 serde_json::json!({"action": "read", "slug": "test"}),
@@ -329,7 +329,7 @@ mod tests {
     async fn remove_action_deletes_page() {
         let (store, _dir) = fresh_store();
         save_page(&store, "temp", "Temporary", "# Temp", &[]);
-        let tool = ManageKnowledgeTool::new(Arc::clone(&store));
+        let tool = KnowledgeTool::new(Arc::clone(&store));
         let r = tool
             .call(
                 serde_json::json!({"action": "remove", "slug": "temp"}),
@@ -345,7 +345,7 @@ mod tests {
     async fn list_action_returns_index() {
         let (store, _dir) = fresh_store();
         save_page(&store, "config", "Config page", "# Config", &[]);
-        let tool = ManageKnowledgeTool::new(Arc::clone(&store));
+        let tool = KnowledgeTool::new(Arc::clone(&store));
         let r = tool
             .call(serde_json::json!({"action": "list"}), &ctx())
             .await
@@ -360,7 +360,7 @@ mod tests {
         for i in 0..10 {
             save_page(&store, &format!("page-{i}"), "A note", "# Note", &[]);
         }
-        let tool = ManageKnowledgeTool::new(Arc::clone(&store));
+        let tool = KnowledgeTool::new(Arc::clone(&store));
         let r = tool
             .call(serde_json::json!({"action": "list"}), &ctx())
             .await
@@ -373,7 +373,7 @@ mod tests {
     #[tokio::test]
     async fn list_action_empty_store() {
         let (store, _dir) = fresh_store();
-        let tool = ManageKnowledgeTool::new(Arc::clone(&store));
+        let tool = KnowledgeTool::new(Arc::clone(&store));
         let r = tool
             .call(serde_json::json!({"action": "list"}), &ctx())
             .await
@@ -384,7 +384,7 @@ mod tests {
     #[tokio::test]
     async fn write_without_slug_is_rejected() {
         let (store, _dir) = fresh_store();
-        let tool = ManageKnowledgeTool::new(Arc::clone(&store));
+        let tool = KnowledgeTool::new(Arc::clone(&store));
         let r = tool
             .call(
                 serde_json::json!({"action": "write", "description": "s", "content": "c"}),
@@ -398,7 +398,7 @@ mod tests {
     #[tokio::test]
     async fn write_without_description_is_rejected() {
         let (store, _dir) = fresh_store();
-        let tool = ManageKnowledgeTool::new(Arc::clone(&store));
+        let tool = KnowledgeTool::new(Arc::clone(&store));
         let r = tool
             .call(
                 serde_json::json!({"action": "write", "slug": "test", "content": "c"}),
@@ -412,7 +412,7 @@ mod tests {
     #[tokio::test]
     async fn write_without_content_is_rejected() {
         let (store, _dir) = fresh_store();
-        let tool = ManageKnowledgeTool::new(Arc::clone(&store));
+        let tool = KnowledgeTool::new(Arc::clone(&store));
         let r = tool
             .call(
                 serde_json::json!({"action": "write", "slug": "test", "description": "s"}),
@@ -426,7 +426,7 @@ mod tests {
     #[tokio::test]
     async fn unknown_action_is_rejected() {
         let (store, _dir) = fresh_store();
-        let tool = ManageKnowledgeTool::new(Arc::clone(&store));
+        let tool = KnowledgeTool::new(Arc::clone(&store));
         let r = tool
             .call(serde_json::json!({"action": "wat"}), &ctx())
             .await
@@ -437,7 +437,7 @@ mod tests {
     #[tokio::test]
     async fn missing_action_is_rejected() {
         let (store, _dir) = fresh_store();
-        let tool = ManageKnowledgeTool::new(Arc::clone(&store));
+        let tool = KnowledgeTool::new(Arc::clone(&store));
         let r = tool.call(serde_json::json!({}), &ctx()).await.unwrap();
         assert_error(&r, "action");
     }
@@ -449,7 +449,7 @@ mod tests {
         use std::sync::Mutex;
 
         let (store, _dir) = fresh_store();
-        let tool = ManageKnowledgeTool::new(Arc::clone(&store));
+        let tool = KnowledgeTool::new(Arc::clone(&store));
         let tickets = TicketQueue::new();
         let reported = Arc::new(Mutex::new(Vec::new()));
         let seen = Arc::clone(&reported);

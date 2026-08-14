@@ -199,7 +199,7 @@ Seven rules the surface table below never repeats.
 | `GrepTool`, `GlobTool`, `ListDirectoryTool` | `GrepTool()`, `GlobTool()`, `ListDirectoryTool()` |
 | `FetchUrlTool`, `FindToolsTool` | `FetchUrlTool()`, `FindToolsTool()` |
 | `TicketsTool`, `FinishTool` | `TicketsTool()`, `FinishTool()` |
-| `ManageKnowledgeTool::new(store)` | `ManageKnowledgeTool(store)` |
+| `KnowledgeTool::new(store)` | `KnowledgeTool(store)` |
 | `BashTool::new(name)` | `BashTool(name)`: a class carrying the builder methods below, where every other built-in tool is a function returning a handle. |
 | `BashTool::allow(pattern)`, `::deny(pattern)`, `::description(..)`, `::read_only(..)` | `BashTool.allow(pattern)`, `.deny(pattern)`, `.description(..)`, `.read_only(..)` |
 | `BashTool::unrestricted()` | `UnrestrictedBashTool()`: a second constructor on one class becomes a second function. |

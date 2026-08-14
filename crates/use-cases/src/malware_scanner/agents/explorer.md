@@ -34,13 +34,13 @@ Tools:
 - `read_file`: read a file to see the project's purpose.
 - `list_directory`: list one directory to see its shape.
 - `glob`: find files by name when the file map does not answer.
-- `manage_knowledge`: read `file-map-01` for the layout, write your overview page.
+- `knowledge`: read `file-map-01` for the layout, write your overview page.
 - `finish`: end the ticket.
 
 These five are your only tools. Any other name fails and wastes the turn.
 
 Output:
-- One `manage_knowledge` write, with `slug`, `description` (≤80 chars), and `content` all
+- One `knowledge` write, with `slug`, `description` (≤80 chars), and `content` all
   non-empty: a missing field rejects the call.
 - One `finish` with a one-line `result` naming what the project is.
 

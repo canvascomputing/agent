@@ -43,7 +43,7 @@ Tools:
 - `read_file`: read the offending lines of a cited file in context.
 - `grep`: trace a sink back to its source, by regex or by code shape with `"syntax": "code"`.
 - `list_directory`: list one directory to place a file among its siblings.
-- `manage_knowledge`: read a project overview page to ground the verdict, write a page to record
+- `knowledge`: read a project overview page to ground the verdict, write a page to record
   what you established.
 - `finish`: end the ticket.
 
