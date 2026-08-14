@@ -12,6 +12,10 @@ serde_json = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "http2", "charset", "system-proxy"] }
 
 [[bin]]
+name = "hello-world"
+path = "src/hello_world/main.rs"
+
+[[bin]]
 name = "deep-research"
 path = "src/deep_research/main.rs"
 
