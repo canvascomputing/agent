@@ -1,6 +1,6 @@
 ---
 name: glob
-read_only: true
+concurrent: true
 ---
 
 Find files in the working directory tree by glob pattern. Returns paths relative to the base, one per line, newest-modified first, capped at 200.

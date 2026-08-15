@@ -126,7 +126,7 @@ InvalidRequest, UnexpectedStatus, MissingKey, RequestError               // reje
 
 **Builder methods are bare nouns. No `with_` prefix.**
 
-`.name()`, `.model()`, `.tool()`, `.label()`, `.read_only()`
+`.name()`, `.model()`, `.tool()`, `.label()`, `.concurrent()`
 
 - The `with_` prefix is reserved for a bare name that would be ambiguous even with an inherent and trait split; no current builder needs it.
 - Two chaining shapes exist, picked by whether the type is shared. A value the caller owns before execution consumes itself: `AgentBuilder` takes `mut self` and returns `Self`, which is also what lets its type-state track the filled provider and model slots.

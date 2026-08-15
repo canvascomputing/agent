@@ -12,7 +12,7 @@ use crate::providers::ProviderResult as Result;
 
 /// In-place string replacement in an existing file. The model supplies the
 /// old and new strings; the tool fails if the old string is absent or
-/// matches more than once. Not read-only.
+/// matches more than once. Not concurrent.
 ///
 /// # Examples
 ///
@@ -47,8 +47,8 @@ impl ToolLike for EditFileTool {
         tool_file().input_schema.clone()
     }
 
-    fn is_read_only(&self) -> bool {
-        tool_file().read_only
+    fn is_concurrent(&self) -> bool {
+        tool_file().concurrent
     }
 
     fn opened_paths(&self, input: &Value) -> Vec<String> {

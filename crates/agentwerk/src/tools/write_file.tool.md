@@ -1,6 +1,6 @@
 ---
 name: write_file
-read_only: false
+concurrent: false
 ---
 
 Create a new file or overwrite an existing one in one shot (no append mode); parent directories are created automatically. `path` resolves against the working directory. Returns a one-line confirmation.

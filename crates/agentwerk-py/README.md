@@ -563,7 +563,7 @@ You can define custom tools for specific needs with the following parameters:
 
 | Method | Description |
 |--------|-------------|
-| `read_only=True` | Let the agent run this tool concurrently with other read-only calls in the same turn. |
+| `concurrent=True` | If a tool has no side-effects you can run it in parallel with this option. |
 | `paths=["path"]` | Name file path used for a tool call, so the files are included in statistics. |
 
 Describe the tool, then hand it the code it runs:
@@ -573,7 +573,7 @@ from agentwerk import tool
 
 
 @tool(
-    read_only=True,
+    concurrent=True,
     schema={
         "type": "object",
         "properties": {"name": {"type": "string"}},

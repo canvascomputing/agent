@@ -55,7 +55,7 @@ EventName.__doc__ = "Every event kind's name, the spelling `Event.kind` reports.
 def tool(
     func=None,
     *,
-    read_only=False,
+    concurrent=False,
     paths=None,
     schema=None,
     name=None,
@@ -63,7 +63,7 @@ def tool(
 ):
     """Turn a Python function into a tool an agent may call.
 
-    Write ``@tool`` or ``@tool(read_only=True, schema={...})``. The name
+    Write ``@tool`` or ``@tool(concurrent=True, schema={...})``. The name
     defaults to the function's, and the description to its docstring. The input
     arrives as keyword arguments. ``paths`` names the input fields holding a
     file path, so the files a call opens are included in statistics.
@@ -73,7 +73,7 @@ def tool(
         fn._agentwerk_tool = True
         fn._agentwerk_name = name or fn.__name__
         fn._agentwerk_description = description or (fn.__doc__ or "").strip()
-        fn._agentwerk_read_only = read_only
+        fn._agentwerk_concurrent = concurrent
         fn._agentwerk_paths = list(paths or [])
         fn._agentwerk_schema = schema if schema is not None else {"type": "object"}
         return fn

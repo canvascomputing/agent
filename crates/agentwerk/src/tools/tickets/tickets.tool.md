@@ -1,6 +1,6 @@
 ---
 name: tickets
-read_only: false
+concurrent: false
 ---
 
 Read and mutate the ticket queue from one tool: `ticket` / `result` / `list` / `search` to read, `create` / `edit` to write. One `action` per call; a `key` defaults to your current ticket, and `create` stamps `reporter` from the calling agent. `ticket` answers with a markdown ticket block, `result` with a finished ticket's result and the file holding it, which is how you pick up what another agent produced. `list` and `search` answer with a bullet summary and cap at 50 tickets, so tighten filters rather than re-running; `search` matches the task body only, not the label or the result.

@@ -217,7 +217,7 @@ fn python_tool() -> Tool {
         },
         "required": ["code"]
     }))
-    .read_only(true)
+    .concurrent(true)
     .handler(|input, ctx| async move {
         let code = input
             .get("code")

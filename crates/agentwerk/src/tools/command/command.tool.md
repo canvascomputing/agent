@@ -1,6 +1,6 @@
 ---
 name: command
-read_only: false
+concurrent: false
 ---
 
 Execute one command in the working directory and return its output. A command the patterns below do not permit is rejected before it runs.

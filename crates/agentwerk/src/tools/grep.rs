@@ -18,7 +18,7 @@ use crate::providers::ProviderResult as Result;
 /// Search the working directory for a regular-expression `pattern` and return a
 /// structured result: matching lines, matching file names, or per-file counts,
 /// per `output_mode`. The body drives ripgrep's search engine in-process, so a
-/// match is found the same way `rg pattern` would. Read-only.
+/// match is found the same way `rg pattern` would. Concurrent.
 ///
 /// # Examples
 ///
@@ -66,8 +66,8 @@ impl ToolLike for GrepTool {
         tool_file().input_schema.clone()
     }
 
-    fn is_read_only(&self) -> bool {
-        tool_file().read_only
+    fn is_concurrent(&self) -> bool {
+        tool_file().concurrent
     }
 
     fn call<'a>(

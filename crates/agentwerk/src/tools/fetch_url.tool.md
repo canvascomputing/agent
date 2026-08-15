@@ -1,6 +1,6 @@
 ---
 name: fetch_url
-read_only: true
+concurrent: true
 ---
 
 Fetch a URL over HTTPS and return its content as text: HTML becomes readable plain text, while JSON, text, and markdown pass through. HTTP is upgraded to HTTPS. Output is truncated to `max_length` chars (default 100 000). Limits: 60 s timeout, 10 MB body cap, 10 same-host redirect hops.

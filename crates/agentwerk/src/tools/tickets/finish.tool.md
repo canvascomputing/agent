@@ -1,6 +1,6 @@
 ---
 name: finish
-read_only: false
+concurrent: false
 ---
 
 Record your final answer and mark your current ticket `Finished`. Call it once, as the last action of the work: until you do, the ticket is unfinished and you'll be asked for it again.

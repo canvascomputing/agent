@@ -28,9 +28,9 @@ async fn test() -> std::result::Result<(), Box<dyn std::error::Error>> {
         "required": ["files", "line_count"]
     }))?;
 
-    let ls = CommandTool::new("ls").allow("ls*").read_only(true);
-    let cat = CommandTool::new("cat").allow("cat *").read_only(true);
-    let wc = CommandTool::new("wc").allow("wc *").read_only(true);
+    let ls = CommandTool::new("ls").allow("ls*").concurrent(true);
+    let cat = CommandTool::new("cat").allow("cat *").concurrent(true);
+    let wc = CommandTool::new("wc").allow("wc *").concurrent(true);
 
     let tickets = TicketQueue::new();
 

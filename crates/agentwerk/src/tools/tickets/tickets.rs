@@ -47,8 +47,8 @@ impl ToolLike for TicketsTool {
         tool_file().input_schema.clone()
     }
 
-    fn is_read_only(&self) -> bool {
-        tool_file().read_only
+    fn is_concurrent(&self) -> bool {
+        tool_file().concurrent
     }
 
     fn call<'a>(

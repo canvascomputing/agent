@@ -44,7 +44,7 @@ async def test_invokes_a_python_tool_and_records_the_file_it_opened(tmp_path):
     (tmp_path / "note.txt").write_text("THE-TOKEN-IS-42\n")
     calls = []
 
-    @aw.tool(read_only=True, paths=["path"])
+    @aw.tool(concurrent=True, paths=["path"])
     def slurp(path: str) -> str:
         """Return the contents of the file at `path`."""
         calls.append(path)

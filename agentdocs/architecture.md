@@ -51,7 +51,7 @@ tickets.ticket(Ticket::new("Audit src/db."));               // the default scope
 
 - The fold only removes information, so it cannot reach a tool the model did not name. That is what separates it from repairing a malformed argument, which agentwerk never does: the argument payload still reaches the tool untouched and is still rejected by the tool's own schema when wrong.
 - Refusing on ambiguity is the load-bearing half. A host registering `grep_tool` beside the built-in `grep` keeps both reachable under their own names, and a third spelling resolves to neither rather than to an arbitrary winner.
-- `get` is the only entry point: dispatch, the read-only batching decision in `partition_tool_calls`, and the `opened_paths` lookup all go through it, so they cannot disagree about which tool a call names.
+- `get` is the only entry point: dispatch, the concurrent batching decision in `partition_tool_calls`, and the `opened_paths` lookup all go through it, so they cannot disagree about which tool a call names.
 - The loop rewrites each call to the registered name before emitting `ToolCallStarted`, so `Event` and `Stats` never split one tool across spellings. No event reports the fold; it is a lookup detail, not a state the run reached.
 - A name that resolves to nothing returns `ToolNotFound`, whose model-visible message names every registered tool. Without that list the model has nothing to correct against, and each retry spends `max_schema_retries` budget until the ticket fails.
 - `ToolChoice::Specific` is not folded: it travels outbound and is written by agentwerk or the host, never by the model.
