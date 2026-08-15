@@ -511,13 +511,13 @@ A violated limit emits a `policy_violated` event, see [`EventKind`](https://docs
 Tools allow agents to perform their work.
 
 ```python
-from agentwerk import Agent, BashTool, GrepTool, ReadFileTool
+from agentwerk import Agent, CommandTool, GrepTool, ReadFileTool
 
 agent = (
     Agent()
     .tool(ReadFileTool())
     .tool(GrepTool())
-    .tool(BashTool("git").allow("git *"))
+    .tool(CommandTool("git").allow("git *"))
 )
 ```
 
@@ -532,7 +532,7 @@ agent = (
 | **Search** | `GlobTool()` | Find files by pattern. |
 | | `GrepTool()` | Search file contents by regular expression, or by code shape with `syntax: "code"`. |
 | | `ListDirectoryTool()` | List files and directories. |
-| **Shell** | `BashTool(name)` | Run a shell command from an allow-list of patterns. |
+| **Command** | `CommandTool(name)` | Give access to specific commands. |
 | **Web** | `FetchUrlTool()` | Fetch a URL and read its body. |
 | **Tickets** | `FinishTool()` | Write the result for the current ticket and mark it finished. |
 | | `TicketsTool()` | Read the ticket queue and create or edit tickets. |
@@ -543,16 +543,17 @@ agent = (
 
 `FinishTool()` and `KnowledgeTool(store)` are special tools, registered automatically on every agent. They are used for interacting with the `TicketQueue` or knowledge base.
 
-#### BashTool
+#### CommandTool
 
-The `BashTool` allows you to granularly define what bash commands are allowed and what commands are denied.
+The `CommandTool` allows you to granularly define what commands are allowed and what commands are denied.
 
 ```python
 git = (
-    BashTool("git")
+    CommandTool("git")
     .allow("git status")
     .allow("git log *")
     .deny("git push*")
+    .deny_flag("--force")
 )
 ```
 

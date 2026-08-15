@@ -184,9 +184,7 @@ mod tests {
             .await
             .unwrap();
 
-        let (ToolResult::Success(content)
-        | ToolResult::Error(content)
-        | ToolResult::SchemaError(content)) = &result;
+        let content = result.content();
         assert!(matches!(result, ToolResult::Error(_)));
         assert!(content.contains("2"));
     }
@@ -242,9 +240,7 @@ mod tests {
             .await
             .unwrap();
 
-        let (ToolResult::Success(content)
-        | ToolResult::Error(content)
-        | ToolResult::SchemaError(content)) = &result;
+        let content = result.content();
         assert!(matches!(result, ToolResult::Error(_)));
         assert!(content.contains("not found"));
     }

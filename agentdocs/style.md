@@ -18,7 +18,7 @@ Naming, comment, and prose rules, plus README structure. Skim the section matchi
 
 **Types live next to the abstraction, owner, or protocol they belong to.**
 
-- Concrete implementations live with their abstraction: `AnthropicProvider` under `providers::`, `BashTool` under `tools::`.
+- Concrete implementations live with their abstraction: `AnthropicProvider` under `providers::`, `CommandTool` under `tools::`.
 - Companion types and handles live with their owner: `Ticket`, `Status`, `TicketError`, `Reply`, and `ReplyContent` under `agents::tickets`; `Stats` under `agents::stats`; `Compaction` under `agents::compaction`.
 - Domain errors live with their domain: `ProviderError`, `ToolError`.
 - Request and response types live with the protocol: `ModelRequest`, `Message`, `TokenUsage` under `providers::`.
@@ -137,7 +137,7 @@ InvalidRequest, UnexpectedStatus, MissingKey, RequestError               // reje
 **`new()` for the primary path. Named constructors carry semantics.**
 
 - `new()` is the primary constructor.
-- Named constructors: `load()`, `unrestricted()`, `success()`, `error()`, `from_id()`, `from_env()`.
+- Named constructors: `load()`, `success()`, `error()`, `from_id()`, `from_env()`.
 
 ## Getters and Setters
 
@@ -224,9 +224,9 @@ Forbidden:
 - A free helper called from exactly one private method. Make it a private method or a nested `fn`.
 - An associated function that takes no `self` and does not return `Self` or `Result<Self>`. Move it to the module as a free function. Exception: a per-variant static lookup where the `Type::` prefix partitions otherwise-colliding names, such as `AnthropicProvider::lookup_context_window_size` next to `OpenAiProvider::lookup_context_window_size`.
 
-Naming is `snake_case`. Tool structs keep the `{Name}Tool` suffix: `ReadFileTool`, `BashTool`, `TicketsTool`.
+Naming is `snake_case`. Tool structs keep the `{Name}Tool` suffix: `ReadFileTool`, `CommandTool`, `TicketsTool`.
 
-The name the model calls is a separate namespace and takes no suffix: `read_file`, `bash`, `tickets`. It lives in the tool's `.tool.md` frontmatter, never as a Rust literal at a call site. A `_tool` suffix there restates what the tools array already says.
+The name the model calls is a separate namespace and takes no suffix: `read_file`, `grep`, `tickets`. It lives in the tool's `.tool.md` frontmatter, never as a Rust literal at a call site. A `_tool` suffix there restates what the tools array already says.
 
 ## Doc Comments (`///`)
 

@@ -19,7 +19,7 @@ test:
 
 # Run integration tests (requires a live LLM LITELLM_PROVIDER)
 # Usage: make test_integration              (run all)
-#        make test_integration name=bash_usage  (run one file)
+#        make test_integration name=command_usage  (run one file)
 test_integration:
 ifdef name
 	@if [ -f .env ]; then set -a; . ./.env; set +a; fi; \

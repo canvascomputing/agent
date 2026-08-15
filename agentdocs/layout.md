@@ -37,7 +37,7 @@ crates/
 - Extension types live in `tools::` and `default_logger` in `event::`. Callers reach into a sub-module when they need anything below the orchestration level.
 - `event.rs` defines `Event`, `EventKind`, `EventName`, `PolicyKind`, `FinishReason`, `ToolFailureKind`, `CompactReason`, and `default_logger`, plus the crate-internal `Subject` and `Measure` that `EventKind::measures` returns.
 - `persistence.rs` holds the `Persist` and `Append` traits, the log types (`Results`, `TicketEvents`), and the shared `write_atomic`, `append_line`, and `output_path` helpers. It is `pub(crate)` and not re-exported from `lib.rs`.
-- The `agents/`, `prompts/`, `providers/`, `schemas/`, and `tools/` modules each own their domain. `agents/` and `tools/` also re-export their headline types, so `use agentwerk::agents::{Agent, TicketQueue}` and `use agentwerk::tools::BashTool` work without descending into leaf files.
+- The `agents/`, `prompts/`, `providers/`, `schemas/`, and `tools/` modules each own their domain. `agents/` and `tools/` also re-export their headline types, so `use agentwerk::agents::{Agent, TicketQueue}` and `use agentwerk::tools::CommandTool` work without descending into leaf files.
 
 ## The `agents/` Module
 
@@ -85,7 +85,7 @@ crates/
 - `tool.rs` defines `ToolLike`, `Tool`, `ToolRegistry`, `ToolContext`, and `ToolCall`.
 - `read_file.rs`, `write_file.rs`, `edit_file.rs`, `glob.rs`, `grep.rs`, and `list_directory.rs` are filesystem tools.
 - `code.rs` backs `grep`'s `syntax: "code"` shape matching, delegating to the `codegrep` engine.
-- `bash.rs` is the shell tool, restricted through `new()` and unrestricted through `unrestricted()`.
+- `command/` holds the command tool and the parsing behind it. `tool.rs` is the tool, restricted through `new()` and widened through `allow()`; it runs one program per call and never a shell. `parse.rs` splits a line into one command and classifies its arguments, which is how the tool refuses anything that is not one command and how a rule about a flag means what the program will mean.
 - `tickets/` holds `TicketsTool` and `FinishTool`; `knowledge.rs` is the model-facing wrapper around `Knowledge`, whose store lives in `agents::knowledge`.
 - `find_tools.rs` is the discovery surface for deferred tools; `fetch_url.rs` is the web fetch tool.
 - Each built-in tool pairs with a `<tool>.tool.md` definition: `---` frontmatter (`name`, `read_only`), a prose body shown to the model, and a `## Schema` section whose ` ```json ` fence holds the input schema. `tool_file.rs` parses it; `util.rs` is a shared helper; `error.rs` holds `ToolError`.

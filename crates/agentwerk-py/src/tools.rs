@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use agentwerk::providers::ProviderResult;
 use agentwerk::tools::{
-    BashTool, EditFileTool, FetchUrlTool, FindToolsTool, FinishTool, GlobTool, GrepTool,
+    CommandTool, EditFileTool, FetchUrlTool, FindToolsTool, FinishTool, GlobTool, GrepTool,
     KnowledgeTool, ListDirectoryTool, ReadFileTool, TicketsTool, ToolContext, ToolLike, ToolResult,
     WriteFileTool,
 };
@@ -204,8 +204,8 @@ pub fn extract_tool(obj: &Bound<'_, PyAny>) -> PyResult<Arc<dyn ToolLike>> {
     if let Ok(handle) = obj.extract::<PyRef<PyTool>>() {
         return Ok(Arc::clone(&handle.inner));
     }
-    if let Ok(bash) = obj.extract::<PyRef<PyBashTool>>() {
-        return Ok(Arc::new(bash.inner.clone()));
+    if let Ok(command) = obj.extract::<PyRef<PyCommandTool>>() {
+        return Ok(Arc::new(command.inner.clone()));
     }
     if obj.hasattr("_agentwerk_tool")? {
         let name = obj.getattr("_agentwerk_name")?.extract()?;
@@ -311,19 +311,19 @@ fn tickets_tool() -> PyTool {
     handle(Arc::new(TicketsTool))
 }
 
-/// Run a shell command the model calls by `name`, passed to `Agent.tool(...)`.
+/// Run a command the model calls by `name`, passed to `Agent.tool(...)`.
 /// Until an `allow` pattern widens it, only the bare `name` runs.
-#[pyclass(name = "BashTool")]
-pub struct PyBashTool {
-    inner: BashTool,
+#[pyclass(name = "CommandTool")]
+pub struct PyCommandTool {
+    inner: CommandTool,
 }
 
 #[pymethods]
-impl PyBashTool {
+impl PyCommandTool {
     #[new]
     fn new(name: &str) -> Self {
-        PyBashTool {
-            inner: BashTool::new(name),
+        PyCommandTool {
+            inner: CommandTool::new(name),
         }
     }
 
@@ -341,6 +341,13 @@ impl PyBashTool {
         slf
     }
 
+    /// Refuse commands carrying `flag`, even when an allowed pattern matches
+    /// them. `--force` also catches `--force=x`, and `-f` also catches `-rf`.
+    fn deny_flag<'py>(mut slf: PyRefMut<'py, Self>, flag: &str) -> PyRefMut<'py, Self> {
+        slf.inner = slf.inner.clone().deny_flag(flag);
+        slf
+    }
+
     /// Override the auto-generated description.
     fn description<'py>(mut slf: PyRefMut<'py, Self>, description: &str) -> PyRefMut<'py, Self> {
         slf.inner = slf.inner.clone().description(description);
@@ -354,18 +361,9 @@ impl PyBashTool {
     }
 }
 
-/// Run any shell command. Only for input you trust.
-#[pyfunction]
-#[pyo3(name = "UnrestrictedBashTool")]
-fn unrestricted_bash_tool() -> PyBashTool {
-    PyBashTool {
-        inner: BashTool::unrestricted(),
-    }
-}
-
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyTool>()?;
-    m.add_class::<PyBashTool>()?;
+    m.add_class::<PyCommandTool>()?;
     m.add_class::<PyToolResult>()?;
     m.add_function(wrap_pyfunction!(read_file_tool, m)?)?;
     m.add_function(wrap_pyfunction!(write_file_tool, m)?)?;
@@ -378,6 +376,5 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(knowledge_tool, m)?)?;
     m.add_function(wrap_pyfunction!(finish_tool, m)?)?;
     m.add_function(wrap_pyfunction!(tickets_tool, m)?)?;
-    m.add_function(wrap_pyfunction!(unrestricted_bash_tool, m)?)?;
     Ok(())
 }

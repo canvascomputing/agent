@@ -7,8 +7,8 @@ mod common;
 #[path = "../src/test_util.rs"]
 mod test_util;
 
-#[path = "integration/bash_usage.rs"]
-mod bash_usage;
+#[path = "integration/command_usage.rs"]
+mod command_usage;
 
 #[path = "integration/grep_finds_by_shape.rs"]
 mod grep_finds_by_shape;

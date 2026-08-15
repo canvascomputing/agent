@@ -4,7 +4,7 @@
 use std::fmt;
 
 /// A tool failed for reasons the model can't fix by retrying with different
-/// arguments. Most tool failures (bad args, non-zero bash exit, file-not-found,
+/// arguments. Most tool failures (bad args, non-zero exit, file-not-found,
 /// timeouts) flow through [`ToolResult::Error`](super::ToolResult::Error)
 /// instead; those reach the model as tool-result messages.
 #[derive(Debug)]
