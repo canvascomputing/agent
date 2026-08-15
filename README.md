@@ -100,6 +100,8 @@ agent.task("Read CHANGELOG.md and summarize the entries added since the last rel
 agent.start();
 ```
 
+Optionally, install the [`prompt` skill](skills/prompt/SKILL.md), which is optimized for highly efficient agents with a proven structure for effectiveness.
+
 <details>
 <summary>All agent methods</summary>
 
