@@ -53,7 +53,7 @@ PARTIAL_SUM = Schema(
 
 
 @tool(
-    read_only=True,
+    concurrent=True,
     schema={
         "type": "object",
         "properties": {

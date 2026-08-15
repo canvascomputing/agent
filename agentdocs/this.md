@@ -26,7 +26,7 @@ Naming and comment rules, plus README structure. Skim the section matching what 
 
 **Builder methods are bare nouns. No `with_` prefix.**
 
-`.name()`, `.model()`, `.tool()`, `.label()`, `.read_only()`
+`.name()`, `.model()`, `.tool()`, `.label()`, `.concurrent()`
 
 - The `with_` prefix is reserved for a bare name that would be ambiguous.
 ```

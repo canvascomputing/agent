@@ -11,7 +11,7 @@ use super::tool::{ToolContext, ToolLike, ToolResult};
 use super::tool_file::ToolFile;
 use crate::providers::ProviderResult as Result;
 
-/// List the entries of a directory with type and size. Read-only. Pair with
+/// List the entries of a directory with type and size. Concurrent. Pair with
 /// [`GlobTool`](crate::tools::GlobTool) when you need pattern-based file discovery.
 ///
 /// # Examples
@@ -47,8 +47,8 @@ impl ToolLike for ListDirectoryTool {
         tool_file().input_schema.clone()
     }
 
-    fn is_read_only(&self) -> bool {
-        tool_file().read_only
+    fn is_concurrent(&self) -> bool {
+        tool_file().concurrent
     }
 
     fn call<'a>(

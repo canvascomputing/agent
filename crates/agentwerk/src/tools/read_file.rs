@@ -13,7 +13,7 @@ use super::tool_file::ToolFile;
 
 /// Read a file with optional line offset and limit. Returns line-numbered
 /// text so the model can reference specific lines in subsequent edits.
-/// Read-only.
+/// Concurrent.
 ///
 /// # Examples
 ///
@@ -48,8 +48,8 @@ impl ToolLike for ReadFileTool {
         tool_file().input_schema.clone()
     }
 
-    fn is_read_only(&self) -> bool {
-        tool_file().read_only
+    fn is_concurrent(&self) -> bool {
+        tool_file().concurrent
     }
 
     fn opened_paths(&self, input: &Value) -> Vec<String> {

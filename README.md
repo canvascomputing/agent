@@ -539,7 +539,7 @@ You can define custom tools for specific needs with the following parameters:
 
 | Method | Description |
 |--------|-------------|
-| `read_only(true)` | Let the agent run this tool concurrently with other read-only calls in the same turn. |
+| `concurrent(true)` | If a tool has no side-effects you can run it in parallel with this option. |
 | `paths(["path"])` | Name file path used for a tool call, so the files are included in statistics. |
 
 Describe the tool, then hand it the code it runs:
@@ -553,7 +553,7 @@ let greet = Tool::new("greet", "Say hello")
         "properties": { "name": { "type": "string" } },
         "required": ["name"]
     }))
-    .read_only(true)
+    .concurrent(true)
     .handler(|input, _context| async move {
         let name = input["name"].as_str().unwrap_or("world");
         Ok(ToolResult::success(format!("Hello, {name}!")))

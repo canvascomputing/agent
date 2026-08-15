@@ -11,7 +11,7 @@ use super::tool_file::ToolFile;
 use crate::providers::ProviderResult as Result;
 
 /// Create or overwrite a file. Destructive: existing content is replaced.
-/// Not read-only, so agentwerk runs it serially.
+/// Not concurrent, so agentwerk runs it one call at a time.
 ///
 /// # Examples
 ///
@@ -46,8 +46,8 @@ impl ToolLike for WriteFileTool {
         tool_file().input_schema.clone()
     }
 
-    fn is_read_only(&self) -> bool {
-        tool_file().read_only
+    fn is_concurrent(&self) -> bool {
+        tool_file().concurrent
     }
 
     fn opened_paths(&self, input: &Value) -> Vec<String> {

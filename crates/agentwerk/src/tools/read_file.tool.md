@@ -1,6 +1,6 @@
 ---
 name: read_file
-read_only: true
+concurrent: true
 ---
 
 Read a file's contents, returning line-numbered text so you can cite `file:line` and target edits. Output is `<line_no>\t<line>` from line 1; the path resolves against the working directory.

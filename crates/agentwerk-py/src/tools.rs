@@ -36,8 +36,8 @@ impl ToolLike for BoxedTool {
         self.0.input_schema()
     }
 
-    fn is_read_only(&self) -> bool {
-        self.0.is_read_only()
+    fn is_concurrent(&self) -> bool {
+        self.0.is_concurrent()
     }
 
     fn opened_paths(&self, input: &Value) -> Vec<String> {
@@ -69,7 +69,7 @@ struct PyToolAdapter {
     name: String,
     description: String,
     schema: Value,
-    read_only: bool,
+    concurrent: bool,
     paths: Vec<String>,
 }
 
@@ -86,8 +86,8 @@ impl ToolLike for PyToolAdapter {
         self.schema.clone()
     }
 
-    fn is_read_only(&self) -> bool {
-        self.read_only
+    fn is_concurrent(&self) -> bool {
+        self.concurrent
     }
 
     fn opened_paths(&self, input: &Value) -> Vec<String> {
@@ -105,7 +105,7 @@ impl ToolLike for PyToolAdapter {
     ) -> Pin<Box<dyn Future<Output = ProviderResult<ToolResult>> + Send + 'a>> {
         let func = Python::attach(|py| self.func.clone_ref(py));
         Box::pin(async move {
-            // Read-only tool calls are spawned onto a multi-thread runtime, so
+            // Concurrent tool calls are spawned onto a multi-thread runtime, so
             // the GIL work must run on a blocking thread, not the async worker.
             let outcome: Result<ToolResult, String> = tokio::task::spawn_blocking(move || {
                 Python::attach(|py| invoke_python(py, &func, &input).map_err(|e| e.to_string()))
@@ -200,7 +200,7 @@ pub fn extract_tool(obj: &Bound<'_, PyAny>) -> PyResult<Arc<dyn ToolLike>> {
     if obj.hasattr("_agentwerk_tool")? {
         let name = obj.getattr("_agentwerk_name")?.extract()?;
         let description = obj.getattr("_agentwerk_description")?.extract()?;
-        let read_only = obj.getattr("_agentwerk_read_only")?.extract()?;
+        let concurrent = obj.getattr("_agentwerk_concurrent")?.extract()?;
         let paths = obj.getattr("_agentwerk_paths")?.extract()?;
         let schema = py_to_value(&obj.getattr("_agentwerk_schema")?)?;
         return Ok(Arc::new(PyToolAdapter {
@@ -208,7 +208,7 @@ pub fn extract_tool(obj: &Bound<'_, PyAny>) -> PyResult<Arc<dyn ToolLike>> {
             name,
             description,
             schema,
-            read_only,
+            concurrent,
             paths,
         }));
     }
@@ -335,9 +335,10 @@ impl PyCommandTool {
         slf
     }
 
-    /// Set whether this tool is considered read-only.
-    fn read_only<'py>(mut slf: PyRefMut<'py, Self>, read_only: bool) -> PyRefMut<'py, Self> {
-        slf.inner = slf.inner.clone().read_only(read_only);
+    /// Run this tool in parallel with the turn's other concurrent calls. Set it
+    /// for a tool with no side effects.
+    fn concurrent<'py>(mut slf: PyRefMut<'py, Self>, concurrent: bool) -> PyRefMut<'py, Self> {
+        slf.inner = slf.inner.clone().concurrent(concurrent);
         slf
     }
 }

@@ -10,7 +10,7 @@ use serde_json::Value;
 #[derive(Debug)]
 pub(crate) struct ToolFile {
     pub(crate) name: String,
-    pub(crate) read_only: bool,
+    pub(crate) concurrent: bool,
     pub(crate) input_schema: Value,
     description: String,
 }
@@ -23,14 +23,14 @@ impl ToolFile {
         let (front, body) = split_frontmatter(markdown);
 
         let mut name: Option<String> = None;
-        let mut read_only: Option<bool> = None;
+        let mut concurrent: Option<bool> = None;
         for line in front.lines() {
             let Some((key, value)) = line.split_once(':') else {
                 continue;
             };
             match key.trim() {
                 "name" => name = Some(value.trim().to_string()),
-                "read_only" => read_only = Some(value.trim() == "true"),
+                "concurrent" => concurrent = Some(value.trim() == "true"),
                 _ => {}
             }
         }
@@ -41,7 +41,7 @@ impl ToolFile {
 
         ToolFile {
             name: name.expect("tool definition missing `name` in frontmatter"),
-            read_only: read_only.expect("tool definition missing `read_only` in frontmatter"),
+            concurrent: concurrent.expect("tool definition missing `concurrent` in frontmatter"),
             input_schema: parse_json_fence(schema_section),
             description: description.trim().to_string(),
         }
@@ -84,7 +84,7 @@ mod tests {
     const FIXTURE: &str = "\
 ---
 name: fixture_tool
-read_only: true
+concurrent: true
 ---
 
 First sentence. Second sentence.
@@ -108,10 +108,10 @@ First sentence. Second sentence.
 ";
 
     #[test]
-    fn parses_frontmatter_name_and_read_only() {
+    fn parses_frontmatter_name_and_concurrent() {
         let tf = ToolFile::parse(FIXTURE);
         assert_eq!(tf.name, "fixture_tool");
-        assert!(tf.read_only);
+        assert!(tf.concurrent);
     }
 
     #[test]
@@ -136,11 +136,11 @@ First sentence. Second sentence.
     }
 
     #[test]
-    fn read_only_false_round_trips() {
+    fn concurrent_false_round_trips() {
         let md = "\
 ---
 name: minimal
-read_only: false
+concurrent: false
 ---
 
 Body.
@@ -153,7 +153,7 @@ Body.
 ";
         let tf = ToolFile::parse(md);
         assert_eq!(tf.name, "minimal");
-        assert!(!tf.read_only);
+        assert!(!tf.concurrent);
         assert_eq!(tf.render_markdown(), "Body.");
     }
 }

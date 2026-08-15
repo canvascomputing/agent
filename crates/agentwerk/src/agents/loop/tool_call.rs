@@ -646,7 +646,7 @@ mod tests {
                 "properties": {"bytes": {"type": "integer"}},
                 "required": ["bytes"],
             }))
-            .read_only(true)
+            .concurrent(true)
             .handler(|input, _ctx| async move {
                 let bytes = input["bytes"].as_u64().unwrap_or(0) as usize;
                 Ok(ToolResult::success("x".repeat(bytes)))

@@ -12,7 +12,7 @@ use super::tool::{ToolContext, ToolLike, ToolResult};
 use super::tool_file::ToolFile;
 use crate::providers::ProviderResult as Result;
 
-/// Find files matching a glob pattern under the working directory. Read-only.
+/// Find files matching a glob pattern under the working directory. Concurrent.
 /// Sorted by modification time (newest first); capped at 200 results.
 ///
 /// # Examples
@@ -50,8 +50,8 @@ impl ToolLike for GlobTool {
         tool_file().input_schema.clone()
     }
 
-    fn is_read_only(&self) -> bool {
-        tool_file().read_only
+    fn is_concurrent(&self) -> bool {
+        tool_file().concurrent
     }
 
     fn call<'a>(

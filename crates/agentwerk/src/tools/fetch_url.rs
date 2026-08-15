@@ -26,7 +26,7 @@ fn description() -> &'static str {
     DESC.get_or_init(|| tool_file().render_markdown())
 }
 
-/// Fetch a URL and return its content as text. Read-only. HTML is converted
+/// Fetch a URL and return its content as text. Concurrent. HTML is converted
 /// to plain text; HTTP is upgraded to HTTPS; cross-host redirects are
 /// surfaced rather than followed.
 ///
@@ -53,8 +53,8 @@ impl ToolLike for FetchUrlTool {
         tool_file().input_schema.clone()
     }
 
-    fn is_read_only(&self) -> bool {
-        tool_file().read_only
+    fn is_concurrent(&self) -> bool {
+        tool_file().concurrent
     }
 
     fn call<'a>(

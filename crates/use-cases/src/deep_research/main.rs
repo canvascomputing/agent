@@ -269,7 +269,7 @@ fn brave_search_tool(api_key: String) -> Tool {
         },
         "required": ["query"]
     }))
-    .read_only(true)
+    .concurrent(true)
     .handler(move |input, _ctx| {
         let api_key = api_key.clone();
         async move { brave_search(&api_key, &input).await }

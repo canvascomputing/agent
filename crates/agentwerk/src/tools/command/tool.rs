@@ -27,7 +27,7 @@ fn description_base() -> &'static str {
 
 /// Execute commands. A tool named `git` runs the bare `git` and nothing else
 /// until [`CommandTool::allow`] widens it; [`CommandTool::deny`] and
-/// [`CommandTool::deny_flag`] overrule any allowed pattern. Not read-only.
+/// [`CommandTool::deny_flag`] overrule any allowed pattern. Not concurrent.
 ///
 /// One call runs one program, without a shell.
 ///
@@ -54,7 +54,7 @@ pub struct CommandTool {
     deny_flags: Vec<DeniedFlag>,
     description: String,
     custom_description: bool,
-    read_only: bool,
+    concurrent: bool,
 }
 
 impl CommandTool {
@@ -74,7 +74,7 @@ impl CommandTool {
             deny_flags: Vec::new(),
             description: String::new(),
             custom_description: false,
-            read_only: tool_file().read_only,
+            concurrent: tool_file().concurrent,
         };
         tool.render_description();
         tool
@@ -142,9 +142,10 @@ impl CommandTool {
         self
     }
 
-    /// Set whether this tool is considered read-only.
-    pub fn read_only(mut self, read_only: bool) -> Self {
-        self.read_only = read_only;
+    /// Run this tool in parallel with the turn's other concurrent calls. Set it
+    /// for a tool with no side effects.
+    pub fn concurrent(mut self, concurrent: bool) -> Self {
+        self.concurrent = concurrent;
         self
     }
 
@@ -328,8 +329,8 @@ impl ToolLike for CommandTool {
         tool_file().input_schema.clone()
     }
 
-    fn is_read_only(&self) -> bool {
-        self.read_only
+    fn is_concurrent(&self) -> bool {
+        self.concurrent
     }
 
     fn call<'a>(
@@ -371,8 +372,8 @@ mod tests {
     }
 
     #[test]
-    fn a_tool_is_not_read_only_by_default() {
-        assert!(!CommandTool::new("echo").is_read_only());
+    fn a_tool_is_not_concurrent_by_default() {
+        assert!(!CommandTool::new("echo").is_concurrent());
     }
 
     #[test]
@@ -382,9 +383,9 @@ mod tests {
     }
 
     #[test]
-    fn a_tool_can_be_marked_read_only() {
-        let tool = CommandTool::new("echo").read_only(true);
-        assert!(tool.is_read_only());
+    fn a_tool_can_be_marked_concurrent() {
+        let tool = CommandTool::new("echo").concurrent(true);
+        assert!(tool.is_concurrent());
     }
 
     #[test]

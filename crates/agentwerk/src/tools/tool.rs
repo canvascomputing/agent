@@ -184,9 +184,10 @@ pub trait ToolLike: Send + Sync {
     /// JSON Schema describing the tool's arguments.
     fn input_schema(&self) -> Value;
 
-    /// Whether the tool changes nothing. Read-only tools in one turn run at the
-    /// same time; the rest run one after another. `false` by default.
-    fn is_read_only(&self) -> bool {
+    /// Whether the agent may run this tool in parallel with the turn's other
+    /// concurrent calls; set it for a tool with no side effects. `false` by
+    /// default.
+    fn is_concurrent(&self) -> bool {
         false
     }
 
@@ -270,7 +271,7 @@ impl ToolRegistry {
             .collect()
     }
 
-    /// Run the calls, read-only ones together and the rest one at a time.
+    /// Run the calls, concurrent ones together and the rest one at a time.
     ///
     /// Each result carries the block the model sees, the typed outcome, and the
     /// file an oversized output was written to.
@@ -370,7 +371,7 @@ pub struct ToolBuilder<H> {
     name: String,
     description: String,
     schema: Value,
-    read_only: bool,
+    concurrent: bool,
     paths: Vec<String>,
     handler: H,
 }
@@ -391,7 +392,7 @@ pub struct ToolBuilder<H> {
 ///         "properties": { "name": { "type": "string" } },
 ///         "required": ["name"]
 ///     }))
-///     .read_only(true)
+///     .concurrent(true)
 ///     .handler(|input, _ctx| async move {
 ///         let name = input["name"].as_str().unwrap_or("world");
 ///         Ok(ToolResult::success(format!("Hello, {name}!")))
@@ -404,7 +405,7 @@ pub struct Tool {
     name: String,
     description: String,
     schema: Value,
-    read_only: bool,
+    concurrent: bool,
     paths: Vec<String>,
     handler: ToolHandler,
 }
@@ -417,20 +418,20 @@ impl Tool {
             name: name.into(),
             description: description.into(),
             schema: serde_json::json!({"type": "object", "properties": {}}),
-            read_only: false,
+            concurrent: false,
             paths: Vec::new(),
             handler: (),
         }
     }
 
     /// Start building a tool from a `.tool.md` definition, which supplies its
-    /// name, description, input schema, and whether it is read-only. Panics when
-    /// the file is malformed.
+    /// name, description, input schema, and whether it may run concurrently.
+    /// Panics when the file is malformed.
     pub fn from_tool_file(definition: &str) -> ToolBuilder<()> {
         let tf = super::tool_file::ToolFile::parse(definition);
         Tool::new(tf.name.clone(), tf.render_markdown())
             .schema(tf.input_schema.clone())
-            .read_only(tf.read_only)
+            .concurrent(tf.concurrent)
     }
 }
 
@@ -441,10 +442,10 @@ impl<H> ToolBuilder<H> {
         self
     }
 
-    /// Let the agent run this tool concurrently with other read-only calls in
-    /// the same turn.
-    pub fn read_only(mut self, read_only: bool) -> Self {
-        self.read_only = read_only;
+    /// Run this tool in parallel with the turn's other concurrent calls. Set it
+    /// for a tool with no side effects.
+    pub fn concurrent(mut self, concurrent: bool) -> Self {
+        self.concurrent = concurrent;
         self
     }
 
@@ -473,7 +474,7 @@ impl ToolBuilder<()> {
             name: self.name,
             description: self.description,
             schema: self.schema,
-            read_only: self.read_only,
+            concurrent: self.concurrent,
             paths: self.paths,
             handler: Box::new(move |v, c| Box::pin(f(v, c.clone()))),
         }
@@ -487,7 +488,7 @@ impl ToolBuilder<ToolHandler> {
             name: self.name,
             description: self.description,
             schema: self.schema,
-            read_only: self.read_only,
+            concurrent: self.concurrent,
             paths: self.paths,
             handler: self.handler,
         }
@@ -507,8 +508,8 @@ impl ToolLike for Tool {
         self.schema.clone()
     }
 
-    fn is_read_only(&self) -> bool {
-        self.read_only
+    fn is_concurrent(&self) -> bool {
+        self.concurrent
     }
 
     fn opened_paths(&self, input: &Value) -> Vec<String> {
@@ -595,9 +596,9 @@ fn partition_tool_calls(calls: &[ToolCall], registry: &ToolRegistry) -> Vec<Tool
     let mut concurrent_batch: Vec<ToolCall> = Vec::new();
 
     for call in calls {
-        let is_read_only = registry.get(&call.name).is_some_and(|t| t.is_read_only());
+        let is_concurrent = registry.get(&call.name).is_some_and(|t| t.is_concurrent());
 
-        if is_read_only {
+        if is_concurrent {
             concurrent_batch.push(call.clone());
         } else {
             if !concurrent_batch.is_empty() {
@@ -838,15 +839,15 @@ mod tests {
     /// The mock the registry tests share.
     struct MockTool {
         name: String,
-        read_only: bool,
+        concurrent: bool,
         result: String,
     }
 
     impl MockTool {
-        fn new(name: &str, read_only: bool, result: &str) -> Self {
+        fn new(name: &str, concurrent: bool, result: &str) -> Self {
             Self {
                 name: name.into(),
-                read_only,
+                concurrent,
                 result: result.into(),
             }
         }
@@ -862,8 +863,8 @@ mod tests {
         fn input_schema(&self) -> Value {
             serde_json::json!({"type": "object"})
         }
-        fn is_read_only(&self) -> bool {
-            self.read_only
+        fn is_concurrent(&self) -> bool {
+            self.concurrent
         }
         fn call<'a>(
             &'a self,
@@ -920,10 +921,10 @@ mod tests {
     }
 
     #[test]
-    fn from_tool_file_populates_name_description_schema_read_only() {
+    fn from_tool_file_populates_name_description_schema_concurrent() {
         let definition = r#"---
 name: demo_tool
-read_only: true
+concurrent: true
 ---
 
 Do the demo thing.
@@ -946,7 +947,7 @@ Do the demo thing.
         assert_eq!(tool.name(), "demo_tool");
         assert!(tool.description().contains("Do the demo thing."));
         assert!(tool.description().contains("- Returns nothing useful."));
-        assert!(tool.is_read_only());
+        assert!(tool.is_concurrent());
         let schema = tool.input_schema();
         assert_eq!(schema["properties"]["x"]["type"], "string");
         assert_eq!(schema["required"][0], "x");
@@ -1018,7 +1019,7 @@ Do the demo thing.
     }
 
     #[tokio::test]
-    async fn execute_read_only_tools_concurrently() {
+    async fn execute_concurrent_tools_at_the_same_time() {
         let mut registry = ToolRegistry::default();
         registry.register(MockTool::new("read1", true, "result1"));
         registry.register(MockTool::new("read2", true, "result2"));
@@ -1072,7 +1073,7 @@ Do the demo thing.
             .schema(
                 serde_json::json!({"type": "object", "properties": {"text": {"type": "string"}}}),
             )
-            .read_only(true)
+            .concurrent(true)
             .handler(|input, _ctx| async move {
                 let text = input["text"].as_str().unwrap_or("").to_string();
                 Ok(ToolResult::success(text))
@@ -1080,7 +1081,7 @@ Do the demo thing.
             .build();
 
         assert_eq!(tool.name(), "echo");
-        assert!(tool.is_read_only());
+        assert!(tool.is_concurrent());
     }
 
     // Layer 1: result-cap helpers

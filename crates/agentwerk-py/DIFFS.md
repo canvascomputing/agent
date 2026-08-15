@@ -188,7 +188,7 @@ Seven rules the surface table below never repeats.
 | `ToolBuilder<H>` | Folded into the `@tool` decorator: the type changes once a handler is attached, which Python cannot hold across calls. |
 | `Tool` | `Tool`: an opaque handle the built-in tool functions return. An ad-hoc tool is a decorated function, not a `Tool`. |
 | `Tool::from_tool_file(definition)` | Not bound: write the name, description, and schema on the Python function instead. |
-| `ToolBuilder::read_only(b)` | `@tool(read_only=..)` |
+| `ToolBuilder::concurrent(b)` | `@tool(concurrent=..)` |
 | `ToolBuilder::paths(fields)` | `@tool(paths=[..])` |
 | `ToolLike` | A `@tool`-decorated callable. Python cannot implement a Rust trait. |
 | `ToolContext` | Not bound: a `@tool` function receives its input as keyword arguments only. |
@@ -201,6 +201,6 @@ Seven rules the surface table below never repeats.
 | `TicketsTool`, `FinishTool` | `TicketsTool()`, `FinishTool()` |
 | `KnowledgeTool::new(store)` | `KnowledgeTool(store)` |
 | `CommandTool::new(name)` | `CommandTool(name)`: a class carrying the builder methods below, where every other built-in tool is a function returning a handle. |
-| `CommandTool::allow(pattern)`, `::deny(pattern)`, `::deny_flag(flag)`, `::description(..)`, `::read_only(..)` | `CommandTool.allow(pattern)`, `.deny(pattern)`, `.deny_flag(flag)`, `.description(..)`, `.read_only(..)` |
+| `CommandTool::allow(pattern)`, `::deny(pattern)`, `::deny_flag(flag)`, `::description(..)`, `::concurrent(..)` | `CommandTool.allow(pattern)`, `.deny(pattern)`, `.deny_flag(flag)`, `.description(..)`, `.concurrent(..)` |
 | **Code search** | |
 | `codegrep::{Pattern, Conf, search, tokenize_pattern, ..}` | Not bound: reachable through `GrepTool()` with `syntax="code"`. |

@@ -27,7 +27,7 @@ def test_command_tool_configuration_chains_on_one_object():
     assert tool.allow("git *") is tool
     assert tool.deny("git push*") is tool
     assert tool.deny_flag("--force") is tool
-    assert tool.read_only(True) is tool
+    assert tool.concurrent(True) is tool
     assert tool.description("Run git commands.") is tool
 
 
@@ -36,19 +36,19 @@ def test_an_agent_accepts_a_command_tool():
     assert isinstance(agent, aw.Agent)
 
 
-def test_tool_decorator_records_name_doc_and_read_only():
-    @aw.tool(read_only=True)
+def test_tool_decorator_records_name_doc_and_concurrent():
+    @aw.tool(concurrent=True)
     def sample(path: str) -> str:
         """Describe the sample."""
         return path
 
     assert sample._agentwerk_name == "sample"
     assert sample._agentwerk_description == "Describe the sample."
-    assert sample._agentwerk_read_only is True
+    assert sample._agentwerk_concurrent is True
 
 
 def test_tool_decorator_records_path_fields():
-    @aw.tool(read_only=True, paths=["path"])
+    @aw.tool(concurrent=True, paths=["path"])
     def cat(path: str) -> str:
         """Read a file."""
         return path
