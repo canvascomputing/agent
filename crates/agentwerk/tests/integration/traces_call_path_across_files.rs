@@ -110,7 +110,7 @@ async fn traces_three_hop_call_path() -> std::result::Result<(), Box<dyn std::er
         .schema(schema),
     );
 
-    tickets.finish_all().await;
+    let json = tickets.finish_last().await.unwrap_or_default();
     common::print_result(&tickets, tickets.stats());
 
     assert!(
@@ -118,7 +118,6 @@ async fn traces_three_hop_call_path() -> std::result::Result<(), Box<dyn std::er
         "tracing a call path requires at least two read-only tool calls"
     );
 
-    let json = tickets.results().pop().unwrap_or_default();
     let chain = json["call_path"]
         .as_array()
         .expect("call_path must be an array");

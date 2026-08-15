@@ -69,7 +69,7 @@ async fn separates_files_and_directories() -> std::result::Result<(), Box<dyn st
         .schema(schema),
     );
 
-    tickets.finish_all().await;
+    let json = tickets.finish_last().await.unwrap_or_default();
     common::print_result(&tickets, tickets.stats());
 
     assert!(
@@ -77,7 +77,6 @@ async fn separates_files_and_directories() -> std::result::Result<(), Box<dyn st
         "agent must call at least one tool"
     );
 
-    let json = tickets.results().pop().unwrap_or_default();
     let mut files = sorted_basenames(&json["files"]);
     let mut dirs = sorted_basenames(&json["directories"]);
     files.sort();

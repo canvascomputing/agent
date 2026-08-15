@@ -156,6 +156,7 @@ InvalidRequest, UnexpectedStatus, MissingKey, RequestError               // reje
 tickets.start();
 tickets.finish(|t| t.has_label("scan")).await;   // one pool
 tickets.finish_all().await;                      // the whole run
+tickets.finish_last().await;                     // the whole run, one result
 tickets.cancel(|t| t.has_label("scan"));         // one pool
 tickets.cancel_all();                            // the whole run
 ```
@@ -163,7 +164,8 @@ tickets.cancel_all();                            // the whole run
 - A verb takes a filter when it can mean part of the queue, and none when it cannot: `run` starts everything or nothing, so it takes no filter.
 - IMPORTANT: the filter says WHICH tickets, never WHAT to wait for. `finish(|t| t.is_finished())` is a mistake that returns at once: the filter selects the tickets, and "no work left" is the condition, fixed. Name the tickets by key or by label, and reach for `finish_all()` when the answer is all of them.
 - The whole-run case has exactly one spelling. `finish_all()` and `cancel_all()` are it; `|_| true` is never written at a call site, and a third spelling is not added.
-- The family was `start`, `finish`, `cancel`, `cancel_label`, `cancel_on`, six `cancel_*_on_*` reactors and four `wait_for_*` methods for several releases. They were one operation at three scopes: waiting for a subset, waiting for the run, and taking a pool off the queue. Adding a filter to the two verbs that can be scoped collapsed all of it. The two `_all` forms are the only filterless additions the family takes; do not grow the rest back one convenience at a time.
+- A filterless form earns its place only by naming how many results the caller wants back, never by re-spelling a filter. `finish_last()` is that form: it waits exactly as `finish_all()` does and gives the last result in creation order, so a host whose run has one answer says so rather than popping a `Vec` at every call site.
+- The family was `start`, `finish`, `cancel`, `cancel_label`, `cancel_on`, six `cancel_*_on_*` reactors and four `wait_for_*` methods for several releases. They were one operation at three scopes: waiting for a subset, waiting for the run, and taking a pool off the queue. Adding a filter to the two verbs that can be scoped collapsed all of it. The two `_all` forms and `finish_last()` are the only filterless additions the family takes; do not grow the rest back one convenience at a time.
 
 ## Hooks
 

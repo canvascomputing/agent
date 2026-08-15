@@ -20,9 +20,8 @@
 //!
 //! agent.task("Find every `pub trait` defined under src/ and explain each in one sentence.");
 //! let work = agent.start();
-//! let mut results = work.finish_all().await;
+//! let result = work.finish_last().await.unwrap();
 //!
-//! let result = results.pop().unwrap();
 //! println!("{}", result.as_str().unwrap_or_default());
 //! # }
 //! ```
