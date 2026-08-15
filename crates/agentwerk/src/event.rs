@@ -8,7 +8,8 @@ use serde::{Deserialize, Serialize};
 use crate::providers::{RequestErrorKind, TokenUsage};
 
 /// Why the older messages were summarized.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum CompactReason {
     /// The next request was estimated to be too long for the model, ahead of
     /// any failure.
@@ -27,7 +28,8 @@ impl fmt::Display for CompactReason {
 }
 
 /// Which limit a [`EventKind::PolicyViolated`] refers to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum PolicyKind {
     /// `max_turns`: the turn limit across all agents.
     Turns,
@@ -59,7 +61,8 @@ impl fmt::Display for PolicyKind {
 ///
 /// Carried by [`EventKind::RunFinished`], and handed back by
 /// `TicketQueue::finish` once the wait is over.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum FinishReason {
     /// The queue emptied; nothing more to do.
     Drained,
@@ -84,13 +87,16 @@ impl fmt::Display for FinishReason {
 /// How a tool call failed, carried by [`EventKind::ToolCallFailed`] and by
 /// [`EventKind::FileOpenFailed`], since a path fails with the call that named
 /// it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum ToolFailureKind {
     /// No tool of that name is registered.
+    #[serde(rename = "not_found")]
     ToolNotFound,
     /// The tool ran and returned an error.
+    #[serde(rename = "execution_failed")]
     ExecutionFailed,
     /// The tool rejected its input. Counted against `max_schema_retries`.
+    #[serde(rename = "schema_failed")]
     SchemaValidationFailed,
 }
 
@@ -119,15 +125,10 @@ impl fmt::Display for ToolFailureKind {
     }
 }
 
-impl Serialize for ToolFailureKind {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(self.as_str())
-    }
-}
-
 /// Why a knowledge operation did not go through, carried by
 /// [`EventKind::KnowledgeFailed`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum KnowledgeFailureKind {
     /// No page exists at that slug.
     PageMissing,
@@ -159,14 +160,9 @@ impl fmt::Display for KnowledgeFailureKind {
     }
 }
 
-impl Serialize for KnowledgeFailureKind {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(self.as_str())
-    }
-}
-
 /// What was done to a knowledge page, carried by [`EventKind::KnowledgeUsed`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum KnowledgeOp {
     Write,
     Read,
@@ -209,8 +205,10 @@ impl fmt::Display for KnowledgeOp {
 /// tickets.finish_all().await;
 /// # }
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Event {
+    /// When this event happened, in milliseconds since the epoch.
+    pub created_at: u64,
     /// Name of the agent that produced this event.
     pub agent_id: String,
     /// Key of the ticket this event concerns. Empty on `RunStarted` and
@@ -219,8 +217,11 @@ pub struct Event {
     /// Label the ticket carries, so a handler counting per label reads it
     /// without looking the ticket up. `None` when the event names no ticket,
     /// and when the ticket carries no label.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
-    /// What happened.
+    /// What happened. Flattened into the event itself, so one logged line
+    /// carries the kind's name and its payload beside the four fields here.
+    #[serde(flatten)]
     pub kind: EventKind,
 }
 
@@ -232,6 +233,7 @@ impl Event {
         kind: EventKind,
     ) -> Self {
         Self {
+            created_at: crate::agents::tickets::now_millis(),
             agent_id: agent_id.into(),
             ticket_key: ticket_key.into(),
             label,
@@ -246,7 +248,8 @@ impl Event {
 /// `RunStarted` and `RunFinished` come from the `TicketQueue` itself and
 /// arrive with an empty `agent_id`, as does `TicketFailed` when the host
 /// fails a ticket through `TicketQueue::set_failed`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "event", rename_all = "snake_case")]
 pub enum EventKind {
     /// Execution began.
     RunStarted,
@@ -348,7 +351,7 @@ pub enum EventKind {
 }
 
 impl EventKind {
-    /// The stable snake_case spelling of this kind, as `stats.json` writes it.
+    /// The stable snake_case spelling of this kind, as `events.jsonl` writes it.
     pub fn name(&self) -> &'static str {
         self.event_name().as_str()
     }
@@ -411,7 +414,7 @@ impl fmt::Display for EventKind {
 
 /// Which [`EventKind`] a count belongs to, without the payload the kind
 /// carries. Pass one to [`Stats::event_count`](crate::Stats::event_count); the
-/// snake_case spelling is the one `stats.json` uses.
+/// snake_case spelling is the one `events.jsonl` uses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EventName {
@@ -604,12 +607,12 @@ fn compact_input(input: &serde_json::Value) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::providers::TokenUsage;
     use std::collections::BTreeSet;
 
-    fn all_variants() -> Vec<EventKind> {
+    pub(crate) fn all_variants() -> Vec<EventKind> {
         vec![
             EventKind::RunStarted,
             EventKind::RunFinished {
@@ -756,8 +759,8 @@ mod tests {
 
     #[test]
     fn every_event_name_matches_its_serde_spelling() {
-        // `name()` is hand-written and `stats.json` is written by serde's
-        // rename_all, so the two have to agree or a saved count reloads under
+        // `name()` is hand-written and `events.jsonl` is written by serde's
+        // rename_all, so the two have to agree or a logged event reloads under
         // a name nothing asks for.
         for kind in all_variants() {
             let event = kind.event_name();
@@ -767,18 +770,12 @@ mod tests {
     }
 
     #[test]
-    fn stats_counts_every_variant() {
-        let stats = crate::agents::stats::Stats::new();
+    fn a_logged_kind_names_itself_the_way_event_name_spells_it() {
         for kind in all_variants() {
-            stats.record_event(&kind, "KEY");
-        }
-        let counts = stats.event_counts();
-        for kind in all_variants() {
-            assert!(
-                counts.get(&kind.event_name()).copied().unwrap_or(0) > 0,
-                "{} missing from event counts",
-                kind.event_name(),
-            );
+            let name = kind.event_name();
+            let event = Event::new("agent", "TICKET-1", None, kind);
+            let line = serde_json::to_value(&event).unwrap();
+            assert_eq!(line["event"].as_str(), Some(name.as_str()));
         }
     }
 }

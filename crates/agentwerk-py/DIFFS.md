@@ -93,11 +93,14 @@ Seven rules the surface table below never repeats.
 | `TicketQueue::finish(matches).await` | `await TicketQueue.finish(matches)`: the results become a list. |
 | `TicketQueue::finish_all().await` | `await TicketQueue.finish_all()`: the results become a list. |
 | `TicketQueue::finish_last().await` | `await TicketQueue.finish_last()`: an absent result becomes `None`. |
-| `TicketQueue::get_finish_reason()` | `TicketQueue.get_finish_reason()`: the `FinishReason` becomes the string it prints as, such as `policy_violated(turns)`. |
+| `TicketQueue::finish_reason()` | `TicketQueue.finish_reason()`: the `FinishReason` becomes the string it prints as, such as `policy_violated(turns)`. |
 | `TicketQueue::cancel(matches)` | `TicketQueue.cancel(matches)` |
 | `TicketQueue::cancel_all()` | `TicketQueue.cancel_all()` |
 | `TicketQueue::is_cancelled(ticket)` | `TicketQueue.is_cancelled(ticket)` |
-| `TicketQueue::stats()` | `TicketQueue.stats()` |
+| `TicketQueue::find_events(condition)` | `TicketQueue.find_events(condition)` |
+| `TicketQueue::find_event(condition)` | `TicketQueue.find_event(condition)` |
+| `TicketQueue::input_tokens()`, `::output_tokens()` | Same names. |
+| `TicketQueue::execution_duration()` | `TicketQueue.execution_duration()`: seconds as a float, where Rust hands back a `Duration`. |
 | `TicketQueue::results()` | `TicketQueue.results()` |
 | **Ticket** | |
 | `Ticket::new(task)` | `Ticket(task)` |
@@ -142,12 +145,6 @@ Seven rules the surface table below never repeats.
 | `Pages::remove(slug)` | `Pages.remove(slug)` |
 | `Page { slug, kind, description, content, tags }` | `Page(slug, description, content, kind=.., tags=..)`: a struct literal becomes a constructor, so the optional fields move last. |
 | `KnowledgeError` | `RuntimeError` |
-| **Statistics** | |
-| `Stats::event_count(event)` | `Stats.event_count(name)`: the name as a string; an unknown one raises. |
-| `Stats::event_counts()` | `Stats.event_counts()`: keyed by that string. |
-| `Stats::input_tokens()`, `::output_tokens()` | Same names. |
-| `Stats::execution_duration()` | `Stats.execution_duration()` |
-| `serde_json::to_value(&stats)` | `Stats.to_dict()`: Python cannot call `serde`, so reaching the `stats.json` shape needs a method. |
 | **Schema** | |
 | `Schema::new(document)` | `Schema(document)` |
 | `Schema::validate(value)` | `Schema.validate(value)` |
@@ -157,7 +154,7 @@ Seven rules the surface table below never repeats.
 | `SchemaStore::label(label, document)` | `SchemaStore.label(label, document)`: raises on a document that is not a schema, where Rust returns `SchemaParseError`. |
 | `SchemaStore::get(label)` | `SchemaStore.get(label)` |
 | **Events** | |
-| `Event { agent_id, ticket_key, label, kind }` | `Event.agent_id`, `.ticket_key`, `.label`, `.kind` |
+| `Event { created_at, agent_id, ticket_key, label, kind }` | `Event.created_at`, `.agent_id`, `.ticket_key`, `.label`, `.kind` |
 | `EventKind` variant payload | `Event.data`: a dict of that variant's fields. |
 | `EventKind`, `FinishReason` | Strings. |
 | `EventName` | `EventName`: string constants, so `Event.kind == EventName.TURN_STARTED`. |

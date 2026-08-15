@@ -157,7 +157,6 @@ fn claim<'a>(agent: &'a Agent, ticket_queue: &'a Arc<TicketQueue>) -> Option<Tic
             unreachable!("Ticket::as_user_message returns Message::User");
         };
         ticket_queue.add_reply(&ticket_key, Reply::user(&task_blocks, &HashMap::new()));
-        ticket_queue.emit(&ticket_key, agent_id, EventKind::TicketStarted);
     }
 
     Some(TicketContext {

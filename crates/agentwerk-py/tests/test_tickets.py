@@ -186,16 +186,20 @@ def test_cancel_takes_the_matching_tickets_off_the_queue(queue):
     assert queue.is_cancelled(report) is False
 
 
-def test_stats_reports_zero_counts_before_a_run(queue):
-    stats = queue.stats()
-    assert stats.event_count(aw.EventName.REQUEST_FINISHED) == 0
-    assert stats.event_count(aw.EventName.TICKET_CREATED) == 0
-    assert stats.execution_duration() is None
+def test_a_queue_that_has_not_run_records_nothing(queue):
+    assert queue.find_events(lambda e: True) == []
+    assert queue.input_tokens() == 0
+    assert queue.execution_duration() is None
 
 
-def test_event_count_rejects_a_name_no_event_carries(queue):
-    with pytest.raises(RuntimeError):
-        queue.stats().event_count("request_finishd")
+def test_a_condition_that_raises_reads_as_no_match(queue):
+    def broken(event):
+        raise ValueError("boom")
+
+    queue.task("seed")
+
+    assert queue.find_events(broken) == []
+    assert queue.find_event(broken) is None
 
 
 def test_event_name_spells_the_kind_an_event_reports(queue):
@@ -205,11 +209,16 @@ def test_event_name_spells_the_kind_an_event_reports(queue):
     queue.task("seed")
 
     assert aw.EventName.TICKET_CREATED in seen
-    assert queue.stats().event_count(aw.EventName.TICKET_CREATED) == 1
+    assert len(queue.find_events(lambda e: e.kind == aw.EventName.TICKET_CREATED)) == 1
 
 
-def test_stats_to_dict_keeps_the_on_disk_shape(queue):
-    assert queue.stats().to_dict()["input_tokens"] == 0
+def test_find_event_returns_the_earliest_match(queue):
+    queue.task("one")
+    queue.task("two")
+
+    first = queue.find_event(lambda e: e.kind == aw.EventName.TICKET_CREATED)
+    assert first.ticket_key == "TICKET-1"
+    assert queue.find_event(lambda e: e.kind == aw.EventName.TICKET_FAILED) is None
 
 
 def test_an_event_carries_the_label_of_the_ticket_it_concerns(queue):
@@ -399,7 +408,7 @@ async def test_run_finished_announces_why_execution_ended(queue):
         else None
     )
     await queue.finish_all()
-    assert queue.get_finish_reason() == "drained"
+    assert queue.finish_reason() == "drained"
     assert reasons == ["drained"]
 
 
@@ -533,7 +542,7 @@ async def test_a_cancelled_run_reports_its_reason(queue):
     queue.task("work")
     queue.cancel_all()
     await queue.finish_all()
-    assert queue.get_finish_reason() == "cancelled"
+    assert queue.finish_reason() == "cancelled"
 
 
 def test_assignee_is_unset_until_an_agent_claims_the_ticket(queue):

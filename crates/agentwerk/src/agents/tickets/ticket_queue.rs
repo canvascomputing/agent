@@ -218,9 +218,7 @@ impl Run {
 ///
 /// ```text
 /// .agentwerk/
-/// ├── stats.json                            execution statistics
-/// ├── tickets.jsonl                         lifecycle events (one per line)
-/// ├── results.jsonl                         finished results (one per line)
+/// ├── events.jsonl                          every event (one per line)
 /// ├── tickets/
 /// │   └── TICKET-1/
 /// │       ├── ticket.json                   the ticket without its messages or result
@@ -268,8 +266,7 @@ pub struct TicketQueue {
     /// every ticket with whatever schema it was built with.
     pub(super) schemas: Mutex<Option<Arc<SchemaStore>>>,
     pub(super) dir: Mutex<PathBuf>,
-    pub(super) tickets_log_lock: Mutex<()>,
-    pub(super) results_log_lock: Mutex<()>,
+    pub(super) events_lock: Mutex<()>,
     /// The main loop, held so `start()` can join a previous one before starting
     /// the next.
     pub(super) join_handle: Mutex<Option<JoinHandle<()>>>,
@@ -300,8 +297,7 @@ impl TicketQueue {
             directive_editor: Mutex::new(None),
             schemas: Mutex::new(None),
             dir: Mutex::new(PathBuf::from(".agentwerk")),
-            tickets_log_lock: Mutex::new(()),
-            results_log_lock: Mutex::new(()),
+            events_lock: Mutex::new(()),
             join_handle: Mutex::new(None),
             next_ticket_id: Mutex::new(None),
         })
@@ -310,9 +306,10 @@ impl TicketQueue {
     /// Continue a session from `tickets_dir`, or start one there when it is empty.
     ///
     /// Every ticket is read back with its status, result, and messages, and the
-    /// statistics resume from `stats.json`, so success rate and totals stay
-    /// continuous across restarts. Pointing this and `Knowledge::load` at the
-    /// same directory keeps the knowledge pages beside the session.
+    /// statistics resume from `events.jsonl`, so the turn and token budgets
+    /// policies check stay continuous across restarts. Pointing this and
+    /// `Knowledge::load` at the same directory keeps the knowledge pages beside
+    /// the session.
     ///
     /// An unfinished ticket is picked up again by the agent whose id it carries
     /// as its assignee. Ids are numbered per label as agents are built, so
@@ -341,8 +338,8 @@ impl TicketQueue {
                     continue;
                 };
                 // Skipping an unreadable ticket would drop its status, result
-                // and timestamps with it, and `Stats::derive` would then
-                // recompute the run's counters from whatever did load.
+                // and timestamps with it, leaving the queue to resume work it
+                // has no record of.
                 let ticket = Ticket::load(&tickets_dir, &key).map_err(|source| {
                     io::Error::new(
                         source.kind(),
@@ -353,7 +350,10 @@ impl TicketQueue {
             }
         }
 
-        let stats = Stats::load(&tickets_dir).unwrap_or_else(|_| Stats::derive(&tickets));
+        // The clock starts over: `max_time` bounds this run, not the one that
+        // wrote the log.
+        let stats = Stats::load(&tickets_dir).unwrap_or_else(|_| Stats::new());
+        stats.restart_clock();
         let next_id = tickets
             .keys()
             .map(|k| numeric_id(k) as u64)
@@ -378,16 +378,29 @@ impl TicketQueue {
             directive_editor: Mutex::new(None),
             schemas: Mutex::new(None),
             dir: Mutex::new(tickets_dir),
-            tickets_log_lock: Mutex::new(()),
-            results_log_lock: Mutex::new(()),
+            events_lock: Mutex::new(()),
             join_handle: Mutex::new(None),
             next_ticket_id: Mutex::new(Some(next_id)),
         }))
     }
 
-    /// Get the execution statistics, available during execution and after it finishes.
-    pub fn stats(&self) -> &Stats {
-        &self.stats
+    /// Get the input tokens across the run's finished requests.
+    ///
+    /// Counted as the requests finish, so this reports what the run has spent
+    /// even when the log it wrote is gone.
+    pub fn input_tokens(&self) -> u64 {
+        self.stats.input_tokens()
+    }
+
+    /// Get the output tokens across the run's finished requests.
+    pub fn output_tokens(&self) -> u64 {
+        self.stats.output_tokens()
+    }
+
+    /// Get the elapsed duration, which keeps growing while agents work and
+    /// stops when execution ends. `None` until the first ticket starts.
+    pub fn execution_duration(&self) -> Option<Duration> {
+        self.stats.execution_duration()
     }
 
     /// Push an event observer onto the handler chain. Every installed
@@ -802,14 +815,20 @@ impl TicketQueue {
     /// Publish `kind` and hand back the event it became, so a caller that also
     /// acts on it works from what every observer saw.
     pub(crate) fn emit(&self, key: &str, agent: &str, kind: EventKind) -> Event {
-        self.stats.record_event(&kind, key);
         let event = Event::new(agent, key, self.label_for(key), kind);
+        self.stats.record(&event);
         // Published before the handlers run: a `finish` waiter competes
         // with them for nothing, and no handler can swallow the event. The
-        // count is checked first so a run with no waiter never pays the clone,
-        // which `TextChunkReceived` would otherwise charge per streamed token.
+        // receiver count is checked first so a run with no waiter never pays the
+        // clone, which `TextChunkReceived` would otherwise charge per token.
         if self.event_stream.receiver_count() > 0 {
             let _ = self.event_stream.send(event.clone());
+        }
+        // The chunk kinds are the exception: one per streamed token would
+        // outweigh every other line and repeats what `replies.jsonl` holds.
+        if !matches!(event.kind, EventKind::TextChunkReceived { .. }) {
+            let _guard = self.events_lock.lock().unwrap();
+            let _ = Stats::append(&self.get_dir(), &event);
         }
         let handlers: Vec<Arc<EventHandler>> = self.event_handlers.lock().unwrap().clone();
         if handlers.is_empty() {
@@ -1226,6 +1245,40 @@ impl TicketQueue {
         matching.into_iter().next().cloned()
     }
 
+    /// Get every recorded event matching a condition, oldest first.
+    ///
+    /// Read from the session's `events.jsonl`, so this answers for a run that
+    /// has finished as readily as one still working. Counting is `.len()`, and
+    /// a total is a fold over the events themselves. A log that cannot be read
+    /// finds nothing, and `TextChunkReceived` is never recorded, so a condition
+    /// naming it never matches.
+    pub fn find_events<F>(&self, predicate: F) -> Vec<Event>
+    where
+        F: Fn(&Event) -> bool,
+    {
+        let mut out = Vec::new();
+        let _ = Stats::for_each_event(&self.get_dir(), |event| {
+            if predicate(event) {
+                out.push(event.clone());
+            }
+        });
+        out
+    }
+
+    /// Get the earliest recorded event matching a condition.
+    pub fn find_event<F>(&self, predicate: F) -> Option<Event>
+    where
+        F: Fn(&Event) -> bool,
+    {
+        let mut found = None;
+        let _ = Stats::for_each_event(&self.get_dir(), |event| {
+            if found.is_none() && predicate(event) {
+                found = Some(event.clone());
+            }
+        });
+        found
+    }
+
     /// Take every matching ticket off the queue.
     ///
     /// A match is neither claimed nor resumed, and an agent already holding one
@@ -1430,7 +1483,7 @@ impl TicketQueue {
     /// A ticket contributes a result only when it finished with one, so this is
     /// shorter than the set the filter named rather than aligned with it, as
     /// with [`Self::results`]. Read why the wait ended with
-    /// [`Self::get_finish_reason`].
+    /// [`Self::finish_reason`].
     ///
     /// Execution begins here when the queue has never run, and otherwise this
     /// waits on what is already under way. Once a run has ended it returns at
@@ -1527,7 +1580,7 @@ impl TicketQueue {
     /// Cleared by [`Self::start`], so a re-started queue does not report the
     /// previous run. A [`Self::finish`] over a subset can return while the run
     /// carries on, and this reads `None` until it ends.
-    pub fn get_finish_reason(&self) -> Option<FinishReason> {
+    pub fn finish_reason(&self) -> Option<FinishReason> {
         self.run.reason()
     }
 
@@ -1746,6 +1799,108 @@ mod tests {
             queue.compact_at(given);
             assert_eq!(queue.get_compact_at(), Some(expected), "given {given}");
         }
+    }
+
+    #[test]
+    fn find_events_returns_the_matching_events_oldest_first() {
+        let (queue, _tmp) = test_queue();
+        queue.task("a");
+        queue.task("b");
+        queue.claim(|t| t.key == "TICKET-1", "alice");
+
+        let created = queue.find_events(|e| matches!(e.kind, EventKind::TicketCreated));
+        assert_eq!(created.len(), 2);
+        assert_eq!(created[0].ticket_key, "TICKET-1");
+        assert_eq!(created[1].ticket_key, "TICKET-2");
+        assert!(created[0].created_at <= created[1].created_at);
+    }
+
+    #[test]
+    fn find_events_matching_nothing_is_empty() {
+        let (queue, _tmp) = test_queue();
+        queue.task("a");
+        assert!(queue
+            .find_events(|e| matches!(e.kind, EventKind::RunFinished { .. }))
+            .is_empty());
+    }
+
+    #[test]
+    fn find_events_without_a_log_is_empty() {
+        let (queue, _tmp) = test_queue();
+        assert!(queue.find_events(|_| true).is_empty());
+    }
+
+    #[test]
+    fn find_event_returns_the_earliest_match() {
+        let (queue, _tmp) = test_queue();
+        queue.task("a");
+        queue.task("b");
+
+        let first = queue.find_event(|e| matches!(e.kind, EventKind::TicketCreated));
+        assert_eq!(first.unwrap().ticket_key, "TICKET-1");
+        assert!(queue
+            .find_event(|e| matches!(e.kind, EventKind::TicketFailed))
+            .is_none());
+    }
+
+    #[test]
+    fn a_condition_reads_the_label_and_the_agent_that_caused_the_event() {
+        // What makes a per-label or per-agent breakdown possible without the
+        // crate keeping one.
+        let (queue, _tmp) = test_queue();
+        queue.ticket(Ticket::new("scan").label("scout"));
+        queue.claim(|t| t.has_label("scout"), "scout-1");
+
+        assert_eq!(
+            queue
+                .find_events(|e| e.label.as_deref() == Some("scout"))
+                .len(),
+            2
+        );
+        assert_eq!(queue.find_events(|e| e.agent_id == "scout-1").len(), 1);
+    }
+
+    #[test]
+    fn a_condition_naming_a_streamed_chunk_never_matches() {
+        let (queue, _tmp) = test_queue();
+        queue.task("a");
+        queue.emit(
+            "TICKET-1",
+            "alice",
+            EventKind::TextChunkReceived {
+                content: "a piece of the reply".into(),
+            },
+        );
+
+        // Chunks are deliberately left out of the log, so nothing finds them.
+        assert!(queue
+            .find_events(|e| matches!(e.kind, EventKind::TextChunkReceived { .. }))
+            .is_empty());
+    }
+
+    #[test]
+    fn the_totals_keep_reporting_once_the_log_is_gone() {
+        // The counters are what the run spent; the finders are what it wrote
+        // down. Deleting the log separates the two.
+        let (queue, dir) = test_queue();
+        queue.task("a");
+        queue.emit(
+            "TICKET-1",
+            "alice",
+            EventKind::RequestFinished {
+                model: "m".into(),
+                usage: crate::providers::TokenUsage {
+                    input_tokens: 900,
+                    output_tokens: 120,
+                },
+            },
+        );
+
+        std::fs::remove_file(dir.path().join("events.jsonl")).unwrap();
+
+        assert_eq!(queue.input_tokens(), 900);
+        assert_eq!(queue.output_tokens(), 120);
+        assert!(queue.find_events(|_| true).is_empty());
     }
 
     #[test]
@@ -2500,9 +2655,10 @@ mod tests {
         let (queue, _tmp) = test_queue();
         let seen = Arc::new(Mutex::new(Vec::new()));
         let record = Arc::clone(&seen);
-        queue.on_ticket(move |_, ticket| record.lock().unwrap().push(ticket.key.clone()));
         queue.ticket(Ticket::new("scan").label("scan"));
         let key = queue.claim(|t| t.has_label("scan"), "analyst").unwrap();
+        // Installed after the claim, so only the turn is in the handler's view.
+        queue.on_ticket(move |_, ticket| record.lock().unwrap().push(ticket.key.clone()));
         queue.emit(&key, "analyst", EventKind::TurnStarted);
         assert!(seen.lock().unwrap().is_empty());
     }
@@ -2527,8 +2683,8 @@ mod tests {
         let record = Arc::clone(&seen);
         queue.on_ticket(move |_, ticket| record.lock().unwrap().push(ticket.key.clone()));
         queue.ticket(Ticket::new("scan").label("scan"));
+        // The claim is the lifecycle event; no second emit needed.
         let key = queue.claim(|t| t.has_label("scan"), "analyst").unwrap();
-        queue.emit(&key, "analyst", EventKind::TicketStarted);
 
         assert_eq!(*seen.lock().unwrap(), vec![key]);
         assert!(logged.lock().unwrap().contains(&"ticket_started"));
@@ -2564,9 +2720,9 @@ mod tests {
     async fn finish_reason_reports_nothing_until_the_run_ends() {
         let (queue, _tmp) = test_queue();
         queue.start();
-        assert_eq!(queue.get_finish_reason(), None);
+        assert_eq!(queue.finish_reason(), None);
         queue.finish_all().await;
-        assert_eq!(queue.get_finish_reason(), Some(FinishReason::Drained));
+        assert_eq!(queue.finish_reason(), Some(FinishReason::Drained));
     }
 
     #[tokio::test]
@@ -2575,16 +2731,16 @@ mod tests {
         queue.start();
         queue.cancel_all();
         queue.finish_all().await;
-        assert_eq!(queue.get_finish_reason(), Some(FinishReason::Cancelled));
+        assert_eq!(queue.finish_reason(), Some(FinishReason::Cancelled));
         queue.start();
-        assert_eq!(queue.get_finish_reason(), None);
+        assert_eq!(queue.finish_reason(), None);
     }
 
     #[tokio::test]
     async fn a_clean_drain_is_not_reported_as_cancelled() {
         let (queue, _tmp) = test_queue();
         queue.finish_all().await;
-        assert_eq!(queue.get_finish_reason(), Some(FinishReason::Drained));
+        assert_eq!(queue.finish_reason(), Some(FinishReason::Drained));
     }
 
     #[tokio::test]
@@ -2646,7 +2802,7 @@ mod tests {
         queue.cancel_all();
         queue.finish_all().await;
         assert_eq!(*reasons.lock().unwrap(), vec![FinishReason::Cancelled]);
-        assert_eq!(queue.get_finish_reason(), Some(FinishReason::Cancelled));
+        assert_eq!(queue.finish_reason(), Some(FinishReason::Cancelled));
     }
 
     #[tokio::test]

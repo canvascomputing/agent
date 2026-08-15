@@ -86,10 +86,13 @@ mod tests {
             max_time: Some(Duration::from_millis(1)),
             ..Policies::default()
         };
+        // Stamped far in the past so execution_duration trivially exceeds the
+        // 1ms limit.
         let stats = Stats::new();
-        // Stamp started_at far in the past so execution_duration trivially
-        // exceeds the 1ms limit. `record_started` first-call-wins.
-        stats.record_started(1);
+        stats.record(&crate::event::Event {
+            created_at: 1,
+            ..crate::event::Event::new("", "TICKET-1", None, crate::event::EventKind::TicketStarted)
+        });
         let trip = policy_violated_kind(&policies, &stats);
         assert!(matches!(trip, Some((PolicyKind::Time, _))));
     }
@@ -100,9 +103,9 @@ mod tests {
             max_time: Some(Duration::from_millis(1)),
             ..Policies::default()
         };
+        // No ticket started, so execution_duration is None; the time limit must
+        // not trip until one has.
         let stats = Stats::new();
-        // started_at == 0 so execution_duration is None; the time limit must
-        // not trip until a ticket has actually started.
         assert!(policy_violated_kind(&policies, &stats).is_none());
     }
 }

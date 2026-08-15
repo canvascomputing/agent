@@ -13,10 +13,9 @@ use serde_json::Value;
 use crate::agent::PyAgent;
 use crate::compaction::invoke_editor;
 use crate::convert::{py_to_value, runtime_error, value_to_py};
-use crate::event::to_py_event;
+use crate::event::{to_py_event, PyEvent};
 use crate::reply::{py_to_replies, replies_to_py};
 use crate::schema::PySchemaStore;
-use crate::stats::PyStats;
 use crate::ticket::PyTicket;
 
 /// The core data structure of agentwerk, coordinating complex work across
@@ -638,10 +637,8 @@ impl PyTicketQueue {
     }
 
     /// Get why the last run ended, or `None` while one is still going.
-    fn get_finish_reason(&self) -> Option<String> {
-        self.inner
-            .get_finish_reason()
-            .map(|reason| reason.to_string())
+    fn finish_reason(&self) -> Option<String> {
+        self.inner.finish_reason().map(|reason| reason.to_string())
     }
 
     /// Take every matching ticket off the queue.
@@ -663,10 +660,38 @@ impl PyTicketQueue {
         self.inner.is_cancelled(&ticket.to_ticket())
     }
 
-    /// Get the execution statistics: requests, tokens, ticket counts, and the
-    /// per-tool, per-file, per-label, and per-model figures.
-    fn stats(&self) -> PyStats {
-        PyStats::for_run(Arc::clone(&self.inner))
+    /// Get every recorded event matching a condition, oldest first. Counting
+    /// is `len()`, and a total is a fold over the events themselves.
+    fn find_events(&self, predicate: Py<PyAny>) -> Vec<PyEvent> {
+        self.inner
+            .find_events(|event| event_predicate(&predicate, event))
+            .iter()
+            .map(to_py_event)
+            .collect()
+    }
+
+    /// Get the earliest recorded event matching a condition.
+    fn find_event(&self, predicate: Py<PyAny>) -> Option<PyEvent> {
+        self.inner
+            .find_event(|event| event_predicate(&predicate, event))
+            .as_ref()
+            .map(to_py_event)
+    }
+
+    /// Get the input tokens across the run's finished requests.
+    fn input_tokens(&self) -> u64 {
+        self.inner.input_tokens()
+    }
+
+    /// Get the output tokens across the run's finished requests.
+    fn output_tokens(&self) -> u64 {
+        self.inner.output_tokens()
+    }
+
+    /// Get the elapsed execution duration in seconds, or `None` before the
+    /// first ticket starts.
+    fn execution_duration(&self) -> Option<f64> {
+        self.inner.execution_duration().map(|d| d.as_secs_f64())
     }
 
     /// Get the result of every finished ticket, in creation order.
@@ -738,6 +763,18 @@ fn built_tickets(produced: &Bound<'_, PyAny>) -> Vec<Ticket> {
         .flatten()
         .filter_map(|item| built_ticket(&item))
         .collect()
+}
+
+/// Ask a Python condition about an event, on the same terms as
+/// [`ticket_predicate`].
+fn event_predicate(predicate: &Py<PyAny>, event: &Event) -> bool {
+    Python::attach(|py| {
+        predicate
+            .bind(py)
+            .call1((to_py_event(event),))
+            .and_then(|value| value.is_truthy())
+            .unwrap_or(false)
+    })
 }
 
 /// Ask a Python condition about a ticket. A conversion or Python error reads as

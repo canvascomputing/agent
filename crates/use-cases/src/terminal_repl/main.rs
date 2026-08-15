@@ -192,18 +192,19 @@ async fn main() {
             continue;
         }
         if line == "/stats" {
-            let s = tickets.stats();
+            let recorded = tickets.find_events(|_| true);
+            let count = |kind: EventName| counted(&recorded, kind);
             eprintln!(
                 "{}{} turns · {} requests · {} tools · {} in / {} out · {} created / {} done / {} failed{}",
                 style.dim,
-                s.event_count(EventName::TurnStarted),
-                s.event_count(EventName::RequestFinished),
-                s.event_count(EventName::ToolCallStarted),
-                s.input_tokens(),
-                s.output_tokens(),
-                s.event_count(EventName::TicketCreated),
-                s.event_count(EventName::TicketFinished),
-                s.event_count(EventName::TicketFailed),
+                count(EventName::TurnStarted),
+                count(EventName::RequestFinished),
+                count(EventName::ToolCallStarted),
+                tickets.input_tokens(),
+                tickets.output_tokens(),
+                count(EventName::TicketCreated),
+                count(EventName::TicketFinished),
+                count(EventName::TicketFailed),
                 style.reset,
             );
             continue;
@@ -298,7 +299,9 @@ async fn main() {
             }
         };
 
-        let stats = tickets.stats();
+        // One read per turn, counted three ways, rather than one read per count.
+        let recorded = tickets.find_events(|_| true);
+        let count = |kind: EventName| counted(&recorded, kind);
         let outcome = {
             let chat = chat_key.as_deref().and_then(|k| tickets.get_ticket(k));
             match chat {
@@ -315,22 +318,16 @@ async fn main() {
             }
         };
 
-        let turns = stats
-            .event_count(EventName::TurnStarted)
-            .saturating_sub(prev_turns);
-        let requests = stats
-            .event_count(EventName::RequestFinished)
-            .saturating_sub(prev_requests);
-        let tool_calls = stats
-            .event_count(EventName::ToolCallStarted)
-            .saturating_sub(prev_tool_calls);
-        let input = stats.input_tokens().saturating_sub(prev_input);
-        let output = stats.output_tokens().saturating_sub(prev_output);
-        prev_turns = stats.event_count(EventName::TurnStarted);
-        prev_requests = stats.event_count(EventName::RequestFinished);
-        prev_tool_calls = stats.event_count(EventName::ToolCallStarted);
-        prev_input = stats.input_tokens();
-        prev_output = stats.output_tokens();
+        let turns = count(EventName::TurnStarted).saturating_sub(prev_turns);
+        let requests = count(EventName::RequestFinished).saturating_sub(prev_requests);
+        let tool_calls = count(EventName::ToolCallStarted).saturating_sub(prev_tool_calls);
+        let input = tickets.input_tokens().saturating_sub(prev_input);
+        let output = tickets.output_tokens().saturating_sub(prev_output);
+        prev_turns = count(EventName::TurnStarted);
+        prev_requests = count(EventName::RequestFinished);
+        prev_tool_calls = count(EventName::ToolCallStarted);
+        prev_input = tickets.input_tokens();
+        prev_output = tickets.output_tokens();
 
         if midstream.swap(false, Ordering::Relaxed) {
             eprintln!();
@@ -340,6 +337,14 @@ async fn main() {
             style.dim, style.reset,
         );
     }
+}
+
+/// How many of `recorded` are of one kind.
+fn counted(recorded: &[Event], kind: EventName) -> u64 {
+    recorded
+        .iter()
+        .filter(|e| e.kind.event_name() == kind)
+        .count() as u64
 }
 
 fn announce_assistant(style: &Style) {

@@ -34,9 +34,10 @@ def pytest_collection_modifyitems(config, items):
 
 
 @pytest.fixture
-def queue():
-    """A fresh, empty ticket queue."""
-    return aw.TicketQueue()
+def queue(tmp_path):
+    """A fresh, empty ticket queue with a session directory of its own, so one
+    test's event log is never another's."""
+    return aw.TicketQueue().dir(str(tmp_path))
 
 
 @pytest.fixture

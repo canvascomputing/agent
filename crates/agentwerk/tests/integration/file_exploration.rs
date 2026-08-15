@@ -31,9 +31,14 @@ async fn test() -> std::result::Result<(), Box<dyn std::error::Error>> {
     tickets.task("Find all Rust source files and describe what this project does.");
 
     tickets.finish_all().await;
-    common::print_result(&tickets, tickets.stats());
+    common::print_result(&tickets);
 
-    assert!(tickets.stats().event_count(EventName::ToolCallStarted) >= 1);
+    assert!(
+        tickets
+            .find_events(|e| e.kind.event_name() == EventName::ToolCallStarted)
+            .len()
+            >= 1
+    );
 
     Ok(())
 }

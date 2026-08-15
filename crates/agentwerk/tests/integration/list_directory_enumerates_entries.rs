@@ -70,10 +70,13 @@ async fn separates_files_and_directories() -> std::result::Result<(), Box<dyn st
     );
 
     let json = tickets.finish_last().await.unwrap_or_default();
-    common::print_result(&tickets, tickets.stats());
+    common::print_result(&tickets);
 
     assert!(
-        tickets.stats().event_count(EventName::ToolCallStarted) >= 1,
+        tickets
+            .find_events(|e| e.kind.event_name() == EventName::ToolCallStarted)
+            .len()
+            >= 1,
         "agent must call at least one tool"
     );
 

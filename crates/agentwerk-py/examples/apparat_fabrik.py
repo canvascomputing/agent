@@ -325,7 +325,7 @@ async def main(pruefer, meister, monteur):
         {
             "t": time.monotonic() - started_at,
             "kind": "bell",
-            "reason": tickets.get_finish_reason(),
+            "reason": tickets.finish_reason(),
             "stats": stats.to_dict(),
         }
     )

@@ -108,7 +108,7 @@ async fn finds_every_lib_rs_in_nested_tree() -> std::result::Result<(), Box<dyn 
     );
 
     tickets.finish_all().await;
-    common::print_result(&tickets, tickets.stats());
+    common::print_result(&tickets);
 
     let recorded = calls.lock().unwrap().clone();
 

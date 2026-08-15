@@ -17,7 +17,7 @@ use std::io::IsTerminal;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use agentwerk::event::{Event, EventKind, EventName};
+use agentwerk::event::{Event, EventKind};
 use agentwerk::providers::{Model, Provider};
 use agentwerk::schemas::Schema;
 use agentwerk::tools::{TicketsTool, Tool, ToolResult};
@@ -108,14 +108,18 @@ fn aggregate_and_report(tickets: &TicketQueue, partitions: &[(u64, u64)], n: u64
 
     let total_sum: i128 = partials.iter().flatten().sum();
     let expected = closed_form(n);
-    let stats = tickets.stats();
-    let elapsed = stats.execution_duration().unwrap_or_default().as_secs_f64();
+    let elapsed = tickets
+        .execution_duration()
+        .unwrap_or_default()
+        .as_secs_f64();
+    let done = tickets
+        .find_events(|e| matches!(e.kind, EventKind::TicketFinished))
+        .len();
 
     eprintln!(
-        "{dim}└ aggregated in {elapsed:.1}s · {} done, {failures} failed · {} in / {} out tokens{reset}",
-        stats.event_count(EventName::TicketFinished),
-        stats.input_tokens(),
-        stats.output_tokens(),
+        "{dim}└ aggregated in {elapsed:.1}s · {done} done, {failures} failed · {} in / {} out tokens{reset}",
+        tickets.input_tokens(),
+        tickets.output_tokens(),
         dim = style.dim,
         reset = style.reset,
     );

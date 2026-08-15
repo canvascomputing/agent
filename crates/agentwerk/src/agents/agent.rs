@@ -640,18 +640,16 @@ mod tests {
             max_input_tokens: Some(1_000),
             ..Policies::default()
         };
-        let stats = Stats::new();
-        stats.record_event(&EventKind::TurnStarted, "");
-        stats.record_event(
-            &EventKind::RequestFinished {
+        let stats = Stats::of([
+            EventKind::TurnStarted,
+            EventKind::RequestFinished {
                 model: "m".into(),
                 usage: TokenUsage {
                     input_tokens: 250,
                     output_tokens: 0,
                 },
             },
-            "",
-        );
+        ]);
 
         // The exact rendering is pinned in `prompts`; what matters here is
         // that the role's placeholder sees the live policies and stats.
@@ -678,8 +676,7 @@ mod tests {
             max_turns: Some(3),
             ..Policies::default()
         };
-        let stats = Stats::new();
-        stats.record_event(&EventKind::TurnStarted, "");
+        let stats = Stats::of([EventKind::TurnStarted]);
 
         let rendered = agent.system_prompt(None, &policies, &stats, "T-1");
 

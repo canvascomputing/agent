@@ -1,7 +1,7 @@
 //! Starts one tokio task per registered agent, decides when the run is over,
 //! and waits for them on shutdown.
 
-use crate::agents::tickets::{now_millis, TicketQueue};
+use crate::agents::tickets::TicketQueue;
 use crate::event::{EventKind, FinishReason};
 
 use super::agent::run_agent;
@@ -31,7 +31,6 @@ pub(in crate::agents) async fn run_main_loop(ticket_queue: &TicketQueue) {
         let _ = agent.await;
     }
     let reason = ticket_queue.run.reason().unwrap_or(FinishReason::Drained);
-    ticket_queue.stats.record_execution_finished(now_millis());
     ticket_queue.emit("", "", EventKind::RunFinished { reason });
     // Last, so a caller that starts another run never overlaps this one.
     ticket_queue.run.set_finished();

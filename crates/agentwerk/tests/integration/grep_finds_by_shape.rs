@@ -76,7 +76,7 @@ async fn grep_lists_unknown_function_names() -> std::result::Result<(), Box<dyn 
     );
 
     tickets.finish_all().await;
-    common::print_result(&tickets, tickets.stats());
+    common::print_result(&tickets);
 
     let recorded = calls.lock().unwrap().clone();
 
