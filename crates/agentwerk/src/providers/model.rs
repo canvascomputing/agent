@@ -1,7 +1,7 @@
 //! What agentwerk knows about each model's context window, and when a
 //! conversation has to be summarized to fit.
 
-use super::{AnthropicProvider, MistralProvider, OpenAiProvider, ReasoningEffort};
+use super::{Anthropic, Mistral, OpenAi, ReasoningEffort};
 
 /// Model metadata: the name plus anything we know about its capabilities.
 ///
@@ -22,9 +22,9 @@ impl Model {
     /// compacted and nothing fails.
     pub fn from_name(name: impl Into<String>) -> Self {
         let name = name.into();
-        let context_window = AnthropicProvider::lookup_context_window_size(&name)
-            .or_else(|| OpenAiProvider::lookup_context_window_size(&name))
-            .or_else(|| MistralProvider::lookup_context_window_size(&name));
+        let context_window = Anthropic::lookup_context_window_size(&name)
+            .or_else(|| OpenAi::lookup_context_window_size(&name))
+            .or_else(|| Mistral::lookup_context_window_size(&name));
         Self {
             name,
             context_window,

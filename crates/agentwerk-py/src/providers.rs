@@ -4,10 +4,7 @@
 
 use std::time::Duration;
 
-use agentwerk::providers::{
-    AnthropicProvider, LiteLlmProvider, MistralProvider, Model, OpenAiProvider, Provider,
-    ReasoningEffort,
-};
+use agentwerk::providers::{Anthropic, LiteLlm, Mistral, Model, OpenAi, Provider, ReasoningEffort};
 use pyo3::prelude::*;
 
 use crate::convert::runtime_error;
@@ -96,9 +93,9 @@ impl PyModel {
 }
 
 #[pyfunction]
-#[pyo3(name = "AnthropicProvider", signature = (api_key, base_url=None, timeout=None))]
+#[pyo3(name = "Anthropic", signature = (api_key, base_url=None, timeout=None))]
 fn anthropic_provider(api_key: &str, base_url: Option<&str>, timeout: Option<f64>) -> PyProvider {
-    let mut provider = AnthropicProvider::new(api_key);
+    let mut provider = Anthropic::new(api_key);
     if let Some(url) = base_url {
         provider = provider.base_url(url);
     }
@@ -111,9 +108,9 @@ fn anthropic_provider(api_key: &str, base_url: Option<&str>, timeout: Option<f64
 }
 
 #[pyfunction]
-#[pyo3(name = "OpenAiProvider", signature = (api_key, base_url=None, timeout=None))]
+#[pyo3(name = "OpenAi", signature = (api_key, base_url=None, timeout=None))]
 fn openai_provider(api_key: &str, base_url: Option<&str>, timeout: Option<f64>) -> PyProvider {
-    let mut provider = OpenAiProvider::new(api_key);
+    let mut provider = OpenAi::new(api_key);
     if let Some(url) = base_url {
         provider = provider.base_url(url);
     }
@@ -126,9 +123,9 @@ fn openai_provider(api_key: &str, base_url: Option<&str>, timeout: Option<f64>) 
 }
 
 #[pyfunction]
-#[pyo3(name = "MistralProvider", signature = (api_key, base_url=None, timeout=None))]
+#[pyo3(name = "Mistral", signature = (api_key, base_url=None, timeout=None))]
 fn mistral_provider(api_key: &str, base_url: Option<&str>, timeout: Option<f64>) -> PyProvider {
-    let mut provider = MistralProvider::new(api_key);
+    let mut provider = Mistral::new(api_key);
     if let Some(url) = base_url {
         provider = provider.base_url(url);
     }
@@ -141,9 +138,9 @@ fn mistral_provider(api_key: &str, base_url: Option<&str>, timeout: Option<f64>)
 }
 
 #[pyfunction]
-#[pyo3(name = "LiteLlmProvider", signature = (api_key, base_url=None, timeout=None))]
+#[pyo3(name = "LiteLlm", signature = (api_key, base_url=None, timeout=None))]
 fn litellm_provider(api_key: &str, base_url: Option<&str>, timeout: Option<f64>) -> PyProvider {
-    let mut provider = LiteLlmProvider::new(api_key);
+    let mut provider = LiteLlm::new(api_key);
     if let Some(url) = base_url {
         provider = provider.base_url(url);
     }

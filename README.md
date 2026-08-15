@@ -143,10 +143,10 @@ See more: [`AgentBuilder`](https://docs.rs/agentwerk/latest/agentwerk/agents/age
 A `Provider` gives agents access to LLMs: Anthropic, OpenAI, Mistral, and a LiteLLM proxy.
 
 ```rust
-use agentwerk::providers::AnthropicProvider;
+use agentwerk::providers::Anthropic;
 
 let agent = Agent::new()
-    .provider(AnthropicProvider::new(key))
+    .provider(Anthropic::new(key))
     .model("claude-sonnet-4-20250514");
 ```
 

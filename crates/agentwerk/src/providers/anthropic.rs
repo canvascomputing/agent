@@ -25,9 +25,9 @@ use super::types::{ContentBlock, Message, ModelResponse, ResponseStatus, StreamE
 /// Direct construction with an API key:
 ///
 /// ```no_run
-/// use agentwerk::providers::AnthropicProvider;
+/// use agentwerk::providers::Anthropic;
 ///
-/// let _provider = AnthropicProvider::new("sk-ant-...");
+/// let _provider = Anthropic::new("sk-ant-...");
 /// ```
 ///
 /// Read the API key from the environment:
@@ -39,16 +39,16 @@ use super::types::{ContentBlock, Message, ModelResponse, ResponseStatus, StreamE
 /// ```
 ///
 /// [`Provider::from_env`]: crate::providers::Provider::from_env
-/// [`base_url`]: AnthropicProvider::base_url
-/// [`timeout`]: AnthropicProvider::timeout
-pub struct AnthropicProvider {
+/// [`base_url`]: Anthropic::base_url
+/// [`timeout`]: Anthropic::timeout
+pub struct Anthropic {
     api_key: String,
     base_url: String,
     client: reqwest::Client,
     timeout: Duration,
 }
 
-impl AnthropicProvider {
+impl Anthropic {
     pub fn new(api_key: impl Into<String>) -> Self {
         Self {
             api_key: api_key.into(),
@@ -176,7 +176,7 @@ fn classify_400(body: &str) -> Option<ProviderError> {
     }
 }
 
-impl AnthropicProvider {
+impl Anthropic {
     pub(crate) fn lookup_context_window_size(id: &str) -> Option<u64> {
         let m = id.to_ascii_lowercase();
         if m.contains("[1m]") {
@@ -206,7 +206,7 @@ impl AnthropicProvider {
     }
 }
 
-impl ProviderLike for AnthropicProvider {
+impl ProviderLike for Anthropic {
     fn prewarm(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
         Box::pin(async { super::provider::prewarm_with(&self.client, &self.base_url).await })
     }
@@ -650,8 +650,8 @@ mod tests {
         }
     }
 
-    fn provider() -> AnthropicProvider {
-        AnthropicProvider::new("test-key")
+    fn provider() -> Anthropic {
+        Anthropic::new("test-key")
     }
 
     #[test]
@@ -768,7 +768,7 @@ mod tests {
 
     #[test]
     fn lookup_claude_4_family_returns_200k() {
-        let lookup = AnthropicProvider::lookup_context_window_size;
+        let lookup = Anthropic::lookup_context_window_size;
         assert_eq!(lookup("claude-sonnet-4-20250514"), Some(200_000));
         assert_eq!(lookup("claude-opus-4-20250101"), Some(200_000));
         assert_eq!(lookup("claude-haiku-4-5-20251001"), Some(200_000));
@@ -776,7 +776,7 @@ mod tests {
 
     #[test]
     fn lookup_claude_5_family_returns_1m() {
-        let lookup = AnthropicProvider::lookup_context_window_size;
+        let lookup = Anthropic::lookup_context_window_size;
         assert_eq!(lookup("claude-fable-5"), Some(1_000_000));
         assert_eq!(lookup("claude-opus-5"), Some(1_000_000));
         assert_eq!(lookup("claude-sonnet-5"), Some(1_000_000));
@@ -785,14 +785,14 @@ mod tests {
 
     #[test]
     fn lookup_claude_3_family_returns_200k() {
-        let lookup = AnthropicProvider::lookup_context_window_size;
+        let lookup = Anthropic::lookup_context_window_size;
         assert_eq!(lookup("claude-3-5-sonnet-20241022"), Some(200_000));
         assert_eq!(lookup("claude-3-opus-20240229"), Some(200_000));
     }
 
     #[test]
     fn lookup_one_million_suffix_overrides_base_family() {
-        let lookup = AnthropicProvider::lookup_context_window_size;
+        let lookup = Anthropic::lookup_context_window_size;
         assert_eq!(
             lookup("claude-opus-4-7[1m]"),
             Some(1_000_000),
@@ -803,7 +803,7 @@ mod tests {
 
     #[test]
     fn lookup_unknown_models_return_none() {
-        let lookup = AnthropicProvider::lookup_context_window_size;
+        let lookup = Anthropic::lookup_context_window_size;
         assert_eq!(lookup("gpt-4"), None);
         assert_eq!(lookup("mistral-large-2411"), None);
         assert_eq!(lookup("some-future-model"), None);

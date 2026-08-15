@@ -5,10 +5,10 @@ import pytest
 import agentwerk as aw
 
 VENDOR_CONSTRUCTORS = [
-    aw.AnthropicProvider,
-    aw.OpenAiProvider,
-    aw.MistralProvider,
-    aw.LiteLlmProvider,
+    aw.Anthropic,
+    aw.OpenAi,
+    aw.Mistral,
+    aw.LiteLlm,
 ]
 
 PROVIDER_KEYS = (

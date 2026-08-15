@@ -41,7 +41,7 @@ def test_build_with_explicit_provider_and_model_succeeds(offline_agent):
 def test_model_accepts_a_tuned_model_object():
     agent = (
         aw.Agent()
-        .provider(aw.AnthropicProvider("test-key"))
+        .provider(aw.Anthropic("test-key"))
         .model(aw.Model("claude-sonnet-4-20250514").context_window(128_000))
         .build()
     )
@@ -55,7 +55,7 @@ def test_build_without_a_provider_is_rejected():
 
 def test_build_without_a_model_is_rejected():
     with pytest.raises(RuntimeError):
-        aw.Agent().provider(aw.AnthropicProvider("test-key")).build()
+        aw.Agent().provider(aw.Anthropic("test-key")).build()
 
 
 def test_from_env_without_provider_env_is_rejected(monkeypatch):
@@ -74,7 +74,7 @@ def test_id_is_built_from_the_label():
     agent = (
         aw.Agent()
         .label("id_from_label")
-        .provider(aw.AnthropicProvider("test-key"))
+        .provider(aw.Anthropic("test-key"))
         .model("claude-sonnet-4-20250514")
         .build()
     )
