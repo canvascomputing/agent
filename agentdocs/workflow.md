@@ -43,7 +43,6 @@ export OPENAI_BASE_URL=http://localhost:8095
 
 - `make test_integration` sources `.env` automatically when present.
 - The file holds shell `export` statements, one per variable.
-- `Agent::from_dot_env()` reads the same file without the Makefile, which is how a plain `cargo run` picks it up. Anything already exported wins.
 - `OPENAI_BASE_URL` points at a local OpenAI-compatible proxy on port 8095.
 - `.env` is gitignored: each contributor maintains their own.
 

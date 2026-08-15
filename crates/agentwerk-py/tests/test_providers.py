@@ -82,45 +82,6 @@ def test_model_from_env_without_provider_env_is_rejected(monkeypatch):
         aw.Model.from_env()
 
 
-def test_provider_from_dot_env_reads_the_file(dot_env, monkeypatch):
-    for key in PROVIDER_KEYS:
-        monkeypatch.delenv(key, raising=False)
-    dot_env("export ANTHROPIC_API_KEY=from-file\n")
-    assert isinstance(aw.Provider.from_dot_env(), aw.Provider)
-
-
-def test_model_from_dot_env_reads_the_file(dot_env, monkeypatch):
-    monkeypatch.delenv("MODEL", raising=False)
-    dot_env("MODEL=my-local-model\nMODEL_CONTEXT_WINDOW=64000\n")
-    model = aw.Model.from_dot_env()
-    assert model.name == "my-local-model"
-    assert model.get_context_window() == 64_000
-
-
-def test_dot_env_does_not_override_the_environment(dot_env, monkeypatch):
-    monkeypatch.setenv("MODEL", "from-environment")
-    dot_env("MODEL=from-file\n")
-    assert aw.Model.from_dot_env().name == "from-environment"
-
-
-def test_from_dot_env_without_the_file_is_rejected(dot_env):
-    with pytest.raises(RuntimeError):
-        aw.Provider.from_dot_env()
-
-
-def test_from_dot_env_with_a_malformed_line_is_rejected(dot_env):
-    dot_env("MODEL=my-local-model\njust some words\n")
-    with pytest.raises(RuntimeError, match="line 2"):
-        aw.Model.from_dot_env()
-
-
-def test_agent_from_dot_env_builds_an_agent(dot_env, monkeypatch):
-    for key in (*PROVIDER_KEYS, "MODEL"):
-        monkeypatch.delenv(key, raising=False)
-    dot_env("export ANTHROPIC_API_KEY=from-file\nMODEL=my-local-model\n")
-    assert isinstance(aw.Agent.from_dot_env(), aw.Agent)
-
-
 def test_knowledge_load_creates_an_empty_index(knowledge_dir):
     store = aw.Knowledge.load(knowledge_dir)
     assert store.index() == ""

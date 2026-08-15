@@ -1,12 +1,7 @@
 //! Resolves an LLM provider, model name, and runtime overrides from environment variables so callers do not have to code the detection matrix or the override knobs themselves.
-//!
-//! [`load_dot_env`] is the one reader that also writes: call it at startup,
-//! before threads that read the environment are spawned.
 
 use super::error::{ProviderError, ProviderResult};
 use super::{AnthropicProvider, LiteLlmProvider, MistralProvider, OpenAiProvider, Provider};
-
-const DOT_ENV: &str = ".env";
 
 /// Detected provider name, before constructing the actual provider.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,79 +33,6 @@ pub(crate) fn env_required(name: &'static str) -> ProviderResult<String> {
 /// Read an optional env var, treating empty values as unset. Returns `None` if missing or empty.
 pub(crate) fn env_opt(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|v| !v.is_empty())
-}
-
-/// Writes the process environment rather than threading the values through, so
-/// `SSL_CERT_FILE` and host-side reads see the file too. A missing or malformed
-/// file is an error: a caller who names the file means it.
-pub(crate) fn load_dot_env() -> ProviderResult<()> {
-    let contents =
-        std::fs::read_to_string(DOT_ENV).map_err(|e| ProviderError::ProviderUnrecognized {
-            message: format!("{DOT_ENV} could not be read from the current directory: {e}"),
-        })?;
-    for (name, value) in unset_pairs(parse_dot_env(&contents)?, |name| env_opt(name)) {
-        std::env::set_var(name, value);
-    }
-    Ok(())
-}
-
-/// Parse `.env` contents into name and value pairs, in file order. `export ` is
-/// accepted so the same file still sources in a shell. Nothing is expanded and
-/// no escape sequence is honoured: every value is literal.
-fn parse_dot_env(contents: &str) -> ProviderResult<Vec<(String, String)>> {
-    let mut pairs = Vec::new();
-    for (index, raw) in contents.lines().enumerate() {
-        let line = raw.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        let statement = line.strip_prefix("export ").unwrap_or(line);
-        let (name, value) = statement
-            .split_once('=')
-            .ok_or_else(|| malformed(index, line))?;
-        let name = name.trim();
-        if name.is_empty() {
-            return Err(malformed(index, line));
-        }
-        pairs.push((name.to_string(), unquote(value.trim())));
-    }
-    Ok(pairs)
-}
-
-/// Where precedence is decided: `.env` fills gaps, never overrides.
-fn unset_pairs<F>(pairs: Vec<(String, String)>, get: F) -> Vec<(String, String)>
-where
-    F: Fn(&str) -> Option<String>,
-{
-    pairs
-        .into_iter()
-        .filter(|(name, _)| get(name).is_none())
-        .collect()
-}
-
-/// The comment cut needs the leading space: a bare `#` is legal inside a key.
-fn unquote(value: &str) -> String {
-    for quote in ['"', '\''] {
-        if let Some(inner) = value
-            .strip_prefix(quote)
-            .and_then(|v| v.strip_suffix(quote))
-        {
-            return inner.to_string();
-        }
-    }
-    match value.split_once(" #") {
-        Some((before, _)) => before.trim_end().to_string(),
-        None => value.to_string(),
-    }
-}
-
-fn malformed(index: usize, line: &str) -> ProviderError {
-    ProviderError::ProviderUnrecognized {
-        message: format!(
-            "{DOT_ENV} line {}: expected NAME=VALUE, found \"{line}\"",
-            index + 1
-        ),
-    }
 }
 
 /// Detect an LLM provider from environment variables and construct it from
@@ -443,93 +365,5 @@ mod tests {
             context_window_from_env_with(env_map(&[("MODEL_CONTEXT_WINDOW", "0")])),
             None,
         );
-    }
-
-    #[test]
-    fn dot_env_reads_plain_and_exported_assignments() {
-        let pairs = parse_dot_env("OPENAI_API_KEY=sk-local\nexport MODEL=gpt-4o\n").unwrap();
-        assert_eq!(
-            pairs,
-            vec![
-                ("OPENAI_API_KEY".to_string(), "sk-local".to_string()),
-                ("MODEL".to_string(), "gpt-4o".to_string()),
-            ],
-        );
-    }
-
-    #[test]
-    fn dot_env_skips_comments_and_blank_lines() {
-        let pairs = parse_dot_env("# a note\n\n   \nMODEL=gpt-4o\n").unwrap();
-        assert_eq!(pairs, vec![("MODEL".to_string(), "gpt-4o".to_string())]);
-    }
-
-    #[test]
-    fn dot_env_unwraps_quoted_values() {
-        let pairs = parse_dot_env("A=\"one two\"\nB='three four'\n").unwrap();
-        assert_eq!(
-            pairs,
-            vec![
-                ("A".to_string(), "one two".to_string()),
-                ("B".to_string(), "three four".to_string()),
-            ],
-        );
-    }
-
-    #[test]
-    fn dot_env_cuts_a_trailing_comment_off_an_unquoted_value() {
-        let pairs = parse_dot_env("MODEL=gpt-4o # the cheap one\n").unwrap();
-        assert_eq!(pairs, vec![("MODEL".to_string(), "gpt-4o".to_string())]);
-    }
-
-    #[test]
-    fn dot_env_keeps_a_hash_inside_a_quoted_value() {
-        let pairs = parse_dot_env("KEY=\"sk-a#b\"\n").unwrap();
-        assert_eq!(pairs, vec![("KEY".to_string(), "sk-a#b".to_string())]);
-    }
-
-    #[test]
-    fn dot_env_trims_whitespace_around_the_assignment() {
-        let pairs = parse_dot_env("  MODEL  =  gpt-4o  \n").unwrap();
-        assert_eq!(pairs, vec![("MODEL".to_string(), "gpt-4o".to_string())]);
-    }
-
-    #[test]
-    fn dot_env_keeps_both_spellings_of_a_repeated_name() {
-        // Deduplication is the writer's job: it applies in order, so the last wins.
-        let pairs = parse_dot_env("MODEL=first\nMODEL=second\n").unwrap();
-        assert_eq!(pairs.last().unwrap().1, "second");
-    }
-
-    #[test]
-    fn dot_env_line_without_assignment_is_rejected() {
-        let err = parse_dot_env("MODEL=gpt-4o\njust some words\n").unwrap_err();
-        assert!(err.to_string().contains(".env line 2"));
-        assert!(err.to_string().contains("just some words"));
-    }
-
-    #[test]
-    fn dot_env_line_without_a_name_is_rejected() {
-        let err = parse_dot_env("=gpt-4o\n").unwrap_err();
-        assert!(err.to_string().contains(".env line 1"));
-    }
-
-    #[test]
-    fn dot_env_yields_only_what_the_environment_lacks() {
-        let pairs = vec![
-            ("MODEL".to_string(), "from-file".to_string()),
-            ("OPENAI_API_KEY".to_string(), "from-file".to_string()),
-        ];
-        let unset = unset_pairs(pairs, env_map(&[("MODEL", "from-shell")]));
-        assert_eq!(
-            unset,
-            vec![("OPENAI_API_KEY".to_string(), "from-file".to_string())],
-        );
-    }
-
-    #[test]
-    fn dot_env_fills_a_name_the_environment_carries_empty() {
-        let pairs = vec![("MODEL".to_string(), "from-file".to_string())];
-        let unset = unset_pairs(pairs, env_map(&[("MODEL", "")]));
-        assert_eq!(unset, vec![("MODEL".to_string(), "from-file".to_string())]);
     }
 }

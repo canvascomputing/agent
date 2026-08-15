@@ -86,7 +86,7 @@ agentwerk relies on server-side tool calling. Enable it through the following fl
 ## Environment
 
 Use cases and integration tests use the following environment variables, or a
-`.env` file read by the `from_dot_env()` constructors.
+`.env` file sourced by the Makefile targets.
 
 **General**
 

@@ -75,7 +75,7 @@ crates/
 - `provider.rs` defines `ProviderLike`, the `Provider` handle over it, `ModelRequest`, `ProviderToolDefinition`, and `ToolChoice`.
 - `types.rs` defines `Message`, `ContentBlock`, `TokenUsage`, `AsUserMessage`, `ResponseStatus`, and `StreamEvent`.
 - `anthropic.rs`, `openai.rs`, `mistral.rs`, and `litellm.rs` are concrete providers.
-- `environment.rs` reads the variables behind `Provider::from_env()` and `Model::from_env()`, and holds the `.env` parser and loader behind their `from_dot_env()` counterparts; its readers are crate-internal.
+- `environment.rs` reads the variables behind `Provider::from_env()` and `Model::from_env()`; its readers are crate-internal.
 - `stream.rs` holds the SSE parser; `error.rs` holds `ProviderError`, `ProviderResult`, and `RequestErrorKind`.
 
 ## The `tools/` Module
