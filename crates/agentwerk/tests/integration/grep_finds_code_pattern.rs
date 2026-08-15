@@ -119,7 +119,7 @@ async fn finds_code_pattern_with_special_chars(
     ));
 
     tickets.finish_all().await;
-    common::print_result(&tickets, tickets.stats());
+    common::print_result(&tickets);
 
     let recorded = calls.lock().unwrap().clone();
 

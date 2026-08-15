@@ -21,7 +21,7 @@ crates/
 **One file per bound concept, mirroring the library. Naming rules live in [style.md](style.md).**
 
 - `src/lib.rs` is the `#[pymodule]` and registers every class and function.
-- `agent.rs`, `ticket.rs`, `ticket_queue.rs`, `reply.rs`, `trajectory.rs`, `knowledge.rs`, `stats.rs`, `schema.rs`, `event.rs`, `providers.rs`, and `tools.rs` each bind the library module of the same name. `reply.rs` also owns the two reply converters the editors on `TicketQueue` use.
+- `agent.rs`, `ticket.rs`, `ticket_queue.rs`, `reply.rs`, `trajectory.rs`, `knowledge.rs`, `schema.rs`, `event.rs`, `providers.rs`, and `tools.rs` each bind the library module of the same name. `reply.rs` also owns the two reply converters the editors on `TicketQueue` use.
 - `src/convert.rs` holds the only JSON boundary: `py_to_value` and `value_to_py` over `pythonize`, plus `runtime_error`.
 - The compiled extension is `_agentwerk`. `python/agentwerk/__init__.py` re-exports it and holds the `@tool` decorator, the one piece of pure-Python logic.
 - `__init__.pyi` declares the surface and MUST match the module, which `tests/test_parity.py` enforces.
@@ -33,10 +33,10 @@ crates/
 
 **Each top-level source file is one concern the caller observes directly.**
 
-- `lib.rs` holds public re-exports only: `Agent`, `AgentBuilder`, `TicketQueue`, `Ticket`, `Status`, `Reply`, `Trajectory`, `Knowledge`, `Stats`, `Schema`, `SchemaStore`, `Event`, `EventKind`, `FinishReason`.
+- `lib.rs` holds public re-exports only: `Agent`, `AgentBuilder`, `TicketQueue`, `Ticket`, `Status`, `Reply`, `Trajectory`, `Knowledge`, `Schema`, `SchemaStore`, `Event`, `EventKind`, `FinishReason`.
 - Extension types live in `tools::` and `default_logger` in `event::`. Callers reach into a sub-module when they need anything below the orchestration level.
 - `event.rs` defines `Event`, `EventKind`, `EventName`, `PolicyKind`, `FinishReason`, `ToolFailureKind`, `CompactReason`, and `default_logger`, plus the crate-internal `Subject` and `Measure` that `EventKind::measures` returns.
-- `persistence.rs` holds the `Persist` and `Append` traits, the log types (`Results`, `TicketEvents`), and the shared `write_atomic`, `append_line`, and `output_path` helpers. It is `pub(crate)` and not re-exported from `lib.rs`.
+- `persistence.rs` holds the `Persist` trait and the shared `write_atomic`, `append_line`, and `output_path` helpers. It is `pub(crate)` and not re-exported from `lib.rs`.
 - The `agents/`, `prompts/`, `providers/`, `schemas/`, and `tools/` modules each own their domain. `agents/` and `tools/` also re-export their headline types, so `use agentwerk::agents::{Agent, TicketQueue}` and `use agentwerk::tools::CommandTool` work without descending into leaf files.
 
 ## The `agents/` Module
@@ -47,7 +47,7 @@ crates/
 - `knowledge.rs` holds `Knowledge`: the cross-ticket store, an OKF v0.1 bundle in `<dir>/knowledge/` backed by a `pages/` directory of concept files and a derived `index.md`. Pages are curated through the `pages()` handle (`save`, `load`, `remove`) plus `clear`; failures are typed as `KnowledgeError`.
 - `policy.rs` holds `Policies` and the limit checks the loop applies on each turn, plus `compact_at`, the one entry that moves a trigger rather than limiting anything.
 - `compaction.rs` holds the public `Compaction` handed to a compaction editor, the built-in summarizer that runs without one, and the threshold and chunking arithmetic behind both.
-- `stats.rs` holds `Stats` and the run-wide statistics and timings.
+- `stats.rs` holds the crate-private `Stats`: the live counters a policy check reads, and the one reader over `events.jsonl`.
 
 `tickets/` holds the ticket value types and the orchestrator. `Reply` is one entry in a ticket's replies; `ReplyContent` mirrors `providers::ContentBlock` and carries the same serde tags, so both serialize alike and the ticket surface stays free of provider types.
 

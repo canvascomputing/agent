@@ -69,7 +69,6 @@
 //! - [`TicketQueue`]: coordinates complex work across agents.
 //! - [`Ticket`]: a task plus the label and schema that assign and validate it.
 //! - [`Knowledge`]: durable memory the agent shares across tickets and other agents.
-//! - [`Stats`]: statistics about tickets, tokens, and time.
 //! - [`Event`]: requests, tool usage, failures and more.
 //! - [`tools`]: the built-in tools agents call, for files, search, commands, web, knowledge, and tickets.
 
@@ -96,7 +95,6 @@ pub use agents::TicketQueue;
 // Tuning, telemetry, durable state
 pub use agents::Compaction;
 pub use agents::Knowledge;
-pub use agents::Stats;
 pub use agents::Trajectory;
 
 // Validation

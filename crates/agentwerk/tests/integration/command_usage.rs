@@ -62,7 +62,7 @@ async fn test() -> std::result::Result<(), Box<dyn std::error::Error>> {
     );
 
     let json = tickets.finish_last().await.unwrap_or_default();
-    common::print_result(&tickets, tickets.stats());
+    common::print_result(&tickets);
 
     assert!(json["line_count"].as_u64().unwrap_or(0) > 1);
     assert!(json["files"].as_array().map_or(0, |a| a.len()) > 1);

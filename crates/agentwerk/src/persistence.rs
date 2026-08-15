@@ -14,31 +14,6 @@ pub(crate) trait Persist: Sized {
     fn load(dir: &Path, key: &Self::Key) -> io::Result<Self>;
 }
 
-pub(crate) trait Append {
-    type Record;
-    fn append(dir: &Path, record: &Self::Record) -> io::Result<()>;
-}
-
-pub(crate) struct Results;
-
-impl Append for Results {
-    type Record = serde_json::Value;
-    fn append(dir: &Path, record: &Self::Record) -> io::Result<()> {
-        let line = serde_json::to_string(record).map_err(io::Error::other)?;
-        append_line(&dir.join("results.jsonl"), &line)
-    }
-}
-
-pub(crate) struct TicketEvents;
-
-impl Append for TicketEvents {
-    type Record = serde_json::Value;
-    fn append(dir: &Path, record: &Self::Record) -> io::Result<()> {
-        let line = serde_json::to_string(record).map_err(io::Error::other)?;
-        append_line(&dir.join("tickets.jsonl"), &line)
-    }
-}
-
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
@@ -118,22 +93,5 @@ mod tests {
         append_line(&path, "first").unwrap();
         append_line(&path, "second").unwrap();
         assert_eq!(fs::read_to_string(&path).unwrap(), "first\nsecond\n");
-    }
-
-    #[test]
-    fn results_appends_a_record_to_results_jsonl() {
-        let dir = TempDir::new().unwrap();
-        Results::append(dir.path(), &serde_json::json!({"k": 1})).unwrap();
-        Results::append(dir.path(), &serde_json::json!({"k": 2})).unwrap();
-        let body = fs::read_to_string(dir.path().join("results.jsonl")).unwrap();
-        assert_eq!(body, "{\"k\":1}\n{\"k\":2}\n");
-    }
-
-    #[test]
-    fn ticket_events_appends_to_tickets_jsonl() {
-        let dir = TempDir::new().unwrap();
-        TicketEvents::append(dir.path(), &serde_json::json!({"event": "created"})).unwrap();
-        let body = fs::read_to_string(dir.path().join("tickets.jsonl")).unwrap();
-        assert_eq!(body, "{\"event\":\"created\"}\n");
     }
 }

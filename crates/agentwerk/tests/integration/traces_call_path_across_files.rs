@@ -111,10 +111,13 @@ async fn traces_three_hop_call_path() -> std::result::Result<(), Box<dyn std::er
     );
 
     let json = tickets.finish_last().await.unwrap_or_default();
-    common::print_result(&tickets, tickets.stats());
+    common::print_result(&tickets);
 
     assert!(
-        tickets.stats().event_count(EventName::ToolCallStarted) >= 2,
+        tickets
+            .find_events(|e| e.kind.event_name() == EventName::ToolCallStarted)
+            .len()
+            >= 2,
         "tracing a call path requires at least two read-only tool calls"
     );
 

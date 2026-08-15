@@ -4,7 +4,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::event::EventKind;
-use crate::persistence::{Append, Persist, Results, TicketEvents};
+use crate::persistence::Persist;
 use crate::schemas::SchemaViolations;
 
 use super::error::TicketError;
@@ -48,27 +48,11 @@ impl TicketQueue {
         ticket.result = None;
         ticket.status = Status::Todo;
         let key = ticket.key.clone();
-        let label = ticket.label.clone();
         let reporter = ticket.reporter.clone();
-        let task = ticket.task.clone();
-        let created_at = ticket.created_at;
-        let parent = ticket.parent.clone();
         store.insert(key.clone(), ticket);
         drop(store);
         self.save_ticket(&key);
         self.emit(&key, &reporter, EventKind::TicketCreated);
-        let mut event = serde_json::json!({
-            "event": "created",
-            "ts": created_at,
-            "key": key,
-            "reporter": reporter,
-            "label": label,
-            "task": task,
-        });
-        if let Some(p) = &parent {
-            event["parent"] = serde_json::Value::String(p.clone());
-        }
-        self.append_ticket_event(event);
         key
     }
 
@@ -77,18 +61,6 @@ impl TicketQueue {
         if let Some(t) = self.get_ticket(key) {
             let _ = t.save(&self.get_dir());
         }
-    }
-
-    /// Append one JSON line to `<dir>/tickets.jsonl` and refresh
-    /// `<dir>/stats.json` from the current statistics. Both writes happen
-    /// under the same lock so a concurrent reader sees consistent
-    /// observational state. Errors are swallowed: persistence is
-    /// best-effort, not load-bearing for run correctness.
-    pub(crate) fn append_ticket_event(&self, event: serde_json::Value) {
-        let dir = self.get_dir();
-        let _guard = self.tickets_log_lock.lock().unwrap();
-        let _ = TicketEvents::append(&dir, &event);
-        let _ = self.stats.save(&dir);
     }
 
     /// Write a tool's full output to `<dir>/tickets/<key>/outputs/<tool_use_id>.txt`.
@@ -118,7 +90,7 @@ impl TicketQueue {
     {
         let now = now_millis();
         let schemas = self.schemas.lock().unwrap().clone();
-        let (key, prev, durations, label) = {
+        let key = {
             let mut store = self.tickets.lock().unwrap();
             let mut candidates: Vec<&String> = store
                 .iter()
@@ -142,22 +114,14 @@ impl TicketQueue {
                     .and_then(|(s, label)| s.get(label));
                 ticket.schema = bound;
             }
-            let prev = ticket.status;
             ticket.stamp_transition(Status::InProgress, now);
             ticket.status = Status::InProgress;
-            let durations = ticket.terminal_durations();
-            let label = ticket.label.clone();
-            (key, prev, durations, label)
+            key
         };
-        self.record_transition(
-            &key,
-            prev,
-            Status::InProgress,
-            now,
-            durations,
-            label.as_deref(),
-        );
         self.save_ticket(&key);
+        // Emitted here rather than from the loop: the claim is the moment a
+        // ticket starts, so a host claiming one records it the same way.
+        self.emit(&key, agent_id, EventKind::TicketStarted);
         Some(key)
     }
 
@@ -238,39 +202,36 @@ impl TicketQueue {
         let _in_flight = InFlight(&self.terminal_transitions_in_flight);
 
         let now = now_millis();
-        let Some((prev, durations, label)) = ({
+        let transitioned = {
             let mut store = self.tickets.lock().unwrap();
             let ticket = store
                 .get_mut(key)
                 .ok_or_else(|| TicketError::TicketMissing {
                     key: key.to_string(),
                 })?;
-            let prev = ticket.status;
             // First outcome wins. The host resolving a ticket an agent is still
             // turning, and the agent giving up on one the host just resolved,
             // are the same race from either side; without this the loser's
             // status overwrites the winner's and leaves, say, a `Failed` ticket
             // carrying a result. Checked under the lock the write happens
             // under, so two racing transitions cannot both pass it.
-            match prev {
-                Status::Finished | Status::Failed => None,
+            match ticket.status {
+                Status::Finished | Status::Failed => false,
                 _ => {
                     ticket.stamp_transition(status, now);
                     ticket.status = status;
-                    Some((prev, ticket.terminal_durations(), ticket.label.clone()))
+                    true
                 }
             }
-        }) else {
-            return Ok(());
         };
-        // Emitted before the transition is recorded: the outcome is an event
-        // count now, and `record_transition` ends by writing `stats.json`.
+        if !transitioned {
+            return Ok(());
+        }
         let kind = match status {
             Status::Finished => EventKind::TicketFinished,
             _ => EventKind::TicketFailed,
         };
         self.emit(key, agent, kind);
-        self.record_transition(key, prev, status, now, durations, label.as_deref());
         self.save_ticket(key);
         // The ticket will never request again, so drop any events buffered
         // for its message editors instead of leaking them for the run.
@@ -278,67 +239,10 @@ impl TicketQueue {
         Ok(())
     }
 
-    /// Fire stats recorders and ticket log after a transition.
-    fn record_transition(
-        &self,
-        key: &str,
-        prev: Status,
-        next: Status,
-        now: u64,
-        durations: (std::time::Duration, std::time::Duration),
-        label: Option<&str>,
-    ) {
-        self.stats.record_transition(prev, next, now);
-        self.log_transition(key, prev, next, now, durations, label);
-    }
-
-    /// Append a `started` / `finished` / `failed` line to `tickets.jsonl` if
-    /// `prev → next` is observable. No-op when prev == next or when the
-    /// transition is not one we surface.
-    fn log_transition(
-        &self,
-        key: &str,
-        prev: Status,
-        next: Status,
-        ts: u64,
-        (ticket_duration, work_duration): (std::time::Duration, std::time::Duration),
-        label: Option<&str>,
-    ) {
-        if prev == next {
-            return;
-        }
-        if prev == Status::Todo && next == Status::InProgress {
-            self.append_ticket_event(serde_json::json!({
-                "event": "started",
-                "ts": ts,
-                "key": key,
-                "label": label,
-            }));
-        }
-        match next {
-            Status::Finished | Status::Failed => {
-                let event = if next == Status::Finished {
-                    "finished"
-                } else {
-                    "failed"
-                };
-                self.append_ticket_event(serde_json::json!({
-                    "event": event,
-                    "ts": ts,
-                    "key": key,
-                    "duration_ms": ticket_duration.as_millis() as u64,
-                    "work_ms": work_duration.as_millis() as u64,
-                }));
-            }
-            _ => {}
-        }
-    }
-
-    /// Validate `result` against the ticket's schema, write it to the
-    /// ticket's `result.json`, append it to `results.jsonl`, and store the
-    /// validated result on the ticket, which it returns. A result an agent
-    /// double-encoded as a JSON string is decoded so the stored value is
-    /// the object. Does not finish the ticket: the caller does.
+    /// Validate `result` against the ticket's schema, write it to the ticket's
+    /// `result.json`, and store the validated result on the ticket, which it
+    /// returns. A result an agent double-encoded as a JSON string is decoded so
+    /// the stored value is the object. Does not finish the ticket: the caller does.
     pub(crate) fn set_result(
         &self,
         key: &str,
@@ -374,12 +278,9 @@ impl TicketQueue {
                 key: key.to_string(),
                 value: Some(result.clone()),
             };
-            let log_line = serde_json::json!({ "ticket": key, "result": result });
-            let _guard = self.results_log_lock.lock().unwrap();
-            // Both writes are best-effort: the result is already attached in
-            // memory, so a failed file or log is observational, not load-bearing.
+            // Best-effort: the result is already attached in memory, so a
+            // failed write is observational, not load-bearing.
             let _ = record.save(&self.get_dir());
-            let _ = Results::append(&self.get_dir(), &log_line);
         }
         Ok(result)
     }
@@ -524,60 +425,102 @@ mod tests {
         queue.task("a");
         queue.task("b");
         queue.task("c");
-        assert_eq!(queue.stats().event_count(EventName::TicketCreated), 3);
+        assert_eq!(queue.stats.event_count(EventName::TicketCreated), 3);
         queue.claim(|t| t.key == "TICKET-1", "agent");
         queue.set_finished_by("TICKET-1", "agent").unwrap();
         queue.claim(|t| t.key == "TICKET-2", "agent");
         queue.set_failed("TICKET-2").unwrap();
-        assert_eq!(queue.stats().event_count(EventName::TicketFinished), 1);
-        assert_eq!(queue.stats().event_count(EventName::TicketFailed), 1);
+        assert_eq!(queue.stats.event_count(EventName::TicketFinished), 1);
+        assert_eq!(queue.stats.event_count(EventName::TicketFailed), 1);
     }
 
     #[test]
-    fn workspace_emits_created_started_done_in_order() {
+    fn a_ticket_logs_created_started_and_finished_in_order() {
         let (queue, dir) = test_queue();
         queue.task("hello");
         queue.claim(|t| t.key == "TICKET-1", "agent");
         queue.set_finished_by("TICKET-1", "agent").unwrap();
-        let lines = read_tickets_log(dir.path());
+        let lines = read_events_log(dir.path());
         assert_eq!(lines.len(), 3);
-        assert_eq!(lines[0]["event"], "created");
-        assert_eq!(lines[0]["key"], "TICKET-1");
-        assert_eq!(lines[0]["reporter"], "user");
-        assert_eq!(lines[0]["task"], "hello");
-        assert_eq!(lines[1]["event"], "started");
-        assert_eq!(lines[1]["key"], "TICKET-1");
-        assert_eq!(lines[2]["event"], "finished");
-        assert_eq!(lines[2]["key"], "TICKET-1");
-        assert!(lines[2]["duration_ms"].is_u64());
-        assert!(lines[2]["work_ms"].is_u64());
+        let names: Vec<&str> = lines.iter().map(|l| l["event"].as_str().unwrap()).collect();
+        assert_eq!(
+            names,
+            ["ticket_created", "ticket_started", "ticket_finished"]
+        );
+        for line in &lines {
+            assert_eq!(line["ticket_key"], "TICKET-1");
+            assert!(line["created_at"].is_u64());
+        }
     }
 
     #[test]
-    fn workspace_emits_failed_event_on_set_failed() {
+    fn streamed_chunks_stay_out_of_the_log() {
+        let (queue, dir) = test_queue();
+        queue.task("seed");
+        queue.emit(
+            "TICKET-1",
+            "agent",
+            EventKind::TextChunkReceived {
+                content: "a piece of the reply".into(),
+            },
+        );
+        // One line per token would outweigh every other line, and the replies
+        // already hold the text.
+        let lines = read_events_log(dir.path());
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0]["event"], "ticket_created");
+    }
+
+    #[test]
+    fn load_replays_the_token_totals_a_run_already_spent() {
+        let dir = crate::test_util::TempDir::new().unwrap();
+        let original = TicketQueue::new();
+        original.dir(dir.path().to_path_buf());
+        original.task("seed");
+        original.emit(
+            "TICKET-1",
+            "agent",
+            EventKind::RequestFinished {
+                model: "m".into(),
+                usage: crate::providers::TokenUsage {
+                    input_tokens: 900,
+                    output_tokens: 120,
+                },
+            },
+        );
+        drop(original);
+
+        // The token limits divide against these, so a resumed run that read
+        // them back as zero would silently start its budget over.
+        let resumed = TicketQueue::load(dir.path()).unwrap();
+        assert_eq!(resumed.stats.input_tokens(), 900);
+        assert_eq!(resumed.stats.output_tokens(), 120);
+    }
+
+    #[test]
+    fn set_failed_logs_a_failure_without_a_start() {
         let (queue, dir) = test_queue();
         queue.task("hello");
         queue.set_failed("TICKET-1").unwrap();
-        let lines = read_tickets_log(dir.path());
-        // created + failed (no started since Todo→Failed via set_failed)
+        let lines = read_events_log(dir.path());
         assert_eq!(lines.len(), 2);
-        assert_eq!(lines[0]["event"], "created");
-        assert_eq!(lines[1]["event"], "failed");
-        assert_eq!(lines[1]["key"], "TICKET-1");
+        assert_eq!(lines[0]["event"], "ticket_created");
+        assert_eq!(lines[1]["event"], "ticket_failed");
+        assert_eq!(lines[1]["ticket_key"], "TICKET-1");
     }
 
     #[test]
-    fn workspace_created_event_carries_the_label_when_pinned() {
+    fn a_logged_event_carries_the_ticket_label_when_pinned() {
         let (queue, dir) = test_queue();
         queue.ticket(Ticket::new("specific").label("alice"));
-        let lines = read_tickets_log(dir.path());
+        let lines = read_events_log(dir.path());
         assert_eq!(lines.len(), 1);
-        assert_eq!(lines[0]["event"], "created");
+        assert_eq!(lines[0]["event"], "ticket_created");
         assert_eq!(lines[0]["label"], "alice");
     }
 
     #[test]
-    fn workspace_logs_one_line_per_lifecycle_turn_for_multiple_tickets() {
+    fn the_log_holds_one_line_per_lifecycle_turn_across_tickets() {
         let (queue, dir) = test_queue();
         queue.task("a");
         queue.task("b");
@@ -585,9 +528,8 @@ mod tests {
         queue.set_finished_by("TICKET-1", "agent").unwrap();
         queue.claim(|t| t.key == "TICKET-2", "agent");
         queue.set_failed("TICKET-2").unwrap();
-        let lines = read_tickets_log(dir.path());
-        // 2 created + 2 started + 1 done + 1 failed
-        assert_eq!(lines.len(), 6);
+        // 2 created + 2 started + 1 finished + 1 failed
+        assert_eq!(read_events_log(dir.path()).len(), 6);
     }
 
     #[test]
@@ -743,15 +685,16 @@ mod tests {
     }
 
     #[test]
-    fn claim_emits_started_event_in_workspace_log() {
+    fn claim_logs_the_ticket_starting() {
         let (queue, dir) = test_queue();
         queue.task("hello");
         queue.claim(|t| t.status == Status::Todo, "alice");
-        let lines = read_tickets_log(dir.path());
+        let lines = read_events_log(dir.path());
         assert_eq!(lines.len(), 2);
-        assert_eq!(lines[0]["event"], "created");
-        assert_eq!(lines[1]["event"], "started");
-        assert_eq!(lines[1]["key"], "TICKET-1");
+        assert_eq!(lines[0]["event"], "ticket_created");
+        assert_eq!(lines[1]["event"], "ticket_started");
+        assert_eq!(lines[1]["ticket_key"], "TICKET-1");
+        assert_eq!(lines[1]["agent_id"], "alice");
     }
 
     #[test]
@@ -886,16 +829,15 @@ mod tests {
     }
 
     #[test]
-    fn parent_field_renders_in_created_event() {
+    fn a_logged_event_names_the_agent_that_caused_it() {
         let (queue, dir) = test_queue();
         queue.task("first");
         queue.ticket(Ticket::new("child").parent("TICKET-1"));
-        let lines = read_tickets_log(dir.path());
+        let lines = read_events_log(dir.path());
         assert_eq!(lines.len(), 2);
-        assert_eq!(lines[0]["event"], "created");
-        assert!(lines[0].get("parent").is_none());
-        assert_eq!(lines[1]["event"], "created");
-        assert_eq!(lines[1]["parent"], "TICKET-1");
+        // The reporter, since a ticket is created by whoever filed it.
+        assert_eq!(lines[0]["agent_id"], "user");
+        assert_eq!(lines[1]["agent_id"], "user");
     }
 
     // Resumption: TicketQueue::load
@@ -1018,13 +960,12 @@ mod tests {
     }
 
     #[test]
-    fn load_derives_stats_from_ticket_files_when_stats_file_missing() {
+    fn load_replays_the_event_log_into_the_counters() {
         let dir = crate::test_util::TempDir::new().unwrap();
         let original = TicketQueue::new();
         original.dir(dir.path().to_path_buf());
-        original.ticket(Ticket::new("a").label("scan"));
-        original.ticket(Ticket::new("b").label("scan"));
-        original.ticket(Ticket::new("c").label("scan"));
+        original.task("a");
+        original.task("b");
         original
             .set_result("TICKET-1", serde_json::Value::Null)
             .unwrap();
@@ -1032,15 +973,11 @@ mod tests {
         original.set_failed("TICKET-2").unwrap();
         drop(original);
 
-        std::fs::remove_file(dir.path().join("stats.json")).unwrap();
-
         let resumed = TicketQueue::load(dir.path()).unwrap();
-        let s = resumed.stats();
-        assert_eq!(s.event_count(EventName::TicketCreated), 3);
-        assert_eq!(s.event_count(EventName::TicketFinished), 1);
-        assert_eq!(s.event_count(EventName::TicketFailed), 1);
+        assert_eq!(resumed.stats.event_count(EventName::TicketCreated), 2);
+        assert_eq!(resumed.stats.event_count(EventName::TicketFinished), 1);
+        assert_eq!(resumed.stats.event_count(EventName::TicketFailed), 1);
     }
-
     #[test]
     fn load_skips_dir_without_ticket_json() {
         let dir = crate::test_util::TempDir::new().unwrap();
@@ -1179,8 +1116,8 @@ mod tests {
     }
 
     #[test]
-    fn ticket_lifecycle_event_writes_stats_file() {
-        let (queue, dir) = test_queue();
+    fn ticket_lifecycle_writes_its_events_to_the_log() {
+        let (queue, _dir) = test_queue();
         queue.task("seed");
         queue.claim(|t| t.status == Status::Todo, "alice").unwrap();
         queue
@@ -1188,10 +1125,18 @@ mod tests {
             .unwrap();
         queue.set_finished_by("TICKET-1", "agent").unwrap();
 
-        let bytes = std::fs::read(dir.path().join("stats.json")).expect("stats file written");
-        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(body["events"]["ticket_created"], 1);
-        assert_eq!(body["events"]["ticket_finished"], 1);
+        assert_eq!(
+            queue
+                .find_events(|e| matches!(e.kind, EventKind::TicketCreated))
+                .len(),
+            1
+        );
+        assert_eq!(
+            queue
+                .find_events(|e| matches!(e.kind, EventKind::TicketFinished))
+                .len(),
+            1
+        );
     }
 
     #[test]
@@ -1207,7 +1152,7 @@ mod tests {
 
         queue.task("seed");
 
-        assert_eq!(queue.stats().event_count(EventName::TicketCreated), 1);
+        assert_eq!(queue.stats.event_count(EventName::TicketCreated), 1);
         assert_eq!(*reporters.lock().unwrap(), vec!["user".to_string()]);
     }
 
@@ -1219,52 +1164,9 @@ mod tests {
         // Refused before the transition, so nothing is emitted to count.
         queue.set_failed(&key).unwrap();
 
-        let stats = queue.stats();
+        let stats = &queue.stats;
         assert_eq!(stats.event_count(EventName::TicketFinished), 1);
         assert_eq!(stats.event_count(EventName::TicketFailed), 0);
-    }
-
-    #[test]
-    fn load_prefers_stats_file_over_derivation() {
-        let dir = crate::test_util::TempDir::new().unwrap();
-        std::fs::create_dir_all(dir.path().join("tickets")).unwrap();
-        let body = serde_json::json!({
-            "events": { "turn_started": 42, "request_finished": 7 },
-            "input_tokens": 900,
-            "output_tokens": 120,
-        });
-        std::fs::write(
-            dir.path().join("stats.json"),
-            serde_json::to_vec(&body).unwrap(),
-        )
-        .unwrap();
-
-        let queue = TicketQueue::load(dir.path()).unwrap();
-        assert_eq!(queue.stats().event_count(EventName::TurnStarted), 42);
-        assert_eq!(queue.stats().event_count(EventName::RequestFinished), 7);
-        // The token limits divide against these, so a resumed run that read
-        // them back as zero would silently start its budget over.
-        assert_eq!(queue.stats().input_tokens(), 900);
-        assert_eq!(queue.stats().output_tokens(), 120);
-    }
-
-    #[test]
-    fn load_falls_back_to_derivation_when_stats_file_malformed() {
-        let dir = crate::test_util::TempDir::new().unwrap();
-        let original = TicketQueue::new();
-        original.dir(dir.path().to_path_buf());
-        original.task("seed");
-        original
-            .set_result("TICKET-1", serde_json::Value::Null)
-            .unwrap();
-        original.set_finished_by("TICKET-1", "agent").unwrap();
-        drop(original);
-
-        std::fs::write(dir.path().join("stats.json"), "not json").unwrap();
-
-        let queue = TicketQueue::load(dir.path()).unwrap();
-        assert_eq!(queue.stats().event_count(EventName::TicketCreated), 1);
-        assert_eq!(queue.stats().event_count(EventName::TicketFinished), 1);
     }
 
     #[test]

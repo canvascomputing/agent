@@ -11,7 +11,6 @@ mod knowledge;
 mod providers;
 mod reply;
 mod schema;
-mod stats;
 mod ticket;
 mod ticket_queue;
 mod tools;
@@ -33,7 +32,6 @@ fn _agentwerk(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<knowledge::PyKnowledge>()?;
     m.add_class::<knowledge::PyPages>()?;
     m.add_class::<knowledge::PyPage>()?;
-    m.add_class::<stats::PyStats>()?;
     providers::register(m)?;
     tools::register(m)?;
     Ok(())

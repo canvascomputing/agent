@@ -200,7 +200,7 @@ async fn seeker_pool_finds_planted_indicators(
     }
 
     tickets.finish_all().await;
-    common::print_result(&tickets, tickets.stats());
+    common::print_result(&tickets);
 
     let calls = calls.lock().unwrap().clone();
     let outputs = outputs.lock().unwrap().clone();

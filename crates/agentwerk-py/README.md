@@ -12,8 +12,8 @@
   <a href="#installation">Installation</a> •
   <a href="crates/agentwerk-py/README.md">Python</a> •
   <a href="#quick-start">Quick Start</a> •
-  <a href="#use-cases">Use Cases</a> •
   <a href="#api">API</a> •
+  <a href="#use-cases">Use Cases</a> •
   <a href="#development">Development</a>
 </div>
 
@@ -76,32 +76,13 @@ async def main():
 asyncio.run(main())
 ```
 
-## Use Cases
-
-Example projects built with agentwerk:
-
-- [Hello World](https://github.com/canvascomputing/agentwerk/tree/main/crates/use-cases/src/hello_world/): basic example, ported in [examples/hello_world.py](https://github.com/canvascomputing/agentwerk/blob/main/crates/agentwerk-py/examples/hello_world.py)
-- [Terminal REPL](https://github.com/canvascomputing/agentwerk/tree/main/crates/use-cases/src/terminal_repl/): minimal interactive chat
-- [Divide and Conquer](https://github.com/canvascomputing/agentwerk/tree/main/crates/use-cases/src/divide_and_conquer/): arithmetic problem shared across agents, ported in [examples/divide_and_conquer.py](https://github.com/canvascomputing/agentwerk/blob/main/crates/agentwerk-py/examples/divide_and_conquer.py)
-- [Deep Research](https://github.com/canvascomputing/agentwerk/tree/main/crates/use-cases/src/deep_research/): deep research pipeline (requires `BRAVE_API_KEY`)
-- [Malware Scanner](https://github.com/canvascomputing/agentwerk/tree/main/crates/use-cases/src/malware_scanner/): identify indicators of compromise in a software package
-- [Apparat Fabrik](https://github.com/canvascomputing/agentwerk/blob/main/crates/agentwerk-py/examples/apparat_fabrik.py): a shift on the line of an apparatus works
-
-> Configure an LLM provider first (see [Environment](https://github.com/canvascomputing/agentwerk/blob/main/DEVELOPMENT.md#environment)).
-
-```bash
-python examples/divide_and_conquer.py 200 4 2
-```
-
 ## API
 
 - [Agents](#agents): Define roles, behavior and actions.
 - [Tickets](#tickets): Coordinate complex work across agents.
 - [Tools](#tools): Define accessible tooling.
 - [Events](#events): Requests, tool usage, failures and more.
-- [Stats](#stats): Metrics about tickets, tokens and time.
 - [Knowledge](#knowledge): Notes agents can share for collaboration.
-- [Sessions](#sessions): Directory layout of data agents create.
 
 ## Agents
 
@@ -257,20 +238,25 @@ tickets.ticket(Ticket("Write up the ranking.", label="report"))
 ```
 
 <details>
-<summary>All ticket entry points</summary>
+<summary>All ticket methods</summary>
 
-| Method | Description |
-|--------|-------------|
-| `agent(agent)` | Add an agent to this ticket queue. |
-| `task(task)` | Submit a task and return its ticket key. |
-| `ticket(ticket)` | Submit a `Ticket` with a custom label or schema. |
-| `reply(key, content)` | Add a reply to a ticket. |
-| `edit_replies(key, editor)` | Rewrite one ticket's replies now. |
-| `set_finished(key, result)` | Finish a ticket with a result. |
-| `set_failed(key)` | Fail a ticket. |
-| `dir(dir)` | Define where a session is stored. |
-| `get_dir()` | Get the session directory. |
-| `schemas(store)` | Enforce schemas for ticket results. |
+| | Method | Description |
+|-|--------|-------------|
+| **Configure** | `agent(agent)` | Add an agent to this ticket queue. |
+| | `schemas(store)` | Enforce schemas for ticket results. |
+| | `dir(dir)` | Define where a session is stored. |
+| | `get_dir()` | Get the session directory. |
+| **Submit** | `task(task)` | Submit a task and return its ticket key. |
+| | `ticket(ticket)` | Submit a `Ticket` with a custom label or schema, and return its key. |
+| **Read** | `results()` | Get the result of every finished ticket, in creation order. |
+| | `tickets()` | Get every ticket in creation order. |
+| | `find_ticket(condition)` | Get the earliest ticket matching a condition. |
+| | `find_tickets(condition)` | Get every ticket matching a condition. |
+| | `get_ticket(key)` | Get one ticket by key. |
+| **Drive** | `reply(key, content)` | Add a reply to a ticket. |
+| | `edit_replies(key, editor)` | Rewrite a ticket's replies now. |
+| **Resolve** | `set_finished(key, result)` | Finish a ticket with a result. |
+| | `set_failed(key)` | Fail a ticket. |
 
 See [`TicketQueue`](https://docs.rs/agentwerk/latest/agentwerk/agents/tickets/struct.TicketQueue.html).
 
@@ -289,7 +275,7 @@ if answer is not None:
 ```
 
 <details>
-<summary>All execution methods and result accessors</summary>
+<summary>All execution methods</summary>
 
 | | Method | Description |
 |-|--------|-------------|
@@ -297,15 +283,10 @@ if answer is not None:
 | **Wait** | `await finish(matches)` | Wait for the matching tickets to be done and get their results. |
 | | `await finish_all()` | Wait for every ticket to be finished and get every result. |
 | | `await finish_last()` | Wait for every ticket to be finished and get the last result. |
-| | `get_finish_reason()` | Get why the last run ended. |
+| | `finish_reason()` | Get why the last run ended. |
 | **Stop** | `cancel(matches)` | Stop work on the matching tickets. |
 | | `cancel_all()` | Stop work on every ticket. |
 | | `is_cancelled(ticket)` | Check whether a ticket has been cancelled. |
-| **Read** | `results()` | Get the result of every finished ticket, in creation order. |
-| | `tickets()` | Get every ticket in creation order. |
-| | `find_ticket(condition)` | Get the earliest ticket matching a condition. |
-| | `find_tickets(condition)` | Get every ticket matching a condition. |
-| | `get_ticket(key)` | Get one ticket by key. |
 
 Ticket members:
 
@@ -503,6 +484,39 @@ A violated limit emits a `policy_violated` event, see [`EventKind`](https://docs
 
 </details>
 
+### Sessions
+
+<div align="left">
+  <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/sessions.gif" width="600" />
+</div>
+
+A `TicketQueue` writes every ticket, reply, and event to its working directory (default `./.agentwerk`). You can continue a session from that directory.
+
+```python
+tickets = TicketQueue.load(".agentwerk")
+tickets.agent(my_agent)
+tickets.start()
+```
+
+<details>
+<summary>All session files</summary>
+
+```
+.agentwerk/
+├── events.jsonl                          every event (one per line)
+├── tickets/
+│   └── TICKET-1/
+│       ├── ticket.json                   the ticket without its messages (key, status, label, timestamps)
+│       ├── result.json                   the result the agent produced
+│       ├── replies.jsonl                 every message exchanged with the model, one per line
+│       └── outputs/<tool_use_id>.txt     full tool outputs spilled out of the messages
+└── knowledge/
+    ├── pages/<slug>.md                   knowledge pages
+    └── index.md                          knowledge index
+```
+
+</details>
+
 ## Tools
 
 <div align="left">
@@ -609,7 +623,7 @@ tickets.on_event(log)
 ```
 
 <details>
-<summary>All event kinds</summary>
+<summary>All event kinds and readers</summary>
 
 | | Kind | Description |
 |-|------|-------------|
@@ -638,7 +652,16 @@ tickets.on_event(log)
 | | `compaction_finished` | Compaction replaced the older messages. |
 | | `compaction_failed` | Compaction could not finish. |
 
-See [`EventKind`](https://docs.rs/agentwerk/latest/agentwerk/event/enum.EventKind.html).
+Every event is written to the session log. You read events from the ticket queue, or from the session directory in `.agentwerk/events.jsonl`:
+
+| Method | Description |
+|--------|-------------|
+| `find_event(condition)` | Get the earliest recorded event matching a condition. |
+| `find_events(condition)` | Get every recorded event matching a condition, oldest first. |
+| `input_tokens()` / `output_tokens()` | Get token counts across the run's requests. |
+| `execution_duration()` | Get the elapsed execution duration. |
+
+See [`EventKind`](https://docs.rs/agentwerk/latest/agentwerk/event/enum.EventKind.html) and [`TicketQueue`](https://docs.rs/agentwerk/latest/agentwerk/agents/tickets/struct.TicketQueue.html).
 
 </details>
 
@@ -704,33 +727,6 @@ See [`TicketQueue`](https://docs.rs/agentwerk/latest/agentwerk/agents/tickets/st
 
 </details>
 
-## Stats
-
-<div align="left">
-  <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/stats.gif" width="600" />
-</div>
-
-Statistics allow you to measure execution time, token usage, and how often each event happened. Anything finer is a fold over the events.
-
-```python
-stats = tickets.stats()
-print(stats.event_count("request_finished"), stats.input_tokens())
-```
-
-<details>
-<summary>All statistics</summary>
-
-| Method | Description |
-|--------|-------------|
-| `execution_duration()` | Get the elapsed execution duration. |
-| `event_count(name)` | Get how many events of one kind were recorded, such as `"turn_started"`. |
-| `event_counts()` | Get per-event counts. |
-| `input_tokens()` / `output_tokens()` | Get token counts across requests. |
-
-See [`Stats`](https://docs.rs/agentwerk/latest/agentwerk/agents/stats/struct.Stats.html).
-
-</details>
-
 ## Knowledge
 
 <div align="left">
@@ -781,40 +777,22 @@ See [`Knowledge`](https://docs.rs/agentwerk/latest/agentwerk/agents/knowledge/st
 
 </details>
 
-## Sessions
+## Use Cases
 
-<div align="left">
-  <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/sessions.gif" width="600" />
-</div>
+Example projects built with agentwerk:
 
-A `TicketQueue` writes every ticket, reply, statistic, and lifecycle event to its working directory (default `./.agentwerk`). You can continue a session from that directory.
+- [Hello World](https://github.com/canvascomputing/agentwerk/tree/main/crates/use-cases/src/hello_world/): basic example, ported in [examples/hello_world.py](https://github.com/canvascomputing/agentwerk/blob/main/crates/agentwerk-py/examples/hello_world.py)
+- [Terminal REPL](https://github.com/canvascomputing/agentwerk/tree/main/crates/use-cases/src/terminal_repl/): minimal interactive chat
+- [Divide and Conquer](https://github.com/canvascomputing/agentwerk/tree/main/crates/use-cases/src/divide_and_conquer/): arithmetic problem shared across agents, ported in [examples/divide_and_conquer.py](https://github.com/canvascomputing/agentwerk/blob/main/crates/agentwerk-py/examples/divide_and_conquer.py)
+- [Deep Research](https://github.com/canvascomputing/agentwerk/tree/main/crates/use-cases/src/deep_research/): deep research pipeline (requires `BRAVE_API_KEY`)
+- [Malware Scanner](https://github.com/canvascomputing/agentwerk/tree/main/crates/use-cases/src/malware_scanner/): identify indicators of compromise in a software package
+- [Apparat Fabrik](https://github.com/canvascomputing/agentwerk/blob/main/crates/agentwerk-py/examples/apparat_fabrik.py): a shift on the line of an apparatus works
 
-```python
-tickets = TicketQueue.load(".agentwerk")
-tickets.agent(my_agent)
-tickets.start()
+> Configure an LLM provider first (see [Environment](https://github.com/canvascomputing/agentwerk/blob/main/DEVELOPMENT.md#environment)).
+
+```bash
+python examples/divide_and_conquer.py 200 4 2
 ```
-
-<details>
-<summary>All session files</summary>
-
-```
-.agentwerk/
-├── stats.json                            execution statistics
-├── tickets.jsonl                         lifecycle events (one per line)
-├── results.jsonl                         finished results (one per line)
-├── tickets/
-│   └── TICKET-1/
-│       ├── ticket.json                   the ticket without its messages (key, status, label, timestamps)
-│       ├── result.json                   the result the agent produced
-│       ├── replies.jsonl                 every message exchanged with the model, one per line
-│       └── outputs/<tool_use_id>.txt     full tool outputs spilled out of the messages
-└── knowledge/
-    ├── pages/<slug>.md                   knowledge pages
-    └── index.md                          knowledge index
-```
-
-</details>
 
 ## Development
 

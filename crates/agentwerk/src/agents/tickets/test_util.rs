@@ -45,8 +45,8 @@ pub(super) fn attach_done_result(queue: &TicketQueue, key: &str, result: &str) {
     queue.set_finished_by(key, "agent").unwrap();
 }
 
-pub(super) fn read_tickets_log(dir: &Path) -> Vec<serde_json::Value> {
-    std::fs::read_to_string(dir.join("tickets.jsonl"))
+pub(super) fn read_events_log(dir: &Path) -> Vec<serde_json::Value> {
+    std::fs::read_to_string(dir.join("events.jsonl"))
         .unwrap()
         .lines()
         .filter(|l| !l.trim().is_empty())

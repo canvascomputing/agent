@@ -164,7 +164,7 @@ async fn summariser_produces_text_when_compaction_fires_against_live_llm() {
         eprintln!("{}", serde_json::to_string_pretty(&ticket).unwrap());
     }
 
-    common::print_result(&tickets, tickets.stats());
+    common::print_result(&tickets);
 
     assert!(
         compacted,

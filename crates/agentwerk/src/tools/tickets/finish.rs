@@ -203,6 +203,14 @@ mod tests {
         (queue, key)
     }
 
+    /// Read a ticket's result back from `tickets/<key>/result.json`, or `None`
+    /// when it wrote none.
+    fn read_result(dir: &std::path::Path, key: &str) -> Option<serde_json::Value> {
+        let path = dir.join("tickets").join(key).join("result.json");
+        let body = std::fs::read_to_string(path).ok()?;
+        serde_json::from_str(&body).ok()
+    }
+
     /// Process-lifetime tempdir used as the default `TicketQueue` root
     /// for tests in this module. Tests that need an isolated workspace
     /// still call `queue.dir(...)` explicitly to override.
@@ -231,11 +239,7 @@ mod tests {
             Some("the answer")
         );
 
-        let log = std::fs::read_to_string(dir.path().join("results.jsonl")).unwrap();
-        let line = log.trim_end();
-        let parsed: serde_json::Value = serde_json::from_str(line).unwrap();
-        assert_eq!(parsed["ticket"], key.as_str());
-        assert_eq!(parsed["result"], "the answer");
+        assert_eq!(read_result(dir.path(), &key), Some("the answer".into()));
     }
 
     #[tokio::test]
@@ -322,15 +326,10 @@ mod tests {
         assert_eq!(t.status, Status::Finished);
         assert_eq!(t.result.as_ref().unwrap()["x"], 1);
 
-        // The saved `result` field is a JSON object, not an escaped
-        // string of JSON.
-        let log = std::fs::read_to_string(dir.path().join("results.jsonl")).unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(log.trim_end()).unwrap();
-        assert!(
-            parsed["result"].is_object(),
-            "expected raw object, got {parsed}"
-        );
-        assert_eq!(parsed["result"]["x"], 1);
+        // The stored result is a JSON object, not an escaped string of JSON.
+        let result = read_result(dir.path(), &key).unwrap();
+        assert!(result.is_object(), "expected raw object, got {result}");
+        assert_eq!(result["x"], 1);
     }
 
     #[tokio::test]
@@ -439,11 +438,7 @@ mod tests {
         // Stored as the decoded object, not the raw string.
         assert!(t.result.as_ref().unwrap().is_object());
         assert_eq!(t.result.as_ref().unwrap()["x"], "ok");
-        // The persisted log line carries the object too.
-        let log = std::fs::read_to_string(dir.path().join("results.jsonl")).unwrap();
-        let parsed: serde_json::Value =
-            serde_json::from_str(log.lines().next_back().unwrap()).unwrap();
-        assert!(parsed["result"].is_object());
+        assert!(read_result(dir.path(), &key).unwrap().is_object());
     }
 
     #[tokio::test]
@@ -486,15 +481,8 @@ mod tests {
             .await
             .unwrap();
 
-        let log = std::fs::read_to_string(dir.path().join("results.jsonl")).unwrap();
-        let lines: Vec<&str> = log.lines().collect();
-        assert_eq!(lines.len(), 2);
-        let first: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
-        let second: serde_json::Value = serde_json::from_str(lines[1]).unwrap();
-        assert_eq!(first["ticket"], key1.as_str());
-        assert_eq!(first["result"], "from alice");
-        assert_eq!(second["ticket"], key2.as_str());
-        assert_eq!(second["result"], "from bob");
+        assert_eq!(read_result(dir.path(), &key1), Some("from alice".into()));
+        assert_eq!(read_result(dir.path(), &key2), Some("from bob".into()));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -535,20 +523,21 @@ mod tests {
             assert!(matches!(h.await.unwrap(), ToolResult::Success(_)));
         }
 
-        let log = std::fs::read_to_string(dir.path().join("results.jsonl")).unwrap();
-        let lines: Vec<&str> = log.lines().collect();
-        assert_eq!(lines.len(), N, "expected {N} lines, got {}", lines.len());
-
-        let mut seen_tickets = std::collections::HashSet::new();
-        for line in &lines {
+        // Every finish appends to the one shared log, so a torn line here is
+        // two agents writing over each other.
+        let log = std::fs::read_to_string(dir.path().join("events.jsonl")).unwrap();
+        let mut finished = std::collections::HashSet::new();
+        for line in log.lines() {
             let parsed: serde_json::Value =
                 serde_json::from_str(line).unwrap_or_else(|e| panic!("corrupt line {line:?}: {e}"));
-            let ticket = parsed["ticket"].as_str().unwrap().to_string();
-            assert!(seen_tickets.insert(ticket), "duplicate ticket in log");
+            if parsed["event"] == "ticket_finished" {
+                let ticket = parsed["ticket_key"].as_str().unwrap().to_string();
+                assert!(finished.insert(ticket), "duplicate ticket in log");
+            }
         }
         let expected_keys: std::collections::HashSet<String> =
             expected.iter().map(|(_, k)| k.clone()).collect();
-        assert_eq!(seen_tickets, expected_keys);
+        assert_eq!(finished, expected_keys);
     }
 
     // Handover
@@ -649,16 +638,15 @@ mod tests {
             .await
             .unwrap();
 
-        let log = std::fs::read_to_string(dir.path().join("results.jsonl")).unwrap();
-        let lines: Vec<&str> = log.lines().collect();
         assert_eq!(
-            lines.len(),
-            1,
-            "only the parent finish writes a result line"
+            read_result(dir.path(), &parent_key),
+            Some("done part 1".into())
         );
-        let parsed: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
-        assert_eq!(parsed["ticket"], parent_key.as_str());
-        assert_eq!(parsed["result"], "done part 1");
+        assert_eq!(
+            read_result(dir.path(), "TICKET-2"),
+            None,
+            "only the parent finish writes a result"
+        );
     }
 
     #[tokio::test]
@@ -699,7 +687,7 @@ mod tests {
             queue.get_ticket("TICKET-2").is_none(),
             "no child created on schema failure"
         );
-        assert!(!dir.path().join("results.jsonl").exists());
+        assert_eq!(read_result(dir.path(), &parent_key), None);
     }
 
     /// Build a claimed parent whose own schema requires an object with a
@@ -745,9 +733,10 @@ mod tests {
         );
         assert!(queue.get_ticket("TICKET-2").is_some());
 
-        let log = std::fs::read_to_string(dir.path().join("results.jsonl")).unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(log.lines().next().unwrap()).unwrap();
-        assert_eq!(parsed["result"], serde_json::json!({"status": "done"}));
+        assert_eq!(
+            read_result(dir.path(), &parent_key),
+            Some(serde_json::json!({"status": "done"}))
+        );
     }
 
     #[tokio::test]
@@ -819,7 +808,7 @@ mod tests {
             queue.get_ticket("TICKET-2").is_none(),
             "no child created on schema failure"
         );
-        assert!(!dir.path().join("results.jsonl").exists());
+        assert_eq!(read_result(dir.path(), &parent_key), None);
     }
 
     #[tokio::test]

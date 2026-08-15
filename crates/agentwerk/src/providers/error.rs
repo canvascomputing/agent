@@ -4,6 +4,8 @@
 use std::fmt;
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
+
 /// Failure produced by a provider call.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -146,7 +148,8 @@ impl std::error::Error for ProviderError {}
 /// Categorical discriminant of [`ProviderError`] for event observers. Mirrors
 /// the variants of `ProviderError` without their payloads, so matching on
 /// `kind` is a stable branching point independent of the detail carried.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum RequestErrorKind {
     AuthenticationFailed,
     PermissionDenied,
@@ -199,12 +202,6 @@ impl RequestErrorKind {
 impl fmt::Display for RequestErrorKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
-    }
-}
-
-impl serde::Serialize for RequestErrorKind {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(self.as_str())
     }
 }
 

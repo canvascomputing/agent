@@ -6,7 +6,7 @@ Naming, comment, and prose rules, plus README structure. Skim the section matchi
 
 **A type earns a `pub use` at `lib.rs` only when it names a concept in the one-sentence description of the crate, or when root-level signatures hand it to the caller.**
 
-`Agent`, `AgentBuilder`, `TicketQueue`, `Ticket`, `Knowledge`, `Stats`, `Trajectory`, `Reply`, `Event`, `Status`, `EventKind`, `FinishReason`, `Schema`, `SchemaStore`
+`Agent`, `AgentBuilder`, `TicketQueue`, `Ticket`, `Knowledge`, `Trajectory`, `Reply`, `Event`, `Status`, `EventKind`, `FinishReason`, `Schema`, `SchemaStore`
 
 - Discriminants callers match on in their own code earn a root slot: `Status` (on `Ticket.status`), `EventKind` (on `Event.kind`), `FinishReason` (on `EventKind::RunFinished`).
 - Errors and conversion traits do not earn a root slot. They live in their domain module.
@@ -19,7 +19,7 @@ Naming, comment, and prose rules, plus README structure. Skim the section matchi
 **Types live next to the abstraction, owner, or protocol they belong to.**
 
 - Concrete implementations live with their abstraction: `AnthropicProvider` under `providers::`, `CommandTool` under `tools::`.
-- Companion types and handles live with their owner: `Ticket`, `Status`, `TicketError`, `Reply`, and `ReplyContent` under `agents::tickets`; `Stats` under `agents::stats`; `Compaction` under `agents::compaction`.
+- Companion types and handles live with their owner: `Ticket`, `Status`, `TicketError`, `Reply`, and `ReplyContent` under `agents::tickets`; `Compaction` under `agents::compaction`.
 - Domain errors live with their domain: `ProviderError`, `ToolError`.
 - Request and response types live with the protocol: `ModelRequest`, `Message`, `TokenUsage` under `providers::`.
 - Free functions live in their module, never at the crate root: the env readers in `providers::environment`, helpers in `tools::util`.
@@ -99,10 +99,10 @@ InvalidRequest, UnexpectedStatus, MissingKey, RequestError               // reje
 
 `requests`, `tool_calls`, `turns`, `input_tokens`, `output_tokens`
 
-- `Stats` sets the vocabulary; event payloads follow suit: `usage` on `RequestFinished` carries token counts, not a `token_count`.
-- Accessor methods mirror the field form: `Stats::input_tokens()` returns how many input tokens were recorded.
+- `TicketQueue` sets the vocabulary; event payloads follow suit: `usage` on `RequestFinished` carries token counts, not a `token_count`.
+- Accessor methods mirror the field form: `TicketQueue::input_tokens()` returns how many input tokens were recorded.
 - The `_count` suffix is reserved for the rare case where the plural would clash with a sibling collection field on the same type.
-- The ban is on scalars: a map keyed by subject is named for what its values are, `<subject>_counts()` for a bare count (`event_counts()`) and `<subject>_stats()` for a struct. Bare `<subject>s()` stays reserved for a collection of the subject itself, so the map is not `Stats::events()`.
+- The ban is on scalars: a map keyed by subject is named for what its values are, `<subject>_counts()` for a bare count (`event_counts()`) and `<subject>_stats()` for a struct. Bare `<subject>s()` stays reserved for a collection of the subject itself, which is why `TicketQueue::find_events(condition)` hands back the events themselves.
 
 ## Optional Returns
 
@@ -117,10 +117,10 @@ InvalidRequest, UnexpectedStatus, MissingKey, RequestError               // reje
 
 **Two traits cover every read and write in the crate. The trait dictates the verb; the implementer's type name binds the file location.**
 
-- `Persist` (in `persistence`): `save(&self, dir)` and `load(dir, &Self::Key)`. Implemented by `Stats`, `Ticket`, `Page`. Service bootstrap (`TicketQueue::load`, `Knowledge::load`) uses the same `load` verb by convention.
-- `Append` (in `persistence`): `append(dir, &Self::Record)`. Implemented by `Results` (`results.jsonl`) and `TicketEvents` (`tickets.jsonl`). Each implementer encodes its own filename, so the wrong file cannot be reached through the wrong type.
+- `Persist` (in `persistence`): `save(&self, dir)` and `load(dir, &Self::Key)`. Implemented by `Ticket`, `Replies`, `Page`. Service bootstrap (`TicketQueue::load`, `Knowledge::load`) uses the same `load` verb by convention.
+- `append(dir, ..)` is the inherent verb on a type that owns an append-only log: `Stats` (`events.jsonl`, crate-internal) and `Replies` (`tickets/<key>/replies.jsonl`). Each encodes its own filename, so the wrong file cannot be reached through the wrong type.
 - No `open` for bootstrap, no `write_X_to_dir`, no `to_json` or `from_json`, and no `checkpoint`, `snapshot`, `persist`, or `counter` in names. The jargon these replaced is what the convention exists to keep out.
-- Function names do not embed the type names of their arguments: `Stats::derive(&tickets)`, not `derive_from_tickets`. The argument type carries the meaning.
+- Function names do not embed the type names of their arguments: `Stats::append(dir, &event)`, not `append_event`. The argument type carries the meaning.
 
 ## Builders
 
@@ -414,12 +414,12 @@ A `Schema` constrains the result an agent produces for a ticket.
 - "user" is not a domain concept. It names one thing only, the `Message::User` role in the exchange with the model.
 - "routed" and "routing" are replaced with "assigned" and "assignment".
 - "replies" or "messages" replace "transcript". The field is `replies`, so name it.
-- "execution" is the word for a run, in prose and in identifiers: `Stats::execution_duration()`. `run` survives only where it names the event itself, `EventKind::RunStarted` and `RunFinished`.
+- "execution" is the word for a run, in prose and in identifiers: `TicketQueue::execution_duration()`. `run` survives only where it names the event itself, `EventKind::RunStarted` and `RunFinished`.
 - Bare "provider" in caller-facing prose is spelled "LLM provider". Identifier names (`Provider`, `AnthropicProvider`, the `providers::` module) stay unqualified.
 - "finisher" is banned outright, in agent-facing prompts (role files, `*.tool.md`, directives) as much as in caller-facing prose. It names nothing an agent can call: name the tool, `finish` (rustdoc names the type `FinishTool`).
 - "caps" is replaced with "limits" everywhere it is used as a noun. Imperative cells say "Limit X", not "Cap X".
 - "snapshot" does not appear in caller-facing prose. Say what the value is, not that it is a snapshot.
-- "counters" is replaced with "statistics" in caller-facing prose. `Stats` is statistics, not counters, on docs.rs.
+- "counters" is replaced with "statistics" in caller-facing prose.
 - "live" as an adjective for statistics is rejected ("live counters", "readable live"). Say *when* the value is available in plain English.
 - "wall-clock" is replaced with "elapsed duration", "max time", or "time cap".
 - "stamp", "trip", "walk off", and "mint" are internal metaphors for writing a timestamp, breaching a limit, releasing a ticket, and creating one. Use the plain verb.
@@ -442,10 +442,10 @@ A `Schema` constrains the result an agent produces for a ticket.
 
 **Terse, example-driven, scannable.**
 
-- Fixed section order: Why use agentwerk?, Installation, Quick Start, Agent Swarms, Demo, Use Cases, the API sections, Development.
+- Fixed section order: Why use agentwerk?, Installation, Quick Start, Agent Swarms, Demo, the API sections, Use Cases, Development.
 - The opening section is one bullet per reason to reach for the crate: `**Reason:** one short sentence` saying what agentwerk does to deliver it. A reason with nothing behind it is marketing and is cut.
 - That section runs before the reader has met a single agentwerk concept, so it carries no identifier, no type or function name, no counted-surface claim, and none of the domain vocabulary the API sections introduce. "Task" and "agent" are the only nouns assumed.
-- API sections run in the order a new reader needs them: Agents, Tickets, Tools, Events, Stats, Knowledge, Sessions.
+- API sections run in the order a new reader needs them: Agents, Tickets, Tools, Events, Knowledge. Sessions is a subsection of Tickets, since a session is what a queue writes its tickets to.
 - Prompting has no section of its own. `role`, `task`, and the template bindings configure an agent, so they live in Agents next to `name` and `tool`; a separate section only forced a forward reference out of the Agents lead.
 - Every section leads with one minimal example, then at most three sentences.
 - Facts live in one place; other sections cross-link rather than repeat.

@@ -96,7 +96,7 @@ async fn walks_every_ticket_action() -> std::result::Result<(), Box<dyn std::err
     tickets
         .finish(|t| t.has_label("archive") || t.has_label("auditor"))
         .await;
-    common::print_result(&tickets, tickets.stats());
+    common::print_result(&tickets);
 
     let used = seen.lock().unwrap().clone();
     let missing: Vec<&str> = ACTIONS

@@ -15,7 +15,6 @@ from ._agentwerk import (
     Provider,
     Schema,
     SchemaStore,
-    Stats,
     Reply,
     ReplyContent,
     Ticket,
@@ -41,7 +40,7 @@ from ._agentwerk import (
     event_names,
 )
 
-# The names an `Event.kind` reports and `Stats.event_count` accepts, as
+# The names an `Event.kind` reports, as
 # constants rather than literals. Built from the crate's list so the two
 # cannot end up spelling a kind differently.
 EventName = type(
@@ -95,7 +94,6 @@ __all__ = [
     "Provider",
     "Schema",
     "SchemaStore",
-    "Stats",
     "Reply",
     "ReplyContent",
     "Ticket",

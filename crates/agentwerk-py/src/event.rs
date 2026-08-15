@@ -21,6 +21,8 @@ pub struct PyEvent {
     #[pyo3(get)]
     kind: String,
     #[pyo3(get)]
+    pub(crate) created_at: u64,
+    #[pyo3(get)]
     pub(crate) agent_id: String,
     #[pyo3(get)]
     pub(crate) ticket_key: String,
@@ -49,6 +51,7 @@ impl PyEvent {
 pub fn to_py_event(event: &Event) -> PyEvent {
     PyEvent {
         kind: event.kind.to_string(),
+        created_at: event.created_at,
         agent_id: event.agent_id.clone(),
         ticket_key: event.ticket_key.clone(),
         label: event.label.clone(),

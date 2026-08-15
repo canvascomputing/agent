@@ -311,10 +311,7 @@ mod tests {
             max_output_tokens: Some(20_000),
             ..Policies::default()
         };
-        let stats = Stats::new();
-        stats.record_event(&turn(), "");
-        stats.record_event(&turn(), "");
-        stats.record_event(&request(5_000, 8_000), "");
+        let stats = Stats::of([turn(), turn(), request(5_000, 8_000)]);
 
         let rendered = context_body(&working_dir, &policies, &stats, "T-1");
 
@@ -338,8 +335,7 @@ mod tests {
             max_turns: Some(5),
             ..Policies::default()
         };
-        let stats = Stats::new();
-        stats.record_event(&turn(), "");
+        let stats = Stats::of([turn()]);
 
         let rendered = context_body(&working_dir, &policies, &stats, "T-1");
 
@@ -360,10 +356,7 @@ mod tests {
             max_turns: Some(2),
             ..Policies::default()
         };
-        let stats = Stats::new();
-        for _ in 0..5 {
-            stats.record_event(&turn(), "");
-        }
+        let stats = Stats::of(std::iter::repeat_n(turn(), 5));
 
         let rendered = context_body(&working_dir, &policies, &stats, "T-1");
 
@@ -385,8 +378,8 @@ mod tests {
 
         let rendered = context_body(&working_dir, &policies, &stats, "T-1");
 
-        // No `record_started` call: `Stats::execution_duration` is `None`,
-        // so the time bullet must not appear.
+        // No ticket ever started, so `Stats::execution_duration` is `None` and
+        // the time bullet must not appear.
         let baseline = context_body(&working_dir, &Policies::default(), &Stats::new(), "T-1");
         assert_eq!(rendered, baseline);
         assert!(!rendered.contains("Time remaining"));
@@ -394,18 +387,12 @@ mod tests {
 
     #[test]
     fn context_body_includes_time_bullet_once_started() {
-        use std::time::{SystemTime, UNIX_EPOCH};
         let working_dir = PathBuf::from("/tmp/check");
         let policies = Policies {
             max_time: Some(Duration::from_secs(3600)),
             ..Policies::default()
         };
-        let stats = Stats::new();
-        let now_ms = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u64;
-        stats.record_started(now_ms);
+        let stats = Stats::of([EventKind::TicketStarted]);
 
         let rendered = context_body(&working_dir, &policies, &stats, "T-1");
 

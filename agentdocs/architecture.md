@@ -15,7 +15,7 @@ tickets.finish_all().await;
 - The `Agent` builder carries identity, prompt parts, provider and model, tools, working directory, event handler, and a `Weak<TicketQueue>` (dangling by default).
 - `TicketQueue::new` captures its own `Weak<Self>` through `Arc::new_cyclic`, so binding can hand every agent the back-reference it needs at run time.
 - `TicketQueue::agent(a)` sets that `Weak<Self>` on the agent, drains any tickets the agent had queued in its private default queue into the shared one, and pushes a clone of the agent onto the queue's agents list.
-- `TicketQueue::start` and `finish` spawn one tokio task per registered agent. Each task upgrades its `Weak` once at the start and reads the shared store, policies, stats, and ending from the resulting `Arc<TicketQueue>`.
+- `TicketQueue::start` and `finish` spawn one tokio task per registered agent. Each task upgrades its `Weak` once at the start and reads the shared store, policies, budget, and ending from the resulting `Arc<TicketQueue>`.
 - `tickets.task(value)` creates a new ticket and returns its key as `String`. `tickets.reply(&key, content)` appends a text reply to an existing ticket, and the loop's wait-for-input branch picks it up and drives the next turn on the same replies.
 - Use `task` to start a conversation and `reply` to continue it. That is how multi-turn chat is built on top of one ticket.
 
@@ -23,7 +23,7 @@ tickets.finish_all().await;
 
 **Agents read shared state through one `Arc<TicketQueue>`. Locks are held only around queue and metric operations, never across `provider.respond().await`.**
 
-- The ticket store, policies, stats, ending, cancel filters, and registered-agent list live on `TicketQueue`.
+- The ticket store, policies, budget, ending, cancel filters, and registered-agent list live on `TicketQueue`.
 - The per-agent loop in `agents/loop.rs` claims one ticket, drives it through one or more provider and tool turns, and releases locks before each await.
 - Multiple agents share one queue; a ticket is claimed exactly once.
 - Nested queues are not supported: a single `TicketQueue` is the unit of orchestration.
@@ -79,8 +79,8 @@ Schemas and results:
 - This is what gives a ticket nobody could build a contract: a handover child, or one the model filed through `tickets`. No tool takes a schema document, since a small model does not write nested schemas reliably.
 - A handover validates its `result` against the parent ticket's own schema, exactly as a plain finish does. It carries no schema for the child, which takes one from its handover label when it is claimed. A schema mismatch aborts before the child is inserted, so neither the parent's finish nor the child happens and the operation stays atomic.
 - `handover` and `task` are reserved argument names for `finish`. A ticket whose schema is an object has its fields passed as `finish`'s top-level arguments, so such a schema must not declare a `handover` or `task` property: those names are stripped as control keys before the result is recovered.
-- A successful finish appends one NDJSON record `{ticket, result}` to `<dir>/results.jsonl` (configured through `TicketQueue::dir(d)`, default `./.agentwerk`) and attaches the same `result` value to the ticket. The value is surfaced through `Ticket::result()`.
-- The queue also appends one JSON line to `<dir>/tickets.jsonl` per lifecycle event (`created`, `started`, `done`, `failed`) and writes the full ticket state to `<dir>/tickets/<key>/ticket.json`. The `created` event carries the optional `parent` key when set, giving the log a complete handover audit trail. The log is observational: errors are swallowed. The result payload stays in `results.jsonl`; `tickets.jsonl` carries only the transition.
+- A successful finish writes the result to `<dir>/tickets/<key>/result.json` (the directory is configured through `TicketQueue::dir(d)`, default `./.agentwerk`) and attaches the same value to the ticket. The value is surfaced through `Ticket::result()`.
+- The queue writes the full ticket state to `<dir>/tickets/<key>/ticket.json` on every transition, and the transition itself reaches `<dir>/events.jsonl` as a `TicketCreated`, `TicketStarted`, `TicketFinished`, or `TicketFailed` event. The result payload stays in `result.json`; the log carries only the transition. Both writes are observational: errors are swallowed.
 
 ## Knowledge Is Opt-In and Shareable Across Agents
 
@@ -89,7 +89,7 @@ Schemas and results:
 Two layers of state exist. The per-ticket replies live on `Ticket::replies`: every message the loop sends to the provider is appended as a `Reply`, and the loop derives the request's `Vec<Message>` from those replies through `Ticket::to_messages` each turn. `Agent::knowledge(&store)` adds a separate cross-ticket layer: a `Knowledge` store rooted at a caller-supplied directory, surfaced to the model through `KnowledgeTool` and rendered into the system prompt.
 
 - The store is constructed through `Knowledge::load(store_dir)` and passed to one or more agents through `Agent::knowledge(&store)`. Two agents bound to the same `Arc<Knowledge>` share the same `index.md` and `pages/` directory; two agents bound to different stores see independent knowledge.
-- Pointing `Knowledge::load` at the same directory as `TicketQueue::dir` co-locates the `knowledge/` bundle with `results.jsonl` and `tickets.jsonl`.
+- Pointing `Knowledge::load` at the same directory as `TicketQueue::dir` co-locates the `knowledge/` bundle with `events.jsonl` and the ticket files.
 - The store is an Open Knowledge Format (OKF) v0.1 bundle held in `<dir>/knowledge/` (`BUNDLE_DIR`), which keeps it out of a co-located `TicketQueue`'s files and keeps the recursive page walk inside the bundle.
 - `<dir>/knowledge/pages/<slug>.md` holds each concept with `type`, `description`, and `timestamp` frontmatter, and pages cross-link with standard markdown links (`[text](/pages/slug.md)`). `<dir>/knowledge/index.md` is a derived progressive-disclosure view with a clickable link per page.
 - Only the compact index is injected into the system prompt; the agent reads full pages on demand through the `read` action. `index.md` is written but never parsed back: on load the in-memory index is rebuilt by walking the page frontmatter (`rebuild_index_from_pages`), so an OKF bundle placed in `<dir>/knowledge/` seeds the store from it.
@@ -154,31 +154,34 @@ Two layers of state exist. The per-ticket replies live on `Ticket::replies`: eve
 - Tools observe the ending through `ToolContext::cancelled`; pair it with `tokio::select!` so it drops the losing branch promptly.
 - Dropping the `TicketQueue` while agents still reference it through `Weak` is the public way to abort: the upgrade fails and each task panics out cleanly.
 
-## Stats Are Event-Derived, One Writer
+## Every Event Is Logged, Statistics Are Folded From It
 
-**`Stats::record_event` is the single writer for event-derived statistics: every `EventKind` is counted automatically by its name; only the ticket lifecycle writes directly.**
+**`TicketQueue::emit` folds every event into the crate-private `Stats` and appends it to `events.jsonl`, `TextChunkReceived` aside. A host reads the log back through `TicketQueue::find_events`; the crate counts only what a policy needs.**
 
-- `TicketQueue::emit` forwards every event to `Stats::record_event(kind, key)` before firing observers. The event's `EventKind::event_name()` keys a per-kind count map, so a new variant is counted the moment it names itself in that exhaustive match, with no statistics code to add.
-- Every kind is read the same way: `event_count(EventName::TurnStarted)` for one, `event_counts()` for the whole map. No kind has an accessor of its own, and `stats.json` carries the counts under `events` alone, never repeated at the top. `EventName` is the payload-free half of `EventKind`; the snake_case spelling lives in `EventName::name()`, and serde's `rename_all` reproduces it for `stats.json`.
-- `RequestFinished` is the one kind whose payload `Stats` reads: it adds to the two token totals, and appends to the per-ticket series compaction estimates from. Every other kind contributes its count and nothing else.
-- Breakdowns are the host's, not the crate's. `Stats` counts the run as a whole; per tool, per model, per file, per agent, or per label is a fold on the `on_event` chain, which is why an `Event` carries `agent_id`, `ticket_key`, and the ticket's `label` alongside the kind. The scanner use case shows the shape.
-- The ticket lifecycle is counted like everything else, through `EventKind::TicketCreated`, `TicketStarted`, `TicketFinished`, and `TicketFailed`. What the store still writes directly is `record_started`, since the moment a run begins is a transition rather than an event.
-- Reads happen on `Stats` directly through inherent accessors: `event_count(event)`, `event_counts()`, `input_tokens()`, `output_tokens()`, and `execution_duration()`. A count is always an `event_count`, and a ratio like the ticket success rate is the caller's division over two counts.
-- The per-ticket token series (`usage_for_ticket`) is `pub(crate)`. Compaction clears it on every compaction, so a caller would read a silently truncated series; a host that wants the figures reads `EventKind::RequestFinished`, which reports every one as it happens.
+- `emit` writes the line before firing observers, so the log holds what every handler saw. The chunk kinds are the exception: one line per streamed token would outweigh every other line and repeats what `replies.jsonl` already carries.
+- The write is best-effort, like every observational write. A failed line costs an entry in the log, never the run.
+- `TicketQueue::find_events(condition)` and `find_event(condition)` read the log; a count is `.len()` and any breakdown is a fold. `input_tokens()`, `output_tokens()`, and `execution_duration()` stay live off the counters, because the policy check reads the same ones every 50ms and a token total should not cost a file read.
+- The two sources can disagree, by design: delete the log mid-run and the three totals keep reporting while the finders find nothing. The counters are what the run spent, the log is what it wrote down.
+- A line this build cannot parse is skipped rather than costing every line after it, which is what lets a log written by another version still report.
+- `EventKind` is internally tagged under `event`, so a line names itself the way `EventName` spells it. `EventName` is the payload-free half of `EventKind`, and serde's `rename_all` reproduces the same snake_case on both.
+- `RequestFinished` is the one kind whose payload the statistics read: its `usage` adds to the two token totals. Every other kind contributes its count and nothing else.
+- `execution_duration` spans the first `TicketStarted` to the `RunFinished`, or to now while the run is going. `TicketStarted` is emitted from `claim`, where the transition happens, so a host claiming a ticket without running the loop still starts the clock. `TicketQueue::load` restarts it: `max_time` bounds the run resuming the session, not the one that wrote the log.
+- Breakdowns are the host's, not the crate's. Per tool, per model, per file, per agent, or per label is a fold — on the `on_event` chain while the run works, or over `find_events` afterwards — which is why an `Event` carries `agent_id`, `ticket_key`, and the ticket's `label` alongside the kind. The scanner use case shows both shapes.
+- `Stats::record` is the single writer, and it takes the whole `Event`: a live queue folds each one in as `emit` publishes it, and `Stats::load` folds the same events back out of the file. Both arrive at the same figures, so a run never keeps a second set of counters. The figures are counts, not the events, which is what keeps a long run's tool output out of memory once its line is written.
+- The per-ticket token series (`usage_for_ticket`) stays crate-internal. Compaction clears it on every compaction, so a caller would read a silently truncated series; a host that wants the figures reads `EventKind::RequestFinished`, which reports every one as it happens.
 
-## Persistence Routes Through Two Traits
+## Persistence Routes Through One Trait
 
-**Every read and write in the crate goes through `Persist` (state files) or `Append` (jsonl logs) in `persistence`. No domain module hand-rolls file IO; no module knows its file's name except the implementer.**
+**Every read and write in the crate goes through `Persist` in `persistence`, or through an inherent `append` on the type that owns its log. No domain module hand-rolls file IO; no module knows its file's name except the implementer.**
 
-- `Persist` defines `save(&self, dir) -> io::Result<()>` and `load(dir, &Self::Key) -> io::Result<Self>`. `Stats`, `Ticket`, `Replies`, `TicketResult`, `Page`, and `Trajectory` implement it; each owns its own path layout (`stats.json`, `tickets/<key>/ticket.json`, `tickets/<key>/replies.jsonl`, `tickets/<key>/result.json`, `pages/<slug>.md`, `trajectories/<key>.json`).
+- `Persist` defines `save(&self, dir) -> io::Result<()>` and `load(dir, &Self::Key) -> io::Result<Self>`. `Ticket`, `Replies`, `TicketResult`, `Page`, and `Trajectory` implement it; each owns its own path layout (`tickets/<key>/ticket.json`, `tickets/<key>/replies.jsonl`, `tickets/<key>/result.json`, `pages/<slug>.md`, `trajectories/<key>.json`).
 - A ticket's result and its replies are both `#[serde(skip)]` on `Ticket` and spliced back in by `Ticket::load`, so each fact has one file. An agent reads another ticket's result through the ticket tools' `result` action or straight from `result.json`.
 - A value type the caller stores itself reaches its file through an inherent method that delegates to its own impl, never by publishing the trait: `Trajectory::save(dir)` and `Knowledge::pages().save(page)` are the two. Service bootstrap (`TicketQueue::load`, `Knowledge::load`) uses the same `load` verb for its directory-to-`Arc<Self>` entry by convention.
-- `Append` defines `append(dir, &Self::Record) -> io::Result<()>`. `Results` writes `results.jsonl`; `TicketEvents` writes `tickets.jsonl`. The wrong type cannot reach the wrong file: each implementer's `append` body hardcodes the filename.
-- The per-ticket replies are the one shape that does not fit either trait. `Replies` (in `agents::tickets`) is a free type with `append(dir, key, &Reply)` and `load(dir, key) -> Vec<Reply>`, writing one JSON line per `Reply` to `tickets/<key>/replies.jsonl`.
-- `Replies` also implements `Persist`, whose `save` overwrites the file wholesale so a dropped or redacted reply leaves nothing behind. The `append` half is per-key, so the single-fixed-filename `Append` trait does not generalize cleanly; promote it to a trait only when a second per-key log appears.
+- The two append-only logs each own their filename on the type that reads them back: `Stats::append(dir, &Event)` writes `events.jsonl`, and `Replies::append(dir, key, &Reply)` writes `tickets/<key>/replies.jsonl`. Neither earns a trait, since the second takes a key the first does not; give them one when a third log matches either shape.
+- `Replies` also implements `Persist`, whose `save` overwrites the file wholesale so a dropped or redacted reply leaves nothing behind.
 - `TICKET-<N>` keys are handed out in order. `load()` seeds the next key from the tickets it just read off disk; a queue built with `new()` scans for the highest existing key at the first insert instead, since `new()` never reads the directory itself.
 - One agent processes one ticket at a time (claim is atomic), so `add_reply` and the rewrite for one key are sequential within a single loop task. No per-key lock is needed for either path.
-- Crate-internal helpers `write_atomic` (tmp plus rename) and `append_line` (`O_APPEND` plus newline) are the only places that touch the filesystem. They are `pub(crate)` so trait impls colocated with their types can call them; by convention nothing outside a `Persist` or `Append` impl reaches for them.
+- Crate-internal helpers `write_atomic` (tmp plus rename) and `append_line` (`O_APPEND` plus newline) are the only places that touch the filesystem. They are `pub(crate)` so impls colocated with their types can call them; by convention nothing outside a `Persist` impl or an `append` reaches for them.
 - One documented exception: `TicketQueue::write_tool_output` writes single-shot flat files that fit neither trait.
 - Vocabulary is fixed: `save`, `load`, `append`. Bootstrap verbs other than `load` (such as `open`) are not used. Domain words (`checkpoint`, `snapshot`, `counter`, `persist`) do not appear in identifiers or test names.
 
@@ -187,6 +190,6 @@ Two layers of state exist. The per-ticket replies live on `Ticket::replies`: eve
 **A run stops cleanly when any limit on `Policies` is breached. The check fires `EventKind::PolicyViolated` and exits the per-agent task.**
 
 - The loop calls `policy_violated_kind` at each iteration; a non-`None` return takes the agent off the queue.
-- Token budgets read from `Stats`; `max_time` reads from `Policies` and from `Stats::execution_duration()`. All limits, including `max_time`, route through `policy_violated_kind` and emit `PolicyViolated`; `get_finish_reason` reports the matching `FinishReason::PolicyViolated(kind)` once the run has ended.
+- Token budgets read from the queue's live `Stats`; `max_time` reads from `Policies` and from `Stats::execution_duration()`. All limits, including `max_time`, route through `policy_violated_kind` and emit `PolicyViolated`; `finish_reason` reports the matching `FinishReason::PolicyViolated(kind)` once the run has ended.
 - The schema-retry budget is applied per-ticket inside the result-writing path, not at the top of the loop.
 - `compact_at` rides on `Policies` for the same per-queue snapshot every limit gets, but it is a trigger rather than a limit: `policy_violated_kind` ignores it, and reaching it costs a compaction, not the run.

@@ -103,7 +103,7 @@ pub(super) fn proactive_compaction_needed(context: &TicketContext<'_>, ticket: &
     let window = context.model.get_context_window();
     let history = context
         .ticket_queue
-        .stats()
+        .stats
         .usage_for_ticket(&context.ticket_key);
 
     algo::should_compact_proactively(
@@ -717,7 +717,7 @@ mod tests {
         // The 180 000-token anchor that tripped the trigger described replies
         // the ticket no longer holds, so it must not survive compaction.
         let tickets = queue_handle.lock().unwrap().take().expect("queue captured");
-        let history = tickets.stats().usage_for_ticket(&ticket.key);
+        let history = tickets.stats.usage_for_ticket(&ticket.key);
         assert!(
             history.len() <= 1,
             "expected the pre-compaction usage to be dropped, got {history:?}",

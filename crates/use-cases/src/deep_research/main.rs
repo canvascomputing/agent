@@ -172,7 +172,7 @@ fn classify_outcome(tickets: &TicketQueue) -> Outcome {
     if let Some(result) = reported {
         return Outcome::Report(result);
     }
-    if tickets.get_finish_reason() == Some(FinishReason::Cancelled) {
+    if tickets.finish_reason() == Some(FinishReason::Cancelled) {
         return Outcome::Cancelled;
     }
     Outcome::Stalled
@@ -209,14 +209,14 @@ fn print_chain_summary(tickets: &TicketQueue) {
 }
 
 fn print_stats(tickets: &TicketQueue) {
-    let stats = tickets.stats();
     eprintln!("\nStats:");
     eprintln!(
         "  Duration : {:?}",
-        stats.execution_duration().unwrap_or_default()
+        tickets.execution_duration().unwrap_or_default()
     );
-    let done = stats.event_count(EventName::TicketFinished);
-    let failed = stats.event_count(EventName::TicketFailed);
+    let count = |kind: EventName| tickets.find_events(|e| e.kind.event_name() == kind).len() as u64;
+    let done = count(EventName::TicketFinished);
+    let failed = count(EventName::TicketFailed);
     let resolved = done + failed;
     let success = if resolved == 0 {
         0.0
@@ -226,14 +226,14 @@ fn print_stats(tickets: &TicketQueue) {
     eprintln!("  Tickets  : {done} done, {failed} failed ({success:.0}%)");
     eprintln!(
         "  Tokens   : {} in, {} out",
-        stats.input_tokens(),
-        stats.output_tokens(),
+        tickets.input_tokens(),
+        tickets.output_tokens(),
     );
     eprintln!(
         "  Activity : {} requests · {} tool calls · {} failed requests",
-        stats.event_count(EventName::RequestFinished),
-        stats.event_count(EventName::ToolCallStarted),
-        stats.event_count(EventName::RequestFailed),
+        count(EventName::RequestFinished),
+        count(EventName::ToolCallStarted),
+        count(EventName::RequestFailed),
     );
 }
 

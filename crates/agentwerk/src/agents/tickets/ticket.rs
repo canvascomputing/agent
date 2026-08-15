@@ -3,7 +3,6 @@
 use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use serde::Serialize;
 
@@ -196,21 +195,6 @@ impl Ticket {
             }
             _ => {}
         }
-    }
-
-    /// The time from creation to resolution, and the time an agent held the
-    /// ticket. Either is zero when its timestamps are not both set.
-    pub(crate) fn terminal_durations(&self) -> (Duration, Duration) {
-        let terminal = self.finished_at.or(self.failed_at);
-        let ticket_duration = match terminal {
-            Some(end) => Duration::from_millis(end.saturating_sub(self.created_at)),
-            None => Duration::ZERO,
-        };
-        let work_duration = match (self.started_at, terminal) {
-            (Some(start), Some(end)) => Duration::from_millis(end.saturating_sub(start)),
-            _ => Duration::ZERO,
-        };
-        (ticket_duration, work_duration)
     }
 }
 
