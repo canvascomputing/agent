@@ -87,7 +87,7 @@ crates/
 - `code.rs` backs `grep`'s `syntax: "code"` shape matching, delegating to the `codegrep` engine.
 - `command/` holds the command tool and the parsing behind it. `tool.rs` is the tool, restricted through `new()` and widened through `allow()`; it runs one program per call and never a shell. `parse.rs` splits a line into one command and classifies its arguments, which is how the tool refuses anything that is not one command and how a rule about a flag means what the program will mean.
 - `tickets/` holds `TicketsTool` and `FinishTool`; `knowledge.rs` is the model-facing wrapper around `Knowledge`, whose store lives in `agents::knowledge`.
-- `find_tools.rs` is the discovery surface for deferred tools; `fetch_url.rs` is the web fetch tool.
+- `fetch_url.rs` is the web fetch tool.
 - Each built-in tool pairs with a `<tool>.tool.md` definition: `---` frontmatter (`name`, `read_only`), a prose body shown to the model, and a `## Schema` section whose ` ```json ` fence holds the input schema. `tool_file.rs` parses it; `util.rs` is a shared helper; `error.rs` holds `ToolError`.
 
 ## The `prompts/` and `schemas/` Modules

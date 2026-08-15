@@ -7,9 +7,8 @@ use std::sync::Arc;
 
 use agentwerk::providers::ProviderResult;
 use agentwerk::tools::{
-    CommandTool, EditFileTool, FetchUrlTool, FindToolsTool, FinishTool, GlobTool, GrepTool,
-    KnowledgeTool, ListDirectoryTool, ReadFileTool, TicketsTool, ToolContext, ToolLike, ToolResult,
-    WriteFileTool,
+    CommandTool, EditFileTool, FetchUrlTool, FinishTool, GlobTool, GrepTool, KnowledgeTool,
+    ListDirectoryTool, ReadFileTool, TicketsTool, ToolContext, ToolLike, ToolResult, WriteFileTool,
 };
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -39,10 +38,6 @@ impl ToolLike for BoxedTool {
 
     fn is_read_only(&self) -> bool {
         self.0.is_read_only()
-    }
-
-    fn should_defer(&self) -> bool {
-        self.0.should_defer()
     }
 
     fn opened_paths(&self, input: &Value) -> Vec<String> {
@@ -75,7 +70,6 @@ struct PyToolAdapter {
     description: String,
     schema: Value,
     read_only: bool,
-    defer: bool,
     paths: Vec<String>,
 }
 
@@ -94,10 +88,6 @@ impl ToolLike for PyToolAdapter {
 
     fn is_read_only(&self) -> bool {
         self.read_only
-    }
-
-    fn should_defer(&self) -> bool {
-        self.defer
     }
 
     fn opened_paths(&self, input: &Value) -> Vec<String> {
@@ -211,7 +201,6 @@ pub fn extract_tool(obj: &Bound<'_, PyAny>) -> PyResult<Arc<dyn ToolLike>> {
         let name = obj.getattr("_agentwerk_name")?.extract()?;
         let description = obj.getattr("_agentwerk_description")?.extract()?;
         let read_only = obj.getattr("_agentwerk_read_only")?.extract()?;
-        let defer = obj.getattr("_agentwerk_defer")?.extract()?;
         let paths = obj.getattr("_agentwerk_paths")?.extract()?;
         let schema = py_to_value(&obj.getattr("_agentwerk_schema")?)?;
         return Ok(Arc::new(PyToolAdapter {
@@ -220,7 +209,6 @@ pub fn extract_tool(obj: &Bound<'_, PyAny>) -> PyResult<Arc<dyn ToolLike>> {
             description,
             schema,
             read_only,
-            defer,
             paths,
         }));
     }
@@ -278,13 +266,6 @@ fn list_directory_tool() -> PyTool {
 #[pyo3(name = "FetchUrlTool")]
 fn fetch_url_tool() -> PyTool {
     handle(Arc::new(FetchUrlTool))
-}
-
-/// Look up the tools held back until they are needed.
-#[pyfunction]
-#[pyo3(name = "FindToolsTool")]
-fn find_tools_tool() -> PyTool {
-    handle(Arc::new(FindToolsTool))
 }
 
 /// Point the knowledge tool at `store` without making it the agent's own.
@@ -372,7 +353,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(glob_tool, m)?)?;
     m.add_function(wrap_pyfunction!(list_directory_tool, m)?)?;
     m.add_function(wrap_pyfunction!(fetch_url_tool, m)?)?;
-    m.add_function(wrap_pyfunction!(find_tools_tool, m)?)?;
     m.add_function(wrap_pyfunction!(knowledge_tool, m)?)?;
     m.add_function(wrap_pyfunction!(finish_tool, m)?)?;
     m.add_function(wrap_pyfunction!(tickets_tool, m)?)?;

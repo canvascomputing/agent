@@ -188,7 +188,6 @@ Seven rules the surface table below never repeats.
 | `Tool` | `Tool`: an opaque handle the built-in tool functions return. An ad-hoc tool is a decorated function, not a `Tool`. |
 | `Tool::from_tool_file(definition)` | Not bound: write the name, description, and schema on the Python function instead. |
 | `ToolBuilder::read_only(b)` | `@tool(read_only=..)` |
-| `ToolBuilder::defer(b)` | `@tool(defer=..)` |
 | `ToolBuilder::paths(fields)` | `@tool(paths=[..])` |
 | `ToolLike` | A `@tool`-decorated callable. Python cannot implement a Rust trait. |
 | `ToolContext` | Not bound: a `@tool` function receives its input as keyword arguments only. |
@@ -197,7 +196,7 @@ Seven rules the surface table below never repeats.
 | `ReadFileTool` | `ReadFileTool()`: a unit struct becomes a function returning a handle. |
 | `WriteFileTool`, `EditFileTool` | `WriteFileTool()`, `EditFileTool()` |
 | `GrepTool`, `GlobTool`, `ListDirectoryTool` | `GrepTool()`, `GlobTool()`, `ListDirectoryTool()` |
-| `FetchUrlTool`, `FindToolsTool` | `FetchUrlTool()`, `FindToolsTool()` |
+| `FetchUrlTool` | `FetchUrlTool()` |
 | `TicketsTool`, `FinishTool` | `TicketsTool()`, `FinishTool()` |
 | `KnowledgeTool::new(store)` | `KnowledgeTool(store)` |
 | `CommandTool::new(name)` | `CommandTool(name)`: a class carrying the builder methods below, where every other built-in tool is a function returning a handle. |
