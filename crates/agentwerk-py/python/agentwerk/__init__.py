@@ -38,8 +38,7 @@ from ._agentwerk import (
     KnowledgeTool,
     TicketsTool,
     FinishTool,
-    BashTool,
-    UnrestrictedBashTool,
+    CommandTool,
     event_names,
 )
 
@@ -123,6 +122,5 @@ __all__ = [
     "KnowledgeTool",
     "TicketsTool",
     "FinishTool",
-    "BashTool",
-    "UnrestrictedBashTool",
+    "CommandTool",
 ]

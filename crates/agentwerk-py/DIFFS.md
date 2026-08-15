@@ -200,8 +200,7 @@ Seven rules the surface table below never repeats.
 | `FetchUrlTool`, `FindToolsTool` | `FetchUrlTool()`, `FindToolsTool()` |
 | `TicketsTool`, `FinishTool` | `TicketsTool()`, `FinishTool()` |
 | `KnowledgeTool::new(store)` | `KnowledgeTool(store)` |
-| `BashTool::new(name)` | `BashTool(name)`: a class carrying the builder methods below, where every other built-in tool is a function returning a handle. |
-| `BashTool::allow(pattern)`, `::deny(pattern)`, `::description(..)`, `::read_only(..)` | `BashTool.allow(pattern)`, `.deny(pattern)`, `.description(..)`, `.read_only(..)` |
-| `BashTool::unrestricted()` | `UnrestrictedBashTool()`: a second constructor on one class becomes a second function. |
+| `CommandTool::new(name)` | `CommandTool(name)`: a class carrying the builder methods below, where every other built-in tool is a function returning a handle. |
+| `CommandTool::allow(pattern)`, `::deny(pattern)`, `::deny_flag(flag)`, `::description(..)`, `::read_only(..)` | `CommandTool.allow(pattern)`, `.deny(pattern)`, `.deny_flag(flag)`, `.description(..)`, `.read_only(..)` |
 | **Code search** | |
 | `codegrep::{Pattern, Conf, search, tokenize_pattern, ..}` | Not bound: reachable through `GrepTool()` with `syntax="code"`. |

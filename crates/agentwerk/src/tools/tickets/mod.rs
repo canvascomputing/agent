@@ -402,7 +402,7 @@ mod tests {
     }
 
     fn unwrap_text(result: &ToolResult) -> &str {
-        let (ToolResult::Success(s) | ToolResult::Error(s) | ToolResult::SchemaError(s)) = result;
+        let s = result.content();
         s
     }
 

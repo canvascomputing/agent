@@ -1,11 +1,11 @@
-//! End-to-end: a real LLM drives three pattern-restricted `BashTool`
+//! End-to-end: a real LLM drives three pattern-restricted `CommandTool`
 //! commands (`ls`, `cat`, `wc`) and finishes its ticket with a
 //! JSON result validated against the ticket schema.
 
 use super::common;
 
 use agentwerk::schemas::Schema;
-use agentwerk::tools::BashTool;
+use agentwerk::tools::CommandTool;
 use agentwerk::{Agent, Ticket, TicketQueue};
 
 #[tokio::test]
@@ -28,9 +28,9 @@ async fn test() -> std::result::Result<(), Box<dyn std::error::Error>> {
         "required": ["files", "line_count"]
     }))?;
 
-    let ls = BashTool::new("ls").allow("ls*").read_only(true);
-    let cat = BashTool::new("cat").allow("cat *").read_only(true);
-    let wc = BashTool::new("wc").allow("wc *").read_only(true);
+    let ls = CommandTool::new("ls").allow("ls*").read_only(true);
+    let cat = CommandTool::new("cat").allow("cat *").read_only(true);
+    let wc = CommandTool::new("wc").allow("wc *").read_only(true);
 
     let tickets = TicketQueue::new();
 

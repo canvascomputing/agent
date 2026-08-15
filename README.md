@@ -492,12 +492,12 @@ A violated limit emits `EventKind::PolicyViolated`, see [`EventKind`](https://do
 Tools allow agents to perform their work.
 
 ```rust
-use agentwerk::tools::{BashTool, GrepTool, ReadFileTool};
+use agentwerk::tools::{CommandTool, GrepTool, ReadFileTool};
 
 let agent = Agent::new()
     .tool(ReadFileTool)
     .tool(GrepTool)
-    .tool(BashTool::new("git").allow("git *"));
+    .tool(CommandTool::new("git").allow("git *"));
 ```
 
 <details>
@@ -511,7 +511,7 @@ let agent = Agent::new()
 | **Search** | `GlobTool` | Find files by pattern. |
 | | `GrepTool` | Search file contents by regular expression, or by code shape with `syntax: "code"`. |
 | | `ListDirectoryTool` | List files and directories. |
-| **Shell** | `BashTool` | Run a shell command from an allow-list of patterns. |
+| **Command** | `CommandTool` | Give access to specific commands. |
 | **Web** | `FetchUrlTool` | Fetch a URL and read its body. |
 | **Tickets** | `FinishTool` | Write the result for the current ticket and mark it finished. |
 | | `TicketsTool` | Read the ticket queue and create or edit tickets. |
@@ -522,15 +522,16 @@ let agent = Agent::new()
 
 `FinishTool` and `KnowledgeTool` are special tools, registered automatically on every agent. They are used for interacting with the `TicketQueue` or knowledge base.
 
-#### BashTool
+#### CommandTool
 
-The `BashTool` allows you to granularly define what bash commands are allowed and what commands are denied.
+The `CommandTool` allows you to granularly define what commands are allowed and what commands are denied.
 
 ```rust
-let git = BashTool::new("git")
+let git = CommandTool::new("git")
     .allow("git status")
     .allow("git log *")
-    .deny("git push*");
+    .deny("git push*")
+    .deny_flag("--force");
 ```
 
 #### Custom Tools

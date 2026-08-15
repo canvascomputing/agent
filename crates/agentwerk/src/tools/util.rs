@@ -1,22 +1,28 @@
-//! Glob matching and process invocation, shared by the file and shell tools.
+//! Glob matching and process invocation, shared by the file and command tools.
+//!
+//! Nothing here runs a shell: a command reaches its program as an argument
+//! list, so an operator inside one is text rather than a second command.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use super::command::Command;
 use super::tool::{ToolContext, ToolResult};
 
-/// Execute a command via `sh -c`, returning combined stdout/stderr. Bounded by
-/// `timeout` and interruptible via [`ToolContext::cancelled`]: it drops the
-/// pending output future, and `kill_on_drop(true)` cascades SIGKILL to the
-/// subprocess so a hanging `python3` / `sleep` doesn't outlive the run.
-pub(crate) async fn run_shell_command(
-    command: &str,
+/// Execute one program directly, returning combined stdout/stderr. No shell is
+/// involved, so an operator in an argument is text the program receives rather
+/// than a second command.
+///
+/// Bounded by `timeout` and interruptible via [`ToolContext::cancelled`]: it
+/// drops the pending output future, and `kill_on_drop(true)` cascades SIGKILL
+/// to the subprocess so a hanging `python3` / `sleep` doesn't outlive the run.
+pub(crate) async fn run_command(
+    command: &Command,
     timeout: Duration,
     ctx: &ToolContext,
 ) -> ToolResult {
-    let output_fut = tokio::process::Command::new("sh")
-        .arg("-c")
-        .arg(command)
+    let output_fut = tokio::process::Command::new(command.program_path(&ctx.dir))
+        .args(&command.arguments)
         .current_dir(&ctx.dir)
         .kill_on_drop(true)
         .output();
@@ -29,7 +35,7 @@ pub(crate) async fn run_shell_command(
 
     match result {
         Err(_) => ToolResult::error(format!("Command timed out after {}ms", timeout.as_millis())),
-        Ok(Err(e)) => ToolResult::error(format!("Failed to execute command: {e}")),
+        Ok(Err(e)) => ToolResult::error(format!("Failed to run '{}': {e}", command.program)),
         Ok(Ok(output)) => {
             let mut content = String::from_utf8_lossy(&output.stdout).into_owned();
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -171,13 +177,12 @@ mod tests {
             run.set_draining(FinishReason::Cancelled);
         });
 
+        let command = Command::split("sleep 30").unwrap();
         let started = Instant::now();
-        let result = run_shell_command("sleep 30", Duration::from_millis(60_000), &ctx).await;
+        let result = run_command(&command, Duration::from_millis(60_000), &ctx).await;
         let elapsed = started.elapsed();
 
-        let (ToolResult::Success(content)
-        | ToolResult::Error(content)
-        | ToolResult::SchemaError(content)) = &result;
+        let content = result.content();
         assert!(
             matches!(result, ToolResult::Error(_)),
             "expected cancelled result"

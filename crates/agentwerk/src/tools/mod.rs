@@ -5,8 +5,8 @@ mod tool;
 mod tool_file;
 pub(crate) mod util;
 
-mod bash;
 mod code;
+mod command;
 mod edit_file;
 mod fetch_url;
 mod find_tools;
@@ -22,7 +22,7 @@ pub use error::ToolError;
 pub use tool::{Tool, ToolContext, ToolLike, ToolResult};
 pub(crate) use tool::{ToolCall, ToolRegistry};
 
-pub use bash::BashTool;
+pub use command::CommandTool;
 pub use edit_file::EditFileTool;
 pub use fetch_url::FetchUrlTool;
 pub use find_tools::FindToolsTool;

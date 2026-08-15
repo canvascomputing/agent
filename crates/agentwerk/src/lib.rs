@@ -72,7 +72,7 @@
 //! - [`Knowledge`]: durable memory the agent shares across tickets and other agents.
 //! - [`Stats`]: statistics about tickets, tokens, and time.
 //! - [`Event`]: requests, tool usage, failures and more.
-//! - [`tools`]: the built-in tools agents call, for files, search, shell, web, knowledge, and tickets.
+//! - [`tools`]: the built-in tools agents call, for files, search, commands, web, knowledge, and tickets.
 
 pub mod agents;
 pub mod codegrep;

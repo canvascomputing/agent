@@ -23,20 +23,17 @@ def test_builtin_factories_return_a_tool(factory):
     assert isinstance(factory(), aw.Tool)
 
 
-def test_the_unrestricted_bash_tool_is_configurable_like_any_other():
-    assert isinstance(aw.UnrestrictedBashTool().read_only(True), aw.BashTool)
-
-
-def test_bash_tool_configuration_chains_on_one_object():
-    tool = aw.BashTool("git")
+def test_command_tool_configuration_chains_on_one_object():
+    tool = aw.CommandTool("git")
     assert tool.allow("git *") is tool
     assert tool.deny("git push*") is tool
+    assert tool.deny_flag("--force") is tool
     assert tool.read_only(True) is tool
     assert tool.description("Run git commands.") is tool
 
 
-def test_an_agent_accepts_a_bash_tool():
-    agent = aw.Agent().tool(aw.BashTool("git").allow("git *"))
+def test_an_agent_accepts_a_command_tool():
+    agent = aw.Agent().tool(aw.CommandTool("git").allow("git *"))
     assert isinstance(agent, aw.Agent)
 
 

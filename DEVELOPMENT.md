@@ -37,7 +37,7 @@ make python_test_integration   # the tests marked live
 
 ```bash
 make test_integration                     # run all
-make test_integration name=bash_usage     # run one
+make test_integration name=command_usage     # run one
 ```
 
 ## Use cases

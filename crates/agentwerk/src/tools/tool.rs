@@ -178,6 +178,12 @@ impl ToolResult {
     pub fn schema_error(content: impl Into<String>) -> Self {
         Self::SchemaError(content.into())
     }
+
+    /// Get the text, whichever outcome this is.
+    pub fn content(&self) -> &str {
+        let (Self::Success(content) | Self::Error(content) | Self::SchemaError(content)) = self;
+        content
+    }
 }
 
 /// What every tool implements.
@@ -901,7 +907,7 @@ mod tests {
             Box::new(crate::tools::FetchUrlTool),
             Box::new(crate::tools::FindToolsTool),
             Box::new(crate::tools::KnowledgeTool::new(store)),
-            Box::new(crate::tools::BashTool::new("git").allow("git *")),
+            Box::new(crate::tools::CommandTool::new("git").allow("git *")),
             Box::new(crate::tools::FinishTool),
             Box::new(crate::tools::TicketsTool),
         ];

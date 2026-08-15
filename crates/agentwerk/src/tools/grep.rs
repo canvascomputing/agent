@@ -527,10 +527,8 @@ mod tests {
 
     async fn search(ctx: &ToolContext, input: Value) -> Value {
         let result = GrepTool.call(input, ctx).await.unwrap();
-        let (ToolResult::Success(content)
-        | ToolResult::Error(content)
-        | ToolResult::SchemaError(content)) = result;
-        serde_json::from_str(&content).unwrap_or(Value::String(content))
+        let content = result.content();
+        serde_json::from_str(content).unwrap_or_else(|_| Value::String(content.to_string()))
     }
 
     #[tokio::test]
