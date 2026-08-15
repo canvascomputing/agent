@@ -538,7 +538,6 @@ agent = (
 | **Tickets** | `FinishTool()` | Write the result for the current ticket and mark it finished. |
 | | `TicketsTool()` | Read the ticket queue and create or edit tickets. |
 | **Knowledge** | `KnowledgeTool(store)` | Write, read, remove, or list pages in a knowledge store. |
-| **Discovery** | `FindToolsTool()` | Look up the tools held back until they are needed. |
 
 #### `FinishTool` and `KnowledgeTool`
 
@@ -565,7 +564,6 @@ You can define custom tools for specific needs with the following parameters:
 | Method | Description |
 |--------|-------------|
 | `read_only=True` | Let the agent run this tool concurrently with other read-only calls in the same turn. |
-| `defer=True` | Hold the tool back until the agent looks it up with `FindToolsTool()`. |
 | `paths=["path"]` | Name file path used for a tool call, so the files are included in statistics. |
 
 Describe the tool, then hand it the code it runs:

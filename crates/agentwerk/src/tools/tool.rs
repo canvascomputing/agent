@@ -1,10 +1,9 @@
 //! The actions agents can take, and the registry an agent's tools live in.
 
-use std::collections::HashSet;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -43,7 +42,6 @@ pub struct ToolContext {
     /// Directory the tool runs in. Resolve a relative path against it.
     pub dir: PathBuf,
     pub(crate) run: Option<Arc<Run>>,
-    pub(crate) tool_registry: Option<Arc<ToolRegistry>>,
     pub(crate) ticket_queue: Option<Arc<TicketQueue>>,
     pub(crate) agent_id: Option<String>,
     pub(crate) ticket_key: Option<String>,
@@ -51,14 +49,12 @@ pub struct ToolContext {
 }
 
 impl ToolContext {
-    /// A context rooted at `dir` that is never cancelled and knows about no
-    /// other tools. Use it standalone or in tests; agentwerk installs its own at
-    /// call time.
+    /// A context rooted at `dir` that is never cancelled. Use it standalone or
+    /// in tests; agentwerk installs its own at call time.
     pub fn new(dir: PathBuf) -> Self {
         Self {
             dir,
             run: None,
-            tool_registry: None,
             ticket_queue: None,
             agent_id: None,
             ticket_key: None,
@@ -68,11 +64,6 @@ impl ToolContext {
 
     pub(crate) fn run(mut self, run: Arc<Run>) -> Self {
         self.run = Some(run);
-        self
-    }
-
-    pub(crate) fn registry(mut self, registry: Arc<ToolRegistry>) -> Self {
-        self.tool_registry = Some(registry);
         self
     }
 
@@ -117,19 +108,12 @@ impl ToolContext {
             None => std::future::pending::<()>().await,
         }
     }
-
-    pub(crate) fn mark_tool_discovered(&self, name: &str) {
-        if let Some(registry) = self.tool_registry.as_ref() {
-            registry.mark_discovered(name);
-        }
-    }
 }
 
 impl std::fmt::Debug for ToolContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ToolContext")
             .field("dir", &self.dir)
-            .field("has_registry", &self.tool_registry.is_some())
             .field("has_ticket_queue", &self.ticket_queue.is_some())
             .finish()
     }
@@ -206,12 +190,6 @@ pub trait ToolLike: Send + Sync {
         false
     }
 
-    /// Whether the tool is held back until the agent looks it up with
-    /// `FindToolsTool`, showing only its name until then. `false` by default.
-    fn should_defer(&self) -> bool {
-        false
-    }
-
     /// The file paths this call opens, so they reach
     /// [`Stats`](crate::Stats). Empty by default.
     fn opened_paths(&self, _input: &Value) -> Vec<String> {
@@ -229,11 +207,10 @@ pub trait ToolLike: Send + Sync {
     ) -> Pin<Box<dyn Future<Output = ProviderResult<ToolResult>> + Send + 'a>>;
 }
 
-/// The tools one agent may call, plus the held-back tools it has looked up so
-/// far. A copy of the registry starts with none looked up.
+/// The tools one agent may call.
+#[derive(Clone, Default)]
 pub(crate) struct ToolRegistry {
     pub(crate) tools: Vec<Arc<dyn ToolLike>>,
-    pub(crate) discovered: Mutex<HashSet<String>>,
 }
 
 impl std::fmt::Debug for ToolRegistry {
@@ -242,15 +219,6 @@ impl std::fmt::Debug for ToolRegistry {
         f.debug_struct("ToolRegistry")
             .field("tools", &names)
             .finish()
-    }
-}
-
-impl Default for ToolRegistry {
-    fn default() -> Self {
-        Self {
-            tools: Vec::new(),
-            discovered: Mutex::new(HashSet::new()),
-        }
     }
 }
 
@@ -290,72 +258,16 @@ impl ToolRegistry {
         names
     }
 
-    pub(crate) fn mark_discovered(&self, name: &str) {
-        self.discovered.lock().unwrap().insert(name.to_string());
-    }
-
-    /// The tool definitions sent to the model. A held-back tool the agent has
-    /// not looked up yet appears as its name alone.
+    /// The tool definitions sent to the model.
     pub(crate) fn definitions(&self) -> Vec<ProviderToolDefinition> {
-        let discovered = self.discovered.lock().unwrap();
         self.tools
             .iter()
-            .map(|t| {
-                if t.should_defer() && !discovered.contains(t.name()) {
-                    ProviderToolDefinition {
-                        name: t.name().to_string(),
-                        description: String::new(),
-                        input_schema: serde_json::json!({}),
-                    }
-                } else {
-                    ProviderToolDefinition {
-                        name: t.name().to_string(),
-                        description: t.description().to_string(),
-                        input_schema: t.input_schema(),
-                    }
-                }
+            .map(|t| ProviderToolDefinition {
+                name: t.name().to_string(),
+                description: t.description().to_string(),
+                input_schema: t.input_schema(),
             })
             .collect()
-    }
-
-    /// Find tools matching a query, best match first.
-    pub(crate) fn search(&self, query: &str) -> Vec<ProviderToolDefinition> {
-        let query_lower = query.to_lowercase();
-        let mut scored: Vec<(ProviderToolDefinition, u32)> = self
-            .tools
-            .iter()
-            .filter_map(|t| {
-                let mut score = 0u32;
-                let name = t.name().to_lowercase();
-                let desc = t.description().to_lowercase();
-
-                if name == query_lower {
-                    score += 100;
-                } else if name.contains(&query_lower) {
-                    score += 50;
-                }
-
-                if desc.contains(&query_lower) {
-                    score += 25;
-                }
-
-                if score > 0 {
-                    Some((
-                        ProviderToolDefinition {
-                            name: t.name().to_string(),
-                            description: t.description().to_string(),
-                            input_schema: t.input_schema(),
-                        },
-                        score,
-                    ))
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        scored.sort_by(|a, b| b.1.cmp(&a.1));
-        scored.into_iter().map(|(def, _)| def).collect()
     }
 
     /// Run the calls, read-only ones together and the rest one at a time.
@@ -430,15 +342,6 @@ impl ToolRegistry {
     }
 }
 
-impl Clone for ToolRegistry {
-    fn clone(&self) -> Self {
-        Self {
-            tools: self.tools.clone(),
-            discovered: Mutex::new(HashSet::new()),
-        }
-    }
-}
-
 /// Reduce a tool name to the key lookups match on, so capitalization, hyphens,
 /// or a trailing `_tool` still reach the tool.
 ///
@@ -468,7 +371,6 @@ pub struct ToolBuilder<H> {
     description: String,
     schema: Value,
     read_only: bool,
-    defer: bool,
     paths: Vec<String>,
     handler: H,
 }
@@ -503,7 +405,6 @@ pub struct Tool {
     description: String,
     schema: Value,
     read_only: bool,
-    defer: bool,
     paths: Vec<String>,
     handler: ToolHandler,
 }
@@ -517,7 +418,6 @@ impl Tool {
             description: description.into(),
             schema: serde_json::json!({"type": "object", "properties": {}}),
             read_only: false,
-            defer: false,
             paths: Vec::new(),
             handler: (),
         }
@@ -548,12 +448,6 @@ impl<H> ToolBuilder<H> {
         self
     }
 
-    /// Hold the tool back until the agent looks it up with `FindToolsTool`.
-    pub fn defer(mut self, defer: bool) -> Self {
-        self.defer = defer;
-        self
-    }
-
     /// Name the input fields holding a file path, so the files a call opens are
     /// included in statistics. A field that is absent or not a string is
     /// skipped.
@@ -580,7 +474,6 @@ impl ToolBuilder<()> {
             description: self.description,
             schema: self.schema,
             read_only: self.read_only,
-            defer: self.defer,
             paths: self.paths,
             handler: Box::new(move |v, c| Box::pin(f(v, c.clone()))),
         }
@@ -595,7 +488,6 @@ impl ToolBuilder<ToolHandler> {
             description: self.description,
             schema: self.schema,
             read_only: self.read_only,
-            defer: self.defer,
             paths: self.paths,
             handler: self.handler,
         }
@@ -617,10 +509,6 @@ impl ToolLike for Tool {
 
     fn is_read_only(&self) -> bool {
         self.read_only
-    }
-
-    fn should_defer(&self) -> bool {
-        self.defer
     }
 
     fn opened_paths(&self, input: &Value) -> Vec<String> {
@@ -905,7 +793,6 @@ mod tests {
             Box::new(crate::tools::GrepTool),
             Box::new(crate::tools::ListDirectoryTool),
             Box::new(crate::tools::FetchUrlTool),
-            Box::new(crate::tools::FindToolsTool),
             Box::new(crate::tools::KnowledgeTool::new(store)),
             Box::new(crate::tools::CommandTool::new("git").allow("git *")),
             Box::new(crate::tools::FinishTool),
@@ -985,38 +872,6 @@ mod tests {
         ) -> Pin<Box<dyn Future<Output = ProviderResult<ToolResult>> + Send + 'a>> {
             let result = self.result.clone();
             Box::pin(async move { Ok(ToolResult::success(result)) })
-        }
-    }
-
-    struct DeferredMockTool {
-        name: String,
-    }
-
-    impl DeferredMockTool {
-        fn new(name: &str) -> Self {
-            Self { name: name.into() }
-        }
-    }
-
-    impl ToolLike for DeferredMockTool {
-        fn name(&self) -> &str {
-            &self.name
-        }
-        fn description(&self) -> &str {
-            "deferred mock"
-        }
-        fn input_schema(&self) -> Value {
-            serde_json::json!({"type": "object"})
-        }
-        fn should_defer(&self) -> bool {
-            true
-        }
-        fn call<'a>(
-            &'a self,
-            _input: Value,
-            _ctx: &'a ToolContext,
-        ) -> Pin<Box<dyn Future<Output = ProviderResult<ToolResult>> + Send + 'a>> {
-            Box::pin(async { Ok(ToolResult::success("ok")) })
         }
     }
 
@@ -1107,35 +962,6 @@ Do the demo thing.
         assert_eq!(defs.len(), 2);
         assert_eq!(defs[0].name, "read");
         assert_eq!(defs[1].name, "write");
-    }
-
-    #[test]
-    fn registry_definitions_deferred() {
-        let mut registry = ToolRegistry::default();
-        registry.register(MockTool::new("always_visible", true, "ok"));
-        registry.register(DeferredMockTool::new("deferred_tool"));
-
-        let defs = registry.definitions();
-        assert_eq!(defs.len(), 2);
-        let deferred = defs.iter().find(|d| d.name == "deferred_tool").unwrap();
-        assert!(deferred.description.is_empty());
-        assert_eq!(deferred.input_schema, serde_json::json!({}));
-
-        registry.mark_discovered("deferred_tool");
-        let defs = registry.definitions();
-        let deferred = defs.iter().find(|d| d.name == "deferred_tool").unwrap();
-        assert!(!deferred.description.is_empty());
-    }
-
-    #[test]
-    fn registry_search_by_name() {
-        let mut registry = ToolRegistry::default();
-        registry.register(MockTool::new("read_file", true, "ok"));
-        registry.register(MockTool::new("write_file", false, "ok"));
-
-        let results = registry.search("read");
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].name, "read_file");
     }
 
     #[test]
@@ -1255,16 +1081,6 @@ Do the demo thing.
 
         assert_eq!(tool.name(), "echo");
         assert!(tool.is_read_only());
-    }
-
-    #[test]
-    fn tool_defer_builder() {
-        let tool = Tool::new("advanced", "Advanced tool")
-            .defer(true)
-            .handler(|_input, _ctx| async { Ok(ToolResult::success("ok")) })
-            .build();
-
-        assert!(tool.should_defer());
     }
 
     // Layer 1: result-cap helpers

@@ -12,7 +12,6 @@ BUILTIN_FACTORIES = [
     aw.GlobTool,
     aw.ListDirectoryTool,
     aw.FetchUrlTool,
-    aw.FindToolsTool,
     aw.TicketsTool,
     aw.FinishTool,
 ]
@@ -46,16 +45,6 @@ def test_tool_decorator_records_name_doc_and_read_only():
     assert sample._agentwerk_name == "sample"
     assert sample._agentwerk_description == "Describe the sample."
     assert sample._agentwerk_read_only is True
-    assert sample._agentwerk_defer is False
-
-
-def test_tool_decorator_records_defer():
-    @aw.tool(defer=True)
-    def deep(query: str) -> str:
-        """Search deeply."""
-        return query
-
-    assert deep._agentwerk_defer is True
 
 
 def test_tool_decorator_records_path_fields():

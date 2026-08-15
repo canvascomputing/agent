@@ -32,7 +32,6 @@ pub(super) async fn run(context: &mut TicketContext<'_>, mut calls: Vec<ToolCall
     }
     let tool_context = ToolContext::new(context.agent.dir())
         .run(std::sync::Arc::clone(&context.run))
-        .registry(std::sync::Arc::new(context.agent.tool_registry().clone()))
         .ticket_queue(std::sync::Arc::clone(context.ticket_queue))
         .agent_id(context.agent.get_id().to_string())
         .ticket_key(context.ticket_key.clone())

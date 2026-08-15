@@ -34,7 +34,6 @@ from ._agentwerk import (
     GlobTool,
     ListDirectoryTool,
     FetchUrlTool,
-    FindToolsTool,
     KnowledgeTool,
     TicketsTool,
     FinishTool,
@@ -57,7 +56,6 @@ def tool(
     func=None,
     *,
     read_only=False,
-    defer=False,
     paths=None,
     schema=None,
     name=None,
@@ -67,9 +65,8 @@ def tool(
 
     Write ``@tool`` or ``@tool(read_only=True, schema={...})``. The name
     defaults to the function's, and the description to its docstring. The input
-    arrives as keyword arguments. ``defer`` holds the tool back until the agent
-    looks it up with ``FindToolsTool``. ``paths`` names the input fields holding
-    a file path, so the files a call opens are included in statistics.
+    arrives as keyword arguments. ``paths`` names the input fields holding a
+    file path, so the files a call opens are included in statistics.
     """
 
     def decorate(fn):
@@ -77,7 +74,6 @@ def tool(
         fn._agentwerk_name = name or fn.__name__
         fn._agentwerk_description = description or (fn.__doc__ or "").strip()
         fn._agentwerk_read_only = read_only
-        fn._agentwerk_defer = defer
         fn._agentwerk_paths = list(paths or [])
         fn._agentwerk_schema = schema if schema is not None else {"type": "object"}
         return fn
@@ -118,7 +114,6 @@ __all__ = [
     "GlobTool",
     "ListDirectoryTool",
     "FetchUrlTool",
-    "FindToolsTool",
     "KnowledgeTool",
     "TicketsTool",
     "FinishTool",
