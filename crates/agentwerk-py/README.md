@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/logo.png" width="200" />
+  <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/assets/logo.png" width="200" />
 </div>
 
 <h1 align="center">agentwerk (Python)</h1>
@@ -22,7 +22,7 @@
 ---
 
 <div align="center">
-  <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/demo.gif" width="800" />
+  <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/assets/demo.gif" width="800" />
 </div>
 <div align="center"><a href="https://github.com/canvascomputing/agentwerk/blob/main/crates/agentwerk-py/examples/apparat_fabrik.py">Apparat Fabrik</a></div>
 <div align="center"><em>agentwerk pairs "agent" with the German "Werk", a word for both factory and artwork: machinery for building agentic systems.</em></div>
@@ -87,7 +87,7 @@ asyncio.run(main())
 ## Agents
 
 <div align="left">
-  <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/agents.gif" width="600" />
+  <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/assets/agents.gif" width="600" />
 </div>
 
 An `Agent` is the core entity of agentwerk. It has access to tools for solving tasks in the form of tickets.
@@ -211,7 +211,7 @@ See [`Provider`](https://docs.rs/agentwerk/latest/agentwerk/providers/struct.Pro
 ## Tickets
 
 <div align="left">
-  <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/tickets.gif" width="600" />
+  <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/assets/tickets.gif" width="600" />
 </div>
 
 The `TicketQueue` is the core data structure of agentwerk for coordinating complex interactions.
@@ -488,7 +488,7 @@ A violated limit emits a `policy_violated` event, see [`EventKind`](https://docs
 ### Sessions
 
 <div align="left">
-  <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/sessions.gif" width="600" />
+  <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/assets/sessions.gif" width="600" />
 </div>
 
 A `TicketQueue` writes every ticket, reply, and event to its working directory (default `./.agentwerk`). You can continue a session from that directory.
@@ -521,7 +521,7 @@ tickets.start()
 ## Tools
 
 <div align="left">
-  <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/tools.gif" width="600" />
+  <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/assets/tools.gif" width="600" />
 </div>
 
 Tools allow agents to perform their work.
@@ -609,7 +609,7 @@ See [`Tool`](https://docs.rs/agentwerk/latest/agentwerk/tools/struct.Tool.html).
 ## Events
 
 <div align="left">
-  <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/events.gif" width="600" />
+  <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/assets/events.gif" width="600" />
 </div>
 
 Events allow you to inspect all activities of your agents.
@@ -731,7 +731,7 @@ See [`TicketQueue`](https://docs.rs/agentwerk/latest/agentwerk/agents/tickets/st
 ## Knowledge
 
 <div align="left">
-  <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/knowledge.gif" width="600" />
+  <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/assets/knowledge.gif" width="600" />
 </div>
 
 `Knowledge` allows agents to share insights or learnings. Knowledge pages are created in the Open Knowledge Format (OKF).
