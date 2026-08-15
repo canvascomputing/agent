@@ -4,8 +4,8 @@
 use std::sync::Arc;
 
 use crate::agents::retry::{ExponentialRetry, Retry};
-use crate::event::{CompactReason, EventKind};
-use crate::providers::types::{ResponseStatus, StreamEvent};
+use crate::event::{CompactReason, EventKind, RepairKind};
+use crate::providers::types::StreamEvent;
 use crate::providers::{ContentBlock, ModelRequest, ProviderError, ProviderToolDefinition};
 use crate::schemas::Schema;
 use crate::tools::ToolCall;
@@ -52,13 +52,13 @@ pub(super) async fn run(context: &mut TicketContext<'_>) -> Option<Step> {
                     StreamEvent::TextDelta { text, .. } => {
                         EventKind::TextChunkReceived { content: text }
                     }
-                    StreamEvent::ToolCallRecovered { tool_name } => {
-                        EventKind::ToolCallRecovered { tool_name }
-                    }
+                    StreamEvent::ToolCallRepaired { tool_name } => EventKind::ResponseRepaired {
+                        reason: RepairKind::CallMalformed,
+                        message: format!("{tool_name}: rebuilt from text"),
+                    },
                     StreamEvent::ToolCallDeclined { tool_name, reason } => {
                         EventKind::ToolCallDeclined { tool_name, reason }
                     }
-                    _ => return,
                 };
                 ticket_queue.emit(&ticket_key, &agent_id, kind);
             });
@@ -101,15 +101,10 @@ pub(super) async fn run(context: &mut TicketContext<'_>) -> Option<Step> {
         }
     };
 
-    // The overflowed reply is discarded: compaction rewrites the messages
-    // and the next request regenerates it.
-    let overflowed = response.status == ResponseStatus::ContextWindowExceeded;
-    if !overflowed {
-        context.ticket_queue.add_reply(
-            &context.ticket_key,
-            crate::agents::tickets::Reply::assistant(&response.content),
-        );
-    }
+    context.ticket_queue.add_reply(
+        &context.ticket_key,
+        crate::agents::tickets::Reply::assistant(&response.content),
+    );
 
     // Emitted after the reply lands: a handler or a `finish` filter that
     // resolves the ticket must see the reply the event announces.
@@ -117,10 +112,6 @@ pub(super) async fn run(context: &mut TicketContext<'_>) -> Option<Step> {
         model: response.model.clone(),
         usage: response.usage.clone(),
     });
-
-    if overflowed {
-        return Some(Step::Compact(CompactReason::Reactive));
-    }
 
     let calls: Vec<ToolCall> = response
         .content
@@ -151,11 +142,8 @@ fn finish_tool_with_ticket_schema(
 ) -> Vec<ProviderToolDefinition> {
     for definition in &mut tools {
         if definition.name == crate::tools::TICKET_FINISH_TOOL {
-            definition.input_schema = crate::tools::finish_tool_input_schema(
-                &definition.name,
-                definition.input_schema.clone(),
-                schema,
-            );
+            definition.input_schema =
+                crate::tools::finish_tool_input_schema(definition.input_schema.clone(), schema);
         }
     }
     tools

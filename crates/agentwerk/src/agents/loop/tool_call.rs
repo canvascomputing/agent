@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use crate::event::{EventKind, PolicyKind, ToolFailureKind};
+use crate::event::{EventKind, PolicyKind, RepairKind, ToolFailureKind};
 use crate::prompts::schema_retry_detail;
 use crate::providers::ContentBlock;
 use crate::tools::{ToolCall, ToolContext, ToolError};
@@ -19,7 +19,14 @@ pub(super) async fn run(context: &mut TicketContext<'_>, mut calls: Vec<ToolCall
     // still reports every call under the one name a handler counts by.
     for call in &mut calls {
         if let Some(tool) = context.agent.tool_registry().get(&call.name) {
-            call.name = tool.name().to_string();
+            let registered = tool.name().to_string();
+            if registered != call.name {
+                context.emit(EventKind::ResponseRepaired {
+                    reason: RepairKind::CallMalformed,
+                    message: format!("{}: resolved to {registered}", call.name),
+                });
+            }
+            call.name = registered;
         }
     }
 
@@ -159,7 +166,7 @@ mod tests {
     use crate::agents::agent::Agent;
     use crate::agents::r#loop::test_util::*;
     use crate::agents::tickets::{Status, Ticket, TicketQueue};
-    use crate::event::{EventKind, PolicyKind};
+    use crate::event::{EventKind, PolicyKind, RepairKind};
     use crate::schemas::Schema;
 
     #[tokio::test]
@@ -333,6 +340,39 @@ mod tests {
             })
             .collect();
         assert_eq!(names, vec!["finish"]);
+    }
+
+    #[tokio::test]
+    async fn a_hallucinated_tool_name_is_reported_as_a_repair() {
+        let provider = MockProvider::with_results(vec![Ok(write_result_response_named(
+            "finish_tool",
+            "done",
+        ))]);
+        let (events, _, _) = run_one(provider, 0, 3, None).await;
+
+        let repairs: Vec<(RepairKind, &str)> = events
+            .iter()
+            .filter_map(|e| match &e.kind {
+                EventKind::ResponseRepaired { reason, message } => {
+                    Some((*reason, message.as_str()))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            repairs,
+            vec![(RepairKind::CallMalformed, "finish_tool: resolved to finish")]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_tool_name_that_needed_no_folding_reports_no_repair() {
+        let provider = MockProvider::with_results(vec![Ok(write_result_response("done"))]);
+        let (events, _, _) = run_one(provider, 0, 3, None).await;
+
+        assert!(!events
+            .iter()
+            .any(|e| matches!(e.kind, EventKind::ResponseRepaired { .. })));
     }
 
     #[tokio::test]

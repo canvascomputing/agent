@@ -24,18 +24,19 @@ impl PySchema {
         Ok(PySchema { inner })
     }
 
-    /// Validate content and give back the value to keep. A value the agent
-    /// wrote as a JSON string comes back decoded. Raises on a violation.
+    /// Validate content and give back the value to keep, plus the JSON pointer
+    /// of every value it repaired. A value the agent quoted or wrote as JSON
+    /// text comes back retyped. Raises on a violation.
     fn validate<'py>(
         &self,
         py: Python<'py>,
         value: &Bound<'_, PyAny>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let kept = self
+    ) -> PyResult<(Bound<'py, PyAny>, Vec<String>)> {
+        let (kept, repaired) = self
             .inner
             .validate(py_to_value(value)?)
             .map_err(runtime_error)?;
-        value_to_py(py, &kept)
+        Ok((value_to_py(py, &kept)?, repaired))
     }
 }
 

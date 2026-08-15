@@ -10,11 +10,10 @@ use crate::agents::tickets::{Status, Ticket, TicketError, TicketQueue};
 use super::tool::{ToolContext, ToolResult};
 
 mod finish;
-mod result_shape;
 mod tickets;
 
+pub(crate) use finish::finish_tool_input_schema;
 pub use finish::FinishTool;
-pub(crate) use result_shape::finish_tool_input_schema;
 pub use tickets::TicketsTool;
 
 /// Name of the tool that finishes a ticket. The request builder matches tool
@@ -329,26 +328,6 @@ fn parse_label(input: &Value) -> Result<Option<String>, ToolResult> {
         Some(Value::String(s)) => Ok(Some(s.clone())),
         Some(Value::Null) | None => Ok(None),
         Some(_) => Err(ToolResult::error("`label` must be a string")),
-    }
-}
-
-/// Validate `result` against the ticket's schema, append an NDJSON
-/// `{ticket, result}` line to the configured results directory, attach
-/// the payload to the ticket, and transition the ticket to `Finished`.
-/// The `ticket` field is the resolved key. Called by `FinishTool` when no
-/// `handover` was requested.
-pub(super) fn write_result(
-    ticket_queue: &TicketQueue,
-    key: &str,
-    result: Value,
-    agent: &str,
-) -> ToolResult {
-    if let Err(violations) = ticket_queue.set_result(key, result) {
-        return ToolResult::schema_error(violations.to_string());
-    }
-    match ticket_queue.set_finished_by(key, agent) {
-        Ok(()) => ToolResult::success(format!("Ticket {key} marked finished")),
-        Err(e) => ToolResult::error(ticket_error_message(e)),
     }
 }
 

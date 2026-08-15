@@ -5,16 +5,18 @@
 //! kept out of the index: they matter only when implementing [`ProviderLike`].
 
 mod anthropic;
+mod endpoint;
 pub(crate) mod environment;
 mod error;
+mod framed_calls;
 mod litellm;
 mod mistral;
 pub(crate) mod model;
 mod openai;
 mod patterns;
 mod provider;
-pub(crate) mod stream;
-mod tool_calls;
+mod response_builder;
+mod stream;
 pub mod types;
 
 pub use anthropic::Anthropic;
@@ -30,66 +32,3 @@ pub use types::{
     AsUserMessage, ContentBlock, Message, ModelResponse, ResponseStatus, StreamEvent, TokenUsage,
     ToolDeclineKind,
 };
-
-pub(crate) fn retry_delay_from_headers(resp: &reqwest::Response) -> Option<std::time::Duration> {
-    let value = resp.headers().get("retry-after")?.to_str().ok()?;
-    value
-        .parse::<u64>()
-        .ok()
-        .map(std::time::Duration::from_secs)
-}
-
-/// HTTP error handler shared by every provider. Non-2xx responses are passed
-/// to the provider-specific `classify` closure, which maps recognised
-/// `(status, body)` signatures to typed [`ProviderError`] variants. Anything
-/// `classify` returns `None` for falls through: 429/529 become
-/// [`ProviderError::RateLimited`], 5xx become retryable
-/// [`ProviderError::StatusUnclassified`], and other non-2xx codes become
-/// terminal [`ProviderError::StatusUnclassified`].
-pub(crate) async fn map_http_errors<F>(
-    resp: reqwest::Response,
-    classify: F,
-) -> ProviderResult<reqwest::Response>
-where
-    F: FnOnce(u16, &str) -> Option<ProviderError>,
-{
-    let status = resp.status().as_u16();
-    if status < 400 {
-        return Ok(resp);
-    }
-    let retry_delay = retry_delay_from_headers(&resp);
-    let body = resp.text().await.unwrap_or_default();
-    if let Some(e) = classify(status, &body) {
-        return Err(e);
-    }
-    // Per-provider classifiers only recognise their own vendor's
-    // wording. When an OpenAI-compatible proxy (LiteLLM, OpenRouter,
-    // …) wraps an upstream overflow / rate-limit signal, the vendor
-    // classifier gives up. The shared pattern bank catches those
-    // wrapped errors so the agent loop sees ContextWindowExceeded /
-    // RateLimited instead of a terminal StatusUnclassified.
-    if let Some(e) = patterns::refine(status, &body, retry_delay) {
-        return Err(e);
-    }
-    Err(fallback_http_error(status, body, retry_delay))
-}
-
-fn fallback_http_error(
-    status: u16,
-    body: String,
-    retry_delay: Option<std::time::Duration>,
-) -> ProviderError {
-    match status {
-        429 | 529 => ProviderError::RateLimited {
-            message: body,
-            status,
-            retry_delay,
-        },
-        _ => ProviderError::StatusUnclassified {
-            status,
-            message: body,
-            retryable: matches!(status, 500 | 502 | 503 | 504),
-            retry_delay,
-        },
-    }
-}

@@ -1,146 +1,141 @@
 //! Reads Server-Sent Events from an LLM provider, reassembling whole `data:`
-//! events however the bytes arrive, and decodes the arguments of the tool calls
-//! they carry.
+//! events however the bytes arrive.
 
 use serde_json::Value;
 
-/// Parse a tool call's accumulated `arguments` into JSON. An empty string is a
-/// no-argument call (`{}`); a non-empty but unparseable string is kept verbatim
-/// so the schema decode reports the real problem, not a fabricated `{}`.
-pub(crate) fn parse_tool_arguments(arguments: String) -> Value {
-    if arguments.trim().is_empty() {
-        return Value::Object(Default::default());
+use super::error::{ProviderError, ProviderResult};
+
+/// Read an SSE response to its end, handing every `data:` JSON payload to
+/// `ingest`.
+pub(crate) async fn for_each_data(
+    mut response: reqwest::Response,
+    mut ingest: impl FnMut(&Value),
+) -> ProviderResult<()> {
+    let mut parser = StreamParser::new();
+    while let Some(chunk) =
+        response
+            .chunk()
+            .await
+            .map_err(|error| ProviderError::StreamInterrupted {
+                message: error.to_string(),
+            })?
+    {
+        for payload in parser.push(&chunk) {
+            ingest(&payload);
+        }
     }
-    serde_json::from_str(&arguments).unwrap_or(Value::String(arguments))
+    Ok(())
 }
 
-/// A parsed stream event.
-pub(crate) enum SseEvent {
-    Data(Value),
-    Done,
-}
-
-/// Line-buffered SSE parser. Feed raw bytes via `push()`, get parsed events back.
-pub(crate) struct StreamParser {
-    buffer: String,
+/// Line-buffered SSE parser. Feed raw bytes via `push()`, get `data:` payloads
+/// back. Holds bytes rather than text because a chunk may end partway through
+/// a multi-byte character.
+struct StreamParser {
+    buffer: Vec<u8>,
 }
 
 impl StreamParser {
-    pub(crate) fn new() -> Self {
-        Self {
-            buffer: String::new(),
-        }
+    fn new() -> Self {
+        Self { buffer: Vec::new() }
     }
 
-    /// Feed a chunk of bytes and return all complete SSE events found.
-    pub(crate) fn push(&mut self, chunk: &[u8]) -> Vec<SseEvent> {
-        self.buffer.push_str(&String::from_utf8_lossy(chunk));
-
-        let mut events = Vec::new();
-        while let Some(newline_pos) = self.buffer.find('\n') {
-            let line = self.buffer[..newline_pos].trim().to_string();
-            self.buffer = self.buffer[newline_pos + 1..].to_string();
-
-            if line.is_empty() {
-                continue;
-            }
-            let Some(data) = line.strip_prefix("data: ") else {
-                continue;
-            };
-            if data == "[DONE]" {
-                events.push(SseEvent::Done);
-                continue;
-            }
-            if let Ok(json) = serde_json::from_str::<Value>(data) {
-                events.push(SseEvent::Data(json));
-            }
-        }
-        events
+    /// Feed a chunk of bytes and return the payload of every complete `data:`
+    /// line found.
+    fn push(&mut self, chunk: &[u8]) -> Vec<Value> {
+        self.buffer.extend_from_slice(chunk);
+        let Some(last_newline) = self.buffer.iter().rposition(|&byte| byte == b'\n') else {
+            return Vec::new();
+        };
+        let payloads = self.buffer[..last_newline]
+            .split(|&byte| byte == b'\n')
+            .filter_map(data_payload)
+            .collect();
+        self.buffer.drain(..=last_newline);
+        payloads
     }
+}
+
+/// The JSON payload of one `data:` line; `None` for other lines and malformed
+/// JSON. The space after the colon is optional, and an endpoint that omits it
+/// would otherwise stream a reply that parses to nothing at all. The `[DONE]`
+/// sentinel some endpoints close with says only that the stream is over, which
+/// the response ending says too.
+fn data_payload(line: &[u8]) -> Option<Value> {
+    let line = String::from_utf8_lossy(line);
+    let data = line.trim().strip_prefix("data:")?.trim_start();
+    if data == "[DONE]" {
+        return None;
+    }
+    serde_json::from_str(data).ok()
 }
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
 
     #[test]
-    fn parse_tool_arguments_parses_valid_json_object() {
-        let input = parse_tool_arguments(r#"{"pattern":"foo"}"#.into());
-        assert_eq!(input, serde_json::json!({"pattern": "foo"}));
-    }
-
-    #[test]
-    fn parse_tool_arguments_empty_string_is_no_args_object() {
-        assert_eq!(parse_tool_arguments(String::new()), serde_json::json!({}));
-        assert_eq!(parse_tool_arguments("   ".into()), serde_json::json!({}));
-    }
-
-    #[test]
-    fn parse_tool_arguments_keeps_malformed_string_verbatim() {
-        let raw = r#"{"pattern": "foo""#;
-        assert_eq!(parse_tool_arguments(raw.into()), Value::String(raw.into()));
-    }
-
-    #[test]
-    fn parse_data_line() {
+    fn a_data_line_yields_its_json_payload() {
         let mut parser = StreamParser::new();
-        let events = parser.push(b"data: {\"type\":\"ping\"}\n\n");
-        assert_eq!(events.len(), 1);
-        match &events[0] {
-            SseEvent::Data(v) => assert_eq!(v["type"], "ping"),
-            SseEvent::Done => panic!("Expected Data"),
-        }
+        let payloads = parser.push(b"data: {\"type\":\"ping\"}\n\n");
+        assert_eq!(payloads, [json!({"type": "ping"})]);
     }
 
     #[test]
-    fn parse_done_sentinel() {
+    fn a_data_line_without_a_space_yields_its_json_payload() {
         let mut parser = StreamParser::new();
-        let events = parser.push(b"data: [DONE]\n\n");
-        assert_eq!(events.len(), 1);
-        assert!(matches!(events[0], SseEvent::Done));
+        let payloads = parser.push(b"data:{\"type\":\"ping\"}\n\n");
+        assert_eq!(payloads, [json!({"type": "ping"})]);
     }
 
     #[test]
-    fn ignore_non_data_lines() {
+    fn the_done_sentinel_yields_no_payload() {
         let mut parser = StreamParser::new();
-        let events = parser.push(b"event: message_start\n: comment\n\n");
-        assert!(events.is_empty());
+        assert!(parser.push(b"data: [DONE]\n\n").is_empty());
     }
 
     #[test]
-    fn buffer_split_lines() {
+    fn non_data_lines_are_ignored() {
+        let mut parser = StreamParser::new();
+        assert!(parser
+            .push(b"event: message_start\n: comment\n\n")
+            .is_empty());
+    }
+
+    #[test]
+    fn a_line_split_across_chunks_is_reassembled() {
         let mut parser = StreamParser::new();
 
-        let events = parser.push(b"data: {\"type\":\"pi");
-        assert!(events.is_empty());
+        assert!(parser.push(b"data: {\"type\":\"pi").is_empty());
 
-        let events = parser.push(b"ng\"}\n\n");
-        assert_eq!(events.len(), 1);
-        match &events[0] {
-            SseEvent::Data(v) => assert_eq!(v["type"], "ping"),
-            SseEvent::Done => panic!("Expected Data"),
-        }
+        let payloads = parser.push(b"ng\"}\n\n");
+        assert_eq!(payloads, [json!({"type": "ping"})]);
     }
 
     #[test]
-    fn burst_events() {
+    fn a_character_split_across_chunks_is_reassembled() {
+        let mut parser = StreamParser::new();
+        let line = "data: {\"text\":\"é\"}\n".as_bytes();
+        let mid_character = line.len() - 4;
+
+        assert!(parser.push(&line[..mid_character]).is_empty());
+
+        let payloads = parser.push(&line[mid_character..]);
+        assert_eq!(payloads, [json!({"text": "é"})]);
+    }
+
+    #[test]
+    fn one_chunk_can_hold_many_payloads() {
         let mut parser = StreamParser::new();
         let chunk = b"data: {\"a\":1}\n\ndata: {\"a\":2}\n\ndata: [DONE]\n\n";
-        let events = parser.push(chunk);
-        assert_eq!(events.len(), 3);
-        assert!(matches!(&events[0], SseEvent::Data(v) if v["a"] == 1));
-        assert!(matches!(&events[1], SseEvent::Data(v) if v["a"] == 2));
-        assert!(matches!(events[2], SseEvent::Done));
+        assert_eq!(parser.push(chunk), [json!({"a": 1}), json!({"a": 2})]);
     }
 
     #[test]
-    fn skip_malformed_json() {
+    fn malformed_json_is_skipped() {
         let mut parser = StreamParser::new();
-        let events = parser.push(b"data: not-json\ndata: {\"ok\":true}\n\n");
-        assert_eq!(events.len(), 1);
-        match &events[0] {
-            SseEvent::Data(v) => assert_eq!(v["ok"], true),
-            SseEvent::Done => panic!("Expected Data"),
-        }
+        let payloads = parser.push(b"data: not-json\ndata: {\"ok\":true}\n\n");
+        assert_eq!(payloads, [json!({"ok": true})]);
     }
 }

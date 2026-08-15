@@ -1,7 +1,6 @@
 //! OpenAI's Chat Completions API. The `mistral` and `litellm` providers send
 //! the same shape to a different base URL.
 
-use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -9,17 +8,17 @@ use std::time::Duration;
 
 use serde_json::Value;
 
+use super::endpoint::Endpoint;
 use super::error::{ProviderError, ProviderResult};
-use super::provider::{
-    build_client, ModelRequest, ProviderLike, ProviderToolDefinition, ToolChoice,
-    DEFAULT_REQUEST_TIMEOUT,
-};
-use super::stream::{parse_tool_arguments, SseEvent, StreamParser};
-use super::tool_calls;
-use super::types::{ContentBlock, Message, ModelResponse, ResponseStatus, StreamEvent, TokenUsage};
+use super::framed_calls;
+use super::provider::{ModelRequest, ProviderLike, ProviderToolDefinition, ToolChoice};
+use super::response_builder::{assemble, ResponseBuilder};
+use super::types::{ContentBlock, Message, ModelResponse, ResponseStatus, StreamEvent};
+
+const DEFAULT_BASE_URL: &str = "https://api.openai.com";
 
 /// LLM provider for the OpenAI Chat Completions API and any compatible
-/// endpoint that speaks the same wire format.
+/// endpoint that accepts the same request shape.
 ///
 /// Reads `OPENAI_API_KEY` (and optional `OPENAI_BASE_URL`) when built via
 /// [`Provider::from_env`]. Override the endpoint with [`base_url`] and the
@@ -46,177 +45,77 @@ use super::types::{ContentBlock, Message, ModelResponse, ResponseStatus, StreamE
 /// [`Provider::from_env`]: crate::providers::Provider::from_env
 /// [`base_url`]: OpenAi::base_url
 /// [`timeout`]: OpenAi::timeout
-pub struct OpenAi {
-    api_key: String,
-    base_url: String,
-    client: reqwest::Client,
-    timeout: Duration,
-}
+pub struct OpenAi(Endpoint);
 
 impl OpenAi {
     pub fn new(api_key: impl Into<String>) -> Self {
-        Self::raw(api_key, "https://api.openai.com")
-    }
-
-    /// Raw constructor used by sibling provider modules (`mistral`, `litellm`)
-    /// to build an `OpenAi` pointed at their own endpoint. Not part of the
-    /// public API.
-    pub(crate) fn raw(api_key: impl Into<String>, base_url: &str) -> Self {
-        Self {
-            api_key: api_key.into(),
-            base_url: base_url.into(),
-            client: build_client(DEFAULT_REQUEST_TIMEOUT),
-            timeout: DEFAULT_REQUEST_TIMEOUT,
-        }
+        Self(Endpoint::new(api_key, DEFAULT_BASE_URL))
     }
 
     pub fn base_url(mut self, url: impl Into<String>) -> Self {
-        self.base_url = url.into();
+        self.0 = self.0.base_url(url);
         self
     }
 
-    pub fn timeout(mut self, d: Duration) -> Self {
-        self.timeout = d;
-        self.client = build_client(self.timeout);
+    pub fn timeout(mut self, duration: Duration) -> Self {
+        self.0 = self.0.timeout(duration);
         self
-    }
-
-    #[cfg(test)]
-    pub(crate) fn request_timeout(&self) -> Duration {
-        self.timeout
     }
 
     pub(crate) fn from_env() -> ProviderResult<Self> {
         use super::environment::{env_or, env_required};
         Ok(Self::new(env_required("OPENAI_API_KEY")?)
-            .base_url(env_or("OPENAI_BASE_URL", "https://api.openai.com")))
-    }
-}
-
-impl OpenAi {
-    pub(crate) fn lookup_context_window_size(id: &str) -> Option<u64> {
-        let m = id.to_ascii_lowercase();
-        // Newest first so "gpt-4" doesn't shadow "gpt-4.1".
-        if m.contains("gpt-4.1") {
-            return Some(1_000_000);
-        }
-        if m.contains("gpt-5") {
-            // 400K covers mini/nano; full/pro reach ~1M but we pick the family floor.
-            return Some(400_000);
-        }
-        if m.starts_with("o3") || m.starts_with("o1") {
-            return Some(200_000);
-        }
-        if m.contains("gpt-4o") || m.contains("gpt-4-turbo") {
-            return Some(128_000);
-        }
-        if m.contains("gpt-4-32k") {
-            return Some(32_768);
-        }
-        if m.contains("gpt-4") {
-            return Some(8_192);
-        }
-        if m.contains("gpt-3.5-turbo") {
-            return Some(16_385);
-        }
-        // Qwen (Alibaba) is routinely served via OpenAI-compatible endpoints
-        // (vLLM, Ollama, LiteLLM), so its lookup lives here. Values are the
-        // published *native* windows; deployments that disable YaRN or
-        // configure a shorter `max_model_len` should override via
-        // `Agent::model(Model::from_name(name).context_window(n))`.
-        // Newest first so "qwen3" doesn't shadow "qwen3.5" / "qwen3.6".
-        if m.contains("qwen3.6") || m.contains("qwen3.5") {
-            return Some(262_144);
-        }
-        if m.contains("qwen3-coder") || m.contains("qwen3-next") {
-            return Some(262_144);
-        }
-        if m.contains("-2507") && m.contains("qwen3") {
-            return Some(262_144);
-        }
-        if m.contains("qwen3") {
-            return Some(131_072);
-        }
-        if m.contains("qwen2.5") {
-            // Qwen2.5 "1M" variants (e.g. Qwen2.5-7B-Instruct-1M) are a
-            // separate release with a 1M-token native window.
-            if m.contains("-1m") {
-                return Some(1_000_000);
-            }
-            return Some(32_768);
-        }
-        None
+            .base_url(env_or("OPENAI_BASE_URL", DEFAULT_BASE_URL)))
     }
 }
 
 impl ProviderLike for OpenAi {
-    fn prewarm(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
-        Box::pin(async { super::provider::prewarm_with(&self.client, &self.base_url).await })
-    }
-
     fn respond(
         &self,
         request: ModelRequest,
         on_event: Arc<dyn Fn(StreamEvent) + Send + Sync>,
     ) -> Pin<Box<dyn Future<Output = ProviderResult<ModelResponse>> + Send + '_>> {
-        let mut body = serialize_request(&request);
-        body["stream"] = Value::Bool(true);
-        body["stream_options"] = serde_json::json!({"include_usage": true});
-        let url = format!("{}/v1/chat/completions", self.base_url);
-
-        Box::pin(async move {
-            let resp = self.send_raw(&url, body).await?;
-            let mut response = stream_response(resp, &on_event).await?;
-            tool_calls::repair(&mut response, &request.tools, &on_event);
-            Ok(response)
-        })
+        respond(&self.0, request, on_event)
     }
 }
 
-impl OpenAi {
-    async fn send_raw(&self, url: &str, body: Value) -> ProviderResult<reqwest::Response> {
-        let resp = self
-            .client
-            .post(url)
-            .header("authorization", format!("Bearer {}", self.api_key))
-            .header("content-type", "application/json")
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| ProviderError::ConnectionFailed {
-                message: e.to_string(),
-            })?;
+/// Run one turn against an OpenAI-compatible endpoint. The sibling providers
+/// (`mistral`, `litellm`) speak the same shape, so they answer through here
+/// rather than owning an [`OpenAi`] of their own.
+pub(super) fn respond(
+    endpoint: &Endpoint,
+    request: ModelRequest,
+    on_event: Arc<dyn Fn(StreamEvent) + Send + Sync>,
+) -> Pin<Box<dyn Future<Output = ProviderResult<ModelResponse>> + Send + '_>> {
+    let mut body = serialize_request(&request);
+    body["stream"] = Value::Bool(true);
+    body["stream_options"] = serde_json::json!({"include_usage": true});
 
-        super::map_http_errors(resp, classify_error).await
-    }
+    Box::pin(async move {
+        let posted = endpoint
+            .post("/v1/chat/completions", &body)
+            .bearer_auth(endpoint.api_key());
+        let http_response = endpoint.send(posted, classify_error).await?;
+        let mut response = assemble(http_response, &on_event, ingest_chunk).await?;
+        framed_calls::repair(&mut response, &request.tools, &on_event);
+        Ok(response)
+    })
 }
 
-/// Map OpenAI-compatible error signatures to typed [`ProviderError`]
-/// variants. Covers the OpenAI shape and the subset of it that LiteLLM /
-/// Mistral reproduce (where `error.code` may be absent, so the message
-/// text is the fallback signal).
+/// Map OpenAI-compatible 400 bodies to typed [`ProviderError`] variants.
+/// Covers the OpenAI shape and the subset of it that LiteLLM / Mistral
+/// reproduce (where `error.code` may be absent, so the message text is the
+/// fallback signal). Statuses every vendor reports the same way are mapped
+/// by `Endpoint::send` itself.
 fn classify_error(status: u16, body: &str) -> Option<ProviderError> {
-    match status {
-        401 => Some(ProviderError::AuthenticationFailed {
-            message: body.into(),
-        }),
-        403 => Some(ProviderError::PermissionDenied {
-            message: body.into(),
-        }),
-        404 => Some(ProviderError::ModelNotFound {
-            message: body.into(),
-        }),
-        400 => classify_400(body),
-        _ => None,
+    if status != 400 {
+        return None;
     }
-}
-
-fn classify_400(body: &str) -> Option<ProviderError> {
     let json: Value = serde_json::from_str(body).ok()?;
-    let err = &json["error"];
-    let code = err["code"].as_str().unwrap_or("");
-    let type_ = err["type"].as_str().unwrap_or("");
-    let message = err["message"].as_str().unwrap_or("").to_string();
+    let error = &json["error"];
+    let code = error["code"].as_str().unwrap_or("");
+    let type_ = error["type"].as_str().unwrap_or("");
+    let message = error["message"].as_str().unwrap_or("").to_string();
 
     let is_context_window = code == "context_length_exceeded"
         || type_ == "exceed_context_size_error"
@@ -230,197 +129,6 @@ fn classify_400(body: &str) -> Option<ProviderError> {
         "content_filter" => Some(ProviderError::SafetyFilterTriggered { message }),
         _ => None,
     }
-}
-
-async fn stream_response(
-    mut response: reqwest::Response,
-    on_event: &Arc<dyn Fn(StreamEvent) + Send + Sync>,
-) -> ProviderResult<ModelResponse> {
-    let mut state = StreamState::default();
-    let mut parser = StreamParser::new();
-
-    while let Some(chunk) =
-        response
-            .chunk()
-            .await
-            .map_err(|e| ProviderError::StreamInterrupted {
-                message: e.to_string(),
-            })?
-    {
-        for event in parser.push(&chunk) {
-            match event {
-                SseEvent::Done => on_event(StreamEvent::MessageDone),
-                SseEvent::Data(json) => ingest_chunk(&json, &mut state, on_event),
-            }
-        }
-    }
-
-    on_event(StreamEvent::MessageDelta {
-        status: state.status.clone(),
-        usage: state.usage.clone(),
-    });
-    Ok(state.into_response())
-}
-
-#[derive(Default)]
-struct ToolCallAccumulator {
-    id: String,
-    name: String,
-    arguments: String,
-}
-
-#[derive(Default)]
-struct StreamState {
-    reasoning: String,
-    text: String,
-    tool_calls: HashMap<usize, ToolCallAccumulator>,
-    status: ResponseStatus,
-    usage: TokenUsage,
-    model: String,
-}
-
-impl StreamState {
-    fn into_response(self) -> ModelResponse {
-        let mut content = Vec::new();
-        // Reasoning precedes the visible answer, matching the order the model
-        // produced it. The signature is empty: these endpoints stream no replay
-        // token, and the reasoning is not echoed back on the next turn.
-        if !self.reasoning.is_empty() {
-            content.push(ContentBlock::Thinking {
-                thinking: self.reasoning,
-                signature: String::new(),
-            });
-        }
-        if !self.text.is_empty() {
-            content.push(ContentBlock::Text { text: self.text });
-        }
-        let mut sorted: Vec<_> = self.tool_calls.into_iter().collect();
-        sorted.sort_by_key(|(idx, _)| *idx);
-        for (_, acc) in sorted {
-            content.push(ContentBlock::ToolUse {
-                id: acc.id,
-                name: acc.name,
-                input: parse_tool_arguments(acc.arguments),
-            });
-        }
-        ModelResponse {
-            content,
-            status: self.status,
-            usage: self.usage,
-            model: if self.model.is_empty() {
-                "unknown".into()
-            } else {
-                self.model
-            },
-        }
-    }
-}
-
-fn ingest_chunk(
-    json: &Value,
-    state: &mut StreamState,
-    on_event: &Arc<dyn Fn(StreamEvent) + Send + Sync>,
-) {
-    if let Some(m) = json["model"].as_str() {
-        state.model = m.to_string();
-    }
-    let choice = &json["choices"][0];
-    update_reasoning(&choice["delta"], state);
-    update_text(&choice["delta"], state, on_event);
-    update_tool_calls(&choice["delta"], state, on_event);
-    if let Some(reason) = choice["finish_reason"].as_str() {
-        state.status = parse_status_str(reason);
-    }
-    if let Some(u) = json.get("usage").filter(|u| !u.is_null()) {
-        parse_streaming_usage(u, &mut state.usage);
-    }
-}
-
-/// Accumulate a reasoning delta. Endpoints disagree on the field name:
-/// `reasoning_content` (deepseek, qwen, llama.cpp) and `reasoning` (other
-/// OpenAI-compatible proxies) both appear; take whichever is present.
-fn update_reasoning(delta: &Value, state: &mut StreamState) {
-    let reasoning = delta["reasoning_content"]
-        .as_str()
-        .or_else(|| delta["reasoning"].as_str())
-        .filter(|s| !s.is_empty());
-    if let Some(reasoning) = reasoning {
-        state.reasoning.push_str(reasoning);
-    }
-}
-
-fn update_text(
-    delta: &Value,
-    state: &mut StreamState,
-    on_event: &Arc<dyn Fn(StreamEvent) + Send + Sync>,
-) {
-    let Some(content) = delta["content"].as_str().filter(|s| !s.is_empty()) else {
-        return;
-    };
-    state.text.push_str(content);
-    on_event(StreamEvent::TextDelta {
-        index: 0,
-        text: content.to_string(),
-    });
-}
-
-fn update_tool_calls(
-    delta: &Value,
-    state: &mut StreamState,
-    on_event: &Arc<dyn Fn(StreamEvent) + Send + Sync>,
-) {
-    /// Pick which in-flight call a fragment belongs to. Defaulting a missing
-    /// index to 0 would splice a parallel call's arguments into the first call.
-    fn call_index(call: &Value, open: &HashMap<usize, ToolCallAccumulator>) -> usize {
-        if let Some(index) = call["index"].as_u64() {
-            return index as usize;
-        }
-        let Some(id) = call["id"].as_str().filter(|id| !id.is_empty()) else {
-            return open.keys().max().copied().unwrap_or(0);
-        };
-        match open.iter().find(|(_, acc)| acc.id == id) {
-            Some((slot, _)) => *slot,
-            None => open.len(),
-        }
-    }
-
-    let Some(calls) = delta["tool_calls"].as_array() else {
-        return;
-    };
-    for call in calls {
-        let idx = call_index(call, &state.tool_calls);
-        let acc = state.tool_calls.entry(idx).or_default();
-        if let Some(id) = call["id"].as_str() {
-            acc.id = id.to_string();
-        }
-        if let Some(name) = call["function"]["name"].as_str() {
-            acc.name = name.to_string();
-        }
-        if let Some(args) = call["function"]["arguments"].as_str() {
-            // Some endpoints re-send the whole payload after streaming a prefix
-            // of it; appending would leave `prefix + full`, parsing as neither.
-            let resent = !acc.arguments.is_empty() && args.starts_with(acc.arguments.as_str());
-            let delta = if resent {
-                let unseen = args[acc.arguments.len()..].to_string();
-                acc.arguments = args.to_string();
-                unseen
-            } else {
-                acc.arguments.push_str(args);
-                args.to_string()
-            };
-            if !delta.is_empty() {
-                on_event(StreamEvent::InputJsonDelta {
-                    index: idx,
-                    partial_json: delta,
-                });
-            }
-        }
-    }
-}
-
-fn parse_streaming_usage(u: &Value, dst: &mut TokenUsage) {
-    dst.input_tokens = u["prompt_tokens"].as_u64().unwrap_or(0);
-    dst.output_tokens = u["completion_tokens"].as_u64().unwrap_or(0);
 }
 
 fn serialize_request(request: &ModelRequest) -> Value {
@@ -460,24 +168,21 @@ fn serialize_messages(request: &ModelRequest) -> Vec<Value> {
         }));
     }
 
-    for msg in &request.messages {
-        match msg {
+    for message in &request.messages {
+        match message {
             Message::System { content } => {
                 messages.push(serde_json::json!({"role": "system", "content": content}));
             }
-            Message::User { content } => {
-                serialize_user_blocks(content, &mut messages);
-            }
-            Message::Assistant { content } => {
-                messages.push(serialize_assistant_message(content));
-            }
+            Message::User { content } => messages.extend(serialize_user_blocks(content)),
+            Message::Assistant { content } => messages.push(serialize_assistant_message(content)),
         }
     }
 
     messages
 }
 
-fn serialize_user_blocks(blocks: &[ContentBlock], messages: &mut Vec<Value>) {
+fn serialize_user_blocks(blocks: &[ContentBlock]) -> Vec<Value> {
+    let mut messages = Vec::new();
     let mut text_parts = Vec::new();
 
     for block in blocks {
@@ -504,6 +209,8 @@ fn serialize_user_blocks(blocks: &[ContentBlock], messages: &mut Vec<Value>) {
             "content": text_parts.join("\n"),
         }));
     }
+
+    messages
 }
 
 fn serialize_assistant_message(blocks: &[ContentBlock]) -> Value {
@@ -521,21 +228,21 @@ fn serialize_assistant_message(blocks: &[ContentBlock]) -> Value {
                 }));
             }
             // Reasoning is regenerated each turn on these endpoints, so it is
-            // kept in the transcript but not sent back in the assistant message.
+            // kept in the replies but not sent back in the assistant message.
             ContentBlock::Thinking { .. } | ContentBlock::RedactedThinking { .. } => {}
             ContentBlock::ToolResult { .. } => {}
         }
     }
 
-    let content_str = text_parts.join("\n");
-    let mut msg = serde_json::json!({
+    let content = text_parts.join("\n");
+    let mut message = serde_json::json!({
         "role": "assistant",
-        "content": if content_str.is_empty() { Value::Null } else { Value::String(content_str) },
+        "content": if content.is_empty() { Value::Null } else { Value::String(content) },
     });
     if !tool_calls.is_empty() {
-        msg["tool_calls"] = Value::Array(tool_calls);
+        message["tool_calls"] = Value::Array(tool_calls);
     }
-    msg
+    message
 }
 
 fn serialize_tool_definition(tool: &ProviderToolDefinition) -> Value {
@@ -558,7 +265,57 @@ fn serialize_tool_choice(choice: &ToolChoice) -> Value {
     }
 }
 
-fn parse_status_str(raw: &str) -> ResponseStatus {
+fn ingest_chunk(json: &Value, reply: &mut ResponseBuilder) {
+    if let Some(model) = json["model"].as_str() {
+        reply.set_model(model);
+    }
+
+    let choice = &json["choices"][0];
+    let delta = &choice["delta"];
+    accumulate_reasoning(delta, reply);
+    if let Some(text) = delta["content"].as_str() {
+        reply.add_text(text);
+    }
+    accumulate_tool_calls(delta, reply);
+
+    if let Some(reason) = choice["finish_reason"].as_str() {
+        reply.set_status(status_from_finish_reason(reason));
+    }
+    if let Some(usage) = json.get("usage").filter(|usage| !usage.is_null()) {
+        reply.set_input_tokens(usage["prompt_tokens"].as_u64().unwrap_or(0));
+        reply.set_output_tokens(usage["completion_tokens"].as_u64().unwrap_or(0));
+    }
+}
+
+/// Accumulate a reasoning delta. Endpoints disagree on the field name:
+/// `reasoning_content` (deepseek, qwen, llama.cpp) and `reasoning` (other
+/// OpenAI-compatible proxies) both appear; take whichever is present.
+fn accumulate_reasoning(delta: &Value, reply: &mut ResponseBuilder) {
+    let fragment = ["reasoning_content", "reasoning"]
+        .into_iter()
+        .find_map(|field| delta[field].as_str().filter(|text| !text.is_empty()));
+    if let Some(fragment) = fragment {
+        reply.add_thinking(fragment);
+    }
+}
+
+fn accumulate_tool_calls(delta: &Value, reply: &mut ResponseBuilder) {
+    let Some(calls) = delta["tool_calls"].as_array() else {
+        return;
+    };
+    for call in calls {
+        let numbered = call["index"].as_u64().map(|index| index as usize);
+        let function = &call["function"];
+        let key = reply.open_tool_call(
+            numbered,
+            call["id"].as_str().unwrap_or(""),
+            function["name"].as_str().unwrap_or(""),
+        );
+        reply.add_arguments(key, function["arguments"].as_str().unwrap_or(""));
+    }
+}
+
+fn status_from_finish_reason(raw: &str) -> ResponseStatus {
     match raw {
         "stop" => ResponseStatus::EndTurn,
         "tool_calls" => ResponseStatus::ToolUse,
@@ -570,27 +327,35 @@ fn parse_status_str(raw: &str) -> ResponseStatus {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex;
-
     use super::*;
     use crate::providers::ReasoningEffort;
 
+    /// Feed `chunks` through the decoder, returning the blocks they assemble.
+    fn ingest_all(chunks: &[Value]) -> Vec<ContentBlock> {
+        decode(chunks).content
+    }
+
+    fn decode(chunks: &[Value]) -> ModelResponse {
+        let sink: Arc<dyn Fn(StreamEvent) + Send + Sync> = Arc::new(|_| {});
+        let mut reply = ResponseBuilder::new(&sink);
+        for chunk in chunks {
+            ingest_chunk(chunk, &mut reply);
+        }
+        reply
+            .into_response()
+            .expect("a reply that did not overflow")
+    }
+
     #[test]
     fn parses_reasoning_content_into_thinking_before_text() {
-        let mut state = StreamState::default();
-        let sink: Arc<dyn Fn(StreamEvent) + Send + Sync> = Arc::new(|_| {});
-        ingest_chunk(
-            &serde_json::json!({"choices":[{"delta":{"reasoning_content":"let me think"}}]}),
-            &mut state,
-            &sink,
-        );
-        ingest_chunk(
-            &serde_json::json!({"choices":[{"delta":{"content":"the answer"}}]}),
-            &mut state,
-            &sink,
-        );
+        let content = ingest_all(&[
+            serde_json::json!({"choices":[{"delta":{"reasoning_content":"let me think"}}]}),
+            serde_json::json!({"choices":[{"delta":{"content":"the answer"}}]}),
+        ]);
+        // The signature is empty: these endpoints stream no replay token, and
+        // the reasoning is not echoed back on the next turn.
         assert!(matches!(
-            &state.into_response().content[..],
+            &content[..],
             [ContentBlock::Thinking { thinking, signature }, ContentBlock::Text { text }]
                 if thinking == "let me think" && signature.is_empty() && text == "the answer"
         ));
@@ -598,116 +363,97 @@ mod tests {
 
     #[test]
     fn parses_reasoning_field_alias() {
-        let mut state = StreamState::default();
-        let sink: Arc<dyn Fn(StreamEvent) + Send + Sync> = Arc::new(|_| {});
-        ingest_chunk(
-            &serde_json::json!({"choices":[{"delta":{"reasoning":"alt field"}}]}),
-            &mut state,
-            &sink,
-        );
+        let content =
+            ingest_all(&[serde_json::json!({"choices":[{"delta":{"reasoning":"alt field"}}]})]);
         assert!(matches!(
-            &state.into_response().content[..],
+            &content[..],
             [ContentBlock::Thinking { thinking, .. }] if thinking == "alt field"
         ));
     }
 
-    /// Feed `chunks` through `ingest_chunk`, returning the finished blocks and
-    /// every `partial_json` the stream emitted.
-    fn ingest_all(chunks: &[Value]) -> (Vec<ContentBlock>, Vec<String>) {
-        let deltas = Arc::new(Mutex::new(Vec::new()));
-        let collected = Arc::clone(&deltas);
-        let sink: Arc<dyn Fn(StreamEvent) + Send + Sync> = Arc::new(move |event| {
-            if let StreamEvent::InputJsonDelta { partial_json, .. } = event {
-                collected.lock().unwrap().push(partial_json);
-            }
-        });
-        let mut state = StreamState::default();
-        for chunk in chunks {
-            ingest_chunk(chunk, &mut state, &sink);
-        }
-        let emitted = deltas.lock().unwrap().clone();
-        (state.into_response().content, emitted)
+    #[test]
+    fn an_empty_reasoning_field_falls_through_to_the_other_name() {
+        let content = ingest_all(&[serde_json::json!({"choices":[{"delta":{
+            "reasoning_content": "", "reasoning": "weighing it up",
+        }}]})]);
+        assert!(matches!(
+            &content[..],
+            [ContentBlock::Thinking { thinking, .. }] if thinking == "weighing it up"
+        ));
     }
-
-    fn arguments_chunk(index: u64, arguments: &str) -> Value {
-        serde_json::json!({"choices":[{"delta":{"tool_calls":[
-            {"index": index, "function": {"arguments": arguments}}
-        ]}}]})
-    }
-
-    /// Verbatim from a cortecs.ai reply: a streamed prefix, then the whole
-    /// payload again in the next chunk.
-    const RESENT_PREFIX: &str = r#"{"pattern": "__import__""#;
-    const RESENT_FULL: &str =
-        r#"{"pattern": "__import__", "output_mode": "content", "type": "py"}"#;
 
     #[test]
-    fn resent_argument_payload_replaces_the_streamed_prefix() {
-        let (content, _) = ingest_all(&[
+    fn reasoning_returning_after_text_opens_a_second_thinking_block() {
+        // The blocks record the order the chunks arrived in, so a proxy that
+        // interleaves the two streams is reported as it answered.
+        let content = ingest_all(&[
+            serde_json::json!({"choices":[{"delta":{"reasoning_content":"weighing it"}}]}),
+            serde_json::json!({"choices":[{"delta":{"content":"first"}}]}),
+            serde_json::json!({"choices":[{"delta":{"reasoning_content":"reconsidering"}}]}),
+            serde_json::json!({"choices":[{"delta":{"content":"second"}}]}),
+        ]);
+        assert!(matches!(
+            &content[..],
+            [
+                ContentBlock::Thinking { .. },
+                ContentBlock::Text { .. },
+                ContentBlock::Thinking { .. },
+                ContentBlock::Text { .. },
+            ]
+        ));
+    }
+
+    #[test]
+    fn parses_tool_call_arguments_from_chunk_fragments() {
+        let content = ingest_all(&[
             serde_json::json!({"choices":[{"delta":{"tool_calls":[
-                {"index": 0, "id": "call_1", "function": {"name": "grep", "arguments": ""}}
+                {"index": 0, "id": "call_1", "function": {"name": "grep", "arguments": r#"{"pattern":"#}}
             ]}}]}),
-            arguments_chunk(0, RESENT_PREFIX),
-            arguments_chunk(0, RESENT_FULL),
+            serde_json::json!({"choices":[{"delta":{"tool_calls":[
+                {"index": 0, "function": {"arguments": r#" "exec"}"#}}
+            ]}}]}),
         ]);
         assert!(matches!(
             &content[..],
-            [ContentBlock::ToolUse { name, input, .. }]
-                if name == "grep" && *input == serde_json::json!({
-                    "pattern": "__import__",
-                    "output_mode": "content",
-                    "type": "py",
-                })
+            [ContentBlock::ToolUse { id, name, input }]
+                if id == "call_1" && name == "grep"
+                    && *input == serde_json::json!({"pattern": "exec"})
         ));
     }
 
     #[test]
-    fn resent_payload_emits_only_the_unseen_suffix() {
-        let (_, emitted) = ingest_all(&[
-            arguments_chunk(0, RESENT_PREFIX),
-            arguments_chunk(0, RESENT_FULL),
-        ]);
-        assert_eq!(emitted.concat(), RESENT_FULL);
-    }
-
-    #[test]
-    fn argument_fragments_still_accumulate_as_deltas() {
-        let (content, emitted) = ingest_all(&[
-            arguments_chunk(0, r#"{"pattern":"#),
-            arguments_chunk(0, r#" "exec"}"#),
-        ]);
-        assert!(matches!(
-            &content[..],
-            [ContentBlock::ToolUse { input, .. }]
-                if *input == serde_json::json!({"pattern": "exec"})
-        ));
-        assert_eq!(emitted.concat(), r#"{"pattern": "exec"}"#);
-    }
-
-    #[test]
-    fn parallel_calls_keep_their_own_arguments() {
-        let (content, _) = ingest_all(&[
-            arguments_chunk(0, r#"{"pattern": "exec"}"#),
-            arguments_chunk(1, RESENT_PREFIX),
-            arguments_chunk(1, RESENT_FULL),
+    fn tool_calls_the_chunks_index_apart_keep_their_own_arguments() {
+        let content = ingest_all(&[
+            serde_json::json!({"choices":[{"delta":{"tool_calls":[
+                {"index": 0, "id": "call_1", "function": {"name": "grep", "arguments": r#"{"pattern": "a"}"#}}
+            ]}}]}),
+            serde_json::json!({"choices":[{"delta":{"tool_calls":[
+                {"index": 1, "id": "call_2", "function": {"name": "grep", "arguments": r#"{"pattern": "b"}"#}}
+            ]}}]}),
         ]);
         assert!(matches!(
             &content[..],
             [
                 ContentBlock::ToolUse { input: first, .. },
                 ContentBlock::ToolUse { input: second, .. },
-            ] if *first == serde_json::json!({"pattern": "exec"})
-                && *second == serde_json::json!({
-                    "pattern": "__import__",
-                    "output_mode": "content",
-                    "type": "py",
-                })
+            ] if *first == serde_json::json!({"pattern": "a"})
+                && *second == serde_json::json!({"pattern": "b"})
         ));
     }
 
     #[test]
-    fn index_less_fragments_with_new_ids_stay_separate_calls() {
-        let (content, _) = ingest_all(&[
+    fn a_high_tool_call_index_adds_only_the_one_call() {
+        // The index reaches the reply from the endpoint, so it must route a
+        // fragment without deciding how much the reply holds.
+        let content = ingest_all(&[serde_json::json!({"choices":[{"delta":{"tool_calls":[
+            {"index": 100000, "id": "call_1", "function": {"name": "grep", "arguments": "{}"}}
+        ]}}]})]);
+        assert_eq!(content.len(), 1);
+    }
+
+    #[test]
+    fn index_less_fragments_with_new_ids_stay_separate_tool_calls() {
+        let content = ingest_all(&[
             serde_json::json!({"choices":[{"delta":{"tool_calls":[
                 {"id": "call_1", "function": {"name": "grep", "arguments": r#"{"pattern": "a"}"#}}
             ]}}]}),
@@ -726,8 +472,8 @@ mod tests {
     }
 
     #[test]
-    fn index_less_fragments_without_an_id_continue_the_call_in_flight() {
-        let (content, _) = ingest_all(&[
+    fn index_less_fragments_without_an_id_continue_the_tool_call_in_flight() {
+        let content = ingest_all(&[
             serde_json::json!({"choices":[{"delta":{"tool_calls":[
                 {"id": "call_1", "function": {"name": "grep", "arguments": r#"{"pattern":"#}}
             ]}}]}),
@@ -743,10 +489,23 @@ mod tests {
     }
 
     #[test]
+    fn a_chunk_reports_the_finish_reason_and_the_usage() {
+        let response = decode(&[serde_json::json!({
+            "model": "gpt-5",
+            "choices": [{"delta": {}, "finish_reason": "tool_calls"}],
+            "usage": {"prompt_tokens": 120, "completion_tokens": 34},
+        })]);
+        assert_eq!(response.model, "gpt-5");
+        assert_eq!(response.status, ResponseStatus::ToolUse);
+        assert_eq!(response.usage.input_tokens, 120);
+        assert_eq!(response.usage.output_tokens, 34);
+    }
+
+    #[test]
     fn serialize_request_sets_reasoning_effort() {
-        let mut req = dummy_request();
-        req.reasoning_effort = ReasoningEffort::High;
-        assert_eq!(serialize_request(&req)["reasoning_effort"], "high");
+        let mut request = dummy_request();
+        request.reasoning_effort = ReasoningEffort::High;
+        assert_eq!(serialize_request(&request)["reasoning_effort"], "high");
     }
 
     #[test]
@@ -758,7 +517,7 @@ mod tests {
 
     #[test]
     fn assistant_message_drops_thinking() {
-        let msg = serialize_assistant_message(&[
+        let message = serialize_assistant_message(&[
             ContentBlock::Thinking {
                 thinking: "hidden".into(),
                 signature: String::new(),
@@ -767,8 +526,8 @@ mod tests {
                 text: "shown".into(),
             },
         ]);
-        assert_eq!(msg["content"], "shown");
-        assert!(msg.get("reasoning_content").is_none());
+        assert_eq!(message["content"], "shown");
+        assert!(message.get("reasoning_content").is_none());
     }
 
     fn dummy_request() -> ModelRequest {
@@ -785,14 +544,6 @@ mod tests {
             tool_choice: None,
             reasoning_effort: Default::default(),
         }
-    }
-
-    #[test]
-    fn timeout_builder_stores_duration() {
-        let p = OpenAi::new("test-key");
-        assert_eq!(p.request_timeout(), DEFAULT_REQUEST_TIMEOUT);
-        let p = p.timeout(Duration::from_secs(42));
-        assert_eq!(p.request_timeout(), Duration::from_secs(42));
     }
 
     #[test]
@@ -813,9 +564,9 @@ mod tests {
 
     #[test]
     fn serialize_request_omits_max_tokens_when_none() {
-        let mut req = dummy_request();
-        req.max_request_tokens = None;
-        let body = serialize_request(&req);
+        let mut request = dummy_request();
+        request.max_request_tokens = None;
+        let body = serialize_request(&request);
         assert!(body.get("max_tokens").is_none());
     }
 
@@ -919,37 +670,13 @@ mod tests {
     }
 
     #[test]
-    fn maps_http_401_to_authentication_failed() {
-        assert!(matches!(
-            classify_error(401, "boom"),
-            Some(ProviderError::AuthenticationFailed { .. })
-        ));
-    }
-
-    #[test]
-    fn maps_http_403_to_permission_denied() {
-        assert!(matches!(
-            classify_error(403, "boom"),
-            Some(ProviderError::PermissionDenied { .. })
-        ));
-    }
-
-    #[test]
-    fn maps_http_404_to_model_not_found() {
-        assert!(matches!(
-            classify_error(404, "boom"),
-            Some(ProviderError::ModelNotFound { .. })
-        ));
-    }
-
-    #[test]
-    fn unrelated_400_falls_through() {
+    fn an_unrelated_openai_400_falls_through() {
         let body = body_400("invalid_api_key", "incorrect API key provided");
         assert!(classify_error(400, &body).is_none());
     }
 
     #[test]
-    fn preserves_provider_message() {
+    fn an_openai_400_keeps_the_message_it_carried() {
         let body = body_400(
             "context_length_exceeded",
             "maximum context length is 8192 tokens; requested 12000",
@@ -962,55 +689,5 @@ mod tests {
             message,
             "maximum context length is 8192 tokens; requested 12000"
         );
-    }
-
-    #[test]
-    fn lookup_gpt_5_family_returns_400k() {
-        let lookup = OpenAi::lookup_context_window_size;
-        assert_eq!(lookup("gpt-5"), Some(400_000));
-        assert_eq!(lookup("gpt-5-mini"), Some(400_000));
-    }
-
-    #[test]
-    fn lookup_gpt_4_1_returns_1m() {
-        let lookup = OpenAi::lookup_context_window_size;
-        assert_eq!(lookup("gpt-4.1"), Some(1_000_000));
-    }
-
-    #[test]
-    fn lookup_o_series_returns_200k() {
-        let lookup = OpenAi::lookup_context_window_size;
-        assert_eq!(lookup("o3-mini"), Some(200_000));
-        assert_eq!(lookup("o1-preview"), Some(200_000));
-    }
-
-    #[test]
-    fn lookup_gpt_4o_and_turbo_return_128k() {
-        let lookup = OpenAi::lookup_context_window_size;
-        assert_eq!(lookup("gpt-4o"), Some(128_000));
-        assert_eq!(lookup("gpt-4o-mini"), Some(128_000));
-        assert_eq!(lookup("gpt-4-turbo-2024-04-09"), Some(128_000));
-    }
-
-    #[test]
-    fn lookup_legacy_gpt_4_returns_8k() {
-        let lookup = OpenAi::lookup_context_window_size;
-        assert_eq!(lookup("gpt-4"), Some(8_192));
-        assert_eq!(lookup("gpt-4-32k"), Some(32_768));
-    }
-
-    #[test]
-    fn lookup_gpt_3_5_turbo_returns_16k() {
-        let lookup = OpenAi::lookup_context_window_size;
-        assert_eq!(lookup("gpt-3.5-turbo"), Some(16_385));
-        assert_eq!(lookup("gpt-3.5-turbo-16k"), Some(16_385));
-    }
-
-    #[test]
-    fn lookup_unknown_models_return_none() {
-        let lookup = OpenAi::lookup_context_window_size;
-        assert_eq!(lookup("claude-sonnet-4-20250514"), None);
-        assert_eq!(lookup("mistral-large-2411"), None);
-        assert_eq!(lookup("llama-3-70b"), None);
     }
 }

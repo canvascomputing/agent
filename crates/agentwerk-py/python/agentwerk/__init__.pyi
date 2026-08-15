@@ -84,7 +84,7 @@ def tool(
 
 class Schema:
     def __init__(self, document: Any) -> None: ...
-    def validate(self, value: Any) -> Any: ...
+    def validate(self, value: Any) -> tuple[Any, list[str]]: ...
 
 class SchemaStore:
     def __init__(self) -> None: ...
@@ -232,7 +232,7 @@ class EventName:
     REQUEST_FAILED: str
     REQUEST_RETRIED: str
     TEXT_CHUNK_RECEIVED: str
-    TOOL_CALL_RECOVERED: str
+    RESPONSE_REPAIRED: str
     TOOL_CALL_DECLINED: str
     TOOL_CALL_STARTED: str
     TOOL_CALL_FINISHED: str

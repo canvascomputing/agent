@@ -18,9 +18,9 @@
 //! }))
 //! .unwrap();
 //!
-//! // A conforming value comes back unchanged.
+//! // A conforming value comes back unchanged, repaired nowhere.
 //! let value = json!({ "name": "Ada" });
-//! assert_eq!(schema.validate(value.clone()).unwrap(), value);
+//! assert_eq!(schema.validate(value.clone()).unwrap(), (value, vec![]));
 //!
 //! // Otherwise every problem is reported as a violation.
 //! let violations = schema.validate(json!({})).unwrap_err();
@@ -79,45 +79,64 @@ impl Schema {
         })
     }
 
-    /// Validate content and give back the value to keep.
+    /// Validate content and give back the value to keep, plus the JSON pointer
+    /// of every value it repaired to get there, empty for a repair of the value
+    /// as a whole.
     ///
-    /// A value that satisfies the schema comes back unchanged. A value an agent
-    /// wrote as a JSON string is decoded once and kept when the decoded form
-    /// satisfies the schema. Otherwise the original violations are reported, so
-    /// a retry points at the real problem rather than at the decoding.
+    /// A value that satisfies the schema comes back unchanged and repaired
+    /// nowhere. A value that does not is retyped against the schema and checked
+    /// again: a scalar an agent quoted becomes the type declared for it, and a
+    /// structure it wrote as JSON text is decoded. A retype that still does not
+    /// satisfy the schema is discarded and the original violations are
+    /// reported, so a retry points at the real problem rather than at the
+    /// repair.
     ///
     /// ```
     /// use agentwerk::schemas::Schema;
     /// use serde_json::json;
     ///
-    /// let schema = Schema::new(json!({ "type": "object", "required": ["status"] })).unwrap();
+    /// let schema = Schema::new(json!({
+    ///     "type": "object",
+    ///     "properties": { "line": { "type": "integer" } },
+    ///     "required": ["line"],
+    /// }))
+    /// .unwrap();
     ///
-    /// // A string an agent double-encoded is decoded once, then validated.
-    /// let decoded = schema.validate(json!("{\"status\": \"done\"}")).unwrap();
-    /// assert_eq!(decoded, json!({ "status": "done" }));
+    /// // A string an agent double-encoded is decoded, then validated.
+    /// let (decoded, _) = schema.validate(json!("{\"line\": 12}")).unwrap();
+    /// assert_eq!(decoded, json!({ "line": 12 }));
+    ///
+    /// // A number an agent quoted is retyped to what the schema declares, and
+    /// // the repair names where it happened.
+    /// let (retyped, repaired) = schema.validate(json!({ "line": "12" })).unwrap();
+    /// assert_eq!(retyped, json!({ "line": 12 }));
+    /// assert_eq!(repaired, vec!["/line"]);
     ///
     /// // A failure carries the instance path of each problem.
     /// let violations = schema.validate(json!({})).unwrap_err();
     /// assert_eq!(violations[0].instance_path, "");
     /// ```
-    pub fn validate(&self, value: Value) -> Result<Value, SchemaViolations> {
+    pub fn validate(&self, value: Value) -> Result<(Value, Vec<String>), SchemaViolations> {
         let violations = match self.check(&value) {
-            Ok(()) => return Ok(value),
+            Ok(()) => return Ok((value, Vec::new())),
             Err(v) => SchemaViolations(v),
         };
-
-        let Value::String(s) = &value else {
-            return Err(violations);
-        };
-        let Ok(decoded) = serde_json::from_str::<Value>(s) else {
-            return Err(violations);
-        };
-
-        if self.check(&decoded).is_ok() {
-            Ok(decoded)
+        let mut repaired = value;
+        let mut repairs = Vec::new();
+        self.inner
+            .compiled
+            .coerce(&mut repaired, true, "", &mut repairs);
+        if self.check(&repaired).is_ok() {
+            Ok((repaired, repairs))
         } else {
             Err(violations)
         }
+    }
+
+    /// The JSON Schema document this was built from, the same one `Serialize`
+    /// writes. Reading a field off it needs no copy and cannot fail.
+    pub(crate) fn get_raw_schema(&self) -> &Value {
+        &self.inner.raw_document
     }
 
     /// Check `value` against the schema and report every violation, each
@@ -236,7 +255,7 @@ struct Node {
     // object
     properties: Option<Vec<(String, Node)>>,
     required: Option<Vec<String>>,
-    additional_properties: AdditionalProperties,
+    additional_properties_forbidden: bool,
     // array
     items: Option<Box<Node>>,
     min_items: Option<usize>,
@@ -248,15 +267,6 @@ struct Node {
     min_length: Option<usize>,
     max_length: Option<usize>,
     pattern: Option<regex::Regex>,
-}
-
-#[derive(Debug, Default)]
-enum AdditionalProperties {
-    /// `additionalProperties` unset or `true`: extra keys are allowed.
-    #[default]
-    Allowed,
-    /// `additionalProperties: false`: an extra key is a violation.
-    Forbidden,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -292,7 +302,14 @@ impl JsonType {
             (Self::Boolean, Value::Bool(_)) => true,
             (Self::Null, Value::Null) => true,
             (Self::Number, Value::Number(_)) => true,
-            (Self::Integer, Value::Number(n)) => is_integer(n),
+            // JSON Schema counts a whole float as an integer: `1.0` validates
+            // against `type: integer`.
+            (Self::Integer, Value::Number(n)) => {
+                n.is_i64()
+                    || n.is_u64()
+                    || n.as_f64()
+                        .is_some_and(|f| f.is_finite() && f.fract() == 0.0)
+            }
             _ => false,
         }
     }
@@ -310,15 +327,7 @@ impl JsonType {
     }
 }
 
-fn is_integer(n: &Number) -> bool {
-    if n.is_i64() || n.is_u64() {
-        return true;
-    }
-    // f64 with no fractional part is still considered an integer by
-    // JSON Schema (e.g. `1.0` validates against `type: integer`).
-    n.as_f64()
-        .is_some_and(|f| f.is_finite() && f.fract() == 0.0)
-}
+// Parsing
 
 /// The keywords agentwerk understands. Anything else is rejected when the
 /// schema is parsed, so an unsupported constraint is reported rather than
@@ -367,7 +376,7 @@ fn compile(value: &Value, schema_path: &str) -> Result<Node, SchemaParseError> {
             });
         }
         Value::Bool(false) => {
-            // false schema rejects everything; model as empty types list.
+            // A false schema rejects everything: no type matches an empty list.
             return Ok(Node {
                 schema_path: schema_path.to_string(),
                 types: Some(Vec::new()),
@@ -397,23 +406,20 @@ fn compile(value: &Value, schema_path: &str) -> Result<Node, SchemaParseError> {
         Some(Value::Array(arr)) => {
             let mut out = Vec::with_capacity(arr.len());
             for (i, item) in arr.iter().enumerate() {
-                let s = item.as_str().ok_or_else(|| {
-                    parse_err(
-                        schema_path,
-                        format!("`type[{i}]` must be a string, got {}", value_label(item)),
-                    )
-                })?;
-                out.push(parse_type(s, schema_path, &format!("type[{i}]"))?);
+                let key = format!("type[{i}]");
+                let s = item
+                    .as_str()
+                    .ok_or_else(|| wrong_type(schema_path, &key, "a string", item))?;
+                out.push(parse_type(s, schema_path, &key)?);
             }
             Some(out)
         }
         Some(other) => {
-            return Err(parse_err(
+            return Err(wrong_type(
                 schema_path,
-                format!(
-                    "`type` must be a string or array of strings, got {}",
-                    value_label(other)
-                ),
+                "type",
+                "a string or array of strings",
+                other,
             ));
         }
     };
@@ -428,13 +434,7 @@ fn compile(value: &Value, schema_path: &str) -> Result<Node, SchemaParseError> {
             ));
         }
         Some(other) => {
-            return Err(parse_err(
-                schema_path,
-                format!(
-                    "`enum` must be a non-empty array, got {}",
-                    value_label(other)
-                ),
-            ));
+            return Err(wrong_type(schema_path, "enum", "a non-empty array", other));
         }
     };
 
@@ -446,25 +446,18 @@ fn compile(value: &Value, schema_path: &str) -> Result<Node, SchemaParseError> {
             let mut out = Vec::with_capacity(arr.len());
             for (i, item) in arr.iter().enumerate() {
                 let s = item.as_str().ok_or_else(|| {
-                    parse_err(
-                        schema_path,
-                        format!(
-                            "`required[{i}]` must be a string, got {}",
-                            value_label(item)
-                        ),
-                    )
+                    wrong_type(schema_path, &format!("required[{i}]"), "a string", item)
                 })?;
                 out.push(s.to_string());
             }
             Some(out)
         }
         Some(other) => {
-            return Err(parse_err(
+            return Err(wrong_type(
                 schema_path,
-                format!(
-                    "`required` must be an array of strings, got {}",
-                    value_label(other)
-                ),
+                "required",
+                "an array of strings",
+                other,
             ));
         }
     };
@@ -475,30 +468,24 @@ fn compile(value: &Value, schema_path: &str) -> Result<Node, SchemaParseError> {
             let mut out = Vec::with_capacity(props.len());
             for (name, sub) in props {
                 let sub_path = format!("{schema_path}/properties/{}", escape_pointer(name));
-                let node = compile(sub, &sub_path)?;
-                out.push((name.clone(), node));
+                out.push((name.clone(), compile(sub, &sub_path)?));
             }
             Some(out)
         }
         Some(other) => {
-            return Err(parse_err(
-                schema_path,
-                format!("`properties` must be an object, got {}", value_label(other)),
-            ));
+            return Err(wrong_type(schema_path, "properties", "an object", other));
         }
     };
 
-    let additional_properties = match obj.get("additionalProperties") {
-        None => AdditionalProperties::Allowed,
-        Some(Value::Bool(true)) => AdditionalProperties::Allowed,
-        Some(Value::Bool(false)) => AdditionalProperties::Forbidden,
+    let additional_properties_forbidden = match obj.get("additionalProperties") {
+        None | Some(Value::Bool(true)) => false,
+        Some(Value::Bool(false)) => true,
         Some(other) => {
-            return Err(parse_err(
+            return Err(wrong_type(
                 schema_path,
-                format!(
-                    "`additionalProperties` must be a boolean (subschema form is unsupported), got {}",
-                    value_label(other)
-                ),
+                "additionalProperties",
+                "a boolean (subschema form is unsupported)",
+                other,
             ));
         }
     };
@@ -506,44 +493,23 @@ fn compile(value: &Value, schema_path: &str) -> Result<Node, SchemaParseError> {
     let items = match obj.get("items") {
         None => None,
         Some(v @ (Value::Object(_) | Value::Bool(_))) => {
-            let sub_path = format!("{schema_path}/items");
-            Some(Box::new(compile(v, &sub_path)?))
+            Some(Box::new(compile(v, &format!("{schema_path}/items"))?))
         }
         Some(other) => {
-            return Err(parse_err(
+            return Err(wrong_type(
                 schema_path,
-                format!(
-                    "`items` must be a schema (object or boolean); per-position arrays are unsupported, got {}",
-                    value_label(other)
-                ),
+                "items",
+                "a schema (object or boolean); per-position arrays are unsupported",
+                other,
             ));
         }
     };
-
-    let all_of = parse_subschema_array(obj, "allOf", schema_path)?;
-    let any_of = parse_subschema_array(obj, "anyOf", schema_path)?;
-    let one_of = parse_subschema_array(obj, "oneOf", schema_path)?;
-    let not = parse_subschema(obj, "not", schema_path)?;
-
-    let if_schema = parse_subschema(obj, "if", schema_path)?;
-    let then_schema = parse_subschema(obj, "then", schema_path)?;
-    let else_schema = parse_subschema(obj, "else", schema_path)?;
-
-    let minimum = parse_number(obj.get("minimum"), schema_path, "minimum")?;
-    let maximum = parse_number(obj.get("maximum"), schema_path, "maximum")?;
-    let min_length = parse_usize(obj.get("minLength"), schema_path, "minLength")?;
-    let max_length = parse_usize(obj.get("maxLength"), schema_path, "maxLength")?;
-    let min_items = parse_usize(obj.get("minItems"), schema_path, "minItems")?;
-    let max_items = parse_usize(obj.get("maxItems"), schema_path, "maxItems")?;
 
     let pattern = match obj.get("pattern") {
         None => None,
         Some(Value::String(s)) => Some(compile_regex(s, schema_path, "pattern")?),
         Some(other) => {
-            return Err(parse_err(
-                schema_path,
-                format!("`pattern` must be a string, got {}", value_label(other)),
-            ));
+            return Err(wrong_type(schema_path, "pattern", "a string", other));
         }
     };
 
@@ -552,23 +518,23 @@ fn compile(value: &Value, schema_path: &str) -> Result<Node, SchemaParseError> {
         types,
         enum_values,
         const_value,
-        all_of,
-        any_of,
-        one_of,
-        not,
-        if_schema,
-        then_schema,
-        else_schema,
+        all_of: parse_subschema_array(obj, "allOf", schema_path)?,
+        any_of: parse_subschema_array(obj, "anyOf", schema_path)?,
+        one_of: parse_subschema_array(obj, "oneOf", schema_path)?,
+        not: parse_subschema(obj, "not", schema_path)?,
+        if_schema: parse_subschema(obj, "if", schema_path)?,
+        then_schema: parse_subschema(obj, "then", schema_path)?,
+        else_schema: parse_subschema(obj, "else", schema_path)?,
         properties,
         required,
-        additional_properties,
+        additional_properties_forbidden,
         items,
-        min_items,
-        max_items,
-        minimum,
-        maximum,
-        min_length,
-        max_length,
+        min_items: parse_usize(obj.get("minItems"), schema_path, "minItems")?,
+        max_items: parse_usize(obj.get("maxItems"), schema_path, "maxItems")?,
+        minimum: parse_number(obj.get("minimum"), schema_path, "minimum")?,
+        maximum: parse_number(obj.get("maximum"), schema_path, "maximum")?,
+        min_length: parse_usize(obj.get("minLength"), schema_path, "minLength")?,
+        max_length: parse_usize(obj.get("maxLength"), schema_path, "maxLength")?,
         pattern,
     })
 }
@@ -584,12 +550,11 @@ fn parse_subschema(
         Some(v @ (Value::Object(_) | Value::Bool(_))) => {
             Ok(Some(Box::new(compile(v, &format!("{schema_path}/{key}"))?)))
         }
-        Some(other) => Err(parse_err(
+        Some(other) => Err(wrong_type(
             schema_path,
-            format!(
-                "`{key}` must be a schema (object or boolean), got {}",
-                value_label(other)
-            ),
+            key,
+            "a schema (object or boolean)",
+            other,
         )),
     }
 }
@@ -606,8 +571,7 @@ fn parse_subschema_array(
         Some(Value::Array(arr)) if !arr.is_empty() => {
             let mut out = Vec::with_capacity(arr.len());
             for (i, item) in arr.iter().enumerate() {
-                let sub_path = format!("{schema_path}/{key}/{i}");
-                out.push(compile(item, &sub_path)?);
+                out.push(compile(item, &format!("{schema_path}/{key}/{i}"))?);
             }
             Ok(Some(out))
         }
@@ -615,12 +579,11 @@ fn parse_subschema_array(
             schema_path,
             format!("`{key}` must contain at least one schema"),
         )),
-        Some(other) => Err(parse_err(
+        Some(other) => Err(wrong_type(
             schema_path,
-            format!(
-                "`{key}` must be a non-empty array of schemas, got {}",
-                value_label(other)
-            ),
+            key,
+            "a non-empty array of schemas",
+            other,
         )),
     }
 }
@@ -638,10 +601,7 @@ fn parse_number(
     match v {
         None => Ok(None),
         Some(Value::Number(n)) => Ok(n.as_f64()),
-        Some(other) => Err(parse_err(
-            schema_path,
-            format!("`{key}` must be a number, got {}", value_label(other)),
-        )),
+        Some(other) => Err(wrong_type(schema_path, key, "a number", other)),
     }
 }
 
@@ -652,21 +612,18 @@ fn parse_usize(
 ) -> Result<Option<usize>, SchemaParseError> {
     match v {
         None => Ok(None),
-        Some(Value::Number(n)) => {
-            let u = n.as_u64().ok_or_else(|| {
-                parse_err(
-                    schema_path,
-                    format!("`{key}` must be a non-negative integer, got {n}"),
-                )
-            })?;
-            Ok(Some(u as usize))
-        }
-        Some(other) => Err(parse_err(
+        Some(Value::Number(n)) => match n.as_u64() {
+            Some(u) => Ok(Some(u as usize)),
+            None => Err(parse_err(
+                schema_path,
+                format!("`{key}` must be a non-negative integer, got {n}"),
+            )),
+        },
+        Some(other) => Err(wrong_type(
             schema_path,
-            format!(
-                "`{key}` must be a non-negative integer, got {}",
-                value_label(other)
-            ),
+            key,
+            "a non-negative integer",
+            other,
         )),
     }
 }
@@ -678,6 +635,14 @@ fn compile_regex(
 ) -> Result<regex::Regex, SchemaParseError> {
     regex::Regex::new(pattern)
         .map_err(|e| parse_err(schema_path, format!("`{key}` is not a valid regex: {e}")))
+}
+
+/// The parse error for a keyword holding the wrong kind of value.
+fn wrong_type(schema_path: &str, key: &str, expected: &str, got: &Value) -> SchemaParseError {
+    parse_err(
+        schema_path,
+        format!("`{key}` must be {expected}, got {}", value_label(got)),
+    )
 }
 
 fn parse_err(schema_path: &str, message: impl Into<String>) -> SchemaParseError {
@@ -706,7 +671,7 @@ fn escape_pointer(segment: &str) -> String {
     segment.replace('~', "~0").replace('/', "~1")
 }
 
-// Validation
+// Checking
 
 impl Node {
     fn check(&self, instance: &Value, instance_path: &str, out: &mut Vec<SchemaViolation>) {
@@ -722,16 +687,15 @@ impl Node {
             }
             if !types.iter().any(|t| t.matches(instance)) {
                 let labels: Vec<&str> = types.iter().map(|t| t.label()).collect();
-                self.violation(
-                    instance_path,
-                    "/type",
-                    format!(
-                        "expected type {}, got {}",
-                        join_or(&labels),
-                        value_label(instance)
-                    ),
-                    out,
+                let mut message = format!(
+                    "expected type {}, got {}",
+                    join_or(&labels),
+                    value_label(instance)
                 );
+                if let Some(hint) = retype_hint(types, instance) {
+                    message.push_str(&format!(": {hint}"));
+                }
+                self.violation(instance_path, "/type", message, out);
                 return;
             }
         }
@@ -753,7 +717,8 @@ impl Node {
             }
         }
 
-        // allOf collects violations from every branch, not just the first failure
+        // Only allOf writes each branch's violations into `out`: every branch
+        // must hold, so all of them reach the agent.
         if let Some(schemas) = &self.all_of {
             for sub in schemas {
                 sub.check(instance, instance_path, out);
@@ -761,12 +726,7 @@ impl Node {
         }
 
         if let Some(schemas) = &self.any_of {
-            let passed = schemas.iter().any(|sub| {
-                let mut tmp = Vec::new();
-                sub.check(instance, instance_path, &mut tmp);
-                tmp.is_empty()
-            });
-            if !passed {
+            if !schemas.iter().any(|sub| sub.accepts(instance)) {
                 self.violation(
                     instance_path,
                     "/anyOf",
@@ -777,14 +737,7 @@ impl Node {
         }
 
         if let Some(schemas) = &self.one_of {
-            let count = schemas
-                .iter()
-                .filter(|sub| {
-                    let mut tmp = Vec::new();
-                    sub.check(instance, instance_path, &mut tmp);
-                    tmp.is_empty()
-                })
-                .count();
+            let count = schemas.iter().filter(|sub| sub.accepts(instance)).count();
             if count != 1 {
                 self.violation(
                     instance_path,
@@ -796,9 +749,7 @@ impl Node {
         }
 
         if let Some(sub) = &self.not {
-            let mut tmp = Vec::new();
-            sub.check(instance, instance_path, &mut tmp);
-            if tmp.is_empty() {
+            if sub.accepts(instance) {
                 self.violation(
                     instance_path,
                     "/not",
@@ -809,14 +760,13 @@ impl Node {
         }
 
         if let Some(if_sub) = &self.if_schema {
-            let mut tmp = Vec::new();
-            if_sub.check(instance, instance_path, &mut tmp);
-            if tmp.is_empty() {
-                if let Some(then_sub) = &self.then_schema {
-                    then_sub.check(instance, instance_path, out);
-                }
-            } else if let Some(else_sub) = &self.else_schema {
-                else_sub.check(instance, instance_path, out);
+            let branch = if if_sub.accepts(instance) {
+                &self.then_schema
+            } else {
+                &self.else_schema
+            };
+            if let Some(sub) = branch {
+                sub.check(instance, instance_path, out);
             }
         }
 
@@ -827,6 +777,13 @@ impl Node {
             Value::Number(n) => self.check_number(n, instance_path, out),
             _ => {}
         }
+    }
+
+    /// Whether `instance` satisfies this node, with the violations discarded.
+    fn accepts(&self, instance: &Value) -> bool {
+        let mut violations = Vec::new();
+        self.check(instance, "", &mut violations);
+        violations.is_empty()
     }
 
     fn check_object(
@@ -857,7 +814,7 @@ impl Node {
             }
         }
 
-        if matches!(self.additional_properties, AdditionalProperties::Forbidden) {
+        if self.additional_properties_forbidden {
             let known: HashSet<&str> = self
                 .properties
                 .as_ref()
@@ -989,10 +946,168 @@ fn join_or(labels: &[&str]) -> String {
     }
 }
 
+/// The change to suggest when a type is wrong only because the model quoted the
+/// value. Only reached once the retype declined, so it speaks to a value no
+/// rewrite could recover.
+fn retype_hint(types: &[JsonType], instance: &Value) -> Option<&'static str> {
+    let unquoted = types
+        .iter()
+        .any(|t| matches!(t, JsonType::Integer | JsonType::Number | JsonType::Boolean));
+    match instance {
+        Value::String(_) if unquoted => Some("send the value unquoted"),
+        Value::Number(_) | Value::Bool(_) if types.contains(&JsonType::String) => {
+            Some("send the value quoted")
+        }
+        _ => None,
+    }
+}
+
+// Retyping
+
+impl Node {
+    /// Retype the values this schema names a type for, recording each rewrite
+    /// and where it happened. Runs only on a value that already failed, and the
+    /// caller checks the outcome, so a rewrite that misses is discarded.
+    ///
+    /// `widen` allows the two rewrites that pick a shape the model did not
+    /// write. A branch of `anyOf` or `oneOf` clears it: choosing a shape there
+    /// would also choose the branch.
+    ///
+    /// `not` and `if`/`then`/`else` are left out. Rewriting under `not` inverts
+    /// what it asks for, and an `if` reads the value the rewrite would change.
+    fn coerce(&self, value: &mut Value, widen: bool, instance_path: &str, out: &mut Vec<String>) {
+        // Commit the first branch whose own check accepts the value it
+        // retyped. A oneOf that matches twice afterwards fails the outer
+        // check, and the original violations stand.
+        fn coerce_branches(
+            branches: &[Node],
+            value: &mut Value,
+            instance_path: &str,
+            out: &mut Vec<String>,
+        ) {
+            for branch in branches {
+                let mut candidate = value.clone();
+                let mut repairs = Vec::new();
+                branch.coerce(&mut candidate, false, instance_path, &mut repairs);
+                if !repairs.is_empty() && branch.accepts(&candidate) {
+                    *value = candidate;
+                    out.append(&mut repairs);
+                    return;
+                }
+            }
+        }
+
+        for branch in self.all_of.iter().flatten() {
+            branch.coerce(value, widen, instance_path, out);
+        }
+        for branches in [&self.any_of, &self.one_of].into_iter().flatten() {
+            coerce_branches(branches, value, instance_path, out);
+        }
+
+        if let Some(types) = self.types.as_deref() {
+            if !types.iter().any(|t| t.matches(value)) {
+                // Several types listed poses the same choice `anyOf` does.
+                let widen = widen && types.len() == 1;
+                if let Some(retyped) = types.iter().find_map(|t| t.retype(value, widen)) {
+                    *value = retyped;
+                    out.push(instance_path.to_string());
+                }
+            }
+        }
+
+        // Recurse once the value holds its final shape. `additionalProperties`
+        // carries no subschema here and `items` has no tuple form, so a
+        // property and an element are the only children to reach.
+        match value {
+            Value::Object(map) => {
+                for (name, sub) in self.properties.iter().flatten() {
+                    if let Some(field) = map.get_mut(name) {
+                        let child_path = format!("{instance_path}/{}", escape_pointer(name));
+                        sub.coerce(field, widen, &child_path, out);
+                    }
+                }
+            }
+            Value::Array(items) => {
+                if let Some(items_schema) = &self.items {
+                    for (i, item) in items.iter_mut().enumerate() {
+                        let child_path = format!("{instance_path}/{i}");
+                        items_schema.coerce(item, widen, &child_path, out);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+impl JsonType {
+    /// The value this type would accept, when the rewrite is exact. `None`
+    /// leaves the value for the violation report to name.
+    ///
+    /// Reading a quoted literal recovers what the model wrote; the arms behind
+    /// `widen` wrap or stringify instead, picking a shape it never wrote.
+    /// `null` is never produced: for a nullable string `"null"` is a real value.
+    fn retype(self, value: &Value, widen: bool) -> Option<Value> {
+        match (self, value) {
+            (Self::Integer, Value::String(text)) => retype_integer(text),
+            (Self::Number, Value::String(text)) => retype_number(text),
+            (Self::Boolean, Value::String(text)) => retype_boolean(text),
+            (Self::Object, Value::String(text)) => decode_json(text, Value::is_object),
+            (Self::Array, Value::String(text)) => decode_json(text, Value::is_array)
+                .or_else(|| widen.then(|| Value::Array(vec![value.clone()]))),
+            (Self::Array, other) if widen && !other.is_null() => {
+                Some(Value::Array(vec![other.clone()]))
+            }
+            (Self::String, Value::Number(n)) if widen => Some(Value::String(n.to_string())),
+            (Self::String, Value::Bool(b)) if widen => Some(Value::String(b.to_string())),
+            _ => None,
+        }
+    }
+}
+
+fn retype_integer(text: &str) -> Option<Value> {
+    let text = text.trim();
+    if let Ok(number) = text.parse::<i64>() {
+        return Some(Value::from(number));
+    }
+    // `"42.0"` and `"1e3"` are the same slip. Past 2^53 a float no longer names
+    // one integer, so the rewrite stops there.
+    let number = text.parse::<f64>().ok()?;
+    let exact = number.is_finite() && number.fract() == 0.0 && number.abs() <= (1u64 << 53) as f64;
+    exact.then(|| Value::from(number as i64))
+}
+
+fn retype_number(text: &str) -> Option<Value> {
+    // Rust parses `"inf"` and `"NaN"`, and `Value::from` turns both into null.
+    let number = text.trim().parse::<f64>().ok()?;
+    number.is_finite().then(|| Value::from(number))
+}
+
+fn retype_boolean(text: &str) -> Option<Value> {
+    match text.trim().to_ascii_lowercase().as_str() {
+        "true" => Some(Value::Bool(true)),
+        "false" => Some(Value::Bool(false)),
+        _ => None,
+    }
+}
+
+/// Decode a structure the model wrote as JSON text. Length is not capped: the
+/// longest results are the reports an agent is most likely to double-encode,
+/// and a cap would reject one with a violation that never names the size.
+fn decode_json(text: &str, fits: fn(&Value) -> bool) -> Option<Value> {
+    let decoded = serde_json::from_str::<Value>(text).ok()?;
+    fits(&decoded).then_some(decoded)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// The value `schema` keeps, for the tests that do not read the pointers.
+    fn kept(schema: &Schema, value: Value) -> Value {
+        schema.validate(value).unwrap().0
+    }
 
     // Parse errors
 
@@ -1362,7 +1477,7 @@ mod tests {
         }))
         .unwrap();
         let value = json!({"status": "ok"});
-        assert_eq!(schema.validate(value.clone()).unwrap(), value);
+        assert_eq!(schema.validate(value.clone()).unwrap(), (value, vec![]));
     }
 
     #[test]
@@ -1374,7 +1489,22 @@ mod tests {
         }))
         .unwrap();
         let encoded = json!("{\"status\": \"ok\"}");
-        assert_eq!(schema.validate(encoded).unwrap(), json!({"status": "ok"}));
+        let (decoded, _) = schema.validate(encoded).unwrap();
+        assert_eq!(decoded, json!({"status": "ok"}));
+    }
+
+    #[test]
+    fn validate_decodes_a_long_string_encoded_object() {
+        // A long report is the one an agent is most likely to double-encode.
+        let schema = Schema::new(json!({
+            "type": "object",
+            "properties": { "details": { "type": "string" } },
+            "required": ["details"],
+        }))
+        .unwrap();
+        let details = "d".repeat(100_000);
+        let encoded = serde_json::to_string(&json!({ "details": details })).unwrap();
+        assert_eq!(kept(&schema, json!(encoded)), json!({ "details": details }));
     }
 
     #[test]
@@ -1394,6 +1524,180 @@ mod tests {
     fn validate_non_string_fails_type_check_without_decode_attempt() {
         let schema = Schema::new(json!({"type": "object", "required": ["status"]})).unwrap();
         assert!(schema.validate(json!(42)).is_err());
+    }
+
+    // Retyping
+
+    fn line_schema() -> Schema {
+        Schema::new(json!({
+            "type": "object",
+            "properties": { "line": { "type": "integer" } },
+            "required": ["line"],
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn validate_retypes_a_quoted_integer() {
+        assert_eq!(
+            kept(&line_schema(), json!({"line": "42"})),
+            json!({"line": 42})
+        );
+    }
+
+    #[test]
+    fn validate_retypes_a_quoted_number() {
+        let schema = Schema::new(json!({"type": "number"})).unwrap();
+        assert_eq!(kept(&schema, json!("2.5")), json!(2.5));
+    }
+
+    #[test]
+    fn validate_retypes_a_quoted_boolean() {
+        let schema = Schema::new(json!({"type": "boolean"})).unwrap();
+        assert_eq!(kept(&schema, json!("true")), json!(true));
+    }
+
+    #[test]
+    fn validate_retypes_a_quoted_whole_float_to_an_integer() {
+        assert_eq!(
+            kept(&line_schema(), json!({"line": "42.0"})),
+            json!({"line": 42})
+        );
+    }
+
+    #[test]
+    fn validate_leaves_a_quoted_integer_with_decimals_alone() {
+        assert!(line_schema().validate(json!({"line": "42.5"})).is_err());
+    }
+
+    #[test]
+    fn validate_leaves_an_integer_beyond_exact_float_range_alone() {
+        // Past 2^53 a float names a range of integers, not one to rewrite to.
+        assert!(line_schema().validate(json!({"line": "1e300"})).is_err());
+    }
+
+    #[test]
+    fn validate_leaves_a_non_finite_number_string_alone() {
+        // Rust parses "inf", and `Value::from` turns a non-finite float into
+        // null, which this nullable schema would then accept.
+        let schema = Schema::new(json!({"type": ["number", "null"]})).unwrap();
+        assert!(schema.validate(json!("inf")).is_err());
+    }
+
+    #[test]
+    fn validate_leaves_the_text_null_alone() {
+        // No retype produces null, so the text stays a value in its own right.
+        let schema = Schema::new(json!({"type": "null"})).unwrap();
+        assert!(schema.validate(json!("null")).is_err());
+    }
+
+    #[test]
+    fn validate_decodes_a_nested_json_string_into_an_array() {
+        let schema = Schema::new(json!({
+            "type": "object",
+            "properties": { "lines": { "type": "array", "items": { "type": "integer" } } },
+            "required": ["lines"],
+        }))
+        .unwrap();
+        assert_eq!(
+            kept(&schema, json!({"lines": "[1, 2]"})),
+            json!({"lines": [1, 2]})
+        );
+    }
+
+    #[test]
+    fn validate_retypes_each_element_of_an_array() {
+        let schema = Schema::new(json!({"type": "array", "items": {"type": "integer"}})).unwrap();
+        assert_eq!(kept(&schema, json!(["1", "2"])), json!([1, 2]));
+    }
+
+    #[test]
+    fn validate_stringifies_a_number_for_a_single_string_type() {
+        let schema = Schema::new(json!({"type": "string"})).unwrap();
+        assert_eq!(kept(&schema, json!(42)), json!("42"));
+    }
+
+    #[test]
+    fn validate_wraps_a_lone_value_for_a_single_array_type() {
+        let schema = Schema::new(json!({"type": "array", "items": {"type": "string"}})).unwrap();
+        assert_eq!(kept(&schema, json!("urgent")), json!(["urgent"]));
+    }
+
+    #[test]
+    fn validate_does_not_widen_to_satisfy_a_union_member() {
+        // Writing a literal would pick both a shape and a member.
+        let listed = Schema::new(json!({"type": ["string", "null"]})).unwrap();
+        assert!(listed.validate(json!(1)).is_err());
+        let branched = Schema::new(json!({
+            "anyOf": [{ "type": "string" }, { "type": "null" }],
+        }))
+        .unwrap();
+        assert!(branched.validate(json!(1)).is_err());
+    }
+
+    #[test]
+    fn validate_retypes_within_a_matching_any_of_branch() {
+        let schema = Schema::new(json!({
+            "anyOf": [{ "type": "integer" }, { "type": "boolean" }],
+        }))
+        .unwrap();
+        assert_eq!(kept(&schema, json!("42")), json!(42));
+    }
+
+    #[test]
+    fn validate_reports_the_original_violations_when_a_retype_still_fails() {
+        // `line` retypes but `name` cannot, so the whole value still fails.
+        let schema = Schema::new(json!({
+            "type": "object",
+            "properties": {
+                "line": { "type": "integer" },
+                "name": { "type": "string", "minLength": 3 },
+            },
+            "required": ["line", "name"],
+        }))
+        .unwrap();
+        let violations = schema
+            .validate(json!({"line": "42", "name": "ab"}))
+            .unwrap_err();
+        assert!(violations.iter().any(|v| v.instance_path == "/line"));
+        assert!(violations.iter().any(|v| v.instance_path == "/name"));
+    }
+
+    #[test]
+    fn validate_retypes_inside_a_decoded_string() {
+        assert_eq!(
+            kept(&line_schema(), json!("{\"line\": \"42\"}")),
+            json!({"line": 42})
+        );
+    }
+
+    #[test]
+    fn validate_names_the_pointer_it_repaired() {
+        let (_, repaired) = line_schema().validate(json!({"line": "42"})).unwrap();
+        assert_eq!(repaired, vec!["/line"]);
+    }
+
+    #[test]
+    fn validate_reports_a_decode_before_the_retype_it_enabled() {
+        // The decode is the root's own retype, so it carries the empty pointer.
+        let (_, repaired) = line_schema().validate(json!("{\"line\": \"42\"}")).unwrap();
+        assert_eq!(repaired, vec!["", "/line"]);
+    }
+
+    #[test]
+    fn validate_reports_nothing_for_a_conforming_value() {
+        let (_, repaired) = line_schema().validate(json!({"line": 42})).unwrap();
+        assert!(repaired.is_empty());
+    }
+
+    #[test]
+    fn type_violation_names_the_quoting_to_change() {
+        let violations = line_schema()
+            .validate(json!({"line": "about 42"}))
+            .unwrap_err();
+        assert!(violations
+            .iter()
+            .any(|v| v.message.contains("send the value unquoted")));
     }
 
     // Serde / clone

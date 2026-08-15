@@ -54,14 +54,16 @@ def test_valid_schema_parses_and_attaches_to_a_ticket():
     assert isinstance(ticket.schema, aw.Schema)
 
 
-def test_schema_validate_returns_the_value_to_keep():
+def test_schema_validate_returns_the_value_to_keep_and_no_repair():
     schema = aw.Schema({"type": "object", "required": ["status"]})
-    assert schema.validate({"status": "done"}) == {"status": "done"}
+    assert schema.validate({"status": "done"}) == ({"status": "done"}, [])
 
 
 def test_schema_validate_decodes_a_double_encoded_value():
     schema = aw.Schema({"type": "object", "required": ["status"]})
-    assert schema.validate('{"status": "done"}') == {"status": "done"}
+    kept, repaired = schema.validate('{"status": "done"}')
+    assert kept == {"status": "done"}
+    assert repaired == [""]
 
 
 def test_schema_validate_rejects_a_violating_value():
@@ -564,7 +566,7 @@ def test_a_schema_is_read_back_by_the_label_it_was_bound_to():
     schemas = aw.SchemaStore()
     schemas.label("analysis", {"type": "object", "required": ["verdict"]})
 
-    assert schemas.get("analysis").validate({"verdict": "clean"}) == {"verdict": "clean"}
+    assert schemas.get("analysis").validate({"verdict": "clean"}) == ({"verdict": "clean"}, [])
     assert schemas.get("discovery") is None
 
 

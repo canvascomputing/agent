@@ -49,11 +49,11 @@ tickets.ticket(Ticket::new("Audit src/db."));               // the default scope
 
 **`ToolRegistry::get` matches the name the model sent exactly. Failing that, it folds both sides onto a lookup key (lowercase, hyphens to underscores, one trailing `_tool` removed) and resolves to the tool that key matches. A key two registered tools share resolves to nothing.**
 
-- The fold only removes information, so it cannot reach a tool the model did not name. That is what separates it from repairing a malformed argument, which agentwerk never does: the argument payload still reaches the tool untouched and is still rejected by the tool's own schema when wrong.
+- The fold only removes information, so it cannot reach a tool the model did not name. A repaired argument is held to the same bar from the other side: the rewrite runs only on a payload that already failed, and it is discarded unless the schema then accepts it, so what the model reads back is the violations its own value produced.
 - Refusing on ambiguity is the load-bearing half. A host registering `grep_tool` beside the built-in `grep` keeps both reachable under their own names, and a third spelling resolves to neither rather than to an arbitrary winner.
 - `get` is the only entry point: dispatch, the concurrent batching decision in `partition_tool_calls`, and the `opened_paths` lookup all go through it, so they cannot disagree about which tool a call names.
-- The loop rewrites each call to the registered name before emitting `ToolCallStarted`, so `Event` and `Stats` never split one tool across spellings. No event reports the fold; it is a lookup detail, not a state the run reached.
-- A name that resolves to nothing returns `ToolNotFound`, whose model-visible message names every registered tool. Without that list the model has nothing to correct against, and each retry spends `max_schema_retries` budget until the ticket fails.
+- The loop rewrites each call to the registered name before emitting `ToolCallStarted`, so `Event` and `Stats` never split one tool across spellings. The fold itself is reported as `EventKind::ResponseRepaired` carrying `RepairKind::CallMalformed`, so a host folding the event chain sees a model that keeps misspelling one tool.
+- A name that resolves to nothing returns `ToolNotFound`, whose model-visible message names every registered tool. Without that list the model has nothing to correct against, and each retry spends `max_schema_retries` budget until the ticket fails. A call the model wrote as text rather than emitting takes the same path: it is promoted whatever it names, so one reason covers an unknown tool however the call arrived.
 - `ToolChoice::Specific` is not folded: it travels outbound and is written by agentwerk or the host, never by the model.
 
 ## Finishing Is a Tool Call
@@ -127,12 +127,15 @@ Two layers of state exist. The per-ticket replies live on `Ticket::replies`: eve
 
 ## Providers Own Their Client
 
-**Each concrete provider owns a `reqwest::Client` directly. There is no transport abstraction.**
+**Each concrete provider owns an `Endpoint`, which owns a `reqwest::Client` directly. There is no transport abstraction beyond it.**
 
-- The `ProviderLike` trait fulfils one contract: `respond` (drive one turn) plus per-vendor metadata. Callers hold it as a `Provider`, a cloneable handle any implementer converts into.
+- The `ProviderLike` trait fulfils one contract: `respond`, drive one turn. Callers hold it as a `Provider`, a cloneable handle any implementer converts into. `Provider::verify` is an inherent convenience over `respond`, not a second thing to implement.
 - `ModelRequest`, `Message`, `ContentBlock`, and `TokenUsage` are the request and response types every provider converts to and from.
 - Those types, plus `ModelResponse`, `StreamEvent`, `ResponseStatus`, `ToolChoice`, and `ProviderToolDefinition`, are `pub` and documented: the `ProviderLike` trait is a supported extension point, and its implementors name them.
-- HTTP error mapping is shared through `providers::map_http_errors` plus a provider-specific `classify_error`; SSE parsing lives in `providers::stream`.
+- Where a request goes, how long it may take, and what a non-2xx answer means are decided in `providers::endpoint`. Vendor code adds its own authentication headers and its own `classify_error` for the bodies only that vendor words its own way. SSE parsing lives in `providers::stream`.
+- There are two protocols and four configurations: `mistral` and `litellm` answer through `openai::respond` against their own `Endpoint` rather than owning an `OpenAi` of their own.
+- A provider decodes its own payloads and names which `ResponseBuilder` call each one is. `providers::response_builder` decides which block a fragment continues and when a `StreamEvent` fires, so no two vendors can disagree about either. Blocks are dense and in arrival order; the number an endpoint attaches to a fragment routes tool calls only, and never sizes anything.
+- A context window is looked up by model name in `providers::model`, not per vendor: the same name reaches agentwerk through whichever endpoint serves it.
 - Retry happens at the request level using `Policies::max_request_retries` and `request_retry_delay`; vendor code does not retry.
 
 ## The Lifecycle Is Three Verbs Over One Filter

@@ -114,10 +114,6 @@ pub enum ResponseStatus {
     /// Anthropic: `max_tokens` | OpenAI: `length` | Mistral: `length`
     OutputTruncated,
 
-    /// Input exceeded the model's context window.
-    /// Anthropic: `model_context_window_exceeded`
-    ContextWindowExceeded,
-
     /// Model refused to respond due to safety policy.
     /// Anthropic: `refusal` | OpenAI: `content_filter`
     Refused,
@@ -159,28 +155,35 @@ pub struct ModelResponse {
 
 /// Why a tool call a model wrote as text was not promoted to a real call,
 /// carried by `EventKind::ToolCallDeclined`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum ToolDeclineKind {
-    /// The reply ended on a length or filter limit, so a whole-looking block
-    /// may be one the model never finished committing to.
+    /// The reply hit a length limit, so the block may be cut short.
+    #[serde(rename = "output_truncated")]
     OutputTruncated,
-    /// The block named a tool the request never advertised.
-    ToolNotAdvertised,
+    /// The model refused, paused, or hit a stop sequence, so a whole-looking
+    /// block may be one it never committed to.
+    #[serde(rename = "not_finished")]
+    ReplyNotFinished,
+    /// The endpoint already delivered a call under that name, so the block was
+    /// left alone rather than run a second time.
+    #[serde(rename = "already_delivered")]
+    AlreadyDelivered,
 }
 
 impl ToolDeclineKind {
     /// Every kind, in the order they are declared.
     pub const ALL: &'static [ToolDeclineKind] = &[
         ToolDeclineKind::OutputTruncated,
-        ToolDeclineKind::ToolNotAdvertised,
+        ToolDeclineKind::ReplyNotFinished,
+        ToolDeclineKind::AlreadyDelivered,
     ];
 
-    /// The stable snake_case spelling, which is also the counter this decline
-    /// adds to under `tools.<name>`.
+    /// The stable snake_case spelling, the one `Event.data["reason"]` carries.
     pub fn as_str(&self) -> &'static str {
         match self {
             ToolDeclineKind::OutputTruncated => "output_truncated",
-            ToolDeclineKind::ToolNotAdvertised => "not_advertised",
+            ToolDeclineKind::ReplyNotFinished => "not_finished",
+            ToolDeclineKind::AlreadyDelivered => "already_delivered",
         }
     }
 }
@@ -191,47 +194,24 @@ impl std::fmt::Display for ToolDeclineKind {
     }
 }
 
-impl Serialize for ToolDeclineKind {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(self.as_str())
-    }
-}
-
-/// Incremental event emitted during SSE streaming.
-///
-/// Events within a single response arrive in order and reference the content block they
-/// belong to via `index`. A stream ends with `MessageDone`.
+/// Something worth reporting while a reply is still arriving, in the order it
+/// happened.
 #[derive(Debug, Clone)]
 pub enum StreamEvent {
-    /// Appended text for the text block at `index`.
-    TextDelta { index: usize, text: String },
+    /// Text the model just produced, to be shown as it arrives.
+    TextDelta { text: String },
 
-    /// Partial JSON fragment for the tool-use block at `index`. Concatenate the fragments
-    /// across deltas to reconstruct the full tool input; intermediate chunks are not valid JSON.
-    InputJsonDelta { index: usize, partial_json: String },
+    /// A tool call the endpoint did not deliver usably, written as text or
+    /// delivered without its arguments, was rebuilt from the text the model
+    /// wrote; it will run.
+    ToolCallRepaired { tool_name: String },
 
-    /// The content block at `index` is complete; no further deltas will target it.
-    ContentBlockStop { index: usize },
-
-    /// Final status and cumulative token usage for the response. Emitted after all content blocks.
-    MessageDelta {
-        status: ResponseStatus,
-        usage: TokenUsage,
-    },
-
-    /// A tool call the model wrote as text rather than emitting was read back
-    /// out and added to the response; it will run.
-    ToolCallRecovered { tool_name: String },
-
-    /// A framed tool call was found in the reply and left alone, with the
+    /// A framed tool call was found in the reply and declined, with the
     /// reason it was not promoted.
     ToolCallDeclined {
         tool_name: String,
         reason: ToolDeclineKind,
     },
-
-    /// End of stream. No further events follow.
-    MessageDone,
 }
 
 #[cfg(test)]

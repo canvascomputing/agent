@@ -616,8 +616,8 @@ tickets.on_event(|event| {
 | | `RequestFailed` | A request failed and was not retried. |
 | | `RequestRetried` | A transient provider error triggered a retry. |
 | | `TextChunkReceived` | A piece of the reply arrived. |
-| **Tool** | `ToolCallRecovered` | An invalidly written tool call was recovered. |
-| | `ToolCallDeclined` | An invalidly written tool call was not recovered. |
+| | `ResponseRepaired` | A malformed call or value was corrected. |
+| **Tool** | `ToolCallDeclined` | A tool call written in the reply was declined, with the reason. |
 | | `ToolCallStarted` | A tool invocation began. |
 | | `ToolCallFinished` | A tool invocation finished. |
 | | `ToolCallFailed` | A tool invocation failed but the ticket continues. |

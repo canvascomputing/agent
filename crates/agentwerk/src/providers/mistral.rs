@@ -5,13 +5,16 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
+use super::endpoint::Endpoint;
 use super::error::ProviderResult;
-use super::openai::OpenAi;
+use super::openai;
 use super::provider::{ModelRequest, ProviderLike};
 use super::types::{ModelResponse, StreamEvent};
 
-/// LLM provider for the Mistral API. Speaks OpenAI's chat-completions
-/// wire format against `api.mistral.ai`.
+const DEFAULT_BASE_URL: &str = "https://api.mistral.ai";
+
+/// LLM provider for the Mistral API. Sends the same request shape as OpenAI's
+/// chat completions against `api.mistral.ai`.
 ///
 /// Reads `MISTRAL_API_KEY` (and optional `MISTRAL_BASE_URL`) when built
 /// via [`Provider::from_env`]. Override the endpoint with [`base_url`] and
@@ -38,13 +41,11 @@ use super::types::{ModelResponse, StreamEvent};
 /// [`Provider::from_env`]: crate::providers::Provider::from_env
 /// [`base_url`]: Mistral::base_url
 /// [`timeout`]: Mistral::timeout
-pub struct Mistral(OpenAi);
-
-const DEFAULT_BASE_URL: &str = "https://api.mistral.ai";
+pub struct Mistral(Endpoint);
 
 impl Mistral {
     pub fn new(api_key: impl Into<String>) -> Self {
-        Self(OpenAi::raw(api_key, DEFAULT_BASE_URL))
+        Self(Endpoint::new(api_key, DEFAULT_BASE_URL))
     }
 
     pub fn base_url(mut self, url: impl Into<String>) -> Self {
@@ -52,8 +53,8 @@ impl Mistral {
         self
     }
 
-    pub fn timeout(mut self, d: Duration) -> Self {
-        self.0 = self.0.timeout(d);
+    pub fn timeout(mut self, duration: Duration) -> Self {
+        self.0 = self.0.timeout(duration);
         self
     }
 
@@ -64,65 +65,31 @@ impl Mistral {
     }
 }
 
-impl Mistral {
-    pub(crate) fn lookup_context_window_size(id: &str) -> Option<u64> {
-        let m = id.to_ascii_lowercase();
-        if m.contains("codestral") {
-            return Some(256_000);
-        }
-        if m.contains("mistral-large")
-            || m.contains("mistral-medium")
-            || m.contains("mistral-small")
-        {
-            return Some(131_072);
-        }
-        None
-    }
-}
-
 impl ProviderLike for Mistral {
     fn respond(
         &self,
         request: ModelRequest,
         on_event: Arc<dyn Fn(StreamEvent) + Send + Sync>,
     ) -> Pin<Box<dyn Future<Output = ProviderResult<ModelResponse>> + Send + '_>> {
-        self.0.respond(request, on_event)
-    }
-
-    fn prewarm(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
-        self.0.prewarm()
+        openai::respond(&self.0, request, on_event)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::providers::endpoint::DEFAULT_REQUEST_TIMEOUT;
 
     #[test]
-    fn lookup_codestral_returns_256k() {
-        let lookup = Mistral::lookup_context_window_size;
-        assert_eq!(lookup("codestral-latest"), Some(256_000));
+    fn a_new_provider_points_at_the_mistral_api() {
+        let provider = Mistral::new("test-key");
+        assert_eq!(provider.0.api_key(), "test-key");
+        assert_eq!(provider.0.get_timeout(), DEFAULT_REQUEST_TIMEOUT);
     }
 
     #[test]
-    fn lookup_mistral_families_return_131k() {
-        let lookup = Mistral::lookup_context_window_size;
-        assert_eq!(lookup("mistral-large-2411"), Some(131_072));
-        assert_eq!(lookup("mistral-medium-2508"), Some(131_072));
-        assert_eq!(lookup("mistral-small-latest"), Some(131_072));
-    }
-
-    #[test]
-    fn lookup_unknown_models_return_none() {
-        let lookup = Mistral::lookup_context_window_size;
-        assert_eq!(lookup("claude-sonnet-4-20250514"), None);
-        assert_eq!(lookup("gpt-5"), None);
-        assert_eq!(lookup("llama-3-70b"), None);
-    }
-
-    #[test]
-    fn timeout_delegates_to_inner() {
-        let p = Mistral::new("test-key").timeout(Duration::from_secs(42));
-        assert_eq!(p.0.request_timeout(), Duration::from_secs(42));
+    fn the_timeout_builder_reaches_the_endpoint() {
+        let provider = Mistral::new("test-key").timeout(Duration::from_secs(42));
+        assert_eq!(provider.0.get_timeout(), Duration::from_secs(42));
     }
 }

@@ -125,6 +125,41 @@ impl fmt::Display for ToolFailureKind {
     }
 }
 
+/// What was wrong with something the model sent, carried by
+/// [`EventKind::ResponseRepaired`]. Each variant names the defect, since the fix
+/// already happened and the defect is what a prompt change would address.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum RepairKind {
+    /// The call arrived unusable: written as text in the reply, delivered
+    /// without its arguments, or named with a spelling that had to be folded.
+    #[serde(rename = "call_malformed")]
+    CallMalformed,
+    /// A value did not match the schema declared for it, in type or in shape:
+    /// a scalar the model quoted, a structure it wrote as JSON text, or a
+    /// result it sent under a `result` key the schema does not declare.
+    #[serde(rename = "value_mistyped")]
+    ValueMistyped,
+}
+
+impl RepairKind {
+    /// Every kind, in the order they are declared.
+    pub const ALL: &'static [RepairKind] = &[RepairKind::CallMalformed, RepairKind::ValueMistyped];
+
+    /// The stable snake_case spelling, the one `Event.data["reason"]` carries.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            RepairKind::CallMalformed => "call_malformed",
+            RepairKind::ValueMistyped => "value_mistyped",
+        }
+    }
+}
+
+impl fmt::Display for RepairKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// Why a knowledge operation did not go through, carried by
 /// [`EventKind::KnowledgeFailed`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -285,9 +320,11 @@ pub enum EventKind {
     },
     /// A piece of the reply arrived.
     TextChunkReceived { content: String },
-    /// A tool call the model wrote as text instead of emitting was read back
-    /// out and will run.
-    ToolCallRecovered { tool_name: String },
+    /// A malformed call or value was corrected here and then used, rather than
+    /// asked for again. `message` reads `<name>: <what was corrected>`, so
+    /// grouping by its prefix collects every repair one tool needed. Repeated
+    /// repairs of one reason point at a prompt or tool description to fix.
+    ResponseRepaired { reason: RepairKind, message: String },
     /// A framed tool call was found in the reply and left alone, with the
     /// reason it was not promoted.
     ToolCallDeclined {
@@ -383,7 +420,7 @@ impl EventKind {
             EventKind::RequestFailed { .. } => EventName::RequestFailed,
             EventKind::RequestRetried { .. } => EventName::RequestRetried,
             EventKind::TextChunkReceived { .. } => EventName::TextChunkReceived,
-            EventKind::ToolCallRecovered { .. } => EventName::ToolCallRecovered,
+            EventKind::ResponseRepaired { .. } => EventName::ResponseRepaired,
             EventKind::ToolCallDeclined { .. } => EventName::ToolCallDeclined,
             EventKind::ToolCallStarted { .. } => EventName::ToolCallStarted,
             EventKind::ToolCallFinished { .. } => EventName::ToolCallFinished,
@@ -441,7 +478,7 @@ pub enum EventName {
     RequestFailed,
     RequestRetried,
     TextChunkReceived,
-    ToolCallRecovered,
+    ResponseRepaired,
     ToolCallDeclined,
     ToolCallStarted,
     ToolCallFinished,
@@ -474,7 +511,7 @@ impl EventName {
         EventName::RequestFailed,
         EventName::RequestRetried,
         EventName::TextChunkReceived,
-        EventName::ToolCallRecovered,
+        EventName::ResponseRepaired,
         EventName::ToolCallDeclined,
         EventName::ToolCallStarted,
         EventName::ToolCallFinished,
@@ -506,7 +543,7 @@ impl EventName {
             EventName::RequestFailed => "request_failed",
             EventName::RequestRetried => "request_retried",
             EventName::TextChunkReceived => "text_chunk_received",
-            EventName::ToolCallRecovered => "tool_call_recovered",
+            EventName::ResponseRepaired => "response_repaired",
             EventName::ToolCallDeclined => "tool_call_declined",
             EventName::ToolCallStarted => "tool_call_started",
             EventName::ToolCallFinished => "tool_call_finished",
@@ -671,8 +708,9 @@ pub(crate) mod tests {
             EventKind::TextChunkReceived {
                 content: "hello".into(),
             },
-            EventKind::ToolCallRecovered {
-                tool_name: "grep".into(),
+            EventKind::ResponseRepaired {
+                reason: RepairKind::CallMalformed,
+                message: "grep".into(),
             },
             EventKind::ToolCallDeclined {
                 tool_name: "grep".into(),
