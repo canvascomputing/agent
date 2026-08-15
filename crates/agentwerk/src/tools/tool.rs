@@ -12,6 +12,7 @@ use crate::agents::knowledge::Knowledge;
 use crate::agents::tickets::{Run, TicketQueue};
 use crate::providers::types::ContentBlock;
 use crate::providers::{ProviderResult, ProviderToolDefinition};
+use crate::schemas::Schema;
 
 use super::error::ToolError;
 
@@ -212,6 +213,11 @@ pub trait ToolLike: Send + Sync {
 #[derive(Clone, Default)]
 pub(crate) struct ToolRegistry {
     pub(crate) tools: Vec<Arc<dyn ToolLike>>,
+    /// Each tool's arguments schema, compiled once at registration, against the
+    /// registered name. A tool whose schema does not compile is absent and its
+    /// arguments reach it unchecked, since a mistake in the schema is the
+    /// author's and must not make the tool uncallable.
+    schemas: std::collections::HashMap<String, Schema>,
 }
 
 impl std::fmt::Debug for ToolRegistry {
@@ -231,7 +237,19 @@ impl ToolRegistry {
     pub(crate) fn register(&mut self, tool: impl ToolLike + 'static) {
         let tool: Arc<dyn ToolLike> = Arc::new(tool);
         self.tools.retain(|t| t.name() != tool.name());
+        self.schemas.remove(tool.name());
+        if let Ok(schema) = Schema::new(tool.input_schema()) {
+            self.schemas.insert(tool.name().to_string(), schema);
+        }
         self.tools.push(tool);
+    }
+
+    /// The compiled arguments schema of the tool `name` resolves to, through the
+    /// same spelling fold as [`get`](Self::get) so a folded name is checked
+    /// against the tool that will run.
+    fn schema_for(&self, name: &str) -> Option<Schema> {
+        let tool = self.get(name)?;
+        self.schemas.get(tool.name()).cloned()
     }
 
     /// Find the tool a call names.
@@ -301,6 +319,7 @@ impl ToolRegistry {
                         let ctx = ctx.clone();
                         let tool_arc = self.get(&call.name);
                         let available = tool_arc.is_none().then(|| self.tool_names());
+                        let schema = self.schema_for(&call.name);
                         let call_id = call.id.clone();
                         let call_name = call.name.clone();
                         let input = call.input.clone();
@@ -308,7 +327,7 @@ impl ToolRegistry {
                         set.spawn(async move {
                             let _permit = sem.acquire().await.unwrap();
                             let outcome =
-                                invoke(tool_arc, available, &call_name, input, &ctx).await;
+                                invoke(tool_arc, available, schema, &call_name, input, &ctx).await;
                             let outcome = replace_empty_output(outcome, &call_name);
                             let (outcome, path) =
                                 cap_oversized_result(outcome, &ctx, &call_id, PER_TOOL_CAP);
@@ -326,8 +345,16 @@ impl ToolRegistry {
                 ToolBatch::Serial(call) => {
                     let tool_arc = self.get(&call.name);
                     let available = tool_arc.is_none().then(|| self.tool_names());
-                    let outcome =
-                        invoke(tool_arc, available, &call.name, call.input.clone(), ctx).await;
+                    let schema = self.schema_for(&call.name);
+                    let outcome = invoke(
+                        tool_arc,
+                        available,
+                        schema,
+                        &call.name,
+                        call.input.clone(),
+                        ctx,
+                    )
+                    .await;
                     let outcome = replace_empty_output(outcome, &call.name);
                     let (outcome, path) =
                         cap_oversized_result(outcome, ctx, &call.id, PER_TOOL_CAP);
@@ -532,6 +559,7 @@ impl ToolLike for Tool {
 async fn invoke(
     tool: Option<Arc<dyn ToolLike>>,
     available: Option<Vec<String>>,
+    schema: Option<Schema>,
     name: &str,
     input: Value,
     ctx: &ToolContext,
@@ -557,6 +585,17 @@ async fn invoke(
                 truncate_preview(&received)
             ),
         });
+    }
+    // The arguments are checked against what the tool advertises, so a wrong
+    // type is named once here rather than by each tool in its own words, or
+    // taken for a missing argument and silently defaulted.
+    if let Some(schema) = schema {
+        if let Err(violations) = schema.violations(&input) {
+            return Err(ToolError::SchemaValidationFailed {
+                tool_name: name.into(),
+                message: violations.to_string(),
+            });
+        }
     }
     match t.call(input, ctx).await {
         Ok(ToolResult::Success(s)) => Ok(s),
@@ -1034,6 +1073,136 @@ Do the demo thing.
         assert!(content.contains("not a JSON object"));
         assert!(content.contains(r#"{"pattern": "exec""#));
         assert_ne!(content, "matches");
+    }
+
+    /// A tool that declares what its one argument must be, so dispatch has
+    /// something to check a call against.
+    struct TypedTool;
+
+    impl ToolLike for TypedTool {
+        fn name(&self) -> &str {
+            "typed"
+        }
+        fn description(&self) -> &str {
+            "typed"
+        }
+        fn input_schema(&self) -> Value {
+            serde_json::json!({
+                "type": "object",
+                "properties": { "count": { "type": "integer" } },
+                "required": ["count"],
+            })
+        }
+        fn call<'a>(
+            &'a self,
+            _input: Value,
+            _ctx: &'a ToolContext,
+        ) -> Pin<Box<dyn Future<Output = ProviderResult<ToolResult>> + Send + 'a>> {
+            Box::pin(async move { Ok(ToolResult::success("ran")) })
+        }
+    }
+
+    async fn call_typed(input: Value) -> (String, bool) {
+        let mut registry = ToolRegistry::default();
+        registry.register(TypedTool);
+        let calls = vec![ToolCall {
+            id: "c1".into(),
+            name: "typed".into(),
+            input,
+        }];
+        let results = registry.execute(&calls, &test_ctx()).await;
+        let ContentBlock::ToolResult {
+            content, succeeded, ..
+        } = &results[0].0
+        else {
+            panic!("Expected ToolResult");
+        };
+        (content.clone(), *succeeded)
+    }
+
+    #[tokio::test]
+    async fn arguments_matching_the_declared_schema_reach_the_tool() {
+        let (content, succeeded) = call_typed(serde_json::json!({"count": 3})).await;
+        assert!(succeeded);
+        assert_eq!(content, "ran");
+    }
+
+    #[tokio::test]
+    async fn an_argument_of_the_wrong_type_is_named_and_never_reaches_the_tool() {
+        // The quoted number is not retyped: running the call on something the
+        // model did not ask for is worse than telling it what to send.
+        let (content, succeeded) = call_typed(serde_json::json!({"count": "3"})).await;
+        assert!(!succeeded);
+        assert_ne!(content, "ran");
+        assert!(content.contains("count"), "{content}");
+    }
+
+    #[tokio::test]
+    async fn a_missing_required_argument_is_named_and_never_reaches_the_tool() {
+        let (content, succeeded) = call_typed(serde_json::json!({})).await;
+        assert!(!succeeded);
+        assert_ne!(content, "ran");
+        assert!(content.contains("count"), "{content}");
+    }
+
+    #[tokio::test]
+    async fn an_argument_the_schema_does_not_declare_still_reaches_the_tool() {
+        // Tool schemas close over nothing, so an extra key is the model being
+        // generous rather than wrong.
+        let (_, succeeded) = call_typed(serde_json::json!({"count": 3, "extra": true})).await;
+        assert!(succeeded);
+    }
+
+    #[test]
+    fn a_tool_whose_schema_does_not_compile_stays_callable() {
+        // The mistake is the tool author's; making the tool uncallable would
+        // punish the agent for it.
+        struct Unschemable;
+        impl ToolLike for Unschemable {
+            fn name(&self) -> &str {
+                "unschemable"
+            }
+            fn description(&self) -> &str {
+                "unschemable"
+            }
+            fn input_schema(&self) -> Value {
+                serde_json::json!({"uniqueItems": true})
+            }
+            fn call<'a>(
+                &'a self,
+                _input: Value,
+                _ctx: &'a ToolContext,
+            ) -> Pin<Box<dyn Future<Output = ProviderResult<ToolResult>> + Send + 'a>> {
+                Box::pin(async move { Ok(ToolResult::success("ran")) })
+            }
+        }
+        let mut registry = ToolRegistry::default();
+        registry.register(Unschemable);
+        assert!(registry.get("unschemable").is_some());
+        assert!(registry.schema_for("unschemable").is_none());
+    }
+
+    #[test]
+    fn every_built_in_tool_advertises_a_schema_dispatch_can_check() {
+        let mut registry = ToolRegistry::default();
+        registry.register(crate::tools::ReadFileTool);
+        registry.register(crate::tools::WriteFileTool);
+        registry.register(crate::tools::EditFileTool);
+        registry.register(crate::tools::GrepTool);
+        registry.register(crate::tools::GlobTool);
+        registry.register(crate::tools::ListDirectoryTool);
+        registry.register(crate::tools::FetchUrlTool);
+        registry.register(crate::tools::FinishTool);
+        let unchecked: Vec<&str> = registry
+            .tools
+            .iter()
+            .map(|tool| tool.name())
+            .filter(|name| registry.schema_for(name).is_none())
+            .collect();
+        assert!(
+            unchecked.is_empty(),
+            "schema did not compile: {unchecked:?}"
+        );
     }
 
     #[tokio::test]

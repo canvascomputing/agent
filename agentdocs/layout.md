@@ -79,7 +79,7 @@ crates/
 - `environment.rs` reads the variables behind `Provider::from_env()` and `Model::from_env()`; its readers are crate-internal.
 - `model.rs` holds `Model` and the one table of context window sizes, keyed by model name rather than by LLM provider.
 - `stream.rs` holds the SSE parser; `error.rs` holds `ProviderError`, `ProviderResult`, and `RequestErrorKind`; `patterns.rs` holds the error-body patterns that catch an upstream signal a proxy wrapped.
-- `response_builder.rs` holds `ResponseBuilder`, the reply every provider grows one fragment at a time and the one place a `StreamEvent` is emitted from, plus `assemble`, which reads one SSE reply to its end through a provider's decoder.
+- `response.rs` holds `ResponseBuilder`, the reply every provider grows one fragment at a time and the one place a `StreamEvent` is emitted from, plus `assemble`, which reads one SSE reply to its end through a provider's decoder.
 - `framed_calls.rs` holds `repair`, which reads back the tool calls a model wrote as text rather than emitting through the tool channel; `openai.rs` is its only caller.
 
 ## The `tools/` Module

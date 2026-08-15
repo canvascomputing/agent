@@ -88,7 +88,7 @@ fn finish(input: &Value, ctx: &ToolContext) -> Result<String, ToolResult> {
     let (result, unwrapped) = parse_result(schema.as_ref(), input);
 
     // A present, non-blank `handover` selects the chaining path.
-    let Some(handover) = optional_string(input, "handover")? else {
+    let Some(handover) = optional_string(input, "handover") else {
         attach_result(&ticket_queue, &parent_key, result, &agent, unwrapped)?;
         mark_finished(&ticket_queue, &parent_key, &agent)?;
         return Ok(format!("Ticket {parent_key} marked finished"));
@@ -117,7 +117,7 @@ fn hand_over(
 ) -> Result<String, ToolResult> {
     // An omitted `task` defaults to the parent result below: the
     // common handoff forwards the finding verbatim.
-    let task = optional_string(input, "task")?;
+    let task = optional_string(input, "task");
 
     // null and an empty string are rejected: a handoff needs a real result.
     match &result {
@@ -160,17 +160,12 @@ fn hand_over(
     ))
 }
 
-/// Read an optional string argument. Absent and null both mean "not given";
-/// a blank string or another type is worth an error the model can correct.
-fn optional_string(input: &Value, key: &str) -> Result<Option<String>, ToolResult> {
-    match input.get(key) {
-        Some(Value::String(s)) if !s.trim().is_empty() => Ok(Some(s.clone())),
-        Some(Value::String(_)) => Err(ToolResult::error(format!(
-            "`{key}` must not be an empty string"
-        ))),
-        Some(Value::Null) | None => Ok(None),
-        Some(_) => Err(ToolResult::error(format!("`{key}` must be a string"))),
-    }
+/// Read an optional string argument. Absent and null both mean "not given"; the
+/// schema has already rejected a blank string and any other type, so what is
+/// here is a string with something in it.
+fn optional_string(input: &Value, key: &str) -> Option<String> {
+    let text = input.get(key)?.as_str()?;
+    (!text.trim().is_empty()).then(|| text.to_string())
 }
 
 fn mark_finished(ticket_queue: &TicketQueue, key: &str, agent: &str) -> Result<(), ToolResult> {
@@ -1166,19 +1161,13 @@ mod tests {
         assert_eq!(read_result(dir.path(), &parent_key), None);
     }
 
-    #[tokio::test]
-    async fn rejects_empty_handover() {
-        let dir = crate::test_util::TempDir::new().unwrap();
-        let (queue, _key) = one_ticket_in("alice", dir.path().to_path_buf());
-        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
-        let outcome = FinishTool
-            .call(
-                serde_json::json!({"handover": "  ", "task": "x", "result": "y"}),
-                &ctx,
-            )
-            .await
-            .unwrap();
-        assert!(matches!(outcome, ToolResult::Error(_)));
+    #[test]
+    fn a_blank_handover_violates_the_advertised_schema() {
+        // Dispatch checks the arguments, so a blank one never reaches the tool.
+        let schema = Schema::new(FinishTool.input_schema()).unwrap();
+        assert!(schema
+            .violations(&serde_json::json!({"handover": "  ", "task": "x", "result": "y"}))
+            .is_err());
     }
 
     #[tokio::test]
@@ -1326,19 +1315,12 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn handover_rejects_non_string_task() {
-        let dir = crate::test_util::TempDir::new().unwrap();
-        let (queue, _key) = one_ticket_in("alice", dir.path().to_path_buf());
-        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
-        let outcome = FinishTool
-            .call(
-                serde_json::json!({"handover": "bob", "task": 42, "result": "ok"}),
-                &ctx,
-            )
-            .await
-            .unwrap();
-        assert!(matches!(outcome, ToolResult::Error(_)));
+    #[test]
+    fn a_non_string_task_violates_the_advertised_schema() {
+        let schema = Schema::new(FinishTool.input_schema()).unwrap();
+        assert!(schema
+            .violations(&serde_json::json!({"handover": "bob", "task": 42, "result": "ok"}))
+            .is_err());
     }
 
     #[tokio::test]

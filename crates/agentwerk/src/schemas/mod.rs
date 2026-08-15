@@ -139,6 +139,14 @@ impl Schema {
         &self.inner.raw_document
     }
 
+    /// Report what `value` violates, repairing nothing. Tool arguments take this
+    /// rather than [`validate`](Self::validate): retyping them would run the
+    /// call on something the model did not ask for, where a named violation
+    /// tells it what to send instead.
+    pub(crate) fn violations(&self, value: &Value) -> Result<(), SchemaViolations> {
+        self.check(value).map_err(SchemaViolations)
+    }
+
     /// Check `value` against the schema and report every violation, each
     /// naming where in the value it occurred.
     fn check(&self, instance: &Value) -> Result<(), Vec<SchemaViolation>> {

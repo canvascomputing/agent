@@ -12,7 +12,7 @@ use super::endpoint::Endpoint;
 use super::error::{ProviderError, ProviderResult};
 use super::framed_calls;
 use super::provider::{ModelRequest, ProviderLike, ProviderToolDefinition, ToolChoice};
-use super::response_builder::{assemble, ResponseBuilder};
+use super::response::{assemble, ResponseBuilder};
 use super::types::{ContentBlock, Message, ModelResponse, ResponseStatus, StreamEvent};
 
 const DEFAULT_BASE_URL: &str = "https://api.openai.com";

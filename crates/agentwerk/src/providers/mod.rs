@@ -15,7 +15,7 @@ pub(crate) mod model;
 mod openai;
 mod patterns;
 mod provider;
-mod response_builder;
+mod response;
 mod stream;
 pub mod types;
 

@@ -10,7 +10,7 @@ use serde_json::Value;
 use super::endpoint::Endpoint;
 use super::error::{ProviderError, ProviderResult};
 use super::provider::{ModelRequest, ProviderLike, ProviderToolDefinition, ToolChoice};
-use super::response_builder::{assemble, ResponseBuilder, ToolCallKey};
+use super::response::{assemble, ResponseBuilder, ToolCallKey};
 use super::types::{ContentBlock, Message, ModelResponse, ResponseStatus, StreamEvent};
 
 const DEFAULT_BASE_URL: &str = "https://api.anthropic.com";
