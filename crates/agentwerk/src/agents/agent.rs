@@ -393,19 +393,6 @@ impl Agent {
             .model(Model::from_env().expect("model name required"))
     }
 
-    /// Start building an agent with the provider and model from a `.env` file
-    /// in the current directory. An exported value wins over the file. Panics
-    /// when the file is missing, holds a malformed line, or names no LLM
-    /// provider.
-    pub fn from_dot_env() -> AgentBuilder<Provider, Model> {
-        let provider = Provider::from_dot_env().expect(
-            "readable .env required, naming ANTHROPIC_API_KEY, OPENAI_API_KEY, MISTRAL_API_KEY, or LITELLM_API_KEY",
-        );
-        AgentBuilder::new()
-            .provider(provider)
-            .model(Model::from_env().expect("model name required"))
-    }
-
     /// The unique identifier this agent works under, `<label>-<n>` for a
     /// labeled agent and `agent-<n>` for one without. It names the agent in
     /// [`Event::agent_id`] and in [`Ticket::assignee`].

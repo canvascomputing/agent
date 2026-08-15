@@ -197,14 +197,6 @@ impl Provider {
     pub fn from_env() -> ProviderResult<Self> {
         super::environment::provider_from_env()
     }
-
-    /// Fill the environment from a `.env` file in the current directory, then
-    /// detect the LLM provider as [`from_env`](Self::from_env) does. An exported
-    /// value wins over the file; a missing or malformed file is an `Err`.
-    pub fn from_dot_env() -> ProviderResult<Self> {
-        super::environment::load_dot_env()?;
-        Self::from_env()
-    }
 }
 
 impl<P: ProviderLike + 'static> From<P> for Provider {

@@ -1,7 +1,7 @@
 """Shared fixtures and the live-provider gate.
 
-Offline tests run with no network and no `.env`. Tests marked ``live`` need a
-real LLM provider and are skipped automatically when none is configured.
+Offline tests run with no network. Tests marked ``live`` need a real LLM
+provider and are skipped automatically when none is configured.
 """
 
 import os
@@ -62,26 +62,3 @@ def live_agent():
 def knowledge_dir(tmp_path):
     """A temp directory for an Open Knowledge Format bundle."""
     return str(tmp_path / "kb")
-
-
-@pytest.fixture
-def dot_env(tmp_path, monkeypatch):
-    """Run the test from an empty temp directory and hand it a writer for the
-    `.env` there. Cleanup goes through ``os.unsetenv``, not ``os.environ``: the
-    Rust side writes the process environment directly, so neither the
-    ``os.environ`` snapshot nor ``monkeypatch`` ever sees those names.
-    """
-    monkeypatch.chdir(tmp_path)
-    written = []
-
-    def write(contents):
-        (tmp_path / ".env").write_text(contents)
-        for line in contents.splitlines():
-            statement = line.strip().removeprefix("export ")
-            if "=" in statement:
-                written.append(statement.split("=", 1)[0].strip())
-
-    yield write
-
-    for name in written:
-        os.unsetenv(name)

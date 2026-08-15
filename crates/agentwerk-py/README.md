@@ -167,9 +167,8 @@ agent = (
 | `provider(provider)` | Define the LLM provider. |
 | `model(model)` | Set the model. |
 | `Agent.from_env()` | Read the provider and the model from environment variables. |
-| `Agent.from_dot_env()` | Read values from a `.env` file in the current directory. |
 
-You can also read the model or provider individually: `.provider(Provider.from_env())` or `.model(Model.from_env())`. An `.env` file can be parsed with `Provider.from_dot_env()` and `Model.from_dot_env()`.
+You can also read the model or provider individually: `.provider(Provider.from_env())` or `.model(Model.from_env())`.
 
 | Variable | Description |
 |----------|-------------|

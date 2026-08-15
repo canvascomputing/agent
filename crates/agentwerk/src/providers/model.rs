@@ -42,14 +42,6 @@ impl Model {
         })
     }
 
-    /// Fill the environment from a `.env` file in the current directory, then
-    /// build a `Model` as [`from_env`](Self::from_env) does. An exported value
-    /// wins over the file; a missing or malformed file is an `Err`.
-    pub fn from_dot_env() -> super::ProviderResult<Self> {
-        super::environment::load_dot_env()?;
-        Self::from_env()
-    }
-
     /// Set the context window size for a model, skipping the known names. Useful for local proxies or
     /// private deployments whose name isn't in any provider's table.
     pub fn context_window(mut self, size: u64) -> Self {

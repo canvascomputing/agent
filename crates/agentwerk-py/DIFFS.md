@@ -21,7 +21,6 @@ Seven rules the surface table below never repeats.
 | **Agent** | |
 | `Agent::new() -> AgentBuilder<(), ()>` | `Agent()` |
 | `Agent::from_env() -> AgentBuilder<Provider, Model>` | `Agent.from_env()`: raises `RuntimeError` where Rust panics. |
-| `Agent::from_dot_env() -> AgentBuilder<Provider, Model>` | `Agent.from_dot_env()`: raises `RuntimeError` where Rust panics. |
 | `AgentBuilder<P, M>` | Folded into `Agent`: the type changes as the provider and model slots fill, which Python cannot hold across calls. |
 | `AgentBuilder::provider(p)` | `Agent.provider(provider)` |
 | `AgentBuilder::model(m)` | `Agent.model(model)` |
@@ -169,11 +168,9 @@ Seven rules the surface table below never repeats.
 | `Provider` | An opaque handle. |
 | `ProviderLike` | Not bound: implement it in Rust to write a new LLM provider. |
 | `Provider::from_env()` | `Provider.from_env()` |
-| `Provider::from_dot_env()` | `Provider.from_dot_env()` |
 | `Provider::new(p)` | Not bound: the per-vendor constructors already hand back a `Provider`. |
 | `Model::from_name(name)` | `Model(name)` |
 | `Model::from_env()` | `Model.from_env()` |
-| `Model::from_dot_env()` | `Model.from_dot_env()` |
 | `Model.name` | `Model.name` |
 | `Model::context_window(size)` | `Model.context_window(size)` |
 | `Model::reasoning_effort(effort)` | `Model.reasoning_effort(effort)` |
