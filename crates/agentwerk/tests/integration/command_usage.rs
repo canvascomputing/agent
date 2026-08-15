@@ -61,10 +61,9 @@ async fn test() -> std::result::Result<(), Box<dyn std::error::Error>> {
         .schema(schema),
     );
 
-    tickets.finish_all().await;
+    let json = tickets.finish_last().await.unwrap_or_default();
     common::print_result(&tickets, tickets.stats());
 
-    let json = tickets.results().pop().unwrap_or_default();
     assert!(json["line_count"].as_u64().unwrap_or(0) > 1);
     assert!(json["files"].as_array().map_or(0, |a| a.len()) > 1);
 

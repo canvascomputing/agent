@@ -416,6 +416,21 @@ async def test_finish_all_hands_back_the_results_of_every_pool(queue):
     assert await queue.finish_all() == [{"verdict": "clean"}, {"pages": 2}]
 
 
+async def test_finish_last_hands_back_the_last_result_in_creation_order(queue):
+    scan = queue.ticket(aw.Ticket("scan the corpus", label="scan"))
+    report = queue.ticket(aw.Ticket("write it up", label="report"))
+    # Resolved back to front, so the answer tells creation order from the order
+    # the results landed in.
+    queue.set_finished(report, {"pages": 2})
+    queue.set_finished(scan, {"verdict": "clean"})
+
+    assert await queue.finish_last() == {"pages": 2}
+
+
+async def test_finish_last_is_none_when_nothing_finished(queue):
+    assert await queue.finish_last() is None
+
+
 async def test_a_cancelled_run_reports_its_reason(queue):
     queue.start()
     queue.task("work")

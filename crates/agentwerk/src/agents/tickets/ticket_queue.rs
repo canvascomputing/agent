@@ -1349,6 +1349,25 @@ impl TicketQueue {
         self.finish(|_| true).await
     }
 
+    /// Wait for every ticket to be done, then get the last result in creation
+    /// order.
+    ///
+    /// The one-result form of [`Self::finish_all`], for a run whose answer is a
+    /// single value. `None` means no ticket finished with a result.
+    ///
+    /// ```no_run
+    /// # use agentwerk::TicketQueue;
+    /// # async fn run() {
+    /// let tickets = TicketQueue::new();
+    /// if let Some(answer) = tickets.finish_last().await {
+    ///     println!("{answer}");
+    /// }
+    /// # }
+    /// ```
+    pub async fn finish_last(&self) -> Option<serde_json::Value> {
+        self.finish_all().await.pop()
+    }
+
     /// Get why the last run ended, or `None` while one is still going.
     ///
     /// Cleared by [`Self::start`], so a re-started queue does not report the
@@ -2229,6 +2248,29 @@ mod tests {
             queue.finish_all().await,
             vec![serde_json::json!("scanned"), serde_json::json!("reported")]
         );
+    }
+
+    #[tokio::test]
+    async fn finish_last_hands_back_the_last_result_in_creation_order() {
+        let (queue, _tmp) = test_queue();
+        queue.ticket(Ticket::new("a").label("scan"));
+        queue.ticket(Ticket::new("b").label("report"));
+        // Resolved back to front, so the answer tells creation order from the
+        // order the results landed in.
+        attach_done_result(&queue, "TICKET-2", "reported");
+        attach_done_result(&queue, "TICKET-1", "scanned");
+
+        assert_eq!(
+            queue.finish_last().await,
+            Some(serde_json::json!("reported"))
+        );
+    }
+
+    #[tokio::test]
+    async fn finish_last_is_none_when_nothing_finished() {
+        let (queue, _tmp) = test_queue();
+
+        assert_eq!(queue.finish_last().await, None);
     }
 
     #[tokio::test]

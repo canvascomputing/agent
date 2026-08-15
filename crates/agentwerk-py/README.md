@@ -68,9 +68,9 @@ async def main():
     )
 
     work = agent.start()
-    results = await work.finish_all()
+    result = await work.finish_last()
 
-    print(results[-1])
+    print(result)
 
 
 asyncio.run(main())
@@ -283,9 +283,9 @@ The ticket queue schedules the work of your agents and returns their results.
 ```python
 tickets.start()
 
-answers = await tickets.finish_all()
-if answers:
-    print(answers[-1])
+answer = await tickets.finish_last()
+if answer is not None:
+    print(answer)
 ```
 
 <details>
@@ -296,6 +296,7 @@ if answers:
 | **Run** | `start()` | Begin processing tickets. |
 | **Wait** | `await finish(matches)` | Wait for the matching tickets to be done and get their results. |
 | | `await finish_all()` | Wait for every ticket to be finished and get every result. |
+| | `await finish_last()` | Wait for every ticket to be finished and get the last result. |
 | | `get_finish_reason()` | Get why the last run ended. |
 | **Stop** | `cancel(matches)` | Stop work on the matching tickets. |
 | | `cancel_all()` | Stop work on every ticket. |

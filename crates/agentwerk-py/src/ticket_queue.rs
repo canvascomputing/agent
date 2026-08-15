@@ -565,6 +565,21 @@ impl PyTicketQueue {
         })
     }
 
+    /// Wait for every ticket to be done, then give back the last result in
+    /// creation order. `None` means no ticket finished with a result.
+    /// Awaitable.
+    fn finish_last<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let inner = Arc::clone(&self.inner);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let result = inner.finish_last().await;
+            Python::attach(|py| {
+                result
+                    .map(|value| Ok(value_to_py(py, &value)?.unbind()))
+                    .transpose()
+            })
+        })
+    }
+
     /// Get why the last run ended, or `None` while one is still going.
     fn get_finish_reason(&self) -> Option<String> {
         self.inner

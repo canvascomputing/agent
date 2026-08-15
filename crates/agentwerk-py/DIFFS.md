@@ -90,6 +90,7 @@ Seven rules the surface table below never repeats.
 | `TicketQueue::start()` | `TicketQueue.start()` |
 | `TicketQueue::finish(matches).await` | `await TicketQueue.finish(matches)`: the results become a list. |
 | `TicketQueue::finish_all().await` | `await TicketQueue.finish_all()`: the results become a list. |
+| `TicketQueue::finish_last().await` | `await TicketQueue.finish_last()`: an absent result becomes `None`. |
 | `TicketQueue::get_finish_reason()` | `TicketQueue.get_finish_reason()`: the `FinishReason` becomes the string it prints as, such as `policy_violated(turns)`. |
 | `TicketQueue::cancel(matches)` | `TicketQueue.cancel(matches)` |
 | `TicketQueue::cancel_all()` | `TicketQueue.cancel_all()` |

@@ -65,9 +65,8 @@ async fn main() {
     agent.task("Find every `pub trait` defined under src/ and explain each in one sentence.");
 
     let work = agent.start();
-    let mut results = work.finish_all().await;
+    let result = work.finish_last().await.unwrap();
 
-    let result = results.pop().unwrap();
     println!("{}", result.as_str().unwrap_or_default());
 }
 ```
@@ -273,7 +272,7 @@ The ticket queue schedules the work of your agents and returns their results.
 ```rust
 tickets.start();
 
-if let Some(answer) = tickets.finish_all().await.pop() {
+if let Some(answer) = tickets.finish_last().await {
     println!("{answer}");
 }
 ```
@@ -286,6 +285,7 @@ if let Some(answer) = tickets.finish_all().await.pop() {
 | **Run** | `start()` | Begin processing tickets. |
 | **Wait** | `finish(matches).await` | Wait for the matching tickets to be done and get their results. |
 | | `finish_all().await` | Wait for every ticket to be finished and get every result. |
+| | `finish_last().await` | Wait for every ticket to be finished and get the last result. |
 | | `get_finish_reason()` | Get why the last run ended. |
 | **Stop** | `cancel(matches)` | Stop work on the matching tickets. |
 | | `cancel_all()` | Stop work on every ticket. |
