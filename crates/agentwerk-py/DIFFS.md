@@ -162,10 +162,10 @@ Seven rules the surface table below never repeats.
 | `CompactReason`, `PolicyKind`, `ToolFailureKind`, `KnowledgeFailureKind`, `KnowledgeOp` | Strings inside `Event.data`, under the field's own name: `data["policy"]`, `data["reason"]`, `data["op"]`. |
 | `default_logger()` | Not bound: pass your own handler to `TicketQueue.on_event(handler)`. |
 | **LLM providers** | |
-| `AnthropicProvider::new(key).base_url(url).timeout(d)` | `AnthropicProvider(api_key, base_url=.., timeout=..)` |
-| `OpenAiProvider::new(key).base_url(url).timeout(d)` | `OpenAiProvider(api_key, base_url=.., timeout=..)` |
-| `MistralProvider::new(key).base_url(url).timeout(d)` | `MistralProvider(api_key, base_url=.., timeout=..)` |
-| `LiteLlmProvider::new(key).base_url(url).timeout(d)` | `LiteLlmProvider(api_key, base_url=.., timeout=..)` |
+| `Anthropic::new(key).base_url(url).timeout(d)` | `Anthropic(api_key, base_url=.., timeout=..)` |
+| `OpenAi::new(key).base_url(url).timeout(d)` | `OpenAi(api_key, base_url=.., timeout=..)` |
+| `Mistral::new(key).base_url(url).timeout(d)` | `Mistral(api_key, base_url=.., timeout=..)` |
+| `LiteLlm::new(key).base_url(url).timeout(d)` | `LiteLlm(api_key, base_url=.., timeout=..)` |
 | `Provider` | An opaque handle. |
 | `ProviderLike` | Not bound: implement it in Rust to write a new LLM provider. |
 | `Provider::from_env()` | `Provider.from_env()` |

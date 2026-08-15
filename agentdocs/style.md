@@ -18,7 +18,7 @@ Naming, comment, and prose rules, plus README structure. Skim the section matchi
 
 **Types live next to the abstraction, owner, or protocol they belong to.**
 
-- Concrete implementations live with their abstraction: `AnthropicProvider` under `providers::`, `CommandTool` under `tools::`.
+- Concrete implementations live with their abstraction: `Anthropic` under `providers::`, `CommandTool` under `tools::`.
 - Companion types and handles live with their owner: `Ticket`, `Status`, `TicketError`, `Reply`, and `ReplyContent` under `agents::tickets`; `Compaction` under `agents::compaction`.
 - Domain errors live with their domain: `ProviderError`, `ToolError`.
 - Request and response types live with the protocol: `ModelRequest`, `Message`, `TokenUsage` under `providers::`.
@@ -29,7 +29,7 @@ Naming, comment, and prose rules, plus README structure. Skim the section matchi
 **Names are disambiguated through content, not through redundant prefixes.**
 
 - Specific compound names stand alone: `TicketQueue`, `SchemaStore`, `PolicyKind`.
-- Vendor prefixes are used only to distinguish concrete LLM providers or tools: `AnthropicProvider`, `OpenAiProvider`, `LiteLlmProvider`.
+- A concrete LLM provider is named for its vendor alone: `Anthropic`, `OpenAi`, `LiteLlm`. The `providers::` module carries the rest.
 - Acronyms follow Rust API guidelines: `OpenAi`, not `OpenAI`.
 - Two structs may not share a bare name within one module; both stay qualified.
 - When a trait and the concrete type callers hold want the same name, the bare noun goes to the type and the trait takes a `Like` suffix: `Tool` / `ToolLike`, `Provider` / `ProviderLike`.
@@ -224,7 +224,7 @@ Forbidden:
 - A free function that delegates to a single method on one type. Inline it as a method instead.
 - A free constructor for a local type that already has an inherent `impl`. Constructors for `Foo` live on `Foo`.
 - A free helper called from exactly one private method. Make it a private method or a nested `fn`.
-- An associated function that takes no `self` and does not return `Self` or `Result<Self>`. Move it to the module as a free function. Exception: a per-variant static lookup where the `Type::` prefix partitions otherwise-colliding names, such as `AnthropicProvider::lookup_context_window_size` next to `OpenAiProvider::lookup_context_window_size`.
+- An associated function that takes no `self` and does not return `Self` or `Result<Self>`. Move it to the module as a free function. Exception: a per-variant static lookup where the `Type::` prefix partitions otherwise-colliding names, such as `Anthropic::lookup_context_window_size` next to `OpenAi::lookup_context_window_size`.
 
 Naming is `snake_case`. Tool structs keep the `{Name}Tool` suffix: `ReadFileTool`, `CommandTool`, `TicketsTool`.
 
@@ -415,7 +415,7 @@ A `Schema` constrains the result an agent produces for a ticket.
 - "routed" and "routing" are replaced with "assigned" and "assignment".
 - "replies" or "messages" replace "transcript". The field is `replies`, so name it.
 - "execution" is the word for a run, in prose and in identifiers: `TicketQueue::execution_duration()`. `run` survives only where it names the event itself, `EventKind::RunStarted` and `RunFinished`.
-- Bare "provider" in caller-facing prose is spelled "LLM provider". Identifier names (`Provider`, `AnthropicProvider`, the `providers::` module) stay unqualified.
+- Bare "provider" in caller-facing prose is spelled "LLM provider". Identifier names (`Provider`, `Anthropic`, the `providers::` module) stay unqualified.
 - "finisher" is banned outright, in agent-facing prompts (role files, `*.tool.md`, directives) as much as in caller-facing prose. It names nothing an agent can call: name the tool, `finish` (rustdoc names the type `FinishTool`).
 - "caps" is replaced with "limits" everywhere it is used as a noun. Imperative cells say "Limit X", not "Cap X".
 - "snapshot" does not appear in caller-facing prose. Say what the value is, not that it is a snapshot.

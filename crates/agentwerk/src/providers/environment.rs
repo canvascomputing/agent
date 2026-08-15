@@ -4,7 +4,7 @@
 //! before threads that read the environment are spawned.
 
 use super::error::{ProviderError, ProviderResult};
-use super::{AnthropicProvider, LiteLlmProvider, MistralProvider, OpenAiProvider, Provider};
+use super::{Anthropic, LiteLlm, Mistral, OpenAi, Provider};
 
 const DOT_ENV: &str = ".env";
 
@@ -128,10 +128,10 @@ fn malformed(index: usize, line: &str) -> ProviderError {
 pub(crate) fn provider_from_env() -> ProviderResult<Provider> {
     let detected = detect_provider_name(|name| std::env::var(name).ok().filter(|v| !v.is_empty()))?;
     Ok(match detected {
-        DetectedProvider::Anthropic => Provider::new(AnthropicProvider::from_env()?),
-        DetectedProvider::Mistral => Provider::new(MistralProvider::from_env()?),
-        DetectedProvider::OpenAi => Provider::new(OpenAiProvider::from_env()?),
-        DetectedProvider::LiteLlm => Provider::new(LiteLlmProvider::from_env()?),
+        DetectedProvider::Anthropic => Provider::new(Anthropic::from_env()?),
+        DetectedProvider::Mistral => Provider::new(Mistral::from_env()?),
+        DetectedProvider::OpenAi => Provider::new(OpenAi::from_env()?),
+        DetectedProvider::LiteLlm => Provider::new(LiteLlm::from_env()?),
     })
 }
 

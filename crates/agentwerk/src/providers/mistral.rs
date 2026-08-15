@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use super::error::ProviderResult;
-use super::openai::OpenAiProvider;
+use super::openai::OpenAi;
 use super::provider::{ModelRequest, ProviderLike};
 use super::types::{ModelResponse, StreamEvent};
 
@@ -22,9 +22,9 @@ use super::types::{ModelResponse, StreamEvent};
 /// Direct construction with an API key:
 ///
 /// ```no_run
-/// use agentwerk::providers::MistralProvider;
+/// use agentwerk::providers::Mistral;
 ///
-/// let _provider = MistralProvider::new("...");
+/// let _provider = Mistral::new("...");
 /// ```
 ///
 /// Read the API key from the environment:
@@ -36,15 +36,15 @@ use super::types::{ModelResponse, StreamEvent};
 /// ```
 ///
 /// [`Provider::from_env`]: crate::providers::Provider::from_env
-/// [`base_url`]: MistralProvider::base_url
-/// [`timeout`]: MistralProvider::timeout
-pub struct MistralProvider(OpenAiProvider);
+/// [`base_url`]: Mistral::base_url
+/// [`timeout`]: Mistral::timeout
+pub struct Mistral(OpenAi);
 
 const DEFAULT_BASE_URL: &str = "https://api.mistral.ai";
 
-impl MistralProvider {
+impl Mistral {
     pub fn new(api_key: impl Into<String>) -> Self {
-        Self(OpenAiProvider::raw(api_key, DEFAULT_BASE_URL))
+        Self(OpenAi::raw(api_key, DEFAULT_BASE_URL))
     }
 
     pub fn base_url(mut self, url: impl Into<String>) -> Self {
@@ -64,7 +64,7 @@ impl MistralProvider {
     }
 }
 
-impl MistralProvider {
+impl Mistral {
     pub(crate) fn lookup_context_window_size(id: &str) -> Option<u64> {
         let m = id.to_ascii_lowercase();
         if m.contains("codestral") {
@@ -80,7 +80,7 @@ impl MistralProvider {
     }
 }
 
-impl ProviderLike for MistralProvider {
+impl ProviderLike for Mistral {
     fn respond(
         &self,
         request: ModelRequest,
@@ -100,13 +100,13 @@ mod tests {
 
     #[test]
     fn lookup_codestral_returns_256k() {
-        let lookup = MistralProvider::lookup_context_window_size;
+        let lookup = Mistral::lookup_context_window_size;
         assert_eq!(lookup("codestral-latest"), Some(256_000));
     }
 
     #[test]
     fn lookup_mistral_families_return_131k() {
-        let lookup = MistralProvider::lookup_context_window_size;
+        let lookup = Mistral::lookup_context_window_size;
         assert_eq!(lookup("mistral-large-2411"), Some(131_072));
         assert_eq!(lookup("mistral-medium-2508"), Some(131_072));
         assert_eq!(lookup("mistral-small-latest"), Some(131_072));
@@ -114,7 +114,7 @@ mod tests {
 
     #[test]
     fn lookup_unknown_models_return_none() {
-        let lookup = MistralProvider::lookup_context_window_size;
+        let lookup = Mistral::lookup_context_window_size;
         assert_eq!(lookup("claude-sonnet-4-20250514"), None);
         assert_eq!(lookup("gpt-5"), None);
         assert_eq!(lookup("llama-3-70b"), None);
@@ -122,7 +122,7 @@ mod tests {
 
     #[test]
     fn timeout_delegates_to_inner() {
-        let p = MistralProvider::new("test-key").timeout(Duration::from_secs(42));
+        let p = Mistral::new("test-key").timeout(Duration::from_secs(42));
         assert_eq!(p.0.request_timeout(), Duration::from_secs(42));
     }
 }

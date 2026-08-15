@@ -29,9 +29,9 @@ use super::types::{ContentBlock, Message, ModelResponse, ResponseStatus, StreamE
 /// Direct construction with an API key:
 ///
 /// ```no_run
-/// use agentwerk::providers::OpenAiProvider;
+/// use agentwerk::providers::OpenAi;
 ///
-/// let _provider = OpenAiProvider::new("sk-...");
+/// let _provider = OpenAi::new("sk-...");
 /// ```
 ///
 /// Read the API key from the environment:
@@ -43,23 +43,23 @@ use super::types::{ContentBlock, Message, ModelResponse, ResponseStatus, StreamE
 /// ```
 ///
 /// [`Provider::from_env`]: crate::providers::Provider::from_env
-/// [`base_url`]: OpenAiProvider::base_url
-/// [`timeout`]: OpenAiProvider::timeout
-pub struct OpenAiProvider {
+/// [`base_url`]: OpenAi::base_url
+/// [`timeout`]: OpenAi::timeout
+pub struct OpenAi {
     api_key: String,
     base_url: String,
     client: reqwest::Client,
     timeout: Duration,
 }
 
-impl OpenAiProvider {
+impl OpenAi {
     pub fn new(api_key: impl Into<String>) -> Self {
         Self::raw(api_key, "https://api.openai.com")
     }
 
-    /// Raw constructor used by sibling provider modules (`mistral`,
-    /// `litellm`) to build an `OpenAiProvider` pointed at their own
-    /// endpoint. Not part of the public API.
+    /// Raw constructor used by sibling provider modules (`mistral`, `litellm`)
+    /// to build an `OpenAi` pointed at their own endpoint. Not part of the
+    /// public API.
     pub(crate) fn raw(api_key: impl Into<String>, base_url: &str) -> Self {
         Self {
             api_key: api_key.into(),
@@ -92,7 +92,7 @@ impl OpenAiProvider {
     }
 }
 
-impl OpenAiProvider {
+impl OpenAi {
     pub(crate) fn lookup_context_window_size(id: &str) -> Option<u64> {
         let m = id.to_ascii_lowercase();
         // Newest first so "gpt-4" doesn't shadow "gpt-4.1".
@@ -148,7 +148,7 @@ impl OpenAiProvider {
     }
 }
 
-impl ProviderLike for OpenAiProvider {
+impl ProviderLike for OpenAi {
     fn prewarm(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
         Box::pin(async { super::provider::prewarm_with(&self.client, &self.base_url).await })
     }
@@ -170,7 +170,7 @@ impl ProviderLike for OpenAiProvider {
     }
 }
 
-impl OpenAiProvider {
+impl OpenAi {
     async fn send_raw(&self, url: &str, body: Value) -> ProviderResult<reqwest::Response> {
         let resp = self
             .client
@@ -636,7 +636,7 @@ mod tests {
 
     #[test]
     fn timeout_builder_stores_duration() {
-        let p = OpenAiProvider::new("test-key");
+        let p = OpenAi::new("test-key");
         assert_eq!(p.request_timeout(), DEFAULT_REQUEST_TIMEOUT);
         let p = p.timeout(Duration::from_secs(42));
         assert_eq!(p.request_timeout(), Duration::from_secs(42));
@@ -833,27 +833,27 @@ mod tests {
 
     #[test]
     fn lookup_gpt_5_family_returns_400k() {
-        let lookup = OpenAiProvider::lookup_context_window_size;
+        let lookup = OpenAi::lookup_context_window_size;
         assert_eq!(lookup("gpt-5"), Some(400_000));
         assert_eq!(lookup("gpt-5-mini"), Some(400_000));
     }
 
     #[test]
     fn lookup_gpt_4_1_returns_1m() {
-        let lookup = OpenAiProvider::lookup_context_window_size;
+        let lookup = OpenAi::lookup_context_window_size;
         assert_eq!(lookup("gpt-4.1"), Some(1_000_000));
     }
 
     #[test]
     fn lookup_o_series_returns_200k() {
-        let lookup = OpenAiProvider::lookup_context_window_size;
+        let lookup = OpenAi::lookup_context_window_size;
         assert_eq!(lookup("o3-mini"), Some(200_000));
         assert_eq!(lookup("o1-preview"), Some(200_000));
     }
 
     #[test]
     fn lookup_gpt_4o_and_turbo_return_128k() {
-        let lookup = OpenAiProvider::lookup_context_window_size;
+        let lookup = OpenAi::lookup_context_window_size;
         assert_eq!(lookup("gpt-4o"), Some(128_000));
         assert_eq!(lookup("gpt-4o-mini"), Some(128_000));
         assert_eq!(lookup("gpt-4-turbo-2024-04-09"), Some(128_000));
@@ -861,21 +861,21 @@ mod tests {
 
     #[test]
     fn lookup_legacy_gpt_4_returns_8k() {
-        let lookup = OpenAiProvider::lookup_context_window_size;
+        let lookup = OpenAi::lookup_context_window_size;
         assert_eq!(lookup("gpt-4"), Some(8_192));
         assert_eq!(lookup("gpt-4-32k"), Some(32_768));
     }
 
     #[test]
     fn lookup_gpt_3_5_turbo_returns_16k() {
-        let lookup = OpenAiProvider::lookup_context_window_size;
+        let lookup = OpenAi::lookup_context_window_size;
         assert_eq!(lookup("gpt-3.5-turbo"), Some(16_385));
         assert_eq!(lookup("gpt-3.5-turbo-16k"), Some(16_385));
     }
 
     #[test]
     fn lookup_unknown_models_return_none() {
-        let lookup = OpenAiProvider::lookup_context_window_size;
+        let lookup = OpenAi::lookup_context_window_size;
         assert_eq!(lookup("claude-sonnet-4-20250514"), None);
         assert_eq!(lookup("mistral-large-2411"), None);
         assert_eq!(lookup("llama-3-70b"), None);

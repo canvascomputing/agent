@@ -150,11 +150,11 @@ See more: [`AgentBuilder`](https://docs.rs/agentwerk/latest/agentwerk/agents/age
 A `Provider` gives agents access to LLMs: Anthropic, OpenAI, Mistral, and a LiteLLM proxy.
 
 ```python
-from agentwerk import Agent, AnthropicProvider
+from agentwerk import Agent, Anthropic
 
 agent = (
     Agent()
-    .provider(AnthropicProvider(key))
+    .provider(Anthropic(key))
     .model("claude-sonnet-4-20250514")
 )
 ```

@@ -162,24 +162,23 @@ impl<T: ProviderLike + ?Sized> ProviderLike for Arc<T> {
 
 /// Connect to a `Provider` to give agents access to LLMs.
 ///
-/// agentwerk supports [`AnthropicProvider`](crate::providers::AnthropicProvider),
-/// [`OpenAiProvider`](crate::providers::OpenAiProvider),
-/// [`MistralProvider`](crate::providers::MistralProvider), and
-/// [`LiteLlmProvider`](crate::providers::LiteLlmProvider). Each converts into a
-/// `Provider`, so `.provider(AnthropicProvider::new(key))` needs no wrapping.
-/// Implement [`ProviderLike`] for anything else.
+/// agentwerk supports [`Anthropic`](crate::providers::Anthropic),
+/// [`OpenAi`](crate::providers::OpenAi), [`Mistral`](crate::providers::Mistral),
+/// and [`LiteLlm`](crate::providers::LiteLlm). Each converts into a `Provider`,
+/// so `.provider(Anthropic::new(key))` needs no wrapping. Implement
+/// [`ProviderLike`] for anything else.
 ///
 /// Cloning shares one connection pool, so several agents can hold the same
 /// provider.
 ///
 /// ```no_run
 /// use agentwerk::Agent;
-/// use agentwerk::providers::{AnthropicProvider, Provider};
+/// use agentwerk::providers::{Anthropic, Provider};
 ///
 /// # fn run(key: &str) -> Result<(), Box<dyn std::error::Error>> {
 /// let shared = Provider::from_env()?;
 /// let reader = Agent::new().provider(shared.clone()).model("claude-sonnet-4-20250514");
-/// let writer = Agent::new().provider(AnthropicProvider::new(key)).model("claude-sonnet-4-20250514");
+/// let writer = Agent::new().provider(Anthropic::new(key)).model("claude-sonnet-4-20250514");
 /// # let _ = (reader, writer);
 /// # Ok(())
 /// # }

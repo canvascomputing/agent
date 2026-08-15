@@ -16,12 +16,12 @@ mod provider;
 pub(crate) mod stream;
 pub mod types;
 
-pub use anthropic::AnthropicProvider;
+pub use anthropic::Anthropic;
 pub use error::{ProviderError, ProviderResult, RequestErrorKind};
-pub use litellm::LiteLlmProvider;
-pub use mistral::MistralProvider;
+pub use litellm::LiteLlm;
+pub use mistral::Mistral;
 pub use model::Model;
-pub use openai::OpenAiProvider;
+pub use openai::OpenAi;
 pub use provider::{
     ModelRequest, Provider, ProviderLike, ProviderToolDefinition, ReasoningEffort, ToolChoice,
 };

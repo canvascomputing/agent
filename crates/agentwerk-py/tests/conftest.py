@@ -46,7 +46,7 @@ def offline_agent():
     builder, enqueue, and query behavior is testable offline."""
     return (
         aw.Agent()
-        .provider(aw.AnthropicProvider("test-key"))
+        .provider(aw.Anthropic("test-key"))
         .model("claude-sonnet-4-20250514")
         .build()
     )

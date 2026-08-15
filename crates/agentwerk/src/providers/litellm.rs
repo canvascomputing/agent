@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use super::error::ProviderResult;
-use super::openai::OpenAiProvider;
+use super::openai::OpenAi;
 use super::provider::{ModelRequest, ProviderLike};
 use super::types::{ModelResponse, StreamEvent};
 
@@ -25,9 +25,9 @@ use super::types::{ModelResponse, StreamEvent};
 /// Direct construction pointed at a local proxy:
 ///
 /// ```no_run
-/// use agentwerk::providers::LiteLlmProvider;
+/// use agentwerk::providers::LiteLlm;
 ///
-/// let _provider = LiteLlmProvider::new("").base_url("http://localhost:4000");
+/// let _provider = LiteLlm::new("").base_url("http://localhost:4000");
 /// ```
 ///
 /// Read configuration from the environment:
@@ -39,15 +39,15 @@ use super::types::{ModelResponse, StreamEvent};
 /// ```
 ///
 /// [`Provider::from_env`]: crate::providers::Provider::from_env
-/// [`base_url`]: LiteLlmProvider::base_url
-/// [`timeout`]: LiteLlmProvider::timeout
-pub struct LiteLlmProvider(OpenAiProvider);
+/// [`base_url`]: LiteLlm::base_url
+/// [`timeout`]: LiteLlm::timeout
+pub struct LiteLlm(OpenAi);
 
 const DEFAULT_BASE_URL: &str = "http://localhost:4000";
 
-impl LiteLlmProvider {
+impl LiteLlm {
     pub fn new(api_key: impl Into<String>) -> Self {
-        Self(OpenAiProvider::raw(api_key, DEFAULT_BASE_URL))
+        Self(OpenAi::raw(api_key, DEFAULT_BASE_URL))
     }
 
     pub fn base_url(mut self, url: impl Into<String>) -> Self {
@@ -67,7 +67,7 @@ impl LiteLlmProvider {
     }
 }
 
-impl ProviderLike for LiteLlmProvider {
+impl ProviderLike for LiteLlm {
     fn respond(
         &self,
         request: ModelRequest,
