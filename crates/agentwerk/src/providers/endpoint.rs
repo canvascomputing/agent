@@ -10,8 +10,7 @@ use std::time::Duration;
 use serde_json::Value;
 
 use super::environment;
-use super::error::{ProviderError, ProviderResult};
-use super::parsing;
+use super::error::{self, ProviderError, ProviderResult};
 
 pub(crate) const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(600);
 
@@ -105,7 +104,7 @@ async fn map_http_errors(
     }
     // A proxy wraps the upstream signal in wording neither vendor classifier
     // knows, so the shared bank reads it rather than losing it to a 5xx.
-    if let Some(error) = parsing::recover_wrapped_error(status, &body, retry_delay) {
+    if let Some(error) = error::recover_wrapped_error(status, &body, retry_delay) {
         return Err(error);
     }
     Err(fallback_http_error(status, body, retry_delay))

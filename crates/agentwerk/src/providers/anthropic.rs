@@ -9,8 +9,8 @@ use serde_json::Value;
 
 use super::endpoint::Endpoint;
 use super::error::{ProviderError, ProviderResult};
-use super::parsing::{ResponseBuilder, ToolCallKey};
 use super::provider::{self, Protocol, ProviderLike};
+use super::stream::{ResponseBuilder, ToolCallKey};
 use super::types::{
     ContentBlock, Message, ModelRequest, ModelResponse, ResponseStatus, StreamEvent, ToolChoice,
     ToolDefinition,

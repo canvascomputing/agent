@@ -79,7 +79,9 @@ crates/
 - `environment.rs` reads the variables behind `Provider::from_env()` and `Model::from_env()`; its readers are crate-internal.
 - `model.rs` holds `Model` and the one table of context window sizes, keyed by model name rather than by LLM provider.
 - `error.rs` holds `ProviderError`, `ProviderResult`, and `RequestErrorKind`.
-- `parsing.rs` takes an HTTP response and gives back a `ModelResponse`, in five sections: `read_reply`, the SSE reader, `ResponseBuilder` (the reply every provider grows one fragment at a time, and the one place a `StreamEvent` is emitted from), the calls a model wrote as prose rather than emitting through the tool channel, and the upstream error a proxy wrapped in wording no vendor classifier knows.
+- `error.rs` also holds the bank of upstream wordings a proxy wraps, since what it reads them into is the error beside it.
+- `stream.rs` takes an HTTP response and gives back a `ModelResponse`: `read_reply`, the SSE reader, and `ResponseBuilder`, the reply every provider grows one fragment at a time and the one place a `StreamEvent` is emitted from.
+- `frames.rs` recovers the calls a model wrote as prose rather than emitting through the tool channel.
 
 ## The `tools/` Module
 

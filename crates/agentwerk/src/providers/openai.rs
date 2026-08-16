@@ -10,9 +10,9 @@ use serde_json::Value;
 
 use super::endpoint::Endpoint;
 use super::error::{ProviderError, ProviderResult};
-use super::parsing;
-use super::parsing::ResponseBuilder;
+use super::frames;
 use super::provider::{self, Protocol, ProviderLike};
+use super::stream::ResponseBuilder;
 use super::types::{
     ContentBlock, Message, ModelRequest, ModelResponse, ResponseStatus, StreamEvent, ToolChoice,
     ToolDefinition,
@@ -171,12 +171,8 @@ impl Protocol for OpenAiChat {
         }
     }
 
-    fn recover(
-        reply: &mut ModelResponse,
-        _request: &ModelRequest,
-        on_event: &Arc<dyn Fn(StreamEvent) + Send + Sync>,
-    ) {
-        parsing::recover_framed_calls(reply, on_event);
+    fn recover(reply: &mut ModelResponse, on_event: &Arc<dyn Fn(StreamEvent) + Send + Sync>) {
+        frames::recover_framed_calls(reply, on_event);
     }
 }
 

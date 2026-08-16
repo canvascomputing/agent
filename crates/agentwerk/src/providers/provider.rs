@@ -12,7 +12,7 @@ use serde_json::Value;
 
 use super::endpoint::Endpoint;
 use super::error::{ProviderError, ProviderResult};
-use super::parsing::{read_reply, ResponseBuilder};
+use super::stream::{read_reply, ResponseBuilder};
 use super::types::{Message, ModelRequest, ModelResponse, ReasoningEffort, StreamEvent};
 
 /// What every LLM provider implements.
@@ -135,7 +135,7 @@ pub(crate) trait Protocol {
 
     /// Read the 400 bodies only this vendor words its own way. Statuses every
     /// vendor reports alike are mapped by `Endpoint::send`, and anything left
-    /// falls through to `parsing::recover_wrapped_error`.
+    /// falls through to `error::recover_wrapped_error`.
     fn classify_error(status: u16, body: &str) -> Option<ProviderError>;
 
     /// Read one payload of the reply, naming which [`ResponseBuilder`] call it is.
@@ -143,12 +143,7 @@ pub(crate) trait Protocol {
 
     /// Only a model that writes its calls as text rather than emitting them
     /// needs this.
-    fn recover(
-        _reply: &mut ModelResponse,
-        _request: &ModelRequest,
-        _on_event: &Arc<dyn Fn(StreamEvent) + Send + Sync>,
-    ) {
-    }
+    fn recover(_reply: &mut ModelResponse, _on_event: &Arc<dyn Fn(StreamEvent) + Send + Sync>) {}
 }
 
 /// Run one turn of `P` against `endpoint`. Every provider answers through here,
@@ -163,7 +158,7 @@ pub(crate) fn respond<P: Protocol>(
         let posted = P::authenticate(endpoint.post(P::PATH, &body), endpoint.api_key());
         let streamed = endpoint.send(posted, P::classify_error).await?;
         let mut reply = read_reply(streamed, &on_event, P::decode).await?;
-        P::recover(&mut reply, &request, &on_event);
+        P::recover(&mut reply, &on_event);
         Ok(reply)
     })
 }
