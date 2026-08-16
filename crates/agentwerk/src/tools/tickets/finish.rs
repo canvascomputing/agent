@@ -94,7 +94,7 @@ fn finish(input: &Value, ctx: &ToolContext) -> Result<String, ToolResult> {
     let (result, unwrapped) = parse_result(schema.as_ref(), input);
 
     // A present, non-blank `handover` selects the chaining path.
-    let Some(handover) = optional_string(input, "handover") else {
+    let Some(handover) = control_string(input, "handover")? else {
         attach_result(&ticket_queue, &parent_key, result, &agent, unwrapped)?;
         mark_finished(&ticket_queue, &parent_key, &agent)?;
         return Ok(format!("Ticket {parent_key} marked finished"));
@@ -123,7 +123,7 @@ fn hand_over(
 ) -> Result<String, ToolResult> {
     // An omitted `task` defaults to the parent result below: the
     // common handoff forwards the finding verbatim.
-    let task = optional_string(input, "task");
+    let task = control_string(input, "task")?;
 
     // A rule about the unwrapped result, not about the shape of the arguments,
     // so the schema cannot state it: for an inlined ticket the result is the
@@ -167,12 +167,21 @@ fn hand_over(
     ))
 }
 
-/// Read an optional string argument. Absent and null both mean "not given"; the
-/// schema has already rejected a blank string and any other type, so what is
-/// here is a string with something in it.
-fn optional_string(input: &Value, key: &str) -> Option<String> {
-    let text = input.get(key)?.as_str()?;
-    (!text.trim().is_empty()).then(|| text.to_string())
+/// Read an optional control argument. Absent and null both mean "not given".
+/// A value that is present but blank or not a string is refused rather than
+/// read as absent: the schema already rejects it for the model, so only a
+/// direct host call reaches this, and a finish asked to hand over must not
+/// quietly finish without doing so.
+fn control_string(input: &Value, key: &str) -> Result<Option<String>, ToolResult> {
+    let Some(value) = input.get(key).filter(|value| !value.is_null()) else {
+        return Ok(None);
+    };
+    match value.as_str() {
+        Some(text) if !text.trim().is_empty() => Ok(Some(text.to_string())),
+        _ => Err(ToolResult::error(format!(
+            "`{key}` must be a non-blank string when given, got {value}"
+        ))),
+    }
 }
 
 fn mark_finished(ticket_queue: &TicketQueue, key: &str, agent: &str) -> Result<(), ToolResult> {
@@ -1394,6 +1403,31 @@ mod tests {
         assert!(
             violations.iter().any(|v| v.instance_path == "/task"),
             "{violations}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_blank_handover_from_a_direct_call_is_an_error() {
+        // The registry's schema check rejects a blank for the model; a host
+        // calling the tool directly must hear the same refusal rather than
+        // finish without the handover it asked for.
+        let dir = crate::test_util::TempDir::new().unwrap();
+        let (queue, parent_key) = one_ticket_in("alice", dir.path().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
+        for body in [
+            serde_json::json!({"handover": "  ", "result": "x"}),
+            serde_json::json!({"handover": "bob", "task": "  ", "result": "x"}),
+            serde_json::json!({"handover": 7, "result": "x"}),
+        ] {
+            let outcome = FinishTool.call(body, &ctx).await;
+            assert!(
+                matches!(&outcome, ToolResult::Error(message) if message.contains("non-blank")),
+                "{outcome:?}",
+            );
+        }
+        assert_eq!(
+            queue.get_ticket(&parent_key).unwrap().status,
+            Status::InProgress,
         );
     }
 
