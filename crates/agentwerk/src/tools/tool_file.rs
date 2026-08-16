@@ -23,24 +23,40 @@ impl ToolFile {
     pub(crate) fn parse(definition: &str, schema: &str) -> Self {
         let (front, body) = split_frontmatter(definition);
 
-        let mut name: Option<String> = None;
+        // `name` is read ahead of the strict pass, so every refusal below can
+        // say whose definition is broken.
+        let name = frontmatter_value(front, "name").unwrap_or_else(|| {
+            panic!(
+                "tool definition missing `name` in frontmatter, starts {:?}",
+                first_line(front)
+            )
+        });
+
         let mut concurrent: Option<bool> = None;
-        for line in front.lines() {
+        for line in front.lines().filter(|line| !line.trim().is_empty()) {
             let Some((key, value)) = line.split_once(':') else {
-                continue;
+                panic!("tool `{name}`: frontmatter line {line:?} is not `key: value`");
             };
             match key.trim() {
-                "name" => name = Some(value.trim().to_string()),
-                "concurrent" => concurrent = Some(value.trim() == "true"),
-                _ => {}
+                "name" => {}
+                "concurrent" => {
+                    concurrent = Some(match value.trim() {
+                        "true" => true,
+                        "false" => false,
+                        other => panic!(
+                            "tool `{name}`: `concurrent` must be `true` or `false`, got `{other}`"
+                        ),
+                    });
+                }
+                unknown => panic!("tool `{name}`: unknown frontmatter key `{unknown}`"),
             }
         }
-        let name = name.expect("tool definition missing `name` in frontmatter");
 
         ToolFile {
             input_schema: compile_schema(schema, &name),
+            concurrent: concurrent
+                .unwrap_or_else(|| panic!("tool `{name}`: frontmatter missing `concurrent`")),
             name,
-            concurrent: concurrent.expect("tool definition missing `concurrent` in frontmatter"),
             description: body.trim().to_string(),
         }
     }
@@ -54,13 +70,33 @@ impl ToolFile {
 }
 
 /// Split a leading `---` frontmatter block from the body. Panics when the
-/// block is missing or unterminated.
+/// block is missing or unterminated, quoting how the document starts, since no
+/// name exists yet to say whose it is.
 fn split_frontmatter(markdown: &str) -> (&str, &str) {
-    let rest = markdown
-        .strip_prefix("---\n")
-        .expect("tool definition must open with `---` frontmatter");
-    rest.split_once("\n---\n")
-        .expect("tool definition has an unterminated `---` frontmatter block")
+    let rest = markdown.strip_prefix("---\n").unwrap_or_else(|| {
+        panic!(
+            "tool definition must open with `---` frontmatter, starts {:?}",
+            first_line(markdown)
+        )
+    });
+    rest.split_once("\n---\n").unwrap_or_else(|| {
+        panic!(
+            "tool definition has an unterminated `---` frontmatter block, starts {:?}",
+            first_line(rest)
+        )
+    })
+}
+
+/// The value of `key` in the frontmatter, or `None` when no line declares it.
+fn frontmatter_value(front: &str, key: &str) -> Option<String> {
+    front.lines().find_map(|line| {
+        let (written, value) = line.split_once(':')?;
+        (written.trim() == key).then(|| value.trim().to_string())
+    })
+}
+
+fn first_line(text: &str) -> &str {
+    text.lines().next().unwrap_or_default()
 }
 
 /// Compile the schema document beside `name`'s definition. Panics on a
@@ -163,6 +199,56 @@ concurrent: false
 Body.
 ",
             "{ not json",
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "tool `demo`: unknown frontmatter key `concurent`")]
+    fn an_unknown_frontmatter_key_fails_the_build_naming_the_tool() {
+        // Silently skipping the misspelling would leave `concurrent` at its
+        // default and the mistake undiscovered.
+        ToolFile::parse(
+            "\
+---
+name: demo
+concurent: true
+---
+
+Body.
+",
+            r#"{ "type": "object" }"#,
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "tool `demo`: frontmatter line \"concurrent\" is not `key: value`")]
+    fn a_frontmatter_line_without_a_colon_fails_the_build_naming_the_tool() {
+        ToolFile::parse(
+            "\
+---
+name: demo
+concurrent
+---
+
+Body.
+",
+            r#"{ "type": "object" }"#,
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "tool `demo`: `concurrent` must be `true` or `false`, got `yes`")]
+    fn a_concurrent_value_that_is_not_a_boolean_fails_the_build() {
+        ToolFile::parse(
+            "\
+---
+name: demo
+concurrent: yes
+---
+
+Body.
+",
+            r#"{ "type": "object" }"#,
         );
     }
 
