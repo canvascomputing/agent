@@ -37,8 +37,8 @@ fn description() -> &'static str {
     DESC.get_or_init(|| tool_file().render_markdown())
 }
 
-/// What `read_file` accepts. `limit` has no declared default: absent means
-/// the rest of the file from `offset`, which only the file's length gives.
+/// `limit` declares no default: absent means the rest of the file from
+/// `offset`, which only the file's length gives.
 #[derive(serde::Deserialize)]
 pub struct ReadFileArgs {
     path: String,

@@ -36,7 +36,6 @@ fn description() -> &'static str {
     DESC.get_or_init(|| tool_file().render_markdown())
 }
 
-/// What `edit_file` accepts.
 #[derive(serde::Deserialize)]
 pub struct EditFileArgs {
     path: String,

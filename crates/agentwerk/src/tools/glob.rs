@@ -37,7 +37,6 @@ fn description() -> &'static str {
     DESC.get_or_init(|| tool_file().render_markdown())
 }
 
-/// What `glob` accepts. `path` defaults to the working directory itself.
 #[derive(serde::Deserialize)]
 pub struct GlobArgs {
     pattern: String,

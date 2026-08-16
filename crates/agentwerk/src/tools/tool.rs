@@ -653,11 +653,9 @@ impl ToolLike for Tool {
 
 /// What one call produced.
 pub(crate) struct ToolOutcome {
-    /// The block the model sees.
     pub(crate) block: ContentBlock,
-    /// What the tool reported, for the events the turn emits.
     pub(crate) outcome: std::result::Result<String, ToolError>,
-    /// Where an oversized output was written, relative to the session.
+    /// Where an oversized output went, relative to the session directory.
     pub(crate) path: Option<PathBuf>,
 }
 

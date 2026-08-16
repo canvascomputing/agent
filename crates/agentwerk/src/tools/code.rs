@@ -209,7 +209,7 @@ fn satisfies_constraints(found: &codegrep::Match, constraints: &[(String, regex:
 #[cfg(test)]
 mod tests {
     use super::super::grep::GrepTool;
-    use super::super::tool::{ToolContext, ToolLike};
+    use super::super::tool::ToolContext;
     use serde_json::Value;
     use std::fs;
 
@@ -218,7 +218,10 @@ mod tests {
     }
 
     async fn search(ctx: &ToolContext, input: Value) -> Value {
-        let result = GrepTool.call(input, ctx).await.unwrap();
+        let result = crate::tools::erase(GrepTool)
+            .call_with(input, ctx)
+            .await
+            .unwrap();
         let content = result.content();
         serde_json::from_str(content).unwrap_or_else(|_| Value::String(content.to_string()))
     }

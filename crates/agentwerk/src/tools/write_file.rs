@@ -35,7 +35,6 @@ fn description() -> &'static str {
     DESC.get_or_init(|| tool_file().render_markdown())
 }
 
-/// What `write_file` accepts.
 #[derive(serde::Deserialize)]
 pub struct WriteFileArgs {
     path: String,

@@ -40,7 +40,6 @@ fn description() -> &'static str {
 /// ```
 pub struct FetchUrlTool;
 
-/// What `fetch_url` accepts.
 #[derive(serde::Deserialize)]
 pub struct FetchUrlArgs {
     url: String,

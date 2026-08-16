@@ -34,7 +34,6 @@ fn description() -> &'static str {
     DESC.get_or_init(|| tool_file().render_markdown())
 }
 
-/// What `list_directory` accepts. `path` defaults to the working directory.
 #[derive(serde::Deserialize)]
 pub struct ListDirectoryArgs {
     #[serde(default = "here")]

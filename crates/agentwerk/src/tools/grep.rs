@@ -56,7 +56,7 @@ fn description() -> &'static str {
 }
 
 impl ToolLike for GrepTool {
-    type Args = Value;
+    type Args = GrepArgs;
 
     fn name(&self) -> &str {
         &tool_file().name
@@ -76,11 +76,11 @@ impl ToolLike for GrepTool {
 
     fn call<'a>(
         &'a self,
-        input: Value,
+        args: GrepArgs,
         ctx: &'a ToolContext,
     ) -> Pin<Box<dyn Future<Output = Result<ToolResult>> + Send + 'a>> {
         Box::pin(async move {
-            let query = Query::from_input(&input);
+            let query = Query::from_args(args);
 
             // The `grep`/`ignore` engine is synchronous, so run it on a blocking
             // thread: `grep` is parallel-callable and a 180s search must not stall
@@ -116,17 +116,21 @@ impl ToolLike for GrepTool {
 }
 
 /// Which shape the result takes.
-#[derive(Clone, Copy, PartialEq)]
-pub(super) enum OutputMode {
+#[derive(Clone, Copy, PartialEq, Default, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OutputMode {
     Content,
+    #[default]
     FilesWithMatches,
     Count,
 }
 
 /// Which matcher interprets `pattern`: ripgrep's regex, or the code-shape
 /// engine reached via `syntax: "code"`.
-#[derive(Clone, Copy, PartialEq)]
-enum Syntax {
+#[derive(Clone, Copy, PartialEq, Default, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Syntax {
+    #[default]
     Regex,
     Code,
 }
@@ -163,54 +167,69 @@ pub(super) struct Query {
 }
 
 impl Query {
-    /// Read the model's arguments, applying defaults.
-    fn from_input(input: &Value) -> Query {
-        let pattern = input["pattern"].as_str().unwrap_or_default().to_string();
-
-        // `-C`/`context` set both sides; `-A`/`-B` override the near or far side.
-        let both = number(input, "-C").or_else(|| number(input, "context"));
-        let before_context = number(input, "-B").or(both).unwrap_or(0);
-        let after_context = number(input, "-A").or(both).unwrap_or(0);
-
-        let output_mode = match input["output_mode"].as_str() {
-            Some("content") => OutputMode::Content,
-            Some("count") => OutputMode::Count,
-            _ => OutputMode::FilesWithMatches,
-        };
-
-        let syntax = match input["syntax"].as_str() {
-            Some("code") => Syntax::Code,
-            _ => Syntax::Regex,
-        };
-
+    /// Apply what serde could not: `-C` and `context` set both context sides,
+    /// and `-A` or `-B` override one of them.
+    fn from_args(args: GrepArgs) -> Query {
+        let both = args.context_both.or(args.context);
         Query {
-            pattern,
-            path: string(input, "path"),
-            glob: string(input, "glob"),
-            output_mode,
-            before_context,
-            after_context,
-            line_numbers: input["-n"].as_bool().unwrap_or(true),
-            case_insensitive: input["-i"].as_bool().unwrap_or(false),
-            file_type: string(input, "type"),
-            head_limit: number(input, "head_limit").unwrap_or(DEFAULT_HEAD_LIMIT),
-            offset: number(input, "offset").unwrap_or(0),
-            multiline: input["multiline"].as_bool().unwrap_or(false),
-            syntax,
-            constraints: input["constraints"].clone(),
+            before_context: args.context_before.or(both).unwrap_or(0),
+            after_context: args.context_after.or(both).unwrap_or(0),
+            pattern: args.pattern,
+            path: args.path,
+            glob: args.glob,
+            output_mode: args.output_mode,
+            line_numbers: args.line_numbers,
+            case_insensitive: args.case_insensitive,
+            file_type: args.file_type,
+            head_limit: args.head_limit,
+            offset: args.offset,
+            multiline: args.multiline,
+            syntax: args.syntax,
+            constraints: args.constraints,
         }
     }
 }
 
-fn number(input: &Value, key: &str) -> Option<usize> {
-    input[key].as_u64().map(|n| n as usize)
+/// What `grep` accepts, as the model writes it. `Query` is what the search
+/// reads, once the context flags have been resolved against each other.
+#[derive(serde::Deserialize)]
+pub struct GrepArgs {
+    pattern: String,
+    path: Option<String>,
+    glob: Option<String>,
+    #[serde(default)]
+    output_mode: OutputMode,
+    #[serde(rename = "-B")]
+    context_before: Option<usize>,
+    #[serde(rename = "-A")]
+    context_after: Option<usize>,
+    #[serde(rename = "-C")]
+    context_both: Option<usize>,
+    context: Option<usize>,
+    #[serde(rename = "-n", default = "yes")]
+    line_numbers: bool,
+    #[serde(rename = "-i", default)]
+    case_insensitive: bool,
+    #[serde(rename = "type")]
+    file_type: Option<String>,
+    #[serde(default = "default_head_limit")]
+    head_limit: usize,
+    #[serde(default)]
+    offset: usize,
+    #[serde(default)]
+    multiline: bool,
+    #[serde(default)]
+    syntax: Syntax,
+    #[serde(default)]
+    constraints: Value,
 }
 
-fn string(input: &Value, key: &str) -> Option<String> {
-    input[key]
-        .as_str()
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
+fn yes() -> bool {
+    true
+}
+
+fn default_head_limit() -> usize {
+    DEFAULT_HEAD_LIMIT
 }
 
 /// Walk the corpus under `dir` with ripgrep's engine and return the structured
@@ -495,6 +514,15 @@ pub(super) fn render_count(rows: &[(String, u64)], query: &Query) -> ToolResult 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_example_the_schema_shows_deserializes_into_the_arguments() {
+        let document = tool_file().input_schema.get_raw_schema().clone();
+        for example in document["examples"].as_array().expect("examples") {
+            serde_json::from_value::<GrepArgs>(example.clone())
+                .unwrap_or_else(|error| panic!("{example}: {error}"));
+        }
+    }
     use std::fs;
 
     fn test_ctx(path: &std::path::Path) -> ToolContext {
@@ -523,7 +551,10 @@ mod tests {
     }
 
     async fn search(ctx: &ToolContext, input: Value) -> Value {
-        let result = GrepTool.call(input, ctx).await.unwrap();
+        let result = crate::tools::erase(GrepTool)
+            .call_with(input, ctx)
+            .await
+            .unwrap();
         let content = result.content();
         serde_json::from_str(content).unwrap_or_else(|_| Value::String(content.to_string()))
     }

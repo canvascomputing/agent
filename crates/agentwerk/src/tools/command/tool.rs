@@ -316,7 +316,6 @@ fn quoted(patterns: &[String]) -> String {
         .join(", ")
 }
 
-/// What `command` accepts.
 #[derive(serde::Deserialize)]
 pub struct CommandArgs {
     command: String,

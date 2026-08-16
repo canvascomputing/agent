@@ -25,7 +25,7 @@ pub use command::{CommandArgs, CommandTool};
 pub use edit_file::{EditFileArgs, EditFileTool};
 pub use fetch_url::{FetchUrlArgs, FetchUrlTool};
 pub use glob::{GlobArgs, GlobTool};
-pub use grep::GrepTool;
+pub use grep::{GrepArgs, GrepTool};
 pub use knowledge::{KnowledgeArgs, KnowledgeTool};
 pub use list_directory::{ListDirectoryArgs, ListDirectoryTool};
 pub use read_file::{ReadFileArgs, ReadFileTool};
