@@ -598,8 +598,6 @@ def greet(name: str) -> str:
     return f"Hello, {name}!"
 ```
 
-Return `ToolResult.error(message)` for a failure the model should work around.
-
 See [`Tool`](https://docs.rs/agentwerk/latest/agentwerk/tools/struct.Tool.html).
 
 </details>
@@ -633,14 +631,14 @@ tickets.on_event(log)
 | | `ticket_finished` | A ticket finished successfully. |
 | | `ticket_failed` | A ticket failed. |
 | | `turn_started` | The agent began another turn on its ticket. |
-| | `schema_retried` | A result missed its schema and the agent was asked again. |
+| | `schema_retried` | A tool call or result the model created was invalid. |
 | **LLM provider** | `request_started` | A request went out to the model. |
 | | `request_finished` | A request finished and reported its token usage. |
 | | `request_failed` | A request failed and was not retried. |
 | | `request_retried` | A transient provider error triggered a retry. |
 | | `text_chunk_received` | A piece of the reply arrived. |
-| | `response_repaired` | A malformed call or value was corrected. |
-| **Tool** | `tool_call_declined` | A tool call written in the reply was declined, with the reason. |
+| | `response_repaired` | A tool call or value the model created was invalid and was corrected. |
+| **Tool** | `tool_call_declined` | A tool call proposed by the model was declined. |
 | | `tool_call_started` | A tool invocation began. |
 | | `tool_call_finished` | A tool invocation finished. |
 | | `tool_call_failed` | A tool invocation failed but the ticket continues. |
