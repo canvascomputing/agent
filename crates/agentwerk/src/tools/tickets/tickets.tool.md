@@ -69,6 +69,18 @@ Read and mutate the ticket queue from one tool: `ticket` / `result` / `list` / `
       },
       "then": { "required": ["task"] }
     }
+  ],
+  "examples": [
+    { "action": "ticket" },
+    { "action": "result", "key": "TICKET-3" },
+    { "action": "list", "status": "Todo", "label": "review" },
+    { "action": "search", "query": "retry budget" },
+    {
+      "action": "create",
+      "task": "Check the retry budget on the upload path.",
+      "label": "review"
+    },
+    { "action": "edit", "key": "TICKET-3", "label": "review" }
   ]
 }
 ```

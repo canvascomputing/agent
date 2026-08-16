@@ -28,6 +28,10 @@ List a directory's entries to survey an unfamiliar layout. Output is one entry p
       "type": "boolean",
       "description": "Walk subdirectories and list every entry beneath `path` (default: false). Use sparingly: on a large tree `glob` with a pattern returns far less."
     }
-  }
+  },
+  "examples": [
+    { "path": "src" },
+    { "path": "src", "recursive": true }
+  ]
 }
 ```

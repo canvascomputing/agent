@@ -865,10 +865,9 @@ fn utf8_boundary_floor(s: &str, mut i: usize) -> usize {
 mod tests {
     use super::*;
 
-    /// Every built-in `.tool.md` must parse. Reading each tool's name,
-    /// description, and schema forces that here, rather than at the first call.
-    #[test]
-    fn every_builtin_tool_definition_parses() {
+    /// Every tool agentwerk registers, for the checks that hold across all of
+    /// them. The knowledge store is temporary; its tool is read, not used.
+    fn built_in_tools() -> (Vec<Box<dyn ToolLike>>, crate::test_util::TempDir) {
         let dir = crate::test_util::TempDir::new().unwrap();
         let store = crate::agents::knowledge::Knowledge::load(dir.path()).unwrap();
         let tools: Vec<Box<dyn ToolLike>> = vec![
@@ -884,6 +883,15 @@ mod tests {
             Box::new(crate::tools::FinishTool),
             Box::new(crate::tools::TicketsTool),
         ];
+        (tools, dir)
+    }
+
+    /// Every built-in `.tool.md` must parse and compile. Reading each tool's
+    /// name, description, and schema forces that here, rather than at the first
+    /// call.
+    #[test]
+    fn every_built_in_tool_definition_parses_and_compiles() {
+        let (tools, _dir) = built_in_tools();
         for tool in &tools {
             assert!(!tool.name().is_empty(), "tool name is empty");
             assert!(
@@ -891,11 +899,41 @@ mod tests {
                 "empty description for {}",
                 tool.name(),
             );
-            assert!(
-                tool.input_schema().get("type").is_some(),
-                "schema missing `type` for {}",
+            let document = tool.input_schema();
+            // The registry holds a call to this, so a tool that declares
+            // something else loses the check that its arguments are an object.
+            assert_eq!(
+                document["type"],
+                "object",
+                "arguments are not an object for {}",
                 tool.name(),
             );
+            assert!(
+                Schema::new(document).is_ok(),
+                "schema did not compile for {}",
+                tool.name(),
+            );
+        }
+    }
+
+    #[test]
+    fn every_example_a_built_in_tool_shows_is_a_call_its_own_schema_accepts() {
+        // An example needing a repair, or failing outright, teaches the model a
+        // shape it will be corrected for.
+        let (tools, _dir) = built_in_tools();
+        for tool in &tools {
+            let document = tool.input_schema();
+            let schema = Schema::new(document.clone()).expect("schema compiles");
+            let examples = document["examples"]
+                .as_array()
+                .unwrap_or_else(|| panic!("{} shows no examples", tool.name()))
+                .clone();
+            for example in examples {
+                let (_, repaired) = schema
+                    .validate(example.clone())
+                    .unwrap_or_else(|violations| panic!("{}: {violations}", tool.name()));
+                assert!(repaired.is_empty(), "{} repaired {example}", tool.name());
+            }
         }
     }
 
@@ -1330,30 +1368,6 @@ Do the demo thing.
         };
         assert!(!succeeded);
         assert!(content.contains("expected type object"), "{content}");
-    }
-
-    #[test]
-    fn every_built_in_tool_declares_a_schema_that_compiles() {
-        let tools: Vec<Box<dyn ToolLike>> = vec![
-            Box::new(crate::tools::ReadFileTool),
-            Box::new(crate::tools::WriteFileTool),
-            Box::new(crate::tools::EditFileTool),
-            Box::new(crate::tools::GrepTool),
-            Box::new(crate::tools::GlobTool),
-            Box::new(crate::tools::ListDirectoryTool),
-            Box::new(crate::tools::FetchUrlTool),
-            Box::new(crate::tools::FinishTool),
-            Box::new(crate::tools::TicketsTool),
-        ];
-        let unchecked: Vec<&str> = tools
-            .iter()
-            .filter(|tool| Schema::new(tool.input_schema()).is_err())
-            .map(|tool| tool.name())
-            .collect();
-        assert!(
-            unchecked.is_empty(),
-            "schema did not compile: {unchecked:?}"
-        );
     }
 
     #[tokio::test]

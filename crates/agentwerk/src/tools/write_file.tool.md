@@ -30,6 +30,9 @@ Create a new file or overwrite an existing one in one shot (no append mode); par
   "required": [
     "path",
     "content"
+  ],
+  "examples": [
+    { "path": "notes/findings.md", "content": "# Findings\n\nOne per line.\n" }
   ]
 }
 ```

@@ -30,6 +30,10 @@ Find files in the working directory tree by glob pattern. Returns paths relative
   },
   "required": [
     "pattern"
+  ],
+  "examples": [
+    { "pattern": "**/*.rs" },
+    { "pattern": "*.toml", "path": "crates/core" }
   ]
 }
 ```

@@ -30,6 +30,11 @@ Reach for the dedicated tool, which is faster, structured, and cites line number
   },
   "required": [
     "command"
+  ],
+  "examples": [
+    { "command": "git status --short" },
+    { "command": "git log -5 --format=%s" },
+    { "command": "cargo test --lib", "timeout_ms": 300000 }
   ]
 }
 ```

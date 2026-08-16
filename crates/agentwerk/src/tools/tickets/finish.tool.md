@@ -32,6 +32,15 @@ Record your final answer and mark your current ticket `Finished`. Call it once, 
       "pattern": "\\S",
       "description": "Body of the follow-up ticket, for a `handover` only; when omitted it is your `result`. Pass it to tell the receiving agent something beyond the result. `{parent_key}`, `{parent_result}`, and `{parent_result_path}` are substituted with this ticket's key, result, and result file; unknown `{name}` placeholders pass through verbatim."
     }
-  }
+  },
+  "examples": [
+    { "result": "The upload path retries three times, then fails the ticket." },
+    { "result": { "verdict": "safe", "evidence": ["no network calls"] } },
+    {
+      "result": "Two candidates need a second opinion.",
+      "handover": "review",
+      "task": "Confirm the two candidates in {parent_result_path}."
+    }
+  ]
 }
 ```

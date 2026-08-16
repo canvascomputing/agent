@@ -116,6 +116,16 @@ In code mode `[a-z]`, `*`, `.`, and `\` are literal, and `<word>` is plain text,
   },
   "required": [
     "pattern"
+  ],
+  "examples": [
+    { "pattern": "TODO|FIXME" },
+    { "pattern": "fn connect", "glob": "*.rs", "output_mode": "content", "-C": 3 },
+    { "pattern": "import requests", "type": "py", "output_mode": "count" },
+    {
+      "pattern": "$FN(...)",
+      "syntax": "code",
+      "constraints": [{ "metavariable": "FN", "regex": "^(open|read)$" }]
+    }
   ]
 }
 ```

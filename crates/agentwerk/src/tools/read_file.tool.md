@@ -45,6 +45,11 @@ Read a file's contents, returning line-numbered text so you can cite `file:line`
   },
   "required": [
     "path"
+  ],
+  "examples": [
+    { "path": "src/main.rs" },
+    { "path": "src/main.rs", "offset": 120, "limit": 40 },
+    { "path": "src/main.rs", "offset": 120, "limit": 1, "column": 30, "length": 120 }
   ]
 }
 ```

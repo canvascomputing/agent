@@ -31,6 +31,10 @@ Fetch a URL over HTTPS and return its content as text: HTML becomes readable pla
   },
   "required": [
     "url"
+  ],
+  "examples": [
+    { "url": "https://example.com/docs/getting-started" },
+    { "url": "https://example.com/api/reference.json", "max_length": 300000 }
   ]
 }
 ```

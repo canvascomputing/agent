@@ -63,6 +63,17 @@ Read or write pages in your knowledge: durable facts shared across tickets and a
       },
       "then": { "required": ["slug"] }
     }
+  ],
+  "examples": [
+    {
+      "action": "write",
+      "slug": "deployment-config",
+      "description": "How the service is deployed and which variables it reads.",
+      "content": "# Deployment\n\nThe service reads ...\n"
+    },
+    { "action": "read", "slug": "deployment-config" },
+    { "action": "list" },
+    { "action": "remove", "slug": "deployment-config" }
   ]
 }
 ```

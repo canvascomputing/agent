@@ -300,6 +300,11 @@ pub(crate) fn finish_tool_input_schema(static_schema: Value, schema: Option<&Sch
 /// Set the `result` property of the tool's static schema to the ticket schema,
 /// so an enveloped finish tool advertises a typed `result` instead of "any value".
 fn set_result_schema(mut static_schema: Value, schema: &Schema) -> Value {
+    if let Some(object) = static_schema.as_object_mut() {
+        // The examples show the untyped result the static schema accepts. The
+        // ticket now decides its shape, so keeping them would contradict it.
+        object.remove("examples");
+    }
     if let Some(result) = static_schema
         .get_mut("properties")
         .and_then(|properties| properties.get_mut("result"))
