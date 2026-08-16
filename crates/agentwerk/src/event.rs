@@ -110,8 +110,7 @@ impl ToolFailureKind {
         ToolFailureKind::SchemaValidationFailed,
     ];
 
-    /// The stable snake_case spelling, for a handler keying its own counts by
-    /// reason.
+    /// The stable snake_case spelling, which differs from the variant name.
     pub fn as_str(&self) -> &'static str {
         match self {
             ToolFailureKind::ToolNotFound => "not_found",
@@ -147,7 +146,7 @@ impl RepairKind {
     /// Every kind, in the order they are declared.
     pub const ALL: &'static [RepairKind] = &[RepairKind::CallMalformed, RepairKind::ValueMistyped];
 
-    /// The stable snake_case spelling, the one `Event.data["reason"]` carries.
+    /// The stable snake_case spelling, the one `reason` carries.
     pub fn as_str(&self) -> &'static str {
         match self {
             RepairKind::CallMalformed => "call_malformed",
@@ -181,8 +180,7 @@ impl KnowledgeFailureKind {
         KnowledgeFailureKind::StoreRefused,
     ];
 
-    /// The stable snake_case spelling, for a handler keying its own counts by
-    /// reason.
+    /// The stable snake_case spelling, the one `reason` carries.
     pub fn as_str(&self) -> &'static str {
         match self {
             KnowledgeFailureKind::PageMissing => "page_missing",
@@ -208,7 +206,6 @@ pub enum KnowledgeOp {
 }
 
 impl KnowledgeOp {
-    /// The stable name this operation reports itself under.
     fn name(&self) -> &'static str {
         match self {
             KnowledgeOp::Write => "write",
@@ -246,7 +243,6 @@ impl fmt::Display for KnowledgeOp {
 pub struct Event {
     /// When this event happened, in milliseconds since the epoch.
     pub created_at: u64,
-    /// Name of the agent that produced this event.
     pub agent_id: String,
     /// Key of the ticket this event concerns. Empty on `RunStarted` and
     /// `RunFinished`, which no ticket owns.
@@ -256,8 +252,8 @@ pub struct Event {
     /// and when the ticket carries no label.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
-    /// What happened. Flattened into the event itself, so one logged line
-    /// carries the kind's name and its payload beside the four fields here.
+    /// Flattened, so one logged line carries the kind's name and its payload
+    /// beside the four fields here.
     #[serde(flatten)]
     pub kind: EventKind,
 }
@@ -406,9 +402,6 @@ impl EventKind {
     }
 
     /// Which count this event adds to.
-    ///
-    /// The match is exhaustive on purpose: a new variant must name itself here,
-    /// and that one line is everything its count needs.
     pub fn event_name(&self) -> EventName {
         match self {
             EventKind::RunStarted => EventName::RunStarted,
@@ -441,9 +434,9 @@ impl EventKind {
         }
     }
 
-    /// Whether this kind reports something that went wrong. Names the
-    /// six kinds `TicketQueue::on_failure` fires on, so a handler on
-    /// the plain event chain can ask the same question.
+    /// Whether this kind reports something that went wrong. The kinds
+    /// `TicketQueue::on_failure` fires on, so a handler on the plain event
+    /// chain can ask the same question.
     pub fn is_failure(&self) -> bool {
         matches!(
             self,
@@ -499,8 +492,7 @@ pub enum EventName {
 }
 
 impl EventName {
-    /// Every name, in the order the kinds are declared. Lets a caller walk the
-    /// counts without knowing which kinds exist.
+    /// Every name, in the order the kinds are declared.
     pub const ALL: &'static [EventName] = &[
         EventName::RunStarted,
         EventName::RunFinished,
