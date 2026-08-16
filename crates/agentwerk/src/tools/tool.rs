@@ -136,10 +136,11 @@ pub struct ToolCall {
 }
 
 /// What a tool reports back: a result, an error the model should work around,
-/// or a rejection of its input.
+/// or arguments that missed the tool's own schema.
 ///
-/// All three reach the model the same way. The [`SchemaError`] variant is kept
-/// apart so `max_schema_retries` can govern it.
+/// All three reach the model the same way, and both failures count against
+/// `max_schema_retries`. [`SchemaError`] alone also shows the model the schema
+/// this tool advertised, with a directive to match it.
 ///
 /// [`SchemaError`]: ToolResult::SchemaError
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -148,7 +149,7 @@ pub enum ToolResult {
     Success(String),
     /// The tool failed, and the message tells the model how to recover.
     Error(String),
-    /// The tool rejected its input, and the message names what was wrong.
+    /// The arguments missed the tool's schema, and the message names how.
     SchemaError(String),
 }
 
@@ -163,7 +164,15 @@ impl ToolResult {
         Self::Error(content.into())
     }
 
-    /// Report malformed input. It counts against `max_schema_retries`.
+    /// Report arguments that missed a schema, worded as
+    /// [`Schema::validate`](crate::Schema::validate) words it. Reach for this
+    /// when your tool runs a schema of its own; agentwerk already checks the
+    /// one the tool declares.
+    ///
+    /// The model reads that schema back with a directive to match it, which
+    /// misleads when the rule broken is one no schema states. Report those with
+    /// [`error`](Self::error), saying what to do instead. Both count against
+    /// `max_schema_retries`.
     pub fn schema_error(content: impl Into<String>) -> Self {
         Self::SchemaError(content.into())
     }
