@@ -35,8 +35,15 @@ fn description() -> &'static str {
     DESC.get_or_init(|| tool_file().render_markdown())
 }
 
+/// What `write_file` accepts.
+#[derive(serde::Deserialize)]
+pub struct WriteFileArgs {
+    path: String,
+    content: String,
+}
+
 impl ToolLike for WriteFileTool {
-    type Args = Value;
+    type Args = WriteFileArgs;
 
     fn name(&self) -> &str {
         &tool_file().name
@@ -64,14 +71,13 @@ impl ToolLike for WriteFileTool {
 
     fn call<'a>(
         &'a self,
-        input: Value,
+        args: WriteFileArgs,
         ctx: &'a ToolContext,
     ) -> Pin<Box<dyn Future<Output = Result<ToolResult>> + Send + 'a>> {
         Box::pin(async move {
-            let path = input["path"].as_str().unwrap_or_default();
-            let content = input["content"].as_str().unwrap_or_default();
+            let WriteFileArgs { path, content } = args;
 
-            let resolved = ctx.dir.join(path);
+            let resolved = ctx.dir.join(&path);
 
             if let Some(parent) = resolved.parent() {
                 if let Err(e) = std::fs::create_dir_all(parent) {
@@ -92,6 +98,15 @@ impl ToolLike for WriteFileTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_example_the_schema_shows_deserializes_into_the_arguments() {
+        let document = tool_file().input_schema.get_raw_schema().clone();
+        for example in document["examples"].as_array().expect("examples") {
+            serde_json::from_value::<WriteFileArgs>(example.clone())
+                .unwrap_or_else(|error| panic!("{example}: {error}"));
+        }
+    }
     use std::path::PathBuf;
 
     fn test_ctx(dir: &std::path::Path) -> ToolContext {
@@ -101,11 +116,11 @@ mod tests {
     #[tokio::test]
     async fn create_new_file() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let tool = WriteFileTool;
+        let tool = crate::tools::erase(WriteFileTool);
         let ctx = test_ctx(dir.path());
 
         let result = tool
-            .call(
+            .call_with(
                 serde_json::json!({ "path": "new.txt", "content": "hello world" }),
                 &ctx,
             )
@@ -124,11 +139,11 @@ mod tests {
         let dir = crate::test_util::TempDir::new().unwrap();
         std::fs::write(dir.path().join("existing.txt"), "old content").unwrap();
 
-        let tool = WriteFileTool;
+        let tool = crate::tools::erase(WriteFileTool);
         let ctx = test_ctx(dir.path());
 
         let result = tool
-            .call(
+            .call_with(
                 serde_json::json!({ "path": "existing.txt", "content": "new content" }),
                 &ctx,
             )
@@ -143,11 +158,11 @@ mod tests {
     #[tokio::test]
     async fn creates_parent_dirs() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let tool = WriteFileTool;
+        let tool = crate::tools::erase(WriteFileTool);
         let ctx = test_ctx(dir.path());
 
         let result = tool
-            .call(
+            .call_with(
                 serde_json::json!({ "path": "a/b/c/deep.txt", "content": "nested" }),
                 &ctx,
             )

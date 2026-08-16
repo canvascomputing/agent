@@ -5,8 +5,6 @@ use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::OnceLock;
 
-use serde_json::Value;
-
 use crate::schemas::Schema;
 
 use super::tool::{ToolContext, ToolLike, ToolResult};
@@ -36,8 +34,21 @@ fn description() -> &'static str {
     DESC.get_or_init(|| tool_file().render_markdown())
 }
 
+/// What `list_directory` accepts. `path` defaults to the working directory.
+#[derive(serde::Deserialize)]
+pub struct ListDirectoryArgs {
+    #[serde(default = "here")]
+    path: String,
+    #[serde(default)]
+    recursive: bool,
+}
+
+fn here() -> String {
+    ".".to_string()
+}
+
 impl ToolLike for ListDirectoryTool {
-    type Args = Value;
+    type Args = ListDirectoryArgs;
 
     fn name(&self) -> &str {
         &tool_file().name
@@ -57,13 +68,15 @@ impl ToolLike for ListDirectoryTool {
 
     fn call<'a>(
         &'a self,
-        input: Value,
+        args: ListDirectoryArgs,
         ctx: &'a ToolContext,
     ) -> Pin<Box<dyn Future<Output = Result<ToolResult>> + Send + 'a>> {
         Box::pin(async move {
-            let path_str = input["path"].as_str().unwrap_or(".");
-            let recursive = input["recursive"].as_bool().unwrap_or(false);
-            let base = ctx.dir.join(path_str);
+            let ListDirectoryArgs {
+                path: path_str,
+                recursive,
+            } = args;
+            let base = ctx.dir.join(&path_str);
 
             if base.exists() && !base.is_dir() {
                 return Ok(ToolResult::error(format!(
@@ -151,6 +164,15 @@ fn list_entries(dir: &PathBuf, base: &PathBuf, recursive: bool) -> std::io::Resu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_example_the_schema_shows_deserializes_into_the_arguments() {
+        let document = tool_file().input_schema.get_raw_schema().clone();
+        for example in document["examples"].as_array().expect("examples") {
+            serde_json::from_value::<ListDirectoryArgs>(example.clone())
+                .unwrap_or_else(|error| panic!("{example}: {error}"));
+        }
+    }
     use std::fs;
 
     fn test_ctx(path: &std::path::Path) -> ToolContext {
@@ -164,9 +186,9 @@ mod tests {
         fs::write(tmp.path().join("beta.txt"), "world").unwrap();
         fs::create_dir(tmp.path().join("subdir")).unwrap();
 
-        let tool = ListDirectoryTool;
+        let tool = crate::tools::erase(ListDirectoryTool);
         let ctx = test_ctx(tmp.path());
-        let result = tool.call(serde_json::json!({}), &ctx).await.unwrap();
+        let result = tool.call_with(serde_json::json!({}), &ctx).await.unwrap();
 
         let content = result.content();
         let lines: Vec<&str> = content.lines().collect();
@@ -185,10 +207,10 @@ mod tests {
         fs::create_dir(tmp.path().join("child")).unwrap();
         fs::write(tmp.path().join("child").join("nested.txt"), "n").unwrap();
 
-        let tool = ListDirectoryTool;
+        let tool = crate::tools::erase(ListDirectoryTool);
         let ctx = test_ctx(tmp.path());
         let result = tool
-            .call(serde_json::json!({"recursive": true}), &ctx)
+            .call_with(serde_json::json!({"recursive": true}), &ctx)
             .await
             .unwrap();
 
@@ -204,8 +226,8 @@ mod tests {
         let tmp = crate::test_util::TempDir::new().unwrap();
         fs::write(tmp.path().join("app.py"), "x = 1\n").unwrap();
 
-        let result = ListDirectoryTool
-            .call(
+        let result = crate::tools::erase(ListDirectoryTool)
+            .call_with(
                 serde_json::json!({ "path": "app.py" }),
                 &test_ctx(tmp.path()),
             )
@@ -227,8 +249,8 @@ mod tests {
         fs::create_dir(tmp.path().join("pkg")).unwrap();
 
         // Guess a non-existent directory directly under cwd.
-        let result = ListDirectoryTool
-            .call(serde_json::json!({ "path": "nope" }), &test_ctx(tmp.path()))
+        let result = crate::tools::erase(ListDirectoryTool)
+            .call_with(serde_json::json!({ "path": "nope" }), &test_ctx(tmp.path()))
             .await
             .unwrap();
 
@@ -253,8 +275,8 @@ mod tests {
         fs::create_dir(cwd.join("pkg")).unwrap();
         let dropped = root.path().join("pkg");
 
-        let result = ListDirectoryTool
-            .call(
+        let result = crate::tools::erase(ListDirectoryTool)
+            .call_with(
                 serde_json::json!({ "path": dropped.to_str().unwrap() }),
                 &test_ctx(&cwd),
             )

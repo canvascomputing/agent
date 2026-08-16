@@ -6,8 +6,6 @@ use std::pin::Pin;
 use std::sync::OnceLock;
 use std::time::SystemTime;
 
-use serde_json::Value;
-
 use crate::schemas::Schema;
 
 use super::tool::{ToolContext, ToolLike, ToolResult};
@@ -39,8 +37,20 @@ fn description() -> &'static str {
     DESC.get_or_init(|| tool_file().render_markdown())
 }
 
+/// What `glob` accepts. `path` defaults to the working directory itself.
+#[derive(serde::Deserialize)]
+pub struct GlobArgs {
+    pattern: String,
+    #[serde(default = "here")]
+    path: String,
+}
+
+fn here() -> String {
+    ".".to_string()
+}
+
 impl ToolLike for GlobTool {
-    type Args = Value;
+    type Args = GlobArgs;
 
     fn name(&self) -> &str {
         &tool_file().name
@@ -60,12 +70,14 @@ impl ToolLike for GlobTool {
 
     fn call<'a>(
         &'a self,
-        input: Value,
+        args: GlobArgs,
         ctx: &'a ToolContext,
     ) -> Pin<Box<dyn Future<Output = Result<ToolResult>> + Send + 'a>> {
         Box::pin(async move {
-            let pattern = input["pattern"].as_str().unwrap_or_default();
-            let base_str = input["path"].as_str().unwrap_or(".");
+            let GlobArgs {
+                pattern,
+                path: base_str,
+            } = args;
             let base = ctx.dir.join(base_str);
 
             let pattern_segments: Vec<&str> = pattern.split('/').collect();
@@ -222,6 +234,15 @@ fn seg_match_recursive(pat: &[u8], txt: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_example_the_schema_shows_deserializes_into_the_arguments() {
+        let document = tool_file().input_schema.get_raw_schema().clone();
+        for example in document["examples"].as_array().expect("examples") {
+            serde_json::from_value::<GlobArgs>(example.clone())
+                .unwrap_or_else(|error| panic!("{example}: {error}"));
+        }
+    }
     use std::fs;
 
     fn test_ctx(path: &std::path::Path) -> ToolContext {
@@ -237,10 +258,10 @@ mod tests {
         fs::write(tmp.path().join("src/sub/deep.rs"), "// deep").unwrap();
         fs::write(tmp.path().join("readme.md"), "# hi").unwrap();
 
-        let tool = GlobTool;
+        let tool = crate::tools::erase(GlobTool);
         let ctx = test_ctx(tmp.path());
         let result = tool
-            .call(serde_json::json!({"pattern": "**/*.rs"}), &ctx)
+            .call_with(serde_json::json!({"pattern": "**/*.rs"}), &ctx)
             .await
             .unwrap();
 
@@ -262,10 +283,10 @@ mod tests {
             fs::write(tmp.path().join(format!("file_{i:04}.txt")), "x").unwrap();
         }
 
-        let tool = GlobTool;
+        let tool = crate::tools::erase(GlobTool);
         let ctx = test_ctx(tmp.path());
         let result = tool
-            .call(serde_json::json!({"pattern": "*.txt"}), &ctx)
+            .call_with(serde_json::json!({"pattern": "*.txt"}), &ctx)
             .await
             .unwrap();
 
