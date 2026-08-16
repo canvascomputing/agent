@@ -228,35 +228,28 @@ impl fmt::Display for SchemaParseError {
 
 impl std::error::Error for SchemaParseError {}
 
-// Compiled schema tree
-
+/// One compiled schema node. Every keyword is `None` until the document
+/// declares it, so a node constrains only what it names.
 #[derive(Debug, Default)]
 struct Node {
-    // type / enum / const
     types: Option<Vec<JsonType>>,
     enum_values: Option<Vec<Value>>,
     const_value: Option<Value>,
-    // logical combinators
     all_of: Option<Vec<Node>>,
     any_of: Option<Vec<Node>>,
     one_of: Option<Vec<Node>>,
     not: Option<Box<Node>>,
-    // conditional
     if_schema: Option<Box<Node>>,
     then_schema: Option<Box<Node>>,
     else_schema: Option<Box<Node>>,
-    // object
     properties: Option<Vec<(String, Node)>>,
     required: Option<Vec<String>>,
     additional_properties_forbidden: bool,
-    // array
     items: Option<Box<Node>>,
     min_items: Option<usize>,
     max_items: Option<usize>,
-    // number
     minimum: Option<f64>,
     maximum: Option<f64>,
-    // string
     min_length: Option<usize>,
     max_length: Option<usize>,
     pattern: Option<regex::Regex>,
@@ -319,8 +312,6 @@ impl JsonType {
         }
     }
 }
-
-// Parsing
 
 /// The keywords agentwerk understands. Anything else is rejected when the
 /// schema is parsed, so an unsupported constraint is reported rather than
@@ -659,8 +650,6 @@ fn escape_pointer(segment: &str) -> String {
     segment.replace('~', "~0").replace('/', "~1")
 }
 
-// Checking
-
 impl Node {
     fn check(&self, instance: &Value, instance_path: &str, out: &mut Vec<SchemaViolation>) {
         if let Some(types) = &self.types {
@@ -924,8 +913,6 @@ fn retype_hint(types: &[JsonType], instance: &Value) -> Option<&'static str> {
     }
 }
 
-// Retyping
-
 impl Node {
     /// Retype the values this schema names a type for, recording each rewrite
     /// and where it happened. Runs only on a value that already failed, and the
@@ -1084,8 +1071,6 @@ mod tests {
         schema.validate(value).unwrap().0
     }
 
-    // Parse errors
-
     #[test]
     fn parse_rejects_malformed_schema() {
         let bad = json!({"type": 42});
@@ -1137,8 +1122,6 @@ mod tests {
         assert!(err.message.contains("oneOf"));
     }
 
-    // Type
-
     #[test]
     fn validate_type_rejects_wrong_kind() {
         let schema = Schema::new(json!({"type": "object", "required": ["status"]})).unwrap();
@@ -1174,8 +1157,6 @@ mod tests {
         assert!(schema.validate(json!(null)).is_err());
         assert!(schema.validate(json!("anything")).is_err());
     }
-
-    // Enum / const
 
     #[test]
     fn validate_enum_rejects_value_not_in_list() {
@@ -1226,8 +1207,6 @@ mod tests {
         let (_, repaired) = schema.validate(json!({"mode": "Content"})).unwrap();
         assert_eq!(repaired, vec!["/mode"]);
     }
-
-    // Object
 
     #[test]
     fn validate_passes_conforming_object() {
@@ -1289,8 +1268,6 @@ mod tests {
         assert!(violations.iter().any(|v| v.message.contains("`y`")));
     }
 
-    // Array
-
     #[test]
     fn validate_items_schema_validates_each_element() {
         let schema =
@@ -1320,8 +1297,6 @@ mod tests {
             .iter()
             .any(|v| v.message.contains("expected at most 2")));
     }
-
-    // String
 
     #[test]
     fn validate_string_length_bounds() {
@@ -1354,8 +1329,6 @@ mod tests {
         assert!(schema.validate(json!(42)).is_ok());
     }
 
-    // Number
-
     #[test]
     fn validate_minimum_and_maximum_bounds() {
         let schema = Schema::new(json!({"minimum": 0, "maximum": 10})).unwrap();
@@ -1363,8 +1336,6 @@ mod tests {
         assert!(schema.validate(json!(-1)).is_err());
         assert!(schema.validate(json!(11)).is_err());
     }
-
-    // Logical combinators
 
     #[test]
     fn validate_all_of_passes_when_all_schemas_match() {
@@ -1445,8 +1416,6 @@ mod tests {
             .iter()
             .any(|v| v.message.contains("must not match")));
     }
-
-    // If / then / else
 
     #[test]
     fn validate_if_then_applies_then_when_if_passes() {
@@ -1580,8 +1549,6 @@ mod tests {
         );
     }
 
-    // Decode fallback
-
     #[test]
     fn validate_returns_a_conforming_value_unchanged() {
         let schema = Schema::new(json!({
@@ -1641,8 +1608,6 @@ mod tests {
         let schema = Schema::new(json!({"type": "object", "required": ["status"]})).unwrap();
         assert!(schema.validate(json!(42)).is_err());
     }
-
-    // Retyping
 
     fn line_schema() -> Schema {
         Schema::new(json!({
@@ -1812,8 +1777,6 @@ mod tests {
             .any(|v| v.message.contains("send the value unquoted")));
     }
 
-    // Serde / clone
-
     #[test]
     fn clone_shares_compiled_state() {
         let schema = Schema::new(json!({
@@ -1851,8 +1814,6 @@ mod tests {
         let none: Option<Schema> = serde_json::from_value(Value::Null).unwrap();
         assert!(none.is_none());
     }
-
-    // SchemaViolations display
 
     #[test]
     fn violations_display_renders_one_line_per_violation() {
