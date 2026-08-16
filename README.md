@@ -548,33 +548,7 @@ let git = CommandTool::new("git")
 
 #### Custom Tools
 
-You can define custom tools for specific needs with the following parameters:
-
-| Method | Description |
-|--------|-------------|
-| `concurrent(true)` | If a tool has no side-effects you can run it in parallel with this option. |
-| `paths(["path"])` | Name file path used for a tool call, so the files are included in statistics. |
-
-Describe the tool, then hand it the code it runs:
-
-```rust
-use agentwerk::tools::{Tool, ToolResult};
-
-let greet = Tool::new("greet", "Say hello")
-    .schema(json!({
-        "type": "object",
-        "properties": { "name": { "type": "string" } },
-        "required": ["name"]
-    }))
-    .concurrent(true)
-    .handler(|input, _context| async move {
-        let name = input["name"].as_str().unwrap_or("world");
-        ToolResult::success(format!("Hello, {name}!"))
-    })
-    .build();
-```
-
-See [`Tool`](https://docs.rs/agentwerk/latest/agentwerk/tools/struct.Tool.html).
+Build one with [`Tool`](https://docs.rs/agentwerk/latest/agentwerk/tools/struct.Tool.html): a name, a description, a JSON Schema for the arguments, and the handler that runs.
 
 </details>
 

@@ -572,33 +572,7 @@ git = (
 
 #### Custom Tools
 
-You can define custom tools for specific needs with the following parameters:
-
-| Method | Description |
-|--------|-------------|
-| `concurrent=True` | If a tool has no side-effects you can run it in parallel with this option. |
-| `paths=["path"]` | Name file path used for a tool call, so the files are included in statistics. |
-
-Describe the tool, then hand it the code it runs:
-
-```python
-from agentwerk import tool
-
-
-@tool(
-    concurrent=True,
-    schema={
-        "type": "object",
-        "properties": {"name": {"type": "string"}},
-        "required": ["name"],
-    },
-)
-def greet(name: str) -> str:
-    """Say hello."""
-    return f"Hello, {name}!"
-```
-
-See [`Tool`](https://docs.rs/agentwerk/latest/agentwerk/tools/struct.Tool.html).
+Build one with the [`@tool`](https://docs.rs/agentwerk/latest/agentwerk/tools/struct.Tool.html) decorator: a name, a description, a JSON Schema for the arguments, and the function that runs.
 
 </details>
 
