@@ -9,7 +9,6 @@ use crate::schemas::Schema;
 
 use super::tool::{ToolContext, ToolLike, ToolResult};
 use super::tool_file::ToolFile;
-use crate::providers::ProviderResult as Result;
 
 /// List the entries of a directory with type and size. Concurrent. Pair with
 /// [`GlobTool`](crate::tools::GlobTool) when you need pattern-based file discovery.
@@ -69,7 +68,7 @@ impl ToolLike for ListDirectoryTool {
         &'a self,
         args: ListDirectoryArgs,
         ctx: &'a ToolContext,
-    ) -> Pin<Box<dyn Future<Output = Result<ToolResult>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = ToolResult> + Send + 'a>> {
         Box::pin(async move {
             let ListDirectoryArgs {
                 path: path_str,
@@ -78,9 +77,7 @@ impl ToolLike for ListDirectoryTool {
             let base = ctx.dir.join(&path_str);
 
             if base.exists() && !base.is_dir() {
-                return Ok(ToolResult::error(format!(
-                    "Path is not a directory: {path_str}"
-                )));
+                return ToolResult::error(format!("Path is not a directory: {path_str}"));
             }
 
             match list_entries(&base, &base, recursive) {
@@ -97,15 +94,13 @@ impl ToolLike for ListDirectoryTool {
                             _ => format!("{}  {} bytes", e.display_name, e.size.unwrap_or(0)),
                         })
                         .collect();
-                    Ok(ToolResult::success(lines.join("\n")))
+                    ToolResult::success(lines.join("\n"))
                 }
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    Ok(ToolResult::error(format!(
-                        "Directory does not exist: {path_str}. {}",
-                        super::util::not_found_hint(&ctx.dir, &base)
-                    )))
-                }
-                Err(e) => Ok(ToolResult::error(format!("Error listing directory: {e}"))),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => ToolResult::error(format!(
+                    "Directory does not exist: {path_str}. {}",
+                    super::util::not_found_hint(&ctx.dir, &base)
+                )),
+                Err(e) => ToolResult::error(format!("Error listing directory: {e}")),
             }
         })
     }
@@ -187,7 +182,7 @@ mod tests {
 
         let tool = crate::tools::erase(ListDirectoryTool);
         let ctx = test_ctx(tmp.path());
-        let result = tool.call_with(serde_json::json!({}), &ctx).await.unwrap();
+        let result = tool.call_with(serde_json::json!({}), &ctx).await;
 
         let content = result.content();
         let lines: Vec<&str> = content.lines().collect();
@@ -210,8 +205,7 @@ mod tests {
         let ctx = test_ctx(tmp.path());
         let result = tool
             .call_with(serde_json::json!({"recursive": true}), &ctx)
-            .await
-            .unwrap();
+            .await;
 
         let content = result.content();
         assert!(content.contains("child/nested.txt") || content.contains("child\\nested.txt"));
@@ -230,8 +224,7 @@ mod tests {
                 serde_json::json!({ "path": "app.py" }),
                 &test_ctx(tmp.path()),
             )
-            .await
-            .unwrap();
+            .await;
 
         let ToolResult::Error(content) = &result else {
             panic!("listing a file should return an error result, got {result:?}");
@@ -250,8 +243,7 @@ mod tests {
         // Guess a non-existent directory directly under cwd.
         let result = crate::tools::erase(ListDirectoryTool)
             .call_with(serde_json::json!({ "path": "nope" }), &test_ctx(tmp.path()))
-            .await
-            .unwrap();
+            .await;
 
         let ToolResult::Error(content) = &result else {
             panic!("a missing directory should return an error result, got {result:?}");
@@ -279,8 +271,7 @@ mod tests {
                 serde_json::json!({ "path": dropped.to_str().unwrap() }),
                 &test_ctx(&cwd),
             )
-            .await
-            .unwrap();
+            .await;
 
         let ToolResult::Error(content) = &result else {
             panic!("a missing directory should return an error result, got {result:?}");

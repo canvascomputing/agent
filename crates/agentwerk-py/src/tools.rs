@@ -5,7 +5,6 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use agentwerk::providers::ProviderResult;
 use agentwerk::schemas::Schema;
 use agentwerk::tools::{
     AnyTool, CommandTool, EditFileTool, FetchUrlTool, FinishTool, GlobTool, GrepTool,
@@ -52,7 +51,7 @@ impl ToolLike for BoxedTool {
         &'a self,
         input: Value,
         ctx: &'a ToolContext,
-    ) -> Pin<Box<dyn Future<Output = ProviderResult<ToolResult>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = ToolResult> + Send + 'a>> {
         self.0.call_with(input, ctx)
     }
 }
@@ -108,7 +107,7 @@ impl ToolLike for PyToolAdapter {
         &'a self,
         input: Value,
         _ctx: &'a ToolContext,
-    ) -> Pin<Box<dyn Future<Output = ProviderResult<ToolResult>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = ToolResult> + Send + 'a>> {
         let func = Python::attach(|py| self.func.clone_ref(py));
         Box::pin(async move {
             // Concurrent tool calls are spawned onto a multi-thread runtime, so
@@ -120,10 +119,10 @@ impl ToolLike for PyToolAdapter {
             .unwrap_or_else(|join| Err(format!("tool thread panicked: {join}")));
             // A Python exception is a recoverable failure shown back to the
             // model, not a hard `Err` that stops the run.
-            Ok(match outcome {
+            match outcome {
                 Ok(result) => result,
                 Err(message) => ToolResult::error(message),
-            })
+            }
         })
     }
 }

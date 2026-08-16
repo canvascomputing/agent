@@ -7,7 +7,6 @@ use std::sync::{Arc, OnceLock};
 
 use crate::agents::knowledge::{Knowledge, KnowledgeError};
 use crate::event::{EventKind, KnowledgeFailureKind, KnowledgeOp};
-use crate::providers::ProviderResult;
 
 use crate::schemas::Schema;
 
@@ -111,7 +110,7 @@ impl ToolLike for KnowledgeTool {
         &'a self,
         args: KnowledgeArgs,
         ctx: &'a ToolContext,
-    ) -> Pin<Box<dyn Future<Output = ProviderResult<ToolResult>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = ToolResult> + Send + 'a>> {
         Box::pin(async move {
             // The tool self-reports each outcome: only it can see a read/remove
             // miss, which returns Ok, so the shared tool-call loop cannot.
@@ -137,14 +136,14 @@ impl ToolLike for KnowledgeTool {
                             record(EventKind::KnowledgeUsed {
                                 op: KnowledgeOp::Write,
                             });
-                            Ok(ToolResult::success(usage_line("page written", &self.store)))
+                            ToolResult::success(usage_line("page written", &self.store))
                         }
                         Err(why) => {
                             record(EventKind::KnowledgeFailed {
                                 op: KnowledgeOp::Write,
                                 reason: failure_kind(&why),
                             });
-                            Ok(ToolResult::error(why.to_string()))
+                            ToolResult::error(why.to_string())
                         }
                     }
                 }
@@ -154,16 +153,16 @@ impl ToolLike for KnowledgeTool {
                         record(EventKind::KnowledgeUsed {
                             op: KnowledgeOp::Read,
                         });
-                        Ok(ToolResult::success(page.content))
+                        ToolResult::success(page.content)
                     }
                     Err(why) => {
                         record(EventKind::KnowledgeFailed {
                             op: KnowledgeOp::Read,
                             reason: failure_kind(&why),
                         });
-                        Ok(ToolResult::success(format!(
+                        ToolResult::success(format!(
                                 "No page found for `{slug}`. The `list` action shows every page that exists: an unlisted slug cannot be read."
-                            )))
+                            ))
                     }
                 },
 
@@ -172,14 +171,14 @@ impl ToolLike for KnowledgeTool {
                         record(EventKind::KnowledgeUsed {
                             op: KnowledgeOp::Remove,
                         });
-                        Ok(ToolResult::success(usage_line("page removed", &self.store)))
+                        ToolResult::success(usage_line("page removed", &self.store))
                     }
                     Err(why) => {
                         record(EventKind::KnowledgeFailed {
                             op: KnowledgeOp::Remove,
                             reason: failure_kind(&why),
                         });
-                        Ok(ToolResult::error(why.to_string()))
+                        ToolResult::error(why.to_string())
                     }
                 },
 
@@ -195,7 +194,7 @@ impl ToolLike for KnowledgeTool {
                     } else {
                         index
                     };
-                    Ok(ToolResult::success(body))
+                    ToolResult::success(body)
                 }
             }
         })
@@ -261,8 +260,7 @@ mod tests {
                 },
                 &ctx(),
             )
-            .await
-            .unwrap();
+            .await;
         assert_success(&r, "page written");
         assert!(store.index().contains("test"));
     }
@@ -279,8 +277,7 @@ mod tests {
                 },
                 &ctx(),
             )
-            .await
-            .unwrap();
+            .await;
         assert_success(&r, "Hello.");
     }
 
@@ -295,8 +292,7 @@ mod tests {
                 },
                 &ctx(),
             )
-            .await
-            .unwrap();
+            .await;
         assert_success(&r, "No page found");
     }
 
@@ -312,8 +308,7 @@ mod tests {
                 },
                 &ctx(),
             )
-            .await
-            .unwrap();
+            .await;
         match &r {
             ToolResult::Success(s) => {
                 assert!(!s.contains("---"));
@@ -335,8 +330,7 @@ mod tests {
                 },
                 &ctx(),
             )
-            .await
-            .unwrap();
+            .await;
         assert_success(&r, "page removed");
         assert!(store.index().is_empty());
     }
@@ -346,7 +340,7 @@ mod tests {
         let (store, _dir) = fresh_store();
         save_page(&store, "config", "Config page", "# Config", &[]);
         let tool = KnowledgeTool::new(Arc::clone(&store));
-        let r = tool.call(KnowledgeArgs::List, &ctx()).await.unwrap();
+        let r = tool.call(KnowledgeArgs::List, &ctx()).await;
         assert_success(&r, "config");
     }
 
@@ -358,7 +352,7 @@ mod tests {
             save_page(&store, &format!("page-{i}"), "A note", "# Note", &[]);
         }
         let tool = KnowledgeTool::new(Arc::clone(&store));
-        let r = tool.call(KnowledgeArgs::List, &ctx()).await.unwrap();
+        let r = tool.call(KnowledgeArgs::List, &ctx()).await;
 
         assert!(!store.index().contains("page-9"), "{}", store.index());
         assert_success(&r, "page-9");
@@ -368,7 +362,7 @@ mod tests {
     async fn list_action_empty_store() {
         let (store, _dir) = fresh_store();
         let tool = KnowledgeTool::new(Arc::clone(&store));
-        let r = tool.call(KnowledgeArgs::List, &ctx()).await.unwrap();
+        let r = tool.call(KnowledgeArgs::List, &ctx()).await;
         assert_success(&r, "(no pages)");
     }
 
@@ -457,33 +451,29 @@ mod tests {
             },
             &ctx,
         )
-        .await
-        .unwrap();
-        tool.call(KnowledgeArgs::List, &ctx).await.unwrap();
+        .await;
+        tool.call(KnowledgeArgs::List, &ctx).await;
         tool.call(
             KnowledgeArgs::Read {
                 slug: "note".into(),
             },
             &ctx,
         )
-        .await
-        .unwrap();
+        .await;
         tool.call(
             KnowledgeArgs::Read {
                 slug: "ghost".into(),
             },
             &ctx,
         )
-        .await
-        .unwrap();
+        .await;
         tool.call(
             KnowledgeArgs::Remove {
                 slug: "note".into(),
             },
             &ctx,
         )
-        .await
-        .unwrap();
+        .await;
 
         // Every action reports itself, and the read of an absent slug reports
         // the reason it did not go through.

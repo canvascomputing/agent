@@ -11,7 +11,6 @@ use super::super::tool::{ToolContext, ToolLike, ToolResult};
 use super::super::tool_file::ToolFile;
 use super::super::util::{glob_match, run_command};
 use super::parse::{Argument, Command, Refusal};
-use crate::providers::ProviderResult as Result;
 
 fn tool_file() -> &'static ToolFile {
     static FILE: OnceLock<ToolFile> = OnceLock::new();
@@ -345,7 +344,7 @@ impl ToolLike for CommandTool {
         &'a self,
         args: CommandArgs,
         ctx: &'a ToolContext,
-    ) -> Pin<Box<dyn Future<Output = Result<ToolResult>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = ToolResult> + Send + 'a>> {
         Box::pin(async move {
             let CommandArgs {
                 command,
@@ -354,7 +353,7 @@ impl ToolLike for CommandTool {
 
             let command = match self.check(&command) {
                 Ok(command) => command,
-                Err(refusal) => return Ok(ToolResult::error(refusal)),
+                Err(refusal) => return ToolResult::error(refusal),
             };
 
             let timeout = timeout_ms
@@ -364,7 +363,7 @@ impl ToolLike for CommandTool {
                 // letting a call name any number it likes.
                 .min(Self::MAX_TIMEOUT);
 
-            Ok(run_command(&command, timeout, ctx).await)
+            run_command(&command, timeout, ctx).await
         })
     }
 }
@@ -434,8 +433,7 @@ mod tests {
         let input = serde_json::json!({ "command": "echo hello" });
         let result = crate::tools::erase(tool.clone())
             .call_with(input, &ctx)
-            .await
-            .unwrap();
+            .await;
         let content = result.content();
         assert!(content.contains("hello"));
         assert!(matches!(result, ToolResult::Success(_)));
@@ -448,8 +446,7 @@ mod tests {
         let input = serde_json::json!({ "command": "sleep 10", "timeout_ms": 100 });
         let result = crate::tools::erase(tool.clone())
             .call_with(input, &ctx)
-            .await
-            .unwrap();
+            .await;
         let content = result.content();
         assert!(matches!(result, ToolResult::Error(_)));
         assert!(content.contains("timed out"));
@@ -483,8 +480,7 @@ mod tests {
         let ctx = test_tool_context();
         let result = crate::tools::erase(tool)
             .call_with(serde_json::json!({ "command": "echo" }), &ctx)
-            .await
-            .unwrap();
+            .await;
         assert!(matches!(result, ToolResult::Success(_)));
     }
 
@@ -494,8 +490,7 @@ mod tests {
         let ctx = test_tool_context();
         let result = crate::tools::erase(tool)
             .call_with(serde_json::json!({ "command": "echo hello" }), &ctx)
-            .await
-            .unwrap();
+            .await;
         let content = result.content();
         assert!(matches!(result, ToolResult::Error(_)));
         assert!(content.contains("is not allowed by tool 'echo'"));
@@ -507,8 +502,7 @@ mod tests {
         let ctx = test_tool_context();
         let result = crate::tools::erase(tool)
             .call_with(serde_json::json!({ "command": "rm -rf /" }), &ctx)
-            .await
-            .unwrap();
+            .await;
         let content = result.content();
         assert!(matches!(result, ToolResult::Error(_)));
         assert!(content.contains("Allowed: `echo *`."));
@@ -523,8 +517,7 @@ mod tests {
         for command in ["echo one", "echo two"] {
             let result = crate::tools::erase(tool.clone())
                 .call_with(serde_json::json!({ "command": command }), &ctx)
-                .await
-                .unwrap();
+                .await;
             assert!(matches!(result, ToolResult::Success(_)));
         }
     }
@@ -537,8 +530,7 @@ mod tests {
         let ctx = test_tool_context();
         let result = crate::tools::erase(tool)
             .call_with(serde_json::json!({ "command": "echo secret" }), &ctx)
-            .await
-            .unwrap();
+            .await;
         let content = result.content();
         assert!(matches!(result, ToolResult::Error(_)));
         assert!(content.contains("denied pattern 'echo secret*'"));
@@ -550,8 +542,7 @@ mod tests {
         let ctx = test_tool_context();
         let result = crate::tools::erase(tool)
             .call_with(serde_json::json!({ "command": "echo" }), &ctx)
-            .await
-            .unwrap();
+            .await;
         assert!(matches!(result, ToolResult::Error(_)));
     }
 
@@ -565,8 +556,7 @@ mod tests {
 
         let result = crate::tools::erase(tool)
             .call_with(serde_json::json!({ "command": command }), &ctx)
-            .await
-            .unwrap();
+            .await;
 
         let content = result.content();
         assert!(
@@ -588,8 +578,7 @@ mod tests {
 
         let result = crate::tools::erase(CommandTool::new("touch").allow("touch *"))
             .call_with(serde_json::json!({ "command": "touch chained.txt" }), &ctx)
-            .await
-            .unwrap();
+            .await;
 
         assert!(matches!(result, ToolResult::Success(_)));
         assert!(dir.path().join("chained.txt").exists());
@@ -615,8 +604,7 @@ mod tests {
         let ctx = test_tool_context();
         let result = crate::tools::erase(CommandTool::new("echo").allow("echo *"))
             .call_with(serde_json::json!({ "command": "echo \"a && b\"" }), &ctx)
-            .await
-            .unwrap();
+            .await;
 
         let content = result.content();
         assert!(matches!(result, ToolResult::Success(_)), "got {content}");
@@ -636,8 +624,7 @@ mod tests {
                 serde_json::json!({ "command": "ls -1 \"two words.txt\"" }),
                 &ctx,
             )
-            .await
-            .unwrap();
+            .await;
 
         let content = result.content();
         assert!(matches!(result, ToolResult::Success(_)), "got {content}");
@@ -649,8 +636,7 @@ mod tests {
         let ctx = test_tool_context();
         let result = crate::tools::erase(CommandTool::new("echo").allow("/bin/echo *"))
             .call_with(serde_json::json!({ "command": "/bin/echo hi" }), &ctx)
-            .await
-            .unwrap();
+            .await;
 
         let content = result.content();
         assert!(matches!(result, ToolResult::Success(_)), "got {content}");
@@ -665,8 +651,7 @@ mod tests {
         let ctx = test_tool_context();
         let result = crate::tools::erase(tool)
             .call_with(serde_json::json!({ "command": "echo  push --force" }), &ctx)
-            .await
-            .unwrap();
+            .await;
         let content = result.content();
         assert!(
             content.contains("denied pattern 'echo push*'"),
@@ -680,8 +665,7 @@ mod tests {
         let ctx = test_tool_context();
         let result = crate::tools::erase(tool)
             .call_with(serde_json::json!({ "command": "ls -a -l" }), &ctx)
-            .await
-            .unwrap();
+            .await;
         let content = result.content();
         assert!(content.contains("denied flag '-l'"), "got {content}");
     }
@@ -695,8 +679,7 @@ mod tests {
                 serde_json::json!({ "command": "git log --format=%H" }),
                 &ctx,
             )
-            .await
-            .unwrap();
+            .await;
         assert!(matches!(result, ToolResult::Error(_)));
     }
 
@@ -713,8 +696,7 @@ mod tests {
                 serde_json::json!({ "command": "echo -oProxyCommand=/bin/sh host" }),
                 &ctx,
             )
-            .await
-            .unwrap();
+            .await;
         let content = result.content();
         assert!(
             content.contains("denied flag '-oProxyCommand=/bin/sh'"),
@@ -730,8 +712,7 @@ mod tests {
         let ctx = test_tool_context();
         let result = crate::tools::erase(tool)
             .call_with(serde_json::json!({ "command": "echo --force" }), &ctx)
-            .await
-            .unwrap();
+            .await;
         assert!(matches!(result, ToolResult::Success(_)));
     }
 
@@ -743,8 +724,7 @@ mod tests {
         let ctx = test_tool_context();
         let result = crate::tools::erase(tool)
             .call_with(serde_json::json!({ "command": "echo -f" }), &ctx)
-            .await
-            .unwrap();
+            .await;
         assert!(matches!(result, ToolResult::Success(_)));
     }
 
@@ -754,8 +734,7 @@ mod tests {
         let ctx = test_tool_context();
         let result = crate::tools::erase(tool)
             .call_with(serde_json::json!({ "command": "echo -rf" }), &ctx)
-            .await
-            .unwrap();
+            .await;
         assert!(result.content().contains("denied flag '-rf'"));
     }
 
@@ -768,14 +747,12 @@ mod tests {
 
         let refused = crate::tools::erase(tool.clone())
             .call_with(serde_json::json!({ "command": "echo -rf" }), &ctx)
-            .await
-            .unwrap();
+            .await;
         assert!(refused.content().contains("denied flag '-rf'"));
 
         let allowed = crate::tools::erase(tool)
             .call_with(serde_json::json!({ "command": "echo -r" }), &ctx)
-            .await
-            .unwrap();
+            .await;
         assert!(matches!(allowed, ToolResult::Success(_)));
     }
 
@@ -787,8 +764,7 @@ mod tests {
         let ctx = test_tool_context();
         let result = crate::tools::erase(tool)
             .call_with(serde_json::json!({ "command": "/bin/echo hi" }), &ctx)
-            .await
-            .unwrap();
+            .await;
         assert!(matches!(result, ToolResult::Error(_)));
     }
 
@@ -801,8 +777,7 @@ mod tests {
                 serde_json::json!({ "command": "LD_PRELOAD=./x echo hi" }),
                 &ctx,
             )
-            .await
-            .unwrap();
+            .await;
         let content = result.content();
         assert!(content.contains("environment variable"), "got {content}");
     }
@@ -815,8 +790,7 @@ mod tests {
                 serde_json::json!({ "command": "nonexistent_command_xyz" }),
                 &ctx,
             )
-            .await
-            .unwrap();
+            .await;
         let content = result.content();
         assert!(content.contains("nonexistent_command_xyz"), "got {content}");
     }
@@ -850,8 +824,7 @@ mod tests {
         let ctx = test_tool_context();
         let result = crate::tools::erase(tool)
             .call_with(serde_json::json!({ "command": "echo -- --force" }), &ctx)
-            .await
-            .unwrap();
+            .await;
         assert!(matches!(result, ToolResult::Success(_)));
     }
 
@@ -864,8 +837,7 @@ mod tests {
         let ctx = test_tool_context();
         let result = crate::tools::erase(tool)
             .call_with(serde_json::json!({ "command": "echo \"a b\"" }), &ctx)
-            .await
-            .unwrap();
+            .await;
         assert!(matches!(result, ToolResult::Success(_)));
     }
 
@@ -877,8 +849,7 @@ mod tests {
         let ctx = test_tool_context();
         let result = crate::tools::erase(tool)
             .call_with(serde_json::json!({ "command": "ECHO hi" }), &ctx)
-            .await
-            .unwrap();
+            .await;
         assert!(matches!(result, ToolResult::Error(_)));
     }
 
@@ -892,12 +863,10 @@ mod tests {
 
         crate::tools::erase(tool.clone())
             .call_with(serde_json::json!({ "command": "touch allowed.txt" }), &ctx)
-            .await
-            .unwrap();
+            .await;
         let result = crate::tools::erase(tool)
             .call_with(serde_json::json!({ "command": "touch marker.txt" }), &ctx)
-            .await
-            .unwrap();
+            .await;
 
         // Without the allowed file, the absent marker would prove nothing.
         assert!(dir.path().join("allowed.txt").exists());

@@ -10,7 +10,6 @@ use crate::schemas::Schema;
 
 use super::tool::{ToolContext, ToolLike, ToolResult};
 use super::tool_file::ToolFile;
-use crate::providers::ProviderResult as Result;
 
 /// In-place string replacement in an existing file. The model supplies the
 /// old and new strings; the tool fails if the old string is absent or
@@ -76,7 +75,7 @@ impl ToolLike for EditFileTool {
         &'a self,
         args: EditFileArgs,
         ctx: &'a ToolContext,
-    ) -> Pin<Box<dyn Future<Output = Result<ToolResult>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = ToolResult> + Send + 'a>> {
         Box::pin(async move {
             let EditFileArgs {
                 path,
@@ -91,20 +90,20 @@ impl ToolLike for EditFileTool {
             let content = match std::fs::read_to_string(&resolved) {
                 Ok(c) => c,
                 Err(e) => {
-                    return Ok(ToolResult::error(format!("Failed to read file: {e}")));
+                    return ToolResult::error(format!("Failed to read file: {e}"));
                 }
             };
 
             let count = content.matches(old_string).count();
 
             if count == 0 {
-                return Ok(ToolResult::error(format!("old_string not found in {path}")));
+                return ToolResult::error(format!("old_string not found in {path}"));
             }
 
             if count > 1 && !replace_all {
-                return Ok(ToolResult::error(format!(
+                return ToolResult::error(format!(
                     "Found {count} occurrences of old_string in {path}. Use replace_all to replace all."
-                )));
+                ));
             }
 
             let new_content = if replace_all {
@@ -114,10 +113,10 @@ impl ToolLike for EditFileTool {
             };
 
             match std::fs::write(&resolved, &new_content) {
-                Ok(()) => Ok(ToolResult::success(format!(
-                    "Edited {path}: replaced {count} occurrence(s)"
-                ))),
-                Err(e) => Ok(ToolResult::error(format!("Failed to write file: {e}"))),
+                Ok(()) => {
+                    ToolResult::success(format!("Edited {path}: replaced {count} occurrence(s)"))
+                }
+                Err(e) => ToolResult::error(format!("Failed to write file: {e}")),
             }
         })
     }
@@ -158,8 +157,7 @@ mod tests {
                 }),
                 &ctx,
             )
-            .await
-            .unwrap();
+            .await;
 
         let (ToolResult::Success(out) | ToolResult::Error(out) | ToolResult::SchemaError(out)) =
             &result;
@@ -188,8 +186,7 @@ mod tests {
                 }),
                 &ctx,
             )
-            .await
-            .unwrap();
+            .await;
 
         let content = result.content();
         assert!(matches!(result, ToolResult::Error(_)));
@@ -214,8 +211,7 @@ mod tests {
                 }),
                 &ctx,
             )
-            .await
-            .unwrap();
+            .await;
 
         let (ToolResult::Success(out) | ToolResult::Error(out) | ToolResult::SchemaError(out)) =
             &result;
@@ -244,8 +240,7 @@ mod tests {
                 }),
                 &ctx,
             )
-            .await
-            .unwrap();
+            .await;
 
         let content = result.content();
         assert!(matches!(result, ToolResult::Error(_)));

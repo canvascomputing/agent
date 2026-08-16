@@ -569,7 +569,7 @@ let greet = Tool::new("greet", "Say hello")
     .concurrent(true)
     .handler(|input, _context| async move {
         let name = input["name"].as_str().unwrap_or("world");
-        Ok(ToolResult::success(format!("Hello, {name}!")))
+        ToolResult::success(format!("Hello, {name}!"))
     })
     .build();
 ```

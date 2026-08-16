@@ -6,8 +6,6 @@ use std::sync::OnceLock;
 
 use serde_json::Value;
 
-use crate::providers::ProviderResult;
-
 use crate::schemas::Schema;
 
 use super::tool::{ToolContext, ToolLike, ToolResult};
@@ -84,7 +82,7 @@ impl ToolLike for ReadFileTool {
         &'a self,
         args: ReadFileArgs,
         ctx: &'a ToolContext,
-    ) -> Pin<Box<dyn Future<Output = ProviderResult<ToolResult>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = ToolResult> + Send + 'a>> {
         Box::pin(async move {
             let ReadFileArgs {
                 path,
@@ -104,7 +102,7 @@ impl ToolLike for ReadFileTool {
                     ),
                     None => format!("'{path}' is a directory, not a file."),
                 };
-                return Ok(ToolResult::error(message));
+                return ToolResult::error(message);
             }
 
             let content = match std::fs::read(&resolved) {
@@ -116,21 +114,21 @@ impl ToolLike for ReadFileTool {
                     // templates. Otherwise decode lossily so odd-encoded source
                     // stays inspectable, the point of a scan.
                     if bytes.contains(&0) {
-                        return Ok(ToolResult::success(format!(
+                        return ToolResult::success(format!(
                             "{path} is a binary file ({} bytes), not text; it cannot be read as source. Judge from the information you already have.",
                             bytes.len()
-                        )));
+                        ));
                     }
                     String::from_utf8_lossy(&bytes).into_owned()
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    return Ok(ToolResult::error(format!(
+                    return ToolResult::error(format!(
                         "File does not exist: {path}. {}",
                         super::util::not_found_hint(&ctx.dir, &resolved)
-                    )));
+                    ));
                 }
                 Err(e) => {
-                    return Ok(ToolResult::error(format!("Failed to read file: {e}")));
+                    return ToolResult::error(format!("Failed to read file: {e}"));
                 }
             };
 
@@ -171,7 +169,7 @@ impl ToolLike for ReadFileTool {
                 }
             }
 
-            Ok(ToolResult::success(result))
+            ToolResult::success(result)
         })
     }
 }
@@ -310,8 +308,7 @@ mod tests {
         for case in cases {
             let result = crate::tools::erase(ReadFileTool)
                 .call_with(case.input, &ctx)
-                .await
-                .unwrap();
+                .await;
             let is_error = matches!(result, ToolResult::Error(_));
             let content = result.content();
             assert_eq!(
@@ -338,8 +335,7 @@ mod tests {
 
         let result = crate::tools::erase(ReadFileTool)
             .call_with(serde_json::json!({ "path": "." }), &test_ctx(dir.path()))
-            .await
-            .unwrap();
+            .await;
 
         let ToolResult::Error(content) = &result else {
             panic!("reading a directory should return an error result, got {result:?}");
@@ -364,8 +360,7 @@ mod tests {
                 serde_json::json!({ "path": "odd.py" }),
                 &test_ctx(dir.path()),
             )
-            .await
-            .unwrap();
+            .await;
 
         let ToolResult::Success(content) = &result else {
             panic!("a non-UTF-8 file should read lossily, not error, got {result:?}");
@@ -390,8 +385,7 @@ mod tests {
                 serde_json::json!({ "path": "blob.bin" }),
                 &test_ctx(dir.path()),
             )
-            .await
-            .unwrap();
+            .await;
 
         let ToolResult::Success(content) = &result else {
             panic!("a binary file should report concisely as success, got {result:?}");
@@ -415,8 +409,7 @@ mod tests {
                 serde_json::json!({ "path": "missing.py" }),
                 &test_ctx(dir.path()),
             )
-            .await
-            .unwrap();
+            .await;
 
         let ToolResult::Error(content) = &result else {
             panic!("a missing file should return an error result, got {result:?}");
@@ -443,8 +436,7 @@ mod tests {
                 serde_json::json!({ "path": dropped.to_str().unwrap() }),
                 &test_ctx(&cwd),
             )
-            .await
-            .unwrap();
+            .await;
 
         let ToolResult::Error(content) = &result else {
             panic!("a missing file should return an error result, got {result:?}");
@@ -470,8 +462,7 @@ mod tests {
                 serde_json::json!({ "path": "test.txt", "offset": 100 }),
                 &test_ctx(dir.path()),
             )
-            .await
-            .unwrap();
+            .await;
 
         let ToolResult::Success(content) = &result else {
             panic!("offset past EOF should succeed with an empty slice, got {result:?}");
@@ -490,8 +481,7 @@ mod tests {
                 serde_json::json!({ "path": "test.txt", "column": 5 }),
                 &test_ctx(dir.path()),
             )
-            .await
-            .unwrap();
+            .await;
 
         let ToolResult::Success(content) = &result else {
             panic!("slicing mid-codepoint should succeed, got {result:?}");

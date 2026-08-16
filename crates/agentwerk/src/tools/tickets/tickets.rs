@@ -4,8 +4,6 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::OnceLock;
 
-use crate::providers::ProviderResult;
-
 use crate::schemas::Schema;
 
 use super::super::tool::{ToolContext, ToolLike, ToolResult};
@@ -57,8 +55,8 @@ impl ToolLike for TicketsTool {
         &'a self,
         args: super::TicketsArgs,
         ctx: &'a ToolContext,
-    ) -> Pin<Box<dyn Future<Output = ProviderResult<ToolResult>> + Send + 'a>> {
-        Box::pin(async move { Ok(dispatch(args, ctx)) })
+    ) -> Pin<Box<dyn Future<Output = ToolResult> + Send + 'a>> {
+        Box::pin(async move { dispatch(args, ctx) })
     }
 }
 

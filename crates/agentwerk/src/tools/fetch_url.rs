@@ -8,7 +8,6 @@ use crate::schemas::Schema;
 
 use super::tool::{ToolContext, ToolLike, ToolResult};
 use super::tool_file::ToolFile;
-use crate::providers::ProviderResult as Result;
 
 const MAX_URL_LENGTH: usize = 2000;
 const MAX_RESPONSE_BYTES: usize = 10 * 1024 * 1024;
@@ -74,18 +73,18 @@ impl ToolLike for FetchUrlTool {
         &'a self,
         args: FetchUrlArgs,
         _ctx: &'a ToolContext,
-    ) -> Pin<Box<dyn Future<Output = Result<ToolResult>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = ToolResult> + Send + 'a>> {
         Box::pin(async move {
             let FetchUrlArgs { url, max_length } = args;
 
             let validated_url = match validate_url(&url) {
                 Ok(u) => u,
-                Err(msg) => return Ok(ToolResult::error(msg)),
+                Err(msg) => return ToolResult::error(msg),
             };
 
             let text = match fetch_url(&validated_url).await {
                 Ok(text) => text,
-                Err(msg) => return Ok(ToolResult::error(msg)),
+                Err(msg) => return ToolResult::error(msg),
             };
             if let FetchedContent::Redirect {
                 original_url,
@@ -100,7 +99,7 @@ impl ToolLike for FetchUrlTool {
                      Status: {status}\n\n\
                      To fetch the content, make a new web_fetch request with the redirect URL."
                 );
-                return Ok(ToolResult::success(msg));
+                return ToolResult::success(msg);
             }
             let FetchedContent::Page {
                 body,
@@ -113,7 +112,7 @@ impl ToolLike for FetchUrlTool {
             };
 
             let output = format_output(&url, &body, status, &content_type, bytes, max_length);
-            Ok(ToolResult::success(output))
+            ToolResult::success(output)
         })
     }
 }

@@ -496,7 +496,7 @@ mod tests {
             Ok(write_result_response("done")),
         ]);
         let boom = Tool::new("boom", "Always fails")
-            .handler(|_, _| async move { Ok(ToolResult::error("boom")) })
+            .handler(|_, _| async move { ToolResult::error("boom") })
             .build();
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let tickets = TicketQueue::new();

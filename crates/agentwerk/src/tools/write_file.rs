@@ -10,7 +10,6 @@ use crate::schemas::Schema;
 
 use super::tool::{ToolContext, ToolLike, ToolResult};
 use super::tool_file::ToolFile;
-use crate::providers::ProviderResult as Result;
 
 /// Create or overwrite a file. Destructive: existing content is replaced.
 /// Not concurrent, so agentwerk runs it one call at a time.
@@ -72,7 +71,7 @@ impl ToolLike for WriteFileTool {
         &'a self,
         args: WriteFileArgs,
         ctx: &'a ToolContext,
-    ) -> Pin<Box<dyn Future<Output = Result<ToolResult>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = ToolResult> + Send + 'a>> {
         Box::pin(async move {
             let WriteFileArgs { path, content } = args;
 
@@ -80,15 +79,13 @@ impl ToolLike for WriteFileTool {
 
             if let Some(parent) = resolved.parent() {
                 if let Err(e) = std::fs::create_dir_all(parent) {
-                    return Ok(ToolResult::error(format!(
-                        "Failed to create parent directories: {e}"
-                    )));
+                    return ToolResult::error(format!("Failed to create parent directories: {e}"));
                 }
             }
 
             match std::fs::write(&resolved, content) {
-                Ok(()) => Ok(ToolResult::success(format!("File written: {path}"))),
-                Err(e) => Ok(ToolResult::error(format!("Failed to write file: {e}"))),
+                Ok(()) => ToolResult::success(format!("File written: {path}")),
+                Err(e) => ToolResult::error(format!("Failed to write file: {e}")),
             }
         })
     }
@@ -123,8 +120,7 @@ mod tests {
                 serde_json::json!({ "path": "new.txt", "content": "hello world" }),
                 &ctx,
             )
-            .await
-            .unwrap();
+            .await;
 
         let content = result.content();
         assert!(content.contains("File written: new.txt"));
@@ -146,8 +142,7 @@ mod tests {
                 serde_json::json!({ "path": "existing.txt", "content": "new content" }),
                 &ctx,
             )
-            .await
-            .unwrap();
+            .await;
 
         assert!(matches!(result, ToolResult::Success(_)));
         let written = std::fs::read_to_string(dir.path().join("existing.txt")).unwrap();
@@ -165,8 +160,7 @@ mod tests {
                 serde_json::json!({ "path": "a/b/c/deep.txt", "content": "nested" }),
                 &ctx,
             )
-            .await
-            .unwrap();
+            .await;
 
         assert!(matches!(result, ToolResult::Success(_)));
         let written = std::fs::read_to_string(dir.path().join("a/b/c/deep.txt")).unwrap();

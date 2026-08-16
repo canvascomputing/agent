@@ -10,7 +10,6 @@ use crate::schemas::Schema;
 
 use super::tool::{ToolContext, ToolLike, ToolResult};
 use super::tool_file::ToolFile;
-use crate::providers::ProviderResult as Result;
 
 /// Find files matching a glob pattern under the working directory. Concurrent.
 /// Sorted by modification time (newest first); capped at 200 results.
@@ -71,7 +70,7 @@ impl ToolLike for GlobTool {
         &'a self,
         args: GlobArgs,
         ctx: &'a ToolContext,
-    ) -> Pin<Box<dyn Future<Output = Result<ToolResult>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = ToolResult> + Send + 'a>> {
         Box::pin(async move {
             let GlobArgs {
                 pattern,
@@ -100,7 +99,7 @@ impl ToolLike for GlobTool {
                 })
                 .collect();
 
-            Ok(ToolResult::success(lines.join("\n")))
+            ToolResult::success(lines.join("\n"))
         })
     }
 }
@@ -261,8 +260,7 @@ mod tests {
         let ctx = test_ctx(tmp.path());
         let result = tool
             .call_with(serde_json::json!({"pattern": "**/*.rs"}), &ctx)
-            .await
-            .unwrap();
+            .await;
 
         let content = result.content();
         let lines: Vec<&str> = content.lines().collect();
@@ -286,8 +284,7 @@ mod tests {
         let ctx = test_ctx(tmp.path());
         let result = tool
             .call_with(serde_json::json!({"pattern": "*.txt"}), &ctx)
-            .await
-            .unwrap();
+            .await;
 
         let content = result.content();
         let lines: Vec<&str> = content.lines().collect();

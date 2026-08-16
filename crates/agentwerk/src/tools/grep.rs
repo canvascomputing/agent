@@ -15,7 +15,6 @@ use crate::schemas::Schema;
 
 use super::tool::{ToolContext, ToolLike, ToolResult};
 use super::tool_file::ToolFile;
-use crate::providers::ProviderResult as Result;
 
 /// Search the working directory for a regular-expression `pattern` and return a
 /// structured result: matching lines, matching file names, or per-file counts,
@@ -78,7 +77,7 @@ impl ToolLike for GrepTool {
         &'a self,
         args: GrepArgs,
         ctx: &'a ToolContext,
-    ) -> Pin<Box<dyn Future<Output = Result<ToolResult>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = ToolResult> + Send + 'a>> {
         Box::pin(async move {
             let query = Query::from_args(args);
 
@@ -110,7 +109,7 @@ impl ToolLike for GrepTool {
             };
             // Whichever branch lost, the blocking thread is still walking files.
             interrupt.store(true, Ordering::Relaxed);
-            Ok(outcome)
+            outcome
         })
     }
 }
@@ -551,10 +550,7 @@ mod tests {
     }
 
     async fn search(ctx: &ToolContext, input: Value) -> Value {
-        let result = crate::tools::erase(GrepTool)
-            .call_with(input, ctx)
-            .await
-            .unwrap();
+        let result = crate::tools::erase(GrepTool).call_with(input, ctx).await;
         let content = result.content();
         serde_json::from_str(content).unwrap_or_else(|_| Value::String(content.to_string()))
     }

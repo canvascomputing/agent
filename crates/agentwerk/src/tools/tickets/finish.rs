@@ -9,7 +9,6 @@ use serde_json::Value;
 
 use crate::agents::tickets::{Ticket, TicketQueue};
 use crate::event::{EventKind, RepairKind};
-use crate::providers::ProviderResult;
 use crate::schemas::Schema;
 
 use super::super::tool::{repair_message, ToolContext, ToolLike, ToolResult};
@@ -62,12 +61,12 @@ impl ToolLike for FinishTool {
         &'a self,
         input: Value,
         ctx: &'a ToolContext,
-    ) -> Pin<Box<dyn Future<Output = ProviderResult<ToolResult>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = ToolResult> + Send + 'a>> {
         Box::pin(async move {
-            Ok(match finish(&input, ctx) {
+            match finish(&input, ctx) {
                 Ok(message) => ToolResult::success(message),
                 Err(failure) => failure,
-            })
+            }
         })
     }
 }
@@ -420,8 +419,7 @@ mod tests {
         // A `result` key the flat schema does not declare, quoted line inside.
         let outcome = FinishTool
             .call(serde_json::json!({"result": {"line": "42"}}), &ctx)
-            .await
-            .unwrap();
+            .await;
 
         assert!(matches!(outcome, ToolResult::Success(_)));
         // Two repairs under one reason: the pointer is what tells them apart.
@@ -449,8 +447,7 @@ mod tests {
         // The wrapper comes off, but `line` is beyond repair.
         let outcome = FinishTool
             .call(serde_json::json!({"result": {"line": "about 42"}}), &ctx)
-            .await
-            .unwrap();
+            .await;
 
         assert!(matches!(outcome, ToolResult::SchemaError(_)));
         assert!(repairs.lock().unwrap().is_empty());
@@ -583,8 +580,7 @@ mod tests {
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
         let outcome = FinishTool
             .call(serde_json::json!({"result": "the answer"}), &ctx)
-            .await
-            .unwrap();
+            .await;
         assert!(matches!(outcome, ToolResult::Success(_)));
         let t = queue.get_ticket(&key).unwrap();
         assert_eq!(t.status, Status::Finished);
@@ -604,8 +600,7 @@ mod tests {
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
         FinishTool
             .call(serde_json::json!({"result": {"x": 1}}), &ctx)
-            .await
-            .unwrap();
+            .await;
 
         let path = dir.path().join("tickets").join(&key).join("result.json");
         let body = std::fs::read_to_string(&path).unwrap();
@@ -628,8 +623,7 @@ mod tests {
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
         FinishTool
             .call(serde_json::json!({"result": "the answer"}), &ctx)
-            .await
-            .unwrap();
+            .await;
 
         let reloaded = TicketQueue::load(dir.path()).unwrap();
         let ticket = reloaded.get_ticket(&key).unwrap();
@@ -654,8 +648,7 @@ mod tests {
             let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
             let outcome = FinishTool
                 .call(serde_json::json!({"result": value}), &ctx)
-                .await
-                .unwrap();
+                .await;
             assert!(
                 matches!(outcome, ToolResult::Success(_)),
                 "expected success for {value:?}"
@@ -673,8 +666,7 @@ mod tests {
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
         let outcome = FinishTool
             .call(serde_json::json!({"result": {"x": 1, "y": [2, 3]}}), &ctx)
-            .await
-            .unwrap();
+            .await;
         assert!(matches!(outcome, ToolResult::Success(_)));
         let t = queue.get_ticket(&key).unwrap();
         assert_eq!(t.status, Status::Finished);
@@ -711,8 +703,7 @@ mod tests {
         // quoted scalar.
         let outcome = FinishTool
             .call(serde_json::json!({"result": {"x": {}}}), &ctx)
-            .await
-            .unwrap();
+            .await;
         assert!(matches!(outcome, ToolResult::SchemaError(_)));
         let t = queue.get_ticket(&key).unwrap();
         assert_eq!(t.status, Status::InProgress);
@@ -720,8 +711,7 @@ mod tests {
         // valid shape
         let outcome = FinishTool
             .call(serde_json::json!({"result": {"x": "ok"}}), &ctx)
-            .await
-            .unwrap();
+            .await;
         assert!(matches!(outcome, ToolResult::Success(_)));
         let t = queue.get_ticket(&key).unwrap();
         assert_eq!(t.status, Status::Finished);
@@ -750,10 +740,7 @@ mod tests {
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
 
         // Fields at the top level, no `result` wrapper.
-        let outcome = FinishTool
-            .call(serde_json::json!({"x": "ok"}), &ctx)
-            .await
-            .unwrap();
+        let outcome = FinishTool.call(serde_json::json!({"x": "ok"}), &ctx).await;
         assert!(matches!(outcome, ToolResult::Success(_)));
         let t = queue.get_ticket(&key).unwrap();
         assert_eq!(t.status, Status::Finished);
@@ -784,8 +771,7 @@ mod tests {
         // The agent double-encoded the conforming object as a JSON string.
         let outcome = FinishTool
             .call(serde_json::json!({"result": "{\"x\": \"ok\"}"}), &ctx)
-            .await
-            .unwrap();
+            .await;
         assert!(matches!(outcome, ToolResult::Success(_)));
 
         let t = queue.get_ticket(&key).unwrap();
@@ -804,8 +790,7 @@ mod tests {
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
         let outcome = FinishTool
             .call(serde_json::json!({"result": "x"}), &ctx)
-            .await
-            .unwrap();
+            .await;
         assert!(matches!(outcome, ToolResult::Error(_)));
     }
 
@@ -823,8 +808,7 @@ mod tests {
         let ctx_alice = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
         FinishTool
             .call(serde_json::json!({"result": "from alice"}), &ctx_alice)
-            .await
-            .unwrap();
+            .await;
 
         queue.insert(Ticket::new("b").label("bob"), "tester".into());
         let key2 = queue
@@ -833,8 +817,7 @@ mod tests {
         let ctx_bob = ctx_with(Arc::clone(&queue), "bob", dir.path().to_path_buf());
         FinishTool
             .call(serde_json::json!({"result": "from bob"}), &ctx_bob)
-            .await
-            .unwrap();
+            .await;
 
         assert_eq!(read_result(dir.path(), &key1), Some("from alice".into()));
         assert_eq!(read_result(dir.path(), &key2), Some("from bob".into()));
@@ -871,7 +854,6 @@ mod tests {
                 FinishTool
                     .call(serde_json::json!({"result": format!("payload_{i}")}), &ctx)
                     .await
-                    .unwrap()
             }));
         }
         for h in handles {
@@ -922,8 +904,7 @@ mod tests {
                 }),
                 &ctx,
             )
-            .await
-            .unwrap();
+            .await;
         assert!(matches!(outcome, ToolResult::Success(_)));
 
         let parent = queue.get_ticket(&parent_key).unwrap();
@@ -959,8 +940,7 @@ mod tests {
                 serde_json::json!({"handover": "bob", "result": "a lead worth tracing"}),
                 &ctx,
             )
-            .await
-            .unwrap();
+            .await;
 
         // `finish` cannot attach a schema to the child it inserts, so the
         // child is born without one and picks the label's up at claim.
@@ -990,8 +970,7 @@ mod tests {
                 serde_json::json!({"handover": "bob", "task": "next", "result": "done part 1"}),
                 &ctx,
             )
-            .await
-            .unwrap();
+            .await;
 
         assert_eq!(
             read_result(dir.path(), &parent_key),
@@ -1031,8 +1010,7 @@ mod tests {
                 serde_json::json!({"handover": "bob", "task": "next", "result": "too short"}),
                 &ctx,
             )
-            .await
-            .unwrap();
+            .await;
         assert!(matches!(outcome, ToolResult::SchemaError(_)));
 
         let parent = queue.get_ticket(&parent_key).unwrap();
@@ -1077,7 +1055,7 @@ mod tests {
                 &ctx,
             )
             .await
-            .unwrap();
+            ;
         assert!(matches!(outcome, ToolResult::Success(_)));
 
         let parent = queue.get_ticket(&parent_key).unwrap();
@@ -1106,8 +1084,7 @@ mod tests {
                 serde_json::json!({"handover": "bob", "task": "next", "status": "done"}),
                 &ctx,
             )
-            .await
-            .unwrap();
+            .await;
         assert!(matches!(outcome, ToolResult::Success(_)));
 
         let parent = queue.get_ticket(&parent_key).unwrap();
@@ -1132,7 +1109,7 @@ mod tests {
                 &ctx,
             )
             .await
-            .unwrap();
+            ;
 
         let parent = queue.get_ticket(&parent_key).unwrap();
         assert_eq!(
@@ -1152,8 +1129,7 @@ mod tests {
                 serde_json::json!({"handover": "bob", "task": "next", "result": {"wrong": 1}}),
                 &ctx,
             )
-            .await
-            .unwrap();
+            .await;
         assert!(matches!(outcome, ToolResult::SchemaError(_)));
 
         let parent = queue.get_ticket(&parent_key).unwrap();
@@ -1182,8 +1158,7 @@ mod tests {
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
         let outcome = FinishTool
             .call(serde_json::json!({"result": "done"}), &ctx)
-            .await
-            .unwrap();
+            .await;
         assert!(matches!(outcome, ToolResult::Success(_)));
         assert_eq!(
             queue.get_ticket(&parent_key).unwrap().status,
@@ -1202,8 +1177,7 @@ mod tests {
                 serde_json::json!({"handover": "bob", "result": "alice's findings"}),
                 &ctx,
             )
-            .await
-            .unwrap();
+            .await;
         assert!(matches!(outcome, ToolResult::Success(_)), "{outcome:?}");
 
         let child = queue.get_ticket("TICKET-2").unwrap();
@@ -1221,8 +1195,7 @@ mod tests {
                 serde_json::json!({"handover": "bob", "result": "alice's findings"}),
                 &ctx,
             )
-            .await
-            .unwrap();
+            .await;
 
         let child = queue.get_ticket("TICKET-2").unwrap();
         let body = child_body(&child);
@@ -1248,8 +1221,7 @@ mod tests {
                 }),
                 &ctx,
             )
-            .await
-            .unwrap();
+            .await;
 
         let child = queue.get_ticket("TICKET-2").unwrap();
         let path = queue.result_path(&parent_key);
@@ -1278,7 +1250,7 @@ mod tests {
             serde_json::json!({"handover": "bob", "task": "x", "result": null}),
             serde_json::json!({"handover": "bob", "task": "x", "result": ""}),
         ] {
-            let outcome = FinishTool.call(body, &ctx).await.unwrap();
+            let outcome = FinishTool.call(body, &ctx).await;
             assert!(
                 matches!(&outcome, ToolResult::Error(message) if message.contains("needs a result")),
                 "{outcome:?}",
@@ -1304,8 +1276,7 @@ mod tests {
                     serde_json::json!({"handover": "bob", "task": "next", "result": result_value}),
                     &ctx,
                 )
-                .await
-                .unwrap();
+                .await;
             assert!(matches!(outcome, ToolResult::Success(_)));
 
             let parent = queue.get_ticket(&parent_key).unwrap();
@@ -1340,8 +1311,7 @@ mod tests {
                 serde_json::json!({"handover": "bob", "task": "x", "result": "y"}),
                 &ctx,
             )
-            .await
-            .unwrap();
+            .await;
         assert!(matches!(outcome, ToolResult::Error(_)));
     }
 
@@ -1360,8 +1330,7 @@ mod tests {
                 }),
                 &ctx,
             )
-            .await
-            .unwrap();
+            .await;
 
         let child = queue.get_ticket("TICKET-2").unwrap();
         assert!(child_body(&child).starts_with(&format!("Continue {parent_key}: alice's findings")));
@@ -1382,8 +1351,7 @@ mod tests {
                 }),
                 &ctx,
             )
-            .await
-            .unwrap();
+            .await;
 
         let child = queue.get_ticket("TICKET-2").unwrap();
         assert!(child_body(&child).starts_with(&format!("See {parent_key} and {{unknown}}")));
@@ -1407,8 +1375,7 @@ mod tests {
                 }),
                 &ctx,
             )
-            .await
-            .unwrap();
+            .await;
 
         let child = queue.get_ticket("TICKET-2").unwrap();
         assert!(

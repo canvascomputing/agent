@@ -444,7 +444,7 @@ mod tests {
             Ok(tool_call_response("boom")),
         ]);
         let boom = Tool::new("boom", "Always fails")
-            .handler(|_, _| async move { Ok(ToolResult::error("boom")) })
+            .handler(|_, _| async move { ToolResult::error("boom") })
             .build();
 
         let results_dir = crate::test_util::TempDir::new().unwrap();
@@ -498,10 +498,10 @@ mod tests {
             Ok(write_result_value(serde_json::json!("done"))),
         ]);
         let boom = Tool::new("boom", "Always fails")
-            .handler(|_, _| async move { Ok(ToolResult::error("boom")) })
+            .handler(|_, _| async move { ToolResult::error("boom") })
             .build();
         let ping = Tool::new("ping", "Always succeeds")
-            .handler(|_, _| async move { Ok(ToolResult::success("pong")) })
+            .handler(|_, _| async move { ToolResult::success("pong") })
             .build();
 
         let results_dir = crate::test_util::TempDir::new().unwrap();
@@ -556,7 +556,7 @@ mod tests {
                 async move {
                     s.notify_one();
                     u.notified().await;
-                    Ok(ToolResult::success("ok"))
+                    ToolResult::success("ok")
                 }
             })
             .build();
@@ -630,7 +630,7 @@ mod tests {
             .max_time(Duration::from_millis(500));
 
         let dump = Tool::new("dump", "Returns ~800 KB of text")
-            .handler(|_input, _ctx| async move { Ok(ToolResult::success("x".repeat(800_000))) })
+            .handler(|_input, _ctx| async move { ToolResult::success("x".repeat(800_000)) })
             .build();
 
         tickets.on_event(move |e| handler(e));
@@ -745,7 +745,7 @@ mod tests {
             .concurrent(true)
             .handler(|input, _ctx| async move {
                 let bytes = input["bytes"].as_u64().unwrap_or(0) as usize;
-                Ok(ToolResult::success("x".repeat(bytes)))
+                ToolResult::success("x".repeat(bytes))
             })
             .build();
 

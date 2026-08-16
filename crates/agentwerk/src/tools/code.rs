@@ -218,10 +218,7 @@ mod tests {
     }
 
     async fn search(ctx: &ToolContext, input: Value) -> Value {
-        let result = crate::tools::erase(GrepTool)
-            .call_with(input, ctx)
-            .await
-            .unwrap();
+        let result = crate::tools::erase(GrepTool).call_with(input, ctx).await;
         let content = result.content();
         serde_json::from_str(content).unwrap_or_else(|_| Value::String(content.to_string()))
     }

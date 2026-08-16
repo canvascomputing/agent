@@ -18,7 +18,7 @@
 use std::sync::Arc;
 
 use agentwerk::event::{Event, EventKind, EventName};
-use agentwerk::providers::{Model, Provider, ProviderResult};
+use agentwerk::providers::{Model, Provider};
 use agentwerk::schemas::{Schema, SchemaStore};
 use agentwerk::tools::{TicketsTool, Tool, ToolResult};
 use agentwerk::{Agent, FinishReason, Ticket, TicketQueue};
@@ -277,7 +277,7 @@ fn brave_search_tool(api_key: String) -> Tool {
     .build()
 }
 
-async fn brave_search(api_key: &str, input: &serde_json::Value) -> ProviderResult<ToolResult> {
+async fn brave_search(api_key: &str, input: &serde_json::Value) -> ToolResult {
     let query = input["query"].as_str().unwrap_or("").trim();
     let count = input["count"].as_u64().unwrap_or(5).min(20).to_string();
 
@@ -290,16 +290,16 @@ async fn brave_search(api_key: &str, input: &serde_json::Value) -> ProviderResul
         .await
     {
         Ok(r) => r,
-        Err(e) => return Ok(ToolResult::error(format!("Brave search failed: {e}"))),
+        Err(e) => return ToolResult::error(format!("Brave search failed: {e}")),
     };
 
     let json: serde_json::Value = match response.json().await {
         Ok(j) => j,
-        Err(e) => return Ok(ToolResult::error(format!("Failed to parse response: {e}"))),
+        Err(e) => return ToolResult::error(format!("Failed to parse response: {e}")),
     };
 
     let Some(results) = json["web"]["results"].as_array() else {
-        return Ok(ToolResult::success("No results found."));
+        return ToolResult::success("No results found.");
     };
 
     let text = results
@@ -315,7 +315,7 @@ async fn brave_search(api_key: &str, input: &serde_json::Value) -> ProviderResul
         .collect::<Vec<_>>()
         .join("\n");
 
-    Ok(ToolResult::success(text))
+    ToolResult::success(text)
 }
 
 fn log_event(event: &Event) {

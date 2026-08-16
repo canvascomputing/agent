@@ -12,7 +12,7 @@ use crate::agents::knowledge::Knowledge;
 use crate::agents::tickets::{Run, TicketQueue};
 use crate::event::{EventKind, RepairKind};
 use crate::providers::types::ContentBlock;
-use crate::providers::{ProviderResult, ToolDefinition};
+use crate::providers::ToolDefinition;
 use crate::schemas::Schema;
 
 use super::error::ToolError;
@@ -226,7 +226,7 @@ pub trait ToolLike: Send + Sync {
         &'a self,
         args: Self::Args,
         ctx: &'a ToolContext,
-    ) -> Pin<Box<dyn Future<Output = ProviderResult<ToolResult>> + Send + 'a>>;
+    ) -> Pin<Box<dyn Future<Output = ToolResult> + Send + 'a>>;
 }
 
 /// A tool an agent holds, whatever type its arguments have.
@@ -252,7 +252,7 @@ pub trait AnyTool: Send + Sync {
         &'a self,
         input: Value,
         ctx: &'a ToolContext,
-    ) -> Pin<Box<dyn Future<Output = ProviderResult<ToolResult>> + Send + 'a>>;
+    ) -> Pin<Box<dyn Future<Output = ToolResult> + Send + 'a>>;
 }
 
 /// Holds a tool with its argument type erased. Only this implements [`AnyTool`],
@@ -284,17 +284,17 @@ impl<T: ToolLike> AnyTool for Erased<T> {
         &'a self,
         input: Value,
         ctx: &'a ToolContext,
-    ) -> Pin<Box<dyn Future<Output = ProviderResult<ToolResult>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = ToolResult> + Send + 'a>> {
         match serde_json::from_value::<T::Args>(input) {
             Ok(args) => self.0.call(args, ctx),
             // The schema accepted this call, so the tool's schema and its
             // argument type disagree: the author's mistake, not the model's.
             // Reporting it as a schema failure would show the model a document
             // its call already satisfied.
-            Err(error) => Box::pin(std::future::ready(Ok(ToolResult::error(format!(
+            Err(error) => Box::pin(std::future::ready(ToolResult::error(format!(
                 "`{}` could not read its arguments: {error}",
                 self.0.name()
-            ))))),
+            )))),
         }
     }
 }
@@ -467,10 +467,7 @@ fn lookup_key(name: &str) -> String {
 }
 
 type ToolHandler = Box<
-    dyn Fn(
-            Value,
-            &ToolContext,
-        ) -> Pin<Box<dyn Future<Output = ProviderResult<ToolResult>> + Send + '_>>
+    dyn Fn(Value, &ToolContext) -> Pin<Box<dyn Future<Output = ToolResult> + Send + '_>>
         + Send
         + Sync,
 >;
@@ -505,7 +502,7 @@ pub struct ToolBuilder<H> {
 ///     .concurrent(true)
 ///     .handler(|input, _ctx| async move {
 ///         let name = input["name"].as_str().unwrap_or("world");
-///         Ok(ToolResult::success(format!("Hello, {name}!")))
+///         ToolResult::success(format!("Hello, {name}!"))
 ///     })
 ///     .build();
 ///
@@ -588,7 +585,7 @@ impl ToolBuilder<()> {
     pub fn handler<F, Fut>(self, f: F) -> ToolBuilder<ToolHandler>
     where
         F: Fn(Value, ToolContext) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = ProviderResult<ToolResult>> + Send + 'static,
+        Fut: Future<Output = ToolResult> + Send + 'static,
     {
         ToolBuilder {
             name: self.name,
@@ -646,7 +643,7 @@ impl ToolLike for Tool {
         &'a self,
         input: Value,
         ctx: &'a ToolContext,
-    ) -> Pin<Box<dyn Future<Output = ProviderResult<ToolResult>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = ToolResult> + Send + 'a>> {
         (self.handler)(input, ctx)
     }
 }
@@ -703,18 +700,14 @@ async fn invoke(
         });
     }
     match tool.call_with(input, ctx).await {
-        Ok(ToolResult::Success(s)) => Ok(s),
-        Ok(ToolResult::Error(s)) => Err(ToolError::ExecutionFailed {
+        ToolResult::Success(s) => Ok(s),
+        ToolResult::Error(s) => Err(ToolError::ExecutionFailed {
             tool_name: name.into(),
             message: s,
         }),
-        Ok(ToolResult::SchemaError(s)) => Err(ToolError::SchemaValidationFailed {
+        ToolResult::SchemaError(s) => Err(ToolError::SchemaValidationFailed {
             tool_name: name.into(),
             message: s,
-        }),
-        Err(e) => Err(ToolError::ExecutionFailed {
-            tool_name: name.into(),
-            message: e.to_string(),
         }),
     }
 }
@@ -1025,7 +1018,7 @@ mod tests {
     fn paths_reports_the_named_input_fields() {
         let tool = Tool::new("cat", "Read a file.")
             .paths(["path", "into"])
-            .handler(|_input, _ctx| async move { Ok(ToolResult::success("ok")) })
+            .handler(|_input, _ctx| async move { ToolResult::success("ok") })
             .build();
 
         let input = serde_json::json!({"path": "src/lib.rs", "limit": 20});
@@ -1068,9 +1061,9 @@ mod tests {
             &'a self,
             _input: Value,
             _ctx: &'a ToolContext,
-        ) -> Pin<Box<dyn Future<Output = ProviderResult<ToolResult>> + Send + 'a>> {
+        ) -> Pin<Box<dyn Future<Output = ToolResult> + Send + 'a>> {
             let result = self.result.clone();
-            Box::pin(async move { Ok(ToolResult::success(result)) })
+            Box::pin(async move { ToolResult::success(result) })
         }
     }
 
@@ -1140,7 +1133,7 @@ Do the demo thing.
 ```
 "#;
         let tool = Tool::from_tool_file(definition)
-            .handler(|_, _| async { Ok(ToolResult::success("")) })
+            .handler(|_, _| async { ToolResult::success("") })
             .build();
         assert_eq!(tool.name(), "demo_tool");
         assert!(tool.description().contains("Do the demo thing."));
@@ -1287,8 +1280,8 @@ Do the demo thing.
             &'a self,
             input: Value,
             _ctx: &'a ToolContext,
-        ) -> Pin<Box<dyn Future<Output = ProviderResult<ToolResult>> + Send + 'a>> {
-            Box::pin(async move { Ok(ToolResult::success(input["count"].to_string())) })
+        ) -> Pin<Box<dyn Future<Output = ToolResult> + Send + 'a>> {
+            Box::pin(async move { ToolResult::success(input["count"].to_string()) })
         }
     }
 
@@ -1477,7 +1470,7 @@ Do the demo thing.
             .concurrent(true)
             .handler(|input, _ctx| async move {
                 let text = input["text"].as_str().unwrap_or("").to_string();
-                Ok(ToolResult::success(text))
+                ToolResult::success(text)
             })
             .build();
 

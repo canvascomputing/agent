@@ -384,10 +384,7 @@ mod tests {
         input: serde_json::Value,
         ctx: &ToolContext,
     ) -> ToolResult {
-        crate::tools::erase(tool)
-            .call_with(input, ctx)
-            .await
-            .unwrap()
+        crate::tools::erase(tool).call_with(input, ctx).await
     }
 
     fn unwrap_text(result: &ToolResult) -> &str {
