@@ -86,14 +86,11 @@ fn finish(input: &Value, ctx: &ToolContext) -> Result<String, ToolResult> {
     let parent_key = resolve_current_key(&ticket_queue, ctx)?;
     let agent = ctx.agent_id.clone().unwrap_or_default();
 
-    // The ticket's own schema decides whether the result rode in as
-    // the top-level arguments (object schema) or under `result`.
     let schema = ticket_queue
         .get_ticket(&parent_key)
         .and_then(|ticket| ticket.schema);
     let (result, unwrapped) = parse_result(schema.as_ref(), input);
 
-    // A present, non-blank `handover` selects the chaining path.
     let Some(handover) = control_string(input, "handover")? else {
         attach_result(&ticket_queue, &parent_key, result, &agent, unwrapped)?;
         mark_finished(&ticket_queue, &parent_key, &agent)?;
@@ -138,8 +135,7 @@ fn hand_over(
     // A schema failure returns here, before any child exists.
     let validated_result = attach_result(ticket_queue, parent_key, result, agent, unwrapped)?;
 
-    // `{parent_result}` needs a string: a plain string substitutes
-    // verbatim, anything structured renders as compact JSON.
+    // `{parent_result}` needs a string.
     let parent_result = match validated_result {
         Value::String(s) => s,
         other => serde_json::to_string(&other).unwrap_or_default(),
@@ -785,7 +781,6 @@ mod tests {
         let t = queue.get_ticket(&key).unwrap();
         assert_eq!(t.status, Status::InProgress);
 
-        // valid shape
         let outcome = FinishTool
             .call(serde_json::json!({"result": {"x": "ok"}}), &ctx)
             .await;
@@ -1062,9 +1057,8 @@ mod tests {
 
     #[tokio::test]
     async fn handover_schema_violation_aborts_atomically() {
-        // Parent demands a string of at least 50 characters; we pass
-        // a short string, which violates the schema but passes the
-        // type check, so we exercise the schema-validation abort path.
+        // A short string passes the type check and fails `minLength`, which is
+        // the abort path this exercises.
         let dir = crate::test_util::TempDir::new().unwrap();
         let queue = TicketQueue::new();
         queue.dir(dir.path().to_path_buf());
