@@ -5,8 +5,6 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, OnceLock};
 
-use serde_json::Value;
-
 use crate::agents::knowledge::{Knowledge, KnowledgeError};
 use crate::event::{EventKind, KnowledgeFailureKind, KnowledgeOp};
 use crate::providers::ProviderResult;
@@ -69,8 +67,29 @@ fn usage_line(message: &str, store: &Knowledge) -> String {
     format!("{message} ({pages} pages, {pct}%, {used}/{limit} chars)")
 }
 
+/// What the model asks the store to do. The schema declares `action` as the
+/// discriminator and states which fields each one requires; the variants are
+/// the same statement in Rust, so a `write` without a `slug` can neither reach
+/// this tool nor be forgotten inside it.
+#[derive(serde::Deserialize)]
+#[serde(tag = "action", rename_all = "lowercase")]
+pub enum KnowledgeArgs {
+    Write {
+        slug: String,
+        description: String,
+        content: String,
+    },
+    Read {
+        slug: String,
+    },
+    Remove {
+        slug: String,
+    },
+    List,
+}
+
 impl ToolLike for KnowledgeTool {
-    type Args = Value;
+    type Args = KnowledgeArgs;
 
     fn name(&self) -> &str {
         &tool_file().name
@@ -90,27 +109,27 @@ impl ToolLike for KnowledgeTool {
 
     fn call<'a>(
         &'a self,
-        input: Value,
+        args: KnowledgeArgs,
         ctx: &'a ToolContext,
     ) -> Pin<Box<dyn Future<Output = ProviderResult<ToolResult>> + Send + 'a>> {
         Box::pin(async move {
-            let action = input["action"].as_str().unwrap_or_default();
             // The tool self-reports each outcome: only it can see a read/remove
             // miss, which returns Ok, so the shared tool-call loop cannot.
             let record = |kind: EventKind| ctx.emit(kind);
 
-            match action {
-                "write" => {
-                    let slug = input["slug"].as_str().unwrap_or_default();
-                    let description = input["description"].as_str().unwrap_or_default();
-                    let content = input["content"].as_str().unwrap_or_default();
+            match args {
+                KnowledgeArgs::Write {
+                    slug,
+                    description,
+                    content,
+                } => {
                     // Kind and tags stay host-side concerns set through the
                     // Page API; the model only names, describes, and fills a page.
                     let page = crate::agents::knowledge::Page {
-                        slug: slug.to_string(),
+                        slug,
                         kind: String::new(),
-                        description: description.to_string(),
-                        content: content.to_string(),
+                        description,
+                        content,
                         tags: Vec::new(),
                     };
                     match self.store.pages().save(page) {
@@ -130,47 +149,41 @@ impl ToolLike for KnowledgeTool {
                     }
                 }
 
-                "read" => {
-                    let slug = input["slug"].as_str().unwrap_or_default();
-                    match self.store.pages().load(slug) {
-                        Ok(page) => {
-                            record(EventKind::KnowledgeUsed {
-                                op: KnowledgeOp::Read,
-                            });
-                            Ok(ToolResult::success(page.content))
-                        }
-                        Err(why) => {
-                            record(EventKind::KnowledgeFailed {
-                                op: KnowledgeOp::Read,
-                                reason: failure_kind(&why),
-                            });
-                            Ok(ToolResult::success(format!(
+                KnowledgeArgs::Read { slug } => match self.store.pages().load(&slug) {
+                    Ok(page) => {
+                        record(EventKind::KnowledgeUsed {
+                            op: KnowledgeOp::Read,
+                        });
+                        Ok(ToolResult::success(page.content))
+                    }
+                    Err(why) => {
+                        record(EventKind::KnowledgeFailed {
+                            op: KnowledgeOp::Read,
+                            reason: failure_kind(&why),
+                        });
+                        Ok(ToolResult::success(format!(
                                 "No page found for `{slug}`. The `list` action shows every page that exists: an unlisted slug cannot be read."
                             )))
-                        }
                     }
-                }
+                },
 
-                "remove" => {
-                    let slug = input["slug"].as_str().unwrap_or_default();
-                    match self.store.pages().remove(slug) {
-                        Ok(()) => {
-                            record(EventKind::KnowledgeUsed {
-                                op: KnowledgeOp::Remove,
-                            });
-                            Ok(ToolResult::success(usage_line("page removed", &self.store)))
-                        }
-                        Err(why) => {
-                            record(EventKind::KnowledgeFailed {
-                                op: KnowledgeOp::Remove,
-                                reason: failure_kind(&why),
-                            });
-                            Ok(ToolResult::error(why.to_string()))
-                        }
+                KnowledgeArgs::Remove { slug } => match self.store.pages().remove(&slug) {
+                    Ok(()) => {
+                        record(EventKind::KnowledgeUsed {
+                            op: KnowledgeOp::Remove,
+                        });
+                        Ok(ToolResult::success(usage_line("page removed", &self.store)))
                     }
-                }
+                    Err(why) => {
+                        record(EventKind::KnowledgeFailed {
+                            op: KnowledgeOp::Remove,
+                            reason: failure_kind(&why),
+                        });
+                        Ok(ToolResult::error(why.to_string()))
+                    }
+                },
 
-                "list" => {
+                KnowledgeArgs::List => {
                     record(EventKind::KnowledgeUsed {
                         op: KnowledgeOp::List,
                     });
@@ -184,11 +197,6 @@ impl ToolLike for KnowledgeTool {
                     };
                     Ok(ToolResult::success(body))
                 }
-
-                // The schema declares `action` as an enum, so dispatch rejects
-                // anything else and names what exists. This arm is what `match`
-                // demands, reached only by a host calling the tool directly.
-                other => Ok(ToolResult::error(format!("Unknown action `{other}`"))),
             }
         })
     }
@@ -229,18 +237,28 @@ mod tests {
         }
     }
 
+    #[test]
+    fn every_example_the_schema_shows_deserializes_into_the_arguments() {
+        // The schema and this enum both describe the shape. The examples are
+        // where they are held to the same one.
+        let document = tool_file().input_schema.get_raw_schema().clone();
+        for example in document["examples"].as_array().expect("examples") {
+            serde_json::from_value::<KnowledgeArgs>(example.clone())
+                .unwrap_or_else(|error| panic!("{example}: {error}"));
+        }
+    }
+
     #[tokio::test]
     async fn write_action_creates_page() {
         let (store, _dir) = fresh_store();
         let tool = KnowledgeTool::new(Arc::clone(&store));
         let r = tool
             .call(
-                serde_json::json!({
-                    "action": "write",
-                    "slug": "test",
-                    "description": "A test page",
-                    "content": "# Test\n\nContent."
-                }),
+                KnowledgeArgs::Write {
+                    slug: "test".into(),
+                    description: "A test page".into(),
+                    content: "# Test\n\nContent.".into(),
+                },
                 &ctx(),
             )
             .await
@@ -256,7 +274,9 @@ mod tests {
         let tool = KnowledgeTool::new(Arc::clone(&store));
         let r = tool
             .call(
-                serde_json::json!({"action": "read", "slug": "test"}),
+                KnowledgeArgs::Read {
+                    slug: "test".into(),
+                },
                 &ctx(),
             )
             .await
@@ -270,7 +290,9 @@ mod tests {
         let tool = KnowledgeTool::new(Arc::clone(&store));
         let r = tool
             .call(
-                serde_json::json!({"action": "read", "slug": "nonexistent"}),
+                KnowledgeArgs::Read {
+                    slug: "nonexistent".into(),
+                },
                 &ctx(),
             )
             .await
@@ -285,7 +307,9 @@ mod tests {
         let tool = KnowledgeTool::new(Arc::clone(&store));
         let r = tool
             .call(
-                serde_json::json!({"action": "read", "slug": "test"}),
+                KnowledgeArgs::Read {
+                    slug: "test".into(),
+                },
                 &ctx(),
             )
             .await
@@ -306,7 +330,9 @@ mod tests {
         let tool = KnowledgeTool::new(Arc::clone(&store));
         let r = tool
             .call(
-                serde_json::json!({"action": "remove", "slug": "temp"}),
+                KnowledgeArgs::Remove {
+                    slug: "temp".into(),
+                },
                 &ctx(),
             )
             .await
@@ -320,10 +346,7 @@ mod tests {
         let (store, _dir) = fresh_store();
         save_page(&store, "config", "Config page", "# Config", &[]);
         let tool = KnowledgeTool::new(Arc::clone(&store));
-        let r = tool
-            .call(serde_json::json!({"action": "list"}), &ctx())
-            .await
-            .unwrap();
+        let r = tool.call(KnowledgeArgs::List, &ctx()).await.unwrap();
         assert_success(&r, "config");
     }
 
@@ -335,10 +358,7 @@ mod tests {
             save_page(&store, &format!("page-{i}"), "A note", "# Note", &[]);
         }
         let tool = KnowledgeTool::new(Arc::clone(&store));
-        let r = tool
-            .call(serde_json::json!({"action": "list"}), &ctx())
-            .await
-            .unwrap();
+        let r = tool.call(KnowledgeArgs::List, &ctx()).await.unwrap();
 
         assert!(!store.index().contains("page-9"), "{}", store.index());
         assert_success(&r, "page-9");
@@ -348,17 +368,14 @@ mod tests {
     async fn list_action_empty_store() {
         let (store, _dir) = fresh_store();
         let tool = KnowledgeTool::new(Arc::clone(&store));
-        let r = tool
-            .call(serde_json::json!({"action": "list"}), &ctx())
-            .await
-            .unwrap();
+        let r = tool.call(KnowledgeArgs::List, &ctx()).await.unwrap();
         assert_success(&r, "(no pages)");
     }
 
     /// Run a call the way an agent does: through the registry, which checks the
     /// arguments against the schema before the tool sees them. The tests below
     /// read what the model would.
-    async fn dispatch(store: &Arc<Knowledge>, input: Value) -> String {
+    async fn dispatch(store: &Arc<Knowledge>, input: serde_json::Value) -> String {
         let mut registry = crate::tools::ToolRegistry::default();
         registry.register(KnowledgeTool::new(Arc::clone(store)));
         let calls = vec![crate::tools::ToolCall {
@@ -433,25 +450,36 @@ mod tests {
             ToolContext::new(std::env::current_dir().unwrap()).ticket_queue(Arc::clone(&tickets));
 
         tool.call(
-            serde_json::json!({
-                "action": "write", "slug": "note",
-                "description": "a note", "content": "body",
-            }),
+            KnowledgeArgs::Write {
+                slug: "note".into(),
+                description: "a note".into(),
+                content: "body".into(),
+            },
             &ctx,
         )
         .await
         .unwrap();
-        tool.call(serde_json::json!({"action": "list"}), &ctx)
-            .await
-            .unwrap();
-        tool.call(serde_json::json!({"action": "read", "slug": "note"}), &ctx)
-            .await
-            .unwrap();
-        tool.call(serde_json::json!({"action": "read", "slug": "ghost"}), &ctx)
-            .await
-            .unwrap();
+        tool.call(KnowledgeArgs::List, &ctx).await.unwrap();
         tool.call(
-            serde_json::json!({"action": "remove", "slug": "note"}),
+            KnowledgeArgs::Read {
+                slug: "note".into(),
+            },
+            &ctx,
+        )
+        .await
+        .unwrap();
+        tool.call(
+            KnowledgeArgs::Read {
+                slug: "ghost".into(),
+            },
+            &ctx,
+        )
+        .await
+        .unwrap();
+        tool.call(
+            KnowledgeArgs::Remove {
+                slug: "note".into(),
+            },
             &ctx,
         )
         .await

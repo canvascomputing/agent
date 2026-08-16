@@ -26,7 +26,7 @@ pub use edit_file::EditFileTool;
 pub use fetch_url::FetchUrlTool;
 pub use glob::GlobTool;
 pub use grep::GrepTool;
-pub use knowledge::KnowledgeTool;
+pub use knowledge::{KnowledgeArgs, KnowledgeTool};
 pub use list_directory::ListDirectoryTool;
 pub use read_file::ReadFileTool;
 pub(crate) use tickets::finish_tool_input_schema;
