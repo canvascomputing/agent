@@ -21,31 +21,26 @@ const RETRY_TEMPLATE: &str = include_str!("retry.directive.md");
 
 const COMPACTION_TEMPLATE: &str = include_str!("compaction.directive.md");
 
-/// Render the corrective user message the loop pushes when the model's
-/// previous reply could not finalise the current piece of work. Used
-/// for two cases: a finish tool returned a schema-validation error,
-/// or the model ended its turn without calling any finish tool.
-/// Callers compose a self-contained `detail` describing what was
-/// wrong; the template wraps it with the consistent framing.
+/// Render the corrective message the loop pushes when the model's previous
+/// reply did not carry the work forward. `detail` says what was wrong and
+/// stands on its own; the template supplies the framing around it.
 pub(crate) fn retry_directive(detail: &str) -> String {
     RETRY_TEMPLATE.replace("{detail}", detail)
 }
 
-/// System prompt used by the agent loop when it collapses an
-/// over-budget conversation into a single summary message. Has no
-/// placeholders; the conversation itself is sent as the user messages.
+/// The system prompt for collapsing an over-budget conversation into one
+/// summary. No placeholders: the messages themselves are what it summarizes.
 pub(crate) fn compaction_directive() -> &'static str {
     COMPACTION_TEMPLATE
 }
 
-/// Render the model-facing block that tells the agent how to return a result
-/// matching `schema`, with the document as pretty JSON. Leads with a blank line
-/// so callers append it directly after preceding text. An object schema is
-/// passed as the finish tool's top-level arguments; any other shape rides in
-/// `result`, the only place a scalar or array fits.
+/// Render the block telling the agent how to return a result matching
+/// `schema`. Leads with a blank line so callers append it directly after
+/// preceding text. A scalar or an array rides in `result`, the only place
+/// either fits as an argument.
 pub(crate) fn schema_directive(schema: &Value) -> String {
     let pretty = serde_json::to_string_pretty(schema).unwrap_or_default();
-    if is_object_schema(schema) {
+    if crate::tools::FinishTool::inlines_result(schema) {
         format!("\n\nCall `finish` with these fields as its top-level arguments, not wrapped in `result`, matching this schema:\n{pretty}")
     } else {
         format!(
@@ -54,13 +49,12 @@ pub(crate) fn schema_directive(schema: &Value) -> String {
     }
 }
 
-/// Compose the detail string for a call whose arguments did not match the
-/// schema its tool advertises. The validator names what was wrong but not the
-/// target shape, so the schema is appended when known: without it a model that
-/// guessed the shape has nothing new to correct against.
-///
-/// The schema is the one the tool advertised for this ticket, so a `finish`
-/// call reads back the ticket's own fields.
+/// Compose the detail for a call whose arguments did not match the schema its
+/// tool advertises. The validator names what was wrong but not the target
+/// shape, so the schema is appended when known: without it a model that
+/// guessed the shape has nothing new to correct against. It is the schema the
+/// tool advertised for this ticket, so a `finish` call reads back the ticket's
+/// own fields.
 pub(crate) fn arguments_retry_detail(
     tool_name: &str,
     violations: &str,
@@ -78,16 +72,10 @@ pub(crate) fn arguments_retry_detail(
     )
 }
 
-fn is_object_schema(schema: &Value) -> bool {
-    schema.get("type").and_then(Value::as_str) == Some("object")
-}
-
-/// Every fact the context knows, as `(placeholder, value)`: the ticket key,
-/// date, working directory, platform, OS version, and what is left of each
-/// `Policies` budget. A budget left as `None` (unlimited) carries an empty
-/// value, which drops its bullet in [`render_context`] and expands the
-/// standalone variable to nothing. Pass empty `Policies::default()` and
-/// `Stats::new()` when you only want the static facts.
+/// Every fact the context knows, as `(placeholder, value)`. An unlimited
+/// budget carries an empty value, which drops its bullet in
+/// [`render_context`]. Pass `Policies::default()` and `Stats::new()` for the
+/// static facts alone.
 pub(crate) fn context_values(
     dir: &Path,
     policies: &Policies,
@@ -134,10 +122,10 @@ fn optional(value: Option<impl ToString>) -> String {
     value.map(|v| v.to_string()).unwrap_or_default()
 }
 
-/// Build the bullet list `{context}` expands to from [`context_values`]. Every
-/// label lives in `context.md`; a line whose placeholders all came back empty
-/// is left out, so an unconfigured budget shows no bullet. One empty value next
-/// to a filled one keeps the line: a failed `uname` still leaves a platform.
+/// Build the bullet list `{context}` expands to. Every label lives in
+/// `context.md`; a line whose placeholders all came back empty is left out, so
+/// an unconfigured budget shows no bullet. One empty value next to a filled one
+/// keeps the line: a failed `uname` still leaves a platform.
 pub(crate) fn render_context(values: &[(&'static str, String)]) -> String {
     let lines: Vec<String> = CONTEXT_TEMPLATE
         .trim_matches('\n')
@@ -212,6 +200,19 @@ mod tests {
         assert!(directive.contains("top-level arguments"));
         assert!(directive.contains("matching this schema"));
         assert!(directive.contains("summary"));
+    }
+
+    #[test]
+    fn schema_directive_for_a_colliding_object_keeps_the_result_envelope() {
+        // Decided by the finish tool's own predicate: a schema naming a
+        // control key is advertised enveloped, so the prose must not tell the
+        // model to inline it.
+        let directive = schema_directive(&serde_json::json!({
+            "type": "object",
+            "properties": { "handover": { "type": "string" } },
+        }));
+        assert!(!directive.contains("top-level arguments"), "{directive}");
+        assert!(directive.contains("`result`"), "{directive}");
     }
 
     #[test]
@@ -321,9 +322,8 @@ mod tests {
 
         let rendered = context_body(&working_dir, &policies, &stats, "T-1");
 
-        // Visualizes the exact appended block. Static prefix (date, directory,
-        // platform) is rebuilt with empty policy/stats
-        // so the expected literal stays portable across CI hosts.
+        // The static prefix is rebuilt rather than written out, so the expected
+        // literal stays portable across hosts.
         let expected = format!(
             "{static_prefix}\n\
              - Turns remaining: 8\n\
@@ -402,10 +402,8 @@ mod tests {
 
         let rendered = context_body(&working_dir, &policies, &stats, "T-1");
 
-        // Exact remaining seconds depend on millisecond-level timing
-        // (truncating elapsed > 0ms drops one second), so assert the
-        // bullet shape and that the value is within the tight live
-        // window (3599 or 3600 seconds).
+        // Truncating an elapsed duration above 0ms drops one second, so both
+        // 3600 and 3599 are correct here.
         let baseline = context_body(&working_dir, &Policies::default(), &Stats::new(), "T-1");
         assert!(rendered.starts_with(&baseline));
         let trailing = &rendered[baseline.len()..];

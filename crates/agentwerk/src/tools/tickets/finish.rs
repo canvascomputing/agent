@@ -282,26 +282,32 @@ fn parse_result(schema: Option<&Schema>, input: &Value) -> (Value, bool) {
     unwrap_accidental_result(Value::Object(object), schema)
 }
 
-/// Whether the ticket's fields ride as `finish`'s top-level arguments; anything
-/// not inlined keeps the `result` envelope.
-///
-/// An object schema that itself declares a control-key-named property is not
-/// inlined: at the top level `finish` would read that field as its own and
-/// strip it from the result. Shared by [`FinishTool::input_schema_for`] and
-/// [`parse_result`], so the shape advertised and the shape read cannot
-/// disagree.
-fn is_inlined(schema: &Schema) -> bool {
-    let document = schema.get_raw_schema();
-    if document["type"] != "object" {
-        return false;
+impl FinishTool {
+    /// Whether a ticket schema's fields ride as this tool's top-level
+    /// arguments; anything not inlined keeps the `result` envelope.
+    ///
+    /// An object schema that itself declares a control-key-named property is
+    /// not inlined: at the top level `finish` would read that field as its own
+    /// and strip it from the result. [`FinishTool::input_schema_for`],
+    /// [`parse_result`], and the ticket body's schema directive all consult
+    /// this one predicate, so the shape described, advertised, and read cannot
+    /// disagree.
+    pub(crate) fn inlines_result(document: &Value) -> bool {
+        if document["type"] != "object" {
+            return false;
+        }
+        !document["properties"]
+            .as_object()
+            .is_some_and(|properties| {
+                control_keys()
+                    .iter()
+                    .any(|key| properties.contains_key(key))
+            })
     }
-    !document["properties"]
-        .as_object()
-        .is_some_and(|properties| {
-            control_keys()
-                .iter()
-                .any(|key| properties.contains_key(key))
-        })
+}
+
+fn is_inlined(schema: &Schema) -> bool {
+    FinishTool::inlines_result(schema.get_raw_schema())
 }
 
 /// A model that wrapped `{"result": <value>}` despite the flat schema is
