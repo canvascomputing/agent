@@ -93,27 +93,17 @@ impl Protocol for OpenAiChat {
         posted.bearer_auth(api_key)
     }
 
-    /// Covers the OpenAI shape and the subset of it that LiteLLM and Mistral
-    /// reproduce, where `error.code` may be absent and the message text is the
-    /// only signal left.
+    /// The codes only this vendor names. Its overflow wordings are read by
+    /// `error::recover_wrapped_error`, which every body reaches: reading them
+    /// here too would answer ahead of the rate-limit signal that outranks them.
     fn classify_error(status: u16, body: &str) -> Option<ProviderError> {
         if status != 400 {
             return None;
         }
         let json: Value = serde_json::from_str(body).ok()?;
         let error = &json["error"];
-        let code = error["code"].as_str().unwrap_or("");
-        let type_ = error["type"].as_str().unwrap_or("");
         let message = error["message"].as_str().unwrap_or("").to_string();
-
-        let is_context_window = code == "context_length_exceeded"
-            || type_ == "exceed_context_size_error"
-            || message.contains("maximum context length")
-            || message.contains("context_length_exceeded");
-        if is_context_window {
-            return Some(ProviderError::ContextWindowExceeded { message });
-        }
-        match code {
+        match error["code"].as_str().unwrap_or("") {
             "model_not_found" => Some(ProviderError::ModelNotFound { message }),
             "content_filter" => Some(ProviderError::SafetyFilterTriggered { message }),
             _ => None,
@@ -324,6 +314,7 @@ fn status_from_finish_reason(raw: &str) -> ResponseStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::providers::error::recover_wrapped_error;
     use crate::providers::ReasoningEffort;
 
     /// Feed `chunks` through the decoder, returning the blocks they assemble.
@@ -617,21 +608,22 @@ mod tests {
     }
 
     #[test]
-    fn context_window_exceeded_by_code() {
+    fn an_overflow_code_falls_through_to_the_shared_bank() {
         let body = body_400(
             "context_length_exceeded",
             "This model's maximum context length is 128000 tokens.",
         );
+        assert!(OpenAiChat::classify_error(400, &body).is_none());
         assert!(matches!(
-            OpenAiChat::classify_error(400, &body),
+            recover_wrapped_error(400, &body, None),
             Some(ProviderError::ContextWindowExceeded { .. })
         ));
     }
 
     #[test]
-    fn context_window_exceeded_by_message_fallback() {
-        // Mistral / LiteLLM path: `code` absent, classifier falls back to
-        // matching the message text.
+    fn an_overflow_wording_without_a_code_falls_through_to_the_shared_bank() {
+        // Mistral / LiteLLM path: `code` absent, so the message text is all
+        // there is to read.
         let body = serde_json::json!({
             "error": {
                 "type": "invalid_request_error",
@@ -640,8 +632,9 @@ mod tests {
             }
         })
         .to_string();
+        assert!(OpenAiChat::classify_error(400, &body).is_none());
         assert!(matches!(
-            OpenAiChat::classify_error(400, &body),
+            recover_wrapped_error(400, &body, None),
             Some(ProviderError::ContextWindowExceeded { .. })
         ));
     }
@@ -672,18 +665,11 @@ mod tests {
 
     #[test]
     fn an_openai_400_keeps_the_message_it_carried() {
-        let body = body_400(
-            "context_length_exceeded",
-            "maximum context length is 8192 tokens; requested 12000",
-        );
-        let Some(ProviderError::ContextWindowExceeded { message }) =
-            OpenAiChat::classify_error(400, &body)
+        let body = body_400("model_not_found", "the model `gpt-x` does not exist");
+        let Some(ProviderError::ModelNotFound { message }) = OpenAiChat::classify_error(400, &body)
         else {
-            panic!("expected ContextWindowExceeded");
+            panic!("expected ModelNotFound");
         };
-        assert_eq!(
-            message,
-            "maximum context length is 8192 tokens; requested 12000"
-        );
+        assert_eq!(message, "the model `gpt-x` does not exist");
     }
 }

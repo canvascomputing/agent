@@ -91,24 +91,18 @@ impl Protocol for AnthropicMessages {
             .header("anthropic-version", "2023-06-01")
     }
 
-    /// Anything unrecognised falls through to
-    /// [`ProviderError::StatusUnclassified`] (or [`ProviderError::RateLimited`]
-    /// for 429/529).
+    /// The one type only this vendor names. Its overflow wordings are read by
+    /// `error::recover_wrapped_error`, and anything unrecognised falls through
+    /// to [`ProviderError::StatusUnclassified`] (or
+    /// [`ProviderError::RateLimited`] for 429/529).
     fn classify_error(status: u16, body: &str) -> Option<ProviderError> {
         if status != 400 {
             return None;
         }
         let json: Value = serde_json::from_str(body).ok()?;
         let error = &json["error"];
-        let type_ = error["type"].as_str().unwrap_or("");
         let message = error["message"].as_str().unwrap_or("").to_string();
-        match type_ {
-            "invalid_request_error"
-                if message.contains("prompt is too long")
-                    || message.contains("input length and `max_tokens` exceed context limit") =>
-            {
-                Some(ProviderError::ContextWindowExceeded { message })
-            }
+        match error["type"].as_str().unwrap_or("") {
             "not_found_error" => Some(ProviderError::ModelNotFound { message }),
             _ => None,
         }
@@ -311,6 +305,7 @@ fn status_from_stop_reason(raw: &str) -> ResponseStatus {
 mod tests {
     use super::*;
     use crate::providers::endpoint::DEFAULT_REQUEST_TIMEOUT;
+    use crate::providers::error::recover_wrapped_error;
     use crate::providers::ReasoningEffort;
 
     /// Feed `payloads` through the decoder, returning the blocks they assemble.
@@ -558,10 +553,11 @@ mod tests {
     }
 
     #[test]
-    fn context_window_exceeded_when_prompt_is_too_long() {
+    fn a_prompt_too_long_falls_through_to_the_shared_bank() {
         let body = invalid_request("prompt is too long: 205000 > 200000");
+        assert!(AnthropicMessages::classify_error(400, &body).is_none());
         assert!(matches!(
-            AnthropicMessages::classify_error(400, &body),
+            recover_wrapped_error(400, &body, None),
             Some(ProviderError::ContextWindowExceeded { .. })
         ));
     }
@@ -586,12 +582,15 @@ mod tests {
 
     #[test]
     fn an_anthropic_400_keeps_the_message_it_carried() {
-        let body = invalid_request("prompt is too long: 205000 > 200000");
-        let Some(ProviderError::ContextWindowExceeded { message }) =
+        let body = serde_json::json!({
+            "error": { "type": "not_found_error", "message": "model opus-9 not found" }
+        })
+        .to_string();
+        let Some(ProviderError::ModelNotFound { message }) =
             AnthropicMessages::classify_error(400, &body)
         else {
-            panic!("expected ContextWindowExceeded");
+            panic!("expected ModelNotFound");
         };
-        assert_eq!(message, "prompt is too long: 205000 > 200000");
+        assert_eq!(message, "model opus-9 not found");
     }
 }

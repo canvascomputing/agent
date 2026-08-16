@@ -226,11 +226,13 @@ pub type ProviderResult<T> = std::result::Result<T, ProviderError>;
 const OVERFLOW_PATTERNS: &[&str] = &[
     // Anthropic
     "prompt is too long",
+    "input length and `max_tokens` exceed context limit",
     "request_too_large",
     // OpenAI
     "this model's maximum context length",
     "exceeds the context window",
     "context_length_exceeded",
+    "exceed_context_size_error",
     // Mistral
     "too large for model with",
     // Vertex / Gemini, observed through LiteLLM-passthrough: its 1 M-token limit
@@ -506,8 +508,27 @@ mod tests {
         }
     }
 
-    /// First-party Anthropic phrasing, which its own classifier normally
-    /// catches: the shared bank is the backstop if that one ever misses a variant.
+    #[test]
+    fn a_body_carrying_both_signals_is_a_rate_limit_whichever_vendor_sent_it() {
+        // Each vendor's own overflow wording, throttled. Reading overflow first
+        // would spend a compaction and meet the same throttle next request.
+        for body in [
+            r#"{"error":{"message":"Rate limit reached: prompt is too long"}}"#,
+            r#"{"error":{"message":"429 Too Many Requests: this model's maximum context length is 8192"}}"#,
+            r#"{"error":{"message":"litellm.RateLimitError: input token count exceeds the maximum number of tokens"}}"#,
+        ] {
+            assert!(
+                matches!(
+                    recover_wrapped_error(400, body, None),
+                    Some(ProviderError::RateLimited { .. })
+                ),
+                "{body}"
+            );
+        }
+    }
+
+    /// First-party Anthropic phrasing, now that its own classifier reads codes
+    /// alone: this bank is what answers an overflow, whoever sent it.
     #[test]
     fn anthropic_prompt_too_long_classifies_as_context_window() {
         let body = r#"{"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long: 250000 tokens > 200000 maximum"}}"#;
