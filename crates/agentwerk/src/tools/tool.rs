@@ -260,23 +260,13 @@ impl ToolRegistry {
         Some(advertised(&*tool, ticket))
     }
 
-    /// Get the tool a call reaches and the schema it is checked against, owned,
-    /// so a concurrent batch can move both into its task.
-    ///
-    /// The finish tool is checked against what it registered rather than what it
-    /// advertised: it accepts a `result` envelope the advertised shape does not
-    /// name, unwraps it, and validates the result against the ticket itself.
-    fn resolve(&self, name: &str) -> Resolved {
-        match self.get(name) {
-            Some(tool) => {
-                let schema = tool.input_schema();
-                Ok((tool, schema))
-            }
-            None => Err(ToolError::ToolNotFound {
-                tool_name: name.into(),
-                available: self.names(),
-            }),
-        }
+    /// Get the tool a call reaches, owned, so a concurrent batch can move it
+    /// into its task, or the failure naming what could have been called.
+    fn resolve(&self, name: &str) -> std::result::Result<Arc<dyn ToolLike>, ToolError> {
+        self.get(name).ok_or_else(|| ToolError::ToolNotFound {
+            tool_name: name.into(),
+            available: self.names(),
+        })
     }
 
     /// Get the tool a call names.
@@ -577,50 +567,53 @@ impl ToolLike for Tool {
     }
 }
 
-/// What one call produced: the block the model sees, the typed outcome, and the
-/// file an oversized output was written to.
-type ToolOutcome = (
-    ContentBlock,
-    std::result::Result<String, ToolError>,
-    Option<PathBuf>,
-);
-
-/// What a call name resolved to: the tool and the schema its arguments are
-/// checked against, or the failure naming what could have been called instead.
-/// The tools a batch runs concurrently are resolved before the batch spawns, so
-/// each task owns what it needs.
-type Resolved = std::result::Result<(Arc<dyn ToolLike>, Schema), ToolError>;
+/// What one call produced.
+pub(crate) struct ToolOutcome {
+    /// The block the model sees.
+    pub(crate) block: ContentBlock,
+    /// What the tool reported, for the events the turn emits.
+    pub(crate) outcome: std::result::Result<String, ToolError>,
+    /// Where an oversized output was written, relative to the session.
+    pub(crate) path: Option<PathBuf>,
+}
 
 /// Run one call to the outcome the turn collects: check the arguments, run the
 /// tool, then stand in for an empty or oversized result.
-async fn run_call(found: Resolved, call: &ToolCall, ctx: &ToolContext) -> ToolOutcome {
+async fn run_call(
+    found: std::result::Result<Arc<dyn ToolLike>, ToolError>,
+    call: &ToolCall,
+    ctx: &ToolContext,
+) -> ToolOutcome {
     let outcome = invoke(found, &call.name, call.input.clone(), ctx).await;
     let outcome = replace_empty_output(outcome, &call.name);
     let (outcome, path) = cap_oversized_result(outcome, ctx, &call.id, PER_TOOL_CAP);
     let block = content_block_for(&call.id, &outcome);
-    (block, outcome, path)
+    ToolOutcome {
+        block,
+        outcome,
+        path,
+    }
 }
 
 /// Check the arguments against the schema the tool registered, then run it on
 /// what survives.
 async fn invoke(
-    resolved: Resolved,
+    resolved: std::result::Result<Arc<dyn ToolLike>, ToolError>,
     name: &str,
     input: Value,
     ctx: &ToolContext,
 ) -> std::result::Result<String, ToolError> {
-    let (tool, schema) = resolved?;
+    let tool = resolved?;
     // Retyped rather than refused, so a quoted number runs the call the model
     // asked for and arguments it wrote as JSON text are decoded. What comes
     // back names the value that produced, which is the one the tool would have
     // received.
-    let (input, repairs) =
-        schema
-            .validate(input)
-            .map_err(|violations| ToolError::SchemaValidationFailed {
-                tool_name: name.into(),
-                message: violations.to_string(),
-            })?;
+    let (input, repairs) = tool.input_schema().validate(input).map_err(|violations| {
+        ToolError::SchemaValidationFailed {
+            tool_name: name.into(),
+            message: violations.to_string(),
+        }
+    })?;
     for pointer in &repairs {
         ctx.emit(EventKind::ResponseRepaired {
             reason: RepairKind::ValueMistyped,
@@ -745,7 +738,7 @@ fn cap_aggregate_outputs(results: &mut [ToolOutcome], ctx: &ToolContext, per_tur
     loop {
         let total: usize = results
             .iter()
-            .map(|(b, _, _)| match b {
+            .map(|result| match &result.block {
                 ContentBlock::ToolResult { content, .. } => content.len(),
                 _ => 0,
             })
@@ -754,8 +747,8 @@ fn cap_aggregate_outputs(results: &mut [ToolOutcome], ctx: &ToolContext, per_tur
             return;
         }
         let mut largest: Option<(usize, usize)> = None;
-        for (i, (b, _, _)) in results.iter().enumerate() {
-            if let ContentBlock::ToolResult { content, .. } = b {
+        for (i, result) in results.iter().enumerate() {
+            if let ContentBlock::ToolResult { content, .. } = &result.block {
                 if content.starts_with(OVERSIZED_STUB_TAG_OPEN) {
                     continue;
                 }
@@ -772,7 +765,7 @@ fn cap_aggregate_outputs(results: &mut [ToolOutcome], ctx: &ToolContext, per_tur
             tool_use_id,
             content,
             succeeded,
-        } = &results[i].0
+        } = &results[i].block
         else {
             return;
         };
@@ -785,15 +778,15 @@ fn cap_aggregate_outputs(results: &mut [ToolOutcome], ctx: &ToolContext, per_tur
         };
         let preview = truncate_preview(&original);
         let stub = format_oversized_tool_result(original.len(), &p.display, preview);
-        results[i].0 = ContentBlock::ToolResult {
+        results[i].block = ContentBlock::ToolResult {
             tool_use_id,
             content: stub.clone(),
             succeeded,
         };
-        if results[i].1.is_ok() {
-            results[i].1 = Ok(stub);
+        if results[i].outcome.is_ok() {
+            results[i].outcome = Ok(stub);
         }
-        results[i].2 = Some(p.rel);
+        results[i].path = Some(p.rel);
     }
 }
 
@@ -1143,7 +1136,7 @@ Do the demo thing.
 
         let results = registry.execute(&calls, &ctx).await;
         assert_eq!(results.len(), 1);
-        match &results[0].0 {
+        match &results[0].block {
             ContentBlock::ToolResult {
                 succeeded, content, ..
             } => {
@@ -1168,7 +1161,7 @@ Do the demo thing.
         let results = registry.execute(&calls, &ctx).await;
         let ContentBlock::ToolResult {
             content, succeeded, ..
-        } = &results[0].0
+        } = &results[0].block
         else {
             panic!("Expected ToolResult");
         };
@@ -1228,7 +1221,7 @@ Do the demo thing.
         let results = registry.execute(&calls, ctx).await;
         let ContentBlock::ToolResult {
             content, succeeded, ..
-        } = &results[0].0
+        } = &results[0].block
         else {
             panic!("Expected ToolResult");
         };
@@ -1331,7 +1324,7 @@ Do the demo thing.
         }];
 
         let results = registry.execute(&calls, &ctx).await;
-        let ContentBlock::ToolResult { content, .. } = &results[0].0 else {
+        let ContentBlock::ToolResult { content, .. } = &results[0].block else {
             panic!("Expected ToolResult");
         };
         assert_eq!(
@@ -1378,7 +1371,7 @@ Do the demo thing.
 
         let results = registry.execute(&calls, &ctx).await;
         assert_eq!(results.len(), 1);
-        match &results[0].0 {
+        match &results[0].block {
             ContentBlock::ToolResult {
                 content, succeeded, ..
             } => {
@@ -1423,6 +1416,16 @@ Do the demo thing.
             .ticket_queue(Arc::clone(&queue))
             .ticket_key(key.clone());
         (ctx, queue, key, dir)
+    }
+
+    /// An outcome the aggregate cap may write out, which is what those tests
+    /// hand it.
+    fn stubbable(id: &str, content: &str) -> ToolOutcome {
+        ToolOutcome {
+            block: tool_result_block(id, content),
+            outcome: Ok(content.to_string()),
+            path: None,
+        }
     }
 
     fn tool_result_block(id: &str, content: &str) -> ContentBlock {
@@ -1531,34 +1534,34 @@ Do the demo thing.
         let big = "b".repeat(80_000);
         let tiny = "c".repeat(30_000);
         let mut results = vec![
-            (tool_result_block("c1", &small), Ok(small.clone()), None),
-            (tool_result_block("c2", &big), Ok(big.clone()), None),
-            (tool_result_block("c3", &tiny), Ok(tiny.clone()), None),
+            stubbable("c1", &small),
+            stubbable("c2", &big),
+            stubbable("c3", &tiny),
         ];
         cap_aggregate_outputs(&mut results, &ctx, 100_000);
         // c2 (the largest) was offloaded; the other two stayed inline.
-        match &results[1].0 {
+        match &results[1].block {
             ContentBlock::ToolResult { content, .. } => {
                 assert!(content.starts_with("<persisted-output>"));
                 assert!(content.contains("Full output saved to:"));
             }
             _ => panic!("expected ToolResult"),
         }
-        let big_path = results[1].2.clone().expect("c2 path recorded");
+        let big_path = results[1].path.clone().expect("c2 path recorded");
         assert_eq!(big_path, relative_outputs_path(&key, "c2"));
         let body = std::fs::read_to_string(absolute_outputs_path(dir.path(), &key, "c2")).unwrap();
         assert_eq!(body, big);
 
         assert!(matches!(
-            &results[0].0,
+            &results[0].block,
             ContentBlock::ToolResult { content, .. } if content.len() == 40_000
         ));
         assert!(matches!(
-            &results[2].0,
+            &results[2].block,
             ContentBlock::ToolResult { content, .. } if content.len() == 30_000
         ));
-        assert!(results[0].2.is_none());
-        assert!(results[2].2.is_none());
+        assert!(results[0].path.is_none());
+        assert!(results[2].path.is_none());
     }
 
     #[test]
@@ -1567,20 +1570,15 @@ Do the demo thing.
         // Many small results whose total far exceeds the cap, but
         // each is already a stub-marked block. Aggregate should bail
         // rather than spin: stubs are skipped, so no candidates.
-        let mut results: Vec<(
-            ContentBlock,
-            std::result::Result<String, ToolError>,
-            Option<PathBuf>,
-        )> = (0..5)
+        let mut results: Vec<ToolOutcome> = (0..5)
             .map(|i| {
-                let id = format!("c{i}");
                 let stub = format!("<persisted-output>already stubbed {i}</persisted-output>");
-                (tool_result_block(&id, &stub), Ok(stub), None)
+                stubbable(&format!("c{i}"), &stub)
             })
             .collect();
         let before: Vec<String> = results
             .iter()
-            .map(|(b, _, _)| match b {
+            .map(|result| match &result.block {
                 ContentBlock::ToolResult { content, .. } => content.clone(),
                 _ => String::new(),
             })
@@ -1588,7 +1586,7 @@ Do the demo thing.
         cap_aggregate_outputs(&mut results, &ctx, 10);
         let after: Vec<String> = results
             .iter()
-            .map(|(b, _, _)| match b {
+            .map(|result| match &result.block {
                 ContentBlock::ToolResult { content, .. } => content.clone(),
                 _ => String::new(),
             })

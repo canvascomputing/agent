@@ -365,7 +365,7 @@ mod tests {
             input,
         }];
         let results = registry.execute(&calls, &ctx()).await;
-        match &results[0].0 {
+        match &results[0].block {
             crate::providers::ContentBlock::ToolResult { content, .. } => content.clone(),
             other => panic!("expected a tool result, got {other:?}"),
         }

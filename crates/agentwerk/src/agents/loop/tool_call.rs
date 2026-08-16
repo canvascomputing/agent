@@ -48,8 +48,8 @@ pub(super) async fn run(context: &mut TicketContext<'_>, mut calls: Vec<ToolCall
     let outcomes = registry.execute(&calls, &tool_context).await;
 
     let mut schema_failure: Option<(String, String)> = None;
-    for (block, tool_result, _path) in &outcomes {
-        let ContentBlock::ToolResult { tool_use_id, .. } = block else {
+    for result in &outcomes {
+        let ContentBlock::ToolResult { tool_use_id, .. } = &result.block else {
             continue;
         };
         let call = calls.iter().find(|call| &call.id == tool_use_id);
@@ -66,7 +66,7 @@ pub(super) async fn run(context: &mut TicketContext<'_>, mut calls: Vec<ToolCall
                     .unwrap_or_default()
             })
             .unwrap_or_default();
-        match tool_result {
+        match &result.outcome {
             Ok(output) => {
                 // Any successful tool call is progress: clear the counter.
                 context.consecutive_schema_failures = 0;
@@ -117,11 +117,13 @@ pub(super) async fn run(context: &mut TicketContext<'_>, mut calls: Vec<ToolCall
 
     let mut paths: HashMap<String, PathBuf> = HashMap::new();
     let mut blocks: Vec<ContentBlock> = Vec::with_capacity(outcomes.len());
-    for (block, _, path) in outcomes {
-        if let (ContentBlock::ToolResult { tool_use_id, .. }, Some(path)) = (&block, path) {
+    for result in outcomes {
+        if let (ContentBlock::ToolResult { tool_use_id, .. }, Some(path)) =
+            (&result.block, result.path)
+        {
             paths.insert(tool_use_id.clone(), path);
         }
-        blocks.push(block);
+        blocks.push(result.block);
     }
     if let Some((failing_tool, validator_message)) = &schema_failure {
         let advertised = registry.advertised_schema(failing_tool, ticket_schema.as_ref());
