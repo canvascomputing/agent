@@ -14,7 +14,12 @@ use super::parse::{Argument, Command, Refusal};
 
 fn tool_file() -> &'static ToolFile {
     static FILE: OnceLock<ToolFile> = OnceLock::new();
-    FILE.get_or_init(|| ToolFile::parse(include_str!("command.tool.md")))
+    FILE.get_or_init(|| {
+        ToolFile::parse(
+            include_str!("command.tool.md"),
+            include_str!("command.schema.json"),
+        )
+    })
 }
 
 /// The shared part of every tool's description, with the per-instance patterns

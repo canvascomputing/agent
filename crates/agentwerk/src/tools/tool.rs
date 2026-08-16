@@ -536,11 +536,12 @@ impl Tool {
         }
     }
 
-    /// Start building a tool from a `.tool.md` definition, which supplies its
-    /// name, description, input schema, and whether it may run concurrently.
-    /// Panics when the file is malformed or its schema does not compile.
-    pub fn from_tool_file(definition: &str) -> ToolBuilder<()> {
-        let tf = super::tool_file::ToolFile::parse(definition);
+    /// Start building a tool from a `.tool.md` definition and the JSON Schema
+    /// document beside it. The definition supplies the name, description, and
+    /// whether the tool may run concurrently; `schema` is what it accepts.
+    /// Panics when either file is malformed or the schema does not compile.
+    pub fn from_tool_file(definition: &str, schema: &str) -> ToolBuilder<()> {
+        let tf = super::tool_file::ToolFile::parse(definition, schema);
         let mut builder =
             Tool::new(tf.name.clone(), tf.render_markdown()).concurrent(tf.concurrent);
         // Already compiled by `ToolFile::parse`, so it skips `schema`.
@@ -1075,18 +1076,13 @@ concurrent: true
 Do the demo thing.
 
 - Returns nothing useful.
-
-## Schema
-
-```json
-{
+"#;
+        let schema = r#"{
   "type": "object",
   "properties": {"x": {"type": "string"}},
   "required": ["x"]
-}
-```
-"#;
-        let tool = Tool::from_tool_file(definition)
+}"#;
+        let tool = Tool::from_tool_file(definition, schema)
             .handler(|_, _| async { ToolResult::success("") })
             .build();
         assert_eq!(tool.name(), "demo_tool");

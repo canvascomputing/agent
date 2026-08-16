@@ -1,0 +1,33 @@
+{
+  "type": "object",
+  "properties": {
+    "path": {
+      "type": "string",
+      "description": "Path to the file to read."
+    },
+    "offset": {
+      "type": "integer",
+      "description": "1-based line number to start reading from (default: 1)."
+    },
+    "limit": {
+      "type": "integer",
+      "description": "Number of lines to read (default: to end of file). Combine with `offset` to read a slice."
+    },
+    "column": {
+      "type": "integer",
+      "description": "1-based byte offset within each line to start reading from (default: full line). Compatible with the column reported by `grep` in content mode. To see context around a match, subtract a margin (e.g. `column = hit_column - 50`)."
+    },
+    "length": {
+      "type": "integer",
+      "description": "Max bytes to read per line from `column` (default: to end of line)."
+    }
+  },
+  "required": [
+    "path"
+  ],
+  "examples": [
+    { "path": "src/main.rs" },
+    { "path": "src/main.rs", "offset": 120, "limit": 40 },
+    { "path": "src/main.rs", "offset": 120, "limit": 1, "column": 30, "length": 120 }
+  ]
+}

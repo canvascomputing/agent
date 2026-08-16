@@ -41,7 +41,12 @@ impl KnowledgeTool {
 
 fn tool_file() -> &'static ToolFile {
     static FILE: OnceLock<ToolFile> = OnceLock::new();
-    FILE.get_or_init(|| ToolFile::parse(include_str!("knowledge.tool.md")))
+    FILE.get_or_init(|| {
+        ToolFile::parse(
+            include_str!("knowledge.tool.md"),
+            include_str!("knowledge.schema.json"),
+        )
+    })
 }
 
 fn description() -> &'static str {

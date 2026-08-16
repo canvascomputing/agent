@@ -94,7 +94,7 @@ NOTE: <what this ticket is not>
 
 ## Tool definition
 
-`*.tool.md`, parsed by `tool_file.rs`: frontmatter, prose body, `## Schema`.
+`*.tool.md`, parsed by `tool_file.rs`: frontmatter and prose body. The input schema lives in a sibling `*.schema.json`.
 
 `````markdown
 ---
@@ -109,12 +109,6 @@ read_only: <true|false>
 ## When NOT to use
 
 - <neighbouring case>: use `<other tool>`.
-
-## Schema
-
-```json
-{ }
-```
 `````
 
 - Voice is the affordance: `Find files by glob pattern`, never `This tool finds files`.

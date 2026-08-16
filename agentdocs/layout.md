@@ -93,7 +93,7 @@ crates/
 - `command/` holds the command tool and the parsing behind it. `tool.rs` is the tool, restricted through `new()` and widened through `allow()`; it runs one program per call and never a shell. `parse.rs` splits a line into one command and classifies its arguments, which is how the tool refuses anything that is not one command and how a rule about a flag means what the program will mean.
 - `tickets/` holds `TicketsTool` and `FinishTool`; `knowledge.rs` is the model-facing wrapper around `Knowledge`, whose store lives in `agents::knowledge`.
 - `fetch_url.rs` is the web fetch tool.
-- Each built-in tool pairs with a `<tool>.tool.md` definition: `---` frontmatter (`name`, `concurrent`), a prose body shown to the model, and a `## Schema` section whose ` ```json ` fence holds the input schema. `tool_file.rs` parses it; `util.rs` is a shared helper.
+- Each built-in tool pairs with a `<tool>.tool.md` definition and a `<tool>.schema.json` beside it. The definition holds `---` frontmatter (`name`, `concurrent`) and the prose body shown to the model; the sibling document holds the input schema. `tool_file.rs` parses the pair; `util.rs` is a shared helper.
 
 ## The `prompts/` and `schemas/` Modules
 

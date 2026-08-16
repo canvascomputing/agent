@@ -183,7 +183,7 @@ Seven rules the surface table below never repeats.
 | `Tool::new(name, description).schema(..).handler(..).build()` | The `@tool` decorator: a decorated function carries the name, description, and schema a `ToolBuilder` collects. |
 | `ToolBuilder<H>` | Folded into the `@tool` decorator: the type changes once a handler is attached, which Python cannot hold across calls. |
 | `Tool` | `Tool`: an opaque handle the built-in tool functions return. An ad-hoc tool is a decorated function, not a `Tool`. |
-| `Tool::from_tool_file(definition)` | Not bound: write the name, description, and schema on the Python function instead. |
+| `Tool::from_tool_file(definition, schema)` | Not bound: write the name, description, and schema on the Python function instead. |
 | `ToolBuilder::concurrent(b)` | `@tool(concurrent=..)` |
 | `ToolBuilder::paths(fields)` | `@tool(paths=[..])` |
 | `ToolBuilder::schema(document)` panics on a document that does not compile | `@tool(schema=..)` raises `ValueError` when `.tool(fn)` registers it: a decorator runs before the schema is read, so the failure surfaces one call later. |

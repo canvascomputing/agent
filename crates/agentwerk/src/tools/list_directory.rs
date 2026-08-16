@@ -25,7 +25,12 @@ pub struct ListDirectoryTool;
 
 fn tool_file() -> &'static ToolFile {
     static FILE: OnceLock<ToolFile> = OnceLock::new();
-    FILE.get_or_init(|| ToolFile::parse(include_str!("list_directory.tool.md")))
+    FILE.get_or_init(|| {
+        ToolFile::parse(
+            include_str!("list_directory.tool.md"),
+            include_str!("list_directory.schema.json"),
+        )
+    })
 }
 
 fn description() -> &'static str {

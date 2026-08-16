@@ -30,7 +30,12 @@ pub struct FinishTool;
 
 fn tool_file() -> &'static ToolFile {
     static FILE: OnceLock<ToolFile> = OnceLock::new();
-    FILE.get_or_init(|| ToolFile::parse(include_str!("finish.tool.md")))
+    FILE.get_or_init(|| {
+        ToolFile::parse(
+            include_str!("finish.tool.md"),
+            include_str!("finish.schema.json"),
+        )
+    })
 }
 
 fn description() -> &'static str {

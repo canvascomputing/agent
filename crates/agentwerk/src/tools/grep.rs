@@ -46,7 +46,12 @@ const SEARCH_TIMEOUT: Duration = Duration::from_secs(180);
 
 fn tool_file() -> &'static ToolFile {
     static FILE: OnceLock<ToolFile> = OnceLock::new();
-    FILE.get_or_init(|| ToolFile::parse(include_str!("grep.tool.md")))
+    FILE.get_or_init(|| {
+        ToolFile::parse(
+            include_str!("grep.tool.md"),
+            include_str!("grep.schema.json"),
+        )
+    })
 }
 
 fn description() -> &'static str {

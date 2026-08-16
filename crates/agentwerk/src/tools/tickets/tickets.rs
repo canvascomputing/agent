@@ -24,7 +24,12 @@ pub struct TicketsTool;
 
 fn tool_file() -> &'static ToolFile {
     static FILE: OnceLock<ToolFile> = OnceLock::new();
-    FILE.get_or_init(|| ToolFile::parse(include_str!("tickets.tool.md")))
+    FILE.get_or_init(|| {
+        ToolFile::parse(
+            include_str!("tickets.tool.md"),
+            include_str!("tickets.schema.json"),
+        )
+    })
 }
 
 fn description() -> &'static str {

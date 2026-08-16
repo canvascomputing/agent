@@ -11,28 +11,3 @@ Create a new file or overwrite an existing one in one shot (no append mode); par
 ## When NOT to use
 
 - Modify part of an existing file: use `edit_file`.
-
-## Schema
-
-```json
-{
-  "type": "object",
-  "properties": {
-    "path": {
-      "type": "string",
-      "description": "Path to the file to write, relative to the working directory. Parent directories are created automatically."
-    },
-    "content": {
-      "type": "string",
-      "description": "Full file content. Replaces any existing content at `path` byte-for-byte."
-    }
-  },
-  "required": [
-    "path",
-    "content"
-  ],
-  "examples": [
-    { "path": "notes/findings.md", "content": "# Findings\n\nOne per line.\n" }
-  ]
-}
-```

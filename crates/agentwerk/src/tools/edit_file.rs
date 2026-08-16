@@ -27,7 +27,12 @@ pub struct EditFileTool;
 
 fn tool_file() -> &'static ToolFile {
     static FILE: OnceLock<ToolFile> = OnceLock::new();
-    FILE.get_or_init(|| ToolFile::parse(include_str!("edit_file.tool.md")))
+    FILE.get_or_init(|| {
+        ToolFile::parse(
+            include_str!("edit_file.tool.md"),
+            include_str!("edit_file.schema.json"),
+        )
+    })
 }
 
 fn description() -> &'static str {

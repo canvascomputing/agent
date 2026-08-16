@@ -17,7 +17,12 @@ const MAX_REDIRECT_HOPS: usize = 10;
 
 fn tool_file() -> &'static ToolFile {
     static FILE: OnceLock<ToolFile> = OnceLock::new();
-    FILE.get_or_init(|| ToolFile::parse(include_str!("fetch_url.tool.md")))
+    FILE.get_or_init(|| {
+        ToolFile::parse(
+            include_str!("fetch_url.tool.md"),
+            include_str!("fetch_url.schema.json"),
+        )
+    })
 }
 
 fn description() -> &'static str {
