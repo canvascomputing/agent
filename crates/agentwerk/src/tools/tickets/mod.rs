@@ -25,7 +25,7 @@ pub(super) fn dispatch(input: Value, ctx: &ToolContext) -> ToolResult {
         Some(a) => a,
         None => return ToolResult::error("Missing required parameter: action"),
     };
-    let Some(ticket_queue) = ctx.ticket_queue_handle().cloned() else {
+    let Some(ticket_queue) = ctx.ticket_queue.clone() else {
         return ToolResult::error("Ticket queue unavailable in this context");
     };
 
@@ -60,7 +60,7 @@ pub(super) fn resolve_current_key(
     if let Some(key) = ctx.ticket_key.as_deref() {
         return Ok(key.to_string());
     }
-    let agent_id = ctx.agent_id_str().ok_or_else(|| {
+    let agent_id = ctx.agent_id.as_deref().ok_or_else(|| {
         ToolResult::error("Missing `key` and no agent_id set on this tool context")
     })?;
     match ticket_queue
@@ -293,7 +293,8 @@ fn action_create(ticket_queue: &TicketQueue, input: &Value, ctx: &ToolContext) -
     }
 
     let reporter = ctx
-        .agent_id_str()
+        .agent_id
+        .as_deref()
         .expect("agent_id on ToolContext")
         .to_string();
     let key = ticket_queue.insert(ticket, reporter);

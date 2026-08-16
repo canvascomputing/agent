@@ -12,9 +12,9 @@ use crate::event::{EventKind, RepairKind};
 use crate::providers::ProviderResult;
 use crate::schemas::Schema;
 
-use super::super::tool::{ToolContext, ToolLike, ToolResult};
+use super::super::tool::{repair_message, ToolContext, ToolLike, ToolResult};
 use super::super::tool_file::ToolFile;
-use super::resolve_current_key;
+use super::{resolve_current_key, TICKET_FINISH_TOOL};
 
 /// Write a ticket's result and mark it finished, optionally handing
 /// follow-up work to another agent.
@@ -74,11 +74,11 @@ impl ToolLike for FinishTool {
 /// failure can surface through `?` as the `ToolResult` it reads back as.
 fn finish(input: &Value, ctx: &ToolContext) -> Result<String, ToolResult> {
     let ticket_queue = ctx
-        .ticket_queue_handle()
-        .cloned()
+        .ticket_queue
+        .clone()
         .ok_or_else(|| ToolResult::error("Ticket queue unavailable in this context"))?;
     let parent_key = resolve_current_key(&ticket_queue, ctx)?;
-    let agent = ctx.agent_id_str().unwrap_or_default().to_string();
+    let agent = ctx.agent_id.clone().unwrap_or_default();
 
     // The ticket's own schema decides whether the result rode in as
     // the top-level arguments (object schema) or under `result`.
@@ -212,23 +212,20 @@ fn attach_result(
     let (validated, repaired) = ticket_queue
         .set_result(key, result)
         .map_err(|violations| ToolResult::schema_error(violations.to_string()))?;
-    let mut details = Vec::new();
+    let mut messages = Vec::new();
     if unwrapped {
-        details.push("result unwrapped".to_string());
+        messages.push("finish: result unwrapped".to_string());
     }
     for pointer in repaired {
-        details.push(match pointer.as_str() {
-            "" => "retyped".to_string(),
-            path => format!("{path} retyped"),
-        });
+        messages.push(repair_message(TICKET_FINISH_TOOL, &pointer));
     }
-    for detail in details {
+    for message in messages {
         ticket_queue.emit(
             key,
             agent,
             EventKind::ResponseRepaired {
                 reason: RepairKind::ValueMistyped,
-                message: format!("finish: {detail}"),
+                message,
             },
         );
     }

@@ -93,13 +93,7 @@ impl ToolLike for KnowledgeTool {
             let action = input.get("action").and_then(Value::as_str).unwrap_or("");
             // The tool self-reports each outcome: only it can see a read/remove
             // miss, which returns Ok, so the shared tool-call loop cannot.
-            let record = |kind: EventKind| {
-                if let Some(queue) = ctx.ticket_queue_handle() {
-                    let key = ctx.ticket_key.as_deref().unwrap_or_default();
-                    let agent = ctx.agent_id_str().unwrap_or_default();
-                    queue.emit(key, agent, kind);
-                }
-            };
+            let record = |kind: EventKind| ctx.emit(kind);
 
             match action {
                 "write" => {

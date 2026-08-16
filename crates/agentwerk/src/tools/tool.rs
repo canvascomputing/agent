@@ -89,12 +89,15 @@ impl ToolContext {
         self
     }
 
-    pub(crate) fn ticket_queue_handle(&self) -> Option<&Arc<TicketQueue>> {
-        self.ticket_queue.as_ref()
-    }
-
-    pub(crate) fn agent_id_str(&self) -> Option<&str> {
-        self.agent_id.as_deref()
+    /// Publish `kind` for the ticket and agent this call runs for. A context
+    /// with no queue publishes nothing; the call still runs.
+    pub(crate) fn emit(&self, kind: EventKind) {
+        let Some(queue) = &self.ticket_queue else {
+            return;
+        };
+        let key = self.ticket_key.as_deref().unwrap_or_default();
+        let agent = self.agent_id.as_deref().unwrap_or_default();
+        queue.emit(key, agent, kind);
     }
 
     /// Resolves once the run starts to finish, whether the caller cancelled it
@@ -624,7 +627,12 @@ async fn invoke(
     if let Some(error) = non_object.filter(|_| !input.is_object()) {
         return Err(error);
     }
-    report_repairs(name, &repairs, ctx);
+    for pointer in &repairs {
+        ctx.emit(EventKind::ResponseRepaired {
+            reason: RepairKind::ValueMistyped,
+            message: repair_message(name, pointer),
+        });
+    }
     match t.call(input, ctx).await {
         Ok(ToolResult::Success(s)) => Ok(s),
         Ok(ToolResult::Error(s)) => Err(ToolError::ExecutionFailed {
@@ -642,6 +650,19 @@ async fn invoke(
     }
 }
 
+/// Name a repair `tool` made before running, by the JSON pointer it happened
+/// at; the empty pointer is the value as a whole. One wording for every
+/// reporter, since a host groups these by the tool name they lead with.
+///
+/// One verb covers both rewrites: decoding a payload the model wrote as text is
+/// the whole-value case of retyping it.
+pub(crate) fn repair_message(tool: &str, pointer: &str) -> String {
+    match pointer {
+        "" => format!("{tool}: retyped"),
+        path => format!("{tool}: {path} retyped"),
+    }
+}
+
 /// Name the payload that arrived in place of an arguments object, so a model
 /// that wrapped or double-encoded them sees what it sent.
 fn not_an_object(name: &str, input: &Value) -> ToolError {
@@ -656,31 +677,6 @@ fn not_an_object(name: &str, input: &Value) -> ToolError {
             "Tool arguments were not a JSON object. Send them as an object whose keys are this tool's parameters. Received: {}",
             truncate_preview(&received)
         ),
-    }
-}
-
-/// Name each argument the schema retyped, so a tool description that keeps
-/// causing one stays discoverable. A context with no queue still gets the
-/// repair; only the report needs somewhere to go.
-fn report_repairs(name: &str, repairs: &[String], ctx: &ToolContext) {
-    let Some(queue) = ctx.ticket_queue_handle() else {
-        return;
-    };
-    let key = ctx.ticket_key.as_deref().unwrap_or_default();
-    let agent = ctx.agent_id_str().unwrap_or_default();
-    for pointer in repairs {
-        let detail = match pointer.as_str() {
-            "" => "arguments decoded".to_string(),
-            path => format!("{path} retyped"),
-        };
-        queue.emit(
-            key,
-            agent,
-            EventKind::ResponseRepaired {
-                reason: RepairKind::ValueMistyped,
-                message: format!("{name}: {detail}"),
-            },
-        );
     }
 }
 
@@ -1293,6 +1289,17 @@ Do the demo thing.
                 RepairKind::ValueMistyped,
                 "typed: /count retyped".to_string()
             )]
+        );
+
+        seen.lock().unwrap().clear();
+        // No pointer names a whole payload the model wrote as text.
+        let arguments = Value::String(r#"{"count": 3}"#.into());
+        let (_, succeeded) = call_typed_in(arguments, &ctx).await;
+
+        assert!(succeeded);
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec![(RepairKind::ValueMistyped, "typed: retyped".to_string())]
         );
     }
 
