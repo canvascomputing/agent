@@ -43,6 +43,8 @@ fn description() -> &'static str {
 pub struct FetchUrlTool;
 
 impl ToolLike for FetchUrlTool {
+    type Args = Value;
+
     fn name(&self) -> &str {
         &tool_file().name
     }

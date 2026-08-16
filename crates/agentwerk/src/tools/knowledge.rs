@@ -70,6 +70,8 @@ fn usage_line(message: &str, store: &Knowledge) -> String {
 }
 
 impl ToolLike for KnowledgeTool {
+    type Args = Value;
+
     fn name(&self) -> &str {
         &tool_file().name
     }

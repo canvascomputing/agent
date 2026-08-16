@@ -321,7 +321,6 @@ fn parse_label(input: &Value) -> Result<Option<String>, ToolResult> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::tool::ToolLike;
     use super::*;
     use crate::agents::tickets::TicketQueue;
     use std::path::PathBuf;
@@ -364,8 +363,15 @@ mod tests {
             .join(format!("queue-{}", COUNTER.fetch_add(1, Ordering::Relaxed)))
     }
 
-    async fn call(tool: &dyn ToolLike, input: serde_json::Value, ctx: &ToolContext) -> ToolResult {
-        tool.call(input, ctx).await.unwrap()
+    async fn call(
+        tool: impl crate::tools::ToolLike + 'static,
+        input: serde_json::Value,
+        ctx: &ToolContext,
+    ) -> ToolResult {
+        crate::tools::erase(tool)
+            .call_with(input, ctx)
+            .await
+            .unwrap()
     }
 
     fn unwrap_text(result: &ToolResult) -> &str {
@@ -377,7 +383,7 @@ mod tests {
     async fn ticket_defaults_key_to_current_ticket() {
         let (queue, key) = shared_with_one_ticket("alice");
         let ctx = ctx_with(Arc::clone(&queue), "alice");
-        let result = call(&TicketsTool, serde_json::json!({"action": "ticket"}), &ctx).await;
+        let result = call(TicketsTool, serde_json::json!({"action": "ticket"}), &ctx).await;
         let text = unwrap_text(&result);
         assert!(text.contains(&key), "expected key in output: {text}");
         assert!(text.contains("body"));
@@ -392,7 +398,7 @@ mod tests {
 
         let ctx = ctx_with(Arc::clone(&queue), "bob");
         let result = call(
-            &TicketsTool,
+            TicketsTool,
             serde_json::json!({"action": "result", "key": key}),
             &ctx,
         )
@@ -414,7 +420,7 @@ mod tests {
             .unwrap();
 
         let ctx = ctx_with(Arc::clone(&queue), "alice");
-        let result = call(&TicketsTool, serde_json::json!({"action": "result"}), &ctx).await;
+        let result = call(TicketsTool, serde_json::json!({"action": "result"}), &ctx).await;
         let text = unwrap_text(&result);
         assert!(text.contains("what alice found"), "{text}");
     }
@@ -424,7 +430,7 @@ mod tests {
         let (queue, key) = shared_with_one_ticket("alice");
         let ctx = ctx_with(Arc::clone(&queue), "alice");
         let result = call(
-            &TicketsTool,
+            TicketsTool,
             serde_json::json!({"action": "result", "key": key}),
             &ctx,
         )
@@ -443,7 +449,7 @@ mod tests {
 
         let ctx = ctx_with(Arc::clone(&queue), "alice");
         let result = call(
-            &TicketsTool,
+            TicketsTool,
             serde_json::json!({"action": "list", "status": "InProgress"}),
             &ctx,
         )
@@ -459,7 +465,7 @@ mod tests {
         queue.dir(isolated_test_dir());
         let ctx = ctx_with(Arc::clone(&queue), "alice");
         let result = call(
-            &TicketsTool,
+            TicketsTool,
             serde_json::json!({"action": "create", "task": "new ticket"}),
             &ctx,
         )
@@ -476,7 +482,7 @@ mod tests {
         queue.dir(isolated_test_dir());
         let ctx = ctx_with(Arc::clone(&queue), "alice");
         let result = call(
-            &TicketsTool,
+            TicketsTool,
             serde_json::json!({
                 "action": "create",
                 "task": "new",
@@ -497,7 +503,7 @@ mod tests {
         queue.dir(isolated_test_dir());
         let ctx = ctx_with(Arc::clone(&queue), "alice");
         let result = call(
-            &TicketsTool,
+            TicketsTool,
             serde_json::json!({
                 "action": "create",
                 "task": "new",
@@ -524,7 +530,7 @@ mod tests {
 
         let ctx = ctx_with(Arc::clone(&queue), "alice");
         let result = call(
-            &TicketsTool,
+            TicketsTool,
             serde_json::json!({
                 "action": "create",
                 "task": "new",
@@ -545,7 +551,7 @@ mod tests {
         let (queue, key) = shared_with_one_ticket("alice");
         let ctx = ctx_with(Arc::clone(&queue), "alice");
         let result = call(
-            &TicketsTool,
+            TicketsTool,
             serde_json::json!({
                 "action": "edit",
                 "task": "new body",
@@ -565,7 +571,7 @@ mod tests {
         let (queue, _key) = shared_with_one_ticket("alice");
         let ctx = ctx_with(Arc::clone(&queue), "alice");
         for action in ["done", "transition", "comment", "assign", "attach"] {
-            let result = call(&TicketsTool, serde_json::json!({"action": action}), &ctx).await;
+            let result = call(TicketsTool, serde_json::json!({"action": action}), &ctx).await;
             assert!(
                 matches!(result, ToolResult::Error(_)),
                 "{action}: {result:?}"

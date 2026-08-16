@@ -38,6 +38,8 @@ fn description() -> &'static str {
 }
 
 impl ToolLike for ReadFileTool {
+    type Args = Value;
+
     fn name(&self) -> &str {
         &tool_file().name
     }
@@ -177,10 +179,10 @@ mod tests {
         use crate::tools::{EditFileTool, GlobTool, GrepTool, ListDirectoryTool, WriteFileTool};
 
         let input = serde_json::json!({"path": "src/lib.rs"});
-        let openers: Vec<Box<dyn ToolLike>> = vec![
-            Box::new(ReadFileTool),
-            Box::new(WriteFileTool),
-            Box::new(EditFileTool),
+        let openers: Vec<std::sync::Arc<dyn crate::tools::AnyTool>> = vec![
+            crate::tools::erase(ReadFileTool),
+            crate::tools::erase(WriteFileTool),
+            crate::tools::erase(EditFileTool),
         ];
         for tool in &openers {
             assert_eq!(

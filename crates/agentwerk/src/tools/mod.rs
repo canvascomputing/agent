@@ -18,7 +18,7 @@ mod tickets;
 mod write_file;
 
 pub use error::ToolError;
-pub use tool::{Tool, ToolContext, ToolLike, ToolResult};
+pub use tool::{erase, AnyTool, Tool, ToolContext, ToolLike, ToolResult};
 pub(crate) use tool::{ToolCall, ToolRegistry};
 
 pub use command::CommandTool;

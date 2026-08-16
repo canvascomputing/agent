@@ -40,6 +40,8 @@ fn description() -> &'static str {
 }
 
 impl ToolLike for FinishTool {
+    type Args = Value;
+
     fn name(&self) -> &str {
         &tool_file().name
     }

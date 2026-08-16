@@ -319,6 +319,8 @@ fn quoted(patterns: &[String]) -> String {
 }
 
 impl ToolLike for CommandTool {
+    type Args = Value;
+
     fn name(&self) -> &str {
         &self.tool_name
     }

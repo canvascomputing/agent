@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use agentwerk::providers::{Model, Provider};
-use agentwerk::tools::ToolLike;
+use agentwerk::tools::AnyTool;
 use agentwerk::{Agent, Knowledge};
 use pyo3::prelude::*;
 
@@ -32,7 +32,7 @@ pub struct PyAgent {
     interactive: bool,
     provider: Option<Provider>,
     model: Option<Model>,
-    tools: Vec<Arc<dyn ToolLike>>,
+    tools: Vec<Arc<dyn AnyTool>>,
     knowledge: Option<Arc<Knowledge>>,
     /// Set by `build()`. Every method that reaches the queue needs it.
     agent: Option<Agent>,

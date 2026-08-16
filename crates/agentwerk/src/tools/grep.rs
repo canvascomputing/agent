@@ -56,6 +56,8 @@ fn description() -> &'static str {
 }
 
 impl ToolLike for GrepTool {
+    type Args = Value;
+
     fn name(&self) -> &str {
         &tool_file().name
     }

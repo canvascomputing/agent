@@ -8,8 +8,9 @@ use std::sync::Arc;
 use agentwerk::providers::ProviderResult;
 use agentwerk::schemas::Schema;
 use agentwerk::tools::{
-    CommandTool, EditFileTool, FetchUrlTool, FinishTool, GlobTool, GrepTool, KnowledgeTool,
-    ListDirectoryTool, ReadFileTool, TicketsTool, ToolContext, ToolLike, ToolResult, WriteFileTool,
+    AnyTool, CommandTool, EditFileTool, FetchUrlTool, FinishTool, GlobTool, GrepTool,
+    KnowledgeTool, ListDirectoryTool, ReadFileTool, TicketsTool, ToolContext, ToolLike, ToolResult,
+    WriteFileTool,
 };
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -20,11 +21,13 @@ use crate::knowledge::PyKnowledge;
 
 /// Forwards `ToolLike` through an already-`Arc`'d trait object. The agent
 /// builder's `.tool(...)` takes `impl ToolLike` by value and re-wraps it in an
-/// `Arc`; a Python builder collects heterogeneous tools as `Arc<dyn ToolLike>`,
+/// `Arc`; a Python builder collects heterogeneous tools as `Arc<dyn AnyTool>`,
 /// so this newtype lets each one pass back through that by-value gate.
-pub struct BoxedTool(pub Arc<dyn ToolLike>);
+pub struct BoxedTool(pub Arc<dyn AnyTool>);
 
 impl ToolLike for BoxedTool {
+    type Args = Value;
+
     fn name(&self) -> &str {
         self.0.name()
     }
@@ -50,7 +53,7 @@ impl ToolLike for BoxedTool {
         input: Value,
         ctx: &'a ToolContext,
     ) -> Pin<Box<dyn Future<Output = ProviderResult<ToolResult>> + Send + 'a>> {
-        self.0.call(input, ctx)
+        self.0.call_with(input, ctx)
     }
 }
 
@@ -58,7 +61,7 @@ impl ToolLike for BoxedTool {
 /// one.
 #[pyclass(name = "Tool")]
 pub struct PyTool {
-    pub inner: Arc<dyn ToolLike>,
+    pub inner: Arc<dyn AnyTool>,
 }
 
 /// Turns a `@tool`-decorated Python function into a tool agentwerk can call.
@@ -75,6 +78,8 @@ struct PyToolAdapter {
 }
 
 impl ToolLike for PyToolAdapter {
+    type Args = Value;
+
     fn name(&self) -> &str {
         &self.name
     }
@@ -191,12 +196,12 @@ impl PyToolResult {
 
 /// Read a usable tool out of whatever Python passed to `.tool(...)`: a built-in
 /// handle, or a `@tool`-decorated function.
-pub fn extract_tool(obj: &Bound<'_, PyAny>) -> PyResult<Arc<dyn ToolLike>> {
+pub fn extract_tool(obj: &Bound<'_, PyAny>) -> PyResult<Arc<dyn AnyTool>> {
     if let Ok(handle) = obj.extract::<PyRef<PyTool>>() {
         return Ok(Arc::clone(&handle.inner));
     }
     if let Ok(command) = obj.extract::<PyRef<PyCommandTool>>() {
-        return Ok(Arc::new(command.inner.clone()));
+        return Ok(agentwerk::tools::erase(command.inner.clone()));
     }
     if obj.hasattr("_agentwerk_tool")? {
         let name = obj.getattr("_agentwerk_name")?.extract()?;
@@ -212,7 +217,7 @@ pub fn extract_tool(obj: &Bound<'_, PyAny>) -> PyResult<Arc<dyn ToolLike>> {
                 "tool `{name}` declares a schema that does not compile: {error}"
             ))
         })?;
-        return Ok(Arc::new(PyToolAdapter {
+        return Ok(agentwerk::tools::erase(PyToolAdapter {
             func: obj.clone().unbind(),
             name,
             description,
@@ -226,7 +231,7 @@ pub fn extract_tool(obj: &Bound<'_, PyAny>) -> PyResult<Arc<dyn ToolLike>> {
     ))
 }
 
-fn handle(inner: Arc<dyn ToolLike>) -> PyTool {
+fn handle(inner: Arc<dyn AnyTool>) -> PyTool {
     PyTool { inner }
 }
 
@@ -236,19 +241,19 @@ fn handle(inner: Arc<dyn ToolLike>) -> PyTool {
 #[pyfunction]
 #[pyo3(name = "ReadFileTool")]
 fn read_file_tool() -> PyTool {
-    handle(Arc::new(ReadFileTool))
+    handle(agentwerk::tools::erase(ReadFileTool))
 }
 
 #[pyfunction]
 #[pyo3(name = "WriteFileTool")]
 fn write_file_tool() -> PyTool {
-    handle(Arc::new(WriteFileTool))
+    handle(agentwerk::tools::erase(WriteFileTool))
 }
 
 #[pyfunction]
 #[pyo3(name = "EditFileTool")]
 fn edit_file_tool() -> PyTool {
-    handle(Arc::new(EditFileTool))
+    handle(agentwerk::tools::erase(EditFileTool))
 }
 
 /// Search file contents by regular expression, or by code shape with
@@ -256,25 +261,25 @@ fn edit_file_tool() -> PyTool {
 #[pyfunction]
 #[pyo3(name = "GrepTool")]
 fn grep_tool() -> PyTool {
-    handle(Arc::new(GrepTool))
+    handle(agentwerk::tools::erase(GrepTool))
 }
 
 #[pyfunction]
 #[pyo3(name = "GlobTool")]
 fn glob_tool() -> PyTool {
-    handle(Arc::new(GlobTool))
+    handle(agentwerk::tools::erase(GlobTool))
 }
 
 #[pyfunction]
 #[pyo3(name = "ListDirectoryTool")]
 fn list_directory_tool() -> PyTool {
-    handle(Arc::new(ListDirectoryTool))
+    handle(agentwerk::tools::erase(ListDirectoryTool))
 }
 
 #[pyfunction]
 #[pyo3(name = "FetchUrlTool")]
 fn fetch_url_tool() -> PyTool {
-    handle(Arc::new(FetchUrlTool))
+    handle(agentwerk::tools::erase(FetchUrlTool))
 }
 
 /// Point the knowledge tool at `store` without making it the agent's own.
@@ -284,7 +289,9 @@ fn fetch_url_tool() -> PyTool {
 #[pyfunction]
 #[pyo3(name = "KnowledgeTool")]
 fn knowledge_tool(store: PyRef<'_, PyKnowledge>) -> PyTool {
-    handle(Arc::new(KnowledgeTool::new(Arc::clone(&store.inner))))
+    handle(agentwerk::tools::erase(KnowledgeTool::new(Arc::clone(
+        &store.inner,
+    ))))
 }
 
 /// Write the result for the current ticket and mark it finished, handing work
@@ -292,13 +299,13 @@ fn knowledge_tool(store: PyRef<'_, PyKnowledge>) -> PyTool {
 #[pyfunction]
 #[pyo3(name = "FinishTool")]
 fn finish_tool() -> PyTool {
-    handle(Arc::new(FinishTool))
+    handle(agentwerk::tools::erase(FinishTool))
 }
 
 #[pyfunction]
 #[pyo3(name = "TicketsTool")]
 fn tickets_tool() -> PyTool {
-    handle(Arc::new(TicketsTool))
+    handle(agentwerk::tools::erase(TicketsTool))
 }
 
 /// Run a command the model calls by `name`, passed to `Agent.tool(...)`.

@@ -189,6 +189,11 @@ impl ToolResult {
 /// Implement it on any type an agent should be able to call. For a tool defined
 /// inline, use [`Tool`] and its builder instead.
 pub trait ToolLike: Send + Sync {
+    /// What this tool's arguments deserialize into, from a call the registry
+    /// has already checked against [`input_schema`](Self::input_schema). Use
+    /// `Value` to take the JSON as it arrived.
+    type Args: serde::de::DeserializeOwned + Send;
+
     /// The name the model calls the tool by.
     fn name(&self) -> &str;
 
@@ -219,7 +224,7 @@ pub trait ToolLike: Send + Sync {
     /// with [`ToolContext::cancelled`] in a `tokio::select!`.
     fn call<'a>(
         &'a self,
-        input: Value,
+        args: Self::Args,
         ctx: &'a ToolContext,
     ) -> Pin<Box<dyn Future<Output = ProviderResult<ToolResult>> + Send + 'a>>;
 }
@@ -280,8 +285,25 @@ impl<T: ToolLike> AnyTool for Erased<T> {
         input: Value,
         ctx: &'a ToolContext,
     ) -> Pin<Box<dyn Future<Output = ProviderResult<ToolResult>> + Send + 'a>> {
-        self.0.call(input, ctx)
+        match serde_json::from_value::<T::Args>(input) {
+            Ok(args) => self.0.call(args, ctx),
+            // The schema accepted this call, so the tool's schema and its
+            // argument type disagree: the author's mistake, not the model's.
+            // Reporting it as a schema failure would show the model a document
+            // its call already satisfied.
+            Err(error) => Box::pin(std::future::ready(Ok(ToolResult::error(format!(
+                "`{}` could not read its arguments: {error}",
+                self.0.name()
+            ))))),
+        }
     }
+}
+
+/// Erase a tool's argument type so it can sit beside tools whose arguments have
+/// other types. [`Agent::tool`](crate::AgentBuilder::tool) does this; a host
+/// collecting tools of its own needs it.
+pub fn erase(tool: impl ToolLike + 'static) -> Arc<dyn AnyTool> {
+    Arc::new(Erased(tool))
 }
 
 /// The tools one agent may call.
@@ -305,7 +327,7 @@ impl ToolRegistry {
     /// A request carrying one name twice is rejected, so the last registration
     /// is the one that counts.
     pub(crate) fn register(&mut self, tool: impl ToolLike + 'static) {
-        let tool: Arc<dyn AnyTool> = Arc::new(Erased(tool));
+        let tool = erase(tool);
         self.tools.retain(|t| t.name() != tool.name());
         self.tools.push(tool);
     }
@@ -594,6 +616,8 @@ impl ToolBuilder<ToolHandler> {
 }
 
 impl ToolLike for Tool {
+    type Args = Value;
+
     fn name(&self) -> &str {
         &self.name
     }
@@ -925,21 +949,21 @@ mod tests {
 
     /// Every tool agentwerk registers, for the checks that hold across all of
     /// them. The knowledge store is temporary; its tool is read, not used.
-    fn built_in_tools() -> (Vec<Box<dyn ToolLike>>, crate::test_util::TempDir) {
+    fn built_in_tools() -> (Vec<Arc<dyn AnyTool>>, crate::test_util::TempDir) {
         let dir = crate::test_util::TempDir::new().unwrap();
         let store = crate::agents::knowledge::Knowledge::load(dir.path()).unwrap();
-        let tools: Vec<Box<dyn ToolLike>> = vec![
-            Box::new(crate::tools::ReadFileTool),
-            Box::new(crate::tools::WriteFileTool),
-            Box::new(crate::tools::EditFileTool),
-            Box::new(crate::tools::GlobTool),
-            Box::new(crate::tools::GrepTool),
-            Box::new(crate::tools::ListDirectoryTool),
-            Box::new(crate::tools::FetchUrlTool),
-            Box::new(crate::tools::KnowledgeTool::new(store)),
-            Box::new(crate::tools::CommandTool::new("git").allow("git *")),
-            Box::new(crate::tools::FinishTool),
-            Box::new(crate::tools::TicketsTool),
+        let tools: Vec<Arc<dyn AnyTool>> = vec![
+            erase(crate::tools::ReadFileTool),
+            erase(crate::tools::WriteFileTool),
+            erase(crate::tools::EditFileTool),
+            erase(crate::tools::GlobTool),
+            erase(crate::tools::GrepTool),
+            erase(crate::tools::ListDirectoryTool),
+            erase(crate::tools::FetchUrlTool),
+            erase(crate::tools::KnowledgeTool::new(store)),
+            erase(crate::tools::CommandTool::new("git").allow("git *")),
+            erase(crate::tools::FinishTool),
+            erase(crate::tools::TicketsTool),
         ];
         (tools, dir)
     }
@@ -1028,6 +1052,8 @@ mod tests {
     }
 
     impl ToolLike for MockTool {
+        type Args = Value;
+
         fn name(&self) -> &str {
             &self.name
         }
@@ -1243,6 +1269,8 @@ Do the demo thing.
     struct TypedTool;
 
     impl ToolLike for TypedTool {
+        type Args = Value;
+
         fn name(&self) -> &str {
             "typed"
         }

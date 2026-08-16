@@ -37,6 +37,8 @@ fn description() -> &'static str {
 }
 
 impl ToolLike for TicketsTool {
+    type Args = Value;
+
     fn name(&self) -> &str {
         &tool_file().name
     }

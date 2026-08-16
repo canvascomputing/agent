@@ -37,6 +37,8 @@ fn description() -> &'static str {
 }
 
 impl ToolLike for EditFileTool {
+    type Args = Value;
+
     fn name(&self) -> &str {
         &tool_file().name
     }
