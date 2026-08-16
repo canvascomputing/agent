@@ -119,19 +119,14 @@ fn hand_over(
     // common handoff forwards the finding verbatim.
     let task = optional_string(input, "task");
 
-    // null and an empty string are rejected: a handoff needs a real result.
-    match &result {
-        Value::String(s) if s.is_empty() => {
-            return Err(ToolResult::schema_error(
-                "`result` must not be an empty string",
-            ))
-        }
-        Value::Null => {
-            return Err(ToolResult::schema_error(
-                "Missing required parameter: result",
-            ))
-        }
-        _ => {}
+    // A rule about the unwrapped result, not about the shape of the arguments,
+    // so the schema cannot state it: for an inlined ticket the result is the
+    // top-level arguments and there is no `result` to require.
+    if matches!(&result, Value::Null) || result.as_str().is_some_and(str::is_empty) {
+        return Err(ToolResult::error(
+            "A handover needs a result to pass on. Call `finish` again with a \
+             `result`, or without `handover` to finish without passing work on.",
+        ));
     }
 
     // A schema failure returns here, before any child exists.
@@ -1264,28 +1259,23 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn handover_rejects_missing_result() {
-        let dir = crate::test_util::TempDir::new().unwrap();
-        let (queue, _key) = one_ticket_in("alice", dir.path().to_path_buf());
-        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
-        let outcome = FinishTool
-            .call(serde_json::json!({"handover": "bob", "task": "x"}), &ctx)
-            .await
-            .unwrap();
-        assert!(matches!(outcome, ToolResult::SchemaError(_)));
-    }
-
-    #[tokio::test]
-    async fn handover_rejects_null_or_empty_result() {
+    async fn a_handover_with_nothing_to_pass_on_is_rejected() {
+        // Absent, null, and empty all leave the receiving agent a body that
+        // says nothing. The schema cannot state this: for an inlined ticket
+        // the result is the top-level arguments, with no `result` to require.
         let dir = crate::test_util::TempDir::new().unwrap();
         let (queue, _key) = one_ticket_in("alice", dir.path().to_path_buf());
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
         for body in [
+            serde_json::json!({"handover": "bob", "task": "x"}),
             serde_json::json!({"handover": "bob", "task": "x", "result": null}),
             serde_json::json!({"handover": "bob", "task": "x", "result": ""}),
         ] {
             let outcome = FinishTool.call(body, &ctx).await.unwrap();
-            assert!(matches!(outcome, ToolResult::SchemaError(_)));
+            assert!(
+                matches!(&outcome, ToolResult::Error(message) if message.contains("needs a result")),
+                "{outcome:?}",
+            );
         }
     }
 

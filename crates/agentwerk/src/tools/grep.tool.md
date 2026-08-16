@@ -34,6 +34,7 @@ In code mode `[a-z]`, `*`, `.`, and `\` are literal, and `<word>` is plain text,
   "properties": {
     "pattern": {
       "type": "string",
+      "minLength": 1,
       "description": "Regular expression over file contents. For a fixed call or code shape, use `syntax: \"code\"` instead of escaping."
     },
     "path": {

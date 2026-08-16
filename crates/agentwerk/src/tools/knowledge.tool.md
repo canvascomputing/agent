@@ -47,6 +47,22 @@ Read or write pages in your knowledge: durable facts shared across tickets and a
   },
   "required": [
     "action"
+  ],
+  "allOf": [
+    {
+      "if": {
+        "required": ["action"],
+        "properties": { "action": { "const": "write" } }
+      },
+      "then": { "required": ["slug", "description", "content"] }
+    },
+    {
+      "if": {
+        "required": ["action"],
+        "properties": { "action": { "enum": ["read", "remove"] } }
+      },
+      "then": { "required": ["slug"] }
+    }
   ]
 }
 ```

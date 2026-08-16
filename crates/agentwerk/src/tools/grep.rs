@@ -76,10 +76,7 @@ impl ToolLike for GrepTool {
         ctx: &'a ToolContext,
     ) -> Pin<Box<dyn Future<Output = Result<ToolResult>> + Send + 'a>> {
         Box::pin(async move {
-            let query = match Query::from_input(&input) {
-                Ok(query) => query,
-                Err(response) => return Ok(response),
-            };
+            let query = Query::from_input(&input);
 
             // The `grep`/`ignore` engine is synchronous, so run it on a blocking
             // thread: `grep` is parallel-callable and a 180s search must not stall
@@ -162,17 +159,9 @@ pub(super) struct Query {
 }
 
 impl Query {
-    /// Read the model's arguments, applying defaults. Returns an error
-    /// `ToolResult` (recoverable, not a hard failure) when `pattern` is missing.
-    fn from_input(input: &Value) -> std::result::Result<Query, ToolResult> {
-        let pattern = match input["pattern"].as_str() {
-            Some(pattern) if !pattern.is_empty() => pattern.to_string(),
-            _ => {
-                return Err(ToolResult::schema_error(
-                    "Missing required parameter: pattern",
-                ))
-            }
-        };
+    /// Read the model's arguments, applying defaults.
+    fn from_input(input: &Value) -> Query {
+        let pattern = input["pattern"].as_str().unwrap_or_default().to_string();
 
         // `-C`/`context` set both sides; `-A`/`-B` override the near or far side.
         let both = number(input, "-C").or_else(|| number(input, "context"));
@@ -190,7 +179,7 @@ impl Query {
             _ => Syntax::Regex,
         };
 
-        Ok(Query {
+        Query {
             pattern,
             path: string(input, "path"),
             glob: string(input, "glob"),
@@ -205,7 +194,7 @@ impl Query {
             multiline: input["multiline"].as_bool().unwrap_or(false),
             syntax,
             constraints: input["constraints"].clone(),
-        })
+        }
     }
 }
 

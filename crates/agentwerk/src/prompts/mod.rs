@@ -63,7 +63,7 @@ pub(crate) fn schema_directive(schema: &Value) -> String {
 /// call reads back the ticket's own fields.
 pub(crate) fn arguments_retry_detail(
     tool_name: &str,
-    validator_message: &str,
+    violations: &str,
     schema: Option<&Value>,
 ) -> String {
     let shape = schema
@@ -73,9 +73,8 @@ pub(crate) fn arguments_retry_detail(
         })
         .unwrap_or_default();
     format!(
-        "The arguments you passed to `{tool_name}` did not match its schema. Call \
-         `{tool_name}` again with arguments that match it. Validator said: \
-         {validator_message}{shape}"
+        "`{tool_name}` rejected your arguments. Call it again with arguments \
+         that match its schema.\n\n{violations}{shape}"
     )
 }
 

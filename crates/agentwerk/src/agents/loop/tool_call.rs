@@ -240,6 +240,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_conditional_requirement_retries_against_a_schema_that_states_it() {
+        // The message and the shape printed beside it have to agree. A model
+        // told `slug` is missing, beside a schema whose `required` list holds
+        // only `action`, has nothing to correct against.
+        let write_without_slug = crate::providers::types::ModelResponse {
+            content: vec![crate::providers::ContentBlock::ToolUse {
+                id: "call-1".into(),
+                name: "knowledge".into(),
+                input: serde_json::json!({"action": "write", "description": "d", "content": "c"}),
+            }],
+            status: crate::providers::types::ResponseStatus::ToolUse,
+            usage: crate::providers::types::TokenUsage::default(),
+            model: "mock".into(),
+        };
+        let provider = MockProvider::with_results(vec![
+            Ok(write_without_slug),
+            Ok(write_result_value(serde_json::json!({"partial_sum": 1}))),
+        ]);
+        let (events, _, _) = run_one(provider, 3, 10, Some(schema_for_partial_sum())).await;
+
+        let schema_retries = schema_retries_in(&events);
+        assert_eq!(schema_retries.len(), 1);
+        let message = &schema_retries[0].2;
+        assert!(
+            message.contains("missing required property `slug`"),
+            "{message}"
+        );
+
+        // The shape printed under the message rejects the same call for the
+        // same reason, so what the model reads back is what it was held to.
+        let shape = message.split("accepts:").nth(1).expect("schema is printed");
+        let advertised = Schema::new(serde_json::from_str(shape.trim()).expect("valid JSON"))
+            .expect("a schema the model was shown");
+        let violations = advertised
+            .validate(serde_json::json!({"action": "write", "description": "d", "content": "c"}))
+            .unwrap_err();
+        assert!(
+            violations.iter().any(|v| v.message.contains("`slug`")),
+            "{violations}"
+        );
+    }
+
+    #[tokio::test]
     async fn directive_editor_reads_the_reason_and_amends_the_default_directive() {
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let provider = MockProvider::with_results(vec![

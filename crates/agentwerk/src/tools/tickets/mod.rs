@@ -247,11 +247,7 @@ fn action_list(ticket_queue: &TicketQueue, input: &Value) -> ToolResult {
 }
 
 fn action_search(ticket_queue: &TicketQueue, input: &Value) -> ToolResult {
-    let query = match input["query"].as_str() {
-        Some(q) => q,
-        None => return ToolResult::schema_error("Missing required parameter: query"),
-    };
-    let needle = query.to_lowercase();
+    let needle = input["query"].as_str().unwrap_or_default().to_lowercase();
     let hits = ticket_queue.find_tickets(|t| match &t.task {
         Value::String(s) => s.to_lowercase().contains(&needle),
         other => other.to_string().to_lowercase().contains(&needle),
@@ -274,10 +270,7 @@ fn action_search(ticket_queue: &TicketQueue, input: &Value) -> ToolResult {
 }
 
 fn action_create(ticket_queue: &TicketQueue, input: &Value, ctx: &ToolContext) -> ToolResult {
-    let task = match input.get("task") {
-        Some(v) => v.clone(),
-        None => return ToolResult::schema_error("Missing required parameter: task"),
-    };
+    let task = input["task"].clone();
 
     let label = match parse_label(input) {
         Ok(l) => l,

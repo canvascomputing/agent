@@ -53,6 +53,22 @@ Read and mutate the ticket queue from one tool: `ticket` / `result` / `list` / `
   },
   "required": [
     "action"
+  ],
+  "allOf": [
+    {
+      "if": {
+        "required": ["action"],
+        "properties": { "action": { "const": "search" } }
+      },
+      "then": { "required": ["query"] }
+    },
+    {
+      "if": {
+        "required": ["action"],
+        "properties": { "action": { "const": "create" } }
+      },
+      "then": { "required": ["task"] }
+    }
   ]
 }
 ```

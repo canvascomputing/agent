@@ -90,35 +90,16 @@ impl ToolLike for KnowledgeTool {
         ctx: &'a ToolContext,
     ) -> Pin<Box<dyn Future<Output = ProviderResult<ToolResult>> + Send + 'a>> {
         Box::pin(async move {
-            let action = input.get("action").and_then(Value::as_str).unwrap_or("");
+            let action = input["action"].as_str().unwrap_or_default();
             // The tool self-reports each outcome: only it can see a read/remove
             // miss, which returns Ok, so the shared tool-call loop cannot.
             let record = |kind: EventKind| ctx.emit(kind);
 
             match action {
                 "write" => {
-                    let slug = match input.get("slug").and_then(Value::as_str) {
-                        Some(s) => s,
-                        None => {
-                            return Ok(ToolResult::schema_error("Missing required parameter: slug"))
-                        }
-                    };
-                    let description = match input.get("description").and_then(Value::as_str) {
-                        Some(s) => s,
-                        None => {
-                            return Ok(ToolResult::schema_error(
-                                "Missing required parameter: description",
-                            ))
-                        }
-                    };
-                    let content = match input.get("content").and_then(Value::as_str) {
-                        Some(s) => s,
-                        None => {
-                            return Ok(ToolResult::schema_error(
-                                "Missing required parameter: content",
-                            ))
-                        }
-                    };
+                    let slug = input["slug"].as_str().unwrap_or_default();
+                    let description = input["description"].as_str().unwrap_or_default();
+                    let content = input["content"].as_str().unwrap_or_default();
                     // Kind and tags stay host-side concerns set through the
                     // Page API; the model only names, describes, and fills a page.
                     let page = crate::agents::knowledge::Page {
@@ -146,12 +127,7 @@ impl ToolLike for KnowledgeTool {
                 }
 
                 "read" => {
-                    let slug = match input.get("slug").and_then(Value::as_str) {
-                        Some(s) => s,
-                        None => {
-                            return Ok(ToolResult::schema_error("Missing required parameter: slug"))
-                        }
-                    };
+                    let slug = input["slug"].as_str().unwrap_or_default();
                     match self.store.pages().load(slug) {
                         Ok(page) => {
                             record(EventKind::KnowledgeUsed {
@@ -172,12 +148,7 @@ impl ToolLike for KnowledgeTool {
                 }
 
                 "remove" => {
-                    let slug = match input.get("slug").and_then(Value::as_str) {
-                        Some(s) => s,
-                        None => {
-                            return Ok(ToolResult::schema_error("Missing required parameter: slug"))
-                        }
-                    };
+                    let slug = input["slug"].as_str().unwrap_or_default();
                     match self.store.pages().remove(slug) {
                         Ok(()) => {
                             record(EventKind::KnowledgeUsed {
@@ -250,17 +221,6 @@ mod tests {
                 assert!(s.contains(fragment), "expected `{fragment}` in `{s}`")
             }
             other => panic!("expected Success, got {other:?}"),
-        }
-    }
-
-    /// A rejected argument and a store that refused both read back the same way;
-    /// only the retry budget they count against differs.
-    fn assert_error(result: &ToolResult, fragment: &str) {
-        match result {
-            ToolResult::Error(s) | ToolResult::SchemaError(s) => {
-                assert!(s.contains(fragment), "expected `{fragment}` in `{s}`")
-            }
-            other => panic!("expected a failure, got {other:?}"),
         }
     }
 
@@ -390,69 +350,59 @@ mod tests {
         assert_success(&r, "(no pages)");
     }
 
-    #[tokio::test]
-    async fn write_without_slug_is_rejected() {
-        let (store, _dir) = fresh_store();
-        let tool = KnowledgeTool::new(Arc::clone(&store));
-        let r = tool
-            .call(
-                serde_json::json!({"action": "write", "description": "s", "content": "c"}),
-                &ctx(),
-            )
-            .await
-            .unwrap();
-        // `slug` is required for `write` alone, so the schema cannot demand it
-        // and dispatch cannot reject it. Reported as a schema failure all the
-        // same, which is what puts it under `max_schema_retries`.
-        assert!(matches!(r, ToolResult::SchemaError(_)), "{r:?}");
-        assert_error(&r, "slug");
+    /// Run a call the way an agent does: through the registry, which checks the
+    /// arguments against the schema before the tool sees them. The tests below
+    /// read what the model would.
+    async fn dispatch(store: &Arc<Knowledge>, input: Value) -> String {
+        let mut registry = crate::tools::ToolRegistry::default();
+        registry.register(KnowledgeTool::new(Arc::clone(store)));
+        let calls = vec![crate::tools::ToolCall {
+            id: "c1".into(),
+            name: "knowledge".into(),
+            input,
+        }];
+        let results = registry.execute(&calls, &ctx()).await;
+        match &results[0].0 {
+            crate::providers::ContentBlock::ToolResult { content, .. } => content.clone(),
+            other => panic!("expected a tool result, got {other:?}"),
+        }
     }
 
     #[tokio::test]
-    async fn write_without_description_is_rejected() {
+    async fn a_write_names_every_field_it_is_missing_at_once() {
         let (store, _dir) = fresh_store();
-        let tool = KnowledgeTool::new(Arc::clone(&store));
-        let r = tool
-            .call(
-                serde_json::json!({"action": "write", "slug": "test", "content": "c"}),
-                &ctx(),
-            )
-            .await
-            .unwrap();
-        assert_error(&r, "description");
+        let reported = dispatch(&store, serde_json::json!({"action": "write"})).await;
+        assert!(reported.contains("`slug`"), "{reported}");
+        assert!(reported.contains("`description`"), "{reported}");
+        assert!(reported.contains("`content`"), "{reported}");
     }
 
     #[tokio::test]
-    async fn write_without_content_is_rejected() {
+    async fn a_read_without_a_slug_is_rejected() {
         let (store, _dir) = fresh_store();
-        let tool = KnowledgeTool::new(Arc::clone(&store));
-        let r = tool
-            .call(
-                serde_json::json!({"action": "write", "slug": "test", "description": "s"}),
-                &ctx(),
-            )
-            .await
-            .unwrap();
-        assert_error(&r, "content");
+        let reported = dispatch(&store, serde_json::json!({"action": "read"})).await;
+        assert!(reported.contains("`slug`"), "{reported}");
     }
 
     #[tokio::test]
-    async fn unknown_action_is_rejected() {
+    async fn a_list_needs_no_other_field() {
         let (store, _dir) = fresh_store();
-        let tool = KnowledgeTool::new(Arc::clone(&store));
-        let r = tool
-            .call(serde_json::json!({"action": "wat"}), &ctx())
-            .await
-            .unwrap();
-        assert_error(&r, "Unknown action");
+        let reported = dispatch(&store, serde_json::json!({"action": "list"})).await;
+        assert_eq!(reported, "(no pages)");
     }
 
     #[tokio::test]
-    async fn missing_action_is_rejected() {
+    async fn an_unknown_action_is_rejected() {
         let (store, _dir) = fresh_store();
-        let tool = KnowledgeTool::new(Arc::clone(&store));
-        let r = tool.call(serde_json::json!({}), &ctx()).await.unwrap();
-        assert_error(&r, "action");
+        let reported = dispatch(&store, serde_json::json!({"action": "wat"})).await;
+        assert!(reported.contains("`enum`"), "{reported}");
+    }
+
+    #[tokio::test]
+    async fn a_missing_action_is_rejected() {
+        let (store, _dir) = fresh_store();
+        let reported = dispatch(&store, serde_json::json!({})).await;
+        assert!(reported.contains("`action`"), "{reported}");
     }
 
     #[tokio::test]
