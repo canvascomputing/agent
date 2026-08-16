@@ -216,16 +216,20 @@ pub trait ToolLike: Send + Sync {
 /// The tools one agent may call.
 #[derive(Clone, Default)]
 pub(crate) struct ToolRegistry {
-    pub(crate) tools: Vec<Arc<dyn ToolLike>>,
-    /// Keyed by registered name. A tool whose schema does not compile is absent
-    /// and its arguments reach it unchecked and unrepaired: that mistake is the
-    /// author's, and must not make the tool uncallable.
-    schemas: std::collections::HashMap<String, Schema>,
+    tools: Vec<Registered>,
+}
+
+/// A tool and the schema a call to it is checked against. Held together so
+/// there is no tool the registry can reach without one.
+#[derive(Clone)]
+struct Registered {
+    tool: Arc<dyn ToolLike>,
+    schema: Schema,
 }
 
 impl std::fmt::Debug for ToolRegistry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let names: Vec<&str> = self.tools.iter().map(|t| t.name()).collect();
+        let names: Vec<&str> = self.tools.iter().map(|r| r.tool.name()).collect();
         f.debug_struct("ToolRegistry")
             .field("tools", &names)
             .finish()
@@ -239,12 +243,12 @@ impl ToolRegistry {
     /// is the one that counts.
     pub(crate) fn register(&mut self, tool: impl ToolLike + 'static) {
         let tool: Arc<dyn ToolLike> = Arc::new(tool);
-        self.tools.retain(|t| t.name() != tool.name());
-        self.schemas.remove(tool.name());
-        if let Ok(schema) = Schema::new(tool.input_schema()) {
-            self.schemas.insert(tool.name().to_string(), schema);
-        }
-        self.tools.push(tool);
+        // A schema that does not compile is the author's mistake, not the
+        // model's. Falling back to "must be an object" keeps the tool callable
+        // and still checks the call, rather than leaving one tool unguarded.
+        let schema = Schema::new(tool.input_schema()).unwrap_or_else(|_| object_schema());
+        self.tools.retain(|r| r.tool.name() != tool.name());
+        self.tools.push(Registered { tool, schema });
     }
 
     /// Get the arguments `name` advertised for `ticket`, which is what a call
@@ -254,9 +258,7 @@ impl ToolRegistry {
     /// name reads back the schema of the tool that would have run.
     pub(crate) fn advertised_schema(&self, name: &str, ticket: Option<&Schema>) -> Option<Value> {
         let tool = self.get(name)?;
-        let registered = || self.schemas.get(tool.name()).map(Schema::get_raw_schema);
-        let advertised = advertised_document(&*tool, ticket);
-        advertised.or_else(|| registered().cloned())
+        Some(advertised(&*tool, ticket))
     }
 
     /// Get the tool a call reaches and the schema it is checked against, owned,
@@ -266,36 +268,48 @@ impl ToolRegistry {
     /// advertised: it accepts a `result` envelope the advertised shape does not
     /// name, unwraps it, and validates the result against the ticket itself.
     fn resolve(&self, name: &str) -> Resolved {
-        let Some(tool) = self.get(name) else {
-            return Resolved::Unknown {
+        match self.find(name) {
+            Some(found) => Ok((Arc::clone(&found.tool), found.schema.clone())),
+            None => Err(ToolError::ToolNotFound {
+                tool_name: name.into(),
                 available: self.names(),
-            };
-        };
-        let schema = self.schemas.get(tool.name()).cloned();
-        Resolved::Found { tool, schema }
+            }),
+        }
     }
 
     /// Get the tool a call names.
+    pub(crate) fn get(&self, name: &str) -> Option<Arc<dyn ToolLike>> {
+        self.find(name).map(|found| Arc::clone(&found.tool))
+    }
+
+    /// Find what a call name reaches.
     ///
     /// An exact match wins. Otherwise a spelling that reduces to the same key as
     /// exactly one registered tool resolves to it, so a model that adds a
     /// `_tool` suffix still reaches the right tool.
-    pub(crate) fn get(&self, name: &str) -> Option<Arc<dyn ToolLike>> {
+    fn find(&self, name: &str) -> Option<&Registered> {
         let name = name.trim();
-        if let Some(tool) = self.tools.iter().find(|t| t.name() == name) {
-            return Some(Arc::clone(tool));
+        if let Some(found) = self.tools.iter().find(|r| r.tool.name() == name) {
+            return Some(found);
         }
         let key = lookup_key(name);
-        let mut folded = self.tools.iter().filter(|t| lookup_key(t.name()) == key);
-        let tool = folded.next()?;
+        let mut folded = self
+            .tools
+            .iter()
+            .filter(|r| lookup_key(r.tool.name()) == key);
+        let found = folded.next()?;
         // A key two tools share is ambiguous: refuse rather than guess.
-        folded.next().is_none().then(|| Arc::clone(tool))
+        folded.next().is_none().then_some(found)
     }
 
     /// Get the registered names, sorted, for the error that tells the model what
     /// it could have called.
     fn names(&self) -> Vec<String> {
-        let mut names: Vec<String> = self.tools.iter().map(|t| t.name().to_string()).collect();
+        let mut names: Vec<String> = self
+            .tools
+            .iter()
+            .map(|r| r.tool.name().to_string())
+            .collect();
         names.sort();
         names
     }
@@ -305,10 +319,10 @@ impl ToolRegistry {
     pub(crate) fn definitions(&self, ticket: Option<&Schema>) -> Vec<ToolDefinition> {
         self.tools
             .iter()
-            .map(|t| ToolDefinition {
-                name: t.name().to_string(),
-                description: t.description().to_string(),
-                input_schema: advertised_document(&**t, ticket).unwrap_or_else(|| t.input_schema()),
+            .map(|r| ToolDefinition {
+                name: r.tool.name().to_string(),
+                description: r.tool.description().to_string(),
+                input_schema: advertised(&*r.tool, ticket),
             })
             .collect()
     }
@@ -353,17 +367,23 @@ impl ToolRegistry {
     }
 }
 
-/// Compose the arguments `tool` advertises for `ticket`. Only the finish tool's
-/// depend on it; `None` says this tool advertises what it registered.
+/// Compose the arguments `tool` shows the model for `ticket`. Only the finish
+/// tool's depend on it; every other tool shows what it registered.
 ///
-/// One answer serves the definitions the model is shown and the check its call
-/// meets, so the two cannot disagree about the shape.
-fn advertised_document(tool: &dyn ToolLike, ticket: Option<&Schema>) -> Option<Value> {
-    let ticket = ticket.filter(|_| tool.name() == super::TICKET_FINISH_TOOL)?;
-    Some(super::finish_tool_input_schema(
-        tool.input_schema(),
-        Some(ticket),
-    ))
+/// One answer serves the definitions the model is shown and the shape a
+/// rejected call reads back, so the two cannot disagree.
+fn advertised(tool: &dyn ToolLike, ticket: Option<&Schema>) -> Value {
+    match ticket.filter(|_| tool.name() == super::TICKET_FINISH_TOOL) {
+        Some(ticket) => super::finish_tool_input_schema(tool.input_schema(), Some(ticket)),
+        None => tool.input_schema(),
+    }
+}
+
+/// The schema a tool whose own document does not compile is checked against.
+/// Every tool call carries an arguments object, so this is the least the
+/// registry can hold a call to.
+fn object_schema() -> Schema {
+    Schema::new(serde_json::json!({"type": "object"})).expect("a literal object schema compiles")
 }
 
 /// Reduce a tool name to the key lookups match on, so capitalization, hyphens,
@@ -560,17 +580,11 @@ type ToolOutcome = (
     Option<PathBuf>,
 );
 
-/// What a call name resolved to. The tools a batch runs concurrently are
-/// resolved before the batch spawns, so each task owns what it needs.
-enum Resolved {
-    Found {
-        tool: Arc<dyn ToolLike>,
-        schema: Option<Schema>,
-    },
-    Unknown {
-        available: Vec<String>,
-    },
-}
+/// What a call name resolved to: the tool and the schema its arguments are
+/// checked against, or the failure naming what could have been called instead.
+/// The tools a batch runs concurrently are resolved before the batch spawns, so
+/// each task owns what it needs.
+type Resolved = std::result::Result<(Arc<dyn ToolLike>, Schema), ToolError>;
 
 /// Run one call to the outcome the turn collects: check the arguments, run the
 /// tool, then stand in for an empty or oversized result.
@@ -585,46 +599,23 @@ async fn run_call(found: Resolved, call: &ToolCall, ctx: &ToolContext) -> ToolOu
 /// Check the arguments against the schema the tool registered, then run it on
 /// what survives.
 async fn invoke(
-    found: Resolved,
+    resolved: Resolved,
     name: &str,
     input: Value,
     ctx: &ToolContext,
 ) -> std::result::Result<String, ToolError> {
-    let (tool, schema) = match found {
-        Resolved::Found { tool, schema } => (tool, schema),
-        Resolved::Unknown { available } => {
-            return Err(ToolError::ToolNotFound {
-                tool_name: name.into(),
-                available,
-            })
-        }
-    };
-    // Built before the retype, which consumes the value: a payload no rewrite
-    // recovers is quoted back as it arrived.
-    let non_object = (!input.is_object()).then(|| not_an_object(name, &input));
-
+    let (tool, schema) = resolved?;
     // Retyped rather than refused, so a quoted number runs the call the model
-    // asked for. A rewrite the schema then rejects is discarded, so what comes
-    // back names the model's own value.
-    let (input, repairs) = match schema {
-        Some(schema) => match schema.validate(input) {
-            Ok(repaired) => repaired,
-            Err(violations) => {
-                return Err(
-                    non_object.unwrap_or_else(|| ToolError::SchemaValidationFailed {
-                        tool_name: name.into(),
-                        message: violations.to_string(),
-                    }),
-                )
-            }
-        },
-        None => (input, Vec::new()),
-    };
-    // Indexing a non-object `Value` yields null, so every tool would report its
-    // own first parameter missing rather than the arguments not being an object.
-    if let Some(error) = non_object.filter(|_| !input.is_object()) {
-        return Err(error);
-    }
+    // asked for and arguments it wrote as JSON text are decoded. What comes
+    // back names the value that produced, which is the one the tool would have
+    // received.
+    let (input, repairs) =
+        schema
+            .validate(input)
+            .map_err(|violations| ToolError::SchemaValidationFailed {
+                tool_name: name.into(),
+                message: violations.to_string(),
+            })?;
     for pointer in &repairs {
         ctx.emit(EventKind::ResponseRepaired {
             reason: RepairKind::ValueMistyped,
@@ -658,27 +649,6 @@ pub(crate) fn repair_message(tool: &str, pointer: &str) -> String {
     match pointer {
         "" => format!("{tool}: retyped"),
         path => format!("{tool}: {path} retyped"),
-    }
-}
-
-/// Name the payload that arrived in place of an arguments object, so a model
-/// that wrapped or double-encoded them sees what it sent.
-///
-/// A schema failure like any other: arguments that are not an object are the
-/// coarsest way to miss the shape, and reporting them apart would put the one
-/// case a retry most needs outside `max_schema_retries`.
-fn not_an_object(name: &str, input: &Value) -> ToolError {
-    // Quote a string payload raw; `to_string` would escape and requote it.
-    let received = match input.as_str() {
-        Some(text) => text.to_string(),
-        None => input.to_string(),
-    };
-    ToolError::SchemaValidationFailed {
-        tool_name: name.into(),
-        message: format!(
-            "Tool arguments were not a JSON object. Send them as an object whose keys are this tool's parameters. Received: {}",
-            truncate_preview(&received)
-        ),
     }
 }
 
@@ -1166,8 +1136,14 @@ Do the demo thing.
             panic!("Expected ToolResult");
         };
         assert!(!succeeded);
-        assert!(content.contains("not a JSON object"));
-        assert!(content.contains(r#"{"pattern": "exec""#));
+        assert!(
+            content.contains("expected type object, got string"),
+            "{content}"
+        );
+        assert!(
+            content.contains("send it as JSON, not as a string"),
+            "{content}"
+        );
         assert_ne!(content, "matches");
     }
 
@@ -1304,9 +1280,10 @@ Do the demo thing.
         assert!(succeeded);
     }
 
-    #[test]
-    fn a_tool_whose_schema_does_not_compile_stays_callable() {
-        // The mistake is the author's; the agent should not pay for it.
+    #[tokio::test]
+    async fn a_tool_whose_schema_does_not_compile_is_still_held_to_an_object() {
+        // The mistake is the author's; the agent should not pay for it with an
+        // uncallable tool, nor with the one call nothing checks.
         struct Unschemable;
         impl ToolLike for Unschemable {
             fn name(&self) -> &str {
@@ -1328,29 +1305,50 @@ Do the demo thing.
         }
         let mut registry = ToolRegistry::default();
         registry.register(Unschemable);
-        assert!(registry.get("unschemable").is_some());
-        assert!(matches!(
-            registry.resolve("unschemable"),
-            Resolved::Found { schema: None, .. }
-        ));
+        let calls = vec![ToolCall {
+            id: "c1".into(),
+            name: "unschemable".into(),
+            input: serde_json::json!({"anything": 1}),
+        }];
+        let results = registry.execute(&calls, &test_ctx()).await;
+        let ContentBlock::ToolResult { content, .. } = &results[0].0 else {
+            panic!("Expected ToolResult");
+        };
+        assert_eq!(content, "ran");
+
+        let calls = vec![ToolCall {
+            id: "c2".into(),
+            name: "unschemable".into(),
+            input: Value::String("not an object".into()),
+        }];
+        let results = registry.execute(&calls, &test_ctx()).await;
+        let ContentBlock::ToolResult {
+            content, succeeded, ..
+        } = &results[0].0
+        else {
+            panic!("Expected ToolResult");
+        };
+        assert!(!succeeded);
+        assert!(content.contains("expected type object"), "{content}");
     }
 
     #[test]
-    fn every_built_in_tool_advertises_a_schema_dispatch_can_check() {
-        let mut registry = ToolRegistry::default();
-        registry.register(crate::tools::ReadFileTool);
-        registry.register(crate::tools::WriteFileTool);
-        registry.register(crate::tools::EditFileTool);
-        registry.register(crate::tools::GrepTool);
-        registry.register(crate::tools::GlobTool);
-        registry.register(crate::tools::ListDirectoryTool);
-        registry.register(crate::tools::FetchUrlTool);
-        registry.register(crate::tools::FinishTool);
-        let unchecked: Vec<&str> = registry
-            .tools
+    fn every_built_in_tool_declares_a_schema_that_compiles() {
+        let tools: Vec<Box<dyn ToolLike>> = vec![
+            Box::new(crate::tools::ReadFileTool),
+            Box::new(crate::tools::WriteFileTool),
+            Box::new(crate::tools::EditFileTool),
+            Box::new(crate::tools::GrepTool),
+            Box::new(crate::tools::GlobTool),
+            Box::new(crate::tools::ListDirectoryTool),
+            Box::new(crate::tools::FetchUrlTool),
+            Box::new(crate::tools::FinishTool),
+            Box::new(crate::tools::TicketsTool),
+        ];
+        let unchecked: Vec<&str> = tools
             .iter()
+            .filter(|tool| Schema::new(tool.input_schema()).is_err())
             .map(|tool| tool.name())
-            .filter(|name| matches!(registry.resolve(name), Resolved::Found { schema: None, .. }))
             .collect();
         assert!(
             unchecked.is_empty(),

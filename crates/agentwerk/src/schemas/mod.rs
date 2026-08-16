@@ -946,14 +946,20 @@ fn join_or(labels: &[&str]) -> String {
 }
 
 /// The change to suggest when a type is wrong only because the model quoted the
-/// value. The report is written from the value as it arrived, so this is
-/// reached for a field the retype recovered too, whenever something else failed.
+/// value. Reached for what no retype recovered, since the report is written
+/// from what the retype produced.
 fn retype_hint(types: &[JsonType], instance: &Value) -> Option<&'static str> {
     let unquoted = types
         .iter()
         .any(|t| matches!(t, JsonType::Integer | JsonType::Number | JsonType::Boolean));
+    let structured = types
+        .iter()
+        .any(|t| matches!(t, JsonType::Object | JsonType::Array));
     match instance {
         Value::String(_) if unquoted => Some("send the value unquoted"),
+        // A structure written as text is decoded when it parses, so what
+        // reaches here is text that did not.
+        Value::String(_) if structured => Some("send it as JSON, not as a string"),
         Value::Number(_) | Value::Bool(_) if types.contains(&JsonType::String) => {
             Some("send the value quoted")
         }
