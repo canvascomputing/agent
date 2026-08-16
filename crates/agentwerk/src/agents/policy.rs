@@ -5,30 +5,26 @@ use std::time::Duration;
 /// Execution limits and retry tuning the loop reads from the ticket
 /// queue. Set on a `TicketQueue` via `.max_turns(...)`,
 /// `.max_time(...)`, `.max_input_tokens(...)`, etc. A breached limit emits
-/// `EventKind::PolicyViolated` and halts execution. `compact_at` is the one
-/// entry that cannot be breached: it moves a trigger rather than limiting
-/// anything.
+/// `EventKind::PolicyViolated` and halts execution. `None` means no limit,
+/// except on `compact_at`, the one entry that cannot be breached: it moves a
+/// trigger rather than limiting anything.
 #[derive(Clone, Debug)]
 pub(crate) struct Policies {
-    /// Limit on the total number of turns. `None` for no limit.
     pub max_turns: Option<u32>,
-    /// Limit on the total input tokens. `None` for no limit.
     pub max_input_tokens: Option<u64>,
-    /// Limit on the total output tokens. `None` for no limit.
     pub max_output_tokens: Option<u64>,
-    /// Limit on the input tokens per request. `None` for no limit.
+    /// The output tokens of a single request, not its input.
     pub max_request_tokens: Option<u32>,
-    /// Limit on consecutive failed tool calls and silent no-tool replies;
-    /// any successful call resets the count. `None` for no limit.
+    /// Consecutive failed tool calls and silent no-tool replies; any
+    /// successful call resets the count.
     pub max_schema_retries: Option<u32>,
-    /// Limit on the retry attempts on recoverable provider errors.
+    /// Retries on recoverable provider errors.
     pub max_request_retries: u32,
-    /// Base delay between request retries.
+    /// Base of the exponential backoff between request retries.
     pub request_retry_delay: Duration,
-    /// Limit on the total elapsed duration. `None` for no limit.
     pub max_time: Option<Duration>,
-    /// Fraction of the context window at which compaction fires. `None` uses the
-    /// built-in default fraction.
+    /// Fraction of the context window at which compaction fires. `None` uses
+    /// the built-in default fraction.
     pub compact_at: Option<f64>,
 }
 
