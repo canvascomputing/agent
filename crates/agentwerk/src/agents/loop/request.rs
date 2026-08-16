@@ -6,8 +6,7 @@ use std::sync::Arc;
 use crate::agents::retry::{ExponentialRetry, Retry};
 use crate::event::{CompactReason, EventKind, RepairKind};
 use crate::providers::types::StreamEvent;
-use crate::providers::{ContentBlock, ModelRequest, ProviderError, ToolDefinition};
-use crate::schemas::Schema;
+use crate::providers::{ContentBlock, ModelRequest, ProviderError};
 use crate::tools::ToolCall;
 
 use super::agent::TicketContext;
@@ -21,8 +20,8 @@ pub(super) async fn run(context: &mut TicketContext<'_>) -> Option<Step> {
     let Some(ticket) = context.ticket() else {
         return None;
     };
-    let tools =
-        finish_tool_with_ticket_schema(ticket.schema.as_ref(), context.agent.tool_definitions());
+    let registry = context.agent.tool_registry();
+    let tools = registry.definitions(ticket.schema.as_ref());
     let model_name = context.model.name.clone();
     context.emit(EventKind::RequestStarted {
         model: model_name.clone(),
@@ -130,23 +129,6 @@ pub(super) async fn run(context: &mut TicketContext<'_>) -> Option<Step> {
     } else {
         Some(Step::ToolCalls(calls))
     }
-}
-
-/// Advertise the finish tool's arguments in the shape the current ticket expects:
-/// an object schema inlines to top-level arguments, everything else keeps the
-/// `result` envelope. Shares `finish_tool_input_schema` with the `finish` tool
-/// so the advertised shape and the parsed shape always agree.
-fn finish_tool_with_ticket_schema(
-    schema: Option<&Schema>,
-    mut tools: Vec<ToolDefinition>,
-) -> Vec<ToolDefinition> {
-    for definition in &mut tools {
-        if definition.name == crate::tools::TICKET_FINISH_TOOL {
-            definition.input_schema =
-                crate::tools::finish_tool_input_schema(definition.input_schema.clone(), schema);
-        }
-    }
-    tools
 }
 
 #[cfg(test)]

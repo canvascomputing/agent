@@ -610,7 +610,7 @@ tickets.on_event(|event| {
 | | `TicketFinished` | A ticket finished successfully. |
 | | `TicketFailed` | A ticket failed. |
 | | `TurnStarted` | The agent began another turn on its ticket. |
-| | `SchemaRetried` | A result missed its schema and the agent was asked again. |
+| | `SchemaRetried` | A call or a result missed its schema and the agent was asked again. |
 | **LLM provider** | `RequestStarted` | A request went out to the model. |
 | | `RequestFinished` | A request finished and reported its token usage. |
 | | `RequestFailed` | A request failed and was not retried. |

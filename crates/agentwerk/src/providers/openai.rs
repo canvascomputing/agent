@@ -173,10 +173,10 @@ impl Protocol for OpenAiChat {
 
     fn recover(
         reply: &mut ModelResponse,
-        request: &ModelRequest,
+        _request: &ModelRequest,
         on_event: &Arc<dyn Fn(StreamEvent) + Send + Sync>,
     ) {
-        parsing::recover_framed_calls(reply, &request.tools, on_event);
+        parsing::recover_framed_calls(reply, on_event);
     }
 }
 

@@ -40,10 +40,9 @@ pub(crate) fn compaction_directive() -> &'static str {
 
 /// Render the model-facing block that tells the agent how to return a result
 /// matching `schema`, with the document as pretty JSON. Leads with a blank line
-/// so callers append it directly after preceding text. Shared by the ticket seed
-/// message and the schema-retry directive so the wording stays in step. An
-/// object schema is passed as the finish tool's top-level arguments; any other
-/// shape rides in `result`, the only place a scalar or array fits.
+/// so callers append it directly after preceding text. An object schema is
+/// passed as the finish tool's top-level arguments; any other shape rides in
+/// `result`, the only place a scalar or array fits.
 pub(crate) fn schema_directive(schema: &Value) -> String {
     let pretty = serde_json::to_string_pretty(schema).unwrap_or_default();
     if is_object_schema(schema) {
@@ -55,23 +54,29 @@ pub(crate) fn schema_directive(schema: &Value) -> String {
     }
 }
 
-/// Compose the detail string for a schema-validation retry. Plugged
-/// into `retry_directive` when a finish tool's output does not match
-/// the ticket's schema. The validator names what was wrong but not the
-/// target shape, so the schema is rendered via [`schema_directive`] and
-/// appended when known: without it a model that guessed the shape has
-/// nothing new to correct against. Object-schema tickets are always finished
-/// via a finish tool that inlines, so the argument wording is correct there.
-pub(crate) fn schema_retry_detail(validator_message: &str, schema: Option<&Value>) -> String {
-    let shape = schema.map(schema_directive).unwrap_or_default();
-    let lead = if schema.is_some_and(is_object_schema) {
-        "The arguments you passed did not match the ticket's schema. Call `finish` \
-         again with the fields as its top-level arguments that match it."
-    } else {
-        "The `result` you passed did not match the ticket's schema. Call `finish` \
-         again with `result` set to a JSON value that matches it."
-    };
-    format!("{lead} Validator said: {validator_message}{shape}")
+/// Compose the detail string for a call whose arguments did not match the
+/// schema its tool advertises. The validator names what was wrong but not the
+/// target shape, so the schema is appended when known: without it a model that
+/// guessed the shape has nothing new to correct against.
+///
+/// The schema is the one the tool advertised for this ticket, so a `finish`
+/// call reads back the ticket's own fields.
+pub(crate) fn arguments_retry_detail(
+    tool_name: &str,
+    validator_message: &str,
+    schema: Option<&Value>,
+) -> String {
+    let shape = schema
+        .map(|schema| {
+            let pretty = serde_json::to_string_pretty(schema).unwrap_or_default();
+            format!("\n\nThe arguments `{tool_name}` accepts:\n{pretty}")
+        })
+        .unwrap_or_default();
+    format!(
+        "The arguments you passed to `{tool_name}` did not match its schema. Call \
+         `{tool_name}` again with arguments that match it. Validator said: \
+         {validator_message}{shape}"
+    )
 }
 
 fn is_object_schema(schema: &Value) -> bool {
@@ -218,23 +223,25 @@ mod tests {
     }
 
     #[test]
-    fn schema_retry_detail_appends_the_schema_when_known() {
+    fn arguments_retry_detail_names_the_tool_and_its_schema() {
         let schema = serde_json::json!({
             "type": "object",
-            "properties": {"summary": {"type": "string"}},
+            "properties": {"offset": {"type": "integer"}},
         });
-        let rendered = schema_retry_detail("expected type object, got string", Some(&schema));
-        assert!(rendered.contains("expected type object, got string"));
-        // The model that guessed wrong now sees the keys it must produce.
-        assert!(rendered.contains("matching this schema"));
-        assert!(rendered.contains("summary"));
+        let rendered =
+            arguments_retry_detail("read_file", "/offset: expected type integer", Some(&schema));
+        assert!(rendered.contains("read_file"));
+        assert!(rendered.contains("/offset: expected type integer"));
+        assert!(rendered.contains("offset"));
+        // Pointing at `finish` is the mistake this wording exists to avoid.
+        assert!(!rendered.contains("finish"), "{rendered}");
     }
 
     #[test]
-    fn schema_retry_detail_adds_no_shape_without_a_schema() {
-        let rendered = schema_retry_detail("expected type object, got string", None);
-        assert!(rendered.contains("expected type object, got string"));
-        assert!(!rendered.contains("matching this schema"));
+    fn arguments_retry_detail_adds_no_shape_without_a_schema() {
+        let rendered = arguments_retry_detail("read_file", "/offset: expected type integer", None);
+        assert!(rendered.contains("read_file"));
+        assert!(!rendered.contains("accepts:"));
     }
 
     #[test]

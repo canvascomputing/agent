@@ -368,8 +368,8 @@ pub enum EventKind {
     },
     /// A limit was breached and execution stopped.
     PolicyViolated { policy: PolicyKind, limit: u64 },
-    /// A result missed its schema and the agent was asked again. `attempt`
-    /// counts from one.
+    /// A call or a result missed its schema and the agent was asked again.
+    /// `attempt` counts from one.
     SchemaRetried {
         attempt: u32,
         max_attempts: u32,

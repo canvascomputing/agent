@@ -139,14 +139,6 @@ impl Schema {
         &self.inner.raw_document
     }
 
-    /// Report what `value` violates, repairing nothing. Tool arguments take this
-    /// rather than [`validate`](Self::validate): retyping them would run the
-    /// call on something the model did not ask for, where a named violation
-    /// tells it what to send instead.
-    pub(crate) fn violations(&self, value: &Value) -> Result<(), SchemaViolations> {
-        self.check(value).map_err(SchemaViolations)
-    }
-
     /// Check `value` against the schema and report every violation, each
     /// naming where in the value it occurred.
     fn check(&self, instance: &Value) -> Result<(), Vec<SchemaViolation>> {
@@ -955,8 +947,8 @@ fn join_or(labels: &[&str]) -> String {
 }
 
 /// The change to suggest when a type is wrong only because the model quoted the
-/// value. Only reached once the retype declined, so it speaks to a value no
-/// rewrite could recover.
+/// value. The report is written from the value as it arrived, so this is
+/// reached for a field the retype recovered too, whenever something else failed.
 fn retype_hint(types: &[JsonType], instance: &Value) -> Option<&'static str> {
     let unquoted = types
         .iter()
@@ -1023,6 +1015,13 @@ impl Node {
             }
         }
 
+        // Outside the block above: an `enum` with no declared `type` never
+        // reaches it, and the value the model wrote is still recoverable.
+        if let Some(declared) = self.enum_candidate(value) {
+            *value = declared;
+            out.push(instance_path.to_string());
+        }
+
         // Recurse once the value holds its final shape. `additionalProperties`
         // carries no subschema here and `items` has no tuple form, so a
         // property and an element are the only children to reach.
@@ -1045,6 +1044,31 @@ impl Node {
             }
             _ => {}
         }
+    }
+
+    /// The one declared value `value` names, read without case or padding.
+    /// Two candidates naming it means the spelling picks neither, so nothing
+    /// is rewritten.
+    fn enum_candidate(&self, value: &Value) -> Option<Value> {
+        let candidates = self.enum_values.as_ref()?;
+        if candidates.iter().any(|candidate| candidate == value) {
+            return None;
+        }
+        let written = text_form(value);
+        let mut named = candidates
+            .iter()
+            .filter(|candidate| text_form(candidate) == written);
+        let candidate = named.next()?;
+        named.next().is_none().then(|| candidate.clone())
+    }
+}
+
+/// The text a value reads as, folded so a capitalised or padded spelling still
+/// names the declared one.
+fn text_form(value: &Value) -> String {
+    match value {
+        Value::String(text) => text.trim().to_lowercase(),
+        other => other.to_string(),
     }
 }
 
@@ -1223,6 +1247,42 @@ mod tests {
         let schema = Schema::new(json!({"const": 42})).unwrap();
         assert!(schema.validate(json!(42)).is_ok());
         assert!(schema.validate(json!(43)).is_err());
+    }
+
+    #[test]
+    fn validate_reads_an_enum_value_the_model_capitalised() {
+        let schema = Schema::new(json!({"type": "string", "enum": ["content", "count"]})).unwrap();
+        assert_eq!(kept(&schema, json!("Content")), json!("content"));
+    }
+
+    #[test]
+    fn validate_reads_an_enum_value_the_model_padded() {
+        let schema = Schema::new(json!({"type": "string", "enum": ["content"]})).unwrap();
+        assert_eq!(kept(&schema, json!(" content ")), json!("content"));
+    }
+
+    #[test]
+    fn validate_leaves_a_value_two_enum_candidates_read_as_alone() {
+        // Neither spelling is the one meant, so the violation names the value.
+        let schema = Schema::new(json!({"enum": ["draft", "Draft"]})).unwrap();
+        assert!(schema.validate(json!("DRAFT")).is_err());
+    }
+
+    #[test]
+    fn validate_reads_an_enum_value_with_no_declared_type() {
+        let schema = Schema::new(json!({"enum": ["open", "closed"]})).unwrap();
+        assert_eq!(kept(&schema, json!("OPEN")), json!("open"));
+    }
+
+    #[test]
+    fn validate_names_the_pointer_of_an_enum_it_read() {
+        let schema = Schema::new(json!({
+            "type": "object",
+            "properties": {"mode": {"enum": ["content"]}},
+        }))
+        .unwrap();
+        let (_, repaired) = schema.validate(json!({"mode": "Content"})).unwrap();
+        assert_eq!(repaired, vec!["/mode"]);
     }
 
     // Object

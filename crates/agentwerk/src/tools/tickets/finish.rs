@@ -1166,7 +1166,7 @@ mod tests {
         // Dispatch checks the arguments, so a blank one never reaches the tool.
         let schema = Schema::new(FinishTool.input_schema()).unwrap();
         assert!(schema
-            .violations(&serde_json::json!({"handover": "  ", "task": "x", "result": "y"}))
+            .validate(serde_json::json!({"handover": "  ", "task": "x", "result": "y"}))
             .is_err());
     }
 
@@ -1316,11 +1316,13 @@ mod tests {
     }
 
     #[test]
-    fn a_non_string_task_violates_the_advertised_schema() {
+    fn a_number_where_the_advertised_schema_declares_a_string_is_retyped() {
         let schema = Schema::new(FinishTool.input_schema()).unwrap();
-        assert!(schema
-            .violations(&serde_json::json!({"handover": "bob", "task": 42, "result": "ok"}))
-            .is_err());
+        let (validated, repaired) = schema
+            .validate(serde_json::json!({"handover": "bob", "task": 42, "result": "ok"}))
+            .unwrap();
+        assert_eq!(validated["task"], serde_json::json!("42"));
+        assert_eq!(repaired, vec!["/task"]);
     }
 
     #[tokio::test]

@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::event::{EventKind, PolicyKind, RepairKind, ToolFailureKind};
-use crate::prompts::schema_retry_detail;
+use crate::prompts::arguments_retry_detail;
 use crate::providers::ContentBlock;
 use crate::tools::{ToolCall, ToolContext, ToolError};
 
@@ -43,13 +43,11 @@ pub(super) async fn run(context: &mut TicketContext<'_>, mut calls: Vec<ToolCall
         .agent_id(context.agent.get_id().to_string())
         .ticket_key(context.ticket_key.clone())
         .knowledge(context.agent.knowledge());
-    let outcomes = context
-        .agent
-        .tool_registry()
-        .execute(&calls, &tool_context)
-        .await;
+    let ticket_schema = context.ticket().and_then(|ticket| ticket.schema);
+    let registry = context.agent.tool_registry();
+    let outcomes = registry.execute(&calls, &tool_context).await;
 
-    let mut schema_failure_message: Option<String> = None;
+    let mut schema_failure: Option<(String, String)> = None;
     for (block, tool_result, _path) in &outcomes {
         let ContentBlock::ToolResult { tool_use_id, .. } = block else {
             continue;
@@ -88,9 +86,9 @@ pub(super) async fn run(context: &mut TicketContext<'_>, mut calls: Vec<ToolCall
                 context.consecutive_schema_failures =
                     context.consecutive_schema_failures.saturating_add(1);
                 if matches!(error, ToolError::SchemaValidationFailed { .. })
-                    && schema_failure_message.is_none()
+                    && schema_failure.is_none()
                 {
-                    schema_failure_message = Some(error.message());
+                    schema_failure = Some((error.tool_name().to_string(), error.message()));
                 }
                 let failure_kind = match error {
                     ToolError::ToolNotFound { .. } => ToolFailureKind::ToolNotFound,
@@ -125,12 +123,10 @@ pub(super) async fn run(context: &mut TicketContext<'_>, mut calls: Vec<ToolCall
         }
         blocks.push(block);
     }
-    if let Some(validator_message) = &schema_failure_message {
-        let schema = context
-            .ticket()
-            .and_then(|ticket| ticket.schema)
-            .and_then(|schema| serde_json::to_value(&schema).ok());
-        let schema_detail = schema_retry_detail(validator_message, schema.as_ref());
+    if let Some((failing_tool, validator_message)) = &schema_failure {
+        let advertised = registry.advertised_schema(failing_tool, ticket_schema.as_ref());
+        let schema_detail =
+            arguments_retry_detail(failing_tool, validator_message, advertised.as_ref());
         let retried = context.emit(EventKind::SchemaRetried {
             attempt: context.consecutive_schema_failures,
             max_attempts: max_schema_retries,
@@ -226,6 +222,21 @@ mod tests {
             "retry message must carry validator detail: {:?}",
             schema_retries[0].2,
         );
+    }
+
+    #[tokio::test]
+    async fn an_argument_violation_retries_against_the_failing_tools_own_schema() {
+        let provider = MockProvider::with_results(vec![
+            Ok(tool_call_response("tickets")),
+            Ok(write_result_value(serde_json::json!({"partial_sum": 1}))),
+        ]);
+        let (events, _, _) = run_one(provider, 3, 10, Some(schema_for_partial_sum())).await;
+
+        let schema_retries = schema_retries_in(&events);
+        assert_eq!(schema_retries.len(), 1);
+        let message = &schema_retries[0].2;
+        assert!(message.contains("tickets"), "{message}");
+        assert!(!message.contains("finish"), "{message}");
     }
 
     #[tokio::test]

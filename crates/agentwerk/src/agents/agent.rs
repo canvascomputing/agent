@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex, Weak};
 use serde::Serialize;
 
 use crate::prompts::{context_values, render_context, PromptBuilder};
-use crate::providers::{Model, Provider, ToolDefinition};
+use crate::providers::{Model, Provider};
 use crate::tools::{FinishTool, KnowledgeTool, ToolLike, ToolRegistry};
 
 use super::knowledge::Knowledge;
@@ -214,8 +214,8 @@ impl<P, M> AgentBuilder<P, M> {
         self.label.as_deref() == ticket_label
     }
 
-    pub(super) fn tool_definitions(&self) -> Vec<ToolDefinition> {
-        self.tools.definitions()
+    pub(super) fn tool_registry(&self) -> &ToolRegistry {
+        &self.tools
     }
 
     pub(super) fn system_prompt(
@@ -409,10 +409,6 @@ impl Agent {
 
     pub(super) fn handles(&self, ticket_label: Option<&str>) -> bool {
         self.label.as_deref() == ticket_label
-    }
-
-    pub(super) fn tool_definitions(&self) -> Vec<ToolDefinition> {
-        self.tools.definitions()
     }
 
     pub(super) fn tool_registry(&self) -> &ToolRegistry {
@@ -691,10 +687,11 @@ mod tests {
     #[test]
     fn new_agent_has_finish_registered() {
         let agent = Agent::new();
-        let names: Vec<String> = agent
-            .tool_definitions()
+        let registry = agent.tool_registry();
+        let names: Vec<String> = registry
+            .definitions(None)
             .into_iter()
-            .map(|d| d.name)
+            .map(|definition| definition.name)
             .collect();
         assert!(names.iter().any(|n| n == "finish"));
     }
@@ -789,10 +786,11 @@ mod tests {
         let dir = crate::test_util::TempDir::new().unwrap();
         let store = Knowledge::load(dir.path()).unwrap();
         let agent = Agent::new().knowledge(&store);
-        let names: Vec<String> = agent
-            .tool_definitions()
+        let registry = agent.tool_registry();
+        let names: Vec<String> = registry
+            .definitions(None)
             .into_iter()
-            .map(|d| d.name)
+            .map(|definition| definition.name)
             .collect();
         assert!(
             names.iter().any(|n| n == "knowledge"),
@@ -881,10 +879,11 @@ mod tests {
     #[test]
     fn new_agent_has_the_knowledge_tool_registered() {
         let agent = Agent::new();
-        let names: Vec<String> = agent
-            .tool_definitions()
+        let registry = agent.tool_registry();
+        let names: Vec<String> = registry
+            .definitions(None)
             .into_iter()
-            .map(|d| d.name)
+            .map(|definition| definition.name)
             .collect();
         assert!(
             names.iter().any(|n| n == "knowledge"),

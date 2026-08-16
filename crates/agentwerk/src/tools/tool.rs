@@ -10,6 +10,7 @@ use serde_json::Value;
 
 use crate::agents::knowledge::Knowledge;
 use crate::agents::tickets::{Run, TicketQueue};
+use crate::event::{EventKind, RepairKind};
 use crate::providers::types::ContentBlock;
 use crate::providers::{ProviderResult, ToolDefinition};
 use crate::schemas::Schema;
@@ -214,8 +215,8 @@ pub trait ToolLike: Send + Sync {
 pub(crate) struct ToolRegistry {
     pub(crate) tools: Vec<Arc<dyn ToolLike>>,
     /// Keyed by registered name. A tool whose schema does not compile is absent
-    /// and its arguments reach it unchecked: that mistake is the author's, and
-    /// must not make the tool uncallable.
+    /// and its arguments reach it unchecked and unrepaired: that mistake is the
+    /// author's, and must not make the tool uncallable.
     schemas: std::collections::HashMap<String, Schema>,
 }
 
@@ -243,14 +244,29 @@ impl ToolRegistry {
         self.tools.push(tool);
     }
 
+    /// Get the arguments `name` advertised for `ticket`, which is what a call
+    /// this registry rejected reads back.
+    ///
     /// Resolved through the same spelling fold as [`get`](Self::get), so a folded
-    /// name is checked against the tool that will run.
-    fn schema_for(&self, name: &str) -> Option<Schema> {
+    /// name reads back the schema of the tool that would have run.
+    pub(crate) fn advertised_schema(&self, name: &str, ticket: Option<&Schema>) -> Option<Value> {
+        let tool = self.get(name)?;
+        let registered = || self.schemas.get(tool.name()).map(Schema::get_raw_schema);
+        let advertised = advertised_document(&*tool, ticket);
+        advertised.or_else(|| registered().cloned())
+    }
+
+    /// Get the schema a call is checked against before the tool runs.
+    ///
+    /// The finish tool is checked against what it registered rather than what it
+    /// advertised: it accepts a `result` envelope the advertised shape does not
+    /// name, unwraps it, and validates the result against the ticket itself.
+    fn checked_schema(&self, name: &str) -> Option<Schema> {
         let tool = self.get(name)?;
         self.schemas.get(tool.name()).cloned()
     }
 
-    /// Find the tool a call names.
+    /// Get the tool a call names.
     ///
     /// An exact match wins. Otherwise a spelling that reduces to the same key as
     /// exactly one registered tool resolves to it, so a model that adds a
@@ -267,22 +283,23 @@ impl ToolRegistry {
         folded.next().is_none().then(|| Arc::clone(tool))
     }
 
-    /// The registered names, sorted, for the error that tells the model what it
-    /// could have called.
-    fn tool_names(&self) -> Vec<String> {
+    /// Get the registered names, sorted, for the error that tells the model what
+    /// it could have called.
+    fn names(&self) -> Vec<String> {
         let mut names: Vec<String> = self.tools.iter().map(|t| t.name().to_string()).collect();
         names.sort();
         names
     }
 
-    /// The tool definitions sent to the model.
-    pub(crate) fn definitions(&self) -> Vec<ToolDefinition> {
+    /// Get the tool definitions sent to the model, the finish tool's arguments
+    /// carrying `ticket`'s schema.
+    pub(crate) fn definitions(&self, ticket: Option<&Schema>) -> Vec<ToolDefinition> {
         self.tools
             .iter()
             .map(|t| ToolDefinition {
                 name: t.name().to_string(),
                 description: t.description().to_string(),
-                input_schema: t.input_schema(),
+                input_schema: advertised_document(&**t, ticket).unwrap_or_else(|| t.input_schema()),
             })
             .collect()
     }
@@ -316,8 +333,8 @@ impl ToolRegistry {
                         let sem = semaphore.clone();
                         let ctx = ctx.clone();
                         let tool_arc = self.get(&call.name);
-                        let available = tool_arc.is_none().then(|| self.tool_names());
-                        let schema = self.schema_for(&call.name);
+                        let available = tool_arc.is_none().then(|| self.names());
+                        let schema = self.checked_schema(&call.name);
                         let call_id = call.id.clone();
                         let call_name = call.name.clone();
                         let input = call.input.clone();
@@ -342,8 +359,8 @@ impl ToolRegistry {
                 }
                 ToolBatch::Serial(call) => {
                     let tool_arc = self.get(&call.name);
-                    let available = tool_arc.is_none().then(|| self.tool_names());
-                    let schema = self.schema_for(&call.name);
+                    let available = tool_arc.is_none().then(|| self.names());
+                    let schema = self.checked_schema(&call.name);
                     let outcome = invoke(
                         tool_arc,
                         available,
@@ -366,6 +383,19 @@ impl ToolRegistry {
 
         results
     }
+}
+
+/// Compose the arguments `tool` advertises for `ticket`. Only the finish tool's
+/// depend on it; `None` says this tool advertises what it registered.
+///
+/// One answer serves the definitions the model is shown and the check its call
+/// meets, so the two cannot disagree about the shape.
+fn advertised_document(tool: &dyn ToolLike, ticket: Option<&Schema>) -> Option<Value> {
+    let ticket = ticket.filter(|_| tool.name() == super::TICKET_FINISH_TOOL)?;
+    Some(super::finish_tool_input_schema(
+        tool.input_schema(),
+        Some(ticket),
+    ))
 }
 
 /// Reduce a tool name to the key lookups match on, so capitalization, hyphens,
@@ -568,32 +598,33 @@ async fn invoke(
             available: available.unwrap_or_default(),
         });
     };
+    // Built before the retype, which consumes the value: a payload no rewrite
+    // recovers is quoted back as it arrived.
+    let non_object = (!input.is_object()).then(|| not_an_object(name, &input));
+
+    // Retyped rather than refused, so a quoted number runs the call the model
+    // asked for. A rewrite the schema then rejects is discarded, so what comes
+    // back names the model's own value.
+    let (input, repairs) = match schema {
+        Some(schema) => match schema.validate(input) {
+            Ok(repaired) => repaired,
+            Err(violations) => {
+                return Err(
+                    non_object.unwrap_or_else(|| ToolError::SchemaValidationFailed {
+                        tool_name: name.into(),
+                        message: violations.to_string(),
+                    }),
+                )
+            }
+        },
+        None => (input, Vec::new()),
+    };
     // Indexing a non-object `Value` yields null, so every tool would report its
     // own first parameter missing rather than the arguments not being an object.
-    if !input.is_object() {
-        // Quote a string payload raw; `to_string` would escape and requote it.
-        let received = match input.as_str() {
-            Some(text) => text.to_string(),
-            None => input.to_string(),
-        };
-        return Err(ToolError::ExecutionFailed {
-            tool_name: name.into(),
-            message: format!(
-                "Tool arguments were not a JSON object. Send them as an object whose keys are this tool's parameters. Received: {}",
-                truncate_preview(&received)
-            ),
-        });
+    if let Some(error) = non_object.filter(|_| !input.is_object()) {
+        return Err(error);
     }
-    // Checked once here, so a wrong type is named rather than read as a missing
-    // argument and silently defaulted.
-    if let Some(schema) = schema {
-        if let Err(violations) = schema.violations(&input) {
-            return Err(ToolError::SchemaValidationFailed {
-                tool_name: name.into(),
-                message: violations.to_string(),
-            });
-        }
-    }
+    report_repairs(name, &repairs, ctx);
     match t.call(input, ctx).await {
         Ok(ToolResult::Success(s)) => Ok(s),
         Ok(ToolResult::Error(s)) => Err(ToolError::ExecutionFailed {
@@ -608,6 +639,48 @@ async fn invoke(
             tool_name: name.into(),
             message: e.to_string(),
         }),
+    }
+}
+
+/// Name the payload that arrived in place of an arguments object, so a model
+/// that wrapped or double-encoded them sees what it sent.
+fn not_an_object(name: &str, input: &Value) -> ToolError {
+    // Quote a string payload raw; `to_string` would escape and requote it.
+    let received = match input.as_str() {
+        Some(text) => text.to_string(),
+        None => input.to_string(),
+    };
+    ToolError::ExecutionFailed {
+        tool_name: name.into(),
+        message: format!(
+            "Tool arguments were not a JSON object. Send them as an object whose keys are this tool's parameters. Received: {}",
+            truncate_preview(&received)
+        ),
+    }
+}
+
+/// Name each argument the schema retyped, so a tool description that keeps
+/// causing one stays discoverable. A context with no queue still gets the
+/// repair; only the report needs somewhere to go.
+fn report_repairs(name: &str, repairs: &[String], ctx: &ToolContext) {
+    let Some(queue) = ctx.ticket_queue_handle() else {
+        return;
+    };
+    let key = ctx.ticket_key.as_deref().unwrap_or_default();
+    let agent = ctx.agent_id_str().unwrap_or_default();
+    for pointer in repairs {
+        let detail = match pointer.as_str() {
+            "" => "arguments decoded".to_string(),
+            path => format!("{path} retyped"),
+        };
+        queue.emit(
+            key,
+            agent,
+            EventKind::ResponseRepaired {
+                reason: RepairKind::ValueMistyped,
+                message: format!("{name}: {detail}"),
+            },
+        );
     }
 }
 
@@ -872,7 +945,7 @@ mod tests {
         registry.register(MockTool::new("echo", true, "first"));
         registry.register(MockTool::new("echo", true, "second"));
 
-        let definitions = registry.definitions();
+        let definitions = registry.definitions(None);
         assert_eq!(definitions.len(), 1);
         assert_eq!(definitions[0].name, "echo");
     }
@@ -1011,10 +1084,46 @@ Do the demo thing.
         registry.register(MockTool::new("read", true, "ok"));
         registry.register(MockTool::new("write", false, "ok"));
 
-        let defs = registry.definitions();
+        let defs = registry.definitions(None);
         assert_eq!(defs.len(), 2);
         assert_eq!(defs[0].name, "read");
         assert_eq!(defs[1].name, "write");
+    }
+
+    #[test]
+    fn a_rejected_call_reads_back_the_arguments_its_tool_advertised() {
+        let mut registry = ToolRegistry::default();
+        registry.register(crate::tools::FinishTool);
+        let ticket = Schema::new(serde_json::json!({
+            "type": "object",
+            "properties": {"partial_sum": {"type": "integer"}},
+            "required": ["partial_sum"],
+        }))
+        .unwrap();
+
+        let definitions = registry.definitions(Some(&ticket));
+        let advertised = registry.advertised_schema("finish", Some(&ticket)).unwrap();
+
+        let shown = definitions
+            .iter()
+            .find(|definition| definition.name == "finish")
+            .expect("finish is registered");
+        assert_eq!(shown.input_schema, advertised);
+        assert!(
+            advertised["properties"]["partial_sum"].is_object(),
+            "{advertised}"
+        );
+    }
+
+    #[test]
+    fn a_tool_the_ticket_says_nothing_about_advertises_what_it_registered() {
+        let mut registry = ToolRegistry::default();
+        registry.register(TypedTool);
+        let ticket = Schema::new(serde_json::json!({"type": "string"})).unwrap();
+
+        let advertised = registry.advertised_schema("typed", Some(&ticket)).unwrap();
+
+        assert_eq!(advertised, TypedTool.input_schema());
     }
 
     #[test]
@@ -1022,7 +1131,7 @@ Do the demo thing.
         let mut registry = ToolRegistry::default();
         registry.register(MockTool::new("t", true, "ok"));
         let cloned = registry.clone();
-        assert_eq!(cloned.definitions().len(), 1);
+        assert_eq!(cloned.definitions(None).len(), 1);
     }
 
     #[tokio::test]
@@ -1073,7 +1182,8 @@ Do the demo thing.
     }
 
     /// A tool that declares what its one argument must be, so dispatch has
-    /// something to check a call against.
+    /// something to check a call against. It answers with the argument it
+    /// received, which is what the retype tests read.
     struct TypedTool;
 
     impl ToolLike for TypedTool {
@@ -1092,14 +1202,18 @@ Do the demo thing.
         }
         fn call<'a>(
             &'a self,
-            _input: Value,
+            input: Value,
             _ctx: &'a ToolContext,
         ) -> Pin<Box<dyn Future<Output = ProviderResult<ToolResult>> + Send + 'a>> {
-            Box::pin(async move { Ok(ToolResult::success("ran")) })
+            Box::pin(async move { Ok(ToolResult::success(input["count"].to_string())) })
         }
     }
 
     async fn call_typed(input: Value) -> (String, bool) {
+        call_typed_in(input, &test_ctx()).await
+    }
+
+    async fn call_typed_in(input: Value, ctx: &ToolContext) -> (String, bool) {
         let mut registry = ToolRegistry::default();
         registry.register(TypedTool);
         let calls = vec![ToolCall {
@@ -1107,7 +1221,7 @@ Do the demo thing.
             name: "typed".into(),
             input,
         }];
-        let results = registry.execute(&calls, &test_ctx()).await;
+        let results = registry.execute(&calls, ctx).await;
         let ContentBlock::ToolResult {
             content, succeeded, ..
         } = &results[0].0
@@ -1121,16 +1235,27 @@ Do the demo thing.
     async fn arguments_matching_the_declared_schema_reach_the_tool() {
         let (content, succeeded) = call_typed(serde_json::json!({"count": 3})).await;
         assert!(succeeded);
-        assert_eq!(content, "ran");
+        assert_eq!(content, "3");
     }
 
     #[tokio::test]
-    async fn an_argument_of_the_wrong_type_is_named_and_never_reaches_the_tool() {
-        // The quoted number is not retyped: running the call on something the
-        // model did not ask for is worse than telling it what to send.
+    async fn an_argument_the_model_quoted_is_retyped_before_the_tool_runs() {
         let (content, succeeded) = call_typed(serde_json::json!({"count": "3"})).await;
+        assert!(succeeded);
+        assert_eq!(content, "3");
+    }
+
+    #[tokio::test]
+    async fn arguments_the_model_quoted_whole_are_decoded_before_the_tool_runs() {
+        let (content, succeeded) = call_typed(Value::String(r#"{"count": 3}"#.into())).await;
+        assert!(succeeded);
+        assert_eq!(content, "3");
+    }
+
+    #[tokio::test]
+    async fn an_argument_no_retype_recovers_is_named_and_never_reaches_the_tool() {
+        let (content, succeeded) = call_typed(serde_json::json!({"count": "three"})).await;
         assert!(!succeeded);
-        assert_ne!(content, "ran");
         assert!(content.contains("count"), "{content}");
     }
 
@@ -1138,8 +1263,37 @@ Do the demo thing.
     async fn a_missing_required_argument_is_named_and_never_reaches_the_tool() {
         let (content, succeeded) = call_typed(serde_json::json!({})).await;
         assert!(!succeeded);
-        assert_ne!(content, "ran");
         assert!(content.contains("count"), "{content}");
+    }
+
+    #[tokio::test]
+    async fn a_retyped_argument_is_reported_as_a_repair() {
+        let dir = crate::test_util::TempDir::new().unwrap();
+        let queue = TicketQueue::new();
+        queue.dir(dir.path().to_path_buf());
+        let seen: Arc<std::sync::Mutex<Vec<(RepairKind, String)>>> =
+            Arc::new(std::sync::Mutex::new(Vec::new()));
+        let collected = Arc::clone(&seen);
+        queue.on_event(move |event| {
+            if let EventKind::ResponseRepaired { reason, message } = &event.kind {
+                collected.lock().unwrap().push((*reason, message.clone()));
+            }
+        });
+        let ctx = ToolContext::new(dir.path().to_path_buf())
+            .ticket_queue(Arc::clone(&queue))
+            .agent_id("alice".into())
+            .ticket_key("TICKET-1".into());
+
+        let (_, succeeded) = call_typed_in(serde_json::json!({"count": "3"}), &ctx).await;
+
+        assert!(succeeded);
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec![(
+                RepairKind::ValueMistyped,
+                "typed: /count retyped".to_string()
+            )]
+        );
     }
 
     #[tokio::test]
@@ -1174,7 +1328,7 @@ Do the demo thing.
         let mut registry = ToolRegistry::default();
         registry.register(Unschemable);
         assert!(registry.get("unschemable").is_some());
-        assert!(registry.schema_for("unschemable").is_none());
+        assert!(registry.checked_schema("unschemable").is_none());
     }
 
     #[test]
@@ -1192,7 +1346,7 @@ Do the demo thing.
             .tools
             .iter()
             .map(|tool| tool.name())
-            .filter(|name| registry.schema_for(name).is_none())
+            .filter(|name| registry.checked_schema(name).is_none())
             .collect();
         assert!(
             unchecked.is_empty(),

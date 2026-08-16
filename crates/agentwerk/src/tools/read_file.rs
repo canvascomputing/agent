@@ -201,6 +201,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_slice_the_model_quoted_reads_the_lines_it_asked_for() {
+        // Dispatch retypes against the advertised schema, which is what keeps
+        // these `as_u64` reads from silently defaulting to the whole file.
+        let dir = crate::test_util::TempDir::new().unwrap();
+        std::fs::write(dir.path().join("test.txt"), "alpha\nbeta\ngamma\ndelta\n").unwrap();
+        let mut registry = crate::tools::tool::ToolRegistry::default();
+        registry.register(ReadFileTool);
+        let calls = vec![crate::tools::ToolCall {
+            id: "c1".into(),
+            name: "read_file".into(),
+            input: serde_json::json!({"path": "test.txt", "offset": "2", "limit": "2"}),
+        }];
+
+        let results = registry.execute(&calls, &test_ctx(dir.path())).await;
+
+        assert_eq!(results[0].1.as_deref().unwrap(), "2\tbeta\n3\tgamma");
+    }
+
+    #[tokio::test]
     async fn read_file_cases() {
         let dir = crate::test_util::TempDir::new().unwrap();
         let file_path = dir.path().join("test.txt");

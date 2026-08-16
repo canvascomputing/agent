@@ -15,7 +15,6 @@ use serde_json::{Map, Value};
 use super::error::{ProviderError, ProviderResult};
 use super::types::{
     ContentBlock, ModelResponse, ResponseStatus, StreamEvent, TokenUsage, ToolDeclineKind,
-    ToolDefinition,
 };
 
 // ---------- reading one reply ----------
@@ -394,7 +393,6 @@ const PARAMETER_CLOSE: &str = "</parameter>";
 /// the tools that exist rather than the call vanishing into the reply text.
 pub(crate) fn recover_framed_calls(
     response: &mut ModelResponse,
-    tools: &[ToolDefinition],
     on_event: &Arc<dyn Fn(StreamEvent) + Send + Sync>,
 ) {
     let framed = find_framed_calls(response);
@@ -410,7 +408,7 @@ pub(crate) fn recover_framed_calls(
         return;
     }
     strip_framed_syntax(response);
-    apply_framed_calls(response, tools, &framed, on_event);
+    apply_framed_calls(response, &framed, on_event);
 }
 
 /// Read every framed call the reply carries, leaving the reply as it is.
@@ -469,7 +467,6 @@ fn decline_reason(status: &ResponseStatus) -> Option<ToolDeclineKind> {
 /// what keeps a call the endpoint delivered from running twice.
 fn apply_framed_calls(
     response: &mut ModelResponse,
-    tools: &[ToolDefinition],
     framed: &[FramedCall],
     on_event: &Arc<dyn Fn(StreamEvent) + Send + Sync>,
 ) {
@@ -488,7 +485,6 @@ fn apply_framed_calls(
         let position = seen.entry(call.name.as_str()).or_default();
         let at = *position;
         *position += 1;
-        let typed = retype_arguments(call, schema_for(tools, &call.name));
 
         let Some(input) = nth_delivered_input(response, &call.name, at) else {
             if delivered.contains(call.name.as_str()) {
@@ -499,7 +495,7 @@ fn apply_framed_calls(
                 added.push(ContentBlock::ToolUse {
                     id: format!("repaired_{offset}"),
                     name: call.name.clone(),
-                    input: typed,
+                    input: arguments_as_object(call),
                 });
                 report_repaired(call, on_event);
             }
@@ -507,9 +503,9 @@ fn apply_framed_calls(
         };
 
         if input.as_object().is_none_or(|fields| fields.is_empty()) {
-            *input = typed;
+            *input = arguments_as_object(call);
             report_repaired(call, on_event);
-        } else if *input != typed {
+        } else if !same_call(call, input) {
             report_declined(call, ToolDeclineKind::AlreadyDelivered, on_event);
         }
         // A delivered call whose arguments already match is the call the model
@@ -555,40 +551,31 @@ fn report_repaired(call: &FramedCall, on_event: &Arc<dyn Fn(StreamEvent) + Send 
     });
 }
 
-/// A parameter declared `boolean` and read with `as_bool()` sees nothing when it
-/// arrives as the text `"true"`.
-fn retype_arguments(call: &FramedCall, input_schema: &Value) -> Value {
-    let properties = &input_schema["properties"];
-    let typed = call
+/// Every value stays the text the model typed: the registry retypes a call's
+/// arguments against the schema the tool advertises, reading the unions,
+/// nested properties, and enums a second engine here never would.
+fn arguments_as_object(call: &FramedCall) -> Value {
+    let fields = call
         .arguments
         .iter()
-        .map(|(key, value)| (key.clone(), retype_value(value, &properties[key])));
-    Value::Object(Map::from_iter(typed))
+        .map(|(name, text)| (name.clone(), Value::String(text.clone())));
+    Value::Object(Map::from_iter(fields))
 }
 
-/// A value that does not parse as its declared type stays text, so the tool
-/// reports the real problem rather than a guess at what was meant.
-fn retype_value(value: &str, schema: &Value) -> Value {
-    let fits = |parsed: &Value| match schema["type"].as_str().unwrap_or_default() {
-        "boolean" => parsed.is_boolean(),
-        "integer" | "number" => parsed.is_number(),
-        "array" => parsed.is_array(),
-        "object" => parsed.is_object(),
-        _ => false,
+/// The delivered call, written a second time as text. A framed value is always
+/// text, so a delivered one is compared by what it reads as: `offset=100` and
+/// the number 100 are one call, not two.
+fn same_call(framed: &FramedCall, delivered: &Value) -> bool {
+    let Some(fields) = delivered.as_object() else {
+        return false;
     };
-    serde_json::from_str::<Value>(value)
-        .ok()
-        .filter(fits)
-        .unwrap_or_else(|| Value::String(value.to_string()))
-}
-
-/// Indexing null yields null, so every value of a call the request advertised no
-/// tool for stays the text the model typed.
-fn schema_for<'a>(tools: &'a [ToolDefinition], name: &str) -> &'a Value {
-    tools
-        .iter()
-        .find(|tool| tool.name == name)
-        .map_or(&Value::Null, |tool| &tool.input_schema)
+    fields.len() == framed.arguments.len()
+        && framed.arguments.iter().all(|(name, text)| {
+            fields.get(name).is_some_and(|value| match value {
+                Value::String(delivered) => delivered == text,
+                other => serde_json::from_str::<Value>(text).is_ok_and(|read| read == *other),
+            })
+        })
 }
 
 /// A tool call the model wrote as text instead of emitting it; every value is
@@ -833,35 +820,9 @@ mod tests {
     /// reasoning instead of emitting it.
     const FRAMED_READ: &str = "<tool_call>\n<function=read_file>\n<parameter=path>\n/Users/mav/dev/lambda/README.md\n</parameter>\n</function>\n</tool_call>";
 
-    fn grep_tool() -> Vec<ToolDefinition> {
-        vec![ToolDefinition {
-            name: "grep".into(),
-            description: "Search files".into(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "-n": {"type": "boolean"},
-                    "output_mode": {"type": "string"},
-                    "pattern": {"type": "string"},
-                }
-            }),
-        }]
-    }
-
     /// `FRAMED_READ` naming another file, for the tests that need two blocks.
     fn framed_read(path: &str) -> String {
         FRAMED_READ.replace("/Users/mav/dev/lambda/README.md", path)
-    }
-
-    fn read_file_tool() -> Vec<ToolDefinition> {
-        vec![ToolDefinition {
-            name: "read_file".into(),
-            description: "Read a file".into(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {"path": {"type": "string"}}
-            }),
-        }]
     }
 
     fn thinking(text: &str) -> ContentBlock {
@@ -874,9 +835,8 @@ mod tests {
     fn recover(
         content: Vec<ContentBlock>,
         status: ResponseStatus,
-        tools: &[ToolDefinition],
     ) -> (Vec<ContentBlock>, Vec<StreamEvent>) {
-        let (response, events) = recover_response(content, status, tools);
+        let (response, events) = recover_response(content, status);
         (response.content, events)
     }
 
@@ -884,7 +844,6 @@ mod tests {
     fn recover_response(
         content: Vec<ContentBlock>,
         status: ResponseStatus,
-        tools: &[ToolDefinition],
     ) -> (ModelResponse, Vec<StreamEvent>) {
         let seen = Arc::new(Mutex::new(Vec::new()));
         let collected = Arc::clone(&seen);
@@ -896,7 +855,7 @@ mod tests {
             usage: TokenUsage::default(),
             model: "test".into(),
         };
-        recover_framed_calls(&mut response, tools, &sink);
+        recover_framed_calls(&mut response, &sink);
         let events = seen.lock().unwrap().clone();
         (response, events)
     }
@@ -966,45 +925,8 @@ mod tests {
     }
 
     #[test]
-    fn a_promoted_call_types_its_arguments_against_the_tool_schema() {
-        // `-n` is declared boolean, and a tool reading it with `as_bool()`
-        // sees nothing when it arrives as the text the model typed.
-        let (content, _) = recover(
-            vec![thinking(FRAMED_GREP)],
-            ResponseStatus::EndTurn,
-            &grep_tool(),
-        );
-        assert!(matches!(
-            content.last(),
-            Some(ContentBlock::ToolUse { input, .. })
-                if *input == serde_json::json!({
-                    "-n": true, "output_mode": "content", "pattern": "plugin.Open(...)"
-                })
-        ));
-    }
-
-    #[test]
-    fn a_promoted_value_that_misses_its_declared_type_stays_text() {
-        // The tool reports the real problem rather than a guess at what was meant.
-        let framed = FRAMED_GREP.replace("\ntrue\n", "\nyes\n");
-        let (content, _) = recover(
-            vec![thinking(&framed)],
-            ResponseStatus::EndTurn,
-            &grep_tool(),
-        );
-        assert!(matches!(
-            content.last(),
-            Some(ContentBlock::ToolUse { input, .. }) if input["-n"] == serde_json::json!("yes")
-        ));
-    }
-
-    #[test]
     fn framed_call_promotes_when_the_reply_carries_none() {
-        let (content, events) = recover(
-            vec![thinking(FRAMED_READ)],
-            ResponseStatus::EndTurn,
-            &read_file_tool(),
-        );
+        let (content, events) = recover(vec![thinking(FRAMED_READ)], ResponseStatus::EndTurn);
         assert!(matches!(
             content.last(),
             Some(ContentBlock::ToolUse { name, input, .. })
@@ -1024,11 +946,7 @@ mod tests {
             framed_read("/first.md"),
             framed_read("/second.md")
         );
-        let (content, events) = recover(
-            vec![thinking(&both)],
-            ResponseStatus::EndTurn,
-            &read_file_tool(),
-        );
+        let (content, events) = recover(vec![thinking(&both)], ResponseStatus::EndTurn);
         let ids: Vec<&str> = content
             .iter()
             .filter_map(|block| match block {
@@ -1048,11 +966,7 @@ mod tests {
 
     #[test]
     fn promoting_turns_the_reply_into_a_tool_use() {
-        let (response, _) = recover_response(
-            vec![thinking(FRAMED_READ)],
-            ResponseStatus::EndTurn,
-            &read_file_tool(),
-        );
+        let (response, _) = recover_response(vec![thinking(FRAMED_READ)], ResponseStatus::EndTurn);
         assert_eq!(response.status, ResponseStatus::ToolUse);
     }
 
@@ -1070,7 +984,6 @@ mod tests {
                 },
             ],
             ResponseStatus::ToolUse,
-            &read_file_tool(),
         );
         assert!(matches!(
             content.last(),
@@ -1100,7 +1013,6 @@ mod tests {
                 },
             ],
             ResponseStatus::ToolUse,
-            &read_file_tool(),
         );
         assert_eq!(content.iter().filter(|b| is_tool_use(b)).count(), 1);
         assert!(matches!(
@@ -1123,7 +1035,6 @@ mod tests {
                 },
             ],
             ResponseStatus::ToolUse,
-            &read_file_tool(),
         );
         assert_eq!(content.iter().filter(|b| is_tool_use(b)).count(), 1);
         assert!(events.is_empty());
@@ -1141,7 +1052,6 @@ mod tests {
                 },
             ],
             ResponseStatus::ToolUse,
-            &read_file_tool(),
         );
         assert!(matches!(
             &content[1],
@@ -1177,7 +1087,6 @@ mod tests {
                 },
             ],
             ResponseStatus::ToolUse,
-            &read_file_tool(),
         );
         assert!(matches!(
             &content[2],
@@ -1204,7 +1113,6 @@ mod tests {
                 },
             ],
             ResponseStatus::ToolUse,
-            &read_file_tool(),
         );
         assert_eq!(content.iter().filter(|block| is_tool_use(block)).count(), 1);
         assert!(matches!(
@@ -1226,7 +1134,6 @@ mod tests {
                 text: written.into(),
             }],
             ResponseStatus::EndTurn,
-            &read_file_tool(),
         );
         assert!(matches!(
             &content[..],
@@ -1250,7 +1157,6 @@ mod tests {
                 },
             ],
             ResponseStatus::ToolUse,
-            &read_file_tool(),
         );
         assert_eq!(content.len(), 2);
         assert!(matches!(&content[1], ContentBlock::ToolUse { input, .. } if *input == delivered));
@@ -1262,12 +1168,28 @@ mod tests {
     }
 
     #[test]
-    fn a_truncated_reply_declines_instead_of_promoting() {
-        let (content, events) = recover(
-            vec![thinking(FRAMED_READ)],
-            ResponseStatus::OutputTruncated,
-            &read_file_tool(),
+    fn a_delivered_call_the_model_also_framed_is_one_call() {
+        // A framed value is text and a delivered one is typed, so comparing
+        // them as they stand would report the same call as two.
+        let framed = "<tool_call>\n<function=read_file>\n<parameter=offset>\n100\n</parameter>\n</function>\n</tool_call>";
+        let (_, events) = recover(
+            vec![
+                thinking(framed),
+                ContentBlock::ToolUse {
+                    id: "call_1".into(),
+                    name: "read_file".into(),
+                    input: serde_json::json!({"offset": 100}),
+                },
+            ],
+            ResponseStatus::ToolUse,
         );
+        assert!(events.is_empty(), "{events:?}");
+    }
+
+    #[test]
+    fn a_truncated_reply_declines_instead_of_promoting() {
+        let (content, events) =
+            recover(vec![thinking(FRAMED_READ)], ResponseStatus::OutputTruncated);
         assert!(!content.iter().any(is_tool_use));
         assert!(matches!(
             &events[..],
@@ -1280,11 +1202,7 @@ mod tests {
     fn a_refused_reply_declines_as_not_finished() {
         // Apart from a truncated one: nothing was cut off, the model stopped
         // before committing to the call it had already written.
-        let (content, events) = recover(
-            vec![thinking(FRAMED_READ)],
-            ResponseStatus::Refused,
-            &read_file_tool(),
-        );
+        let (content, events) = recover(vec![thinking(FRAMED_READ)], ResponseStatus::Refused);
         assert!(!content.iter().any(is_tool_use));
         assert!(matches!(
             &events[..],
@@ -1294,9 +1212,10 @@ mod tests {
     }
 
     #[test]
-    fn an_unknown_name_is_promoted_with_its_arguments_untyped() {
-        // No schema names a type, so every value stays the text the model typed.
-        let (content, events) = recover(vec![thinking(FRAMED_GREP)], ResponseStatus::EndTurn, &[]);
+    fn a_promoted_call_carries_the_text_the_model_wrote() {
+        // Retyping them is the registry's, against the schema of the tool that
+        // will run.
+        let (content, events) = recover(vec![thinking(FRAMED_GREP)], ResponseStatus::EndTurn);
         assert!(matches!(
             content.last(),
             Some(ContentBlock::ToolUse { name, input, .. })
@@ -1321,7 +1240,6 @@ mod tests {
                 text: written.clone(),
             }],
             ResponseStatus::OutputTruncated,
-            &read_file_tool(),
         );
         assert!(matches!(
             &content[..],
@@ -1338,7 +1256,6 @@ mod tests {
                 text: format!("Reading it now.\n{FRAMED_READ}"),
             }],
             ResponseStatus::EndTurn,
-            &read_file_tool(),
         );
         assert!(matches!(
             &content[..],
@@ -1359,7 +1276,6 @@ mod tests {
                 text: answer.into(),
             }],
             ResponseStatus::EndTurn,
-            &read_file_tool(),
         );
         assert!(matches!(
             &content[..],
