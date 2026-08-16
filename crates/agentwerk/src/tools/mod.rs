@@ -27,6 +27,5 @@ pub use grep::{GrepArgs, GrepTool};
 pub use knowledge::{KnowledgeArgs, KnowledgeTool};
 pub use list_directory::{ListDirectoryArgs, ListDirectoryTool};
 pub use read_file::{ReadFileArgs, ReadFileTool};
-pub(crate) use tickets::finish_tool_input_schema;
 pub use tickets::{FinishTool, TicketsArgs, TicketsTool};
 pub use write_file::{WriteFileArgs, WriteFileTool};

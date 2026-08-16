@@ -447,7 +447,7 @@ impl ToolRegistry {
 /// rejected call reads back, so the two cannot disagree.
 fn advertised(tool: &dyn AnyTool, ticket: Option<&Schema>) -> Value {
     match ticket.filter(|_| tool.name() == super::FinishTool.name()) {
-        Some(ticket) => super::finish_tool_input_schema(document(tool), Some(ticket)),
+        Some(ticket) => super::FinishTool::input_schema_for(ticket),
         None => document(tool),
     }
 }

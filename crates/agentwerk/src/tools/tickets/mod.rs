@@ -12,7 +12,6 @@ use super::tool::{ToolContext, ToolResult};
 mod finish;
 mod tickets;
 
-pub(crate) use finish::finish_tool_input_schema;
 pub use finish::FinishTool;
 pub use tickets::TicketsTool;
 

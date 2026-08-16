@@ -287,7 +287,7 @@ fn parse_result(schema: Option<&Schema>, input: &Value) -> (Value, bool) {
 ///
 /// An object schema that itself declares a control-key-named property is not
 /// inlined: at the top level `finish` would read that field as its own and
-/// strip it from the result. Shared by [`finish_tool_input_schema`] and
+/// strip it from the result. Shared by [`FinishTool::input_schema_for`] and
 /// [`parse_result`], so the shape advertised and the shape read cannot
 /// disagree.
 fn is_inlined(schema: &Schema) -> bool {
@@ -327,23 +327,27 @@ fn declares_result(schema: &Schema) -> bool {
         .is_some()
 }
 
-/// The model-facing arguments schema for a finish tool, read by the request
-/// builder. It and [`parse_result`] share `is_inlined`, so the shape advertised
-/// and the shape read can never disagree. Inlined: the object schema with the
-/// tool's control keys merged back in. Anything else advertises the registered
-/// schema untouched; the ticket schema still validates the result on write,
-/// and its violations are what a miss reads back.
-pub(crate) fn finish_tool_input_schema(static_schema: Value, schema: Option<&Schema>) -> Value {
-    match schema.filter(|schema| is_inlined(schema)) {
-        Some(schema) => merge_controls(schema.get_raw_schema().clone(), &static_schema),
-        None => static_schema,
+impl FinishTool {
+    /// The model-facing arguments for `ticket`, read by the request builder
+    /// and by the schema a rejected call reads back. It and [`parse_result`]
+    /// share `is_inlined`, so the shape advertised and the shape read can
+    /// never disagree: an inlined object schema becomes the flat arguments
+    /// with the control keys merged back in, anything else advertises the
+    /// registered schema untouched, and the ticket schema's violations are
+    /// what a missed write reads back.
+    pub(crate) fn input_schema_for(ticket: &Schema) -> Value {
+        if is_inlined(ticket) {
+            merge_controls(ticket.get_raw_schema().clone())
+        } else {
+            tool_file().input_schema.get_raw_schema().clone()
+        }
     }
 }
 
-/// Add the finish tool's control-key property definitions (taken from its static
-/// schema) onto the inlined object schema. They stay optional: a plain finish
-/// passes neither.
-fn merge_controls(mut document: Value, static_schema: &Value) -> Value {
+/// Add the finish tool's control-key property definitions onto the inlined
+/// object schema. They stay optional: a plain finish passes neither.
+fn merge_controls(mut document: Value) -> Value {
+    let static_schema = tool_file().input_schema.get_raw_schema();
     let static_properties = static_schema.get("properties").and_then(Value::as_object);
     let properties = document.as_object_mut().and_then(|object| {
         object
@@ -524,9 +528,8 @@ mod tests {
     fn a_schema_naming_a_control_key_advertises_the_enveloped_shape() {
         // The same predicate decides both, so what the model is shown is the
         // shape `parse_result` reads.
-        let advertised =
-            finish_tool_input_schema(static_finish_schema(), Some(&colliding_schema()));
-        assert_eq!(advertised, static_finish_schema());
+        let advertised = FinishTool::input_schema_for(&colliding_schema());
+        assert_eq!(&advertised, FinishTool.input_schema().get_raw_schema());
     }
 
     #[tokio::test]
@@ -565,19 +568,6 @@ mod tests {
         let (result, repair) = parse_result(None, &input);
         assert_eq!(result, serde_json::json!("plain"));
         assert!(!repair);
-    }
-
-    /// The `finish` tool's own static schema: `result` plus the two
-    /// optional control keys, none of them required.
-    fn static_finish_schema() -> Value {
-        serde_json::json!({
-            "type": "object",
-            "properties": {
-                "result": {},
-                "handover": { "type": "string" },
-                "task": { "type": "string" },
-            },
-        })
     }
 
     #[test]
@@ -630,15 +620,12 @@ mod tests {
 
     #[test]
     fn finish_inlined_schema_has_result_fields_flat_plus_optional_control_keys() {
-        let advertised = finish_tool_input_schema(static_finish_schema(), Some(&object_schema()));
+        let advertised = FinishTool::input_schema_for(&object_schema());
         assert_eq!(
             advertised["properties"]["status"],
             serde_json::json!({ "type": "string" })
         );
-        assert_eq!(
-            advertised["properties"]["handover"],
-            serde_json::json!({ "type": "string" })
-        );
+        assert_eq!(advertised["properties"]["handover"]["type"], "string");
         assert!(advertised["properties"].get("result").is_none());
         let required = advertised["required"].as_array().unwrap();
         assert!(
@@ -652,8 +639,8 @@ mod tests {
     fn an_enveloped_ticket_advertises_the_registered_schema_untouched() {
         // The ticket schema still validates the result on write; its
         // violations are what a miss reads back.
-        let advertised = finish_tool_input_schema(static_finish_schema(), Some(&string_schema()));
-        assert_eq!(advertised, static_finish_schema());
+        let advertised = FinishTool::input_schema_for(&string_schema());
+        assert_eq!(&advertised, FinishTool.input_schema().get_raw_schema());
     }
 
     #[tokio::test]
