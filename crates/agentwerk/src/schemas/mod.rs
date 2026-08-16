@@ -174,8 +174,6 @@ pub struct SchemaViolation {
     /// Where in the value the problem is, as a JSON Pointer such as
     /// `/items/0/name`. Empty means the value itself.
     pub instance_path: String,
-    /// Which part of the schema was violated, as a JSON Pointer.
-    pub schema_path: String,
     /// What went wrong, in one line.
     pub message: String,
 }
@@ -235,7 +233,6 @@ impl std::error::Error for SchemaParseError {}
 
 #[derive(Debug, Default)]
 struct Node {
-    schema_path: String,
     // type / enum / const
     types: Option<Vec<JsonType>>,
     enum_values: Option<Vec<Value>>,
@@ -367,15 +364,11 @@ fn compile(value: &Value, schema_path: &str) -> Result<Node, SchemaParseError> {
     let obj = match value {
         Value::Object(map) => map,
         Value::Bool(true) => {
-            return Ok(Node {
-                schema_path: schema_path.to_string(),
-                ..Node::default()
-            });
+            return Ok(Node::default());
         }
         Value::Bool(false) => {
             // A false schema rejects everything: no type matches an empty list.
             return Ok(Node {
-                schema_path: schema_path.to_string(),
                 types: Some(Vec::new()),
                 ..Node::default()
             });
@@ -511,7 +504,6 @@ fn compile(value: &Value, schema_path: &str) -> Result<Node, SchemaParseError> {
     };
 
     Ok(Node {
-        schema_path: schema_path.to_string(),
         types,
         enum_values,
         const_value,
@@ -674,12 +666,7 @@ impl Node {
     fn check(&self, instance: &Value, instance_path: &str, out: &mut Vec<SchemaViolation>) {
         if let Some(types) = &self.types {
             if types.is_empty() {
-                self.violation(
-                    instance_path,
-                    "/type",
-                    "value is rejected by `false` schema",
-                    out,
-                );
+                self.violation(instance_path, "value is rejected by `false` schema", out);
                 return;
             }
             if !types.iter().any(|t| t.matches(instance)) {
@@ -692,25 +679,20 @@ impl Node {
                 if let Some(hint) = retype_hint(types, instance) {
                     message.push_str(&format!(": {hint}"));
                 }
-                self.violation(instance_path, "/type", message, out);
+                self.violation(instance_path, message, out);
                 return;
             }
         }
 
         if let Some(expected) = &self.const_value {
             if instance != expected {
-                self.violation(
-                    instance_path,
-                    "/const",
-                    format!("expected {}", expected),
-                    out,
-                );
+                self.violation(instance_path, format!("expected {}", expected), out);
             }
         }
 
         if let Some(values) = &self.enum_values {
             if !values.iter().any(|v| v == instance) {
-                self.violation(instance_path, "/enum", "value is not in `enum`", out);
+                self.violation(instance_path, "value is not in `enum`", out);
             }
         }
 
@@ -726,7 +708,6 @@ impl Node {
             if !schemas.iter().any(|sub| sub.accepts(instance)) {
                 self.violation(
                     instance_path,
-                    "/anyOf",
                     "value does not match any of the anyOf schemas",
                     out,
                 );
@@ -738,7 +719,6 @@ impl Node {
             if count != 1 {
                 self.violation(
                     instance_path,
-                    "/oneOf",
                     format!("value matches {count} of the oneOf schemas, expected exactly 1"),
                     out,
                 );
@@ -747,12 +727,7 @@ impl Node {
 
         if let Some(sub) = &self.not {
             if sub.accepts(instance) {
-                self.violation(
-                    instance_path,
-                    "/not",
-                    "value must not match the `not` schema",
-                    out,
-                );
+                self.violation(instance_path, "value must not match the `not` schema", out);
             }
         }
 
@@ -794,7 +769,6 @@ impl Node {
                 if !map.contains_key(name) {
                     self.violation(
                         instance_path,
-                        "/required",
                         format!("missing required property `{name}`"),
                         out,
                     );
@@ -819,12 +793,7 @@ impl Node {
                 .unwrap_or_default();
             for name in map.keys() {
                 if !known.contains(name.as_str()) {
-                    self.violation(
-                        instance_path,
-                        "/additionalProperties",
-                        format!("unexpected property `{name}`"),
-                        out,
-                    );
+                    self.violation(instance_path, format!("unexpected property `{name}`"), out);
                 }
             }
         }
@@ -835,7 +804,6 @@ impl Node {
             if arr.len() < min {
                 self.violation(
                     instance_path,
-                    "/minItems",
                     format!("array has {} items, expected at least {min}", arr.len()),
                     out,
                 );
@@ -845,7 +813,6 @@ impl Node {
             if arr.len() > max {
                 self.violation(
                     instance_path,
-                    "/maxItems",
                     format!("array has {} items, expected at most {max}", arr.len()),
                     out,
                 );
@@ -865,7 +832,6 @@ impl Node {
             if len < min {
                 self.violation(
                     instance_path,
-                    "/minLength",
                     format!("string length {len} is below minimum {min}"),
                     out,
                 );
@@ -875,7 +841,6 @@ impl Node {
             if len > max {
                 self.violation(
                     instance_path,
-                    "/maxLength",
                     format!("string length {len} is above maximum {max}"),
                     out,
                 );
@@ -885,7 +850,6 @@ impl Node {
             if !re.is_match(s) {
                 self.violation(
                     instance_path,
-                    "/pattern",
                     format!("string does not match pattern `{}`", re.as_str()),
                     out,
                 );
@@ -899,7 +863,6 @@ impl Node {
             if f < min {
                 self.violation(
                     instance_path,
-                    "/minimum",
                     format!("value {f} is below minimum {min}"),
                     out,
                 );
@@ -909,7 +872,6 @@ impl Node {
             if f > max {
                 self.violation(
                     instance_path,
-                    "/maximum",
                     format!("value {f} is above maximum {max}"),
                     out,
                 );
@@ -920,13 +882,11 @@ impl Node {
     fn violation(
         &self,
         instance_path: &str,
-        keyword_suffix: &str,
         message: impl Into<String>,
         out: &mut Vec<SchemaViolation>,
     ) {
         out.push(SchemaViolation {
             instance_path: instance_path.to_string(),
-            schema_path: format!("{}{keyword_suffix}", self.schema_path),
             message: message.into(),
         });
     }
@@ -1350,7 +1310,7 @@ mod tests {
         let violations = schema.validate(json!([])).unwrap_err();
         assert!(violations
             .iter()
-            .any(|v| v.schema_path.ends_with("/minItems")));
+            .any(|v| v.message.contains("expected at least 1")));
     }
 
     #[test]
@@ -1360,7 +1320,7 @@ mod tests {
         let violations = schema.validate(json!([1, 2, 3])).unwrap_err();
         assert!(violations
             .iter()
-            .any(|v| v.schema_path.ends_with("/maxItems")));
+            .any(|v| v.message.contains("expected at most 2")));
     }
 
     // String
@@ -1381,7 +1341,7 @@ mod tests {
         let violations = schema.validate(json!("bar")).unwrap_err();
         assert!(violations
             .iter()
-            .any(|v| v.schema_path.ends_with("/pattern")));
+            .any(|v| v.message.contains("does not match pattern")));
     }
 
     #[test]
@@ -1447,7 +1407,9 @@ mod tests {
         assert!(schema.validate(json!("hello")).is_ok());
         assert!(schema.validate(json!(42)).is_ok());
         let violations = schema.validate(json!(null)).unwrap_err();
-        assert!(violations.iter().any(|v| v.schema_path.ends_with("/anyOf")));
+        assert!(violations
+            .iter()
+            .any(|v| v.message.contains("does not match any")));
     }
 
     #[test]
@@ -1464,7 +1426,7 @@ mod tests {
         assert!(schema.validate(json!(42)).is_ok());
         // Matches neither branch.
         let none = schema.validate(json!(true)).unwrap_err();
-        assert!(none.iter().any(|v| v.schema_path.ends_with("/oneOf")));
+        assert!(none.iter().any(|v| v.message.contains("oneOf")));
 
         // A number matches both `number` and `minimum`, so oneOf fails.
         let both = Schema::new(json!({
@@ -1475,7 +1437,7 @@ mod tests {
         }))
         .unwrap();
         let violations = both.validate(json!(5)).unwrap_err();
-        assert!(violations.iter().any(|v| v.schema_path.ends_with("/oneOf")));
+        assert!(violations.iter().any(|v| v.message.contains("oneOf")));
     }
 
     #[test]
@@ -1483,7 +1445,9 @@ mod tests {
         let schema = Schema::new(json!({"not": {"type": "string"}})).unwrap();
         assert!(schema.validate(json!(42)).is_ok());
         let violations = schema.validate(json!("hello")).unwrap_err();
-        assert!(violations.iter().any(|v| v.schema_path.ends_with("/not")));
+        assert!(violations
+            .iter()
+            .any(|v| v.message.contains("must not match")));
     }
 
     // If / then / else
@@ -1670,8 +1634,10 @@ mod tests {
         let violations = schema.validate(json!("{\"other\": 1}")).unwrap_err();
         assert!(violations
             .iter()
-            .any(|v| v.schema_path.ends_with("/required")));
-        assert!(!violations.iter().any(|v| v.schema_path.ends_with("/type")));
+            .any(|v| v.message.contains("missing required property `status`")));
+        assert!(!violations
+            .iter()
+            .any(|v| v.message.contains("expected type")));
     }
 
     #[test]
