@@ -48,6 +48,7 @@ Read and mutate the ticket queue from one tool: `ticket` / `result` / `list` / `
       "description": "For `search`: case-insensitive substring matched against the task body."
     },
     "task": {
+      "type": ["string", "object", "array", "number", "boolean"],
       "description": "For `create` (required) or `edit` (optional): the task body, any JSON value (string, object, array, scalar)."
     }
   },
