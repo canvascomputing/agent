@@ -208,21 +208,11 @@ impl fmt::Display for RequestErrorKind {
 /// Result alias for [`Provider`](super::Provider) calls.
 pub type ProviderResult<T> = std::result::Result<T, ProviderError>;
 
-// Errors arrive wrapped: a proxy returns an HTTP 400 whose body carries another
-// provider's error verbatim, with its own status and code on the outside. The
-// vendor classifier sees `code = "400"` and gives up, and the wrapped signal is
-// then lost: the loop treats the response as terminal instead of compacting.
-// This runs after the vendor returns None and before the generic fallback.
+// A proxy wraps another provider's error behind its own status and code, so the
+// vendor classifier gives up and the loop ends the ticket instead of compacting.
+// Read after the vendor's classifier and before the generic fallback.
 
-//
-// Errors arrive wrapped: a proxy returns an HTTP 400 whose body carries another
-// provider's error verbatim, with its own status and code on the outside. The
-// vendor classifier sees `code = "400"` and gives up, and the wrapped signal is
-// then lost: the loop treats the response as terminal instead of compacting.
-// This runs after the vendor returns None and before the generic fallback.
-
-/// Matched case-insensitively against the full body, so they survive arbitrary
-/// JSON wrapping.
+/// Matched case-insensitively against the whole body, so they survive wrapping.
 const OVERFLOW_PATTERNS: &[&str] = &[
     // Anthropic
     "prompt is too long",
@@ -235,15 +225,13 @@ const OVERFLOW_PATTERNS: &[&str] = &[
     "exceed_context_size_error",
     // Mistral
     "too large for model with",
-    // Vertex / Gemini, observed through LiteLLM-passthrough: its 1 M-token limit
-    // phrases overflow this way and nothing else does.
+    // Vertex / Gemini through LiteLLM. Nothing else phrases overflow this way.
     "input token count",
     "exceeds the maximum number of tokens",
-    // LiteLLM prepends `litellm.ContextWindowExceededError:` before forwarding,
-    // catching an upstream overflow whose own wording none of the above knows.
+    // LiteLLM's own prefix, for an upstream wording none of the above knows.
     "contextwindowexceedederror",
-    // Deliberately broad, for upstreams not enumerated above: a false positive
-    // costs one compaction attempt, a false negative costs the ticket.
+    // Broad on purpose: a false positive costs one compaction, a false negative
+    // the ticket.
     "context window exceeded",
     "maximum context length",
 ];
@@ -253,17 +241,15 @@ const RATE_LIMIT_PATTERNS: &[&str] = &[
     "rate limit",
     "too many requests",
     "throttling",
-    // Lowercased, a class name like `litellm.RateLimitError` has no space, so
-    // the prose form above misses it.
+    // A class name like `litellm.RateLimitError` has no space for the form above.
     "ratelimit",
     // Google Vertex's RPC status for quota exhaustion.
     "resource_exhausted",
 ];
 
-/// A rate-limited body classifies as such whatever the outer HTTP status:
-/// LiteLLM occasionally wraps a 429 inside a different outer code, so the status
-/// alone cannot be trusted to mean "this was a rate limit". `None` falls through
-/// to `fallback_http_error`, preserving the handling of unrecognised errors.
+/// Read the upstream signal out of `body`, whatever the outer status says: a
+/// proxy wraps a 429 inside another code often enough that the status alone
+/// cannot be trusted. `None` leaves the body to `fallback_http_error`.
 pub(crate) fn recover_wrapped_error(
     status: u16,
     body: &str,
@@ -272,9 +258,8 @@ pub(crate) fn recover_wrapped_error(
     // One lowercase per call: a wrapped body carries the full upstream payload.
     let lower = body.to_lowercase();
 
-    // Rate-limit exclusion runs FIRST. A body that says both "throttling" and
-    // "maximum tokens" is a rate limit, not an overflow: the inverse would burn
-    // a compaction round-trip and still hit the same throttle on the next request.
+    // A body saying both is throttled: reading overflow first would spend a
+    // compaction and meet the same throttle on the next request.
     let looks_like_rate_limit = RATE_LIMIT_PATTERNS.iter().any(|p| lower.contains(p));
 
     if !looks_like_rate_limit && OVERFLOW_PATTERNS.iter().any(|p| lower.contains(p)) {

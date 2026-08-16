@@ -1,10 +1,8 @@
 //! The tool calls a model wrote as text, read back as calls it can run.
 //!
-//! Some models are trained to write a call as
-//! `<tool_call><function=NAME><parameter=KEY>VALUE</parameter>…</function></tool_call>`
-//! for the endpoint to convert, and do not do it consistently: in one run the
-//! same model emits some calls properly and writes others as text. One left as
-//! text costs the turn, since the loop answers "no tool call", or the tool
+//! Some models write a call as `<tool_call><function=NAME>…</function></tool_call>`
+//! for the endpoint to convert, and do it inconsistently within one run. One
+//! left as text costs the turn: the loop answers "no tool call", or the tool
 //! answers "missing required parameter" for one delivered empty.
 
 use std::collections::{HashMap, HashSet};
@@ -13,14 +11,6 @@ use std::sync::Arc;
 use serde_json::{Map, Value};
 
 use super::types::{ContentBlock, ModelResponse, ResponseStatus, StreamEvent, ToolDeclineKind};
-
-//
-// These models are trained to write a call as
-// `<tool_call><function=NAME><parameter=KEY>VALUE</parameter>…</function></tool_call>`
-// for the endpoint to convert, and do not do it consistently: in one run the
-// same model emits some calls properly and writes others as text. One left as
-// text costs the turn, since the loop answers "no tool call", or the tool
-// answers "missing required parameter" for one delivered empty.
 
 const TOOL_CALL_OPEN: &str = "<tool_call>";
 const TOOL_CALL_CLOSE: &str = "</tool_call>";
