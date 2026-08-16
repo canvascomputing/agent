@@ -239,10 +239,25 @@ fn attach_result(
     Ok(validated)
 }
 
-/// Top-level keys `finish` owns; stripped from the arguments to recover the
-/// result. A result schema must not reuse these names: `finish` would mistake
-/// such a field for a control key. No schema in the tree does.
-const CONTROL_KEYS: &[&str] = &["handover", "task"];
+/// Top-level keys `finish` owns, stripped from the arguments to recover the
+/// result: the properties its own schema declares, minus `result` itself.
+/// Derived from that schema so the list cannot fall out of step with the
+/// document the model is shown.
+fn control_keys() -> &'static [String] {
+    static KEYS: OnceLock<Vec<String>> = OnceLock::new();
+    KEYS.get_or_init(|| {
+        tool_file().input_schema.get_raw_schema()["properties"]
+            .as_object()
+            .map(|properties| {
+                properties
+                    .keys()
+                    .filter(|key| *key != "result")
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default()
+    })
+}
 
 /// Recover the result value from a finish tool call's arguments, and whether a
 /// repair took. Callers still read their own control keys (`handover`/`task`)
@@ -252,8 +267,8 @@ fn parse_result(schema: Option<&Schema>, input: &Value) -> (Value, bool) {
         return (input.get("result").cloned().unwrap_or(Value::Null), false);
     };
     let mut object = input.as_object().cloned().unwrap_or_default();
-    for key in CONTROL_KEYS {
-        object.remove(*key);
+    for key in control_keys() {
+        object.remove(key);
     }
     unwrap_accidental_result(Value::Object(object), schema)
 }
@@ -332,9 +347,9 @@ fn merge_controls(mut document: Value, static_schema: &Value) -> Value {
             .as_object_mut()
     });
     if let (Some(properties), Some(static_properties)) = (properties, static_properties) {
-        for key in CONTROL_KEYS {
-            if let Some(definition) = static_properties.get(*key) {
-                properties.insert((*key).to_string(), definition.clone());
+        for key in control_keys() {
+            if let Some(definition) = static_properties.get(key) {
+                properties.insert(key.clone(), definition.clone());
             }
         }
     }
