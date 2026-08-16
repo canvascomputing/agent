@@ -329,35 +329,15 @@ fn declares_result(schema: &Schema) -> bool {
 
 /// The model-facing arguments schema for a finish tool, read by the request
 /// builder. It and [`parse_result`] share `is_inlined`, so the shape advertised
-/// and the shape read can never disagree. Inlined: the object schema (with the
-/// tool's control keys merged back in). Enveloped: the tool's static schema with
-/// the ticket schema set on its `result` property.
+/// and the shape read can never disagree. Inlined: the object schema with the
+/// tool's control keys merged back in. Anything else advertises the registered
+/// schema untouched; the ticket schema still validates the result on write,
+/// and its violations are what a miss reads back.
 pub(crate) fn finish_tool_input_schema(static_schema: Value, schema: Option<&Schema>) -> Value {
-    let Some(schema) = schema else {
-        return static_schema;
-    };
-    if is_inlined(schema) {
-        merge_controls(schema.get_raw_schema().clone(), &static_schema)
-    } else {
-        set_result_schema(static_schema, schema)
+    match schema.filter(|schema| is_inlined(schema)) {
+        Some(schema) => merge_controls(schema.get_raw_schema().clone(), &static_schema),
+        None => static_schema,
     }
-}
-
-/// Set the `result` property of the tool's static schema to the ticket schema,
-/// so an enveloped finish tool advertises a typed `result` instead of "any value".
-fn set_result_schema(mut static_schema: Value, schema: &Schema) -> Value {
-    if let Some(object) = static_schema.as_object_mut() {
-        // The examples show the untyped result the static schema accepts. The
-        // ticket now decides its shape, so keeping them would contradict it.
-        object.remove("examples");
-    }
-    if let Some(result) = static_schema
-        .get_mut("properties")
-        .and_then(|properties| properties.get_mut("result"))
-    {
-        *result = schema.get_raw_schema().clone();
-    }
-    static_schema
 }
 
 /// Add the finish tool's control-key property definitions (taken from its static
@@ -546,8 +526,7 @@ mod tests {
         // shape `parse_result` reads.
         let advertised =
             finish_tool_input_schema(static_finish_schema(), Some(&colliding_schema()));
-        assert_eq!(advertised["properties"]["result"]["type"], "object");
-        assert!(advertised["properties"].get("status").is_none());
+        assert_eq!(advertised, static_finish_schema());
     }
 
     #[tokio::test]
@@ -670,12 +649,11 @@ mod tests {
     }
 
     #[test]
-    fn enveloped_schema_sets_the_ticket_schema_on_result() {
+    fn an_enveloped_ticket_advertises_the_registered_schema_untouched() {
+        // The ticket schema still validates the result on write; its
+        // violations are what a miss reads back.
         let advertised = finish_tool_input_schema(static_finish_schema(), Some(&string_schema()));
-        assert_eq!(
-            advertised["properties"]["result"],
-            serde_json::json!({ "type": "string" })
-        );
+        assert_eq!(advertised, static_finish_schema());
     }
 
     #[tokio::test]
