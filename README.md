@@ -574,7 +574,7 @@ let greet = Tool::new("greet", "Say hello")
     .build();
 ```
 
-Return `ToolResult::error(message)` for a failure the model should work around.
+Return `ToolResult::error(message)` for a failure the model should work around, and `ToolResult::schema_error(message)` for arguments it must send differently: that one counts against `max_schema_retries`.
 
 See [`Tool`](https://docs.rs/agentwerk/latest/agentwerk/tools/struct.Tool.html).
 

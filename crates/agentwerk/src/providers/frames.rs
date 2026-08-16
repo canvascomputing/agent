@@ -709,8 +709,8 @@ mod tests {
 
     #[test]
     fn a_promoted_call_carries_the_text_the_model_wrote() {
-        // Retyping them is the registry's, against the schema of the tool that
-        // will run.
+        // The registry retypes them a moment later, against the schema of the
+        // tool that will run.
         let (content, events) = recover(vec![thinking(FRAMED_GREP)], ResponseStatus::EndTurn);
         assert!(matches!(
             content.last(),

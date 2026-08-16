@@ -1,4 +1,6 @@
-//! The `Provider` handle, the `ProviderLike` trait behind it, and the vendor-specific implementations that speak to Anthropic, OpenAI-compatible APIs, Mistral, and LiteLLM.
+//! The `Provider` handle, the `ProviderLike` trait behind it, and the
+//! vendor implementations that speak to Anthropic, OpenAI-compatible APIs,
+//! Mistral, and LiteLLM.
 //!
 //! The types a request and a response are made of (`Message`, `ContentBlock`,
 //! `ModelRequest`, `ModelResponse`, `StreamEvent`) are reachable by name but
