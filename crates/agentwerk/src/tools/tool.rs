@@ -218,20 +218,12 @@ pub trait ToolLike: Send + Sync {
 /// The tools one agent may call.
 #[derive(Clone, Default)]
 pub(crate) struct ToolRegistry {
-    tools: Vec<Registered>,
-}
-
-/// A tool and the schema a call to it is checked against. Held together so
-/// there is no tool the registry can reach without one.
-#[derive(Clone)]
-struct Registered {
-    tool: Arc<dyn ToolLike>,
-    schema: Schema,
+    tools: Vec<Arc<dyn ToolLike>>,
 }
 
 impl std::fmt::Debug for ToolRegistry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let names: Vec<&str> = self.tools.iter().map(|r| r.tool.name()).collect();
+        let names: Vec<&str> = self.tools.iter().map(|tool| tool.name()).collect();
         f.debug_struct("ToolRegistry")
             .field("tools", &names)
             .finish()
@@ -245,9 +237,8 @@ impl ToolRegistry {
     /// is the one that counts.
     pub(crate) fn register(&mut self, tool: impl ToolLike + 'static) {
         let tool: Arc<dyn ToolLike> = Arc::new(tool);
-        let schema = tool.input_schema();
-        self.tools.retain(|r| r.tool.name() != tool.name());
-        self.tools.push(Registered { tool, schema });
+        self.tools.retain(|t| t.name() != tool.name());
+        self.tools.push(tool);
     }
 
     /// Get the arguments `name` advertised for `ticket`, which is what a call
@@ -267,8 +258,11 @@ impl ToolRegistry {
     /// advertised: it accepts a `result` envelope the advertised shape does not
     /// name, unwraps it, and validates the result against the ticket itself.
     fn resolve(&self, name: &str) -> Resolved {
-        match self.find(name) {
-            Some(found) => Ok((Arc::clone(&found.tool), found.schema.clone())),
+        match self.get(name) {
+            Some(tool) => {
+                let schema = tool.input_schema();
+                Ok((tool, schema))
+            }
             None => Err(ToolError::ToolNotFound {
                 tool_name: name.into(),
                 available: self.names(),
@@ -277,28 +271,23 @@ impl ToolRegistry {
     }
 
     /// Get the tool a call names.
-    pub(crate) fn get(&self, name: &str) -> Option<Arc<dyn ToolLike>> {
-        self.find(name).map(|found| Arc::clone(&found.tool))
-    }
-
-    /// Find what a call name reaches.
     ///
     /// An exact match wins. Otherwise a spelling that reduces to the same key as
     /// exactly one registered tool resolves to it, so a model that adds a
     /// `_tool` suffix still reaches the right tool.
-    fn find(&self, name: &str) -> Option<&Registered> {
+    pub(crate) fn get(&self, name: &str) -> Option<Arc<dyn ToolLike>> {
         let name = name.trim();
-        if let Some(found) = self.tools.iter().find(|r| r.tool.name() == name) {
-            return Some(found);
+        if let Some(found) = self.tools.iter().find(|tool| tool.name() == name) {
+            return Some(Arc::clone(found));
         }
         let key = lookup_key(name);
         let mut folded = self
             .tools
             .iter()
-            .filter(|r| lookup_key(r.tool.name()) == key);
+            .filter(|tool| lookup_key(tool.name()) == key);
         let found = folded.next()?;
         // A key two tools share is ambiguous: refuse rather than guess.
-        folded.next().is_none().then_some(found)
+        folded.next().is_none().then(|| Arc::clone(found))
     }
 
     /// Get the registered names, sorted, for the error that tells the model what
@@ -307,7 +296,7 @@ impl ToolRegistry {
         let mut names: Vec<String> = self
             .tools
             .iter()
-            .map(|r| r.tool.name().to_string())
+            .map(|tool| tool.name().to_string())
             .collect();
         names.sort();
         names
@@ -318,10 +307,10 @@ impl ToolRegistry {
     pub(crate) fn definitions(&self, ticket: Option<&Schema>) -> Vec<ToolDefinition> {
         self.tools
             .iter()
-            .map(|r| ToolDefinition {
-                name: r.tool.name().to_string(),
-                description: r.tool.description().to_string(),
-                input_schema: advertised(&*r.tool, ticket),
+            .map(|tool| ToolDefinition {
+                name: tool.name().to_string(),
+                description: tool.description().to_string(),
+                input_schema: advertised(&**tool, ticket),
             })
             .collect()
     }
