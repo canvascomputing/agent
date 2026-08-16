@@ -169,9 +169,9 @@ fn hand_over(
 
 /// Read an optional control argument. Absent and null both mean "not given".
 /// A value that is present but blank or not a string is refused rather than
-/// read as absent: the schema already rejects it for the model, so only a
-/// direct host call reaches this, and a finish asked to hand over must not
-/// quietly finish without doing so.
+/// read as absent: a finish asked to hand over must not quietly finish
+/// without doing so. The one place the rule lives, for the model and for a
+/// host calling the tool directly.
 fn control_string(input: &Value, key: &str) -> Result<Option<String>, ToolResult> {
     let Some(value) = input.get(key).filter(|value| !value.is_null()) else {
         return Ok(None);
@@ -1213,15 +1213,6 @@ mod tests {
         assert_eq!(read_result(dir.path(), &parent_key), None);
     }
 
-    #[test]
-    fn a_blank_handover_violates_the_advertised_schema() {
-        // Dispatch checks the arguments, so a blank one never reaches the tool.
-        let schema = FinishTool.input_schema();
-        assert!(schema
-            .validate(serde_json::json!({"handover": "  ", "task": "x", "result": "y"}))
-            .is_err());
-    }
-
     #[tokio::test]
     async fn omitted_handover_finishes_without_a_child() {
         let dir = crate::test_util::TempDir::new().unwrap();
@@ -1373,9 +1364,8 @@ mod tests {
 
     #[tokio::test]
     async fn a_blank_handover_from_a_direct_call_is_an_error() {
-        // The registry's schema check rejects a blank for the model; a host
-        // calling the tool directly must hear the same refusal rather than
-        // finish without the handover it asked for.
+        // Model or host, a caller asking to hand over must hear a refusal
+        // rather than finish without the handover it asked for.
         let dir = crate::test_util::TempDir::new().unwrap();
         let (queue, parent_key) = one_ticket_in("alice", dir.path().to_path_buf());
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
