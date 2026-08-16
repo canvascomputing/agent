@@ -454,7 +454,7 @@ tickets
 | `max_input_tokens(count)` / `get_max_input_tokens()` | Limit the total input tokens. |
 | `max_output_tokens(count)` / `get_max_output_tokens()` | Limit the total output tokens. |
 | `max_request_tokens(count)` / `get_max_request_tokens()` | Limit the output tokens of a single request. |
-| `max_schema_retries(count)` / `get_max_schema_retries()` | Limit how often a result may fail its schema before the ticket fails. |
+| `max_schema_retries(count)` / `get_max_schema_retries()` | Limit the consecutive turns without a valid tool call. |
 | `max_request_retries(count)` / `get_max_request_retries()` | Limit how often a failing request is retried. |
 | `request_retry_delay(duration)` / `get_request_retry_delay()` | Wait this long between retries. |
 | `compact_at(fraction)` / `get_compact_at()` | Compact once the context window is this full. |

@@ -910,7 +910,9 @@ impl TicketQueue {
         self
     }
 
-    /// Limit how often a result may fail its schema before the ticket fails.
+    /// Limit the consecutive turns without a valid tool call before the
+    /// ticket fails. A schema violation, an unknown tool, a failed call, and
+    /// a reply with no call at all each count; any successful call resets it.
     pub fn max_schema_retries(&self, n: u32) -> &Self {
         self.policies.lock().unwrap().max_schema_retries = Some(n);
         self

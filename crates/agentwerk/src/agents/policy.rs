@@ -18,7 +18,8 @@ pub(crate) struct Policies {
     pub max_output_tokens: Option<u64>,
     /// Limit on the input tokens per request. `None` for no limit.
     pub max_request_tokens: Option<u32>,
-    /// Limit on the schema-validation retry attempts. `None` for no limit.
+    /// Limit on consecutive failed tool calls and silent no-tool replies;
+    /// any successful call resets the count. `None` for no limit.
     pub max_schema_retries: Option<u32>,
     /// Limit on the retry attempts on recoverable provider errors.
     pub max_request_retries: u32,
