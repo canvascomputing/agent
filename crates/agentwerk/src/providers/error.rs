@@ -44,11 +44,9 @@ pub enum ProviderError {
     /// The response arrived but its body could not be read: malformed JSON, an
     /// unexpected shape, or a broken frame.
     ResponseMalformed { message: String },
-    /// Provider construction failed to resolve a provider from the
-    /// environment: no provider was detected, a required env var was unset,
-    /// `LITELLM_PROVIDER` named an unknown provider, or a `.env` the caller
-    /// asked for was missing or malformed. `message` states the specific
-    /// failure.
+    /// No provider could be resolved from the environment: none was detected,
+    /// a required variable was unset, or `LITELLM_PROVIDER` named one that does
+    /// not exist. `message` states which.
     ProviderUnrecognized { message: String },
 }
 
@@ -74,8 +72,6 @@ impl ProviderError {
         }
     }
 
-    /// Categorical discriminant for event observers. One variant per
-    /// `ProviderError` case; payloads stripped.
     pub fn kind(&self) -> RequestErrorKind {
         match self {
             ProviderError::AuthenticationFailed { .. } => RequestErrorKind::AuthenticationFailed,
@@ -210,7 +206,8 @@ pub type ProviderResult<T> = std::result::Result<T, ProviderError>;
 
 // A proxy wraps another provider's error behind its own status and code, so the
 // vendor classifier gives up and the loop ends the ticket instead of compacting.
-// Read after the vendor's classifier and before the generic fallback.
+// The two banks below are read after that classifier, before the generic
+// fallback.
 
 /// Matched case-insensitively against the whole body, so they survive wrapping.
 const OVERFLOW_PATTERNS: &[&str] = &[
@@ -255,7 +252,8 @@ pub(crate) fn recover_wrapped_error(
     body: &str,
     retry_delay: Option<Duration>,
 ) -> Option<ProviderError> {
-    // One lowercase per call: a wrapped body carries the full upstream payload.
+    // One lowercase per call, not one per pattern: a wrapped body carries the
+    // full upstream payload.
     let lower = body.to_lowercase();
 
     // A body saying both is throttled: reading overflow first would spend a
@@ -495,8 +493,7 @@ mod tests {
 
     #[test]
     fn a_body_carrying_both_signals_is_a_rate_limit_whichever_vendor_sent_it() {
-        // Each vendor's own overflow wording, throttled. Reading overflow first
-        // would spend a compaction and meet the same throttle next request.
+        // Each vendor's own overflow wording, throttled.
         for body in [
             r#"{"error":{"message":"Rate limit reached: prompt is too long"}}"#,
             r#"{"error":{"message":"429 Too Many Requests: this model's maximum context length is 8192"}}"#,
@@ -525,8 +522,6 @@ mod tests {
 
     #[test]
     fn unrelated_400_returns_none() {
-        // An auth error has nothing in common with overflow or rate-limit
-        // wording, so `fallback_http_error` handles the classification.
         let body = r#"{"error":{"message":"invalid_api_key: incorrect API key provided","code":"invalid_api_key"}}"#;
         assert!(recover_wrapped_error(400, body, None).is_none());
     }

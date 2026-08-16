@@ -180,8 +180,7 @@ pub struct SchemaViolation {
 
 impl fmt::Display for SchemaViolation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // A root violation has no pointer to name, so show the message alone
-        // rather than a placeholder path.
+        // A root violation has no pointer to name.
         if self.instance_path.is_empty() {
             write!(f, "{}", self.message)
         } else {
@@ -1102,9 +1101,8 @@ mod tests {
 
     #[test]
     fn parse_rejects_unsupported_keyword() {
-        // `uniqueItems` is outside the supported subset; the limit must
-        // surface at parse time rather than silently passing values it
-        // would otherwise constrain.
+        // The limit has to be reported at parse time, or the schema silently
+        // passes values `uniqueItems` was written to constrain.
         let err = Schema::new(json!({"type": "array", "uniqueItems": true})).unwrap_err();
         assert!(err.message.contains("unsupported keyword `uniqueItems`"));
     }
@@ -1421,10 +1419,8 @@ mod tests {
             ]
         }))
         .unwrap();
-        // Matches exactly one branch.
         assert!(schema.validate(json!("hello")).is_ok());
         assert!(schema.validate(json!(42)).is_ok());
-        // Matches neither branch.
         let none = schema.validate(json!(true)).unwrap_err();
         assert!(none.iter().any(|v| v.message.contains("oneOf")));
 
@@ -1856,7 +1852,7 @@ mod tests {
         assert!(none.is_none());
     }
 
-    // SchemaViolations display (agent-facing feedback)
+    // SchemaViolations display
 
     #[test]
     fn violations_display_renders_one_line_per_violation() {
