@@ -319,11 +319,14 @@ pub enum EventKind {
     /// A piece of the reply arrived.
     TextChunkReceived { content: String },
     /// A tool call or value the model created was invalid and was corrected
-    /// here, rather than asked for again. `message` reads
-    /// `<name>: <what was corrected>`, so grouping by its prefix collects every
-    /// repair one tool needed. Repeated repairs of one reason point at a prompt
-    /// or tool description to fix.
-    ResponseRepaired { reason: RepairKind, message: String },
+    /// here, rather than asked for again. `message` says what was corrected.
+    /// Repeated repairs of one reason point at a prompt or tool description to
+    /// fix.
+    ResponseRepaired {
+        tool_name: String,
+        reason: RepairKind,
+        message: String,
+    },
     /// A tool call proposed by the model was declined. `reason` says why it was
     /// not promoted to a call that runs.
     ToolCallDeclined {
@@ -704,8 +707,9 @@ pub(crate) mod tests {
                 content: "hello".into(),
             },
             EventKind::ResponseRepaired {
+                tool_name: "grep".into(),
                 reason: RepairKind::CallMalformed,
-                message: "grep".into(),
+                message: "rebuilt from text".into(),
             },
             EventKind::ToolCallDeclined {
                 tool_name: "grep".into(),

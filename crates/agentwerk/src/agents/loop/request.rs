@@ -52,8 +52,9 @@ pub(super) async fn run(context: &mut TicketContext<'_>) -> Option<Step> {
                         EventKind::TextChunkReceived { content: text }
                     }
                     StreamEvent::ToolCallRepaired { tool_name } => EventKind::ResponseRepaired {
+                        tool_name,
                         reason: RepairKind::CallMalformed,
-                        message: format!("{tool_name}: rebuilt from text"),
+                        message: "rebuilt from text".to_string(),
                     },
                     StreamEvent::ToolCallDeclined { tool_name, reason } => {
                         EventKind::ToolCallDeclined { tool_name, reason }

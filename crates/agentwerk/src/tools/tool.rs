@@ -710,8 +710,9 @@ async fn invoke(
     };
     for pointer in &repairs {
         ctx.emit(EventKind::ResponseRepaired {
+            tool_name: call.name.clone(),
             reason: RepairKind::ValueMistyped,
-            message: repair_message(&call.name, pointer),
+            message: retype_message(pointer),
         });
     }
     match tool.call_with(input, ctx).await {
@@ -723,16 +724,13 @@ async fn invoke(
     }
 }
 
-/// Name a repair `tool` made before running, by the JSON pointer it happened
-/// at; the empty pointer is the value as a whole. One wording for every
-/// reporter, since a host groups these by the tool name they lead with.
-///
-/// One verb covers both rewrites: decoding a payload the model wrote as text is
-/// the whole-value case of retyping it.
-pub(crate) fn repair_message(tool: &str, pointer: &str) -> String {
+/// Name a retype by the JSON pointer it happened at; the empty pointer is the
+/// value as a whole. One verb covers both rewrites: decoding a payload the
+/// model wrote as text is the whole-value case of retyping it.
+pub(crate) fn retype_message(pointer: &str) -> String {
     match pointer {
-        "" => format!("{tool}: retyped"),
-        path => format!("{tool}: {path} retyped"),
+        "" => "retyped".to_string(),
+        path => format!("{path} retyped"),
     }
 }
 
@@ -1282,12 +1280,20 @@ Do the demo thing.
         let dir = crate::test_util::TempDir::new().unwrap();
         let queue = TicketQueue::new();
         queue.dir(dir.path().to_path_buf());
-        let seen: Arc<std::sync::Mutex<Vec<(RepairKind, String)>>> =
+        let seen: Arc<std::sync::Mutex<Vec<(String, RepairKind, String)>>> =
             Arc::new(std::sync::Mutex::new(Vec::new()));
         let collected = Arc::clone(&seen);
         queue.on_event(move |event| {
-            if let EventKind::ResponseRepaired { reason, message } = &event.kind {
-                collected.lock().unwrap().push((*reason, message.clone()));
+            if let EventKind::ResponseRepaired {
+                tool_name,
+                reason,
+                message,
+            } = &event.kind
+            {
+                collected
+                    .lock()
+                    .unwrap()
+                    .push((tool_name.clone(), *reason, message.clone()));
             }
         });
         let ctx = ToolContext::new(dir.path().to_path_buf())
@@ -1301,8 +1307,9 @@ Do the demo thing.
         assert_eq!(
             *seen.lock().unwrap(),
             vec![(
+                "typed".to_string(),
                 RepairKind::ValueMistyped,
-                "typed: /count retyped".to_string()
+                "/count retyped".to_string()
             )]
         );
 
@@ -1314,7 +1321,11 @@ Do the demo thing.
         assert!(succeeded);
         assert_eq!(
             *seen.lock().unwrap(),
-            vec![(RepairKind::ValueMistyped, "typed: retyped".to_string())]
+            vec![(
+                "typed".to_string(),
+                RepairKind::ValueMistyped,
+                "retyped".to_string()
+            )]
         );
     }
 

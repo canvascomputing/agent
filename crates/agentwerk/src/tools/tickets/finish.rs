@@ -11,7 +11,7 @@ use crate::agents::tickets::{Ticket, TicketQueue};
 use crate::event::{EventKind, RepairKind};
 use crate::schemas::Schema;
 
-use super::super::tool::{repair_message, ToolContext, ToolLike, ToolResult};
+use super::super::tool::{retype_message, ToolContext, ToolLike, ToolResult};
 use super::super::tool_file::ToolFile;
 use super::resolve_current_key;
 
@@ -224,18 +224,14 @@ fn attach_result(
     let (validated, repaired) = ticket_queue
         .set_result(key, result)
         .map_err(|violations| ToolResult::schema_error(violations.to_string()))?;
-    let mut messages = Vec::new();
-    if unwrapped {
-        messages.push("finish: result unwrapped".to_string());
-    }
-    for pointer in repaired {
-        messages.push(repair_message(&tool_file().name, &pointer));
-    }
-    for message in messages {
+    let unwrap_note = unwrapped.then(|| "result unwrapped".to_string());
+    let retypes = repaired.iter().map(|pointer| retype_message(pointer));
+    for message in unwrap_note.into_iter().chain(retypes) {
         ticket_queue.emit(
             key,
             agent,
             EventKind::ResponseRepaired {
+                tool_name: tool_file().name.clone(),
                 reason: RepairKind::ValueMistyped,
                 message,
             },
@@ -411,7 +407,7 @@ mod tests {
     }
 
     /// The repairs a test observed, shared with the queue's event handler.
-    type SeenRepairs = Arc<std::sync::Mutex<Vec<(RepairKind, String)>>>;
+    type SeenRepairs = Arc<std::sync::Mutex<Vec<(String, RepairKind, String)>>>;
 
     /// Claim a ticket carrying an integer-typed `line`, and collect every
     /// repair the queue reports while the test runs.
@@ -434,8 +430,15 @@ mod tests {
         let repairs = Arc::new(std::sync::Mutex::new(Vec::new()));
         let seen = Arc::clone(&repairs);
         queue.on_event(move |event| {
-            if let crate::event::EventKind::ResponseRepaired { reason, message } = &event.kind {
-                seen.lock().unwrap().push((*reason, message.clone()));
+            if let crate::event::EventKind::ResponseRepaired {
+                tool_name,
+                reason,
+                message,
+            } = &event.kind
+            {
+                seen.lock()
+                    .unwrap()
+                    .push((tool_name.clone(), *reason, message.clone()));
             }
         });
         (queue, repairs)
@@ -458,12 +461,14 @@ mod tests {
             *repairs.lock().unwrap(),
             vec![
                 (
+                    "finish".to_string(),
                     RepairKind::ValueMistyped,
-                    "finish: result unwrapped".to_string()
+                    "result unwrapped".to_string()
                 ),
                 (
+                    "finish".to_string(),
                     RepairKind::ValueMistyped,
-                    "finish: /line retyped".to_string()
+                    "/line retyped".to_string()
                 ),
             ]
         );

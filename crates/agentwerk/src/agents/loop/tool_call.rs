@@ -22,8 +22,9 @@ pub(super) async fn run(context: &mut TicketContext<'_>, mut calls: Vec<ToolCall
             let registered = tool.name().to_string();
             if registered != call.name {
                 context.emit(EventKind::ResponseRepaired {
+                    tool_name: registered.clone(),
                     reason: RepairKind::CallMalformed,
-                    message: format!("{}: resolved to {registered}", call.name),
+                    message: format!("resolved from `{}`", call.name),
                 });
             }
             call.name = registered;
@@ -396,18 +397,24 @@ mod tests {
         ))]);
         let (events, _, _) = run_one(provider, 0, 3, None).await;
 
-        let repairs: Vec<(RepairKind, &str)> = events
+        let repairs: Vec<(&str, RepairKind, &str)> = events
             .iter()
             .filter_map(|e| match &e.kind {
-                EventKind::ResponseRepaired { reason, message } => {
-                    Some((*reason, message.as_str()))
-                }
+                EventKind::ResponseRepaired {
+                    tool_name,
+                    reason,
+                    message,
+                } => Some((tool_name.as_str(), *reason, message.as_str())),
                 _ => None,
             })
             .collect();
         assert_eq!(
             repairs,
-            vec![(RepairKind::CallMalformed, "finish_tool: resolved to finish")]
+            vec![(
+                "finish",
+                RepairKind::CallMalformed,
+                "resolved from `finish_tool`"
+            )]
         );
     }
 
