@@ -1,93 +1,19 @@
-//! Connects agents to LLMs, and the request they send.
+//! Connects agents to LLMs: the trait a provider implements, the handle callers
+//! hold it by, and the two protocols the built-in four are configurations of.
+//!
+//! What a request and a reply are made of lives in [`types`](super::types).
 
-use std::fmt;
 use std::future::Future;
 use std::ops::Deref;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::error::ProviderResult;
-use super::types::{Message, ModelResponse, StreamEvent};
-
-/// One tool as the model is told about it.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProviderToolDefinition {
-    /// The name the model calls the tool by.
-    pub name: String,
-    /// What the tool does, in the words the model reads.
-    pub description: String,
-    /// What the tool accepts, as JSON Schema.
-    pub input_schema: Value,
-}
-
-/// How much reasoning to ask the model for.
-///
-/// Each LLM provider has its own field for it. `Off` sends none, leaving the
-/// model's own default. This shapes only the request: whatever reasoning comes
-/// back is always kept as a `Thinking`
-/// [`ContentBlock`](super::ContentBlock).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ReasoningEffort {
-    #[default]
-    Off,
-    Low,
-    Medium,
-    High,
-}
-
-impl ReasoningEffort {
-    /// The value sent with the request, `"low"`, `"medium"`, or `"high"`, or
-    /// `None` when off. Every supported LLM provider takes these same words.
-    pub(crate) fn label(self) -> Option<&'static str> {
-        match self {
-            ReasoningEffort::Off => None,
-            ReasoningEffort::Low => Some("low"),
-            ReasoningEffort::Medium => Some("medium"),
-            ReasoningEffort::High => Some("high"),
-        }
-    }
-}
-
-impl fmt::Display for ReasoningEffort {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.label().unwrap_or("off"))
-    }
-}
-
-/// One request to an LLM provider, assembled from the agent's configuration and
-/// the conversation so far.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ModelRequest {
-    /// Which model to ask, such as `claude-sonnet-4-20250514`.
-    pub model: String,
-    /// The system prompt, assembled from the role, the behavior, and the
-    /// facts of the moment.
-    pub system_prompt: String,
-    /// Everything said so far, ending with the latest input.
-    pub messages: Vec<Message>,
-    /// The tools the model may call this turn.
-    pub tools: Vec<ProviderToolDefinition>,
-    /// Limit on this request's output tokens, or `None` for the LLM provider's
-    /// own default.
-    pub max_request_tokens: Option<u32>,
-    /// Which tool the model may pick this turn.
-    pub tool_choice: Option<ToolChoice>,
-    /// How much reasoning to ask for, taken from the [`Model`](super::Model).
-    #[serde(default)]
-    pub reasoning_effort: ReasoningEffort,
-}
-
-/// Which tool the model may pick on one turn.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum ToolChoice {
-    /// The model picks freely, or replies without calling a tool.
-    Auto,
-    /// The model must call this tool.
-    Specific { name: String },
-}
+use super::endpoint::Endpoint;
+use super::error::{ProviderError, ProviderResult};
+use super::parsing::{read_reply, ResponseBuilder};
+use super::types::{Message, ModelRequest, ModelResponse, ReasoningEffort, StreamEvent};
 
 /// What every LLM provider implements.
 ///
@@ -191,6 +117,55 @@ impl Deref for Provider {
     fn deref(&self) -> &Self::Target {
         &*self.0
     }
+}
+
+/// One LLM request shape. Two exist: Anthropic's Messages API, and OpenAI's
+/// chat completions, which Mistral and LiteLLM also speak. A provider is one
+/// `Endpoint` plus one of these, so the four built-ins are four configurations
+/// of two protocols.
+pub(crate) trait Protocol {
+    const PATH: &'static str;
+
+    /// Add this vendor's authentication headers. Everything else about the call
+    /// is [`Endpoint`]'s.
+    fn authenticate(posted: reqwest::RequestBuilder, api_key: &str) -> reqwest::RequestBuilder;
+
+    /// The request body, including however this protocol asks to be streamed.
+    fn serialize(request: &ModelRequest) -> Value;
+
+    /// Read the 400 bodies only this vendor words its own way. Statuses every
+    /// vendor reports alike are mapped by `Endpoint::send`, and anything left
+    /// falls through to `parsing::recover_wrapped_error`.
+    fn classify_error(status: u16, body: &str) -> Option<ProviderError>;
+
+    /// Read one payload of the reply, naming which [`ResponseBuilder`] call it is.
+    fn decode(payload: &Value, reply: &mut ResponseBuilder);
+
+    /// Only a model that writes its calls as text rather than emitting them
+    /// needs this.
+    fn recover(
+        _reply: &mut ModelResponse,
+        _request: &ModelRequest,
+        _on_event: &Arc<dyn Fn(StreamEvent) + Send + Sync>,
+    ) {
+    }
+}
+
+/// Run one turn of `P` against `endpoint`. Every provider answers through here,
+/// so no two can disagree about the order a turn happens in.
+pub(crate) fn respond<P: Protocol>(
+    endpoint: &Endpoint,
+    request: ModelRequest,
+    on_event: Arc<dyn Fn(StreamEvent) + Send + Sync>,
+) -> Pin<Box<dyn Future<Output = ProviderResult<ModelResponse>> + Send + '_>> {
+    let body = P::serialize(&request);
+    Box::pin(async move {
+        let posted = P::authenticate(endpoint.post(P::PATH, &body), endpoint.api_key());
+        let streamed = endpoint.send(posted, P::classify_error).await?;
+        let mut reply = read_reply(streamed, &on_event, P::decode).await?;
+        P::recover(&mut reply, &request, &on_event);
+        Ok(reply)
+    })
 }
 
 #[cfg(test)]

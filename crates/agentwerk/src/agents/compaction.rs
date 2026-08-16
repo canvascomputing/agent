@@ -9,8 +9,8 @@ use crate::event::CompactReason;
 use crate::prompts::compaction_directive;
 use crate::providers::types::StreamEvent;
 use crate::providers::{
-    ContentBlock, Message, ModelRequest, Provider, ProviderError, ProviderResult,
-    ProviderToolDefinition, TokenUsage,
+    ContentBlock, Message, ModelRequest, Provider, ProviderError, ProviderResult, TokenUsage,
+    ToolDefinition,
 };
 
 /// How full the context window gets before compaction fires, when the host
@@ -39,7 +39,7 @@ pub(crate) fn estimate_next_request_tokens(
     history: &[TokenUsage],
     messages: &[Message],
     system_prompt: &str,
-    tools: &[ProviderToolDefinition],
+    tools: &[ToolDefinition],
 ) -> u64 {
     let last_input = history.last().map(|u| u.input_tokens).unwrap_or(0);
     let bytes = messages.iter().map(message_bytes).sum::<usize>()
@@ -81,7 +81,7 @@ fn block_bytes(block: &ContentBlock) -> usize {
     }
 }
 
-fn tool_definition_bytes(tool: &ProviderToolDefinition) -> usize {
+fn tool_definition_bytes(tool: &ToolDefinition) -> usize {
     tool.name.len() + tool.description.len() + tool.input_schema.to_string().len()
 }
 
@@ -96,7 +96,7 @@ pub(crate) fn should_compact_proactively(
     history: &[TokenUsage],
     messages: &[Message],
     system_prompt: &str,
-    tools: &[ProviderToolDefinition],
+    tools: &[ToolDefinition],
 ) -> bool {
     let Some(threshold) = compaction_threshold(window, compact_at) else {
         return false;
@@ -374,7 +374,7 @@ mod tests {
         // estimate = 0 + 159/4 = 39
         let history = [TokenUsage::default()];
         let messages = [Message::user("hi!!")];
-        let tools = vec![ProviderToolDefinition {
+        let tools = vec![ToolDefinition {
             name: "tot".into(),
             description: "x".repeat(50),
             input_schema: serde_json::json!({}),

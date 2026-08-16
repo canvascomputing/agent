@@ -10,10 +10,13 @@ use serde_json::Value;
 
 use super::endpoint::Endpoint;
 use super::error::{ProviderError, ProviderResult};
-use super::framed_calls;
-use super::provider::{ModelRequest, ProviderLike, ProviderToolDefinition, ToolChoice};
-use super::response::{assemble, ResponseBuilder};
-use super::types::{ContentBlock, Message, ModelResponse, ResponseStatus, StreamEvent};
+use super::parsing;
+use super::parsing::ResponseBuilder;
+use super::provider::{self, Protocol, ProviderLike};
+use super::types::{
+    ContentBlock, Message, ModelRequest, ModelResponse, ResponseStatus, StreamEvent, ToolChoice,
+    ToolDefinition,
+};
 
 const DEFAULT_BASE_URL: &str = "https://api.openai.com";
 
@@ -75,87 +78,106 @@ impl ProviderLike for OpenAi {
         request: ModelRequest,
         on_event: Arc<dyn Fn(StreamEvent) + Send + Sync>,
     ) -> Pin<Box<dyn Future<Output = ProviderResult<ModelResponse>> + Send + '_>> {
-        respond(&self.0, request, on_event)
+        provider::respond::<OpenAiChat>(&self.0, request, on_event)
     }
 }
 
-/// Run one turn against an OpenAI-compatible endpoint. The sibling providers
-/// (`mistral`, `litellm`) speak the same shape, so they answer through here
-/// rather than owning an [`OpenAi`] of their own.
-pub(super) fn respond(
-    endpoint: &Endpoint,
-    request: ModelRequest,
-    on_event: Arc<dyn Fn(StreamEvent) + Send + Sync>,
-) -> Pin<Box<dyn Future<Output = ProviderResult<ModelResponse>> + Send + '_>> {
-    let mut body = serialize_request(&request);
-    body["stream"] = Value::Bool(true);
-    body["stream_options"] = serde_json::json!({"include_usage": true});
+/// OpenAI's chat completions, which `Mistral` and `LiteLlm` speak too against
+/// their own base URL.
+pub(crate) struct OpenAiChat;
 
-    Box::pin(async move {
-        let posted = endpoint
-            .post("/v1/chat/completions", &body)
-            .bearer_auth(endpoint.api_key());
-        let http_response = endpoint.send(posted, classify_error).await?;
-        let mut response = assemble(http_response, &on_event, ingest_chunk).await?;
-        framed_calls::repair(&mut response, &request.tools, &on_event);
-        Ok(response)
-    })
-}
+impl Protocol for OpenAiChat {
+    const PATH: &'static str = "/v1/chat/completions";
 
-/// Map OpenAI-compatible 400 bodies to typed [`ProviderError`] variants.
-/// Covers the OpenAI shape and the subset of it that LiteLLM / Mistral
-/// reproduce (where `error.code` may be absent, so the message text is the
-/// fallback signal). Statuses every vendor reports the same way are mapped
-/// by `Endpoint::send` itself.
-fn classify_error(status: u16, body: &str) -> Option<ProviderError> {
-    if status != 400 {
-        return None;
+    fn authenticate(posted: reqwest::RequestBuilder, api_key: &str) -> reqwest::RequestBuilder {
+        posted.bearer_auth(api_key)
     }
-    let json: Value = serde_json::from_str(body).ok()?;
-    let error = &json["error"];
-    let code = error["code"].as_str().unwrap_or("");
-    let type_ = error["type"].as_str().unwrap_or("");
-    let message = error["message"].as_str().unwrap_or("").to_string();
 
-    let is_context_window = code == "context_length_exceeded"
-        || type_ == "exceed_context_size_error"
-        || message.contains("maximum context length")
-        || message.contains("context_length_exceeded");
-    if is_context_window {
-        return Some(ProviderError::ContextWindowExceeded { message });
-    }
-    match code {
-        "model_not_found" => Some(ProviderError::ModelNotFound { message }),
-        "content_filter" => Some(ProviderError::SafetyFilterTriggered { message }),
-        _ => None,
-    }
-}
+    /// Covers the OpenAI shape and the subset of it that LiteLLM and Mistral
+    /// reproduce, where `error.code` may be absent and the message text is the
+    /// only signal left.
+    fn classify_error(status: u16, body: &str) -> Option<ProviderError> {
+        if status != 400 {
+            return None;
+        }
+        let json: Value = serde_json::from_str(body).ok()?;
+        let error = &json["error"];
+        let code = error["code"].as_str().unwrap_or("");
+        let type_ = error["type"].as_str().unwrap_or("");
+        let message = error["message"].as_str().unwrap_or("").to_string();
 
-fn serialize_request(request: &ModelRequest) -> Value {
-    let mut body = serde_json::json!({
-        "model": request.model,
-        "messages": serialize_messages(request),
-    });
-    if let Some(n) = request.max_request_tokens {
-        body["max_tokens"] = Value::from(n);
+        let is_context_window = code == "context_length_exceeded"
+            || type_ == "exceed_context_size_error"
+            || message.contains("maximum context length")
+            || message.contains("context_length_exceeded");
+        if is_context_window {
+            return Some(ProviderError::ContextWindowExceeded { message });
+        }
+        match code {
+            "model_not_found" => Some(ProviderError::ModelNotFound { message }),
+            "content_filter" => Some(ProviderError::SafetyFilterTriggered { message }),
+            _ => None,
+        }
     }
-    if !request.tools.is_empty() {
-        let tools: Vec<Value> = request
-            .tools
-            .iter()
-            .map(serialize_tool_definition)
-            .collect();
-        body["tools"] = Value::Array(tools);
+
+    fn serialize(request: &ModelRequest) -> Value {
+        let mut body = serde_json::json!({
+            "model": request.model,
+            "stream": true,
+            "stream_options": {"include_usage": true},
+            "messages": serialize_messages(request),
+        });
+        if let Some(n) = request.max_request_tokens {
+            body["max_tokens"] = Value::from(n);
+        }
+        if !request.tools.is_empty() {
+            let tools: Vec<Value> = request
+                .tools
+                .iter()
+                .map(serialize_tool_definition)
+                .collect();
+            body["tools"] = Value::Array(tools);
+        }
+        if let Some(ref choice) = request.tool_choice {
+            body["tool_choice"] = serialize_tool_choice(choice);
+        }
+        // The OpenAI-standard reasoning knob; the litellm proxy maps it to the
+        // backend's own thinking switch.
+        if let Some(effort) = request.reasoning_effort.label() {
+            body["reasoning_effort"] = Value::from(effort);
+        }
+        body
     }
-    if let Some(ref choice) = request.tool_choice {
-        body["tool_choice"] = serialize_tool_choice(choice);
+
+    fn decode(payload: &Value, reply: &mut ResponseBuilder) {
+        if let Some(model) = payload["model"].as_str() {
+            reply.set_model(model);
+        }
+
+        let choice = &payload["choices"][0];
+        let delta = &choice["delta"];
+        decode_reasoning(delta, reply);
+        if let Some(text) = delta["content"].as_str() {
+            reply.add_text(text);
+        }
+        decode_tool_calls(delta, reply);
+
+        if let Some(reason) = choice["finish_reason"].as_str() {
+            reply.set_status(status_from_finish_reason(reason));
+        }
+        if let Some(usage) = payload.get("usage").filter(|usage| !usage.is_null()) {
+            reply.set_input_tokens(usage["prompt_tokens"].as_u64().unwrap_or(0));
+            reply.set_output_tokens(usage["completion_tokens"].as_u64().unwrap_or(0));
+        }
     }
-    // The OpenAI-standard reasoning knob; the litellm proxy maps it to the
-    // backend's own thinking switch.
-    if let Some(effort) = request.reasoning_effort.label() {
-        body["reasoning_effort"] = Value::from(effort);
+
+    fn recover(
+        reply: &mut ModelResponse,
+        request: &ModelRequest,
+        on_event: &Arc<dyn Fn(StreamEvent) + Send + Sync>,
+    ) {
+        parsing::recover_framed_calls(reply, &request.tools, on_event);
     }
-    body
 }
 
 fn serialize_messages(request: &ModelRequest) -> Vec<Value> {
@@ -245,7 +267,7 @@ fn serialize_assistant_message(blocks: &[ContentBlock]) -> Value {
     message
 }
 
-fn serialize_tool_definition(tool: &ProviderToolDefinition) -> Value {
+fn serialize_tool_definition(tool: &ToolDefinition) -> Value {
     serde_json::json!({
         "type": "function",
         "function": {
@@ -265,32 +287,10 @@ fn serialize_tool_choice(choice: &ToolChoice) -> Value {
     }
 }
 
-fn ingest_chunk(json: &Value, reply: &mut ResponseBuilder) {
-    if let Some(model) = json["model"].as_str() {
-        reply.set_model(model);
-    }
-
-    let choice = &json["choices"][0];
-    let delta = &choice["delta"];
-    accumulate_reasoning(delta, reply);
-    if let Some(text) = delta["content"].as_str() {
-        reply.add_text(text);
-    }
-    accumulate_tool_calls(delta, reply);
-
-    if let Some(reason) = choice["finish_reason"].as_str() {
-        reply.set_status(status_from_finish_reason(reason));
-    }
-    if let Some(usage) = json.get("usage").filter(|usage| !usage.is_null()) {
-        reply.set_input_tokens(usage["prompt_tokens"].as_u64().unwrap_or(0));
-        reply.set_output_tokens(usage["completion_tokens"].as_u64().unwrap_or(0));
-    }
-}
-
-/// Accumulate a reasoning delta. Endpoints disagree on the field name:
-/// `reasoning_content` (deepseek, qwen, llama.cpp) and `reasoning` (other
-/// OpenAI-compatible proxies) both appear; take whichever is present.
-fn accumulate_reasoning(delta: &Value, reply: &mut ResponseBuilder) {
+/// Endpoints disagree on the field name: `reasoning_content` (deepseek, qwen,
+/// llama.cpp) and `reasoning` (other OpenAI-compatible proxies) both appear, so
+/// whichever is present wins.
+fn decode_reasoning(delta: &Value, reply: &mut ResponseBuilder) {
     let fragment = ["reasoning_content", "reasoning"]
         .into_iter()
         .find_map(|field| delta[field].as_str().filter(|text| !text.is_empty()));
@@ -299,7 +299,7 @@ fn accumulate_reasoning(delta: &Value, reply: &mut ResponseBuilder) {
     }
 }
 
-fn accumulate_tool_calls(delta: &Value, reply: &mut ResponseBuilder) {
+fn decode_tool_calls(delta: &Value, reply: &mut ResponseBuilder) {
     let Some(calls) = delta["tool_calls"].as_array() else {
         return;
     };
@@ -331,7 +331,7 @@ mod tests {
     use crate::providers::ReasoningEffort;
 
     /// Feed `chunks` through the decoder, returning the blocks they assemble.
-    fn ingest_all(chunks: &[Value]) -> Vec<ContentBlock> {
+    fn decode_blocks(chunks: &[Value]) -> Vec<ContentBlock> {
         decode(chunks).content
     }
 
@@ -339,7 +339,7 @@ mod tests {
         let sink: Arc<dyn Fn(StreamEvent) + Send + Sync> = Arc::new(|_| {});
         let mut reply = ResponseBuilder::new(&sink);
         for chunk in chunks {
-            ingest_chunk(chunk, &mut reply);
+            OpenAiChat::decode(chunk, &mut reply);
         }
         reply
             .into_response()
@@ -348,7 +348,7 @@ mod tests {
 
     #[test]
     fn parses_reasoning_content_into_thinking_before_text() {
-        let content = ingest_all(&[
+        let content = decode_blocks(&[
             serde_json::json!({"choices":[{"delta":{"reasoning_content":"let me think"}}]}),
             serde_json::json!({"choices":[{"delta":{"content":"the answer"}}]}),
         ]);
@@ -364,7 +364,7 @@ mod tests {
     #[test]
     fn parses_reasoning_field_alias() {
         let content =
-            ingest_all(&[serde_json::json!({"choices":[{"delta":{"reasoning":"alt field"}}]})]);
+            decode_blocks(&[serde_json::json!({"choices":[{"delta":{"reasoning":"alt field"}}]})]);
         assert!(matches!(
             &content[..],
             [ContentBlock::Thinking { thinking, .. }] if thinking == "alt field"
@@ -373,7 +373,7 @@ mod tests {
 
     #[test]
     fn an_empty_reasoning_field_falls_through_to_the_other_name() {
-        let content = ingest_all(&[serde_json::json!({"choices":[{"delta":{
+        let content = decode_blocks(&[serde_json::json!({"choices":[{"delta":{
             "reasoning_content": "", "reasoning": "weighing it up",
         }}]})]);
         assert!(matches!(
@@ -386,7 +386,7 @@ mod tests {
     fn reasoning_returning_after_text_opens_a_second_thinking_block() {
         // The blocks record the order the chunks arrived in, so a proxy that
         // interleaves the two streams is reported as it answered.
-        let content = ingest_all(&[
+        let content = decode_blocks(&[
             serde_json::json!({"choices":[{"delta":{"reasoning_content":"weighing it"}}]}),
             serde_json::json!({"choices":[{"delta":{"content":"first"}}]}),
             serde_json::json!({"choices":[{"delta":{"reasoning_content":"reconsidering"}}]}),
@@ -405,7 +405,7 @@ mod tests {
 
     #[test]
     fn parses_tool_call_arguments_from_chunk_fragments() {
-        let content = ingest_all(&[
+        let content = decode_blocks(&[
             serde_json::json!({"choices":[{"delta":{"tool_calls":[
                 {"index": 0, "id": "call_1", "function": {"name": "grep", "arguments": r#"{"pattern":"#}}
             ]}}]}),
@@ -423,7 +423,7 @@ mod tests {
 
     #[test]
     fn tool_calls_the_chunks_index_apart_keep_their_own_arguments() {
-        let content = ingest_all(&[
+        let content = decode_blocks(&[
             serde_json::json!({"choices":[{"delta":{"tool_calls":[
                 {"index": 0, "id": "call_1", "function": {"name": "grep", "arguments": r#"{"pattern": "a"}"#}}
             ]}}]}),
@@ -443,9 +443,8 @@ mod tests {
 
     #[test]
     fn a_high_tool_call_index_adds_only_the_one_call() {
-        // The index reaches the reply from the endpoint, so it must route a
-        // fragment without deciding how much the reply holds.
-        let content = ingest_all(&[serde_json::json!({"choices":[{"delta":{"tool_calls":[
+        // The endpoint supplies the index, so it routes without sizing anything.
+        let content = decode_blocks(&[serde_json::json!({"choices":[{"delta":{"tool_calls":[
             {"index": 100000, "id": "call_1", "function": {"name": "grep", "arguments": "{}"}}
         ]}}]})]);
         assert_eq!(content.len(), 1);
@@ -453,7 +452,7 @@ mod tests {
 
     #[test]
     fn index_less_fragments_with_new_ids_stay_separate_tool_calls() {
-        let content = ingest_all(&[
+        let content = decode_blocks(&[
             serde_json::json!({"choices":[{"delta":{"tool_calls":[
                 {"id": "call_1", "function": {"name": "grep", "arguments": r#"{"pattern": "a"}"#}}
             ]}}]}),
@@ -473,7 +472,7 @@ mod tests {
 
     #[test]
     fn index_less_fragments_without_an_id_continue_the_tool_call_in_flight() {
-        let content = ingest_all(&[
+        let content = decode_blocks(&[
             serde_json::json!({"choices":[{"delta":{"tool_calls":[
                 {"id": "call_1", "function": {"name": "grep", "arguments": r#"{"pattern":"#}}
             ]}}]}),
@@ -505,12 +504,12 @@ mod tests {
     fn serialize_request_sets_reasoning_effort() {
         let mut request = dummy_request();
         request.reasoning_effort = ReasoningEffort::High;
-        assert_eq!(serialize_request(&request)["reasoning_effort"], "high");
+        assert_eq!(OpenAiChat::serialize(&request)["reasoning_effort"], "high");
     }
 
     #[test]
     fn serialize_request_omits_reasoning_effort_when_off() {
-        assert!(serialize_request(&dummy_request())
+        assert!(OpenAiChat::serialize(&dummy_request())
             .get("reasoning_effort")
             .is_none());
     }
@@ -548,7 +547,7 @@ mod tests {
 
     #[test]
     fn serialize_system_prompt_as_message() {
-        let body = serialize_request(&dummy_request());
+        let body = OpenAiChat::serialize(&dummy_request());
         let messages = body["messages"].as_array().unwrap();
         assert_eq!(messages[0]["role"], "system");
         assert_eq!(messages[0]["content"], "You are helpful.");
@@ -556,7 +555,7 @@ mod tests {
 
     #[test]
     fn serialize_basic_structure() {
-        let body = serialize_request(&dummy_request());
+        let body = OpenAiChat::serialize(&dummy_request());
         assert_eq!(body["model"], "test-model");
         assert_eq!(body["max_tokens"], 1024);
         assert!(body.get("tools").is_none());
@@ -566,7 +565,7 @@ mod tests {
     fn serialize_request_omits_max_tokens_when_none() {
         let mut request = dummy_request();
         request.max_request_tokens = None;
-        let body = serialize_request(&request);
+        let body = OpenAiChat::serialize(&request);
         assert!(body.get("max_tokens").is_none());
     }
 
@@ -576,7 +575,7 @@ mod tests {
             model: "test".into(),
             system_prompt: String::new(),
             messages: vec![],
-            tools: vec![ProviderToolDefinition {
+            tools: vec![ToolDefinition {
                 name: "get_weather".into(),
                 description: "Get weather".into(),
                 input_schema: serde_json::json!({"type": "object", "properties": {"city": {"type": "string"}}}),
@@ -585,7 +584,7 @@ mod tests {
             tool_choice: Some(ToolChoice::Auto),
             reasoning_effort: Default::default(),
         };
-        let body = serialize_request(&request);
+        let body = OpenAiChat::serialize(&request);
         let tools = body["tools"].as_array().unwrap();
         assert_eq!(tools[0]["type"], "function");
         assert_eq!(tools[0]["function"]["name"], "get_weather");
@@ -605,7 +604,7 @@ mod tests {
             }),
             reasoning_effort: Default::default(),
         };
-        let body = serialize_request(&request);
+        let body = OpenAiChat::serialize(&request);
         assert_eq!(body["tool_choice"]["type"], "function");
         assert_eq!(body["tool_choice"]["function"]["name"], "read_file");
     }
@@ -628,7 +627,7 @@ mod tests {
             "This model's maximum context length is 128000 tokens.",
         );
         assert!(matches!(
-            classify_error(400, &body),
+            OpenAiChat::classify_error(400, &body),
             Some(ProviderError::ContextWindowExceeded { .. })
         ));
     }
@@ -646,7 +645,7 @@ mod tests {
         })
         .to_string();
         assert!(matches!(
-            classify_error(400, &body),
+            OpenAiChat::classify_error(400, &body),
             Some(ProviderError::ContextWindowExceeded { .. })
         ));
     }
@@ -655,7 +654,7 @@ mod tests {
     fn maps_400_content_filter_to_safety_filter_triggered() {
         let body = body_400("content_filter", "request blocked by policy");
         assert!(matches!(
-            classify_error(400, &body),
+            OpenAiChat::classify_error(400, &body),
             Some(ProviderError::SafetyFilterTriggered { .. })
         ));
     }
@@ -664,7 +663,7 @@ mod tests {
     fn maps_400_model_not_found_to_model_not_found() {
         let body = body_400("model_not_found", "the model `gpt-x` does not exist");
         assert!(matches!(
-            classify_error(400, &body),
+            OpenAiChat::classify_error(400, &body),
             Some(ProviderError::ModelNotFound { .. })
         ));
     }
@@ -672,7 +671,7 @@ mod tests {
     #[test]
     fn an_unrelated_openai_400_falls_through() {
         let body = body_400("invalid_api_key", "incorrect API key provided");
-        assert!(classify_error(400, &body).is_none());
+        assert!(OpenAiChat::classify_error(400, &body).is_none());
     }
 
     #[test]
@@ -681,7 +680,8 @@ mod tests {
             "context_length_exceeded",
             "maximum context length is 8192 tokens; requested 12000",
         );
-        let Some(ProviderError::ContextWindowExceeded { message }) = classify_error(400, &body)
+        let Some(ProviderError::ContextWindowExceeded { message }) =
+            OpenAiChat::classify_error(400, &body)
         else {
             panic!("expected ContextWindowExceeded");
         };

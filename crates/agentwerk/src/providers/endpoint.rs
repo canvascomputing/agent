@@ -11,7 +11,7 @@ use serde_json::Value;
 
 use super::environment;
 use super::error::{ProviderError, ProviderResult};
-use super::patterns;
+use super::parsing;
 
 pub(crate) const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(600);
 
@@ -48,9 +48,8 @@ impl Endpoint {
         &self.api_key
     }
 
-    /// Read back what the builder set. Only the tests ask: a request reaches
-    /// the URL through [`post`](Self::post), and the timeout lives in the
-    /// client.
+    /// Only the tests ask: a request reaches the URL through
+    /// [`post`](Self::post), and the timeout lives in the client.
     #[cfg(test)]
     pub(crate) fn get_base_url(&self) -> &str {
         &self.base_url
@@ -61,7 +60,6 @@ impl Endpoint {
         self.timeout
     }
 
-    /// A POST to `path` under this endpoint's base URL carrying `body` as JSON.
     /// The caller adds its own vendor's authentication headers before handing
     /// the request to [`send`](Self::send).
     pub(crate) fn post(&self, path: &str, body: &Value) -> reqwest::RequestBuilder {
@@ -71,14 +69,9 @@ impl Endpoint {
             .json(body)
     }
 
-    /// Send a request built by [`post`](Self::post), mapping a transport
-    /// failure and every non-2xx status to a typed [`ProviderError`].
-    ///
-    /// `classify` reads the bodies only this vendor words its own way. Anything
-    /// it returns `None` for falls through: 401/403/404 map the same way for
-    /// every vendor, 429/529 become [`ProviderError::RateLimited`], 5xx become
-    /// retryable [`ProviderError::StatusUnclassified`], and other non-2xx codes
-    /// become terminal [`ProviderError::StatusUnclassified`].
+    /// Send a request built by [`post`](Self::post), mapping a transport failure
+    /// and every non-2xx status to a typed [`ProviderError`]. `classify` reads
+    /// only the bodies this vendor words its own way; the rest fall through.
     pub(crate) async fn send(
         &self,
         request: reqwest::RequestBuilder,
@@ -110,13 +103,9 @@ async fn map_http_errors(
     if let Some(error) = classify_common_status(status, &body) {
         return Err(error);
     }
-    // Per-provider classifiers only recognise their own vendor's wording. When
-    // an OpenAI-compatible proxy (LiteLLM, OpenRouter, …) wraps an upstream
-    // overflow / rate-limit signal, the vendor classifier gives up. The shared
-    // pattern bank catches those wrapped errors so the agent loop sees
-    // ContextWindowExceeded / RateLimited instead of a terminal
-    // StatusUnclassified.
-    if let Some(error) = patterns::refine(status, &body, retry_delay) {
+    // A proxy wraps the upstream signal in wording neither vendor classifier
+    // knows, so the shared bank reads it rather than losing it to a 5xx.
+    if let Some(error) = parsing::recover_wrapped_error(status, &body, retry_delay) {
         return Err(error);
     }
     Err(fallback_http_error(status, body, retry_delay))

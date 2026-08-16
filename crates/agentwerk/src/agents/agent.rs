@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex, Weak};
 use serde::Serialize;
 
 use crate::prompts::{context_values, render_context, PromptBuilder};
-use crate::providers::{Model, Provider, ProviderToolDefinition};
+use crate::providers::{Model, Provider, ToolDefinition};
 use crate::tools::{FinishTool, KnowledgeTool, ToolLike, ToolRegistry};
 
 use super::knowledge::Knowledge;
@@ -214,7 +214,7 @@ impl<P, M> AgentBuilder<P, M> {
         self.label.as_deref() == ticket_label
     }
 
-    pub(super) fn tool_definitions(&self) -> Vec<ProviderToolDefinition> {
+    pub(super) fn tool_definitions(&self) -> Vec<ToolDefinition> {
         self.tools.definitions()
     }
 
@@ -411,7 +411,7 @@ impl Agent {
         self.label.as_deref() == ticket_label
     }
 
-    pub(super) fn tool_definitions(&self) -> Vec<ProviderToolDefinition> {
+    pub(super) fn tool_definitions(&self) -> Vec<ToolDefinition> {
         self.tools.definitions()
     }
 

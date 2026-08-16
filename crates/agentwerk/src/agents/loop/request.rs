@@ -6,7 +6,7 @@ use std::sync::Arc;
 use crate::agents::retry::{ExponentialRetry, Retry};
 use crate::event::{CompactReason, EventKind, RepairKind};
 use crate::providers::types::StreamEvent;
-use crate::providers::{ContentBlock, ModelRequest, ProviderError, ProviderToolDefinition};
+use crate::providers::{ContentBlock, ModelRequest, ProviderError, ToolDefinition};
 use crate::schemas::Schema;
 use crate::tools::ToolCall;
 
@@ -138,8 +138,8 @@ pub(super) async fn run(context: &mut TicketContext<'_>) -> Option<Step> {
 /// so the advertised shape and the parsed shape always agree.
 fn finish_tool_with_ticket_schema(
     schema: Option<&Schema>,
-    mut tools: Vec<ProviderToolDefinition>,
-) -> Vec<ProviderToolDefinition> {
+    mut tools: Vec<ToolDefinition>,
+) -> Vec<ToolDefinition> {
     for definition in &mut tools {
         if definition.name == crate::tools::TICKET_FINISH_TOOL {
             definition.input_schema =

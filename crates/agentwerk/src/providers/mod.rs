@@ -8,15 +8,12 @@ mod anthropic;
 mod endpoint;
 pub(crate) mod environment;
 mod error;
-mod framed_calls;
 mod litellm;
 mod mistral;
 pub(crate) mod model;
 mod openai;
-mod patterns;
+mod parsing;
 mod provider;
-mod response;
-mod stream;
 pub mod types;
 
 pub use anthropic::Anthropic;
@@ -25,10 +22,8 @@ pub use litellm::LiteLlm;
 pub use mistral::Mistral;
 pub use model::Model;
 pub use openai::OpenAi;
-pub use provider::{
-    ModelRequest, Provider, ProviderLike, ProviderToolDefinition, ReasoningEffort, ToolChoice,
-};
+pub use provider::{Provider, ProviderLike};
 pub use types::{
-    AsUserMessage, ContentBlock, Message, ModelResponse, ResponseStatus, StreamEvent, TokenUsage,
-    ToolDeclineKind,
+    AsUserMessage, ContentBlock, Message, ModelRequest, ModelResponse, ReasoningEffort,
+    ResponseStatus, StreamEvent, TokenUsage, ToolChoice, ToolDeclineKind, ToolDefinition,
 };

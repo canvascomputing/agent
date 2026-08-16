@@ -11,7 +11,7 @@ use serde_json::Value;
 use crate::agents::knowledge::Knowledge;
 use crate::agents::tickets::{Run, TicketQueue};
 use crate::providers::types::ContentBlock;
-use crate::providers::{ProviderResult, ProviderToolDefinition};
+use crate::providers::{ProviderResult, ToolDefinition};
 use crate::schemas::Schema;
 
 use super::error::ToolError;
@@ -213,10 +213,9 @@ pub trait ToolLike: Send + Sync {
 #[derive(Clone, Default)]
 pub(crate) struct ToolRegistry {
     pub(crate) tools: Vec<Arc<dyn ToolLike>>,
-    /// Each tool's arguments schema, compiled once at registration, against the
-    /// registered name. A tool whose schema does not compile is absent and its
-    /// arguments reach it unchecked, since a mistake in the schema is the
-    /// author's and must not make the tool uncallable.
+    /// Keyed by registered name. A tool whose schema does not compile is absent
+    /// and its arguments reach it unchecked: that mistake is the author's, and
+    /// must not make the tool uncallable.
     schemas: std::collections::HashMap<String, Schema>,
 }
 
@@ -244,9 +243,8 @@ impl ToolRegistry {
         self.tools.push(tool);
     }
 
-    /// The compiled arguments schema of the tool `name` resolves to, through the
-    /// same spelling fold as [`get`](Self::get) so a folded name is checked
-    /// against the tool that will run.
+    /// Resolved through the same spelling fold as [`get`](Self::get), so a folded
+    /// name is checked against the tool that will run.
     fn schema_for(&self, name: &str) -> Option<Schema> {
         let tool = self.get(name)?;
         self.schemas.get(tool.name()).cloned()
@@ -278,10 +276,10 @@ impl ToolRegistry {
     }
 
     /// The tool definitions sent to the model.
-    pub(crate) fn definitions(&self) -> Vec<ProviderToolDefinition> {
+    pub(crate) fn definitions(&self) -> Vec<ToolDefinition> {
         self.tools
             .iter()
-            .map(|t| ProviderToolDefinition {
+            .map(|t| ToolDefinition {
                 name: t.name().to_string(),
                 description: t.description().to_string(),
                 input_schema: t.input_schema(),
@@ -586,9 +584,8 @@ async fn invoke(
             ),
         });
     }
-    // The arguments are checked against what the tool advertises, so a wrong
-    // type is named once here rather than by each tool in its own words, or
-    // taken for a missing argument and silently defaulted.
+    // Checked once here, so a wrong type is named rather than read as a missing
+    // argument and silently defaulted.
     if let Some(schema) = schema {
         if let Err(violations) = schema.violations(&input) {
             return Err(ToolError::SchemaValidationFailed {
@@ -1147,16 +1144,14 @@ Do the demo thing.
 
     #[tokio::test]
     async fn an_argument_the_schema_does_not_declare_still_reaches_the_tool() {
-        // Tool schemas close over nothing, so an extra key is the model being
-        // generous rather than wrong.
+        // Tool schemas close over nothing: an extra key is generosity, not error.
         let (_, succeeded) = call_typed(serde_json::json!({"count": 3, "extra": true})).await;
         assert!(succeeded);
     }
 
     #[test]
     fn a_tool_whose_schema_does_not_compile_stays_callable() {
-        // The mistake is the tool author's; making the tool uncallable would
-        // punish the agent for it.
+        // The mistake is the author's; the agent should not pay for it.
         struct Unschemable;
         impl ToolLike for Unschemable {
             fn name(&self) -> &str {

@@ -260,7 +260,7 @@ The name the model calls is a separate namespace and takes no suffix: `read_file
 
 **A type a public trait or extension point hands to callers is documented; a genuinely internal type is `pub(crate)`.**
 
-- The request and response types under `providers::` (`Message`, `ContentBlock`, `ModelRequest`, `ProviderToolDefinition`, `ToolChoice`, `StreamEvent`, `ModelResponse`, `ResponseStatus`) are documented: implementing `ProviderLike` is supported, and implementors name them.
+- The request and response types under `providers::` (`Message`, `ContentBlock`, `ModelRequest`, `ToolDefinition`, `ToolChoice`, `StreamEvent`, `ModelResponse`, `ResponseStatus`) are documented: implementing `ProviderLike` is supported, and implementors name them.
 - A type that is genuinely internal becomes `pub(crate)` instead. `tools::ToolFile` is the example: callers go through `Tool::from_tool_file(definition: &str)` and never name the struct.
 - `#[doc(hidden)]` is reserved for items a macro or trait forces `pub` that are useless even to implementors; there are currently none.
 

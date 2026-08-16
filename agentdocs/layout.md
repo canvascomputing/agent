@@ -72,15 +72,14 @@ crates/
 
 **Holds every concrete LLM provider plus the shared request and response types.**
 
-- `provider.rs` defines `ProviderLike`, the `Provider` handle over it, `ModelRequest`, `ProviderToolDefinition`, and `ToolChoice`.
-- `types.rs` defines `Message`, `ContentBlock`, `TokenUsage`, `AsUserMessage`, `ResponseStatus`, and `StreamEvent`.
-- `anthropic.rs`, `openai.rs`, `mistral.rs`, and `litellm.rs` are concrete providers. Each is a newtype over one `Endpoint`; `mistral.rs` and `litellm.rs` answer through `openai::respond`, so the OpenAI request shape is written once.
+- `provider.rs` defines the behavior: `ProviderLike`, the `Provider` handle over it, the crate-internal `Protocol` trait, and the generic `respond` every provider answers through.
+- `types.rs` defines every value the two sides exchange, in the order a turn happens: `ModelRequest`, `ToolDefinition`, `ToolChoice`, `ReasoningEffort`, then `Message`, `AsUserMessage`, `ContentBlock`, then `ModelResponse`, `TokenUsage`, `ResponseStatus`, `ToolDeclineKind`, and `StreamEvent`.
+- `anthropic.rs`, `openai.rs`, `mistral.rs`, and `litellm.rs` are concrete providers. Each is a newtype over one `Endpoint` whose `respond` names a `Protocol`: `AnthropicMessages` in `anthropic.rs`, and `OpenAiChat` in `openai.rs`, which `mistral.rs` and `litellm.rs` name too, so the OpenAI request shape is written once.
 - `endpoint.rs` holds `Endpoint`, the one HTTP call every provider makes: the base URL, the client, the timeout, and the mapping of every non-2xx answer to a `ProviderError`.
 - `environment.rs` reads the variables behind `Provider::from_env()` and `Model::from_env()`; its readers are crate-internal.
 - `model.rs` holds `Model` and the one table of context window sizes, keyed by model name rather than by LLM provider.
-- `stream.rs` holds the SSE parser; `error.rs` holds `ProviderError`, `ProviderResult`, and `RequestErrorKind`; `patterns.rs` holds the error-body patterns that catch an upstream signal a proxy wrapped.
-- `response.rs` holds `ResponseBuilder`, the reply every provider grows one fragment at a time and the one place a `StreamEvent` is emitted from, plus `assemble`, which reads one SSE reply to its end through a provider's decoder.
-- `framed_calls.rs` holds `repair`, which reads back the tool calls a model wrote as text rather than emitting through the tool channel; `openai.rs` is its only caller.
+- `error.rs` holds `ProviderError`, `ProviderResult`, and `RequestErrorKind`.
+- `parsing.rs` takes an HTTP response and gives back a `ModelResponse`, in five sections: `read_reply`, the SSE reader, `ResponseBuilder` (the reply every provider grows one fragment at a time, and the one place a `StreamEvent` is emitted from), the calls a model wrote as prose rather than emitting through the tool channel, and the upstream error a proxy wrapped in wording no vendor classifier knows.
 
 ## The `tools/` Module
 

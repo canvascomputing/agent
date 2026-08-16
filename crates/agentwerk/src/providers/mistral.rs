@@ -7,9 +7,9 @@ use std::time::Duration;
 
 use super::endpoint::Endpoint;
 use super::error::ProviderResult;
-use super::openai;
-use super::provider::{ModelRequest, ProviderLike};
-use super::types::{ModelResponse, StreamEvent};
+use super::openai::OpenAiChat;
+use super::provider::{self, ProviderLike};
+use super::types::{ModelRequest, ModelResponse, StreamEvent};
 
 const DEFAULT_BASE_URL: &str = "https://api.mistral.ai";
 
@@ -71,7 +71,7 @@ impl ProviderLike for Mistral {
         request: ModelRequest,
         on_event: Arc<dyn Fn(StreamEvent) + Send + Sync>,
     ) -> Pin<Box<dyn Future<Output = ProviderResult<ModelResponse>> + Send + '_>> {
-        openai::respond(&self.0, request, on_event)
+        provider::respond::<OpenAiChat>(&self.0, request, on_event)
     }
 }
 

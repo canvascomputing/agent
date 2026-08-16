@@ -8,9 +8,9 @@ use std::time::Duration;
 
 use super::endpoint::Endpoint;
 use super::error::ProviderResult;
-use super::openai;
-use super::provider::{ModelRequest, ProviderLike};
-use super::types::{ModelResponse, StreamEvent};
+use super::openai::OpenAiChat;
+use super::provider::{self, ProviderLike};
+use super::types::{ModelRequest, ModelResponse, StreamEvent};
 
 const DEFAULT_BASE_URL: &str = "http://localhost:4000";
 
@@ -74,7 +74,7 @@ impl ProviderLike for LiteLlm {
         request: ModelRequest,
         on_event: Arc<dyn Fn(StreamEvent) + Send + Sync>,
     ) -> Pin<Box<dyn Future<Output = ProviderResult<ModelResponse>> + Send + '_>> {
-        openai::respond(&self.0, request, on_event)
+        provider::respond::<OpenAiChat>(&self.0, request, on_event)
     }
 }
 
@@ -89,8 +89,7 @@ mod tests {
 
     #[test]
     fn a_proxy_that_wants_no_key_is_built_with_an_empty_one() {
-        // A local proxy commonly runs unauthenticated, so the key is the one
-        // provider setting that may legitimately be blank.
+        // A local proxy commonly runs unauthenticated, so blank is legitimate here.
         assert_eq!(LiteLlm::new("").0.api_key(), "");
     }
 

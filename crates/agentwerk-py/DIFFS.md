@@ -178,7 +178,7 @@ Seven rules the surface table below never repeats.
 | `Model::get_reasoning_effort()` | `Model.get_reasoning_effort()` |
 | `ReasoningEffort` | A string. |
 | `ProviderError`, `ProviderResult`, `RequestErrorKind` | `RuntimeError` |
-| `ModelRequest`, `ProviderToolDefinition`, `ToolChoice`, `Message`, `AsUserMessage`, `ContentBlock`, `ModelResponse`, `ResponseStatus`, `StreamEvent` | Not bound: the shapes an LLM provider is built from. Python binds the four providers, not what they are built out of. |
+| `ModelRequest`, `ToolDefinition`, `ToolChoice`, `Message`, `AsUserMessage`, `ContentBlock`, `ModelResponse`, `ResponseStatus`, `StreamEvent` | Not bound: the shapes an LLM provider is built from. Python binds the four providers, not what they are built out of. |
 | **Tools** | |
 | `Tool::new(name, description).schema(..).handler(..).build()` | The `@tool` decorator: a decorated function carries the name, description, and schema a `ToolBuilder` collects. |
 | `ToolBuilder<H>` | Folded into the `@tool` decorator: the type changes once a handler is attached, which Python cannot hold across calls. |

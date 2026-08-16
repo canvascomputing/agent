@@ -9,9 +9,12 @@ use serde_json::Value;
 
 use super::endpoint::Endpoint;
 use super::error::{ProviderError, ProviderResult};
-use super::provider::{ModelRequest, ProviderLike, ProviderToolDefinition, ToolChoice};
-use super::response::{assemble, ResponseBuilder, ToolCallKey};
-use super::types::{ContentBlock, Message, ModelResponse, ResponseStatus, StreamEvent};
+use super::parsing::{ResponseBuilder, ToolCallKey};
+use super::provider::{self, Protocol, ProviderLike};
+use super::types::{
+    ContentBlock, Message, ModelRequest, ModelResponse, ResponseStatus, StreamEvent, ToolChoice,
+    ToolDefinition,
+};
 
 const DEFAULT_BASE_URL: &str = "https://api.anthropic.com";
 
@@ -72,139 +75,88 @@ impl ProviderLike for Anthropic {
         request: ModelRequest,
         on_event: Arc<dyn Fn(StreamEvent) + Send + Sync>,
     ) -> Pin<Box<dyn Future<Output = ProviderResult<ModelResponse>> + Send + '_>> {
-        let mut body = serialize_request(&request);
-        body["stream"] = Value::Bool(true);
-
-        Box::pin(async move {
-            let request = self
-                .0
-                .post("/v1/messages", &body)
-                .header("x-api-key", self.0.api_key())
-                .header("anthropic-version", "2023-06-01");
-            let response = self.0.send(request, classify_error).await?;
-            assemble(response, &on_event, handle_stream_event).await
-        })
+        provider::respond::<AnthropicMessages>(&self.0, request, on_event)
     }
 }
 
-/// Map Anthropic-specific 400 bodies to typed [`ProviderError`] variants.
-/// Statuses every vendor reports the same way are mapped by `Endpoint::send`
-/// itself; anything unrecognised falls through to
-/// [`ProviderError::StatusUnclassified`] (or [`ProviderError::RateLimited`]
-/// for 429/529).
-fn classify_error(status: u16, body: &str) -> Option<ProviderError> {
-    if status != 400 {
-        return None;
+/// The Anthropic Messages API.
+pub(crate) struct AnthropicMessages;
+
+impl Protocol for AnthropicMessages {
+    const PATH: &'static str = "/v1/messages";
+
+    fn authenticate(posted: reqwest::RequestBuilder, api_key: &str) -> reqwest::RequestBuilder {
+        posted
+            .header("x-api-key", api_key)
+            .header("anthropic-version", "2023-06-01")
     }
-    let json: Value = serde_json::from_str(body).ok()?;
-    let error = &json["error"];
-    let type_ = error["type"].as_str().unwrap_or("");
-    let message = error["message"].as_str().unwrap_or("").to_string();
-    match type_ {
-        "invalid_request_error"
-            if message.contains("prompt is too long")
-                || message.contains("input length and `max_tokens` exceed context limit") =>
-        {
-            Some(ProviderError::ContextWindowExceeded { message })
+
+    /// Anything unrecognised falls through to
+    /// [`ProviderError::StatusUnclassified`] (or [`ProviderError::RateLimited`]
+    /// for 429/529).
+    fn classify_error(status: u16, body: &str) -> Option<ProviderError> {
+        if status != 400 {
+            return None;
         }
-        "not_found_error" => Some(ProviderError::ModelNotFound { message }),
-        _ => None,
-    }
-}
-
-fn serialize_request(request: &ModelRequest) -> Value {
-    let mut body = serde_json::json!({
-        "model": request.model,
-        "system": request.system_prompt,
-        "messages": serialize_messages(&request.messages),
-    });
-    if let Some(n) = request.max_request_tokens {
-        body["max_tokens"] = Value::from(n);
-    }
-    if !request.tools.is_empty() {
-        let tools: Vec<Value> = request
-            .tools
-            .iter()
-            .map(serialize_tool_definition)
-            .collect();
-        body["tools"] = Value::Array(tools);
-    }
-    if let Some(ref choice) = request.tool_choice {
-        body["tool_choice"] = serialize_tool_choice(choice);
-    }
-    // Request thinking only when an effort is set and the model accepts the
-    // adaptive form. Older Anthropic models used a different request field we
-    // no longer send, so they get none; parsing still keeps the thinking of
-    // any model that returns it.
-    if let Some(effort) = request.reasoning_effort.label() {
-        if supports_adaptive_thinking(&request.model) {
-            body["thinking"] = serde_json::json!({"type": "adaptive", "display": "summarized"});
-            body["output_config"] = serde_json::json!({"effort": effort});
+        let json: Value = serde_json::from_str(body).ok()?;
+        let error = &json["error"];
+        let type_ = error["type"].as_str().unwrap_or("");
+        let message = error["message"].as_str().unwrap_or("").to_string();
+        match type_ {
+            "invalid_request_error"
+                if message.contains("prompt is too long")
+                    || message.contains("input length and `max_tokens` exceed context limit") =>
+            {
+                Some(ProviderError::ContextWindowExceeded { message })
+            }
+            "not_found_error" => Some(ProviderError::ModelNotFound { message }),
+            _ => None,
         }
     }
-    body
-}
 
-fn handle_stream_event(json: &Value, reply: &mut ResponseBuilder) {
-    match json["type"].as_str().unwrap_or("") {
-        "message_start" => handle_message_start(json, reply),
-        "content_block_start" => handle_block_start(json, reply),
-        "content_block_delta" => handle_block_delta(json, reply),
-        "message_delta" => handle_message_delta(json, reply),
-        _ => {}
-    }
-}
-
-fn block_number(json: &Value) -> usize {
-    json["index"].as_u64().unwrap_or(0) as usize
-}
-
-fn handle_message_start(json: &Value, reply: &mut ResponseBuilder) {
-    let message = &json["message"];
-    reply.set_model(message["model"].as_str().unwrap_or("unknown"));
-    reply.set_input_tokens(message["usage"]["input_tokens"].as_u64().unwrap_or(0));
-}
-
-fn handle_block_start(json: &Value, reply: &mut ResponseBuilder) {
-    let block = &json["content_block"];
-    match block["type"].as_str().unwrap_or("") {
-        "tool_use" => {
-            reply.open_tool_call(
-                Some(block_number(json)),
-                block["id"].as_str().unwrap_or(""),
-                block["name"].as_str().unwrap_or(""),
-            );
+    fn serialize(request: &ModelRequest) -> Value {
+        let mut body = serde_json::json!({
+            "model": request.model,
+            "stream": true,
+            "system": request.system_prompt,
+            "messages": serialize_messages(&request.messages),
+        });
+        if let Some(n) = request.max_request_tokens {
+            body["max_tokens"] = Value::from(n);
         }
-        "redacted_thinking" => reply.add_redacted_thinking(block["data"].as_str().unwrap_or("")),
-        // A text or thinking block is opened by the first delta that reaches it.
-        _ => {}
+        if !request.tools.is_empty() {
+            let tools: Vec<Value> = request
+                .tools
+                .iter()
+                .map(serialize_tool_definition)
+                .collect();
+            body["tools"] = Value::Array(tools);
+        }
+        if let Some(ref choice) = request.tool_choice {
+            body["tool_choice"] = serialize_tool_choice(choice);
+        }
+        // Request thinking only when an effort is set and the model accepts the
+        // adaptive form. Older Anthropic models used a different request field we
+        // no longer send, so they get none; parsing still keeps the thinking of
+        // any model that returns it.
+        if let Some(effort) = request.reasoning_effort.label() {
+            if supports_adaptive_thinking(&request.model) {
+                body["thinking"] = serde_json::json!({"type": "adaptive", "display": "summarized"});
+                body["output_config"] = serde_json::json!({"effort": effort});
+            }
+        }
+        body
     }
-}
 
-fn handle_block_delta(json: &Value, reply: &mut ResponseBuilder) {
-    let delta = &json["delta"];
-    match delta["type"].as_str().unwrap_or("") {
-        "text_delta" => reply.add_text(delta["text"].as_str().unwrap_or("")),
-        "input_json_delta" => reply.add_arguments(
-            ToolCallKey::Named(block_number(json)),
-            delta["partial_json"].as_str().unwrap_or(""),
-        ),
-        "thinking_delta" => reply.add_thinking(delta["thinking"].as_str().unwrap_or("")),
-        "signature_delta" => reply.add_signature(delta["signature"].as_str().unwrap_or("")),
-        _ => {}
+    fn decode(payload: &Value, reply: &mut ResponseBuilder) {
+        match payload["type"].as_str().unwrap_or("") {
+            "message_start" => decode_message_start(payload, reply),
+            "content_block_start" => decode_block_start(payload, reply),
+            "content_block_delta" => decode_block_delta(payload, reply),
+            "message_delta" => decode_message_delta(payload, reply),
+            _ => {}
+        }
     }
-}
-
-fn handle_message_delta(json: &Value, reply: &mut ResponseBuilder) {
-    let stop_reason = json["delta"]["stop_reason"].as_str().unwrap_or("end_turn");
-    // The one stop reason that reports a failed request rather than a finished
-    // reply, so it leaves as the error the loop summarizes on.
-    if stop_reason == "model_context_window_exceeded" {
-        reply.set_context_window_exceeded();
-    } else {
-        reply.set_status(status_from_stop_reason(stop_reason));
-    }
-    reply.set_output_tokens(json["usage"]["output_tokens"].as_u64().unwrap_or(0));
 }
 
 fn serialize_messages(messages: &[Message]) -> Vec<Value> {
@@ -233,7 +185,7 @@ fn serialize_content_block(block: &ContentBlock) -> Option<Value> {
         ContentBlock::Text { text } => {
             serde_json::json!({"type": "text", "text": text})
         }
-        // This API types `input` as an object, so a payload `parse_tool_arguments`
+        // This API types `input` as an object, so a payload `read_arguments`
         // kept as text has to go: sending it back 400s every later request.
         ContentBlock::ToolUse { id, name, input } => {
             let input = input.as_object().cloned().unwrap_or_default();
@@ -261,7 +213,7 @@ fn serialize_content_block(block: &ContentBlock) -> Option<Value> {
     Some(value)
 }
 
-fn serialize_tool_definition(tool: &ProviderToolDefinition) -> Value {
+fn serialize_tool_definition(tool: &ToolDefinition) -> Value {
     serde_json::json!({
         "name": tool.name,
         "description": tool.description,
@@ -292,6 +244,57 @@ fn supports_adaptive_thinking(model: &str) -> bool {
     ADAPTIVE.iter().any(|family| model.contains(family))
 }
 
+fn block_number(json: &Value) -> usize {
+    json["index"].as_u64().unwrap_or(0) as usize
+}
+
+fn decode_message_start(json: &Value, reply: &mut ResponseBuilder) {
+    let message = &json["message"];
+    reply.set_model(message["model"].as_str().unwrap_or("unknown"));
+    reply.set_input_tokens(message["usage"]["input_tokens"].as_u64().unwrap_or(0));
+}
+
+fn decode_block_start(json: &Value, reply: &mut ResponseBuilder) {
+    let block = &json["content_block"];
+    match block["type"].as_str().unwrap_or("") {
+        "tool_use" => {
+            reply.open_tool_call(
+                Some(block_number(json)),
+                block["id"].as_str().unwrap_or(""),
+                block["name"].as_str().unwrap_or(""),
+            );
+        }
+        "redacted_thinking" => reply.add_redacted_thinking(block["data"].as_str().unwrap_or("")),
+        // A text or thinking block is opened by the first delta that reaches it.
+        _ => {}
+    }
+}
+
+fn decode_block_delta(json: &Value, reply: &mut ResponseBuilder) {
+    let delta = &json["delta"];
+    match delta["type"].as_str().unwrap_or("") {
+        "text_delta" => reply.add_text(delta["text"].as_str().unwrap_or("")),
+        "input_json_delta" => reply.add_arguments(
+            ToolCallKey::Numbered(block_number(json)),
+            delta["partial_json"].as_str().unwrap_or(""),
+        ),
+        "thinking_delta" => reply.add_thinking(delta["thinking"].as_str().unwrap_or("")),
+        "signature_delta" => reply.add_signature(delta["signature"].as_str().unwrap_or("")),
+        _ => {}
+    }
+}
+
+fn decode_message_delta(json: &Value, reply: &mut ResponseBuilder) {
+    let stop_reason = json["delta"]["stop_reason"].as_str().unwrap_or("end_turn");
+    // The one stop reason that reports a failed request, not a finished reply.
+    if stop_reason == "model_context_window_exceeded" {
+        reply.set_context_window_exceeded();
+    } else {
+        reply.set_status(status_from_stop_reason(stop_reason));
+    }
+    reply.set_output_tokens(json["usage"]["output_tokens"].as_u64().unwrap_or(0));
+}
+
 fn status_from_stop_reason(raw: &str) -> ResponseStatus {
     match raw {
         "end_turn" => ResponseStatus::EndTurn,
@@ -311,7 +314,7 @@ mod tests {
     use crate::providers::ReasoningEffort;
 
     /// Feed `payloads` through the decoder, returning the blocks they assemble.
-    fn stream(payloads: &[Value]) -> Vec<ContentBlock> {
+    fn decode_blocks(payloads: &[Value]) -> Vec<ContentBlock> {
         decode(payloads)
             .expect("a reply that did not overflow")
             .content
@@ -321,14 +324,14 @@ mod tests {
         let sink: Arc<dyn Fn(StreamEvent) + Send + Sync> = Arc::new(|_| {});
         let mut reply = ResponseBuilder::new(&sink);
         for payload in payloads {
-            handle_stream_event(payload, &mut reply);
+            AnthropicMessages::decode(payload, &mut reply);
         }
         reply.into_response()
     }
 
     #[test]
     fn parses_thinking_and_signature_into_one_block() {
-        let content = stream(&[
+        let content = decode_blocks(&[
             serde_json::json!({"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}),
             serde_json::json!({"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"weigh it"}}),
             serde_json::json!({"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"sig-abc"}}),
@@ -343,7 +346,7 @@ mod tests {
 
     #[test]
     fn parses_tool_input_from_json_fragments() {
-        let content = stream(&[
+        let content = decode_blocks(&[
             serde_json::json!({"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"grep"}}),
             serde_json::json!({"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":r#"{"pattern":"#}}),
             serde_json::json!({"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":r#" "exec"}"#}}),
@@ -359,7 +362,7 @@ mod tests {
 
     #[test]
     fn parses_two_numbered_tool_calls_into_their_own_blocks() {
-        let content = stream(&[
+        let content = decode_blocks(&[
             serde_json::json!({"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"grep"}}),
             serde_json::json!({"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":r#"{"a":1}"#}}),
             serde_json::json!({"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_2","name":"read_file"}}),
@@ -378,7 +381,7 @@ mod tests {
 
     #[test]
     fn parses_redacted_thinking_block() {
-        let content = stream(&[
+        let content = decode_blocks(&[
             serde_json::json!({"type":"content_block_start","index":0,"content_block":{"type":"redacted_thinking","data":"enc-xyz"}}),
             serde_json::json!({"type":"content_block_stop","index":0}),
         ]);
@@ -470,14 +473,14 @@ mod tests {
         let mut request = simple_request();
         request.model = "claude-opus-4-8".into();
         request.reasoning_effort = ReasoningEffort::High;
-        let body = serialize_request(&request);
+        let body = AnthropicMessages::serialize(&request);
         assert_eq!(body["thinking"]["type"], "adaptive");
         assert_eq!(body["output_config"]["effort"], "high");
     }
 
     #[test]
     fn serialize_request_omits_thinking_when_off() {
-        let body = serialize_request(&simple_request());
+        let body = AnthropicMessages::serialize(&simple_request());
         assert!(body.get("thinking").is_none());
     }
 
@@ -486,7 +489,7 @@ mod tests {
         let mut request = simple_request();
         request.model = "claude-sonnet-4-20250514".into();
         request.reasoning_effort = ReasoningEffort::High;
-        let body = serialize_request(&request);
+        let body = AnthropicMessages::serialize(&request);
         assert!(body.get("thinking").is_none());
     }
 
@@ -514,7 +517,7 @@ mod tests {
 
     #[test]
     fn serialize_request_sets_model_and_system() {
-        let body = serialize_request(&simple_request());
+        let body = AnthropicMessages::serialize(&simple_request());
         assert_eq!(body["model"], "test-model");
         assert_eq!(body["system"], "You are helpful.");
         assert_eq!(body["max_tokens"], 1024);
@@ -524,13 +527,13 @@ mod tests {
     fn serialize_request_omits_max_tokens_when_none() {
         let mut request = simple_request();
         request.max_request_tokens = None;
-        let body = serialize_request(&request);
+        let body = AnthropicMessages::serialize(&request);
         assert!(body.get("max_tokens").is_none());
     }
 
     #[test]
     fn serialize_request_excludes_system_from_messages() {
-        let body = serialize_request(&simple_request());
+        let body = AnthropicMessages::serialize(&simple_request());
         for message in body["messages"].as_array().unwrap() {
             assert_ne!(message["role"], "system");
         }
@@ -542,7 +545,7 @@ mod tests {
         request.tool_choice = Some(ToolChoice::Specific {
             name: "read_file".into(),
         });
-        let body = serialize_request(&request);
+        let body = AnthropicMessages::serialize(&request);
         assert_eq!(body["tool_choice"]["type"], "tool");
         assert_eq!(body["tool_choice"]["name"], "read_file");
     }
@@ -558,7 +561,7 @@ mod tests {
     fn context_window_exceeded_when_prompt_is_too_long() {
         let body = invalid_request("prompt is too long: 205000 > 200000");
         assert!(matches!(
-            classify_error(400, &body),
+            AnthropicMessages::classify_error(400, &body),
             Some(ProviderError::ContextWindowExceeded { .. })
         ));
     }
@@ -570,7 +573,7 @@ mod tests {
         })
         .to_string();
         assert!(matches!(
-            classify_error(400, &body),
+            AnthropicMessages::classify_error(400, &body),
             Some(ProviderError::ModelNotFound { .. })
         ));
     }
@@ -578,13 +581,14 @@ mod tests {
     #[test]
     fn an_unrelated_anthropic_400_falls_through() {
         let body = invalid_request("max_tokens must be a positive integer");
-        assert!(classify_error(400, &body).is_none());
+        assert!(AnthropicMessages::classify_error(400, &body).is_none());
     }
 
     #[test]
     fn an_anthropic_400_keeps_the_message_it_carried() {
         let body = invalid_request("prompt is too long: 205000 > 200000");
-        let Some(ProviderError::ContextWindowExceeded { message }) = classify_error(400, &body)
+        let Some(ProviderError::ContextWindowExceeded { message }) =
+            AnthropicMessages::classify_error(400, &body)
         else {
             panic!("expected ContextWindowExceeded");
         };
