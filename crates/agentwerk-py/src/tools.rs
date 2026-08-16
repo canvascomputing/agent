@@ -6,6 +6,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use agentwerk::providers::ProviderResult;
+use agentwerk::schemas::Schema;
 use agentwerk::tools::{
     CommandTool, EditFileTool, FetchUrlTool, FinishTool, GlobTool, GrepTool, KnowledgeTool,
     ListDirectoryTool, ReadFileTool, TicketsTool, ToolContext, ToolLike, ToolResult, WriteFileTool,
@@ -32,7 +33,7 @@ impl ToolLike for BoxedTool {
         self.0.description()
     }
 
-    fn input_schema(&self) -> Value {
+    fn input_schema(&self) -> Schema {
         self.0.input_schema()
     }
 
@@ -68,7 +69,7 @@ struct PyToolAdapter {
     func: Py<PyAny>,
     name: String,
     description: String,
-    schema: Value,
+    schema: Schema,
     concurrent: bool,
     paths: Vec<String>,
 }
@@ -82,7 +83,7 @@ impl ToolLike for PyToolAdapter {
         &self.description
     }
 
-    fn input_schema(&self) -> Value {
+    fn input_schema(&self) -> Schema {
         self.schema.clone()
     }
 
@@ -202,7 +203,15 @@ pub fn extract_tool(obj: &Bound<'_, PyAny>) -> PyResult<Arc<dyn ToolLike>> {
         let description = obj.getattr("_agentwerk_description")?.extract()?;
         let concurrent = obj.getattr("_agentwerk_concurrent")?.extract()?;
         let paths = obj.getattr("_agentwerk_paths")?.extract()?;
-        let schema = py_to_value(&obj.getattr("_agentwerk_schema")?)?;
+        let document = py_to_value(&obj.getattr("_agentwerk_schema")?)?;
+        // Reported here rather than absorbed: a schema that does not compile
+        // would leave this tool checked against nothing, and the author is
+        // right here to fix it.
+        let schema = Schema::new(document).map_err(|error| {
+            pyo3::exceptions::PyValueError::new_err(format!(
+                "tool `{name}` declares a schema that does not compile: {error}"
+            ))
+        })?;
         return Ok(Arc::new(PyToolAdapter {
             func: obj.clone().unbind(),
             name,
