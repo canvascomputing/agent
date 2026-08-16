@@ -36,8 +36,18 @@ fn description() -> &'static str {
     DESC.get_or_init(|| tool_file().render_markdown())
 }
 
+/// What `edit_file` accepts.
+#[derive(serde::Deserialize)]
+pub struct EditFileArgs {
+    path: String,
+    old_string: String,
+    new_string: String,
+    #[serde(default)]
+    replace_all: bool,
+}
+
 impl ToolLike for EditFileTool {
-    type Args = Value;
+    type Args = EditFileArgs;
 
     fn name(&self) -> &str {
         &tool_file().name
@@ -65,16 +75,19 @@ impl ToolLike for EditFileTool {
 
     fn call<'a>(
         &'a self,
-        input: Value,
+        args: EditFileArgs,
         ctx: &'a ToolContext,
     ) -> Pin<Box<dyn Future<Output = Result<ToolResult>> + Send + 'a>> {
         Box::pin(async move {
-            let path = input["path"].as_str().unwrap_or_default();
-            let old_string = input["old_string"].as_str().unwrap_or_default();
-            let new_string = input["new_string"].as_str().unwrap_or_default();
-            let replace_all = input["replace_all"].as_bool().unwrap_or(false);
+            let EditFileArgs {
+                path,
+                old_string,
+                new_string,
+                replace_all,
+            } = args;
+            let (old_string, new_string) = (old_string.as_str(), new_string.as_str());
 
-            let resolved = ctx.dir.join(path);
+            let resolved = ctx.dir.join(&path);
 
             let content = match std::fs::read_to_string(&resolved) {
                 Ok(c) => c,
@@ -114,6 +127,15 @@ impl ToolLike for EditFileTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_example_the_schema_shows_deserializes_into_the_arguments() {
+        let document = tool_file().input_schema.get_raw_schema().clone();
+        for example in document["examples"].as_array().expect("examples") {
+            serde_json::from_value::<EditFileArgs>(example.clone())
+                .unwrap_or_else(|error| panic!("{example}: {error}"));
+        }
+    }
     use std::path::PathBuf;
 
     fn test_ctx(dir: &std::path::Path) -> ToolContext {
@@ -128,8 +150,8 @@ mod tests {
         let tool = EditFileTool;
         let ctx = test_ctx(dir.path());
 
-        let result = tool
-            .call(
+        let result = crate::tools::erase(tool)
+            .call_with(
                 serde_json::json!({
                     "path": "f.txt",
                     "old_string": "world",
@@ -158,8 +180,8 @@ mod tests {
         let tool = EditFileTool;
         let ctx = test_ctx(dir.path());
 
-        let result = tool
-            .call(
+        let result = crate::tools::erase(tool)
+            .call_with(
                 serde_json::json!({
                     "path": "f.txt",
                     "old_string": "aaa",
@@ -183,8 +205,8 @@ mod tests {
         let tool = EditFileTool;
         let ctx = test_ctx(dir.path());
 
-        let result = tool
-            .call(
+        let result = crate::tools::erase(tool)
+            .call_with(
                 serde_json::json!({
                     "path": "f.txt",
                     "old_string": "aaa",
@@ -214,8 +236,8 @@ mod tests {
         let tool = EditFileTool;
         let ctx = test_ctx(dir.path());
 
-        let result = tool
-            .call(
+        let result = crate::tools::erase(tool)
+            .call_with(
                 serde_json::json!({
                     "path": "f.txt",
                     "old_string": "missing",

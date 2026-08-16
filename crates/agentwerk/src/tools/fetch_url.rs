@@ -4,8 +4,6 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::OnceLock;
 
-use serde_json::Value;
-
 use crate::schemas::Schema;
 
 use super::tool::{ToolContext, ToolLike, ToolResult};
@@ -42,8 +40,20 @@ fn description() -> &'static str {
 /// ```
 pub struct FetchUrlTool;
 
+/// What `fetch_url` accepts.
+#[derive(serde::Deserialize)]
+pub struct FetchUrlArgs {
+    url: String,
+    #[serde(default = "default_max_length")]
+    max_length: usize,
+}
+
+fn default_max_length() -> usize {
+    DEFAULT_MAX_LENGTH
+}
+
 impl ToolLike for FetchUrlTool {
-    type Args = Value;
+    type Args = FetchUrlArgs;
 
     fn name(&self) -> &str {
         &tool_file().name
@@ -63,17 +73,13 @@ impl ToolLike for FetchUrlTool {
 
     fn call<'a>(
         &'a self,
-        input: Value,
+        args: FetchUrlArgs,
         _ctx: &'a ToolContext,
     ) -> Pin<Box<dyn Future<Output = Result<ToolResult>> + Send + 'a>> {
         Box::pin(async move {
-            let url = input["url"].as_str().unwrap_or_default();
-            let max_length = input["max_length"]
-                .as_u64()
-                .map(|n| n as usize)
-                .unwrap_or(DEFAULT_MAX_LENGTH);
+            let FetchUrlArgs { url, max_length } = args;
 
-            let validated_url = match validate_url(url) {
+            let validated_url = match validate_url(&url) {
                 Ok(u) => u,
                 Err(msg) => return Ok(ToolResult::error(msg)),
             };
@@ -107,7 +113,7 @@ impl ToolLike for FetchUrlTool {
                 unreachable!()
             };
 
-            let output = format_output(url, &body, status, &content_type, bytes, max_length);
+            let output = format_output(&url, &body, status, &content_type, bytes, max_length);
             Ok(ToolResult::success(output))
         })
     }
@@ -478,6 +484,15 @@ fn collapse_whitespace(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_example_the_schema_shows_deserializes_into_the_arguments() {
+        let document = tool_file().input_schema.get_raw_schema().clone();
+        for example in document["examples"].as_array().expect("examples") {
+            serde_json::from_value::<FetchUrlArgs>(example.clone())
+                .unwrap_or_else(|error| panic!("{example}: {error}"));
+        }
+    }
 
     // URL validation
 

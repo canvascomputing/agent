@@ -37,8 +37,24 @@ fn description() -> &'static str {
     DESC.get_or_init(|| tool_file().render_markdown())
 }
 
+/// What `read_file` accepts. `limit` has no declared default: absent means
+/// the rest of the file from `offset`, which only the file's length gives.
+#[derive(serde::Deserialize)]
+pub struct ReadFileArgs {
+    path: String,
+    #[serde(default = "first_line")]
+    offset: u64,
+    limit: Option<u64>,
+    column: Option<u64>,
+    length: Option<u64>,
+}
+
+fn first_line() -> u64 {
+    1
+}
+
 impl ToolLike for ReadFileTool {
-    type Args = Value;
+    type Args = ReadFileArgs;
 
     fn name(&self) -> &str {
         &tool_file().name
@@ -66,13 +82,19 @@ impl ToolLike for ReadFileTool {
 
     fn call<'a>(
         &'a self,
-        input: Value,
+        args: ReadFileArgs,
         ctx: &'a ToolContext,
     ) -> Pin<Box<dyn Future<Output = ProviderResult<ToolResult>> + Send + 'a>> {
         Box::pin(async move {
-            let path = input["path"].as_str().unwrap_or_default();
+            let ReadFileArgs {
+                path,
+                offset,
+                limit,
+                column,
+                length,
+            } = args;
 
-            let resolved = ctx.dir.join(path);
+            let resolved = ctx.dir.join(&path);
 
             if resolved.is_dir() {
                 let message = match super::util::directory_entries(&resolved) {
@@ -114,14 +136,12 @@ impl ToolLike for ReadFileTool {
 
             let lines: Vec<&str> = content.lines().collect();
 
-            let offset = input["offset"].as_u64().unwrap_or(1).max(1) as usize;
-            let limit = input["limit"]
-                .as_u64()
+            let offset = offset.max(1) as usize;
+            let limit = limit
                 .map(|l| l as usize)
                 .unwrap_or(lines.len().saturating_sub(offset - 1));
-
-            let column = input["column"].as_u64().map(|c| c.max(1) as usize);
-            let length = input["length"].as_u64().map(|c| c as usize);
+            let column = column.map(|c| c.max(1) as usize);
+            let length = length.map(|c| c as usize);
 
             let start = (offset - 1).min(lines.len());
             let end = (start + limit).min(lines.len());
@@ -168,6 +188,15 @@ fn snap_to_char_boundary(s: &str, pos: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_example_the_schema_shows_deserializes_into_the_arguments() {
+        let document = tool_file().input_schema.get_raw_schema().clone();
+        for example in document["examples"].as_array().expect("examples") {
+            serde_json::from_value::<ReadFileArgs>(example.clone())
+                .unwrap_or_else(|error| panic!("{example}: {error}"));
+        }
+    }
     use std::path::PathBuf;
 
     fn test_ctx(dir: &std::path::Path) -> ToolContext {
@@ -276,11 +305,13 @@ mod tests {
             },
         ];
 
-        let tool = ReadFileTool;
         let ctx = test_ctx(dir.path());
 
         for case in cases {
-            let result = tool.call(case.input, &ctx).await.unwrap();
+            let result = crate::tools::erase(ReadFileTool)
+                .call_with(case.input, &ctx)
+                .await
+                .unwrap();
             let is_error = matches!(result, ToolResult::Error(_));
             let content = result.content();
             assert_eq!(
@@ -305,8 +336,8 @@ mod tests {
         std::fs::write(dir.path().join("sessions.py"), "y = 2\n").unwrap();
         std::fs::create_dir(dir.path().join("subpkg")).unwrap();
 
-        let result = ReadFileTool
-            .call(serde_json::json!({ "path": "." }), &test_ctx(dir.path()))
+        let result = crate::tools::erase(ReadFileTool)
+            .call_with(serde_json::json!({ "path": "." }), &test_ctx(dir.path()))
             .await
             .unwrap();
 
@@ -328,8 +359,8 @@ mod tests {
         // Valid text with a stray non-UTF-8 byte, as in minified/obfuscated source.
         std::fs::write(dir.path().join("odd.py"), b"import os\xff\nx = 1\n").unwrap();
 
-        let result = ReadFileTool
-            .call(
+        let result = crate::tools::erase(ReadFileTool)
+            .call_with(
                 serde_json::json!({ "path": "odd.py" }),
                 &test_ctx(dir.path()),
             )
@@ -354,8 +385,8 @@ mod tests {
         // A NUL byte marks a true binary; do not decode it to garbage.
         std::fs::write(dir.path().join("blob.bin"), [0x7f, 0x45, 0x00, 0x01, 0x02]).unwrap();
 
-        let result = ReadFileTool
-            .call(
+        let result = crate::tools::erase(ReadFileTool)
+            .call_with(
                 serde_json::json!({ "path": "blob.bin" }),
                 &test_ctx(dir.path()),
             )
@@ -379,8 +410,8 @@ mod tests {
         std::fs::write(dir.path().join("helpers.py"), "x\n").unwrap();
 
         // Guess a file that does not exist; cwd is the dir holding helpers.py.
-        let result = ReadFileTool
-            .call(
+        let result = crate::tools::erase(ReadFileTool)
+            .call_with(
                 serde_json::json!({ "path": "missing.py" }),
                 &test_ctx(dir.path()),
             )
@@ -407,8 +438,8 @@ mod tests {
         std::fs::write(cwd.join("flask.py"), "x = 1\n").unwrap();
         let dropped = root.path().join("flask.py");
 
-        let result = ReadFileTool
-            .call(
+        let result = crate::tools::erase(ReadFileTool)
+            .call_with(
                 serde_json::json!({ "path": dropped.to_str().unwrap() }),
                 &test_ctx(&cwd),
             )
@@ -434,8 +465,8 @@ mod tests {
         let dir = crate::test_util::TempDir::new().unwrap();
         std::fs::write(dir.path().join("test.txt"), "alpha\nbeta\n").unwrap();
 
-        let result = ReadFileTool
-            .call(
+        let result = crate::tools::erase(ReadFileTool)
+            .call_with(
                 serde_json::json!({ "path": "test.txt", "offset": 100 }),
                 &test_ctx(dir.path()),
             )
@@ -454,8 +485,8 @@ mod tests {
         // 'é' is two bytes; column 5 lands on its second byte.
         std::fs::write(dir.path().join("test.txt"), "caféx\n").unwrap();
 
-        let result = ReadFileTool
-            .call(
+        let result = crate::tools::erase(ReadFileTool)
+            .call_with(
                 serde_json::json!({ "path": "test.txt", "column": 5 }),
                 &test_ctx(dir.path()),
             )

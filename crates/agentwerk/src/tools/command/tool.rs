@@ -5,8 +5,6 @@ use std::pin::Pin;
 use std::sync::OnceLock;
 use std::time::Duration;
 
-use serde_json::Value;
-
 use crate::schemas::Schema;
 
 use super::super::tool::{ToolContext, ToolLike, ToolResult};
@@ -318,8 +316,15 @@ fn quoted(patterns: &[String]) -> String {
         .join(", ")
 }
 
+/// What `command` accepts.
+#[derive(serde::Deserialize)]
+pub struct CommandArgs {
+    command: String,
+    timeout_ms: Option<u64>,
+}
+
 impl ToolLike for CommandTool {
-    type Args = Value;
+    type Args = CommandArgs;
 
     fn name(&self) -> &str {
         &self.tool_name
@@ -339,23 +344,21 @@ impl ToolLike for CommandTool {
 
     fn call<'a>(
         &'a self,
-        input: Value,
+        args: CommandArgs,
         ctx: &'a ToolContext,
     ) -> Pin<Box<dyn Future<Output = Result<ToolResult>> + Send + 'a>> {
         Box::pin(async move {
-            let command = match input.get("command").and_then(|v| v.as_str()) {
-                Some(cmd) => cmd,
-                None => return Ok(ToolResult::error("Missing required field: command")),
-            };
+            let CommandArgs {
+                command,
+                timeout_ms,
+            } = args;
 
-            let command = match self.check(command) {
+            let command = match self.check(&command) {
                 Ok(command) => command,
                 Err(refusal) => return Ok(ToolResult::error(refusal)),
             };
 
-            let timeout = input
-                .get("timeout_ms")
-                .and_then(|v| v.as_u64())
+            let timeout = timeout_ms
                 .map(Duration::from_millis)
                 .unwrap_or(Self::DEFAULT_TIMEOUT)
                 // The schema advertises the ceiling, so honour it rather than
@@ -370,6 +373,15 @@ impl ToolLike for CommandTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_example_the_schema_shows_deserializes_into_the_arguments() {
+        let document = tool_file().input_schema.get_raw_schema().clone();
+        for example in document["examples"].as_array().expect("examples") {
+            serde_json::from_value::<CommandArgs>(example.clone())
+                .unwrap_or_else(|error| panic!("{example}: {error}"));
+        }
+    }
 
     fn test_tool_context() -> ToolContext {
         ToolContext::new(std::env::current_dir().unwrap())
@@ -421,7 +433,10 @@ mod tests {
         let tool = CommandTool::new("echo").allow("echo *");
         let ctx = test_tool_context();
         let input = serde_json::json!({ "command": "echo hello" });
-        let result = tool.call(input, &ctx).await.unwrap();
+        let result = crate::tools::erase(tool.clone())
+            .call_with(input, &ctx)
+            .await
+            .unwrap();
         let content = result.content();
         assert!(content.contains("hello"));
         assert!(matches!(result, ToolResult::Success(_)));
@@ -432,7 +447,10 @@ mod tests {
         let tool = CommandTool::new("sleep").allow("sleep *");
         let ctx = test_tool_context();
         let input = serde_json::json!({ "command": "sleep 10", "timeout_ms": 100 });
-        let result = tool.call(input, &ctx).await.unwrap();
+        let result = crate::tools::erase(tool.clone())
+            .call_with(input, &ctx)
+            .await
+            .unwrap();
         let content = result.content();
         assert!(matches!(result, ToolResult::Error(_)));
         assert!(content.contains("timed out"));
@@ -440,20 +458,32 @@ mod tests {
 
     #[tokio::test]
     async fn a_call_without_a_command_is_rejected() {
-        let tool = CommandTool::new("echo");
-        let ctx = test_tool_context();
-        let result = tool.call(serde_json::json!({}), &ctx).await.unwrap();
-        let content = result.content();
-        assert!(matches!(result, ToolResult::Error(_)));
-        assert!(content.contains("Missing required field: command"));
+        // The schema requires `command`, so dispatch rejects the call before
+        // the tool runs and names the property.
+        let mut registry = crate::tools::ToolRegistry::default();
+        registry.register(CommandTool::new("echo"));
+        let calls = vec![crate::tools::ToolCall {
+            id: "c1".into(),
+            name: "echo".into(),
+            input: serde_json::json!({}),
+        }];
+        let results = registry.execute(&calls, &test_tool_context()).await;
+        let crate::providers::ContentBlock::ToolResult {
+            content, succeeded, ..
+        } = &results[0].block
+        else {
+            panic!("expected a tool result");
+        };
+        assert!(!succeeded);
+        assert!(content.contains("`command`"), "{content}");
     }
 
     #[tokio::test]
     async fn a_tool_without_an_allowed_pattern_runs_the_bare_command() {
         let tool = CommandTool::new("echo");
         let ctx = test_tool_context();
-        let result = tool
-            .call(serde_json::json!({ "command": "echo" }), &ctx)
+        let result = crate::tools::erase(tool)
+            .call_with(serde_json::json!({ "command": "echo" }), &ctx)
             .await
             .unwrap();
         assert!(matches!(result, ToolResult::Success(_)));
@@ -463,8 +493,8 @@ mod tests {
     async fn a_tool_without_an_allowed_pattern_rejects_a_command_with_arguments() {
         let tool = CommandTool::new("echo");
         let ctx = test_tool_context();
-        let result = tool
-            .call(serde_json::json!({ "command": "echo hello" }), &ctx)
+        let result = crate::tools::erase(tool)
+            .call_with(serde_json::json!({ "command": "echo hello" }), &ctx)
             .await
             .unwrap();
         let content = result.content();
@@ -476,8 +506,8 @@ mod tests {
     async fn a_command_matching_no_allowed_pattern_is_rejected() {
         let tool = CommandTool::new("echo").allow("echo *");
         let ctx = test_tool_context();
-        let result = tool
-            .call(serde_json::json!({ "command": "rm -rf /" }), &ctx)
+        let result = crate::tools::erase(tool)
+            .call_with(serde_json::json!({ "command": "rm -rf /" }), &ctx)
             .await
             .unwrap();
         let content = result.content();
@@ -492,8 +522,8 @@ mod tests {
             .allow("echo two*");
         let ctx = test_tool_context();
         for command in ["echo one", "echo two"] {
-            let result = tool
-                .call(serde_json::json!({ "command": command }), &ctx)
+            let result = crate::tools::erase(tool.clone())
+                .call_with(serde_json::json!({ "command": command }), &ctx)
                 .await
                 .unwrap();
             assert!(matches!(result, ToolResult::Success(_)));
@@ -506,8 +536,8 @@ mod tests {
             .allow("echo *")
             .deny("echo secret*");
         let ctx = test_tool_context();
-        let result = tool
-            .call(serde_json::json!({ "command": "echo secret" }), &ctx)
+        let result = crate::tools::erase(tool)
+            .call_with(serde_json::json!({ "command": "echo secret" }), &ctx)
             .await
             .unwrap();
         let content = result.content();
@@ -519,8 +549,8 @@ mod tests {
     async fn a_denied_pattern_overrules_the_bare_command() {
         let tool = CommandTool::new("echo").deny("echo");
         let ctx = test_tool_context();
-        let result = tool
-            .call(serde_json::json!({ "command": "echo" }), &ctx)
+        let result = crate::tools::erase(tool)
+            .call_with(serde_json::json!({ "command": "echo" }), &ctx)
             .await
             .unwrap();
         assert!(matches!(result, ToolResult::Error(_)));
@@ -534,8 +564,8 @@ mod tests {
         let ctx = ToolContext::new(dir.path().to_path_buf());
         let tool = CommandTool::new("touch").allow("touch *");
 
-        let result = tool
-            .call(serde_json::json!({ "command": command }), &ctx)
+        let result = crate::tools::erase(tool)
+            .call_with(serde_json::json!({ "command": command }), &ctx)
             .await
             .unwrap();
 
@@ -557,9 +587,8 @@ mod tests {
         let dir = crate::test_util::TempDir::new().unwrap();
         let ctx = ToolContext::new(dir.path().to_path_buf());
 
-        let result = CommandTool::new("touch")
-            .allow("touch *")
-            .call(serde_json::json!({ "command": "touch chained.txt" }), &ctx)
+        let result = crate::tools::erase(CommandTool::new("touch").allow("touch *"))
+            .call_with(serde_json::json!({ "command": "touch chained.txt" }), &ctx)
             .await
             .unwrap();
 
@@ -585,9 +614,8 @@ mod tests {
     #[tokio::test]
     async fn an_operator_inside_quotes_is_one_command() {
         let ctx = test_tool_context();
-        let result = CommandTool::new("echo")
-            .allow("echo *")
-            .call(serde_json::json!({ "command": "echo \"a && b\"" }), &ctx)
+        let result = crate::tools::erase(CommandTool::new("echo").allow("echo *"))
+            .call_with(serde_json::json!({ "command": "echo \"a && b\"" }), &ctx)
             .await
             .unwrap();
 
@@ -604,9 +632,8 @@ mod tests {
         std::fs::write(dir.path().join("two words.txt"), "x").unwrap();
         let ctx = ToolContext::new(dir.path().to_path_buf());
 
-        let result = CommandTool::new("ls")
-            .allow("ls *")
-            .call(
+        let result = crate::tools::erase(CommandTool::new("ls").allow("ls *"))
+            .call_with(
                 serde_json::json!({ "command": "ls -1 \"two words.txt\"" }),
                 &ctx,
             )
@@ -621,9 +648,8 @@ mod tests {
     #[tokio::test]
     async fn an_absolute_program_path_runs_when_a_pattern_allows_it() {
         let ctx = test_tool_context();
-        let result = CommandTool::new("echo")
-            .allow("/bin/echo *")
-            .call(serde_json::json!({ "command": "/bin/echo hi" }), &ctx)
+        let result = crate::tools::erase(CommandTool::new("echo").allow("/bin/echo *"))
+            .call_with(serde_json::json!({ "command": "/bin/echo hi" }), &ctx)
             .await
             .unwrap();
 
@@ -638,8 +664,8 @@ mod tests {
         // push from the checkout instead of failing the assertion.
         let tool = CommandTool::new("echo").allow("echo *").deny("echo push*");
         let ctx = test_tool_context();
-        let result = tool
-            .call(serde_json::json!({ "command": "echo  push --force" }), &ctx)
+        let result = crate::tools::erase(tool)
+            .call_with(serde_json::json!({ "command": "echo  push --force" }), &ctx)
             .await
             .unwrap();
         let content = result.content();
@@ -653,8 +679,8 @@ mod tests {
     async fn a_denied_flag_is_refused_wherever_it_sits() {
         let tool = CommandTool::new("ls").allow("ls *").deny_flag("-l");
         let ctx = test_tool_context();
-        let result = tool
-            .call(serde_json::json!({ "command": "ls -a -l" }), &ctx)
+        let result = crate::tools::erase(tool)
+            .call_with(serde_json::json!({ "command": "ls -a -l" }), &ctx)
             .await
             .unwrap();
         let content = result.content();
@@ -665,8 +691,8 @@ mod tests {
     async fn a_denied_flag_catches_the_value_it_carries() {
         let tool = CommandTool::new("git").allow("git *").deny_flag("--format");
         let ctx = test_tool_context();
-        let result = tool
-            .call(
+        let result = crate::tools::erase(tool)
+            .call_with(
                 serde_json::json!({ "command": "git log --format=%H" }),
                 &ctx,
             )
@@ -683,8 +709,8 @@ mod tests {
         // network until the tool timeout instead of failing the assertion.
         let tool = CommandTool::new("echo").allow("echo *").deny_flag("-o");
         let ctx = test_tool_context();
-        let result = tool
-            .call(
+        let result = crate::tools::erase(tool)
+            .call_with(
                 serde_json::json!({ "command": "echo -oProxyCommand=/bin/sh host" }),
                 &ctx,
             )
@@ -703,8 +729,8 @@ mod tests {
         // one covers the other.
         let tool = CommandTool::new("echo").allow("echo *").deny_flag("-f");
         let ctx = test_tool_context();
-        let result = tool
-            .call(serde_json::json!({ "command": "echo --force" }), &ctx)
+        let result = crate::tools::erase(tool)
+            .call_with(serde_json::json!({ "command": "echo --force" }), &ctx)
             .await
             .unwrap();
         assert!(matches!(result, ToolResult::Success(_)));
@@ -716,8 +742,8 @@ mod tests {
             .allow("echo *")
             .deny_flag("--force");
         let ctx = test_tool_context();
-        let result = tool
-            .call(serde_json::json!({ "command": "echo -f" }), &ctx)
+        let result = crate::tools::erase(tool)
+            .call_with(serde_json::json!({ "command": "echo -f" }), &ctx)
             .await
             .unwrap();
         assert!(matches!(result, ToolResult::Success(_)));
@@ -727,8 +753,8 @@ mod tests {
     async fn a_denied_letter_reaches_into_a_cluster() {
         let tool = CommandTool::new("echo").allow("echo *").deny_flag("-f");
         let ctx = test_tool_context();
-        let result = tool
-            .call(serde_json::json!({ "command": "echo -rf" }), &ctx)
+        let result = crate::tools::erase(tool)
+            .call_with(serde_json::json!({ "command": "echo -rf" }), &ctx)
             .await
             .unwrap();
         assert!(result.content().contains("denied flag '-rf'"));
@@ -741,15 +767,14 @@ mod tests {
         let tool = CommandTool::new("echo").allow("echo *").deny_flag("-rf");
         let ctx = test_tool_context();
 
-        let refused = tool
-            .clone()
-            .call(serde_json::json!({ "command": "echo -rf" }), &ctx)
+        let refused = crate::tools::erase(tool.clone())
+            .call_with(serde_json::json!({ "command": "echo -rf" }), &ctx)
             .await
             .unwrap();
         assert!(refused.content().contains("denied flag '-rf'"));
 
-        let allowed = tool
-            .call(serde_json::json!({ "command": "echo -r" }), &ctx)
+        let allowed = crate::tools::erase(tool)
+            .call_with(serde_json::json!({ "command": "echo -r" }), &ctx)
             .await
             .unwrap();
         assert!(matches!(allowed, ToolResult::Success(_)));
@@ -761,8 +786,8 @@ mod tests {
         // absolute path allows it.
         let tool = CommandTool::new("echo").allow("echo *");
         let ctx = test_tool_context();
-        let result = tool
-            .call(serde_json::json!({ "command": "/bin/echo hi" }), &ctx)
+        let result = crate::tools::erase(tool)
+            .call_with(serde_json::json!({ "command": "/bin/echo hi" }), &ctx)
             .await
             .unwrap();
         assert!(matches!(result, ToolResult::Error(_)));
@@ -772,8 +797,8 @@ mod tests {
     async fn an_environment_assignment_is_refused() {
         let tool = CommandTool::new("echo").allow("echo *");
         let ctx = test_tool_context();
-        let result = tool
-            .call(
+        let result = crate::tools::erase(tool)
+            .call_with(
                 serde_json::json!({ "command": "LD_PRELOAD=./x echo hi" }),
                 &ctx,
             )
@@ -786,8 +811,8 @@ mod tests {
     #[tokio::test]
     async fn a_missing_program_names_itself_in_the_error() {
         let ctx = test_tool_context();
-        let result = CommandTool::new("nonexistent_command_xyz")
-            .call(
+        let result = crate::tools::erase(CommandTool::new("nonexistent_command_xyz"))
+            .call_with(
                 serde_json::json!({ "command": "nonexistent_command_xyz" }),
                 &ctx,
             )
@@ -824,8 +849,8 @@ mod tests {
             .allow("echo *")
             .deny_flag("--force");
         let ctx = test_tool_context();
-        let result = tool
-            .call(serde_json::json!({ "command": "echo -- --force" }), &ctx)
+        let result = crate::tools::erase(tool)
+            .call_with(serde_json::json!({ "command": "echo -- --force" }), &ctx)
             .await
             .unwrap();
         assert!(matches!(result, ToolResult::Success(_)));
@@ -838,8 +863,8 @@ mod tests {
         // pattern read as two.
         let tool = CommandTool::new("echo").allow("echo a b");
         let ctx = test_tool_context();
-        let result = tool
-            .call(serde_json::json!({ "command": "echo \"a b\"" }), &ctx)
+        let result = crate::tools::erase(tool)
+            .call_with(serde_json::json!({ "command": "echo \"a b\"" }), &ctx)
             .await
             .unwrap();
         assert!(matches!(result, ToolResult::Success(_)));
@@ -851,8 +876,8 @@ mod tests {
         // failing closed is what keeps it from widening the allow list.
         let tool = CommandTool::new("echo").allow("echo *");
         let ctx = test_tool_context();
-        let result = tool
-            .call(serde_json::json!({ "command": "ECHO hi" }), &ctx)
+        let result = crate::tools::erase(tool)
+            .call_with(serde_json::json!({ "command": "ECHO hi" }), &ctx)
             .await
             .unwrap();
         assert!(matches!(result, ToolResult::Error(_)));
@@ -866,11 +891,12 @@ mod tests {
             .deny("touch marker*");
         let ctx = ToolContext::new(dir.path().to_path_buf());
 
-        tool.call(serde_json::json!({ "command": "touch allowed.txt" }), &ctx)
+        crate::tools::erase(tool.clone())
+            .call_with(serde_json::json!({ "command": "touch allowed.txt" }), &ctx)
             .await
             .unwrap();
-        let result = tool
-            .call(serde_json::json!({ "command": "touch marker.txt" }), &ctx)
+        let result = crate::tools::erase(tool)
+            .call_with(serde_json::json!({ "command": "touch marker.txt" }), &ctx)
             .await
             .unwrap();
 
