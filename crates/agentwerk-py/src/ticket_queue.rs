@@ -103,9 +103,8 @@ impl PyTicketQueue {
         slf
     }
 
-    /// Limit the consecutive turns without a valid tool call before the
-    /// ticket fails. A schema violation, an unknown tool, a failed call, and
-    /// a reply with no call at all each count; any successful call resets it.
+    /// Limit the consecutive turns without a valid tool call; any successful
+    /// call resets the count.
     fn max_schema_retries(slf: PyRef<'_, Self>, n: u32) -> PyRef<'_, Self> {
         slf.inner.max_schema_retries(n);
         slf

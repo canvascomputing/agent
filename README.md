@@ -574,10 +574,6 @@ let greet = Tool::new("greet", "Say hello")
     .build();
 ```
 
-`schema(..)` panics on a document agentwerk cannot compile, naming your tool: an unchecked tool is a mistake to fix here, not one an agent should meet at call time.
-
-Return `ToolResult::error(message)` for a failure the model should work around. `ToolResult::schema_error(message)` is for a tool running a schema of its own: it shows the model the schema back with a directive to match it, so it misleads when the rule broken is one no schema states. Both count against `max_schema_retries`.
-
 See [`Tool`](https://docs.rs/agentwerk/latest/agentwerk/tools/struct.Tool.html).
 
 </details>
