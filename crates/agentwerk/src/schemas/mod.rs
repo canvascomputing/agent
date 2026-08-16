@@ -84,12 +84,11 @@ impl Schema {
     /// as a whole.
     ///
     /// A value that satisfies the schema comes back unchanged and repaired
-    /// nowhere. A value that does not is retyped against the schema and checked
-    /// again: a scalar an agent quoted becomes the type declared for it, and a
-    /// structure it wrote as JSON text is decoded. A retype that still does not
-    /// satisfy the schema is discarded and the original violations are
-    /// reported, so a retry points at the real problem rather than at the
-    /// repair.
+    /// nowhere. A value that does not is retyped against the schema and then
+    /// checked: a scalar an agent quoted becomes the type declared for it, and
+    /// a structure it wrote as JSON text is decoded. The violations describe
+    /// what the retype produced, so one report names everything still wrong
+    /// instead of one problem per attempt.
     ///
     /// ```
     /// use agentwerk::schemas::Schema;
@@ -117,19 +116,19 @@ impl Schema {
     /// assert_eq!(violations[0].instance_path, "");
     /// ```
     pub fn validate(&self, value: Value) -> Result<(Value, Vec<String>), SchemaViolations> {
-        let violations = match self.check(&value) {
-            Ok(()) => return Ok((value, Vec::new())),
-            Err(v) => SchemaViolations(v),
-        };
+        // Checking first is both the fast path and the guarantee that a
+        // conforming value comes back untouched.
+        if self.check(&value).is_ok() {
+            return Ok((value, Vec::new()));
+        }
         let mut repaired = value;
         let mut repairs = Vec::new();
         self.inner
             .compiled
             .coerce(&mut repaired, true, "", &mut repairs);
-        if self.check(&repaired).is_ok() {
-            Ok((repaired, repairs))
-        } else {
-            Err(violations)
+        match self.check(&repaired) {
+            Ok(()) => Ok((repaired, repairs)),
+            Err(violations) => Err(SchemaViolations(violations)),
         }
     }
 
@@ -967,14 +966,18 @@ fn retype_hint(types: &[JsonType], instance: &Value) -> Option<&'static str> {
 impl Node {
     /// Retype the values this schema names a type for, recording each rewrite
     /// and where it happened. Runs only on a value that already failed, and the
-    /// caller checks the outcome, so a rewrite that misses is discarded.
+    /// caller checks what it produced.
+    ///
+    /// Each step reads a value the steps before it are done with: this node's
+    /// own shape, then its children, then the subschemas that select on what
+    /// those produced. So an `if` reads a discriminator already folded to its
+    /// declared spelling.
     ///
     /// `widen` allows the two rewrites that pick a shape the model did not
     /// write. A branch of `anyOf` or `oneOf` clears it: choosing a shape there
-    /// would also choose the branch.
-    ///
-    /// `not` and `if`/`then`/`else` are left out. Rewriting under `not` inverts
-    /// what it asks for, and an `if` reads the value the rewrite would change.
+    /// would also choose the branch. An `if` is left out for that reason, and
+    /// `not` because it names what the value must fail, so there is no shape to
+    /// rewrite toward.
     fn coerce(&self, value: &mut Value, widen: bool, instance_path: &str, out: &mut Vec<String>) {
         // Commit the first branch whose own check accepts the value it
         // retyped. A oneOf that matches twice afterwards fails the outer
@@ -995,13 +998,6 @@ impl Node {
                     return;
                 }
             }
-        }
-
-        for branch in self.all_of.iter().flatten() {
-            branch.coerce(value, widen, instance_path, out);
-        }
-        for branches in [&self.any_of, &self.one_of].into_iter().flatten() {
-            coerce_branches(branches, value, instance_path, out);
         }
 
         if let Some(types) = self.types.as_deref() {
@@ -1043,6 +1039,26 @@ impl Node {
                 }
             }
             _ => {}
+        }
+
+        for branch in self.all_of.iter().flatten() {
+            branch.coerce(value, widen, instance_path, out);
+        }
+        for branches in [&self.any_of, &self.one_of].into_iter().flatten() {
+            coerce_branches(branches, value, instance_path, out);
+        }
+
+        // Once selected, a branch is part of the schema, so its rewrites are
+        // this node's own.
+        if let Some(if_sub) = &self.if_schema {
+            let selected = if if_sub.accepts(value) {
+                &self.then_schema
+            } else {
+                &self.else_schema
+            };
+            if let Some(sub) = selected {
+                sub.coerce(value, widen, instance_path, out);
+            }
         }
     }
 
@@ -1309,7 +1325,10 @@ mod tests {
             "required": ["name", "age"],
         }))
         .unwrap();
-        let violations = schema.validate(json!({"name": 7, "age": -1})).unwrap_err();
+        // Neither value is recoverable, so both violations survive the retype.
+        let violations = schema
+            .validate(json!({"name": {"a": 1}, "age": -1}))
+            .unwrap_err();
         assert!(violations.len() >= 2);
         let paths: Vec<&str> = violations
             .iter()
@@ -1534,6 +1553,105 @@ mod tests {
         assert!(schema.validate(json!(42)).is_ok());
     }
 
+    /// An object whose `action` decides which other fields are required, the
+    /// shape every tool taking an `action` argument declares.
+    fn discriminated_schema() -> Schema {
+        Schema::new(json!({
+            "type": "object",
+            "properties": {
+                "action": { "type": "string", "enum": ["write", "read"] },
+                "slug": { "type": "string" },
+                "content": { "type": "string" },
+            },
+            "required": ["action"],
+            "allOf": [
+                {
+                    "if": {
+                        "required": ["action"],
+                        "properties": { "action": { "const": "write" } },
+                    },
+                    "then": { "required": ["slug", "content"] },
+                },
+                {
+                    "if": {
+                        "required": ["action"],
+                        "properties": { "action": { "const": "read" } },
+                    },
+                    "then": { "required": ["slug"] },
+                },
+            ],
+        }))
+        .unwrap()
+    }
+
+    fn messages(violations: &SchemaViolations) -> Vec<&str> {
+        violations.iter().map(|v| v.message.as_str()).collect()
+    }
+
+    #[test]
+    fn validate_requires_only_the_fields_the_discriminator_selects() {
+        let schema = discriminated_schema();
+        assert!(schema
+            .validate(json!({"action": "read", "slug": "s"}))
+            .is_ok());
+        let violations = schema
+            .validate(json!({"action": "write", "slug": "s"}))
+            .unwrap_err();
+        assert_eq!(
+            messages(&violations),
+            vec!["missing required property `content`"]
+        );
+    }
+
+    #[test]
+    fn validate_names_every_field_one_branch_requires_at_once() {
+        // One report, so a value missing three fields costs one retry.
+        let violations = discriminated_schema()
+            .validate(json!({"action": "write"}))
+            .unwrap_err();
+        assert_eq!(
+            messages(&violations),
+            vec![
+                "missing required property `slug`",
+                "missing required property `content`",
+            ]
+        );
+    }
+
+    #[test]
+    fn validate_selects_a_branch_from_a_discriminator_it_read() {
+        // `Write` folds to `write` before the branch is picked, so the report
+        // names what that branch requires rather than the spelling alone.
+        let violations = discriminated_schema()
+            .validate(json!({"action": "Write"}))
+            .unwrap_err();
+        assert_eq!(
+            messages(&violations),
+            vec![
+                "missing required property `slug`",
+                "missing required property `content`",
+            ]
+        );
+    }
+
+    #[test]
+    fn validate_retypes_a_value_under_the_branch_it_selected() {
+        let schema = Schema::new(json!({
+            "type": "object",
+            "properties": { "mode": { "type": "string" } },
+            "if": {
+                "required": ["mode"],
+                "properties": { "mode": { "const": "count" } },
+            },
+            "then": { "properties": { "limit": { "type": "integer" } } },
+        }))
+        .unwrap();
+        assert_eq!(
+            kept(&schema, json!({"mode": "count", "limit": "5"})),
+            json!({"mode": "count", "limit": 5})
+        );
+    }
+
     // Decode fallback
 
     #[test]
@@ -1576,16 +1694,16 @@ mod tests {
     }
 
     #[test]
-    fn validate_reports_string_type_violation_when_decoded_object_also_fails() {
-        // The string decodes to a valid object, but that object still fails
-        // `required`. The violation reported must be the outer /type error,
-        // not the inner /required, so the agent retry targets the real problem.
+    fn validate_reports_what_a_decoded_object_still_fails() {
+        // The string decodes to a valid object that still fails `required`.
+        // What the retry has to fix is the missing property, not the quoting
+        // the decode already saw through.
         let schema = Schema::new(json!({"type": "object", "required": ["status"]})).unwrap();
         let violations = schema.validate(json!("{\"other\": 1}")).unwrap_err();
-        assert!(violations.iter().any(|v| v.schema_path.ends_with("/type")));
-        assert!(!violations
+        assert!(violations
             .iter()
             .any(|v| v.schema_path.ends_with("/required")));
+        assert!(!violations.iter().any(|v| v.schema_path.ends_with("/type")));
     }
 
     #[test]
@@ -1713,8 +1831,9 @@ mod tests {
     }
 
     #[test]
-    fn validate_reports_the_original_violations_when_a_retype_still_fails() {
+    fn validate_reports_only_what_a_retype_could_not_recover() {
         // `line` retypes but `name` cannot, so the whole value still fails.
+        // Only `name` is reported: it is the one thing a retry has to change.
         let schema = Schema::new(json!({
             "type": "object",
             "properties": {
@@ -1727,8 +1846,11 @@ mod tests {
         let violations = schema
             .validate(json!({"line": "42", "name": "ab"}))
             .unwrap_err();
-        assert!(violations.iter().any(|v| v.instance_path == "/line"));
-        assert!(violations.iter().any(|v| v.instance_path == "/name"));
+        let paths: Vec<&str> = violations
+            .iter()
+            .map(|v| v.instance_path.as_str())
+            .collect();
+        assert_eq!(paths, vec!["/name"]);
     }
 
     #[test]
