@@ -16,10 +16,6 @@ pub(crate) use finish::finish_tool_input_schema;
 pub use finish::FinishTool;
 pub use tickets::TicketsTool;
 
-/// Name of the tool that finishes a ticket. The request builder matches tool
-/// definitions against it to advertise the ticket's schema on its arguments.
-pub(crate) const TICKET_FINISH_TOOL: &str = "finish";
-
 pub(super) fn dispatch(input: Value, ctx: &ToolContext) -> ToolResult {
     let action = input["action"].as_str().unwrap_or_default();
     let Some(ticket_queue) = ctx.ticket_queue.clone() else {

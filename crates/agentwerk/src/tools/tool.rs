@@ -373,7 +373,7 @@ impl ToolRegistry {
 /// One answer serves the definitions the model is shown and the shape a
 /// rejected call reads back, so the two cannot disagree.
 fn advertised(tool: &dyn ToolLike, ticket: Option<&Schema>) -> Value {
-    match ticket.filter(|_| tool.name() == super::TICKET_FINISH_TOOL) {
+    match ticket.filter(|_| tool.name() == super::FinishTool.name()) {
         Some(ticket) => super::finish_tool_input_schema(tool.input_schema(), Some(ticket)),
         None => tool.input_schema(),
     }

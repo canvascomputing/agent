@@ -29,6 +29,6 @@ pub use grep::GrepTool;
 pub use knowledge::KnowledgeTool;
 pub use list_directory::ListDirectoryTool;
 pub use read_file::ReadFileTool;
-pub(crate) use tickets::{finish_tool_input_schema, TICKET_FINISH_TOOL};
+pub(crate) use tickets::finish_tool_input_schema;
 pub use tickets::{FinishTool, TicketsTool};
 pub use write_file::WriteFileTool;

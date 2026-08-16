@@ -14,7 +14,7 @@ use crate::schemas::Schema;
 
 use super::super::tool::{repair_message, ToolContext, ToolLike, ToolResult};
 use super::super::tool_file::ToolFile;
-use super::{resolve_current_key, TICKET_FINISH_TOOL};
+use super::resolve_current_key;
 
 /// Write a ticket's result and mark it finished, optionally handing
 /// follow-up work to another agent.
@@ -218,7 +218,7 @@ fn attach_result(
         messages.push("finish: result unwrapped".to_string());
     }
     for pointer in repaired {
-        messages.push(repair_message(TICKET_FINISH_TOOL, &pointer));
+        messages.push(repair_message(&tool_file().name, &pointer));
     }
     for message in messages {
         ticket_queue.emit(
