@@ -29,9 +29,10 @@ pub(super) fn dispatch(input: Value, ctx: &ToolContext) -> ToolResult {
         "search" => action_search(&ticket_queue, &input),
         "create" => action_create(&ticket_queue, &input, ctx),
         "edit" => action_edit(&ticket_queue, &input, ctx),
-        other => ToolResult::error(format!(
-            "Unknown action `{other}`. Valid actions: ticket, result, list, search, create, edit"
-        )),
+        // The schema declares `action` as an enum, so dispatch rejects anything
+        // else and names what exists. This arm is what `match` demands, reached
+        // only by a host calling the tool directly.
+        other => ToolResult::error(format!("Unknown action `{other}`")),
     }
 }
 

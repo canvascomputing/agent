@@ -183,9 +183,10 @@ impl ToolLike for KnowledgeTool {
                     Ok(ToolResult::success(body))
                 }
 
-                other => Ok(ToolResult::error(format!(
-                    "Unknown action `{other}`. Valid actions: write, read, remove, list"
-                ))),
+                // The schema declares `action` as an enum, so dispatch rejects
+                // anything else and names what exists. This arm is what `match`
+                // demands, reached only by a host calling the tool directly.
+                other => Ok(ToolResult::error(format!("Unknown action `{other}`"))),
             }
         })
     }
