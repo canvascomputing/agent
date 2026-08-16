@@ -977,35 +977,15 @@ impl Node {
     /// Each step reads a value the steps before it are done with: this node's
     /// own shape, then its children, then the subschemas that select on what
     /// those produced. So an `if` reads a discriminator already folded to its
-    /// declared spelling.
+    /// declared spelling. A branch of `anyOf` or `oneOf` retypes nothing:
+    /// choosing a value's shape there would also choose the branch, so the
+    /// violations name the mismatch instead.
     ///
     /// `widen` allows the two rewrites that pick a shape the model did not
-    /// write. A branch of `anyOf` or `oneOf` clears it: choosing a shape there
-    /// would also choose the branch. An `if` is left out for that reason, and
-    /// `not` because it names what the value must fail, so there is no shape to
+    /// write. An `if` is left out for the reason a branch is, and `not`
+    /// because it names what the value must fail, so there is no shape to
     /// rewrite toward.
     fn coerce(&self, value: &mut Value, widen: bool, instance_path: &str, out: &mut Vec<String>) {
-        // Commit the first branch whose own check accepts the value it
-        // retyped. A oneOf that matches twice afterwards fails the outer
-        // check, and the original violations stand.
-        fn coerce_branches(
-            branches: &[Node],
-            value: &mut Value,
-            instance_path: &str,
-            out: &mut Vec<String>,
-        ) {
-            for branch in branches {
-                let mut candidate = value.clone();
-                let mut repairs = Vec::new();
-                branch.coerce(&mut candidate, false, instance_path, &mut repairs);
-                if !repairs.is_empty() && branch.accepts(&candidate) {
-                    *value = candidate;
-                    out.append(&mut repairs);
-                    return;
-                }
-            }
-        }
-
         if let Some(types) = self.types.as_deref() {
             if !types.iter().any(|t| t.matches(value)) {
                 // Several types listed poses the same choice `anyOf` does.
@@ -1049,9 +1029,6 @@ impl Node {
 
         for branch in self.all_of.iter().flatten() {
             branch.coerce(value, widen, instance_path, out);
-        }
-        for branches in [&self.any_of, &self.one_of].into_iter().flatten() {
-            coerce_branches(branches, value, instance_path, out);
         }
 
         // Once selected, a branch is part of the schema, so its rewrites are
@@ -1828,12 +1805,14 @@ mod tests {
     }
 
     #[test]
-    fn validate_retypes_within_a_matching_any_of_branch() {
+    fn validate_does_not_retype_inside_a_union_branch() {
+        // Reading `"42"` as the integer branch would also choose the branch,
+        // so the violation names the mismatch instead.
         let schema = Schema::new(json!({
             "anyOf": [{ "type": "integer" }, { "type": "boolean" }],
         }))
         .unwrap();
-        assert_eq!(kept(&schema, json!("42")), json!(42));
+        assert!(schema.validate(json!("42")).is_err());
     }
 
     #[test]
