@@ -224,10 +224,70 @@ pub trait ToolLike: Send + Sync {
     ) -> Pin<Box<dyn Future<Output = ProviderResult<ToolResult>> + Send + 'a>>;
 }
 
+/// A tool an agent holds, whatever type its arguments have.
+///
+/// Blanket-implemented over every [`ToolLike`] and written by hand nowhere, so
+/// the step from a checked call to a tool's arguments happens in one place. A
+/// host collecting tools of different types names this.
+pub trait AnyTool: Send + Sync {
+    /// The name the model calls the tool by.
+    fn name(&self) -> &str;
+    /// What the tool does, in the words the model reads.
+    fn description(&self) -> &str;
+    /// The arguments this tool accepts.
+    fn input_schema(&self) -> Schema;
+    /// Whether the agent may run this tool alongside the turn's other
+    /// concurrent calls.
+    fn is_concurrent(&self) -> bool;
+    /// The file paths this call opens, read from the arguments as they arrived
+    /// so a call the schema rejected still reports them.
+    fn opened_paths(&self, input: &Value) -> Vec<String>;
+    /// Run the tool on a call the registry has already checked.
+    fn call_with<'a>(
+        &'a self,
+        input: Value,
+        ctx: &'a ToolContext,
+    ) -> Pin<Box<dyn Future<Output = ProviderResult<ToolResult>> + Send + 'a>>;
+}
+
+/// Holds a tool with its argument type erased. Only this implements [`AnyTool`],
+/// so a concrete tool keeps one `name`, one `description`, and one `call`.
+struct Erased<T>(T);
+
+impl<T: ToolLike> AnyTool for Erased<T> {
+    fn name(&self) -> &str {
+        self.0.name()
+    }
+
+    fn description(&self) -> &str {
+        self.0.description()
+    }
+
+    fn input_schema(&self) -> Schema {
+        self.0.input_schema()
+    }
+
+    fn is_concurrent(&self) -> bool {
+        self.0.is_concurrent()
+    }
+
+    fn opened_paths(&self, input: &Value) -> Vec<String> {
+        self.0.opened_paths(input)
+    }
+
+    fn call_with<'a>(
+        &'a self,
+        input: Value,
+        ctx: &'a ToolContext,
+    ) -> Pin<Box<dyn Future<Output = ProviderResult<ToolResult>> + Send + 'a>> {
+        self.0.call(input, ctx)
+    }
+}
+
 /// The tools one agent may call.
 #[derive(Clone, Default)]
 pub(crate) struct ToolRegistry {
-    tools: Vec<Arc<dyn ToolLike>>,
+    tools: Vec<Arc<dyn AnyTool>>,
 }
 
 impl std::fmt::Debug for ToolRegistry {
@@ -245,7 +305,7 @@ impl ToolRegistry {
     /// A request carrying one name twice is rejected, so the last registration
     /// is the one that counts.
     pub(crate) fn register(&mut self, tool: impl ToolLike + 'static) {
-        let tool: Arc<dyn ToolLike> = Arc::new(tool);
+        let tool: Arc<dyn AnyTool> = Arc::new(Erased(tool));
         self.tools.retain(|t| t.name() != tool.name());
         self.tools.push(tool);
     }
@@ -262,7 +322,7 @@ impl ToolRegistry {
 
     /// Get the tool a call reaches, owned, so a concurrent batch can move it
     /// into its task, or the failure naming what could have been called.
-    fn resolve(&self, name: &str) -> std::result::Result<Arc<dyn ToolLike>, ToolError> {
+    fn resolve(&self, name: &str) -> std::result::Result<Arc<dyn AnyTool>, ToolError> {
         self.get(name).ok_or_else(|| ToolError::ToolNotFound {
             tool_name: name.into(),
             available: self.names(),
@@ -274,7 +334,7 @@ impl ToolRegistry {
     /// An exact match wins. Otherwise a spelling that reduces to the same key as
     /// exactly one registered tool resolves to it, so a model that adds a
     /// `_tool` suffix still reaches the right tool.
-    pub(crate) fn get(&self, name: &str) -> Option<Arc<dyn ToolLike>> {
+    pub(crate) fn get(&self, name: &str) -> Option<Arc<dyn AnyTool>> {
         let name = name.trim();
         if let Some(found) = self.tools.iter().find(|tool| tool.name() == name) {
             return Some(Arc::clone(found));
@@ -359,7 +419,7 @@ impl ToolRegistry {
 ///
 /// One answer serves the definitions the model is shown and the shape a
 /// rejected call reads back, so the two cannot disagree.
-fn advertised(tool: &dyn ToolLike, ticket: Option<&Schema>) -> Value {
+fn advertised(tool: &dyn AnyTool, ticket: Option<&Schema>) -> Value {
     match ticket.filter(|_| tool.name() == super::FinishTool.name()) {
         Some(ticket) => super::finish_tool_input_schema(document(tool), Some(ticket)),
         None => document(tool),
@@ -367,7 +427,7 @@ fn advertised(tool: &dyn ToolLike, ticket: Option<&Schema>) -> Value {
 }
 
 /// The JSON document `tool` declares, for the definition sent to the model.
-fn document(tool: &dyn ToolLike) -> Value {
+fn document(tool: &dyn AnyTool) -> Value {
     tool.input_schema().get_raw_schema().clone()
 }
 
@@ -580,7 +640,7 @@ pub(crate) struct ToolOutcome {
 /// Run one call to the outcome the turn collects: check the arguments, run the
 /// tool, then stand in for an empty or oversized result.
 async fn run_call(
-    found: std::result::Result<Arc<dyn ToolLike>, ToolError>,
+    found: std::result::Result<Arc<dyn AnyTool>, ToolError>,
     call: &ToolCall,
     ctx: &ToolContext,
 ) -> ToolOutcome {
@@ -598,7 +658,7 @@ async fn run_call(
 /// Check the arguments against the schema the tool registered, then run it on
 /// what survives.
 async fn invoke(
-    resolved: std::result::Result<Arc<dyn ToolLike>, ToolError>,
+    resolved: std::result::Result<Arc<dyn AnyTool>, ToolError>,
     name: &str,
     input: Value,
     ctx: &ToolContext,
@@ -620,7 +680,7 @@ async fn invoke(
             message: repair_message(name, pointer),
         });
     }
-    match tool.call(input, ctx).await {
+    match tool.call_with(input, ctx).await {
         Ok(ToolResult::Success(s)) => Ok(s),
         Ok(ToolResult::Error(s)) => Err(ToolError::ExecutionFailed {
             tool_name: name.into(),
