@@ -273,10 +273,26 @@ fn parse_result(schema: Option<&Schema>, input: &Value) -> (Value, bool) {
     unwrap_accidental_result(Value::Object(object), schema)
 }
 
-/// Object schema means the arguments are the result object; anything else keeps
-/// the `result` envelope.
+/// Whether the ticket's fields ride as `finish`'s top-level arguments; anything
+/// not inlined keeps the `result` envelope.
+///
+/// An object schema that itself declares a control-key-named property is not
+/// inlined: at the top level `finish` would read that field as its own and
+/// strip it from the result. Shared by [`finish_tool_input_schema`] and
+/// [`parse_result`], so the shape advertised and the shape read cannot
+/// disagree.
 fn is_inlined(schema: &Schema) -> bool {
-    schema.get_raw_schema()["type"] == "object"
+    let document = schema.get_raw_schema();
+    if document["type"] != "object" {
+        return false;
+    }
+    !document["properties"]
+        .as_object()
+        .is_some_and(|properties| {
+            control_keys()
+                .iter()
+                .any(|key| properties.contains_key(key))
+        })
 }
 
 /// A model that wrapped `{"result": <value>}` despite the flat schema is
@@ -492,6 +508,67 @@ mod tests {
     fn object_schema_is_inlined_others_enveloped() {
         assert!(is_inlined(&object_schema()));
         assert!(!is_inlined(&string_schema()));
+    }
+
+    /// An object schema declaring a property `finish` owns as a control key.
+    /// Inlining it would strip that field from every result.
+    fn colliding_schema() -> Schema {
+        Schema::new(serde_json::json!({
+            "type": "object",
+            "properties": { "handover": { "type": "string" } },
+            "required": ["handover"],
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_schema_naming_a_control_key_keeps_the_result_envelope() {
+        let schema = colliding_schema();
+        assert!(!is_inlined(&schema));
+        let input = serde_json::json!({ "result": { "handover": "x" } });
+        let (result, repair) = parse_result(Some(&schema), &input);
+        assert_eq!(result, serde_json::json!({ "handover": "x" }));
+        assert!(!repair);
+    }
+
+    #[test]
+    fn a_schema_naming_a_control_key_advertises_the_enveloped_shape() {
+        // The same predicate decides both, so what the model is shown is the
+        // shape `parse_result` reads.
+        let advertised =
+            finish_tool_input_schema(static_finish_schema(), Some(&colliding_schema()));
+        assert_eq!(advertised["properties"]["result"]["type"], "object");
+        assert!(advertised["properties"].get("status").is_none());
+    }
+
+    #[tokio::test]
+    async fn a_result_field_named_like_a_control_key_survives_the_finish() {
+        let dir = crate::test_util::TempDir::new().unwrap();
+        let queue = TicketQueue::new();
+        queue.dir(dir.path().to_path_buf());
+        queue.insert(
+            Ticket::new("body")
+                .schema(colliding_schema())
+                .label("alice"),
+            "tester".into(),
+        );
+        let key = queue
+            .claim(|t| t.status == Status::Todo, "alice")
+            .expect("claim must succeed");
+        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
+
+        let outcome = FinishTool
+            .call(serde_json::json!({"result": {"handover": "x"}}), &ctx)
+            .await;
+
+        assert!(matches!(outcome, ToolResult::Success(_)), "{outcome:?}");
+        let ticket = queue.get_ticket(&key).unwrap();
+        assert_eq!(ticket.status, Status::Finished);
+        assert_eq!(
+            ticket.result.as_ref(),
+            Some(&serde_json::json!({"handover": "x"})),
+        );
+        assert!(queue.get_ticket("TICKET-2").is_none(), "no child filed");
     }
 
     #[test]
