@@ -1,6 +1,5 @@
 //! The actions agents can take to perform their work.
 
-mod error;
 mod tool;
 mod tool_file;
 pub(crate) mod util;
@@ -17,7 +16,6 @@ mod read_file;
 mod tickets;
 mod write_file;
 
-pub use error::ToolError;
 pub use tool::{erase, AnyTool, Tool, ToolContext, ToolLike, ToolResult};
 pub(crate) use tool::{ToolCall, ToolRegistry};
 

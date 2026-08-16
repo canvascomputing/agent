@@ -462,8 +462,8 @@ impl fmt::Display for EventKind {
 }
 
 /// Which [`EventKind`] a count belongs to, without the payload the kind
-/// carries. Pass one to [`Stats::event_count`](crate::Stats::event_count); the
-/// snake_case spelling is the one `events.jsonl` uses.
+/// carries. Pass one to `Stats::event_count`; the snake_case spelling is the
+/// one `events.jsonl` uses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EventName {

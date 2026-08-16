@@ -56,7 +56,7 @@ tickets.ticket(Ticket::new("Audit src/db."));               // the default scope
 - Refusing on ambiguity is the load-bearing half. A host registering `grep_tool` beside the built-in `grep` keeps both reachable under their own names, and a third spelling resolves to neither rather than to an arbitrary winner.
 - `get` is the only entry point: dispatch, the concurrent batching decision in `partition_tool_calls`, and the `opened_paths` lookup all go through it, so they cannot disagree about which tool a call names.
 - The loop rewrites each call to the registered name before emitting `ToolCallStarted`, so `Event` and `Stats` never split one tool across spellings. The fold itself is reported as `EventKind::ResponseRepaired` carrying `RepairKind::CallMalformed`, so a host folding the event chain sees a model that keeps misspelling one tool.
-- A name that resolves to nothing returns `ToolNotFound`, whose model-visible message names every registered tool. Without that list the model has nothing to correct against, and each retry spends `max_schema_retries` budget until the ticket fails. A call the model wrote as text rather than emitting takes the same path: it is promoted whatever it names, so one reason covers an unknown tool however the call arrived.
+- A name that resolves to nothing fails as `ToolFailureKind::ToolNotFound`, with a message naming every registered tool. Without that list the model has nothing to correct against, and each retry spends `max_schema_retries` budget until the ticket fails. A call the model wrote as text rather than emitting takes the same path: it is promoted whatever it names, so one reason covers an unknown tool however the call arrived.
 - `ToolChoice::Specific` is not folded: it travels outbound and is written by agentwerk or the host, never by the model.
 
 ## Finishing Is a Tool Call
@@ -102,10 +102,10 @@ Two layers of state exist. The per-ticket replies live on `Ticket::replies`: eve
 
 ## Observer Chain, One Error Path
 
-**`Event` reports state. `ProviderError` and `ToolError` report failed contracts. The two channels carry independent information.**
+**`Event` reports state. `ProviderError` reports a failed provider contract. The two channels carry independent information.**
 
 - State transitions exist only as `Event`: `TicketClaimed`, `TicketFinished`, `RequestStarted`, `RequestFinished`, `TextChunkReceived`.
-- An observable failure fires both the typed error (`ProviderError`, `ToolError`) and a matching `Event` (`RequestFailed`, `ToolCallFailed`, `PolicyViolated`).
+- A failed request fires both `ProviderError` and a matching `Event` (`RequestFailed`, `PolicyViolated`). A failed tool call is an `Event` alone: `ToolCallFailed` carries a `ToolFailureKind` and the model-visible message, which is all a tool failure is.
 - A model-fixable failure (wrong arguments, schema mismatch, missing file) goes back to the model as a `ToolResult::Error` content block. It still fires `ToolCallFailed` but does not stop the run.
 - Handlers MUST be cheap and non-blocking; the loop does not await them.
 - `on_result_async` is the exception that proves it: the loop still never awaits, so registering one only queues the finished ticket, and whichever `finish` is waiting drains the queue and awaits each handler on its own task. That is what puts the handler on the caller's event loop in the bindings, and why one that never returns stalls the caller rather than an agent. Handlers run only while a `finish` is awaited; a `start()`-only host uses `on_result`.
@@ -126,7 +126,7 @@ Two layers of state exist. The per-ticket replies live on `Ticket::replies`: eve
 - Could not fulfil a contract: typed error in the matching domain.
 - Both at once (terminal request failure, policy violation): define both. Share the payload type when observer-friendly (`PolicyKind`); introduce a stripped `Kind` enum when the error carries observer-hostile detail (`RequestErrorKind`, `ToolFailureKind`).
 - Model-fixable failure: `ToolResult::Error(String)`; still fires `ToolCallFailed` but is recoverable.
-- A public error enum carries `#[non_exhaustive]`, so a later variant is not a breaking change for callers that match on it. `ProviderError` and `ToolError` both do. The attribute covers new variants only: adding a field to an existing struct variant still breaks a caller that matches it without `..`, so prefer a new variant to widening an old one.
+- A public error enum carries `#[non_exhaustive]`, so a later variant is not a breaking change for callers that match on it. `ProviderError` does. The attribute covers new variants only: adding a field to an existing struct variant still breaks a caller that matches it without `..`, so prefer a new variant to widening an old one.
 
 ## Providers Own Their Client
 

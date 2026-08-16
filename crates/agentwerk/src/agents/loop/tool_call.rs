@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use crate::event::{EventKind, PolicyKind, RepairKind, ToolFailureKind};
 use crate::prompts::arguments_retry_detail;
 use crate::providers::ContentBlock;
-use crate::tools::{ToolCall, ToolContext, ToolError};
+use crate::tools::{ToolCall, ToolContext};
 
 use super::agent::TicketContext;
 use super::Step;
@@ -48,11 +48,8 @@ pub(super) async fn run(context: &mut TicketContext<'_>, mut calls: Vec<ToolCall
     let outcomes = registry.execute(&calls, &tool_context).await;
 
     let mut schema_failure: Option<(String, String)> = None;
-    for result in &outcomes {
-        let ContentBlock::ToolResult { tool_use_id, .. } = &result.block else {
-            continue;
-        };
-        let call = calls.iter().find(|call| &call.id == tool_use_id);
+    for outcome in &outcomes {
+        let call = calls.iter().find(|call| call.id == outcome.call_id);
         let tool_name = call.map(|call| call.name.clone()).unwrap_or_default();
         // The files this call opened. Feeds the per-path open tally;
         // empty for tools that open no file.
@@ -66,8 +63,8 @@ pub(super) async fn run(context: &mut TicketContext<'_>, mut calls: Vec<ToolCall
                     .unwrap_or_default()
             })
             .unwrap_or_default();
-        match &result.outcome {
-            Ok(output) => {
+        match outcome.failure {
+            None => {
                 // Any successful tool call is progress: clear the counter.
                 context.consecutive_schema_failures = 0;
                 for path in &opened_paths {
@@ -75,41 +72,32 @@ pub(super) async fn run(context: &mut TicketContext<'_>, mut calls: Vec<ToolCall
                 }
                 context.emit(EventKind::ToolCallFinished {
                     tool_name,
-                    call_id: tool_use_id.clone(),
-                    output: output.clone(),
+                    call_id: outcome.call_id.clone(),
+                    output: outcome.content.clone(),
                 });
             }
-            Err(error) => {
+            Some(reason) => {
                 // Any tool failure (bad arguments, unknown tool, schema
                 // mismatch) counts toward the budget, so a stuck agent
                 // fails its ticket instead of looping until the time limit.
                 context.consecutive_schema_failures =
                     context.consecutive_schema_failures.saturating_add(1);
-                if matches!(error, ToolError::SchemaValidationFailed { .. })
-                    && schema_failure.is_none()
-                {
-                    schema_failure = Some((error.tool_name().to_string(), error.message()));
+                if reason == ToolFailureKind::SchemaValidationFailed && schema_failure.is_none() {
+                    schema_failure = Some((tool_name.clone(), outcome.content.clone()));
                 }
-                let failure_kind = match error {
-                    ToolError::ToolNotFound { .. } => ToolFailureKind::ToolNotFound,
-                    ToolError::ExecutionFailed { .. } => ToolFailureKind::ExecutionFailed,
-                    ToolError::SchemaValidationFailed { .. } => {
-                        ToolFailureKind::SchemaValidationFailed
-                    }
-                };
                 // A path fails with the call that named it, so it carries the
                 // call's reason.
                 for path in &opened_paths {
                     context.emit(EventKind::FileOpenFailed {
                         path: path.clone(),
-                        reason: failure_kind,
+                        reason,
                     });
                 }
                 context.emit(EventKind::ToolCallFailed {
                     tool_name,
-                    call_id: tool_use_id.clone(),
-                    reason: failure_kind,
-                    message: error.message(),
+                    call_id: outcome.call_id.clone(),
+                    reason,
+                    message: outcome.content.clone(),
                 });
             }
         }
@@ -117,13 +105,15 @@ pub(super) async fn run(context: &mut TicketContext<'_>, mut calls: Vec<ToolCall
 
     let mut paths: HashMap<String, PathBuf> = HashMap::new();
     let mut blocks: Vec<ContentBlock> = Vec::with_capacity(outcomes.len());
-    for result in outcomes {
-        if let (ContentBlock::ToolResult { tool_use_id, .. }, Some(path)) =
-            (&result.block, result.path)
-        {
-            paths.insert(tool_use_id.clone(), path);
+    for outcome in outcomes {
+        if let Some(path) = outcome.path {
+            paths.insert(outcome.call_id.clone(), path);
         }
-        blocks.push(result.block);
+        blocks.push(ContentBlock::ToolResult {
+            tool_use_id: outcome.call_id,
+            content: outcome.content,
+            succeeded: outcome.failure.is_none(),
+        });
     }
     if let Some((failing_tool, validator_message)) = &schema_failure {
         let advertised = registry.advertised_schema(failing_tool, ticket_schema.as_ref());

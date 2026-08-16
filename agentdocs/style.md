@@ -20,7 +20,7 @@ Naming, comment, and prose rules, plus README structure. Skim the section matchi
 
 - Concrete implementations live with their abstraction: `Anthropic` under `providers::`, `CommandTool` under `tools::`.
 - Companion types and handles live with their owner: `Ticket`, `Status`, `TicketError`, `Reply`, and `ReplyContent` under `agents::tickets`; `Compaction` under `agents::compaction`.
-- Domain errors live with their domain: `ProviderError`, `ToolError`.
+- Domain errors live with their domain: `ProviderError` under `providers::`, `TicketError` under `agents::tickets`.
 - Request and response types live with the protocol: `ModelRequest`, `Message`, `TokenUsage` under `providers::`.
 - Free functions live in their module, never at the crate root: the env readers in `providers::environment`, helpers in `tools::util`.
 

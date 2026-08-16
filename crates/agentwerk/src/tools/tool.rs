@@ -10,12 +10,9 @@ use serde_json::Value;
 
 use crate::agents::knowledge::Knowledge;
 use crate::agents::tickets::{Run, TicketQueue};
-use crate::event::{EventKind, RepairKind};
-use crate::providers::types::ContentBlock;
+use crate::event::{EventKind, RepairKind, ToolFailureKind};
 use crate::providers::ToolDefinition;
 use crate::schemas::Schema;
-
-use super::error::ToolError;
 
 /// The largest result one tool may return. Anything longer is written to
 /// `<ticket-dir>/outputs/<tool_use_id>.txt` and replaced with a short stub.
@@ -213,7 +210,7 @@ pub trait ToolLike: Send + Sync {
     }
 
     /// The file paths this call opens, so they reach
-    /// [`Stats`](crate::Stats). Empty by default.
+    /// `Stats`. Empty by default.
     fn opened_paths(&self, _input: &Value) -> Vec<String> {
         Vec::new()
     }
@@ -343,11 +340,18 @@ impl ToolRegistry {
     }
 
     /// Get the tool a call reaches, owned, so a concurrent batch can move it
-    /// into its task, or the failure naming what could have been called.
-    fn resolve(&self, name: &str) -> std::result::Result<Arc<dyn AnyTool>, ToolError> {
-        self.get(name).ok_or_else(|| ToolError::ToolNotFound {
-            tool_name: name.into(),
-            available: self.names(),
+    /// into its task, or the message naming what could have been called.
+    fn resolve(&self, name: &str) -> std::result::Result<Arc<dyn AnyTool>, String> {
+        self.get(name).ok_or_else(|| {
+            let names = self.names();
+            if names.is_empty() {
+                format!("Unknown tool: {name}")
+            } else {
+                format!(
+                    "Unknown tool: {name}. Available tools: {}",
+                    names.join(", ")
+                )
+            }
         })
     }
 
@@ -648,10 +652,14 @@ impl ToolLike for Tool {
     }
 }
 
-/// What one call produced.
+/// What one call produced, collected by the turn.
 pub(crate) struct ToolOutcome {
-    pub(crate) block: ContentBlock,
-    pub(crate) outcome: std::result::Result<String, ToolError>,
+    /// Identifier of the call, sent back with the result.
+    pub(crate) call_id: String,
+    /// What the model reads back: the tool's output, or the failure message.
+    pub(crate) content: String,
+    /// How the call failed. `None` is a success.
+    pub(crate) failure: Option<ToolFailureKind>,
     /// Where an oversized output went, relative to the session directory.
     pub(crate) path: Option<PathBuf>,
 }
@@ -659,56 +667,58 @@ pub(crate) struct ToolOutcome {
 /// Run one call to the outcome the turn collects: check the arguments, run the
 /// tool, then stand in for an empty or oversized result.
 async fn run_call(
-    found: std::result::Result<Arc<dyn AnyTool>, ToolError>,
+    found: std::result::Result<Arc<dyn AnyTool>, String>,
     call: &ToolCall,
     ctx: &ToolContext,
 ) -> ToolOutcome {
-    let outcome = invoke(found, &call.name, call.input.clone(), ctx).await;
-    let outcome = replace_empty_output(outcome, &call.name);
-    let (outcome, path) = cap_oversized_result(outcome, ctx, &call.id, PER_TOOL_CAP);
-    let block = content_block_for(&call.id, &outcome);
-    ToolOutcome {
-        block,
-        outcome,
-        path,
-    }
+    let mut outcome = invoke(found, call, ctx).await;
+    replace_empty_output(&mut outcome, &call.name);
+    cap_oversized_result(&mut outcome, ctx, PER_TOOL_CAP);
+    outcome
 }
 
 /// Check the arguments against the schema the tool registered, then run it on
 /// what survives.
 async fn invoke(
-    resolved: std::result::Result<Arc<dyn AnyTool>, ToolError>,
-    name: &str,
-    input: Value,
+    resolved: std::result::Result<Arc<dyn AnyTool>, String>,
+    call: &ToolCall,
     ctx: &ToolContext,
-) -> std::result::Result<String, ToolError> {
-    let tool = resolved?;
+) -> ToolOutcome {
+    let outcome = |content: String, failure: Option<ToolFailureKind>| ToolOutcome {
+        call_id: call.id.clone(),
+        content,
+        failure,
+        path: None,
+    };
+    let tool = match resolved {
+        Ok(tool) => tool,
+        Err(message) => return outcome(message, Some(ToolFailureKind::ToolNotFound)),
+    };
     // Retyped rather than refused, so a quoted number runs the call the model
     // asked for and arguments it wrote as JSON text are decoded. What comes
     // back names the value that produced, which is the one the tool would have
     // received.
-    let (input, repairs) = tool.input_schema().validate(input).map_err(|violations| {
-        ToolError::SchemaValidationFailed {
-            tool_name: name.into(),
-            message: violations.to_string(),
+    let (input, repairs) = match tool.input_schema().validate(call.input.clone()) {
+        Ok(validated) => validated,
+        Err(violations) => {
+            return outcome(
+                violations.to_string(),
+                Some(ToolFailureKind::SchemaValidationFailed),
+            );
         }
-    })?;
+    };
     for pointer in &repairs {
         ctx.emit(EventKind::ResponseRepaired {
             reason: RepairKind::ValueMistyped,
-            message: repair_message(name, pointer),
+            message: repair_message(&call.name, pointer),
         });
     }
     match tool.call_with(input, ctx).await {
-        ToolResult::Success(s) => Ok(s),
-        ToolResult::Error(s) => Err(ToolError::ExecutionFailed {
-            tool_name: name.into(),
-            message: s,
-        }),
-        ToolResult::SchemaError(s) => Err(ToolError::SchemaValidationFailed {
-            tool_name: name.into(),
-            message: s,
-        }),
+        ToolResult::Success(content) => outcome(content, None),
+        ToolResult::Error(content) => outcome(content, Some(ToolFailureKind::ExecutionFailed)),
+        ToolResult::SchemaError(content) => {
+            outcome(content, Some(ToolFailureKind::SchemaValidationFailed))
+        }
     }
 }
 
@@ -726,29 +736,10 @@ pub(crate) fn repair_message(tool: &str, pointer: &str) -> String {
 }
 
 /// Put a placeholder in place of an empty result, since empty content has upset
-/// LLM providers. Everything else passes through.
-fn replace_empty_output(
-    outcome: std::result::Result<String, ToolError>,
-    tool_name: &str,
-) -> std::result::Result<String, ToolError> {
-    match outcome {
-        Ok(s) if s.is_empty() => Ok(format!("({tool_name} completed with no output)")),
-        other => other,
-    }
-}
-
-fn content_block_for(
-    tool_use_id: &str,
-    outcome: &std::result::Result<String, ToolError>,
-) -> ContentBlock {
-    let (content, succeeded) = match outcome {
-        Ok(s) => (s.clone(), true),
-        Err(e) => (e.message(), false),
-    };
-    ContentBlock::ToolResult {
-        tool_use_id: tool_use_id.to_string(),
-        content,
-        succeeded,
+/// LLM providers. A failure passes through: its message is never empty.
+fn replace_empty_output(outcome: &mut ToolOutcome, tool_name: &str) {
+    if outcome.failure.is_none() && outcome.content.is_empty() {
+        outcome.content = format!("({tool_name} completed with no output)");
     }
 }
 
@@ -782,86 +773,49 @@ fn partition_tool_calls(calls: &[ToolCall], registry: &ToolRegistry) -> Vec<Tool
 }
 
 /// Replace an oversized result with a stub, writing the original under the
-/// ticket's outputs directory and reporting where it went.
+/// ticket's outputs directory and recording where it went.
 ///
-/// An error passes through, being short by construction, and so does the raw
+/// A failure passes through, being short by construction, and so does the raw
 /// content when the write fails.
-fn cap_oversized_result(
-    outcome: std::result::Result<String, ToolError>,
-    ctx: &ToolContext,
-    tool_use_id: &str,
-    per_tool_cap: usize,
-) -> (std::result::Result<String, ToolError>, Option<PathBuf>) {
-    match outcome {
-        Err(e) => (Err(e), None),
-        Ok(content) if content.len() <= per_tool_cap => (Ok(content), None),
-        Ok(content) => match persist_output(ctx, tool_use_id, &content) {
-            None => (Ok(content), None),
-            Some(p) => {
-                let preview = truncate_preview(&content);
-                let stub = format_oversized_tool_result(content.len(), &p.display, preview);
-                (Ok(stub), Some(p.rel))
-            }
-        },
+fn cap_oversized_result(outcome: &mut ToolOutcome, ctx: &ToolContext, per_tool_cap: usize) {
+    if outcome.failure.is_some() || outcome.content.len() <= per_tool_cap {
+        return;
     }
+    let Some(p) = persist_output(ctx, &outcome.call_id, &outcome.content) else {
+        return;
+    };
+    let preview = truncate_preview(&outcome.content);
+    let stub = format_oversized_tool_result(outcome.content.len(), &p.display, preview);
+    outcome.content = stub;
+    outcome.path = Some(p.rel);
 }
 
 /// While one turn's results are too large together, write out the largest that
 /// is not already a stub. It stops once the turn fits, or once nothing left can
-/// be written out.
+/// be written out. A failure is never written out: its message is short by
+/// construction, the same rule the per-call cap applies.
 fn cap_aggregate_outputs(results: &mut [ToolOutcome], ctx: &ToolContext, per_turn_cap: usize) {
     loop {
-        let total: usize = results
-            .iter()
-            .map(|result| match &result.block {
-                ContentBlock::ToolResult { content, .. } => content.len(),
-                _ => 0,
-            })
-            .sum();
+        let total: usize = results.iter().map(|outcome| outcome.content.len()).sum();
         if total <= per_turn_cap {
             return;
         }
-        let mut largest: Option<(usize, usize)> = None;
-        for (i, result) in results.iter().enumerate() {
-            if let ContentBlock::ToolResult { content, .. } = &result.block {
-                if content.starts_with(OVERSIZED_STUB_TAG_OPEN) {
-                    continue;
-                }
-                let len = content.len();
-                if largest.is_none_or(|(_, max_len)| len > max_len) {
-                    largest = Some((i, len));
-                }
-            }
-        }
-        let Some((i, _)) = largest else {
+        let largest = results
+            .iter_mut()
+            .filter(|outcome| outcome.failure.is_none())
+            .filter(|outcome| !outcome.content.starts_with(OVERSIZED_STUB_TAG_OPEN))
+            .max_by_key(|outcome| outcome.content.len());
+        let Some(outcome) = largest else {
             return;
         };
-        let ContentBlock::ToolResult {
-            tool_use_id,
-            content,
-            succeeded,
-        } = &results[i].block
-        else {
-            return;
-        };
-        let tool_use_id = tool_use_id.clone();
-        let original = content.clone();
-        let succeeded = *succeeded;
-        let Some(p) = persist_output(ctx, &tool_use_id, &original) else {
+        let Some(p) = persist_output(ctx, &outcome.call_id, &outcome.content) else {
             // Persistence failed; nothing further this pass can do.
             return;
         };
-        let preview = truncate_preview(&original);
-        let stub = format_oversized_tool_result(original.len(), &p.display, preview);
-        results[i].block = ContentBlock::ToolResult {
-            tool_use_id,
-            content: stub.clone(),
-            succeeded,
-        };
-        if results[i].outcome.is_ok() {
-            results[i].outcome = Ok(stub);
-        }
-        results[i].path = Some(p.rel);
+        let preview = truncate_preview(&outcome.content);
+        let stub = format_oversized_tool_result(outcome.content.len(), &p.display, preview);
+        outcome.content = stub;
+        outcome.path = Some(p.rel);
     }
 }
 
@@ -1213,15 +1167,8 @@ Do the demo thing.
 
         let results = registry.execute(&calls, &ctx).await;
         assert_eq!(results.len(), 1);
-        match &results[0].block {
-            ContentBlock::ToolResult {
-                succeeded, content, ..
-            } => {
-                assert!(!succeeded);
-                assert!(content.contains("Unknown tool"));
-            }
-            other => panic!("Expected ToolResult, got {other:?}"),
-        }
+        assert_eq!(results[0].failure, Some(ToolFailureKind::ToolNotFound));
+        assert!(results[0].content.contains("Unknown tool"));
     }
 
     #[tokio::test]
@@ -1236,13 +1183,11 @@ Do the demo thing.
         }];
 
         let results = registry.execute(&calls, &ctx).await;
-        let ContentBlock::ToolResult {
-            content, succeeded, ..
-        } = &results[0].block
-        else {
-            panic!("Expected ToolResult");
-        };
-        assert!(!succeeded);
+        let content = &results[0].content;
+        assert_eq!(
+            results[0].failure,
+            Some(ToolFailureKind::SchemaValidationFailed)
+        );
         assert!(
             content.contains("expected type object, got string"),
             "{content}"
@@ -1298,13 +1243,7 @@ Do the demo thing.
             input,
         }];
         let results = registry.execute(&calls, ctx).await;
-        let ContentBlock::ToolResult {
-            content, succeeded, ..
-        } = &results[0].block
-        else {
-            panic!("Expected ToolResult");
-        };
-        (content.clone(), *succeeded)
+        (results[0].content.clone(), results[0].failure.is_none())
     }
 
     #[tokio::test]
@@ -1403,11 +1342,8 @@ Do the demo thing.
         }];
 
         let results = registry.execute(&calls, &ctx).await;
-        let ContentBlock::ToolResult { content, .. } = &results[0].block else {
-            panic!("Expected ToolResult");
-        };
         assert_eq!(
-            content,
+            results[0].content,
             "Unknown tool: ripgrep. Available tools: grep, read_file"
         );
     }
@@ -1450,15 +1386,8 @@ Do the demo thing.
 
         let results = registry.execute(&calls, &ctx).await;
         assert_eq!(results.len(), 1);
-        match &results[0].block {
-            ContentBlock::ToolResult {
-                content, succeeded, ..
-            } => {
-                assert!(succeeded);
-                assert_eq!(content, "written");
-            }
-            other => panic!("Expected ToolResult, got {other:?}"),
-        }
+        assert!(results[0].failure.is_none());
+        assert_eq!(results[0].content, "written");
     }
 
     #[test]
@@ -1501,17 +1430,20 @@ Do the demo thing.
     /// hand it.
     fn stubbable(id: &str, content: &str) -> ToolOutcome {
         ToolOutcome {
-            block: tool_result_block(id, content),
-            outcome: Ok(content.to_string()),
+            call_id: id.into(),
+            content: content.into(),
+            failure: None,
             path: None,
         }
     }
 
-    fn tool_result_block(id: &str, content: &str) -> ContentBlock {
-        ContentBlock::ToolResult {
-            tool_use_id: id.into(),
+    /// A failed outcome, for the tests that pin what the caps leave alone.
+    fn failed(id: &str, content: &str) -> ToolOutcome {
+        ToolOutcome {
+            call_id: id.into(),
             content: content.into(),
-            succeeded: true,
+            failure: Some(ToolFailureKind::ExecutionFailed),
+            path: None,
         }
     }
 
@@ -1529,8 +1461,9 @@ Do the demo thing.
     #[test]
     fn write_tool_output_stores_relative_path_in_comment() {
         let (ctx, _queue, key, _dir) = ticket_ctx();
-        let (_outcome, path) = cap_oversized_result(Ok("z".repeat(500)), &ctx, "call-rel", 100);
-        let stored = path.expect("offload happened");
+        let mut outcome = stubbable("call-rel", &"z".repeat(500));
+        cap_oversized_result(&mut outcome, &ctx, 100);
+        let stored = outcome.path.expect("offload happened");
         assert_eq!(stored, relative_outputs_path(&key, "call-rel"));
         assert!(
             stored.is_relative(),
@@ -1542,8 +1475,9 @@ Do the demo thing.
     #[test]
     fn persisted_output_renders_absolute_path_for_model() {
         let (ctx, _queue, key, dir) = ticket_ctx();
-        let (outcome, _path) = cap_oversized_result(Ok("y".repeat(500)), &ctx, "call-abs", 100);
-        let stub = outcome.unwrap();
+        let mut outcome = stubbable("call-abs", &"y".repeat(500));
+        cap_oversized_result(&mut outcome, &ctx, 100);
+        let stub = outcome.content;
         let absolute = absolute_outputs_path(dir.path(), &key, "call-abs");
         assert!(
             stub.contains(&absolute.display().to_string()),
@@ -1554,16 +1488,18 @@ Do the demo thing.
     #[test]
     fn cap_oversized_result_passes_through_under_cap() {
         let ctx = test_ctx();
-        let (outcome, path) = cap_oversized_result(Ok("hello".into()), &ctx, "call-1", 100);
-        assert_eq!(outcome.unwrap(), "hello");
-        assert!(path.is_none());
+        let mut outcome = stubbable("call-1", "hello");
+        cap_oversized_result(&mut outcome, &ctx, 100);
+        assert_eq!(outcome.content, "hello");
+        assert!(outcome.path.is_none());
     }
 
     #[test]
     fn cap_oversized_result_replaces_oversized_ok_with_stub() {
         let (ctx, _queue, key, dir) = ticket_ctx();
-        let (outcome, path) = cap_oversized_result(Ok("a".repeat(500)), &ctx, "call-xyz", 100);
-        let stub = outcome.unwrap();
+        let mut outcome = stubbable("call-xyz", &"a".repeat(500));
+        cap_oversized_result(&mut outcome, &ctx, 100);
+        let stub = outcome.content;
         assert!(stub.starts_with("<persisted-output>"));
         assert!(stub.contains("Output too large"));
         assert!(stub.contains("Full output saved to:"));
@@ -1574,35 +1510,29 @@ Do the demo thing.
         );
         assert!(stub.contains("Preview (first"));
         assert!(stub.ends_with("</persisted-output>"));
-        let path = path.expect("offload path");
+        let path = outcome.path.expect("offload path");
         assert_eq!(path, relative_outputs_path(&key, "call-xyz"));
         let body = std::fs::read_to_string(&absolute).unwrap();
         assert_eq!(body, "a".repeat(500));
     }
 
     #[test]
-    fn cap_oversized_result_passes_through_errs() {
+    fn cap_oversized_result_passes_a_failure_through() {
         let ctx = test_ctx();
-        let (outcome, path) = cap_oversized_result(
-            Err(ToolError::ExecutionFailed {
-                tool_name: "tool".into(),
-                message: "boom".into(),
-            }),
-            &ctx,
-            "call-1",
-            10,
-        );
-        assert!(matches!(outcome, Err(ToolError::ExecutionFailed { .. })));
-        assert!(path.is_none());
+        let mut outcome = failed("call-1", "boom");
+        cap_oversized_result(&mut outcome, &ctx, 1);
+        assert_eq!(outcome.content, "boom");
+        assert!(outcome.path.is_none());
     }
 
     #[test]
     fn cap_oversized_result_returns_raw_when_no_ticket_key() {
         let ctx = test_ctx();
         let payload = "x".repeat(500);
-        let (outcome, path) = cap_oversized_result(Ok(payload.clone()), &ctx, "call-1", 100);
-        assert_eq!(outcome.unwrap(), payload);
-        assert!(path.is_none(), "no ticket key means no offload");
+        let mut outcome = stubbable("call-1", &payload);
+        cap_oversized_result(&mut outcome, &ctx, 100);
+        assert_eq!(outcome.content, payload);
+        assert!(outcome.path.is_none(), "no ticket key means no offload");
     }
 
     #[test]
@@ -1619,26 +1549,15 @@ Do the demo thing.
         ];
         cap_aggregate_outputs(&mut results, &ctx, 100_000);
         // c2 (the largest) was offloaded; the other two stayed inline.
-        match &results[1].block {
-            ContentBlock::ToolResult { content, .. } => {
-                assert!(content.starts_with("<persisted-output>"));
-                assert!(content.contains("Full output saved to:"));
-            }
-            _ => panic!("expected ToolResult"),
-        }
+        assert!(results[1].content.starts_with("<persisted-output>"));
+        assert!(results[1].content.contains("Full output saved to:"));
         let big_path = results[1].path.clone().expect("c2 path recorded");
         assert_eq!(big_path, relative_outputs_path(&key, "c2"));
         let body = std::fs::read_to_string(absolute_outputs_path(dir.path(), &key, "c2")).unwrap();
         assert_eq!(body, big);
 
-        assert!(matches!(
-            &results[0].block,
-            ContentBlock::ToolResult { content, .. } if content.len() == 40_000
-        ));
-        assert!(matches!(
-            &results[2].block,
-            ContentBlock::ToolResult { content, .. } if content.len() == 30_000
-        ));
+        assert_eq!(results[0].content.len(), 40_000);
+        assert_eq!(results[2].content.len(), 30_000);
         assert!(results[0].path.is_none());
         assert!(results[2].path.is_none());
     }
@@ -1657,18 +1576,12 @@ Do the demo thing.
             .collect();
         let before: Vec<String> = results
             .iter()
-            .map(|result| match &result.block {
-                ContentBlock::ToolResult { content, .. } => content.clone(),
-                _ => String::new(),
-            })
+            .map(|outcome| outcome.content.clone())
             .collect();
         cap_aggregate_outputs(&mut results, &ctx, 10);
         let after: Vec<String> = results
             .iter()
-            .map(|result| match &result.block {
-                ContentBlock::ToolResult { content, .. } => content.clone(),
-                _ => String::new(),
-            })
+            .map(|outcome| outcome.content.clone())
             .collect();
         assert_eq!(
             before, after,
@@ -1724,25 +1637,35 @@ Do the demo thing.
 
     #[test]
     fn replace_empty_output_substitutes_placeholder() {
-        let outcome: std::result::Result<String, ToolError> = Ok(String::new());
-        let outcome = replace_empty_output(outcome, "bash");
-        assert_eq!(outcome.unwrap(), "(bash completed with no output)");
+        let mut outcome = stubbable("c1", "");
+        replace_empty_output(&mut outcome, "bash");
+        assert_eq!(outcome.content, "(bash completed with no output)");
     }
 
     #[test]
     fn replace_empty_output_passes_non_empty_through() {
-        let outcome: std::result::Result<String, ToolError> = Ok("hello".into());
-        let outcome = replace_empty_output(outcome, "bash");
-        assert_eq!(outcome.unwrap(), "hello");
+        let mut outcome = stubbable("c1", "hello");
+        replace_empty_output(&mut outcome, "bash");
+        assert_eq!(outcome.content, "hello");
     }
 
     #[test]
-    fn replace_empty_output_passes_errors_through() {
-        let outcome: std::result::Result<String, ToolError> = Err(ToolError::ExecutionFailed {
-            tool_name: "bash".into(),
-            message: "boom".into(),
-        });
-        let outcome = replace_empty_output(outcome, "bash");
-        assert!(matches!(outcome, Err(ToolError::ExecutionFailed { .. })));
+    fn replace_empty_output_passes_a_failure_through() {
+        // The guard reads `failure`, not the content, so even an empty
+        // failure message is left as the tool reported it.
+        let mut outcome = failed("c1", "");
+        replace_empty_output(&mut outcome, "bash");
+        assert_eq!(outcome.content, "");
+    }
+
+    #[test]
+    fn cap_aggregate_skips_a_failed_outcome() {
+        // A failure's message is what the model must read to recover, so the
+        // aggregate cap never writes it out.
+        let (ctx, _queue, _key, _dir) = ticket_ctx();
+        let mut results = vec![failed("c1", &"e".repeat(50_000))];
+        cap_aggregate_outputs(&mut results, &ctx, 10);
+        assert_eq!(results[0].content.len(), 50_000);
+        assert!(results[0].path.is_none());
     }
 }

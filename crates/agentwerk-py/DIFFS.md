@@ -190,7 +190,6 @@ Seven rules the surface table below never repeats.
 | `ToolLike` | A `@tool`-decorated callable. Python cannot implement a Rust trait. |
 | `ToolContext` | Not bound: a `@tool` function receives its input as keyword arguments only. |
 | `ToolResult::success(c)`, `::error(c)`, `::schema_error(c)` | `ToolResult.success(content)`, `.error(content)`, `.schema_error(content)` |
-| `ToolError` | `RuntimeError` |
 | `ReadFileTool` | `ReadFileTool()`: a unit struct becomes a function returning a handle. |
 | `WriteFileTool`, `EditFileTool` | `WriteFileTool()`, `EditFileTool()` |
 | `GrepTool`, `GlobTool`, `ListDirectoryTool` | `GrepTool()`, `GlobTool()`, `ListDirectoryTool()` |

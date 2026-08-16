@@ -464,14 +464,12 @@ mod tests {
             input: serde_json::json!({}),
         }];
         let results = registry.execute(&calls, &test_tool_context()).await;
-        let crate::providers::ContentBlock::ToolResult {
-            content, succeeded, ..
-        } = &results[0].block
-        else {
-            panic!("expected a tool result");
-        };
-        assert!(!succeeded);
-        assert!(content.contains("`command`"), "{content}");
+        assert!(results[0].failure.is_some());
+        assert!(
+            results[0].content.contains("`command`"),
+            "{content}",
+            content = results[0].content
+        );
     }
 
     #[tokio::test]
