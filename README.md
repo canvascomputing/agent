@@ -574,7 +574,9 @@ let greet = Tool::new("greet", "Say hello")
     .build();
 ```
 
-Return `ToolResult::error(message)` for a failure the model should work around, and `ToolResult::schema_error(message)` for arguments it must send differently: that one counts against `max_schema_retries`.
+`schema(..)` panics on a document agentwerk cannot compile, naming your tool: an unchecked tool is a mistake to fix here, not one an agent should meet at call time.
+
+Return `ToolResult::error(message)` for a failure the model should work around. `ToolResult::schema_error(message)` is for a tool running a schema of its own: it shows the model the schema back with a directive to match it, so it misleads when the rule broken is one no schema states. Both count against `max_schema_retries`.
 
 See [`Tool`](https://docs.rs/agentwerk/latest/agentwerk/tools/struct.Tool.html).
 
@@ -610,14 +612,14 @@ tickets.on_event(|event| {
 | | `TicketFinished` | A ticket finished successfully. |
 | | `TicketFailed` | A ticket failed. |
 | | `TurnStarted` | The agent began another turn on its ticket. |
-| | `SchemaRetried` | A call or a result missed its schema and the agent was asked again. |
+| | `SchemaRetried` | A tool call or result the model created was invalid. |
 | **LLM provider** | `RequestStarted` | A request went out to the model. |
 | | `RequestFinished` | A request finished and reported its token usage. |
 | | `RequestFailed` | A request failed and was not retried. |
 | | `RequestRetried` | A transient provider error triggered a retry. |
 | | `TextChunkReceived` | A piece of the reply arrived. |
-| | `ResponseRepaired` | A malformed call or value was corrected. |
-| **Tool** | `ToolCallDeclined` | A tool call written in the reply was declined, with the reason. |
+| | `ResponseRepaired` | A tool call or value the model created was invalid and was corrected. |
+| **Tool** | `ToolCallDeclined` | A tool call proposed by the model was declined. |
 | | `ToolCallStarted` | A tool invocation began. |
 | | `ToolCallFinished` | A tool invocation finished. |
 | | `ToolCallFailed` | A tool invocation failed but the ticket continues. |

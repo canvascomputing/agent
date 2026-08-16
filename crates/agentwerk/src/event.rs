@@ -320,13 +320,14 @@ pub enum EventKind {
     },
     /// A piece of the reply arrived.
     TextChunkReceived { content: String },
-    /// A malformed call or value was corrected here and then used, rather than
-    /// asked for again. `message` reads `<name>: <what was corrected>`, so
-    /// grouping by its prefix collects every repair one tool needed. Repeated
-    /// repairs of one reason point at a prompt or tool description to fix.
+    /// A tool call or value the model created was invalid and was corrected
+    /// here, rather than asked for again. `message` reads
+    /// `<name>: <what was corrected>`, so grouping by its prefix collects every
+    /// repair one tool needed. Repeated repairs of one reason point at a prompt
+    /// or tool description to fix.
     ResponseRepaired { reason: RepairKind, message: String },
-    /// A framed tool call was found in the reply and left alone, with the
-    /// reason it was not promoted.
+    /// A tool call proposed by the model was declined. `reason` says why it was
+    /// not promoted to a call that runs.
     ToolCallDeclined {
         tool_name: String,
         reason: ToolDeclineKind,
@@ -368,8 +369,8 @@ pub enum EventKind {
     },
     /// A limit was breached and execution stopped.
     PolicyViolated { policy: PolicyKind, limit: u64 },
-    /// A call or a result missed its schema and the agent was asked again.
-    /// `attempt` counts from one.
+    /// A tool call or result the model created was invalid. The agent was asked
+    /// again; `attempt` counts from one.
     SchemaRetried {
         attempt: u32,
         max_attempts: u32,
