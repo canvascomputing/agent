@@ -63,9 +63,7 @@ impl ToolLike for FetchUrlTool {
         _ctx: &'a ToolContext,
     ) -> Pin<Box<dyn Future<Output = Result<ToolResult>> + Send + 'a>> {
         Box::pin(async move {
-            let Some(url) = input["url"].as_str() else {
-                return Ok(ToolResult::schema_error("Missing required parameter: url"));
-            };
+            let url = input["url"].as_str().unwrap_or_default();
             let max_length = input["max_length"]
                 .as_u64()
                 .map(|n| n as usize)

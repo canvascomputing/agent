@@ -60,14 +60,7 @@ impl ToolLike for GlobTool {
         ctx: &'a ToolContext,
     ) -> Pin<Box<dyn Future<Output = Result<ToolResult>> + Send + 'a>> {
         Box::pin(async move {
-            let pattern = match input["pattern"].as_str() {
-                Some(p) => p,
-                None => {
-                    return Ok(ToolResult::schema_error(
-                        "Missing required parameter: pattern",
-                    ));
-                }
-            };
+            let pattern = input["pattern"].as_str().unwrap_or_default();
             let base_str = input["path"].as_str().unwrap_or(".");
             let base = ctx.dir.join(base_str);
 

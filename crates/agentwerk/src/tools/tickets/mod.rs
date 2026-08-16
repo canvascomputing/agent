@@ -21,10 +21,7 @@ pub use tickets::TicketsTool;
 pub(crate) const TICKET_FINISH_TOOL: &str = "finish";
 
 pub(super) fn dispatch(input: Value, ctx: &ToolContext) -> ToolResult {
-    let action = match input["action"].as_str() {
-        Some(a) => a,
-        None => return ToolResult::schema_error("Missing required parameter: action"),
-    };
+    let action = input["action"].as_str().unwrap_or_default();
     let Some(ticket_queue) = ctx.ticket_queue.clone() else {
         return ToolResult::error("Ticket queue unavailable in this context");
     };

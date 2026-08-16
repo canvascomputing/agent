@@ -66,12 +66,7 @@ impl ToolLike for ReadFileTool {
         ctx: &'a ToolContext,
     ) -> Pin<Box<dyn Future<Output = ProviderResult<ToolResult>> + Send + 'a>> {
         Box::pin(async move {
-            let path = match input["path"].as_str() {
-                Some(p) => p,
-                None => {
-                    return Ok(ToolResult::schema_error("Missing required parameter: path"));
-                }
-            };
+            let path = input["path"].as_str().unwrap_or_default();
 
             let resolved = ctx.dir.join(path);
 

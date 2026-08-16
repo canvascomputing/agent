@@ -210,10 +210,9 @@ impl ToolLike for KnowledgeTool {
                     Ok(ToolResult::success(body))
                 }
 
-                "" => Ok(ToolResult::schema_error(
-                    "Missing required parameter: action",
-                )),
-                other => Ok(ToolResult::error(format!("Unknown action: {other}"))),
+                other => Ok(ToolResult::error(format!(
+                    "Unknown action `{other}`. Valid actions: write, read, remove, list"
+                ))),
             }
         })
     }

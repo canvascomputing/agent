@@ -64,21 +64,8 @@ impl ToolLike for WriteFileTool {
         ctx: &'a ToolContext,
     ) -> Pin<Box<dyn Future<Output = Result<ToolResult>> + Send + 'a>> {
         Box::pin(async move {
-            let path = match input["path"].as_str() {
-                Some(p) => p,
-                None => {
-                    return Ok(ToolResult::schema_error("Missing required parameter: path"));
-                }
-            };
-
-            let content = match input["content"].as_str() {
-                Some(c) => c,
-                None => {
-                    return Ok(ToolResult::schema_error(
-                        "Missing required parameter: content",
-                    ));
-                }
-            };
+            let path = input["path"].as_str().unwrap_or_default();
+            let content = input["content"].as_str().unwrap_or_default();
 
             let resolved = ctx.dir.join(path);
 

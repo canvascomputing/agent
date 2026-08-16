@@ -65,31 +65,9 @@ impl ToolLike for EditFileTool {
         ctx: &'a ToolContext,
     ) -> Pin<Box<dyn Future<Output = Result<ToolResult>> + Send + 'a>> {
         Box::pin(async move {
-            let path = match input["path"].as_str() {
-                Some(p) => p,
-                None => {
-                    return Ok(ToolResult::schema_error("Missing required parameter: path"));
-                }
-            };
-
-            let old_string = match input["old_string"].as_str() {
-                Some(s) => s,
-                None => {
-                    return Ok(ToolResult::schema_error(
-                        "Missing required parameter: old_string",
-                    ));
-                }
-            };
-
-            let new_string = match input["new_string"].as_str() {
-                Some(s) => s,
-                None => {
-                    return Ok(ToolResult::schema_error(
-                        "Missing required parameter: new_string",
-                    ));
-                }
-            };
-
+            let path = input["path"].as_str().unwrap_or_default();
+            let old_string = input["old_string"].as_str().unwrap_or_default();
+            let new_string = input["new_string"].as_str().unwrap_or_default();
             let replace_all = input["replace_all"].as_bool().unwrap_or(false);
 
             let resolved = ctx.dir.join(path);
