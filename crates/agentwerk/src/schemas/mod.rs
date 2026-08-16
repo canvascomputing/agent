@@ -123,9 +123,7 @@ impl Schema {
         }
         let mut repaired = value;
         let mut repairs = Vec::new();
-        self.inner
-            .compiled
-            .coerce(&mut repaired, true, "", &mut repairs);
+        self.inner.compiled.coerce(&mut repaired, "", &mut repairs);
         match self.check(&repaired) {
             Ok(()) => Ok((repaired, repairs)),
             Err(violations) => Err(SchemaViolations(violations)),
@@ -980,17 +978,10 @@ impl Node {
     /// declared spelling. A branch of `anyOf` or `oneOf` retypes nothing:
     /// choosing a value's shape there would also choose the branch, so the
     /// violations name the mismatch instead.
-    ///
-    /// `widen` allows the two rewrites that pick a shape the model did not
-    /// write. An `if` is left out for the reason a branch is, and `not`
-    /// because it names what the value must fail, so there is no shape to
-    /// rewrite toward.
-    fn coerce(&self, value: &mut Value, widen: bool, instance_path: &str, out: &mut Vec<String>) {
+    fn coerce(&self, value: &mut Value, instance_path: &str, out: &mut Vec<String>) {
         if let Some(types) = self.types.as_deref() {
             if !types.iter().any(|t| t.matches(value)) {
-                // Several types listed poses the same choice `anyOf` does.
-                let widen = widen && types.len() == 1;
-                if let Some(retyped) = types.iter().find_map(|t| t.retype(value, widen)) {
+                if let Some(retyped) = types.iter().find_map(|t| t.retype(value)) {
                     *value = retyped;
                     out.push(instance_path.to_string());
                 }
@@ -1012,7 +1003,7 @@ impl Node {
                 for (name, sub) in self.properties.iter().flatten() {
                     if let Some(field) = map.get_mut(name) {
                         let child_path = format!("{instance_path}/{}", escape_pointer(name));
-                        sub.coerce(field, widen, &child_path, out);
+                        sub.coerce(field, &child_path, out);
                     }
                 }
             }
@@ -1020,7 +1011,7 @@ impl Node {
                 if let Some(items_schema) = &self.items {
                     for (i, item) in items.iter_mut().enumerate() {
                         let child_path = format!("{instance_path}/{i}");
-                        items_schema.coerce(item, widen, &child_path, out);
+                        items_schema.coerce(item, &child_path, out);
                     }
                 }
             }
@@ -1028,7 +1019,7 @@ impl Node {
         }
 
         for branch in self.all_of.iter().flatten() {
-            branch.coerce(value, widen, instance_path, out);
+            branch.coerce(value, instance_path, out);
         }
 
         // Once selected, a branch is part of the schema, so its rewrites are
@@ -1040,7 +1031,7 @@ impl Node {
                 &self.else_schema
             };
             if let Some(sub) = selected {
-                sub.coerce(value, widen, instance_path, out);
+                sub.coerce(value, instance_path, out);
             }
         }
     }
@@ -1075,22 +1066,16 @@ impl JsonType {
     /// The value this type would accept, when the rewrite is exact. `None`
     /// leaves the value for the violation report to name.
     ///
-    /// Reading a quoted literal recovers what the model wrote; the arms behind
-    /// `widen` wrap or stringify instead, picking a shape it never wrote.
+    /// Every arm reads a quoted literal back to what the model wrote; nothing
+    /// wraps or stringifies, which would pick a shape it never wrote.
     /// `null` is never produced: for a nullable string `"null"` is a real value.
-    fn retype(self, value: &Value, widen: bool) -> Option<Value> {
+    fn retype(self, value: &Value) -> Option<Value> {
         match (self, value) {
             (Self::Integer, Value::String(text)) => retype_integer(text),
             (Self::Number, Value::String(text)) => retype_number(text),
             (Self::Boolean, Value::String(text)) => retype_boolean(text),
             (Self::Object, Value::String(text)) => decode_json(text, Value::is_object),
-            (Self::Array, Value::String(text)) => decode_json(text, Value::is_array)
-                .or_else(|| widen.then(|| Value::Array(vec![value.clone()]))),
-            (Self::Array, other) if widen && !other.is_null() => {
-                Some(Value::Array(vec![other.clone()]))
-            }
-            (Self::String, Value::Number(n)) if widen => Some(Value::String(n.to_string())),
-            (Self::String, Value::Bool(b)) if widen => Some(Value::String(b.to_string())),
+            (Self::Array, Value::String(text)) => decode_json(text, Value::is_array),
             _ => None,
         }
     }
@@ -1781,27 +1766,17 @@ mod tests {
     }
 
     #[test]
-    fn validate_stringifies_a_number_for_a_single_string_type() {
-        let schema = Schema::new(json!({"type": "string"})).unwrap();
-        assert_eq!(kept(&schema, json!(42)), json!("42"));
-    }
-
-    #[test]
-    fn validate_wraps_a_lone_value_for_a_single_array_type() {
-        let schema = Schema::new(json!({"type": "array", "items": {"type": "string"}})).unwrap();
-        assert_eq!(kept(&schema, json!("urgent")), json!(["urgent"]));
-    }
-
-    #[test]
-    fn validate_does_not_widen_to_satisfy_a_union_member() {
-        // Writing a literal would pick both a shape and a member.
-        let listed = Schema::new(json!({"type": ["string", "null"]})).unwrap();
-        assert!(listed.validate(json!(1)).is_err());
-        let branched = Schema::new(json!({
-            "anyOf": [{ "type": "string" }, { "type": "null" }],
-        }))
-        .unwrap();
-        assert!(branched.validate(json!(1)).is_err());
+    fn validate_never_rewrites_a_value_to_a_shape_the_model_did_not_write() {
+        // Stringifying the number or wrapping the lone value would pass the
+        // check with a value the model never wrote; the violation asks for the
+        // right shape instead.
+        let string = Schema::new(json!({"type": "string"})).unwrap();
+        let violations = string.validate(json!(42)).unwrap_err();
+        assert!(violations
+            .iter()
+            .any(|v| v.message.contains("send the value quoted")));
+        let array = Schema::new(json!({"type": "array", "items": {"type": "string"}})).unwrap();
+        assert!(array.validate(json!("urgent")).is_err());
     }
 
     #[test]

@@ -1316,13 +1316,17 @@ mod tests {
     }
 
     #[test]
-    fn a_number_where_the_advertised_schema_declares_a_string_is_retyped() {
+    fn a_number_where_the_advertised_schema_declares_a_string_is_rejected() {
+        // Stringifying `42` would pass the check with a task the model never
+        // wrote; the violation names the field to fix instead.
         let schema = FinishTool.input_schema();
-        let (validated, repaired) = schema
+        let violations = schema
             .validate(serde_json::json!({"handover": "bob", "task": 42, "result": "ok"}))
-            .unwrap();
-        assert_eq!(validated["task"], serde_json::json!("42"));
-        assert_eq!(repaired, vec!["/task"]);
+            .unwrap_err();
+        assert!(
+            violations.iter().any(|v| v.instance_path == "/task"),
+            "{violations}"
+        );
     }
 
     #[tokio::test]
