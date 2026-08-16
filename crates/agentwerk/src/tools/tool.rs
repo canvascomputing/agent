@@ -259,14 +259,20 @@ impl ToolRegistry {
         advertised.or_else(|| registered().cloned())
     }
 
-    /// Get the schema a call is checked against before the tool runs.
+    /// Get the tool a call reaches and the schema it is checked against, owned,
+    /// so a concurrent batch can move both into its task.
     ///
     /// The finish tool is checked against what it registered rather than what it
     /// advertised: it accepts a `result` envelope the advertised shape does not
     /// name, unwraps it, and validates the result against the ticket itself.
-    fn checked_schema(&self, name: &str) -> Option<Schema> {
-        let tool = self.get(name)?;
-        self.schemas.get(tool.name()).cloned()
+    fn resolve(&self, name: &str) -> Resolved {
+        let Some(tool) = self.get(name) else {
+            return Resolved::Unknown {
+                available: self.names(),
+            };
+        };
+        let schema = self.schemas.get(tool.name()).cloned();
+        Resolved::Found { tool, schema }
     }
 
     /// Get the tool a call names.
@@ -308,24 +314,9 @@ impl ToolRegistry {
     }
 
     /// Run the calls, concurrent ones together and the rest one at a time.
-    ///
-    /// Each result carries the block the model sees, the typed outcome, and the
-    /// file an oversized output was written to.
-    pub(crate) async fn execute(
-        &self,
-        calls: &[ToolCall],
-        ctx: &ToolContext,
-    ) -> Vec<(
-        ContentBlock,
-        std::result::Result<String, ToolError>,
-        Option<PathBuf>,
-    )> {
+    pub(crate) async fn execute(&self, calls: &[ToolCall], ctx: &ToolContext) -> Vec<ToolOutcome> {
         let batches = partition_tool_calls(calls, self);
-        let mut results: Vec<(
-            ContentBlock,
-            std::result::Result<String, ToolError>,
-            Option<PathBuf>,
-        )> = Vec::new();
+        let mut results: Vec<ToolOutcome> = Vec::new();
         let semaphore = Arc::new(tokio::sync::Semaphore::new(10));
 
         for batch in batches {
@@ -335,49 +326,23 @@ impl ToolRegistry {
                     for call in calls {
                         let sem = semaphore.clone();
                         let ctx = ctx.clone();
-                        let tool_arc = self.get(&call.name);
-                        let available = tool_arc.is_none().then(|| self.names());
-                        let schema = self.checked_schema(&call.name);
-                        let call_id = call.id.clone();
-                        let call_name = call.name.clone();
-                        let input = call.input.clone();
-
+                        // Resolved before the spawn: the task outlives this
+                        // borrow of the registry.
+                        let found = self.resolve(&call.name);
                         set.spawn(async move {
                             let _permit = sem.acquire().await.unwrap();
-                            let outcome =
-                                invoke(tool_arc, available, schema, &call_name, input, &ctx).await;
-                            let outcome = replace_empty_output(outcome, &call_name);
-                            let (outcome, path) =
-                                cap_oversized_result(outcome, &ctx, &call_id, PER_TOOL_CAP);
-                            (call_id, outcome, path)
+                            run_call(found, &call, &ctx).await
                         });
                     }
 
                     while let Some(join_result) = set.join_next().await {
-                        if let Ok((id, outcome, path)) = join_result {
-                            let block = content_block_for(&id, &outcome);
-                            results.push((block, outcome, path));
+                        if let Ok(outcome) = join_result {
+                            results.push(outcome);
                         }
                     }
                 }
                 ToolBatch::Serial(call) => {
-                    let tool_arc = self.get(&call.name);
-                    let available = tool_arc.is_none().then(|| self.names());
-                    let schema = self.checked_schema(&call.name);
-                    let outcome = invoke(
-                        tool_arc,
-                        available,
-                        schema,
-                        &call.name,
-                        call.input.clone(),
-                        ctx,
-                    )
-                    .await;
-                    let outcome = replace_empty_output(outcome, &call.name);
-                    let (outcome, path) =
-                        cap_oversized_result(outcome, ctx, &call.id, PER_TOOL_CAP);
-                    let block = content_block_for(&call.id, &outcome);
-                    results.push((block, outcome, path));
+                    results.push(run_call(self.resolve(&call.name), &call, ctx).await);
                 }
             }
         }
@@ -587,19 +552,52 @@ impl ToolLike for Tool {
     }
 }
 
+/// What one call produced: the block the model sees, the typed outcome, and the
+/// file an oversized output was written to.
+type ToolOutcome = (
+    ContentBlock,
+    std::result::Result<String, ToolError>,
+    Option<PathBuf>,
+);
+
+/// What a call name resolved to. The tools a batch runs concurrently are
+/// resolved before the batch spawns, so each task owns what it needs.
+enum Resolved {
+    Found {
+        tool: Arc<dyn ToolLike>,
+        schema: Option<Schema>,
+    },
+    Unknown {
+        available: Vec<String>,
+    },
+}
+
+/// Run one call to the outcome the turn collects: check the arguments, run the
+/// tool, then stand in for an empty or oversized result.
+async fn run_call(found: Resolved, call: &ToolCall, ctx: &ToolContext) -> ToolOutcome {
+    let outcome = invoke(found, &call.name, call.input.clone(), ctx).await;
+    let outcome = replace_empty_output(outcome, &call.name);
+    let (outcome, path) = cap_oversized_result(outcome, ctx, &call.id, PER_TOOL_CAP);
+    let block = content_block_for(&call.id, &outcome);
+    (block, outcome, path)
+}
+
+/// Check the arguments against the schema the tool registered, then run it on
+/// what survives.
 async fn invoke(
-    tool: Option<Arc<dyn ToolLike>>,
-    available: Option<Vec<String>>,
-    schema: Option<Schema>,
+    found: Resolved,
     name: &str,
     input: Value,
     ctx: &ToolContext,
 ) -> std::result::Result<String, ToolError> {
-    let Some(t) = tool else {
-        return Err(ToolError::ToolNotFound {
-            tool_name: name.into(),
-            available: available.unwrap_or_default(),
-        });
+    let (tool, schema) = match found {
+        Resolved::Found { tool, schema } => (tool, schema),
+        Resolved::Unknown { available } => {
+            return Err(ToolError::ToolNotFound {
+                tool_name: name.into(),
+                available,
+            })
+        }
     };
     // Built before the retype, which consumes the value: a payload no rewrite
     // recovers is quoted back as it arrived.
@@ -633,7 +631,7 @@ async fn invoke(
             message: repair_message(name, pointer),
         });
     }
-    match t.call(input, ctx).await {
+    match tool.call(input, ctx).await {
         Ok(ToolResult::Success(s)) => Ok(s),
         Ok(ToolResult::Error(s)) => Err(ToolError::ExecutionFailed {
             tool_name: name.into(),
@@ -665,13 +663,17 @@ pub(crate) fn repair_message(tool: &str, pointer: &str) -> String {
 
 /// Name the payload that arrived in place of an arguments object, so a model
 /// that wrapped or double-encoded them sees what it sent.
+///
+/// A schema failure like any other: arguments that are not an object are the
+/// coarsest way to miss the shape, and reporting them apart would put the one
+/// case a retry most needs outside `max_schema_retries`.
 fn not_an_object(name: &str, input: &Value) -> ToolError {
     // Quote a string payload raw; `to_string` would escape and requote it.
     let received = match input.as_str() {
         Some(text) => text.to_string(),
         None => input.to_string(),
     };
-    ToolError::ExecutionFailed {
+    ToolError::SchemaValidationFailed {
         tool_name: name.into(),
         message: format!(
             "Tool arguments were not a JSON object. Send them as an object whose keys are this tool's parameters. Received: {}",
@@ -764,15 +766,7 @@ fn cap_oversized_result(
 /// While one turn's results are too large together, write out the largest that
 /// is not already a stub. It stops once the turn fits, or once nothing left can
 /// be written out.
-fn cap_aggregate_outputs(
-    results: &mut [(
-        ContentBlock,
-        std::result::Result<String, ToolError>,
-        Option<PathBuf>,
-    )],
-    ctx: &ToolContext,
-    per_turn_cap: usize,
-) {
+fn cap_aggregate_outputs(results: &mut [ToolOutcome], ctx: &ToolContext, per_turn_cap: usize) {
     loop {
         let total: usize = results
             .iter()
@@ -1335,7 +1329,10 @@ Do the demo thing.
         let mut registry = ToolRegistry::default();
         registry.register(Unschemable);
         assert!(registry.get("unschemable").is_some());
-        assert!(registry.checked_schema("unschemable").is_none());
+        assert!(matches!(
+            registry.resolve("unschemable"),
+            Resolved::Found { schema: None, .. }
+        ));
     }
 
     #[test]
@@ -1353,7 +1350,7 @@ Do the demo thing.
             .tools
             .iter()
             .map(|tool| tool.name())
-            .filter(|name| registry.checked_schema(name).is_none())
+            .filter(|name| matches!(registry.resolve(name), Resolved::Found { schema: None, .. }))
             .collect();
         assert!(
             unchecked.is_empty(),
