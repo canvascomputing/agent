@@ -16,35 +16,61 @@ pub(crate) use finish::finish_tool_input_schema;
 pub use finish::FinishTool;
 pub use tickets::TicketsTool;
 
-pub(super) fn dispatch(input: Value, ctx: &ToolContext) -> ToolResult {
-    let action = input["action"].as_str().unwrap_or_default();
-    let Some(ticket_queue) = ctx.ticket_queue.clone() else {
+/// What the model asks the queue to do. The schema declares `action` as the
+/// discriminator and states which fields each one requires; the variants say
+/// the same in Rust, so `search` cannot arrive without a `query`.
+#[derive(serde::Deserialize)]
+#[serde(tag = "action", rename_all = "lowercase")]
+pub enum TicketsArgs {
+    Ticket {
+        key: Option<String>,
+    },
+    Result {
+        key: Option<String>,
+    },
+    List {
+        status: Option<String>,
+        label: Option<String>,
+    },
+    Search {
+        query: String,
+    },
+    Create {
+        task: Value,
+        label: Option<String>,
+    },
+    Edit {
+        key: Option<String>,
+        task: Option<Value>,
+        label: Option<String>,
+    },
+}
+
+pub(super) fn dispatch(args: TicketsArgs, ctx: &ToolContext) -> ToolResult {
+    let Some(queue) = ctx.ticket_queue.clone() else {
         return ToolResult::error("Ticket queue unavailable in this context");
     };
 
-    match action {
-        "ticket" => action_ticket(&ticket_queue, &input, ctx),
-        "result" => action_result(&ticket_queue, &input, ctx),
-        "list" => action_list(&ticket_queue, &input),
-        "search" => action_search(&ticket_queue, &input),
-        "create" => action_create(&ticket_queue, &input, ctx),
-        "edit" => action_edit(&ticket_queue, &input, ctx),
-        // The schema declares `action` as an enum, so dispatch rejects anything
-        // else and names what exists. This arm is what `match` demands, reached
-        // only by a host calling the tool directly.
-        other => ToolResult::error(format!("Unknown action `{other}`")),
+    match args {
+        TicketsArgs::Ticket { key } => action_ticket(&queue, key, ctx),
+        TicketsArgs::Result { key } => action_result(&queue, key, ctx),
+        TicketsArgs::List { status, label } => action_list(&queue, status, label),
+        TicketsArgs::Search { query } => action_search(&queue, &query),
+        TicketsArgs::Create { task, label } => action_create(&queue, task, label, ctx),
+        TicketsArgs::Edit { key, task, label } => action_edit(&queue, key, task, label, ctx),
     }
 }
 
+/// The ticket an action names, or the one this agent is holding.
 fn resolve_key(
     ticket_queue: &TicketQueue,
-    input: &Value,
+    key: Option<String>,
     ctx: &ToolContext,
 ) -> Result<String, ToolResult> {
-    if let Some(k) = input["key"].as_str() {
-        return Ok(k.to_string());
+    match key {
+        Some(key) => Ok(key),
+        None => resolve_current_key(ticket_queue, ctx),
     }
-    resolve_current_key(ticket_queue, ctx)
 }
 
 pub(super) fn resolve_current_key(
@@ -175,8 +201,8 @@ fn task_preview(task: &serde_json::Value) -> String {
     truncate_for_preview(&raw, 80)
 }
 
-fn action_ticket(ticket_queue: &TicketQueue, input: &Value, ctx: &ToolContext) -> ToolResult {
-    let key = match resolve_key(ticket_queue, input, ctx) {
+fn action_ticket(ticket_queue: &TicketQueue, key: Option<String>, ctx: &ToolContext) -> ToolResult {
+    let key = match resolve_key(ticket_queue, key, ctx) {
         Ok(k) => k,
         Err(e) => return e,
     };
@@ -186,8 +212,8 @@ fn action_ticket(ticket_queue: &TicketQueue, input: &Value, ctx: &ToolContext) -
     }
 }
 
-fn action_result(ticket_queue: &TicketQueue, input: &Value, ctx: &ToolContext) -> ToolResult {
-    let key = match resolve_key(ticket_queue, input, ctx) {
+fn action_result(ticket_queue: &TicketQueue, key: Option<String>, ctx: &ToolContext) -> ToolResult {
+    let key = match resolve_key(ticket_queue, key, ctx) {
         Ok(k) => k,
         Err(e) => return e,
     };
@@ -205,10 +231,12 @@ fn action_result(ticket_queue: &TicketQueue, input: &Value, ctx: &ToolContext) -
     }
 }
 
-fn action_list(ticket_queue: &TicketQueue, input: &Value) -> ToolResult {
-    let label = input["label"].as_str().map(String::from);
-    let status = input["status"].as_str().map(parse_status_for_list);
-    let status = match status {
+fn action_list(
+    ticket_queue: &TicketQueue,
+    status: Option<String>,
+    label: Option<String>,
+) -> ToolResult {
+    let status = match status.as_deref().map(parse_status_for_list) {
         Some(Ok(s)) => Some(s),
         Some(Err(e)) => return e,
         None => None,
@@ -243,8 +271,8 @@ fn action_list(ticket_queue: &TicketQueue, input: &Value) -> ToolResult {
     ToolResult::success(render_summary_list(&rows))
 }
 
-fn action_search(ticket_queue: &TicketQueue, input: &Value) -> ToolResult {
-    let needle = input["query"].as_str().unwrap_or_default().to_lowercase();
+fn action_search(ticket_queue: &TicketQueue, query: &str) -> ToolResult {
+    let needle = query.to_lowercase();
     let hits = ticket_queue.find_tickets(|t| match &t.task {
         Value::String(s) => s.to_lowercase().contains(&needle),
         other => other.to_string().to_lowercase().contains(&needle),
@@ -266,14 +294,12 @@ fn action_search(ticket_queue: &TicketQueue, input: &Value) -> ToolResult {
     ToolResult::success(render_summary_list(&rows))
 }
 
-fn action_create(ticket_queue: &TicketQueue, input: &Value, ctx: &ToolContext) -> ToolResult {
-    let task = input["task"].clone();
-
-    let label = match parse_label(input) {
-        Ok(l) => l,
-        Err(e) => return e,
-    };
-
+fn action_create(
+    ticket_queue: &TicketQueue,
+    task: Value,
+    label: Option<String>,
+    ctx: &ToolContext,
+) -> ToolResult {
     let mut ticket = Ticket::new(task);
     if let Some(label) = label {
         ticket = ticket.label(label);
@@ -288,15 +314,15 @@ fn action_create(ticket_queue: &TicketQueue, input: &Value, ctx: &ToolContext) -
     ToolResult::success(format!("Created ticket {key}"))
 }
 
-fn action_edit(ticket_queue: &TicketQueue, input: &Value, ctx: &ToolContext) -> ToolResult {
-    let key = match resolve_key(ticket_queue, input, ctx) {
+fn action_edit(
+    ticket_queue: &TicketQueue,
+    key: Option<String>,
+    new_task: Option<Value>,
+    new_label: Option<String>,
+    ctx: &ToolContext,
+) -> ToolResult {
+    let key = match resolve_key(ticket_queue, key, ctx) {
         Ok(k) => k,
-        Err(e) => return e,
-    };
-
-    let new_task = input.get("task").cloned();
-    let new_label = match parse_label(input) {
-        Ok(l) => l,
         Err(e) => return e,
     };
     if new_task.is_none() && new_label.is_none() {
@@ -306,16 +332,6 @@ fn action_edit(ticket_queue: &TicketQueue, input: &Value, ctx: &ToolContext) -> 
     match ticket_queue.edit(&key, new_task, new_label) {
         Ok(()) => ToolResult::success(format!("Edited ticket {key}")),
         Err(e) => ToolResult::error(ticket_error_message(e)),
-    }
-}
-
-/// Read the `label` argument `create` and `edit` share. Absent or null means
-/// the caller said nothing about the label, never that it should be removed.
-fn parse_label(input: &Value) -> Result<Option<String>, ToolResult> {
-    match input.get("label") {
-        Some(Value::String(s)) => Ok(Some(s.clone())),
-        Some(Value::Null) | None => Ok(None),
-        Some(_) => Err(ToolResult::error("`label` must be a string")),
     }
 }
 

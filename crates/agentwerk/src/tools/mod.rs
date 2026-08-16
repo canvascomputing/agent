@@ -30,5 +30,5 @@ pub use knowledge::{KnowledgeArgs, KnowledgeTool};
 pub use list_directory::ListDirectoryTool;
 pub use read_file::ReadFileTool;
 pub(crate) use tickets::finish_tool_input_schema;
-pub use tickets::{FinishTool, TicketsTool};
+pub use tickets::{FinishTool, TicketsArgs, TicketsTool};
 pub use write_file::WriteFileTool;

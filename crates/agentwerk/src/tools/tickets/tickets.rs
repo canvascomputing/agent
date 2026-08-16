@@ -4,8 +4,6 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::OnceLock;
 
-use serde_json::Value;
-
 use crate::providers::ProviderResult;
 
 use crate::schemas::Schema;
@@ -37,7 +35,7 @@ fn description() -> &'static str {
 }
 
 impl ToolLike for TicketsTool {
-    type Args = Value;
+    type Args = super::TicketsArgs;
 
     fn name(&self) -> &str {
         &tool_file().name
@@ -57,10 +55,10 @@ impl ToolLike for TicketsTool {
 
     fn call<'a>(
         &'a self,
-        input: Value,
+        args: super::TicketsArgs,
         ctx: &'a ToolContext,
     ) -> Pin<Box<dyn Future<Output = ProviderResult<ToolResult>> + Send + 'a>> {
-        Box::pin(async move { Ok(dispatch(input, ctx)) })
+        Box::pin(async move { Ok(dispatch(args, ctx)) })
     }
 }
 
@@ -68,6 +66,17 @@ impl ToolLike for TicketsTool {
 mod tests {
     use super::*;
     use std::collections::BTreeSet;
+
+    #[test]
+    fn every_example_the_schema_shows_deserializes_into_the_arguments() {
+        // The schema and `TicketsArgs` both describe the shape. The examples
+        // are where they are held to the same one.
+        let document = tool_file().input_schema.get_raw_schema().clone();
+        for example in document["examples"].as_array().expect("examples") {
+            serde_json::from_value::<crate::tools::TicketsArgs>(example.clone())
+                .unwrap_or_else(|error| panic!("{example}: {error}"));
+        }
+    }
 
     #[test]
     fn the_schema_advertises_exactly_the_arguments_dispatch_reads() {
