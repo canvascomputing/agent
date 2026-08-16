@@ -68,21 +68,25 @@ impl ToolLike for EditFileTool {
             let path = match input["path"].as_str() {
                 Some(p) => p,
                 None => {
-                    return Ok(ToolResult::error("Missing required parameter: path"));
+                    return Ok(ToolResult::schema_error("Missing required parameter: path"));
                 }
             };
 
             let old_string = match input["old_string"].as_str() {
                 Some(s) => s,
                 None => {
-                    return Ok(ToolResult::error("Missing required parameter: old_string"));
+                    return Ok(ToolResult::schema_error(
+                        "Missing required parameter: old_string",
+                    ));
                 }
             };
 
             let new_string = match input["new_string"].as_str() {
                 Some(s) => s,
                 None => {
-                    return Ok(ToolResult::error("Missing required parameter: new_string"));
+                    return Ok(ToolResult::schema_error(
+                        "Missing required parameter: new_string",
+                    ));
                 }
             };
 

@@ -69,7 +69,7 @@ impl ToolLike for ReadFileTool {
             let path = match input["path"].as_str() {
                 Some(p) => p,
                 None => {
-                    return Ok(ToolResult::error("Missing required parameter: path"));
+                    return Ok(ToolResult::schema_error("Missing required parameter: path"));
                 }
             };
 

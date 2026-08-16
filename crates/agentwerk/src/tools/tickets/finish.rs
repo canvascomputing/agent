@@ -122,9 +122,15 @@ fn hand_over(
     // null and an empty string are rejected: a handoff needs a real result.
     match &result {
         Value::String(s) if s.is_empty() => {
-            return Err(ToolResult::error("`result` must not be an empty string"))
+            return Err(ToolResult::schema_error(
+                "`result` must not be an empty string",
+            ))
         }
-        Value::Null => return Err(ToolResult::error("Missing required parameter: result")),
+        Value::Null => {
+            return Err(ToolResult::schema_error(
+                "Missing required parameter: result",
+            ))
+        }
         _ => {}
     }
 
@@ -1266,7 +1272,7 @@ mod tests {
             .call(serde_json::json!({"handover": "bob", "task": "x"}), &ctx)
             .await
             .unwrap();
-        assert!(matches!(outcome, ToolResult::Error(_)));
+        assert!(matches!(outcome, ToolResult::SchemaError(_)));
     }
 
     #[tokio::test]
@@ -1279,7 +1285,7 @@ mod tests {
             serde_json::json!({"handover": "bob", "task": "x", "result": ""}),
         ] {
             let outcome = FinishTool.call(body, &ctx).await.unwrap();
-            assert!(matches!(outcome, ToolResult::Error(_)));
+            assert!(matches!(outcome, ToolResult::SchemaError(_)));
         }
     }
 

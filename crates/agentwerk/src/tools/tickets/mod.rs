@@ -23,7 +23,7 @@ pub(crate) const TICKET_FINISH_TOOL: &str = "finish";
 pub(super) fn dispatch(input: Value, ctx: &ToolContext) -> ToolResult {
     let action = match input["action"].as_str() {
         Some(a) => a,
-        None => return ToolResult::error("Missing required parameter: action"),
+        None => return ToolResult::schema_error("Missing required parameter: action"),
     };
     let Some(ticket_queue) = ctx.ticket_queue.clone() else {
         return ToolResult::error("Ticket queue unavailable in this context");
@@ -252,7 +252,7 @@ fn action_list(ticket_queue: &TicketQueue, input: &Value) -> ToolResult {
 fn action_search(ticket_queue: &TicketQueue, input: &Value) -> ToolResult {
     let query = match input["query"].as_str() {
         Some(q) => q,
-        None => return ToolResult::error("Missing required parameter: query"),
+        None => return ToolResult::schema_error("Missing required parameter: query"),
     };
     let needle = query.to_lowercase();
     let hits = ticket_queue.find_tickets(|t| match &t.task {
@@ -279,7 +279,7 @@ fn action_search(ticket_queue: &TicketQueue, input: &Value) -> ToolResult {
 fn action_create(ticket_queue: &TicketQueue, input: &Value, ctx: &ToolContext) -> ToolResult {
     let task = match input.get("task") {
         Some(v) => v.clone(),
-        None => return ToolResult::error("Missing required parameter: task"),
+        None => return ToolResult::schema_error("Missing required parameter: task"),
     };
 
     let label = match parse_label(input) {

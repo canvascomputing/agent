@@ -167,7 +167,11 @@ impl Query {
     fn from_input(input: &Value) -> std::result::Result<Query, ToolResult> {
         let pattern = match input["pattern"].as_str() {
             Some(pattern) if !pattern.is_empty() => pattern.to_string(),
-            _ => return Err(ToolResult::error("Missing required parameter: pattern")),
+            _ => {
+                return Err(ToolResult::schema_error(
+                    "Missing required parameter: pattern",
+                ))
+            }
         };
 
         // `-C`/`context` set both sides; `-A`/`-B` override the near or far side.

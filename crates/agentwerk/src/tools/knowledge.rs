@@ -99,18 +99,24 @@ impl ToolLike for KnowledgeTool {
                 "write" => {
                     let slug = match input.get("slug").and_then(Value::as_str) {
                         Some(s) => s,
-                        None => return Ok(ToolResult::error("Missing required parameter: slug")),
+                        None => {
+                            return Ok(ToolResult::schema_error("Missing required parameter: slug"))
+                        }
                     };
                     let description = match input.get("description").and_then(Value::as_str) {
                         Some(s) => s,
                         None => {
-                            return Ok(ToolResult::error("Missing required parameter: description"))
+                            return Ok(ToolResult::schema_error(
+                                "Missing required parameter: description",
+                            ))
                         }
                     };
                     let content = match input.get("content").and_then(Value::as_str) {
                         Some(s) => s,
                         None => {
-                            return Ok(ToolResult::error("Missing required parameter: content"))
+                            return Ok(ToolResult::schema_error(
+                                "Missing required parameter: content",
+                            ))
                         }
                     };
                     // Kind and tags stay host-side concerns set through the
@@ -142,7 +148,9 @@ impl ToolLike for KnowledgeTool {
                 "read" => {
                     let slug = match input.get("slug").and_then(Value::as_str) {
                         Some(s) => s,
-                        None => return Ok(ToolResult::error("Missing required parameter: slug")),
+                        None => {
+                            return Ok(ToolResult::schema_error("Missing required parameter: slug"))
+                        }
                     };
                     match self.store.pages().load(slug) {
                         Ok(page) => {
@@ -166,7 +174,9 @@ impl ToolLike for KnowledgeTool {
                 "remove" => {
                     let slug = match input.get("slug").and_then(Value::as_str) {
                         Some(s) => s,
-                        None => return Ok(ToolResult::error("Missing required parameter: slug")),
+                        None => {
+                            return Ok(ToolResult::schema_error("Missing required parameter: slug"))
+                        }
                     };
                     match self.store.pages().remove(slug) {
                         Ok(()) => {
@@ -200,7 +210,9 @@ impl ToolLike for KnowledgeTool {
                     Ok(ToolResult::success(body))
                 }
 
-                "" => Ok(ToolResult::error("Missing required parameter: action")),
+                "" => Ok(ToolResult::schema_error(
+                    "Missing required parameter: action",
+                )),
                 other => Ok(ToolResult::error(format!("Unknown action: {other}"))),
             }
         })
@@ -242,10 +254,14 @@ mod tests {
         }
     }
 
+    /// A rejected argument and a store that refused both read back the same way;
+    /// only the retry budget they count against differs.
     fn assert_error(result: &ToolResult, fragment: &str) {
         match result {
-            ToolResult::Error(s) => assert!(s.contains(fragment), "expected `{fragment}` in `{s}`"),
-            other => panic!("expected Error, got {other:?}"),
+            ToolResult::Error(s) | ToolResult::SchemaError(s) => {
+                assert!(s.contains(fragment), "expected `{fragment}` in `{s}`")
+            }
+            other => panic!("expected a failure, got {other:?}"),
         }
     }
 
@@ -386,6 +402,10 @@ mod tests {
             )
             .await
             .unwrap();
+        // `slug` is required for `write` alone, so the schema cannot demand it
+        // and dispatch cannot reject it. Reported as a schema failure all the
+        // same, which is what puts it under `max_schema_retries`.
+        assert!(matches!(r, ToolResult::SchemaError(_)), "{r:?}");
         assert_error(&r, "slug");
     }
 

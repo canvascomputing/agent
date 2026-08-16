@@ -63,7 +63,9 @@ impl ToolLike for GlobTool {
             let pattern = match input["pattern"].as_str() {
                 Some(p) => p,
                 None => {
-                    return Ok(ToolResult::error("Missing required parameter: pattern"));
+                    return Ok(ToolResult::schema_error(
+                        "Missing required parameter: pattern",
+                    ));
                 }
             };
             let base_str = input["path"].as_str().unwrap_or(".");

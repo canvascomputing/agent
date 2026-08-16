@@ -67,14 +67,16 @@ impl ToolLike for WriteFileTool {
             let path = match input["path"].as_str() {
                 Some(p) => p,
                 None => {
-                    return Ok(ToolResult::error("Missing required parameter: path"));
+                    return Ok(ToolResult::schema_error("Missing required parameter: path"));
                 }
             };
 
             let content = match input["content"].as_str() {
                 Some(c) => c,
                 None => {
-                    return Ok(ToolResult::error("Missing required parameter: content"));
+                    return Ok(ToolResult::schema_error(
+                        "Missing required parameter: content",
+                    ));
                 }
             };
 
