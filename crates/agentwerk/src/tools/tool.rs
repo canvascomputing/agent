@@ -186,8 +186,10 @@ pub trait ToolLike: Send + Sync {
     /// What the tool does, in the words the model reads.
     fn description(&self) -> &str;
 
-    /// JSON Schema describing the tool's arguments.
-    fn input_schema(&self) -> Value;
+    /// The arguments this tool accepts, compiled. Build it from a JSON Schema
+    /// document with [`Schema::new`], which reports a document it cannot
+    /// compile rather than leaving the tool checked against something weaker.
+    fn input_schema(&self) -> Schema;
 
     /// Whether the agent may run this tool in parallel with the turn's other
     /// concurrent calls; set it for a tool with no side effects. `false` by
@@ -243,10 +245,7 @@ impl ToolRegistry {
     /// is the one that counts.
     pub(crate) fn register(&mut self, tool: impl ToolLike + 'static) {
         let tool: Arc<dyn ToolLike> = Arc::new(tool);
-        // A schema that does not compile is the author's mistake, not the
-        // model's. Falling back to "must be an object" keeps the tool callable
-        // and still checks the call, rather than leaving one tool unguarded.
-        let schema = Schema::new(tool.input_schema()).unwrap_or_else(|_| object_schema());
+        let schema = tool.input_schema();
         self.tools.retain(|r| r.tool.name() != tool.name());
         self.tools.push(Registered { tool, schema });
     }
@@ -374,16 +373,14 @@ impl ToolRegistry {
 /// rejected call reads back, so the two cannot disagree.
 fn advertised(tool: &dyn ToolLike, ticket: Option<&Schema>) -> Value {
     match ticket.filter(|_| tool.name() == super::FinishTool.name()) {
-        Some(ticket) => super::finish_tool_input_schema(tool.input_schema(), Some(ticket)),
-        None => tool.input_schema(),
+        Some(ticket) => super::finish_tool_input_schema(document(tool), Some(ticket)),
+        None => document(tool),
     }
 }
 
-/// The schema a tool whose own document does not compile is checked against.
-/// Every tool call carries an arguments object, so this is the least the
-/// registry can hold a call to.
-fn object_schema() -> Schema {
-    Schema::new(serde_json::json!({"type": "object"})).expect("a literal object schema compiles")
+/// The JSON document `tool` declares, for the definition sent to the model.
+fn document(tool: &dyn ToolLike) -> Value {
+    tool.input_schema().get_raw_schema().clone()
 }
 
 /// Reduce a tool name to the key lookups match on, so capitalization, hyphens,
@@ -413,7 +410,7 @@ type ToolHandler = Box<
 pub struct ToolBuilder<H> {
     name: String,
     description: String,
-    schema: Value,
+    schema: Schema,
     concurrent: bool,
     paths: Vec<String>,
     handler: H,
@@ -447,7 +444,7 @@ pub struct ToolBuilder<H> {
 pub struct Tool {
     name: String,
     description: String,
-    schema: Value,
+    schema: Schema,
     concurrent: bool,
     paths: Vec<String>,
     handler: ToolHandler,
@@ -460,7 +457,8 @@ impl Tool {
         ToolBuilder {
             name: name.into(),
             description: description.into(),
-            schema: serde_json::json!({"type": "object", "properties": {}}),
+            schema: Schema::new(serde_json::json!({"type": "object", "properties": {}}))
+                .expect("a literal object schema compiles"),
             concurrent: false,
             paths: Vec::new(),
             handler: (),
@@ -469,19 +467,28 @@ impl Tool {
 
     /// Start building a tool from a `.tool.md` definition, which supplies its
     /// name, description, input schema, and whether it may run concurrently.
-    /// Panics when the file is malformed.
+    /// Panics when the file is malformed or its schema does not compile.
     pub fn from_tool_file(definition: &str) -> ToolBuilder<()> {
         let tf = super::tool_file::ToolFile::parse(definition);
-        Tool::new(tf.name.clone(), tf.render_markdown())
-            .schema(tf.input_schema.clone())
-            .concurrent(tf.concurrent)
+        let mut builder =
+            Tool::new(tf.name.clone(), tf.render_markdown()).concurrent(tf.concurrent);
+        // Already compiled by `ToolFile::parse`, so it skips `schema`.
+        builder.schema = tf.input_schema.clone();
+        builder
     }
 }
 
 impl<H> ToolBuilder<H> {
-    /// Define what the tool accepts, as JSON Schema.
+    /// Define what the tool accepts, as JSON Schema. Panics on a document
+    /// `Schema::new` refuses, naming this tool: an uncheckable tool is a
+    /// mistake here, not one the agent should discover at call time.
     pub fn schema(mut self, schema: Value) -> Self {
-        self.schema = schema;
+        self.schema = Schema::new(schema).unwrap_or_else(|error| {
+            panic!(
+                "tool `{}` declares a schema that does not compile: {error}",
+                self.name
+            )
+        });
         self
     }
 
@@ -547,7 +554,7 @@ impl ToolLike for Tool {
         &self.description
     }
 
-    fn input_schema(&self) -> Value {
+    fn input_schema(&self) -> Schema {
         self.schema.clone()
     }
 
@@ -886,11 +893,11 @@ mod tests {
         (tools, dir)
     }
 
-    /// Every built-in `.tool.md` must parse and compile. Reading each tool's
-    /// name, description, and schema forces that here, rather than at the first
-    /// call.
+    /// Every built-in `.tool.md` must parse. Compiling is now structural, since
+    /// `ToolFile::parse` panics on a fence `Schema::new` refuses, so what is
+    /// left to force here is the name, the description, and the object type.
     #[test]
-    fn every_built_in_tool_definition_parses_and_compiles() {
+    fn every_built_in_tool_definition_parses() {
         let (tools, _dir) = built_in_tools();
         for tool in &tools {
             assert!(!tool.name().is_empty(), "tool name is empty");
@@ -899,18 +906,12 @@ mod tests {
                 "empty description for {}",
                 tool.name(),
             );
-            let document = tool.input_schema();
             // The registry holds a call to this, so a tool that declares
             // something else loses the check that its arguments are an object.
             assert_eq!(
-                document["type"],
+                tool.input_schema().get_raw_schema()["type"],
                 "object",
                 "arguments are not an object for {}",
-                tool.name(),
-            );
-            assert!(
-                Schema::new(document).is_ok(),
-                "schema did not compile for {}",
                 tool.name(),
             );
         }
@@ -922,9 +923,8 @@ mod tests {
         // shape it will be corrected for.
         let (tools, _dir) = built_in_tools();
         for tool in &tools {
-            let document = tool.input_schema();
-            let schema = Schema::new(document.clone()).expect("schema compiles");
-            let examples = document["examples"]
+            let schema = tool.input_schema();
+            let examples = schema.get_raw_schema()["examples"]
                 .as_array()
                 .unwrap_or_else(|| panic!("{} shows no examples", tool.name()))
                 .clone();
@@ -983,8 +983,8 @@ mod tests {
         fn description(&self) -> &str {
             "mock"
         }
-        fn input_schema(&self) -> Value {
-            serde_json::json!({"type": "object"})
+        fn input_schema(&self) -> Schema {
+            Schema::new(serde_json::json!({"type": "object"})).expect("literal")
         }
         fn is_concurrent(&self) -> bool {
             self.concurrent
@@ -1072,8 +1072,9 @@ Do the demo thing.
         assert!(tool.description().contains("- Returns nothing useful."));
         assert!(tool.is_concurrent());
         let schema = tool.input_schema();
-        assert_eq!(schema["properties"]["x"]["type"], "string");
-        assert_eq!(schema["required"][0], "x");
+        let document = schema.get_raw_schema();
+        assert_eq!(document["properties"]["x"]["type"], "string");
+        assert_eq!(document["required"][0], "x");
     }
 
     #[test]
@@ -1121,7 +1122,7 @@ Do the demo thing.
 
         let advertised = registry.advertised_schema("typed", Some(&ticket)).unwrap();
 
-        assert_eq!(advertised, TypedTool.input_schema());
+        assert_eq!(&advertised, TypedTool.input_schema().get_raw_schema());
     }
 
     #[test]
@@ -1197,12 +1198,13 @@ Do the demo thing.
         fn description(&self) -> &str {
             "typed"
         }
-        fn input_schema(&self) -> Value {
-            serde_json::json!({
+        fn input_schema(&self) -> Schema {
+            Schema::new(serde_json::json!({
                 "type": "object",
                 "properties": { "count": { "type": "integer" } },
                 "required": ["count"],
-            })
+            }))
+            .expect("literal")
         }
         fn call<'a>(
             &'a self,
@@ -1316,58 +1318,6 @@ Do the demo thing.
         // Tool schemas close over nothing: an extra key is generosity, not error.
         let (_, succeeded) = call_typed(serde_json::json!({"count": 3, "extra": true})).await;
         assert!(succeeded);
-    }
-
-    #[tokio::test]
-    async fn a_tool_whose_schema_does_not_compile_is_still_held_to_an_object() {
-        // The mistake is the author's; the agent should not pay for it with an
-        // uncallable tool, nor with the one call nothing checks.
-        struct Unschemable;
-        impl ToolLike for Unschemable {
-            fn name(&self) -> &str {
-                "unschemable"
-            }
-            fn description(&self) -> &str {
-                "unschemable"
-            }
-            fn input_schema(&self) -> Value {
-                serde_json::json!({"uniqueItems": true})
-            }
-            fn call<'a>(
-                &'a self,
-                _input: Value,
-                _ctx: &'a ToolContext,
-            ) -> Pin<Box<dyn Future<Output = ProviderResult<ToolResult>> + Send + 'a>> {
-                Box::pin(async move { Ok(ToolResult::success("ran")) })
-            }
-        }
-        let mut registry = ToolRegistry::default();
-        registry.register(Unschemable);
-        let calls = vec![ToolCall {
-            id: "c1".into(),
-            name: "unschemable".into(),
-            input: serde_json::json!({"anything": 1}),
-        }];
-        let results = registry.execute(&calls, &test_ctx()).await;
-        let ContentBlock::ToolResult { content, .. } = &results[0].0 else {
-            panic!("Expected ToolResult");
-        };
-        assert_eq!(content, "ran");
-
-        let calls = vec![ToolCall {
-            id: "c2".into(),
-            name: "unschemable".into(),
-            input: Value::String("not an object".into()),
-        }];
-        let results = registry.execute(&calls, &test_ctx()).await;
-        let ContentBlock::ToolResult {
-            content, succeeded, ..
-        } = &results[0].0
-        else {
-            panic!("Expected ToolResult");
-        };
-        assert!(!succeeded);
-        assert!(content.contains("expected type object"), "{content}");
     }
 
     #[tokio::test]

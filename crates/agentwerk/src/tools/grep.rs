@@ -11,6 +11,8 @@ use std::time::{Duration, Instant};
 use grep::searcher::sinks::UTF8;
 use serde_json::{Map, Value};
 
+use crate::schemas::Schema;
+
 use super::tool::{ToolContext, ToolLike, ToolResult};
 use super::tool_file::ToolFile;
 use crate::providers::ProviderResult as Result;
@@ -62,7 +64,7 @@ impl ToolLike for GrepTool {
         description()
     }
 
-    fn input_schema(&self) -> Value {
+    fn input_schema(&self) -> Schema {
         tool_file().input_schema.clone()
     }
 

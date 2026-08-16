@@ -11,6 +11,8 @@ use crate::agents::knowledge::{Knowledge, KnowledgeError};
 use crate::event::{EventKind, KnowledgeFailureKind, KnowledgeOp};
 use crate::providers::ProviderResult;
 
+use crate::schemas::Schema;
+
 use super::tool::{ToolContext, ToolLike, ToolResult};
 use super::tool_file::ToolFile;
 
@@ -76,7 +78,7 @@ impl ToolLike for KnowledgeTool {
         description()
     }
 
-    fn input_schema(&self) -> Value {
+    fn input_schema(&self) -> Schema {
         tool_file().input_schema.clone()
     }
 

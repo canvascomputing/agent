@@ -7,6 +7,8 @@ use std::sync::OnceLock;
 
 use serde_json::Value;
 
+use crate::schemas::Schema;
+
 use super::tool::{ToolContext, ToolLike, ToolResult};
 use super::tool_file::ToolFile;
 use crate::providers::ProviderResult as Result;
@@ -43,7 +45,7 @@ impl ToolLike for ListDirectoryTool {
         description()
     }
 
-    fn input_schema(&self) -> Value {
+    fn input_schema(&self) -> Schema {
         tool_file().input_schema.clone()
     }
 

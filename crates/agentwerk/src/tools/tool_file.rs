@@ -3,15 +3,17 @@
 
 use serde_json::Value;
 
+use crate::schemas::Schema;
+
 /// Parsed view of a tool's `.tool.md` file. `description` is the prose body
-/// verbatim (already the markdown the model sees); `input_schema` is the JSON
-/// Schema from the `## Schema` fence. Authors write markdown; the framework
-/// only splits it into these fields.
+/// verbatim (already the markdown the model sees); `input_schema` is the
+/// compiled `## Schema` fence. Authors write markdown; the framework only
+/// splits it into these fields.
 #[derive(Debug)]
 pub(crate) struct ToolFile {
     pub(crate) name: String,
     pub(crate) concurrent: bool,
-    pub(crate) input_schema: Value,
+    pub(crate) input_schema: Schema,
     description: String,
 }
 
@@ -38,11 +40,12 @@ impl ToolFile {
         let (description, schema_section) = body
             .split_once("\n## Schema")
             .expect("tool definition missing `## Schema` section");
+        let name = name.expect("tool definition missing `name` in frontmatter");
 
         ToolFile {
-            name: name.expect("tool definition missing `name` in frontmatter"),
+            input_schema: compile_json_fence(schema_section, &name),
+            name,
             concurrent: concurrent.expect("tool definition missing `concurrent` in frontmatter"),
-            input_schema: parse_json_fence(schema_section),
             description: description.trim().to_string(),
         }
     }
@@ -63,6 +66,16 @@ fn split_frontmatter(markdown: &str) -> (&str, &str) {
         .expect("tool definition must open with `---` frontmatter");
     rest.split_once("\n---\n")
         .expect("tool definition has an unterminated `---` frontmatter block")
+}
+
+/// Compile the first ` ```json ` fence in `section`. Panics on a document
+/// `Schema::new` refuses, for the reason [`ToolFile::parse`] panics on a
+/// malformed file: a definition is a compile-time asset, so a broken one should
+/// fail the build rather than leave `name` running against a weaker check.
+fn compile_json_fence(section: &str, name: &str) -> Schema {
+    Schema::new(parse_json_fence(section)).unwrap_or_else(|error| {
+        panic!("tool `{name}` declares a schema that does not compile: {error}")
+    })
 }
 
 /// Extract and parse the first ` ```json ` fence in `section`.
@@ -131,8 +144,30 @@ First sentence. Second sentence.
     #[test]
     fn parses_the_input_schema_from_the_json_fence() {
         let tf = ToolFile::parse(FIXTURE);
-        assert_eq!(tf.input_schema["properties"]["x"]["type"], "string");
-        assert_eq!(tf.input_schema["required"][0], "x");
+        let document = tf.input_schema.get_raw_schema();
+        assert_eq!(document["properties"]["x"]["type"], "string");
+        assert_eq!(document["required"][0], "x");
+    }
+
+    #[test]
+    #[should_panic(expected = "tool `broken` declares a schema that does not compile")]
+    fn a_fence_the_schema_compiler_refuses_fails_the_build() {
+        ToolFile::parse(
+            "\
+---
+name: broken
+concurrent: false
+---
+
+Body.
+
+## Schema
+
+```json
+{ \"uniqueItems\": true }
+```
+",
+        );
     }
 
     #[test]

@@ -48,7 +48,7 @@ impl ToolLike for FinishTool {
         description()
     }
 
-    fn input_schema(&self) -> Value {
+    fn input_schema(&self) -> Schema {
         tool_file().input_schema.clone()
     }
 
@@ -1167,7 +1167,7 @@ mod tests {
     #[test]
     fn a_blank_handover_violates_the_advertised_schema() {
         // Dispatch checks the arguments, so a blank one never reaches the tool.
-        let schema = Schema::new(FinishTool.input_schema()).unwrap();
+        let schema = FinishTool.input_schema();
         assert!(schema
             .validate(serde_json::json!({"handover": "  ", "task": "x", "result": "y"}))
             .is_err());
@@ -1315,7 +1315,7 @@ mod tests {
 
     #[test]
     fn a_number_where_the_advertised_schema_declares_a_string_is_retyped() {
-        let schema = Schema::new(FinishTool.input_schema()).unwrap();
+        let schema = FinishTool.input_schema();
         let (validated, repaired) = schema
             .validate(serde_json::json!({"handover": "bob", "task": 42, "result": "ok"}))
             .unwrap();

@@ -8,6 +8,8 @@ use serde_json::Value;
 
 use crate::providers::ProviderResult;
 
+use crate::schemas::Schema;
+
 use super::tool::{ToolContext, ToolLike, ToolResult};
 use super::tool_file::ToolFile;
 
@@ -44,7 +46,7 @@ impl ToolLike for ReadFileTool {
         description()
     }
 
-    fn input_schema(&self) -> Value {
+    fn input_schema(&self) -> Schema {
         tool_file().input_schema.clone()
     }
 

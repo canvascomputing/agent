@@ -8,6 +8,8 @@ use serde_json::Value;
 
 use crate::providers::ProviderResult;
 
+use crate::schemas::Schema;
+
 use super::super::tool::{ToolContext, ToolLike, ToolResult};
 use super::super::tool_file::ToolFile;
 use super::dispatch;
@@ -43,7 +45,7 @@ impl ToolLike for TicketsTool {
         description()
     }
 
-    fn input_schema(&self) -> Value {
+    fn input_schema(&self) -> Schema {
         tool_file().input_schema.clone()
     }
 
@@ -71,7 +73,7 @@ mod tests {
         // model is told about but `dispatch` never reads is silently dropped
         // rather than caught by the compiler.
         let schema = TicketsTool.input_schema();
-        let advertised: BTreeSet<&str> = schema["properties"]
+        let advertised: BTreeSet<&str> = schema.get_raw_schema()["properties"]
             .as_object()
             .expect("properties is an object")
             .keys()

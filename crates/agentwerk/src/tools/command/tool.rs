@@ -7,6 +7,8 @@ use std::time::Duration;
 
 use serde_json::Value;
 
+use crate::schemas::Schema;
+
 use super::super::tool::{ToolContext, ToolLike, ToolResult};
 use super::super::tool_file::ToolFile;
 use super::super::util::{glob_match, run_command};
@@ -325,7 +327,7 @@ impl ToolLike for CommandTool {
         &self.description
     }
 
-    fn input_schema(&self) -> Value {
+    fn input_schema(&self) -> Schema {
         tool_file().input_schema.clone()
     }
 
