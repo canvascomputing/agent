@@ -186,6 +186,7 @@ Seven rules the surface table below never repeats.
 | `Tool::from_tool_file(definition)` | Not bound: write the name, description, and schema on the Python function instead. |
 | `ToolBuilder::concurrent(b)` | `@tool(concurrent=..)` |
 | `ToolBuilder::paths(fields)` | `@tool(paths=[..])` |
+| `ToolBuilder::schema(document)` panics on a document that does not compile | `@tool(schema=..)` raises `ValueError` when `.tool(fn)` registers it: a decorator runs before the schema is read, so the failure surfaces one call later. |
 | `ToolLike` | A `@tool`-decorated callable. Python cannot implement a Rust trait. |
 | `ToolContext` | Not bound: a `@tool` function receives its input as keyword arguments only. |
 | `ToolResult::success(c)`, `::error(c)`, `::schema_error(c)` | `ToolResult.success(content)`, `.error(content)`, `.schema_error(content)` |
