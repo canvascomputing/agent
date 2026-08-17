@@ -241,22 +241,22 @@ impl TicketQueue {
 
     /// Validate `result` against the ticket's schema, write it to the ticket's
     /// `result.json`, and store the validated result on the ticket, which it
-    /// returns. A result an agent double-encoded as a JSON string is decoded so
-    /// the stored value is the object. Does not finish the ticket: the caller does.
+    /// returns alongside the JSON pointer of every value validation repaired to
+    /// accept it. Does not finish the ticket: the caller does.
     pub(crate) fn set_result(
         &self,
         key: &str,
         result: serde_json::Value,
-    ) -> Result<serde_json::Value, SchemaViolations> {
+    ) -> Result<(serde_json::Value, Vec<String>), SchemaViolations> {
         let schema = self
             .tickets
             .lock()
             .unwrap()
             .get(key)
             .and_then(|t| t.schema.clone());
-        let result = match schema.as_ref() {
+        let (result, repairs) = match schema.as_ref() {
             Some(schema) => schema.validate(result)?,
-            None => result,
+            None => (result, Vec::new()),
         };
         let attached = {
             let mut store = self.tickets.lock().unwrap();
@@ -282,7 +282,7 @@ impl TicketQueue {
             // failed write is observational, not load-bearing.
             let _ = record.save(&self.get_dir());
         }
-        Ok(result)
+        Ok((result, repairs))
     }
 
     /// Apply `edit` to ticket `key`'s replies now, then rewrite them
