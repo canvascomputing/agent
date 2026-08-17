@@ -7,7 +7,7 @@ use std::sync::OnceLock;
 
 use crate::schemas::Schema;
 
-use super::tool::{ToolContext, ToolLike, ToolResult};
+use super::tool::{Tool, ToolContext, ToolLike, ToolResult};
 use super::tool_file::ToolFile;
 
 /// List the entries of a directory with type and size. Concurrent. Pair with
@@ -74,40 +74,52 @@ impl ToolLike for ListDirectoryTool {
         args: ListDirectoryArgs,
         ctx: &'a ToolContext,
     ) -> Pin<Box<dyn Future<Output = ToolResult> + Send + 'a>> {
-        Box::pin(async move {
-            let ListDirectoryArgs {
-                path: path_str,
-                recursive,
-            } = args;
-            let base = ctx.dir.join(&path_str);
+        Box::pin(run(args, ctx.clone()))
+    }
+}
 
-            if base.exists() && !base.is_dir() {
-                return ToolResult::error(format!("Path is not a directory: {path_str}"));
-            }
+impl From<ListDirectoryTool> for Tool {
+    fn from(_: ListDirectoryTool) -> Tool {
+        Tool::from_tool_file(
+            include_str!("list_directory.tool.md"),
+            include_str!("list_directory.schema.json"),
+            run,
+        )
+    }
+}
 
-            match list_entries(&base, &base, recursive) {
-                Ok(mut entries) => {
-                    entries.sort_by(|a, b| a.display_name.cmp(&b.display_name));
-                    // Suffix the type onto the name (`ls -F` style) instead of a
-                    // separate column: a bare `dir`/`file` word reads as a second
-                    // entry and gets listed as a path that does not exist.
-                    let lines: Vec<String> = entries
-                        .iter()
-                        .map(|e| match e.kind {
-                            "dir" => format!("{}/", e.display_name),
-                            "symlink" => format!("{}@", e.display_name),
-                            _ => format!("{}  {} bytes", e.display_name, e.size.unwrap_or(0)),
-                        })
-                        .collect();
-                    ToolResult::success(lines.join("\n"))
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => ToolResult::error(format!(
-                    "Directory does not exist: {path_str}. {}",
-                    super::util::not_found_hint(&ctx.dir, &base)
-                )),
-                Err(e) => ToolResult::error(format!("Error listing directory: {e}")),
-            }
-        })
+async fn run(args: ListDirectoryArgs, ctx: ToolContext) -> ToolResult {
+    let ListDirectoryArgs {
+        path: path_str,
+        recursive,
+    } = args;
+    let base = ctx.dir.join(&path_str);
+
+    if base.exists() && !base.is_dir() {
+        return ToolResult::error(format!("Path is not a directory: {path_str}"));
+    }
+
+    match list_entries(&base, &base, recursive) {
+        Ok(mut entries) => {
+            entries.sort_by(|a, b| a.display_name.cmp(&b.display_name));
+            // Suffix the type onto the name (`ls -F` style) instead of a
+            // separate column: a bare `dir`/`file` word reads as a second
+            // entry and gets listed as a path that does not exist.
+            let lines: Vec<String> = entries
+                .iter()
+                .map(|e| match e.kind {
+                    "dir" => format!("{}/", e.display_name),
+                    "symlink" => format!("{}@", e.display_name),
+                    _ => format!("{}  {} bytes", e.display_name, e.size.unwrap_or(0)),
+                })
+                .collect();
+            ToolResult::success(lines.join("\n"))
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => ToolResult::error(format!(
+            "Directory does not exist: {path_str}. {}",
+            super::util::not_found_hint(&ctx.dir, &base)
+        )),
+        Err(e) => ToolResult::error(format!("Error listing directory: {e}")),
     }
 }
 

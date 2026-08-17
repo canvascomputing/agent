@@ -8,7 +8,7 @@ use std::time::SystemTime;
 
 use crate::schemas::Schema;
 
-use super::tool::{ToolContext, ToolLike, ToolResult};
+use super::tool::{Tool, ToolContext, ToolLike, ToolResult};
 use super::tool_file::ToolFile;
 
 /// Find files matching a glob pattern under the working directory. Concurrent.
@@ -76,37 +76,49 @@ impl ToolLike for GlobTool {
         args: GlobArgs,
         ctx: &'a ToolContext,
     ) -> Pin<Box<dyn Future<Output = ToolResult> + Send + 'a>> {
-        Box::pin(async move {
-            let GlobArgs {
-                pattern,
-                path: base_str,
-            } = args;
-            let base = ctx.dir.join(base_str);
-
-            let pattern_segments: Vec<&str> = pattern.split('/').collect();
-
-            let mut matches: Vec<(PathBuf, SystemTime)> = Vec::new();
-            collect_matches(&base, &base, &pattern_segments, &mut matches);
-
-            // Sort by modification time, newest first
-            matches.sort_by(|a, b| b.1.cmp(&a.1));
-
-            // Cap at MAX_RESULTS
-            matches.truncate(MAX_RESULTS);
-
-            let lines: Vec<String> = matches
-                .iter()
-                .map(|(p, _)| {
-                    p.strip_prefix(&base)
-                        .unwrap_or(p)
-                        .to_string_lossy()
-                        .to_string()
-                })
-                .collect();
-
-            ToolResult::success(lines.join("\n"))
-        })
+        Box::pin(run(args, ctx.clone()))
     }
+}
+
+impl From<GlobTool> for Tool {
+    fn from(_: GlobTool) -> Tool {
+        Tool::from_tool_file(
+            include_str!("glob.tool.md"),
+            include_str!("glob.schema.json"),
+            run,
+        )
+    }
+}
+
+async fn run(args: GlobArgs, ctx: ToolContext) -> ToolResult {
+    let GlobArgs {
+        pattern,
+        path: base_str,
+    } = args;
+    let base = ctx.dir.join(base_str);
+
+    let pattern_segments: Vec<&str> = pattern.split('/').collect();
+
+    let mut matches: Vec<(PathBuf, SystemTime)> = Vec::new();
+    collect_matches(&base, &base, &pattern_segments, &mut matches);
+
+    // Sort by modification time, newest first
+    matches.sort_by(|a, b| b.1.cmp(&a.1));
+
+    // Cap at MAX_RESULTS
+    matches.truncate(MAX_RESULTS);
+
+    let lines: Vec<String> = matches
+        .iter()
+        .map(|(p, _)| {
+            p.strip_prefix(&base)
+                .unwrap_or(p)
+                .to_string_lossy()
+                .to_string()
+        })
+        .collect();
+
+    ToolResult::success(lines.join("\n"))
 }
 
 /// Recursively walk the directory tree and collect files matching the glob pattern.

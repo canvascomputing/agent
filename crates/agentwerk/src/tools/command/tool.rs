@@ -2,12 +2,12 @@
 
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use crate::schemas::Schema;
 
-use super::super::tool::{ToolContext, ToolLike, ToolResult};
+use super::super::tool::{Tool, ToolContext, ToolLike, ToolResult};
 use super::super::tool_file::ToolFile;
 use super::super::util::{glob_match, run_command};
 use super::parse::{Argument, Command, Refusal};
@@ -350,26 +350,49 @@ impl ToolLike for CommandTool {
         args: CommandArgs,
         ctx: &'a ToolContext,
     ) -> Pin<Box<dyn Future<Output = ToolResult> + Send + 'a>> {
-        Box::pin(async move {
-            let CommandArgs {
-                command,
-                timeout_ms,
-            } = args;
+        Box::pin(self.run(args, ctx.clone()))
+    }
+}
 
-            let command = match self.check(&command) {
-                Ok(command) => command,
-                Err(refusal) => return ToolResult::error(refusal),
-            };
+impl CommandTool {
+    async fn run(&self, args: CommandArgs, ctx: ToolContext) -> ToolResult {
+        let CommandArgs {
+            command,
+            timeout_ms,
+        } = args;
 
-            let timeout = timeout_ms
-                .map(Duration::from_millis)
-                .unwrap_or(Self::DEFAULT_TIMEOUT)
-                // The schema advertises the ceiling, so honour it rather than
-                // letting a call name any number it likes.
-                .min(Self::MAX_TIMEOUT);
+        let command = match self.check(&command) {
+            Ok(command) => command,
+            Err(refusal) => return ToolResult::error(refusal),
+        };
 
-            run_command(&command, timeout, ctx).await
-        })
+        let timeout = timeout_ms
+            .map(Duration::from_millis)
+            .unwrap_or(Self::DEFAULT_TIMEOUT)
+            // The schema advertises the ceiling, so honour it rather than
+            // letting a call name any number it likes.
+            .min(Self::MAX_TIMEOUT);
+
+        run_command(&command, timeout, &ctx).await
+    }
+}
+
+impl From<CommandTool> for Tool {
+    fn from(tool: CommandTool) -> Tool {
+        let name = tool.tool_name.clone();
+        let description = tool.description.clone();
+        let concurrent = tool.concurrent;
+        let config = Arc::new(tool);
+        Tool::new(
+            name,
+            description,
+            move |args: CommandArgs, ctx: ToolContext| {
+                let config = Arc::clone(&config);
+                async move { config.run(args, ctx).await }
+            },
+        )
+        .schema(tool_file().input_schema.get_raw_schema().clone())
+        .concurrent(concurrent)
     }
 }
 
@@ -523,6 +546,33 @@ mod tests {
                 .await;
             assert!(matches!(result, ToolResult::Success(_)));
         }
+    }
+
+    #[tokio::test]
+    async fn the_conversion_keeps_the_rules() {
+        // The closure captures the whole configuration, so a converted tool
+        // must refuse what the type refuses.
+        let tool: Tool = CommandTool::new("echo")
+            .allow("echo *")
+            .deny("echo secret*")
+            .into();
+        let allowed = tool
+            .call(
+                serde_json::json!({"command": "echo hi"}),
+                &test_tool_context(),
+            )
+            .await;
+        assert!(matches!(allowed, ToolResult::Success(_)), "{allowed:?}");
+        let denied = tool
+            .call(
+                serde_json::json!({"command": "echo secret"}),
+                &test_tool_context(),
+            )
+            .await;
+        assert!(
+            matches!(&denied, ToolResult::Error(message) if message.contains("denied pattern")),
+            "{denied:?}"
+        );
     }
 
     #[tokio::test]

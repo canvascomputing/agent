@@ -6,7 +6,7 @@ use std::sync::OnceLock;
 
 use crate::schemas::Schema;
 
-use super::tool::{ToolContext, ToolLike, ToolResult};
+use super::tool::{Tool, ToolContext, ToolLike, ToolResult};
 use super::tool_file::ToolFile;
 
 const MAX_URL_LENGTH: usize = 2000;
@@ -77,49 +77,61 @@ impl ToolLike for FetchUrlTool {
     fn call<'a>(
         &'a self,
         args: FetchUrlArgs,
-        _ctx: &'a ToolContext,
+        ctx: &'a ToolContext,
     ) -> Pin<Box<dyn Future<Output = ToolResult> + Send + 'a>> {
-        Box::pin(async move {
-            let FetchUrlArgs { url, max_length } = args;
-
-            let validated_url = match validate_url(&url) {
-                Ok(u) => u,
-                Err(msg) => return ToolResult::error(msg),
-            };
-
-            let text = match fetch_url(&validated_url).await {
-                Ok(text) => text,
-                Err(msg) => return ToolResult::error(msg),
-            };
-            if let FetchedContent::Redirect {
-                original_url,
-                redirect_url,
-                status,
-            } = &text
-            {
-                let msg = format!(
-                    "REDIRECT DETECTED: The URL redirects to a different host.\n\n\
-                     Original URL: {original_url}\n\
-                     Redirect URL: {redirect_url}\n\
-                     Status: {status}\n\n\
-                     To fetch the content, make a new web_fetch request with the redirect URL."
-                );
-                return ToolResult::success(msg);
-            }
-            let FetchedContent::Page {
-                body,
-                status,
-                content_type,
-                bytes,
-            } = text
-            else {
-                unreachable!()
-            };
-
-            let output = format_output(&url, &body, status, &content_type, bytes, max_length);
-            ToolResult::success(output)
-        })
+        Box::pin(run(args, ctx.clone()))
     }
+}
+
+impl From<FetchUrlTool> for Tool {
+    fn from(_: FetchUrlTool) -> Tool {
+        Tool::from_tool_file(
+            include_str!("fetch_url.tool.md"),
+            include_str!("fetch_url.schema.json"),
+            run,
+        )
+    }
+}
+
+async fn run(args: FetchUrlArgs, _ctx: ToolContext) -> ToolResult {
+    let FetchUrlArgs { url, max_length } = args;
+
+    let validated_url = match validate_url(&url) {
+        Ok(u) => u,
+        Err(msg) => return ToolResult::error(msg),
+    };
+
+    let text = match fetch_url(&validated_url).await {
+        Ok(text) => text,
+        Err(msg) => return ToolResult::error(msg),
+    };
+    if let FetchedContent::Redirect {
+        original_url,
+        redirect_url,
+        status,
+    } = &text
+    {
+        let msg = format!(
+            "REDIRECT DETECTED: The URL redirects to a different host.\n\n\
+             Original URL: {original_url}\n\
+             Redirect URL: {redirect_url}\n\
+             Status: {status}\n\n\
+             To fetch the content, make a new web_fetch request with the redirect URL."
+        );
+        return ToolResult::success(msg);
+    }
+    let FetchedContent::Page {
+        body,
+        status,
+        content_type,
+        bytes,
+    } = text
+    else {
+        unreachable!()
+    };
+
+    let output = format_output(&url, &body, status, &content_type, bytes, max_length);
+    ToolResult::success(output)
 }
 
 // Fetching

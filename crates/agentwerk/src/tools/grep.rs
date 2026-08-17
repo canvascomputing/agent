@@ -13,7 +13,7 @@ use serde_json::{Map, Value};
 
 use crate::schemas::Schema;
 
-use super::tool::{ToolContext, ToolLike, ToolResult};
+use super::tool::{Tool, ToolContext, ToolLike, ToolResult};
 use super::tool_file::ToolFile;
 
 /// Search the working directory for a regular-expression `pattern` and return a
@@ -83,40 +83,51 @@ impl ToolLike for GrepTool {
         args: GrepArgs,
         ctx: &'a ToolContext,
     ) -> Pin<Box<dyn Future<Output = ToolResult> + Send + 'a>> {
-        Box::pin(async move {
-            let query = Query::from_args(args);
-
-            // The `grep`/`ignore` engine is synchronous, so run it on a blocking
-            // thread: `grep` is parallel-callable and a 180s search must not stall
-            // a runtime worker. The interrupt flag and deadline let it bail between
-            // files, since a spawn_blocking task cannot be force-killed.
-            let dir = ctx.dir.clone();
-            let interrupt = Arc::new(AtomicBool::new(false));
-            let searching = Arc::clone(&interrupt);
-            let deadline = Instant::now() + SEARCH_TIMEOUT;
-            let handle = tokio::task::spawn_blocking(move || {
-                search_corpus(&dir, &query, &searching, deadline)
-            });
-
-            let outcome = tokio::select! {
-                biased;
-                _ = ctx.cancelled() => ToolResult::error("Search cancelled"),
-                r = tokio::time::timeout(SEARCH_TIMEOUT, handle) => match r {
-                    Err(_) => {
-                        ToolResult::error(format!(
-                            "Search timed out after {}s; narrow the pattern or path",
-                            SEARCH_TIMEOUT.as_secs()
-                        ))
-                    }
-                    Ok(Err(_)) => ToolResult::error("Search failed"),
-                    Ok(Ok(result)) => result,
-                },
-            };
-            // Whichever branch lost, the blocking thread is still walking files.
-            interrupt.store(true, Ordering::Relaxed);
-            outcome
-        })
+        Box::pin(run(args, ctx.clone()))
     }
+}
+
+impl From<GrepTool> for Tool {
+    fn from(_: GrepTool) -> Tool {
+        Tool::from_tool_file(
+            include_str!("grep.tool.md"),
+            include_str!("grep.schema.json"),
+            run,
+        )
+    }
+}
+
+async fn run(args: GrepArgs, ctx: ToolContext) -> ToolResult {
+    let query = Query::from_args(args);
+
+    // The `grep`/`ignore` engine is synchronous, so run it on a blocking
+    // thread: `grep` is parallel-callable and a 180s search must not stall
+    // a runtime worker. The interrupt flag and deadline let it bail between
+    // files, since a spawn_blocking task cannot be force-killed.
+    let dir = ctx.dir.clone();
+    let interrupt = Arc::new(AtomicBool::new(false));
+    let searching = Arc::clone(&interrupt);
+    let deadline = Instant::now() + SEARCH_TIMEOUT;
+    let handle =
+        tokio::task::spawn_blocking(move || search_corpus(&dir, &query, &searching, deadline));
+
+    let outcome = tokio::select! {
+        biased;
+        _ = ctx.cancelled() => ToolResult::error("Search cancelled"),
+        r = tokio::time::timeout(SEARCH_TIMEOUT, handle) => match r {
+            Err(_) => {
+                ToolResult::error(format!(
+                    "Search timed out after {}s; narrow the pattern or path",
+                    SEARCH_TIMEOUT.as_secs()
+                ))
+            }
+            Ok(Err(_)) => ToolResult::error("Search failed"),
+            Ok(Ok(result)) => result,
+        },
+    };
+    // Whichever branch lost, the blocking thread is still walking files.
+    interrupt.store(true, Ordering::Relaxed);
+    outcome
 }
 
 /// Which shape the result takes.

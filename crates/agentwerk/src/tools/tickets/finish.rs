@@ -11,7 +11,7 @@ use crate::agents::tickets::{Ticket, TicketQueue};
 use crate::event::{EventKind, RepairKind};
 use crate::schemas::Schema;
 
-use super::super::tool::{retype_message, ToolContext, ToolLike, ToolResult};
+use super::super::tool::{retype_message, Tool, ToolContext, ToolLike, ToolResult};
 use super::super::tool_file::ToolFile;
 use super::resolve_current_key;
 
@@ -73,6 +73,21 @@ impl ToolLike for FinishTool {
                 Err(failure) => failure,
             }
         })
+    }
+}
+
+impl From<FinishTool> for Tool {
+    fn from(_: FinishTool) -> Tool {
+        Tool::from_tool_file(
+            include_str!("finish.tool.md"),
+            include_str!("finish.schema.json"),
+            |input: Value, ctx: ToolContext| async move {
+                match finish(&input, &ctx) {
+                    Ok(message) => ToolResult::success(message),
+                    Err(failure) => failure,
+                }
+            },
+        )
     }
 }
 
@@ -275,6 +290,11 @@ fn parse_result(schema: Option<&Schema>, input: &Value) -> (Value, bool) {
 }
 
 impl FinishTool {
+    /// The name the model calls the tool by, for the registry's finish check.
+    pub(crate) fn name() -> &'static str {
+        &tool_file().name
+    }
+
     /// Whether a ticket schema's fields ride as this tool's top-level
     /// arguments; anything not inlined keeps the `result` envelope.
     ///

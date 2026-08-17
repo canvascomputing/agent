@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use crate::schemas::Schema;
 
-use super::tool::{ToolContext, ToolLike, ToolResult};
+use super::tool::{Tool, ToolContext, ToolLike, ToolResult};
 use super::tool_file::ToolFile;
 
 /// In-place string replacement in an existing file. The model supplies the
@@ -81,49 +81,60 @@ impl ToolLike for EditFileTool {
         args: EditFileArgs,
         ctx: &'a ToolContext,
     ) -> Pin<Box<dyn Future<Output = ToolResult> + Send + 'a>> {
-        Box::pin(async move {
-            let EditFileArgs {
-                path,
-                old_string,
-                new_string,
-                replace_all,
-            } = args;
-            let (old_string, new_string) = (old_string.as_str(), new_string.as_str());
+        Box::pin(run(args, ctx.clone()))
+    }
+}
 
-            let resolved = ctx.dir.join(&path);
+impl From<EditFileTool> for Tool {
+    fn from(_: EditFileTool) -> Tool {
+        Tool::from_tool_file(
+            include_str!("edit_file.tool.md"),
+            include_str!("edit_file.schema.json"),
+            run,
+        )
+        .paths(["path"])
+    }
+}
 
-            let content = match std::fs::read_to_string(&resolved) {
-                Ok(c) => c,
-                Err(e) => {
-                    return ToolResult::error(format!("Failed to read file: {e}"));
-                }
-            };
+async fn run(args: EditFileArgs, ctx: ToolContext) -> ToolResult {
+    let EditFileArgs {
+        path,
+        old_string,
+        new_string,
+        replace_all,
+    } = args;
+    let (old_string, new_string) = (old_string.as_str(), new_string.as_str());
 
-            let count = content.matches(old_string).count();
+    let resolved = ctx.dir.join(&path);
 
-            if count == 0 {
-                return ToolResult::error(format!("old_string not found in {path}"));
-            }
+    let content = match std::fs::read_to_string(&resolved) {
+        Ok(c) => c,
+        Err(e) => {
+            return ToolResult::error(format!("Failed to read file: {e}"));
+        }
+    };
 
-            if count > 1 && !replace_all {
-                return ToolResult::error(format!(
-                    "Found {count} occurrences of old_string in {path}. Use replace_all to replace all."
-                ));
-            }
+    let count = content.matches(old_string).count();
 
-            let new_content = if replace_all {
-                content.replace(old_string, new_string)
-            } else {
-                content.replacen(old_string, new_string, 1)
-            };
+    if count == 0 {
+        return ToolResult::error(format!("old_string not found in {path}"));
+    }
 
-            match std::fs::write(&resolved, &new_content) {
-                Ok(()) => {
-                    ToolResult::success(format!("Edited {path}: replaced {count} occurrence(s)"))
-                }
-                Err(e) => ToolResult::error(format!("Failed to write file: {e}")),
-            }
-        })
+    if count > 1 && !replace_all {
+        return ToolResult::error(format!(
+            "Found {count} occurrences of old_string in {path}. Use replace_all to replace all."
+        ));
+    }
+
+    let new_content = if replace_all {
+        content.replace(old_string, new_string)
+    } else {
+        content.replacen(old_string, new_string, 1)
+    };
+
+    match std::fs::write(&resolved, &new_content) {
+        Ok(()) => ToolResult::success(format!("Edited {path}: replaced {count} occurrence(s)")),
+        Err(e) => ToolResult::error(format!("Failed to write file: {e}")),
     }
 }
 

@@ -6,7 +6,7 @@ use std::sync::OnceLock;
 
 use crate::schemas::Schema;
 
-use super::super::tool::{ToolContext, ToolLike, ToolResult};
+use super::super::tool::{Tool, ToolContext, ToolLike, ToolResult};
 use super::super::tool_file::ToolFile;
 use super::dispatch;
 
@@ -62,6 +62,16 @@ impl ToolLike for TicketsTool {
         ctx: &'a ToolContext,
     ) -> Pin<Box<dyn Future<Output = ToolResult> + Send + 'a>> {
         Box::pin(async move { dispatch(args, ctx) })
+    }
+}
+
+impl From<TicketsTool> for Tool {
+    fn from(_: TicketsTool) -> Tool {
+        Tool::from_tool_file(
+            include_str!("tickets.tool.md"),
+            include_str!("tickets.schema.json"),
+            |args: super::TicketsArgs, ctx: ToolContext| async move { dispatch(args, &ctx) },
+        )
     }
 }
 

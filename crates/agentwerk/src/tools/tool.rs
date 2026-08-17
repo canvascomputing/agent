@@ -446,7 +446,7 @@ impl ToolRegistry {
 /// One answer serves the definitions the model is shown and the shape a
 /// rejected call reads back, so the two cannot disagree.
 fn advertised(tool: &dyn AnyTool, ticket: Option<&Schema>) -> Value {
-    match ticket.filter(|_| tool.name() == super::FinishTool.name()) {
+    match ticket.filter(|_| tool.name() == super::FinishTool::name()) {
         Some(ticket) => super::FinishTool::input_schema_for(ticket),
         None => document(tool),
     }
@@ -987,6 +987,67 @@ mod tests {
                     .unwrap_or_else(|violations| panic!("{}: {violations}", tool.name()));
                 assert!(repaired.is_empty(), "{} repaired {example}", tool.name());
             }
+        }
+    }
+
+    /// Deleted with `ToolLike`: pins that each built-in's `From` conversion
+    /// reports what its trait implementation reports.
+    #[test]
+    fn every_from_conversion_matches_the_tool_like_implementation() {
+        let dir = crate::test_util::TempDir::new().unwrap();
+        let store = crate::agents::knowledge::Knowledge::load(dir.path()).unwrap();
+        let probe = serde_json::json!({"path": "src/lib.rs"});
+        let pairs: Vec<(Arc<dyn AnyTool>, Tool)> = vec![
+            (
+                erase(crate::tools::ReadFileTool),
+                crate::tools::ReadFileTool.into(),
+            ),
+            (
+                erase(crate::tools::WriteFileTool),
+                crate::tools::WriteFileTool.into(),
+            ),
+            (
+                erase(crate::tools::EditFileTool),
+                crate::tools::EditFileTool.into(),
+            ),
+            (erase(crate::tools::GlobTool), crate::tools::GlobTool.into()),
+            (erase(crate::tools::GrepTool), crate::tools::GrepTool.into()),
+            (
+                erase(crate::tools::ListDirectoryTool),
+                crate::tools::ListDirectoryTool.into(),
+            ),
+            (
+                erase(crate::tools::FetchUrlTool),
+                crate::tools::FetchUrlTool.into(),
+            ),
+            (
+                erase(crate::tools::KnowledgeTool::new(Arc::clone(&store))),
+                crate::tools::KnowledgeTool::new(store).into(),
+            ),
+            (
+                erase(crate::tools::CommandTool::new("git").allow("git *")),
+                crate::tools::CommandTool::new("git").allow("git *").into(),
+            ),
+            (
+                erase(crate::tools::FinishTool),
+                crate::tools::FinishTool.into(),
+            ),
+            (
+                erase(crate::tools::TicketsTool),
+                crate::tools::TicketsTool.into(),
+            ),
+        ];
+        for (erased, tool) in pairs {
+            assert_eq!(erased.name(), tool.name());
+            assert_eq!(erased.description(), tool.description());
+            assert_eq!(
+                erased.input_schema().get_raw_schema(),
+                tool.input_schema().get_raw_schema(),
+                "{}",
+                tool.name(),
+            );
+            assert_eq!(erased.is_concurrent(), tool.is_concurrent());
+            assert_eq!(erased.opened_paths(&probe), tool.opened_paths(&probe));
         }
     }
 

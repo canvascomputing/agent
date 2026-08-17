@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use crate::schemas::Schema;
 
-use super::tool::{ToolContext, ToolLike, ToolResult};
+use super::tool::{Tool, ToolContext, ToolLike, ToolResult};
 use super::tool_file::ToolFile;
 
 /// Create or overwrite a file. Destructive: existing content is replaced.
@@ -77,22 +77,35 @@ impl ToolLike for WriteFileTool {
         args: WriteFileArgs,
         ctx: &'a ToolContext,
     ) -> Pin<Box<dyn Future<Output = ToolResult> + Send + 'a>> {
-        Box::pin(async move {
-            let WriteFileArgs { path, content } = args;
+        Box::pin(run(args, ctx.clone()))
+    }
+}
 
-            let resolved = ctx.dir.join(&path);
+impl From<WriteFileTool> for Tool {
+    fn from(_: WriteFileTool) -> Tool {
+        Tool::from_tool_file(
+            include_str!("write_file.tool.md"),
+            include_str!("write_file.schema.json"),
+            run,
+        )
+        .paths(["path"])
+    }
+}
 
-            if let Some(parent) = resolved.parent() {
-                if let Err(e) = std::fs::create_dir_all(parent) {
-                    return ToolResult::error(format!("Failed to create parent directories: {e}"));
-                }
-            }
+async fn run(args: WriteFileArgs, ctx: ToolContext) -> ToolResult {
+    let WriteFileArgs { path, content } = args;
 
-            match std::fs::write(&resolved, content) {
-                Ok(()) => ToolResult::success(format!("File written: {path}")),
-                Err(e) => ToolResult::error(format!("Failed to write file: {e}")),
-            }
-        })
+    let resolved = ctx.dir.join(&path);
+
+    if let Some(parent) = resolved.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            return ToolResult::error(format!("Failed to create parent directories: {e}"));
+        }
+    }
+
+    match std::fs::write(&resolved, content) {
+        Ok(()) => ToolResult::success(format!("File written: {path}")),
+        Err(e) => ToolResult::error(format!("Failed to write file: {e}")),
     }
 }
 

@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use crate::schemas::Schema;
 
-use super::tool::{ToolContext, ToolLike, ToolResult};
+use super::tool::{Tool, ToolContext, ToolLike, ToolResult};
 use super::tool_file::ToolFile;
 
 /// Read a file with optional line offset and limit. Returns line-numbered
@@ -88,95 +88,106 @@ impl ToolLike for ReadFileTool {
         args: ReadFileArgs,
         ctx: &'a ToolContext,
     ) -> Pin<Box<dyn Future<Output = ToolResult> + Send + 'a>> {
-        Box::pin(async move {
-            let ReadFileArgs {
-                path,
-                offset,
-                limit,
-                column,
-                length,
-            } = args;
-
-            let resolved = ctx.dir.join(&path);
-
-            if resolved.is_dir() {
-                let message = match super::util::directory_entries(&resolved) {
-                    Some(entries) => format!(
-                        "'{path}' is a directory, not a file. Read one of its entries by \
-                         appending the name to the path:\n  {entries}"
-                    ),
-                    None => format!("'{path}' is a directory, not a file."),
-                };
-                return ToolResult::error(message);
-            }
-
-            let content = match std::fs::read(&resolved) {
-                Ok(bytes) => {
-                    // A NUL byte marks a true binary (image, archive, compiled
-                    // object); text, even minified or lightly obfuscated, never
-                    // contains one. Report it concisely instead of dumping decoded
-                    // garbage that floods the transcript and breaks strict chat
-                    // templates. Otherwise decode lossily so odd-encoded source
-                    // stays inspectable, the point of a scan.
-                    if bytes.contains(&0) {
-                        return ToolResult::success(format!(
-                            "{path} is a binary file ({} bytes), not text; it cannot be read as source. Judge from the information you already have.",
-                            bytes.len()
-                        ));
-                    }
-                    String::from_utf8_lossy(&bytes).into_owned()
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    return ToolResult::error(format!(
-                        "File does not exist: {path}. {}",
-                        super::util::not_found_hint(&ctx.dir, &resolved)
-                    ));
-                }
-                Err(e) => {
-                    return ToolResult::error(format!("Failed to read file: {e}"));
-                }
-            };
-
-            let lines: Vec<&str> = content.lines().collect();
-
-            let offset = offset.max(1) as usize;
-            let limit = limit
-                .map(|l| l as usize)
-                .unwrap_or(lines.len().saturating_sub(offset - 1));
-            let column = column.map(|c| c.max(1) as usize);
-            let length = length.map(|c| c as usize);
-
-            let start = (offset - 1).min(lines.len());
-            let end = (start + limit).min(lines.len());
-
-            let mut result = String::new();
-            for (i, line) in lines[start..end].iter().enumerate() {
-                let line_num = start + i + 1;
-                if !result.is_empty() {
-                    result.push('\n');
-                }
-                match column {
-                    Some(col) => {
-                        let byte_start = snap_to_char_boundary(line, (col - 1).min(line.len()));
-                        let byte_end = match length {
-                            Some(len) => {
-                                snap_to_char_boundary(line, (byte_start + len).min(line.len()))
-                            }
-                            None => line.len(),
-                        };
-                        let slice = &line[byte_start..byte_end];
-                        let display_col = byte_start + 1;
-                        result.push_str(&format!("{line_num}:{display_col}\t{slice}"));
-                    }
-                    None => {
-                        result.push_str(&format!("{line_num}\t{line}"));
-                    }
-                }
-            }
-
-            ToolResult::success(result)
-        })
+        Box::pin(run(args, ctx.clone()))
     }
+}
+
+impl From<ReadFileTool> for Tool {
+    fn from(_: ReadFileTool) -> Tool {
+        Tool::from_tool_file(
+            include_str!("read_file.tool.md"),
+            include_str!("read_file.schema.json"),
+            run,
+        )
+        .paths(["path"])
+    }
+}
+
+async fn run(args: ReadFileArgs, ctx: ToolContext) -> ToolResult {
+    let ReadFileArgs {
+        path,
+        offset,
+        limit,
+        column,
+        length,
+    } = args;
+
+    let resolved = ctx.dir.join(&path);
+
+    if resolved.is_dir() {
+        let message = match super::util::directory_entries(&resolved) {
+            Some(entries) => format!(
+                "'{path}' is a directory, not a file. Read one of its entries by \
+                 appending the name to the path:\n  {entries}"
+            ),
+            None => format!("'{path}' is a directory, not a file."),
+        };
+        return ToolResult::error(message);
+    }
+
+    let content = match std::fs::read(&resolved) {
+        Ok(bytes) => {
+            // A NUL byte marks a true binary (image, archive, compiled
+            // object); text, even minified or lightly obfuscated, never
+            // contains one. Report it concisely instead of dumping decoded
+            // garbage that floods the transcript and breaks strict chat
+            // templates. Otherwise decode lossily so odd-encoded source
+            // stays inspectable, the point of a scan.
+            if bytes.contains(&0) {
+                return ToolResult::success(format!(
+                    "{path} is a binary file ({} bytes), not text; it cannot be read as source. Judge from the information you already have.",
+                    bytes.len()
+                ));
+            }
+            String::from_utf8_lossy(&bytes).into_owned()
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return ToolResult::error(format!(
+                "File does not exist: {path}. {}",
+                super::util::not_found_hint(&ctx.dir, &resolved)
+            ));
+        }
+        Err(e) => {
+            return ToolResult::error(format!("Failed to read file: {e}"));
+        }
+    };
+
+    let lines: Vec<&str> = content.lines().collect();
+
+    let offset = offset.max(1) as usize;
+    let limit = limit
+        .map(|l| l as usize)
+        .unwrap_or(lines.len().saturating_sub(offset - 1));
+    let column = column.map(|c| c.max(1) as usize);
+    let length = length.map(|c| c as usize);
+
+    let start = (offset - 1).min(lines.len());
+    let end = (start + limit).min(lines.len());
+
+    let mut result = String::new();
+    for (i, line) in lines[start..end].iter().enumerate() {
+        let line_num = start + i + 1;
+        if !result.is_empty() {
+            result.push('\n');
+        }
+        match column {
+            Some(col) => {
+                let byte_start = snap_to_char_boundary(line, (col - 1).min(line.len()));
+                let byte_end = match length {
+                    Some(len) => snap_to_char_boundary(line, (byte_start + len).min(line.len())),
+                    None => line.len(),
+                };
+                let slice = &line[byte_start..byte_end];
+                let display_col = byte_start + 1;
+                result.push_str(&format!("{line_num}:{display_col}\t{slice}"));
+            }
+            None => {
+                result.push_str(&format!("{line_num}\t{line}"));
+            }
+        }
+    }
+
+    ToolResult::success(result)
 }
 
 fn snap_to_char_boundary(s: &str, pos: usize) -> usize {

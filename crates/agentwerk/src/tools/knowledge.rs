@@ -10,7 +10,7 @@ use crate::event::{EventKind, KnowledgeFailureKind, KnowledgeOp};
 
 use crate::schemas::Schema;
 
-use super::tool::{ToolContext, ToolLike, ToolResult};
+use super::tool::{Tool, ToolContext, ToolLike, ToolResult};
 use super::tool_file::ToolFile;
 
 /// The model's four-action handle on a `Knowledge` store:
@@ -116,93 +116,110 @@ impl ToolLike for KnowledgeTool {
         args: KnowledgeArgs,
         ctx: &'a ToolContext,
     ) -> Pin<Box<dyn Future<Output = ToolResult> + Send + 'a>> {
-        Box::pin(async move {
-            // The tool self-reports each outcome: only it can see a read/remove
-            // miss, which returns Ok, so the shared tool-call loop cannot.
-            let record = |kind: EventKind| ctx.emit(kind);
+        let store = Arc::clone(&self.store);
+        Box::pin(async move { run(&store, args, &ctx.clone()) })
+    }
+}
 
-            match args {
-                KnowledgeArgs::Write {
-                    slug,
-                    description,
-                    content,
-                } => {
-                    // Kind and tags stay host-side concerns set through the
-                    // Page API; the model only names, describes, and fills a page.
-                    let page = crate::agents::knowledge::Page {
-                        slug,
-                        kind: String::new(),
-                        description,
-                        content,
-                        tags: Vec::new(),
-                    };
-                    match self.store.pages().save(page) {
-                        Ok(()) => {
-                            record(EventKind::KnowledgeUsed {
-                                op: KnowledgeOp::Write,
-                            });
-                            ToolResult::success(usage_line("page written", &self.store))
-                        }
-                        Err(why) => {
-                            record(EventKind::KnowledgeFailed {
-                                op: KnowledgeOp::Write,
-                                reason: failure_kind(&why),
-                            });
-                            ToolResult::error(why.to_string())
-                        }
-                    }
-                }
+impl From<KnowledgeTool> for Tool {
+    fn from(tool: KnowledgeTool) -> Tool {
+        let store = tool.store;
+        Tool::from_tool_file(
+            include_str!("knowledge.tool.md"),
+            include_str!("knowledge.schema.json"),
+            move |args: KnowledgeArgs, ctx: ToolContext| {
+                let store = Arc::clone(&store);
+                async move { run(&store, args, &ctx) }
+            },
+        )
+    }
+}
 
-                KnowledgeArgs::Read { slug } => match self.store.pages().load(&slug) {
-                    Ok(page) => {
-                        record(EventKind::KnowledgeUsed {
-                            op: KnowledgeOp::Read,
-                        });
-                        ToolResult::success(page.content)
-                    }
-                    Err(why) => {
-                        record(EventKind::KnowledgeFailed {
-                            op: KnowledgeOp::Read,
-                            reason: failure_kind(&why),
-                        });
-                        ToolResult::success(format!(
-                                "No page found for `{slug}`. The `list` action shows every page that exists: an unlisted slug cannot be read."
-                            ))
-                    }
-                },
+fn run(store: &Knowledge, args: KnowledgeArgs, ctx: &ToolContext) -> ToolResult {
+    // The tool self-reports each outcome: only it can see a read/remove
+    // miss, which returns Ok, so the shared tool-call loop cannot.
+    let record = |kind: EventKind| ctx.emit(kind);
 
-                KnowledgeArgs::Remove { slug } => match self.store.pages().remove(&slug) {
-                    Ok(()) => {
-                        record(EventKind::KnowledgeUsed {
-                            op: KnowledgeOp::Remove,
-                        });
-                        ToolResult::success(usage_line("page removed", &self.store))
-                    }
-                    Err(why) => {
-                        record(EventKind::KnowledgeFailed {
-                            op: KnowledgeOp::Remove,
-                            reason: failure_kind(&why),
-                        });
-                        ToolResult::error(why.to_string())
-                    }
-                },
-
-                KnowledgeArgs::List => {
+    match args {
+        KnowledgeArgs::Write {
+            slug,
+            description,
+            content,
+        } => {
+            // Kind and tags stay host-side concerns set through the
+            // Page API; the model only names, describes, and fills a page.
+            let page = crate::agents::knowledge::Page {
+                slug,
+                kind: String::new(),
+                description,
+                content,
+                tags: Vec::new(),
+            };
+            match store.pages().save(page) {
+                Ok(()) => {
                     record(EventKind::KnowledgeUsed {
-                        op: KnowledgeOp::List,
+                        op: KnowledgeOp::Write,
                     });
-                    // Not the prompt's limited view: this is how the agent sees
-                    // the pages the prompt had no room for.
-                    let index = self.store.full_index();
-                    let body = if index.is_empty() {
-                        "(no pages)".to_string()
-                    } else {
-                        index
-                    };
-                    ToolResult::success(body)
+                    ToolResult::success(usage_line("page written", &store))
+                }
+                Err(why) => {
+                    record(EventKind::KnowledgeFailed {
+                        op: KnowledgeOp::Write,
+                        reason: failure_kind(&why),
+                    });
+                    ToolResult::error(why.to_string())
                 }
             }
-        })
+        }
+
+        KnowledgeArgs::Read { slug } => match store.pages().load(&slug) {
+            Ok(page) => {
+                record(EventKind::KnowledgeUsed {
+                    op: KnowledgeOp::Read,
+                });
+                ToolResult::success(page.content)
+            }
+            Err(why) => {
+                record(EventKind::KnowledgeFailed {
+                    op: KnowledgeOp::Read,
+                    reason: failure_kind(&why),
+                });
+                ToolResult::success(format!(
+                        "No page found for `{slug}`. The `list` action shows every page that exists: an unlisted slug cannot be read."
+                    ))
+            }
+        },
+
+        KnowledgeArgs::Remove { slug } => match store.pages().remove(&slug) {
+            Ok(()) => {
+                record(EventKind::KnowledgeUsed {
+                    op: KnowledgeOp::Remove,
+                });
+                ToolResult::success(usage_line("page removed", &store))
+            }
+            Err(why) => {
+                record(EventKind::KnowledgeFailed {
+                    op: KnowledgeOp::Remove,
+                    reason: failure_kind(&why),
+                });
+                ToolResult::error(why.to_string())
+            }
+        },
+
+        KnowledgeArgs::List => {
+            record(EventKind::KnowledgeUsed {
+                op: KnowledgeOp::List,
+            });
+            // Not the prompt's limited view: this is how the agent sees
+            // the pages the prompt had no room for.
+            let index = store.full_index();
+            let body = if index.is_empty() {
+                "(no pages)".to_string()
+            } else {
+                index
+            };
+            ToolResult::success(body)
+        }
     }
 }
 
