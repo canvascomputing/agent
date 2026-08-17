@@ -474,6 +474,8 @@ mod tests {
 
     use std::sync::Arc;
 
+    use serde_json::Value;
+
     use crate::agents::agent::Agent;
     use crate::agents::tickets::{Reply, ReplyContent, TicketQueue};
     use crate::event::{Event, EventKind};
@@ -496,9 +498,9 @@ mod tests {
             Ok(tool_call_response("boom")),
             Ok(write_result_response("done")),
         ]);
-        let boom = Tool::new("boom", "Always fails")
-            .handler(|_, _| async move { ToolResult::error("boom") })
-            .build();
+        let boom = Tool::new("boom", "Always fails", |_: Value, _| async move {
+            ToolResult::error("boom")
+        });
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let tickets = TicketQueue::new();
         tickets

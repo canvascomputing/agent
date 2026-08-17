@@ -470,48 +470,41 @@ fn lookup_key(name: &str) -> String {
     }
 }
 
-type ToolHandler = Box<
+type ToolHandler = Arc<
     dyn Fn(Value, &ToolContext) -> Pin<Box<dyn Future<Output = ToolResult> + Send + '_>>
         + Send
         + Sync,
 >;
 
-/// Collects what a [`Tool`] needs. `.build()` exists only once a handler is
-/// installed, so a tool that does nothing cannot reach an agent.
-pub struct ToolBuilder<H> {
-    name: String,
-    description: String,
-    schema: Schema,
-    concurrent: bool,
-    paths: Vec<String>,
-    handler: H,
-}
-
-/// A `Tool` you define inline, for when a whole type would be too much. With
-/// state to carry, implement [`ToolLike`] on your own type instead.
+/// A tool an agent may call: a name, a description, a JSON Schema for the
+/// arguments, and the handler that runs.
+///
+/// The handler names its own argument type, so a typed tool deserializes
+/// nowhere in its body; `Value` takes the JSON as it arrived. State the
+/// handler needs is captured in its closure. Copying a `Tool` is cheap and
+/// shares the handler.
 ///
 /// # Examples
 ///
 /// ```
 /// use agentwerk::Agent;
 /// use agentwerk::tools::{Tool, ToolResult};
-/// use serde_json::json;
+/// use serde_json::{json, Value};
 ///
-/// let greet = Tool::new("greet", "Say hello to a name.")
-///     .schema(json!({
-///         "type": "object",
-///         "properties": { "name": { "type": "string" } },
-///         "required": ["name"]
-///     }))
-///     .concurrent(true)
-///     .handler(|input, _ctx| async move {
-///         let name = input["name"].as_str().unwrap_or("world");
-///         ToolResult::success(format!("Hello, {name}!"))
-///     })
-///     .build();
+/// let greet = Tool::new("greet", "Say hello to a name.", |input: Value, _ctx| async move {
+///     let name = input["name"].as_str().unwrap_or("world");
+///     ToolResult::success(format!("Hello, {name}!"))
+/// })
+/// .schema(json!({
+///     "type": "object",
+///     "properties": { "name": { "type": "string" } },
+///     "required": ["name"]
+/// }))
+/// .concurrent(true);
 ///
 /// Agent::new().tool(greet);
 /// ```
+#[derive(Clone)]
 pub struct Tool {
     name: String,
     description: String,
@@ -522,39 +515,56 @@ pub struct Tool {
 }
 
 impl Tool {
-    /// Start building a tool. Add what it accepts with `.schema(...)`, what it
-    /// does with `.handler(...)`, and finish with `.build()`.
-    pub fn new(name: impl Into<String>, description: impl Into<String>) -> ToolBuilder<()> {
-        ToolBuilder {
-            name: name.into(),
+    /// Create a tool from its name, its description, and the handler that runs
+    /// when the model calls it. A bare `async` block works. Refine what the
+    /// tool accepts with [`schema`](Self::schema).
+    pub fn new<A, F, Fut>(
+        name: impl Into<String>,
+        description: impl Into<String>,
+        handler: F,
+    ) -> Tool
+    where
+        A: serde::de::DeserializeOwned + Send + 'static,
+        F: Fn(A, ToolContext) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = ToolResult> + Send + 'static,
+    {
+        let name = name.into();
+        Tool {
+            handler: read_arguments_then(name.clone(), handler),
+            name,
             description: description.into(),
             schema: Schema::new(serde_json::json!({"type": "object", "properties": {}}))
                 .expect("a literal object schema compiles"),
             concurrent: false,
             paths: Vec::new(),
-            handler: (),
         }
     }
 
-    /// Start building a tool from a `.tool.md` definition and the JSON Schema
-    /// document beside it. The definition supplies the name, description, and
-    /// whether the tool may run concurrently; `schema` is what it accepts.
-    /// Panics when either file is malformed or the schema does not compile.
-    pub fn from_tool_file(definition: &str, schema: &str) -> ToolBuilder<()> {
+    /// Create a tool from a `.tool.md` definition, the JSON Schema document
+    /// beside it, and the handler that runs. The definition supplies the name,
+    /// description, and whether the tool may run concurrently. Panics when
+    /// either file is malformed or the schema does not compile.
+    pub fn from_tool_file<A, F, Fut>(definition: &str, schema: &str, handler: F) -> Tool
+    where
+        A: serde::de::DeserializeOwned + Send + 'static,
+        F: Fn(A, ToolContext) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = ToolResult> + Send + 'static,
+    {
         let tf = super::tool_file::ToolFile::parse(definition, schema);
-        let mut builder =
-            Tool::new(tf.name.clone(), tf.render_markdown()).concurrent(tf.concurrent);
-        // Already compiled by `ToolFile::parse`, so it skips `schema`.
-        builder.schema = tf.input_schema.clone();
-        builder
+        Tool {
+            handler: read_arguments_then(tf.name.clone(), handler),
+            description: tf.render_markdown(),
+            schema: tf.input_schema.clone(),
+            concurrent: tf.concurrent,
+            paths: Vec::new(),
+            name: tf.name,
+        }
     }
-}
 
-impl<H> ToolBuilder<H> {
     /// Define what the tool accepts, as JSON Schema. Panics on a document
     /// `Schema::new` refuses, naming this tool: an uncheckable tool is a
     /// mistake here, not one the agent should discover at call time.
-    pub fn schema(mut self, schema: Value) -> Self {
+    pub fn schema(mut self, schema: Value) -> Tool {
         self.schema = Schema::new(schema).unwrap_or_else(|error| {
             panic!(
                 "tool `{}` declares a schema that does not compile: {error}",
@@ -566,7 +576,7 @@ impl<H> ToolBuilder<H> {
 
     /// Run this tool in parallel with the turn's other concurrent calls. Set it
     /// for a tool with no side effects.
-    pub fn concurrent(mut self, concurrent: bool) -> Self {
+    pub fn concurrent(mut self, concurrent: bool) -> Tool {
         self.concurrent = concurrent;
         self
     }
@@ -574,7 +584,7 @@ impl<H> ToolBuilder<H> {
     /// Name the input fields holding a file path, so the files a call opens are
     /// included in statistics. A field that is absent or not a string is
     /// skipped.
-    pub fn paths<I, S>(mut self, fields: I) -> Self
+    pub fn paths<I, S>(mut self, fields: I) -> Tool
     where
         I: IntoIterator<Item = S>,
         S: Into<String>,
@@ -582,39 +592,63 @@ impl<H> ToolBuilder<H> {
         self.paths = fields.into_iter().map(Into::into).collect();
         self
     }
-}
 
-impl ToolBuilder<()> {
-    /// Define what runs when the model calls this tool. A bare `async` block
-    /// works.
-    pub fn handler<F, Fut>(self, f: F) -> ToolBuilder<ToolHandler>
-    where
-        F: Fn(Value, ToolContext) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = ToolResult> + Send + 'static,
-    {
-        ToolBuilder {
-            name: self.name,
-            description: self.description,
-            schema: self.schema,
-            concurrent: self.concurrent,
-            paths: self.paths,
-            handler: Box::new(move |v, c| Box::pin(f(v, c.clone()))),
-        }
+    /// Run the tool on a call the registry has already checked against
+    /// [`schema`](Self::schema).
+    pub async fn call(&self, input: Value, ctx: &ToolContext) -> ToolResult {
+        (self.handler)(input, ctx).await
+    }
+
+    /// The name the model calls the tool by.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// What the tool does, in the words the model reads.
+    pub fn description(&self) -> &str {
+        &self.description
+    }
+
+    /// The arguments this tool accepts, compiled.
+    pub fn input_schema(&self) -> &Schema {
+        &self.schema
+    }
+
+    /// Whether the agent may run this tool alongside the turn's other
+    /// concurrent calls.
+    pub fn is_concurrent(&self) -> bool {
+        self.concurrent
+    }
+
+    /// The file paths this call opens, read from the fields named by
+    /// [`paths`](Self::paths), so they reach `Stats`.
+    pub fn opened_paths(&self, input: &Value) -> Vec<String> {
+        self.paths
+            .iter()
+            .filter_map(|field| input.get(field).and_then(|v| v.as_str()))
+            .map(str::to_string)
+            .collect()
     }
 }
 
-impl ToolBuilder<ToolHandler> {
-    /// Create the tool, ready for `Agent::tool(...)`.
-    pub fn build(self) -> Tool {
-        Tool {
-            name: self.name,
-            description: self.description,
-            schema: self.schema,
-            concurrent: self.concurrent,
-            paths: self.paths,
-            handler: self.handler,
-        }
-    }
+/// Fold a typed handler into the stored form: deserialize the checked
+/// arguments, then run the handler on what they read as.
+fn read_arguments_then<A, F, Fut>(name: String, handler: F) -> ToolHandler
+where
+    A: serde::de::DeserializeOwned + Send + 'static,
+    F: Fn(A, ToolContext) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = ToolResult> + Send + 'static,
+{
+    Arc::new(move |input, ctx| match serde_json::from_value::<A>(input) {
+        Ok(args) => Box::pin(handler(args, ctx.clone())),
+        // The schema accepted this call, so the tool's schema and its
+        // argument type disagree: the author's mistake, not the model's.
+        // Reporting it as a schema failure would show the model a document
+        // its call already satisfied.
+        Err(error) => Box::pin(std::future::ready(ToolResult::error(format!(
+            "`{name}` could not read its arguments: {error}"
+        )))),
+    })
 }
 
 impl ToolLike for Tool {
@@ -969,10 +1003,10 @@ mod tests {
 
     #[test]
     fn paths_reports_the_named_input_fields() {
-        let tool = Tool::new("cat", "Read a file.")
-            .paths(["path", "into"])
-            .handler(|_input, _ctx| async move { ToolResult::success("ok") })
-            .build();
+        let tool = Tool::new("cat", "Read a file.", |_: Value, _ctx| async move {
+            ToolResult::success("ok")
+        })
+        .paths(["path", "into"]);
 
         let input = serde_json::json!({"path": "src/lib.rs", "limit": 20});
         assert_eq!(tool.opened_paths(&input), vec!["src/lib.rs".to_string()]);
@@ -1080,9 +1114,9 @@ Do the demo thing.
   "properties": {"x": {"type": "string"}},
   "required": ["x"]
 }"#;
-        let tool = Tool::from_tool_file(definition, schema)
-            .handler(|_, _| async { ToolResult::success("") })
-            .build();
+        let tool = Tool::from_tool_file(definition, schema, |_: Value, _| async {
+            ToolResult::success("")
+        });
         assert_eq!(tool.name(), "demo_tool");
         assert!(tool.description().contains("Do the demo thing."));
         assert!(tool.description().contains("- Returns nothing useful."));
@@ -1397,18 +1431,49 @@ Do the demo thing.
         assert_eq!(results[0].content, "written");
     }
 
+    #[tokio::test]
+    async fn a_typed_handler_that_cannot_read_its_arguments_names_the_author() {
+        // The default schema accepts `{}`, so the mismatch is between the
+        // schema and the handler's argument type: the author's mistake.
+        #[derive(serde::Deserialize)]
+        struct Args {
+            #[allow(dead_code)]
+            count: i64,
+        }
+        let tool = Tool::new("typed", "typed", |_: Args, _ctx| async move {
+            ToolResult::success("ran")
+        });
+        let outcome = tool.call(serde_json::json!({}), &test_ctx()).await;
+        assert!(
+            matches!(&outcome, ToolResult::Error(message)
+                if message.contains("`typed` could not read its arguments")),
+            "{outcome:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_cloned_tool_runs_the_same_handler() {
+        // The bindings register one tool on several agents; the clones must
+        // share the handler, not lose it.
+        let tool = Tool::new("echo", "Echoes input", |input: Value, _ctx| async move {
+            ToolResult::success(input["text"].as_str().unwrap_or("").to_string())
+        });
+        let cloned = tool.clone();
+        let outcome = cloned
+            .call(serde_json::json!({"text": "hi"}), &test_ctx())
+            .await;
+        assert_eq!(outcome.content(), "hi");
+        assert_eq!(cloned.name(), tool.name());
+    }
+
     #[test]
     fn tool_basic() {
-        let tool = Tool::new("echo", "Echoes input")
-            .schema(
-                serde_json::json!({"type": "object", "properties": {"text": {"type": "string"}}}),
-            )
-            .concurrent(true)
-            .handler(|input, _ctx| async move {
-                let text = input["text"].as_str().unwrap_or("").to_string();
-                ToolResult::success(text)
-            })
-            .build();
+        let tool = Tool::new("echo", "Echoes input", |input: Value, _ctx| async move {
+            let text = input["text"].as_str().unwrap_or("").to_string();
+            ToolResult::success(text)
+        })
+        .schema(serde_json::json!({"type": "object", "properties": {"text": {"type": "string"}}}))
+        .concurrent(true);
 
         assert_eq!(tool.name(), "echo");
         assert!(tool.is_concurrent());

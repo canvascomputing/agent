@@ -152,6 +152,8 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
+    use serde_json::Value;
+
     use crate::agents::agent::Agent;
     use crate::agents::r#loop::test_util::*;
     use crate::agents::tickets::{Status, Ticket, TicketQueue};
@@ -440,9 +442,9 @@ mod tests {
             Ok(tool_call_response("boom")),
             Ok(tool_call_response("boom")),
         ]);
-        let boom = Tool::new("boom", "Always fails")
-            .handler(|_, _| async move { ToolResult::error("boom") })
-            .build();
+        let boom = Tool::new("boom", "Always fails", |_: Value, _| async move {
+            ToolResult::error("boom")
+        });
 
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let tickets = TicketQueue::new();
@@ -494,12 +496,12 @@ mod tests {
             Ok(tool_call_response("boom")),
             Ok(write_result_value(serde_json::json!("done"))),
         ]);
-        let boom = Tool::new("boom", "Always fails")
-            .handler(|_, _| async move { ToolResult::error("boom") })
-            .build();
-        let ping = Tool::new("ping", "Always succeeds")
-            .handler(|_, _| async move { ToolResult::success("pong") })
-            .build();
+        let boom = Tool::new("boom", "Always fails", |_: Value, _| async move {
+            ToolResult::error("boom")
+        });
+        let ping = Tool::new("ping", "Always succeeds", |_: Value, _| async move {
+            ToolResult::success("pong")
+        });
 
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let tickets = TicketQueue::new();
@@ -546,17 +548,15 @@ mod tests {
             Ok(write_result_value(serde_json::json!("done"))),
         ]);
 
-        let slow_tool = Tool::new("slow_tool", "Blocks until released")
-            .handler(move |_, _| {
-                let s = Arc::clone(&tool_started_clone);
-                let u = Arc::clone(&tool_unblocked_clone);
-                async move {
-                    s.notify_one();
-                    u.notified().await;
-                    ToolResult::success("ok")
-                }
-            })
-            .build();
+        let slow_tool = Tool::new("slow_tool", "Blocks until released", move |_: Value, _| {
+            let s = Arc::clone(&tool_started_clone);
+            let u = Arc::clone(&tool_unblocked_clone);
+            async move {
+                s.notify_one();
+                u.notified().await;
+                ToolResult::success("ok")
+            }
+        });
 
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let tickets = TicketQueue::new();
@@ -626,9 +626,11 @@ mod tests {
             .max_schema_retries(10)
             .max_time(Duration::from_millis(500));
 
-        let dump = Tool::new("dump", "Returns ~800 KB of text")
-            .handler(|_input, _ctx| async move { ToolResult::success("x".repeat(800_000)) })
-            .build();
+        let dump = Tool::new(
+            "dump",
+            "Returns ~800 KB of text",
+            |_: Value, _ctx| async move { ToolResult::success("x".repeat(800_000)) },
+        );
 
         tickets.on_event(move |e| handler(e));
         tickets.agent(
@@ -733,18 +735,20 @@ mod tests {
             .max_schema_retries(10)
             .max_time(Duration::from_millis(500));
 
-        let size_tool = Tool::new("size_tool", "Returns N bytes of 'x'")
-            .schema(serde_json::json!({
-                "type": "object",
-                "properties": {"bytes": {"type": "integer"}},
-                "required": ["bytes"],
-            }))
-            .concurrent(true)
-            .handler(|input, _ctx| async move {
+        let size_tool = Tool::new(
+            "size_tool",
+            "Returns N bytes of 'x'",
+            |input: Value, _ctx| async move {
                 let bytes = input["bytes"].as_u64().unwrap_or(0) as usize;
                 ToolResult::success("x".repeat(bytes))
-            })
-            .build();
+            },
+        )
+        .schema(serde_json::json!({
+            "type": "object",
+            "properties": {"bytes": {"type": "integer"}},
+            "required": ["bytes"],
+        }))
+        .concurrent(true);
 
         tickets.agent(
             Agent::new()

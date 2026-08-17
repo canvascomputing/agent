@@ -180,13 +180,12 @@ Seven rules the surface table below never repeats.
 | `ProviderError`, `ProviderResult`, `RequestErrorKind` | `RuntimeError` |
 | `ModelRequest`, `ToolDefinition`, `ToolChoice`, `Message`, `AsUserMessage`, `ContentBlock`, `ModelResponse`, `ResponseStatus`, `StreamEvent` | Not bound: the shapes an LLM provider is built from. Python binds the four providers, not what they are built out of. |
 | **Tools** | |
-| `Tool::new(name, description).schema(..).handler(..).build()` | The `@tool` decorator: a decorated function carries the name, description, and schema a `ToolBuilder` collects. |
-| `ToolBuilder<H>` | Folded into the `@tool` decorator: the type changes once a handler is attached, which Python cannot hold across calls. |
+| `Tool::new(name, description, handler).schema(..)` | The `@tool` decorator: a decorated function carries the name, description, and schema. |
 | `Tool` | `Tool`: an opaque handle the built-in tool functions return. An ad-hoc tool is a decorated function, not a `Tool`. |
-| `Tool::from_tool_file(definition, schema)` | Not bound: write the name, description, and schema on the Python function instead. |
-| `ToolBuilder::concurrent(b)` | `@tool(concurrent=..)` |
-| `ToolBuilder::paths(fields)` | `@tool(paths=[..])` |
-| `ToolBuilder::schema(document)` panics on a document that does not compile | `@tool(schema=..)` raises `ValueError` when `.tool(fn)` registers it: a decorator runs before the schema is read, so the failure surfaces one call later. |
+| `Tool::from_tool_file(definition, schema, handler)` | Not bound: write the name, description, and schema on the Python function instead. |
+| `Tool::concurrent(b)` | `@tool(concurrent=..)` |
+| `Tool::paths(fields)` | `@tool(paths=[..])` |
+| `Tool::schema(document)` panics on a document that does not compile | `@tool(schema=..)` raises `ValueError` when `.tool(fn)` registers it: a decorator runs before the schema is read, so the failure surfaces one call later. |
 | `ToolLike` | A `@tool`-decorated callable. Python cannot implement a Rust trait. |
 | `ToolContext` | Not bound: a `@tool` function receives its input as keyword arguments only. |
 | `ToolResult::success(c)`, `::error(c)`, `::schema_error(c)` | `ToolResult.success(content)`, `.error(content)`, `.schema_error(content)` |

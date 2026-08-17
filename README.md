@@ -559,19 +559,18 @@ Describe the tool, then hand it the code it runs:
 
 ```rust
 use agentwerk::tools::{Tool, ToolResult};
+use serde_json::Value;
 
-let greet = Tool::new("greet", "Say hello")
-    .schema(json!({
-        "type": "object",
-        "properties": { "name": { "type": "string" } },
-        "required": ["name"]
-    }))
-    .concurrent(true)
-    .handler(|input, _context| async move {
-        let name = input["name"].as_str().unwrap_or("world");
-        ToolResult::success(format!("Hello, {name}!"))
-    })
-    .build();
+let greet = Tool::new("greet", "Say hello", |input: Value, _context| async move {
+    let name = input["name"].as_str().unwrap_or("world");
+    ToolResult::success(format!("Hello, {name}!"))
+})
+.schema(json!({
+    "type": "object",
+    "properties": { "name": { "type": "string" } },
+    "required": ["name"]
+}))
+.concurrent(true);
 ```
 
 See [`Tool`](https://docs.rs/agentwerk/latest/agentwerk/tools/struct.Tool.html).

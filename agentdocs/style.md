@@ -199,7 +199,7 @@ edit_replies(key, editor)            // act once, now
 
 **Every public Rust item has a Python counterpart of the same name. Six transforms are permitted; nothing else.**
 
-- Type-state collapses: `AgentBuilder<P, M>` and `ToolBuilder<H>` fold into the class they build and take its name, so the builder type has no Python counterpart. The collapsed class validates at `build()`.
+- Type-state collapses: `AgentBuilder<P, M>` folds into the class it builds and takes its name, so the builder type has no Python counterpart. The collapsed class validates at `build()`.
 - `Duration` becomes float seconds: the parameter keeps its name and the unit moves into the docstring.
 - A fieldless enum becomes its snake_case `Display` string. That `Display` impl is the single source, so the binding never formats a variant with `{:?}`.
 - An enum whose variants carry fields becomes a class with a `kind` string, a `data` dict, and one static constructor per variant. `Event` and `ReplyContent` are the two; a bare dict would make callers hand-build a tagged shape.
@@ -261,7 +261,7 @@ The name the model calls is a separate namespace and takes no suffix: `read_file
 **A type a public trait or extension point hands to callers is documented; a genuinely internal type is `pub(crate)`.**
 
 - The request and response types under `providers::` (`Message`, `ContentBlock`, `ModelRequest`, `ToolDefinition`, `ToolChoice`, `StreamEvent`, `ModelResponse`, `ResponseStatus`) are documented: implementing `ProviderLike` is supported, and implementors name them.
-- A type that is genuinely internal becomes `pub(crate)` instead. `tools::ToolFile` is the example: callers go through `Tool::from_tool_file(definition: &str)` and never name the struct.
+- A type that is genuinely internal becomes `pub(crate)` instead. `tools::ToolFile` is the example: callers go through `Tool::from_tool_file(definition, schema, handler)` and never name the struct.
 - `#[doc(hidden)]` is reserved for items a macro or trait forces `pub` that are useless even to implementors; there are currently none.
 
 ## Line Comments (`//`)
