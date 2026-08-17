@@ -127,12 +127,15 @@ Two layers of state exist. The per-ticket replies live on `Ticket::replies`: eve
 
 ## Providers Own Their Client
 
-**Each concrete provider owns a `reqwest::Client` directly. There is no transport abstraction.**
+**Each concrete provider owns an `Endpoint`, which owns a `reqwest::Client` directly. There is no transport abstraction beyond it.**
 
-- The `ProviderLike` trait fulfils one contract: `respond` (drive one turn) plus per-vendor metadata. Callers hold it as a `Provider`, a cloneable handle any implementer converts into.
+- The `ProviderLike` trait fulfils one contract: `respond`, drive one turn. Callers hold it as a `Provider`, a cloneable handle any implementer converts into. `Provider::verify` is an inherent convenience over `respond`, not a second thing to implement.
 - `ModelRequest`, `Message`, `ContentBlock`, and `TokenUsage` are the request and response types every provider converts to and from.
 - Those types, plus `ModelResponse`, `StreamEvent`, `ResponseStatus`, `ToolChoice`, and `ProviderToolDefinition`, are `pub` and documented: the `ProviderLike` trait is a supported extension point, and its implementors name them.
-- HTTP error mapping is shared through `providers::map_http_errors` plus a provider-specific `classify_error`; SSE parsing lives in `providers::stream`.
+- Where a request goes, how long it may take, and what a non-2xx answer means are decided in `providers::endpoint`. Vendor code adds its own authentication headers and its own `classify_error` for the bodies only that vendor words its own way. SSE reading lives in `providers::stream`.
+- There are two protocols and four configurations, and the `Protocol` trait is where that split lives: `AnthropicMessages` and `OpenAiChat` each supply a path, their authentication headers, a request shape, a 400-body classifier, and a decoder. `mistral` and `litellm` name `OpenAiChat` against their own `Endpoint` rather than owning an `OpenAi` of their own, and every provider's `respond` is one call to `provider::respond::<P>`, so no two can disagree about the order a turn happens in.
+- A provider decodes its own payloads and names which `ResponseBuilder` call each one is. `providers::stream` decides which block a fragment continues and when a `StreamEvent` fires, so no two vendors can disagree about either. Blocks are dense and in arrival order; the number an endpoint attaches to a fragment routes tool calls only, and never sizes anything.
+- A context window is looked up by model name in `providers::model`, not per vendor: the same name reaches agentwerk through whichever endpoint serves it.
 - Retry happens at the request level using `Policies::max_request_retries` and `request_retry_delay`; vendor code does not retry.
 
 ## The Lifecycle Is Three Verbs Over One Filter

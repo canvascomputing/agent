@@ -44,11 +44,9 @@ pub enum ProviderError {
     /// The response arrived but its body could not be read: malformed JSON, an
     /// unexpected shape, or a broken frame.
     ResponseMalformed { message: String },
-    /// Provider construction failed to resolve a provider from the
-    /// environment: no provider was detected, a required env var was unset,
-    /// `LITELLM_PROVIDER` named an unknown provider, or a `.env` the caller
-    /// asked for was missing or malformed. `message` states the specific
-    /// failure.
+    /// No provider could be resolved from the environment: none was detected,
+    /// a required variable was unset, or `LITELLM_PROVIDER` named one that does
+    /// not exist. `message` states which.
     ProviderUnrecognized { message: String },
 }
 
@@ -74,8 +72,6 @@ impl ProviderError {
         }
     }
 
-    /// Categorical discriminant for event observers. One variant per
-    /// `ProviderError` case; payloads stripped.
     pub fn kind(&self) -> RequestErrorKind {
         match self {
             ProviderError::AuthenticationFailed { .. } => RequestErrorKind::AuthenticationFailed,
@@ -207,6 +203,79 @@ impl fmt::Display for RequestErrorKind {
 
 /// Result alias for [`Provider`](super::Provider) calls.
 pub type ProviderResult<T> = std::result::Result<T, ProviderError>;
+
+// A proxy wraps another provider's error behind its own status and code, so the
+// vendor classifier gives up and the loop ends the ticket instead of compacting.
+// The two banks below are read after that classifier, before the generic
+// fallback.
+
+/// Matched case-insensitively against the whole body, so they survive wrapping.
+const OVERFLOW_PATTERNS: &[&str] = &[
+    // Anthropic
+    "prompt is too long",
+    "input length and `max_tokens` exceed context limit",
+    "request_too_large",
+    // OpenAI
+    "this model's maximum context length",
+    "exceeds the context window",
+    "context_length_exceeded",
+    "exceed_context_size_error",
+    // Mistral
+    "too large for model with",
+    // Vertex / Gemini through LiteLLM. Nothing else phrases overflow this way.
+    "input token count",
+    "exceeds the maximum number of tokens",
+    // LiteLLM's own prefix, for an upstream wording none of the above knows.
+    "contextwindowexceedederror",
+    // Broad on purpose: a false positive costs one compaction, a false negative
+    // the ticket.
+    "context window exceeded",
+    "maximum context length",
+];
+
+/// Throttling signals, several of which also match [`OVERFLOW_PATTERNS`].
+const RATE_LIMIT_PATTERNS: &[&str] = &[
+    "rate limit",
+    "too many requests",
+    "throttling",
+    // A class name like `litellm.RateLimitError` has no space for the form above.
+    "ratelimit",
+    // Google Vertex's RPC status for quota exhaustion.
+    "resource_exhausted",
+];
+
+/// Read the upstream signal out of `body`, whatever the outer status says: a
+/// proxy wraps a 429 inside another code often enough that the status alone
+/// cannot be trusted. `None` leaves the body to `fallback_http_error`.
+pub(crate) fn recover_wrapped_error(
+    status: u16,
+    body: &str,
+    retry_delay: Option<Duration>,
+) -> Option<ProviderError> {
+    // One lowercase per call, not one per pattern: a wrapped body carries the
+    // full upstream payload.
+    let lower = body.to_lowercase();
+
+    // A body saying both is throttled: reading overflow first would spend a
+    // compaction and meet the same throttle on the next request.
+    let looks_like_rate_limit = RATE_LIMIT_PATTERNS.iter().any(|p| lower.contains(p));
+
+    if !looks_like_rate_limit && OVERFLOW_PATTERNS.iter().any(|p| lower.contains(p)) {
+        return Some(ProviderError::ContextWindowExceeded {
+            message: body.to_string(),
+        });
+    }
+
+    if looks_like_rate_limit {
+        return Some(ProviderError::RateLimited {
+            status,
+            message: body.to_string(),
+            retry_delay,
+        });
+    }
+
+    None
+}
 
 #[cfg(test)]
 mod tests {
@@ -377,5 +446,83 @@ mod tests {
         for v in &variants {
             assert!(!format!("{v}").is_empty(), "empty display: {v:?}");
         }
+    }
+
+    /// The exact body that triggered the original failure: LiteLLM wrapping a
+    /// Vertex/Gemini 400 INVALID_ARGUMENT with a `code = "400"` outer field. The
+    /// OpenAI vendor classifier returns None on this.
+    #[test]
+    fn litellm_vertex_overflow_classifies_as_context_window() {
+        let body = r#"{"error":{"message":"litellm.ContextWindowExceededError: litellm.BadRequestError: ContextWindowExceededError: Vertex_ai_betaException - b'{\n  \"error\": {\n    \"code\": 400,\n    \"message\": \"The input token count exceeds the maximum number of tokens allowed 1048576.\",\n    \"status\": \"INVALID_ARGUMENT\"\n  }\n}\n'","type":null,"param":null,"code":"400"}}"#;
+        assert!(matches!(
+            recover_wrapped_error(400, body, None),
+            Some(ProviderError::ContextWindowExceeded { .. })
+        ));
+    }
+
+    /// LiteLLM wrapping a Vertex RESOURCE_EXHAUSTED behind its own
+    /// `MidStreamFallbackError`. The outer status IS 429 so the fallback path
+    /// would handle it, but a wrapped 429 returned with any other outer status
+    /// must classify correctly too, and the `retry_delay` must propagate.
+    #[test]
+    fn litellm_rate_limit_wrap_classifies_as_rate_limited() {
+        let body = r#"{"error":{"message":"litellm.MidStreamFallbackError: litellm.RateLimitError: litellm.RateLimitError: vertex_ai_betaException - b'{\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"Resource exhausted. Please try again later.\",\n    \"status\": \"RESOURCE_EXHAUSTED\"\n  }\n}\n'. Received Model Group=gemini-3-flash-preview","type":null,"param":null,"code":"429"}}"#;
+        let delay = Some(Duration::from_secs(2));
+        match recover_wrapped_error(429, body, delay) {
+            Some(ProviderError::RateLimited {
+                status,
+                retry_delay,
+                ..
+            }) => {
+                assert_eq!(status, 429);
+                assert_eq!(retry_delay, delay);
+            }
+            other => panic!("expected RateLimited, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn throttling_with_overflow_wording_classifies_as_rate_limited() {
+        // Compacting would not help and the next request would hit the same throttle.
+        let body = r#"{"message":"Throttling error: maximum context length per minute reached"}"#;
+        match recover_wrapped_error(400, body, None) {
+            Some(ProviderError::RateLimited { .. }) => {}
+            other => panic!("expected RateLimited (throttling wins), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_body_carrying_both_signals_is_a_rate_limit_whichever_vendor_sent_it() {
+        // Each vendor's own overflow wording, throttled.
+        for body in [
+            r#"{"error":{"message":"Rate limit reached: prompt is too long"}}"#,
+            r#"{"error":{"message":"429 Too Many Requests: this model's maximum context length is 8192"}}"#,
+            r#"{"error":{"message":"litellm.RateLimitError: input token count exceeds the maximum number of tokens"}}"#,
+        ] {
+            assert!(
+                matches!(
+                    recover_wrapped_error(400, body, None),
+                    Some(ProviderError::RateLimited { .. })
+                ),
+                "{body}"
+            );
+        }
+    }
+
+    /// First-party Anthropic phrasing, now that its own classifier reads codes
+    /// alone: this bank is what answers an overflow, whoever sent it.
+    #[test]
+    fn anthropic_prompt_too_long_classifies_as_context_window() {
+        let body = r#"{"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long: 250000 tokens > 200000 maximum"}}"#;
+        assert!(matches!(
+            recover_wrapped_error(400, body, None),
+            Some(ProviderError::ContextWindowExceeded { .. })
+        ));
+    }
+
+    #[test]
+    fn unrelated_400_returns_none() {
+        let body = r#"{"error":{"message":"invalid_api_key: incorrect API key provided","code":"invalid_api_key"}}"#;
+        assert!(recover_wrapped_error(400, body, None).is_none());
     }
 }

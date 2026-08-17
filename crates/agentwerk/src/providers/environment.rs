@@ -1,4 +1,5 @@
-//! Resolves an LLM provider, model name, and runtime overrides from environment variables so callers do not have to code the detection matrix or the override knobs themselves.
+//! Resolves an LLM provider, model name, and runtime overrides from environment
+//! variables, so a caller writes neither the detection order nor the overrides.
 
 use super::error::{ProviderError, ProviderResult};
 use super::{Anthropic, LiteLlm, Mistral, OpenAi, Provider};
@@ -12,7 +13,8 @@ pub(crate) enum DetectedProvider {
     LiteLlm,
 }
 
-/// Read an env var, treating empty values as unset. Returns `default` if missing or empty.
+/// Read an environment variable, falling back to `default`. An empty value
+/// counts as unset.
 pub(crate) fn env_or(name: &str, default: &str) -> String {
     std::env::var(name)
         .ok()
@@ -20,7 +22,8 @@ pub(crate) fn env_or(name: &str, default: &str) -> String {
         .unwrap_or_else(|| default.into())
 }
 
-/// Read a required env var. Returns `Err` if missing or empty.
+/// Read an environment variable a provider cannot be built without. An empty
+/// value counts as unset and fails the same way.
 pub(crate) fn env_required(name: &'static str) -> ProviderResult<String> {
     std::env::var(name)
         .ok()
@@ -30,7 +33,8 @@ pub(crate) fn env_required(name: &'static str) -> ProviderResult<String> {
         })
 }
 
-/// Read an optional env var, treating empty values as unset. Returns `None` if missing or empty.
+/// Read an environment variable that may be absent. An empty value counts as
+/// unset.
 pub(crate) fn env_opt(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|v| !v.is_empty())
 }
@@ -109,7 +113,8 @@ where
         .filter(|n| *n > 0)
 }
 
-/// Pure detection logic. Determines which provider to use based on env var values.
+/// Decide which provider the environment names, reading it through `get_env` so
+/// the order is testable without setting variables.
 pub(crate) fn detect_provider_name<F>(get_env: F) -> ProviderResult<DetectedProvider>
 where
     F: Fn(&str) -> Option<String>,
@@ -164,7 +169,7 @@ mod tests {
     }
 
     #[test]
-    fn explicit_anthropic() {
+    fn an_explicit_name_selects_anthropic() {
         let result = detect_provider_name(env_map(&[
             ("LITELLM_PROVIDER", "anthropic"),
             ("ANTHROPIC_API_KEY", "key"),
@@ -174,7 +179,7 @@ mod tests {
     }
 
     #[test]
-    fn explicit_mistral() {
+    fn an_explicit_name_selects_mistral() {
         let result = detect_provider_name(env_map(&[
             ("LITELLM_PROVIDER", "mistral"),
             ("MISTRAL_API_KEY", "key"),
@@ -184,7 +189,7 @@ mod tests {
     }
 
     #[test]
-    fn explicit_openai() {
+    fn an_explicit_name_selects_openai() {
         let result = detect_provider_name(env_map(&[
             ("LITELLM_PROVIDER", "openai"),
             ("OPENAI_API_KEY", "key"),
@@ -194,13 +199,13 @@ mod tests {
     }
 
     #[test]
-    fn explicit_litellm() {
+    fn an_explicit_name_selects_the_litellm_proxy() {
         let result = detect_provider_name(env_map(&[("LITELLM_PROVIDER", "litellm")])).unwrap();
         assert_eq!(result, DetectedProvider::LiteLlm);
     }
 
     #[test]
-    fn explicit_overrides_auto_detection() {
+    fn an_explicit_name_outranks_every_key_that_is_set() {
         let result = detect_provider_name(env_map(&[
             ("LITELLM_PROVIDER", "anthropic"),
             ("ANTHROPIC_API_KEY", "key"),
@@ -211,31 +216,31 @@ mod tests {
     }
 
     #[test]
-    fn auto_litellm_api_key() {
+    fn a_litellm_key_alone_selects_the_proxy() {
         let result = detect_provider_name(env_map(&[("LITELLM_API_KEY", "key")])).unwrap();
         assert_eq!(result, DetectedProvider::LiteLlm);
     }
 
     #[test]
-    fn auto_mistral() {
+    fn a_mistral_key_alone_selects_mistral() {
         let result = detect_provider_name(env_map(&[("MISTRAL_API_KEY", "key")])).unwrap();
         assert_eq!(result, DetectedProvider::Mistral);
     }
 
     #[test]
-    fn auto_anthropic() {
+    fn an_anthropic_key_alone_selects_anthropic() {
         let result = detect_provider_name(env_map(&[("ANTHROPIC_API_KEY", "key")])).unwrap();
         assert_eq!(result, DetectedProvider::Anthropic);
     }
 
     #[test]
-    fn auto_openai() {
+    fn an_openai_key_alone_selects_openai() {
         let result = detect_provider_name(env_map(&[("OPENAI_API_KEY", "key")])).unwrap();
         assert_eq!(result, DetectedProvider::OpenAi);
     }
 
     #[test]
-    fn litellm_key_wins_over_others() {
+    fn a_litellm_key_outranks_the_vendor_keys_beside_it() {
         let result = detect_provider_name(env_map(&[
             ("LITELLM_API_KEY", "key"),
             ("MISTRAL_API_KEY", "key"),
@@ -246,7 +251,7 @@ mod tests {
     }
 
     #[test]
-    fn mistral_wins_over_anthropic() {
+    fn a_mistral_key_outranks_an_anthropic_one() {
         let result = detect_provider_name(env_map(&[
             ("MISTRAL_API_KEY", "key"),
             ("ANTHROPIC_API_KEY", "key"),
@@ -256,7 +261,7 @@ mod tests {
     }
 
     #[test]
-    fn invalid_provider_returns_error() {
+    fn a_name_no_provider_answers_to_is_refused() {
         let err = detect_provider_name(env_map(&[
             ("LITELLM_PROVIDER", "invalid"),
             ("ANTHROPIC_API_KEY", "key"),
@@ -266,19 +271,19 @@ mod tests {
     }
 
     #[test]
-    fn no_provider_returns_error() {
+    fn an_environment_naming_no_provider_is_refused() {
         let err = detect_provider_name(env_map(&[])).unwrap_err();
         assert!(err.to_string().contains("No LLM provider found"));
     }
 
     #[test]
-    fn empty_values_treated_as_unset() {
+    fn an_empty_key_counts_as_unset() {
         let err = detect_provider_name(env_map(&[("ANTHROPIC_API_KEY", "")])).unwrap_err();
         assert!(err.to_string().contains("No LLM provider found"));
     }
 
     #[test]
-    fn model_generic_wins_over_provider_prefixed() {
+    fn a_bare_model_name_outranks_the_provider_prefixed_one() {
         let model = model_from_env_with(env_map(&[
             ("OPENAI_API_KEY", "key"),
             ("OPENAI_MODEL", "gpt-4-turbo"),
@@ -289,7 +294,7 @@ mod tests {
     }
 
     #[test]
-    fn model_provider_prefixed_used_when_generic_unset() {
+    fn the_provider_prefixed_model_name_is_read_when_no_bare_one_is_set() {
         let model = model_from_env_with(env_map(&[
             ("OPENAI_API_KEY", "key"),
             ("OPENAI_MODEL", "gpt-4-turbo"),
@@ -299,13 +304,13 @@ mod tests {
     }
 
     #[test]
-    fn model_falls_back_to_hosted_default() {
+    fn a_provider_with_no_model_named_takes_its_own_default() {
         let model = model_from_env_with(env_map(&[("OPENAI_API_KEY", "key")])).unwrap();
         assert_eq!(model, "gpt-4o");
     }
 
     #[test]
-    fn model_hosted_defaults_per_provider() {
+    fn every_provider_carries_its_own_default_model() {
         let anthropic = model_from_env_with(env_map(&[("ANTHROPIC_API_KEY", "k")])).unwrap();
         assert_eq!(anthropic, "claude-sonnet-4-20250514");
 
@@ -317,13 +322,13 @@ mod tests {
     }
 
     #[test]
-    fn model_errors_when_no_provider_detected() {
+    fn a_model_cannot_be_named_when_no_provider_is() {
         let err = model_from_env_with(env_map(&[])).unwrap_err();
         assert!(err.to_string().contains("No LLM provider found"));
     }
 
     #[test]
-    fn model_empty_provider_prefixed_falls_through_to_default() {
+    fn an_empty_provider_prefixed_model_name_falls_to_the_default() {
         let model =
             model_from_env_with(env_map(&[("OPENAI_API_KEY", "key"), ("OPENAI_MODEL", "")]))
                 .unwrap();
@@ -331,18 +336,18 @@ mod tests {
     }
 
     #[test]
-    fn context_window_returns_parsed_value() {
+    fn a_context_window_override_is_read_as_a_number() {
         let n = context_window_from_env_with(env_map(&[("MODEL_CONTEXT_WINDOW", "65536")]));
         assert_eq!(n, Some(65_536));
     }
 
     #[test]
-    fn context_window_unset_returns_none() {
+    fn an_unset_context_window_leaves_the_registry_to_answer() {
         assert_eq!(context_window_from_env_with(env_map(&[])), None);
     }
 
     #[test]
-    fn context_window_empty_returns_none() {
+    fn an_empty_context_window_leaves_the_registry_to_answer() {
         assert_eq!(
             context_window_from_env_with(env_map(&[("MODEL_CONTEXT_WINDOW", "")])),
             None,
@@ -350,7 +355,7 @@ mod tests {
     }
 
     #[test]
-    fn context_window_garbage_returns_none() {
+    fn a_context_window_that_is_not_a_number_leaves_the_registry_to_answer() {
         assert_eq!(
             context_window_from_env_with(env_map(&[("MODEL_CONTEXT_WINDOW", "huge")])),
             None,
@@ -358,7 +363,7 @@ mod tests {
     }
 
     #[test]
-    fn context_window_zero_returns_none() {
+    fn a_zero_context_window_leaves_the_registry_to_answer() {
         // Zero is a parse success but a meaningless window; treat as unset
         // so the registry guess still gets a chance.
         assert_eq!(

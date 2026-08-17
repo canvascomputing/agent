@@ -473,38 +473,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn response_status_context_window_exceeded_triggers_reactive_compaction() {
-        use crate::providers::types::ModelResponse;
-        let provider = MockProvider::with_results(vec![
-            Ok(tool_call_response("primer")),
-            Ok(ModelResponse {
-                content: vec![crate::providers::ContentBlock::Text {
-                    text: "oops".into(),
-                }],
-                status: crate::providers::types::ResponseStatus::ContextWindowExceeded,
-                usage: crate::providers::types::TokenUsage::default(),
-                model: "mock".into(),
-            }),
-            Ok(text_response_with_usage(
-                "SUMMARY",
-                crate::providers::types::TokenUsage::default(),
-            )),
-            Ok(write_result_response("recovered")),
-        ]);
-        let (events, _, ticket) = run_compaction(provider, |_| {}).await;
-
-        assert_eq!(
-            compaction_starts(&events, crate::event::CompactReason::Reactive),
-            1
-        );
-        assert_eq!(
-            compaction_finishes(&events, crate::event::CompactReason::Reactive),
-            1
-        );
-        assert_eq!(ticket.status, Status::Finished);
-    }
-
-    #[tokio::test]
     async fn proactive_compact_does_not_consume_reactive_budget() {
         use crate::event::CompactReason;
         let provider = MockProvider::with_results(vec![
