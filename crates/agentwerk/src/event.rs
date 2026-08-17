@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-use crate::providers::{RequestErrorKind, TokenUsage};
+use crate::providers::{RequestErrorKind, TokenUsage, ToolDeclineKind};
 
 /// Why the older messages were summarized.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -108,8 +108,7 @@ impl ToolFailureKind {
         ToolFailureKind::SchemaValidationFailed,
     ];
 
-    /// The stable snake_case spelling, for a handler keying its own counts by
-    /// reason.
+    /// The stable snake_case spelling, which differs from the variant name.
     pub fn as_str(&self) -> &'static str {
         match self {
             ToolFailureKind::ToolNotFound => "not_found",
@@ -120,6 +119,41 @@ impl ToolFailureKind {
 }
 
 impl fmt::Display for ToolFailureKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// What was wrong with something the model sent, carried by
+/// [`EventKind::ResponseRepaired`]. Each variant names the defect, since the fix
+/// already happened and the defect is what a prompt change would address.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum RepairKind {
+    /// The call arrived unusable: written as text in the reply, delivered
+    /// without its arguments, or named with a spelling that had to be folded.
+    #[serde(rename = "call_malformed")]
+    CallMalformed,
+    /// A value did not match the schema declared for it, in type or in shape:
+    /// a scalar the model quoted, a structure it wrote as JSON text, or a
+    /// result it sent under a `result` key the schema does not declare.
+    #[serde(rename = "value_mistyped")]
+    ValueMistyped,
+}
+
+impl RepairKind {
+    /// Every kind, in the order they are declared.
+    pub const ALL: &'static [RepairKind] = &[RepairKind::CallMalformed, RepairKind::ValueMistyped];
+
+    /// The stable snake_case spelling, the one `reason` carries.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            RepairKind::CallMalformed => "call_malformed",
+            RepairKind::ValueMistyped => "value_mistyped",
+        }
+    }
+}
+
+impl fmt::Display for RepairKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }
@@ -144,8 +178,7 @@ impl KnowledgeFailureKind {
         KnowledgeFailureKind::StoreRefused,
     ];
 
-    /// The stable snake_case spelling, for a handler keying its own counts by
-    /// reason.
+    /// The stable snake_case spelling, the one `reason` carries.
     pub fn as_str(&self) -> &'static str {
         match self {
             KnowledgeFailureKind::PageMissing => "page_missing",
@@ -171,7 +204,6 @@ pub enum KnowledgeOp {
 }
 
 impl KnowledgeOp {
-    /// The stable name this operation reports itself under.
     fn name(&self) -> &'static str {
         match self {
             KnowledgeOp::Write => "write",
@@ -209,7 +241,6 @@ impl fmt::Display for KnowledgeOp {
 pub struct Event {
     /// When this event happened, in milliseconds since the epoch.
     pub created_at: u64,
-    /// Name of the agent that produced this event.
     pub agent_id: String,
     /// Key of the ticket this event concerns. Empty on `RunStarted` and
     /// `RunFinished`, which no ticket owns.
@@ -219,8 +250,8 @@ pub struct Event {
     /// and when the ticket carries no label.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
-    /// What happened. Flattened into the event itself, so one logged line
-    /// carries the kind's name and its payload beside the four fields here.
+    /// Flattened, so one logged line carries the kind's name and its payload
+    /// beside the four fields here.
     #[serde(flatten)]
     pub kind: EventKind,
 }
@@ -285,6 +316,21 @@ pub enum EventKind {
     },
     /// A piece of the reply arrived.
     TextChunkReceived { content: String },
+    /// A tool call or value the model created was invalid and was corrected
+    /// here, rather than asked for again. `message` says what was corrected.
+    /// Repeated repairs of one reason point at a prompt or tool description to
+    /// fix.
+    ResponseRepaired {
+        tool_name: String,
+        reason: RepairKind,
+        message: String,
+    },
+    /// A tool call proposed by the model was declined. `reason` says why it was
+    /// not promoted to a call that runs.
+    ToolCallDeclined {
+        tool_name: String,
+        reason: ToolDeclineKind,
+    },
     /// A tool invocation began.
     ToolCallStarted {
         tool_name: String,
@@ -357,9 +403,6 @@ impl EventKind {
     }
 
     /// Which count this event adds to.
-    ///
-    /// The match is exhaustive on purpose: a new variant must name itself here,
-    /// and that one line is everything its count needs.
     pub fn event_name(&self) -> EventName {
         match self {
             EventKind::RunStarted => EventName::RunStarted,
@@ -374,6 +417,8 @@ impl EventKind {
             EventKind::RequestFailed { .. } => EventName::RequestFailed,
             EventKind::RequestRetried { .. } => EventName::RequestRetried,
             EventKind::TextChunkReceived { .. } => EventName::TextChunkReceived,
+            EventKind::ResponseRepaired { .. } => EventName::ResponseRepaired,
+            EventKind::ToolCallDeclined { .. } => EventName::ToolCallDeclined,
             EventKind::ToolCallStarted { .. } => EventName::ToolCallStarted,
             EventKind::ToolCallFinished { .. } => EventName::ToolCallFinished,
             EventKind::ToolCallFailed { .. } => EventName::ToolCallFailed,
@@ -390,9 +435,9 @@ impl EventKind {
         }
     }
 
-    /// Whether this kind reports something that went wrong. Names the
-    /// six kinds `TicketQueue::on_failure` fires on, so a handler on
-    /// the plain event chain can ask the same question.
+    /// Whether this kind reports something that went wrong. The kinds
+    /// `TicketQueue::on_failure` fires on, so a handler on the plain event
+    /// chain can ask the same question.
     pub fn is_failure(&self) -> bool {
         matches!(
             self,
@@ -413,8 +458,8 @@ impl fmt::Display for EventKind {
 }
 
 /// Which [`EventKind`] a count belongs to, without the payload the kind
-/// carries. Pass one to [`Stats::event_count`](crate::Stats::event_count); the
-/// snake_case spelling is the one `events.jsonl` uses.
+/// carries. Pass one to `Stats::event_count`; the snake_case spelling is the
+/// one `events.jsonl` uses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EventName {
@@ -430,6 +475,8 @@ pub enum EventName {
     RequestFailed,
     RequestRetried,
     TextChunkReceived,
+    ResponseRepaired,
+    ToolCallDeclined,
     ToolCallStarted,
     ToolCallFinished,
     ToolCallFailed,
@@ -446,8 +493,7 @@ pub enum EventName {
 }
 
 impl EventName {
-    /// Every name, in the order the kinds are declared. Lets a caller walk the
-    /// counts without knowing which kinds exist.
+    /// Every name, in the order the kinds are declared.
     pub const ALL: &'static [EventName] = &[
         EventName::RunStarted,
         EventName::RunFinished,
@@ -461,6 +507,8 @@ impl EventName {
         EventName::RequestFailed,
         EventName::RequestRetried,
         EventName::TextChunkReceived,
+        EventName::ResponseRepaired,
+        EventName::ToolCallDeclined,
         EventName::ToolCallStarted,
         EventName::ToolCallFinished,
         EventName::ToolCallFailed,
@@ -491,6 +539,8 @@ impl EventName {
             EventName::RequestFailed => "request_failed",
             EventName::RequestRetried => "request_retried",
             EventName::TextChunkReceived => "text_chunk_received",
+            EventName::ResponseRepaired => "response_repaired",
+            EventName::ToolCallDeclined => "tool_call_declined",
             EventName::ToolCallStarted => "tool_call_started",
             EventName::ToolCallFinished => "tool_call_finished",
             EventName::ToolCallFailed => "tool_call_failed",
@@ -653,6 +703,15 @@ pub(crate) mod tests {
             },
             EventKind::TextChunkReceived {
                 content: "hello".into(),
+            },
+            EventKind::ResponseRepaired {
+                tool_name: "grep".into(),
+                reason: RepairKind::CallMalformed,
+                message: "rebuilt from text".into(),
+            },
+            EventKind::ToolCallDeclined {
+                tool_name: "grep".into(),
+                reason: ToolDeclineKind::OutputTruncated,
             },
             EventKind::ToolCallStarted {
                 tool_name: "bash".into(),
