@@ -146,7 +146,9 @@ Seven rules the surface table below never repeats.
 | `KnowledgeError` | `RuntimeError` |
 | **Schema** | |
 | `Schema::new(document)` | `Schema(document)` |
+| `Schema::try_from(document)`, `::try_from(json_text)` | Not bound: `Schema(document)` takes the Python object, and a document read from a file is parsed before it gets there. |
 | `Schema::validate(value)` | `Schema.validate(value)` |
+| `Schema::get_raw_schema()` | Not bound: Python already holds the document it passed to `Schema(document)`. |
 | `SchemaViolation`, `SchemaViolations`, `SchemaParseError` | `RuntimeError` |
 | **SchemaStore** | |
 | `SchemaStore::new()` | `SchemaStore()` |
@@ -178,7 +180,7 @@ Seven rules the surface table below never repeats.
 | `Model::get_reasoning_effort()` | `Model.get_reasoning_effort()` |
 | `ReasoningEffort` | A string. |
 | `ProviderError`, `ProviderResult`, `RequestErrorKind` | `RuntimeError` |
-| `ModelRequest`, `ToolDefinition`, `ToolChoice`, `Message`, `AsUserMessage`, `ContentBlock`, `ModelResponse`, `ResponseStatus`, `StreamEvent` | Not bound: the shapes an LLM provider is built from. Python binds the four providers, not what they are built out of. |
+| `ModelRequest`, `Message`, `AsUserMessage`, `ContentBlock`, `ModelResponse`, `ResponseStatus`, `StreamEvent` | Not bound: the shapes an LLM provider is built from. Python binds the four providers, not what they are built out of. |
 | **Tools** | |
 | `Tool::new(name, description, handler).schema(..)` | The `@tool` decorator: a decorated function carries the name, description, and schema. |
 | `Tool` | `Tool`: an opaque handle the built-in tool functions return. An ad-hoc tool is a decorated function, not a `Tool`. |
@@ -187,7 +189,7 @@ Seven rules the surface table below never repeats.
 | `Tool::paths(fields)` | `@tool(paths=[..])` |
 | `Tool::schema(document)` panics on a document that does not compile | `@tool(schema=..)` raises `ValueError` when `.tool(fn)` registers it: a decorator runs before the schema is read, so the failure surfaces one call later. |
 | `ToolContext` | Not bound: a `@tool` function receives its input as keyword arguments only. |
-| `ToolResult::success(c)`, `::error(c)`, `::schema_error(c)` | `ToolResult.success(content)`, `.error(content)`, `.schema_error(content)` |
+| `ToolResult::success(c)`, `::error(c)` | `ToolResult.success(content)`, `.error(content)` |
 | `ReadFileTool` | `ReadFileTool()`: the unit struct converts to a `Tool`; Python spells the conversion as a call. |
 | `WriteFileTool`, `EditFileTool` | `WriteFileTool()`, `EditFileTool()` |
 | `GrepTool`, `GlobTool`, `ListDirectoryTool` | `GrepTool()`, `GlobTool()`, `ListDirectoryTool()` |
