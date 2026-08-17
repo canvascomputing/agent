@@ -410,6 +410,7 @@ tickets.ticket(Ticket::new("Write a report.").schema(schema));
 |-|--------|-------------|
 | **Schema** | `Schema::new(document)` | Create a schema. |
 | | `validate(value)` | Validate content. |
+| | `get_raw_schema()` | Read the JSON Schema document the schema was built from. |
 | **SchemaStore** | `SchemaStore::new()` | Create a store of schemas bound to labels. |
 | | `label(label, document)` | Bind a schema to a label. |
 | | `get(label)` | Read back the schema bound to a label. |

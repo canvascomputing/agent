@@ -120,6 +120,14 @@ impl Schema {
         }
     }
 
+    /// The JSON Schema document this was built from, the same one `Serialize`
+    /// writes. Reading a field off it needs no copy and cannot fail. A
+    /// [`ProviderLike`](crate::providers::ProviderLike) implementation reaches
+    /// a tool's schema through here.
+    pub fn get_raw_schema(&self) -> &Value {
+        &self.inner.raw_document
+    }
+
     /// Check `value` against the schema and report every violation, each
     /// naming where in the value it occurred.
     fn check(&self, instance: &Value) -> Result<(), Vec<SchemaViolation>> {
@@ -130,6 +138,27 @@ impl Schema {
         } else {
             Err(violations)
         }
+    }
+}
+
+impl TryFrom<Value> for Schema {
+    type Error = SchemaParseError;
+
+    fn try_from(document: Value) -> Result<Self, Self::Error> {
+        Schema::new(document)
+    }
+}
+
+impl TryFrom<&str> for Schema {
+    type Error = SchemaParseError;
+
+    /// Compile a schema written as JSON text, such as a `.schema.json` a tool
+    /// includes beside its definition.
+    fn try_from(document: &str) -> Result<Self, Self::Error> {
+        let parsed = serde_json::from_str(document).map_err(|error| SchemaParseError {
+            message: format!("document is not JSON: {error}"),
+        })?;
+        Schema::new(parsed)
     }
 }
 
@@ -993,6 +1022,32 @@ fn join_or(labels: &[&str]) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn compiles_a_document_written_as_json_text() {
+        let schema = Schema::try_from(r#"{"type": "object", "required": ["path"]}"#).unwrap();
+        assert!(schema.validate(json!({})).is_err());
+        assert!(schema.validate(json!({"path": "src/main.rs"})).is_ok());
+    }
+
+    #[test]
+    fn json_text_that_does_not_parse_names_the_syntax_error() {
+        let err = Schema::try_from(r#"{"type": "object",}"#).unwrap_err();
+        assert!(err.message.contains("document is not JSON"));
+    }
+
+    #[test]
+    fn json_text_the_compiler_refuses_reports_the_keyword() {
+        let err = Schema::try_from(r#"{"uniqueItems": true}"#).unwrap_err();
+        assert!(err.message.contains("unsupported keyword `uniqueItems`"));
+    }
+
+    #[test]
+    fn the_raw_schema_reads_back_the_document_it_was_built_from() {
+        let document = json!({"type": "object", "required": ["path"]});
+        let schema = Schema::new(document.clone()).unwrap();
+        assert_eq!(schema.get_raw_schema(), &document);
+    }
 
     // Parse errors
 
