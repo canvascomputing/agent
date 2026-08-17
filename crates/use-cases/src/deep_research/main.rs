@@ -257,23 +257,22 @@ fn final_report_schema_value() -> serde_json::Value {
 }
 
 fn brave_search_tool(api_key: String) -> Tool {
-    Tool::new(
-        "brave_search",
-        "Search the web. Returns titles, URLs, and descriptions.",
-        move |input: serde_json::Value, _ctx| {
+    Tool::new("brave_search")
+        .description("Search the web. Returns titles, URLs, and descriptions.")
+        .schema(serde_json::json!({
+            "type": "object",
+            "properties": {
+                "query": { "type": "string", "description": "Search query" },
+                "count": { "type": "integer", "description": "Results count (1-20, default: 5)" }
+            },
+            "required": ["query"]
+        }))
+        .concurrent(true)
+        .handler(move |input: serde_json::Value, _ctx| {
             let api_key = api_key.clone();
             async move { brave_search(&api_key, &input).await }
-        },
-    )
-    .schema(serde_json::json!({
-        "type": "object",
-        "properties": {
-            "query": { "type": "string", "description": "Search query" },
-            "count": { "type": "integer", "description": "Results count (1-20, default: 5)" }
-        },
-        "required": ["query"]
-    }))
-    .concurrent(true)
+        })
+        .build()
 }
 
 async fn brave_search(api_key: &str, input: &serde_json::Value) -> ToolResult {

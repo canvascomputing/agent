@@ -27,12 +27,12 @@ pub struct EditFileArgs {
 
 impl From<EditFileTool> for Tool {
     fn from(_: EditFileTool) -> Tool {
-        Tool::from_tool_file(
-            include_str!("edit_file.tool.md"),
-            include_str!("edit_file.schema.json"),
-            run,
-        )
-        .paths(["path"])
+        Tool::new("edit_file")
+            .description(include_str!("edit_file.tool.md"))
+            .schema(include_str!("edit_file.schema.json"))
+            .paths(["path"])
+            .handler(run)
+            .build()
     }
 }
 
@@ -118,10 +118,9 @@ mod tests {
             )
             .await;
 
-        let (ToolResult::Success(out) | ToolResult::Error(out) | ToolResult::SchemaError(out)) =
-            &result;
+        let out = result.content();
         assert!(
-            matches!(result, ToolResult::Success(_)),
+            matches!(result, ToolResult::Success { .. }),
             "unexpected error: {out}"
         );
         let content = std::fs::read_to_string(dir.path().join("f.txt")).unwrap();
@@ -148,7 +147,7 @@ mod tests {
             .await;
 
         let content = result.content();
-        assert!(matches!(result, ToolResult::Error(_)));
+        assert!(matches!(result, ToolResult::Error { .. }));
         assert!(content.contains("2"));
     }
 
@@ -172,10 +171,9 @@ mod tests {
             )
             .await;
 
-        let (ToolResult::Success(out) | ToolResult::Error(out) | ToolResult::SchemaError(out)) =
-            &result;
+        let out = result.content();
         assert!(
-            matches!(result, ToolResult::Success(_)),
+            matches!(result, ToolResult::Success { .. }),
             "unexpected error: {out}"
         );
         let content = std::fs::read_to_string(dir.path().join("f.txt")).unwrap();
@@ -202,7 +200,7 @@ mod tests {
             .await;
 
         let content = result.content();
-        assert!(matches!(result, ToolResult::Error(_)));
+        assert!(matches!(result, ToolResult::Error { .. }));
         assert!(content.contains("not found"));
     }
 }

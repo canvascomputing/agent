@@ -408,6 +408,7 @@ tickets.ticket(Ticket::new("Write a report.").schema(schema));
 |-|--------|-------------|
 | **Schema** | `Schema::new(document)` | Create a schema. |
 | | `validate(value)` | Validate content. |
+| | `get_raw_schema()` | Read the JSON Schema document the schema was built from. |
 | **SchemaStore** | `SchemaStore::new()` | Create a store of schemas bound to labels. |
 | | `label(label, document)` | Bind a schema to a label. |
 | | `get(label)` | Read back the schema bound to a label. |
@@ -561,17 +562,22 @@ Describe the tool, then hand it the code it runs:
 use agentwerk::tools::{Tool, ToolResult};
 use serde_json::Value;
 
-let greet = Tool::new("greet", "Say hello", |input: Value, _context| async move {
-    let name = input["name"].as_str().unwrap_or("world");
-    ToolResult::success(format!("Hello, {name}!"))
-})
-.schema(json!({
-    "type": "object",
-    "properties": { "name": { "type": "string" } },
-    "required": ["name"]
-}))
-.concurrent(true);
+let greet = Tool::new("greet")
+    .description("Say hello")
+    .schema(json!({
+        "type": "object",
+        "properties": { "name": { "type": "string" } },
+        "required": ["name"]
+    }))
+    .concurrent(true)
+    .handler(|input: Value, _context| async move {
+        let name = input["name"].as_str().unwrap_or("world");
+        ToolResult::success(format!("Hello, {name}!"))
+    })
+    .build();
 ```
+
+Return `ToolResult::error(message)` for a failure the model should work around.
 
 See [`Tool`](https://docs.rs/agentwerk/latest/agentwerk/tools/struct.Tool.html).
 

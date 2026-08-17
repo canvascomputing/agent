@@ -531,15 +531,16 @@ mod tests {
         let agent = Agent::new().tools(vec![
             Tool::from(ReadFileTool),
             CommandTool::new("git").allow("git *").into(),
-            Tool::new("greet", "Say hello.", |_: serde_json::Value, _| async {
-                ToolResult::success("hi")
-            }),
+            Tool::new("greet")
+                .description("Say hello.")
+                .handler(|_: serde_json::Value, _| async { ToolResult::success("hi") })
+                .build(),
         ]);
         let names: Vec<String> = agent
             .tool_registry()
-            .definitions(None)
+            .tools()
             .into_iter()
-            .map(|definition| definition.name)
+            .map(|tool| tool.name().to_string())
             .collect();
         for name in ["read_file", "git", "greet"] {
             assert!(names.contains(&name.to_string()), "{names:?}");
@@ -712,9 +713,9 @@ mod tests {
         let agent = Agent::new();
         let registry = agent.tool_registry();
         let names: Vec<String> = registry
-            .definitions(None)
+            .tools()
             .into_iter()
-            .map(|definition| definition.name)
+            .map(|tool| tool.name().to_string())
             .collect();
         assert!(names.iter().any(|n| n == "finish"));
     }
@@ -811,9 +812,9 @@ mod tests {
         let agent = Agent::new().knowledge(&store);
         let registry = agent.tool_registry();
         let names: Vec<String> = registry
-            .definitions(None)
+            .tools()
             .into_iter()
-            .map(|definition| definition.name)
+            .map(|tool| tool.name().to_string())
             .collect();
         assert!(
             names.iter().any(|n| n == "knowledge"),
@@ -904,9 +905,9 @@ mod tests {
         let agent = Agent::new();
         let registry = agent.tool_registry();
         let names: Vec<String> = registry
-            .definitions(None)
+            .tools()
             .into_iter()
-            .map(|definition| definition.name)
+            .map(|tool| tool.name().to_string())
             .collect();
         assert!(
             names.iter().any(|n| n == "knowledge"),

@@ -1,8 +1,3 @@
----
-name: write_file
-concurrent: false
----
-
 Create a new file or overwrite an existing one in one shot (no append mode); parent directories are created automatically. `path` resolves against the working directory. Returns a one-line confirmation.
 
 - ALWAYS `read_file` an existing file before overwriting it, or you are guessing what you destroy. The overwrite is recoverable only from version control or a backup.

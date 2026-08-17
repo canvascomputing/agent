@@ -1,8 +1,3 @@
----
-name: grep
-concurrent: true
----
-
 Search file contents under the working directory. `pattern` is a regular expression by default; set `syntax: "code"` to match a call or code shape without escaping. Every file is searched, including hidden and gitignored ones, so narrow with the `path`, `glob`, or `type` arguments.
 
 - Prefer a few narrow parallel searches over one broad one.

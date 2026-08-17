@@ -1,8 +1,3 @@
----
-name: edit_file
-concurrent: false
----
-
 Replace one or more occurrences of a string inside an existing file, preserving the rest byte-for-byte. `old_string` must match exactly, including indentation and whitespace. Returns how many occurrences were replaced.
 
 - ALWAYS `read_file` first; otherwise `old_string` is a guess, likely absent or ambiguous.

@@ -1,8 +1,3 @@
----
-name: command
-concurrent: false
----
-
 Execute one command in the working directory and return its output. A command the patterns below do not permit is rejected before it runs.
 
 - No shell: `&`, `|`, `;`, `<`, `>`, `(`, `)`, `$(...)` and backticks are rejected. Make one call per command.

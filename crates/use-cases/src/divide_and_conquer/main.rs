@@ -205,12 +205,24 @@ fn partial_sum_schema() -> Schema {
 }
 
 fn python_tool() -> Tool {
-    Tool::new(
-        "python",
-        "Run a short Python 3 snippet. The `code` field is passed directly to \
-         `python3 -c`. Return value is the snippet's stdout, trimmed. Use this \
-         for exact integer arithmetic.",
-        |input: serde_json::Value, ctx| async move {
+    Tool::new("python")
+        .description(
+            "Run a short Python 3 snippet. The `code` field is passed directly to \
+             `python3 -c`. Return value is the snippet's stdout, trimmed. Use this \
+             for exact integer arithmetic.",
+        )
+        .schema(json!({
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "string",
+                    "description": "Python 3 source. Must print the result to stdout."
+                }
+            },
+            "required": ["code"]
+        }))
+        .concurrent(true)
+        .handler(|input: serde_json::Value, ctx| async move {
             let code = input
                 .get("code")
                 .and_then(|v| v.as_str())
@@ -240,19 +252,8 @@ fn python_tool() -> Tool {
                     }
                 }
             }
-        },
-    )
-    .schema(json!({
-        "type": "object",
-        "properties": {
-            "code": {
-                "type": "string",
-                "description": "Python 3 source. Must print the result to stdout."
-            }
-        },
-        "required": ["code"]
-    }))
-    .concurrent(true)
+        })
+        .build()
 }
 
 fn build_event_handler(

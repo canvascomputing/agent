@@ -23,12 +23,12 @@ pub struct WriteFileArgs {
 
 impl From<WriteFileTool> for Tool {
     fn from(_: WriteFileTool) -> Tool {
-        Tool::from_tool_file(
-            include_str!("write_file.tool.md"),
-            include_str!("write_file.schema.json"),
-            run,
-        )
-        .paths(["path"])
+        Tool::new("write_file")
+            .description(include_str!("write_file.tool.md"))
+            .schema(include_str!("write_file.schema.json"))
+            .paths(["path"])
+            .handler(run)
+            .build()
     }
 }
 
@@ -105,7 +105,7 @@ mod tests {
             )
             .await;
 
-        assert!(matches!(result, ToolResult::Success(_)));
+        assert!(matches!(result, ToolResult::Success { .. }));
         let written = std::fs::read_to_string(dir.path().join("existing.txt")).unwrap();
         assert_eq!(written, "new content");
     }
@@ -123,7 +123,7 @@ mod tests {
             )
             .await;
 
-        assert!(matches!(result, ToolResult::Success(_)));
+        assert!(matches!(result, ToolResult::Success { .. }));
         let written = std::fs::read_to_string(dir.path().join("a/b/c/deep.txt")).unwrap();
         assert_eq!(written, "nested");
     }

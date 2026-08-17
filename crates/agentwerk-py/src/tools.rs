@@ -78,14 +78,6 @@ impl PyToolResult {
             inner: ToolResult::error(content),
         }
     }
-
-    /// The input was malformed. It counts against `max_schema_retries`.
-    #[staticmethod]
-    fn schema_error(content: String) -> Self {
-        PyToolResult {
-            inner: ToolResult::schema_error(content),
-        }
-    }
 }
 
 /// Read a usable tool out of whatever Python passed to `.tool(...)`: a built-in
@@ -105,7 +97,7 @@ pub fn extract_tool(obj: &Bound<'_, PyAny>) -> PyResult<Tool> {
         let document = py_to_value(&obj.getattr("_agentwerk_schema")?)?;
         // Reported here rather than absorbed: a schema that does not compile
         // would leave this tool checked against nothing, and the author is
-        // right here to fix it. `Tool::schema` below cannot panic on a
+        // right here to fix it. `ToolBuilder::schema` below cannot panic on a
         // document this compiled.
         Schema::new(document.clone()).map_err(|error| {
             pyo3::exceptions::PyValueError::new_err(format!(
@@ -113,28 +105,34 @@ pub fn extract_tool(obj: &Bound<'_, PyAny>) -> PyResult<Tool> {
             ))
         })?;
         let func = obj.clone().unbind();
-        let tool = Tool::new(name, description, move |input: Value, _ctx: ToolContext| {
-            let func = Python::attach(|py| func.clone_ref(py));
-            async move {
-                // Concurrent tool calls are spawned onto a multi-thread
-                // runtime, so the GIL work must run on a blocking thread, not
-                // the async worker.
-                let outcome: Result<ToolResult, String> = tokio::task::spawn_blocking(move || {
-                    Python::attach(|py| invoke_python(py, &func, &input).map_err(|e| e.to_string()))
-                })
-                .await
-                .unwrap_or_else(|join| Err(format!("tool thread panicked: {join}")));
-                // A Python exception is a recoverable failure shown back to
-                // the model, not a hard error that stops the run.
-                match outcome {
-                    Ok(result) => result,
-                    Err(message) => ToolResult::error(message),
+        let tool = Tool::new(name)
+            .description(description)
+            .schema(document)
+            .concurrent(concurrent)
+            .paths(paths)
+            .handler(move |input: Value, _ctx: ToolContext| {
+                let func = Python::attach(|py| func.clone_ref(py));
+                async move {
+                    // Concurrent tool calls are spawned onto a multi-thread
+                    // runtime, so the GIL work must run on a blocking thread,
+                    // not the async worker.
+                    let outcome: Result<ToolResult, String> =
+                        tokio::task::spawn_blocking(move || {
+                            Python::attach(|py| {
+                                invoke_python(py, &func, &input).map_err(|e| e.to_string())
+                            })
+                        })
+                        .await
+                        .unwrap_or_else(|join| Err(format!("tool thread panicked: {join}")));
+                    // A Python exception is a recoverable failure shown back to
+                    // the model, not a hard error that stops the run.
+                    match outcome {
+                        Ok(result) => result,
+                        Err(message) => ToolResult::error(message),
+                    }
                 }
-            }
-        })
-        .schema(document)
-        .concurrent(concurrent)
-        .paths(paths);
+            })
+            .build();
         return Ok(tool);
     }
     Err(pyo3::exceptions::PyTypeError::new_err(

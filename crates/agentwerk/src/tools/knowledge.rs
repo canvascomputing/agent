@@ -75,14 +75,14 @@ pub enum KnowledgeArgs {
 impl From<KnowledgeTool> for Tool {
     fn from(tool: KnowledgeTool) -> Tool {
         let store = tool.store;
-        Tool::from_tool_file(
-            include_str!("knowledge.tool.md"),
-            include_str!("knowledge.schema.json"),
-            move |args: KnowledgeArgs, ctx: ToolContext| {
+        Tool::new("knowledge")
+            .description(include_str!("knowledge.tool.md"))
+            .schema(include_str!("knowledge.schema.json"))
+            .handler(move |args: KnowledgeArgs, ctx: ToolContext| {
                 let store = Arc::clone(&store);
                 async move { run(&store, args, &ctx) }
-            },
-        )
+            })
+            .build()
     }
 }
 
@@ -202,7 +202,7 @@ mod tests {
 
     fn assert_success(result: &ToolResult, fragment: &str) {
         match result {
-            ToolResult::Success(s) => {
+            ToolResult::Success { content: s, .. } => {
                 assert!(s.contains(fragment), "expected `{fragment}` in `{s}`")
             }
             other => panic!("expected Success, got {other:?}"),
@@ -277,7 +277,7 @@ mod tests {
             &ctx(),
         );
         match &r {
-            ToolResult::Success(s) => {
+            ToolResult::Success { content: s, .. } => {
                 assert!(!s.contains("---"));
                 assert!(!s.contains("timestamp:"));
             }

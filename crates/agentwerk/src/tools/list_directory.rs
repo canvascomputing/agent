@@ -31,11 +31,12 @@ fn here() -> String {
 
 impl From<ListDirectoryTool> for Tool {
     fn from(_: ListDirectoryTool) -> Tool {
-        Tool::from_tool_file(
-            include_str!("list_directory.tool.md"),
-            include_str!("list_directory.schema.json"),
-            run,
-        )
+        Tool::new("list_directory")
+            .description(include_str!("list_directory.tool.md"))
+            .schema(include_str!("list_directory.schema.json"))
+            .concurrent(true)
+            .handler(run)
+            .build()
     }
 }
 
@@ -197,7 +198,7 @@ mod tests {
             )
             .await;
 
-        let ToolResult::Error(content) = &result else {
+        let ToolResult::Error { content, .. } = &result else {
             panic!("listing a file should return an error result, got {result:?}");
         };
         assert!(
@@ -216,7 +217,7 @@ mod tests {
             .call(serde_json::json!({ "path": "nope" }), &test_ctx(tmp.path()))
             .await;
 
-        let ToolResult::Error(content) = &result else {
+        let ToolResult::Error { content, .. } = &result else {
             panic!("a missing directory should return an error result, got {result:?}");
         };
         assert!(
@@ -244,7 +245,7 @@ mod tests {
             )
             .await;
 
-        let ToolResult::Error(content) = &result else {
+        let ToolResult::Error { content, .. } = &result else {
             panic!("a missing directory should return an error result, got {result:?}");
         };
         assert!(

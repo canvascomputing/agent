@@ -20,8 +20,7 @@ pub(super) async fn run(context: &mut TicketContext<'_>) -> Option<Step> {
     let Some(ticket) = context.ticket() else {
         return None;
     };
-    let registry = context.agent.tool_registry();
-    let tools = registry.definitions(ticket.schema.as_ref());
+    let tools = context.tools.tools();
     let model_name = context.model.name.clone();
     context.emit(EventKind::RequestStarted {
         model: model_name.clone(),
@@ -32,7 +31,6 @@ pub(super) async fn run(context: &mut TicketContext<'_>) -> Option<Step> {
         messages: ticket.to_messages(),
         tools,
         max_request_tokens: context.policies.max_request_tokens,
-        tool_choice: None,
         reasoning_effort: context.model.get_reasoning_effort(),
     };
 
@@ -188,6 +186,33 @@ mod tests {
         let failures = failures_in(&events);
         assert!(!failures.is_empty());
         assert!(failures[0].contains("rate limited"));
+    }
+
+    #[tokio::test]
+    async fn the_finish_tool_the_model_is_shown_carries_the_tickets_schema() {
+        use crate::schemas::Schema;
+        let schema = Schema::new(serde_json::json!({
+            "type": "object",
+            "properties": { "verdict": { "type": "string" } },
+            "required": ["verdict"],
+        }))
+        .expect("valid schema");
+        let provider = MockProvider::with_results(vec![Ok(write_result_value(
+            serde_json::json!({"verdict": "safe"}),
+        ))]);
+        let (_, provider, _) = run_one(provider, 3, 10, Some(schema)).await;
+
+        let tools = provider.received_tools();
+        let finish = tools[0]
+            .iter()
+            .find(|tool| tool.name() == "finish")
+            .expect("finish is sent with every request");
+        let shown = finish.input_schema().get_raw_schema();
+        assert!(
+            shown["properties"]["result"]["properties"]["verdict"].is_object(),
+            "{shown}"
+        );
+        assert_eq!(shown["required"], serde_json::json!(["result"]), "{shown}");
     }
 
     #[tokio::test]
@@ -498,9 +523,10 @@ mod tests {
             Ok(tool_call_response("boom")),
             Ok(write_result_response("done")),
         ]);
-        let boom = Tool::new("boom", "Always fails", |_: Value, _| async move {
-            ToolResult::error("boom")
-        });
+        let boom = Tool::new("boom")
+            .description("Always fails")
+            .handler(|_: Value, _| async move { ToolResult::error("boom") })
+            .build();
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let tickets = TicketQueue::new();
         tickets

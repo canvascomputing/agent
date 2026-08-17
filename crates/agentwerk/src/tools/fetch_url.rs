@@ -35,11 +35,12 @@ fn default_max_length() -> usize {
 
 impl From<FetchUrlTool> for Tool {
     fn from(_: FetchUrlTool) -> Tool {
-        Tool::from_tool_file(
-            include_str!("fetch_url.tool.md"),
-            include_str!("fetch_url.schema.json"),
-            run,
-        )
+        Tool::new("fetch_url")
+            .description(include_str!("fetch_url.tool.md"))
+            .schema(include_str!("fetch_url.schema.json"))
+            .concurrent(true)
+            .handler(run)
+            .build()
     }
 }
 

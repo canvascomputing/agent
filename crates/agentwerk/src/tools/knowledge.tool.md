@@ -1,8 +1,3 @@
----
-name: knowledge
-concurrent: false
----
-
 Read or write pages in your knowledge: durable facts shared across tickets and agents, injected into every ticket's system prompt. The store is an Open Knowledge Format (OKF) bundle. `write` creates or replaces a whole page, `read` loads one body, `list` shows every page with its one-line description.
 
 - Save a durable fact later tickets need; one topic per page, with a descriptive slug (`deployment-config`, `pkg-utils-py`).

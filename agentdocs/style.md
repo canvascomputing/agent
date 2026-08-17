@@ -88,7 +88,7 @@ InvalidRequest, UnexpectedStatus, MissingKey, RequestError               // reje
 **A directory path uses `_dir`. A file path uses `_file`. The bare suffix `_path` is used only when the value can be either.**
 
 - Directories: `results_dir`, `knowledge_dir`, `ticket_dir`, `working_dir`. Matches `std::fs::read_dir`, `std::env::current_dir`, `std::fs::DirEntry`.
-- Files: `page_file`, `tool_file`. The value is always a concrete file on disk.
+- Files: `page_file`. The value is always a concrete file on disk.
 - `_path` is for genuinely ambiguous cases: input that could name either, or a value passed through as opaque.
 - IMPORTANT: `folder` is never used; it has no std analog.
 - Doc comments and environment labels may still say "working directory" in English prose.
@@ -199,7 +199,7 @@ edit_replies(key, editor)            // act once, now
 
 **Every public Rust item has a Python counterpart of the same name. Six transforms are permitted; nothing else.**
 
-- Type-state collapses: `AgentBuilder<P, M>` folds into the class it builds and takes its name, so the builder type has no Python counterpart. The collapsed class validates at `build()`.
+- Type-state collapses: `AgentBuilder<P, M>` and `ToolBuilder<D, H>` fold into the class they build and take its name, so the builder type has no Python counterpart. The collapsed class validates at `build()`.
 - `Duration` becomes float seconds: the parameter keeps its name and the unit moves into the docstring.
 - A fieldless enum becomes its snake_case `Display` string. That `Display` impl is the single source, so the binding never formats a variant with `{:?}`.
 - An enum whose variants carry fields becomes a class with a `kind` string, a `data` dict, and one static constructor per variant. `Event` and `ReplyContent` are the two; a bare dict would make callers hand-build a tagged shape.
@@ -228,7 +228,7 @@ Forbidden:
 
 Naming is `snake_case`. Tool structs keep the `{Name}Tool` suffix: `ReadFileTool`, `CommandTool`, `TicketsTool`.
 
-The name the model calls is a separate namespace and takes no suffix: `read_file`, `grep`, `tickets`. It lives in the tool's `.tool.md` frontmatter, never as a Rust literal at a call site. A `_tool` suffix there restates what the tools array already says.
+The name the model calls is a separate namespace and takes no suffix: `read_file`, `grep`, `tickets`. It is written once, in the tool's `From<XTool> for Tool` conversion, and never at a call site: a host registers `ReadFileTool`, not the string. A `_tool` suffix restates what the tools array already says.
 
 ## Doc Comments (`///`)
 
@@ -260,8 +260,8 @@ The name the model calls is a separate namespace and takes no suffix: `read_file
 
 **A type a public trait or extension point hands to callers is documented; a genuinely internal type is `pub(crate)`.**
 
-- The request and response types under `providers::` (`Message`, `ContentBlock`, `ModelRequest`, `ToolDefinition`, `ToolChoice`, `StreamEvent`, `ModelResponse`, `ResponseStatus`) are documented: implementing `ProviderLike` is supported, and implementors name them.
-- A type that is genuinely internal becomes `pub(crate)` instead. `tools::ToolFile` is the example: callers go through `Tool::from_tool_file(definition, schema, handler)` and never name the struct.
+- The request and response types under `providers::` (`Message`, `ContentBlock`, `ModelRequest`, `StreamEvent`, `ModelResponse`, `ResponseStatus`) are documented: implementing `ProviderLike` is supported, and implementors name them.
+- A type that is genuinely internal becomes `pub(crate)` instead. `tools::ToolRegistry` is the example: callers reach it through `Agent::tool(..)` and never name the struct.
 - `#[doc(hidden)]` is reserved for items a macro or trait forces `pub` that are useless even to implementors; there are currently none.
 
 ## Line Comments (`//`)

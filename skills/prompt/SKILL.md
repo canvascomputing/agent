@@ -94,14 +94,9 @@ NOTE: <what this ticket is not>
 
 ## Tool definition
 
-`*.tool.md`, parsed by `tool_file.rs`: frontmatter and prose body. The input schema lives in a sibling `*.schema.json`.
+`*.tool.md`, the prose body and nothing else: the tool's `From<XTool> for Tool` conversion reads it through `.description(include_str!(..))`, and states the name and concurrency in Rust. The input schema lives in a sibling `*.schema.json`.
 
 `````markdown
----
-name: <the name the model calls, no `_tool` suffix>
-read_only: <true|false>
----
-
 <Imperative one-liner: the agent acts, the tool exposes the action. Then what it returns, and its limits.>
 
 - <constraint the model needs to call it correctly>

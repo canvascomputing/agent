@@ -34,12 +34,13 @@ fn first_line() -> u64 {
 
 impl From<ReadFileTool> for Tool {
     fn from(_: ReadFileTool) -> Tool {
-        Tool::from_tool_file(
-            include_str!("read_file.tool.md"),
-            include_str!("read_file.schema.json"),
-            run,
-        )
-        .paths(["path"])
+        Tool::new("read_file")
+            .description(include_str!("read_file.tool.md"))
+            .schema(include_str!("read_file.schema.json"))
+            .concurrent(true)
+            .paths(["path"])
+            .handler(run)
+            .build()
     }
 }
 
@@ -268,7 +269,7 @@ mod tests {
 
         for case in cases {
             let result = Tool::from(ReadFileTool).call(case.input, &ctx).await;
-            let is_error = matches!(result, ToolResult::Error(_));
+            let is_error = matches!(result, ToolResult::Error { .. });
             let content = result.content();
             assert_eq!(
                 is_error, case.expect_error,
@@ -296,7 +297,7 @@ mod tests {
             .call(serde_json::json!({ "path": "." }), &test_ctx(dir.path()))
             .await;
 
-        let ToolResult::Error(content) = &result else {
+        let ToolResult::Error { content, .. } = &result else {
             panic!("reading a directory should return an error result, got {result:?}");
         };
         assert!(content.contains("is a directory"), "got {content:?}");
@@ -321,7 +322,7 @@ mod tests {
             )
             .await;
 
-        let ToolResult::Success(content) = &result else {
+        let ToolResult::Success { content, .. } = &result else {
             panic!("a non-UTF-8 file should read lossily, not error, got {result:?}");
         };
         // The readable text survives; the bad byte becomes the replacement char.
@@ -346,7 +347,7 @@ mod tests {
             )
             .await;
 
-        let ToolResult::Success(content) = &result else {
+        let ToolResult::Success { content, .. } = &result else {
             panic!("a binary file should report concisely as success, got {result:?}");
         };
         assert!(content.contains("binary file"), "got {content:?}");
@@ -370,7 +371,7 @@ mod tests {
             )
             .await;
 
-        let ToolResult::Error(content) = &result else {
+        let ToolResult::Error { content, .. } = &result else {
             panic!("a missing file should return an error result, got {result:?}");
         };
         assert!(content.contains("File does not exist"), "got {content:?}");
@@ -397,7 +398,7 @@ mod tests {
             )
             .await;
 
-        let ToolResult::Error(content) = &result else {
+        let ToolResult::Error { content, .. } = &result else {
             panic!("a missing file should return an error result, got {result:?}");
         };
         assert!(content.contains("File does not exist"), "got {content:?}");
@@ -423,7 +424,7 @@ mod tests {
             )
             .await;
 
-        let ToolResult::Success(content) = &result else {
+        let ToolResult::Success { content, .. } = &result else {
             panic!("offset past EOF should succeed with an empty slice, got {result:?}");
         };
         assert_eq!(content, "");
@@ -442,7 +443,7 @@ mod tests {
             )
             .await;
 
-        let ToolResult::Success(content) = &result else {
+        let ToolResult::Success { content, .. } = &result else {
             panic!("slicing mid-codepoint should succeed, got {result:?}");
         };
         // The slice starts at the next char boundary instead of splitting 'é'.

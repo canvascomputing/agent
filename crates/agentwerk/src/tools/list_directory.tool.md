@@ -1,8 +1,3 @@
----
-name: list_directory
-concurrent: true
----
-
 List a directory's entries to survey an unfamiliar layout. Output is one entry per line, sorted alphabetically: a directory ends in `/`, a symlink ends in `@`, a file shows its size as `<name>  <size_bytes> bytes`.
 
 - The suffix marks the type and is not part of the name: listing or reading `foo/` as a path fails.

@@ -182,12 +182,13 @@ Seven rules the surface table below never repeats.
 | `ProviderError`, `ProviderResult`, `RequestErrorKind` | `RuntimeError` |
 | `ModelRequest`, `Message`, `AsUserMessage`, `ContentBlock`, `ModelResponse`, `ResponseStatus`, `StreamEvent` | Not bound: the shapes an LLM provider is built from. Python binds the four providers, not what they are built out of. |
 | **Tools** | |
-| `Tool::new(name, description, handler).schema(..)` | The `@tool` decorator: a decorated function carries the name, description, and schema. |
+| `Tool::new(name).description(..).schema(..).handler(..).build()` | The `@tool` decorator: a decorated function carries the name, description, and schema. |
 | `Tool` | `Tool`: an opaque handle the built-in tool functions return. An ad-hoc tool is a decorated function, not a `Tool`. |
-| `Tool::from_tool_file(definition, schema, handler)` | Not bound: write the name, description, and schema on the Python function instead. |
-| `Tool::concurrent(b)` | `@tool(concurrent=..)` |
-| `Tool::paths(fields)` | `@tool(paths=[..])` |
-| `Tool::schema(document)` panics on a document that does not compile | `@tool(schema=..)` raises `ValueError` when `.tool(fn)` registers it: a decorator runs before the schema is read, so the failure surfaces one call later. |
+| `ToolBuilder<D, H>` | Folded into the `@tool` decorator: the type changes as the description and handler are attached, which Python cannot hold across calls. |
+| `ToolBuilder::description(text)` | `@tool(description=..)`, defaulting to the decorated function's docstring. |
+| `ToolBuilder::concurrent(b)` | `@tool(concurrent=..)` |
+| `ToolBuilder::paths(fields)` | `@tool(paths=[..])` |
+| `ToolBuilder::schema(document)` panics on a document that does not compile | `@tool(schema=..)` raises `ValueError` when `.tool(fn)` registers it: a decorator runs before the schema is read, so the failure surfaces one call later. |
 | `ToolContext` | Not bound: a `@tool` function receives its input as keyword arguments only. |
 | `ToolResult::success(c)`, `::error(c)` | `ToolResult.success(content)`, `.error(content)` |
 | `ReadFileTool` | `ReadFileTool()`: the unit struct converts to a `Tool`; Python spells the conversion as a call. |

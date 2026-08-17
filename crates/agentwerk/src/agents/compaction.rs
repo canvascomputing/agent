@@ -10,8 +10,8 @@ use crate::prompts::compaction_directive;
 use crate::providers::types::StreamEvent;
 use crate::providers::{
     ContentBlock, Message, ModelRequest, Provider, ProviderError, ProviderResult, TokenUsage,
-    ToolDefinition,
 };
+use crate::tools::Tool;
 
 /// How full the context window gets before compaction fires, when the host
 /// sets no fraction of its own. What is left over covers the model's response
@@ -39,12 +39,12 @@ pub(crate) fn estimate_next_request_tokens(
     history: &[TokenUsage],
     messages: &[Message],
     system_prompt: &str,
-    tools: &[ToolDefinition],
+    tools: &[Tool],
 ) -> u64 {
     let last_input = history.last().map(|u| u.input_tokens).unwrap_or(0);
     let bytes = messages.iter().map(message_bytes).sum::<usize>()
         + system_prompt.len()
-        + tools.iter().map(tool_definition_bytes).sum::<usize>();
+        + tools.iter().map(tool_bytes).sum::<usize>();
     last_input + (bytes / 4) as u64
 }
 
@@ -81,8 +81,9 @@ fn block_bytes(block: &ContentBlock) -> usize {
     }
 }
 
-fn tool_definition_bytes(tool: &ToolDefinition) -> usize {
-    tool.name.len() + tool.description.len() + tool.input_schema.to_string().len()
+fn tool_bytes(tool: &Tool) -> usize {
+    let schema = tool.input_schema().get_raw_schema();
+    tool.name().len() + tool.description().len() + schema.to_string().len()
 }
 
 /// `true` when the estimated next-request input plus one more turn's
@@ -96,7 +97,7 @@ pub(crate) fn should_compact_proactively(
     history: &[TokenUsage],
     messages: &[Message],
     system_prompt: &str,
-    tools: &[ToolDefinition],
+    tools: &[Tool],
 ) -> bool {
     let Some(threshold) = compaction_threshold(window, compact_at) else {
         return false;
@@ -181,7 +182,6 @@ impl Compaction {
                 messages: chunk.clone(),
                 tools: Vec::new(),
                 max_request_tokens: None,
-                tool_choice: None,
                 // The summarizer does not think; capture only the summary text.
                 reasoning_effort: Default::default(),
             };
@@ -318,6 +318,8 @@ fn find_split_index(text: &str, target: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tools::ToolResult;
+    use serde_json::Value;
 
     #[test]
     fn the_default_fraction_applies_when_none_is_set() {
@@ -368,20 +370,19 @@ mod tests {
     }
 
     #[test]
-    fn estimate_includes_system_prompt_and_tool_definitions() {
+    fn estimate_includes_system_prompt_and_tools() {
         // bytes = system_prompt + tool(name+description+schema) + message
-        //       = 100 + (3 + 50 + "{}".len()) + 4 = 159
-        // estimate = 0 + 159/4 = 39
+        //       = 100 + (3 + 50 + r#"{"type":"object","properties":{}}"#.len()) + 4 = 190
+        // estimate = 0 + 190/4 = 47
         let history = [TokenUsage::default()];
         let messages = [Message::user("hi!!")];
-        let tools = vec![ToolDefinition {
-            name: "tot".into(),
-            description: "x".repeat(50),
-            input_schema: serde_json::json!({}),
-        }];
+        let tools = vec![Tool::new("tot")
+            .description("x".repeat(50))
+            .handler(|_: Value, _| async { ToolResult::success("") })
+            .build()];
         let system_prompt = "x".repeat(100);
         let got = estimate_next_request_tokens(&history, &messages, &system_prompt, &tools);
-        assert_eq!(got, 39);
+        assert_eq!(got, 47);
     }
 
     #[test]
@@ -811,7 +812,6 @@ mod tests {
 
         let request = provider.last_request().expect("provider was called");
         assert!(request.tools.is_empty(), "tools must be disabled");
-        assert!(request.tool_choice.is_none(), "tool_choice must be unset");
         // The system reply carries the system prompt, which travels in its own
         // field rather than as a message.
         assert_eq!(request.messages.len(), replies.len() - 1);

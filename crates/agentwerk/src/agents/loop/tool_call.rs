@@ -1,31 +1,35 @@
 //! Runs the tools a model asks for, writes out oversized results, and counts
 //! consecutive failures against the retry budget.
 
+use std::sync::Arc;
+
+use crate::agents::tickets::Reply;
 use crate::event::{EventKind, PolicyKind, RepairKind, ToolFailureKind};
-use crate::prompts::arguments_retry_detail;
 use crate::providers::ContentBlock;
-use crate::tools::{cap_results, ToolCall, ToolContext, ToolResult};
+use crate::tools::{ToolCall, ToolContext, ToolResult};
 
 use super::agent::TicketContext;
 use super::Step;
 
 pub(super) async fn run(context: &mut TicketContext<'_>, mut calls: Vec<ToolCall>) -> Option<Step> {
     let max_schema_retries = context.policies.max_schema_retries.unwrap_or(u32::MAX);
+    let registry = context.tools.clone();
 
     // Report the registered name, so a model alternating spellings of one tool
     // still reports every call under the one name a handler counts by.
     for call in &mut calls {
-        if let Some(tool) = context.agent.tool_registry().get(&call.name) {
-            let registered = tool.name().to_string();
-            if registered != call.name {
-                context.emit(EventKind::ResponseRepaired {
-                    tool_name: registered.clone(),
-                    reason: RepairKind::CallMalformed,
-                    message: format!("resolved from `{}`", call.name),
-                });
-            }
-            call.name = registered;
+        let Some(tool) = registry.get(&call.name) else {
+            continue;
+        };
+        let registered = tool.name().to_string();
+        if registered != call.name {
+            context.emit(EventKind::ResponseRepaired {
+                tool_name: registered.clone(),
+                reason: RepairKind::CallMalformed,
+                message: format!("resolved from `{}`", call.name),
+            });
         }
+        call.name = registered;
     }
 
     for call in &calls {
@@ -35,108 +39,111 @@ pub(super) async fn run(context: &mut TicketContext<'_>, mut calls: Vec<ToolCall
             input: call.input.clone(),
         });
     }
+
     let tool_context = ToolContext::new(context.agent.dir())
-        .run(std::sync::Arc::clone(&context.run))
-        .ticket_queue(std::sync::Arc::clone(context.ticket_queue))
+        .run(Arc::clone(&context.run))
+        .ticket_queue(Arc::clone(context.ticket_queue))
         .agent_id(context.agent.get_id().to_string())
         .ticket_key(context.ticket_key.clone())
         .knowledge(context.agent.knowledge());
-    let ticket_schema = context.ticket().and_then(|ticket| ticket.schema);
-    let registry = context.agent.tool_registry();
-    let mut results = registry.execute(&calls, &tool_context).await;
-    let paths = cap_results(&calls, &mut results, &tool_context);
 
-    let mut schema_failure: Option<(String, String)> = None;
+    let results = registry.execute(&calls, &tool_context).await;
+
+    let mut first_schema_failure: Option<String> = None;
     for (call, result) in calls.iter().zip(&results) {
-        // The files this call opened. Feeds the per-path open tally;
-        // empty for tools that open no file.
+        // Feeds the per-path open tally; empty for a tool that opens no file.
         let opened_paths = registry
             .get(&call.name)
             .map(|tool| tool.opened_paths(&call.input))
             .unwrap_or_default();
-        // The fold above renamed every call the registry resolves, so a name
-        // it still does not know is the unknown-tool failure.
         let reason = match result {
-            ToolResult::Success(_) => None,
-            _ if registry.get(&call.name).is_none() => Some(ToolFailureKind::ToolNotFound),
-            ToolResult::Error(_) => Some(ToolFailureKind::ExecutionFailed),
-            ToolResult::SchemaError(_) => Some(ToolFailureKind::SchemaValidationFailed),
+            ToolResult::Success { .. } => None,
+            ToolResult::Error { kind, .. } => Some(*kind),
         };
-        match reason {
-            None => {
-                // Any successful tool call is progress: clear the counter.
-                context.consecutive_schema_failures = 0;
-                for path in &opened_paths {
-                    context.emit(EventKind::FileOpenFinished { path: path.clone() });
-                }
-                context.emit(EventKind::ToolCallFinished {
-                    tool_name: call.name.clone(),
-                    call_id: call.id.clone(),
-                    output: result.content().to_string(),
-                });
-            }
-            Some(reason) => {
-                // Any tool failure (bad arguments, unknown tool, schema
-                // mismatch) counts toward the budget, so a stuck agent
-                // fails its ticket instead of looping until the time limit.
-                context.consecutive_schema_failures =
-                    context.consecutive_schema_failures.saturating_add(1);
-                if reason == ToolFailureKind::SchemaValidationFailed && schema_failure.is_none() {
-                    schema_failure = Some((call.name.clone(), result.content().to_string()));
-                }
-                // A path fails with the call that named it, so it carries the
-                // call's reason.
-                for path in &opened_paths {
-                    context.emit(EventKind::FileOpenFailed {
-                        path: path.clone(),
-                        reason,
+
+        let Some(reason) = reason else {
+            // Any successful tool call is progress: clear the counter.
+            context.consecutive_schema_failures = 0;
+            if let ToolResult::Success { repaired, .. } = result {
+                for message in repaired {
+                    context.emit(EventKind::ResponseRepaired {
+                        tool_name: call.name.clone(),
+                        reason: RepairKind::ValueMistyped,
+                        message: message.clone(),
                     });
                 }
-                context.emit(EventKind::ToolCallFailed {
-                    tool_name: call.name.clone(),
-                    call_id: call.id.clone(),
-                    reason,
-                    message: result.content().to_string(),
-                });
             }
+            for path in &opened_paths {
+                context.emit(EventKind::FileOpenFinished { path: path.clone() });
+            }
+            context.emit(EventKind::ToolCallFinished {
+                tool_name: call.name.clone(),
+                call_id: call.id.clone(),
+                output: result.content().to_string(),
+            });
+            continue;
+        };
+
+        // Every tool failure counts toward the budget, so a stuck agent fails
+        // its ticket instead of looping until the time limit.
+        context.consecutive_schema_failures = context.consecutive_schema_failures.saturating_add(1);
+        if reason == ToolFailureKind::SchemaValidationFailed && first_schema_failure.is_none() {
+            first_schema_failure = Some(result.content().to_string());
         }
+        // A path fails with the call that named it, so it carries the call's
+        // reason.
+        for path in &opened_paths {
+            context.emit(EventKind::FileOpenFailed {
+                path: path.clone(),
+                reason,
+            });
+        }
+        context.emit(EventKind::ToolCallFailed {
+            tool_name: call.name.clone(),
+            call_id: call.id.clone(),
+            reason,
+            message: result.content().to_string(),
+        });
     }
 
+    // The corrective message for a rejected call is already in its result, so
+    // the reply carries nothing beyond the results themselves.
+    if let Some(message) = first_schema_failure {
+        context.emit(EventKind::SchemaRetried {
+            attempt: context.consecutive_schema_failures,
+            max_attempts: max_schema_retries,
+            message,
+        });
+    }
+
+    let mut offloaded = std::collections::HashMap::new();
     let mut blocks: Vec<ContentBlock> = Vec::with_capacity(results.len());
     for (call, result) in calls.iter().zip(results) {
-        let succeeded = matches!(result, ToolResult::Success(_));
+        let succeeded = matches!(result, ToolResult::Success { .. });
+        if let ToolResult::Success {
+            offloaded: Some(path),
+            ..
+        } = &result
+        {
+            offloaded.insert(call.id.clone(), path.clone());
+        }
         blocks.push(ContentBlock::ToolResult {
             tool_use_id: call.id.clone(),
             content: result.into_content(),
             succeeded,
         });
     }
-    if let Some((failing_tool, validator_message)) = &schema_failure {
-        let advertised = registry.advertised_schema(failing_tool, ticket_schema.as_ref());
-        let schema_detail =
-            arguments_retry_detail(failing_tool, validator_message, advertised.as_ref());
-        let retried = context.emit(EventKind::SchemaRetried {
-            attempt: context.consecutive_schema_failures,
-            max_attempts: max_schema_retries,
-            message: schema_detail.clone(),
-        });
-        blocks.push(ContentBlock::Text {
-            text: context.retry_directive(&schema_detail, &retried),
-        });
-    }
-    context.ticket_queue.add_reply(
-        &context.ticket_key,
-        crate::agents::tickets::Reply::user(&blocks, &paths),
-    );
+
+    context
+        .ticket_queue
+        .add_reply(&context.ticket_key, Reply::user(&blocks, &offloaded));
 
     if context.consecutive_schema_failures >= max_schema_retries {
         context.emit(EventKind::PolicyViolated {
             policy: PolicyKind::MaxSchemaRetries,
             limit: u64::from(max_schema_retries),
         });
-        let _ = context
-            .ticket_queue
-            .set_failed_by(&context.ticket_key, context.agent.get_id());
+        context.fail_ticket();
         return None;
     }
     Some(Step::Evaluate)
@@ -178,6 +185,24 @@ mod tests {
         assert_eq!(ticket.result.as_ref().unwrap()["partial_sum"], 42);
     }
 
+    #[tokio::test]
+    async fn a_result_wrapper_against_an_inlined_ticket_is_rejected_and_names_the_fields() {
+        let provider = MockProvider::with_results(vec![
+            Ok(write_result_response("wrapped")),
+            Ok(write_result_value(serde_json::json!({"partial_sum": 1}))),
+        ]);
+        let (events, _, ticket) = run_one(provider, 3, 10, Some(schema_for_partial_sum())).await;
+
+        let schema_retries = schema_retries_in(&events);
+        assert_eq!(schema_retries.len(), 1, "the wrapper is not unwrapped");
+        assert!(
+            schema_retries[0].2.contains("partial_sum"),
+            "the rejection names the fields to send: {}",
+            schema_retries[0].2
+        );
+        assert_eq!(ticket.status, Status::Finished, "one retry recovers");
+    }
+
     // Schema retries
 
     #[tokio::test]
@@ -199,7 +224,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn schema_retry_appends_directive_to_user_message() {
+    async fn a_schema_retry_message_carries_the_validator_detail() {
         let provider = MockProvider::with_results(vec![
             Ok(write_result_response("not json")),
             Ok(write_result_value(serde_json::json!({"partial_sum": 1}))),
@@ -273,7 +298,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn directive_editor_reads_the_reason_and_amends_the_default_directive() {
+    async fn a_schema_miss_answers_in_the_tool_result_and_injects_no_directive() {
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let provider = MockProvider::with_results(vec![
             Ok(write_result_response("not json")),
@@ -285,13 +310,7 @@ mod tests {
             .max_request_retries(0)
             .request_retry_delay(Duration::from_millis(1))
             .max_schema_retries(10)
-            .max_time(Duration::from_millis(500))
-            .edit_directive_on_retry(|event, directive| {
-                let EventKind::SchemaRetried { message, .. } = &event.kind else {
-                    return;
-                };
-                *directive = format!("REDO NOW. {message}\n{directive}");
-            });
+            .max_time(Duration::from_millis(500));
         tickets.agent(
             Agent::new()
                 .provider(provider.clone())
@@ -303,19 +322,27 @@ mod tests {
 
         let _ = tickets.finish_all().await;
 
-        let injected = user_text(&provider.received()[1]);
+        let second = &provider.received()[1];
+        let answered = second
+            .iter()
+            .filter_map(|message| match message {
+                crate::providers::Message::User { content } => {
+                    content.iter().find_map(|block| match block {
+                        crate::providers::ContentBlock::ToolResult { content, .. } => {
+                            Some(content.clone())
+                        }
+                        _ => None,
+                    })
+                }
+                _ => None,
+            })
+            .next()
+            .expect("the rejected call is answered");
+        assert!(answered.contains("rejected your arguments"), "{answered}");
+        assert!(answered.contains("partial_sum"), "{answered}");
         assert!(
-            injected.contains("REDO NOW."),
-            "editor's text must be injected: {injected:?}",
-        );
-        assert!(
-            injected.contains("Schema validation failed"),
-            "editor must receive the bare validator reason: {injected:?}",
-        );
-        // The directive arrives pre-filled, so amending it keeps the framing.
-        assert!(
-            injected.contains("was not accepted"),
-            "default directive must survive an editor that only prepends: {injected:?}",
+            !user_text(second).contains("was not accepted"),
+            "no directive block rides beside the tool result",
         );
     }
 
@@ -426,6 +453,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_repaired_result_is_reported_under_the_finishing_tool() {
+        // The retype happens in `invoke`, before the tool runs, so one note.
+        let provider = MockProvider::with_results(vec![Ok(write_result_value(
+            serde_json::json!({"partial_sum": "42"}),
+        ))]);
+        let (events, _, ticket) = run_one(provider, 3, 10, Some(schema_for_partial_sum())).await;
+
+        assert_eq!(ticket.status, Status::Finished);
+        let repairs: Vec<(&str, RepairKind, &str)> = events
+            .iter()
+            .filter_map(|e| match &e.kind {
+                EventKind::ResponseRepaired {
+                    tool_name,
+                    reason,
+                    message,
+                } => Some((tool_name.as_str(), *reason, message.as_str())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            repairs,
+            vec![(
+                "finish",
+                RepairKind::ValueMistyped,
+                "/result/partial_sum retyped"
+            )]
+        );
+    }
+
+    #[tokio::test]
     async fn repeated_execution_failures_trip_the_budget_and_fail_the_ticket() {
         use std::time::Duration;
 
@@ -437,9 +494,10 @@ mod tests {
             Ok(tool_call_response("boom")),
             Ok(tool_call_response("boom")),
         ]);
-        let boom = Tool::new("boom", "Always fails", |_: Value, _| async move {
-            ToolResult::error("boom")
-        });
+        let boom = Tool::new("boom")
+            .description("Always fails")
+            .handler(|_: Value, _| async move { ToolResult::error("boom") })
+            .build();
 
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let tickets = TicketQueue::new();
@@ -489,14 +547,16 @@ mod tests {
             Ok(tool_call_response("boom")),
             Ok(tool_call_response("ping")),
             Ok(tool_call_response("boom")),
-            Ok(write_result_value(serde_json::json!("done"))),
+            Ok(write_result_response("done")),
         ]);
-        let boom = Tool::new("boom", "Always fails", |_: Value, _| async move {
-            ToolResult::error("boom")
-        });
-        let ping = Tool::new("ping", "Always succeeds", |_: Value, _| async move {
-            ToolResult::success("pong")
-        });
+        let boom = Tool::new("boom")
+            .description("Always fails")
+            .handler(|_: Value, _| async move { ToolResult::error("boom") })
+            .build();
+        let ping = Tool::new("ping")
+            .description("Always succeeds")
+            .handler(|_: Value, _| async move { ToolResult::success("pong") })
+            .build();
 
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let tickets = TicketQueue::new();
@@ -540,18 +600,21 @@ mod tests {
 
         let provider = MockProvider::with_results(vec![
             Ok(tool_call_response("slow_tool")),
-            Ok(write_result_value(serde_json::json!("done"))),
+            Ok(write_result_response("done")),
         ]);
 
-        let slow_tool = Tool::new("slow_tool", "Blocks until released", move |_: Value, _| {
-            let s = Arc::clone(&tool_started_clone);
-            let u = Arc::clone(&tool_unblocked_clone);
-            async move {
-                s.notify_one();
-                u.notified().await;
-                ToolResult::success("ok")
-            }
-        });
+        let slow_tool = Tool::new("slow_tool")
+            .description("Blocks until released")
+            .handler(move |_: Value, _| {
+                let s = Arc::clone(&tool_started_clone);
+                let u = Arc::clone(&tool_unblocked_clone);
+                async move {
+                    s.notify_one();
+                    u.notified().await;
+                    ToolResult::success("ok")
+                }
+            })
+            .build();
 
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let tickets = TicketQueue::new();
@@ -621,11 +684,10 @@ mod tests {
             .max_schema_retries(10)
             .max_time(Duration::from_millis(500));
 
-        let dump = Tool::new(
-            "dump",
-            "Returns ~800 KB of text",
-            |_: Value, _ctx| async move { ToolResult::success("x".repeat(800_000)) },
-        );
+        let dump = Tool::new("dump")
+            .description("Returns ~800 KB of text")
+            .handler(|_: Value, _ctx| async move { ToolResult::success("x".repeat(800_000)) })
+            .build();
 
         tickets.on_event(move |e| handler(e));
         tickets.agent(
@@ -730,20 +792,19 @@ mod tests {
             .max_schema_retries(10)
             .max_time(Duration::from_millis(500));
 
-        let size_tool = Tool::new(
-            "size_tool",
-            "Returns N bytes of 'x'",
-            |input: Value, _ctx| async move {
+        let size_tool = Tool::new("size_tool")
+            .description("Returns N bytes of 'x'")
+            .schema(serde_json::json!({
+                "type": "object",
+                "properties": {"bytes": {"type": "integer"}},
+                "required": ["bytes"],
+            }))
+            .concurrent(true)
+            .handler(|input: Value, _ctx| async move {
                 let bytes = input["bytes"].as_u64().unwrap_or(0) as usize;
                 ToolResult::success("x".repeat(bytes))
-            },
-        )
-        .schema(serde_json::json!({
-            "type": "object",
-            "properties": {"bytes": {"type": "integer"}},
-            "required": ["bytes"],
-        }))
-        .concurrent(true);
+            })
+            .build();
 
         tickets.agent(
             Agent::new()

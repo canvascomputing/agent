@@ -17,11 +17,13 @@ pub struct TicketsTool;
 
 impl From<TicketsTool> for Tool {
     fn from(_: TicketsTool) -> Tool {
-        Tool::from_tool_file(
-            include_str!("tickets.tool.md"),
-            include_str!("tickets.schema.json"),
-            |args: super::TicketsArgs, ctx: ToolContext| async move { dispatch(args, &ctx) },
-        )
+        Tool::new("tickets")
+            .description(include_str!("tickets.tool.md"))
+            .schema(include_str!("tickets.schema.json"))
+            .handler(
+                |args: super::TicketsArgs, ctx: ToolContext| async move { dispatch(args, &ctx) },
+            )
+            .build()
     }
 }
 

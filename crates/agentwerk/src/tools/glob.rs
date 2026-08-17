@@ -33,11 +33,12 @@ fn here() -> String {
 
 impl From<GlobTool> for Tool {
     fn from(_: GlobTool) -> Tool {
-        Tool::from_tool_file(
-            include_str!("glob.tool.md"),
-            include_str!("glob.schema.json"),
-            run,
-        )
+        Tool::new("glob")
+            .description(include_str!("glob.tool.md"))
+            .schema(include_str!("glob.schema.json"))
+            .concurrent(true)
+            .handler(run)
+            .build()
     }
 }
 

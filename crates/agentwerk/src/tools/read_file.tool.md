@@ -1,8 +1,3 @@
----
-name: read_file
-concurrent: true
----
-
 Read a file's contents, returning line-numbered text so you can cite `file:line` and target edits. Output is `<line_no>\t<line>` from line 1; the path resolves against the working directory.
 
 - For large files, pass `offset` and `limit` to read only the slice you need.

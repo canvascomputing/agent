@@ -41,11 +41,12 @@ const SEARCH_TIMEOUT: Duration = Duration::from_secs(180);
 
 impl From<GrepTool> for Tool {
     fn from(_: GrepTool) -> Tool {
-        Tool::from_tool_file(
-            include_str!("grep.tool.md"),
-            include_str!("grep.schema.json"),
-            run,
-        )
+        Tool::new("grep")
+            .description(include_str!("grep.tool.md"))
+            .schema(include_str!("grep.schema.json"))
+            .concurrent(true)
+            .handler(run)
+            .build()
     }
 }
 

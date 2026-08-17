@@ -1,17 +1,19 @@
 //! Lets an agent write the result for its ticket and mark it finished, handing
 //! the work on to another agent in the same call when it needs to.
 
-use std::sync::OnceLock;
-
 use serde_json::Value;
 
 use crate::agents::tickets::{Ticket, TicketQueue};
-use crate::event::{EventKind, RepairKind};
+use crate::event::ToolFailureKind;
 use crate::schemas::Schema;
 
 use super::super::tool::{retype_message, Tool, ToolContext, ToolResult};
-use super::super::tool_file::ToolFile;
 use super::resolve_current_key;
+
+/// The name the model calls, and the two files the tool is described by.
+const NAME: &str = "finish";
+const DEFINITION: &str = include_str!("finish.tool.md");
+const SCHEMA: &str = include_str!("finish.schema.json");
 
 /// Write a ticket's result and mark it finished, optionally handing
 /// follow-up work to another agent.
@@ -26,34 +28,47 @@ use super::resolve_current_key;
 /// ```
 pub struct FinishTool;
 
-fn tool_file() -> &'static ToolFile {
-    static FILE: OnceLock<ToolFile> = OnceLock::new();
-    FILE.get_or_init(|| {
-        ToolFile::parse(
-            include_str!("finish.tool.md"),
-            include_str!("finish.schema.json"),
-        )
-    })
+impl From<FinishTool> for Tool {
+    /// Unbound: the registered arguments, reading the result out of `result`.
+    /// The loop rebinds it to the ticket's schema at claim.
+    fn from(_: FinishTool) -> Tool {
+        FinishTool::from_schema(None)
+    }
 }
 
-impl From<FinishTool> for Tool {
-    fn from(_: FinishTool) -> Tool {
-        Tool::from_tool_file(
-            include_str!("finish.tool.md"),
-            include_str!("finish.schema.json"),
-            |input: Value, ctx: ToolContext| async move {
-                match finish(&input, &ctx) {
-                    Ok(message) => ToolResult::success(message),
-                    Err(failure) => failure,
-                }
-            },
-        )
+impl FinishTool {
+    /// The finish tool declaring `schema` as its `result` argument, so
+    /// dispatch validates the result before the handler runs and the shape the
+    /// model is shown is the shape a call is checked against.
+    pub(crate) fn from_schema(schema: Option<Schema>) -> Tool {
+        let arguments = schema.as_ref().map(|ticket| {
+            let mut document: Value =
+                serde_json::from_str(SCHEMA).expect("finish.schema.json is valid JSON");
+            document["properties"]["result"] = ticket.get_raw_schema().clone();
+            document["required"] = serde_json::json!(["result"]);
+            document
+        });
+        let run = move |input: Value, ctx: ToolContext| {
+            // `Fn`, not `FnOnce`: the closure cannot move `schema` out.
+            let schema = schema.clone();
+            async move { finish(&input, &ctx, schema.as_ref()).unwrap_or_else(|failure| failure) }
+        };
+        let tool = Tool::new(NAME).description(DEFINITION).handler(run);
+        match arguments {
+            Some(document) => tool.schema(document).build(),
+            None => tool.schema(SCHEMA).build(),
+        }
     }
 }
 
 /// The whole flow behind [`FinishTool::call`], so every argument or queue
-/// failure can surface through `?` as the `ToolResult` it reads back as.
-fn finish(input: &Value, ctx: &ToolContext) -> Result<String, ToolResult> {
+/// failure can surface through `?` as the `ToolResult` it reads back as. A
+/// success carries the repair notes its result took, for the loop to report.
+fn finish(
+    input: &Value,
+    ctx: &ToolContext,
+    schema: Option<&Schema>,
+) -> Result<ToolResult, ToolResult> {
     let ticket_queue = ctx
         .ticket_queue
         .clone()
@@ -61,15 +76,16 @@ fn finish(input: &Value, ctx: &ToolContext) -> Result<String, ToolResult> {
     let parent_key = resolve_current_key(&ticket_queue, ctx)?;
     let agent = ctx.agent_id.clone().unwrap_or_default();
 
-    let schema = ticket_queue
-        .get_ticket(&parent_key)
-        .and_then(|ticket| ticket.schema);
-    let (result, unwrapped) = parse_result(schema.as_ref(), input);
+    let result = input.get("result").cloned().unwrap_or(Value::Null);
 
     let Some(handover) = control_string(input, "handover")? else {
-        attach_result(&ticket_queue, &parent_key, result, &agent, unwrapped)?;
+        let (_, repaired) = attach_result(&ticket_queue, &parent_key, result, schema)?;
         mark_finished(&ticket_queue, &parent_key, &agent)?;
-        return Ok(format!("Ticket {parent_key} marked finished"));
+        return Ok(ToolResult::Success {
+            content: format!("Ticket {parent_key} marked finished"),
+            offloaded: None,
+            repaired,
+        });
     };
     hand_over(
         &ticket_queue,
@@ -77,7 +93,7 @@ fn finish(input: &Value, ctx: &ToolContext) -> Result<String, ToolResult> {
         &parent_key,
         &agent,
         result,
-        unwrapped,
+        schema,
         handover.trim().to_string(),
     )
 }
@@ -90,16 +106,15 @@ fn hand_over(
     parent_key: &str,
     agent: &str,
     result: Value,
-    unwrapped: bool,
+    schema: Option<&Schema>,
     handover: String,
-) -> Result<String, ToolResult> {
+) -> Result<ToolResult, ToolResult> {
     // An omitted `task` defaults to the parent result below: the
     // common handoff forwards the finding verbatim.
     let task = control_string(input, "task")?;
 
-    // A rule about the unwrapped result, not about the shape of the arguments,
-    // so the schema cannot state it: for an inlined ticket the result is the
-    // top-level arguments and there is no `result` to require.
+    // A ticket carrying no schema declares no `required`, so nothing else
+    // stops a handover that passes on an empty result.
     if matches!(&result, Value::Null) || result.as_str().is_some_and(str::is_empty) {
         return Err(ToolResult::error(
             "A handover needs a result to pass on. Call `finish` again with a \
@@ -108,7 +123,7 @@ fn hand_over(
     }
 
     // A schema failure returns here, before any child exists.
-    let validated_result = attach_result(ticket_queue, parent_key, result, agent, unwrapped)?;
+    let (validated_result, repaired) = attach_result(ticket_queue, parent_key, result, schema)?;
 
     // `{parent_result}` needs a string.
     let parent_result = match validated_result {
@@ -133,9 +148,13 @@ fn hand_over(
     let child_key = ticket_queue.insert(child, agent.to_string());
     mark_finished(ticket_queue, parent_key, agent)?;
 
-    Ok(format!(
-        "Ticket {parent_key} marked finished; handed off to {child_key} (handover: {handover})"
-    ))
+    Ok(ToolResult::Success {
+        content: format!(
+            "Ticket {parent_key} marked finished; handed off to {child_key} (handover: {handover})"
+        ),
+        offloaded: None,
+        repaired,
+    })
 }
 
 /// Read an optional control argument. Absent and null both mean "not given".
@@ -184,163 +203,31 @@ fn append_parent_reference(body: &str, parent_key: &str, result_path: &str) -> S
     format!("{body}\n\nHanded over from {parent_key}, result file: {result_path}")
 }
 
-/// Validate the result against the ticket's schema, attach it, and report every
-/// repair it took to get there, so a prompt or a schema that keeps causing one
-/// stays discoverable. Nothing is reported for a result that failed: the
-/// violations already say what was wrong. The ticket is not finished here, since
-/// a handover inserts its child first.
+/// Validate the result against the ticket's schema, attach it, and give back
+/// a note for every repair it took to get there, so a prompt or a schema that
+/// keeps causing one stays discoverable once the loop reports them. A result
+/// that failed carries no notes: the violations already say what was wrong.
+/// The ticket is not finished here, since a handover inserts its child first.
 fn attach_result(
     ticket_queue: &TicketQueue,
     key: &str,
     result: Value,
-    agent: &str,
-    unwrapped: bool,
-) -> Result<Value, ToolResult> {
-    let (validated, repaired) = ticket_queue
-        .set_result(key, result)
-        .map_err(|violations| ToolResult::schema_error(violations.to_string()))?;
-    let unwrap_note = unwrapped.then(|| "result unwrapped".to_string());
-    let retypes = repaired.iter().map(|pointer| retype_message(pointer));
-    for message in unwrap_note.into_iter().chain(retypes) {
-        ticket_queue.emit(
-            key,
-            agent,
-            EventKind::ResponseRepaired {
-                tool_name: tool_file().name.clone(),
-                reason: RepairKind::ValueMistyped,
-                message,
-            },
-        );
-    }
-    Ok(validated)
-}
-
-/// Top-level keys `finish` owns, stripped from the arguments to recover the
-/// result: the properties its own schema declares, minus `result` itself.
-/// Derived from that schema so the list cannot fall out of step with the
-/// document the model is shown.
-fn control_keys() -> &'static [String] {
-    static KEYS: OnceLock<Vec<String>> = OnceLock::new();
-    KEYS.get_or_init(|| {
-        tool_file().input_schema.get_raw_schema()["properties"]
-            .as_object()
-            .map(|properties| {
-                properties
-                    .keys()
-                    .filter(|key| *key != "result")
-                    .cloned()
-                    .collect()
-            })
-            .unwrap_or_default()
-    })
-}
-
-/// Recover the result value from a finish tool call's arguments, and whether a
-/// repair took. Callers still read their own control keys (`handover`/`task`)
-/// off `input` separately.
-fn parse_result(schema: Option<&Schema>, input: &Value) -> (Value, bool) {
-    let Some(schema) = schema.filter(|schema| is_inlined(schema)) else {
-        return (input.get("result").cloned().unwrap_or(Value::Null), false);
-    };
-    let mut object = input.as_object().cloned().unwrap_or_default();
-    for key in control_keys() {
-        object.remove(key);
-    }
-    unwrap_accidental_result(Value::Object(object), schema)
-}
-
-impl FinishTool {
-    /// The name the model calls the tool by, for the registry's finish check.
-    pub(crate) fn name() -> &'static str {
-        &tool_file().name
-    }
-
-    /// Whether a ticket schema's fields ride as this tool's top-level
-    /// arguments; anything not inlined keeps the `result` envelope.
-    ///
-    /// An object schema that itself declares a control-key-named property is
-    /// not inlined: at the top level `finish` would read that field as its own
-    /// and strip it from the result. [`FinishTool::input_schema_for`],
-    /// [`parse_result`], and the ticket body's schema directive all consult
-    /// this one predicate, so the shape described, advertised, and read cannot
-    /// disagree.
-    pub(crate) fn inlines_result(document: &Value) -> bool {
-        if document["type"] != "object" {
-            return false;
+    schema: Option<&Schema>,
+) -> Result<(Value, Vec<String>), ToolResult> {
+    let (validated, repaired) = ticket_queue.set_result(key, result).map_err(|violations| {
+        // Composed here, where the ticket's schema is known: the loop
+        // passes the content to the model as-is.
+        ToolResult::Error {
+            content: crate::prompts::arguments_retry_detail(
+                NAME,
+                &violations.to_string(),
+                schema.map(Schema::get_raw_schema),
+            ),
+            kind: ToolFailureKind::SchemaValidationFailed,
         }
-        !document["properties"]
-            .as_object()
-            .is_some_and(|properties| {
-                control_keys()
-                    .iter()
-                    .any(|key| properties.contains_key(key))
-            })
-    }
-}
-
-fn is_inlined(schema: &Schema) -> bool {
-    FinishTool::inlines_result(schema.get_raw_schema())
-}
-
-/// A model that wrapped `{"result": <value>}` despite the flat schema is
-/// unwrapped, unless the schema itself declares a `result` property.
-fn unwrap_accidental_result(value: Value, schema: &Schema) -> (Value, bool) {
-    if declares_result(schema) {
-        return (value, false);
-    }
-    match value {
-        Value::Object(mut object) if object.len() == 1 => match object.remove("result") {
-            Some(inner) => (inner, true),
-            None => (Value::Object(object), false),
-        },
-        other => (other, false),
-    }
-}
-
-/// A schema that declares `result` itself means the model was right to send it,
-/// so the wrapper stays.
-fn declares_result(schema: &Schema) -> bool {
-    schema.get_raw_schema()["properties"]
-        .get("result")
-        .is_some()
-}
-
-impl FinishTool {
-    /// The model-facing arguments for `ticket`, read by the request builder
-    /// and by the schema a rejected call reads back. It and [`parse_result`]
-    /// share `is_inlined`, so the shape advertised and the shape read can
-    /// never disagree: an inlined object schema becomes the flat arguments
-    /// with the control keys merged back in, anything else advertises the
-    /// registered schema untouched, and the ticket schema's violations are
-    /// what a missed write reads back.
-    pub(crate) fn input_schema_for(ticket: &Schema) -> Value {
-        if is_inlined(ticket) {
-            merge_controls(ticket.get_raw_schema().clone())
-        } else {
-            tool_file().input_schema.get_raw_schema().clone()
-        }
-    }
-}
-
-/// Add the finish tool's control-key property definitions onto the inlined
-/// object schema. They stay optional: a plain finish passes neither.
-fn merge_controls(mut document: Value) -> Value {
-    let static_schema = tool_file().input_schema.get_raw_schema();
-    let static_properties = static_schema.get("properties").and_then(Value::as_object);
-    let properties = document.as_object_mut().and_then(|object| {
-        object
-            .entry("properties")
-            .or_insert_with(|| Value::Object(Default::default()))
-            .as_object_mut()
-    });
-    if let (Some(properties), Some(static_properties)) = (properties, static_properties) {
-        for key in control_keys() {
-            if let Some(definition) = static_properties.get(key) {
-                properties.insert(key.clone(), definition.clone());
-            }
-        }
-    }
-    document
+    })?;
+    let notes = repaired.iter().map(|pointer| retype_message(pointer));
+    Ok((validated, notes.collect()))
 }
 
 #[cfg(test)]
@@ -386,87 +273,71 @@ mod tests {
             .path()
     }
 
-    /// The repairs a test observed, shared with the queue's event handler.
-    type SeenRepairs = Arc<std::sync::Mutex<Vec<(String, RepairKind, String)>>>;
-
-    /// Claim a ticket carrying an integer-typed `line`, and collect every
-    /// repair the queue reports while the test runs.
-    fn line_ticket(dir: &std::path::Path) -> (Arc<TicketQueue>, SeenRepairs) {
-        let queue = TicketQueue::new();
-        queue.dir(dir.to_path_buf());
-        let schema = Schema::new(serde_json::json!({
+    fn line_schema() -> Schema {
+        Schema::new(serde_json::json!({
             "type": "object",
             "properties": { "line": { "type": "integer" } },
             "required": ["line"],
         }))
-        .unwrap();
+        .unwrap()
+    }
+
+    /// Claim a ticket carrying an integer-typed `line`.
+    fn line_ticket(dir: &std::path::Path) -> Arc<TicketQueue> {
+        let queue = TicketQueue::new();
+        queue.dir(dir.to_path_buf());
         queue.insert(
-            Ticket::new("body").schema(schema).label("alice"),
+            Ticket::new("body").schema(line_schema()).label("alice"),
             "tester".into(),
         );
         queue
             .claim(|t| t.status == Status::Todo, "alice")
             .expect("claim must succeed");
-        let repairs = Arc::new(std::sync::Mutex::new(Vec::new()));
-        let seen = Arc::clone(&repairs);
-        queue.on_event(move |event| {
-            if let crate::event::EventKind::ResponseRepaired {
-                tool_name,
-                reason,
-                message,
-            } = &event.kind
-            {
-                seen.lock()
-                    .unwrap()
-                    .push((tool_name.clone(), *reason, message.clone()));
-            }
-        });
-        (queue, repairs)
+        queue
+    }
+
+    /// The finish tool as the loop binds it at claim.
+    fn finish_for(schema: Schema) -> Tool {
+        FinishTool::from_schema(Some(schema))
     }
 
     #[tokio::test]
-    async fn finish_reports_every_repair_its_result_needed() {
+    async fn finish_notes_every_repair_its_result_needed() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (queue, repairs) = line_ticket(dir.path());
+        let queue = line_ticket(dir.path());
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
 
-        // A `result` key the flat schema does not declare, quoted line inside.
-        let outcome = Tool::from(FinishTool)
+        let outcome = finish_for(line_schema())
             .call(serde_json::json!({"result": {"line": "42"}}), &ctx)
             .await;
 
-        assert!(matches!(outcome, ToolResult::Success(_)));
-        // Two repairs under one reason: the pointer is what tells them apart.
-        assert_eq!(
-            *repairs.lock().unwrap(),
-            vec![
-                (
-                    "finish".to_string(),
-                    RepairKind::ValueMistyped,
-                    "result unwrapped".to_string()
-                ),
-                (
-                    "finish".to_string(),
-                    RepairKind::ValueMistyped,
-                    "/line retyped".to_string()
-                ),
-            ]
+        assert!(
+            matches!(
+                &outcome,
+                ToolResult::Success { repaired, .. } if repaired == &vec!["/line retyped".to_string()]
+            ),
+            "{outcome:?}"
         );
     }
 
     #[tokio::test]
-    async fn finish_reports_no_repair_for_a_result_it_rejected() {
+    async fn finish_notes_no_repair_for_a_result_it_rejected() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (queue, repairs) = line_ticket(dir.path());
+        let queue = line_ticket(dir.path());
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
 
-        // The wrapper comes off, but `line` is beyond repair.
-        let outcome = Tool::from(FinishTool)
+        // `line` is beyond repair.
+        let outcome = finish_for(line_schema())
             .call(serde_json::json!({"result": {"line": "about 42"}}), &ctx)
             .await;
 
-        assert!(matches!(outcome, ToolResult::SchemaError(_)));
-        assert!(repairs.lock().unwrap().is_empty());
+        assert!(matches!(
+            outcome,
+            ToolResult::Error {
+                kind: ToolFailureKind::SchemaValidationFailed,
+                ..
+            }
+        ));
     }
 
     // Argument shape
@@ -485,13 +356,35 @@ mod tests {
     }
 
     #[test]
-    fn object_schema_is_inlined_others_enveloped() {
-        assert!(is_inlined(&object_schema()));
-        assert!(!is_inlined(&string_schema()));
+    fn a_bound_ticket_schema_is_the_result_argument() {
+        let declared = finish_for(object_schema())
+            .input_schema()
+            .get_raw_schema()
+            .clone();
+        assert_eq!(
+            declared["properties"]["result"],
+            *object_schema().get_raw_schema()
+        );
+        assert_eq!(declared["properties"]["handover"]["type"], "string");
+        assert_eq!(declared["required"], serde_json::json!(["result"]));
+        // A ticket field never reaches the top level, whatever it is called.
+        assert!(declared["properties"].get("status").is_none(), "{declared}");
     }
 
-    /// An object schema declaring a property `finish` owns as a control key.
-    /// Inlining it would strip that field from every result.
+    #[test]
+    fn a_scalar_ticket_schema_is_the_result_argument_too() {
+        let declared = finish_for(string_schema())
+            .input_schema()
+            .get_raw_schema()
+            .clone();
+        assert_eq!(
+            declared["properties"]["result"],
+            *string_schema().get_raw_schema()
+        );
+    }
+
+    /// An object schema declaring a property `finish` also declares as a
+    /// control key. Nesting keeps the two apart.
     fn colliding_schema() -> Schema {
         Schema::new(serde_json::json!({
             "type": "object",
@@ -499,30 +392,6 @@ mod tests {
             "required": ["handover"],
         }))
         .unwrap()
-    }
-
-    #[test]
-    fn a_schema_naming_a_control_key_keeps_the_result_envelope() {
-        let schema = colliding_schema();
-        assert!(!is_inlined(&schema));
-        let input = serde_json::json!({ "result": { "handover": "x" } });
-        let (result, repair) = parse_result(Some(&schema), &input);
-        assert_eq!(result, serde_json::json!({ "handover": "x" }));
-        assert!(!repair);
-    }
-
-    #[test]
-    fn a_schema_naming_a_control_key_advertises_the_enveloped_shape() {
-        // The same predicate decides both, so what the model is shown is the
-        // shape `parse_result` reads.
-        let advertised = FinishTool::input_schema_for(&colliding_schema());
-        assert_eq!(
-            &advertised,
-            Tool::from(FinishTool)
-                .input_schema()
-                .clone()
-                .get_raw_schema()
-        );
     }
 
     #[tokio::test]
@@ -545,7 +414,7 @@ mod tests {
             .call(serde_json::json!({"result": {"handover": "x"}}), &ctx)
             .await;
 
-        assert!(matches!(outcome, ToolResult::Success(_)), "{outcome:?}");
+        assert!(matches!(outcome, ToolResult::Success { .. }), "{outcome:?}");
         let ticket = queue.get_ticket(&key).unwrap();
         assert_eq!(ticket.status, Status::Finished);
         assert_eq!(
@@ -555,90 +424,40 @@ mod tests {
         assert!(queue.get_ticket("TICKET-2").is_none(), "no child filed");
     }
 
-    #[test]
-    fn no_schema_reads_the_result_envelope() {
-        let input = serde_json::json!({ "result": "plain" });
-        let (result, repair) = parse_result(None, &input);
-        assert_eq!(result, serde_json::json!("plain"));
-        assert!(!repair);
-    }
+    #[tokio::test]
+    async fn a_double_encoded_result_decodes_through_the_bound_schema() {
+        // The whole reason the flat shape existed: a model that writes the
+        // object as JSON text. Dispatch decodes it against the nested schema.
+        let dir = crate::test_util::TempDir::new().unwrap();
+        let (queue, key) = one_ticket("alice");
+        queue.dir(dir.path().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
+        let mut registry = crate::tools::ToolRegistry::default();
+        registry.register(FinishTool::from_schema(Some(object_schema())));
 
-    #[test]
-    fn finish_inlined_takes_the_whole_arguments_object() {
-        let input = serde_json::json!({ "status": "malicious", "note": "x" });
-        let (result, repair) = parse_result(Some(&object_schema()), &input);
+        let calls = vec![crate::tools::ToolCall {
+            id: "call-1".to_string(),
+            name: "finish".to_string(),
+            input: serde_json::json!({ "result": "{\"status\": \"malicious\"}" }),
+        }];
+        let outcome = registry.execute(&calls, &ctx).await.remove(0);
+
+        assert!(matches!(outcome, ToolResult::Success { .. }), "{outcome:?}");
         assert_eq!(
-            result,
-            serde_json::json!({ "status": "malicious", "note": "x" })
-        );
-        assert!(!repair);
-    }
-
-    #[test]
-    fn finish_inlined_unwraps_an_accidental_result_wrapper() {
-        let input = serde_json::json!({ "result": { "status": "malicious" } });
-        let (result, repair) = parse_result(Some(&object_schema()), &input);
-        assert_eq!(result, serde_json::json!({ "status": "malicious" }));
-        assert!(repair);
-    }
-
-    #[test]
-    fn a_schema_that_declares_result_is_not_unwrapped() {
-        let schema = Schema::new(serde_json::json!({
-            "type": "object",
-            "properties": { "result": { "type": "string" } },
-            "required": ["result"],
-        }))
-        .unwrap();
-        let input = serde_json::json!({ "result": "the answer" });
-        let (result, repair) = parse_result(Some(&schema), &input);
-        assert_eq!(result, serde_json::json!({ "result": "the answer" }));
-        assert!(!repair);
-    }
-
-    #[test]
-    fn finish_inlined_strips_control_keys() {
-        let input =
-            serde_json::json!({ "status": "malicious", "handover": "analysis", "task": "go" });
-        let (result, _) = parse_result(Some(&object_schema()), &input);
-        assert_eq!(result, serde_json::json!({ "status": "malicious" }));
-    }
-
-    #[test]
-    fn enveloped_reads_the_result_field() {
-        let input = serde_json::json!({ "handover": "a", "task": "t", "result": "the overview" });
-        let (result, _) = parse_result(Some(&string_schema()), &input);
-        assert_eq!(result, serde_json::json!("the overview"));
-    }
-
-    #[test]
-    fn finish_inlined_schema_has_result_fields_flat_plus_optional_control_keys() {
-        let advertised = FinishTool::input_schema_for(&object_schema());
-        assert_eq!(
-            advertised["properties"]["status"],
-            serde_json::json!({ "type": "string" })
-        );
-        assert_eq!(advertised["properties"]["handover"]["type"], "string");
-        assert!(advertised["properties"].get("result").is_none());
-        let required = advertised["required"].as_array().unwrap();
-        assert!(
-            !required.contains(&serde_json::json!("handover"))
-                && !required.contains(&serde_json::json!("task")),
-            "control keys stay optional: {required:?}"
+            queue.get_ticket(&key).unwrap().result.as_ref(),
+            Some(&serde_json::json!({ "status": "malicious" }))
         );
     }
 
     #[test]
-    fn an_enveloped_ticket_advertises_the_registered_schema_untouched() {
-        // The ticket schema still validates the result on write; its
-        // violations are what a miss reads back.
-        let advertised = FinishTool::input_schema_for(&string_schema());
+    fn an_unbound_finish_declares_the_registered_arguments() {
+        let unbound = Tool::from(FinishTool);
+        assert!(unbound.input_schema().get_raw_schema()["properties"]["result"].is_object());
         assert_eq!(
-            &advertised,
-            Tool::from(FinishTool)
+            FinishTool::from_schema(None)
                 .input_schema()
-                .clone()
-                .get_raw_schema()
+                .get_raw_schema(),
+            unbound.input_schema().get_raw_schema()
         );
     }
 
@@ -651,7 +470,7 @@ mod tests {
         let outcome = Tool::from(FinishTool)
             .call(serde_json::json!({"result": "the answer"}), &ctx)
             .await;
-        assert!(matches!(outcome, ToolResult::Success(_)));
+        assert!(matches!(outcome, ToolResult::Success { .. }));
         let t = queue.get_ticket(&key).unwrap();
         assert_eq!(t.status, Status::Finished);
         assert_eq!(
@@ -720,7 +539,7 @@ mod tests {
                 .call(serde_json::json!({"result": value}), &ctx)
                 .await;
             assert!(
-                matches!(outcome, ToolResult::Success(_)),
+                matches!(outcome, ToolResult::Success { .. }),
                 "expected success for {value:?}"
             );
             let t = queue.get_ticket(&key).unwrap();
@@ -737,7 +556,7 @@ mod tests {
         let outcome = Tool::from(FinishTool)
             .call(serde_json::json!({"result": {"x": 1, "y": [2, 3]}}), &ctx)
             .await;
-        assert!(matches!(outcome, ToolResult::Success(_)));
+        assert!(matches!(outcome, ToolResult::Success { .. }));
         let t = queue.get_ticket(&key).unwrap();
         assert_eq!(t.status, Status::Finished);
         assert_eq!(t.result.as_ref().unwrap()["x"], 1);
@@ -774,21 +593,27 @@ mod tests {
         let outcome = Tool::from(FinishTool)
             .call(serde_json::json!({"result": {"x": {}}}), &ctx)
             .await;
-        assert!(matches!(outcome, ToolResult::SchemaError(_)));
+        assert!(matches!(
+            outcome,
+            ToolResult::Error {
+                kind: ToolFailureKind::SchemaValidationFailed,
+                ..
+            }
+        ));
         let t = queue.get_ticket(&key).unwrap();
         assert_eq!(t.status, Status::InProgress);
 
         let outcome = Tool::from(FinishTool)
             .call(serde_json::json!({"result": {"x": "ok"}}), &ctx)
             .await;
-        assert!(matches!(outcome, ToolResult::Success(_)));
+        assert!(matches!(outcome, ToolResult::Success { .. }));
         let t = queue.get_ticket(&key).unwrap();
         assert_eq!(t.status, Status::Finished);
         assert_eq!(t.result.as_ref().unwrap()["x"], "ok");
     }
 
     #[tokio::test]
-    async fn object_schema_takes_flat_arguments_as_the_result() {
+    async fn an_object_result_is_stored_as_the_object() {
         let dir = crate::test_util::TempDir::new().unwrap();
         let queue = TicketQueue::new();
         queue.dir(shared_test_dir().to_path_buf());
@@ -800,7 +625,7 @@ mod tests {
         }))
         .unwrap();
         queue.insert(
-            Ticket::new("hi").schema(schema).label("alice"),
+            Ticket::new("hi").schema(schema.clone()).label("alice"),
             "tester".into(),
         );
         let key = queue
@@ -808,11 +633,10 @@ mod tests {
             .expect("claim must succeed");
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
 
-        // Fields at the top level, no `result` wrapper.
-        let outcome = Tool::from(FinishTool)
-            .call(serde_json::json!({"x": "ok"}), &ctx)
+        let outcome = finish_for(schema)
+            .call(serde_json::json!({"result": {"x": "ok"}}), &ctx)
             .await;
-        assert!(matches!(outcome, ToolResult::Success(_)));
+        assert!(matches!(outcome, ToolResult::Success { .. }));
         let t = queue.get_ticket(&key).unwrap();
         assert_eq!(t.status, Status::Finished);
         assert_eq!(t.result.as_ref().unwrap(), &serde_json::json!({"x": "ok"}));
@@ -843,7 +667,7 @@ mod tests {
         let outcome = Tool::from(FinishTool)
             .call(serde_json::json!({"result": "{\"x\": \"ok\"}"}), &ctx)
             .await;
-        assert!(matches!(outcome, ToolResult::Success(_)));
+        assert!(matches!(outcome, ToolResult::Success { .. }));
 
         let t = queue.get_ticket(&key).unwrap();
         assert_eq!(t.status, Status::Finished);
@@ -862,7 +686,7 @@ mod tests {
         let outcome = Tool::from(FinishTool)
             .call(serde_json::json!({"result": "x"}), &ctx)
             .await;
-        assert!(matches!(outcome, ToolResult::Error(_)));
+        assert!(matches!(outcome, ToolResult::Error { .. }));
     }
 
     #[tokio::test]
@@ -928,7 +752,7 @@ mod tests {
             }));
         }
         for h in handles {
-            assert!(matches!(h.await.unwrap(), ToolResult::Success(_)));
+            assert!(matches!(h.await.unwrap(), ToolResult::Success { .. }));
         }
 
         // Every finish appends to the one shared log, so a torn line here is
@@ -976,7 +800,7 @@ mod tests {
                 &ctx,
             )
             .await;
-        assert!(matches!(outcome, ToolResult::Success(_)));
+        assert!(matches!(outcome, ToolResult::Success { .. }));
 
         let parent = queue.get_ticket(&parent_key).unwrap();
         assert_eq!(parent.status, Status::Finished);
@@ -1081,7 +905,13 @@ mod tests {
                 &ctx,
             )
             .await;
-        assert!(matches!(outcome, ToolResult::SchemaError(_)));
+        assert!(matches!(
+            outcome,
+            ToolResult::Error {
+                kind: ToolFailureKind::SchemaValidationFailed,
+                ..
+            }
+        ));
 
         let parent = queue.get_ticket(&parent_key).unwrap();
         assert_eq!(parent.status, Status::InProgress);
@@ -1095,16 +925,21 @@ mod tests {
 
     /// Build a claimed parent whose own schema requires an object with a
     /// `status` field, so the handover result is validated structurally.
-    fn one_ticket_with_object_schema(agent: &str, dir: PathBuf) -> (Arc<TicketQueue>, String) {
-        let queue = TicketQueue::new();
-        queue.dir(dir);
-        let schema = Schema::new(serde_json::json!({
+    fn strict_object_schema() -> Schema {
+        Schema::new(serde_json::json!({
             "type": "object",
             "required": ["status"]
         }))
-        .unwrap();
+        .unwrap()
+    }
+
+    fn one_ticket_with_object_schema(agent: &str, dir: PathBuf) -> (Arc<TicketQueue>, String) {
+        let queue = TicketQueue::new();
+        queue.dir(dir);
         queue.insert(
-            Ticket::new("strict parent").schema(schema).label(agent),
+            Ticket::new("strict parent")
+                .schema(strict_object_schema())
+                .label(agent),
             "tester".into(),
         );
         let key = queue
@@ -1126,7 +961,7 @@ mod tests {
             )
             .await
             ;
-        assert!(matches!(outcome, ToolResult::Success(_)));
+        assert!(matches!(outcome, ToolResult::Success { .. }));
 
         let parent = queue.get_ticket(&parent_key).unwrap();
         assert_eq!(parent.status, Status::Finished);
@@ -1143,19 +978,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn handover_object_schema_takes_result_fields_flat_alongside_control_keys() {
+    async fn handover_takes_an_object_result_alongside_the_control_keys() {
         let dir = crate::test_util::TempDir::new().unwrap();
         let (queue, parent_key) = one_ticket_with_object_schema("alice", dir.path().to_path_buf());
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
 
-        // `status` sits at the top level next to `handover`/`task`, no `result` wrapper.
-        let outcome = Tool::from(FinishTool)
+        let outcome = finish_for(strict_object_schema())
             .call(
-                serde_json::json!({"handover": "bob", "task": "next", "status": "done"}),
+                serde_json::json!({"handover": "bob", "task": "next", "result": {"status": "done"}}),
                 &ctx,
             )
             .await;
-        assert!(matches!(outcome, ToolResult::Success(_)));
+        assert!(matches!(outcome, ToolResult::Success { .. }));
 
         let parent = queue.get_ticket(&parent_key).unwrap();
         assert_eq!(parent.status, Status::Finished);
@@ -1200,7 +1034,13 @@ mod tests {
                 &ctx,
             )
             .await;
-        assert!(matches!(outcome, ToolResult::SchemaError(_)));
+        assert!(matches!(
+            outcome,
+            ToolResult::Error {
+                kind: ToolFailureKind::SchemaValidationFailed,
+                ..
+            }
+        ));
 
         let parent = queue.get_ticket(&parent_key).unwrap();
         assert_eq!(parent.status, Status::InProgress);
@@ -1220,7 +1060,7 @@ mod tests {
         let outcome = Tool::from(FinishTool)
             .call(serde_json::json!({"result": "done"}), &ctx)
             .await;
-        assert!(matches!(outcome, ToolResult::Success(_)));
+        assert!(matches!(outcome, ToolResult::Success { .. }));
         assert_eq!(
             queue.get_ticket(&parent_key).unwrap().status,
             Status::Finished
@@ -1239,7 +1079,7 @@ mod tests {
                 &ctx,
             )
             .await;
-        assert!(matches!(outcome, ToolResult::Success(_)), "{outcome:?}");
+        assert!(matches!(outcome, ToolResult::Success { .. }), "{outcome:?}");
 
         let child = queue.get_ticket("TICKET-2").unwrap();
         assert!(child_body(&child).starts_with("alice's findings"));
@@ -1301,8 +1141,7 @@ mod tests {
     #[tokio::test]
     async fn a_handover_with_nothing_to_pass_on_is_rejected() {
         // Absent, null, and empty all leave the receiving agent a body that
-        // says nothing. The schema cannot state this: for an inlined ticket
-        // the result is the top-level arguments, with no `result` to require.
+        // says nothing, and this ticket carries no schema to require one.
         let dir = crate::test_util::TempDir::new().unwrap();
         let (queue, _key) = one_ticket_in("alice", dir.path().to_path_buf());
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
@@ -1313,7 +1152,7 @@ mod tests {
         ] {
             let outcome = Tool::from(FinishTool).call(body, &ctx).await;
             assert!(
-                matches!(&outcome, ToolResult::Error(message) if message.contains("needs a result")),
+                matches!(&outcome, ToolResult::Error { content: message, .. } if message.contains("needs a result")),
                 "{outcome:?}",
             );
         }
@@ -1338,7 +1177,7 @@ mod tests {
                     &ctx,
                 )
                 .await;
-            assert!(matches!(outcome, ToolResult::Success(_)));
+            assert!(matches!(outcome, ToolResult::Success { .. }));
 
             let parent = queue.get_ticket(&parent_key).unwrap();
             assert_eq!(parent.status, Status::Finished);
@@ -1348,7 +1187,7 @@ mod tests {
     }
 
     #[test]
-    fn a_number_where_the_advertised_schema_declares_a_string_is_rejected() {
+    fn a_number_where_the_declared_schema_asks_for_a_string_is_rejected() {
         // Stringifying `42` would pass the check with a task the model never
         // wrote; the violation names the field to fix instead.
         let schema = Tool::from(FinishTool).input_schema().clone();
@@ -1375,7 +1214,7 @@ mod tests {
         ] {
             let outcome = Tool::from(FinishTool).call(body, &ctx).await;
             assert!(
-                matches!(&outcome, ToolResult::Error(message) if message.contains("non-blank")),
+                matches!(&outcome, ToolResult::Error { content: message, .. } if message.contains("non-blank")),
                 "{outcome:?}",
             );
         }
@@ -1397,7 +1236,7 @@ mod tests {
                 &ctx,
             )
             .await;
-        assert!(matches!(outcome, ToolResult::Error(_)));
+        assert!(matches!(outcome, ToolResult::Error { .. }));
     }
 
     #[tokio::test]
