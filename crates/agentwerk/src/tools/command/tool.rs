@@ -13,8 +13,9 @@ const DEFINITION: &str = include_str!("command.tool.md");
 const SCHEMA: &str = include_str!("command.schema.json");
 
 /// Execute commands. A tool named `git` runs the bare `git` and nothing else
-/// until [`CommandTool::allow`] widens it; [`CommandTool::deny`] and
-/// [`CommandTool::deny_flag`] overrule any allowed pattern. Not concurrent.
+/// until [`CommandTool::allow`] widens it; [`CommandTool::allow_flag`] narrows
+/// an allowed pattern to the flags it names, and [`CommandTool::deny`] and
+/// [`CommandTool::deny_flag`] overrule any of them. Not concurrent.
 ///
 /// One call runs one program, without a shell.
 ///
@@ -37,6 +38,7 @@ const SCHEMA: &str = include_str!("command.schema.json");
 pub struct CommandTool {
     tool_name: String,
     allow: Vec<String>,
+    allow_flags: Vec<String>,
     deny: Vec<String>,
     deny_flags: Vec<DeniedFlag>,
     description: String,
@@ -57,6 +59,7 @@ impl CommandTool {
         let mut tool = Self {
             tool_name: name.to_string(),
             allow: Vec::new(),
+            allow_flags: Vec::new(),
             deny: Vec::new(),
             deny_flags: Vec::new(),
             description: String::new(),
@@ -76,6 +79,30 @@ impl CommandTool {
     /// program as one argument.
     pub fn allow(mut self, pattern: &str) -> Self {
         self.allow.push(pattern.trim().to_string());
+        self.render_description();
+        self
+    }
+
+    /// Permit `flag` and, from the first call on, refuse every command
+    /// carrying a flag no rule names.
+    ///
+    /// A rule reaches the spelling it names and no other: `-n` leaves `-n5`
+    /// and `-rf` refused, where the same rule given to
+    /// [`CommandTool::deny_flag`] would catch both. An allow that is too wide
+    /// lets a command run, so this one under-matches on purpose. `--force`
+    /// still covers `--force=x`, since the value belongs to the flag.
+    ///
+    /// [`CommandTool::deny`] and [`CommandTool::deny_flag`] are asked first, so
+    /// naming a flag here does not carry it past a rule refusing it.
+    ///
+    /// Arguments after a bare `--` are operands and go unchecked.
+    ///
+    /// # Panics
+    ///
+    /// When `flag` does not read as one, such as `force` or `-5`: the rule
+    /// would otherwise permit nothing.
+    pub fn allow_flag(mut self, flag: &str) -> Self {
+        self.allow_flags.push(flag_rule("allow_flag", flag));
         self.render_description();
         self
     }
@@ -109,15 +136,8 @@ impl CommandTool {
     /// When `flag` does not read as one, such as `force` or `-5`: the rule
     /// would otherwise sit inert and deny nothing.
     pub fn deny_flag(mut self, flag: &str) -> Self {
-        let flag = flag.trim().to_string();
-        assert!(
-            matches!(
-                Argument::parse(&flag),
-                Argument::Long(_) | Argument::Short(_)
-            ),
-            "deny_flag({flag:?}) is not a flag: name one like \"--force\" or \"-f\""
-        );
-        self.deny_flags.push(DeniedFlag::new(flag));
+        self.deny_flags
+            .push(DeniedFlag::new(flag_rule("deny_flag", flag)));
         self.render_description();
         self
     }
@@ -144,6 +164,12 @@ impl CommandTool {
         }
 
         let mut description = format!("{}\n\n{}", DEFINITION.trim(), self.allowed_line());
+        if !self.allow_flags.is_empty() {
+            description.push_str(&format!(
+                "\nAllowed flags: {}, and no other.",
+                quoted(&self.allow_flags)
+            ));
+        }
         if !self.deny.is_empty() {
             description.push_str(&format!("\nDenied: {}.", quoted(&self.deny)));
         }
@@ -206,15 +232,24 @@ impl CommandTool {
                 .any(|pattern| glob_match(pattern, &normalized))
         };
 
-        if permitted {
-            return Ok(command);
+        if !permitted {
+            return Err(format!(
+                "Command '{normalized}' is not allowed by tool '{name}'. {allowed}",
+                name = self.tool_name,
+                allowed = self.allowed_line(),
+            ));
         }
 
-        Err(format!(
-            "Command '{normalized}' is not allowed by tool '{name}'. {allowed}",
-            name = self.tool_name,
-            allowed = self.allowed_line(),
-        ))
+        if let Some((flag, _)) = command.flags().find(|(_, found)| !self.allows_flag(*found)) {
+            return Err(format!(
+                "Command '{normalized}' carries the flag '{flag}', which tool '{name}' does not \
+                 allow. Allowed flags: {allowed}, and no other.",
+                name = self.tool_name,
+                allowed = quoted(&self.allow_flags),
+            ));
+        }
+
+        Ok(command)
     }
 
     /// The message for a line that is not one command, naming what stopped it
@@ -233,6 +268,16 @@ impl CommandTool {
             }
             Refusal::Empty => "Missing required field: command".to_string(),
         }
+    }
+
+    /// Whether `found` may be carried. Without a rule every flag may, which is
+    /// what a tool configured by patterns alone means.
+    fn allows_flag(&self, found: Argument<'_>) -> bool {
+        self.allow_flags.is_empty()
+            || self
+                .allow_flags
+                .iter()
+                .any(|allowed| Argument::parse(allowed) == found)
     }
 
     /// Whether a deny rule names `found`. A long rule and a short one never
@@ -284,6 +329,20 @@ enum FlagKey {
     Letter(char),
     /// `-rf`, which reaches only that spelling.
     Cluster(String),
+}
+
+/// Read `flag` as a rule for `method`, refusing one that names no flag: it
+/// would sit inert, and an operator writing it meant it to have an effect.
+fn flag_rule(method: &str, flag: &str) -> String {
+    let flag = flag.trim().to_string();
+    assert!(
+        matches!(
+            Argument::parse(&flag),
+            Argument::Long(_) | Argument::Short(_)
+        ),
+        "{method}({flag:?}) is not a flag: name one like \"--force\" or \"-f\""
+    );
+    flag
 }
 
 /// Whether `token` is a `NAME=value` prefix rather than a program.
@@ -781,6 +840,132 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_flag_runs_when_no_rule_narrows_the_tool() {
+        let tool = CommandTool::new("echo").allow("echo *");
+        let ctx = test_tool_context();
+        let result = Tool::from(tool)
+            .call(serde_json::json!({ "command": "echo -n hi" }), &ctx)
+            .await;
+        assert!(matches!(result, ToolResult::Success { .. }));
+    }
+
+    #[tokio::test]
+    async fn an_allowed_flag_runs_the_command_carrying_it() {
+        let tool = CommandTool::new("echo").allow("echo *").allow_flag("-n");
+        let ctx = test_tool_context();
+        let result = Tool::from(tool)
+            .call(serde_json::json!({ "command": "echo -n hi" }), &ctx)
+            .await;
+        assert!(matches!(result, ToolResult::Success { .. }));
+    }
+
+    #[tokio::test]
+    async fn every_allowed_flag_is_accepted() {
+        let tool = CommandTool::new("echo")
+            .allow("echo *")
+            .allow_flag("-n")
+            .allow_flag("-e");
+        let ctx = test_tool_context();
+        for command in ["echo -n hi", "echo -e hi"] {
+            let result = Tool::from(tool.clone())
+                .call(serde_json::json!({ "command": command }), &ctx)
+                .await;
+            assert!(matches!(result, ToolResult::Success { .. }));
+        }
+    }
+
+    #[tokio::test]
+    async fn an_allowed_flag_does_not_widen_the_bare_command_default() {
+        // Naming a flag says which of the permitted commands may carry it, so
+        // a tool with no allowed pattern still runs the bare command alone.
+        let tool = CommandTool::new("echo").allow_flag("-n");
+        let ctx = test_tool_context();
+        let result = Tool::from(tool)
+            .call(serde_json::json!({ "command": "echo -n hi" }), &ctx)
+            .await;
+        let content = result.content();
+        assert!(content.contains("is not allowed by tool"), "got {content}");
+    }
+
+    #[tokio::test]
+    async fn a_flag_after_a_double_dash_is_not_measured_against_the_allowed_set() {
+        // The getopt convention: after `--` the token names a file, so the set
+        // has no say over it.
+        let tool = CommandTool::new("echo").allow("echo *").allow_flag("-n");
+        let ctx = test_tool_context();
+        let result = Tool::from(tool)
+            .call(serde_json::json!({ "command": "echo -- --force" }), &ctx)
+            .await;
+        assert!(matches!(result, ToolResult::Success { .. }));
+    }
+
+    #[tokio::test]
+    async fn an_allowed_flag_set_refuses_a_flag_it_does_not_name() {
+        let tool = CommandTool::new("echo").allow("echo *").allow_flag("-n");
+        let ctx = test_tool_context();
+        let result = Tool::from(tool)
+            .call(serde_json::json!({ "command": "echo -e hi" }), &ctx)
+            .await;
+        let content = result.content();
+        assert!(content.contains("carries the flag '-e'"), "got {content}");
+        assert!(content.contains("Allowed flags: `-n`"), "got {content}");
+    }
+
+    #[tokio::test]
+    async fn an_allowed_flag_permits_the_value_written_against_it() {
+        let tool = CommandTool::new("echo")
+            .allow("echo *")
+            .allow_flag("--format");
+        let ctx = test_tool_context();
+        let result = Tool::from(tool)
+            .call(serde_json::json!({ "command": "echo --format=%H" }), &ctx)
+            .await;
+        assert!(matches!(result, ToolResult::Success { .. }));
+    }
+
+    #[tokio::test]
+    async fn an_allowed_short_flag_leaves_a_cluster_holding_it_refused() {
+        // The mirror of the denied letter reaching into a cluster: an allow
+        // doing the same would hand over `-f` along with the `-r` it names.
+        let tool = CommandTool::new("echo").allow("echo *").allow_flag("-r");
+        let ctx = test_tool_context();
+        let result = Tool::from(tool)
+            .call(serde_json::json!({ "command": "echo -rf" }), &ctx)
+            .await;
+        assert!(result.content().contains("carries the flag '-rf'"));
+    }
+
+    #[tokio::test]
+    async fn a_denied_flag_is_refused_though_an_allowed_flag_names_it() {
+        // The deny answers first whatever the allowed set says, and it answers
+        // on its own terms: a denied letter reaches into a cluster an allow
+        // rule would have to name in full.
+        let tool = CommandTool::new("echo")
+            .allow("echo *")
+            .allow_flag("--force")
+            .deny_flag("--force");
+        let ctx = test_tool_context();
+        let result = Tool::from(tool)
+            .call(serde_json::json!({ "command": "echo --force" }), &ctx)
+            .await;
+        let content = result.content();
+        assert!(content.contains("denied flag '--force'"), "got {content}");
+    }
+
+    #[tokio::test]
+    async fn a_command_refused_by_both_rules_names_the_pattern() {
+        // Both rules refuse it. Naming the flag would send the model back with
+        // the same command and one flag fewer, which is still not allowed.
+        let tool = CommandTool::new("echo").allow("echo one*").allow_flag("-n");
+        let ctx = test_tool_context();
+        let result = Tool::from(tool)
+            .call(serde_json::json!({ "command": "echo two -e" }), &ctx)
+            .await;
+        let content = result.content();
+        assert!(content.contains("is not allowed by tool"), "got {content}");
+    }
+
+    #[tokio::test]
     async fn an_absolute_path_is_refused_by_a_pattern_naming_the_program() {
         // Fail closed: the pattern matches what runs, so an operator wanting the
         // absolute path allows it.
@@ -825,6 +1010,21 @@ mod tests {
         assert!(Tool::from(tool)
             .description()
             .contains("Denied flags: `--force`."));
+    }
+
+    #[test]
+    fn a_description_lists_the_allowed_flags() {
+        let tool = CommandTool::new("git").allow("git *").allow_flag("--all");
+        assert!(Tool::from(tool)
+            .description()
+            .contains("Allowed flags: `--all`, and no other."));
+    }
+
+    #[test]
+    #[should_panic(expected = "is not a flag")]
+    fn an_allow_flag_rule_that_is_not_a_flag_is_refused_at_construction() {
+        // Silently accepted, the rule would sit inert and permit nothing.
+        let _ = CommandTool::new("git").allow_flag("all");
     }
 
     #[test]

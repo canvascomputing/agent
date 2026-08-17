@@ -25,6 +25,7 @@ def test_builtin_factories_return_a_tool(factory):
 def test_command_tool_configuration_chains_on_one_object():
     tool = aw.CommandTool("git")
     assert tool.allow("git *") is tool
+    assert tool.allow_flag("--oneline") is tool
     assert tool.deny("git push*") is tool
     assert tool.deny_flag("--force") is tool
     assert tool.concurrent(True) is tool

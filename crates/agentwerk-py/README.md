@@ -570,6 +570,12 @@ git = (
 )
 ```
 
+With an `allow_flag` set, a command carrying any other flag is refused:
+
+```python
+cargo = CommandTool("cargo").allow("cargo test*").allow_flag("--all-features")
+```
+
 #### Custom Tools
 
 You can define custom tools for specific needs with the following parameters:

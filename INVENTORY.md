@@ -1357,7 +1357,7 @@ Not bound: it is how `CommandTool` reads one command line.
 |----------|------|------------|
 | Rust | `DEFINITION: string` | private |
 | Rust | `SCHEMA: string` | private |
-| Rust | `CommandTool { tool_name: string, allow: string[], deny: string[], deny_flags: DeniedFlag[], description: string, custom_description: boolean, concurrent: boolean }` | pub |
+| Rust | `CommandTool { tool_name: string, allow: string[], allow_flags: string[], deny: string[], deny_flags: DeniedFlag[], description: string, custom_description: boolean, concurrent: boolean }` | pub |
 | Python | `CommandTool`: a class carrying the builder methods, where every other built-in tool is a function returning a handle | |
 | Rust | `CommandTool.DEFAULT_TIMEOUT: number = 120000` | pub |
 | Python | not bound | |
@@ -1366,6 +1366,7 @@ Not bound: it is how `CommandTool` reads one command line.
 | Rust | `CommandTool.new(name: string): CommandTool` | pub |
 | Python | `CommandTool(name)` | |
 | both | `CommandTool.allow(pattern: string): CommandTool` | pub |
+| both | `CommandTool.allow_flag(flag: string): CommandTool` | pub |
 | both | `CommandTool.deny(pattern: string): CommandTool` | pub |
 | both | `CommandTool.deny_flag(flag: string): CommandTool` | pub |
 | both | `CommandTool.description(description: string): CommandTool` | pub |
@@ -1374,6 +1375,7 @@ Not bound: it is how `CommandTool` reads one command line.
 | Rust | `CommandTool.allowed_line(): string` | private |
 | Rust | `CommandTool.check(line: string): Command throws string` | private |
 | Rust | `CommandTool.unreadable(line: string, refusal: Refusal): string` | private |
+| Rust | `CommandTool.allows_flag(found: Argument): boolean` | private |
 | Rust | `CommandTool.denies_flag(found: Argument): boolean` | private |
 | Rust | `DeniedFlag { written: string, key: FlagKey }` | private |
 | Rust | `DeniedFlag.new(written: string): DeniedFlag` | private |
@@ -1381,6 +1383,7 @@ Not bound: it is how `CommandTool` reads one command line.
 | Rust | `FlagKey.Long(string)` | private |
 | Rust | `FlagKey.Letter(string)` | private |
 | Rust | `FlagKey.Cluster(string)` | private |
+| Rust | `flag_rule(method: string, flag: string): string` | private |
 | Rust | `is_assignment(token: string): boolean` | private |
 | Rust | `quoted(patterns: string[]): string` | private |
 | Rust | `CommandArgs { command: string, timeout_ms: number? }` | pub |
@@ -2031,6 +2034,7 @@ Binds `tools/`.
 | Rust | `PyCommandTool { inner: CommandTool }` | python |
 | Rust | `PyCommandTool.new(name: string): PyCommandTool` | python |
 | Rust | `PyCommandTool.allow(pattern: string): PyCommandTool` | python |
+| Rust | `PyCommandTool.allow_flag(flag: string): PyCommandTool` | python |
 | Rust | `PyCommandTool.deny(pattern: string): PyCommandTool` | python |
 | Rust | `PyCommandTool.deny_flag(flag: string): PyCommandTool` | python |
 | Rust | `PyCommandTool.description(description: string): PyCommandTool` | python |
