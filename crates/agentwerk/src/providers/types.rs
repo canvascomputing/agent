@@ -157,12 +157,65 @@ pub struct ModelResponse {
     pub model: String,
 }
 
+/// Why a tool call a model wrote as text was not promoted to a real call,
+/// carried by `EventKind::ToolCallDeclined`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum ToolDeclineKind {
+    /// The reply hit a length limit, so the block may be cut short.
+    #[serde(rename = "output_truncated")]
+    OutputTruncated,
+    /// The model refused, paused, or hit a stop sequence, so a whole-looking
+    /// block may be one it never committed to.
+    #[serde(rename = "not_finished")]
+    ReplyNotFinished,
+    /// The endpoint already delivered a call under that name, so the block was
+    /// left alone rather than run a second time.
+    #[serde(rename = "already_delivered")]
+    AlreadyDelivered,
+}
+
+impl ToolDeclineKind {
+    /// Every kind, in the order they are declared.
+    pub const ALL: &'static [ToolDeclineKind] = &[
+        ToolDeclineKind::OutputTruncated,
+        ToolDeclineKind::ReplyNotFinished,
+        ToolDeclineKind::AlreadyDelivered,
+    ];
+
+    /// The stable snake_case spelling, the one `Event.data["reason"]` carries.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ToolDeclineKind::OutputTruncated => "output_truncated",
+            ToolDeclineKind::ReplyNotFinished => "not_finished",
+            ToolDeclineKind::AlreadyDelivered => "already_delivered",
+        }
+    }
+}
+
+impl std::fmt::Display for ToolDeclineKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// Incremental event emitted during SSE streaming.
 ///
 /// Events within a single response arrive in order and reference the content block they
 /// belong to via `index`. A stream ends with `MessageDone`.
 #[derive(Debug, Clone)]
 pub enum StreamEvent {
+    /// A tool call the endpoint did not deliver usably, written as text or
+    /// delivered without its arguments, was rebuilt from the text the model
+    /// wrote; it will run.
+    ToolCallRepaired { tool_name: String },
+
+    /// A framed tool call was found in the reply and declined, with the
+    /// reason it was not promoted.
+    ToolCallDeclined {
+        tool_name: String,
+        reason: ToolDeclineKind,
+    },
+
     /// Appended text for the text block at `index`.
     TextDelta { index: usize, text: String },
 

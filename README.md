@@ -619,7 +619,9 @@ tickets.on_event(|event| {
 | | `RequestFailed` | A request failed and was not retried. |
 | | `RequestRetried` | A transient provider error triggered a retry. |
 | | `TextChunkReceived` | A piece of the reply arrived. |
-| **Tool** | `ToolCallStarted` | A tool invocation began. |
+| | `ResponseRepaired` | A tool call or value the model created was invalid and was corrected. |
+| **Tool** | `ToolCallDeclined` | A tool call proposed by the model was declined. |
+| | `ToolCallStarted` | A tool invocation began. |
 | | `ToolCallFinished` | A tool invocation finished. |
 | | `ToolCallFailed` | A tool invocation failed but the ticket continues. |
 | **File** | `FileOpenFinished` | A tool opened a file. |
