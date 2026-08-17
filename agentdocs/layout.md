@@ -73,7 +73,7 @@ crates/
 **Holds every concrete LLM provider plus the shared request and response types.**
 
 - `provider.rs` defines the behavior: `ProviderLike`, the `Provider` handle over it, the crate-internal `Protocol` trait, and the generic `respond` every provider answers through.
-- `types.rs` defines every value the two sides exchange, in the order a turn happens: `ModelRequest`, `ReasoningEffort`, then `Message`, `AsUserMessage`, `ContentBlock`, then `ModelResponse`, `TokenUsage`, `ResponseStatus`, `ToolDeclineKind`, and `StreamEvent`.
+- `types.rs` defines every value the two sides exchange, in the order a turn happens: `ModelRequest`, `ReasoningEffort`, then `Message`, `AsUserMessage`, `ContentBlock`, then `ModelResponse`, `TokenUsage`, `ResponseStatus`, `ToolDeclineKind`, and `StreamEvent`. The tools a request carries are `tools::Tool` values.
 - `anthropic.rs`, `openai.rs`, `mistral.rs`, and `litellm.rs` are concrete providers. Each is a newtype over one `Endpoint` whose `respond` names a `Protocol`: `AnthropicMessages` in `anthropic.rs`, and `OpenAiChat` in `openai.rs`, which `mistral.rs` and `litellm.rs` name too, so the OpenAI request shape is written once.
 - `endpoint.rs` holds `Endpoint`, the one HTTP call every provider makes: the base URL, the client, the timeout, and the mapping of every non-2xx answer to a `ProviderError`.
 - `environment.rs` reads the variables behind `Provider::from_env()` and `Model::from_env()`; its readers are crate-internal.
@@ -87,13 +87,13 @@ crates/
 
 **`tool.rs` holds the trait and registry; every other file is one built-in tool or a helper.**
 
-- `tool.rs` defines `ToolLike`, `Tool`, `ToolRegistry`, `ToolContext`, and `ToolCall`.
+- `tool.rs` defines `Tool`, `ToolRegistry`, `ToolContext`, and `ToolCall`.
 - `read_file.rs`, `write_file.rs`, `edit_file.rs`, `glob.rs`, `grep.rs`, and `list_directory.rs` are filesystem tools.
 - `code.rs` backs `grep`'s `syntax: "code"` shape matching, delegating to the `codegrep` engine.
 - `command/` holds the command tool and the parsing behind it. `tool.rs` is the tool, restricted through `new()` and widened through `allow()`; it runs one program per call and never a shell. `parse.rs` splits a line into one command and classifies its arguments, which is how the tool refuses anything that is not one command and how a rule about a flag means what the program will mean.
 - `tickets/` holds `TicketsTool` and `FinishTool`; `knowledge.rs` is the model-facing wrapper around `Knowledge`, whose store lives in `agents::knowledge`.
 - `fetch_url.rs` is the web fetch tool.
-- Each built-in tool pairs with a `<tool>.tool.md` definition: `---` frontmatter (`name`, `concurrent`), a prose body shown to the model, and a `## Schema` section whose ` ```json ` fence holds the input schema. `tool_file.rs` parses it; `util.rs` is a shared helper; `error.rs` holds `ToolError`.
+- Each built-in tool pairs with a `<tool>.tool.md` definition and a `<tool>.schema.json` beside it. The definition holds only the prose shown to the model; the sibling document holds the input schema. Both reach the tool through `include_str!` in its `From<XTool> for Tool` conversion, which is also where the name and concurrency are stated. `util.rs` is a shared helper.
 
 ## The `prompts/` and `schemas/` Modules
 

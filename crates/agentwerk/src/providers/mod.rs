@@ -27,6 +27,6 @@ pub use model::Model;
 pub use openai::OpenAi;
 pub use provider::{Provider, ProviderLike};
 pub use types::{
-    AsUserMessage, ContentBlock, Message, ModelRequest, ModelResponse, ProviderToolDefinition,
-    ReasoningEffort, ResponseStatus, StreamEvent, TokenUsage, ToolChoice, ToolDeclineKind,
+    AsUserMessage, ContentBlock, Message, ModelRequest, ModelResponse, ReasoningEffort,
+    ResponseStatus, StreamEvent, TokenUsage, ToolDeclineKind,
 };

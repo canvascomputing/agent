@@ -8,8 +8,8 @@ use std::sync::{Arc, Mutex, Weak};
 use serde::Serialize;
 
 use crate::prompts::{context_values, render_context, PromptBuilder};
-use crate::providers::{Model, Provider, ProviderToolDefinition};
-use crate::tools::{FinishTool, KnowledgeTool, ToolLike, ToolRegistry};
+use crate::providers::{Model, Provider};
+use crate::tools::{FinishTool, KnowledgeTool, Tool, ToolRegistry};
 
 use super::knowledge::Knowledge;
 use super::policy::Policies;
@@ -164,16 +164,16 @@ impl<P, M> AgentBuilder<P, M> {
     }
 
     /// Register a tool the agent may call.
-    pub fn tool(mut self, tool: impl ToolLike + 'static) -> Self {
+    pub fn tool(mut self, tool: impl Into<Tool>) -> Self {
         self.tools.register(tool);
         self
     }
 
     /// Register several tools the agent may call.
-    pub fn tools<I, T>(mut self, tools: I) -> Self
+    pub fn tools<I>(mut self, tools: I) -> Self
     where
-        I: IntoIterator<Item = T>,
-        T: ToolLike + 'static,
+        I: IntoIterator,
+        I::Item: Into<Tool>,
     {
         for t in tools {
             self.tools.register(t);
@@ -214,8 +214,8 @@ impl<P, M> AgentBuilder<P, M> {
         self.label.as_deref() == ticket_label
     }
 
-    pub(super) fn tool_definitions(&self) -> Vec<ProviderToolDefinition> {
-        self.tools.definitions()
+    pub(super) fn tool_registry(&self) -> &ToolRegistry {
+        &self.tools
     }
 
     pub(super) fn system_prompt(
@@ -411,10 +411,6 @@ impl Agent {
         self.label.as_deref() == ticket_label
     }
 
-    pub(super) fn tool_definitions(&self) -> Vec<ProviderToolDefinition> {
-        self.tools.definitions()
-    }
-
     pub(super) fn tool_registry(&self) -> &ToolRegistry {
         &self.tools
     }
@@ -527,6 +523,30 @@ impl Agent {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn tools_accepts_a_mixed_list_of_tools() {
+        use crate::tools::{CommandTool, ReadFileTool, Tool, ToolResult};
+
+        let agent = Agent::new().tools(vec![
+            Tool::from(ReadFileTool),
+            CommandTool::new("git").allow("git *").into(),
+            Tool::new("greet")
+                .description("Say hello.")
+                .handler(|_: serde_json::Value, _| async { ToolResult::success("hi") })
+                .build(),
+        ]);
+        let names: Vec<String> = agent
+            .tool_registry()
+            .tools()
+            .into_iter()
+            .map(|tool| tool.name().to_string())
+            .collect();
+        for name in ["read_file", "git", "greet"] {
+            assert!(names.contains(&name.to_string()), "{names:?}");
+        }
+    }
+
     use std::sync::Arc;
 
     use super::*;
@@ -691,10 +711,11 @@ mod tests {
     #[test]
     fn new_agent_has_finish_registered() {
         let agent = Agent::new();
-        let names: Vec<String> = agent
-            .tool_definitions()
+        let registry = agent.tool_registry();
+        let names: Vec<String> = registry
+            .tools()
             .into_iter()
-            .map(|d| d.name)
+            .map(|tool| tool.name().to_string())
             .collect();
         assert!(names.iter().any(|n| n == "finish"));
     }
@@ -789,10 +810,11 @@ mod tests {
         let dir = crate::test_util::TempDir::new().unwrap();
         let store = Knowledge::load(dir.path()).unwrap();
         let agent = Agent::new().knowledge(&store);
-        let names: Vec<String> = agent
-            .tool_definitions()
+        let registry = agent.tool_registry();
+        let names: Vec<String> = registry
+            .tools()
             .into_iter()
-            .map(|d| d.name)
+            .map(|tool| tool.name().to_string())
             .collect();
         assert!(
             names.iter().any(|n| n == "knowledge"),
@@ -881,10 +903,11 @@ mod tests {
     #[test]
     fn new_agent_has_the_knowledge_tool_registered() {
         let agent = Agent::new();
-        let names: Vec<String> = agent
-            .tool_definitions()
+        let registry = agent.tool_registry();
+        let names: Vec<String> = registry
+            .tools()
             .into_iter()
-            .map(|d| d.name)
+            .map(|tool| tool.name().to_string())
             .collect();
         assert!(
             names.iter().any(|n| n == "knowledge"),

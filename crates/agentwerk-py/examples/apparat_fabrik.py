@@ -63,8 +63,8 @@ part it names down the line, one ticket per part.
   plan alone cannot answer it.
 - Before you finish, write one page with `knowledge` on what this plan
   asks for, so the next reader of the Prüfbuch has it.
-- Call `finish` exactly once with `apparat`, `bauplan`, and `teile` as its
-  top-level arguments, each as its native JSON type.
+- Call `finish` exactly once with `result` holding `apparat`, `bauplan`, and
+  `teile`, each as its native JSON type.
 """
 
 MEISTER_ROLE = """
@@ -85,9 +85,8 @@ fitted to the apparatus.
 - NEVER rule on a card you did not read.
 - Before you finish, record the ruling with `knowledge` as one short
   page, which is what stamps it into the Prüfbuch.
-- Call `finish` exactly once with `teil`, `gemessen`, `soll`, `toleranz`,
-  `passt`, `befund`, and `massnahme` as its top-level arguments, each as its
-  native JSON type.
+- Call `finish` exactly once with `result` holding `teil`, `gemessen`, `soll`,
+  `toleranz`, `passt`, `befund`, and `massnahme`, each as its native JSON type.
 """
 
 MONTEUR_ROLE = """
@@ -106,8 +105,8 @@ You fit a cleared part into its apparatus and book it against the plan.
 - `eingebaut` is true only when the part is on the plan and you booked it.
 - Before you finish, book the fitting with `knowledge` as one short page,
   which is what puts it in the Prüfbuch.
-- Call `finish` exactly once with `apparat`, `teil`, `eingebaut`, `fehlt`, and
-  `vermerk` as its top-level arguments, each as its native JSON type.
+- Call `finish` exactly once with `result` holding `apparat`, `teil`,
+  `eingebaut`, `fehlt`, and `vermerk`, each as its native JSON type.
 """
 
 PLAN = Schema(

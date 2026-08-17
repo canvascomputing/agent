@@ -1,29 +1,16 @@
 //! Command access for agents, narrowed to the commands an operator names and refused for everything else.
 
-use std::future::Future;
-use std::pin::Pin;
-use std::sync::OnceLock;
+use std::sync::Arc;
 use std::time::Duration;
 
-use serde_json::Value;
-
-use super::super::tool::{ToolContext, ToolLike, ToolResult};
-use super::super::tool_file::ToolFile;
+use super::super::tool::{Tool, ToolContext, ToolResult};
 use super::super::util::{glob_match, run_command};
 use super::parse::{Argument, Command, Refusal};
-use crate::providers::ProviderResult as Result;
-
-fn tool_file() -> &'static ToolFile {
-    static FILE: OnceLock<ToolFile> = OnceLock::new();
-    FILE.get_or_init(|| ToolFile::parse(include_str!("command.tool.md")))
-}
 
 /// The shared part of every tool's description, with the per-instance patterns
-/// appended at construction time.
-fn description_base() -> &'static str {
-    static DESC: OnceLock<String> = OnceLock::new();
-    DESC.get_or_init(|| tool_file().render_markdown())
-}
+/// appended at construction time, and the arguments every one of them accepts.
+const DEFINITION: &str = include_str!("command.tool.md");
+const SCHEMA: &str = include_str!("command.schema.json");
 
 /// Execute commands. A tool named `git` runs the bare `git` and nothing else
 /// until [`CommandTool::allow`] widens it; [`CommandTool::deny`] and
@@ -74,7 +61,7 @@ impl CommandTool {
             deny_flags: Vec::new(),
             description: String::new(),
             custom_description: false,
-            concurrent: tool_file().concurrent,
+            concurrent: false,
         };
         tool.render_description();
         tool
@@ -156,7 +143,7 @@ impl CommandTool {
             return;
         }
 
-        let mut description = format!("{}\n\n{}", description_base(), self.allowed_line());
+        let mut description = format!("{}\n\n{}", DEFINITION.trim(), self.allowed_line());
         if !self.deny.is_empty() {
             description.push_str(&format!("\nDenied: {}.", quoted(&self.deny)));
         }
@@ -316,50 +303,50 @@ fn quoted(patterns: &[String]) -> String {
         .join(", ")
 }
 
-impl ToolLike for CommandTool {
-    fn name(&self) -> &str {
-        &self.tool_name
+#[derive(serde::Deserialize)]
+pub struct CommandArgs {
+    command: String,
+    timeout_ms: Option<u64>,
+}
+
+impl CommandTool {
+    async fn run(&self, args: CommandArgs, ctx: ToolContext) -> ToolResult {
+        let CommandArgs {
+            command,
+            timeout_ms,
+        } = args;
+
+        let command = match self.check(&command) {
+            Ok(command) => command,
+            Err(refusal) => return ToolResult::error(refusal),
+        };
+
+        let timeout = timeout_ms
+            .map(Duration::from_millis)
+            .unwrap_or(Self::DEFAULT_TIMEOUT)
+            // The schema advertises the ceiling, so honour it rather than
+            // letting a call name any number it likes.
+            .min(Self::MAX_TIMEOUT);
+
+        run_command(&command, timeout, &ctx).await
     }
+}
 
-    fn description(&self) -> &str {
-        &self.description
-    }
-
-    fn input_schema(&self) -> Value {
-        tool_file().input_schema.clone()
-    }
-
-    fn is_concurrent(&self) -> bool {
-        self.concurrent
-    }
-
-    fn call<'a>(
-        &'a self,
-        input: Value,
-        ctx: &'a ToolContext,
-    ) -> Pin<Box<dyn Future<Output = Result<ToolResult>> + Send + 'a>> {
-        Box::pin(async move {
-            let command = match input.get("command").and_then(|v| v.as_str()) {
-                Some(cmd) => cmd,
-                None => return Ok(ToolResult::error("Missing required field: command")),
-            };
-
-            let command = match self.check(command) {
-                Ok(command) => command,
-                Err(refusal) => return Ok(ToolResult::error(refusal)),
-            };
-
-            let timeout = input
-                .get("timeout_ms")
-                .and_then(|v| v.as_u64())
-                .map(Duration::from_millis)
-                .unwrap_or(Self::DEFAULT_TIMEOUT)
-                // The schema advertises the ceiling, so honour it rather than
-                // letting a call name any number it likes.
-                .min(Self::MAX_TIMEOUT);
-
-            Ok(run_command(&command, timeout, ctx).await)
-        })
+impl From<CommandTool> for Tool {
+    fn from(tool: CommandTool) -> Tool {
+        let name = tool.tool_name.clone();
+        let description = tool.description.clone();
+        let concurrent = tool.concurrent;
+        let config = Arc::new(tool);
+        Tool::new(name)
+            .description(description)
+            .schema(SCHEMA)
+            .concurrent(concurrent)
+            .handler(move |args: CommandArgs, ctx: ToolContext| {
+                let config = Arc::clone(&config);
+                async move { config.run(args, ctx).await }
+            })
+            .build()
     }
 }
 
@@ -367,25 +354,38 @@ impl ToolLike for CommandTool {
 mod tests {
     use super::*;
 
+    use crate::event::ToolFailureKind;
+
+    #[test]
+    fn every_example_the_schema_shows_deserializes_into_the_arguments() {
+        let document = Tool::from(CommandTool::new("echo"))
+            .input_schema()
+            .get_raw_schema()
+            .clone();
+        for example in document["examples"].as_array().expect("examples") {
+            serde_json::from_value::<CommandArgs>(example.clone())
+                .unwrap_or_else(|error| panic!("{example}: {error}"));
+        }
+    }
+
     fn test_tool_context() -> ToolContext {
         ToolContext::new(std::env::current_dir().unwrap())
     }
 
     #[test]
     fn a_tool_is_not_concurrent_by_default() {
-        assert!(!CommandTool::new("echo").is_concurrent());
+        assert!(!Tool::from(CommandTool::new("echo")).is_concurrent());
     }
 
     #[test]
     fn a_tool_takes_its_name_from_its_only_argument() {
-        let tool = CommandTool::new("echo");
-        assert_eq!(tool.name(), "echo");
+        assert_eq!(Tool::from(CommandTool::new("echo")).name(), "echo");
     }
 
     #[test]
     fn a_tool_can_be_marked_concurrent() {
         let tool = CommandTool::new("echo").concurrent(true);
-        assert!(tool.is_concurrent());
+        assert!(Tool::from(tool).is_concurrent());
     }
 
     #[test]
@@ -393,7 +393,7 @@ mod tests {
         let tool = CommandTool::new("git")
             .allow("git status")
             .deny("git push*");
-        let description = ToolLike::description(&tool);
+        let description = Tool::from(tool).description().to_string();
         assert!(description.contains("Allowed: `git status`."));
         assert!(description.contains("Denied: `git push*`."));
     }
@@ -401,7 +401,9 @@ mod tests {
     #[test]
     fn a_description_names_the_bare_command_without_an_allowed_pattern() {
         let tool = CommandTool::new("git");
-        assert!(ToolLike::description(&tool).contains("Allowed: only the bare command `git`."));
+        assert!(Tool::from(tool)
+            .description()
+            .contains("Allowed: only the bare command `git`."));
     }
 
     #[test]
@@ -409,7 +411,7 @@ mod tests {
         let tool = CommandTool::new("git")
             .description("Run git commands.")
             .allow("git *");
-        assert_eq!(ToolLike::description(&tool), "Run git commands.");
+        assert_eq!(Tool::from(tool).description(), "Run git commands.");
     }
 
     #[tokio::test]
@@ -417,10 +419,10 @@ mod tests {
         let tool = CommandTool::new("echo").allow("echo *");
         let ctx = test_tool_context();
         let input = serde_json::json!({ "command": "echo hello" });
-        let result = tool.call(input, &ctx).await.unwrap();
+        let result = Tool::from(tool.clone()).call(input, &ctx).await;
         let content = result.content();
         assert!(content.contains("hello"));
-        assert!(matches!(result, ToolResult::Success(_)));
+        assert!(matches!(result, ToolResult::Success { .. }));
     }
 
     #[tokio::test]
@@ -428,43 +430,57 @@ mod tests {
         let tool = CommandTool::new("sleep").allow("sleep *");
         let ctx = test_tool_context();
         let input = serde_json::json!({ "command": "sleep 10", "timeout_ms": 100 });
-        let result = tool.call(input, &ctx).await.unwrap();
+        let result = Tool::from(tool.clone()).call(input, &ctx).await;
         let content = result.content();
-        assert!(matches!(result, ToolResult::Error(_)));
+        assert!(matches!(result, ToolResult::Error { .. }));
         assert!(content.contains("timed out"));
     }
 
     #[tokio::test]
     async fn a_call_without_a_command_is_rejected() {
-        let tool = CommandTool::new("echo");
-        let ctx = test_tool_context();
-        let result = tool.call(serde_json::json!({}), &ctx).await.unwrap();
-        let content = result.content();
-        assert!(matches!(result, ToolResult::Error(_)));
-        assert!(content.contains("Missing required field: command"));
+        // The schema requires `command`, so dispatch rejects the call before
+        // the tool runs and names the property.
+        let mut registry = crate::tools::ToolRegistry::default();
+        registry.register(CommandTool::new("echo"));
+        let calls = vec![crate::tools::ToolCall {
+            id: "c1".into(),
+            name: "echo".into(),
+            input: serde_json::json!({}),
+        }];
+        let results = registry.execute(&calls, &test_tool_context()).await;
+        assert!(matches!(
+            results[0],
+            ToolResult::Error {
+                kind: ToolFailureKind::SchemaValidationFailed,
+                ..
+            }
+        ));
+        assert!(
+            results[0].content().contains("`command`"),
+            "{}",
+            results[0].content()
+        );
     }
 
     #[tokio::test]
     async fn a_tool_without_an_allowed_pattern_runs_the_bare_command() {
         let tool = CommandTool::new("echo");
         let ctx = test_tool_context();
-        let result = tool
+        let result = Tool::from(tool)
             .call(serde_json::json!({ "command": "echo" }), &ctx)
-            .await
-            .unwrap();
-        assert!(matches!(result, ToolResult::Success(_)));
+            .await;
+        assert!(matches!(result, ToolResult::Success { .. }));
     }
 
     #[tokio::test]
     async fn a_tool_without_an_allowed_pattern_rejects_a_command_with_arguments() {
         let tool = CommandTool::new("echo");
         let ctx = test_tool_context();
-        let result = tool
+        let result = Tool::from(tool)
             .call(serde_json::json!({ "command": "echo hello" }), &ctx)
-            .await
-            .unwrap();
+            .await;
         let content = result.content();
-        assert!(matches!(result, ToolResult::Error(_)));
+        assert!(matches!(result, ToolResult::Error { .. }));
         assert!(content.contains("is not allowed by tool 'echo'"));
     }
 
@@ -472,12 +488,11 @@ mod tests {
     async fn a_command_matching_no_allowed_pattern_is_rejected() {
         let tool = CommandTool::new("echo").allow("echo *");
         let ctx = test_tool_context();
-        let result = tool
+        let result = Tool::from(tool)
             .call(serde_json::json!({ "command": "rm -rf /" }), &ctx)
-            .await
-            .unwrap();
+            .await;
         let content = result.content();
-        assert!(matches!(result, ToolResult::Error(_)));
+        assert!(matches!(result, ToolResult::Error { .. }));
         assert!(content.contains("Allowed: `echo *`."));
     }
 
@@ -488,12 +503,38 @@ mod tests {
             .allow("echo two*");
         let ctx = test_tool_context();
         for command in ["echo one", "echo two"] {
-            let result = tool
+            let result = Tool::from(tool.clone())
                 .call(serde_json::json!({ "command": command }), &ctx)
-                .await
-                .unwrap();
-            assert!(matches!(result, ToolResult::Success(_)));
+                .await;
+            assert!(matches!(result, ToolResult::Success { .. }));
         }
+    }
+
+    #[tokio::test]
+    async fn the_conversion_keeps_the_rules() {
+        // The closure captures the whole configuration, so a converted tool
+        // must refuse what the type refuses.
+        let tool: Tool = CommandTool::new("echo")
+            .allow("echo *")
+            .deny("echo secret*")
+            .into();
+        let allowed = tool
+            .call(
+                serde_json::json!({"command": "echo hi"}),
+                &test_tool_context(),
+            )
+            .await;
+        assert!(matches!(allowed, ToolResult::Success { .. }), "{allowed:?}");
+        let denied = tool
+            .call(
+                serde_json::json!({"command": "echo secret"}),
+                &test_tool_context(),
+            )
+            .await;
+        assert!(
+            matches!(&denied, ToolResult::Error { content: message, .. } if message.contains("denied pattern")),
+            "{denied:?}"
+        );
     }
 
     #[tokio::test]
@@ -502,12 +543,11 @@ mod tests {
             .allow("echo *")
             .deny("echo secret*");
         let ctx = test_tool_context();
-        let result = tool
+        let result = Tool::from(tool)
             .call(serde_json::json!({ "command": "echo secret" }), &ctx)
-            .await
-            .unwrap();
+            .await;
         let content = result.content();
-        assert!(matches!(result, ToolResult::Error(_)));
+        assert!(matches!(result, ToolResult::Error { .. }));
         assert!(content.contains("denied pattern 'echo secret*'"));
     }
 
@@ -515,11 +555,10 @@ mod tests {
     async fn a_denied_pattern_overrules_the_bare_command() {
         let tool = CommandTool::new("echo").deny("echo");
         let ctx = test_tool_context();
-        let result = tool
+        let result = Tool::from(tool)
             .call(serde_json::json!({ "command": "echo" }), &ctx)
-            .await
-            .unwrap();
-        assert!(matches!(result, ToolResult::Error(_)));
+            .await;
+        assert!(matches!(result, ToolResult::Error { .. }));
     }
 
     /// Run `command` through a tool whose pattern matches the whole line, so a
@@ -530,14 +569,13 @@ mod tests {
         let ctx = ToolContext::new(dir.path().to_path_buf());
         let tool = CommandTool::new("touch").allow("touch *");
 
-        let result = tool
+        let result = Tool::from(tool)
             .call(serde_json::json!({ "command": command }), &ctx)
-            .await
-            .unwrap();
+            .await;
 
         let content = result.content();
         assert!(
-            matches!(result, ToolResult::Error(_)),
+            matches!(result, ToolResult::Error { .. }),
             "{command:?} should be refused, got {content}"
         );
         assert!(
@@ -553,13 +591,11 @@ mod tests {
         let dir = crate::test_util::TempDir::new().unwrap();
         let ctx = ToolContext::new(dir.path().to_path_buf());
 
-        let result = CommandTool::new("touch")
-            .allow("touch *")
+        let result = Tool::from(CommandTool::new("touch").allow("touch *"))
             .call(serde_json::json!({ "command": "touch chained.txt" }), &ctx)
-            .await
-            .unwrap();
+            .await;
 
-        assert!(matches!(result, ToolResult::Success(_)));
+        assert!(matches!(result, ToolResult::Success { .. }));
         assert!(dir.path().join("chained.txt").exists());
     }
 
@@ -581,14 +617,15 @@ mod tests {
     #[tokio::test]
     async fn an_operator_inside_quotes_is_one_command() {
         let ctx = test_tool_context();
-        let result = CommandTool::new("echo")
-            .allow("echo *")
+        let result = Tool::from(CommandTool::new("echo").allow("echo *"))
             .call(serde_json::json!({ "command": "echo \"a && b\"" }), &ctx)
-            .await
-            .unwrap();
+            .await;
 
         let content = result.content();
-        assert!(matches!(result, ToolResult::Success(_)), "got {content}");
+        assert!(
+            matches!(result, ToolResult::Success { .. }),
+            "got {content}"
+        );
         assert!(content.contains("a && b"));
     }
 
@@ -600,31 +637,33 @@ mod tests {
         std::fs::write(dir.path().join("two words.txt"), "x").unwrap();
         let ctx = ToolContext::new(dir.path().to_path_buf());
 
-        let result = CommandTool::new("ls")
-            .allow("ls *")
+        let result = Tool::from(CommandTool::new("ls").allow("ls *"))
             .call(
                 serde_json::json!({ "command": "ls -1 \"two words.txt\"" }),
                 &ctx,
             )
-            .await
-            .unwrap();
+            .await;
 
         let content = result.content();
-        assert!(matches!(result, ToolResult::Success(_)), "got {content}");
+        assert!(
+            matches!(result, ToolResult::Success { .. }),
+            "got {content}"
+        );
         assert!(content.contains("two words.txt"), "got {content}");
     }
 
     #[tokio::test]
     async fn an_absolute_program_path_runs_when_a_pattern_allows_it() {
         let ctx = test_tool_context();
-        let result = CommandTool::new("echo")
-            .allow("/bin/echo *")
+        let result = Tool::from(CommandTool::new("echo").allow("/bin/echo *"))
             .call(serde_json::json!({ "command": "/bin/echo hi" }), &ctx)
-            .await
-            .unwrap();
+            .await;
 
         let content = result.content();
-        assert!(matches!(result, ToolResult::Success(_)), "got {content}");
+        assert!(
+            matches!(result, ToolResult::Success { .. }),
+            "got {content}"
+        );
         assert!(content.contains("hi"));
     }
 
@@ -634,10 +673,9 @@ mod tests {
         // push from the checkout instead of failing the assertion.
         let tool = CommandTool::new("echo").allow("echo *").deny("echo push*");
         let ctx = test_tool_context();
-        let result = tool
+        let result = Tool::from(tool)
             .call(serde_json::json!({ "command": "echo  push --force" }), &ctx)
-            .await
-            .unwrap();
+            .await;
         let content = result.content();
         assert!(
             content.contains("denied pattern 'echo push*'"),
@@ -649,10 +687,9 @@ mod tests {
     async fn a_denied_flag_is_refused_wherever_it_sits() {
         let tool = CommandTool::new("ls").allow("ls *").deny_flag("-l");
         let ctx = test_tool_context();
-        let result = tool
+        let result = Tool::from(tool)
             .call(serde_json::json!({ "command": "ls -a -l" }), &ctx)
-            .await
-            .unwrap();
+            .await;
         let content = result.content();
         assert!(content.contains("denied flag '-l'"), "got {content}");
     }
@@ -661,14 +698,13 @@ mod tests {
     async fn a_denied_flag_catches_the_value_it_carries() {
         let tool = CommandTool::new("git").allow("git *").deny_flag("--format");
         let ctx = test_tool_context();
-        let result = tool
+        let result = Tool::from(tool)
             .call(
                 serde_json::json!({ "command": "git log --format=%H" }),
                 &ctx,
             )
-            .await
-            .unwrap();
-        assert!(matches!(result, ToolResult::Error(_)));
+            .await;
+        assert!(matches!(result, ToolResult::Error { .. }));
     }
 
     #[tokio::test]
@@ -679,13 +715,12 @@ mod tests {
         // network until the tool timeout instead of failing the assertion.
         let tool = CommandTool::new("echo").allow("echo *").deny_flag("-o");
         let ctx = test_tool_context();
-        let result = tool
+        let result = Tool::from(tool)
             .call(
                 serde_json::json!({ "command": "echo -oProxyCommand=/bin/sh host" }),
                 &ctx,
             )
-            .await
-            .unwrap();
+            .await;
         let content = result.content();
         assert!(
             content.contains("denied flag '-oProxyCommand=/bin/sh'"),
@@ -699,11 +734,10 @@ mod tests {
         // one covers the other.
         let tool = CommandTool::new("echo").allow("echo *").deny_flag("-f");
         let ctx = test_tool_context();
-        let result = tool
+        let result = Tool::from(tool)
             .call(serde_json::json!({ "command": "echo --force" }), &ctx)
-            .await
-            .unwrap();
-        assert!(matches!(result, ToolResult::Success(_)));
+            .await;
+        assert!(matches!(result, ToolResult::Success { .. }));
     }
 
     #[tokio::test]
@@ -712,21 +746,19 @@ mod tests {
             .allow("echo *")
             .deny_flag("--force");
         let ctx = test_tool_context();
-        let result = tool
+        let result = Tool::from(tool)
             .call(serde_json::json!({ "command": "echo -f" }), &ctx)
-            .await
-            .unwrap();
-        assert!(matches!(result, ToolResult::Success(_)));
+            .await;
+        assert!(matches!(result, ToolResult::Success { .. }));
     }
 
     #[tokio::test]
     async fn a_denied_letter_reaches_into_a_cluster() {
         let tool = CommandTool::new("echo").allow("echo *").deny_flag("-f");
         let ctx = test_tool_context();
-        let result = tool
+        let result = Tool::from(tool)
             .call(serde_json::json!({ "command": "echo -rf" }), &ctx)
-            .await
-            .unwrap();
+            .await;
         assert!(result.content().contains("denied flag '-rf'"));
     }
 
@@ -737,18 +769,15 @@ mod tests {
         let tool = CommandTool::new("echo").allow("echo *").deny_flag("-rf");
         let ctx = test_tool_context();
 
-        let refused = tool
-            .clone()
+        let refused = Tool::from(tool.clone())
             .call(serde_json::json!({ "command": "echo -rf" }), &ctx)
-            .await
-            .unwrap();
+            .await;
         assert!(refused.content().contains("denied flag '-rf'"));
 
-        let allowed = tool
+        let allowed = Tool::from(tool)
             .call(serde_json::json!({ "command": "echo -r" }), &ctx)
-            .await
-            .unwrap();
-        assert!(matches!(allowed, ToolResult::Success(_)));
+            .await;
+        assert!(matches!(allowed, ToolResult::Success { .. }));
     }
 
     #[tokio::test]
@@ -757,24 +786,22 @@ mod tests {
         // absolute path allows it.
         let tool = CommandTool::new("echo").allow("echo *");
         let ctx = test_tool_context();
-        let result = tool
+        let result = Tool::from(tool)
             .call(serde_json::json!({ "command": "/bin/echo hi" }), &ctx)
-            .await
-            .unwrap();
-        assert!(matches!(result, ToolResult::Error(_)));
+            .await;
+        assert!(matches!(result, ToolResult::Error { .. }));
     }
 
     #[tokio::test]
     async fn an_environment_assignment_is_refused() {
         let tool = CommandTool::new("echo").allow("echo *");
         let ctx = test_tool_context();
-        let result = tool
+        let result = Tool::from(tool)
             .call(
                 serde_json::json!({ "command": "LD_PRELOAD=./x echo hi" }),
                 &ctx,
             )
-            .await
-            .unwrap();
+            .await;
         let content = result.content();
         assert!(content.contains("environment variable"), "got {content}");
     }
@@ -782,13 +809,12 @@ mod tests {
     #[tokio::test]
     async fn a_missing_program_names_itself_in_the_error() {
         let ctx = test_tool_context();
-        let result = CommandTool::new("nonexistent_command_xyz")
+        let result = Tool::from(CommandTool::new("nonexistent_command_xyz"))
             .call(
                 serde_json::json!({ "command": "nonexistent_command_xyz" }),
                 &ctx,
             )
-            .await
-            .unwrap();
+            .await;
         let content = result.content();
         assert!(content.contains("nonexistent_command_xyz"), "got {content}");
     }
@@ -796,7 +822,9 @@ mod tests {
     #[test]
     fn a_description_lists_the_denied_flags() {
         let tool = CommandTool::new("git").allow("git *").deny_flag("--force");
-        assert!(ToolLike::description(&tool).contains("Denied flags: `--force`."));
+        assert!(Tool::from(tool)
+            .description()
+            .contains("Denied flags: `--force`."));
     }
 
     #[test]
@@ -820,11 +848,10 @@ mod tests {
             .allow("echo *")
             .deny_flag("--force");
         let ctx = test_tool_context();
-        let result = tool
+        let result = Tool::from(tool)
             .call(serde_json::json!({ "command": "echo -- --force" }), &ctx)
-            .await
-            .unwrap();
-        assert!(matches!(result, ToolResult::Success(_)));
+            .await;
+        assert!(matches!(result, ToolResult::Success { .. }));
     }
 
     #[tokio::test]
@@ -834,11 +861,10 @@ mod tests {
         // pattern read as two.
         let tool = CommandTool::new("echo").allow("echo a b");
         let ctx = test_tool_context();
-        let result = tool
+        let result = Tool::from(tool)
             .call(serde_json::json!({ "command": "echo \"a b\"" }), &ctx)
-            .await
-            .unwrap();
-        assert!(matches!(result, ToolResult::Success(_)));
+            .await;
+        assert!(matches!(result, ToolResult::Success { .. }));
     }
 
     #[tokio::test]
@@ -847,11 +873,10 @@ mod tests {
         // failing closed is what keeps it from widening the allow list.
         let tool = CommandTool::new("echo").allow("echo *");
         let ctx = test_tool_context();
-        let result = tool
+        let result = Tool::from(tool)
             .call(serde_json::json!({ "command": "ECHO hi" }), &ctx)
-            .await
-            .unwrap();
-        assert!(matches!(result, ToolResult::Error(_)));
+            .await;
+        assert!(matches!(result, ToolResult::Error { .. }));
     }
 
     #[tokio::test]
@@ -862,17 +887,16 @@ mod tests {
             .deny("touch marker*");
         let ctx = ToolContext::new(dir.path().to_path_buf());
 
-        tool.call(serde_json::json!({ "command": "touch allowed.txt" }), &ctx)
-            .await
-            .unwrap();
-        let result = tool
+        Tool::from(tool.clone())
+            .call(serde_json::json!({ "command": "touch allowed.txt" }), &ctx)
+            .await;
+        let result = Tool::from(tool)
             .call(serde_json::json!({ "command": "touch marker.txt" }), &ctx)
-            .await
-            .unwrap();
+            .await;
 
         // Without the allowed file, the absent marker would prove nothing.
         assert!(dir.path().join("allowed.txt").exists());
         assert!(!dir.path().join("marker.txt").exists());
-        assert!(matches!(result, ToolResult::Error(_)));
+        assert!(matches!(result, ToolResult::Error { .. }));
     }
 }

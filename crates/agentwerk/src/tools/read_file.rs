@@ -1,15 +1,6 @@
 //! The agent's eyes on the filesystem. Lets a model read a file it did not receive in the prompt.
 
-use std::future::Future;
-use std::pin::Pin;
-use std::sync::OnceLock;
-
-use serde_json::Value;
-
-use crate::providers::ProviderResult;
-
-use super::tool::{ToolContext, ToolLike, ToolResult};
-use super::tool_file::ToolFile;
+use super::tool::{Tool, ToolContext, ToolResult};
 
 /// Read a file with optional line offset and limit. Returns line-numbered
 /// text so the model can reference specific lines in subsequent edits.
@@ -25,136 +16,119 @@ use super::tool_file::ToolFile;
 /// ```
 pub struct ReadFileTool;
 
-fn tool_file() -> &'static ToolFile {
-    static FILE: OnceLock<ToolFile> = OnceLock::new();
-    FILE.get_or_init(|| ToolFile::parse(include_str!("read_file.tool.md")))
+/// `limit` declares no default: absent means the rest of the file from
+/// `offset`, which only the file's length gives.
+#[derive(serde::Deserialize)]
+pub struct ReadFileArgs {
+    path: String,
+    #[serde(default = "first_line")]
+    offset: u64,
+    limit: Option<u64>,
+    column: Option<u64>,
+    length: Option<u64>,
 }
 
-fn description() -> &'static str {
-    static DESC: OnceLock<String> = OnceLock::new();
-    DESC.get_or_init(|| tool_file().render_markdown())
+fn first_line() -> u64 {
+    1
 }
 
-impl ToolLike for ReadFileTool {
-    fn name(&self) -> &str {
-        &tool_file().name
+impl From<ReadFileTool> for Tool {
+    fn from(_: ReadFileTool) -> Tool {
+        Tool::new("read_file")
+            .description(include_str!("read_file.tool.md"))
+            .schema(include_str!("read_file.schema.json"))
+            .concurrent(true)
+            .paths(["path"])
+            .handler(run)
+            .build()
+    }
+}
+
+async fn run(args: ReadFileArgs, ctx: ToolContext) -> ToolResult {
+    let ReadFileArgs {
+        path,
+        offset,
+        limit,
+        column,
+        length,
+    } = args;
+
+    let resolved = ctx.dir.join(&path);
+
+    if resolved.is_dir() {
+        let message = match super::util::directory_entries(&resolved) {
+            Some(entries) => format!(
+                "'{path}' is a directory, not a file. Read one of its entries by \
+                 appending the name to the path:\n  {entries}"
+            ),
+            None => format!("'{path}' is a directory, not a file."),
+        };
+        return ToolResult::error(message);
     }
 
-    fn description(&self) -> &str {
-        description()
-    }
+    let content = match std::fs::read(&resolved) {
+        Ok(bytes) => {
+            // A NUL byte marks a true binary (image, archive, compiled
+            // object); text, even minified or lightly obfuscated, never
+            // contains one. Report it concisely instead of dumping decoded
+            // garbage that floods the transcript and breaks strict chat
+            // templates. Otherwise decode lossily so odd-encoded source
+            // stays inspectable, the point of a scan.
+            if bytes.contains(&0) {
+                return ToolResult::success(format!(
+                    "{path} is a binary file ({} bytes), not text; it cannot be read as source. Judge from the information you already have.",
+                    bytes.len()
+                ));
+            }
+            String::from_utf8_lossy(&bytes).into_owned()
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return ToolResult::error(format!(
+                "File does not exist: {path}. {}",
+                super::util::not_found_hint(&ctx.dir, &resolved)
+            ));
+        }
+        Err(e) => {
+            return ToolResult::error(format!("Failed to read file: {e}"));
+        }
+    };
 
-    fn input_schema(&self) -> Value {
-        tool_file().input_schema.clone()
-    }
+    let lines: Vec<&str> = content.lines().collect();
 
-    fn is_concurrent(&self) -> bool {
-        tool_file().concurrent
-    }
+    let offset = offset.max(1) as usize;
+    let limit = limit
+        .map(|l| l as usize)
+        .unwrap_or(lines.len().saturating_sub(offset - 1));
+    let column = column.map(|c| c.max(1) as usize);
+    let length = length.map(|c| c as usize);
 
-    fn opened_paths(&self, input: &Value) -> Vec<String> {
-        input
-            .get("path")
-            .and_then(|v| v.as_str())
-            .map(|s| vec![s.to_string()])
-            .unwrap_or_default()
-    }
+    let start = (offset - 1).min(lines.len());
+    let end = (start + limit).min(lines.len());
 
-    fn call<'a>(
-        &'a self,
-        input: Value,
-        ctx: &'a ToolContext,
-    ) -> Pin<Box<dyn Future<Output = ProviderResult<ToolResult>> + Send + 'a>> {
-        Box::pin(async move {
-            let path = match input["path"].as_str() {
-                Some(p) => p,
-                None => {
-                    return Ok(ToolResult::error("Missing required parameter: path"));
-                }
-            };
-
-            let resolved = ctx.dir.join(path);
-
-            if resolved.is_dir() {
-                let message = match super::util::directory_entries(&resolved) {
-                    Some(entries) => format!(
-                        "'{path}' is a directory, not a file. Read one of its entries by \
-                         appending the name to the path:\n  {entries}"
-                    ),
-                    None => format!("'{path}' is a directory, not a file."),
+    let mut result = String::new();
+    for (i, line) in lines[start..end].iter().enumerate() {
+        let line_num = start + i + 1;
+        if !result.is_empty() {
+            result.push('\n');
+        }
+        match column {
+            Some(col) => {
+                let byte_start = snap_to_char_boundary(line, (col - 1).min(line.len()));
+                let byte_end = match length {
+                    Some(len) => snap_to_char_boundary(line, (byte_start + len).min(line.len())),
+                    None => line.len(),
                 };
-                return Ok(ToolResult::error(message));
+                let slice = &line[byte_start..byte_end];
+                let display_col = byte_start + 1;
+                result.push_str(&format!("{line_num}:{display_col}\t{slice}"));
             }
-
-            let content = match std::fs::read(&resolved) {
-                Ok(bytes) => {
-                    // A NUL byte marks a true binary (image, archive, compiled
-                    // object); text, even minified or lightly obfuscated, never
-                    // contains one. Report it concisely instead of dumping decoded
-                    // garbage that floods the transcript and breaks strict chat
-                    // templates. Otherwise decode lossily so odd-encoded source
-                    // stays inspectable, the point of a scan.
-                    if bytes.contains(&0) {
-                        return Ok(ToolResult::success(format!(
-                            "{path} is a binary file ({} bytes), not text; it cannot be read as source. Judge from the information you already have.",
-                            bytes.len()
-                        )));
-                    }
-                    String::from_utf8_lossy(&bytes).into_owned()
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    return Ok(ToolResult::error(format!(
-                        "File does not exist: {path}. {}",
-                        super::util::not_found_hint(&ctx.dir, &resolved)
-                    )));
-                }
-                Err(e) => {
-                    return Ok(ToolResult::error(format!("Failed to read file: {e}")));
-                }
-            };
-
-            let lines: Vec<&str> = content.lines().collect();
-
-            let offset = input["offset"].as_u64().unwrap_or(1).max(1) as usize;
-            let limit = input["limit"]
-                .as_u64()
-                .map(|l| l as usize)
-                .unwrap_or(lines.len().saturating_sub(offset - 1));
-
-            let column = input["column"].as_u64().map(|c| c.max(1) as usize);
-            let length = input["length"].as_u64().map(|c| c as usize);
-
-            let start = (offset - 1).min(lines.len());
-            let end = (start + limit).min(lines.len());
-
-            let mut result = String::new();
-            for (i, line) in lines[start..end].iter().enumerate() {
-                let line_num = start + i + 1;
-                if !result.is_empty() {
-                    result.push('\n');
-                }
-                match column {
-                    Some(col) => {
-                        let byte_start = snap_to_char_boundary(line, (col - 1).min(line.len()));
-                        let byte_end = match length {
-                            Some(len) => {
-                                snap_to_char_boundary(line, (byte_start + len).min(line.len()))
-                            }
-                            None => line.len(),
-                        };
-                        let slice = &line[byte_start..byte_end];
-                        let display_col = byte_start + 1;
-                        result.push_str(&format!("{line_num}:{display_col}\t{slice}"));
-                    }
-                    None => {
-                        result.push_str(&format!("{line_num}\t{line}"));
-                    }
-                }
+            None => {
+                result.push_str(&format!("{line_num}\t{line}"));
             }
-
-            Ok(ToolResult::success(result))
-        })
+        }
     }
+
+    ToolResult::success(result)
 }
 
 fn snap_to_char_boundary(s: &str, pos: usize) -> usize {
@@ -169,6 +143,18 @@ fn snap_to_char_boundary(s: &str, pos: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_example_the_schema_shows_deserializes_into_the_arguments() {
+        let document = Tool::from(ReadFileTool)
+            .input_schema()
+            .get_raw_schema()
+            .clone();
+        for example in document["examples"].as_array().expect("examples") {
+            serde_json::from_value::<ReadFileArgs>(example.clone())
+                .unwrap_or_else(|error| panic!("{example}: {error}"));
+        }
+    }
     use std::path::PathBuf;
 
     fn test_ctx(dir: &std::path::Path) -> ToolContext {
@@ -180,10 +166,10 @@ mod tests {
         use crate::tools::{EditFileTool, GlobTool, GrepTool, ListDirectoryTool, WriteFileTool};
 
         let input = serde_json::json!({"path": "src/lib.rs"});
-        let openers: Vec<Box<dyn ToolLike>> = vec![
-            Box::new(ReadFileTool),
-            Box::new(WriteFileTool),
-            Box::new(EditFileTool),
+        let openers: Vec<Tool> = vec![
+            ReadFileTool.into(),
+            WriteFileTool.into(),
+            EditFileTool.into(),
         ];
         for tool in &openers {
             assert_eq!(
@@ -195,9 +181,30 @@ mod tests {
         }
 
         // Directory, pattern, and content-search tools open no file.
-        assert!(ListDirectoryTool.opened_paths(&input).is_empty());
-        assert!(GlobTool.opened_paths(&input).is_empty());
-        assert!(GrepTool.opened_paths(&input).is_empty());
+        assert!(Tool::from(ListDirectoryTool)
+            .opened_paths(&input)
+            .is_empty());
+        assert!(Tool::from(GlobTool).opened_paths(&input).is_empty());
+        assert!(Tool::from(GrepTool).opened_paths(&input).is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_slice_the_model_quoted_reads_the_lines_it_asked_for() {
+        // Dispatch retypes against the advertised schema, which is what keeps
+        // these `as_u64` reads from silently defaulting to the whole file.
+        let dir = crate::test_util::TempDir::new().unwrap();
+        std::fs::write(dir.path().join("test.txt"), "alpha\nbeta\ngamma\ndelta\n").unwrap();
+        let mut registry = crate::tools::tool::ToolRegistry::default();
+        registry.register(ReadFileTool);
+        let calls = vec![crate::tools::ToolCall {
+            id: "c1".into(),
+            name: "read_file".into(),
+            input: serde_json::json!({"path": "test.txt", "offset": "2", "limit": "2"}),
+        }];
+
+        let results = registry.execute(&calls, &test_ctx(dir.path())).await;
+
+        assert_eq!(results[0].content(), "2\tbeta\n3\tgamma");
     }
 
     #[tokio::test]
@@ -208,7 +215,7 @@ mod tests {
 
         struct Case {
             name: &'static str,
-            input: Value,
+            input: serde_json::Value,
             expect_error: bool,
             expect_contains: &'static str,
         }
@@ -258,12 +265,11 @@ mod tests {
             },
         ];
 
-        let tool = ReadFileTool;
         let ctx = test_ctx(dir.path());
 
         for case in cases {
-            let result = tool.call(case.input, &ctx).await.unwrap();
-            let is_error = matches!(result, ToolResult::Error(_));
+            let result = Tool::from(ReadFileTool).call(case.input, &ctx).await;
+            let is_error = matches!(result, ToolResult::Error { .. });
             let content = result.content();
             assert_eq!(
                 is_error, case.expect_error,
@@ -287,12 +293,11 @@ mod tests {
         std::fs::write(dir.path().join("sessions.py"), "y = 2\n").unwrap();
         std::fs::create_dir(dir.path().join("subpkg")).unwrap();
 
-        let result = ReadFileTool
+        let result = Tool::from(ReadFileTool)
             .call(serde_json::json!({ "path": "." }), &test_ctx(dir.path()))
-            .await
-            .unwrap();
+            .await;
 
-        let ToolResult::Error(content) = &result else {
+        let ToolResult::Error { content, .. } = &result else {
             panic!("reading a directory should return an error result, got {result:?}");
         };
         assert!(content.contains("is a directory"), "got {content:?}");
@@ -310,15 +315,14 @@ mod tests {
         // Valid text with a stray non-UTF-8 byte, as in minified/obfuscated source.
         std::fs::write(dir.path().join("odd.py"), b"import os\xff\nx = 1\n").unwrap();
 
-        let result = ReadFileTool
+        let result = Tool::from(ReadFileTool)
             .call(
                 serde_json::json!({ "path": "odd.py" }),
                 &test_ctx(dir.path()),
             )
-            .await
-            .unwrap();
+            .await;
 
-        let ToolResult::Success(content) = &result else {
+        let ToolResult::Success { content, .. } = &result else {
             panic!("a non-UTF-8 file should read lossily, not error, got {result:?}");
         };
         // The readable text survives; the bad byte becomes the replacement char.
@@ -336,15 +340,14 @@ mod tests {
         // A NUL byte marks a true binary; do not decode it to garbage.
         std::fs::write(dir.path().join("blob.bin"), [0x7f, 0x45, 0x00, 0x01, 0x02]).unwrap();
 
-        let result = ReadFileTool
+        let result = Tool::from(ReadFileTool)
             .call(
                 serde_json::json!({ "path": "blob.bin" }),
                 &test_ctx(dir.path()),
             )
-            .await
-            .unwrap();
+            .await;
 
-        let ToolResult::Success(content) = &result else {
+        let ToolResult::Success { content, .. } = &result else {
             panic!("a binary file should report concisely as success, got {result:?}");
         };
         assert!(content.contains("binary file"), "got {content:?}");
@@ -361,15 +364,14 @@ mod tests {
         std::fs::write(dir.path().join("helpers.py"), "x\n").unwrap();
 
         // Guess a file that does not exist; cwd is the dir holding helpers.py.
-        let result = ReadFileTool
+        let result = Tool::from(ReadFileTool)
             .call(
                 serde_json::json!({ "path": "missing.py" }),
                 &test_ctx(dir.path()),
             )
-            .await
-            .unwrap();
+            .await;
 
-        let ToolResult::Error(content) = &result else {
+        let ToolResult::Error { content, .. } = &result else {
             panic!("a missing file should return an error result, got {result:?}");
         };
         assert!(content.contains("File does not exist"), "got {content:?}");
@@ -389,15 +391,14 @@ mod tests {
         std::fs::write(cwd.join("flask.py"), "x = 1\n").unwrap();
         let dropped = root.path().join("flask.py");
 
-        let result = ReadFileTool
+        let result = Tool::from(ReadFileTool)
             .call(
                 serde_json::json!({ "path": dropped.to_str().unwrap() }),
                 &test_ctx(&cwd),
             )
-            .await
-            .unwrap();
+            .await;
 
-        let ToolResult::Error(content) = &result else {
+        let ToolResult::Error { content, .. } = &result else {
             panic!("a missing file should return an error result, got {result:?}");
         };
         assert!(content.contains("File does not exist"), "got {content:?}");
@@ -416,15 +417,14 @@ mod tests {
         let dir = crate::test_util::TempDir::new().unwrap();
         std::fs::write(dir.path().join("test.txt"), "alpha\nbeta\n").unwrap();
 
-        let result = ReadFileTool
+        let result = Tool::from(ReadFileTool)
             .call(
                 serde_json::json!({ "path": "test.txt", "offset": 100 }),
                 &test_ctx(dir.path()),
             )
-            .await
-            .unwrap();
+            .await;
 
-        let ToolResult::Success(content) = &result else {
+        let ToolResult::Success { content, .. } = &result else {
             panic!("offset past EOF should succeed with an empty slice, got {result:?}");
         };
         assert_eq!(content, "");
@@ -436,15 +436,14 @@ mod tests {
         // 'é' is two bytes; column 5 lands on its second byte.
         std::fs::write(dir.path().join("test.txt"), "caféx\n").unwrap();
 
-        let result = ReadFileTool
+        let result = Tool::from(ReadFileTool)
             .call(
                 serde_json::json!({ "path": "test.txt", "column": 5 }),
                 &test_ctx(dir.path()),
             )
-            .await
-            .unwrap();
+            .await;
 
-        let ToolResult::Success(content) = &result else {
+        let ToolResult::Success { content, .. } = &result else {
             panic!("slicing mid-codepoint should succeed, got {result:?}");
         };
         // The slice starts at the next char boundary instead of splitting 'é'.

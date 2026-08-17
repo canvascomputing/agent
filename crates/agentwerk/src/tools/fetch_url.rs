@@ -1,30 +1,12 @@
 //! Fetches a URL and returns its extracted text. Gives an agent access to external documentation the prompt cannot enumerate up front.
 
-use std::future::Future;
-use std::pin::Pin;
-use std::sync::OnceLock;
-
-use serde_json::Value;
-
-use super::tool::{ToolContext, ToolLike, ToolResult};
-use super::tool_file::ToolFile;
-use crate::providers::ProviderResult as Result;
+use super::tool::{Tool, ToolContext, ToolResult};
 
 const MAX_URL_LENGTH: usize = 2000;
 const MAX_RESPONSE_BYTES: usize = 10 * 1024 * 1024;
 const DEFAULT_MAX_LENGTH: usize = 100_000;
 const FETCH_TIMEOUT_SECS: u64 = 60;
 const MAX_REDIRECT_HOPS: usize = 10;
-
-fn tool_file() -> &'static ToolFile {
-    static FILE: OnceLock<ToolFile> = OnceLock::new();
-    FILE.get_or_init(|| ToolFile::parse(include_str!("fetch_url.tool.md")))
-}
-
-fn description() -> &'static str {
-    static DESC: OnceLock<String> = OnceLock::new();
-    DESC.get_or_init(|| tool_file().render_markdown())
-}
 
 /// Fetch a URL and return its content as text. Concurrent. HTML is converted
 /// to plain text; HTTP is upgraded to HTTPS; cross-host redirects are
@@ -40,75 +22,67 @@ fn description() -> &'static str {
 /// ```
 pub struct FetchUrlTool;
 
-impl ToolLike for FetchUrlTool {
-    fn name(&self) -> &str {
-        &tool_file().name
+#[derive(serde::Deserialize)]
+pub struct FetchUrlArgs {
+    url: String,
+    #[serde(default = "default_max_length")]
+    max_length: usize,
+}
+
+fn default_max_length() -> usize {
+    DEFAULT_MAX_LENGTH
+}
+
+impl From<FetchUrlTool> for Tool {
+    fn from(_: FetchUrlTool) -> Tool {
+        Tool::new("fetch_url")
+            .description(include_str!("fetch_url.tool.md"))
+            .schema(include_str!("fetch_url.schema.json"))
+            .concurrent(true)
+            .handler(run)
+            .build()
     }
+}
 
-    fn description(&self) -> &str {
-        description()
+async fn run(args: FetchUrlArgs, _ctx: ToolContext) -> ToolResult {
+    let FetchUrlArgs { url, max_length } = args;
+
+    let validated_url = match validate_url(&url) {
+        Ok(u) => u,
+        Err(msg) => return ToolResult::error(msg),
+    };
+
+    let text = match fetch_url(&validated_url).await {
+        Ok(text) => text,
+        Err(msg) => return ToolResult::error(msg),
+    };
+    if let FetchedContent::Redirect {
+        original_url,
+        redirect_url,
+        status,
+    } = &text
+    {
+        let msg = format!(
+            "REDIRECT DETECTED: The URL redirects to a different host.\n\n\
+             Original URL: {original_url}\n\
+             Redirect URL: {redirect_url}\n\
+             Status: {status}\n\n\
+             To fetch the content, make a new web_fetch request with the redirect URL."
+        );
+        return ToolResult::success(msg);
     }
+    let FetchedContent::Page {
+        body,
+        status,
+        content_type,
+        bytes,
+    } = text
+    else {
+        unreachable!()
+    };
 
-    fn input_schema(&self) -> Value {
-        tool_file().input_schema.clone()
-    }
-
-    fn is_concurrent(&self) -> bool {
-        tool_file().concurrent
-    }
-
-    fn call<'a>(
-        &'a self,
-        input: Value,
-        _ctx: &'a ToolContext,
-    ) -> Pin<Box<dyn Future<Output = Result<ToolResult>> + Send + 'a>> {
-        Box::pin(async move {
-            let Some(url) = input["url"].as_str() else {
-                return Ok(ToolResult::error("Missing required parameter: url"));
-            };
-            let max_length = input["max_length"]
-                .as_u64()
-                .map(|n| n as usize)
-                .unwrap_or(DEFAULT_MAX_LENGTH);
-
-            let validated_url = match validate_url(url) {
-                Ok(u) => u,
-                Err(msg) => return Ok(ToolResult::error(msg)),
-            };
-
-            let text = match fetch_url(&validated_url).await {
-                Ok(text) => text,
-                Err(msg) => return Ok(ToolResult::error(msg)),
-            };
-            if let FetchedContent::Redirect {
-                original_url,
-                redirect_url,
-                status,
-            } = &text
-            {
-                let msg = format!(
-                    "REDIRECT DETECTED: The URL redirects to a different host.\n\n\
-                     Original URL: {original_url}\n\
-                     Redirect URL: {redirect_url}\n\
-                     Status: {status}\n\n\
-                     To fetch the content, make a new web_fetch request with the redirect URL."
-                );
-                return Ok(ToolResult::success(msg));
-            }
-            let FetchedContent::Page {
-                body,
-                status,
-                content_type,
-                bytes,
-            } = text
-            else {
-                unreachable!()
-            };
-
-            let output = format_output(url, &body, status, &content_type, bytes, max_length);
-            Ok(ToolResult::success(output))
-        })
-    }
+    let output = format_output(&url, &body, status, &content_type, bytes, max_length);
+    ToolResult::success(output)
 }
 
 // Fetching
@@ -476,6 +450,18 @@ fn collapse_whitespace(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_example_the_schema_shows_deserializes_into_the_arguments() {
+        let document = Tool::from(FetchUrlTool)
+            .input_schema()
+            .get_raw_schema()
+            .clone();
+        for example in document["examples"].as_array().expect("examples") {
+            serde_json::from_value::<FetchUrlArgs>(example.clone())
+                .unwrap_or_else(|error| panic!("{example}: {error}"));
+        }
+    }
 
     // URL validation
 

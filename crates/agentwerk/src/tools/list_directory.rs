@@ -1,15 +1,8 @@
 //! Lets an agent enumerate the contents of a directory: the first turn of any exploratory task against an unknown layout.
 
-use std::future::Future;
 use std::path::PathBuf;
-use std::pin::Pin;
-use std::sync::OnceLock;
 
-use serde_json::Value;
-
-use super::tool::{ToolContext, ToolLike, ToolResult};
-use super::tool_file::ToolFile;
-use crate::providers::ProviderResult as Result;
+use super::tool::{Tool, ToolContext, ToolResult};
 
 /// List the entries of a directory with type and size. Concurrent. Pair with
 /// [`GlobTool`](crate::tools::GlobTool) when you need pattern-based file discovery.
@@ -24,74 +17,61 @@ use crate::providers::ProviderResult as Result;
 /// ```
 pub struct ListDirectoryTool;
 
-fn tool_file() -> &'static ToolFile {
-    static FILE: OnceLock<ToolFile> = OnceLock::new();
-    FILE.get_or_init(|| ToolFile::parse(include_str!("list_directory.tool.md")))
+#[derive(serde::Deserialize)]
+pub struct ListDirectoryArgs {
+    #[serde(default = "here")]
+    path: String,
+    #[serde(default)]
+    recursive: bool,
 }
 
-fn description() -> &'static str {
-    static DESC: OnceLock<String> = OnceLock::new();
-    DESC.get_or_init(|| tool_file().render_markdown())
+fn here() -> String {
+    ".".to_string()
 }
 
-impl ToolLike for ListDirectoryTool {
-    fn name(&self) -> &str {
-        &tool_file().name
+impl From<ListDirectoryTool> for Tool {
+    fn from(_: ListDirectoryTool) -> Tool {
+        Tool::new("list_directory")
+            .description(include_str!("list_directory.tool.md"))
+            .schema(include_str!("list_directory.schema.json"))
+            .concurrent(true)
+            .handler(run)
+            .build()
+    }
+}
+
+async fn run(args: ListDirectoryArgs, ctx: ToolContext) -> ToolResult {
+    let ListDirectoryArgs {
+        path: path_str,
+        recursive,
+    } = args;
+    let base = ctx.dir.join(&path_str);
+
+    if base.exists() && !base.is_dir() {
+        return ToolResult::error(format!("Path is not a directory: {path_str}"));
     }
 
-    fn description(&self) -> &str {
-        description()
-    }
-
-    fn input_schema(&self) -> Value {
-        tool_file().input_schema.clone()
-    }
-
-    fn is_concurrent(&self) -> bool {
-        tool_file().concurrent
-    }
-
-    fn call<'a>(
-        &'a self,
-        input: Value,
-        ctx: &'a ToolContext,
-    ) -> Pin<Box<dyn Future<Output = Result<ToolResult>> + Send + 'a>> {
-        Box::pin(async move {
-            let path_str = input["path"].as_str().unwrap_or(".");
-            let recursive = input["recursive"].as_bool().unwrap_or(false);
-            let base = ctx.dir.join(path_str);
-
-            if base.exists() && !base.is_dir() {
-                return Ok(ToolResult::error(format!(
-                    "Path is not a directory: {path_str}"
-                )));
-            }
-
-            match list_entries(&base, &base, recursive) {
-                Ok(mut entries) => {
-                    entries.sort_by(|a, b| a.display_name.cmp(&b.display_name));
-                    // Suffix the type onto the name (`ls -F` style) instead of a
-                    // separate column: a bare `dir`/`file` word reads as a second
-                    // entry and gets listed as a path that does not exist.
-                    let lines: Vec<String> = entries
-                        .iter()
-                        .map(|e| match e.kind {
-                            "dir" => format!("{}/", e.display_name),
-                            "symlink" => format!("{}@", e.display_name),
-                            _ => format!("{}  {} bytes", e.display_name, e.size.unwrap_or(0)),
-                        })
-                        .collect();
-                    Ok(ToolResult::success(lines.join("\n")))
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    Ok(ToolResult::error(format!(
-                        "Directory does not exist: {path_str}. {}",
-                        super::util::not_found_hint(&ctx.dir, &base)
-                    )))
-                }
-                Err(e) => Ok(ToolResult::error(format!("Error listing directory: {e}"))),
-            }
-        })
+    match list_entries(&base, &base, recursive) {
+        Ok(mut entries) => {
+            entries.sort_by(|a, b| a.display_name.cmp(&b.display_name));
+            // Suffix the type onto the name (`ls -F` style) instead of a
+            // separate column: a bare `dir`/`file` word reads as a second
+            // entry and gets listed as a path that does not exist.
+            let lines: Vec<String> = entries
+                .iter()
+                .map(|e| match e.kind {
+                    "dir" => format!("{}/", e.display_name),
+                    "symlink" => format!("{}@", e.display_name),
+                    _ => format!("{}  {} bytes", e.display_name, e.size.unwrap_or(0)),
+                })
+                .collect();
+            ToolResult::success(lines.join("\n"))
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => ToolResult::error(format!(
+            "Directory does not exist: {path_str}. {}",
+            super::util::not_found_hint(&ctx.dir, &base)
+        )),
+        Err(e) => ToolResult::error(format!("Error listing directory: {e}")),
     }
 }
 
@@ -147,6 +127,18 @@ fn list_entries(dir: &PathBuf, base: &PathBuf, recursive: bool) -> std::io::Resu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_example_the_schema_shows_deserializes_into_the_arguments() {
+        let document = Tool::from(ListDirectoryTool)
+            .input_schema()
+            .get_raw_schema()
+            .clone();
+        for example in document["examples"].as_array().expect("examples") {
+            serde_json::from_value::<ListDirectoryArgs>(example.clone())
+                .unwrap_or_else(|error| panic!("{example}: {error}"));
+        }
+    }
     use std::fs;
 
     fn test_ctx(path: &std::path::Path) -> ToolContext {
@@ -160,9 +152,9 @@ mod tests {
         fs::write(tmp.path().join("beta.txt"), "world").unwrap();
         fs::create_dir(tmp.path().join("subdir")).unwrap();
 
-        let tool = ListDirectoryTool;
+        let tool = Tool::from(ListDirectoryTool);
         let ctx = test_ctx(tmp.path());
-        let result = tool.call(serde_json::json!({}), &ctx).await.unwrap();
+        let result = tool.call(serde_json::json!({}), &ctx).await;
 
         let content = result.content();
         let lines: Vec<&str> = content.lines().collect();
@@ -181,12 +173,11 @@ mod tests {
         fs::create_dir(tmp.path().join("child")).unwrap();
         fs::write(tmp.path().join("child").join("nested.txt"), "n").unwrap();
 
-        let tool = ListDirectoryTool;
+        let tool = Tool::from(ListDirectoryTool);
         let ctx = test_ctx(tmp.path());
         let result = tool
             .call(serde_json::json!({"recursive": true}), &ctx)
-            .await
-            .unwrap();
+            .await;
 
         let content = result.content();
         assert!(content.contains("child/nested.txt") || content.contains("child\\nested.txt"));
@@ -200,15 +191,14 @@ mod tests {
         let tmp = crate::test_util::TempDir::new().unwrap();
         fs::write(tmp.path().join("app.py"), "x = 1\n").unwrap();
 
-        let result = ListDirectoryTool
+        let result = Tool::from(ListDirectoryTool)
             .call(
                 serde_json::json!({ "path": "app.py" }),
                 &test_ctx(tmp.path()),
             )
-            .await
-            .unwrap();
+            .await;
 
-        let ToolResult::Error(content) = &result else {
+        let ToolResult::Error { content, .. } = &result else {
             panic!("listing a file should return an error result, got {result:?}");
         };
         assert!(
@@ -223,12 +213,11 @@ mod tests {
         fs::create_dir(tmp.path().join("pkg")).unwrap();
 
         // Guess a non-existent directory directly under cwd.
-        let result = ListDirectoryTool
+        let result = Tool::from(ListDirectoryTool)
             .call(serde_json::json!({ "path": "nope" }), &test_ctx(tmp.path()))
-            .await
-            .unwrap();
+            .await;
 
-        let ToolResult::Error(content) = &result else {
+        let ToolResult::Error { content, .. } = &result else {
             panic!("a missing directory should return an error result, got {result:?}");
         };
         assert!(
@@ -249,15 +238,14 @@ mod tests {
         fs::create_dir(cwd.join("pkg")).unwrap();
         let dropped = root.path().join("pkg");
 
-        let result = ListDirectoryTool
+        let result = Tool::from(ListDirectoryTool)
             .call(
                 serde_json::json!({ "path": dropped.to_str().unwrap() }),
                 &test_ctx(&cwd),
             )
-            .await
-            .unwrap();
+            .await;
 
-        let ToolResult::Error(content) = &result else {
+        let ToolResult::Error { content, .. } = &result else {
             panic!("a missing directory should return an error result, got {result:?}");
         };
         assert!(

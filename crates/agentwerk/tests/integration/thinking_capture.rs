@@ -30,7 +30,6 @@ async fn test() -> std::result::Result<(), Box<dyn std::error::Error>> {
         }],
         tools: vec![],
         max_request_tokens: None,
-        tool_choice: None,
         reasoning_effort: ReasoningEffort::High,
     };
 

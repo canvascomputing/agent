@@ -1,8 +1,6 @@
 //! The actions agents can take to perform their work.
 
-mod error;
 mod tool;
-mod tool_file;
 pub(crate) mod util;
 
 mod code;
@@ -17,8 +15,7 @@ mod read_file;
 mod tickets;
 mod write_file;
 
-pub use error::ToolError;
-pub use tool::{Tool, ToolContext, ToolLike, ToolResult};
+pub use tool::{Tool, ToolContext, ToolResult};
 pub(crate) use tool::{ToolCall, ToolRegistry};
 
 pub use command::CommandTool;
@@ -29,6 +26,5 @@ pub use grep::GrepTool;
 pub use knowledge::KnowledgeTool;
 pub use list_directory::ListDirectoryTool;
 pub use read_file::ReadFileTool;
-pub(crate) use tickets::{finish_tool_input_schema, TICKET_FINISH_TOOL};
 pub use tickets::{FinishTool, TicketsTool};
 pub use write_file::WriteFileTool;

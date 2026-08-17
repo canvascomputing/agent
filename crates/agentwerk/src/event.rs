@@ -37,8 +37,8 @@ pub enum PolicyKind {
     InputTokens,
     /// `max_output_tokens`: the total output-token limit.
     OutputTokens,
-    /// `max_schema_retries`: consecutive schema failures on one ticket. The
-    /// count resets after every result that validates.
+    /// `max_schema_retries`: consecutive failed tool calls or silent
+    /// no-tool replies on one ticket. Any successful call resets the count.
     MaxSchemaRetries,
     /// `max_time`: the elapsed-duration limit. The matching event reports its
     /// `limit` in milliseconds.
@@ -95,7 +95,9 @@ pub enum ToolFailureKind {
     /// The tool ran and returned an error.
     #[serde(rename = "execution_failed")]
     ExecutionFailed,
-    /// The tool rejected its input. Counted against `max_schema_retries`.
+    /// The tool rejected its input. This is the failure whose result shows
+    /// the model the schema back; every kind counts against
+    /// `max_schema_retries`.
     #[serde(rename = "schema_failed")]
     SchemaValidationFailed,
 }
@@ -368,8 +370,8 @@ pub enum EventKind {
     },
     /// A limit was breached and execution stopped.
     PolicyViolated { policy: PolicyKind, limit: u64 },
-    /// A result missed its schema and the agent was asked again. `attempt`
-    /// counts from one.
+    /// A tool call or result the model created was invalid. The agent was asked
+    /// again; `attempt` counts from one.
     SchemaRetried {
         attempt: u32,
         max_attempts: u32,

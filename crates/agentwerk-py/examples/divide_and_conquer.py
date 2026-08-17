@@ -28,8 +28,8 @@ than guess.
 - Each task body gives the bounds `lo`, `hi`, and a partition index `idx`.
 - MUST call `python` with `{"code": "print(sum(k*k for k in range(LO, HI + 1)))"}`,
   substituting the bounds from the task.
-- Finish the ticket by calling `finish` with `idx` and `partial_sum` as its
-  top-level arguments, copying `idx` verbatim from the task.
+- Finish the ticket by calling `finish` with `result` holding `idx` and
+  `partial_sum`, copying `idx` verbatim from the task.
 - NEVER add prose, code fences, or commentary outside the `finish` call.
 """
 

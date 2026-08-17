@@ -457,7 +457,7 @@ tickets
 | `max_input_tokens(count)` / `get_max_input_tokens()` | Limit the total input tokens. |
 | `max_output_tokens(count)` / `get_max_output_tokens()` | Limit the total output tokens. |
 | `max_request_tokens(count)` / `get_max_request_tokens()` | Limit the output tokens of a single request. |
-| `max_schema_retries(count)` / `get_max_schema_retries()` | Limit how often a result may fail its schema before the ticket fails. |
+| `max_schema_retries(count)` / `get_max_schema_retries()` | Limit the consecutive turns without a valid tool call. |
 | `max_request_retries(count)` / `get_max_request_retries()` | Limit how often a failing request is retried. |
 | `request_retry_delay(duration)` / `get_request_retry_delay()` | Wait this long between retries. |
 | `compact_at(fraction)` / `get_compact_at()` | Compact once the context window is this full. |
@@ -562,17 +562,19 @@ Describe the tool, then hand it the code it runs:
 
 ```rust
 use agentwerk::tools::{Tool, ToolResult};
+use serde_json::Value;
 
-let greet = Tool::new("greet", "Say hello")
+let greet = Tool::new("greet")
+    .description("Say hello")
     .schema(json!({
         "type": "object",
         "properties": { "name": { "type": "string" } },
         "required": ["name"]
     }))
     .concurrent(true)
-    .handler(|input, _context| async move {
+    .handler(|input: Value, _context| async move {
         let name = input["name"].as_str().unwrap_or("world");
-        Ok(ToolResult::success(format!("Hello, {name}!")))
+        ToolResult::success(format!("Hello, {name}!"))
     })
     .build();
 ```
@@ -613,7 +615,7 @@ tickets.on_event(|event| {
 | | `TicketFinished` | A ticket finished successfully. |
 | | `TicketFailed` | A ticket failed. |
 | | `TurnStarted` | The agent began another turn on its ticket. |
-| | `SchemaRetried` | A result missed its schema and the agent was asked again. |
+| | `SchemaRetried` | A tool call or result the model created was invalid. |
 | **LLM provider** | `RequestStarted` | A request went out to the model. |
 | | `RequestFinished` | A request finished and reported its token usage. |
 | | `RequestFailed` | A request failed and was not retried. |

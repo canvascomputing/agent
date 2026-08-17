@@ -67,7 +67,6 @@ def test_tool_result_constructors_produce_a_tool_result():
     for result in (
         aw.ToolResult.success("done"),
         aw.ToolResult.error("nope"),
-        aw.ToolResult.schema_error("bad input"),
     ):
         assert isinstance(result, aw.ToolResult)
 

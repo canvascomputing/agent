@@ -1,14 +1,6 @@
 //! In-place find-and-replace on a file, so a model can modify existing code without restating the whole file.
 
-use std::future::Future;
-use std::pin::Pin;
-use std::sync::OnceLock;
-
-use serde_json::Value;
-
-use super::tool::{ToolContext, ToolLike, ToolResult};
-use super::tool_file::ToolFile;
-use crate::providers::ProviderResult as Result;
+use super::tool::{Tool, ToolContext, ToolResult};
 
 /// In-place string replacement in an existing file. The model supplies the
 /// old and new strings; the tool fails if the old string is absent or
@@ -24,110 +16,83 @@ use crate::providers::ProviderResult as Result;
 /// ```
 pub struct EditFileTool;
 
-fn tool_file() -> &'static ToolFile {
-    static FILE: OnceLock<ToolFile> = OnceLock::new();
-    FILE.get_or_init(|| ToolFile::parse(include_str!("edit_file.tool.md")))
+#[derive(serde::Deserialize)]
+pub struct EditFileArgs {
+    path: String,
+    old_string: String,
+    new_string: String,
+    #[serde(default)]
+    replace_all: bool,
 }
 
-fn description() -> &'static str {
-    static DESC: OnceLock<String> = OnceLock::new();
-    DESC.get_or_init(|| tool_file().render_markdown())
+impl From<EditFileTool> for Tool {
+    fn from(_: EditFileTool) -> Tool {
+        Tool::new("edit_file")
+            .description(include_str!("edit_file.tool.md"))
+            .schema(include_str!("edit_file.schema.json"))
+            .paths(["path"])
+            .handler(run)
+            .build()
+    }
 }
 
-impl ToolLike for EditFileTool {
-    fn name(&self) -> &str {
-        &tool_file().name
+async fn run(args: EditFileArgs, ctx: ToolContext) -> ToolResult {
+    let EditFileArgs {
+        path,
+        old_string,
+        new_string,
+        replace_all,
+    } = args;
+    let (old_string, new_string) = (old_string.as_str(), new_string.as_str());
+
+    let resolved = ctx.dir.join(&path);
+
+    let content = match std::fs::read_to_string(&resolved) {
+        Ok(c) => c,
+        Err(e) => {
+            return ToolResult::error(format!("Failed to read file: {e}"));
+        }
+    };
+
+    let count = content.matches(old_string).count();
+
+    if count == 0 {
+        return ToolResult::error(format!("old_string not found in {path}"));
     }
 
-    fn description(&self) -> &str {
-        description()
+    if count > 1 && !replace_all {
+        return ToolResult::error(format!(
+            "Found {count} occurrences of old_string in {path}. Use replace_all to replace all."
+        ));
     }
 
-    fn input_schema(&self) -> Value {
-        tool_file().input_schema.clone()
-    }
+    let new_content = if replace_all {
+        content.replace(old_string, new_string)
+    } else {
+        content.replacen(old_string, new_string, 1)
+    };
 
-    fn is_concurrent(&self) -> bool {
-        tool_file().concurrent
-    }
-
-    fn opened_paths(&self, input: &Value) -> Vec<String> {
-        input
-            .get("path")
-            .and_then(|v| v.as_str())
-            .map(|s| vec![s.to_string()])
-            .unwrap_or_default()
-    }
-
-    fn call<'a>(
-        &'a self,
-        input: Value,
-        ctx: &'a ToolContext,
-    ) -> Pin<Box<dyn Future<Output = Result<ToolResult>> + Send + 'a>> {
-        Box::pin(async move {
-            let path = match input["path"].as_str() {
-                Some(p) => p,
-                None => {
-                    return Ok(ToolResult::error("Missing required parameter: path"));
-                }
-            };
-
-            let old_string = match input["old_string"].as_str() {
-                Some(s) => s,
-                None => {
-                    return Ok(ToolResult::error("Missing required parameter: old_string"));
-                }
-            };
-
-            let new_string = match input["new_string"].as_str() {
-                Some(s) => s,
-                None => {
-                    return Ok(ToolResult::error("Missing required parameter: new_string"));
-                }
-            };
-
-            let replace_all = input["replace_all"].as_bool().unwrap_or(false);
-
-            let resolved = ctx.dir.join(path);
-
-            let content = match std::fs::read_to_string(&resolved) {
-                Ok(c) => c,
-                Err(e) => {
-                    return Ok(ToolResult::error(format!("Failed to read file: {e}")));
-                }
-            };
-
-            let count = content.matches(old_string).count();
-
-            if count == 0 {
-                return Ok(ToolResult::error(format!("old_string not found in {path}")));
-            }
-
-            if count > 1 && !replace_all {
-                return Ok(ToolResult::error(format!(
-                    "Found {count} occurrences of old_string in {path}. Use replace_all to replace all."
-                )));
-            }
-
-            let new_content = if replace_all {
-                content.replace(old_string, new_string)
-            } else {
-                content.replacen(old_string, new_string, 1)
-            };
-
-            match std::fs::write(&resolved, &new_content) {
-                Ok(()) => Ok(ToolResult::success(format!(
-                    "Edited {path}: replaced {count} occurrence(s)"
-                ))),
-                Err(e) => Ok(ToolResult::error(format!("Failed to write file: {e}"))),
-            }
-        })
+    match std::fs::write(&resolved, &new_content) {
+        Ok(()) => ToolResult::success(format!("Edited {path}: replaced {count} occurrence(s)")),
+        Err(e) => ToolResult::error(format!("Failed to write file: {e}")),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_example_the_schema_shows_deserializes_into_the_arguments() {
+        let document = Tool::from(EditFileTool)
+            .input_schema()
+            .get_raw_schema()
+            .clone();
+        for example in document["examples"].as_array().expect("examples") {
+            serde_json::from_value::<EditFileArgs>(example.clone())
+                .unwrap_or_else(|error| panic!("{example}: {error}"));
+        }
+    }
     use std::path::PathBuf;
 
     fn test_ctx(dir: &std::path::Path) -> ToolContext {
@@ -142,7 +107,7 @@ mod tests {
         let tool = EditFileTool;
         let ctx = test_ctx(dir.path());
 
-        let result = tool
+        let result = Tool::from(tool)
             .call(
                 serde_json::json!({
                     "path": "f.txt",
@@ -151,13 +116,11 @@ mod tests {
                 }),
                 &ctx,
             )
-            .await
-            .unwrap();
+            .await;
 
-        let (ToolResult::Success(out) | ToolResult::Error(out) | ToolResult::SchemaError(out)) =
-            &result;
+        let out = result.content();
         assert!(
-            matches!(result, ToolResult::Success(_)),
+            matches!(result, ToolResult::Success { .. }),
             "unexpected error: {out}"
         );
         let content = std::fs::read_to_string(dir.path().join("f.txt")).unwrap();
@@ -172,7 +135,7 @@ mod tests {
         let tool = EditFileTool;
         let ctx = test_ctx(dir.path());
 
-        let result = tool
+        let result = Tool::from(tool)
             .call(
                 serde_json::json!({
                     "path": "f.txt",
@@ -181,11 +144,10 @@ mod tests {
                 }),
                 &ctx,
             )
-            .await
-            .unwrap();
+            .await;
 
         let content = result.content();
-        assert!(matches!(result, ToolResult::Error(_)));
+        assert!(matches!(result, ToolResult::Error { .. }));
         assert!(content.contains("2"));
     }
 
@@ -197,7 +159,7 @@ mod tests {
         let tool = EditFileTool;
         let ctx = test_ctx(dir.path());
 
-        let result = tool
+        let result = Tool::from(tool)
             .call(
                 serde_json::json!({
                     "path": "f.txt",
@@ -207,13 +169,11 @@ mod tests {
                 }),
                 &ctx,
             )
-            .await
-            .unwrap();
+            .await;
 
-        let (ToolResult::Success(out) | ToolResult::Error(out) | ToolResult::SchemaError(out)) =
-            &result;
+        let out = result.content();
         assert!(
-            matches!(result, ToolResult::Success(_)),
+            matches!(result, ToolResult::Success { .. }),
             "unexpected error: {out}"
         );
         let content = std::fs::read_to_string(dir.path().join("f.txt")).unwrap();
@@ -228,7 +188,7 @@ mod tests {
         let tool = EditFileTool;
         let ctx = test_ctx(dir.path());
 
-        let result = tool
+        let result = Tool::from(tool)
             .call(
                 serde_json::json!({
                     "path": "f.txt",
@@ -237,11 +197,10 @@ mod tests {
                 }),
                 &ctx,
             )
-            .await
-            .unwrap();
+            .await;
 
         let content = result.content();
-        assert!(matches!(result, ToolResult::Error(_)));
+        assert!(matches!(result, ToolResult::Error { .. }));
         assert!(content.contains("not found"));
     }
 }

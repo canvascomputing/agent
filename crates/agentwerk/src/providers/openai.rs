@@ -14,9 +14,9 @@ use super::frames;
 use super::provider::{self, Protocol, ProviderLike};
 use super::stream::ResponseBuilder;
 use super::types::{
-    ContentBlock, Message, ModelRequest, ModelResponse, ProviderToolDefinition, ResponseStatus,
-    StreamEvent, ToolChoice,
+    ContentBlock, Message, ModelRequest, ModelResponse, ResponseStatus, StreamEvent,
 };
+use crate::tools::Tool;
 
 const DEFAULT_BASE_URL: &str = "https://api.openai.com";
 
@@ -121,15 +121,8 @@ impl Protocol for OpenAiChat {
             body["max_tokens"] = Value::from(n);
         }
         if !request.tools.is_empty() {
-            let tools: Vec<Value> = request
-                .tools
-                .iter()
-                .map(serialize_tool_definition)
-                .collect();
+            let tools: Vec<Value> = request.tools.iter().map(serialize_tool).collect();
             body["tools"] = Value::Array(tools);
-        }
-        if let Some(ref choice) = request.tool_choice {
-            body["tool_choice"] = serialize_tool_choice(choice);
         }
         // The OpenAI-standard reasoning knob; the litellm proxy maps it to the
         // backend's own thinking switch.
@@ -253,24 +246,15 @@ fn serialize_assistant_message(blocks: &[ContentBlock]) -> Value {
     message
 }
 
-fn serialize_tool_definition(tool: &ProviderToolDefinition) -> Value {
+fn serialize_tool(tool: &Tool) -> Value {
     serde_json::json!({
         "type": "function",
         "function": {
-            "name": tool.name,
-            "description": tool.description,
-            "parameters": tool.input_schema,
+            "name": tool.name(),
+            "description": tool.description(),
+            "parameters": tool.input_schema().get_raw_schema(),
         }
     })
-}
-
-fn serialize_tool_choice(choice: &ToolChoice) -> Value {
-    match choice {
-        ToolChoice::Auto => serde_json::json!("auto"),
-        ToolChoice::Specific { name } => {
-            serde_json::json!({"type": "function", "function": {"name": name}})
-        }
-    }
 }
 
 /// Endpoints disagree on the field name: `reasoning_content` (deepseek, qwen,
@@ -527,7 +511,6 @@ mod tests {
             }],
             tools: vec![],
             max_request_tokens: Some(1024),
-            tool_choice: None,
             reasoning_effort: Default::default(),
         }
     }
@@ -562,30 +545,20 @@ mod tests {
             model: "test".into(),
             system_prompt: String::new(),
             messages: vec![],
-            tools: vec![ProviderToolDefinition {
-                name: "get_weather".into(),
-                description: "Get weather".into(),
-                input_schema: serde_json::json!({"type": "object", "properties": {"city": {"type": "string"}}}),
-            }],
+            tools: vec![Tool::new("get_weather")
+                .description("Get weather")
+                .schema(
+                    serde_json::json!({"type": "object", "properties": {"city": {"type": "string"}}}),
+                )
+                .handler(|_: Value, _| async { crate::tools::ToolResult::success("") })
+                .build()],
             max_request_tokens: Some(1024),
-            tool_choice: None,
             reasoning_effort: Default::default(),
         };
         let body = OpenAiChat::serialize(&request);
         let tools = body["tools"].as_array().unwrap();
         assert_eq!(tools[0]["type"], "function");
         assert_eq!(tools[0]["function"]["name"], "get_weather");
-    }
-
-    #[test]
-    fn serialize_tool_choice_specific() {
-        let mut request = dummy_request();
-        request.tool_choice = Some(ToolChoice::Specific {
-            name: "read_file".into(),
-        });
-        let body = OpenAiChat::serialize(&request);
-        assert_eq!(body["tool_choice"]["type"], "function");
-        assert_eq!(body["tool_choice"]["function"]["name"], "read_file");
     }
 
     fn body_400(code: &str, message: &str) -> String {
