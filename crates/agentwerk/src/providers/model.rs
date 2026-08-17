@@ -1,7 +1,7 @@
 //! What agentwerk knows about each model's context window, and when a
 //! conversation has to be summarized to fit.
 
-use super::{Anthropic, Mistral, OpenAi, ReasoningEffort};
+use super::ReasoningEffort;
 
 /// Model metadata: the name plus anything we know about its capabilities.
 ///
@@ -17,14 +17,12 @@ pub struct Model {
 }
 
 impl Model {
-    /// Build a `Model` by asking each provider in turn for its known context
-    /// window. An unknown name leaves `context_window` at `None`, so nothing is
-    /// compacted and nothing fails.
+    /// Build a `Model`, looking its context window up by name. An unknown name
+    /// leaves `context_window` at `None`, so nothing is compacted and nothing
+    /// fails.
     pub fn from_name(name: impl Into<String>) -> Self {
         let name = name.into();
-        let context_window = Anthropic::lookup_context_window_size(&name)
-            .or_else(|| OpenAi::lookup_context_window_size(&name))
-            .or_else(|| Mistral::lookup_context_window_size(&name));
+        let context_window = context_window_for(&name);
         Self {
             name,
             context_window,
@@ -92,6 +90,98 @@ impl From<&Model> for Model {
     }
 }
 
+/// The context window a model name is known to have, in tokens. One table
+/// rather than one per LLM provider: the same name reaches agentwerk through
+/// whichever endpoint serves it, and several of these families are served by
+/// more than one.
+fn context_window_for(name: &str) -> Option<u64> {
+    let model = name.to_ascii_lowercase();
+
+    if model.contains("[1m]") {
+        return Some(1_000_000);
+    }
+    // The Claude 5 family is natively 1 000 000 tokens, with no [1m] opt-in.
+    if model.contains("claude-fable-5")
+        || model.contains("claude-mythos-5")
+        || model.contains("claude-opus-5")
+        || model.contains("claude-sonnet-5")
+    {
+        return Some(1_000_000);
+    }
+    if model.contains("claude-opus-4")
+        || model.contains("claude-sonnet-4")
+        || model.contains("claude-haiku-4")
+        || model.contains("claude-3-7-sonnet")
+        || model.contains("claude-3-5-sonnet")
+        || model.contains("claude-3-5-haiku")
+        || model.contains("claude-3-opus")
+        || model.contains("claude-3-sonnet")
+        || model.contains("claude-3-haiku")
+    {
+        return Some(200_000);
+    }
+
+    // Newest first so "gpt-4" doesn't shadow "gpt-4.1".
+    if model.contains("gpt-4.1") {
+        return Some(1_000_000);
+    }
+    if model.contains("gpt-5") {
+        // 400K covers mini/nano; full/pro reach ~1M but we pick the family floor.
+        return Some(400_000);
+    }
+    if model.starts_with("o3") || model.starts_with("o1") {
+        return Some(200_000);
+    }
+    if model.contains("gpt-4o") || model.contains("gpt-4-turbo") {
+        return Some(128_000);
+    }
+    if model.contains("gpt-4-32k") {
+        return Some(32_768);
+    }
+    if model.contains("gpt-4") {
+        return Some(8_192);
+    }
+    if model.contains("gpt-3.5-turbo") {
+        return Some(16_385);
+    }
+
+    // Qwen values are the published *native* windows; deployments that disable
+    // YaRN or configure a shorter `max_model_len` should override via
+    // `Agent::model(Model::from_name(name).context_window(n))`.
+    // Newest first so "qwen3" doesn't shadow "qwen3.5" / "qwen3.6".
+    let qwen3_256k = model.contains("qwen3.6")
+        || model.contains("qwen3.5")
+        || model.contains("qwen3-coder")
+        || model.contains("qwen3-next")
+        || (model.contains("qwen3") && model.contains("-2507"));
+    if qwen3_256k {
+        return Some(262_144);
+    }
+    if model.contains("qwen3") {
+        return Some(131_072);
+    }
+    if model.contains("qwen2.5") {
+        // Qwen2.5 "1M" variants (e.g. Qwen2.5-7B-Instruct-1M) are a separate
+        // release with a 1 000 000-token native window.
+        if model.contains("-1m") {
+            return Some(1_000_000);
+        }
+        return Some(32_768);
+    }
+
+    if model.contains("codestral") {
+        return Some(256_000);
+    }
+    if model.contains("mistral-large")
+        || model.contains("mistral-medium")
+        || model.contains("mistral-small")
+    {
+        return Some(131_072);
+    }
+
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -146,6 +236,104 @@ mod tests {
 
         std::env::remove_var("ANTHROPIC_API_KEY");
         std::env::remove_var("MODEL");
+    }
+
+    #[test]
+    fn lookup_claude_4_family_returns_200k() {
+        assert_eq!(
+            context_window_for("claude-sonnet-4-20250514"),
+            Some(200_000)
+        );
+        assert_eq!(context_window_for("claude-opus-4-20250101"), Some(200_000));
+        assert_eq!(
+            context_window_for("claude-haiku-4-5-20251001"),
+            Some(200_000)
+        );
+    }
+
+    #[test]
+    fn lookup_claude_5_family_returns_one_million() {
+        assert_eq!(context_window_for("claude-fable-5"), Some(1_000_000));
+        assert_eq!(context_window_for("claude-opus-5"), Some(1_000_000));
+        assert_eq!(context_window_for("claude-sonnet-5"), Some(1_000_000));
+        assert_eq!(context_window_for("claude-mythos-5"), Some(1_000_000));
+    }
+
+    #[test]
+    fn lookup_claude_3_family_returns_200k() {
+        assert_eq!(
+            context_window_for("claude-3-5-sonnet-20241022"),
+            Some(200_000)
+        );
+        assert_eq!(context_window_for("claude-3-opus-20240229"), Some(200_000));
+    }
+
+    #[test]
+    fn lookup_one_million_suffix_overrides_base_family() {
+        assert_eq!(
+            context_window_for("claude-opus-4-7[1m]"),
+            Some(1_000_000),
+            "explicit [1m] opt-in promotes the whole family"
+        );
+        assert_eq!(
+            context_window_for("claude-sonnet-4-20250514[1m]"),
+            Some(1_000_000)
+        );
+    }
+
+    #[test]
+    fn lookup_gpt_5_family_returns_400k() {
+        assert_eq!(context_window_for("gpt-5"), Some(400_000));
+        assert_eq!(context_window_for("gpt-5-mini"), Some(400_000));
+    }
+
+    #[test]
+    fn lookup_gpt_4_1_returns_one_million() {
+        assert_eq!(context_window_for("gpt-4.1"), Some(1_000_000));
+    }
+
+    #[test]
+    fn lookup_o_series_returns_200k() {
+        assert_eq!(context_window_for("o3-mini"), Some(200_000));
+        assert_eq!(context_window_for("o1-preview"), Some(200_000));
+    }
+
+    #[test]
+    fn lookup_gpt_4o_and_turbo_return_128k() {
+        assert_eq!(context_window_for("gpt-4o"), Some(128_000));
+        assert_eq!(context_window_for("gpt-4o-mini"), Some(128_000));
+        assert_eq!(context_window_for("gpt-4-turbo-2024-04-09"), Some(128_000));
+    }
+
+    #[test]
+    fn lookup_legacy_gpt_4_returns_8k() {
+        assert_eq!(context_window_for("gpt-4"), Some(8_192));
+        assert_eq!(context_window_for("gpt-4-32k"), Some(32_768));
+    }
+
+    #[test]
+    fn lookup_gpt_3_5_turbo_returns_16k() {
+        assert_eq!(context_window_for("gpt-3.5-turbo"), Some(16_385));
+        assert_eq!(context_window_for("gpt-3.5-turbo-16k"), Some(16_385));
+    }
+
+    #[test]
+    fn lookup_qwen3_coder_returns_256k() {
+        assert_eq!(context_window_for("qwen3-coder-next"), Some(262_144));
+        assert_eq!(context_window_for("qwen3-30b"), Some(131_072));
+    }
+
+    #[test]
+    fn lookup_mistral_families_return_their_own_windows() {
+        assert_eq!(context_window_for("codestral-2501"), Some(256_000));
+        assert_eq!(context_window_for("mistral-large-2411"), Some(131_072));
+        assert_eq!(context_window_for("mistral-small-2409"), Some(131_072));
+    }
+
+    #[test]
+    fn lookup_unknown_models_return_none() {
+        assert_eq!(context_window_for("llama-3-70b"), None);
+        assert_eq!(context_window_for("some-future-model"), None);
     }
 
     #[test]

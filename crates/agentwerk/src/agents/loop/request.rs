@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use crate::agents::retry::{ExponentialRetry, Retry};
 use crate::event::{CompactReason, EventKind, RepairKind};
-use crate::providers::types::{ResponseStatus, StreamEvent};
+use crate::providers::types::StreamEvent;
 use crate::providers::{ContentBlock, ModelRequest, ProviderError, ProviderToolDefinition};
 use crate::schemas::Schema;
 use crate::tools::ToolCall;
@@ -60,7 +60,6 @@ pub(super) async fn run(context: &mut TicketContext<'_>) -> Option<Step> {
                     StreamEvent::ToolCallDeclined { tool_name, reason } => {
                         EventKind::ToolCallDeclined { tool_name, reason }
                     }
-                    _ => return,
                 };
                 ticket_queue.emit(&ticket_key, &agent_id, kind);
             });
@@ -103,15 +102,10 @@ pub(super) async fn run(context: &mut TicketContext<'_>) -> Option<Step> {
         }
     };
 
-    // The overflowed reply is discarded: compaction rewrites the messages
-    // and the next request regenerates it.
-    let overflowed = response.status == ResponseStatus::ContextWindowExceeded;
-    if !overflowed {
-        context.ticket_queue.add_reply(
-            &context.ticket_key,
-            crate::agents::tickets::Reply::assistant(&response.content),
-        );
-    }
+    context.ticket_queue.add_reply(
+        &context.ticket_key,
+        crate::agents::tickets::Reply::assistant(&response.content),
+    );
 
     // Emitted after the reply lands: a handler or a `finish` filter that
     // resolves the ticket must see the reply the event announces.
@@ -119,10 +113,6 @@ pub(super) async fn run(context: &mut TicketContext<'_>) -> Option<Step> {
         model: response.model.clone(),
         usage: response.usage.clone(),
     });
-
-    if overflowed {
-        return Some(Step::Compact(CompactReason::Reactive));
-    }
 
     let calls: Vec<ToolCall> = response
         .content

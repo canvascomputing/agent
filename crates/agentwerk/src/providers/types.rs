@@ -1,7 +1,87 @@
-//! What agentwerk and every LLM provider exchange: messages, content blocks,
-//! token usage, stop reasons, and the pieces of a reply as they arrive.
+//! Every value agentwerk and an LLM provider exchange, in the order a turn
+//! happens: the request and its parts, the messages and content blocks both
+//! sides use, then the reply, its token usage, its stop reason, and the pieces
+//! of it as they arrive.
+
+use std::fmt;
 
 use serde::{Deserialize, Serialize};
+
+/// How much reasoning to ask the model for.
+///
+/// Each LLM provider has its own field for it. `Off` sends none, leaving the
+/// model's own default. This shapes only the request: whatever reasoning comes
+/// back is always kept as a `Thinking` [`ContentBlock`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ReasoningEffort {
+    #[default]
+    Off,
+    Low,
+    Medium,
+    High,
+}
+
+impl ReasoningEffort {
+    /// The value sent with the request, `"low"`, `"medium"`, or `"high"`, or
+    /// `None` when off. Every supported LLM provider takes these same words.
+    pub(crate) fn label(self) -> Option<&'static str> {
+        match self {
+            ReasoningEffort::Off => None,
+            ReasoningEffort::Low => Some("low"),
+            ReasoningEffort::Medium => Some("medium"),
+            ReasoningEffort::High => Some("high"),
+        }
+    }
+}
+
+impl fmt::Display for ReasoningEffort {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.label().unwrap_or("off"))
+    }
+}
+
+/// One tool as the model is told about it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderToolDefinition {
+    /// The name the model calls the tool by.
+    pub name: String,
+    /// What the tool does, in the words the model reads.
+    pub description: String,
+    /// What the tool accepts, as JSON Schema.
+    pub input_schema: serde_json::Value,
+}
+
+/// Which tool the model may pick on one turn.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ToolChoice {
+    /// The model picks freely, or replies without calling a tool.
+    Auto,
+    /// The model must call this tool.
+    Specific { name: String },
+}
+
+/// One request to an LLM provider, assembled from the agent's configuration and
+/// the conversation so far.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelRequest {
+    /// Which model to ask, such as `claude-sonnet-4-20250514`.
+    pub model: String,
+    /// The system prompt, assembled from the role, the behavior, and the
+    /// facts of the moment.
+    pub system_prompt: String,
+    /// Everything said so far, ending with the latest input.
+    pub messages: Vec<Message>,
+    /// The tools the model may call this turn.
+    pub tools: Vec<ProviderToolDefinition>,
+    /// Limit on this request's output tokens, or `None` for the LLM provider's
+    /// own default.
+    pub max_request_tokens: Option<u32>,
+    /// Which tool the model may pick this turn.
+    pub tool_choice: Option<ToolChoice>,
+    /// How much reasoning to ask for, taken from the [`Model`](super::Model).
+    #[serde(default)]
+    pub reasoning_effort: ReasoningEffort,
+}
 
 /// One message in the conversation passed to a provider, tagged by role.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -114,10 +194,6 @@ pub enum ResponseStatus {
     /// Anthropic: `max_tokens` | OpenAI: `length` | Mistral: `length`
     OutputTruncated,
 
-    /// Input exceeded the model's context window.
-    /// Anthropic: `model_context_window_exceeded`
-    ContextWindowExceeded,
-
     /// Model refused to respond due to safety policy.
     /// Anthropic: `refusal` | OpenAI: `content_filter`
     Refused,
@@ -198,12 +274,13 @@ impl std::fmt::Display for ToolDeclineKind {
     }
 }
 
-/// Incremental event emitted during SSE streaming.
-///
-/// Events within a single response arrive in order and reference the content block they
-/// belong to via `index`. A stream ends with `MessageDone`.
+/// Something worth reporting while a reply is still arriving, in the order it
+/// happened.
 #[derive(Debug, Clone)]
 pub enum StreamEvent {
+    /// Text the model just produced, to be shown as it arrives.
+    TextDelta { text: String },
+
     /// A tool call the endpoint did not deliver usably, written as text or
     /// delivered without its arguments, was rebuilt from the text the model
     /// wrote; it will run.
@@ -215,25 +292,6 @@ pub enum StreamEvent {
         tool_name: String,
         reason: ToolDeclineKind,
     },
-
-    /// Appended text for the text block at `index`.
-    TextDelta { index: usize, text: String },
-
-    /// Partial JSON fragment for the tool-use block at `index`. Concatenate the fragments
-    /// across deltas to reconstruct the full tool input; intermediate chunks are not valid JSON.
-    InputJsonDelta { index: usize, partial_json: String },
-
-    /// The content block at `index` is complete; no further deltas will target it.
-    ContentBlockStop { index: usize },
-
-    /// Final status and cumulative token usage for the response. Emitted after all content blocks.
-    MessageDelta {
-        status: ResponseStatus,
-        usage: TokenUsage,
-    },
-
-    /// End of stream. No further events follow.
-    MessageDone,
 }
 
 #[cfg(test)]

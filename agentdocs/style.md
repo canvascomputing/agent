@@ -224,7 +224,7 @@ Forbidden:
 - A free function that delegates to a single method on one type. Inline it as a method instead.
 - A free constructor for a local type that already has an inherent `impl`. Constructors for `Foo` live on `Foo`.
 - A free helper called from exactly one private method. Make it a private method or a nested `fn`.
-- An associated function that takes no `self` and does not return `Self` or `Result<Self>`. Move it to the module as a free function. Exception: a per-variant static lookup where the `Type::` prefix partitions otherwise-colliding names, such as `Anthropic::lookup_context_window_size` next to `OpenAi::lookup_context_window_size`.
+- An associated function that takes no `self` and does not return `Self` or `Result<Self>`. Move it to the module as a free function.
 
 Naming is `snake_case`. Tool structs keep the `{Name}Tool` suffix: `ReadFileTool`, `CommandTool`, `TicketsTool`.
 

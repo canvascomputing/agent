@@ -72,11 +72,16 @@ crates/
 
 **Holds every concrete LLM provider plus the shared request and response types.**
 
-- `provider.rs` defines `ProviderLike`, the `Provider` handle over it, `ModelRequest`, `ProviderToolDefinition`, and `ToolChoice`.
-- `types.rs` defines `Message`, `ContentBlock`, `TokenUsage`, `AsUserMessage`, `ResponseStatus`, and `StreamEvent`.
-- `anthropic.rs`, `openai.rs`, `mistral.rs`, and `litellm.rs` are concrete providers.
+- `provider.rs` defines the behavior: `ProviderLike`, the `Provider` handle over it, the crate-internal `Protocol` trait, and the generic `respond` every provider answers through.
+- `types.rs` defines every value the two sides exchange, in the order a turn happens: `ModelRequest`, `ReasoningEffort`, then `Message`, `AsUserMessage`, `ContentBlock`, then `ModelResponse`, `TokenUsage`, `ResponseStatus`, `ToolDeclineKind`, and `StreamEvent`.
+- `anthropic.rs`, `openai.rs`, `mistral.rs`, and `litellm.rs` are concrete providers. Each is a newtype over one `Endpoint` whose `respond` names a `Protocol`: `AnthropicMessages` in `anthropic.rs`, and `OpenAiChat` in `openai.rs`, which `mistral.rs` and `litellm.rs` name too, so the OpenAI request shape is written once.
+- `endpoint.rs` holds `Endpoint`, the one HTTP call every provider makes: the base URL, the client, the timeout, and the mapping of every non-2xx answer to a `ProviderError`.
 - `environment.rs` reads the variables behind `Provider::from_env()` and `Model::from_env()`; its readers are crate-internal.
-- `stream.rs` holds the SSE parser; `error.rs` holds `ProviderError`, `ProviderResult`, and `RequestErrorKind`.
+- `model.rs` holds `Model` and the one table of context window sizes, keyed by model name rather than by LLM provider.
+- `error.rs` holds `ProviderError`, `ProviderResult`, and `RequestErrorKind`.
+- `error.rs` also holds the bank of upstream wordings a proxy wraps, since what it reads them into is the error beside it.
+- `stream.rs` takes an HTTP response and gives back a `ModelResponse`: `read_reply`, the SSE reader, and `ResponseBuilder`, the reply every provider grows one fragment at a time and the one place a `StreamEvent` is emitted from.
+- `frames.rs` recovers the calls a model wrote as prose rather than emitting through the tool channel.
 
 ## The `tools/` Module
 
