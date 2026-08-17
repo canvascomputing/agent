@@ -340,7 +340,7 @@ mod tests {
             input,
         }];
         let results = registry.execute(&calls, &ctx()).await;
-        results[0].content.clone()
+        results[0].content().to_string()
     }
 
     #[tokio::test]

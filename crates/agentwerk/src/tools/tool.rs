@@ -1,5 +1,6 @@
 //! The actions agents can take, and the registry an agent's tools live in.
 
+use std::collections::HashMap;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
@@ -10,7 +11,7 @@ use serde_json::Value;
 
 use crate::agents::knowledge::Knowledge;
 use crate::agents::tickets::{Run, TicketQueue};
-use crate::event::{EventKind, RepairKind, ToolFailureKind};
+use crate::event::{EventKind, RepairKind};
 use crate::providers::ToolDefinition;
 use crate::schemas::Schema;
 
@@ -179,6 +180,12 @@ impl ToolResult {
         let (Self::Success(content) | Self::Error(content) | Self::SchemaError(content)) = self;
         content
     }
+
+    /// Take the text, whichever outcome this is.
+    pub fn into_content(self) -> String {
+        let (Self::Success(content) | Self::Error(content) | Self::SchemaError(content)) = self;
+        content
+    }
 }
 
 /// The tools one agent may call.
@@ -278,43 +285,56 @@ impl ToolRegistry {
             .collect()
     }
 
-    /// Run the calls, concurrent ones together and the rest one at a time.
-    pub(crate) async fn execute(&self, calls: &[ToolCall], ctx: &ToolContext) -> Vec<ToolOutcome> {
+    /// Run the calls, concurrent ones together and the rest one at a time,
+    /// answering each in the order it was asked.
+    pub(crate) async fn execute(&self, calls: &[ToolCall], ctx: &ToolContext) -> Vec<ToolResult> {
         let batches = partition_tool_calls(calls, self);
-        let mut results: Vec<ToolOutcome> = Vec::new();
+        let mut results: Vec<Option<ToolResult>> = calls.iter().map(|_| None).collect();
         let semaphore = Arc::new(tokio::sync::Semaphore::new(10));
 
         for batch in batches {
             match batch {
-                ToolBatch::Concurrent(calls) => {
+                ToolBatch::Concurrent(batch_calls) => {
                     let mut set = tokio::task::JoinSet::new();
-                    for call in calls {
-                        let sem = semaphore.clone();
+                    for (index, call) in batch_calls {
+                        let sem = Arc::clone(&semaphore);
                         let ctx = ctx.clone();
                         // Resolved before the spawn: the task outlives this
                         // borrow of the registry.
                         let found = self.resolve(&call.name);
                         set.spawn(async move {
                             let _permit = sem.acquire().await.unwrap();
-                            run_call(found, &call, &ctx).await
+                            (index, invoke(found, &call, &ctx).await)
                         });
                     }
 
-                    while let Some(join_result) = set.join_next().await {
-                        if let Ok(outcome) = join_result {
-                            results.push(outcome);
+                    while let Some(joined) = set.join_next().await {
+                        if let Ok((index, result)) = joined {
+                            results[index] = Some(result);
                         }
                     }
                 }
-                ToolBatch::Serial(call) => {
-                    results.push(run_call(self.resolve(&call.name), &call, ctx).await);
+                ToolBatch::Serial((index, call)) => {
+                    results[index] = Some(invoke(self.resolve(&call.name), &call, ctx).await);
                 }
             }
         }
 
-        cap_aggregate_outputs(&mut results, ctx, PER_TURN_CAP);
-
+        // A slot still empty means its task panicked. The call is answered
+        // anyway: a reply with a `tool_use` block and no result upsets LLM
+        // providers.
         results
+            .into_iter()
+            .enumerate()
+            .map(|(index, result)| {
+                result.unwrap_or_else(|| {
+                    ToolResult::error(format!(
+                        "`{}` did not finish: it panicked",
+                        calls[index].name
+                    ))
+                })
+            })
+            .collect()
     }
 }
 
@@ -529,47 +549,16 @@ where
     })
 }
 
-/// What one call produced, collected by the turn.
-pub(crate) struct ToolOutcome {
-    /// Identifier of the call, sent back with the result.
-    pub(crate) call_id: String,
-    /// What the model reads back: the tool's output, or the failure message.
-    pub(crate) content: String,
-    /// How the call failed. `None` is a success.
-    pub(crate) failure: Option<ToolFailureKind>,
-    /// Where an oversized output went, relative to the session directory.
-    pub(crate) path: Option<PathBuf>,
-}
-
-/// Run one call to the outcome the turn collects: check the arguments, run the
-/// tool, then stand in for an empty or oversized result.
-async fn run_call(
-    found: std::result::Result<Arc<Tool>, String>,
-    call: &ToolCall,
-    ctx: &ToolContext,
-) -> ToolOutcome {
-    let mut outcome = invoke(found, call, ctx).await;
-    replace_empty_output(&mut outcome, &call.name);
-    cap_oversized_result(&mut outcome, ctx, PER_TOOL_CAP);
-    outcome
-}
-
 /// Check the arguments against the schema the tool registered, then run it on
 /// what survives.
 async fn invoke(
     resolved: std::result::Result<Arc<Tool>, String>,
     call: &ToolCall,
     ctx: &ToolContext,
-) -> ToolOutcome {
-    let outcome = |content: String, failure: Option<ToolFailureKind>| ToolOutcome {
-        call_id: call.id.clone(),
-        content,
-        failure,
-        path: None,
-    };
+) -> ToolResult {
     let tool = match resolved {
         Ok(tool) => tool,
-        Err(message) => return outcome(message, Some(ToolFailureKind::ToolNotFound)),
+        Err(message) => return ToolResult::error(message),
     };
     // Retyped rather than refused, so a quoted number runs the call the model
     // asked for and arguments it wrote as JSON text are decoded. What comes
@@ -577,12 +566,7 @@ async fn invoke(
     // received.
     let (input, repairs) = match tool.input_schema().validate(call.input.clone()) {
         Ok(validated) => validated,
-        Err(violations) => {
-            return outcome(
-                violations.to_string(),
-                Some(ToolFailureKind::SchemaValidationFailed),
-            );
-        }
+        Err(violations) => return ToolResult::schema_error(violations.to_string()),
     };
     for pointer in &repairs {
         ctx.emit(EventKind::ResponseRepaired {
@@ -591,13 +575,7 @@ async fn invoke(
             message: retype_message(pointer),
         });
     }
-    match tool.call(input, ctx).await {
-        ToolResult::Success(content) => outcome(content, None),
-        ToolResult::Error(content) => outcome(content, Some(ToolFailureKind::ExecutionFailed)),
-        ToolResult::SchemaError(content) => {
-            outcome(content, Some(ToolFailureKind::SchemaValidationFailed))
-        }
-    }
+    tool.call(input, ctx).await
 }
 
 /// Name a retype by the JSON pointer it happened at; the empty pointer is the
@@ -610,33 +588,58 @@ pub(crate) fn retype_message(pointer: &str) -> String {
     }
 }
 
+/// Stand in for every empty and oversized result, so one turn's reply always
+/// fits, and report where each offloaded original went, keyed by call id.
+///
+/// `results` are [`ToolRegistry::execute`]'s answers to `calls`, in the same
+/// order. Only a [`ToolResult::Success`] is ever rewritten: a failure's
+/// message is what the model must read to recover, and is short by
+/// construction.
+pub(crate) fn cap_results(
+    calls: &[ToolCall],
+    results: &mut [ToolResult],
+    ctx: &ToolContext,
+) -> HashMap<String, PathBuf> {
+    let mut paths = HashMap::new();
+    for (call, result) in calls.iter().zip(results.iter_mut()) {
+        replace_empty_output(result, &call.name);
+        if let Some(path) = cap_oversized_result(result, ctx, &call.id, PER_TOOL_CAP) {
+            paths.insert(call.id.clone(), path);
+        }
+    }
+    cap_aggregate_outputs(calls, results, ctx, PER_TURN_CAP, &mut paths);
+    paths
+}
+
 /// Put a placeholder in place of an empty result, since empty content has upset
-/// LLM providers. A failure passes through: its message is never empty.
-fn replace_empty_output(outcome: &mut ToolOutcome, tool_name: &str) {
-    if outcome.failure.is_none() && outcome.content.is_empty() {
-        outcome.content = format!("({tool_name} completed with no output)");
+/// LLM providers.
+fn replace_empty_output(result: &mut ToolResult, tool_name: &str) {
+    if let ToolResult::Success(content) = result {
+        if content.is_empty() {
+            *content = format!("({tool_name} completed with no output)");
+        }
     }
 }
 
 enum ToolBatch {
-    Concurrent(Vec<ToolCall>),
-    Serial(ToolCall),
+    Concurrent(Vec<(usize, ToolCall)>),
+    Serial((usize, ToolCall)),
 }
 
 fn partition_tool_calls(calls: &[ToolCall], registry: &ToolRegistry) -> Vec<ToolBatch> {
     let mut batches: Vec<ToolBatch> = Vec::new();
-    let mut concurrent_batch: Vec<ToolCall> = Vec::new();
+    let mut concurrent_batch: Vec<(usize, ToolCall)> = Vec::new();
 
-    for call in calls {
+    for (index, call) in calls.iter().enumerate() {
         let is_concurrent = registry.get(&call.name).is_some_and(|t| t.is_concurrent());
 
         if is_concurrent {
-            concurrent_batch.push(call.clone());
+            concurrent_batch.push((index, call.clone()));
         } else {
             if !concurrent_batch.is_empty() {
                 batches.push(ToolBatch::Concurrent(std::mem::take(&mut concurrent_batch)));
             }
-            batches.push(ToolBatch::Serial(call.clone()));
+            batches.push(ToolBatch::Serial((index, call.clone())));
         }
     }
 
@@ -648,49 +651,65 @@ fn partition_tool_calls(calls: &[ToolCall], registry: &ToolRegistry) -> Vec<Tool
 }
 
 /// Replace an oversized result with a stub, writing the original under the
-/// ticket's outputs directory and recording where it went.
+/// ticket's outputs directory, and give back where it went.
 ///
 /// A failure passes through, being short by construction, and so does the raw
 /// content when the write fails.
-fn cap_oversized_result(outcome: &mut ToolOutcome, ctx: &ToolContext, per_tool_cap: usize) {
-    if outcome.failure.is_some() || outcome.content.len() <= per_tool_cap {
-        return;
-    }
-    let Some(p) = persist_output(ctx, &outcome.call_id, &outcome.content) else {
-        return;
+fn cap_oversized_result(
+    result: &mut ToolResult,
+    ctx: &ToolContext,
+    call_id: &str,
+    per_tool_cap: usize,
+) -> Option<PathBuf> {
+    let ToolResult::Success(content) = result else {
+        return None;
     };
-    let preview = truncate_preview(&outcome.content);
-    let stub = format_oversized_tool_result(outcome.content.len(), &p.display, preview);
-    outcome.content = stub;
-    outcome.path = Some(p.rel);
+    if content.len() <= per_tool_cap {
+        return None;
+    }
+    let p = persist_output(ctx, call_id, content)?;
+    let preview = truncate_preview(content);
+    let stub = format_oversized_tool_result(content.len(), &p.display, preview);
+    *content = stub;
+    Some(p.rel)
 }
 
-/// While one turn's results are too large together, write out the largest that
-/// is not already a stub. It stops once the turn fits, or once nothing left can
-/// be written out. A failure is never written out: its message is short by
-/// construction, the same rule the per-call cap applies.
-fn cap_aggregate_outputs(results: &mut [ToolOutcome], ctx: &ToolContext, per_turn_cap: usize) {
+/// While one turn's results are too large together, write out the largest
+/// success that is not already a stub. It stops once the turn fits, or once
+/// nothing left can be written out.
+fn cap_aggregate_outputs(
+    calls: &[ToolCall],
+    results: &mut [ToolResult],
+    ctx: &ToolContext,
+    per_turn_cap: usize,
+    paths: &mut HashMap<String, PathBuf>,
+) {
     loop {
-        let total: usize = results.iter().map(|outcome| outcome.content.len()).sum();
+        let total: usize = results.iter().map(|result| result.content().len()).sum();
         if total <= per_turn_cap {
             return;
         }
-        let largest = results
-            .iter_mut()
-            .filter(|outcome| outcome.failure.is_none())
-            .filter(|outcome| !outcome.content.starts_with(OVERSIZED_STUB_TAG_OPEN))
-            .max_by_key(|outcome| outcome.content.len());
-        let Some(outcome) = largest else {
+        let largest = calls
+            .iter()
+            .zip(results.iter_mut())
+            .filter_map(|(call, result)| match result {
+                ToolResult::Success(content) if !content.starts_with(OVERSIZED_STUB_TAG_OPEN) => {
+                    Some((call, content))
+                }
+                _ => None,
+            })
+            .max_by_key(|(_, content)| content.len());
+        let Some((call, content)) = largest else {
             return;
         };
-        let Some(p) = persist_output(ctx, &outcome.call_id, &outcome.content) else {
+        let Some(p) = persist_output(ctx, &call.id, content) else {
             // Persistence failed; nothing further this pass can do.
             return;
         };
-        let preview = truncate_preview(&outcome.content);
-        let stub = format_oversized_tool_result(outcome.content.len(), &p.display, preview);
-        outcome.content = stub;
-        outcome.path = Some(p.rel);
+        let preview = truncate_preview(content);
+        let stub = format_oversized_tool_result(content.len(), &p.display, preview);
+        *content = stub;
+        paths.insert(call.id.clone(), p.rel);
     }
 }
 
@@ -1006,8 +1025,8 @@ Do the demo thing.
 
         let results = registry.execute(&calls, &ctx).await;
         assert_eq!(results.len(), 1);
-        assert_eq!(results[0].failure, Some(ToolFailureKind::ToolNotFound));
-        assert!(results[0].content.contains("Unknown tool"));
+        assert!(matches!(results[0], ToolResult::Error(_)));
+        assert!(results[0].content().contains("Unknown tool"));
     }
 
     #[tokio::test]
@@ -1022,11 +1041,8 @@ Do the demo thing.
         }];
 
         let results = registry.execute(&calls, &ctx).await;
-        let content = &results[0].content;
-        assert_eq!(
-            results[0].failure,
-            Some(ToolFailureKind::SchemaValidationFailed)
-        );
+        assert!(matches!(results[0], ToolResult::SchemaError(_)));
+        let content = results[0].content();
         assert!(
             content.contains("expected type object, got string"),
             "{content}"
@@ -1064,8 +1080,10 @@ Do the demo thing.
             name: "typed".into(),
             input,
         }];
-        let results = registry.execute(&calls, ctx).await;
-        (results[0].content.clone(), results[0].failure.is_none())
+        let mut results = registry.execute(&calls, ctx).await;
+        let result = results.remove(0);
+        let succeeded = matches!(result, ToolResult::Success(_));
+        (result.into_content(), succeeded)
     }
 
     #[tokio::test]
@@ -1178,7 +1196,7 @@ Do the demo thing.
 
         let results = registry.execute(&calls, &ctx).await;
         assert_eq!(
-            results[0].content,
+            results[0].content(),
             "Unknown tool: ripgrep. Available tools: grep, read_file"
         );
     }
@@ -1207,6 +1225,43 @@ Do the demo thing.
         assert_eq!(results.len(), 2);
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_call_whose_task_panics_is_still_answered() {
+        // Leaving the slot empty would send the model a `tool_use` block with
+        // no result, which providers reject.
+        let mut registry = ToolRegistry::default();
+        registry.register(
+            Tool::new("explode", "panics", |_: Value, _ctx| async {
+                panic!("boom");
+            })
+            .concurrent(true),
+        );
+        registry.register(mock_tool("steady", true, "ok"));
+        let ctx = test_ctx();
+        let calls = vec![
+            ToolCall {
+                id: "c1".into(),
+                name: "explode".into(),
+                input: serde_json::json!({}),
+            },
+            ToolCall {
+                id: "c2".into(),
+                name: "steady".into(),
+                input: serde_json::json!({}),
+            },
+        ];
+
+        let results = registry.execute(&calls, &ctx).await;
+
+        assert_eq!(results.len(), 2);
+        assert!(
+            matches!(&results[0], ToolResult::Error(message) if message.contains("panicked")),
+            "{:?}",
+            results[0]
+        );
+        assert_eq!(results[1].content(), "ok");
+    }
+
     #[tokio::test]
     async fn execute_serial_tool() {
         let mut registry = ToolRegistry::default();
@@ -1221,8 +1276,8 @@ Do the demo thing.
 
         let results = registry.execute(&calls, &ctx).await;
         assert_eq!(results.len(), 1);
-        assert!(results[0].failure.is_none());
-        assert_eq!(results[0].content, "written");
+        assert!(matches!(results[0], ToolResult::Success(_)));
+        assert_eq!(results[0].content(), "written");
     }
 
     #[tokio::test]
@@ -1292,24 +1347,12 @@ Do the demo thing.
         (ctx, queue, key, dir)
     }
 
-    /// An outcome the aggregate cap may write out, which is what those tests
-    /// hand it.
-    fn stubbable(id: &str, content: &str) -> ToolOutcome {
-        ToolOutcome {
-            call_id: id.into(),
-            content: content.into(),
-            failure: None,
-            path: None,
-        }
-    }
-
-    /// A failed outcome, for the tests that pin what the caps leave alone.
-    fn failed(id: &str, content: &str) -> ToolOutcome {
-        ToolOutcome {
-            call_id: id.into(),
-            content: content.into(),
-            failure: Some(ToolFailureKind::ExecutionFailed),
-            path: None,
+    /// The call an aggregate test answers with a synthetic result.
+    fn sized_call(id: &str) -> ToolCall {
+        ToolCall {
+            id: id.into(),
+            name: "dump".into(),
+            input: serde_json::json!({}),
         }
     }
 
@@ -1327,9 +1370,9 @@ Do the demo thing.
     #[test]
     fn write_tool_output_stores_relative_path_in_comment() {
         let (ctx, _queue, key, _dir) = ticket_ctx();
-        let mut outcome = stubbable("call-rel", &"z".repeat(500));
-        cap_oversized_result(&mut outcome, &ctx, 100);
-        let stored = outcome.path.expect("offload happened");
+        let mut result = ToolResult::success("z".repeat(500));
+        let stored =
+            cap_oversized_result(&mut result, &ctx, "call-rel", 100).expect("offload happened");
         assert_eq!(stored, relative_outputs_path(&key, "call-rel"));
         assert!(
             stored.is_relative(),
@@ -1341,31 +1384,31 @@ Do the demo thing.
     #[test]
     fn persisted_output_renders_absolute_path_for_model() {
         let (ctx, _queue, key, dir) = ticket_ctx();
-        let mut outcome = stubbable("call-abs", &"y".repeat(500));
-        cap_oversized_result(&mut outcome, &ctx, 100);
-        let stub = outcome.content;
+        let mut result = ToolResult::success("y".repeat(500));
+        cap_oversized_result(&mut result, &ctx, "call-abs", 100);
         let absolute = absolute_outputs_path(dir.path(), &key, "call-abs");
         assert!(
-            stub.contains(&absolute.display().to_string()),
-            "stub must give the model the joinable on-disk path: {stub}"
+            result.content().contains(&absolute.display().to_string()),
+            "stub must give the model the joinable on-disk path: {}",
+            result.content()
         );
     }
 
     #[test]
     fn cap_oversized_result_passes_through_under_cap() {
         let ctx = test_ctx();
-        let mut outcome = stubbable("call-1", "hello");
-        cap_oversized_result(&mut outcome, &ctx, 100);
-        assert_eq!(outcome.content, "hello");
-        assert!(outcome.path.is_none());
+        let mut result = ToolResult::success("hello");
+        let path = cap_oversized_result(&mut result, &ctx, "call-1", 100);
+        assert_eq!(result.content(), "hello");
+        assert!(path.is_none());
     }
 
     #[test]
     fn cap_oversized_result_replaces_oversized_ok_with_stub() {
         let (ctx, _queue, key, dir) = ticket_ctx();
-        let mut outcome = stubbable("call-xyz", &"a".repeat(500));
-        cap_oversized_result(&mut outcome, &ctx, 100);
-        let stub = outcome.content;
+        let mut result = ToolResult::success("a".repeat(500));
+        let path = cap_oversized_result(&mut result, &ctx, "call-xyz", 100);
+        let stub = result.content();
         assert!(stub.starts_with("<persisted-output>"));
         assert!(stub.contains("Output too large"));
         assert!(stub.contains("Full output saved to:"));
@@ -1376,7 +1419,7 @@ Do the demo thing.
         );
         assert!(stub.contains("Preview (first"));
         assert!(stub.ends_with("</persisted-output>"));
-        let path = outcome.path.expect("offload path");
+        let path = path.expect("offload path");
         assert_eq!(path, relative_outputs_path(&key, "call-xyz"));
         let body = std::fs::read_to_string(&absolute).unwrap();
         assert_eq!(body, "a".repeat(500));
@@ -1385,74 +1428,70 @@ Do the demo thing.
     #[test]
     fn cap_oversized_result_passes_a_failure_through() {
         let ctx = test_ctx();
-        let mut outcome = failed("call-1", "boom");
-        cap_oversized_result(&mut outcome, &ctx, 1);
-        assert_eq!(outcome.content, "boom");
-        assert!(outcome.path.is_none());
+        let mut result = ToolResult::error("boom");
+        let path = cap_oversized_result(&mut result, &ctx, "call-1", 1);
+        assert_eq!(result.content(), "boom");
+        assert!(path.is_none());
     }
 
     #[test]
     fn cap_oversized_result_returns_raw_when_no_ticket_key() {
         let ctx = test_ctx();
         let payload = "x".repeat(500);
-        let mut outcome = stubbable("call-1", &payload);
-        cap_oversized_result(&mut outcome, &ctx, 100);
-        assert_eq!(outcome.content, payload);
-        assert!(outcome.path.is_none(), "no ticket key means no offload");
+        let mut result = ToolResult::success(payload.clone());
+        let path = cap_oversized_result(&mut result, &ctx, "call-1", 100);
+        assert_eq!(result.content(), payload);
+        assert!(path.is_none(), "no ticket key means no offload");
     }
 
     #[test]
     fn cap_aggregate_offloads_largest_first() {
         let (ctx, _queue, key, dir) = ticket_ctx();
         // Sizes chosen so the stub's own bytes (~200) don't dominate.
-        let small = "a".repeat(40_000);
         let big = "b".repeat(80_000);
-        let tiny = "c".repeat(30_000);
+        let calls = vec![sized_call("c1"), sized_call("c2"), sized_call("c3")];
         let mut results = vec![
-            stubbable("c1", &small),
-            stubbable("c2", &big),
-            stubbable("c3", &tiny),
+            ToolResult::success("a".repeat(40_000)),
+            ToolResult::success(big.clone()),
+            ToolResult::success("c".repeat(30_000)),
         ];
-        cap_aggregate_outputs(&mut results, &ctx, 100_000);
+        let mut paths = HashMap::new();
+        cap_aggregate_outputs(&calls, &mut results, &ctx, 100_000, &mut paths);
         // c2 (the largest) was offloaded; the other two stayed inline.
-        assert!(results[1].content.starts_with("<persisted-output>"));
-        assert!(results[1].content.contains("Full output saved to:"));
-        let big_path = results[1].path.clone().expect("c2 path recorded");
-        assert_eq!(big_path, relative_outputs_path(&key, "c2"));
+        assert!(results[1].content().starts_with("<persisted-output>"));
+        assert!(results[1].content().contains("Full output saved to:"));
+        assert_eq!(paths["c2"], relative_outputs_path(&key, "c2"));
         let body = std::fs::read_to_string(absolute_outputs_path(dir.path(), &key, "c2")).unwrap();
         assert_eq!(body, big);
 
-        assert_eq!(results[0].content.len(), 40_000);
-        assert_eq!(results[2].content.len(), 30_000);
-        assert!(results[0].path.is_none());
-        assert!(results[2].path.is_none());
+        assert_eq!(results[0].content().len(), 40_000);
+        assert_eq!(results[2].content().len(), 30_000);
+        assert_eq!(paths.len(), 1);
     }
 
     #[test]
     fn cap_aggregate_stops_when_only_small_results_remain() {
         let (ctx, _queue, _key, _dir) = ticket_ctx();
         // Many small results whose total far exceeds the cap, but
-        // each is already a stub-marked block. Aggregate should bail
+        // each is already stub-marked. Aggregate should bail
         // rather than spin: stubs are skipped, so no candidates.
-        let mut results: Vec<ToolOutcome> = (0..5)
+        let calls: Vec<ToolCall> = (0..5).map(|i| sized_call(&format!("c{i}"))).collect();
+        let mut results: Vec<ToolResult> = (0..5)
             .map(|i| {
-                let stub = format!("<persisted-output>already stubbed {i}</persisted-output>");
-                stubbable(&format!("c{i}"), &stub)
+                ToolResult::success(format!(
+                    "<persisted-output>already stubbed {i}</persisted-output>"
+                ))
             })
             .collect();
-        let before: Vec<String> = results
-            .iter()
-            .map(|outcome| outcome.content.clone())
-            .collect();
-        cap_aggregate_outputs(&mut results, &ctx, 10);
-        let after: Vec<String> = results
-            .iter()
-            .map(|outcome| outcome.content.clone())
-            .collect();
+        let before: Vec<String> = results.iter().map(|r| r.content().to_string()).collect();
+        let mut paths = HashMap::new();
+        cap_aggregate_outputs(&calls, &mut results, &ctx, 10, &mut paths);
+        let after: Vec<String> = results.iter().map(|r| r.content().to_string()).collect();
         assert_eq!(
             before, after,
             "aggregate must be a no-op when only stubs remain"
         );
+        assert!(paths.is_empty());
     }
 
     #[test]
@@ -1503,35 +1542,37 @@ Do the demo thing.
 
     #[test]
     fn replace_empty_output_substitutes_placeholder() {
-        let mut outcome = stubbable("c1", "");
-        replace_empty_output(&mut outcome, "bash");
-        assert_eq!(outcome.content, "(bash completed with no output)");
+        let mut result = ToolResult::success("");
+        replace_empty_output(&mut result, "bash");
+        assert_eq!(result.content(), "(bash completed with no output)");
     }
 
     #[test]
     fn replace_empty_output_passes_non_empty_through() {
-        let mut outcome = stubbable("c1", "hello");
-        replace_empty_output(&mut outcome, "bash");
-        assert_eq!(outcome.content, "hello");
+        let mut result = ToolResult::success("hello");
+        replace_empty_output(&mut result, "bash");
+        assert_eq!(result.content(), "hello");
     }
 
     #[test]
     fn replace_empty_output_passes_a_failure_through() {
-        // The guard reads `failure`, not the content, so even an empty
+        // The guard reads the variant, not the content, so even an empty
         // failure message is left as the tool reported it.
-        let mut outcome = failed("c1", "");
-        replace_empty_output(&mut outcome, "bash");
-        assert_eq!(outcome.content, "");
+        let mut result = ToolResult::error("");
+        replace_empty_output(&mut result, "bash");
+        assert_eq!(result.content(), "");
     }
 
     #[test]
-    fn cap_aggregate_skips_a_failed_outcome() {
+    fn cap_aggregate_skips_a_failed_result() {
         // A failure's message is what the model must read to recover, so the
         // aggregate cap never writes it out.
         let (ctx, _queue, _key, _dir) = ticket_ctx();
-        let mut results = vec![failed("c1", &"e".repeat(50_000))];
-        cap_aggregate_outputs(&mut results, &ctx, 10);
-        assert_eq!(results[0].content.len(), 50_000);
-        assert!(results[0].path.is_none());
+        let calls = vec![sized_call("c1")];
+        let mut results = vec![ToolResult::error("e".repeat(50_000))];
+        let mut paths = HashMap::new();
+        cap_aggregate_outputs(&calls, &mut results, &ctx, 10, &mut paths);
+        assert_eq!(results[0].content().len(), 50_000);
+        assert!(paths.is_empty());
     }
 }

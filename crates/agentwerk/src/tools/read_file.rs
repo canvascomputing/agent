@@ -203,7 +203,7 @@ mod tests {
 
         let results = registry.execute(&calls, &test_ctx(dir.path())).await;
 
-        assert_eq!(results[0].content, "2\tbeta\n3\tgamma");
+        assert_eq!(results[0].content(), "2\tbeta\n3\tgamma");
     }
 
     #[tokio::test]

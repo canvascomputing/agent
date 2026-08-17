@@ -457,11 +457,11 @@ mod tests {
             input: serde_json::json!({}),
         }];
         let results = registry.execute(&calls, &test_tool_context()).await;
-        assert!(results[0].failure.is_some());
+        assert!(matches!(results[0], ToolResult::SchemaError(_)));
         assert!(
-            results[0].content.contains("`command`"),
-            "{content}",
-            content = results[0].content
+            results[0].content().contains("`command`"),
+            "{}",
+            results[0].content()
         );
     }
 

@@ -1,13 +1,10 @@
 //! Runs the tools a model asks for, writes out oversized results, and counts
 //! consecutive failures against the retry budget.
 
-use std::collections::HashMap;
-use std::path::PathBuf;
-
 use crate::event::{EventKind, PolicyKind, RepairKind, ToolFailureKind};
 use crate::prompts::arguments_retry_detail;
 use crate::providers::ContentBlock;
-use crate::tools::{ToolCall, ToolContext};
+use crate::tools::{cap_results, ToolCall, ToolContext, ToolResult};
 
 use super::agent::TicketContext;
 use super::Step;
@@ -46,25 +43,26 @@ pub(super) async fn run(context: &mut TicketContext<'_>, mut calls: Vec<ToolCall
         .knowledge(context.agent.knowledge());
     let ticket_schema = context.ticket().and_then(|ticket| ticket.schema);
     let registry = context.agent.tool_registry();
-    let outcomes = registry.execute(&calls, &tool_context).await;
+    let mut results = registry.execute(&calls, &tool_context).await;
+    let paths = cap_results(&calls, &mut results, &tool_context);
 
     let mut schema_failure: Option<(String, String)> = None;
-    for outcome in &outcomes {
-        let call = calls.iter().find(|call| call.id == outcome.call_id);
-        let tool_name = call.map(|call| call.name.clone()).unwrap_or_default();
+    for (call, result) in calls.iter().zip(&results) {
         // The files this call opened. Feeds the per-path open tally;
         // empty for tools that open no file.
-        let opened_paths = call
-            .map(|call| {
-                context
-                    .agent
-                    .tool_registry()
-                    .get(&call.name)
-                    .map(|tool| tool.opened_paths(&call.input))
-                    .unwrap_or_default()
-            })
+        let opened_paths = registry
+            .get(&call.name)
+            .map(|tool| tool.opened_paths(&call.input))
             .unwrap_or_default();
-        match outcome.failure {
+        // The fold above renamed every call the registry resolves, so a name
+        // it still does not know is the unknown-tool failure.
+        let reason = match result {
+            ToolResult::Success(_) => None,
+            _ if registry.get(&call.name).is_none() => Some(ToolFailureKind::ToolNotFound),
+            ToolResult::Error(_) => Some(ToolFailureKind::ExecutionFailed),
+            ToolResult::SchemaError(_) => Some(ToolFailureKind::SchemaValidationFailed),
+        };
+        match reason {
             None => {
                 // Any successful tool call is progress: clear the counter.
                 context.consecutive_schema_failures = 0;
@@ -72,9 +70,9 @@ pub(super) async fn run(context: &mut TicketContext<'_>, mut calls: Vec<ToolCall
                     context.emit(EventKind::FileOpenFinished { path: path.clone() });
                 }
                 context.emit(EventKind::ToolCallFinished {
-                    tool_name,
-                    call_id: outcome.call_id.clone(),
-                    output: outcome.content.clone(),
+                    tool_name: call.name.clone(),
+                    call_id: call.id.clone(),
+                    output: result.content().to_string(),
                 });
             }
             Some(reason) => {
@@ -84,7 +82,7 @@ pub(super) async fn run(context: &mut TicketContext<'_>, mut calls: Vec<ToolCall
                 context.consecutive_schema_failures =
                     context.consecutive_schema_failures.saturating_add(1);
                 if reason == ToolFailureKind::SchemaValidationFailed && schema_failure.is_none() {
-                    schema_failure = Some((tool_name.clone(), outcome.content.clone()));
+                    schema_failure = Some((call.name.clone(), result.content().to_string()));
                 }
                 // A path fails with the call that named it, so it carries the
                 // call's reason.
@@ -95,25 +93,22 @@ pub(super) async fn run(context: &mut TicketContext<'_>, mut calls: Vec<ToolCall
                     });
                 }
                 context.emit(EventKind::ToolCallFailed {
-                    tool_name,
-                    call_id: outcome.call_id.clone(),
+                    tool_name: call.name.clone(),
+                    call_id: call.id.clone(),
                     reason,
-                    message: outcome.content.clone(),
+                    message: result.content().to_string(),
                 });
             }
         }
     }
 
-    let mut paths: HashMap<String, PathBuf> = HashMap::new();
-    let mut blocks: Vec<ContentBlock> = Vec::with_capacity(outcomes.len());
-    for outcome in outcomes {
-        if let Some(path) = outcome.path {
-            paths.insert(outcome.call_id.clone(), path);
-        }
+    let mut blocks: Vec<ContentBlock> = Vec::with_capacity(results.len());
+    for (call, result) in calls.iter().zip(results) {
+        let succeeded = matches!(result, ToolResult::Success(_));
         blocks.push(ContentBlock::ToolResult {
-            tool_use_id: outcome.call_id,
-            content: outcome.content,
-            succeeded: outcome.failure.is_none(),
+            tool_use_id: call.id.clone(),
+            content: result.into_content(),
+            succeeded,
         });
     }
     if let Some((failing_tool, validator_message)) = &schema_failure {
