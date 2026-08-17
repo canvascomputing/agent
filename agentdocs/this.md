@@ -13,8 +13,7 @@ Naming and comment rules, plus README structure. Skim the section matching what 
 ```
 
 - `# Title`: one word or short phrase, no trailing punctuation.
-- One sentence under the title states what the file covers.
-- Sections use plain headings: `## Title Cased Heading`. No numbers: adding a section must not force renumbering.
+- Sections use plain headings: `## Title Cased Heading`. No numbers, so adding a section forces no renumbering.
 - Each section is self-contained, so a reader can skip straight to it.
 
 ## Section Shape
