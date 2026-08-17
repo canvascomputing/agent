@@ -1,14 +1,8 @@
 //! Lets an agent enumerate the contents of a directory: the first turn of any exploratory task against an unknown layout.
 
-use std::future::Future;
 use std::path::PathBuf;
-use std::pin::Pin;
-use std::sync::OnceLock;
 
-use crate::schemas::Schema;
-
-use super::tool::{Tool, ToolContext, ToolLike, ToolResult};
-use super::tool_file::ToolFile;
+use super::tool::{Tool, ToolContext, ToolResult};
 
 /// List the entries of a directory with type and size. Concurrent. Pair with
 /// [`GlobTool`](crate::tools::GlobTool) when you need pattern-based file discovery.
@@ -23,21 +17,6 @@ use super::tool_file::ToolFile;
 /// ```
 pub struct ListDirectoryTool;
 
-fn tool_file() -> &'static ToolFile {
-    static FILE: OnceLock<ToolFile> = OnceLock::new();
-    FILE.get_or_init(|| {
-        ToolFile::parse(
-            include_str!("list_directory.tool.md"),
-            include_str!("list_directory.schema.json"),
-        )
-    })
-}
-
-fn description() -> &'static str {
-    static DESC: OnceLock<String> = OnceLock::new();
-    DESC.get_or_init(|| tool_file().render_markdown())
-}
-
 #[derive(serde::Deserialize)]
 pub struct ListDirectoryArgs {
     #[serde(default = "here")]
@@ -48,34 +27,6 @@ pub struct ListDirectoryArgs {
 
 fn here() -> String {
     ".".to_string()
-}
-
-impl ToolLike for ListDirectoryTool {
-    type Args = ListDirectoryArgs;
-
-    fn name(&self) -> &str {
-        &tool_file().name
-    }
-
-    fn description(&self) -> &str {
-        description()
-    }
-
-    fn input_schema(&self) -> Schema {
-        tool_file().input_schema.clone()
-    }
-
-    fn is_concurrent(&self) -> bool {
-        tool_file().concurrent
-    }
-
-    fn call<'a>(
-        &'a self,
-        args: ListDirectoryArgs,
-        ctx: &'a ToolContext,
-    ) -> Pin<Box<dyn Future<Output = ToolResult> + Send + 'a>> {
-        Box::pin(run(args, ctx.clone()))
-    }
 }
 
 impl From<ListDirectoryTool> for Tool {
@@ -178,7 +129,10 @@ mod tests {
 
     #[test]
     fn every_example_the_schema_shows_deserializes_into_the_arguments() {
-        let document = tool_file().input_schema.get_raw_schema().clone();
+        let document = Tool::from(ListDirectoryTool)
+            .input_schema()
+            .get_raw_schema()
+            .clone();
         for example in document["examples"].as_array().expect("examples") {
             serde_json::from_value::<ListDirectoryArgs>(example.clone())
                 .unwrap_or_else(|error| panic!("{example}: {error}"));
@@ -197,9 +151,9 @@ mod tests {
         fs::write(tmp.path().join("beta.txt"), "world").unwrap();
         fs::create_dir(tmp.path().join("subdir")).unwrap();
 
-        let tool = crate::tools::erase(ListDirectoryTool);
+        let tool = Tool::from(ListDirectoryTool);
         let ctx = test_ctx(tmp.path());
-        let result = tool.call_with(serde_json::json!({}), &ctx).await;
+        let result = tool.call(serde_json::json!({}), &ctx).await;
 
         let content = result.content();
         let lines: Vec<&str> = content.lines().collect();
@@ -218,10 +172,10 @@ mod tests {
         fs::create_dir(tmp.path().join("child")).unwrap();
         fs::write(tmp.path().join("child").join("nested.txt"), "n").unwrap();
 
-        let tool = crate::tools::erase(ListDirectoryTool);
+        let tool = Tool::from(ListDirectoryTool);
         let ctx = test_ctx(tmp.path());
         let result = tool
-            .call_with(serde_json::json!({"recursive": true}), &ctx)
+            .call(serde_json::json!({"recursive": true}), &ctx)
             .await;
 
         let content = result.content();
@@ -236,8 +190,8 @@ mod tests {
         let tmp = crate::test_util::TempDir::new().unwrap();
         fs::write(tmp.path().join("app.py"), "x = 1\n").unwrap();
 
-        let result = crate::tools::erase(ListDirectoryTool)
-            .call_with(
+        let result = Tool::from(ListDirectoryTool)
+            .call(
                 serde_json::json!({ "path": "app.py" }),
                 &test_ctx(tmp.path()),
             )
@@ -258,8 +212,8 @@ mod tests {
         fs::create_dir(tmp.path().join("pkg")).unwrap();
 
         // Guess a non-existent directory directly under cwd.
-        let result = crate::tools::erase(ListDirectoryTool)
-            .call_with(serde_json::json!({ "path": "nope" }), &test_ctx(tmp.path()))
+        let result = Tool::from(ListDirectoryTool)
+            .call(serde_json::json!({ "path": "nope" }), &test_ctx(tmp.path()))
             .await;
 
         let ToolResult::Error(content) = &result else {
@@ -283,8 +237,8 @@ mod tests {
         fs::create_dir(cwd.join("pkg")).unwrap();
         let dropped = root.path().join("pkg");
 
-        let result = crate::tools::erase(ListDirectoryTool)
-            .call_with(
+        let result = Tool::from(ListDirectoryTool)
+            .call(
                 serde_json::json!({ "path": dropped.to_str().unwrap() }),
                 &test_ctx(&cwd),
             )

@@ -1,20 +1,15 @@
 //! Lets an agent search file contents by regular expression, so it can find
 //! where something is mentioned before opening any one file.
 
-use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use grep::searcher::sinks::UTF8;
 use serde_json::{Map, Value};
 
-use crate::schemas::Schema;
-
-use super::tool::{Tool, ToolContext, ToolLike, ToolResult};
-use super::tool_file::ToolFile;
+use super::tool::{Tool, ToolContext, ToolResult};
 
 /// Search the working directory for a regular-expression `pattern` and return a
 /// structured result: matching lines, matching file names, or per-file counts,
@@ -43,49 +38,6 @@ pub(super) const MAX_LINE_COLUMNS: usize = 250;
 /// How long a single search may run before it is killed. A regex over a huge
 /// tree should still return promptly; a runaway pattern must not wedge a turn.
 const SEARCH_TIMEOUT: Duration = Duration::from_secs(180);
-
-fn tool_file() -> &'static ToolFile {
-    static FILE: OnceLock<ToolFile> = OnceLock::new();
-    FILE.get_or_init(|| {
-        ToolFile::parse(
-            include_str!("grep.tool.md"),
-            include_str!("grep.schema.json"),
-        )
-    })
-}
-
-fn description() -> &'static str {
-    static DESC: OnceLock<String> = OnceLock::new();
-    DESC.get_or_init(|| tool_file().render_markdown())
-}
-
-impl ToolLike for GrepTool {
-    type Args = GrepArgs;
-
-    fn name(&self) -> &str {
-        &tool_file().name
-    }
-
-    fn description(&self) -> &str {
-        description()
-    }
-
-    fn input_schema(&self) -> Schema {
-        tool_file().input_schema.clone()
-    }
-
-    fn is_concurrent(&self) -> bool {
-        tool_file().concurrent
-    }
-
-    fn call<'a>(
-        &'a self,
-        args: GrepArgs,
-        ctx: &'a ToolContext,
-    ) -> Pin<Box<dyn Future<Output = ToolResult> + Send + 'a>> {
-        Box::pin(run(args, ctx.clone()))
-    }
-}
 
 impl From<GrepTool> for Tool {
     fn from(_: GrepTool) -> Tool {
@@ -532,7 +484,7 @@ mod tests {
 
     #[test]
     fn every_example_the_schema_shows_deserializes_into_the_arguments() {
-        let document = tool_file().input_schema.get_raw_schema().clone();
+        let document = Tool::from(GrepTool).input_schema().get_raw_schema().clone();
         for example in document["examples"].as_array().expect("examples") {
             serde_json::from_value::<GrepArgs>(example.clone())
                 .unwrap_or_else(|error| panic!("{example}: {error}"));
@@ -566,7 +518,7 @@ mod tests {
     }
 
     async fn search(ctx: &ToolContext, input: Value) -> Value {
-        let result = crate::tools::erase(GrepTool).call_with(input, ctx).await;
+        let result = Tool::from(GrepTool).call(input, ctx).await;
         let content = result.content();
         serde_json::from_str(content).unwrap_or_else(|_| Value::String(content.to_string()))
     }

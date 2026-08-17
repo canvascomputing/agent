@@ -61,9 +61,7 @@ impl ToolFile {
         }
     }
 
-    /// The prose body shown to the model. Named for the format it returns so
-    /// the `ToolLike` impls that cache it read the same as before the markdown
-    /// migration.
+    /// The prose body shown to the model, already the markdown it reads.
     pub(crate) fn render_markdown(&self) -> String {
         self.description.clone()
     }

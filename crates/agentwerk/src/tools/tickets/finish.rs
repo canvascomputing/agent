@@ -1,8 +1,6 @@
 //! Lets an agent write the result for its ticket and mark it finished, handing
 //! the work on to another agent in the same call when it needs to.
 
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::OnceLock;
 
 use serde_json::Value;
@@ -11,7 +9,7 @@ use crate::agents::tickets::{Ticket, TicketQueue};
 use crate::event::{EventKind, RepairKind};
 use crate::schemas::Schema;
 
-use super::super::tool::{retype_message, Tool, ToolContext, ToolLike, ToolResult};
+use super::super::tool::{retype_message, Tool, ToolContext, ToolResult};
 use super::super::tool_file::ToolFile;
 use super::resolve_current_key;
 
@@ -36,44 +34,6 @@ fn tool_file() -> &'static ToolFile {
             include_str!("finish.schema.json"),
         )
     })
-}
-
-fn description() -> &'static str {
-    static DESC: OnceLock<String> = OnceLock::new();
-    DESC.get_or_init(|| tool_file().render_markdown())
-}
-
-impl ToolLike for FinishTool {
-    type Args = Value;
-
-    fn name(&self) -> &str {
-        &tool_file().name
-    }
-
-    fn description(&self) -> &str {
-        description()
-    }
-
-    fn input_schema(&self) -> Schema {
-        tool_file().input_schema.clone()
-    }
-
-    fn is_concurrent(&self) -> bool {
-        tool_file().concurrent
-    }
-
-    fn call<'a>(
-        &'a self,
-        input: Value,
-        ctx: &'a ToolContext,
-    ) -> Pin<Box<dyn Future<Output = ToolResult> + Send + 'a>> {
-        Box::pin(async move {
-            match finish(&input, ctx) {
-                Ok(message) => ToolResult::success(message),
-                Err(failure) => failure,
-            }
-        })
-    }
 }
 
 impl From<FinishTool> for Tool {
@@ -471,7 +431,7 @@ mod tests {
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
 
         // A `result` key the flat schema does not declare, quoted line inside.
-        let outcome = FinishTool
+        let outcome = Tool::from(FinishTool)
             .call(serde_json::json!({"result": {"line": "42"}}), &ctx)
             .await;
 
@@ -501,7 +461,7 @@ mod tests {
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
 
         // The wrapper comes off, but `line` is beyond repair.
-        let outcome = FinishTool
+        let outcome = Tool::from(FinishTool)
             .call(serde_json::json!({"result": {"line": "about 42"}}), &ctx)
             .await;
 
@@ -556,7 +516,13 @@ mod tests {
         // The same predicate decides both, so what the model is shown is the
         // shape `parse_result` reads.
         let advertised = FinishTool::input_schema_for(&colliding_schema());
-        assert_eq!(&advertised, FinishTool.input_schema().get_raw_schema());
+        assert_eq!(
+            &advertised,
+            Tool::from(FinishTool)
+                .input_schema()
+                .clone()
+                .get_raw_schema()
+        );
     }
 
     #[tokio::test]
@@ -575,7 +541,7 @@ mod tests {
             .expect("claim must succeed");
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
 
-        let outcome = FinishTool
+        let outcome = Tool::from(FinishTool)
             .call(serde_json::json!({"result": {"handover": "x"}}), &ctx)
             .await;
 
@@ -667,7 +633,13 @@ mod tests {
         // The ticket schema still validates the result on write; its
         // violations are what a miss reads back.
         let advertised = FinishTool::input_schema_for(&string_schema());
-        assert_eq!(&advertised, FinishTool.input_schema().get_raw_schema());
+        assert_eq!(
+            &advertised,
+            Tool::from(FinishTool)
+                .input_schema()
+                .clone()
+                .get_raw_schema()
+        );
     }
 
     #[tokio::test]
@@ -676,7 +648,7 @@ mod tests {
         let (queue, key) = one_ticket("alice");
         queue.dir(dir.path().to_path_buf());
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
-        let outcome = FinishTool
+        let outcome = Tool::from(FinishTool)
             .call(serde_json::json!({"result": "the answer"}), &ctx)
             .await;
         assert!(matches!(outcome, ToolResult::Success(_)));
@@ -696,7 +668,7 @@ mod tests {
         let (queue, key) = one_ticket("alice");
         queue.dir(dir.path().to_path_buf());
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
-        FinishTool
+        Tool::from(FinishTool)
             .call(serde_json::json!({"result": {"x": 1}}), &ctx)
             .await;
 
@@ -719,7 +691,7 @@ mod tests {
         let (queue, key) = one_ticket("alice");
         queue.dir(dir.path().to_path_buf());
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
-        FinishTool
+        Tool::from(FinishTool)
             .call(serde_json::json!({"result": "the answer"}), &ctx)
             .await;
 
@@ -744,7 +716,7 @@ mod tests {
             let (queue, key) = one_ticket("alice");
             queue.dir(dir.path().to_path_buf());
             let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
-            let outcome = FinishTool
+            let outcome = Tool::from(FinishTool)
                 .call(serde_json::json!({"result": value}), &ctx)
                 .await;
             assert!(
@@ -762,7 +734,7 @@ mod tests {
         let (queue, key) = one_ticket("alice");
         queue.dir(dir.path().to_path_buf());
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
-        let outcome = FinishTool
+        let outcome = Tool::from(FinishTool)
             .call(serde_json::json!({"result": {"x": 1, "y": [2, 3]}}), &ctx)
             .await;
         assert!(matches!(outcome, ToolResult::Success(_)));
@@ -799,14 +771,14 @@ mod tests {
 
         // An object where a string belongs: no retype recovers it, unlike a
         // quoted scalar.
-        let outcome = FinishTool
+        let outcome = Tool::from(FinishTool)
             .call(serde_json::json!({"result": {"x": {}}}), &ctx)
             .await;
         assert!(matches!(outcome, ToolResult::SchemaError(_)));
         let t = queue.get_ticket(&key).unwrap();
         assert_eq!(t.status, Status::InProgress);
 
-        let outcome = FinishTool
+        let outcome = Tool::from(FinishTool)
             .call(serde_json::json!({"result": {"x": "ok"}}), &ctx)
             .await;
         assert!(matches!(outcome, ToolResult::Success(_)));
@@ -837,7 +809,9 @@ mod tests {
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
 
         // Fields at the top level, no `result` wrapper.
-        let outcome = FinishTool.call(serde_json::json!({"x": "ok"}), &ctx).await;
+        let outcome = Tool::from(FinishTool)
+            .call(serde_json::json!({"x": "ok"}), &ctx)
+            .await;
         assert!(matches!(outcome, ToolResult::Success(_)));
         let t = queue.get_ticket(&key).unwrap();
         assert_eq!(t.status, Status::Finished);
@@ -866,7 +840,7 @@ mod tests {
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
 
         // The agent double-encoded the conforming object as a JSON string.
-        let outcome = FinishTool
+        let outcome = Tool::from(FinishTool)
             .call(serde_json::json!({"result": "{\"x\": \"ok\"}"}), &ctx)
             .await;
         assert!(matches!(outcome, ToolResult::Success(_)));
@@ -885,7 +859,7 @@ mod tests {
         let queue = TicketQueue::new();
         queue.dir(shared_test_dir().to_path_buf());
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
-        let outcome = FinishTool
+        let outcome = Tool::from(FinishTool)
             .call(serde_json::json!({"result": "x"}), &ctx)
             .await;
         assert!(matches!(outcome, ToolResult::Error(_)));
@@ -903,7 +877,7 @@ mod tests {
             .claim(|t| t.key == "TICKET-1", "alice")
             .expect("claim must succeed");
         let ctx_alice = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
-        FinishTool
+        Tool::from(FinishTool)
             .call(serde_json::json!({"result": "from alice"}), &ctx_alice)
             .await;
 
@@ -912,7 +886,7 @@ mod tests {
             .claim(|t| t.key == "TICKET-2", "bob")
             .expect("claim must succeed");
         let ctx_bob = ctx_with(Arc::clone(&queue), "bob", dir.path().to_path_buf());
-        FinishTool
+        Tool::from(FinishTool)
             .call(serde_json::json!({"result": "from bob"}), &ctx_bob)
             .await;
 
@@ -948,7 +922,7 @@ mod tests {
             let agent = agent.clone();
             handles.push(tokio::spawn(async move {
                 let ctx = ctx_with(queue, &agent, dir_path);
-                FinishTool
+                Tool::from(FinishTool)
                     .call(serde_json::json!({"result": format!("payload_{i}")}), &ctx)
                     .await
             }));
@@ -992,7 +966,7 @@ mod tests {
         let (queue, parent_key) = one_ticket_in("alice", dir.path().to_path_buf());
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
 
-        let outcome = FinishTool
+        let outcome = Tool::from(FinishTool)
             .call(
                 serde_json::json!({
                     "handover": "bob",
@@ -1032,7 +1006,7 @@ mod tests {
         queue.schemas(&schemas);
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
 
-        FinishTool
+        Tool::from(FinishTool)
             .call(
                 serde_json::json!({"handover": "bob", "result": "a lead worth tracing"}),
                 &ctx,
@@ -1062,7 +1036,7 @@ mod tests {
         let (queue, parent_key) = one_ticket_in("alice", dir.path().to_path_buf());
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
 
-        FinishTool
+        Tool::from(FinishTool)
             .call(
                 serde_json::json!({"handover": "bob", "task": "next", "result": "done part 1"}),
                 &ctx,
@@ -1101,7 +1075,7 @@ mod tests {
             .expect("claim must succeed");
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
 
-        let outcome = FinishTool
+        let outcome = Tool::from(FinishTool)
             .call(
                 serde_json::json!({"handover": "bob", "task": "next", "result": "too short"}),
                 &ctx,
@@ -1145,7 +1119,7 @@ mod tests {
         let (queue, parent_key) = one_ticket_with_object_schema("alice", dir.path().to_path_buf());
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
 
-        let outcome = FinishTool
+        let outcome = Tool::from(FinishTool)
             .call(
                 serde_json::json!({"handover": "bob", "task": "next", "result": {"status": "done"}}),
                 &ctx,
@@ -1175,7 +1149,7 @@ mod tests {
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
 
         // `status` sits at the top level next to `handover`/`task`, no `result` wrapper.
-        let outcome = FinishTool
+        let outcome = Tool::from(FinishTool)
             .call(
                 serde_json::json!({"handover": "bob", "task": "next", "status": "done"}),
                 &ctx,
@@ -1199,7 +1173,7 @@ mod tests {
         let (queue, parent_key) = one_ticket_with_object_schema("alice", dir.path().to_path_buf());
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
 
-        FinishTool
+        Tool::from(FinishTool)
             .call(
                 serde_json::json!({"handover": "bob", "task": "next", "result": "{\"status\":\"done\"}"}),
                 &ctx,
@@ -1220,7 +1194,7 @@ mod tests {
         let (queue, parent_key) = one_ticket_with_object_schema("alice", dir.path().to_path_buf());
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
 
-        let outcome = FinishTool
+        let outcome = Tool::from(FinishTool)
             .call(
                 serde_json::json!({"handover": "bob", "task": "next", "result": {"wrong": 1}}),
                 &ctx,
@@ -1243,7 +1217,7 @@ mod tests {
         let dir = crate::test_util::TempDir::new().unwrap();
         let (queue, parent_key) = one_ticket_in("alice", dir.path().to_path_buf());
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
-        let outcome = FinishTool
+        let outcome = Tool::from(FinishTool)
             .call(serde_json::json!({"result": "done"}), &ctx)
             .await;
         assert!(matches!(outcome, ToolResult::Success(_)));
@@ -1259,7 +1233,7 @@ mod tests {
         let dir = crate::test_util::TempDir::new().unwrap();
         let (queue, _key) = one_ticket_in("alice", dir.path().to_path_buf());
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
-        let outcome = FinishTool
+        let outcome = Tool::from(FinishTool)
             .call(
                 serde_json::json!({"handover": "bob", "result": "alice's findings"}),
                 &ctx,
@@ -1277,7 +1251,7 @@ mod tests {
         let (queue, parent_key) = one_ticket_in("alice", dir.path().to_path_buf());
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
 
-        FinishTool
+        Tool::from(FinishTool)
             .call(
                 serde_json::json!({"handover": "bob", "result": "alice's findings"}),
                 &ctx,
@@ -1299,7 +1273,7 @@ mod tests {
         let (queue, parent_key) = one_ticket_in("alice", dir.path().to_path_buf());
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
 
-        FinishTool
+        Tool::from(FinishTool)
             .call(
                 serde_json::json!({
                     "handover": "bob",
@@ -1337,7 +1311,7 @@ mod tests {
             serde_json::json!({"handover": "bob", "task": "x", "result": null}),
             serde_json::json!({"handover": "bob", "task": "x", "result": ""}),
         ] {
-            let outcome = FinishTool.call(body, &ctx).await;
+            let outcome = Tool::from(FinishTool).call(body, &ctx).await;
             assert!(
                 matches!(&outcome, ToolResult::Error(message) if message.contains("needs a result")),
                 "{outcome:?}",
@@ -1358,7 +1332,7 @@ mod tests {
             let (queue, parent_key) = one_ticket_in("alice", dir.path().to_path_buf());
             let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
 
-            let outcome = FinishTool
+            let outcome = Tool::from(FinishTool)
                 .call(
                     serde_json::json!({"handover": "bob", "task": "next", "result": result_value}),
                     &ctx,
@@ -1377,7 +1351,7 @@ mod tests {
     fn a_number_where_the_advertised_schema_declares_a_string_is_rejected() {
         // Stringifying `42` would pass the check with a task the model never
         // wrote; the violation names the field to fix instead.
-        let schema = FinishTool.input_schema();
+        let schema = Tool::from(FinishTool).input_schema().clone();
         let violations = schema
             .validate(serde_json::json!({"handover": "bob", "task": 42, "result": "ok"}))
             .unwrap_err();
@@ -1399,7 +1373,7 @@ mod tests {
             serde_json::json!({"handover": "bob", "task": "  ", "result": "x"}),
             serde_json::json!({"handover": 7, "result": "x"}),
         ] {
-            let outcome = FinishTool.call(body, &ctx).await;
+            let outcome = Tool::from(FinishTool).call(body, &ctx).await;
             assert!(
                 matches!(&outcome, ToolResult::Error(message) if message.contains("non-blank")),
                 "{outcome:?}",
@@ -1417,7 +1391,7 @@ mod tests {
         let queue = TicketQueue::new();
         queue.dir(dir.path().to_path_buf());
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
-        let outcome = FinishTool
+        let outcome = Tool::from(FinishTool)
             .call(
                 serde_json::json!({"handover": "bob", "task": "x", "result": "y"}),
                 &ctx,
@@ -1432,7 +1406,7 @@ mod tests {
         let (queue, parent_key) = one_ticket_in("alice", dir.path().to_path_buf());
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
 
-        FinishTool
+        Tool::from(FinishTool)
             .call(
                 serde_json::json!({
                     "handover": "bob",
@@ -1453,7 +1427,7 @@ mod tests {
         let (queue, parent_key) = one_ticket_in("alice", dir.path().to_path_buf());
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
 
-        FinishTool
+        Tool::from(FinishTool)
             .call(
                 serde_json::json!({
                     "handover": "bob",
@@ -1477,7 +1451,7 @@ mod tests {
         let (queue, parent_key) = one_ticket_in("alice", dir.path().to_path_buf());
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
 
-        FinishTool
+        Tool::from(FinishTool)
             .call(
                 serde_json::json!({
                     "handover": "bob",

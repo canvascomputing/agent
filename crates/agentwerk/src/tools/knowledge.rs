@@ -1,17 +1,12 @@
 //! Lets an agent write, read, remove, and list the knowledge it shares across
 //! tickets and with other agents.
 
-use std::future::Future;
-use std::pin::Pin;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use crate::agents::knowledge::{Knowledge, KnowledgeError};
 use crate::event::{EventKind, KnowledgeFailureKind, KnowledgeOp};
 
-use crate::schemas::Schema;
-
-use super::tool::{Tool, ToolContext, ToolLike, ToolResult};
-use super::tool_file::ToolFile;
+use super::tool::{Tool, ToolContext, ToolResult};
 
 /// The model's four-action handle on a `Knowledge` store:
 /// `write`, `read`, `remove`, `list`. Registered automatically on every
@@ -37,21 +32,6 @@ impl KnowledgeTool {
     pub fn new(store: Arc<Knowledge>) -> Self {
         Self { store }
     }
-}
-
-fn tool_file() -> &'static ToolFile {
-    static FILE: OnceLock<ToolFile> = OnceLock::new();
-    FILE.get_or_init(|| {
-        ToolFile::parse(
-            include_str!("knowledge.tool.md"),
-            include_str!("knowledge.schema.json"),
-        )
-    })
-}
-
-fn description() -> &'static str {
-    static DESC: OnceLock<String> = OnceLock::new();
-    DESC.get_or_init(|| tool_file().render_markdown())
 }
 
 /// Which failure the statistics count this under. Everything but a missing
@@ -90,35 +70,6 @@ pub enum KnowledgeArgs {
         slug: String,
     },
     List,
-}
-
-impl ToolLike for KnowledgeTool {
-    type Args = KnowledgeArgs;
-
-    fn name(&self) -> &str {
-        &tool_file().name
-    }
-
-    fn description(&self) -> &str {
-        description()
-    }
-
-    fn input_schema(&self) -> Schema {
-        tool_file().input_schema.clone()
-    }
-
-    fn is_concurrent(&self) -> bool {
-        tool_file().concurrent
-    }
-
-    fn call<'a>(
-        &'a self,
-        args: KnowledgeArgs,
-        ctx: &'a ToolContext,
-    ) -> Pin<Box<dyn Future<Output = ToolResult> + Send + 'a>> {
-        let store = Arc::clone(&self.store);
-        Box::pin(async move { run(&store, args, &ctx.clone()) })
-    }
 }
 
 impl From<KnowledgeTool> for Tool {
@@ -262,7 +213,9 @@ mod tests {
     fn every_example_the_schema_shows_deserializes_into_the_arguments() {
         // The schema and this enum both describe the shape. The examples are
         // where they are held to the same one.
-        let document = tool_file().input_schema.get_raw_schema().clone();
+        let document =
+            serde_json::from_str::<serde_json::Value>(include_str!("knowledge.schema.json"))
+                .unwrap();
         for example in document["examples"].as_array().expect("examples") {
             serde_json::from_value::<KnowledgeArgs>(example.clone())
                 .unwrap_or_else(|error| panic!("{example}: {error}"));
@@ -272,17 +225,15 @@ mod tests {
     #[tokio::test]
     async fn write_action_creates_page() {
         let (store, _dir) = fresh_store();
-        let tool = KnowledgeTool::new(Arc::clone(&store));
-        let r = tool
-            .call(
-                KnowledgeArgs::Write {
-                    slug: "test".into(),
-                    description: "A test page".into(),
-                    content: "# Test\n\nContent.".into(),
-                },
-                &ctx(),
-            )
-            .await;
+        let r = run(
+            &store,
+            KnowledgeArgs::Write {
+                slug: "test".into(),
+                description: "A test page".into(),
+                content: "# Test\n\nContent.".into(),
+            },
+            &ctx(),
+        );
         assert_success(&r, "page written");
         assert!(store.index().contains("test"));
     }
@@ -291,30 +242,26 @@ mod tests {
     async fn read_action_returns_page_body() {
         let (store, _dir) = fresh_store();
         save_page(&store, "test", "A test", "# Test\n\nHello.", &[]);
-        let tool = KnowledgeTool::new(Arc::clone(&store));
-        let r = tool
-            .call(
-                KnowledgeArgs::Read {
-                    slug: "test".into(),
-                },
-                &ctx(),
-            )
-            .await;
+        let r = run(
+            &store,
+            KnowledgeArgs::Read {
+                slug: "test".into(),
+            },
+            &ctx(),
+        );
         assert_success(&r, "Hello.");
     }
 
     #[tokio::test]
     async fn read_action_missing_page_returns_soft_success() {
         let (store, _dir) = fresh_store();
-        let tool = KnowledgeTool::new(Arc::clone(&store));
-        let r = tool
-            .call(
-                KnowledgeArgs::Read {
-                    slug: "nonexistent".into(),
-                },
-                &ctx(),
-            )
-            .await;
+        let r = run(
+            &store,
+            KnowledgeArgs::Read {
+                slug: "nonexistent".into(),
+            },
+            &ctx(),
+        );
         assert_success(&r, "No page found");
     }
 
@@ -322,15 +269,13 @@ mod tests {
     async fn read_action_strips_frontmatter() {
         let (store, _dir) = fresh_store();
         save_page(&store, "test", "A test", "# Test\n\nHello.", &["tag"]);
-        let tool = KnowledgeTool::new(Arc::clone(&store));
-        let r = tool
-            .call(
-                KnowledgeArgs::Read {
-                    slug: "test".into(),
-                },
-                &ctx(),
-            )
-            .await;
+        let r = run(
+            &store,
+            KnowledgeArgs::Read {
+                slug: "test".into(),
+            },
+            &ctx(),
+        );
         match &r {
             ToolResult::Success(s) => {
                 assert!(!s.contains("---"));
@@ -344,15 +289,13 @@ mod tests {
     async fn remove_action_deletes_page() {
         let (store, _dir) = fresh_store();
         save_page(&store, "temp", "Temporary", "# Temp", &[]);
-        let tool = KnowledgeTool::new(Arc::clone(&store));
-        let r = tool
-            .call(
-                KnowledgeArgs::Remove {
-                    slug: "temp".into(),
-                },
-                &ctx(),
-            )
-            .await;
+        let r = run(
+            &store,
+            KnowledgeArgs::Remove {
+                slug: "temp".into(),
+            },
+            &ctx(),
+        );
         assert_success(&r, "page removed");
         assert!(store.index().is_empty());
     }
@@ -361,8 +304,7 @@ mod tests {
     async fn list_action_returns_index() {
         let (store, _dir) = fresh_store();
         save_page(&store, "config", "Config page", "# Config", &[]);
-        let tool = KnowledgeTool::new(Arc::clone(&store));
-        let r = tool.call(KnowledgeArgs::List, &ctx()).await;
+        let r = run(&store, KnowledgeArgs::List, &ctx());
         assert_success(&r, "config");
     }
 
@@ -373,8 +315,7 @@ mod tests {
         for i in 0..10 {
             save_page(&store, &format!("page-{i}"), "A note", "# Note", &[]);
         }
-        let tool = KnowledgeTool::new(Arc::clone(&store));
-        let r = tool.call(KnowledgeArgs::List, &ctx()).await;
+        let r = run(&store, KnowledgeArgs::List, &ctx());
 
         assert!(!store.index().contains("page-9"), "{}", store.index());
         assert_success(&r, "page-9");
@@ -383,8 +324,7 @@ mod tests {
     #[tokio::test]
     async fn list_action_empty_store() {
         let (store, _dir) = fresh_store();
-        let tool = KnowledgeTool::new(Arc::clone(&store));
-        let r = tool.call(KnowledgeArgs::List, &ctx()).await;
+        let r = run(&store, KnowledgeArgs::List, &ctx());
         assert_success(&r, "(no pages)");
     }
 
@@ -447,7 +387,6 @@ mod tests {
         use std::sync::Mutex;
 
         let (store, _dir) = fresh_store();
-        let tool = KnowledgeTool::new(Arc::clone(&store));
         let tickets = TicketQueue::new();
         let reported = Arc::new(Mutex::new(Vec::new()));
         let seen = Arc::clone(&reported);
@@ -462,37 +401,37 @@ mod tests {
         let ctx =
             ToolContext::new(std::env::current_dir().unwrap()).ticket_queue(Arc::clone(&tickets));
 
-        tool.call(
+        run(
+            &store,
             KnowledgeArgs::Write {
                 slug: "note".into(),
                 description: "a note".into(),
                 content: "body".into(),
             },
             &ctx,
-        )
-        .await;
-        tool.call(KnowledgeArgs::List, &ctx).await;
-        tool.call(
+        );
+        run(&store, KnowledgeArgs::List, &ctx);
+        run(
+            &store,
             KnowledgeArgs::Read {
                 slug: "note".into(),
             },
             &ctx,
-        )
-        .await;
-        tool.call(
+        );
+        run(
+            &store,
             KnowledgeArgs::Read {
                 slug: "ghost".into(),
             },
             &ctx,
-        )
-        .await;
-        tool.call(
+        );
+        run(
+            &store,
             KnowledgeArgs::Remove {
                 slug: "note".into(),
             },
             &ctx,
-        )
-        .await;
+        );
 
         // Every action reports itself, and the read of an absent slug reports
         // the reason it did not go through.

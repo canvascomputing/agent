@@ -1,34 +1,12 @@
 //! Fetches a URL and returns its extracted text. Gives an agent access to external documentation the prompt cannot enumerate up front.
 
-use std::future::Future;
-use std::pin::Pin;
-use std::sync::OnceLock;
-
-use crate::schemas::Schema;
-
-use super::tool::{Tool, ToolContext, ToolLike, ToolResult};
-use super::tool_file::ToolFile;
+use super::tool::{Tool, ToolContext, ToolResult};
 
 const MAX_URL_LENGTH: usize = 2000;
 const MAX_RESPONSE_BYTES: usize = 10 * 1024 * 1024;
 const DEFAULT_MAX_LENGTH: usize = 100_000;
 const FETCH_TIMEOUT_SECS: u64 = 60;
 const MAX_REDIRECT_HOPS: usize = 10;
-
-fn tool_file() -> &'static ToolFile {
-    static FILE: OnceLock<ToolFile> = OnceLock::new();
-    FILE.get_or_init(|| {
-        ToolFile::parse(
-            include_str!("fetch_url.tool.md"),
-            include_str!("fetch_url.schema.json"),
-        )
-    })
-}
-
-fn description() -> &'static str {
-    static DESC: OnceLock<String> = OnceLock::new();
-    DESC.get_or_init(|| tool_file().render_markdown())
-}
 
 /// Fetch a URL and return its content as text. Concurrent. HTML is converted
 /// to plain text; HTTP is upgraded to HTTPS; cross-host redirects are
@@ -53,34 +31,6 @@ pub struct FetchUrlArgs {
 
 fn default_max_length() -> usize {
     DEFAULT_MAX_LENGTH
-}
-
-impl ToolLike for FetchUrlTool {
-    type Args = FetchUrlArgs;
-
-    fn name(&self) -> &str {
-        &tool_file().name
-    }
-
-    fn description(&self) -> &str {
-        description()
-    }
-
-    fn input_schema(&self) -> Schema {
-        tool_file().input_schema.clone()
-    }
-
-    fn is_concurrent(&self) -> bool {
-        tool_file().concurrent
-    }
-
-    fn call<'a>(
-        &'a self,
-        args: FetchUrlArgs,
-        ctx: &'a ToolContext,
-    ) -> Pin<Box<dyn Future<Output = ToolResult> + Send + 'a>> {
-        Box::pin(run(args, ctx.clone()))
-    }
 }
 
 impl From<FetchUrlTool> for Tool {
@@ -502,7 +452,10 @@ mod tests {
 
     #[test]
     fn every_example_the_schema_shows_deserializes_into_the_arguments() {
-        let document = tool_file().input_schema.get_raw_schema().clone();
+        let document = Tool::from(FetchUrlTool)
+            .input_schema()
+            .get_raw_schema()
+            .clone();
         for example in document["examples"].as_array().expect("examples") {
             serde_json::from_value::<FetchUrlArgs>(example.clone())
                 .unwrap_or_else(|error| panic!("{example}: {error}"));

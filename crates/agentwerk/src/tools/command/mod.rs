@@ -5,4 +5,4 @@ mod parse;
 mod tool;
 
 pub(crate) use parse::Command;
-pub use tool::{CommandArgs, CommandTool};
+pub use tool::CommandTool;

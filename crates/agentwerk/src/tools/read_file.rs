@@ -1,15 +1,6 @@
 //! The agent's eyes on the filesystem. Lets a model read a file it did not receive in the prompt.
 
-use std::future::Future;
-use std::pin::Pin;
-use std::sync::OnceLock;
-
-use serde_json::Value;
-
-use crate::schemas::Schema;
-
-use super::tool::{Tool, ToolContext, ToolLike, ToolResult};
-use super::tool_file::ToolFile;
+use super::tool::{Tool, ToolContext, ToolResult};
 
 /// Read a file with optional line offset and limit. Returns line-numbered
 /// text so the model can reference specific lines in subsequent edits.
@@ -25,21 +16,6 @@ use super::tool_file::ToolFile;
 /// ```
 pub struct ReadFileTool;
 
-fn tool_file() -> &'static ToolFile {
-    static FILE: OnceLock<ToolFile> = OnceLock::new();
-    FILE.get_or_init(|| {
-        ToolFile::parse(
-            include_str!("read_file.tool.md"),
-            include_str!("read_file.schema.json"),
-        )
-    })
-}
-
-fn description() -> &'static str {
-    static DESC: OnceLock<String> = OnceLock::new();
-    DESC.get_or_init(|| tool_file().render_markdown())
-}
-
 /// `limit` declares no default: absent means the rest of the file from
 /// `offset`, which only the file's length gives.
 #[derive(serde::Deserialize)]
@@ -54,42 +30,6 @@ pub struct ReadFileArgs {
 
 fn first_line() -> u64 {
     1
-}
-
-impl ToolLike for ReadFileTool {
-    type Args = ReadFileArgs;
-
-    fn name(&self) -> &str {
-        &tool_file().name
-    }
-
-    fn description(&self) -> &str {
-        description()
-    }
-
-    fn input_schema(&self) -> Schema {
-        tool_file().input_schema.clone()
-    }
-
-    fn is_concurrent(&self) -> bool {
-        tool_file().concurrent
-    }
-
-    fn opened_paths(&self, input: &Value) -> Vec<String> {
-        input
-            .get("path")
-            .and_then(|v| v.as_str())
-            .map(|s| vec![s.to_string()])
-            .unwrap_or_default()
-    }
-
-    fn call<'a>(
-        &'a self,
-        args: ReadFileArgs,
-        ctx: &'a ToolContext,
-    ) -> Pin<Box<dyn Future<Output = ToolResult> + Send + 'a>> {
-        Box::pin(run(args, ctx.clone()))
-    }
 }
 
 impl From<ReadFileTool> for Tool {
@@ -205,7 +145,10 @@ mod tests {
 
     #[test]
     fn every_example_the_schema_shows_deserializes_into_the_arguments() {
-        let document = tool_file().input_schema.get_raw_schema().clone();
+        let document = Tool::from(ReadFileTool)
+            .input_schema()
+            .get_raw_schema()
+            .clone();
         for example in document["examples"].as_array().expect("examples") {
             serde_json::from_value::<ReadFileArgs>(example.clone())
                 .unwrap_or_else(|error| panic!("{example}: {error}"));
@@ -222,10 +165,10 @@ mod tests {
         use crate::tools::{EditFileTool, GlobTool, GrepTool, ListDirectoryTool, WriteFileTool};
 
         let input = serde_json::json!({"path": "src/lib.rs"});
-        let openers: Vec<std::sync::Arc<dyn crate::tools::AnyTool>> = vec![
-            crate::tools::erase(ReadFileTool),
-            crate::tools::erase(WriteFileTool),
-            crate::tools::erase(EditFileTool),
+        let openers: Vec<Tool> = vec![
+            ReadFileTool.into(),
+            WriteFileTool.into(),
+            EditFileTool.into(),
         ];
         for tool in &openers {
             assert_eq!(
@@ -237,9 +180,11 @@ mod tests {
         }
 
         // Directory, pattern, and content-search tools open no file.
-        assert!(ListDirectoryTool.opened_paths(&input).is_empty());
-        assert!(GlobTool.opened_paths(&input).is_empty());
-        assert!(GrepTool.opened_paths(&input).is_empty());
+        assert!(Tool::from(ListDirectoryTool)
+            .opened_paths(&input)
+            .is_empty());
+        assert!(Tool::from(GlobTool).opened_paths(&input).is_empty());
+        assert!(Tool::from(GrepTool).opened_paths(&input).is_empty());
     }
 
     #[tokio::test]
@@ -269,7 +214,7 @@ mod tests {
 
         struct Case {
             name: &'static str,
-            input: Value,
+            input: serde_json::Value,
             expect_error: bool,
             expect_contains: &'static str,
         }
@@ -322,9 +267,7 @@ mod tests {
         let ctx = test_ctx(dir.path());
 
         for case in cases {
-            let result = crate::tools::erase(ReadFileTool)
-                .call_with(case.input, &ctx)
-                .await;
+            let result = Tool::from(ReadFileTool).call(case.input, &ctx).await;
             let is_error = matches!(result, ToolResult::Error(_));
             let content = result.content();
             assert_eq!(
@@ -349,8 +292,8 @@ mod tests {
         std::fs::write(dir.path().join("sessions.py"), "y = 2\n").unwrap();
         std::fs::create_dir(dir.path().join("subpkg")).unwrap();
 
-        let result = crate::tools::erase(ReadFileTool)
-            .call_with(serde_json::json!({ "path": "." }), &test_ctx(dir.path()))
+        let result = Tool::from(ReadFileTool)
+            .call(serde_json::json!({ "path": "." }), &test_ctx(dir.path()))
             .await;
 
         let ToolResult::Error(content) = &result else {
@@ -371,8 +314,8 @@ mod tests {
         // Valid text with a stray non-UTF-8 byte, as in minified/obfuscated source.
         std::fs::write(dir.path().join("odd.py"), b"import os\xff\nx = 1\n").unwrap();
 
-        let result = crate::tools::erase(ReadFileTool)
-            .call_with(
+        let result = Tool::from(ReadFileTool)
+            .call(
                 serde_json::json!({ "path": "odd.py" }),
                 &test_ctx(dir.path()),
             )
@@ -396,8 +339,8 @@ mod tests {
         // A NUL byte marks a true binary; do not decode it to garbage.
         std::fs::write(dir.path().join("blob.bin"), [0x7f, 0x45, 0x00, 0x01, 0x02]).unwrap();
 
-        let result = crate::tools::erase(ReadFileTool)
-            .call_with(
+        let result = Tool::from(ReadFileTool)
+            .call(
                 serde_json::json!({ "path": "blob.bin" }),
                 &test_ctx(dir.path()),
             )
@@ -420,8 +363,8 @@ mod tests {
         std::fs::write(dir.path().join("helpers.py"), "x\n").unwrap();
 
         // Guess a file that does not exist; cwd is the dir holding helpers.py.
-        let result = crate::tools::erase(ReadFileTool)
-            .call_with(
+        let result = Tool::from(ReadFileTool)
+            .call(
                 serde_json::json!({ "path": "missing.py" }),
                 &test_ctx(dir.path()),
             )
@@ -447,8 +390,8 @@ mod tests {
         std::fs::write(cwd.join("flask.py"), "x = 1\n").unwrap();
         let dropped = root.path().join("flask.py");
 
-        let result = crate::tools::erase(ReadFileTool)
-            .call_with(
+        let result = Tool::from(ReadFileTool)
+            .call(
                 serde_json::json!({ "path": dropped.to_str().unwrap() }),
                 &test_ctx(&cwd),
             )
@@ -473,8 +416,8 @@ mod tests {
         let dir = crate::test_util::TempDir::new().unwrap();
         std::fs::write(dir.path().join("test.txt"), "alpha\nbeta\n").unwrap();
 
-        let result = crate::tools::erase(ReadFileTool)
-            .call_with(
+        let result = Tool::from(ReadFileTool)
+            .call(
                 serde_json::json!({ "path": "test.txt", "offset": 100 }),
                 &test_ctx(dir.path()),
             )
@@ -492,8 +435,8 @@ mod tests {
         // 'é' is two bytes; column 5 lands on its second byte.
         std::fs::write(dir.path().join("test.txt"), "caféx\n").unwrap();
 
-        let result = crate::tools::erase(ReadFileTool)
-            .call_with(
+        let result = Tool::from(ReadFileTool)
+            .call(
                 serde_json::json!({ "path": "test.txt", "column": 5 }),
                 &test_ctx(dir.path()),
             )

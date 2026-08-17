@@ -87,7 +87,7 @@ crates/
 
 **`tool.rs` holds the trait and registry; every other file is one built-in tool or a helper.**
 
-- `tool.rs` defines `ToolLike`, `Tool`, `ToolRegistry`, `ToolContext`, and `ToolCall`.
+- `tool.rs` defines `Tool`, `ToolRegistry`, `ToolContext`, and `ToolCall`.
 - `read_file.rs`, `write_file.rs`, `edit_file.rs`, `glob.rs`, `grep.rs`, and `list_directory.rs` are filesystem tools.
 - `code.rs` backs `grep`'s `syntax: "code"` shape matching, delegating to the `codegrep` engine.
 - `command/` holds the command tool and the parsing behind it. `tool.rs` is the tool, restricted through `new()` and widened through `allow()`; it runs one program per call and never a shell. `parse.rs` splits a line into one command and classifies its arguments, which is how the tool refuses anything that is not one command and how a rule about a flag means what the program will mean.

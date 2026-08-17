@@ -379,11 +379,11 @@ mod tests {
     }
 
     async fn call(
-        tool: impl crate::tools::ToolLike + 'static,
+        tool: impl Into<crate::tools::Tool>,
         input: serde_json::Value,
         ctx: &ToolContext,
     ) -> ToolResult {
-        crate::tools::erase(tool).call_with(input, ctx).await
+        tool.into().call(input, ctx).await
     }
 
     fn unwrap_text(result: &ToolResult) -> &str {

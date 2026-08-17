@@ -1,15 +1,6 @@
 //! In-place find-and-replace on a file, so a model can modify existing code without restating the whole file.
 
-use std::future::Future;
-use std::pin::Pin;
-use std::sync::OnceLock;
-
-use serde_json::Value;
-
-use crate::schemas::Schema;
-
-use super::tool::{Tool, ToolContext, ToolLike, ToolResult};
-use super::tool_file::ToolFile;
+use super::tool::{Tool, ToolContext, ToolResult};
 
 /// In-place string replacement in an existing file. The model supplies the
 /// old and new strings; the tool fails if the old string is absent or
@@ -25,21 +16,6 @@ use super::tool_file::ToolFile;
 /// ```
 pub struct EditFileTool;
 
-fn tool_file() -> &'static ToolFile {
-    static FILE: OnceLock<ToolFile> = OnceLock::new();
-    FILE.get_or_init(|| {
-        ToolFile::parse(
-            include_str!("edit_file.tool.md"),
-            include_str!("edit_file.schema.json"),
-        )
-    })
-}
-
-fn description() -> &'static str {
-    static DESC: OnceLock<String> = OnceLock::new();
-    DESC.get_or_init(|| tool_file().render_markdown())
-}
-
 #[derive(serde::Deserialize)]
 pub struct EditFileArgs {
     path: String,
@@ -47,42 +23,6 @@ pub struct EditFileArgs {
     new_string: String,
     #[serde(default)]
     replace_all: bool,
-}
-
-impl ToolLike for EditFileTool {
-    type Args = EditFileArgs;
-
-    fn name(&self) -> &str {
-        &tool_file().name
-    }
-
-    fn description(&self) -> &str {
-        description()
-    }
-
-    fn input_schema(&self) -> Schema {
-        tool_file().input_schema.clone()
-    }
-
-    fn is_concurrent(&self) -> bool {
-        tool_file().concurrent
-    }
-
-    fn opened_paths(&self, input: &Value) -> Vec<String> {
-        input
-            .get("path")
-            .and_then(|v| v.as_str())
-            .map(|s| vec![s.to_string()])
-            .unwrap_or_default()
-    }
-
-    fn call<'a>(
-        &'a self,
-        args: EditFileArgs,
-        ctx: &'a ToolContext,
-    ) -> Pin<Box<dyn Future<Output = ToolResult> + Send + 'a>> {
-        Box::pin(run(args, ctx.clone()))
-    }
 }
 
 impl From<EditFileTool> for Tool {
@@ -144,7 +84,10 @@ mod tests {
 
     #[test]
     fn every_example_the_schema_shows_deserializes_into_the_arguments() {
-        let document = tool_file().input_schema.get_raw_schema().clone();
+        let document = Tool::from(EditFileTool)
+            .input_schema()
+            .get_raw_schema()
+            .clone();
         for example in document["examples"].as_array().expect("examples") {
             serde_json::from_value::<EditFileArgs>(example.clone())
                 .unwrap_or_else(|error| panic!("{example}: {error}"));
@@ -164,8 +107,8 @@ mod tests {
         let tool = EditFileTool;
         let ctx = test_ctx(dir.path());
 
-        let result = crate::tools::erase(tool)
-            .call_with(
+        let result = Tool::from(tool)
+            .call(
                 serde_json::json!({
                     "path": "f.txt",
                     "old_string": "world",
@@ -193,8 +136,8 @@ mod tests {
         let tool = EditFileTool;
         let ctx = test_ctx(dir.path());
 
-        let result = crate::tools::erase(tool)
-            .call_with(
+        let result = Tool::from(tool)
+            .call(
                 serde_json::json!({
                     "path": "f.txt",
                     "old_string": "aaa",
@@ -217,8 +160,8 @@ mod tests {
         let tool = EditFileTool;
         let ctx = test_ctx(dir.path());
 
-        let result = crate::tools::erase(tool)
-            .call_with(
+        let result = Tool::from(tool)
+            .call(
                 serde_json::json!({
                     "path": "f.txt",
                     "old_string": "aaa",
@@ -247,8 +190,8 @@ mod tests {
         let tool = EditFileTool;
         let ctx = test_ctx(dir.path());
 
-        let result = crate::tools::erase(tool)
-            .call_with(
+        let result = Tool::from(tool)
+            .call(
                 serde_json::json!({
                     "path": "f.txt",
                     "old_string": "missing",

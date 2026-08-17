@@ -1,15 +1,9 @@
 //! File discovery by glob pattern. Lets an agent enumerate candidates before committing to read or edit any specific file.
 
-use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::pin::Pin;
-use std::sync::OnceLock;
 use std::time::SystemTime;
 
-use crate::schemas::Schema;
-
-use super::tool::{Tool, ToolContext, ToolLike, ToolResult};
-use super::tool_file::ToolFile;
+use super::tool::{Tool, ToolContext, ToolResult};
 
 /// Find files matching a glob pattern under the working directory. Concurrent.
 /// Sorted by modification time (newest first); capped at 200 results.
@@ -26,21 +20,6 @@ pub struct GlobTool;
 
 const MAX_RESULTS: usize = 200;
 
-fn tool_file() -> &'static ToolFile {
-    static FILE: OnceLock<ToolFile> = OnceLock::new();
-    FILE.get_or_init(|| {
-        ToolFile::parse(
-            include_str!("glob.tool.md"),
-            include_str!("glob.schema.json"),
-        )
-    })
-}
-
-fn description() -> &'static str {
-    static DESC: OnceLock<String> = OnceLock::new();
-    DESC.get_or_init(|| tool_file().render_markdown())
-}
-
 #[derive(serde::Deserialize)]
 pub struct GlobArgs {
     pattern: String,
@@ -50,34 +29,6 @@ pub struct GlobArgs {
 
 fn here() -> String {
     ".".to_string()
-}
-
-impl ToolLike for GlobTool {
-    type Args = GlobArgs;
-
-    fn name(&self) -> &str {
-        &tool_file().name
-    }
-
-    fn description(&self) -> &str {
-        description()
-    }
-
-    fn input_schema(&self) -> Schema {
-        tool_file().input_schema.clone()
-    }
-
-    fn is_concurrent(&self) -> bool {
-        tool_file().concurrent
-    }
-
-    fn call<'a>(
-        &'a self,
-        args: GlobArgs,
-        ctx: &'a ToolContext,
-    ) -> Pin<Box<dyn Future<Output = ToolResult> + Send + 'a>> {
-        Box::pin(run(args, ctx.clone()))
-    }
 }
 
 impl From<GlobTool> for Tool {
@@ -252,7 +203,7 @@ mod tests {
 
     #[test]
     fn every_example_the_schema_shows_deserializes_into_the_arguments() {
-        let document = tool_file().input_schema.get_raw_schema().clone();
+        let document = Tool::from(GlobTool).input_schema().get_raw_schema().clone();
         for example in document["examples"].as_array().expect("examples") {
             serde_json::from_value::<GlobArgs>(example.clone())
                 .unwrap_or_else(|error| panic!("{example}: {error}"));
@@ -273,10 +224,10 @@ mod tests {
         fs::write(tmp.path().join("src/sub/deep.rs"), "// deep").unwrap();
         fs::write(tmp.path().join("readme.md"), "# hi").unwrap();
 
-        let tool = crate::tools::erase(GlobTool);
+        let tool = Tool::from(GlobTool);
         let ctx = test_ctx(tmp.path());
         let result = tool
-            .call_with(serde_json::json!({"pattern": "**/*.rs"}), &ctx)
+            .call(serde_json::json!({"pattern": "**/*.rs"}), &ctx)
             .await;
 
         let content = result.content();
@@ -297,10 +248,10 @@ mod tests {
             fs::write(tmp.path().join(format!("file_{i:04}.txt")), "x").unwrap();
         }
 
-        let tool = crate::tools::erase(GlobTool);
+        let tool = Tool::from(GlobTool);
         let ctx = test_ctx(tmp.path());
         let result = tool
-            .call_with(serde_json::json!({"pattern": "*.txt"}), &ctx)
+            .call(serde_json::json!({"pattern": "*.txt"}), &ctx)
             .await;
 
         let content = result.content();

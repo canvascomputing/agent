@@ -9,7 +9,7 @@ use serde::Serialize;
 
 use crate::prompts::{context_values, render_context, PromptBuilder};
 use crate::providers::{Model, Provider};
-use crate::tools::{FinishTool, KnowledgeTool, ToolLike, ToolRegistry};
+use crate::tools::{FinishTool, KnowledgeTool, Tool, ToolRegistry};
 
 use super::knowledge::Knowledge;
 use super::policy::Policies;
@@ -164,16 +164,16 @@ impl<P, M> AgentBuilder<P, M> {
     }
 
     /// Register a tool the agent may call.
-    pub fn tool(mut self, tool: impl ToolLike + 'static) -> Self {
+    pub fn tool(mut self, tool: impl Into<Tool>) -> Self {
         self.tools.register(tool);
         self
     }
 
     /// Register several tools the agent may call.
-    pub fn tools<I, T>(mut self, tools: I) -> Self
+    pub fn tools<I>(mut self, tools: I) -> Self
     where
-        I: IntoIterator<Item = T>,
-        T: ToolLike + 'static,
+        I: IntoIterator,
+        I::Item: Into<Tool>,
     {
         for t in tools {
             self.tools.register(t);
@@ -523,6 +523,29 @@ impl Agent {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn tools_accepts_a_mixed_list_of_tools() {
+        use crate::tools::{CommandTool, ReadFileTool, Tool, ToolResult};
+
+        let agent = Agent::new().tools(vec![
+            Tool::from(ReadFileTool),
+            CommandTool::new("git").allow("git *").into(),
+            Tool::new("greet", "Say hello.", |_: serde_json::Value, _| async {
+                ToolResult::success("hi")
+            }),
+        ]);
+        let names: Vec<String> = agent
+            .tool_registry()
+            .definitions(None)
+            .into_iter()
+            .map(|definition| definition.name)
+            .collect();
+        for name in ["read_file", "git", "greet"] {
+            assert!(names.contains(&name.to_string()), "{names:?}");
+        }
+    }
+
     use std::sync::Arc;
 
     use super::*;

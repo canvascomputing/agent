@@ -32,7 +32,7 @@ Naming, comment, and prose rules, plus README structure. Skim the section matchi
 - A concrete LLM provider is named for its vendor alone: `Anthropic`, `OpenAi`, `LiteLlm`. The `providers::` module carries the rest.
 - Acronyms follow Rust API guidelines: `OpenAi`, not `OpenAI`.
 - Two structs may not share a bare name within one module; both stay qualified.
-- When a trait and the concrete type callers hold want the same name, the bare noun goes to the type and the trait takes a `Like` suffix: `Tool` / `ToolLike`, `Provider` / `ProviderLike`.
+- When a trait and the concrete type callers hold want the same name, the bare noun goes to the type and the trait takes a `Like` suffix: `Provider` / `ProviderLike`.
 
 ## Failure Variants
 

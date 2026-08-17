@@ -181,132 +181,10 @@ impl ToolResult {
     }
 }
 
-/// What every tool implements.
-///
-/// Implement it on any type an agent should be able to call. For a tool defined
-/// inline, use [`Tool`] and its builder instead.
-pub trait ToolLike: Send + Sync {
-    /// What this tool's arguments deserialize into, from a call the registry
-    /// has already checked against [`input_schema`](Self::input_schema). Use
-    /// `Value` to take the JSON as it arrived.
-    type Args: serde::de::DeserializeOwned + Send;
-
-    /// The name the model calls the tool by.
-    fn name(&self) -> &str;
-
-    /// What the tool does, in the words the model reads.
-    fn description(&self) -> &str;
-
-    /// The arguments this tool accepts, compiled. Build it from a JSON Schema
-    /// document with [`Schema::new`], which reports a document it cannot
-    /// compile rather than leaving the tool checked against something weaker.
-    fn input_schema(&self) -> Schema;
-
-    /// Whether the agent may run this tool in parallel with the turn's other
-    /// concurrent calls; set it for a tool with no side effects. `false` by
-    /// default.
-    fn is_concurrent(&self) -> bool {
-        false
-    }
-
-    /// The file paths this call opens, so they reach
-    /// `Stats`. Empty by default.
-    fn opened_paths(&self, _input: &Value) -> Vec<String> {
-        Vec::new()
-    }
-
-    /// Run the tool.
-    ///
-    /// Cancellation drops the work in progress, so pair anything long-running
-    /// with [`ToolContext::cancelled`] in a `tokio::select!`.
-    fn call<'a>(
-        &'a self,
-        args: Self::Args,
-        ctx: &'a ToolContext,
-    ) -> Pin<Box<dyn Future<Output = ToolResult> + Send + 'a>>;
-}
-
-/// A tool an agent holds, whatever type its arguments have.
-///
-/// Blanket-implemented over every [`ToolLike`] and written by hand nowhere, so
-/// the step from a checked call to a tool's arguments happens in one place. A
-/// host collecting tools of different types names this.
-pub trait AnyTool: Send + Sync {
-    /// The name the model calls the tool by.
-    fn name(&self) -> &str;
-    /// What the tool does, in the words the model reads.
-    fn description(&self) -> &str;
-    /// The arguments this tool accepts.
-    fn input_schema(&self) -> Schema;
-    /// Whether the agent may run this tool alongside the turn's other
-    /// concurrent calls.
-    fn is_concurrent(&self) -> bool;
-    /// The file paths this call opens, read from the arguments as they arrived
-    /// so a call the schema rejected still reports them.
-    fn opened_paths(&self, input: &Value) -> Vec<String>;
-    /// Run the tool on a call the registry has already checked.
-    fn call_with<'a>(
-        &'a self,
-        input: Value,
-        ctx: &'a ToolContext,
-    ) -> Pin<Box<dyn Future<Output = ToolResult> + Send + 'a>>;
-}
-
-/// Holds a tool with its argument type erased. Only this implements [`AnyTool`],
-/// so a concrete tool keeps one `name`, one `description`, and one `call`.
-struct Erased<T>(T);
-
-impl<T: ToolLike> AnyTool for Erased<T> {
-    fn name(&self) -> &str {
-        self.0.name()
-    }
-
-    fn description(&self) -> &str {
-        self.0.description()
-    }
-
-    fn input_schema(&self) -> Schema {
-        self.0.input_schema()
-    }
-
-    fn is_concurrent(&self) -> bool {
-        self.0.is_concurrent()
-    }
-
-    fn opened_paths(&self, input: &Value) -> Vec<String> {
-        self.0.opened_paths(input)
-    }
-
-    fn call_with<'a>(
-        &'a self,
-        input: Value,
-        ctx: &'a ToolContext,
-    ) -> Pin<Box<dyn Future<Output = ToolResult> + Send + 'a>> {
-        match serde_json::from_value::<T::Args>(input) {
-            Ok(args) => self.0.call(args, ctx),
-            // The schema accepted this call, so the tool's schema and its
-            // argument type disagree: the author's mistake, not the model's.
-            // Reporting it as a schema failure would show the model a document
-            // its call already satisfied.
-            Err(error) => Box::pin(std::future::ready(ToolResult::error(format!(
-                "`{}` could not read its arguments: {error}",
-                self.0.name()
-            )))),
-        }
-    }
-}
-
-/// Erase a tool's argument type so it can sit beside tools whose arguments have
-/// other types. [`Agent::tool`](crate::AgentBuilder::tool) does this; a host
-/// collecting tools of its own needs it.
-pub fn erase(tool: impl ToolLike + 'static) -> Arc<dyn AnyTool> {
-    Arc::new(Erased(tool))
-}
-
 /// The tools one agent may call.
 #[derive(Clone, Default)]
 pub(crate) struct ToolRegistry {
-    tools: Vec<Arc<dyn AnyTool>>,
+    tools: Vec<Arc<Tool>>,
 }
 
 impl std::fmt::Debug for ToolRegistry {
@@ -323,8 +201,8 @@ impl ToolRegistry {
     ///
     /// A request carrying one name twice is rejected, so the last registration
     /// is the one that counts.
-    pub(crate) fn register(&mut self, tool: impl ToolLike + 'static) {
-        let tool = erase(tool);
+    pub(crate) fn register(&mut self, tool: impl Into<Tool>) {
+        let tool = Arc::new(tool.into());
         self.tools.retain(|t| t.name() != tool.name());
         self.tools.push(tool);
     }
@@ -336,12 +214,12 @@ impl ToolRegistry {
     /// name reads back the schema of the tool that would have run.
     pub(crate) fn advertised_schema(&self, name: &str, ticket: Option<&Schema>) -> Option<Value> {
         let tool = self.get(name)?;
-        Some(advertised(&*tool, ticket))
+        Some(advertised(&tool, ticket))
     }
 
     /// Get the tool a call reaches, owned, so a concurrent batch can move it
     /// into its task, or the message naming what could have been called.
-    fn resolve(&self, name: &str) -> std::result::Result<Arc<dyn AnyTool>, String> {
+    fn resolve(&self, name: &str) -> std::result::Result<Arc<Tool>, String> {
         self.get(name).ok_or_else(|| {
             let names = self.names();
             if names.is_empty() {
@@ -360,7 +238,7 @@ impl ToolRegistry {
     /// An exact match wins. Otherwise a spelling that reduces to the same key as
     /// exactly one registered tool resolves to it, so a model that adds a
     /// `_tool` suffix still reaches the right tool.
-    pub(crate) fn get(&self, name: &str) -> Option<Arc<dyn AnyTool>> {
+    pub(crate) fn get(&self, name: &str) -> Option<Arc<Tool>> {
         let name = name.trim();
         if let Some(found) = self.tools.iter().find(|tool| tool.name() == name) {
             return Some(Arc::clone(found));
@@ -395,7 +273,7 @@ impl ToolRegistry {
             .map(|tool| ToolDefinition {
                 name: tool.name().to_string(),
                 description: tool.description().to_string(),
-                input_schema: advertised(&**tool, ticket),
+                input_schema: advertised(tool, ticket),
             })
             .collect()
     }
@@ -445,7 +323,7 @@ impl ToolRegistry {
 ///
 /// One answer serves the definitions the model is shown and the shape a
 /// rejected call reads back, so the two cannot disagree.
-fn advertised(tool: &dyn AnyTool, ticket: Option<&Schema>) -> Value {
+fn advertised(tool: &Tool, ticket: Option<&Schema>) -> Value {
     match ticket.filter(|_| tool.name() == super::FinishTool::name()) {
         Some(ticket) => super::FinishTool::input_schema_for(ticket),
         None => document(tool),
@@ -453,7 +331,7 @@ fn advertised(tool: &dyn AnyTool, ticket: Option<&Schema>) -> Value {
 }
 
 /// The JSON document `tool` declares, for the definition sent to the model.
-fn document(tool: &dyn AnyTool) -> Value {
+fn document(tool: &Tool) -> Value {
     tool.input_schema().get_raw_schema().clone()
 }
 
@@ -651,42 +529,6 @@ where
     })
 }
 
-impl ToolLike for Tool {
-    type Args = Value;
-
-    fn name(&self) -> &str {
-        &self.name
-    }
-
-    fn description(&self) -> &str {
-        &self.description
-    }
-
-    fn input_schema(&self) -> Schema {
-        self.schema.clone()
-    }
-
-    fn is_concurrent(&self) -> bool {
-        self.concurrent
-    }
-
-    fn opened_paths(&self, input: &Value) -> Vec<String> {
-        self.paths
-            .iter()
-            .filter_map(|field| input.get(field).and_then(|v| v.as_str()))
-            .map(str::to_string)
-            .collect()
-    }
-
-    fn call<'a>(
-        &'a self,
-        input: Value,
-        ctx: &'a ToolContext,
-    ) -> Pin<Box<dyn Future<Output = ToolResult> + Send + 'a>> {
-        (self.handler)(input, ctx)
-    }
-}
-
 /// What one call produced, collected by the turn.
 pub(crate) struct ToolOutcome {
     /// Identifier of the call, sent back with the result.
@@ -702,7 +544,7 @@ pub(crate) struct ToolOutcome {
 /// Run one call to the outcome the turn collects: check the arguments, run the
 /// tool, then stand in for an empty or oversized result.
 async fn run_call(
-    found: std::result::Result<Arc<dyn AnyTool>, String>,
+    found: std::result::Result<Arc<Tool>, String>,
     call: &ToolCall,
     ctx: &ToolContext,
 ) -> ToolOutcome {
@@ -715,7 +557,7 @@ async fn run_call(
 /// Check the arguments against the schema the tool registered, then run it on
 /// what survives.
 async fn invoke(
-    resolved: std::result::Result<Arc<dyn AnyTool>, String>,
+    resolved: std::result::Result<Arc<Tool>, String>,
     call: &ToolCall,
     ctx: &ToolContext,
 ) -> ToolOutcome {
@@ -749,7 +591,7 @@ async fn invoke(
             message: retype_message(pointer),
         });
     }
-    match tool.call_with(input, ctx).await {
+    match tool.call(input, ctx).await {
         ToolResult::Success(content) => outcome(content, None),
         ToolResult::Error(content) => outcome(content, Some(ToolFailureKind::ExecutionFailed)),
         ToolResult::SchemaError(content) => {
@@ -927,21 +769,21 @@ mod tests {
 
     /// Every tool agentwerk registers, for the checks that hold across all of
     /// them. The knowledge store is temporary; its tool is read, not used.
-    fn built_in_tools() -> (Vec<Arc<dyn AnyTool>>, crate::test_util::TempDir) {
+    fn built_in_tools() -> (Vec<Tool>, crate::test_util::TempDir) {
         let dir = crate::test_util::TempDir::new().unwrap();
         let store = crate::agents::knowledge::Knowledge::load(dir.path()).unwrap();
-        let tools: Vec<Arc<dyn AnyTool>> = vec![
-            erase(crate::tools::ReadFileTool),
-            erase(crate::tools::WriteFileTool),
-            erase(crate::tools::EditFileTool),
-            erase(crate::tools::GlobTool),
-            erase(crate::tools::GrepTool),
-            erase(crate::tools::ListDirectoryTool),
-            erase(crate::tools::FetchUrlTool),
-            erase(crate::tools::KnowledgeTool::new(store)),
-            erase(crate::tools::CommandTool::new("git").allow("git *")),
-            erase(crate::tools::FinishTool),
-            erase(crate::tools::TicketsTool),
+        let tools: Vec<Tool> = vec![
+            crate::tools::ReadFileTool.into(),
+            crate::tools::WriteFileTool.into(),
+            crate::tools::EditFileTool.into(),
+            crate::tools::GlobTool.into(),
+            crate::tools::GrepTool.into(),
+            crate::tools::ListDirectoryTool.into(),
+            crate::tools::FetchUrlTool.into(),
+            crate::tools::KnowledgeTool::new(store).into(),
+            crate::tools::CommandTool::new("git").allow("git *").into(),
+            crate::tools::FinishTool.into(),
+            crate::tools::TicketsTool.into(),
         ];
         (tools, dir)
     }
@@ -990,72 +832,11 @@ mod tests {
         }
     }
 
-    /// Deleted with `ToolLike`: pins that each built-in's `From` conversion
-    /// reports what its trait implementation reports.
-    #[test]
-    fn every_from_conversion_matches_the_tool_like_implementation() {
-        let dir = crate::test_util::TempDir::new().unwrap();
-        let store = crate::agents::knowledge::Knowledge::load(dir.path()).unwrap();
-        let probe = serde_json::json!({"path": "src/lib.rs"});
-        let pairs: Vec<(Arc<dyn AnyTool>, Tool)> = vec![
-            (
-                erase(crate::tools::ReadFileTool),
-                crate::tools::ReadFileTool.into(),
-            ),
-            (
-                erase(crate::tools::WriteFileTool),
-                crate::tools::WriteFileTool.into(),
-            ),
-            (
-                erase(crate::tools::EditFileTool),
-                crate::tools::EditFileTool.into(),
-            ),
-            (erase(crate::tools::GlobTool), crate::tools::GlobTool.into()),
-            (erase(crate::tools::GrepTool), crate::tools::GrepTool.into()),
-            (
-                erase(crate::tools::ListDirectoryTool),
-                crate::tools::ListDirectoryTool.into(),
-            ),
-            (
-                erase(crate::tools::FetchUrlTool),
-                crate::tools::FetchUrlTool.into(),
-            ),
-            (
-                erase(crate::tools::KnowledgeTool::new(Arc::clone(&store))),
-                crate::tools::KnowledgeTool::new(store).into(),
-            ),
-            (
-                erase(crate::tools::CommandTool::new("git").allow("git *")),
-                crate::tools::CommandTool::new("git").allow("git *").into(),
-            ),
-            (
-                erase(crate::tools::FinishTool),
-                crate::tools::FinishTool.into(),
-            ),
-            (
-                erase(crate::tools::TicketsTool),
-                crate::tools::TicketsTool.into(),
-            ),
-        ];
-        for (erased, tool) in pairs {
-            assert_eq!(erased.name(), tool.name());
-            assert_eq!(erased.description(), tool.description());
-            assert_eq!(
-                erased.input_schema().get_raw_schema(),
-                tool.input_schema().get_raw_schema(),
-                "{}",
-                tool.name(),
-            );
-            assert_eq!(erased.is_concurrent(), tool.is_concurrent());
-            assert_eq!(erased.opened_paths(&probe), tool.opened_paths(&probe));
-        }
-    }
-
     #[test]
     fn registering_a_name_twice_leaves_the_later_tool() {
         let mut registry = ToolRegistry::default();
-        registry.register(MockTool::new("echo", true, "first"));
-        registry.register(MockTool::new("echo", true, "second"));
+        registry.register(mock_tool("echo", true, "first"));
+        registry.register(mock_tool("echo", true, "second"));
 
         let definitions = registry.definitions(None);
         assert_eq!(definitions.len(), 1);
@@ -1074,45 +855,14 @@ mod tests {
     }
 
     /// The mock the registry tests share.
-    struct MockTool {
-        name: String,
-        concurrent: bool,
-        result: String,
-    }
-
-    impl MockTool {
-        fn new(name: &str, concurrent: bool, result: &str) -> Self {
-            Self {
-                name: name.into(),
-                concurrent,
-                result: result.into(),
-            }
-        }
-    }
-
-    impl ToolLike for MockTool {
-        type Args = Value;
-
-        fn name(&self) -> &str {
-            &self.name
-        }
-        fn description(&self) -> &str {
-            "mock"
-        }
-        fn input_schema(&self) -> Schema {
-            Schema::new(serde_json::json!({"type": "object"})).expect("literal")
-        }
-        fn is_concurrent(&self) -> bool {
-            self.concurrent
-        }
-        fn call<'a>(
-            &'a self,
-            _input: Value,
-            _ctx: &'a ToolContext,
-        ) -> Pin<Box<dyn Future<Output = ToolResult> + Send + 'a>> {
-            let result = self.result.clone();
-            Box::pin(async move { ToolResult::success(result) })
-        }
+    fn mock_tool(name: &str, concurrent: bool, result: &str) -> Tool {
+        let result = result.to_string();
+        Tool::new(name, "mock", move |_: Value, _ctx| {
+            let result = result.clone();
+            async move { ToolResult::success(result) }
+        })
+        .schema(serde_json::json!({"type": "object"}))
+        .concurrent(concurrent)
     }
 
     fn test_ctx() -> ToolContext {
@@ -1122,7 +872,7 @@ mod tests {
     #[test]
     fn registry_register_and_get() {
         let mut registry = ToolRegistry::default();
-        registry.register(MockTool::new("read_file", true, "file contents"));
+        registry.register(mock_tool("read_file", true, "file contents"));
         assert!(registry.get("read_file").is_some());
         assert!(registry.get("nonexistent").is_none());
     }
@@ -1130,7 +880,7 @@ mod tests {
     #[test]
     fn resolves_a_name_carrying_a_tool_suffix() {
         let mut registry = ToolRegistry::default();
-        registry.register(MockTool::new("grep", true, "matches"));
+        registry.register(mock_tool("grep", true, "matches"));
 
         let tool = registry.get("grep_tool").expect("suffix should fold away");
         assert_eq!(tool.name(), "grep");
@@ -1139,7 +889,7 @@ mod tests {
     #[test]
     fn resolves_a_name_the_model_hyphenated() {
         let mut registry = ToolRegistry::default();
-        registry.register(MockTool::new("read_file", true, "file contents"));
+        registry.register(mock_tool("read_file", true, "file contents"));
 
         let tool = registry
             .get("Read-File")
@@ -1150,8 +900,8 @@ mod tests {
     #[test]
     fn refuses_a_name_two_tools_share_a_key() {
         let mut registry = ToolRegistry::default();
-        registry.register(MockTool::new("grep", true, "builtin"));
-        registry.register(MockTool::new("grep_tool", true, "host tool"));
+        registry.register(mock_tool("grep", true, "builtin"));
+        registry.register(mock_tool("grep_tool", true, "host tool"));
 
         assert!(registry.get("Grep").is_none());
         // Each registered name still reaches its own tool: exact match wins.
@@ -1191,8 +941,8 @@ Do the demo thing.
     #[test]
     fn registry_definitions() {
         let mut registry = ToolRegistry::default();
-        registry.register(MockTool::new("read", true, "ok"));
-        registry.register(MockTool::new("write", false, "ok"));
+        registry.register(mock_tool("read", true, "ok"));
+        registry.register(mock_tool("write", false, "ok"));
 
         let defs = registry.definitions(None);
         assert_eq!(defs.len(), 2);
@@ -1228,18 +978,18 @@ Do the demo thing.
     #[test]
     fn a_tool_the_ticket_says_nothing_about_advertises_what_it_registered() {
         let mut registry = ToolRegistry::default();
-        registry.register(TypedTool);
+        registry.register(typed_tool());
         let ticket = Schema::new(serde_json::json!({"type": "string"})).unwrap();
 
         let advertised = registry.advertised_schema("typed", Some(&ticket)).unwrap();
 
-        assert_eq!(&advertised, TypedTool.input_schema().get_raw_schema());
+        assert_eq!(&advertised, typed_tool().input_schema().get_raw_schema());
     }
 
     #[test]
     fn registry_clone() {
         let mut registry = ToolRegistry::default();
-        registry.register(MockTool::new("t", true, "ok"));
+        registry.register(mock_tool("t", true, "ok"));
         let cloned = registry.clone();
         assert_eq!(cloned.definitions(None).len(), 1);
     }
@@ -1263,7 +1013,7 @@ Do the demo thing.
     #[tokio::test]
     async fn non_object_input_is_reported_as_such_and_never_reaches_the_tool() {
         let mut registry = ToolRegistry::default();
-        registry.register(MockTool::new("grep", true, "matches"));
+        registry.register(mock_tool("grep", true, "matches"));
         let ctx = test_ctx();
         let calls = vec![ToolCall {
             id: "c1".into(),
@@ -1291,32 +1041,15 @@ Do the demo thing.
     /// A tool that declares what its one argument must be, so dispatch has
     /// something to check a call against. It answers with the argument it
     /// received, which is what the retype tests read.
-    struct TypedTool;
-
-    impl ToolLike for TypedTool {
-        type Args = Value;
-
-        fn name(&self) -> &str {
-            "typed"
-        }
-        fn description(&self) -> &str {
-            "typed"
-        }
-        fn input_schema(&self) -> Schema {
-            Schema::new(serde_json::json!({
-                "type": "object",
-                "properties": { "count": { "type": "integer" } },
-                "required": ["count"],
-            }))
-            .expect("literal")
-        }
-        fn call<'a>(
-            &'a self,
-            input: Value,
-            _ctx: &'a ToolContext,
-        ) -> Pin<Box<dyn Future<Output = ToolResult> + Send + 'a>> {
-            Box::pin(async move { ToolResult::success(input["count"].to_string()) })
-        }
+    fn typed_tool() -> Tool {
+        Tool::new("typed", "typed", |input: Value, _ctx| async move {
+            ToolResult::success(input["count"].to_string())
+        })
+        .schema(serde_json::json!({
+            "type": "object",
+            "properties": { "count": { "type": "integer" } },
+            "required": ["count"],
+        }))
     }
 
     async fn call_typed(input: Value) -> (String, bool) {
@@ -1325,7 +1058,7 @@ Do the demo thing.
 
     async fn call_typed_in(input: Value, ctx: &ToolContext) -> (String, bool) {
         let mut registry = ToolRegistry::default();
-        registry.register(TypedTool);
+        registry.register(typed_tool());
         let calls = vec![ToolCall {
             id: "c1".into(),
             name: "typed".into(),
@@ -1434,8 +1167,8 @@ Do the demo thing.
     #[tokio::test]
     async fn unknown_tool_error_names_the_registered_tools() {
         let mut registry = ToolRegistry::default();
-        registry.register(MockTool::new("grep", true, "matches"));
-        registry.register(MockTool::new("read_file", true, "file contents"));
+        registry.register(mock_tool("grep", true, "matches"));
+        registry.register(mock_tool("read_file", true, "file contents"));
         let ctx = test_ctx();
         let calls = vec![ToolCall {
             id: "c1".into(),
@@ -1453,8 +1186,8 @@ Do the demo thing.
     #[tokio::test]
     async fn execute_concurrent_tools_at_the_same_time() {
         let mut registry = ToolRegistry::default();
-        registry.register(MockTool::new("read1", true, "result1"));
-        registry.register(MockTool::new("read2", true, "result2"));
+        registry.register(mock_tool("read1", true, "result1"));
+        registry.register(mock_tool("read2", true, "result2"));
         let ctx = test_ctx();
 
         let calls = vec![
@@ -1477,7 +1210,7 @@ Do the demo thing.
     #[tokio::test]
     async fn execute_serial_tool() {
         let mut registry = ToolRegistry::default();
-        registry.register(MockTool::new("write_file", false, "written"));
+        registry.register(mock_tool("write_file", false, "written"));
         let ctx = test_ctx();
 
         let calls = vec![ToolCall {

@@ -1,15 +1,6 @@
 //! Lets an agent create or overwrite a file on disk. Pairs with `read_file` and `edit_file` to give a model full file-editing reach.
 
-use std::future::Future;
-use std::pin::Pin;
-use std::sync::OnceLock;
-
-use serde_json::Value;
-
-use crate::schemas::Schema;
-
-use super::tool::{Tool, ToolContext, ToolLike, ToolResult};
-use super::tool_file::ToolFile;
+use super::tool::{Tool, ToolContext, ToolResult};
 
 /// Create or overwrite a file. Destructive: existing content is replaced.
 /// Not concurrent, so agentwerk runs it one call at a time.
@@ -24,61 +15,10 @@ use super::tool_file::ToolFile;
 /// ```
 pub struct WriteFileTool;
 
-fn tool_file() -> &'static ToolFile {
-    static FILE: OnceLock<ToolFile> = OnceLock::new();
-    FILE.get_or_init(|| {
-        ToolFile::parse(
-            include_str!("write_file.tool.md"),
-            include_str!("write_file.schema.json"),
-        )
-    })
-}
-
-fn description() -> &'static str {
-    static DESC: OnceLock<String> = OnceLock::new();
-    DESC.get_or_init(|| tool_file().render_markdown())
-}
-
 #[derive(serde::Deserialize)]
 pub struct WriteFileArgs {
     path: String,
     content: String,
-}
-
-impl ToolLike for WriteFileTool {
-    type Args = WriteFileArgs;
-
-    fn name(&self) -> &str {
-        &tool_file().name
-    }
-
-    fn description(&self) -> &str {
-        description()
-    }
-
-    fn input_schema(&self) -> Schema {
-        tool_file().input_schema.clone()
-    }
-
-    fn is_concurrent(&self) -> bool {
-        tool_file().concurrent
-    }
-
-    fn opened_paths(&self, input: &Value) -> Vec<String> {
-        input
-            .get("path")
-            .and_then(|v| v.as_str())
-            .map(|s| vec![s.to_string()])
-            .unwrap_or_default()
-    }
-
-    fn call<'a>(
-        &'a self,
-        args: WriteFileArgs,
-        ctx: &'a ToolContext,
-    ) -> Pin<Box<dyn Future<Output = ToolResult> + Send + 'a>> {
-        Box::pin(run(args, ctx.clone()))
-    }
 }
 
 impl From<WriteFileTool> for Tool {
@@ -115,7 +55,10 @@ mod tests {
 
     #[test]
     fn every_example_the_schema_shows_deserializes_into_the_arguments() {
-        let document = tool_file().input_schema.get_raw_schema().clone();
+        let document = Tool::from(WriteFileTool)
+            .input_schema()
+            .get_raw_schema()
+            .clone();
         for example in document["examples"].as_array().expect("examples") {
             serde_json::from_value::<WriteFileArgs>(example.clone())
                 .unwrap_or_else(|error| panic!("{example}: {error}"));
@@ -130,11 +73,11 @@ mod tests {
     #[tokio::test]
     async fn create_new_file() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let tool = crate::tools::erase(WriteFileTool);
+        let tool = Tool::from(WriteFileTool);
         let ctx = test_ctx(dir.path());
 
         let result = tool
-            .call_with(
+            .call(
                 serde_json::json!({ "path": "new.txt", "content": "hello world" }),
                 &ctx,
             )
@@ -152,11 +95,11 @@ mod tests {
         let dir = crate::test_util::TempDir::new().unwrap();
         std::fs::write(dir.path().join("existing.txt"), "old content").unwrap();
 
-        let tool = crate::tools::erase(WriteFileTool);
+        let tool = Tool::from(WriteFileTool);
         let ctx = test_ctx(dir.path());
 
         let result = tool
-            .call_with(
+            .call(
                 serde_json::json!({ "path": "existing.txt", "content": "new content" }),
                 &ctx,
             )
@@ -170,11 +113,11 @@ mod tests {
     #[tokio::test]
     async fn creates_parent_dirs() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let tool = crate::tools::erase(WriteFileTool);
+        let tool = Tool::from(WriteFileTool);
         let ctx = test_ctx(dir.path());
 
         let result = tool
-            .call_with(
+            .call(
                 serde_json::json!({ "path": "a/b/c/deep.txt", "content": "nested" }),
                 &ctx,
             )

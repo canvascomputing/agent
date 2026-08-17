@@ -16,16 +16,16 @@ mod read_file;
 mod tickets;
 mod write_file;
 
-pub use tool::{erase, AnyTool, Tool, ToolContext, ToolLike, ToolResult};
+pub use tool::{Tool, ToolContext, ToolResult};
 pub(crate) use tool::{ToolCall, ToolRegistry};
 
-pub use command::{CommandArgs, CommandTool};
-pub use edit_file::{EditFileArgs, EditFileTool};
-pub use fetch_url::{FetchUrlArgs, FetchUrlTool};
-pub use glob::{GlobArgs, GlobTool};
-pub use grep::{GrepArgs, GrepTool};
-pub use knowledge::{KnowledgeArgs, KnowledgeTool};
-pub use list_directory::{ListDirectoryArgs, ListDirectoryTool};
-pub use read_file::{ReadFileArgs, ReadFileTool};
-pub use tickets::{FinishTool, TicketsArgs, TicketsTool};
-pub use write_file::{WriteFileArgs, WriteFileTool};
+pub use command::CommandTool;
+pub use edit_file::EditFileTool;
+pub use fetch_url::FetchUrlTool;
+pub use glob::GlobTool;
+pub use grep::GrepTool;
+pub use knowledge::KnowledgeTool;
+pub use list_directory::ListDirectoryTool;
+pub use read_file::ReadFileTool;
+pub use tickets::{FinishTool, TicketsTool};
+pub use write_file::WriteFileTool;
