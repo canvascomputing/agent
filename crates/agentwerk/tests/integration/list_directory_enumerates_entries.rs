@@ -53,8 +53,8 @@ async fn separates_files_and_directories() -> std::result::Result<(), Box<dyn st
             "{context}\n\n\
              Step 1: call `list_directory` with `path: \".\"` to see the \
              working directory's top level. \
-             Step 2: immediately call `finish` with `files` and \
-             `directories` as its top-level arguments in exactly this shape: \
+             Step 2: immediately call `finish` with `result` set to a JSON \
+             object in exactly this shape: \
              {\"files\": [\"<basename>\", ...], \"directories\": [\"<basename>\", ...]}. \
              Never prose, never a bullet list, never a sentence. Do not output \
              any text outside of tool calls.",

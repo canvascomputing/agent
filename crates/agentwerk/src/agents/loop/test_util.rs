@@ -11,7 +11,7 @@ use crate::event::Event;
 use crate::providers::types::{ModelResponse, ResponseStatus, TokenUsage};
 use crate::providers::{ContentBlock, Message, ProviderError, ProviderResult};
 use crate::schemas::Schema;
-use crate::tools::TicketsTool;
+use crate::tools::{TicketsTool, Tool};
 
 // Mock provider
 
@@ -20,6 +20,7 @@ pub struct MockProvider {
     requests: AtomicUsize,
     received: Mutex<Vec<Vec<Message>>>,
     received_system_prompts: Mutex<Vec<String>>,
+    received_tools: Mutex<Vec<Vec<Tool>>>,
 }
 
 impl MockProvider {
@@ -29,6 +30,7 @@ impl MockProvider {
             requests: AtomicUsize::new(0),
             received: Mutex::new(Vec::new()),
             received_system_prompts: Mutex::new(Vec::new()),
+            received_tools: Mutex::new(Vec::new()),
         })
     }
 
@@ -43,6 +45,10 @@ impl MockProvider {
     pub fn received_system_prompts(&self) -> Vec<String> {
         self.received_system_prompts.lock().unwrap().clone()
     }
+
+    pub fn received_tools(&self) -> Vec<Vec<Tool>> {
+        self.received_tools.lock().unwrap().clone()
+    }
 }
 
 impl crate::providers::ProviderLike for MockProvider {
@@ -56,6 +62,10 @@ impl crate::providers::ProviderLike for MockProvider {
             .lock()
             .unwrap()
             .push(request.system_prompt.clone());
+        self.received_tools
+            .lock()
+            .unwrap()
+            .push(request.tools.clone());
         self.requests.fetch_add(1, Ordering::Relaxed);
         let next = {
             let mut results = self.results.lock().unwrap();
@@ -95,6 +105,7 @@ pub fn write_result_response_named(tool_name: &str, result: &str) -> ModelRespon
     }
 }
 
+/// A finish call carrying a result that is not a plain string.
 pub fn write_result_value(result: serde_json::Value) -> ModelResponse {
     ModelResponse {
         content: vec![ContentBlock::ToolUse {

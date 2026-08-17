@@ -1,0 +1,39 @@
+{
+  "type": "object",
+  "properties": {
+    "path": {
+      "type": "string",
+      "description": "Path to the file to edit, relative to the working directory."
+    },
+    "old_string": {
+      "type": "string",
+      "description": "Exact text to find. Must appear verbatim in the file, including indentation and trailing whitespace."
+    },
+    "new_string": {
+      "type": "string",
+      "description": "Replacement text. May be empty to delete the match."
+    },
+    "replace_all": {
+      "type": "boolean",
+      "description": "Replace every occurrence (default: false). When false, the tool fails if `old_string` matches more than once."
+    }
+  },
+  "required": [
+    "path",
+    "old_string",
+    "new_string"
+  ],
+  "examples": [
+    {
+      "path": "src/config.rs",
+      "old_string": "const LIMIT: usize = 10;",
+      "new_string": "const LIMIT: usize = 25;"
+    },
+    {
+      "path": "src/config.rs",
+      "old_string": "old_name",
+      "new_string": "new_name",
+      "replace_all": true
+    }
+  ]
+}

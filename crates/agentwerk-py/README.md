@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/assets/logo.png" width="200" />
+  <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/logo.png" width="200" />
 </div>
 
 <h1 align="center">agentwerk (Python)</h1>
@@ -22,7 +22,7 @@
 ---
 
 <div align="center">
-  <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/assets/demo.gif" width="800" />
+  <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/demo.gif" width="800" />
 </div>
 <div align="center"><a href="https://github.com/canvascomputing/agentwerk/blob/main/crates/agentwerk-py/examples/apparat_fabrik.py">Apparat Fabrik</a></div>
 <div align="center"><em>agentwerk pairs "agent" with the German "Werk", a word for both factory and artwork: machinery for building agentic systems.</em></div>
@@ -87,7 +87,7 @@ asyncio.run(main())
 ## Agents
 
 <div align="left">
-  <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/assets/agents.gif" width="600" />
+  <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/agents.gif" width="600" />
 </div>
 
 An `Agent` is the core entity of agentwerk. It has access to tools for solving tasks in the form of tickets.
@@ -106,8 +106,6 @@ agent.task("Read CHANGELOG.md and summarize the entries added since the last rel
 
 agent.start()
 ```
-
-Optionally, install the [`prompt` skill](../../skills/prompt/SKILL.md), which is optimized for highly efficient agents with a proven structure for effectiveness.
 
 <details>
 <summary>All agent methods</summary>
@@ -211,7 +209,7 @@ See [`Provider`](https://docs.rs/agentwerk/latest/agentwerk/providers/struct.Pro
 ## Tickets
 
 <div align="left">
-  <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/assets/tickets.gif" width="600" />
+  <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/tickets.gif" width="600" />
 </div>
 
 The `TicketQueue` is the core data structure of agentwerk for coordinating complex interactions.
@@ -476,7 +474,7 @@ Policies allow you to define execution limits.
 | `max_input_tokens(count)` / `get_max_input_tokens()` | Limit the total input tokens. |
 | `max_output_tokens(count)` / `get_max_output_tokens()` | Limit the total output tokens. |
 | `max_request_tokens(count)` / `get_max_request_tokens()` | Limit the output tokens of a single request. |
-| `max_schema_retries(count)` / `get_max_schema_retries()` | Limit how often a result may fail its schema before the ticket fails. |
+| `max_schema_retries(count)` / `get_max_schema_retries()` | Limit the consecutive turns without a valid tool call. |
 | `max_request_retries(count)` / `get_max_request_retries()` | Limit how often a failing request is retried. |
 | `request_retry_delay(seconds)` / `get_request_retry_delay()` | Wait this long between retries. |
 | `compact_at(fraction)` / `get_compact_at()` | Compact once the context window is this full. |
@@ -488,7 +486,7 @@ A violated limit emits a `policy_violated` event, see [`EventKind`](https://docs
 ### Sessions
 
 <div align="left">
-  <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/assets/sessions.gif" width="600" />
+  <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/sessions.gif" width="600" />
 </div>
 
 A `TicketQueue` writes every ticket, reply, and event to its working directory (default `./.agentwerk`). You can continue a session from that directory.
@@ -521,7 +519,7 @@ tickets.start()
 ## Tools
 
 <div align="left">
-  <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/assets/tools.gif" width="600" />
+  <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/tools.gif" width="600" />
 </div>
 
 Tools allow agents to perform their work.
@@ -600,8 +598,6 @@ def greet(name: str) -> str:
     return f"Hello, {name}!"
 ```
 
-Return `ToolResult.error(message)` for a failure the model should work around.
-
 See [`Tool`](https://docs.rs/agentwerk/latest/agentwerk/tools/struct.Tool.html).
 
 </details>
@@ -609,7 +605,7 @@ See [`Tool`](https://docs.rs/agentwerk/latest/agentwerk/tools/struct.Tool.html).
 ## Events
 
 <div align="left">
-  <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/assets/events.gif" width="600" />
+  <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/events.gif" width="600" />
 </div>
 
 Events allow you to inspect all activities of your agents.
@@ -635,7 +631,7 @@ tickets.on_event(log)
 | | `ticket_finished` | A ticket finished successfully. |
 | | `ticket_failed` | A ticket failed. |
 | | `turn_started` | The agent began another turn on its ticket. |
-| | `schema_retried` | A result missed its schema and the agent was asked again. |
+| | `schema_retried` | A tool call or result the model created was invalid. |
 | **LLM provider** | `request_started` | A request went out to the model. |
 | | `request_finished` | A request finished and reported its token usage. |
 | | `request_failed` | A request failed and was not retried. |
@@ -733,7 +729,7 @@ See [`TicketQueue`](https://docs.rs/agentwerk/latest/agentwerk/agents/tickets/st
 ## Knowledge
 
 <div align="left">
-  <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/assets/knowledge.gif" width="600" />
+  <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/knowledge.gif" width="600" />
 </div>
 
 `Knowledge` allows agents to share insights or learnings. Knowledge pages are created in the Open Knowledge Format (OKF).

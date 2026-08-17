@@ -97,7 +97,6 @@ impl Provider {
             messages: vec![Message::user("ping")],
             tools: Vec::new(),
             max_request_tokens: None,
-            tool_choice: None,
             reasoning_effort: ReasoningEffort::Off,
         };
         self.respond(request, Arc::new(|_| {})).await.map(|_| ())

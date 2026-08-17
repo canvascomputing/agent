@@ -1,19 +1,15 @@
 //! Lets an agent search file contents by regular expression, so it can find
 //! where something is mentioned before opening any one file.
 
-use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use grep::searcher::sinks::UTF8;
 use serde_json::{Map, Value};
 
-use super::tool::{ToolContext, ToolLike, ToolResult};
-use super::tool_file::ToolFile;
-use crate::providers::ProviderResult as Result;
+use super::tool::{Tool, ToolContext, ToolResult};
 
 /// Search the working directory for a regular-expression `pattern` and return a
 /// structured result: matching lines, matching file names, or per-file counts,
@@ -43,89 +39,66 @@ pub(super) const MAX_LINE_COLUMNS: usize = 250;
 /// tree should still return promptly; a runaway pattern must not wedge a turn.
 const SEARCH_TIMEOUT: Duration = Duration::from_secs(180);
 
-fn tool_file() -> &'static ToolFile {
-    static FILE: OnceLock<ToolFile> = OnceLock::new();
-    FILE.get_or_init(|| ToolFile::parse(include_str!("grep.tool.md")))
+impl From<GrepTool> for Tool {
+    fn from(_: GrepTool) -> Tool {
+        Tool::new("grep")
+            .description(include_str!("grep.tool.md"))
+            .schema(include_str!("grep.schema.json"))
+            .concurrent(true)
+            .handler(run)
+            .build()
+    }
 }
 
-fn description() -> &'static str {
-    static DESC: OnceLock<String> = OnceLock::new();
-    DESC.get_or_init(|| tool_file().render_markdown())
-}
+async fn run(args: GrepArgs, ctx: ToolContext) -> ToolResult {
+    let query = Query::from_args(args);
 
-impl ToolLike for GrepTool {
-    fn name(&self) -> &str {
-        &tool_file().name
-    }
+    // The `grep`/`ignore` engine is synchronous, so run it on a blocking
+    // thread: `grep` is parallel-callable and a 180s search must not stall
+    // a runtime worker. The interrupt flag and deadline let it bail between
+    // files, since a spawn_blocking task cannot be force-killed.
+    let dir = ctx.dir.clone();
+    let interrupt = Arc::new(AtomicBool::new(false));
+    let searching = Arc::clone(&interrupt);
+    let deadline = Instant::now() + SEARCH_TIMEOUT;
+    let handle =
+        tokio::task::spawn_blocking(move || search_corpus(&dir, &query, &searching, deadline));
 
-    fn description(&self) -> &str {
-        description()
-    }
-
-    fn input_schema(&self) -> Value {
-        tool_file().input_schema.clone()
-    }
-
-    fn is_concurrent(&self) -> bool {
-        tool_file().concurrent
-    }
-
-    fn call<'a>(
-        &'a self,
-        input: Value,
-        ctx: &'a ToolContext,
-    ) -> Pin<Box<dyn Future<Output = Result<ToolResult>> + Send + 'a>> {
-        Box::pin(async move {
-            let query = match Query::from_input(&input) {
-                Ok(query) => query,
-                Err(response) => return Ok(response),
-            };
-
-            // The `grep`/`ignore` engine is synchronous, so run it on a blocking
-            // thread: `grep` is parallel-callable and a 180s search must not stall
-            // a runtime worker. The interrupt flag and deadline let it bail between
-            // files, since a spawn_blocking task cannot be force-killed.
-            let dir = ctx.dir.clone();
-            let interrupt = Arc::new(AtomicBool::new(false));
-            let searching = Arc::clone(&interrupt);
-            let deadline = Instant::now() + SEARCH_TIMEOUT;
-            let handle = tokio::task::spawn_blocking(move || {
-                search_corpus(&dir, &query, &searching, deadline)
-            });
-
-            let outcome = tokio::select! {
-                biased;
-                _ = ctx.cancelled() => ToolResult::error("Search cancelled"),
-                r = tokio::time::timeout(SEARCH_TIMEOUT, handle) => match r {
-                    Err(_) => {
-                        ToolResult::error(format!(
-                            "Search timed out after {}s; narrow the pattern or path",
-                            SEARCH_TIMEOUT.as_secs()
-                        ))
-                    }
-                    Ok(Err(_)) => ToolResult::error("Search failed"),
-                    Ok(Ok(result)) => result,
-                },
-            };
-            // Whichever branch lost, the blocking thread is still walking files.
-            interrupt.store(true, Ordering::Relaxed);
-            Ok(outcome)
-        })
-    }
+    let outcome = tokio::select! {
+        biased;
+        _ = ctx.cancelled() => ToolResult::error("Search cancelled"),
+        r = tokio::time::timeout(SEARCH_TIMEOUT, handle) => match r {
+            Err(_) => {
+                ToolResult::error(format!(
+                    "Search timed out after {}s; narrow the pattern or path",
+                    SEARCH_TIMEOUT.as_secs()
+                ))
+            }
+            Ok(Err(_)) => ToolResult::error("Search failed"),
+            Ok(Ok(result)) => result,
+        },
+    };
+    // Whichever branch lost, the blocking thread is still walking files.
+    interrupt.store(true, Ordering::Relaxed);
+    outcome
 }
 
 /// Which shape the result takes.
-#[derive(Clone, Copy, PartialEq)]
-pub(super) enum OutputMode {
+#[derive(Clone, Copy, PartialEq, Default, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OutputMode {
     Content,
+    #[default]
     FilesWithMatches,
     Count,
 }
 
 /// Which matcher interprets `pattern`: ripgrep's regex, or the code-shape
 /// engine reached via `syntax: "code"`.
-#[derive(Clone, Copy, PartialEq)]
-enum Syntax {
+#[derive(Clone, Copy, PartialEq, Default, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Syntax {
+    #[default]
     Regex,
     Code,
 }
@@ -162,58 +135,69 @@ pub(super) struct Query {
 }
 
 impl Query {
-    /// Read the model's arguments, applying defaults. Returns an error
-    /// `ToolResult` (recoverable, not a hard failure) when `pattern` is missing.
-    fn from_input(input: &Value) -> std::result::Result<Query, ToolResult> {
-        let pattern = match input["pattern"].as_str() {
-            Some(pattern) if !pattern.is_empty() => pattern.to_string(),
-            _ => return Err(ToolResult::error("Missing required parameter: pattern")),
-        };
-
-        // `-C`/`context` set both sides; `-A`/`-B` override the near or far side.
-        let both = number(input, "-C").or_else(|| number(input, "context"));
-        let before_context = number(input, "-B").or(both).unwrap_or(0);
-        let after_context = number(input, "-A").or(both).unwrap_or(0);
-
-        let output_mode = match input["output_mode"].as_str() {
-            Some("content") => OutputMode::Content,
-            Some("count") => OutputMode::Count,
-            _ => OutputMode::FilesWithMatches,
-        };
-
-        let syntax = match input["syntax"].as_str() {
-            Some("code") => Syntax::Code,
-            _ => Syntax::Regex,
-        };
-
-        Ok(Query {
-            pattern,
-            path: string(input, "path"),
-            glob: string(input, "glob"),
-            output_mode,
-            before_context,
-            after_context,
-            line_numbers: input["-n"].as_bool().unwrap_or(true),
-            case_insensitive: input["-i"].as_bool().unwrap_or(false),
-            file_type: string(input, "type"),
-            head_limit: number(input, "head_limit").unwrap_or(DEFAULT_HEAD_LIMIT),
-            offset: number(input, "offset").unwrap_or(0),
-            multiline: input["multiline"].as_bool().unwrap_or(false),
-            syntax,
-            constraints: input["constraints"].clone(),
-        })
+    /// Apply what serde could not: `-C` and `context` set both context sides,
+    /// and `-A` or `-B` override one of them.
+    fn from_args(args: GrepArgs) -> Query {
+        let both = args.context_both.or(args.context);
+        Query {
+            before_context: args.context_before.or(both).unwrap_or(0),
+            after_context: args.context_after.or(both).unwrap_or(0),
+            pattern: args.pattern,
+            path: args.path,
+            glob: args.glob,
+            output_mode: args.output_mode,
+            line_numbers: args.line_numbers,
+            case_insensitive: args.case_insensitive,
+            file_type: args.file_type,
+            head_limit: args.head_limit,
+            offset: args.offset,
+            multiline: args.multiline,
+            syntax: args.syntax,
+            constraints: args.constraints,
+        }
     }
 }
 
-fn number(input: &Value, key: &str) -> Option<usize> {
-    input[key].as_u64().map(|n| n as usize)
+/// What `grep` accepts, as the model writes it. `Query` is what the search
+/// reads, once the context flags have been resolved against each other.
+#[derive(serde::Deserialize)]
+pub struct GrepArgs {
+    pattern: String,
+    path: Option<String>,
+    glob: Option<String>,
+    #[serde(default)]
+    output_mode: OutputMode,
+    #[serde(rename = "-B")]
+    context_before: Option<usize>,
+    #[serde(rename = "-A")]
+    context_after: Option<usize>,
+    #[serde(rename = "-C")]
+    context_both: Option<usize>,
+    context: Option<usize>,
+    #[serde(rename = "-n", default = "yes")]
+    line_numbers: bool,
+    #[serde(rename = "-i", default)]
+    case_insensitive: bool,
+    #[serde(rename = "type")]
+    file_type: Option<String>,
+    #[serde(default = "default_head_limit")]
+    head_limit: usize,
+    #[serde(default)]
+    offset: usize,
+    #[serde(default)]
+    multiline: bool,
+    #[serde(default)]
+    syntax: Syntax,
+    #[serde(default)]
+    constraints: Value,
 }
 
-fn string(input: &Value, key: &str) -> Option<String> {
-    input[key]
-        .as_str()
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
+fn yes() -> bool {
+    true
+}
+
+fn default_head_limit() -> usize {
+    DEFAULT_HEAD_LIMIT
 }
 
 /// Walk the corpus under `dir` with ripgrep's engine and return the structured
@@ -498,6 +482,15 @@ pub(super) fn render_count(rows: &[(String, u64)], query: &Query) -> ToolResult 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_example_the_schema_shows_deserializes_into_the_arguments() {
+        let document = Tool::from(GrepTool).input_schema().get_raw_schema().clone();
+        for example in document["examples"].as_array().expect("examples") {
+            serde_json::from_value::<GrepArgs>(example.clone())
+                .unwrap_or_else(|error| panic!("{example}: {error}"));
+        }
+    }
     use std::fs;
 
     fn test_ctx(path: &std::path::Path) -> ToolContext {
@@ -526,7 +519,7 @@ mod tests {
     }
 
     async fn search(ctx: &ToolContext, input: Value) -> Value {
-        let result = GrepTool.call(input, ctx).await.unwrap();
+        let result = Tool::from(GrepTool).call(input, ctx).await;
         let content = result.content();
         serde_json::from_str(content).unwrap_or_else(|_| Value::String(content.to_string()))
     }

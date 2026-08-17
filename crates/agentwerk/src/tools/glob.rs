@@ -1,16 +1,9 @@
 //! File discovery by glob pattern. Lets an agent enumerate candidates before committing to read or edit any specific file.
 
-use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::pin::Pin;
-use std::sync::OnceLock;
 use std::time::SystemTime;
 
-use serde_json::Value;
-
-use super::tool::{ToolContext, ToolLike, ToolResult};
-use super::tool_file::ToolFile;
-use crate::providers::ProviderResult as Result;
+use super::tool::{Tool, ToolContext, ToolResult};
 
 /// Find files matching a glob pattern under the working directory. Concurrent.
 /// Sorted by modification time (newest first); capped at 200 results.
@@ -27,72 +20,57 @@ pub struct GlobTool;
 
 const MAX_RESULTS: usize = 200;
 
-fn tool_file() -> &'static ToolFile {
-    static FILE: OnceLock<ToolFile> = OnceLock::new();
-    FILE.get_or_init(|| ToolFile::parse(include_str!("glob.tool.md")))
+#[derive(serde::Deserialize)]
+pub struct GlobArgs {
+    pattern: String,
+    #[serde(default = "here")]
+    path: String,
 }
 
-fn description() -> &'static str {
-    static DESC: OnceLock<String> = OnceLock::new();
-    DESC.get_or_init(|| tool_file().render_markdown())
+fn here() -> String {
+    ".".to_string()
 }
 
-impl ToolLike for GlobTool {
-    fn name(&self) -> &str {
-        &tool_file().name
+impl From<GlobTool> for Tool {
+    fn from(_: GlobTool) -> Tool {
+        Tool::new("glob")
+            .description(include_str!("glob.tool.md"))
+            .schema(include_str!("glob.schema.json"))
+            .concurrent(true)
+            .handler(run)
+            .build()
     }
+}
 
-    fn description(&self) -> &str {
-        description()
-    }
+async fn run(args: GlobArgs, ctx: ToolContext) -> ToolResult {
+    let GlobArgs {
+        pattern,
+        path: base_str,
+    } = args;
+    let base = ctx.dir.join(base_str);
 
-    fn input_schema(&self) -> Value {
-        tool_file().input_schema.clone()
-    }
+    let pattern_segments: Vec<&str> = pattern.split('/').collect();
 
-    fn is_concurrent(&self) -> bool {
-        tool_file().concurrent
-    }
+    let mut matches: Vec<(PathBuf, SystemTime)> = Vec::new();
+    collect_matches(&base, &base, &pattern_segments, &mut matches);
 
-    fn call<'a>(
-        &'a self,
-        input: Value,
-        ctx: &'a ToolContext,
-    ) -> Pin<Box<dyn Future<Output = Result<ToolResult>> + Send + 'a>> {
-        Box::pin(async move {
-            let pattern = match input["pattern"].as_str() {
-                Some(p) => p,
-                None => {
-                    return Ok(ToolResult::error("Missing required parameter: pattern"));
-                }
-            };
-            let base_str = input["path"].as_str().unwrap_or(".");
-            let base = ctx.dir.join(base_str);
+    // Sort by modification time, newest first
+    matches.sort_by(|a, b| b.1.cmp(&a.1));
 
-            let pattern_segments: Vec<&str> = pattern.split('/').collect();
+    // Cap at MAX_RESULTS
+    matches.truncate(MAX_RESULTS);
 
-            let mut matches: Vec<(PathBuf, SystemTime)> = Vec::new();
-            collect_matches(&base, &base, &pattern_segments, &mut matches);
-
-            // Sort by modification time, newest first
-            matches.sort_by(|a, b| b.1.cmp(&a.1));
-
-            // Cap at MAX_RESULTS
-            matches.truncate(MAX_RESULTS);
-
-            let lines: Vec<String> = matches
-                .iter()
-                .map(|(p, _)| {
-                    p.strip_prefix(&base)
-                        .unwrap_or(p)
-                        .to_string_lossy()
-                        .to_string()
-                })
-                .collect();
-
-            Ok(ToolResult::success(lines.join("\n")))
+    let lines: Vec<String> = matches
+        .iter()
+        .map(|(p, _)| {
+            p.strip_prefix(&base)
+                .unwrap_or(p)
+                .to_string_lossy()
+                .to_string()
         })
-    }
+        .collect();
+
+    ToolResult::success(lines.join("\n"))
 }
 
 /// Recursively walk the directory tree and collect files matching the glob pattern.
@@ -223,6 +201,15 @@ fn seg_match_recursive(pat: &[u8], txt: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_example_the_schema_shows_deserializes_into_the_arguments() {
+        let document = Tool::from(GlobTool).input_schema().get_raw_schema().clone();
+        for example in document["examples"].as_array().expect("examples") {
+            serde_json::from_value::<GlobArgs>(example.clone())
+                .unwrap_or_else(|error| panic!("{example}: {error}"));
+        }
+    }
     use std::fs;
 
     fn test_ctx(path: &std::path::Path) -> ToolContext {
@@ -238,12 +225,11 @@ mod tests {
         fs::write(tmp.path().join("src/sub/deep.rs"), "// deep").unwrap();
         fs::write(tmp.path().join("readme.md"), "# hi").unwrap();
 
-        let tool = GlobTool;
+        let tool = Tool::from(GlobTool);
         let ctx = test_ctx(tmp.path());
         let result = tool
             .call(serde_json::json!({"pattern": "**/*.rs"}), &ctx)
-            .await
-            .unwrap();
+            .await;
 
         let content = result.content();
         let lines: Vec<&str> = content.lines().collect();
@@ -263,12 +249,11 @@ mod tests {
             fs::write(tmp.path().join(format!("file_{i:04}.txt")), "x").unwrap();
         }
 
-        let tool = GlobTool;
+        let tool = Tool::from(GlobTool);
         let ctx = test_ctx(tmp.path());
         let result = tool
             .call(serde_json::json!({"pattern": "*.txt"}), &ctx)
-            .await
-            .unwrap();
+            .await;
 
         let content = result.content();
         let lines: Vec<&str> = content.lines().collect();

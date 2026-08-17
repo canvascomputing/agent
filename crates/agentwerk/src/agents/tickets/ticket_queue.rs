@@ -773,12 +773,13 @@ impl TicketQueue {
 
     /// Rewrite the prompt that corrects an agent's behavior.
     ///
-    /// agentwerk asks again when a turn ends without an accepted result: the
-    /// model called no tool, or its result missed the ticket's schema. Your
-    /// function receives the `SchemaRetried` event that says which of the two
-    /// happened, in whose ticket, and for which agent, together with the prompt
+    /// agentwerk asks again when a turn ends with the model calling no tool.
+    /// Your function receives the `SchemaRetried` event that says in whose
+    /// ticket and for which agent that happened, together with the prompt
     /// itself. The prompt arrives holding the built-in text, so writing nothing
-    /// keeps the default. It runs once per retry, so keep it cheap.
+    /// keeps the default. It runs once per retry, so keep it cheap. A tool
+    /// call whose arguments missed a schema takes no directive: its corrective
+    /// message rides in the tool result.
     ///
     /// One editor is held at a time, and installing a second replaces the
     /// first, the way [`Self::edit_replies_on_compaction`] does.
@@ -910,7 +911,8 @@ impl TicketQueue {
         self
     }
 
-    /// Limit how often a result may fail its schema before the ticket fails.
+    /// Limit the consecutive turns without a valid tool call; any successful
+    /// call resets the count.
     pub fn max_schema_retries(&self, n: u32) -> &Self {
         self.policies.lock().unwrap().max_schema_retries = Some(n);
         self

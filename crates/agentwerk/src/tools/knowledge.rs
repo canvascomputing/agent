@@ -1,18 +1,12 @@
 //! Lets an agent write, read, remove, and list the knowledge it shares across
 //! tickets and with other agents.
 
-use std::future::Future;
-use std::pin::Pin;
-use std::sync::{Arc, OnceLock};
-
-use serde_json::Value;
+use std::sync::Arc;
 
 use crate::agents::knowledge::{Knowledge, KnowledgeError};
 use crate::event::{EventKind, KnowledgeFailureKind, KnowledgeOp};
-use crate::providers::ProviderResult;
 
-use super::tool::{ToolContext, ToolLike, ToolResult};
-use super::tool_file::ToolFile;
+use super::tool::{Tool, ToolContext, ToolResult};
 
 /// The model's four-action handle on a `Knowledge` store:
 /// `write`, `read`, `remove`, `list`. Registered automatically on every
@@ -40,16 +34,6 @@ impl KnowledgeTool {
     }
 }
 
-fn tool_file() -> &'static ToolFile {
-    static FILE: OnceLock<ToolFile> = OnceLock::new();
-    FILE.get_or_init(|| ToolFile::parse(include_str!("knowledge.tool.md")))
-}
-
-fn description() -> &'static str {
-    static DESC: OnceLock<String> = OnceLock::new();
-    DESC.get_or_init(|| tool_file().render_markdown())
-}
-
 /// Which failure the statistics count this under. Everything but a missing
 /// page is the store refusing: rejected values or IO.
 fn failure_kind(error: &KnowledgeError) -> KnowledgeFailureKind {
@@ -67,149 +51,126 @@ fn usage_line(message: &str, store: &Knowledge) -> String {
     format!("{message} ({pages} pages, {pct}%, {used}/{limit} chars)")
 }
 
-impl ToolLike for KnowledgeTool {
-    fn name(&self) -> &str {
-        &tool_file().name
-    }
+/// What the model asks the store to do. The schema declares `action` as the
+/// discriminator and states which fields each one requires; the variants are
+/// the same statement in Rust, so a `write` without a `slug` can neither reach
+/// this tool nor be forgotten inside it.
+#[derive(serde::Deserialize)]
+#[serde(tag = "action", rename_all = "lowercase")]
+pub enum KnowledgeArgs {
+    Write {
+        slug: String,
+        description: String,
+        content: String,
+    },
+    Read {
+        slug: String,
+    },
+    Remove {
+        slug: String,
+    },
+    List,
+}
 
-    fn description(&self) -> &str {
-        description()
+impl From<KnowledgeTool> for Tool {
+    fn from(tool: KnowledgeTool) -> Tool {
+        let store = tool.store;
+        Tool::new("knowledge")
+            .description(include_str!("knowledge.tool.md"))
+            .schema(include_str!("knowledge.schema.json"))
+            .handler(move |args: KnowledgeArgs, ctx: ToolContext| {
+                let store = Arc::clone(&store);
+                async move { run(&store, args, &ctx) }
+            })
+            .build()
     }
+}
 
-    fn input_schema(&self) -> Value {
-        tool_file().input_schema.clone()
-    }
+fn run(store: &Knowledge, args: KnowledgeArgs, ctx: &ToolContext) -> ToolResult {
+    // The tool self-reports each outcome: only it can see a read/remove
+    // miss, which returns Ok, so the shared tool-call loop cannot.
+    let record = |kind: EventKind| ctx.emit(kind);
 
-    fn is_concurrent(&self) -> bool {
-        tool_file().concurrent
-    }
-
-    fn call<'a>(
-        &'a self,
-        input: Value,
-        ctx: &'a ToolContext,
-    ) -> Pin<Box<dyn Future<Output = ProviderResult<ToolResult>> + Send + 'a>> {
-        Box::pin(async move {
-            let action = input.get("action").and_then(Value::as_str).unwrap_or("");
-            // The tool self-reports each outcome: only it can see a read/remove
-            // miss, which returns Ok, so the shared tool-call loop cannot.
-            let record = |kind: EventKind| {
-                if let Some(queue) = ctx.ticket_queue_handle() {
-                    let key = ctx.ticket_key.as_deref().unwrap_or_default();
-                    let agent = ctx.agent_id_str().unwrap_or_default();
-                    queue.emit(key, agent, kind);
-                }
+    match args {
+        KnowledgeArgs::Write {
+            slug,
+            description,
+            content,
+        } => {
+            // Kind and tags stay host-side concerns set through the
+            // Page API; the model only names, describes, and fills a page.
+            let page = crate::agents::knowledge::Page {
+                slug,
+                kind: String::new(),
+                description,
+                content,
+                tags: Vec::new(),
             };
-
-            match action {
-                "write" => {
-                    let slug = match input.get("slug").and_then(Value::as_str) {
-                        Some(s) => s,
-                        None => return Ok(ToolResult::error("Missing required parameter: slug")),
-                    };
-                    let description = match input.get("description").and_then(Value::as_str) {
-                        Some(s) => s,
-                        None => {
-                            return Ok(ToolResult::error("Missing required parameter: description"))
-                        }
-                    };
-                    let content = match input.get("content").and_then(Value::as_str) {
-                        Some(s) => s,
-                        None => {
-                            return Ok(ToolResult::error("Missing required parameter: content"))
-                        }
-                    };
-                    // Kind and tags stay host-side concerns set through the
-                    // Page API; the model only names, describes, and fills a page.
-                    let page = crate::agents::knowledge::Page {
-                        slug: slug.to_string(),
-                        kind: String::new(),
-                        description: description.to_string(),
-                        content: content.to_string(),
-                        tags: Vec::new(),
-                    };
-                    match self.store.pages().save(page) {
-                        Ok(()) => {
-                            record(EventKind::KnowledgeUsed {
-                                op: KnowledgeOp::Write,
-                            });
-                            Ok(ToolResult::success(usage_line("page written", &self.store)))
-                        }
-                        Err(why) => {
-                            record(EventKind::KnowledgeFailed {
-                                op: KnowledgeOp::Write,
-                                reason: failure_kind(&why),
-                            });
-                            Ok(ToolResult::error(why.to_string()))
-                        }
-                    }
-                }
-
-                "read" => {
-                    let slug = match input.get("slug").and_then(Value::as_str) {
-                        Some(s) => s,
-                        None => return Ok(ToolResult::error("Missing required parameter: slug")),
-                    };
-                    match self.store.pages().load(slug) {
-                        Ok(page) => {
-                            record(EventKind::KnowledgeUsed {
-                                op: KnowledgeOp::Read,
-                            });
-                            Ok(ToolResult::success(page.content))
-                        }
-                        Err(why) => {
-                            record(EventKind::KnowledgeFailed {
-                                op: KnowledgeOp::Read,
-                                reason: failure_kind(&why),
-                            });
-                            Ok(ToolResult::success(format!(
-                                "No page found for `{slug}`. The `list` action shows every page that exists: an unlisted slug cannot be read."
-                            )))
-                        }
-                    }
-                }
-
-                "remove" => {
-                    let slug = match input.get("slug").and_then(Value::as_str) {
-                        Some(s) => s,
-                        None => return Ok(ToolResult::error("Missing required parameter: slug")),
-                    };
-                    match self.store.pages().remove(slug) {
-                        Ok(()) => {
-                            record(EventKind::KnowledgeUsed {
-                                op: KnowledgeOp::Remove,
-                            });
-                            Ok(ToolResult::success(usage_line("page removed", &self.store)))
-                        }
-                        Err(why) => {
-                            record(EventKind::KnowledgeFailed {
-                                op: KnowledgeOp::Remove,
-                                reason: failure_kind(&why),
-                            });
-                            Ok(ToolResult::error(why.to_string()))
-                        }
-                    }
-                }
-
-                "list" => {
+            match store.pages().save(page) {
+                Ok(()) => {
                     record(EventKind::KnowledgeUsed {
-                        op: KnowledgeOp::List,
+                        op: KnowledgeOp::Write,
                     });
-                    // Not the prompt's limited view: this is how the agent sees
-                    // the pages the prompt had no room for.
-                    let index = self.store.full_index();
-                    let body = if index.is_empty() {
-                        "(no pages)".to_string()
-                    } else {
-                        index
-                    };
-                    Ok(ToolResult::success(body))
+                    ToolResult::success(usage_line("page written", &store))
                 }
-
-                "" => Ok(ToolResult::error("Missing required parameter: action")),
-                other => Ok(ToolResult::error(format!("Unknown action: {other}"))),
+                Err(why) => {
+                    record(EventKind::KnowledgeFailed {
+                        op: KnowledgeOp::Write,
+                        reason: failure_kind(&why),
+                    });
+                    ToolResult::error(why.to_string())
+                }
             }
-        })
+        }
+
+        KnowledgeArgs::Read { slug } => match store.pages().load(&slug) {
+            Ok(page) => {
+                record(EventKind::KnowledgeUsed {
+                    op: KnowledgeOp::Read,
+                });
+                ToolResult::success(page.content)
+            }
+            Err(why) => {
+                record(EventKind::KnowledgeFailed {
+                    op: KnowledgeOp::Read,
+                    reason: failure_kind(&why),
+                });
+                ToolResult::success(format!(
+                        "No page found for `{slug}`. The `list` action shows every page that exists: an unlisted slug cannot be read."
+                    ))
+            }
+        },
+
+        KnowledgeArgs::Remove { slug } => match store.pages().remove(&slug) {
+            Ok(()) => {
+                record(EventKind::KnowledgeUsed {
+                    op: KnowledgeOp::Remove,
+                });
+                ToolResult::success(usage_line("page removed", &store))
+            }
+            Err(why) => {
+                record(EventKind::KnowledgeFailed {
+                    op: KnowledgeOp::Remove,
+                    reason: failure_kind(&why),
+                });
+                ToolResult::error(why.to_string())
+            }
+        },
+
+        KnowledgeArgs::List => {
+            record(EventKind::KnowledgeUsed {
+                op: KnowledgeOp::List,
+            });
+            // Not the prompt's limited view: this is how the agent sees
+            // the pages the prompt had no room for.
+            let index = store.full_index();
+            let body = if index.is_empty() {
+                "(no pages)".to_string()
+            } else {
+                index
+            };
+            ToolResult::success(body)
+        }
     }
 }
 
@@ -241,36 +202,38 @@ mod tests {
 
     fn assert_success(result: &ToolResult, fragment: &str) {
         match result {
-            ToolResult::Success(s) => {
+            ToolResult::Success { content: s, .. } => {
                 assert!(s.contains(fragment), "expected `{fragment}` in `{s}`")
             }
             other => panic!("expected Success, got {other:?}"),
         }
     }
 
-    fn assert_error(result: &ToolResult, fragment: &str) {
-        match result {
-            ToolResult::Error(s) => assert!(s.contains(fragment), "expected `{fragment}` in `{s}`"),
-            other => panic!("expected Error, got {other:?}"),
+    #[test]
+    fn every_example_the_schema_shows_deserializes_into_the_arguments() {
+        // The schema and this enum both describe the shape. The examples are
+        // where they are held to the same one.
+        let document =
+            serde_json::from_str::<serde_json::Value>(include_str!("knowledge.schema.json"))
+                .unwrap();
+        for example in document["examples"].as_array().expect("examples") {
+            serde_json::from_value::<KnowledgeArgs>(example.clone())
+                .unwrap_or_else(|error| panic!("{example}: {error}"));
         }
     }
 
     #[tokio::test]
     async fn write_action_creates_page() {
         let (store, _dir) = fresh_store();
-        let tool = KnowledgeTool::new(Arc::clone(&store));
-        let r = tool
-            .call(
-                serde_json::json!({
-                    "action": "write",
-                    "slug": "test",
-                    "description": "A test page",
-                    "content": "# Test\n\nContent."
-                }),
-                &ctx(),
-            )
-            .await
-            .unwrap();
+        let r = run(
+            &store,
+            KnowledgeArgs::Write {
+                slug: "test".into(),
+                description: "A test page".into(),
+                content: "# Test\n\nContent.".into(),
+            },
+            &ctx(),
+        );
         assert_success(&r, "page written");
         assert!(store.index().contains("test"));
     }
@@ -279,28 +242,26 @@ mod tests {
     async fn read_action_returns_page_body() {
         let (store, _dir) = fresh_store();
         save_page(&store, "test", "A test", "# Test\n\nHello.", &[]);
-        let tool = KnowledgeTool::new(Arc::clone(&store));
-        let r = tool
-            .call(
-                serde_json::json!({"action": "read", "slug": "test"}),
-                &ctx(),
-            )
-            .await
-            .unwrap();
+        let r = run(
+            &store,
+            KnowledgeArgs::Read {
+                slug: "test".into(),
+            },
+            &ctx(),
+        );
         assert_success(&r, "Hello.");
     }
 
     #[tokio::test]
     async fn read_action_missing_page_returns_soft_success() {
         let (store, _dir) = fresh_store();
-        let tool = KnowledgeTool::new(Arc::clone(&store));
-        let r = tool
-            .call(
-                serde_json::json!({"action": "read", "slug": "nonexistent"}),
-                &ctx(),
-            )
-            .await
-            .unwrap();
+        let r = run(
+            &store,
+            KnowledgeArgs::Read {
+                slug: "nonexistent".into(),
+            },
+            &ctx(),
+        );
         assert_success(&r, "No page found");
     }
 
@@ -308,16 +269,15 @@ mod tests {
     async fn read_action_strips_frontmatter() {
         let (store, _dir) = fresh_store();
         save_page(&store, "test", "A test", "# Test\n\nHello.", &["tag"]);
-        let tool = KnowledgeTool::new(Arc::clone(&store));
-        let r = tool
-            .call(
-                serde_json::json!({"action": "read", "slug": "test"}),
-                &ctx(),
-            )
-            .await
-            .unwrap();
+        let r = run(
+            &store,
+            KnowledgeArgs::Read {
+                slug: "test".into(),
+            },
+            &ctx(),
+        );
         match &r {
-            ToolResult::Success(s) => {
+            ToolResult::Success { content: s, .. } => {
                 assert!(!s.contains("---"));
                 assert!(!s.contains("timestamp:"));
             }
@@ -329,14 +289,13 @@ mod tests {
     async fn remove_action_deletes_page() {
         let (store, _dir) = fresh_store();
         save_page(&store, "temp", "Temporary", "# Temp", &[]);
-        let tool = KnowledgeTool::new(Arc::clone(&store));
-        let r = tool
-            .call(
-                serde_json::json!({"action": "remove", "slug": "temp"}),
-                &ctx(),
-            )
-            .await
-            .unwrap();
+        let r = run(
+            &store,
+            KnowledgeArgs::Remove {
+                slug: "temp".into(),
+            },
+            &ctx(),
+        );
         assert_success(&r, "page removed");
         assert!(store.index().is_empty());
     }
@@ -345,11 +304,7 @@ mod tests {
     async fn list_action_returns_index() {
         let (store, _dir) = fresh_store();
         save_page(&store, "config", "Config page", "# Config", &[]);
-        let tool = KnowledgeTool::new(Arc::clone(&store));
-        let r = tool
-            .call(serde_json::json!({"action": "list"}), &ctx())
-            .await
-            .unwrap();
+        let r = run(&store, KnowledgeArgs::List, &ctx());
         assert_success(&r, "config");
     }
 
@@ -360,11 +315,7 @@ mod tests {
         for i in 0..10 {
             save_page(&store, &format!("page-{i}"), "A note", "# Note", &[]);
         }
-        let tool = KnowledgeTool::new(Arc::clone(&store));
-        let r = tool
-            .call(serde_json::json!({"action": "list"}), &ctx())
-            .await
-            .unwrap();
+        let r = run(&store, KnowledgeArgs::List, &ctx());
 
         assert!(!store.index().contains("page-9"), "{}", store.index());
         assert_success(&r, "page-9");
@@ -373,73 +324,60 @@ mod tests {
     #[tokio::test]
     async fn list_action_empty_store() {
         let (store, _dir) = fresh_store();
-        let tool = KnowledgeTool::new(Arc::clone(&store));
-        let r = tool
-            .call(serde_json::json!({"action": "list"}), &ctx())
-            .await
-            .unwrap();
+        let r = run(&store, KnowledgeArgs::List, &ctx());
         assert_success(&r, "(no pages)");
     }
 
-    #[tokio::test]
-    async fn write_without_slug_is_rejected() {
-        let (store, _dir) = fresh_store();
-        let tool = KnowledgeTool::new(Arc::clone(&store));
-        let r = tool
-            .call(
-                serde_json::json!({"action": "write", "description": "s", "content": "c"}),
-                &ctx(),
-            )
-            .await
-            .unwrap();
-        assert_error(&r, "slug");
+    /// Run a call the way an agent does: through the registry, which checks the
+    /// arguments against the schema before the tool sees them. The tests below
+    /// read what the model would.
+    async fn dispatch(store: &Arc<Knowledge>, input: serde_json::Value) -> String {
+        let mut registry = crate::tools::ToolRegistry::default();
+        registry.register(KnowledgeTool::new(Arc::clone(store)));
+        let calls = vec![crate::tools::ToolCall {
+            id: "c1".into(),
+            name: "knowledge".into(),
+            input,
+        }];
+        let results = registry.execute(&calls, &ctx()).await;
+        results[0].content().to_string()
     }
 
     #[tokio::test]
-    async fn write_without_description_is_rejected() {
+    async fn a_write_names_every_field_it_is_missing_at_once() {
         let (store, _dir) = fresh_store();
-        let tool = KnowledgeTool::new(Arc::clone(&store));
-        let r = tool
-            .call(
-                serde_json::json!({"action": "write", "slug": "test", "content": "c"}),
-                &ctx(),
-            )
-            .await
-            .unwrap();
-        assert_error(&r, "description");
+        let reported = dispatch(&store, serde_json::json!({"action": "write"})).await;
+        assert!(reported.contains("`slug`"), "{reported}");
+        assert!(reported.contains("`description`"), "{reported}");
+        assert!(reported.contains("`content`"), "{reported}");
     }
 
     #[tokio::test]
-    async fn write_without_content_is_rejected() {
+    async fn a_read_without_a_slug_is_rejected() {
         let (store, _dir) = fresh_store();
-        let tool = KnowledgeTool::new(Arc::clone(&store));
-        let r = tool
-            .call(
-                serde_json::json!({"action": "write", "slug": "test", "description": "s"}),
-                &ctx(),
-            )
-            .await
-            .unwrap();
-        assert_error(&r, "content");
+        let reported = dispatch(&store, serde_json::json!({"action": "read"})).await;
+        assert!(reported.contains("`slug`"), "{reported}");
     }
 
     #[tokio::test]
-    async fn unknown_action_is_rejected() {
+    async fn a_list_needs_no_other_field() {
         let (store, _dir) = fresh_store();
-        let tool = KnowledgeTool::new(Arc::clone(&store));
-        let r = tool
-            .call(serde_json::json!({"action": "wat"}), &ctx())
-            .await
-            .unwrap();
-        assert_error(&r, "Unknown action");
+        let reported = dispatch(&store, serde_json::json!({"action": "list"})).await;
+        assert_eq!(reported, "(no pages)");
     }
 
     #[tokio::test]
-    async fn missing_action_is_rejected() {
+    async fn an_unknown_action_is_rejected() {
         let (store, _dir) = fresh_store();
-        let tool = KnowledgeTool::new(Arc::clone(&store));
-        let r = tool.call(serde_json::json!({}), &ctx()).await.unwrap();
-        assert_error(&r, "action");
+        let reported = dispatch(&store, serde_json::json!({"action": "wat"})).await;
+        assert!(reported.contains("`enum`"), "{reported}");
+    }
+
+    #[tokio::test]
+    async fn a_missing_action_is_rejected() {
+        let (store, _dir) = fresh_store();
+        let reported = dispatch(&store, serde_json::json!({})).await;
+        assert!(reported.contains("`action`"), "{reported}");
     }
 
     #[tokio::test]
@@ -449,7 +387,6 @@ mod tests {
         use std::sync::Mutex;
 
         let (store, _dir) = fresh_store();
-        let tool = KnowledgeTool::new(Arc::clone(&store));
         let tickets = TicketQueue::new();
         let reported = Arc::new(Mutex::new(Vec::new()));
         let seen = Arc::clone(&reported);
@@ -464,30 +401,37 @@ mod tests {
         let ctx =
             ToolContext::new(std::env::current_dir().unwrap()).ticket_queue(Arc::clone(&tickets));
 
-        tool.call(
-            serde_json::json!({
-                "action": "write", "slug": "note",
-                "description": "a note", "content": "body",
-            }),
+        run(
+            &store,
+            KnowledgeArgs::Write {
+                slug: "note".into(),
+                description: "a note".into(),
+                content: "body".into(),
+            },
             &ctx,
-        )
-        .await
-        .unwrap();
-        tool.call(serde_json::json!({"action": "list"}), &ctx)
-            .await
-            .unwrap();
-        tool.call(serde_json::json!({"action": "read", "slug": "note"}), &ctx)
-            .await
-            .unwrap();
-        tool.call(serde_json::json!({"action": "read", "slug": "ghost"}), &ctx)
-            .await
-            .unwrap();
-        tool.call(
-            serde_json::json!({"action": "remove", "slug": "note"}),
+        );
+        run(&store, KnowledgeArgs::List, &ctx);
+        run(
+            &store,
+            KnowledgeArgs::Read {
+                slug: "note".into(),
+            },
             &ctx,
-        )
-        .await
-        .unwrap();
+        );
+        run(
+            &store,
+            KnowledgeArgs::Read {
+                slug: "ghost".into(),
+            },
+            &ctx,
+        );
+        run(
+            &store,
+            KnowledgeArgs::Remove {
+                slug: "note".into(),
+            },
+            &ctx,
+        );
 
         // Every action reports itself, and the read of an absent slug reports
         // the reason it did not go through.

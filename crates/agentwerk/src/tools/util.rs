@@ -184,7 +184,7 @@ mod tests {
 
         let content = result.content();
         assert!(
-            matches!(result, ToolResult::Error(_)),
+            matches!(result, ToolResult::Error { .. }),
             "expected cancelled result"
         );
         assert!(content.contains("cancelled"));

@@ -1,0 +1,20 @@
+{
+  "type": "object",
+  "properties": {
+    "url": {
+      "type": "string",
+      "description": "The URL to fetch. HTTP is upgraded to HTTPS. Max length 2000 characters."
+    },
+    "max_length": {
+      "type": "integer",
+      "description": "Max response length in characters (default: 100000). Increase only if the content is known to exceed the default."
+    }
+  },
+  "required": [
+    "url"
+  ],
+  "examples": [
+    { "url": "https://example.com/docs/getting-started" },
+    { "url": "https://example.com/api/reference.json", "max_length": 300000 }
+  ]
+}

@@ -325,12 +325,9 @@ impl AsUserMessage for Ticket {
             other => serde_json::to_string_pretty(other).unwrap_or_default(),
         };
         // Show the result shape up front: the finish tool validates against it, and
-        // the role prompt alone is a thin thread for the model to hold. The
-        // directive names an object schema's fields as top-level arguments.
+        // the role prompt alone is a thin thread for the model to hold.
         if let Some(schema) = &self.schema {
-            if let Ok(document) = serde_json::to_value(schema) {
-                body.push_str(&crate::prompts::schema_directive(&document));
-            }
+            body.push_str(&crate::prompts::schema_directive(schema));
         }
         Message::user(body)
     }

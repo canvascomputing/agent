@@ -18,7 +18,7 @@
 use std::sync::Arc;
 
 use agentwerk::event::{Event, EventKind, EventName};
-use agentwerk::providers::{Model, Provider, ProviderResult};
+use agentwerk::providers::{Model, Provider};
 use agentwerk::schemas::{Schema, SchemaStore};
 use agentwerk::tools::{TicketsTool, Tool, ToolResult};
 use agentwerk::{Agent, FinishReason, Ticket, TicketQueue};
@@ -257,27 +257,25 @@ fn final_report_schema_value() -> serde_json::Value {
 }
 
 fn brave_search_tool(api_key: String) -> Tool {
-    Tool::new(
-        "brave_search",
-        "Search the web. Returns titles, URLs, and descriptions.",
-    )
-    .schema(serde_json::json!({
-        "type": "object",
-        "properties": {
-            "query": { "type": "string", "description": "Search query" },
-            "count": { "type": "integer", "description": "Results count (1-20, default: 5)" }
-        },
-        "required": ["query"]
-    }))
-    .concurrent(true)
-    .handler(move |input, _ctx| {
-        let api_key = api_key.clone();
-        async move { brave_search(&api_key, &input).await }
-    })
-    .build()
+    Tool::new("brave_search")
+        .description("Search the web. Returns titles, URLs, and descriptions.")
+        .schema(serde_json::json!({
+            "type": "object",
+            "properties": {
+                "query": { "type": "string", "description": "Search query" },
+                "count": { "type": "integer", "description": "Results count (1-20, default: 5)" }
+            },
+            "required": ["query"]
+        }))
+        .concurrent(true)
+        .handler(move |input: serde_json::Value, _ctx| {
+            let api_key = api_key.clone();
+            async move { brave_search(&api_key, &input).await }
+        })
+        .build()
 }
 
-async fn brave_search(api_key: &str, input: &serde_json::Value) -> ProviderResult<ToolResult> {
+async fn brave_search(api_key: &str, input: &serde_json::Value) -> ToolResult {
     let query = input["query"].as_str().unwrap_or("").trim();
     let count = input["count"].as_u64().unwrap_or(5).min(20).to_string();
 
@@ -290,16 +288,16 @@ async fn brave_search(api_key: &str, input: &serde_json::Value) -> ProviderResul
         .await
     {
         Ok(r) => r,
-        Err(e) => return Ok(ToolResult::error(format!("Brave search failed: {e}"))),
+        Err(e) => return ToolResult::error(format!("Brave search failed: {e}")),
     };
 
     let json: serde_json::Value = match response.json().await {
         Ok(j) => j,
-        Err(e) => return Ok(ToolResult::error(format!("Failed to parse response: {e}"))),
+        Err(e) => return ToolResult::error(format!("Failed to parse response: {e}")),
     };
 
     let Some(results) = json["web"]["results"].as_array() else {
-        return Ok(ToolResult::success("No results found."));
+        return ToolResult::success("No results found.");
     };
 
     let text = results
@@ -315,7 +313,7 @@ async fn brave_search(api_key: &str, input: &serde_json::Value) -> ProviderResul
         .collect::<Vec<_>>()
         .join("\n");
 
-    Ok(ToolResult::success(text))
+    ToolResult::success(text)
 }
 
 fn log_event(event: &Event) {

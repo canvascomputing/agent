@@ -1,0 +1,20 @@
+{
+  "type": "object",
+  "properties": {
+    "pattern": {
+      "type": "string",
+      "description": "Glob pattern, evaluated relative to `path` (e.g. `**/*.rs`, `src/*.toml`). Required."
+    },
+    "path": {
+      "type": "string",
+      "description": "Base directory to search under (default: `.`, i.e. the agent's working directory)."
+    }
+  },
+  "required": [
+    "pattern"
+  ],
+  "examples": [
+    { "pattern": "**/*.rs" },
+    { "pattern": "*.toml", "path": "crates/core" }
+  ]
+}

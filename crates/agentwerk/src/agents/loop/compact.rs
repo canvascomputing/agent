@@ -99,7 +99,7 @@ pub(super) async fn run(context: &mut TicketContext<'_>, reason: CompactReason) 
 }
 
 pub(super) fn proactive_compaction_needed(context: &TicketContext<'_>, ticket: &Ticket) -> bool {
-    let tools = context.agent.tool_definitions();
+    let tools = context.tools.tools();
     let window = context.model.get_context_window();
     let history = context
         .ticket_queue
