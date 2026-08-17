@@ -137,8 +137,8 @@ impl ToolLike for FinishTool {
             // not finish the ticket, so the child is inserted and the
             // parent finished below. A schema failure returns here before
             // any child exists.
-            let validated_result = match ticket_queue.set_result(&parent_key, result) {
-                Ok(value) => value,
+            let (validated_result, _repairs) = match ticket_queue.set_result(&parent_key, result) {
+                Ok(kept) => kept,
                 Err(violations) => return Ok(ToolResult::schema_error(violations.to_string())),
             };
 
