@@ -549,6 +549,14 @@ let git = CommandTool::new("git")
     .deny_flag("--force");
 ```
 
+With an `allow_flag` set, a command carrying any other flag is refused:
+
+```rust
+let cargo = CommandTool::new("cargo")
+    .allow("cargo test*")
+    .allow_flag("--all-features");
+```
+
 #### Custom Tools
 
 You can define custom tools for specific needs with the following parameters:

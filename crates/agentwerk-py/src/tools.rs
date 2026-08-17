@@ -240,6 +240,14 @@ impl PyCommandTool {
         slf
     }
 
+    /// Permit `flag` and, from the first call on, refuse every command
+    /// carrying a flag no rule names. A rule reaches the spelling it names and
+    /// no other, so `-n` leaves `-n5` and `-rf` refused.
+    fn allow_flag<'py>(mut slf: PyRefMut<'py, Self>, flag: &str) -> PyRefMut<'py, Self> {
+        slf.inner = slf.inner.clone().allow_flag(flag);
+        slf
+    }
+
     /// Refuse commands matching `pattern`, even when an allowed pattern
     /// matches them too.
     fn deny<'py>(mut slf: PyRefMut<'py, Self>, pattern: &str) -> PyRefMut<'py, Self> {
