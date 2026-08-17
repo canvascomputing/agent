@@ -416,7 +416,7 @@ mod tests {
         )
         .await;
         let text = unwrap_text(&result);
-        assert!(matches!(result, ToolResult::Success(_)), "{text}");
+        assert!(matches!(result, ToolResult::Success { .. }), "{text}");
         assert!(text.contains("a lead"), "expected the result: {text}");
         assert!(
             text.contains("result.json"),
@@ -447,7 +447,7 @@ mod tests {
             &ctx,
         )
         .await;
-        assert!(matches!(result, ToolResult::Error(_)), "{result:?}");
+        assert!(matches!(result, ToolResult::Error { .. }), "{result:?}");
         assert!(unwrap_text(&result).contains("InProgress"));
     }
 
@@ -482,7 +482,7 @@ mod tests {
             &ctx,
         )
         .await;
-        assert!(matches!(result, ToolResult::Success(_)));
+        assert!(matches!(result, ToolResult::Success { .. }));
         let t = queue.get_ticket("TICKET-1").unwrap();
         assert_eq!(t.task, serde_json::Value::String("new ticket".into()));
         assert_eq!(t.reporter, "alice");
@@ -503,7 +503,7 @@ mod tests {
             &ctx,
         )
         .await;
-        assert!(matches!(result, ToolResult::Success(_)));
+        assert!(matches!(result, ToolResult::Success { .. }));
         let t = queue.get_ticket("TICKET-1").unwrap();
         assert!(t.has_label("research"));
         assert_eq!(t.status, Status::Todo);
@@ -524,7 +524,7 @@ mod tests {
             &ctx,
         )
         .await;
-        assert!(matches!(result, ToolResult::Success(_)));
+        assert!(matches!(result, ToolResult::Success { .. }));
         let t = queue.get_ticket("TICKET-1").unwrap();
         assert!(t.has_label("alice"));
         assert_eq!(t.status, Status::Todo);
@@ -551,7 +551,7 @@ mod tests {
             &ctx,
         )
         .await;
-        assert!(matches!(result, ToolResult::Success(_)));
+        assert!(matches!(result, ToolResult::Success { .. }));
         assert!(queue.get_ticket("TICKET-1").unwrap().schema.is_none());
 
         queue.claim(|t| t.has_label("analysis"), "bob");
@@ -572,7 +572,7 @@ mod tests {
             &ctx,
         )
         .await;
-        assert!(matches!(result, ToolResult::Success(_)));
+        assert!(matches!(result, ToolResult::Success { .. }));
         let t = queue.get_ticket(&key).unwrap();
         assert_eq!(t.task, serde_json::Value::String("new body".into()));
         assert!(t.has_label("urgent"));
@@ -585,7 +585,7 @@ mod tests {
         for action in ["done", "transition", "comment", "assign", "attach"] {
             let result = call(TicketsTool, serde_json::json!({"action": action}), &ctx).await;
             assert!(
-                matches!(result, ToolResult::Error(_)),
+                matches!(result, ToolResult::Error { .. }),
                 "{action}: {result:?}"
             );
         }

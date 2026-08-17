@@ -95,8 +95,8 @@ pub enum ToolFailureKind {
     /// The tool ran and returned an error.
     #[serde(rename = "execution_failed")]
     ExecutionFailed,
-    /// The tool rejected its input. This is the failure whose retry
-    /// directive shows the model the schema back; every kind counts against
+    /// The tool rejected its input. This is the failure whose result shows
+    /// the model the schema back; every kind counts against
     /// `max_schema_retries`.
     #[serde(rename = "schema_failed")]
     SchemaValidationFailed,

@@ -12,9 +12,9 @@ use super::error::{ProviderError, ProviderResult};
 use super::provider::{self, Protocol, ProviderLike};
 use super::stream::{ResponseBuilder, ToolCallKey};
 use super::types::{
-    ContentBlock, Message, ModelRequest, ModelResponse, ResponseStatus, StreamEvent, ToolChoice,
-    ToolDefinition,
+    ContentBlock, Message, ModelRequest, ModelResponse, ResponseStatus, StreamEvent,
 };
+use crate::tools::Tool;
 
 const DEFAULT_BASE_URL: &str = "https://api.anthropic.com";
 
@@ -119,15 +119,8 @@ impl Protocol for AnthropicMessages {
             body["max_tokens"] = Value::from(n);
         }
         if !request.tools.is_empty() {
-            let tools: Vec<Value> = request
-                .tools
-                .iter()
-                .map(serialize_tool_definition)
-                .collect();
+            let tools: Vec<Value> = request.tools.iter().map(serialize_tool).collect();
             body["tools"] = Value::Array(tools);
-        }
-        if let Some(ref choice) = request.tool_choice {
-            body["tool_choice"] = serialize_tool_choice(choice);
         }
         // Request thinking only when an effort is set and the model accepts the
         // adaptive form. Older Anthropic models used a different request field we
@@ -207,19 +200,12 @@ fn serialize_content_block(block: &ContentBlock) -> Option<Value> {
     Some(value)
 }
 
-fn serialize_tool_definition(tool: &ToolDefinition) -> Value {
+fn serialize_tool(tool: &Tool) -> Value {
     serde_json::json!({
-        "name": tool.name,
-        "description": tool.description,
-        "input_schema": tool.input_schema,
+        "name": tool.name(),
+        "description": tool.description(),
+        "input_schema": tool.input_schema().get_raw_schema(),
     })
-}
-
-fn serialize_tool_choice(choice: &ToolChoice) -> Value {
-    match choice {
-        ToolChoice::Auto => serde_json::json!({"type": "auto"}),
-        ToolChoice::Specific { name } => serde_json::json!({"type": "tool", "name": name}),
-    }
 }
 
 /// True for the Anthropic generation that takes `thinking:{type:"adaptive"}`
@@ -497,7 +483,6 @@ mod tests {
             }],
             tools: vec![],
             max_request_tokens: Some(1024),
-            tool_choice: None,
             reasoning_effort: Default::default(),
         }
     }
@@ -532,17 +517,6 @@ mod tests {
         for message in body["messages"].as_array().unwrap() {
             assert_ne!(message["role"], "system");
         }
-    }
-
-    #[test]
-    fn serialize_request_includes_tool_choice() {
-        let mut request = simple_request();
-        request.tool_choice = Some(ToolChoice::Specific {
-            name: "read_file".into(),
-        });
-        let body = AnthropicMessages::serialize(&request);
-        assert_eq!(body["tool_choice"]["type"], "tool");
-        assert_eq!(body["tool_choice"]["name"], "read_file");
     }
 
     fn invalid_request(message: &str) -> String {

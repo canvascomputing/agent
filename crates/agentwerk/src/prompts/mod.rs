@@ -14,6 +14,7 @@ pub(crate) use builder::PromptBuilder;
 use crate::agents::policy::Policies;
 use crate::agents::stats::Stats;
 use crate::event::EventName;
+use crate::schemas::Schema;
 
 const CONTEXT_TEMPLATE: &str = include_str!("context.md");
 
@@ -36,25 +37,16 @@ pub(crate) fn compaction_directive() -> &'static str {
 
 /// Render the block telling the agent how to return a result matching
 /// `schema`. Leads with a blank line so callers append it directly after
-/// preceding text. A scalar or an array rides in `result`, the only place
-/// either fits as an argument.
-pub(crate) fn schema_directive(schema: &Value) -> String {
-    let pretty = serde_json::to_string_pretty(schema).unwrap_or_default();
-    if crate::tools::FinishTool::inlines_result(schema) {
-        format!("\n\nCall `finish` with these fields as its top-level arguments, not wrapped in `result`, matching this schema:\n{pretty}")
-    } else {
-        format!(
-            "\n\nRecord your `result` via `finish` as a JSON value matching this schema:\n{pretty}"
-        )
-    }
+/// preceding text.
+pub(crate) fn schema_directive(schema: &Schema) -> String {
+    let pretty = serde_json::to_string_pretty(schema.get_raw_schema()).unwrap_or_default();
+    format!("\n\nRecord your `result` via `finish` as a JSON value matching this schema:\n{pretty}")
 }
 
-/// Compose the detail for a call whose arguments did not match the schema its
-/// tool advertises. The validator names what was wrong but not the target
-/// shape, so the schema is appended when known: without it a model that
-/// guessed the shape has nothing new to correct against. It is the schema the
-/// tool advertised for this ticket, so a `finish` call reads back the ticket's
-/// own fields.
+/// Compose the detail for a call whose arguments did not match its tool's
+/// schema. The validator names what was wrong but not the target shape, so the
+/// schema is appended when known: without it a model that guessed the shape has
+/// nothing new to correct against.
 pub(crate) fn arguments_retry_detail(
     tool_name: &str,
     violations: &str,
@@ -191,35 +183,38 @@ mod tests {
     }
 
     #[test]
-    fn schema_directive_for_an_object_asks_for_top_level_arguments() {
-        let directive = schema_directive(&serde_json::json!({
+    fn every_schema_shape_asks_for_the_result_argument() {
+        let shapes = [
+            serde_json::json!({
+                "type": "object",
+                "properties": {"summary": {"type": "string"}},
+                "required": ["summary"],
+            }),
+            // A ticket field named like a control key needs no special prose:
+            // it sits inside `result`, not next to `handover`.
+            serde_json::json!({
+                "type": "object",
+                "properties": { "handover": { "type": "string" } },
+            }),
+            serde_json::json!({ "type": "string" }),
+        ];
+
+        for shape in shapes {
+            let directive = schema_directive(&Schema::new(shape).expect("valid schema"));
+            assert!(directive.contains("`result`"), "{directive}");
+            assert!(directive.contains("matching this schema"), "{directive}");
+        }
+    }
+
+    #[test]
+    fn schema_directive_renders_the_schema_itself() {
+        let schema = Schema::new(serde_json::json!({
             "type": "object",
             "properties": {"summary": {"type": "string"}},
-            "required": ["summary"],
-        }));
-        assert!(directive.contains("top-level arguments"));
-        assert!(directive.contains("matching this schema"));
-        assert!(directive.contains("summary"));
-    }
+        }))
+        .expect("valid schema");
 
-    #[test]
-    fn schema_directive_for_a_colliding_object_keeps_the_result_envelope() {
-        // Decided by the finish tool's own predicate: a schema naming a
-        // control key is advertised enveloped, so the prose must not tell the
-        // model to inline it.
-        let directive = schema_directive(&serde_json::json!({
-            "type": "object",
-            "properties": { "handover": { "type": "string" } },
-        }));
-        assert!(!directive.contains("top-level arguments"), "{directive}");
-        assert!(directive.contains("`result`"), "{directive}");
-    }
-
-    #[test]
-    fn schema_directive_for_a_scalar_keeps_the_result_envelope() {
-        let directive = schema_directive(&serde_json::json!({ "type": "string" }));
-        assert!(directive.contains("`result`"));
-        assert!(directive.contains("finish"));
+        assert!(schema_directive(&schema).contains("summary"));
     }
 
     #[test]

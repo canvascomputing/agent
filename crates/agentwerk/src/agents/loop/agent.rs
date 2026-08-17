@@ -9,6 +9,7 @@ use crate::agents::policy::Policies;
 use crate::agents::tickets::{policy_violated_kind, Reply, Run, Status, Ticket, TicketQueue};
 use crate::event::{CompactReason, Event, EventKind, PolicyKind};
 use crate::providers::{AsUserMessage, Message, Model, RequestErrorKind};
+use crate::tools::{FinishTool, ToolRegistry};
 
 use super::{compact, request, tool_call, Step, POLL_INTERVAL};
 
@@ -24,6 +25,8 @@ pub(super) struct TicketContext<'a> {
     pub(super) ticket_key: String,
     pub(super) system_prompt: String,
     pub(super) policies: Policies,
+
+    pub(super) tools: ToolRegistry,
 
     // Spans turns; trips max_schema_retries.
     pub(super) consecutive_schema_failures: u32,
@@ -135,6 +138,9 @@ fn claim<'a>(agent: &'a Agent, ticket_queue: &'a Arc<TicketQueue>) -> Option<Tic
         .or_else(|| ticket_queue.find_ticket(resumable).map(|t| t.key.clone()))?;
     let ticket = ticket_queue.get_ticket(&ticket_key)?;
 
+    let mut tools = agent.tool_registry().clone();
+    tools.register(FinishTool::from_schema(ticket.schema.clone()));
+
     let knowledge_index = agent.knowledge().index();
     let policies = ticket_queue.policies();
     // Lets the model see what knowledge pages it can read.
@@ -168,6 +174,7 @@ fn claim<'a>(agent: &'a Agent, ticket_queue: &'a Arc<TicketQueue>) -> Option<Tic
         ticket_key,
         system_prompt,
         policies,
+        tools,
 
         consecutive_schema_failures: 0,
     })
@@ -1224,7 +1231,9 @@ mod tests {
 
     #[tokio::test]
     async fn a_schema_bound_to_a_label_reaches_the_first_message_of_its_ticket() {
-        let provider = MockProvider::with_results(vec![Ok(write_result_response("done"))]);
+        let provider = MockProvider::with_results(vec![Ok(write_result_value(
+            serde_json::json!({"verdict": "done"}),
+        ))]);
         let results_dir = crate::test_util::TempDir::new().unwrap();
 
         let schemas = crate::schemas::SchemaStore::new();
@@ -1261,6 +1270,39 @@ mod tests {
         assert!(
             task_message.contains("verdict"),
             "the bound schema must be in the task message: {task_message:?}",
+        );
+        assert_eq!(tickets.tickets()[0].status, Status::Finished);
+    }
+
+    #[tokio::test]
+    async fn a_claimed_ticket_binds_its_schema_to_the_finish_tool() {
+        let results_dir = crate::test_util::TempDir::new().unwrap();
+        let tickets = TicketQueue::new();
+        tickets.dir(results_dir.path().to_path_buf());
+        let agent = Agent::new()
+            .provider(MockProvider::with_results(vec![]))
+            .model("mock")
+            .role("test")
+            .build();
+        tickets.agent(agent.clone());
+        tickets.ticket(
+            Ticket::new("audit").schema(
+                crate::schemas::Schema::new(serde_json::json!({
+                    "type": "object",
+                    "properties": { "verdict": { "type": "string" } },
+                    "required": ["verdict"],
+                }))
+                .unwrap(),
+            ),
+        );
+
+        let context = claim(&agent, &tickets).expect("the ticket is claimable");
+        let finish = context.tools.get("finish").expect("finish is bound");
+
+        let declared = finish.input_schema().get_raw_schema();
+        assert!(
+            declared["properties"]["result"]["properties"]["verdict"].is_object(),
+            "{declared}"
         );
     }
 

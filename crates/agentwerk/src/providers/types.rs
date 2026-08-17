@@ -6,18 +6,8 @@
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
-/// One tool as the model is told about it.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolDefinition {
-    /// The name the model calls the tool by.
-    pub name: String,
-    /// What the tool does, in the words the model reads.
-    pub description: String,
-    /// What the tool accepts, as JSON Schema.
-    pub input_schema: Value,
-}
+use crate::tools::Tool;
 
 /// How much reasoning to ask the model for.
 ///
@@ -54,7 +44,7 @@ impl fmt::Display for ReasoningEffort {
 
 /// One request to an LLM provider, assembled from the agent's configuration and
 /// the conversation so far.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct ModelRequest {
     /// Which model to ask, such as `claude-sonnet-4-20250514`.
     pub model: String,
@@ -63,25 +53,15 @@ pub struct ModelRequest {
     pub system_prompt: String,
     /// Everything said so far, ending with the latest input.
     pub messages: Vec<Message>,
-    /// The tools the model may call this turn.
-    pub tools: Vec<ToolDefinition>,
+    /// The tools the model may call this turn, each carrying the name,
+    /// description, and schema to send. Read the schema document with
+    /// [`Schema::get_raw_schema`](crate::schemas::Schema::get_raw_schema).
+    pub tools: Vec<Tool>,
     /// Limit on this request's output tokens, or `None` for the LLM provider's
     /// own default.
     pub max_request_tokens: Option<u32>,
-    /// Which tool the model may pick this turn.
-    pub tool_choice: Option<ToolChoice>,
     /// How much reasoning to ask for, taken from the [`Model`](super::Model).
-    #[serde(default)]
     pub reasoning_effort: ReasoningEffort,
-}
-
-/// Which tool the model may pick on one turn.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum ToolChoice {
-    /// The model picks freely, or replies without calling a tool.
-    Auto,
-    /// The model must call this tool.
-    Specific { name: String },
 }
 
 /// One message in the conversation passed to a provider, tagged by role.
