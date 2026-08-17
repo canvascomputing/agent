@@ -4,15 +4,13 @@ Commands used to build, test, release, and run example agents.
 
 ## Build
 
-**Every build MUST run with `-D warnings`.**
+**Every build MUST run with `-D warnings`. Any warning fails it.**
 
 ```bash
 make        # compile the crate
 make fmt    # format the code
 make clean  # remove build artifacts
 ```
-
-- Any warning fails the build.
 
 ## Test
 
@@ -24,11 +22,10 @@ make clean  # remove build artifacts
 
 ## Python Bindings
 
-**`make python` builds the extension; the two test targets split on whether an LLM provider is needed.**
+**`make python` runs `maturin develop` in `crates/agentwerk-py/`, building the extension into the active virtualenv.**
 
-- `make python` runs `maturin develop` in `crates/agentwerk-py/`, building the extension into the active virtualenv.
 - Create the virtualenv first with `python3 -m venv .venv` at the repo root and activate it. maturin fails without one, and the test targets resolve `python3` off the PATH, so an unactivated virtualenv imports the system interpreter instead.
-- `make python_test` runs the offline pytest suite. It needs no network and no provider.
+- `make python_test` runs the offline pytest suite: no network, no LLM provider.
 - `make python_test_integration` runs the tests marked `live`, which call a real LLM provider.
 - Both test targets depend on `make python`, so an edit to the binding crate is picked up automatically.
 
@@ -48,18 +45,16 @@ make test_integration
 
 ## Release
 
-**`make bump` runs the full release step in one command.**
+**`make bump` runs tests, bumps the patch version, commits, and tags.**
 
-- `make bump` runs tests, bumps the patch version, commits, and tags.
-- `make bump part=minor` bumps the minor version.
-- `make bump part=major` bumps the major version.
+- `make bump part=minor` and `make bump part=major` bump the other two parts.
 - Push the new tag with `git push --tags`.
 
 ## Hooks
 
 **`make hooks` installs Claude Code hooks into `.claude/settings.local.json`.**
 
-- Source files live in `hooks/` (tracked). `make hooks` copies them into `.claude/hooks/` (ignored) and merges the configuration.
+- Source files live in `hooks/` (tracked); `make hooks` copies them into `.claude/hooks/` (ignored) and merges the configuration.
 - `check-conventions.sh` injects `agentdocs/style.md` and `agentdocs/architecture.md` as context after each Rust file edit.
 
 ## Skills
@@ -71,14 +66,13 @@ make test_integration
 
 ## Use Cases
 
-**Example agents live in a separate crate and run through `make use_case`.**
+**Example agents live in `crates/use-cases/src/` and run through `make use_case`.**
 
 ```bash
 make use_case                # list available names
 make use_case name=<name>    # run one
 ```
 
-- Source is in `crates/use-cases/src/`.
 - `hello-world` is the smallest program the crate allows: one agent, one ticket, one printed answer.
 - `terminal-repl` is a per-turn interactive chat that prints output as it arrives.
 - `divide-and-conquer` partitions an arithmetic problem across agents sharing one ticket queue.

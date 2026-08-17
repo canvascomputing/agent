@@ -6,9 +6,8 @@ How tests are organized and written. Commands used to run them live in [workflow
 
 **Two layers: integration and inline.**
 
-- `tests/integration/` uses a real LLM provider; bundled by `tests/integration.rs`.
+- `tests/integration/` uses a real LLM provider; bundled by `tests/integration.rs`, with shared helpers in `tests/integration/common.rs`.
 - Inline `#[cfg(test)] mod tests` lives next to the code it covers and runs without a network.
-- Shared integration helpers live in `tests/integration/common.rs`.
 
 ## Purpose
 
@@ -16,7 +15,7 @@ How tests are organized and written. Commands used to run them live in [workflow
 
 - A test exists because a single contract would otherwise go undemonstrated.
 - A failure points to one cause: no grab-bag assertions across unrelated concerns.
-- A sibling that already covers the same behavior with different inputs is merged or removed.
+- A sibling covering the same branch with trivial input changes is merged or removed.
 - Behavior is tested at the layer where it lives: unit, integration, or inline.
 
 ## Naming
@@ -66,6 +65,5 @@ test_schema_works
 **Every public operation has a test that demonstrates intended usage.**
 
 - Error cases, edge conditions, and boundaries sit at the same interface level as the happy path.
-- Overlapping cases that exercise the same branch with trivial input changes are merged.
 - A missing behavior is added before a duplicate case is kept for symmetry.
 - IMPORTANT: a public method with no test is a documentation gap, not just a coverage gap.
