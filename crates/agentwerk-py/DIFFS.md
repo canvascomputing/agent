@@ -146,7 +146,9 @@ Seven rules the surface table below never repeats.
 | `KnowledgeError` | `RuntimeError` |
 | **Schema** | |
 | `Schema::new(document)` | `Schema(document)` |
+| `Schema::try_from(document)`, `::try_from(json_text)` | Not bound: `Schema(document)` takes the Python object, and a document read from a file is parsed before it gets there. |
 | `Schema::validate(value)` | `Schema.validate(value)` |
+| `Schema::get_raw_schema()` | Not bound: Python already holds the document it passed to `Schema(document)`. |
 | `SchemaViolation`, `SchemaViolations`, `SchemaParseError` | `RuntimeError` |
 | **SchemaStore** | |
 | `SchemaStore::new()` | `SchemaStore()` |
