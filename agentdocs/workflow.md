@@ -28,23 +28,23 @@ make clean  # remove build artifacts
 
 - `make python` runs `maturin develop` in `crates/agentwerk-py/`, building the extension into the active virtualenv.
 - Create the virtualenv first with `python3 -m venv .venv` at the repo root and activate it. maturin fails without one, and the test targets resolve `python3` off the PATH, so an unactivated virtualenv imports the system interpreter instead.
-- `make python_test` runs the offline pytest suite. It needs no network and no `.env`.
-- `make python_test_integration` sources `.env` and runs the tests marked `live`, which call a real LLM provider.
+- `make python_test` runs the offline pytest suite. It needs no network and no provider.
+- `make python_test_integration` runs the tests marked `live`, which call a real LLM provider.
 - Both test targets depend on `make python`, so an edit to the binding crate is picked up automatically.
 
 ## Integration Environment
 
-**Integration tests read LLM provider configuration from a `.env` file at the repo root.**
+**Integration tests read LLM provider configuration from the environment. Export it in your shell before running them; no target reads a file.**
 
 ```bash
 export OPENAI_API_KEY=sk-local
 export OPENAI_BASE_URL=http://localhost:8095
+make test_integration
 ```
 
-- `make test_integration` sources `.env` automatically when present.
-- The file holds shell `export` statements, one per variable.
 - `OPENAI_BASE_URL` points at a local OpenAI-compatible proxy on port 8095.
-- `.env` is gitignored: each contributor maintains their own.
+- A target that finds no provider fails at the first request rather than skipping, so an unset variable is loud.
+- Keeping a `.env` and sourcing it yourself still works, since the targets inherit whatever the shell exports.
 
 ## Release
 

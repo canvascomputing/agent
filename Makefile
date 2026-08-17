@@ -17,15 +17,14 @@ test:
 	RUSTFLAGS="-D warnings" cargo test --workspace --exclude agentwerk-py --doc
 	RUSTFLAGS="-D warnings" cargo test -p use-cases --bins
 
-# Run integration tests (requires a live LLM LITELLM_PROVIDER)
+# Run integration tests against whatever LLM provider the environment names.
+# Export the provider's variables in your shell first; nothing is read from a file.
 # Usage: make test_integration              (run all)
 #        make test_integration name=command_usage  (run one file)
 test_integration:
 ifdef name
-	@if [ -f .env ]; then set -a; . ./.env; set +a; fi; \
 	RUSTFLAGS="-D warnings" cargo test --test integration $(name) -- --nocapture
 else
-	@if [ -f .env ]; then set -a; . ./.env; set +a; fi; \
 	RUSTFLAGS="-D warnings" cargo test --test integration -- --nocapture --test-threads=1
 endif
 
@@ -33,15 +32,14 @@ endif
 python:
 	cd crates/agentwerk-py && maturin develop
 
-# Run the offline Python binding tests (no network, no .env)
+# Run the offline Python binding tests (no network, no provider needed)
 python_test: python
 	@cd crates/agentwerk-py && python3 -m pip install -q pytest pytest-asyncio && \
 	  python3 -m pytest tests -q -m "not live"
 
-# Run the live Python binding tests against a real provider (sources .env)
+# Run the live Python binding tests against the provider the environment names
 python_test_integration: python
-	@if [ -f .env ]; then set -a; . ./.env; set +a; fi; \
-	cd crates/agentwerk-py && python3 -m pip install -q pytest pytest-asyncio && \
+	@cd crates/agentwerk-py && python3 -m pip install -q pytest pytest-asyncio && \
 	  python3 -m pytest tests -q -m live
 
 # Build rustdoc (warnings are errors; broken intra-doc links fail)
@@ -68,8 +66,7 @@ update:
 # not a build failure, so it is tolerated; every other non-zero code still fails.
 use_case:
 ifdef name
-	@if [ -f .env ]; then set -a; . ./.env; set +a; fi; \
-	cargo run -p use-cases --bin $(name) -- $(args) || [ $$? -eq 2 ]
+	@cargo run -p use-cases --bin $(name) -- $(args) || [ $$? -eq 2 ]
 else
 	@echo "Available use cases:"
 	@grep -A1 '^\[\[bin\]\]' crates/use-cases/Cargo.toml | grep 'name' | sed 's/.*"\(.*\)"/  \1/'
