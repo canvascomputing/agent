@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use agentwerk::providers::{Model, Provider};
-use agentwerk::tools::AnyTool;
+use agentwerk::tools::Tool;
 use agentwerk::{Agent, Knowledge};
 use pyo3::prelude::*;
 
@@ -19,7 +19,7 @@ use crate::knowledge::PyKnowledge;
 use crate::providers::{PyModel, PyProvider};
 use crate::ticket::PyTicket;
 use crate::ticket_queue::PyTicketQueue;
-use crate::tools::{extract_tool, BoxedTool};
+use crate::tools::extract_tool;
 
 /// An `Agent` is the core entity of agentwerk. It has access to tools for
 /// solving tasks in the form of tickets.
@@ -32,7 +32,7 @@ pub struct PyAgent {
     interactive: bool,
     provider: Option<Provider>,
     model: Option<Model>,
-    tools: Vec<Arc<dyn AnyTool>>,
+    tools: Vec<Tool>,
     knowledge: Option<Arc<Knowledge>>,
     /// Set by `build()`. Every method that reaches the queue needs it.
     agent: Option<Agent>,
@@ -106,7 +106,7 @@ impl PyAgent {
             builder = builder.knowledge(store);
         }
         for tool in &self.tools {
-            builder = builder.tool(BoxedTool(Arc::clone(tool)));
+            builder = builder.tool(tool.clone());
         }
         Ok(builder.build())
     }
