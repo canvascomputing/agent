@@ -4,11 +4,73 @@
 //! Rust sets those fields with chained methods. A Python class cannot carry a
 //! `label` method and a `label` attribute, so they are keyword arguments here.
 
-use agentwerk::Ticket;
+use agentwerk::agents::tickets::TicketMatcher;
+use agentwerk::{Query, Status, Ticket};
 use pyo3::prelude::*;
 
 use crate::convert::{py_to_value, value_to_py};
 use crate::schema::PySchema;
+
+/// Selects tickets by field values.
+#[pyclass(name = "Query")]
+pub struct PyQuery {
+    pub inner: Query,
+}
+
+#[pymethods]
+impl PyQuery {
+    #[new]
+    #[pyo3(signature = (*, key=None, label=None, status=None, agent=None, parent_key=None))]
+    fn new(
+        key: Option<String>,
+        label: Option<String>,
+        status: Option<&str>,
+        agent: Option<String>,
+        parent_key: Option<String>,
+    ) -> PyResult<Self> {
+        let mut q = Query::new();
+        if let Some(k) = key {
+            q = q.key(k);
+        }
+        if let Some(l) = label {
+            q = q.label(l);
+        }
+        if let Some(s) = status {
+            q = q.status(parse_status(s)?);
+        }
+        if let Some(a) = agent {
+            q = q.agent(a);
+        }
+        if let Some(p) = parent_key {
+            q = q.parent_key(p);
+        }
+        Ok(PyQuery { inner: q })
+    }
+
+    fn __repr__(&self) -> String {
+        format!("{:?}", self.inner)
+    }
+}
+
+fn parse_status(s: &str) -> PyResult<Status> {
+    match s {
+        "todo" => Ok(Status::Todo),
+        "in_progress" => Ok(Status::InProgress),
+        "finished" => Ok(Status::Finished),
+        "failed" => Ok(Status::Failed),
+        other => Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "unknown status: {other}"
+        ))),
+    }
+}
+
+/// Check whether a Python argument is a `Query`, and if so return a boxed
+/// matcher. Falls back to `None` so the caller can try the callable path.
+pub fn try_extract_query(py: Python<'_>, arg: &Py<PyAny>) -> Option<Query> {
+    arg.extract::<PyRef<'_, PyQuery>>(py)
+        .ok()
+        .map(|q| q.inner.clone())
+}
 
 /// A `Ticket` is a task plus what assigns and validates it.
 #[pyclass(name = "Ticket")]

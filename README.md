@@ -239,9 +239,11 @@ tickets.ticket(Ticket::new("Write up the ranking.").label("report"));
 | **Submit** | `task(task)` | Submit a task and return its ticket key. |
 | | `ticket(ticket)` | Submit a `Ticket` with a custom label or schema, and return its key. |
 | **Read** | `results()` | Get the result of every finished ticket, in creation order. |
+| | `find_results(query)` | Get every result whose ticket matches a `Query`. |
+| | `find_result(query)` | Get the earliest result whose ticket matches a `Query`. |
 | | `tickets()` | Get every ticket in creation order. |
-| | `find_ticket(condition)` | Get the earliest ticket matching a condition. |
-| | `find_tickets(condition)` | Get every ticket matching a condition. |
+| | `find_ticket(query)` | Get the earliest ticket matching a `Query` or closure. |
+| | `find_tickets(query)` | Get every ticket matching a `Query` or closure. |
 | | `get_ticket(key)` | Get one ticket by key. |
 | **Drive** | `reply(key, content)` | Add a reply to a ticket. |
 | | `edit_replies(key, editor)` | Rewrite a ticket's replies now. |
@@ -270,11 +272,11 @@ if let Some(answer) = tickets.finish_last().await {
 | | Method | Description |
 |-|--------|-------------|
 | **Run** | `start()` | Begin processing tickets. |
-| **Wait** | `finish(matches).await` | Wait for the matching tickets to be done and get their results. |
+| **Wait** | `finish(query).await` | Wait for the matching tickets to be done and get their results. |
 | | `finish_all().await` | Wait for every ticket to be finished and get every result. |
 | | `finish_last().await` | Wait for every ticket to be finished and get the last result. |
 | | `finish_reason()` | Get why the last run ended. |
-| **Stop** | `cancel(matches)` | Stop work on the matching tickets. |
+| **Stop** | `cancel(query)` | Stop work on the matching tickets. |
 | | `cancel_all()` | Stop work on every ticket. |
 | | `is_cancelled(ticket)` | Check whether a ticket has been cancelled. |
 

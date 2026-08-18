@@ -87,6 +87,7 @@ pub(crate) mod test_util;
 // Workshop: agents pull tickets from the queue
 pub use agents::Agent;
 pub use agents::AgentBuilder;
+pub use agents::Query;
 pub use agents::Reply;
 pub use agents::Status;
 pub use agents::Ticket;

@@ -411,8 +411,8 @@ mod tests {
         queue.claim(|t| t.key == "TICKET-1", "agent");
         queue.set_finished_by("TICKET-1", "agent").unwrap();
         queue.set_failed("TICKET-2").unwrap();
-        let done = queue.find_tickets(|t| t.status == Status::Finished);
-        let failed = queue.find_tickets(|t| t.status == Status::Failed);
+        let done = queue.find_tickets(|t: &Ticket| t.status == Status::Finished);
+        let failed = queue.find_tickets(|t: &Ticket| t.status == Status::Failed);
         assert_eq!(done.len(), 1);
         assert_eq!(done[0].key, "TICKET-1");
         assert_eq!(failed.len(), 1);

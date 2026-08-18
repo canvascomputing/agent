@@ -22,6 +22,7 @@ fn _agentwerk(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<agent::PyAgent>()?;
     m.add_class::<ticket_queue::PyTicketQueue>()?;
     m.add_class::<ticket::PyTicket>()?;
+    m.add_class::<ticket::PyQuery>()?;
     m.add_class::<reply::PyReply>()?;
     m.add_class::<reply::PyReplyContent>()?;
     m.add_class::<trajectory::PyTrajectory>()?;

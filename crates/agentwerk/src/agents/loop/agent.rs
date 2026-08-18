@@ -720,7 +720,7 @@ mod tests {
         let waited = key.clone();
         tokio::time::timeout(
             Duration::from_secs(5),
-            tickets.finish(move |t| t.key == waited),
+            tickets.finish(move |t: &Ticket| t.key == waited),
         )
         .await
         .expect("finish did not return within 5s");
@@ -994,7 +994,7 @@ mod tests {
         // Call off the research pool on the live run (start() resets signals), then
         // enqueue both tickets; the analysis pool runs on.
         tickets.start();
-        tickets.cancel(|t| t.has_label("research"));
+        tickets.cancel(|t: &Ticket| t.has_label("research"));
         tickets.ticket(Ticket::new("hunt").label("research"));
         tickets.ticket(Ticket::new("triage").label("analysis"));
 

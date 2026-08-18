@@ -4,9 +4,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use agentwerk::agents::tickets::Reply;
+use agentwerk::agents::tickets::{Reply, TicketMatcher};
 use agentwerk::event::Event;
-use agentwerk::{Ticket, TicketQueue};
+use agentwerk::{Query, Ticket, TicketQueue};
 use pyo3::prelude::*;
 use serde_json::Value;
 
@@ -16,7 +16,7 @@ use crate::convert::{py_to_value, runtime_error, value_to_py};
 use crate::event::{to_py_event, PyEvent};
 use crate::reply::{py_to_replies, replies_to_py};
 use crate::schema::PySchemaStore;
-use crate::ticket::PyTicket;
+use crate::ticket::{try_extract_query, PyTicket};
 
 /// The core data structure of agentwerk, coordinating complex work across
 /// agents.
@@ -396,21 +396,29 @@ impl PyTicketQueue {
             .collect()
     }
 
-    /// Get every ticket matching a condition.
+    /// Get every ticket matching a Query or callable.
     fn find_tickets(&self, py: Python<'_>, predicate: Py<PyAny>) -> PyResult<Vec<Py<PyTicket>>> {
-        self.inner
-            .find_tickets(|ticket| ticket_predicate(&predicate, ticket))
+        let tickets = match try_extract_query(py, &predicate) {
+            Some(query) => self.inner.find_tickets(query),
+            None => self
+                .inner
+                .find_tickets(|ticket: &Ticket| ticket_predicate(&predicate, ticket)),
+        };
+        tickets
             .iter()
             .map(|ticket| Py::new(py, PyTicket::from_ticket(ticket)))
             .collect()
     }
 
-    /// Get the earliest ticket matching a condition.
+    /// Get the earliest ticket matching a Query or callable.
     fn find_ticket(&self, py: Python<'_>, predicate: Py<PyAny>) -> PyResult<Option<Py<PyTicket>>> {
-        match self
-            .inner
-            .find_ticket(|ticket| ticket_predicate(&predicate, ticket))
-        {
+        let ticket = match try_extract_query(py, &predicate) {
+            Some(query) => self.inner.find_ticket(query),
+            None => self
+                .inner
+                .find_ticket(|ticket: &Ticket| ticket_predicate(&predicate, ticket)),
+        };
+        match ticket {
             Some(ticket) => Ok(Some(Py::new(py, PyTicket::from_ticket(&ticket))?)),
             None => Ok(None),
         }
@@ -557,14 +565,19 @@ impl PyTicketQueue {
     }
 
     /// Wait for the matching tickets to be done, then give back their results
-    /// in creation order. Name a label to wait for one pool, or a key to wait
-    /// for one ticket; `finish_all()` waits for the whole run. Awaitable.
+    /// in creation order. Accepts a Query or callable. Awaitable.
     fn finish<'py>(&self, py: Python<'py>, matches: Py<PyAny>) -> PyResult<Bound<'py, PyAny>> {
         let inner = Arc::clone(&self.inner);
+        let query = try_extract_query(py, &matches);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let results = inner
-                .finish(|ticket| ticket_predicate(&matches, ticket))
-                .await;
+            let results = match query {
+                Some(q) => inner.finish(q).await,
+                None => {
+                    inner
+                        .finish(|ticket: &Ticket| ticket_predicate(&matches, ticket))
+                        .await
+                }
+            };
             Python::attach(|py| {
                 results
                     .iter()
@@ -609,10 +622,14 @@ impl PyTicketQueue {
         self.inner.finish_reason().map(|reason| reason.to_string())
     }
 
-    /// Take every matching ticket off the queue.
+    /// Take every matching ticket off the queue. Accepts a Query or callable.
     fn cancel<'py>(slf: PyRef<'py, Self>, matches: Py<PyAny>) -> PyRef<'py, Self> {
-        slf.inner
-            .cancel(move |ticket| ticket_predicate(&matches, ticket));
+        match try_extract_query(slf.py(), &matches) {
+            Some(query) => slf.inner.cancel(query),
+            None => slf
+                .inner
+                .cancel(move |ticket: &Ticket| ticket_predicate(&matches, ticket)),
+        };
         slf
     }
 
@@ -669,6 +686,33 @@ impl PyTicketQueue {
             .iter()
             .map(|value| value_to_py(py, value))
             .collect()
+    }
+
+    /// Get every result whose ticket matches the Query, in creation order.
+    /// Status defaults to `"finished"`.
+    fn find_results<'py>(
+        &self,
+        py: Python<'py>,
+        query: PyRef<'_, crate::ticket::PyQuery>,
+    ) -> PyResult<Vec<Bound<'py, PyAny>>> {
+        self.inner
+            .find_results(query.inner.clone())
+            .iter()
+            .map(|value| value_to_py(py, value))
+            .collect()
+    }
+
+    /// Get the earliest result whose ticket matches the Query.
+    /// Status defaults to `"finished"`.
+    fn find_result<'py>(
+        &self,
+        py: Python<'py>,
+        query: PyRef<'_, crate::ticket::PyQuery>,
+    ) -> PyResult<Option<Bound<'py, PyAny>>> {
+        match self.inner.find_result(query.inner.clone()) {
+            Some(value) => Ok(Some(value_to_py(py, &value)?)),
+            None => Ok(None),
+        }
     }
 }
 

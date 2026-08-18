@@ -23,6 +23,7 @@ use super::super::compaction::Compaction;
 use super::super::policy::Policies;
 use super::super::r#loop::run_main_loop;
 use super::super::stats::Stats;
+use super::query::{Query, TicketMatcher};
 use super::ticket::{Status, Ticket};
 use super::{numeric_id, policy_violated_kind, Reply};
 
@@ -240,7 +241,7 @@ pub struct TicketQueue {
     /// while the rest of the run continues.
     pub(crate) cancel_filters: Mutex<Vec<Arc<TicketFilter>>>,
     /// How many terminal status transitions are between their status change and
-    /// the return of their event handlers. `work_left` counts a non-zero value as
+    /// the return of their event handlers. `pending` counts a non-zero value as
     /// pending work, so a handler creating a follow-up ticket always beats the drain.
     pub(crate) terminal_transitions_in_flight: AtomicUsize,
     pub(crate) stats: Stats,
@@ -1176,12 +1177,13 @@ impl TicketQueue {
     ///
     /// Your condition MUST NOT call another `TicketQueue` method that reads
     /// the ticket store, or the call deadlocks.
-    pub fn find_tickets<F>(&self, predicate: F) -> Vec<Ticket>
-    where
-        F: Fn(&Ticket) -> bool,
-    {
+    pub fn find_tickets(&self, predicate: impl TicketMatcher) -> Vec<Ticket> {
         let store = self.tickets.lock().unwrap();
-        let mut out: Vec<Ticket> = store.values().filter(|t| predicate(t)).cloned().collect();
+        let mut out: Vec<Ticket> = store
+            .values()
+            .filter(|t| predicate.matches(t))
+            .cloned()
+            .collect();
         out.sort_by_key(|t| (t.created_at, numeric_id(&t.key)));
         out
     }
@@ -1190,12 +1192,12 @@ impl TicketQueue {
     ///
     /// Your condition MUST NOT call another `TicketQueue` method that reads
     /// the ticket store, or the call deadlocks.
-    pub fn find_ticket<F>(&self, predicate: F) -> Option<Ticket>
-    where
-        F: Fn(&Ticket) -> bool,
-    {
+    pub fn find_ticket(&self, predicate: impl TicketMatcher) -> Option<Ticket> {
         let store = self.tickets.lock().unwrap();
-        let mut matching: Vec<&Ticket> = store.values().filter(|t| predicate(t)).collect();
+        let mut matching: Vec<&Ticket> = store
+            .values()
+            .filter(|t| predicate.matches(t))
+            .collect();
         matching.sort_by_key(|t| (t.created_at, numeric_id(&t.key)));
         matching.into_iter().next().cloned()
     }
@@ -1245,15 +1247,15 @@ impl TicketQueue {
     /// ticket store, or the claim path deadlocks.
     ///
     /// ```no_run
-    /// # use agentwerk::TicketQueue;
+    /// # use agentwerk::{Query, TicketQueue};
     /// let tickets = TicketQueue::new();
-    /// tickets.cancel(|t| t.has_label("scan")); // one pool
+    /// tickets.cancel(Query::new().label("scan"));
     /// ```
-    pub fn cancel<F>(&self, matches: F) -> &Self
-    where
-        F: Fn(&Ticket) -> bool + Send + Sync + 'static,
-    {
-        self.cancel_filters.lock().unwrap().push(Arc::new(matches));
+    pub fn cancel(&self, matches: impl TicketMatcher + 'static) -> &Self {
+        self.cancel_filters
+            .lock()
+            .unwrap()
+            .push(Arc::new(move |t: &Ticket| matches.matches(t)));
         self
     }
 
@@ -1262,7 +1264,7 @@ impl TicketQueue {
     /// [`Self::finish_all`] then reports `FinishReason::Cancelled`. Like
     /// [`Self::cancel`], nothing waits, so a ctrl-c handler can call it.
     pub fn cancel_all(&self) -> &Self {
-        self.cancel(|_| true)
+        self.cancel(|_: &Ticket| true)
     }
 
     /// Check whether a ticket has been cancelled.
@@ -1279,9 +1281,9 @@ impl TicketQueue {
     ///
     /// The one definition of "not done yet": the main loop asks it of every
     /// ticket to decide the run is over, and [`Self::finish`] asks it of a
-    /// subset. A ticket has work left while it is pending, uncancelled, and not
-    /// paused for a caller reply.
-    pub(crate) fn work_left(&self, matches: &dyn Fn(&Ticket) -> bool) -> bool {
+    /// subset. A ticket is pending while it is todo or in progress,
+    /// uncancelled, and not paused for a caller reply.
+    pub(crate) fn pending(&self, matches: &impl TicketMatcher) -> bool {
         // A terminal transition mid-flight may still add a follow-up ticket
         // from a handler, so it counts as work whatever the store says.
         if self.terminal_transitions_in_flight.load(Ordering::SeqCst) > 0 {
@@ -1290,7 +1292,7 @@ impl TicketQueue {
         let interactive = self.interactive_agents();
         let tickets = self.tickets.lock().unwrap();
         tickets.values().any(|t| {
-            matches(t)
+            matches.matches(t)
                 && t.is_pending()
                 && !self.is_cancelled(t)
                 && !(t.is_paused()
@@ -1326,7 +1328,7 @@ impl TicketQueue {
         cancelled.then_some(FinishReason::Cancelled)
     }
 
-    /// True while any ticket is still open. Stricter than [`Self::work_left`]:
+    /// True while any ticket is still open. Stricter than [`Self::pending`]:
     /// an interactive agent's paused ticket has no work for it right now, but a
     /// reply revives it, so the run is not over.
     fn anything_pending(&self) -> bool {
@@ -1447,23 +1449,20 @@ impl TicketQueue {
     /// deadlocks.
     ///
     /// ```no_run
-    /// # use agentwerk::TicketQueue;
+    /// # use agentwerk::{Query, TicketQueue};
     /// # async fn run() {
     /// let tickets = TicketQueue::new();
-    /// for finding in tickets.finish(|t| t.has_label("research")).await {
+    /// for finding in tickets.finish(Query::new().label("research")).await {
     ///     println!("{finding}");
     /// }
     /// # }
     /// ```
-    pub async fn finish<F>(&self, matches: F) -> Vec<serde_json::Value>
-    where
-        F: Fn(&Ticket) -> bool,
-    {
+    pub async fn finish(&self, matches: impl TicketMatcher) -> Vec<serde_json::Value> {
         if self.join_handle.lock().unwrap().is_none() {
             self.start();
         }
         let mut stream = self.event_stream.subscribe();
-        while self.work_left(&matches) {
+        while self.pending(&matches) {
             let ended = self.next_event_or_end(&mut stream).await;
             self.await_result_handlers().await;
             if ended {
@@ -1484,7 +1483,7 @@ impl TicketQueue {
         if self.run.is_finished() {
             self.join_handle.lock().unwrap().take();
         }
-        self.find_tickets(|t| matches(t) && t.is_finished())
+        self.find_tickets(|t: &Ticket| matches.matches(t) && t.is_finished())
             .into_iter()
             .filter_map(|t| t.result)
             .collect()
@@ -1508,7 +1507,7 @@ impl TicketQueue {
     /// # }
     /// ```
     pub async fn finish_all(&self) -> Vec<serde_json::Value> {
-        self.finish(|_| true).await
+        self.finish(|_: &Ticket| true).await
     }
 
     /// Wait for every ticket to be done, then get the last result in creation
@@ -1559,10 +1558,39 @@ impl TicketQueue {
     /// still running, or finished without a result, contributes nothing, so
     /// this is shorter than [`Self::tickets`] rather than aligned with it.
     pub fn results(&self) -> Vec<serde_json::Value> {
-        self.find_tickets(|t| t.status == Status::Finished && t.result.is_some())
+        self.find_tickets(|t: &Ticket| t.status == Status::Finished && t.result.is_some())
             .into_iter()
             .filter_map(|t| t.result)
             .collect()
+    }
+
+    /// Get every result whose ticket matches the query, in creation order.
+    ///
+    /// Status defaults to `Finished` when the query leaves it unset.
+    /// A caller that sets `.status(Status::Failed)` keeps that filter.
+    /// A ticket contributes a result only when it has one, so this is
+    /// shorter than the set the query named.
+    ///
+    /// ```no_run
+    /// # use agentwerk::{Query, TicketQueue};
+    /// let tickets = TicketQueue::new();
+    /// let scans = tickets.find_results(Query::new().label("scan"));
+    /// ```
+    pub fn find_results(&self, query: Query) -> Vec<serde_json::Value> {
+        let query = query.default_status(Status::Finished);
+        self.find_tickets(|t: &Ticket| query.matches(t) && t.result.is_some())
+            .into_iter()
+            .filter_map(|t| t.result)
+            .collect()
+    }
+
+    /// Get the earliest result whose ticket matches the query.
+    ///
+    /// Status defaults to `Finished` as in [`Self::find_results`].
+    pub fn find_result(&self, query: Query) -> Option<serde_json::Value> {
+        let query = query.default_status(Status::Finished);
+        self.find_ticket(|t: &Ticket| query.matches(t) && t.result.is_some())
+            .and_then(|t| t.result)
     }
 }
 
@@ -1580,7 +1608,7 @@ mod tests {
         alice.task("from alice");
         queue.task("from queue");
         let all_keys: Vec<String> = queue
-            .find_tickets(|t| t.status == Status::Todo)
+            .find_tickets(|t: &Ticket| t.status == Status::Todo)
             .iter()
             .map(|t| t.key.clone())
             .collect();
@@ -1594,7 +1622,7 @@ mod tests {
         queue.bind_agent(&mut alice);
         alice.task("first");
         alice.task("second");
-        assert_eq!(queue.find_tickets(|t| t.status == Status::Todo).len(), 2);
+        assert_eq!(queue.find_tickets(|t: &Ticket| t.status == Status::Todo).len(), 2);
     }
 
     #[test]
@@ -1651,30 +1679,30 @@ mod tests {
     }
 
     #[test]
-    fn work_left_on_a_todo_ticket() {
+    fn pending_on_a_todo_ticket() {
         let (queue, _tmp) = test_queue();
         queue.task("a");
-        assert!(queue.work_left(&|_| true));
+        assert!(queue.pending(&|_: &Ticket| true));
     }
 
     #[test]
-    fn work_left_only_for_the_matching_tickets() {
+    fn pending_only_for_the_matching_tickets() {
         let (queue, _tmp) = test_queue();
         queue.ticket(Ticket::new("a").label("research"));
-        assert!(queue.work_left(&|t| t.has_label("research")));
-        assert!(!queue.work_left(&|t| t.has_label("report")));
+        assert!(queue.pending(&|t: &Ticket| t.has_label("research")));
+        assert!(!queue.pending(&|t: &Ticket| t.has_label("report")));
     }
 
     #[test]
-    fn work_left_while_a_claimed_ticket_awaits_the_model() {
+    fn pending_while_a_claimed_ticket_awaits_the_model() {
         let (queue, _tmp) = test_queue();
         queue.task("x");
         queue.claim(|t| t.status == Status::Todo, "agent").unwrap();
-        assert!(queue.work_left(&|_| true));
+        assert!(queue.pending(&|_: &Ticket| true));
     }
 
     #[test]
-    fn work_left_when_a_text_only_reply_pauses_a_non_interactive_agent() {
+    fn pending_when_a_text_only_reply_pauses_a_non_interactive_agent() {
         let (queue, _tmp) = test_queue();
         queue.task("x");
         let key = queue.claim(|t| t.status == Status::Todo, "agent").unwrap();
@@ -1685,11 +1713,11 @@ mod tests {
             }]),
         );
         // Only an interactive agent waits on the caller; the rest are retried.
-        assert!(queue.work_left(&|_| true));
+        assert!(queue.pending(&|_: &Ticket| true));
     }
 
     #[test]
-    fn no_work_left_once_every_ticket_is_finished_or_failed() {
+    fn not_pending_once_every_ticket_is_finished_or_failed() {
         let (queue, _tmp) = test_queue();
         queue.task("a");
         queue.task("b");
@@ -1697,15 +1725,15 @@ mod tests {
         let key_b = queue.claim(|t| t.key == "TICKET-2", "agent").unwrap();
         queue.set_finished_by(&key_a, "agent").unwrap();
         queue.set_failed(&key_b).unwrap();
-        assert!(!queue.work_left(&|_| true));
+        assert!(!queue.pending(&|_: &Ticket| true));
     }
 
     #[test]
-    fn no_work_left_on_a_cancelled_ticket() {
+    fn not_pending_on_a_cancelled_ticket() {
         let (queue, _tmp) = test_queue();
         queue.ticket(Ticket::new("a").label("research"));
-        queue.cancel(|t| t.has_label("research"));
-        assert!(!queue.work_left(&|_| true));
+        queue.cancel(|t: &Ticket| t.has_label("research"));
+        assert!(!queue.pending(&|_: &Ticket| true));
     }
 
     #[test]
@@ -1867,7 +1895,7 @@ mod tests {
     #[test]
     fn cancel_takes_only_the_matching_tickets_off_the_queue() {
         let (queue, _tmp) = test_queue();
-        queue.cancel(|t| t.has_label("research"));
+        queue.cancel(|t: &Ticket| t.has_label("research"));
 
         assert!(queue.is_cancelled(&Ticket::new("x").label("research")));
         assert!(
@@ -1881,7 +1909,7 @@ mod tests {
     fn is_cancelled_reads_back_what_cancel_took_off_the_queue() {
         let (queue, _tmp) = test_queue();
         assert!(!queue.is_cancelled(&Ticket::new("x").label("research")));
-        queue.cancel(|t| t.has_label("research"));
+        queue.cancel(|t: &Ticket| t.has_label("research"));
         assert!(queue.is_cancelled(&Ticket::new("x").label("research")));
         assert!(
             !queue.is_cancelled(&Ticket::new("x").label("analysis")),
@@ -1948,7 +1976,7 @@ mod tests {
             attach_done_result(&writer, &claimed, "done");
         });
         let target = key.clone();
-        queue.finish(move |t| t.key == target).await;
+        queue.finish(move |t: &Ticket| t.key == target).await;
         assert!(queue.get_ticket(&key).unwrap().is_finished());
     }
 
@@ -1960,7 +1988,7 @@ mod tests {
         // Nothing emits from here on, so only the check before the wait can
         // resolve this.
         assert_eq!(
-            queue.finish(move |t| t.key == key).await,
+            queue.finish(move |t: &Ticket| t.key == key).await,
             vec![serde_json::json!("done")]
         );
     }
@@ -2185,7 +2213,7 @@ mod tests {
         queue.set_failed(&key).unwrap();
 
         let retry = queue
-            .find_ticket(|t| t.parent.as_deref() == Some(&key))
+            .find_ticket(|t: &Ticket| t.parent.as_deref() == Some(&key))
             .unwrap();
         assert_eq!(retry.task, serde_json::json!("work"));
     }
@@ -2201,7 +2229,7 @@ mod tests {
 
         queue.emit(&key, "agent", EventKind::TurnStarted);
 
-        assert_eq!(queue.find_tickets(|t| t.has_label("report")).len(), 1);
+        assert_eq!(queue.find_tickets(|t: &Ticket| t.has_label("report")).len(), 1);
     }
 
     #[test]
@@ -2216,7 +2244,7 @@ mod tests {
                 .then(|| Ticket::new("hunt").label("sniper"))
         });
         queue.emit(&key, "agent", EventKind::TicketFinished);
-        assert_eq!(queue.find_tickets(|t| t.has_label("sniper")).len(), 1);
+        assert_eq!(queue.find_tickets(|t: &Ticket| t.has_label("sniper")).len(), 1);
     }
 
     #[test]
@@ -2230,7 +2258,7 @@ mod tests {
             Some(Ticket::new("hunt").label("sniper").parent(&done.key))
         });
         queue.emit(&key, "agent", EventKind::TicketFinished);
-        let spawned = queue.find_ticket(|t| t.has_label("sniper")).unwrap();
+        let spawned = queue.find_ticket(|t: &Ticket| t.has_label("sniper")).unwrap();
         assert_eq!(spawned.parent, Some(key));
     }
 
@@ -2504,10 +2532,10 @@ mod tests {
         let scans = scans(&queue, 2);
 
         queue.set_finished(&scans[0], "clean").unwrap();
-        assert!(queue.find_tickets(|t| t.has_label("report")).is_empty());
+        assert!(queue.find_tickets(|t: &Ticket| t.has_label("report")).is_empty());
 
         queue.set_finished(&scans[1], "clean").unwrap();
-        assert_eq!(queue.find_tickets(|t| t.has_label("report")).len(), 1);
+        assert_eq!(queue.find_tickets(|t: &Ticket| t.has_label("report")).len(), 1);
     }
 
     #[test]
@@ -2526,7 +2554,7 @@ mod tests {
         queue.set_finished(&scans[1], 4).unwrap();
 
         let filed: Vec<serde_json::Value> = queue
-            .find_tickets(|t| t.has_label("review"))
+            .find_tickets(|t: &Ticket| t.has_label("review"))
             .into_iter()
             .map(|t| t.task)
             .collect();
@@ -2546,7 +2574,7 @@ mod tests {
         queue.set_finished_by(&key, "agent").unwrap();
         // The handler ran inside `set_finished_by`, so the queue is never
         // observably empty between the parent finishing and the follow-up.
-        assert!(queue.work_left(&|_| true));
+        assert!(queue.pending(&|_: &Ticket| true));
     }
 
     #[test]
@@ -2685,7 +2713,7 @@ mod tests {
         attach_done_result(&queue, "TICKET-2", "reported");
 
         assert_eq!(
-            queue.finish(|t| t.has_label("scan")).await,
+            queue.finish(|t: &Ticket| t.has_label("scan")).await,
             vec![serde_json::json!("scanned")]
         );
     }

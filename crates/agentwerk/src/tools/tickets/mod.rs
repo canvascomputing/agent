@@ -89,7 +89,7 @@ pub(super) fn resolve_current_key(
         .as_deref()
         .ok_or_else(|| ToolResult::error(ctx.directives.render(TICKET_KEY_MISSING, &[])))?;
     match ticket_queue
-        .find_ticket(|t| t.status == Status::InProgress && t.assignee.as_deref() == Some(agent_id))
+        .find_ticket(|t: &Ticket| t.status == Status::InProgress && t.assignee.as_deref() == Some(agent_id))
     {
         Some(t) => Ok(t.key.clone()),
         None => Err(ToolResult::error(
@@ -251,7 +251,7 @@ fn action_list(
         None => None,
     };
 
-    let pool: Vec<Ticket> = ticket_queue.find_tickets(|t| {
+    let pool: Vec<Ticket> = ticket_queue.find_tickets(|t: &Ticket| {
         let status_ok = match status {
             Some(s) => t.status == s,
             None => true,
@@ -282,7 +282,7 @@ fn action_list(
 
 fn action_search(ticket_queue: &TicketQueue, query: &str) -> ToolResult {
     let needle = query.to_lowercase();
-    let hits = ticket_queue.find_tickets(|t| match &t.task {
+    let hits = ticket_queue.find_tickets(|t: &Ticket| match &t.task {
         Value::String(s) => s.to_lowercase().contains(&needle),
         other => other.to_string().to_lowercase().contains(&needle),
     });
