@@ -7,27 +7,22 @@
         "ticket",
         "result",
         "list",
-        "search",
         "create",
         "edit"
       ],
-      "description": "Read: `ticket`, `result`, `list`, `search`. Write: `create`, `edit`."
+      "description": "Read: `ticket`, `result`, `list`. Write: `create`, `edit`."
     },
     "key": {
       "type": "string",
-      "description": "Ticket key (e.g. `TICKET-3`). Used by `ticket`, `result`, `edit`. Defaults to the agent's current ticket. Ignored by `create`, `list`, `search`."
+      "description": "Ticket key (e.g. `TICKET-3`). Used by `ticket`, `result`, `edit`. Defaults to the agent's current ticket. Ignored by `create`, `list`."
     },
-    "status": {
+    "aql": {
       "type": "string",
-      "description": "For `list`: filter by status. One of `Todo`, `InProgress`, `Finished`, `Failed`."
+      "description": "For `list`: which tickets to answer with, in AQL. Fields are `key`, `label`, `status`, `agent`, `parent`, `task`, `result`. Operators are `=`, `!=`, `IN (a, b)`, `NOT IN (a, b)`, `IS EMPTY`, `IS NOT EMPTY`, and on `task` and `result` the case-insensitive `~` and `!~`. Combine terms with `AND`, `OR`, `NOT`, and parentheses. A lone word is the label; a lone `TICKET-N` is that ticket. Status is one of `Todo`, `InProgress`, `Finished`, `Failed`. Leave out to answer with every ticket."
     },
     "label": {
       "type": "string",
-      "description": "For `list`: filter to tickets carrying this label (case-sensitive). For `create` or `edit` (optional): the ticket's label scope, which decides who picks it up: every agent serving that label may claim it. A ticket carries at most one label, and on `edit` the new one replaces the current one."
-    },
-    "query": {
-      "type": "string",
-      "description": "For `search`: case-insensitive substring matched against the task body."
+      "description": "For `create` or `edit` (optional): the ticket's label scope, which decides who picks it up: every agent serving that label may claim it. A ticket carries at most one label, and on `edit` the new one replaces the current one."
     },
     "task": {
       "type": ["string", "object", "array", "number", "boolean"],
@@ -41,13 +36,6 @@
     {
       "if": {
         "required": ["action"],
-        "properties": { "action": { "const": "search" } }
-      },
-      "then": { "required": ["query"] }
-    },
-    {
-      "if": {
-        "required": ["action"],
         "properties": { "action": { "const": "create" } }
       },
       "then": { "required": ["task"] }
@@ -56,8 +44,9 @@
   "examples": [
     { "action": "ticket" },
     { "action": "result", "key": "TICKET-3" },
-    { "action": "list", "status": "Todo", "label": "review" },
-    { "action": "search", "query": "retry budget" },
+    { "action": "list" },
+    { "action": "list", "aql": "status = Todo AND label = review" },
+    { "action": "list", "aql": "task ~ \"retry budget\" AND agent IS EMPTY" },
     {
       "action": "create",
       "task": "Check the retry budget on the upload path.",

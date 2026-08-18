@@ -16,7 +16,7 @@ use crate::convert::{py_to_value, runtime_error, value_to_py};
 use crate::event::{to_py_event, PyEvent};
 use crate::reply::{py_to_replies, replies_to_py};
 use crate::schema::PySchemaStore;
-use crate::ticket::{as_query, to_ticket, try_extract_query, PyTicket};
+use crate::ticket::{to_ticket, try_extract_query, PyTicket};
 
 /// The core data structure of agentwerk, coordinating complex work across
 /// agents.
@@ -396,7 +396,7 @@ impl PyTicketQueue {
 
     /// Get every ticket matching a Query or callable.
     fn find_tickets(&self, py: Python<'_>, predicate: Py<PyAny>) -> PyResult<Vec<Py<PyTicket>>> {
-        let tickets = match try_extract_query(py, &predicate) {
+        let tickets = match try_extract_query(py, &predicate)? {
             Some(query) => self.inner.find_tickets(query),
             None => self
                 .inner
@@ -410,7 +410,7 @@ impl PyTicketQueue {
 
     /// Get the earliest ticket matching a Query or callable.
     fn find_ticket(&self, py: Python<'_>, predicate: Py<PyAny>) -> PyResult<Option<Py<PyTicket>>> {
-        let ticket = match try_extract_query(py, &predicate) {
+        let ticket = match try_extract_query(py, &predicate)? {
             Some(query) => self.inner.find_ticket(query),
             None => self
                 .inner
@@ -566,7 +566,7 @@ impl PyTicketQueue {
     /// in creation order. Accepts a Query or callable. Awaitable.
     fn finish<'py>(&self, py: Python<'py>, matches: Py<PyAny>) -> PyResult<Bound<'py, PyAny>> {
         let inner = Arc::clone(&self.inner);
-        let query = try_extract_query(py, &matches);
+        let query = try_extract_query(py, &matches)?;
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let results = match query {
                 Some(q) => inner.finish(q).await,
@@ -621,14 +621,14 @@ impl PyTicketQueue {
     }
 
     /// Take every matching ticket off the queue. Accepts a Query or callable.
-    fn cancel<'py>(slf: PyRef<'py, Self>, matches: Py<PyAny>) -> PyRef<'py, Self> {
-        match try_extract_query(slf.py(), &matches) {
+    fn cancel<'py>(slf: PyRef<'py, Self>, matches: Py<PyAny>) -> PyResult<PyRef<'py, Self>> {
+        match try_extract_query(slf.py(), &matches)? {
             Some(query) => slf.inner.cancel(query),
             None => slf
                 .inner
                 .cancel(move |ticket: &Ticket| ticket_predicate(&matches, ticket)),
         };
-        slf
+        Ok(slf)
     }
 
     /// Take every ticket off the queue, which ends the run.
@@ -686,28 +686,36 @@ impl PyTicketQueue {
             .collect()
     }
 
-    /// Get every result whose ticket matches the Query or label, in creation
+    /// Get every result whose ticket matches the Query or callable, in creation
     /// order. Status defaults to `"finished"`.
     fn find_results<'py>(
         &self,
         py: Python<'py>,
         query: Py<PyAny>,
     ) -> PyResult<Vec<Bound<'py, PyAny>>> {
-        self.inner
-            .find_results(as_query(py, &query)?)
-            .iter()
-            .map(|value| value_to_py(py, value))
-            .collect()
+        let results = match try_extract_query(py, &query)? {
+            Some(parsed) => self.inner.find_results(parsed),
+            None => self
+                .inner
+                .find_results(|ticket: &Ticket| ticket_predicate(&query, ticket)),
+        };
+        results.iter().map(|value| value_to_py(py, value)).collect()
     }
 
-    /// Get the earliest result whose ticket matches the Query or label.
+    /// Get the earliest result whose ticket matches the Query or callable.
     /// Status defaults to `"finished"`.
     fn find_result<'py>(
         &self,
         py: Python<'py>,
         query: Py<PyAny>,
     ) -> PyResult<Option<Bound<'py, PyAny>>> {
-        match self.inner.find_result(as_query(py, &query)?) {
+        let result = match try_extract_query(py, &query)? {
+            Some(parsed) => self.inner.find_result(parsed),
+            None => self
+                .inner
+                .find_result(|ticket: &Ticket| ticket_predicate(&query, ticket)),
+        };
+        match result {
             Some(value) => Ok(Some(value_to_py(py, &value)?)),
             None => Ok(None),
         }

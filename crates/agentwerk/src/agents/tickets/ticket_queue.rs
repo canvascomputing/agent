@@ -22,7 +22,7 @@ use super::super::compaction::Compaction;
 use super::super::policy::Policies;
 use super::super::r#loop::run_main_loop;
 use super::super::stats::Stats;
-use super::query::{Query, TicketMatcher};
+use super::query::TicketMatcher;
 use super::ticket::{Status, Ticket};
 use super::{numeric_id, policy_violated_kind, Reply};
 
@@ -1560,19 +1560,20 @@ impl TicketQueue {
 
     /// Get every result whose ticket matches the query, in creation order.
     ///
-    /// Status defaults to `Finished` when the query leaves it unset.
-    /// A caller that sets `.status(Status::Failed)` keeps that filter.
-    /// A ticket contributes a result only when it has one, so this is
-    /// shorter than the set the query named.
+    /// Status defaults to `Finished` when the filter names none, which is
+    /// every closure and any query that leaves it unset. A caller that sets
+    /// `.status(Status::Failed)` keeps that filter. A ticket contributes a
+    /// result only when it has one, so this is shorter than the set the
+    /// filter named.
     ///
     /// ```no_run
     /// # use agentwerk::TicketQueue;
     /// let tickets = TicketQueue::new();
     /// let scans = tickets.find_results("scan");
     /// ```
-    pub fn find_results(&self, query: impl Into<Query>) -> Vec<serde_json::Value> {
-        let query = query.into().default_status(Status::Finished);
-        self.find_tickets(|t: &Ticket| query.matches(t) && t.result.is_some())
+    pub fn find_results(&self, matches: impl TicketMatcher) -> Vec<serde_json::Value> {
+        let finished_only = !matches.names_status();
+        self.find_tickets(|t: &Ticket| finished_results(&matches, finished_only, t))
             .into_iter()
             .filter_map(|t| t.result)
             .collect()
@@ -1581,11 +1582,17 @@ impl TicketQueue {
     /// Get the earliest result whose ticket matches the query.
     ///
     /// Status defaults to `Finished` as in [`Self::find_results`].
-    pub fn find_result(&self, query: impl Into<Query>) -> Option<serde_json::Value> {
-        let query = query.into().default_status(Status::Finished);
-        self.find_ticket(|t: &Ticket| query.matches(t) && t.result.is_some())
+    pub fn find_result(&self, matches: impl TicketMatcher) -> Option<serde_json::Value> {
+        let finished_only = !matches.names_status();
+        self.find_ticket(|t: &Ticket| finished_results(&matches, finished_only, t))
             .and_then(|t| t.result)
     }
+}
+
+/// Whether a ticket contributes to `find_results`: it matches, it carries a
+/// result, and it has finished unless the filter named a status of its own.
+fn finished_results(matches: &impl TicketMatcher, finished_only: bool, ticket: &Ticket) -> bool {
+    matches.matches(ticket) && (!finished_only || ticket.is_finished()) && ticket.result.is_some()
 }
 
 #[cfg(test)]
@@ -1688,6 +1695,74 @@ mod tests {
             queue.find_results("scan"),
             vec![serde_json::json!("scanned")]
         );
+    }
+
+    #[test]
+    fn find_results_defaults_to_finished_when_the_query_names_no_status() {
+        let (queue, _tmp) = test_queue();
+        queue.ticket(Ticket::labeled("scan", "a"));
+        queue.ticket(Ticket::labeled("scan", "b"));
+        attach_done_result(&queue, "TICKET-1", "scanned");
+        assert_eq!(
+            queue.find_results("scan"),
+            vec![serde_json::json!("scanned")]
+        );
+    }
+
+    #[test]
+    fn find_results_keeps_the_status_the_query_names() {
+        let (queue, _tmp) = test_queue();
+        queue.ticket(Ticket::labeled("scan", "a"));
+        attach_done_result(&queue, "TICKET-1", "scanned");
+        assert!(queue
+            .find_results("label = scan AND status = Todo")
+            .is_empty());
+    }
+
+    #[test]
+    fn find_results_takes_a_closure_in_place_of_a_query() {
+        let (queue, _tmp) = test_queue();
+        queue.ticket(Ticket::labeled("scan", "a"));
+        queue.ticket(Ticket::labeled("report", "b"));
+        attach_done_result(&queue, "TICKET-1", "scanned");
+        attach_done_result(&queue, "TICKET-2", "reported");
+        assert_eq!(
+            queue.find_results(|t: &Ticket| t.has_label("scan")),
+            vec![serde_json::json!("scanned")]
+        );
+    }
+
+    #[test]
+    fn find_results_defaults_a_closure_to_finished_tickets() {
+        let (queue, _tmp) = test_queue();
+        queue.ticket(Ticket::labeled("scan", "a"));
+        // A result attached without the finish transition, which the default
+        // leaves out because a closure names no status of its own.
+        queue
+            .set_result("TICKET-1", serde_json::json!("mid-flight"))
+            .unwrap();
+        assert!(queue
+            .find_results(|t: &Ticket| t.has_label("scan"))
+            .is_empty());
+    }
+
+    #[test]
+    fn find_tickets_takes_a_query_string_in_place_of_a_query() {
+        let (queue, _tmp) = test_queue();
+        queue.ticket(Ticket::labeled("scan", "a"));
+        queue.ticket(Ticket::labeled("report", "b"));
+        let found = queue.find_tickets("label IN (scan, report) AND status = Todo");
+        assert_eq!(found.len(), 2);
+    }
+
+    #[test]
+    fn find_tickets_takes_a_ticket_key_in_place_of_a_query() {
+        let (queue, _tmp) = test_queue();
+        queue.ticket(Ticket::labeled("scan", "a"));
+        queue.ticket(Ticket::labeled("report", "b"));
+        let found = queue.find_tickets("TICKET-2");
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].task, serde_json::json!("b"));
     }
 
     #[test]

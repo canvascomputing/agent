@@ -149,6 +149,24 @@ Schemas and results:
 - `TicketQueue::cancel_filters` holds what `cancel` took off the queue. The claim and resume path reads it through `is_cancelled(ticket)`, so a cancelled ticket is neither claimed nor resumed and an agent already holding one is taken off it. The ticket stays `InProgress`.
 - A filter runs while the ticket store lock is held, so it MUST NOT call back into the queue: the same rule `find_ticket` and `find_tickets` carry.
 
+## A String That Selects Tickets Is AQL
+
+**Every method taking a filter accepts a string, and the string is AQL: a query compiled by `Query::parse`. There is no second string meaning, and no method takes a bare label.**
+
+```rust
+tickets.find_tickets("scan");                    // label = scan
+tickets.find_results("TICKET-3");                // key = TICKET-3
+tickets.find_tickets("label IN (scan, report) AND status != Failed");
+```
+
+- `Query` holds a private condition tree of `All`, `Any`, `Not`, and one term per field. The builders push into the root `All`, so `Query::labeled("scan").status(s)` and the string that says the same compile to the same value.
+- A lone bare word is `key = <word>` when it is spelled `TICKET-<digits>` and `label = <word>` otherwise, which is what keeps a label the shortest thing you can write. A label named like a key needs `label = TICKET-3`.
+- `From<&str>` and `TicketMatcher for &str` are infallible by signature, so a string that does not compile panics, the way `ToolBuilder::schema` panics on a document the compiler refuses. `Query::parse` returns a `Result` for a string built at run time, and the Python bindings raise `ValueError` rather than panicking across the binding.
+- `TicketMatcher for &str` compiles the string once per ticket. A host filtering a large queue passes a `Query`.
+- `TicketMatcher::names_status` is what lets `find_results` and `find_result` take any filter and still default the status to `Finished`. `Query` answers it by walking its tree, the string impls by parsing, and a closure takes the `false` default, so a closure always gets the `Finished` filter. It is the one thing the trait knows beyond `matches`, and it exists because that default cannot be read off a closure.
+- Two equalities on one single-valued field are a parse error rather than a query no ticket satisfies, and the message names `IN` as the fix. An absent field fails every comparison, so `label != scan` never reaches an unlabelled ticket and `IS EMPTY` is what does.
+- The `tickets` tool takes the same syntax as its one `aql` argument, and answers a `QueryError` as a `ToolResult::Error` through `ticket_query_invalid`. Nothing on that path panics.
+
 ## The Run Names Its Own Ending
 
 **`run_main_loop` decides when a run is over and announces it once, rather than whichever caller happens to await. A limit breached while the host is busy elsewhere still ends the run.**
