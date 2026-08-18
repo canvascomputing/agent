@@ -115,7 +115,7 @@ directives! {
     TICKET_NOT_ASSIGNED = "ticket_not_assigned",
     TICKET_NOT_FOUND = "ticket_not_found",
     TICKET_RESULT_MISSING = "ticket_result_missing",
-    TICKET_STATUS_UNKNOWN = "ticket_status_unknown",
+    TICKET_QUERY_INVALID = "ticket_query_invalid",
     TICKET_EDIT_INCOMPLETE = "ticket_edit_incomplete",
     TICKET_TRANSITION_REJECTED = "ticket_transition_rejected",
     HANDOVER_RESULT_MISSING = "handover_result_missing",

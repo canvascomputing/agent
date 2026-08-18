@@ -5,10 +5,10 @@ use std::path::Path;
 
 use serde_json::Value;
 
-use crate::agents::tickets::{Status, Ticket, TicketError, TicketQueue};
+use crate::agents::tickets::{Query, Status, Ticket, TicketError, TicketQueue};
 use crate::prompts::directives::{
     DirectiveStore, TICKET_EDIT_INCOMPLETE, TICKET_KEY_MISSING, TICKET_NOT_ASSIGNED,
-    TICKET_NOT_FOUND, TICKET_QUEUE_UNAVAILABLE, TICKET_RESULT_MISSING, TICKET_STATUS_UNKNOWN,
+    TICKET_NOT_FOUND, TICKET_QUERY_INVALID, TICKET_QUEUE_UNAVAILABLE, TICKET_RESULT_MISSING,
     TICKET_TRANSITION_REJECTED,
 };
 
@@ -33,11 +33,7 @@ pub enum TicketsArgs {
         key: Option<String>,
     },
     List {
-        status: Option<String>,
-        label: Option<String>,
-    },
-    Search {
-        query: String,
+        aql: Option<String>,
     },
     Create {
         task: Value,
@@ -58,8 +54,7 @@ pub(super) fn dispatch(args: TicketsArgs, ctx: &ToolContext) -> ToolResult {
     match args {
         TicketsArgs::Ticket { key } => action_ticket(&queue, key, ctx),
         TicketsArgs::Result { key } => action_result(&queue, key, ctx),
-        TicketsArgs::List { status, label } => action_list(&queue, status, label, &ctx.directives),
-        TicketsArgs::Search { query } => action_search(&queue, &query),
+        TicketsArgs::List { aql } => action_list(&queue, aql, &ctx.directives),
         TicketsArgs::Create { task, label } => action_create(&queue, task, label, ctx),
         TicketsArgs::Edit { key, task, label } => action_edit(&queue, key, task, label, ctx),
     }
@@ -157,18 +152,6 @@ fn status_label(s: Status) -> &'static str {
     }
 }
 
-fn parse_status_for_list(s: &str, directives: &DirectiveStore) -> Result<Status, ToolResult> {
-    match s {
-        "Todo" => Ok(Status::Todo),
-        "InProgress" => Ok(Status::InProgress),
-        "Finished" => Ok(Status::Finished),
-        "Failed" => Ok(Status::Failed),
-        other => Err(ToolResult::error(
-            directives.render(TICKET_STATUS_UNKNOWN, &[("status", other)]),
-        )),
-    }
-}
-
 fn truncate_for_preview(s: &str, max: usize) -> String {
     let one_line = s.lines().next().unwrap_or("");
     if one_line.chars().count() <= max {
@@ -238,31 +221,20 @@ fn action_result(ticket_queue: &TicketQueue, key: Option<String>, ctx: &ToolCont
 
 fn action_list(
     ticket_queue: &TicketQueue,
-    status: Option<String>,
-    label: Option<String>,
+    aql: Option<String>,
     directives: &DirectiveStore,
 ) -> ToolResult {
-    let status = match status
-        .as_deref()
-        .map(|s| parse_status_for_list(s, directives))
-    {
-        Some(Ok(s)) => Some(s),
-        Some(Err(e)) => return e,
-        None => None,
+    let query = match aql.as_deref().map(Query::parse) {
+        Some(Ok(query)) => query,
+        Some(Err(error)) => {
+            return ToolResult::error(
+                directives.render(TICKET_QUERY_INVALID, &[("error", &error.to_string())]),
+            )
+        }
+        None => Query::new(),
     };
 
-    let pool: Vec<Ticket> = ticket_queue.find_tickets(|t: &Ticket| {
-        let status_ok = match status {
-            Some(s) => t.status == s,
-            None => true,
-        };
-        let label_ok = match label.as_deref() {
-            Some(l) => t.has_label(l),
-            None => true,
-        };
-        status_ok && label_ok
-    });
-
+    let pool: Vec<Ticket> = ticket_queue.find_tickets(query);
     if pool.is_empty() {
         return ToolResult::success("(no matching tickets)".to_string());
     }
@@ -272,29 +244,6 @@ fn action_list(
         .map(|t| task_preview(&t.task))
         .collect();
     let rows: Vec<SummaryRow<'_>> = pool
-        .iter()
-        .take(50)
-        .zip(previews.iter())
-        .map(|(t, p)| (t.key.as_str(), p.as_str(), t.status, t.label.as_deref()))
-        .collect();
-    ToolResult::success(render_summary_list(&rows))
-}
-
-fn action_search(ticket_queue: &TicketQueue, query: &str) -> ToolResult {
-    let needle = query.to_lowercase();
-    let hits = ticket_queue.find_tickets(|t: &Ticket| match &t.task {
-        Value::String(s) => s.to_lowercase().contains(&needle),
-        other => other.to_string().to_lowercase().contains(&needle),
-    });
-    if hits.is_empty() {
-        return ToolResult::success("(no matching tickets)".to_string());
-    }
-    let previews: Vec<String> = hits
-        .iter()
-        .take(50)
-        .map(|t| task_preview(&t.task))
-        .collect();
-    let rows: Vec<SummaryRow<'_>> = hits
         .iter()
         .take(50)
         .zip(previews.iter())
@@ -461,24 +410,82 @@ mod tests {
         assert!(unwrap_text(&result).contains("InProgress"));
     }
 
-    #[tokio::test]
-    async fn list_filters_by_status() {
+    /// Two tickets, the first claimed by `alice` and labelled `review`, the
+    /// second still Todo and unlabelled.
+    fn queue_with_two_tickets() -> Arc<TicketQueue> {
         let queue = TicketQueue::new();
         queue.dir(isolated_test_dir());
-        queue.insert(Ticket::new("a"), "tester".into());
+        queue.insert(Ticket::new("a").label("review"), "tester".into());
         queue.insert(Ticket::new("b"), "tester".into());
         queue.claim(|t| t.key == "TICKET-1", "alice");
+        queue
+    }
 
+    #[tokio::test]
+    async fn list_without_a_filter_returns_every_ticket() {
+        let queue = queue_with_two_tickets();
+        let ctx = ctx_with(Arc::clone(&queue), "alice");
+        let result = call(TicketsTool, serde_json::json!({"action": "list"}), &ctx).await;
+        let text = unwrap_text(&result);
+        assert!(text.contains("TICKET-1"), "{text}");
+        assert!(text.contains("TICKET-2"), "{text}");
+    }
+
+    #[tokio::test]
+    async fn list_filters_by_the_status_the_aql_names() {
+        let queue = queue_with_two_tickets();
         let ctx = ctx_with(Arc::clone(&queue), "alice");
         let result = call(
             TicketsTool,
-            serde_json::json!({"action": "list", "status": "InProgress"}),
+            serde_json::json!({"action": "list", "aql": "status = InProgress"}),
             &ctx,
         )
         .await;
         let text = unwrap_text(&result);
-        assert!(text.contains("TICKET-1"));
-        assert!(!text.contains("TICKET-2"));
+        assert!(text.contains("TICKET-1"), "{text}");
+        assert!(!text.contains("TICKET-2"), "{text}");
+    }
+
+    #[tokio::test]
+    async fn list_filters_by_a_boolean_aql() {
+        let queue = queue_with_two_tickets();
+        let ctx = ctx_with(Arc::clone(&queue), "alice");
+        let result = call(
+            TicketsTool,
+            serde_json::json!({"action": "list", "aql": "label = review OR status = Todo"}),
+            &ctx,
+        )
+        .await;
+        let text = unwrap_text(&result);
+        assert!(text.contains("TICKET-1"), "{text}");
+        assert!(text.contains("TICKET-2"), "{text}");
+    }
+
+    #[tokio::test]
+    async fn list_answers_no_matching_tickets_when_the_aql_selects_none() {
+        let queue = queue_with_two_tickets();
+        let ctx = ctx_with(Arc::clone(&queue), "alice");
+        let result = call(
+            TicketsTool,
+            serde_json::json!({"action": "list", "aql": "status = Finished"}),
+            &ctx,
+        )
+        .await;
+        assert!(unwrap_text(&result).contains("no matching tickets"));
+    }
+
+    #[tokio::test]
+    async fn an_invalid_aql_answers_with_the_parse_error() {
+        let queue = queue_with_two_tickets();
+        let ctx = ctx_with(Arc::clone(&queue), "alice");
+        let result = call(
+            TicketsTool,
+            serde_json::json!({"action": "list", "aql": "assignee = alice"}),
+            &ctx,
+        )
+        .await;
+        assert!(matches!(result, ToolResult::Error { .. }), "{result:?}");
+        assert!(unwrap_text(&result).contains("agent"));
     }
 
     #[tokio::test]

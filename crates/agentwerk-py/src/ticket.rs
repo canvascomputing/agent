@@ -46,9 +46,23 @@ impl PyQuery {
         Ok(PyQuery { inner: q })
     }
 
+    /// Compile an AQL string, the same syntax a string argument carries.
+    #[staticmethod]
+    fn parse(query: &str) -> PyResult<Self> {
+        Ok(PyQuery {
+            inner: to_query(query)?,
+        })
+    }
+
     fn __repr__(&self) -> String {
         format!("{:?}", self.inner)
     }
+}
+
+/// A string as a query, raising where the Rust `From` impl would panic: a
+/// Python caller gets `ValueError`, not a panic across the binding.
+fn to_query(query: &str) -> PyResult<Query> {
+    Query::parse(query).map_err(|error| pyo3::exceptions::PyValueError::new_err(format!("{error}")))
 }
 
 fn parse_status(s: &str) -> PyResult<Status> {
@@ -63,20 +77,17 @@ fn parse_status(s: &str) -> PyResult<Status> {
     }
 }
 
-/// Read a Python argument as a query: a `Query`, or a string naming a label.
-/// Falls back to `None` so the caller can try the callable path.
-pub fn try_extract_query(py: Python<'_>, arg: &Py<PyAny>) -> Option<Query> {
+/// Read a Python argument as a query: a `Query`, or a string in AQL. `None`
+/// means the argument is neither, so the caller can try the callable path; an
+/// error means it was a string that does not compile.
+pub fn try_extract_query(py: Python<'_>, arg: &Py<PyAny>) -> PyResult<Option<Query>> {
     if let Ok(query) = arg.extract::<PyRef<'_, PyQuery>>(py) {
-        return Some(query.inner.clone());
+        return Ok(Some(query.inner.clone()));
     }
-    arg.extract::<String>(py).ok().map(Query::from)
-}
-
-/// Read a Python argument that must be a query, raising where a callable has
-/// nothing to fall back to.
-pub fn as_query(py: Python<'_>, arg: &Py<PyAny>) -> PyResult<Query> {
-    try_extract_query(py, arg)
-        .ok_or_else(|| pyo3::exceptions::PyTypeError::new_err("expected a Query or a label string"))
+    match arg.extract::<String>(py) {
+        Ok(query) => to_query(&query).map(Some),
+        Err(_) => Ok(None),
+    }
 }
 
 /// Read a Python argument as a ticket: a `Ticket`, an `os.PathLike` naming the

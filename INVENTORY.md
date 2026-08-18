@@ -422,24 +422,60 @@ The rules the tables never repeat.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `trait TicketMatcher: Send + Sync { matches(ticket: Ticket): boolean }` | pub |
+| Rust | `trait TicketMatcher: Send + Sync { matches(ticket: Ticket): boolean, names_status(): boolean }` | pub |
 | Rust | `impl TicketMatcher for F where F: Fn(Ticket) => boolean + Send + Sync` | pub |
 | Rust | `impl TicketMatcher for &str` | pub |
 | Rust | `impl TicketMatcher for String` | pub |
-| Python | a label string stands in for the `Query` wherever one is accepted | |
-| Rust | `Query { key: string?, label: string?, status: Status?, agent: string?, parent_key: string? }` | pub |
+| Python | an AQL string stands in for the `Query` wherever one is accepted | |
+| Rust | `Query { root: Condition }` | pub |
 | Python | `Query(*, key=None, label=None, status=None, agent=None, parent_key=None)` | |
 | Rust | `Query.new(): Query` | pub |
 | Rust | `Query.labeled(label: string): Query` | pub |
+| Rust | `Query.parse(query: string): Query throws QueryError` | pub |
 | Rust | `Query.key(key: string): Query` | pub |
 | Rust | `Query.label(label: string): Query` | pub |
 | Rust | `Query.status(status: Status): Query` | pub |
 | Rust | `Query.agent(agent: string): Query` | pub |
 | Rust | `Query.parent_key(parent_key: string): Query` | pub |
-| Rust | `Query.default_status(status: Status): Query` | pub |
+| Rust | `Query.and(field: Field, matcher: Match): Query` | private |
 | Rust | `impl From<&str> for Query` | pub |
 | Rust | `impl From<String> for Query` | pub |
 | both | `impl TicketMatcher for Query` | pub |
+| Rust | `enum Condition { All(Condition[]), Any(Condition[]), Not(Condition), Term(Field, Match) }` | private |
+| Rust | `Condition.matches(ticket: Ticket): boolean` | private |
+| Rust | `Condition.mentions(field: Field): boolean` | private |
+| Rust | `enum Field { Key, Label, Status, Agent, Parent, Task, Result }` | private |
+| Rust | `FIELDS: [string, Field][]` | private |
+| Rust | `Field.named(name: string): Field?` | private |
+| Rust | `Field.name(): string` | private |
+| Rust | `Field.of(ticket: Ticket): string?` | private |
+| Rust | `Field.is_optional(): boolean` | private |
+| Rust | `Field.is_text(): boolean` | private |
+| Rust | `Field.allows(matcher: Match): boolean` | private |
+| Rust | `Field.operators(): string` | private |
+| Rust | `as_text(value: json): string` | private |
+| Rust | `enum Match { Is, IsNot, In, NotIn, Contains, Omits, Empty, NotEmpty }` | private |
+| Rust | `Match.test(value: string?): boolean` | private |
+| Rust | `enum QueryError { Blank, UnknownField, UnknownStatus, OperatorNotAllowed, RepeatedField, UnexpectedToken, UnexpectedEnd }` | pub |
+| Rust | `impl Display for QueryError` | pub |
+| Rust | `impl Error for QueryError` | pub |
+| Rust | `enum Token { Word, Quoted, Equals, NotEquals, Contains, Omits, Open, Close, Comma }` | private |
+| Rust | `Token.spelling(): string` | private |
+| Rust | `Token.is_keyword(keyword: string): boolean` | private |
+| Rust | `tokenize(query: string): Token[] throws QueryError` | private |
+| Rust | `parse_query(query: string): Condition throws QueryError` | private |
+| Rust | `Parser { tokens: Token[], at: number }` | private |
+| Rust | `Parser.any(): Condition throws QueryError` | private |
+| Rust | `Parser.all(): Condition throws QueryError` | private |
+| Rust | `Parser.unary(): Condition throws QueryError` | private |
+| Rust | `Parser.term(): Condition throws QueryError` | private |
+| Rust | `Parser.operator(field: Field): Match throws QueryError` | private |
+| Rust | `Parser.value(field: Field): string throws QueryError` | private |
+| Rust | `Parser.values(field: Field): string[] throws QueryError` | private |
+| Rust | `shorthand(word: string): Condition` | private |
+| Rust | `canonical(field: Field, value: string): string throws QueryError` | private |
+| Rust | `one_or(group: (Condition[]) => Condition, terms: Condition[]): Condition` | private |
+| Rust | `reject_repeated_field(terms: Condition[]): void throws QueryError` | private |
 
 ## `crates/agentwerk/src/agents/tickets/ticket_queue.rs`
 
@@ -564,10 +600,11 @@ The rules the tables never repeat.
 | Python | `TicketQueue.finish_reason(): str?`: the string it prints as, such as `policy_violated(turns)` | |
 | Rust | `TicketQueue.next_event_or_end(stream: Event): Promise<boolean>` | private |
 | both | `TicketQueue.results(): json[]` | pub |
-| both | `TicketQueue.find_results(query: Query): json[]` | pub |
-| both | `TicketQueue.find_results(label)`: a label string stands in for the `Query` | |
-| both | `TicketQueue.find_result(query: Query): json?` | pub |
-| both | `TicketQueue.find_result(label)`: a label string stands in for the `Query` | |
+| both | `TicketQueue.find_results(matches: TicketMatcher): json[]` | pub |
+| both | `TicketQueue.find_results(query)`: an AQL string stands in for the `Query` | |
+| both | `TicketQueue.find_result(matches: TicketMatcher): json?` | pub |
+| both | `TicketQueue.find_result(query)`: an AQL string stands in for the `Query` | |
+| Rust | `finished_results(matches: TicketMatcher, finished_only: boolean, ticket: Ticket): boolean` | private |
 
 ## `crates/agentwerk/src/agents/tickets/trajectory.rs`
 
@@ -876,7 +913,7 @@ One of the two public parts of `prompts`, beside `Text`: `Directive` reaches the
 |----------|------|------------|
 | Rust | `directives!(name = key, ..)`, declaring each key's crate-private `const`, its `Directive` constant, and its `ALL` entry | private |
 | Rust | `CATALOGUE: string[]` | private |
-| Rust | `Directive.REPLY_REJECTED: string = "reply_rejected"`, and one constant per catalogue heading, each also a crate-private `const` under the same name that the render sites write: `NO_TOOL_CALLED`, `ARGUMENTS_REJECTED`, `ARGUMENTS_EXPECTED`, `RESULT_SCHEMA_REQUIRED`, `SUMMARY_REQUESTED`, `KNOWLEDGE_INDEX_TRUNCATED`, `TOOL_NOT_FOUND`, `NO_TOOLS_REGISTERED`, `TOOL_PANICKED`, `TOOL_OUTPUT_EMPTY`, `TOOL_OUTPUT_OFFLOADED`, `EDIT_FILE_READ_FAILED`, `EDIT_FILE_OLD_STRING_NOT_FOUND`, `EDIT_FILE_OLD_STRING_NOT_UNIQUE`, `EDIT_FILE_WRITE_FAILED`, `WRITE_FILE_PARENT_NOT_CREATED`, `WRITE_FILE_FAILED`, `READ_FILE_PATH_IS_DIRECTORY`, `READ_FILE_PATH_IS_DIRECTORY_WITH_ENTRIES`, `READ_FILE_IS_BINARY`, `READ_FILE_NOT_FOUND`, `READ_FILE_FAILED`, `LIST_DIRECTORY_PATH_IS_FILE`, `LIST_DIRECTORY_NOT_FOUND`, `LIST_DIRECTORY_FAILED`, `PATH_HINT_DIRECTORY_LISTED`, `PATH_HINT_SUGGESTION`, `PATH_HINT_WORKING_DIRECTORY`, `COMMAND_CANCELLED`, `COMMAND_TIMED_OUT`, `COMMAND_NOT_STARTED`, `COMMAND_MISSING`, `COMMAND_SHELL_OPERATOR_FOUND`, `COMMAND_QUOTE_UNTERMINATED`, `COMMAND_CONTROL_CHARACTER_FOUND`, `COMMAND_ASSIGNMENT_FOUND`, `COMMAND_FLAG_DENIED`, `COMMAND_PATTERN_DENIED`, `COMMAND_NOT_ALLOWED`, `COMMAND_FLAG_NOT_ALLOWED`, `GREP_CANCELLED`, `GREP_TIMED_OUT`, `GREP_FAILED`, `GREP_GLOB_REJECTED`, `GREP_FILE_TYPE_UNKNOWN`, `GREP_PATTERN_REJECTED`, `CODE_PATTERN_REJECTED`, `CODE_CONSTRAINT_INCOMPLETE`, `CODE_CONSTRAINT_METAVARIABLE_UNKNOWN`, `CODE_CONSTRAINT_REGEX_REJECTED`, `FETCH_URL_TOO_LONG`, `FETCH_URL_SCHEME_MISSING`, `FETCH_URL_SCHEME_UNSUPPORTED`, `FETCH_URL_CREDENTIALS_PRESENT`, `FETCH_URL_HOST_MISSING`, `FETCH_URL_HOST_NOT_RESOLVABLE`, `FETCH_URL_TOO_MANY_REDIRECTS`, `FETCH_URL_REQUEST_FAILED`, `FETCH_URL_BODY_NOT_READ`, `FETCH_URL_RESPONSE_TOO_LARGE`, `FETCH_URL_REDIRECT_LOCATION_MISSING`, `KNOWLEDGE_PAGE_NOT_FOUND`, `KNOWLEDGE_WRITE_FAILED`, `KNOWLEDGE_REMOVE_FAILED`, `TICKET_QUEUE_UNAVAILABLE`, `TICKET_KEY_MISSING`, `TICKET_NOT_ASSIGNED`, `TICKET_NOT_FOUND`, `TICKET_RESULT_MISSING`, `TICKET_STATUS_UNKNOWN`, `TICKET_EDIT_INCOMPLETE`, `TICKET_TRANSITION_REJECTED`, `HANDOVER_RESULT_MISSING`, `FINISH_ARGUMENT_BLANK`, `SCHEMA_FALSE_REJECTED`, `SCHEMA_TYPE_MISMATCHED`, `SCHEMA_CONST_MISMATCHED`, `SCHEMA_ENUM_MISMATCHED`, `SCHEMA_ANY_OF_UNMATCHED`, `SCHEMA_ONE_OF_AMBIGUOUS`, `SCHEMA_NOT_MATCHED`, `SCHEMA_PROPERTY_MISSING`, `SCHEMA_PROPERTY_UNEXPECTED`, `SCHEMA_ARRAY_TOO_SHORT`, `SCHEMA_ARRAY_TOO_LONG`, `SCHEMA_STRING_TOO_SHORT`, `SCHEMA_STRING_TOO_LONG`, `SCHEMA_PATTERN_UNMATCHED`, `SCHEMA_NUMBER_TOO_SMALL`, `SCHEMA_NUMBER_TOO_LARGE`, `SCHEMA_HINT_UNQUOTE`, `SCHEMA_HINT_JSON`, `SCHEMA_HINT_QUOTE` | pub |
+| Rust | `Directive.REPLY_REJECTED: string = "reply_rejected"`, and one constant per catalogue heading, each also a crate-private `const` under the same name that the render sites write: `NO_TOOL_CALLED`, `ARGUMENTS_REJECTED`, `ARGUMENTS_EXPECTED`, `RESULT_SCHEMA_REQUIRED`, `SUMMARY_REQUESTED`, `KNOWLEDGE_INDEX_TRUNCATED`, `TOOL_NOT_FOUND`, `NO_TOOLS_REGISTERED`, `TOOL_PANICKED`, `TOOL_OUTPUT_EMPTY`, `TOOL_OUTPUT_OFFLOADED`, `EDIT_FILE_READ_FAILED`, `EDIT_FILE_OLD_STRING_NOT_FOUND`, `EDIT_FILE_OLD_STRING_NOT_UNIQUE`, `EDIT_FILE_WRITE_FAILED`, `WRITE_FILE_PARENT_NOT_CREATED`, `WRITE_FILE_FAILED`, `READ_FILE_PATH_IS_DIRECTORY`, `READ_FILE_PATH_IS_DIRECTORY_WITH_ENTRIES`, `READ_FILE_IS_BINARY`, `READ_FILE_NOT_FOUND`, `READ_FILE_FAILED`, `LIST_DIRECTORY_PATH_IS_FILE`, `LIST_DIRECTORY_NOT_FOUND`, `LIST_DIRECTORY_FAILED`, `PATH_HINT_DIRECTORY_LISTED`, `PATH_HINT_SUGGESTION`, `PATH_HINT_WORKING_DIRECTORY`, `COMMAND_CANCELLED`, `COMMAND_TIMED_OUT`, `COMMAND_NOT_STARTED`, `COMMAND_MISSING`, `COMMAND_SHELL_OPERATOR_FOUND`, `COMMAND_QUOTE_UNTERMINATED`, `COMMAND_CONTROL_CHARACTER_FOUND`, `COMMAND_ASSIGNMENT_FOUND`, `COMMAND_FLAG_DENIED`, `COMMAND_PATTERN_DENIED`, `COMMAND_NOT_ALLOWED`, `COMMAND_FLAG_NOT_ALLOWED`, `GREP_CANCELLED`, `GREP_TIMED_OUT`, `GREP_FAILED`, `GREP_GLOB_REJECTED`, `GREP_FILE_TYPE_UNKNOWN`, `GREP_PATTERN_REJECTED`, `CODE_PATTERN_REJECTED`, `CODE_CONSTRAINT_INCOMPLETE`, `CODE_CONSTRAINT_METAVARIABLE_UNKNOWN`, `CODE_CONSTRAINT_REGEX_REJECTED`, `FETCH_URL_TOO_LONG`, `FETCH_URL_SCHEME_MISSING`, `FETCH_URL_SCHEME_UNSUPPORTED`, `FETCH_URL_CREDENTIALS_PRESENT`, `FETCH_URL_HOST_MISSING`, `FETCH_URL_HOST_NOT_RESOLVABLE`, `FETCH_URL_TOO_MANY_REDIRECTS`, `FETCH_URL_REQUEST_FAILED`, `FETCH_URL_BODY_NOT_READ`, `FETCH_URL_RESPONSE_TOO_LARGE`, `FETCH_URL_REDIRECT_LOCATION_MISSING`, `KNOWLEDGE_PAGE_NOT_FOUND`, `KNOWLEDGE_WRITE_FAILED`, `KNOWLEDGE_REMOVE_FAILED`, `TICKET_QUEUE_UNAVAILABLE`, `TICKET_KEY_MISSING`, `TICKET_NOT_ASSIGNED`, `TICKET_NOT_FOUND`, `TICKET_RESULT_MISSING`, `TICKET_QUERY_INVALID`, `TICKET_EDIT_INCOMPLETE`, `TICKET_TRANSITION_REJECTED`, `HANDOVER_RESULT_MISSING`, `FINISH_ARGUMENT_BLANK`, `SCHEMA_FALSE_REJECTED`, `SCHEMA_TYPE_MISMATCHED`, `SCHEMA_CONST_MISMATCHED`, `SCHEMA_ENUM_MISMATCHED`, `SCHEMA_ANY_OF_UNMATCHED`, `SCHEMA_ONE_OF_AMBIGUOUS`, `SCHEMA_NOT_MATCHED`, `SCHEMA_PROPERTY_MISSING`, `SCHEMA_PROPERTY_UNEXPECTED`, `SCHEMA_ARRAY_TOO_SHORT`, `SCHEMA_ARRAY_TOO_LONG`, `SCHEMA_STRING_TOO_SHORT`, `SCHEMA_STRING_TOO_LONG`, `SCHEMA_PATTERN_UNMATCHED`, `SCHEMA_NUMBER_TOO_SMALL`, `SCHEMA_NUMBER_TOO_LARGE`, `SCHEMA_HINT_UNQUOTE`, `SCHEMA_HINT_JSON`, `SCHEMA_HINT_QUOTE` | pub |
 | Rust | `Directive.ALL: string[]` | pub |
 | Python | `Directive.ALL` is not published; `register` walks it to set the key constants | |
 | Rust | `Directive { }`, the key namespace | pub |
@@ -1664,8 +1701,7 @@ Not bound: it is how `CommandTool` reads one command line.
 | Python | not bound: the model sends these fields as the tool's input | |
 | Rust | `TicketsArgs.Ticket { key: string? }` | pub |
 | Rust | `TicketsArgs.Result { key: string? }` | pub |
-| Rust | `TicketsArgs.List { status: string?, label: string? }` | pub |
-| Rust | `TicketsArgs.Search { query: string }` | pub |
+| Rust | `TicketsArgs.List { aql: string? }` | pub |
 | Rust | `TicketsArgs.Create { task: json, label: string? }` | pub |
 | Rust | `TicketsArgs.Edit { key: string?, task: json?, label: string? }` | pub |
 | Rust | `dispatch(args: TicketsArgs, ctx: ToolContext): ToolResult` | super |
@@ -1676,15 +1712,13 @@ Not bound: it is how `CommandTool` reads one command line.
 | Rust | `render_result(key: string, path: string, result: json): string` | private |
 | Rust | `push_value(out: string, value: json): void` | private |
 | Rust | `status_label(s: Status): string` | private |
-| Rust | `parse_status_for_list(s: string): Status throws ToolResult` | private |
 | Rust | `truncate_for_preview(s: string, max: number): string` | private |
 | Rust | `SummaryRow = [string, string, Status, string?]` | private |
 | Rust | `render_summary_list(tickets: SummaryRow[]): string` | private |
 | Rust | `task_preview(task: json): string` | private |
 | Rust | `action_ticket(ticket_queue: TicketQueue, key: string?, ctx: ToolContext): ToolResult` | private |
 | Rust | `action_result(ticket_queue: TicketQueue, key: string?, ctx: ToolContext): ToolResult` | private |
-| Rust | `action_list(ticket_queue: TicketQueue, status: string?, label: string?): ToolResult` | private |
-| Rust | `action_search(ticket_queue: TicketQueue, query: string): ToolResult` | private |
+| Rust | `action_list(ticket_queue: TicketQueue, aql: string?): ToolResult` | private |
 | Rust | `action_create(ticket_queue: TicketQueue, task: json, label: string?, ctx: ToolContext): ToolResult` | private |
 | Rust | `action_edit(ticket_queue: TicketQueue, key: string?, new_task: json?, new_label: string?, ctx: ToolContext): ToolResult` | private |
 
@@ -2005,10 +2039,11 @@ Binds `agents/tickets/ticket.rs` and `agents/tickets/query.rs`.
 |----------|------|------------|
 | Rust | `PyQuery { inner: Query }` | python |
 | Rust | `PyQuery.new(key: string?, label: string?, status: string?, agent: string?, parent_key: string?): PyQuery throws PyErr` | python |
+| Rust | `PyQuery.parse(query: string): PyQuery throws PyErr` | python |
 | Rust | `PyQuery.__repr__(): string` | python |
 | Rust | `parse_status(s: string): Status throws PyErr` | private |
-| Rust | `try_extract_query(arg: any): Query?` | pub |
-| Rust | `as_query(arg: any): Query throws PyErr` | pub |
+| Rust | `to_query(query: string): Query throws PyErr` | private |
+| Rust | `try_extract_query(arg: any): Query? throws PyErr` | pub |
 | Rust | `to_ticket(arg: any): Ticket throws PyErr`, reading an `os.PathLike` as the file holding the task | pub |
 | Rust | `PyTicket { inner: Ticket }` | python |
 | Rust | `PyTicket.new(task: any, label: string?, schema: PySchema?, parent: string?): PyTicket throws PyErr` | python |
@@ -2095,7 +2130,7 @@ Binds `agents/tickets/ticket_queue.rs` and `store.rs`.
 | Rust | `PyTicketQueue.finish_all(): Promise<any[]> throws PyErr` | python |
 | Rust | `PyTicketQueue.finish_last(): Promise<any?> throws PyErr` | python |
 | Rust | `PyTicketQueue.finish_reason(): string?` | python |
-| Rust | `PyTicketQueue.cancel(matches: any): PyTicketQueue` | python |
+| Rust | `PyTicketQueue.cancel(matches: any): PyTicketQueue throws PyErr` | python |
 | Rust | `PyTicketQueue.cancel_all(): PyTicketQueue` | python |
 | Rust | `PyTicketQueue.is_cancelled(ticket: PyTicket): boolean` | python |
 | Rust | `PyTicketQueue.find_events(predicate: any): PyEvent[]` | python |
@@ -2104,8 +2139,8 @@ Binds `agents/tickets/ticket_queue.rs` and `store.rs`.
 | Rust | `PyTicketQueue.output_tokens(): number` | python |
 | Rust | `PyTicketQueue.execution_duration(): number?` | python |
 | Rust | `PyTicketQueue.results(): any[] throws PyErr` | python |
-| Rust | `PyTicketQueue.find_results(query: PyQuery): any[] throws PyErr` | python |
-| Rust | `PyTicketQueue.find_result(query: PyQuery): any? throws PyErr` | python |
+| Rust | `PyTicketQueue.find_results(query: any): any[] throws PyErr` | python |
+| Rust | `PyTicketQueue.find_result(query: any): any? throws PyErr` | python |
 | Rust | `call_with_result(py: Python, callable: any, ticket: Ticket, result: json): any throws PyErr` | private |
 | Rust | `call_with_ticket(py: Python, callable: any, event: Event, ticket: Ticket): any throws PyErr` | private |
 | Rust | `call_with_results(py: Python, callable: any, results: json[]): any throws PyErr` | private |

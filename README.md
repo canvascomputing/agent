@@ -238,11 +238,11 @@ tickets.ticket(Ticket::labeled("report", "Write up the ranking."));
 | | `get_dir()` | Get the session directory. |
 | **Submit** | `ticket(task)` | Submit a task, or a `Ticket` carrying a label or schema, and return its ticket key. |
 | **Read** | `results()` | Get the result of every finished ticket, in creation order. |
-| | `find_results(query)` | Get every result whose ticket matches a `Query` or label. |
-| | `find_result(query)` | Get the earliest result whose ticket matches a `Query` or label. |
+| | `find_results(query)` | Get every result whose ticket matches a `Query` or an AQL string. |
+| | `find_result(query)` | Get the earliest result whose ticket matches a `Query` or an AQL string. |
 | | `tickets()` | Get every ticket in creation order. |
-| | `find_ticket(query)` | Get the earliest ticket matching a `Query`, label, or closure. |
-| | `find_tickets(query)` | Get every ticket matching a `Query`, label, or closure. |
+| | `find_ticket(query)` | Get the earliest ticket matching a `Query` or an AQL string. |
+| | `find_tickets(query)` | Get every ticket matching a `Query` or an AQL string. |
 | | `get_ticket(key)` | Get one ticket by key. |
 | **Drive** | `reply(key, content)` | Add a reply to a ticket. |
 | | `edit_replies(key, editor)` | Rewrite a ticket's replies now. |
@@ -250,6 +250,59 @@ tickets.ticket(Ticket::labeled("report", "Write up the ranking."));
 | | `set_failed(key)` | Fail a ticket. |
 
 See [`TicketQueue`](https://docs.rs/agentwerk/latest/agentwerk/agents/tickets/struct.TicketQueue.html).
+
+</details>
+
+### Queries
+
+You can query tickets with AQL, the agentwerk query syntax, or with a `Query` built field by field.
+
+```rust
+tickets.find_tickets("scan");
+tickets.find_results("TICKET-3");
+tickets.find_tickets("label IN (scan, report) AND status = Finished");
+tickets.find_tickets(Query::labeled("scan").status(Status::Finished));
+```
+
+<details>
+<summary>All query terms</summary>
+
+| | Term | Description |
+|-|------|-------------|
+| **Match** | `label = scan` | Select the tickets carrying the label `scan`. |
+| | `label != scan` | Exclude that label, and every ticket carrying none. |
+| | `label IN (scan, report)` | Select the tickets carrying either label. |
+| | `label NOT IN (scan, report)` | Exclude both labels. |
+| | `label IS EMPTY` | Select the tickets carrying no label. |
+| | `label IS NOT EMPTY` | Select the tickets carrying one. |
+| **Search** | `task ~ "retry budget"` | Search the task body, ignoring case. |
+| | `task !~ draft` | Exclude the tasks the text appears in. |
+| **Combine** | `A AND B` | Require both terms; `AND` binds tighter than `OR`. |
+| | `A OR B` | Require either term. |
+| | `NOT A` | Invert a term or a group. |
+| | `(A OR B) AND C` | Group terms with parentheses. |
+| **Shorten** | `scan` | Select the label `scan`, the short form of `label = scan`. |
+| | `TICKET-3` | Select one ticket by key, the short form of `key = TICKET-3`. |
+
+Fields:
+
+| | Field | Description |
+|-|-------|-------------|
+| **Identity** | `key` | Match the ticket key, of the form `TICKET-N`. |
+| | `label` | Match the label the ticket carries. |
+| | `parent` | Match the ticket a handover came from. |
+| | `agent` | Match the agent that claimed the ticket. |
+| **Outcome** | `status` | Match `Todo`, `InProgress`, `Finished`, or `Failed`. |
+| | `result` | Search the result the agent produced. |
+| **Body** | `task` | Search the work the agent was asked to do. |
+
+`=`, `!=`, `IN`, and `NOT IN` compare exactly; `~` and `!~` ignore case. `IS EMPTY` reads `label`, `agent`, `parent`, and `result` only, and `~` reads `task` and `result` only. A field holds one value per ticket, so `label = a AND label = b` is rejected and names `IN` as the fix. A string that does not compile panics; use `Query::parse` for one built at run time, which returns a `Result`.
+
+Every method that takes a query also takes a closure, for a condition no field carries:
+
+```rust
+tickets.find_tickets(|t: &Ticket| t.replies.len() > 4);
+```
 
 </details>
 

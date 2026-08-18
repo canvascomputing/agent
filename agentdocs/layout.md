@@ -50,6 +50,7 @@ crates/
 - `mod.rs` re-exports them and hosts the free helpers `policy_violated`, `policy_violated_kind`, `now_millis`, `numeric_id`.
 - `ticket.rs`: `Ticket`, `Status`, the `Replies` log helper, and the `tickets/<key>/...` path helpers. `reply.rs`: `Author`, `Reply`, `ReplyContent`, and their conversions to and from `providers::Message` and `ContentBlock`. `error.rs`: `TicketError`.
 - `ticket_queue.rs`: constructors, configuration, policy builders, ticket creation, agent binding, run lifecycle, results, and queries. `store.rs`: the store mutations (`insert`, `claim`, `set_finished`, `edit_replies`, transition recording).
+- `query.rs`: `TicketMatcher`, `Query` and its private condition tree, and the AQL tokenizer, parser, and `QueryError` that compile a string into one.
 - `trajectory.rs`: `Trajectory`, a ticket's replies captured as a training example, its `trajectories/<key>.json` write, and the `.html` rendering written beside it.
 
 `loop/` holds the multi-agent loop, split by state:

@@ -15,8 +15,8 @@ No ticket {key}. The `list` action shows every ticket that exists.
 ## ticket_result_missing
 Ticket {key} has no result yet, it is {status}. Read it again once it is finished.
 
-## ticket_status_unknown
-No status named `{status}`. Use one of Todo, InProgress, Finished, Failed.
+## ticket_query_invalid
+{error}
 
 ## ticket_edit_incomplete
 An edit needs at least one of `task` or `label`. Give the one you want changed.

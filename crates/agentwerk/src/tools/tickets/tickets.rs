@@ -61,7 +61,7 @@ mod tests {
             .collect();
         assert_eq!(
             advertised,
-            BTreeSet::from(["action", "key", "status", "label", "query", "task"]),
+            BTreeSet::from(["action", "aql", "key", "label", "task"]),
         );
     }
 }
