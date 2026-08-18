@@ -14,6 +14,7 @@
   <a href="#quick-start">Quick Start</a> •
   <a href="#api">API</a> •
   <a href="#use-cases">Use Cases</a> •
+  <a href="#security">Security</a> •
   <a href="#development">Development</a>
 </div>
 
@@ -838,6 +839,10 @@ Example projects built with agentwerk:
 ```bash
 python examples/divide_and_conquer.py 200 4 2
 ```
+
+## Security
+
+Report a vulnerability to security@canvascomputing.org, not in a public issue. See [SECURITY.md](https://github.com/canvascomputing/agentwerk/blob/main/SECURITY.md).
 
 ## Development
 

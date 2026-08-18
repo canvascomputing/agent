@@ -413,7 +413,7 @@ Also:
 
 **Terse, example-driven, scannable.**
 
-- Fixed section order: Why use agentwerk?, Installation, Quick Start, Agent Swarms, Demo, the API sections, Use Cases, Development.
+- Fixed section order: Why use agentwerk?, Installation, Quick Start, Agent Swarms, Demo, the API sections, Use Cases, Security, Development.
 - The opening section is one bullet per reason to reach for the crate: `**Reason:** one short sentence`. A reason with nothing behind it is marketing and is cut. It runs before the reader has met a single agentwerk concept, so it carries no identifier, no type or function name, and none of the domain vocabulary the API sections introduce. "Task" and "agent" are the only nouns assumed.
 - API sections run in the order a new reader needs them: Agents, Tickets, Tools, Events, Knowledge. Sessions is a subsection of Tickets.
 - Prompting has no section of its own. `role`, `task`, and the template bindings configure an agent, so they live in Agents next to `name` and `tool`.

@@ -14,6 +14,7 @@
   <a href="#quick-start">Quick Start</a> •
   <a href="#api">API</a> •
   <a href="#use-cases">Use Cases</a> •
+  <a href="#security">Security</a> •
   <a href="#development">Development</a>
 </div>
 
@@ -823,6 +824,10 @@ Example projects built with agentwerk:
 make use_case                # list available names
 make use_case name=<name>    # run one
 ```
+
+## Security
+
+Report a vulnerability to security@canvascomputing.org, not in a public issue. See [SECURITY.md](SECURITY.md).
 
 ## Development
 
