@@ -149,7 +149,7 @@ fn hand_over(
     let child = Ticket::new(body).label(&handover).parent(parent_key);
 
     // Insert the child BEFORE finishing the parent: the child is already
-    // `Todo` when the parent leaves the queue, so a concurrent `work_left`
+    // `Todo` when the parent leaves the queue, so a concurrent `pending`
     // check never reads false and `finish` cannot end the chain mid-handover.
     // `parent_key` is resolved and `InProgress`, so `set_finished_by` cannot
     // miss it and leave the inserted child orphaned.

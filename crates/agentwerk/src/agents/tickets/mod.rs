@@ -8,6 +8,7 @@ use super::policy::Policies;
 use super::stats::Stats;
 
 mod error;
+mod query;
 mod reply;
 mod store;
 mod ticket;
@@ -18,6 +19,7 @@ mod trajectory;
 pub(super) mod test_util;
 
 pub use error::TicketError;
+pub use query::{Query, TicketMatcher};
 pub use reply::{Author, Reply, ReplyContent};
 pub use ticket::{Status, Ticket};
 pub use ticket_queue::TicketQueue;

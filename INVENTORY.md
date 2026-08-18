@@ -258,7 +258,7 @@ The rules the tables never repeat.
 |----------|------|------------|
 | Rust | `mod agent`, `mod compaction`, `mod knowledge`, `mod loop`, `mod tickets` | pub |
 | Rust | `mod policy`, `mod retry`, `mod stats` | crate |
-| Rust | re-exports `Agent`, `AgentBuilder`, `Compaction`, `Knowledge`, `Reply`, `Status`, `Ticket`, `TicketError`, `TicketQueue`, `Trajectory` | pub |
+| Rust | re-exports `Agent`, `AgentBuilder`, `Compaction`, `Knowledge`, `Query`, `Reply`, `Status`, `Ticket`, `TicketError`, `TicketQueue`, `Trajectory` | pub |
 
 ## `crates/agentwerk/src/agents/policy.rs`
 
@@ -316,8 +316,8 @@ The rules the tables never repeat.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `mod error`, `mod reply`, `mod store`, `mod ticket`, `mod ticket_queue`, `mod trajectory` | private |
-| Rust | re-exports `Author`, `Reply`, `ReplyContent`, `Status`, `Ticket`, `TicketError`, `TicketQueue`, `Trajectory` | pub |
+| Rust | `mod error`, `mod query`, `mod reply`, `mod store`, `mod ticket`, `mod ticket_queue`, `mod trajectory` | private |
+| Rust | re-exports `Author`, `Query`, `Reply`, `ReplyContent`, `Status`, `Ticket`, `TicketError`, `TicketMatcher`, `TicketQueue`, `Trajectory` | pub |
 | Rust | `policy_violated_kind(policies: Policies, stats: Stats): [PolicyKind, number]?` | crate |
 | Rust | `now_millis(): number` | crate |
 | Rust | `numeric_id(key: string): number` | crate |
@@ -410,6 +410,23 @@ The rules the tables never repeat.
 | Rust | `Status.Finished` | pub |
 | Rust | `Status.Failed` | pub |
 | Rust | `impl Display for Status` | pub |
+
+## `crates/agentwerk/src/agents/tickets/query.rs`
+
+| Language | Item | Visibility |
+|----------|------|------------|
+| Rust | `trait TicketMatcher: Send + Sync { matches(ticket: Ticket): boolean }` | pub |
+| Rust | `impl TicketMatcher for F where F: Fn(Ticket) => boolean + Send + Sync` | pub |
+| Rust | `Query { key: string?, label: string?, status: Status?, agent: string?, parent_key: string? }` | pub |
+| Python | `Query(*, key=None, label=None, status=None, agent=None, parent_key=None)` | |
+| Rust | `Query.new(): Query` | pub |
+| Rust | `Query.key(key: string): Query` | pub |
+| Rust | `Query.label(label: string): Query` | pub |
+| Rust | `Query.status(status: Status): Query` | pub |
+| Rust | `Query.agent(agent: string): Query` | pub |
+| Rust | `Query.parent_key(parent_key: string): Query` | pub |
+| Rust | `Query.default_status(status: Status): Query` | pub |
+| both | `impl TicketMatcher for Query` | pub |
 
 ## `crates/agentwerk/src/agents/tickets/ticket_queue.rs`
 
@@ -507,14 +524,17 @@ The rules the tables never repeat.
 | Rust | `TicketQueue.dispatch(ticket: Ticket): string` | private |
 | both | `TicketQueue.get_ticket(key: string): Ticket?` | pub |
 | both | `TicketQueue.tickets(): Ticket[]` | pub |
-| both | `TicketQueue.find_tickets(predicate: (ticket: Ticket) => boolean): Ticket[]` | pub |
-| both | `TicketQueue.find_ticket(predicate: (ticket: Ticket) => boolean): Ticket?` | pub |
+| both | `TicketQueue.find_tickets(predicate: TicketMatcher): Ticket[]` | pub |
+| Python | `TicketQueue.find_tickets(predicate)`: accepts a `Query` or a callable | |
+| both | `TicketQueue.find_ticket(predicate: TicketMatcher): Ticket?` | pub |
+| Python | `TicketQueue.find_ticket(predicate)`: accepts a `Query` or a callable | |
 | both | `TicketQueue.find_events(predicate: (event: Event) => boolean): Event[]` | pub |
 | both | `TicketQueue.find_event(predicate: (event: Event) => boolean): Event?` | pub |
-| both | `TicketQueue.cancel(matches: (ticket: Ticket) => boolean): TicketQueue` | pub |
+| both | `TicketQueue.cancel(matches: TicketMatcher): TicketQueue` | pub |
+| Python | `TicketQueue.cancel(matches)`: accepts a `Query` or a callable | |
 | both | `TicketQueue.cancel_all(): TicketQueue` | pub |
 | both | `TicketQueue.is_cancelled(ticket: Ticket): boolean` | pub |
-| Rust | `TicketQueue.work_left(matches: (ticket: Ticket) => boolean): boolean` | crate |
+| Rust | `TicketQueue.pending(matches: TicketMatcher): boolean` | crate |
 | Rust | `TicketQueue.ending_reason(): FinishReason?` | crate |
 | Rust | `TicketQueue.anything_pending(): boolean` | private |
 | Rust | `TicketQueue.is_running(): boolean` | private |
@@ -523,13 +543,16 @@ The rules the tables never repeat.
 | Rust | `TicketQueue.clone_agents(): Agent[]` | crate |
 | both | `TicketQueue.agent(agent: Agent): TicketQueue` | pub |
 | both | `TicketQueue.start(): TicketQueue` | pub |
-| both | `TicketQueue.finish(matches: (ticket: Ticket) => boolean): Promise<json[]>` | pub |
+| both | `TicketQueue.finish(matches: TicketMatcher): Promise<json[]>` | pub |
+| Python | `TicketQueue.finish(matches)`: accepts a `Query` or a callable | |
 | both | `TicketQueue.finish_all(): Promise<json[]>` | pub |
 | both | `TicketQueue.finish_last(): Promise<json?>` | pub |
 | Rust | `TicketQueue.finish_reason(): FinishReason?` | pub |
 | Python | `TicketQueue.finish_reason(): str?`: the string it prints as, such as `policy_violated(turns)` | |
 | Rust | `TicketQueue.next_event_or_end(stream: Event): Promise<boolean>` | private |
 | both | `TicketQueue.results(): json[]` | pub |
+| both | `TicketQueue.find_results(query: Query): json[]` | pub |
+| both | `TicketQueue.find_result(query: Query): json?` | pub |
 
 ## `crates/agentwerk/src/agents/tickets/trajectory.rs`
 
@@ -801,7 +824,7 @@ Not bound, like the rest of `codegrep`.
 |----------|------|------------|
 | Rust | `mod agents`, `mod codegrep`, `mod event`, `mod providers`, `mod schemas`, `mod tools` | pub |
 | Rust | `mod persistence`, `mod prompts` | crate |
-| Rust | re-exports `Agent`, `AgentBuilder`, `Reply`, `Status`, `Ticket`, `TicketQueue`, `Compaction`, `Knowledge`, `Trajectory`, `Schema`, `SchemaStore`, `Event`, `EventKind`, `FinishReason` | pub |
+| Rust | re-exports `Agent`, `AgentBuilder`, `Query`, `Reply`, `Status`, `Ticket`, `TicketQueue`, `Compaction`, `Knowledge`, `Trajectory`, `Schema`, `SchemaStore`, `Event`, `EventKind`, `FinishReason` | pub |
 | Python | `agentwerk` exports every bound class from one flat module | |
 
 ## `crates/agentwerk/src/persistence.rs`
@@ -2045,6 +2068,8 @@ Binds `agents/tickets/ticket_queue.rs` and `store.rs`.
 | Rust | `PyTicketQueue.output_tokens(): number` | python |
 | Rust | `PyTicketQueue.execution_duration(): number?` | python |
 | Rust | `PyTicketQueue.results(): any[] throws PyErr` | python |
+| Rust | `PyTicketQueue.find_results(query: PyQuery): any[] throws PyErr` | python |
+| Rust | `PyTicketQueue.find_result(query: PyQuery): any? throws PyErr` | python |
 | Rust | `call_with_result(py: Python, callable: any, ticket: Ticket, result: json): any throws PyErr` | private |
 | Rust | `call_with_ticket(py: Python, callable: any, event: Event, ticket: Ticket): any throws PyErr` | private |
 | Rust | `call_with_results(py: Python, callable: any, results: json[]): any throws PyErr` | private |

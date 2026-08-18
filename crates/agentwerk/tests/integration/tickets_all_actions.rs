@@ -94,7 +94,7 @@ async fn walks_every_ticket_action() -> std::result::Result<(), Box<dyn std::err
     // for nobody, so they stay `Todo` and a wait on the whole queue only ever
     // ends at the time cap.
     tickets
-        .finish(|t| t.has_label("archive") || t.has_label("auditor"))
+        .finish(|t: &agentwerk::Ticket| t.has_label("archive") || t.has_label("auditor"))
         .await;
     common::print_result(&tickets);
 
@@ -110,7 +110,7 @@ async fn walks_every_ticket_action() -> std::result::Result<(), Box<dyn std::err
     );
 
     let audit = tickets
-        .find_ticket(|t| t.has_label("auditor") && t.is_finished())
+        .find_ticket(|t: &agentwerk::Ticket| t.has_label("auditor") && t.is_finished())
         .expect("the auditor must finish the ticket handed to it");
     let answer = audit.result.unwrap_or_default().to_string();
     assert!(
