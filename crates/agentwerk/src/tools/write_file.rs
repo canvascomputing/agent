@@ -1,6 +1,7 @@
 //! Lets an agent create or overwrite a file on disk. Pairs with `read_file` and `edit_file` to give a model full file-editing reach.
 
 use super::tool::{Tool, ToolContext, ToolResult};
+use crate::prompts::directives::{WRITE_FILE_FAILED, WRITE_FILE_PARENT_NOT_CREATED};
 
 /// Create or overwrite a file. Destructive: existing content is replaced.
 /// Not concurrent, so agentwerk runs it one call at a time.
@@ -39,13 +40,19 @@ async fn run(args: WriteFileArgs, ctx: ToolContext) -> ToolResult {
 
     if let Some(parent) = resolved.parent() {
         if let Err(e) = std::fs::create_dir_all(parent) {
-            return ToolResult::error(format!("Failed to create parent directories: {e}"));
+            return ToolResult::error(ctx.directives.render(
+                WRITE_FILE_PARENT_NOT_CREATED,
+                &[("path", &path), ("error", &e.to_string())],
+            ));
         }
     }
 
     match std::fs::write(&resolved, content) {
         Ok(()) => ToolResult::success(format!("File written: {path}")),
-        Err(e) => ToolResult::error(format!("Failed to write file: {e}")),
+        Err(e) => ToolResult::error(ctx.directives.render(
+            WRITE_FILE_FAILED,
+            &[("path", &path), ("error", &e.to_string())],
+        )),
     }
 }
 

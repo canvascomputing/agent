@@ -52,6 +52,23 @@ tickets.ticket(Ticket::new("Audit src/db."));               // the default scope
 - The loop rewrites each call to the registered name before emitting `ToolCallStarted`, so `Event` and `Stats` never split one tool across spellings. Both repairs reach the host as `EventKind::ResponseRepaired` naming the tool, with `RepairKind::CallMalformed` for a folded name and `RepairKind::ValueMistyped` for a retyped value.
 - A name that resolves to nothing fails as `ToolFailureKind::ToolNotFound`, with a message naming every registered tool. Without that list each retry spends `max_schema_retries` until the ticket fails. A call the model wrote as text takes the same path.
 
+## Every Directive Is a Catalogue Entry
+
+**Text agentwerk sends the model to report a failure or correct its behavior is one entry in `prompts/directives/*.md`, named by a `pub const` beside it, and the function an agent takes through `AgentBuilder::directives` decides what it renders as. No call site writes one inline.**
+
+```rust
+ToolResult::error(ctx.directives.render(EDIT_FILE_OLD_STRING_NOT_FOUND, &[("path", &path)]))
+```
+
+- `DirectiveStore::render(key, values)` hands that function the key, then binds `{name}` into what comes back, or into the catalogue text when it answers `None`. A store therefore varies a directive by which one it is, and the values reach the model through the template rather than through the function. It takes a `&str`, so the constants rather than the compiler are what keep the 94 call sites honest.
+- The `directives!` macro declares each key once and emits the crate-private constant the render sites write, the `Directive` constant a host matches on, and the `ALL` entry, so the three cannot disagree. A test pairs `ALL` against the `## ` headings, which the macro cannot reach.
+- One function decides every directive, rather than a table of per-key replacements. A host matches the key against the constants `Directive` carries, so a misspelled arm does not compile, and answers `None` to leave a key as it is.
+- `AgentBuilder::directives` wraps the function in the crate-private `DirectiveStore`, which then travels the way `Knowledge` does: `ToolContext` carries it and the loop reads `context.agent.directives()`. Two agents in one process therefore word a failure differently, and no test needs a lock. A host sharing one function across agents passes the same `fn` or a cloned handle.
+- Twenty-one keys render through `built_in` instead, composed where no agent is in reach: the 19 schema violations inside `Node::check`, `knowledge_index_truncated` inside `Knowledge::index`, and `result_schema_required` inside `Ticket::as_user_message`. Threading a store into any of the three would re-type public API.
+- Binding is one pass, so a value carrying `{` is never read as a placeholder of its own. A `{name}` with no value renders as written, the rule `AgentBuilder::template` already states.
+- Two categories stay out: a `SchemaParseError` and the "could not read its arguments" answer both name a mistake in the host's code, and no model reads them. The tags around an offloaded result stay in Rust too, since `cap_aggregate_outputs` reads the opening one back.
+- The retry site binds `attempt`, `max_attempts`, `ticket`, and `agent` beside `detail`, so a replacement naming `{attempt}` or `{agent}` says how far into the budget a retry is, or which agent it addresses, without an event in reach.
+
 ## Finishing Is a Tool Call
 
 **Agents finish tickets through one tool, `finish`. An optional `handover` argument additionally creates a child ticket; its presence is the only discriminator, so there is no second tool and no mode field.**
@@ -60,7 +77,7 @@ tickets.ticket(Ticket::new("Audit src/db."));               // the default scope
 
 - With `handover`, `finish` also inserts a child ticket pinned to that agent or label, with the current ticket recorded as its `parent`. The child's body is the result or the caller's `task` (with `{parent_key}`, `{parent_result_path}`, and `{parent_result}` substituted, the result last so nothing it carries is expanded again), and always ends with the parent key and its result file.
 - The child is inserted BEFORE the parent finishes, so a concurrent `work_left` check can never see an empty queue between them. `TicketFinished` and `TicketFailed` are emitted synchronously from the transition, and a count of in-flight transitions keeps `work_left` true until every handler returns, so a `create_ticket_on_result` follow-up lands first as well.
-- A turn that ends without a `finish` call pushes a corrective directive and retries, the same path a schema failure takes, bounded by `max_schema_retries`; exhaustion emits `PolicyViolated { MaxSchemaRetries, .. }` and `TicketFailed`. Both paths emit `SchemaRetried` first and hand it to `TicketQueue::edit_directive_on_retry`.
+- A turn that ends without a `finish` call pushes a corrective directive and retries, the same path a schema failure takes, bounded by `max_schema_retries`; exhaustion emits `PolicyViolated { MaxSchemaRetries, .. }` and `TicketFailed`. Both paths emit `SchemaRetried` first, and its `attempt` and `max_attempts` are bound into the directive that follows.
 - `finish` holds one schema, not two: `FinishTool::from_schema` makes the ticket's document the tool's own `result` argument at claim time, so a result that misses it is rejected before the handler runs and one written as JSON text is decoded there. Its one own check: a handover needs a real result.
 - An agent that must always chain cannot be forced to by its tool registry, since every `finish` accepts an optional `handover`. Its role prompt carries that requirement instead.
 - `Status` transitions go through tickets-side helpers; the agent never writes status directly. `Failed` is reserved for system-driven outcomes: exhausted schema retries, exhausted missing-`finish` retries, and policy violations.

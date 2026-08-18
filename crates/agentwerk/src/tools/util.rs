@@ -8,6 +8,10 @@ use std::time::Duration;
 
 use super::command::Command;
 use super::tool::{ToolContext, ToolResult};
+use crate::prompts::directives::{
+    DirectiveStore, COMMAND_CANCELLED, COMMAND_NOT_STARTED, COMMAND_TIMED_OUT,
+    PATH_HINT_DIRECTORY_LISTED, PATH_HINT_SUGGESTION, PATH_HINT_WORKING_DIRECTORY,
+};
 
 /// Execute one program directly, returning combined stdout/stderr. No shell is
 /// involved, so an operator in an argument is text the program receives rather
@@ -29,13 +33,22 @@ pub(crate) async fn run_command(
 
     let result = tokio::select! {
         biased;
-        _ = ctx.cancelled() => return ToolResult::error("Command cancelled"),
+        _ = ctx.cancelled() => return ToolResult::error(ctx.directives.render(COMMAND_CANCELLED, &[])),
         r = tokio::time::timeout(timeout, output_fut) => r,
     };
 
     match result {
-        Err(_) => ToolResult::error(format!("Command timed out after {}ms", timeout.as_millis())),
-        Ok(Err(e)) => ToolResult::error(format!("Failed to run '{}': {e}", command.program)),
+        Err(_) => ToolResult::error(ctx.directives.render(
+            COMMAND_TIMED_OUT,
+            &[
+                ("program", &command.program),
+                ("milliseconds", &timeout.as_millis().to_string()),
+            ],
+        )),
+        Ok(Err(e)) => ToolResult::error(ctx.directives.render(
+            COMMAND_NOT_STARTED,
+            &[("program", &command.program), ("error", &e.to_string())],
+        )),
         Ok(Ok(output)) => {
             let mut content = String::from_utf8_lossy(&output.stdout).into_owned();
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -115,21 +128,31 @@ fn nearest_existing_dir(path: &Path) -> Option<&Path> {
 /// directory, so a wrong guess becomes the real directory contents next turn.
 /// Falls back to echoing the working directory plus a dropped-folder suggestion
 /// for paths that escape it.
-pub(crate) fn not_found_hint(ctx_dir: &Path, resolved: &Path) -> String {
+pub(crate) fn not_found_hint(
+    ctx_dir: &Path,
+    resolved: &Path,
+    directives: &DirectiveStore,
+) -> String {
     if let Some(dir) = nearest_existing_dir(resolved) {
         if dir.starts_with(ctx_dir) {
             if let Some(entries) = directory_entries(dir) {
-                return format!("'{}' contains:\n  {entries}", dir.display());
+                return directives.render(
+                    PATH_HINT_DIRECTORY_LISTED,
+                    &[("dir", &dir.display().to_string()), ("entries", &entries)],
+                );
             }
         }
     }
-    let cwd = ctx_dir.display();
+    let cwd = ctx_dir.display().to_string();
     match suggest_path(ctx_dir, resolved) {
-        Some(suggestion) => format!(
-            "Note: your current working directory is {cwd}. Did you mean {}?",
-            suggestion.display()
+        Some(suggestion) => directives.render(
+            PATH_HINT_SUGGESTION,
+            &[
+                ("dir", &cwd),
+                ("suggestion", &suggestion.display().to_string()),
+            ],
         ),
-        None => format!("Note: your current working directory is {cwd}."),
+        None => directives.render(PATH_HINT_WORKING_DIRECTORY, &[("dir", &cwd)]),
     }
 }
 
@@ -260,7 +283,7 @@ mod tests {
 
         // Model guessed pkg/pkg (package-name-as-file); pkg exists.
         let resolved = pkg.join("pkg");
-        let hint = not_found_hint(tmp.path(), &resolved);
+        let hint = not_found_hint(tmp.path(), &resolved, &DirectiveStore::default());
         assert!(
             hint.contains(&format!("'{}' contains", pkg.display())),
             "got {hint}"
@@ -280,7 +303,7 @@ mod tests {
 
         // Escaped path (whole prefix dropped); the suffix exists under cwd.
         let resolved = Path::new("/data83/pkg/setup.py");
-        let hint = not_found_hint(&cwd, resolved);
+        let hint = not_found_hint(&cwd, resolved, &DirectiveStore::default());
         assert!(
             hint.contains("your current working directory"),
             "got {hint}"

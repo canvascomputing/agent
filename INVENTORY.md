@@ -81,13 +81,15 @@ The rules the tables never repeat.
 | Python | `Agent.dir(dir): Agent` | |
 | Rust | `AgentBuilder.knowledge(store: Knowledge): AgentBuilder` | pub |
 | Python | `Agent.knowledge(store): Agent` | |
+| Rust | `AgentBuilder.directives(compute: (key: string) => string?): AgentBuilder` | pub |
+| Python | `Agent.directives(compute): Agent` | |
 | Rust | `AgentBuilder.build(): Agent` | pub |
 | Python | `Agent.build(): Agent`: returns the same object, armed. Configuring after it, or building twice, raises | |
 | Rust | `TicketQueueRef` | crate |
 | Rust | `TicketQueueRef.Shared(TicketQueue)` | crate |
 | Rust | `TicketQueueRef.Private(TicketQueue)` | crate |
 | Rust | `TicketQueueRef.upgrade(): TicketQueue?` | crate |
-| Rust | `Agent { id: string, model: Model, label: string?, interactive: boolean, ticket_queue: TicketQueueRef, provider: Provider, role: string, templates: [string, string][], tools: ToolRegistry, dir: string, knowledge: Knowledge }` | pub |
+| Rust | `Agent { id: string, model: Model, label: string?, interactive: boolean, ticket_queue: TicketQueueRef, provider: Provider, role: string, templates: [string, string][], tools: ToolRegistry, dir: string, knowledge: Knowledge, directives: DirectiveStore }` | pub |
 | Python | `Agent`: also carries every `AgentBuilder` method | |
 | Rust | `impl Clone for Agent` | pub |
 | Rust | `Agent.new(): AgentBuilder` | pub |
@@ -101,6 +103,7 @@ The rules the tables never repeat.
 | Rust | `Agent.tool_registry(): ToolRegistry` | super |
 | Rust | `Agent.provider(): Provider` | super |
 | Rust | `Agent.knowledge(): Knowledge` | super |
+| Rust | `Agent.directives(): DirectiveStore` | super |
 | Rust | `Agent.dir(): string` | super |
 | Rust | `Agent.system_prompt(knowledge: string?, policies: Policies, stats: Stats, ticket_key: string): string` | super |
 | Rust | `Agent.expand_context(role: string, policies: Policies, stats: Stats, ticket_key: string): string` | private |
@@ -420,7 +423,6 @@ The rules the tables never repeat.
 | Rust | `HandlerWork = Promise<void>` | private |
 | Rust | `ReplyEditor = (events: Event[], replies: Reply[]) => void` | private |
 | Rust | `CompactionEditor = (compaction: Compaction, replies: Reply[]) => EditedReplies` | private |
-| Rust | `DirectiveEditor = (event: Event, directive: string) => void` | private |
 | Rust | `EditedReplies = Promise<Reply[] throws ProviderError>` | private |
 | Rust | `Delivery = [Ticket, json, json[]]` | private |
 | Rust | `AwaitedResults { per_result: AsyncResultHandler[], all_results: AsyncResultsHandler[], queued: Delivery[], draining: void, queueing: void }` | super |
@@ -439,7 +441,7 @@ The rules the tables never repeat.
 | Rust | `Run.until_draining(): Promise<void>` | crate |
 | Rust | `Run.until_finished(): Promise<void>` | crate |
 | Rust | `Run.reset(): void` | private |
-| Rust | `TicketQueue { weak_self: Weak<TicketQueue>, tickets: Record<string, Ticket>, agents: Agent[], policies: Policies, run: Run, cancel_filters: TicketFilter[], terminal_transitions_in_flight: number, stats: Stats, event_handlers: EventHandler[], awaited_results: AwaitedResults, event_stream: Sender<Event>, reply_editing: ReplyEditing, compaction_editor: CompactionEditor?, directive_editor: DirectiveEditor?, schemas: SchemaStore?, dir: string, events_lock: void, join_handle: JoinHandle<void>?, next_ticket_id: number? }` | pub |
+| Rust | `TicketQueue { weak_self: Weak<TicketQueue>, tickets: Record<string, Ticket>, agents: Agent[], policies: Policies, run: Run, cancel_filters: TicketFilter[], terminal_transitions_in_flight: number, stats: Stats, event_handlers: EventHandler[], awaited_results: AwaitedResults, event_stream: Sender<Event>, reply_editing: ReplyEditing, compaction_editor: CompactionEditor?, schemas: SchemaStore?, dir: string, events_lock: void, join_handle: JoinHandle<void>?, next_ticket_id: number? }` | pub |
 | Python | `TicketQueue` | |
 | Rust | `TicketQueue.new(): TicketQueue` | pub |
 | Python | `TicketQueue()` | |
@@ -464,9 +466,6 @@ The rules the tables never repeat.
 | both | `TicketQueue.edit_replies_on_compaction(editor: (compaction: Compaction, replies: Reply[]) => Promise<Reply[] throws ProviderError>): TicketQueue` | pub |
 | Python | `TicketQueue.edit_replies_on_compaction(editor)`: the editor returns the new list, or `None` to keep the current one. Define it with `async def` to await `Compaction.summarize`; a coroutine is driven on a worker thread of its own | |
 | Rust | `TicketQueue.compaction_editor(): CompactionEditor?` | crate |
-| both | `TicketQueue.edit_directive_on_retry(editor: (event: Event, directive: string) => void): TicketQueue` | pub |
-| Python | `TicketQueue.edit_directive_on_retry(editor)`: the editor returns the replacement, or `None` to keep the default, where Rust rewrites in place | |
-| Rust | `TicketQueue.edit_directive(event: Event, directive: string): void` | crate |
 | Rust | `TicketQueue.emit(key: string, agent: string, kind: EventKind): Event` | crate |
 | Rust | `TicketQueue.run_reply_editor(key: string): void` | crate |
 | Rust | `TicketQueue.label_for(key: string): string?` | private |
@@ -831,16 +830,37 @@ Not bound: `prompts` is crate-internal, reached through `Agent.role(..)`.
 | Rust | `PromptBuilder.append_directive(body: string): PromptBuilder` | pub |
 | Rust | `PromptBuilder.build(): Prompt` | pub |
 
+## `crates/agentwerk/src/prompts/directives.rs`
+
+The only public part of `prompts`: `Directive` reaches the caller as a root re-export and carries nothing but the key constants, one per catalogue heading. `AgentBuilder::directives` takes the function deciding all of them, which sees a key and answers a template. `DirectiveStore` is the crate-private carrier of that function, which no host names. The constants sit on `Directive` in both languages, so `Directive::GREP_FAILED` and `Directive.GREP_FAILED` are the same name.
+
+| Language | Item | Visibility |
+|----------|------|------------|
+| Rust | `directives!(name = key, ..)`, declaring each key's crate-private `const`, its `Directive` constant, and its `ALL` entry | private |
+| Rust | `CATALOGUE: string[]` | private |
+| Rust | `Directive.REPLY_REJECTED: string = "reply_rejected"`, and one constant per catalogue heading, each also a crate-private `const` under the same name that the render sites write: `NO_TOOL_CALLED`, `ARGUMENTS_REJECTED`, `ARGUMENTS_EXPECTED`, `RESULT_SCHEMA_REQUIRED`, `SUMMARY_REQUESTED`, `KNOWLEDGE_INDEX_TRUNCATED`, `TOOL_NOT_FOUND`, `NO_TOOLS_REGISTERED`, `TOOL_PANICKED`, `TOOL_OUTPUT_EMPTY`, `TOOL_OUTPUT_OFFLOADED`, `EDIT_FILE_READ_FAILED`, `EDIT_FILE_OLD_STRING_NOT_FOUND`, `EDIT_FILE_OLD_STRING_NOT_UNIQUE`, `EDIT_FILE_WRITE_FAILED`, `WRITE_FILE_PARENT_NOT_CREATED`, `WRITE_FILE_FAILED`, `READ_FILE_PATH_IS_DIRECTORY`, `READ_FILE_PATH_IS_DIRECTORY_WITH_ENTRIES`, `READ_FILE_IS_BINARY`, `READ_FILE_NOT_FOUND`, `READ_FILE_FAILED`, `LIST_DIRECTORY_PATH_IS_FILE`, `LIST_DIRECTORY_NOT_FOUND`, `LIST_DIRECTORY_FAILED`, `PATH_HINT_DIRECTORY_LISTED`, `PATH_HINT_SUGGESTION`, `PATH_HINT_WORKING_DIRECTORY`, `COMMAND_CANCELLED`, `COMMAND_TIMED_OUT`, `COMMAND_NOT_STARTED`, `COMMAND_MISSING`, `COMMAND_SHELL_OPERATOR_FOUND`, `COMMAND_QUOTE_UNTERMINATED`, `COMMAND_CONTROL_CHARACTER_FOUND`, `COMMAND_ASSIGNMENT_FOUND`, `COMMAND_FLAG_DENIED`, `COMMAND_PATTERN_DENIED`, `COMMAND_NOT_ALLOWED`, `COMMAND_FLAG_NOT_ALLOWED`, `GREP_CANCELLED`, `GREP_TIMED_OUT`, `GREP_FAILED`, `GREP_GLOB_REJECTED`, `GREP_FILE_TYPE_UNKNOWN`, `GREP_PATTERN_REJECTED`, `CODE_PATTERN_REJECTED`, `CODE_CONSTRAINT_INCOMPLETE`, `CODE_CONSTRAINT_METAVARIABLE_UNKNOWN`, `CODE_CONSTRAINT_REGEX_REJECTED`, `FETCH_URL_TOO_LONG`, `FETCH_URL_SCHEME_MISSING`, `FETCH_URL_SCHEME_UNSUPPORTED`, `FETCH_URL_CREDENTIALS_PRESENT`, `FETCH_URL_HOST_MISSING`, `FETCH_URL_HOST_NOT_RESOLVABLE`, `FETCH_URL_TOO_MANY_REDIRECTS`, `FETCH_URL_REQUEST_FAILED`, `FETCH_URL_BODY_NOT_READ`, `FETCH_URL_RESPONSE_TOO_LARGE`, `FETCH_URL_REDIRECT_LOCATION_MISSING`, `KNOWLEDGE_PAGE_NOT_FOUND`, `KNOWLEDGE_WRITE_FAILED`, `KNOWLEDGE_REMOVE_FAILED`, `TICKET_QUEUE_UNAVAILABLE`, `TICKET_KEY_MISSING`, `TICKET_NOT_ASSIGNED`, `TICKET_NOT_FOUND`, `TICKET_RESULT_MISSING`, `TICKET_STATUS_UNKNOWN`, `TICKET_EDIT_INCOMPLETE`, `TICKET_TRANSITION_REJECTED`, `HANDOVER_RESULT_MISSING`, `FINISH_ARGUMENT_BLANK`, `SCHEMA_FALSE_REJECTED`, `SCHEMA_TYPE_MISMATCHED`, `SCHEMA_CONST_MISMATCHED`, `SCHEMA_ENUM_MISMATCHED`, `SCHEMA_ANY_OF_UNMATCHED`, `SCHEMA_ONE_OF_AMBIGUOUS`, `SCHEMA_NOT_MATCHED`, `SCHEMA_PROPERTY_MISSING`, `SCHEMA_PROPERTY_UNEXPECTED`, `SCHEMA_ARRAY_TOO_SHORT`, `SCHEMA_ARRAY_TOO_LONG`, `SCHEMA_STRING_TOO_SHORT`, `SCHEMA_STRING_TOO_LONG`, `SCHEMA_PATTERN_UNMATCHED`, `SCHEMA_NUMBER_TOO_SMALL`, `SCHEMA_NUMBER_TOO_LARGE`, `SCHEMA_HINT_UNQUOTE`, `SCHEMA_HINT_JSON`, `SCHEMA_HINT_QUOTE` | pub |
+| Rust | `Directive.ALL: string[]` | pub |
+| Python | `Directive.ALL` is not published; `register` walks it to set the key constants | |
+| Rust | `Directive { }`, the key namespace | pub |
+| Rust | `DirectiveStore { compute: (key: string) => string? }` | crate |
+| Rust | `DirectiveStore.new(compute: (key: string) => string?): DirectiveStore` | crate |
+| Rust | `DirectiveStore.render(key: string, values: [string, string][]): string` | crate |
+| Rust | `impl Default for DirectiveStore`, the built-in text | crate |
+| Rust | `impl Debug for DirectiveStore` | crate |
+| Rust | `built_in(key: string, values: [string, string][]): string` | crate |
+| Rust | `bind(template: string, values: [string, string][]): string` | private |
+| Rust | `entries(markdown: string): [string, string][]` | private |
+| Rust | `catalogue(): Record<string, string>` | private |
+
 ## `crates/agentwerk/src/prompts/mod.rs`
 
-Not bound, like the rest of `prompts`.
+Not bound, except what `directives.rs` re-exports through it.
 
 | Language | Item | Visibility |
 |----------|------|------------|
 | Rust | `mod builder`, `mod section` | private |
+| Rust | `pub(crate) mod directives` | crate |
 | Rust | `CONTEXT_TEMPLATE: string` | private |
-| Rust | `RETRY_TEMPLATE: string` | private |
-| Rust | `COMPACTION_TEMPLATE: string` | private |
 | Rust | `retry_directive(detail: string): string` | crate |
 | Rust | `compaction_directive(): string` | crate |
 | Rust | `schema_directive(schema: Schema): string` | crate |
@@ -1753,7 +1773,7 @@ Binds `agents/agent.rs`, whose section holds the Python spelling of each method.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `PyAgent { role: string?, label: string?, templates: [string, string][], dir: string?, interactive: boolean, provider: Provider?, model: Model?, tools: Tool[], knowledge: Knowledge?, agent: Agent? }` | python |
+| Rust | `PyAgent { role: string?, label: string?, templates: [string, string][], dir: string?, interactive: boolean, provider: Provider?, model: Model?, tools: Tool[], knowledge: Knowledge?, directives: any?, agent: Agent? }` | python |
 | Rust | `PyAgent.create(): PyAgent` | private |
 | Rust | `PyAgent.built(): Agent throws PyErr` | crate |
 | Rust | `PyAgent.ensure_unbuilt(): void throws PyErr` | private |
@@ -1770,6 +1790,7 @@ Binds `agents/agent.rs`, whose section holds the Python spelling of each method.
 | Rust | `PyAgent.templates(variables: Record<string, string>): PyAgent throws PyErr` | python |
 | Rust | `PyAgent.dir(dir: string): PyAgent throws PyErr` | python |
 | Rust | `PyAgent.knowledge(store: PyKnowledge): PyAgent throws PyErr` | python |
+| Rust | `PyAgent.directives(compute: any): PyAgent throws PyErr` | python |
 | Rust | `PyAgent.tool(tool: any): PyAgent throws PyErr` | python |
 | Rust | `PyAgent.tools(tools: any): PyAgent throws PyErr` | python |
 | Rust | `PyAgent.build(): PyAgent throws PyErr` | python |
@@ -1800,6 +1821,16 @@ Not bound: the one JSON boundary between the two languages.
 | Rust | `value_to_py(py: Python, value: json): any throws PyErr` | pub |
 | Rust | `py_to_value(obj: any): json throws PyErr` | pub |
 | Rust | `runtime_error(message: string): PyErr` | pub |
+
+## `crates/agentwerk-py/src/directives.rs`
+
+Binds `prompts/directives.rs`.
+
+| Language | Item | Visibility |
+|----------|------|------------|
+| Rust | `PyDirective { }`, exposed as `Directive`, the key namespace | python |
+| Rust | `compute(compute: any): (key: string) => string?`, which prints a raising call's traceback and keeps the catalogue text | crate |
+| Rust | `register(module: PyModule): void throws PyErr`, which also sets each key as an uppercase attribute on `Directive` | pub |
 
 ## `crates/agentwerk-py/src/event.rs`
 
@@ -1849,7 +1880,7 @@ Registers every bound class and function in the `_agentwerk` module.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `mod agent`, `mod compaction`, `mod convert`, `mod event`, `mod knowledge`, `mod providers`, `mod reply`, `mod schema`, `mod ticket`, `mod ticket_queue`, `mod tools`, `mod trajectory` | private |
+| Rust | `mod agent`, `mod compaction`, `mod convert`, `mod directives`, `mod event`, `mod knowledge`, `mod providers`, `mod reply`, `mod schema`, `mod ticket`, `mod ticket_queue`, `mod tools`, `mod trajectory` | private |
 | Rust | `_agentwerk(m: PyModule): void throws PyErr` | python |
 
 ## `crates/agentwerk-py/src/providers.rs`
@@ -1998,7 +2029,6 @@ Binds `agents/tickets/ticket_queue.rs` and `store.rs`.
 | Rust | `PyTicketQueue.on_ticket(handler: any): PyTicketQueue` | python |
 | Rust | `PyTicketQueue.edit_replies_on_event(editor: any): PyTicketQueue` | python |
 | Rust | `PyTicketQueue.edit_replies_on_compaction(editor: any): PyTicketQueue` | python |
-| Rust | `PyTicketQueue.edit_directive_on_retry(editor: any): PyTicketQueue` | python |
 | Rust | `PyTicketQueue.edit_replies(key: string, editor: any): PyTicketQueue throws PyErr` | python |
 | Rust | `PyTicketQueue.start(): PyTicketQueue` | python |
 | Rust | `PyTicketQueue.finish(matches: any): Promise<any[]> throws PyErr` | python |

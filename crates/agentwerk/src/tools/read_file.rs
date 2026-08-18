@@ -1,6 +1,10 @@
 //! The agent's eyes on the filesystem. Lets a model read a file it did not receive in the prompt.
 
 use super::tool::{Tool, ToolContext, ToolResult};
+use crate::prompts::directives::{
+    READ_FILE_FAILED, READ_FILE_IS_BINARY, READ_FILE_NOT_FOUND, READ_FILE_PATH_IS_DIRECTORY,
+    READ_FILE_PATH_IS_DIRECTORY_WITH_ENTRIES,
+};
 
 /// Read a file with optional line offset and limit. Returns line-numbered
 /// text so the model can reference specific lines in subsequent edits.
@@ -57,11 +61,13 @@ async fn run(args: ReadFileArgs, ctx: ToolContext) -> ToolResult {
 
     if resolved.is_dir() {
         let message = match super::util::directory_entries(&resolved) {
-            Some(entries) => format!(
-                "'{path}' is a directory, not a file. Read one of its entries by \
-                 appending the name to the path:\n  {entries}"
+            Some(entries) => ctx.directives.render(
+                READ_FILE_PATH_IS_DIRECTORY_WITH_ENTRIES,
+                &[("path", &path), ("entries", &entries)],
             ),
-            None => format!("'{path}' is a directory, not a file."),
+            None => ctx
+                .directives
+                .render(READ_FILE_PATH_IS_DIRECTORY, &[("path", &path)]),
         };
         return ToolResult::error(message);
     }
@@ -75,21 +81,30 @@ async fn run(args: ReadFileArgs, ctx: ToolContext) -> ToolResult {
             // templates. Otherwise decode lossily so odd-encoded source
             // stays inspectable, the point of a scan.
             if bytes.contains(&0) {
-                return ToolResult::success(format!(
-                    "{path} is a binary file ({} bytes), not text; it cannot be read as source. Judge from the information you already have.",
-                    bytes.len()
+                return ToolResult::success(ctx.directives.render(
+                    READ_FILE_IS_BINARY,
+                    &[("path", &path), ("bytes", &bytes.len().to_string())],
                 ));
             }
             String::from_utf8_lossy(&bytes).into_owned()
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return ToolResult::error(format!(
-                "File does not exist: {path}. {}",
-                super::util::not_found_hint(&ctx.dir, &resolved)
+            return ToolResult::error(ctx.directives.render(
+                READ_FILE_NOT_FOUND,
+                &[
+                    ("path", &path),
+                    (
+                        "hint",
+                        &super::util::not_found_hint(&ctx.dir, &resolved, &ctx.directives),
+                    ),
+                ],
             ));
         }
         Err(e) => {
-            return ToolResult::error(format!("Failed to read file: {e}"));
+            return ToolResult::error(ctx.directives.render(
+                READ_FILE_FAILED,
+                &[("path", &path), ("error", &e.to_string())],
+            ));
         }
     };
 

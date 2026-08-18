@@ -15,6 +15,7 @@ use super::knowledge::Knowledge;
 use super::policy::Policies;
 use super::stats::Stats;
 use super::tickets::{Ticket, TicketQueue};
+use crate::prompts::directives::DirectiveStore;
 
 /// One counter per label, behind the ids [`AgentBuilder::build`] hands out.
 /// Numbering restarts at 1 for each label, so a host that builds the same
@@ -45,6 +46,7 @@ pub struct AgentBuilder<P, M> {
     tools: ToolRegistry,
     dir: PathBuf,
     knowledge: Arc<Knowledge>,
+    directives: Arc<DirectiveStore>,
 }
 
 impl AgentBuilder<(), ()> {
@@ -63,6 +65,7 @@ impl AgentBuilder<(), ()> {
             tools,
             dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             knowledge,
+            directives: Arc::new(DirectiveStore::default()),
         }
     }
 }
@@ -81,6 +84,7 @@ impl<M> AgentBuilder<(), M> {
             tools: self.tools,
             dir: self.dir,
             knowledge: self.knowledge,
+            directives: self.directives,
         }
     }
 }
@@ -97,6 +101,7 @@ impl<P> AgentBuilder<P, ()> {
             tools: self.tools,
             dir: self.dir,
             knowledge: self.knowledge,
+            directives: self.directives,
         }
     }
 }
@@ -198,6 +203,28 @@ impl<P, M> AgentBuilder<P, M> {
         self.knowledge = Arc::clone(store);
         self
     }
+
+    /// Decide what the agent tells the model when a call fails.
+    ///
+    /// `compute` sees the key of every directive before it renders. Match it
+    /// against the constants [`Directive`] carries, and answer `None` for the
+    /// ones you leave as they are. What it returns is a template, bound
+    /// afterwards, so a `{name}` it carries still resolves.
+    ///
+    /// ```no_run
+    /// # use agentwerk::{Agent, Directive};
+    /// Agent::from_env().directives(|key| match key {
+    ///     Directive::GREP_FAILED => Some("The search did not run. Narrow `path`."),
+    ///     _ => None,
+    /// });
+    /// ```
+    pub fn directives<T: Into<String>>(
+        mut self,
+        compute: impl Fn(&str) -> Option<T> + Send + Sync + 'static,
+    ) -> Self {
+        self.directives = Arc::new(DirectiveStore::new(compute));
+        self
+    }
 }
 
 // Inline-test inspectors. Production callers go through `Agent`, which
@@ -289,6 +316,7 @@ impl AgentBuilder<Provider, Model> {
             tools: self.tools,
             dir: self.dir,
             knowledge: self.knowledge,
+            directives: self.directives,
         };
         let private = TicketQueue::new();
         private.bind_agent(&mut agent);
@@ -348,6 +376,7 @@ pub struct Agent {
     tools: ToolRegistry,
     dir: PathBuf,
     knowledge: Arc<Knowledge>,
+    directives: Arc<DirectiveStore>,
 }
 
 impl Clone for Agent {
@@ -365,6 +394,7 @@ impl Clone for Agent {
             model: self.model.clone(),
             label: self.label.clone(),
             interactive: self.interactive,
+            directives: Arc::clone(&self.directives),
             ticket_queue,
             provider: self.provider.clone(),
             role: self.role.clone(),
@@ -421,6 +451,10 @@ impl Agent {
 
     pub(super) fn knowledge(&self) -> Arc<Knowledge> {
         Arc::clone(&self.knowledge)
+    }
+
+    pub(super) fn directives(&self) -> Arc<DirectiveStore> {
+        Arc::clone(&self.directives)
     }
 
     pub(super) fn dir(&self) -> PathBuf {

@@ -5,6 +5,9 @@ use serde_json::Value;
 
 use crate::agents::tickets::{Ticket, TicketQueue};
 use crate::event::ToolFailureKind;
+use crate::prompts::directives::{
+    DirectiveStore, FINISH_ARGUMENT_BLANK, HANDOVER_RESULT_MISSING, TICKET_QUEUE_UNAVAILABLE,
+};
 use crate::schemas::Schema;
 
 use super::super::tool::{retype_message, Tool, ToolContext, ToolResult};
@@ -72,15 +75,16 @@ fn finish(
     let ticket_queue = ctx
         .ticket_queue
         .clone()
-        .ok_or_else(|| ToolResult::error("Ticket queue unavailable in this context"))?;
+        .ok_or_else(|| ToolResult::error(ctx.directives.render(TICKET_QUEUE_UNAVAILABLE, &[])))?;
     let parent_key = resolve_current_key(&ticket_queue, ctx)?;
     let agent = ctx.agent_id.clone().unwrap_or_default();
 
     let result = input.get("result").cloned().unwrap_or(Value::Null);
 
-    let Some(handover) = control_string(input, "handover")? else {
-        let (_, repaired) = attach_result(&ticket_queue, &parent_key, result, schema)?;
-        mark_finished(&ticket_queue, &parent_key, &agent)?;
+    let Some(handover) = control_string(input, "handover", &ctx.directives)? else {
+        let (_, repaired) =
+            attach_result(&ticket_queue, &parent_key, result, schema, &ctx.directives)?;
+        mark_finished(&ticket_queue, &parent_key, &agent, &ctx.directives)?;
         return Ok(ToolResult::Success {
             content: format!("Ticket {parent_key} marked finished"),
             offloaded: None,
@@ -95,6 +99,7 @@ fn finish(
         result,
         schema,
         handover.trim().to_string(),
+        &ctx.directives,
     )
 }
 
@@ -108,22 +113,23 @@ fn hand_over(
     result: Value,
     schema: Option<&Schema>,
     handover: String,
+    directives: &DirectiveStore,
 ) -> Result<ToolResult, ToolResult> {
     // An omitted `task` defaults to the parent result below: the
     // common handoff forwards the finding verbatim.
-    let task = control_string(input, "task")?;
+    let task = control_string(input, "task", directives)?;
 
     // A ticket carrying no schema declares no `required`, so nothing else
     // stops a handover that passes on an empty result.
     if matches!(&result, Value::Null) || result.as_str().is_some_and(str::is_empty) {
         return Err(ToolResult::error(
-            "A handover needs a result to pass on. Call `finish` again with a \
-             `result`, or without `handover` to finish without passing work on.",
+            directives.render(HANDOVER_RESULT_MISSING, &[]),
         ));
     }
 
     // A schema failure returns here, before any child exists.
-    let (validated_result, repaired) = attach_result(ticket_queue, parent_key, result, schema)?;
+    let (validated_result, repaired) =
+        attach_result(ticket_queue, parent_key, result, schema, directives)?;
 
     // `{parent_result}` needs a string.
     let parent_result = match validated_result {
@@ -146,7 +152,7 @@ fn hand_over(
     // `parent_key` is resolved and `InProgress`, so `set_finished_by` cannot
     // miss it and leave the inserted child orphaned.
     let child_key = ticket_queue.insert(child, agent.to_string());
-    mark_finished(ticket_queue, parent_key, agent)?;
+    mark_finished(ticket_queue, parent_key, agent, directives)?;
 
     Ok(ToolResult::Success {
         content: format!(
@@ -162,22 +168,32 @@ fn hand_over(
 /// read as absent: a finish asked to hand over must not quietly finish
 /// without doing so. The one place the rule lives, for the model and for a
 /// host calling the tool directly.
-fn control_string(input: &Value, key: &str) -> Result<Option<String>, ToolResult> {
+fn control_string(
+    input: &Value,
+    key: &str,
+    directives: &DirectiveStore,
+) -> Result<Option<String>, ToolResult> {
     let Some(value) = input.get(key).filter(|value| !value.is_null()) else {
         return Ok(None);
     };
     match value.as_str() {
         Some(text) if !text.trim().is_empty() => Ok(Some(text.to_string())),
-        _ => Err(ToolResult::error(format!(
-            "`{key}` must be a non-blank string when given, got {value}"
+        _ => Err(ToolResult::error(directives.render(
+            FINISH_ARGUMENT_BLANK,
+            &[("argument", key), ("value", &value.to_string())],
         ))),
     }
 }
 
-fn mark_finished(ticket_queue: &TicketQueue, key: &str, agent: &str) -> Result<(), ToolResult> {
+fn mark_finished(
+    ticket_queue: &TicketQueue,
+    key: &str,
+    agent: &str,
+    directives: &DirectiveStore,
+) -> Result<(), ToolResult> {
     ticket_queue
         .set_finished_by(key, agent)
-        .map_err(|error| ToolResult::error(super::ticket_error_message(error)))
+        .map_err(|error| ToolResult::error(super::ticket_error_message(error, directives)))
 }
 
 /// Reserved placeholders substituted into the child ticket's `task`
@@ -213,6 +229,7 @@ fn attach_result(
     key: &str,
     result: Value,
     schema: Option<&Schema>,
+    directives: &DirectiveStore,
 ) -> Result<(Value, Vec<String>), ToolResult> {
     let (validated, repaired) = ticket_queue.set_result(key, result).map_err(|violations| {
         // Composed here, where the ticket's schema is known: the loop
@@ -222,6 +239,7 @@ fn attach_result(
                 NAME,
                 &violations.to_string(),
                 schema.map(Schema::get_raw_schema),
+                directives,
             ),
             kind: ToolFailureKind::SchemaValidationFailed,
         }

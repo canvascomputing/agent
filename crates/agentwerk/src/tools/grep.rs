@@ -10,6 +10,10 @@ use grep::searcher::sinks::UTF8;
 use serde_json::{Map, Value};
 
 use super::tool::{Tool, ToolContext, ToolResult};
+use crate::prompts::directives::{
+    DirectiveStore, GREP_CANCELLED, GREP_FAILED, GREP_FILE_TYPE_UNKNOWN, GREP_GLOB_REJECTED,
+    GREP_PATTERN_REJECTED, GREP_TIMED_OUT,
+};
 
 /// Search the working directory for a regular-expression `pattern` and return a
 /// structured result: matching lines, matching file names, or per-file counts,
@@ -61,20 +65,20 @@ async fn run(args: GrepArgs, ctx: ToolContext) -> ToolResult {
     let interrupt = Arc::new(AtomicBool::new(false));
     let searching = Arc::clone(&interrupt);
     let deadline = Instant::now() + SEARCH_TIMEOUT;
-    let handle =
-        tokio::task::spawn_blocking(move || search_corpus(&dir, &query, &searching, deadline));
+    let searching_directives = Arc::clone(&ctx.directives);
+    let handle = tokio::task::spawn_blocking(move || {
+        search_corpus(&dir, &query, &searching, deadline, &searching_directives)
+    });
 
     let outcome = tokio::select! {
         biased;
-        _ = ctx.cancelled() => ToolResult::error("Search cancelled"),
+        _ = ctx.cancelled() => ToolResult::error(ctx.directives.render(GREP_CANCELLED, &[])),
         r = tokio::time::timeout(SEARCH_TIMEOUT, handle) => match r {
-            Err(_) => {
-                ToolResult::error(format!(
-                    "Search timed out after {}s; narrow the pattern or path",
-                    SEARCH_TIMEOUT.as_secs()
-                ))
-            }
-            Ok(Err(_)) => ToolResult::error("Search failed"),
+            Err(_) => ToolResult::error(ctx.directives.render(
+                GREP_TIMED_OUT,
+                &[("seconds", &SEARCH_TIMEOUT.as_secs().to_string())],
+            )),
+            Ok(Err(_)) => ToolResult::error(ctx.directives.render(GREP_FAILED, &[])),
             Ok(Ok(result)) => result,
         },
     };
@@ -210,6 +214,7 @@ fn search_corpus(
     query: &Query,
     interrupt: &AtomicBool,
     deadline: Instant,
+    directives: &DirectiveStore,
 ) -> ToolResult {
     let root = match &query.path {
         Some(path) => dir.join(path),
@@ -224,7 +229,11 @@ fn search_corpus(
             Ok(overrides) => {
                 walk.overrides(overrides);
             }
-            Err(error) => return ToolResult::error(format!("Invalid glob: {error}")),
+            Err(error) => {
+                return ToolResult::error(
+                    directives.render(GREP_GLOB_REJECTED, &[("error", &error.to_string())]),
+                )
+            }
         }
     }
     if let Some(file_type) = query.file_type.as_deref() {
@@ -236,7 +245,10 @@ fn search_corpus(
                 walk.types(types);
             }
             Err(error) => {
-                return ToolResult::error(format!("Unknown file type `{file_type}`: {error}"))
+                return ToolResult::error(directives.render(
+                    GREP_FILE_TYPE_UNKNOWN,
+                    &[("file_type", file_type), ("error", &error.to_string())],
+                ))
             }
         }
     }
@@ -244,8 +256,8 @@ fn search_corpus(
     let files = collect_files(walk.build(), dir, interrupt, deadline);
 
     match query.syntax {
-        Syntax::Regex => run_regex(&files, query, interrupt, deadline),
-        Syntax::Code => super::code::run(&files, query, interrupt, deadline),
+        Syntax::Regex => run_regex(&files, query, interrupt, deadline, directives),
+        Syntax::Code => super::code::run(&files, query, interrupt, deadline, directives),
     }
 }
 
@@ -257,6 +269,7 @@ fn run_regex(
     query: &Query,
     interrupt: &AtomicBool,
     deadline: Instant,
+    directives: &DirectiveStore,
 ) -> ToolResult {
     // Ripgrep's Rust-regex matcher, line-oriented. `dot_matches_new_line` and the
     // searcher's multi-line mode are tied to `multiline` so `.` spans newlines only
@@ -273,11 +286,9 @@ fn run_regex(
         // paren) is invalid. Name the remedy so the caller escapes rather than
         // re-sending the same doomed pattern.
         Err(error) => {
-            return ToolResult::error(format!(
-                "Search failed: {error}. `pattern` is a regular expression. To find a call or \
-                 code shape, use `syntax: \"code\"` (`Name(...)`); otherwise escape the \
-                 metacharacters."
-            ))
+            return ToolResult::error(
+                directives.render(GREP_PATTERN_REJECTED, &[("error", &error.to_string())]),
+            )
         }
     };
 

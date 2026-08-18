@@ -601,9 +601,13 @@ fn index_directive(remaining: usize, path: &Path) -> String {
     } else {
         "pages are"
     };
-    format!(
-        "{remaining} more {pages} not listed. Read the full index at {}.",
-        path.display()
+    crate::prompts::directives::built_in(
+        crate::prompts::directives::KNOWLEDGE_INDEX_TRUNCATED,
+        &[
+            ("remaining", &remaining.to_string()),
+            ("pages", pages),
+            ("path", &path.display().to_string()),
+        ],
     )
 }
 

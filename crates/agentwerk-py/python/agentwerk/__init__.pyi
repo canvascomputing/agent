@@ -259,6 +259,104 @@ class EventName:
     COMPACTION_FINISHED: str
     COMPACTION_FAILED: str
 
+class Directive:
+    """Every directive agentwerk can send, one constant per key."""
+
+    REPLY_REJECTED: str
+    NO_TOOL_CALLED: str
+    ARGUMENTS_REJECTED: str
+    ARGUMENTS_EXPECTED: str
+    RESULT_SCHEMA_REQUIRED: str
+    SUMMARY_REQUESTED: str
+    KNOWLEDGE_INDEX_TRUNCATED: str
+    TOOL_NOT_FOUND: str
+    NO_TOOLS_REGISTERED: str
+    TOOL_PANICKED: str
+    TOOL_OUTPUT_EMPTY: str
+    TOOL_OUTPUT_OFFLOADED: str
+    EDIT_FILE_READ_FAILED: str
+    EDIT_FILE_OLD_STRING_NOT_FOUND: str
+    EDIT_FILE_OLD_STRING_NOT_UNIQUE: str
+    EDIT_FILE_WRITE_FAILED: str
+    WRITE_FILE_PARENT_NOT_CREATED: str
+    WRITE_FILE_FAILED: str
+    READ_FILE_PATH_IS_DIRECTORY: str
+    READ_FILE_PATH_IS_DIRECTORY_WITH_ENTRIES: str
+    READ_FILE_IS_BINARY: str
+    READ_FILE_NOT_FOUND: str
+    READ_FILE_FAILED: str
+    LIST_DIRECTORY_PATH_IS_FILE: str
+    LIST_DIRECTORY_NOT_FOUND: str
+    LIST_DIRECTORY_FAILED: str
+    PATH_HINT_DIRECTORY_LISTED: str
+    PATH_HINT_SUGGESTION: str
+    PATH_HINT_WORKING_DIRECTORY: str
+    COMMAND_CANCELLED: str
+    COMMAND_TIMED_OUT: str
+    COMMAND_NOT_STARTED: str
+    COMMAND_MISSING: str
+    COMMAND_SHELL_OPERATOR_FOUND: str
+    COMMAND_QUOTE_UNTERMINATED: str
+    COMMAND_CONTROL_CHARACTER_FOUND: str
+    COMMAND_ASSIGNMENT_FOUND: str
+    COMMAND_FLAG_DENIED: str
+    COMMAND_PATTERN_DENIED: str
+    COMMAND_NOT_ALLOWED: str
+    COMMAND_FLAG_NOT_ALLOWED: str
+    GREP_CANCELLED: str
+    GREP_TIMED_OUT: str
+    GREP_FAILED: str
+    GREP_GLOB_REJECTED: str
+    GREP_FILE_TYPE_UNKNOWN: str
+    GREP_PATTERN_REJECTED: str
+    CODE_PATTERN_REJECTED: str
+    CODE_CONSTRAINT_INCOMPLETE: str
+    CODE_CONSTRAINT_METAVARIABLE_UNKNOWN: str
+    CODE_CONSTRAINT_REGEX_REJECTED: str
+    FETCH_URL_TOO_LONG: str
+    FETCH_URL_SCHEME_MISSING: str
+    FETCH_URL_SCHEME_UNSUPPORTED: str
+    FETCH_URL_CREDENTIALS_PRESENT: str
+    FETCH_URL_HOST_MISSING: str
+    FETCH_URL_HOST_NOT_RESOLVABLE: str
+    FETCH_URL_TOO_MANY_REDIRECTS: str
+    FETCH_URL_REQUEST_FAILED: str
+    FETCH_URL_BODY_NOT_READ: str
+    FETCH_URL_RESPONSE_TOO_LARGE: str
+    FETCH_URL_REDIRECT_LOCATION_MISSING: str
+    KNOWLEDGE_PAGE_NOT_FOUND: str
+    KNOWLEDGE_WRITE_FAILED: str
+    KNOWLEDGE_REMOVE_FAILED: str
+    TICKET_QUEUE_UNAVAILABLE: str
+    TICKET_KEY_MISSING: str
+    TICKET_NOT_ASSIGNED: str
+    TICKET_NOT_FOUND: str
+    TICKET_RESULT_MISSING: str
+    TICKET_STATUS_UNKNOWN: str
+    TICKET_EDIT_INCOMPLETE: str
+    TICKET_TRANSITION_REJECTED: str
+    HANDOVER_RESULT_MISSING: str
+    FINISH_ARGUMENT_BLANK: str
+    SCHEMA_FALSE_REJECTED: str
+    SCHEMA_TYPE_MISMATCHED: str
+    SCHEMA_CONST_MISMATCHED: str
+    SCHEMA_ENUM_MISMATCHED: str
+    SCHEMA_ANY_OF_UNMATCHED: str
+    SCHEMA_ONE_OF_AMBIGUOUS: str
+    SCHEMA_NOT_MATCHED: str
+    SCHEMA_PROPERTY_MISSING: str
+    SCHEMA_PROPERTY_UNEXPECTED: str
+    SCHEMA_ARRAY_TOO_SHORT: str
+    SCHEMA_ARRAY_TOO_LONG: str
+    SCHEMA_STRING_TOO_SHORT: str
+    SCHEMA_STRING_TOO_LONG: str
+    SCHEMA_PATTERN_UNMATCHED: str
+    SCHEMA_NUMBER_TOO_SMALL: str
+    SCHEMA_NUMBER_TOO_LARGE: str
+    SCHEMA_HINT_UNQUOTE: str
+    SCHEMA_HINT_JSON: str
+    SCHEMA_HINT_QUOTE: str
+
 class Agent:
     """The core entity of agentwerk. It has access to tools for solving tasks in
     the form of tickets."""
@@ -275,6 +373,7 @@ class Agent:
     def templates(self, variables: dict[str, str]) -> "Agent": ...
     def dir(self, dir: str) -> "Agent": ...
     def knowledge(self, store: Knowledge) -> "Agent": ...
+    def directives(self, compute: Callable[[str], Optional[str]]) -> "Agent": ...
     def tool(self, tool: Any) -> "Agent": ...
     def tools(self, tools: list) -> "Agent": ...
     def build(self) -> "Agent": ...
@@ -352,9 +451,6 @@ class TicketQueue:
     def edit_replies_on_compaction(
         self,
         editor: Callable[["Compaction", list[Reply]], Any],
-    ) -> "TicketQueue": ...
-    def edit_directive_on_retry(
-        self, editor: Callable[[Event, str], Optional[str]]
     ) -> "TicketQueue": ...
     def edit_replies(
         self, key: str, editor: Callable[[list[Reply]], Optional[list[Reply]]]

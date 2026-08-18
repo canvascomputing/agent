@@ -34,6 +34,7 @@ pub struct PyAgent {
     model: Option<Model>,
     tools: Vec<Tool>,
     knowledge: Option<Arc<Knowledge>>,
+    directives: Option<Py<PyAny>>,
     /// Set by `build()`. Every method that reaches the queue needs it.
     agent: Option<Agent>,
 }
@@ -50,6 +51,7 @@ impl PyAgent {
             model: None,
             tools: Vec::new(),
             knowledge: None,
+            directives: None,
             agent: None,
         }
     }
@@ -101,6 +103,10 @@ impl PyAgent {
         }
         if let Some(dir) = &self.dir {
             builder = builder.dir(std::path::PathBuf::from(dir));
+        }
+        if let Some(compute) = &self.directives {
+            let compute = Python::attach(|py| compute.clone_ref(py));
+            builder = builder.directives(crate::directives::compute(compute));
         }
         if let Some(store) = &self.knowledge {
             builder = builder.knowledge(store);
@@ -221,6 +227,19 @@ impl PyAgent {
     ) -> PyResult<PyRefMut<'py, Self>> {
         slf.ensure_unbuilt()?;
         slf.knowledge = Some(Arc::clone(&store.inner));
+        Ok(slf)
+    }
+
+    /// Decide what the agent tells the model when a call fails.
+    ///
+    /// `compute` sees every directive before it renders and returns the text to
+    /// send, or `None` for the ones it leaves as they are.
+    fn directives<'py>(
+        mut slf: PyRefMut<'py, Self>,
+        compute: Py<PyAny>,
+    ) -> PyResult<PyRefMut<'py, Self>> {
+        slf.ensure_unbuilt()?;
+        slf.directives = Some(compute);
         Ok(slf)
     }
 

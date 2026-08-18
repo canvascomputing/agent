@@ -8,13 +8,11 @@ use crate::agents::agent::Agent;
 use crate::agents::policy::Policies;
 use crate::agents::tickets::{policy_violated_kind, Reply, Run, Status, Ticket, TicketQueue};
 use crate::event::{CompactReason, Event, EventKind, PolicyKind};
+use crate::prompts::directives::{NO_TOOL_CALLED, REPLY_REJECTED};
 use crate::providers::{AsUserMessage, Message, Model, RequestErrorKind};
 use crate::tools::{FinishTool, ToolRegistry};
 
 use super::{compact, request, tool_call, Step, POLL_INTERVAL};
-
-const RESUME_OR_FINISH_DETAIL: &str =
-    "Your last reply contained no tool call. Call `finish` with your result if the work is complete, or another tool to continue.";
 
 pub(super) struct TicketContext<'a> {
     pub(super) agent: &'a Agent,
@@ -42,13 +40,21 @@ impl<'a> TicketContext<'a> {
         self.ticket_queue.get_ticket(&self.ticket_key)
     }
 
-    /// The corrective directive to inject for `detail`: the built-in text,
-    /// passed through the queue's directive editor when one is installed.
-    /// `event` is the `SchemaRetried` the caller just emitted for this retry.
-    pub(super) fn retry_directive(&self, detail: &str, event: &Event) -> String {
-        let mut directive = crate::prompts::retry_directive(detail);
-        self.ticket_queue.edit_directive(event, &mut directive);
-        directive
+    /// The corrective directive to inject for `detail`. Everything the
+    /// `SchemaRetried` this retry emitted carries is bound alongside it, so a
+    /// replacement can read how far into the budget this is and who it
+    /// addresses without reaching for an event.
+    pub(super) fn retry_directive(&self, detail: &str, attempt: u32, max_attempts: u32) -> String {
+        self.agent.directives().render(
+            REPLY_REJECTED,
+            &[
+                ("detail", detail),
+                ("attempt", &attempt.to_string()),
+                ("max_attempts", &max_attempts.to_string()),
+                ("ticket", &self.ticket_key),
+                ("agent", self.agent.id()),
+            ],
+        )
     }
 
     /// Fail the ticket without naming a cause. The caller has already emitted
@@ -224,14 +230,16 @@ fn silence_retry(context: &mut TicketContext<'_>) -> Option<Step> {
             .set_failed_by(&context.ticket_key, context.agent.id());
         return None;
     }
-    let retried = context.emit(EventKind::SchemaRetried {
-        attempt: context.consecutive_schema_failures,
+    let detail = context.agent.directives().render(NO_TOOL_CALLED, &[]);
+    let attempt = context.consecutive_schema_failures;
+    context.emit(EventKind::SchemaRetried {
+        attempt,
         max_attempts: max,
-        message: RESUME_OR_FINISH_DETAIL.to_string(),
+        message: detail.clone(),
     });
     context.ticket_queue.add_reply(
         &context.ticket_key,
-        Reply::user_text(context.retry_directive(RESUME_OR_FINISH_DETAIL, &retried)),
+        Reply::user_text(context.retry_directive(&detail, attempt, max)),
     );
     Some(Step::Evaluate)
 }
@@ -240,6 +248,8 @@ fn silence_retry(context: &mut TicketContext<'_>) -> Option<Step> {
 mod tests {
     use std::sync::Arc;
     use std::time::Duration;
+
+    use crate::prompts::directives::DirectiveStore;
 
     use super::claim;
     use crate::agents::agent::Agent;
@@ -284,10 +294,10 @@ mod tests {
         assert_eq!(tickets.results().pop(), Some(serde_json::json!("b-done")));
     }
 
-    // directive editor
+    // retry directive
 
     #[tokio::test]
-    async fn directive_editor_replaces_the_silence_directive() {
+    async fn a_replacement_replaces_the_silence_directive() {
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let provider = MockProvider::with_results(vec![
             Ok(text_response("just thinking, no tool call")),
@@ -298,12 +308,13 @@ mod tests {
             .dir(results_dir.path().to_path_buf())
             .max_request_retries(0)
             .request_retry_delay(Duration::from_millis(1))
-            .edit_directive_on_retry(|_, directive| *directive = "PLEASE CALL A TOOL NOW".into());
+            .max_schema_retries(3);
         tickets.agent(
             Agent::new()
                 .provider(provider.clone())
                 .model("mock")
                 .role("test")
+                .directives(|_| Some("PLEASE CALL A TOOL NOW"))
                 .build(),
         );
 
@@ -316,7 +327,7 @@ mod tests {
         let injected = user_text(&provider.received()[1]);
         assert!(
             injected.contains("PLEASE CALL A TOOL NOW"),
-            "hook directive must be injected: {injected:?}",
+            "the replacement must be injected: {injected:?}",
         );
         assert!(
             !injected.contains("was not accepted"),
@@ -325,7 +336,42 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn directive_editor_rewrites_for_the_agent_it_addresses() {
+    async fn a_replacement_reads_the_attempt_the_retry_bound() {
+        let results_dir = crate::test_util::TempDir::new().unwrap();
+        let provider = MockProvider::with_results(vec![
+            Ok(text_response("just thinking, no tool call")),
+            Ok(write_result_response("done")),
+        ]);
+        let tickets = TicketQueue::new();
+        tickets
+            .dir(results_dir.path().to_path_buf())
+            .max_request_retries(0)
+            .request_retry_delay(Duration::from_millis(1))
+            .max_schema_retries(3);
+        tickets.agent(
+            Agent::new()
+                .provider(provider.clone())
+                .model("mock")
+                .role("test")
+                .directives(|_| Some("attempt {attempt} of {max_attempts}"))
+                .build(),
+        );
+
+        tickets.start();
+        tickets.task("go");
+        tokio::time::timeout(Duration::from_secs(5), tickets.finish_all())
+            .await
+            .expect("finish did not finish within 5s");
+
+        let injected = user_text(&provider.received()[1]);
+        assert!(
+            injected.contains("attempt 1 of 3"),
+            "the retry must bind what it emitted: {injected:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn a_replacement_names_the_agent_it_addresses() {
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let scout = MockProvider::with_results(vec![
             Ok(text_response("just thinking, no tool call")),
@@ -340,18 +386,18 @@ mod tests {
             .dir(results_dir.path().to_path_buf())
             .max_request_retries(0)
             .request_retry_delay(Duration::from_millis(1))
-            .edit_directive_on_retry(|event, directive| {
-                // An id is `<label>-<n>`, and only this agent carries the label.
-                if event.agent_id.starts_with("scout") {
-                    *directive = "SCOUT, CALL A TOOL".into();
-                }
-            });
+            .max_schema_retries(3);
+        // An id is `<label>-<n>`, so the two agents read their own name back.
+        fn addressed(_: &str) -> Option<&'static str> {
+            Some("{agent}, CALL A TOOL")
+        }
         tickets.agent(
             Agent::new()
                 .label("scout")
                 .provider(scout.clone())
                 .model("mock")
                 .role("test")
+                .directives(addressed)
                 .build(),
         );
         tickets.agent(
@@ -360,6 +406,7 @@ mod tests {
                 .provider(worker.clone())
                 .model("mock")
                 .role("test")
+                .directives(addressed)
                 .build(),
         );
 
@@ -372,18 +419,18 @@ mod tests {
 
         let scouted = user_text(&scout.received()[1]);
         assert!(
-            scouted.contains("SCOUT, CALL A TOOL"),
-            "the named agent must get the rewritten directive: {scouted:?}",
+            scouted.contains("scout-1, CALL A TOOL"),
+            "the directive must bind the agent it addresses: {scouted:?}",
         );
         let worked = user_text(&worker.received()[1]);
         assert!(
-            worked.contains("was not accepted"),
-            "every other agent must keep the built-in directive: {worked:?}",
+            worked.contains("worker-1, CALL A TOOL"),
+            "every agent must read its own id: {worked:?}",
         );
     }
 
     #[tokio::test]
-    async fn directive_editor_that_writes_nothing_keeps_the_default_directive() {
+    async fn the_built_in_directive_is_injected_when_nothing_replaces_it() {
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let provider = MockProvider::with_results(vec![
             Ok(text_response("just thinking, no tool call")),
@@ -394,7 +441,7 @@ mod tests {
             .dir(results_dir.path().to_path_buf())
             .max_request_retries(0)
             .request_retry_delay(Duration::from_millis(1))
-            .edit_directive_on_retry(|_, _| {});
+            .max_schema_retries(3);
         tickets.agent(
             Agent::new()
                 .provider(provider.clone())
@@ -412,7 +459,7 @@ mod tests {
         let injected = user_text(&provider.received()[1]);
         assert!(
             injected.contains("was not accepted"),
-            "None must fall back to the built-in directive: {injected:?}",
+            "an unreplaced directive must render its built-in text: {injected:?}",
         );
     }
 
@@ -877,7 +924,10 @@ mod tests {
             .collect();
         assert_eq!(
             schema_retries,
-            vec![(1, super::RESUME_OR_FINISH_DETAIL.to_string())],
+            vec![(
+                1,
+                DirectiveStore::default().render(crate::prompts::directives::NO_TOOL_CALLED, &[]),
+            )],
             "exactly one SchemaRetried at attempt 1 with the silence detail",
         );
     }

@@ -1,6 +1,12 @@
 //! Fetches a URL and returns its extracted text. Gives an agent access to external documentation the prompt cannot enumerate up front.
 
 use super::tool::{Tool, ToolContext, ToolResult};
+use crate::prompts::directives::{
+    DirectiveStore, FETCH_URL_BODY_NOT_READ, FETCH_URL_CREDENTIALS_PRESENT, FETCH_URL_HOST_MISSING,
+    FETCH_URL_HOST_NOT_RESOLVABLE, FETCH_URL_REDIRECT_LOCATION_MISSING, FETCH_URL_REQUEST_FAILED,
+    FETCH_URL_RESPONSE_TOO_LARGE, FETCH_URL_SCHEME_MISSING, FETCH_URL_SCHEME_UNSUPPORTED,
+    FETCH_URL_TOO_LONG, FETCH_URL_TOO_MANY_REDIRECTS,
+};
 
 const MAX_URL_LENGTH: usize = 2000;
 const MAX_RESPONSE_BYTES: usize = 10 * 1024 * 1024;
@@ -98,15 +104,15 @@ impl From<FetchUrlTool> for Tool {
     }
 }
 
-async fn run(args: FetchUrlArgs, _ctx: ToolContext, impersonate: bool) -> ToolResult {
+async fn run(args: FetchUrlArgs, ctx: ToolContext, impersonate: bool) -> ToolResult {
     let FetchUrlArgs { url, max_length } = args;
 
-    let validated_url = match validate_url(&url) {
+    let validated_url = match validate_url(&url, &ctx.directives) {
         Ok(u) => u,
         Err(msg) => return ToolResult::error(msg),
     };
 
-    let text = match fetch_url(&validated_url, impersonate).await {
+    let text = match fetch_url(&validated_url, impersonate, &ctx.directives).await {
         Ok(text) => text,
         Err(msg) => return ToolResult::error(msg),
     };
@@ -155,7 +161,11 @@ enum FetchedContent {
     },
 }
 
-async fn fetch_url(url: &str, impersonate: bool) -> std::result::Result<FetchedContent, String> {
+async fn fetch_url(
+    url: &str,
+    impersonate: bool,
+    directives: &DirectiveStore,
+) -> std::result::Result<FetchedContent, String> {
     // Manual redirect handling prevents open-redirect exploitation across domains.
     let mut builder = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(FETCH_TIMEOUT_SECS))
@@ -168,7 +178,7 @@ async fn fetch_url(url: &str, impersonate: bool) -> std::result::Result<FetchedC
     }
     let client = builder.build().map_err(|e| e.to_string())?;
 
-    let response = follow_safe_redirects(&client, url, impersonate).await?;
+    let response = follow_safe_redirects(&client, url, impersonate, directives).await?;
     if let FollowResult::CrossDomain {
         original_url,
         redirect_url,
@@ -196,11 +206,14 @@ async fn fetch_url(url: &str, impersonate: bool) -> std::result::Result<FetchedC
     let bytes = response
         .bytes()
         .await
-        .map_err(|e| format!("Failed to read response: {e}"))?;
+        .map_err(|e| directives.render(FETCH_URL_BODY_NOT_READ, &[("error", &e.to_string())]))?;
     if bytes.len() > MAX_RESPONSE_BYTES {
-        return Err(format!(
-            "Response too large: {} bytes (max {MAX_RESPONSE_BYTES})",
-            bytes.len()
+        return Err(directives.render(
+            FETCH_URL_RESPONSE_TOO_LARGE,
+            &[
+                ("bytes", &bytes.len().to_string()),
+                ("limit", &MAX_RESPONSE_BYTES.to_string()),
+            ],
         ));
     }
 
@@ -301,6 +314,7 @@ async fn follow_safe_redirects(
     client: &reqwest::Client,
     url: &str,
     impersonate: bool,
+    directives: &DirectiveStore,
 ) -> std::result::Result<FollowResult, String> {
     let mut current_url = url.to_string();
 
@@ -309,10 +323,9 @@ async fn follow_safe_redirects(
         for (name, value) in request_headers(impersonate, hop == 0) {
             request = request.header(name, value);
         }
-        let response = request
-            .send()
-            .await
-            .map_err(|e| format!("Fetch failed: {e}"))?;
+        let response = request.send().await.map_err(|e| {
+            directives.render(FETCH_URL_REQUEST_FAILED, &[("error", &e.to_string())])
+        })?;
 
         let status = response.status().as_u16();
         if !is_redirect(status) {
@@ -323,7 +336,7 @@ async fn follow_safe_redirects(
             .headers()
             .get("location")
             .and_then(|v| v.to_str().ok())
-            .ok_or("Redirect missing Location header")?;
+            .ok_or_else(|| directives.render(FETCH_URL_REDIRECT_LOCATION_MISSING, &[]))?;
 
         let redirect_url = resolve_redirect_location(&current_url, location);
 
@@ -338,7 +351,10 @@ async fn follow_safe_redirects(
         }
     }
 
-    Err(format!("Too many redirects (exceeded {MAX_REDIRECT_HOPS})"))
+    Err(directives.render(
+        FETCH_URL_TOO_MANY_REDIRECTS,
+        &[("limit", &MAX_REDIRECT_HOPS.to_string())],
+    ))
 }
 
 fn is_redirect(status: u16) -> bool {
@@ -413,30 +429,35 @@ fn resolve_redirect_location(base_url: &str, location: &str) -> String {
 
 // URL validation
 
-fn validate_url(url: &str) -> std::result::Result<String, String> {
+fn validate_url(url: &str, directives: &DirectiveStore) -> std::result::Result<String, String> {
     if url.len() > MAX_URL_LENGTH {
-        return Err(format!(
-            "URL too long: {} chars (max {MAX_URL_LENGTH})",
-            url.len()
+        return Err(directives.render(
+            FETCH_URL_TOO_LONG,
+            &[
+                ("length", &url.len().to_string()),
+                ("limit", &MAX_URL_LENGTH.to_string()),
+            ],
         ));
     }
 
-    let (scheme, rest) = url.split_once("://").ok_or("Invalid URL: missing scheme")?;
+    let (scheme, rest) = url
+        .split_once("://")
+        .ok_or_else(|| directives.render(FETCH_URL_SCHEME_MISSING, &[]))?;
     if !matches!(scheme, "http" | "https") {
-        return Err(format!("Unsupported scheme: {scheme}"));
+        return Err(directives.render(FETCH_URL_SCHEME_UNSUPPORTED, &[("scheme", scheme)]));
     }
 
     let authority = rest.split('/').next().unwrap_or(rest);
     if authority.contains('@') {
-        return Err("URLs with embedded credentials are not allowed".into());
+        return Err(directives.render(FETCH_URL_CREDENTIALS_PRESENT, &[]));
     }
 
     let host = authority.split(':').next().unwrap_or(authority);
     if host.is_empty() {
-        return Err("URL must have a hostname".into());
+        return Err(directives.render(FETCH_URL_HOST_MISSING, &[]));
     }
     if host.split('.').count() < 2 {
-        return Err("URL must have a publicly resolvable hostname".into());
+        return Err(directives.render(FETCH_URL_HOST_NOT_RESOLVABLE, &[("host", host)]));
     }
 
     if scheme == "http" {
@@ -575,64 +596,64 @@ mod tests {
 
     #[test]
     fn validate_url_valid_https() {
-        let result = validate_url("https://example.com/page");
+        let result = validate_url_for_test("https://example.com/page");
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), "https://example.com/page");
     }
 
     #[test]
     fn validate_url_upgrades_http() {
-        let result = validate_url("http://example.com/page");
+        let result = validate_url_for_test("http://example.com/page");
         assert!(result.is_ok());
         assert!(result.unwrap().starts_with("https://"));
     }
 
     #[test]
     fn validate_url_accepts_port() {
-        let result = validate_url("https://example.com:8080/page");
+        let result = validate_url_for_test("https://example.com:8080/page");
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), "https://example.com:8080/page");
     }
 
     #[test]
     fn validate_url_accepts_query_and_fragment() {
-        assert!(validate_url("https://example.com/page?q=1&b=2#section").is_ok());
+        assert!(validate_url_for_test("https://example.com/page?q=1&b=2#section").is_ok());
     }
 
     #[test]
     fn validate_url_rejects_no_host() {
-        assert!(validate_url("https://").is_err());
+        assert!(validate_url_for_test("https://").is_err());
     }
 
     #[test]
     fn validate_url_rejects_empty_host() {
-        let err = validate_url("https:///path").unwrap_err();
-        assert!(err.contains("hostname"));
+        let err = validate_url_for_test("https:///path").unwrap_err();
+        assert!(err.contains("names no host"));
     }
 
     #[test]
     fn validate_url_rejects_single_label_host() {
-        let err = validate_url("https://localhost/page").unwrap_err();
+        let err = validate_url_for_test("https://localhost/page").unwrap_err();
         assert!(err.contains("publicly resolvable"));
     }
 
     #[test]
     fn validate_url_rejects_credentials() {
-        let err = validate_url("https://user:pass@example.com").unwrap_err();
+        let err = validate_url_for_test("https://user:pass@example.com").unwrap_err();
         assert!(err.contains("credentials"));
     }
 
     #[test]
     fn validate_url_rejects_too_long() {
         let long = format!("https://example.com/{}", "a".repeat(MAX_URL_LENGTH));
-        let err = validate_url(&long).unwrap_err();
-        assert!(err.contains("too long"));
+        let err = validate_url_for_test(&long).unwrap_err();
+        assert!(err.contains("over the 2000 character limit"));
     }
 
     #[test]
     fn validate_url_rejects_ftp() {
-        let err = validate_url("ftp://example.com/file").unwrap_err();
-        assert!(err.contains("Unsupported scheme"));
+        let err = validate_url_for_test("ftp://example.com/file").unwrap_err();
+        assert!(err.contains("Scheme `ftp` cannot be fetched"));
     }
 
     // Output
@@ -878,4 +899,9 @@ mod tests {
             "line1\n\nline2"
         );
     }
+}
+
+#[cfg(test)]
+fn validate_url_for_test(url: &str) -> std::result::Result<String, String> {
+    validate_url(url, &DirectiveStore::default())
 }

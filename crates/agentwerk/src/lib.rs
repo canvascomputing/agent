@@ -105,3 +105,7 @@ pub use schemas::SchemaStore;
 pub use event::Event;
 pub use event::EventKind;
 pub use event::FinishReason;
+
+// The one public face of `prompts`: what agentwerk tells the model when it has
+// to correct it. The rest of the module assembles a role and stays internal.
+pub use prompts::directives::Directive;

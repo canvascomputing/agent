@@ -38,6 +38,7 @@ from ._agentwerk import (
     FinishTool,
     CommandTool,
     event_names,
+    Directive,
 )
 
 # The names an `Event.kind` reports, as
@@ -85,6 +86,7 @@ __all__ = [
     "tool",
     "Agent",
     "Compaction",
+    "Directive",
     "Event",
     "EventName",
     "Knowledge",

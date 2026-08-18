@@ -5,6 +5,9 @@ use std::sync::Arc;
 
 use crate::agents::knowledge::{Knowledge, KnowledgeError};
 use crate::event::{EventKind, KnowledgeAction, KnowledgeFailureKind};
+use crate::prompts::directives::{
+    KNOWLEDGE_PAGE_NOT_FOUND, KNOWLEDGE_REMOVE_FAILED, KNOWLEDGE_WRITE_FAILED,
+};
 
 use super::tool::{Tool, ToolContext, ToolResult};
 
@@ -117,7 +120,10 @@ fn run(store: &Knowledge, args: KnowledgeArgs, ctx: &ToolContext) -> ToolResult 
                         action: KnowledgeAction::Write,
                         reason: failure_kind(&why),
                     });
-                    ToolResult::error(why.to_string())
+                    ToolResult::error(
+                        ctx.directives
+                            .render(KNOWLEDGE_WRITE_FAILED, &[("error", &why.to_string())]),
+                    )
                 }
             }
         }
@@ -132,9 +138,10 @@ fn run(store: &Knowledge, args: KnowledgeArgs, ctx: &ToolContext) -> ToolResult 
                     action: KnowledgeAction::Read,
                     reason: failure_kind(&why),
                 });
-                ToolResult::success(format!(
-                        "No page found for `{slug}`. The `list` action shows every page that exists: an unlisted slug cannot be read."
-                    ))
+                ToolResult::success(
+                    ctx.directives
+                        .render(KNOWLEDGE_PAGE_NOT_FOUND, &[("slug", &slug)]),
+                )
             }
         },
 
@@ -148,7 +155,10 @@ fn run(store: &Knowledge, args: KnowledgeArgs, ctx: &ToolContext) -> ToolResult 
                     action: KnowledgeAction::Remove,
                     reason: failure_kind(&why),
                 });
-                ToolResult::error(why.to_string())
+                ToolResult::error(
+                    ctx.directives
+                        .render(KNOWLEDGE_REMOVE_FAILED, &[("error", &why.to_string())]),
+                )
             }
         },
 

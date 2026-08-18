@@ -483,6 +483,36 @@ A violated limit emits a `policy_violated` event, see [`EventKind`](https://docs
 
 </details>
 
+### Directives
+
+A directive is used when a model fails to perform a specific task. It is a message for correcting the agent's behavior.
+
+```python
+from agentwerk import Agent, Directive
+
+
+def tune(key):
+    if key == Directive.GREP_FAILED:
+        return "The search did not run. Narrow `path`."
+    return None
+
+
+agent = Agent.from_env().directives(tune).build()
+```
+
+<details>
+<summary>All directive settings</summary>
+
+| Method | Description |
+|--------|-------------|
+| `directives(compute)` | Decide every directive's text with one function. |
+
+The function returns a directive template. So you can access template variables, like `{detail}`, `{attempt}`, and `{path}`.
+
+See [prompts/directives](https://github.com/canvascomputing/agentwerk/tree/main/crates/agentwerk/src/prompts/directives) for the built-in text.
+
+</details>
+
 ### Sessions
 
 <div align="left">
@@ -713,7 +743,6 @@ tickets.create_ticket_on_failure(retry_once)
 | | `create_ticket_on_failure(make)` | Enqueue a retry for a ticket that failed. |
 | **Rewrite** | `edit_replies_on_event(editor)` | Rewrite a ticket's replies before its next request. |
 | | `edit_replies_on_compaction(editor)` | Decide what compaction does with a ticket's replies. |
-| | `edit_directive_on_retry(editor)` | Override the prompt that corrects an agent's behavior. |
 
 Save replies of every finished ticket as a training example:
 

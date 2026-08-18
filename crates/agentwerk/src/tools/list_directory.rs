@@ -3,6 +3,9 @@
 use std::path::PathBuf;
 
 use super::tool::{Tool, ToolContext, ToolResult};
+use crate::prompts::directives::{
+    LIST_DIRECTORY_FAILED, LIST_DIRECTORY_NOT_FOUND, LIST_DIRECTORY_PATH_IS_FILE,
+};
 
 /// List the entries of a directory with type and size. Concurrent. Pair with
 /// [`GlobTool`](crate::tools::GlobTool) when you need pattern-based file discovery.
@@ -48,7 +51,10 @@ async fn run(args: ListDirectoryArgs, ctx: ToolContext) -> ToolResult {
     let base = ctx.dir.join(&path_str);
 
     if base.exists() && !base.is_dir() {
-        return ToolResult::error(format!("Path is not a directory: {path_str}"));
+        return ToolResult::error(
+            ctx.directives
+                .render(LIST_DIRECTORY_PATH_IS_FILE, &[("path", &path_str)]),
+        );
     }
 
     match list_entries(&base, &base, recursive) {
@@ -67,11 +73,22 @@ async fn run(args: ListDirectoryArgs, ctx: ToolContext) -> ToolResult {
                 .collect();
             ToolResult::success(lines.join("\n"))
         }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => ToolResult::error(format!(
-            "Directory does not exist: {path_str}. {}",
-            super::util::not_found_hint(&ctx.dir, &base)
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            ToolResult::error(ctx.directives.render(
+                LIST_DIRECTORY_NOT_FOUND,
+                &[
+                    ("path", &path_str),
+                    (
+                        "hint",
+                        &super::util::not_found_hint(&ctx.dir, &base, &ctx.directives),
+                    ),
+                ],
+            ))
+        }
+        Err(e) => ToolResult::error(ctx.directives.render(
+            LIST_DIRECTORY_FAILED,
+            &[("path", &path_str), ("error", &e.to_string())],
         )),
-        Err(e) => ToolResult::error(format!("Error listing directory: {e}")),
     }
 }
 
