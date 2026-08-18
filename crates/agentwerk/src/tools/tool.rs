@@ -259,6 +259,12 @@ impl ToolRegistry {
         folded.next().is_none().then(|| Arc::clone(found))
     }
 
+    /// True when a tool of exactly this name is registered. Exact where
+    /// [`Self::get`] folds, so a near-miss never passes for the real tool.
+    pub(crate) fn contains(&self, name: &str) -> bool {
+        self.tools.iter().any(|tool| tool.name() == name)
+    }
+
     /// Get the registered names, sorted, for the error that tells the model what
     /// it could have called.
     fn names(&self) -> Vec<String> {
@@ -994,6 +1000,18 @@ mod tests {
         registry.register(mock_tool("read_file", true, "file contents"));
         assert!(registry.get("read_file").is_some());
         assert!(registry.get("nonexistent").is_none());
+    }
+
+    #[test]
+    fn contains_answers_on_the_exact_name_only() {
+        let mut registry = ToolRegistry::default();
+        registry.register(mock_tool("grep", true, "matches"));
+        assert!(registry.contains("grep"));
+        assert!(!registry.contains("glob"));
+        assert!(
+            !registry.contains("grep_tool"),
+            "a folded spelling is not the registered name",
+        );
     }
 
     #[test]

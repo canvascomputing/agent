@@ -1566,12 +1566,12 @@ Not bound: it is how `CommandTool` reads one command line.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `NAME: string = "finish"` | private |
 | Rust | `DEFINITION: string` | private |
 | Rust | `SCHEMA: string` | private |
 | Rust | `FinishTool` | pub |
 | Python | `FinishTool()` | |
 | Rust | `impl From<FinishTool> for Tool` | pub |
+| Rust | `FinishTool.NAME: string = "finish"` | crate |
 | Rust | `FinishTool.from_schema(schema: Schema?): Tool` | crate |
 | Rust | `finish(input: json, ctx: ToolContext, schema: Schema?): ToolResult throws ToolResult` | private |
 | Rust | `hand_over(ticket_queue: TicketQueue, input: json, parent_key: string, agent: string, result: json, schema: Schema?, handover: string): ToolResult throws ToolResult` | private |
@@ -1661,6 +1661,7 @@ Not bound: it is how `CommandTool` reads one command line.
 | Rust | `ToolRegistry.register(tool: Tool): void` | crate |
 | Rust | `ToolRegistry.resolve(name: string): Tool throws string` | private |
 | Rust | `ToolRegistry.get(name: string): Tool?` | crate |
+| Rust | `ToolRegistry.contains(name: string): boolean` | crate |
 | Rust | `ToolRegistry.names(): string[]` | private |
 | Rust | `ToolRegistry.tools(): Tool[]` | crate |
 | Rust | `ToolRegistry.execute(calls: ToolCall[], ctx: ToolContext): Promise<ToolResult[]>` | crate |

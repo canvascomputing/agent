@@ -175,6 +175,9 @@ impl PyAgent {
     }
 
     /// Let the agent wait for new instructions to keep a ticket in-progress.
+    ///
+    /// It gets no `FinishTool()`; the host closes the ticket with
+    /// `set_finished(key, result)`.
     fn interactive(mut slf: PyRefMut<'_, Self>) -> PyResult<PyRefMut<'_, Self>> {
         slf.ensure_unbuilt()?;
         slf.interactive = true;
