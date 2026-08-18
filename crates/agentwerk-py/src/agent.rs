@@ -146,7 +146,7 @@ impl PyAgent {
     ) -> PyResult<PyRefMut<'py, Self>> {
         slf.ensure_unbuilt()?;
         let resolved = if let Ok(name) = model.extract::<String>() {
-            Model::from_name(name)
+            Model::new(name)
         } else {
             model.extract::<PyRef<PyModel>>()?.inner.clone()
         };
@@ -171,7 +171,7 @@ impl PyAgent {
     /// The id the agent works under, once it is built.
     #[getter]
     fn id(&self) -> PyResult<&str> {
-        Ok(self.built()?.get_id())
+        Ok(self.built()?.id())
     }
 
     /// Let the agent wait for new instructions to keep a ticket in-progress.

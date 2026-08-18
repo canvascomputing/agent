@@ -36,8 +36,8 @@ impl PyTicketQueue {
 
     /// Continue a session from a directory written earlier.
     #[staticmethod]
-    fn load(dir: &str) -> PyResult<Self> {
-        let inner = TicketQueue::load(dir).map_err(runtime_error)?;
+    fn load(tickets_dir: &str) -> PyResult<Self> {
+        let inner = TicketQueue::load(tickets_dir).map_err(runtime_error)?;
         Ok(PyTicketQueue { inner })
     }
 
@@ -80,39 +80,39 @@ impl PyTicketQueue {
     }
 
     /// Limit the total number of turns.
-    fn max_turns(slf: PyRef<'_, Self>, n: u32) -> PyRef<'_, Self> {
-        slf.inner.max_turns(n);
+    fn max_turns(slf: PyRef<'_, Self>, count: u32) -> PyRef<'_, Self> {
+        slf.inner.max_turns(count);
         slf
     }
 
     /// Limit the total input tokens.
-    fn max_input_tokens(slf: PyRef<'_, Self>, n: u64) -> PyRef<'_, Self> {
-        slf.inner.max_input_tokens(n);
+    fn max_input_tokens(slf: PyRef<'_, Self>, count: u64) -> PyRef<'_, Self> {
+        slf.inner.max_input_tokens(count);
         slf
     }
 
     /// Limit the total output tokens.
-    fn max_output_tokens(slf: PyRef<'_, Self>, n: u64) -> PyRef<'_, Self> {
-        slf.inner.max_output_tokens(n);
+    fn max_output_tokens(slf: PyRef<'_, Self>, count: u64) -> PyRef<'_, Self> {
+        slf.inner.max_output_tokens(count);
         slf
     }
 
     /// Limit the output tokens of a single request.
-    fn max_request_tokens(slf: PyRef<'_, Self>, n: u32) -> PyRef<'_, Self> {
-        slf.inner.max_request_tokens(n);
+    fn max_request_tokens(slf: PyRef<'_, Self>, count: u32) -> PyRef<'_, Self> {
+        slf.inner.max_request_tokens(count);
         slf
     }
 
     /// Limit the consecutive turns without a valid tool call; any successful
     /// call resets the count.
-    fn max_schema_retries(slf: PyRef<'_, Self>, n: u32) -> PyRef<'_, Self> {
-        slf.inner.max_schema_retries(n);
+    fn max_schema_retries(slf: PyRef<'_, Self>, count: u32) -> PyRef<'_, Self> {
+        slf.inner.max_schema_retries(count);
         slf
     }
 
     /// Limit how often a failing request is retried.
-    fn max_request_retries(slf: PyRef<'_, Self>, n: u32) -> PyRef<'_, Self> {
-        slf.inner.max_request_retries(n);
+    fn max_request_retries(slf: PyRef<'_, Self>, count: u32) -> PyRef<'_, Self> {
+        slf.inner.max_request_retries(count);
         slf
     }
 
@@ -205,10 +205,10 @@ impl PyTicketQueue {
 
     /// Read every event as it is emitted. It replaces the handler that prints to
     /// stderr.
-    fn on_event<'py>(slf: PyRef<'py, Self>, callback: Py<PyAny>) -> PyRef<'py, Self> {
+    fn on_event<'py>(slf: PyRef<'py, Self>, handler: Py<PyAny>) -> PyRef<'py, Self> {
         slf.inner.on_event(move |event: &Event| {
             Python::attach(|py| {
-                let handled = callback.bind(py).call1((to_py_event(event),));
+                let handled = handler.bind(py).call1((to_py_event(event),));
                 if let Err(err) = handled {
                     err.print(py);
                 }
@@ -219,10 +219,10 @@ impl PyTicketQueue {
 
     /// Read every finished ticket together with its result, already validated
     /// against the ticket's schema.
-    fn on_result<'py>(slf: PyRef<'py, Self>, callback: Py<PyAny>) -> PyRef<'py, Self> {
+    fn on_result<'py>(slf: PyRef<'py, Self>, handler: Py<PyAny>) -> PyRef<'py, Self> {
         slf.inner.on_result(move |ticket: &Ticket, result: &Value| {
             Python::attach(|py| {
-                if let Err(err) = call_with_result(py, &callback, ticket, result) {
+                if let Err(err) = call_with_result(py, &handler, ticket, result) {
                     err.print(py);
                 }
             });
@@ -239,11 +239,11 @@ impl PyTicketQueue {
     /// Handlers run only while `finish` or `finish_all` is awaited, and MUST
     /// NOT call either themselves: that waits forever on the handover the
     /// handler is running inside.
-    fn on_result_async<'py>(slf: PyRef<'py, Self>, callback: Py<PyAny>) -> PyRef<'py, Self> {
+    fn on_result_async<'py>(slf: PyRef<'py, Self>, handler: Py<PyAny>) -> PyRef<'py, Self> {
         slf.inner
             .on_result_async(move |ticket: Ticket, result: Value| {
                 let coroutine = Python::attach(|py| {
-                    let produced = call_with_result(py, &callback, &ticket, &result)?;
+                    let produced = call_with_result(py, &handler, &ticket, &result)?;
                     pyo3_async_runtimes::tokio::into_future(produced)
                 });
                 async move {
@@ -267,10 +267,10 @@ impl PyTicketQueue {
     /// Handlers run only while `finish` or `finish_all` is awaited, and MUST
     /// NOT call either themselves: that waits forever on the handover the
     /// handler is running inside.
-    fn on_results_async<'py>(slf: PyRef<'py, Self>, callback: Py<PyAny>) -> PyRef<'py, Self> {
+    fn on_results_async<'py>(slf: PyRef<'py, Self>, handler: Py<PyAny>) -> PyRef<'py, Self> {
         slf.inner.on_results_async(move |results: Vec<Value>| {
             let coroutine = Python::attach(|py| {
-                let produced = call_with_results(py, &callback, &results)?;
+                let produced = call_with_results(py, &handler, &results)?;
                 pyo3_async_runtimes::tokio::into_future(produced)
             });
             async move {
@@ -290,10 +290,10 @@ impl PyTicketQueue {
     /// Read every result the run has produced so far, each time one lands. The
     /// same list `results()` gives after the run, in creation order, delivered
     /// while it is still going.
-    fn on_results<'py>(slf: PyRef<'py, Self>, callback: Py<PyAny>) -> PyRef<'py, Self> {
+    fn on_results<'py>(slf: PyRef<'py, Self>, handler: Py<PyAny>) -> PyRef<'py, Self> {
         slf.inner.on_results(move |results: &[Value]| {
             Python::attach(|py| {
-                if let Err(err) = call_with_results(py, &callback, results) {
+                if let Err(err) = call_with_results(py, &handler, results) {
                     err.print(py);
                 }
             });
@@ -304,10 +304,10 @@ impl PyTicketQueue {
     /// Read every failure together with the ticket it happened in: a failed
     /// ticket, tool call, or request, a file that would not open, or compaction
     /// that could not finish. Read `event.kind` to tell them apart.
-    fn on_failure<'py>(slf: PyRef<'py, Self>, callback: Py<PyAny>) -> PyRef<'py, Self> {
+    fn on_failure<'py>(slf: PyRef<'py, Self>, handler: Py<PyAny>) -> PyRef<'py, Self> {
         slf.inner.on_failure(move |event: &Event, ticket: &Ticket| {
             Python::attach(|py| {
-                if let Err(err) = call_with_ticket(py, &callback, event, ticket) {
+                if let Err(err) = call_with_ticket(py, &handler, event, ticket) {
                     err.print(py);
                 }
             });
@@ -420,11 +420,11 @@ impl PyTicketQueue {
     ///
     /// It arrives with its messages, so a handler can pass it straight to
     /// `Trajectory.from_ticket`.
-    fn on_ticket<'py>(slf: PyRef<'py, Self>, callback: Py<PyAny>) -> PyRef<'py, Self> {
+    fn on_ticket<'py>(slf: PyRef<'py, Self>, handler: Py<PyAny>) -> PyRef<'py, Self> {
         slf.inner.on_ticket(move |event: &Event, ticket: &Ticket| {
             Python::attach(|py| {
                 let handled = Py::new(py, PyTicket::from_ticket(ticket))
-                    .and_then(|view| callback.bind(py).call1((to_py_event(event), view)));
+                    .and_then(|view| handler.bind(py).call1((to_py_event(event), view)));
                 if let Err(err) = handled {
                     err.print(py);
                 }

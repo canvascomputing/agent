@@ -94,7 +94,7 @@ where
 
 /// Caller-supplied override for the model's context window, read from
 /// `MODEL_CONTEXT_WINDOW`. Use when the registry guess (see
-/// [`super::Model::from_name`]) disagrees with the runtime's actual
+/// [`super::Model::new`]) disagrees with the runtime's actual
 /// window: a local llama.cpp or vLLM deployment whose name does not
 /// match any registry entry, or a hosted model whose deployment was
 /// truncated below its native window. Returns `None` when the variable

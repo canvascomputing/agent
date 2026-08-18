@@ -28,7 +28,7 @@ pub(super) async fn run(context: &mut TicketContext<'_>, reason: CompactReason) 
 
     let on_progress: Arc<dyn Fn(u32, u32) + Send + Sync> = {
         let ticket_queue = Arc::clone(context.ticket_queue);
-        let agent_id = context.agent.get_id().to_string();
+        let agent_id = context.agent.id().to_string();
         let ticket_key = context.ticket_key.clone();
         Arc::new(move |completed, total| {
             ticket_queue.emit(

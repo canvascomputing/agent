@@ -392,10 +392,9 @@ mod tests {
         let seen = Arc::clone(&reported);
         tickets.on_event(move |event| match &event.kind {
             EventKind::KnowledgeUsed { op } => seen.lock().unwrap().push(op.to_string()),
-            EventKind::KnowledgeFailed { op, reason } => seen
-                .lock()
-                .unwrap()
-                .push(format!("{op}:{}", reason.as_str())),
+            EventKind::KnowledgeFailed { op, reason } => {
+                seen.lock().unwrap().push(format!("{op}:{}", reason.name()))
+            }
             _ => {}
         });
         let ctx =

@@ -51,6 +51,40 @@ def module_classes():
     return [name for name in aw.__all__ if inspect.isclass(getattr(aw, name))]
 
 
+def stub_methods(name):
+    for node in stub_tree().body:
+        if isinstance(node, ast.ClassDef) and node.name == name:
+            return [
+                member
+                for member in node.body
+                if isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef))
+            ]
+    raise AssertionError(f"{name} is missing from {STUB.name}")
+
+
+def stub_parameters(node):
+    spec = node.args
+    names = [arg.arg for arg in spec.posonlyargs + spec.args]
+    if spec.vararg:
+        names.append("*" + spec.vararg.arg)
+    names += [arg.arg for arg in spec.kwonlyargs]
+    if spec.kwarg:
+        names.append("**" + spec.kwarg.arg)
+    return [name for name in names if name != "self"]
+
+
+def live_parameters(member):
+    names = []
+    for parameter in inspect.signature(member).parameters.values():
+        if parameter.kind is parameter.VAR_POSITIONAL:
+            names.append("*" + parameter.name)
+        elif parameter.kind is parameter.VAR_KEYWORD:
+            names.append("**" + parameter.name)
+        else:
+            names.append(parameter.name)
+    return [name for name in names if name != "self"]
+
+
 def test_every_exported_name_is_declared_in_the_stub():
     assert set(aw.__all__) <= stub_top_level_names()
 
@@ -63,6 +97,22 @@ def test_every_class_member_is_declared_in_the_stub():
         if gap:
             missing[name] = sorted(gap)
     assert missing == {}
+
+
+def test_every_stub_parameter_is_named_as_the_module_names_it():
+    renamed = {}
+    for name in module_classes():
+        klass = getattr(aw, name)
+        for method in stub_methods(name):
+            live = klass if method.name == "__init__" else getattr(klass, method.name)
+            try:
+                expected = live_parameters(live)
+            except (TypeError, ValueError):
+                # A property and a slot wrapper carry no signature to compare.
+                continue
+            if stub_parameters(method) != expected:
+                renamed[f"{name}.{method.name}"] = (stub_parameters(method), expected)
+    assert renamed == {}
 
 
 def test_the_stub_declares_nothing_the_module_lacks():

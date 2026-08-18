@@ -407,8 +407,8 @@ impl TicketQueue {
     /// handler fires on every event, in installation order. Handlers
     /// must be cheap and non-blocking. When no handler has been
     /// installed, [`default_logger`] runs in its place.
-    pub fn on_event(&self, h: impl Fn(&Event) + Send + Sync + 'static) -> &Self {
-        self.event_handlers.lock().unwrap().push(Arc::new(h));
+    pub fn on_event(&self, handler: impl Fn(&Event) + Send + Sync + 'static) -> &Self {
+        self.event_handlers.lock().unwrap().push(Arc::new(handler));
         self
     }
 
@@ -888,45 +888,45 @@ impl TicketQueue {
     }
 
     /// Limit the total number of turns.
-    pub fn max_turns(&self, n: u32) -> &Self {
-        self.policies.lock().unwrap().max_turns = Some(n);
+    pub fn max_turns(&self, count: u32) -> &Self {
+        self.policies.lock().unwrap().max_turns = Some(count);
         self
     }
 
     /// Limit the total input tokens.
-    pub fn max_input_tokens(&self, n: u64) -> &Self {
-        self.policies.lock().unwrap().max_input_tokens = Some(n);
+    pub fn max_input_tokens(&self, count: u64) -> &Self {
+        self.policies.lock().unwrap().max_input_tokens = Some(count);
         self
     }
 
     /// Limit the total output tokens.
-    pub fn max_output_tokens(&self, n: u64) -> &Self {
-        self.policies.lock().unwrap().max_output_tokens = Some(n);
+    pub fn max_output_tokens(&self, count: u64) -> &Self {
+        self.policies.lock().unwrap().max_output_tokens = Some(count);
         self
     }
 
     /// Limit the output tokens of a single request.
-    pub fn max_request_tokens(&self, n: u32) -> &Self {
-        self.policies.lock().unwrap().max_request_tokens = Some(n);
+    pub fn max_request_tokens(&self, count: u32) -> &Self {
+        self.policies.lock().unwrap().max_request_tokens = Some(count);
         self
     }
 
     /// Limit the consecutive turns without a valid tool call; any successful
     /// call resets the count.
-    pub fn max_schema_retries(&self, n: u32) -> &Self {
-        self.policies.lock().unwrap().max_schema_retries = Some(n);
+    pub fn max_schema_retries(&self, count: u32) -> &Self {
+        self.policies.lock().unwrap().max_schema_retries = Some(count);
         self
     }
 
     /// Limit how often a failing request is retried.
-    pub fn max_request_retries(&self, n: u32) -> &Self {
-        self.policies.lock().unwrap().max_request_retries = n;
+    pub fn max_request_retries(&self, count: u32) -> &Self {
+        self.policies.lock().unwrap().max_request_retries = count;
         self
     }
 
     /// Wait this long between retries.
-    pub fn request_retry_delay(&self, d: Duration) -> &Self {
-        self.policies.lock().unwrap().request_retry_delay = d;
+    pub fn request_retry_delay(&self, duration: Duration) -> &Self {
+        self.policies.lock().unwrap().request_retry_delay = duration;
         self
     }
 
@@ -935,8 +935,8 @@ impl TicketQueue {
     /// On reaching it, `finish` stops with
     /// `FinishReason::PolicyViolated(PolicyKind::Time)` and emits the matching
     /// `PolicyViolated` event.
-    pub fn max_time(&self, d: Duration) -> &Self {
-        self.policies.lock().unwrap().max_time = Some(d);
+    pub fn max_time(&self, duration: Duration) -> &Self {
+        self.policies.lock().unwrap().max_time = Some(duration);
         self
     }
 
@@ -1400,7 +1400,7 @@ impl TicketQueue {
             .unwrap()
             .iter()
             .filter(|a| a.is_interactive())
-            .map(|a| a.get_id().to_string())
+            .map(|a| a.id().to_string())
             .collect()
     }
 

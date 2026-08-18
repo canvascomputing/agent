@@ -1,6 +1,6 @@
 # Inventory
 
-Every declaration in `crates/agentwerk/src` and `crates/agentwerk-py/src`, one table per source file.
+Every declaration in `crates/agentwerk/src` and `crates/agentwerk-py/src`, one table per source file. `python/agentwerk/__init__.py` adds only `EventName` and `@tool`, which sit with the Rust items they wrap.
 
 > A commit that adds, renames, removes, or re-types an item changes this file in the same commit.
 
@@ -10,29 +10,30 @@ Signatures use one language-independent notation, so a Rust row and a Python row
 
 - Receivers, borrows, and lifetimes drop: `fn record(&self, event: &Event)` is `Stats.record(event: Event): void`.
 - A method carries its type: `Owner.name(..)`. A free function carries none.
-- `u8`, `u32`, `u64`, `usize`, `f32`, `f64`, and `Duration` are `number`.
+- `u8`, `u32`, `u64`, `usize`, `f32`, `f64`, and `Duration` are `number`, and a `Duration` constant shows milliseconds.
 - `&str`, `String`, `impl Into<String>`, `&Path`, and `PathBuf` are `string`.
 - `bool` is `boolean`, `()` is `void`, `serde_json::Value` is `json`.
 - `Vec<T>` and `&[T]` are `T[]`, `HashMap<K, V>` and `BTreeMap<K, V>` are `Record<K, V>`.
 - `Option<T>` is `T?`, written that way rather than as a union because a `|` splits a table cell.
 - `Result<T, E>` is `T throws E`, `io::Result<T>` is `T throws io::Error`.
 - An `async fn` returns `Promise<T>`.
-- `Arc<T>`, `Box<T>`, `Rc<T>`, `Mutex<T>`, `RwLock<T>`, `Weak<T>`, and `&T` unwrap to `T`.
+- `Arc<T>`, `Box<T>`, `Rc<T>`, `Mutex<T>`, `RwLock<T>`, and `&T` unwrap to `T`. Every other wrapper keeps its name: `Weak<TicketQueue>`, `Sender<Event>`, `JoinHandle<void>`.
 - A callback becomes an arrow: `Arc<dyn Fn(&Event) + Send + Sync>` is `(event: Event) => void`.
-- A generic bound erases to what the caller passes: `T: Serialize` is `json`.
+- A generic bound erases to what the caller passes: `T: Serialize` is `json`. A type's own parameters stay: `AgentBuilder<P, M>`, `ProviderResult<T>`.
 - Domain type names stay as the code writes them: `Ticket`, `Event`, `Status`, `PolicyKind`.
+- A constant shows `= value` when the value is one scalar or short string, and nothing when it is longer or computed.
 - Names are never re-cased: `is_todo`, never `isTodo`. Every name here is greppable in `src/`.
 
 ## Rows
 
-- `Language` is `both` when Rust and Python read the same after normalization. Otherwise a `Rust` row is followed by its `Python` row.
-- Every `pub` item is either half of a `both` row or has a `Python` row. `not bound` is the Python cell for an item the bindings leave out, with the reason where there is one.
-- A file the bindings leave out entirely says so in one line under its heading, and its rows then carry no `Python` row.
-- No `Python` row follows an enum variant, an associated constant, a trait impl, a module declaration, or a re-export line: the row above it already says what Python sees.
+- `Language` is `both` when Rust and Python read the same after normalization, and a `Python` row may still follow one to note a difference in behavior. Otherwise a `Rust` row is followed by its `Python` row.
+- Every item the crate exports is either half of a `both` row or has a `Python` row. `not bound` is the Python cell for an item the bindings leave out, with the reason where there is one.
+- A file whose exports the bindings leave out says so in one line under its heading, and its rows then carry no `Python` row. A `crates/agentwerk-py` file names the library file it binds instead. A file that exports nothing carries no note.
+- An enum variant, an associated constant, a trait impl, a module declaration, or a re-export takes a `Python` row only where Python does something the row above does not already imply.
 - A `Python` row leaves `Visibility` empty. A trailing `: note` states a behavioral difference.
-- `Visibility` is `pub`, `crate`, `super`, or `private`. In `crates/agentwerk-py` it is `python` for an item a `#[pyclass]`, `#[pymethods]`, or `#[pyfunction]` exposes though Rust keeps it private.
-- Struct fields sit inside the struct's row. An enum gets its own row plus one row per variant, carrying the variant's payload where it has one.
-- A hand-written trait impl is one row, written `impl Trait for Type`. Derived impls are not listed.
+- `Visibility` is the reach: `pub`, `crate`, `super`, or `private`, so a `pub(in path)` and a `pub` member of a `crate` type both record as `crate`. In `crates/agentwerk-py` it is `python` for anything a `#[pyclass]`, `#[pymethods]`, or `#[pyfunction]` exposes, whether or not Rust keeps it private.
+- Struct fields sit inside the struct's row, and a trait's members inside the trait's. An enum gets its own row plus one row per variant, carrying the variant's payload where it has one.
+- A hand-written trait impl is one row, written `impl Trait for Type` with the type as Rust spells it: `impl ProviderLike for Arc<T>`. Derived impls are not listed.
 - `#[cfg(test)]` items, `test_util.rs`, and `codegrep/*_tests.rs` are not listed.
 
 ## Python conversions
@@ -41,11 +42,12 @@ The rules the tables never repeat.
 
 - Every enum is its lowercase string: `ticket.status == "in_progress"`.
 - Every error type is `RuntimeError`.
-- Every `Duration` is float seconds, under the same parameter name.
+- Every `Duration` is a float named `seconds`. Every other parameter keeps its Rust name.
 - Every shared handle is a plain object, shared by passing it to several agents.
 - Every `async` item is awaitable.
 - An argument Rust takes by `Serialize` takes any JSON-serializable value.
 - A `json` value is a dict, list, or scalar.
+- A reader with no arguments is an attribute: `ticket.key`, `agent.id`.
 
 ## `crates/agentwerk/src/agents/agent.rs`
 
@@ -57,25 +59,25 @@ The rules the tables never repeat.
 | Python | folded into `Agent`: the type changes as the provider and model slots fill, which Python cannot hold across calls | |
 | Rust | `AgentBuilder.new(): AgentBuilder` | pub |
 | Python | `Agent()` | |
-| Rust | `AgentBuilder.provider(p: Provider): AgentBuilder` | pub |
+| Rust | `AgentBuilder.provider(provider: Provider): AgentBuilder` | pub |
 | Python | `Agent.provider(provider): Agent` | |
-| Rust | `AgentBuilder.model(m: Model): AgentBuilder` | pub |
+| Rust | `AgentBuilder.model(model: Model): AgentBuilder` | pub |
 | Python | `Agent.model(model): Agent` | |
-| Rust | `AgentBuilder.role(r: string): AgentBuilder` | pub |
+| Rust | `AgentBuilder.role(role: string): AgentBuilder` | pub |
 | Python | `Agent.role(role): Agent` | |
-| Rust | `AgentBuilder.label(l: string): AgentBuilder` | pub |
+| Rust | `AgentBuilder.label(label: string): AgentBuilder` | pub |
 | Python | `Agent.label(label): Agent` | |
 | Rust | `AgentBuilder.interactive(): AgentBuilder` | pub |
 | Python | `Agent.interactive(): Agent` | |
 | Rust | `AgentBuilder.template(key: string, value: string): AgentBuilder` | pub |
 | Python | `Agent.template(key, value): Agent` | |
-| Rust | `AgentBuilder.templates(vars: [string, string][]): AgentBuilder` | pub |
+| Rust | `AgentBuilder.templates(variables: [string, string][]): AgentBuilder` | pub |
 | Python | `Agent.templates(variables): Agent`: a mapping, so the bulk bind applies in key order where Rust preserves insertion order | |
 | Rust | `AgentBuilder.tool(tool: Tool): AgentBuilder` | pub |
 | Python | `Agent.tool(tool): Agent` | |
 | Rust | `AgentBuilder.tools(tools: Tool[]): AgentBuilder` | pub |
 | Python | `Agent.tools(tools): Agent` | |
-| Rust | `AgentBuilder.dir(p: string): AgentBuilder` | pub |
+| Rust | `AgentBuilder.dir(dir: string): AgentBuilder` | pub |
 | Python | `Agent.dir(dir): Agent` | |
 | Rust | `AgentBuilder.knowledge(store: Knowledge): AgentBuilder` | pub |
 | Python | `Agent.knowledge(store): Agent` | |
@@ -92,7 +94,7 @@ The rules the tables never repeat.
 | Python | `Agent()` | |
 | both | `Agent.from_env(): Agent` | pub |
 | Python | `Agent.from_env()`: raises `RuntimeError` where Rust panics | |
-| Rust | `Agent.get_id(): string` | pub |
+| Rust | `Agent.id(): string` | pub |
 | Python | `Agent.id`: a property, and a `RuntimeError` before `build()` | |
 | Rust | `Agent.is_interactive(): boolean` | super |
 | Rust | `Agent.handles(ticket_label: string?): boolean` | super |
@@ -158,7 +160,7 @@ The rules the tables never repeat.
 | Rust | `Knowledge { knowledge_dir: string, index: IndexEntry[], write_lock: void, index_char_limit: number }` | pub |
 | Python | `Knowledge` | |
 | both | `Knowledge.load(store_dir: string): Knowledge throws io::Error` | pub |
-| both | `Knowledge.index_char_limit(n: number): Knowledge` | pub |
+| both | `Knowledge.index_char_limit(count: number): Knowledge` | pub |
 | both | `Knowledge.get_index_char_limit(): number` | pub |
 | both | `Knowledge.index(): string` | pub |
 | Rust | `Knowledge.full_index(): string` | crate |
@@ -260,9 +262,9 @@ The rules the tables never repeat.
 | Language | Item | Visibility |
 |----------|------|------------|
 | Rust | `Policies { max_turns: number?, max_input_tokens: number?, max_output_tokens: number?, max_request_tokens: number?, max_schema_retries: number?, max_request_retries: number, request_retry_delay: number, max_time: number?, compact_at: number? }` | crate |
-| Rust | `Policies.DEFAULT_MAX_SCHEMA_RETRIES: number = 10` | pub |
-| Rust | `Policies.DEFAULT_MAX_REQUEST_RETRIES: number = 10` | pub |
-| Rust | `Policies.DEFAULT_REQUEST_RETRY_DELAY: number = 500` | pub |
+| Rust | `Policies.DEFAULT_MAX_SCHEMA_RETRIES: number = 10` | crate |
+| Rust | `Policies.DEFAULT_MAX_REQUEST_RETRIES: number = 10` | crate |
+| Rust | `Policies.DEFAULT_REQUEST_RETRY_DELAY: number = 500` | crate |
 | Rust | `impl Default for Policies` | crate |
 
 ## `crates/agentwerk/src/agents/retry.rs`
@@ -360,7 +362,7 @@ The rules the tables never repeat.
 | Rust | `TicketQueue.set_failed_by(key: string, agent: string): void throws TicketError` | crate |
 | Rust | `TicketQueue.set_final_status(key: string, status: Status, agent: string): void throws TicketError` | private |
 | Rust | `TicketQueue.set_result(key: string, result: json): [json, string[]] throws SchemaViolations` | crate |
-| both | `TicketQueue.edit_replies(key: string, edit: (replies: Reply[]) => void): TicketQueue` | pub |
+| both | `TicketQueue.edit_replies(key: string, editor: (replies: Reply[]) => void): TicketQueue` | pub |
 | Python | `TicketQueue.edit_replies(key, editor)`: the editor returns the new list, or `None` to keep the old one, where Rust mutates in place. An editor that raises, or returns anything but `Reply` objects, raises here | |
 | Rust | `TicketQueue.edit(key: string, task: json?, label: string?): void throws TicketError` | crate |
 
@@ -437,7 +439,7 @@ The rules the tables never repeat.
 | Rust | `Run.until_draining(): Promise<void>` | crate |
 | Rust | `Run.until_finished(): Promise<void>` | crate |
 | Rust | `Run.reset(): void` | private |
-| Rust | `TicketQueue { weak_self: TicketQueue, tickets: Record<string, Ticket>, agents: Agent[], policies: Policies, run: Run, cancel_filters: TicketFilter[], terminal_transitions_in_flight: number, stats: Stats, event_handlers: EventHandler[], awaited_results: AwaitedResults, event_stream: Event, reply_editing: ReplyEditing, compaction_editor: CompactionEditor?, directive_editor: DirectiveEditor?, schemas: SchemaStore?, dir: string, events_lock: void, join_handle: void, next_ticket_id: number? }` | pub |
+| Rust | `TicketQueue { weak_self: Weak<TicketQueue>, tickets: Record<string, Ticket>, agents: Agent[], policies: Policies, run: Run, cancel_filters: TicketFilter[], terminal_transitions_in_flight: number, stats: Stats, event_handlers: EventHandler[], awaited_results: AwaitedResults, event_stream: Sender<Event>, reply_editing: ReplyEditing, compaction_editor: CompactionEditor?, directive_editor: DirectiveEditor?, schemas: SchemaStore?, dir: string, events_lock: void, join_handle: JoinHandle<void>?, next_ticket_id: number? }` | pub |
 | Python | `TicketQueue` | |
 | Rust | `TicketQueue.new(): TicketQueue` | pub |
 | Python | `TicketQueue()` | |
@@ -445,17 +447,17 @@ The rules the tables never repeat.
 | both | `TicketQueue.input_tokens(): number` | pub |
 | both | `TicketQueue.output_tokens(): number` | pub |
 | both | `TicketQueue.execution_duration(): number?` | pub |
-| both | `TicketQueue.on_event(h: (event: Event) => void): TicketQueue` | pub |
+| both | `TicketQueue.on_event(handler: (event: Event) => void): TicketQueue` | pub |
 | Rust | `TicketQueue.on_ticket_event(wanted: (kind: EventKind) => boolean, handler: (queue: TicketQueue, event: Event, ticket: Ticket) => void): TicketQueue` | private |
 | both | `TicketQueue.on_result(handler: (ticket: Ticket, result: json) => void): TicketQueue` | pub |
 | both | `TicketQueue.on_result_async(handler: (ticket: Ticket, result: json) => Promise<void>): TicketQueue` | pub |
-| Python | `TicketQueue.on_result_async(callback)`: takes an `async def`, awaited on the event loop awaiting `finish`, so a handler that raises prints its traceback and does not stop the run | |
+| Python | `TicketQueue.on_result_async(handler)`: takes an `async def`, awaited on the event loop awaiting `finish`, so a handler that raises prints its traceback and does not stop the run | |
 | both | `TicketQueue.on_results_async(handler: (results: json[]) => Promise<void>): TicketQueue` | pub |
-| Python | `TicketQueue.on_results_async(callback)`: takes an `async def`, on the same terms as `on_result_async` | |
+| Python | `TicketQueue.on_results_async(handler)`: takes an `async def`, on the same terms as `on_result_async` | |
 | Rust | `TicketQueue.queue_finished_results(): void` | private |
 | Rust | `TicketQueue.await_result_handlers(): Promise<void>` | private |
 | both | `TicketQueue.on_results(handler: (results: json[]) => void): TicketQueue` | pub |
-| Python | `TicketQueue.on_results(callback)`: the results arrive as a list | |
+| Python | `TicketQueue.on_results(handler)`: the results arrive as a list | |
 | both | `TicketQueue.on_failure(handler: (event: Event, ticket: Ticket) => void): TicketQueue` | pub |
 | both | `TicketQueue.edit_replies_on_event(editor: (events: Event[], replies: Reply[]) => void): TicketQueue` | pub |
 | Python | `TicketQueue.edit_replies_on_event(editor)`: the editor returns the new list, or `None` to keep the old one, where Rust mutates in place. An editor that raises prints its traceback and changes nothing | |
@@ -470,14 +472,16 @@ The rules the tables never repeat.
 | Rust | `TicketQueue.label_for(key: string): string?` | private |
 | both | `TicketQueue.model_for_agent(agent_id: string): string?` | pub |
 | Rust | `TicketQueue.policies(): Policies` | crate |
-| both | `TicketQueue.max_turns(n: number): TicketQueue` | pub |
-| both | `TicketQueue.max_input_tokens(n: number): TicketQueue` | pub |
-| both | `TicketQueue.max_output_tokens(n: number): TicketQueue` | pub |
-| both | `TicketQueue.max_request_tokens(n: number): TicketQueue` | pub |
-| both | `TicketQueue.max_schema_retries(n: number): TicketQueue` | pub |
-| both | `TicketQueue.max_request_retries(n: number): TicketQueue` | pub |
-| both | `TicketQueue.request_retry_delay(d: number): TicketQueue` | pub |
-| both | `TicketQueue.max_time(d: number): TicketQueue` | pub |
+| both | `TicketQueue.max_turns(count: number): TicketQueue` | pub |
+| both | `TicketQueue.max_input_tokens(count: number): TicketQueue` | pub |
+| both | `TicketQueue.max_output_tokens(count: number): TicketQueue` | pub |
+| both | `TicketQueue.max_request_tokens(count: number): TicketQueue` | pub |
+| both | `TicketQueue.max_schema_retries(count: number): TicketQueue` | pub |
+| both | `TicketQueue.max_request_retries(count: number): TicketQueue` | pub |
+| Rust | `TicketQueue.request_retry_delay(duration: number): TicketQueue` | pub |
+| Python | `TicketQueue.request_retry_delay(seconds)` | |
+| Rust | `TicketQueue.max_time(duration: number): TicketQueue` | pub |
+| Python | `TicketQueue.max_time(seconds)` | |
 | both | `TicketQueue.compact_at(fraction: number): TicketQueue` | pub |
 | both | `TicketQueue.get_max_turns(): number?` | pub |
 | both | `TicketQueue.get_max_input_tokens(): number?` | pub |
@@ -684,27 +688,21 @@ Not bound, like the rest of `codegrep`.
 | Rust | `ToolFailureKind.ToolNotFound` | pub |
 | Rust | `ToolFailureKind.ExecutionFailed` | pub |
 | Rust | `ToolFailureKind.SchemaValidationFailed` | pub |
-| Rust | `ToolFailureKind.ALL: ToolFailureKind[]` | pub |
-| Python | not bound | |
-| Rust | `ToolFailureKind.as_str(): string` | pub |
+| Rust | `ToolFailureKind.name(): string` | pub |
 | Python | not bound: the kind is already a string | |
 | Rust | `impl Display for ToolFailureKind` | pub |
 | Rust | `RepairKind` | pub |
 | Python | a string inside `Event.data`: `data["reason"]` | |
 | Rust | `RepairKind.CallMalformed` | pub |
 | Rust | `RepairKind.ValueMistyped` | pub |
-| Rust | `RepairKind.ALL: RepairKind[]` | pub |
-| Python | not bound | |
-| Rust | `RepairKind.as_str(): string` | pub |
+| Rust | `RepairKind.name(): string` | pub |
 | Python | not bound: the kind is already a string | |
 | Rust | `impl Display for RepairKind` | pub |
 | Rust | `KnowledgeFailureKind` | pub |
 | Python | a string inside `Event.data`: `data["reason"]` | |
 | Rust | `KnowledgeFailureKind.PageMissing` | pub |
 | Rust | `KnowledgeFailureKind.StoreRefused` | pub |
-| Rust | `KnowledgeFailureKind.ALL: KnowledgeFailureKind[]` | pub |
-| Python | not bound | |
-| Rust | `KnowledgeFailureKind.as_str(): string` | pub |
+| Rust | `KnowledgeFailureKind.name(): string` | pub |
 | Python | not bound: the kind is already a string | |
 | Rust | `impl Display for KnowledgeFailureKind` | pub |
 | Rust | `KnowledgeOp` | pub |
@@ -713,7 +711,8 @@ Not bound, like the rest of `codegrep`.
 | Rust | `KnowledgeOp.Read` | pub |
 | Rust | `KnowledgeOp.Remove` | pub |
 | Rust | `KnowledgeOp.List` | pub |
-| Rust | `KnowledgeOp.name(): string` | private |
+| Rust | `KnowledgeOp.name(): string` | pub |
+| Python | not bound: the op is already a string | |
 | Rust | `impl Display for KnowledgeOp` | pub |
 | Rust | `Event { created_at: number, agent_id: string, ticket_key: string, label: string?, kind: EventKind }` | pub |
 | Python | `Event.created_at`, `.agent_id`, `.ticket_key`, `.label`, `.kind`, plus `.data`: a dict of the kind's fields | |
@@ -784,8 +783,7 @@ Not bound, like the rest of `codegrep`.
 | Rust | `EventName.CompactionFinished` | pub |
 | Rust | `EventName.CompactionFailed` | pub |
 | Rust | `EventName.ALL: EventName[]` | pub |
-| Python | not bound | |
-| Rust | `EventName.as_str(): string` | pub |
+| Rust | `EventName.name(): string` | pub |
 | Python | not bound: the constants are already strings | |
 | Rust | `impl Display for EventName` | pub |
 | Rust | `default_logger(): (event: Event) => void` | pub |
@@ -853,11 +851,11 @@ Not bound, like the rest of `prompts`.
 | Language | Item | Visibility |
 |----------|------|------------|
 | Rust | `Section { heading: string?, body: string }` | crate |
-| Rust | `Section.role(body: string): Section` | pub |
-| Rust | `Section.knowledge(body: string): Section` | pub |
-| Rust | `Section.task(body: string): Section` | pub |
-| Rust | `Section.directive(body: string): Section` | pub |
-| Rust | `Section.render(): string` | pub |
+| Rust | `Section.role(body: string): Section` | crate |
+| Rust | `Section.knowledge(body: string): Section` | crate |
+| Rust | `Section.task(body: string): Section` | crate |
+| Rust | `Section.directive(body: string): Section` | crate |
+| Rust | `Section.render(): string` | crate |
 
 ## `crates/agentwerk/src/providers/anthropic.rs`
 
@@ -968,9 +966,7 @@ Not bound: `Provider.from_env()` and `Model.from_env()` read these variables.
 | Rust | `RequestErrorKind.StreamInterrupted` | pub |
 | Rust | `RequestErrorKind.ResponseMalformed` | pub |
 | Rust | `RequestErrorKind.ProviderUnrecognized` | pub |
-| Rust | `RequestErrorKind.ALL: RequestErrorKind[]` | pub |
-| Python | not bound | |
-| Rust | `RequestErrorKind.as_str(): string` | pub |
+| Rust | `RequestErrorKind.name(): string` | pub |
 | Python | not bound: the kind is already a string | |
 | Rust | `impl Display for RequestErrorKind` | pub |
 | Rust | `ProviderResult<T> = T throws ProviderError` | pub |
@@ -1056,7 +1052,7 @@ Not bound: it repairs a reply before the loop reads it.
 |----------|------|------------|
 | Rust | `Model { name: string, context_window: number?, reasoning_effort: ReasoningEffort }` | pub |
 | Python | `Model.name` | |
-| Rust | `Model.from_name(name: string): Model` | pub |
+| Rust | `Model.new(name: string): Model` | pub |
 | Python | `Model(name)` | |
 | both | `Model.from_env(): Model throws ProviderError` | pub |
 | both | `Model.context_window(size: number): Model` | pub |
@@ -1158,7 +1154,7 @@ Not bound: it turns one HTTP response into a `ModelResponse`.
 
 ## `crates/agentwerk/src/providers/types.rs`
 
-Not bound, apart from `ReasoningEffort`: Python binds the four providers, not the shapes they are built from.
+Not bound, apart from `ReasoningEffort` and `ToolDeclineKind`: Python binds the four providers, not the shapes they are built from.
 
 | Language | Item | Visibility |
 |----------|------|------------|
@@ -1201,8 +1197,7 @@ Not bound, apart from `ReasoningEffort`: Python binds the four providers, not th
 | Rust | `ToolDeclineKind.OutputTruncated` | pub |
 | Rust | `ToolDeclineKind.ReplyNotFinished` | pub |
 | Rust | `ToolDeclineKind.AlreadyDelivered` | pub |
-| Rust | `ToolDeclineKind.ALL: ToolDeclineKind[]` | pub |
-| Rust | `ToolDeclineKind.as_str(): string` | pub |
+| Rust | `ToolDeclineKind.name(): string` | pub |
 | Rust | `impl Display for ToolDeclineKind` | pub |
 | Rust | `StreamEvent` | pub |
 | Rust | `StreamEvent.TextDelta { text: string }` | pub |
@@ -1253,7 +1248,7 @@ Not bound, apart from `ReasoningEffort`: Python binds the four providers, not th
 | Rust | `JsonType.Null` | private |
 | Rust | `JsonType.parse(s: string): JsonType?` | private |
 | Rust | `JsonType.matches(value: json): boolean` | private |
-| Rust | `JsonType.label(): string` | private |
+| Rust | `JsonType.name(): string` | private |
 | Rust | `SUPPORTED_KEYWORDS: string[]` | private |
 | Rust | `compile(value: json, schema_path: string): Node throws SchemaParseError` | private |
 | Rust | `parse_subschema(obj: Record<string, json>, key: string, schema_path: string): Node? throws SchemaParseError` | private |
@@ -1809,8 +1804,8 @@ Binds `agents/knowledge.rs`.
 | Language | Item | Visibility |
 |----------|------|------------|
 | Rust | `PyKnowledge { inner: Knowledge }` | python |
-| Rust | `PyKnowledge.load(dir: string): PyKnowledge throws PyErr` | python |
-| Rust | `PyKnowledge.index_char_limit(n: number): PyKnowledge` | python |
+| Rust | `PyKnowledge.load(store_dir: string): PyKnowledge throws PyErr` | python |
+| Rust | `PyKnowledge.index_char_limit(count: number): PyKnowledge` | python |
 | Rust | `PyKnowledge.get_index_char_limit(): number` | python |
 | Rust | `PyKnowledge.index(): string` | python |
 | Rust | `PyKnowledge.pages(): PyPages` | python |
@@ -1832,6 +1827,8 @@ Binds `agents/knowledge.rs`.
 | Rust | `PyPage.__repr__(): string` | python |
 
 ## `crates/agentwerk-py/src/lib.rs`
+
+Registers every bound class and function in the `_agentwerk` module.
 
 | Language | Item | Visibility |
 |----------|------|------------|
@@ -1938,19 +1935,19 @@ Binds `agents/tickets/ticket_queue.rs` and `store.rs`.
 |----------|------|------------|
 | Rust | `PyTicketQueue { inner: TicketQueue }` | python |
 | Rust | `PyTicketQueue.new(): PyTicketQueue` | python |
-| Rust | `PyTicketQueue.load(dir: string): PyTicketQueue throws PyErr` | python |
+| Rust | `PyTicketQueue.load(tickets_dir: string): PyTicketQueue throws PyErr` | python |
 | Rust | `PyTicketQueue.agent(agent: PyAgent): PyTicketQueue throws PyErr` | python |
 | Rust | `PyTicketQueue.task(task: any): string throws PyErr` | python |
 | Rust | `PyTicketQueue.ticket(ticket: PyTicket): string` | python |
 | Rust | `PyTicketQueue.reply(key: string, content: string): PyTicketQueue` | python |
 | Rust | `PyTicketQueue.set_finished(key: string, result: any): void throws PyErr` | python |
 | Rust | `PyTicketQueue.set_failed(key: string): void throws PyErr` | python |
-| Rust | `PyTicketQueue.max_turns(n: number): PyTicketQueue` | python |
-| Rust | `PyTicketQueue.max_input_tokens(n: number): PyTicketQueue` | python |
-| Rust | `PyTicketQueue.max_output_tokens(n: number): PyTicketQueue` | python |
-| Rust | `PyTicketQueue.max_request_tokens(n: number): PyTicketQueue` | python |
-| Rust | `PyTicketQueue.max_schema_retries(n: number): PyTicketQueue` | python |
-| Rust | `PyTicketQueue.max_request_retries(n: number): PyTicketQueue` | python |
+| Rust | `PyTicketQueue.max_turns(count: number): PyTicketQueue` | python |
+| Rust | `PyTicketQueue.max_input_tokens(count: number): PyTicketQueue` | python |
+| Rust | `PyTicketQueue.max_output_tokens(count: number): PyTicketQueue` | python |
+| Rust | `PyTicketQueue.max_request_tokens(count: number): PyTicketQueue` | python |
+| Rust | `PyTicketQueue.max_schema_retries(count: number): PyTicketQueue` | python |
+| Rust | `PyTicketQueue.max_request_retries(count: number): PyTicketQueue` | python |
 | Rust | `PyTicketQueue.max_time(seconds: number): PyTicketQueue` | python |
 | Rust | `PyTicketQueue.compact_at(fraction: number): PyTicketQueue` | python |
 | Rust | `PyTicketQueue.request_retry_delay(seconds: number): PyTicketQueue` | python |
@@ -1966,12 +1963,12 @@ Binds `agents/tickets/ticket_queue.rs` and `store.rs`.
 | Rust | `PyTicketQueue.dir(dir: string): PyTicketQueue` | python |
 | Rust | `PyTicketQueue.get_dir(): string` | python |
 | Rust | `PyTicketQueue.schemas(store: PySchemaStore): PyTicketQueue` | python |
-| Rust | `PyTicketQueue.on_event(callback: any): PyTicketQueue` | python |
-| Rust | `PyTicketQueue.on_result(callback: any): PyTicketQueue` | python |
-| Rust | `PyTicketQueue.on_result_async(callback: any): PyTicketQueue` | python |
-| Rust | `PyTicketQueue.on_results_async(callback: any): PyTicketQueue` | python |
-| Rust | `PyTicketQueue.on_results(callback: any): PyTicketQueue` | python |
-| Rust | `PyTicketQueue.on_failure(callback: any): PyTicketQueue` | python |
+| Rust | `PyTicketQueue.on_event(handler: any): PyTicketQueue` | python |
+| Rust | `PyTicketQueue.on_result(handler: any): PyTicketQueue` | python |
+| Rust | `PyTicketQueue.on_result_async(handler: any): PyTicketQueue` | python |
+| Rust | `PyTicketQueue.on_results_async(handler: any): PyTicketQueue` | python |
+| Rust | `PyTicketQueue.on_results(handler: any): PyTicketQueue` | python |
+| Rust | `PyTicketQueue.on_failure(handler: any): PyTicketQueue` | python |
 | Rust | `PyTicketQueue.create_ticket_on_event(make: any): PyTicketQueue` | python |
 | Rust | `PyTicketQueue.create_ticket_on_result(make: any): PyTicketQueue` | python |
 | Rust | `PyTicketQueue.create_tickets_on_results(make: any): PyTicketQueue` | python |
@@ -1981,7 +1978,7 @@ Binds `agents/tickets/ticket_queue.rs` and `store.rs`.
 | Rust | `PyTicketQueue.tickets(): PyTicket[] throws PyErr` | python |
 | Rust | `PyTicketQueue.find_tickets(predicate: any): PyTicket[] throws PyErr` | python |
 | Rust | `PyTicketQueue.find_ticket(predicate: any): PyTicket? throws PyErr` | python |
-| Rust | `PyTicketQueue.on_ticket(callback: any): PyTicketQueue` | python |
+| Rust | `PyTicketQueue.on_ticket(handler: any): PyTicketQueue` | python |
 | Rust | `PyTicketQueue.edit_replies_on_event(editor: any): PyTicketQueue` | python |
 | Rust | `PyTicketQueue.edit_replies_on_compaction(editor: any): PyTicketQueue` | python |
 | Rust | `PyTicketQueue.edit_directive_on_retry(editor: any): PyTicketQueue` | python |

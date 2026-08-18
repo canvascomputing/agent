@@ -84,7 +84,7 @@ Schemas and results:
 - `index.md` is derived and never parsed back: on load the in-memory index is rebuilt by walking the page frontmatter (`rebuild_index_from_pages`), so a bundle dropped into `<dir>/knowledge/` seeds the store.
 - Only the index is injected into the system prompt; the agent reads full pages on demand through `read`. The loop reads `Knowledge::index()` once at the top of `process_ticket`, so the prompt stays byte-stable across every turn and the provider's prefix cache survives mid-ticket writes. Writes become visible at the top of the next ticket.
 - Knowledge is purely model-driven, and the tool description carries the policy (durable facts only, do NOT save task progress or TODOs). A page's `type` and `tags` are host-side concerns set through the `Page` API, not tool parameters.
-- A character limit caps how much of the index the prompt lists, never what may be written. Past it the index names the absolute path to `index.md` instead, while `list` still returns the whole thing. It defaults to 12 000 and is configurable through `Knowledge::index_char_limit(n)`.
+- A character limit caps how much of the index the prompt lists, never what may be written. Past it the index names the absolute path to `index.md` instead, while `list` still returns the whole thing. It defaults to 12 000 and is configurable through `Knowledge::index_char_limit(count)`.
 
 ## Observer Chain, One Error Path
 

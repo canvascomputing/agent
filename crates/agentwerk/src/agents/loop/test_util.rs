@@ -371,7 +371,7 @@ pub async fn run_with_context_window(
     tickets.agent(
         Agent::new()
             .provider(provider.clone())
-            .model(Model::from_name("mock").context_window(context_window_size))
+            .model(Model::new("mock").context_window(context_window_size))
             .role("test")
             .build(),
     );

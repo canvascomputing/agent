@@ -161,24 +161,9 @@ pub enum RequestErrorKind {
 }
 
 impl RequestErrorKind {
-    /// Every kind, in the order they are declared.
-    pub const ALL: &'static [RequestErrorKind] = &[
-        RequestErrorKind::AuthenticationFailed,
-        RequestErrorKind::PermissionDenied,
-        RequestErrorKind::ModelNotFound,
-        RequestErrorKind::ContextWindowExceeded,
-        RequestErrorKind::SafetyFilterTriggered,
-        RequestErrorKind::RateLimited,
-        RequestErrorKind::StatusUnclassified,
-        RequestErrorKind::ConnectionFailed,
-        RequestErrorKind::StreamInterrupted,
-        RequestErrorKind::ResponseMalformed,
-        RequestErrorKind::ProviderUnrecognized,
-    ];
-
     /// The stable snake_case spelling, which is also the counter this failure
     /// adds to under `models.<name>`.
-    pub fn as_str(&self) -> &'static str {
+    pub fn name(&self) -> &'static str {
         match self {
             RequestErrorKind::AuthenticationFailed => "authentication_failed",
             RequestErrorKind::PermissionDenied => "permission_denied",
@@ -197,7 +182,7 @@ impl RequestErrorKind {
 
 impl fmt::Display for RequestErrorKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
+        f.write_str(self.name())
     }
 }
 
