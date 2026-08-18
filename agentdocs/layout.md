@@ -84,6 +84,7 @@ crates/
 **Composable prompt assembly and JSON-Schema validation.**
 
 - `prompts/builder.rs` and `prompts/section.rs` hold `PromptBuilder` and `Section`, which assemble role and knowledge blocks.
+- `prompts/directives.rs` holds `Directive`, the key namespace, the crate-private `DirectiveStore` carrying the function an agent decides its text with, and one `directives!` block declaring every key as a constant and an `ALL` entry. The text lives in `prompts/directives/*.md`, one file per area, each entry under a `## key` heading; a test pairs every key with its heading. It is the only public part of `prompts`, and reaches the caller as the root re-export `agentwerk::Directive`.
 - `schemas/mod.rs` holds `Schema`, `SchemaParseError`, and `SchemaViolation`.
 - `schemas/store.rs` holds `SchemaStore`, the label-keyed store a `TicketQueue` reads on each claim. It sits beside the compiler rather than inside it: binding a contract to a label is a separate concern from validating one.
 

@@ -14,6 +14,10 @@ use super::grep::{
 };
 use super::tool::ToolResult;
 use crate::codegrep::{self, Conf, Pattern};
+use crate::prompts::directives::{
+    DirectiveStore, CODE_CONSTRAINT_INCOMPLETE, CODE_CONSTRAINT_METAVARIABLE_UNKNOWN,
+    CODE_CONSTRAINT_REGEX_REJECTED, CODE_PATTERN_REJECTED,
+};
 
 /// Match every file with the `codegrep` engine and render per `output_mode`,
 /// reusing `grep`'s renderers so code results carry the same structured
@@ -23,14 +27,19 @@ pub(super) fn run(
     query: &Query,
     interrupt: &AtomicBool,
     deadline: Instant,
+    directives: &DirectiveStore,
 ) -> ToolResult {
     let mut conf = Conf::default_multiline();
     conf.caseless = query.case_insensitive;
     let pattern = match Pattern::parse(&query.pattern, &conf) {
         Ok(pattern) => pattern,
-        Err(error) => return ToolResult::error(format!("invalid code pattern: {error}")),
+        Err(error) => {
+            return ToolResult::error(
+                directives.render(CODE_PATTERN_REJECTED, &[("error", &error.to_string())]),
+            )
+        }
     };
-    let constraints = match parse_constraints(&query.constraints, &pattern) {
+    let constraints = match parse_constraints(&query.constraints, &pattern, directives) {
         Ok(constraints) => constraints,
         Err(message) => return ToolResult::error(message),
     };
@@ -165,6 +174,7 @@ fn truncate_to_chars(text: &str, max_chars: usize) -> String {
 fn parse_constraints(
     constraints: &Value,
     pattern: &Pattern,
+    directives: &DirectiveStore,
 ) -> std::result::Result<Vec<(String, regex::Regex)>, String> {
     let Some(items) = constraints.as_array() else {
         return Ok(Vec::new());
@@ -178,15 +188,16 @@ fn parse_constraints(
             .trim_start_matches('$');
         let source = item["regex"].as_str().unwrap_or("");
         if name.is_empty() || source.is_empty() {
-            return Err("each constraint needs a metavariable and a regex".to_string());
+            return Err(directives.render(CODE_CONSTRAINT_INCOMPLETE, &[]));
         }
         if !names.contains(name) {
-            return Err(format!(
-                "constraint references unknown metavariable ${name}"
-            ));
+            return Err(directives.render(CODE_CONSTRAINT_METAVARIABLE_UNKNOWN, &[("name", name)]));
         }
         let regex = regex::Regex::new(source).map_err(|error| {
-            format!("invalid metavariable-regex constraint for ${name}: {error}")
+            directives.render(
+                CODE_CONSTRAINT_REGEX_REJECTED,
+                &[("name", name), ("error", &error.to_string())],
+            )
         })?;
         compiled.push((name.to_string(), regex));
     }
@@ -285,7 +296,7 @@ mod tests {
         assert!(
             out.as_str()
                 .unwrap_or_default()
-                .contains("invalid code pattern"),
+                .contains("not a valid code pattern"),
             "got {out}"
         );
     }

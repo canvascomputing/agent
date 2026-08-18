@@ -11,6 +11,10 @@ use serde_json::Value;
 use crate::agents::knowledge::Knowledge;
 use crate::agents::tickets::{Run, TicketQueue};
 use crate::event::{EventKind, ToolFailureKind};
+use crate::prompts::directives::{
+    DirectiveStore, NO_TOOLS_REGISTERED, TOOL_NOT_FOUND, TOOL_OUTPUT_EMPTY, TOOL_OUTPUT_OFFLOADED,
+    TOOL_PANICKED,
+};
 use crate::schemas::Schema;
 
 /// How many calls one turn runs at the same time. The rest wait their turn.
@@ -47,6 +51,9 @@ pub struct ToolContext {
     pub(crate) agent_id: Option<String>,
     pub(crate) ticket_key: Option<String>,
     pub(crate) knowledge: Option<Arc<Knowledge>>,
+    /// What this call's failures say. An agent shares its store here; a
+    /// standalone call keeps the built-in text.
+    pub(crate) directives: Arc<DirectiveStore>,
 }
 
 impl ToolContext {
@@ -60,6 +67,7 @@ impl ToolContext {
             agent_id: None,
             ticket_key: None,
             knowledge: None,
+            directives: Arc::new(DirectiveStore::default()),
         }
     }
 
@@ -85,6 +93,11 @@ impl ToolContext {
 
     pub(crate) fn knowledge(mut self, knowledge: Arc<Knowledge>) -> Self {
         self.knowledge = Some(knowledge);
+        self
+    }
+
+    pub(crate) fn directives(mut self, directives: Arc<DirectiveStore>) -> Self {
+        self.directives = directives;
         self
     }
 
@@ -225,17 +238,21 @@ impl ToolRegistry {
 
     /// Get the tool a call reaches, owned, so a concurrent batch can move it
     /// into its task, or the message naming what could have been called.
-    fn resolve(&self, name: &str) -> std::result::Result<Arc<Tool>, String> {
+    fn resolve(
+        &self,
+        name: &str,
+        directives: &DirectiveStore,
+    ) -> std::result::Result<Arc<Tool>, String> {
         if let Some(tool) = self.get(name) {
             return Ok(tool);
         }
         let names = self.names();
         if names.is_empty() {
-            return Err(format!("Unknown tool: {name}"));
+            return Err(directives.render(NO_TOOLS_REGISTERED, &[("name", name)]));
         }
-        Err(format!(
-            "Unknown tool: {name}. Available tools: {}",
-            names.join(", ")
+        Err(directives.render(
+            TOOL_NOT_FOUND,
+            &[("name", name), ("available", &names.join(", "))],
         ))
     }
 
@@ -298,12 +315,13 @@ impl ToolRegistry {
                     }
                 }
                 ToolBatch::Serial(index, call) => {
-                    answers[index] = Some(invoke(self.resolve(&call.name), &call, ctx).await);
+                    answers[index] =
+                        Some(invoke(self.resolve(&call.name, &ctx.directives), &call, ctx).await);
                 }
             }
         }
 
-        let mut results = answer_every_call(calls, answers);
+        let mut results = answer_every_call(calls, answers, &ctx.directives);
         cap_results(calls, &mut results, ctx);
         results
     }
@@ -322,7 +340,7 @@ impl ToolRegistry {
             let ctx = ctx.clone();
             // Resolved before the spawn: the task outlives this borrow of the
             // registry.
-            let resolved = self.resolve(&call.name);
+            let resolved = self.resolve(&call.name, &ctx.directives);
             set.spawn(async move {
                 let _permit = semaphore.acquire().await.unwrap();
                 (index, invoke(resolved, &call, &ctx).await)
@@ -374,13 +392,17 @@ fn partition_tool_calls(calls: &[ToolCall], registry: &ToolRegistry) -> Vec<Tool
 
 /// Give every call an answer, standing in for one whose task panicked: a reply
 /// with a `tool_use` block and no result upsets LLM providers.
-fn answer_every_call(calls: &[ToolCall], answers: Vec<Option<ToolResult>>) -> Vec<ToolResult> {
+fn answer_every_call(
+    calls: &[ToolCall],
+    answers: Vec<Option<ToolResult>>,
+    directives: &DirectiveStore,
+) -> Vec<ToolResult> {
     calls
         .iter()
         .zip(answers)
         .map(|(call, answer)| {
             answer.unwrap_or_else(|| {
-                ToolResult::error(format!("`{}` did not finish: it panicked", call.name))
+                ToolResult::error(directives.render(TOOL_PANICKED, &[("tool", &call.name)]))
             })
         })
         .collect()
@@ -667,6 +689,7 @@ async fn invoke(
                     tool.name(),
                     &violations.to_string(),
                     Some(tool.input_schema().get_raw_schema()),
+                    &ctx.directives,
                 ),
                 kind: ToolFailureKind::SchemaValidationFailed,
             };
@@ -699,7 +722,7 @@ pub(crate) fn retype_message(pointer: &str) -> String {
 /// model must read to recover, and is short by construction.
 fn cap_results(calls: &[ToolCall], results: &mut [ToolResult], ctx: &ToolContext) {
     for (call, result) in calls.iter().zip(results.iter_mut()) {
-        replace_empty_output(result, &call.name);
+        replace_empty_output(result, &call.name, &ctx.directives);
         cap_oversized_result(result, ctx, &call.id, PER_TOOL_CAP);
     }
     cap_aggregate_outputs(calls, results, ctx, PER_TURN_CAP);
@@ -707,12 +730,12 @@ fn cap_results(calls: &[ToolCall], results: &mut [ToolResult], ctx: &ToolContext
 
 /// Put a placeholder in place of an empty result, since empty content has upset
 /// LLM providers.
-fn replace_empty_output(result: &mut ToolResult, tool_name: &str) {
+fn replace_empty_output(result: &mut ToolResult, tool_name: &str, directives: &DirectiveStore) {
     let ToolResult::Success { content, .. } = result else {
         return;
     };
     if content.is_empty() {
-        *content = format!("({tool_name} completed with no output)");
+        *content = directives.render(TOOL_OUTPUT_EMPTY, &[("tool", tool_name)]);
     }
 }
 
@@ -790,7 +813,8 @@ fn largest_inline_success<'a>(
 fn write_out(content: &mut String, ctx: &ToolContext, call_id: &str) -> Option<PathBuf> {
     let output = persist_output(ctx, call_id, content)?;
     let preview = truncate_preview(content);
-    let stub = format_oversized_tool_result(content.len(), &output.display, preview);
+    let stub =
+        format_oversized_tool_result(content.len(), &output.display, preview, &ctx.directives);
     *content = stub;
     Some(output.rel)
 }
@@ -818,16 +842,24 @@ const OVERSIZED_STUB_TAG_CLOSE: &str = "</persisted-output>";
 
 /// Build the stub the model sees in place of an oversized result: how large it
 /// was, where it went, and how it starts.
-fn format_oversized_tool_result(original_len: usize, path: &Path, preview: &str) -> String {
-    let size = format_bytes(original_len);
-    let preview_size = format_bytes(preview.len());
-    format!(
-        "{OVERSIZED_STUB_TAG_OPEN}Output too large ({size}). Full output saved to: {path}\n\
-         Preview (first {preview_size}):\n\
-         {preview}\n\
-         {OVERSIZED_STUB_TAG_CLOSE}",
-        path = path.display(),
-    )
+fn format_oversized_tool_result(
+    original_len: usize,
+    path: &Path,
+    preview: &str,
+    directives: &DirectiveStore,
+) -> String {
+    // The tags stay out of the directive: `cap_aggregate_outputs` reads the
+    // opening one to tell an already-stubbed result from a fresh one.
+    let body = directives.render(
+        TOOL_OUTPUT_OFFLOADED,
+        &[
+            ("size", &format_bytes(original_len)),
+            ("path", &path.display().to_string()),
+            ("preview_size", &format_bytes(preview.len())),
+            ("preview", preview),
+        ],
+    );
+    format!("{OVERSIZED_STUB_TAG_OPEN}{body}\n{OVERSIZED_STUB_TAG_CLOSE}")
 }
 
 /// The first `PREVIEW_CHARS` bytes of `content`, ending at the last newline in
@@ -1141,7 +1173,7 @@ mod tests {
         let results = registry.execute(&calls, &ctx).await;
         assert_eq!(results.len(), 1);
         assert!(matches!(results[0], ToolResult::Error { .. }));
-        assert!(results[0].content().contains("Unknown tool"));
+        assert!(results[0].content().contains("No tool named `nonexistent`"));
     }
 
     #[tokio::test]
@@ -1295,7 +1327,10 @@ mod tests {
         let results = registry.execute(&calls, &ctx).await;
         assert_eq!(
             results[0].content(),
-            "Unknown tool: ripgrep. Available tools: grep, read_file"
+            DirectiveStore::default().render(
+                TOOL_NOT_FOUND,
+                &[("name", "ripgrep"), ("available", "grep, read_file")]
+            )
         );
     }
 
@@ -1620,7 +1655,12 @@ mod tests {
     #[test]
     fn format_oversized_tool_result_renders_template() {
         let path = PathBuf::from("/tmp/agentwerk/tickets/TICKET-1/outputs/call-1.txt");
-        let stub = format_oversized_tool_result(1_048_576, &path, "preview-body");
+        let stub = format_oversized_tool_result(
+            1_048_576,
+            &path,
+            "preview-body",
+            &DirectiveStore::default(),
+        );
         assert!(stub.starts_with("<persisted-output>"));
         assert!(stub.contains("Output too large (1.0 MB)."));
         assert!(stub
@@ -1666,14 +1706,14 @@ mod tests {
     #[test]
     fn replace_empty_output_substitutes_placeholder() {
         let mut result = ToolResult::success("");
-        replace_empty_output(&mut result, "bash");
+        replace_empty_output(&mut result, "bash", &DirectiveStore::default());
         assert_eq!(result.content(), "(bash completed with no output)");
     }
 
     #[test]
     fn replace_empty_output_passes_non_empty_through() {
         let mut result = ToolResult::success("hello");
-        replace_empty_output(&mut result, "bash");
+        replace_empty_output(&mut result, "bash", &DirectiveStore::default());
         assert_eq!(result.content(), "hello");
     }
 
@@ -1682,7 +1722,7 @@ mod tests {
         // The guard reads the variant, not the content, so even an empty
         // failure message is left as the tool reported it.
         let mut result = ToolResult::error("");
-        replace_empty_output(&mut result, "bash");
+        replace_empty_output(&mut result, "bash", &DirectiveStore::default());
         assert_eq!(result.content(), "");
     }
 

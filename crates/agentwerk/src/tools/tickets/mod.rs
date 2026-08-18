@@ -6,6 +6,11 @@ use std::path::Path;
 use serde_json::Value;
 
 use crate::agents::tickets::{Status, Ticket, TicketError, TicketQueue};
+use crate::prompts::directives::{
+    DirectiveStore, TICKET_EDIT_INCOMPLETE, TICKET_KEY_MISSING, TICKET_NOT_ASSIGNED,
+    TICKET_NOT_FOUND, TICKET_QUEUE_UNAVAILABLE, TICKET_RESULT_MISSING, TICKET_STATUS_UNKNOWN,
+    TICKET_TRANSITION_REJECTED,
+};
 
 use super::tool::{ToolContext, ToolResult};
 
@@ -47,13 +52,13 @@ pub enum TicketsArgs {
 
 pub(super) fn dispatch(args: TicketsArgs, ctx: &ToolContext) -> ToolResult {
     let Some(queue) = ctx.ticket_queue.clone() else {
-        return ToolResult::error("Ticket queue unavailable in this context");
+        return ToolResult::error(ctx.directives.render(TICKET_QUEUE_UNAVAILABLE, &[]));
     };
 
     match args {
         TicketsArgs::Ticket { key } => action_ticket(&queue, key, ctx),
         TicketsArgs::Result { key } => action_result(&queue, key, ctx),
-        TicketsArgs::List { status, label } => action_list(&queue, status, label),
+        TicketsArgs::List { status, label } => action_list(&queue, status, label, &ctx.directives),
         TicketsArgs::Search { query } => action_search(&queue, &query),
         TicketsArgs::Create { task, label } => action_create(&queue, task, label, ctx),
         TicketsArgs::Edit { key, task, label } => action_edit(&queue, key, task, label, ctx),
@@ -79,21 +84,22 @@ pub(super) fn resolve_current_key(
     if let Some(key) = ctx.ticket_key.as_deref() {
         return Ok(key.to_string());
     }
-    let agent_id = ctx.agent_id.as_deref().ok_or_else(|| {
-        ToolResult::error("Missing `key` and no agent_id set on this tool context")
-    })?;
+    let agent_id = ctx
+        .agent_id
+        .as_deref()
+        .ok_or_else(|| ToolResult::error(ctx.directives.render(TICKET_KEY_MISSING, &[])))?;
     match ticket_queue
         .find_ticket(|t| t.status == Status::InProgress && t.assignee.as_deref() == Some(agent_id))
     {
         Some(t) => Ok(t.key.clone()),
         None => Err(ToolResult::error(
-            "Missing `key` and no current ticket assigned to this agent",
+            ctx.directives.render(TICKET_NOT_ASSIGNED, &[]),
         )),
     }
 }
 
-pub(super) fn ticket_error_message(err: TicketError) -> String {
-    err.to_string()
+pub(super) fn ticket_error_message(err: TicketError, directives: &DirectiveStore) -> String {
+    directives.render(TICKET_TRANSITION_REJECTED, &[("error", &err.to_string())])
 }
 
 fn render_ticket(t: &Ticket) -> String {
@@ -151,15 +157,15 @@ fn status_label(s: Status) -> &'static str {
     }
 }
 
-fn parse_status_for_list(s: &str) -> Result<Status, ToolResult> {
+fn parse_status_for_list(s: &str, directives: &DirectiveStore) -> Result<Status, ToolResult> {
     match s {
         "Todo" => Ok(Status::Todo),
         "InProgress" => Ok(Status::InProgress),
         "Finished" => Ok(Status::Finished),
         "Failed" => Ok(Status::Failed),
-        other => Err(ToolResult::error(format!(
-            "Invalid status `{other}`. Expected one of Todo, InProgress, Finished, Failed"
-        ))),
+        other => Err(ToolResult::error(
+            directives.render(TICKET_STATUS_UNKNOWN, &[("status", other)]),
+        )),
     }
 }
 
@@ -207,7 +213,7 @@ fn action_ticket(ticket_queue: &TicketQueue, key: Option<String>, ctx: &ToolCont
     };
     match ticket_queue.get_ticket(&key) {
         Some(t) => ToolResult::success(render_ticket(&t)),
-        None => ToolResult::error(format!("Ticket {key} not found")),
+        None => ToolResult::error(ctx.directives.render(TICKET_NOT_FOUND, &[("key", &key)])),
     }
 }
 
@@ -217,15 +223,15 @@ fn action_result(ticket_queue: &TicketQueue, key: Option<String>, ctx: &ToolCont
         Err(e) => return e,
     };
     let Some(ticket) = ticket_queue.get_ticket(&key) else {
-        return ToolResult::error(format!("Ticket {key} not found"));
+        return ToolResult::error(ctx.directives.render(TICKET_NOT_FOUND, &[("key", &key)]));
     };
     match ticket.result.as_ref() {
         Some(result) => {
             ToolResult::success(render_result(&key, &ticket_queue.result_path(&key), result))
         }
-        None => ToolResult::error(format!(
-            "Ticket {key} has no result yet, it is {}",
-            status_label(ticket.status)
+        None => ToolResult::error(ctx.directives.render(
+            TICKET_RESULT_MISSING,
+            &[("key", &key), ("status", status_label(ticket.status))],
         )),
     }
 }
@@ -234,8 +240,12 @@ fn action_list(
     ticket_queue: &TicketQueue,
     status: Option<String>,
     label: Option<String>,
+    directives: &DirectiveStore,
 ) -> ToolResult {
-    let status = match status.as_deref().map(parse_status_for_list) {
+    let status = match status
+        .as_deref()
+        .map(|s| parse_status_for_list(s, directives))
+    {
         Some(Ok(s)) => Some(s),
         Some(Err(e)) => return e,
         None => None,
@@ -325,12 +335,12 @@ fn action_edit(
         Err(e) => return e,
     };
     if new_task.is_none() && new_label.is_none() {
-        return ToolResult::error("Edit needs at least one of `task` or `label`");
+        return ToolResult::error(ctx.directives.render(TICKET_EDIT_INCOMPLETE, &[]));
     }
 
     match ticket_queue.edit(&key, new_task, new_label) {
         Ok(()) => ToolResult::success(format!("Edited ticket {key}")),
-        Err(e) => ToolResult::error(ticket_error_message(e)),
+        Err(e) => ToolResult::error(ticket_error_message(e, &ctx.directives)),
     }
 }
 

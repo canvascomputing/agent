@@ -45,7 +45,8 @@ pub(super) async fn run(context: &mut TicketContext<'_>, mut calls: Vec<ToolCall
         .ticket_queue(Arc::clone(context.ticket_queue))
         .agent_id(context.agent.id().to_string())
         .ticket_key(context.ticket_key.clone())
-        .knowledge(context.agent.knowledge());
+        .knowledge(context.agent.knowledge())
+        .directives(context.agent.directives());
 
     let results = registry.execute(&calls, &tool_context).await;
 

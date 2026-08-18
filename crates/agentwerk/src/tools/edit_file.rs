@@ -1,6 +1,10 @@
 //! In-place find-and-replace on a file, so a model can modify existing code without restating the whole file.
 
 use super::tool::{Tool, ToolContext, ToolResult};
+use crate::prompts::directives::{
+    EDIT_FILE_OLD_STRING_NOT_FOUND, EDIT_FILE_OLD_STRING_NOT_UNIQUE, EDIT_FILE_READ_FAILED,
+    EDIT_FILE_WRITE_FAILED,
+};
 
 /// In-place string replacement in an existing file. The model supplies the
 /// old and new strings; the tool fails if the old string is absent or
@@ -50,19 +54,26 @@ async fn run(args: EditFileArgs, ctx: ToolContext) -> ToolResult {
     let content = match std::fs::read_to_string(&resolved) {
         Ok(c) => c,
         Err(e) => {
-            return ToolResult::error(format!("Failed to read file: {e}"));
+            return ToolResult::error(ctx.directives.render(
+                EDIT_FILE_READ_FAILED,
+                &[("path", &path), ("error", &e.to_string())],
+            ));
         }
     };
 
     let count = content.matches(old_string).count();
 
     if count == 0 {
-        return ToolResult::error(format!("old_string not found in {path}"));
+        return ToolResult::error(
+            ctx.directives
+                .render(EDIT_FILE_OLD_STRING_NOT_FOUND, &[("path", &path)]),
+        );
     }
 
     if count > 1 && !replace_all {
-        return ToolResult::error(format!(
-            "Found {count} occurrences of old_string in {path}. Use replace_all to replace all."
+        return ToolResult::error(ctx.directives.render(
+            EDIT_FILE_OLD_STRING_NOT_UNIQUE,
+            &[("path", &path), ("count", &count.to_string())],
         ));
     }
 
@@ -74,7 +85,10 @@ async fn run(args: EditFileArgs, ctx: ToolContext) -> ToolResult {
 
     match std::fs::write(&resolved, &new_content) {
         Ok(()) => ToolResult::success(format!("Edited {path}: replaced {count} occurrence(s)")),
-        Err(e) => ToolResult::error(format!("Failed to write file: {e}")),
+        Err(e) => ToolResult::error(ctx.directives.render(
+            EDIT_FILE_WRITE_FAILED,
+            &[("path", &path), ("error", &e.to_string())],
+        )),
     }
 }
 
@@ -201,6 +215,6 @@ mod tests {
 
         let content = result.content();
         assert!(matches!(result, ToolResult::Error { .. }));
-        assert!(content.contains("not found"));
+        assert!(content.contains("No `old_string` match"));
     }
 }

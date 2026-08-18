@@ -54,6 +54,7 @@ pub(super) async fn run(context: &mut TicketContext<'_>, reason: CompactReason) 
         context.model.name.clone(),
         window,
         on_progress,
+        context.agent.directives(),
     );
     let edited = match editor {
         Some(editor) => editor(compaction, replies.clone()).await,

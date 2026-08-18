@@ -48,8 +48,6 @@ type ReplyEditor = dyn Fn(&[Event], &mut Vec<Reply>) + Send + Sync;
 
 type CompactionEditor = dyn Fn(Compaction, Vec<Reply>) -> EditedReplies + Send + Sync;
 
-type DirectiveEditor = dyn Fn(&Event, &mut String) + Send + Sync;
-
 /// The replies an editor hands back, once its work finishes.
 type EditedReplies = Pin<Box<dyn Future<Output = ProviderResult<Vec<Reply>>> + Send>>;
 
@@ -261,7 +259,6 @@ pub struct TicketQueue {
     pub(super) compaction_editor: Mutex<Option<Arc<CompactionEditor>>>,
     /// What corrects an agent asked to try again. `None` keeps the built-in
     /// directive.
-    pub(super) directive_editor: Mutex<Option<Arc<DirectiveEditor>>>,
     /// The result contracts bound to labels, read once per claim. `None` leaves
     /// every ticket with whatever schema it was built with.
     pub(super) schemas: Mutex<Option<Arc<SchemaStore>>>,
@@ -294,7 +291,6 @@ impl TicketQueue {
             event_stream: broadcast::Sender::new(EVENT_STREAM_CAPACITY),
             reply_editing: Mutex::new(ReplyEditing::default()),
             compaction_editor: Mutex::new(None),
-            directive_editor: Mutex::new(None),
             schemas: Mutex::new(None),
             dir: Mutex::new(PathBuf::from(".agentwerk")),
             events_lock: Mutex::new(()),
@@ -375,7 +371,6 @@ impl TicketQueue {
             event_stream: broadcast::Sender::new(EVENT_STREAM_CAPACITY),
             reply_editing: Mutex::new(ReplyEditing::default()),
             compaction_editor: Mutex::new(None),
-            directive_editor: Mutex::new(None),
             schemas: Mutex::new(None),
             dir: Mutex::new(tickets_dir),
             events_lock: Mutex::new(()),
@@ -769,48 +764,6 @@ impl TicketQueue {
     /// before the loop awaits it.
     pub(crate) fn compaction_editor(&self) -> Option<Arc<CompactionEditor>> {
         self.compaction_editor.lock().unwrap().clone()
-    }
-
-    /// Rewrite the prompt that corrects an agent's behavior.
-    ///
-    /// agentwerk asks again when a turn ends with the model calling no tool.
-    /// Your function receives the `SchemaRetried` event that says in whose
-    /// ticket and for which agent that happened, together with the prompt
-    /// itself. The prompt arrives holding the built-in text, so writing nothing
-    /// keeps the default. It runs once per retry, so keep it cheap. A tool
-    /// call whose arguments missed a schema takes no directive: its corrective
-    /// message rides in the tool result.
-    ///
-    /// One editor is held at a time, and installing a second replaces the
-    /// first, the way [`Self::edit_replies_on_compaction`] does.
-    ///
-    /// ```no_run
-    /// use agentwerk::TicketQueue;
-    /// use agentwerk::event::EventKind;
-    ///
-    /// let tickets = TicketQueue::new();
-    /// tickets.edit_directive_on_retry(|event, directive| {
-    ///     let EventKind::SchemaRetried { message, .. } = &event.kind else {
-    ///         return;
-    ///     };
-    ///     *directive = format!("{message}\nCall `finish` with a result now.");
-    /// });
-    /// ```
-    pub fn edit_directive_on_retry(
-        &self,
-        editor: impl Fn(&Event, &mut String) + Send + Sync + 'static,
-    ) -> &Self {
-        *self.directive_editor.lock().unwrap() = Some(Arc::new(editor));
-        self
-    }
-
-    /// Apply the registered editor to the directive `event` calls for. Does
-    /// nothing until an editor is registered.
-    pub(crate) fn edit_directive(&self, event: &Event, directive: &mut String) {
-        let editor = self.directive_editor.lock().unwrap().clone();
-        if let Some(editor) = editor {
-            editor(event, directive);
-        }
     }
 
     /// Publish `kind` and hand back the event it became, so a caller that also
@@ -2110,28 +2063,6 @@ mod tests {
             !texts.contains(&"first".to_string()),
             "the replaced editor must not run: {texts:?}"
         );
-    }
-
-    /// One editor at a time, like the reply editors above.
-    #[test]
-    fn a_second_directive_editor_replaces_the_first() {
-        let (queue, _tmp) = test_queue();
-        queue.edit_directive_on_retry(|_event, directive| *directive = "first".into());
-        queue.edit_directive_on_retry(|_event, directive| *directive = "second".into());
-
-        let retried = queue.emit(
-            "KEY",
-            "agent",
-            EventKind::SchemaRetried {
-                attempt: 1,
-                max_attempts: 3,
-                message: "no tool call".into(),
-            },
-        );
-        let mut directive = String::from("built-in");
-        queue.edit_directive(&retried, &mut directive);
-
-        assert_eq!(directive, "second");
     }
 
     #[test]

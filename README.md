@@ -466,6 +466,35 @@ A violated limit emits `EventKind::PolicyViolated`, see [`EventKind`](https://do
 
 </details>
 
+### Directives
+
+A directive is used when a model fails to perform a specific task. It is a message for correcting the agent's behavior.
+
+```rust
+use agentwerk::Directive;
+
+let agent = Agent::from_env()
+    .directives(|key| match key {
+        Directive::GREP_FAILED => Some("The search did not run. Narrow `path`."),
+        _ => None,
+    })
+    .build();
+```
+
+<details>
+<summary>All directive settings</summary>
+
+| Method | Description |
+|--------|-------------|
+| `directives(compute)` | Decide every directive's text with one function. |
+| `Directive::ALL` | Get every directive key, in the order the catalogue declares them. |
+
+The function returns a directive template. So you can access template variables, like `{detail}`, `{attempt}`, and `{path}`.
+
+See [prompts/directives](https://github.com/canvascomputing/agentwerk/tree/main/crates/agentwerk/src/prompts/directives) for the built-in text.
+
+</details>
+
 ### Sessions
 
 <div align="left">
@@ -697,7 +726,6 @@ tickets.create_ticket_on_failure(|_, failed| {
 | | `create_ticket_on_failure(make)` | Enqueue a retry for a ticket that failed. |
 | **Rewrite** | `edit_replies_on_event(editor)` | Rewrite a ticket's replies before its next request. |
 | | `edit_replies_on_compaction(editor)` | Decide what compaction does with a ticket's replies. |
-| | `edit_directive_on_retry(editor)` | Override the prompt that corrects an agent's behavior. |
 
 Save replies of every finished ticket as a training example:
 

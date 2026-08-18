@@ -6,6 +6,11 @@ use std::time::Duration;
 use super::super::tool::{Tool, ToolContext, ToolResult};
 use super::super::util::{glob_match, run_command};
 use super::parse::{Argument, Command, Refusal};
+use crate::prompts::directives::{
+    DirectiveStore, COMMAND_ASSIGNMENT_FOUND, COMMAND_CONTROL_CHARACTER_FOUND, COMMAND_FLAG_DENIED,
+    COMMAND_FLAG_NOT_ALLOWED, COMMAND_MISSING, COMMAND_NOT_ALLOWED, COMMAND_PATTERN_DENIED,
+    COMMAND_QUOTE_UNTERMINATED, COMMAND_SHELL_OPERATOR_FOUND,
+};
 
 /// The shared part of every tool's description, with the per-instance patterns
 /// appended at construction time, and the arguments every one of them accepts.
@@ -196,21 +201,24 @@ impl CommandTool {
     /// Rules match the normalized form rather than the line as written, because
     /// that is what runs: otherwise a second space or a pair of quotes walks a
     /// command past a deny that names it.
-    fn check(&self, line: &str) -> std::result::Result<Command, String> {
+    fn check(
+        &self,
+        line: &str,
+        directives: &DirectiveStore,
+    ) -> std::result::Result<Command, String> {
         let line = line.trim();
-        let command = Command::split(line).map_err(|refusal| self.unreadable(line, refusal))?;
+        let command =
+            Command::split(line).map_err(|refusal| self.unreadable(line, refusal, directives))?;
         let normalized = command.normalized();
 
         if is_assignment(&command.program) {
-            return Err(format!(
-                "Command '{normalized}' sets an environment variable. This tool runs one program \
-                 with the environment it was started in, so drop the assignment."
-            ));
+            return Err(directives.render(COMMAND_ASSIGNMENT_FOUND, &[("command", &normalized)]));
         }
 
         if let Some((flag, _)) = command.flags().find(|(_, found)| self.denies_flag(*found)) {
-            return Err(format!(
-                "Command '{normalized}' carries the denied flag '{flag}'"
+            return Err(directives.render(
+                COMMAND_FLAG_DENIED,
+                &[("command", &normalized), ("flag", flag)],
             ));
         }
 
@@ -219,8 +227,9 @@ impl CommandTool {
             .iter()
             .find(|pattern| glob_match(pattern, &normalized))
         {
-            return Err(format!(
-                "Command '{normalized}' matches the denied pattern '{pattern}'"
+            return Err(directives.render(
+                COMMAND_PATTERN_DENIED,
+                &[("command", &normalized), ("pattern", pattern)],
             ));
         }
 
@@ -233,19 +242,25 @@ impl CommandTool {
         };
 
         if !permitted {
-            return Err(format!(
-                "Command '{normalized}' is not allowed by tool '{name}'. {allowed}",
-                name = self.tool_name,
-                allowed = self.allowed_line(),
+            return Err(directives.render(
+                COMMAND_NOT_ALLOWED,
+                &[
+                    ("command", &normalized),
+                    ("tool", &self.tool_name),
+                    ("allowed", &self.allowed_line()),
+                ],
             ));
         }
 
         if let Some((flag, _)) = command.flags().find(|(_, found)| !self.allows_flag(*found)) {
-            return Err(format!(
-                "Command '{normalized}' carries the flag '{flag}', which tool '{name}' does not \
-                 allow. Allowed flags: {allowed}, and no other.",
-                name = self.tool_name,
-                allowed = quoted(&self.allow_flags),
+            return Err(directives.render(
+                COMMAND_FLAG_NOT_ALLOWED,
+                &[
+                    ("command", &normalized),
+                    ("flag", flag),
+                    ("tool", &self.tool_name),
+                    ("allowed", &quoted(&self.allow_flags)),
+                ],
             ));
         }
 
@@ -254,19 +269,19 @@ impl CommandTool {
 
     /// The message for a line that is not one command, naming what stopped it
     /// so the model can fix the call rather than guess at it.
-    fn unreadable(&self, line: &str, refusal: Refusal) -> String {
+    fn unreadable(&self, line: &str, refusal: Refusal, directives: &DirectiveStore) -> String {
         match refusal {
-            Refusal::OperatorFound(operator) => format!(
-                "Command '{line}' holds the shell operator `{operator}`. This tool runs one \
-                 program directly, with no shell, so make one call per command."
+            Refusal::OperatorFound(operator) => directives.render(
+                COMMAND_SHELL_OPERATOR_FOUND,
+                &[("command", line), ("operator", &operator.to_string())],
             ),
             Refusal::Unterminated => {
-                format!("Command '{line}' ends inside a quote or an escape.")
+                directives.render(COMMAND_QUOTE_UNTERMINATED, &[("command", line)])
             }
             Refusal::ControlCharacterFound => {
-                format!("Command '{line}' holds a control character.")
+                directives.render(COMMAND_CONTROL_CHARACTER_FOUND, &[("command", line)])
             }
-            Refusal::Empty => "Missing required field: command".to_string(),
+            Refusal::Empty => directives.render(COMMAND_MISSING, &[]),
         }
     }
 
@@ -375,7 +390,7 @@ impl CommandTool {
             timeout_ms,
         } = args;
 
-        let command = match self.check(&command) {
+        let command = match self.check(&command, &ctx.directives) {
             Ok(command) => command,
             Err(refusal) => return ToolResult::error(refusal),
         };
@@ -492,7 +507,7 @@ mod tests {
         let result = Tool::from(tool.clone()).call(input, &ctx).await;
         let content = result.content();
         assert!(matches!(result, ToolResult::Error { .. }));
-        assert!(content.contains("timed out"));
+        assert!(content.contains("was stopped after 100ms"));
     }
 
     #[tokio::test]

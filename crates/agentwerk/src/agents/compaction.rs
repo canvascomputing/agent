@@ -7,6 +7,7 @@ use std::sync::Arc;
 use crate::agents::tickets::{Author, Reply, Ticket};
 use crate::event::CompactReason;
 use crate::prompts::compaction_directive;
+use crate::prompts::directives::DirectiveStore;
 use crate::providers::types::StreamEvent;
 use crate::providers::{
     ContentBlock, Message, ModelRequest, Provider, ProviderError, ProviderResult, TokenUsage,
@@ -121,6 +122,7 @@ pub struct Compaction {
     model: String,
     window: Option<u64>,
     on_progress: Arc<dyn Fn(u32, u32) + Send + Sync>,
+    directives: Arc<DirectiveStore>,
 }
 
 impl Compaction {
@@ -131,6 +133,7 @@ impl Compaction {
         model: String,
         window: Option<u64>,
         on_progress: Arc<dyn Fn(u32, u32) + Send + Sync>,
+        directives: Arc<DirectiveStore>,
     ) -> Self {
         Self {
             reason,
@@ -139,6 +142,7 @@ impl Compaction {
             model,
             window,
             on_progress,
+            directives,
         }
     }
 
@@ -178,7 +182,7 @@ impl Compaction {
         for (index, chunk) in chunks.iter().enumerate() {
             let request = ModelRequest {
                 model: self.model.clone(),
-                system_prompt: compaction_directive().to_string(),
+                system_prompt: compaction_directive(&self.directives),
                 messages: chunk.clone(),
                 tools: Vec::new(),
                 max_request_tokens: None,
@@ -599,6 +603,7 @@ mod tests {
             "mock".into(),
             window,
             on_progress,
+            Arc::new(DirectiveStore::default()),
         )
     }
 
@@ -815,7 +820,10 @@ mod tests {
         // The system reply carries the system prompt, which travels in its own
         // field rather than as a message.
         assert_eq!(request.messages.len(), replies.len() - 1);
-        assert_eq!(request.system_prompt, compaction_directive());
+        assert_eq!(
+            request.system_prompt,
+            compaction_directive(&DirectiveStore::default())
+        );
     }
 
     #[tokio::test]

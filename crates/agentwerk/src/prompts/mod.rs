@@ -2,6 +2,7 @@
 //! `{context}` expands to.
 
 mod builder;
+pub(crate) mod directives;
 mod section;
 
 use std::path::Path;
@@ -10,6 +11,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde_json::Value;
 
 pub(crate) use builder::PromptBuilder;
+use directives::{
+    built_in, DirectiveStore, ARGUMENTS_EXPECTED, ARGUMENTS_REJECTED, RESULT_SCHEMA_REQUIRED,
+    SUMMARY_REQUESTED,
+};
 
 use crate::agents::policy::Policies;
 use crate::agents::stats::Stats;
@@ -18,21 +23,10 @@ use crate::schemas::Schema;
 
 const CONTEXT_TEMPLATE: &str = include_str!("context.md");
 
-const RETRY_TEMPLATE: &str = include_str!("retry.directive.md");
-
-const COMPACTION_TEMPLATE: &str = include_str!("compaction.directive.md");
-
-/// Render the corrective message the loop pushes when the model's previous
-/// reply did not carry the work forward. `detail` says what was wrong and
-/// stands on its own; the template supplies the framing around it.
-pub(crate) fn retry_directive(detail: &str) -> String {
-    RETRY_TEMPLATE.replace("{detail}", detail)
-}
-
 /// The system prompt for collapsing an over-budget conversation into one
 /// summary. No placeholders: the messages themselves are what it summarizes.
-pub(crate) fn compaction_directive() -> &'static str {
-    COMPACTION_TEMPLATE
+pub(crate) fn compaction_directive(directives: &DirectiveStore) -> String {
+    directives.render(SUMMARY_REQUESTED, &[])
 }
 
 /// Render the block telling the agent how to return a result matching
@@ -40,7 +34,8 @@ pub(crate) fn compaction_directive() -> &'static str {
 /// preceding text.
 pub(crate) fn schema_directive(schema: &Schema) -> String {
     let pretty = serde_json::to_string_pretty(schema.get_raw_schema()).unwrap_or_default();
-    format!("\n\nRecord your `result` via `finish` as a JSON value matching this schema:\n{pretty}")
+    let body = built_in(RESULT_SCHEMA_REQUIRED, &[("schema", &pretty)]);
+    format!("\n\n{body}")
 }
 
 /// Compose the detail for a call whose arguments did not match its tool's
@@ -51,17 +46,21 @@ pub(crate) fn arguments_retry_detail(
     tool_name: &str,
     violations: &str,
     schema: Option<&Value>,
+    directives: &DirectiveStore,
 ) -> String {
-    let shape = schema
-        .map(|schema| {
-            let pretty = serde_json::to_string_pretty(schema).unwrap_or_default();
-            format!("\n\nThe arguments `{tool_name}` accepts:\n{pretty}")
-        })
-        .unwrap_or_default();
-    format!(
-        "`{tool_name}` rejected your arguments. Call it again with arguments \
-         that match its schema.\n\n{violations}{shape}"
-    )
+    let rejected = directives.render(
+        ARGUMENTS_REJECTED,
+        &[("tool", tool_name), ("violations", violations)],
+    );
+    let Some(schema) = schema else {
+        return rejected;
+    };
+    let pretty = serde_json::to_string_pretty(schema).unwrap_or_default();
+    let expected = directives.render(
+        ARGUMENTS_EXPECTED,
+        &[("tool", tool_name), ("schema", &pretty)],
+    );
+    format!("{rejected}\n\n{expected}")
 }
 
 /// Every fact the context knows, as `(placeholder, value)`. An unlimited
@@ -223,8 +222,12 @@ mod tests {
             "type": "object",
             "properties": {"offset": {"type": "integer"}},
         });
-        let rendered =
-            arguments_retry_detail("read_file", "/offset: expected type integer", Some(&schema));
+        let rendered = arguments_retry_detail(
+            "read_file",
+            "/offset: expected type integer",
+            Some(&schema),
+            &DirectiveStore::default(),
+        );
         assert!(rendered.contains("read_file"));
         assert!(rendered.contains("/offset: expected type integer"));
         assert!(rendered.contains("offset"));
@@ -234,17 +237,14 @@ mod tests {
 
     #[test]
     fn arguments_retry_detail_adds_no_shape_without_a_schema() {
-        let rendered = arguments_retry_detail("read_file", "/offset: expected type integer", None);
+        let rendered = arguments_retry_detail(
+            "read_file",
+            "/offset: expected type integer",
+            None,
+            &DirectiveStore::default(),
+        );
         assert!(rendered.contains("read_file"));
         assert!(!rendered.contains("accepts:"));
-    }
-
-    #[test]
-    fn retry_directive_substitutes_detail_placeholder() {
-        let rendered = retry_directive("expected integer at /partial_sum");
-        assert!(rendered.contains("expected integer at /partial_sum"));
-        assert!(!rendered.contains("{detail}"));
-        assert!(rendered.contains("not accepted"));
     }
 
     fn context_body(

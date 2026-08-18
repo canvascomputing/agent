@@ -33,6 +33,15 @@ use std::sync::Arc;
 
 use serde_json::{Map, Number, Value};
 
+use crate::prompts::directives::{
+    built_in, SCHEMA_ANY_OF_UNMATCHED, SCHEMA_ARRAY_TOO_LONG, SCHEMA_ARRAY_TOO_SHORT,
+    SCHEMA_CONST_MISMATCHED, SCHEMA_ENUM_MISMATCHED, SCHEMA_FALSE_REJECTED, SCHEMA_HINT_JSON,
+    SCHEMA_HINT_QUOTE, SCHEMA_HINT_UNQUOTE, SCHEMA_NOT_MATCHED, SCHEMA_NUMBER_TOO_LARGE,
+    SCHEMA_NUMBER_TOO_SMALL, SCHEMA_ONE_OF_AMBIGUOUS, SCHEMA_PATTERN_UNMATCHED,
+    SCHEMA_PROPERTY_MISSING, SCHEMA_PROPERTY_UNEXPECTED, SCHEMA_STRING_TOO_LONG,
+    SCHEMA_STRING_TOO_SHORT, SCHEMA_TYPE_MISMATCHED,
+};
+
 mod store;
 
 pub use store::SchemaStore;
@@ -677,18 +686,20 @@ impl Node {
     fn check(&self, instance: &Value, instance_path: &str, out: &mut Vec<SchemaViolation>) {
         if let Some(types) = &self.types {
             if types.is_empty() {
-                self.violation(instance_path, "value is rejected by `false` schema", out);
+                self.violation(instance_path, built_in(SCHEMA_FALSE_REJECTED, &[]), out);
                 return;
             }
             if !types.iter().any(|t| t.matches(instance)) {
                 let labels: Vec<&str> = types.iter().map(|t| t.name()).collect();
-                let mut message = format!(
-                    "expected type {}, got {}",
-                    join_or(&labels),
-                    value_label(instance)
+                let mut message = built_in(
+                    SCHEMA_TYPE_MISMATCHED,
+                    &[
+                        ("expected", &join_or(&labels)),
+                        ("got", value_label(instance)),
+                    ],
                 );
                 if let Some(hint) = retype_hint(types, instance) {
-                    message.push_str(&format!(": {hint}"));
+                    message.push_str(&format!(": {}", built_in(hint, &[])));
                 }
                 self.violation(instance_path, message, out);
                 return;
@@ -697,13 +708,20 @@ impl Node {
 
         if let Some(expected) = &self.const_value {
             if instance != expected {
-                self.violation(instance_path, format!("expected {}", expected), out);
+                self.violation(
+                    instance_path,
+                    built_in(
+                        SCHEMA_CONST_MISMATCHED,
+                        &[("expected", &expected.to_string())],
+                    ),
+                    out,
+                );
             }
         }
 
         if let Some(values) = &self.enum_values {
             if !values.iter().any(|v| v == instance) {
-                self.violation(instance_path, "value is not in `enum`", out);
+                self.violation(instance_path, built_in(SCHEMA_ENUM_MISMATCHED, &[]), out);
             }
         }
 
@@ -717,11 +735,7 @@ impl Node {
 
         if let Some(schemas) = &self.any_of {
             if !schemas.iter().any(|sub| sub.accepts(instance)) {
-                self.violation(
-                    instance_path,
-                    "value does not match any of the anyOf schemas",
-                    out,
-                );
+                self.violation(instance_path, built_in(SCHEMA_ANY_OF_UNMATCHED, &[]), out);
             }
         }
 
@@ -730,7 +744,7 @@ impl Node {
             if count != 1 {
                 self.violation(
                     instance_path,
-                    format!("value matches {count} of the oneOf schemas, expected exactly 1"),
+                    built_in(SCHEMA_ONE_OF_AMBIGUOUS, &[("count", &count.to_string())]),
                     out,
                 );
             }
@@ -738,7 +752,7 @@ impl Node {
 
         if let Some(sub) = &self.not {
             if sub.accepts(instance) {
-                self.violation(instance_path, "value must not match the `not` schema", out);
+                self.violation(instance_path, built_in(SCHEMA_NOT_MATCHED, &[]), out);
             }
         }
 
@@ -780,7 +794,7 @@ impl Node {
                 if !map.contains_key(name) {
                     self.violation(
                         instance_path,
-                        format!("missing required property `{name}`"),
+                        built_in(SCHEMA_PROPERTY_MISSING, &[("name", name)]),
                         out,
                     );
                 }
@@ -804,7 +818,11 @@ impl Node {
                 .unwrap_or_default();
             for name in map.keys() {
                 if !known.contains(name.as_str()) {
-                    self.violation(instance_path, format!("unexpected property `{name}`"), out);
+                    self.violation(
+                        instance_path,
+                        built_in(SCHEMA_PROPERTY_UNEXPECTED, &[("name", name)]),
+                        out,
+                    );
                 }
             }
         }
@@ -815,7 +833,10 @@ impl Node {
             if arr.len() < min {
                 self.violation(
                     instance_path,
-                    format!("array has {} items, expected at least {min}", arr.len()),
+                    built_in(
+                        SCHEMA_ARRAY_TOO_SHORT,
+                        &[("count", &arr.len().to_string()), ("min", &min.to_string())],
+                    ),
                     out,
                 );
             }
@@ -824,7 +845,10 @@ impl Node {
             if arr.len() > max {
                 self.violation(
                     instance_path,
-                    format!("array has {} items, expected at most {max}", arr.len()),
+                    built_in(
+                        SCHEMA_ARRAY_TOO_LONG,
+                        &[("count", &arr.len().to_string()), ("max", &max.to_string())],
+                    ),
                     out,
                 );
             }
@@ -843,7 +867,10 @@ impl Node {
             if len < min {
                 self.violation(
                     instance_path,
-                    format!("string length {len} is below minimum {min}"),
+                    built_in(
+                        SCHEMA_STRING_TOO_SHORT,
+                        &[("length", &len.to_string()), ("min", &min.to_string())],
+                    ),
                     out,
                 );
             }
@@ -852,7 +879,10 @@ impl Node {
             if len > max {
                 self.violation(
                     instance_path,
-                    format!("string length {len} is above maximum {max}"),
+                    built_in(
+                        SCHEMA_STRING_TOO_LONG,
+                        &[("length", &len.to_string()), ("max", &max.to_string())],
+                    ),
                     out,
                 );
             }
@@ -861,7 +891,7 @@ impl Node {
             if !re.is_match(s) {
                 self.violation(
                     instance_path,
-                    format!("string does not match pattern `{}`", re.as_str()),
+                    built_in(SCHEMA_PATTERN_UNMATCHED, &[("pattern", re.as_str())]),
                     out,
                 );
             }
@@ -874,7 +904,10 @@ impl Node {
             if f < min {
                 self.violation(
                     instance_path,
-                    format!("value {f} is below minimum {min}"),
+                    built_in(
+                        SCHEMA_NUMBER_TOO_SMALL,
+                        &[("value", &f.to_string()), ("min", &min.to_string())],
+                    ),
                     out,
                 );
             }
@@ -883,7 +916,10 @@ impl Node {
             if f > max {
                 self.violation(
                     instance_path,
-                    format!("value {f} is above maximum {max}"),
+                    built_in(
+                        SCHEMA_NUMBER_TOO_LARGE,
+                        &[("value", &f.to_string()), ("max", &max.to_string())],
+                    ),
                     out,
                 );
             }
@@ -925,12 +961,12 @@ fn retype_hint(types: &[JsonType], instance: &Value) -> Option<&'static str> {
         .iter()
         .any(|t| matches!(t, JsonType::Object | JsonType::Array));
     match instance {
-        Value::String(_) if unquoted => Some("send the value unquoted"),
+        Value::String(_) if unquoted => Some(SCHEMA_HINT_UNQUOTE),
         // A structure written as text is decoded when it parses, so what
         // reaches here is text that did not.
-        Value::String(_) if structured => Some("send it as JSON, not as a string"),
+        Value::String(_) if structured => Some(SCHEMA_HINT_JSON),
         Value::Number(_) | Value::Bool(_) if types.contains(&JsonType::String) => {
-            Some("send the value quoted")
+            Some(SCHEMA_HINT_QUOTE)
         }
         _ => None,
     }

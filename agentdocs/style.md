@@ -6,10 +6,10 @@ Naming, comment, and prose rules, plus README structure. Skim the section matchi
 
 **A type earns a `pub use` at `lib.rs` only when it names a concept in the one-sentence description of the crate, or when root-level signatures hand it to the caller.**
 
-`Agent`, `AgentBuilder`, `TicketQueue`, `Ticket`, `Knowledge`, `Trajectory`, `Reply`, `Event`, `Status`, `EventKind`, `FinishReason`, `Schema`, `SchemaStore`
+`Agent`, `AgentBuilder`, `TicketQueue`, `Ticket`, `Knowledge`, `Directive`, `Trajectory`, `Reply`, `Event`, `Status`, `EventKind`, `FinishReason`, `Schema`, `SchemaStore`
 
 - Discriminants callers match on earn a root slot: `Status`, `EventKind`, `FinishReason`.
-- Builder parameters and run outputs earn one when callers name them: `Schema`, `SchemaStore`, `AgentBuilder`, `Reply`, `Trajectory`.
+- Builder parameters and run outputs earn one when callers name them: `Schema`, `SchemaStore`, `Directive`, `AgentBuilder`, `Reply`, `Trajectory`.
 - Errors and conversion traits do not. They live in their domain module.
 - Free functions at the root are forbidden: convert to an associated function or move to the domain module.
 - Name collisions at the root are forbidden; `ToolResult` next to `Result` is not acceptable.
@@ -189,13 +189,13 @@ edit_replies(key, editor)            // act once, now
 - IMPORTANT: the trigger fixes the handler's parameters, the action fixes its return type. `_on_event` hands over `&Event`, `_on_result` a `&Ticket` and its validated `&Value`, `_on_failure` the `&Event` and the `&Ticket` it happened in. Observing returns `()`, `create_ticket*` returns `Option<Ticket>`.
 - A hook reacts to something agentwerk produces. Anything the caller already holds needs no hook: to stop a pool on a verdict, `finish` for it and `cancel`.
 - `on_ticket` sits outside the trigger grid, keying on a ticket rather than naming a trigger.
-- The editor row is the one exception and holds three members: `edit_replies_on_event`, `edit_replies_on_compaction`, and `edit_directive_on_retry`. Compaction and the retry earn the last two because each is a moment agentwerk writes on the host's behalf. No `_on_result` or `_on_failure` sibling follows: an editor runs once per request over the batch of events since the previous one, and a failure is already reachable by matching `EventKind::ToolCallFailed` inside the batch.
+- The editor row is the one exception and holds two members: `edit_replies_on_event` and `edit_replies_on_compaction`. Compaction earns the second because it is a moment agentwerk writes on the host's behalf. What agentwerk writes to correct the model is not an editor at all: `AgentBuilder::directives` takes one function over every directive. No `_on_result` or `_on_failure` sibling follows: an editor runs once per request over the batch of events since the previous one, and a failure is already reachable by matching `EventKind::ToolCallFailed` inside the batch.
 
 ## Editors
 
 **An editor is `edit_<noun>`. Its last parameter is the `&mut` value it rewrites; anything before it is read-only context.**
 
-- `edit_replies(key, FnOnce(&mut Vec<Reply>))`, `edit_replies_on_event(Fn(&[Event], &mut Vec<Reply>))`, `edit_directive_on_retry(Fn(&Event, &mut String))`.
+- `edit_replies(key, FnOnce(&mut Vec<Reply>))`, `edit_replies_on_event(Fn(&[Event], &mut Vec<Reply>))`.
 - The value arrives holding what agentwerk would otherwise have used, so an editor that writes nothing keeps the default. No editor returns `Option<T>`: there is nothing left to signal.
 - An async editor takes the value by move and returns the replacement: `edit_replies_on_compaction(Fn(Compaction, Vec<Reply>) -> Future<Output = ProviderResult<Vec<Reply>>>)`. Handing back what it was given is how it says it changed nothing, and the `Result` is there because an editor that calls the model can fail.
 - A hook that rewrites a value is named for that value, not for its trigger alone. Naming it `on_<trigger>` alone reads as an observer and hides what it changes.
