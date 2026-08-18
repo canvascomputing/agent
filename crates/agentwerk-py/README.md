@@ -650,8 +650,11 @@ tickets.on_event(log)
 | | `tool_call_failed` | A tool invocation failed but the ticket continues. |
 | **File** | `file_open_finished` | A tool opened a file. |
 | | `file_open_failed` | A tool could not open a file. |
-| **Knowledge** | `knowledge_used` | A page was written, read, removed, or listed. |
-| | `knowledge_missed` | A page the agent asked for was not there. |
+| **Knowledge** | `knowledge_written` | A page was written. |
+| | `knowledge_read` | A page was read. |
+| | `knowledge_removed` | A page was removed. |
+| | `knowledge_listed` | The pages were listed. |
+| | `knowledge_failed` | An action against the store did not go through. |
 | **Compaction** | `compaction_started` | Compaction is about to rewrite the older messages. |
 | | `compaction_progress` | Compaction finished part of the work. |
 | | `compaction_finished` | Compaction replaced the older messages. |

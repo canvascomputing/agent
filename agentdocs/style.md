@@ -74,7 +74,7 @@ ToolFailureKind::ExecutionFailed.name()   // "execution_failed"
 
 - Human-readable strings MUST be named `message: String`, never `error`.
 - Wrapped underlying errors MUST be named `source`, as in `FooFailed { source: io::Error }`.
-- Typed metadata uses descriptive names: `status`, `retryable`, `retry_delay`, `tool_name`, `retries`, `after_ms`.
+- Typed metadata uses descriptive names: `status`, `retryable`, `retry_delay`, `tool_name`, `retries`, `after_ms`, `action`, `slug`.
 - A discriminant explaining why something happened is `reason`. `PolicyViolated` names its field `policy` instead, because `reason` next to `limit` reads as the limit's justification.
 - IMPORTANT: never name such a field `kind`. `Event` already carries `kind`, so `event.data["kind"]` and `event.kind` would be unrelated values one word apart. The type may still be named `PolicyKind` or `ToolFailureKind`; only the field is constrained.
 

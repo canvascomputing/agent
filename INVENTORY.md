@@ -705,15 +705,15 @@ Not bound, like the rest of `codegrep`.
 | Rust | `KnowledgeFailureKind.name(): string` | pub |
 | Python | not bound: the kind is already a string | |
 | Rust | `impl Display for KnowledgeFailureKind` | pub |
-| Rust | `KnowledgeOp` | pub |
-| Python | a string inside `Event.data`: `data["op"]` | |
-| Rust | `KnowledgeOp.Write` | pub |
-| Rust | `KnowledgeOp.Read` | pub |
-| Rust | `KnowledgeOp.Remove` | pub |
-| Rust | `KnowledgeOp.List` | pub |
-| Rust | `KnowledgeOp.name(): string` | pub |
-| Python | not bound: the op is already a string | |
-| Rust | `impl Display for KnowledgeOp` | pub |
+| Rust | `KnowledgeAction` | pub |
+| Python | a string inside `Event.data`: `data["action"]` | |
+| Rust | `KnowledgeAction.Write` | pub |
+| Rust | `KnowledgeAction.Read` | pub |
+| Rust | `KnowledgeAction.Remove` | pub |
+| Rust | `KnowledgeAction.List` | pub |
+| Rust | `KnowledgeAction.name(): string` | pub |
+| Python | not bound: the action is already a string | |
+| Rust | `impl Display for KnowledgeAction` | pub |
 | Rust | `Event { created_at: number, agent_id: string, ticket_key: string, label: string?, kind: EventKind }` | pub |
 | Python | `Event.created_at`, `.agent_id`, `.ticket_key`, `.label`, `.kind`, plus `.data`: a dict of the kind's fields | |
 | Rust | `Event.new(agent_id: string, ticket_key: string, label: string?, kind: EventKind): Event` | crate |
@@ -738,8 +738,11 @@ Not bound, like the rest of `codegrep`.
 | Rust | `EventKind.ToolCallFailed { tool_name: string, call_id: string, reason: ToolFailureKind, message: string }` | pub |
 | Rust | `EventKind.FileOpenFinished { path: string }` | pub |
 | Rust | `EventKind.FileOpenFailed { path: string, reason: ToolFailureKind }` | pub |
-| Rust | `EventKind.KnowledgeUsed { op: KnowledgeOp }` | pub |
-| Rust | `EventKind.KnowledgeFailed { op: KnowledgeOp, reason: KnowledgeFailureKind }` | pub |
+| Rust | `EventKind.KnowledgeWritten { slug: string }` | pub |
+| Rust | `EventKind.KnowledgeRead { slug: string }` | pub |
+| Rust | `EventKind.KnowledgeRemoved { slug: string }` | pub |
+| Rust | `EventKind.KnowledgeListed` | pub |
+| Rust | `EventKind.KnowledgeFailed { action: KnowledgeAction, reason: KnowledgeFailureKind }` | pub |
 | Rust | `EventKind.PolicyViolated { policy: PolicyKind, limit: number }` | pub |
 | Rust | `EventKind.SchemaRetried { attempt: number, max_attempts: number, message: string }` | pub |
 | Rust | `EventKind.CompactionStarted { reason: CompactReason, total: number }` | pub |
@@ -774,7 +777,10 @@ Not bound, like the rest of `codegrep`.
 | Rust | `EventName.ToolCallFailed` | pub |
 | Rust | `EventName.FileOpenFinished` | pub |
 | Rust | `EventName.FileOpenFailed` | pub |
-| Rust | `EventName.KnowledgeUsed` | pub |
+| Rust | `EventName.KnowledgeWritten` | pub |
+| Rust | `EventName.KnowledgeRead` | pub |
+| Rust | `EventName.KnowledgeRemoved` | pub |
+| Rust | `EventName.KnowledgeListed` | pub |
 | Rust | `EventName.KnowledgeFailed` | pub |
 | Rust | `EventName.PolicyViolated` | pub |
 | Rust | `EventName.SchemaRetried` | pub |

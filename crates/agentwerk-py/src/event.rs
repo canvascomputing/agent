@@ -118,9 +118,12 @@ fn payload(kind: &EventKind) -> Value {
         FileOpenFailed { path, reason } => {
             json!({ "path": path, "reason": reason.to_string() })
         }
-        KnowledgeUsed { op } => json!({ "op": op.to_string() }),
-        KnowledgeFailed { op, reason } => {
-            json!({ "op": op.to_string(), "reason": reason.to_string() })
+        KnowledgeWritten { slug } | KnowledgeRead { slug } | KnowledgeRemoved { slug } => {
+            json!({ "slug": slug })
+        }
+        KnowledgeListed => json!({}),
+        KnowledgeFailed { action, reason } => {
+            json!({ "action": action.to_string(), "reason": reason.to_string() })
         }
         PolicyViolated { policy, limit } => json!({ "policy": policy.to_string(), "limit": limit }),
         SchemaRetried {

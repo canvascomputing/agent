@@ -19,7 +19,8 @@ HOST = "127.0.0.1"
 # draws them.
 CARRIED = (
     "tool_name",
-    "op",
+    "action",
+    "slug",
     "model",
     "usage",
     "reason",
