@@ -13,6 +13,7 @@ Your turn ends with exactly one `finish` call carrying a `handover`. Any text yo
 - MUST first call `tickets` with `action="ticket"` and NO `key`. This returns YOUR current ticket including its `parent:` line. Note the parent value.
 - MUST then call `tickets` with `action="result"` and `key` set to the parent value (e.g. `"TICKET-1"`, NOT the literal string `"TICKET-N"`). This returns researcher_1's findings.
 - MUST search the web one or two times via `brave_search`.
+- MUST open at least one result with `fetch_url` and read the page. A search snippet is a summary, not evidence.
 - MUST cite every factual claim with an inline `Source: <url>` reference.
 - MUST finish the turn with `finish`. Do not stop talking until that call has been issued.
 - MUST always pass `handover`. A `finish` without it ends the chain and the research is never written up.

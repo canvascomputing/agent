@@ -89,6 +89,9 @@ pub fn extract_tool(obj: &Bound<'_, PyAny>) -> PyResult<Tool> {
     if let Ok(command) = obj.extract::<PyRef<PyCommandTool>>() {
         return Ok(command.inner.clone().into());
     }
+    if let Ok(fetch_url) = obj.extract::<PyRef<PyFetchUrlTool>>() {
+        return Ok(fetch_url.inner.clone().into());
+    }
     if obj.hasattr("_agentwerk_tool")? {
         let name: String = obj.getattr("_agentwerk_name")?.extract()?;
         let description: String = obj.getattr("_agentwerk_description")?.extract()?;
@@ -187,12 +190,6 @@ fn list_directory_tool() -> PyTool {
     handle(ListDirectoryTool)
 }
 
-#[pyfunction]
-#[pyo3(name = "FetchUrlTool")]
-fn fetch_url_tool() -> PyTool {
-    handle(FetchUrlTool)
-}
-
 /// Point the knowledge tool at `store` without making it the agent's own.
 ///
 /// `Agent.knowledge(store)` is the usual route, and also shows the store's index
@@ -215,6 +212,32 @@ fn finish_tool() -> PyTool {
 #[pyo3(name = "TicketsTool")]
 fn tickets_tool() -> PyTool {
     handle(TicketsTool)
+}
+
+/// Fetch a URL and read its body, passed to `Agent.tool(...)`. Requests carry
+/// agentwerk's own user agent until `impersonate()` changes that.
+#[pyclass(name = "FetchUrlTool")]
+pub struct PyFetchUrlTool {
+    inner: FetchUrlTool,
+}
+
+#[pymethods]
+impl PyFetchUrlTool {
+    #[new]
+    fn new() -> Self {
+        PyFetchUrlTool {
+            inner: FetchUrlTool::new(),
+        }
+    }
+
+    /// Send the headers and HTTP/2 settings a browser sends, reaching a site
+    /// that refuses a client it cannot recognize as one. The TLS handshake is
+    /// unchanged, so a site reading the ClientHello rather than the headers
+    /// refuses the request either way.
+    fn impersonate<'py>(mut slf: PyRefMut<'py, Self>) -> PyRefMut<'py, Self> {
+        slf.inner = slf.inner.clone().impersonate();
+        slf
+    }
 }
 
 /// Run a command the model calls by `name`, passed to `Agent.tool(...)`.
@@ -279,6 +302,7 @@ impl PyCommandTool {
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyTool>()?;
     m.add_class::<PyCommandTool>()?;
+    m.add_class::<PyFetchUrlTool>()?;
     m.add_class::<PyToolResult>()?;
     m.add_function(wrap_pyfunction!(read_file_tool, m)?)?;
     m.add_function(wrap_pyfunction!(write_file_tool, m)?)?;
@@ -286,7 +310,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(grep_tool, m)?)?;
     m.add_function(wrap_pyfunction!(glob_tool, m)?)?;
     m.add_function(wrap_pyfunction!(list_directory_tool, m)?)?;
-    m.add_function(wrap_pyfunction!(fetch_url_tool, m)?)?;
     m.add_function(wrap_pyfunction!(knowledge_tool, m)?)?;
     m.add_function(wrap_pyfunction!(finish_tool, m)?)?;
     m.add_function(wrap_pyfunction!(tickets_tool, m)?)?;

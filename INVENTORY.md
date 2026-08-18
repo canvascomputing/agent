@@ -1413,22 +1413,33 @@ Not bound: it is how `CommandTool` reads one command line.
 | Rust | `DEFAULT_MAX_LENGTH: number = 100000` | private |
 | Rust | `FETCH_TIMEOUT_SECS: number = 60` | private |
 | Rust | `MAX_REDIRECT_HOPS: number = 10` | private |
-| Rust | `FetchUrlTool` | pub |
+| Rust | `DEFAULT_USER_AGENT: string` | private |
+| Rust | `BROWSER_USER_AGENT: string` | private |
+| Rust | `BROWSER_CLIENT_HINT: string` | private |
+| Rust | `BROWSER_ACCEPT: string` | private |
+| Rust | `BROWSER_STREAM_WINDOW: number = 6291456` | private |
+| Rust | `BROWSER_CONNECTION_WINDOW: number = 15728640` | private |
+| Rust | `BROWSER_MAX_FRAME_SIZE: number = 16384` | private |
+| Rust | `FetchUrlTool { impersonate: boolean }` | pub |
+| Python | `FetchUrlTool`: a class carrying the builder method, where every other built-in tool except `CommandTool` is a function returning a handle | |
+| Rust | `FetchUrlTool.new(): FetchUrlTool` | pub |
 | Python | `FetchUrlTool()` | |
+| both | `FetchUrlTool.impersonate(): FetchUrlTool` | pub |
 | Rust | `FetchUrlArgs { url: string, max_length: number }` | pub |
 | Python | not bound: the model sends these fields as the tool's input | |
 | Rust | `default_max_length(): number` | private |
 | Rust | `impl From<FetchUrlTool> for Tool` | pub |
-| Rust | `run(args: FetchUrlArgs, ctx: ToolContext): Promise<ToolResult>` | private |
+| Rust | `run(args: FetchUrlArgs, ctx: ToolContext, impersonate: boolean): Promise<ToolResult>` | private |
 | Rust | `FetchedContent` | private |
 | Rust | `FetchedContent.Page { body: string, status: number, content_type: string, bytes: number }` | private |
 | Rust | `FetchedContent.Redirect { original_url: string, redirect_url: string, status: number }` | private |
-| Rust | `fetch_url(url: string): Promise<FetchedContent throws string>` | private |
+| Rust | `fetch_url(url: string, impersonate: boolean): Promise<FetchedContent throws string>` | private |
 | Rust | `format_output(url: string, body: string, status: number, content_type: string, bytes: number, max_length: number): string` | private |
 | Rust | `FollowResult` | private |
 | Rust | `FollowResult.Ok(reqwest::Response)` | private |
 | Rust | `FollowResult.CrossDomain { original_url: string, redirect_url: string, status: number }` | private |
-| Rust | `follow_safe_redirects(client: reqwest::Client, url: string): Promise<FollowResult throws string>` | private |
+| Rust | `request_headers(impersonate: boolean, first_hop: boolean): [string, string][]` | private |
+| Rust | `follow_safe_redirects(client: reqwest::Client, url: string, impersonate: boolean): Promise<FollowResult throws string>` | private |
 | Rust | `is_redirect(status: number): boolean` | private |
 | Rust | `is_same_origin(original_url: string, redirect_url: string): boolean` | private |
 | Rust | `UrlOrigin { scheme: string, host: string, port: string }` | private |
@@ -2030,10 +2041,12 @@ Binds `tools/`.
 | Rust | `grep_tool(): PyTool` | python |
 | Rust | `glob_tool(): PyTool` | python |
 | Rust | `list_directory_tool(): PyTool` | python |
-| Rust | `fetch_url_tool(): PyTool` | python |
 | Rust | `knowledge_tool(store: PyKnowledge): PyTool` | python |
 | Rust | `finish_tool(): PyTool` | python |
 | Rust | `tickets_tool(): PyTool` | python |
+| Rust | `PyFetchUrlTool { inner: FetchUrlTool }` | python |
+| Rust | `PyFetchUrlTool.new(): PyFetchUrlTool` | python |
+| Rust | `PyFetchUrlTool.impersonate(): PyFetchUrlTool` | python |
 | Rust | `PyCommandTool { inner: CommandTool }` | python |
 | Rust | `PyCommandTool.new(name: string): PyCommandTool` | python |
 | Rust | `PyCommandTool.allow(pattern: string): PyCommandTool` | python |

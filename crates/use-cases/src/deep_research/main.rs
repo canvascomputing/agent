@@ -20,7 +20,7 @@ use std::sync::Arc;
 use agentwerk::event::{Event, EventKind, EventName};
 use agentwerk::providers::{Model, Provider};
 use agentwerk::schemas::{Schema, SchemaStore};
-use agentwerk::tools::{TicketsTool, Tool, ToolResult};
+use agentwerk::tools::{FetchUrlTool, TicketsTool, Tool, ToolResult};
 use agentwerk::{Agent, FinishReason, Ticket, TicketQueue};
 
 const RESEARCHER_1_ROLE: &str = include_str!("prompts/researcher_1.role.md");
@@ -61,6 +61,7 @@ async fn main() {
         .role(RESEARCHER_1_ROLE)
         .label("researcher_1")
         .tool(brave_search_tool(brave_key.clone()))
+        .tool(FetchUrlTool::new().impersonate())
         .tool(TicketsTool)
         .build();
 
@@ -70,6 +71,7 @@ async fn main() {
         .role(RESEARCHER_2_ROLE)
         .label("researcher_2")
         .tool(brave_search_tool(brave_key.clone()))
+        .tool(FetchUrlTool::new().impersonate())
         .tool(TicketsTool)
         .build();
 

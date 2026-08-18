@@ -576,6 +576,14 @@ With an `allow_flag` set, a command carrying any other flag is refused:
 cargo = CommandTool("cargo").allow("cargo test*").allow_flag("--all-features")
 ```
 
+#### FetchUrlTool
+
+The `FetchUrlTool` fetches a URL and returns its text, requesting it with the user agent `agentwerk/<version>`. `impersonate()` swaps in the headers and HTTP/2 settings a browser sends.
+
+```python
+web = FetchUrlTool().impersonate()
+```
+
 #### Custom Tools
 
 You can define custom tools for specific needs with the following parameters:

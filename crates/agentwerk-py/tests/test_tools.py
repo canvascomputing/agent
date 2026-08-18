@@ -11,7 +11,6 @@ BUILTIN_FACTORIES = [
     aw.GrepTool,
     aw.GlobTool,
     aw.ListDirectoryTool,
-    aw.FetchUrlTool,
     aw.TicketsTool,
     aw.FinishTool,
 ]
@@ -34,6 +33,16 @@ def test_command_tool_configuration_chains_on_one_object():
 
 def test_an_agent_accepts_a_command_tool():
     agent = aw.Agent().tool(aw.CommandTool("git").allow("git *"))
+    assert isinstance(agent, aw.Agent)
+
+
+def test_fetch_url_tool_configuration_chains_on_one_object():
+    tool = aw.FetchUrlTool()
+    assert tool.impersonate() is tool
+
+
+def test_an_agent_accepts_a_fetch_url_tool():
+    agent = aw.Agent().tool(aw.FetchUrlTool().impersonate())
     assert isinstance(agent, aw.Agent)
 
 

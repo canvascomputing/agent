@@ -39,7 +39,7 @@
 //!     tickets.agent(
 //!         Agent::from_env()
 //!             .label("research")
-//!             .tool(FetchUrlTool)
+//!             .tool(FetchUrlTool::new())
 //!             .build(),
 //!     );
 //! }
