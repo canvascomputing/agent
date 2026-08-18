@@ -6,10 +6,10 @@ Naming, comment, and prose rules, plus README structure. Skim the section matchi
 
 **A type earns a `pub use` at `lib.rs` only when it names a concept in the one-sentence description of the crate, or when root-level signatures hand it to the caller.**
 
-`Agent`, `AgentBuilder`, `TicketQueue`, `Ticket`, `Knowledge`, `Directive`, `Trajectory`, `Reply`, `Event`, `Status`, `EventKind`, `FinishReason`, `Schema`, `SchemaStore`
+`Agent`, `AgentBuilder`, `TicketQueue`, `Ticket`, `Knowledge`, `Directive`, `Text`, `Trajectory`, `Reply`, `Event`, `Status`, `EventKind`, `FinishReason`, `Schema`, `SchemaStore`
 
 - Discriminants callers match on earn a root slot: `Status`, `EventKind`, `FinishReason`.
-- Builder parameters and run outputs earn one when callers name them: `Schema`, `SchemaStore`, `Directive`, `AgentBuilder`, `Reply`, `Trajectory`.
+- Builder parameters and run outputs earn one when callers name them: `Schema`, `SchemaStore`, `Directive`, `Text`, `AgentBuilder`, `Reply`, `Trajectory`.
 - Errors and conversion traits do not. They live in their domain module.
 - Free functions at the root are forbidden: convert to an associated function or move to the domain module.
 - Name collisions at the root are forbidden; `ToolResult` next to `Result` is not acceptable.
@@ -211,6 +211,7 @@ edit_replies(key, editor)            // act once, now
 - An enum whose variants carry fields becomes a class with a `kind` string, a `data` dict, and one static constructor per variant. `Event` and `ReplyContent` are the two.
 - A builder method whose name collides with a reader on the same Python class becomes a constructor keyword argument, because a Python class cannot carry both. `Ticket` needs this for `label`, `schema`, and `parent`.
 - A `&mut` editor becomes a callable that returns the replacement, or `None` to keep the current value, since Python cannot take a Rust `&mut`.
+- A conversion type a setter takes collapses into the Python types it converts from: `Text` is a `str` for the text itself and an `os.PathLike` for the file holding it.
 - A reader taking no argument becomes an attribute: `Agent::id()` is `agent.id`, `Ticket::key()` is `ticket.key`.
 - IMPORTANT: no `with_` prefix in either language, and no transform beyond this list.
 

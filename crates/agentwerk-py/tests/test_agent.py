@@ -23,6 +23,18 @@ def test_chaining_returns_the_same_agent():
     assert agent.role("r").label("x").dir(".") is agent
 
 
+def test_role_reads_a_path_as_the_file_holding_it(tmp_path):
+    role = tmp_path / "reviewer.md"
+    role.write_text("You review code.\n")
+    agent = aw.Agent()
+    assert agent.role(role) is agent
+
+
+def test_role_naming_a_missing_file_is_rejected(tmp_path):
+    with pytest.raises(RuntimeError):
+        aw.Agent().role(tmp_path / "absent.md")
+
+
 def test_interactive_chains():
     agent = aw.Agent()
     assert agent.interactive() is agent

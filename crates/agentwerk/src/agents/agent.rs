@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, Weak};
 
-use crate::prompts::{context_values, render_context, PromptBuilder};
+use crate::prompts::{context_values, render_context, PromptBuilder, Text};
 use crate::providers::{Model, Provider};
 use crate::tools::{FinishTool, KnowledgeTool, Tool, ToolRegistry};
 
@@ -116,8 +116,11 @@ impl<P, M> AgentBuilder<P, M> {
     /// unconfigured expands to nothing and shows no bullet. Leave the
     /// placeholders out and nothing is added, so the role decides both whether
     /// those facts appear and where.
-    pub fn role(mut self, role: impl Into<String>) -> Self {
-        self.role = role.into();
+    ///
+    /// A string is the role itself; a `&Path` or `PathBuf` names the file
+    /// holding it, which panics when that file cannot be read.
+    pub fn role(mut self, role: impl Into<Text>) -> Self {
+        self.role = role.into().into_string();
         self
     }
 
@@ -207,7 +210,7 @@ impl<P, M> AgentBuilder<P, M> {
     /// Decide what the agent tells the model when a call fails.
     ///
     /// `compute` sees the key of every directive before it renders. Match it
-    /// against the constants [`Directive`] carries, and answer `None` for the
+    /// against the constants [`crate::Directive`] carries, and answer `None` for the
     /// ones you leave as they are. What it returns is a template, bound
     /// afterwards, so a `{name}` it carries still resolves.
     ///
@@ -518,9 +521,9 @@ impl Agent {
 
     /// Submit a task and return its ticket key.
     ///
-    /// A string is the task itself. A [`Ticket`] carries a custom label or
-    /// schema with it. Call it as often as you like: one agent can drive many
-    /// tickets.
+    /// A string is the task itself, and a `&Path` or `PathBuf` names the file
+    /// holding it. A [`Ticket`] carries a custom label or schema with it. Call
+    /// it as often as you like: one agent can drive many tickets.
     pub fn ticket(&self, ticket: impl Into<Ticket>) -> String {
         self.dispatch(ticket.into())
     }
@@ -661,6 +664,24 @@ mod tests {
     fn a_role_without_the_placeholder_gets_no_context_block() {
         let agent = Agent::new().role("ROLE");
         assert_eq!(system_prompt(&agent, None), "ROLE");
+    }
+
+    #[test]
+    fn a_role_read_from_a_file_becomes_the_system_prompt() {
+        let dir = crate::test_util::TempDir::new().unwrap();
+        let file = dir.path().join("reviewer.md");
+        std::fs::write(&file, "ROLE\n").unwrap();
+        let agent = Agent::new().role(file.as_path());
+        assert_eq!(system_prompt(&agent, None), "ROLE");
+    }
+
+    #[test]
+    fn a_role_read_from_a_file_keeps_its_placeholders_expandable() {
+        let dir = crate::test_util::TempDir::new().unwrap();
+        let file = dir.path().join("reviewer.md");
+        std::fs::write(&file, "ROLE\n\n{context}\n").unwrap();
+        let agent = Agent::new().role(file).dir("/tmp/check");
+        assert!(system_prompt(&agent, None).contains("- Working directory: /tmp/check"));
     }
 
     #[test]

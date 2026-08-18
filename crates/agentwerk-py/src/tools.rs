@@ -12,7 +12,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use serde_json::Value;
 
-use crate::convert::{py_to_value, value_to_py};
+use crate::convert::{py_to_text, py_to_value, value_to_py};
 use crate::knowledge::PyKnowledge;
 
 /// A tool handle Python passes to `Agent.tool(...)`. Every built-in returns
@@ -94,7 +94,7 @@ pub fn extract_tool(obj: &Bound<'_, PyAny>) -> PyResult<Tool> {
     }
     if obj.hasattr("_agentwerk_tool")? {
         let name: String = obj.getattr("_agentwerk_name")?.extract()?;
-        let description: String = obj.getattr("_agentwerk_description")?.extract()?;
+        let description = py_to_text(&obj.getattr("_agentwerk_description")?)?;
         let concurrent = obj.getattr("_agentwerk_concurrent")?.extract()?;
         let paths: Vec<String> = obj.getattr("_agentwerk_paths")?.extract()?;
         let document = py_to_value(&obj.getattr("_agentwerk_schema")?)?;
@@ -286,9 +286,15 @@ impl PyCommandTool {
     }
 
     /// Override the auto-generated description.
-    fn description<'py>(mut slf: PyRefMut<'py, Self>, description: &str) -> PyRefMut<'py, Self> {
-        slf.inner = slf.inner.clone().description(description);
-        slf
+    ///
+    /// A `str` is the description itself; an `os.PathLike` names the file
+    /// holding it.
+    fn description<'py>(
+        mut slf: PyRefMut<'py, Self>,
+        description: &Bound<'_, PyAny>,
+    ) -> PyResult<PyRefMut<'py, Self>> {
+        slf.inner = slf.inner.clone().description(py_to_text(description)?);
+        Ok(slf)
     }
 
     /// Run this tool in parallel with the turn's other concurrent calls. Set it

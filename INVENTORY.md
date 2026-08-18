@@ -12,6 +12,7 @@ Signatures use one language-independent notation, so a Rust row and a Python row
 - A method carries its type: `Owner.name(..)`. A free function carries none.
 - `u8`, `u32`, `u64`, `usize`, `f32`, `f64`, and `Duration` are `number`, and a `Duration` constant shows milliseconds.
 - `&str`, `String`, `impl Into<String>`, `&Path`, and `PathBuf` are `string`.
+- `impl Into<Text>` is `Text`: a string is the text itself, a `&Path` or `PathBuf` names the file the crate reads and trims.
 - `bool` is `boolean`, `()` is `void`, `serde_json::Value` is `json`.
 - `Vec<T>` and `&[T]` are `T[]`, `HashMap<K, V>` and `BTreeMap<K, V>` are `Record<K, V>`.
 - `Option<T>` is `T?`, written that way rather than as a union because a `|` splits a table cell.
@@ -63,8 +64,8 @@ The rules the tables never repeat.
 | Python | `Agent.provider(provider): Agent` | |
 | Rust | `AgentBuilder.model(model: Model): AgentBuilder` | pub |
 | Python | `Agent.model(model): Agent` | |
-| Rust | `AgentBuilder.role(role: string): AgentBuilder` | pub |
-| Python | `Agent.role(role): Agent` | |
+| Rust | `AgentBuilder.role(role: Text): AgentBuilder` | pub |
+| Python | `Agent.role(role): Agent`: a `str` is the role, an `os.PathLike` names the file holding it | |
 | Rust | `AgentBuilder.label(label: string): AgentBuilder` | pub |
 | Python | `Agent.label(label): Agent` | |
 | Rust | `AgentBuilder.interactive(): AgentBuilder` | pub |
@@ -398,6 +399,7 @@ The rules the tables never repeat.
 | Rust | `impl From<&str> for Ticket` | pub |
 | Rust | `impl From<String> for Ticket` | pub |
 | Rust | `impl From<json> for Ticket` | pub |
+| Rust | `impl From<&Path> for Ticket`, `impl From<PathBuf> for Ticket`, and `impl From<&PathBuf> for Ticket`, reading the file as the task | pub |
 | Rust | `impl Persist for Ticket` | pub |
 | Rust | `TicketResult { key: string, value: json? }` | crate |
 | Rust | `impl Persist for TicketResult` | crate |
@@ -837,7 +839,7 @@ Not bound, like the rest of `codegrep`.
 |----------|------|------------|
 | Rust | `mod agents`, `mod codegrep`, `mod event`, `mod providers`, `mod schemas`, `mod tools` | pub |
 | Rust | `mod persistence`, `mod prompts` | crate |
-| Rust | re-exports `Agent`, `AgentBuilder`, `Query`, `Reply`, `Status`, `Ticket`, `TicketQueue`, `Compaction`, `Knowledge`, `Trajectory`, `Schema`, `SchemaStore`, `Event`, `EventKind`, `FinishReason` | pub |
+| Rust | re-exports `Agent`, `AgentBuilder`, `Query`, `Reply`, `Status`, `Ticket`, `TicketQueue`, `Compaction`, `Knowledge`, `Trajectory`, `Schema`, `SchemaStore`, `Event`, `EventKind`, `FinishReason`, `Directive`, `Text` | pub |
 | Python | `agentwerk` exports every bound class from one flat module | |
 
 ## `crates/agentwerk/src/persistence.rs`
@@ -868,7 +870,7 @@ Not bound: `prompts` is crate-internal, reached through `Agent.role(..)`.
 
 ## `crates/agentwerk/src/prompts/directives.rs`
 
-The only public part of `prompts`: `Directive` reaches the caller as a root re-export and carries nothing but the key constants, one per catalogue heading. `AgentBuilder::directives` takes the function deciding all of them, which sees a key and answers a template. `DirectiveStore` is the crate-private carrier of that function, which no host names. The constants sit on `Directive` in both languages, so `Directive::GREP_FAILED` and `Directive.GREP_FAILED` are the same name.
+One of the two public parts of `prompts`, beside `Text`: `Directive` reaches the caller as a root re-export and carries nothing but the key constants, one per catalogue heading. `AgentBuilder::directives` takes the function deciding all of them, which sees a key and answers a template. `DirectiveStore` is the crate-private carrier of that function, which no host names. The constants sit on `Directive` in both languages, so `Directive::GREP_FAILED` and `Directive.GREP_FAILED` are the same name.
 
 | Language | Item | Visibility |
 |----------|------|------------|
@@ -890,12 +892,12 @@ The only public part of `prompts`: `Directive` reaches the caller as a root re-e
 
 ## `crates/agentwerk/src/prompts/mod.rs`
 
-Not bound, except what `directives.rs` re-exports through it.
+Not bound, except what `directives.rs` and `text.rs` re-export through it.
 
 | Language | Item | Visibility |
 |----------|------|------------|
 | Rust | `mod builder`, `mod section` | private |
-| Rust | `pub(crate) mod directives` | crate |
+| Rust | `pub(crate) mod directives`, `pub(crate) mod text` | crate |
 | Rust | `CONTEXT_TEMPLATE: string` | private |
 | Rust | `retry_directive(detail: string): string` | crate |
 | Rust | `compaction_directive(): string` | crate |
@@ -918,6 +920,20 @@ Not bound, like the rest of `prompts`.
 | Rust | `Section.task(body: string): Section` | crate |
 | Rust | `Section.directive(body: string): Section` | crate |
 | Rust | `Section.render(): string` | crate |
+
+## `crates/agentwerk/src/prompts/text.rs`
+
+Not bound: Python passes a `str` for the text and an `os.PathLike` for the file holding it, which `convert.py_to_text` reads.
+
+| Language | Item | Visibility |
+|----------|------|------------|
+| Rust | `Text(string)`, the trimmed text | pub |
+| Rust | `Text.from_file(file: string): Text throws io::Error` | pub |
+| Rust | `Text.into_string(): string` | pub |
+| Rust | `Text.read(file: string): Text`, panicking where `from_file` reports | private |
+| Rust | `impl From<&str> for Text`, `impl From<String> for Text`, and `impl From<&String> for Text` | pub |
+| Rust | `impl From<&Path> for Text`, `impl From<PathBuf> for Text`, and `impl From<&PathBuf> for Text`, reading the file | pub |
+| Rust | `impl From<Text> for String` | pub |
 
 ## `crates/agentwerk/src/providers/anthropic.rs`
 
@@ -1426,7 +1442,8 @@ Not bound: it is how `CommandTool` reads one command line.
 | both | `CommandTool.allow_flag(flag: string): CommandTool` | pub |
 | both | `CommandTool.deny(pattern: string): CommandTool` | pub |
 | both | `CommandTool.deny_flag(flag: string): CommandTool` | pub |
-| both | `CommandTool.description(description: string): CommandTool` | pub |
+| Rust | `CommandTool.description(description: Text): CommandTool` | pub |
+| Python | `CommandTool.description(description)`: a `str` is the description, an `os.PathLike` names the file holding it | |
 | both | `CommandTool.concurrent(concurrent: boolean): CommandTool` | pub |
 | Rust | `CommandTool.render_description(): void` | private |
 | Rust | `CommandTool.allowed_line(): string` | private |
@@ -1754,8 +1771,8 @@ Not bound: it is how `CommandTool` reads one command line.
 | Python | `@tool(concurrent=..)` | |
 | Rust | `ToolBuilder.paths(fields: string[]): ToolBuilder` | pub |
 | Python | `@tool(paths=[..])` | |
-| Rust | `ToolBuilder.description(description: string): ToolBuilder` | pub |
-| Python | `@tool(description=..)`, defaulting to the decorated function's docstring | |
+| Rust | `ToolBuilder.description(description: Text): ToolBuilder` | pub |
+| Python | `@tool(description=..)`, defaulting to the decorated function's docstring: a `str` is the description, an `os.PathLike` names the file holding it | |
 | Rust | `ToolBuilder.handler(handler: (input: json, ctx: ToolContext) => Promise<ToolResult>): ToolBuilder` | pub |
 | Python | the decorated function itself | |
 | Rust | `ToolBuilder.build(): Tool` | pub |
@@ -1819,7 +1836,7 @@ Binds `agents/agent.rs`, whose section holds the Python spelling of each method.
 | Rust | `PyAgent.from_env(): PyAgent throws PyErr` | python |
 | Rust | `PyAgent.provider(provider: PyProvider): PyAgent throws PyErr` | python |
 | Rust | `PyAgent.model(model: any): PyAgent throws PyErr` | python |
-| Rust | `PyAgent.role(role: string): PyAgent throws PyErr` | python |
+| Rust | `PyAgent.role(role: any): PyAgent throws PyErr` | python |
 | Rust | `PyAgent.label(label: string): PyAgent throws PyErr` | python |
 | Rust | `PyAgent.id(): string throws PyErr` | python |
 | Rust | `PyAgent.interactive(): PyAgent throws PyErr` | python |
@@ -1856,6 +1873,7 @@ Not bound: the one JSON boundary between the two languages.
 |----------|------|------------|
 | Rust | `value_to_py(py: Python, value: json): any throws PyErr` | pub |
 | Rust | `py_to_value(obj: any): json throws PyErr` | pub |
+| Rust | `py_to_text(obj: any): string throws PyErr` | pub |
 | Rust | `runtime_error(message: string): PyErr` | pub |
 
 ## `crates/agentwerk-py/src/directives.rs`
@@ -1991,7 +2009,7 @@ Binds `agents/tickets/ticket.rs` and `agents/tickets/query.rs`.
 | Rust | `parse_status(s: string): Status throws PyErr` | private |
 | Rust | `try_extract_query(arg: any): Query?` | pub |
 | Rust | `as_query(arg: any): Query throws PyErr` | pub |
-| Rust | `to_ticket(arg: any): Ticket throws PyErr` | pub |
+| Rust | `to_ticket(arg: any): Ticket throws PyErr`, reading an `os.PathLike` as the file holding the task | pub |
 | Rust | `PyTicket { inner: Ticket }` | python |
 | Rust | `PyTicket.new(task: any, label: string?, schema: PySchema?, parent: string?): PyTicket throws PyErr` | python |
 | Rust | `PyTicket.has_label(label: string): boolean` | python |
@@ -2127,7 +2145,7 @@ Binds `tools/`.
 | Rust | `PyCommandTool.allow_flag(flag: string): PyCommandTool` | python |
 | Rust | `PyCommandTool.deny(pattern: string): PyCommandTool` | python |
 | Rust | `PyCommandTool.deny_flag(flag: string): PyCommandTool` | python |
-| Rust | `PyCommandTool.description(description: string): PyCommandTool` | python |
+| Rust | `PyCommandTool.description(description: any): PyCommandTool throws PyErr` | python |
 | Rust | `PyCommandTool.concurrent(concurrent: boolean): PyCommandTool` | python |
 | Rust | `register(m: PyModule): void throws PyErr` | pub |
 

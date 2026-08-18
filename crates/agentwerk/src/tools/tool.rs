@@ -15,6 +15,7 @@ use crate::prompts::directives::{
     DirectiveStore, NO_TOOLS_REGISTERED, TOOL_NOT_FOUND, TOOL_OUTPUT_EMPTY, TOOL_OUTPUT_OFFLOADED,
     TOOL_PANICKED,
 };
+use crate::prompts::Text;
 use crate::schemas::Schema;
 
 /// How many calls one turn runs at the same time. The rest wait their turn.
@@ -591,13 +592,14 @@ impl<D, H> ToolBuilder<D, H> {
 }
 
 impl<H> ToolBuilder<(), H> {
-    /// Say what the tool does, in the words the model reads. A built-in reads
-    /// its own from the `.tool.md` beside it, which is why the text is stored
-    /// trimmed: the file's closing newline would otherwise reach the model.
-    pub fn description(self, description: impl Into<String>) -> ToolBuilder<String, H> {
+    /// Say what the tool does, in the words the model reads.
+    ///
+    /// A string is the description itself; a `&Path` or `PathBuf` names the
+    /// file holding it, which panics when that file cannot be read.
+    pub fn description(self, description: impl Into<Text>) -> ToolBuilder<String, H> {
         ToolBuilder {
             name: self.name,
-            description: description.into().trim().to_string(),
+            description: description.into().into_string(),
             schema: self.schema,
             concurrent: self.concurrent,
             paths: self.paths,
@@ -1088,6 +1090,18 @@ mod tests {
             tool.description(),
             "Do the demo thing.\n\n- Returns nothing useful."
         );
+    }
+
+    #[test]
+    fn a_description_named_by_a_path_is_read_from_that_file() {
+        let dir = crate::test_util::TempDir::new().unwrap();
+        let file = dir.path().join("demo.tool.md");
+        std::fs::write(&file, "Do the demo thing.\n").unwrap();
+        let tool = Tool::new("demo")
+            .description(file.as_path())
+            .handler(|_: Value, _| async { ToolResult::success("") })
+            .build();
+        assert_eq!(tool.description(), "Do the demo thing.");
     }
 
     #[test]

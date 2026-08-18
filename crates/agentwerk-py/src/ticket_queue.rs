@@ -50,8 +50,8 @@ impl PyTicketQueue {
 
     /// Submit a task and return its ticket key.
     ///
-    /// A string is the task itself. A `Ticket` carries a custom label or
-    /// schema with it.
+    /// A `str` is the task itself, and an `os.PathLike` names the file holding
+    /// it. A `Ticket` carries a custom label or schema with it.
     fn ticket(slf: PyRef<'_, Self>, ticket: &Bound<'_, PyAny>) -> PyResult<String> {
         Ok(slf.inner.ticket(to_ticket(ticket)?))
     }

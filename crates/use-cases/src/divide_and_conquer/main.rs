@@ -64,7 +64,7 @@ async fn main() {
             Agent::new()
                 .provider(provider.clone())
                 .model(&model)
-                .role(ROLE.trim())
+                .role(ROLE)
                 .label("compute")
                 .tool(python_tool())
                 .tool(TicketsTool)

@@ -14,7 +14,7 @@ use agentwerk::tools::Tool;
 use agentwerk::{Agent, Knowledge};
 use pyo3::prelude::*;
 
-use crate::convert::runtime_error;
+use crate::convert::{py_to_text, runtime_error};
 use crate::knowledge::PyKnowledge;
 use crate::providers::{PyModel, PyProvider};
 use crate::ticket::to_ticket;
@@ -160,9 +160,15 @@ impl PyAgent {
         Ok(slf)
     }
 
-    fn role(mut slf: PyRefMut<'_, Self>, role: String) -> PyResult<PyRefMut<'_, Self>> {
+    /// Define who the agent is and how it should work.
+    ///
+    /// A `str` is the role itself; an `os.PathLike` names the file holding it.
+    fn role<'py>(
+        mut slf: PyRefMut<'py, Self>,
+        role: &Bound<'_, PyAny>,
+    ) -> PyResult<PyRefMut<'py, Self>> {
         slf.ensure_unbuilt()?;
-        slf.role = Some(role);
+        slf.role = Some(py_to_text(role)?);
         Ok(slf)
     }
 
@@ -285,9 +291,9 @@ impl PyAgent {
 
     /// Submit a task and return its ticket key.
     ///
-    /// A string is the task itself. A `Ticket` carries a custom label or
-    /// schema with it. Call it as often as you like: one agent can drive many
-    /// tickets.
+    /// A `str` is the task itself, and an `os.PathLike` names the file holding
+    /// it. A `Ticket` carries a custom label or schema with it. Call it as often
+    /// as you like: one agent can drive many tickets.
     fn ticket(&self, ticket: &Bound<'_, PyAny>) -> PyResult<String> {
         Ok(self.built()?.ticket(to_ticket(ticket)?))
     }

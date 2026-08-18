@@ -31,6 +31,25 @@ def test_command_tool_configuration_chains_on_one_object():
     assert tool.description("Run git commands.") is tool
 
 
+def test_command_tool_description_reads_a_path_as_the_file_holding_it(tmp_path):
+    description = tmp_path / "git.tool.md"
+    description.write_text("Run git commands.\n")
+    tool = aw.CommandTool("git")
+    assert tool.description(description) is tool
+
+
+def test_tool_decorator_reads_a_description_from_a_path(tmp_path):
+    description = tmp_path / "sample.tool.md"
+    description.write_text("Describe the sample.\n")
+
+    @aw.tool(description=description)
+    def sample(path: str) -> str:
+        return path
+
+    agent = aw.Agent().tool(sample)
+    assert isinstance(agent, aw.Agent)
+
+
 def test_an_agent_accepts_a_command_tool():
     agent = aw.Agent().tool(aw.CommandTool("git").allow("git *"))
     assert isinstance(agent, aw.Agent)

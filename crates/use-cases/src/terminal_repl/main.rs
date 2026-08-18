@@ -69,8 +69,6 @@ async fn main() {
         (None, None) => {}
     }
 
-    let role = ROLE.trim();
-
     let user_prompt = format!("\n{}you ›{} ", style.user, style.reset);
 
     let event_style = style.clone();
@@ -103,7 +101,7 @@ async fn main() {
     let _agent = tickets.agent(
         Agent::from_env()
             .interactive()
-            .role(role)
+            .role(ROLE)
             .dir(&cwd)
             .tool(GlobTool)
             .tool(GrepTool)

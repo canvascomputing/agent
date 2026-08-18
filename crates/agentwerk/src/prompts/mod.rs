@@ -4,6 +4,7 @@
 mod builder;
 pub(crate) mod directives;
 mod section;
+pub(crate) mod text;
 
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -15,6 +16,7 @@ use directives::{
     built_in, DirectiveStore, ARGUMENTS_EXPECTED, ARGUMENTS_REJECTED, RESULT_SCHEMA_REQUIRED,
     SUMMARY_REQUESTED,
 };
+pub(crate) use text::Text;
 
 use crate::agents::policy::Policies;
 use crate::agents::stats::Stats;

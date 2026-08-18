@@ -20,6 +20,26 @@ def test_enqueued_ticket_appears_with_its_status_and_label(queue):
     assert ticket.has_label("scan")
 
 
+def test_a_path_task_is_read_from_the_file(queue, tmp_path):
+    task = tmp_path / "task.md"
+    task.write_text("scan the corpus\n")
+
+    queue.ticket(task)
+
+    (ticket,) = queue.tickets()
+    assert ticket.task == "scan the corpus"
+
+
+def test_a_string_task_stays_the_string_even_when_it_names_a_file(queue, tmp_path):
+    task = tmp_path / "task.md"
+    task.write_text("scan the corpus\n")
+
+    queue.ticket(str(task))
+
+    (ticket,) = queue.tickets()
+    assert ticket.task == str(task)
+
+
 def test_unstarted_ticket_carries_its_key_and_no_messages(queue):
     key = queue.ticket(aw.Ticket("scan the corpus", label="scan"))
 
