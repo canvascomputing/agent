@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use crate::agents::knowledge::{Knowledge, KnowledgeError};
-use crate::event::{EventKind, KnowledgeFailureKind, KnowledgeOp};
+use crate::event::{EventKind, KnowledgeAction, KnowledgeFailureKind};
 
 use super::tool::{Tool, ToolContext, ToolResult};
 
@@ -99,6 +99,7 @@ fn run(store: &Knowledge, args: KnowledgeArgs, ctx: &ToolContext) -> ToolResult 
         } => {
             // Kind and tags stay host-side concerns set through the
             // Page API; the model only names, describes, and fills a page.
+            let written = slug.clone();
             let page = crate::agents::knowledge::Page {
                 slug,
                 kind: String::new(),
@@ -108,14 +109,12 @@ fn run(store: &Knowledge, args: KnowledgeArgs, ctx: &ToolContext) -> ToolResult 
             };
             match store.pages().save(page) {
                 Ok(()) => {
-                    record(EventKind::KnowledgeUsed {
-                        op: KnowledgeOp::Write,
-                    });
+                    record(EventKind::KnowledgeWritten { slug: written });
                     ToolResult::success(usage_line("page written", &store))
                 }
                 Err(why) => {
                     record(EventKind::KnowledgeFailed {
-                        op: KnowledgeOp::Write,
+                        action: KnowledgeAction::Write,
                         reason: failure_kind(&why),
                     });
                     ToolResult::error(why.to_string())
@@ -125,14 +124,12 @@ fn run(store: &Knowledge, args: KnowledgeArgs, ctx: &ToolContext) -> ToolResult 
 
         KnowledgeArgs::Read { slug } => match store.pages().load(&slug) {
             Ok(page) => {
-                record(EventKind::KnowledgeUsed {
-                    op: KnowledgeOp::Read,
-                });
+                record(EventKind::KnowledgeRead { slug });
                 ToolResult::success(page.content)
             }
             Err(why) => {
                 record(EventKind::KnowledgeFailed {
-                    op: KnowledgeOp::Read,
+                    action: KnowledgeAction::Read,
                     reason: failure_kind(&why),
                 });
                 ToolResult::success(format!(
@@ -143,14 +140,12 @@ fn run(store: &Knowledge, args: KnowledgeArgs, ctx: &ToolContext) -> ToolResult 
 
         KnowledgeArgs::Remove { slug } => match store.pages().remove(&slug) {
             Ok(()) => {
-                record(EventKind::KnowledgeUsed {
-                    op: KnowledgeOp::Remove,
-                });
+                record(EventKind::KnowledgeRemoved { slug });
                 ToolResult::success(usage_line("page removed", &store))
             }
             Err(why) => {
                 record(EventKind::KnowledgeFailed {
-                    op: KnowledgeOp::Remove,
+                    action: KnowledgeAction::Remove,
                     reason: failure_kind(&why),
                 });
                 ToolResult::error(why.to_string())
@@ -158,9 +153,7 @@ fn run(store: &Knowledge, args: KnowledgeArgs, ctx: &ToolContext) -> ToolResult 
         },
 
         KnowledgeArgs::List => {
-            record(EventKind::KnowledgeUsed {
-                op: KnowledgeOp::List,
-            });
+            record(EventKind::KnowledgeListed);
             // Not the prompt's limited view: this is how the agent sees
             // the pages the prompt had no room for.
             let index = store.full_index();
@@ -391,9 +384,13 @@ mod tests {
         let reported = Arc::new(Mutex::new(Vec::new()));
         let seen = Arc::clone(&reported);
         tickets.on_event(move |event| match &event.kind {
-            EventKind::KnowledgeUsed { op } => seen.lock().unwrap().push(op.to_string()),
-            EventKind::KnowledgeFailed { op, reason } => {
-                seen.lock().unwrap().push(format!("{op}:{}", reason.name()))
+            EventKind::KnowledgeFailed { action, reason } => seen.lock().unwrap().push(format!(
+                "{}:{action}:{}",
+                event.kind.name(),
+                reason.name()
+            )),
+            kind if kind.name().starts_with("knowledge_") => {
+                seen.lock().unwrap().push(kind.name().to_string())
             }
             _ => {}
         });
@@ -432,11 +429,17 @@ mod tests {
             &ctx,
         );
 
-        // Every action reports itself, and the read of an absent slug reports
-        // the reason it did not go through.
+        // Every action reports itself under its own kind, and the read of an
+        // absent slug reports the action and the reason it did not go through.
         assert_eq!(
             *reported.lock().unwrap(),
-            vec!["write", "list", "read", "read:page_missing", "remove"],
+            vec![
+                "knowledge_written",
+                "knowledge_listed",
+                "knowledge_read",
+                "knowledge_failed:read:page_missing",
+                "knowledge_removed",
+            ],
         );
     }
 }

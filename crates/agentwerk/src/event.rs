@@ -179,29 +179,31 @@ impl fmt::Display for KnowledgeFailureKind {
     }
 }
 
-/// What was done to a knowledge page, carried by [`EventKind::KnowledgeUsed`].
+/// Which action the store was asked for, carried by
+/// [`EventKind::KnowledgeFailed`]. A successful one is named by its own kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum KnowledgeOp {
+pub enum KnowledgeAction {
     Write,
     Read,
     Remove,
     List,
 }
 
-impl KnowledgeOp {
-    /// The stable snake_case spelling, the one `op` carries.
+impl KnowledgeAction {
+    /// The stable snake_case spelling, the one `action` carries. It is also
+    /// what the model sends as the tool's `action`.
     pub fn name(&self) -> &'static str {
         match self {
-            KnowledgeOp::Write => "write",
-            KnowledgeOp::Read => "read",
-            KnowledgeOp::Remove => "remove",
-            KnowledgeOp::List => "list",
+            KnowledgeAction::Write => "write",
+            KnowledgeAction::Read => "read",
+            KnowledgeAction::Remove => "remove",
+            KnowledgeAction::List => "list",
         }
     }
 }
 
-impl fmt::Display for KnowledgeOp {
+impl fmt::Display for KnowledgeAction {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.name())
     }
@@ -346,11 +348,17 @@ pub enum EventKind {
         path: String,
         reason: ToolFailureKind,
     },
-    /// A page was written, read, removed, or listed.
-    KnowledgeUsed { op: KnowledgeOp },
-    /// A page operation did not go through.
+    /// A page was written.
+    KnowledgeWritten { slug: String },
+    /// A page was read.
+    KnowledgeRead { slug: String },
+    /// A page was removed.
+    KnowledgeRemoved { slug: String },
+    /// The pages were listed.
+    KnowledgeListed,
+    /// An action against the store did not go through.
     KnowledgeFailed {
-        op: KnowledgeOp,
+        action: KnowledgeAction,
         reason: KnowledgeFailureKind,
     },
     /// A limit was breached and execution stopped.
@@ -411,7 +419,10 @@ impl EventKind {
             EventKind::ToolCallFailed { .. } => EventName::ToolCallFailed,
             EventKind::FileOpenFinished { .. } => EventName::FileOpenFinished,
             EventKind::FileOpenFailed { .. } => EventName::FileOpenFailed,
-            EventKind::KnowledgeUsed { .. } => EventName::KnowledgeUsed,
+            EventKind::KnowledgeWritten { .. } => EventName::KnowledgeWritten,
+            EventKind::KnowledgeRead { .. } => EventName::KnowledgeRead,
+            EventKind::KnowledgeRemoved { .. } => EventName::KnowledgeRemoved,
+            EventKind::KnowledgeListed => EventName::KnowledgeListed,
             EventKind::KnowledgeFailed { .. } => EventName::KnowledgeFailed,
             EventKind::PolicyViolated { .. } => EventName::PolicyViolated,
             EventKind::SchemaRetried { .. } => EventName::SchemaRetried,
@@ -469,7 +480,10 @@ pub enum EventName {
     ToolCallFailed,
     FileOpenFinished,
     FileOpenFailed,
-    KnowledgeUsed,
+    KnowledgeWritten,
+    KnowledgeRead,
+    KnowledgeRemoved,
+    KnowledgeListed,
     KnowledgeFailed,
     PolicyViolated,
     SchemaRetried,
@@ -501,7 +515,10 @@ impl EventName {
         EventName::ToolCallFailed,
         EventName::FileOpenFinished,
         EventName::FileOpenFailed,
-        EventName::KnowledgeUsed,
+        EventName::KnowledgeWritten,
+        EventName::KnowledgeRead,
+        EventName::KnowledgeRemoved,
+        EventName::KnowledgeListed,
         EventName::KnowledgeFailed,
         EventName::PolicyViolated,
         EventName::SchemaRetried,
@@ -533,7 +550,10 @@ impl EventName {
             EventName::ToolCallFailed => "tool_call_failed",
             EventName::FileOpenFinished => "file_open_finished",
             EventName::FileOpenFailed => "file_open_failed",
-            EventName::KnowledgeUsed => "knowledge_used",
+            EventName::KnowledgeWritten => "knowledge_written",
+            EventName::KnowledgeRead => "knowledge_read",
+            EventName::KnowledgeRemoved => "knowledge_removed",
+            EventName::KnowledgeListed => "knowledge_listed",
             EventName::KnowledgeFailed => "knowledge_failed",
             EventName::PolicyViolated => "policy_violated",
             EventName::SchemaRetried => "schema_retried",
@@ -729,11 +749,18 @@ pub(crate) mod tests {
                 path: "src/missing.rs".into(),
                 reason: ToolFailureKind::ExecutionFailed,
             },
-            EventKind::KnowledgeUsed {
-                op: KnowledgeOp::Write,
+            EventKind::KnowledgeWritten {
+                slug: "notes".into(),
             },
+            EventKind::KnowledgeRead {
+                slug: "notes".into(),
+            },
+            EventKind::KnowledgeRemoved {
+                slug: "notes".into(),
+            },
+            EventKind::KnowledgeListed,
             EventKind::KnowledgeFailed {
-                op: KnowledgeOp::Read,
+                action: KnowledgeAction::Read,
                 reason: KnowledgeFailureKind::PageMissing,
             },
             EventKind::PolicyViolated {

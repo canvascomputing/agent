@@ -332,6 +332,13 @@ function agentOf(name) {
   return state.agents.get(name) || null;
 }
 
+function consult(frame) {
+  const agent = agentOf(frame.agent);
+  if (!agent) return;
+  walk(agent, "pruefbuch");
+  state.book.stamp = 1;
+}
+
 function plain(text) {
   return String(text == null ? "" : text)
     .replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]));
@@ -622,23 +629,31 @@ const handle = {
     }
   },
 
-  knowledge_used(frame) {
+  knowledge_written(frame) {
     const agent = agentOf(frame.agent);
     if (!agent) return;
     walk(agent, "pruefbuch");
-    if (frame.data.op === "write") {
-      const stamped = agent.pocket.length;
-      agent.pocket = [];
-      agent.score += stamped * PER_STAMP;
-      state.score += stamped * PER_STAMP;
-      state.book.stamp = 1;
-      if (stamped) {
-        flash(agent, COLOR.ochre);
-        tell(`<b>${agent.name}</b> stempelt ${stamped === 1 ? "einen Vorgang" : `${stamped} Vorgänge`} ins Prüfbuch.`);
-      }
-    } else {
-      state.book.stamp = 1;
+    const stamped = agent.pocket.length;
+    agent.pocket = [];
+    agent.score += stamped * PER_STAMP;
+    state.score += stamped * PER_STAMP;
+    state.book.stamp = 1;
+    if (stamped) {
+      flash(agent, COLOR.ochre);
+      tell(`<b>${agent.name}</b> stempelt ${stamped === 1 ? "einen Vorgang" : `${stamped} Vorgänge`} ins Prüfbuch.`);
     }
+  },
+
+  knowledge_read(frame) {
+    consult(frame);
+  },
+
+  knowledge_removed(frame) {
+    consult(frame);
+  },
+
+  knowledge_listed(frame) {
+    consult(frame);
   },
 
   page(frame) {
