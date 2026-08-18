@@ -554,7 +554,7 @@ agent = (
 
 #### `FinishTool` and `KnowledgeTool`
 
-`FinishTool()` and `KnowledgeTool(store)` are special tools, registered automatically on every agent. They are used for interacting with the `TicketQueue` or knowledge base.
+`FinishTool()` and `KnowledgeTool(store)` are special tools, registered automatically on every agent. They are used for interacting with the `TicketQueue` or knowledge base. An interactive agent is the exception: it gets no `FinishTool()`, so it pauses for the next reply instead of ending its ticket.
 
 #### CommandTool
 

@@ -51,7 +51,6 @@ impl AgentBuilder<(), ()> {
     pub fn new() -> Self {
         let knowledge = Knowledge::load(".agentwerk").expect("open knowledge store");
         let mut tools = ToolRegistry::default();
-        tools.register(FinishTool);
         tools.register(KnowledgeTool::new(Arc::clone(&knowledge)));
         Self {
             provider: (),
@@ -134,7 +133,10 @@ impl<P, M> AgentBuilder<P, M> {
     /// Let the agent wait for new instructions to keep a ticket in-progress.
     ///
     /// The agent stops after a reply that calls no tool, and
-    /// `TicketQueue::reply` drives the next turn.
+    /// `TicketQueue::reply` drives the next turn. It gets no `FinishTool`,
+    /// since ending the ticket would end the conversation; the host closes it
+    /// with `TicketQueue::set_finished`. Register the tool by hand to give the
+    /// agent one back.
     pub fn interactive(mut self) -> Self {
         self.interactive = true;
         self
@@ -276,7 +278,11 @@ impl AgentBuilder<Provider, Model> {
     /// It starts with a ticket queue of its own, so `.task(...).finish_all().await`
     /// works without one being set up. `TicketQueue::agent(...)` later moves
     /// those tickets into the shared queue.
-    pub fn build(self) -> Agent {
+    pub fn build(mut self) -> Agent {
+        // Here rather than in `new`, because only now is `interactive` known.
+        if !self.interactive {
+            self.tools.register(FinishTool);
+        }
         let mut agent = Agent {
             id: next_id(self.label.as_deref()),
             model: self.model,
@@ -708,16 +714,34 @@ mod tests {
         assert!(system_prompt(&agent, None).is_empty());
     }
 
-    #[test]
-    fn new_agent_has_finish_registered() {
-        let agent = Agent::new();
-        let registry = agent.tool_registry();
-        let names: Vec<String> = registry
+    fn tool_names(agent: &Agent) -> Vec<String> {
+        agent
+            .tool_registry()
             .tools()
             .into_iter()
             .map(|tool| tool.name().to_string())
-            .collect();
-        assert!(names.iter().any(|n| n == "finish"));
+            .collect()
+    }
+
+    #[test]
+    fn a_built_agent_has_finish_registered() {
+        let names = tool_names(&built(Agent::new()));
+        assert!(names.iter().any(|n| n == "finish"), "{names:?}");
+    }
+
+    #[test]
+    fn an_interactive_agent_has_no_finish_tool() {
+        let names = tool_names(&built(Agent::new().interactive()));
+        assert!(
+            !names.iter().any(|n| n == "finish"),
+            "an interactive agent ends its ticket through the host: {names:?}",
+        );
+    }
+
+    #[test]
+    fn an_interactive_agent_keeps_a_finish_tool_it_registered_itself() {
+        let names = tool_names(&built(Agent::new().interactive().tool(FinishTool)));
+        assert!(names.iter().any(|n| n == "finish"), "{names:?}");
     }
 
     #[test]

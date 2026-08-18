@@ -135,7 +135,11 @@ fn claim<'a>(agent: &'a Agent, ticket_queue: &'a Arc<TicketQueue>) -> Option<Tic
     let ticket = ticket_queue.get_ticket(&ticket_key)?;
 
     let mut tools = agent.tool_registry().clone();
-    tools.register(FinishTool::from_schema(ticket.schema.clone()));
+    // Rebinding, not registering: an interactive agent carries no `finish`
+    // unless it asked for one, and this must not hand it back.
+    if tools.contains(FinishTool::NAME) {
+        tools.register(FinishTool::from_schema(ticket.schema.clone()));
+    }
 
     let knowledge_index = agent.knowledge().index();
     let policies = ticket_queue.policies();
@@ -587,10 +591,8 @@ mod tests {
     #[tokio::test]
     async fn loop_pauses_after_text_reply_then_resumes_when_caller_replies() {
         let results_dir = crate::test_util::TempDir::new().unwrap();
-        let provider = MockProvider::with_results(vec![
-            Ok(text_response("hi")),
-            Ok(write_result_response("done")),
-        ]);
+        let provider =
+            MockProvider::with_results(vec![Ok(text_response("hi")), Ok(text_response("and now"))]);
         let tickets = TicketQueue::new();
         tickets
             .dir(results_dir.path().to_path_buf())
@@ -642,7 +644,14 @@ mod tests {
             .into_iter()
             .next()
             .expect("ticket must exist");
-        assert_eq!(ticket.status, Status::Finished);
+        // The reply is what proves the resume: an interactive agent has no
+        // `finish`, so the ticket pauses again instead of ending.
+        assert_eq!(provider.requests(), 2, "the caller's reply drove a turn");
+        assert_eq!(ticket.status, Status::InProgress);
+        assert_eq!(
+            ticket.replies.last().map(|r| r.author),
+            Some(Author::Assistant),
+        );
     }
 
     #[tokio::test]
@@ -713,7 +722,7 @@ mod tests {
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let provider = MockProvider::with_results(vec![
             Ok(text_response("hi")),
-            Ok(write_result_response("second-done")),
+            Ok(text_response("hi again")),
         ]);
         let tickets = TicketQueue::new();
         tickets
@@ -741,8 +750,7 @@ mod tests {
             for _ in 0..400 {
                 if tickets_for_drive
                     .get_ticket(&second_key)
-                    .map(|t| t.status == Status::Finished)
-                    .unwrap_or(false)
+                    .is_some_and(|t| t.replies.iter().any(|r| r.author == Author::Assistant))
                 {
                     break;
                 }
@@ -755,10 +763,16 @@ mod tests {
                 Status::InProgress,
                 "first chat remains paused; no caller replied",
             );
+            // Its own answer, not a status: an interactive agent has no
+            // `finish`, so the second chat pauses like the first.
             assert_eq!(
                 second.status,
-                Status::Finished,
+                Status::InProgress,
                 "agent must release the paused first chat and claim the new Todo",
+            );
+            assert!(
+                second.replies.iter().any(|r| r.author == Author::Assistant),
+                "second chat must have been answered",
             );
         };
 
@@ -1300,6 +1314,19 @@ mod tests {
             declared["properties"]["result"]["properties"]["verdict"].is_object(),
             "{declared}"
         );
+    }
+
+    #[tokio::test]
+    async fn a_claimed_ticket_offers_an_interactive_agent_no_finish_tool() {
+        let results_dir = crate::test_util::TempDir::new().unwrap();
+        let tickets = TicketQueue::new();
+        tickets.dir(results_dir.path().to_path_buf());
+        let agent = interactive_chatbot(&MockProvider::with_results(vec![]));
+        tickets.agent(agent.clone());
+        tickets.task("hello");
+
+        let context = claim(&agent, &tickets).expect("the ticket is claimable");
+        assert!(context.tools.get("finish").is_none());
     }
 
     #[tokio::test]

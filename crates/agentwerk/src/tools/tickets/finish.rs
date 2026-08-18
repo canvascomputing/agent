@@ -10,8 +10,7 @@ use crate::schemas::Schema;
 use super::super::tool::{retype_message, Tool, ToolContext, ToolResult};
 use super::resolve_current_key;
 
-/// The name the model calls, and the two files the tool is described by.
-const NAME: &str = "finish";
+/// The two files the tool is described by.
 const DEFINITION: &str = include_str!("finish.tool.md");
 const SCHEMA: &str = include_str!("finish.schema.json");
 
@@ -37,6 +36,9 @@ impl From<FinishTool> for Tool {
 }
 
 impl FinishTool {
+    /// The name the model calls, and the name the loop looks the tool up under.
+    pub(crate) const NAME: &str = "finish";
+
     /// The finish tool declaring `schema` as its `result` argument, so
     /// dispatch validates the result before the handler runs and the shape the
     /// model is shown is the shape a call is checked against.
@@ -53,7 +55,7 @@ impl FinishTool {
             let schema = schema.clone();
             async move { finish(&input, &ctx, schema.as_ref()).unwrap_or_else(|failure| failure) }
         };
-        let tool = Tool::new(NAME).description(DEFINITION).handler(run);
+        let tool = Tool::new(Self::NAME).description(DEFINITION).handler(run);
         match arguments {
             Some(document) => tool.schema(document).build(),
             None => tool.schema(SCHEMA).build(),
@@ -219,7 +221,7 @@ fn attach_result(
         // passes the content to the model as-is.
         ToolResult::Error {
             content: crate::prompts::arguments_retry_detail(
-                NAME,
+                FinishTool::NAME,
                 &violations.to_string(),
                 schema.map(Schema::get_raw_schema),
             ),
