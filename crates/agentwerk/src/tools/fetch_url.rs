@@ -8,6 +8,25 @@ const DEFAULT_MAX_LENGTH: usize = 100_000;
 const FETCH_TIMEOUT_SECS: u64 = 60;
 const MAX_REDIRECT_HOPS: usize = 10;
 
+/// What the tool identifies itself as until [`FetchUrlTool::impersonate`]
+/// changes that. The version comes from `Cargo.toml`, so a release moves it.
+const DEFAULT_USER_AGENT: &str = concat!("agentwerk/", env!("CARGO_PKG_VERSION"));
+
+/// The one browser [`FetchUrlTool::impersonate`] presents itself as. Pinned
+/// rather than chosen, since the two values must agree on a version.
+const BROWSER_USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) \
+    AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36";
+const BROWSER_CLIENT_HINT: &str =
+    r#""Not(A:Brand";v="99", "Google Chrome";v="133", "Chromium";v="133""#;
+const BROWSER_ACCEPT: &str = "text/html,application/xhtml+xml,application/xml;q=0.9,\
+    image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7";
+
+/// The HTTP/2 SETTINGS a browser opens a connection with. Together with
+/// [`request_headers`] this is as far as `reqwest` reaches.
+const BROWSER_STREAM_WINDOW: u32 = 6_291_456;
+const BROWSER_CONNECTION_WINDOW: u32 = 15_728_640;
+const BROWSER_MAX_FRAME_SIZE: u32 = 16_384;
+
 /// Fetch a URL and return its content as text. Concurrent. HTML is converted
 /// to plain text; HTTP is upgraded to HTTPS; cross-host redirects are
 /// surfaced rather than followed.
@@ -18,9 +37,41 @@ const MAX_REDIRECT_HOPS: usize = 10;
 /// use agentwerk::Agent;
 /// use agentwerk::tools::FetchUrlTool;
 ///
-/// Agent::new().tool(FetchUrlTool);
+/// Agent::new().tool(FetchUrlTool::new());
 /// ```
-pub struct FetchUrlTool;
+#[derive(Clone, Default)]
+pub struct FetchUrlTool {
+    impersonate: bool,
+}
+
+impl FetchUrlTool {
+    /// Create the tool. Requests carry agentwerk's own user agent until
+    /// [`FetchUrlTool::impersonate`] changes that.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Send the headers and HTTP/2 settings a browser sends, reaching a site
+    /// that refuses a client it cannot recognize as one.
+    ///
+    /// The TLS handshake is unchanged. rustls writes the ClientHello, so JA3
+    /// and JA4 do not read as a browser, and a site reading those rather than
+    /// the headers refuses the request either way. Cloudflare, DataDome,
+    /// Akamai, and Kasada all read those.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use agentwerk::Agent;
+    /// use agentwerk::tools::FetchUrlTool;
+    ///
+    /// Agent::new().tool(FetchUrlTool::new().impersonate());
+    /// ```
+    pub fn impersonate(mut self) -> Self {
+        self.impersonate = true;
+        self
+    }
+}
 
 #[derive(serde::Deserialize)]
 pub struct FetchUrlArgs {
@@ -34,17 +85,20 @@ fn default_max_length() -> usize {
 }
 
 impl From<FetchUrlTool> for Tool {
-    fn from(_: FetchUrlTool) -> Tool {
+    fn from(tool: FetchUrlTool) -> Tool {
+        let impersonate = tool.impersonate;
         Tool::new("fetch_url")
             .description(include_str!("fetch_url.tool.md"))
             .schema(include_str!("fetch_url.schema.json"))
             .concurrent(true)
-            .handler(run)
+            .handler(move |args: FetchUrlArgs, ctx: ToolContext| async move {
+                run(args, ctx, impersonate).await
+            })
             .build()
     }
 }
 
-async fn run(args: FetchUrlArgs, _ctx: ToolContext) -> ToolResult {
+async fn run(args: FetchUrlArgs, _ctx: ToolContext, impersonate: bool) -> ToolResult {
     let FetchUrlArgs { url, max_length } = args;
 
     let validated_url = match validate_url(&url) {
@@ -52,7 +106,7 @@ async fn run(args: FetchUrlArgs, _ctx: ToolContext) -> ToolResult {
         Err(msg) => return ToolResult::error(msg),
     };
 
-    let text = match fetch_url(&validated_url).await {
+    let text = match fetch_url(&validated_url, impersonate).await {
         Ok(text) => text,
         Err(msg) => return ToolResult::error(msg),
     };
@@ -67,7 +121,7 @@ async fn run(args: FetchUrlArgs, _ctx: ToolContext) -> ToolResult {
              Original URL: {original_url}\n\
              Redirect URL: {redirect_url}\n\
              Status: {status}\n\n\
-             To fetch the content, make a new web_fetch request with the redirect URL."
+             To fetch the content, make a new fetch_url request with the redirect URL."
         );
         return ToolResult::success(msg);
     }
@@ -101,15 +155,20 @@ enum FetchedContent {
     },
 }
 
-async fn fetch_url(url: &str) -> std::result::Result<FetchedContent, String> {
+async fn fetch_url(url: &str, impersonate: bool) -> std::result::Result<FetchedContent, String> {
     // Manual redirect handling prevents open-redirect exploitation across domains.
-    let client = reqwest::Client::builder()
+    let mut builder = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(FETCH_TIMEOUT_SECS))
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .map_err(|e| e.to_string())?;
+        .redirect(reqwest::redirect::Policy::none());
+    if impersonate {
+        builder = builder
+            .http2_initial_stream_window_size(BROWSER_STREAM_WINDOW)
+            .http2_initial_connection_window_size(BROWSER_CONNECTION_WINDOW)
+            .http2_max_frame_size(BROWSER_MAX_FRAME_SIZE);
+    }
+    let client = builder.build().map_err(|e| e.to_string())?;
 
-    let response = follow_safe_redirects(&client, url).await?;
+    let response = follow_safe_redirects(&client, url, impersonate).await?;
     if let FollowResult::CrossDomain {
         original_url,
         redirect_url,
@@ -176,13 +235,53 @@ fn format_output(
 
     let remaining = max_length.saturating_sub(output.len());
     if body.len() > remaining {
-        output.push_str(&body[..remaining]);
+        // Slicing the raw byte index panics when it lands inside a multi-byte
+        // character, which any non-ASCII page reaches sooner or later.
+        let mut cut = remaining;
+        while cut > 0 && !body.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        output.push_str(&body[..cut]);
         output.push_str("\n\n[Content truncated...]");
     } else {
         output.push_str(body);
     }
 
     output
+}
+
+// Request headers
+
+/// The headers one hop sends. `first_hop` picks the `Sec-Fetch-Site` a browser
+/// would report: nothing yet for a request the address bar made, the same
+/// origin once a redirect has moved it.
+///
+/// No `Accept-Encoding` while impersonating, even though a browser sends one:
+/// `reqwest` is built here without `gzip`, `brotli`, and `zstd`, so a
+/// compressed body would reach [`strip_html`] as binary.
+fn request_headers(impersonate: bool, first_hop: bool) -> Vec<(&'static str, &'static str)> {
+    if !impersonate {
+        return vec![
+            ("Accept", "text/markdown, text/html, */*"),
+            ("User-Agent", DEFAULT_USER_AGENT),
+        ];
+    }
+    vec![
+        ("User-Agent", BROWSER_USER_AGENT),
+        ("Accept", BROWSER_ACCEPT),
+        ("Accept-Language", "en-US,en;q=0.9"),
+        ("sec-ch-ua", BROWSER_CLIENT_HINT),
+        ("sec-ch-ua-mobile", "?0"),
+        ("sec-ch-ua-platform", "\"macOS\""),
+        ("Sec-Fetch-Dest", "document"),
+        ("Sec-Fetch-Mode", "navigate"),
+        (
+            "Sec-Fetch-Site",
+            if first_hop { "none" } else { "same-origin" },
+        ),
+        ("Sec-Fetch-User", "?1"),
+        ("Upgrade-Insecure-Requests", "1"),
+    ]
 }
 
 // Redirect safety
@@ -201,14 +300,16 @@ enum FollowResult {
 async fn follow_safe_redirects(
     client: &reqwest::Client,
     url: &str,
+    impersonate: bool,
 ) -> std::result::Result<FollowResult, String> {
     let mut current_url = url.to_string();
 
-    for _ in 0..MAX_REDIRECT_HOPS {
-        let response = client
-            .get(&current_url)
-            .header("Accept", "text/markdown, text/html, */*")
-            .header("User-Agent", "agentwerk/web_fetch")
+    for hop in 0..MAX_REDIRECT_HOPS {
+        let mut request = client.get(&current_url);
+        for (name, value) in request_headers(impersonate, hop == 0) {
+            request = request.header(name, value);
+        }
+        let response = request
             .send()
             .await
             .map_err(|e| format!("Fetch failed: {e}"))?;
@@ -451,9 +552,16 @@ fn collapse_whitespace(text: &str) -> String {
 mod tests {
     use super::*;
 
+    fn header<'a>(headers: &'a [(&'static str, &'static str)], name: &str) -> Option<&'a str> {
+        headers
+            .iter()
+            .find(|(key, _)| *key == name)
+            .map(|(_, value)| *value)
+    }
+
     #[test]
     fn every_example_the_schema_shows_deserializes_into_the_arguments() {
-        let document = Tool::from(FetchUrlTool)
+        let document = Tool::from(FetchUrlTool::new())
             .input_schema()
             .get_raw_schema()
             .clone();
@@ -525,6 +633,50 @@ mod tests {
     fn validate_url_rejects_ftp() {
         let err = validate_url("ftp://example.com/file").unwrap_err();
         assert!(err.contains("Unsupported scheme"));
+    }
+
+    // Output
+
+    #[test]
+    fn truncation_cuts_before_a_multi_byte_character_rather_than_inside_it() {
+        let body = format!("{}ä tail", "a".repeat(50));
+        let output = format_output("https://example.com", &body, 200, "text/html", 99, 120);
+        assert!(output.ends_with("[Content truncated...]"));
+        assert!(!output.contains('ä'));
+    }
+
+    // Request headers
+
+    #[test]
+    fn the_default_sends_the_agentwerk_user_agent_carrying_the_crate_version() {
+        let headers = request_headers(false, true);
+        let agent = header(&headers, "User-Agent").expect("User-Agent");
+        assert_eq!(agent, format!("agentwerk/{}", env!("CARGO_PKG_VERSION")));
+    }
+
+    #[test]
+    fn impersonate_sends_a_browser_user_agent_and_client_hint() {
+        let headers = request_headers(true, true);
+        assert_eq!(header(&headers, "User-Agent"), Some(BROWSER_USER_AGENT));
+        assert_eq!(header(&headers, "sec-ch-ua"), Some(BROWSER_CLIENT_HINT));
+    }
+
+    #[test]
+    fn impersonate_reports_no_fetch_site_on_the_first_hop() {
+        let headers = request_headers(true, true);
+        assert_eq!(header(&headers, "Sec-Fetch-Site"), Some("none"));
+    }
+
+    #[test]
+    fn impersonate_reports_the_same_origin_after_a_redirect() {
+        let headers = request_headers(true, false);
+        assert_eq!(header(&headers, "Sec-Fetch-Site"), Some("same-origin"));
+    }
+
+    #[test]
+    fn impersonate_advertises_no_encoding_the_tool_cannot_decode() {
+        let headers = request_headers(true, true);
+        assert_eq!(header(&headers, "Accept-Encoding"), None);
     }
 
     // Redirect safety

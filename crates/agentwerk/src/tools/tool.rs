@@ -874,7 +874,7 @@ mod tests {
             crate::tools::GlobTool.into(),
             crate::tools::GrepTool.into(),
             crate::tools::ListDirectoryTool.into(),
-            crate::tools::FetchUrlTool.into(),
+            crate::tools::FetchUrlTool::new().into(),
             crate::tools::KnowledgeTool::new(store).into(),
             crate::tools::CommandTool::new("git").allow("git *").into(),
             crate::tools::FinishTool.into(),
