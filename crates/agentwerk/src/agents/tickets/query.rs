@@ -4,15 +4,16 @@ use super::ticket::{Status, Ticket};
 
 /// A condition a ticket is tested against.
 ///
-/// Both [`Query`] and closures implement this trait, so every method
-/// that selects tickets accepts either. The blanket impl for
+/// A label, [`Query`], and closures all implement this trait, so every method
+/// that selects tickets accepts any of them. The blanket impl for
 /// `Fn(&Ticket) -> bool` keeps closures working unchanged.
 ///
 /// ```no_run
 /// use agentwerk::{Query, TicketQueue};
 ///
 /// let tickets = TicketQueue::new();
-/// tickets.find_tickets(Query::new().label("research"));
+/// tickets.find_tickets("research");
+/// tickets.find_tickets(Query::labeled("research").agent("research-1"));
 /// tickets.find_tickets(|t: &agentwerk::Ticket| t.has_label("research"));
 /// ```
 pub trait TicketMatcher: Send + Sync {
@@ -25,6 +26,17 @@ impl<F: Fn(&Ticket) -> bool + Send + Sync> TicketMatcher for F {
     }
 }
 
+impl TicketMatcher for &str {
+    fn matches(&self, ticket: &Ticket) -> bool {
+        ticket.has_label(self)
+    }
+}
+
+impl TicketMatcher for String {
+    fn matches(&self, ticket: &Ticket) -> bool {
+        ticket.has_label(self)
+    }
+}
 
 /// Selects tickets by field values. Every set field must match (AND).
 /// An empty query matches every ticket.
@@ -32,7 +44,7 @@ impl<F: Fn(&Ticket) -> bool + Send + Sync> TicketMatcher for F {
 /// ```no_run
 /// use agentwerk::Query;
 ///
-/// let q = Query::new().label("scan").agent("scanner-1");
+/// let q = Query::labeled("scan").agent("scanner-1");
 /// ```
 #[derive(Debug, Clone, Default)]
 pub struct Query {
@@ -46,6 +58,11 @@ pub struct Query {
 impl Query {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Create a query for one label, the field most queries select on.
+    pub fn labeled(label: impl Into<String>) -> Self {
+        Self::new().label(label)
     }
 
     pub fn key(mut self, key: impl Into<String>) -> Self {
@@ -78,6 +95,18 @@ impl Query {
             self.status = Some(status);
         }
         self
+    }
+}
+
+impl From<&str> for Query {
+    fn from(label: &str) -> Self {
+        Query::labeled(label)
+    }
+}
+
+impl From<String> for Query {
+    fn from(label: String) -> Self {
+        Query::labeled(label)
     }
 }
 
@@ -195,4 +224,32 @@ mod tests {
         assert!(!matcher.matches(&ticket("TICKET-2", Some("report"), None, None)));
     }
 
+    #[test]
+    fn labeled_filters_by_ticket_label() {
+        let q = Query::labeled("scan");
+        assert!(q.matches(&ticket("TICKET-1", Some("scan"), None, None)));
+        assert!(!q.matches(&ticket("TICKET-2", Some("report"), None, None)));
+    }
+
+    #[test]
+    fn str_implements_ticket_matcher_as_a_label() {
+        let matcher: &dyn TicketMatcher = &"scan";
+        assert!(matcher.matches(&ticket("TICKET-1", Some("scan"), None, None)));
+        assert!(!matcher.matches(&ticket("TICKET-2", Some("report"), None, None)));
+        assert!(!matcher.matches(&ticket("TICKET-3", None, None, None)));
+    }
+
+    #[test]
+    fn string_implements_ticket_matcher_as_a_label() {
+        let matcher: &dyn TicketMatcher = &"scan".to_string();
+        assert!(matcher.matches(&ticket("TICKET-1", Some("scan"), None, None)));
+        assert!(!matcher.matches(&ticket("TICKET-2", Some("report"), None, None)));
+    }
+
+    #[test]
+    fn a_string_converts_into_a_label_query() {
+        let q = Query::from("scan");
+        assert!(q.matches(&ticket("TICKET-1", Some("scan"), None, None)));
+        assert!(!q.matches(&ticket("TICKET-2", Some("report"), None, None)));
+    }
 }

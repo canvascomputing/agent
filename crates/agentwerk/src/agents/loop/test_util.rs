@@ -333,7 +333,7 @@ pub async fn run_one(
     if let Some(schema) = schema {
         tickets.ticket(Ticket::new("go").schema(schema));
     } else {
-        tickets.task("go");
+        tickets.ticket("go");
     }
 
     let _ = tickets.finish_all().await;
@@ -375,7 +375,7 @@ pub async fn run_with_context_window(
             .role("test")
             .build(),
     );
-    tickets.task(task);
+    tickets.ticket(task);
 
     let _ = tickets.finish_all().await;
     let events = collected.lock().unwrap().clone();

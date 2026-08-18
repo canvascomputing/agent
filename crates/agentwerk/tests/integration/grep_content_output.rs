@@ -101,7 +101,7 @@ async fn finds_string_buried_deep_in_line() -> std::result::Result<(), Box<dyn s
             .tool(ReadFileTool)
             .build(),
     );
-    tickets.task(format!(
+    tickets.ticket(format!(
         "Which source file contains the string `{NEEDLE}`? \
          Answer with the file path.",
     ));
@@ -241,7 +241,7 @@ async fn reads_column_slice_after_grep_locates_needle(
             .tool(ReadFileTool)
             .build(),
     );
-    tickets.task(format!(
+    tickets.ticket(format!(
         "Find the string `{NEEDLE}` in the working directory. \
          Use grep to locate it, then use read_file with column \
          and length to read just the surrounding context (not the \

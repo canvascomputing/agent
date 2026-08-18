@@ -21,7 +21,7 @@ async def main(task):
         .build()
     )
 
-    agent.task(task)
+    agent.ticket(task)
 
     work = agent.start()
     results = await work.finish_all()

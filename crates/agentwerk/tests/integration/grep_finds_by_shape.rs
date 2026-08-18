@@ -70,7 +70,7 @@ async fn grep_lists_unknown_function_names() -> std::result::Result<(), Box<dyn 
             .tool(GrepTool)
             .build(),
     );
-    tickets.task(
+    tickets.ticket(
         "List the names of every function defined in `geometry.rs`. The names are \
          not known in advance. Answer with the names.",
     );

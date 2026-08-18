@@ -154,7 +154,7 @@ impl TicketQueue {
     /// # use agentwerk::TicketQueue;
     /// # fn run() -> Result<(), Box<dyn std::error::Error>> {
     /// let tickets = TicketQueue::new();
-    /// let key = tickets.task("Look up the cached answer.");
+    /// let key = tickets.ticket("Look up the cached answer.");
     /// tickets.set_finished(&key, "42")?;
     /// # Ok(())
     /// # }
@@ -349,7 +349,7 @@ mod tests {
     #[test]
     fn task_creates_ticket_with_user_reporter() {
         let (queue, _tmp) = test_queue();
-        queue.task("hello");
+        queue.ticket("hello");
         let t = queue.get_ticket("TICKET-1").unwrap();
         assert_eq!(t.task, serde_json::Value::String("hello".into()));
         assert_eq!(t.reporter, "user");
@@ -387,7 +387,7 @@ mod tests {
     #[test]
     fn set_result_updates_ticket() {
         let (queue, _tmp) = test_queue();
-        queue.task("hi");
+        queue.ticket("hi");
         queue
             .set_result("TICKET-1", serde_json::Value::String("answer".into()))
             .unwrap();
@@ -405,9 +405,9 @@ mod tests {
     #[test]
     fn done_and_failed_filter_by_status() {
         let (queue, _tmp) = test_queue();
-        queue.task("ok");
-        queue.task("oops");
-        queue.task("pending");
+        queue.ticket("ok");
+        queue.ticket("oops");
+        queue.ticket("pending");
         queue.claim(|t| t.key == "TICKET-1", "agent");
         queue.set_finished_by("TICKET-1", "agent").unwrap();
         queue.set_failed("TICKET-2").unwrap();
@@ -422,9 +422,9 @@ mod tests {
     #[test]
     fn ticket_status_transitions_record_stats() {
         let (queue, _tmp) = test_queue();
-        queue.task("a");
-        queue.task("b");
-        queue.task("c");
+        queue.ticket("a");
+        queue.ticket("b");
+        queue.ticket("c");
         assert_eq!(queue.stats.event_count(EventName::TicketCreated), 3);
         queue.claim(|t| t.key == "TICKET-1", "agent");
         queue.set_finished_by("TICKET-1", "agent").unwrap();
@@ -437,7 +437,7 @@ mod tests {
     #[test]
     fn a_ticket_logs_created_started_and_finished_in_order() {
         let (queue, dir) = test_queue();
-        queue.task("hello");
+        queue.ticket("hello");
         queue.claim(|t| t.key == "TICKET-1", "agent");
         queue.set_finished_by("TICKET-1", "agent").unwrap();
         let lines = read_events_log(dir.path());
@@ -456,7 +456,7 @@ mod tests {
     #[test]
     fn streamed_chunks_stay_out_of_the_log() {
         let (queue, dir) = test_queue();
-        queue.task("seed");
+        queue.ticket("seed");
         queue.emit(
             "TICKET-1",
             "agent",
@@ -476,7 +476,7 @@ mod tests {
         let dir = crate::test_util::TempDir::new().unwrap();
         let original = TicketQueue::new();
         original.dir(dir.path().to_path_buf());
-        original.task("seed");
+        original.ticket("seed");
         original.emit(
             "TICKET-1",
             "agent",
@@ -500,7 +500,7 @@ mod tests {
     #[test]
     fn set_failed_logs_a_failure_without_a_start() {
         let (queue, dir) = test_queue();
-        queue.task("hello");
+        queue.ticket("hello");
         queue.set_failed("TICKET-1").unwrap();
         let lines = read_events_log(dir.path());
         assert_eq!(lines.len(), 2);
@@ -522,8 +522,8 @@ mod tests {
     #[test]
     fn the_log_holds_one_line_per_lifecycle_turn_across_tickets() {
         let (queue, dir) = test_queue();
-        queue.task("a");
-        queue.task("b");
+        queue.ticket("a");
+        queue.ticket("b");
         queue.claim(|t| t.key == "TICKET-1", "agent");
         queue.set_finished_by("TICKET-1", "agent").unwrap();
         queue.claim(|t| t.key == "TICKET-2", "agent");
@@ -535,7 +535,7 @@ mod tests {
     #[test]
     fn claim_transitions_todo_to_in_progress_and_sets_the_assignee() {
         let (queue, _tmp) = test_queue();
-        queue.task("hello");
+        queue.ticket("hello");
         let key = queue.claim(|t| t.status == Status::Todo, "alice").unwrap();
         assert_eq!(key, "TICKET-1");
         let t = queue.get_ticket(&key).unwrap();
@@ -555,7 +555,7 @@ mod tests {
     #[test]
     fn claim_returns_none_when_no_ticket_matches() {
         let (queue, _tmp) = test_queue();
-        queue.task("hello");
+        queue.ticket("hello");
         assert!(queue
             .claim(|t| t.has_label("nonexistent"), "alice")
             .is_none());
@@ -564,7 +564,7 @@ mod tests {
     #[test]
     fn second_claim_of_same_ticket_returns_none() {
         let (queue, _tmp) = test_queue();
-        queue.task("hello");
+        queue.ticket("hello");
         let first = queue.claim(|t| t.key == "TICKET-1", "alice");
         assert!(first.is_some());
         // Second claim: ticket is now InProgress, not Todo.
@@ -575,9 +575,9 @@ mod tests {
     #[test]
     fn claim_picks_earliest_eligible_ticket() {
         let (queue, _tmp) = test_queue();
-        queue.task("a");
-        queue.task("b");
-        queue.task("c");
+        queue.ticket("a");
+        queue.ticket("b");
+        queue.ticket("c");
         let key = queue.claim(|t| t.status == Status::Todo, "alice").unwrap();
         assert_eq!(key, "TICKET-1");
     }
@@ -687,7 +687,7 @@ mod tests {
     #[test]
     fn claim_logs_the_ticket_starting() {
         let (queue, dir) = test_queue();
-        queue.task("hello");
+        queue.ticket("hello");
         queue.claim(|t| t.status == Status::Todo, "alice");
         let lines = read_events_log(dir.path());
         assert_eq!(lines.len(), 2);
@@ -700,7 +700,7 @@ mod tests {
     #[test]
     fn set_finished_transitions_to_finished() {
         let (queue, _tmp) = test_queue();
-        let key = queue.task("hello");
+        let key = queue.ticket("hello");
         queue.claim(|t| t.status == Status::Todo, "alice");
         queue.set_finished_by(&key, "alice").unwrap();
         let t = queue.get_ticket(&key).unwrap();
@@ -711,7 +711,7 @@ mod tests {
     #[test]
     fn set_failed_transitions_to_failed() {
         let (queue, _tmp) = test_queue();
-        let key = queue.task("hello");
+        let key = queue.ticket("hello");
         queue.claim(|t| t.status == Status::Todo, "alice");
         queue.set_failed(&key).unwrap();
         let t = queue.get_ticket(&key).unwrap();
@@ -722,7 +722,7 @@ mod tests {
     #[test]
     fn a_finished_ticket_is_not_reopened_by_a_later_failure() {
         let (queue, _tmp) = test_queue();
-        let key = queue.task("hello");
+        let key = queue.ticket("hello");
         queue.claim(|t| t.status == Status::Todo, "alice");
         queue.set_finished(&key, "host result").unwrap();
 
@@ -739,7 +739,7 @@ mod tests {
     #[test]
     fn a_failed_ticket_is_not_reopened_by_a_later_finish() {
         let (queue, _tmp) = test_queue();
-        let key = queue.task("hello");
+        let key = queue.ticket("hello");
         queue.claim(|t| t.status == Status::Todo, "alice");
         queue.set_failed_by(&key, "alice").unwrap();
 
@@ -755,7 +755,7 @@ mod tests {
     #[test]
     fn set_finished_stores_the_result_and_resolves_the_ticket() {
         let (queue, _tmp) = test_queue();
-        queue.task("hello");
+        queue.ticket("hello");
         queue
             .set_finished("TICKET-1", serde_json::json!({"answer": 42}))
             .unwrap();
@@ -804,7 +804,7 @@ mod tests {
     #[test]
     fn write_tool_output_returns_relative_path_and_writes_absolute() {
         let (queue, dir) = test_queue();
-        queue.task("seed");
+        queue.ticket("seed");
         let rel = queue
             .write_tool_output("TICKET-1", "call-1", "the full content")
             .expect("write succeeds when dir exists");
@@ -819,7 +819,7 @@ mod tests {
     #[test]
     fn write_tool_output_creates_outputs_subdir_lazily() {
         let (queue, dir) = test_queue();
-        queue.task("seed");
+        queue.ticket("seed");
         let outputs = dir.path().join("tickets").join("TICKET-1").join("outputs");
         assert!(!outputs.exists());
         queue
@@ -831,7 +831,7 @@ mod tests {
     #[test]
     fn a_logged_event_names_the_agent_that_caused_it() {
         let (queue, dir) = test_queue();
-        queue.task("first");
+        queue.ticket("first");
         queue.ticket(Ticket::new("child").parent("TICKET-1"));
         let lines = read_events_log(dir.path());
         assert_eq!(lines.len(), 2);
@@ -858,7 +858,7 @@ mod tests {
         let dir = crate::test_util::TempDir::new().unwrap();
         let original = TicketQueue::new();
         original.dir(dir.path().to_path_buf());
-        original.task("seed work");
+        original.ticket("seed work");
         original.add_reply("TICKET-1", Reply::user_text("hello"));
         original.set_finished_by("TICKET-1", "agent").unwrap();
         drop(original);
@@ -884,7 +884,7 @@ mod tests {
         let dir = crate::test_util::TempDir::new().unwrap();
         let original = TicketQueue::new();
         original.dir(dir.path().to_path_buf());
-        original.task("seed work");
+        original.ticket("seed work");
         original
             .set_result("TICKET-1", serde_json::json!({"ok": true}))
             .unwrap();
@@ -903,11 +903,11 @@ mod tests {
         let dir = crate::test_util::TempDir::new().unwrap();
         let original = TicketQueue::new();
         original.dir(dir.path().to_path_buf());
-        original.task("seed work");
+        original.ticket("seed work");
         drop(original);
 
         let resumed = TicketQueue::load(dir.path()).unwrap();
-        assert_eq!(resumed.task("more work"), "TICKET-2");
+        assert_eq!(resumed.ticket("more work"), "TICKET-2");
     }
 
     #[test]
@@ -917,12 +917,12 @@ mod tests {
         let dir = crate::test_util::TempDir::new().unwrap();
         let first = TicketQueue::new();
         first.dir(dir.path().to_path_buf());
-        first.task("seed work");
+        first.ticket("seed work");
         drop(first);
 
         let second = TicketQueue::new();
         second.dir(dir.path().to_path_buf());
-        assert_eq!(second.task("more work"), "TICKET-2");
+        assert_eq!(second.ticket("more work"), "TICKET-2");
     }
 
     #[test]
@@ -930,7 +930,7 @@ mod tests {
         let dir = crate::test_util::TempDir::new().unwrap();
         let original = TicketQueue::new();
         original.dir(dir.path().to_path_buf());
-        original.task("seed work");
+        original.ticket("seed work");
         drop(original);
 
         let resumed = TicketQueue::load(dir.path()).unwrap();
@@ -939,7 +939,7 @@ mod tests {
         // not rescan it, since a rescan would find nothing and wrongly
         // restart numbering at 1.
         std::fs::remove_dir_all(dir.path().join("tickets")).unwrap();
-        assert_eq!(resumed.task("more work"), "TICKET-2");
+        assert_eq!(resumed.ticket("more work"), "TICKET-2");
     }
 
     #[test]
@@ -947,7 +947,7 @@ mod tests {
         let dir = crate::test_util::TempDir::new().unwrap();
         let original = TicketQueue::new();
         original.dir(dir.path().to_path_buf());
-        original.task("mid flight");
+        original.ticket("mid flight");
         original
             .claim(|t| t.status == Status::Todo, "alice")
             .unwrap();
@@ -964,8 +964,8 @@ mod tests {
         let dir = crate::test_util::TempDir::new().unwrap();
         let original = TicketQueue::new();
         original.dir(dir.path().to_path_buf());
-        original.task("a");
-        original.task("b");
+        original.ticket("a");
+        original.ticket("b");
         original
             .set_result("TICKET-1", serde_json::Value::Null)
             .unwrap();
@@ -983,7 +983,7 @@ mod tests {
         let dir = crate::test_util::TempDir::new().unwrap();
         let original = TicketQueue::new();
         original.dir(dir.path().to_path_buf());
-        original.task("valid");
+        original.ticket("valid");
         drop(original);
 
         // A leftover directory with no `ticket.json` is ignored by the
@@ -1056,7 +1056,7 @@ mod tests {
         let dir = crate::test_util::TempDir::new().unwrap();
         let queue = TicketQueue::new();
         queue.dir(dir.path().to_path_buf());
-        queue.task("hello");
+        queue.ticket("hello");
         let stored = std::fs::read_to_string(
             dir.path()
                 .join("tickets")
@@ -1074,7 +1074,7 @@ mod tests {
     #[test]
     fn add_reply_appends_one_line_to_replies_jsonl() {
         let (queue, dir) = test_queue();
-        queue.task("hello");
+        queue.ticket("hello");
         queue.reply("TICKET-1", "first");
         queue.reply("TICKET-1", "second");
         let body = std::fs::read_to_string(
@@ -1098,7 +1098,7 @@ mod tests {
         {
             let queue = TicketQueue::new();
             queue.dir(dir.path().to_path_buf());
-            queue.task("hello");
+            queue.ticket("hello");
             queue.reply("TICKET-1", "first");
             queue.reply("TICKET-1", "second");
         }
@@ -1118,7 +1118,7 @@ mod tests {
     #[test]
     fn ticket_lifecycle_writes_its_events_to_the_log() {
         let (queue, _dir) = test_queue();
-        queue.task("seed");
+        queue.ticket("seed");
         queue.claim(|t| t.status == Status::Todo, "alice").unwrap();
         queue
             .set_result("TICKET-1", serde_json::Value::Null)
@@ -1150,7 +1150,7 @@ mod tests {
             }
         });
 
-        queue.task("seed");
+        queue.ticket("seed");
 
         assert_eq!(queue.stats.event_count(EventName::TicketCreated), 1);
         assert_eq!(*reporters.lock().unwrap(), vec!["user".to_string()]);
@@ -1159,7 +1159,7 @@ mod tests {
     #[test]
     fn a_finished_ticket_failed_afterwards_is_not_counted_twice() {
         let (queue, _tmp) = test_queue();
-        let key = queue.task("seed");
+        let key = queue.ticket("seed");
         queue.set_finished_by(&key, "alice").unwrap();
         // Refused before the transition, so nothing is emitted to count.
         queue.set_failed(&key).unwrap();
@@ -1194,7 +1194,7 @@ mod tests {
     fn edit_replies_rewrites_replies_without_touching_task() {
         use crate::agents::tickets::ReplyContent;
         let (queue, _tmp) = test_queue();
-        let key = queue.task("original task");
+        let key = queue.ticket("original task");
         queue.add_reply(&key, Reply::user_text("keep me"));
         queue.add_reply(&key, Reply::user_text("drop me"));
 
@@ -1225,7 +1225,7 @@ mod tests {
     #[test]
     fn edit_replies_that_changes_nothing_writes_nothing() {
         let (queue, _tmp) = test_queue();
-        let key = queue.task("go");
+        let key = queue.ticket("go");
         queue.add_reply(&key, Reply::user_text("keep me"));
         let ticket_dir = queue.get_dir().join("tickets").join(&key);
 
@@ -1250,7 +1250,7 @@ mod tests {
     fn edit_rewrites_replies_in_place_without_a_snapshot_file() {
         use crate::agents::tickets::ReplyContent;
         let (queue, _tmp) = test_queue();
-        let key = queue.task("go");
+        let key = queue.ticket("go");
         queue.add_reply(&key, Reply::user_text("keep me"));
         queue.add_reply(&key, Reply::user_text("drop me"));
         let ticket_dir = queue.get_dir().join("tickets").join(&key);
@@ -1283,7 +1283,7 @@ mod tests {
     fn compaction_then_edit_leaves_one_replies_file_and_no_leak() {
         use crate::agents::tickets::ReplyContent;
         let (queue, _tmp) = test_queue();
-        let key = queue.task("go");
+        let key = queue.ticket("go");
         queue.add_reply(&key, Reply::user_text("SECRET"));
         // What compaction applies: the replies wholesale, rewritten in place.
         queue.edit_replies(&key, |replies| *replies = vec![Reply::user_text("summary")]);

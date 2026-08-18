@@ -108,8 +108,8 @@ The rules the tables never repeat.
 | Rust | `Agent.system_prompt(knowledge: string?, policies: Policies, stats: Stats, ticket_key: string): string` | super |
 | Rust | `Agent.expand_context(role: string, policies: Policies, stats: Stats, ticket_key: string): string` | private |
 | Rust | `Agent.interpolate(s: string): string` | private |
-| both | `Agent.task(task: json): string` | pub |
 | both | `Agent.ticket(ticket: Ticket): string` | pub |
+| both | `Agent.ticket(task)`: a string or json value stands in for the `Ticket` | |
 | both | `Agent.start(): TicketQueue` | pub |
 | Rust | `Agent.dispatch(ticket: Ticket): string` | private |
 
@@ -377,6 +377,8 @@ The rules the tables never repeat.
 | Python | `Ticket`: same field names. `replies` is a list of `Reply`, converted on access | |
 | Rust | `Ticket.new(task: json): Ticket` | pub |
 | Python | `Ticket(task)` | |
+| Rust | `Ticket.labeled(label: string, task: json): Ticket` | pub |
+| Python | `Ticket(task, label=l)` | |
 | Rust | `Ticket.label(label: string): Ticket` | pub |
 | Python | `Ticket(task, label=l)` | |
 | Rust | `Ticket.schema(schema: Schema): Ticket` | pub |
@@ -393,6 +395,9 @@ The rules the tables never repeat.
 | Rust | `Ticket.is_paused(): boolean` | crate |
 | Rust | `Ticket.to_messages(): Message[]` | crate |
 | Rust | `Ticket.stamp_transition(next: Status, now: number): void` | crate |
+| Rust | `impl From<&str> for Ticket` | pub |
+| Rust | `impl From<String> for Ticket` | pub |
+| Rust | `impl From<json> for Ticket` | pub |
 | Rust | `impl Persist for Ticket` | pub |
 | Rust | `TicketResult { key: string, value: json? }` | crate |
 | Rust | `impl Persist for TicketResult` | crate |
@@ -417,15 +422,21 @@ The rules the tables never repeat.
 |----------|------|------------|
 | Rust | `trait TicketMatcher: Send + Sync { matches(ticket: Ticket): boolean }` | pub |
 | Rust | `impl TicketMatcher for F where F: Fn(Ticket) => boolean + Send + Sync` | pub |
+| Rust | `impl TicketMatcher for &str` | pub |
+| Rust | `impl TicketMatcher for String` | pub |
+| Python | a label string stands in for the `Query` wherever one is accepted | |
 | Rust | `Query { key: string?, label: string?, status: Status?, agent: string?, parent_key: string? }` | pub |
 | Python | `Query(*, key=None, label=None, status=None, agent=None, parent_key=None)` | |
 | Rust | `Query.new(): Query` | pub |
+| Rust | `Query.labeled(label: string): Query` | pub |
 | Rust | `Query.key(key: string): Query` | pub |
 | Rust | `Query.label(label: string): Query` | pub |
 | Rust | `Query.status(status: Status): Query` | pub |
 | Rust | `Query.agent(agent: string): Query` | pub |
 | Rust | `Query.parent_key(parent_key: string): Query` | pub |
 | Rust | `Query.default_status(status: Status): Query` | pub |
+| Rust | `impl From<&str> for Query` | pub |
+| Rust | `impl From<String> for Query` | pub |
 | both | `impl TicketMatcher for Query` | pub |
 
 ## `crates/agentwerk/src/agents/tickets/ticket_queue.rs`
@@ -518,8 +529,8 @@ The rules the tables never repeat.
 | both | `TicketQueue.get_dir(): string` | pub |
 | Rust | `TicketQueue.result_path(key: string): string` | crate |
 | both | `TicketQueue.schemas(store: SchemaStore): TicketQueue` | pub |
-| both | `TicketQueue.task(task: json): string` | pub |
 | both | `TicketQueue.ticket(ticket: Ticket): string` | pub |
+| both | `TicketQueue.ticket(task)`: a string or json value stands in for the `Ticket` | |
 | both | `TicketQueue.reply(key: string, content: string): TicketQueue` | pub |
 | Rust | `TicketQueue.dispatch(ticket: Ticket): string` | private |
 | both | `TicketQueue.get_ticket(key: string): Ticket?` | pub |
@@ -552,7 +563,9 @@ The rules the tables never repeat.
 | Rust | `TicketQueue.next_event_or_end(stream: Event): Promise<boolean>` | private |
 | both | `TicketQueue.results(): json[]` | pub |
 | both | `TicketQueue.find_results(query: Query): json[]` | pub |
+| both | `TicketQueue.find_results(label)`: a label string stands in for the `Query` | |
 | both | `TicketQueue.find_result(query: Query): json?` | pub |
+| both | `TicketQueue.find_result(label)`: a label string stands in for the `Query` | |
 
 ## `crates/agentwerk/src/agents/tickets/trajectory.rs`
 
@@ -1818,7 +1831,6 @@ Binds `agents/agent.rs`, whose section holds the Python spelling of each method.
 | Rust | `PyAgent.tool(tool: any): PyAgent throws PyErr` | python |
 | Rust | `PyAgent.tools(tools: any): PyAgent throws PyErr` | python |
 | Rust | `PyAgent.build(): PyAgent throws PyErr` | python |
-| Rust | `PyAgent.task(task: any): string throws PyErr` | python |
 | Rust | `PyAgent.ticket(ticket: PyTicket): string throws PyErr` | python |
 | Rust | `PyAgent.start(): PyTicketQueue throws PyErr` | python |
 
@@ -1969,10 +1981,17 @@ Binds `schemas/`.
 
 ## `crates/agentwerk-py/src/ticket.rs`
 
-Binds `agents/tickets/ticket.rs`.
+Binds `agents/tickets/ticket.rs` and `agents/tickets/query.rs`.
 
 | Language | Item | Visibility |
 |----------|------|------------|
+| Rust | `PyQuery { inner: Query }` | python |
+| Rust | `PyQuery.new(key: string?, label: string?, status: string?, agent: string?, parent_key: string?): PyQuery throws PyErr` | python |
+| Rust | `PyQuery.__repr__(): string` | python |
+| Rust | `parse_status(s: string): Status throws PyErr` | private |
+| Rust | `try_extract_query(arg: any): Query?` | pub |
+| Rust | `as_query(arg: any): Query throws PyErr` | pub |
+| Rust | `to_ticket(arg: any): Ticket throws PyErr` | pub |
 | Rust | `PyTicket { inner: Ticket }` | python |
 | Rust | `PyTicket.new(task: any, label: string?, schema: PySchema?, parent: string?): PyTicket throws PyErr` | python |
 | Rust | `PyTicket.has_label(label: string): boolean` | python |
@@ -2009,8 +2028,7 @@ Binds `agents/tickets/ticket_queue.rs` and `store.rs`.
 | Rust | `PyTicketQueue.new(): PyTicketQueue` | python |
 | Rust | `PyTicketQueue.load(tickets_dir: string): PyTicketQueue throws PyErr` | python |
 | Rust | `PyTicketQueue.agent(agent: PyAgent): PyTicketQueue throws PyErr` | python |
-| Rust | `PyTicketQueue.task(task: any): string throws PyErr` | python |
-| Rust | `PyTicketQueue.ticket(ticket: PyTicket): string` | python |
+| Rust | `PyTicketQueue.ticket(ticket: PyTicket): string throws PyErr` | python |
 | Rust | `PyTicketQueue.reply(key: string, content: string): PyTicketQueue` | python |
 | Rust | `PyTicketQueue.set_finished(key: string, result: any): void throws PyErr` | python |
 | Rust | `PyTicketQueue.set_failed(key: string): void throws PyErr` | python |

@@ -1,6 +1,6 @@
 //! Interactive terminal chat. One `TicketQueue` + `Agent` + `Knowledge`
 //! lives for the whole session, and one chat ticket spans every turn:
-//! the first input creates the ticket via `tickets.task(...)`, every
+//! the first input creates the ticket via `tickets.ticket(...)`, every
 //! subsequent input lands as a user reply via `tickets.reply(&key, ...)`.
 //! The agent loop's wait-for-input branch picks each comment up and
 //! drives the next model turn on the same growing set of replies. Tickets
@@ -34,7 +34,7 @@ use agentwerk::providers::Model;
 use agentwerk::tools::{
     GlobTool, GrepTool, ListDirectoryTool, ReadFileTool, TicketsTool, WriteFileTool,
 };
-use agentwerk::{Agent, Knowledge, TicketQueue};
+use agentwerk::{Agent, Knowledge, Query, Ticket, TicketQueue};
 
 const ROLE: &str = include_str!("prompts/repl.role.md");
 const BIBLE_PASSAGE: &str = include_str!("prompts/bible.txt");
@@ -157,7 +157,7 @@ async fn main() {
             continue;
         }
         if let Some(first) = line.strip_prefix("/new ") {
-            let k = tickets.task(first.trim());
+            let k = tickets.ticket(first.trim());
             eprintln!("{}new chat {k}{}", style.dim, style.reset);
             chat_key = Some(k);
             continue;
@@ -276,7 +276,7 @@ async fn main() {
                 tickets.reply(k, payload);
                 k.to_string()
             }
-            _ => tickets.task(payload),
+            _ => tickets.ticket(payload),
         };
         chat_key = Some(key.clone());
 
@@ -517,8 +517,7 @@ fn redact(messages: &mut [Reply], word: &str) {
 /// no tool. A mid-turn reply carrying a tool call doesn't count, so the
 /// prompt never races the user against the loop.
 async fn wait_for_assistant_pause(tickets: &TicketQueue, key: &str) {
-    let waited = key.to_string();
-    tickets.finish(move |t| t.key == waited).await;
+    tickets.finish(Query::new().key(key)).await;
 }
 
 async fn read_line(prompt: &str) -> Option<String> {
@@ -566,7 +565,7 @@ impl Style {
 /// any orphan Todo left by an interrupted `/new <message>`.
 fn fail_stale_chats(tickets: &TicketQueue, label: &str) -> usize {
     let stale: Vec<String> = tickets
-        .find_tickets(|t| t.is_pending() && t.has_label(label))
+        .find_tickets(|t: &Ticket| t.is_pending() && t.has_label(label))
         .iter()
         .map(|t| t.key.clone())
         .collect();
@@ -586,10 +585,10 @@ mod tests {
         let tickets = TicketQueue::new();
         let mut keys = Vec::new();
         for body in ["one", "two", "three"] {
-            let k = tickets.ticket(Ticket::new(body).label("orchestrator"));
+            let k = tickets.ticket(Ticket::labeled("orchestrator", body));
             keys.push(k);
         }
-        let other = tickets.ticket(Ticket::new("scanner").label("analyst"));
+        let other = tickets.ticket(Ticket::labeled("analyst", "scanner"));
 
         let n = fail_stale_chats(&tickets, "orchestrator");
 

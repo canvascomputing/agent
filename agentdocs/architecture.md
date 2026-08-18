@@ -15,7 +15,7 @@ tickets.finish_all().await;
 - An `Agent` carries a `Weak<TicketQueue>` that dangles until `agent(a)` binds it. `TicketQueue::new` captures its own `Weak<Self>` through `Arc::new_cyclic` to have one to hand out.
 - `agent(a)` also drains tickets the agent queued in its private default queue into the shared one.
 - `start` and `finish` spawn one tokio task per registered agent. Each upgrades its `Weak` once and reads the shared store, policies, budget, and ending from the resulting `Arc`.
-- `tickets.task(value)` creates a ticket and returns its key; `tickets.reply(&key, content)` appends a text reply and the wait-for-input branch drives the next turn on the same replies. That is how multi-turn chat is built on one ticket.
+- `tickets.ticket(value)` creates a ticket and returns its key; `tickets.reply(&key, content)` appends a text reply and the wait-for-input branch drives the next turn on the same replies. That is how multi-turn chat is built on one ticket.
 
 ## Shared Queue, Per-Agent Task
 

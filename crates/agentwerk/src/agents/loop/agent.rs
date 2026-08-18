@@ -287,8 +287,8 @@ mod tests {
 
         tickets.start();
 
-        tickets.task("a");
-        tickets.task("b");
+        tickets.ticket("a");
+        tickets.ticket("b");
 
         tokio::time::timeout(Duration::from_secs(5), tickets.finish_all())
             .await
@@ -323,7 +323,7 @@ mod tests {
         );
 
         tickets.start();
-        tickets.task("go");
+        tickets.ticket("go");
         tokio::time::timeout(Duration::from_secs(5), tickets.finish_all())
             .await
             .expect("finish did not finish within 5s");
@@ -362,7 +362,7 @@ mod tests {
         );
 
         tickets.start();
-        tickets.task("go");
+        tickets.ticket("go");
         tokio::time::timeout(Duration::from_secs(5), tickets.finish_all())
             .await
             .expect("finish did not finish within 5s");
@@ -455,7 +455,7 @@ mod tests {
         );
 
         tickets.start();
-        tickets.task("go");
+        tickets.ticket("go");
         tokio::time::timeout(Duration::from_secs(5), tickets.finish_all())
             .await
             .expect("finish did not finish within 5s");
@@ -601,7 +601,7 @@ mod tests {
             .request_retry_delay(Duration::from_millis(1));
         tickets.edit_replies_on_event(|_events, _messages| {});
         tickets.agent(interactive_chatbot(&provider));
-        tickets.task("hello");
+        tickets.ticket("hello");
         tickets.start();
 
         for _ in 0..200 {
@@ -646,7 +646,7 @@ mod tests {
             .max_request_retries(0)
             .request_retry_delay(Duration::from_millis(1));
         tickets.agent(interactive_chatbot(&provider));
-        let key = tickets.task("hello");
+        let key = tickets.ticket("hello");
 
         let tickets_for_inject = Arc::clone(&tickets);
         let inject = async move {
@@ -711,7 +711,7 @@ mod tests {
             .max_request_retries(0)
             .max_time(Duration::from_millis(500));
         tickets.agent(interactive_chatbot(&provider));
-        let key = tickets.task("hello");
+        let key = tickets.ticket("hello");
         tickets.start();
 
         // Pausing for input is no lifecycle transition and leaves the ticket
@@ -747,7 +747,7 @@ mod tests {
             .max_time(Duration::from_millis(500));
         let collected = collect_events(&tickets);
         tickets.agent(interactive_chatbot(&provider));
-        tickets.task("hello");
+        tickets.ticket("hello");
 
         tokio::time::timeout(Duration::from_secs(5), tickets.finish_all())
             .await
@@ -778,7 +778,7 @@ mod tests {
             .request_retry_delay(Duration::from_millis(1))
             .max_time(Duration::from_millis(500));
         tickets.agent(interactive_chatbot(&provider));
-        let first_key = tickets.task("first chat");
+        let first_key = tickets.ticket("first chat");
         tickets.start();
 
         let tickets_for_drive = Arc::clone(&tickets);
@@ -793,7 +793,7 @@ mod tests {
                 }
                 tokio::time::sleep(Duration::from_millis(5)).await;
             }
-            let second_key = tickets_for_drive.task("second chat");
+            let second_key = tickets_for_drive.ticket("second chat");
             for _ in 0..400 {
                 if tickets_for_drive
                     .get_ticket(&second_key)
@@ -844,7 +844,7 @@ mod tests {
             .max_schema_retries(1);
         let collected = collect_events(&tickets);
         tickets.agent(task_agent(&provider));
-        tickets.task("go");
+        tickets.ticket("go");
 
         tokio::time::timeout(Duration::from_secs(5), tickets.finish_all())
             .await
@@ -888,7 +888,7 @@ mod tests {
             .request_retry_delay(Duration::from_millis(1))
             .max_schema_retries(3);
         tickets.agent(task_agent(&provider));
-        tickets.task("go");
+        tickets.ticket("go");
 
         tokio::time::timeout(Duration::from_secs(5), tickets.finish_all())
             .await
@@ -920,7 +920,7 @@ mod tests {
             .max_schema_retries(3);
         let collected = collect_events(&tickets);
         tickets.agent(task_agent(&provider));
-        tickets.task("go");
+        tickets.ticket("go");
 
         tokio::time::timeout(Duration::from_secs(5), tickets.finish_all())
             .await
@@ -1053,11 +1053,11 @@ mod tests {
                 .build(),
         );
 
-        tickets.task("first");
+        tickets.ticket("first");
         tickets.finish_all().await;
         assert_eq!(tickets.results().pop(), Some(serde_json::json!("first")));
 
-        tickets.task("second");
+        tickets.ticket("second");
         tokio::time::timeout(Duration::from_secs(5), tickets.finish_all())
             .await
             .expect("second finish did not finish within 5s");
@@ -1082,7 +1082,7 @@ mod tests {
                 .build(),
         );
 
-        agent.task("hello");
+        agent.ticket("hello");
         let queue = agent.start();
         tokio::time::timeout(Duration::from_secs(5), queue.finish_all())
             .await
@@ -1129,8 +1129,8 @@ mod tests {
                 .tool(crate::tools::TicketsTool)
                 .build(),
         );
-        tickets.task("first");
-        tickets.task("second");
+        tickets.ticket("first");
+        tickets.ticket("second");
         let _ = tickets.finish_all().await;
 
         let calls = provider.received();
@@ -1168,8 +1168,8 @@ mod tests {
                 .knowledge(&store)
                 .build(),
         );
-        tickets.task("first");
-        tickets.task("second");
+        tickets.ticket("first");
+        tickets.ticket("second");
         let _ = tickets.finish_all().await;
 
         let prompts = provider.received_system_prompts();
@@ -1219,7 +1219,7 @@ mod tests {
                 .knowledge(&store)
                 .build(),
         );
-        tickets.task("hi");
+        tickets.ticket("hi");
         let _ = tickets.finish_all().await;
 
         let prompts = provider.received_system_prompts();
@@ -1373,7 +1373,7 @@ mod tests {
         tickets.dir(results_dir.path().to_path_buf());
         let agent = interactive_chatbot(&MockProvider::with_results(vec![]));
         tickets.agent(agent.clone());
-        tickets.task("hello");
+        tickets.ticket("hello");
 
         let context = claim(&agent, &tickets).expect("the ticket is claimable");
         assert!(context.tools.get("finish").is_none());
@@ -1443,8 +1443,8 @@ mod tests {
                 .knowledge(&store)
                 .build(),
         );
-        tickets.task("first");
-        tickets.task("second");
+        tickets.ticket("first");
+        tickets.ticket("second");
         let _ = tickets.finish_all().await;
 
         let prompts = provider.received_system_prompts();

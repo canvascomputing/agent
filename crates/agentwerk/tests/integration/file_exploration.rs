@@ -28,7 +28,7 @@ async fn test() -> std::result::Result<(), Box<dyn std::error::Error>> {
         .tool(TicketsTool)
         .build();
     tickets.agent(agent);
-    tickets.task("Find all Rust source files and describe what this project does.");
+    tickets.ticket("Find all Rust source files and describe what this project does.");
 
     tickets.finish_all().await;
     common::print_result(&tickets);

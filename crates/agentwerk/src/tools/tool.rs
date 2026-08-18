@@ -1484,7 +1484,7 @@ mod tests {
         let dir = crate::test_util::TempDir::new().unwrap();
         let queue = TicketQueue::new();
         queue.dir(dir.path().to_path_buf());
-        queue.task("seed");
+        queue.ticket("seed");
         let key = "TICKET-1".to_string();
         let ctx = test_ctx()
             .ticket_queue(Arc::clone(&queue))

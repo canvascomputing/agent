@@ -5,8 +5,6 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, Weak};
 
-use serde::Serialize;
-
 use crate::prompts::{context_values, render_context, PromptBuilder};
 use crate::providers::{Model, Provider};
 use crate::tools::{FinishTool, KnowledgeTool, Tool, ToolRegistry};
@@ -302,7 +300,7 @@ impl<P, M> AgentBuilder<P, M> {
 impl AgentBuilder<Provider, Model> {
     /// Create the agent, giving it the id it keeps for the rest of the run.
     ///
-    /// It starts with a ticket queue of its own, so `.task(...).finish_all().await`
+    /// It starts with a ticket queue of its own, so `.ticket(...).finish_all().await`
     /// works without one being set up. `TicketQueue::agent(...)` later moves
     /// those tickets into the shared queue.
     pub fn build(mut self) -> Agent {
@@ -520,14 +518,11 @@ impl Agent {
 
     /// Submit a task and return its ticket key.
     ///
-    /// Call it as often as you like: one agent can drive many tickets.
-    pub fn task<T: Serialize>(&self, task: T) -> String {
-        self.dispatch(Ticket::new(task))
-    }
-
-    /// Submit a `Ticket` with a custom label or schema, and return its key.
-    pub fn ticket(&self, ticket: Ticket) -> String {
-        self.dispatch(ticket)
+    /// A string is the task itself. A [`Ticket`] carries a custom label or
+    /// schema with it. Call it as often as you like: one agent can drive many
+    /// tickets.
+    pub fn ticket(&self, ticket: impl Into<Ticket>) -> String {
+        self.dispatch(ticket.into())
     }
 
     fn dispatch(&self, mut ticket: Ticket) -> String {
@@ -813,7 +808,7 @@ mod tests {
         queue.dir(dir.path().to_path_buf());
         let mut agent = built(Agent::new().template("topic", "rust"));
         queue.bind_agent(&mut agent);
-        agent.task("Search {topic} forums.");
+        agent.ticket("Search {topic} forums.");
         let stored = queue
             .tickets()
             .into_iter()
@@ -834,7 +829,7 @@ mod tests {
         // exists yet at dispatch. Only the role expands it.
         let mut agent = built(Agent::new());
         queue.bind_agent(&mut agent);
-        agent.task("Work on {context}.");
+        agent.ticket("Work on {context}.");
         let stored = queue
             .tickets()
             .into_iter()

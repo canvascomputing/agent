@@ -35,7 +35,7 @@ def test_templates_chain_singly_and_in_bulk():
 
 
 def test_build_with_explicit_provider_and_model_succeeds(offline_agent):
-    assert offline_agent.task("go").startswith("TICKET-")
+    assert offline_agent.ticket("go").startswith("TICKET-")
 
 
 def test_model_accepts_a_tuned_model_object():
@@ -45,7 +45,7 @@ def test_model_accepts_a_tuned_model_object():
         .model(aw.Model("claude-sonnet-4-20250514").context_window(128_000))
         .build()
     )
-    assert agent.task("go").startswith("TICKET-")
+    assert agent.ticket("go").startswith("TICKET-")
 
 
 def test_build_without_a_provider_is_rejected():
@@ -67,7 +67,7 @@ def test_from_env_without_provider_env_is_rejected(monkeypatch):
 
 def test_using_an_unbuilt_agent_is_rejected():
     with pytest.raises(RuntimeError):
-        aw.Agent().task("count to three")
+        aw.Agent().ticket("count to three")
 
 
 def test_id_is_built_from_the_label():
@@ -109,7 +109,7 @@ def test_agent_enqueues_a_ticket_on_its_private_queue(offline_agent):
 def test_binding_an_agent_drains_its_queue_into_the_shared_queue(
     offline_agent, queue
 ):
-    offline_agent.task("count to three")
+    offline_agent.ticket("count to three")
     queue.agent(offline_agent)
 
     assert [t.task for t in queue.tickets()] == ["count to three"]

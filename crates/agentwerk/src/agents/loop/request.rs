@@ -410,7 +410,7 @@ mod tests {
                 .role("test")
                 .build(),
         );
-        tickets.task("go");
+        tickets.ticket("go");
 
         let run_fut = tickets.finish_all();
         let check_fut = async {
@@ -474,7 +474,7 @@ mod tests {
                 .role("test")
                 .build(),
         );
-        tickets.task("go");
+        tickets.ticket("go");
 
         let run_fut = tickets.finish_all();
         let cancel_handle = Arc::clone(&tickets);
@@ -546,7 +546,7 @@ mod tests {
                 .tool(boom)
                 .build(),
         );
-        tickets.task("go");
+        tickets.ticket("go");
         let _ = tickets.finish_all().await;
         (provider, tickets, results_dir)
     }

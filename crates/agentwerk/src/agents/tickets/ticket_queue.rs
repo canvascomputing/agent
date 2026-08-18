@@ -9,7 +9,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::Duration;
 
-use serde::Serialize;
 use tokio::sync::{broadcast, watch};
 use tokio::task::JoinHandle;
 
@@ -190,7 +189,7 @@ impl Run {
 ///             .build(),
 ///     );
 /// }
-/// tickets.ticket(Ticket::new("Summarize https://canvascomputing.org").label("research"));
+/// tickets.ticket(Ticket::labeled("research", "Summarize https://canvascomputing.org"));
 /// tickets.finish_all().await;
 /// # }
 /// ```
@@ -1124,7 +1123,7 @@ impl TicketQueue {
     ///
     /// let tickets = TicketQueue::new();
     /// tickets.schemas(&schemas);
-    /// tickets.ticket(Ticket::new("Audit src/db.").label("analysis"));
+    /// tickets.ticket(Ticket::labeled("analysis", "Audit src/db."));
     /// # Ok::<(), agentwerk::schemas::SchemaParseError>(())
     /// ```
     pub fn schemas(&self, store: &Arc<SchemaStore>) -> &Self {
@@ -1133,17 +1132,14 @@ impl TicketQueue {
     }
 
     /// Submit a task and return its ticket key.
-    pub fn task<T: Serialize>(&self, task: T) -> String {
-        self.dispatch(Ticket::new(task))
-    }
-
-    /// Submit a `Ticket` with a custom label or schema, and return its key.
     ///
-    /// Key, reporter, creation time, status, and result are set at insertion
-    /// and overwrite whatever the ticket carried. A label decides which agents
-    /// may claim it, so give an agent a label of its own to address it alone.
-    pub fn ticket(&self, ticket: Ticket) -> String {
-        self.dispatch(ticket)
+    /// A string is the task itself. A [`Ticket`] carries a custom label or
+    /// schema with it. Key, reporter, creation time, status, and result are set
+    /// at insertion and overwrite whatever the ticket carried. A label decides
+    /// which agents may claim it, so give an agent a label of its own to
+    /// address it alone.
+    pub fn ticket(&self, ticket: impl Into<Ticket>) -> String {
+        self.dispatch(ticket.into())
     }
 
     /// Add a reply to a ticket.
@@ -1194,10 +1190,7 @@ impl TicketQueue {
     /// the ticket store, or the call deadlocks.
     pub fn find_ticket(&self, predicate: impl TicketMatcher) -> Option<Ticket> {
         let store = self.tickets.lock().unwrap();
-        let mut matching: Vec<&Ticket> = store
-            .values()
-            .filter(|t| predicate.matches(t))
-            .collect();
+        let mut matching: Vec<&Ticket> = store.values().filter(|t| predicate.matches(t)).collect();
         matching.sort_by_key(|t| (t.created_at, numeric_id(&t.key)));
         matching.into_iter().next().cloned()
     }
@@ -1572,12 +1565,12 @@ impl TicketQueue {
     /// shorter than the set the query named.
     ///
     /// ```no_run
-    /// # use agentwerk::{Query, TicketQueue};
+    /// # use agentwerk::TicketQueue;
     /// let tickets = TicketQueue::new();
-    /// let scans = tickets.find_results(Query::new().label("scan"));
+    /// let scans = tickets.find_results("scan");
     /// ```
-    pub fn find_results(&self, query: Query) -> Vec<serde_json::Value> {
-        let query = query.default_status(Status::Finished);
+    pub fn find_results(&self, query: impl Into<Query>) -> Vec<serde_json::Value> {
+        let query = query.into().default_status(Status::Finished);
         self.find_tickets(|t: &Ticket| query.matches(t) && t.result.is_some())
             .into_iter()
             .filter_map(|t| t.result)
@@ -1587,8 +1580,8 @@ impl TicketQueue {
     /// Get the earliest result whose ticket matches the query.
     ///
     /// Status defaults to `Finished` as in [`Self::find_results`].
-    pub fn find_result(&self, query: Query) -> Option<serde_json::Value> {
-        let query = query.default_status(Status::Finished);
+    pub fn find_result(&self, query: impl Into<Query>) -> Option<serde_json::Value> {
+        let query = query.into().default_status(Status::Finished);
         self.find_ticket(|t: &Ticket| query.matches(t) && t.result.is_some())
             .and_then(|t| t.result)
     }
@@ -1605,8 +1598,8 @@ mod tests {
         let (queue, _tmp) = test_queue();
         let alice = queue.agent(minimal_agent("alice"));
         // Alice's task lands in the same queue.
-        alice.task("from alice");
-        queue.task("from queue");
+        alice.ticket("from alice");
+        queue.ticket("from queue");
         let all_keys: Vec<String> = queue
             .find_tickets(|t: &Ticket| t.status == Status::Todo)
             .iter()
@@ -1620,17 +1613,22 @@ mod tests {
         let (queue, _tmp) = test_queue();
         let mut alice = minimal_agent("alice");
         queue.bind_agent(&mut alice);
-        alice.task("first");
-        alice.task("second");
-        assert_eq!(queue.find_tickets(|t: &Ticket| t.status == Status::Todo).len(), 2);
+        alice.ticket("first");
+        alice.ticket("second");
+        assert_eq!(
+            queue
+                .find_tickets(|t: &Ticket| t.status == Status::Todo)
+                .len(),
+            2
+        );
     }
 
     #[test]
     fn tickets_returns_all_in_creation_order() {
         let (queue, _tmp) = test_queue();
-        queue.task("a");
-        queue.task("b");
-        queue.task("c");
+        queue.ticket("a");
+        queue.ticket("b");
+        queue.ticket("c");
         let all = queue.tickets();
         assert_eq!(all.len(), 3);
         assert_eq!(all[0].key, "TICKET-1");
@@ -1641,9 +1639,9 @@ mod tests {
     #[test]
     fn results_return_done_payloads_in_creation_order() {
         let (queue, _tmp) = test_queue();
-        queue.task("a");
-        queue.task("b");
-        queue.task("c");
+        queue.ticket("a");
+        queue.ticket("b");
+        queue.ticket("c");
         attach_done_result(&queue, "TICKET-1", "first");
         attach_done_result(&queue, "TICKET-3", "third");
         assert_eq!(
@@ -1655,9 +1653,9 @@ mod tests {
     #[test]
     fn results_order_by_creation_regardless_of_done_order() {
         let (queue, _tmp) = test_queue();
-        queue.task("a");
-        queue.task("b");
-        queue.task("c");
+        queue.ticket("a");
+        queue.ticket("b");
+        queue.ticket("c");
         attach_done_result(&queue, "TICKET-3", "third");
         attach_done_result(&queue, "TICKET-1", "first");
         attach_done_result(&queue, "TICKET-2", "second");
@@ -1674,14 +1672,37 @@ mod tests {
     #[test]
     fn results_are_empty_when_nothing_finished() {
         let (queue, _tmp) = test_queue();
-        queue.task("pending");
+        queue.ticket("pending");
         assert!(queue.results().is_empty());
+    }
+
+    #[test]
+    fn find_results_takes_a_label_in_place_of_a_query() {
+        let (queue, _tmp) = test_queue();
+        queue.ticket(Ticket::labeled("scan", "a"));
+        queue.ticket(Ticket::labeled("report", "b"));
+        attach_done_result(&queue, "TICKET-1", "scanned");
+        attach_done_result(&queue, "TICKET-2", "reported");
+        assert_eq!(
+            queue.find_results("scan"),
+            vec![serde_json::json!("scanned")]
+        );
+    }
+
+    #[test]
+    fn find_tickets_takes_a_label_in_place_of_a_query() {
+        let (queue, _tmp) = test_queue();
+        queue.ticket(Ticket::labeled("scan", "a"));
+        queue.ticket(Ticket::labeled("report", "b"));
+        let found = queue.find_tickets("scan");
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].task, serde_json::json!("a"));
     }
 
     #[test]
     fn pending_on_a_todo_ticket() {
         let (queue, _tmp) = test_queue();
-        queue.task("a");
+        queue.ticket("a");
         assert!(queue.pending(&|_: &Ticket| true));
     }
 
@@ -1696,7 +1717,7 @@ mod tests {
     #[test]
     fn pending_while_a_claimed_ticket_awaits_the_model() {
         let (queue, _tmp) = test_queue();
-        queue.task("x");
+        queue.ticket("x");
         queue.claim(|t| t.status == Status::Todo, "agent").unwrap();
         assert!(queue.pending(&|_: &Ticket| true));
     }
@@ -1704,7 +1725,7 @@ mod tests {
     #[test]
     fn pending_when_a_text_only_reply_pauses_a_non_interactive_agent() {
         let (queue, _tmp) = test_queue();
-        queue.task("x");
+        queue.ticket("x");
         let key = queue.claim(|t| t.status == Status::Todo, "agent").unwrap();
         queue.add_reply(
             &key,
@@ -1719,8 +1740,8 @@ mod tests {
     #[test]
     fn not_pending_once_every_ticket_is_finished_or_failed() {
         let (queue, _tmp) = test_queue();
-        queue.task("a");
-        queue.task("b");
+        queue.ticket("a");
+        queue.ticket("b");
         let key_a = queue.claim(|t| t.key == "TICKET-1", "agent").unwrap();
         let key_b = queue.claim(|t| t.key == "TICKET-2", "agent").unwrap();
         queue.set_finished_by(&key_a, "agent").unwrap();
@@ -1787,8 +1808,8 @@ mod tests {
     #[test]
     fn find_events_returns_the_matching_events_oldest_first() {
         let (queue, _tmp) = test_queue();
-        queue.task("a");
-        queue.task("b");
+        queue.ticket("a");
+        queue.ticket("b");
         queue.claim(|t| t.key == "TICKET-1", "alice");
 
         let created = queue.find_events(|e| matches!(e.kind, EventKind::TicketCreated));
@@ -1801,7 +1822,7 @@ mod tests {
     #[test]
     fn find_events_matching_nothing_is_empty() {
         let (queue, _tmp) = test_queue();
-        queue.task("a");
+        queue.ticket("a");
         assert!(queue
             .find_events(|e| matches!(e.kind, EventKind::RunFinished { .. }))
             .is_empty());
@@ -1816,8 +1837,8 @@ mod tests {
     #[test]
     fn find_event_returns_the_earliest_match() {
         let (queue, _tmp) = test_queue();
-        queue.task("a");
-        queue.task("b");
+        queue.ticket("a");
+        queue.ticket("b");
 
         let first = queue.find_event(|e| matches!(e.kind, EventKind::TicketCreated));
         assert_eq!(first.unwrap().ticket_key, "TICKET-1");
@@ -1846,7 +1867,7 @@ mod tests {
     #[test]
     fn a_condition_naming_a_streamed_chunk_never_matches() {
         let (queue, _tmp) = test_queue();
-        queue.task("a");
+        queue.ticket("a");
         queue.emit(
             "TICKET-1",
             "alice",
@@ -1866,7 +1887,7 @@ mod tests {
         // The counters are what the run spent; the finders are what it wrote
         // down. Deleting the log separates the two.
         let (queue, dir) = test_queue();
-        queue.task("a");
+        queue.ticket("a");
         queue.emit(
             "TICKET-1",
             "alice",
@@ -1968,7 +1989,7 @@ mod tests {
     #[tokio::test]
     async fn finish_returns_once_the_matching_ticket_resolves() {
         let (queue, _tmp) = test_queue();
-        let key = queue.task("work");
+        let key = queue.ticket("work");
         let writer = Arc::clone(&queue);
         let claimed = key.clone();
         tokio::spawn(async move {
@@ -1983,7 +2004,7 @@ mod tests {
     #[tokio::test]
     async fn finish_returns_without_an_event_when_nothing_matches_yet() {
         let (queue, _tmp) = test_queue();
-        let key = queue.task("work");
+        let key = queue.ticket("work");
         attach_done_result(&queue, &key, "done");
         // Nothing emits from here on, so only the check before the wait can
         // resolve this.
@@ -1997,7 +2018,7 @@ mod tests {
     fn message_editor_receives_buffered_events_excluding_text_chunks() {
         use crate::event::ToolFailureKind;
         let (queue, _tmp) = test_queue();
-        let key = queue.task("go");
+        let key = queue.ticket("go");
 
         let seen: Arc<Mutex<Vec<Event>>> = Arc::new(Mutex::new(Vec::new()));
         let recorder = Arc::clone(&seen);
@@ -2040,7 +2061,7 @@ mod tests {
     #[test]
     fn message_editor_batch_drains_after_it_runs() {
         let (queue, _tmp) = test_queue();
-        let key = queue.task("go");
+        let key = queue.ticket("go");
 
         let runs = Arc::new(Mutex::new(0u32));
         let counter = Arc::clone(&runs);
@@ -2062,7 +2083,7 @@ mod tests {
     fn a_second_reply_editor_replaces_the_first() {
         use crate::agents::tickets::ReplyContent;
         let (queue, _tmp) = test_queue();
-        let key = queue.task("go");
+        let key = queue.ticket("go");
         queue.edit_replies_on_event(|_events, replies| {
             replies.push(Reply::user_text("first"));
         });
@@ -2096,8 +2117,8 @@ mod tests {
     #[test]
     fn message_editor_sees_only_the_events_of_the_ticket_it_edits() {
         let (queue, _tmp) = test_queue();
-        let a = queue.task("a");
-        let b = queue.task("b");
+        let a = queue.ticket("a");
+        let b = queue.ticket("b");
 
         let seen: Arc<Mutex<Vec<Event>>> = Arc::new(Mutex::new(Vec::new()));
         let recorder = Arc::clone(&seen);
@@ -2123,7 +2144,7 @@ mod tests {
     fn edit_replies_edits_the_transcript_on_demand() {
         use crate::agents::tickets::ReplyContent;
         let (queue, _tmp) = test_queue();
-        let key = queue.task("go");
+        let key = queue.ticket("go");
         queue.add_reply(&key, Reply::user_text("keep me"));
         queue.add_reply(&key, Reply::user_text("drop me"));
 
@@ -2175,7 +2196,7 @@ mod tests {
                 .unwrap()
                 .push((event.kind.name(), ticket.key.clone()))
         });
-        let key = queue.task("work");
+        let key = queue.ticket("work");
 
         queue.emit(&key, "agent", EventKind::TurnStarted);
         queue.emit(
@@ -2208,7 +2229,7 @@ mod tests {
                 .is_none()
                 .then(|| Ticket::new(failed.task.clone()).parent(&failed.key))
         });
-        let key = queue.task("work");
+        let key = queue.ticket("work");
 
         queue.set_failed(&key).unwrap();
 
@@ -2225,11 +2246,14 @@ mod tests {
             matches!(event.kind, EventKind::TurnStarted)
                 .then(|| Ticket::new("report").label("report"))
         });
-        let key = queue.task("work");
+        let key = queue.ticket("work");
 
         queue.emit(&key, "agent", EventKind::TurnStarted);
 
-        assert_eq!(queue.find_tickets(|t: &Ticket| t.has_label("report")).len(), 1);
+        assert_eq!(
+            queue.find_tickets(|t: &Ticket| t.has_label("report")).len(),
+            1
+        );
     }
 
     #[test]
@@ -2244,7 +2268,10 @@ mod tests {
                 .then(|| Ticket::new("hunt").label("sniper"))
         });
         queue.emit(&key, "agent", EventKind::TicketFinished);
-        assert_eq!(queue.find_tickets(|t: &Ticket| t.has_label("sniper")).len(), 1);
+        assert_eq!(
+            queue.find_tickets(|t: &Ticket| t.has_label("sniper")).len(),
+            1
+        );
     }
 
     #[test]
@@ -2258,7 +2285,9 @@ mod tests {
             Some(Ticket::new("hunt").label("sniper").parent(&done.key))
         });
         queue.emit(&key, "agent", EventKind::TicketFinished);
-        let spawned = queue.find_ticket(|t: &Ticket| t.has_label("sniper")).unwrap();
+        let spawned = queue
+            .find_ticket(|t: &Ticket| t.has_label("sniper"))
+            .unwrap();
         assert_eq!(spawned.parent, Some(key));
     }
 
@@ -2286,7 +2315,7 @@ mod tests {
             let record = Arc::clone(&record);
             async move { record.lock().unwrap().push((ticket.key, result)) }
         });
-        let key = queue.task("scan the corpus");
+        let key = queue.ticket("scan the corpus");
         queue.set_finished(&key, "clean").unwrap();
 
         queue.finish_all().await;
@@ -2308,7 +2337,7 @@ mod tests {
                 async move { record.lock().unwrap().push(name) }
             });
         }
-        let key = queue.task("scan the corpus");
+        let key = queue.ticket("scan the corpus");
         queue.set_finished(&key, "clean").unwrap();
 
         queue.finish_all().await;
@@ -2336,7 +2365,7 @@ mod tests {
                 });
             }
         });
-        let key = queue.task("scan the corpus");
+        let key = queue.ticket("scan the corpus");
         queue.set_finished(&key, "clean").unwrap();
 
         queue.finish_all().await;
@@ -2361,8 +2390,8 @@ mod tests {
                 }
             }
         });
-        let first = queue.task("scan the first half");
-        let second = queue.task("scan the second half");
+        let first = queue.ticket("scan the first half");
+        let second = queue.ticket("scan the second half");
         queue.set_finished(&first, "clean").unwrap();
         queue.set_finished(&second, "clean").unwrap();
 
@@ -2387,8 +2416,8 @@ mod tests {
                 record.lock().unwrap().push(format!("end {}", ticket.key));
             }
         });
-        let first = queue.task("scan the first half");
-        let second = queue.task("scan the second half");
+        let first = queue.ticket("scan the first half");
+        let second = queue.ticket("scan the second half");
         queue.set_finished(&first, "clean").unwrap();
         queue.set_finished(&second, "clean").unwrap();
 
@@ -2414,8 +2443,8 @@ mod tests {
             let record = Arc::clone(&record);
             async move { record.lock().unwrap().push(results) }
         });
-        let first = queue.task("scan the first half");
-        let second = queue.task("scan the second half");
+        let first = queue.ticket("scan the first half");
+        let second = queue.ticket("scan the second half");
         queue.set_finished(&first, 1).unwrap();
         queue.set_finished(&second, 4).unwrap();
 
@@ -2444,7 +2473,7 @@ mod tests {
             let all = Arc::clone(&all);
             async move { all.lock().unwrap().push(format!("all {}", results.len())) }
         });
-        let key = queue.task("scan the corpus");
+        let key = queue.ticket("scan the corpus");
         queue.set_finished(&key, 1).unwrap();
 
         queue.finish_all().await;
@@ -2462,7 +2491,7 @@ mod tests {
             let record = Arc::clone(&record);
             async move { record.lock().unwrap().push(ticket.key) }
         });
-        let key = queue.task("scan the corpus");
+        let key = queue.ticket("scan the corpus");
 
         queue.set_finished(&key, "clean").unwrap();
         assert!(seen.lock().unwrap().is_empty());
@@ -2480,7 +2509,7 @@ mod tests {
             let record = Arc::clone(&record);
             async move { record.lock().unwrap().push(ticket.key) }
         });
-        let key = queue.task("scan the corpus");
+        let key = queue.ticket("scan the corpus");
         queue.set_failed(&key).unwrap();
 
         queue.finish_all().await;
@@ -2532,10 +2561,15 @@ mod tests {
         let scans = scans(&queue, 2);
 
         queue.set_finished(&scans[0], "clean").unwrap();
-        assert!(queue.find_tickets(|t: &Ticket| t.has_label("report")).is_empty());
+        assert!(queue
+            .find_tickets(|t: &Ticket| t.has_label("report"))
+            .is_empty());
 
         queue.set_finished(&scans[1], "clean").unwrap();
-        assert_eq!(queue.find_tickets(|t: &Ticket| t.has_label("report")).len(), 1);
+        assert_eq!(
+            queue.find_tickets(|t: &Ticket| t.has_label("report")).len(),
+            1
+        );
     }
 
     #[test]

@@ -18,7 +18,7 @@
 //!     .tool(GrepTool)
 //!     .build();
 //!
-//! agent.task("Find every `pub trait` defined under src/ and explain each in one sentence.");
+//! agent.ticket("Find every `pub trait` defined under src/ and explain each in one sentence.");
 //! let work = agent.start();
 //! let result = work.finish_last().await.unwrap();
 //!
@@ -50,7 +50,7 @@
 //!     "https://canvascomputing.org/products",
 //!     "https://canvascomputing.org/blog",
 //! ] {
-//!     tickets.ticket(Ticket::new(format!("Summarize {url}")).label("research"));
+//!     tickets.ticket(Ticket::labeled("research", format!("Summarize {url}")));
 //! }
 //!
 //! tickets.finish_all().await;
