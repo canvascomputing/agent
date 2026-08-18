@@ -20,7 +20,7 @@ crates/
 **One file per bound concept, mirroring the library. Naming rules live in [style.md](style.md).**
 
 - `src/lib.rs` is the `#[pymodule]` and registers every class and function. `agent.rs`, `ticket.rs`, `ticket_queue.rs`, `reply.rs`, `trajectory.rs`, `knowledge.rs`, `schema.rs`, `event.rs`, `providers.rs`, and `tools.rs` each bind the library module of the same name.
-- `src/convert.rs` holds the only JSON boundary: `py_to_value` and `value_to_py` over `pythonize`, plus `runtime_error`.
+- `src/convert.rs` holds the only JSON boundary: `py_to_value` and `value_to_py` over `pythonize`, plus `py_to_text` for a prompt argument and `runtime_error`.
 - The compiled extension is `_agentwerk`. `python/agentwerk/__init__.py` re-exports it and holds the `@tool` decorator, the one piece of pure-Python logic. `__init__.pyi` declares the surface and MUST match the module, which `tests/test_parity.py` enforces.
 - The root `INVENTORY.md` lists every declaration of both crates, Rust rows next to Python rows. A binding missing from it, or a divergence its cells do not state, is a bug in one of the two.
 - The crate is a workspace member but not a default member: `cargo build` and `cargo test` skip it because it links against a Python interpreter. Its commands live in [workflow.md](workflow.md).
@@ -84,7 +84,8 @@ crates/
 **Composable prompt assembly and JSON-Schema validation.**
 
 - `prompts/builder.rs` and `prompts/section.rs` hold `PromptBuilder` and `Section`, which assemble role and knowledge blocks.
-- `prompts/directives.rs` holds `Directive`, the key namespace, the crate-private `DirectiveStore` carrying the function an agent decides its text with, and one `directives!` block declaring every key as a constant and an `ALL` entry. The text lives in `prompts/directives/*.md`, one file per area, each entry under a `## key` heading; a test pairs every key with its heading. It is the only public part of `prompts`, and reaches the caller as the root re-export `agentwerk::Directive`.
+- `prompts/directives.rs` holds `Directive`, the key namespace, the crate-private `DirectiveStore` carrying the function an agent decides its text with, and one `directives!` block declaring every key as a constant and an `ALL` entry. The text lives in `prompts/directives/*.md`, one file per area, each entry under a `## key` heading; a test pairs every key with its heading. It reaches the caller as the root re-export `agentwerk::Directive`.
+- `prompts/text.rs` holds `Text`, the text a role, a description, or a task is set from, reading a file where the caller names a path. It reaches the caller as the root re-export `agentwerk::Text`.
 - `schemas/mod.rs` holds `Schema`, `SchemaParseError`, and `SchemaViolation`.
 - `schemas/store.rs` holds `SchemaStore`, the label-keyed store a `TicketQueue` reads on each claim. It sits beside the compiler rather than inside it: binding a contract to a label is a separate concern from validating one.
 

@@ -7,7 +7,7 @@
 use agentwerk::{Query, Status, Ticket};
 use pyo3::prelude::*;
 
-use crate::convert::{py_to_value, value_to_py};
+use crate::convert::{py_to_text, py_to_value, value_to_py};
 use crate::schema::PySchema;
 
 /// Selects tickets by field values.
@@ -79,12 +79,18 @@ pub fn as_query(py: Python<'_>, arg: &Py<PyAny>) -> PyResult<Query> {
         .ok_or_else(|| pyo3::exceptions::PyTypeError::new_err("expected a Query or a label string"))
 }
 
-/// Read a Python argument as a ticket: a `Ticket`, or any value as the task.
+/// Read a Python argument as a ticket: a `Ticket`, an `os.PathLike` naming the
+/// file holding the task, or any value as the task itself.
+///
+/// A `str` stays the task, since a task naming a file is still a task.
 pub fn to_ticket(arg: &Bound<'_, PyAny>) -> PyResult<Ticket> {
-    match arg.extract::<PyRef<'_, PyTicket>>() {
-        Ok(ticket) => Ok(ticket.to_ticket()),
-        Err(_) => Ok(Ticket::new(py_to_value(arg)?)),
+    if let Ok(ticket) = arg.extract::<PyRef<'_, PyTicket>>() {
+        return Ok(ticket.to_ticket());
     }
+    if arg.hasattr("__fspath__")? {
+        return Ok(Ticket::new(py_to_text(arg)?));
+    }
+    Ok(Ticket::new(py_to_value(arg)?))
 }
 
 /// A `Ticket` is a task plus what assigns and validates it.

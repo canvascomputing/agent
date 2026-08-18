@@ -160,7 +160,7 @@ async fn seeker_pool_finds_planted_indicators(
             Agent::new()
                 .provider(provider.clone())
                 .model(&model)
-                .role(SEEKER_AGENT.trim())
+                .role(SEEKER_AGENT)
                 .template("instruction", "")
                 .label(SEEKER_LABEL)
                 .dir(root.to_path_buf())

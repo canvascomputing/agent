@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use crate::persistence::Persist;
+use crate::prompts::Text;
 use crate::providers::{AsUserMessage, Message};
 
 use super::reply::{Author, Reply, ReplyContent};
@@ -223,6 +224,26 @@ impl From<serde_json::Value> for Ticket {
     }
 }
 
+/// The file holds the task. `Ticket::new(file)` stores the path itself, since
+/// there the value passed is the task.
+impl From<&Path> for Ticket {
+    fn from(file: &Path) -> Self {
+        Ticket::new(Text::from(file).into_string())
+    }
+}
+
+impl From<PathBuf> for Ticket {
+    fn from(file: PathBuf) -> Self {
+        Self::from(file.as_path())
+    }
+}
+
+impl From<&PathBuf> for Ticket {
+    fn from(file: &PathBuf) -> Self {
+        Self::from(file.as_path())
+    }
+}
+
 impl crate::persistence::Persist for Ticket {
     type Key = String;
 
@@ -418,6 +439,17 @@ mod tests {
         );
         assert_eq!(
             Ticket::from("Audit src/db.".to_string()).task,
+            serde_json::json!("Audit src/db.")
+        );
+    }
+
+    #[test]
+    fn a_path_converts_into_a_ticket_carrying_the_file_as_the_task() {
+        let dir = crate::test_util::TempDir::new().unwrap();
+        let file = dir.path().join("task.md");
+        std::fs::write(&file, "Audit src/db.\n").unwrap();
+        assert_eq!(
+            Ticket::from(file.as_path()).task,
             serde_json::json!("Audit src/db.")
         );
     }

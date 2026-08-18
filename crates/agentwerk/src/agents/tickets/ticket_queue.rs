@@ -1133,7 +1133,8 @@ impl TicketQueue {
 
     /// Submit a task and return its ticket key.
     ///
-    /// A string is the task itself. A [`Ticket`] carries a custom label or
+    /// A string is the task itself, and a `&Path` or `PathBuf` names the file
+    /// holding it. A [`Ticket`] carries a custom label or
     /// schema with it. Key, reporter, creation time, status, and result are set
     /// at insertion and overwrite whatever the ticket carried. A label decides
     /// which agents may claim it, so give an agent a label of its own to
