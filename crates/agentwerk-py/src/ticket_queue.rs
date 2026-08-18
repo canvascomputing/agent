@@ -4,9 +4,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use agentwerk::agents::tickets::{Reply, TicketMatcher};
+use agentwerk::agents::tickets::Reply;
 use agentwerk::event::Event;
-use agentwerk::{Query, Ticket, TicketQueue};
+use agentwerk::{Ticket, TicketQueue};
 use pyo3::prelude::*;
 use serde_json::Value;
 
@@ -16,7 +16,7 @@ use crate::convert::{py_to_value, runtime_error, value_to_py};
 use crate::event::{to_py_event, PyEvent};
 use crate::reply::{py_to_replies, replies_to_py};
 use crate::schema::PySchemaStore;
-use crate::ticket::{try_extract_query, PyTicket};
+use crate::ticket::{as_query, to_ticket, try_extract_query, PyTicket};
 
 /// The core data structure of agentwerk, coordinating complex work across
 /// agents.
@@ -49,13 +49,11 @@ impl PyTicketQueue {
     }
 
     /// Submit a task and return its ticket key.
-    fn task(slf: PyRef<'_, Self>, task: &Bound<'_, PyAny>) -> PyResult<String> {
-        Ok(slf.inner.task(py_to_value(task)?))
-    }
-
-    /// Submit a `Ticket` with a custom label or schema, and return its key.
-    fn ticket(slf: PyRef<'_, Self>, ticket: PyRef<'_, PyTicket>) -> String {
-        slf.inner.ticket(ticket.to_ticket())
+    ///
+    /// A string is the task itself. A `Ticket` carries a custom label or
+    /// schema with it.
+    fn ticket(slf: PyRef<'_, Self>, ticket: &Bound<'_, PyAny>) -> PyResult<String> {
+        Ok(slf.inner.ticket(to_ticket(ticket)?))
     }
 
     /// Add a reply to a ticket, which drives its next turn.
@@ -688,28 +686,28 @@ impl PyTicketQueue {
             .collect()
     }
 
-    /// Get every result whose ticket matches the Query, in creation order.
-    /// Status defaults to `"finished"`.
+    /// Get every result whose ticket matches the Query or label, in creation
+    /// order. Status defaults to `"finished"`.
     fn find_results<'py>(
         &self,
         py: Python<'py>,
-        query: PyRef<'_, crate::ticket::PyQuery>,
+        query: Py<PyAny>,
     ) -> PyResult<Vec<Bound<'py, PyAny>>> {
         self.inner
-            .find_results(query.inner.clone())
+            .find_results(as_query(py, &query)?)
             .iter()
             .map(|value| value_to_py(py, value))
             .collect()
     }
 
-    /// Get the earliest result whose ticket matches the Query.
+    /// Get the earliest result whose ticket matches the Query or label.
     /// Status defaults to `"finished"`.
     fn find_result<'py>(
         &self,
         py: Python<'py>,
-        query: PyRef<'_, crate::ticket::PyQuery>,
+        query: Py<PyAny>,
     ) -> PyResult<Option<Bound<'py, PyAny>>> {
-        match self.inner.find_result(query.inner.clone()) {
+        match self.inner.find_result(as_query(py, &query)?) {
             Some(value) => Ok(Some(value_to_py(py, &value)?)),
             None => Ok(None),
         }

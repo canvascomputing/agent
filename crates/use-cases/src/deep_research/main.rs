@@ -141,7 +141,7 @@ fn print_research_outcome(tickets: &TicketQueue, outcome: &Outcome) {
             eprintln!(" {label}");
             eprintln!("══════════════════════════════════════════════════════════\n");
             let researched: Vec<(String, String)> = tickets
-                .find_tickets(|t| t.is_finished() && !t.has_label("report"))
+                .find_tickets(|t: &Ticket| t.is_finished() && !t.has_label("report"))
                 .iter()
                 .filter_map(|t| Some((t.key.clone(), plain_text(t.result.as_ref()?))))
                 .collect();
@@ -166,11 +166,7 @@ enum Outcome {
 /// ticket wins, an external cancel is surfaced, anything else means the
 /// chain stopped without reaching the report step.
 fn classify_outcome(tickets: &TicketQueue) -> Outcome {
-    let reported = tickets
-        .find_tickets(|t| t.is_finished() && t.has_label("report"))
-        .into_iter()
-        .filter_map(|t| t.result)
-        .next_back();
+    let reported = tickets.find_results("report").pop();
     if let Some(result) = reported {
         return Outcome::Report(result);
     }

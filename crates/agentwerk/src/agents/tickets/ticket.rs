@@ -98,6 +98,11 @@ impl Ticket {
         }
     }
 
+    /// Create a ticket carrying `task` under `label`, the pair most tickets set.
+    pub fn labeled<T: Serialize>(label: impl Into<String>, task: T) -> Self {
+        Self::new(task).label(label)
+    }
+
     /// Set the label, replacing any label already set.
     pub fn label(mut self, label: impl Into<String>) -> Self {
         self.label = Some(label.into());
@@ -195,6 +200,26 @@ impl Ticket {
             }
             _ => {}
         }
+    }
+}
+
+// A blanket impl over `Serialize` would collide with the reflexive
+// `From<Ticket>`, so the task types callers actually pass are listed.
+impl From<&str> for Ticket {
+    fn from(task: &str) -> Self {
+        Ticket::new(task)
+    }
+}
+
+impl From<String> for Ticket {
+    fn from(task: String) -> Self {
+        Ticket::new(task)
+    }
+}
+
+impl From<serde_json::Value> for Ticket {
+    fn from(task: serde_json::Value) -> Self {
+        Ticket::new(task)
     }
 }
 
@@ -376,6 +401,31 @@ mod tests {
             created_at: 0,
         });
         ticket
+    }
+
+    #[test]
+    fn labeled_carries_both_the_label_and_the_task() {
+        let ticket = Ticket::labeled("analysis", "Audit src/db.");
+        assert!(ticket.has_label("analysis"));
+        assert_eq!(ticket.task, serde_json::json!("Audit src/db."));
+    }
+
+    #[test]
+    fn a_string_converts_into_a_ticket_carrying_it_as_the_task() {
+        assert_eq!(
+            Ticket::from("Audit src/db.").task,
+            serde_json::json!("Audit src/db.")
+        );
+        assert_eq!(
+            Ticket::from("Audit src/db.".to_string()).task,
+            serde_json::json!("Audit src/db.")
+        );
+    }
+
+    #[test]
+    fn a_json_value_converts_into_a_ticket_carrying_it_as_the_task() {
+        let task = serde_json::json!({ "file": "src/db.rs" });
+        assert_eq!(Ticket::from(task.clone()).task, task);
     }
 
     #[test]

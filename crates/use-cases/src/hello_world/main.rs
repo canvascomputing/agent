@@ -24,7 +24,7 @@ async fn main() {
         .role("You are a friendly greeter who answers in one short sentence.")
         .build();
 
-    agent.task(task);
+    agent.ticket(task);
 
     let work = agent.start();
     let mut results = work.finish_all().await;

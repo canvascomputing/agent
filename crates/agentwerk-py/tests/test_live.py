@@ -12,7 +12,7 @@ pytestmark = pytest.mark.live
 
 
 async def test_runs_a_single_task_to_a_result(live_agent):
-    live_agent.task("Reply with exactly the word: pong")
+    live_agent.ticket("Reply with exactly the word: pong")
     # The reason is only announced, so the handler goes on before the run ends.
     work = live_agent.start()
     reasons = []
@@ -35,7 +35,7 @@ async def test_invokes_a_builtin_tool(tmp_path):
         .tool(aw.ReadFileTool())
         .build()
     )
-    agent.task("Read secret.txt and report the exact token it contains.")
+    agent.ticket("Read secret.txt and report the exact token it contains.")
     work = agent.start()
     assert "THE-TOKEN-IS-42" in str(await work.finish_last())
 
@@ -56,7 +56,7 @@ async def test_invokes_a_python_tool_and_records_the_file_it_opened(tmp_path):
         .tool(slurp)
         .build()
     )
-    agent.task("Read note.txt with the slurp tool and report the token it contains.")
+    agent.ticket("Read note.txt with the slurp tool and report the token it contains.")
     work = agent.start()
     opened = []
     work.on_event(
@@ -112,7 +112,7 @@ async def test_saves_the_messages_of_a_finished_ticket(tmp_path):
             captured.append((len(trajectory.messages), trajectory.model))
 
     queue.on_ticket(capture)
-    key = queue.task("Reply with exactly the word: pong")
+    key = queue.ticket("Reply with exactly the word: pong")
     await queue.finish_all()
 
     written = sorted(p.name for p in (tmp_path / "trajectories").iterdir())
@@ -141,7 +141,7 @@ async def test_an_async_compaction_editor_awaits_the_built_in_summarizer(tmp_pat
         .role("Answer in plain text. Do not call any tools.")
         .build()
     )
-    queue.task("Name one colour and say why you picked it.")
+    queue.ticket("Name one colour and say why you picked it.")
     await queue.finish_all()
 
     assert summaries, "the editor must have run and awaited the summarizer"

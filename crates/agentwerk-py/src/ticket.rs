@@ -4,7 +4,6 @@
 //! Rust sets those fields with chained methods. A Python class cannot carry a
 //! `label` method and a `label` attribute, so they are keyword arguments here.
 
-use agentwerk::agents::tickets::TicketMatcher;
 use agentwerk::{Query, Status, Ticket};
 use pyo3::prelude::*;
 
@@ -64,12 +63,28 @@ fn parse_status(s: &str) -> PyResult<Status> {
     }
 }
 
-/// Check whether a Python argument is a `Query`, and if so return a boxed
-/// matcher. Falls back to `None` so the caller can try the callable path.
+/// Read a Python argument as a query: a `Query`, or a string naming a label.
+/// Falls back to `None` so the caller can try the callable path.
 pub fn try_extract_query(py: Python<'_>, arg: &Py<PyAny>) -> Option<Query> {
-    arg.extract::<PyRef<'_, PyQuery>>(py)
-        .ok()
-        .map(|q| q.inner.clone())
+    if let Ok(query) = arg.extract::<PyRef<'_, PyQuery>>(py) {
+        return Some(query.inner.clone());
+    }
+    arg.extract::<String>(py).ok().map(Query::from)
+}
+
+/// Read a Python argument that must be a query, raising where a callable has
+/// nothing to fall back to.
+pub fn as_query(py: Python<'_>, arg: &Py<PyAny>) -> PyResult<Query> {
+    try_extract_query(py, arg)
+        .ok_or_else(|| pyo3::exceptions::PyTypeError::new_err("expected a Query or a label string"))
+}
+
+/// Read a Python argument as a ticket: a `Ticket`, or any value as the task.
+pub fn to_ticket(arg: &Bound<'_, PyAny>) -> PyResult<Ticket> {
+    match arg.extract::<PyRef<'_, PyTicket>>() {
+        Ok(ticket) => Ok(ticket.to_ticket()),
+        Err(_) => Ok(Ticket::new(py_to_value(arg)?)),
+    }
 }
 
 /// A `Ticket` is a task plus what assigns and validates it.

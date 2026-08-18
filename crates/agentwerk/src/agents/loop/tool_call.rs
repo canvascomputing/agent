@@ -517,7 +517,7 @@ mod tests {
                 .tool(boom)
                 .build(),
         );
-        tickets.task("go");
+        tickets.ticket("go");
         let _ = tickets.finish_all().await;
 
         assert_eq!(
@@ -576,7 +576,7 @@ mod tests {
                 .tool(ping)
                 .build(),
         );
-        tickets.task("go");
+        tickets.ticket("go");
         let _ = tickets.finish_all().await;
 
         assert_eq!(
@@ -634,7 +634,7 @@ mod tests {
                 .tool(slow_tool)
                 .build(),
         );
-        tickets.task("go");
+        tickets.ticket("go");
 
         let unblock = async move {
             tool_started.notified().await;
@@ -699,7 +699,7 @@ mod tests {
                 .tool(dump)
                 .build(),
         );
-        tickets.task("go");
+        tickets.ticket("go");
 
         let _ = tickets.finish_all().await;
         let events = collected.lock().unwrap().clone();
@@ -815,7 +815,7 @@ mod tests {
                 .tool(size_tool)
                 .build(),
         );
-        tickets.task("go");
+        tickets.ticket("go");
 
         let _ = tickets.finish_all().await;
         let ticket = tickets

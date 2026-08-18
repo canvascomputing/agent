@@ -14,10 +14,10 @@ use agentwerk::tools::Tool;
 use agentwerk::{Agent, Knowledge};
 use pyo3::prelude::*;
 
-use crate::convert::{py_to_value, runtime_error};
+use crate::convert::runtime_error;
 use crate::knowledge::PyKnowledge;
 use crate::providers::{PyModel, PyProvider};
-use crate::ticket::PyTicket;
+use crate::ticket::to_ticket;
 use crate::ticket_queue::PyTicketQueue;
 use crate::tools::extract_tool;
 
@@ -285,15 +285,11 @@ impl PyAgent {
 
     /// Submit a task and return its ticket key.
     ///
-    /// Call it as often as you like: one agent can drive many tickets.
-    fn task(&self, task: &Bound<'_, PyAny>) -> PyResult<String> {
-        let value = py_to_value(task)?;
-        Ok(self.built()?.task(value))
-    }
-
-    /// Submit a `Ticket` with a custom label or schema, and return its key.
-    fn ticket(&self, ticket: PyRef<'_, PyTicket>) -> PyResult<String> {
-        Ok(self.built()?.ticket(ticket.to_ticket()))
+    /// A string is the task itself. A `Ticket` carries a custom label or
+    /// schema with it. Call it as often as you like: one agent can drive many
+    /// tickets.
+    fn ticket(&self, ticket: &Bound<'_, PyAny>) -> PyResult<String> {
+        Ok(self.built()?.ticket(to_ticket(ticket)?))
     }
 
     /// Begin processing tickets, and hand back the ticket queue so results,

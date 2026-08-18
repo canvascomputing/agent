@@ -107,6 +107,43 @@ def test_find_ticket_returns_the_first_match(queue):
     assert found.task == "alpha"
 
 
+def test_find_tickets_filters_by_query(queue):
+    queue.ticket(aw.Ticket("alpha", label="a"))
+    queue.ticket(aw.Ticket("beta", label="b"))
+
+    matches = queue.find_tickets(aw.Query(label="a"))
+    assert [t.task for t in matches] == ["alpha"]
+
+
+def test_find_tickets_filters_by_label_string(queue):
+    queue.ticket(aw.Ticket("alpha", label="a"))
+    queue.ticket(aw.Ticket("beta", label="b"))
+
+    matches = queue.find_tickets("b")
+    assert [t.task for t in matches] == ["beta"]
+
+
+def test_ticket_takes_a_bare_task_without_a_ticket_object(queue):
+    key = queue.ticket("scan the corpus")
+
+    assert queue.get_ticket(key).task == "scan the corpus"
+
+
+def test_find_results_selects_by_label(queue):
+    scan = queue.ticket(aw.Ticket("scan the corpus", label="scan"))
+    report = queue.ticket(aw.Ticket("write the report", label="report"))
+    queue.set_finished(scan, {"verdict": "clean"})
+    queue.set_finished(report, {"summary": "nothing found"})
+
+    assert queue.find_results("scan") == [{"verdict": "clean"}]
+    assert queue.find_result(aw.Query(label="report")) == {"summary": "nothing found"}
+
+
+def test_find_results_rejects_a_callable(queue):
+    with pytest.raises(TypeError):
+        queue.find_results(lambda t: t.has_label("scan"))
+
+
 def test_get_ticket_returns_none_for_unknown_key(queue):
     assert queue.get_ticket("TICKET-does-not-exist") is None
 
@@ -198,7 +235,7 @@ def test_a_condition_that_raises_reads_as_no_match(queue):
     def broken(event):
         raise ValueError("boom")
 
-    queue.task("seed")
+    queue.ticket("seed")
 
     assert queue.find_events(broken) == []
     assert queue.find_event(broken) is None
@@ -208,15 +245,15 @@ def test_event_name_spells_the_kind_an_event_reports(queue):
     seen = []
     queue.on_event(lambda event: seen.append(event.kind))
 
-    queue.task("seed")
+    queue.ticket("seed")
 
     assert aw.EventName.TICKET_CREATED in seen
     assert len(queue.find_events(lambda e: e.kind == aw.EventName.TICKET_CREATED)) == 1
 
 
 def test_find_event_returns_the_earliest_match(queue):
-    queue.task("one")
-    queue.task("two")
+    queue.ticket("one")
+    queue.ticket("two")
 
     first = queue.find_event(lambda e: e.kind == aw.EventName.TICKET_CREATED)
     assert first.ticket_key == "TICKET-1"
@@ -356,7 +393,7 @@ def test_edit_replies_on_an_unstarted_ticket_is_a_no_op(queue):
 
 
 def test_edit_replies_drops_a_reply_from_a_non_empty_list(queue):
-    key = queue.task("scan the corpus")
+    key = queue.ticket("scan the corpus")
     queue.reply(key, "keep me")
     queue.reply(key, "drop me")
 
@@ -369,7 +406,7 @@ def test_edit_replies_drops_a_reply_from_a_non_empty_list(queue):
 
 
 def test_edit_replies_appends_a_reply_built_in_python(queue):
-    key = queue.task("scan the corpus")
+    key = queue.ticket("scan the corpus")
     queue.reply(key, "first")
 
     queue.edit_replies(key, lambda replies: replies + [aw.Reply.user_text("second")])
@@ -379,7 +416,7 @@ def test_edit_replies_appends_a_reply_built_in_python(queue):
 
 
 def test_edit_replies_raises_when_the_editor_raises(queue):
-    key = queue.task("scan the corpus")
+    key = queue.ticket("scan the corpus")
     queue.reply(key, "first")
 
     def editor(replies):
@@ -390,7 +427,7 @@ def test_edit_replies_raises_when_the_editor_raises(queue):
 
 
 def test_edit_replies_raises_when_the_editor_returns_dicts(queue):
-    key = queue.task("scan the corpus")
+    key = queue.ticket("scan the corpus")
     queue.reply(key, "first")
 
     with pytest.raises(RuntimeError, match="list of Reply objects"):
@@ -417,7 +454,7 @@ async def test_on_result_async_awaits_the_handler_before_finish_all_returns(queu
         seen.append((ticket.key, result))
 
     queue.on_result_async(persist)
-    key = queue.task("scan the corpus")
+    key = queue.ticket("scan the corpus")
     queue.set_finished(key, {"verdict": "clean"})
 
     await queue.finish_all()
@@ -435,8 +472,8 @@ async def test_on_result_async_finishes_one_handler_before_starting_the_next(que
         seen.append(f"end {ticket.key}")
 
     queue.on_result_async(persist)
-    first = queue.task("scan a.py")
-    second = queue.task("scan b.py")
+    first = queue.ticket("scan a.py")
+    second = queue.ticket("scan b.py")
     queue.set_finished(first, "clean")
     queue.set_finished(second, "clean")
 
@@ -458,8 +495,8 @@ async def test_on_result_async_writes_every_result_to_a_database(queue, tmp_path
         await asyncio.to_thread(insert, ticket.key, result["verdict"])
 
     queue.on_result_async(persist)
-    first = queue.task("scan a.py")
-    second = queue.task("scan b.py")
+    first = queue.ticket("scan a.py")
+    second = queue.ticket("scan b.py")
     queue.set_finished(first, {"verdict": "clean"})
     queue.set_finished(second, {"verdict": "malicious"})
 
@@ -478,8 +515,8 @@ async def test_on_results_async_hands_over_every_result_so_far(queue):
         seen.append(results)
 
     queue.on_results_async(note)
-    first = queue.task("scan a.py")
-    second = queue.task("scan b.py")
+    first = queue.ticket("scan a.py")
+    second = queue.ticket("scan b.py")
     queue.set_finished(first, "clean")
     queue.set_finished(second, "malicious")
 
@@ -495,7 +532,7 @@ async def test_on_result_async_runs_the_handler_on_the_callers_event_loop(queue)
         loops.append(asyncio.get_running_loop())
 
     queue.on_result_async(persist)
-    key = queue.task("scan the corpus")
+    key = queue.ticket("scan the corpus")
     queue.set_finished(key, "clean")
 
     await queue.finish_all()
@@ -505,7 +542,7 @@ async def test_on_result_async_runs_the_handler_on_the_callers_event_loop(queue)
 
 
 async def test_finish_hands_back_the_results_its_filter_named(queue):
-    key = queue.task("work")
+    key = queue.ticket("work")
     queue.set_finished(key, {"verdict": "clean"})
     assert await queue.finish(lambda t: t.key == key) == [{"verdict": "clean"}]
 
@@ -536,14 +573,14 @@ async def test_finish_last_is_none_when_nothing_finished(queue):
 
 async def test_a_cancelled_run_reports_its_reason(queue):
     queue.start()
-    queue.task("work")
+    queue.ticket("work")
     queue.cancel_all()
     await queue.finish_all()
     assert queue.finish_reason() == "cancelled"
 
 
 def test_assignee_is_unset_until_an_agent_claims_the_ticket(queue):
-    key = queue.task("work")
+    key = queue.ticket("work")
     assert queue.get_ticket(key).assignee is None
     assert queue.find_tickets(lambda t: t.assignee == "scout") == []
 

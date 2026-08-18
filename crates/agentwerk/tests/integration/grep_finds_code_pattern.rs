@@ -113,7 +113,7 @@ async fn finds_code_pattern_with_special_chars(
             .tool(ReadFileTool)
             .build(),
     );
-    tickets.task(format!(
+    tickets.ticket(format!(
         "Which source file in this project contains the exact code \
          `{TARGET_SIGNATURE}`? Answer with the file's path."
     ));

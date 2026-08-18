@@ -64,7 +64,7 @@ async def main():
         .build()
     )
 
-    agent.task(
+    agent.ticket(
         "Find every `pub trait` defined under src/ and explain each in one sentence."
     )
 
@@ -103,7 +103,7 @@ agent = (
     .build()
 )
 
-agent.task("Read CHANGELOG.md and summarize the entries added since the last release.")
+agent.ticket("Read CHANGELOG.md and summarize the entries added since the last release.")
 
 agent.start()
 ```
@@ -122,8 +122,7 @@ agent.start()
 | | `knowledge(store)` | Share a knowledge store with the agent. |
 | | `interactive()` | Let the agent wait for new instructions to keep a ticket in-progress. |
 | | `build()` | Create the agent. |
-| **Work** | `task(task)` | Submit a task and return its ticket key. |
-| | `ticket(ticket)` | Submit a `Ticket` with a custom label or schema. |
+| **Work** | `ticket(task)` | Submit a task, or a `Ticket` carrying a label or schema, and return its ticket key. |
 | | `start()` | Begin processing tickets. |
 | | `id` | Get the unique identifier of an agent. |
 
@@ -246,14 +245,13 @@ tickets.ticket(Ticket("Write up the ranking.", label="report"))
 | | `schemas(store)` | Enforce schemas for ticket results. |
 | | `dir(dir)` | Define where a session is stored. |
 | | `get_dir()` | Get the session directory. |
-| **Submit** | `task(task)` | Submit a task and return its ticket key. |
-| | `ticket(ticket)` | Submit a `Ticket` with a custom label or schema, and return its key. |
+| **Submit** | `ticket(task)` | Submit a task, or a `Ticket` carrying a label or schema, and return its ticket key. |
 | **Read** | `results()` | Get the result of every finished ticket, in creation order. |
-| | `find_results(query)` | Get every result whose ticket matches a `Query`. |
-| | `find_result(query)` | Get the earliest result whose ticket matches a `Query`. |
+| | `find_results(query)` | Get every result whose ticket matches a `Query` or label. |
+| | `find_result(query)` | Get the earliest result whose ticket matches a `Query` or label. |
 | | `tickets()` | Get every ticket in creation order. |
-| | `find_ticket(query)` | Get the earliest ticket matching a `Query` or callable. |
-| | `find_tickets(query)` | Get every ticket matching a `Query` or callable. |
+| | `find_ticket(query)` | Get the earliest ticket matching a `Query`, label, or callable. |
+| | `find_tickets(query)` | Get every ticket matching a `Query`, label, or callable. |
 | | `get_ticket(key)` | Get one ticket by key. |
 | **Drive** | `reply(key, content)` | Add a reply to a ticket. |
 | | `edit_replies(key, editor)` | Rewrite a ticket's replies now. |
