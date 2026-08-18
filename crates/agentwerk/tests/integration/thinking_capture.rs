@@ -17,7 +17,7 @@ use agentwerk::providers::{
 async fn test() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let (provider, default_model) = common::build_provider();
     let model = std::env::var("THINKING_MODEL")
-        .map(Model::from_name)
+        .map(Model::new)
         .unwrap_or(default_model);
 
     let request = ModelRequest {

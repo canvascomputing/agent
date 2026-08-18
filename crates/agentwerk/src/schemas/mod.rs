@@ -323,7 +323,7 @@ impl JsonType {
         }
     }
 
-    fn label(self) -> &'static str {
+    fn name(self) -> &'static str {
         match self {
             Self::Object => "object",
             Self::Array => "array",
@@ -681,7 +681,7 @@ impl Node {
                 return;
             }
             if !types.iter().any(|t| t.matches(instance)) {
-                let labels: Vec<&str> = types.iter().map(|t| t.label()).collect();
+                let labels: Vec<&str> = types.iter().map(|t| t.name()).collect();
                 let mut message = format!(
                     "expected type {}, got {}",
                     join_or(&labels),

@@ -5,7 +5,7 @@ use super::ReasoningEffort;
 
 /// Model metadata: the name plus anything we know about its capabilities.
 ///
-/// Built by [`Model::from_name`] (registry-backed) or
+/// Built by [`Model::new`] (registry-backed) or
 /// [`Model::context_window`] (explicit override). The agent loop reads
 /// `Model::context_window` to decide when a conversation needs to be
 /// shrunk before the next request.
@@ -20,7 +20,7 @@ impl Model {
     /// Build a `Model`, looking its context window up by name. An unknown name
     /// leaves `context_window` at `None`, so nothing is compacted and nothing
     /// fails.
-    pub fn from_name(name: impl Into<String>) -> Self {
+    pub fn new(name: impl Into<String>) -> Self {
         let name = name.into();
         let context_window = context_window_for(&name);
         Self {
@@ -33,7 +33,7 @@ impl Model {
     /// Build a `Model` from the environment: the name, plus the context window
     /// when `MODEL_CONTEXT_WINDOW` is set.
     pub fn from_env() -> super::ProviderResult<Self> {
-        let model = Self::from_name(super::environment::model_from_env()?);
+        let model = Self::new(super::environment::model_from_env()?);
         Ok(match super::environment::context_window_from_env() {
             Some(size) => model.context_window(size),
             None => model,
@@ -68,19 +68,19 @@ impl Model {
 
 impl From<&str> for Model {
     fn from(name: &str) -> Self {
-        Self::from_name(name)
+        Self::new(name)
     }
 }
 
 impl From<String> for Model {
     fn from(name: String) -> Self {
-        Self::from_name(name)
+        Self::new(name)
     }
 }
 
 impl From<&String> for Model {
     fn from(name: &String) -> Self {
-        Self::from_name(name.as_str())
+        Self::new(name.as_str())
     }
 }
 
@@ -147,7 +147,7 @@ fn context_window_for(name: &str) -> Option<u64> {
 
     // Qwen values are the published *native* windows; deployments that disable
     // YaRN or configure a shorter `max_model_len` should override via
-    // `Agent::model(Model::from_name(name).context_window(n))`.
+    // `Agent::model(Model::new(name).context_window(n))`.
     // Newest first so "qwen3" doesn't shadow "qwen3.5" / "qwen3.6".
     let qwen3_256k = model.contains("qwen3.6")
         || model.contains("qwen3.5")
@@ -187,36 +187,36 @@ mod tests {
     use super::*;
 
     #[test]
-    fn from_name_resolves_claude_models() {
+    fn new_resolves_claude_models() {
         assert_eq!(
-            Model::from_name("claude-sonnet-4-20250514").context_window,
+            Model::new("claude-sonnet-4-20250514").context_window,
             Some(200_000)
         );
     }
 
     #[test]
-    fn from_name_resolves_openai_models() {
-        assert_eq!(Model::from_name("gpt-5").context_window, Some(400_000));
-        assert_eq!(Model::from_name("gpt-4o").context_window, Some(128_000));
+    fn new_resolves_openai_models() {
+        assert_eq!(Model::new("gpt-5").context_window, Some(400_000));
+        assert_eq!(Model::new("gpt-4o").context_window, Some(128_000));
     }
 
     #[test]
-    fn from_name_resolves_mistral_models() {
+    fn new_resolves_mistral_models() {
         assert_eq!(
-            Model::from_name("mistral-large-2411").context_window,
+            Model::new("mistral-large-2411").context_window,
             Some(131_072)
         );
     }
 
     #[test]
-    fn from_name_unknown_has_no_context_window() {
-        assert_eq!(Model::from_name("unknown").context_window, None);
-        assert_eq!(Model::from_name("mock").context_window, None);
+    fn new_with_unknown_name_has_no_context_window() {
+        assert_eq!(Model::new("unknown").context_window, None);
+        assert_eq!(Model::new("mock").context_window, None);
     }
 
     #[test]
     fn context_window_overrides() {
-        let m = Model::from_name("unknown").context_window(50_000);
+        let m = Model::new("unknown").context_window(50_000);
         assert_eq!(m.context_window, Some(50_000));
     }
 
@@ -339,10 +339,10 @@ mod tests {
     #[test]
     fn reasoning_effort_defaults_off_and_is_settable() {
         assert_eq!(
-            Model::from_name("gpt-5").get_reasoning_effort(),
+            Model::new("gpt-5").get_reasoning_effort(),
             ReasoningEffort::Off
         );
-        let m = Model::from_name("gpt-5").reasoning_effort(ReasoningEffort::High);
+        let m = Model::new("gpt-5").reasoning_effort(ReasoningEffort::High);
         assert_eq!(m.get_reasoning_effort(), ReasoningEffort::High);
     }
 }

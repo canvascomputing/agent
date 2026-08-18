@@ -21,18 +21,18 @@ pub struct PyKnowledge {
 
 #[pymethods]
 impl PyKnowledge {
-    /// Open a knowledge store at `dir/knowledge`, or seed one from the pages
-    /// already there.
+    /// Open a knowledge store at `store_dir/knowledge`, or seed one from the
+    /// pages already there.
     #[staticmethod]
-    fn load(dir: &str) -> PyResult<Self> {
-        let inner = Knowledge::load(dir).map_err(runtime_error)?;
+    fn load(store_dir: &str) -> PyResult<Self> {
+        let inner = Knowledge::load(store_dir).map_err(runtime_error)?;
         Ok(PyKnowledge { inner })
     }
 
     /// Limit how much of the index is injected into the prompt, in characters.
     /// No write is ever refused for being too large.
-    fn index_char_limit<'py>(slf: PyRef<'py, Self>, n: usize) -> PyRef<'py, Self> {
-        slf.inner.index_char_limit(n);
+    fn index_char_limit<'py>(slf: PyRef<'py, Self>, count: usize) -> PyRef<'py, Self> {
+        slf.inner.index_char_limit(count);
         slf
     }
 

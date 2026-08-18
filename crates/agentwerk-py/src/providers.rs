@@ -37,7 +37,7 @@ impl PyModel {
     #[new]
     fn new(name: &str) -> Self {
         PyModel {
-            inner: Model::from_name(name),
+            inner: Model::new(name),
         }
     }
 

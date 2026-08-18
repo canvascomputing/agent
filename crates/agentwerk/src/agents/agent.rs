@@ -70,9 +70,9 @@ impl AgentBuilder<(), ()> {
 impl<M> AgentBuilder<(), M> {
     /// Define the LLM provider. Takes a vendor provider directly, or a
     /// [`Provider`] shared with other agents.
-    pub fn provider(self, p: impl Into<Provider>) -> AgentBuilder<Provider, M> {
+    pub fn provider(self, provider: impl Into<Provider>) -> AgentBuilder<Provider, M> {
         AgentBuilder {
-            provider: p.into(),
+            provider: provider.into(),
             model: self.model,
             role: self.role,
             label: self.label,
@@ -86,10 +86,10 @@ impl<M> AgentBuilder<(), M> {
 }
 
 impl<P> AgentBuilder<P, ()> {
-    pub fn model(self, m: impl Into<Model>) -> AgentBuilder<P, Model> {
+    pub fn model(self, model: impl Into<Model>) -> AgentBuilder<P, Model> {
         AgentBuilder {
             provider: self.provider,
-            model: m.into(),
+            model: model.into(),
             role: self.role,
             label: self.label,
             interactive: self.interactive,
@@ -114,8 +114,8 @@ impl<P, M> AgentBuilder<P, M> {
     /// unconfigured expands to nothing and shows no bullet. Leave the
     /// placeholders out and nothing is added, so the role decides both whether
     /// those facts appear and where.
-    pub fn role(mut self, r: impl Into<String>) -> Self {
-        self.role = r.into();
+    pub fn role(mut self, role: impl Into<String>) -> Self {
+        self.role = role.into();
         self
     }
 
@@ -125,9 +125,9 @@ impl<P, M> AgentBuilder<P, M> {
     /// An agent serves one label and a ticket carries one, so an agent claims
     /// a ticket when the two are equal, and every agent serving that label may
     /// claim it. Calling this twice replaces the label. The id
-    /// [`Agent::get_id`] hands back is built from it.
-    pub fn label(mut self, l: impl Into<String>) -> Self {
-        self.label = Some(l.into());
+    /// [`Agent::id`] hands back is built from it.
+    pub fn label(mut self, label: impl Into<String>) -> Self {
+        self.label = Some(label.into());
         self
     }
 
@@ -152,14 +152,14 @@ impl<P, M> AgentBuilder<P, M> {
     }
 
     /// Inject more than one entry into prompts.
-    pub fn templates<I, K, V>(mut self, vars: I) -> Self
+    pub fn templates<I, K, V>(mut self, variables: I) -> Self
     where
         I: IntoIterator<Item = (K, V)>,
         K: Into<String>,
         V: Into<String>,
     {
         self.templates
-            .extend(vars.into_iter().map(|(k, v)| (k.into(), v.into())));
+            .extend(variables.into_iter().map(|(k, v)| (k.into(), v.into())));
         self
     }
 
@@ -182,8 +182,8 @@ impl<P, M> AgentBuilder<P, M> {
     }
 
     /// Set the directory the agent has access to, the current one by default.
-    pub fn dir(mut self, p: impl Into<PathBuf>) -> Self {
-        self.dir = p.into();
+    pub fn dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.dir = dir.into();
         self
     }
 
@@ -399,7 +399,7 @@ impl Agent {
     ///
     /// [`Event::agent_id`]: crate::Event::agent_id
     /// [`Ticket::assignee`]: crate::Ticket::assignee
-    pub fn get_id(&self) -> &str {
+    pub fn id(&self) -> &str {
         &self.id
     }
 
@@ -597,24 +597,24 @@ mod tests {
     fn ids_are_numbered_per_label() {
         let first = built(Agent::new().label("ids_per_label"));
         let second = built(Agent::new().label("ids_per_label"));
-        assert_eq!(first.get_id(), "ids_per_label-1");
-        assert_eq!(second.get_id(), "ids_per_label-2");
+        assert_eq!(first.id(), "ids_per_label-1");
+        assert_eq!(second.id(), "ids_per_label-2");
     }
 
     #[test]
     fn an_unlabeled_agent_is_numbered_under_agent() {
         let agent = built(Agent::new());
         assert!(
-            agent.get_id().starts_with("agent-"),
+            agent.id().starts_with("agent-"),
             "unexpected id: {}",
-            agent.get_id()
+            agent.id()
         );
     }
 
     #[test]
     fn a_clone_keeps_the_id_of_the_agent_it_came_from() {
         let agent = built(Agent::new().label("cloned_id"));
-        assert_eq!(agent.clone().get_id(), agent.get_id());
+        assert_eq!(agent.clone().id(), agent.id());
     }
 
     /// The system prompt with no live state and a fixed ticket key.

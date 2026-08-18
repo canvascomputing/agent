@@ -103,15 +103,8 @@ pub enum ToolFailureKind {
 }
 
 impl ToolFailureKind {
-    /// Every kind, in the order they are declared.
-    pub const ALL: &'static [ToolFailureKind] = &[
-        ToolFailureKind::ToolNotFound,
-        ToolFailureKind::ExecutionFailed,
-        ToolFailureKind::SchemaValidationFailed,
-    ];
-
     /// The stable snake_case spelling, which differs from the variant name.
-    pub fn as_str(&self) -> &'static str {
+    pub fn name(&self) -> &'static str {
         match self {
             ToolFailureKind::ToolNotFound => "not_found",
             ToolFailureKind::ExecutionFailed => "execution_failed",
@@ -122,7 +115,7 @@ impl ToolFailureKind {
 
 impl fmt::Display for ToolFailureKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
+        f.write_str(self.name())
     }
 }
 
@@ -143,11 +136,8 @@ pub enum RepairKind {
 }
 
 impl RepairKind {
-    /// Every kind, in the order they are declared.
-    pub const ALL: &'static [RepairKind] = &[RepairKind::CallMalformed, RepairKind::ValueMistyped];
-
     /// The stable snake_case spelling, the one `reason` carries.
-    pub fn as_str(&self) -> &'static str {
+    pub fn name(&self) -> &'static str {
         match self {
             RepairKind::CallMalformed => "call_malformed",
             RepairKind::ValueMistyped => "value_mistyped",
@@ -157,7 +147,7 @@ impl RepairKind {
 
 impl fmt::Display for RepairKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
+        f.write_str(self.name())
     }
 }
 
@@ -174,14 +164,8 @@ pub enum KnowledgeFailureKind {
 }
 
 impl KnowledgeFailureKind {
-    /// Every kind, in the order they are declared.
-    pub const ALL: &'static [KnowledgeFailureKind] = &[
-        KnowledgeFailureKind::PageMissing,
-        KnowledgeFailureKind::StoreRefused,
-    ];
-
     /// The stable snake_case spelling, the one `reason` carries.
-    pub fn as_str(&self) -> &'static str {
+    pub fn name(&self) -> &'static str {
         match self {
             KnowledgeFailureKind::PageMissing => "page_missing",
             KnowledgeFailureKind::StoreRefused => "store_refused",
@@ -191,7 +175,7 @@ impl KnowledgeFailureKind {
 
 impl fmt::Display for KnowledgeFailureKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
+        f.write_str(self.name())
     }
 }
 
@@ -206,7 +190,8 @@ pub enum KnowledgeOp {
 }
 
 impl KnowledgeOp {
-    fn name(&self) -> &'static str {
+    /// The stable snake_case spelling, the one `op` carries.
+    pub fn name(&self) -> &'static str {
         match self {
             KnowledgeOp::Write => "write",
             KnowledgeOp::Read => "read",
@@ -401,7 +386,7 @@ pub enum EventKind {
 impl EventKind {
     /// The stable snake_case spelling of this kind, as `events.jsonl` writes it.
     pub fn name(&self) -> &'static str {
-        self.event_name().as_str()
+        self.event_name().name()
     }
 
     /// Which count this event adds to.
@@ -527,7 +512,7 @@ impl EventName {
     ];
 
     /// The stable snake_case spelling, the same one serde reads and writes.
-    pub fn as_str(&self) -> &'static str {
+    pub fn name(&self) -> &'static str {
         match self {
             EventName::RunStarted => "run_started",
             EventName::RunFinished => "run_finished",
@@ -562,7 +547,7 @@ impl EventName {
 
 impl fmt::Display for EventName {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
+        f.write_str(self.name())
     }
 }
 
@@ -826,7 +811,7 @@ pub(crate) mod tests {
         for kind in all_variants() {
             let event = kind.event_name();
             let spelled = serde_json::to_value(event).unwrap();
-            assert_eq!(spelled.as_str(), Some(event.as_str()));
+            assert_eq!(spelled.as_str(), Some(event.name()));
         }
     }
 
@@ -836,7 +821,7 @@ pub(crate) mod tests {
             let name = kind.event_name();
             let event = Event::new("agent", "TICKET-1", None, kind);
             let line = serde_json::to_value(&event).unwrap();
-            assert_eq!(line["event"].as_str(), Some(name.as_str()));
+            assert_eq!(line["event"].as_str(), Some(name.name()));
         }
     }
 }

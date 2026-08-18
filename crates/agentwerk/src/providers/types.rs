@@ -232,15 +232,8 @@ pub enum ToolDeclineKind {
 }
 
 impl ToolDeclineKind {
-    /// Every kind, in the order they are declared.
-    pub const ALL: &'static [ToolDeclineKind] = &[
-        ToolDeclineKind::OutputTruncated,
-        ToolDeclineKind::ReplyNotFinished,
-        ToolDeclineKind::AlreadyDelivered,
-    ];
-
     /// The stable snake_case spelling, the one `Event.data["reason"]` carries.
-    pub fn as_str(&self) -> &'static str {
+    pub fn name(&self) -> &'static str {
         match self {
             ToolDeclineKind::OutputTruncated => "output_truncated",
             ToolDeclineKind::ReplyNotFinished => "not_finished",
@@ -251,7 +244,7 @@ impl ToolDeclineKind {
 
 impl std::fmt::Display for ToolDeclineKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
+        f.write_str(self.name())
     }
 }
 

@@ -12,7 +12,7 @@ use crate::convert::value_to_py;
 /// Python side is built from this, so the two never carry different spellings.
 #[pyfunction]
 pub fn event_names() -> Vec<&'static str> {
-    EventName::ALL.iter().map(EventName::as_str).collect()
+    EventName::ALL.iter().map(EventName::name).collect()
 }
 
 /// An `Event` reports one thing that happened as agents work.
@@ -91,10 +91,10 @@ fn payload(kind: &EventKind) -> Value {
             reason,
             message,
         } => {
-            json!({ "tool_name": tool_name, "reason": reason.as_str(), "message": message })
+            json!({ "tool_name": tool_name, "reason": reason.name(), "message": message })
         }
         ToolCallDeclined { tool_name, reason } => {
-            json!({ "tool_name": tool_name, "reason": reason.as_str() })
+            json!({ "tool_name": tool_name, "reason": reason.name() })
         }
         ToolCallStarted {
             tool_name,

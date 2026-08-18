@@ -41,7 +41,7 @@ pub(super) async fn run(context: &mut TicketContext<'_>) -> Option<Step> {
     let response = loop {
         let outcome = {
             let provider = context.agent.provider();
-            let agent_id = context.agent.get_id().to_string();
+            let agent_id = context.agent.id().to_string();
             let ticket_key = context.ticket_key.clone();
             let ticket_queue = Arc::clone(context.ticket_queue);
             let emit_stream: Arc<dyn Fn(StreamEvent) + Send + Sync> = Arc::new(move |event| {

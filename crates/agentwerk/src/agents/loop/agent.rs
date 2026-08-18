@@ -35,7 +35,7 @@ pub(super) struct TicketContext<'a> {
 impl<'a> TicketContext<'a> {
     pub(super) fn emit(&self, kind: EventKind) -> Event {
         self.ticket_queue
-            .emit(&self.ticket_key, self.agent.get_id(), kind)
+            .emit(&self.ticket_key, self.agent.id(), kind)
     }
 
     pub(super) fn ticket(&self) -> Option<Ticket> {
@@ -56,7 +56,7 @@ impl<'a> TicketContext<'a> {
     pub(super) fn fail_ticket(&self) {
         let _ = self
             .ticket_queue
-            .set_failed_by(&self.ticket_key, self.agent.get_id());
+            .set_failed_by(&self.ticket_key, self.agent.id());
     }
 
     /// Fail the ticket because a request did not come back. Reserved for the
@@ -107,11 +107,7 @@ fn run_is_over(agent: &Agent, ticket_queue: &TicketQueue) -> bool {
     }
     let policies = ticket_queue.policies();
     if let Some((policy, limit)) = policy_violated_kind(&policies, &ticket_queue.stats) {
-        ticket_queue.emit(
-            "",
-            agent.get_id(),
-            EventKind::PolicyViolated { policy, limit },
-        );
+        ticket_queue.emit("", agent.id(), EventKind::PolicyViolated { policy, limit });
         return true;
     }
     false
@@ -129,12 +125,12 @@ fn claim<'a>(agent: &'a Agent, ticket_queue: &'a Arc<TicketQueue>) -> Option<Tic
     // other's started tickets.
     let resumable = |t: &Ticket| {
         t.status == Status::InProgress
-            && t.assignee.as_deref() == Some(agent.get_id())
+            && t.assignee.as_deref() == Some(agent.id())
             && (t.is_waiting_for_response() || !agent.is_interactive())
             && !ticket_queue.is_cancelled(t)
     };
     let ticket_key = ticket_queue
-        .claim(claimable, agent.get_id())
+        .claim(claimable, agent.id())
         .or_else(|| ticket_queue.find_ticket(resumable).map(|t| t.key.clone()))?;
     let ticket = ticket_queue.get_ticket(&ticket_key)?;
 
@@ -150,7 +146,7 @@ fn claim<'a>(agent: &'a Agent, ticket_queue: &'a Arc<TicketQueue>) -> Option<Tic
         &ticket_queue.stats,
         &ticket_key,
     );
-    let agent_id = agent.get_id();
+    let agent_id = agent.id();
 
     ticket_queue.emit(&ticket_key, agent_id, EventKind::TurnStarted);
 
@@ -225,7 +221,7 @@ fn silence_retry(context: &mut TicketContext<'_>) -> Option<Step> {
         });
         let _ = context
             .ticket_queue
-            .set_failed_by(&context.ticket_key, context.agent.get_id());
+            .set_failed_by(&context.ticket_key, context.agent.id());
         return None;
     }
     let retried = context.emit(EventKind::SchemaRetried {

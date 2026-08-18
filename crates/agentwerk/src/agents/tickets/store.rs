@@ -285,21 +285,21 @@ impl TicketQueue {
         Ok((result, repairs))
     }
 
-    /// Apply `edit` to ticket `key`'s replies now, then rewrite them
+    /// Apply `editor` to ticket `key`'s replies now, then rewrite them
     /// in place so the change survives resumption. The on-demand
     /// sibling of [`Self::edit_replies_on_event`]; triggers no request.
     /// No-op when the ticket is missing. The edit must keep the replies
     /// well-formed (matched tool_use/tool_result pairs); they are sent
     /// as-is. Leaves the task and the token accounting untouched, which
     /// is why compaction resets the usage history itself.
-    pub fn edit_replies(&self, key: &str, edit: impl FnOnce(&mut Vec<Reply>)) -> &Self {
+    pub fn edit_replies(&self, key: &str, editor: impl FnOnce(&mut Vec<Reply>)) -> &Self {
         let ticket_copy = {
             let mut store = self.tickets.lock().unwrap();
             let Some(ticket) = store.get_mut(key) else {
                 return self;
             };
             let before = ticket.replies.clone();
-            edit(&mut ticket.replies);
+            editor(&mut ticket.replies);
             // An editor that inspected without changing anything must not
             // trigger a rewrite: leave the on-disk files alone.
             if ticket.replies == before {

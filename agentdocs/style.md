@@ -55,6 +55,19 @@ InvalidRequest, UnexpectedStatus, MissingKey, RequestError               // reje
 - Struct form: `AgentError::PolicyViolated { kind, limit }`, and also when a single field name carries meaning the type alone does not.
 - Two-arm result enums use one word per variant: `Success` and `Error`, with no `is_*` predicates.
 
+## Discriminant Members
+
+**A fieldless discriminant exposes `name()`, and `Display` prints what `name()` returns.**
+
+```rust
+ToolFailureKind::ExecutionFailed.name()   // "execution_failed"
+```
+
+- `name()` returns the stable snake_case spelling, which is also what serde reads and writes.
+- No `as_str`, no `label`, and no second spelling of the same string.
+- A `pub const ALL` is added only where the crate itself enumerates the variants: `EventName`, which the Python `EventName` class is built from.
+- A variant carrying fields has no `name()`; `EventKind` reaches its through `event_name()`.
+
 ## Payload Fields
 
 **One vocabulary is used across every error type.**
@@ -77,7 +90,7 @@ InvalidRequest, UnexpectedStatus, MissingKey, RequestError               // reje
 
 **Public API fields MUST use `std::time::Duration`. The type is the unit.**
 
-- No `_ms`, `_MS`, or `_seconds` suffix on public API names.
+- No `_ms`, `_MS`, or `_seconds` suffix on public Rust API names; the Python binding takes a float `seconds` instead.
 - Internal helpers and on-the-wire JSON may use raw integers where the protocol requires it: `timeout_ms` is acceptable inside a tool input schema.
 
 ## Path Identifiers
@@ -139,7 +152,7 @@ InvalidRequest, UnexpectedStatus, MissingKey, RequestError               // reje
 
 - Example: `set_extension()`, `get_extension()`. Builder methods remain unprefixed.
 - A public method returning `bool` is `is_<state>` or `has_<thing>`. A bare past participle such as `label_cancelled` reads as a field, not a question.
-- `get_<name>` is reserved for reading back a value a builder set. A lookup by key keeps it for the `HashMap::get` sense, which is why `get_ticket(key)` stands apart from `find_ticket(matches)`.
+- `get_<name>` reads back a value a builder set where the bare noun would collide with the builder method on the same type: `TicketQueue::get_dir`, `Model::get_context_window`. A type whose builder is a separate type keeps the bare noun: `Tool::name`, `Agent::id`. A lookup by key keeps `get_` for the `HashMap::get` sense, which is why `get_ticket(key)` stands apart from `find_ticket(matches)`.
 
 ## Lifecycle
 
@@ -190,15 +203,16 @@ edit_replies(key, editor)            // act once, now
 
 ## Python Bindings
 
-**Every public Rust item has a Python counterpart of the same name. Six transforms are permitted; nothing else.**
+**Every public Rust item has a Python counterpart of the same name. The transforms below are permitted; nothing else.**
 
 - Type-state collapses: `AgentBuilder<P, M>` and `ToolBuilder<D, H>` fold into the class they build and take its name. The collapsed class validates at `build()`.
-- `Duration` becomes float seconds: the parameter keeps its name and the unit moves into the docstring.
+- `Duration` becomes a float named `seconds`, with the unit repeated in the docstring: `max_time(duration)` binds as `max_time(seconds)`. Every other parameter keeps its Rust name.
 - A fieldless enum becomes its snake_case `Display` string. That `Display` impl is the single source, so the binding never formats a variant with `{:?}`.
 - An enum whose variants carry fields becomes a class with a `kind` string, a `data` dict, and one static constructor per variant. `Event` and `ReplyContent` are the two.
 - A builder method whose name collides with a reader on the same Python class becomes a constructor keyword argument, because a Python class cannot carry both. `Ticket` needs this for `label`, `schema`, and `parent`.
 - A `&mut` editor becomes a callable that returns the replacement, or `None` to keep the current value, since Python cannot take a Rust `&mut`.
-- IMPORTANT: no `with_` prefix in either language, and no seventh transform.
+- A reader taking no argument becomes an attribute: `Agent::id()` is `agent.id`, `Ticket::key()` is `ticket.key`.
+- IMPORTANT: no `with_` prefix in either language, and no transform beyond this list.
 
 ## Free Functions
 

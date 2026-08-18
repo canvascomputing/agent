@@ -150,8 +150,8 @@ impl Knowledge {
     /// the pages that fit and names `index.md` for the rest. Page bodies are
     /// never limited. Set it on the loaded store before handing the store to any
     /// agent.
-    pub fn index_char_limit(&self, n: usize) -> &Self {
-        self.index_char_limit.store(n, Ordering::Relaxed);
+    pub fn index_char_limit(&self, count: usize) -> &Self {
+        self.index_char_limit.store(count, Ordering::Relaxed);
         self
     }
 

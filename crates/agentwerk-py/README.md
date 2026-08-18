@@ -117,7 +117,7 @@ agent.start()
 | | `label(label)` | Restrict the agent to tickets carrying this label. |
 | | `dir(dir)` | Set the directory the agent has access to. |
 | | `template(key, value)` | Inject data into prompts with template strings. |
-| | `templates(pairs)` | Inject more than one entry into prompts. |
+| | `templates(variables)` | Inject more than one entry into prompts. |
 | | `knowledge(store)` | Share a knowledge store with the agent. |
 | | `interactive()` | Let the agent wait for new instructions to keep a ticket in-progress. |
 | | `build()` | Create the agent. |
