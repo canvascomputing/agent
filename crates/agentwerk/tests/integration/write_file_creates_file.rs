@@ -9,7 +9,7 @@ use super::common;
 
 use agentwerk::event::EventName;
 use agentwerk::tools::WriteFileTool;
-use agentwerk::{Agent, TicketQueue};
+use agentwerk::{Agent, Config, TicketQueue};
 
 #[tokio::test]
 async fn creates_file_with_token() -> std::result::Result<(), Box<dyn std::error::Error>> {
@@ -21,7 +21,10 @@ async fn creates_file_with_token() -> std::result::Result<(), Box<dyn std::error
 
     let tickets = TicketQueue::new();
 
-    tickets.max_turns(10);
+    tickets.config(Config {
+        max_turns: Some(10),
+        ..Default::default()
+    });
     let agent = Agent::new()
         .provider(provider)
         .model(&model)

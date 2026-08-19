@@ -26,13 +26,13 @@ pub(super) async fn run(context: &mut TicketContext<'_>) -> Option<Step> {
         system_prompt: context.system_prompt.clone(),
         messages: ticket.to_messages(),
         tools,
-        max_request_tokens: context.policies.max_request_tokens,
+        max_request_tokens: context.config.max_request_tokens,
         reasoning_effort: context.model.get_reasoning_effort(),
     };
 
     let mut retry = ExponentialRetry::new(
-        context.policies.request_retry_delay,
-        context.policies.max_request_retries,
+        context.config.request_retry_delay,
+        context.config.max_request_retries,
     );
     let response = loop {
         let outcome = {
@@ -130,6 +130,7 @@ pub(super) async fn run(context: &mut TicketContext<'_>) -> Option<Step> {
 mod tests {
     use std::time::Duration;
 
+    use crate::agents::config::Config;
     use crate::agents::r#loop::test_util::*;
     use crate::agents::tickets::Status;
 
@@ -396,8 +397,11 @@ mod tests {
         let tickets = TicketQueue::new();
         tickets
             .dir(results_dir.path().to_path_buf())
-            .max_request_retries(3)
-            .request_retry_delay(Duration::from_millis(1));
+            .config(Config {
+                max_request_retries: 3,
+                request_retry_delay: Duration::from_millis(1),
+                ..Default::default()
+            });
         tickets.on_event(move |_, e| handler(e));
         tickets.agent(
             Agent::new()
@@ -460,8 +464,11 @@ mod tests {
         let tickets = TicketQueue::new();
         tickets
             .dir(results_dir.path().to_path_buf())
-            .max_request_retries(3)
-            .request_retry_delay(Duration::from_secs(60));
+            .config(Config {
+                max_request_retries: 3,
+                request_retry_delay: Duration::from_secs(60),
+                ..Default::default()
+            });
         tickets.on_event(move |_, e| handler(e));
         tickets.agent(
             Agent::new()
@@ -527,10 +534,13 @@ mod tests {
         let tickets = TicketQueue::new();
         tickets
             .dir(results_dir.path().to_path_buf())
-            .max_request_retries(0)
-            .request_retry_delay(Duration::from_millis(1))
-            .max_schema_retries(10)
-            .max_time(Duration::from_millis(500));
+            .config(Config {
+                max_request_retries: 0,
+                request_retry_delay: Duration::from_millis(1),
+                max_schema_retries: Some(10),
+                max_time: Some(Duration::from_millis(500)),
+                ..Default::default()
+            });
         if let Some(handler) = handler {
             tickets.on_event(handler);
         }

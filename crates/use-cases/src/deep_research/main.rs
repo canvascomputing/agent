@@ -346,8 +346,8 @@ fn log_event(event: &Event) {
                 truncate(message, 110)
             );
         }
-        EventKind::PolicyViolated { policy, limit } => {
-            eprintln!("│  ⚠ policy: {policy:?} limit={limit}");
+        EventKind::ConfigViolated { config, limit } => {
+            eprintln!("│  ⚠ config: {config:?} limit={limit}");
         }
         EventKind::TicketFinished => {
             eprintln!("└─ ✓ finished {key}");

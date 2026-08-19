@@ -21,7 +21,7 @@ Signatures use one language-independent notation, so a Rust row and a Python row
 - `Arc<T>`, `Box<T>`, `Rc<T>`, `Mutex<T>`, `RwLock<T>`, and `&T` unwrap to `T`. Every other wrapper keeps its name: `Weak<TicketQueue>`, `Sender<Event>`, `JoinHandle<void>`.
 - A callback becomes an arrow: `Arc<dyn Fn(&Event) + Send + Sync>` is `(event: Event) => void`.
 - A generic bound erases to what the caller passes: `T: Serialize` is `json`. A type's own parameters stay: `AgentBuilder<P, M>`, `ProviderResult<T>`.
-- Domain type names stay as the code writes them: `Ticket`, `Event`, `Status`, `PolicyKind`.
+- Domain type names stay as the code writes them: `Ticket`, `Event`, `Status`, `ConfigViolation`.
 - A constant shows `= value` when the value is one scalar or short string, and nothing when it is longer or computed.
 - Names are never re-cased: `is_todo`, never `isTodo`. Every name here is greppable in `src/`.
 
@@ -106,8 +106,8 @@ The rules the tables never repeat.
 | Rust | `Agent.knowledge(): Knowledge` | super |
 | Rust | `Agent.directives(): DirectiveStore` | super |
 | Rust | `Agent.dir(): string` | super |
-| Rust | `Agent.system_prompt(knowledge: string?, policies: Policies, stats: Stats, ticket_key: string): string` | super |
-| Rust | `Agent.expand_context(role: string, policies: Policies, stats: Stats, ticket_key: string): string` | private |
+| Rust | `Agent.system_prompt(knowledge: string?, config: Config, stats: Stats, ticket_key: string): string` | super |
+| Rust | `Agent.expand_context(role: string, config: Config, stats: Stats, ticket_key: string): string` | private |
 | Rust | `Agent.interpolate(s: string): string` | private |
 | both | `Agent.ticket(ticket: Ticket): string` | pub |
 | both | `Agent.ticket(task)`: a string or json value stands in for the `Ticket` | |
@@ -118,14 +118,13 @@ The rules the tables never repeat.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `DEFAULT_COMPACT_AT: number = 0.85` | private |
-| Rust | `compaction_threshold(window: number?, compact_at: number?): number?` | crate |
+| Rust | `compaction_token_threshold(window: number?, fraction: number?): number?` | crate |
 | Rust | `estimate_next_request_tokens(history: TokenUsage[], messages: Message[], system_prompt: string, tools: Tool[]): number` | crate |
 | Rust | `next_delta(history: TokenUsage[]): number` | private |
 | Rust | `message_bytes(message: Message): number` | private |
 | Rust | `block_bytes(block: ContentBlock): number` | private |
 | Rust | `tool_bytes(tool: Tool): number` | private |
-| Rust | `should_compact_proactively(window: number?, compact_at: number?, history: TokenUsage[], messages: Message[], system_prompt: string, tools: Tool[]): boolean` | crate |
+| Rust | `should_compact_proactively(window: number?, fraction: number?, history: TokenUsage[], messages: Message[], system_prompt: string, tools: Tool[]): boolean` | crate |
 | Rust | `Compaction { provider: Provider, model: string, window: number?, on_progress: (completed: number, total: number) => void, directives: DirectiveStore }` | crate |
 | Rust | `Compaction.new(provider: Provider, model: string, window: number?, on_progress: (completed: number, total: number) => void, directives: DirectiveStore): Compaction` | crate |
 | Rust | `Compaction.window(): number?` | crate |
@@ -135,6 +134,19 @@ The rules the tables never repeat.
 | Rust | `chunks_within(messages: Message[], max_tokens_per_chunk: number): Message[][]` | private |
 | Rust | `split_in_half(message: Message): Message[]?` | private |
 | Rust | `find_split_index(text: string, target: number): number` | private |
+
+## `crates/agentwerk/src/agents/config.rs`
+
+| Language | Item | Visibility |
+|----------|------|------------|
+| Rust | `Config { max_turns: number?, max_input_tokens: number?, max_output_tokens: number?, max_request_tokens: number?, max_schema_retries: number?, max_request_retries: number, request_retry_delay: number, max_time: number?, compaction_threshold: number? }` | pub |
+| Python | `Config(*, max_turns=None, ..., compaction_threshold=None)`: keyword-only, `max_time` and `request_retry_delay` in seconds, and a field left out takes its default rather than meaning "no limit" | |
+| Rust | `Config.DEFAULT_MAX_SCHEMA_RETRIES: number = 10` | pub |
+| Rust | `Config.DEFAULT_MAX_REQUEST_RETRIES: number = 10` | pub |
+| Rust | `Config.DEFAULT_REQUEST_RETRY_DELAY: number = 500` | pub |
+| Rust | `Config.DEFAULT_COMPACTION_THRESHOLD: number = 0.85` | pub |
+| Python | not bound: read the field back through `TicketQueue.get_config()` | |
+| Rust | `impl Default for Config` | pub |
 
 ## `crates/agentwerk/src/agents/knowledge.rs`
 
@@ -200,7 +212,7 @@ The rules the tables never repeat.
 | Language | Item | Visibility |
 |----------|------|------------|
 | Rust | `RESUME_OR_FINISH_DETAIL: string` | private |
-| Rust | `TicketContext { agent: Agent, model: Model, ticket_queue: TicketQueue, run: Run, ticket_key: string, system_prompt: string, policies: Policies, tools: ToolRegistry, consecutive_schema_failures: number }` | super |
+| Rust | `TicketContext { agent: Agent, model: Model, ticket_queue: TicketQueue, run: Run, ticket_key: string, system_prompt: string, config: Config, tools: ToolRegistry, consecutive_schema_failures: number }` | super |
 | Rust | `TicketContext.emit(kind: EventKind): Event` | super |
 | Rust | `TicketContext.ticket(): Ticket?` | super |
 | Rust | `TicketContext.retry_directive(detail: string, event: Event): string` | super |
@@ -253,20 +265,23 @@ The rules the tables never repeat.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `mod agent`, `mod knowledge`, `mod loop`, `mod tickets` | pub |
+| Rust | `mod agent`, `mod config`, `mod knowledge`, `mod loop`, `mod tickets` | pub |
 | Rust | `mod compaction` | crate |
-| Rust | `mod policy`, `mod retry`, `mod stats` | crate |
-| Rust | re-exports `Agent`, `AgentBuilder`, `Knowledge`, `Query`, `Reply`, `Status`, `Ticket`, `TicketError`, `TicketQueue`, `Trajectory` | pub |
+| Rust | `mod retry`, `mod stats` | crate |
+| Rust | re-exports `Agent`, `AgentBuilder`, `Config`, `Knowledge`, `Query`, `Reply`, `Status`, `Ticket`, `TicketError`, `TicketQueue`, `Trajectory` | pub |
 
-## `crates/agentwerk/src/agents/policy.rs`
+## `crates/agentwerk/src/agents/config.rs`
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `Policies { max_turns: number?, max_input_tokens: number?, max_output_tokens: number?, max_request_tokens: number?, max_schema_retries: number?, max_request_retries: number, request_retry_delay: number, max_time: number?, compact_at: number? }` | crate |
-| Rust | `Policies.DEFAULT_MAX_SCHEMA_RETRIES: number = 10` | crate |
-| Rust | `Policies.DEFAULT_MAX_REQUEST_RETRIES: number = 10` | crate |
-| Rust | `Policies.DEFAULT_REQUEST_RETRY_DELAY: number = 500` | crate |
-| Rust | `impl Default for Policies` | crate |
+| Rust | `Config { max_turns: number?, max_input_tokens: number?, max_output_tokens: number?, max_request_tokens: number?, max_schema_retries: number?, max_request_retries: number, request_retry_delay: number, max_time: number?, compaction_threshold: number? }` | pub |
+| Python | `Config(*, max_turns=None, ..., compaction_threshold=None)`: keyword-only, `max_time` and `request_retry_delay` in seconds, and a field left out takes its default rather than meaning "no limit" | |
+| Rust | `Config.DEFAULT_MAX_SCHEMA_RETRIES: number = 10` | pub |
+| Rust | `Config.DEFAULT_MAX_REQUEST_RETRIES: number = 10` | pub |
+| Rust | `Config.DEFAULT_REQUEST_RETRY_DELAY: number = 500` | pub |
+| Rust | `Config.DEFAULT_COMPACTION_THRESHOLD: number = 0.85` | pub |
+| Python | not bound: read the field back through `TicketQueue.get_config()` | |
+| Rust | `impl Default for Config` | pub |
 
 ## `crates/agentwerk/src/agents/retry.rs`
 
@@ -316,7 +331,7 @@ The rules the tables never repeat.
 |----------|------|------------|
 | Rust | `mod error`, `mod query`, `mod reply`, `mod store`, `mod ticket`, `mod ticket_queue`, `mod trajectory` | private |
 | Rust | re-exports `Author`, `Query`, `Reply`, `ReplyContent`, `Status`, `Ticket`, `TicketError`, `TicketMatcher`, `TicketQueue`, `Trajectory` | pub |
-| Rust | `policy_violated_kind(policies: Policies, stats: Stats): [PolicyKind, number]?` | crate |
+| Rust | `config_violated(config: Config, stats: Stats): [ConfigViolation, number]?` | crate |
 | Rust | `now_millis(): number` | crate |
 | Rust | `numeric_id(key: string): number` | crate |
 
@@ -505,7 +520,7 @@ The rules the tables never repeat.
 | Rust | `Run.until_draining(): Promise<void>` | crate |
 | Rust | `Run.until_finished(): Promise<void>` | crate |
 | Rust | `Run.reset(): void` | private |
-| Rust | `TicketQueue { weak_self: Weak<TicketQueue>, tickets: Record<string, Ticket>, agents: Agent[], policies: Policies, run: Run, cancel_filters: TicketFilter[], terminal_transitions_in_flight: number, stats: Stats, event_handlers: EventHandler[], awaited_events: AwaitedEvents, event_stream: Sender<Event>, schemas: SchemaStore?, dir: string, events_lock: void, join_handle: JoinHandle<void>?, next_ticket_id: number? }` | pub |
+| Rust | `TicketQueue { weak_self: Weak<TicketQueue>, tickets: Record<string, Ticket>, agents: Agent[], config: Config, run: Run, cancel_filters: TicketFilter[], terminal_transitions_in_flight: number, stats: Stats, event_handlers: EventHandler[], awaited_events: AwaitedEvents, event_stream: Sender<Event>, schemas: SchemaStore?, dir: string, events_lock: void, join_handle: JoinHandle<void>?, next_ticket_id: number? }` | pub |
 | Python | `TicketQueue` | |
 | Rust | `TicketQueue.new(): TicketQueue` | pub |
 | Python | `TicketQueue()` | |
@@ -532,27 +547,8 @@ The rules the tables never repeat.
 | Rust | `TicketQueue.emit(key: string, agent: string, kind: EventKind): Event` | crate |
 | Rust | `TicketQueue.label_for(key: string): string?` | private |
 | both | `TicketQueue.model_for_agent(agent_id: string): string?` | pub |
-| Rust | `TicketQueue.policies(): Policies` | crate |
-| both | `TicketQueue.max_turns(count: number): TicketQueue` | pub |
-| both | `TicketQueue.max_input_tokens(count: number): TicketQueue` | pub |
-| both | `TicketQueue.max_output_tokens(count: number): TicketQueue` | pub |
-| both | `TicketQueue.max_request_tokens(count: number): TicketQueue` | pub |
-| both | `TicketQueue.max_schema_retries(count: number): TicketQueue` | pub |
-| both | `TicketQueue.max_request_retries(count: number): TicketQueue` | pub |
-| Rust | `TicketQueue.request_retry_delay(duration: number): TicketQueue` | pub |
-| Python | `TicketQueue.request_retry_delay(seconds)` | |
-| Rust | `TicketQueue.max_time(duration: number): TicketQueue` | pub |
-| Python | `TicketQueue.max_time(seconds)` | |
-| both | `TicketQueue.compact_at(fraction: number): TicketQueue` | pub |
-| both | `TicketQueue.get_max_turns(): number?` | pub |
-| both | `TicketQueue.get_max_input_tokens(): number?` | pub |
-| both | `TicketQueue.get_max_output_tokens(): number?` | pub |
-| both | `TicketQueue.get_max_request_tokens(): number?` | pub |
-| both | `TicketQueue.get_max_schema_retries(): number?` | pub |
-| both | `TicketQueue.get_max_request_retries(): number` | pub |
-| both | `TicketQueue.get_request_retry_delay(): number` | pub |
-| both | `TicketQueue.get_max_time(): number?` | pub |
-| both | `TicketQueue.get_compact_at(): number?` | pub |
+| both | `TicketQueue.config(config: Config): TicketQueue` | pub |
+| both | `TicketQueue.get_config(): Config` | pub |
 | both | `TicketQueue.dir(dir: string): TicketQueue` | pub |
 | both | `TicketQueue.get_dir(): string` | pub |
 | Rust | `TicketQueue.result_path(key: string): string` | crate |
@@ -589,7 +585,7 @@ The rules the tables never repeat.
 | both | `TicketQueue.finish_all(): Promise<json[]>` | pub |
 | both | `TicketQueue.finish_last(): Promise<json?>` | pub |
 | Rust | `TicketQueue.finish_reason(): FinishReason?` | pub |
-| Python | `TicketQueue.finish_reason(): str?`: the string it prints as, such as `policy_violated(turns)` | |
+| Python | `TicketQueue.finish_reason(): str?`: the string it prints as, such as `config_violated(turns)` | |
 | Rust | `TicketQueue.next_event_or_end(stream: Event): Promise<boolean>` | private |
 | both | `TicketQueue.results(): json[]` | pub |
 | both | `TicketQueue.find_results(matches: TicketMatcher): json[]` | pub |
@@ -735,18 +731,18 @@ Not bound, like the rest of `codegrep`.
 | Rust | `CompactReason.Proactive` | pub |
 | Rust | `CompactReason.Reactive` | pub |
 | Rust | `impl Display for CompactReason` | pub |
-| Rust | `PolicyKind` | pub |
-| Python | a string inside `Event.data`: `data["policy"]` | |
-| Rust | `PolicyKind.Turns` | pub |
-| Rust | `PolicyKind.InputTokens` | pub |
-| Rust | `PolicyKind.OutputTokens` | pub |
-| Rust | `PolicyKind.MaxSchemaRetries` | pub |
-| Rust | `PolicyKind.Time` | pub |
-| Rust | `impl Display for PolicyKind` | pub |
+| Rust | `ConfigViolation` | pub |
+| Python | a string inside `Event.data`: `data["config"]` | |
+| Rust | `ConfigViolation.Turns` | pub |
+| Rust | `ConfigViolation.InputTokens` | pub |
+| Rust | `ConfigViolation.OutputTokens` | pub |
+| Rust | `ConfigViolation.MaxSchemaRetries` | pub |
+| Rust | `ConfigViolation.Time` | pub |
+| Rust | `impl Display for ConfigViolation` | pub |
 | Rust | `FinishReason` | pub |
-| Python | a string, such as `policy_violated(turns)` | |
+| Python | a string, such as `config_violated(turns)` | |
 | Rust | `FinishReason.Drained` | pub |
-| Rust | `FinishReason.PolicyViolated(PolicyKind)` | pub |
+| Rust | `FinishReason.ConfigViolated(ConfigViolation)` | pub |
 | Rust | `FinishReason.Cancelled` | pub |
 | Rust | `impl Display for FinishReason` | pub |
 | Rust | `ToolFailureKind` | pub |
@@ -809,7 +805,7 @@ Not bound, like the rest of `codegrep`.
 | Rust | `EventKind.KnowledgeRemoved { slug: string }` | pub |
 | Rust | `EventKind.KnowledgeListed` | pub |
 | Rust | `EventKind.KnowledgeFailed { action: KnowledgeAction, reason: KnowledgeFailureKind }` | pub |
-| Rust | `EventKind.PolicyViolated { policy: PolicyKind, limit: number }` | pub |
+| Rust | `EventKind.ConfigViolated { config: ConfigViolation, limit: number }` | pub |
 | Rust | `EventKind.SchemaRetried { attempt: number, max_attempts: number, message: string }` | pub |
 | Rust | `EventKind.CompactionStarted { reason: CompactReason, total: number }` | pub |
 | Rust | `EventKind.CompactionProgress { reason: CompactReason, completed: number, total: number }` | pub |
@@ -848,7 +844,7 @@ Not bound, like the rest of `codegrep`.
 | Rust | `EventName.KnowledgeRemoved` | pub |
 | Rust | `EventName.KnowledgeListed` | pub |
 | Rust | `EventName.KnowledgeFailed` | pub |
-| Rust | `EventName.PolicyViolated` | pub |
+| Rust | `EventName.ConfigViolated` | pub |
 | Rust | `EventName.SchemaRetried` | pub |
 | Rust | `EventName.CompactionStarted` | pub |
 | Rust | `EventName.CompactionProgress` | pub |
@@ -868,7 +864,7 @@ Not bound, like the rest of `codegrep`.
 |----------|------|------------|
 | Rust | `mod agents`, `mod codegrep`, `mod event`, `mod providers`, `mod schemas`, `mod tools` | pub |
 | Rust | `mod persistence`, `mod prompts` | crate |
-| Rust | re-exports `Agent`, `AgentBuilder`, `Query`, `Reply`, `Status`, `Ticket`, `TicketQueue`, `Knowledge`, `Trajectory`, `Schema`, `SchemaStore`, `Event`, `EventKind`, `FinishReason`, `Directive`, `Text` | pub |
+| Rust | re-exports `Agent`, `AgentBuilder`, `Query`, `Reply`, `Status`, `Ticket`, `TicketQueue`, `Config`, `Knowledge`, `Trajectory`, `Schema`, `SchemaStore`, `Event`, `EventKind`, `FinishReason`, `Directive`, `Text` | pub |
 | Python | `agentwerk` exports every bound class from one flat module | |
 
 ## `crates/agentwerk/src/persistence.rs`
@@ -932,7 +928,7 @@ Not bound, except what `directives.rs` and `text.rs` re-export through it.
 | Rust | `compaction_directive(): string` | crate |
 | Rust | `schema_directive(schema: Schema): string` | crate |
 | Rust | `arguments_retry_detail(tool_name: string, violations: string, schema: json?): string` | crate |
-| Rust | `context_values(dir: string, policies: Policies, stats: Stats, ticket_key: string): [string, string][]` | crate |
+| Rust | `context_values(dir: string, config: Config, stats: Stats, ticket_key: string): [string, string][]` | crate |
 | Rust | `optional(value: string?): string` | private |
 | Rust | `render_context(values: [string, string][]): string` | crate |
 | Rust | `format_current_date(): string` | private |
@@ -1877,6 +1873,25 @@ Binds `agents/agent.rs`, whose section holds the Python spelling of each method.
 | Rust | `PyAgent.ticket(ticket: PyTicket): string throws PyErr` | python |
 | Rust | `PyAgent.start(): PyTicketQueue throws PyErr` | python |
 
+## `crates/agentwerk-py/src/config.rs`
+
+Binds `agents/config.rs`.
+
+| Language | Item | Visibility |
+|----------|------|------------|
+| Rust | `PyConfig { inner: Config }` | python |
+| Rust | `PyConfig.new(max_turns: number?, max_input_tokens: number?, max_output_tokens: number?, max_request_tokens: number?, max_schema_retries: number?, max_request_retries: number?, request_retry_delay: number?, max_time: number?, compaction_threshold: number?): PyConfig` | python |
+| Rust | `PyConfig.max_turns(): number?` | python |
+| Rust | `PyConfig.max_input_tokens(): number?` | python |
+| Rust | `PyConfig.max_output_tokens(): number?` | python |
+| Rust | `PyConfig.max_request_tokens(): number?` | python |
+| Rust | `PyConfig.max_schema_retries(): number?` | python |
+| Rust | `PyConfig.max_request_retries(): number` | python |
+| Rust | `PyConfig.request_retry_delay(): number` | python |
+| Rust | `PyConfig.max_time(): number?` | python |
+| Rust | `PyConfig.compaction_threshold(): number?` | python |
+| Python | every reader is an attribute, not a call | |
+
 ## `crates/agentwerk-py/src/convert.rs`
 
 Not bound: the one JSON boundary between the two languages.
@@ -1946,7 +1961,7 @@ Registers every bound class and function in the `_agentwerk` module.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `mod agent`, `mod convert`, `mod directives`, `mod event`, `mod knowledge`, `mod providers`, `mod reply`, `mod schema`, `mod ticket`, `mod ticket_queue`, `mod tools`, `mod trajectory` | private |
+| Rust | `mod agent`, `mod config`, `mod convert`, `mod directives`, `mod event`, `mod knowledge`, `mod providers`, `mod reply`, `mod schema`, `mod ticket`, `mod ticket_queue`, `mod tools`, `mod trajectory` | private |
 | Rust | `_agentwerk(m: PyModule): void throws PyErr` | python |
 
 ## `crates/agentwerk-py/src/providers.rs`
@@ -2061,24 +2076,8 @@ Binds `agents/tickets/ticket_queue.rs` and `store.rs`.
 | Rust | `PyTicketQueue.reply(key: string, content: string): PyTicketQueue` | python |
 | Rust | `PyTicketQueue.set_finished(key: string, result: any): void throws PyErr` | python |
 | Rust | `PyTicketQueue.set_failed(key: string): void throws PyErr` | python |
-| Rust | `PyTicketQueue.max_turns(count: number): PyTicketQueue` | python |
-| Rust | `PyTicketQueue.max_input_tokens(count: number): PyTicketQueue` | python |
-| Rust | `PyTicketQueue.max_output_tokens(count: number): PyTicketQueue` | python |
-| Rust | `PyTicketQueue.max_request_tokens(count: number): PyTicketQueue` | python |
-| Rust | `PyTicketQueue.max_schema_retries(count: number): PyTicketQueue` | python |
-| Rust | `PyTicketQueue.max_request_retries(count: number): PyTicketQueue` | python |
-| Rust | `PyTicketQueue.max_time(seconds: number): PyTicketQueue` | python |
-| Rust | `PyTicketQueue.compact_at(fraction: number): PyTicketQueue` | python |
-| Rust | `PyTicketQueue.request_retry_delay(seconds: number): PyTicketQueue` | python |
-| Rust | `PyTicketQueue.get_max_turns(): number?` | python |
-| Rust | `PyTicketQueue.get_max_input_tokens(): number?` | python |
-| Rust | `PyTicketQueue.get_max_output_tokens(): number?` | python |
-| Rust | `PyTicketQueue.get_max_request_tokens(): number?` | python |
-| Rust | `PyTicketQueue.get_max_schema_retries(): number?` | python |
-| Rust | `PyTicketQueue.get_max_request_retries(): number` | python |
-| Rust | `PyTicketQueue.get_max_time(): number?` | python |
-| Rust | `PyTicketQueue.get_compact_at(): number?` | python |
-| Rust | `PyTicketQueue.get_request_retry_delay(): number` | python |
+| Rust | `PyTicketQueue.config(config: PyConfig): PyTicketQueue` | python |
+| Rust | `PyTicketQueue.get_config(): PyConfig` | python |
 | Rust | `PyTicketQueue.dir(dir: string): PyTicketQueue` | python |
 | Rust | `PyTicketQueue.get_dir(): string` | python |
 | Rust | `PyTicketQueue.schemas(store: PySchemaStore): PyTicketQueue` | python |

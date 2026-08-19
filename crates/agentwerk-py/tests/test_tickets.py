@@ -97,17 +97,8 @@ def test_invalid_schema_document_is_rejected_with_runtime_error():
         aw.Schema({"type": "not-a-real-type"})
 
 
-def test_policy_setters_chain(queue):
-    configured = (
-        queue.max_turns(5)
-        .max_time(30.0)
-        .max_input_tokens(1000)
-        .max_output_tokens(500)
-        .max_request_tokens(8000)
-        .max_schema_retries(3)
-        .max_request_retries(2)
-        .request_retry_delay(0.25)
-    )
+def test_config_returns_the_queue_so_calls_chain(queue):
+    configured = queue.config(aw.Config(max_turns=5, max_time=30.0)).dir("/tmp")
     assert isinstance(configured, aw.TicketQueue)
 
 
@@ -239,13 +230,14 @@ def test_find_tickets_returns_every_status_not_just_finished(queue):
     assert tasks == ["alpha"]
 
 
-def test_policy_readers_return_the_limits_that_were_set(queue):
-    queue.max_turns(40).max_time(300.0)
+def test_config_round_trips_through_get_config(queue):
+    queue.config(aw.Config(max_turns=40, max_time=300.0))
 
-    assert queue.get_max_turns() == 40
-    assert queue.get_max_time() == 300.0
-    assert queue.get_max_input_tokens() is None
-    assert queue.get_max_request_retries() == 10
+    config = queue.get_config()
+    assert config.max_turns == 40
+    assert config.max_time == 300.0
+    assert config.max_input_tokens is None
+    assert config.max_request_retries == 10
 
 
 def test_cancel_takes_the_matching_tickets_off_the_queue(queue):
@@ -408,18 +400,18 @@ def test_an_event_handler_rewrites_replies_through_the_queue(queue):
     assert texts == ["[redacted]"]
 
 
-def test_compact_at_round_trips_through_get_compact_at(queue):
-    assert queue.get_compact_at() is None
+def test_compaction_threshold_round_trips_through_get_config(queue):
+    assert queue.get_config().compaction_threshold is None
 
-    queue.compact_at(0.8)
+    queue.config(aw.Config(compaction_threshold=0.8))
 
-    assert queue.get_compact_at() == 0.8
+    assert queue.get_config().compaction_threshold == 0.8
 
 
-def test_compact_at_clamps_a_fraction_above_one(queue):
-    queue.compact_at(1.5)
+def test_compaction_threshold_clamps_a_fraction_above_one(queue):
+    queue.config(aw.Config(compaction_threshold=1.5))
 
-    assert queue.get_compact_at() == 1.0
+    assert queue.get_config().compaction_threshold == 1.0
 
 
 def test_edit_replies_on_an_unstarted_ticket_is_a_no_op(queue):

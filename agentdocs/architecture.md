@@ -14,14 +14,14 @@ tickets.finish_all().await;
 
 - An `Agent` carries a `Weak<TicketQueue>` that dangles until `agent(a)` binds it. `TicketQueue::new` captures its own `Weak<Self>` through `Arc::new_cyclic` to have one to hand out.
 - `agent(a)` also drains tickets the agent queued in its private default queue into the shared one.
-- `start` and `finish` spawn one tokio task per registered agent. Each upgrades its `Weak` once and reads the shared store, policies, budget, and ending from the resulting `Arc`.
+- `start` and `finish` spawn one tokio task per registered agent. Each upgrades its `Weak` once and reads the shared store, config, budget, and ending from the resulting `Arc`.
 - `tickets.ticket(value)` creates a ticket and returns its key; `tickets.reply(&key, content)` appends a text reply and the wait-for-input branch drives the next turn on the same replies. That is how multi-turn chat is built on one ticket.
 
 ## Shared Queue, Per-Agent Task
 
 **Agents read shared state through one `Arc<TicketQueue>`. Locks are held only around queue and metric operations, never across `provider.respond().await`.**
 
-- The ticket store, policies, budget, ending, cancel filters, and registered-agent list live on `TicketQueue`.
+- The ticket store, config, budget, ending, cancel filters, and registered-agent list live on `TicketQueue`.
 - The per-agent loop in `loop/agent.rs` claims one ticket, drives it through one or more provider and tool turns, and releases locks before each await.
 - Multiple agents share one queue; a ticket is claimed exactly once. Nested queues are not supported: one `TicketQueue` is the unit of orchestration.
 
@@ -78,10 +78,10 @@ ToolResult::error(ctx.directives.render(EDIT_FILE_OLD_STRING_NOT_FOUND, &[("path
 - An interactive agent gets no `finish` at all, since ending the ticket would end the conversation. It pauses on a reply that calls no tool, and the host closes the ticket with `TicketQueue::set_finished`. `AgentBuilder::build` is where the tool is registered, because only there is `interactive` known; a host that registers `FinishTool` itself keeps it either way.
 - With `handover`, `finish` also inserts a child ticket pinned to that agent or label, with the current ticket recorded as its `parent`. The child's body is the result or the caller's `task` (with `{parent_key}`, `{parent_result_path}`, and `{parent_result}` substituted, the result last so nothing it carries is expanded again), and always ends with the parent key and its result file.
 - The child is inserted BEFORE the parent finishes, so a concurrent `work_left` check can never see an empty queue between them. `TicketFinished` and `TicketFailed` are emitted synchronously from the transition, and a count of in-flight transitions keeps `work_left` true until every handler returns, so an `on_result` follow-up lands first as well.
-- A turn that ends without a `finish` call pushes a corrective directive and retries, the same path a schema failure takes, bounded by `max_schema_retries`; exhaustion emits `PolicyViolated { MaxSchemaRetries, .. }` and `TicketFailed`. Both paths emit `SchemaRetried` first, and its `attempt` and `max_attempts` are bound into the directive that follows.
+- A turn that ends without a `finish` call pushes a corrective directive and retries, the same path a schema failure takes, bounded by `max_schema_retries`; exhaustion emits `ConfigViolated { MaxSchemaRetries, .. }` and `TicketFailed`. Both paths emit `SchemaRetried` first, and its `attempt` and `max_attempts` are bound into the directive that follows.
 - `finish` holds one schema, not two: `FinishTool::from_schema` makes the ticket's document the tool's own `result` argument at claim time, so a result that misses it is rejected before the handler runs and one written as JSON text is decoded there. Its one own check: a handover needs a real result.
 - An agent that must always chain cannot be forced to by its tool registry, since every `finish` accepts an optional `handover`. Its role prompt carries that requirement instead.
-- `Status` transitions go through tickets-side helpers; the agent never writes status directly. `Failed` is reserved for system-driven outcomes: exhausted schema retries, exhausted missing-`finish` retries, and policy violations.
+- `Status` transitions go through tickets-side helpers; the agent never writes status directly. `Failed` is reserved for system-driven outcomes: exhausted schema retries, exhausted missing-`finish` retries, and breached limits.
 
 Schemas and results:
 
@@ -108,7 +108,7 @@ Schemas and results:
 
 **`Event` reports state. `ProviderError` reports a failed provider contract. The two channels carry independent information.**
 
-- State transitions exist only as `Event`. A failed request fires both `ProviderError` and a matching `Event` (`RequestFailed`, `PolicyViolated`).
+- State transitions exist only as `Event`. A failed request fires both `ProviderError` and a matching `Event` (`RequestFailed`, `ConfigViolated`).
 - A failed tool call is an `Event` alone: `ToolCallFailed` carries a `ToolFailureKind` and the model-visible message, which is all a tool failure is.
 - A model-fixable failure (wrong arguments, schema mismatch, missing file) goes back to the model as a `ToolResult::Error` content block. It still fires `ToolCallFailed` but does not stop the run.
 - Handlers MUST be cheap and non-blocking; the loop does not await them. The four `_async` twins are the exception, and the loop still never awaits: registering one only queues the event, and whichever `finish` is waiting drains it and awaits each handler on its own task. A handler that never returns therefore stalls the caller rather than an agent, and a `start()`-only host uses the blocking form.
@@ -127,7 +127,7 @@ Schemas and results:
 
 - Reached a state: `Event` only.
 - Could not fulfil a contract: typed error in the matching domain.
-- Both at once (terminal request failure, policy violation): define both. Share the payload type when observer-friendly (`PolicyKind`); introduce a stripped `Kind` enum when the error carries observer-hostile detail (`RequestErrorKind`, `ToolFailureKind`).
+- Both at once (terminal request failure, breached limit): define both. Share the payload type when observer-friendly (`ConfigViolation`); introduce a stripped `Kind` enum when the error carries observer-hostile detail (`RequestErrorKind`, `ToolFailureKind`).
 - Model-fixable failure: `ToolResult::Error(String)`; still fires `ToolCallFailed` but is recoverable.
 - A public error enum carries `#[non_exhaustive]`, which covers new variants only: adding a field to an existing struct variant still breaks a caller that matches it without `..`, so prefer a new variant to widening an old one.
 
@@ -138,7 +138,7 @@ Schemas and results:
 - The `ProviderLike` trait fulfils one contract: `respond`, drive one turn. Callers hold it as a `Provider`, a cloneable handle any implementer converts into.
 - The request and response types are `pub` and documented, because implementing `ProviderLike` is supported and implementors name them.
 - `ModelRequest.tools` carries the `Tool` values themselves rather than a second description of them, and the registry they come from is the ticket's own: `claim` clones the agent's registry and rebinds a `finish` already in it to `FinishTool::from_schema(ticket.schema)`. A provider never calls a tool's handler.
-- Where a request goes, how long it may take, and what a non-2xx answer means are decided in `providers::endpoint`. Vendor code adds its own authentication headers and its own `classify_error`, and never retries: retry is request-level, using `Policies::max_request_retries` and `request_retry_delay`.
+- Where a request goes, how long it may take, and what a non-2xx answer means are decided in `providers::endpoint`. Vendor code adds its own authentication headers and its own `classify_error`, and never retries: retry is request-level, using `Config::max_request_retries` and `Config::request_retry_delay`.
 - Two protocols cover four configurations, and the `Protocol` trait is where that split lives: `AnthropicMessages` and `OpenAiChat` each supply a path, authentication headers, a request shape, a 400-body classifier, and a decoder. `mistral` and `litellm` name `OpenAiChat` against their own `Endpoint`, and every `respond` is one call to `provider::respond::<P>`.
 - A provider decodes its own payloads and names which `ResponseBuilder` call each one is; `providers::stream` decides which block a fragment continues and when a `StreamEvent` fires. The number an endpoint attaches to a fragment routes tool calls only, and never sizes anything.
 - A context window is looked up by model name in `providers::model`, not per vendor.
@@ -177,18 +177,18 @@ tickets.find_tickets("label IN (scan, report) AND status != Failed");
 **`run_main_loop` decides when a run is over and announces it once, rather than whichever caller happens to await. A limit breached while the host is busy elsewhere still ends the run.**
 
 - `TicketQueue::run` is one `Arc<Run>` over a `watch` channel of three phases: `Working`, `Draining(reason)` while the agents stop, and `Finished(reason)` once `RunFinished` has been announced. The channel is both the value and the wake, and a run complete without a reason cannot be written.
-- `ending_reason()` names `FinishReason::PolicyViolated(kind)` for a breached limit and `FinishReason::Cancelled` once a cancel leaves nothing claimable. An empty queue is not an ending: a host that called `start()` may still be filing work, and a paused ticket revives on the next reply.
+- `ending_reason()` names `FinishReason::ConfigViolated(kind)` for a breached limit and `FinishReason::Cancelled` once a cancel leaves nothing claimable. An empty queue is not an ending: a host that called `start()` may still be filing work, and a paused ticket revives on the next reply.
 - `FinishReason::Drained` is named by the `finish` that waited for it, and only when no ticket at all is still open. That is what keeps an interactive chat alive between turns.
 - The main loop joins its agents and emits `RunFinished { reason }` before `Run::set_finished`, so a caller that starts another run never overlaps the previous one.
 - Tools observe the ending through `ToolContext::cancelled`; pair it with `tokio::select!` so it drops the losing branch promptly. Dropping the `TicketQueue` while agents still hold a `Weak` is the public way to abort: the upgrade fails and each task panics out cleanly.
 
 ## Every Event Is Logged, Statistics Are Folded From It
 
-**`TicketQueue::emit` folds every event into the crate-private `Stats` and appends it to `events.jsonl`, `TextChunkReceived` aside. A host reads the log back through `TicketQueue::find_events`; the crate counts only what a policy needs.**
+**`TicketQueue::emit` folds every event into the crate-private `Stats` and appends it to `events.jsonl`, `TextChunkReceived` aside. A host reads the log back through `TicketQueue::find_events`; the crate counts only what a limit check needs.**
 
 - `emit` writes the line before firing observers, so the log holds what every handler saw. One line per streamed token would outweigh every other line and repeats what `replies.jsonl` already carries, which is why the chunk kinds are excluded.
 - The write is best-effort, and a line this build cannot parse is skipped rather than costing every line after it, so a log written by another version still reports.
-- `find_events(condition)` reads the log; a count is `.len()` and any breakdown is a fold. `input_tokens()`, `output_tokens()`, and `execution_duration()` stay off the counters, because the policy check reads the same ones every 50ms.
+- `find_events(condition)` reads the log; a count is `.len()` and any breakdown is a fold. `input_tokens()`, `output_tokens()`, and `execution_duration()` stay off the counters, because the limit check reads the same ones every 50ms.
 - The two sources can disagree, by design: delete the log mid-run and the three totals keep reporting while the finders find nothing.
 - `RequestFinished` is the one kind whose payload the statistics read: its `usage` adds to the two token totals. Every other kind contributes its count and nothing else.
 - `execution_duration` spans the first `TicketStarted` to the `RunFinished`, or to now while the run is going. `TicketStarted` is emitted from `claim`, so a host claiming a ticket without running the loop still starts the clock. `TicketQueue::load` restarts it: `max_time` bounds the run resuming the session, not the one that wrote the log.
@@ -209,11 +209,12 @@ tickets.find_tickets("label IN (scan, report) AND status != Failed");
 - `write_atomic` (tmp plus rename) and `append_line` (`O_APPEND` plus newline) are the only places that touch the filesystem. They are `pub(crate)`, and by convention nothing outside a `Persist` impl or an `append` reaches for them. One documented exception: `TicketQueue::write_tool_output` writes single-shot flat files that fit neither trait.
 - Vocabulary is fixed: `save`, `load`, `append`. Bootstrap verbs other than `load` (such as `open`) are not used, and `checkpoint`, `snapshot`, `counter`, and `persist` do not appear in identifiers or test names.
 
-## Policies Are Per-Queue, Checked at Turn Boundaries
+## Config Is Per-Queue, Checked at Turn Boundaries
 
-**A run stops cleanly when any limit on `Policies` is breached. The check fires `EventKind::PolicyViolated` and exits the per-agent task.**
+**A run stops cleanly when any limit on `Config` is breached. The check fires `EventKind::ConfigViolated` and exits the per-agent task.**
 
-- The loop calls `policy_violated_kind` at each iteration; a non-`None` return takes the agent off the queue.
-- Token budgets read from the queue's live `Stats`; `max_time` reads from `Policies` and from `Stats::execution_duration()`. `finish_reason` reports the matching `FinishReason::PolicyViolated(kind)` once the run has ended.
+- The loop calls `config_violated` at each iteration; a non-`None` return takes the agent off the queue.
+- Token budgets read from the queue's live `Stats`; `max_time` reads from `Config` and from `Stats::execution_duration()`. `finish_reason` reports the matching `FinishReason::ConfigViolated(violation)` once the run has ended.
+- `TicketQueue::config` replaces the whole value, so a host builds one from `Config::default()`, and `get_config` reads back what it stored, including the clamped `compaction_threshold`.
 - The schema-retry budget is applied per-ticket inside the result-writing path, not at the top of the loop.
-- `compact_at` rides on `Policies` for the same per-queue snapshot every limit gets, but it is a trigger rather than a limit: `policy_violated_kind` ignores it, and reaching it costs a compaction, not the run.
+- `compaction_threshold` rides on `Config` for the same per-queue snapshot every limit gets, but it is a trigger rather than a limit: `config_violated` ignores it, and reaching it costs a compaction, not the run.

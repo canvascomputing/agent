@@ -10,7 +10,7 @@ use super::common;
 
 use agentwerk::event::{default_logger, Event, EventKind};
 use agentwerk::tools::{GlobTool, GrepTool, ListDirectoryTool, ReadFileTool};
-use agentwerk::{Agent, TicketQueue};
+use agentwerk::{Agent, Config, TicketQueue};
 
 const NEEDLE: &str = "XYZZY_PLUGH_42";
 
@@ -81,7 +81,10 @@ async fn finds_string_buried_deep_in_line() -> std::result::Result<(), Box<dyn s
 
     let tickets = TicketQueue::new();
 
-    tickets.max_turns(10);
+    tickets.config(Config {
+        max_turns: Some(10),
+        ..Default::default()
+    });
     tickets.on_event(move |_, e| event_handler(e));
     tickets.agent(
         Agent::new()
@@ -223,7 +226,10 @@ async fn reads_column_slice_after_grep_locates_needle(
 
     let tickets = TicketQueue::new();
 
-    tickets.max_turns(10);
+    tickets.config(Config {
+        max_turns: Some(10),
+        ..Default::default()
+    });
     tickets.on_event(move |_, e| event_handler(e));
     tickets.agent(
         Agent::new()

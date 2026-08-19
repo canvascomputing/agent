@@ -42,6 +42,7 @@ mod tests {
     use std::time::Duration;
 
     use crate::agents::agent::Agent;
+    use crate::agents::config::Config;
     use crate::agents::r#loop::test_util::*;
     use crate::agents::tickets::{Status, Ticket, TicketQueue};
     use crate::event::EventKind;
@@ -55,8 +56,11 @@ mod tests {
         let tickets = TicketQueue::new();
         tickets
             .dir(results_dir.path().to_path_buf())
-            .max_request_retries(0)
-            .request_retry_delay(Duration::from_millis(1));
+            .config(Config {
+                max_request_retries: 0,
+                request_retry_delay: Duration::from_millis(1),
+                ..Default::default()
+            });
 
         let run_handle = tickets.start();
 
@@ -101,8 +105,11 @@ mod tests {
         let tickets = TicketQueue::new();
         tickets
             .dir(results_dir.path().to_path_buf())
-            .max_request_retries(0)
-            .request_retry_delay(Duration::from_millis(1));
+            .config(Config {
+                max_request_retries: 0,
+                request_retry_delay: Duration::from_millis(1),
+                ..Default::default()
+            });
 
         // The agent replies without calling its finish tool, so the ticket is
         // still in progress when the host resolves it out of band.
@@ -145,8 +152,11 @@ mod tests {
         let tickets = TicketQueue::new();
         tickets
             .dir(results_dir.path().to_path_buf())
-            .max_request_retries(0)
-            .request_retry_delay(Duration::from_millis(1));
+            .config(Config {
+                max_request_retries: 0,
+                request_retry_delay: Duration::from_millis(1),
+                ..Default::default()
+            });
 
         let run_handle = tickets.start();
 

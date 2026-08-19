@@ -3,6 +3,7 @@
 
 use std::sync::Arc;
 
+use crate::agents::config::Config;
 use crate::agents::tickets::{Author, Reply};
 use crate::prompts::compaction_directive;
 use crate::prompts::directives::DirectiveStore;
@@ -12,18 +13,14 @@ use crate::providers::{
 };
 use crate::tools::Tool;
 
-/// How full the context window gets before compaction fires, when the host
-/// sets no fraction of its own. What is left over covers the model's response
-/// budget and the slack the `bytes / 4` token estimate needs because it
-/// under-counts code and JSON. A share rather than a fixed count, so it holds
-/// from the smallest window to the largest.
-const DEFAULT_COMPACT_AT: f64 = 0.85;
-
 /// Token count at which compaction fires for a model with context window
-/// `window`, at `compact_at` of it or at [`DEFAULT_COMPACT_AT`] when that is
-/// unset. `None` when the window is unknown.
-pub(crate) fn compaction_threshold(window: Option<u64>, compact_at: Option<f64>) -> Option<u64> {
-    Some((window? as f64 * compact_at.unwrap_or(DEFAULT_COMPACT_AT)) as u64)
+/// `window`, at `fraction` of it or at [`Config::DEFAULT_COMPACTION_THRESHOLD`]
+/// when that is unset. `None` when the window is unknown.
+pub(crate) fn compaction_token_threshold(
+    window: Option<u64>,
+    fraction: Option<f64>,
+) -> Option<u64> {
+    Some((window? as f64 * fraction.unwrap_or(Config::DEFAULT_COMPACTION_THRESHOLD)) as u64)
 }
 
 /// Estimate of the next request's input-token count: the last response's
@@ -92,13 +89,13 @@ fn tool_bytes(tool: &Tool) -> usize {
 /// before a request that would otherwise overflow.
 pub(crate) fn should_compact_proactively(
     window: Option<u64>,
-    compact_at: Option<f64>,
+    fraction: Option<f64>,
     history: &[TokenUsage],
     messages: &[Message],
     system_prompt: &str,
     tools: &[Tool],
 ) -> bool {
-    let Some(threshold) = compaction_threshold(window, compact_at) else {
+    let Some(threshold) = compaction_token_threshold(window, fraction) else {
         return false;
     };
     if history.is_empty() {
@@ -302,28 +299,31 @@ mod tests {
 
     #[test]
     fn the_default_fraction_applies_when_none_is_set() {
-        assert_eq!(compaction_threshold(Some(200_000), None), Some(170_000));
+        assert_eq!(
+            compaction_token_threshold(Some(200_000), None),
+            Some(170_000)
+        );
     }
 
     #[test]
     fn the_default_fraction_scales_down_to_a_tiny_window() {
         // The rule this replaced subtracted a fixed 33 000 tokens, which left
         // any window under that compacting from the first turn.
-        assert_eq!(compaction_threshold(Some(32_000), None), Some(27_200));
-        assert_eq!(compaction_threshold(Some(100), None), Some(85));
-        assert_eq!(compaction_threshold(Some(0), None), Some(0));
+        assert_eq!(compaction_token_threshold(Some(32_000), None), Some(27_200));
+        assert_eq!(compaction_token_threshold(Some(100), None), Some(85));
+        assert_eq!(compaction_token_threshold(Some(0), None), Some(0));
     }
 
     #[test]
-    fn compaction_threshold_is_none_for_unknown_window() {
-        assert_eq!(compaction_threshold(None, None), None);
-        assert_eq!(compaction_threshold(None, Some(0.8)), None);
+    fn compaction_token_threshold_is_none_for_unknown_window() {
+        assert_eq!(compaction_token_threshold(None, None), None);
+        assert_eq!(compaction_token_threshold(None, Some(0.8)), None);
     }
 
     #[test]
     fn the_threshold_is_the_configured_fraction_of_the_window() {
         assert_eq!(
-            compaction_threshold(Some(200_000), Some(0.8)),
+            compaction_token_threshold(Some(200_000), Some(0.8)),
             Some(160_000)
         );
     }
@@ -494,8 +494,8 @@ mod tests {
             output_tokens: 0,
         }];
         let messages = [Message::user("hi")];
-        let fires = |compact_at| {
-            should_compact_proactively(Some(200_000), compact_at, &history, &messages, "", &[])
+        let fires = |fraction| {
+            should_compact_proactively(Some(200_000), fraction, &history, &messages, "", &[])
         };
         assert!(!fires(None));
         assert!(fires(Some(0.4)));

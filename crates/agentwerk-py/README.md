@@ -516,35 +516,30 @@ See [`Schema`](https://docs.rs/agentwerk/latest/agentwerk/schemas/struct.Schema.
 
 </details>
 
-### Policies
+### Configuration
 
-Policies allow you to define execution limits.
+A `Config` limits the turns, tokens, and time a run may spend, and allows configuring retries and compaction.
 
 ```python
-(
-    tickets.max_turns(40)
-    .max_time(300.0)
-    .max_input_tokens(200_000)
-    .max_output_tokens(50_000)
-)
+tickets.config(Config(max_turns=40, max_time=300.0))
 ```
 
 <details>
-<summary>All limits</summary>
+<summary>All configuration fields</summary>
 
-| Method | Description |
-|--------|-------------|
-| `max_turns(count)` / `get_max_turns()` | Limit the total number of turns. |
-| `max_time(seconds)` / `get_max_time()` | Limit the total elapsed duration. |
-| `max_input_tokens(count)` / `get_max_input_tokens()` | Limit the total input tokens. |
-| `max_output_tokens(count)` / `get_max_output_tokens()` | Limit the total output tokens. |
-| `max_request_tokens(count)` / `get_max_request_tokens()` | Limit the output tokens of a single request. |
-| `max_schema_retries(count)` / `get_max_schema_retries()` | Limit the consecutive turns without a valid tool call. |
-| `max_request_retries(count)` / `get_max_request_retries()` | Limit how often a failing request is retried. |
-| `request_retry_delay(seconds)` / `get_request_retry_delay()` | Wait this long between retries. |
-| `compact_at(fraction)` / `get_compact_at()` | Compact once the context window is this full. |
+| Field | Description |
+|-------|-------------|
+| `max_turns` | Limit the total number of turns. |
+| `max_time` | Limit the total elapsed duration. |
+| `max_input_tokens` | Limit the total input tokens. |
+| `max_output_tokens` | Limit the total output tokens. |
+| `max_request_tokens` | Limit the output tokens of a single request. |
+| `max_schema_retries` | Limit the consecutive turns without a valid tool call. |
+| `max_request_retries` | Limit how often a failing request is retried. |
+| `request_retry_delay` | Wait this long between retries. |
+| `compaction_threshold` | Compact once the context window is this full. |
 
-A violated limit emits a `policy_violated` event, see [`EventKind`](https://docs.rs/agentwerk/latest/agentwerk/event/enum.EventKind.html).
+`config(config)` replaces the whole configuration, and `get_config()` reads it back. A violated limit emits a `config_violated` event, see [`EventKind`](https://docs.rs/agentwerk/latest/agentwerk/event/enum.EventKind.html).
 
 </details>
 
@@ -735,7 +730,7 @@ tickets.on_event(log)
 |-|------|-------------|
 | **Run** | `run_started` | Execution began. |
 | | `run_finished` | Execution ended, carrying the reason. |
-| | `policy_violated` | A limit was breached and execution stopped. |
+| | `config_violated` | A limit was breached and execution stopped. |
 | **Ticket** | `ticket_started` | An agent claimed a ticket. |
 | | `ticket_finished` | A ticket finished successfully. |
 | | `ticket_failed` | A ticket failed. |
