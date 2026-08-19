@@ -58,7 +58,7 @@ async fn main() {
     }
 
     let event_handler = build_event_handler(args.verbose, style.clone(), partitions.len());
-    tickets.on_event(move |e| event_handler(e));
+    tickets.on_event(move |_, e| event_handler(e));
     for _ in 0..agents {
         tickets.agent(
             Agent::new()

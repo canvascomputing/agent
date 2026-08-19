@@ -179,14 +179,17 @@ tickets.cancel_all();                            // the whole run
 
 ```rust
 on_event(handler)                    // observe
-create_ticket_on_result(make)        // react whenever the trigger matches
+on_result_async(handler)             // observe, in a handler `finish` awaits
+edit_replies_on_event(editor)        // react whenever the trigger matches
 edit_replies(key, editor)            // act once, now
 ```
 
 - `on_<trigger>(handler)` observes: the handler sees every `<trigger>` and returns nothing.
-- `<action>_on_<trigger>(..)` reacts whenever `<trigger>` matches. The action may be more than one word, so `create_ticket_on_result` reads as `create_ticket` plus `on_result`.
+- `on_<trigger>_async(handler)` is the same trigger in a handler whichever `finish` is waiting awaits. Every observer has one, and only observers do.
+- `<action>_on_<trigger>(..)` reacts whenever `<trigger>` matches. The action may be more than one word, so `edit_replies_on_event` reads as `edit_replies` plus `on_event`.
 - A bare `<action>(..)` acts once, now: `cancel`, `edit_replies`. Every method carrying the `_on_` infix returns `&Self`.
-- IMPORTANT: the trigger fixes the handler's parameters, the action fixes its return type. `_on_event` hands over `&Event`, `_on_result` a `&Ticket` and its validated `&Value`, `_on_failure` the `&Event` and the `&Ticket` it happened in. Observing returns `()`, `create_ticket*` returns `Option<Ticket>`.
+- IMPORTANT: the trigger fixes the handler's parameters. `_on_event` hands over `&Event`, `_on_result` a `&Ticket` and its validated `&Value`, `_on_failure` the `&Event` and the `&Ticket` it happened in. Observing returns `()`.
+- IMPORTANT: an observer takes the queue first, `&Arc<TicketQueue>` before the trigger's own parameters, owned in the `_async` twin. That is what a hook files follow-up work through, and why no `create_ticket_on_*` family exists: `queue.ticket(..)` inside `on_result` is the whole of it.
 - A hook reacts to something agentwerk produces. Anything the caller already holds needs no hook: to stop a pool on a verdict, `finish` for it and `cancel`.
 - `on_ticket` sits outside the trigger grid, keying on a ticket rather than naming a trigger.
 - The editor row is the one exception and holds two members: `edit_replies_on_event` and `edit_replies_on_compaction`. Compaction earns the second because it is a moment agentwerk writes on the host's behalf. What agentwerk writes to correct the model is not an editor at all: `AgentBuilder::directives` takes one function over every directive. No `_on_result` or `_on_failure` sibling follows: an editor runs once per request over the batch of events since the previous one, and a failure is already reachable by matching `EventKind::ToolCallFailed` inside the batch.

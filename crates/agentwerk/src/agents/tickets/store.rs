@@ -1144,7 +1144,7 @@ mod tests {
         let (queue, _tmp) = test_queue();
         let reporters = Arc::new(Mutex::new(Vec::new()));
         let seen = Arc::clone(&reporters);
-        queue.on_event(move |event| {
+        queue.on_event(move |_, event| {
             if matches!(event.kind, EventKind::TicketCreated) {
                 seen.lock().unwrap().push(event.agent_id.clone());
             }

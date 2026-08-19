@@ -122,7 +122,7 @@ mod tests {
         // left the agent's own outcome on the ticket instead.
         let host = Arc::clone(&tickets);
         let resolved = key.clone();
-        tickets.on_event(move |event| {
+        tickets.on_event(move |_, event| {
             if matches!(event.kind, EventKind::RequestFinished { .. }) {
                 let _ = host.set_finished(&resolved, "resolved by the host");
             }

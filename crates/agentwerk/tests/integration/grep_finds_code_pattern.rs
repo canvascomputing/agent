@@ -94,7 +94,7 @@ async fn finds_code_pattern_with_special_chars(
     let tickets = TicketQueue::new();
 
     tickets.max_turns(10);
-    tickets.on_event(move |e| event_handler(e));
+    tickets.on_event(move |_, e| event_handler(e));
     tickets.agent(
         Agent::new()
             .provider(provider)

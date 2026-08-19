@@ -237,11 +237,11 @@ async def main(pruefer, meister, monteur):
 
     # One read plan opens one Abnahme per part it names, which is the fan-out
     # the line runs on.
-    def open_abnahme(ticket, result):
+    def open_abnahme(work, ticket, result):
         if not ticket.has_label("pruefung"):
             return
         for teil in result["teile"]:
-            tickets.ticket(
+            work.ticket(
                 Ticket(
                     f"Nimm {teil['teil']} ({teil['name']}) ab. Sollmaß {teil['soll']}, "
                     f"Toleranz {teil['toleranz']}. Der Bauplan liegt in {result['bauplan']}.",
@@ -254,32 +254,34 @@ async def main(pruefer, meister, monteur):
 
     # A part that passes the Abnahme is not done: it goes on to be fitted, so
     # the work fans forward instead of ending at the second station.
-    tickets.create_ticket_on_result(
-        lambda ticket, result: Ticket(
-            f"Baue {result['teil']} ein und buche es. Der Laufzettel lautete: {ticket.task}",
-            label="montage",
-            schema=FITTING,
-        )
-        if ticket.has_label("abnahme") and result.get("passt")
-        else None
-    )
+    def open_montage(work, ticket, result):
+        if ticket.has_label("abnahme") and result.get("passt"):
+            work.ticket(
+                Ticket(
+                    f"Baue {result['teil']} ein und buche es. Der Laufzettel lautete: {ticket.task}",
+                    label="montage",
+                    schema=FITTING,
+                )
+            )
+
+    tickets.on_result(open_montage)
 
     workers = worker_names(pruefer, meister, monteur)
 
-    def publish(event):
+    def publish(work, event):
         if event.kind == "text_chunk_received":
             return
         frame = frame_for(event, started_at, str(REPO))
         frame["agent"] = workers.get(frame["agent"], frame["agent"])
         if frame["ticket"] and event.kind.startswith("ticket_"):
-            ticket = tickets.get_ticket(frame["ticket"])
+            ticket = work.get_ticket(frame["ticket"])
             if ticket is not None:
                 frame["label"] = ticket.label
                 frame["reporter"] = ticket.reporter
                 frame["task"] = str(ticket.task)[:160]
         loop.call_soon_threadsafe(feed.push, frame)
 
-    def publish_result(ticket, result):
+    def publish_result(_, ticket, result):
         loop.call_soon_threadsafe(
             feed.push,
             {

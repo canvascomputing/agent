@@ -53,7 +53,7 @@ async fn main() {
             on_ctrl_c.cancel_all();
         }
     });
-    tickets.on_event(move |e| event_handler(e));
+    tickets.on_event(move |_, e| event_handler(e));
 
     let researcher_1 = Agent::new()
         .provider(provider.clone())

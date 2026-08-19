@@ -55,7 +55,7 @@ async fn grep_lists_unknown_function_names() -> std::result::Result<(), Box<dyn 
     let tickets = TicketQueue::new();
 
     tickets.max_turns(10);
-    tickets.on_event(move |e| event_handler(e));
+    tickets.on_event(move |_, e| event_handler(e));
     tickets.agent(
         Agent::new()
             .provider(provider)

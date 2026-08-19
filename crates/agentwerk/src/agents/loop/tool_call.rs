@@ -690,7 +690,7 @@ mod tests {
             .handler(|_: Value, _ctx| async move { ToolResult::success("x".repeat(800_000)) })
             .build();
 
-        tickets.on_event(move |e| handler(e));
+        tickets.on_event(move |_, e| handler(e));
         tickets.agent(
             Agent::new()
                 .provider(provider.clone())

@@ -129,7 +129,7 @@ async fn summariser_produces_text_when_compaction_fires_against_live_llm() {
     // threshold of zero is always crossed.
     tickets.max_turns(2);
     tickets.compact_at(0.0);
-    tickets.on_event(move |e| log.lock().unwrap().push(e.clone()));
+    tickets.on_event(move |_, e| log.lock().unwrap().push(e.clone()));
     tickets.agent(
         Agent::new()
             .provider(provider)

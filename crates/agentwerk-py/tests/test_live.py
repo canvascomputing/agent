@@ -17,7 +17,7 @@ async def test_runs_a_single_task_to_a_result(live_agent):
     work = live_agent.start()
     reasons = []
     work.on_event(
-        lambda event: reasons.append(event.data["reason"])
+        lambda _, event: reasons.append(event.data["reason"])
         if event.kind == "run_finished"
         else None
     )
@@ -60,7 +60,7 @@ async def test_invokes_a_python_tool_and_records_the_file_it_opened(tmp_path):
     work = agent.start()
     opened = []
     work.on_event(
-        lambda event: opened.append(event.data["path"])
+        lambda _, event: opened.append(event.data["path"])
         if event.kind == aw.EventName.FILE_OPEN_FINISHED
         else None
     )
@@ -74,7 +74,7 @@ async def test_runs_two_labeled_agents_with_events_and_chaining():
     queue = aw.TicketQueue().max_turns(30)
 
     kinds = []
-    queue.on_event(lambda event: kinds.append(event.kind))
+    queue.on_event(lambda _, event: kinds.append(event.kind))
 
     queue.agent(
         aw.Agent.from_env().label("a").role("Reply with one word: alpha").build()
@@ -83,12 +83,11 @@ async def test_runs_two_labeled_agents_with_events_and_chaining():
         aw.Agent.from_env().label("b").role("Reply with one word: beta").build()
     )
 
-    def chain(ticket, result):
+    def chain(work, ticket, result):
         if ticket.has_label("a"):
-            return aw.Ticket("Reply beta", label="b")
-        return None
+            work.ticket(aw.Ticket("Reply beta", label="b"))
 
-    queue.create_ticket_on_result(chain)
+    queue.on_result(chain)
     queue.ticket(aw.Ticket("Reply alpha", label="a"))
     await queue.finish_all()
 
@@ -104,7 +103,7 @@ async def test_saves_the_messages_of_a_finished_ticket(tmp_path):
 
     captured = []
 
-    def capture(event, ticket):
+    def capture(_, event, ticket):
         if event.kind == "ticket_finished":
             model = queue.model_for_agent(event.agent_id)
             trajectory = aw.Trajectory.from_ticket(event.agent_id, model, ticket)

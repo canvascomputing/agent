@@ -26,7 +26,9 @@ use super::query::TicketMatcher;
 use super::ticket::{Status, Ticket};
 use super::{numeric_id, policy_violated_kind, Reply};
 
-type EventHandler = dyn Fn(&Event) + Send + Sync;
+/// The queue arrives first so a handler selects tickets and files follow-up work
+/// without capturing an `Arc` into the queue that holds it.
+type EventHandler = dyn Fn(&Arc<TicketQueue>, &Event) + Send + Sync;
 
 /// Which tickets a lifecycle call speaks for. `cancel` stores one; `finish`
 /// borrows one for the length of the wait.
@@ -37,9 +39,10 @@ pub(crate) type TicketFilter = dyn Fn(&Ticket) -> bool + Send + Sync;
 /// the volume this has to absorb.
 const EVENT_STREAM_CAPACITY: usize = 1024;
 
-type AsyncResultHandler = dyn Fn(Ticket, serde_json::Value) -> HandlerWork + Send + Sync;
-
-type AsyncResultsHandler = dyn Fn(Vec<serde_json::Value>) -> HandlerWork + Send + Sync;
+/// One shape for every awaited hook: the ticket is `None` for the kinds no
+/// ticket-shaped hook accepts, and the wrapper each `on_*_async` installs picks
+/// out what its own handler takes.
+type AsyncHandler = dyn Fn(Arc<TicketQueue>, Event, Option<Ticket>) -> HandlerWork + Send + Sync;
 
 /// Boxed so the queue can hold handlers with different future types.
 type HandlerWork = Pin<Box<dyn Future<Output = ()> + Send>>;
@@ -51,23 +54,39 @@ type CompactionEditor = dyn Fn(Compaction, Vec<Reply>) -> EditedReplies + Send +
 /// The replies an editor hands back, once its work finishes.
 type EditedReplies = Pin<Box<dyn Future<Output = ProviderResult<Vec<Reply>>> + Send>>;
 
-/// A finished ticket and its result, with every result there was when it landed.
-type Delivery = (Ticket, serde_json::Value, Vec<serde_json::Value>);
+/// The kinds that name a ticket the whole hook is about, as opposed to one
+/// step inside it.
+fn is_ticket_kind(kind: &EventKind) -> bool {
+    matches!(
+        kind,
+        EventKind::TicketStarted | EventKind::TicketFinished | EventKind::TicketFailed
+    )
+}
 
-/// `emit` runs on an agent that has to carry on, so a finished result is only
-/// queued here; whichever `finish` is waiting drains it and awaits the
-/// handlers.
+/// An awaited handler and the kinds it accepts. The filter is read twice: once
+/// to decide whether the event is worth queueing at all, once at handover.
+struct AwaitedHandler {
+    matches: fn(&EventKind) -> bool,
+    call: Arc<AsyncHandler>,
+}
+
+/// An event held for the awaited handlers, with its ticket resolved as it was
+/// when the event landed.
+type Delivery = (Event, Option<Ticket>);
+
+/// `emit` runs on an agent that has to carry on, so an event an awaited handler
+/// wants is only queued here; whichever `finish` is waiting drains it and awaits
+/// the handlers.
 ///
 /// `queued` and `draining` are separate locks because `emit` pushes without
 /// awaiting, while the drain guard is held across handler awaits.
 #[derive(Default)]
-pub(super) struct AwaitedResults {
-    pub(super) per_result: Mutex<Vec<Arc<AsyncResultHandler>>>,
-    pub(super) all_results: Mutex<Vec<Arc<AsyncResultsHandler>>>,
-    pub(super) queued: Mutex<VecDeque<Delivery>>,
-    pub(super) draining: tokio::sync::Mutex<()>,
+pub(super) struct AwaitedEvents {
+    handlers: Mutex<Vec<AwaitedHandler>>,
+    queued: Mutex<VecDeque<Delivery>>,
+    draining: tokio::sync::Mutex<()>,
     /// A concurrent registration waits for the hook rather than adding a second.
-    pub(super) queueing: OnceLock<()>,
+    queueing: OnceLock<()>,
 }
 
 /// The registered reply editor and the per-ticket events buffered for it since
@@ -245,7 +264,7 @@ pub struct TicketQueue {
     pub(crate) terminal_transitions_in_flight: AtomicUsize,
     pub(crate) stats: Stats,
     pub(super) event_handlers: Mutex<Vec<Arc<EventHandler>>>,
-    pub(super) awaited_results: AwaitedResults,
+    pub(super) awaited_events: AwaitedEvents,
     /// Every emitted event, for `finish` to wake on. A separate channel rather
     /// than one more `on_event` entry: a handler stays on the chain for the
     /// life of the queue, so one registered per call would grow without bound
@@ -287,7 +306,7 @@ impl TicketQueue {
             terminal_transitions_in_flight: AtomicUsize::new(0),
             stats: Stats::new(),
             event_handlers: Mutex::new(Vec::new()),
-            awaited_results: AwaitedResults::default(),
+            awaited_events: AwaitedEvents::default(),
             event_stream: broadcast::Sender::new(EVENT_STREAM_CAPACITY),
             reply_editing: Mutex::new(ReplyEditing::default()),
             compaction_editor: Mutex::new(None),
@@ -367,7 +386,7 @@ impl TicketQueue {
             terminal_transitions_in_flight: AtomicUsize::new(0),
             stats,
             event_handlers: Mutex::new(Vec::new()),
-            awaited_results: AwaitedResults::default(),
+            awaited_events: AwaitedEvents::default(),
             event_stream: broadcast::Sender::new(EVENT_STREAM_CAPACITY),
             reply_editing: Mutex::new(ReplyEditing::default()),
             compaction_editor: Mutex::new(None),
@@ -402,29 +421,80 @@ impl TicketQueue {
     /// handler fires on every event, in installation order. Handlers
     /// must be cheap and non-blocking. When no handler has been
     /// installed, [`default_logger`] runs in its place.
-    pub fn on_event(&self, handler: impl Fn(&Event) + Send + Sync + 'static) -> &Self {
+    ///
+    /// The queue arrives with the event, so a handler selects tickets and
+    /// results and files follow-up work without holding one of its own.
+    ///
+    /// ```no_run
+    /// # use agentwerk::{Ticket, TicketQueue};
+    /// # use agentwerk::event::EventKind;
+    /// let tickets = TicketQueue::new();
+    /// tickets.on_event(|queue, event| {
+    ///     if matches!(event.kind, EventKind::TicketFailed) {
+    ///         queue.ticket(Ticket::labeled("triage", "Look into the failure."));
+    ///     }
+    /// });
+    /// ```
+    pub fn on_event(
+        &self,
+        handler: impl Fn(&Arc<TicketQueue>, &Event) + Send + Sync + 'static,
+    ) -> &Self {
         self.event_handlers.lock().unwrap().push(Arc::new(handler));
         self
     }
 
+    /// Read every event as it is emitted, in a handler [`Self::finish`] waits
+    /// for before it returns.
+    ///
+    /// [`Self::on_event`] cannot await: it runs on the agent task that emitted
+    /// the event, and that task has to carry on. This one hands the work to
+    /// whichever `finish` is waiting, which awaits each handler as the events
+    /// land. In Python that puts the handler on the caller's event loop, so
+    /// work that has to stay serialized against the caller's own, such as a
+    /// commit, can be.
+    ///
+    /// Every kind reaches it, `TextChunkReceived` included, and each event
+    /// waits in memory until a `finish` drains it. A host that streams a long
+    /// reply and only calls [`Self::start`] uses `on_event`.
+    ///
+    /// Your handler MUST NOT call `finish` or [`Self::finish_all`], or it waits
+    /// forever on the handover it is running inside.
+    ///
+    /// ```no_run
+    /// # use agentwerk::TicketQueue;
+    /// # async fn run() {
+    /// let tickets = TicketQueue::new();
+    /// tickets.on_event_async(|_, event| async move {
+    ///     println!("{:?}", event.kind);
+    /// });
+    /// tickets.finish_all().await;
+    /// # }
+    /// ```
+    pub fn on_event_async<F, Fut>(&self, handler: F) -> &Self
+    where
+        F: Fn(Arc<TicketQueue>, Event) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        self.on_awaited(
+            |_| true,
+            move |queue, event, _| Box::pin(handler(queue, event)),
+        )
+    }
+
     /// The filter-resolve-call shape the ticket handlers share. The queue is
     /// handed in so one that files follow-up work needs no upgrade of its own.
-    fn on_ticket_event<F>(&self, wanted: fn(&EventKind) -> bool, handler: F) -> &Self
+    fn on_ticket_event<F>(&self, matches: fn(&EventKind) -> bool, handler: F) -> &Self
     where
         F: Fn(&Arc<Self>, &Event, &Ticket) + Send + Sync + 'static,
     {
-        let supervisor = self.weak_self.clone();
-        self.on_event(move |event| {
-            if !wanted(&event.kind) {
+        self.on_event(move |queue, event| {
+            if !matches(&event.kind) {
                 return;
             }
-            let Some(queue) = supervisor.upgrade() else {
-                return;
-            };
             let Some(ticket) = queue.get_ticket(&event.ticket_key) else {
                 return;
             };
-            handler(&queue, event, &ticket);
+            handler(queue, event, &ticket);
         })
     }
 
@@ -433,17 +503,27 @@ impl TicketQueue {
     /// The value handed over is the stored, schema-validated result, so a
     /// handler never reaches into the finish tool's input shape. This is one
     /// more entry on the [`Self::on_event`] chain.
+    ///
+    /// ```no_run
+    /// # use agentwerk::{Ticket, TicketQueue};
+    /// let tickets = TicketQueue::new();
+    /// tickets.on_result(|queue, done, result| {
+    ///     if result["needs_review"] == true {
+    ///         queue.ticket(Ticket::labeled("review", done.task.clone()).parent(&done.key));
+    ///     }
+    /// });
+    /// ```
     pub fn on_result<F>(&self, handler: F) -> &Self
     where
-        F: Fn(&Ticket, &serde_json::Value) + Send + Sync + 'static,
+        F: Fn(&Arc<TicketQueue>, &Ticket, &serde_json::Value) + Send + Sync + 'static,
     {
         self.on_ticket_event(
             |kind| matches!(kind, EventKind::TicketFinished),
-            move |_, _, finished| {
+            move |queue, _, finished| {
                 let Some(result) = &finished.result else {
                     return;
                 };
-                handler(finished, result);
+                handler(queue, finished, result);
             },
         )
     }
@@ -453,48 +533,9 @@ impl TicketQueue {
     ///
     /// [`Self::on_result`] cannot await: it runs on the agent task that just
     /// finished the ticket, and that task has to carry on. This one hands the
-    /// work to whichever [`Self::finish`] is waiting, which awaits each
-    /// handler as the results land. In Python that puts the handler on the
-    /// caller's event loop, so work that has to stay serialized against the
-    /// caller's own, such as a commit, can be.
-    ///
-    /// Handlers therefore run only while a `finish` or [`Self::finish_all`] is
-    /// awaited. A host that only calls [`Self::start`] uses `on_result`: each
-    /// result waiting to be handed over holds a copy of its ticket and every
-    /// reply in it, so a run that never drains grows for as long as it lasts.
-    ///
-    /// Your handler MUST NOT call `finish` or `finish_all`, or it waits forever
-    /// on the handover it is running inside.
-    ///
-    /// ```no_run
-    /// # use agentwerk::TicketQueue;
-    /// # async fn run() {
-    /// let tickets = TicketQueue::new();
-    /// tickets.on_result_async(|ticket, result| async move {
-    ///     println!("{} produced {result}", ticket.key);
-    /// });
-    /// tickets.finish_all().await;
-    /// # }
-    /// ```
-    pub fn on_result_async<F, Fut>(&self, handler: F) -> &Self
-    where
-        F: Fn(Ticket, serde_json::Value) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = ()> + Send + 'static,
-    {
-        let boxed: Arc<AsyncResultHandler> =
-            Arc::new(move |ticket, result| Box::pin(handler(ticket, result)));
-        self.queue_finished_results();
-        self.awaited_results.per_result.lock().unwrap().push(boxed);
-        self
-    }
-
-    /// Read every result the run has produced so far, each time one lands, in
-    /// a handler [`Self::finish`] waits for before it returns.
-    ///
-    /// [`Self::on_results`] on the terms [`Self::on_result_async`] sets: the
-    /// same list [`Self::results`] gives after the run, handed over while it
-    /// is still going. Use it to act on a condition across results with work
-    /// that has to be awaited.
+    /// work to whichever `finish` is waiting, on the terms
+    /// [`Self::on_event_async`] sets, and each result waiting to be handed over
+    /// holds a copy of its ticket and every reply in it.
     ///
     /// Your handler MUST NOT call `finish` or [`Self::finish_all`], or it waits
     /// forever on the handover it is running inside.
@@ -503,109 +544,25 @@ impl TicketQueue {
     /// # use agentwerk::TicketQueue;
     /// # async fn run() {
     /// let tickets = TicketQueue::new();
-    /// tickets.on_results_async(|results| async move {
-    ///     println!("{} results so far", results.len());
+    /// tickets.on_result_async(|_, ticket, result| async move {
+    ///     println!("{} produced {result}", ticket.key);
     /// });
     /// tickets.finish_all().await;
     /// # }
     /// ```
-    pub fn on_results_async<F, Fut>(&self, handler: F) -> &Self
+    pub fn on_result_async<F, Fut>(&self, handler: F) -> &Self
     where
-        F: Fn(Vec<serde_json::Value>) -> Fut + Send + Sync + 'static,
+        F: Fn(Arc<TicketQueue>, Ticket, serde_json::Value) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = ()> + Send + 'static,
     {
-        let boxed: Arc<AsyncResultsHandler> = Arc::new(move |results| Box::pin(handler(results)));
-        self.queue_finished_results();
-        self.awaited_results.all_results.lock().unwrap().push(boxed);
-        self
-    }
-
-    /// Installed only once, or a second registration would queue every result
-    /// twice.
-    fn queue_finished_results(&self) {
-        self.awaited_results.queueing.get_or_init(|| {
-            self.on_ticket_event(
-                |kind| matches!(kind, EventKind::TicketFinished),
-                |queue, _, finished| {
-                    let Some(result) = &finished.result else {
-                        return;
-                    };
-                    // Taken now rather than at handoff, so a handler sees what had
-                    // landed when its result did, as the synchronous `on_results`
-                    // does. Skipped while nothing wants it, since it copies them all.
-                    let wants_all = !queue.awaited_results.all_results.lock().unwrap().is_empty();
-                    let so_far = match wants_all {
-                        true => queue.results(),
-                        false => Vec::new(),
-                    };
-                    queue.awaited_results.queued.lock().unwrap().push_back((
-                        finished.clone(),
-                        result.clone(),
-                        so_far,
-                    ));
-                },
-            );
-        });
-    }
-
-    /// Loops because a handler that takes a while lets more results queue up
-    /// behind it. One is taken per lock, so a `finish` dropped mid-handover, by
-    /// a timeout or a panic, loses only the result it was on.
-    async fn await_result_handlers(&self) {
-        let per_result = self.awaited_results.per_result.lock().unwrap().clone();
-        let all_results = self.awaited_results.all_results.lock().unwrap().clone();
-        if per_result.is_empty() && all_results.is_empty() {
-            return;
-        }
-        // Waits rather than skips, or a second `finish` could return while its
-        // own results were still being handed over.
-        let _draining = self.awaited_results.draining.lock().await;
-        loop {
-            let next = self.awaited_results.queued.lock().unwrap().pop_front();
-            let Some((ticket, result, so_far)) = next else {
-                return;
-            };
-            for handler in &per_result {
-                handler(ticket.clone(), result.clone()).await;
-            }
-            for handler in &all_results {
-                handler(so_far.clone()).await;
-            }
-        }
-    }
-
-    /// Read every result the run has produced so far, each time one lands.
-    ///
-    /// Where [`Self::on_result`] hands over the one ticket that just finished,
-    /// this hands over all of them: the same [`Self::results`] a caller reads
-    /// after the run, in creation order, delivered while it is still going.
-    /// That is what lets a handler act on a condition across results rather
-    /// than on any single one, such as every result it was waiting for having
-    /// arrived.
-    ///
-    /// ```no_run
-    /// # use agentwerk::TicketQueue;
-    /// let tickets = TicketQueue::new();
-    /// tickets.on_results(|results| {
-    ///     if results.len() == 3 {
-    ///         println!("every scan landed");
-    ///     }
-    /// });
-    /// ```
-    pub fn on_results<H>(&self, handler: H) -> &Self
-    where
-        H: Fn(&[serde_json::Value]) + Send + Sync + 'static,
-    {
-        let supervisor = self.weak_self.clone();
-        self.on_event(move |event| {
-            if !matches!(event.kind, EventKind::TicketFinished) {
-                return;
-            }
-            let Some(queue) = supervisor.upgrade() else {
-                return;
-            };
-            handler(&queue.results());
-        })
+        self.on_awaited(
+            |kind| matches!(kind, EventKind::TicketFinished),
+            move |queue, _, finished| match finished.and_then(|t| t.result.clone().map(|r| (t, r)))
+            {
+                Some((ticket, result)) => Box::pin(handler(queue, ticket, result)),
+                None => Box::pin(std::future::ready(())),
+            },
+        )
     }
 
     /// Read every failure together with the ticket it happened in:
@@ -615,13 +572,163 @@ impl TicketQueue {
     /// Match on `event.kind` to tell a failure that ends the ticket from one
     /// the agent works around. Each call copies the ticket's replies, so an
     /// agent that fails many tool calls pays that copy once per failure.
+    ///
+    /// ```no_run
+    /// # use agentwerk::{Ticket, TicketQueue};
+    /// # use agentwerk::event::EventKind;
+    /// let tickets = TicketQueue::new();
+    /// tickets.on_failure(|queue, event, failed| {
+    ///     // Count the attempts yourself, or a ticket that fails every time
+    ///     // re-queues itself forever.
+    ///     if matches!(event.kind, EventKind::TicketFailed) && failed.parent.is_none() {
+    ///         queue.ticket(Ticket::new(failed.task.clone()).parent(&failed.key));
+    ///     }
+    /// });
+    /// ```
     pub fn on_failure<F>(&self, handler: F) -> &Self
     where
-        F: Fn(&Event, &Ticket) + Send + Sync + 'static,
+        F: Fn(&Arc<TicketQueue>, &Event, &Ticket) + Send + Sync + 'static,
     {
-        self.on_ticket_event(EventKind::is_failure, move |_, event, ticket| {
-            handler(event, ticket)
+        self.on_ticket_event(EventKind::is_failure, handler)
+    }
+
+    /// Read every failure together with the ticket it happened in, in a handler
+    /// [`Self::finish`] waits for before it returns.
+    ///
+    /// [`Self::on_failure`] on the terms [`Self::on_event_async`] sets.
+    ///
+    /// Your handler MUST NOT call `finish` or [`Self::finish_all`], or it waits
+    /// forever on the handover it is running inside.
+    pub fn on_failure_async<F, Fut>(&self, handler: F) -> &Self
+    where
+        F: Fn(Arc<TicketQueue>, Event, Ticket) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        self.on_awaited(
+            EventKind::is_failure,
+            move |queue, event, ticket| match ticket {
+                Some(ticket) => Box::pin(handler(queue, event, ticket)),
+                None => Box::pin(std::future::ready(())),
+            },
+        )
+    }
+
+    /// Read a ticket as it starts, finishes, or fails.
+    ///
+    /// The handler receives the event plus the ticket it names, already
+    /// resolved, so it reads the result, label, and replies without a second
+    /// lookup. No other kind reaches the handler: resolving a ticket copies its
+    /// replies, which on `TextChunkReceived` would cost once per piece of the
+    /// reply.
+    pub fn on_ticket<F>(&self, handler: F) -> &Self
+    where
+        F: Fn(&Arc<TicketQueue>, &Event, &Ticket) + Send + Sync + 'static,
+    {
+        self.on_ticket_event(is_ticket_kind, handler)
+    }
+
+    /// Read a ticket as it starts, finishes, or fails, in a handler
+    /// [`Self::finish`] waits for before it returns.
+    ///
+    /// [`Self::on_ticket`] on the terms [`Self::on_event_async`] sets.
+    ///
+    /// Your handler MUST NOT call `finish` or [`Self::finish_all`], or it waits
+    /// forever on the handover it is running inside.
+    pub fn on_ticket_async<F, Fut>(&self, handler: F) -> &Self
+    where
+        F: Fn(Arc<TicketQueue>, Event, Ticket) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        self.on_awaited(is_ticket_kind, move |queue, event, ticket| match ticket {
+            Some(ticket) => Box::pin(handler(queue, event, ticket)),
+            None => Box::pin(std::future::ready(())),
         })
+    }
+
+    /// Register an awaited handler and make sure the kinds it accepts are being
+    /// queued for it.
+    fn on_awaited<F>(&self, matches: fn(&EventKind) -> bool, call: F) -> &Self
+    where
+        F: Fn(Arc<TicketQueue>, Event, Option<Ticket>) -> HandlerWork + Send + Sync + 'static,
+    {
+        self.queue_events();
+        self.awaited_events
+            .handlers
+            .lock()
+            .unwrap()
+            .push(AwaitedHandler {
+                matches,
+                call: Arc::new(call),
+            });
+        self
+    }
+
+    /// Installed only once, or a second registration would queue every event
+    /// twice.
+    fn queue_events(&self) {
+        self.awaited_events.queueing.get_or_init(|| {
+            self.on_event(|queue, event| {
+                let anyone_wants_it = queue
+                    .awaited_events
+                    .handlers
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|handler| (handler.matches)(&event.kind));
+                if !anyone_wants_it {
+                    return;
+                }
+                // Resolved now rather than at handover, so a handler sees the
+                // ticket as it was when the event landed. Only for the kinds a
+                // ticket-shaped hook accepts: resolving copies every reply,
+                // which on `TextChunkReceived` would cost once per piece.
+                let ticket = match is_ticket_kind(&event.kind) || EventKind::is_failure(&event.kind)
+                {
+                    true => queue.get_ticket(&event.ticket_key),
+                    false => None,
+                };
+                queue
+                    .awaited_events
+                    .queued
+                    .lock()
+                    .unwrap()
+                    .push_back((event.clone(), ticket));
+            });
+        });
+    }
+
+    /// Loops because a handler that takes a while lets more events queue up
+    /// behind it. One is taken per lock, so a `finish` dropped mid-handover, by
+    /// a timeout or a panic, loses only the event it was on.
+    async fn await_handlers(&self) {
+        let handlers: Vec<(fn(&EventKind) -> bool, Arc<AsyncHandler>)> = self
+            .awaited_events
+            .handlers
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|handler| (handler.matches, handler.call.clone()))
+            .collect();
+        if handlers.is_empty() {
+            return;
+        }
+        let Some(queue) = self.weak_self.upgrade() else {
+            return;
+        };
+        // Waits rather than skips, or a second `finish` could return while its
+        // own events were still being handed over.
+        let _draining = self.awaited_events.draining.lock().await;
+        loop {
+            let next = self.awaited_events.queued.lock().unwrap().pop_front();
+            let Some((event, ticket)) = next else {
+                return;
+            };
+            for (matches, call) in &handlers {
+                if matches(&event.kind) {
+                    call(Arc::clone(&queue), event.clone(), ticket.clone()).await;
+                }
+            }
+        }
     }
 
     /// Rewrite a ticket's replies before its next request.
@@ -689,8 +796,7 @@ impl TicketQueue {
 
         // Buffer each ticket's events for the editors as one more `on_event`
         // handler, installed once with the first editor.
-        let supervisor = self.weak_self.clone();
-        let buffer_event = move |event: &Event| {
+        let buffer_event = move |queue: &Arc<TicketQueue>, event: &Event| {
             // Streaming chunks carry no editing signal; run-lifecycle events
             // (empty key) belong to no ticket.
             if event.ticket_key.is_empty()
@@ -698,9 +804,6 @@ impl TicketQueue {
             {
                 return;
             }
-            let Some(queue) = supervisor.upgrade() else {
-                return;
-            };
             queue
                 .reply_editing
                 .lock()
@@ -789,8 +892,14 @@ impl TicketQueue {
             default_logger()(&event);
             return event;
         }
+        // Handed to every handler, so one that files follow-up work needs no
+        // reference of its own. Gone only while the queue is being dropped,
+        // when there is nothing left for a handler to act on.
+        let Some(queue) = self.weak_self.upgrade() else {
+            return event;
+        };
         for h in &handlers {
-            h(&event);
+            h(&queue, &event);
         }
         event
     }
@@ -956,136 +1065,6 @@ impl TicketQueue {
     /// `None` when the built-in default applies.
     pub fn get_compact_at(&self) -> Option<f64> {
         self.policies.lock().unwrap().compact_at
-    }
-
-    /// Enqueue a follow-up ticket from any event.
-    ///
-    /// The broadest of the three: your function sees every kind, including each
-    /// piece of a reply as it arrives, so match on `event.kind` first. Guard
-    /// against a follow-up that triggers itself, or execution never ends.
-    pub fn create_ticket_on_event<F>(&self, make: F) -> &Self
-    where
-        F: Fn(&Event) -> Option<Ticket> + Send + Sync + 'static,
-    {
-        let supervisor = self.weak_self.clone();
-        self.on_event(move |event| {
-            let Some(ticket) = make(event) else {
-                return;
-            };
-            if let Some(queue) = supervisor.upgrade() {
-                queue.ticket(ticket);
-            }
-        })
-    }
-
-    /// Enqueue a follow-up ticket from a finished ticket.
-    ///
-    /// Your function reads the finished ticket's key, label, and task
-    /// alongside its result, and can chain the follow-up through
-    /// `Ticket::parent`. Guard against a follow-up that triggers itself, or
-    /// execution never ends.
-    pub fn create_ticket_on_result<F>(&self, make: F) -> &Self
-    where
-        F: Fn(&Ticket, &serde_json::Value) -> Option<Ticket> + Send + Sync + 'static,
-    {
-        self.on_ticket_event(
-            |kind| matches!(kind, EventKind::TicketFinished),
-            move |queue, _, finished| {
-                let Some(result) = &finished.result else {
-                    return;
-                };
-                if let Some(ticket) = make(finished, result) {
-                    queue.ticket(ticket);
-                }
-            },
-        )
-    }
-
-    /// Enqueue follow-up tickets once a condition across every result holds.
-    ///
-    /// The many-to-many counterpart to [`Self::create_ticket_on_result`], on
-    /// the terms [`Self::on_results`] sets: every result so far in, as many
-    /// follow-ups as you hand back out. Your function is the condition, so
-    /// hand back an empty `Vec` until the results call for the work, which is
-    /// how it waits for the ones it needs. That also guards against a
-    /// follow-up whose own result triggers it again, or execution never ends.
-    ///
-    /// ```no_run
-    /// # use agentwerk::{Ticket, TicketQueue};
-    /// let tickets = TicketQueue::new();
-    /// tickets.create_tickets_on_results(|results| {
-    ///     match results.iter().filter(|r| r["scanned"] == true).count() == 3 {
-    ///         true => vec![Ticket::new("Write the report.").label("report")],
-    ///         false => Vec::new(),
-    ///     }
-    /// });
-    /// ```
-    pub fn create_tickets_on_results<M>(&self, make: M) -> &Self
-    where
-        M: Fn(&[serde_json::Value]) -> Vec<Ticket> + Send + Sync + 'static,
-    {
-        let supervisor = self.weak_self.clone();
-        self.on_results(move |results| {
-            let follow_ups = make(results);
-            if follow_ups.is_empty() {
-                return;
-            }
-            if let Some(queue) = supervisor.upgrade() {
-                for ticket in follow_ups {
-                    queue.ticket(ticket);
-                }
-            }
-        })
-    }
-
-    /// Enqueue a retry for a ticket that failed.
-    ///
-    /// Your function reads the failed ticket's task and label and hands back a
-    /// fresh attempt, chained through `Ticket::parent`. Count the attempts
-    /// yourself, or a ticket that fails every time re-queues itself forever.
-    ///
-    /// ```no_run
-    /// # use agentwerk::{Ticket, TicketQueue};
-    /// # use agentwerk::event::EventKind;
-    /// let tickets = TicketQueue::new();
-    /// tickets.create_ticket_on_failure(|event, failed| {
-    ///     if !matches!(event.kind, EventKind::TicketFailed) || failed.parent.is_some() {
-    ///         return None;
-    ///     }
-    ///     Some(Ticket::new(failed.task.clone()).parent(&failed.key))
-    /// });
-    /// ```
-    pub fn create_ticket_on_failure<F>(&self, make: F) -> &Self
-    where
-        F: Fn(&Event, &Ticket) -> Option<Ticket> + Send + Sync + 'static,
-    {
-        self.on_ticket_event(EventKind::is_failure, move |queue, event, failed| {
-            if let Some(ticket) = make(event, failed) {
-                queue.ticket(ticket);
-            }
-        })
-    }
-
-    /// Read a ticket as it starts, finishes, or fails.
-    ///
-    /// The handler receives the event plus the ticket it names, already
-    /// resolved, so it reads the result, label, and replies without a second
-    /// lookup. No other kind reaches the handler: resolving a ticket copies its
-    /// replies, which on `TextChunkReceived` would cost once per piece of the
-    /// reply.
-    pub fn on_ticket<F>(&self, handler: F) -> &Self
-    where
-        F: Fn(&Event, &Ticket) + Send + Sync + 'static,
-    {
-        self.on_ticket_event(
-            |kind| {
-                matches!(
-                    kind,
-                    EventKind::TicketStarted | EventKind::TicketFinished | EventKind::TicketFailed
-                )
-            },
-            move |_, event, ticket| handler(event, ticket),
-        )
     }
 
     /// Define where a session is stored, `./.agentwerk` by default.
@@ -1458,13 +1437,13 @@ impl TicketQueue {
         let mut stream = self.event_stream.subscribe();
         while self.pending(&matches) {
             let ended = self.next_event_or_end(&mut stream).await;
-            self.await_result_handlers().await;
+            self.await_handlers().await;
             if ended {
                 break;
             }
         }
         // Again after the wait, for whatever landed in its last turn.
-        self.await_result_handlers().await;
+        self.await_handlers().await;
         // Nothing this filter named is left. When no ticket at all is open, the
         // run is over too, so start it finishing and let it announce the reason.
         if !self.anything_pending() {
@@ -2021,8 +2000,8 @@ mod tests {
         let log: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
         let l1 = Arc::clone(&log);
         let l2 = Arc::clone(&log);
-        queue.on_event(move |_| l1.lock().unwrap().push(1));
-        queue.on_event(move |_| l2.lock().unwrap().push(2));
+        queue.on_event(move |_, _| l1.lock().unwrap().push(1));
+        queue.on_event(move |_, _| l2.lock().unwrap().push(2));
         queue.emit("KEY", "agent", EventKind::TurnStarted);
         assert_eq!(*log.lock().unwrap(), vec![1, 2]);
     }
@@ -2042,7 +2021,7 @@ mod tests {
         let (queue, _tmp) = test_queue();
         let outcomes = Arc::new(Mutex::new(Vec::new()));
         let seen = Arc::clone(&outcomes);
-        queue.on_event(move |event| {
+        queue.on_event(move |_, event| {
             if matches!(event.kind, EventKind::TicketFinished) {
                 seen.lock()
                     .unwrap()
@@ -2244,7 +2223,7 @@ mod tests {
         let (queue, _tmp) = test_queue();
         let seen = Arc::new(Mutex::new(Vec::new()));
         let record = Arc::clone(&seen);
-        queue.on_result(move |ticket, result| {
+        queue.on_result(move |_, ticket, result| {
             record
                 .lock()
                 .unwrap()
@@ -2266,7 +2245,7 @@ mod tests {
         let (queue, _tmp) = test_queue();
         let seen = Arc::new(Mutex::new(Vec::new()));
         let record = Arc::clone(&seen);
-        queue.on_failure(move |event, ticket| {
+        queue.on_failure(move |_, event, ticket| {
             record
                 .lock()
                 .unwrap()
@@ -2297,13 +2276,12 @@ mod tests {
     }
 
     #[test]
-    fn create_ticket_on_failure_enqueues_a_retry_for_the_failed_ticket() {
+    fn on_failure_files_a_retry_through_the_queue_it_is_handed() {
         let (queue, _tmp) = test_queue();
-        queue.create_ticket_on_failure(|_, failed| {
-            failed
-                .parent
-                .is_none()
-                .then(|| Ticket::new(failed.task.clone()).parent(&failed.key))
+        queue.on_failure(|queue, _, failed| {
+            if failed.parent.is_none() {
+                queue.ticket(Ticket::new(failed.task.clone()).parent(&failed.key));
+            }
         });
         let key = queue.ticket("work");
 
@@ -2316,11 +2294,12 @@ mod tests {
     }
 
     #[test]
-    fn create_ticket_on_event_enqueues_a_follow_up_for_any_event() {
+    fn on_event_files_a_follow_up_for_any_kind() {
         let (queue, _tmp) = test_queue();
-        queue.create_ticket_on_event(|event| {
-            matches!(event.kind, EventKind::TurnStarted)
-                .then(|| Ticket::new("report").label("report"))
+        queue.on_event(|queue, event| {
+            if matches!(event.kind, EventKind::TurnStarted) {
+                queue.ticket(Ticket::new("report").label("report"));
+            }
         });
         let key = queue.ticket("work");
 
@@ -2333,32 +2312,14 @@ mod tests {
     }
 
     #[test]
-    fn create_ticket_on_result_enqueues_follow_up_for_finished_ticket() {
+    fn on_result_links_a_follow_up_to_the_finished_parent() {
         let (queue, _tmp) = test_queue();
         queue.ticket(Ticket::new("scout").label("scout"));
         let key = queue.claim(|t| t.has_label("scout"), "agent").unwrap();
         queue.set_result(&key, serde_json::json!("lead")).unwrap();
         queue.set_finished_by(&key, "agent").unwrap();
-        queue.create_ticket_on_result(|done, _| {
-            done.has_label("scout")
-                .then(|| Ticket::new("hunt").label("sniper"))
-        });
-        queue.emit(&key, "agent", EventKind::TicketFinished);
-        assert_eq!(
-            queue.find_tickets(|t: &Ticket| t.has_label("sniper")).len(),
-            1
-        );
-    }
-
-    #[test]
-    fn create_ticket_on_result_links_follow_up_to_finished_parent() {
-        let (queue, _tmp) = test_queue();
-        queue.ticket(Ticket::new("scout").label("scout"));
-        let key = queue.claim(|t| t.has_label("scout"), "agent").unwrap();
-        queue.set_result(&key, serde_json::json!("lead")).unwrap();
-        queue.set_finished_by(&key, "agent").unwrap();
-        queue.create_ticket_on_result(|done, _| {
-            Some(Ticket::new("hunt").label("sniper").parent(&done.key))
+        queue.on_result(|queue, done, _| {
+            queue.ticket(Ticket::new("hunt").label("sniper").parent(&done.key));
         });
         queue.emit(&key, "agent", EventKind::TicketFinished);
         let spawned = queue
@@ -2368,11 +2329,32 @@ mod tests {
     }
 
     #[test]
-    fn create_ticket_on_result_ignores_unfinished_events() {
+    fn on_result_ignores_unfinished_events() {
         let (queue, _tmp) = test_queue();
-        queue.create_ticket_on_result(|_, _| Some(Ticket::new("follow-up").label("next")));
+        queue.on_result(|queue, _, _| {
+            queue.ticket(Ticket::new("follow-up").label("next"));
+        });
         queue.emit("KEY", "agent", EventKind::TurnStarted);
         assert!(queue.tickets().is_empty());
+    }
+
+    #[test]
+    fn on_result_reads_the_results_that_landed_before_it() {
+        // A condition across results, which the handler selects for itself.
+        let (queue, _tmp) = test_queue();
+        let counts = Arc::new(Mutex::new(Vec::new()));
+        let record = Arc::clone(&counts);
+        queue.on_result(move |queue, _, _| {
+            record
+                .lock()
+                .unwrap()
+                .push(queue.find_results("scan").len());
+        });
+        for key in scans(&queue, 2) {
+            queue.set_finished(&key, "clean").unwrap();
+        }
+
+        assert_eq!(*counts.lock().unwrap(), vec![1, 2]);
     }
 
     /// File `count` tickets labelled `scan`, all `Todo`.
@@ -2387,7 +2369,7 @@ mod tests {
         let (queue, _tmp) = test_queue();
         let seen = Arc::new(Mutex::new(Vec::new()));
         let record = Arc::clone(&seen);
-        queue.on_result_async(move |ticket, result| {
+        queue.on_result_async(move |_, ticket, result| {
             let record = Arc::clone(&record);
             async move { record.lock().unwrap().push((ticket.key, result)) }
         });
@@ -2408,7 +2390,7 @@ mod tests {
         let seen = Arc::new(Mutex::new(Vec::new()));
         for name in ["first", "second"] {
             let record = Arc::clone(&seen);
-            queue.on_result_async(move |_, _| {
+            queue.on_result_async(move |_, _, _| {
                 let record = Arc::clone(&record);
                 async move { record.lock().unwrap().push(name) }
             });
@@ -2434,7 +2416,7 @@ mod tests {
                 let start = &start;
                 threads.spawn(move || {
                     start.wait();
-                    queue.on_result_async(move |_, _| {
+                    queue.on_result_async(move |_, _, _| {
                         let record = Arc::clone(&record);
                         async move { record.lock().unwrap().push(name) }
                     });
@@ -2455,7 +2437,7 @@ mod tests {
         let (queue, _tmp) = test_queue();
         let seen = Arc::new(Mutex::new(Vec::new()));
         let record = Arc::clone(&seen);
-        queue.on_result_async(move |ticket, _| {
+        queue.on_result_async(move |_, ticket, _| {
             let record = Arc::clone(&record);
             async move {
                 let first = record.lock().unwrap().is_empty();
@@ -2483,7 +2465,7 @@ mod tests {
         let (queue, _tmp) = test_queue();
         let seen = Arc::new(Mutex::new(Vec::new()));
         let record = Arc::clone(&seen);
-        queue.on_result_async(move |ticket, _| {
+        queue.on_result_async(move |_, ticket, _| {
             let record = Arc::clone(&record);
             async move {
                 record.lock().unwrap().push(format!("start {}", ticket.key));
@@ -2511,43 +2493,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn on_results_async_hands_over_every_result_so_far() {
-        let (queue, _tmp) = test_queue();
-        let seen = Arc::new(Mutex::new(Vec::new()));
-        let record = Arc::clone(&seen);
-        queue.on_results_async(move |results| {
-            let record = Arc::clone(&record);
-            async move { record.lock().unwrap().push(results) }
-        });
-        let first = queue.ticket("scan the first half");
-        let second = queue.ticket("scan the second half");
-        queue.set_finished(&first, 1).unwrap();
-        queue.set_finished(&second, 4).unwrap();
-
-        queue.finish_all().await;
-
-        assert_eq!(
-            *seen.lock().unwrap(),
-            vec![
-                vec![serde_json::json!(1)],
-                vec![serde_json::json!(1), serde_json::json!(4)],
-            ]
-        );
-    }
-
-    #[tokio::test]
-    async fn both_kinds_of_async_handler_see_each_result_once() {
+    async fn every_kind_of_async_handler_sees_its_event_once() {
         let (queue, _tmp) = test_queue();
         let seen = Arc::new(Mutex::new(Vec::new()));
         let one = Arc::clone(&seen);
-        queue.on_result_async(move |_, result| {
+        queue.on_result_async(move |_, _, result| {
             let one = Arc::clone(&one);
-            async move { one.lock().unwrap().push(format!("one {result}")) }
+            async move { one.lock().unwrap().push(format!("result {result}")) }
         });
-        let all = Arc::clone(&seen);
-        queue.on_results_async(move |results| {
-            let all = Arc::clone(&all);
-            async move { all.lock().unwrap().push(format!("all {}", results.len())) }
+        let each = Arc::clone(&seen);
+        queue.on_ticket_async(move |_, event, _| {
+            let each = Arc::clone(&each);
+            async move {
+                each.lock()
+                    .unwrap()
+                    .push(format!("ticket {}", event.kind.name()))
+            }
         });
         let key = queue.ticket("scan the corpus");
         queue.set_finished(&key, 1).unwrap();
@@ -2555,7 +2516,65 @@ mod tests {
         queue.finish_all().await;
 
         // One entry each: the two kinds share one queueing hook.
-        assert_eq!(*seen.lock().unwrap(), vec!["one 1", "all 1"]);
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec!["result 1", "ticket ticket_finished"]
+        );
+    }
+
+    #[tokio::test]
+    async fn on_event_async_sees_the_kinds_no_ticket_hook_accepts() {
+        let (queue, _tmp) = test_queue();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let record = Arc::clone(&seen);
+        queue.on_event_async(move |_, event| {
+            let record = Arc::clone(&record);
+            async move { record.lock().unwrap().push(event.kind.name()) }
+        });
+        queue.emit("KEY", "agent", EventKind::TurnStarted);
+
+        queue.finish_all().await;
+
+        assert!(seen.lock().unwrap().contains(&"turn_started"));
+    }
+
+    #[tokio::test]
+    async fn on_failure_async_hands_over_the_failed_ticket() {
+        let (queue, _tmp) = test_queue();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let record = Arc::clone(&seen);
+        queue.on_failure_async(move |_, event, ticket| {
+            let record = Arc::clone(&record);
+            async move {
+                record
+                    .lock()
+                    .unwrap()
+                    .push((event.kind.name(), ticket.key.clone()))
+            }
+        });
+        let key = queue.ticket("scan the corpus");
+        queue.set_failed(&key).unwrap();
+
+        queue.finish_all().await;
+
+        assert_eq!(*seen.lock().unwrap(), vec![("ticket_failed", key)]);
+    }
+
+    #[tokio::test]
+    async fn an_async_handler_files_a_follow_up_through_the_queue_it_is_handed() {
+        let (queue, _tmp) = test_queue();
+        queue.on_result_async(|queue, done, _| async move {
+            queue.ticket(Ticket::new("hunt").label("sniper").parent(&done.key));
+        });
+        let key = queue.ticket(Ticket::new("scout").label("scout"));
+        queue.set_finished(&key, "lead").unwrap();
+
+        queue.finish_all().await;
+
+        let spawned = queue
+            .find_ticket(|t: &Ticket| t.has_label("sniper"))
+            .unwrap();
+        assert_eq!(spawned.parent, Some(key));
     }
 
     #[tokio::test]
@@ -2563,7 +2582,7 @@ mod tests {
         let (queue, _tmp) = test_queue();
         let seen = Arc::new(Mutex::new(Vec::new()));
         let record = Arc::clone(&seen);
-        queue.on_result_async(move |ticket, _| {
+        queue.on_result_async(move |_, ticket, _| {
             let record = Arc::clone(&record);
             async move { record.lock().unwrap().push(ticket.key) }
         });
@@ -2581,7 +2600,7 @@ mod tests {
         let (queue, _tmp) = test_queue();
         let seen = Arc::new(Mutex::new(Vec::new()));
         let record = Arc::clone(&seen);
-        queue.on_result_async(move |ticket, _| {
+        queue.on_result_async(move |_, ticket, _| {
             let record = Arc::clone(&record);
             async move { record.lock().unwrap().push(ticket.key) }
         });
@@ -2594,45 +2613,12 @@ mod tests {
     }
 
     #[test]
-    fn on_results_hands_over_every_result_so_far_each_time_one_lands() {
+    fn a_hook_waits_for_the_results_it_needs_before_filing_the_next_step() {
         let (queue, _tmp) = test_queue();
-        let seen = Arc::new(Mutex::new(Vec::new()));
-        let record = Arc::clone(&seen);
-        queue.on_results(move |results| record.lock().unwrap().push(results.to_vec()));
-        let scans = scans(&queue, 2);
-
-        queue.set_finished(&scans[0], 1).unwrap();
-        queue.set_finished(&scans[1], 4).unwrap();
-
-        assert_eq!(
-            *seen.lock().unwrap(),
-            vec![
-                vec![serde_json::json!(1)],
-                vec![serde_json::json!(1), serde_json::json!(4)],
-            ]
-        );
-    }
-
-    #[test]
-    fn on_results_stays_quiet_for_a_ticket_that_failed() {
-        let (queue, _tmp) = test_queue();
-        let seen = Arc::new(Mutex::new(Vec::new()));
-        let record = Arc::clone(&seen);
-        queue.on_results(move |results| record.lock().unwrap().push(results.to_vec()));
-        let scans = scans(&queue, 1);
-
-        queue.set_failed(&scans[0]).unwrap();
-
-        // A failed ticket produces no result, so nothing changed to report.
-        assert!(seen.lock().unwrap().is_empty());
-    }
-
-    #[test]
-    fn create_tickets_on_results_waits_until_the_results_call_for_the_work() {
-        let (queue, _tmp) = test_queue();
-        queue.create_tickets_on_results(|results| match results.len() == 2 {
-            true => vec![Ticket::new("write the report").label("report")],
-            false => Vec::new(),
+        queue.on_result(|queue, _, _| {
+            if queue.find_results("scan").len() == 2 {
+                queue.ticket(Ticket::new("write the report").label("report"));
+            }
         });
         let scans = scans(&queue, 2);
 
@@ -2649,34 +2635,12 @@ mod tests {
     }
 
     #[test]
-    fn create_tickets_on_results_files_one_follow_up_per_result() {
+    fn on_result_inserts_a_follow_up_before_drain_is_observable() {
         let (queue, _tmp) = test_queue();
-        queue.create_tickets_on_results(|results| match results.len() == 2 {
-            true => results
-                .iter()
-                .map(|r| Ticket::new(r.clone()).label("review"))
-                .collect(),
-            false => Vec::new(),
-        });
-        let scans = scans(&queue, 2);
-
-        queue.set_finished(&scans[0], 1).unwrap();
-        queue.set_finished(&scans[1], 4).unwrap();
-
-        let filed: Vec<serde_json::Value> = queue
-            .find_tickets(|t: &Ticket| t.has_label("review"))
-            .into_iter()
-            .map(|t| t.task)
-            .collect();
-        assert_eq!(filed, vec![serde_json::json!(1), serde_json::json!(4)]);
-    }
-
-    #[test]
-    fn create_ticket_on_result_inserts_follow_up_before_drain_is_observable() {
-        let (queue, _tmp) = test_queue();
-        queue.create_ticket_on_result(|done, _| {
-            done.has_label("scout")
-                .then(|| Ticket::new("hunt").label("sniper"))
+        queue.on_result(|queue, done, _| {
+            if done.has_label("scout") {
+                queue.ticket(Ticket::new("hunt").label("sniper"));
+            }
         });
         queue.ticket(Ticket::new("scout").label("scout"));
         let key = queue.claim(|t| t.has_label("scout"), "agent").unwrap();
@@ -2692,7 +2656,7 @@ mod tests {
         let (queue, _tmp) = test_queue();
         let seen = Arc::new(Mutex::new(Vec::new()));
         let record = Arc::clone(&seen);
-        queue.on_ticket(move |event, ticket| {
+        queue.on_ticket(move |_, event, ticket| {
             if matches!(event.kind, EventKind::TicketFinished) {
                 record.lock().unwrap().push((
                     event.agent_id.clone(),
@@ -2729,7 +2693,7 @@ mod tests {
         queue.ticket(Ticket::new("scan").label("scan"));
         let key = queue.claim(|t| t.has_label("scan"), "analyst").unwrap();
         // Installed after the claim, so only the turn is in the handler's view.
-        queue.on_ticket(move |_, ticket| record.lock().unwrap().push(ticket.key.clone()));
+        queue.on_ticket(move |_, _, ticket| record.lock().unwrap().push(ticket.key.clone()));
         queue.emit(&key, "analyst", EventKind::TurnStarted);
         assert!(seen.lock().unwrap().is_empty());
     }
@@ -2739,7 +2703,7 @@ mod tests {
         let (queue, _tmp) = test_queue();
         let seen = Arc::new(Mutex::new(Vec::new()));
         let record = Arc::clone(&seen);
-        queue.on_ticket(move |_, ticket| record.lock().unwrap().push(ticket.key.clone()));
+        queue.on_ticket(move |_, _, ticket| record.lock().unwrap().push(ticket.key.clone()));
         queue.emit("", "", EventKind::RunStarted);
         assert!(seen.lock().unwrap().is_empty());
     }
@@ -2749,10 +2713,10 @@ mod tests {
         let (queue, _tmp) = test_queue();
         let logged = Arc::new(Mutex::new(Vec::new()));
         let log = Arc::clone(&logged);
-        queue.on_event(move |e| log.lock().unwrap().push(e.kind.name()));
+        queue.on_event(move |_, e| log.lock().unwrap().push(e.kind.name()));
         let seen = Arc::new(Mutex::new(Vec::new()));
         let record = Arc::clone(&seen);
-        queue.on_ticket(move |_, ticket| record.lock().unwrap().push(ticket.key.clone()));
+        queue.on_ticket(move |_, _, ticket| record.lock().unwrap().push(ticket.key.clone()));
         queue.ticket(Ticket::new("scan").label("scan"));
         // The claim is the lifecycle event; no second emit needed.
         let key = queue.claim(|t| t.has_label("scan"), "analyst").unwrap();
@@ -2768,10 +2732,10 @@ mod tests {
         let count = Arc::new(AtomicU32::new(0));
         let c1 = Arc::clone(&count);
         let c2 = Arc::clone(&count);
-        queue.on_event(move |_| {
+        queue.on_event(move |_, _| {
             c1.fetch_add(1, Ordering::Relaxed);
         });
-        queue.on_event(move |_| {
+        queue.on_event(move |_, _| {
             c2.fetch_add(10, Ordering::Relaxed);
         });
         queue.emit("KEY", "agent", EventKind::TurnStarted);
@@ -2908,7 +2872,7 @@ mod tests {
         let (queue, _tmp) = test_queue();
         let log = Arc::new(Mutex::new(Vec::new()));
         let sink = Arc::clone(&log);
-        queue.on_event(move |e| {
+        queue.on_event(move |_, e| {
             if matches!(
                 e.kind,
                 EventKind::RunStarted | EventKind::RunFinished { .. }

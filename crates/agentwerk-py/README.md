@@ -378,7 +378,7 @@ Agents can share the results of their work in the following ways:
 2. **Read tickets**: the `tickets` tool allows reading any finished ticket's result, by key.
 3. **Read result file**: the `read_file` tool allows reading a ticket's `result.json` in the session directory.
 4. **Share knowledge**: the `knowledge` tool allows sharing knowledge with other agents.
-5. **Register hooks**: the `create_ticket_on_result` and `create_tickets_on_results` hooks allow creating follow-up tickets.
+5. **Register hooks**: the `on_result` hook allows creating follow-up tickets.
 
 <details>
 <summary>All ways agents pass data</summary>
@@ -435,20 +435,12 @@ The `knowledge` tool allows sharing knowledge with other agents:
 Use hooks to create new tickets when certain results arrived:
 
 ```python
-def hand_to_report(done, result):
+def hand_to_report(work, done, result):
     if done.has_label("research"):
-        return Ticket(result, label="report")
-    return None
+        work.ticket(Ticket(result, label="report"))
 
 
-def report_when_scanned(results):
-    if len([r for r in results if r["scanned"]]) == 3:
-        return [Ticket("Write the report.", label="report")]
-    return None
-
-
-tickets.create_ticket_on_result(hand_to_report)
-tickets.create_tickets_on_results(report_when_scanned)
+tickets.on_result(hand_to_report)
 ```
 
 </details>
@@ -709,7 +701,7 @@ See [`Tool`](https://docs.rs/agentwerk/latest/agentwerk/tools/struct.Tool.html).
 Events allow you to inspect all activities of your agents.
 
 ```python
-def log(event):
+def log(work, event):
     if event.kind == "ticket_finished":
         print(f"[{event.agent_id}] done {event.ticket_key} {event.label}")
 
@@ -770,13 +762,12 @@ See [`EventKind`](https://docs.rs/agentwerk/latest/agentwerk/event/enum.EventKin
 Hooks allow you to react to events.
 
 ```python
-def retry_once(event, failed):
-    if failed.parent is not None:
-        return None
-    return Ticket(failed.task, parent=failed.key)
+def retry_once(work, event, failed):
+    if failed.parent is None:
+        work.ticket(Ticket(failed.task, parent=failed.key))
 
 
-tickets.create_ticket_on_failure(retry_once)
+tickets.on_failure(retry_once)
 ```
 
 <details>
@@ -786,24 +777,21 @@ tickets.create_ticket_on_failure(retry_once)
 |-|--------|-------------|
 | **Observe** | `on_event(handler)` | Read every event as it is emitted. |
 | | `on_result(handler)` | Read every finished ticket together with its result. |
-| | `on_result_async(handler)` | Read every finished ticket with its result, in an async handler. |
-| | `on_results(handler)` | Read every result the run has produced so far, each time one lands. |
-| | `on_results_async(handler)` | Read every result in an async handler. |
 | | `on_failure(handler)` | Read every failure together with the ticket it happened in. |
 | | `on_ticket(handler)` | Read a ticket as it starts, finishes, or fails. |
-| **Add work** | `create_ticket_on_event(make)` | Enqueue a follow-up ticket from any event. |
-| | `create_ticket_on_result(make)` | Enqueue a follow-up ticket from a finished ticket. |
-| | `create_tickets_on_results(make)` | Enqueue follow-up tickets once a condition across every result holds. |
-| | `create_ticket_on_failure(make)` | Enqueue a retry for a ticket that failed. |
+| **Await** | `on_event_async(handler)` | Read every event in an async handler. |
+| | `on_result_async(handler)` | Read every finished ticket with its result, in an async handler. |
+| | `on_failure_async(handler)` | Read every failure with its ticket, in an async handler. |
+| | `on_ticket_async(handler)` | Read a ticket lifecycle transition in an async handler. |
 | **Rewrite** | `edit_replies_on_event(editor)` | Rewrite a ticket's replies before its next request. |
 | | `edit_replies_on_compaction(editor)` | Decide what compaction does with a ticket's replies. |
 
 Save replies of every finished ticket as a training example:
 
 ```python
-def capture(event, ticket):
+def capture(work, event, ticket):
     if event.kind == "ticket_finished":
-        model = tickets.model_for_agent(event.agent_id)
+        model = work.model_for_agent(event.agent_id)
         Trajectory.from_ticket(event.agent_id, model, ticket).save("datasets")
 
 
@@ -812,10 +800,10 @@ tickets.on_ticket(capture)
 
 #### Async handlers
 
-`on_result` is blocking and prevents an agent continuing its work till the hook is finished. If you perform time-consuming operations use `on_result_async` instead: storing results in a database, posting them to an HTTP API, or uploading them to object storage. Both take an `async def` and run it on the event loop you await `finish` on.
+`on_result` is blocking and prevents an agent continuing its work till the hook is finished. If you perform time-consuming operations use `on_result_async` instead: storing results in a database, posting them to an HTTP API, or uploading them to object storage. It takes an `async def` and runs it on the event loop you await `finish` on.
 
 ```python
-async def store(ticket, result):
+async def store(work, ticket, result):
     await database.insert(ticket.key, result)
 
 

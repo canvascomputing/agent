@@ -151,7 +151,7 @@ async fn seeker_pool_finds_planted_indicators(
     let tickets = TicketQueue::new();
     tickets.max_time(TIME_BUDGET);
     tickets.max_turns(80);
-    tickets.on_event(move |e| event_handler(e));
+    tickets.on_event(move |_, e| event_handler(e));
 
     // The Seeker no longer derives a threat itself; each ticket already names one
     // observed construct per planted language, the way a Tracer would hand it off.

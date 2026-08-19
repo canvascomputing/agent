@@ -218,7 +218,7 @@ impl fmt::Display for KnowledgeAction {
 ///
 /// # async fn run() {
 /// let tickets = TicketQueue::new();
-/// tickets.on_event(|event| {
+/// tickets.on_event(|_, event| {
 ///     if let EventKind::TicketFinished = &event.kind {
 ///         eprintln!("[{}] done {}", event.agent_id, event.ticket_key);
 ///     }
