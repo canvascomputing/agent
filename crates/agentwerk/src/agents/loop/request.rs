@@ -13,10 +13,6 @@ use super::agent::TicketContext;
 use super::Step;
 
 pub(super) async fn run(context: &mut TicketContext<'_>) -> Option<Step> {
-    // Let registered editors rewrite or drop messages before the request
-    // is assembled; the re-read below then projects the edited transcript.
-    context.ticket_queue.run_reply_editor(&context.ticket_key);
-
     let Some(ticket) = context.ticket() else {
         return None;
     };
@@ -495,7 +491,7 @@ mod tests {
         assert!(failures_in(&events).is_empty());
     }
 
-    // Message editing via edit_replies_on_event
+    // Editing replies from an event handler
 
     use std::sync::Arc;
 
@@ -507,13 +503,13 @@ mod tests {
     use crate::providers::{ContentBlock, Message};
     use crate::tools::{Tool, ToolResult};
 
-    type BoomEditor = Box<dyn Fn(&[Event], &mut Vec<Reply>) + Send + Sync>;
+    type BoomHandler = Box<dyn Fn(&Arc<TicketQueue>, &Event) + Send + Sync>;
 
     /// Run a ticket whose first turn calls a tool that always fails, then
-    /// writes a result. Registers `editor` when one is given. Returns the
+    /// writes a result. Registers `handler` when one is given. Returns the
     /// provider and temp dir so callers can inspect the requests and reload.
     async fn run_boom(
-        editor: Option<BoomEditor>,
+        handler: Option<BoomHandler>,
     ) -> (
         Arc<MockProvider>,
         Arc<TicketQueue>,
@@ -535,8 +531,8 @@ mod tests {
             .request_retry_delay(Duration::from_millis(1))
             .max_schema_retries(10)
             .max_time(Duration::from_millis(500));
-        if let Some(editor) = editor {
-            tickets.edit_replies_on_event(editor);
+        if let Some(handler) = handler {
+            tickets.on_event(handler);
         }
         tickets.agent(
             Agent::new()
@@ -551,15 +547,15 @@ mod tests {
         (provider, tickets, results_dir)
     }
 
-    /// Editor that drops the whole failed tool exchange once a tool call
+    /// Handler that drops the whole failed tool exchange once a tool call
     /// fails: both the assistant's tool_use and the failed tool_result, so
     /// no unpaired block is left behind.
-    fn drop_failed_exchange(events: &[Event], messages: &mut Vec<Reply>) {
-        if events
-            .iter()
-            .any(|e| matches!(e.kind, EventKind::ToolCallFailed { .. }))
-        {
-            messages.retain(|reply| {
+    fn drop_failed_exchange(queue: &Arc<TicketQueue>, event: &Event) {
+        if !matches!(event.kind, EventKind::ToolCallFailed { .. }) {
+            return;
+        }
+        queue.edit_replies(&event.ticket_key, |replies| {
+            replies.retain(|reply| {
                 !reply.content.iter().any(|b| {
                     matches!(
                         b,
@@ -571,7 +567,7 @@ mod tests {
                     )
                 })
             });
-        }
+        });
     }
 
     fn has_tool_blocks(messages: &[Message]) -> bool {
@@ -587,10 +583,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn editor_drops_the_failed_tool_exchange() {
+    async fn an_event_handler_drops_the_failed_tool_exchange() {
         let (provider, tickets, _dir) = run_boom(Some(Box::new(drop_failed_exchange))).await;
 
-        // The editor dropped both sides of the boom exchange, so the second
+        // The handler dropped both sides of the boom exchange, so the second
         // request carries no tool blocks.
         assert!(
             !has_tool_blocks(&provider.received()[1]),
@@ -601,38 +597,39 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn editor_injects_message_into_next_request() {
-        let (provider, _tickets, _dir) = run_boom(Some(Box::new(|events, messages| {
-            if events
-                .iter()
-                .any(|e| matches!(e.kind, EventKind::ToolCallFailed { .. }))
-            {
-                messages.push(Reply::user_text("EDITOR HINT: change approach"));
-            }
-        })))
-        .await;
+    async fn an_event_handler_injects_a_message_into_the_next_request() {
+        let (provider, _tickets, _dir) =
+            run_boom(Some(Box::new(|queue: &Arc<TicketQueue>, event: &Event| {
+                if !matches!(event.kind, EventKind::ToolCallFailed { .. }) {
+                    return;
+                }
+                queue.edit_replies(&event.ticket_key, |replies| {
+                    replies.push(Reply::user_text("HANDLER HINT: change approach"));
+                });
+            })))
+            .await;
 
-        assert!(user_text(&provider.received()[1]).contains("EDITOR HINT"));
+        assert!(user_text(&provider.received()[1]).contains("HANDLER HINT"));
     }
 
     #[tokio::test]
-    async fn editor_can_rewrite_a_message_in_place() {
-        let (provider, _tickets, _dir) = run_boom(Some(Box::new(|events, messages| {
-            if !events
-                .iter()
-                .any(|e| matches!(e.kind, EventKind::ToolCallFailed { .. }))
-            {
-                return;
-            }
-            for reply in messages.iter_mut() {
-                for block in reply.content.iter_mut() {
-                    if let ReplyContent::ToolResult { content, .. } = block {
-                        *content = "REWRITTEN".into();
-                    }
+    async fn an_event_handler_rewrites_a_reply_in_place() {
+        let (provider, _tickets, _dir) =
+            run_boom(Some(Box::new(|queue: &Arc<TicketQueue>, event: &Event| {
+                if !matches!(event.kind, EventKind::ToolCallFailed { .. }) {
+                    return;
                 }
-            }
-        })))
-        .await;
+                queue.edit_replies(&event.ticket_key, |replies| {
+                    for reply in replies.iter_mut() {
+                        for block in reply.content.iter_mut() {
+                            if let ReplyContent::ToolResult { content, .. } = block {
+                                *content = "REWRITTEN".into();
+                            }
+                        }
+                    }
+                });
+            })))
+            .await;
 
         let rewritten = provider.received()[1].iter().any(|message| match message {
             Message::User { content } => content.iter().any(
@@ -657,16 +654,16 @@ mod tests {
                 _ => false,
             })
         });
-        assert!(!keeps_boom, "reloaded transcript must reflect the edit");
+        assert!(!keeps_boom, "reloaded replies must reflect the edit");
     }
 
     #[tokio::test]
-    async fn no_editor_leaves_the_boom_exchange_in_the_transcript() {
+    async fn no_handler_leaves_the_boom_exchange_in_the_replies() {
         let (provider, _tickets, _dir) = run_boom(None).await;
 
         assert!(
             has_tool_blocks(&provider.received()[1]),
-            "without an editor the boom exchange must remain",
+            "without a handler the boom exchange must remain",
         );
     }
 }

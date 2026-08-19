@@ -126,15 +126,11 @@ The rules the tables never repeat.
 | Rust | `block_bytes(block: ContentBlock): number` | private |
 | Rust | `tool_bytes(tool: Tool): number` | private |
 | Rust | `should_compact_proactively(window: number?, compact_at: number?, history: TokenUsage[], messages: Message[], system_prompt: string, tools: Tool[]): boolean` | crate |
-| Rust | `Compaction { reason: CompactReason, ticket: Ticket, provider: Provider, model: string, window: number?, on_progress: (completed: number, total: number) => void }` | pub |
-| Python | `Compaction` | |
-| Rust | `Compaction.new(reason: CompactReason, ticket: Ticket, provider: Provider, model: string, window: number?, on_progress: (completed: number, total: number) => void): Compaction` | crate |
-| Rust | `Compaction.reason(): CompactReason` | pub |
-| Python | `Compaction.reason(): str`: the string `"proactive"` or `"reactive"` | |
-| both | `Compaction.ticket(): Ticket` | pub |
-| both | `Compaction.window(): number?` | pub |
-| both | `Compaction.summarize(replies: Reply[]): Promise<string throws ProviderError>` | pub |
-| Rust | `default_editor(compaction: Compaction, replies: Reply[]): Promise<Reply[] throws ProviderError>` | crate |
+| Rust | `Compaction { provider: Provider, model: string, window: number?, on_progress: (completed: number, total: number) => void, directives: DirectiveStore }` | crate |
+| Rust | `Compaction.new(provider: Provider, model: string, window: number?, on_progress: (completed: number, total: number) => void, directives: DirectiveStore): Compaction` | crate |
+| Rust | `Compaction.window(): number?` | crate |
+| Rust | `Compaction.summarize(replies: Reply[]): Promise<string throws ProviderError>` | crate |
+| Rust | `summarize_replies(compaction: Compaction, replies: Reply[]): Promise<Reply[] throws ProviderError>` | crate |
 | Rust | `chunks_for_window(messages: Message[], window: number?): Message[][]` | crate |
 | Rust | `chunks_within(messages: Message[], max_tokens_per_chunk: number): Message[][]` | private |
 | Rust | `split_in_half(message: Message): Message[]?` | private |
@@ -257,9 +253,10 @@ The rules the tables never repeat.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `mod agent`, `mod compaction`, `mod knowledge`, `mod loop`, `mod tickets` | pub |
+| Rust | `mod agent`, `mod knowledge`, `mod loop`, `mod tickets` | pub |
+| Rust | `mod compaction` | crate |
 | Rust | `mod policy`, `mod retry`, `mod stats` | crate |
-| Rust | re-exports `Agent`, `AgentBuilder`, `Compaction`, `Knowledge`, `Query`, `Reply`, `Status`, `Ticket`, `TicketError`, `TicketQueue`, `Trajectory` | pub |
+| Rust | re-exports `Agent`, `AgentBuilder`, `Knowledge`, `Query`, `Reply`, `Status`, `Ticket`, `TicketError`, `TicketQueue`, `Trajectory` | pub |
 
 ## `crates/agentwerk/src/agents/policy.rs`
 
@@ -491,13 +488,9 @@ The rules the tables never repeat.
 | Rust | `is_ticket_kind(kind: EventKind): boolean` | private |
 | Rust | `AsyncHandler = (queue: TicketQueue, event: Event, ticket: Ticket?) => HandlerWork` | private |
 | Rust | `HandlerWork = Promise<void>` | private |
-| Rust | `ReplyEditor = (events: Event[], replies: Reply[]) => void` | private |
-| Rust | `CompactionEditor = (compaction: Compaction, replies: Reply[]) => EditedReplies` | private |
-| Rust | `EditedReplies = Promise<Reply[] throws ProviderError>` | private |
 | Rust | `AwaitedHandler { matches: (kind: EventKind) => boolean, call: AsyncHandler }` | private |
 | Rust | `Delivery = [Event, Ticket?]` | private |
 | Rust | `AwaitedEvents { handlers: AwaitedHandler[], queued: Delivery[], draining: void, queueing: void }` | super |
-| Rust | `ReplyEditing { editor: ReplyEditor?, pending: Record<string, Event[]> }` | super |
 | Rust | `Run { phase: Phase }` | crate |
 | Rust | `Phase` | private |
 | Rust | `Phase.Working` | private |
@@ -512,7 +505,7 @@ The rules the tables never repeat.
 | Rust | `Run.until_draining(): Promise<void>` | crate |
 | Rust | `Run.until_finished(): Promise<void>` | crate |
 | Rust | `Run.reset(): void` | private |
-| Rust | `TicketQueue { weak_self: Weak<TicketQueue>, tickets: Record<string, Ticket>, agents: Agent[], policies: Policies, run: Run, cancel_filters: TicketFilter[], terminal_transitions_in_flight: number, stats: Stats, event_handlers: EventHandler[], awaited_events: AwaitedEvents, event_stream: Sender<Event>, reply_editing: ReplyEditing, compaction_editor: CompactionEditor?, schemas: SchemaStore?, dir: string, events_lock: void, join_handle: JoinHandle<void>?, next_ticket_id: number? }` | pub |
+| Rust | `TicketQueue { weak_self: Weak<TicketQueue>, tickets: Record<string, Ticket>, agents: Agent[], policies: Policies, run: Run, cancel_filters: TicketFilter[], terminal_transitions_in_flight: number, stats: Stats, event_handlers: EventHandler[], awaited_events: AwaitedEvents, event_stream: Sender<Event>, schemas: SchemaStore?, dir: string, events_lock: void, join_handle: JoinHandle<void>?, next_ticket_id: number? }` | pub |
 | Python | `TicketQueue` | |
 | Rust | `TicketQueue.new(): TicketQueue` | pub |
 | Python | `TicketQueue()` | |
@@ -536,13 +529,7 @@ The rules the tables never repeat.
 | Rust | `TicketQueue.on_awaited(matches: (kind: EventKind) => boolean, call: AsyncHandler): TicketQueue` | private |
 | Rust | `TicketQueue.queue_events(): void` | private |
 | Rust | `TicketQueue.await_handlers(): Promise<void>` | private |
-| both | `TicketQueue.edit_replies_on_event(editor: (events: Event[], replies: Reply[]) => void): TicketQueue` | pub |
-| Python | `TicketQueue.edit_replies_on_event(editor)`: the editor returns the new list, or `None` to keep the old one, where Rust mutates in place. An editor that raises prints its traceback and changes nothing | |
-| both | `TicketQueue.edit_replies_on_compaction(editor: (compaction: Compaction, replies: Reply[]) => Promise<Reply[] throws ProviderError>): TicketQueue` | pub |
-| Python | `TicketQueue.edit_replies_on_compaction(editor)`: the editor returns the new list, or `None` to keep the current one. Define it with `async def` to await `Compaction.summarize`; a coroutine is driven on a worker thread of its own | |
-| Rust | `TicketQueue.compaction_editor(): CompactionEditor?` | crate |
 | Rust | `TicketQueue.emit(key: string, agent: string, kind: EventKind): Event` | crate |
-| Rust | `TicketQueue.run_reply_editor(key: string): void` | crate |
 | Rust | `TicketQueue.label_for(key: string): string?` | private |
 | both | `TicketQueue.model_for_agent(agent_id: string): string?` | pub |
 | Rust | `TicketQueue.policies(): Policies` | crate |
@@ -881,7 +868,7 @@ Not bound, like the rest of `codegrep`.
 |----------|------|------------|
 | Rust | `mod agents`, `mod codegrep`, `mod event`, `mod providers`, `mod schemas`, `mod tools` | pub |
 | Rust | `mod persistence`, `mod prompts` | crate |
-| Rust | re-exports `Agent`, `AgentBuilder`, `Query`, `Reply`, `Status`, `Ticket`, `TicketQueue`, `Compaction`, `Knowledge`, `Trajectory`, `Schema`, `SchemaStore`, `Event`, `EventKind`, `FinishReason`, `Directive`, `Text` | pub |
+| Rust | re-exports `Agent`, `AgentBuilder`, `Query`, `Reply`, `Status`, `Ticket`, `TicketQueue`, `Knowledge`, `Trajectory`, `Schema`, `SchemaStore`, `Event`, `EventKind`, `FinishReason`, `Directive`, `Text` | pub |
 | Python | `agentwerk` exports every bound class from one flat module | |
 
 ## `crates/agentwerk/src/persistence.rs`
@@ -1890,20 +1877,6 @@ Binds `agents/agent.rs`, whose section holds the Python spelling of each method.
 | Rust | `PyAgent.ticket(ticket: PyTicket): string throws PyErr` | python |
 | Rust | `PyAgent.start(): PyTicketQueue throws PyErr` | python |
 
-## `crates/agentwerk-py/src/compaction.rs`
-
-Binds `agents/compaction.rs`.
-
-| Language | Item | Visibility |
-|----------|------|------------|
-| Rust | `PyCompaction { inner: Compaction }` | python |
-| Rust | `PyCompaction.reason(): string` | python |
-| Rust | `PyCompaction.ticket(): PyTicket` | python |
-| Rust | `PyCompaction.window(): number?` | python |
-| Rust | `PyCompaction.summarize(replies: PyReply[]): Promise<string> throws PyErr` | python |
-| Rust | `into_replies(replies: PyReply[]): Reply[]` | private |
-| Rust | `invoke_editor(py: Python, editor: any, compaction: Compaction, replies: Reply[]): Reply[]? throws PyErr` | crate |
-
 ## `crates/agentwerk-py/src/convert.rs`
 
 Not bound: the one JSON boundary between the two languages.
@@ -1973,7 +1946,7 @@ Registers every bound class and function in the `_agentwerk` module.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `mod agent`, `mod compaction`, `mod convert`, `mod directives`, `mod event`, `mod knowledge`, `mod providers`, `mod reply`, `mod schema`, `mod ticket`, `mod ticket_queue`, `mod tools`, `mod trajectory` | private |
+| Rust | `mod agent`, `mod convert`, `mod directives`, `mod event`, `mod knowledge`, `mod providers`, `mod reply`, `mod schema`, `mod ticket`, `mod ticket_queue`, `mod tools`, `mod trajectory` | private |
 | Rust | `_agentwerk(m: PyModule): void throws PyErr` | python |
 
 ## `crates/agentwerk-py/src/providers.rs`
@@ -2122,8 +2095,6 @@ Binds `agents/tickets/ticket_queue.rs` and `store.rs`.
 | Rust | `PyTicketQueue.find_ticket(predicate: any): PyTicket? throws PyErr` | python |
 | Rust | `PyTicketQueue.on_ticket(handler: any): PyTicketQueue` | python |
 | Rust | `PyTicketQueue.on_ticket_async(handler: any): PyTicketQueue` | python |
-| Rust | `PyTicketQueue.edit_replies_on_event(editor: any): PyTicketQueue` | python |
-| Rust | `PyTicketQueue.edit_replies_on_compaction(editor: any): PyTicketQueue` | python |
 | Rust | `PyTicketQueue.edit_replies(key: string, editor: any): PyTicketQueue throws PyErr` | python |
 | Rust | `PyTicketQueue.start(): PyTicketQueue` | python |
 | Rust | `PyTicketQueue.finish(matches: any): Promise<any[]> throws PyErr` | python |

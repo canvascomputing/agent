@@ -233,9 +233,6 @@ impl TicketQueue {
         };
         self.emit(key, agent, kind);
         self.save_ticket(key);
-        // The ticket will never request again, so drop any events buffered
-        // for its message editors instead of leaking them for the run.
-        self.reply_editing.lock().unwrap().pending.remove(key);
         Ok(())
     }
 
@@ -286,12 +283,42 @@ impl TicketQueue {
     }
 
     /// Apply `editor` to ticket `key`'s replies now, then rewrite them
-    /// in place so the change survives resumption. The on-demand
-    /// sibling of [`Self::edit_replies_on_event`]; triggers no request.
+    /// in place so the change survives resumption. Triggers no request.
     /// No-op when the ticket is missing. The edit must keep the replies
     /// well-formed (matched tool_use/tool_result pairs); they are sent
     /// as-is. Leaves the task and the token accounting untouched, which
     /// is why compaction resets the usage history itself.
+    ///
+    /// Inside [`Self::on_event`] it rewrites what the model reads next: the
+    /// reply the event announces is stored, and the next request re-reads
+    /// the ticket.
+    ///
+    /// ```no_run
+    /// use agentwerk::TicketQueue;
+    /// use agentwerk::event::EventKind;
+    /// use agentwerk::agents::tickets::{Reply, ReplyContent};
+    ///
+    /// let tickets = TicketQueue::new();
+    /// tickets.on_event(|queue, event| {
+    ///     if !matches!(event.kind, EventKind::ToolCallFailed { .. }) {
+    ///         return;
+    ///     }
+    ///     queue.edit_replies(&event.ticket_key, |replies| {
+    ///         // Drop both sides of the failed exchange: the assistant's tool_use
+    ///         // and the failed tool_result, so no unpaired block is left behind.
+    ///         replies.retain(|reply| {
+    ///             !reply.content.iter().any(|b| {
+    ///                 matches!(
+    ///                     b,
+    ///                     ReplyContent::ToolUse { .. }
+    ///                         | ReplyContent::ToolResult { succeeded: false, .. }
+    ///                 )
+    ///             })
+    ///         });
+    ///         replies.push(Reply::user_text("That approach failed. Re-read the file first."));
+    ///     });
+    /// });
+    /// ```
     pub fn edit_replies(&self, key: &str, editor: impl FnOnce(&mut Vec<Reply>)) -> &Self {
         let ticket_copy = {
             let mut store = self.tickets.lock().unwrap();

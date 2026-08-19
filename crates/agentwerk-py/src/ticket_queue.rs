@@ -12,7 +12,6 @@ use pyo3::prelude::*;
 use serde_json::Value;
 
 use crate::agent::PyAgent;
-use crate::compaction::invoke_editor;
 use crate::convert::{py_to_value, runtime_error, value_to_py};
 use crate::event::{to_py_event, PyEvent};
 use crate::reply::{py_to_replies, replies_to_py};
@@ -392,84 +391,6 @@ impl PyTicketQueue {
                     pyo3_async_runtimes::tokio::into_future(produced)
                 });
                 await_coroutine(coroutine)
-            });
-        slf
-    }
-
-    /// Rewrite a ticket's replies before its next request.
-    ///
-    /// Your function receives the events since the ticket's previous request and
-    /// the current replies, and returns the new list, or `None` to change
-    /// nothing. Keep each `tool_use` paired with its `tool_result`. The edit is
-    /// permanent and survives the session being continued.
-    ///
-    /// Raising prints the traceback and leaves the replies alone: this runs on
-    /// an agent's own thread, with no Python frame to raise into.
-    fn edit_replies_on_event<'py>(slf: PyRef<'py, Self>, editor: Py<PyAny>) -> PyRef<'py, Self> {
-        slf.inner
-            .edit_replies_on_event(move |events: &[Event], replies: &mut Vec<Reply>| {
-                Python::attach(|py| {
-                    let outcome = (|| -> PyResult<Option<Vec<Reply>>> {
-                        let py_events: Vec<_> = events.iter().map(to_py_event).collect();
-                        let returned =
-                            editor.bind(py).call1((py_events, replies_to_py(replies)))?;
-                        if returned.is_none() {
-                            return Ok(None);
-                        }
-                        Ok(Some(py_to_replies(&returned)?))
-                    })();
-                    match outcome {
-                        Ok(Some(edited)) => *replies = edited,
-                        Ok(None) => {}
-                        Err(err) => err.print(py),
-                    }
-                });
-            });
-        slf
-    }
-
-    /// Decide what compaction does with a ticket's replies.
-    ///
-    /// Your function receives the `Compaction` and the current replies, and
-    /// returns the new list, or `None` to leave them alone. Define it with
-    /// `async def` to await `compaction.summarize(replies)`; a plain function
-    /// cannot await and has to rewrite the replies on its own.
-    ///
-    /// Handing the replies back unchanged says compaction found nothing to
-    /// drop, and after an overflow the ticket then fails. One editor is held at
-    /// a time, and installing a second replaces the first.
-    ///
-    /// Raising prints the traceback and leaves the replies alone: this runs on
-    /// an agent's own thread, with no Python frame to raise into.
-    fn edit_replies_on_compaction<'py>(
-        slf: PyRef<'py, Self>,
-        editor: Py<PyAny>,
-    ) -> PyRef<'py, Self> {
-        slf.inner
-            .edit_replies_on_compaction(move |compaction, replies: Vec<Reply>| {
-                let editor = Python::attach(|py| editor.clone_ref(py));
-                let unchanged = replies.clone();
-                async move {
-                    // The editor may await `Compaction.summarize`, whose future
-                    // the tokio runtime drives. Running `asyncio.run` on an
-                    // async worker would block the thread that has to poll it.
-                    let edited = tokio::task::spawn_blocking(move || {
-                        Python::attach(|py| {
-                            match invoke_editor(py, &editor, compaction, &replies) {
-                                Ok(Some(edited)) => edited,
-                                Ok(None) => replies,
-                                Err(err) => {
-                                    err.print(py);
-                                    replies
-                                }
-                            }
-                        })
-                    })
-                    .await;
-                    // A panicked editor thread carries no replies back, so hand
-                    // over the originals: compaction changed nothing.
-                    Ok(edited.unwrap_or(unchanged))
-                }
             });
         slf
     }

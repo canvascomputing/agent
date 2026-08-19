@@ -658,9 +658,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn interactive_pause_holds_when_a_message_editor_is_registered() {
-        // A registered no-op editor must not perturb the interactive gate:
-        // the ticket pauses on the assistant text reply, and no second
+    async fn interactive_pause_holds_when_an_event_handler_edits_replies() {
+        // A handler that edits on every event must not perturb the interactive
+        // gate: the ticket pauses on the assistant text reply, and no second
         // request fires. Exhausting the single mock response would fail the
         // ticket, so `requests == 1` and `InProgress` prove the gate held.
         let results_dir = crate::test_util::TempDir::new().unwrap();
@@ -670,7 +670,11 @@ mod tests {
             .dir(results_dir.path().to_path_buf())
             .max_request_retries(0)
             .request_retry_delay(Duration::from_millis(1));
-        tickets.edit_replies_on_event(|_events, _messages| {});
+        // Unfiltered on purpose: it also fires for the run-level events, whose
+        // empty key names no ticket.
+        tickets.on_event(|queue, event| {
+            queue.edit_replies(&event.ticket_key, |_replies| {});
+        });
         tickets.agent(interactive_chatbot(&provider));
         tickets.ticket("hello");
         tickets.start();
@@ -699,7 +703,7 @@ mod tests {
         assert_eq!(
             provider.requests(),
             1,
-            "editor must not trigger a re-request"
+            "an edit must not trigger a re-request"
         );
 
         tickets.cancel_all();

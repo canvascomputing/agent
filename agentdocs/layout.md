@@ -42,7 +42,7 @@ crates/
 - `agent.rs`: the `Agent` builder and ticket-dispatch helpers.
 - `knowledge.rs`: `Knowledge`, the cross-ticket store, an OKF v0.1 bundle in `<dir>/knowledge/`. Pages are curated through the `pages()` handle (`save`, `load`, `remove`) plus `clear`; failures are typed as `KnowledgeError`.
 - `policy.rs`: `Policies` and the limit checks the loop applies on each turn, plus `compact_at`.
-- `compaction.rs`: the public `Compaction` handed to a compaction editor, the built-in summarizer, and the threshold and chunking arithmetic behind both.
+- `compaction.rs`: the summarizer that compaction runs, and the threshold and chunking arithmetic behind it.
 - `stats.rs`: the crate-private `Stats`, the counters a policy check reads and the one reader over `events.jsonl`.
 
 `tickets/` holds the ticket value types and the orchestrator:
@@ -57,7 +57,7 @@ crates/
 
 - `main.rs`: `run_main_loop`, which spawns one tokio task per registered agent, decides when the run is over, joins them, and emits `RunFinished`.
 - `agent.rs`: `run_agent` (outer claim loop plus the inner `Step` match), `TicketContext`, the ticket check, and the silence retry. `mod.rs` names the `Step` enum itself.
-- `compact.rs`, `request.rs`, `tool_call.rs`: compaction dispatched to the installed editor or the built-in summarizer; the provider round-trip with retry and backoff; tool dispatch, output offloading, and the tool-failure budget.
+- `compact.rs`, `request.rs`, `tool_call.rs`: compaction dispatched to the summarizer; the provider round-trip with retry and backoff; tool dispatch, output offloading, and the tool-failure budget.
 
 ## The `providers/` Module
 

@@ -1,6 +1,6 @@
 //! Rewriting a ticket's replies to fit the context window: ahead of it filling
-//! up, and after the LLM provider reports it has. Summarizing them is the
-//! default; `TicketQueue::edit_replies_on_compaction` replaces it.
+//! up, and after the LLM provider reports it has. The older messages are
+//! summarized; the four `Compaction*` events report each step of it.
 
 use std::sync::Arc;
 
@@ -16,14 +16,7 @@ pub(super) async fn run(context: &mut TicketContext<'_>, reason: CompactReason) 
         return None;
     };
     let window = context.model.get_context_window();
-    let editor = context.ticket_queue.compaction_editor();
-    // Only the built-in summarizer works in chunks, so only it can say how many
-    // are coming. Counting them means splitting every message, which an editor
-    // that never calls the summarizer would pay for nothing.
-    let total = match editor {
-        Some(_) => 1,
-        None => algo::chunks_for_window(&ticket.to_messages(), window).len() as u32,
-    };
+    let total = algo::chunks_for_window(&ticket.to_messages(), window).len() as u32;
     context.emit(EventKind::CompactionStarted { reason, total });
 
     let on_progress: Arc<dyn Fn(u32, u32) + Send + Sync> = {
@@ -43,24 +36,18 @@ pub(super) async fn run(context: &mut TicketContext<'_>, reason: CompactReason) 
         })
     };
 
-    // Moved out rather than cloned: the editor gets the replies as its own
+    // Moved out rather than cloned: the summarizer gets the replies as its own
     // argument, so a second copy on the ticket would only be one more thing to
     // read them from.
     let replies = std::mem::take(&mut ticket.replies);
     let compaction = Compaction::new(
-        reason,
-        ticket,
         context.agent.provider(),
         context.model.name.clone(),
         window,
         on_progress,
         context.agent.directives(),
     );
-    let edited = match editor {
-        Some(editor) => editor(compaction, replies.clone()).await,
-        None => algo::default_editor(compaction, replies.clone()).await,
-    };
-    let edited = match edited {
+    let edited = match algo::summarize_replies(compaction, replies.clone()).await {
         Ok(edited) => edited,
         Err(error) => {
             context.emit(EventKind::CompactionFailed {
@@ -509,12 +496,9 @@ mod tests {
         assert_eq!(ticket.status, Status::Finished);
     }
 
-    // Editors
-
-    /// A provider primed to trip the proactive threshold on its first turn,
-    /// then answer the request that follows compaction.
-    fn provider_that_overflows_then_finishes() -> std::sync::Arc<MockProvider> {
-        MockProvider::with_results(vec![
+    #[tokio::test]
+    async fn compaction_clears_the_ticket_usage() {
+        let provider = MockProvider::with_results(vec![
             Ok(tool_call_response_with_usage(
                 "primer",
                 crate::providers::types::TokenUsage {
@@ -522,164 +506,17 @@ mod tests {
                     output_tokens: 0,
                 },
             )),
+            Ok(text_response_with_usage(
+                "SUMMARY",
+                crate::providers::types::TokenUsage::default(),
+            )),
             Ok(write_result_response("done")),
-        ])
-    }
-
-    #[tokio::test]
-    async fn an_installed_editor_replaces_the_built_in_summarizer() {
-        let provider = provider_that_overflows_then_finishes();
-        let (events, provider, ticket) = run_compaction(provider, |tickets| {
-            tickets.edit_replies_on_compaction(|_compaction, _replies| async move {
-                Ok(vec![crate::agents::tickets::Reply::user_text("EDITED")])
-            });
-        })
-        .await;
-
-        // Two requests, not three: the editor asked the provider for nothing.
-        assert_eq!(provider.requests(), 2);
-        assert_eq!(
-            compaction_finishes(&events, crate::event::CompactReason::Proactive),
-            1
-        );
-        assert_eq!(ticket.status, Status::Finished);
-        assert_eq!(user_texts(&provider.received()[1]), vec!["EDITED"]);
-    }
-
-    #[tokio::test]
-    async fn an_installed_editor_reports_one_chunk_on_compaction_started() {
-        let provider = provider_that_overflows_then_finishes();
-        let (events, _, _) = run_compaction(provider, |tickets| {
-            tickets.edit_replies_on_compaction(|_, _| async move {
-                Ok(vec![crate::agents::tickets::Reply::user_text("EDITED")])
-            });
-        })
-        .await;
-
-        let totals: Vec<u32> = events
-            .iter()
-            .filter_map(|e| match &e.kind {
-                crate::event::EventKind::CompactionStarted { total, .. } => Some(*total),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(
-            totals,
-            vec![1],
-            "only the built-in summarizer works in chunks worth counting",
-        );
-    }
-
-    #[tokio::test]
-    async fn the_editor_gets_the_replies_and_a_ticket_that_does_not_repeat_them() {
-        let provider = provider_that_overflows_then_finishes();
-        let seen: std::sync::Arc<std::sync::Mutex<Vec<(usize, usize)>>> =
-            std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let captured = std::sync::Arc::clone(&seen);
-        run_compaction(provider, move |tickets| {
-            tickets.edit_replies_on_compaction(move |compaction, replies| {
-                let captured = std::sync::Arc::clone(&captured);
-                async move {
-                    captured
-                        .lock()
-                        .unwrap()
-                        .push((replies.len(), compaction.ticket().replies.len()));
-                    Ok(vec![crate::agents::tickets::Reply::user_text("EDITED")])
-                }
-            });
-        })
-        .await;
-
-        let seen = seen.lock().unwrap().clone();
-        assert_eq!(seen.len(), 1, "the editor must have run once");
-        let (argument, on_ticket) = seen[0];
-        assert!(argument > 0, "the replies arrive as the argument");
-        assert_eq!(on_ticket, 0, "and are not carried a second time");
-    }
-
-    #[tokio::test]
-    async fn a_second_compaction_editor_replaces_the_first() {
-        let provider = provider_that_overflows_then_finishes();
-        let (_, provider, _) = run_compaction(provider, |tickets| {
-            tickets.edit_replies_on_compaction(|_, _| async move {
-                Ok(vec![crate::agents::tickets::Reply::user_text("FIRST")])
-            });
-            tickets.edit_replies_on_compaction(|_, _| async move {
-                Ok(vec![crate::agents::tickets::Reply::user_text("SECOND")])
-            });
-        })
-        .await;
-
-        assert_eq!(user_texts(&provider.received()[1]), vec!["SECOND"]);
-    }
-
-    #[tokio::test]
-    async fn an_editor_that_returns_the_replies_unchanged_fails_a_reactive_compaction() {
-        let provider = MockProvider::with_results(vec![
-            Ok(tool_call_response("primer")),
-            Err(crate::providers::ProviderError::ContextWindowExceeded {
-                message: "overflow".into(),
-            }),
         ]);
-        let (events, _, ticket) = run_compaction(provider, |tickets| {
-            tickets.edit_replies_on_compaction(|_, replies| async move { Ok(replies) });
-        })
-        .await;
-
-        assert_eq!(
-            compaction_finishes(&events, crate::event::CompactReason::Reactive),
-            0,
-            "compaction that dropped nothing must not report success",
-        );
-        assert_eq!(ticket.status, Status::Failed);
-        assert!(failures_in(&events)
-            .iter()
-            .any(|message| message.contains("context still exceeds window")));
-        assert!(
-            !events
-                .iter()
-                .any(|e| matches!(&e.kind, crate::event::EventKind::RequestFailed { .. })),
-            "no request was made here, so none may be reported as failed",
-        );
-    }
-
-    #[tokio::test]
-    async fn an_editor_error_fails_the_ticket_and_emits_compaction_failed() {
-        let provider = provider_that_overflows_then_finishes();
-        let (events, _, ticket) = run_compaction(provider, |tickets| {
-            tickets.edit_replies_on_compaction(|_, _| async move {
-                Err(crate::providers::ProviderError::ConnectionFailed {
-                    message: "editor could not reach its own service".into(),
-                })
-            });
-        })
-        .await;
-
-        assert!(events.iter().any(|e| matches!(
-            &e.kind,
-            crate::event::EventKind::CompactionFailed { message, .. }
-            if message.contains("editor could not reach its own service"),
-        )));
-        assert_eq!(ticket.status, Status::Failed);
-        assert!(
-            !events
-                .iter()
-                .any(|e| matches!(&e.kind, crate::event::EventKind::RequestFailed { .. })),
-            "the editor failed, not a request, and one failure reports once",
-        );
-    }
-
-    #[tokio::test]
-    async fn compaction_clears_the_ticket_usage() {
-        let provider = provider_that_overflows_then_finishes();
         let queue_handle: std::sync::Arc<std::sync::Mutex<Option<_>>> =
             std::sync::Arc::new(std::sync::Mutex::new(None));
         let captured = std::sync::Arc::clone(&queue_handle);
         let (_, _, ticket) = run_compaction(provider, move |tickets| {
             *captured.lock().unwrap() = Some(std::sync::Arc::clone(tickets));
-            tickets.edit_replies_on_compaction(|_, _| async move {
-                Ok(vec![crate::agents::tickets::Reply::user_text("EDITED")])
-            });
         })
         .await;
 

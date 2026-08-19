@@ -14,11 +14,9 @@ use tokio::task::JoinHandle;
 
 use crate::event::{default_logger, Event, EventKind, FinishReason};
 use crate::persistence::Persist;
-use crate::providers::ProviderResult;
 use crate::schemas::SchemaStore;
 
 use super::super::agent::{Agent, TicketQueueRef};
-use super::super::compaction::Compaction;
 use super::super::policy::Policies;
 use super::super::r#loop::run_main_loop;
 use super::super::stats::Stats;
@@ -46,13 +44,6 @@ type AsyncHandler = dyn Fn(Arc<TicketQueue>, Event, Option<Ticket>) -> HandlerWo
 
 /// Boxed so the queue can hold handlers with different future types.
 type HandlerWork = Pin<Box<dyn Future<Output = ()> + Send>>;
-
-type ReplyEditor = dyn Fn(&[Event], &mut Vec<Reply>) + Send + Sync;
-
-type CompactionEditor = dyn Fn(Compaction, Vec<Reply>) -> EditedReplies + Send + Sync;
-
-/// The replies an editor hands back, once its work finishes.
-type EditedReplies = Pin<Box<dyn Future<Output = ProviderResult<Vec<Reply>>> + Send>>;
 
 /// The kinds that name a ticket the whole hook is about, as opposed to one
 /// step inside it.
@@ -87,14 +78,6 @@ pub(super) struct AwaitedEvents {
     draining: tokio::sync::Mutex<()>,
     /// A concurrent registration waits for the hook rather than adding a second.
     queueing: OnceLock<()>,
-}
-
-/// The registered reply editor and the per-ticket events buffered for it since
-/// each ticket's previous request. The two are always touched together.
-#[derive(Default)]
-pub(super) struct ReplyEditing {
-    pub(super) editor: Option<Arc<ReplyEditor>>,
-    pub(super) pending: HashMap<String, Vec<Event>>,
 }
 
 /// Where a run is, and the wake for anything waiting on it.
@@ -270,14 +253,6 @@ pub struct TicketQueue {
     /// life of the queue, so one registered per call would grow without bound
     /// in a host that awaits in a loop.
     pub(super) event_stream: broadcast::Sender<Event>,
-    /// The editor that rewrites a ticket's replies before each request, plus the
-    /// per-ticket events buffered for it. Buffering runs whether or not an
-    /// editor is installed.
-    pub(super) reply_editing: Mutex<ReplyEditing>,
-    /// What compaction does with a ticket's replies. `None` summarizes them.
-    pub(super) compaction_editor: Mutex<Option<Arc<CompactionEditor>>>,
-    /// What corrects an agent asked to try again. `None` keeps the built-in
-    /// directive.
     /// The result contracts bound to labels, read once per claim. `None` leaves
     /// every ticket with whatever schema it was built with.
     pub(super) schemas: Mutex<Option<Arc<SchemaStore>>>,
@@ -308,8 +283,6 @@ impl TicketQueue {
             event_handlers: Mutex::new(Vec::new()),
             awaited_events: AwaitedEvents::default(),
             event_stream: broadcast::Sender::new(EVENT_STREAM_CAPACITY),
-            reply_editing: Mutex::new(ReplyEditing::default()),
-            compaction_editor: Mutex::new(None),
             schemas: Mutex::new(None),
             dir: Mutex::new(PathBuf::from(".agentwerk")),
             events_lock: Mutex::new(()),
@@ -388,8 +361,6 @@ impl TicketQueue {
             event_handlers: Mutex::new(Vec::new()),
             awaited_events: AwaitedEvents::default(),
             event_stream: broadcast::Sender::new(EVENT_STREAM_CAPACITY),
-            reply_editing: Mutex::new(ReplyEditing::default()),
-            compaction_editor: Mutex::new(None),
             schemas: Mutex::new(None),
             dir: Mutex::new(tickets_dir),
             events_lock: Mutex::new(()),
@@ -731,144 +702,6 @@ impl TicketQueue {
         }
     }
 
-    /// Rewrite a ticket's replies before its next request.
-    ///
-    /// Your function receives the events emitted for that ticket since its
-    /// previous request and the replies themselves, and changes them in place:
-    /// drop a reply, rewrite one, or add one. Match on `event.kind` to act only
-    /// on what you care about, such as a tool failure or a stalled turn, and
-    /// keep the work cheap, since it runs between requests.
-    ///
-    /// The edit is permanent. It changes the stored replies and rewrites them
-    /// on disk, so a dropped message stays gone from what the model sees, now
-    /// and after the session is continued, and no superseded file is left
-    /// behind. Keep the replies well-formed: a `tool_use` and its `tool_result`
-    /// span two replies, so drop both sides together or the LLM provider
-    /// rejects the unpaired block.
-    ///
-    /// One editor is held at a time, and installing a second replaces the
-    /// first, the way [`Self::dir`] or [`Self::max_turns`] do. Two rewriters of
-    /// one ticket's replies would each see the other's output, so stack edits
-    /// inside a single editor instead.
-    ///
-    /// Act only when the event batch says so. A retry after compaction
-    /// reassembles the request, so an editor that ignores the now empty batch
-    /// would edit the same replies twice.
-    ///
-    /// ```no_run
-    /// use agentwerk::TicketQueue;
-    /// use agentwerk::event::EventKind;
-    /// use agentwerk::agents::tickets::{Reply, ReplyContent};
-    ///
-    /// let tickets = TicketQueue::new();
-    /// tickets.edit_replies_on_event(|events, replies| {
-    ///     let failed = events
-    ///         .iter()
-    ///         .any(|e| matches!(e.kind, EventKind::ToolCallFailed { .. }));
-    ///     if !failed {
-    ///         return;
-    ///     }
-    ///     // Drop both sides of the failed exchange: the assistant's tool_use
-    ///     // and the failed tool_result, so no unpaired block is left behind.
-    ///     replies.retain(|reply| {
-    ///         !reply.content.iter().any(|b| {
-    ///             matches!(
-    ///                 b,
-    ///                 ReplyContent::ToolUse { .. }
-    ///                     | ReplyContent::ToolResult { succeeded: false, .. }
-    ///             )
-    ///         })
-    ///     });
-    ///     replies.push(Reply::user_text("That approach failed. Re-read the file first."));
-    /// });
-    /// ```
-    pub fn edit_replies_on_event(
-        &self,
-        editor: impl Fn(&[Event], &mut Vec<Reply>) + Send + Sync + 'static,
-    ) -> &Self {
-        let had_editor = {
-            let mut editing = self.reply_editing.lock().unwrap();
-            editing.editor.replace(Arc::new(editor)).is_some()
-        };
-        if had_editor {
-            return self;
-        }
-
-        // Buffer each ticket's events for the editors as one more `on_event`
-        // handler, installed once with the first editor.
-        let buffer_event = move |queue: &Arc<TicketQueue>, event: &Event| {
-            // Streaming chunks carry no editing signal; run-lifecycle events
-            // (empty key) belong to no ticket.
-            if event.ticket_key.is_empty()
-                || matches!(event.kind, EventKind::TextChunkReceived { .. })
-            {
-                return;
-            }
-            queue
-                .reply_editing
-                .lock()
-                .unwrap()
-                .pending
-                .entry(event.ticket_key.clone())
-                .or_default()
-                .push(event.clone());
-        };
-        self.on_event(buffer_event);
-        self
-    }
-
-    /// Decide what compaction does with a ticket's replies.
-    ///
-    /// Compaction fires when the next request would not fit the model's context
-    /// window, from [`Self::compact_at`] or the built-in distance below it. Your
-    /// function receives the [`Compaction`] and the replies as they stand, and
-    /// returns the ones to keep. Summarizing them into a single message is what
-    /// happens without this hook, and [`Compaction::summarize`] is that
-    /// summarizer, so an editor can call it for part of the replies and handle
-    /// the rest itself.
-    ///
-    /// Returning the replies unchanged says compaction found nothing to drop.
-    /// After an overflow the ticket then fails, because the next request would
-    /// overflow again. Returning an error fails the ticket and emits
-    /// `EventKind::CompactionFailed`.
-    ///
-    /// The edit is permanent, like [`Self::edit_replies_on_event`]: it rewrites
-    /// the stored replies on disk. Keep them well-formed, since a `tool_use` and
-    /// its `tool_result` span two replies and the LLM provider rejects an
-    /// unpaired block.
-    ///
-    /// One editor is held at a time, and installing a second replaces the first.
-    ///
-    /// ```no_run
-    /// use agentwerk::TicketQueue;
-    ///
-    /// let tickets = TicketQueue::new();
-    /// // Summarize what falls off, keep the last two turns as they were.
-    /// tickets.edit_replies_on_compaction(|compaction, replies| async move {
-    ///     let cut = replies.len().saturating_sub(4);
-    ///     let summary = compaction.summarize(&replies[..cut]).await?;
-    ///     let mut kept = vec![agentwerk::Reply::user_text(summary)];
-    ///     kept.extend_from_slice(&replies[cut..]);
-    ///     Ok(kept)
-    /// });
-    /// ```
-    pub fn edit_replies_on_compaction<F, Fut>(&self, editor: F) -> &Self
-    where
-        F: Fn(Compaction, Vec<Reply>) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = ProviderResult<Vec<Reply>>> + Send + 'static,
-    {
-        let boxed: Arc<CompactionEditor> =
-            Arc::new(move |compaction, replies| Box::pin(editor(compaction, replies)));
-        *self.compaction_editor.lock().unwrap() = Some(boxed);
-        self
-    }
-
-    /// The installed compaction editor, cloned out so the lock is released
-    /// before the loop awaits it.
-    pub(crate) fn compaction_editor(&self) -> Option<Arc<CompactionEditor>> {
-        self.compaction_editor.lock().unwrap().clone()
-    }
-
     /// Publish `kind` and hand back the event it became, so a caller that also
     /// acts on it works from what every observer saw.
     pub(crate) fn emit(&self, key: &str, agent: &str, kind: EventKind) -> Event {
@@ -902,24 +735,6 @@ impl TicketQueue {
             h(&queue, &event);
         }
         event
-    }
-
-    /// Apply the registered editor to `key`'s replies, handing it the events
-    /// buffered since the ticket's previous request and draining that batch.
-    /// Does nothing until an editor is registered, or while no events are pending.
-    pub(crate) fn run_reply_editor(&self, key: &str) {
-        let (editor, events) = {
-            let mut editing = self.reply_editing.lock().unwrap();
-            let Some(editor) = editing.editor.clone() else {
-                return;
-            };
-            let events = editing.pending.remove(key).unwrap_or_default();
-            (editor, events)
-        };
-        if events.is_empty() {
-            return;
-        }
-        self.edit_replies(key, |replies| editor(&events, replies));
     }
 
     fn label_for(&self, key: &str) -> Option<String> {
@@ -1410,7 +1225,6 @@ impl TicketQueue {
         }
         self.run.reset();
         self.cancel_filters.lock().unwrap().clear();
-        self.reply_editing.lock().unwrap().pending.clear();
         let supervisor = self
             .weak_self
             .upgrade()
@@ -2127,132 +1941,6 @@ mod tests {
             queue.finish(move |t: &Ticket| t.key == key).await,
             vec![serde_json::json!("done")]
         );
-    }
-
-    #[test]
-    fn message_editor_receives_buffered_events_excluding_text_chunks() {
-        use crate::event::ToolFailureKind;
-        let (queue, _tmp) = test_queue();
-        let key = queue.ticket("go");
-
-        let seen: Arc<Mutex<Vec<Event>>> = Arc::new(Mutex::new(Vec::new()));
-        let recorder = Arc::clone(&seen);
-        queue.edit_replies_on_event(move |events, _replies| {
-            recorder.lock().unwrap().extend(events.iter().cloned());
-        });
-
-        queue.emit(&key, "agent", EventKind::TurnStarted);
-        queue.emit(
-            &key,
-            "agent",
-            EventKind::TextChunkReceived {
-                content: "hi".into(),
-            },
-        );
-        queue.emit(
-            &key,
-            "agent",
-            EventKind::ToolCallFailed {
-                tool_name: "boom".into(),
-                call_id: "c1".into(),
-                reason: ToolFailureKind::ExecutionFailed,
-                message: "boom".into(),
-            },
-        );
-        queue.run_reply_editor(&key);
-
-        let events = seen.lock().unwrap();
-        assert!(events
-            .iter()
-            .any(|e| matches!(e.kind, EventKind::TurnStarted)));
-        assert!(events
-            .iter()
-            .any(|e| matches!(e.kind, EventKind::ToolCallFailed { .. })));
-        assert!(!events
-            .iter()
-            .any(|e| matches!(e.kind, EventKind::TextChunkReceived { .. })));
-    }
-
-    #[test]
-    fn message_editor_batch_drains_after_it_runs() {
-        let (queue, _tmp) = test_queue();
-        let key = queue.ticket("go");
-
-        let runs = Arc::new(Mutex::new(0u32));
-        let counter = Arc::clone(&runs);
-        queue.edit_replies_on_event(move |_events, _replies| {
-            *counter.lock().unwrap() += 1;
-        });
-
-        queue.emit(&key, "agent", EventKind::TurnStarted);
-        queue.run_reply_editor(&key);
-        // The batch is drained, so a second run has nothing to react to.
-        queue.run_reply_editor(&key);
-
-        assert_eq!(*runs.lock().unwrap(), 1);
-    }
-
-    /// One editor at a time, the way `dir` or `max_turns` replace. Two
-    /// rewriters of one ticket's replies would each see the other's output.
-    #[test]
-    fn a_second_reply_editor_replaces_the_first() {
-        use crate::agents::tickets::ReplyContent;
-        let (queue, _tmp) = test_queue();
-        let key = queue.ticket("go");
-        queue.edit_replies_on_event(|_events, replies| {
-            replies.push(Reply::user_text("first"));
-        });
-        queue.edit_replies_on_event(|_events, replies| {
-            replies.push(Reply::user_text("second"));
-        });
-
-        queue.emit(&key, "agent", EventKind::TurnStarted);
-        queue.run_reply_editor(&key);
-
-        let texts: Vec<String> = queue
-            .get_ticket(&key)
-            .unwrap()
-            .replies
-            .iter()
-            .filter_map(|r| match r.content.first() {
-                Some(ReplyContent::Text { text: t }) => Some(t.clone()),
-                _ => None,
-            })
-            .collect();
-        assert!(
-            texts.contains(&"second".to_string()),
-            "the last editor installed must run: {texts:?}"
-        );
-        assert!(
-            !texts.contains(&"first".to_string()),
-            "the replaced editor must not run: {texts:?}"
-        );
-    }
-
-    #[test]
-    fn message_editor_sees_only_the_events_of_the_ticket_it_edits() {
-        let (queue, _tmp) = test_queue();
-        let a = queue.ticket("a");
-        let b = queue.ticket("b");
-
-        let seen: Arc<Mutex<Vec<Event>>> = Arc::new(Mutex::new(Vec::new()));
-        let recorder = Arc::clone(&seen);
-        queue.edit_replies_on_event(move |events, _replies| {
-            recorder.lock().unwrap().extend(events.iter().cloned());
-        });
-
-        queue.emit(&a, "agent", EventKind::TurnStarted);
-        queue.emit(&b, "agent", EventKind::TicketFailed);
-        queue.run_reply_editor(&a);
-
-        let events = seen.lock().unwrap();
-        assert!(
-            events.iter().all(|e| e.ticket_key == a),
-            "editor for ticket {a} must not see another ticket's events: {events:?}"
-        );
-        assert!(events
-            .iter()
-            .any(|e| matches!(e.kind, EventKind::TurnStarted)));
     }
 
     #[test]
