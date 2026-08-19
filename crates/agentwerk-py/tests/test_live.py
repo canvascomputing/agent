@@ -121,27 +121,26 @@ async def test_saves_the_messages_of_a_finished_ticket(tmp_path):
     assert model
 
 
-async def test_an_async_compaction_editor_awaits_the_built_in_summarizer(tmp_path):
+async def test_compaction_summarizes_the_replies_against_the_live_model(tmp_path):
     # Two turns: the first records the token usage the trigger reads, the
     # second compacts, since a threshold of zero is always crossed. The role
     # forbids tools so the ticket cannot finish on turn one and skip it.
     queue = aw.TicketQueue().max_turns(2).dir(str(tmp_path))
     queue.compact_at(0.0)
-    summaries = []
+    compacted = []
 
-    async def summarize_the_head(compaction, replies):
-        summary = await compaction.summarize(replies)
-        summaries.append(summary)
-        return [aw.Reply.user_text(summary)]
+    def watch(work, event):
+        if event.kind == "compaction_finished":
+            compacted.append(event.ticket_key)
 
-    queue.edit_replies_on_compaction(summarize_the_head)
+    queue.on_event(watch)
     queue.agent(
         aw.Agent.from_env()
         .role("Answer in plain text. Do not call any tools.")
         .build()
     )
-    queue.ticket("Name one colour and say why you picked it.")
+    key = queue.ticket("Name one colour and say why you picked it.")
     await queue.finish_all()
 
-    assert summaries, "the editor must have run and awaited the summarizer"
-    assert summaries[0].strip()
+    # A summarizer that failed would emit `compaction_failed` instead.
+    assert compacted == [key]

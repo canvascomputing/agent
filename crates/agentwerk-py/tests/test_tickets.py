@@ -393,17 +393,19 @@ def test_on_event_files_a_follow_up_for_any_kind(queue):
     assert [t.task for t in filed] == ["report"]
 
 
-def test_edit_replies_on_event_chains(queue):
-    configured = queue.edit_replies_on_event(lambda events, replies: replies)
-    assert isinstance(configured, aw.TicketQueue)
+def test_an_event_handler_rewrites_replies_through_the_queue(queue):
+    def redact_when_done(work, event):
+        if event.kind == "ticket_finished":
+            work.edit_replies(event.ticket_key, lambda replies: [aw.Reply.user_text("[redacted]")])
 
+    queue.on_event(redact_when_done)
+    key = queue.ticket(aw.Ticket("scan the corpus"))
+    queue.reply(key, "secret")
 
-def test_edit_replies_on_compaction_chains(queue):
-    async def keep_the_tail(compaction, replies):
-        return replies[-2:]
+    queue.set_finished(key, {"verdict": "clean"})
 
-    configured = queue.edit_replies_on_compaction(keep_the_tail)
-    assert isinstance(configured, aw.TicketQueue)
+    texts = [r.content[0].data["text"] for r in queue.get_ticket(key).replies]
+    assert texts == ["[redacted]"]
 
 
 def test_compact_at_round_trips_through_get_compact_at(queue):

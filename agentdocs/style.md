@@ -175,34 +175,30 @@ tickets.cancel_all();                            // the whole run
 
 ## Hooks
 
-**A hook's name says when it runs. `on_<trigger>` observes, `<action>_on_<trigger>` reacts.**
+**A hook's name says when it runs. Every hook observes: `on_<trigger>`, and `on_<trigger>_async` for the same trigger in a handler `finish` awaits.**
 
 ```rust
 on_event(handler)                    // observe
 on_result_async(handler)             // observe, in a handler `finish` awaits
-edit_replies_on_event(editor)        // react whenever the trigger matches
 edit_replies(key, editor)            // act once, now
 ```
 
 - `on_<trigger>(handler)` observes: the handler sees every `<trigger>` and returns nothing.
 - `on_<trigger>_async(handler)` is the same trigger in a handler whichever `finish` is waiting awaits. Every observer has one, and only observers do.
-- `<action>_on_<trigger>(..)` reacts whenever `<trigger>` matches. The action may be more than one word, so `edit_replies_on_event` reads as `edit_replies` plus `on_event`.
-- A bare `<action>(..)` acts once, now: `cancel`, `edit_replies`. Every method carrying the `_on_` infix returns `&Self`.
+- A bare `<action>(..)` acts once, now: `cancel`, `edit_replies`.
 - IMPORTANT: the trigger fixes the handler's parameters. `_on_event` hands over `&Event`, `_on_result` a `&Ticket` and its validated `&Value`, `_on_failure` the `&Event` and the `&Ticket` it happened in. Observing returns `()`.
-- IMPORTANT: an observer takes the queue first, `&Arc<TicketQueue>` before the trigger's own parameters, owned in the `_async` twin. That is what a hook files follow-up work through, and why no `create_ticket_on_*` family exists: `queue.ticket(..)` inside `on_result` is the whole of it.
+- IMPORTANT: an observer takes the queue first, `&Arc<TicketQueue>` before the trigger's own parameters, owned in the `_async` twin. That is what a hook acts through, and why neither a `create_ticket_on_*` nor an `edit_replies_on_*` family exists: `queue.ticket(..)` inside `on_result`, and `queue.edit_replies(&event.ticket_key, ..)` inside `on_event`, are the whole of them.
 - A hook reacts to something agentwerk produces. Anything the caller already holds needs no hook: to stop a pool on a verdict, `finish` for it and `cancel`.
 - `on_ticket` sits outside the trigger grid, keying on a ticket rather than naming a trigger.
-- The editor row is the one exception and holds two members: `edit_replies_on_event` and `edit_replies_on_compaction`. Compaction earns the second because it is a moment agentwerk writes on the host's behalf. What agentwerk writes to correct the model is not an editor at all: `AgentBuilder::directives` takes one function over every directive. No `_on_result` or `_on_failure` sibling follows: an editor runs once per request over the batch of events since the previous one, and a failure is already reachable by matching `EventKind::ToolCallFailed` inside the batch.
+- No hook registers something agentwerk calls in place of its own work. Compaction summarizes and says so through the four `Compaction*` events, and what agentwerk writes to correct the model is set once by `AgentBuilder::directives`, which takes one function over every directive.
 
 ## Editors
 
 **An editor is `edit_<noun>`. Its last parameter is the `&mut` value it rewrites; anything before it is read-only context.**
 
-- `edit_replies(key, FnOnce(&mut Vec<Reply>))`, `edit_replies_on_event(Fn(&[Event], &mut Vec<Reply>))`.
+- `edit_replies(key, FnOnce(&mut Vec<Reply>))`: the key is the read-only context, the replies are the value.
 - The value arrives holding what agentwerk would otherwise have used, so an editor that writes nothing keeps the default. No editor returns `Option<T>`: there is nothing left to signal.
-- An async editor takes the value by move and returns the replacement: `edit_replies_on_compaction(Fn(Compaction, Vec<Reply>) -> Future<Output = ProviderResult<Vec<Reply>>>)`. Handing back what it was given is how it says it changed nothing, and the `Result` is there because an editor that calls the model can fail.
-- A hook that rewrites a value is named for that value, not for its trigger alone. Naming it `on_<trigger>` alone reads as an observer and hides what it changes.
-- IMPORTANT: an observer composes, an editor is singular. Installing a second editor replaces the first, like `dir` or `max_turns`, so stack edits inside a single editor.
+- IMPORTANT: an editor acts once, on the value as it stands. Nothing is registered, so a second caller reads what the first left rather than replacing it.
 
 ## Python Bindings
 

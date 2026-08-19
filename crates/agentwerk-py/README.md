@@ -802,8 +802,6 @@ tickets.on_failure(retry_once)
 | | `on_result_async(handler)` | Read every finished ticket with its result, in an async handler. |
 | | `on_failure_async(handler)` | Read every failure with its ticket, in an async handler. |
 | | `on_ticket_async(handler)` | Read a ticket lifecycle transition in an async handler. |
-| **Rewrite** | `edit_replies_on_event(editor)` | Rewrite a ticket's replies before its next request. |
-| | `edit_replies_on_compaction(editor)` | Decide what compaction does with a ticket's replies. |
 
 Save replies of every finished ticket as a training example:
 

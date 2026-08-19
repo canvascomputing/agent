@@ -1,11 +1,9 @@
 //! Context-window compaction: rewrite a ticket's replies before the next
-//! request would overflow. Summarizing them into one message is the default;
-//! `TicketQueue::edit_replies_on_compaction` replaces it.
+//! request would overflow, by summarizing them into one message.
 
 use std::sync::Arc;
 
-use crate::agents::tickets::{Author, Reply, Ticket};
-use crate::event::CompactReason;
+use crate::agents::tickets::{Author, Reply};
 use crate::prompts::compaction_directive;
 use crate::prompts::directives::DirectiveStore;
 use crate::providers::types::StreamEvent;
@@ -110,14 +108,9 @@ pub(crate) fn should_compact_proactively(
     estimate.saturating_add(next_delta(history)) >= threshold
 }
 
-/// One compaction round-trip, handed to the editor installed with
-/// [`TicketQueue::edit_replies_on_compaction`]. It owns everything it needs, so
-/// it can cross an await: the ticket is a copy taken when compaction started.
-///
-/// [`TicketQueue::edit_replies_on_compaction`]: crate::TicketQueue::edit_replies_on_compaction
-pub struct Compaction {
-    reason: CompactReason,
-    ticket: Ticket,
+/// One compaction round-trip. It owns everything it needs, so it can cross an
+/// await.
+pub(crate) struct Compaction {
     provider: Provider,
     model: String,
     window: Option<u64>,
@@ -127,8 +120,6 @@ pub struct Compaction {
 
 impl Compaction {
     pub(crate) fn new(
-        reason: CompactReason,
-        ticket: Ticket,
         provider: Provider,
         model: String,
         window: Option<u64>,
@@ -136,8 +127,6 @@ impl Compaction {
         directives: Arc<DirectiveStore>,
     ) -> Self {
         Self {
-            reason,
-            ticket,
             provider,
             model,
             window,
@@ -146,21 +135,8 @@ impl Compaction {
         }
     }
 
-    /// Get why compaction fired: ahead of an overflow, or after one.
-    pub fn reason(&self) -> CompactReason {
-        self.reason
-    }
-
-    /// Get the ticket being compacted: its key, label, task, and status as
-    /// they stood when compaction started. `replies` is empty here, because the
-    /// replies travel to the editor as their own argument rather than as a
-    /// second copy on the ticket.
-    pub fn ticket(&self) -> &Ticket {
-        &self.ticket
-    }
-
     /// Get the model's context window, or `None` when it is unknown.
-    pub fn window(&self) -> Option<u64> {
+    pub(crate) fn window(&self) -> Option<u64> {
         self.window
     }
 
@@ -169,7 +145,7 @@ impl Compaction {
     /// first, so a single oversized reply still gets through. Replies the model
     /// would not see, an empty slice or system replies alone, summarize to an
     /// empty string without a request.
-    pub async fn summarize(&self, replies: &[Reply]) -> ProviderResult<String> {
+    pub(crate) async fn summarize(&self, replies: &[Reply]) -> ProviderResult<String> {
         let messages: Vec<Message> = replies.iter().filter_map(Reply::as_message).collect();
         // Chunking hands back one empty chunk here, and an LLM provider rejects
         // a request carrying no messages.
@@ -227,11 +203,10 @@ impl Compaction {
     }
 }
 
-/// What compaction does when no editor is installed: collapse everything the
-/// model would see into one summary, keeping the system reply that carries the
-/// system prompt. Replies that already hold nothing to collapse come back
-/// unchanged, which the loop reads as a no-op.
-pub(crate) async fn default_editor(
+/// Collapse everything the model would see into one summary, keeping the system
+/// reply that carries the system prompt. Replies that already hold nothing to
+/// collapse come back unchanged, which the loop reads as a no-op.
+pub(crate) async fn summarize_replies(
     compaction: Compaction,
     replies: Vec<Reply>,
 ) -> ProviderResult<Vec<Reply>> {
@@ -597,8 +572,6 @@ mod tests {
         on_progress: Arc<dyn Fn(u32, u32) + Send + Sync>,
     ) -> Compaction {
         Compaction::new(
-            CompactReason::Proactive,
-            Ticket::new("task"),
             provider.into(),
             "mock".into(),
             window,
@@ -635,8 +608,8 @@ mod tests {
 
     #[tokio::test]
     async fn summarize_makes_no_request_for_replies_the_model_would_not_see() {
-        // An editor summarizing the head of a short ticket hands over a slice
-        // that maps to no messages, which an LLM provider would reject.
+        // A short ticket hands over a slice that maps to no messages, which an
+        // LLM provider would reject.
         for replies in [Vec::new(), vec![Reply::system_text("system prompt")]] {
             let provider = ScriptedProvider::new(Vec::new());
             let compaction = compaction_for(provider.clone(), None);
@@ -652,11 +625,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_default_editor_keeps_the_system_reply_and_appends_the_summary() {
+    async fn summarizing_keeps_the_system_reply_and_appends_the_summary() {
         let provider = ScriptedProvider::new(vec![Ok(summary_response("SUMMARY"))]);
         let compaction = compaction_for(provider, None);
 
-        let kept = default_editor(compaction, worked_replies())
+        let kept = summarize_replies(compaction, worked_replies())
             .await
             .expect("the default handler should succeed");
 
@@ -671,7 +644,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_default_editor_returns_the_replies_unchanged_when_there_is_nothing_to_collapse() {
+    async fn summarizing_returns_the_replies_unchanged_when_there_is_nothing_to_collapse() {
         // The system reply is not sent to the model, so one message is all
         // these replies amount to: there is nothing to collapse into a summary.
         for replies in [
@@ -685,7 +658,7 @@ mod tests {
             let provider = ScriptedProvider::new(Vec::new());
             let compaction = compaction_for(provider.clone(), None);
 
-            let kept = default_editor(compaction, replies.clone())
+            let kept = summarize_replies(compaction, replies.clone())
                 .await
                 .expect("a no-op should succeed");
 
@@ -863,7 +836,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_default_editor_emits_no_progress_when_there_is_nothing_to_collapse() {
+    async fn summarizing_emits_no_progress_when_there_is_nothing_to_collapse() {
         let provider = ScriptedProvider::new(Vec::new());
         let captured: Arc<StdMutex<Vec<(u32, u32)>>> = Arc::new(StdMutex::new(Vec::new()));
         let on_progress: Arc<dyn Fn(u32, u32) + Send + Sync> = {
@@ -874,7 +847,7 @@ mod tests {
         };
         let compaction = compaction_reporting_to(provider, None, on_progress);
 
-        default_editor(compaction, vec![Reply::user_text("only one")])
+        summarize_replies(compaction, vec![Reply::user_text("only one")])
             .await
             .expect("a no-op should succeed");
 
