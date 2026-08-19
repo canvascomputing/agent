@@ -51,93 +51,93 @@ pub(super) async fn run(context: &mut TicketContext<'_>, mut calls: Vec<ToolCall
     let results = registry.execute(&calls, &tool_context).await;
 
     let mut first_schema_failure: Option<String> = None;
-    for (call, result) in calls.iter().zip(&results) {
+    let mut offloaded = std::collections::HashMap::new();
+    let mut blocks: Vec<ContentBlock> = Vec::with_capacity(results.len());
+    let mut kinds: Vec<EventKind> = Vec::with_capacity(results.len());
+    for (call, result) in calls.iter().zip(results) {
         // Feeds the per-path open tally; empty for a tool that opens no file.
         let opened_paths = registry
             .get(&call.name)
             .map(|tool| tool.opened_paths(&call.input))
             .unwrap_or_default();
-        let reason = match result {
-            ToolResult::Success { .. } => None,
-            ToolResult::Error { kind, .. } => Some(*kind),
-        };
-
-        let Some(reason) = reason else {
-            // Any successful tool call is progress: clear the counter.
-            context.consecutive_schema_failures = 0;
-            if let ToolResult::Success { repaired, .. } = result {
+        let succeeded = matches!(result, ToolResult::Success { .. });
+        let content = match result {
+            ToolResult::Success {
+                content,
+                offloaded: offload_path,
+                repaired,
+            } => {
+                // Any successful tool call is progress: clear the counter.
+                context.consecutive_schema_failures = 0;
                 for message in repaired {
-                    context.emit(EventKind::ResponseRepaired {
+                    kinds.push(EventKind::ResponseRepaired {
                         tool_name: call.name.clone(),
                         reason: RepairKind::ValueMistyped,
-                        message: message.clone(),
+                        message,
                     });
                 }
+                for path in opened_paths {
+                    kinds.push(EventKind::FileOpenFinished { path });
+                }
+                kinds.push(EventKind::ToolCallFinished {
+                    tool_name: call.name.clone(),
+                    call_id: call.id.clone(),
+                    output: content.clone(),
+                });
+                if let Some(path) = offload_path {
+                    offloaded.insert(call.id.clone(), path);
+                }
+                content
             }
-            for path in &opened_paths {
-                context.emit(EventKind::FileOpenFinished { path: path.clone() });
+            ToolResult::Error { content, kind } => {
+                // Every tool failure counts toward the budget, so a stuck agent
+                // fails its ticket instead of looping until the time limit.
+                context.consecutive_schema_failures =
+                    context.consecutive_schema_failures.saturating_add(1);
+                if kind == ToolFailureKind::SchemaValidationFailed && first_schema_failure.is_none()
+                {
+                    first_schema_failure = Some(content.clone());
+                }
+                // A path fails with the call that named it, so it carries the
+                // call's reason.
+                for path in opened_paths {
+                    kinds.push(EventKind::FileOpenFailed { path, reason: kind });
+                }
+                kinds.push(EventKind::ToolCallFailed {
+                    tool_name: call.name.clone(),
+                    call_id: call.id.clone(),
+                    reason: kind,
+                    message: content.clone(),
+                });
+                content
             }
-            context.emit(EventKind::ToolCallFinished {
-                tool_name: call.name.clone(),
-                call_id: call.id.clone(),
-                output: result.content().to_string(),
-            });
-            continue;
         };
-
-        // Every tool failure counts toward the budget, so a stuck agent fails
-        // its ticket instead of looping until the time limit.
-        context.consecutive_schema_failures = context.consecutive_schema_failures.saturating_add(1);
-        if reason == ToolFailureKind::SchemaValidationFailed && first_schema_failure.is_none() {
-            first_schema_failure = Some(result.content().to_string());
-        }
-        // A path fails with the call that named it, so it carries the call's
-        // reason.
-        for path in &opened_paths {
-            context.emit(EventKind::FileOpenFailed {
-                path: path.clone(),
-                reason,
-            });
-        }
-        context.emit(EventKind::ToolCallFailed {
-            tool_name: call.name.clone(),
-            call_id: call.id.clone(),
-            reason,
-            message: result.content().to_string(),
+        blocks.push(ContentBlock::ToolResult {
+            tool_use_id: call.id.clone(),
+            content,
+            succeeded,
         });
     }
 
     // The corrective message for a rejected call is already in its result, so
     // the reply carries nothing beyond the results themselves.
     if let Some(message) = first_schema_failure {
-        context.emit(EventKind::SchemaRetried {
+        kinds.push(EventKind::SchemaRetried {
             attempt: context.consecutive_schema_failures,
             max_attempts: max_schema_retries,
             message,
         });
     }
 
-    let mut offloaded = std::collections::HashMap::new();
-    let mut blocks: Vec<ContentBlock> = Vec::with_capacity(results.len());
-    for (call, result) in calls.iter().zip(results) {
-        let succeeded = matches!(result, ToolResult::Success { .. });
-        if let ToolResult::Success {
-            offloaded: Some(path),
-            ..
-        } = &result
-        {
-            offloaded.insert(call.id.clone(), path.clone());
-        }
-        blocks.push(ContentBlock::ToolResult {
-            tool_use_id: call.id.clone(),
-            content: result.into_content(),
-            succeeded,
-        });
-    }
-
     context
         .ticket_queue
         .add_reply(&context.ticket_key, Reply::user(&blocks, &offloaded));
+
+    // Emitted after the reply lands: a handler that rewrites this ticket's
+    // replies must find the tool result the event announces.
+    for kind in kinds {
+        context.emit(kind);
+    }
 
     if context.consecutive_schema_failures >= max_schema_retries {
         context.emit(EventKind::PolicyViolated {
@@ -534,6 +534,68 @@ mod tests {
                 limit: 2,
             },
         )));
+    }
+
+    /// The whole reply-editing pattern rests on this: a handler that rewrites
+    /// the replies on a failure must find the result it is rewriting.
+    #[tokio::test]
+    async fn tool_call_failed_fires_after_its_tool_result_is_stored() {
+        use std::sync::Mutex;
+        use std::time::Duration;
+
+        use crate::agents::agent::Agent;
+        use crate::agents::tickets::{ReplyContent, TicketQueue};
+        use crate::tools::{Tool, ToolResult};
+
+        let provider = MockProvider::with_results(vec![
+            Ok(tool_call_response("boom")),
+            Ok(write_result_response("done")),
+        ]);
+        let boom = Tool::new("boom")
+            .description("Always fails")
+            .handler(|_: Value, _| async move { ToolResult::error("boom") })
+            .build();
+
+        let results_dir = crate::test_util::TempDir::new().unwrap();
+        let tickets = TicketQueue::new();
+        tickets
+            .dir(results_dir.path().to_path_buf())
+            .max_request_retries(0)
+            .request_retry_delay(Duration::from_millis(1))
+            .max_time(Duration::from_millis(500));
+        // `None` until the handler runs, so the assertion also proves it did.
+        let stored: Arc<Mutex<Option<bool>>> = Arc::new(Mutex::new(None));
+        let seen = Arc::clone(&stored);
+        tickets.on_event(move |queue, event| {
+            if !matches!(event.kind, EventKind::ToolCallFailed { .. }) {
+                return;
+            }
+            let ticket = queue.get_ticket(&event.ticket_key).unwrap();
+            let landed = ticket.replies.iter().any(|reply| {
+                reply.content.iter().any(|block| {
+                    matches!(
+                        block,
+                        ReplyContent::ToolResult {
+                            succeeded: false,
+                            ..
+                        }
+                    )
+                })
+            });
+            *seen.lock().unwrap() = Some(landed);
+        });
+        tickets.agent(
+            Agent::new()
+                .provider(provider)
+                .model("mock")
+                .role("test")
+                .tool(boom)
+                .build(),
+        );
+        tickets.ticket("go");
+        let _ = tickets.finish_all().await;
+
+        assert_eq!(*stored.lock().unwrap(), Some(true));
     }
 
     #[tokio::test]
