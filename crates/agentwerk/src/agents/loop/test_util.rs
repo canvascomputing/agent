@@ -293,7 +293,7 @@ pub fn collect_events(tickets: &TicketQueue) -> Arc<Mutex<Vec<Event>>> {
         let c = Arc::clone(&collected);
         Arc::new(move |e: &Event| c.lock().unwrap().push(e.clone()))
     };
-    tickets.on_event(move |e| handler(e));
+    tickets.on_event(move |_, e| handler(e));
     collected
 }
 
@@ -320,7 +320,7 @@ pub async fn run_one(
         .max_schema_retries(max_schema_retries)
         .max_time(Duration::from_millis(200));
 
-    tickets.on_event(move |e| handler(e));
+    tickets.on_event(move |_, e| handler(e));
     tickets.agent(
         Agent::new()
             .provider(provider.clone())
@@ -367,7 +367,7 @@ pub async fn run_with_context_window(
         .request_retry_delay(Duration::from_millis(1))
         .max_schema_retries(10)
         .max_time(Duration::from_secs(5));
-    tickets.on_event(move |e| handler(e));
+    tickets.on_event(move |_, e| handler(e));
     tickets.agent(
         Agent::new()
             .provider(provider.clone())
@@ -409,7 +409,7 @@ pub async fn run_compaction(
         .max_schema_retries(10)
         .max_time(Duration::from_secs(30));
 
-    tickets.on_event(move |e| handler(e));
+    tickets.on_event(move |_, e| handler(e));
     tickets.agent(
         Agent::new()
             .provider(provider.clone())

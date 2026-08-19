@@ -509,7 +509,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn finish_waits_through_create_ticket_on_result_follow_up() {
+    async fn finish_waits_through_an_on_result_follow_up() {
         // The handler mints a follow-up when TICKET-1 finishes. finish()
         // must not drain in the window between the finish transition and
         // the handler's insert.
@@ -523,8 +523,10 @@ mod tests {
             .dir(results_dir.path().to_path_buf())
             .max_request_retries(0)
             .request_retry_delay(Duration::from_millis(1));
-        tickets.create_ticket_on_result(|done, _| {
-            (done.key == "TICKET-1").then(|| Ticket::new("follow up").label("alice"))
+        tickets.on_result(|queue, done, _| {
+            if done.key == "TICKET-1" {
+                queue.ticket(Ticket::new("follow up").label("alice"));
+            }
         });
         tickets.agent(
             Agent::new()
@@ -550,6 +552,75 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_hook_files_the_report_once_aql_finds_both_scans_finished() {
+        // Two scans run side by side on their own agents. The hook selects the
+        // finished ones with AQL after each result and, once both are in,
+        // writes their results into the ticket that reports on them.
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let results_dir = crate::test_util::TempDir::new().unwrap();
+        let provider = MockProvider::with_results(vec![
+            Ok(write_result_response("clean")),
+            Ok(write_result_response("clean")),
+            Ok(write_result_response("report-done")),
+        ]);
+        let tickets = TicketQueue::new();
+        tickets
+            .dir(results_dir.path().to_path_buf())
+            .max_request_retries(0)
+            .request_retry_delay(Duration::from_millis(1));
+
+        // Both scans can finish at once, so the first handler to see the pair
+        // takes the flag and the other returns: without it the report is filed
+        // twice.
+        let filed = Arc::new(AtomicBool::new(false));
+        tickets.on_result(move |queue, done, _| {
+            if !done.has_label("scan") {
+                return;
+            }
+            let scans = queue.find_results("label = scan AND status = Finished");
+            if scans.len() < 2 || filed.swap(true, Ordering::SeqCst) {
+                return;
+            }
+            let verdicts: Vec<String> = scans.iter().map(|scan| scan.to_string()).collect();
+            queue.ticket(Ticket::labeled(
+                "report",
+                format!("Write the report from {}.", verdicts.join(" and ")),
+            ));
+        });
+
+        for label in ["scan", "scan", "report"] {
+            tickets.agent(
+                Agent::new()
+                    .label(label)
+                    .provider(provider.clone())
+                    .model("mock")
+                    .role("test")
+                    .build(),
+            );
+        }
+
+        tickets.start();
+        tickets.ticket(Ticket::labeled("scan", "scan a.py"));
+        tickets.ticket(Ticket::labeled("scan", "scan b.py"));
+
+        tokio::time::timeout(Duration::from_secs(5), tickets.finish_all())
+            .await
+            .expect("finish did not finish within 5s");
+
+        let report = tickets.find_ticket("label = report").unwrap();
+        assert_eq!(
+            report.task,
+            serde_json::json!("Write the report from \"clean\" and \"clean\".")
+        );
+        assert_eq!(report.status, Status::Finished);
+        assert_eq!(
+            tickets.find_results("label = report"),
+            vec![serde_json::json!("report-done")]
+        );
+    }
+
+    #[tokio::test]
     async fn ticket_finished_event_fires_exactly_once_per_ticket() {
         use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -562,7 +633,7 @@ mod tests {
             .request_retry_delay(Duration::from_millis(1));
         let finished_events = Arc::new(AtomicUsize::new(0));
         let counter = Arc::clone(&finished_events);
-        tickets.on_event(move |e| {
+        tickets.on_event(move |_, e| {
             if matches!(e.kind, crate::event::EventKind::TicketFinished) {
                 counter.fetch_add(1, Ordering::Relaxed);
             }

@@ -11,7 +11,7 @@ use crate::event::{EventKind, FinishReason};
 pub(super) fn collect_finish_reasons(queue: &TicketQueue) -> Arc<Mutex<Vec<FinishReason>>> {
     let seen = Arc::new(Mutex::new(Vec::new()));
     let sink = Arc::clone(&seen);
-    queue.on_event(move |event| {
+    queue.on_event(move |_, event| {
         if let EventKind::RunFinished { reason } = event.kind {
             sink.lock().unwrap().push(reason);
         }

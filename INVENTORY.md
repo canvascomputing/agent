@@ -481,17 +481,18 @@ The rules the tables never repeat.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `EventHandler = (event: Event) => void` | private |
+| Rust | `EventHandler = (queue: TicketQueue, event: Event) => void` | private |
 | Rust | `TicketFilter = (ticket: Ticket) => boolean` | crate |
 | Rust | `EVENT_STREAM_CAPACITY: number = 1024` | private |
-| Rust | `AsyncResultHandler = (ticket: Ticket, result: json) => HandlerWork` | private |
-| Rust | `AsyncResultsHandler = (results: json[]) => HandlerWork` | private |
+| Rust | `is_ticket_kind(kind: EventKind): boolean` | private |
+| Rust | `AsyncHandler = (queue: TicketQueue, event: Event, ticket: Ticket?) => HandlerWork` | private |
 | Rust | `HandlerWork = Promise<void>` | private |
 | Rust | `ReplyEditor = (events: Event[], replies: Reply[]) => void` | private |
 | Rust | `CompactionEditor = (compaction: Compaction, replies: Reply[]) => EditedReplies` | private |
 | Rust | `EditedReplies = Promise<Reply[] throws ProviderError>` | private |
-| Rust | `Delivery = [Ticket, json, json[]]` | private |
-| Rust | `AwaitedResults { per_result: AsyncResultHandler[], all_results: AsyncResultsHandler[], queued: Delivery[], draining: void, queueing: void }` | super |
+| Rust | `AwaitedHandler { matches: (kind: EventKind) => boolean, call: AsyncHandler }` | private |
+| Rust | `Delivery = [Event, Ticket?]` | private |
+| Rust | `AwaitedEvents { handlers: AwaitedHandler[], queued: Delivery[], draining: void, queueing: void }` | super |
 | Rust | `ReplyEditing { editor: ReplyEditor?, pending: Record<string, Event[]> }` | super |
 | Rust | `Run { phase: Phase }` | crate |
 | Rust | `Phase` | private |
@@ -507,7 +508,7 @@ The rules the tables never repeat.
 | Rust | `Run.until_draining(): Promise<void>` | crate |
 | Rust | `Run.until_finished(): Promise<void>` | crate |
 | Rust | `Run.reset(): void` | private |
-| Rust | `TicketQueue { weak_self: Weak<TicketQueue>, tickets: Record<string, Ticket>, agents: Agent[], policies: Policies, run: Run, cancel_filters: TicketFilter[], terminal_transitions_in_flight: number, stats: Stats, event_handlers: EventHandler[], awaited_results: AwaitedResults, event_stream: Sender<Event>, reply_editing: ReplyEditing, compaction_editor: CompactionEditor?, schemas: SchemaStore?, dir: string, events_lock: void, join_handle: JoinHandle<void>?, next_ticket_id: number? }` | pub |
+| Rust | `TicketQueue { weak_self: Weak<TicketQueue>, tickets: Record<string, Ticket>, agents: Agent[], policies: Policies, run: Run, cancel_filters: TicketFilter[], terminal_transitions_in_flight: number, stats: Stats, event_handlers: EventHandler[], awaited_events: AwaitedEvents, event_stream: Sender<Event>, reply_editing: ReplyEditing, compaction_editor: CompactionEditor?, schemas: SchemaStore?, dir: string, events_lock: void, join_handle: JoinHandle<void>?, next_ticket_id: number? }` | pub |
 | Python | `TicketQueue` | |
 | Rust | `TicketQueue.new(): TicketQueue` | pub |
 | Python | `TicketQueue()` | |
@@ -515,18 +516,22 @@ The rules the tables never repeat.
 | both | `TicketQueue.input_tokens(): number` | pub |
 | both | `TicketQueue.output_tokens(): number` | pub |
 | both | `TicketQueue.execution_duration(): number?` | pub |
-| both | `TicketQueue.on_event(handler: (event: Event) => void): TicketQueue` | pub |
-| Rust | `TicketQueue.on_ticket_event(wanted: (kind: EventKind) => boolean, handler: (queue: TicketQueue, event: Event, ticket: Ticket) => void): TicketQueue` | private |
-| both | `TicketQueue.on_result(handler: (ticket: Ticket, result: json) => void): TicketQueue` | pub |
-| both | `TicketQueue.on_result_async(handler: (ticket: Ticket, result: json) => Promise<void>): TicketQueue` | pub |
-| Python | `TicketQueue.on_result_async(handler)`: takes an `async def`, awaited on the event loop awaiting `finish`, so a handler that raises prints its traceback and does not stop the run | |
-| both | `TicketQueue.on_results_async(handler: (results: json[]) => Promise<void>): TicketQueue` | pub |
-| Python | `TicketQueue.on_results_async(handler)`: takes an `async def`, on the same terms as `on_result_async` | |
-| Rust | `TicketQueue.queue_finished_results(): void` | private |
-| Rust | `TicketQueue.await_result_handlers(): Promise<void>` | private |
-| both | `TicketQueue.on_results(handler: (results: json[]) => void): TicketQueue` | pub |
-| Python | `TicketQueue.on_results(handler)`: the results arrive as a list | |
-| both | `TicketQueue.on_failure(handler: (event: Event, ticket: Ticket) => void): TicketQueue` | pub |
+| both | `TicketQueue.on_event(handler: (queue: TicketQueue, event: Event) => void): TicketQueue` | pub |
+| both | `TicketQueue.on_event_async(handler: (queue: TicketQueue, event: Event) => Promise<void>): TicketQueue` | pub |
+| Python | `TicketQueue.on_event_async(handler)`: takes an `async def`, awaited on the event loop awaiting `finish`, so a handler that raises prints its traceback and does not stop the run | |
+| Rust | `TicketQueue.on_ticket_event(matches: (kind: EventKind) => boolean, handler: (queue: TicketQueue, event: Event, ticket: Ticket) => void): TicketQueue` | private |
+| both | `TicketQueue.on_result(handler: (queue: TicketQueue, ticket: Ticket, result: json) => void): TicketQueue` | pub |
+| both | `TicketQueue.on_result_async(handler: (queue: TicketQueue, ticket: Ticket, result: json) => Promise<void>): TicketQueue` | pub |
+| Python | `TicketQueue.on_result_async(handler)`: takes an `async def`, on the same terms as `on_event_async` | |
+| both | `TicketQueue.on_failure(handler: (queue: TicketQueue, event: Event, ticket: Ticket) => void): TicketQueue` | pub |
+| both | `TicketQueue.on_failure_async(handler: (queue: TicketQueue, event: Event, ticket: Ticket) => Promise<void>): TicketQueue` | pub |
+| Python | `TicketQueue.on_failure_async(handler)`: takes an `async def`, on the same terms as `on_event_async` | |
+| both | `TicketQueue.on_ticket(handler: (queue: TicketQueue, event: Event, ticket: Ticket) => void): TicketQueue` | pub |
+| both | `TicketQueue.on_ticket_async(handler: (queue: TicketQueue, event: Event, ticket: Ticket) => Promise<void>): TicketQueue` | pub |
+| Python | `TicketQueue.on_ticket_async(handler)`: takes an `async def`, on the same terms as `on_event_async` | |
+| Rust | `TicketQueue.on_awaited(matches: (kind: EventKind) => boolean, call: AsyncHandler): TicketQueue` | private |
+| Rust | `TicketQueue.queue_events(): void` | private |
+| Rust | `TicketQueue.await_handlers(): Promise<void>` | private |
 | both | `TicketQueue.edit_replies_on_event(editor: (events: Event[], replies: Reply[]) => void): TicketQueue` | pub |
 | Python | `TicketQueue.edit_replies_on_event(editor)`: the editor returns the new list, or `None` to keep the old one, where Rust mutates in place. An editor that raises prints its traceback and changes nothing | |
 | both | `TicketQueue.edit_replies_on_compaction(editor: (compaction: Compaction, replies: Reply[]) => Promise<Reply[] throws ProviderError>): TicketQueue` | pub |
@@ -557,12 +562,6 @@ The rules the tables never repeat.
 | both | `TicketQueue.get_request_retry_delay(): number` | pub |
 | both | `TicketQueue.get_max_time(): number?` | pub |
 | both | `TicketQueue.get_compact_at(): number?` | pub |
-| both | `TicketQueue.create_ticket_on_event(make: (event: Event) => Ticket?): TicketQueue` | pub |
-| both | `TicketQueue.create_ticket_on_result(make: (ticket: Ticket, result: json) => Ticket?): TicketQueue` | pub |
-| both | `TicketQueue.create_tickets_on_results(make: (results: json[]) => Ticket[]): TicketQueue` | pub |
-| Python | `TicketQueue.create_tickets_on_results(make)`: hand back any sequence of tickets. `None` adds nothing, where Rust has only the empty list | |
-| both | `TicketQueue.create_ticket_on_failure(make: (event: Event, ticket: Ticket) => Ticket?): TicketQueue` | pub |
-| both | `TicketQueue.on_ticket(handler: (event: Event, ticket: Ticket) => void): TicketQueue` | pub |
 | both | `TicketQueue.dir(dir: string): TicketQueue` | pub |
 | both | `TicketQueue.get_dir(): string` | pub |
 | Rust | `TicketQueue.result_path(key: string): string` | crate |
@@ -2107,21 +2106,18 @@ Binds `agents/tickets/ticket_queue.rs` and `store.rs`.
 | Rust | `PyTicketQueue.get_dir(): string` | python |
 | Rust | `PyTicketQueue.schemas(store: PySchemaStore): PyTicketQueue` | python |
 | Rust | `PyTicketQueue.on_event(handler: any): PyTicketQueue` | python |
+| Rust | `PyTicketQueue.on_event_async(handler: any): PyTicketQueue` | python |
 | Rust | `PyTicketQueue.on_result(handler: any): PyTicketQueue` | python |
 | Rust | `PyTicketQueue.on_result_async(handler: any): PyTicketQueue` | python |
-| Rust | `PyTicketQueue.on_results_async(handler: any): PyTicketQueue` | python |
-| Rust | `PyTicketQueue.on_results(handler: any): PyTicketQueue` | python |
 | Rust | `PyTicketQueue.on_failure(handler: any): PyTicketQueue` | python |
-| Rust | `PyTicketQueue.create_ticket_on_event(make: any): PyTicketQueue` | python |
-| Rust | `PyTicketQueue.create_ticket_on_result(make: any): PyTicketQueue` | python |
-| Rust | `PyTicketQueue.create_tickets_on_results(make: any): PyTicketQueue` | python |
-| Rust | `PyTicketQueue.create_ticket_on_failure(make: any): PyTicketQueue` | python |
+| Rust | `PyTicketQueue.on_failure_async(handler: any): PyTicketQueue` | python |
 | Rust | `PyTicketQueue.model_for_agent(agent_id: string): string?` | python |
 | Rust | `PyTicketQueue.get_ticket(key: string): PyTicket? throws PyErr` | python |
 | Rust | `PyTicketQueue.tickets(): PyTicket[] throws PyErr` | python |
 | Rust | `PyTicketQueue.find_tickets(predicate: any): PyTicket[] throws PyErr` | python |
 | Rust | `PyTicketQueue.find_ticket(predicate: any): PyTicket? throws PyErr` | python |
 | Rust | `PyTicketQueue.on_ticket(handler: any): PyTicketQueue` | python |
+| Rust | `PyTicketQueue.on_ticket_async(handler: any): PyTicketQueue` | python |
 | Rust | `PyTicketQueue.edit_replies_on_event(editor: any): PyTicketQueue` | python |
 | Rust | `PyTicketQueue.edit_replies_on_compaction(editor: any): PyTicketQueue` | python |
 | Rust | `PyTicketQueue.edit_replies(key: string, editor: any): PyTicketQueue throws PyErr` | python |
@@ -2141,11 +2137,10 @@ Binds `agents/tickets/ticket_queue.rs` and `store.rs`.
 | Rust | `PyTicketQueue.results(): any[] throws PyErr` | python |
 | Rust | `PyTicketQueue.find_results(query: any): any[] throws PyErr` | python |
 | Rust | `PyTicketQueue.find_result(query: any): any? throws PyErr` | python |
-| Rust | `call_with_result(py: Python, callable: any, ticket: Ticket, result: json): any throws PyErr` | private |
-| Rust | `call_with_ticket(py: Python, callable: any, event: Event, ticket: Ticket): any throws PyErr` | private |
-| Rust | `call_with_results(py: Python, callable: any, results: json[]): any throws PyErr` | private |
-| Rust | `built_ticket(produced: any): Ticket?` | private |
-| Rust | `built_tickets(produced: any): Ticket[]` | private |
+| Rust | `as_py_queue(py: Python, queue: TicketQueue): any throws PyErr` | private |
+| Rust | `call_with_result(py: Python, callable: any, queue: TicketQueue, ticket: Ticket, result: json): any throws PyErr` | private |
+| Rust | `call_with_ticket(py: Python, callable: any, queue: TicketQueue, event: Event, ticket: Ticket): any throws PyErr` | private |
+| Rust | `await_coroutine(coroutine: Promise<any throws PyErr> throws PyErr): Promise<void>` | private |
 | Rust | `event_predicate(predicate: any, event: Event): boolean` | private |
 | Rust | `ticket_predicate(predicate: any, ticket: Ticket): boolean` | private |
 

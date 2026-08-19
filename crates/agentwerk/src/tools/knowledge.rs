@@ -393,7 +393,7 @@ mod tests {
         let tickets = TicketQueue::new();
         let reported = Arc::new(Mutex::new(Vec::new()));
         let seen = Arc::clone(&reported);
-        tickets.on_event(move |event| match &event.kind {
+        tickets.on_event(move |_, event| match &event.kind {
             EventKind::KnowledgeFailed { action, reason } => seen.lock().unwrap().push(format!(
                 "{}:{action}:{}",
                 event.kind.name(),

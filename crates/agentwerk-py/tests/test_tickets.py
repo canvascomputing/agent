@@ -280,7 +280,7 @@ def test_a_condition_that_raises_reads_as_no_match(queue):
 
 def test_event_name_spells_the_kind_an_event_reports(queue):
     seen = []
-    queue.on_event(lambda event: seen.append(event.kind))
+    queue.on_event(lambda _, event: seen.append(event.kind))
 
     queue.ticket("seed")
 
@@ -300,7 +300,7 @@ def test_find_event_returns_the_earliest_match(queue):
 def test_an_event_carries_the_label_of_the_ticket_it_concerns(queue):
     created = Counter()
 
-    def count_per_label(event):
+    def count_per_label(_, event):
         if event.kind == aw.EventName.TICKET_CREATED:
             created[event.label] += 1
 
@@ -319,7 +319,7 @@ def test_model_for_agent_is_none_when_no_agent_is_bound(queue):
 
 def test_on_result_receives_the_finished_ticket_and_its_result(queue):
     seen = []
-    queue.on_result(lambda ticket, result: seen.append((ticket.key, result)))
+    queue.on_result(lambda _, ticket, result: seen.append((ticket.key, result)))
     key = queue.ticket(aw.Ticket("scan the corpus"))
 
     queue.set_finished(key, {"verdict": "clean"})
@@ -327,9 +327,9 @@ def test_on_result_receives_the_finished_ticket_and_its_result(queue):
     assert seen == [(key, {"verdict": "clean"})]
 
 
-def test_on_results_hands_over_every_result_so_far(queue):
+def test_a_hook_reads_the_results_that_landed_before_it(queue):
     seen = []
-    queue.on_results(lambda results: seen.append(results))
+    queue.on_result(lambda work, _, __: seen.append(work.results()))
     first = queue.ticket(aw.Ticket("scan a.py"))
     second = queue.ticket(aw.Ticket("scan b.py"))
 
@@ -339,12 +339,14 @@ def test_on_results_hands_over_every_result_so_far(queue):
     assert seen == [["clean"], ["clean", "malicious"]]
 
 
-def test_create_tickets_on_results_waits_until_the_results_call_for_the_work(queue):
-    queue.create_tickets_on_results(
-        lambda results: [aw.Ticket(r, label="review") for r in results]
-        if len(results) == 2
-        else None
-    )
+def test_a_hook_waits_for_the_results_it_needs_before_filing_the_next_step(queue):
+    def review_once_both_landed(work, _, __):
+        results = work.results()
+        if len(results) == 2:
+            for result in results:
+                work.ticket(aw.Ticket(result, label="review"))
+
+    queue.on_result(review_once_both_landed)
     first = queue.ticket(aw.Ticket("scan a.py"))
     second = queue.ticket(aw.Ticket("scan b.py"))
 
@@ -358,7 +360,7 @@ def test_create_tickets_on_results_waits_until_the_results_call_for_the_work(que
 
 def test_on_failure_receives_the_failed_ticket(queue):
     seen = []
-    queue.on_failure(lambda event, ticket: seen.append((event.kind, ticket.key)))
+    queue.on_failure(lambda _, event, ticket: seen.append((event.kind, ticket.key)))
     key = queue.ticket(aw.Ticket("scan the corpus"))
 
     queue.set_failed(key)
@@ -366,12 +368,12 @@ def test_on_failure_receives_the_failed_ticket(queue):
     assert seen == [("ticket_failed", key)]
 
 
-def test_create_ticket_on_failure_enqueues_a_retry(queue):
-    queue.create_ticket_on_failure(
-        lambda event, failed: None
-        if failed.parent
-        else aw.Ticket(failed.task, parent=failed.key)
-    )
+def test_on_failure_files_a_retry_through_the_queue_it_is_handed(queue):
+    def retry_once(work, _, failed):
+        if not failed.parent:
+            work.ticket(aw.Ticket(failed.task, parent=failed.key))
+
+    queue.on_failure(retry_once)
     key = queue.ticket(aw.Ticket("scan the corpus"))
 
     queue.set_failed(key)
@@ -380,12 +382,12 @@ def test_create_ticket_on_failure_enqueues_a_retry(queue):
     assert retry.task == "scan the corpus"
 
 
-def test_create_ticket_on_event_enqueues_a_follow_up(queue):
-    queue.create_ticket_on_event(
-        lambda event: aw.Ticket("report", label="report")
-        if event.kind == "ticket_finished"
-        else None
-    )
+def test_on_event_files_a_follow_up_for_any_kind(queue):
+    def report_when_done(work, event):
+        if event.kind == "ticket_finished":
+            work.ticket(aw.Ticket("report", label="report"))
+
+    queue.on_event(report_when_done)
     key = queue.ticket(aw.Ticket("scan the corpus"))
 
     queue.set_finished(key, {"verdict": "clean"})
@@ -474,7 +476,7 @@ def test_edit_replies_raises_when_the_editor_returns_dicts(queue):
 async def test_run_finished_announces_why_execution_ended(queue):
     reasons = []
     queue.on_event(
-        lambda event: reasons.append(event.data["reason"])
+        lambda _, event: reasons.append(event.data["reason"])
         if event.kind == "run_finished"
         else None
     )
@@ -486,7 +488,7 @@ async def test_run_finished_announces_why_execution_ended(queue):
 async def test_on_result_async_awaits_the_handler_before_finish_all_returns(queue):
     seen = []
 
-    async def persist(ticket, result):
+    async def persist(_, ticket, result):
         await asyncio.sleep(0)
         seen.append((ticket.key, result))
 
@@ -502,7 +504,7 @@ async def test_on_result_async_awaits_the_handler_before_finish_all_returns(queu
 async def test_on_result_async_finishes_one_handler_before_starting_the_next(queue):
     seen = []
 
-    async def persist(ticket, result):
+    async def persist(_, ticket, result):
         seen.append(f"start {ticket.key}")
         # A scheduled-only coroutine would let the next one start here.
         await asyncio.sleep(0.01)
@@ -528,7 +530,7 @@ async def test_on_result_async_writes_every_result_to_a_database(queue, tmp_path
         database.execute("INSERT INTO verdicts VALUES (?, ?)", (key, verdict))
         database.commit()
 
-    async def persist(ticket, result):
+    async def persist(_, ticket, result):
         await asyncio.to_thread(insert, ticket.key, result["verdict"])
 
     queue.on_result_async(persist)
@@ -544,28 +546,58 @@ async def test_on_result_async_writes_every_result_to_a_database(queue, tmp_path
     assert rows == [(first, "clean"), (second, "malicious")]
 
 
-async def test_on_results_async_hands_over_every_result_so_far(queue):
+async def test_on_ticket_async_awaits_the_handler_before_finish_all_returns(queue):
     seen = []
 
-    async def note(results):
+    async def note(_, event, ticket):
         await asyncio.sleep(0)
-        seen.append(results)
+        seen.append((event.kind, ticket.key))
 
-    queue.on_results_async(note)
-    first = queue.ticket("scan a.py")
-    second = queue.ticket("scan b.py")
-    queue.set_finished(first, "clean")
-    queue.set_finished(second, "malicious")
+    queue.on_ticket_async(note)
+    key = queue.ticket("scan the corpus")
+    queue.set_finished(key, "clean")
 
     await queue.finish_all()
 
-    assert seen == [["clean"], ["clean", "malicious"]]
+    assert seen == [("ticket_finished", key)]
+
+
+async def test_on_failure_async_awaits_the_handler_before_finish_all_returns(queue):
+    seen = []
+
+    async def note(_, event, ticket):
+        await asyncio.sleep(0)
+        seen.append((event.kind, ticket.key))
+
+    queue.on_failure_async(note)
+    key = queue.ticket("scan the corpus")
+    queue.set_failed(key)
+
+    await queue.finish_all()
+
+    assert seen == [("ticket_failed", key)]
+
+
+async def test_on_event_async_sees_the_kinds_no_ticket_hook_accepts(queue):
+    seen = []
+
+    async def note(_, event):
+        await asyncio.sleep(0)
+        seen.append(event.kind)
+
+    queue.on_event_async(note)
+    key = queue.ticket("scan the corpus")
+    queue.set_finished(key, "clean")
+
+    await queue.finish_all()
+
+    assert "ticket_created" in seen
 
 
 async def test_on_result_async_runs_the_handler_on_the_callers_event_loop(queue):
     loops = []
 
-    async def persist(ticket, result):
+    async def persist(_, ticket, result):
         loops.append(asyncio.get_running_loop())
 
     queue.on_result_async(persist)

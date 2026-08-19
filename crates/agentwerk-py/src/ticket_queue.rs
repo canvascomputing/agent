@@ -1,6 +1,7 @@
 //! The ticket queue as Python sees it: add agents, submit work, set limits,
 //! install handlers, drive execution, and read results.
 
+use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -203,10 +204,14 @@ impl PyTicketQueue {
 
     /// Read every event as it is emitted. It replaces the handler that prints to
     /// stderr.
+    ///
+    /// The queue arrives first, so a handler files follow-up work with
+    /// `queue.ticket(..)` and selects tickets and results with `queue.find_*`.
     fn on_event<'py>(slf: PyRef<'py, Self>, handler: Py<PyAny>) -> PyRef<'py, Self> {
-        slf.inner.on_event(move |event: &Event| {
+        slf.inner.on_event(move |queue, event: &Event| {
             Python::attach(|py| {
-                let handled = handler.bind(py).call1((to_py_event(event),));
+                let handled = as_py_queue(py, queue)
+                    .and_then(|view| handler.bind(py).call1((view, to_py_event(event))));
                 if let Err(err) = handled {
                     err.print(py);
                 }
@@ -215,87 +220,59 @@ impl PyTicketQueue {
         slf
     }
 
-    /// Read every finished ticket together with its result, already validated
-    /// against the ticket's schema.
-    fn on_result<'py>(slf: PyRef<'py, Self>, handler: Py<PyAny>) -> PyRef<'py, Self> {
-        slf.inner.on_result(move |ticket: &Ticket, result: &Value| {
-            Python::attach(|py| {
-                if let Err(err) = call_with_result(py, &handler, ticket, result) {
-                    err.print(py);
-                }
+    /// Read every event as it is emitted, in an `async def` that `finish` waits
+    /// for before it returns. It runs on the event loop awaiting `finish`, so
+    /// work that has to stay serialized against the caller's own, such as a
+    /// commit, can be; `on_event` runs on an agent thread and cannot await.
+    ///
+    /// Every kind reaches it, streamed reply chunks included, and each event
+    /// waits in memory until a `finish` drains it.
+    ///
+    /// Handlers run only while `finish` or `finish_all` is awaited, and MUST
+    /// NOT call either themselves: that waits forever on the handover the
+    /// handler is running inside.
+    fn on_event_async<'py>(slf: PyRef<'py, Self>, handler: Py<PyAny>) -> PyRef<'py, Self> {
+        slf.inner.on_event_async(move |queue, event: Event| {
+            let coroutine = Python::attach(|py| {
+                let view = as_py_queue(py, &queue)?;
+                let produced = handler.bind(py).call1((view, to_py_event(&event)))?;
+                pyo3_async_runtimes::tokio::into_future(produced)
             });
+            await_coroutine(coroutine)
         });
         slf
     }
 
+    /// Read every finished ticket together with its result, already validated
+    /// against the ticket's schema.
+    fn on_result<'py>(slf: PyRef<'py, Self>, handler: Py<PyAny>) -> PyRef<'py, Self> {
+        slf.inner
+            .on_result(move |queue, ticket: &Ticket, result: &Value| {
+                Python::attach(|py| {
+                    if let Err(err) = call_with_result(py, &handler, queue, ticket, result) {
+                        err.print(py);
+                    }
+                });
+            });
+        slf
+    }
+
     /// Read every finished ticket together with its result, in an `async def`
-    /// that `finish` waits for before it returns. It runs on the event loop
-    /// awaiting `finish`, so work that has to stay serialized against the
-    /// caller's own, such as a commit, can be; `on_result` runs on an agent
-    /// thread and cannot await.
+    /// that `finish` waits for before it returns, on the terms
+    /// `on_event_async` sets.
     ///
     /// Handlers run only while `finish` or `finish_all` is awaited, and MUST
     /// NOT call either themselves: that waits forever on the handover the
     /// handler is running inside.
     fn on_result_async<'py>(slf: PyRef<'py, Self>, handler: Py<PyAny>) -> PyRef<'py, Self> {
         slf.inner
-            .on_result_async(move |ticket: Ticket, result: Value| {
+            .on_result_async(move |queue, ticket: Ticket, result: Value| {
                 let coroutine = Python::attach(|py| {
-                    let produced = call_with_result(py, &handler, &ticket, &result)?;
+                    let produced = call_with_result(py, &handler, &queue, &ticket, &result)?;
                     pyo3_async_runtimes::tokio::into_future(produced)
                 });
-                async move {
-                    match coroutine {
-                        Ok(future) => {
-                            if let Err(err) = future.await {
-                                Python::attach(|py| err.print(py));
-                            }
-                        }
-                        Err(err) => Python::attach(|py| err.print(py)),
-                    }
-                }
+                await_coroutine(coroutine)
             });
-        slf
-    }
-
-    /// Read every result the run has produced so far, each time one lands, in
-    /// an `async def` that `finish` waits for before it returns. Use it to act
-    /// on a condition across results with work that has to be awaited.
-    ///
-    /// Handlers run only while `finish` or `finish_all` is awaited, and MUST
-    /// NOT call either themselves: that waits forever on the handover the
-    /// handler is running inside.
-    fn on_results_async<'py>(slf: PyRef<'py, Self>, handler: Py<PyAny>) -> PyRef<'py, Self> {
-        slf.inner.on_results_async(move |results: Vec<Value>| {
-            let coroutine = Python::attach(|py| {
-                let produced = call_with_results(py, &handler, &results)?;
-                pyo3_async_runtimes::tokio::into_future(produced)
-            });
-            async move {
-                match coroutine {
-                    Ok(future) => {
-                        if let Err(err) = future.await {
-                            Python::attach(|py| err.print(py));
-                        }
-                    }
-                    Err(err) => Python::attach(|py| err.print(py)),
-                }
-            }
-        });
-        slf
-    }
-
-    /// Read every result the run has produced so far, each time one lands. The
-    /// same list `results()` gives after the run, in creation order, delivered
-    /// while it is still going.
-    fn on_results<'py>(slf: PyRef<'py, Self>, handler: Py<PyAny>) -> PyRef<'py, Self> {
-        slf.inner.on_results(move |results: &[Value]| {
-            Python::attach(|py| {
-                if let Err(err) = call_with_results(py, &handler, results) {
-                    err.print(py);
-                }
-            });
-        });
         slf
     }
 
@@ -303,70 +280,32 @@ impl PyTicketQueue {
     /// ticket, tool call, or request, a file that would not open, or compaction
     /// that could not finish. Read `event.kind` to tell them apart.
     fn on_failure<'py>(slf: PyRef<'py, Self>, handler: Py<PyAny>) -> PyRef<'py, Self> {
-        slf.inner.on_failure(move |event: &Event, ticket: &Ticket| {
-            Python::attach(|py| {
-                if let Err(err) = call_with_ticket(py, &handler, event, ticket) {
-                    err.print(py);
-                }
-            });
-        });
-        slf
-    }
-
-    /// Enqueue a follow-up ticket from any event. Returning `None` adds
-    /// nothing.
-    fn create_ticket_on_event<'py>(slf: PyRef<'py, Self>, make: Py<PyAny>) -> PyRef<'py, Self> {
-        slf.inner.create_ticket_on_event(move |event: &Event| {
-            Python::attach(|py| {
-                let produced = make.bind(py).call1((to_py_event(event),)).ok()?;
-                built_ticket(&produced)
-            })
-        });
-        slf
-    }
-
-    /// Enqueue a follow-up ticket from a finished ticket. Returning `None` adds
-    /// nothing.
-    fn create_ticket_on_result<'py>(slf: PyRef<'py, Self>, make: Py<PyAny>) -> PyRef<'py, Self> {
         slf.inner
-            .create_ticket_on_result(move |ticket: &Ticket, result: &Value| {
+            .on_failure(move |queue, event: &Event, ticket: &Ticket| {
                 Python::attach(|py| {
-                    let produced = call_with_result(py, &make, ticket, result).ok()?;
-                    built_ticket(&produced)
-                })
-            });
-        slf
-    }
-
-    /// Enqueue follow-up tickets once a condition across every result holds.
-    /// Your function is the condition: return an empty list or `None` until
-    /// the results call for the work, which is also what stops a follow-up
-    /// whose own result triggers it again.
-    fn create_tickets_on_results<'py>(slf: PyRef<'py, Self>, make: Py<PyAny>) -> PyRef<'py, Self> {
-        slf.inner
-            .create_tickets_on_results(move |results: &[Value]| {
-                Python::attach(|py| match call_with_results(py, &make, results) {
-                    Ok(produced) => built_tickets(&produced),
-                    Err(err) => {
+                    if let Err(err) = call_with_ticket(py, &handler, queue, event, ticket) {
                         err.print(py);
-                        Vec::new()
                     }
-                })
+                });
             });
         slf
     }
 
-    /// Enqueue a retry for a ticket that failed. Returning `None` adds nothing.
+    /// Read every failure together with the ticket it happened in, in an
+    /// `async def` that `finish` waits for before it returns, on the terms
+    /// `on_event_async` sets.
     ///
-    /// Count the attempts yourself, or a ticket that fails every time re-queues
-    /// itself forever.
-    fn create_ticket_on_failure<'py>(slf: PyRef<'py, Self>, make: Py<PyAny>) -> PyRef<'py, Self> {
+    /// Handlers run only while `finish` or `finish_all` is awaited, and MUST
+    /// NOT call either themselves: that waits forever on the handover the
+    /// handler is running inside.
+    fn on_failure_async<'py>(slf: PyRef<'py, Self>, handler: Py<PyAny>) -> PyRef<'py, Self> {
         slf.inner
-            .create_ticket_on_failure(move |event: &Event, ticket: &Ticket| {
-                Python::attach(|py| {
-                    let produced = call_with_ticket(py, &make, event, ticket).ok()?;
-                    built_ticket(&produced)
-                })
+            .on_failure_async(move |queue, event: Event, ticket: Ticket| {
+                let coroutine = Python::attach(|py| {
+                    let produced = call_with_ticket(py, &handler, &queue, &event, &ticket)?;
+                    pyo3_async_runtimes::tokio::into_future(produced)
+                });
+                await_coroutine(coroutine)
             });
         slf
     }
@@ -427,15 +366,33 @@ impl PyTicketQueue {
     /// It arrives with its messages, so a handler can pass it straight to
     /// `Trajectory.from_ticket`.
     fn on_ticket<'py>(slf: PyRef<'py, Self>, handler: Py<PyAny>) -> PyRef<'py, Self> {
-        slf.inner.on_ticket(move |event: &Event, ticket: &Ticket| {
-            Python::attach(|py| {
-                let handled = Py::new(py, PyTicket::from_ticket(ticket))
-                    .and_then(|view| handler.bind(py).call1((to_py_event(event), view)));
-                if let Err(err) = handled {
-                    err.print(py);
-                }
+        slf.inner
+            .on_ticket(move |queue, event: &Event, ticket: &Ticket| {
+                Python::attach(|py| {
+                    if let Err(err) = call_with_ticket(py, &handler, queue, event, ticket) {
+                        err.print(py);
+                    }
+                });
             });
-        });
+        slf
+    }
+
+    /// Read a ticket as it starts, finishes, or fails, in an `async def` that
+    /// `finish` waits for before it returns, on the terms `on_event_async`
+    /// sets.
+    ///
+    /// Handlers run only while `finish` or `finish_all` is awaited, and MUST
+    /// NOT call either themselves: that waits forever on the handover the
+    /// handler is running inside.
+    fn on_ticket_async<'py>(slf: PyRef<'py, Self>, handler: Py<PyAny>) -> PyRef<'py, Self> {
+        slf.inner
+            .on_ticket_async(move |queue, event: Event, ticket: Ticket| {
+                let coroutine = Python::attach(|py| {
+                    let produced = call_with_ticket(py, &handler, &queue, &event, &ticket)?;
+                    pyo3_async_runtimes::tokio::into_future(produced)
+                });
+                await_coroutine(coroutine)
+            });
         slf
     }
 
@@ -722,65 +679,60 @@ impl PyTicketQueue {
     }
 }
 
-/// Call a Python function with the ticket and result every `_on_result` hook
-/// hands over.
+/// Hand a hook the queue it is registered on. Built per call: a cached view
+/// would hold the queue that holds the handler, and neither would ever be freed.
+fn as_py_queue<'py>(py: Python<'py>, queue: &Arc<TicketQueue>) -> PyResult<Bound<'py, PyAny>> {
+    let view = Py::new(
+        py,
+        PyTicketQueue {
+            inner: Arc::clone(queue),
+        },
+    )?;
+    Ok(view.into_bound(py).into_any())
+}
+
+/// Call a Python function with the queue, ticket, and result every `on_result`
+/// hook hands over.
 fn call_with_result<'py>(
     py: Python<'py>,
     callable: &Py<PyAny>,
+    queue: &Arc<TicketQueue>,
     ticket: &Ticket,
     result: &Value,
 ) -> PyResult<Bound<'py, PyAny>> {
     let view = Py::new(py, PyTicket::from_ticket(ticket))?;
     let value = value_to_py(py, result)?;
-    callable.bind(py).call1((view, value))
+    callable
+        .bind(py)
+        .call1((as_py_queue(py, queue)?, view, value))
 }
 
-/// Call a Python function with the event and ticket every `_on_failure` hook
-/// hands over.
+/// Call a Python function with the queue, event, and ticket the `on_ticket` and
+/// `on_failure` hooks hand over.
 fn call_with_ticket<'py>(
     py: Python<'py>,
     callable: &Py<PyAny>,
+    queue: &Arc<TicketQueue>,
     event: &Event,
     ticket: &Ticket,
 ) -> PyResult<Bound<'py, PyAny>> {
     let view = Py::new(py, PyTicket::from_ticket(ticket))?;
-    callable.bind(py).call1((to_py_event(event), view))
+    callable
+        .bind(py)
+        .call1((as_py_queue(py, queue)?, to_py_event(event), view))
 }
 
-/// Call a Python function with the parent and its children's results every
-/// `_on_results` hook hands over.
-fn call_with_results<'py>(
-    py: Python<'py>,
-    callable: &Py<PyAny>,
-    results: &[Value],
-) -> PyResult<Bound<'py, PyAny>> {
-    let values = results
-        .iter()
-        .map(|result| value_to_py(py, result))
-        .collect::<PyResult<Vec<_>>>()?;
-    callable.bind(py).call1((values,))
-}
-
-/// Read a ticket back out of what a `create_ticket_*` function returned. `None`,
-/// or anything that is not a `Ticket`, adds nothing.
-fn built_ticket(produced: &Bound<'_, PyAny>) -> Option<Ticket> {
-    if produced.is_none() {
-        return None;
+/// Await what an `async def` handler returned, printing whatever it raised:
+/// there is no Python frame behind a handover to raise into.
+async fn await_coroutine(coroutine: PyResult<impl Future<Output = PyResult<Py<PyAny>>> + Send>) {
+    match coroutine {
+        Ok(future) => {
+            if let Err(err) = future.await {
+                Python::attach(|py| err.print(py));
+            }
+        }
+        Err(err) => Python::attach(|py| err.print(py)),
     }
-    Some(produced.extract::<PyRef<PyTicket>>().ok()?.to_ticket())
-}
-
-/// Read every ticket back out of what `create_tickets_on_results` returned.
-/// Anything that is not a sequence, `None` included, and any element that is
-/// not a `Ticket`, adds nothing.
-fn built_tickets(produced: &Bound<'_, PyAny>) -> Vec<Ticket> {
-    let Ok(items) = produced.try_iter() else {
-        return Vec::new();
-    };
-    items
-        .flatten()
-        .filter_map(|item| built_ticket(&item))
-        .collect()
 }
 
 /// Ask a Python condition about an event, on the same terms as

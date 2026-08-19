@@ -97,7 +97,7 @@ async fn main() {
 
     let knowledge = Knowledge::load(&store_dir).expect("open knowledge store");
 
-    tickets.on_event(move |e| handler(e));
+    tickets.on_event(move |_, e| handler(e));
     let _agent = tickets.agent(
         Agent::from_env()
             .interactive()

@@ -369,7 +369,7 @@ Agents can share the results of their work in the following ways:
 2. **Read tickets**: the `tickets` tool allows reading any finished ticket's result, by key.
 3. **Read result file**: the `read_file` tool allows reading a ticket's `result.json` in the session directory.
 4. **Share knowledge**: the `knowledge` tool allows sharing knowledge with other agents.
-5. **Register hooks**: the `create_ticket_on_result` and `create_tickets_on_results` hooks allow creating follow-up tickets.
+5. **Register hooks**: the `on_result` hook allows creating follow-up tickets.
 
 <details>
 <summary>All ways agents pass data</summary>
@@ -426,15 +426,9 @@ The `knowledge` tool allows sharing knowledge with other agents:
 Use hooks to create new tickets when certain results arrived:
 
 ```rust
-tickets.create_ticket_on_result(|done, result| {
-    done.has_label("research")
-        .then(|| Ticket::labeled("report", result.clone()))
-});
-
-tickets.create_tickets_on_results(|results| {
-    match results.iter().filter(|r| r["scanned"] == true).count() == 3 {
-        true => vec![Ticket::labeled("report", "Write the report.")],
-        false => Vec::new(),
+tickets.on_result(|queue, done, result| {
+    if done.has_label("research") {
+        queue.ticket(Ticket::labeled("report", result.clone()));
     }
 });
 ```
@@ -695,7 +689,7 @@ Events allow you to inspect all activities of your agents.
 ```rust
 use agentwerk::event::EventKind;
 
-tickets.on_event(|event| {
+tickets.on_event(|_, event| {
     if let EventKind::TicketFinished = &event.kind {
         eprintln!("[{}] done {} {:?}", event.agent_id, event.ticket_key, event.label);
     }
@@ -755,10 +749,10 @@ See [`EventKind`](https://docs.rs/agentwerk/latest/agentwerk/event/enum.EventKin
 Hooks allow you to react to events.
 
 ```rust
-tickets.create_ticket_on_failure(|_, failed| {
-    failed.parent.is_none().then(|| {
-        Ticket::new(failed.task.clone()).parent(&failed.key)
-    })
+tickets.on_failure(|queue, _, failed| {
+    if failed.parent.is_none() {
+        queue.ticket(Ticket::new(failed.task.clone()).parent(&failed.key));
+    }
 });
 ```
 
@@ -769,23 +763,19 @@ tickets.create_ticket_on_failure(|_, failed| {
 |-|--------|-------------|
 | **Observe** | `on_event(handler)` | Read every event as it is emitted. |
 | | `on_result(handler)` | Read every finished ticket together with its result. |
-| | `on_result_async(handler)` | Read every finished ticket with its result, in an async handler. |
-| | `on_results(handler)` | Read every result the run has produced so far, each time one lands. |
-| | `on_results_async(handler)` | Read every result in an async handler. |
 | | `on_failure(handler)` | Read every failure together with the ticket it happened in. |
 | | `on_ticket(handler)` | Read a ticket as it starts, finishes, or fails. |
-| **Add work** | `create_ticket_on_event(make)` | Enqueue a follow-up ticket from any event. |
-| | `create_ticket_on_result(make)` | Enqueue a follow-up ticket from a finished ticket. |
-| | `create_tickets_on_results(make)` | Enqueue follow-up tickets once a condition across every result holds. |
-| | `create_ticket_on_failure(make)` | Enqueue a retry for a ticket that failed. |
+| **Await** | `on_event_async(handler)` | Read every event in an async handler. |
+| | `on_result_async(handler)` | Read every finished ticket with its result, in an async handler. |
+| | `on_failure_async(handler)` | Read every failure with its ticket, in an async handler. |
+| | `on_ticket_async(handler)` | Read a ticket lifecycle transition in an async handler. |
 | **Rewrite** | `edit_replies_on_event(editor)` | Rewrite a ticket's replies before its next request. |
 | | `edit_replies_on_compaction(editor)` | Decide what compaction does with a ticket's replies. |
 
 Save replies of every finished ticket as a training example:
 
 ```rust
-let queue = Arc::clone(&tickets);
-tickets.on_ticket(move |event, ticket| {
+tickets.on_ticket(|queue, event, ticket| {
     if matches!(event.kind, EventKind::TicketFinished) {
         let model = queue.model_for_agent(&event.agent_id);
         let _ = Trajectory::from_ticket(&event.agent_id, model.as_deref(), ticket)
@@ -800,7 +790,7 @@ tickets.on_ticket(move |event, ticket| {
 
 ```rust
 let findings = Arc::clone(&database);
-tickets.on_result_async(move |ticket, result| {
+tickets.on_result_async(move |_, ticket, result| {
     let findings = Arc::clone(&findings);
     async move {
         let _ = findings.insert(&ticket.key, &result).await;

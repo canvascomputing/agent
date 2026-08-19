@@ -35,7 +35,7 @@ async fn walks_every_ticket_action() -> std::result::Result<(), Box<dyn std::err
     let written = Arc::new(Mutex::new(Vec::new()));
     let actions = Arc::clone(&seen);
     let queries = Arc::clone(&written);
-    tickets.on_event(move |e| {
+    tickets.on_event(move |_, e| {
         if let EventKind::ToolCallStarted {
             tool_name, input, ..
         } = &e.kind
