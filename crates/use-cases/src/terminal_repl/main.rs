@@ -34,7 +34,7 @@ use agentwerk::providers::Model;
 use agentwerk::tools::{
     GlobTool, GrepTool, ListDirectoryTool, ReadFileTool, TicketsTool, WriteFileTool,
 };
-use agentwerk::{Agent, Knowledge, Query, Ticket, TicketQueue};
+use agentwerk::{Agent, Knowledge, Ticket, TicketQueue};
 
 const ROLE: &str = include_str!("prompts/repl.role.md");
 const BIBLE_PASSAGE: &str = include_str!("prompts/bible.txt");
@@ -515,7 +515,7 @@ fn redact(messages: &mut [Reply], word: &str) {
 /// no tool. A mid-turn reply carrying a tool call doesn't count, so the
 /// prompt never races the user against the loop.
 async fn wait_for_assistant_pause(tickets: &TicketQueue, key: &str) {
-    tickets.finish(Query::new().key(key)).await;
+    tickets.finish(key).await;
 }
 
 async fn read_line(prompt: &str) -> Option<String> {

@@ -152,7 +152,7 @@ Schemas and results:
 
 ## A String That Selects Tickets Is AQL
 
-**Every method taking a filter accepts a string, and the string is AQL: a query compiled by `Query::parse`. There is no second string meaning, and no method takes a bare label.**
+**Every method taking a filter accepts a string, and the string is AQL: a query compiled by `Query::new`. There is no second string meaning, and no method takes a bare label.**
 
 ```rust
 tickets.find_tickets("scan");                    // label = scan
@@ -160,9 +160,9 @@ tickets.find_results("TICKET-3");                // key = TICKET-3
 tickets.find_tickets("label IN (scan, report) AND status != Failed");
 ```
 
-- `Query` holds a private condition tree of `All`, `Any`, `Not`, and one term per field. The builders push into the root `All`, so `Query::labeled("scan").status(s)` and the string that says the same compile to the same value.
+- `Query` holds a private condition tree of `All`, `Any`, `Not`, and one term per field. `Query::new` is the only way to build one, so AQL is the one grammar a selection is written in and no field gains a second spelling as a method.
 - A lone bare word is `key = <word>` when it is spelled `TICKET-<digits>` and `label = <word>` otherwise, which is what keeps a label the shortest thing you can write. A label named like a key needs `label = TICKET-3`.
-- `From<&str>` and `TicketMatcher for &str` are infallible by signature, so a string that does not compile panics, the way `ToolBuilder::schema` panics on a document the compiler refuses. `Query::parse` returns a `Result` for a string built at run time, and the Python bindings raise `ValueError` rather than panicking across the binding.
+- `From<&str>` and `TicketMatcher for &str` are infallible by signature, so a string that does not compile panics, the way `ToolBuilder::schema` panics on a document the compiler refuses. `Query::new` returns a `Result` for a string built at run time, and the Python bindings raise `ValueError` rather than panicking across the binding.
 - `TicketMatcher for &str` compiles the string once per ticket. A host filtering a large queue passes a `Query`.
 - `ORDER BY` rides on the query rather than on the call, so the one string says both which tickets and in what order, and the `tickets` tool needs no second argument. A query that is nothing but an `ORDER BY` selects every ticket.
 - `TicketMatcher::sort` is how the order reaches the queue, and its default is creation order, so a closure and a query without `ORDER BY` answer as they always did. `find_tickets` and `find_results` share `matching_tickets(keep, order)`, which takes the filter and the order apart because `find_results` wraps the matcher in a closure of its own and a closure names no order.

@@ -1239,9 +1239,9 @@ impl TicketQueue {
     /// ticket store, or the claim path deadlocks.
     ///
     /// ```no_run
-    /// # use agentwerk::{Query, TicketQueue};
+    /// # use agentwerk::TicketQueue;
     /// let tickets = TicketQueue::new();
-    /// tickets.cancel(Query::new().label("scan"));
+    /// tickets.cancel("scan");
     /// ```
     pub fn cancel(&self, matches: impl TicketMatcher + 'static) -> &Self {
         self.cancel_filters
@@ -1441,10 +1441,10 @@ impl TicketQueue {
     /// deadlocks.
     ///
     /// ```no_run
-    /// # use agentwerk::{Query, TicketQueue};
+    /// # use agentwerk::TicketQueue;
     /// # async fn run() {
     /// let tickets = TicketQueue::new();
-    /// for finding in tickets.finish(Query::new().label("research")).await {
+    /// for finding in tickets.finish("research").await {
     ///     println!("{finding}");
     /// }
     /// # }

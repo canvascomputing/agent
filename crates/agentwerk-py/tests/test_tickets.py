@@ -131,7 +131,7 @@ def test_find_tickets_filters_by_query(queue):
     queue.ticket(aw.Ticket("alpha", label="a"))
     queue.ticket(aw.Ticket("beta", label="b"))
 
-    matches = queue.find_tickets(aw.Query(label="a"))
+    matches = queue.find_tickets(aw.Query("label = a"))
     assert [t.task for t in matches] == ["alpha"]
 
 
@@ -148,6 +148,11 @@ def test_a_malformed_query_string_raises_value_error(queue):
         queue.find_tickets("assignee = alice")
 
 
+def test_a_query_compiles_its_string_on_construction():
+    with pytest.raises(ValueError):
+        aw.Query("label =")
+
+
 def test_ticket_takes_a_bare_task_without_a_ticket_object(queue):
     key = queue.ticket("scan the corpus")
 
@@ -161,7 +166,7 @@ def test_find_results_selects_by_label(queue):
     queue.set_finished(report, {"summary": "nothing found"})
 
     assert queue.find_results("scan") == [{"verdict": "clean"}]
-    assert queue.find_result(aw.Query(label="report")) == {"summary": "nothing found"}
+    assert queue.find_result(aw.Query("label = report")) == {"summary": "nothing found"}
 
 
 def test_find_results_takes_a_callable(queue):

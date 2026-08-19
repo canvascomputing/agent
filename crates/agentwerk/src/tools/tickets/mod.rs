@@ -224,17 +224,15 @@ fn action_list(
     aql: Option<String>,
     directives: &DirectiveStore,
 ) -> ToolResult {
-    let query = match aql.as_deref().map(Query::parse) {
-        Some(Ok(query)) => query,
+    let pool: Vec<Ticket> = match aql.as_deref().map(Query::new) {
+        Some(Ok(query)) => ticket_queue.find_tickets(query),
         Some(Err(error)) => {
             return ToolResult::error(
                 directives.render(TICKET_QUERY_INVALID, &[("error", &error.to_string())]),
             )
         }
-        None => Query::new(),
+        None => ticket_queue.tickets(),
     };
-
-    let pool: Vec<Ticket> = ticket_queue.find_tickets(query);
     if pool.is_empty() {
         return ToolResult::success("(no matching tickets)".to_string());
     }

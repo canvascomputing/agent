@@ -18,7 +18,7 @@
     },
     "aql": {
       "type": "string",
-      "description": "For `list`: which tickets to answer with, in AQL. Fields are `key`, `label`, `status`, `agent`, `parent`, `task`, `result`, and the times `created`, `started`, `finished`, `failed`. Operators are `=`, `!=`, `IN (a, b)`, `NOT IN (a, b)`, `IS EMPTY`, `IS NOT EMPTY`, and on `task` and `result` the case-insensitive `~` and `!~`. A time takes none of them: it sorts, and the three that can be unset also read `IS EMPTY`. Combine terms with `AND`, `OR`, `NOT`, and parentheses. End with `ORDER BY <field> DESC` to answer with the highest first, or `ASC` for the lowest; without it tickets arrive oldest first. A lone word is the label; a lone `TICKET-N` is that ticket. Status is one of `Todo`, `InProgress`, `Finished`, `Failed`. Leave out to answer with every ticket."
+      "description": "For `list`: which tickets to answer with, in AQL. Fields are `key`, `label`, `status`, `agent`, `parent`, `task`, `result`, `created`, `started`, `finished`, `failed`. Operators are `=`, `!=`, `IN (a, b)`, `NOT IN (a, b)`, `IS EMPTY`, `IS NOT EMPTY`, and on `task` and `result` the case-insensitive `~` and `!~`. The four times take none of them: they sort, and `started`, `finished`, `failed` also read `IS EMPTY`. Combine terms with `AND`, `OR`, `NOT`, and parentheses. Close with `ORDER BY <field> ASC|DESC`; without it tickets arrive oldest first. A lone word is the label, a lone `TICKET-N` that ticket. Status is `Todo`, `InProgress`, `Finished`, or `Failed`. Leave out to answer with every ticket."
     },
     "label": {
       "type": "string",
