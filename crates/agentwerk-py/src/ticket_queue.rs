@@ -347,7 +347,7 @@ impl PyTicketQueue {
             .collect()
     }
 
-    /// Get the earliest ticket matching a Query or callable.
+    /// Get the first ticket matching a Query or callable.
     fn find_ticket(&self, py: Python<'_>, predicate: Py<PyAny>) -> PyResult<Option<Py<PyTicket>>> {
         let ticket = match try_extract_query(py, &predicate)? {
             Some(query) => self.inner.find_ticket(query),
@@ -659,7 +659,7 @@ impl PyTicketQueue {
         results.iter().map(|value| value_to_py(py, value)).collect()
     }
 
-    /// Get the earliest result whose ticket matches the Query or callable.
+    /// Get the first result whose ticket matches the Query or callable.
     /// Status defaults to `"finished"`.
     fn find_result<'py>(
         &self,

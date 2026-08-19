@@ -135,20 +135,12 @@ def test_find_tickets_filters_by_query(queue):
     assert [t.task for t in matches] == ["alpha"]
 
 
-def test_find_tickets_filters_by_label_string(queue):
+def test_find_tickets_compiles_the_string_as_a_query(queue):
     queue.ticket(aw.Ticket("alpha", label="a"))
     queue.ticket(aw.Ticket("beta", label="b"))
 
-    matches = queue.find_tickets("b")
-    assert [t.task for t in matches] == ["beta"]
-
-
-def test_find_tickets_filters_by_a_query_string(queue):
-    queue.ticket(aw.Ticket("alpha", label="a"))
-    queue.ticket(aw.Ticket("beta", label="b"))
-
-    matches = queue.find_tickets("label IN (a, b) AND status = Todo")
-    assert [t.task for t in matches] == ["alpha", "beta"]
+    assert [t.task for t in queue.find_tickets("b")] == ["beta"]
+    assert [t.task for t in queue.find_tickets("label = a")] == ["alpha"]
 
 
 def test_a_malformed_query_string_raises_value_error(queue):

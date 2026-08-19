@@ -422,12 +422,13 @@ The rules the tables never repeat.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `trait TicketMatcher: Send + Sync { matches(ticket: Ticket): boolean, names_status(): boolean }` | pub |
+| Rust | `trait TicketMatcher: Send + Sync { matches(ticket: Ticket): boolean, names_status(): boolean, sort(tickets: Ticket[]): void }` | pub |
 | Rust | `impl TicketMatcher for F where F: Fn(Ticket) => boolean + Send + Sync` | pub |
+| Rust | `sort_by_creation(tickets: Ticket[]): void` | private |
 | Rust | `impl TicketMatcher for &str` | pub |
 | Rust | `impl TicketMatcher for String` | pub |
 | Python | an AQL string stands in for the `Query` wherever one is accepted | |
-| Rust | `Query { root: Condition }` | pub |
+| Rust | `Query { root: Condition, order: Sort? }` | pub |
 | Python | `Query(*, key=None, label=None, status=None, agent=None, parent_key=None)` | |
 | Rust | `Query.new(): Query` | pub |
 | Rust | `Query.labeled(label: string): Query` | pub |
@@ -444,16 +445,25 @@ The rules the tables never repeat.
 | Rust | `enum Condition { All(Condition[]), Any(Condition[]), Not(Condition), Term(Field, Match) }` | private |
 | Rust | `Condition.matches(ticket: Ticket): boolean` | private |
 | Rust | `Condition.mentions(field: Field): boolean` | private |
-| Rust | `enum Field { Key, Label, Status, Agent, Parent, Task, Result }` | private |
+| Rust | `enum Field { Key, Label, Status, Agent, Parent, Task, Result, Created, Started, Finished, Failed }` | private |
+| Rust | `enum Kind { Value, Text, Time }` | private |
 | Rust | `FIELDS: [string, Field][]` | private |
 | Rust | `Field.named(name: string): Field?` | private |
 | Rust | `Field.name(): string` | private |
 | Rust | `Field.of(ticket: Ticket): string?` | private |
 | Rust | `Field.is_optional(): boolean` | private |
-| Rust | `Field.is_text(): boolean` | private |
+| Rust | `Field.kind(): Kind` | private |
+| Rust | `Field.compare(left: string, right: string): Ordering` | private |
 | Rust | `Field.allows(matcher: Match): boolean` | private |
 | Rust | `Field.operators(): string` | private |
 | Rust | `as_text(value: json): string` | private |
+| Rust | `Sort { field: Field, descending: boolean }` | private |
+| Rust | `Sort.compare(left: Ticket, right: Ticket): Ordering` | private |
+| Rust | `created(ticket: Ticket): [number, number]` | private |
+| Rust | `STATUSES: Status[]` | private |
+| Rust | `millis_text(millis: number): string` | private |
+| Rust | `millis(value: string): number` | private |
+| Rust | `status_rank(value: string): number` | private |
 | Rust | `enum Match { Is, IsNot, In, NotIn, Contains, Omits, Empty, NotEmpty }` | private |
 | Rust | `Match.test(value: string?): boolean` | private |
 | Rust | `enum QueryError { Blank, UnknownField, UnknownStatus, OperatorNotAllowed, RepeatedField, UnexpectedToken, UnexpectedEnd }` | pub |
@@ -463,8 +473,10 @@ The rules the tables never repeat.
 | Rust | `Token.spelling(): string` | private |
 | Rust | `Token.is_keyword(keyword: string): boolean` | private |
 | Rust | `tokenize(query: string): Token[] throws QueryError` | private |
-| Rust | `parse_query(query: string): Condition throws QueryError` | private |
+| Rust | `parse_query(query: string): [Condition, Sort?] throws QueryError` | private |
 | Rust | `Parser { tokens: Token[], at: number }` | private |
+| Rust | `Parser.at_order_by(): boolean` | private |
+| Rust | `Parser.order_by(): Sort? throws QueryError` | private |
 | Rust | `Parser.any(): Condition throws QueryError` | private |
 | Rust | `Parser.all(): Condition throws QueryError` | private |
 | Rust | `Parser.unary(): Condition throws QueryError` | private |
@@ -575,6 +587,8 @@ The rules the tables never repeat.
 | both | `TicketQueue.find_tickets(predicate: TicketMatcher): Ticket[]` | pub |
 | Python | `TicketQueue.find_tickets(predicate)`: accepts a `Query` or a callable | |
 | both | `TicketQueue.find_ticket(predicate: TicketMatcher): Ticket?` | pub |
+| Rust | `TicketQueue.matching_tickets(keep: (ticket: Ticket) => boolean, order: TicketMatcher): Ticket[]` | private |
+| Rust | `TicketQueue.first_matching_ticket(keep: (ticket: Ticket) => boolean, order: TicketMatcher): Ticket?` | private |
 | Python | `TicketQueue.find_ticket(predicate)`: accepts a `Query` or a callable | |
 | both | `TicketQueue.find_events(predicate: (event: Event) => boolean): Event[]` | pub |
 | both | `TicketQueue.find_event(predicate: (event: Event) => boolean): Event?` | pub |
