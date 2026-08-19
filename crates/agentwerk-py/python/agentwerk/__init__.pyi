@@ -135,7 +135,10 @@ class Reply:
     def __repr__(self) -> str: ...
 
 class Query:
-    """Selects tickets by field values. Every set field must match."""
+    """Selects tickets by field values. Every set field must match.
+
+    `parse` also reads `ORDER BY <field> ASC | DESC`, which only AQL says.
+    """
 
     def __init__(
         self,

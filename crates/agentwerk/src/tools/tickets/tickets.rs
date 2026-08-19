@@ -3,7 +3,7 @@
 use super::super::tool::{Tool, ToolContext};
 use super::dispatch;
 
-/// `ticket`, `result`, `list`, `search`, `create`, `edit` in one tool.
+/// `ticket`, `result`, `list`, `create`, `edit` in one tool.
 ///
 /// # Examples
 ///

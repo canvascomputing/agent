@@ -239,9 +239,9 @@ tickets.ticket(Ticket::labeled("report", "Write up the ranking."));
 | **Submit** | `ticket(task)` | Submit a task, or a `Ticket` carrying a label or schema, and return its ticket key. |
 | **Read** | `results()` | Get the result of every finished ticket, in creation order. |
 | | `find_results(query)` | Get every result whose ticket matches a `Query` or an AQL string. |
-| | `find_result(query)` | Get the earliest result whose ticket matches a `Query` or an AQL string. |
+| | `find_result(query)` | Get the first result whose ticket matches a `Query` or an AQL string. |
 | | `tickets()` | Get every ticket in creation order. |
-| | `find_ticket(query)` | Get the earliest ticket matching a `Query` or an AQL string. |
+| | `find_ticket(query)` | Get the first ticket matching a `Query` or an AQL string. |
 | | `find_tickets(query)` | Get every ticket matching a `Query` or an AQL string. |
 | | `get_ticket(key)` | Get one ticket by key. |
 | **Drive** | `reply(key, content)` | Add a reply to a ticket. |
@@ -260,12 +260,16 @@ You can query tickets with AQL, the agentwerk query syntax, or with a `Query` bu
 ```rust
 tickets.find_tickets("scan");
 tickets.find_results("TICKET-3");
+tickets.find_tickets("key IN (TICKET-3, TICKET-4)");
 tickets.find_tickets("label IN (scan, report) AND status = Finished");
+tickets.find_results("scan ORDER BY finished DESC");
 tickets.find_tickets(Query::labeled("scan").status(Status::Finished));
 ```
 
 <details>
 <summary>All query terms</summary>
+
+#### Terms
 
 | | Term | Description |
 |-|------|-------------|
@@ -283,8 +287,10 @@ tickets.find_tickets(Query::labeled("scan").status(Status::Finished));
 | | `(A OR B) AND C` | Group terms with parentheses. |
 | **Shorten** | `scan` | Select the label `scan`, the short form of `label = scan`. |
 | | `TICKET-3` | Select one ticket by key, the short form of `key = TICKET-3`. |
+| **Sort** | `ORDER BY finished DESC` | Answer with the most recently finished first. |
+| | `ORDER BY created` | Answer in creation order, which `ASC` also says. |
 
-Fields:
+#### Fields
 
 | | Field | Description |
 |-|-------|-------------|
@@ -295,8 +301,22 @@ Fields:
 | **Outcome** | `status` | Match `Todo`, `InProgress`, `Finished`, or `Failed`. |
 | | `result` | Search the result the agent produced. |
 | **Body** | `task` | Search the work the agent was asked to do. |
+| **Time** | `created` | Sort by when the ticket was submitted. |
+| | `started` | Sort by when an agent claimed the ticket. |
+| | `finished` | Sort by when the ticket reached the `Finished` status. |
+| | `failed` | Sort by when the ticket reached the `Failed` status. |
 
-`=`, `!=`, `IN`, and `NOT IN` compare exactly; `~` and `!~` ignore case. `IS EMPTY` reads `label`, `agent`, `parent`, and `result` only, and `~` reads `task` and `result` only. A field holds one value per ticket, so `label = a AND label = b` is rejected and names `IN` as the fix. A string that does not compile panics; use `Query::parse` for one built at run time, which returns a `Result`.
+#### Rules
+
+- `=`, `!=`, `IN`, and `NOT IN` compare exactly, `~` and `!~` ignore case.
+- `IS EMPTY` and `IS NOT EMPTY` read `label`, `agent`, `parent`, `result`, `started`, `finished`, and `failed` only.
+- `~` and `!~` read `task` and `result` only.
+- A field holds one value per ticket, so `label = a AND label = b` is rejected and names `IN` as the fix.
+- `ORDER BY` names one field and closes the query. Every field sorts, `key` by its number and `status` along the lifecycle.
+- Without it tickets arrive in creation order, which is also what breaks a tie and what a closure answers in. A ticket missing the field sorts last.
+- The four times sort and nothing else, since AQL has no `>`. The three an agent can leave unset also read `IS EMPTY`, so `finished IS EMPTY` selects the tickets still open.
+- A query may be nothing but an `ORDER BY`, which selects every ticket.
+- A string that does not compile panics. Use `Query::parse` for one built at run time, which returns a `Result`.
 
 Every method that takes a query also takes a closure, for a condition no field carries:
 

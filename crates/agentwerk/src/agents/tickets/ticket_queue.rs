@@ -1149,29 +1149,48 @@ impl TicketQueue {
         out
     }
 
-    /// Get every ticket matching a condition, in creation order.
+    /// Get every ticket matching a condition, in creation order unless the
+    /// query names another with `ORDER BY`.
     ///
     /// Your condition MUST NOT call another `TicketQueue` method that reads
     /// the ticket store, or the call deadlocks.
     pub fn find_tickets(&self, predicate: impl TicketMatcher) -> Vec<Ticket> {
-        let store = self.tickets.lock().unwrap();
-        let mut out: Vec<Ticket> = store
-            .values()
-            .filter(|t| predicate.matches(t))
-            .cloned()
-            .collect();
-        out.sort_by_key(|t| (t.created_at, numeric_id(&t.key)));
-        out
+        self.matching_tickets(|t| predicate.matches(t), &predicate)
     }
 
-    /// Get the earliest ticket matching a condition.
+    /// Get the first ticket matching a condition, the earliest one unless the
+    /// query names another order.
     ///
     /// Your condition MUST NOT call another `TicketQueue` method that reads
     /// the ticket store, or the call deadlocks.
     pub fn find_ticket(&self, predicate: impl TicketMatcher) -> Option<Ticket> {
+        self.first_matching_ticket(|t| predicate.matches(t), &predicate)
+    }
+
+    /// Every ticket `keep` accepts, ordered by `order`.
+    ///
+    /// The filter and the order are separate because `find_results` wraps the
+    /// matcher in a closure of its own, and a closure names no order.
+    fn matching_tickets(
+        &self,
+        keep: impl Fn(&Ticket) -> bool,
+        order: &impl TicketMatcher,
+    ) -> Vec<Ticket> {
         let store = self.tickets.lock().unwrap();
-        let mut matching: Vec<&Ticket> = store.values().filter(|t| predicate.matches(t)).collect();
-        matching.sort_by_key(|t| (t.created_at, numeric_id(&t.key)));
+        let mut matching: Vec<&Ticket> = store.values().filter(|t| keep(t)).collect();
+        order.sort(&mut matching);
+        matching.into_iter().cloned().collect()
+    }
+
+    /// The first of those, and the only ticket copied.
+    fn first_matching_ticket(
+        &self,
+        keep: impl Fn(&Ticket) -> bool,
+        order: &impl TicketMatcher,
+    ) -> Option<Ticket> {
+        let store = self.tickets.lock().unwrap();
+        let mut matching: Vec<&Ticket> = store.values().filter(|t| keep(t)).collect();
+        order.sort(&mut matching);
         matching.into_iter().next().cloned()
     }
 
@@ -1552,18 +1571,19 @@ impl TicketQueue {
     /// ```
     pub fn find_results(&self, matches: impl TicketMatcher) -> Vec<serde_json::Value> {
         let finished_only = !matches.names_status();
-        self.find_tickets(|t: &Ticket| finished_results(&matches, finished_only, t))
+        self.matching_tickets(|t| finished_results(&matches, finished_only, t), &matches)
             .into_iter()
             .filter_map(|t| t.result)
             .collect()
     }
 
-    /// Get the earliest result whose ticket matches the query.
+    /// Get the first result whose ticket matches the query.
     ///
-    /// Status defaults to `Finished` as in [`Self::find_results`].
+    /// Status defaults to `Finished` as in [`Self::find_results`], and the
+    /// order is that method's too.
     pub fn find_result(&self, matches: impl TicketMatcher) -> Option<serde_json::Value> {
         let finished_only = !matches.names_status();
-        self.find_ticket(|t: &Ticket| finished_results(&matches, finished_only, t))
+        self.first_matching_ticket(|t| finished_results(&matches, finished_only, t), &matches)
             .and_then(|t| t.result)
     }
 }
@@ -1621,6 +1641,65 @@ mod tests {
         assert_eq!(all[0].key, "TICKET-1");
         assert_eq!(all[1].key, "TICKET-2");
         assert_eq!(all[2].key, "TICKET-3");
+    }
+
+    #[test]
+    fn find_tickets_answers_in_creation_order() {
+        let (queue, _tmp) = test_queue();
+        queue.ticket("a");
+        queue.ticket("b");
+        queue.ticket("c");
+        let keys: Vec<String> = queue
+            .find_tickets(|t: &Ticket| t.is_todo())
+            .into_iter()
+            .map(|t| t.key)
+            .collect();
+        assert_eq!(keys, ["TICKET-1", "TICKET-2", "TICKET-3"]);
+    }
+
+    #[test]
+    fn cancel_ignores_an_order_by_and_takes_every_ticket() {
+        let (queue, _tmp) = test_queue();
+        queue.ticket("a");
+        queue.ticket("b");
+        queue.cancel("ORDER BY key DESC");
+        assert!(queue.tickets().iter().all(|t| queue.is_cancelled(t)));
+    }
+
+    #[test]
+    fn find_tickets_answers_in_the_order_the_query_names() {
+        let (queue, _tmp) = test_queue();
+        queue.ticket("a");
+        queue.ticket("b");
+        queue.ticket("c");
+        let keys: Vec<String> = queue
+            .find_tickets("ORDER BY key DESC")
+            .into_iter()
+            .map(|t| t.key)
+            .collect();
+        assert_eq!(keys, ["TICKET-3", "TICKET-2", "TICKET-1"]);
+    }
+
+    #[test]
+    fn find_ticket_answers_the_first_in_the_order_the_query_names() {
+        let (queue, _tmp) = test_queue();
+        queue.ticket("a");
+        queue.ticket("b");
+        let found = queue.find_ticket("ORDER BY key DESC").expect("a ticket");
+        assert_eq!(found.key, "TICKET-2");
+    }
+
+    #[test]
+    fn find_results_answers_in_the_order_the_query_names() {
+        let (queue, _tmp) = test_queue();
+        queue.ticket("a");
+        queue.ticket("b");
+        attach_done_result(&queue, "TICKET-1", "first");
+        attach_done_result(&queue, "TICKET-2", "second");
+        assert_eq!(
+            queue.find_results("ORDER BY key DESC"),
+            vec![serde_json::json!("second"), serde_json::json!("first")]
+        );
     }
 
     #[test]
@@ -1726,32 +1805,13 @@ mod tests {
     }
 
     #[test]
-    fn find_tickets_takes_a_query_string_in_place_of_a_query() {
+    fn find_tickets_compiles_the_string_as_a_query() {
         let (queue, _tmp) = test_queue();
         queue.ticket(Ticket::labeled("scan", "a"));
         queue.ticket(Ticket::labeled("report", "b"));
-        let found = queue.find_tickets("label IN (scan, report) AND status = Todo");
-        assert_eq!(found.len(), 2);
-    }
-
-    #[test]
-    fn find_tickets_takes_a_ticket_key_in_place_of_a_query() {
-        let (queue, _tmp) = test_queue();
-        queue.ticket(Ticket::labeled("scan", "a"));
-        queue.ticket(Ticket::labeled("report", "b"));
-        let found = queue.find_tickets("TICKET-2");
+        let found = queue.find_tickets("label = report AND status = Todo");
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].task, serde_json::json!("b"));
-    }
-
-    #[test]
-    fn find_tickets_takes_a_label_in_place_of_a_query() {
-        let (queue, _tmp) = test_queue();
-        queue.ticket(Ticket::labeled("scan", "a"));
-        queue.ticket(Ticket::labeled("report", "b"));
-        let found = queue.find_tickets("scan");
-        assert_eq!(found.len(), 1);
-        assert_eq!(found[0].task, serde_json::json!("a"));
     }
 
     #[test]

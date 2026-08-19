@@ -251,8 +251,10 @@ mod tests {
         let schema_retries = schema_retries_in(&events);
         assert_eq!(schema_retries.len(), 1);
         let message = &schema_retries[0].2;
-        assert!(message.contains("tickets"), "{message}");
-        assert!(!message.contains("finish"), "{message}");
+        assert!(message.contains("`tickets` rejected"), "{message}");
+        // `partial_sum` belongs to the finish tool's schema, which is the one
+        // the message must not print.
+        assert!(!message.contains("partial_sum"), "{message}");
     }
 
     #[tokio::test]

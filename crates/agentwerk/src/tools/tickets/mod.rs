@@ -432,6 +432,20 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn list_stops_at_fifty_tickets() {
+        let queue = TicketQueue::new();
+        queue.dir(isolated_test_dir());
+        for i in 1..=51 {
+            queue.insert(Ticket::new(format!("task {i}")), "tester".into());
+        }
+        let ctx = ctx_with(Arc::clone(&queue), "alice");
+        let result = call(TicketsTool, serde_json::json!({"action": "list"}), &ctx).await;
+        let text = unwrap_text(&result);
+        assert_eq!(text.lines().count(), 50, "{text}");
+        assert!(!text.contains("TICKET-51"), "{text}");
+    }
+
+    #[tokio::test]
     async fn list_filters_by_the_status_the_aql_names() {
         let queue = queue_with_two_tickets();
         let ctx = ctx_with(Arc::clone(&queue), "alice");
@@ -447,18 +461,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn list_filters_by_a_boolean_aql() {
+    async fn list_answers_in_the_order_the_aql_names() {
         let queue = queue_with_two_tickets();
         let ctx = ctx_with(Arc::clone(&queue), "alice");
         let result = call(
             TicketsTool,
-            serde_json::json!({"action": "list", "aql": "label = review OR status = Todo"}),
+            serde_json::json!({"action": "list", "aql": "ORDER BY key DESC"}),
             &ctx,
         )
         .await;
         let text = unwrap_text(&result);
-        assert!(text.contains("TICKET-1"), "{text}");
-        assert!(text.contains("TICKET-2"), "{text}");
+        assert!(text.find("TICKET-2") < text.find("TICKET-1"), "{text}");
     }
 
     #[tokio::test]
