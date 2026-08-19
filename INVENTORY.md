@@ -429,16 +429,8 @@ The rules the tables never repeat.
 | Rust | `impl TicketMatcher for String` | pub |
 | Python | an AQL string stands in for the `Query` wherever one is accepted | |
 | Rust | `Query { root: Condition, order: Sort? }` | pub |
-| Python | `Query(*, key=None, label=None, status=None, agent=None, parent_key=None)` | |
-| Rust | `Query.new(): Query` | pub |
-| Rust | `Query.labeled(label: string): Query` | pub |
-| Rust | `Query.parse(query: string): Query throws QueryError` | pub |
-| Rust | `Query.key(key: string): Query` | pub |
-| Rust | `Query.label(label: string): Query` | pub |
-| Rust | `Query.status(status: Status): Query` | pub |
-| Rust | `Query.agent(agent: string): Query` | pub |
-| Rust | `Query.parent_key(parent_key: string): Query` | pub |
-| Rust | `Query.and(field: Field, matcher: Match): Query` | private |
+| Python | `Query(query: str)` | |
+| Rust | `Query.new(query: string): Query throws QueryError` | pub |
 | Rust | `impl From<&str> for Query` | pub |
 | Rust | `impl From<String> for Query` | pub |
 | both | `impl TicketMatcher for Query` | pub |
@@ -2051,10 +2043,8 @@ Binds `agents/tickets/ticket.rs` and `agents/tickets/query.rs`.
 | Language | Item | Visibility |
 |----------|------|------------|
 | Rust | `PyQuery { inner: Query }` | python |
-| Rust | `PyQuery.new(key: string?, label: string?, status: string?, agent: string?, parent_key: string?): PyQuery throws PyErr` | python |
-| Rust | `PyQuery.parse(query: string): PyQuery throws PyErr` | python |
+| Rust | `PyQuery.new(query: string): PyQuery throws PyErr` | python |
 | Rust | `PyQuery.__repr__(): string` | python |
-| Rust | `parse_status(s: string): Status throws PyErr` | private |
 | Rust | `to_query(query: string): Query throws PyErr` | private |
 | Rust | `try_extract_query(arg: any): Query? throws PyErr` | pub |
 | Rust | `to_ticket(arg: any): Ticket throws PyErr`, reading an `os.PathLike` as the file holding the task | pub |

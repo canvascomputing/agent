@@ -4,13 +4,13 @@
 //! Rust sets those fields with chained methods. A Python class cannot carry a
 //! `label` method and a `label` attribute, so they are keyword arguments here.
 
-use agentwerk::{Query, Status, Ticket};
+use agentwerk::{Query, Ticket};
 use pyo3::prelude::*;
 
 use crate::convert::{py_to_text, py_to_value, value_to_py};
 use crate::schema::PySchema;
 
-/// Selects tickets by field values.
+/// Selects tickets by field values, compiled from AQL.
 #[pyclass(name = "Query")]
 pub struct PyQuery {
     pub inner: Query,
@@ -18,37 +18,9 @@ pub struct PyQuery {
 
 #[pymethods]
 impl PyQuery {
-    #[new]
-    #[pyo3(signature = (*, key=None, label=None, status=None, agent=None, parent_key=None))]
-    fn new(
-        key: Option<String>,
-        label: Option<String>,
-        status: Option<&str>,
-        agent: Option<String>,
-        parent_key: Option<String>,
-    ) -> PyResult<Self> {
-        let mut q = Query::new();
-        if let Some(k) = key {
-            q = q.key(k);
-        }
-        if let Some(l) = label {
-            q = q.label(l);
-        }
-        if let Some(s) = status {
-            q = q.status(parse_status(s)?);
-        }
-        if let Some(a) = agent {
-            q = q.agent(a);
-        }
-        if let Some(p) = parent_key {
-            q = q.parent_key(p);
-        }
-        Ok(PyQuery { inner: q })
-    }
-
     /// Compile an AQL string, the same syntax a string argument carries.
-    #[staticmethod]
-    fn parse(query: &str) -> PyResult<Self> {
+    #[new]
+    fn new(query: &str) -> PyResult<Self> {
         Ok(PyQuery {
             inner: to_query(query)?,
         })
@@ -62,19 +34,7 @@ impl PyQuery {
 /// A string as a query, raising where the Rust `From` impl would panic: a
 /// Python caller gets `ValueError`, not a panic across the binding.
 fn to_query(query: &str) -> PyResult<Query> {
-    Query::parse(query).map_err(|error| pyo3::exceptions::PyValueError::new_err(format!("{error}")))
-}
-
-fn parse_status(s: &str) -> PyResult<Status> {
-    match s {
-        "todo" => Ok(Status::Todo),
-        "in_progress" => Ok(Status::InProgress),
-        "finished" => Ok(Status::Finished),
-        "failed" => Ok(Status::Failed),
-        other => Err(pyo3::exceptions::PyValueError::new_err(format!(
-            "unknown status: {other}"
-        ))),
-    }
+    Query::new(query).map_err(|error| pyo3::exceptions::PyValueError::new_err(format!("{error}")))
 }
 
 /// Read a Python argument as a query: a `Query`, or a string in AQL. `None`

@@ -16,11 +16,14 @@ use super::ticket::{Status, Ticket};
 /// ```no_run
 /// use agentwerk::{Query, TicketQueue};
 ///
+/// # fn run() -> Result<(), Box<dyn std::error::Error>> {
 /// let tickets = TicketQueue::new();
 /// tickets.find_tickets("research");
 /// tickets.find_tickets("label = research AND status != Failed");
-/// tickets.find_tickets(Query::labeled("research").agent("research-1"));
+/// tickets.find_tickets(Query::new("label = research AND agent = research-1")?);
 /// tickets.find_tickets(|t: &agentwerk::Ticket| t.has_label("research"));
+/// # Ok(())
+/// # }
 /// ```
 pub trait TicketMatcher: Send + Sync {
     fn matches(&self, ticket: &Ticket) -> bool;
@@ -80,26 +83,12 @@ impl TicketMatcher for String {
     }
 }
 
-/// Selects tickets by field values, either built up field by field or parsed
-/// from AQL, the agentwerk query syntax.
+/// Selects tickets by field values, compiled from AQL, the agentwerk query
+/// syntax.
 ///
-/// Every field a builder sets must match (AND). An empty query matches every
-/// ticket. [`Query::parse`] accepts the same selection as a string, plus `OR`,
-/// `NOT`, the operators the builders have no method for, and `ORDER BY`, which
-/// only a string says.
-///
-/// ```no_run
-/// use agentwerk::Query;
-///
-/// # fn run() -> Result<(), Box<dyn std::error::Error>> {
-/// let built = Query::labeled("scan").agent("scanner-1");
-/// let parsed = Query::parse("label = scan AND agent = scanner-1")?;
-/// let either = Query::parse("label IN (scan, report) AND status != Failed")?;
-/// let newest = Query::parse("label = scan ORDER BY finished DESC")?;
-/// # let _ = (built, parsed, either, newest);
-/// # Ok(())
-/// # }
-/// ```
+/// A string says the same query wherever a matcher is taken. Compile it here
+/// when the same filter runs over a large queue, or when a string built at run
+/// time should answer with an error rather than a panic.
 #[derive(Debug, Clone)]
 pub struct Query {
     root: Condition,
@@ -107,77 +96,25 @@ pub struct Query {
     order: Option<Sort>,
 }
 
-impl Default for Query {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl Query {
-    /// Create a query matching every ticket.
-    pub fn new() -> Self {
-        Self {
-            root: Condition::All(Vec::new()),
-            order: None,
-        }
-    }
-
-    /// Create a query for one label, the field most queries select on.
-    pub fn labeled(label: impl Into<String>) -> Self {
-        Self::new().label(label)
-    }
-
     /// Compile an AQL string.
     ///
     /// ```
     /// use agentwerk::Query;
     ///
     /// # fn run() -> Result<(), Box<dyn std::error::Error>> {
-    /// Query::parse("status = Finished AND label IN (scan, report)")?;
-    /// Query::parse("task ~ \"retry budget\" AND agent IS EMPTY")?;
-    /// Query::parse("TICKET-3")?;
-    /// Query::parse("status = Finished ORDER BY finished DESC")?;
-    /// Query::parse("finished IS EMPTY ORDER BY created")?;
+    /// Query::new("status = Finished AND label IN (scan, report)")?;
+    /// Query::new("task ~ \"retry budget\" AND agent IS EMPTY")?;
+    /// Query::new("TICKET-3")?;
+    /// Query::new("status = Finished ORDER BY finished DESC")?;
+    /// Query::new("finished IS EMPTY ORDER BY created")?;
     /// # Ok(())
     /// # }
     /// # run().unwrap();
     /// ```
-    pub fn parse(query: &str) -> Result<Self, QueryError> {
+    pub fn new(query: &str) -> Result<Self, QueryError> {
         let (root, order) = parse_query(query)?;
         Ok(Self { root, order })
-    }
-
-    pub fn key(self, key: impl Into<String>) -> Self {
-        self.and(Field::Key, Match::Is(key.into()))
-    }
-
-    pub fn label(self, label: impl Into<String>) -> Self {
-        self.and(Field::Label, Match::Is(label.into()))
-    }
-
-    pub fn status(self, status: Status) -> Self {
-        self.and(Field::Status, Match::Is(status.to_string()))
-    }
-
-    pub fn agent(self, agent: impl Into<String>) -> Self {
-        self.and(Field::Agent, Match::Is(agent.into()))
-    }
-
-    pub fn parent_key(self, parent_key: impl Into<String>) -> Self {
-        self.and(Field::Parent, Match::Is(parent_key.into()))
-    }
-
-    fn and(mut self, field: Field, matcher: Match) -> Self {
-        let term = Condition::Term(field, matcher);
-        match &mut self.root {
-            Condition::All(terms) => terms.push(term),
-            // A parsed root is any shape, so it becomes the first of two.
-            other => {
-                let parsed = std::mem::replace(other, Condition::All(Vec::new()));
-                self.root = Condition::All(vec![parsed, term]);
-            }
-        }
-        self
     }
 }
 
@@ -200,11 +137,11 @@ impl TicketMatcher for Query {
 
 /// Parses the string as AQL, and panics on one that does not parse: a query
 /// literal that does not compile is a mistake in the calling code, the way a
-/// tool schema document the compiler refuses is. Use [`Query::parse`] for a
+/// tool schema document the compiler refuses is. Use [`Query::new`] for a
 /// string built at run time.
 impl From<&str> for Query {
     fn from(query: &str) -> Self {
-        Query::parse(query).unwrap_or_else(|error| panic!("invalid query {query:?}: {error}"))
+        Query::new(query).unwrap_or_else(|error| panic!("invalid query {query:?}: {error}"))
     }
 }
 
@@ -957,11 +894,11 @@ mod tests {
     }
 
     fn parse(query: &str) -> Query {
-        Query::parse(query).expect("query must parse")
+        Query::new(query).expect("query must parse")
     }
 
     fn error(query: &str) -> QueryError {
-        Query::parse(query).expect_err("query must be rejected")
+        Query::new(query).expect_err("query must be rejected")
     }
 
     /// The keys the query selects, in the order it puts them in.
@@ -973,53 +910,8 @@ mod tests {
     }
 
     #[test]
-    fn empty_query_matches_every_ticket() {
-        let q = Query::new();
-        assert!(q.matches(&ticket("TICKET-1").label("scan").agent("a-1")));
-        assert!(q.matches(&ticket("TICKET-2")));
-    }
-
-    #[test]
-    fn key_filters_by_ticket_key() {
-        let q = Query::new().key("TICKET-1");
-        assert!(q.matches(&ticket("TICKET-1")));
-        assert!(!q.matches(&ticket("TICKET-2")));
-    }
-
-    #[test]
-    fn label_filters_by_ticket_label() {
-        let q = Query::new().label("scan");
-        assert!(q.matches(&ticket("TICKET-1").label("scan")));
-        assert!(!q.matches(&ticket("TICKET-2").label("report")));
-        assert!(!q.matches(&ticket("TICKET-3")));
-    }
-
-    #[test]
-    fn status_filters_by_ticket_status() {
-        let q = Query::new().status(Status::Finished);
-        assert!(q.matches(&ticket("TICKET-1").status(Status::Finished)));
-        assert!(!q.matches(&ticket("TICKET-1").status(Status::Todo)));
-    }
-
-    #[test]
-    fn agent_filters_by_assignee() {
-        let q = Query::new().agent("scanner-1");
-        assert!(q.matches(&ticket("TICKET-1").agent("scanner-1")));
-        assert!(!q.matches(&ticket("TICKET-2").agent("scanner-2")));
-        assert!(!q.matches(&ticket("TICKET-3")));
-    }
-
-    #[test]
-    fn parent_key_filters_by_parent() {
-        let q = Query::new().parent_key("TICKET-1");
-        assert!(q.matches(&ticket("TICKET-2").parent("TICKET-1")));
-        assert!(!q.matches(&ticket("TICKET-3").parent("TICKET-5")));
-        assert!(!q.matches(&ticket("TICKET-4")));
-    }
-
-    #[test]
     fn multiple_fields_and_together() {
-        let q = Query::new().label("scan").agent("scanner-1");
+        let q = parse("label = scan AND agent = scanner-1");
         assert!(q.matches(&ticket("TICKET-1").label("scan").agent("scanner-1")));
         assert!(!q.matches(&ticket("TICKET-2").label("scan").agent("scanner-2")));
         assert!(!q.matches(&ticket("TICKET-3").label("report").agent("scanner-1")));
@@ -1027,13 +919,11 @@ mod tests {
 
     #[test]
     fn names_status_is_false_for_a_query_that_leaves_it_unset() {
-        assert!(!Query::labeled("scan").names_status());
         assert!(!parse("label = scan").names_status());
     }
 
     #[test]
     fn names_status_is_true_for_a_query_that_sets_it() {
-        assert!(Query::new().status(Status::Failed).names_status());
         assert!(parse("status != Finished").names_status());
     }
 
@@ -1057,11 +947,9 @@ mod tests {
 
     #[test]
     fn every_way_of_naming_a_label_selects_the_same_tickets() {
-        let built = Query::labeled("scan");
         let converted = Query::from("scan");
         let owned = "scan".to_string();
-        let matchers: [(&str, &dyn TicketMatcher); 4] = [
-            ("Query::labeled", &built),
+        let matchers: [(&str, &dyn TicketMatcher); 3] = [
             ("Query::from", &converted),
             ("&str", &"scan"),
             ("String", &owned),
@@ -1533,19 +1421,5 @@ mod tests {
     fn a_malformed_query_string_panics_naming_the_input() {
         let matcher: &dyn TicketMatcher = &"label = ";
         matcher.matches(&ticket("TICKET-1"));
-    }
-
-    #[test]
-    fn a_parsed_query_matches_the_same_tickets_as_the_builder() {
-        let built = Query::labeled("scan").agent("scanner-1");
-        let parsed = parse("label = scan AND agent = scanner-1");
-        for t in [
-            ticket("TICKET-1").label("scan").agent("scanner-1"),
-            ticket("TICKET-2").label("scan").agent("scanner-2"),
-            ticket("TICKET-3").label("report"),
-            ticket("TICKET-4"),
-        ] {
-            assert_eq!(built.matches(&t), parsed.matches(&t), "{}", t.key);
-        }
     }
 }

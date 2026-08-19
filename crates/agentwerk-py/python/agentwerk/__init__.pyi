@@ -135,22 +135,13 @@ class Reply:
     def __repr__(self) -> str: ...
 
 class Query:
-    """Selects tickets by field values. Every set field must match.
+    """Selects tickets by field values, compiled from AQL.
 
-    `parse` also reads `ORDER BY <field> ASC | DESC`, which only AQL says.
+    The string is the same syntax a query argument carries, `ORDER BY <field>
+    ASC | DESC` included, and one that does not compile raises `ValueError`.
     """
 
-    def __init__(
-        self,
-        *,
-        key: Optional[str] = ...,
-        label: Optional[str] = ...,
-        status: Optional[str] = ...,
-        agent: Optional[str] = ...,
-        parent_key: Optional[str] = ...,
-    ) -> None: ...
-    @staticmethod
-    def parse(query: str) -> "Query": ...
+    def __init__(self, query: str) -> None: ...
     def __repr__(self) -> str: ...
 
 class Ticket:

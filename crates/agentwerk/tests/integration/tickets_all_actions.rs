@@ -118,7 +118,7 @@ async fn walks_every_ticket_action() -> std::result::Result<(), Box<dyn std::err
     // the intent has to reach, not every attempt on the way there.
     let written = written.lock().unwrap().clone();
     assert!(
-        written.iter().any(|q| Query::parse(q).is_ok()),
+        written.iter().any(|q| Query::new(q).is_ok()),
         "the narrowing intent reached no query that compiles; it wrote {written:?}"
     );
 

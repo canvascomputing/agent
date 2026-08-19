@@ -247,11 +247,11 @@ tickets.ticket(Ticket("Write up the ranking.", label="report"))
 | | `get_dir()` | Get the session directory. |
 | **Submit** | `ticket(task)` | Submit a task, or a `Ticket` carrying a label or schema, and return its ticket key. |
 | **Read** | `results()` | Get the result of every finished ticket, in creation order. |
-| | `find_results(query)` | Get every result whose ticket matches a `Query` or an AQL string. |
-| | `find_result(query)` | Get the first result whose ticket matches a `Query` or an AQL string. |
+| | `find_results(query)` | Get every result whose ticket matches an AQL query. |
+| | `find_result(query)` | Get the first result whose ticket matches an AQL query. |
 | | `tickets()` | Get every ticket in creation order. |
-| | `find_ticket(query)` | Get the first ticket matching a `Query` or an AQL string. |
-| | `find_tickets(query)` | Get every ticket matching a `Query` or an AQL string. |
+| | `find_ticket(query)` | Get the first ticket matching an AQL query. |
+| | `find_tickets(query)` | Get every ticket matching an AQL query. |
 | | `get_ticket(key)` | Get one ticket by key. |
 | **Drive** | `reply(key, content)` | Add a reply to a ticket. |
 | | `edit_replies(key, editor)` | Rewrite a ticket's replies now. |
@@ -264,7 +264,7 @@ See [`TicketQueue`](https://docs.rs/agentwerk/latest/agentwerk/agents/tickets/st
 
 ### Queries
 
-You can query tickets with AQL, the agentwerk query syntax, or with a `Query` built field by field.
+You can query tickets with AQL, the agentwerk query syntax.
 
 ```python
 tickets.find_tickets("scan")
@@ -272,7 +272,6 @@ tickets.find_results("TICKET-3")
 tickets.find_tickets("key IN (TICKET-3, TICKET-4)")
 tickets.find_tickets("label IN (scan, report) AND status = finished")
 tickets.find_results("scan ORDER BY finished DESC")
-tickets.find_tickets(aw.Query(label="scan", status="finished"))
 ```
 
 <details>
@@ -325,7 +324,7 @@ tickets.find_tickets(aw.Query(label="scan", status="finished"))
 - Without it tickets arrive in creation order, which is also what breaks a tie and what a callable answers in. A ticket missing the field sorts last.
 - The four times sort and nothing else, since AQL has no `>`. The three an agent can leave unset also read `IS EMPTY`, so `finished IS EMPTY` selects the tickets still open.
 - A query may be nothing but an `ORDER BY`, which selects every ticket.
-- A string that does not compile raises `ValueError`, as does `Query.parse(query)`, which compiles one without running it.
+- A string that does not compile raises `ValueError`, as does `Query(query)`, which compiles one without running it.
 
 Every method that takes a query also takes a callable, for a condition no field carries:
 
