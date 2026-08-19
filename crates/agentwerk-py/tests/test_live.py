@@ -4,6 +4,8 @@ All marked ``live`` and skipped automatically without a provider (see conftest).
 Prompts are tiny to bound cost.
 """
 
+import asyncio
+
 import pytest
 
 import agentwerk as aw
@@ -108,39 +110,58 @@ async def test_saves_the_messages_of_a_finished_ticket(tmp_path):
             model = queue.model_for_agent(event.agent_id)
             trajectory = aw.Trajectory.from_ticket(event.agent_id, model, ticket)
             trajectory.save(str(tmp_path))
-            captured.append((len(trajectory.messages), trajectory.model))
+            captured.append((event.agent_id, len(trajectory.replies), trajectory.model))
 
     queue.on_ticket(capture)
     key = queue.ticket("Reply with exactly the word: pong")
     await queue.finish_all()
 
+    (agent_id, replies, model), = captured
     written = sorted(p.name for p in (tmp_path / "trajectories").iterdir())
-    assert written == [f"scribe-{key}.html", f"scribe-{key}.json"]
-    (messages, model), = captured
-    assert messages > 0
+    assert written == [f"{agent_id}-{key}.html", f"{agent_id}-{key}.json"]
+    assert replies > 0
     assert model
 
 
 async def test_compaction_summarizes_the_replies_against_the_live_model(tmp_path):
-    # Two turns: the first records the token usage the trigger reads, the
-    # second compacts, since a threshold of zero is always crossed. The role
-    # forbids tools so the ticket cannot finish on turn one and skip it.
-    queue = aw.TicketQueue().max_turns(2).dir(str(tmp_path))
+    # An interactive agent carries no finish tool, so the ticket cannot end on
+    # turn one and skip compaction. The follow-up reply drives the request that
+    # a threshold of zero compacts before.
+    task = "Name one colour and say why you picked it."
+    queue = aw.TicketQueue().dir(str(tmp_path))
     queue.compact_at(0.0)
-    compacted = []
-
-    def watch(work, event):
-        if event.kind == "compaction_finished":
-            compacted.append(event.ticket_key)
-
-    queue.on_event(watch)
-    queue.agent(
-        aw.Agent.from_env()
-        .role("Answer in plain text. Do not call any tools.")
-        .build()
+    kinds = []
+    queue.on_event(
+        lambda _, event: kinds.append(event.kind)
+        if event.kind.startswith("compaction_")
+        else None
     )
-    key = queue.ticket("Name one colour and say why you picked it.")
+    queue.agent(
+        aw.Agent.from_env().role("Answer in plain text.").interactive().build()
+    )
+    queue.start()
+    key = queue.ticket(task)
+    await _until(lambda: _answered(queue, key))
+    queue.reply(key, "Now name a second colour.")
+    await _until(lambda: "compaction_finished" in kinds)
+    queue.cancel_all()
     await queue.finish_all()
 
-    # A summarizer that failed would emit `compaction_failed` instead.
-    assert compacted == [key]
+    assert "compaction_failed" not in kinds
+    texts = [b.data.get("text", "") for r in queue.get_ticket(key).replies for b in r.content]
+    assert task not in texts, "the summary must have replaced the task reply"
+    assert any(text.strip() for text in texts), "the summary must carry text"
+
+
+def _answered(queue, key):
+    replies = queue.get_ticket(key).replies
+    return bool(replies) and replies[-1].author == "assistant"
+
+
+async def _until(condition, timeout=120.0):
+    """Wait for `condition`, which a live turn takes seconds to satisfy."""
+    for _ in range(int(timeout / 0.5)):
+        if condition():
+            return
+        await asyncio.sleep(0.5)
+    raise AssertionError("the run did not reach the awaited state")
