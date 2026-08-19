@@ -1,4 +1,4 @@
-//! Core check on summarizing: `compact_at(0.0)` puts the threshold at zero, so
+//! Core check on summarizing: `compaction_threshold: Some(0.0)` puts the threshold at zero, so
 //! proactive compaction fires between turns. The loop calls compact and the
 //! summariser must return non-empty text. The ticket does not need to
 //! complete: verifying the summariser is the sole purpose of this test.
@@ -9,12 +9,12 @@ use super::common;
 
 use agentwerk::agents::tickets::Author;
 use agentwerk::event::EventKind;
-use agentwerk::{Agent, Event, Ticket, TicketQueue};
+use agentwerk::{Agent, Config, Event, Ticket, TicketQueue};
 
 // Pins a known context window: the trigger stays quiet on a model whose window
 // it cannot look up, and the model here comes from the environment. The first
 // response appends to `token_usage` and the next iteration's proactive check
-// fires against the zero threshold `compact_at(0.0)` sets.
+// fires against the zero threshold `compaction_threshold: Some(0.0)` sets.
 const LOCAL_CTX: u64 = 4_096;
 
 // A realistic debugging scenario: ~1 500 tokens, with enough structure
@@ -127,8 +127,11 @@ async fn summariser_produces_text_when_compaction_fires_against_live_llm() {
     // Two iterations: turn 1 lets the model respond once (appending one entry
     // to `token_usage`); turn 2's proactive guard then trips because a
     // threshold of zero is always crossed.
-    tickets.max_turns(2);
-    tickets.compact_at(0.0);
+    tickets.config(Config {
+        max_turns: Some(2),
+        compaction_threshold: Some(0.0),
+        ..Default::default()
+    });
     tickets.on_event(move |_, e| log.lock().unwrap().push(e.clone()));
     tickets.agent(
         Agent::new()

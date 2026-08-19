@@ -6,7 +6,7 @@ use super::common;
 
 use agentwerk::schemas::Schema;
 use agentwerk::tools::CommandTool;
-use agentwerk::{Agent, Ticket, TicketQueue};
+use agentwerk::{Agent, Config, Ticket, TicketQueue};
 
 #[tokio::test]
 async fn test() -> std::result::Result<(), Box<dyn std::error::Error>> {
@@ -34,7 +34,10 @@ async fn test() -> std::result::Result<(), Box<dyn std::error::Error>> {
 
     let tickets = TicketQueue::new();
 
-    tickets.max_turns(10);
+    tickets.config(Config {
+        max_turns: Some(10),
+        ..Default::default()
+    });
     let agent = Agent::new()
         .provider(provider)
         .model(&model)

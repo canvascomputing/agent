@@ -24,7 +24,7 @@ CARRIED = (
     "model",
     "usage",
     "reason",
-    "policy",
+    "config",
     "limit",
     "attempt",
 )

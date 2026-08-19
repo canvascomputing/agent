@@ -21,7 +21,7 @@ use agentwerk::event::{Event, EventKind};
 use agentwerk::providers::{Model, Provider};
 use agentwerk::schemas::Schema;
 use agentwerk::tools::{TicketsTool, Tool, ToolResult};
-use agentwerk::{Agent, Ticket, TicketQueue};
+use agentwerk::{Agent, Config, Ticket, TicketQueue};
 use serde_json::{json, Value};
 
 const ROLE: &str = include_str!("prompts/agent.role.md");
@@ -45,9 +45,10 @@ async fn main() {
             on_ctrl_c.cancel_all();
         }
     });
-    if let Some(n) = args.max_turns {
-        tickets.max_turns(n);
-    }
+    tickets.config(Config {
+        max_turns: args.max_turns,
+        ..Default::default()
+    });
 
     for (idx, (lo, hi)) in partitions.iter().enumerate() {
         let body = format!(
@@ -313,8 +314,8 @@ fn build_event_handler(
                 red = style.red,
                 reset = style.reset,
             ),
-            EventKind::PolicyViolated { policy, limit } => eprintln!(
-                "{red}│    {agent} ✗ policy {policy:?} (limit {limit}){reset}",
+            EventKind::ConfigViolated { config, limit } => eprintln!(
+                "{red}│    {agent} ✗ config {config:?} (limit {limit}){reset}",
                 red = style.red,
                 reset = style.reset,
             ),

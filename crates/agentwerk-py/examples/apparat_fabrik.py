@@ -22,6 +22,7 @@ from pathlib import Path
 
 from agentwerk import (
     Agent,
+    Config,
     GrepTool,
     Knowledge,
     ReadFileTool,
@@ -233,7 +234,9 @@ async def main(pruefer, meister, monteur):
     started_at = time.monotonic()
     # Every request resends the context, so the input-token limit is what bounds
     # the bill; the shift bell is the time limit, and both end the run on screen.
-    tickets = TicketQueue().max_time(SHIFT).max_input_tokens(2_000_000)
+    tickets = TicketQueue().config(
+        Config(max_time=SHIFT, max_input_tokens=2_000_000)
+    )
 
     # One read plan opens one Abnahme per part it names, which is the fan-out
     # the line runs on.

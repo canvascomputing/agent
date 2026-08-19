@@ -14,7 +14,16 @@ import subprocess
 import sys
 from collections import Counter
 
-from agentwerk import Agent, Schema, Ticket, TicketQueue, TicketsTool, ToolResult, tool
+from agentwerk import (
+    Agent,
+    Config,
+    Schema,
+    Ticket,
+    TicketQueue,
+    TicketsTool,
+    ToolResult,
+    tool,
+)
 
 ROLE = """
 {context}
@@ -98,7 +107,7 @@ async def main(n, partitions, agents):
     agents = min(agents, len(bounds))
     print(f"sum_{{k=1}}^{{{n}}} k^2 over {len(bounds)} partitions, {agents} agent(s)\n")
 
-    tickets = TicketQueue().max_turns(20 * len(bounds))
+    tickets = TicketQueue().config(Config(max_turns=20 * len(bounds)))
     # The finish reason is announced once and not kept, so catch it here. The
     # per-tool counts are the same story: the queue counts the run as a whole,
     # so a breakdown is folded off the events.

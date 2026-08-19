@@ -18,7 +18,7 @@ use super::common;
 use agentwerk::agents::knowledge::Page;
 use agentwerk::event::{default_logger, Event, EventKind};
 use agentwerk::tools::GrepTool;
-use agentwerk::{Agent, Knowledge, Ticket, TicketQueue};
+use agentwerk::{Agent, Config, Knowledge, Ticket, TicketQueue};
 
 const SEEKER_AGENT: &str = include_str!("../../../use-cases/src/malware_scanner/agents/seeker.md");
 
@@ -149,8 +149,11 @@ async fn seeker_pool_finds_planted_indicators(
     });
 
     let tickets = TicketQueue::new();
-    tickets.max_time(TIME_BUDGET);
-    tickets.max_turns(80);
+    tickets.config(Config {
+        max_time: Some(TIME_BUDGET),
+        max_turns: Some(80),
+        ..Default::default()
+    });
     tickets.on_event(move |_, e| event_handler(e));
 
     // The Seeker no longer derives a threat itself; each ticket already names one

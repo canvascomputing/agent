@@ -3,7 +3,6 @@
 
 use std::future::Future;
 use std::sync::Arc;
-use std::time::Duration;
 
 use agentwerk::agents::tickets::Reply;
 use agentwerk::event::Event;
@@ -12,6 +11,7 @@ use pyo3::prelude::*;
 use serde_json::Value;
 
 use crate::agent::PyAgent;
+use crate::config::PyConfig;
 use crate::convert::{py_to_value, runtime_error, value_to_py};
 use crate::event::{to_py_event, PyEvent};
 use crate::reply::{py_to_replies, replies_to_py};
@@ -77,110 +77,17 @@ impl PyTicketQueue {
         self.inner.set_failed(key).map_err(runtime_error)
     }
 
-    /// Limit the total number of turns.
-    fn max_turns(slf: PyRef<'_, Self>, count: u32) -> PyRef<'_, Self> {
-        slf.inner.max_turns(count);
+    /// Set the execution limits and retry tuning.
+    fn config<'py>(slf: PyRef<'py, Self>, config: PyRef<'_, PyConfig>) -> PyRef<'py, Self> {
+        slf.inner.config(config.inner.clone());
         slf
     }
 
-    /// Limit the total input tokens.
-    fn max_input_tokens(slf: PyRef<'_, Self>, count: u64) -> PyRef<'_, Self> {
-        slf.inner.max_input_tokens(count);
-        slf
-    }
-
-    /// Limit the total output tokens.
-    fn max_output_tokens(slf: PyRef<'_, Self>, count: u64) -> PyRef<'_, Self> {
-        slf.inner.max_output_tokens(count);
-        slf
-    }
-
-    /// Limit the output tokens of a single request.
-    fn max_request_tokens(slf: PyRef<'_, Self>, count: u32) -> PyRef<'_, Self> {
-        slf.inner.max_request_tokens(count);
-        slf
-    }
-
-    /// Limit the consecutive turns without a valid tool call; any successful
-    /// call resets the count.
-    fn max_schema_retries(slf: PyRef<'_, Self>, count: u32) -> PyRef<'_, Self> {
-        slf.inner.max_schema_retries(count);
-        slf
-    }
-
-    /// Limit how often a failing request is retried.
-    fn max_request_retries(slf: PyRef<'_, Self>, count: u32) -> PyRef<'_, Self> {
-        slf.inner.max_request_retries(count);
-        slf
-    }
-
-    /// Limit the total elapsed duration, in seconds.
-    fn max_time(slf: PyRef<'_, Self>, seconds: f64) -> PyRef<'_, Self> {
-        slf.inner.max_time(Duration::from_secs_f64(seconds));
-        slf
-    }
-
-    /// Compact once the model's context window is this full.
-    ///
-    /// Unset, a built-in fraction applies. The value is clamped to `0.0` through
-    /// `1.0`, and a fraction near zero compacts every turn. Nothing happens on a
-    /// model whose window is unknown.
-    fn compact_at(slf: PyRef<'_, Self>, fraction: f64) -> PyRef<'_, Self> {
-        slf.inner.compact_at(fraction);
-        slf
-    }
-
-    /// Wait this long between retries, in seconds.
-    fn request_retry_delay(slf: PyRef<'_, Self>, seconds: f64) -> PyRef<'_, Self> {
-        slf.inner
-            .request_retry_delay(Duration::from_secs_f64(seconds));
-        slf
-    }
-
-    /// Get the turn limit, or `None` when there is none.
-    fn get_max_turns(&self) -> Option<u32> {
-        self.inner.get_max_turns()
-    }
-
-    /// Get the input-token limit, or `None` when there is none.
-    fn get_max_input_tokens(&self) -> Option<u64> {
-        self.inner.get_max_input_tokens()
-    }
-
-    /// Get the output-token limit, or `None` when there is none.
-    fn get_max_output_tokens(&self) -> Option<u64> {
-        self.inner.get_max_output_tokens()
-    }
-
-    /// Get the per-request output-token limit, or `None` when there is none.
-    fn get_max_request_tokens(&self) -> Option<u32> {
-        self.inner.get_max_request_tokens()
-    }
-
-    /// Get the schema-retry limit, 10 until it is changed.
-    fn get_max_schema_retries(&self) -> Option<u32> {
-        self.inner.get_max_schema_retries()
-    }
-
-    /// Get the request-retry limit, 10 until it is changed.
-    fn get_max_request_retries(&self) -> u32 {
-        self.inner.get_max_request_retries()
-    }
-
-    /// Get the elapsed-duration limit in seconds, or `None` when there is none.
-    fn get_max_time(&self) -> Option<f64> {
-        self.inner.get_max_time().map(|d| d.as_secs_f64())
-    }
-
-    /// Get how full the context window may get before compaction fires, or
-    /// `None` when the built-in default applies.
-    fn get_compact_at(&self) -> Option<f64> {
-        self.inner.get_compact_at()
-    }
-
-    /// Get the delay between retries, in seconds.
-    fn get_request_retry_delay(&self) -> f64 {
-        self.inner.get_request_retry_delay().as_secs_f64()
+    /// Get the execution limits and retry tuning in force.
+    fn get_config(&self) -> PyConfig {
+        PyConfig {
+            inner: self.inner.get_config(),
+        }
     }
 
     /// Define where a session is stored.

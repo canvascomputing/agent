@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crate::agents::agent::Agent;
+use crate::agents::config::Config;
 use crate::agents::tickets::{Ticket, TicketQueue};
 use crate::event::Event;
 use crate::providers::types::{ModelResponse, ResponseStatus, TokenUsage};
@@ -315,10 +316,13 @@ pub async fn run_one(
     let tickets = TicketQueue::new();
     tickets
         .dir(results_dir.path().to_path_buf())
-        .max_request_retries(max_request_retries)
-        .request_retry_delay(Duration::from_millis(1))
-        .max_schema_retries(max_schema_retries)
-        .max_time(Duration::from_millis(200));
+        .config(Config {
+            max_request_retries: max_request_retries,
+            request_retry_delay: Duration::from_millis(1),
+            max_schema_retries: Some(max_schema_retries),
+            max_time: Some(Duration::from_millis(200)),
+            ..Default::default()
+        });
 
     tickets.on_event(move |_, e| handler(e));
     tickets.agent(
@@ -363,10 +367,13 @@ pub async fn run_with_context_window(
     let tickets = TicketQueue::new();
     tickets
         .dir(results_dir.path().to_path_buf())
-        .max_request_retries(0)
-        .request_retry_delay(Duration::from_millis(1))
-        .max_schema_retries(10)
-        .max_time(Duration::from_secs(5));
+        .config(Config {
+            max_request_retries: 0,
+            request_retry_delay: Duration::from_millis(1),
+            max_schema_retries: Some(10),
+            max_time: Some(Duration::from_secs(5)),
+            ..Default::default()
+        });
     tickets.on_event(move |_, e| handler(e));
     tickets.agent(
         Agent::new()
@@ -404,10 +411,13 @@ pub async fn run_compaction(
     let tickets = TicketQueue::new();
     tickets
         .dir(results_dir.path().to_path_buf())
-        .max_request_retries(0)
-        .request_retry_delay(Duration::from_millis(1))
-        .max_schema_retries(10)
-        .max_time(Duration::from_secs(30));
+        .config(Config {
+            max_request_retries: 0,
+            request_retry_delay: Duration::from_millis(1),
+            max_schema_retries: Some(10),
+            max_time: Some(Duration::from_secs(30)),
+            ..Default::default()
+        });
 
     tickets.on_event(move |_, e| handler(e));
     tickets.agent(

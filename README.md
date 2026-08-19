@@ -502,34 +502,34 @@ See [`Schema`](https://docs.rs/agentwerk/latest/agentwerk/schemas/struct.Schema.
 
 </details>
 
-### Policies
+### Configuration
 
-Policies allow you to define execution limits.
+A `Config` limits the turns, tokens, and time a run may spend, and allows configuring retries and compaction.
 
 ```rust
-tickets
-    .max_turns(40)
-    .max_time(std::time::Duration::from_secs(300))
-    .max_input_tokens(200_000)
-    .max_output_tokens(50_000);
+tickets.config(Config {
+    max_turns: Some(40),
+    max_time: Some(std::time::Duration::from_secs(300)),
+    ..Default::default()
+});
 ```
 
 <details>
-<summary>All limits</summary>
+<summary>All configuration fields</summary>
 
-| Method | Description |
-|--------|-------------|
-| `max_turns(count)` / `get_max_turns()` | Limit the total number of turns. |
-| `max_time(duration)` / `get_max_time()` | Limit the total elapsed duration. |
-| `max_input_tokens(count)` / `get_max_input_tokens()` | Limit the total input tokens. |
-| `max_output_tokens(count)` / `get_max_output_tokens()` | Limit the total output tokens. |
-| `max_request_tokens(count)` / `get_max_request_tokens()` | Limit the output tokens of a single request. |
-| `max_schema_retries(count)` / `get_max_schema_retries()` | Limit the consecutive turns without a valid tool call. |
-| `max_request_retries(count)` / `get_max_request_retries()` | Limit how often a failing request is retried. |
-| `request_retry_delay(duration)` / `get_request_retry_delay()` | Wait this long between retries. |
-| `compact_at(fraction)` / `get_compact_at()` | Compact once the context window is this full. |
+| Field | Description |
+|-------|-------------|
+| `max_turns` | Limit the total number of turns. |
+| `max_time` | Limit the total elapsed duration. |
+| `max_input_tokens` | Limit the total input tokens. |
+| `max_output_tokens` | Limit the total output tokens. |
+| `max_request_tokens` | Limit the output tokens of a single request. |
+| `max_schema_retries` | Limit the consecutive turns without a valid tool call. |
+| `max_request_retries` | Limit how often a failing request is retried. |
+| `request_retry_delay` | Wait this long between retries. |
+| `compaction_threshold` | Compact once the context window is this full. |
 
-A violated limit emits `EventKind::PolicyViolated`, see [`EventKind`](https://docs.rs/agentwerk/latest/agentwerk/event/enum.EventKind.html).
+`config(config)` replaces the whole configuration, and `get_config()` reads it back. A violated limit emits `EventKind::ConfigViolated`, see [`EventKind`](https://docs.rs/agentwerk/latest/agentwerk/event/enum.EventKind.html).
 
 </details>
 
@@ -722,7 +722,7 @@ tickets.on_event(|_, event| {
 |-|------|-------------|
 | **Run** | `RunStarted` | Execution began. |
 | | `RunFinished` | Execution ended, carrying the reason. |
-| | `PolicyViolated` | A limit was breached and execution stopped. |
+| | `ConfigViolated` | A limit was breached and execution stopped. |
 | **Ticket** | `TicketStarted` | An agent claimed a ticket. |
 | | `TicketFinished` | A ticket finished successfully. |
 | | `TicketFailed` | A ticket failed. |

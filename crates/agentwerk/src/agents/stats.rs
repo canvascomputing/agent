@@ -10,7 +10,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use crate::event::{Event, EventKind, EventName};
 use crate::providers::TokenUsage;
 
-/// `Stats` counts a run as it happens, so the policy check that fires every
+/// `Stats` counts a run as it happens, so the limit check that fires every
 /// 50ms, the remaining turns and tokens a system prompt reports, and the
 /// compaction estimate all read the current figures without touching the
 /// filesystem. `TicketQueue::load` folds a session's log back into one, so a

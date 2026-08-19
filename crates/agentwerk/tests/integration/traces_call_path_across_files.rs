@@ -10,7 +10,7 @@ use super::common;
 use agentwerk::event::EventName;
 use agentwerk::schemas::Schema;
 use agentwerk::tools::{GlobTool, GrepTool, ListDirectoryTool, ReadFileTool};
-use agentwerk::{Agent, Ticket, TicketQueue};
+use agentwerk::{Agent, Config, Ticket, TicketQueue};
 
 #[tokio::test]
 async fn traces_three_hop_call_path() -> std::result::Result<(), Box<dyn std::error::Error>> {
@@ -80,7 +80,10 @@ async fn traces_three_hop_call_path() -> std::result::Result<(), Box<dyn std::er
 
     let tickets = TicketQueue::new();
 
-    tickets.max_turns(15);
+    tickets.config(Config {
+        max_turns: Some(15),
+        ..Default::default()
+    });
     let agent = Agent::new()
         .provider(provider)
         .model(&model)

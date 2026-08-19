@@ -17,12 +17,12 @@ use crate::persistence::Persist;
 use crate::schemas::SchemaStore;
 
 use super::super::agent::{Agent, TicketQueueRef};
-use super::super::policy::Policies;
+use super::super::config::Config;
 use super::super::r#loop::run_main_loop;
 use super::super::stats::Stats;
 use super::query::TicketMatcher;
 use super::ticket::{Status, Ticket};
-use super::{numeric_id, policy_violated_kind, Reply};
+use super::{config_violated, numeric_id, Reply};
 
 /// The queue arrives first so a handler selects tickets and files follow-up work
 /// without capturing an `Arc` into the queue that holds it.
@@ -233,7 +233,7 @@ pub struct TicketQueue {
     pub(super) weak_self: Weak<TicketQueue>,
     pub(crate) tickets: Mutex<HashMap<String, Ticket>>,
     pub(super) agents: Mutex<Vec<Agent>>,
-    pub(super) policies: Mutex<Policies>,
+    pub(super) config: Mutex<Config>,
     /// Why the run ended, once the main loop decides. The agent tasks, the
     /// tools, and every `finish` read it to know the run is over.
     pub(crate) run: Arc<Run>,
@@ -275,7 +275,7 @@ impl TicketQueue {
             weak_self: weak.clone(),
             tickets: Mutex::new(HashMap::new()),
             agents: Mutex::new(Vec::new()),
-            policies: Mutex::new(Policies::default()),
+            config: Mutex::new(Config::default()),
             run: Arc::new(Run::default()),
             cancel_filters: Mutex::new(Vec::new()),
             terminal_transitions_in_flight: AtomicUsize::new(0),
@@ -295,7 +295,7 @@ impl TicketQueue {
     ///
     /// Every ticket is read back with its status, result, and messages, and the
     /// statistics resume from `events.jsonl`, so the turn and token budgets
-    /// policies check stay continuous across restarts. Pointing this and
+    /// limit checks stay continuous across restarts. Pointing this and
     /// `Knowledge::load` at the same directory keeps the knowledge pages beside
     /// the session.
     ///
@@ -353,7 +353,7 @@ impl TicketQueue {
             weak_self: weak.clone(),
             tickets: Mutex::new(tickets),
             agents: Mutex::new(Vec::new()),
-            policies: Mutex::new(Policies::default()),
+            config: Mutex::new(Config::default()),
             run: Arc::new(Run::default()),
             cancel_filters: Mutex::new(Vec::new()),
             terminal_transitions_in_flight: AtomicUsize::new(0),
@@ -760,126 +760,28 @@ impl TicketQueue {
             .map(|a| a.model.name.clone())
     }
 
-    pub(crate) fn policies(&self) -> Policies {
-        self.policies.lock().unwrap().clone()
-    }
-
-    /// Limit the total number of turns.
-    pub fn max_turns(&self, count: u32) -> &Self {
-        self.policies.lock().unwrap().max_turns = Some(count);
-        self
-    }
-
-    /// Limit the total input tokens.
-    pub fn max_input_tokens(&self, count: u64) -> &Self {
-        self.policies.lock().unwrap().max_input_tokens = Some(count);
-        self
-    }
-
-    /// Limit the total output tokens.
-    pub fn max_output_tokens(&self, count: u64) -> &Self {
-        self.policies.lock().unwrap().max_output_tokens = Some(count);
-        self
-    }
-
-    /// Limit the output tokens of a single request.
-    pub fn max_request_tokens(&self, count: u32) -> &Self {
-        self.policies.lock().unwrap().max_request_tokens = Some(count);
-        self
-    }
-
-    /// Limit the consecutive turns without a valid tool call; any successful
-    /// call resets the count.
-    pub fn max_schema_retries(&self, count: u32) -> &Self {
-        self.policies.lock().unwrap().max_schema_retries = Some(count);
-        self
-    }
-
-    /// Limit how often a failing request is retried.
-    pub fn max_request_retries(&self, count: u32) -> &Self {
-        self.policies.lock().unwrap().max_request_retries = count;
-        self
-    }
-
-    /// Wait this long between retries.
-    pub fn request_retry_delay(&self, duration: Duration) -> &Self {
-        self.policies.lock().unwrap().request_retry_delay = duration;
-        self
-    }
-
-    /// Limit the total elapsed duration.
+    /// Set the execution limits and retry tuning.
     ///
-    /// On reaching it, `finish` stops with
-    /// `FinishReason::PolicyViolated(PolicyKind::Time)` and emits the matching
-    /// `PolicyViolated` event.
-    pub fn max_time(&self, duration: Duration) -> &Self {
-        self.policies.lock().unwrap().max_time = Some(duration);
-        self
-    }
-
-    /// Compact once the model's context window is this full.
-    ///
-    /// Unset, a built-in fraction applies. The value is clamped to `0.0..=1.0`,
-    /// and a fraction near zero compacts every turn. Nothing happens on a model
-    /// whose window is unknown.
-    ///
-    /// This is a trigger, not a limit: reaching it costs a summary, not the run.
-    pub fn compact_at(&self, fraction: f64) -> &Self {
+    /// The whole `Config` is replaced, so build one from the fields you want:
+    /// `Config { max_turns: Some(40), ..Default::default() }`. A
+    /// `compaction_threshold` outside `0.0..=1.0` is clamped into it.
+    pub fn config(&self, mut config: Config) -> &Self {
         // NaN survives `clamp` and would put the threshold at zero, compacting
         // every turn. A full window is the harmless reading of nonsense.
-        let fraction = if fraction.is_nan() {
-            1.0
-        } else {
-            fraction.clamp(0.0, 1.0)
-        };
-        self.policies.lock().unwrap().compact_at = Some(fraction);
+        config.compaction_threshold = config.compaction_threshold.map(|fraction| {
+            if fraction.is_nan() {
+                1.0
+            } else {
+                fraction.clamp(0.0, 1.0)
+            }
+        });
+        *self.config.lock().unwrap() = config;
         self
     }
 
-    /// Get the turn limit, or `None` when there is none.
-    pub fn get_max_turns(&self) -> Option<u32> {
-        self.policies.lock().unwrap().max_turns
-    }
-
-    /// Get the input-token limit, or `None` when there is none.
-    pub fn get_max_input_tokens(&self) -> Option<u64> {
-        self.policies.lock().unwrap().max_input_tokens
-    }
-
-    /// Get the output-token limit, or `None` when there is none.
-    pub fn get_max_output_tokens(&self) -> Option<u64> {
-        self.policies.lock().unwrap().max_output_tokens
-    }
-
-    /// Get the per-request output-token limit, or `None` when there is none.
-    pub fn get_max_request_tokens(&self) -> Option<u32> {
-        self.policies.lock().unwrap().max_request_tokens
-    }
-
-    /// Get the schema-retry limit, or `None` when there is none.
-    pub fn get_max_schema_retries(&self) -> Option<u32> {
-        self.policies.lock().unwrap().max_schema_retries
-    }
-
-    /// Get the request-retry limit, which always holds a value.
-    pub fn get_max_request_retries(&self) -> u32 {
-        self.policies.lock().unwrap().max_request_retries
-    }
-
-    /// Get the delay between retries, which always holds a value.
-    pub fn get_request_retry_delay(&self) -> Duration {
-        self.policies.lock().unwrap().request_retry_delay
-    }
-
-    /// Get the elapsed-duration limit, or `None` when there is none.
-    pub fn get_max_time(&self) -> Option<Duration> {
-        self.policies.lock().unwrap().max_time
-    }
-
-    /// Get how full the context window may get before compaction fires, or
-    /// `None` when the built-in default applies.
-    pub fn get_compact_at(&self) -> Option<f64> {
-        self.policies.lock().unwrap().compact_at
+    /// Get the execution limits and retry tuning in force.
+    pub fn get_config(&self) -> Config {
+        self.config.lock().unwrap().clone()
     }
 
     /// Define where a session is stored, `./.agentwerk` by default.
@@ -1117,8 +1019,8 @@ impl TicketQueue {
     /// run here; the drained ending is named by the [`Self::finish`] that waited
     /// for it.
     pub(crate) fn ending_reason(&self) -> Option<FinishReason> {
-        if let Some((policy, _)) = policy_violated_kind(&self.policies(), &self.stats) {
-            return Some(FinishReason::PolicyViolated(policy));
+        if let Some((violation, _)) = config_violated(&self.get_config(), &self.stats) {
+            return Some(FinishReason::ConfigViolated(violation));
         }
         let claimable = {
             let tickets = self.tickets.lock().unwrap();
@@ -1687,50 +1589,43 @@ mod tests {
     }
 
     #[test]
-    fn policy_readers_return_the_limits_that_were_set() {
+    fn config_round_trips_through_get_config() {
         let (queue, _tmp) = test_queue();
-        queue
-            .max_turns(40)
-            .max_input_tokens(200_000)
-            .max_output_tokens(50_000)
-            .max_request_tokens(8_000)
-            .max_schema_retries(3)
-            .max_request_retries(5)
-            .request_retry_delay(Duration::from_millis(250))
-            .max_time(Duration::from_secs(300))
-            .compact_at(0.75);
+        let config = Config {
+            max_turns: Some(40),
+            max_input_tokens: Some(200_000),
+            max_output_tokens: Some(50_000),
+            max_request_tokens: Some(8_000),
+            max_schema_retries: Some(3),
+            max_request_retries: 5,
+            request_retry_delay: Duration::from_millis(250),
+            max_time: Some(Duration::from_secs(300)),
+            compaction_threshold: Some(0.75),
+        };
+        queue.config(config.clone());
 
-        assert_eq!(queue.get_max_turns(), Some(40));
-        assert_eq!(queue.get_max_input_tokens(), Some(200_000));
-        assert_eq!(queue.get_max_output_tokens(), Some(50_000));
-        assert_eq!(queue.get_max_request_tokens(), Some(8_000));
-        assert_eq!(queue.get_max_schema_retries(), Some(3));
-        assert_eq!(queue.get_max_request_retries(), 5);
-        assert_eq!(queue.get_request_retry_delay(), Duration::from_millis(250));
-        assert_eq!(queue.get_max_time(), Some(Duration::from_secs(300)));
-        assert_eq!(queue.get_compact_at(), Some(0.75));
+        assert_eq!(queue.get_config(), config);
     }
 
     #[test]
-    fn policy_readers_return_the_defaults_before_any_limit_is_set() {
+    fn get_config_returns_the_defaults_before_config_is_called() {
         let (queue, _tmp) = test_queue();
-        assert_eq!(queue.get_max_turns(), None);
-        assert_eq!(queue.get_max_input_tokens(), None);
-        assert_eq!(queue.get_max_output_tokens(), None);
-        assert_eq!(queue.get_max_request_tokens(), None);
-        assert_eq!(queue.get_max_time(), None);
-        assert_eq!(queue.get_max_schema_retries(), Some(10));
-        assert_eq!(queue.get_max_request_retries(), 10);
-        assert_eq!(queue.get_request_retry_delay(), Duration::from_millis(500));
-        assert_eq!(queue.get_compact_at(), None);
+        assert_eq!(queue.get_config(), Config::default());
     }
 
     #[test]
-    fn compact_at_clamps_a_fraction_outside_the_unit_range() {
+    fn compaction_threshold_clamps_a_fraction_outside_the_unit_range() {
         let (queue, _tmp) = test_queue();
         for (given, expected) in [(1.5, 1.0), (-0.2, 0.0), (f64::NAN, 1.0)] {
-            queue.compact_at(given);
-            assert_eq!(queue.get_compact_at(), Some(expected), "given {given}");
+            queue.config(Config {
+                compaction_threshold: Some(given),
+                ..Default::default()
+            });
+            assert_eq!(
+                queue.get_config().compaction_threshold,
+                Some(expected),
+                "given {given}"
+            );
         }
     }
 
@@ -2589,15 +2484,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_finished_reports_policy_violated_when_max_turns_zero() {
+    async fn run_finished_reports_config_violated_when_max_turns_zero() {
         let (queue, _tmp) = test_queue();
         let reasons = collect_finish_reasons(&queue);
-        queue.max_turns(0);
+        queue.config(Config {
+            max_turns: Some(0),
+            ..Default::default()
+        });
         queue.finish_all().await;
         assert_eq!(
             *reasons.lock().unwrap(),
-            vec![FinishReason::PolicyViolated(
-                crate::event::PolicyKind::Turns
+            vec![FinishReason::ConfigViolated(
+                crate::event::ConfigViolation::Turns
             )],
         );
     }
