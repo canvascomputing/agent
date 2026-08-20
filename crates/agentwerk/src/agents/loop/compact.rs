@@ -96,7 +96,7 @@ pub(super) fn proactive_compaction_needed(context: &TicketContext<'_>, ticket: &
 
     algo::should_compact_proactively(
         window,
-        context.config.compaction_threshold,
+        context.policy.compaction_threshold,
         &history,
         &ticket.to_messages(),
         &context.system_prompt,

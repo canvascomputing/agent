@@ -98,7 +98,7 @@ def test_invalid_schema_document_is_rejected_with_runtime_error():
 
 
 def test_config_returns_the_queue_so_calls_chain(queue):
-    configured = queue.config(aw.Config(max_turns=5, max_time=30.0)).dir("/tmp")
+    configured = queue.policy(aw.Policy(max_turns=5, max_time=30.0)).dir("/tmp")
     assert isinstance(configured, aw.TicketQueue)
 
 
@@ -230,10 +230,10 @@ def test_find_tickets_returns_every_status_not_just_finished(queue):
     assert tasks == ["alpha"]
 
 
-def test_config_round_trips_through_get_config(queue):
-    queue.config(aw.Config(max_turns=40, max_time=300.0))
+def test_policy_round_trips_through_get_policy(queue):
+    queue.policy(aw.Policy(max_turns=40, max_time=300.0))
 
-    config = queue.get_config()
+    config = queue.get_policy()
     assert config.max_turns == 40
     assert config.max_time == 300.0
     assert config.max_input_tokens is None
@@ -400,18 +400,18 @@ def test_an_event_handler_rewrites_replies_through_the_queue(queue):
     assert texts == ["[redacted]"]
 
 
-def test_compaction_threshold_round_trips_through_get_config(queue):
-    assert queue.get_config().compaction_threshold is None
+def test_compaction_threshold_round_trips_through_get_policy(queue):
+    assert queue.get_policy().compaction_threshold is None
 
-    queue.config(aw.Config(compaction_threshold=0.8))
+    queue.policy(aw.Policy(compaction_threshold=0.8))
 
-    assert queue.get_config().compaction_threshold == 0.8
+    assert queue.get_policy().compaction_threshold == 0.8
 
 
 def test_compaction_threshold_clamps_a_fraction_above_one(queue):
-    queue.config(aw.Config(compaction_threshold=1.5))
+    queue.policy(aw.Policy(compaction_threshold=1.5))
 
-    assert queue.get_config().compaction_threshold == 1.0
+    assert queue.get_policy().compaction_threshold == 1.0
 
 
 def test_edit_replies_on_an_unstarted_ticket_is_a_no_op(queue):

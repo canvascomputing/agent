@@ -27,10 +27,10 @@ impl fmt::Display for CompactReason {
     }
 }
 
-/// Which limit a [`EventKind::ConfigViolated`] refers to.
+/// Which limit a [`EventKind::PolicyViolated`] refers to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum ConfigViolation {
+pub enum PolicyViolation {
     /// `max_turns`: the turn limit across all agents.
     Turns,
     /// `max_input_tokens`: the total input-token limit.
@@ -45,14 +45,14 @@ pub enum ConfigViolation {
     Time,
 }
 
-impl fmt::Display for ConfigViolation {
+impl fmt::Display for PolicyViolation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            ConfigViolation::Turns => "turns",
-            ConfigViolation::InputTokens => "input_tokens",
-            ConfigViolation::OutputTokens => "output_tokens",
-            ConfigViolation::MaxSchemaRetries => "max_schema_retries",
-            ConfigViolation::Time => "time",
+            PolicyViolation::Turns => "turns",
+            PolicyViolation::InputTokens => "input_tokens",
+            PolicyViolation::OutputTokens => "output_tokens",
+            PolicyViolation::MaxSchemaRetries => "max_schema_retries",
+            PolicyViolation::Time => "time",
         })
     }
 }
@@ -67,18 +67,18 @@ pub enum FinishReason {
     /// The queue emptied; nothing more to do.
     Drained,
     /// A limit was breached.
-    ConfigViolated(ConfigViolation),
+    PolicyViolated(PolicyViolation),
     /// A `cancel` left nothing claimable.
     Cancelled,
 }
 
 impl fmt::Display for FinishReason {
     /// The violated limit is named inside the parentheses, as in
-    /// `config_violated(turns)`.
+    /// `policy_violated(turns)`.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             FinishReason::Drained => f.write_str("drained"),
-            FinishReason::ConfigViolated(kind) => write!(f, "config_violated({kind})"),
+            FinishReason::PolicyViolated(kind) => write!(f, "policy_violated({kind})"),
             FinishReason::Cancelled => f.write_str("cancelled"),
         }
     }
@@ -362,7 +362,7 @@ pub enum EventKind {
         reason: KnowledgeFailureKind,
     },
     /// A limit was breached and execution stopped.
-    ConfigViolated { config: ConfigViolation, limit: u64 },
+    PolicyViolated { policy: PolicyViolation, limit: u64 },
     /// A tool call or result the model created was invalid. The agent was asked
     /// again; `attempt` counts from one.
     SchemaRetried {
@@ -424,7 +424,7 @@ impl EventKind {
             EventKind::KnowledgeRemoved { .. } => EventName::KnowledgeRemoved,
             EventKind::KnowledgeListed => EventName::KnowledgeListed,
             EventKind::KnowledgeFailed { .. } => EventName::KnowledgeFailed,
-            EventKind::ConfigViolated { .. } => EventName::ConfigViolated,
+            EventKind::PolicyViolated { .. } => EventName::PolicyViolated,
             EventKind::SchemaRetried { .. } => EventName::SchemaRetried,
             EventKind::CompactionStarted { .. } => EventName::CompactionStarted,
             EventKind::CompactionProgress { .. } => EventName::CompactionProgress,
@@ -485,7 +485,7 @@ pub enum EventName {
     KnowledgeRemoved,
     KnowledgeListed,
     KnowledgeFailed,
-    ConfigViolated,
+    PolicyViolated,
     SchemaRetried,
     CompactionStarted,
     CompactionProgress,
@@ -520,7 +520,7 @@ impl EventName {
         EventName::KnowledgeRemoved,
         EventName::KnowledgeListed,
         EventName::KnowledgeFailed,
-        EventName::ConfigViolated,
+        EventName::PolicyViolated,
         EventName::SchemaRetried,
         EventName::CompactionStarted,
         EventName::CompactionProgress,
@@ -555,7 +555,7 @@ impl EventName {
             EventName::KnowledgeRemoved => "knowledge_removed",
             EventName::KnowledgeListed => "knowledge_listed",
             EventName::KnowledgeFailed => "knowledge_failed",
-            EventName::ConfigViolated => "config_violated",
+            EventName::PolicyViolated => "policy_violated",
             EventName::SchemaRetried => "schema_retried",
             EventName::CompactionStarted => "compaction_started",
             EventName::CompactionProgress => "compaction_progress",
@@ -628,8 +628,8 @@ pub fn default_logger() -> Arc<dyn Fn(&Event) + Send + Sync> {
             } => {
                 eprintln!("[{agent}] schema retry {attempt}/{max_attempts}: {message}");
             }
-            EventKind::ConfigViolated { config, limit } => {
-                eprintln!("[{agent}] config violated: {config} limit={limit}");
+            EventKind::PolicyViolated { policy, limit } => {
+                eprintln!("[{agent}] policy violated: {policy} limit={limit}");
             }
             EventKind::CompactionStarted { reason, total } => {
                 eprintln!("[{agent}] compacting context ({reason}): {total} chunks");
@@ -676,7 +676,7 @@ pub(crate) mod tests {
                 reason: FinishReason::Drained,
             },
             EventKind::RunFinished {
-                reason: FinishReason::ConfigViolated(ConfigViolation::Time),
+                reason: FinishReason::PolicyViolated(PolicyViolation::Time),
             },
             EventKind::RunFinished {
                 reason: FinishReason::Cancelled,
@@ -763,16 +763,16 @@ pub(crate) mod tests {
                 action: KnowledgeAction::Read,
                 reason: KnowledgeFailureKind::PageMissing,
             },
-            EventKind::ConfigViolated {
-                config: ConfigViolation::Turns,
+            EventKind::PolicyViolated {
+                policy: PolicyViolation::Turns,
                 limit: 10,
             },
-            EventKind::ConfigViolated {
-                config: ConfigViolation::MaxSchemaRetries,
+            EventKind::PolicyViolated {
+                policy: PolicyViolation::MaxSchemaRetries,
                 limit: 10,
             },
-            EventKind::ConfigViolated {
-                config: ConfigViolation::Time,
+            EventKind::PolicyViolated {
+                policy: PolicyViolation::Time,
                 limit: 60_000,
             },
             EventKind::CompactionStarted {
@@ -845,8 +845,8 @@ pub(crate) mod tests {
     #[test]
     fn a_breached_limit_prints_the_limit_it_names() {
         assert_eq!(
-            FinishReason::ConfigViolated(ConfigViolation::Turns).to_string(),
-            "config_violated(turns)"
+            FinishReason::PolicyViolated(PolicyViolation::Turns).to_string(),
+            "policy_violated(turns)"
         );
     }
 

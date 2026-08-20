@@ -12,7 +12,7 @@ use super::common;
 
 use agentwerk::event::{default_logger, Event, EventKind};
 use agentwerk::tools::{GlobTool, GrepTool, ListDirectoryTool, ReadFileTool};
-use agentwerk::{Agent, Config, TicketQueue};
+use agentwerk::{Agent, Policy, TicketQueue};
 
 #[derive(Clone)]
 struct CapturedCall {
@@ -83,7 +83,7 @@ async fn finds_every_lib_rs_in_nested_tree() -> std::result::Result<(), Box<dyn 
 
     let tickets = TicketQueue::new();
 
-    tickets.config(Config {
+    tickets.policy(Policy {
         max_turns: Some(10),
         ..Default::default()
     });

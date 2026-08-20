@@ -18,7 +18,7 @@ use directives::{
 };
 pub(crate) use text::Text;
 
-use crate::agents::config::Config;
+use crate::agents::policy::Policy;
 use crate::agents::stats::Stats;
 use crate::event::EventName;
 use crate::schemas::Schema;
@@ -67,11 +67,11 @@ pub(crate) fn arguments_retry_detail(
 
 /// Every fact the context knows, as `(placeholder, value)`. An unlimited
 /// budget carries an empty value, which drops its bullet in
-/// [`render_context`]. Pass `Config::default()` and `Stats::new()` for the
+/// [`render_context`]. Pass `Policy::default()` and `Stats::new()` for the
 /// static facts alone.
 pub(crate) fn context_values(
     dir: &Path,
-    config: &Config,
+    policy: &Policy,
     stats: &Stats,
     ticket_key: &str,
 ) -> Vec<(&'static str, String)> {
@@ -80,16 +80,16 @@ pub(crate) fn context_values(
         .output()
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
         .unwrap_or_default();
-    let turns = config
+    let turns = policy
         .max_turns
         .map(|limit| u64::from(limit).saturating_sub(stats.event_count(EventName::TurnStarted)));
-    let input_tokens = config
+    let input_tokens = policy
         .max_input_tokens
         .map(|limit| limit.saturating_sub(stats.input_tokens()));
-    let output_tokens = config
+    let output_tokens = policy
         .max_output_tokens
         .map(|limit| limit.saturating_sub(stats.output_tokens()));
-    let time = config.max_time.zip(stats.execution_duration());
+    let time = policy.max_time.zip(stats.execution_duration());
     vec![
         ("ticket", ticket_key.to_string()),
         ("date", format_current_date()),
@@ -251,18 +251,18 @@ mod tests {
 
     fn context_body(
         dir: &std::path::Path,
-        config: &Config,
+        policy: &Policy,
         stats: &Stats,
         ticket_key: &str,
     ) -> String {
-        render_context(&context_values(dir, config, stats, ticket_key))
+        render_context(&context_values(dir, policy, stats, ticket_key))
     }
 
     #[test]
     fn context_body_renders_bare_bullets_with_substituted_values() {
         let rendered = context_body(
             &PathBuf::from("/tmp/check"),
-            &Config::default(),
+            &Policy::default(),
             &Stats::new(),
             "TICKET-7",
         );
@@ -278,7 +278,7 @@ mod tests {
     fn context_body_carries_no_prose_around_the_bullets() {
         let rendered = context_body(
             &PathBuf::from("/tmp/check"),
-            &Config::default(),
+            &Policy::default(),
             &Stats::new(),
             "TICKET-7",
         );
@@ -291,7 +291,7 @@ mod tests {
     fn context_values_leave_an_unset_budget_empty() {
         let values = context_values(
             &PathBuf::from("/tmp/check"),
-            &Config::default(),
+            &Policy::default(),
             &Stats::new(),
             "TICKET-7",
         );
@@ -309,15 +309,15 @@ mod tests {
     #[test]
     fn context_body_lists_each_set_turn_and_token_budget() {
         let working_dir = PathBuf::from("/tmp/check");
-        let config = Config {
+        let policy = Policy {
             max_turns: Some(10),
             max_input_tokens: Some(100_000),
             max_output_tokens: Some(20_000),
-            ..Config::default()
+            ..Policy::default()
         };
         let stats = Stats::of([turn(), turn(), request(5_000, 8_000)]);
 
-        let rendered = context_body(&working_dir, &config, &stats, "T-1");
+        let rendered = context_body(&working_dir, &policy, &stats, "T-1");
 
         // The static prefix is rebuilt rather than written out, so the expected
         // literal stays portable across hosts.
@@ -326,7 +326,7 @@ mod tests {
              - Turns remaining: 8\n\
              - Input tokens remaining: 95000\n\
              - Output tokens remaining: 12000",
-            static_prefix = context_body(&working_dir, &Config::default(), &Stats::new(), "T-1"),
+            static_prefix = context_body(&working_dir, &Policy::default(), &Stats::new(), "T-1"),
         );
         assert_eq!(rendered, expected);
     }
@@ -334,17 +334,17 @@ mod tests {
     #[test]
     fn context_body_only_shows_configured_budgets() {
         let working_dir = PathBuf::from("/tmp/check");
-        let config = Config {
+        let policy = Policy {
             max_turns: Some(5),
-            ..Config::default()
+            ..Policy::default()
         };
         let stats = Stats::of([turn()]);
 
-        let rendered = context_body(&working_dir, &config, &stats, "T-1");
+        let rendered = context_body(&working_dir, &policy, &stats, "T-1");
 
         let expected = format!(
             "{static_prefix}\n- Turns remaining: 4",
-            static_prefix = context_body(&working_dir, &Config::default(), &Stats::new(), "T-1"),
+            static_prefix = context_body(&working_dir, &Policy::default(), &Stats::new(), "T-1"),
         );
         assert_eq!(rendered, expected);
         assert!(!rendered.contains("Input tokens"));
@@ -355,17 +355,17 @@ mod tests {
     #[test]
     fn context_body_saturates_remaining_at_zero() {
         let working_dir = PathBuf::from("/tmp/check");
-        let config = Config {
+        let policy = Policy {
             max_turns: Some(2),
-            ..Config::default()
+            ..Policy::default()
         };
         let stats = Stats::of(std::iter::repeat_n(turn(), 5));
 
-        let rendered = context_body(&working_dir, &config, &stats, "T-1");
+        let rendered = context_body(&working_dir, &policy, &stats, "T-1");
 
         let expected = format!(
             "{static_prefix}\n- Turns remaining: 0",
-            static_prefix = context_body(&working_dir, &Config::default(), &Stats::new(), "T-1"),
+            static_prefix = context_body(&working_dir, &Policy::default(), &Stats::new(), "T-1"),
         );
         assert_eq!(rendered, expected);
     }
@@ -373,17 +373,17 @@ mod tests {
     #[test]
     fn context_body_omits_time_when_run_not_started() {
         let working_dir = PathBuf::from("/tmp/check");
-        let config = Config {
+        let policy = Policy {
             max_time: Some(Duration::from_secs(300)),
-            ..Config::default()
+            ..Policy::default()
         };
         let stats = Stats::new();
 
-        let rendered = context_body(&working_dir, &config, &stats, "T-1");
+        let rendered = context_body(&working_dir, &policy, &stats, "T-1");
 
         // No ticket ever started, so `Stats::execution_duration` is `None` and
         // the time bullet must not appear.
-        let baseline = context_body(&working_dir, &Config::default(), &Stats::new(), "T-1");
+        let baseline = context_body(&working_dir, &Policy::default(), &Stats::new(), "T-1");
         assert_eq!(rendered, baseline);
         assert!(!rendered.contains("Time remaining"));
     }
@@ -391,17 +391,17 @@ mod tests {
     #[test]
     fn context_body_includes_time_bullet_once_started() {
         let working_dir = PathBuf::from("/tmp/check");
-        let config = Config {
+        let policy = Policy {
             max_time: Some(Duration::from_secs(3600)),
-            ..Config::default()
+            ..Policy::default()
         };
         let stats = Stats::of([EventKind::TicketStarted]);
 
-        let rendered = context_body(&working_dir, &config, &stats, "T-1");
+        let rendered = context_body(&working_dir, &policy, &stats, "T-1");
 
         // Truncating an elapsed duration above 0ms drops one second, so both
         // 3600 and 3599 are correct here.
-        let baseline = context_body(&working_dir, &Config::default(), &Stats::new(), "T-1");
+        let baseline = context_body(&working_dir, &Policy::default(), &Stats::new(), "T-1");
         assert!(rendered.starts_with(&baseline));
         let trailing = &rendered[baseline.len()..];
         let expected = |seconds| format!("\n- Time remaining: {seconds}s");

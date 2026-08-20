@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crate::agents::agent::Agent;
-use crate::agents::config::Config;
+use crate::agents::policy::Policy;
 use crate::agents::tickets::{Ticket, TicketQueue};
 use crate::event::Event;
 use crate::providers::types::{ModelResponse, ResponseStatus, TokenUsage};
@@ -316,7 +316,7 @@ pub async fn run_one(
     let tickets = TicketQueue::new();
     tickets
         .dir(results_dir.path().to_path_buf())
-        .config(Config {
+        .policy(Policy {
             max_request_retries: max_request_retries,
             request_retry_delay: Duration::from_millis(1),
             max_schema_retries: Some(max_schema_retries),
@@ -367,7 +367,7 @@ pub async fn run_with_context_window(
     let tickets = TicketQueue::new();
     tickets
         .dir(results_dir.path().to_path_buf())
-        .config(Config {
+        .policy(Policy {
             max_request_retries: 0,
             request_retry_delay: Duration::from_millis(1),
             max_schema_retries: Some(10),
@@ -411,7 +411,7 @@ pub async fn run_compaction(
     let tickets = TicketQueue::new();
     tickets
         .dir(results_dir.path().to_path_buf())
-        .config(Config {
+        .policy(Policy {
             max_request_retries: 0,
             request_retry_delay: Duration::from_millis(1),
             max_schema_retries: Some(10),

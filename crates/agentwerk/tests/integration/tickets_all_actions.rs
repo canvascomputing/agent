@@ -13,7 +13,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use super::common;
 
 use agentwerk::tools::TicketsTool;
-use agentwerk::{Agent, Config, EventKind, Query, Ticket, TicketQueue};
+use agentwerk::{Agent, Policy, EventKind, Query, Ticket, TicketQueue};
 
 const ACTIONS: [&str; 5] = ["ticket", "result", "list", "create", "edit"];
 
@@ -28,7 +28,7 @@ async fn walks_every_ticket_action() -> std::result::Result<(), Box<dyn std::err
     let secret = ten_digit_token();
 
     let tickets = TicketQueue::new();
-    tickets.config(Config {
+    tickets.policy(Policy {
         max_turns: Some(20),
         max_time: Some(Duration::from_secs(120)),
         ..Default::default()

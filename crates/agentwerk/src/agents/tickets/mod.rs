@@ -2,9 +2,9 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::event::{ConfigViolation, EventName};
+use crate::event::{PolicyViolation, EventName};
 
-use super::config::Config;
+use super::policy::Policy;
 use super::stats::Stats;
 
 mod error;
@@ -28,30 +28,30 @@ pub use trajectory::Trajectory;
 pub(crate) use ticket::{Replies, TicketResult};
 pub(crate) use ticket_queue::Run;
 
-/// Whether the run-wide config have been exceeded by the current
-/// stats reading. Returns the tripping `ConfigViolation` and the
-/// configured limit so callers can emit `ConfigViolated` and assemble
-/// `FinishReason::ConfigViolated`. Used by the main loop's ending check
+/// Whether the run-wide policy have been exceeded by the current
+/// stats reading. Returns the tripping `PolicyViolation` and the
+/// configured limit so callers can emit `PolicyViolated` and assemble
+/// `FinishReason::PolicyViolated`. Used by the main loop's ending check
 /// and the per-agent loop's pre-claim check.
-pub(crate) fn config_violated(config: &Config, stats: &Stats) -> Option<(ConfigViolation, u64)> {
-    if let Some(limit) = config.max_turns {
+pub(crate) fn policy_violated(policy: &Policy, stats: &Stats) -> Option<(PolicyViolation, u64)> {
+    if let Some(limit) = policy.max_turns {
         if stats.event_count(EventName::TurnStarted) >= u64::from(limit) {
-            return Some((ConfigViolation::Turns, u64::from(limit)));
+            return Some((PolicyViolation::Turns, u64::from(limit)));
         }
     }
-    if let Some(limit) = config.max_input_tokens {
+    if let Some(limit) = policy.max_input_tokens {
         if stats.input_tokens() >= limit {
-            return Some((ConfigViolation::InputTokens, limit));
+            return Some((PolicyViolation::InputTokens, limit));
         }
     }
-    if let Some(limit) = config.max_output_tokens {
+    if let Some(limit) = policy.max_output_tokens {
         if stats.output_tokens() >= limit {
-            return Some((ConfigViolation::OutputTokens, limit));
+            return Some((PolicyViolation::OutputTokens, limit));
         }
     }
-    if let Some(limit) = config.max_time {
+    if let Some(limit) = policy.max_time {
         if stats.execution_duration().is_some_and(|d| d >= limit) {
-            return Some((ConfigViolation::Time, limit.as_millis() as u64));
+            return Some((PolicyViolation::Time, limit.as_millis() as u64));
         }
     }
     None
@@ -80,10 +80,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn config_violated_returns_time_when_max_time_elapsed() {
-        let config = Config {
+    fn policy_violated_returns_time_when_max_time_elapsed() {
+        let policy = Policy {
             max_time: Some(Duration::from_millis(1)),
-            ..Config::default()
+            ..Policy::default()
         };
         // Stamped far in the past so execution_duration trivially exceeds the
         // 1ms limit.
@@ -92,19 +92,19 @@ mod tests {
             created_at: 1,
             ..crate::event::Event::new("", "TICKET-1", None, crate::event::EventKind::TicketStarted)
         });
-        let trip = config_violated(&config, &stats);
-        assert!(matches!(trip, Some((ConfigViolation::Time, _))));
+        let trip = policy_violated(&policy, &stats);
+        assert!(matches!(trip, Some((PolicyViolation::Time, _))));
     }
 
     #[test]
-    fn config_violated_returns_none_when_max_time_not_started() {
-        let config = Config {
+    fn policy_violated_returns_none_when_max_time_not_started() {
+        let policy = Policy {
             max_time: Some(Duration::from_millis(1)),
-            ..Config::default()
+            ..Policy::default()
         };
         // No ticket started, so execution_duration is None; the time limit must
         // not trip until one has.
         let stats = Stats::new();
-        assert!(config_violated(&config, &stats).is_none());
+        assert!(policy_violated(&policy, &stats).is_none());
     }
 }

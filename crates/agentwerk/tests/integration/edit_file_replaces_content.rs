@@ -8,7 +8,7 @@ use super::common;
 
 use agentwerk::event::EventName;
 use agentwerk::tools::EditFileTool;
-use agentwerk::{Agent, Config, TicketQueue};
+use agentwerk::{Agent, Policy, TicketQueue};
 
 const ORIGINAL: &str = "setting=old_value\nother=keep_me\n";
 
@@ -23,7 +23,7 @@ async fn replaces_substring_in_place() -> std::result::Result<(), Box<dyn std::e
 
     let tickets = TicketQueue::new();
 
-    tickets.config(Config {
+    tickets.policy(Policy {
         max_turns: Some(10),
         ..Default::default()
     });

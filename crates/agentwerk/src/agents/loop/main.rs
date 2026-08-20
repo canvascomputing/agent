@@ -42,7 +42,7 @@ mod tests {
     use std::time::Duration;
 
     use crate::agents::agent::Agent;
-    use crate::agents::config::Config;
+    use crate::agents::policy::Policy;
     use crate::agents::r#loop::test_util::*;
     use crate::agents::tickets::{Status, Ticket, TicketQueue};
     use crate::event::EventKind;
@@ -56,7 +56,7 @@ mod tests {
         let tickets = TicketQueue::new();
         tickets
             .dir(results_dir.path().to_path_buf())
-            .config(Config {
+            .policy(Policy {
                 max_request_retries: 0,
                 request_retry_delay: Duration::from_millis(1),
                 ..Default::default()
@@ -105,7 +105,7 @@ mod tests {
         let tickets = TicketQueue::new();
         tickets
             .dir(results_dir.path().to_path_buf())
-            .config(Config {
+            .policy(Policy {
                 max_request_retries: 0,
                 request_retry_delay: Duration::from_millis(1),
                 ..Default::default()
@@ -152,7 +152,7 @@ mod tests {
         let tickets = TicketQueue::new();
         tickets
             .dir(results_dir.path().to_path_buf())
-            .config(Config {
+            .policy(Policy {
                 max_request_retries: 0,
                 request_retry_delay: Duration::from_millis(1),
                 ..Default::default()

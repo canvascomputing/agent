@@ -9,7 +9,7 @@ use crate::prompts::{context_values, render_context, PromptBuilder, Text};
 use crate::providers::{Model, Provider};
 use crate::tools::{FinishTool, KnowledgeTool, Tool, ToolRegistry};
 
-use super::config::Config;
+use super::policy::Policy;
 use super::knowledge::Knowledge;
 use super::stats::Stats;
 use super::tickets::{Ticket, TicketQueue};
@@ -251,14 +251,14 @@ impl<P, M> AgentBuilder<P, M> {
     pub(super) fn system_prompt(
         &self,
         knowledge: Option<&str>,
-        config: &Config,
+        policy: &Policy,
         stats: &Stats,
         ticket_key: &str,
     ) -> String {
         let mut b = PromptBuilder::default();
         if !self.role.is_empty() {
             let role = self.interpolate(&self.role);
-            b = b.role(self.expand_context(role, config, stats, ticket_key));
+            b = b.role(self.expand_context(role, policy, stats, ticket_key));
         }
         if let Some(snap) = knowledge.filter(|s| !s.is_empty()) {
             b = b.knowledge(snap.to_string());
@@ -273,14 +273,14 @@ impl<P, M> AgentBuilder<P, M> {
     fn expand_context(
         &self,
         role: String,
-        config: &Config,
+        policy: &Policy,
         stats: &Stats,
         ticket_key: &str,
     ) -> String {
         if !role.contains('{') {
             return role;
         }
-        let values = context_values(&self.dir, config, stats, ticket_key);
+        let values = context_values(&self.dir, policy, stats, ticket_key);
         let mut out = role.replace("{context}", &render_context(&values));
         for (name, value) in &values {
             out = out.replace(&format!("{{{name}}}"), value);
@@ -471,14 +471,14 @@ impl Agent {
     pub(super) fn system_prompt(
         &self,
         knowledge: Option<&str>,
-        config: &Config,
+        policy: &Policy,
         stats: &Stats,
         ticket_key: &str,
     ) -> String {
         let mut b = PromptBuilder::default();
         if !self.role.is_empty() {
             let role = self.interpolate(&self.role);
-            b = b.role(self.expand_context(role, config, stats, ticket_key));
+            b = b.role(self.expand_context(role, policy, stats, ticket_key));
         }
         if let Some(snap) = knowledge.filter(|s| !s.is_empty()) {
             b = b.knowledge(snap.to_string());
@@ -493,14 +493,14 @@ impl Agent {
     fn expand_context(
         &self,
         role: String,
-        config: &Config,
+        policy: &Policy,
         stats: &Stats,
         ticket_key: &str,
     ) -> String {
         if !role.contains('{') {
             return role;
         }
-        let values = context_values(&self.dir, config, stats, ticket_key);
+        let values = context_values(&self.dir, policy, stats, ticket_key);
         let mut out = role.replace("{context}", &render_context(&values));
         for (name, value) in &values {
             out = out.replace(&format!("{{{name}}}"), value);
@@ -657,7 +657,7 @@ mod tests {
 
     /// The system prompt with no live state and a fixed ticket key.
     fn system_prompt<P, M>(agent: &AgentBuilder<P, M>, knowledge: Option<&str>) -> String {
-        agent.system_prompt(knowledge, &Config::default(), &Stats::new(), "T-1")
+        agent.system_prompt(knowledge, &Policy::default(), &Stats::new(), "T-1")
     }
 
     #[test]
@@ -698,10 +698,10 @@ mod tests {
     #[test]
     fn the_context_block_lists_the_remaining_budgets() {
         let agent = Agent::new().role("{context}").dir("/tmp/check");
-        let config = Config {
+        let policy = Policy {
             max_turns: Some(3),
             max_input_tokens: Some(1_000),
-            ..Config::default()
+            ..Policy::default()
         };
         let stats = Stats::of([
             EventKind::TurnStarted,
@@ -715,8 +715,8 @@ mod tests {
         ]);
 
         // The exact rendering is pinned in `prompts`; what matters here is
-        // that the role's placeholder sees the live config and stats.
-        let rendered = agent.system_prompt(None, &config, &stats, "T-1");
+        // that the role's placeholder sees the live policy and stats.
+        let rendered = agent.system_prompt(None, &policy, &stats, "T-1");
 
         assert!(rendered.contains("- Turns remaining: 2"));
         assert!(rendered.contains("- Input tokens remaining: 750"));
@@ -735,13 +735,13 @@ mod tests {
         let agent = Agent::new()
             .role("Ticket {ticket} in {dir}, {turns_remaining} turns left.")
             .dir("/tmp/check");
-        let config = Config {
+        let policy = Policy {
             max_turns: Some(3),
-            ..Config::default()
+            ..Policy::default()
         };
         let stats = Stats::of([EventKind::TurnStarted]);
 
-        let rendered = agent.system_prompt(None, &config, &stats, "T-1");
+        let rendered = agent.system_prompt(None, &policy, &stats, "T-1");
 
         assert_eq!(rendered, "Ticket T-1 in /tmp/check, 2 turns left.");
     }

@@ -73,7 +73,7 @@ async def test_invokes_a_python_tool_and_records_the_file_it_opened(tmp_path):
 
 
 async def test_runs_two_labeled_agents_with_events_and_chaining():
-    queue = aw.TicketQueue().config(aw.Config(max_turns=30))
+    queue = aw.TicketQueue().policy(aw.Policy(max_turns=30))
 
     kinds = []
     queue.on_event(lambda _, event: kinds.append(event.kind))
@@ -98,7 +98,7 @@ async def test_runs_two_labeled_agents_with_events_and_chaining():
 
 
 async def test_saves_the_messages_of_a_finished_ticket(tmp_path):
-    queue = aw.TicketQueue().config(aw.Config(max_turns=10))
+    queue = aw.TicketQueue().policy(aw.Policy(max_turns=10))
     queue.agent(
         aw.Agent.from_env().role("Reply with one word: pong").build()
     )
@@ -129,7 +129,7 @@ async def test_compaction_summarizes_the_replies_against_the_live_model(tmp_path
     # a threshold of zero compacts before.
     task = "Name one colour and say why you picked it."
     queue = aw.TicketQueue().dir(str(tmp_path))
-    queue.config(aw.Config(compaction_threshold=0.0))
+    queue.policy(aw.Policy(compaction_threshold=0.0))
     kinds = []
     queue.on_event(
         lambda _, event: kinds.append(event.kind)

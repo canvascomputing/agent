@@ -11,7 +11,7 @@ use super::common;
 
 use agentwerk::event::{default_logger, Event, EventKind};
 use agentwerk::tools::GrepTool;
-use agentwerk::{Agent, Config, TicketQueue};
+use agentwerk::{Agent, Policy, TicketQueue};
 
 #[derive(Clone)]
 struct CapturedCall {
@@ -54,7 +54,7 @@ async fn grep_lists_unknown_function_names() -> std::result::Result<(), Box<dyn 
 
     let tickets = TicketQueue::new();
 
-    tickets.config(Config {
+    tickets.policy(Policy {
         max_turns: Some(10),
         ..Default::default()
     });

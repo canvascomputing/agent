@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use crate::agents::config::Config;
+use crate::agents::policy::Policy;
 use crate::agents::tickets::{Author, Reply};
 use crate::prompts::compaction_directive;
 use crate::prompts::directives::DirectiveStore;
@@ -14,13 +14,13 @@ use crate::providers::{
 use crate::tools::Tool;
 
 /// Token count at which compaction fires for a model with context window
-/// `window`, at `fraction` of it or at [`Config::DEFAULT_COMPACTION_THRESHOLD`]
+/// `window`, at `fraction` of it or at [`Policy::DEFAULT_COMPACTION_THRESHOLD`]
 /// when that is unset. `None` when the window is unknown.
 pub(crate) fn compaction_token_threshold(
     window: Option<u64>,
     fraction: Option<f64>,
 ) -> Option<u64> {
-    Some((window? as f64 * fraction.unwrap_or(Config::DEFAULT_COMPACTION_THRESHOLD)) as u64)
+    Some((window? as f64 * fraction.unwrap_or(Policy::DEFAULT_COMPACTION_THRESHOLD)) as u64)
 }
 
 /// Estimate of the next request's input-token count: the last response's

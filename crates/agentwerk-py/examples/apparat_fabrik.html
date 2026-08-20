@@ -712,8 +712,8 @@ const handle = {
     tell(`<b>${agent.name}</b> greift nach einer Karte, die nicht im Lager liegt.`);
   },
 
-  config_violated(frame) {
-    tell(frame.data.config === "time" ? "Die Schichtglocke geht." : "Dem Werk geht die Kraft aus.");
+  policy_violated(frame) {
+    tell(frame.data.policy === "time" ? "Die Schichtglocke geht." : "Dem Werk geht die Kraft aus.");
   },
 
   bell(frame) {
@@ -738,8 +738,8 @@ function receive(frame) {
 /** How the shift ended, said the way the hall would say it. */
 function ending(reason) {
   const said = String(reason || "");
-  if (said.startsWith("config_violated(time")) return "die Schichtglocke ging";
-  if (said.startsWith("config_violated")) return "dem Werk ging die Kraft aus";
+  if (said.startsWith("policy_violated(time")) return "die Schichtglocke ging";
+  if (said.startsWith("policy_violated")) return "dem Werk ging die Kraft aus";
   if (said === "drained") return "jeder Bauplan war abgearbeitet";
   if (said === "cancelled") return "die Schicht wurde abgebrochen";
   return "das Band steht still";

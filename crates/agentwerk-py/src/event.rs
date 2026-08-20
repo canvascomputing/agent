@@ -125,7 +125,7 @@ fn payload(kind: &EventKind) -> Value {
         KnowledgeFailed { action, reason } => {
             json!({ "action": action.to_string(), "reason": reason.to_string() })
         }
-        ConfigViolated { config, limit } => json!({ "config": config.to_string(), "limit": limit }),
+        PolicyViolated { policy, limit } => json!({ "policy": policy.to_string(), "limit": limit }),
         SchemaRetried {
             attempt,
             max_attempts,

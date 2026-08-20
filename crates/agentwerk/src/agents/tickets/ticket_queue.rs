@@ -17,12 +17,12 @@ use crate::persistence::Persist;
 use crate::schemas::SchemaStore;
 
 use super::super::agent::{Agent, TicketQueueRef};
-use super::super::config::Config;
+use super::super::policy::Policy;
 use super::super::r#loop::run_main_loop;
 use super::super::stats::Stats;
 use super::query::TicketMatcher;
 use super::ticket::{Status, Ticket};
-use super::{config_violated, numeric_id, Reply};
+use super::{policy_violated, numeric_id, Reply};
 
 /// The queue arrives first so a handler selects tickets and files follow-up work
 /// without capturing an `Arc` into the queue that holds it.
@@ -233,7 +233,7 @@ pub struct TicketQueue {
     pub(super) weak_self: Weak<TicketQueue>,
     pub(crate) tickets: Mutex<HashMap<String, Ticket>>,
     pub(super) agents: Mutex<Vec<Agent>>,
-    pub(super) config: Mutex<Config>,
+    pub(super) policy: Mutex<Policy>,
     /// Why the run ended, once the main loop decides. The agent tasks, the
     /// tools, and every `finish` read it to know the run is over.
     pub(crate) run: Arc<Run>,
@@ -275,7 +275,7 @@ impl TicketQueue {
             weak_self: weak.clone(),
             tickets: Mutex::new(HashMap::new()),
             agents: Mutex::new(Vec::new()),
-            config: Mutex::new(Config::default()),
+            policy: Mutex::new(Policy::default()),
             run: Arc::new(Run::default()),
             cancel_filters: Mutex::new(Vec::new()),
             terminal_transitions_in_flight: AtomicUsize::new(0),
@@ -353,7 +353,7 @@ impl TicketQueue {
             weak_self: weak.clone(),
             tickets: Mutex::new(tickets),
             agents: Mutex::new(Vec::new()),
-            config: Mutex::new(Config::default()),
+            policy: Mutex::new(Policy::default()),
             run: Arc::new(Run::default()),
             cancel_filters: Mutex::new(Vec::new()),
             terminal_transitions_in_flight: AtomicUsize::new(0),
@@ -762,26 +762,26 @@ impl TicketQueue {
 
     /// Set the execution limits and retry tuning.
     ///
-    /// The whole `Config` is replaced, so build one from the fields you want:
-    /// `Config { max_turns: Some(40), ..Default::default() }`. A
+    /// The whole `Policy` is replaced, so build one from the fields you want:
+    /// `Policy { max_turns: Some(40), ..Default::default() }`. A
     /// `compaction_threshold` outside `0.0..=1.0` is clamped into it.
-    pub fn config(&self, mut config: Config) -> &Self {
+    pub fn policy(&self, mut policy: Policy) -> &Self {
         // NaN survives `clamp` and would put the threshold at zero, compacting
         // every turn. A full window is the harmless reading of nonsense.
-        config.compaction_threshold = config.compaction_threshold.map(|fraction| {
+        policy.compaction_threshold = policy.compaction_threshold.map(|fraction| {
             if fraction.is_nan() {
                 1.0
             } else {
                 fraction.clamp(0.0, 1.0)
             }
         });
-        *self.config.lock().unwrap() = config;
+        *self.policy.lock().unwrap() = policy;
         self
     }
 
     /// Get the execution limits and retry tuning in force.
-    pub fn get_config(&self) -> Config {
-        self.config.lock().unwrap().clone()
+    pub fn get_policy(&self) -> Policy {
+        self.policy.lock().unwrap().clone()
     }
 
     /// Define where a session is stored, `./.agentwerk` by default.
@@ -1019,8 +1019,8 @@ impl TicketQueue {
     /// run here; the drained ending is named by the [`Self::finish`] that waited
     /// for it.
     pub(crate) fn ending_reason(&self) -> Option<FinishReason> {
-        if let Some((violation, _)) = config_violated(&self.get_config(), &self.stats) {
-            return Some(FinishReason::ConfigViolated(violation));
+        if let Some((violation, _)) = policy_violated(&self.get_policy(), &self.stats) {
+            return Some(FinishReason::PolicyViolated(violation));
         }
         let claimable = {
             let tickets = self.tickets.lock().unwrap();
@@ -1589,9 +1589,9 @@ mod tests {
     }
 
     #[test]
-    fn config_round_trips_through_get_config() {
+    fn policy_round_trips_through_get_policy() {
         let (queue, _tmp) = test_queue();
-        let config = Config {
+        let policy = Policy {
             max_turns: Some(40),
             max_input_tokens: Some(200_000),
             max_output_tokens: Some(50_000),
@@ -1602,27 +1602,27 @@ mod tests {
             max_time: Some(Duration::from_secs(300)),
             compaction_threshold: Some(0.75),
         };
-        queue.config(config.clone());
+        queue.policy(policy.clone());
 
-        assert_eq!(queue.get_config(), config);
+        assert_eq!(queue.get_policy(), policy);
     }
 
     #[test]
-    fn get_config_returns_the_defaults_before_config_is_called() {
+    fn get_policy_returns_the_defaults_before_policy_is_called() {
         let (queue, _tmp) = test_queue();
-        assert_eq!(queue.get_config(), Config::default());
+        assert_eq!(queue.get_policy(), Policy::default());
     }
 
     #[test]
     fn compaction_threshold_clamps_a_fraction_outside_the_unit_range() {
         let (queue, _tmp) = test_queue();
         for (given, expected) in [(1.5, 1.0), (-0.2, 0.0), (f64::NAN, 1.0)] {
-            queue.config(Config {
+            queue.policy(Policy {
                 compaction_threshold: Some(given),
                 ..Default::default()
             });
             assert_eq!(
-                queue.get_config().compaction_threshold,
+                queue.get_policy().compaction_threshold,
                 Some(expected),
                 "given {given}"
             );
@@ -2484,18 +2484,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_finished_reports_config_violated_when_max_turns_zero() {
+    async fn run_finished_reports_policy_violated_when_max_turns_zero() {
         let (queue, _tmp) = test_queue();
         let reasons = collect_finish_reasons(&queue);
-        queue.config(Config {
+        queue.policy(Policy {
             max_turns: Some(0),
             ..Default::default()
         });
         queue.finish_all().await;
         assert_eq!(
             *reasons.lock().unwrap(),
-            vec![FinishReason::ConfigViolated(
-                crate::event::ConfigViolation::Turns
+            vec![FinishReason::PolicyViolated(
+                crate::event::PolicyViolation::Turns
             )],
         );
     }
