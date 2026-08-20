@@ -5,7 +5,7 @@
 <h1 align="center">agentwerk (Python)</h1>
 
 <div align="center">
-  <strong>A minimal Rust & Python library for solving hard problems with many agents.</strong>
+  <strong>A minimal agentic loop written in Rust & Python for building efficient harnesses.</strong>
 </div>
 
 <div align="center">
@@ -18,7 +18,7 @@
   <a href="#development">Development</a>
 </div>
 
-<div align="center">agentwerk is a lightweight harness optimized for small LLMs: it splits work into tickets to keep context windows short, runs agents in parallel, validates their results and reports every step as an event.</div>
+<div align="center">agentwerk is a lightweight agentic loop optimized for small and fast LLMs: parallel agents, ticket-based coordination, built-in tools, schema-validated results, shared knowledge, and an event for every step.</div>
 
 ---
 
@@ -140,6 +140,30 @@ You can use the `{context}` variable to inject contextual information:
 ```
 
 Every value is a variable of its own: `{ticket}`, `{date}`, `{dir}`, `{platform}`, `{os_version}`, `{turns_remaining}`, `{input_tokens_remaining}`, `{output_tokens_remaining}`, and `{time_remaining}`.
+
+#### Interactive
+
+An interactive agent holds one ticket open across many turns, so a conversation spans a whole session.
+
+```python
+def show(work, ticket, result):
+    print(f"{ticket.key}: {result}")
+
+
+agent = Agent.from_env().interactive().build()
+key = agent.ticket("Where does the configuration get loaded?")
+
+chat = agent.start()
+chat.on_result(show)
+await chat.finish_all()
+
+chat.reply(key, "And which environment variables override it?")
+await chat.finish_all()
+
+chat.set_finished(key, "answered")
+```
+
+An interactive agent never finishes its own ticket, because that would end the conversation. Every answer pauses the ticket instead: it stays `InProgress` with its agent, and each `await chat.finish_all()` returns on the answer it waited for. `reply(key, content)` drives the next turn, and `set_finished(key, result)` ends the conversation, which is the result the hook reports. The answers in between arrive as [events](#events).
 
 See more: [`AgentBuilder`](https://docs.rs/agentwerk/latest/agentwerk/agents/agent/struct.AgentBuilder.html).
 
@@ -326,6 +350,19 @@ tickets.find_results("scan ORDER BY finished DESC")
 - A query may be nothing but an `ORDER BY`, which selects every ticket.
 - A string that does not compile raises `ValueError`, as does `Query(query)`, which compiles one without running it.
 
+#### Examples
+
+```python
+tickets.find_result("TICKET-3")                                 # what one ticket produced
+tickets.find_results("report")                                  # every report result
+tickets.find_tickets("status = Failed")                         # every ticket that failed
+tickets.find_tickets("status = Todo AND agent IS EMPTY")        # waiting, never claimed
+tickets.find_results("report AND result ~ risk")                # reports that mention risk
+tickets.find_tickets("parent IS NOT EMPTY ORDER BY created")    # the children of a handover
+tickets.find_tickets("(scan OR audit) AND NOT status = Failed")
+tickets.find_ticket("task ~ migration")
+```
+
 Every method that takes a query also takes a callable, for a condition no field carries:
 
 ```python
@@ -367,7 +404,7 @@ Ticket members:
 | **Identity** | `key` | Ticket key, of the form `TICKET-N`. |
 | | `task` | The work the agent is asked to do. |
 | | `label` | Label carried by the ticket. |
-| | `parent` | The parent ticket if a handover was performed. |
+| | `parent` | Identifier of the parent ticket if a handover was performed. |
 | | `reporter` | Identifier of the agent that created the ticket. |
 | | `assignee` | Identifier of the agent that claimed the ticket. |
 | **Outcome** | `status` | The ticket lifecycle status. |
@@ -404,49 +441,59 @@ Agents can share the results of their work in the following ways:
 
 #### 1. Create tickets
 
-A handover can be performed through a single `finish` tool call:
+Name the receiving label in the role or in the task, and the agent hands over as it finishes:
 
-```json
-{
-  "handover": "report",
-  "result": "Three products lead on value.",
-  "task": "Write the board report from {parent_key}."
-}
+```python
+analyst = (
+    Agent.from_env()
+    .label("analysis")
+    .role("Rank the products by value, then hand the ranking over to `report`.")
+    .build()
+)
+
+writer = (
+    Agent.from_env()
+    .label("report")
+    .role("Write the board report from the ranking you were handed.")
+    .build()
+)
 ```
 
-When `task` is not defined, the child ticket's body is the result itself. A `task` populates template variables:
-
-- `{parent_key}`: the key of the ticket that was handed over.
-- `{parent_result}`: its result.
-- `{parent_result_path}`: the path of its result file.
+The child ticket is filed under `report` and names the analysis ticket as its `parent`. Its body is the result that was handed over, unless the agent passes a task of its own, which may carry `{parent_key}`, `{parent_result}`, and `{parent_result_path}`. Either way the body ends with the parent's key and the path of its result file.
 
 #### 2. Read tickets
 
-The `tickets` tool reads what any finished ticket produced, by key:
+Give the writer `TicketsTool()`, and it reads what any finished ticket produced, by key:
 
-```json
-{ "action": "result", "key": "TICKET-1" }
+```python
+writer = Agent.from_env().label("report").tool(TicketsTool()).build()
+
+writer.ticket("Read the result of TICKET-1, then write the board report.")
 ```
 
 #### 3. Read result file
 
-The `read_file` tool reads the original result file when its path is known:
+Give the writer `ReadFileTool()` instead, and it opens the result file named at the end of its ticket:
 
-```json
-{ "path": ".agentwerk/tickets/TICKET-1/result.json" }
+```python
+writer = Agent.from_env().label("report").tool(ReadFileTool()).build()
+
+writer.ticket("Read .agentwerk/tickets/TICKET-1/result.json, then write the board report.")
 ```
+
+Results live in the session directory, one `result.json` per ticket.
 
 #### 4. Share knowledge
 
-The `knowledge` tool allows sharing knowledge with other agents:
+Hand both agents one store, and either can write a page the other reads:
 
-```json
-{
-  "action": "write",
-  "slug": "value-ranking",
-  "description": "How the products rank on value.",
-  "content": "Three products lead on value: ..."
-}
+```python
+store = Knowledge.load(".agentwerk")
+
+analyst = Agent.from_env().label("analysis").knowledge(store).build()
+writer = Agent.from_env().label("report").knowledge(store).build()
+
+analyst.ticket("Rank the products by value, then save the ranking to your knowledge.")
 ```
 
 #### 5. Register hooks
@@ -537,9 +584,37 @@ tickets.config(Config(max_turns=40, max_time=300.0))
 | `max_schema_retries` | Limit the consecutive turns without a valid tool call. |
 | `max_request_retries` | Limit how often a failing request is retried. |
 | `request_retry_delay` | Wait this long between retries. |
-| `compaction_threshold` | Compact once the context window is this full. |
+| `compaction_threshold` | Compact once the next request would fill this share of the window. |
 
-`config(config)` replaces the whole configuration, and `get_config()` reads it back. A violated limit emits a `config_violated` event, see [`EventKind`](https://docs.rs/agentwerk/latest/agentwerk/event/enum.EventKind.html).
+`config(config)` replaces the whole configuration, and `get_config()` reads it back. A violated limit emits a `config_violated` event, see [`EventKind`](https://docs.rs/agentwerk/latest/agentwerk/event/enum.EventKind.html). `compaction_threshold` is the exception, see [Compaction](#compaction).
+
+</details>
+
+### Compaction
+
+Compaction summarizes a ticket's older messages once they no longer fit the model's context window.
+
+```python
+tickets.config(Config(compaction_threshold=0.7))
+```
+
+<details>
+<summary>When compaction runs and what it reports</summary>
+
+`compaction_threshold` is a fraction of the model's context window, `0.85` by default. Reaching it summarizes the older messages and the agent carries on.
+
+Compaction also runs after the LLM provider reports the window exceeded. `compaction_started`, `compaction_progress`, `compaction_finished`, and `compaction_failed` report each step, see [Events](#events).
+
+```python
+def watch(work, event):
+    if event.kind == "compaction_finished":
+        print(f"[{event.ticket_key}] compacted {event.data['reason']}")
+
+
+tickets.on_event(watch)
+```
+
+Each of the compaction events carries the reason it ran: `proactive` ahead of the failure, `reactive` after it. Replies that still exceed the window after a reactive compaction fail the ticket.
 
 </details>
 
@@ -608,10 +683,6 @@ tickets.start()
 
 ## Tools
 
-<div align="left">
-  <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/tools.gif" width="600" />
-</div>
-
 Tools allow agents to perform their work.
 
 ```python
@@ -644,7 +715,7 @@ agent = (
 
 #### `FinishTool` and `KnowledgeTool`
 
-`FinishTool()` and `KnowledgeTool(store)` are special tools, registered automatically on every agent. They are used for interacting with the `TicketQueue` or knowledge base. An interactive agent is the exception: it gets no `FinishTool()`, so it pauses for the next reply instead of ending its ticket.
+`FinishTool()` and `KnowledgeTool(store)` are special tools, registered automatically on every agent. They are used for interacting with the `TicketQueue` or knowledge base. An [interactive agent](#interactive) gets no `FinishTool()` by default, since finishing its ticket would end the conversation.
 
 #### CommandTool
 
@@ -707,10 +778,6 @@ See [`Tool`](https://docs.rs/agentwerk/latest/agentwerk/tools/struct.Tool.html).
 </details>
 
 ## Events
-
-<div align="left">
-  <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/events.gif" width="600" />
-</div>
 
 Events allow you to inspect all activities of your agents.
 
@@ -776,12 +843,12 @@ See [`EventKind`](https://docs.rs/agentwerk/latest/agentwerk/event/enum.EventKin
 Hooks allow you to react to events.
 
 ```python
-def retry_once(work, event, failed):
-    if failed.parent is None:
-        work.ticket(Ticket(failed.task, parent=failed.key))
+def triage(work, event, failed):
+    if failed.has_label("scan"):
+        work.ticket(Ticket(failed.task, label="triage"))
 
 
-tickets.on_failure(retry_once)
+tickets.on_failure(triage)
 ```
 
 <details>
@@ -842,6 +909,8 @@ alice = Agent().knowledge(store)
 bob = Agent().knowledge(store)
 ```
 
+Each page is written to `./notes/knowledge/pages/<slug>.md`, and every page gets one line in `./notes/knowledge/index.md`. That list is injected into the prompt of every agent sharing the store, so each of them knows which pages it can read.
+
 <details>
 <summary>All knowledge methods</summary>
 
@@ -853,6 +922,8 @@ bob = Agent().knowledge(store)
 | `pages()` | Get the page collection for reading and writing pages. |
 | `pages().list()` | Get every page in the store. |
 | `clear()` | Remove every page from the store. |
+
+The prompt carries the index up to `index_char_limit`, 12 000 characters by default. Past it the prompt lists the pages that fit and names `index.md` for the agent to read the rest. No page is refused for the length of the index, and page bodies are never shortened.
 
 Programmatically create entries:
 
