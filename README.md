@@ -34,7 +34,7 @@
 ## Why use agentwerk?
 
 - **Simple interface:** create agents with a few lines of code.
-- **Efficient harness:** optimized for fast LLMs with low memory footprint.
+- **Efficient harness:** optimized for small and fast LLMs with low memory footprint.
 - **Complex interactions:** allow agents to collaborate through queues, event hooks and shared knowledge.
 - **Deep observability:** inspect every request, tool call, and failure.
 - **Facilitate training:** store trajectories based on granular events for fine-tuning models.
@@ -74,11 +74,11 @@ async fn main() {
 
 ## API
 
-- [Agents](#agents): Define roles, behavior and actions.
+- [Agents](#agents): Define roles, behavior and tasks.
 - [Tickets](#tickets): Coordinate complex work across agents.
 - [Tools](#tools): Define accessible tooling.
-- [Events](#events): Requests, tool usage, failures and more.
-- [Knowledge](#knowledge): Notes agents can share for collaboration.
+- [Events](#events): Inspect requests, tool usage, failures and more.
+- [Knowledge](#knowledge): Let agents share notes for collaboration.
 
 ## Agents
 
@@ -549,10 +549,10 @@ See [`Schema`](https://docs.rs/agentwerk/latest/agentwerk/schemas/struct.Schema.
 
 ### Configuration
 
-A `Config` limits the turns, tokens, and time a run may spend, and allows configuring retries and compaction.
+A `Policy` limits the turns, tokens, and time a run may spend, and allows configuring retries and compaction.
 
 ```rust
-tickets.config(Config {
+tickets.policy(Policy {
     max_turns: Some(40),
     max_time: Some(std::time::Duration::from_secs(300)),
     ..Default::default()
@@ -574,7 +574,7 @@ tickets.config(Config {
 | `request_retry_delay` | Wait this long between retries. |
 | `compaction_threshold` | Compact once the next request would fill this share of the window. |
 
-`config(config)` replaces the whole configuration, and `get_config()` reads it back. A violated limit emits `EventKind::ConfigViolated`, see [`EventKind`](https://docs.rs/agentwerk/latest/agentwerk/event/enum.EventKind.html). `compaction_threshold` is the exception, see [Compaction](#compaction).
+`policy(policy)` replaces the whole configuration, and `get_policy()` reads it back. A violated limit emits `EventKind::PolicyViolated`, see [`EventKind`](https://docs.rs/agentwerk/latest/agentwerk/event/enum.EventKind.html). `compaction_threshold` is the exception, see [Compaction](#compaction).
 
 </details>
 
@@ -583,7 +583,7 @@ tickets.config(Config {
 Compaction summarizes a ticket's older messages once they no longer fit the model's context window.
 
 ```rust
-tickets.config(Config {
+tickets.policy(Policy {
     compaction_threshold: Some(0.7),
     ..Default::default()
 });
@@ -610,7 +610,7 @@ Each of the compaction events carries the reason it ran: `Proactive` ahead of th
 
 ### Directives
 
-A directive is used when a model fails to perform a specific task. It is a message for correcting the agent's behavior.
+A directive is used when a model fails to perform a specific task. It is a message for correcting the agent's behavior. Directives have been optimized with many hours of testing. Still, you can change them to your needs.
 
 ```rust
 use agentwerk::Directive;
@@ -789,7 +789,7 @@ tickets.on_event(|_, event| {
 |-|------|-------------|
 | **Run** | `RunStarted` | Execution began. |
 | | `RunFinished` | Execution ended, carrying the reason. |
-| | `ConfigViolated` | A limit was breached and execution stopped. |
+| | `PolicyViolated` | A limit was breached and execution stopped. |
 | **Ticket** | `TicketStarted` | An agent claimed a ticket. |
 | | `TicketFinished` | A ticket finished successfully. |
 | | `TicketFailed` | A ticket failed. |

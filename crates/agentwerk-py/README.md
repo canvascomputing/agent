@@ -33,7 +33,7 @@
 ## Why use agentwerk?
 
 - **Simple interface:** create agents with a few lines of code.
-- **Efficient harness:** optimized for fast LLMs with low memory footprint.
+- **Efficient harness:** optimized for small and fast LLMs with low memory footprint.
 - **Complex interactions:** allow agents to collaborate through queues, event hooks and shared knowledge.
 - **Deep observability:** inspect every request, tool call, and failure.
 - **Facilitate training:** store trajectories based on granular events for fine-tuning models.
@@ -79,11 +79,11 @@ asyncio.run(main())
 
 ## API
 
-- [Agents](#agents): Define roles, behavior and actions.
+- [Agents](#agents): Define roles, behavior and tasks.
 - [Tickets](#tickets): Coordinate complex work across agents.
 - [Tools](#tools): Define accessible tooling.
-- [Events](#events): Requests, tool usage, failures and more.
-- [Knowledge](#knowledge): Notes agents can share for collaboration.
+- [Events](#events): Inspect requests, tool usage, failures and more.
+- [Knowledge](#knowledge): Let agents share notes for collaboration.
 
 ## Agents
 
@@ -565,10 +565,10 @@ See [`Schema`](https://docs.rs/agentwerk/latest/agentwerk/schemas/struct.Schema.
 
 ### Configuration
 
-A `Config` limits the turns, tokens, and time a run may spend, and allows configuring retries and compaction.
+A `Policy` limits the turns, tokens, and time a run may spend, and allows configuring retries and compaction.
 
 ```python
-tickets.config(Config(max_turns=40, max_time=300.0))
+tickets.policy(Policy(max_turns=40, max_time=300.0))
 ```
 
 <details>
@@ -586,7 +586,7 @@ tickets.config(Config(max_turns=40, max_time=300.0))
 | `request_retry_delay` | Wait this long between retries. |
 | `compaction_threshold` | Compact once the next request would fill this share of the window. |
 
-`config(config)` replaces the whole configuration, and `get_config()` reads it back. A violated limit emits a `config_violated` event, see [`EventKind`](https://docs.rs/agentwerk/latest/agentwerk/event/enum.EventKind.html). `compaction_threshold` is the exception, see [Compaction](#compaction).
+`policy(policy)` replaces the whole configuration, and `get_policy()` reads it back. A violated limit emits a `policy_violated` event, see [`EventKind`](https://docs.rs/agentwerk/latest/agentwerk/event/enum.EventKind.html). `compaction_threshold` is the exception, see [Compaction](#compaction).
 
 </details>
 
@@ -595,7 +595,7 @@ tickets.config(Config(max_turns=40, max_time=300.0))
 Compaction summarizes a ticket's older messages once they no longer fit the model's context window.
 
 ```python
-tickets.config(Config(compaction_threshold=0.7))
+tickets.policy(Policy(compaction_threshold=0.7))
 ```
 
 <details>
@@ -620,7 +620,7 @@ Each of the compaction events carries the reason it ran: `proactive` ahead of th
 
 ### Directives
 
-A directive is used when a model fails to perform a specific task. It is a message for correcting the agent's behavior.
+A directive is used when a model fails to perform a specific task. It is a message for correcting the agent's behavior. Directives have been optimized with many hours of testing. Still, you can change them to your needs.
 
 ```python
 from agentwerk import Agent, Directive
@@ -797,7 +797,7 @@ tickets.on_event(log)
 |-|------|-------------|
 | **Run** | `run_started` | Execution began. |
 | | `run_finished` | Execution ended, carrying the reason. |
-| | `config_violated` | A limit was breached and execution stopped. |
+| | `policy_violated` | A limit was breached and execution stopped. |
 | **Ticket** | `ticket_started` | An agent claimed a ticket. |
 | | `ticket_finished` | A ticket finished successfully. |
 | | `ticket_failed` | A ticket failed. |

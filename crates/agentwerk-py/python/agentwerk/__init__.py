@@ -6,7 +6,7 @@ re-exports them so `from agentwerk import Agent, ReadFileTool` works.
 
 from ._agentwerk import (
     Agent,
-    Config,
+    Policy,
     Event,
     Knowledge,
     Model,
@@ -86,7 +86,7 @@ def tool(
 __all__ = [
     "tool",
     "Agent",
-    "Config",
+    "Policy",
     "Directive",
     "Event",
     "EventName",

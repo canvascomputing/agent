@@ -9,7 +9,7 @@ use super::common;
 use agentwerk::event::EventName;
 use agentwerk::schemas::Schema;
 use agentwerk::tools::ListDirectoryTool;
-use agentwerk::{Agent, Config, Ticket, TicketQueue};
+use agentwerk::{Agent, Policy, Ticket, TicketQueue};
 
 #[tokio::test]
 async fn separates_files_and_directories() -> std::result::Result<(), Box<dyn std::error::Error>> {
@@ -44,7 +44,7 @@ async fn separates_files_and_directories() -> std::result::Result<(), Box<dyn st
 
     let tickets = TicketQueue::new();
 
-    tickets.config(Config {
+    tickets.policy(Policy {
         max_turns: Some(10),
         ..Default::default()
     });

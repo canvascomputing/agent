@@ -5,7 +5,7 @@ use super::common;
 
 use agentwerk::event::EventName;
 use agentwerk::tools::{GlobTool, ReadFileTool, TicketsTool};
-use agentwerk::{Agent, Config, TicketQueue};
+use agentwerk::{Agent, Policy, TicketQueue};
 
 #[tokio::test]
 async fn test() -> std::result::Result<(), Box<dyn std::error::Error>> {
@@ -13,7 +13,7 @@ async fn test() -> std::result::Result<(), Box<dyn std::error::Error>> {
 
     let tickets = TicketQueue::new();
 
-    tickets.config(Config {
+    tickets.policy(Policy {
         max_turns: Some(10),
         ..Default::default()
     });

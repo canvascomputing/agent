@@ -6,10 +6,10 @@ Naming, comment, and prose rules, plus README structure. Skim the section matchi
 
 **A type earns a `pub use` at `lib.rs` only when it names a concept in the one-sentence description of the crate, or when root-level signatures hand it to the caller.**
 
-`Agent`, `AgentBuilder`, `TicketQueue`, `Ticket`, `Config`, `Knowledge`, `Directive`, `Text`, `Trajectory`, `Reply`, `Event`, `Status`, `EventKind`, `FinishReason`, `Schema`, `SchemaStore`
+`Agent`, `AgentBuilder`, `TicketQueue`, `Ticket`, `Policy`, `Knowledge`, `Directive`, `Text`, `Trajectory`, `Reply`, `Event`, `Status`, `EventKind`, `FinishReason`, `Schema`, `SchemaStore`
 
 - Discriminants callers match on earn a root slot: `Status`, `EventKind`, `FinishReason`.
-- Builder parameters and run outputs earn one when callers name them: `Schema`, `SchemaStore`, `Config`, `Directive`, `Text`, `AgentBuilder`, `Reply`, `Trajectory`.
+- Builder parameters and run outputs earn one when callers name them: `Schema`, `SchemaStore`, `Policy`, `Directive`, `Text`, `AgentBuilder`, `Reply`, `Trajectory`.
 - Errors and conversion traits do not. They live in their domain module.
 - Free functions at the root are forbidden: convert to an associated function or move to the domain module.
 - Name collisions at the root are forbidden; `ToolResult` next to `Result` is not acceptable.
@@ -28,7 +28,7 @@ Naming, comment, and prose rules, plus README structure. Skim the section matchi
 
 **Names are disambiguated through content, not through redundant prefixes.**
 
-- Specific compound names stand alone: `TicketQueue`, `SchemaStore`, `ConfigViolation`.
+- Specific compound names stand alone: `TicketQueue`, `SchemaStore`, `PolicyViolation`.
 - A concrete LLM provider is named for its vendor alone. Acronyms follow Rust API guidelines, so `OpenAi`, not `OpenAI`.
 - Two structs may not share a bare name within one module; both stay qualified.
 - When a trait and the concrete type callers hold want the same name, the bare noun goes to the type and the trait takes a `Like` suffix: `Provider` / `ProviderLike`.
@@ -38,7 +38,7 @@ Naming, comment, and prose rules, plus README structure. Skim the section matchi
 **Failure variants use passive-voice past-participle: `<Subject><Verb-ed>`.**
 
 ```rust
-RequestFailed, TodoItemNotFound, ContextWindowExceeded, ConfigViolated   // accepted
+RequestFailed, TodoItemNotFound, ContextWindowExceeded, PolicyViolated   // accepted
 InvalidRequest, UnexpectedStatus, MissingKey, RequestError               // rejected
 ```
 
@@ -52,7 +52,7 @@ InvalidRequest, UnexpectedStatus, MissingKey, RequestError               // reje
 **Tuple for one payload. Struct for multiple fields or a meaningful field name.**
 
 - Tuple form: `Provider(ProviderError)`, `TodoItemNotFound(String)`, `IoFailed(io::Error)`.
-- Struct form: `EventKind::ConfigViolated { config, limit }`, and also when a single field name carries meaning the type alone does not.
+- Struct form: `EventKind::PolicyViolated { policy, limit }`, and also when a single field name carries meaning the type alone does not.
 - Two-arm result enums use one word per variant: `Success` and `Error`, with no `is_*` predicates.
 
 ## Discriminant Members
@@ -75,8 +75,8 @@ ToolFailureKind::ExecutionFailed.name()   // "execution_failed"
 - Human-readable strings MUST be named `message: String`, never `error`.
 - Wrapped underlying errors MUST be named `source`, as in `FooFailed { source: io::Error }`.
 - Typed metadata uses descriptive names: `status`, `retryable`, `retry_delay`, `tool_name`, `retries`, `after_ms`, `action`, `slug`.
-- A discriminant explaining why something happened is `reason`. `ConfigViolated` names its field `config` instead, because `reason` next to `limit` reads as the limit's justification.
-- IMPORTANT: never name such a field `kind`. `Event` already carries `kind`, so `event.data["kind"]` and `event.kind` would be unrelated values one word apart. The type may still be named `ConfigViolation` or `ToolFailureKind`; only the field is constrained.
+- A discriminant explaining why something happened is `reason`. `PolicyViolated` names its field `policy` instead, because `reason` next to `limit` reads as the limit's justification.
+- IMPORTANT: never name such a field `kind`. `Event` already carries `kind`, so `event.data["kind"]` and `event.kind` would be unrelated values one word apart. The type may still be named `PolicyViolation` or `ToolFailureKind`; only the field is constrained.
 
 ## RAII Guard Fields
 
@@ -205,7 +205,7 @@ edit_replies(key, editor)            // act once, now
 **Every public Rust item has a Python counterpart of the same name. The transforms below are permitted; nothing else.**
 
 - Type-state collapses: `AgentBuilder<P, M>` and `ToolBuilder<D, H>` fold into the class they build and take its name. The collapsed class validates at `build()`.
-- `Duration` becomes a float named `seconds`, with the unit repeated in the docstring: `Config::request_retry_delay` binds as a float in seconds. Every other parameter keeps its Rust name.
+- `Duration` becomes a float named `seconds`, with the unit repeated in the docstring: `Policy::request_retry_delay` binds as a float in seconds. Every other parameter keeps its Rust name.
 - A fieldless enum becomes its snake_case `Display` string. That `Display` impl is the single source, so the binding never formats a variant with `{:?}`.
 - An enum whose variants carry fields becomes a class with a `kind` string, a `data` dict, and one static constructor per variant. `Event` and `ReplyContent` are the two.
 - A builder method whose name collides with a reader on the same Python class becomes a constructor keyword argument, because a Python class cannot carry both. `Ticket` needs this for `label`, `schema`, and `parent`.

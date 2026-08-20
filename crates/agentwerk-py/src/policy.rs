@@ -2,18 +2,18 @@
 
 use std::time::Duration;
 
-use agentwerk::Config;
+use agentwerk::Policy;
 use pyo3::prelude::*;
 
-/// A `Config` limits the turns, tokens, and time a run may spend, and allows
+/// A `Policy` limits the turns, tokens, and time a run may spend, and allows
 /// configuring retries and compaction.
-#[pyclass(name = "Config")]
-pub struct PyConfig {
-    pub inner: Config,
+#[pyclass(name = "Policy")]
+pub struct PyPolicy {
+    pub inner: Policy,
 }
 
 #[pymethods]
-impl PyConfig {
+impl PyPolicy {
     /// Create a configuration, taking the built-in default for every field
     /// left out. `max_time` and `request_retry_delay` are in seconds.
     #[new]
@@ -41,9 +41,9 @@ impl PyConfig {
         max_time: Option<f64>,
         compaction_threshold: Option<f64>,
     ) -> Self {
-        let defaults = Config::default();
-        PyConfig {
-            inner: Config {
+        let defaults = Policy::default();
+        PyPolicy {
+            inner: Policy {
                 max_turns,
                 max_input_tokens,
                 max_output_tokens,

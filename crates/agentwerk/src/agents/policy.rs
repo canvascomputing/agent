@@ -3,18 +3,18 @@
 
 use std::time::Duration;
 
-/// A `Config` limits the turns, tokens, and time a run may spend, and allows
-/// configuring retries and compaction. Set it with `TicketQueue::config`,
+/// A `Policy` limits the turns, tokens, and time a run may spend, and allows
+/// configuring retries and compaction. Set it with `TicketQueue::policy`,
 /// building it from the fields you care about:
-/// `Config { max_turns: Some(40), ..Default::default() }`.
+/// `Policy { max_turns: Some(40), ..Default::default() }`.
 ///
 /// `None` means no limit, except on `compaction_threshold`, the one entry that
 /// cannot be breached: it moves a trigger rather than limiting anything. A
-/// breached limit emits [`EventKind::ConfigViolated`] and halts execution.
+/// breached limit emits [`EventKind::PolicyViolated`] and halts execution.
 ///
-/// [`EventKind::ConfigViolated`]: crate::EventKind::ConfigViolated
+/// [`EventKind::PolicyViolated`]: crate::EventKind::PolicyViolated
 #[derive(Clone, Debug, PartialEq)]
-pub struct Config {
+pub struct Policy {
     /// Total turns across every agent.
     pub max_turns: Option<u32>,
     /// Total input tokens across the run.
@@ -33,11 +33,11 @@ pub struct Config {
     /// Total elapsed duration of the run.
     pub max_time: Option<Duration>,
     /// Fraction of the context window at which compaction fires. `None` uses
-    /// [`Config::DEFAULT_COMPACTION_THRESHOLD`].
+    /// [`Policy::DEFAULT_COMPACTION_THRESHOLD`].
     pub compaction_threshold: Option<f64>,
 }
 
-impl Config {
+impl Policy {
     pub const DEFAULT_MAX_SCHEMA_RETRIES: u32 = 10;
     pub const DEFAULT_MAX_REQUEST_RETRIES: u32 = 10;
     pub const DEFAULT_REQUEST_RETRY_DELAY: Duration = Duration::from_millis(500);
@@ -49,7 +49,7 @@ impl Config {
     pub const DEFAULT_COMPACTION_THRESHOLD: f64 = 0.85;
 }
 
-impl Default for Config {
+impl Default for Policy {
     fn default() -> Self {
         Self {
             max_turns: None,
@@ -72,8 +72,8 @@ mod tests {
     #[test]
     fn defaults_match_documented_values() {
         assert_eq!(
-            Config::default(),
-            Config {
+            Policy::default(),
+            Policy {
                 max_turns: None,
                 max_input_tokens: None,
                 max_output_tokens: None,

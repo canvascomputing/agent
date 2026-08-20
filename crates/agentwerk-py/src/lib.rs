@@ -4,7 +4,7 @@
 use pyo3::prelude::*;
 
 mod agent;
-mod config;
+mod policy;
 mod convert;
 mod directives;
 mod event;
@@ -21,7 +21,7 @@ mod trajectory;
 fn _agentwerk(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<agent::PyAgent>()?;
     m.add_class::<ticket_queue::PyTicketQueue>()?;
-    m.add_class::<config::PyConfig>()?;
+    m.add_class::<policy::PyPolicy>()?;
     m.add_class::<ticket::PyTicket>()?;
     m.add_class::<ticket::PyQuery>()?;
     m.add_class::<reply::PyReply>()?;

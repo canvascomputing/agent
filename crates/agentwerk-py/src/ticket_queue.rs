@@ -11,7 +11,7 @@ use pyo3::prelude::*;
 use serde_json::Value;
 
 use crate::agent::PyAgent;
-use crate::config::PyConfig;
+use crate::policy::PyPolicy;
 use crate::convert::{py_to_value, runtime_error, value_to_py};
 use crate::event::{to_py_event, PyEvent};
 use crate::reply::{py_to_replies, replies_to_py};
@@ -78,15 +78,15 @@ impl PyTicketQueue {
     }
 
     /// Set the execution limits and retry tuning.
-    fn config<'py>(slf: PyRef<'py, Self>, config: PyRef<'_, PyConfig>) -> PyRef<'py, Self> {
-        slf.inner.config(config.inner.clone());
+    fn policy<'py>(slf: PyRef<'py, Self>, policy: PyRef<'_, PyPolicy>) -> PyRef<'py, Self> {
+        slf.inner.policy(policy.inner.clone());
         slf
     }
 
     /// Get the execution limits and retry tuning in force.
-    fn get_config(&self) -> PyConfig {
-        PyConfig {
-            inner: self.inner.get_config(),
+    fn get_policy(&self) -> PyPolicy {
+        PyPolicy {
+            inner: self.inner.get_policy(),
         }
     }
 

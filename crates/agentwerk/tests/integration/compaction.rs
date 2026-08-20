@@ -9,7 +9,7 @@ use super::common;
 
 use agentwerk::agents::tickets::Author;
 use agentwerk::event::EventKind;
-use agentwerk::{Agent, Config, Event, Ticket, TicketQueue};
+use agentwerk::{Agent, Policy, Event, Ticket, TicketQueue};
 
 // Pins a known context window: the trigger stays quiet on a model whose window
 // it cannot look up, and the model here comes from the environment. The first
@@ -127,7 +127,7 @@ async fn summariser_produces_text_when_compaction_fires_against_live_llm() {
     // Two iterations: turn 1 lets the model respond once (appending one entry
     // to `token_usage`); turn 2's proactive guard then trips because a
     // threshold of zero is always crossed.
-    tickets.config(Config {
+    tickets.policy(Policy {
         max_turns: Some(2),
         compaction_threshold: Some(0.0),
         ..Default::default()

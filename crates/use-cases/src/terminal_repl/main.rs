@@ -34,7 +34,7 @@ use agentwerk::providers::Model;
 use agentwerk::tools::{
     GlobTool, GrepTool, ListDirectoryTool, ReadFileTool, TicketsTool, WriteFileTool,
 };
-use agentwerk::{Agent, Config, Knowledge, Ticket, TicketQueue};
+use agentwerk::{Agent, Policy, Knowledge, Ticket, TicketQueue};
 
 const ROLE: &str = include_str!("prompts/repl.role.md");
 const BIBLE_PASSAGE: &str = include_str!("prompts/bible.txt");
@@ -93,7 +93,7 @@ async fn main() {
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let store_dir = cwd.join(".agentwerk");
     let tickets = TicketQueue::load(&store_dir).expect("open ticket store");
-    tickets.config(Config {
+    tickets.policy(Policy {
         max_turns: Some(40),
         ..Default::default()
     });
@@ -471,10 +471,10 @@ fn print_event(
             print_indented_detail(message, style);
         }
         EventKind::SchemaRetried { .. } => {}
-        EventKind::ConfigViolated { config, limit } => {
+        EventKind::PolicyViolated { policy, limit } => {
             break_stream();
             eprintln!(
-                "{}✗ config {config:?} (limit {limit}){}",
+                "{}✗ policy {policy:?} (limit {limit}){}",
                 style.red, style.reset,
             );
         }

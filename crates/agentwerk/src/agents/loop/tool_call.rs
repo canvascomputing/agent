@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use crate::agents::tickets::Reply;
-use crate::event::{ConfigViolation, EventKind, RepairKind, ToolFailureKind};
+use crate::event::{PolicyViolation, EventKind, RepairKind, ToolFailureKind};
 use crate::providers::ContentBlock;
 use crate::tools::{ToolCall, ToolContext, ToolResult};
 
@@ -12,7 +12,7 @@ use super::agent::TicketContext;
 use super::Step;
 
 pub(super) async fn run(context: &mut TicketContext<'_>, mut calls: Vec<ToolCall>) -> Option<Step> {
-    let max_schema_retries = context.config.max_schema_retries.unwrap_or(u32::MAX);
+    let max_schema_retries = context.policy.max_schema_retries.unwrap_or(u32::MAX);
     let registry = context.tools.clone();
 
     // Report the registered name, so a model alternating spellings of one tool
@@ -140,8 +140,8 @@ pub(super) async fn run(context: &mut TicketContext<'_>, mut calls: Vec<ToolCall
     }
 
     if context.consecutive_schema_failures >= max_schema_retries {
-        context.emit(EventKind::ConfigViolated {
-            config: ConfigViolation::MaxSchemaRetries,
+        context.emit(EventKind::PolicyViolated {
+            policy: PolicyViolation::MaxSchemaRetries,
             limit: u64::from(max_schema_retries),
         });
         context.fail_ticket();
@@ -158,10 +158,10 @@ mod tests {
     use serde_json::Value;
 
     use crate::agents::agent::Agent;
-    use crate::agents::config::Config;
+    use crate::agents::policy::Policy;
     use crate::agents::r#loop::test_util::*;
     use crate::agents::tickets::{Status, Ticket, TicketQueue};
-    use crate::event::{ConfigViolation, EventKind, RepairKind};
+    use crate::event::{PolicyViolation, EventKind, RepairKind};
     use crate::schemas::Schema;
 
     #[tokio::test]
@@ -311,7 +311,7 @@ mod tests {
         let tickets = TicketQueue::new();
         tickets
             .dir(results_dir.path().to_path_buf())
-            .config(Config {
+            .policy(Policy {
                 max_request_retries: 0,
                 request_retry_delay: Duration::from_millis(1),
                 max_schema_retries: Some(10),
@@ -354,7 +354,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn schema_retry_exhausted_emits_config_violated_and_force_fails_ticket() {
+    async fn schema_retry_exhausted_emits_policy_violated_and_force_fails_ticket() {
         let provider = MockProvider::with_results(vec![
             Ok(write_result_response("nope")),
             Ok(write_result_response("still nope")),
@@ -362,16 +362,16 @@ mod tests {
         ]);
         let (events, _, ticket) = run_one(provider, 3, 2, Some(schema_for_partial_sum())).await;
 
-        let config_violated = events.iter().any(|e| {
+        let policy_violated = events.iter().any(|e| {
             matches!(
                 &e.kind,
-                EventKind::ConfigViolated {
-                    config: ConfigViolation::MaxSchemaRetries,
+                EventKind::PolicyViolated {
+                    policy: PolicyViolation::MaxSchemaRetries,
                     limit: 2,
                 },
             )
         });
-        assert!(config_violated, "expected MaxSchemaRetries ConfigViolated");
+        assert!(policy_violated, "expected MaxSchemaRetries PolicyViolated");
         assert_eq!(ticket.status, Status::Failed);
     }
 
@@ -391,12 +391,12 @@ mod tests {
         assert!(
             events.iter().any(|e| matches!(
                 &e.kind,
-                EventKind::ConfigViolated {
-                    config: ConfigViolation::MaxSchemaRetries,
+                EventKind::PolicyViolated {
+                    policy: PolicyViolation::MaxSchemaRetries,
                     limit: 3,
                 },
             )),
-            "expected MaxSchemaRetries ConfigViolated",
+            "expected MaxSchemaRetries PolicyViolated",
         );
         assert_eq!(ticket.status, Status::Failed);
     }
@@ -510,7 +510,7 @@ mod tests {
         let tickets = TicketQueue::new();
         tickets
             .dir(results_dir.path().to_path_buf())
-            .config(Config {
+            .policy(Policy {
                 max_request_retries: 0,
                 request_retry_delay: Duration::from_millis(1),
                 max_schema_retries: Some(2),
@@ -536,8 +536,8 @@ mod tests {
         let events = collected.lock().unwrap().clone();
         assert!(events.iter().any(|e| matches!(
             &e.kind,
-            EventKind::ConfigViolated {
-                config: ConfigViolation::MaxSchemaRetries,
+            EventKind::PolicyViolated {
+                policy: PolicyViolation::MaxSchemaRetries,
                 limit: 2,
             },
         )));
@@ -567,7 +567,7 @@ mod tests {
         let tickets = TicketQueue::new();
         tickets
             .dir(results_dir.path().to_path_buf())
-            .config(Config {
+            .policy(Policy {
                 max_request_retries: 0,
                 request_retry_delay: Duration::from_millis(1),
                 max_time: Some(Duration::from_millis(500)),
@@ -637,7 +637,7 @@ mod tests {
         let tickets = TicketQueue::new();
         tickets
             .dir(results_dir.path().to_path_buf())
-            .config(Config {
+            .policy(Policy {
                 max_request_retries: 0,
                 request_retry_delay: Duration::from_millis(1),
                 max_schema_retries: Some(2),
@@ -698,7 +698,7 @@ mod tests {
         let tickets = TicketQueue::new();
         tickets
             .dir(results_dir.path().to_path_buf())
-            .config(Config {
+            .policy(Policy {
                 max_request_retries: 0,
                 request_retry_delay: Duration::from_millis(1),
                 max_schema_retries: Some(10),
@@ -760,7 +760,7 @@ mod tests {
         let tickets = TicketQueue::new();
         tickets
             .dir(results_dir.path().to_path_buf())
-            .config(Config {
+            .policy(Policy {
                 max_request_retries: 0,
                 request_retry_delay: Duration::from_millis(1),
                 max_schema_retries: Some(10),
@@ -871,7 +871,7 @@ mod tests {
         let tickets = TicketQueue::new();
         tickets
             .dir(results_dir.path().to_path_buf())
-            .config(Config {
+            .policy(Policy {
                 max_request_retries: 0,
                 request_retry_delay: Duration::from_millis(1),
                 max_schema_retries: Some(10),

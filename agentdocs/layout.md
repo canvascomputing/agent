@@ -30,7 +30,7 @@ crates/
 **Each top-level source file is one concern the caller observes directly.**
 
 - `lib.rs` holds public re-exports only. Extension types live in `tools::` and `default_logger` in `event::`.
-- `event.rs` defines `Event`, `EventKind`, `EventName`, `ConfigViolation`, `FinishReason`, `ToolFailureKind`, `CompactReason`, and `default_logger`, plus the crate-internal `Subject` and `Measure` that `EventKind::measures` returns.
+- `event.rs` defines `Event`, `EventKind`, `EventName`, `PolicyViolation`, `FinishReason`, `ToolFailureKind`, `CompactReason`, and `default_logger`, plus the crate-internal `Subject` and `Measure` that `EventKind::measures` returns.
 - `persistence.rs` holds the `Persist` trait and the shared `write_atomic`, `append_line`, and `output_path` helpers. It is `pub(crate)` and not re-exported.
 - The root `INVENTORY.md` lists every declaration of both crates, one table per source file. It changes in the same commit that adds, renames, removes, or re-types an item.
 - The `agents/`, `prompts/`, `providers/`, `schemas/`, and `tools/` modules each own their domain. `agents/` and `tools/` re-export their headline types, so `use agentwerk::agents::{Agent, TicketQueue}` works without descending into leaf files.
@@ -41,13 +41,13 @@ crates/
 
 - `agent.rs`: the `Agent` builder and ticket-dispatch helpers.
 - `compaction.rs`: the summarizer that compaction runs, and the threshold and chunking arithmetic behind it.
-- `config.rs`: the public `Config`, what a run may spend, how it retries, and when it compacts.
+- `policy.rs`: the public `Policy`, what a run may spend, how it retries, and when it compacts.
 - `knowledge.rs`: `Knowledge`, the cross-ticket store, an OKF v0.1 bundle in `<dir>/knowledge/`. Pages are curated through the `pages()` handle (`save`, `load`, `remove`) plus `clear`; failures are typed as `KnowledgeError`.
 - `stats.rs`: the crate-private `Stats`, the counters a limit check reads and the one reader over `events.jsonl`.
 
 `tickets/` holds the ticket value types and the orchestrator:
 
-- `mod.rs` re-exports them and hosts the free helpers `config_violated`, `now_millis`, `numeric_id`.
+- `mod.rs` re-exports them and hosts the free helpers `policy_violated`, `now_millis`, `numeric_id`.
 - `ticket.rs`: `Ticket`, `Status`, the `Replies` log helper, and the `tickets/<key>/...` path helpers. `reply.rs`: `Author`, `Reply`, `ReplyContent`, and their conversions to and from `providers::Message` and `ContentBlock`. `error.rs`: `TicketError`.
 - `ticket_queue.rs`: constructors, configuration, ticket creation, agent binding, run lifecycle, results, and queries. `store.rs`: the store mutations (`insert`, `claim`, `set_finished`, `edit_replies`, transition recording).
 - `query.rs`: `TicketMatcher`, `Query` with its private condition tree and sort key, and the AQL tokenizer, parser, and `QueryError` that compile a string into one.
