@@ -3,10 +3,52 @@
 //! without a class per kind.
 
 use agentwerk::event::{Event, EventKind, EventName};
+use agentwerk::EventQuery;
 use pyo3::prelude::*;
 use serde_json::{json, Value};
 
 use crate::convert::value_to_py;
+
+/// Selects recorded events by field values, compiled from AQL.
+#[pyclass(name = "EventQuery")]
+pub struct PyEventQuery {
+    pub inner: EventQuery,
+}
+
+#[pymethods]
+impl PyEventQuery {
+    /// Compile an AQL string over the event fields, the same syntax a string
+    /// argument carries.
+    #[new]
+    fn new(query: &str) -> PyResult<Self> {
+        Ok(PyEventQuery {
+            inner: to_query(query)?,
+        })
+    }
+
+    fn __repr__(&self) -> String {
+        format!("{:?}", self.inner)
+    }
+}
+
+/// A string as a query, raising where the Rust `From` impl would panic.
+fn to_query(query: &str) -> PyResult<EventQuery> {
+    EventQuery::new(query)
+        .map_err(|error| pyo3::exceptions::PyValueError::new_err(format!("{error}")))
+}
+
+/// Read a Python argument as an event query: an `EventQuery`, or a string in
+/// AQL. `None` means the argument is neither, so the caller can try the
+/// callable path; an error means it was a string that does not compile.
+pub fn try_extract_query(py: Python<'_>, arg: &Py<PyAny>) -> PyResult<Option<EventQuery>> {
+    if let Ok(query) = arg.extract::<PyRef<'_, PyEventQuery>>(py) {
+        return Ok(Some(query.inner.clone()));
+    }
+    match arg.extract::<String>(py) {
+        Ok(query) => to_query(&query).map(Some),
+        Err(_) => Ok(None),
+    }
+}
 
 /// Every event name, in the order the kinds are declared. `EventName` on the
 /// Python side is built from this, so the two never carry different spellings.

@@ -193,7 +193,7 @@ async fn main() {
             continue;
         }
         if line == "/stats" {
-            let recorded = tickets.find_events(|_| true);
+            let recorded = tickets.find_events(|_: &Event| true);
             let count = |kind: EventName| counted(&recorded, kind);
             eprintln!(
                 "{}{} turns · {} requests · {} tools · {} in / {} out · {} created / {} done / {} failed{}",
@@ -301,7 +301,7 @@ async fn main() {
         };
 
         // One read per turn, counted three ways, rather than one read per count.
-        let recorded = tickets.find_events(|_| true);
+        let recorded = tickets.find_events(|_: &Event| true);
         let count = |kind: EventName| counted(&recorded, kind);
         let outcome = {
             let chat = chat_key.as_deref().and_then(|k| tickets.get_ticket(k));

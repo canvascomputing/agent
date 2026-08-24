@@ -5,7 +5,8 @@ use std::path::Path;
 
 use serde_json::Value;
 
-use crate::agents::tickets::{Query, Status, Ticket, TicketError, TicketQueue};
+use crate::agents::tickets::{Status, Ticket, TicketError, TicketQueue};
+use crate::agents::Query;
 use crate::prompts::directives::{
     DirectiveStore, TICKET_EDIT_INCOMPLETE, TICKET_KEY_MISSING, TICKET_NOT_ASSIGNED,
     TICKET_NOT_FOUND, TICKET_QUERY_INVALID, TICKET_QUEUE_UNAVAILABLE, TICKET_RESULT_MISSING,

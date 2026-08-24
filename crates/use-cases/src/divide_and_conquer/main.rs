@@ -114,7 +114,7 @@ fn aggregate_and_report(tickets: &TicketQueue, partitions: &[(u64, u64)], n: u64
         .unwrap_or_default()
         .as_secs_f64();
     let done = tickets
-        .find_events(|e| matches!(e.kind, EventKind::TicketFinished))
+        .find_events(|e: &Event| matches!(e.kind, EventKind::TicketFinished))
         .len();
 
     eprintln!(
