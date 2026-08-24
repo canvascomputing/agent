@@ -80,9 +80,8 @@ pub(super) fn resolve_current_key(
     if let Some(key) = ctx.ticket_key.as_deref() {
         return Ok(key.to_string());
     }
-    // Owned, and a closure rather than `agent = {id}`: an id derives from a
-    // host-supplied label, and AQL has no way to bind a value that carries an
-    // operator, a quote, or a space.
+    // A closure, never `agent = {id}`: an id derives from a host-supplied label,
+    // and AQL binds no values, so one carrying `=` or a quote rewrites the query.
     let agent_id = ctx
         .agent_id
         .clone()

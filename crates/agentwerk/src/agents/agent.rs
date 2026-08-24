@@ -444,12 +444,9 @@ impl Agent {
         self.interactive
     }
 
-    /// Whether an agent labelled `agent_label` serves a ticket carrying
-    /// `ticket_label`. Equality in both directions: an agent with no label
-    /// serves the default scope and nothing else.
-    ///
-    /// Takes both labels rather than a receiver, because the loop holds the
-    /// label in a filter the queue keeps and cannot hold the agent there.
+    /// Equality in both directions: an agent with no label serves the default
+    /// scope and nothing else. Both labels rather than a receiver, since the
+    /// loop's claim filter holds the label and cannot hold the agent.
     pub(super) fn handles(agent_label: Option<&str>, ticket_label: Option<&str>) -> bool {
         agent_label == ticket_label
     }

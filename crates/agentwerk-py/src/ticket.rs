@@ -39,8 +39,7 @@ fn to_query(query: &str) -> PyResult<Query> {
 }
 
 /// Read a Python argument as a query: a `Query`, a string in AQL, or a callable
-/// as a condition of its own. An error means it was a string that does not
-/// compile.
+/// as a condition of its own. Only a string can raise.
 pub fn to_matcher(py: Python<'_>, arg: &Py<PyAny>) -> PyResult<Query> {
     if let Ok(query) = arg.extract::<PyRef<'_, PyQuery>>(py) {
         return Ok(query.inner.clone());
