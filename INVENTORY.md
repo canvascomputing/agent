@@ -606,6 +606,7 @@ The rules the tables never repeat.
 | both | `TicketQueue.is_cancelled(ticket: Ticket): boolean` | pub |
 | Rust | `TicketQueue.pending(matches: Query): boolean` | crate |
 | Rust | `TicketQueue.ending_reason(): FinishReason?` | crate |
+| Rust | `TicketQueue.anything_claimable(): boolean` | private |
 | Rust | `TicketQueue.anything_pending(): boolean` | private |
 | Rust | `TicketQueue.is_running(): boolean` | private |
 | Rust | `TicketQueue.interactive_agents(): string[]` | private |
