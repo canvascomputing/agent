@@ -191,6 +191,7 @@ enum Field {
     Parent,
     Task,
     Result,
+    Errors,
     Created,
     Started,
     Finished,
@@ -198,7 +199,7 @@ enum Field {
 }
 
 /// Every field name AQL knows, in the order the error message lists them.
-const FIELDS: [(&str, Field); 11] = [
+const FIELDS: [(&str, Field); 12] = [
     ("key", Field::Key),
     ("label", Field::Label),
     ("status", Field::Status),
@@ -206,6 +207,7 @@ const FIELDS: [(&str, Field); 11] = [
     ("parent", Field::Parent),
     ("task", Field::Task),
     ("result", Field::Result),
+    ("errors", Field::Errors),
     ("created", Field::Created),
     ("started", Field::Started),
     ("finished", Field::Finished),
@@ -249,6 +251,10 @@ impl Field {
             Field::Parent => ticket.parent.as_deref().map(Cow::Borrowed),
             Field::Task => Some(as_text(&ticket.task)),
             Field::Result => ticket.result.as_ref().map(as_text),
+            // The serialized events, so `~` reaches both the kind
+            // (`"event":"tool_call_failed"`) and the message.
+            Field::Errors => (!ticket.errors.is_empty())
+                .then(|| Cow::Owned(serde_json::to_string(&ticket.errors).unwrap_or_default())),
             Field::Created => Some(Cow::Owned(ticket.created_at.to_string())),
             Field::Started => ticket.started_at.map(millis_text),
             Field::Finished => ticket.finished_at.map(millis_text),
@@ -265,6 +271,7 @@ impl Field {
                 | Field::Agent
                 | Field::Parent
                 | Field::Result
+                | Field::Errors
                 | Field::Started
                 | Field::Finished
                 | Field::Failed
@@ -273,7 +280,7 @@ impl Field {
 
     fn kind(self) -> Kind {
         match self {
-            Field::Task | Field::Result => Kind::Text,
+            Field::Task | Field::Result | Field::Errors => Kind::Text,
             Field::Created | Field::Started | Field::Finished | Field::Failed => Kind::Time,
             _ => Kind::Value,
         }
@@ -855,6 +862,7 @@ mod tests {
         fn status(self, status: Status) -> Ticket;
         fn task(self, task: serde_json::Value) -> Ticket;
         fn finished(self, result: serde_json::Value) -> Ticket;
+        fn errored(self, kind: crate::event::EventKind) -> Ticket;
         fn created_at(self, millis: u64) -> Ticket;
         fn finished_at(self, millis: u64) -> Ticket;
     }
@@ -862,6 +870,13 @@ mod tests {
     impl Fixture for Ticket {
         fn agent(mut self, agent: &str) -> Ticket {
             self.assignee = Some(agent.to_string());
+            self
+        }
+
+        fn errored(mut self, kind: crate::event::EventKind) -> Ticket {
+            let key = self.key.clone();
+            self.errors
+                .push(crate::event::Event::new("agent", key, None, kind));
             self
         }
 
@@ -1077,6 +1092,76 @@ mod tests {
         let q = parse("result ~ zip");
         assert!(q.matches(&ticket("TICKET-1").finished(json!({"finding": "zip slip"}))));
         assert!(!q.matches(&ticket("TICKET-2").finished(json!({"finding": "clean"}))));
+    }
+
+    fn tool_failed(message: &str) -> crate::event::EventKind {
+        crate::event::EventKind::ToolCallFailed {
+            tool_name: "grep".into(),
+            call_id: "c1".into(),
+            reason: crate::event::ToolFailureKind::ExecutionFailed,
+            message: message.into(),
+        }
+    }
+
+    #[test]
+    fn errors_is_empty_matches_a_ticket_without_failures() {
+        let q = parse("errors IS EMPTY");
+        assert!(q.matches(&ticket("TICKET-1")));
+        assert!(!q.matches(&ticket("TICKET-2").errored(tool_failed("boom"))));
+    }
+
+    #[test]
+    fn errors_is_not_empty_matches_a_ticket_that_failed() {
+        let q = parse("errors IS NOT EMPTY");
+        assert!(q.matches(&ticket("TICKET-1").errored(tool_failed("boom"))));
+        assert!(!q.matches(&ticket("TICKET-2")));
+    }
+
+    #[test]
+    fn contains_matches_a_failure_by_kind() {
+        let request_failed = crate::event::EventKind::RequestFailed {
+            model: "mock".into(),
+            reason: crate::providers::RequestErrorKind::ConnectionFailed,
+            message: "boom".into(),
+        };
+        let q = parse("errors ~ tool_call_failed");
+        assert!(q.matches(&ticket("TICKET-1").errored(tool_failed("boom"))));
+        // A different kind is excluded: the search selects by kind, not presence.
+        assert!(!q.matches(&ticket("TICKET-2").errored(request_failed)));
+    }
+
+    #[test]
+    fn contains_matches_a_failure_message() {
+        let q = parse("errors ~ timeout");
+        assert!(q.matches(&ticket("TICKET-1").errored(tool_failed("connection timeout"))));
+        assert!(!q.matches(&ticket("TICKET-2").errored(tool_failed("no such file"))));
+    }
+
+    #[test]
+    fn omits_excludes_a_matching_failure() {
+        let q = parse("errors !~ timeout");
+        assert!(q.matches(&ticket("TICKET-1").errored(tool_failed("no such file"))));
+        assert!(!q.matches(&ticket("TICKET-2").errored(tool_failed("connection timeout"))));
+    }
+
+    #[test]
+    fn omits_does_not_match_a_ticket_without_failures() {
+        // An optional field the ticket does not carry fails every comparison,
+        // so `!~` excludes a clean ticket rather than including it.
+        let q = parse("errors !~ timeout");
+        assert!(!q.matches(&ticket("TICKET-1")));
+        assert!(q.matches(&ticket("TICKET-2").errored(tool_failed("no such file"))));
+    }
+
+    #[test]
+    fn contains_searches_every_recorded_failure() {
+        // A ticket accumulates many failures; the search reads the whole log,
+        // so a needle in the second failure still matches.
+        let q = parse("errors ~ timeout");
+        let ticket = ticket("TICKET-1")
+            .errored(tool_failed("no such file"))
+            .errored(tool_failed("connection timeout"));
+        assert!(q.matches(&ticket));
     }
 
     #[test]

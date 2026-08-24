@@ -332,6 +332,7 @@ tickets.find_results("scan ORDER BY finished DESC")
 | | `agent` | Match the agent that claimed the ticket. |
 | **Outcome** | `status` | Match `todo`, `in_progress`, `finished`, or `failed`. |
 | | `result` | Search the result the agent produced. |
+| | `errors` | Search the failures recorded against the ticket. |
 | **Body** | `task` | Search the work the agent was asked to do. |
 | **Time** | `created` | Sort by when the ticket was submitted. |
 | | `started` | Sort by when an agent claimed the ticket. |
@@ -341,8 +342,8 @@ tickets.find_results("scan ORDER BY finished DESC")
 #### Rules
 
 - `=`, `!=`, `IN`, and `NOT IN` compare exactly, `~` and `!~` ignore case.
-- `IS EMPTY` and `IS NOT EMPTY` read `label`, `agent`, `parent`, `result`, `started`, `finished`, and `failed` only.
-- `~` and `!~` read `task` and `result` only.
+- `IS EMPTY` and `IS NOT EMPTY` read `label`, `agent`, `parent`, `result`, `errors`, `started`, `finished`, and `failed` only.
+- `~` and `!~` read `task`, `result`, and `errors` only.
 - A field holds one value per ticket, so `label = a AND label = b` is rejected and names `IN` as the fix.
 - `ORDER BY` names one field and closes the query. Every field sorts, `key` by its number and `status` along the lifecycle.
 - Without it tickets arrive in creation order, which is also what breaks a tie and what a callable answers in. A ticket missing the field sorts last.
@@ -352,15 +353,29 @@ tickets.find_results("scan ORDER BY finished DESC")
 
 #### Examples
 
+Read the results of finished tickets:
+
 ```python
-tickets.find_result("TICKET-3")                                 # what one ticket produced
-tickets.find_results("report")                                  # every report result
-tickets.find_tickets("status = Failed")                         # every ticket that failed
-tickets.find_tickets("status = Todo AND agent IS EMPTY")        # waiting, never claimed
-tickets.find_results("report AND result ~ risk")                # reports that mention risk
-tickets.find_tickets("parent IS NOT EMPTY ORDER BY created")    # the children of a handover
+tickets.find_result("TICKET-3")                   # one ticket's result
+tickets.find_results("report")                    # every report result
+tickets.find_results("report AND result ~ risk")  # reports that mention risk
+```
+
+Select tickets by status or the failures they recorded:
+
+```python
+tickets.find_tickets("status = Failed")            # every ticket that failed
+tickets.find_tickets("errors IS NOT EMPTY")        # hit a failure, even if it finished
+tickets.find_tickets("errors ~ tool_call_failed")  # saw a tool call fail
+tickets.find_tickets("status = Todo AND agent IS EMPTY")  # waiting, never claimed
+```
+
+Group terms and order the answer:
+
+```python
 tickets.find_tickets("(scan OR audit) AND NOT status = Failed")
-tickets.find_ticket("task ~ migration")
+tickets.find_tickets("parent IS NOT EMPTY ORDER BY created")  # handover children, oldest first
+tickets.find_ticket("task ~ migration")                      # the first migration ticket
 ```
 
 Every method that takes a query also takes a callable, for a condition no field carries:
@@ -409,6 +424,7 @@ Ticket members:
 | | `assignee` | Identifier of the agent that claimed the ticket. |
 | **Outcome** | `status` | The ticket lifecycle status. |
 | | `result` | The result the agent produced. |
+| | `errors` | The failures recorded against the ticket, as events. |
 | | `replies` | Messages exchanged with the model. |
 | | `schema` | Optional schema the result must satisfy. |
 | **Timestamps** | `created_at` | Creation time, in milliseconds. |
@@ -672,6 +688,7 @@ tickets.start()
 │   └── TICKET-1/
 │       ├── ticket.json                   the ticket without its messages (key, status, label, timestamps)
 │       ├── result.json                   the result the agent produced
+│       ├── errors.jsonl                   every failure recorded against the ticket, one per line
 │       ├── replies.jsonl                 every message exchanged with the model, one per line
 │       └── outputs/<tool_use_id>.txt     full tool outputs spilled out of the messages
 └── knowledge/
