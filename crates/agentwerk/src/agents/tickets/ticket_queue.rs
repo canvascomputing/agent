@@ -996,7 +996,7 @@ impl TicketQueue {
     /// [`Self::finish_all`] then reports `FinishReason::Cancelled`. Like
     /// [`Self::cancel`], nothing waits, so a ctrl-c handler can call it.
     pub fn cancel_all(&self) -> &Self {
-        self.cancel(|_: &Ticket| true)
+        self.cancel(Query::all())
     }
 
     /// Check whether a ticket has been cancelled.
@@ -1244,7 +1244,7 @@ impl TicketQueue {
     /// # }
     /// ```
     pub async fn finish_all(&self) -> Vec<serde_json::Value> {
-        self.finish(|_: &Ticket| true).await
+        self.finish(Query::all()).await
     }
 
     /// Wait for every ticket to be done, then get the last result in creation
