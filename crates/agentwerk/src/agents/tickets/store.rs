@@ -1152,18 +1152,8 @@ mod tests {
             .unwrap();
         queue.set_finished_by("TICKET-1", "agent").unwrap();
 
-        assert_eq!(
-            queue
-                .find_events(|e| matches!(e.kind, EventKind::TicketCreated))
-                .len(),
-            1
-        );
-        assert_eq!(
-            queue
-                .find_events(|e| matches!(e.kind, EventKind::TicketFinished))
-                .len(),
-            1
-        );
+        assert_eq!(queue.find_events("ticket_created").len(), 1);
+        assert_eq!(queue.find_events("ticket_finished").len(), 1);
     }
 
     #[test]

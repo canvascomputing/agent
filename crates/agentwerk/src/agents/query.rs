@@ -1,11 +1,15 @@
-//! A ticket matcher that selects tickets by field values, and AQL, the string
-//! syntax that parses into one.
+//! AQL, the one string syntax a selection is written in, and the two matchers
+//! it parses into: [`Query`] over tickets, [`EventQuery`] over recorded events.
+//!
+//! The tokenizer, the parser, and the condition tree are shared. A field set
+//! implements [`QueryField`], which is all that separates the two grammars.
 
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::fmt;
 
-use super::ticket::{Status, Ticket};
+use super::tickets::{now_millis, numeric_id, Status, Ticket};
+use crate::event::{Event, EventName};
 
 /// A condition a ticket is tested against.
 ///
@@ -43,7 +47,7 @@ pub trait TicketMatcher: Send + Sync {
 }
 
 fn sort_by_creation(tickets: &mut [&Ticket]) {
-    tickets.sort_by_key(|t| (t.created_at, super::numeric_id(&t.key)));
+    tickets.sort_by_key(|t| TicketField::tie_break(t));
 }
 
 impl<F: Fn(&Ticket) -> bool + Send + Sync> TicketMatcher for F {
@@ -91,9 +95,9 @@ impl TicketMatcher for String {
 /// time should answer with an error rather than a panic.
 #[derive(Debug, Clone)]
 pub struct Query {
-    root: Condition,
+    root: Condition<TicketField>,
     /// What `ORDER BY` named, or `None` for creation order.
-    order: Option<Sort>,
+    order: Option<Sort<TicketField>>,
 }
 
 impl Query {
@@ -126,7 +130,7 @@ impl TicketMatcher for Query {
     }
 
     fn names_status(&self) -> bool {
-        self.root.mentions(Field::Status)
+        self.root.mentions(TicketField::Status)
     }
 
     fn sort(&self, tickets: &mut [&Ticket]) {
@@ -153,26 +157,146 @@ impl From<String> for Query {
     }
 }
 
-/// One node of a parsed query.
-#[derive(Debug, Clone)]
-enum Condition {
-    All(Vec<Condition>),
-    Any(Vec<Condition>),
-    Not(Box<Condition>),
-    Term(Field, Match),
+/// A condition a recorded event is tested against.
+///
+/// An AQL string, [`EventQuery`], and closures all implement this trait, so
+/// [`TicketQueue::find_events`](crate::TicketQueue::find_events) accepts any of
+/// them. The blanket impl for `Fn(&Event) -> bool` keeps closures working
+/// unchanged.
+///
+/// ```no_run
+/// use agentwerk::{EventQuery, TicketQueue};
+///
+/// # fn run() -> Result<(), Box<dyn std::error::Error>> {
+/// let tickets = TicketQueue::new();
+/// tickets.find_events("tool_call_failed");
+/// tickets.find_events("event = request_finished AND agent = research-1");
+/// tickets.find_events(EventQuery::new("payload ~ timeout ORDER BY created DESC")?);
+/// tickets.find_events(|e: &agentwerk::Event| e.kind.is_failure());
+/// # Ok(())
+/// # }
+/// ```
+pub trait EventMatcher {
+    fn matches(&self, event: &Event) -> bool;
+
+    /// Order what the matcher selected. A closure names no order, so events
+    /// stay in the order they were logged, and so does a query without
+    /// `ORDER BY`.
+    fn sort(&self, events: &mut [Event]) {
+        let _ = events;
+    }
 }
 
-impl Condition {
-    fn matches(&self, ticket: &Ticket) -> bool {
+impl<F: Fn(&Event) -> bool> EventMatcher for F {
+    fn matches(&self, event: &Event) -> bool {
+        self(event)
+    }
+}
+
+/// Parses the string as AQL on every event it is handed, and panics on one that
+/// does not parse. Pass an [`EventQuery`] when the same filter runs over a long
+/// log.
+impl EventMatcher for &str {
+    fn matches(&self, event: &Event) -> bool {
+        EventQuery::from(*self).matches(event)
+    }
+
+    fn sort(&self, events: &mut [Event]) {
+        EventQuery::from(*self).sort(events)
+    }
+}
+
+impl EventMatcher for String {
+    fn matches(&self, event: &Event) -> bool {
+        EventQuery::from(self.as_str()).matches(event)
+    }
+
+    fn sort(&self, events: &mut [Event]) {
+        EventQuery::from(self.as_str()).sort(events)
+    }
+}
+
+/// Selects recorded events by field values, compiled from AQL, the same syntax
+/// [`Query`] is written in over a different field set.
+///
+/// A string says the same query wherever a matcher is taken. Compile it here
+/// when the same filter runs over a long log, or when a string built at run
+/// time should answer with an error rather than a panic.
+#[derive(Debug, Clone)]
+pub struct EventQuery {
+    root: Condition<EventField>,
+    /// What `ORDER BY` named, or `None` for the order the log holds.
+    order: Option<Sort<EventField>>,
+}
+
+impl EventQuery {
+    /// Compile an AQL string over the event fields.
+    ///
+    /// ```
+    /// use agentwerk::EventQuery;
+    ///
+    /// # fn run() -> Result<(), Box<dyn std::error::Error>> {
+    /// EventQuery::new("event = tool_call_failed")?;
+    /// EventQuery::new("event IN (request_failed, request_retried) AND agent = scout-1")?;
+    /// EventQuery::new("ticket = TICKET-3 ORDER BY created DESC")?;
+    /// EventQuery::new("payload ~ timeout AND created > -1h")?;
+    /// # Ok(())
+    /// # }
+    /// # run().unwrap();
+    /// ```
+    pub fn new(query: &str) -> Result<Self, QueryError> {
+        let (root, order) = parse_query(query)?;
+        Ok(Self { root, order })
+    }
+}
+
+impl EventMatcher for EventQuery {
+    fn matches(&self, event: &Event) -> bool {
+        self.root.matches(event)
+    }
+
+    fn sort(&self, events: &mut [Event]) {
+        if let Some(order) = &self.order {
+            events.sort_by(|left, right| order.compare(left, right));
+        }
+    }
+}
+
+/// Parses the string as AQL, and panics on one that does not parse, the way
+/// [`Query`]'s own conversion does. Use [`EventQuery::new`] for a string built
+/// at run time.
+impl From<&str> for EventQuery {
+    fn from(query: &str) -> Self {
+        EventQuery::new(query).unwrap_or_else(|error| panic!("invalid query {query:?}: {error}"))
+    }
+}
+
+impl From<String> for EventQuery {
+    fn from(query: String) -> Self {
+        EventQuery::from(query.as_str())
+    }
+}
+
+/// One node of a parsed query.
+#[derive(Debug, Clone)]
+enum Condition<F: QueryField> {
+    All(Vec<Condition<F>>),
+    Any(Vec<Condition<F>>),
+    Not(Box<Condition<F>>),
+    Term(F, Match),
+}
+
+impl<F: QueryField> Condition<F> {
+    fn matches(&self, record: &F::Record) -> bool {
         match self {
-            Condition::All(terms) => terms.iter().all(|t| t.matches(ticket)),
-            Condition::Any(terms) => terms.iter().any(|t| t.matches(ticket)),
-            Condition::Not(term) => !term.matches(ticket),
-            Condition::Term(field, matcher) => matcher.test(field.of(ticket).as_deref()),
+            Condition::All(terms) => terms.iter().all(|t| t.matches(record)),
+            Condition::Any(terms) => terms.iter().any(|t| t.matches(record)),
+            Condition::Not(term) => !term.matches(record),
+            Condition::Term(field, matcher) => matcher.test(field.of(record).as_deref()),
         }
     }
 
-    fn mentions(&self, field: Field) -> bool {
+    fn mentions(&self, field: F) -> bool {
         match self {
             Condition::All(terms) | Condition::Any(terms) => {
                 terms.iter().any(|t| t.mentions(field))
@@ -183,123 +307,73 @@ impl Condition {
     }
 }
 
-/// A ticket field AQL names.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Field {
-    Key,
-    Label,
-    Status,
-    Agent,
-    Parent,
-    Task,
-    Result,
-    Errors,
-    Created,
-    Started,
-    Finished,
-    Failed,
-}
+/// One set of fields AQL names, which is all that separates the ticket grammar
+/// from the event one. The tokenizer, the parser, and [`Condition`] are shared.
+trait QueryField: Copy + PartialEq + fmt::Debug + Sized + 'static {
+    /// What the fields are read off.
+    type Record;
 
-/// Every field name AQL knows, in the order the error message lists them.
-const FIELDS: [(&str, Field); 12] = [
-    ("key", Field::Key),
-    ("label", Field::Label),
-    ("status", Field::Status),
-    ("agent", Field::Agent),
-    ("parent", Field::Parent),
-    ("task", Field::Task),
-    ("result", Field::Result),
-    ("errors", Field::Errors),
-    ("created", Field::Created),
-    ("started", Field::Started),
-    ("finished", Field::Finished),
-    ("failed", Field::Failed),
-];
+    /// Every spelling, in the order an unknown field is answered with.
+    const FIELDS: &'static [(&'static str, Self)];
 
-/// What a field holds, which decides the operators it takes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Kind {
-    /// A value `=` compares.
-    Value,
-    /// Free text `~` searches.
-    Text,
-    /// A moment in milliseconds, which `>` compares and `ORDER BY` sorts.
-    Time,
-}
+    /// What the record holds for this field, or `None` where it holds nothing.
+    fn of(self, record: &Self::Record) -> Option<Cow<'_, str>>;
 
-impl Field {
-    fn named(name: &str) -> Option<Field> {
-        FIELDS
+    fn kind(self) -> Kind;
+
+    /// Whether the field is one a record can be missing, and so one `IS EMPTY`
+    /// reads.
+    fn is_optional(self) -> bool;
+
+    /// A lone word, read as the thing this field set names most often.
+    fn shorthand(word: String) -> Condition<Self>;
+
+    /// The field a lone quoted word names, which is how a label carrying spaces
+    /// is written.
+    fn label() -> Self;
+
+    /// What breaks a tie in `ORDER BY`, so one query answers one list.
+    fn tie_break(record: &Self::Record) -> (u64, u32);
+
+    /// The value in the one spelling the record stores, rejecting one no value
+    /// of this field is written as. Every field takes its value as written
+    /// unless it says otherwise.
+    fn canonical(self, value: String) -> Result<String, QueryError> {
+        Ok(value)
+    }
+
+    /// How two values of this field order. A time by the millisecond `of`
+    /// wrote, everything else as text unless the field set says otherwise.
+    fn compare(self, left: &str, right: &str) -> Ordering {
+        match self.kind() {
+            Kind::Time => millis(left).cmp(&millis(right)),
+            _ => left.cmp(right),
+        }
+    }
+
+    fn named(name: &str) -> Option<Self> {
+        Self::FIELDS
             .iter()
             .find(|(spelling, _)| *spelling == name)
             .map(|(_, field)| *field)
     }
 
     fn name(self) -> &'static str {
-        FIELDS
+        Self::FIELDS
             .iter()
             .find(|(_, field)| *field == self)
             .map(|(spelling, _)| *spelling)
-            .expect("every Field has a spelling")
+            .expect("every field has a spelling")
     }
 
-    /// What the ticket holds for this field, or `None` where it holds nothing.
-    fn of(self, ticket: &Ticket) -> Option<Cow<'_, str>> {
-        match self {
-            Field::Key => Some(Cow::Borrowed(ticket.key.as_str())),
-            Field::Label => ticket.label.as_deref().map(Cow::Borrowed),
-            Field::Status => Some(Cow::Owned(ticket.status.to_string())),
-            Field::Agent => ticket.assignee.as_deref().map(Cow::Borrowed),
-            Field::Parent => ticket.parent.as_deref().map(Cow::Borrowed),
-            Field::Task => Some(as_text(&ticket.task)),
-            Field::Result => ticket.result.as_ref().map(as_text),
-            // The serialized events, so `~` reaches both the kind
-            // (`"event":"tool_call_failed"`) and the message.
-            Field::Errors => (!ticket.errors.is_empty())
-                .then(|| Cow::Owned(serde_json::to_string(&ticket.errors).unwrap_or_default())),
-            Field::Created => Some(Cow::Owned(ticket.created_at.to_string())),
-            Field::Started => ticket.started_at.map(millis_text),
-            Field::Finished => ticket.finished_at.map(millis_text),
-            Field::Failed => ticket.failed_at.map(millis_text),
-        }
-    }
-
-    /// Whether the field is one an agent can leave unset, and so one
-    /// `IS EMPTY` reads.
-    fn is_optional(self) -> bool {
-        matches!(
-            self,
-            Field::Label
-                | Field::Agent
-                | Field::Parent
-                | Field::Result
-                | Field::Errors
-                | Field::Started
-                | Field::Finished
-                | Field::Failed
-        )
-    }
-
-    fn kind(self) -> Kind {
-        match self {
-            Field::Task | Field::Result | Field::Errors => Kind::Text,
-            Field::Created | Field::Started | Field::Finished | Field::Failed => Kind::Time,
-            _ => Kind::Value,
-        }
-    }
-
-    /// How two values of this field order: `key` by its number, so TICKET-2
-    /// comes before TICKET-10, `status` along the lifecycle, a time by the
-    /// millisecond `of` wrote, the rest as text.
-    fn compare(self, left: &str, right: &str) -> Ordering {
-        match self.kind() {
-            Kind::Time => millis(left).cmp(&millis(right)),
-            _ => match self {
-                Field::Key => super::numeric_id(left).cmp(&super::numeric_id(right)),
-                Field::Status => status_rank(left).cmp(&status_rank(right)),
-                _ => left.cmp(right),
-            },
-        }
+    /// Every spelling as one list, for the message an unknown field answers
+    /// with.
+    fn spellings() -> String {
+        Self::FIELDS
+            .iter()
+            .map(|(spelling, _)| *spelling)
+            .collect::<Vec<&str>>()
+            .join(", ")
     }
 
     fn allows(self, matcher: &Match) -> bool {
@@ -327,6 +401,254 @@ impl Field {
     }
 }
 
+/// A ticket field AQL names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TicketField {
+    Key,
+    Label,
+    Status,
+    Agent,
+    Parent,
+    Task,
+    Result,
+    Errors,
+    Created,
+    Started,
+    Finished,
+    Failed,
+}
+
+/// What a field holds, which decides the operators it takes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    /// A value `=` compares.
+    Value,
+    /// Free text `~` searches.
+    Text,
+    /// A moment in milliseconds, which `>` compares and `ORDER BY` sorts.
+    Time,
+}
+
+impl QueryField for TicketField {
+    type Record = Ticket;
+
+    const FIELDS: &'static [(&'static str, TicketField)] = &[
+        ("key", TicketField::Key),
+        ("label", TicketField::Label),
+        ("status", TicketField::Status),
+        ("agent", TicketField::Agent),
+        ("parent", TicketField::Parent),
+        ("task", TicketField::Task),
+        ("result", TicketField::Result),
+        ("errors", TicketField::Errors),
+        ("created", TicketField::Created),
+        ("started", TicketField::Started),
+        ("finished", TicketField::Finished),
+        ("failed", TicketField::Failed),
+    ];
+
+    fn of(self, ticket: &Ticket) -> Option<Cow<'_, str>> {
+        match self {
+            TicketField::Key => Some(Cow::Borrowed(ticket.key.as_str())),
+            TicketField::Label => ticket.label.as_deref().map(Cow::Borrowed),
+            TicketField::Status => Some(Cow::Owned(ticket.status.to_string())),
+            TicketField::Agent => ticket.assignee.as_deref().map(Cow::Borrowed),
+            TicketField::Parent => ticket.parent.as_deref().map(Cow::Borrowed),
+            TicketField::Task => Some(as_text(&ticket.task)),
+            TicketField::Result => ticket.result.as_ref().map(as_text),
+            // The serialized events, so `~` reaches both the kind
+            // (`"event":"tool_call_failed"`) and the message.
+            TicketField::Errors => (!ticket.errors.is_empty())
+                .then(|| Cow::Owned(serde_json::to_string(&ticket.errors).unwrap_or_default())),
+            TicketField::Created => Some(Cow::Owned(ticket.created_at.to_string())),
+            TicketField::Started => ticket.started_at.map(millis_text),
+            TicketField::Finished => ticket.finished_at.map(millis_text),
+            TicketField::Failed => ticket.failed_at.map(millis_text),
+        }
+    }
+
+    fn is_optional(self) -> bool {
+        matches!(
+            self,
+            TicketField::Label
+                | TicketField::Agent
+                | TicketField::Parent
+                | TicketField::Result
+                | TicketField::Errors
+                | TicketField::Started
+                | TicketField::Finished
+                | TicketField::Failed
+        )
+    }
+
+    fn kind(self) -> Kind {
+        match self {
+            TicketField::Task | TicketField::Result | TicketField::Errors => Kind::Text,
+            TicketField::Created
+            | TicketField::Started
+            | TicketField::Finished
+            | TicketField::Failed => Kind::Time,
+            _ => Kind::Value,
+        }
+    }
+
+    /// The ticket it names by key where it is spelled like one, and the label
+    /// otherwise.
+    fn shorthand(word: String) -> Condition<TicketField> {
+        match is_ticket_key(&word) {
+            true => Condition::Term(TicketField::Key, Match::Is(word)),
+            false => Condition::Term(TicketField::Label, Match::Is(word)),
+        }
+    }
+
+    fn label() -> TicketField {
+        TicketField::Label
+    }
+
+    fn tie_break(ticket: &Ticket) -> (u64, u32) {
+        (ticket.created_at, numeric_id(&ticket.key))
+    }
+
+    /// A status in the one spelling `Status::Display` writes, so both the
+    /// `InProgress` the tool schema documents and the `in_progress` the
+    /// bindings use reach the same ticket.
+    fn canonical(self, value: String) -> Result<String, QueryError> {
+        if self != TicketField::Status {
+            return Ok(value);
+        }
+        for status in STATUSES {
+            let spelling = status.to_string();
+            if value.eq_ignore_ascii_case(&spelling)
+                || value.eq_ignore_ascii_case(&format!("{status:?}"))
+            {
+                return Ok(spelling);
+            }
+        }
+        Err(QueryError::UnknownStatus { value })
+    }
+
+    /// `key` by its number, so TICKET-2 comes before TICKET-10, and `status`
+    /// along the lifecycle.
+    fn compare(self, left: &str, right: &str) -> Ordering {
+        match self {
+            TicketField::Key => numeric_id(left).cmp(&numeric_id(right)),
+            TicketField::Status => status_rank(left).cmp(&status_rank(right)),
+            TicketField::Created
+            | TicketField::Started
+            | TicketField::Finished
+            | TicketField::Failed => millis(left).cmp(&millis(right)),
+            _ => left.cmp(right),
+        }
+    }
+}
+
+/// An event field AQL names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EventField {
+    Event,
+    Agent,
+    Ticket,
+    Label,
+    Created,
+    Payload,
+}
+
+impl QueryField for EventField {
+    type Record = Event;
+
+    const FIELDS: &'static [(&'static str, EventField)] = &[
+        ("event", EventField::Event),
+        ("agent", EventField::Agent),
+        ("ticket", EventField::Ticket),
+        ("label", EventField::Label),
+        ("created", EventField::Created),
+        ("payload", EventField::Payload),
+    ];
+
+    fn of(self, event: &Event) -> Option<Cow<'_, str>> {
+        match self {
+            EventField::Event => Some(Cow::Borrowed(event.kind.name())),
+            EventField::Agent => carried(&event.agent_id),
+            EventField::Ticket => carried(&event.ticket_key),
+            EventField::Label => event.label.as_deref().map(Cow::Borrowed),
+            EventField::Created => Some(Cow::Owned(event.created_at.to_string())),
+            // The serialized kind, so `~` reaches both the name and whatever
+            // the payload carries.
+            EventField::Payload => serde_json::to_string(&event.kind).ok().map(Cow::Owned),
+        }
+    }
+
+    fn is_optional(self) -> bool {
+        matches!(
+            self,
+            EventField::Agent | EventField::Ticket | EventField::Label
+        )
+    }
+
+    fn kind(self) -> Kind {
+        match self {
+            EventField::Payload => Kind::Text,
+            EventField::Created => Kind::Time,
+            _ => Kind::Value,
+        }
+    }
+
+    /// The event it names where the word is one, the ticket where it is spelled
+    /// like a key, and the label otherwise.
+    fn shorthand(word: String) -> Condition<EventField> {
+        if is_ticket_key(&word) {
+            return Condition::Term(EventField::Ticket, Match::Is(word));
+        }
+        match event_named(&word) {
+            Some(name) => Condition::Term(EventField::Event, Match::Is(name.to_string())),
+            None => Condition::Term(EventField::Label, Match::Is(word)),
+        }
+    }
+
+    fn label() -> EventField {
+        EventField::Label
+    }
+
+    /// Events arrive in the order they were logged, which is what a tie keeps.
+    fn tie_break(event: &Event) -> (u64, u32) {
+        (event.created_at, 0)
+    }
+
+    /// An event in the one snake_case spelling the log writes, so both
+    /// `tool_call_failed` and `ToolCallFailed` reach the same events.
+    fn canonical(self, value: String) -> Result<String, QueryError> {
+        if self != EventField::Event {
+            return Ok(value);
+        }
+        match event_named(&value) {
+            Some(name) => Ok(name.to_string()),
+            None => Err(QueryError::UnknownEvent { value }),
+        }
+    }
+}
+
+/// A word spelled like a ticket key.
+fn is_ticket_key(word: &str) -> bool {
+    numeric_id(word) != u32::MAX && word.starts_with("TICKET-")
+}
+
+/// A field an event carries only sometimes, which reads as absent where the
+/// event left it empty.
+fn carried(value: &str) -> Option<Cow<'_, str>> {
+    (!value.is_empty()).then_some(Cow::Borrowed(value))
+}
+
+/// The snake_case spelling of an event, from either spelling of its name.
+fn event_named(value: &str) -> Option<&'static str> {
+    EventName::ALL
+        .iter()
+        .find(|name| {
+            value.eq_ignore_ascii_case(name.name())
+                || value.eq_ignore_ascii_case(&format!("{name:?}"))
+        })
+        .map(|name| name.name())
+}
+
 /// A JSON value as the text a query compares against, matching what the
 /// ticket tool's own search has always done with a structured task.
 fn as_text(value: &serde_json::Value) -> Cow<'_, str> {
@@ -338,16 +660,16 @@ fn as_text(value: &serde_json::Value) -> Cow<'_, str> {
 
 /// The one key an `ORDER BY` clause names.
 #[derive(Debug, Clone, Copy)]
-struct Sort {
-    field: Field,
+struct Sort<F: QueryField> {
+    field: F,
     descending: bool,
 }
 
-impl Sort {
-    fn compare(&self, left: &Ticket, right: &Ticket) -> Ordering {
+impl<F: QueryField> Sort<F> {
+    fn compare(&self, left: &F::Record, right: &F::Record) -> Ordering {
         let placed = match (self.field.of(left), self.field.of(right)) {
             (Some(l), Some(r)) => self.field.compare(&l, &r),
-            // A ticket the field is absent from has no value to place, so it
+            // A record the field is absent from has no value to place, so it
             // sorts last whichever way the rest is ordered.
             (Some(_), None) => return Ordering::Less,
             (None, Some(_)) => return Ordering::Greater,
@@ -357,13 +679,9 @@ impl Sort {
             true => placed.reverse(),
             false => placed,
         };
-        // Ties keep creation order, so one query always answers one list.
-        placed.then_with(|| created(left).cmp(&created(right)))
+        // Ties keep the record order, so one query always answers one list.
+        placed.then_with(|| F::tie_break(left).cmp(&F::tie_break(right)))
     }
-}
-
-fn created(ticket: &Ticket) -> (u64, u32) {
-    (ticket.created_at, super::numeric_id(&ticket.key))
 }
 
 /// Every status in lifecycle order, which is the order `ORDER BY status`
@@ -379,8 +697,8 @@ fn millis_text<'a>(millis: u64) -> Cow<'a, str> {
     Cow::Owned(millis.to_string())
 }
 
-/// A time back from the text `Field::of` wrote it as, the way `key` reads its
-/// own number back.
+/// A time back from the text `of` wrote it as, the way `key` reads its own
+/// number back.
 fn millis(value: &str) -> u64 {
     value.parse().unwrap_or(0)
 }
@@ -390,7 +708,7 @@ fn millis(value: &str) -> u64 {
 ///
 /// An offset is resolved here rather than at match time, so one compiled query
 /// answers one set however long it is held.
-fn time_value(field: Field, value: &str) -> Result<u64, QueryError> {
+fn time_value<F: QueryField>(field: F, value: &str) -> Result<u64, QueryError> {
     let resolved = match value.strip_prefix('-') {
         Some(offset) => ago(offset),
         None => match value.chars().all(|c| c.is_ascii_digit()) {
@@ -414,7 +732,7 @@ fn ago(offset: &str) -> Option<u64> {
     ];
     let (unit, span) = UNITS.iter().find(|(unit, _)| offset.ends_with(*unit))?;
     let count: u64 = offset.trim_end_matches(*unit).parse().ok()?;
-    Some(super::now_millis().saturating_sub(count.saturating_mul(*span)))
+    Some(now_millis().saturating_sub(count.saturating_mul(*span)))
 }
 
 /// Midnight UTC on a `YYYY-MM-DD` date, by the days-from-civil algorithm that
@@ -494,10 +812,13 @@ impl Match {
 pub enum QueryError {
     /// The query carried no terms at all.
     Blank,
-    /// No field is named this.
-    UnknownField { name: String },
+    /// No field is named this. `known` is the field set the query was compiled
+    /// against, which is the ticket one or the event one.
+    UnknownField { name: String, known: String },
     /// No status is spelled this way.
     UnknownStatus { value: String },
+    /// No event is spelled this way.
+    UnknownEvent { value: String },
     /// The value a time was compared against is in none of the three spellings.
     InvalidTime { field: &'static str, value: String },
     /// The field does not take the operator it was given.
@@ -505,7 +826,7 @@ pub enum QueryError {
         field: &'static str,
         operators: &'static str,
     },
-    /// Two equalities on one single-valued field, which no ticket satisfies.
+    /// Two equalities on one single-valued field, which no record satisfies.
     RepeatedField { field: &'static str },
     /// A token that cannot appear where it did.
     UnexpectedToken { token: String },
@@ -520,18 +841,21 @@ impl fmt::Display for QueryError {
                 f,
                 "A query cannot be blank. Name a label, a ticket key, or a field."
             ),
-            Self::UnknownField { name } => {
-                let known: Vec<&str> = FIELDS.iter().map(|(spelling, _)| *spelling).collect();
-                write!(
-                    f,
-                    "No field named `{name}`. Use one of {}.",
-                    known.join(", ")
-                )
+            Self::UnknownField { name, known } => {
+                write!(f, "No field named `{name}`. Use one of {known}.")
             }
             Self::UnknownStatus { value } => write!(
                 f,
                 "No status named `{value}`. Use one of Todo, InProgress, Finished, Failed."
             ),
+            Self::UnknownEvent { value } => {
+                let known: Vec<&str> = EventName::ALL.iter().map(|name| name.name()).collect();
+                write!(
+                    f,
+                    "No event named `{value}`. Use one of {}.",
+                    known.join(", ")
+                )
+            }
             Self::InvalidTime { field, value } => write!(
                 f,
                 "`{field}` compares against a time, and `{value}` is not one. \
@@ -653,13 +977,17 @@ fn tokenize(query: &str) -> Result<Vec<Token>, QueryError> {
     Ok(tokens)
 }
 
-fn parse_query(query: &str) -> Result<(Condition, Option<Sort>), QueryError> {
+fn parse_query<F: QueryField>(query: &str) -> Result<(Condition<F>, Option<Sort<F>>), QueryError> {
     let tokens = tokenize(query)?;
     if tokens.is_empty() {
         return Err(QueryError::Blank);
     }
-    let mut parser = Parser { tokens, at: 0 };
-    // A query naming nothing but an order selects every ticket, which is how
+    let mut parser = Parser {
+        tokens,
+        at: 0,
+        field: std::marker::PhantomData,
+    };
+    // A query naming nothing but an order selects every record, which is how
     // the tickets tool asks for the newest without narrowing first.
     let condition = match parser.at_order_by() {
         true => Condition::All(Vec::new()),
@@ -674,12 +1002,13 @@ fn parse_query(query: &str) -> Result<(Condition, Option<Sort>), QueryError> {
     }
 }
 
-struct Parser {
+struct Parser<F: QueryField> {
     tokens: Vec<Token>,
     at: usize,
+    field: std::marker::PhantomData<F>,
 }
 
-impl Parser {
+impl<F: QueryField> Parser<F> {
     fn peek(&self) -> Option<&Token> {
         self.tokens.get(self.at)
     }
@@ -709,7 +1038,7 @@ impl Parser {
 
     /// `ORDER BY field (ASC | DESC)?`, or nothing where the query names no
     /// order.
-    fn order_by(&mut self) -> Result<Option<Sort>, QueryError> {
+    fn order_by(&mut self) -> Result<Option<Sort<F>>, QueryError> {
         if !self.at_order_by() {
             return Ok(None);
         }
@@ -723,7 +1052,10 @@ impl Parser {
             }
             None => return Err(QueryError::UnexpectedEnd),
         };
-        let field = Field::named(&name).ok_or(QueryError::UnknownField { name })?;
+        let field = F::named(&name).ok_or_else(|| QueryError::UnknownField {
+            name,
+            known: F::spellings(),
+        })?;
         let descending = self.take_keyword("desc");
         if !descending {
             self.take_keyword("asc");
@@ -732,7 +1064,7 @@ impl Parser {
     }
 
     /// `and (OR and)*`
-    fn any(&mut self) -> Result<Condition, QueryError> {
+    fn any(&mut self) -> Result<Condition<F>, QueryError> {
         let mut terms = vec![self.all()?];
         while self.take_keyword("or") {
             terms.push(self.all()?);
@@ -742,7 +1074,7 @@ impl Parser {
 
     /// `unary (AND unary)*`, where the collected terms may not name one
     /// single-valued field twice.
-    fn all(&mut self) -> Result<Condition, QueryError> {
+    fn all(&mut self) -> Result<Condition<F>, QueryError> {
         let mut terms = vec![self.unary()?];
         while self.take_keyword("and") {
             terms.push(self.unary()?);
@@ -752,7 +1084,7 @@ impl Parser {
     }
 
     /// `NOT unary | '(' any ')' | term`
-    fn unary(&mut self) -> Result<Condition, QueryError> {
+    fn unary(&mut self) -> Result<Condition<F>, QueryError> {
         if self.take_keyword("not") {
             return Ok(Condition::Not(Box::new(self.unary()?)));
         }
@@ -770,13 +1102,13 @@ impl Parser {
         self.term()
     }
 
-    /// `field operator value?`, or a lone word standing for the ticket it
-    /// names: a key where it is spelled like one, a label otherwise.
-    fn term(&mut self) -> Result<Condition, QueryError> {
+    /// `field operator value?`, or a lone word standing for the record it
+    /// names, which each field set reads its own way.
+    fn term(&mut self) -> Result<Condition<F>, QueryError> {
         let token = self.next().ok_or(QueryError::UnexpectedEnd)?;
         let word = match token {
             Token::Word(word) => word,
-            Token::Quoted(text) => return Ok(Condition::Term(Field::Label, Match::Is(text))),
+            Token::Quoted(text) => return Ok(Condition::Term(F::label(), Match::Is(text))),
             other => {
                 return Err(QueryError::UnexpectedToken {
                     token: other.spelling(),
@@ -787,9 +1119,12 @@ impl Parser {
         // An operator after the word makes it a field reference, so one no
         // field is named is a mistake rather than the shorthand.
         if !self.at_operator() {
-            return Ok(shorthand(word));
+            return Ok(F::shorthand(word));
         }
-        let field = Field::named(&word).ok_or(QueryError::UnknownField { name: word })?;
+        let field = F::named(&word).ok_or_else(|| QueryError::UnknownField {
+            name: word,
+            known: F::spellings(),
+        })?;
         let matcher = self.operator(field)?;
         if !field.allows(&matcher) {
             return Err(QueryError::OperatorNotAllowed {
@@ -822,7 +1157,7 @@ impl Parser {
         }
     }
 
-    fn operator(&mut self, field: Field) -> Result<Match, QueryError> {
+    fn operator(&mut self, field: F) -> Result<Match, QueryError> {
         match self.next().ok_or(QueryError::UnexpectedEnd)? {
             Token::Equals => Ok(Match::Is(self.value(field)?)),
             Token::NotEquals => Ok(Match::IsNot(self.value(field)?)),
@@ -863,10 +1198,10 @@ impl Parser {
         }
     }
 
-    fn value(&mut self, field: Field) -> Result<String, QueryError> {
+    fn value(&mut self, field: F) -> Result<String, QueryError> {
         match self.next().ok_or(QueryError::UnexpectedEnd)? {
-            Token::Word(word) => canonical(field, word),
-            Token::Quoted(text) => canonical(field, text),
+            Token::Word(word) => field.canonical(word),
+            Token::Quoted(text) => field.canonical(text),
             token => Err(QueryError::UnexpectedToken {
                 token: token.spelling(),
             }),
@@ -876,7 +1211,7 @@ impl Parser {
     /// The moment a comparison names. Read before the field is checked against
     /// the operator, so `label > x` answers that `label` takes no `>` rather
     /// than complaining about `x`.
-    fn time(&mut self, field: Field) -> Result<u64, QueryError> {
+    fn time(&mut self, field: F) -> Result<u64, QueryError> {
         match self.next().ok_or(QueryError::UnexpectedEnd)? {
             Token::Word(word) | Token::Quoted(word) => match field.kind() {
                 Kind::Time => time_value(field, &word),
@@ -889,7 +1224,7 @@ impl Parser {
     }
 
     /// `'(' value (',' value)* ')'`, which an empty list does not satisfy.
-    fn values(&mut self, field: Field) -> Result<Vec<String>, QueryError> {
+    fn values(&mut self, field: F) -> Result<Vec<String>, QueryError> {
         match self.next() {
             Some(Token::Open) => {}
             Some(token) => {
@@ -915,45 +1250,21 @@ impl Parser {
     }
 }
 
-/// A lone word: the ticket it names by key where it is spelled like one, and
-/// the label otherwise.
-fn shorthand(word: String) -> Condition {
-    if super::numeric_id(&word) != u32::MAX && word.starts_with("TICKET-") {
-        return Condition::Term(Field::Key, Match::Is(word));
-    }
-    Condition::Term(Field::Label, Match::Is(word))
-}
-
-/// A status in the one spelling `Status::Display` writes, so both the
-/// `InProgress` the tool schema documents and the `in_progress` the bindings
-/// use reach the same ticket. Every other field takes its value as written.
-fn canonical(field: Field, value: String) -> Result<String, QueryError> {
-    if field != Field::Status {
-        return Ok(value);
-    }
-    for status in STATUSES {
-        let spelling = status.to_string();
-        if value.eq_ignore_ascii_case(&spelling)
-            || value.eq_ignore_ascii_case(&format!("{status:?}"))
-        {
-            return Ok(spelling);
-        }
-    }
-    Err(QueryError::UnknownStatus { value })
-}
-
-fn one_or(group: fn(Vec<Condition>) -> Condition, mut terms: Vec<Condition>) -> Condition {
+fn one_or<F: QueryField>(
+    group: fn(Vec<Condition<F>>) -> Condition<F>,
+    mut terms: Vec<Condition<F>>,
+) -> Condition<F> {
     if terms.len() == 1 {
         return terms.pop().expect("one term");
     }
     group(terms)
 }
 
-/// Two equalities on one single-valued field match no ticket, so they are a
+/// Two equalities on one single-valued field match no record, so they are a
 /// mistake rather than a query. `OR` is left alone: that is the shape the
 /// message points at.
-fn reject_repeated_field(terms: &[Condition]) -> Result<(), QueryError> {
-    let mut seen: Vec<Field> = Vec::new();
+fn reject_repeated_field<F: QueryField>(terms: &[Condition<F>]) -> Result<(), QueryError> {
+    let mut seen: Vec<F> = Vec::new();
     for term in terms {
         let Condition::Term(field, Match::Is(_)) = term else {
             continue;
@@ -1739,5 +2050,243 @@ mod tests {
     fn a_malformed_query_string_panics_naming_the_input() {
         let matcher: &dyn TicketMatcher = &"label = ";
         matcher.matches(&ticket("TICKET-1"));
+    }
+}
+
+/// The same grammar over the event field set.
+#[cfg(test)]
+mod event_tests {
+    use super::*;
+    use crate::event::{EventKind, ToolFailureKind};
+
+    fn event(kind: EventKind) -> Event {
+        Event::new("scout-1", "TICKET-1", None, kind)
+    }
+
+    fn tool_failed(message: &str) -> EventKind {
+        EventKind::ToolCallFailed {
+            tool_name: "grep".into(),
+            call_id: "c1".into(),
+            reason: ToolFailureKind::ExecutionFailed,
+            message: message.into(),
+        }
+    }
+
+    /// Pins the stamp, which `Event::new` would set to now.
+    fn at(created_at: u64, kind: EventKind) -> Event {
+        Event {
+            created_at,
+            ..event(kind)
+        }
+    }
+
+    fn parse(query: &str) -> EventQuery {
+        EventQuery::new(query).expect("query must parse")
+    }
+
+    fn error(query: &str) -> QueryError {
+        EventQuery::new(query).expect_err("query must be rejected")
+    }
+
+    /// The events the query selects, in the order it puts them in.
+    fn ordered(query: &str, events: &[Event]) -> Vec<u64> {
+        let query = parse(query);
+        let mut matching: Vec<Event> = events
+            .iter()
+            .filter(|e| query.matches(e))
+            .cloned()
+            .collect();
+        query.sort(&mut matching);
+        matching.iter().map(|e| e.created_at).collect()
+    }
+
+    #[test]
+    fn an_event_is_selected_by_its_name() {
+        let q = parse("event = tool_call_failed");
+        assert!(q.matches(&event(tool_failed("boom"))));
+        assert!(!q.matches(&event(EventKind::TurnStarted)));
+    }
+
+    #[test]
+    fn an_event_name_parses_in_both_spellings() {
+        let failed = event(tool_failed("boom"));
+        assert!(parse("event = tool_call_failed").matches(&failed));
+        assert!(parse("event = ToolCallFailed").matches(&failed));
+    }
+
+    #[test]
+    fn an_event_takes_in_like_any_other_field() {
+        let q = parse("event IN (request_failed, tool_call_failed)");
+        assert!(q.matches(&event(tool_failed("boom"))));
+        assert!(!q.matches(&event(EventKind::TurnStarted)));
+    }
+
+    #[test]
+    fn an_unknown_event_lists_the_ones_that_exist() {
+        let message = error("event = ticket_exploded").to_string();
+        assert!(message.contains("ticket_exploded"), "{message}");
+        assert!(message.contains("ticket_finished"), "{message}");
+    }
+
+    #[test]
+    fn the_ticket_field_selects_the_events_of_one_ticket() {
+        let q = parse("ticket = TICKET-1");
+        assert!(q.matches(&event(EventKind::TurnStarted)));
+        assert!(!q.matches(&Event::new(
+            "scout-1",
+            "TICKET-2",
+            None,
+            EventKind::TurnStarted
+        )));
+    }
+
+    #[test]
+    fn an_event_no_ticket_owns_reads_as_empty() {
+        // `RunStarted` and `RunFinished` carry no ticket key.
+        let run = Event::new("", "", None, EventKind::RunStarted);
+        assert!(parse("ticket IS EMPTY").matches(&run));
+        assert!(parse("agent IS EMPTY").matches(&run));
+        assert!(!parse("ticket IS NOT EMPTY").matches(&run));
+    }
+
+    #[test]
+    fn the_agent_field_selects_who_emitted_it() {
+        let q = parse("agent = scout-1");
+        assert!(q.matches(&event(EventKind::TurnStarted)));
+        assert!(!q.matches(&Event::new(
+            "sniper-1",
+            "TICKET-1",
+            None,
+            EventKind::TurnStarted
+        )));
+    }
+
+    #[test]
+    fn the_label_field_selects_the_pool_the_ticket_belongs_to() {
+        let labelled = Event::new(
+            "scout-1",
+            "TICKET-1",
+            Some("scan".into()),
+            EventKind::TurnStarted,
+        );
+        assert!(parse("label = scan").matches(&labelled));
+        assert!(parse("label IS EMPTY").matches(&event(EventKind::TurnStarted)));
+    }
+
+    #[test]
+    fn payload_searches_the_message_the_kind_carries() {
+        let q = parse("payload ~ timeout");
+        assert!(q.matches(&event(tool_failed("connection timeout"))));
+        assert!(!q.matches(&event(tool_failed("no such file"))));
+    }
+
+    #[test]
+    fn payload_reaches_the_name_as_well_as_the_body() {
+        assert!(parse("payload ~ tool_call_failed").matches(&event(tool_failed("boom"))));
+    }
+
+    #[test]
+    fn a_lone_word_naming_an_event_selects_it() {
+        let q = parse("tool_call_failed");
+        assert!(q.matches(&event(tool_failed("boom"))));
+        assert!(!q.matches(&event(EventKind::TurnStarted)));
+    }
+
+    #[test]
+    fn a_lone_word_naming_no_event_selects_the_label() {
+        let labelled = Event::new(
+            "scout-1",
+            "TICKET-1",
+            Some("scan".into()),
+            EventKind::TurnStarted,
+        );
+        let q = parse("scan");
+        assert!(q.matches(&labelled));
+        assert!(!q.matches(&event(EventKind::TurnStarted)));
+    }
+
+    #[test]
+    fn a_lone_ticket_key_selects_that_ticket_s_events() {
+        let q = parse("TICKET-1");
+        assert!(q.matches(&event(EventKind::TurnStarted)));
+        assert!(!q.matches(&Event::new(
+            "scout-1",
+            "TICKET-2",
+            None,
+            EventKind::TurnStarted
+        )));
+    }
+
+    #[test]
+    fn created_takes_the_same_comparisons_tickets_take() {
+        let q = parse("created > 200");
+        assert!(q.matches(&at(300, EventKind::TurnStarted)));
+        assert!(!q.matches(&at(100, EventKind::TurnStarted)));
+    }
+
+    #[test]
+    fn terms_combine_the_way_they_do_over_tickets() {
+        let q = parse("agent = scout-1 AND (tool_call_failed OR turn_started)");
+        assert!(q.matches(&event(EventKind::TurnStarted)));
+        assert!(!q.matches(&event(EventKind::RunStarted)));
+    }
+
+    #[test]
+    fn order_by_created_desc_answers_the_newest_first() {
+        let events = [
+            at(100, EventKind::TurnStarted),
+            at(300, EventKind::TurnStarted),
+            at(200, EventKind::TurnStarted),
+        ];
+        assert_eq!(
+            ordered("turn_started ORDER BY created DESC", &events),
+            [300, 200, 100]
+        );
+    }
+
+    #[test]
+    fn a_query_without_an_order_keeps_the_order_the_log_holds() {
+        let events = [
+            at(300, EventKind::TurnStarted),
+            at(100, EventKind::TurnStarted),
+        ];
+        assert_eq!(ordered("turn_started", &events), [300, 100]);
+    }
+
+    #[test]
+    fn an_unknown_field_lists_the_event_fields() {
+        let message = error("status = Finished").to_string();
+        assert!(message.contains("status"), "{message}");
+        assert!(message.contains("payload"), "{message}");
+        // The ticket fields are a different set, and the message says so.
+        assert!(!message.contains("parent"), "{message}");
+    }
+
+    #[test]
+    fn an_operator_the_field_rejects_lists_the_ones_it_takes() {
+        let message = error("event ~ tool_call_failed").to_string();
+        assert!(message.contains("event"), "{message}");
+        assert!(message.contains("IN"), "{message}");
+    }
+
+    #[test]
+    fn a_closure_selects_the_events_it_accepts() {
+        let matcher: &dyn EventMatcher = &|e: &Event| e.kind.is_failure();
+        assert!(matcher.matches(&event(tool_failed("boom"))));
+        assert!(!matcher.matches(&event(EventKind::TurnStarted)));
+    }
+
+    #[test]
+    fn a_string_says_the_same_query_a_compiled_one_does() {
+        let matcher: &dyn EventMatcher = &"tool_call_failed";
+        assert!(matcher.matches(&event(tool_failed("boom"))));
+        assert!(!matcher.matches(&event(EventKind::TurnStarted)));
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid query")]
+    fn a_malformed_query_string_panics_naming_the_input() {
+        let matcher: &dyn EventMatcher = &"event = ";
+        matcher.matches(&event(EventKind::TurnStarted));
     }
 }

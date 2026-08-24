@@ -152,16 +152,18 @@ Schemas and results:
 - `TicketQueue::cancel_filters` holds what `cancel` took off the queue. The claim and resume path reads it through `is_cancelled(ticket)`, so a cancelled ticket is neither claimed nor resumed and an agent already holding one is taken off it. The ticket stays `InProgress`.
 - A filter runs while the ticket store lock is held, so it MUST NOT call back into the queue: the same rule `find_ticket` and `find_tickets` carry.
 
-## A String That Selects Tickets Is AQL
+## A String That Selects Anything Is AQL
 
-**Every method taking a filter accepts a string, and the string is AQL: a query compiled by `Query::new`. There is no second string meaning, and no method takes a bare label.**
+**Every method taking a filter accepts a string, and the string is AQL: a query compiled by `Query::new` over tickets or `EventQuery::new` over recorded events. There is no second string meaning, and no method takes a bare label.**
 
 ```rust
 tickets.find_tickets("scan");                    // label = scan
 tickets.find_results("TICKET-3");                // key = TICKET-3
 tickets.find_tickets("label IN (scan, report) AND status != Failed");
+tickets.find_events("tool_call_failed AND created > -1h");
 ```
 
+- One grammar, two field sets. The private `QueryField` trait names what a set must answer (`of`, `kind`, `is_optional`, `shorthand`, `label`, `tie_break`, and the `canonical` and `compare` it may override); `TicketField` and `EventField` implement it, and the tokenizer, `Parser<F>`, `Condition<F>`, and `Sort<F>` are shared. A third record type would be a third impl, not a second parser.
 - `Query` holds a private condition tree of `All`, `Any`, `Not`, and one term per field. `Query::new` is the only way to build one, so AQL is the one grammar a selection is written in and no field gains a second spelling as a method.
 - A lone bare word is `key = <word>` when it is spelled `TICKET-<digits>` and `label = <word>` otherwise, which is what keeps a label the shortest thing you can write. A label named like a key needs `label = TICKET-3`.
 - `From<&str>` and `TicketMatcher for &str` are infallible by signature, so a string that does not compile panics, the way `ToolBuilder::schema` panics on a document the compiler refuses. `Query::new` returns a `Result` for a string built at run time, and the Python bindings raise `ValueError` rather than panicking across the binding.
@@ -171,7 +173,9 @@ tickets.find_tickets("label IN (scan, report) AND status != Failed");
 - `cancel`, `finish`, and `pending` read `matches` alone, so an `ORDER BY` handed to them does nothing. Nothing there is ordered.
 - `TicketMatcher::names_status` is what lets `find_results` and `find_result` take any filter and still default the status to `Finished`. `Query` answers it by walking its tree, the string impls by parsing, and a closure takes the `false` default, so a closure always gets the `Finished` filter. It is the one thing the trait knows beyond `matches`, and it exists because that default cannot be read off a closure.
 - Two equalities on one single-valued field are a parse error rather than a query no ticket satisfies, and the message names `IN` as the fix. An absent field fails every comparison, so `label != scan` never reaches an unlabelled ticket and `IS EMPTY` is what does.
-- The `tickets` tool takes the same syntax as its one `aql` argument, and answers a `QueryError` as a `ToolResult::Error` through `ticket_query_invalid`. Nothing on that path panics.
+- The `tickets` tool takes the same syntax as its one `aql` argument, and answers a `QueryError` as a `ToolResult::Error` through `ticket_query_invalid`. Nothing on that path panics. The tool reads tickets only: the event set is a host API.
+- `EventMatcher` mirrors `TicketMatcher` minus `names_status`, which has no event analog. Its `sort` default leaves the log order alone, where the ticket default sorts by creation, because `find_events` reads a file that is already in order and the ticket store is a map.
+- The four time fields take `>`, `>=`, `<`, `<=` against a date, an offset back from now, or milliseconds. An offset resolves in `Query::new`, not in `matches`, so one compiled query answers one set however long it is held.
 
 ## The Run Names Its Own Ending
 

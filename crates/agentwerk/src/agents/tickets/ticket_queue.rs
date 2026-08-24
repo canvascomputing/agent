@@ -18,9 +18,9 @@ use crate::schemas::SchemaStore;
 
 use super::super::agent::{Agent, TicketQueueRef};
 use super::super::policy::Policy;
+use super::super::query::{EventMatcher, TicketMatcher};
 use super::super::r#loop::run_main_loop;
 use super::super::stats::Stats;
-use super::query::TicketMatcher;
 use super::ticket::{Status, Ticket};
 use super::{numeric_id, policy_violated, Reply, TicketErrors};
 
@@ -930,38 +930,38 @@ impl TicketQueue {
         matching.into_iter().next().cloned()
     }
 
-    /// Get every recorded event matching a condition, oldest first.
+    /// Get every recorded event matching a condition, oldest first, or in the
+    /// order an `ORDER BY` names.
+    ///
+    /// The condition is an AQL string, an [`EventQuery`](crate::EventQuery), or
+    /// a closure, the way [`Self::find_tickets`] takes any of the three.
+    ///
+    /// ```no_run
+    /// # use agentwerk::TicketQueue;
+    /// let tickets = TicketQueue::new();
+    /// tickets.find_events("tool_call_failed AND created > -1h");
+    /// ```
     ///
     /// Read from the session's `events.jsonl`, so this answers for a run that
     /// has finished as readily as one still working. Counting is `.len()`, and
     /// a total is a fold over the events themselves. A log that cannot be read
     /// finds nothing, and `TextChunkReceived` is never recorded, so a condition
     /// naming it never matches.
-    pub fn find_events<F>(&self, predicate: F) -> Vec<Event>
-    where
-        F: Fn(&Event) -> bool,
-    {
+    pub fn find_events(&self, matcher: impl EventMatcher) -> Vec<Event> {
         let mut out = Vec::new();
         let _ = Stats::for_each_event(&self.get_dir(), |event| {
-            if predicate(event) {
+            if matcher.matches(event) {
                 out.push(event.clone());
             }
         });
+        matcher.sort(&mut out);
         out
     }
 
-    /// Get the earliest recorded event matching a condition.
-    pub fn find_event<F>(&self, predicate: F) -> Option<Event>
-    where
-        F: Fn(&Event) -> bool,
-    {
-        let mut found = None;
-        let _ = Stats::for_each_event(&self.get_dir(), |event| {
-            if found.is_none() && predicate(event) {
-                found = Some(event.clone());
-            }
-        });
-        found
+    /// Get the earliest recorded event matching a condition, or the first in
+    /// the order an `ORDER BY` names.
+    pub fn find_event(&self, matcher: impl EventMatcher) -> Option<Event> {
+        self.find_events(matcher).into_iter().next()
     }
 
     /// Take every matching ticket off the queue.
@@ -1655,7 +1655,7 @@ mod tests {
         queue.ticket("b");
         queue.claim(|t| t.key == "TICKET-1", "alice");
 
-        let created = queue.find_events(|e| matches!(e.kind, EventKind::TicketCreated));
+        let created = queue.find_events(|e: &Event| matches!(e.kind, EventKind::TicketCreated));
         assert_eq!(created.len(), 2);
         assert_eq!(created[0].ticket_key, "TICKET-1");
         assert_eq!(created[1].ticket_key, "TICKET-2");
@@ -1667,14 +1667,14 @@ mod tests {
         let (queue, _tmp) = test_queue();
         queue.ticket("a");
         assert!(queue
-            .find_events(|e| matches!(e.kind, EventKind::RunFinished { .. }))
+            .find_events(|e: &Event| matches!(e.kind, EventKind::RunFinished { .. }))
             .is_empty());
     }
 
     #[test]
     fn find_events_without_a_log_is_empty() {
         let (queue, _tmp) = test_queue();
-        assert!(queue.find_events(|_| true).is_empty());
+        assert!(queue.find_events(|_: &Event| true).is_empty());
     }
 
     #[test]
@@ -1683,11 +1683,37 @@ mod tests {
         queue.ticket("a");
         queue.ticket("b");
 
-        let first = queue.find_event(|e| matches!(e.kind, EventKind::TicketCreated));
+        let first = queue.find_event(|e: &Event| matches!(e.kind, EventKind::TicketCreated));
         assert_eq!(first.unwrap().ticket_key, "TICKET-1");
         assert!(queue
-            .find_event(|e| matches!(e.kind, EventKind::TicketFailed))
+            .find_event(|e: &Event| matches!(e.kind, EventKind::TicketFailed))
             .is_none());
+    }
+
+    #[test]
+    fn find_events_takes_the_same_syntax_a_ticket_query_is_written_in() {
+        let (queue, _tmp) = test_queue();
+        queue.ticket(Ticket::new("scan").label("scout"));
+        queue.ticket("b");
+        queue.claim(|t| t.key == "TICKET-1", "scout-1");
+
+        assert_eq!(queue.find_events("ticket_created").len(), 2);
+        assert_eq!(queue.find_events("TICKET-1").len(), 2);
+        assert_eq!(queue.find_events("event = ticket_started").len(), 1);
+        assert_eq!(queue.find_events("agent = scout-1").len(), 1);
+        assert!(queue.find_events("run_finished").is_empty());
+    }
+
+    #[test]
+    fn find_event_answers_the_first_in_the_order_the_query_names() {
+        let (queue, _tmp) = test_queue();
+        queue.ticket("a");
+        queue.ticket("b");
+
+        let newest = queue.find_event("ticket_created ORDER BY created DESC");
+        assert_eq!(newest.unwrap().ticket_key, "TICKET-2");
+        let oldest = queue.find_event("ticket_created");
+        assert_eq!(oldest.unwrap().ticket_key, "TICKET-1");
     }
 
     #[test]
@@ -1700,11 +1726,14 @@ mod tests {
 
         assert_eq!(
             queue
-                .find_events(|e| e.label.as_deref() == Some("scout"))
+                .find_events(|e: &Event| e.label.as_deref() == Some("scout"))
                 .len(),
             2
         );
-        assert_eq!(queue.find_events(|e| e.agent_id == "scout-1").len(), 1);
+        assert_eq!(
+            queue.find_events(|e: &Event| e.agent_id == "scout-1").len(),
+            1
+        );
     }
 
     #[test]
@@ -1721,7 +1750,7 @@ mod tests {
 
         // Chunks are deliberately left out of the log, so nothing finds them.
         assert!(queue
-            .find_events(|e| matches!(e.kind, EventKind::TextChunkReceived { .. }))
+            .find_events(|e: &Event| matches!(e.kind, EventKind::TextChunkReceived { .. }))
             .is_empty());
     }
 
@@ -1747,7 +1776,7 @@ mod tests {
 
         assert_eq!(queue.input_tokens(), 900);
         assert_eq!(queue.output_tokens(), 120);
-        assert!(queue.find_events(|_| true).is_empty());
+        assert!(queue.find_events(|_: &Event| true).is_empty());
     }
 
     #[test]

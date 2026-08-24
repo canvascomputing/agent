@@ -212,7 +212,7 @@ fn print_stats(tickets: &TicketQueue) {
         "  Duration : {:?}",
         tickets.execution_duration().unwrap_or_default()
     );
-    let count = |kind: EventName| tickets.find_events(|e| e.kind.event_name() == kind).len() as u64;
+    let count = |kind: EventName| tickets.find_events(kind.name()).len() as u64;
     let done = count(EventName::TicketFinished);
     let failed = count(EventName::TicketFailed);
     let resolved = done + failed;

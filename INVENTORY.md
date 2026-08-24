@@ -313,6 +313,79 @@ The rules the tables never repeat.
 | Rust | `Stats.restart_clock(): void` | crate |
 | Rust | `Stats.record_usage(ticket_key: string, usage: TokenUsage): void` | private |
 
+## `crates/agentwerk/src/agents/query.rs`
+
+| Language | Item | Visibility |
+|----------|------|------------|
+| Rust | `trait TicketMatcher: Send + Sync { matches(ticket: Ticket): boolean, names_status(): boolean, sort(tickets: Ticket[]): void }` | pub |
+| Rust | `impl TicketMatcher for F where F: Fn(Ticket) => boolean + Send + Sync` | pub |
+| Rust | `sort_by_creation(tickets: Ticket[]): void` | private |
+| Rust | `impl TicketMatcher for &str` | pub |
+| Rust | `impl TicketMatcher for String` | pub |
+| Python | an AQL string stands in for the `Query` wherever one is accepted | |
+| Rust | `Query { root: Condition<TicketField>, order: Sort<TicketField>? }` | pub |
+| Python | `Query(query: str)` | |
+| Rust | `Query.new(query: string): Query throws QueryError` | pub |
+| Rust | `impl From<&str> for Query` | pub |
+| Rust | `impl From<String> for Query` | pub |
+| both | `impl TicketMatcher for Query` | pub |
+| Rust | `trait EventMatcher { matches(event: Event): boolean, sort(events: Event[]): void }` | pub |
+| Rust | `impl EventMatcher for F where F: Fn(Event) => boolean` | pub |
+| Rust | `impl EventMatcher for &str` | pub |
+| Rust | `impl EventMatcher for String` | pub |
+| Python | an AQL string stands in for the `EventQuery` wherever one is accepted | |
+| Rust | `EventQuery { root: Condition<EventField>, order: Sort<EventField>? }` | pub |
+| Python | `EventQuery(query: str)` | |
+| Rust | `EventQuery.new(query: string): EventQuery throws QueryError` | pub |
+| Rust | `impl From<&str> for EventQuery` | pub |
+| Rust | `impl From<String> for EventQuery` | pub |
+| both | `impl EventMatcher for EventQuery` | pub |
+| Rust | `enum Condition<F: QueryField> { All(Condition<F>[]), Any(Condition<F>[]), Not(Condition<F>), Term(F, Match) }` | private |
+| Rust | `Condition.matches(record: F.Record): boolean` | private |
+| Rust | `Condition.mentions(field: F): boolean` | private |
+| Rust | `trait QueryField: Copy + PartialEq + Debug + 'static { Record, FIELDS, of, kind, is_optional, shorthand, label, tie_break, canonical, compare, named, name, spellings, allows, operators }` | private |
+| Rust | `enum TicketField { Key, Label, Status, Agent, Parent, Task, Result, Errors, Created, Started, Finished, Failed }` | private |
+| Rust | `impl QueryField for TicketField` | private |
+| Rust | `enum EventField { Event, Agent, Ticket, Label, Created, Payload }` | private |
+| Rust | `impl QueryField for EventField` | private |
+| Rust | `enum Kind { Value, Text, Time }` | private |
+| Rust | `is_ticket_key(word: string): boolean` | private |
+| Rust | `carried(value: string): string?` | private |
+| Rust | `event_named(value: string): string?` | private |
+| Rust | `as_text(value: json): string` | private |
+| Rust | `Sort<F: QueryField> { field: F, descending: boolean }` | private |
+| Rust | `Sort.compare(left: F.Record, right: F.Record): Ordering` | private |
+| Rust | `STATUSES: Status[]` | private |
+| Rust | `millis_text(millis: number): string` | private |
+| Rust | `millis(value: string): number` | private |
+| Rust | `time_value(field: F, value: string): number throws QueryError` | private |
+| Rust | `ago(offset: string): number?` | private |
+| Rust | `date_millis(value: string): number?` | private |
+| Rust | `status_rank(value: string): number` | private |
+| Rust | `enum Match { Is, IsNot, In, NotIn, Contains, Omits, After, NotBefore, Before, NotAfter, Empty, NotEmpty }` | private |
+| Rust | `Match.test(value: string?): boolean` | private |
+| Rust | `enum QueryError { Blank, UnknownField, UnknownStatus, UnknownEvent, InvalidTime, OperatorNotAllowed, RepeatedField, UnexpectedToken, UnexpectedEnd }` | pub |
+| Rust | `impl Display for QueryError` | pub |
+| Rust | `impl Error for QueryError` | pub |
+| Rust | `enum Token { Word, Quoted, Equals, NotEquals, Contains, Omits, After, NotBefore, Before, NotAfter, Open, Close, Comma }` | private |
+| Rust | `Token.spelling(): string` | private |
+| Rust | `Token.is_keyword(keyword: string): boolean` | private |
+| Rust | `tokenize(query: string): Token[] throws QueryError` | private |
+| Rust | `parse_query<F>(query: string): [Condition<F>, Sort<F>?] throws QueryError` | private |
+| Rust | `Parser<F: QueryField> { tokens: Token[], at: number }` | private |
+| Rust | `Parser.at_order_by(): boolean` | private |
+| Rust | `Parser.order_by(): Sort<F>? throws QueryError` | private |
+| Rust | `Parser.any(): Condition<F> throws QueryError` | private |
+| Rust | `Parser.all(): Condition<F> throws QueryError` | private |
+| Rust | `Parser.unary(): Condition<F> throws QueryError` | private |
+| Rust | `Parser.term(): Condition<F> throws QueryError` | private |
+| Rust | `Parser.operator(field: F): Match throws QueryError` | private |
+| Rust | `Parser.value(field: F): string throws QueryError` | private |
+| Rust | `Parser.time(field: F): number throws QueryError` | private |
+| Rust | `Parser.values(field: F): string[] throws QueryError` | private |
+| Rust | `one_or<F>(group: (Condition<F>[]) => Condition<F>, terms: Condition<F>[]): Condition<F>` | private |
+| Rust | `reject_repeated_field<F>(terms: Condition<F>[]): void throws QueryError` | private |
+
 ## `crates/agentwerk/src/agents/tickets/error.rs`
 
 | Language | Item | Visibility |
@@ -434,73 +507,6 @@ The rules the tables never repeat.
 | Rust | `Status.Failed` | pub |
 | Rust | `impl Display for Status` | pub |
 
-## `crates/agentwerk/src/agents/tickets/query.rs`
-
-| Language | Item | Visibility |
-|----------|------|------------|
-| Rust | `trait TicketMatcher: Send + Sync { matches(ticket: Ticket): boolean, names_status(): boolean, sort(tickets: Ticket[]): void }` | pub |
-| Rust | `impl TicketMatcher for F where F: Fn(Ticket) => boolean + Send + Sync` | pub |
-| Rust | `sort_by_creation(tickets: Ticket[]): void` | private |
-| Rust | `impl TicketMatcher for &str` | pub |
-| Rust | `impl TicketMatcher for String` | pub |
-| Python | an AQL string stands in for the `Query` wherever one is accepted | |
-| Rust | `Query { root: Condition, order: Sort? }` | pub |
-| Python | `Query(query: str)` | |
-| Rust | `Query.new(query: string): Query throws QueryError` | pub |
-| Rust | `impl From<&str> for Query` | pub |
-| Rust | `impl From<String> for Query` | pub |
-| both | `impl TicketMatcher for Query` | pub |
-| Rust | `enum Condition { All(Condition[]), Any(Condition[]), Not(Condition), Term(Field, Match) }` | private |
-| Rust | `Condition.matches(ticket: Ticket): boolean` | private |
-| Rust | `Condition.mentions(field: Field): boolean` | private |
-| Rust | `enum Field { Key, Label, Status, Agent, Parent, Task, Result, Errors, Created, Started, Finished, Failed }` | private |
-| Rust | `enum Kind { Value, Text, Time }` | private |
-| Rust | `FIELDS: [string, Field][]` | private |
-| Rust | `Field.named(name: string): Field?` | private |
-| Rust | `Field.name(): string` | private |
-| Rust | `Field.of(ticket: Ticket): string?` | private |
-| Rust | `Field.is_optional(): boolean` | private |
-| Rust | `Field.kind(): Kind` | private |
-| Rust | `Field.compare(left: string, right: string): Ordering` | private |
-| Rust | `Field.allows(matcher: Match): boolean` | private |
-| Rust | `Field.operators(): string` | private |
-| Rust | `as_text(value: json): string` | private |
-| Rust | `Sort { field: Field, descending: boolean }` | private |
-| Rust | `Sort.compare(left: Ticket, right: Ticket): Ordering` | private |
-| Rust | `created(ticket: Ticket): [number, number]` | private |
-| Rust | `STATUSES: Status[]` | private |
-| Rust | `millis_text(millis: number): string` | private |
-| Rust | `millis(value: string): number` | private |
-| Rust | `time_value(field: Field, value: string): number throws QueryError` | private |
-| Rust | `ago(offset: string): number?` | private |
-| Rust | `date_millis(value: string): number?` | private |
-| Rust | `status_rank(value: string): number` | private |
-| Rust | `enum Match { Is, IsNot, In, NotIn, Contains, Omits, After, NotBefore, Before, NotAfter, Empty, NotEmpty }` | private |
-| Rust | `Match.test(value: string?): boolean` | private |
-| Rust | `enum QueryError { Blank, UnknownField, UnknownStatus, InvalidTime, OperatorNotAllowed, RepeatedField, UnexpectedToken, UnexpectedEnd }` | pub |
-| Rust | `impl Display for QueryError` | pub |
-| Rust | `impl Error for QueryError` | pub |
-| Rust | `enum Token { Word, Quoted, Equals, NotEquals, Contains, Omits, After, NotBefore, Before, NotAfter, Open, Close, Comma }` | private |
-| Rust | `Token.spelling(): string` | private |
-| Rust | `Token.is_keyword(keyword: string): boolean` | private |
-| Rust | `tokenize(query: string): Token[] throws QueryError` | private |
-| Rust | `parse_query(query: string): [Condition, Sort?] throws QueryError` | private |
-| Rust | `Parser { tokens: Token[], at: number }` | private |
-| Rust | `Parser.at_order_by(): boolean` | private |
-| Rust | `Parser.order_by(): Sort? throws QueryError` | private |
-| Rust | `Parser.any(): Condition throws QueryError` | private |
-| Rust | `Parser.all(): Condition throws QueryError` | private |
-| Rust | `Parser.unary(): Condition throws QueryError` | private |
-| Rust | `Parser.term(): Condition throws QueryError` | private |
-| Rust | `Parser.operator(field: Field): Match throws QueryError` | private |
-| Rust | `Parser.value(field: Field): string throws QueryError` | private |
-| Rust | `Parser.time(field: Field): number throws QueryError` | private |
-| Rust | `Parser.values(field: Field): string[] throws QueryError` | private |
-| Rust | `shorthand(word: string): Condition` | private |
-| Rust | `canonical(field: Field, value: string): string throws QueryError` | private |
-| Rust | `one_or(group: (Condition[]) => Condition, terms: Condition[]): Condition` | private |
-| Rust | `reject_repeated_field(terms: Condition[]): void throws QueryError` | private |
-
 ## `crates/agentwerk/src/agents/tickets/ticket_queue.rs`
 
 | Language | Item | Visibility |
@@ -573,8 +579,8 @@ The rules the tables never repeat.
 | Rust | `TicketQueue.matching_tickets(keep: (ticket: Ticket) => boolean, order: TicketMatcher): Ticket[]` | private |
 | Rust | `TicketQueue.first_matching_ticket(keep: (ticket: Ticket) => boolean, order: TicketMatcher): Ticket?` | private |
 | Python | `TicketQueue.find_ticket(predicate)`: accepts a `Query` or a callable | |
-| both | `TicketQueue.find_events(predicate: (event: Event) => boolean): Event[]` | pub |
-| both | `TicketQueue.find_event(predicate: (event: Event) => boolean): Event?` | pub |
+| both | `TicketQueue.find_events(matcher: EventMatcher): Event[]`: an AQL string stands in for the `EventQuery` | pub |
+| both | `TicketQueue.find_event(matcher: EventMatcher): Event?` | pub |
 | both | `TicketQueue.cancel(matches: TicketMatcher): TicketQueue` | pub |
 | Python | `TicketQueue.cancel(matches)`: accepts a `Query` or a callable | |
 | both | `TicketQueue.cancel_all(): TicketQueue` | pub |
@@ -1923,11 +1929,16 @@ Binds `prompts/directives.rs`.
 
 ## `crates/agentwerk-py/src/event.rs`
 
-Binds `event.rs`.
+Binds `event.rs` and the event half of `agents/query.rs`.
 
 | Language | Item | Visibility |
 |----------|------|------------|
 | Rust | `event_names(): string[]` | python |
+| Rust | `PyEventQuery { inner: EventQuery }` | python |
+| Rust | `PyEventQuery.new(query: string): PyEventQuery throws PyErr` | python |
+| Rust | `PyEventQuery.__repr__(): string` | python |
+| Rust | `to_query(query: string): EventQuery throws PyErr` | private |
+| Rust | `try_extract_query(arg: any): EventQuery? throws PyErr` | pub |
 | Rust | `PyEvent { kind: string, created_at: number, agent_id: string, ticket_key: string, label: string?, data: json }` | python |
 | Rust | `PyEvent.data(): any throws PyErr` | python |
 | Rust | `PyEvent.__repr__(): string` | python |
@@ -2034,7 +2045,7 @@ Binds `schemas/`.
 
 ## `crates/agentwerk-py/src/ticket.rs`
 
-Binds `agents/tickets/ticket.rs` and `agents/tickets/query.rs`.
+Binds `agents/tickets/ticket.rs` and the ticket half of `agents/query.rs`.
 
 | Language | Item | Visibility |
 |----------|------|------------|
@@ -2112,8 +2123,8 @@ Binds `agents/tickets/ticket_queue.rs` and `store.rs`.
 | Rust | `PyTicketQueue.cancel(matches: any): PyTicketQueue throws PyErr` | python |
 | Rust | `PyTicketQueue.cancel_all(): PyTicketQueue` | python |
 | Rust | `PyTicketQueue.is_cancelled(ticket: PyTicket): boolean` | python |
-| Rust | `PyTicketQueue.find_events(predicate: any): PyEvent[]` | python |
-| Rust | `PyTicketQueue.find_event(predicate: any): PyEvent?` | python |
+| Rust | `PyTicketQueue.find_events(matches: any): PyEvent[] throws PyErr` | python |
+| Rust | `PyTicketQueue.find_event(matches: any): PyEvent? throws PyErr` | python |
 | Rust | `PyTicketQueue.input_tokens(): number` | python |
 | Rust | `PyTicketQueue.output_tokens(): number` | python |
 | Rust | `PyTicketQueue.execution_duration(): number?` | python |

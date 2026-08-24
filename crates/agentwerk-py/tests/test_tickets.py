@@ -296,6 +296,29 @@ def test_find_event_returns_the_earliest_match(queue):
     assert queue.find_event(lambda e: e.kind == aw.EventName.TICKET_FAILED) is None
 
 
+def test_find_events_takes_an_aql_string(queue):
+    queue.ticket(aw.Ticket("scan", label="scout"))
+    queue.ticket("two")
+
+    assert len(queue.find_events("ticket_created")) == 2
+    assert len(queue.find_events("event = ticket_created AND label = scout")) == 1
+    assert len(queue.find_events("TICKET-2")) == 1
+    assert queue.find_events("run_finished") == []
+
+    newest = queue.find_event("ticket_created ORDER BY created DESC")
+    assert newest.ticket_key == "TICKET-2"
+
+
+def test_find_events_takes_a_compiled_event_query(queue):
+    queue.ticket("seed")
+
+    assert len(queue.find_events(aw.EventQuery("ticket_created"))) == 1
+    with pytest.raises(ValueError):
+        aw.EventQuery("event = ticket_exploded")
+    with pytest.raises(ValueError):
+        queue.find_events("event = ")
+
+
 def test_an_event_carries_the_label_of_the_ticket_it_concerns(queue):
     created = Counter()
 

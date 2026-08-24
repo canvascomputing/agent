@@ -44,13 +44,13 @@ crates/
 - `policy.rs`: the public `Policy`, what a run may spend, how it retries, and when it compacts.
 - `knowledge.rs`: `Knowledge`, the cross-ticket store, an OKF v0.1 bundle in `<dir>/knowledge/`. Pages are curated through the `pages()` handle (`save`, `load`, `remove`) plus `clear`; failures are typed as `KnowledgeError`.
 - `stats.rs`: the crate-private `Stats`, the counters a limit check reads and the one reader over `events.jsonl`.
+- `query.rs`: AQL. The tokenizer, the parser, the private `QueryField` trait, and the two field sets it has: `TicketField` behind `Query` and `TicketMatcher`, `EventField` behind `EventQuery` and `EventMatcher`. `QueryError` lives here too.
 
 `tickets/` holds the ticket value types and the orchestrator:
 
 - `mod.rs` re-exports them and hosts the free helpers `policy_violated`, `now_millis`, `numeric_id`.
 - `ticket.rs`: `Ticket`, `Status`, the `Replies` log helper, and the `tickets/<key>/...` path helpers. `reply.rs`: `Author`, `Reply`, `ReplyContent`, and their conversions to and from `providers::Message` and `ContentBlock`. `error.rs`: `TicketError`.
 - `ticket_queue.rs`: constructors, configuration, ticket creation, agent binding, run lifecycle, results, and queries. `store.rs`: the store mutations (`insert`, `claim`, `set_finished`, `edit_replies`, transition recording).
-- `query.rs`: `TicketMatcher`, `Query` with its private condition tree and sort key, and the AQL tokenizer, parser, and `QueryError` that compile a string into one.
 - `trajectory.rs`: `Trajectory`, a ticket's replies captured as a training example, its `trajectories/<key>.json` write, and the `.html` rendering written beside it.
 
 `loop/` holds the multi-agent loop, split by state:

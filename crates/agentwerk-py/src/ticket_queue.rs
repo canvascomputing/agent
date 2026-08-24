@@ -12,7 +12,7 @@ use serde_json::Value;
 
 use crate::agent::PyAgent;
 use crate::convert::{py_to_value, runtime_error, value_to_py};
-use crate::event::{to_py_event, PyEvent};
+use crate::event::{to_py_event, try_extract_query as try_extract_event_query, PyEvent};
 use crate::policy::PyPolicy;
 use crate::reply::{py_to_replies, replies_to_py};
 use crate::schema::PySchemaStore;
@@ -428,22 +428,29 @@ impl PyTicketQueue {
         self.inner.is_cancelled(&ticket.to_ticket())
     }
 
-    /// Get every recorded event matching a condition, oldest first. Counting
-    /// is `len()`, and a total is a fold over the events themselves.
-    fn find_events(&self, predicate: Py<PyAny>) -> Vec<PyEvent> {
-        self.inner
-            .find_events(|event| event_predicate(&predicate, event))
-            .iter()
-            .map(to_py_event)
-            .collect()
+    /// Get every recorded event matching an EventQuery, an AQL string, or a
+    /// callable, oldest first. Counting is `len()`, and a total is a fold over
+    /// the events themselves.
+    fn find_events(&self, matches: Py<PyAny>, py: Python<'_>) -> PyResult<Vec<PyEvent>> {
+        let found = match try_extract_event_query(py, &matches)? {
+            Some(query) => self.inner.find_events(query),
+            None => self
+                .inner
+                .find_events(|event: &Event| event_predicate(&matches, event)),
+        };
+        Ok(found.iter().map(to_py_event).collect())
     }
 
-    /// Get the earliest recorded event matching a condition.
-    fn find_event(&self, predicate: Py<PyAny>) -> Option<PyEvent> {
-        self.inner
-            .find_event(|event| event_predicate(&predicate, event))
-            .as_ref()
-            .map(to_py_event)
+    /// Get the earliest recorded event matching an EventQuery, an AQL string,
+    /// or a callable, or the first in the order an `ORDER BY` names.
+    fn find_event(&self, matches: Py<PyAny>, py: Python<'_>) -> PyResult<Option<PyEvent>> {
+        let found = match try_extract_event_query(py, &matches)? {
+            Some(query) => self.inner.find_event(query),
+            None => self
+                .inner
+                .find_event(|event: &Event| event_predicate(&matches, event)),
+        };
+        Ok(found.as_ref().map(to_py_event))
     }
 
     /// Get the input tokens across the run's finished requests.
