@@ -31,9 +31,8 @@ use crate::event::{Event, EventName};
 /// # }
 /// ```
 pub trait TicketMatcher {
-    /// Compile into the one thing a selection is: a [`Query`]. A caller's
-    /// closure becomes a condition of its own, so the queue holds one kind of
-    /// filter however the caller wrote it.
+    /// Compile into a [`Query`]. A closure becomes a condition of its own, so
+    /// the queue holds one kind of filter however the caller wrote it.
     fn into_query(self) -> Query;
 }
 
@@ -94,7 +93,6 @@ impl Query {
         Compiled::new(query).map(Query)
     }
 
-    /// Whether this query selects `ticket`.
     pub fn matches(&self, ticket: &Ticket) -> bool {
         self.0.matches(ticket)
     }
@@ -104,7 +102,7 @@ impl Query {
         Query(Compiled::all())
     }
 
-    /// Both conditions, keeping this query's `ORDER BY`.
+    /// Keeps this query's `ORDER BY`.
     pub(crate) fn and(self, other: Query) -> Query {
         Query(self.0.and(other.0))
     }
@@ -124,8 +122,7 @@ impl Query {
         self.and(Query(term))
     }
 
-    /// Also `result IS NOT EMPTY`, so a ticket that finished without one is not
-    /// counted as a result.
+    /// Also `result IS NOT EMPTY`: finishing without one is not a result.
     pub(crate) fn and_result(self) -> Query {
         self.and(Query(Compiled::term(TicketField::Result, Match::NotEmpty)))
     }
@@ -230,13 +227,11 @@ impl EventQuery {
         Compiled::new(query).map(EventQuery)
     }
 
-    /// Whether this query selects `event`.
     pub fn matches(&self, event: &Event) -> bool {
         self.0.matches(event)
     }
 
-    /// Whether an `ORDER BY` names an order, which is what lets a reader stop
-    /// at the first match when none does.
+    /// What lets a reader stop at the first match when no order is named.
     pub(crate) fn is_ordered(&self) -> bool {
         self.0.is_ordered()
     }
@@ -282,9 +277,8 @@ impl<F: QueryField> Condition<F> {
         }
     }
 
-    /// A closure names no field, so it answers `false` however it was written.
-    /// That is why `default_status` adds its `Finished` to a closure and not to
-    /// a query that already sets one.
+    /// A closure names no field, so it answers `false`. That is what makes
+    /// `default_status` apply to one.
     fn mentions(&self, field: F) -> bool {
         match self {
             Condition::All(terms) | Condition::Any(terms) => {
@@ -297,9 +291,9 @@ impl<F: QueryField> Condition<F> {
     }
 }
 
-/// A caller's closure as one condition, so a query says everything a selection
-/// can say. Its own type because `Condition` keeps its derives: `Arc<dyn Fn>`
-/// carries no `Debug`, and a derived `Clone` would demand one of the record.
+/// A caller's closure as one condition. Its own type so `Condition` keeps its
+/// derives: `Arc<dyn Fn>` carries no `Debug`, and a derived `Clone` would
+/// demand one of the record.
 struct Predicate<R>(Arc<dyn Fn(&R) -> bool + Send + Sync>);
 
 impl<R> Clone for Predicate<R> {
@@ -314,9 +308,8 @@ impl<R> fmt::Debug for Predicate<R> {
     }
 }
 
-/// A compiled query over one field set. [`Query`] and [`EventQuery`] are the two
-/// named faces of it, and everything either does with a parsed query it does
-/// here.
+/// A compiled query over one field set. [`Query`] and [`EventQuery`] are its
+/// two named faces, and everything either does with a parsed query it does here.
 #[derive(Debug, Clone)]
 struct Compiled<F: QueryField> {
     root: Condition<F>,
@@ -330,8 +323,7 @@ impl<F: QueryField> Compiled<F> {
         Ok(Self { root, order })
     }
 
-    /// Every record, which is what the whole-run forms select and what AQL has
-    /// no spelling for beyond a bare `ORDER BY`.
+    /// Every record, which AQL cannot spell beyond a bare `ORDER BY`.
     fn all() -> Self {
         Self::rooted(Condition::All(Vec::new()))
     }
@@ -385,8 +377,8 @@ impl<F: QueryField> Compiled<F> {
 /// from the event one. The tokenizer, the parser, [`Condition`], and
 /// [`Compiled`] are shared.
 trait QueryField: Copy + PartialEq + fmt::Debug + Sized + 'static {
-    /// What the fields are read off. `Debug` and `Clone` so a condition holding
-    /// a closure over it keeps the derives every other variant has.
+    /// What the fields are read off. Bounded so `Condition` keeps its derives
+    /// with a closure over it.
     type Record: fmt::Debug + Clone;
 
     /// Every spelling, in the order an unknown field is answered with.
@@ -412,8 +404,7 @@ trait QueryField: Copy + PartialEq + fmt::Debug + Sized + 'static {
     fn tie_break(record: &Self::Record) -> (u64, u32);
 
     /// How records lie when no `ORDER BY` names an order. A log already holds
-    /// one, so it is left alone; a store that is a map holds none, so the tie
-    /// break becomes the order.
+    /// one; a store that is a map does not.
     fn sort_unordered<T: Borrow<Self::Record>>(records: &mut [T]) {
         let _ = records;
     }
@@ -591,8 +582,6 @@ impl QueryField for TicketField {
         (ticket.created_at, numeric_id(&ticket.key))
     }
 
-    /// Creation order, since the ticket store is a map and holds none of its
-    /// own.
     fn sort_unordered<T: Borrow<Ticket>>(tickets: &mut [T]) {
         tickets.sort_by_key(|t| Self::tie_break(t.borrow()));
     }

@@ -39,8 +39,7 @@ fn to_query(query: &str) -> PyResult<EventQuery> {
 }
 
 /// Read a Python argument as an event query: an `EventQuery`, a string in AQL,
-/// or a callable as a condition of its own. An error means it was a string that
-/// does not compile.
+/// or a callable as a condition of its own. Only a string can raise.
 pub fn to_matcher(py: Python<'_>, arg: &Py<PyAny>) -> PyResult<EventQuery> {
     if let Ok(query) = arg.extract::<PyRef<'_, PyEventQuery>>(py) {
         return Ok(query.inner.clone());
@@ -54,8 +53,8 @@ pub fn to_matcher(py: Python<'_>, arg: &Py<PyAny>) -> PyResult<EventQuery> {
     }))
 }
 
-/// Ask a Python condition about an event, on the same terms a ticket condition
-/// is asked: a Python error reads as false rather than stopping the read.
+/// Ask a Python condition about an event. A Python error reads as false, so a
+/// broken condition never stops the read.
 fn event_predicate(predicate: &Py<PyAny>, event: &Event) -> bool {
     Python::attach(|py| {
         predicate

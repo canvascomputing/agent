@@ -902,7 +902,6 @@ impl TicketQueue {
         self.first_matching_ticket(&predicate.into_query())
     }
 
-    /// Every ticket the query selects, in the order it names.
     fn matching_tickets(&self, query: &Query) -> Vec<Ticket> {
         let store = self.tickets.lock().unwrap();
         let mut matching: Vec<&Ticket> = store.values().filter(|t| query.matches(t)).collect();
@@ -946,8 +945,8 @@ impl TicketQueue {
     /// the order an `ORDER BY` names.
     pub fn find_event(&self, matcher: impl EventMatcher) -> Option<Event> {
         let query = matcher.into_query();
-        // Without an order the log's own is the answer, so the first match ends
-        // the read rather than the whole log being copied to be sorted.
+        // Without an order the log's own is the answer, so one match ends the
+        // read instead of the whole log being copied to be sorted.
         let wanted = match query.is_ordered() {
             true => usize::MAX,
             false => 1,
@@ -957,7 +956,7 @@ impl TicketQueue {
         found.into_iter().next()
     }
 
-    /// The first `wanted` events the query selects, in log order.
+    /// In log order: the caller sorts if its query named one.
     fn collect_events(&self, query: &EventQuery, wanted: usize) -> Vec<Event> {
         let mut out = Vec::new();
         let _ = Stats::for_each_event(&self.get_dir(), |event| {
@@ -1005,9 +1004,8 @@ impl TicketQueue {
     /// It reads no ticket state, so a condition passed to [`Self::find_ticket`]
     /// or [`Self::find_tickets`] may call it.
     pub fn is_cancelled(&self, ticket: &Ticket) -> bool {
-        // Cloned out before the filters run, because one may itself hold a
-        // closure, and a closure that reaches back here would meet a lock it
-        // already holds. Cloning a query copies an `Arc`.
+        // Cloned out first: a filter may hold a closure, and one that reaches
+        // back here would meet a lock it already holds.
         let filters: Vec<Query> = self.cancel_filters.lock().unwrap().clone();
         filters.iter().any(|matches| matches.matches(ticket))
     }
@@ -1057,9 +1055,8 @@ impl TicketQueue {
         cancelled.then_some(FinishReason::Cancelled)
     }
 
-    /// True while any ticket is pending and uncancelled: the one definition of
-    /// a ticket an agent could still take, which both the ending check and
-    /// [`Self::anything_pending`] ask for.
+    /// The one definition of a ticket an agent could still take, which both the
+    /// ending check and [`Self::anything_pending`] ask for.
     fn anything_claimable(&self) -> bool {
         let tickets = self.tickets.lock().unwrap();
         tickets
@@ -1328,10 +1325,9 @@ impl TicketQueue {
     }
 }
 
-/// The tickets that contribute to `find_results`: the ones the filter named,
-/// finished unless it named a status of its own, and carrying a result. The
-/// last term is why `find_result` answers with the first match that has one
-/// rather than stopping at the first match.
+/// The tickets that contribute to `find_results`. The result term is why
+/// `find_result` answers with the first match carrying one, not the first
+/// match.
 fn results_of(matches: impl TicketMatcher) -> Query {
     matches
         .into_query()

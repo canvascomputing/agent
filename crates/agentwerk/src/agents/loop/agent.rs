@@ -130,7 +130,7 @@ fn run_is_over(agent: &Agent, ticket_queue: &TicketQueue) -> bool {
 /// Claim a `Todo` ticket for this agent, or resume one of its `InProgress`
 /// tickets; write the first message when there is none.
 fn claim<'a>(agent: &'a Agent, ticket_queue: &'a Arc<TicketQueue>) -> Option<TicketContext<'a>> {
-    // Cloned, since the queue reads the filter under its own lock.
+    // Both filters own what they read: a compiled query outlives the call.
     let label = agent.label.clone();
     let cancels = Arc::clone(ticket_queue);
     let claimable = (move |t: &Ticket| {
@@ -140,8 +140,7 @@ fn claim<'a>(agent: &'a Agent, ticket_queue: &'a Arc<TicketQueue>) -> Option<Tic
     })
     .into_query();
     // On the id, not the label: agents sharing a label must not take over each
-    // other's started tickets. Captured by value, since the queue keeps the
-    // filter it is handed.
+    // other's started tickets.
     let agent_id = agent.id().to_string();
     let interactive = agent.is_interactive();
     let queue = Arc::clone(ticket_queue);
