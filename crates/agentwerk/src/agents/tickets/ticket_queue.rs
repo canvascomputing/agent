@@ -1578,7 +1578,7 @@ mod tests {
     fn pending_while_a_claimed_ticket_awaits_the_model() {
         let (queue, _tmp) = test_queue();
         queue.ticket("x");
-        queue.claim(|t| t.status == Status::Todo, "agent").unwrap();
+        queue.claim(&Query::from("status = Todo"), "agent").unwrap();
         assert!(queue.pending(&Query::all()));
     }
 
@@ -1586,7 +1586,7 @@ mod tests {
     fn pending_when_a_text_only_reply_pauses_a_non_interactive_agent() {
         let (queue, _tmp) = test_queue();
         queue.ticket("x");
-        let key = queue.claim(|t| t.status == Status::Todo, "agent").unwrap();
+        let key = queue.claim(&Query::from("status = Todo"), "agent").unwrap();
         queue.add_reply(
             &key,
             Reply::assistant(&[crate::providers::ContentBlock::Text {
@@ -1602,8 +1602,8 @@ mod tests {
         let (queue, _tmp) = test_queue();
         queue.ticket("a");
         queue.ticket("b");
-        let key_a = queue.claim(|t| t.key == "TICKET-1", "agent").unwrap();
-        let key_b = queue.claim(|t| t.key == "TICKET-2", "agent").unwrap();
+        let key_a = queue.claim(&Query::from("TICKET-1"), "agent").unwrap();
+        let key_b = queue.claim(&Query::from("TICKET-2"), "agent").unwrap();
         queue.set_finished_by(&key_a, "agent").unwrap();
         queue.set_failed(&key_b).unwrap();
         assert!(!queue.pending(&Query::all()));
@@ -1663,7 +1663,7 @@ mod tests {
         let (queue, _tmp) = test_queue();
         queue.ticket("a");
         queue.ticket("b");
-        queue.claim(|t| t.key == "TICKET-1", "alice");
+        queue.claim(&Query::from("TICKET-1"), "alice");
 
         let created = queue.find_events(|e: &Event| matches!(e.kind, EventKind::TicketCreated));
         assert_eq!(created.len(), 2);
@@ -1705,7 +1705,7 @@ mod tests {
         let (queue, _tmp) = test_queue();
         queue.ticket(Ticket::new("scan").label("scout"));
         queue.ticket("b");
-        queue.claim(|t| t.key == "TICKET-1", "scout-1");
+        queue.claim(&Query::from("TICKET-1"), "scout-1");
 
         assert_eq!(queue.find_events("ticket_created").len(), 2);
         assert_eq!(queue.find_events("TICKET-1").len(), 2);
@@ -1732,7 +1732,7 @@ mod tests {
         // crate keeping one.
         let (queue, _tmp) = test_queue();
         queue.ticket(Ticket::new("scan").label("scout"));
-        queue.claim(|t| t.has_label("scout"), "scout-1");
+        queue.claim(&Query::from("scout"), "scout-1");
 
         assert_eq!(
             queue
@@ -1856,9 +1856,7 @@ mod tests {
             }
         });
         queue.ticket(Ticket::new("a").label("scan"));
-        let key = queue
-            .claim(|t| t.task == serde_json::json!("a"), "scout")
-            .unwrap();
+        let key = queue.claim(&Query::from("scan"), "scout").unwrap();
         queue.set_result(&key, serde_json::json!("done")).unwrap();
         queue.set_finished_by(&key, "scout").unwrap();
 
@@ -1931,7 +1929,7 @@ mod tests {
                 .push((ticket.key.clone(), result.clone()))
         });
         queue.ticket(Ticket::new("x").label("L"));
-        let key = queue.claim(|t| t.has_label("L"), "agent").unwrap();
+        let key = queue.claim(&Query::from("L"), "agent").unwrap();
 
         attach_done_result(&queue, &key, "lead");
 
@@ -2148,7 +2146,7 @@ mod tests {
     fn on_result_links_a_follow_up_to_the_finished_parent() {
         let (queue, _tmp) = test_queue();
         queue.ticket(Ticket::new("scout").label("scout"));
-        let key = queue.claim(|t| t.has_label("scout"), "agent").unwrap();
+        let key = queue.claim(&Query::from("scout"), "agent").unwrap();
         queue.set_result(&key, serde_json::json!("lead")).unwrap();
         queue.set_finished_by(&key, "agent").unwrap();
         queue.on_result(|queue, done, _| {
@@ -2476,7 +2474,7 @@ mod tests {
             }
         });
         queue.ticket(Ticket::new("scout").label("scout"));
-        let key = queue.claim(|t| t.has_label("scout"), "agent").unwrap();
+        let key = queue.claim(&Query::from("scout"), "agent").unwrap();
         queue.set_result(&key, serde_json::json!("lead")).unwrap();
         queue.set_finished_by(&key, "agent").unwrap();
         // The handler ran inside `set_finished_by`, so the queue is never
@@ -2500,7 +2498,7 @@ mod tests {
             }
         });
         queue.ticket(Ticket::new("scan").label("scan"));
-        let key = queue.claim(|t| t.has_label("scan"), "analyst").unwrap();
+        let key = queue.claim(&Query::from("scan"), "analyst").unwrap();
         queue.add_reply(&key, Reply::user_text("hello"));
         queue.set_result(&key, serde_json::json!("done")).unwrap();
         queue.set_finished_by(&key, "analyst").unwrap();
@@ -2524,7 +2522,7 @@ mod tests {
         let seen = Arc::new(Mutex::new(Vec::new()));
         let record = Arc::clone(&seen);
         queue.ticket(Ticket::new("scan").label("scan"));
-        let key = queue.claim(|t| t.has_label("scan"), "analyst").unwrap();
+        let key = queue.claim(&Query::from("scan"), "analyst").unwrap();
         // Installed after the claim, so only the turn is in the handler's view.
         queue.on_ticket(move |_, _, ticket| record.lock().unwrap().push(ticket.key.clone()));
         queue.emit(&key, "analyst", EventKind::TurnStarted);
@@ -2552,7 +2550,7 @@ mod tests {
         queue.on_ticket(move |_, _, ticket| record.lock().unwrap().push(ticket.key.clone()));
         queue.ticket(Ticket::new("scan").label("scan"));
         // The claim is the lifecycle event; no second emit needed.
-        let key = queue.claim(|t| t.has_label("scan"), "analyst").unwrap();
+        let key = queue.claim(&Query::from("scan"), "analyst").unwrap();
 
         assert_eq!(*seen.lock().unwrap(), vec![key]);
         assert!(logged.lock().unwrap().contains(&"ticket_started"));

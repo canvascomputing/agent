@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use crate::agents::agent::Agent;
 use crate::agents::policy::Policy;
+use crate::agents::query::TicketMatcher;
 use crate::agents::tickets::{policy_violated, Reply, Run, Status, Ticket, TicketQueue};
 use crate::event::{CompactReason, Event, EventKind, PolicyViolation};
 use crate::prompts::directives::{NO_TOOL_CALLED, REPLY_REJECTED};
@@ -129,11 +130,15 @@ fn run_is_over(agent: &Agent, ticket_queue: &TicketQueue) -> bool {
 /// Claim a `Todo` ticket for this agent, or resume one of its `InProgress`
 /// tickets; write the first message when there is none.
 fn claim<'a>(agent: &'a Agent, ticket_queue: &'a Arc<TicketQueue>) -> Option<TicketContext<'a>> {
-    let claimable = |t: &Ticket| {
+    // Cloned, since the queue reads the filter under its own lock.
+    let label = agent.label.clone();
+    let cancels = Arc::clone(ticket_queue);
+    let claimable = (move |t: &Ticket| {
         t.status == Status::Todo
-            && agent.handles(t.label.as_deref())
-            && !ticket_queue.is_cancelled(t)
-    };
+            && Agent::handles(label.as_deref(), t.label.as_deref())
+            && !cancels.is_cancelled(t)
+    })
+    .into_query();
     // On the id, not the label: agents sharing a label must not take over each
     // other's started tickets. Captured by value, since the queue keeps the
     // filter it is handed.
@@ -147,7 +152,7 @@ fn claim<'a>(agent: &'a Agent, ticket_queue: &'a Arc<TicketQueue>) -> Option<Tic
             && !queue.is_cancelled(t)
     };
     let ticket_key = ticket_queue
-        .claim(claimable, agent.id())
+        .claim(&claimable, agent.id())
         .or_else(|| ticket_queue.find_ticket(resumable).map(|t| t.key.clone()))?;
     let ticket = ticket_queue.get_ticket(&ticket_key)?;
 

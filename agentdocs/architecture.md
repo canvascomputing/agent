@@ -34,7 +34,7 @@ tickets.ticket(Ticket::new("Audit src/db.").label("scan")); // one scope
 tickets.ticket(Ticket::new("Audit src/db."));               // the default scope
 ```
 
-- `Agent::handles` is equality in both directions: an agent with no label matches only tickets with no label, the default scope. A label no agent serves never matches, since the queue never resolves one against the registered-agent set.
+- `Agent::handles` is equality in both directions: an agent with no label matches only tickets with no label, the default scope. A label no agent serves never matches, since the queue never resolves one against the registered-agent set. It takes both labels rather than a receiver, because the loop's claim filter holds the label and the queue keeps that filter.
 - Addressing one agent alone is giving it a label no other agent serves. The ticket is born `Status::Todo` like any other; nothing is born `InProgress`.
 - `AgentBuilder::build` assigns `<label>-<n>`, numbering per label from 1; an agent with no label gets `agent-<n>`. `Agent::clone` keeps the id, since `bind_agent` holds a clone and the two must agree about which tickets are theirs.
 - `claim` writes the claiming agent's id to `Ticket::assignee`, and the `resumable` check requires the two to match, so agents sharing a label never take over each other's started work. A host that wants resumption builds the same agents, in the same order, after a restart.

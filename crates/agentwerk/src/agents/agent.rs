@@ -241,7 +241,7 @@ impl<P, M> AgentBuilder<P, M> {
     }
 
     pub(super) fn handles(&self, ticket_label: Option<&str>) -> bool {
-        self.label.as_deref() == ticket_label
+        Agent::handles(self.label.as_deref(), ticket_label)
     }
 
     pub(super) fn tool_registry(&self) -> &ToolRegistry {
@@ -444,8 +444,14 @@ impl Agent {
         self.interactive
     }
 
-    pub(super) fn handles(&self, ticket_label: Option<&str>) -> bool {
-        self.label.as_deref() == ticket_label
+    /// Whether an agent labelled `agent_label` serves a ticket carrying
+    /// `ticket_label`. Equality in both directions: an agent with no label
+    /// serves the default scope and nothing else.
+    ///
+    /// Takes both labels rather than a receiver, because the loop holds the
+    /// label in a filter the queue keeps and cannot hold the agent there.
+    pub(super) fn handles(agent_label: Option<&str>, ticket_label: Option<&str>) -> bool {
+        agent_label == ticket_label
     }
 
     pub(super) fn tool_registry(&self) -> &ToolRegistry {
