@@ -347,11 +347,6 @@ tickets.find_results("scan ORDER BY finished DESC");
 - `ORDER BY` names one field and closes the query. Every field sorts, `key` by its number and `status` along the lifecycle.
 - Without `ORDER BY` tickets arrive in creation order.
 
-**Invalid queries**
-
-- A string that does not compile panics. Use `Query::new` for one built at run time, which returns a `Result`.
-- A closure owns what it reads, since the queue keeps the filter it is handed. Clone a borrowed value into it.
-
 #### Examples
 
 ```rust

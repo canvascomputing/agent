@@ -360,10 +360,6 @@ tickets.find_results("scan ORDER BY finished DESC")
 - `ORDER BY` names one field and closes the query. Every field sorts, `key` by its number and `status` along the lifecycle.
 - Without `ORDER BY` tickets arrive in creation order.
 
-**Invalid queries**
-
-- A string that does not compile raises `ValueError`, as does `Query(query)`, which compiles one without running it.
-
 #### Examples
 
 ```python
