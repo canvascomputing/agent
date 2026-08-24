@@ -4,11 +4,11 @@
 use pyo3::prelude::*;
 
 mod agent;
-mod policy;
 mod convert;
 mod directives;
 mod event;
 mod knowledge;
+mod policy;
 mod providers;
 mod reply;
 mod schema;

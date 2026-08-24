@@ -91,6 +91,7 @@ Schemas and results:
 - A handover validates its `result` against the parent's schema and carries none for the child, which takes one from its handover label at claim. A mismatch aborts before the child is inserted, so the operation stays atomic.
 - `handover` and `task` are `finish`'s own arguments; the result is always `result`. A ticket schema declaring a property named `handover` needs no special case, because it sits inside `result`.
 - A successful finish writes `<dir>/tickets/<key>/result.json` (`TicketQueue::dir(d)`, default `./.agentwerk`) and attaches the same value, read back through `Ticket::result()`. The full ticket state goes to `ticket.json` on every transition and the transition itself to `<dir>/events.jsonl`. Both writes are observational: errors are swallowed.
+- Failures are the plural mirror of the single result. `TicketQueue::emit` appends every failure event (`EventKind::is_failure()` bar the `TicketFailed` marker, which `status` and `failed_at` already carry) to `<dir>/tickets/<key>/errors.jsonl` and onto `Ticket::errors`, so a ticket accumulates the failed requests and tool calls it saw. A failure is not a transition: an entry lands whether or not the ticket goes on to fail, so a `Finished` ticket can carry some. `emit` is the only writer and `load` reads the file back, so there is no error-only `error.json` and no second filter to keep in step. The append is observational like the result write.
 
 ## Knowledge Is Opt-In and Shareable Across Agents
 

@@ -2,14 +2,14 @@
 
 pub mod agent;
 pub(crate) mod compaction;
-pub mod policy;
 pub mod knowledge;
 pub mod r#loop;
+pub mod policy;
 pub(crate) mod retry;
 pub(crate) mod stats;
 pub mod tickets;
 
 pub use agent::{Agent, AgentBuilder};
-pub use policy::Policy;
 pub use knowledge::Knowledge;
+pub use policy::Policy;
 pub use tickets::{Query, QueryError, Reply, Status, Ticket, TicketError, TicketQueue, Trajectory};

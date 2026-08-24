@@ -11,9 +11,9 @@ use pyo3::prelude::*;
 use serde_json::Value;
 
 use crate::agent::PyAgent;
-use crate::policy::PyPolicy;
 use crate::convert::{py_to_value, runtime_error, value_to_py};
 use crate::event::{to_py_event, PyEvent};
+use crate::policy::PyPolicy;
 use crate::reply::{py_to_replies, replies_to_py};
 use crate::schema::PySchemaStore;
 use crate::ticket::{to_ticket, try_extract_query, PyTicket};

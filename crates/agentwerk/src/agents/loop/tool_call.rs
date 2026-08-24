@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use crate::agents::tickets::Reply;
-use crate::event::{PolicyViolation, EventKind, RepairKind, ToolFailureKind};
+use crate::event::{EventKind, PolicyViolation, RepairKind, ToolFailureKind};
 use crate::providers::ContentBlock;
 use crate::tools::{ToolCall, ToolContext, ToolResult};
 
@@ -161,7 +161,7 @@ mod tests {
     use crate::agents::policy::Policy;
     use crate::agents::r#loop::test_util::*;
     use crate::agents::tickets::{Status, Ticket, TicketQueue};
-    use crate::event::{PolicyViolation, EventKind, RepairKind};
+    use crate::event::{EventKind, PolicyViolation, RepairKind};
     use crate::schemas::Schema;
 
     #[tokio::test]

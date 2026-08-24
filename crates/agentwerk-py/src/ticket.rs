@@ -208,6 +208,18 @@ impl PyTicket {
         crate::reply::replies_to_py(&self.inner.replies)
     }
 
+    /// The failures recorded against the ticket, as events, in the order they
+    /// happened. A failed tool call or request does not fail the ticket, so a
+    /// finished ticket can carry some.
+    #[getter]
+    fn errors(&self) -> Vec<crate::event::PyEvent> {
+        self.inner
+            .errors
+            .iter()
+            .map(crate::event::to_py_event)
+            .collect()
+    }
+
     fn __repr__(&self) -> String {
         format!(
             "Ticket(key={:?}, status={:?})",

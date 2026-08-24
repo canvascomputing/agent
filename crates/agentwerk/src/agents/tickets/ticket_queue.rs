@@ -22,7 +22,7 @@ use super::super::r#loop::run_main_loop;
 use super::super::stats::Stats;
 use super::query::TicketMatcher;
 use super::ticket::{Status, Ticket};
-use super::{policy_violated, numeric_id, Reply};
+use super::{numeric_id, policy_violated, Reply, TicketErrors};
 
 /// The queue arrives first so a handler selects tickets and files follow-up work
 /// without capturing an `Arc` into the queue that holds it.
@@ -719,6 +719,25 @@ impl TicketQueue {
         if !matches!(event.kind, EventKind::TextChunkReceived { .. }) {
             let _guard = self.events_lock.lock().unwrap();
             let _ = Stats::append(&self.get_dir(), &event);
+        }
+        // Record a failure against its ticket, the way a result is recorded
+        // against it. `TicketFailed` is left out: it is the outcome, already
+        // carried by the ticket's status and `failed_at`, not a cause. Pushed
+        // before the handlers run, so one receiving the ticket sees it.
+        if event.kind.is_failure() && !matches!(event.kind, EventKind::TicketFailed) {
+            let recorded = {
+                let mut store = self.tickets.lock().unwrap();
+                store
+                    .get_mut(key)
+                    .map(|t| t.errors.push(event.clone()))
+                    .is_some()
+            };
+            if recorded {
+                // Best-effort, like the other ticket writes: it is already in
+                // memory and in `events.jsonl`, so a failed append is
+                // observational.
+                let _ = TicketErrors::append(&self.get_dir(), key, &event);
+            }
         }
         let handlers: Vec<Arc<EventHandler>> = self.event_handlers.lock().unwrap().clone();
         if handlers.is_empty() {
@@ -1916,6 +1935,102 @@ mod tests {
                 ("ticket_failed", key.clone()),
             ]
         );
+    }
+
+    #[test]
+    fn failures_accumulate_on_the_ticket_in_order() {
+        let (queue, dir) = test_queue();
+        let key = queue.ticket("work");
+
+        queue.emit(
+            &key,
+            "agent",
+            EventKind::ToolCallFailed {
+                tool_name: "grep".into(),
+                call_id: "c1".into(),
+                reason: ToolFailureKind::ExecutionFailed,
+                message: "no such directory".into(),
+            },
+        );
+        queue.emit(
+            &key,
+            "agent",
+            EventKind::RequestFailed {
+                model: "mock".into(),
+                reason: crate::providers::RequestErrorKind::ConnectionFailed,
+                message: "dns lookup failed".into(),
+            },
+        );
+
+        let ticket = queue.get_ticket(&key).unwrap();
+        let names: Vec<&str> = ticket.errors.iter().map(|e| e.kind.name()).collect();
+        assert_eq!(names, ["tool_call_failed", "request_failed"]);
+
+        // One JSON line per failure, each a full event.
+        let body =
+            std::fs::read_to_string(dir.path().join("tickets").join(&key).join("errors.jsonl"))
+                .unwrap();
+        let lines: Vec<&str> = body.lines().collect();
+        assert_eq!(lines.len(), 2);
+        for line in lines {
+            let _: crate::event::Event = serde_json::from_str(line).unwrap();
+        }
+    }
+
+    #[test]
+    fn a_recoverable_failure_stays_on_a_finished_ticket() {
+        let (queue, _tmp) = test_queue();
+        let key = queue.ticket("work");
+
+        // A failed tool call the model recovered from: the ticket finishes.
+        queue.emit(
+            &key,
+            "agent",
+            EventKind::ToolCallFailed {
+                tool_name: "grep".into(),
+                call_id: "c1".into(),
+                reason: ToolFailureKind::ExecutionFailed,
+                message: "boom".into(),
+            },
+        );
+        queue.set_finished(&key, "done").unwrap();
+
+        let ticket = queue.get_ticket(&key).unwrap();
+        assert_eq!(ticket.status, Status::Finished);
+        assert_eq!(ticket.errors.len(), 1);
+        assert_eq!(ticket.errors[0].kind.name(), "tool_call_failed");
+    }
+
+    #[test]
+    fn the_terminal_ticket_failed_is_not_recorded_as_an_error() {
+        let (queue, _tmp) = test_queue();
+        let key = queue.ticket("work");
+        queue.set_failed(&key).unwrap();
+        assert!(queue.get_ticket(&key).unwrap().errors.is_empty());
+    }
+
+    #[test]
+    fn failures_round_trip_through_load() {
+        let dir = crate::test_util::TempDir::new().unwrap();
+        let original = TicketQueue::new();
+        original.dir(dir.path().to_path_buf());
+        let key = original.ticket("work");
+        original.emit(
+            &key,
+            "agent",
+            EventKind::ToolCallFailed {
+                tool_name: "grep".into(),
+                call_id: "c1".into(),
+                reason: ToolFailureKind::ExecutionFailed,
+                message: "boom".into(),
+            },
+        );
+        drop(original);
+
+        let resumed = TicketQueue::load(dir.path()).unwrap();
+        let ticket = resumed.get_ticket(&key).unwrap();
+        assert_eq!(ticket.errors.len(), 1);
+        assert_eq!(ticket.errors[0].kind.name(), "tool_call_failed");
     }
 
     #[test]

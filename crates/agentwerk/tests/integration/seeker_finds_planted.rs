@@ -18,7 +18,7 @@ use super::common;
 use agentwerk::agents::knowledge::Page;
 use agentwerk::event::{default_logger, Event, EventKind};
 use agentwerk::tools::GrepTool;
-use agentwerk::{Agent, Policy, Knowledge, Ticket, TicketQueue};
+use agentwerk::{Agent, Knowledge, Policy, Ticket, TicketQueue};
 
 const SEEKER_AGENT: &str = include_str!("../../../use-cases/src/malware_scanner/agents/seeker.md");
 
