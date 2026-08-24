@@ -299,7 +299,6 @@ The rules the tables never repeat.
 |----------|------|------------|
 | Rust | `Stats { event_counts: Record<EventName, number>, input_tokens: number, output_tokens: number, started_at: number, finished_at: number, token_usage: Record<string, TokenUsage[]> }` | crate |
 | Rust | `Stats.FILE: string = "events.jsonl"` | private |
-| Rust | `Stats.load(dir: string): Stats throws io::Error` | crate |
 | Rust | `Stats.for_each_event(dir: string, visit: (event: Event) => void): void throws io::Error` | crate |
 | Rust | `Stats.event_count(event: EventName): number` | crate |
 | Rust | `Stats.input_tokens(): number` | crate |
@@ -402,8 +401,8 @@ The rules the tables never repeat.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `mod error`, `mod query`, `mod reply`, `mod store`, `mod ticket`, `mod ticket_queue`, `mod trajectory` | private |
-| Rust | re-exports `Author`, `Query`, `Reply`, `ReplyContent`, `Status`, `Ticket`, `TicketError`, `TicketMatcher`, `TicketQueue`, `Trajectory` | pub |
+| Rust | `mod error`, `mod reply`, `mod store`, `mod ticket`, `mod ticket_queue`, `mod trajectory` | private |
+| Rust | re-exports `Author`, `Reply`, `ReplyContent`, `Status`, `Ticket`, `TicketError`, `TicketQueue`, `Trajectory` | pub |
 | Rust | `policy_violated(policy: Policy, stats: Stats): [PolicyViolation, number]?` | crate |
 | Rust | `now_millis(): number` | crate |
 | Rust | `numeric_id(key: string): number` | crate |
@@ -491,13 +490,9 @@ The rules the tables never repeat.
 | Rust | `Replies { key: string, entries: Reply[] }` | crate |
 | Rust | `Replies.append(dir: string, key: string, reply: Reply): void throws io::Error` | crate |
 | Rust | `impl Persist for Replies` | crate |
-| Rust | `TicketErrors { key: string, entries: Event[] }` | crate |
-| Rust | `TicketErrors.append(dir: string, key: string, event: Event): void throws io::Error` | crate |
-| Rust | `impl Persist for TicketErrors` | crate |
 | Rust | `ticket_record_path(dir: string, key: string): string` | super |
 | Rust | `replies_path(dir: string, key: string): string` | private |
 | Rust | `result_path(dir: string, key: string): string` | super |
-| Rust | `errors_path(dir: string, key: string): string` | super |
 | Rust | `impl AsUserMessage for Ticket` | pub |
 | Rust | `Status` | pub |
 | Python | a string: `"todo"`, `"in_progress"`, `"finished"`, `"failed"`. The five `is_*` predicates read better than comparing it | |
@@ -515,6 +510,7 @@ The rules the tables never repeat.
 | Rust | `TicketFilter = (ticket: Ticket) => boolean` | crate |
 | Rust | `EVENT_STREAM_CAPACITY: number = 1024` | private |
 | Rust | `is_ticket_kind(kind: EventKind): boolean` | private |
+| Rust | `is_recorded_failure(kind: EventKind): boolean` | private |
 | Rust | `AsyncHandler = (queue: TicketQueue, event: Event, ticket: Ticket?) => HandlerWork` | private |
 | Rust | `HandlerWork = Promise<void>` | private |
 | Rust | `AwaitedHandler { matches: (kind: EventKind) => boolean, call: AsyncHandler }` | private |

@@ -41,13 +41,6 @@ pub(crate) struct Stats {
 impl Stats {
     const FILE: &'static str = "events.jsonl";
 
-    /// Read events from a session directory.
-    pub(crate) fn load(dir: impl AsRef<Path>) -> io::Result<Self> {
-        let stats = Stats::new();
-        Self::for_each_event(dir.as_ref(), |event| stats.record(event))?;
-        Ok(stats)
-    }
-
     /// Visit every event in `dir`'s log, oldest first. A directory with no log
     /// visits nothing, and a line this build cannot parse is skipped rather
     /// than costing the caller every line after it.
@@ -233,6 +226,14 @@ mod tests {
         }
     }
 
+    /// Every event in `dir`'s log folded back into fresh figures, the way
+    /// `TicketQueue::load` folds them as it resumes a session.
+    fn loaded(dir: &std::path::Path) -> Stats {
+        let stats = Stats::new();
+        Stats::for_each_event(dir, |event| stats.record(event)).unwrap();
+        stats
+    }
+
     /// Pins the stamp, which the clock reads and `Event::new` would set to now.
     fn at(created_at: u64, kind: EventKind) -> Event {
         Event {
@@ -341,7 +342,7 @@ mod tests {
     #[test]
     fn load_reads_a_directory_without_a_log_as_no_events() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let stats = Stats::load(dir.path()).unwrap();
+        let stats = loaded(dir.path());
         assert_eq!(stats.event_count(EventName::TicketCreated), 0);
         assert_eq!(stats.input_tokens(), 0);
         assert_eq!(stats.execution_duration(), None);
@@ -359,7 +360,7 @@ mod tests {
             Stats::append(dir.path(), &event).unwrap();
         }
 
-        let stats = Stats::load(dir.path()).unwrap();
+        let stats = loaded(dir.path());
         assert_eq!(stats.input_tokens(), 900);
         assert_eq!(stats.output_tokens(), 120);
         assert_eq!(stats.event_count(EventName::TurnStarted), 1);
@@ -380,7 +381,7 @@ mod tests {
         .unwrap();
         Stats::append(dir.path(), &at(0, turn())).unwrap();
 
-        let stats = Stats::load(dir.path()).unwrap();
+        let stats = loaded(dir.path());
         assert_eq!(stats.event_count(EventName::TurnStarted), 2);
     }
 
@@ -393,7 +394,7 @@ mod tests {
             Stats::append(dir.path(), &Event::new("agent", "TICKET-1", None, kind)).unwrap();
         }
 
-        let stats = Stats::load(dir.path()).unwrap();
+        let stats = loaded(dir.path());
         for kind in crate::event::tests::all_variants() {
             assert!(
                 stats.event_count(kind.event_name()) > 0,
