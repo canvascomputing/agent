@@ -261,9 +261,8 @@ impl crate::persistence::Persist for Ticket {
         crate::persistence::write_atomic(&path, &body)
     }
 
-    /// Everything the ticket's own files hold. `errors` stays empty: the
-    /// failures live in the session log, and `TicketQueue::load` fills them in
-    /// the pass it makes over it.
+    /// `errors` stays empty: the failures live in the session log, and
+    /// `TicketQueue::load` fills them in the pass it makes over it.
     fn load(dir: &Path, key: &Self::Key) -> io::Result<Self> {
         let bytes = std::fs::read(ticket_record_path(dir, key))?;
         let mut ticket: Ticket = serde_json::from_slice(&bytes).map_err(io::Error::other)?;

@@ -54,12 +54,8 @@ fn is_ticket_kind(kind: &EventKind) -> bool {
     )
 }
 
-/// Whether the event is one a ticket carries in `Ticket::errors`. `TicketFailed`
-/// is left out: it is the outcome, already carried by the ticket's status and
-/// `failed_at`, not a cause.
-///
-/// Read by `emit` as it happens and by `load` off the session log, so a ticket
-/// carries the same failures either way.
+/// `TicketFailed` is left out: it is the outcome, already carried by the
+/// ticket's status and `failed_at`, not a cause.
 fn is_recorded_failure(kind: &EventKind) -> bool {
     kind.is_failure() && !matches!(kind, EventKind::TicketFailed)
 }
@@ -740,10 +736,9 @@ impl TicketQueue {
             let _guard = self.events_lock.lock().unwrap();
             let _ = Stats::append(&self.get_dir(), &event);
         }
-        // Record a failure against its ticket, the way a result is recorded
-        // against it. Pushed before the handlers run, so one receiving the
-        // ticket sees it. Nothing is written: the line is already in
-        // `events.jsonl`, and `load` reads it back from there.
+        // Pushed before the handlers run, so one receiving the ticket sees
+        // it. Nothing is written: the line is already in `events.jsonl`, and
+        // `load` reads it back from there.
         if is_recorded_failure(&event.kind) {
             let mut store = self.tickets.lock().unwrap();
             if let Some(ticket) = store.get_mut(key) {

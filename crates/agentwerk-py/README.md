@@ -326,59 +326,52 @@ tickets.find_results("scan ORDER BY finished DESC")
 
 #### Fields
 
-What a field holds decides the operators it takes.
-
 | | Field | Description |
 |-|-------|-------------|
-| **Value** | `key` | Match the ticket key, of the form `TICKET-N`. |
+| **Match** | `key` | Match the ticket key, of the form `TICKET-N`. |
 | | `label` | Match the label the ticket carries. |
 | | `status` | Match `todo`, `in_progress`, `finished`, or `failed`. |
 | | `agent` | Match the agent that claimed the ticket. |
 | | `parent` | Match the ticket a handover came from. |
-| **Text** | `task` | Search the work the agent was asked to do. |
+| **Search** | `task` | Search the work the agent was asked to do. |
 | | `result` | Search the result the agent produced. |
 | | `errors` | Search the failures recorded against the ticket. |
-| **Time** | `created` | Compare or sort by when the ticket was submitted. |
+| **Compare** | `created` | Compare or sort by when the ticket was submitted. |
 | | `started` | Compare or sort by when an agent claimed the ticket. |
 | | `finished` | Compare or sort by when the ticket reached the `finished` status. |
 | | `failed` | Compare or sort by when the ticket reached the `failed` status. |
 
 #### Rules
 
-- A value field takes `=`, `!=`, `IN`, and `NOT IN`, which match exactly.
-- A text field takes `~` and `!~`, which ignore case.
-- A time field takes `>`, `>=`, `<`, and `<=`.
-- `IS EMPTY` and `IS NOT EMPTY` read the eight fields a ticket can leave unset, every one but `key`, `status`, `task`, and `created`. So `finished IS EMPTY` selects the tickets still open.
-- A field holds one value per ticket, so `label = a AND label = b` is rejected and names `IN` as the fix.
-- A compared moment is a `YYYY-MM-DD` date at midnight UTC, an offset back from now spelled `-30m`, `-2h`, `-7d`, or `-1w`, or milliseconds since the epoch. An offset is resolved when the query compiles, so one query answers one set however long it is held.
-- `ORDER BY` names one field and closes the query. It may be the whole query, which then selects every ticket.
-- Every field sorts, `key` by its number and `status` along the lifecycle. A ticket missing the field sorts last.
-- Without `ORDER BY` tickets arrive in creation order, which also breaks a tie.
+**Operators**
+
+- `key`, `label`, `status`, `agent`, and `parent` take `=`, `!=`, `IN`, and `NOT IN`, which compare exactly.
+- `task`, `result`, and `errors` take `~` and `!~`, which ignore case.
+- `created`, `started`, `finished`, and `failed` take `>`, `>=`, `<`, and `<=`.
+- `IS EMPTY` and `IS NOT EMPTY` read every field but `key`, `status`, `task`, and `created`, so `finished IS EMPTY` selects the tickets still open.
+
+**Times**
+
+- A compared moment is a `YYYY-MM-DD` date at midnight UTC, an offset back from now spelled `-30m`, `-2h`, `-7d`, or `-1w`, or milliseconds since the epoch.
+- An offset is resolved when the query compiles.
+
+**Order**
+
+- `ORDER BY` names one field and closes the query. Every field sorts, `key` by its number and `status` along the lifecycle.
+- Without `ORDER BY` tickets arrive in creation order.
+
+**Invalid queries**
+
 - A string that does not compile raises `ValueError`, as does `Query(query)`, which compiles one without running it.
 
 #### Examples
 
-Read the results of finished tickets:
-
 ```python
-tickets.find_result("TICKET-3")                   # one ticket's result
-tickets.find_results("report AND result ~ risk")  # reports that mention risk
-```
-
-Select the tickets themselves:
-
-```python
-tickets.find_ticket("task ~ migration")                    # the first migration ticket
+tickets.find_results("report AND result ~ risk")           # reports that mention risk
 tickets.find_tickets("errors ~ tool_call_failed")          # saw a tool call fail
 tickets.find_tickets("status = todo AND agent IS EMPTY")   # waiting, never claimed
 tickets.find_tickets("failed > -1h ORDER BY failed DESC")  # the last hour's failures
-tickets.find_tickets("(scan OR audit) AND NOT status = failed")
-```
-
-Every method that takes a query also takes a callable, for a condition no field carries:
-
-```python
-tickets.find_tickets(lambda t: len(t.replies) > 4)
+tickets.find_tickets(lambda t: len(t.replies) > 4)         # a callable, for what no field carries
 ```
 
 </details>
@@ -847,25 +840,28 @@ Every event is written to the session log. You read events from the ticket queue
 | `input_tokens()` / `output_tokens()` | Get token counts across the run's requests. |
 | `execution_duration()` | Get the elapsed execution duration. |
 
-Events are queried in the same AQL a ticket is, over a field set of their own. A callable still works, and `EventQuery(query)` compiles a filter once for a long log.
+You can query events with AQL syntax or callables.
 
 ```python
-queue.find_events("tool_call_failed")
-queue.find_events("event = request_finished AND agent = research-1")
-queue.find_events("ticket = TICKET-3 ORDER BY created DESC")
-queue.find_events("payload ~ timeout AND created > -1h")
+tickets.find_events("tool_call_failed")
+tickets.find_events("event = request_finished AND agent = research-1")
+tickets.find_events("ticket = TICKET-3 ORDER BY created DESC")
+tickets.find_events("payload ~ timeout AND created > -1h")
 ```
 
 | | Field | Description |
 |-|-------|-------------|
-| **Identity** | `event` | Match the kind, as `run_started`, `tool_call_failed`, and the rest are spelled. |
+| **Match** | `event` | Match the kind, as `run_started`, `tool_call_failed`, and the rest are spelled. |
 | | `agent` | Match the agent that emitted the event. |
 | | `ticket` | Match the ticket the event concerns, empty on `run_started` and `run_finished`. |
 | | `label` | Match the label that ticket carries. |
-| **Body** | `payload` | Search what the kind carries, its name included. |
-| **Time** | `created` | Compare or sort by when the event happened. |
+| **Search** | `payload` | Search what the kind carries, its name included. |
+| **Compare** | `created` | Compare or sort by when the event happened. |
 
-The operators, the combinators, and `ORDER BY` are the ones [tickets take](#queries). `IS EMPTY` reads `agent`, `ticket`, and `label`; `~` and `!~` read `payload`. A lone word is the event where it names one and the label otherwise, and a lone `TICKET-N` is that ticket. Without an `ORDER BY` events arrive in the order they were logged.
+- An event query takes the same operators, `AND` / `OR` / `NOT`, and `ORDER BY` a [ticket query](#queries) does.
+- `IS EMPTY` and `IS NOT EMPTY` read `agent`, `ticket`, and `label`.
+- A lone word is the short form of `event = <word>` when it names an event, and of `label = <word>` when it does not. A lone `TICKET-N` is the short form of `ticket = TICKET-N`.
+- A string that does not compile raises `ValueError`, as does `EventQuery(query)`, which compiles one without running it.
 
 See [`EventKind`](https://docs.rs/agentwerk/latest/agentwerk/event/enum.EventKind.html) and [`TicketQueue`](https://docs.rs/agentwerk/latest/agentwerk/agents/tickets/struct.TicketQueue.html).
 

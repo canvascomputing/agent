@@ -226,8 +226,7 @@ mod tests {
         }
     }
 
-    /// Every event in `dir`'s log folded back into fresh figures, the way
-    /// `TicketQueue::load` folds them as it resumes a session.
+    /// The fold `TicketQueue::load` runs over a session log as it resumes.
     fn loaded(dir: &std::path::Path) -> Stats {
         let stats = Stats::new();
         Stats::for_each_event(dir, |event| stats.record(event)).unwrap();

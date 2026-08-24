@@ -335,15 +335,14 @@ trait QueryField: Copy + PartialEq + fmt::Debug + Sized + 'static {
     /// What breaks a tie in `ORDER BY`, so one query answers one list.
     fn tie_break(record: &Self::Record) -> (u64, u32);
 
-    /// The value in the one spelling the record stores, rejecting one no value
-    /// of this field is written as. Every field takes its value as written
-    /// unless it says otherwise.
+    /// The value in the one spelling the record stores, rejecting a spelling
+    /// no value of this field takes. Left as written unless a field overrides.
     fn canonical(self, value: String) -> Result<String, QueryError> {
         Ok(value)
     }
 
-    /// How two values of this field order. A time by the millisecond `of`
-    /// wrote, everything else as text unless the field set says otherwise.
+    /// A time by the millisecond `of` wrote, everything else as text unless
+    /// the field set says otherwise.
     fn compare(self, left: &str, right: &str) -> Ordering {
         match self.kind() {
             Kind::Time => millis(left).cmp(&millis(right)),
@@ -627,13 +626,11 @@ impl QueryField for EventField {
     }
 }
 
-/// A word spelled like a ticket key.
 fn is_ticket_key(word: &str) -> bool {
     numeric_id(word) != u32::MAX && word.starts_with("TICKET-")
 }
 
-/// A field an event carries only sometimes, which reads as absent where the
-/// event left it empty.
+/// An empty string is a field the event does not carry.
 fn carried(value: &str) -> Option<Cow<'_, str>> {
     (!value.is_empty()).then_some(Cow::Borrowed(value))
 }
@@ -1116,8 +1113,8 @@ impl<F: QueryField> Parser<F> {
             }
         };
 
-        // An operator after the word makes it a field reference, so one no
-        // field is named is a mistake rather than the shorthand.
+        // An operator after the word makes it a field reference, so a word
+        // naming no field is a mistake rather than the shorthand.
         if !self.at_operator() {
             return Ok(F::shorthand(word));
         }
