@@ -4,7 +4,7 @@
 //! The tokenizer, the parser, and the condition tree are shared. A field set
 //! implements [`QueryField`], which is all that separates the two grammars.
 
-use std::borrow::Cow;
+use std::borrow::{Borrow, Cow};
 use std::cmp::Ordering;
 use std::fmt;
 
@@ -42,12 +42,8 @@ pub trait TicketMatcher: Send + Sync {
     /// Order what the matcher selected. A closure names no order, so it keeps
     /// creation order, and so does a query without `ORDER BY`.
     fn sort(&self, tickets: &mut [&Ticket]) {
-        sort_by_creation(tickets);
+        TicketField::sort_unordered(tickets);
     }
-}
-
-fn sort_by_creation(tickets: &mut [&Ticket]) {
-    tickets.sort_by_key(|t| TicketField::tie_break(t));
 }
 
 impl<F: Fn(&Ticket) -> bool + Send + Sync> TicketMatcher for F {
@@ -94,11 +90,7 @@ impl TicketMatcher for String {
 /// when the same filter runs over a large queue, or when a string built at run
 /// time should answer with an error rather than a panic.
 #[derive(Debug, Clone)]
-pub struct Query {
-    root: Condition<TicketField>,
-    /// What `ORDER BY` named, or `None` for creation order.
-    order: Option<Sort<TicketField>>,
-}
+pub struct Query(Compiled<TicketField>);
 
 impl Query {
     /// Compile an AQL string.
@@ -119,25 +111,21 @@ impl Query {
     /// # run().unwrap();
     /// ```
     pub fn new(query: &str) -> Result<Self, QueryError> {
-        let (root, order) = parse_query(query)?;
-        Ok(Self { root, order })
+        Compiled::new(query).map(Query)
     }
 }
 
 impl TicketMatcher for Query {
     fn matches(&self, ticket: &Ticket) -> bool {
-        self.root.matches(ticket)
+        self.0.matches(ticket)
     }
 
     fn names_status(&self) -> bool {
-        self.root.mentions(TicketField::Status)
+        self.0.mentions(TicketField::Status)
     }
 
     fn sort(&self, tickets: &mut [&Ticket]) {
-        match &self.order {
-            Some(order) => tickets.sort_by(|left, right| order.compare(left, right)),
-            None => sort_by_creation(tickets),
-        }
+        self.0.sort(tickets);
     }
 }
 
@@ -183,7 +171,7 @@ pub trait EventMatcher {
     /// stay in the order they were logged, and so does a query without
     /// `ORDER BY`.
     fn sort(&self, events: &mut [Event]) {
-        let _ = events;
+        EventField::sort_unordered(events);
     }
 }
 
@@ -223,11 +211,7 @@ impl EventMatcher for String {
 /// when the same filter runs over a long log, or when a string built at run
 /// time should answer with an error rather than a panic.
 #[derive(Debug, Clone)]
-pub struct EventQuery {
-    root: Condition<EventField>,
-    /// What `ORDER BY` named, or `None` for the order the log holds.
-    order: Option<Sort<EventField>>,
-}
+pub struct EventQuery(Compiled<EventField>);
 
 impl EventQuery {
     /// Compile an AQL string over the event fields.
@@ -245,20 +229,17 @@ impl EventQuery {
     /// # run().unwrap();
     /// ```
     pub fn new(query: &str) -> Result<Self, QueryError> {
-        let (root, order) = parse_query(query)?;
-        Ok(Self { root, order })
+        Compiled::new(query).map(EventQuery)
     }
 }
 
 impl EventMatcher for EventQuery {
     fn matches(&self, event: &Event) -> bool {
-        self.root.matches(event)
+        self.0.matches(event)
     }
 
     fn sort(&self, events: &mut [Event]) {
-        if let Some(order) = &self.order {
-            events.sort_by(|left, right| order.compare(left, right));
-        }
+        self.0.sort(events);
     }
 }
 
@@ -307,8 +288,45 @@ impl<F: QueryField> Condition<F> {
     }
 }
 
+/// A compiled query over one field set. [`Query`] and [`EventQuery`] are the two
+/// named faces of it, and everything either does with a parsed query it does
+/// here.
+#[derive(Debug, Clone)]
+struct Compiled<F: QueryField> {
+    root: Condition<F>,
+    /// What `ORDER BY` named, or `None` for the order the field set defaults to.
+    order: Option<Sort<F>>,
+}
+
+impl<F: QueryField> Compiled<F> {
+    fn new(query: &str) -> Result<Self, QueryError> {
+        let (root, order) = parse_query(query)?;
+        Ok(Self { root, order })
+    }
+
+    fn matches(&self, record: &F::Record) -> bool {
+        self.root.matches(record)
+    }
+
+    fn mentions(&self, field: F) -> bool {
+        self.root.mentions(field)
+    }
+
+    /// Takes both the borrowed records a store hands out and the owned ones a
+    /// log read produces, so neither caller copies to be sorted.
+    fn sort<T: Borrow<F::Record>>(&self, records: &mut [T]) {
+        match &self.order {
+            Some(order) => {
+                records.sort_by(|left, right| order.compare(left.borrow(), right.borrow()))
+            }
+            None => F::sort_unordered(records),
+        }
+    }
+}
+
 /// One set of fields AQL names, which is all that separates the ticket grammar
-/// from the event one. The tokenizer, the parser, and [`Condition`] are shared.
+/// from the event one. The tokenizer, the parser, [`Condition`], and
+/// [`Compiled`] are shared.
 trait QueryField: Copy + PartialEq + fmt::Debug + Sized + 'static {
     /// What the fields are read off.
     type Record;
@@ -334,6 +352,13 @@ trait QueryField: Copy + PartialEq + fmt::Debug + Sized + 'static {
 
     /// What breaks a tie in `ORDER BY`, so one query answers one list.
     fn tie_break(record: &Self::Record) -> (u64, u32);
+
+    /// How records lie when no `ORDER BY` names an order. A log already holds
+    /// one, so it is left alone; a store that is a map holds none, so the tie
+    /// break becomes the order.
+    fn sort_unordered<T: Borrow<Self::Record>>(records: &mut [T]) {
+        let _ = records;
+    }
 
     /// The value in the one spelling the record stores, rejecting a spelling
     /// no value of this field takes. Left as written unless a field overrides.
@@ -506,6 +531,12 @@ impl QueryField for TicketField {
 
     fn tie_break(ticket: &Ticket) -> (u64, u32) {
         (ticket.created_at, numeric_id(&ticket.key))
+    }
+
+    /// Creation order, since the ticket store is a map and holds none of its
+    /// own.
+    fn sort_unordered<T: Borrow<Ticket>>(tickets: &mut [T]) {
+        tickets.sort_by_key(|t| Self::tie_break(t.borrow()));
     }
 
     /// A status in the one spelling `Status::Display` writes, so both the

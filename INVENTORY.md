@@ -318,11 +318,10 @@ The rules the tables never repeat.
 |----------|------|------------|
 | Rust | `trait TicketMatcher: Send + Sync { matches(ticket: Ticket): boolean, names_status(): boolean, sort(tickets: Ticket[]): void }` | pub |
 | Rust | `impl TicketMatcher for F where F: Fn(Ticket) => boolean + Send + Sync` | pub |
-| Rust | `sort_by_creation(tickets: Ticket[]): void` | private |
 | Rust | `impl TicketMatcher for &str` | pub |
 | Rust | `impl TicketMatcher for String` | pub |
 | Python | an AQL string stands in for the `Query` wherever one is accepted | |
-| Rust | `Query { root: Condition<TicketField>, order: Sort<TicketField>? }` | pub |
+| Rust | `Query(Compiled<TicketField>)` | pub |
 | Python | `Query(query: str)` | |
 | Rust | `Query.new(query: string): Query throws QueryError` | pub |
 | Rust | `impl From<&str> for Query` | pub |
@@ -333,7 +332,7 @@ The rules the tables never repeat.
 | Rust | `impl EventMatcher for &str` | pub |
 | Rust | `impl EventMatcher for String` | pub |
 | Python | an AQL string stands in for the `EventQuery` wherever one is accepted | |
-| Rust | `EventQuery { root: Condition<EventField>, order: Sort<EventField>? }` | pub |
+| Rust | `EventQuery(Compiled<EventField>)` | pub |
 | Python | `EventQuery(query: str)` | |
 | Rust | `EventQuery.new(query: string): EventQuery throws QueryError` | pub |
 | Rust | `impl From<&str> for EventQuery` | pub |
@@ -342,7 +341,12 @@ The rules the tables never repeat.
 | Rust | `enum Condition<F: QueryField> { All(Condition<F>[]), Any(Condition<F>[]), Not(Condition<F>), Term(F, Match) }` | private |
 | Rust | `Condition.matches(record: F.Record): boolean` | private |
 | Rust | `Condition.mentions(field: F): boolean` | private |
-| Rust | `trait QueryField: Copy + PartialEq + Debug + 'static { Record, FIELDS, of, kind, is_optional, shorthand, label, tie_break, canonical, compare, named, name, spellings, allows, operators }` | private |
+| Rust | `Compiled<F: QueryField> { root: Condition<F>, order: Sort<F>? }` | private |
+| Rust | `Compiled.new(query: string): Compiled<F> throws QueryError` | private |
+| Rust | `Compiled.matches(record: F.Record): boolean` | private |
+| Rust | `Compiled.mentions(field: F): boolean` | private |
+| Rust | `Compiled.sort(records: T[]): void` | private |
+| Rust | `trait QueryField: Copy + PartialEq + Debug + 'static { Record, FIELDS, of, kind, is_optional, shorthand, label, tie_break, sort_unordered, canonical, compare, named, name, spellings, allows, operators }` | private |
 | Rust | `enum TicketField { Key, Label, Status, Agent, Parent, Task, Result, Errors, Created, Started, Finished, Failed }` | private |
 | Rust | `impl QueryField for TicketField` | private |
 | Rust | `enum EventField { Event, Agent, Ticket, Label, Created, Payload }` | private |
