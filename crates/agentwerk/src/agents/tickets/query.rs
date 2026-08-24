@@ -108,6 +108,8 @@ impl Query {
     /// Query::new("TICKET-3")?;
     /// Query::new("status = Finished ORDER BY finished DESC")?;
     /// Query::new("finished IS EMPTY ORDER BY created")?;
+    /// Query::new("failed > -1h")?;
+    /// Query::new("created >= 2026-08-24 AND created < 2026-08-25")?;
     /// # Ok(())
     /// # }
     /// # run().unwrap();
@@ -221,7 +223,7 @@ enum Kind {
     Value,
     /// Free text `~` searches.
     Text,
-    /// A moment in milliseconds, which only sorts: AQL has no `>`.
+    /// A moment in milliseconds, which `>` compares and `ORDER BY` sorts.
     Time,
 }
 
@@ -304,6 +306,9 @@ impl Field {
         match matcher {
             Match::Contains(_) | Match::Omits(_) => self.kind() == Kind::Text,
             Match::Empty | Match::NotEmpty => self.is_optional(),
+            Match::After(_) | Match::NotBefore(_) | Match::Before(_) | Match::NotAfter(_) => {
+                self.kind() == Kind::Time
+            }
             _ => self.kind() == Kind::Value,
         }
     }
@@ -314,8 +319,8 @@ impl Field {
         match (self.kind(), self.is_optional()) {
             (Kind::Text, true) => "~, !~, IS EMPTY, IS NOT EMPTY",
             (Kind::Text, false) => "~ and !~",
-            (Kind::Time, true) => "IS EMPTY, IS NOT EMPTY, and ORDER BY",
-            (Kind::Time, false) => "ORDER BY",
+            (Kind::Time, true) => ">, >=, <, <=, IS EMPTY, IS NOT EMPTY, and ORDER BY",
+            (Kind::Time, false) => ">, >=, <, <=, and ORDER BY",
             (Kind::Value, true) => "=, !=, IN, NOT IN, IS EMPTY, IS NOT EMPTY",
             (Kind::Value, false) => "=, !=, IN, NOT IN",
         }
@@ -380,6 +385,60 @@ fn millis(value: &str) -> u64 {
     value.parse().unwrap_or(0)
 }
 
+/// The moment a comparison names, in one of three spellings: milliseconds since
+/// the epoch, a `YYYY-MM-DD` date, or an offset back from now like `-30m`.
+///
+/// An offset is resolved here rather than at match time, so one compiled query
+/// answers one set however long it is held.
+fn time_value(field: Field, value: &str) -> Result<u64, QueryError> {
+    let resolved = match value.strip_prefix('-') {
+        Some(offset) => ago(offset),
+        None => match value.chars().all(|c| c.is_ascii_digit()) {
+            true => value.parse().ok(),
+            false => date_millis(value),
+        },
+    };
+    resolved.ok_or_else(|| QueryError::InvalidTime {
+        field: field.name(),
+        value: value.to_string(),
+    })
+}
+
+/// `30m`, `2h`, `7d`, or `1w` back from now.
+fn ago(offset: &str) -> Option<u64> {
+    const UNITS: [(char, u64); 4] = [
+        ('m', 60_000),
+        ('h', 3_600_000),
+        ('d', 86_400_000),
+        ('w', 604_800_000),
+    ];
+    let (unit, span) = UNITS.iter().find(|(unit, _)| offset.ends_with(*unit))?;
+    let count: u64 = offset.trim_end_matches(*unit).parse().ok()?;
+    Some(super::now_millis().saturating_sub(count.saturating_mul(*span)))
+}
+
+/// Midnight UTC on a `YYYY-MM-DD` date, by the days-from-civil algorithm that
+/// `prompts::format_current_date` runs the other way. Dates before 1970 are
+/// rejected: no ticket and no event carries one.
+fn date_millis(value: &str) -> Option<u64> {
+    let mut parts = value.split('-');
+    let year: i64 = parts.next()?.parse().ok()?;
+    let month: i64 = parts.next()?.parse().ok()?;
+    let day: i64 = parts.next()?.parse().ok()?;
+    if parts.next().is_some() || !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return None;
+    }
+
+    let year = if month <= 2 { year - 1 } else { year };
+    let era = year.div_euclid(400);
+    let yoe = year - era * 400;
+    let mp = if month > 2 { month - 3 } else { month + 9 };
+    let doy = (153 * mp + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146097 + doe - 719468;
+    u64::try_from(days * 86_400_000).ok()
+}
+
 fn status_rank(value: &str) -> usize {
     STATUSES
         .iter()
@@ -388,7 +447,8 @@ fn status_rank(value: &str) -> usize {
 }
 
 /// The test one field is put to. `Contains` and `Omits` hold their needle
-/// already lowercased, since they are the two that ignore case.
+/// already lowercased, since they are the two that ignore case. The four times
+/// hold the moment they were resolved to, in milliseconds.
 #[derive(Debug, Clone)]
 enum Match {
     Is(String),
@@ -397,6 +457,10 @@ enum Match {
     NotIn(Vec<String>),
     Contains(String),
     Omits(String),
+    After(u64),
+    NotBefore(u64),
+    Before(u64),
+    NotAfter(u64),
     Empty,
     NotEmpty,
 }
@@ -415,6 +479,10 @@ impl Match {
             (Match::NotIn(rejected), Some(value)) => !rejected.iter().any(|r| r == value),
             (Match::Contains(needle), Some(value)) => value.to_lowercase().contains(needle),
             (Match::Omits(needle), Some(value)) => !value.to_lowercase().contains(needle),
+            (Match::After(bound), Some(value)) => millis(value) > *bound,
+            (Match::NotBefore(bound), Some(value)) => millis(value) >= *bound,
+            (Match::Before(bound), Some(value)) => millis(value) < *bound,
+            (Match::NotAfter(bound), Some(value)) => millis(value) <= *bound,
         }
     }
 }
@@ -430,6 +498,8 @@ pub enum QueryError {
     UnknownField { name: String },
     /// No status is spelled this way.
     UnknownStatus { value: String },
+    /// The value a time was compared against is in none of the three spellings.
+    InvalidTime { field: &'static str, value: String },
     /// The field does not take the operator it was given.
     OperatorNotAllowed {
         field: &'static str,
@@ -462,6 +532,12 @@ impl fmt::Display for QueryError {
                 f,
                 "No status named `{value}`. Use one of Todo, InProgress, Finished, Failed."
             ),
+            Self::InvalidTime { field, value } => write!(
+                f,
+                "`{field}` compares against a time, and `{value}` is not one. \
+                 Write milliseconds since the epoch, a date like `2026-08-24`, \
+                 or an offset back from now like `-30m`, `-2h`, `-7d`, `-1w`."
+            ),
             Self::OperatorNotAllowed { field, operators } => {
                 write!(f, "`{field}` takes {operators}.")
             }
@@ -488,6 +564,10 @@ enum Token {
     NotEquals,
     Contains,
     Omits,
+    After,
+    NotBefore,
+    Before,
+    NotAfter,
     Open,
     Close,
     Comma,
@@ -503,6 +583,10 @@ impl Token {
             Token::NotEquals => "!=".into(),
             Token::Contains => "~".into(),
             Token::Omits => "!~".into(),
+            Token::After => ">".into(),
+            Token::NotBefore => ">=".into(),
+            Token::Before => "<".into(),
+            Token::NotAfter => "<=".into(),
             Token::Open => "(".into(),
             Token::Close => ")".into(),
             Token::Comma => ",".into(),
@@ -525,6 +609,18 @@ fn tokenize(query: &str) -> Result<Vec<Token>, QueryError> {
             ',' => tokens.push(Token::Comma),
             '=' => tokens.push(Token::Equals),
             '~' => tokens.push(Token::Contains),
+            '>' | '<' => {
+                let closed = chars.peek() == Some(&'=');
+                if closed {
+                    chars.next();
+                }
+                tokens.push(match (c, closed) {
+                    ('>', false) => Token::After,
+                    ('>', true) => Token::NotBefore,
+                    ('<', false) => Token::Before,
+                    _ => Token::NotAfter,
+                });
+            }
             '!' => match chars.next() {
                 Some('=') => tokens.push(Token::NotEquals),
                 Some('~') => tokens.push(Token::Omits),
@@ -544,7 +640,7 @@ fn tokenize(query: &str) -> Result<Vec<Token>, QueryError> {
             _ => {
                 let mut word = String::from(c);
                 while let Some(&next) = chars.peek() {
-                    if next.is_whitespace() || "()=~!,\"".contains(next) {
+                    if next.is_whitespace() || "()=~!,<>\"".contains(next) {
                         break;
                     }
                     word.push(next);
@@ -706,7 +802,16 @@ impl Parser {
 
     fn at_operator(&self) -> bool {
         match self.peek() {
-            Some(Token::Equals | Token::NotEquals | Token::Contains | Token::Omits) => true,
+            Some(
+                Token::Equals
+                | Token::NotEquals
+                | Token::Contains
+                | Token::Omits
+                | Token::After
+                | Token::NotBefore
+                | Token::Before
+                | Token::NotAfter,
+            ) => true,
             Some(token) => {
                 token.is_keyword("in")
                     || token.is_keyword("is")
@@ -723,6 +828,10 @@ impl Parser {
             Token::NotEquals => Ok(Match::IsNot(self.value(field)?)),
             Token::Contains => Ok(Match::Contains(self.value(field)?.to_lowercase())),
             Token::Omits => Ok(Match::Omits(self.value(field)?.to_lowercase())),
+            Token::After => Ok(Match::After(self.time(field)?)),
+            Token::NotBefore => Ok(Match::NotBefore(self.time(field)?)),
+            Token::Before => Ok(Match::Before(self.time(field)?)),
+            Token::NotAfter => Ok(Match::NotAfter(self.time(field)?)),
             token if token.is_keyword("in") => Ok(Match::In(self.values(field)?)),
             token if token.is_keyword("not") => {
                 if !self.take_keyword("in") {
@@ -758,6 +867,21 @@ impl Parser {
         match self.next().ok_or(QueryError::UnexpectedEnd)? {
             Token::Word(word) => canonical(field, word),
             Token::Quoted(text) => canonical(field, text),
+            token => Err(QueryError::UnexpectedToken {
+                token: token.spelling(),
+            }),
+        }
+    }
+
+    /// The moment a comparison names. Read before the field is checked against
+    /// the operator, so `label > x` answers that `label` takes no `>` rather
+    /// than complaining about `x`.
+    fn time(&mut self, field: Field) -> Result<u64, QueryError> {
+        match self.next().ok_or(QueryError::UnexpectedEnd)? {
+            Token::Word(word) | Token::Quoted(word) => match field.kind() {
+                Kind::Time => time_value(field, &word),
+                _ => Ok(0),
+            },
             token => Err(QueryError::UnexpectedToken {
                 token: token.spelling(),
             }),
@@ -1389,7 +1513,7 @@ mod tests {
     }
 
     #[test]
-    fn a_time_field_takes_no_comparison() {
+    fn a_time_field_takes_no_equality() {
         let message = error("finished = 3").to_string();
         assert!(message.contains("finished"), "{message}");
         assert!(message.contains("ORDER BY"), "{message}");
@@ -1401,9 +1525,118 @@ mod tests {
             error("created IS EMPTY"),
             QueryError::OperatorNotAllowed {
                 field: "created",
-                operators: "ORDER BY",
+                operators: ">, >=, <, <=, and ORDER BY",
             }
         );
+    }
+
+    #[test]
+    fn after_selects_the_tickets_finished_since_the_moment() {
+        let q = parse("finished > 200");
+        assert!(q.matches(&ticket("TICKET-1").finished_at(300)));
+        assert!(!q.matches(&ticket("TICKET-2").finished_at(200)));
+        assert!(!q.matches(&ticket("TICKET-3").finished_at(100)));
+    }
+
+    #[test]
+    fn not_before_includes_the_moment_itself() {
+        let q = parse("finished >= 200");
+        assert!(q.matches(&ticket("TICKET-1").finished_at(200)));
+        assert!(!q.matches(&ticket("TICKET-2").finished_at(199)));
+    }
+
+    #[test]
+    fn before_selects_the_tickets_finished_up_to_the_moment() {
+        let q = parse("finished < 200");
+        assert!(q.matches(&ticket("TICKET-1").finished_at(100)));
+        assert!(!q.matches(&ticket("TICKET-2").finished_at(200)));
+    }
+
+    #[test]
+    fn not_after_includes_the_moment_itself() {
+        let q = parse("finished <= 200");
+        assert!(q.matches(&ticket("TICKET-1").finished_at(200)));
+        assert!(!q.matches(&ticket("TICKET-2").finished_at(201)));
+    }
+
+    #[test]
+    fn two_comparisons_on_one_time_are_a_window() {
+        // `reject_repeated_field` names one field twice a mistake, and this is
+        // the shape that must survive it.
+        let q = parse("finished >= 200 AND finished < 400");
+        assert!(q.matches(&ticket("TICKET-1").finished_at(300)));
+        assert!(!q.matches(&ticket("TICKET-2").finished_at(400)));
+        assert!(!q.matches(&ticket("TICKET-3").finished_at(100)));
+    }
+
+    #[test]
+    fn an_offset_selects_what_happened_inside_it() {
+        let now = crate::agents::tickets::now_millis();
+        let q = parse("created > -1h");
+        assert!(q.matches(&ticket("TICKET-1").created_at(now)));
+        assert!(!q.matches(&ticket("TICKET-2").created_at(now - 7_200_000)));
+    }
+
+    #[test]
+    fn every_offset_unit_reaches_further_back() {
+        let now = crate::agents::tickets::now_millis();
+        let a_day_ago = ticket("TICKET-1").created_at(now - 86_400_000);
+        assert!(!parse("created > -1h").matches(&a_day_ago));
+        assert!(!parse("created > -30m").matches(&a_day_ago));
+        assert!(parse("created > -2d").matches(&a_day_ago));
+        assert!(parse("created > -1w").matches(&a_day_ago));
+    }
+
+    #[test]
+    fn a_date_is_read_as_midnight_utc() {
+        // 2026-08-24T00:00:00Z, the moment the date names.
+        let q = parse("created >= 2026-08-24");
+        assert!(q.matches(&ticket("TICKET-1").created_at(1_787_529_600_000)));
+        assert!(!q.matches(&ticket("TICKET-2").created_at(1_787_529_599_999)));
+    }
+
+    #[test]
+    fn a_date_may_be_quoted() {
+        let q = parse("created >= \"2026-08-24\"");
+        assert!(q.matches(&ticket("TICKET-1").created_at(1_787_529_600_000)));
+    }
+
+    #[test]
+    fn an_absent_time_fails_every_comparison() {
+        // The same rule an absent label follows: `IS EMPTY` is what reads it.
+        let running = ticket("TICKET-1");
+        assert!(!parse("finished > 0").matches(&running));
+        assert!(!parse("finished < 999").matches(&running));
+        assert!(parse("finished IS EMPTY").matches(&running));
+    }
+
+    #[test]
+    fn a_time_that_is_in_no_spelling_names_the_three() {
+        let message = error("created > yesterday").to_string();
+        assert!(message.contains("yesterday"), "{message}");
+        assert!(message.contains("2026-08-24"), "{message}");
+        assert!(message.contains("-30m"), "{message}");
+    }
+
+    #[test]
+    fn an_offset_in_no_unit_is_rejected() {
+        assert!(matches!(
+            error("created > -5y"),
+            QueryError::InvalidTime { .. }
+        ));
+    }
+
+    #[test]
+    fn a_comparison_on_a_field_that_is_not_a_time_lists_the_operators() {
+        let message = error("label > scan").to_string();
+        assert!(message.contains("label"), "{message}");
+        assert!(message.contains("IN"), "{message}");
+    }
+
+    #[test]
+    fn a_comparison_needs_no_spaces_around_it() {
+        let q = parse("finished>=200");
+        assert!(q.matches(&ticket("TICKET-1").finished_at(200)));
     }
 
     #[test]

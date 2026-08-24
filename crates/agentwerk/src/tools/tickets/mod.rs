@@ -473,6 +473,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn list_filters_by_the_window_the_aql_names() {
+        let queue = queue_with_two_tickets();
+        let ctx = ctx_with(Arc::clone(&queue), "alice");
+        let result = call(
+            TicketsTool,
+            serde_json::json!({"action": "list", "aql": "created > -1h"}),
+            &ctx,
+        )
+        .await;
+        let text = unwrap_text(&result);
+        assert!(text.contains("TICKET-1"), "{text}");
+
+        let result = call(
+            TicketsTool,
+            serde_json::json!({"action": "list", "aql": "created < -1h"}),
+            &ctx,
+        )
+        .await;
+        assert!(unwrap_text(&result).contains("no matching tickets"));
+    }
+
+    #[tokio::test]
     async fn list_answers_no_matching_tickets_when_the_aql_selects_none() {
         let queue = queue_with_two_tickets();
         let ctx = ctx_with(Arc::clone(&queue), "alice");
