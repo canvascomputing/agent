@@ -350,6 +350,7 @@ tickets.find_results("scan ORDER BY finished DESC");
 **Invalid queries**
 
 - A string that does not compile panics. Use `Query::new` for one built at run time, which returns a `Result`.
+- A closure owns what it reads, since the queue keeps the filter it is handed. Clone a borrowed value into it.
 
 #### Examples
 

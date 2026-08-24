@@ -7,7 +7,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::common;
 
-use agentwerk::event::EventName;
 use agentwerk::tools::WriteFileTool;
 use agentwerk::{Agent, Policy, TicketQueue};
 
@@ -49,10 +48,7 @@ async fn creates_file_with_token() -> std::result::Result<(), Box<dyn std::error
     common::print_result(&tickets);
 
     assert!(
-        tickets
-            .find_events(|e| e.kind.event_name() == EventName::ToolCallStarted)
-            .len()
-            >= 1,
+        tickets.find_events("tool_call_started").len() >= 1,
         "agent must call at least one tool"
     );
 

@@ -565,8 +565,9 @@ impl Style {
 /// Catches both the active InProgress chat from the prior session and
 /// any orphan Todo left by an interrupted `/new <message>`.
 fn fail_stale_chats(tickets: &TicketQueue, label: &str) -> usize {
+    let label = label.to_string();
     let stale: Vec<String> = tickets
-        .find_tickets(|t: &Ticket| t.is_pending() && t.has_label(label))
+        .find_tickets(move |t: &Ticket| t.is_pending() && t.has_label(&label))
         .iter()
         .map(|t| t.key.clone())
         .collect();

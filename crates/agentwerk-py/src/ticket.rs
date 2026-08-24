@@ -4,6 +4,7 @@
 //! Rust sets those fields with chained methods. A Python class cannot carry a
 //! `label` method and a `label` attribute, so they are keyword arguments here.
 
+use agentwerk::agents::TicketMatcher;
 use agentwerk::{Query, Ticket};
 use pyo3::prelude::*;
 
@@ -37,17 +38,31 @@ fn to_query(query: &str) -> PyResult<Query> {
     Query::new(query).map_err(|error| pyo3::exceptions::PyValueError::new_err(format!("{error}")))
 }
 
-/// Read a Python argument as a query: a `Query`, or a string in AQL. `None`
-/// means the argument is neither, so the caller can try the callable path; an
-/// error means it was a string that does not compile.
-pub fn try_extract_query(py: Python<'_>, arg: &Py<PyAny>) -> PyResult<Option<Query>> {
+/// Read a Python argument as a query: a `Query`, a string in AQL, or a callable
+/// as a condition of its own. An error means it was a string that does not
+/// compile.
+pub fn to_matcher(py: Python<'_>, arg: &Py<PyAny>) -> PyResult<Query> {
     if let Ok(query) = arg.extract::<PyRef<'_, PyQuery>>(py) {
-        return Ok(Some(query.inner.clone()));
+        return Ok(query.inner.clone());
     }
-    match arg.extract::<String>(py) {
-        Ok(query) => to_query(&query).map(Some),
-        Err(_) => Ok(None),
+    if let Ok(query) = arg.extract::<String>(py) {
+        return to_query(&query);
     }
+    let callable = arg.clone_ref(py);
+    Ok(TicketMatcher::into_query(move |ticket: &Ticket| {
+        ticket_predicate(&callable, ticket)
+    }))
+}
+
+/// Ask a Python condition about a ticket. A conversion or Python error reads as
+/// false, so a broken condition never brings down an agent's thread.
+fn ticket_predicate(predicate: &Py<PyAny>, ticket: &Ticket) -> bool {
+    Python::attach(|py| {
+        Py::new(py, PyTicket::from_ticket(ticket))
+            .and_then(|view| predicate.bind(py).call1((view,)))
+            .and_then(|value| value.is_truthy())
+            .unwrap_or(false)
+    })
 }
 
 /// Read a Python argument as a ticket: a `Ticket`, an `os.PathLike` naming the

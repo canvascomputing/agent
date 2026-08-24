@@ -44,7 +44,7 @@ crates/
 - `policy.rs`: the public `Policy`, what a run may spend, how it retries, and when it compacts.
 - `knowledge.rs`: `Knowledge`, the cross-ticket store, an OKF v0.1 bundle in `<dir>/knowledge/`. Pages are curated through the `pages()` handle (`save`, `load`, `remove`) plus `clear`; failures are typed as `KnowledgeError`.
 - `stats.rs`: the crate-private `Stats`, the counters a limit check reads and the one reader over `events.jsonl`.
-- `query.rs`: AQL. The tokenizer, the parser, the private `QueryField` trait, and the two field sets it has: `TicketField` behind `Query` and `TicketMatcher`, `EventField` behind `EventQuery` and `EventMatcher`. `QueryError` lives here too.
+- `query.rs`: AQL. The tokenizer, the parser, the private `QueryField` and `Compiled<F>`, and the two field sets: `TicketField` behind `Query` and `TicketMatcher`, `EventField` behind `EventQuery` and `EventMatcher`. `QueryError` lives here too.
 
 `tickets/` holds the ticket value types and the orchestrator:
 

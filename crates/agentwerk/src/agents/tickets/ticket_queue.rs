@@ -18,7 +18,7 @@ use crate::schemas::SchemaStore;
 
 use super::super::agent::{Agent, TicketQueueRef};
 use super::super::policy::Policy;
-use super::super::query::{EventMatcher, TicketMatcher};
+use super::super::query::{EventMatcher, EventQuery, Query, TicketMatcher};
 use super::super::r#loop::run_main_loop;
 use super::super::stats::Stats;
 use super::ticket::{Status, Ticket};
@@ -27,10 +27,6 @@ use super::{numeric_id, policy_violated, Reply};
 /// The queue arrives first so a handler selects tickets and files follow-up work
 /// without capturing an `Arc` into the queue that holds it.
 type EventHandler = dyn Fn(&Arc<TicketQueue>, &Event) + Send + Sync;
-
-/// Which tickets a lifecycle call speaks for. `cancel` stores one; `finish`
-/// borrows one for the length of the wait.
-pub(crate) type TicketFilter = dyn Fn(&Ticket) -> bool + Send + Sync;
 
 /// How many events a `finish` waiter may fall behind before it starts
 /// missing them. `TextChunkReceived` fires once per streaming delta and sets
@@ -246,7 +242,7 @@ pub struct TicketQueue {
     /// What `cancel` has taken off the queue. A matching ticket is neither
     /// claimed nor resumed, and an agent already holding one is taken off it,
     /// while the rest of the run continues.
-    pub(crate) cancel_filters: Mutex<Vec<Arc<TicketFilter>>>,
+    pub(crate) cancel_filters: Mutex<Vec<Query>>,
     /// How many terminal status transitions are between their status change and
     /// the return of their event handlers. `pending` counts a non-zero value as
     /// pending work, so a handler creating a follow-up ticket always beats the drain.
@@ -885,10 +881,7 @@ impl TicketQueue {
 
     /// Get every ticket in creation order.
     pub fn tickets(&self) -> Vec<Ticket> {
-        let tickets = self.tickets.lock().unwrap();
-        let mut out: Vec<Ticket> = tickets.values().cloned().collect();
-        out.sort_by_key(|t| (t.created_at, numeric_id(&t.key)));
-        out
+        self.matching_tickets(&Query::all())
     }
 
     /// Get every ticket matching a condition, in creation order unless the
@@ -897,7 +890,7 @@ impl TicketQueue {
     /// Your condition MUST NOT call another `TicketQueue` method that reads
     /// the ticket store, or the call deadlocks.
     pub fn find_tickets(&self, predicate: impl TicketMatcher) -> Vec<Ticket> {
-        self.matching_tickets(|t| predicate.matches(t), &predicate)
+        self.matching_tickets(&predicate.into_query())
     }
 
     /// Get the first ticket matching a condition, the earliest one unless the
@@ -906,33 +899,22 @@ impl TicketQueue {
     /// Your condition MUST NOT call another `TicketQueue` method that reads
     /// the ticket store, or the call deadlocks.
     pub fn find_ticket(&self, predicate: impl TicketMatcher) -> Option<Ticket> {
-        self.first_matching_ticket(|t| predicate.matches(t), &predicate)
+        self.first_matching_ticket(&predicate.into_query())
     }
 
-    /// Every ticket `keep` accepts, ordered by `order`.
-    ///
-    /// The filter and the order are separate because `find_results` wraps the
-    /// matcher in a closure of its own, and a closure names no order.
-    fn matching_tickets(
-        &self,
-        keep: impl Fn(&Ticket) -> bool,
-        order: &impl TicketMatcher,
-    ) -> Vec<Ticket> {
+    /// Every ticket the query selects, in the order it names.
+    fn matching_tickets(&self, query: &Query) -> Vec<Ticket> {
         let store = self.tickets.lock().unwrap();
-        let mut matching: Vec<&Ticket> = store.values().filter(|t| keep(t)).collect();
-        order.sort(&mut matching);
+        let mut matching: Vec<&Ticket> = store.values().filter(|t| query.matches(t)).collect();
+        query.sort(&mut matching);
         matching.into_iter().cloned().collect()
     }
 
     /// The first of those, and the only ticket copied.
-    fn first_matching_ticket(
-        &self,
-        keep: impl Fn(&Ticket) -> bool,
-        order: &impl TicketMatcher,
-    ) -> Option<Ticket> {
+    fn first_matching_ticket(&self, query: &Query) -> Option<Ticket> {
         let store = self.tickets.lock().unwrap();
-        let mut matching: Vec<&Ticket> = store.values().filter(|t| keep(t)).collect();
-        order.sort(&mut matching);
+        let mut matching: Vec<&Ticket> = store.values().filter(|t| query.matches(t)).collect();
+        query.sort(&mut matching);
         matching.into_iter().next().cloned()
     }
 
@@ -954,20 +936,36 @@ impl TicketQueue {
     /// finds nothing, and `TextChunkReceived` is never recorded, so a condition
     /// naming it never matches.
     pub fn find_events(&self, matcher: impl EventMatcher) -> Vec<Event> {
-        let mut out = Vec::new();
-        let _ = Stats::for_each_event(&self.get_dir(), |event| {
-            if matcher.matches(event) {
-                out.push(event.clone());
-            }
-        });
-        matcher.sort(&mut out);
+        let query = matcher.into_query();
+        let mut out = self.collect_events(&query, usize::MAX);
+        query.sort(&mut out);
         out
     }
 
     /// Get the earliest recorded event matching a condition, or the first in
     /// the order an `ORDER BY` names.
     pub fn find_event(&self, matcher: impl EventMatcher) -> Option<Event> {
-        self.find_events(matcher).into_iter().next()
+        let query = matcher.into_query();
+        // Without an order the log's own is the answer, so the first match ends
+        // the read rather than the whole log being copied to be sorted.
+        let wanted = match query.is_ordered() {
+            true => usize::MAX,
+            false => 1,
+        };
+        let mut found = self.collect_events(&query, wanted);
+        query.sort(&mut found);
+        found.into_iter().next()
+    }
+
+    /// The first `wanted` events the query selects, in log order.
+    fn collect_events(&self, query: &EventQuery, wanted: usize) -> Vec<Event> {
+        let mut out = Vec::new();
+        let _ = Stats::for_each_event(&self.get_dir(), |event| {
+            if out.len() < wanted && query.matches(event) {
+                out.push(event.clone());
+            }
+        });
+        out
     }
 
     /// Take every matching ticket off the queue.
@@ -985,11 +983,11 @@ impl TicketQueue {
     /// let tickets = TicketQueue::new();
     /// tickets.cancel("scan");
     /// ```
-    pub fn cancel(&self, matches: impl TicketMatcher + 'static) -> &Self {
+    pub fn cancel(&self, matches: impl TicketMatcher) -> &Self {
         self.cancel_filters
             .lock()
             .unwrap()
-            .push(Arc::new(move |t: &Ticket| matches.matches(t)));
+            .push(matches.into_query());
         self
     }
 
@@ -1007,8 +1005,11 @@ impl TicketQueue {
     /// It reads no ticket state, so a condition passed to [`Self::find_ticket`]
     /// or [`Self::find_tickets`] may call it.
     pub fn is_cancelled(&self, ticket: &Ticket) -> bool {
-        let filters = self.cancel_filters.lock().unwrap();
-        filters.iter().any(|matches| matches(ticket))
+        // Cloned out before the filters run, because one may itself hold a
+        // closure, and a closure that reaches back here would meet a lock it
+        // already holds. Cloning a query copies an `Arc`.
+        let filters: Vec<Query> = self.cancel_filters.lock().unwrap().clone();
+        filters.iter().any(|matches| matches.matches(ticket))
     }
 
     /// True while any matching ticket still has work for an agent.
@@ -1017,7 +1018,7 @@ impl TicketQueue {
     /// ticket to decide the run is over, and [`Self::finish`] asks it of a
     /// subset. A ticket is pending while it is todo or in progress,
     /// uncancelled, and not paused for a caller reply.
-    pub(crate) fn pending(&self, matches: &impl TicketMatcher) -> bool {
+    pub(crate) fn pending(&self, matches: &Query) -> bool {
         // A terminal transition mid-flight may still add a follow-up ticket
         // from a handler, so it counts as work whatever the store says.
         if self.terminal_transitions_in_flight.load(Ordering::SeqCst) > 0 {
@@ -1191,11 +1192,12 @@ impl TicketQueue {
     /// # }
     /// ```
     pub async fn finish(&self, matches: impl TicketMatcher) -> Vec<serde_json::Value> {
+        let query = matches.into_query();
         if self.join_handle.lock().unwrap().is_none() {
             self.start();
         }
         let mut stream = self.event_stream.subscribe();
-        while self.pending(&matches) {
+        while self.pending(&query) {
             let ended = self.next_event_or_end(&mut stream).await;
             self.await_handlers().await;
             if ended {
@@ -1216,7 +1218,9 @@ impl TicketQueue {
         if self.run.is_finished() {
             self.join_handle.lock().unwrap().take();
         }
-        self.find_tickets(|t: &Ticket| matches.matches(t) && t.is_finished())
+        // `and_status`, not the `find_results` default: a caller who waited on
+        // `status = Todo` is handed the results that landed, not the todos.
+        self.matching_tickets(&query.and_status(Status::Finished))
             .into_iter()
             .filter_map(|t| t.result)
             .collect()
@@ -1291,10 +1295,7 @@ impl TicketQueue {
     /// still running, or finished without a result, contributes nothing, so
     /// this is shorter than [`Self::tickets`] rather than aligned with it.
     pub fn results(&self) -> Vec<serde_json::Value> {
-        self.find_tickets(|t: &Ticket| t.status == Status::Finished && t.result.is_some())
-            .into_iter()
-            .filter_map(|t| t.result)
-            .collect()
+        self.find_results(Query::all())
     }
 
     /// Get every result whose ticket matches the query, in creation order.
@@ -1311,8 +1312,7 @@ impl TicketQueue {
     /// let scans = tickets.find_results("scan");
     /// ```
     pub fn find_results(&self, matches: impl TicketMatcher) -> Vec<serde_json::Value> {
-        let finished_only = !matches.names_status();
-        self.matching_tickets(|t| finished_results(&matches, finished_only, t), &matches)
+        self.matching_tickets(&results_of(matches))
             .into_iter()
             .filter_map(|t| t.result)
             .collect()
@@ -1323,16 +1323,20 @@ impl TicketQueue {
     /// Status defaults to `Finished` as in [`Self::find_results`], and the
     /// order is that method's too.
     pub fn find_result(&self, matches: impl TicketMatcher) -> Option<serde_json::Value> {
-        let finished_only = !matches.names_status();
-        self.first_matching_ticket(|t| finished_results(&matches, finished_only, t), &matches)
+        self.first_matching_ticket(&results_of(matches))
             .and_then(|t| t.result)
     }
 }
 
-/// Whether a ticket contributes to `find_results`: it matches, it carries a
-/// result, and it has finished unless the filter named a status of its own.
-fn finished_results(matches: &impl TicketMatcher, finished_only: bool, ticket: &Ticket) -> bool {
-    matches.matches(ticket) && (!finished_only || ticket.is_finished()) && ticket.result.is_some()
+/// The tickets that contribute to `find_results`: the ones the filter named,
+/// finished unless it named a status of its own, and carrying a result. The
+/// last term is why `find_result` answers with the first match that has one
+/// rather than stopping at the first match.
+fn results_of(matches: impl TicketMatcher) -> Query {
+    matches
+        .into_query()
+        .default_status(Status::Finished)
+        .and_result()
 }
 
 #[cfg(test)]
@@ -1559,15 +1563,15 @@ mod tests {
     fn pending_on_a_todo_ticket() {
         let (queue, _tmp) = test_queue();
         queue.ticket("a");
-        assert!(queue.pending(&|_: &Ticket| true));
+        assert!(queue.pending(&Query::all()));
     }
 
     #[test]
     fn pending_only_for_the_matching_tickets() {
         let (queue, _tmp) = test_queue();
         queue.ticket(Ticket::new("a").label("research"));
-        assert!(queue.pending(&|t: &Ticket| t.has_label("research")));
-        assert!(!queue.pending(&|t: &Ticket| t.has_label("report")));
+        assert!(queue.pending(&Query::from("research")));
+        assert!(!queue.pending(&Query::from("report")));
     }
 
     #[test]
@@ -1575,7 +1579,7 @@ mod tests {
         let (queue, _tmp) = test_queue();
         queue.ticket("x");
         queue.claim(|t| t.status == Status::Todo, "agent").unwrap();
-        assert!(queue.pending(&|_: &Ticket| true));
+        assert!(queue.pending(&Query::all()));
     }
 
     #[test]
@@ -1590,7 +1594,7 @@ mod tests {
             }]),
         );
         // Only an interactive agent waits on the caller; the rest are retried.
-        assert!(queue.pending(&|_: &Ticket| true));
+        assert!(queue.pending(&Query::all()));
     }
 
     #[test]
@@ -1602,7 +1606,7 @@ mod tests {
         let key_b = queue.claim(|t| t.key == "TICKET-2", "agent").unwrap();
         queue.set_finished_by(&key_a, "agent").unwrap();
         queue.set_failed(&key_b).unwrap();
-        assert!(!queue.pending(&|_: &Ticket| true));
+        assert!(!queue.pending(&Query::all()));
     }
 
     #[test]
@@ -1610,7 +1614,7 @@ mod tests {
         let (queue, _tmp) = test_queue();
         queue.ticket(Ticket::new("a").label("research"));
         queue.cancel(|t: &Ticket| t.has_label("research"));
-        assert!(!queue.pending(&|_: &Ticket| true));
+        assert!(!queue.pending(&Query::all()));
     }
 
     #[test]
@@ -2118,9 +2122,7 @@ mod tests {
 
         queue.set_failed(&key).unwrap();
 
-        let retry = queue
-            .find_ticket(|t: &Ticket| t.parent.as_deref() == Some(&key))
-            .unwrap();
+        let retry = queue.find_ticket(format!("parent = {key}")).unwrap();
         assert_eq!(retry.task, serde_json::json!("work"));
     }
 
@@ -2479,7 +2481,7 @@ mod tests {
         queue.set_finished_by(&key, "agent").unwrap();
         // The handler ran inside `set_finished_by`, so the queue is never
         // observably empty between the parent finishing and the follow-up.
-        assert!(queue.pending(&|_: &Ticket| true));
+        assert!(queue.pending(&Query::all()));
     }
 
     #[test]

@@ -135,12 +135,16 @@ fn claim<'a>(agent: &'a Agent, ticket_queue: &'a Arc<TicketQueue>) -> Option<Tic
             && !ticket_queue.is_cancelled(t)
     };
     // On the id, not the label: agents sharing a label must not take over each
-    // other's started tickets.
-    let resumable = |t: &Ticket| {
+    // other's started tickets. Captured by value, since the queue keeps the
+    // filter it is handed.
+    let agent_id = agent.id().to_string();
+    let interactive = agent.is_interactive();
+    let queue = Arc::clone(ticket_queue);
+    let resumable = move |t: &Ticket| {
         t.status == Status::InProgress
-            && t.assignee.as_deref() == Some(agent.id())
-            && (t.is_waiting_for_response() || !agent.is_interactive())
-            && !ticket_queue.is_cancelled(t)
+            && t.assignee.as_deref() == Some(agent_id.as_str())
+            && (t.is_waiting_for_response() || !interactive)
+            && !queue.is_cancelled(t)
     };
     let ticket_key = ticket_queue
         .claim(claimable, agent.id())

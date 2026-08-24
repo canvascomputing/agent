@@ -7,6 +7,7 @@
 use std::borrow::{Borrow, Cow};
 use std::cmp::Ordering;
 use std::fmt;
+use std::sync::Arc;
 
 use super::tickets::{now_millis, numeric_id, Status, Ticket};
 use crate::event::{Event, EventName};
@@ -29,57 +30,36 @@ use crate::event::{Event, EventName};
 /// # Ok(())
 /// # }
 /// ```
-pub trait TicketMatcher: Send + Sync {
-    fn matches(&self, ticket: &Ticket) -> bool;
+pub trait TicketMatcher {
+    /// Compile into the one thing a selection is: a [`Query`]. A caller's
+    /// closure becomes a condition of its own, so the queue holds one kind of
+    /// filter however the caller wrote it.
+    fn into_query(self) -> Query;
+}
 
-    /// Whether the matcher constrains status itself. A closure cannot be asked,
-    /// so it answers `false` and `TicketQueue::find_results` adds its
-    /// `Finished` default.
-    fn names_status(&self) -> bool {
-        false
-    }
-
-    /// Order what the matcher selected. A closure names no order, so it keeps
-    /// creation order, and so does a query without `ORDER BY`.
-    fn sort(&self, tickets: &mut [&Ticket]) {
-        TicketField::sort_unordered(tickets);
+impl<F: Fn(&Ticket) -> bool + Send + Sync + 'static> TicketMatcher for F {
+    fn into_query(self) -> Query {
+        Query(Compiled::test(self))
     }
 }
 
-impl<F: Fn(&Ticket) -> bool + Send + Sync> TicketMatcher for F {
-    fn matches(&self, ticket: &Ticket) -> bool {
-        self(ticket)
-    }
-}
-
-/// Parses the string as AQL on every ticket it is handed, and panics on one
-/// that does not parse. Pass a [`Query`] when the same filter runs over a
-/// large queue.
+/// Panics on a string that does not parse. Use [`Query::new`] for one built at
+/// run time.
 impl TicketMatcher for &str {
-    fn matches(&self, ticket: &Ticket) -> bool {
-        Query::from(*self).matches(ticket)
-    }
-
-    fn names_status(&self) -> bool {
-        Query::from(*self).names_status()
-    }
-
-    fn sort(&self, tickets: &mut [&Ticket]) {
-        Query::from(*self).sort(tickets)
+    fn into_query(self) -> Query {
+        Query::from(self)
     }
 }
 
 impl TicketMatcher for String {
-    fn matches(&self, ticket: &Ticket) -> bool {
-        Query::from(self.as_str()).matches(ticket)
+    fn into_query(self) -> Query {
+        Query::from(self)
     }
+}
 
-    fn names_status(&self) -> bool {
-        Query::from(self.as_str()).names_status()
-    }
-
-    fn sort(&self, tickets: &mut [&Ticket]) {
-        Query::from(self.as_str()).sort(tickets)
+impl TicketMatcher for Query {
+    fn into_query(self) -> Query {
+        self
     }
 }
 
@@ -113,18 +93,44 @@ impl Query {
     pub fn new(query: &str) -> Result<Self, QueryError> {
         Compiled::new(query).map(Query)
     }
-}
 
-impl TicketMatcher for Query {
-    fn matches(&self, ticket: &Ticket) -> bool {
+    /// Whether this query selects `ticket`.
+    pub fn matches(&self, ticket: &Ticket) -> bool {
         self.0.matches(ticket)
     }
 
-    fn names_status(&self) -> bool {
-        self.0.mentions(TicketField::Status)
+    /// Every ticket, in creation order.
+    pub(crate) fn all() -> Query {
+        Query(Compiled::all())
     }
 
-    fn sort(&self, tickets: &mut [&Ticket]) {
+    /// Both conditions, keeping this query's `ORDER BY`.
+    pub(crate) fn and(self, other: Query) -> Query {
+        Query(self.0.and(other.0))
+    }
+
+    /// Also `status = <status>`, unless the query names a status of its own. A
+    /// closure names none, so it always takes the default.
+    pub(crate) fn default_status(self, status: Status) -> Query {
+        match self.0.mentions(TicketField::Status) {
+            true => self,
+            false => self.and_status(status),
+        }
+    }
+
+    /// Also `status = <status>`, whatever the query already says.
+    pub(crate) fn and_status(self, status: Status) -> Query {
+        let term = Compiled::term(TicketField::Status, Match::Is(status.to_string()));
+        self.and(Query(term))
+    }
+
+    /// Also `result IS NOT EMPTY`, so a ticket that finished without one is not
+    /// counted as a result.
+    pub(crate) fn and_result(self) -> Query {
+        self.and(Query(Compiled::term(TicketField::Result, Match::NotEmpty)))
+    }
+
+    pub(crate) fn sort(&self, tickets: &mut [&Ticket]) {
         self.0.sort(tickets);
     }
 }
@@ -165,42 +171,34 @@ impl From<String> for Query {
 /// # }
 /// ```
 pub trait EventMatcher {
-    fn matches(&self, event: &Event) -> bool;
+    /// Compile into an [`EventQuery`], the way a ticket filter compiles into a
+    /// [`Query`].
+    fn into_query(self) -> EventQuery;
+}
 
-    /// Order what the matcher selected. A closure names no order, so events
-    /// stay in the order they were logged, and so does a query without
-    /// `ORDER BY`.
-    fn sort(&self, events: &mut [Event]) {
-        EventField::sort_unordered(events);
+impl<F: Fn(&Event) -> bool + Send + Sync + 'static> EventMatcher for F {
+    fn into_query(self) -> EventQuery {
+        EventQuery(Compiled::test(self))
     }
 }
 
-impl<F: Fn(&Event) -> bool> EventMatcher for F {
-    fn matches(&self, event: &Event) -> bool {
-        self(event)
-    }
-}
-
-/// Parses the string as AQL on every event it is handed, and panics on one that
-/// does not parse. Pass an [`EventQuery`] when the same filter runs over a long
-/// log.
+/// Panics on a string that does not parse. Use [`EventQuery::new`] for one
+/// built at run time.
 impl EventMatcher for &str {
-    fn matches(&self, event: &Event) -> bool {
-        EventQuery::from(*self).matches(event)
-    }
-
-    fn sort(&self, events: &mut [Event]) {
-        EventQuery::from(*self).sort(events)
+    fn into_query(self) -> EventQuery {
+        EventQuery::from(self)
     }
 }
 
 impl EventMatcher for String {
-    fn matches(&self, event: &Event) -> bool {
-        EventQuery::from(self.as_str()).matches(event)
+    fn into_query(self) -> EventQuery {
+        EventQuery::from(self)
     }
+}
 
-    fn sort(&self, events: &mut [Event]) {
-        EventQuery::from(self.as_str()).sort(events)
+impl EventMatcher for EventQuery {
+    fn into_query(self) -> EventQuery {
+        self
     }
 }
 
@@ -231,14 +229,19 @@ impl EventQuery {
     pub fn new(query: &str) -> Result<Self, QueryError> {
         Compiled::new(query).map(EventQuery)
     }
-}
 
-impl EventMatcher for EventQuery {
-    fn matches(&self, event: &Event) -> bool {
+    /// Whether this query selects `event`.
+    pub fn matches(&self, event: &Event) -> bool {
         self.0.matches(event)
     }
 
-    fn sort(&self, events: &mut [Event]) {
+    /// Whether an `ORDER BY` names an order, which is what lets a reader stop
+    /// at the first match when none does.
+    pub(crate) fn is_ordered(&self) -> bool {
+        self.0.is_ordered()
+    }
+
+    pub(crate) fn sort(&self, events: &mut [Event]) {
         self.0.sort(events);
     }
 }
@@ -265,6 +268,7 @@ enum Condition<F: QueryField> {
     Any(Vec<Condition<F>>),
     Not(Box<Condition<F>>),
     Term(F, Match),
+    Test(Predicate<F::Record>),
 }
 
 impl<F: QueryField> Condition<F> {
@@ -274,9 +278,13 @@ impl<F: QueryField> Condition<F> {
             Condition::Any(terms) => terms.iter().any(|t| t.matches(record)),
             Condition::Not(term) => !term.matches(record),
             Condition::Term(field, matcher) => matcher.test(field.of(record).as_deref()),
+            Condition::Test(check) => (check.0)(record),
         }
     }
 
+    /// A closure names no field, so it answers `false` however it was written.
+    /// That is why `default_status` adds its `Finished` to a closure and not to
+    /// a query that already sets one.
     fn mentions(&self, field: F) -> bool {
         match self {
             Condition::All(terms) | Condition::Any(terms) => {
@@ -284,7 +292,25 @@ impl<F: QueryField> Condition<F> {
             }
             Condition::Not(term) => term.mentions(field),
             Condition::Term(named, _) => *named == field,
+            Condition::Test(_) => false,
         }
+    }
+}
+
+/// A caller's closure as one condition, so a query says everything a selection
+/// can say. Its own type because `Condition` keeps its derives: `Arc<dyn Fn>`
+/// carries no `Debug`, and a derived `Clone` would demand one of the record.
+struct Predicate<R>(Arc<dyn Fn(&R) -> bool + Send + Sync>);
+
+impl<R> Clone for Predicate<R> {
+    fn clone(&self) -> Self {
+        Predicate(Arc::clone(&self.0))
+    }
+}
+
+impl<R> fmt::Debug for Predicate<R> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("<predicate>")
     }
 }
 
@@ -304,12 +330,43 @@ impl<F: QueryField> Compiled<F> {
         Ok(Self { root, order })
     }
 
+    /// Every record, which is what the whole-run forms select and what AQL has
+    /// no spelling for beyond a bare `ORDER BY`.
+    fn all() -> Self {
+        Self::rooted(Condition::All(Vec::new()))
+    }
+
+    fn test(check: impl Fn(&F::Record) -> bool + Send + Sync + 'static) -> Self {
+        Self::rooted(Condition::Test(Predicate(Arc::new(check))))
+    }
+
+    fn term(field: F, matcher: Match) -> Self {
+        Self::rooted(Condition::Term(field, matcher))
+    }
+
+    fn rooted(root: Condition<F>) -> Self {
+        Self { root, order: None }
+    }
+
+    /// Both conditions. The order is this query's, since `other` is the term a
+    /// caller never wrote and so never ordered by.
+    fn and(self, other: Self) -> Self {
+        Self {
+            root: Condition::All(vec![self.root, other.root]),
+            order: self.order.or(other.order),
+        }
+    }
+
     fn matches(&self, record: &F::Record) -> bool {
         self.root.matches(record)
     }
 
     fn mentions(&self, field: F) -> bool {
         self.root.mentions(field)
+    }
+
+    fn is_ordered(&self) -> bool {
+        self.order.is_some()
     }
 
     /// Takes both the borrowed records a store hands out and the owned ones a
@@ -328,8 +385,9 @@ impl<F: QueryField> Compiled<F> {
 /// from the event one. The tokenizer, the parser, [`Condition`], and
 /// [`Compiled`] are shared.
 trait QueryField: Copy + PartialEq + fmt::Debug + Sized + 'static {
-    /// What the fields are read off.
-    type Record;
+    /// What the fields are read off. `Debug` and `Clone` so a condition holding
+    /// a closure over it keeps the derives every other variant has.
+    type Record: fmt::Debug + Clone;
 
     /// Every spelling, in the order an unknown field is answered with.
     const FIELDS: &'static [(&'static str, Self)];
@@ -1396,52 +1454,61 @@ mod tests {
     }
 
     #[test]
-    fn names_status_is_false_for_a_query_that_leaves_it_unset() {
-        assert!(!parse("label = scan").names_status());
+    fn default_status_applies_to_a_query_that_leaves_status_unset() {
+        let q = parse("label = scan").default_status(Status::Finished);
+        assert!(q.matches(&ticket("TICKET-1").label("scan").finished(json!("ok"))));
+        assert!(!q.matches(&ticket("TICKET-2").label("scan")));
     }
 
     #[test]
-    fn names_status_is_true_for_a_query_that_sets_it() {
-        assert!(parse("status != Finished").names_status());
+    fn default_status_leaves_a_query_that_sets_status_alone() {
+        let q = parse("status = Todo").default_status(Status::Finished);
+        assert!(q.matches(&ticket("TICKET-1")));
     }
 
     #[test]
-    fn names_status_finds_a_status_nested_in_a_group() {
-        assert!(parse("label = scan AND NOT (status = Failed)").names_status());
+    fn default_status_finds_a_status_nested_in_a_group() {
+        let q = parse("label = scan AND NOT (status = Failed)").default_status(Status::Finished);
+        assert!(q.matches(&ticket("TICKET-1").label("scan")));
     }
 
     #[test]
-    fn names_status_is_false_for_a_closure() {
-        let matcher: &dyn TicketMatcher = &|t: &Ticket| t.has_label("scan");
-        assert!(!matcher.names_status());
+    fn default_status_applies_to_a_closure_which_names_no_field() {
+        let q = (|t: &Ticket| t.has_label("scan"))
+            .into_query()
+            .default_status(Status::Finished);
+        assert!(q.matches(&ticket("TICKET-1").label("scan").finished(json!("ok"))));
+        assert!(!q.matches(&ticket("TICKET-2").label("scan")));
+    }
+
+    #[test]
+    fn and_status_applies_to_a_query_that_sets_status_of_its_own() {
+        let q = parse("status = Todo").and_status(Status::Finished);
+        assert!(!q.matches(&ticket("TICKET-1")));
+        assert!(!q.matches(&ticket("TICKET-2").finished(json!("ok"))));
     }
 
     #[test]
     fn a_closure_selects_the_tickets_it_accepts() {
-        let matcher: &dyn TicketMatcher = &|t: &Ticket| t.has_label("scan");
-        assert!(matcher.matches(&ticket("TICKET-1").label("scan")));
-        assert!(!matcher.matches(&ticket("TICKET-2").label("report")));
+        let q = (|t: &Ticket| t.has_label("scan")).into_query();
+        assert!(q.matches(&ticket("TICKET-1").label("scan")));
+        assert!(!q.matches(&ticket("TICKET-2").label("report")));
     }
 
     #[test]
     fn every_way_of_naming_a_label_selects_the_same_tickets() {
-        let converted = Query::from("scan");
-        let owned = "scan".to_string();
-        let matchers: [(&str, &dyn TicketMatcher); 3] = [
-            ("Query::from", &converted),
-            ("&str", &"scan"),
-            ("String", &owned),
+        let spellings = [
+            ("Query::from", Query::from("scan")),
+            ("&str", TicketMatcher::into_query("scan")),
+            ("String", TicketMatcher::into_query("scan".to_string())),
         ];
-        for (spelling, matcher) in matchers {
+        for (spelling, q) in spellings {
+            assert!(q.matches(&ticket("TICKET-1").label("scan")), "{spelling}");
             assert!(
-                matcher.matches(&ticket("TICKET-1").label("scan")),
+                !q.matches(&ticket("TICKET-2").label("report")),
                 "{spelling}"
             );
-            assert!(
-                !matcher.matches(&ticket("TICKET-2").label("report")),
-                "{spelling}"
-            );
-            assert!(!matcher.matches(&ticket("TICKET-3")), "{spelling}");
+            assert!(!q.matches(&ticket("TICKET-3")), "{spelling}");
         }
     }
 
@@ -2076,8 +2143,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "invalid query")]
     fn a_malformed_query_string_panics_naming_the_input() {
-        let matcher: &dyn TicketMatcher = &"label = ";
-        matcher.matches(&ticket("TICKET-1"));
+        TicketMatcher::into_query("label = ");
     }
 }
 
@@ -2299,22 +2365,21 @@ mod event_tests {
 
     #[test]
     fn a_closure_selects_the_events_it_accepts() {
-        let matcher: &dyn EventMatcher = &|e: &Event| e.kind.is_failure();
-        assert!(matcher.matches(&event(tool_failed("boom"))));
-        assert!(!matcher.matches(&event(EventKind::TurnStarted)));
+        let q = (|e: &Event| e.kind.is_failure()).into_query();
+        assert!(q.matches(&event(tool_failed("boom"))));
+        assert!(!q.matches(&event(EventKind::TurnStarted)));
     }
 
     #[test]
     fn a_string_says_the_same_query_a_compiled_one_does() {
-        let matcher: &dyn EventMatcher = &"tool_call_failed";
-        assert!(matcher.matches(&event(tool_failed("boom"))));
-        assert!(!matcher.matches(&event(EventKind::TurnStarted)));
+        let q = EventMatcher::into_query("tool_call_failed");
+        assert!(q.matches(&event(tool_failed("boom"))));
+        assert!(!q.matches(&event(EventKind::TurnStarted)));
     }
 
     #[test]
     #[should_panic(expected = "invalid query")]
     fn a_malformed_query_string_panics_naming_the_input() {
-        let matcher: &dyn EventMatcher = &"event = ";
-        matcher.matches(&event(EventKind::TurnStarted));
+        EventMatcher::into_query("event = ");
     }
 }

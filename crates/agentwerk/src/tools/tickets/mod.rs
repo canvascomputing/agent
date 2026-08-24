@@ -80,12 +80,15 @@ pub(super) fn resolve_current_key(
     if let Some(key) = ctx.ticket_key.as_deref() {
         return Ok(key.to_string());
     }
+    // Owned, and a closure rather than `agent = {id}`: an id derives from a
+    // host-supplied label, and AQL has no way to bind a value that carries an
+    // operator, a quote, or a space.
     let agent_id = ctx
         .agent_id
-        .as_deref()
+        .clone()
         .ok_or_else(|| ToolResult::error(ctx.directives.render(TICKET_KEY_MISSING, &[])))?;
-    match ticket_queue.find_ticket(|t: &Ticket| {
-        t.status == Status::InProgress && t.assignee.as_deref() == Some(agent_id)
+    match ticket_queue.find_ticket(move |t: &Ticket| {
+        t.status == Status::InProgress && t.assignee.as_deref() == Some(agent_id.as_str())
     }) {
         Some(t) => Ok(t.key.clone()),
         None => Err(ToolResult::error(

@@ -156,7 +156,7 @@ ToolFailureKind::ExecutionFailed.name()   // "execution_failed"
 
 ## Lifecycle
 
-**Three verbs over one filter, each scoped verb paired with a whole-run form: `start` starts, `finish(matches)` and `finish_all()` wait, `cancel(matches)` and `cancel_all()` stop. A filter is `Fn(&Ticket) -> bool`, so the same call names one ticket or one pool.**
+**Three verbs over one filter, each scoped verb paired with a whole-run form: `start` starts, `finish(matches)` and `finish_all()` wait, `cancel(matches)` and `cancel_all()` stop. A filter is a `TicketMatcher`, so the same call names one ticket or one pool.**
 
 ```rust
 tickets.start();
