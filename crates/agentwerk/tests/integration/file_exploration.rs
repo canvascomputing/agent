@@ -3,7 +3,6 @@
 
 use super::common;
 
-use agentwerk::event::EventName;
 use agentwerk::tools::{GlobTool, ReadFileTool, TicketsTool};
 use agentwerk::{Agent, Policy, TicketQueue};
 
@@ -36,12 +35,7 @@ async fn test() -> std::result::Result<(), Box<dyn std::error::Error>> {
     tickets.finish_all().await;
     common::print_result(&tickets);
 
-    assert!(
-        tickets
-            .find_events(|e| e.kind.event_name() == EventName::ToolCallStarted)
-            .len()
-            >= 1
-    );
+    assert!(tickets.find_events("tool_call_started").len() >= 1);
 
     Ok(())
 }

@@ -6,7 +6,6 @@ use std::fs;
 
 use super::common;
 
-use agentwerk::event::EventName;
 use agentwerk::tools::EditFileTool;
 use agentwerk::{Agent, Policy, TicketQueue};
 
@@ -51,10 +50,7 @@ async fn replaces_substring_in_place() -> std::result::Result<(), Box<dyn std::e
     common::print_result(&tickets);
 
     assert!(
-        tickets
-            .find_events(|e| e.kind.event_name() == EventName::ToolCallStarted)
-            .len()
-            >= 1,
+        tickets.find_events("tool_call_started").len() >= 1,
         "agent must call at least one tool"
     );
 

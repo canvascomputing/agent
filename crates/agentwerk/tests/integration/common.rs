@@ -3,7 +3,7 @@
 
 #![allow(dead_code)]
 
-use agentwerk::event::EventName;
+use agentwerk::event::{Event, EventName};
 use agentwerk::providers::{Model, Provider};
 use agentwerk::TicketQueue;
 
@@ -24,7 +24,7 @@ pub fn last_result_text(tickets: &TicketQueue) -> String {
 }
 
 pub fn print_result(tickets: &TicketQueue) {
-    let recorded = tickets.find_events(|_| true);
+    let recorded = tickets.find_events(|_: &Event| true);
     let count = |kind: EventName| {
         recorded
             .iter()

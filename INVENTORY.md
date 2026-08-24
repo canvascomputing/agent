@@ -316,35 +316,54 @@ The rules the tables never repeat.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `trait TicketMatcher: Send + Sync { matches(ticket: Ticket): boolean, names_status(): boolean, sort(tickets: Ticket[]): void }` | pub |
-| Rust | `impl TicketMatcher for F where F: Fn(Ticket) => boolean + Send + Sync` | pub |
+| Rust | `trait TicketMatcher { into_query(): Query }` | pub |
+| Rust | `impl TicketMatcher for F where F: Fn(Ticket) => boolean + Send + Sync + 'static` | pub |
 | Rust | `impl TicketMatcher for &str` | pub |
 | Rust | `impl TicketMatcher for String` | pub |
 | Python | an AQL string stands in for the `Query` wherever one is accepted | |
 | Rust | `Query(Compiled<TicketField>)` | pub |
 | Python | `Query(query: str)` | |
 | Rust | `Query.new(query: string): Query throws QueryError` | pub |
+| Rust | `Query.matches(ticket: Ticket): boolean` | pub |
+| Rust | `Query.all(): Query` | crate |
+| Rust | `Query.and(other: Query): Query` | crate |
+| Rust | `Query.default_status(status: Status): Query` | crate |
+| Rust | `Query.and_status(status: Status): Query` | crate |
+| Rust | `Query.and_result(): Query` | crate |
+| Rust | `Query.sort(tickets: Ticket[]): void` | crate |
 | Rust | `impl From<&str> for Query` | pub |
 | Rust | `impl From<String> for Query` | pub |
 | both | `impl TicketMatcher for Query` | pub |
-| Rust | `trait EventMatcher { matches(event: Event): boolean, sort(events: Event[]): void }` | pub |
-| Rust | `impl EventMatcher for F where F: Fn(Event) => boolean` | pub |
+| Rust | `trait EventMatcher { into_query(): EventQuery }` | pub |
+| Rust | `impl EventMatcher for F where F: Fn(Event) => boolean + Send + Sync + 'static` | pub |
 | Rust | `impl EventMatcher for &str` | pub |
 | Rust | `impl EventMatcher for String` | pub |
 | Python | an AQL string stands in for the `EventQuery` wherever one is accepted | |
 | Rust | `EventQuery(Compiled<EventField>)` | pub |
 | Python | `EventQuery(query: str)` | |
 | Rust | `EventQuery.new(query: string): EventQuery throws QueryError` | pub |
+| Rust | `EventQuery.matches(event: Event): boolean` | pub |
+| Rust | `EventQuery.is_ordered(): boolean` | crate |
+| Rust | `EventQuery.sort(events: Event[]): void` | crate |
 | Rust | `impl From<&str> for EventQuery` | pub |
 | Rust | `impl From<String> for EventQuery` | pub |
 | both | `impl EventMatcher for EventQuery` | pub |
-| Rust | `enum Condition<F: QueryField> { All(Condition<F>[]), Any(Condition<F>[]), Not(Condition<F>), Term(F, Match) }` | private |
+| Rust | `enum Condition<F: QueryField> { All(Condition<F>[]), Any(Condition<F>[]), Not(Condition<F>), Term(F, Match), Test(Predicate<F.Record>) }` | private |
 | Rust | `Condition.matches(record: F.Record): boolean` | private |
 | Rust | `Condition.mentions(field: F): boolean` | private |
+| Rust | `Predicate<R>((record: R) => boolean)` | private |
+| Rust | `impl Clone for Predicate<R>` | private |
+| Rust | `impl Debug for Predicate<R>` | private |
 | Rust | `Compiled<F: QueryField> { root: Condition<F>, order: Sort<F>? }` | private |
 | Rust | `Compiled.new(query: string): Compiled<F> throws QueryError` | private |
+| Rust | `Compiled.all(): Compiled<F>` | private |
+| Rust | `Compiled.test(check: (record: F.Record) => boolean): Compiled<F>` | private |
+| Rust | `Compiled.term(field: F, matcher: Match): Compiled<F>` | private |
+| Rust | `Compiled.rooted(root: Condition<F>): Compiled<F>` | private |
+| Rust | `Compiled.and(other: Compiled<F>): Compiled<F>` | private |
 | Rust | `Compiled.matches(record: F.Record): boolean` | private |
 | Rust | `Compiled.mentions(field: F): boolean` | private |
+| Rust | `Compiled.is_ordered(): boolean` | private |
 | Rust | `Compiled.sort(records: T[]): void` | private |
 | Rust | `trait QueryField: Copy + PartialEq + Debug + 'static { Record, FIELDS, of, kind, is_optional, shorthand, label, tie_break, sort_unordered, canonical, compare, named, name, spellings, allows, operators }` | private |
 | Rust | `enum TicketField { Key, Label, Status, Agent, Parent, Task, Result, Errors, Created, Started, Finished, Failed }` | private |
@@ -511,7 +530,6 @@ The rules the tables never repeat.
 | Language | Item | Visibility |
 |----------|------|------------|
 | Rust | `EventHandler = (queue: TicketQueue, event: Event) => void` | private |
-| Rust | `TicketFilter = (ticket: Ticket) => boolean` | crate |
 | Rust | `EVENT_STREAM_CAPACITY: number = 1024` | private |
 | Rust | `is_ticket_kind(kind: EventKind): boolean` | private |
 | Rust | `is_recorded_failure(kind: EventKind): boolean` | private |
@@ -534,7 +552,7 @@ The rules the tables never repeat.
 | Rust | `Run.until_draining(): Promise<void>` | crate |
 | Rust | `Run.until_finished(): Promise<void>` | crate |
 | Rust | `Run.reset(): void` | private |
-| Rust | `TicketQueue { weak_self: Weak<TicketQueue>, tickets: Record<string, Ticket>, agents: Agent[], policy: Policy, run: Run, cancel_filters: TicketFilter[], terminal_transitions_in_flight: number, stats: Stats, event_handlers: EventHandler[], awaited_events: AwaitedEvents, event_stream: Sender<Event>, schemas: SchemaStore?, dir: string, events_lock: void, join_handle: JoinHandle<void>?, next_ticket_id: number? }` | pub |
+| Rust | `TicketQueue { weak_self: Weak<TicketQueue>, tickets: Record<string, Ticket>, agents: Agent[], policy: Policy, run: Run, cancel_filters: Query[], terminal_transitions_in_flight: number, stats: Stats, event_handlers: EventHandler[], awaited_events: AwaitedEvents, event_stream: Sender<Event>, schemas: SchemaStore?, dir: string, events_lock: void, join_handle: JoinHandle<void>?, next_ticket_id: number? }` | pub |
 | Python | `TicketQueue` | |
 | Rust | `TicketQueue.new(): TicketQueue` | pub |
 | Python | `TicketQueue()` | |
@@ -576,16 +594,17 @@ The rules the tables never repeat.
 | both | `TicketQueue.find_tickets(predicate: TicketMatcher): Ticket[]` | pub |
 | Python | `TicketQueue.find_tickets(predicate)`: accepts a `Query` or a callable | |
 | both | `TicketQueue.find_ticket(predicate: TicketMatcher): Ticket?` | pub |
-| Rust | `TicketQueue.matching_tickets(keep: (ticket: Ticket) => boolean, order: TicketMatcher): Ticket[]` | private |
-| Rust | `TicketQueue.first_matching_ticket(keep: (ticket: Ticket) => boolean, order: TicketMatcher): Ticket?` | private |
+| Rust | `TicketQueue.matching_tickets(query: Query): Ticket[]` | private |
+| Rust | `TicketQueue.first_matching_ticket(query: Query): Ticket?` | private |
 | Python | `TicketQueue.find_ticket(predicate)`: accepts a `Query` or a callable | |
 | both | `TicketQueue.find_events(matcher: EventMatcher): Event[]`: an AQL string stands in for the `EventQuery` | pub |
 | both | `TicketQueue.find_event(matcher: EventMatcher): Event?` | pub |
+| Rust | `TicketQueue.collect_events(query: EventQuery, wanted: number): Event[]` | private |
 | both | `TicketQueue.cancel(matches: TicketMatcher): TicketQueue` | pub |
 | Python | `TicketQueue.cancel(matches)`: accepts a `Query` or a callable | |
 | both | `TicketQueue.cancel_all(): TicketQueue` | pub |
 | both | `TicketQueue.is_cancelled(ticket: Ticket): boolean` | pub |
-| Rust | `TicketQueue.pending(matches: TicketMatcher): boolean` | crate |
+| Rust | `TicketQueue.pending(matches: Query): boolean` | crate |
 | Rust | `TicketQueue.ending_reason(): FinishReason?` | crate |
 | Rust | `TicketQueue.anything_pending(): boolean` | private |
 | Rust | `TicketQueue.is_running(): boolean` | private |
@@ -606,7 +625,7 @@ The rules the tables never repeat.
 | both | `TicketQueue.find_results(query)`: an AQL string stands in for the `Query` | |
 | both | `TicketQueue.find_result(matches: TicketMatcher): json?` | pub |
 | both | `TicketQueue.find_result(query)`: an AQL string stands in for the `Query` | |
-| Rust | `finished_results(matches: TicketMatcher, finished_only: boolean, ticket: Ticket): boolean` | private |
+| Rust | `results_of(matches: TicketMatcher): Query` | private |
 
 ## `crates/agentwerk/src/agents/tickets/trajectory.rs`
 
@@ -1938,7 +1957,8 @@ Binds `event.rs` and the event half of `agents/query.rs`.
 | Rust | `PyEventQuery.new(query: string): PyEventQuery throws PyErr` | python |
 | Rust | `PyEventQuery.__repr__(): string` | python |
 | Rust | `to_query(query: string): EventQuery throws PyErr` | private |
-| Rust | `try_extract_query(arg: any): EventQuery? throws PyErr` | pub |
+| Rust | `to_matcher(arg: any): EventQuery throws PyErr` | pub |
+| Rust | `event_predicate(predicate: any, event: Event): boolean` | private |
 | Rust | `PyEvent { kind: string, created_at: number, agent_id: string, ticket_key: string, label: string?, data: json }` | python |
 | Rust | `PyEvent.data(): any throws PyErr` | python |
 | Rust | `PyEvent.__repr__(): string` | python |
@@ -2053,7 +2073,8 @@ Binds `agents/tickets/ticket.rs` and the ticket half of `agents/query.rs`.
 | Rust | `PyQuery.new(query: string): PyQuery throws PyErr` | python |
 | Rust | `PyQuery.__repr__(): string` | python |
 | Rust | `to_query(query: string): Query throws PyErr` | private |
-| Rust | `try_extract_query(arg: any): Query? throws PyErr` | pub |
+| Rust | `to_matcher(arg: any): Query throws PyErr` | pub |
+| Rust | `ticket_predicate(predicate: any, ticket: Ticket): boolean` | private |
 | Rust | `to_ticket(arg: any): Ticket throws PyErr`, reading an `os.PathLike` as the file holding the task | pub |
 | Rust | `PyTicket { inner: Ticket }` | python |
 | Rust | `PyTicket.new(task: any, label: string?, schema: PySchema?, parent: string?): PyTicket throws PyErr` | python |
@@ -2135,8 +2156,6 @@ Binds `agents/tickets/ticket_queue.rs` and `store.rs`.
 | Rust | `call_with_result(py: Python, callable: any, queue: TicketQueue, ticket: Ticket, result: json): any throws PyErr` | private |
 | Rust | `call_with_ticket(py: Python, callable: any, queue: TicketQueue, event: Event, ticket: Ticket): any throws PyErr` | private |
 | Rust | `await_coroutine(coroutine: Promise<any throws PyErr> throws PyErr): Promise<void>` | private |
-| Rust | `event_predicate(predicate: any, event: Event): boolean` | private |
-| Rust | `ticket_predicate(predicate: any, ticket: Ticket): boolean` | private |
 
 ## `crates/agentwerk-py/src/tools.rs`
 
