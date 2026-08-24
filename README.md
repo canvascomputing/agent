@@ -661,6 +661,7 @@ tickets.start();
 │   └── TICKET-1/
 │       ├── ticket.json                   the ticket without its messages (key, status, label, timestamps)
 │       ├── result.json                   the result the agent produced
+│       ├── errors.jsonl                   every failure recorded against the ticket, one per line
 │       ├── replies.jsonl                 every message exchanged with the model, one per line
 │       └── outputs/<tool_use_id>.txt     full tool outputs spilled out of the messages
 └── knowledge/

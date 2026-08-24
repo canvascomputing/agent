@@ -7,7 +7,7 @@ use std::sync::Arc;
 use crate::agents::agent::Agent;
 use crate::agents::policy::Policy;
 use crate::agents::tickets::{policy_violated, Reply, Run, Status, Ticket, TicketQueue};
-use crate::event::{CompactReason, PolicyViolation, Event, EventKind};
+use crate::event::{CompactReason, Event, EventKind, PolicyViolation};
 use crate::prompts::directives::{NO_TOOL_CALLED, REPLY_REJECTED};
 use crate::providers::{AsUserMessage, Message, Model, RequestErrorKind};
 use crate::tools::{FinishTool, ToolRegistry};
@@ -957,7 +957,7 @@ mod tests {
 
     #[tokio::test]
     async fn loop_fails_ticket_when_silence_exceeds_schema_retry_budget() {
-        use crate::event::{PolicyViolation, EventKind};
+        use crate::event::{EventKind, PolicyViolation};
 
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let provider = MockProvider::with_results(vec![Ok(text_response("hi"))]);

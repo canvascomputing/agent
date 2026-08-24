@@ -386,8 +386,8 @@ The rules the tables never repeat.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `Ticket { task: json, label: string?, schema: Schema?, key: string, status: Status, reporter: string, assignee: string?, created_at: number, started_at: number?, finished_at: number?, failed_at: number?, result: json?, parent: string?, replies: Reply[] }` | pub |
-| Python | `Ticket`: same field names. `replies` is a list of `Reply`, converted on access | |
+| Rust | `Ticket { task: json, label: string?, schema: Schema?, key: string, status: Status, reporter: string, assignee: string?, created_at: number, started_at: number?, finished_at: number?, failed_at: number?, result: json?, errors: Event[], parent: string?, replies: Reply[] }` | pub |
+| Python | `Ticket`: same field names. `replies` is a list of `Reply` and `errors` a list of `Event`, converted on access | |
 | Rust | `Ticket.new(task: json): Ticket` | pub |
 | Python | `Ticket(task)` | |
 | Rust | `Ticket.labeled(label: string, task: json): Ticket` | pub |
@@ -418,9 +418,13 @@ The rules the tables never repeat.
 | Rust | `Replies { key: string, entries: Reply[] }` | crate |
 | Rust | `Replies.append(dir: string, key: string, reply: Reply): void throws io::Error` | crate |
 | Rust | `impl Persist for Replies` | crate |
+| Rust | `TicketErrors { key: string, entries: Event[] }` | crate |
+| Rust | `TicketErrors.append(dir: string, key: string, event: Event): void throws io::Error` | crate |
+| Rust | `impl Persist for TicketErrors` | crate |
 | Rust | `ticket_record_path(dir: string, key: string): string` | super |
 | Rust | `replies_path(dir: string, key: string): string` | private |
 | Rust | `result_path(dir: string, key: string): string` | super |
+| Rust | `errors_path(dir: string, key: string): string` | super |
 | Rust | `impl AsUserMessage for Ticket` | pub |
 | Rust | `Status` | pub |
 | Python | a string: `"todo"`, `"in_progress"`, `"finished"`, `"failed"`. The five `is_*` predicates read better than comparing it | |
@@ -2058,6 +2062,7 @@ Binds `agents/tickets/ticket.rs` and `agents/tickets/query.rs`.
 | Rust | `PyTicket.finished_at(): number?` | python |
 | Rust | `PyTicket.failed_at(): number?` | python |
 | Rust | `PyTicket.replies(): PyReply[]` | python |
+| Rust | `PyTicket.errors(): PyEvent[]` | python |
 | Rust | `PyTicket.__repr__(): string` | python |
 | Rust | `PyTicket.from_ticket(ticket: Ticket): PyTicket` | pub |
 | Rust | `PyTicket.to_ticket(): Ticket` | pub |

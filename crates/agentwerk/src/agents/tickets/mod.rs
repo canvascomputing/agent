@@ -2,7 +2,7 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::event::{PolicyViolation, EventName};
+use crate::event::{EventName, PolicyViolation};
 
 use super::policy::Policy;
 use super::stats::Stats;
@@ -25,7 +25,7 @@ pub use ticket::{Status, Ticket};
 pub use ticket_queue::TicketQueue;
 pub use trajectory::Trajectory;
 
-pub(crate) use ticket::{Replies, TicketResult};
+pub(crate) use ticket::{Replies, TicketErrors, TicketResult};
 pub(crate) use ticket_queue::Run;
 
 /// Whether the run-wide policy have been exceeded by the current

@@ -9,8 +9,8 @@ use crate::prompts::{context_values, render_context, PromptBuilder, Text};
 use crate::providers::{Model, Provider};
 use crate::tools::{FinishTool, KnowledgeTool, Tool, ToolRegistry};
 
-use super::policy::Policy;
 use super::knowledge::Knowledge;
+use super::policy::Policy;
 use super::stats::Stats;
 use super::tickets::{Ticket, TicketQueue};
 use crate::prompts::directives::DirectiveStore;

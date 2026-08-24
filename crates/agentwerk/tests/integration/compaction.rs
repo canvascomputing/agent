@@ -9,7 +9,7 @@ use super::common;
 
 use agentwerk::agents::tickets::Author;
 use agentwerk::event::EventKind;
-use agentwerk::{Agent, Policy, Event, Ticket, TicketQueue};
+use agentwerk::{Agent, Event, Policy, Ticket, TicketQueue};
 
 // Pins a known context window: the trigger stays quiet on a model whose window
 // it cannot look up, and the model here comes from the environment. The first

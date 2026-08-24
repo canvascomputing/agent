@@ -34,7 +34,7 @@ use agentwerk::providers::Model;
 use agentwerk::tools::{
     GlobTool, GrepTool, ListDirectoryTool, ReadFileTool, TicketsTool, WriteFileTool,
 };
-use agentwerk::{Agent, Policy, Knowledge, Ticket, TicketQueue};
+use agentwerk::{Agent, Knowledge, Policy, Ticket, TicketQueue};
 
 const ROLE: &str = include_str!("prompts/repl.role.md");
 const BIBLE_PASSAGE: &str = include_str!("prompts/bible.txt");

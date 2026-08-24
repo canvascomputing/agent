@@ -181,6 +181,16 @@ def test_set_failed_resolves_a_ticket_from_outside_the_run(queue):
     assert queue.get_ticket(key).status == "failed"
 
 
+def test_errors_is_a_list_and_excludes_the_terminal_failure(queue):
+    key = queue.ticket(aw.Ticket("scan the corpus"))
+
+    queue.set_failed(key)
+
+    # A host fail is the terminal marker, not a recorded cause: the errors
+    # list holds the failure events (failed requests, tool calls) the run saw.
+    assert queue.get_ticket(key).errors == []
+
+
 def test_set_finished_resolves_a_ticket_with_its_result(queue):
     key = queue.ticket(aw.Ticket("scan the corpus"))
 

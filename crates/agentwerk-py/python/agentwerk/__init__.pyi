@@ -159,6 +159,7 @@ class Ticket:
     finished_at: Optional[int]
     failed_at: Optional[int]
     replies: list[Reply]
+    errors: list[Event]
 
     def __init__(
         self,

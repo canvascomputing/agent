@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
+use crate::event::Event;
 use crate::persistence::Persist;
 use crate::prompts::Text;
 use crate::providers::{AsUserMessage, Message};
@@ -67,6 +68,12 @@ pub struct Ticket {
     /// of the ticket record.
     #[serde(skip)]
     pub result: Option<serde_json::Value>,
+    /// Failures recorded against the ticket, appended as they happen. A tool
+    /// call or request that failed does not fail the ticket, so this can carry
+    /// entries on a ticket that finished. Stored in its own file, so it is not
+    /// part of the ticket record.
+    #[serde(skip)]
+    pub errors: Vec<Event>,
     /// The parent ticket if a handover was performed.
     pub parent: Option<String>,
     /// Messages exchanged with the model.
@@ -94,6 +101,7 @@ impl Ticket {
             finished_at: None,
             failed_at: None,
             result: None,
+            errors: Vec::new(),
             parent: None,
             replies: Vec::new(),
         }
@@ -258,6 +266,7 @@ impl crate::persistence::Persist for Ticket {
         let mut ticket: Ticket = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
         ticket.replies = Replies::load(dir, key)?.entries;
         ticket.result = TicketResult::load(dir, key)?.value;
+        ticket.errors = TicketErrors::load(dir, key)?.entries;
         Ok(ticket)
     }
 }
@@ -349,6 +358,56 @@ impl Persist for Replies {
     }
 }
 
+/// A ticket's failures on disk, one JSON [`Event`] per line in
+/// `tickets/<key>/errors.jsonl`.
+///
+/// The failure parallel of [`Replies`]: [`TicketErrors::append`] adds one line
+/// as each failure is emitted, and [`Persist::load`] reads them back.
+pub(crate) struct TicketErrors {
+    pub(crate) key: String,
+    pub(crate) entries: Vec<Event>,
+}
+
+impl TicketErrors {
+    /// Add one failure event as a single line, without reading the file.
+    pub(crate) fn append(dir: &Path, key: &str, event: &Event) -> io::Result<()> {
+        let line = serde_json::to_string(event).map_err(io::Error::other)?;
+        crate::persistence::append_line(&errors_path(dir, key), &line)
+    }
+}
+
+impl Persist for TicketErrors {
+    type Key = String;
+
+    /// Rewrite `errors.jsonl` whole. Unused by the append path, present for the
+    /// same [`Persist`] shape [`Replies`] carries.
+    fn save(&self, dir: &Path) -> io::Result<()> {
+        let mut body = String::new();
+        for event in &self.entries {
+            body.push_str(&serde_json::to_string(event).map_err(io::Error::other)?);
+            body.push('\n');
+        }
+        crate::persistence::write_atomic(&errors_path(dir, &self.key), body.as_bytes())
+    }
+
+    fn load(dir: &Path, key: &String) -> io::Result<Self> {
+        let path = errors_path(dir, key);
+        let entries = if path.exists() {
+            std::fs::read_to_string(&path)?
+                .lines()
+                .filter(|l| !l.is_empty())
+                .map(|l| serde_json::from_str::<Event>(l).map_err(io::Error::other))
+                .collect::<io::Result<Vec<_>>>()?
+        } else {
+            Vec::new()
+        };
+        Ok(TicketErrors {
+            key: key.clone(),
+            entries,
+        })
+    }
+}
+
 /// Where `key`'s ticket is stored: `tickets/<key>/ticket.json`.
 pub(super) fn ticket_record_path(dir: &Path, key: &str) -> PathBuf {
     dir.join("tickets").join(key).join("ticket.json")
@@ -362,6 +421,11 @@ fn replies_path(dir: &Path, key: &str) -> PathBuf {
 /// Where `key`'s result is stored: `tickets/<key>/result.json`.
 pub(super) fn result_path(dir: &Path, key: &str) -> PathBuf {
     dir.join("tickets").join(key).join("result.json")
+}
+
+/// Where `key`'s failures are stored: `tickets/<key>/errors.jsonl`.
+pub(super) fn errors_path(dir: &Path, key: &str) -> PathBuf {
+    dir.join("tickets").join(key).join("errors.jsonl")
 }
 
 impl AsUserMessage for Ticket {
