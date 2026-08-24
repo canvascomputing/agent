@@ -22,7 +22,7 @@ use super::super::query::{EventMatcher, TicketMatcher};
 use super::super::r#loop::run_main_loop;
 use super::super::stats::Stats;
 use super::ticket::{Status, Ticket};
-use super::{numeric_id, policy_violated, Reply, TicketErrors};
+use super::{numeric_id, policy_violated, Reply};
 
 /// The queue arrives first so a handler selects tickets and files follow-up work
 /// without capturing an `Arc` into the queue that holds it.
@@ -52,6 +52,16 @@ fn is_ticket_kind(kind: &EventKind) -> bool {
         kind,
         EventKind::TicketStarted | EventKind::TicketFinished | EventKind::TicketFailed
     )
+}
+
+/// Whether the event is one a ticket carries in `Ticket::errors`. `TicketFailed`
+/// is left out: it is the outcome, already carried by the ticket's status and
+/// `failed_at`, not a cause.
+///
+/// Read by `emit` as it happens and by `load` off the session log, so a ticket
+/// carries the same failures either way.
+fn is_recorded_failure(kind: &EventKind) -> bool {
+    kind.is_failure() && !matches!(kind, EventKind::TicketFailed)
 }
 
 /// An awaited handler and the kinds it accepts. The filter is read twice: once
@@ -338,9 +348,19 @@ impl TicketQueue {
             }
         }
 
+        // One pass over the log fills both: the figures the run resumes on, and
+        // the failures each ticket saw, which no ticket file carries.
+        let stats = Stats::new();
+        let _ = Stats::for_each_event(&tickets_dir, |event| {
+            stats.record(event);
+            if is_recorded_failure(&event.kind) {
+                if let Some(ticket) = tickets.get_mut(&event.ticket_key) {
+                    ticket.errors.push(event.clone());
+                }
+            }
+        });
         // The clock starts over: `max_time` bounds this run, not the one that
         // wrote the log.
-        let stats = Stats::load(&tickets_dir).unwrap_or_else(|_| Stats::new());
         stats.restart_clock();
         let next_id = tickets
             .keys()
@@ -721,22 +741,13 @@ impl TicketQueue {
             let _ = Stats::append(&self.get_dir(), &event);
         }
         // Record a failure against its ticket, the way a result is recorded
-        // against it. `TicketFailed` is left out: it is the outcome, already
-        // carried by the ticket's status and `failed_at`, not a cause. Pushed
-        // before the handlers run, so one receiving the ticket sees it.
-        if event.kind.is_failure() && !matches!(event.kind, EventKind::TicketFailed) {
-            let recorded = {
-                let mut store = self.tickets.lock().unwrap();
-                store
-                    .get_mut(key)
-                    .map(|t| t.errors.push(event.clone()))
-                    .is_some()
-            };
-            if recorded {
-                // Best-effort, like the other ticket writes: it is already in
-                // memory and in `events.jsonl`, so a failed append is
-                // observational.
-                let _ = TicketErrors::append(&self.get_dir(), key, &event);
+        // against it. Pushed before the handlers run, so one receiving the
+        // ticket sees it. Nothing is written: the line is already in
+        // `events.jsonl`, and `load` reads it back from there.
+        if is_recorded_failure(&event.kind) {
+            let mut store = self.tickets.lock().unwrap();
+            if let Some(ticket) = store.get_mut(key) {
+                ticket.errors.push(event.clone());
             }
         }
         let handlers: Vec<Arc<EventHandler>> = self.event_handlers.lock().unwrap().clone();
@@ -1995,15 +2006,21 @@ mod tests {
         let names: Vec<&str> = ticket.errors.iter().map(|e| e.kind.name()).collect();
         assert_eq!(names, ["tool_call_failed", "request_failed"]);
 
-        // One JSON line per failure, each a full event.
-        let body =
-            std::fs::read_to_string(dir.path().join("tickets").join(&key).join("errors.jsonl"))
-                .unwrap();
-        let lines: Vec<&str> = body.lines().collect();
-        assert_eq!(lines.len(), 2);
-        for line in lines {
-            let _: crate::event::Event = serde_json::from_str(line).unwrap();
-        }
+        // Written once, to the session log, as a full event per line.
+        let body = std::fs::read_to_string(dir.path().join("events.jsonl")).unwrap();
+        let logged: Vec<String> = body
+            .lines()
+            .map(|line| serde_json::from_str::<crate::event::Event>(line).unwrap())
+            .filter(|event| is_recorded_failure(&event.kind))
+            .map(|event| event.kind.name().to_string())
+            .collect();
+        assert_eq!(logged, names);
+        assert!(!dir
+            .path()
+            .join("tickets")
+            .join(&key)
+            .join("errors.jsonl")
+            .exists());
     }
 
     #[test]
@@ -2032,10 +2049,42 @@ mod tests {
 
     #[test]
     fn the_terminal_ticket_failed_is_not_recorded_as_an_error() {
-        let (queue, _tmp) = test_queue();
+        let dir = crate::test_util::TempDir::new().unwrap();
+        let queue = TicketQueue::new();
+        queue.dir(dir.path().to_path_buf());
         let key = queue.ticket("work");
         queue.set_failed(&key).unwrap();
         assert!(queue.get_ticket(&key).unwrap().errors.is_empty());
+
+        // The log carries `ticket_failed` either way, so a resumed session that
+        // read it back as a failure would disagree with the run that wrote it.
+        drop(queue);
+        let resumed = TicketQueue::load(dir.path()).unwrap();
+        assert!(resumed.get_ticket(&key).unwrap().errors.is_empty());
+    }
+
+    #[test]
+    fn a_failure_naming_a_ticket_the_directory_lost_is_skipped() {
+        let dir = crate::test_util::TempDir::new().unwrap();
+        let original = TicketQueue::new();
+        original.dir(dir.path().to_path_buf());
+        let key = original.ticket("work");
+        original.emit(
+            &key,
+            "agent",
+            EventKind::ToolCallFailed {
+                tool_name: "grep".into(),
+                call_id: "c1".into(),
+                reason: ToolFailureKind::ExecutionFailed,
+                message: "boom".into(),
+            },
+        );
+        drop(original);
+        std::fs::remove_dir_all(dir.path().join("tickets").join(&key)).unwrap();
+
+        let resumed = TicketQueue::load(dir.path()).unwrap();
+        assert!(resumed.get_ticket(&key).is_none());
+        assert_eq!(resumed.input_tokens(), 0);
     }
 
     #[test]
