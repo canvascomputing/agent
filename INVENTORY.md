@@ -453,7 +453,7 @@ The rules the tables never repeat.
 | Rust | `enum Condition { All(Condition[]), Any(Condition[]), Not(Condition), Term(Field, Match) }` | private |
 | Rust | `Condition.matches(ticket: Ticket): boolean` | private |
 | Rust | `Condition.mentions(field: Field): boolean` | private |
-| Rust | `enum Field { Key, Label, Status, Agent, Parent, Task, Result, Created, Started, Finished, Failed }` | private |
+| Rust | `enum Field { Key, Label, Status, Agent, Parent, Task, Result, Errors, Created, Started, Finished, Failed }` | private |
 | Rust | `enum Kind { Value, Text, Time }` | private |
 | Rust | `FIELDS: [string, Field][]` | private |
 | Rust | `Field.named(name: string): Field?` | private |
@@ -471,13 +471,16 @@ The rules the tables never repeat.
 | Rust | `STATUSES: Status[]` | private |
 | Rust | `millis_text(millis: number): string` | private |
 | Rust | `millis(value: string): number` | private |
+| Rust | `time_value(field: Field, value: string): number throws QueryError` | private |
+| Rust | `ago(offset: string): number?` | private |
+| Rust | `date_millis(value: string): number?` | private |
 | Rust | `status_rank(value: string): number` | private |
-| Rust | `enum Match { Is, IsNot, In, NotIn, Contains, Omits, Empty, NotEmpty }` | private |
+| Rust | `enum Match { Is, IsNot, In, NotIn, Contains, Omits, After, NotBefore, Before, NotAfter, Empty, NotEmpty }` | private |
 | Rust | `Match.test(value: string?): boolean` | private |
-| Rust | `enum QueryError { Blank, UnknownField, UnknownStatus, OperatorNotAllowed, RepeatedField, UnexpectedToken, UnexpectedEnd }` | pub |
+| Rust | `enum QueryError { Blank, UnknownField, UnknownStatus, InvalidTime, OperatorNotAllowed, RepeatedField, UnexpectedToken, UnexpectedEnd }` | pub |
 | Rust | `impl Display for QueryError` | pub |
 | Rust | `impl Error for QueryError` | pub |
-| Rust | `enum Token { Word, Quoted, Equals, NotEquals, Contains, Omits, Open, Close, Comma }` | private |
+| Rust | `enum Token { Word, Quoted, Equals, NotEquals, Contains, Omits, After, NotBefore, Before, NotAfter, Open, Close, Comma }` | private |
 | Rust | `Token.spelling(): string` | private |
 | Rust | `Token.is_keyword(keyword: string): boolean` | private |
 | Rust | `tokenize(query: string): Token[] throws QueryError` | private |
@@ -491,6 +494,7 @@ The rules the tables never repeat.
 | Rust | `Parser.term(): Condition throws QueryError` | private |
 | Rust | `Parser.operator(field: Field): Match throws QueryError` | private |
 | Rust | `Parser.value(field: Field): string throws QueryError` | private |
+| Rust | `Parser.time(field: Field): number throws QueryError` | private |
 | Rust | `Parser.values(field: Field): string[] throws QueryError` | private |
 | Rust | `shorthand(word: string): Condition` | private |
 | Rust | `canonical(field: Field, value: string): string throws QueryError` | private |

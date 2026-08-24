@@ -313,6 +313,8 @@ tickets.find_results("scan ORDER BY finished DESC")
 | | `label IS NOT EMPTY` | Select the tickets carrying one. |
 | **Search** | `task ~ "retry budget"` | Search the task body, ignoring case. |
 | | `task !~ draft` | Exclude the tasks the text appears in. |
+| **Compare** | `failed > -1h` | Select the tickets that failed inside the last hour. |
+| | `created >= 2026-08-24` | Select the tickets submitted on that date or later. |
 | **Combine** | `A AND B` | Require both terms; `AND` binds tighter than `OR`. |
 | | `A OR B` | Require either term. |
 | | `NOT A` | Invert a term or a group. |
@@ -334,10 +336,10 @@ tickets.find_results("scan ORDER BY finished DESC")
 | | `result` | Search the result the agent produced. |
 | | `errors` | Search the failures recorded against the ticket. |
 | **Body** | `task` | Search the work the agent was asked to do. |
-| **Time** | `created` | Sort by when the ticket was submitted. |
-| | `started` | Sort by when an agent claimed the ticket. |
-| | `finished` | Sort by when the ticket reached the `finished` status. |
-| | `failed` | Sort by when the ticket reached the `failed` status. |
+| **Time** | `created` | Compare or sort by when the ticket was submitted. |
+| | `started` | Compare or sort by when an agent claimed the ticket. |
+| | `finished` | Compare or sort by when the ticket reached the `finished` status. |
+| | `failed` | Compare or sort by when the ticket reached the `failed` status. |
 
 #### Rules
 
@@ -347,7 +349,8 @@ tickets.find_results("scan ORDER BY finished DESC")
 - A field holds one value per ticket, so `label = a AND label = b` is rejected and names `IN` as the fix.
 - `ORDER BY` names one field and closes the query. Every field sorts, `key` by its number and `status` along the lifecycle.
 - Without it tickets arrive in creation order, which is also what breaks a tie and what a callable answers in. A ticket missing the field sorts last.
-- The four times sort and nothing else, since AQL has no `>`. The three an agent can leave unset also read `IS EMPTY`, so `finished IS EMPTY` selects the tickets still open.
+- The four times take `>`, `>=`, `<`, `<=` and sort. The three an agent can leave unset also read `IS EMPTY`, so `finished IS EMPTY` selects the tickets still open.
+- A compared moment is a `YYYY-MM-DD` date at midnight UTC, an offset back from now spelled `-30m`, `-2h`, `-7d`, or `-1w`, or milliseconds since the epoch. An offset is resolved when the query compiles, so one query answers one set however long it is held.
 - A query may be nothing but an `ORDER BY`, which selects every ticket.
 - A string that does not compile raises `ValueError`, as does `Query(query)`, which compiles one without running it.
 
