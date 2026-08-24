@@ -100,7 +100,7 @@ The rules the tables never repeat.
 | Rust | `Agent.id(): string` | pub |
 | Python | `Agent.id`: a property, and a `RuntimeError` before `build()` | |
 | Rust | `Agent.is_interactive(): boolean` | super |
-| Rust | `Agent.handles(ticket_label: string?): boolean` | super |
+| Rust | `Agent.handles(agent_label: string?, ticket_label: string?): boolean` | super |
 | Rust | `Agent.tool_registry(): ToolRegistry` | super |
 | Rust | `Agent.provider(): Provider` | super |
 | Rust | `Agent.knowledge(): Knowledge` | super |
@@ -465,7 +465,7 @@ The rules the tables never repeat.
 | Rust | `TicketQueue.insert(ticket: Ticket, reporter: string): string` | crate |
 | Rust | `TicketQueue.save_ticket(key: string): void` | private |
 | Rust | `TicketQueue.write_tool_output(key: string, tool_use_id: string, content: string): string?` | crate |
-| Rust | `TicketQueue.claim(predicate: (ticket: Ticket) => boolean, agent_id: string): string?` | crate |
+| Rust | `TicketQueue.claim(query: Query, agent_id: string): string?` | crate |
 | Rust | `TicketQueue.add_reply(key: string, reply: Reply): void` | crate |
 | Rust | `TicketQueue.set_finished_by(key: string, agent: string): void throws TicketError` | crate |
 | both | `TicketQueue.set_finished(key: string, result: json): void throws TicketError` | pub |

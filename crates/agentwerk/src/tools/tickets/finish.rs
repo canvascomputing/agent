@@ -257,6 +257,7 @@ mod tests {
 
     use super::*;
     use crate::agents::tickets::{Status, Ticket, TicketQueue};
+    use crate::agents::Query;
     use crate::schemas::Schema;
 
     fn ctx_with(ticket_queue: Arc<TicketQueue>, agent: &str, dir: PathBuf) -> ToolContext {
@@ -270,7 +271,7 @@ mod tests {
         queue.dir(shared_test_dir().to_path_buf());
         queue.insert(Ticket::new("body").label(agent), "tester".into());
         let key = queue
-            .claim(|t| t.status == Status::Todo, agent)
+            .claim(&Query::from("status = Todo"), agent)
             .expect("claim must succeed");
         (queue, key)
     }
@@ -311,7 +312,7 @@ mod tests {
             "tester".into(),
         );
         queue
-            .claim(|t| t.status == Status::Todo, "alice")
+            .claim(&Query::from("status = Todo"), "alice")
             .expect("claim must succeed");
         queue
     }
@@ -426,7 +427,7 @@ mod tests {
             "tester".into(),
         );
         let key = queue
-            .claim(|t| t.status == Status::Todo, "alice")
+            .claim(&Query::from("status = Todo"), "alice")
             .expect("claim must succeed");
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
 
@@ -604,7 +605,7 @@ mod tests {
             "tester".into(),
         );
         let key = queue
-            .claim(|t| t.status == Status::Todo, "alice")
+            .claim(&Query::from("status = Todo"), "alice")
             .expect("claim must succeed");
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
 
@@ -649,7 +650,7 @@ mod tests {
             "tester".into(),
         );
         let key = queue
-            .claim(|t| t.status == Status::Todo, "alice")
+            .claim(&Query::from("status = Todo"), "alice")
             .expect("claim must succeed");
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
 
@@ -679,7 +680,7 @@ mod tests {
             "tester".into(),
         );
         let key = queue
-            .claim(|t| t.status == Status::Todo, "alice")
+            .claim(&Query::from("status = Todo"), "alice")
             .expect("claim must succeed");
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
 
@@ -718,7 +719,7 @@ mod tests {
 
         queue.insert(Ticket::new("a").label("alice"), "tester".into());
         let key1 = queue
-            .claim(|t| t.key == "TICKET-1", "alice")
+            .claim(&Query::from("TICKET-1"), "alice")
             .expect("claim must succeed");
         let ctx_alice = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
         Tool::from(FinishTool)
@@ -727,7 +728,7 @@ mod tests {
 
         queue.insert(Ticket::new("b").label("bob"), "tester".into());
         let key2 = queue
-            .claim(|t| t.key == "TICKET-2", "bob")
+            .claim(&Query::from("TICKET-2"), "bob")
             .expect("claim must succeed");
         let ctx_bob = ctx_with(Arc::clone(&queue), "bob", dir.path().to_path_buf());
         Tool::from(FinishTool)
@@ -754,7 +755,10 @@ mod tests {
                 "tester".into(),
             );
             let key = queue
-                .claim(|t| t.status == Status::Todo && t.has_label(&agent), &agent)
+                .claim(
+                    &Query::from(format!("status = Todo AND label = {agent}")),
+                    &agent,
+                )
                 .expect("claim must succeed");
             expected.push((agent, key));
         }
@@ -799,7 +803,7 @@ mod tests {
         queue.dir(dir);
         queue.insert(Ticket::new("parent body").label(agent), "tester".into());
         let key = queue
-            .claim(|t| t.status == Status::Todo, agent)
+            .claim(&Query::from("status = Todo"), agent)
             .expect("claim must succeed");
         (queue, key)
     }
@@ -861,7 +865,7 @@ mod tests {
         // child is born without one and picks the label's up at claim.
         assert!(queue.get_ticket("TICKET-2").unwrap().schema.is_none());
 
-        queue.claim(|t| t.has_label("bob"), "bob");
+        queue.claim(&Query::from("bob"), "bob");
         let bound = queue.get_ticket("TICKET-2").unwrap().schema.unwrap();
         assert_eq!(title_of(&bound), "verdict");
     }
@@ -915,7 +919,7 @@ mod tests {
             "tester".into(),
         );
         let parent_key = queue
-            .claim(|t| t.status == Status::Todo, "alice")
+            .claim(&Query::from("status = Todo"), "alice")
             .expect("claim must succeed");
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
 
@@ -963,7 +967,7 @@ mod tests {
             "tester".into(),
         );
         let key = queue
-            .claim(|t| t.status == Status::Todo, agent)
+            .claim(&Query::from("status = Todo"), agent)
             .expect("claim must succeed");
         (queue, key)
     }

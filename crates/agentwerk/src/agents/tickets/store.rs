@@ -7,6 +7,7 @@ use crate::event::EventKind;
 use crate::persistence::Persist;
 use crate::schemas::SchemaViolations;
 
+use super::super::query::Query;
 use super::error::TicketError;
 use super::reply::Reply;
 use super::ticket::{Status, Ticket};
@@ -82,26 +83,20 @@ impl TicketQueue {
             .map(|_| rel)
     }
 
-    /// Atomically find a `Todo` ticket matching `predicate`, assign it to
+    /// Atomically find a `Todo` ticket the query selects, assign it to
     /// `agent_id`, and transition to `InProgress`.
-    pub(crate) fn claim<F>(&self, predicate: F, agent_id: &str) -> Option<String>
-    where
-        F: Fn(&Ticket) -> bool,
-    {
+    ///
+    /// The earliest candidate must itself be `Todo`, so a query naming no
+    /// status never reaches past a ticket already claimed.
+    pub(crate) fn claim(&self, query: &Query, agent_id: &str) -> Option<String> {
         let now = now_millis();
         let schemas = self.schemas.lock().unwrap().clone();
         let key = {
             let mut store = self.tickets.lock().unwrap();
-            let mut candidates: Vec<&String> = store
-                .iter()
-                .filter(|(_, t)| predicate(t))
-                .map(|(k, _)| k)
-                .collect();
-            candidates.sort_by_key(|k| {
-                let t = &store[k.as_str()];
-                (t.created_at, numeric_id(k))
-            });
-            let key = candidates.into_iter().next()?.clone();
+            let mut candidates: Vec<&Ticket> =
+                store.values().filter(|t| query.matches(t)).collect();
+            query.sort(&mut candidates);
+            let key = candidates.first()?.key.clone();
             let ticket = store.get_mut(&key)?;
             if ticket.status != Status::Todo {
                 return None;
@@ -435,7 +430,7 @@ mod tests {
         queue.ticket("ok");
         queue.ticket("oops");
         queue.ticket("pending");
-        queue.claim(|t| t.key == "TICKET-1", "agent");
+        queue.claim(&Query::from("TICKET-1"), "agent");
         queue.set_finished_by("TICKET-1", "agent").unwrap();
         queue.set_failed("TICKET-2").unwrap();
         let done = queue.find_tickets(|t: &Ticket| t.status == Status::Finished);
@@ -453,9 +448,9 @@ mod tests {
         queue.ticket("b");
         queue.ticket("c");
         assert_eq!(queue.stats.event_count(EventName::TicketCreated), 3);
-        queue.claim(|t| t.key == "TICKET-1", "agent");
+        queue.claim(&Query::from("TICKET-1"), "agent");
         queue.set_finished_by("TICKET-1", "agent").unwrap();
-        queue.claim(|t| t.key == "TICKET-2", "agent");
+        queue.claim(&Query::from("TICKET-2"), "agent");
         queue.set_failed("TICKET-2").unwrap();
         assert_eq!(queue.stats.event_count(EventName::TicketFinished), 1);
         assert_eq!(queue.stats.event_count(EventName::TicketFailed), 1);
@@ -465,7 +460,7 @@ mod tests {
     fn a_ticket_logs_created_started_and_finished_in_order() {
         let (queue, dir) = test_queue();
         queue.ticket("hello");
-        queue.claim(|t| t.key == "TICKET-1", "agent");
+        queue.claim(&Query::from("TICKET-1"), "agent");
         queue.set_finished_by("TICKET-1", "agent").unwrap();
         let lines = read_events_log(dir.path());
         assert_eq!(lines.len(), 3);
@@ -551,9 +546,9 @@ mod tests {
         let (queue, dir) = test_queue();
         queue.ticket("a");
         queue.ticket("b");
-        queue.claim(|t| t.key == "TICKET-1", "agent");
+        queue.claim(&Query::from("TICKET-1"), "agent");
         queue.set_finished_by("TICKET-1", "agent").unwrap();
-        queue.claim(|t| t.key == "TICKET-2", "agent");
+        queue.claim(&Query::from("TICKET-2"), "agent");
         queue.set_failed("TICKET-2").unwrap();
         // 2 created + 2 started + 1 finished + 1 failed
         assert_eq!(read_events_log(dir.path()).len(), 6);
@@ -563,7 +558,7 @@ mod tests {
     fn claim_transitions_todo_to_in_progress_and_sets_the_assignee() {
         let (queue, _tmp) = test_queue();
         queue.ticket("hello");
-        let key = queue.claim(|t| t.status == Status::Todo, "alice").unwrap();
+        let key = queue.claim(&Query::from("status = Todo"), "alice").unwrap();
         assert_eq!(key, "TICKET-1");
         let t = queue.get_ticket(&key).unwrap();
         assert_eq!(t.status, Status::InProgress);
@@ -575,7 +570,7 @@ mod tests {
     fn claim_leaves_the_label_the_ticket_was_filed_with() {
         let (queue, _tmp) = test_queue();
         queue.ticket(Ticket::new("hello").label("analysis"));
-        let key = queue.claim(|t| t.has_label("analysis"), "alice").unwrap();
+        let key = queue.claim(&Query::from("analysis"), "alice").unwrap();
         assert!(queue.get_ticket(&key).unwrap().has_label("analysis"));
     }
 
@@ -583,19 +578,17 @@ mod tests {
     fn claim_returns_none_when_no_ticket_matches() {
         let (queue, _tmp) = test_queue();
         queue.ticket("hello");
-        assert!(queue
-            .claim(|t| t.has_label("nonexistent"), "alice")
-            .is_none());
+        assert!(queue.claim(&Query::from("nonexistent"), "alice").is_none());
     }
 
     #[test]
     fn second_claim_of_same_ticket_returns_none() {
         let (queue, _tmp) = test_queue();
         queue.ticket("hello");
-        let first = queue.claim(|t| t.key == "TICKET-1", "alice");
+        let first = queue.claim(&Query::from("TICKET-1"), "alice");
         assert!(first.is_some());
         // Second claim: ticket is now InProgress, not Todo.
-        let second = queue.claim(|t| t.key == "TICKET-1", "bob");
+        let second = queue.claim(&Query::from("TICKET-1"), "bob");
         assert!(second.is_none());
     }
 
@@ -605,7 +598,7 @@ mod tests {
         queue.ticket("a");
         queue.ticket("b");
         queue.ticket("c");
-        let key = queue.claim(|t| t.status == Status::Todo, "alice").unwrap();
+        let key = queue.claim(&Query::from("status = Todo"), "alice").unwrap();
         assert_eq!(key, "TICKET-1");
     }
 
@@ -635,7 +628,7 @@ mod tests {
         queue.ticket(Ticket::new("audit").label("analysis"));
         assert_eq!(bound_title(&queue, "TICKET-1"), None);
 
-        queue.claim(|t| t.has_label("analysis"), "alice");
+        queue.claim(&Query::from("analysis"), "alice");
         assert_eq!(bound_title(&queue, "TICKET-1").as_deref(), Some("verdict"));
     }
 
@@ -646,7 +639,7 @@ mod tests {
         queue.ticket(Ticket::new("audit").label("analysis").schema(own));
         assert_eq!(bound_title(&queue, "TICKET-1").as_deref(), Some("its own"));
 
-        queue.claim(|t| t.has_label("analysis"), "alice");
+        queue.claim(&Query::from("analysis"), "alice");
         assert_eq!(bound_title(&queue, "TICKET-1").as_deref(), Some("its own"));
     }
 
@@ -660,7 +653,7 @@ mod tests {
         queue.ticket(Ticket::new("audit").label("analysis"));
         assert_eq!(bound_title(&queue, "TICKET-1"), None);
 
-        queue.claim(|t| t.has_label("analysis"), "alice");
+        queue.claim(&Query::from("analysis"), "alice");
         assert_eq!(bound_title(&queue, "TICKET-1").as_deref(), Some("by scope"));
     }
 
@@ -670,7 +663,7 @@ mod tests {
         queue.ticket(Ticket::new("search").label("discovery"));
         assert_eq!(bound_title(&queue, "TICKET-1"), None);
 
-        queue.claim(|t| t.has_label("discovery"), "alice");
+        queue.claim(&Query::from("discovery"), "alice");
         assert_eq!(bound_title(&queue, "TICKET-1"), None);
     }
 
@@ -681,14 +674,14 @@ mod tests {
         schemas.label("analysis", document("first")).unwrap();
         queue.schemas(&schemas);
         queue.ticket(Ticket::new("audit").label("analysis"));
-        queue.claim(|t| t.has_label("analysis"), "alice");
+        queue.claim(&Query::from("analysis"), "alice");
         assert_eq!(bound_title(&queue, "TICKET-1").as_deref(), Some("first"));
 
         schemas.label("analysis", document("second")).unwrap();
 
         // The loop resumes an `InProgress` ticket through `find_ticket`, never
         // through a second `claim`, so a later binding cannot reach it.
-        assert!(queue.claim(|t| t.has_label("analysis"), "alice").is_none());
+        assert!(queue.claim(&Query::from("analysis"), "alice").is_none());
         assert_eq!(bound_title(&queue, "TICKET-1").as_deref(), Some("first"));
     }
 
@@ -701,7 +694,7 @@ mod tests {
         schemas.label("analysis", document("verdict")).unwrap();
         original.schemas(&schemas);
         original.ticket(Ticket::new("audit").label("analysis"));
-        original.claim(|t| t.has_label("analysis"), "alice");
+        original.claim(&Query::from("analysis"), "alice");
         drop(original);
 
         let resumed = TicketQueue::load(dir.path()).unwrap();
@@ -715,7 +708,7 @@ mod tests {
     fn claim_logs_the_ticket_starting() {
         let (queue, dir) = test_queue();
         queue.ticket("hello");
-        queue.claim(|t| t.status == Status::Todo, "alice");
+        queue.claim(&Query::from("status = Todo"), "alice");
         let lines = read_events_log(dir.path());
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[0]["event"], "ticket_created");
@@ -728,7 +721,7 @@ mod tests {
     fn set_finished_transitions_to_finished() {
         let (queue, _tmp) = test_queue();
         let key = queue.ticket("hello");
-        queue.claim(|t| t.status == Status::Todo, "alice");
+        queue.claim(&Query::from("status = Todo"), "alice");
         queue.set_finished_by(&key, "alice").unwrap();
         let t = queue.get_ticket(&key).unwrap();
         assert_eq!(t.status, Status::Finished);
@@ -739,7 +732,7 @@ mod tests {
     fn set_failed_transitions_to_failed() {
         let (queue, _tmp) = test_queue();
         let key = queue.ticket("hello");
-        queue.claim(|t| t.status == Status::Todo, "alice");
+        queue.claim(&Query::from("status = Todo"), "alice");
         queue.set_failed(&key).unwrap();
         let t = queue.get_ticket(&key).unwrap();
         assert_eq!(t.status, Status::Failed);
@@ -750,7 +743,7 @@ mod tests {
     fn a_finished_ticket_is_not_reopened_by_a_later_failure() {
         let (queue, _tmp) = test_queue();
         let key = queue.ticket("hello");
-        queue.claim(|t| t.status == Status::Todo, "alice");
+        queue.claim(&Query::from("status = Todo"), "alice");
         queue.set_finished(&key, "host result").unwrap();
 
         // Alice was still turning the ticket and gives up after the host
@@ -767,7 +760,7 @@ mod tests {
     fn a_failed_ticket_is_not_reopened_by_a_later_finish() {
         let (queue, _tmp) = test_queue();
         let key = queue.ticket("hello");
-        queue.claim(|t| t.status == Status::Todo, "alice");
+        queue.claim(&Query::from("status = Todo"), "alice");
         queue.set_failed_by(&key, "alice").unwrap();
 
         queue.set_finished(&key, "late result").unwrap();
@@ -976,7 +969,7 @@ mod tests {
         original.dir(dir.path().to_path_buf());
         original.ticket("mid flight");
         original
-            .claim(|t| t.status == Status::Todo, "alice")
+            .claim(&Query::from("status = Todo"), "alice")
             .unwrap();
         drop(original);
 
@@ -1146,7 +1139,7 @@ mod tests {
     fn ticket_lifecycle_writes_its_events_to_the_log() {
         let (queue, _dir) = test_queue();
         queue.ticket("seed");
-        queue.claim(|t| t.status == Status::Todo, "alice").unwrap();
+        queue.claim(&Query::from("status = Todo"), "alice").unwrap();
         queue
             .set_result("TICKET-1", serde_json::Value::Null)
             .unwrap();

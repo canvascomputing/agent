@@ -320,7 +320,7 @@ mod tests {
         queue.dir(isolated_test_dir());
         queue.insert(Ticket::new("body").label(agent), "tester".into());
         let key = queue
-            .claim(|t| t.status == Status::Todo, agent)
+            .claim(&Query::from("status = Todo"), agent)
             .expect("claim must succeed");
         (queue, key)
     }
@@ -419,7 +419,7 @@ mod tests {
         queue.dir(isolated_test_dir());
         queue.insert(Ticket::new("a").label("review"), "tester".into());
         queue.insert(Ticket::new("b"), "tester".into());
-        queue.claim(|t| t.key == "TICKET-1", "alice");
+        queue.claim(&Query::from("TICKET-1"), "alice");
         queue
     }
 
@@ -608,7 +608,7 @@ mod tests {
         assert!(matches!(result, ToolResult::Success { .. }));
         assert!(queue.get_ticket("TICKET-1").unwrap().schema.is_none());
 
-        queue.claim(|t| t.has_label("analysis"), "bob");
+        queue.claim(&Query::from("analysis"), "bob");
         assert!(queue.get_ticket("TICKET-1").unwrap().schema.is_some());
     }
 
