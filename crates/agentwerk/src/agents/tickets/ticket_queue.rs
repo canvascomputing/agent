@@ -1048,13 +1048,7 @@ impl TicketQueue {
         if let Some((violation, _)) = policy_violated(&self.get_policy(), &self.stats) {
             return Some(FinishReason::PolicyViolated(violation));
         }
-        let claimable = {
-            let tickets = self.tickets.lock().unwrap();
-            tickets
-                .values()
-                .any(|t| t.is_pending() && !self.is_cancelled(t))
-        };
-        if claimable {
+        if self.anything_claimable() {
             return None;
         }
         // A cancel is a statement that work should stop, so it ends a run with
@@ -1063,17 +1057,23 @@ impl TicketQueue {
         cancelled.then_some(FinishReason::Cancelled)
     }
 
-    /// True while any ticket is still open. Stricter than [`Self::pending`]:
-    /// an interactive agent's paused ticket has no work for it right now, but a
-    /// reply revives it, so the run is not over.
-    fn anything_pending(&self) -> bool {
-        if self.terminal_transitions_in_flight.load(Ordering::SeqCst) > 0 {
-            return true;
-        }
+    /// True while any ticket is pending and uncancelled: the one definition of
+    /// a ticket an agent could still take, which both the ending check and
+    /// [`Self::anything_pending`] ask for.
+    fn anything_claimable(&self) -> bool {
         let tickets = self.tickets.lock().unwrap();
         tickets
             .values()
             .any(|t| t.is_pending() && !self.is_cancelled(t))
+    }
+
+    /// True while any ticket is still open. Stricter than [`Self::pending`]:
+    /// an interactive agent's paused ticket has no work for it right now, but a
+    /// reply revives it, so the run is not over.
+    fn anything_pending(&self) -> bool {
+        // A terminal transition mid-flight may still add a follow-up ticket
+        // from a handler, so it counts as work whatever the store says.
+        self.terminal_transitions_in_flight.load(Ordering::SeqCst) > 0 || self.anything_claimable()
     }
 
     /// True while the main loop is up. `start()` is a no-op then, so a second
