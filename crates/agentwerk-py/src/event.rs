@@ -2,68 +2,11 @@
 //! `ticket_key`, `label`, and a `data` dict, so a handler reads any event
 //! without a class per kind.
 
-use agentwerk::agents::EventMatcher;
 use agentwerk::event::{Event, EventKind, EventName};
-use agentwerk::EventQuery;
 use pyo3::prelude::*;
 use serde_json::{json, Value};
 
 use crate::convert::value_to_py;
-
-/// Selects recorded events by field values, compiled from AQL.
-#[pyclass(name = "EventQuery")]
-pub struct PyEventQuery {
-    pub inner: EventQuery,
-}
-
-#[pymethods]
-impl PyEventQuery {
-    /// Compile an AQL string over the event fields, the same syntax a string
-    /// argument carries.
-    #[new]
-    fn new(query: &str) -> PyResult<Self> {
-        Ok(PyEventQuery {
-            inner: to_query(query)?,
-        })
-    }
-
-    fn __repr__(&self) -> String {
-        format!("{:?}", self.inner)
-    }
-}
-
-/// A string as a query, raising where the Rust `From` impl would panic.
-fn to_query(query: &str) -> PyResult<EventQuery> {
-    EventQuery::new(query)
-        .map_err(|error| pyo3::exceptions::PyValueError::new_err(format!("{error}")))
-}
-
-/// Read a Python argument as an event query: an `EventQuery`, a string in AQL,
-/// or a callable as a condition of its own. Only a string can raise.
-pub fn to_matcher(py: Python<'_>, arg: &Py<PyAny>) -> PyResult<EventQuery> {
-    if let Ok(query) = arg.extract::<PyRef<'_, PyEventQuery>>(py) {
-        return Ok(query.inner.clone());
-    }
-    if let Ok(query) = arg.extract::<String>(py) {
-        return to_query(&query);
-    }
-    let callable = arg.clone_ref(py);
-    Ok(EventMatcher::into_query(move |event: &Event| {
-        event_predicate(&callable, event)
-    }))
-}
-
-/// Ask a Python condition about an event. A Python error reads as false, so a
-/// broken condition never stops the read.
-fn event_predicate(predicate: &Py<PyAny>, event: &Event) -> bool {
-    Python::attach(|py| {
-        predicate
-            .bind(py)
-            .call1((to_py_event(event),))
-            .and_then(|value| value.is_truthy())
-            .unwrap_or(false)
-    })
-}
 
 /// Every event name, in the order the kinds are declared. `EventName` on the
 /// Python side is built from this, so the two never carry different spellings.

@@ -1,8 +1,10 @@
-//! AQL, the one string syntax a selection is written in, and the two matchers
-//! it parses into: [`Query`] over tickets, [`EventQuery`] over recorded events.
+//! AQL, the one string syntax a selection is written in, and the [`Query`] it
+//! parses into: over tickets by default, over recorded events as
+//! `Query<Event>`.
 //!
 //! The tokenizer, the parser, and the condition tree are shared. A field set
-//! implements [`QueryField`], which is all that separates the two grammars.
+//! implements [`QueryField`], which is all that separates the two grammars,
+//! and [`Queryable`] names the field set a record is selected by.
 
 use std::borrow::{Borrow, Cow};
 use std::cmp::Ordering;
@@ -12,79 +14,106 @@ use std::sync::Arc;
 use super::tickets::{now_millis, numeric_id, Status, Ticket};
 use crate::event::{Event, EventName};
 
-/// A condition a ticket is tested against.
+/// A record a query selects, and the field set AQL names it by.
 ///
-/// An AQL string, [`Query`], and closures all implement this trait, so every
-/// method that selects tickets accepts any of them. The blanket impl for
-/// `Fn(&Ticket) -> bool` keeps closures working unchanged.
+/// Implemented for [`Ticket`] and [`Event`]. Private, so the field sets and
+/// everything the parser builds stay inside this module.
+trait Queryable: fmt::Debug + Clone + Send + Sync + 'static {
+    type Field: QueryField<Record = Self>;
+}
+
+impl Queryable for Ticket {
+    type Field = TicketField;
+}
+
+impl Queryable for Event {
+    type Field = EventField;
+}
+
+/// A condition a record is tested against.
+///
+/// An AQL string, a [`Query`], and closures all implement this trait, so every
+/// method that selects records accepts any of them. The blanket impl for
+/// `Fn(&R) -> bool` keeps closures working unchanged.
 ///
 /// ```no_run
-/// use agentwerk::{Query, TicketQueue};
+/// use agentwerk::{Event, Query, Ticket, TicketQueue};
 ///
 /// # fn run() -> Result<(), Box<dyn std::error::Error>> {
 /// let tickets = TicketQueue::new();
 /// tickets.find_tickets("research");
-/// tickets.find_tickets("label = research AND status != Failed");
 /// tickets.find_tickets(Query::new("label = research AND agent = research-1")?);
-/// tickets.find_tickets(|t: &agentwerk::Ticket| t.has_label("research"));
+/// tickets.find_tickets(|t: &Ticket| t.has_label("research"));
+/// tickets.find_events("tool_call_failed");
+/// tickets.find_events(|e: &Event| e.kind.is_failure());
 /// # Ok(())
 /// # }
 /// ```
-pub trait TicketMatcher {
+#[allow(private_bounds)]
+pub trait Matcher<R: Queryable> {
     /// Compile into a [`Query`]. A closure becomes a condition of its own, so
     /// the queue holds one kind of filter however the caller wrote it.
-    fn into_query(self) -> Query;
+    fn into_query(self) -> Query<R>;
 }
 
-impl<F: Fn(&Ticket) -> bool + Send + Sync + 'static> TicketMatcher for F {
-    fn into_query(self) -> Query {
+impl<R: Queryable, F: Fn(&R) -> bool + Send + Sync + 'static> Matcher<R> for F {
+    fn into_query(self) -> Query<R> {
         Query(Compiled::test(self))
     }
 }
 
 /// Panics on a string that does not parse. Use [`Query::new`] for one built at
 /// run time.
-impl TicketMatcher for &str {
-    fn into_query(self) -> Query {
+impl<R: Queryable> Matcher<R> for &str {
+    fn into_query(self) -> Query<R> {
         Query::from(self)
     }
 }
 
-impl TicketMatcher for String {
-    fn into_query(self) -> Query {
+impl<R: Queryable> Matcher<R> for String {
+    fn into_query(self) -> Query<R> {
         Query::from(self)
     }
 }
 
-impl TicketMatcher for Query {
-    fn into_query(self) -> Query {
+impl<R: Queryable> Matcher<R> for Query<R> {
+    fn into_query(self) -> Query<R> {
         self
     }
 }
 
-/// Selects tickets by field values, compiled from AQL, the agentwerk query
+/// Selects records by field values, compiled from AQL, the agentwerk query
 /// syntax.
 ///
+/// `Query` selects tickets and `Query<Event>` selects recorded events, over
+/// the same syntax and a different field set.
+///
 /// A string says the same query wherever a matcher is taken. Compile it here
-/// when the same filter runs over a large queue, or when a string built at run
-/// time should answer with an error rather than a panic.
+/// when the same filter runs over a large queue or a long log, or when a
+/// string built at run time should answer with an error rather than a panic.
+#[allow(private_bounds)]
 #[derive(Debug, Clone)]
-pub struct Query(Compiled<TicketField>);
+pub struct Query<R: Queryable = Ticket>(Compiled<R::Field>);
 
-impl Query {
-    /// Compile an AQL string.
+#[allow(private_bounds)]
+impl<R: Queryable> Query<R> {
+    /// Compile an AQL string over the record's fields.
     ///
     /// ```
-    /// use agentwerk::Query;
+    /// use agentwerk::{Event, Query, Ticket};
     ///
     /// # fn run() -> Result<(), Box<dyn std::error::Error>> {
-    /// Query::new("status = Finished AND label IN (scan, report)")?;
-    /// Query::new("task ~ \"retry budget\" AND agent IS EMPTY")?;
-    /// Query::new("TICKET-3")?;
-    /// Query::new("status = Finished ORDER BY finished DESC")?;
-    /// Query::new("finished IS EMPTY ORDER BY created")?;
-    /// Query::new("failed > -1h")?;
-    /// Query::new("created >= 2026-08-24 AND created < 2026-08-25")?;
+    /// Query::<Ticket>::new("status = Finished AND label IN (scan, report)")?;
+    /// Query::<Ticket>::new("task ~ \"retry budget\" AND agent IS EMPTY")?;
+    /// Query::<Ticket>::new("TICKET-3")?;
+    /// Query::<Ticket>::new("status = Finished ORDER BY finished DESC")?;
+    /// Query::<Ticket>::new("finished IS EMPTY ORDER BY created")?;
+    /// Query::<Ticket>::new("failed > -1h")?;
+    /// Query::<Ticket>::new("created >= 2026-08-24 AND created < 2026-08-25")?;
+    /// Query::<Event>::new("event = tool_call_failed")?;
+    /// Query::<Event>::new("event IN (request_failed, request_retried) AND agent = scout-1")?;
+    /// Query::<Event>::new("ticket = TICKET-3 ORDER BY created DESC")?;
+    /// Query::<Event>::new("payload ~ timeout AND created > -1h")?;
     /// # Ok(())
     /// # }
     /// # run().unwrap();
@@ -93,20 +122,33 @@ impl Query {
         Compiled::new(query).map(Query)
     }
 
-    pub fn matches(&self, ticket: &Ticket) -> bool {
-        self.0.matches(ticket)
+    pub fn matches(&self, record: &R) -> bool {
+        self.0.matches(record)
     }
 
-    /// Every ticket, in creation order.
-    pub(crate) fn all() -> Query {
+    /// Every record, in the order the field set defaults to.
+    pub(crate) fn all() -> Query<R> {
         Query(Compiled::all())
     }
 
     /// Keeps this query's `ORDER BY`.
-    pub(crate) fn and(self, other: Query) -> Query {
+    pub(crate) fn and(self, other: Query<R>) -> Query<R> {
         Query(self.0.and(other.0))
     }
 
+    /// What lets a reader stop at the first match when no order is named.
+    pub(crate) fn is_ordered(&self) -> bool {
+        self.0.is_ordered()
+    }
+
+    /// Takes both the borrowed records a store hands out and the owned ones a
+    /// log read produces, so neither caller copies to be sorted.
+    pub(crate) fn sort<T: Borrow<R>>(&self, records: &mut [T]) {
+        self.0.sort(records);
+    }
+}
+
+impl Query<Ticket> {
     /// Also `status = <status>`, unless the query names a status of its own. A
     /// closure names none, so it always takes the default.
     pub(crate) fn default_status(self, status: Status) -> Query {
@@ -126,133 +168,21 @@ impl Query {
     pub(crate) fn and_result(self) -> Query {
         self.and(Query(Compiled::term(TicketField::Result, Match::NotEmpty)))
     }
-
-    pub(crate) fn sort(&self, tickets: &mut [&Ticket]) {
-        self.0.sort(tickets);
-    }
 }
 
 /// Parses the string as AQL, and panics on one that does not parse: a query
 /// literal that does not compile is a mistake in the calling code, the way a
 /// tool schema document the compiler refuses is. Use [`Query::new`] for a
 /// string built at run time.
-impl From<&str> for Query {
+impl<R: Queryable> From<&str> for Query<R> {
     fn from(query: &str) -> Self {
         Query::new(query).unwrap_or_else(|error| panic!("invalid query {query:?}: {error}"))
     }
 }
 
-impl From<String> for Query {
+impl<R: Queryable> From<String> for Query<R> {
     fn from(query: String) -> Self {
         Query::from(query.as_str())
-    }
-}
-
-/// A condition a recorded event is tested against.
-///
-/// An AQL string, [`EventQuery`], and closures all implement this trait, so
-/// [`TicketQueue::find_events`](crate::TicketQueue::find_events) accepts any of
-/// them. The blanket impl for `Fn(&Event) -> bool` keeps closures working
-/// unchanged.
-///
-/// ```no_run
-/// use agentwerk::{EventQuery, TicketQueue};
-///
-/// # fn run() -> Result<(), Box<dyn std::error::Error>> {
-/// let tickets = TicketQueue::new();
-/// tickets.find_events("tool_call_failed");
-/// tickets.find_events("event = request_finished AND agent = research-1");
-/// tickets.find_events(EventQuery::new("payload ~ timeout ORDER BY created DESC")?);
-/// tickets.find_events(|e: &agentwerk::Event| e.kind.is_failure());
-/// # Ok(())
-/// # }
-/// ```
-pub trait EventMatcher {
-    /// Compile into an [`EventQuery`], the way a ticket filter compiles into a
-    /// [`Query`].
-    fn into_query(self) -> EventQuery;
-}
-
-impl<F: Fn(&Event) -> bool + Send + Sync + 'static> EventMatcher for F {
-    fn into_query(self) -> EventQuery {
-        EventQuery(Compiled::test(self))
-    }
-}
-
-/// Panics on a string that does not parse. Use [`EventQuery::new`] for one
-/// built at run time.
-impl EventMatcher for &str {
-    fn into_query(self) -> EventQuery {
-        EventQuery::from(self)
-    }
-}
-
-impl EventMatcher for String {
-    fn into_query(self) -> EventQuery {
-        EventQuery::from(self)
-    }
-}
-
-impl EventMatcher for EventQuery {
-    fn into_query(self) -> EventQuery {
-        self
-    }
-}
-
-/// Selects recorded events by field values, compiled from AQL, the same syntax
-/// [`Query`] is written in over a different field set.
-///
-/// A string says the same query wherever a matcher is taken. Compile it here
-/// when the same filter runs over a long log, or when a string built at run
-/// time should answer with an error rather than a panic.
-#[derive(Debug, Clone)]
-pub struct EventQuery(Compiled<EventField>);
-
-impl EventQuery {
-    /// Compile an AQL string over the event fields.
-    ///
-    /// ```
-    /// use agentwerk::EventQuery;
-    ///
-    /// # fn run() -> Result<(), Box<dyn std::error::Error>> {
-    /// EventQuery::new("event = tool_call_failed")?;
-    /// EventQuery::new("event IN (request_failed, request_retried) AND agent = scout-1")?;
-    /// EventQuery::new("ticket = TICKET-3 ORDER BY created DESC")?;
-    /// EventQuery::new("payload ~ timeout AND created > -1h")?;
-    /// # Ok(())
-    /// # }
-    /// # run().unwrap();
-    /// ```
-    pub fn new(query: &str) -> Result<Self, QueryError> {
-        Compiled::new(query).map(EventQuery)
-    }
-
-    pub fn matches(&self, event: &Event) -> bool {
-        self.0.matches(event)
-    }
-
-    /// What lets a reader stop at the first match when no order is named.
-    pub(crate) fn is_ordered(&self) -> bool {
-        self.0.is_ordered()
-    }
-
-    pub(crate) fn sort(&self, events: &mut [Event]) {
-        self.0.sort(events);
-    }
-}
-
-/// Parses the string as AQL, and panics on one that does not parse, the way
-/// [`Query`]'s own conversion does. Use [`EventQuery::new`] for a string built
-/// at run time.
-impl From<&str> for EventQuery {
-    fn from(query: &str) -> Self {
-        EventQuery::new(query).unwrap_or_else(|error| panic!("invalid query {query:?}: {error}"))
-    }
-}
-
-impl From<String> for EventQuery {
-    fn from(query: String) -> Self {
-        EventQuery::from(query.as_str())
     }
 }
 
@@ -308,8 +238,8 @@ impl<R> fmt::Debug for Predicate<R> {
     }
 }
 
-/// A compiled query over one field set. [`Query`] and [`EventQuery`] are its
-/// two named faces, and everything either does with a parsed query it does here.
+/// A compiled query over one field set. [`Query`] is its one named face,
+/// and everything a query does with a parsed condition it does here.
 #[derive(Debug, Clone)]
 struct Compiled<F: QueryField> {
     root: Condition<F>,
@@ -1423,7 +1353,7 @@ mod tests {
     }
 
     fn error(query: &str) -> QueryError {
-        Query::new(query).expect_err("query must be rejected")
+        Query::<Ticket>::new(query).expect_err("query must be rejected")
     }
 
     /// The keys the query selects, in the order it puts them in.
@@ -1488,8 +1418,8 @@ mod tests {
     fn every_way_of_naming_a_label_selects_the_same_tickets() {
         let spellings = [
             ("Query::from", Query::from("scan")),
-            ("&str", TicketMatcher::into_query("scan")),
-            ("String", TicketMatcher::into_query("scan".to_string())),
+            ("&str", Matcher::<Ticket>::into_query("scan")),
+            ("String", Matcher::<Ticket>::into_query("scan".to_string())),
         ];
         for (spelling, q) in spellings {
             assert!(q.matches(&ticket("TICKET-1").label("scan")), "{spelling}");
@@ -2132,7 +2062,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "invalid query")]
     fn a_malformed_query_string_panics_naming_the_input() {
-        TicketMatcher::into_query("label = ");
+        Matcher::<Ticket>::into_query("label = ");
     }
 }
 
@@ -2163,12 +2093,12 @@ mod event_tests {
         }
     }
 
-    fn parse(query: &str) -> EventQuery {
-        EventQuery::new(query).expect("query must parse")
+    fn parse(query: &str) -> Query<Event> {
+        Query::new(query).expect("query must parse")
     }
 
     fn error(query: &str) -> QueryError {
-        EventQuery::new(query).expect_err("query must be rejected")
+        Query::<Event>::new(query).expect_err("query must be rejected")
     }
 
     /// The events the query selects, in the order it puts them in.
@@ -2361,7 +2291,7 @@ mod event_tests {
 
     #[test]
     fn a_string_says_the_same_query_a_compiled_one_does() {
-        let q = EventMatcher::into_query("tool_call_failed");
+        let q = Matcher::<Event>::into_query("tool_call_failed");
         assert!(q.matches(&event(tool_failed("boom"))));
         assert!(!q.matches(&event(EventKind::TurnStarted)));
     }
@@ -2369,6 +2299,6 @@ mod event_tests {
     #[test]
     #[should_panic(expected = "invalid query")]
     fn a_malformed_query_string_panics_naming_the_input() {
-        EventMatcher::into_query("event = ");
+        Matcher::<Event>::into_query("event = ");
     }
 }

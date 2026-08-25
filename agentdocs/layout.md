@@ -20,6 +20,7 @@ crates/
 **One file per bound concept, mirroring the library. Naming rules live in [style.md](style.md).**
 
 - `src/lib.rs` is the `#[pymodule]` and registers every class and function. `agent.rs`, `ticket.rs`, `ticket_queue.rs`, `reply.rs`, `trajectory.rs`, `knowledge.rs`, `schema.rs`, `event.rs`, `providers.rs`, and `tools.rs` each bind the library module of the same name.
+- `src/query.rs` binds `Query`, which covers both field sets: Python carries no type parameter, so the class compiles its string over tickets and over events at once and each call reads the compilation it needs.
 - `src/convert.rs` holds the only JSON boundary: `py_to_value` and `value_to_py` over `pythonize`, plus `py_to_text` for a prompt argument and `runtime_error`.
 - The compiled extension is `_agentwerk`. `python/agentwerk/__init__.py` re-exports it and holds the `@tool` decorator, the one piece of pure-Python logic. `__init__.pyi` declares the surface and MUST match the module, which `tests/test_parity.py` enforces.
 - The root `INVENTORY.md` lists every declaration of both crates, Rust rows next to Python rows. A binding missing from it, or a divergence its cells do not state, is a bug in one of the two.
@@ -44,7 +45,7 @@ crates/
 - `policy.rs`: the public `Policy`, what a run may spend, how it retries, and when it compacts.
 - `knowledge.rs`: `Knowledge`, the cross-ticket store, an OKF v0.1 bundle in `<dir>/knowledge/`. Pages are curated through the `pages()` handle (`save`, `load`, `remove`) plus `clear`; failures are typed as `KnowledgeError`.
 - `stats.rs`: the crate-private `Stats`, the counters a limit check reads and the one reader over `events.jsonl`.
-- `query.rs`: AQL. The tokenizer, the parser, the private `QueryField` and `Compiled<F>`, and the two field sets: `TicketField` behind `Query` and `TicketMatcher`, `EventField` behind `EventQuery` and `EventMatcher`. `QueryError` lives here too.
+- `query.rs`: AQL. The tokenizer, the parser, the private `Queryable`, `QueryField`, and `Compiled<F>`, and the two field sets: `TicketField` behind `Query<Ticket>`, `EventField` behind `Query<Event>`. `Matcher<R>` and `QueryError` live here too.
 
 `tickets/` holds the ticket value types and the orchestrator:
 

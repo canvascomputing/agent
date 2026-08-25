@@ -849,7 +849,6 @@ tickets.find_events("payload ~ timeout AND created > -1h");
 - An event query takes the same operators, `AND` / `OR` / `NOT`, and `ORDER BY` a [ticket query](#queries) does.
 - `IS EMPTY` and `IS NOT EMPTY` read `agent`, `ticket`, and `label`.
 - A lone word is the short form of `event = <word>` when it names an event, and of `label = <word>` when it does not. A lone `TICKET-N` is the short form of `ticket = TICKET-N`.
-- A string that does not compile panics. Use `EventQuery::new` for one built at run time, which returns a `Result`.
 
 See [`EventKind`](https://docs.rs/agentwerk/latest/agentwerk/event/enum.EventKind.html) and [`TicketQueue`](https://docs.rs/agentwerk/latest/agentwerk/agents/tickets/struct.TicketQueue.html).
 

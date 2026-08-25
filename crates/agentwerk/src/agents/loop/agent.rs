@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use crate::agents::agent::Agent;
 use crate::agents::policy::Policy;
-use crate::agents::query::TicketMatcher;
+use crate::agents::query::Matcher;
 use crate::agents::tickets::{policy_violated, Reply, Run, Status, Ticket, TicketQueue};
 use crate::event::{CompactReason, Event, EventKind, PolicyViolation};
 use crate::prompts::directives::{NO_TOOL_CALLED, REPLY_REJECTED};

@@ -13,5 +13,5 @@ pub mod tickets;
 pub use agent::{Agent, AgentBuilder};
 pub use knowledge::Knowledge;
 pub use policy::Policy;
-pub use query::{EventMatcher, EventQuery, Query, QueryError, TicketMatcher};
+pub use query::{Matcher, Query, QueryError};
 pub use tickets::{Reply, Status, Ticket, TicketError, TicketQueue, Trajectory};
