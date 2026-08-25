@@ -309,14 +309,28 @@ def test_find_events_takes_an_aql_string(queue):
     assert newest.ticket_key == "TICKET-2"
 
 
-def test_find_events_takes_a_compiled_event_query(queue):
+def test_find_events_takes_a_compiled_query(queue):
     queue.ticket("seed")
 
-    assert len(queue.find_events(aw.EventQuery("ticket_created"))) == 1
+    assert len(queue.find_events(aw.Query("ticket_created"))) == 1
     with pytest.raises(ValueError):
-        aw.EventQuery("event = ticket_exploded")
+        aw.Query("event = ticket_exploded")
     with pytest.raises(ValueError):
         queue.find_events("event = ")
+
+
+def test_a_query_neither_field_set_accepts_raises_on_construction():
+    with pytest.raises(ValueError):
+        aw.Query("assignee = alice")
+
+
+def test_a_ticket_query_raises_where_events_are_selected(queue):
+    queue.ticket("seed")
+    tickets_only = aw.Query("status = Finished")
+
+    assert queue.find_tickets(tickets_only) == []
+    with pytest.raises(ValueError):
+        queue.find_events(tickets_only)
 
 
 def test_an_event_carries_the_label_of_the_ticket_it_concerns(queue):

@@ -4,65 +4,11 @@
 //! Rust sets those fields with chained methods. A Python class cannot carry a
 //! `label` method and a `label` attribute, so they are keyword arguments here.
 
-use agentwerk::agents::TicketMatcher;
-use agentwerk::{Query, Ticket};
+use agentwerk::Ticket;
 use pyo3::prelude::*;
 
 use crate::convert::{py_to_text, py_to_value, value_to_py};
 use crate::schema::PySchema;
-
-/// Selects tickets by field values, compiled from AQL.
-#[pyclass(name = "Query")]
-pub struct PyQuery {
-    pub inner: Query,
-}
-
-#[pymethods]
-impl PyQuery {
-    /// Compile an AQL string, the same syntax a string argument carries.
-    #[new]
-    fn new(query: &str) -> PyResult<Self> {
-        Ok(PyQuery {
-            inner: to_query(query)?,
-        })
-    }
-
-    fn __repr__(&self) -> String {
-        format!("{:?}", self.inner)
-    }
-}
-
-/// A string as a query, raising where the Rust `From` impl would panic: a
-/// Python caller gets `ValueError`, not a panic across the binding.
-fn to_query(query: &str) -> PyResult<Query> {
-    Query::new(query).map_err(|error| pyo3::exceptions::PyValueError::new_err(format!("{error}")))
-}
-
-/// Read a Python argument as a query: a `Query`, a string in AQL, or a callable
-/// as a condition of its own. Only a string can raise.
-pub fn to_matcher(py: Python<'_>, arg: &Py<PyAny>) -> PyResult<Query> {
-    if let Ok(query) = arg.extract::<PyRef<'_, PyQuery>>(py) {
-        return Ok(query.inner.clone());
-    }
-    if let Ok(query) = arg.extract::<String>(py) {
-        return to_query(&query);
-    }
-    let callable = arg.clone_ref(py);
-    Ok(TicketMatcher::into_query(move |ticket: &Ticket| {
-        ticket_predicate(&callable, ticket)
-    }))
-}
-
-/// Ask a Python condition about a ticket. A conversion or Python error reads as
-/// false, so a broken condition never brings down an agent's thread.
-fn ticket_predicate(predicate: &Py<PyAny>, ticket: &Ticket) -> bool {
-    Python::attach(|py| {
-        Py::new(py, PyTicket::from_ticket(ticket))
-            .and_then(|view| predicate.bind(py).call1((view,)))
-            .and_then(|value| value.is_truthy())
-            .unwrap_or(false)
-    })
-}
 
 /// Read a Python argument as a ticket: a `Ticket`, an `os.PathLike` naming the
 /// file holding the task, or any value as the task itself.

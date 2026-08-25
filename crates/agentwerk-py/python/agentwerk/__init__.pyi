@@ -135,10 +135,13 @@ class Reply:
     def __repr__(self) -> str: ...
 
 class Query:
-    """Selects tickets by field values, compiled from AQL.
+    """Selects tickets or recorded events by field values, compiled from AQL.
 
     The string is the same syntax a query argument carries, `ORDER BY <field>
-    ASC | DESC` included, and one that does not compile raises `ValueError`.
+    ASC | DESC` included. It is read over the ticket fields where tickets are
+    selected and over the event fields where events are, so one the two field
+    sets both reject raises `ValueError` here, and one only the other set
+    accepts raises where it is used.
     """
 
     def __init__(self, query: str) -> None: ...
@@ -229,16 +232,6 @@ class Event:
     label: Optional[str]
     @property
     def data(self) -> dict: ...
-    def __repr__(self) -> str: ...
-
-class EventQuery:
-    """Selects recorded events by field values, compiled from AQL.
-
-    The string is the same syntax a ticket query is written in over the event
-    fields, and one that does not compile raises `ValueError`.
-    """
-
-    def __init__(self, query: str) -> None: ...
     def __repr__(self) -> str: ...
 
 class EventName:
@@ -474,10 +467,10 @@ class TicketQueue:
         self, predicate: "Query | str | Callable[[Ticket], bool]"
     ) -> Optional[Ticket]: ...
     def find_events(
-        self, matches: "EventQuery | str | Callable[[Event], bool]"
+        self, matches: "Query | str | Callable[[Event], bool]"
     ) -> list[Event]: ...
     def find_event(
-        self, matches: "EventQuery | str | Callable[[Event], bool]"
+        self, matches: "Query | str | Callable[[Event], bool]"
     ) -> Optional[Event]: ...
     def input_tokens(self) -> int: ...
     def output_tokens(self) -> int: ...

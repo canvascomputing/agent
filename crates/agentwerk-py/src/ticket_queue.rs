@@ -12,11 +12,12 @@ use serde_json::Value;
 
 use crate::agent::PyAgent;
 use crate::convert::{py_to_value, runtime_error, value_to_py};
-use crate::event::{to_matcher as to_event_matcher, to_py_event, PyEvent};
+use crate::event::{to_py_event, PyEvent};
 use crate::policy::PyPolicy;
+use crate::query::{to_event_matcher, to_ticket_matcher};
 use crate::reply::{py_to_replies, replies_to_py};
 use crate::schema::PySchemaStore;
-use crate::ticket::{to_matcher, to_ticket, PyTicket};
+use crate::ticket::{to_ticket, PyTicket};
 
 /// The core data structure of agentwerk, coordinating complex work across
 /// agents.
@@ -241,7 +242,7 @@ impl PyTicketQueue {
 
     /// Get every ticket matching a Query or callable.
     fn find_tickets(&self, py: Python<'_>, predicate: Py<PyAny>) -> PyResult<Vec<Py<PyTicket>>> {
-        let tickets = self.inner.find_tickets(to_matcher(py, &predicate)?);
+        let tickets = self.inner.find_tickets(to_ticket_matcher(py, &predicate)?);
         tickets
             .iter()
             .map(|ticket| Py::new(py, PyTicket::from_ticket(ticket)))
@@ -250,7 +251,7 @@ impl PyTicketQueue {
 
     /// Get the first ticket matching a Query or callable.
     fn find_ticket(&self, py: Python<'_>, predicate: Py<PyAny>) -> PyResult<Option<Py<PyTicket>>> {
-        let ticket = self.inner.find_ticket(to_matcher(py, &predicate)?);
+        let ticket = self.inner.find_ticket(to_ticket_matcher(py, &predicate)?);
         match ticket {
             Some(ticket) => Ok(Some(Py::new(py, PyTicket::from_ticket(&ticket))?)),
             None => Ok(None),
@@ -341,7 +342,7 @@ impl PyTicketQueue {
     /// in creation order. Accepts a Query or callable. Awaitable.
     fn finish<'py>(&self, py: Python<'py>, matches: Py<PyAny>) -> PyResult<Bound<'py, PyAny>> {
         let inner = Arc::clone(&self.inner);
-        let query = to_matcher(py, &matches)?;
+        let query = to_ticket_matcher(py, &matches)?;
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let results = inner.finish(query).await;
             Python::attach(|py| {
@@ -390,7 +391,7 @@ impl PyTicketQueue {
 
     /// Take every matching ticket off the queue. Accepts a Query or callable.
     fn cancel<'py>(slf: PyRef<'py, Self>, matches: Py<PyAny>) -> PyResult<PyRef<'py, Self>> {
-        slf.inner.cancel(to_matcher(slf.py(), &matches)?);
+        slf.inner.cancel(to_ticket_matcher(slf.py(), &matches)?);
         Ok(slf)
     }
 
@@ -406,7 +407,7 @@ impl PyTicketQueue {
         self.inner.is_cancelled(&ticket.to_ticket())
     }
 
-    /// Get every recorded event matching an EventQuery, an AQL string, or a
+    /// Get every recorded event matching a `Query`, an AQL string, or a
     /// callable, oldest first. Counting is `len()`, and a total is a fold over
     /// the events themselves.
     fn find_events(&self, matches: Py<PyAny>, py: Python<'_>) -> PyResult<Vec<PyEvent>> {
@@ -414,8 +415,8 @@ impl PyTicketQueue {
         Ok(found.iter().map(to_py_event).collect())
     }
 
-    /// Get the earliest recorded event matching an EventQuery, an AQL string,
-    /// or a callable, or the first in the order an `ORDER BY` names.
+    /// Get the earliest recorded event matching a `Query`, an AQL string, or a
+    /// callable, or the first in the order an `ORDER BY` names.
     fn find_event(&self, matches: Py<PyAny>, py: Python<'_>) -> PyResult<Option<PyEvent>> {
         let found = self.inner.find_event(to_event_matcher(py, &matches)?);
         Ok(found.as_ref().map(to_py_event))
@@ -453,7 +454,7 @@ impl PyTicketQueue {
         py: Python<'py>,
         query: Py<PyAny>,
     ) -> PyResult<Vec<Bound<'py, PyAny>>> {
-        let results = self.inner.find_results(to_matcher(py, &query)?);
+        let results = self.inner.find_results(to_ticket_matcher(py, &query)?);
         results.iter().map(|value| value_to_py(py, value)).collect()
     }
 
@@ -464,7 +465,7 @@ impl PyTicketQueue {
         py: Python<'py>,
         query: Py<PyAny>,
     ) -> PyResult<Option<Bound<'py, PyAny>>> {
-        let result = self.inner.find_result(to_matcher(py, &query)?);
+        let result = self.inner.find_result(to_ticket_matcher(py, &query)?);
         match result {
             Some(value) => Ok(Some(value_to_py(py, &value)?)),
             None => Ok(None),

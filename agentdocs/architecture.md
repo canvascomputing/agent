@@ -146,7 +146,7 @@ Schemas and results:
 
 ## The Lifecycle Is Three Verbs Over One Filter
 
-**`start` starts, `finish(matches)` waits, `cancel(matches)` stops. Both filters are a `TicketMatcher`, so waiting for one pool or one ticket is the same call with a different filter, and `finish_all()` and `cancel_all()` pass the filter that names every ticket.**
+**`start` starts, `finish(matches)` waits, `cancel(matches)` stops. Both filters are a `Matcher<Ticket>`, so waiting for one pool or one ticket is the same call with a different filter, and `finish_all()` and `cancel_all()` pass the filter that names every ticket.**
 
 - `TicketQueue::work_left(matches)` is the one definition of "not done yet", and both the main loop and `finish` ask it. A ticket has work left while it is pending, uncancelled, and not paused for a caller reply.
 - `TicketQueue::cancel_filters` holds what `cancel` took off the queue. The claim and resume path reads it through `is_cancelled(ticket)`, so a cancelled ticket is neither claimed nor resumed and an agent already holding one is taken off it. The ticket stays `InProgress`.
@@ -154,7 +154,7 @@ Schemas and results:
 
 ## A String That Selects Anything Is AQL
 
-**Every method taking a filter accepts a string, and the string is AQL: a query compiled by `Query::new` over tickets or `EventQuery::new` over recorded events. There is no second string meaning, and no method takes a bare label.**
+**Every method taking a filter accepts a string, and the string is AQL: a query compiled by `Query::new` over tickets or `Query::<Event>::new` over recorded events. There is no second string meaning, and no method takes a bare label.**
 
 ```rust
 tickets.find_tickets("scan");                    // label = scan
@@ -164,11 +164,11 @@ tickets.find_events("tool_call_failed AND created > -1h");
 ```
 
 - One grammar, two field sets. The private `QueryField` trait names what a set must answer (`of`, `kind`, `is_optional`, `shorthand`, `label`, `tie_break`, and the `sort_unordered`, `canonical`, and `compare` it may override); `TicketField` and `EventField` implement it, and the tokenizer, `Parser<F>`, `Condition<F>`, `Sort<F>`, and `Compiled<F>` are shared. A third record type would be a third impl, not a second parser.
-- `Query` and `EventQuery` are newtypes over `Compiled<F>`, which holds the condition tree and the sort key and does everything either of them does with a parsed query. Each keeps its own `new`, its own `From` impls, and its own examples, because those are the API a caller reads.
+- `Query<R>` is a newtype over `Compiled<R::Field>`, which holds the condition tree and the sort key and does everything a parsed query does. `Queryable` maps a record to its field set and stays private, which is what keeps `QueryField` and the tree private; the three declarations that name it carry `#[allow(private_bounds)]`. `R` defaults to `Ticket`, so a ticket query is `Query` and an event query is `Query<Event>`, and only `default_status`, `and_status`, and `and_result` sit in a `Query<Ticket>` block.
 - `Condition<F>` is a tree of `All`, `Any`, `Not`, one term per field, and `Test`, which holds a caller's closure. AQL is the only grammar a selection is written in, and a closure is a leaf of the same tree rather than a second kind of filter, so the queue holds one thing however the caller wrote it. Nothing outside the module builds a term: the crate reaches the tree through `and`, `default_status`, `and_status`, and `and_result`, all crate-private.
 - A lone bare word is `key = <word>` when it is spelled `TICKET-<digits>` and `label = <word>` otherwise, which is what keeps a label the shortest thing you can write. A label named like a key needs `label = TICKET-3`.
-- `From<&str>` and `TicketMatcher for &str` are infallible by signature, so a string that does not compile panics, the way `ToolBuilder::schema` panics on a document the compiler refuses. `Query::new` returns a `Result` for a string built at run time, and the Python bindings raise `ValueError` rather than panicking across the binding.
-- `TicketMatcher` and `EventMatcher` hold one method each, `into_query`. Every call compiles its filter once and reads the query from then on, so a string costs one parse per call rather than one per record. Taking `self` is what makes that possible, and it is why neither trait is object-safe.
+- `From<&str>` and `Matcher<R> for &str` are infallible by signature, so a string that does not compile panics, the way `ToolBuilder::schema` panics on a document the compiler refuses. `Query::new` returns a `Result` for a string built at run time, and the Python bindings raise `ValueError` rather than panicking across the binding.
+- `Matcher<R>` holds one method, `into_query`. Every call compiles its filter once and reads the query from then on, so a string costs one parse per call rather than one per record. Taking `self` is what makes that possible, and it is why the trait is not object-safe.
 - `ORDER BY` rides on the query rather than on the call, so the one string says both which tickets and in what order, and the `tickets` tool needs no second argument. A query that is nothing but an `ORDER BY` selects every ticket.
 - `Compiled::sort` is how the order reaches the queue, and `QueryField::sort_unordered` is what a query without `ORDER BY` falls back to, so a closure answers in creation order the way it always did. `find_tickets` and `find_results` both pass one `Query` to `matching_tickets`, filter and order together.
 - `cancel`, `finish`, and `pending` read `matches` alone, so an `ORDER BY` handed to them does nothing. Nothing there is ordered.
@@ -176,7 +176,7 @@ tickets.find_events("tool_call_failed AND created > -1h");
 - Two equalities on one single-valued field are a parse error rather than a query no ticket satisfies, and the message names `IN` as the fix. An absent field fails every comparison, so `label != scan` never reaches an unlabelled ticket and `IS EMPTY` is what does.
 - The `tickets` tool takes the same syntax as its one `aql` argument, and answers a `QueryError` as a `ToolResult::Error` through `ticket_query_invalid`. Nothing on that path panics. The tool reads tickets only: the event set is a host API.
 - A selection an agent's id or label goes into stays a closure. AQL has no way to bind a value, and both derive from a host-supplied label, so `agent = {id}` would let a label carrying `=`, a quote, or a space change the query. `resolve_current_key` and the loop's own claim filter are the two.
-- `EventMatcher` mirrors `TicketMatcher`. `EventField::sort_unordered` leaves the log order alone, where `TicketField`'s sorts by creation, because `find_events` reads a file that is already in order and the ticket store is a map. That is also what lets `find_event` stop at the first match when the query names no order, instead of copying the whole log to sort it.
+- `EventField::sort_unordered` leaves the log order alone, where `TicketField`'s sorts by creation, because `find_events` reads a file that is already in order and the ticket store is a map. That is also what lets `find_event` stop at the first match when the query names no order, instead of copying the whole log to sort it.
 - The four time fields take `>`, `>=`, `<`, `<=` against a date, an offset back from now, or milliseconds. An offset resolves in `Query::new`, not in `matches`, so one compiled query answers one set however long it is held.
 
 ## The Run Names Its Own Ending

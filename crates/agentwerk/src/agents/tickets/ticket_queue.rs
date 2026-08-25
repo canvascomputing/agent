@@ -18,7 +18,7 @@ use crate::schemas::SchemaStore;
 
 use super::super::agent::{Agent, TicketQueueRef};
 use super::super::policy::Policy;
-use super::super::query::{EventMatcher, EventQuery, Query, TicketMatcher};
+use super::super::query::{Matcher, Query};
 use super::super::r#loop::run_main_loop;
 use super::super::stats::Stats;
 use super::ticket::{Status, Ticket};
@@ -889,7 +889,7 @@ impl TicketQueue {
     ///
     /// Your condition MUST NOT call another `TicketQueue` method that reads
     /// the ticket store, or the call deadlocks.
-    pub fn find_tickets(&self, predicate: impl TicketMatcher) -> Vec<Ticket> {
+    pub fn find_tickets(&self, predicate: impl Matcher<Ticket>) -> Vec<Ticket> {
         self.matching_tickets(&predicate.into_query())
     }
 
@@ -898,7 +898,7 @@ impl TicketQueue {
     ///
     /// Your condition MUST NOT call another `TicketQueue` method that reads
     /// the ticket store, or the call deadlocks.
-    pub fn find_ticket(&self, predicate: impl TicketMatcher) -> Option<Ticket> {
+    pub fn find_ticket(&self, predicate: impl Matcher<Ticket>) -> Option<Ticket> {
         self.first_matching_ticket(&predicate.into_query())
     }
 
@@ -920,8 +920,8 @@ impl TicketQueue {
     /// Get every recorded event matching a condition, oldest first, or in the
     /// order an `ORDER BY` names.
     ///
-    /// The condition is an AQL string, an [`EventQuery`](crate::EventQuery), or
-    /// a closure, the way [`Self::find_tickets`] takes any of the three.
+    /// The condition is an AQL string, a [`Query<Event>`](crate::Query), or a
+    /// closure, the way [`Self::find_tickets`] takes any of the three.
     ///
     /// ```no_run
     /// # use agentwerk::TicketQueue;
@@ -934,7 +934,7 @@ impl TicketQueue {
     /// a total is a fold over the events themselves. A log that cannot be read
     /// finds nothing, and `TextChunkReceived` is never recorded, so a condition
     /// naming it never matches.
-    pub fn find_events(&self, matcher: impl EventMatcher) -> Vec<Event> {
+    pub fn find_events(&self, matcher: impl Matcher<Event>) -> Vec<Event> {
         let query = matcher.into_query();
         let mut out = self.collect_events(&query, usize::MAX);
         query.sort(&mut out);
@@ -943,7 +943,7 @@ impl TicketQueue {
 
     /// Get the earliest recorded event matching a condition, or the first in
     /// the order an `ORDER BY` names.
-    pub fn find_event(&self, matcher: impl EventMatcher) -> Option<Event> {
+    pub fn find_event(&self, matcher: impl Matcher<Event>) -> Option<Event> {
         let query = matcher.into_query();
         // Without an order the log's own is the answer, so one match ends the
         // read instead of the whole log being copied to be sorted.
@@ -957,7 +957,7 @@ impl TicketQueue {
     }
 
     /// In log order: the caller sorts if its query named one.
-    fn collect_events(&self, query: &EventQuery, wanted: usize) -> Vec<Event> {
+    fn collect_events(&self, query: &Query<Event>, wanted: usize) -> Vec<Event> {
         let mut out = Vec::new();
         let _ = Stats::for_each_event(&self.get_dir(), |event| {
             if out.len() < wanted && query.matches(event) {
@@ -982,7 +982,7 @@ impl TicketQueue {
     /// let tickets = TicketQueue::new();
     /// tickets.cancel("scan");
     /// ```
-    pub fn cancel(&self, matches: impl TicketMatcher) -> &Self {
+    pub fn cancel(&self, matches: impl Matcher<Ticket>) -> &Self {
         self.cancel_filters
             .lock()
             .unwrap()
@@ -1188,7 +1188,7 @@ impl TicketQueue {
     /// }
     /// # }
     /// ```
-    pub async fn finish(&self, matches: impl TicketMatcher) -> Vec<serde_json::Value> {
+    pub async fn finish(&self, matches: impl Matcher<Ticket>) -> Vec<serde_json::Value> {
         let query = matches.into_query();
         if self.join_handle.lock().unwrap().is_none() {
             self.start();
@@ -1308,7 +1308,7 @@ impl TicketQueue {
     /// let tickets = TicketQueue::new();
     /// let scans = tickets.find_results("scan");
     /// ```
-    pub fn find_results(&self, matches: impl TicketMatcher) -> Vec<serde_json::Value> {
+    pub fn find_results(&self, matches: impl Matcher<Ticket>) -> Vec<serde_json::Value> {
         self.matching_tickets(&results_of(matches))
             .into_iter()
             .filter_map(|t| t.result)
@@ -1319,7 +1319,7 @@ impl TicketQueue {
     ///
     /// Status defaults to `Finished` as in [`Self::find_results`], and the
     /// order is that method's too.
-    pub fn find_result(&self, matches: impl TicketMatcher) -> Option<serde_json::Value> {
+    pub fn find_result(&self, matches: impl Matcher<Ticket>) -> Option<serde_json::Value> {
         self.first_matching_ticket(&results_of(matches))
             .and_then(|t| t.result)
     }
@@ -1328,7 +1328,7 @@ impl TicketQueue {
 /// The tickets that contribute to `find_results`. The result term is why
 /// `find_result` answers with the first match carrying one, not the first
 /// match.
-fn results_of(matches: impl TicketMatcher) -> Query {
+fn results_of(matches: impl Matcher<Ticket>) -> Query {
     matches
         .into_query()
         .default_status(Status::Finished)
