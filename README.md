@@ -60,8 +60,7 @@ async fn main() {
     let agent = Agent::from_env()
         .role("You are a Rust developer who explores source files to answer questions.")
         .tool(ReadFileTool)
-        .tool(GrepTool)
-        .build();
+        .tool(GrepTool);
 
     agent.ticket("Find every `pub trait` defined under src/ and explain each in one sentence.");
 
@@ -93,8 +92,7 @@ use agentwerk::tools::ReadFileTool;
 
 let agent = Agent::from_env()
     .role("You are a release manager who prepares release notes.")
-    .tool(ReadFileTool)
-    .build();
+    .tool(ReadFileTool);
 
 agent.ticket("Read CHANGELOG.md and summarize the entries added since the last release.");
 
@@ -116,7 +114,6 @@ Optionally, install the [`prompt` skill](skills/prompt/SKILL.md), which is optim
 | | `templates(variables)` | Inject more than one entry into prompts. |
 | | `knowledge(store)` | Share a knowledge store with the agent. |
 | | `interactive()` | Let the agent wait for new instructions to keep a ticket in-progress. |
-| | `build()` | Create the agent. |
 | **Work** | `ticket(task)` | Submit a task, or a `Ticket` carrying a label or schema, and return its ticket key. |
 | | `start()` | Begin processing tickets. |
 | | `id()` | Get the unique identifier of an agent. |
@@ -141,7 +138,7 @@ Every value is a variable of its own: `{ticket}`, `{date}`, `{dir}`, `{platform}
 An interactive agent holds one ticket open across many turns, so a conversation spans a whole session.
 
 ```rust
-let agent = Agent::from_env().interactive().build();
+let agent = Agent::from_env().interactive();
 let key = agent.ticket("Where does the configuration get loaded?");
 
 let chat = agent.start();
@@ -156,7 +153,7 @@ chat.set_finished(&key, "answered")?;
 
 An interactive agent never finishes its own ticket, because that would end the conversation. Every answer pauses the ticket instead: it stays `InProgress` with its agent, and each `finish_all().await` returns on the answer it waited for. `reply(key, content)` drives the next turn, and `set_finished(key, result)` ends the conversation, which is the result the hook reports. The answers in between arrive as [events](#events).
 
-See more: [`AgentBuilder`](https://docs.rs/agentwerk/latest/agentwerk/agents/agent/struct.AgentBuilder.html).
+See more: [`Agent`](https://docs.rs/agentwerk/latest/agentwerk/agents/agent/struct.Agent.html).
 
 </details>
 
@@ -233,12 +230,10 @@ The `TicketQueue` is the core data structure of agentwerk for coordinating compl
 use agentwerk::{Agent, Ticket, TicketQueue};
 
 let analyst = Agent::from_env()
-    .label("analysis")
-    .build();
+    .label("analysis");
 
 let writer = Agent::from_env()
-    .label("report")
-    .build();
+    .label("report");
 
 let tickets = TicketQueue::new();
 tickets.agent(analyst).agent(writer);
@@ -435,13 +430,11 @@ Name the receiving label in the role or in the task, and the agent hands over as
 ```rust
 let analyst = Agent::from_env()
     .label("analysis")
-    .role("Rank the products by value, then hand the ranking over to `report`.")
-    .build();
+    .role("Rank the products by value, then hand the ranking over to `report`.");
 
 let writer = Agent::from_env()
     .label("report")
-    .role("Write the board report from the ranking you were handed.")
-    .build();
+    .role("Write the board report from the ranking you were handed.");
 ```
 
 The child ticket is filed under `report` and names the analysis ticket as its `parent`. Its body is the result that was handed over, unless the agent passes a task of its own, which may carry `{parent_key}`, `{parent_result}`, and `{parent_result_path}`. Either way the body ends with the parent's key and the path of its result file.
@@ -453,8 +446,7 @@ Give the writer `TicketsTool`, and it reads what any finished ticket produced, b
 ```rust
 let writer = Agent::from_env()
     .label("report")
-    .tool(TicketsTool)
-    .build();
+    .tool(TicketsTool);
 
 writer.ticket("Read the result of TICKET-1, then write the board report.");
 ```
@@ -466,8 +458,7 @@ Give the writer `ReadFileTool` instead, and it opens the result file named at th
 ```rust
 let writer = Agent::from_env()
     .label("report")
-    .tool(ReadFileTool)
-    .build();
+    .tool(ReadFileTool);
 
 writer.ticket("Read .agentwerk/tickets/TICKET-1/result.json, then write the board report.");
 ```
@@ -481,8 +472,8 @@ Hand both agents one store, and either can write a page the other reads:
 ```rust
 let store = Knowledge::load(".agentwerk")?;
 
-let analyst = Agent::from_env().label("analysis").knowledge(&store).build();
-let writer = Agent::from_env().label("report").knowledge(&store).build();
+let analyst = Agent::from_env().label("analysis").knowledge(&store);
+let writer = Agent::from_env().label("report").knowledge(&store);
 
 analyst.ticket("Rank the products by value, then save the ranking to your knowledge.");
 ```
@@ -621,8 +612,7 @@ let agent = Agent::from_env()
     .directives(|key| match key {
         Directive::GREP_FAILED => Some("The search did not run. Narrow `path`."),
         _ => None,
-    })
-    .build();
+    });
 ```
 
 <details>

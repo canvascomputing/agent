@@ -2,12 +2,12 @@
 
 The invariants that shape how code fits together. Layout says where code lives; this file says why the boundaries are where they are.
 
-## Builder, Queue, Loop
+## Agent, Queue, Loop
 
-**A run has three stages: build the `Agent`, bind it to a `TicketQueue`, drive the queue with `start` (long-lived) or `finish` (process a fixed batch and return).**
+**A run has three stages: configure the `Agent`, bind it to a `TicketQueue`, drive the queue with `start` (long-lived) or `finish` (process a fixed batch and return).**
 
 ```rust
-let agent = Agent::from_env().build();
+let agent = Agent::from_env();
 tickets.agent(agent);
 tickets.finish_all().await;
 ```
@@ -36,7 +36,7 @@ tickets.ticket(Ticket::new("Audit src/db."));               // the default scope
 
 - `Agent::handles` is equality in both directions: an agent with no label matches only tickets with no label, the default scope. A label no agent serves never matches, since the queue never resolves one against the registered-agent set. It takes both labels rather than a receiver, because the loop's claim filter holds the label and the queue keeps that filter.
 - Addressing one agent alone is giving it a label no other agent serves. The ticket is born `Status::Todo` like any other; nothing is born `InProgress`.
-- `AgentBuilder::build` assigns `<label>-<n>`, numbering per label from 1; an agent with no label gets `agent-<n>`. `Agent::clone` keeps the id, since `bind_agent` holds a clone and the two must agree about which tickets are theirs.
+- `Agent::id` assigns `<label>-<n>` the first time anything asks for it, numbering per label from 1; an agent with no label gets `agent-<n>`. It is that late because the label is set after construction, so a label bound afterwards would otherwise rename an agent the queue already knows. `Agent::clone` reads the id before copying it, since `bind_agent` holds a clone and the two must agree about which tickets are theirs.
 - `claim` writes the claiming agent's id to `Ticket::assignee`, and the `resumable` check requires the two to match, so agents sharing a label never take over each other's started work. A host that wants resumption builds the same agents, in the same order, after a restart.
 - A session directory written before the label became singular stores `"labels": [..]`, which no longer deserializes. There is no shim: start a fresh session directory.
 
@@ -54,7 +54,7 @@ tickets.ticket(Ticket::new("Audit src/db."));               // the default scope
 
 ## Every Directive Is a Catalogue Entry
 
-**Text agentwerk sends the model to report a failure or correct its behavior is one entry in `prompts/directives/*.md`, named by a `pub const` beside it, and the function an agent takes through `AgentBuilder::directives` decides what it renders as. No call site writes one inline.**
+**Text agentwerk sends the model to report a failure or correct its behavior is one entry in `prompts/directives/*.md`, named by a `pub const` beside it, and the function an agent takes through `Agent::directives` decides what it renders as. No call site writes one inline.**
 
 ```rust
 ToolResult::error(ctx.directives.render(EDIT_FILE_OLD_STRING_NOT_FOUND, &[("path", &path)]))
@@ -63,9 +63,9 @@ ToolResult::error(ctx.directives.render(EDIT_FILE_OLD_STRING_NOT_FOUND, &[("path
 - `DirectiveStore::render(key, values)` hands that function the key, then binds `{name}` into what comes back, or into the catalogue text when it answers `None`. A store therefore varies a directive by which one it is, and the values reach the model through the template rather than through the function. It takes a `&str`, so the constants rather than the compiler are what keep the 94 call sites honest.
 - The `directives!` macro declares each key once and emits the crate-private constant the render sites write, the `Directive` constant a host matches on, and the `ALL` entry, so the three cannot disagree. A test pairs `ALL` against the `## ` headings, which the macro cannot reach.
 - One function decides every directive, rather than a table of per-key replacements. A host matches the key against the constants `Directive` carries, so a misspelled arm does not compile, and answers `None` to leave a key as it is.
-- `AgentBuilder::directives` wraps the function in the crate-private `DirectiveStore`, which then travels the way `Knowledge` does: `ToolContext` carries it and the loop reads `context.agent.directives()`. Two agents in one process therefore word a failure differently, and no test needs a lock. A host sharing one function across agents passes the same `fn` or a cloned handle.
+- `Agent::directives` wraps the function in the crate-private `DirectiveStore`, which then travels the way `Knowledge` does: `ToolContext` carries it and the loop reads `context.agent.get_directives()`. Two agents in one process therefore word a failure differently, and no test needs a lock. A host sharing one function across agents passes the same `fn` or a cloned handle.
 - Twenty-one keys render through `built_in` instead, composed where no agent is in reach: the 19 schema violations inside `Node::check`, `knowledge_index_truncated` inside `Knowledge::index`, and `result_schema_required` inside `Ticket::as_user_message`. Threading a store into any of the three would re-type public API.
-- Binding is one pass, so a value carrying `{` is never read as a placeholder of its own. A `{name}` with no value renders as written, the rule `AgentBuilder::template` already states.
+- Binding is one pass, so a value carrying `{` is never read as a placeholder of its own. A `{name}` with no value renders as written, the rule `Agent::template` already states.
 - Two categories stay out: a `SchemaParseError` and the "could not read its arguments" answer both name a mistake in the host's code, and no model reads them. The tags around an offloaded result stay in Rust too, since `cap_aggregate_outputs` reads the opening one back.
 - The retry site binds `attempt`, `max_attempts`, `ticket`, and `agent` beside `detail`, so a replacement naming `{attempt}` or `{agent}` says how far into the budget a retry is, or which agent it addresses, without an event in reach.
 
@@ -75,7 +75,7 @@ ToolResult::error(ctx.directives.render(EDIT_FILE_OLD_STRING_NOT_FOUND, &[("path
 
 `finish` records the result through `TicketQueue::set_result`, which owns the result-validation-and-logging contract, then transitions the ticket to `Finished`. The loop enforces the rule on every agent but an interactive one: a turn that ends without a `finish` call is rejected and retried.
 
-- An interactive agent gets no `finish` at all, since ending the ticket would end the conversation. It pauses on a reply that calls no tool, and the host closes the ticket with `TicketQueue::set_finished`. `AgentBuilder::build` is where the tool is registered, because only there is `interactive` known; a host that registers `FinishTool` itself keeps it either way.
+- An interactive agent gets no `finish` at all, since ending the ticket would end the conversation. It pauses on a reply that calls no tool, and the host closes the ticket with `TicketQueue::set_finished`. `bind_agent` is where the tool is registered, because only once the agent joins a queue is `interactive` final; registration only ever adds, so a host that registers `FinishTool` itself keeps it either way.
 - With `handover`, `finish` also inserts a child ticket pinned to that agent or label, with the current ticket recorded as its `parent`. The child's body is the result or the caller's `task` (with `{parent_key}`, `{parent_result_path}`, and `{parent_result}` substituted, the result last so nothing it carries is expanded again), and always ends with the parent key and its result file.
 - The child is inserted BEFORE the parent finishes, so a concurrent `work_left` check can never see an empty queue between them. `TicketFinished` and `TicketFailed` are emitted synchronously from the transition, and a count of in-flight transitions keeps `work_left` true until every handler returns, so an `on_result` follow-up lands first as well.
 - A turn that ends without a `finish` call pushes a corrective directive and retries, the same path a schema failure takes, bounded by `max_schema_retries`; exhaustion emits `PolicyViolated { MaxSchemaRetries, .. }` and `TicketFailed`. Both paths emit `SchemaRetried` first, and its `attempt` and `max_attempts` are bound into the directive that follows.

@@ -35,7 +35,6 @@ async def test_invokes_a_builtin_tool(tmp_path):
         .role("You read files to answer. Use the read_file tool.")
         .dir(str(tmp_path))
         .tool(aw.ReadFileTool())
-        .build()
     )
     agent.ticket("Read secret.txt and report the exact token it contains.")
     work = agent.start()
@@ -56,7 +55,6 @@ async def test_invokes_a_python_tool_and_records_the_file_it_opened(tmp_path):
         aw.Agent.from_env()
         .role("Call the slurp tool on the given file, then finish.")
         .tool(slurp)
-        .build()
     )
     agent.ticket("Read note.txt with the slurp tool and report the token it contains.")
     work = agent.start()
@@ -79,10 +77,10 @@ async def test_runs_two_labeled_agents_with_events_and_chaining():
     queue.on_event(lambda _, event: kinds.append(event.kind))
 
     queue.agent(
-        aw.Agent.from_env().label("a").role("Reply with one word: alpha").build()
+        aw.Agent.from_env().label("a").role("Reply with one word: alpha")
     )
     queue.agent(
-        aw.Agent.from_env().label("b").role("Reply with one word: beta").build()
+        aw.Agent.from_env().label("b").role("Reply with one word: beta")
     )
 
     def chain(work, ticket, result):
@@ -100,7 +98,7 @@ async def test_runs_two_labeled_agents_with_events_and_chaining():
 async def test_saves_the_messages_of_a_finished_ticket(tmp_path):
     queue = aw.TicketQueue().policy(aw.Policy(max_turns=10))
     queue.agent(
-        aw.Agent.from_env().role("Reply with one word: pong").build()
+        aw.Agent.from_env().role("Reply with one word: pong")
     )
 
     captured = []
@@ -137,7 +135,7 @@ async def test_compaction_summarizes_the_replies_against_the_live_model(tmp_path
         else None
     )
     queue.agent(
-        aw.Agent.from_env().role("Answer in plain text.").interactive().build()
+        aw.Agent.from_env().role("Answer in plain text.").interactive()
     )
     queue.start()
     key = queue.ticket(task)

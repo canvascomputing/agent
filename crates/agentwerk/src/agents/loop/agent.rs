@@ -46,7 +46,7 @@ impl<'a> TicketContext<'a> {
     /// replacement can read how far into the budget this is and who it
     /// addresses without reaching for an event.
     pub(super) fn retry_directive(&self, detail: &str, attempt: u32, max_attempts: u32) -> String {
-        self.agent.directives().render(
+        self.agent.get_directives().render(
             REPLY_REJECTED,
             &[
                 ("detail", detail),
@@ -162,7 +162,7 @@ fn claim<'a>(agent: &'a Agent, ticket_queue: &'a Arc<TicketQueue>) -> Option<Tic
         tools.register(FinishTool::from_schema(ticket.schema.clone()));
     }
 
-    let knowledge_index = agent.knowledge().index();
+    let knowledge_index = agent.get_knowledge().index();
     let policy = ticket_queue.get_policy();
     // Lets the model see what knowledge pages it can read.
     let system_prompt = agent.system_prompt(
@@ -188,7 +188,7 @@ fn claim<'a>(agent: &'a Agent, ticket_queue: &'a Arc<TicketQueue>) -> Option<Tic
 
     Some(TicketContext {
         agent,
-        model: &agent.model,
+        model: agent.get_model(),
         ticket_queue,
         run: Arc::clone(&ticket_queue.run),
 
@@ -249,7 +249,7 @@ fn silence_retry(context: &mut TicketContext<'_>) -> Option<Step> {
             .set_failed_by(&context.ticket_key, context.agent.id());
         return None;
     }
-    let detail = context.agent.directives().render(NO_TOOL_CALLED, &[]);
+    let detail = context.agent.get_directives().render(NO_TOOL_CALLED, &[]);
     let attempt = context.consecutive_schema_failures;
     context.emit(EventKind::SchemaRetried {
         attempt,
@@ -300,8 +300,7 @@ mod tests {
                 .provider(provider)
                 .model("mock")
                 .role("test")
-                .tool(TicketsTool)
-                .build(),
+                .tool(TicketsTool),
         );
 
         tickets.start();
@@ -340,8 +339,7 @@ mod tests {
                 .provider(provider.clone())
                 .model("mock")
                 .role("test")
-                .directives(|_| Some("PLEASE CALL A TOOL NOW"))
-                .build(),
+                .directives(|_| Some("PLEASE CALL A TOOL NOW")),
         );
 
         tickets.start();
@@ -382,8 +380,7 @@ mod tests {
                 .provider(provider.clone())
                 .model("mock")
                 .role("test")
-                .directives(|_| Some("attempt {attempt} of {max_attempts}"))
-                .build(),
+                .directives(|_| Some("attempt {attempt} of {max_attempts}")),
         );
 
         tickets.start();
@@ -429,8 +426,7 @@ mod tests {
                 .provider(scout.clone())
                 .model("mock")
                 .role("test")
-                .directives(addressed)
-                .build(),
+                .directives(addressed),
         );
         tickets.agent(
             Agent::new()
@@ -438,8 +434,7 @@ mod tests {
                 .provider(worker.clone())
                 .model("mock")
                 .role("test")
-                .directives(addressed)
-                .build(),
+                .directives(addressed),
         );
 
         tickets.start();
@@ -481,8 +476,7 @@ mod tests {
             Agent::new()
                 .provider(provider.clone())
                 .model("mock")
-                .role("test")
-                .build(),
+                .role("test"),
         );
 
         tickets.start();
@@ -523,8 +517,7 @@ mod tests {
                     .provider(provider.clone())
                     .model("mock")
                     .role("test")
-                    .tool(FinishTool)
-                    .build(),
+                    .tool(FinishTool),
             );
         }
 
@@ -570,8 +563,7 @@ mod tests {
                 .label("alice")
                 .provider(provider.clone())
                 .model("mock")
-                .role("test")
-                .build(),
+                .role("test"),
         );
 
         tickets.start();
@@ -635,8 +627,7 @@ mod tests {
                     .label(label)
                     .provider(provider.clone())
                     .model("mock")
-                    .role("test")
-                    .build(),
+                    .role("test"),
             );
         }
 
@@ -686,8 +677,7 @@ mod tests {
                 .label("alice")
                 .provider(provider.clone())
                 .model("mock")
-                .role("test")
-                .build(),
+                .role("test"),
         );
 
         tickets.start();
@@ -1127,16 +1117,14 @@ mod tests {
                 .label("analysis")
                 .provider(analyst)
                 .model("mock")
-                .role("test")
-                .build(),
+                .role("test"),
         );
         tickets.agent(
             Agent::new()
                 .label("research")
                 .provider(researcher.clone())
                 .model("mock")
-                .role("test")
-                .build(),
+                .role("test"),
         );
 
         // Call off the research pool on the live run (start() resets signals), then
@@ -1200,8 +1188,7 @@ mod tests {
                 .provider(provider)
                 .model("mock")
                 .role("test")
-                .tool(TicketsTool)
-                .build(),
+                .tool(TicketsTool),
         );
 
         tickets.ticket("first");
@@ -1232,8 +1219,7 @@ mod tests {
                 .provider(provider)
                 .model("mock")
                 .role("test")
-                .tool(TicketsTool)
-                .build(),
+                .tool(TicketsTool),
         );
 
         agent.ticket("hello");
@@ -1283,8 +1269,7 @@ mod tests {
                 .provider(provider.clone())
                 .model("mock")
                 .role("test")
-                .tool(crate::tools::TicketsTool)
-                .build(),
+                .tool(crate::tools::TicketsTool),
         );
         tickets.ticket("first");
         tickets.ticket("second");
@@ -1325,8 +1310,7 @@ mod tests {
                 .provider(provider.clone())
                 .model("mock")
                 .role("test")
-                .knowledge(&store)
-                .build(),
+                .knowledge(&store),
         );
         tickets.ticket("first");
         tickets.ticket("second");
@@ -1379,8 +1363,7 @@ mod tests {
                 .provider(provider.clone())
                 .model("mock")
                 .role("test")
-                .knowledge(&store)
-                .build(),
+                .knowledge(&store),
         );
         tickets.ticket("hi");
         let _ = tickets.finish_all().await;
@@ -1426,8 +1409,7 @@ mod tests {
                 .provider(p_a.clone())
                 .model("mock")
                 .role("test")
-                .knowledge(&store)
-                .build(),
+                .knowledge(&store),
         );
         tickets.agent(
             Agent::new()
@@ -1435,8 +1417,7 @@ mod tests {
                 .provider(p_b.clone())
                 .model("mock")
                 .role("test")
-                .knowledge(&store)
-                .build(),
+                .knowledge(&store),
         );
 
         tickets.ticket(Ticket::new("alice work").label("a"));
@@ -1489,8 +1470,7 @@ mod tests {
                 .provider(provider.clone())
                 .model("mock")
                 .role("test")
-                .label("analysis")
-                .build(),
+                .label("analysis"),
         );
         tickets.ticket(Ticket::new("audit").label("analysis"));
         let _ = tickets.finish_all().await;
@@ -1508,12 +1488,13 @@ mod tests {
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let tickets = TicketQueue::new();
         tickets.dir(results_dir.path().to_path_buf());
-        let agent = Agent::new()
+        // Bound rather than cloned into the queue: `finish` is registered on
+        // the agent that joins one, and this claims through that agent.
+        let mut agent = Agent::new()
             .provider(MockProvider::with_results(vec![]))
             .model("mock")
-            .role("test")
-            .build();
-        tickets.agent(agent.clone());
+            .role("test");
+        tickets.bind_agent(&mut agent);
         tickets.ticket(
             Ticket::new("audit").schema(
                 crate::schemas::Schema::new(serde_json::json!({
@@ -1557,14 +1538,12 @@ mod tests {
             .label("resume_pool")
             .provider(MockProvider::with_results(vec![]))
             .model("mock")
-            .role("test")
-            .build();
+            .role("test");
         let mut second = Agent::new()
             .label("resume_pool")
             .provider(MockProvider::with_results(vec![]))
             .model("mock")
-            .role("test")
-            .build();
+            .role("test");
         tickets.bind_agent(&mut first);
         tickets.bind_agent(&mut second);
         tickets.ticket(Ticket::new("work").label("resume_pool"));
@@ -1612,8 +1591,7 @@ mod tests {
                 .provider(provider.clone())
                 .model("mock")
                 .role("test")
-                .knowledge(&store)
-                .build(),
+                .knowledge(&store),
         );
         tickets.ticket("first");
         tickets.ticket("second");

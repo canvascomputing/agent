@@ -68,8 +68,7 @@ async fn main() {
                 .role(ROLE)
                 .label("compute")
                 .tool(python_tool())
-                .tool(TicketsTool)
-                .build(),
+                .tool(TicketsTool),
         );
     }
 

@@ -168,8 +168,7 @@ async fn seeker_pool_finds_planted_indicators(
                 .label(SEEKER_LABEL)
                 .dir(root.to_path_buf())
                 .knowledge(&knowledge)
-                .tool(GrepTool)
-                .build(),
+                .tool(GrepTool),
         );
     }
 
@@ -184,8 +183,7 @@ async fn seeker_pool_finds_planted_indicators(
                  one-word summary such as \"noted\". Do not call any other tool.",
             )
             .label(ANALYSIS_LABEL)
-            .dir(root.to_path_buf())
-            .build(),
+            .dir(root.to_path_buf()),
     );
 
     let named_threats = [

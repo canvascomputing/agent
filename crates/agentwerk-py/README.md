@@ -61,7 +61,6 @@ async def main():
         .role("You are a Rust developer who explores source files to answer questions.")
         .tool(ReadFileTool())
         .tool(GrepTool())
-        .build()
     )
 
     agent.ticket(
@@ -100,7 +99,6 @@ agent = (
     Agent.from_env()
     .role("You are a release manager who prepares release notes.")
     .tool(ReadFileTool())
-    .build()
 )
 
 agent.ticket("Read CHANGELOG.md and summarize the entries added since the last release.")
@@ -121,7 +119,6 @@ agent.start()
 | | `templates(variables)` | Inject more than one entry into prompts. |
 | | `knowledge(store)` | Share a knowledge store with the agent. |
 | | `interactive()` | Let the agent wait for new instructions to keep a ticket in-progress. |
-| | `build()` | Create the agent. |
 | **Work** | `ticket(task)` | Submit a task, or a `Ticket` carrying a label or schema, and return its ticket key. |
 | | `start()` | Begin processing tickets. |
 | | `id` | Get the unique identifier of an agent. |
@@ -150,7 +147,7 @@ def show(work, ticket, result):
     print(f"{ticket.key}: {result}")
 
 
-agent = Agent.from_env().interactive().build()
+agent = Agent.from_env().interactive()
 key = agent.ticket("Where does the configuration get loaded?")
 
 chat = agent.start()
@@ -165,7 +162,7 @@ chat.set_finished(key, "answered")
 
 An interactive agent never finishes its own ticket, because that would end the conversation. Every answer pauses the ticket instead: it stays `InProgress` with its agent, and each `await chat.finish_all()` returns on the answer it waited for. `reply(key, content)` drives the next turn, and `set_finished(key, result)` ends the conversation, which is the result the hook reports. The answers in between arrive as [events](#events).
 
-See more: [`AgentBuilder`](https://docs.rs/agentwerk/latest/agentwerk/agents/agent/struct.AgentBuilder.html).
+See more: [`Agent`](https://docs.rs/agentwerk/latest/agentwerk/agents/agent/struct.Agent.html).
 
 </details>
 
@@ -244,13 +241,11 @@ from agentwerk import Agent, Ticket, TicketQueue
 analyst = (
     Agent.from_env()
     .label("analysis")
-    .build()
 )
 
 writer = (
     Agent.from_env()
     .label("report")
-    .build()
 )
 
 tickets = TicketQueue()
@@ -450,14 +445,12 @@ analyst = (
     Agent.from_env()
     .label("analysis")
     .role("Rank the products by value, then hand the ranking over to `report`.")
-    .build()
 )
 
 writer = (
     Agent.from_env()
     .label("report")
     .role("Write the board report from the ranking you were handed.")
-    .build()
 )
 ```
 
@@ -468,7 +461,7 @@ The child ticket is filed under `report` and names the analysis ticket as its `p
 Give the writer `TicketsTool()`, and it reads what any finished ticket produced, by key:
 
 ```python
-writer = Agent.from_env().label("report").tool(TicketsTool()).build()
+writer = Agent.from_env().label("report").tool(TicketsTool())
 
 writer.ticket("Read the result of TICKET-1, then write the board report.")
 ```
@@ -478,7 +471,7 @@ writer.ticket("Read the result of TICKET-1, then write the board report.")
 Give the writer `ReadFileTool()` instead, and it opens the result file named at the end of its ticket:
 
 ```python
-writer = Agent.from_env().label("report").tool(ReadFileTool()).build()
+writer = Agent.from_env().label("report").tool(ReadFileTool())
 
 writer.ticket("Read .agentwerk/tickets/TICKET-1/result.json, then write the board report.")
 ```
@@ -492,8 +485,8 @@ Hand both agents one store, and either can write a page the other reads:
 ```python
 store = Knowledge.load(".agentwerk")
 
-analyst = Agent.from_env().label("analysis").knowledge(store).build()
-writer = Agent.from_env().label("report").knowledge(store).build()
+analyst = Agent.from_env().label("analysis").knowledge(store)
+writer = Agent.from_env().label("report").knowledge(store)
 
 analyst.ticket("Rank the products by value, then save the ranking to your knowledge.")
 ```
@@ -634,7 +627,7 @@ def tune(key):
     return None
 
 
-agent = Agent.from_env().directives(tune).build()
+agent = Agent.from_env().directives(tune)
 ```
 
 <details>

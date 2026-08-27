@@ -1,16 +1,14 @@
-//! The agent as Python sees it. One class in two phases: `Agent()` collects the
-//! configuration, `build()` creates the agent, and the rest drives it.
+//! The agent as Python sees it. `Agent()` configures itself and drives its own
+//! tickets, the way the Rust `Agent` does.
 //!
-//! Rust splits those phases across two types, which Python cannot hold, so they
-//! collapse into one class here. That is why `build()` runs once: the Python
-//! object owns the agent's own ticket queue, and rebuilding would leave the
-//! queue that its copies still point at with nothing reading it.
+//! Rust configures through methods that consume and return the agent, which is
+//! why the agent sits in an `Option` here: a setter takes it out and puts the
+//! returned one back.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use agentwerk::providers::{Model, Provider};
-use agentwerk::tools::Tool;
 use agentwerk::{Agent, Knowledge};
 use pyo3::prelude::*;
 
@@ -25,96 +23,38 @@ use crate::tools::extract_tool;
 /// solving tasks in the form of tickets.
 #[pyclass(name = "Agent")]
 pub struct PyAgent {
-    role: Option<String>,
-    label: Option<String>,
-    templates: Vec<(String, String)>,
-    dir: Option<String>,
-    interactive: bool,
-    provider: Option<Provider>,
-    model: Option<Model>,
-    tools: Vec<Tool>,
-    knowledge: Option<Arc<Knowledge>>,
-    directives: Option<Py<PyAny>>,
-    /// Set by `build()`. Every method that reaches the queue needs it.
+    /// Empty only while a setter has the agent.
     agent: Option<Agent>,
+    /// Rust panics when an agent without these joins a queue. Python answers
+    /// with the error it has always raised, so these record what was set.
+    has_provider: bool,
+    has_model: bool,
 }
 
 impl PyAgent {
-    fn create() -> Self {
-        PyAgent {
-            role: None,
-            label: None,
-            templates: Vec::new(),
-            dir: None,
-            interactive: false,
-            provider: None,
-            model: None,
-            tools: Vec::new(),
-            knowledge: None,
-            directives: None,
-            agent: None,
-        }
+    fn get(&self) -> &Agent {
+        self.agent.as_ref().expect("a setter kept the agent")
     }
 
-    /// The built agent, for the methods that drive it.
-    pub(crate) fn built(&self) -> PyResult<&Agent> {
-        self.agent
-            .as_ref()
-            .ok_or_else(|| runtime_error("agent not built: call build() first"))
+    /// Apply a Rust setter, which consumes the agent and hands back the next one.
+    fn set(&mut self, edit: impl FnOnce(Agent) -> Agent) {
+        let agent = self.agent.take().expect("a setter kept the agent");
+        self.agent = Some(edit(agent));
     }
 
-    /// Guards every configuration method. Rust prevents this at compile time;
-    /// Python has to check.
-    fn ensure_unbuilt(&self) -> PyResult<()> {
-        match self.agent {
-            Some(_) => Err(runtime_error(
-                "agent already built: configure before calling build()",
-            )),
-            None => Ok(()),
-        }
-    }
-
-    /// Turn the collected configuration into an `Agent`.
-    fn assemble(&self) -> PyResult<Agent> {
-        let provider = self.provider.as_ref().ok_or_else(|| {
-            runtime_error(
+    /// The agent, for what needs one that can call an LLM.
+    pub(crate) fn ready(&self) -> PyResult<&Agent> {
+        if !self.has_provider {
+            return Err(runtime_error(
                 "provider not set: use Agent.from_env(), or provider(Provider.from_env())",
-            )
-        })?;
-        let model = self.model.as_ref().ok_or_else(|| {
-            runtime_error(
+            ));
+        }
+        if !self.has_model {
+            return Err(runtime_error(
                 "model not set: use Agent.from_env(), model(name), or model(Model.from_env())",
-            )
-        })?;
-
-        let mut builder = Agent::new().provider(provider.clone()).model(model.clone());
-
-        if let Some(role) = &self.role {
-            builder = builder.role(role.clone());
+            ));
         }
-        if let Some(label) = &self.label {
-            builder = builder.label(label.clone());
-        }
-        if self.interactive {
-            builder = builder.interactive();
-        }
-        for (key, value) in &self.templates {
-            builder = builder.template(key.clone(), value.clone());
-        }
-        if let Some(dir) = &self.dir {
-            builder = builder.dir(std::path::PathBuf::from(dir));
-        }
-        if let Some(compute) = &self.directives {
-            let compute = Python::attach(|py| compute.clone_ref(py));
-            builder = builder.directives(crate::directives::compute(compute));
-        }
-        if let Some(store) = &self.knowledge {
-            builder = builder.knowledge(store);
-        }
-        for tool in &self.tools {
-            builder = builder.tool(tool.clone());
-        }
-        Ok(builder.build())
+        Ok(self.get())
     }
 }
 
@@ -122,26 +62,34 @@ impl PyAgent {
 impl PyAgent {
     #[new]
     fn new() -> Self {
-        PyAgent::create()
+        PyAgent {
+            agent: Some(Agent::new()),
+            has_provider: false,
+            has_model: false,
+        }
     }
 
     /// Create an agent with the provider and model from the environment.
     #[staticmethod]
     fn from_env() -> PyResult<Self> {
-        let mut agent = PyAgent::create();
-        agent.provider = Some(Provider::from_env().map_err(runtime_error)?);
-        agent.model = Some(Model::from_env().map_err(runtime_error)?);
-        Ok(agent)
+        let provider = Provider::from_env().map_err(runtime_error)?;
+        let model = Model::from_env().map_err(runtime_error)?;
+        Ok(PyAgent {
+            agent: Some(Agent::new().provider(provider).model(model)),
+            has_provider: true,
+            has_model: true,
+        })
     }
 
     /// Define the LLM provider.
     fn provider<'py>(
         mut slf: PyRefMut<'py, Self>,
         provider: PyRef<'_, PyProvider>,
-    ) -> PyResult<PyRefMut<'py, Self>> {
-        slf.ensure_unbuilt()?;
-        slf.provider = Some(provider.inner.clone());
-        Ok(slf)
+    ) -> PyRefMut<'py, Self> {
+        let resolved = provider.inner.clone();
+        slf.set(|agent| agent.provider(resolved));
+        slf.has_provider = true;
+        slf
     }
 
     /// Set the model, by name or as a `Model` carrying a context window size
@@ -150,13 +98,13 @@ impl PyAgent {
         mut slf: PyRefMut<'py, Self>,
         model: &Bound<'_, PyAny>,
     ) -> PyResult<PyRefMut<'py, Self>> {
-        slf.ensure_unbuilt()?;
         let resolved = if let Ok(name) = model.extract::<String>() {
             Model::new(name)
         } else {
             model.extract::<PyRef<PyModel>>()?.inner.clone()
         };
-        slf.model = Some(resolved);
+        slf.set(|agent| agent.model(resolved));
+        slf.has_model = true;
         Ok(slf)
     }
 
@@ -167,33 +115,31 @@ impl PyAgent {
         mut slf: PyRefMut<'py, Self>,
         role: &Bound<'_, PyAny>,
     ) -> PyResult<PyRefMut<'py, Self>> {
-        slf.ensure_unbuilt()?;
-        slf.role = Some(py_to_text(role)?);
+        let resolved = py_to_text(role)?;
+        slf.set(|agent| agent.role(resolved));
         Ok(slf)
     }
 
     /// Restrict the agent to tickets carrying this label, and name it after
     /// the label. Calling it twice replaces the label.
-    fn label(mut slf: PyRefMut<'_, Self>, label: String) -> PyResult<PyRefMut<'_, Self>> {
-        slf.ensure_unbuilt()?;
-        slf.label = Some(label);
-        Ok(slf)
+    fn label(mut slf: PyRefMut<'_, Self>, label: String) -> PyRefMut<'_, Self> {
+        slf.set(|agent| agent.label(label));
+        slf
     }
 
-    /// The id the agent works under, once it is built.
+    /// The id the agent works under, taken the first time it is read.
     #[getter]
-    fn id(&self) -> PyResult<&str> {
-        Ok(self.built()?.id())
+    fn id(&self) -> &str {
+        self.get().id()
     }
 
     /// Let the agent wait for new instructions to keep a ticket in-progress.
     ///
     /// It gets no `FinishTool()`; the host closes the ticket with
     /// `set_finished(key, result)`.
-    fn interactive(mut slf: PyRefMut<'_, Self>) -> PyResult<PyRefMut<'_, Self>> {
-        slf.ensure_unbuilt()?;
-        slf.interactive = true;
-        Ok(slf)
+    fn interactive(mut slf: PyRefMut<'_, Self>) -> PyRefMut<'_, Self> {
+        slf.set(|agent| agent.interactive());
+        slf
     }
 
     /// Inject data into prompts with template strings.
@@ -201,31 +147,24 @@ impl PyAgent {
     /// `{key}` is replaced in the role and in any text task. Binding `context`
     /// replaces the built-in block the role expands, and binding one of its
     /// value names, such as `ticket` or `turns_remaining`, replaces that value.
-    fn template(
-        mut slf: PyRefMut<'_, Self>,
-        key: String,
-        value: String,
-    ) -> PyResult<PyRefMut<'_, Self>> {
-        slf.ensure_unbuilt()?;
-        slf.templates.push((key, value));
-        Ok(slf)
+    fn template(mut slf: PyRefMut<'_, Self>, key: String, value: String) -> PyRefMut<'_, Self> {
+        slf.set(|agent| agent.template(key, value));
+        slf
     }
 
     /// Inject more than one entry into prompts.
     fn templates(
         mut slf: PyRefMut<'_, Self>,
         variables: BTreeMap<String, String>,
-    ) -> PyResult<PyRefMut<'_, Self>> {
-        slf.ensure_unbuilt()?;
-        slf.templates.extend(variables);
-        Ok(slf)
+    ) -> PyRefMut<'_, Self> {
+        slf.set(|agent| agent.templates(variables));
+        slf
     }
 
     /// Set the directory the agent has access to.
-    fn dir(mut slf: PyRefMut<'_, Self>, dir: String) -> PyResult<PyRefMut<'_, Self>> {
-        slf.ensure_unbuilt()?;
-        slf.dir = Some(dir);
-        Ok(slf)
+    fn dir(mut slf: PyRefMut<'_, Self>, dir: String) -> PyRefMut<'_, Self> {
+        slf.set(|agent| agent.dir(dir));
+        slf
     }
 
     /// Share a knowledge store, the durable memory the agent carries across
@@ -233,23 +172,19 @@ impl PyAgent {
     fn knowledge<'py>(
         mut slf: PyRefMut<'py, Self>,
         store: PyRef<'_, PyKnowledge>,
-    ) -> PyResult<PyRefMut<'py, Self>> {
-        slf.ensure_unbuilt()?;
-        slf.knowledge = Some(Arc::clone(&store.inner));
-        Ok(slf)
+    ) -> PyRefMut<'py, Self> {
+        let store: Arc<Knowledge> = Arc::clone(&store.inner);
+        slf.set(|agent| agent.knowledge(&store));
+        slf
     }
 
     /// Decide what the agent tells the model when a call fails.
     ///
     /// `compute` sees every directive before it renders and returns the text to
     /// send, or `None` for the ones it leaves as they are.
-    fn directives<'py>(
-        mut slf: PyRefMut<'py, Self>,
-        compute: Py<PyAny>,
-    ) -> PyResult<PyRefMut<'py, Self>> {
-        slf.ensure_unbuilt()?;
-        slf.directives = Some(compute);
-        Ok(slf)
+    fn directives<'py>(mut slf: PyRefMut<'py, Self>, compute: Py<PyAny>) -> PyRefMut<'py, Self> {
+        slf.set(|agent| agent.directives(crate::directives::compute(compute)));
+        slf
     }
 
     /// Register a tool the agent may call, either a built-in such as
@@ -258,9 +193,8 @@ impl PyAgent {
         mut slf: PyRefMut<'py, Self>,
         tool: &Bound<'_, PyAny>,
     ) -> PyResult<PyRefMut<'py, Self>> {
-        slf.ensure_unbuilt()?;
         let resolved = extract_tool(tool)?;
-        slf.tools.push(resolved);
+        slf.set(|agent| agent.tool(resolved));
         Ok(slf)
     }
 
@@ -269,23 +203,11 @@ impl PyAgent {
         mut slf: PyRefMut<'py, Self>,
         tools: &Bound<'_, PyAny>,
     ) -> PyResult<PyRefMut<'py, Self>> {
-        slf.ensure_unbuilt()?;
+        let mut resolved = Vec::new();
         for tool in tools.try_iter()? {
-            let resolved = extract_tool(&tool?)?;
-            slf.tools.push(resolved);
+            resolved.push(extract_tool(&tool?)?);
         }
-        Ok(slf)
-    }
-
-    /// Create the agent.
-    ///
-    /// It runs once: afterwards the configuration methods and a second `build()`
-    /// are rejected. Raises when the LLM provider or the model is unset, or when
-    /// neither can be read from the environment.
-    fn build(mut slf: PyRefMut<'_, Self>) -> PyResult<PyRefMut<'_, Self>> {
-        slf.ensure_unbuilt()?;
-        let agent = slf.assemble()?;
-        slf.agent = Some(agent);
+        slf.set(|agent| agent.tools(resolved));
         Ok(slf)
     }
 
@@ -295,19 +217,19 @@ impl PyAgent {
     /// it. A `Ticket` carries a custom label or schema with it. Call it as often
     /// as you like: one agent can drive many tickets.
     fn ticket(&self, ticket: &Bound<'_, PyAny>) -> PyResult<String> {
-        Ok(self.built()?.ticket(to_ticket(ticket)?))
+        Ok(self.get().ticket(to_ticket(ticket)?))
     }
 
     /// Begin processing tickets, and hand back the ticket queue so results,
     /// waiting, and cancellation stay one call away.
     ///
-    /// An agent that was never built raises here.
+    /// An agent without a provider or a model raises here.
     fn start(&self) -> PyResult<PyTicketQueue> {
         // The run spawns onto the ambient Tokio runtime, which a pymethod call
         // does not have entered on its own thread.
         let _guard = pyo3_async_runtimes::tokio::get_runtime().enter();
         Ok(PyTicketQueue {
-            inner: self.built()?.start(),
+            inner: self.ready()?.start(),
         })
     }
 }

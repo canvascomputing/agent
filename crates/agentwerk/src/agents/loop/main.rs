@@ -73,8 +73,7 @@ mod tests {
                 .provider(provider.clone())
                 .model("mock")
                 .role("test")
-                .tool(TicketsTool)
-                .build(),
+                .tool(TicketsTool),
         );
         tickets.ticket(Ticket::new("hello").label("late"));
 
@@ -119,8 +118,7 @@ mod tests {
                 .label("slow")
                 .provider(provider.clone())
                 .model("mock")
-                .role("test")
-                .build(),
+                .role("test"),
         );
         let key = tickets.ticket(Ticket::new("hello").label("slow"));
 
@@ -169,8 +167,7 @@ mod tests {
                 .provider(provider)
                 .model("mock")
                 .role("test")
-                .tool(TicketsTool)
-                .build(),
+                .tool(TicketsTool),
         );
         tickets.ticket(Ticket::new("x").label("late"));
 

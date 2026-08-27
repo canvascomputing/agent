@@ -41,11 +41,11 @@ pub(super) async fn run(context: &mut TicketContext<'_>, reason: CompactReason) 
     // read them from.
     let replies = std::mem::take(&mut ticket.replies);
     let compaction = Compaction::new(
-        context.agent.provider(),
+        context.agent.get_provider(),
         context.model.name.clone(),
         window,
         on_progress,
-        context.agent.directives(),
+        context.agent.get_directives(),
     );
     let edited = match algo::summarize_replies(compaction, replies.clone()).await {
         Ok(edited) => edited,

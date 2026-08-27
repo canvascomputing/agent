@@ -15,10 +15,8 @@ DEFAULT_TASK = "Say hello to the world in one short sentence."
 
 
 async def main(task):
-    agent = (
-        Agent.from_env()
-        .role("You are a friendly greeter who answers in one short sentence.")
-        .build()
+    agent = Agent.from_env().role(
+        "You are a friendly greeter who answers in one short sentence."
     )
 
     agent.ticket(task)

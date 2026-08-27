@@ -25,7 +25,6 @@ pub(super) fn minimal_agent(label: &str) -> Agent {
         .label(label)
         .provider(MockProvider::with_results(vec![]))
         .model("mock")
-        .build()
 }
 
 /// Build a `TicketQueue` rooted at a fresh `TempDir` so the default

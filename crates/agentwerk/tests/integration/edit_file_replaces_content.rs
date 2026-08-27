@@ -38,8 +38,7 @@ async fn replaces_substring_in_place() -> std::result::Result<(), Box<dyn std::e
              ticket. Do not write any prose: your only output must be tool \
              calls.",
         )
-        .tool(EditFileTool)
-        .build();
+        .tool(EditFileTool);
     tickets.agent(agent);
     tickets.ticket(
         "In `config.txt`, change the substring `old_value` to `new_value`. \

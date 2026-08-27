@@ -42,20 +42,19 @@ def queue(tmp_path):
 
 @pytest.fixture
 def offline_agent():
-    """An agent built with a dummy provider: constructs without any network, so
-    builder, enqueue, and query behavior is testable offline."""
+    """An agent with a dummy provider: configures without any network, so
+    configuration, enqueue, and query behavior is testable offline."""
     return (
         aw.Agent()
         .provider(aw.Anthropic("test-key"))
         .model("claude-sonnet-4-20250514")
-        .build()
     )
 
 
 @pytest.fixture
 def live_agent():
     """An agent resolved from the environment; only used by ``live`` tests."""
-    return aw.Agent.from_env().role("You answer in one short word.").build()
+    return aw.Agent.from_env().role("You answer in one short word.")
 
 
 @pytest.fixture

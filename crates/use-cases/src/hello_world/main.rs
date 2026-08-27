@@ -20,9 +20,8 @@ async fn main() {
         .nth(1)
         .unwrap_or_else(|| DEFAULT_TASK.into());
 
-    let agent = Agent::from_env()
-        .role("You are a friendly greeter who answers in one short sentence.")
-        .build();
+    let agent =
+        Agent::from_env().role("You are a friendly greeter who answers in one short sentence.");
 
     agent.ticket(task);
 

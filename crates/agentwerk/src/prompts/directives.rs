@@ -143,7 +143,7 @@ directives! {
 
 /// Every directive agentwerk can send, one constant per key.
 ///
-/// [`AgentBuilder::directives`](crate::AgentBuilder::directives) takes the
+/// [`Agent::directives`](crate::Agent::directives) takes the
 /// function deciding all of them. Match the key it hands you against these
 /// constants, and answer `None` for the ones you leave as they are; the arms
 /// are constants, so a misspelled one does not compile.
@@ -155,13 +155,12 @@ directives! {
 ///     .directives(|key| match key {
 ///         Directive::GREP_CANCELLED => Some("Stop searching."),
 ///         _ => None,
-///     })
-///     .build();
+///     });
 /// ```
 pub struct Directive;
 
 /// The function an agent decides its directives with, as the agent holds it.
-/// A host writes one for [`AgentBuilder::directives`](crate::AgentBuilder::directives)
+/// A host writes one for [`Agent::directives`](crate::Agent::directives)
 /// and never names this type.
 pub(crate) struct DirectiveStore {
     compute: Arc<dyn Fn(&str) -> Option<String> + Send + Sync>,

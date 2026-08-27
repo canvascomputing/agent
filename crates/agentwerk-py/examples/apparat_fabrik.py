@@ -199,7 +199,6 @@ def build_shift(tickets, book, pruefer, meister, monteur):
             .knowledge(book)
             .dir(str(REPO))
             .tools([GrepTool(), ReadFileTool()])
-            .build()
         )
     for _ in range(meister):
         tickets.agent(
@@ -209,7 +208,6 @@ def build_shift(tickets, book, pruefer, meister, monteur):
             .knowledge(book)
             .dir(str(REPO))
             .tool(ReadFileTool())
-            .build()
         )
     for _ in range(monteur):
         tickets.agent(
@@ -219,7 +217,6 @@ def build_shift(tickets, book, pruefer, meister, monteur):
             .knowledge(book)
             .dir(str(REPO))
             .tool(ReadFileTool())
-            .build()
         )
 
 

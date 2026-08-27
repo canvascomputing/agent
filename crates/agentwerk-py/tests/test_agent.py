@@ -1,4 +1,4 @@
-"""The module surface and the agent builder."""
+"""The module surface and agent configuration."""
 
 import pytest
 
@@ -46,7 +46,7 @@ def test_templates_chain_singly_and_in_bulk():
     assert configured is agent
 
 
-def test_build_with_explicit_provider_and_model_succeeds(offline_agent):
+def test_an_explicit_provider_and_model_let_the_agent_take_a_ticket(offline_agent):
     assert offline_agent.ticket("go").startswith("TICKET-")
 
 
@@ -55,19 +55,18 @@ def test_model_accepts_a_tuned_model_object():
         aw.Agent()
         .provider(aw.Anthropic("test-key"))
         .model(aw.Model("claude-sonnet-4-20250514").context_window(128_000))
-        .build()
     )
     assert agent.ticket("go").startswith("TICKET-")
 
 
-def test_build_without_a_provider_is_rejected():
+def test_starting_without_a_provider_is_rejected():
     with pytest.raises(RuntimeError):
-        aw.Agent().model("claude-sonnet-4-20250514").build()
+        aw.Agent().model("claude-sonnet-4-20250514").start()
 
 
-def test_build_without_a_model_is_rejected():
+def test_starting_without_a_model_is_rejected():
     with pytest.raises(RuntimeError):
-        aw.Agent().provider(aw.Anthropic("test-key")).build()
+        aw.Agent().provider(aw.Anthropic("test-key")).start()
 
 
 def test_from_env_without_provider_env_is_rejected(monkeypatch):
@@ -77,38 +76,17 @@ def test_from_env_without_provider_env_is_rejected(monkeypatch):
         aw.Agent.from_env()
 
 
-def test_using_an_unbuilt_agent_is_rejected():
-    with pytest.raises(RuntimeError):
-        aw.Agent().ticket("count to three")
-
-
-def test_id_is_built_from_the_label():
+def test_id_is_taken_from_the_label():
     agent = (
         aw.Agent()
         .label("id_from_label")
         .provider(aw.Anthropic("test-key"))
         .model("claude-sonnet-4-20250514")
-        .build()
     )
     assert agent.id == "id_from_label-1"
 
 
-def test_reading_the_id_of_an_unbuilt_agent_is_rejected():
-    with pytest.raises(RuntimeError):
-        aw.Agent().id
-
-
-def test_configuring_after_build_is_rejected(offline_agent):
-    with pytest.raises(RuntimeError):
-        offline_agent.role("too late")
-
-
-def test_building_twice_is_rejected(offline_agent):
-    with pytest.raises(RuntimeError):
-        offline_agent.build()
-
-
-def test_registering_an_unbuilt_agent_is_rejected(queue):
+def test_registering_an_agent_without_a_provider_is_rejected(queue):
     with pytest.raises(RuntimeError):
         queue.agent(aw.Agent())
 

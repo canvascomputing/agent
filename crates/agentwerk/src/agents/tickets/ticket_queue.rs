@@ -189,8 +189,7 @@ impl Run {
 ///     tickets.agent(
 ///         Agent::from_env()
 ///             .label("research")
-///             .tool(FetchUrlTool::new())
-///             .build(),
+///             .tool(FetchUrlTool::new()),
 ///     );
 /// }
 /// tickets.ticket(Ticket::labeled("research", "Summarize https://canvascomputing.org"));
@@ -302,8 +301,8 @@ impl TicketQueue {
     /// the session.
     ///
     /// An unfinished ticket is picked up again by the agent whose id it carries
-    /// as its assignee. Ids are numbered per label as agents are built, so
-    /// build the same agents in the same order after a restart.
+    /// as its assignee. Ids are numbered per label as agents take them, so
+    /// create the same agents in the same order after a restart.
     ///
     /// A ticket that cannot be read stops the load and the returned error names
     /// it, rather than handing back a store quietly missing that ticket. Files
@@ -777,8 +776,8 @@ impl TicketQueue {
             .lock()
             .unwrap()
             .iter()
-            .find(|a| a.id == agent_id)
-            .map(|a| a.model.name.clone())
+            .find(|a| a.id() == agent_id)
+            .map(|a| a.get_model().name.clone())
     }
 
     /// Set the execution limits and retry tuning.
@@ -1095,6 +1094,8 @@ impl TicketQueue {
     /// private queue across first. The prior queue is freed once nothing else
     /// holds it.
     pub(crate) fn bind_agent(&self, agent: &mut Agent) {
+        agent.require_provider_and_model();
+        agent.register_finish_tool();
         if let Some(prior) = agent.ticket_queue.upgrade() {
             if !Arc::ptr_eq(
                 &prior,
@@ -1107,7 +1108,7 @@ impl TicketQueue {
                     let mut old = prior.tickets.lock().unwrap();
                     std::mem::take(&mut *old).into_values().collect()
                 };
-                let reporter = agent.id.clone();
+                let reporter = agent.id().to_string();
                 for ticket in drained {
                     self.insert(ticket, reporter.clone());
                 }
@@ -1115,6 +1116,12 @@ impl TicketQueue {
         }
         agent.ticket_queue = TicketQueueRef::Shared(self.weak_self.clone());
         self.agents.lock().unwrap().push(agent.clone());
+    }
+
+    /// Whether an agent under this id is registered. `Agent::start` asks
+    /// before binding, so starting twice runs one agent, not two.
+    pub(crate) fn has_agent(&self, id: &str) -> bool {
+        self.agents.lock().unwrap().iter().any(|a| a.id() == id)
     }
 
     /// A copy of the registered agents.

@@ -62,8 +62,7 @@ async fn main() {
         .label("researcher_1")
         .tool(brave_search_tool(brave_key.clone()))
         .tool(FetchUrlTool::new().impersonate())
-        .tool(TicketsTool)
-        .build();
+        .tool(TicketsTool);
 
     let researcher_2 = Agent::new()
         .provider(provider.clone())
@@ -72,16 +71,14 @@ async fn main() {
         .label("researcher_2")
         .tool(brave_search_tool(brave_key.clone()))
         .tool(FetchUrlTool::new().impersonate())
-        .tool(TicketsTool)
-        .build();
+        .tool(TicketsTool);
 
     let report_writer = Agent::new()
         .provider(provider.clone())
         .model(Model::from_env().expect("model name required"))
         .role(REPORT_WRITER_ROLE)
         .label("report")
-        .tool(TicketsTool)
-        .build();
+        .tool(TicketsTool);
 
     tickets.agent(researcher_1);
     tickets.agent(researcher_2);

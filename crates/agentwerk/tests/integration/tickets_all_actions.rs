@@ -64,8 +64,7 @@ async fn walks_every_ticket_action() -> std::result::Result<(), Box<dyn std::err
                  Finish your ticket in a single call: pass the combination from \
                  your task as your result, hand the work over to `auditor`, and \
                  give the new ticket the task `Audit the archived record.`",
-            )
-            .build(),
+            ),
     );
     tickets.agent(
         Agent::new()
@@ -86,8 +85,7 @@ async fn walks_every_ticket_action() -> std::result::Result<(), Box<dyn std::err
                  6. Correct the wording of that new ticket.\n\
                  Finish by quoting the exact combination.",
             )
-            .tool(TicketsTool)
-            .build(),
+            .tool(TicketsTool),
     );
 
     tickets.ticket(Ticket::new(DORMANT_NOTE));
