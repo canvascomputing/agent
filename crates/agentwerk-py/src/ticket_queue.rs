@@ -45,7 +45,7 @@ impl PyTicketQueue {
     /// Add an agent to this ticket queue, moving any tickets it queued on its
     /// own across first.
     fn agent<'py>(slf: PyRef<'py, Self>, agent: PyRef<'_, PyAgent>) -> PyResult<PyRef<'py, Self>> {
-        slf.inner.agent(agent.built()?.clone());
+        slf.inner.agent(agent.ready()?.clone());
         Ok(slf)
     }
 

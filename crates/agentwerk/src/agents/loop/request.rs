@@ -36,7 +36,7 @@ pub(super) async fn run(context: &mut TicketContext<'_>) -> Option<Step> {
     );
     let response = loop {
         let outcome = {
-            let provider = context.agent.provider();
+            let provider = context.agent.get_provider();
             let agent_id = context.agent.id().to_string();
             let ticket_key = context.ticket_key.clone();
             let ticket_queue = Arc::clone(context.ticket_queue);
@@ -403,13 +403,7 @@ mod tests {
                 ..Default::default()
             });
         tickets.on_event(move |_, e| handler(e));
-        tickets.agent(
-            Agent::new()
-                .provider(provider)
-                .model("mock")
-                .role("test")
-                .build(),
-        );
+        tickets.agent(Agent::new().provider(provider).model("mock").role("test"));
         tickets.ticket("go");
 
         let run_fut = tickets.finish_all();
@@ -470,13 +464,7 @@ mod tests {
                 ..Default::default()
             });
         tickets.on_event(move |_, e| handler(e));
-        tickets.agent(
-            Agent::new()
-                .provider(provider)
-                .model("mock")
-                .role("test")
-                .build(),
-        );
+        tickets.agent(Agent::new().provider(provider).model("mock").role("test"));
         tickets.ticket("go");
 
         let run_fut = tickets.finish_all();
@@ -549,8 +537,7 @@ mod tests {
                 .provider(provider.clone())
                 .model("mock")
                 .role("test")
-                .tool(boom)
-                .build(),
+                .tool(boom),
         );
         tickets.ticket("go");
         let _ = tickets.finish_all().await;

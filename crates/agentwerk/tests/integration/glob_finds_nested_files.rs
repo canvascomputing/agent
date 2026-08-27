@@ -103,8 +103,7 @@ async fn finds_every_lib_rs_in_nested_tree() -> std::result::Result<(), Box<dyn 
             .tool(GlobTool)
             .tool(GrepTool)
             .tool(ListDirectoryTool)
-            .tool(ReadFileTool)
-            .build(),
+            .tool(ReadFileTool),
     );
     tickets.ticket(
         "Find every `lib.rs` file anywhere in the project tree, including nested directories.",

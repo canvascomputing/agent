@@ -112,8 +112,7 @@ async fn main() {
             .tool(ReadFileTool)
             .tool(WriteFileTool)
             .tool(TicketsTool)
-            .knowledge(&knowledge)
-            .build(),
+            .knowledge(&knowledge),
     );
 
     let mut prev_turns: u64 = 0;

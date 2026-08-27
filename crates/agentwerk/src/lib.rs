@@ -15,8 +15,7 @@
 //! let agent = Agent::from_env()
 //!     .role("You are a Rust developer who explores source files to answer questions.")
 //!     .tool(ReadFileTool)
-//!     .tool(GrepTool)
-//!     .build();
+//!     .tool(GrepTool);
 //!
 //! agent.ticket("Find every `pub trait` defined under src/ and explain each in one sentence.");
 //! let work = agent.start();
@@ -39,8 +38,7 @@
 //!     tickets.agent(
 //!         Agent::from_env()
 //!             .label("research")
-//!             .tool(FetchUrlTool::new())
-//!             .build(),
+//!             .tool(FetchUrlTool::new()),
 //!     );
 //! }
 //!
@@ -86,7 +84,6 @@ pub(crate) mod test_util;
 
 // Workshop: agents pull tickets from the queue
 pub use agents::Agent;
-pub use agents::AgentBuilder;
 pub use agents::Query;
 pub use agents::Reply;
 pub use agents::Status;

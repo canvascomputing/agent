@@ -10,7 +10,7 @@ pub(crate) mod retry;
 pub(crate) mod stats;
 pub mod tickets;
 
-pub use agent::{Agent, AgentBuilder};
+pub use agent::Agent;
 pub use knowledge::Knowledge;
 pub use policy::Policy;
 pub use query::{Matcher, Query, QueryError};

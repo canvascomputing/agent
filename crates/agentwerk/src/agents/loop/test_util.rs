@@ -277,7 +277,6 @@ pub fn interactive_chatbot(provider: &Arc<MockProvider>) -> Agent {
         .provider(provider.clone())
         .model("mock")
         .role("test")
-        .build()
 }
 
 pub fn task_agent(provider: &Arc<MockProvider>) -> Agent {
@@ -285,7 +284,6 @@ pub fn task_agent(provider: &Arc<MockProvider>) -> Agent {
         .provider(provider.clone())
         .model("mock")
         .role("test")
-        .build()
 }
 
 pub fn collect_events(tickets: &TicketQueue) -> Arc<Mutex<Vec<Event>>> {
@@ -330,8 +328,7 @@ pub async fn run_one(
             .provider(provider.clone())
             .model("mock")
             .role("test")
-            .tool(TicketsTool)
-            .build(),
+            .tool(TicketsTool),
     );
 
     if let Some(schema) = schema {
@@ -379,8 +376,7 @@ pub async fn run_with_context_window(
         Agent::new()
             .provider(provider.clone())
             .model(Model::new("mock").context_window(context_window_size))
-            .role("test")
-            .build(),
+            .role("test"),
     );
     tickets.ticket(task);
 
@@ -425,8 +421,7 @@ pub async fn run_compaction(
             .provider(provider.clone())
             .model("claude-sonnet-4-20250514")
             .role("test")
-            .tool(TicketsTool)
-            .build(),
+            .tool(TicketsTool),
     );
     configure(&tickets);
     let schema = Schema::new(serde_json::json!({"type": "string"})).unwrap();

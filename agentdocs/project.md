@@ -23,7 +23,7 @@ agentwerk is a Rust crate for building LLM agents. An agent reads input, calls a
 **Many agents share one `TicketQueue` and pick up tickets concurrently.**
 
 ```rust
-tickets.agent(Agent::from_env().label("scan").build());
+tickets.agent(Agent::from_env().label("scan"));
 tickets.ticket(Ticket::new("Audit src/db.").label("scan"));
 ```
 

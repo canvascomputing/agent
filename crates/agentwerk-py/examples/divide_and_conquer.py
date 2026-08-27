@@ -132,7 +132,6 @@ async def main(n, partitions, agents):
             .role(ROLE.strip())
             .label("compute")
             .tools([python, TicketsTool()])
-            .build()
         )
 
     for idx, (lo, hi) in enumerate(bounds):

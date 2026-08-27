@@ -6,10 +6,10 @@ Naming, comment, and prose rules, plus README structure. Skim the section matchi
 
 **A type earns a `pub use` at `lib.rs` only when it names a concept in the one-sentence description of the crate, or when root-level signatures hand it to the caller.**
 
-`Agent`, `AgentBuilder`, `TicketQueue`, `Ticket`, `Policy`, `Knowledge`, `Directive`, `Text`, `Trajectory`, `Reply`, `Event`, `Status`, `EventKind`, `FinishReason`, `Schema`, `SchemaStore`
+`Agent`, `TicketQueue`, `Ticket`, `Policy`, `Knowledge`, `Directive`, `Text`, `Trajectory`, `Reply`, `Event`, `Status`, `EventKind`, `FinishReason`, `Schema`, `SchemaStore`
 
 - Discriminants callers match on earn a root slot: `Status`, `EventKind`, `FinishReason`.
-- Builder parameters and run outputs earn one when callers name them: `Schema`, `SchemaStore`, `Policy`, `Directive`, `Text`, `AgentBuilder`, `Reply`, `Trajectory`.
+- Builder parameters and run outputs earn one when callers name them: `Schema`, `SchemaStore`, `Policy`, `Directive`, `Text`, `Reply`, `Trajectory`.
 - Errors and conversion traits do not. They live in their domain module.
 - Free functions at the root are forbidden: convert to an associated function or move to the domain module.
 - Name collisions at the root are forbidden; `ToolResult` next to `Result` is not acceptable.
@@ -137,7 +137,7 @@ ToolFailureKind::ExecutionFailed.name()   // "execution_failed"
 `.name()`, `.model()`, `.tool()`, `.label()`, `.concurrent()`
 
 - The `with_` prefix is reserved for a bare name that would be ambiguous even with an inherent and trait split; no current builder needs it.
-- A value the caller owns before execution consumes itself: `AgentBuilder` takes `mut self` and returns `Self`, which is also what lets its type-state track the filled provider and model slots.
+- A value the caller owns before execution consumes itself: `Agent` and `ToolBuilder` take `mut self` and return `Self`. `Agent` configures itself rather than through a second type, so a provider or model left unset is caught when it joins a queue.
 - A type handed out as `Arc` configures through `&self` and returns `&Self`: `TicketQueue` and `Knowledge`. A third shape, `self: Arc<Self> -> Arc<Self>`, is not used.
 
 ## Constructors
@@ -152,7 +152,7 @@ ToolFailureKind::ExecutionFailed.name()   // "execution_failed"
 
 - Example: `set_extension()`, `get_extension()`. Builder methods remain unprefixed.
 - A public method returning `bool` is `is_<state>` or `has_<thing>`. A bare past participle such as `label_cancelled` reads as a field, not a question.
-- `get_<name>` reads back a value a builder set where the bare noun would collide with the builder method on the same type: `TicketQueue::get_dir`, `Model::get_context_window`. A type whose builder is a separate type keeps the bare noun: `Tool::name`, `Agent::id`. A lookup by key keeps `get_` for the `HashMap::get` sense, which is why `get_ticket(key)` stands apart from `find_ticket(matches)`.
+- `get_<name>` reads back a value a builder set where the bare noun would collide with the builder method on the same type: `TicketQueue::get_dir`, `Model::get_context_window`, `Agent::get_provider`. A reader with no setter to collide with keeps the bare noun: `Tool::name`, `Agent::id`. A lookup by key keeps `get_` for the `HashMap::get` sense, which is why `get_ticket(key)` stands apart from `find_ticket(matches)`.
 
 ## Lifecycle
 
@@ -190,7 +190,7 @@ edit_replies(key, editor)            // act once, now
 - IMPORTANT: an observer takes the queue first, `&Arc<TicketQueue>` before the trigger's own parameters, owned in the `_async` twin. That is what a hook acts through, and why neither a `create_ticket_on_*` nor an `edit_replies_on_*` family exists: `queue.ticket(..)` inside `on_result`, and `queue.edit_replies(&event.ticket_key, ..)` inside `on_event`, are the whole of them.
 - A hook reacts to something agentwerk produces. Anything the caller already holds needs no hook: to stop a pool on a verdict, `finish` for it and `cancel`.
 - `on_ticket` sits outside the trigger grid, keying on a ticket rather than naming a trigger.
-- No hook registers something agentwerk calls in place of its own work. Compaction summarizes and says so through the four `Compaction*` events, and what agentwerk writes to correct the model is set once by `AgentBuilder::directives`, which takes one function over every directive.
+- No hook registers something agentwerk calls in place of its own work. Compaction summarizes and says so through the four `Compaction*` events, and what agentwerk writes to correct the model is set once by `Agent::directives`, which takes one function over every directive.
 
 ## Editors
 
@@ -204,7 +204,7 @@ edit_replies(key, editor)            // act once, now
 
 **Every public Rust item has a Python counterpart of the same name. The transforms below are permitted; nothing else.**
 
-- Type-state collapses: `AgentBuilder<P, M>` and `ToolBuilder<D, H>` fold into the class they build and take its name. The collapsed class validates at `build()`.
+- Type-state collapses: `ToolBuilder<D, H>` folds into the class it builds and takes its name. The collapsed class validates at `build()`.
 - `Duration` becomes a float named `seconds`, with the unit repeated in the docstring: `Policy::request_retry_delay` binds as a float in seconds. Every other parameter keeps its Rust name.
 - A fieldless enum becomes its snake_case `Display` string. That `Display` impl is the single source, so the binding never formats a variant with `{:?}`.
 - An enum whose variants carry fields becomes a class with a `kind` string, a `data` dict, and one static constructor per variant. `Event` and `ReplyContent` are the two.
@@ -467,7 +467,7 @@ Also:
 - Groups do not interleave. The result rows run before the ticket rows in Results; the observers run before the cancels in Hooks.
 - One axis order is chosen and held across every group. Hooks is the model: `event`, `result`, `failure`.
 - Within a group, selectors run widest to narrowest: everything, then by label or agent, then by condition, then by key. Singular leads plural, and an action is followed by the query that reads it back: `cancel(matches)` then `is_cancelled(ticket)`.
-- One table holds one receiver. A method on another type goes in the fold's trailing prose, which is why `TicketQueue::model_for_agent` is prose under the Providers fold rather than a fourth `AgentBuilder` row.
+- One table holds one receiver. A method on another type goes in the fold's trailing prose, which is why `TicketQueue::model_for_agent` is prose under the Providers fold rather than a fourth `Agent` row.
 - The Execution fold holds everything that acts once over a run. The hooks fold holds only what registers a handler the queue calls back into on every matching event.
 
 ## README Examples

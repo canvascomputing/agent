@@ -10,7 +10,7 @@ Signatures use one language-independent notation, so a Rust row and a Python row
 
 - Receivers, borrows, and lifetimes drop: `fn record(&self, event: &Event)` is `Stats.record(event: Event): void`.
 - A type names itself once, on its first member: `Stats.event_count(event: EventName): number`. Every member below it starts at the dot, `.input_tokens(): number`, until another type or a free function takes over. A free function carries no owner.
-- A method returning its own type returns `this`: `AgentBuilder.provider(provider: Provider): this`.
+- A method returning its own type returns `this`: `Agent.provider(provider: Provider): this`.
 - `u8`, `u32`, `u64`, `usize`, `f32`, `f64`, and `Duration` are `number`, and a `Duration` constant shows milliseconds.
 - `&str`, `String`, `impl Into<String>`, `&Path`, and `PathBuf` are `string`.
 - `impl Into<Text>` is `Text`: a string is the text itself, a `&Path` or `PathBuf` names the file the crate reads and trims.
@@ -21,7 +21,7 @@ Signatures use one language-independent notation, so a Rust row and a Python row
 - An `async fn` returns `Promise<T>`.
 - `Arc<T>`, `Box<T>`, `Rc<T>`, `Mutex<T>`, `RwLock<T>`, and `&T` unwrap to `T`. Every other wrapper keeps its name: `Weak<TicketQueue>`, `Sender<Event>`, `JoinHandle<void>`.
 - A callback becomes an arrow: `Arc<dyn Fn(&Event) + Send + Sync>` is `(event: Event) => void`.
-- A generic bound erases to what the caller passes: `T: Serialize` is `json`. A type's own parameters stay: `AgentBuilder<P, M>`, `ProviderResult<T>`.
+- A generic bound erases to what the caller passes: `T: Serialize` is `json`. A type's own parameters stay: `ToolBuilder<D, H>`, `ProviderResult<T>`.
 - Domain type names stay as the code writes them: `Ticket`, `Event`, `Status`, `PolicyViolation`.
 - A constant shows `= value` when the value is one scalar or short string, and nothing when it is longer or computed.
 - Names are never re-cased: `is_todo`, never `isTodo`. Every name here is greppable in `src/`.
@@ -59,38 +59,32 @@ The rules the tables never repeat.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `AgentBuilder<P, M> { provider: P, model: M, role: string, label: string?, interactive: boolean, templates: [string, string][], tools: ToolRegistry, dir: string, knowledge: Knowledge }` | pub |
-| Python | folded into `Agent`: the type changes as the provider and model slots fill, which Python cannot hold across calls | |
+| Rust | `Agent { label: string?, interactive: boolean, ticket_queue: TicketQueueRef, id: OnceLock<string>, provider: Provider?, model: Model?, role: string, templates: [string, string][], tools: ToolRegistry, dir: string, knowledge: Knowledge, directives: DirectiveStore }` | pub |
+| Rust | `impl Clone for Agent` | pub |
 | Rust | `.new(): this` | pub |
 | Python | `Agent()` | |
+| both | `.from_env(): this` | pub |
+| Python | `.from_env()`: raises `RuntimeError` where Rust panics | |
 | both | `.provider(provider: Provider): this` | pub |
 | both | `.model(model: Model): this` | pub |
 | Rust | `.role(role: Text): this` | pub |
-| Python | `Agent.role(role): this`: a `str` is the role, an `os.PathLike` names the file holding it | |
+| Python | `.role(role)`: a `str` is the role, an `os.PathLike` names the file holding it | |
 | both | `.label(label: string): this` | pub |
 | both | `.interactive(): this` | pub |
 | both | `.template(key: string, value: string): this` | pub |
 | Rust | `.templates(variables: [string, string][]): this` | pub |
-| Python | `Agent.templates(variables): this`: a mapping, so the bulk bind applies in key order where Rust preserves insertion order | |
+| Python | `.templates(variables)`: a mapping, so the bulk bind applies in key order where Rust preserves insertion order | |
 | both | `.tool(tool: Tool): this` | pub |
 | both | `.tools(tools: Tool[]): this` | pub |
 | both | `.dir(dir: string): this` | pub |
 | both | `.knowledge(store: Knowledge): this` | pub |
 | both | `.directives(compute: (key: string) => string?): this` | pub |
-| Rust | `.build(): Agent` | pub |
-| Python | `Agent.build(): this`: returns the same object, armed. Configuring after it, or building twice, raises | |
-| Rust | `Agent { id: string, model: Model, label: string?, interactive: boolean, ticket_queue: TicketQueueRef, provider: Provider, role: string, templates: [string, string][], tools: ToolRegistry, dir: string, knowledge: Knowledge, directives: DirectiveStore }` | pub |
-| Python | `Agent`: also carries every `AgentBuilder` method | |
-| Rust | `impl Clone for Agent` | pub |
-| Rust | `.new(): AgentBuilder` | pub |
-| Python | `Agent()` | |
-| both | `.from_env(): this` | pub |
-| Python | `.from_env()`: raises `RuntimeError` where Rust panics | |
 | Rust | `.id(): string` | pub |
-| Python | `.id`: a property, and a `RuntimeError` before `build()` | |
+| Python | `.id`: a property | |
 | both | `.ticket(ticket: Ticket): string` | pub |
 | both | `.ticket(task)`: a string or json value stands in for the `Ticket` | |
 | both | `.start(): TicketQueue` | pub |
+| Python | `.start()`: raises `RuntimeError` where Rust panics on a missing provider or model | |
 
 ### Internal
 
@@ -105,10 +99,13 @@ The rules the tables never repeat.
 | Rust | `Agent.is_interactive(): boolean` | super |
 | Rust | `.handles(agent_label: string?, ticket_label: string?): boolean` | super |
 | Rust | `.tool_registry(): ToolRegistry` | super |
-| Rust | `.provider(): Provider` | super |
-| Rust | `.knowledge(): Knowledge` | super |
-| Rust | `.directives(): DirectiveStore` | super |
-| Rust | `.dir(): string` | super |
+| Rust | `.get_provider(): Provider` | super |
+| Rust | `.get_model(): Model` | super |
+| Rust | `.get_knowledge(): Knowledge` | super |
+| Rust | `.get_directives(): DirectiveStore` | super |
+| Rust | `.get_dir(): string` | super |
+| Rust | `.require_provider_and_model(): void` | super |
+| Rust | `.register_finish_tool(): void` | super |
 | Rust | `.system_prompt(knowledge: string?, policy: Policy, stats: Stats, ticket_key: string): string` | super |
 | Rust | `.expand_context(role: string, policy: Policy, stats: Stats, ticket_key: string): string` | private |
 | Rust | `.interpolate(s: string): string` | private |
@@ -288,7 +285,7 @@ The rules the tables never repeat.
 | Language | Item | Visibility |
 |----------|------|------------|
 | Rust | `mod agent`, `mod policy`, `mod knowledge`, `mod loop`, `mod tickets` | pub |
-| Rust | re-exports `Agent`, `AgentBuilder`, `Policy`, `Knowledge`, `Matcher`, `Query`, `QueryError`, `Reply`, `Status`, `Ticket`, `TicketError`, `TicketQueue`, `Trajectory` | pub |
+| Rust | re-exports `Agent`, `Policy`, `Knowledge`, `Matcher`, `Query`, `QueryError`, `Reply`, `Status`, `Ticket`, `TicketError`, `TicketQueue`, `Trajectory` | pub |
 
 ### Internal
 
@@ -675,6 +672,7 @@ The rules the tables never repeat.
 | Rust | `.is_running(): boolean` | private |
 | Rust | `.interactive_agents(): string[]` | private |
 | Rust | `.bind_agent(agent: Agent): void` | crate |
+| Rust | `.has_agent(id: string): boolean` | crate |
 | Rust | `.clone_agents(): Agent[]` | crate |
 | Rust | `.next_event_or_end(stream: Event): Promise<boolean>` | private |
 | Rust | `results_of(matches: Matcher<Ticket>): Query` | private |
@@ -994,7 +992,7 @@ Not bound, like the rest of `codegrep`.
 | Language | Item | Visibility |
 |----------|------|------------|
 | Rust | `mod agents`, `mod codegrep`, `mod event`, `mod providers`, `mod schemas`, `mod tools` | pub |
-| Rust | re-exports `Agent`, `AgentBuilder`, `Query`, `Reply`, `Status`, `Ticket`, `TicketQueue`, `Policy`, `Knowledge`, `Trajectory`, `Schema`, `SchemaStore`, `Event`, `EventKind`, `FinishReason`, `Directive`, `Text` | pub |
+| Rust | re-exports `Agent`, `Query`, `Reply`, `Status`, `Ticket`, `TicketQueue`, `Policy`, `Knowledge`, `Trajectory`, `Schema`, `SchemaStore`, `Event`, `EventKind`, `FinishReason`, `Directive`, `Text` | pub |
 | Python | `agentwerk` exports every bound class from one flat module | |
 
 ### Internal
@@ -1035,7 +1033,7 @@ Not bound: `prompts` is crate-internal, reached through `Agent.role(..)`.
 
 ## `crates/agentwerk/src/prompts/directives.rs`
 
-One of the two public parts of `prompts`, beside `Text`: `Directive` reaches the caller as a root re-export and carries nothing but the key constants, one per catalogue heading. `AgentBuilder::directives` takes the function deciding all of them, which sees a key and answers a template. `DirectiveStore` is the crate-private carrier of that function, which no host names. The constants sit on `Directive` in both languages, so `Directive::GREP_FAILED` and `Directive.GREP_FAILED` are the same name.
+One of the two public parts of `prompts`, beside `Text`: `Directive` reaches the caller as a root re-export and carries nothing but the key constants, one per catalogue heading. `Agent::directives` takes the function deciding all of them, which sees a key and answers a template. `DirectiveStore` is the crate-private carrier of that function, which no host names. The constants sit on `Directive` in both languages, so `Directive::GREP_FAILED` and `Directive.GREP_FAILED` are the same name.
 
 ### Public
 
@@ -2163,23 +2161,22 @@ Binds `agents/agent.rs`, whose section holds the Python spelling of each method.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `PyAgent { role: string?, label: string?, templates: [string, string][], dir: string?, interactive: boolean, provider: Provider?, model: Model?, tools: Tool[], knowledge: Knowledge?, directives: any?, agent: Agent? }` | python |
+| Rust | `PyAgent { agent: Agent?, has_provider: boolean, has_model: boolean }` | python |
 | Rust | `.new(): this` | python |
 | Rust | `.from_env(): this throws PyErr` | python |
-| Rust | `.provider(provider: PyProvider): this throws PyErr` | python |
+| Rust | `.provider(provider: PyProvider): this` | python |
 | Rust | `.model(model: any): this throws PyErr` | python |
 | Rust | `.role(role: any): this throws PyErr` | python |
-| Rust | `.label(label: string): this throws PyErr` | python |
-| Rust | `.id(): string throws PyErr` | python |
-| Rust | `.interactive(): this throws PyErr` | python |
-| Rust | `.template(key: string, value: string): this throws PyErr` | python |
-| Rust | `.templates(variables: Record<string, string>): this throws PyErr` | python |
-| Rust | `.dir(dir: string): this throws PyErr` | python |
-| Rust | `.knowledge(store: PyKnowledge): this throws PyErr` | python |
-| Rust | `.directives(compute: any): this throws PyErr` | python |
+| Rust | `.label(label: string): this` | python |
+| Rust | `.id(): string` | python |
+| Rust | `.interactive(): this` | python |
+| Rust | `.template(key: string, value: string): this` | python |
+| Rust | `.templates(variables: Record<string, string>): this` | python |
+| Rust | `.dir(dir: string): this` | python |
+| Rust | `.knowledge(store: PyKnowledge): this` | python |
+| Rust | `.directives(compute: any): this` | python |
 | Rust | `.tool(tool: any): this throws PyErr` | python |
 | Rust | `.tools(tools: any): this throws PyErr` | python |
-| Rust | `.build(): this throws PyErr` | python |
 | Rust | `.ticket(ticket: PyTicket): string throws PyErr` | python |
 | Rust | `.start(): PyTicketQueue throws PyErr` | python |
 
@@ -2187,10 +2184,9 @@ Binds `agents/agent.rs`, whose section holds the Python spelling of each method.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `PyAgent.create(): this` | private |
-| Rust | `.built(): Agent throws PyErr` | crate |
-| Rust | `.ensure_unbuilt(): void throws PyErr` | private |
-| Rust | `.assemble(): Agent throws PyErr` | private |
+| Rust | `PyAgent.get(): Agent` | private |
+| Rust | `.set(edit: (agent: Agent) => Agent): void` | private |
+| Rust | `.ready(): Agent throws PyErr` | crate |
 
 ## `crates/agentwerk-py/src/policy.rs`
 

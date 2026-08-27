@@ -38,9 +38,9 @@ crates/
 
 ## The `agents/` Module
 
-**Holds the per-agent builder, the ticket queue, and the multi-agent loop.**
+**Holds the agent, the ticket queue, and the multi-agent loop.**
 
-- `agent.rs`: the `Agent` builder and ticket-dispatch helpers.
+- `agent.rs`: `Agent`, its configuration methods, and ticket-dispatch helpers.
 - `compaction.rs`: the summarizer that compaction runs, and the threshold and chunking arithmetic behind it.
 - `policy.rs`: the public `Policy`, what a run may spend, how it retries, and when it compacts.
 - `knowledge.rs`: `Knowledge`, the cross-ticket store, an OKF v0.1 bundle in `<dir>/knowledge/`. Pages are curated through the `pages()` handle (`save`, `load`, `remove`) plus `clear`; failures are typed as `KnowledgeError`.

@@ -40,13 +40,13 @@ pub(super) async fn run(context: &mut TicketContext<'_>, mut calls: Vec<ToolCall
         });
     }
 
-    let tool_context = ToolContext::new(context.agent.dir())
+    let tool_context = ToolContext::new(context.agent.get_dir())
         .run(Arc::clone(&context.run))
         .ticket_queue(Arc::clone(context.ticket_queue))
         .agent_id(context.agent.id().to_string())
         .ticket_key(context.ticket_key.clone())
-        .knowledge(context.agent.knowledge())
-        .directives(context.agent.directives());
+        .knowledge(context.agent.get_knowledge())
+        .directives(context.agent.get_directives());
 
     let results = registry.execute(&calls, &tool_context).await;
 
@@ -322,8 +322,7 @@ mod tests {
             Agent::new()
                 .provider(provider.clone())
                 .model("mock")
-                .role("test")
-                .build(),
+                .role("test"),
         );
         tickets.ticket(Ticket::new("go").schema(schema_for_partial_sum()));
 
@@ -523,8 +522,7 @@ mod tests {
                 .provider(provider)
                 .model("mock")
                 .role("test")
-                .tool(boom)
-                .build(),
+                .tool(boom),
         );
         tickets.ticket("go");
         let _ = tickets.finish_all().await;
@@ -599,8 +597,7 @@ mod tests {
                 .provider(provider)
                 .model("mock")
                 .role("test")
-                .tool(boom)
-                .build(),
+                .tool(boom),
         );
         tickets.ticket("go");
         let _ = tickets.finish_all().await;
@@ -650,8 +647,7 @@ mod tests {
                 .model("mock")
                 .role("test")
                 .tool(boom)
-                .tool(ping)
-                .build(),
+                .tool(ping),
         );
         tickets.ticket("go");
         let _ = tickets.finish_all().await;
@@ -711,8 +707,7 @@ mod tests {
                 .model("mock")
                 .role("test")
                 .tool(TicketsTool)
-                .tool(slow_tool)
-                .build(),
+                .tool(slow_tool),
         );
         tickets.ticket("go");
 
@@ -779,8 +774,7 @@ mod tests {
                 .provider(provider.clone())
                 .model("claude-sonnet-4-20250514")
                 .role("test")
-                .tool(dump)
-                .build(),
+                .tool(dump),
         );
         tickets.ticket("go");
 
@@ -898,8 +892,7 @@ mod tests {
                 .provider(provider.clone())
                 .model("mock")
                 .role("test")
-                .tool(size_tool)
-                .build(),
+                .tool(size_tool),
         );
         tickets.ticket("go");
 
