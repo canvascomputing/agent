@@ -29,10 +29,10 @@ Signatures use one language-independent notation, so a Rust row and a Python row
 ## Rows
 
 - Each section splits into `### Public` and `### Internal`, public first. Public is what a caller outside the crate can name and what Python sees; internal is the rest, a `pub` item sealed behind a crate-private module included. A section with rows on one side only carries that heading alone.
-- `Language` is `both` when Rust and Python read the same after normalization, and a `Python` row may still follow one to note a difference in behavior. Otherwise a `Rust` row is followed by its `Python` row.
-- Every item the crate exports is either half of a `both` row or has a `Python` row. `not bound` is the Python cell for an item the bindings leave out, with the reason where there is one.
+- `Language` is `both` when Python reads the same after the conversions below and any note the section already carries. A `Python` row follows only where Python does something those do not already say.
+- A `Rust` row carrying no `Python` row is not bound. A `not bound` cell is written only to give the reason.
 - A file whose exports the bindings leave out says so in one line under its heading, and its rows then carry no `Python` row. A `crates/agentwerk-py` file names the library file it binds instead. A file that exports nothing carries no note.
-- An enum variant, an associated constant, a trait impl, a module declaration, or a re-export takes a `Python` row only where Python does something the row above does not already imply.
+- An enum variant, a trait impl, a module declaration, or a re-export is the exception: it takes a `Python` row only where Python does something the row above does not already imply.
 - A `Python` row leaves `Visibility` empty. A trailing `: note` states a behavioral difference.
 - `Visibility` is the reach: `pub`, `crate`, `super`, or `private`, so a `pub(in path)`, a `pub` member of a `crate` type, and a `pub` item in a crate-private module all record as `crate`. In `crates/agentwerk-py` it is `python` for anything a `#[pyclass]`, `#[pymethods]`, or `#[pyfunction]` exposes, whether or not Rust keeps it private.
 - Struct fields sit inside the struct's row, and a trait's members inside the trait's. An enum gets its own row plus one row per variant, carrying the variant's payload where it has one.
@@ -45,7 +45,8 @@ The rules the tables never repeat.
 
 - Every enum is its lowercase string: `ticket.status == "in_progress"`.
 - Every error type is `RuntimeError`.
-- Every `Duration` is a float named `seconds`. Every other parameter keeps its Rust name.
+- Every bound type keeps its Rust name, and its Rust fields are not Python attributes: `Knowledge`, `Anthropic`. A unit struct takes no constructor arguments: `GlobTool()`.
+- Every `Duration` is a float named `seconds`. Every other parameter keeps its Rust name and drops its type.
 - Every shared handle is a plain object, shared by passing it to several agents.
 - Every `async` item is awaitable.
 - An argument Rust takes by `Serialize` takes any JSON-serializable value.
@@ -62,32 +63,22 @@ The rules the tables never repeat.
 | Python | folded into `Agent`: the type changes as the provider and model slots fill, which Python cannot hold across calls | |
 | Rust | `.new(): this` | pub |
 | Python | `Agent()` | |
-| Rust | `.provider(provider: Provider): this` | pub |
-| Python | `.provider(provider): this` | |
-| Rust | `.model(model: Model): this` | pub |
-| Python | `.model(model): this` | |
+| both | `.provider(provider: Provider): this` | pub |
+| both | `.model(model: Model): this` | pub |
 | Rust | `.role(role: Text): this` | pub |
-| Python | `.role(role): this`: a `str` is the role, an `os.PathLike` names the file holding it | |
-| Rust | `.label(label: string): this` | pub |
-| Python | `.label(label): this` | |
-| Rust | `.interactive(): this` | pub |
-| Python | `.interactive(): this` | |
-| Rust | `.template(key: string, value: string): this` | pub |
-| Python | `.template(key, value): this` | |
+| Python | `Agent.role(role): this`: a `str` is the role, an `os.PathLike` names the file holding it | |
+| both | `.label(label: string): this` | pub |
+| both | `.interactive(): this` | pub |
+| both | `.template(key: string, value: string): this` | pub |
 | Rust | `.templates(variables: [string, string][]): this` | pub |
-| Python | `.templates(variables): this`: a mapping, so the bulk bind applies in key order where Rust preserves insertion order | |
-| Rust | `.tool(tool: Tool): this` | pub |
-| Python | `.tool(tool): this` | |
-| Rust | `.tools(tools: Tool[]): this` | pub |
-| Python | `.tools(tools): this` | |
-| Rust | `.dir(dir: string): this` | pub |
-| Python | `.dir(dir): this` | |
-| Rust | `.knowledge(store: Knowledge): this` | pub |
-| Python | `.knowledge(store): this` | |
-| Rust | `.directives(compute: (key: string) => string?): this` | pub |
-| Python | `.directives(compute): this` | |
+| Python | `Agent.templates(variables): this`: a mapping, so the bulk bind applies in key order where Rust preserves insertion order | |
+| both | `.tool(tool: Tool): this` | pub |
+| both | `.tools(tools: Tool[]): this` | pub |
+| both | `.dir(dir: string): this` | pub |
+| both | `.knowledge(store: Knowledge): this` | pub |
+| both | `.directives(compute: (key: string) => string?): this` | pub |
 | Rust | `.build(): Agent` | pub |
-| Python | `.build(): this`: returns the same object, armed. Configuring after it, or building twice, raises | |
+| Python | `Agent.build(): this`: returns the same object, armed. Configuring after it, or building twice, raises | |
 | Rust | `Agent { id: string, model: Model, label: string?, interactive: boolean, ticket_queue: TicketQueueRef, provider: Provider, role: string, templates: [string, string][], tools: ToolRegistry, dir: string, knowledge: Knowledge, directives: DirectiveStore }` | pub |
 | Python | `Agent`: also carries every `AgentBuilder` method | |
 | Rust | `impl Clone for Agent` | pub |
@@ -167,15 +158,13 @@ The rules the tables never repeat.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `KnowledgeError` | pub |
-| Python | `RuntimeError` | |
+| both | `KnowledgeError` | pub |
 | Rust | `.PageRejected { message: string }` | pub |
 | Rust | `.PageMissing { slug: string }` | pub |
 | Rust | `.IoFailed { message: string, source: io::Error }` | pub |
 | Rust | `impl Display for KnowledgeError` | pub |
 | Rust | `impl Error for KnowledgeError` | pub |
-| Rust | `Knowledge { knowledge_dir: string, index: IndexEntry[], write_lock: void, index_char_limit: number }` | pub |
-| Python | `Knowledge` | |
+| both | `Knowledge { knowledge_dir: string, index: IndexEntry[], write_lock: void, index_char_limit: number }` | pub |
 | both | `.load(store_dir: string): this throws io::Error` | pub |
 | both | `.index_char_limit(count: number): this` | pub |
 | both | `.get_index_char_limit(): number` | pub |
@@ -185,8 +174,7 @@ The rules the tables never repeat.
 | Rust | `Page { slug: string, kind: string, description: string, content: string, tags: string[] }` | pub |
 | Python | `Page(slug, description, content, kind=.., tags=..)`: a struct literal becomes a constructor, so the optional fields move last | |
 | Rust | `impl Persist for Page` | pub |
-| Rust | `Pages { inner: Knowledge }` | pub |
-| Python | `Pages` | |
+| both | `Pages { inner: Knowledge }` | pub |
 | both | `.save(page: Page): void throws KnowledgeError` | pub |
 | both | `.load(slug: string): Page throws KnowledgeError` | pub |
 | both | `.list(): Page[] throws KnowledgeError` | pub |
@@ -588,8 +576,7 @@ The rules the tables never repeat.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `TicketQueue { weak_self: Weak<TicketQueue>, tickets: Record<string, Ticket>, agents: Agent[], policy: Policy, run: Run, cancel_filters: Query[], terminal_transitions_in_flight: number, stats: Stats, event_handlers: EventHandler[], awaited_events: AwaitedEvents, event_stream: Sender<Event>, schemas: SchemaStore?, dir: string, events_lock: void, join_handle: JoinHandle<void>?, next_ticket_id: number? }` | pub |
-| Python | `TicketQueue` | |
+| both | `TicketQueue { weak_self: Weak<TicketQueue>, tickets: Record<string, Ticket>, agents: Agent[], policy: Policy, run: Run, cancel_filters: Query[], terminal_transitions_in_flight: number, stats: Stats, event_handlers: EventHandler[], awaited_events: AwaitedEvents, event_stream: Sender<Event>, schemas: SchemaStore?, dir: string, events_lock: void, join_handle: JoinHandle<void>?, next_ticket_id: number? }` | pub |
 | Rust | `.new(): this` | pub |
 | Python | `TicketQueue()` | |
 | both | `.load(tickets_dir: string): this throws io::Error` | pub |
@@ -1137,8 +1124,7 @@ Not bound: Python passes a `str` for the text and an `os.PathLike` for the file 
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `Anthropic(Endpoint)` | pub |
-| Python | `Anthropic` | |
+| both | `Anthropic(Endpoint)` | pub |
 | Rust | `.new(api_key: string): this` | pub |
 | Python | `Anthropic(api_key, base_url=.., timeout=..)` | |
 | Rust | `.base_url(url: string): this` | pub |
@@ -1219,8 +1205,7 @@ Not bound: `Provider.from_env()` and `Model.from_env()` read these variables.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `ProviderError` | pub |
-| Python | `RuntimeError` | |
+| both | `ProviderError` | pub |
 | Rust | `.AuthenticationFailed { message: string }` | pub |
 | Rust | `.PermissionDenied { message: string }` | pub |
 | Rust | `.ModelNotFound { message: string }` | pub |
@@ -1256,8 +1241,7 @@ Not bound: `Provider.from_env()` and `Model.from_env()` read these variables.
 | Rust | `.name(): string` | pub |
 | Python | not bound: the kind is already a string | |
 | Rust | `impl Display for RequestErrorKind` | pub |
-| Rust | `ProviderResult<T> = T throws ProviderError` | pub |
-| Python | `RuntimeError` | |
+| both | `ProviderResult<T> = T throws ProviderError` | pub |
 
 ### Internal
 
@@ -1304,8 +1288,7 @@ Not bound: it repairs a reply before the loop reads it.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `LiteLlm(Endpoint)` | pub |
-| Python | `LiteLlm` | |
+| both | `LiteLlm(Endpoint)` | pub |
 | Rust | `.new(api_key: string): this` | pub |
 | Python | `LiteLlm(api_key, base_url=.., timeout=..)` | |
 | Rust | `.base_url(url: string): this` | pub |
@@ -1327,8 +1310,7 @@ Not bound: it repairs a reply before the loop reads it.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `Mistral(Endpoint)` | pub |
-| Python | `Mistral` | |
+| both | `Mistral(Endpoint)` | pub |
 | Rust | `.new(api_key: string): this` | pub |
 | Python | `Mistral(api_key, base_url=.., timeout=..)` | |
 | Rust | `.base_url(url: string): this` | pub |
@@ -1391,8 +1373,7 @@ Not bound: it repairs a reply before the loop reads it.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `OpenAi(Endpoint)` | pub |
-| Python | `OpenAi` | |
+| both | `OpenAi(Endpoint)` | pub |
 | Rust | `.new(api_key: string): this` | pub |
 | Python | `OpenAi(api_key, base_url=.., timeout=..)` | |
 | Rust | `.base_url(url: string): this` | pub |
@@ -1432,7 +1413,6 @@ Not bound: it repairs a reply before the loop reads it.
 | Python | not bound: the per-vendor constructors already hand back a `Provider` | |
 | both | `.from_env(): this throws ProviderError` | pub |
 | Rust | `.verify(model: string): Promise<void throws ProviderError>` | pub |
-| Python | not bound | |
 | Rust | `impl From<P> for Provider` | pub |
 | Rust | `impl Deref for Provider` | pub |
 
@@ -1555,8 +1535,7 @@ Not bound, apart from `ReasoningEffort` and `ToolDeclineKind`: Python binds the 
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `Schema { inner: SchemaBody }` | pub |
-| Python | `Schema` | |
+| both | `Schema { inner: SchemaBody }` | pub |
 | Rust | `.new(document: json): this throws SchemaParseError` | pub |
 | Python | `Schema(document)` | |
 | both | `.validate(value: json): [json, string[]] throws SchemaViolations` | pub |
@@ -1569,16 +1548,13 @@ Not bound, apart from `ReasoningEffort` and `ToolDeclineKind`: Python binds the 
 | Rust | `impl Debug for Schema` | pub |
 | Rust | `impl Serialize for Schema` | pub |
 | Rust | `impl Deserialize for Schema` | pub |
-| Rust | `SchemaViolation { instance_path: string, message: string }` | pub |
-| Python | `RuntimeError` | |
+| both | `SchemaViolation { instance_path: string, message: string }` | pub |
 | Rust | `impl Display for SchemaViolation` | pub |
-| Rust | `SchemaViolations(SchemaViolation[])` | pub |
-| Python | `RuntimeError` | |
+| both | `SchemaViolations(SchemaViolation[])` | pub |
 | Rust | `impl Deref for SchemaViolations` | pub |
 | Rust | `impl Display for SchemaViolations` | pub |
 | Rust | `impl Error for SchemaViolations` | pub |
-| Rust | `SchemaParseError { message: string }` | pub |
-| Python | `RuntimeError` | |
+| both | `SchemaParseError { message: string }` | pub |
 | Rust | `impl Display for SchemaParseError` | pub |
 | Rust | `impl Error for SchemaParseError` | pub |
 
@@ -1637,8 +1613,7 @@ Not bound, apart from `ReasoningEffort` and `ToolDeclineKind`: Python binds the 
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `SchemaStore { entries: Record<string, Schema> }` | pub |
-| Python | `SchemaStore` | |
+| both | `SchemaStore { entries: Record<string, Schema> }` | pub |
 | Rust | `.new(): this` | pub |
 | Python | `SchemaStore()` | |
 | Rust | `.label(label: string, document: json): this throws SchemaParseError` | pub |
@@ -1720,9 +1695,7 @@ Not bound: it is how `CommandTool` reads one command line.
 | Rust | `CommandTool { tool_name: string, allow: string[], allow_flags: string[], deny: string[], deny_flags: DeniedFlag[], description: string, custom_description: boolean, concurrent: boolean }` | pub |
 | Python | `CommandTool`: a class carrying the builder methods, where every other built-in tool is a function returning a handle | |
 | Rust | `.DEFAULT_TIMEOUT: number = 120000` | pub |
-| Python | not bound | |
 | Rust | `.MAX_TIMEOUT: number = 600000` | pub |
-| Python | not bound | |
 | Rust | `.new(name: string): this` | pub |
 | Python | `CommandTool(name)` | |
 | both | `.allow(pattern: string): this` | pub |
@@ -1840,8 +1813,7 @@ Not bound: it is how `CommandTool` reads one command line.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `GlobTool` | pub |
-| Python | `GlobTool()` | |
+| both | `GlobTool` | pub |
 | Rust | `impl From<GlobTool> for Tool` | pub |
 
 ### Internal
@@ -1865,8 +1837,7 @@ Not bound: it is how `CommandTool` reads one command line.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `GrepTool` | pub |
-| Python | `GrepTool()` | |
+| both | `GrepTool` | pub |
 | Rust | `impl From<GrepTool> for Tool` | pub |
 
 ### Internal
@@ -1909,8 +1880,7 @@ Not bound: it is how `CommandTool` reads one command line.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `KnowledgeTool { store: Knowledge }` | pub |
-| Python | `KnowledgeTool` | |
+| both | `KnowledgeTool { store: Knowledge }` | pub |
 | Rust | `.new(store: Knowledge): this` | pub |
 | Python | `KnowledgeTool(store)` | |
 | Rust | `impl From<KnowledgeTool> for Tool` | pub |
@@ -1935,8 +1905,7 @@ Not bound: it is how `CommandTool` reads one command line.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `ListDirectoryTool` | pub |
-| Python | `ListDirectoryTool()` | |
+| both | `ListDirectoryTool` | pub |
 | Rust | `impl From<ListDirectoryTool> for Tool` | pub |
 
 ### Internal
@@ -1971,8 +1940,7 @@ Not bound: it is how `CommandTool` reads one command line.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `ReadFileTool` | pub |
-| Python | `ReadFileTool()` | |
+| both | `ReadFileTool` | pub |
 | Rust | `impl From<ReadFileTool> for Tool` | pub |
 
 ### Internal
@@ -1991,8 +1959,7 @@ Not bound: it is how `CommandTool` reads one command line.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `FinishTool` | pub |
-| Python | `FinishTool()` | |
+| both | `FinishTool` | pub |
 | Rust | `impl From<FinishTool> for Tool` | pub |
 
 ### Internal
@@ -2055,8 +2022,7 @@ Not bound: it is how `CommandTool` reads one command line.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `TicketsTool` | pub |
-| Python | `TicketsTool()` | |
+| both | `TicketsTool` | pub |
 | Rust | `impl From<TicketsTool> for Tool` | pub |
 
 ## `crates/agentwerk/src/tools/tool.rs`
@@ -2068,20 +2034,15 @@ Not bound: it is how `CommandTool` reads one command line.
 | Rust | `ToolContext { dir: string, run: Run?, ticket_queue: TicketQueue?, agent_id: string?, ticket_key: string?, knowledge: Knowledge? }` | pub |
 | Python | not bound: a `@tool` function receives its input as keyword arguments only | |
 | Rust | `.new(dir: string): this` | pub |
-| Python | not bound | |
 | Rust | `.cancelled(): Promise<void>` | pub |
-| Python | not bound | |
 | Rust | `impl Debug for ToolContext` | pub |
-| Rust | `ToolResult` | pub |
-| Python | `ToolResult` | |
+| both | `ToolResult` | pub |
 | Rust | `.Success { content: string, offloaded: string?, repaired: string[] }` | pub |
 | Rust | `.Error { content: string, kind: ToolFailureKind }` | pub |
 | both | `.success(content: string): this` | pub |
 | both | `.error(content: string): this` | pub |
 | Rust | `.content(): string` | pub |
-| Python | not bound | |
 | Rust | `.into_content(): string` | pub |
-| Python | not bound | |
 | Rust | `ToolBuilder<D, H> { name: string, description: D, schema: Schema, concurrent: boolean, paths: string[], handler: H }` | pub |
 | Python | folded into the `@tool` decorator: the type changes as the description and handler are attached, which Python cannot hold across calls | |
 | Rust | `Tool { name: string, description: string, schema: Schema, concurrent: boolean, paths: string[], handler: ToolHandler }` | pub |
@@ -2092,15 +2053,10 @@ Not bound: it is how `CommandTool` reads one command line.
 | Rust | `.call(input: json, ctx: ToolContext): Promise<ToolResult>` | pub |
 | Python | not bound: the loop calls the decorated function | |
 | Rust | `.name(): string` | pub |
-| Python | not bound | |
 | Rust | `.description(): string` | pub |
-| Python | not bound | |
 | Rust | `.input_schema(): Schema` | pub |
-| Python | not bound | |
 | Rust | `.is_concurrent(): boolean` | pub |
-| Python | not bound | |
 | Rust | `.opened_paths(input: json): string[]` | pub |
-| Python | not bound | |
 | Rust | `ToolBuilder.schema(schema: json): this` | pub |
 | Python | `@tool(schema=..)`: raises `ValueError` when `.tool(fn)` registers it, one call later than the Rust panic | |
 | Rust | `.concurrent(concurrent: boolean): this` | pub |
@@ -2188,8 +2144,7 @@ Not bound: shared helpers behind the built-in tools.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `WriteFileTool` | pub |
-| Python | `WriteFileTool()` | |
+| both | `WriteFileTool` | pub |
 | Rust | `impl From<WriteFileTool> for Tool` | pub |
 
 ### Internal
