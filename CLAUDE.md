@@ -18,6 +18,6 @@ Conventions:
 - [agentdocs/this.md](agentdocs/this.md): how the agentdocs files themselves are written
 
 Inventory:
-- `INVENTORY.md` lists every declaration of both crates, one table per source file, Rust rows next to Python rows.
+- `INVENTORY.md` lists every declaration of both crates, one section per source file, a `### Public` table before an `### Internal` one, Rust rows next to Python rows.
 - Read the section named after the file you are about to change, because it states what already exists there and what Python sees of it.
 - CRITICAL: an item you add, rename, remove, or re-type changes its row in the same commit. A row that has stopped matching the code is worse than no row.
