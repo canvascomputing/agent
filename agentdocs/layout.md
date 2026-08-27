@@ -33,7 +33,7 @@ crates/
 - `lib.rs` holds public re-exports only. Extension types live in `tools::` and `default_logger` in `event::`.
 - `event.rs` defines `Event`, `EventKind`, `EventName`, `PolicyViolation`, `FinishReason`, `ToolFailureKind`, `CompactReason`, and `default_logger`, plus the crate-internal `Subject` and `Measure` that `EventKind::measures` returns.
 - `persistence.rs` holds the `Persist` trait and the shared `write_atomic`, `append_line`, and `output_path` helpers. It is `pub(crate)` and not re-exported.
-- The root `INVENTORY.md` lists every declaration of both crates, one table per source file. It changes in the same commit that adds, renames, removes, or re-types an item.
+- The root `INVENTORY.md` lists every declaration of both crates, one section per source file, public rows before internal ones. It changes in the same commit that adds, renames, removes, or re-types an item.
 - The `agents/`, `prompts/`, `providers/`, `schemas/`, and `tools/` modules each own their domain. `agents/` and `tools/` re-export their headline types, so `use agentwerk::agents::{Agent, TicketQueue}` works without descending into leaf files.
 
 ## The `agents/` Module
