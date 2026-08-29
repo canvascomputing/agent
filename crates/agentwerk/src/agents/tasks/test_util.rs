@@ -43,11 +43,11 @@ pub(super) fn test_queue() -> (Arc<Queue>, crate::test_util::TempDir) {
     (built, dir)
 }
 
-pub(super) fn attach_done_result(queue: &Queue, key: &str, result: &str) {
+pub(super) fn attach_done_result(queue: &Queue, id: &str, result: &str) {
     queue
-        .set_result(key, serde_json::Value::String(result.into()))
+        .set_result(id, serde_json::Value::String(result.into()))
         .unwrap();
-    queue.set_finished_by(key, "agent").unwrap();
+    queue.set_finished_by(id, "agent").unwrap();
 }
 
 pub(super) fn read_events_log(dir: &Path) -> Vec<serde_json::Value> {

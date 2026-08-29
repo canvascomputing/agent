@@ -1,4 +1,4 @@
-- Task: {task}
+- Task: {task_id}
 - Date: {date}
 - Working directory: {dir}
 - Platform: {platform} {os_version}

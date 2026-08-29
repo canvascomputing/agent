@@ -11,7 +11,7 @@ use crate::prompts::directives::{
 use crate::schemas::Schema;
 
 use super::super::tool::{retype_message, Tool, ToolContext, ToolResult};
-use super::resolve_current_key;
+use super::resolve_current_id;
 
 /// The two files the tool is described by.
 const DEFINITION: &str = include_str!("finish.tool.md");
@@ -78,16 +78,16 @@ fn finish(
         .queue
         .clone()
         .ok_or_else(|| ToolResult::error(ctx.directives.render(QUEUE_UNAVAILABLE, &[])))?;
-    let parent_key = resolve_current_key(&queue, ctx)?;
+    let parent_id = resolve_current_id(&queue, ctx)?;
     let agent = ctx.agent_id.clone().unwrap_or_default();
 
     let result = input.get("result").cloned().unwrap_or(Value::Null);
 
     let Some(handover) = control_string(input, "handover", &ctx.directives)? else {
-        let (_, repaired) = attach_result(&queue, &parent_key, result, schema, &ctx.directives)?;
-        mark_finished(&queue, &parent_key, &agent, &ctx.directives)?;
+        let (_, repaired) = attach_result(&queue, &parent_id, result, schema, &ctx.directives)?;
+        mark_finished(&queue, &parent_id, &agent, &ctx.directives)?;
         return Ok(ToolResult::Success {
-            content: format!("Task {parent_key} marked finished"),
+            content: format!("Task {parent_id} marked finished"),
             offloaded: None,
             repaired,
         });
@@ -95,7 +95,7 @@ fn finish(
     hand_over(
         &queue,
         input,
-        &parent_key,
+        &parent_id,
         &agent,
         result,
         schema,
@@ -109,7 +109,7 @@ fn finish(
 fn hand_over(
     queue: &Queue,
     input: &Value,
-    parent_key: &str,
+    parent_id: &str,
     agent: &str,
     result: Value,
     schema: Option<&Schema>,
@@ -129,35 +129,34 @@ fn hand_over(
     }
 
     // A schema failure returns here, before any child exists.
-    let (validated_result, repaired) =
-        attach_result(queue, parent_key, result, schema, directives)?;
+    let (validated_result, repaired) = attach_result(queue, parent_id, result, schema, directives)?;
 
     // `{parent_result}` needs a string.
     let parent_result = match validated_result {
         Value::String(s) => s,
         other => serde_json::to_string(&other).unwrap_or_default(),
     };
-    let result_path = queue.result_path(parent_key);
+    let result_path = queue.result_path(parent_id);
     let result_path = result_path.display().to_string();
 
     let body = match task {
-        Some(task) => apply_handover_templates(&task, parent_key, &result_path, &parent_result),
+        Some(task) => apply_handover_templates(&task, parent_id, &result_path, &parent_result),
         None => parent_result,
     };
-    let body = append_parent_reference(&body, parent_key, &result_path);
-    let child = Task::new(body).label(&handover).parent(parent_key);
+    let body = append_parent_reference(&body, parent_id, &result_path);
+    let child = Task::new(body).label(&handover).parent(parent_id);
 
     // Insert the child BEFORE finishing the parent: the child is already
     // `Todo` when the parent leaves the queue, so a concurrent `pending`
     // check never reads false and `finish` cannot end the chain mid-handover.
-    // `parent_key` is resolved and `InProgress`, so `set_finished_by` cannot
+    // `parent_id` is resolved and `InProgress`, so `set_finished_by` cannot
     // miss it and leave the inserted child orphaned.
-    let child_key = queue.insert(child, agent.to_string());
-    mark_finished(queue, parent_key, agent, directives)?;
+    let child_id = queue.insert(child, agent.to_string());
+    mark_finished(queue, parent_id, agent, directives)?;
 
     Ok(ToolResult::Success {
         content: format!(
-            "Task {parent_key} marked finished; handed off to {child_key} (handover: {handover})"
+            "Task {parent_id} marked finished; handed off to {child_id} (handover: {handover})"
         ),
         offloaded: None,
         repaired,
@@ -188,27 +187,27 @@ fn control_string(
 
 fn mark_finished(
     queue: &Queue,
-    key: &str,
+    id: &str,
     agent: &str,
     directives: &DirectiveStore,
 ) -> Result<(), ToolResult> {
     queue
-        .set_finished_by(key, agent)
+        .set_finished_by(id, agent)
         .map_err(|error| ToolResult::error(super::task_error_message(error, directives)))
 }
 
 /// Reserved placeholders substituted into the child task's `task`
-/// string at handover time: `{parent_key}`, `{parent_result_path}`, and
+/// string at handover time: `{parent_id}`, `{parent_result_path}`, and
 /// `{parent_result}`. Single-pass `str::replace` over each in turn, the
 /// result last so text it carries is never expanded again; unknown
 /// `{name}` placeholders pass through verbatim.
 fn apply_handover_templates(
     task: &str,
-    parent_key: &str,
+    parent_id: &str,
     result_path: &str,
     result: &str,
 ) -> String {
-    task.replace("{parent_key}", parent_key)
+    task.replace("{parent_id}", parent_id)
         .replace("{parent_result_path}", result_path)
         .replace("{parent_result}", result)
 }
@@ -216,8 +215,8 @@ fn apply_handover_templates(
 /// End the child's body with where the work came from, so the receiving
 /// agent can read the whole result even when the body carries a summary
 /// of it or something else entirely.
-fn append_parent_reference(body: &str, parent_key: &str, result_path: &str) -> String {
-    format!("{body}\n\nHanded over from {parent_key}, result file: {result_path}")
+fn append_parent_reference(body: &str, parent_id: &str, result_path: &str) -> String {
+    format!("{body}\n\nHanded over from {parent_id}, result file: {result_path}")
 }
 
 /// Validate the result against the task's schema, attach it, and give back
@@ -227,12 +226,12 @@ fn append_parent_reference(body: &str, parent_key: &str, result_path: &str) -> S
 /// The task is not finished here, since a handover inserts its child first.
 fn attach_result(
     queue: &Queue,
-    key: &str,
+    id: &str,
     result: Value,
     schema: Option<&Schema>,
     directives: &DirectiveStore,
 ) -> Result<(Value, Vec<String>), ToolResult> {
-    let (validated, repaired) = queue.set_result(key, result).map_err(|violations| {
+    let (validated, repaired) = queue.set_result(id, result).map_err(|violations| {
         // Composed here, where the task's schema is known: the loop
         // passes the content to the model as-is.
         ToolResult::Error {
@@ -269,16 +268,16 @@ mod tests {
         let queue = Queue::new();
         queue.set_dir(shared_test_dir().to_path_buf());
         queue.insert(Task::new("body").label(agent), "tester".into());
-        let key = queue
+        let id = queue
             .claim(&Query::from("status = Todo"), agent)
             .expect("claim must succeed");
-        (queue, key)
+        (queue, id)
     }
 
-    /// Read a task's result back from `tasks/<key>/result.json`, or `None`
+    /// Read a task's result back from `tasks/<id>/result.json`, or `None`
     /// when it wrote none.
-    fn read_result(dir: &std::path::Path, key: &str) -> Option<serde_json::Value> {
-        let path = dir.join("tasks").join(key).join("result.json");
+    fn read_result(dir: &std::path::Path, id: &str) -> Option<serde_json::Value> {
+        let path = dir.join("tasks").join(id).join("result.json");
         let body = std::fs::read_to_string(path).ok()?;
         serde_json::from_str(&body).ok()
     }
@@ -423,7 +422,7 @@ mod tests {
             Task::new("body").schema(colliding_schema()).label("alice"),
             "tester".into(),
         );
-        let key = queue
+        let id = queue
             .claim(&Query::from("status = Todo"), "alice")
             .expect("claim must succeed");
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
@@ -433,7 +432,7 @@ mod tests {
             .await;
 
         assert!(matches!(outcome, ToolResult::Success { .. }), "{outcome:?}");
-        let task = queue.get_task(&key).unwrap();
+        let task = queue.get_task(&id).unwrap();
         assert_eq!(task.status, Status::Finished);
         assert_eq!(
             task.result.as_ref(),
@@ -447,7 +446,7 @@ mod tests {
         // The whole reason the flat shape existed: a model that writes the
         // object as JSON text. Dispatch decodes it against the nested schema.
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (queue, key) = one_task("alice");
+        let (queue, id) = one_task("alice");
         queue.set_dir(dir.path().to_path_buf());
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
         let mut registry = crate::tools::ToolRegistry::default();
@@ -462,7 +461,7 @@ mod tests {
 
         assert!(matches!(outcome, ToolResult::Success { .. }), "{outcome:?}");
         assert_eq!(
-            queue.get_task(&key).unwrap().result.as_ref(),
+            queue.get_task(&id).unwrap().result.as_ref(),
             Some(&serde_json::json!({ "status": "malicious" }))
         );
     }
@@ -482,41 +481,41 @@ mod tests {
     #[tokio::test]
     async fn writes_string_result_and_marks_finished() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (queue, key) = one_task("alice");
+        let (queue, id) = one_task("alice");
         queue.set_dir(dir.path().to_path_buf());
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
         let outcome = Tool::from(FinishTool)
             .call(serde_json::json!({"result": "the answer"}), &ctx)
             .await;
         assert!(matches!(outcome, ToolResult::Success { .. }));
-        let t = queue.get_task(&key).unwrap();
+        let t = queue.get_task(&id).unwrap();
         assert_eq!(t.status, Status::Finished);
         assert_eq!(
             t.result.as_ref().and_then(|v| v.as_str()),
             Some("the answer")
         );
 
-        assert_eq!(read_result(dir.path(), &key), Some("the answer".into()));
+        assert_eq!(read_result(dir.path(), &id), Some("the answer".into()));
     }
 
     #[tokio::test]
     async fn a_result_is_written_to_the_task_folder() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (queue, key) = one_task("alice");
+        let (queue, id) = one_task("alice");
         queue.set_dir(dir.path().to_path_buf());
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
         Tool::from(FinishTool)
             .call(serde_json::json!({"result": {"x": 1}}), &ctx)
             .await;
 
-        let path = dir.path().join("tasks").join(&key).join("result.json");
+        let path = dir.path().join("tasks").join(&id).join("result.json");
         let body = std::fs::read_to_string(&path).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!(parsed, serde_json::json!({"x": 1}));
 
         // One home on disk: the task record no longer carries the result.
         let record =
-            std::fs::read_to_string(dir.path().join("tasks").join(&key).join("task.json")).unwrap();
+            std::fs::read_to_string(dir.path().join("tasks").join(&id).join("task.json")).unwrap();
         let record: serde_json::Value = serde_json::from_str(&record).unwrap();
         assert!(record.get("result").is_none(), "{record}");
     }
@@ -524,7 +523,7 @@ mod tests {
     #[tokio::test]
     async fn a_reloaded_queue_reads_the_result_back() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (queue, key) = one_task("alice");
+        let (queue, id) = one_task("alice");
         queue.set_dir(dir.path().to_path_buf());
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
         Tool::from(FinishTool)
@@ -532,7 +531,7 @@ mod tests {
             .await;
 
         let reloaded = Queue::load(dir.path()).unwrap();
-        let task = reloaded.get_task(&key).unwrap();
+        let task = reloaded.get_task(&id).unwrap();
         assert_eq!(
             task.result.as_ref().and_then(|v| v.as_str()),
             Some("the answer")
@@ -549,7 +548,7 @@ mod tests {
             serde_json::json!([]),
         ] {
             let dir = crate::test_util::TempDir::new().unwrap();
-            let (queue, key) = one_task("alice");
+            let (queue, id) = one_task("alice");
             queue.set_dir(dir.path().to_path_buf());
             let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
             let outcome = Tool::from(FinishTool)
@@ -559,7 +558,7 @@ mod tests {
                 matches!(outcome, ToolResult::Success { .. }),
                 "expected success for {value:?}"
             );
-            let t = queue.get_task(&key).unwrap();
+            let t = queue.get_task(&id).unwrap();
             assert_eq!(t.status, Status::Finished);
         }
     }
@@ -567,19 +566,19 @@ mod tests {
     #[tokio::test]
     async fn accepts_structured_value_when_no_schema() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (queue, key) = one_task("alice");
+        let (queue, id) = one_task("alice");
         queue.set_dir(dir.path().to_path_buf());
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
         let outcome = Tool::from(FinishTool)
             .call(serde_json::json!({"result": {"x": 1, "y": [2, 3]}}), &ctx)
             .await;
         assert!(matches!(outcome, ToolResult::Success { .. }));
-        let t = queue.get_task(&key).unwrap();
+        let t = queue.get_task(&id).unwrap();
         assert_eq!(t.status, Status::Finished);
         assert_eq!(t.result.as_ref().unwrap()["x"], 1);
 
         // The stored result is a JSON object, not an escaped string of JSON.
-        let result = read_result(dir.path(), &key).unwrap();
+        let result = read_result(dir.path(), &id).unwrap();
         assert!(result.is_object(), "expected raw object, got {result}");
         assert_eq!(result["x"], 1);
     }
@@ -600,7 +599,7 @@ mod tests {
             Task::new("hi").schema(schema).label("alice"),
             "tester".into(),
         );
-        let key = queue
+        let id = queue
             .claim(&Query::from("status = Todo"), "alice")
             .expect("claim must succeed");
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
@@ -617,14 +616,14 @@ mod tests {
                 ..
             }
         ));
-        let t = queue.get_task(&key).unwrap();
+        let t = queue.get_task(&id).unwrap();
         assert_eq!(t.status, Status::InProgress);
 
         let outcome = Tool::from(FinishTool)
             .call(serde_json::json!({"result": {"x": "ok"}}), &ctx)
             .await;
         assert!(matches!(outcome, ToolResult::Success { .. }));
-        let t = queue.get_task(&key).unwrap();
+        let t = queue.get_task(&id).unwrap();
         assert_eq!(t.status, Status::Finished);
         assert_eq!(t.result.as_ref().unwrap()["x"], "ok");
     }
@@ -645,7 +644,7 @@ mod tests {
             Task::new("hi").schema(schema.clone()).label("alice"),
             "tester".into(),
         );
-        let key = queue
+        let id = queue
             .claim(&Query::from("status = Todo"), "alice")
             .expect("claim must succeed");
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
@@ -654,7 +653,7 @@ mod tests {
             .call(serde_json::json!({"result": {"x": "ok"}}), &ctx)
             .await;
         assert!(matches!(outcome, ToolResult::Success { .. }));
-        let t = queue.get_task(&key).unwrap();
+        let t = queue.get_task(&id).unwrap();
         assert_eq!(t.status, Status::Finished);
         assert_eq!(t.result.as_ref().unwrap(), &serde_json::json!({"x": "ok"}));
     }
@@ -675,7 +674,7 @@ mod tests {
             Task::new("hi").schema(schema).label("alice"),
             "tester".into(),
         );
-        let key = queue
+        let id = queue
             .claim(&Query::from("status = Todo"), "alice")
             .expect("claim must succeed");
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
@@ -686,12 +685,12 @@ mod tests {
             .await;
         assert!(matches!(outcome, ToolResult::Success { .. }));
 
-        let t = queue.get_task(&key).unwrap();
+        let t = queue.get_task(&id).unwrap();
         assert_eq!(t.status, Status::Finished);
         // Stored as the decoded object, not the raw string.
         assert!(t.result.as_ref().unwrap().is_object());
         assert_eq!(t.result.as_ref().unwrap()["x"], "ok");
-        assert!(read_result(dir.path(), &key).unwrap().is_object());
+        assert!(read_result(dir.path(), &id).unwrap().is_object());
     }
 
     #[tokio::test]
@@ -714,7 +713,7 @@ mod tests {
         queue.set_dir(dir.path().to_path_buf());
 
         queue.insert(Task::new("a").label("alice"), "tester".into());
-        let key1 = queue
+        let id1 = queue
             .claim(&Query::from("t-1"), "alice")
             .expect("claim must succeed");
         let ctx_alice = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
@@ -723,7 +722,7 @@ mod tests {
             .await;
 
         queue.insert(Task::new("b").label("bob"), "tester".into());
-        let key2 = queue
+        let id2 = queue
             .claim(&Query::from("t-2"), "bob")
             .expect("claim must succeed");
         let ctx_bob = ctx_with(Arc::clone(&queue), "bob", dir.path().to_path_buf());
@@ -731,8 +730,8 @@ mod tests {
             .call(serde_json::json!({"result": "from bob"}), &ctx_bob)
             .await;
 
-        assert_eq!(read_result(dir.path(), &key1), Some("from alice".into()));
-        assert_eq!(read_result(dir.path(), &key2), Some("from bob".into()));
+        assert_eq!(read_result(dir.path(), &id1), Some("from alice".into()));
+        assert_eq!(read_result(dir.path(), &id2), Some("from bob".into()));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -750,13 +749,13 @@ mod tests {
                 Task::new(format!("body_{i}")).label(&agent),
                 "tester".into(),
             );
-            let key = queue
+            let id = queue
                 .claim(
                     &Query::from(format!("status = Todo AND label = {agent}")),
                     &agent,
                 )
                 .expect("claim must succeed");
-            expected.push((agent, key));
+            expected.push((agent, id));
         }
 
         let mut handles = Vec::with_capacity(N);
@@ -783,13 +782,13 @@ mod tests {
             let parsed: serde_json::Value =
                 serde_json::from_str(line).unwrap_or_else(|e| panic!("corrupt line {line:?}: {e}"));
             if parsed["name"] == "task_finished" {
-                let task = parsed["task_key"].as_str().unwrap().to_string();
+                let task = parsed["task_id"].as_str().unwrap().to_string();
                 assert!(finished.insert(task), "duplicate task in log");
             }
         }
-        let expected_keys: std::collections::HashSet<String> =
+        let expected_ids: std::collections::HashSet<String> =
             expected.iter().map(|(_, k)| k.clone()).collect();
-        assert_eq!(finished, expected_keys);
+        assert_eq!(finished, expected_ids);
     }
 
     // Handover
@@ -798,16 +797,16 @@ mod tests {
         let queue = Queue::new();
         queue.set_dir(dir);
         queue.insert(Task::new("parent body").label(agent), "tester".into());
-        let key = queue
+        let id = queue
             .claim(&Query::from("status = Todo"), agent)
             .expect("claim must succeed");
-        (queue, key)
+        (queue, id)
     }
 
     #[tokio::test]
     async fn handover_finishes_parent_creates_child_with_parent_link() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (queue, parent_key) = one_task_in("alice", dir.path().to_path_buf());
+        let (queue, parent_id) = one_task_in("alice", dir.path().to_path_buf());
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
 
         let outcome = Tool::from(FinishTool)
@@ -822,7 +821,7 @@ mod tests {
             .await;
         assert!(matches!(outcome, ToolResult::Success { .. }));
 
-        let parent = queue.get_task(&parent_key).unwrap();
+        let parent = queue.get_task(&parent_id).unwrap();
         assert_eq!(parent.status, Status::Finished);
         assert_eq!(
             parent.result.as_ref().and_then(|v| v.as_str()),
@@ -831,7 +830,7 @@ mod tests {
 
         let child = queue.get_task("t-2").unwrap();
         assert_eq!(child.status, Status::Todo);
-        assert_eq!(child.parent.as_deref(), Some(parent_key.as_str()));
+        assert_eq!(child.parent.as_deref(), Some(parent_id.as_str()));
         assert_eq!(child.label.as_deref(), Some("bob"));
         assert_eq!(child.reporter, "alice");
     }
@@ -839,7 +838,7 @@ mod tests {
     #[tokio::test]
     async fn handover_child_takes_the_schema_bound_to_its_label() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (queue, _parent_key) = one_task_in("alice", dir.path().to_path_buf());
+        let (queue, _parent_id) = one_task_in("alice", dir.path().to_path_buf());
         let schemas = crate::schemas::SchemaStore::new();
         schemas
             .label(
@@ -877,7 +876,7 @@ mod tests {
     #[tokio::test]
     async fn handover_appends_one_ndjson_line_for_parent_result() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (queue, parent_key) = one_task_in("alice", dir.path().to_path_buf());
+        let (queue, parent_id) = one_task_in("alice", dir.path().to_path_buf());
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
 
         Tool::from(FinishTool)
@@ -888,7 +887,7 @@ mod tests {
             .await;
 
         assert_eq!(
-            read_result(dir.path(), &parent_key),
+            read_result(dir.path(), &parent_id),
             Some("done part 1".into())
         );
         assert_eq!(
@@ -914,7 +913,7 @@ mod tests {
             Task::new("strict parent").schema(schema).label("alice"),
             "tester".into(),
         );
-        let parent_key = queue
+        let parent_id = queue
             .claim(&Query::from("status = Todo"), "alice")
             .expect("claim must succeed");
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
@@ -933,14 +932,14 @@ mod tests {
             }
         ));
 
-        let parent = queue.get_task(&parent_key).unwrap();
+        let parent = queue.get_task(&parent_id).unwrap();
         assert_eq!(parent.status, Status::InProgress);
         assert!(parent.result.is_none());
         assert!(
             queue.get_task("t-2").is_none(),
             "no child created on schema failure"
         );
-        assert_eq!(read_result(dir.path(), &parent_key), None);
+        assert_eq!(read_result(dir.path(), &parent_id), None);
     }
 
     /// Build a claimed parent whose own schema requires an object with a
@@ -962,16 +961,16 @@ mod tests {
                 .label(agent),
             "tester".into(),
         );
-        let key = queue
+        let id = queue
             .claim(&Query::from("status = Todo"), agent)
             .expect("claim must succeed");
-        (queue, key)
+        (queue, id)
     }
 
     #[tokio::test]
     async fn handover_structured_result_validated_against_parent_schema_is_stored_as_object() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (queue, parent_key) = one_task_with_object_schema("alice", dir.path().to_path_buf());
+        let (queue, parent_id) = one_task_with_object_schema("alice", dir.path().to_path_buf());
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
 
         let outcome = Tool::from(FinishTool)
@@ -983,7 +982,7 @@ mod tests {
             ;
         assert!(matches!(outcome, ToolResult::Success { .. }));
 
-        let parent = queue.get_task(&parent_key).unwrap();
+        let parent = queue.get_task(&parent_id).unwrap();
         assert_eq!(parent.status, Status::Finished);
         assert_eq!(
             parent.result.as_ref(),
@@ -992,7 +991,7 @@ mod tests {
         assert!(queue.get_task("t-2").is_some());
 
         assert_eq!(
-            read_result(dir.path(), &parent_key),
+            read_result(dir.path(), &parent_id),
             Some(serde_json::json!({"status": "done"}))
         );
     }
@@ -1000,7 +999,7 @@ mod tests {
     #[tokio::test]
     async fn handover_takes_an_object_result_alongside_the_control_keys() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (queue, parent_key) = one_task_with_object_schema("alice", dir.path().to_path_buf());
+        let (queue, parent_id) = one_task_with_object_schema("alice", dir.path().to_path_buf());
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
 
         let outcome = finish_for(strict_object_schema())
@@ -1011,7 +1010,7 @@ mod tests {
             .await;
         assert!(matches!(outcome, ToolResult::Success { .. }));
 
-        let parent = queue.get_task(&parent_key).unwrap();
+        let parent = queue.get_task(&parent_id).unwrap();
         assert_eq!(parent.status, Status::Finished);
         assert_eq!(
             parent.result.as_ref(),
@@ -1024,7 +1023,7 @@ mod tests {
         // The agent double-encodes the object as a JSON string; the parent
         // schema's validation decodes it so the stored value is the object.
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (queue, parent_key) = one_task_with_object_schema("alice", dir.path().to_path_buf());
+        let (queue, parent_id) = one_task_with_object_schema("alice", dir.path().to_path_buf());
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
 
         Tool::from(FinishTool)
@@ -1035,7 +1034,7 @@ mod tests {
             .await
             ;
 
-        let parent = queue.get_task(&parent_key).unwrap();
+        let parent = queue.get_task(&parent_id).unwrap();
         assert_eq!(
             parent.result.as_ref(),
             Some(&serde_json::json!({"status": "done"}))
@@ -1045,7 +1044,7 @@ mod tests {
     #[tokio::test]
     async fn handover_object_schema_violation_aborts_atomically() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (queue, parent_key) = one_task_with_object_schema("alice", dir.path().to_path_buf());
+        let (queue, parent_id) = one_task_with_object_schema("alice", dir.path().to_path_buf());
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
 
         let outcome = Tool::from(FinishTool)
@@ -1062,36 +1061,33 @@ mod tests {
             }
         ));
 
-        let parent = queue.get_task(&parent_key).unwrap();
+        let parent = queue.get_task(&parent_id).unwrap();
         assert_eq!(parent.status, Status::InProgress);
         assert!(parent.result.is_none());
         assert!(
             queue.get_task("t-2").is_none(),
             "no child created on schema failure"
         );
-        assert_eq!(read_result(dir.path(), &parent_key), None);
+        assert_eq!(read_result(dir.path(), &parent_id), None);
     }
 
     #[tokio::test]
     async fn omitted_handover_finishes_without_a_child() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (queue, parent_key) = one_task_in("alice", dir.path().to_path_buf());
+        let (queue, parent_id) = one_task_in("alice", dir.path().to_path_buf());
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
         let outcome = Tool::from(FinishTool)
             .call(serde_json::json!({"result": "done"}), &ctx)
             .await;
         assert!(matches!(outcome, ToolResult::Success { .. }));
-        assert_eq!(
-            queue.get_task(&parent_key).unwrap().status,
-            Status::Finished
-        );
+        assert_eq!(queue.get_task(&parent_id).unwrap().status, Status::Finished);
         assert!(queue.get_task("t-2").is_none());
     }
 
     #[tokio::test]
     async fn omitted_task_defaults_child_body_to_the_parent_result() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (queue, _key) = one_task_in("alice", dir.path().to_path_buf());
+        let (queue, _id) = one_task_in("alice", dir.path().to_path_buf());
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
         let outcome = Tool::from(FinishTool)
             .call(
@@ -1106,9 +1102,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn handover_ends_the_child_body_with_the_parent_key_and_result_file() {
+    async fn handover_ends_the_child_body_with_the_parent_id_and_result_file() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (queue, parent_key) = one_task_in("alice", dir.path().to_path_buf());
+        let (queue, parent_id) = one_task_in("alice", dir.path().to_path_buf());
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
 
         Tool::from(FinishTool)
@@ -1120,9 +1116,9 @@ mod tests {
 
         let child = queue.get_task("t-2").unwrap();
         let body = child_body(&child);
-        assert!(body.contains(&parent_key), "{body}");
+        assert!(body.contains(&parent_id), "{body}");
         assert!(
-            body.contains(&queue.result_path(&parent_key).display().to_string()),
+            body.contains(&queue.result_path(&parent_id).display().to_string()),
             "{body}"
         );
     }
@@ -1130,7 +1126,7 @@ mod tests {
     #[tokio::test]
     async fn handover_substitutes_the_parent_result_file_in_the_task() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (queue, parent_key) = one_task_in("alice", dir.path().to_path_buf());
+        let (queue, parent_id) = one_task_in("alice", dir.path().to_path_buf());
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
 
         Tool::from(FinishTool)
@@ -1145,7 +1141,7 @@ mod tests {
             .await;
 
         let child = queue.get_task("t-2").unwrap();
-        let path = queue.result_path(&parent_key);
+        let path = queue.result_path(&parent_id);
         assert!(
             child_body(&child).starts_with(&format!("Read {} and continue", path.display())),
             "{}",
@@ -1163,7 +1159,7 @@ mod tests {
         // Absent, null, and empty all leave the receiving agent a body that
         // says nothing, and this task carries no schema to require one.
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (queue, _key) = one_task_in("alice", dir.path().to_path_buf());
+        let (queue, _id) = one_task_in("alice", dir.path().to_path_buf());
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
         for body in [
             serde_json::json!({"handover": "bob", "task": "x"}),
@@ -1188,7 +1184,7 @@ mod tests {
             serde_json::json!({"k": "v"}),
         ] {
             let dir = crate::test_util::TempDir::new().unwrap();
-            let (queue, parent_key) = one_task_in("alice", dir.path().to_path_buf());
+            let (queue, parent_id) = one_task_in("alice", dir.path().to_path_buf());
             let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
 
             let outcome = Tool::from(FinishTool)
@@ -1199,7 +1195,7 @@ mod tests {
                 .await;
             assert!(matches!(outcome, ToolResult::Success { .. }));
 
-            let parent = queue.get_task(&parent_key).unwrap();
+            let parent = queue.get_task(&parent_id).unwrap();
             assert_eq!(parent.status, Status::Finished);
             assert_eq!(parent.result.as_ref(), Some(&result_value));
             assert!(queue.get_task("t-2").is_some());
@@ -1225,7 +1221,7 @@ mod tests {
         // Model or host, a caller asking to hand over must hear a refusal
         // rather than finish without the handover it asked for.
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (queue, parent_key) = one_task_in("alice", dir.path().to_path_buf());
+        let (queue, parent_id) = one_task_in("alice", dir.path().to_path_buf());
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
         for body in [
             serde_json::json!({"handover": "  ", "result": "x"}),
@@ -1239,7 +1235,7 @@ mod tests {
             );
         }
         assert_eq!(
-            queue.get_task(&parent_key).unwrap().status,
+            queue.get_task(&parent_id).unwrap().status,
             Status::InProgress,
         );
     }
@@ -1260,16 +1256,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn substitutes_parent_key_and_result_in_task() {
+    async fn substitutes_parent_id_and_result_in_task() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (queue, parent_key) = one_task_in("alice", dir.path().to_path_buf());
+        let (queue, parent_id) = one_task_in("alice", dir.path().to_path_buf());
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
 
         Tool::from(FinishTool)
             .call(
                 serde_json::json!({
                     "handover": "bob",
-                    "task": "Continue {parent_key}: {parent_result}",
+                    "task": "Continue {parent_id}: {parent_result}",
                     "result": "alice's findings"
                 }),
                 &ctx,
@@ -1277,20 +1273,20 @@ mod tests {
             .await;
 
         let child = queue.get_task("t-2").unwrap();
-        assert!(child_body(&child).starts_with(&format!("Continue {parent_key}: alice's findings")));
+        assert!(child_body(&child).starts_with(&format!("Continue {parent_id}: alice's findings")));
     }
 
     #[tokio::test]
     async fn unknown_placeholders_pass_through() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (queue, parent_key) = one_task_in("alice", dir.path().to_path_buf());
+        let (queue, parent_id) = one_task_in("alice", dir.path().to_path_buf());
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
 
         Tool::from(FinishTool)
             .call(
                 serde_json::json!({
                     "handover": "bob",
-                    "task": "See {parent_key} and {unknown}",
+                    "task": "See {parent_id} and {unknown}",
                     "result": "ok"
                 }),
                 &ctx,
@@ -1298,16 +1294,37 @@ mod tests {
             .await;
 
         let child = queue.get_task("t-2").unwrap();
-        assert!(child_body(&child).starts_with(&format!("See {parent_key} and {{unknown}}")));
+        assert!(child_body(&child).starts_with(&format!("See {parent_id} and {{unknown}}")));
+    }
+
+    #[tokio::test]
+    async fn parent_key_is_not_an_alias_for_parent_id() {
+        let dir = crate::test_util::TempDir::new().unwrap();
+        let (queue, _parent_id) = one_task_in("alice", dir.path().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
+
+        Tool::from(FinishTool)
+            .call(
+                serde_json::json!({
+                    "handover": "bob",
+                    "task": "See {parent_key}",
+                    "result": "ok"
+                }),
+                &ctx,
+            )
+            .await;
+
+        let child = queue.get_task("t-2").unwrap();
+        assert!(child_body(&child).starts_with("See {parent_key}"));
     }
 
     #[tokio::test]
     async fn substitution_is_single_pass() {
-        // A `result` that itself contains the literal text `{parent_key}`
+        // A `result` that itself contains the literal text `{parent_id}`
         // must NOT be re-expanded: the substitution pass runs once
         // per placeholder, not recursively.
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (queue, parent_key) = one_task_in("alice", dir.path().to_path_buf());
+        let (queue, parent_id) = one_task_in("alice", dir.path().to_path_buf());
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
 
         Tool::from(FinishTool)
@@ -1315,7 +1332,7 @@ mod tests {
                 serde_json::json!({
                     "handover": "bob",
                     "task": "[{parent_result}]",
-                    "result": "{parent_key}"
+                    "result": "{parent_id}"
                 }),
                 &ctx,
             )
@@ -1323,9 +1340,9 @@ mod tests {
 
         let child = queue.get_task("t-2").unwrap();
         assert!(
-            child_body(&child).starts_with("[{parent_key}]"),
-            "result containing `{{parent_key}}` should be inserted literally, \
-             not recursively expanded (parent_key was {parent_key})",
+            child_body(&child).starts_with("[{parent_id}]"),
+            "result containing `{{parent_id}}` should be inserted literally, \
+             not recursively expanded (parent_id was {parent_id})",
         );
     }
 }

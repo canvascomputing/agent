@@ -73,7 +73,7 @@ pub(crate) fn context_values(
     dir: &Path,
     policy: &Policy,
     stats: &Stats,
-    task_key: &str,
+    task_id: &str,
 ) -> Vec<(&'static str, String)> {
     let os_version = std::process::Command::new("uname")
         .arg("-r")
@@ -91,7 +91,7 @@ pub(crate) fn context_values(
         .map(|limit| limit.saturating_sub(stats.output_tokens()));
     let time = policy.max_time.zip(stats.execution_duration());
     vec![
-        ("task", task_key.to_string()),
+        ("task_id", task_id.to_string()),
         ("date", format_current_date()),
         ("dir", dir.display().to_string()),
         ("platform", std::env::consts::OS.to_string()),
@@ -253,9 +253,9 @@ mod tests {
         dir: &std::path::Path,
         policy: &Policy,
         stats: &Stats,
-        task_key: &str,
+        task_id: &str,
     ) -> String {
-        render_context(&context_values(dir, policy, stats, task_key))
+        render_context(&context_values(dir, policy, stats, task_id))
     }
 
     #[test]
@@ -301,7 +301,7 @@ mod tests {
                 .find(|(key, _)| *key == name)
                 .map(|(_, value)| value.as_str())
         };
-        assert_eq!(value("task"), Some("t-7"));
+        assert_eq!(value("task_id"), Some("t-7"));
         assert_eq!(value("turns_remaining"), Some(""));
         assert_eq!(value("time_remaining"), Some(""));
     }

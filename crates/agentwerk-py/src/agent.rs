@@ -135,7 +135,7 @@ impl PyAgent {
     /// Let the agent wait for new instructions to keep a task in-progress.
     ///
     /// It gets no `FinishTool()`; the host closes the task with
-    /// `set_task_finished(key, result)`.
+    /// `set_task_finished(id, result)`.
     fn interactive(mut slf: PyRefMut<'_, Self>) -> PyRefMut<'_, Self> {
         slf.set(|agent| agent.interactive());
         slf
@@ -210,7 +210,7 @@ impl PyAgent {
         Ok(slf)
     }
 
-    /// Submit a task and return its task key.
+    /// Submit a task and return its task ID.
     ///
     /// A `str` is the task itself, and an `os.PathLike` names the file holding
     /// it. A `Task` carries a custom label or schema with it. Call it as often

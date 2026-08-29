@@ -1,7 +1,7 @@
 //! Interactive terminal chat. One `Queue` + `Agent` + `Knowledge`
 //! lives for the whole session, and one chat task spans every turn:
 //! the first input creates the task via `tasks.add_task(...)`, every
-//! subsequent input lands as a user reply via `tasks.add_reply(&key, ...)`.
+//! subsequent input lands as a user reply via `tasks.add_reply(&id, ...)`.
 //! The agent loop's wait-for-input branch picks each comment up and
 //! drives the next model turn on the same growing set of replies. Tasks
 //! and knowledge both persist to `./.agentwerk/`, so an existing chat
@@ -131,7 +131,7 @@ async fn main() {
             style.reset,
         );
     }
-    let mut chat_key: Option<String> = None;
+    let mut chat_id: Option<String> = None;
 
     // One long-running loop drives every turn; each user input flips the
     // task out of the gate's pause and the next iteration redraws the
@@ -157,9 +157,9 @@ async fn main() {
             continue;
         }
         if let Some(first) = line.strip_prefix("/new ") {
-            let k = tasks.add_task(first.trim());
-            eprintln!("{}new chat {k}{}", style.dim, style.reset);
-            chat_key = Some(k);
+            let id = tasks.add_task(first.trim());
+            eprintln!("{}new chat {id}{}", style.dim, style.reset);
+            chat_id = Some(id);
             continue;
         }
         if line == "/list" {
@@ -176,12 +176,12 @@ async fn main() {
                     if preview.len() < t.get_task().to_string().len() {
                         preview.push('…');
                     }
-                    let active = chat_key.as_deref() == Some(t.get_key());
+                    let active = chat_id.as_deref() == Some(t.get_id());
                     let mark = if active { "▸ " } else { "  " };
                     eprintln!(
                         "{}{mark}{} [{}] · {} replies · {}{}",
                         style.dim,
-                        t.get_key(),
+                        t.get_id(),
                         t.get_status(),
                         t.get_replies().len(),
                         preview,
@@ -220,12 +220,12 @@ async fn main() {
         }
         if let Some(word) = line.strip_prefix("/scrub ") {
             let word = word.trim().to_string();
-            match chat_key.as_deref() {
+            match chat_id.as_deref() {
                 Some(_) if word.is_empty() => {
                     eprintln!("{}usage: /scrub <word>{}", style.dim, style.reset);
                 }
-                Some(k) => {
-                    tasks.edit_replies(k, move |messages| redact(messages, &word));
+                Some(id) => {
+                    tasks.edit_replies(id, move |messages| redact(messages, &word));
                     eprintln!("{}scrubbed{}", style.dim, style.reset);
                 }
                 None => eprintln!("{}no active chat{}", style.dim, style.reset),
@@ -271,17 +271,17 @@ async fn main() {
         // "agent › " left stdout mid-line; mark so the first event
         // breaks out before its own content.
         midstream.store(true, Ordering::Relaxed);
-        let key = match chat_key.as_deref() {
-            Some(k) if tasks.get_task(k).is_some_and(|t| t.is_in_progress()) => {
-                tasks.add_reply(k, payload);
-                k.to_string()
+        let id = match chat_id.as_deref() {
+            Some(id) if tasks.get_task(id).is_some_and(|t| t.is_in_progress()) => {
+                tasks.add_reply(id, payload);
+                id.to_string()
             }
             _ => tasks.add_task(payload),
         };
-        chat_key = Some(key.clone());
+        chat_id = Some(id.clone());
 
         let cancelled = tokio::select! {
-            _ = wait_for_assistant_pause(&tasks, &key) => false,
+            _ = wait_for_assistant_pause(&tasks, &id) => false,
             _ = tokio::signal::ctrl_c() => {
                 tasks.cancel_all_tasks();
                 if midstream.swap(false, Ordering::Relaxed) {
@@ -303,14 +303,14 @@ async fn main() {
         let recorded = tasks.find_events(|_: &Event| true);
         let count = |name: &str| counted(&recorded, name);
         let outcome = {
-            let chat = chat_key.as_deref().and_then(|k| tasks.get_task(k));
+            let chat = chat_id.as_deref().and_then(|id| tasks.get_task(id));
             match chat {
                 Some(t) if t.is_finished() => {
-                    chat_key = None;
+                    chat_id = None;
                     "completed"
                 }
                 Some(t) if t.is_failed() => {
-                    chat_key = None;
+                    chat_id = None;
                     "failed"
                 }
                 _ if cancelled => "cancelled",
@@ -520,8 +520,8 @@ fn redact(messages: &mut [Reply], word: &str) {
 /// terminal (`finished`/`failed`), or the assistant has spoken and called
 /// no tool. A mid-turn reply carrying a tool call doesn't count, so the
 /// prompt never races the user against the loop.
-async fn wait_for_assistant_pause(tasks: &Queue, key: &str) {
-    tasks.finish_results(key).await;
+async fn wait_for_assistant_pause(tasks: &Queue, id: &str) {
+    tasks.finish_results(id).await;
 }
 
 async fn read_line(prompt: &str) -> Option<String> {
@@ -572,10 +572,10 @@ fn fail_stale_chats(tasks: &Queue, label: &str) -> usize {
     let stale: Vec<String> = tasks
         .find_tasks(move |task: &Task| task.get_label() == Some(&label) && task.is_pending())
         .iter()
-        .map(|t| t.get_key().to_string())
+        .map(|t| t.get_id().to_string())
         .collect();
-    for key in &stale {
-        let _ = tasks.set_task_failed(key);
+    for id in &stale {
+        let _ = tasks.set_task_failed(id);
     }
     stale.len()
 }
@@ -588,18 +588,18 @@ mod tests {
     #[test]
     fn fail_stale_chats_marks_every_matching_pending_task_as_failed() {
         let tasks = Queue::new();
-        let mut keys = Vec::new();
+        let mut ids = Vec::new();
         for body in ["one", "two", "three"] {
-            let k = tasks.add_task(Task::labeled("orchestrator", body));
-            keys.push(k);
+            let id = tasks.add_task(Task::labeled("orchestrator", body));
+            ids.push(id);
         }
         let other = tasks.add_task(Task::labeled("analyst", "scanner"));
 
         let n = fail_stale_chats(&tasks, "orchestrator");
 
         assert_eq!(n, 3);
-        for k in &keys {
-            assert_eq!(tasks.get_task(k).unwrap().get_status(), Status::Failed);
+        for id in &ids {
+            assert_eq!(tasks.get_task(id).unwrap().get_status(), Status::Failed);
         }
         assert_eq!(tasks.get_task(&other).unwrap().get_status(), Status::Todo);
     }

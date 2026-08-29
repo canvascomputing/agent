@@ -87,8 +87,8 @@ impl PyTask {
         self.inner.is_cancelled()
     }
 
-    fn get_key(&self) -> &str {
-        self.inner.get_key()
+    fn get_id(&self) -> &str {
+        self.inner.get_id()
     }
 
     /// `"todo"`, `"in_progress"`, `"finished"`, or `"failed"`.
@@ -167,8 +167,8 @@ impl PyTask {
 
     fn __repr__(&self) -> String {
         format!(
-            "Task(key={:?}, status={:?})",
-            self.inner.get_key(),
+            "Task(id={:?}, status={:?})",
+            self.inner.get_id(),
             self.get_status()
         )
     }
@@ -184,7 +184,7 @@ impl PyTask {
 
     /// Build the task to submit, copying only the fields you own.
     ///
-    /// Submitting sets key, status, reporter, and result, but leaves the
+    /// Submitting sets ID, status, reporter, and result, but leaves the
     /// messages and timestamps, so a task that came back out of the queue
     /// would otherwise carry its messages into the new one.
     pub fn to_task(&self) -> Task {

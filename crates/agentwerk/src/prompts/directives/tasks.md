@@ -1,19 +1,19 @@
-<!-- What the task tools say when a key, a result, or a handover is missing. -->
+<!-- What the task tools say when an ID, a result, or a handover is missing. -->
 
 ## queue_unavailable
 No task queue is available here, so no task can be read or changed.
 
-## task_key_missing
-`key` is missing and this call carries no agent, so there is no task to act on. Name the task with `key`.
+## task_id_missing
+`id` is missing and this call carries no agent, so there is no task to act on. Name the task with `id`.
 
 ## task_not_assigned
-`key` is missing and you hold no task, so there is nothing to act on. Name the task with `key`.
+`id` is missing and you hold no task, so there is nothing to act on. Name the task with `id`.
 
 ## task_not_found
-No task {key}. The `list` action shows every task that exists.
+No task {id}. The `list` action shows every task that exists.
 
 ## task_result_missing
-Task {key} has no result yet, it is {status}. Read it again once it is finished.
+Task {id} has no result yet, it is {status}. Read it again once it is finished.
 
 ## task_query_invalid
 {error}

@@ -215,7 +215,7 @@ impl fmt::Display for KnowledgeAction {
 /// tasks.emit_event(
 ///     Event::new("document_indexed")
 ///         .data(json!({ "documents": 42 }))
-///         .task_key("t-1")
+///         .task_id("t-1")
 ///         .agent_id("indexer-1"),
 /// );
 /// ```
@@ -225,9 +225,9 @@ pub struct Event {
     pub(crate) name: String,
     /// The JSON value carried by the event.
     pub(crate) data: Value,
-    /// Key of the task this event concerns, or empty when it has no task
+    /// ID of the task this event concerns, or empty when it has no task
     /// context.
-    pub(crate) task_key: String,
+    pub(crate) task_id: String,
     /// Agent that produced the event, or empty when it has no agent context.
     pub(crate) agent_id: String,
     /// Label the task carries, so a handler counting per label reads it
@@ -308,7 +308,7 @@ impl Event {
         Self {
             name: name.into(),
             data: Value::Object(Map::new()),
-            task_key: String::new(),
+            task_id: String::new(),
             agent_id: String::new(),
             label: None,
             created_at: 0,
@@ -321,9 +321,9 @@ impl Event {
         self
     }
 
-    /// Associate this event with a task key.
-    pub fn task_key(mut self, task_key: impl Into<String>) -> Self {
-        self.task_key = task_key.into();
+    /// Associate this event with a task ID.
+    pub fn task_id(mut self, task_id: impl Into<String>) -> Self {
+        self.task_id = task_id.into();
         self
     }
 
@@ -344,8 +344,8 @@ impl Event {
     }
 
     /// The task this event concerns, or an empty string when omitted.
-    pub fn get_task_key(&self) -> &str {
-        &self.task_key
+    pub fn get_task_id(&self) -> &str {
+        &self.task_id
     }
 
     /// The agent that produced this event, or an empty string when omitted.
@@ -372,7 +372,7 @@ impl Serialize for Event {
         let mut object = Map::new();
         object.insert("name".into(), self.name.clone().into());
         object.insert("data".into(), self.data.clone());
-        object.insert("task_key".into(), self.task_key.clone().into());
+        object.insert("task_id".into(), self.task_id.clone().into());
         object.insert("agent_id".into(), self.agent_id.clone().into());
         if let Some(label) = &self.label {
             object.insert("label".into(), label.clone().into());
@@ -390,7 +390,7 @@ impl<'de> Deserialize<'de> for Event {
         let mut object = Map::<String, Value>::deserialize(deserializer)?;
         let created_at = take_or(&mut object, "created_at", 0)?;
         let agent_id = take_or(&mut object, "agent_id", String::new())?;
-        let task_key = take_or(&mut object, "task_key", String::new())?;
+        let task_id = take_or(&mut object, "task_id", String::new())?;
         let label = match object.remove("label") {
             Some(value) => serde_json::from_value(value).map_err(D::Error::custom)?,
             None => None,
@@ -419,7 +419,7 @@ impl<'de> Deserialize<'de> for Event {
         Ok(Self {
             name,
             data,
-            task_key,
+            task_id,
             agent_id,
             label,
             created_at,
@@ -462,10 +462,10 @@ pub fn default_logger() -> Arc<dyn Fn(&Event) + Send + Sync> {
                 Some(reason) => eprintln!("run finished: {reason}"),
                 None => eprintln!("run finished"),
             },
-            Event::TASK_CREATED => eprintln!("[{agent}] created {}", event.task_key),
-            Event::TASK_STARTED => eprintln!("[{agent}] started {}", event.task_key),
-            Event::TASK_FINISHED => eprintln!("[{agent}] finished {}", event.task_key),
-            Event::TASK_FAILED => eprintln!("[{agent}] failed {}", event.task_key),
+            Event::TASK_CREATED => eprintln!("[{agent}] created {}", event.task_id),
+            Event::TASK_STARTED => eprintln!("[{agent}] started {}", event.task_id),
+            Event::TASK_FINISHED => eprintln!("[{agent}] finished {}", event.task_id),
+            Event::TASK_FAILED => eprintln!("[{agent}] failed {}", event.task_id),
             Event::TOOL_CALL_STARTED => {
                 if let (Some(tool_name), Some(input)) =
                     (data_str(event, "tool_name"), event.data.get("input"))
@@ -575,7 +575,7 @@ pub(crate) mod tests {
     fn default_logger_handles_every_name_and_malformed_data() {
         let logger = default_logger();
         for name in Event::BUILTIN_NAMES {
-            logger(&Event::new(*name).task_key("T-1").agent_id("agent"));
+            logger(&Event::new(*name).task_id("T-1").agent_id("agent"));
         }
     }
 
@@ -596,7 +596,7 @@ pub(crate) mod tests {
     #[test]
     fn a_logged_event_keeps_its_name() {
         for name in Event::BUILTIN_NAMES {
-            let event = Event::new(*name).task_key("t-1").agent_id("agent");
+            let event = Event::new(*name).task_id("t-1").agent_id("agent");
             let line = serde_json::to_value(&event).unwrap();
             assert_eq!(line["name"].as_str(), Some(*name));
         }
@@ -606,11 +606,11 @@ pub(crate) mod tests {
     fn event_builders_and_readers_follow_record_names() {
         let event = Event::new("document_indexed")
             .data(serde_json::json!({ "documents": 42 }))
-            .task_key("t-1")
+            .task_id("t-1")
             .agent_id("indexer-1");
         assert_eq!(event.get_name(), "document_indexed");
         assert_eq!(event.get_data(), &serde_json::json!({ "documents": 42 }));
-        assert_eq!(event.get_task_key(), "t-1");
+        assert_eq!(event.get_task_id(), "t-1");
         assert_eq!(event.get_agent_id(), "indexer-1");
         assert_eq!(event.get_label(), None);
         assert_eq!(event.get_created_at(), 0);
@@ -620,18 +620,29 @@ pub(crate) mod tests {
     fn new_event_records_serialize_with_name_and_data() {
         let event = Event::new("document_indexed")
             .data(serde_json::json!({ "documents": 42 }))
-            .task_key("t-1")
+            .task_id("t-1")
             .agent_id("indexer-1");
         assert_eq!(
             serde_json::to_value(event).unwrap(),
             serde_json::json!({
                 "name": "document_indexed",
                 "data": { "documents": 42 },
-                "task_key": "t-1",
+                "task_id": "t-1",
                 "agent_id": "indexer-1",
                 "created_at": 0,
             })
         );
+    }
+
+    #[test]
+    fn task_key_is_not_a_deserialization_alias() {
+        let event: Event = serde_json::from_value(serde_json::json!({
+            "name": "document_indexed",
+            "task_key": "t-1",
+        }))
+        .unwrap();
+
+        assert_eq!(event.get_task_id(), "");
     }
 
     #[test]
@@ -640,7 +651,7 @@ pub(crate) mod tests {
             "event": "request_finished",
             "model": "small",
             "usage": { "input_tokens": 12, "output_tokens": 3 },
-            "task_key": "t-1",
+            "task_id": "t-1",
             "agent_id": "worker-1",
             "created_at": 100,
         }))

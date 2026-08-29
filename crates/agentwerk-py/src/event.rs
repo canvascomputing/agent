@@ -89,8 +89,8 @@ impl PyEvent {
         Ok(slf)
     }
 
-    fn task_key<'py>(mut slf: PyRefMut<'py, Self>, task_key: &str) -> PyRefMut<'py, Self> {
-        slf.inner = slf.inner.clone().task_key(task_key);
+    fn task_id<'py>(mut slf: PyRefMut<'py, Self>, task_id: &str) -> PyRefMut<'py, Self> {
+        slf.inner = slf.inner.clone().task_id(task_id);
         slf
     }
 
@@ -107,8 +107,8 @@ impl PyEvent {
         value_to_py(py, self.inner.get_data())
     }
 
-    fn get_task_key(&self) -> &str {
-        self.inner.get_task_key()
+    fn get_task_id(&self) -> &str {
+        self.inner.get_task_id()
     }
 
     fn get_agent_id(&self) -> &str {
@@ -125,9 +125,9 @@ impl PyEvent {
 
     fn __repr__(&self) -> String {
         format!(
-            "Event(name={:?}, task_key={:?})",
+            "Event(name={:?}, task_id={:?})",
             self.inner.get_name(),
-            self.inner.get_task_key()
+            self.inner.get_task_id()
         )
     }
 }

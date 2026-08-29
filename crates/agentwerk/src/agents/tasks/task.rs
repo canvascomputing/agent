@@ -44,8 +44,8 @@ pub struct Task {
     /// Optional schema the result must satisfy.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) schema: Option<crate::schemas::Schema>,
-    /// Task key, of the form `t-N`.
-    pub(crate) key: String,
+    /// Task ID, of the form `t-N`.
+    pub(crate) id: String,
     /// The task lifecycle status.
     pub(crate) status: Status,
     /// Whether the current run has taken this task off the queue.
@@ -99,7 +99,7 @@ impl Task {
             task: value,
             label: None,
             schema: None,
-            key: String::new(),
+            id: String::new(),
             status: Status::Todo,
             cancelled: false,
             reporter: String::new(),
@@ -136,8 +136,8 @@ impl Task {
     ///
     /// What the relationship means is up to you. A `finish` handover uses it to
     /// chain a child to the task that handed off.
-    pub fn parent(mut self, key: impl Into<String>) -> Self {
-        self.parent = Some(key.into());
+    pub fn parent(mut self, id: impl Into<String>) -> Self {
+        self.parent = Some(id.into());
         self
     }
 
@@ -156,9 +156,9 @@ impl Task {
         self.schema.as_ref()
     }
 
-    /// The task key, of the form `t-N`.
-    pub fn get_key(&self) -> &str {
-        &self.key
+    /// The task ID, of the form `t-N`.
+    pub fn get_id(&self) -> &str {
+        &self.id
     }
 
     /// The task's lifecycle status.
@@ -206,7 +206,7 @@ impl Task {
         &self.errors
     }
 
-    /// The parent task key, if any.
+    /// The parent task ID, if any.
     pub fn get_parent(&self) -> Option<&str> {
         self.parent.as_deref()
     }
@@ -339,27 +339,27 @@ impl crate::persistence::Persist for Task {
     type Key = String;
 
     fn save(&self, dir: &Path) -> io::Result<()> {
-        let path = task_record_path(dir, &self.key);
+        let path = task_record_path(dir, &self.id);
         let body = serde_json::to_vec_pretty(self).map_err(io::Error::other)?;
         crate::persistence::write_atomic(&path, &body)
     }
 
     /// `errors` stays empty: the failures live in the session log, and
     /// `Queue::load` fills them in the pass it makes over it.
-    fn load(dir: &Path, key: &Self::Key) -> io::Result<Self> {
-        let bytes = std::fs::read(task_record_path(dir, key))?;
+    fn load(dir: &Path, id: &Self::Key) -> io::Result<Self> {
+        let bytes = std::fs::read(task_record_path(dir, id))?;
         let mut task: Task = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
-        task.replies = Replies::load(dir, key)?.entries;
-        task.result = TaskResult::load(dir, key)?.value;
+        task.replies = Replies::load(dir, id)?.entries;
+        task.result = TaskResult::load(dir, id)?.value;
         Ok(task)
     }
 }
 
 /// A task's result on disk: the bare JSON value in
-/// `tasks/<key>/result.json`, so reading the file gives the result and
+/// `tasks/<id>/result.json`, so reading the file gives the result and
 /// nothing around it.
 pub(crate) struct TaskResult {
-    pub(crate) key: String,
+    pub(crate) id: String,
     pub(crate) value: Option<serde_json::Value>,
 }
 
@@ -371,11 +371,11 @@ impl Persist for TaskResult {
             return Ok(());
         };
         let body = serde_json::to_vec_pretty(value).map_err(io::Error::other)?;
-        crate::persistence::write_atomic(&result_path(dir, &self.key), &body)
+        crate::persistence::write_atomic(&result_path(dir, &self.id), &body)
     }
 
-    fn load(dir: &Path, key: &String) -> io::Result<Self> {
-        let path = result_path(dir, key);
+    fn load(dir: &Path, id: &String) -> io::Result<Self> {
+        let path = result_path(dir, id);
         let value = if path.exists() {
             let bytes = std::fs::read(&path)?;
             Some(serde_json::from_slice(&bytes).map_err(io::Error::other)?)
@@ -383,19 +383,19 @@ impl Persist for TaskResult {
             None
         };
         Ok(TaskResult {
-            key: key.clone(),
+            id: id.clone(),
             value,
         })
     }
 }
 
 /// A task's replies on disk, one JSON reply per line in
-/// `tasks/<key>/replies.jsonl`.
+/// `tasks/<id>/replies.jsonl`.
 ///
 /// [`Persist::save`] rewrites the whole file, and [`Replies::append`] adds one
 /// line without reading it.
 pub(crate) struct Replies {
-    pub(crate) key: String,
+    pub(crate) id: String,
     pub(crate) entries: Vec<Reply>,
 }
 
@@ -404,9 +404,9 @@ impl Replies {
     ///
     /// It is keyed by task, so it fits neither [`Persist::save`] nor
     /// [`Append`](crate::persistence::Append).
-    pub(crate) fn append(dir: &Path, key: &str, reply: &Reply) -> io::Result<()> {
+    pub(crate) fn append(dir: &Path, id: &str, reply: &Reply) -> io::Result<()> {
         let line = serde_json::to_string(reply).map_err(io::Error::other)?;
-        crate::persistence::append_line(&replies_path(dir, key), &line)
+        crate::persistence::append_line(&replies_path(dir, id), &line)
     }
 }
 
@@ -421,11 +421,11 @@ impl Persist for Replies {
             body.push_str(&serde_json::to_string(reply).map_err(io::Error::other)?);
             body.push('\n');
         }
-        crate::persistence::write_atomic(&replies_path(dir, &self.key), body.as_bytes())
+        crate::persistence::write_atomic(&replies_path(dir, &self.id), body.as_bytes())
     }
 
-    fn load(dir: &Path, key: &String) -> io::Result<Self> {
-        let path = replies_path(dir, key);
+    fn load(dir: &Path, id: &String) -> io::Result<Self> {
+        let path = replies_path(dir, id);
         let entries = if path.exists() {
             std::fs::read_to_string(&path)?
                 .lines()
@@ -436,25 +436,25 @@ impl Persist for Replies {
             Vec::new()
         };
         Ok(Replies {
-            key: key.clone(),
+            id: id.clone(),
             entries,
         })
     }
 }
 
-/// Where `key`'s task is stored: `tasks/<key>/task.json`.
-pub(super) fn task_record_path(dir: &Path, key: &str) -> PathBuf {
-    dir.join("tasks").join(key).join("task.json")
+/// Where `id`'s task is stored: `tasks/<id>/task.json`.
+pub(super) fn task_record_path(dir: &Path, id: &str) -> PathBuf {
+    dir.join("tasks").join(id).join("task.json")
 }
 
-/// Where `key`'s replies are stored: `tasks/<key>/replies.jsonl`.
-fn replies_path(dir: &Path, key: &str) -> PathBuf {
-    dir.join("tasks").join(key).join("replies.jsonl")
+/// Where `id`'s replies are stored: `tasks/<id>/replies.jsonl`.
+fn replies_path(dir: &Path, id: &str) -> PathBuf {
+    dir.join("tasks").join(id).join("replies.jsonl")
 }
 
-/// Where `key`'s result is stored: `tasks/<key>/result.json`.
-pub(super) fn result_path(dir: &Path, key: &str) -> PathBuf {
-    dir.join("tasks").join(key).join("result.json")
+/// Where `id`'s result is stored: `tasks/<id>/result.json`.
+pub(super) fn result_path(dir: &Path, id: &str) -> PathBuf {
+    dir.join("tasks").join(id).join("result.json")
 }
 
 impl AsUserMessage for Task {
@@ -529,7 +529,7 @@ mod tests {
         let task = Task::new("Audit src/db.");
         assert_eq!(task.get_label(), None);
         assert!(task.get_schema().is_none());
-        assert_eq!(task.get_key(), "");
+        assert_eq!(task.get_id(), "");
         assert_eq!(task.get_status(), Status::Todo);
         assert_eq!(task.get_reporter(), "");
         assert_eq!(task.get_assignee(), None);

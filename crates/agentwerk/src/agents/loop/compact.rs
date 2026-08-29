@@ -25,7 +25,7 @@ pub(super) async fn run(context: &mut TaskContext<'_>, reason: CompactReason) ->
     let on_progress: Arc<dyn Fn(u32, u32) + Send + Sync> = {
         let queue = Arc::clone(context.queue);
         let agent_id = context.agent.get_id().to_string();
-        let task_key = context.task_key.clone();
+        let task_id = context.task_id.clone();
         Arc::new(move |completed, total| {
             queue.emit_event(
                 Event::new(Event::COMPACTION_PROGRESS)
@@ -34,7 +34,7 @@ pub(super) async fn run(context: &mut TaskContext<'_>, reason: CompactReason) ->
                         "completed": completed,
                         "total": total,
                     }))
-                    .task_key(&task_key)
+                    .task_id(&task_id)
                     .agent_id(&agent_id),
             );
         })
@@ -68,9 +68,9 @@ pub(super) async fn run(context: &mut TaskContext<'_>, reason: CompactReason) ->
     if applied {
         context
             .queue
-            .edit_replies(&context.task_key, |current| *current = edited);
+            .edit_replies(&context.task_id, |current| *current = edited);
         // The last response's input tokens no longer describe the next request.
-        context.queue.stats.reset_usage(&context.task_key);
+        context.queue.stats.reset_usage(&context.task_id);
     }
 
     if !applied && matches!(reason, CompactReason::Reactive) {
@@ -97,7 +97,7 @@ pub(super) async fn run(context: &mut TaskContext<'_>, reason: CompactReason) ->
 pub(super) fn proactive_compaction_needed(context: &TaskContext<'_>, task: &Task) -> bool {
     let tools = context.tools.tools();
     let window = context.model.get_context_window();
-    let history = context.queue.stats.usage_for_task(&context.task_key);
+    let history = context.queue.stats.usage_for_task(&context.task_id);
 
     algo::should_compact_proactively(
         window,
@@ -528,7 +528,7 @@ mod tests {
         // The 180 000-token anchor that tripped the trigger described replies
         // the task no longer holds, so it must not survive compaction.
         let tasks = queue_handle.lock().unwrap().take().expect("queue captured");
-        let history = tasks.stats.usage_for_task(&task.key);
+        let history = tasks.stats.usage_for_task(&task.id);
         assert!(
             history.len() <= 1,
             "expected the pre-compaction usage to be dropped, got {history:?}",

@@ -25,7 +25,7 @@ You are step 1 of 2 in the researcher chain. You start fresh; your task has no p
 Call `finish` exactly once with these three arguments. Pay attention to the TYPES: the call is rejected if any type is wrong:
 
 - `handover`: string. Always the literal text `"researcher_2"`.
-- `task`: string. Always the literal text `"Building on {parent_key}: {parent_result}\n\nDeepen and broaden these facts: causes, consequences, criticisms, alternative perspectives."`. The framework substitutes `{parent_key}` with your task key and `{parent_result}` with the value you pass as `result` before researcher_2 picks the child task up. Keep these placeholders verbatim.
+- `task`: string. Always the literal text `"Building on {parent_id}: {parent_result}\n\nDeepen and broaden these facts: causes, consequences, criticisms, alternative perspectives."`. The framework substitutes `{parent_id}` with your task ID and `{parent_result}` with the value you pass as `result` before researcher_2 picks the child task up. Keep these placeholders verbatim.
 - `result`: STRING of plain prose, several full sentences (target 400–1000 characters). NEVER a number, NEVER an array, NEVER a fragment. Real findings written as paragraphs, each factual claim followed by `Source: <url>`.
 
 All three arguments are required.

@@ -132,7 +132,7 @@ Optionally, install the [`prompt` skill](skills/prompt/SKILL.md), which is optim
 | | `templates(variables)` | Inject more than one entry into prompts. |
 | | `knowledge(store)` | Share a knowledge store with the agent. |
 | | `interactive()` | Let the agent wait for new instructions to keep a task in-progress. |
-| **Work** | `task(task)` | Submit a task, or a `Task` carrying a label or schema, and return its task key. |
+| **Work** | `task(task)` | Submit a task, or a `Task` carrying a label or schema, and return its task ID. |
 | | `start()` | Begin processing tasks. |
 | | `get_id()` | Get the unique identifier of an agent. |
 
@@ -149,7 +149,7 @@ You can use the `{context}` variable to inject contextual information:
 - Time remaining: 240s
 ```
 
-Every value is a variable of its own: `{task}`, `{date}`, `{dir}`, `{platform}`, `{os_version}`, `{turns_remaining}`, `{input_tokens_remaining}`, `{output_tokens_remaining}`, and `{time_remaining}`.
+Every value is a variable of its own: `{task_id}`, `{date}`, `{dir}`, `{platform}`, `{os_version}`, `{turns_remaining}`, `{input_tokens_remaining}`, `{output_tokens_remaining}`, and `{time_remaining}`.
 
 #### Interactive
 
@@ -157,19 +157,19 @@ An interactive agent holds one task open across many turns, so a conversation sp
 
 ```rust
 let agent = Agent::from_env().interactive();
-let key = agent.task("Where does the configuration get loaded?");
+let id = agent.task("Where does the configuration get loaded?");
 
 let chat = agent.start();
-chat.on_result(|_, task, result| println!("{}: {result}", task.get_key()));
+chat.on_result(|_, task, result| println!("{}: {result}", task.get_id()));
 chat.finish_all_tasks().await;
 
-chat.add_reply(&key, "And which environment variables override it?");
+chat.add_reply(&id, "And which environment variables override it?");
 chat.finish_all_tasks().await;
 
-chat.set_task_finished(&key, "answered")?;
+chat.set_task_finished(&id, "answered")?;
 ```
 
-An interactive agent never finishes its own task, because that would end the conversation. Every answer pauses the task instead: it stays `InProgress` with its agent, and each `finish_all_tasks().await` returns on the answer it waited for. `add_reply(key, content)` drives the next turn, and `set_task_finished(key, result)` ends the conversation, which is the result the hook reports. The answers in between arrive as [events](#events).
+An interactive agent never finishes its own task, because that would end the conversation. Every answer pauses the task instead: it stays `InProgress` with its agent, and each `finish_all_tasks().await` returns on the answer it waited for. `add_reply(id, content)` drives the next turn, and `set_task_finished(id, result)` ends the conversation, which is the result the hook reports. The answers in between arrive as [events](#events).
 
 See more: [`Agent`](https://docs.rs/agentwerk/latest/agentwerk/agents/agent/struct.Agent.html).
 
@@ -271,11 +271,11 @@ tasks.add_task(Task::labeled("report", "Write up the ranking."));
 | | `get_dir()` | Get the session directory. |
 | | `set_schemas(store)` | Enforce schemas for task results. |
 | | `add_agent(agent)` | Add an agent to this task queue. |
-| **Submit and interact** | `add_task(task)` | Submit a task and return its task key. |
-| | `add_reply(key, content)` | Add a reply to a task. |
-| | `edit_replies(key, editor)` | Rewrite a task's replies now. |
-| | `set_task_finished(key, result)` | Finish a task with a result. |
-| | `set_task_failed(key)` | Fail a task. |
+| **Submit and interact** | `add_task(task)` | Submit a task and return its task ID. |
+| | `add_reply(id, content)` | Add a reply to a task. |
+| | `edit_replies(id, editor)` | Rewrite a task's replies now. |
+| | `set_task_finished(id, result)` | Finish a task with a result. |
+| | `set_task_failed(id)` | Fail a task. |
 | **Observe** | `on_event(handler)` | Read every event as it is emitted. |
 | | `on_event_async(handler)` | Read every event in an async handler. |
 | | `on_result(handler)` | Read every finished task together with its result. |
@@ -290,7 +290,7 @@ tasks.add_task(Task::labeled("report", "Write up the ranking."));
 | | `finish_all_tasks()` | Wait for every task and get every result. |
 | **Cancel** | `cancel_tasks(query)` | Stop work on matching tasks. |
 | | `cancel_all_tasks()` | Stop work on every task. |
-| **Inspect tasks** | `get_task(key)` | Get one task by key. |
+| **Inspect tasks** | `get_task(id)` | Get one task by ID. |
 | | `get_tasks()` | Get every task in creation order. |
 | | `find_task(query)` | Get the first matching task. |
 | | `find_tasks(query)` | Get every matching task. |
@@ -318,7 +318,7 @@ Use AQL to select and sort tasks. Combine `field operator value` conditions with
 ```rust
 tasks.find_tasks("scan");
 tasks.find_results("t-3");
-tasks.find_tasks("key IN (t-3, t-4)");
+tasks.find_tasks("id IN (t-3, t-4)");
 tasks.find_tasks("label IN (scan, report) AND status = Finished");
 tasks.find_results("scan ORDER BY finished DESC");
 ```
@@ -336,14 +336,14 @@ tasks.find_results("scan ORDER BY finished DESC");
 | **Search** | `field ~ text`, `field !~ text` | Include or exclude case-insensitive text. |
 | **Compare** | `field > value`, `>=`, `<`, `<=` | Compare a time field. |
 | **Combine** | `A AND B`, `A OR B`, `NOT A`, `(A OR B)` | Combine or group conditions. |
-| **Shorthand** | `scan`, `t-3` | Short for `label = scan` and `key = t-3`. |
+| **Shorthand** | `scan`, `t-3` | Short for `label = scan` and `id = t-3`. |
 | **Sort** | `ORDER BY field DESC` | Sort matches; `ASC` is the default. |
 
 #### Fields
 
 | Kind | Fields | Meaning |
 |------|--------|---------|
-| **Identity** | `key`, `label`, `status` | Task identity and lifecycle state (`Todo`, `InProgress`, `Finished`, or `Failed`). |
+| **Identity** | `id`, `label`, `status` | Task identity and lifecycle state (`Todo`, `InProgress`, `Finished`, or `Failed`). |
 | **Run state** | `pending`, `cancelled` | Whether this run may schedule the task. |
 | **Relationship** | `agent`, `parent` | Claiming agent and handover parent. |
 | **Text** | `task`, `result`, `errors` | Task body, result, and recorded failures. |
@@ -357,11 +357,11 @@ Comparisons, including negative ones, skip missing values. `label != scan` there
 
 Quote values containing spaces: `label = "needs review"`. Lists use parentheses: `label IN (scan, report)`.
 
-`NOT` applies to the next condition or group; `AND` binds before `OR`. Keywords ignore case, but exact labels, keys, and agent IDs do not.
+`NOT` applies to the next condition or group; `AND` binds before `OR`. Keywords ignore case, but exact labels, task IDs, and agent IDs do not.
 
 Times accept `YYYY-MM-DD` UTC dates, epoch milliseconds, or offsets such as `-30m`, `-2h`, `-7d`, and `-1w`. Relative times resolve when the query compiles.
 
-`ORDER BY field` defaults to `ASC`; add `DESC` to reverse it. Missing values sort last in either direction. Without it, tasks stay in creation order. Keys sort numerically and statuses by lifecycle.
+`ORDER BY field` defaults to `ASC`; add `DESC` to reverse it. Missing values sort last in either direction. Without it, tasks stay in creation order. IDs sort numerically and statuses by lifecycle.
 
 #### Examples
 
@@ -405,7 +405,7 @@ Task members:
 
 | | Member | Description |
 |-|--------|-------------|
-| **Identity** | `get_key()` | Task key, of the form `t-N`. |
+| **Identity** | `get_id()` | Task ID, of the form `t-N`. |
 | | `get_task()` | The work the agent is asked to do. |
 | | `get_label()` | Label carried by the task. |
 | | `get_parent()` | Identifier of the parent task if a handover was performed. |
@@ -436,7 +436,7 @@ See [`Task`](https://docs.rs/agentwerk/latest/agentwerk/agents/tasks/struct.Task
 Agents can share the results of their work in the following ways:
 
 1. **Create tasks**: the `finish` tool's `handover` option opens a child task carrying the result.
-2. **Read tasks**: the `tasks` tool allows reading any finished task's result, by key.
+2. **Read tasks**: the `tasks` tool allows reading any finished task's result, by ID.
 3. **Read result file**: the `read_file` tool allows reading a task's `result.json` in the session directory.
 4. **Share knowledge**: the `knowledge` tool allows sharing knowledge with other agents.
 5. **Register hooks**: the `on_result` hook allows creating follow-up tasks.
@@ -458,11 +458,11 @@ let writer = Agent::from_env()
     .role("Write the board report from the ranking you were handed.");
 ```
 
-The child task is filed under `report` and names the analysis task as its `parent`. Its body is the result that was handed over, unless the agent passes a task of its own, which may carry `{parent_key}`, `{parent_result}`, and `{parent_result_path}`. Either way the body ends with the parent's key and the path of its result file.
+The child task is filed under `report` and names the analysis task as its `parent`. Its body is the result that was handed over, unless the agent passes a task of its own, which may carry `{parent_id}`, `{parent_result}`, and `{parent_result_path}`. Either way the body ends with the parent's ID and the path of its result file.
 
 #### 2. Read tasks
 
-Give the writer `TasksTool`, and it reads what any finished task produced, by key:
+Give the writer `TasksTool`, and it reads what any finished task produced, by ID:
 
 ```rust
 let writer = Agent::from_env()
@@ -615,7 +615,7 @@ Compaction also runs after the LLM provider reports the window exceeded. `compac
 ```rust
 tasks.on_event(|_, event| {
     if event.get_name() == Event::COMPACTION_FINISHED {
-        eprintln!("[{}] compacted {}", event.get_task_key(), event.get_data()["reason"]);
+        eprintln!("[{}] compacted {}", event.get_task_id(), event.get_data()["reason"]);
     }
 });
 ```
@@ -674,7 +674,7 @@ tasks.start();
 ├── events.jsonl                          every event (one per line)
 ├── tasks/
 │   └── t-1/
-│       ├── task.json                   the task without its messages (key, status, label, timestamps)
+│       ├── task.json                   the task without its messages (id, status, label, timestamps)
 │       ├── result.json                   the result the agent produced
 │       ├── replies.jsonl                 every message exchanged with the model, one per line
 │       └── outputs/<tool_use_id>.txt     full tool outputs spilled out of the messages
@@ -792,7 +792,7 @@ use agentwerk::Event;
 
 tasks.on_event(|_, event| {
     if event.get_name() == Event::TASK_FINISHED {
-        eprintln!("[{}] done {} {:?}", event.get_agent_id(), event.get_task_key(), event.get_label());
+        eprintln!("[{}] done {} {:?}", event.get_agent_id(), event.get_task_id(), event.get_label());
     }
 });
 ```
@@ -844,7 +844,7 @@ use serde_json::json;
 tasks.emit_event(
     Event::new("document_indexed")
         .data(json!({ "documents": 42 }))
-        .task_key("t-1")
+        .task_id("t-1")
         .agent_id("indexer-1"),
 );
 
@@ -854,7 +854,7 @@ tasks.emit_event(Event::new("index_refreshed"));
 The first event's name, data, and context are stored as:
 
 ```json
-{"name":"document_indexed","data":{"documents":42},"task_key":"t-1","agent_id":"indexer-1"}
+{"name":"document_indexed","data":{"documents":42},"task_id":"t-1","agent_id":"indexer-1"}
 ```
 
 Lowercase snake case keeps application names consistent with built-in events, but
@@ -892,7 +892,7 @@ tasks.find_events("payload ~ timeout AND created > -1h");
 |-|-------|-------------|
 | **Match** | `event` | The event name, such as `run_started` or `tool_call_failed`. |
 | | `agent` | The attributed agent ID, when the event has agent context. |
-| | `task` | The attributed task key, when the event has task context. |
+| | `task` | The attributed task ID, when the event has task context. |
 | | `label` | The attributed task's label, when the task is known and labelled. |
 | **Search** | `payload` | The event name and serialized event data, searched together as text. |
 | **Compare** | `created` | When the event was recorded. |
@@ -905,7 +905,7 @@ Without `ORDER BY`, matching events stay in log order, oldest first. When an eve
 
 A lone unquoted word is shorthand, resolved in this order:
 
-1. A task key such as `t-3` means `task = t-3`.
+1. A task ID such as `t-3` means `task = t-3`.
 2. A built-in event name such as `tool_call_failed` means `event = tool_call_failed`.
 3. Any other value such as `scan` means `label = scan`.
 
@@ -962,7 +962,7 @@ let findings = Arc::clone(&database);
 tasks.on_result_async(move |_, task, result| {
     let findings = Arc::clone(&findings);
     async move {
-        let _ = findings.insert(task.get_key(), &result).await;
+        let _ = findings.insert(task.get_id(), &result).await;
     }
 });
 ```

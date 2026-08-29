@@ -52,7 +52,7 @@ impl PyQueue {
         Ok(slf)
     }
 
-    /// Submit a task and return its task key.
+    /// Submit a task and return its task ID.
     ///
     /// A `str` is the task itself, and an `os.PathLike` names the file holding
     /// it. A `Task` carries a custom label or schema with it.
@@ -61,8 +61,8 @@ impl PyQueue {
     }
 
     /// Add a reply to a task, which drives its next turn.
-    fn add_reply<'py>(slf: PyRef<'py, Self>, key: &str, content: &str) -> PyRef<'py, Self> {
-        slf.inner.add_reply(key, content);
+    fn add_reply<'py>(slf: PyRef<'py, Self>, id: &str, content: &str) -> PyRef<'py, Self> {
+        slf.inner.add_reply(id, content);
         slf
     }
 
@@ -73,17 +73,17 @@ impl PyQueue {
 
     /// Finish a task with a result, from outside the execution.
     ///
-    /// Raises when the key is unknown, or when the result misses the task's
+    /// Raises when the ID is unknown, or when the result misses the task's
     /// schema.
-    fn set_task_finished(&self, key: &str, result: &Bound<'_, PyAny>) -> PyResult<()> {
+    fn set_task_finished(&self, id: &str, result: &Bound<'_, PyAny>) -> PyResult<()> {
         self.inner
-            .set_task_finished(key, py_to_value(result)?)
+            .set_task_finished(id, py_to_value(result)?)
             .map_err(runtime_error)
     }
 
-    /// Fail a task, from outside the execution. Raises when the key is unknown.
-    fn set_task_failed(&self, key: &str) -> PyResult<()> {
-        self.inner.set_task_failed(key).map_err(runtime_error)
+    /// Fail a task, from outside the execution. Raises when the ID is unknown.
+    fn set_task_failed(&self, id: &str) -> PyResult<()> {
+        self.inner.set_task_failed(id).map_err(runtime_error)
     }
 
     /// Set the execution limits and retry tuning.
@@ -234,9 +234,9 @@ impl PyQueue {
         self.inner.get_model_for_agent(agent_id)
     }
 
-    /// Get one task by key.
-    fn get_task(&self, py: Python<'_>, key: &str) -> PyResult<Option<Py<PyTask>>> {
-        match self.inner.get_task(key) {
+    /// Get one task by ID.
+    fn get_task(&self, py: Python<'_>, id: &str) -> PyResult<Option<Py<PyTask>>> {
+        match self.inner.get_task(id) {
             Some(task) => Ok(Some(Py::new(py, PyTask::from_task(&task))?)),
             None => Ok(None),
         }
@@ -311,11 +311,11 @@ impl PyQueue {
     /// call has a Python frame to unwind into, so it does not guess.
     fn edit_replies<'py>(
         slf: PyRef<'py, Self>,
-        key: &str,
+        id: &str,
         editor: Py<PyAny>,
     ) -> PyResult<PyRef<'py, Self>> {
         let mut failure: Option<PyErr> = None;
-        slf.inner.edit_replies(key, |replies: &mut Vec<Reply>| {
+        slf.inner.edit_replies(id, |replies: &mut Vec<Reply>| {
             Python::attach(|py| {
                 let outcome = (|| -> PyResult<Option<Vec<Reply>>> {
                     let returned = editor.bind(py).call1((replies_to_py(replies),))?;

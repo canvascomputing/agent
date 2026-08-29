@@ -21,7 +21,7 @@ pub(super) struct TaskContext<'a> {
     pub(super) queue: &'a Arc<Queue>,
     pub(super) run: Arc<Run>,
 
-    pub(super) task_key: String,
+    pub(super) task_id: String,
     pub(super) system_prompt: String,
     pub(super) policy: Policy,
 
@@ -34,11 +34,11 @@ pub(super) struct TaskContext<'a> {
 impl<'a> TaskContext<'a> {
     pub(super) fn emit_event(&self, event: Event) -> Event {
         self.queue
-            .emit_event(event.task_key(&self.task_key).agent_id(self.agent.get_id()))
+            .emit_event(event.task_id(&self.task_id).agent_id(self.agent.get_id()))
     }
 
     pub(super) fn task(&self) -> Option<Task> {
-        self.queue.get_task(&self.task_key)
+        self.queue.get_task(&self.task_id)
     }
 
     /// The corrective directive to inject for `detail`. Everything the
@@ -52,7 +52,7 @@ impl<'a> TaskContext<'a> {
                 ("detail", detail),
                 ("attempt", &attempt.to_string()),
                 ("max_attempts", &max_attempts.to_string()),
-                ("task", &self.task_key),
+                ("task_id", &self.task_id),
                 ("agent", self.agent.get_id()),
             ],
         )
@@ -61,9 +61,7 @@ impl<'a> TaskContext<'a> {
     /// Fail the task without naming a cause. The caller has already emitted
     /// the event that does.
     pub(super) fn fail_task(&self) {
-        let _ = self
-            .queue
-            .set_failed_by(&self.task_key, self.agent.get_id());
+        let _ = self.queue.set_failed_by(&self.task_id, self.agent.get_id());
     }
 
     /// Fail the task because a request did not come back. Reserved for the
@@ -144,10 +142,10 @@ fn claim<'a>(agent: &'a Agent, queue: &'a Arc<Queue>) -> Option<TaskContext<'a>>
             && (t.is_waiting_for_response() || !interactive)
             && !t.is_cancelled()
     };
-    let task_key = queue
+    let task_id = queue
         .claim(&claimable, agent.get_id())
-        .or_else(|| queue.find_task(resumable).map(|t| t.key.clone()))?;
-    let task = queue.get_task(&task_key)?;
+        .or_else(|| queue.find_task(resumable).map(|t| t.id.clone()))?;
+    let task = queue.get_task(&task_id)?;
 
     let mut tools = agent.tool_registry().clone();
     // Rebinding, not registering: an interactive agent carries no `finish`
@@ -160,24 +158,24 @@ fn claim<'a>(agent: &'a Agent, queue: &'a Arc<Queue>) -> Option<TaskContext<'a>>
     let policy = queue.get_policy();
     // Lets the model see what knowledge pages it can read.
     let system_prompt =
-        agent.system_prompt(Some(&knowledge_index), &policy, &queue.stats, &task_key);
+        agent.system_prompt(Some(&knowledge_index), &policy, &queue.stats, &task_id);
     let agent_id = agent.get_id();
 
     queue.emit_event(
         Event::new(Event::TURN_STARTED)
-            .task_key(&task_key)
+            .task_id(&task_id)
             .agent_id(agent_id),
     );
 
     if task.replies.is_empty() {
-        queue.append_reply(&task_key, Reply::system_text(system_prompt.clone()));
+        queue.append_reply(&task_id, Reply::system_text(system_prompt.clone()));
         let Message::User {
             content: task_blocks,
         } = task.as_user_message()
         else {
             unreachable!("Task::as_user_message returns Message::User");
         };
-        queue.append_reply(&task_key, Reply::user(&task_blocks, &HashMap::new()));
+        queue.append_reply(&task_id, Reply::user(&task_blocks, &HashMap::new()));
     }
 
     Some(TaskContext {
@@ -186,7 +184,7 @@ fn claim<'a>(agent: &'a Agent, queue: &'a Arc<Queue>) -> Option<TaskContext<'a>>
         queue,
         run: Arc::clone(&queue.run),
 
-        task_key,
+        task_id,
         system_prompt,
         policy,
         tools,
@@ -240,7 +238,7 @@ fn silence_retry(context: &mut TaskContext<'_>) -> Option<Step> {
         })));
         let _ = context
             .queue
-            .set_failed_by(&context.task_key, context.agent.get_id());
+            .set_failed_by(&context.task_id, context.agent.get_id());
         return None;
     }
     let detail = context.agent.get_directives().render(NO_TOOL_CALLED, &[]);
@@ -251,7 +249,7 @@ fn silence_retry(context: &mut TaskContext<'_>) -> Option<Step> {
         "message": detail,
     })));
     context.queue.append_reply(
-        &context.task_key,
+        &context.task_id,
         Reply::user_text(context.retry_directive(&detail, attempt, max)),
     );
     Some(Step::Evaluate)
@@ -545,7 +543,7 @@ mod tests {
                 ..Default::default()
             });
         tasks.on_result(|queue, done, _| {
-            if done.key == "t-1" {
+            if done.id == "t-1" {
                 queue.add_task(Task::new("follow up").label("alice"));
             }
         });
@@ -695,9 +693,9 @@ mod tests {
                 ..Default::default()
             });
         // Unfiltered on purpose: it also fires for the run-level events, whose
-        // empty key names no task.
+        // empty ID names no task.
         tasks.on_event(|queue, event| {
-            queue.edit_replies(&event.task_key, |_replies| {});
+            queue.edit_replies(&event.task_id, |_replies| {});
         });
         tasks.add_agent(interactive_chatbot(&provider));
         tasks.add_task("hello");
@@ -748,7 +746,7 @@ mod tests {
                 ..Default::default()
             });
         tasks.add_agent(interactive_chatbot(&provider));
-        let key = tasks.add_task("hello");
+        let id = tasks.add_task("hello");
 
         let tasks_for_inject = Arc::clone(&tasks);
         let inject = async move {
@@ -775,7 +773,7 @@ mod tests {
                 Some(Author::Assistant),
                 "gate must pause on the assistant text reply",
             );
-            tasks_for_inject.add_reply(&key, "what next?");
+            tasks_for_inject.add_reply(&id, "what next?");
         };
 
         tokio::time::timeout(Duration::from_secs(5), async {
@@ -816,20 +814,20 @@ mod tests {
                 ..Default::default()
             });
         tasks.add_agent(interactive_chatbot(&provider));
-        let key = tasks.add_task("hello");
+        let id = tasks.add_task("hello");
         tasks.start();
 
         // Pausing for input is no lifecycle transition and leaves the task
         // `InProgress`, so this returns only if `RequestFinished` reaches the
         // waiter after the reply is in the store.
-        let waited = key.clone();
+        let waited = id.clone();
         tokio::time::timeout(
             Duration::from_secs(5),
-            tasks.finish_results(move |t: &Task| t.key == waited),
+            tasks.finish_results(move |t: &Task| t.id == waited),
         )
         .await
         .expect("finish did not return within 5s");
-        let task = tasks.get_task(&key).unwrap();
+        let task = tasks.get_task(&id).unwrap();
         assert_eq!(task.status, Status::InProgress);
         assert!(task
             .replies

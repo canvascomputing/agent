@@ -48,7 +48,7 @@ pub(super) async fn run(context: &mut TaskContext<'_>, mut calls: Vec<ToolCall>)
         .run(Arc::clone(&context.run))
         .queue(Arc::clone(context.queue))
         .agent_id(context.agent.get_id().to_string())
-        .task_key(context.task_key.clone())
+        .task_id(context.task_id.clone())
         .knowledge(context.agent.get_knowledge())
         .directives(context.agent.get_directives());
 
@@ -145,7 +145,7 @@ pub(super) async fn run(context: &mut TaskContext<'_>, mut calls: Vec<ToolCall>)
 
     context
         .queue
-        .append_reply(&context.task_key, Reply::user(&blocks, &offloaded));
+        .append_reply(&context.task_id, Reply::user(&blocks, &offloaded));
 
     // Emitted after the reply lands: a handler that rewrites this task's
     // replies must find the tool result the event announces.
@@ -587,7 +587,7 @@ mod tests {
             if event.get_name() != Event::TOOL_CALL_FAILED {
                 return;
             }
-            let task = queue.get_task(&event.task_key).unwrap();
+            let task = queue.get_task(&event.task_id).unwrap();
             let landed = task.replies.iter().any(|reply| {
                 reply.content.iter().any(|block| {
                     matches!(

@@ -111,7 +111,7 @@ directives! {
     KNOWLEDGE_WRITE_FAILED = "knowledge_write_failed",
     KNOWLEDGE_REMOVE_FAILED = "knowledge_remove_failed",
     QUEUE_UNAVAILABLE = "queue_unavailable",
-    TASK_KEY_MISSING = "task_key_missing",
+    TASK_ID_MISSING = "task_id_missing",
     TASK_NOT_ASSIGNED = "task_not_assigned",
     TASK_NOT_FOUND = "task_not_found",
     TASK_RESULT_MISSING = "task_result_missing",

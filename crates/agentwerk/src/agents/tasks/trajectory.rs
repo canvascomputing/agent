@@ -19,8 +19,8 @@ use super::{Author, Reply, ReplyContent, Task};
 /// debugging.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Trajectory {
-    /// Example id `<agent id>-<task>`; also the on-disk filename.
-    pub(crate) key: String,
+    /// Example ID `<agent id>-<task>`; also the on-disk filename.
+    pub(crate) id: String,
     /// Name of the model that produced the replies. `None` when the
     /// producing agent could not be resolved at capture time.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -31,8 +31,8 @@ pub struct Trajectory {
 
 impl Trajectory {
     /// The example identifier, also used as its filename.
-    pub fn get_key(&self) -> &str {
-        &self.key
+    pub fn get_id(&self) -> &str {
+        &self.id
     }
 
     /// The model that produced the replies, if known.
@@ -50,13 +50,13 @@ impl Trajectory {
     /// trainer wants it, where `Task::to_messages` would drop it.
     pub fn from_task(agent_id: &str, model: Option<&str>, task: &Task) -> Self {
         Self {
-            key: format!("{agent_id}-{}", task.key),
+            id: format!("{agent_id}-{}", task.id),
             model: model.map(str::to_string),
             replies: task.replies.clone(),
         }
     }
 
-    /// Write the example under `dir` as `trajectories/<key>.json`, plus the
+    /// Write the example under `dir` as `trajectories/<id>.json`, plus the
     /// `.html` sibling.
     pub fn save(&self, dir: impl AsRef<Path>) -> io::Result<()> {
         <Self as crate::persistence::Persist>::save(self, dir.as_ref())
@@ -74,7 +74,7 @@ impl Trajectory {
                 .replace('>', "&gt;")
         }
 
-        let mut out = format!("{HTML_HEAD}<h1>{}</h1>\n", escape(&self.key));
+        let mut out = format!("{HTML_HEAD}<h1>{}</h1>\n", escape(&self.id));
         if let Some(model) = &self.model {
             out.push_str(&format!(
                 "<p class=\"model\">model: {}</p>\n",
@@ -157,21 +157,21 @@ impl crate::persistence::Persist for Trajectory {
     type Key = String;
 
     fn save(&self, dir: &Path) -> io::Result<()> {
-        let path = trajectory_path(dir, &self.key);
+        let path = trajectory_path(dir, &self.id);
         let body = serde_json::to_vec_pretty(self).map_err(io::Error::other)?;
         crate::persistence::write_atomic(&path, &body)?;
         crate::persistence::write_atomic(&path.with_extension("html"), self.to_html().as_bytes())
     }
 
-    fn load(dir: &Path, key: &Self::Key) -> io::Result<Self> {
-        let bytes = std::fs::read(trajectory_path(dir, key))?;
+    fn load(dir: &Path, id: &Self::Key) -> io::Result<Self> {
+        let bytes = std::fs::read(trajectory_path(dir, id))?;
         serde_json::from_slice(&bytes).map_err(io::Error::other)
     }
 }
 
-/// Path of the trajectory file for `key`: `trajectories/<key>.json`.
-fn trajectory_path(dir: &Path, key: &str) -> PathBuf {
-    dir.join("trajectories").join(format!("{key}.json"))
+/// Path of the trajectory file for `id`: `trajectories/<id>.json`.
+fn trajectory_path(dir: &Path, id: &str) -> PathBuf {
+    dir.join("trajectories").join(format!("{id}.json"))
 }
 
 #[cfg(test)]
@@ -182,7 +182,7 @@ mod tests {
 
     fn task_with_reply() -> Task {
         let mut task = Task::new("scan the file");
-        task.key = "t-1".into();
+        task.id = "t-1".into();
         task.replies.push(Reply::user_text("hello"));
         task
     }
@@ -190,9 +190,18 @@ mod tests {
     #[test]
     fn from_task_carries_replies() {
         let trajectory = Trajectory::from_task("analyst", Some("gpt-4"), &task_with_reply());
-        assert_eq!(trajectory.get_key(), "analyst-t-1");
+        assert_eq!(trajectory.get_id(), "analyst-t-1");
         assert_eq!(trajectory.get_model(), Some("gpt-4"));
         assert_eq!(trajectory.get_replies().len(), 1);
+    }
+
+    #[test]
+    fn serialized_trajectory_uses_id_without_a_key_alias() {
+        let trajectory = Trajectory::from_task("analyst", Some("gpt-4"), &task_with_reply());
+        let record = serde_json::to_value(trajectory).unwrap();
+
+        assert_eq!(record["id"], "analyst-t-1");
+        assert!(record.get("key").is_none());
     }
 
     #[test]
@@ -203,8 +212,8 @@ mod tests {
 
         let path = dir.path().join("trajectories").join("analyst-t-1.json");
         assert!(path.exists());
-        let loaded = Trajectory::load(dir.path(), &trajectory.key).unwrap();
-        assert_eq!(loaded.key, trajectory.key);
+        let loaded = Trajectory::load(dir.path(), &trajectory.id).unwrap();
+        assert_eq!(loaded.id, trajectory.id);
         assert_eq!(loaded.model.as_deref(), Some("gpt-4"));
         assert_eq!(loaded.replies.len(), 1);
     }

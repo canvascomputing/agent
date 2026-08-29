@@ -34,7 +34,7 @@ fn max_existing_task_id(dir: &Path) -> u64 {
 impl Queue {
     /// Insert `task`, filling in the fields agentwerk owns. The task is always born
     /// `Todo`; to pin it to a specific agent, label it with the agent's
-    /// name. Returns the inserted task's key.
+    /// name. Returns the inserted task's ID.
     pub(crate) fn insert(&self, mut task: Task, reporter: String) -> String {
         let id = {
             let mut next = self.next_task_id.lock().unwrap();
@@ -42,7 +42,7 @@ impl Queue {
             *base += 1;
             *base
         };
-        task.key = format!("t-{id}");
+        task.id = format!("t-{id}");
         task.created_at = now_millis();
         task.reporter = reporter;
         task.result = None;
@@ -54,27 +54,27 @@ impl Queue {
             .iter()
             .any(|query| query.matches(&task));
         let mut store = self.tasks.lock().unwrap();
-        let key = task.key.clone();
+        let id = task.id.clone();
         let reporter = task.reporter.clone();
-        store.insert(key.clone(), task);
+        store.insert(id.clone(), task);
         drop(store);
-        self.save_task(&key);
+        self.save_task(&id);
         self.emit_event(
             Event::new(Event::TASK_CREATED)
-                .task_key(&key)
+                .task_id(&id)
                 .agent_id(&reporter),
         );
-        key
+        id
     }
 
-    /// Write the task at `key` to disk. No-op when the task is missing.
-    fn save_task(&self, key: &str) {
-        if let Some(t) = self.get_task(key) {
+    /// Write the task at `id` to disk. No-op when the task is missing.
+    fn save_task(&self, id: &str) {
+        if let Some(t) = self.get_task(id) {
             let _ = t.save(&self.get_dir());
         }
     }
 
-    /// Write a tool's full output to `<dir>/tasks/<key>/outputs/<tool_use_id>.txt`.
+    /// Write a tool's full output to `<dir>/tasks/<id>/outputs/<tool_use_id>.txt`.
     /// Returns the path relative to the configured `dir` on success,
     /// `None` when the write fails. The relative form keeps the
     /// replies portable across moves of the tasks dir; join with
@@ -82,11 +82,11 @@ impl Queue {
     /// matching the surrounding observational-persistence contract.
     pub(crate) fn write_tool_output(
         &self,
-        key: &str,
+        id: &str,
         tool_use_id: &str,
         content: &str,
     ) -> Option<PathBuf> {
-        let rel = crate::persistence::output_path(key, tool_use_id);
+        let rel = crate::persistence::output_path(id, tool_use_id);
         let absolute = self.get_dir().join(&rel);
         crate::persistence::write_atomic(&absolute, content.as_bytes())
             .ok()
@@ -101,12 +101,12 @@ impl Queue {
     pub(crate) fn claim(&self, query: &Query, agent_id: &str) -> Option<String> {
         let now = now_millis();
         let schemas = self.schemas.lock().unwrap().clone();
-        let key = {
+        let id = {
             let mut store = self.tasks.lock().unwrap();
             let mut candidates: Vec<&Task> = store.values().filter(|t| query.matches(t)).collect();
             query.sort(&mut candidates);
-            let key = candidates.first()?.key.clone();
-            let task = store.get_mut(&key)?;
+            let id = candidates.first()?.id.clone();
+            let task = store.get_mut(&id)?;
             if task.status != Status::Todo {
                 return None;
             }
@@ -120,81 +120,81 @@ impl Queue {
             }
             task.stamp_transition(Status::InProgress, now);
             task.status = Status::InProgress;
-            key
+            id
         };
-        self.save_task(&key);
+        self.save_task(&id);
         // Emitted here rather than from the loop: the claim is the moment a
         // task starts, so a host claiming one records it the same way.
         self.emit_event(
             Event::new(Event::TASK_STARTED)
-                .task_key(&key)
+                .task_id(&id)
                 .agent_id(agent_id),
         );
-        Some(key)
+        Some(id)
     }
 
     /// Append `reply` to the task's replies. No-op when the
     /// task is missing: the loop drops out shortly afterwards on the
     /// same condition. The task record is not rewritten; the replies
     /// live only in `replies.jsonl`.
-    pub(crate) fn append_reply(&self, key: &str, reply: Reply) {
+    pub(crate) fn append_reply(&self, id: &str, reply: Reply) {
         {
             let mut store = self.tasks.lock().unwrap();
-            let Some(t) = store.get_mut(key) else { return };
+            let Some(t) = store.get_mut(id) else { return };
             t.replies.push(reply.clone());
         }
-        let _ = Replies::append(&self.get_dir(), key, &reply);
+        let _ = Replies::append(&self.get_dir(), id, &reply);
     }
 
     /// Transition a task to `Finished`, emitting `TaskFinished`
     /// under `agent`'s name.
-    pub(crate) fn set_finished_by(&self, key: &str, agent: &str) -> Result<(), TaskError> {
-        self.set_final_status(key, Status::Finished, agent)
+    pub(crate) fn set_finished_by(&self, id: &str, agent: &str) -> Result<(), TaskError> {
+        self.set_final_status(id, Status::Finished, agent)
     }
 
     /// Attach `result` to the task and transition it to `Finished`,
     /// resolving it from outside the run. Validates against the task's
     /// schema first, so a host finish and an agent finish record the same
-    /// contract. The emitted `TaskFinished` carries an empty agent id,
+    /// contract. The emitted `TaskFinished` carries an empty agent ID,
     /// like the run-level events no single agent causes.
     ///
     /// ```no_run
     /// # use agentwerk::Queue;
     /// # fn run() -> Result<(), Box<dyn std::error::Error>> {
     /// let tasks = Queue::new();
-    /// let key = tasks.add_task("Look up the cached answer.");
-    /// tasks.set_task_finished(&key, "42")?;
+    /// let id = tasks.add_task("Look up the cached answer.");
+    /// tasks.set_task_finished(&id, "42")?;
     /// # Ok(())
     /// # }
     /// ```
     pub fn set_task_finished(
         &self,
-        key: &str,
+        id: &str,
         result: impl serde::Serialize,
     ) -> Result<(), TaskError> {
         let value = serde_json::to_value(result).expect("result is serializable");
-        self.set_result(key, value)
+        self.set_result(id, value)
             .map_err(|violations| TaskError::ResultRejected {
                 message: violations.to_string(),
             })?;
-        self.set_final_status(key, Status::Finished, "")
+        self.set_final_status(id, Status::Finished, "")
     }
 
     /// Transition a task to `Failed`. No result argument, unlike
     /// [`Self::set_task_finished`]: a failed task has none. The emitted
-    /// `TaskFailed` carries an empty agent id, like the run-level
+    /// `TaskFailed` carries an empty agent ID, like the run-level
     /// events no single agent causes.
-    pub fn set_task_failed(&self, key: &str) -> Result<(), TaskError> {
-        self.set_final_status(key, Status::Failed, "")
+    pub fn set_task_failed(&self, id: &str) -> Result<(), TaskError> {
+        self.set_final_status(id, Status::Failed, "")
     }
 
     /// Transition a task to `Failed`, emitting `TaskFailed` under
     /// `agent`'s name. The loop's failure paths route through this.
-    pub(crate) fn set_failed_by(&self, key: &str, agent: &str) -> Result<(), TaskError> {
-        self.set_final_status(key, Status::Failed, agent)
+    pub(crate) fn set_failed_by(&self, id: &str, agent: &str) -> Result<(), TaskError> {
+        self.set_final_status(id, Status::Failed, agent)
     }
 
-    fn set_final_status(&self, key: &str, status: Status, agent: &str) -> Result<(), TaskError> {
+    fn set_final_status(&self, id: &str, status: Status, agent: &str) -> Result<(), TaskError> {
         // Increment BEFORE the status flip and decrement only after the
         // terminal event has been emitted: the drain check in `finish_results()`
         // must never observe (empty queue, zero counter) mid-transition,
@@ -212,9 +212,9 @@ impl Queue {
         let now = now_millis();
         let transitioned = {
             let mut store = self.tasks.lock().unwrap();
-            let task = store.get_mut(key).ok_or_else(|| TaskError::TaskMissing {
-                key: key.to_string(),
-            })?;
+            let task = store
+                .get_mut(id)
+                .ok_or_else(|| TaskError::TaskMissing { id: id.to_string() })?;
             // First outcome wins. The host resolving a task an agent is still
             // turning, and the agent giving up on one the host just resolved,
             // are the same race from either side; without this the loser's
@@ -237,8 +237,8 @@ impl Queue {
             Status::Finished => Event::TASK_FINISHED,
             _ => Event::TASK_FAILED,
         };
-        self.emit_event(Event::new(name).task_key(key).agent_id(agent));
-        self.save_task(key);
+        self.emit_event(Event::new(name).task_id(id).agent_id(agent));
+        self.save_task(id);
         Ok(())
     }
 
@@ -248,14 +248,14 @@ impl Queue {
     /// accept it. Does not finish the task: the caller does.
     pub(crate) fn set_result(
         &self,
-        key: &str,
+        id: &str,
         result: serde_json::Value,
     ) -> Result<(serde_json::Value, Vec<String>), SchemaViolations> {
         let schema = self
             .tasks
             .lock()
             .unwrap()
-            .get(key)
+            .get(id)
             .and_then(|t| t.schema.clone());
         let (result, repairs) = match schema.as_ref() {
             Some(schema) => schema.validate(result)?,
@@ -267,7 +267,7 @@ impl Queue {
             // outcome carried, the way its status does: the agent's result
             // arriving after the host resolved the task, or the reverse, is
             // the same race, and either way the late one is not the answer.
-            match store.get_mut(key) {
+            match store.get_mut(id) {
                 Some(task) if task.is_pending() => {
                     task.result = Some(result.clone());
                     true
@@ -278,7 +278,7 @@ impl Queue {
         // A missing task records nothing: no phantom results line, no file.
         if attached {
             let record = TaskResult {
-                key: key.to_string(),
+                id: id.to_string(),
                 value: Some(result.clone()),
             };
             // Best-effort: the result is already attached in memory, so a
@@ -288,7 +288,7 @@ impl Queue {
         Ok((result, repairs))
     }
 
-    /// Apply `editor` to task `key`'s replies now, then rewrite them
+    /// Apply `editor` to task `id`'s replies now, then rewrite them
     /// in place so the change survives resumption. Triggers no request.
     /// No-op when the task is missing. The edit must keep the replies
     /// well-formed (matched tool_use/tool_result pairs); they are sent
@@ -309,7 +309,7 @@ impl Queue {
     ///     if event.get_name() != Event::TOOL_CALL_FAILED {
     ///         return;
     ///     }
-    ///     queue.edit_replies(event.get_task_key(), |replies| {
+    ///     queue.edit_replies(event.get_task_id(), |replies| {
     ///         // Drop both sides of the failed exchange: the assistant's tool_use
     ///         // and the failed tool_result, so no unpaired block is left behind.
     ///         replies.retain(|reply| {
@@ -325,10 +325,10 @@ impl Queue {
     ///     });
     /// });
     /// ```
-    pub fn edit_replies(&self, key: &str, editor: impl FnOnce(&mut Vec<Reply>)) -> &Self {
+    pub fn edit_replies(&self, id: &str, editor: impl FnOnce(&mut Vec<Reply>)) -> &Self {
         let task_copy = {
             let mut store = self.tasks.lock().unwrap();
-            let Some(task) = store.get_mut(key) else {
+            let Some(task) = store.get_mut(id) else {
                 return self;
             };
             let before = task.replies.clone();
@@ -341,7 +341,7 @@ impl Queue {
             task.clone()
         };
         let replies = Replies {
-            key: key.to_string(),
+            id: id.to_string(),
             entries: task_copy.replies,
         };
         let _ = replies.save(&self.get_dir());
@@ -352,14 +352,14 @@ impl Queue {
     /// leaves the field untouched. A label can be replaced but not removed.
     pub(crate) fn edit(
         &self,
-        key: &str,
+        id: &str,
         new_task: Option<serde_json::Value>,
         label: Option<String>,
     ) -> Result<(), TaskError> {
         let mut store = self.tasks.lock().unwrap();
-        let task = store.get_mut(key).ok_or_else(|| TaskError::TaskMissing {
-            key: key.to_string(),
-        })?;
+        let task = store
+            .get_mut(id)
+            .ok_or_else(|| TaskError::TaskMissing { id: id.to_string() })?;
         if let Some(t) = new_task {
             task.task = t;
         }
@@ -376,8 +376,8 @@ mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
 
-    fn emit_event(queue: &Queue, key: &str, agent: &str, event: Event) -> Event {
-        queue.emit_event(event.task_key(key).agent_id(agent))
+    fn emit_event(queue: &Queue, id: &str, agent: &str, event: Event) -> Event {
+        queue.emit_event(event.task_id(id).agent_id(agent))
     }
 
     #[test]
@@ -448,9 +448,9 @@ mod tests {
         let done = queue.find_tasks(|t: &Task| t.status == Status::Finished);
         let failed = queue.find_tasks(|t: &Task| t.status == Status::Failed);
         assert_eq!(done.len(), 1);
-        assert_eq!(done[0].key, "t-1");
+        assert_eq!(done[0].id, "t-1");
         assert_eq!(failed.len(), 1);
-        assert_eq!(failed[0].key, "t-2");
+        assert_eq!(failed[0].id, "t-2");
     }
 
     #[test]
@@ -479,7 +479,7 @@ mod tests {
         let names: Vec<&str> = lines.iter().map(|l| l["name"].as_str().unwrap()).collect();
         assert_eq!(names, ["task_created", "task_started", "task_finished"]);
         for line in &lines {
-            assert_eq!(line["task_key"], "t-1");
+            assert_eq!(line["task_id"], "t-1");
             assert!(line["created_at"].is_u64());
         }
     }
@@ -538,7 +538,7 @@ mod tests {
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[0]["name"], "task_created");
         assert_eq!(lines[1]["name"], "task_failed");
-        assert_eq!(lines[1]["task_key"], "t-1");
+        assert_eq!(lines[1]["task_id"], "t-1");
     }
 
     #[test]
@@ -568,9 +568,9 @@ mod tests {
     fn claim_transitions_todo_to_in_progress_and_sets_the_assignee() {
         let (queue, _tmp) = test_queue();
         queue.add_task("hello");
-        let key = queue.claim(&Query::from("status = Todo"), "alice").unwrap();
-        assert_eq!(key, "t-1");
-        let t = queue.get_task(&key).unwrap();
+        let id = queue.claim(&Query::from("status = Todo"), "alice").unwrap();
+        assert_eq!(id, "t-1");
+        let t = queue.get_task(&id).unwrap();
         assert_eq!(t.status, Status::InProgress);
         assert_eq!(t.assignee.as_deref(), Some("alice"));
         assert!(t.started_at.is_some());
@@ -580,9 +580,9 @@ mod tests {
     fn claim_leaves_the_label_the_task_was_filed_with() {
         let (queue, _tmp) = test_queue();
         queue.add_task(Task::new("hello").label("analysis"));
-        let key = queue.claim(&Query::from("analysis"), "alice").unwrap();
+        let id = queue.claim(&Query::from("analysis"), "alice").unwrap();
         assert_eq!(
-            queue.get_task(&key).unwrap().label.as_deref(),
+            queue.get_task(&id).unwrap().label.as_deref(),
             Some("analysis")
         );
     }
@@ -611,8 +611,8 @@ mod tests {
         queue.add_task("a");
         queue.add_task("b");
         queue.add_task("c");
-        let key = queue.claim(&Query::from("status = Todo"), "alice").unwrap();
-        assert_eq!(key, "t-1");
+        let id = queue.claim(&Query::from("status = Todo"), "alice").unwrap();
+        assert_eq!(id, "t-1");
     }
 
     fn queue_with_analysis_schema() -> (std::sync::Arc<Queue>, crate::test_util::TempDir) {
@@ -629,8 +629,8 @@ mod tests {
     }
 
     /// The `title` of the schema bound to a task, naming which one it took.
-    fn bound_title(queue: &Queue, key: &str) -> Option<String> {
-        let schema = queue.get_task(key)?.schema?;
+    fn bound_title(queue: &Queue, id: &str) -> Option<String> {
+        let schema = queue.get_task(id)?.schema?;
         let document = serde_json::to_value(schema).ok()?;
         Some(document["title"].as_str().unwrap_or_default().to_string())
     }
@@ -723,17 +723,17 @@ mod tests {
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[0]["name"], "task_created");
         assert_eq!(lines[1]["name"], "task_started");
-        assert_eq!(lines[1]["task_key"], "t-1");
+        assert_eq!(lines[1]["task_id"], "t-1");
         assert_eq!(lines[1]["agent_id"], "alice");
     }
 
     #[test]
     fn set_finished_transitions_to_finished() {
         let (queue, _tmp) = test_queue();
-        let key = queue.add_task("hello");
+        let id = queue.add_task("hello");
         queue.claim(&Query::from("status = Todo"), "alice");
-        queue.set_finished_by(&key, "alice").unwrap();
-        let t = queue.get_task(&key).unwrap();
+        queue.set_finished_by(&id, "alice").unwrap();
+        let t = queue.get_task(&id).unwrap();
         assert_eq!(t.status, Status::Finished);
         assert!(t.finished_at.is_some());
     }
@@ -741,10 +741,10 @@ mod tests {
     #[test]
     fn set_failed_transitions_to_failed() {
         let (queue, _tmp) = test_queue();
-        let key = queue.add_task("hello");
+        let id = queue.add_task("hello");
         queue.claim(&Query::from("status = Todo"), "alice");
-        queue.set_task_failed(&key).unwrap();
-        let t = queue.get_task(&key).unwrap();
+        queue.set_task_failed(&id).unwrap();
+        let t = queue.get_task(&id).unwrap();
         assert_eq!(t.status, Status::Failed);
         assert!(t.failed_at.is_some());
     }
@@ -752,15 +752,15 @@ mod tests {
     #[test]
     fn a_finished_task_is_not_reopened_by_a_later_failure() {
         let (queue, _tmp) = test_queue();
-        let key = queue.add_task("hello");
+        let id = queue.add_task("hello");
         queue.claim(&Query::from("status = Todo"), "alice");
-        queue.set_task_finished(&key, "host result").unwrap();
+        queue.set_task_finished(&id, "host result").unwrap();
 
         // Alice was still turning the task and gives up after the host
         // resolved it.
-        queue.set_failed_by(&key, "alice").unwrap();
+        queue.set_failed_by(&id, "alice").unwrap();
 
-        let task = queue.get_task(&key).unwrap();
+        let task = queue.get_task(&id).unwrap();
         assert_eq!(task.status, Status::Finished);
         assert_eq!(task.result, Some(serde_json::json!("host result")));
         assert!(task.failed_at.is_none());
@@ -769,13 +769,13 @@ mod tests {
     #[test]
     fn a_failed_task_is_not_reopened_by_a_later_finish() {
         let (queue, _tmp) = test_queue();
-        let key = queue.add_task("hello");
+        let id = queue.add_task("hello");
         queue.claim(&Query::from("status = Todo"), "alice");
-        queue.set_failed_by(&key, "alice").unwrap();
+        queue.set_failed_by(&id, "alice").unwrap();
 
-        queue.set_task_finished(&key, "late result").unwrap();
+        queue.set_task_finished(&id, "late result").unwrap();
 
-        let task = queue.get_task(&key).unwrap();
+        let task = queue.get_task(&id).unwrap();
         assert_eq!(task.status, Status::Failed);
         assert!(task.finished_at.is_none());
         // The result too, or the task reads as failed while carrying an answer.
@@ -817,7 +817,7 @@ mod tests {
     }
 
     #[test]
-    fn set_finished_errors_on_an_unknown_key() {
+    fn set_finished_errors_on_an_unknown_id() {
         let (queue, _tmp) = test_queue();
         let err = queue.set_task_finished("t-9", "done").unwrap_err();
         assert!(matches!(err, TaskError::TaskMissing { .. }));
@@ -925,7 +925,7 @@ mod tests {
     }
 
     #[test]
-    fn insert_after_load_never_reuses_an_existing_key() {
+    fn insert_after_load_never_reuses_an_existing_id() {
         let dir = crate::test_util::TempDir::new().unwrap();
         let original = Queue::new();
         original.set_dir(dir.path().to_path_buf());
@@ -937,7 +937,7 @@ mod tests {
     }
 
     #[test]
-    fn insert_after_new_plus_dir_never_reuses_an_existing_key() {
+    fn insert_after_new_plus_dir_never_reuses_an_existing_id() {
         // The pattern a fresh process actually uses against a directory a
         // prior run already wrote into: `new()` (not `load()`) plus `.dir(..)`.
         let dir = crate::test_util::TempDir::new().unwrap();
@@ -960,7 +960,7 @@ mod tests {
         drop(original);
 
         let resumed = Queue::load(dir.path()).unwrap();
-        // `load()` already knows the highest key from what it just read
+        // `load()` already knows the highest ID from what it just read
         // into memory; removing the directory here proves `insert()` does
         // not rescan it, since a rescan would find nothing and wrongly
         // restart numbering at 1.
@@ -1032,7 +1032,7 @@ mod tests {
         let body = serde_json::json!({
             "task": "scan the tree",
             "labels": ["scan"],
-            "key": "t-1",
+            "id": "t-1",
             "status": "Todo",
             "reporter": "user",
             "created_at": 1,
@@ -1072,6 +1072,46 @@ mod tests {
     }
 
     #[test]
+    fn load_rejects_a_task_record_that_only_carries_key() {
+        let dir = crate::test_util::TempDir::new().unwrap();
+        let task_dir = dir.path().join("tasks").join("t-1");
+        std::fs::create_dir_all(&task_dir).unwrap();
+        let body = serde_json::json!({
+            "task": "scan the tree",
+            "key": "t-1",
+            "status": "Todo",
+            "reporter": "user",
+            "created_at": 1,
+            "started_at": null,
+            "finished_at": null,
+            "failed_at": null,
+            "parent": null,
+        });
+        std::fs::write(
+            task_dir.join("task.json"),
+            serde_json::to_vec(&body).unwrap(),
+        )
+        .unwrap();
+
+        assert!(Queue::load(dir.path()).is_err());
+    }
+
+    #[test]
+    fn task_json_uses_id_without_a_key_alias() {
+        let dir = crate::test_util::TempDir::new().unwrap();
+        let queue = Queue::new();
+        queue.set_dir(dir.path().to_path_buf());
+        queue.add_task("hello");
+        let stored =
+            std::fs::read_to_string(dir.path().join("tasks").join("t-1").join("task.json"))
+                .unwrap();
+        let record: serde_json::Value = serde_json::from_str(&stored).unwrap();
+
+        assert_eq!(record["id"], "t-1");
+        assert!(record.get("key").is_none());
+    }
+
+    #[test]
     fn task_json_does_not_carry_replies_field() {
         let dir = crate::test_util::TempDir::new().unwrap();
         let queue = Queue::new();
@@ -1092,12 +1132,12 @@ mod tests {
         let dir = crate::test_util::TempDir::new().unwrap();
         let queue = Queue::new();
         queue.set_dir(dir.path().to_path_buf());
-        let key = queue.add_task(Task::new("hello").label("scan"));
+        let id = queue.add_task(Task::new("hello").label("scan"));
         queue.cancel_tasks("label = scan");
-        queue.set_task_failed(&key).unwrap();
+        queue.set_task_failed(&id).unwrap();
 
         let stored =
-            std::fs::read_to_string(dir.path().join("tasks").join(&key).join("task.json")).unwrap();
+            std::fs::read_to_string(dir.path().join("tasks").join(&id).join("task.json")).unwrap();
         let record: serde_json::Value = serde_json::from_str(&stored).unwrap();
         assert!(record.get("cancelled").is_none());
 
@@ -1178,10 +1218,10 @@ mod tests {
     #[test]
     fn a_finished_task_failed_afterwards_is_not_counted_twice() {
         let (queue, _tmp) = test_queue();
-        let key = queue.add_task("seed");
-        queue.set_finished_by(&key, "alice").unwrap();
+        let id = queue.add_task("seed");
+        queue.set_finished_by(&id, "alice").unwrap();
         // Refused before the transition, so nothing is emitted to count.
-        queue.set_task_failed(&key).unwrap();
+        queue.set_task_failed(&id).unwrap();
 
         let stats = &queue.stats;
         assert_eq!(stats.event_count(Event::TASK_FINISHED), 1);
@@ -1213,23 +1253,23 @@ mod tests {
     fn edit_replies_rewrites_replies_without_touching_task() {
         use crate::agents::tasks::ReplyContent;
         let (queue, _tmp) = test_queue();
-        let key = queue.add_task("original task");
-        queue.append_reply(&key, Reply::user_text("keep me"));
-        queue.append_reply(&key, Reply::user_text("drop me"));
+        let id = queue.add_task("original task");
+        queue.append_reply(&id, Reply::user_text("keep me"));
+        queue.append_reply(&id, Reply::user_text("drop me"));
 
-        queue.edit_replies(&key, |replies| {
+        queue.edit_replies(&id, |replies| {
             replies.retain(|reply| {
                 !matches!(reply.content.first(), Some(ReplyContent::Text { text: t }) if t == "drop me")
             });
         });
 
         // Unlike summarize, the task is left as it was.
-        let task = queue.get_task(&key).unwrap();
+        let task = queue.get_task(&id).unwrap();
         assert_eq!(task.task, serde_json::Value::String("original task".into()));
 
         // The drop is committed and reloads from disk.
         let reloaded = Queue::load(queue.get_dir()).unwrap();
-        let replies = reloaded.get_task(&key).unwrap().replies;
+        let replies = reloaded.get_task(&id).unwrap().replies;
         assert!(replies.iter().any(
             |r| matches!(r.content.first(), Some(ReplyContent::Text { text: t }) if t == "keep me")
         ));
@@ -1241,11 +1281,11 @@ mod tests {
     #[test]
     fn edit_replies_that_changes_nothing_writes_nothing() {
         let (queue, _tmp) = test_queue();
-        let key = queue.add_task("go");
-        queue.append_reply(&key, Reply::user_text("keep me"));
-        let task_dir = queue.get_dir().join("tasks").join(&key);
+        let id = queue.add_task("go");
+        queue.append_reply(&id, Reply::user_text("keep me"));
+        let task_dir = queue.get_dir().join("tasks").join(&id);
 
-        queue.edit_replies(&key, |_replies| {}); // inspect, change nothing
+        queue.edit_replies(&id, |_replies| {}); // inspect, change nothing
 
         let rewrites = std::fs::read_dir(&task_dir)
             .unwrap()
@@ -1266,12 +1306,12 @@ mod tests {
     fn edit_rewrites_replies_in_place_without_a_snapshot_file() {
         use crate::agents::tasks::ReplyContent;
         let (queue, _tmp) = test_queue();
-        let key = queue.add_task("go");
-        queue.append_reply(&key, Reply::user_text("keep me"));
-        queue.append_reply(&key, Reply::user_text("drop me"));
-        let task_dir = queue.get_dir().join("tasks").join(&key);
+        let id = queue.add_task("go");
+        queue.append_reply(&id, Reply::user_text("keep me"));
+        queue.append_reply(&id, Reply::user_text("drop me"));
+        let task_dir = queue.get_dir().join("tasks").join(&id);
 
-        queue.edit_replies(&key, |replies| {
+        queue.edit_replies(&id, |replies| {
             replies.retain(|reply| {
                 !matches!(reply.content.first(), Some(ReplyContent::Text { text: t }) if t == "drop me")
             });
@@ -1299,19 +1339,19 @@ mod tests {
     fn compaction_then_edit_leaves_one_replies_file_and_no_leak() {
         use crate::agents::tasks::ReplyContent;
         let (queue, _tmp) = test_queue();
-        let key = queue.add_task("go");
-        queue.append_reply(&key, Reply::user_text("SECRET"));
+        let id = queue.add_task("go");
+        queue.append_reply(&id, Reply::user_text("SECRET"));
         // What compaction applies: the replies wholesale, rewritten in place.
-        queue.edit_replies(&key, |replies| *replies = vec![Reply::user_text("summary")]);
-        queue.append_reply(&key, Reply::user_text("after"));
-        queue.edit_replies(&key, |replies| {
+        queue.edit_replies(&id, |replies| *replies = vec![Reply::user_text("summary")]);
+        queue.append_reply(&id, Reply::user_text("after"));
+        queue.edit_replies(&id, |replies| {
             replies.retain(|reply| {
                 !matches!(reply.content.first(), Some(ReplyContent::Text { text: t }) if t == "after")
             });
         });
 
         // One replies file, no snapshots, and neither dropped string survives.
-        let task_dir = queue.get_dir().join("tasks").join(&key);
+        let task_dir = queue.get_dir().join("tasks").join(&id);
         let replies_files: Vec<String> = std::fs::read_dir(&task_dir)
             .unwrap()
             .flatten()

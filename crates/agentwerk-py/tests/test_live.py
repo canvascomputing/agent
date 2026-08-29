@@ -113,12 +113,12 @@ async def test_saves_the_messages_of_a_finished_task(tmp_path):
             captured.append((event.get_agent_id(), len(trajectory.get_replies()), trajectory.get_model()))
 
     queue.on_task(capture)
-    key = queue.add_task("Reply with exactly the word: pong")
+    id = queue.add_task("Reply with exactly the word: pong")
     await queue.finish_all_tasks()
 
     (agent_id, replies, model), = captured
     written = sorted(p.name for p in (tmp_path / "trajectories").iterdir())
-    assert written == [f"{agent_id}-{key}.html", f"{agent_id}-{key}.json"]
+    assert written == [f"{agent_id}-{id}.html", f"{agent_id}-{id}.json"]
     assert replies > 0
     assert model
 
@@ -140,21 +140,21 @@ async def test_compaction_summarizes_the_replies_against_the_live_model(tmp_path
         aw.Agent.from_env().role("Answer in plain text.").interactive()
     )
     queue.start()
-    key = queue.add_task(task)
-    await _until(lambda: _answered(queue, key))
-    queue.add_reply(key, "Now name a second colour.")
+    id = queue.add_task(task)
+    await _until(lambda: _answered(queue, id))
+    queue.add_reply(id, "Now name a second colour.")
     await _until(lambda: "compaction_finished" in kinds)
     queue.cancel_all_tasks()
     await queue.finish_all_tasks()
 
     assert "compaction_failed" not in kinds
-    texts = [b.get_data().get("text", "") for r in queue.get_task(key).get_replies() for b in r.get_content()]
+    texts = [b.get_data().get("text", "") for r in queue.get_task(id).get_replies() for b in r.get_content()]
     assert task not in texts, "the summary must have replaced the task reply"
     assert any(text.strip() for text in texts), "the summary must carry text"
 
 
-def _answered(queue, key):
-    replies = queue.get_task(key).get_replies()
+def _answered(queue, id):
+    replies = queue.get_task(id).get_replies()
     return bool(replies) and replies[-1].get_author() == "assistant"
 
 

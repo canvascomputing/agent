@@ -8,8 +8,8 @@ use super::task::Status;
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum TaskError {
-    /// No task exists at `key`.
-    TaskMissing { key: String },
+    /// No task exists with `id`.
+    TaskMissing { id: String },
     /// Status transition `from → to` is not allowed.
     TransitionRejected { from: Status, to: Status },
     /// The result failed the task's schema. The message lists the
@@ -20,7 +20,7 @@ pub enum TaskError {
 impl fmt::Display for TaskError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::TaskMissing { key } => write!(f, "Task {key} not found"),
+            Self::TaskMissing { id } => write!(f, "Task {id} not found"),
             Self::TransitionRejected { from, to } => {
                 write!(f, "Illegal transition {from:?} -> {to:?}")
             }
