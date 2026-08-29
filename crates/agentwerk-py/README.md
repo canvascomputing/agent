@@ -334,6 +334,7 @@ tasks.find_results("t-3")
 tasks.find_tasks("key IN (t-3, t-4)")
 tasks.find_tasks("label IN (scan, report) AND status = Finished")
 tasks.find_results("scan ORDER BY finished DESC")
+Query("label = scan AND pending = true").matches(tasks.get_task("t-1"))
 ```
 
 <details>
@@ -544,10 +545,8 @@ analyst.task("Rank the products by value, then save the ranking to your knowledg
 Use hooks to create new tasks when certain results arrived:
 
 ```python
-research = Query("label = research")
-
 def hand_to_report(work, done, result):
-    if research.matches(done):
+    if done.has_label("research"):
         work.add_task(Task(result, label="report"))
 
 
@@ -913,10 +912,8 @@ See [`EventKind`](https://docs.rs/agentwerk/latest/agentwerk/event/enum.EventKin
 Hooks allow you to react to events.
 
 ```python
-scan = Query("label = scan")
-
 def triage(work, event, failed):
-    if scan.matches(failed):
+    if failed.has_label("scan"):
         work.add_task(Task(failed.task, label="triage"))
 
 

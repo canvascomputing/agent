@@ -21,7 +21,7 @@ use agentwerk::event::{Event, EventKind};
 use agentwerk::providers::{Model, Provider};
 use agentwerk::schemas::Schema;
 use agentwerk::tools::{TasksTool, Tool, ToolResult};
-use agentwerk::{Agent, Policy, Query, Queue, Task};
+use agentwerk::{Agent, Policy, Queue, Task};
 use serde_json::{json, Value};
 
 const ROLE: &str = include_str!("prompts/agent.role.md");
@@ -153,7 +153,7 @@ fn aggregate_and_report(tasks: &Queue, partitions: &[(u64, u64)], n: u64, style:
 /// against the `idx=` line in the task body so a wrongly assigned result
 /// can't quietly slot into the wrong partition.
 fn extract_partial(task: &Task, total: usize) -> Result<(usize, i128), String> {
-    if !Query::from("status = Finished").matches(task) {
+    if !task.is_finished() {
         return Err(task.status.to_string());
     }
     let attached = task.result.as_ref().ok_or("no result attached")?;

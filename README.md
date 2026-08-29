@@ -321,6 +321,7 @@ tasks.find_results("t-3");
 tasks.find_tasks("key IN (t-3, t-4)");
 tasks.find_tasks("label IN (scan, report) AND status = Finished");
 tasks.find_results("scan ORDER BY finished DESC");
+Query::from("label = scan AND pending = true").matches(&tasks.get_task("t-1").unwrap());
 ```
 
 <details>
@@ -531,9 +532,8 @@ analyst.task("Rank the products by value, then save the ranking to your knowledg
 Use hooks to create new tasks when certain results arrived:
 
 ```rust
-let research = Query::from("label = research");
-tasks.on_result(move |queue, done, result| {
-    if research.matches(done) {
+tasks.on_result(|queue, done, result| {
+    if done.has_label("research") {
         queue.add_task(Task::labeled("report", result.clone()));
     }
 });
@@ -900,9 +900,8 @@ See [`EventKind`](https://docs.rs/agentwerk/latest/agentwerk/event/enum.EventKin
 Hooks allow you to react to events.
 
 ```rust
-let scan = Query::from("label = scan");
-tasks.on_failure(move |queue, _, failed| {
-    if scan.matches(failed) {
+tasks.on_failure(|queue, _, failed| {
+    if failed.has_label("scan") {
         queue.add_task(Task::labeled("triage", failed.task.clone()));
     }
 });

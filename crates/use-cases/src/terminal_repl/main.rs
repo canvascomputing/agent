@@ -34,7 +34,7 @@ use agentwerk::providers::Model;
 use agentwerk::tools::{
     GlobTool, GrepTool, ListDirectoryTool, ReadFileTool, TasksTool, WriteFileTool,
 };
-use agentwerk::{Agent, Knowledge, Policy, Query, Queue};
+use agentwerk::{Agent, Knowledge, Policy, Queue, Task};
 
 const ROLE: &str = include_str!("prompts/repl.role.md");
 const BIBLE_PASSAGE: &str = include_str!("prompts/bible.txt");
@@ -271,9 +271,8 @@ async fn main() {
         // "agent › " left stdout mid-line; mark so the first event
         // breaks out before its own content.
         midstream.store(true, Ordering::Relaxed);
-        let in_progress = Query::from("status = InProgress");
         let key = match chat_key.as_deref() {
-            Some(k) if tasks.get_task(k).is_some_and(|t| in_progress.matches(&t)) => {
+            Some(k) if tasks.get_task(k).is_some_and(|t| t.is_in_progress()) => {
                 tasks.add_reply(k, payload);
                 k.to_string()
             }
@@ -304,15 +303,13 @@ async fn main() {
         let recorded = tasks.find_events(|_: &Event| true);
         let count = |kind: EventName| counted(&recorded, kind);
         let outcome = {
-            let finished = Query::from("status = Finished");
-            let failed = Query::from("status = Failed");
             let chat = chat_key.as_deref().and_then(|k| tasks.get_task(k));
             match chat {
-                Some(t) if finished.matches(&t) => {
+                Some(t) if t.is_finished() => {
                     chat_key = None;
                     "completed"
                 }
-                Some(t) if failed.matches(&t) => {
+                Some(t) if t.is_failed() => {
                     chat_key = None;
                     "failed"
                 }
@@ -567,10 +564,9 @@ impl Style {
 /// Catches both the active InProgress chat from the prior session and
 /// any orphan Todo left by an interrupted `/new <message>`.
 fn fail_stale_chats(tasks: &Queue, label: &str) -> usize {
-    let query = Query::new(&format!("label = {label} AND pending = true"))
-        .expect("chat labels are valid AQL values");
+    let label = label.to_string();
     let stale: Vec<String> = tasks
-        .find_tasks(query)
+        .find_tasks(move |task: &Task| task.has_label(&label) && task.is_pending())
         .iter()
         .map(|t| t.key.clone())
         .collect();
