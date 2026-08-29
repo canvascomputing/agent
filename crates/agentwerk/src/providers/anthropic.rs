@@ -422,7 +422,7 @@ mod tests {
     #[test]
     fn replays_malformed_tool_input_as_an_empty_object() {
         // The API rejects a non-object `input`, which would fail every later
-        // request in the ticket rather than just this call.
+        // request in the task rather than just this call.
         let value = serialize_content_block(&ContentBlock::ToolUse {
             id: "toolu_1".into(),
             name: "grep".into(),

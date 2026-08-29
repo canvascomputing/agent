@@ -43,8 +43,8 @@ mod traces_call_path_across_files;
 #[path = "integration/write_file_creates_file.rs"]
 mod write_file_creates_file;
 
-#[path = "integration/tickets_all_actions.rs"]
-mod tickets_all_actions;
+#[path = "integration/tasks_all_actions.rs"]
+mod tasks_all_actions;
 
 #[path = "integration/thinking_capture.rs"]
 mod thinking_capture;

@@ -7,7 +7,7 @@ use std::fs;
 use super::common;
 
 use agentwerk::tools::EditFileTool;
-use agentwerk::{Agent, Policy, TicketQueue};
+use agentwerk::{Agent, Policy, Queue};
 
 const ORIGINAL: &str = "setting=old_value\nother=keep_me\n";
 
@@ -20,9 +20,9 @@ async fn replaces_substring_in_place() -> std::result::Result<(), Box<dyn std::e
     let path = root.join("config.txt");
     fs::write(&path, ORIGINAL)?;
 
-    let tickets = TicketQueue::new();
+    let tasks = Queue::new();
 
-    tickets.policy(Policy {
+    tasks.policy(Policy {
         max_turns: Some(10),
         ..Default::default()
     });
@@ -35,21 +35,21 @@ async fn replaces_substring_in_place() -> std::result::Result<(), Box<dyn std::e
              Step 1: call `edit_file` to perform an exact substring \
              replacement in the existing file. Do not rewrite the whole file. \
              Step 2: immediately call `finish` to settle the \
-             ticket. Do not write any prose: your only output must be tool \
+             task. Do not write any prose: your only output must be tool \
              calls.",
         )
         .tool(EditFileTool);
-    tickets.agent(agent);
-    tickets.ticket(
+    tasks.agent(agent);
+    tasks.task(
         "In `config.txt`, change the substring `old_value` to `new_value`. \
          Leave the rest of the file untouched.",
     );
 
-    tickets.finish_all().await;
-    common::print_result(&tickets);
+    tasks.finish_all().await;
+    common::print_result(&tasks);
 
     assert!(
-        tickets.find_events("tool_call_started").len() >= 1,
+        tasks.find_events("tool_call_started").len() >= 1,
         "agent must call at least one tool"
     );
 

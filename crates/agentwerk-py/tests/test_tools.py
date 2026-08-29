@@ -11,7 +11,7 @@ BUILTIN_FACTORIES = [
     aw.GrepTool,
     aw.GlobTool,
     aw.ListDirectoryTool,
-    aw.TicketsTool,
+    aw.TasksTool,
     aw.FinishTool,
 ]
 

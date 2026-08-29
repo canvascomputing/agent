@@ -54,11 +54,11 @@ pub(crate) fn append_line(path: &Path, line: &str) -> io::Result<()> {
     file.write_all(b"\n")
 }
 
-/// Relative path of a tool's output file under a tickets dir:
-/// `tickets/<key>/outputs/<id>.txt`. Callers join with the tickets dir
+/// Relative path of a tool's output file under a tasks dir:
+/// `tasks/<key>/outputs/<id>.txt`. Callers join with the tasks dir
 /// to write; storing the relative form keeps the recorded paths portable.
 pub(crate) fn output_path(key: &str, id: &str) -> PathBuf {
-    PathBuf::from("tickets")
+    PathBuf::from("tasks")
         .join(key)
         .join("outputs")
         .join(format!("{id}.txt"))

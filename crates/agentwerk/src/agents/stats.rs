@@ -13,11 +13,11 @@ use crate::providers::TokenUsage;
 /// `Stats` counts a run as it happens, so the limit check that fires every
 /// 50ms, the remaining turns and tokens a system prompt reports, and the
 /// compaction estimate all read the current figures without touching the
-/// filesystem. `TicketQueue::load` folds a session's log back into one, so a
+/// filesystem. `Queue::load` folds a session's log back into one, so a
 /// resumed run keeps what it already spent.
 ///
 /// Crate-internal on purpose. A host reads the three totals off
-/// [`TicketQueue`](crate::TicketQueue) and folds anything finer out of the
+/// [`Queue`](crate::Queue) and folds anything finer out of the
 /// events themselves.
 pub(crate) struct Stats {
     /// Count per event kind. Every recorded event lands here, and
@@ -28,12 +28,12 @@ pub(crate) struct Stats {
     /// Output tokens across the finished requests.
     output_tokens: AtomicU64,
     /// When execution started, in milliseconds since the epoch. 0 until the
-    /// first ticket starts, and the first writer wins.
+    /// first task starts, and the first writer wins.
     started_at: AtomicU64,
     /// When execution ended, in milliseconds since the epoch. 0 while it is
     /// still running.
     finished_at: AtomicU64,
-    /// Token usage per ticket, oldest first. It feeds the estimate that decides
+    /// Token usage per task, oldest first. It feeds the estimate that decides
     /// when to compact, and is cleared once that happens.
     token_usage: Mutex<HashMap<String, Vec<TokenUsage>>>,
 }
@@ -79,7 +79,7 @@ impl Stats {
     }
 
     /// Get the elapsed duration, which keeps growing while agents work and
-    /// stops when execution ends. `None` until the first ticket starts.
+    /// stops when execution ends. `None` until the first task starts.
     pub(crate) fn execution_duration(&self) -> Option<Duration> {
         let started = self.started_at.load(Ordering::Relaxed);
         if started == 0 {
@@ -131,10 +131,10 @@ impl Stats {
                     .fetch_add(usage.input_tokens, Ordering::Relaxed);
                 self.output_tokens
                     .fetch_add(usage.output_tokens, Ordering::Relaxed);
-                self.record_usage(&event.ticket_key, usage.clone());
+                self.record_usage(&event.task_key, usage.clone());
             }
             // The first claim starts the clock; the run ending stops it.
-            EventKind::TicketStarted => {
+            EventKind::TaskStarted => {
                 let _ = self.started_at.compare_exchange(
                     0,
                     event.created_at,
@@ -149,25 +149,25 @@ impl Stats {
         }
     }
 
-    /// A ticket's token usage, oldest first, for the compaction estimator.
+    /// A task's token usage, oldest first, for the compaction estimator.
     ///
-    /// Crate-internal: it is cleared when a ticket is compacted, so a caller
+    /// Crate-internal: it is cleared when a task is compacted, so a caller
     /// reading it would get a silently truncated series. A host that wants
     /// the figures reads `EventKind::RequestFinished`, which reports every
     /// one as it happens and is never cleared.
-    pub(crate) fn usage_for_ticket(&self, ticket_key: &str) -> Vec<TokenUsage> {
+    pub(crate) fn usage_for_task(&self, task_key: &str) -> Vec<TokenUsage> {
         self.token_usage
             .lock()
             .unwrap()
-            .get(ticket_key)
+            .get(task_key)
             .cloned()
             .unwrap_or_default()
     }
 
-    /// Drop a ticket's token usage, once its older messages are summarized
+    /// Drop a task's token usage, once its older messages are summarized
     /// and the earlier trend no longer predicts the next request.
-    pub(crate) fn reset_usage(&self, ticket_key: &str) {
-        self.token_usage.lock().unwrap().remove(ticket_key);
+    pub(crate) fn reset_usage(&self, task_key: &str) {
+        self.token_usage.lock().unwrap().remove(task_key);
     }
 
     /// Start the clock over for a run resuming from a log that already holds
@@ -178,12 +178,12 @@ impl Stats {
         self.finished_at.store(0, Ordering::Relaxed);
     }
 
-    /// Append `usage` to the per-ticket series.
-    fn record_usage(&self, ticket_key: &str, usage: TokenUsage) {
+    /// Append `usage` to the per-task series.
+    fn record_usage(&self, task_key: &str, usage: TokenUsage) {
         self.token_usage
             .lock()
             .unwrap()
-            .entry(ticket_key.to_string())
+            .entry(task_key.to_string())
             .or_default()
             .push(usage);
     }
@@ -226,7 +226,7 @@ mod tests {
         }
     }
 
-    /// The fold `TicketQueue::load` runs over a session log as it resumes.
+    /// The fold `Queue::load` runs over a session log as it resumes.
     fn loaded(dir: &std::path::Path) -> Stats {
         let stats = Stats::new();
         Stats::for_each_event(dir, |event| stats.record(event)).unwrap();
@@ -237,7 +237,7 @@ mod tests {
     fn at(created_at: u64, kind: EventKind) -> Event {
         Event {
             created_at,
-            ..Event::new("", "TICKET-1", None, kind)
+            ..Event::new("", "t-1", None, kind)
         }
     }
 
@@ -271,34 +271,34 @@ mod tests {
     }
 
     #[test]
-    fn a_request_appends_to_the_ticket_usage_series() {
+    fn a_request_appends_to_the_task_usage_series() {
         let stats = Stats::new();
         stats.record(&at(0, request(100, 10)));
         stats.record(&at(0, request(200, 20)));
 
-        let series = stats.usage_for_ticket("TICKET-1");
+        let series = stats.usage_for_task("t-1");
         assert_eq!(series.len(), 2);
         assert_eq!(series[0].input_tokens, 100);
         assert_eq!(series[1].input_tokens, 200);
     }
 
     #[test]
-    fn reset_usage_clears_one_ticket_without_touching_others() {
+    fn reset_usage_clears_one_task_without_touching_others() {
         let stats = Stats::new();
         stats.record(&at(0, request(100, 10)));
-        stats.record(&Event::new("", "TICKET-2", None, request(300, 30)));
+        stats.record(&Event::new("", "t-2", None, request(300, 30)));
 
-        stats.reset_usage("TICKET-1");
+        stats.reset_usage("t-1");
 
-        assert!(stats.usage_for_ticket("TICKET-1").is_empty());
-        assert_eq!(stats.usage_for_ticket("TICKET-2").len(), 1);
+        assert!(stats.usage_for_task("t-1").is_empty());
+        assert_eq!(stats.usage_for_task("t-2").len(), 1);
     }
 
     #[test]
-    fn the_first_ticket_to_start_starts_the_clock() {
+    fn the_first_task_to_start_starts_the_clock() {
         let stats = Stats::new();
-        stats.record(&at(1_000, EventKind::TicketStarted));
-        stats.record(&at(2_000, EventKind::TicketStarted));
+        stats.record(&at(1_000, EventKind::TaskStarted));
+        stats.record(&at(2_000, EventKind::TaskStarted));
         stats.record(&at(4_500, run_finished()));
 
         assert_eq!(
@@ -310,7 +310,7 @@ mod tests {
     #[test]
     fn execution_duration_freezes_when_the_run_ends() {
         let stats = Stats::new();
-        stats.record(&at(1_000, EventKind::TicketStarted));
+        stats.record(&at(1_000, EventKind::TaskStarted));
         stats.record(&at(2_500, run_finished()));
 
         let frozen = stats.execution_duration();
@@ -319,7 +319,7 @@ mod tests {
     }
 
     #[test]
-    fn execution_duration_is_none_until_a_ticket_starts() {
+    fn execution_duration_is_none_until_a_task_starts() {
         let stats = Stats::of([EventKind::RunStarted, turn()]);
         assert_eq!(stats.execution_duration(), None);
     }
@@ -327,7 +327,7 @@ mod tests {
     #[test]
     fn restart_clock_keeps_the_counts_a_resumed_run_already_spent() {
         let stats = Stats::new();
-        stats.record(&at(1_000, EventKind::TicketStarted));
+        stats.record(&at(1_000, EventKind::TaskStarted));
         stats.record(&at(2_000, request(900, 120)));
         stats.record(&at(3_000, run_finished()));
 
@@ -335,14 +335,14 @@ mod tests {
 
         assert_eq!(stats.execution_duration(), None);
         assert_eq!(stats.input_tokens(), 900);
-        assert_eq!(stats.event_count(EventName::TicketStarted), 1);
+        assert_eq!(stats.event_count(EventName::TaskStarted), 1);
     }
 
     #[test]
     fn load_reads_a_directory_without_a_log_as_no_events() {
         let dir = crate::test_util::TempDir::new().unwrap();
         let stats = loaded(dir.path());
-        assert_eq!(stats.event_count(EventName::TicketCreated), 0);
+        assert_eq!(stats.event_count(EventName::TaskCreated), 0);
         assert_eq!(stats.input_tokens(), 0);
         assert_eq!(stats.execution_duration(), None);
     }
@@ -351,7 +351,7 @@ mod tests {
     fn load_folds_back_what_a_run_wrote() {
         let dir = crate::test_util::TempDir::new().unwrap();
         for event in [
-            at(1_000, EventKind::TicketStarted),
+            at(1_000, EventKind::TaskStarted),
             at(2_000, request(900, 120)),
             at(2_000, turn()),
             at(5_000, run_finished()),
@@ -390,7 +390,7 @@ mod tests {
         // that cannot round-trip is a kind the statistics never see.
         let dir = crate::test_util::TempDir::new().unwrap();
         for kind in crate::event::tests::all_variants() {
-            Stats::append(dir.path(), &Event::new("agent", "TICKET-1", None, kind)).unwrap();
+            Stats::append(dir.path(), &Event::new("agent", "t-1", None, kind)).unwrap();
         }
 
         let stats = loaded(dir.path());

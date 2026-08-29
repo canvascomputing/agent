@@ -46,8 +46,8 @@ def test_templates_chain_singly_and_in_bulk():
     assert configured is agent
 
 
-def test_an_explicit_provider_and_model_let_the_agent_take_a_ticket(offline_agent):
-    assert offline_agent.ticket("go").startswith("TICKET-")
+def test_an_explicit_provider_and_model_let_the_agent_take_a_task(offline_agent):
+    assert offline_agent.task("go").startswith("t-")
 
 
 def test_model_accepts_a_tuned_model_object():
@@ -56,7 +56,7 @@ def test_model_accepts_a_tuned_model_object():
         .provider(aw.Anthropic("test-key"))
         .model(aw.Model("claude-sonnet-4-20250514").context_window(128_000))
     )
-    assert agent.ticket("go").startswith("TICKET-")
+    assert agent.task("go").startswith("t-")
 
 
 def test_starting_without_a_provider_is_rejected():
@@ -91,15 +91,15 @@ def test_registering_an_agent_without_a_provider_is_rejected(queue):
         queue.agent(aw.Agent())
 
 
-def test_agent_enqueues_a_ticket_on_its_private_queue(offline_agent):
-    key = offline_agent.ticket(aw.Ticket("scan the corpus", label="scan"))
-    assert key.startswith("TICKET-")
+def test_agent_enqueues_a_task_on_its_private_queue(offline_agent):
+    key = offline_agent.task(aw.Task("scan the corpus", label="scan"))
+    assert key.startswith("t-")
 
 
 def test_binding_an_agent_drains_its_queue_into_the_shared_queue(
     offline_agent, queue
 ):
-    offline_agent.ticket("count to three")
+    offline_agent.task("count to three")
     queue.agent(offline_agent)
 
-    assert [t.task for t in queue.tickets()] == ["count to three"]
+    assert [t.task for t in queue.tasks()] == ["count to three"]

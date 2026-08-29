@@ -103,7 +103,7 @@ impl Message {
 }
 
 /// Render this value as a user-role `Message`. Implemented by anything
-/// that becomes one turn's input, such as `Ticket`, whose task agentwerk sends
+/// that becomes one turn's input, such as `Task`, whose task agentwerk sends
 /// on the first turn.
 pub trait AsUserMessage {
     fn as_user_message(&self) -> Message;

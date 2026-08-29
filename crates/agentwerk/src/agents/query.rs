@@ -1,5 +1,5 @@
 //! AQL, the one string syntax a selection is written in, and the [`Query`] it
-//! parses into: over tickets by default, over recorded events as
+//! parses into: over tasks by default, over recorded events as
 //! `Query<Event>`.
 //!
 //! The tokenizer, the parser, and the condition tree are shared. A field set
@@ -11,19 +11,19 @@ use std::cmp::Ordering;
 use std::fmt;
 use std::sync::Arc;
 
-use super::tickets::{now_millis, numeric_id, Status, Ticket};
+use super::tasks::{now_millis, numeric_id, Status, Task};
 use crate::event::{Event, EventName};
 
 /// A record a query selects, and the field set AQL names it by.
 ///
-/// Implemented for [`Ticket`] and [`Event`]. Private, so the field sets and
+/// Implemented for [`Task`] and [`Event`]. Private, so the field sets and
 /// everything the parser builds stay inside this module.
 trait Queryable: fmt::Debug + Clone + Send + Sync + 'static {
     type Field: QueryField<Record = Self>;
 }
 
-impl Queryable for Ticket {
-    type Field = TicketField;
+impl Queryable for Task {
+    type Field = TaskField;
 }
 
 impl Queryable for Event {
@@ -37,15 +37,15 @@ impl Queryable for Event {
 /// `Fn(&R) -> bool` keeps closures working unchanged.
 ///
 /// ```no_run
-/// use agentwerk::{Event, Query, Ticket, TicketQueue};
+/// use agentwerk::{Event, Query, Task, Queue};
 ///
 /// # fn run() -> Result<(), Box<dyn std::error::Error>> {
-/// let tickets = TicketQueue::new();
-/// tickets.find_tickets("research");
-/// tickets.find_tickets(Query::new("label = research AND agent = research-1")?);
-/// tickets.find_tickets(|t: &Ticket| t.has_label("research"));
-/// tickets.find_events("tool_call_failed");
-/// tickets.find_events(|e: &Event| e.kind.is_failure());
+/// let tasks = Queue::new();
+/// tasks.find_tasks("research");
+/// tasks.find_tasks(Query::new("label = research AND agent = research-1")?);
+/// tasks.find_tasks(|t: &Task| t.has_label("research"));
+/// tasks.find_events("tool_call_failed");
+/// tasks.find_events(|e: &Event| e.kind.is_failure());
 /// # Ok(())
 /// # }
 /// ```
@@ -85,7 +85,7 @@ impl<R: Queryable> Matcher<R> for Query<R> {
 /// Selects records by field values, compiled from AQL, the agentwerk query
 /// syntax.
 ///
-/// `Query` selects tickets and `Query<Event>` selects recorded events, over
+/// `Query` selects tasks and `Query<Event>` selects recorded events, over
 /// the same syntax and a different field set.
 ///
 /// A string says the same query wherever a matcher is taken. Compile it here
@@ -93,26 +93,26 @@ impl<R: Queryable> Matcher<R> for Query<R> {
 /// string built at run time should answer with an error rather than a panic.
 #[allow(private_bounds)]
 #[derive(Debug, Clone)]
-pub struct Query<R: Queryable = Ticket>(Compiled<R::Field>);
+pub struct Query<R: Queryable = Task>(Compiled<R::Field>);
 
 #[allow(private_bounds)]
 impl<R: Queryable> Query<R> {
     /// Compile an AQL string over the record's fields.
     ///
     /// ```
-    /// use agentwerk::{Event, Query, Ticket};
+    /// use agentwerk::{Event, Query, Task};
     ///
     /// # fn run() -> Result<(), Box<dyn std::error::Error>> {
-    /// Query::<Ticket>::new("status = Finished AND label IN (scan, report)")?;
-    /// Query::<Ticket>::new("task ~ \"retry budget\" AND agent IS EMPTY")?;
-    /// Query::<Ticket>::new("TICKET-3")?;
-    /// Query::<Ticket>::new("status = Finished ORDER BY finished DESC")?;
-    /// Query::<Ticket>::new("finished IS EMPTY ORDER BY created")?;
-    /// Query::<Ticket>::new("failed > -1h")?;
-    /// Query::<Ticket>::new("created >= 2026-08-24 AND created < 2026-08-25")?;
+    /// Query::<Task>::new("status = Finished AND label IN (scan, report)")?;
+    /// Query::<Task>::new("task ~ \"retry budget\" AND agent IS EMPTY")?;
+    /// Query::<Task>::new("t-3")?;
+    /// Query::<Task>::new("status = Finished ORDER BY finished DESC")?;
+    /// Query::<Task>::new("finished IS EMPTY ORDER BY created")?;
+    /// Query::<Task>::new("failed > -1h")?;
+    /// Query::<Task>::new("created >= 2026-08-24 AND created < 2026-08-25")?;
     /// Query::<Event>::new("event = tool_call_failed")?;
     /// Query::<Event>::new("event IN (request_failed, request_retried) AND agent = scout-1")?;
-    /// Query::<Event>::new("ticket = TICKET-3 ORDER BY created DESC")?;
+    /// Query::<Event>::new("task = t-3 ORDER BY created DESC")?;
     /// Query::<Event>::new("payload ~ timeout AND created > -1h")?;
     /// # Ok(())
     /// # }
@@ -148,11 +148,11 @@ impl<R: Queryable> Query<R> {
     }
 }
 
-impl Query<Ticket> {
+impl Query<Task> {
     /// Also `status = <status>`, unless the query names a status of its own. A
     /// closure names none, so it always takes the default.
     pub(crate) fn default_status(self, status: Status) -> Query {
-        match self.0.mentions(TicketField::Status) {
+        match self.0.mentions(TaskField::Status) {
             true => self,
             false => self.and_status(status),
         }
@@ -160,13 +160,13 @@ impl Query<Ticket> {
 
     /// Also `status = <status>`, whatever the query already says.
     pub(crate) fn and_status(self, status: Status) -> Query {
-        let term = Compiled::term(TicketField::Status, Match::Is(status.to_string()));
+        let term = Compiled::term(TaskField::Status, Match::Is(status.to_string()));
         self.and(Query(term))
     }
 
     /// Also `result IS NOT EMPTY`: finishing without one is not a result.
     pub(crate) fn and_result(self) -> Query {
-        self.and(Query(Compiled::term(TicketField::Result, Match::NotEmpty)))
+        self.and(Query(Compiled::term(TaskField::Result, Match::NotEmpty)))
     }
 }
 
@@ -303,7 +303,7 @@ impl<F: QueryField> Compiled<F> {
     }
 }
 
-/// One set of fields AQL names, which is all that separates the ticket grammar
+/// One set of fields AQL names, which is all that separates the task grammar
 /// from the event one. The tokenizer, the parser, [`Condition`], and
 /// [`Compiled`] are shared.
 trait QueryField: Copy + PartialEq + fmt::Debug + Sized + 'static {
@@ -404,9 +404,9 @@ trait QueryField: Copy + PartialEq + fmt::Debug + Sized + 'static {
     }
 }
 
-/// A ticket field AQL names.
+/// A task field AQL names.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TicketField {
+enum TaskField {
     Key,
     Label,
     Status,
@@ -432,95 +432,94 @@ enum Kind {
     Time,
 }
 
-impl QueryField for TicketField {
-    type Record = Ticket;
+impl QueryField for TaskField {
+    type Record = Task;
 
-    const FIELDS: &'static [(&'static str, TicketField)] = &[
-        ("key", TicketField::Key),
-        ("label", TicketField::Label),
-        ("status", TicketField::Status),
-        ("agent", TicketField::Agent),
-        ("parent", TicketField::Parent),
-        ("task", TicketField::Task),
-        ("result", TicketField::Result),
-        ("errors", TicketField::Errors),
-        ("created", TicketField::Created),
-        ("started", TicketField::Started),
-        ("finished", TicketField::Finished),
-        ("failed", TicketField::Failed),
+    const FIELDS: &'static [(&'static str, TaskField)] = &[
+        ("key", TaskField::Key),
+        ("label", TaskField::Label),
+        ("status", TaskField::Status),
+        ("agent", TaskField::Agent),
+        ("parent", TaskField::Parent),
+        ("task", TaskField::Task),
+        ("result", TaskField::Result),
+        ("errors", TaskField::Errors),
+        ("created", TaskField::Created),
+        ("started", TaskField::Started),
+        ("finished", TaskField::Finished),
+        ("failed", TaskField::Failed),
     ];
 
-    fn of(self, ticket: &Ticket) -> Option<Cow<'_, str>> {
+    fn of(self, task: &Task) -> Option<Cow<'_, str>> {
         match self {
-            TicketField::Key => Some(Cow::Borrowed(ticket.key.as_str())),
-            TicketField::Label => ticket.label.as_deref().map(Cow::Borrowed),
-            TicketField::Status => Some(Cow::Owned(ticket.status.to_string())),
-            TicketField::Agent => ticket.assignee.as_deref().map(Cow::Borrowed),
-            TicketField::Parent => ticket.parent.as_deref().map(Cow::Borrowed),
-            TicketField::Task => Some(as_text(&ticket.task)),
-            TicketField::Result => ticket.result.as_ref().map(as_text),
+            TaskField::Key => Some(Cow::Borrowed(task.key.as_str())),
+            TaskField::Label => task.label.as_deref().map(Cow::Borrowed),
+            TaskField::Status => Some(Cow::Owned(task.status.to_string())),
+            TaskField::Agent => task.assignee.as_deref().map(Cow::Borrowed),
+            TaskField::Parent => task.parent.as_deref().map(Cow::Borrowed),
+            TaskField::Task => Some(as_text(&task.task)),
+            TaskField::Result => task.result.as_ref().map(as_text),
             // The serialized events, so `~` reaches both the kind
             // (`"event":"tool_call_failed"`) and the message.
-            TicketField::Errors => (!ticket.errors.is_empty())
-                .then(|| Cow::Owned(serde_json::to_string(&ticket.errors).unwrap_or_default())),
-            TicketField::Created => Some(Cow::Owned(ticket.created_at.to_string())),
-            TicketField::Started => ticket.started_at.map(millis_text),
-            TicketField::Finished => ticket.finished_at.map(millis_text),
-            TicketField::Failed => ticket.failed_at.map(millis_text),
+            TaskField::Errors => (!task.errors.is_empty())
+                .then(|| Cow::Owned(serde_json::to_string(&task.errors).unwrap_or_default())),
+            TaskField::Created => Some(Cow::Owned(task.created_at.to_string())),
+            TaskField::Started => task.started_at.map(millis_text),
+            TaskField::Finished => task.finished_at.map(millis_text),
+            TaskField::Failed => task.failed_at.map(millis_text),
         }
     }
 
     fn is_optional(self) -> bool {
         matches!(
             self,
-            TicketField::Label
-                | TicketField::Agent
-                | TicketField::Parent
-                | TicketField::Result
-                | TicketField::Errors
-                | TicketField::Started
-                | TicketField::Finished
-                | TicketField::Failed
+            TaskField::Label
+                | TaskField::Agent
+                | TaskField::Parent
+                | TaskField::Result
+                | TaskField::Errors
+                | TaskField::Started
+                | TaskField::Finished
+                | TaskField::Failed
         )
     }
 
     fn kind(self) -> Kind {
         match self {
-            TicketField::Task | TicketField::Result | TicketField::Errors => Kind::Text,
-            TicketField::Created
-            | TicketField::Started
-            | TicketField::Finished
-            | TicketField::Failed => Kind::Time,
+            TaskField::Task | TaskField::Result | TaskField::Errors => Kind::Text,
+            TaskField::Created | TaskField::Started | TaskField::Finished | TaskField::Failed => {
+                Kind::Time
+            }
             _ => Kind::Value,
         }
     }
 
-    /// The ticket it names by key where it is spelled like one, and the label
+    /// The task it names by key where it is spelled like one, and the label
     /// otherwise.
-    fn shorthand(word: String) -> Condition<TicketField> {
-        match is_ticket_key(&word) {
-            true => Condition::Term(TicketField::Key, Match::Is(word)),
-            false => Condition::Term(TicketField::Label, Match::Is(word)),
+    fn shorthand(word: String) -> Condition<TaskField> {
+        match is_task_key(&word) {
+            true => Condition::Term(TaskField::Key, Match::Is(word)),
+            false => Condition::Term(TaskField::Label, Match::Is(word)),
         }
     }
 
-    fn label() -> TicketField {
-        TicketField::Label
+    fn label() -> TaskField {
+        TaskField::Label
     }
 
-    fn tie_break(ticket: &Ticket) -> (u64, u32) {
-        (ticket.created_at, numeric_id(&ticket.key))
+    fn tie_break(task: &Task) -> (u64, u32) {
+        (task.created_at, numeric_id(&task.key))
     }
 
-    fn sort_unordered<T: Borrow<Ticket>>(tickets: &mut [T]) {
-        tickets.sort_by_key(|t| Self::tie_break(t.borrow()));
+    fn sort_unordered<T: Borrow<Task>>(tasks: &mut [T]) {
+        tasks.sort_by_key(|t| Self::tie_break(t.borrow()));
     }
 
     /// A status in the one spelling `Status::Display` writes, so both the
     /// `InProgress` the tool schema documents and the `in_progress` the
-    /// bindings use reach the same ticket.
+    /// bindings use reach the same task.
     fn canonical(self, value: String) -> Result<String, QueryError> {
-        if self != TicketField::Status {
+        if self != TaskField::Status {
             return Ok(value);
         }
         for status in STATUSES {
@@ -534,16 +533,15 @@ impl QueryField for TicketField {
         Err(QueryError::UnknownStatus { value })
     }
 
-    /// `key` by its number, so TICKET-2 comes before TICKET-10, and `status`
+    /// `key` by its number, so t-2 comes before t-10, and `status`
     /// along the lifecycle.
     fn compare(self, left: &str, right: &str) -> Ordering {
         match self {
-            TicketField::Key => numeric_id(left).cmp(&numeric_id(right)),
-            TicketField::Status => status_rank(left).cmp(&status_rank(right)),
-            TicketField::Created
-            | TicketField::Started
-            | TicketField::Finished
-            | TicketField::Failed => millis(left).cmp(&millis(right)),
+            TaskField::Key => numeric_id(left).cmp(&numeric_id(right)),
+            TaskField::Status => status_rank(left).cmp(&status_rank(right)),
+            TaskField::Created | TaskField::Started | TaskField::Finished | TaskField::Failed => {
+                millis(left).cmp(&millis(right))
+            }
             _ => left.cmp(right),
         }
     }
@@ -554,7 +552,7 @@ impl QueryField for TicketField {
 enum EventField {
     Event,
     Agent,
-    Ticket,
+    Task,
     Label,
     Created,
     Payload,
@@ -566,7 +564,7 @@ impl QueryField for EventField {
     const FIELDS: &'static [(&'static str, EventField)] = &[
         ("event", EventField::Event),
         ("agent", EventField::Agent),
-        ("ticket", EventField::Ticket),
+        ("task", EventField::Task),
         ("label", EventField::Label),
         ("created", EventField::Created),
         ("payload", EventField::Payload),
@@ -576,7 +574,7 @@ impl QueryField for EventField {
         match self {
             EventField::Event => Some(Cow::Borrowed(event.kind.name())),
             EventField::Agent => carried(&event.agent_id),
-            EventField::Ticket => carried(&event.ticket_key),
+            EventField::Task => carried(&event.task_key),
             EventField::Label => event.label.as_deref().map(Cow::Borrowed),
             EventField::Created => Some(Cow::Owned(event.created_at.to_string())),
             // The serialized kind, so `~` reaches both the name and whatever
@@ -588,7 +586,7 @@ impl QueryField for EventField {
     fn is_optional(self) -> bool {
         matches!(
             self,
-            EventField::Agent | EventField::Ticket | EventField::Label
+            EventField::Agent | EventField::Task | EventField::Label
         )
     }
 
@@ -600,11 +598,11 @@ impl QueryField for EventField {
         }
     }
 
-    /// The event it names where the word is one, the ticket where it is spelled
+    /// The event it names where the word is one, the task where it is spelled
     /// like a key, and the label otherwise.
     fn shorthand(word: String) -> Condition<EventField> {
-        if is_ticket_key(&word) {
-            return Condition::Term(EventField::Ticket, Match::Is(word));
+        if is_task_key(&word) {
+            return Condition::Term(EventField::Task, Match::Is(word));
         }
         match event_named(&word) {
             Some(name) => Condition::Term(EventField::Event, Match::Is(name.to_string())),
@@ -634,8 +632,8 @@ impl QueryField for EventField {
     }
 }
 
-fn is_ticket_key(word: &str) -> bool {
-    numeric_id(word) != u32::MAX && word.starts_with("TICKET-")
+fn is_task_key(word: &str) -> bool {
+    numeric_id(word) != u32::MAX && word.starts_with("t-")
 }
 
 /// An empty string is a field the event does not carry.
@@ -655,7 +653,7 @@ fn event_named(value: &str) -> Option<&'static str> {
 }
 
 /// A JSON value as the text a query compares against, matching what the
-/// ticket tool's own search has always done with a structured task.
+/// task tool's own search has always done with a structured task.
 fn as_text(value: &serde_json::Value) -> Cow<'_, str> {
     match value {
         serde_json::Value::String(text) => Cow::Borrowed(text.as_str()),
@@ -742,7 +740,7 @@ fn ago(offset: &str) -> Option<u64> {
 
 /// Midnight UTC on a `YYYY-MM-DD` date, by the days-from-civil algorithm that
 /// `prompts::format_current_date` runs the other way. Dates before 1970 are
-/// rejected: no ticket and no event carries one.
+/// rejected: no task and no event carries one.
 fn date_millis(value: &str) -> Option<u64> {
     let mut parts = value.split('-');
     let year: i64 = parts.next()?.parse().ok()?;
@@ -793,8 +791,8 @@ impl Match {
         match (self, value) {
             (Match::Empty, value) => value.is_none(),
             (Match::NotEmpty, value) => value.is_some(),
-            // A field the ticket does not carry fails every comparison, so
-            // `label != scan` never reaches an unlabelled ticket. IS EMPTY does.
+            // A field the task does not carry fails every comparison, so
+            // `label != scan` never reaches an unlabelled task. IS EMPTY does.
             (_, None) => false,
             (Match::Is(wanted), Some(value)) => value == wanted,
             (Match::IsNot(rejected), Some(value)) => value != rejected,
@@ -818,7 +816,7 @@ pub enum QueryError {
     /// The query carried no terms at all.
     Blank,
     /// No field is named this. `known` is the field set the query was compiled
-    /// against, which is the ticket one or the event one.
+    /// against, which is the task one or the event one.
     UnknownField { name: String, known: String },
     /// No status is spelled this way.
     UnknownStatus { value: String },
@@ -844,7 +842,7 @@ impl fmt::Display for QueryError {
         match self {
             Self::Blank => write!(
                 f,
-                "A query cannot be blank. Name a label, a ticket key, or a field."
+                "A query cannot be blank. Name a label, a task key, or a field."
             ),
             Self::UnknownField { name, known } => {
                 write!(f, "No field named `{name}`. Use one of {known}.")
@@ -872,7 +870,7 @@ impl fmt::Display for QueryError {
             }
             Self::RepeatedField { field } => write!(
                 f,
-                "`{field}` holds one value per ticket; use `{field} IN (a, b)` to match either."
+                "`{field}` holds one value per task; use `{field} IN (a, b)` to match either."
             ),
             Self::UnexpectedToken { token } => write!(f, "Unexpected `{token}` in the query."),
             Self::UnexpectedEnd => write!(f, "The query ends in the middle of a term."),
@@ -993,7 +991,7 @@ fn parse_query<F: QueryField>(query: &str) -> Result<(Condition<F>, Option<Sort<
         field: std::marker::PhantomData,
     };
     // A query naming nothing but an order selects every record, which is how
-    // the tickets tool asks for the newest without narrowing first.
+    // the tasks tool asks for the newest without narrowing first.
     let condition = match parser.at_order_by() {
         true => Condition::All(Vec::new()),
         false => parser.any()?,
@@ -1289,59 +1287,59 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn ticket(key: &str) -> Ticket {
-        let mut ticket = Ticket::new("task");
-        ticket.key = key.to_string();
-        ticket
+    fn task(key: &str) -> Task {
+        let mut task = Task::new("task");
+        task.key = key.to_string();
+        task
     }
 
-    /// The fields the queue writes as a ticket is worked, which `Ticket`'s own
+    /// The fields the queue writes as a task is worked, which `Task`'s own
     /// chainable methods do not set.
     trait Fixture {
-        fn agent(self, agent: &str) -> Ticket;
-        fn status(self, status: Status) -> Ticket;
-        fn task(self, task: serde_json::Value) -> Ticket;
-        fn finished(self, result: serde_json::Value) -> Ticket;
-        fn errored(self, kind: crate::event::EventKind) -> Ticket;
-        fn created_at(self, millis: u64) -> Ticket;
-        fn finished_at(self, millis: u64) -> Ticket;
+        fn agent(self, agent: &str) -> Task;
+        fn status(self, status: Status) -> Task;
+        fn task(self, task: serde_json::Value) -> Task;
+        fn finished(self, result: serde_json::Value) -> Task;
+        fn errored(self, kind: crate::event::EventKind) -> Task;
+        fn created_at(self, millis: u64) -> Task;
+        fn finished_at(self, millis: u64) -> Task;
     }
 
-    impl Fixture for Ticket {
-        fn agent(mut self, agent: &str) -> Ticket {
+    impl Fixture for Task {
+        fn agent(mut self, agent: &str) -> Task {
             self.assignee = Some(agent.to_string());
             self
         }
 
-        fn errored(mut self, kind: crate::event::EventKind) -> Ticket {
+        fn errored(mut self, kind: crate::event::EventKind) -> Task {
             let key = self.key.clone();
             self.errors
                 .push(crate::event::Event::new("agent", key, None, kind));
             self
         }
 
-        fn created_at(mut self, millis: u64) -> Ticket {
+        fn created_at(mut self, millis: u64) -> Task {
             self.created_at = millis;
             self
         }
 
-        fn finished_at(mut self, millis: u64) -> Ticket {
+        fn finished_at(mut self, millis: u64) -> Task {
             self.status = Status::Finished;
             self.finished_at = Some(millis);
             self
         }
 
-        fn status(mut self, status: Status) -> Ticket {
+        fn status(mut self, status: Status) -> Task {
             self.status = status;
             self
         }
 
-        fn task(mut self, task: serde_json::Value) -> Ticket {
+        fn task(mut self, task: serde_json::Value) -> Task {
             self.task = task;
             self
         }
 
-        fn finished(mut self, result: serde_json::Value) -> Ticket {
+        fn finished(mut self, result: serde_json::Value) -> Task {
             self.status = Status::Finished;
             self.result = Some(result);
             self
@@ -1353,13 +1351,13 @@ mod tests {
     }
 
     fn error(query: &str) -> QueryError {
-        Query::<Ticket>::new(query).expect_err("query must be rejected")
+        Query::<Task>::new(query).expect_err("query must be rejected")
     }
 
     /// The keys the query selects, in the order it puts them in.
-    fn ordered(query: &str, tickets: &[Ticket]) -> Vec<String> {
+    fn ordered(query: &str, tasks: &[Task]) -> Vec<String> {
         let query = parse(query);
-        let mut matching: Vec<&Ticket> = tickets.iter().filter(|t| query.matches(t)).collect();
+        let mut matching: Vec<&Task> = tasks.iter().filter(|t| query.matches(t)).collect();
         query.sort(&mut matching);
         matching.into_iter().map(|t| t.key.clone()).collect()
     }
@@ -1367,87 +1365,84 @@ mod tests {
     #[test]
     fn multiple_fields_and_together() {
         let q = parse("label = scan AND agent = scanner-1");
-        assert!(q.matches(&ticket("TICKET-1").label("scan").agent("scanner-1")));
-        assert!(!q.matches(&ticket("TICKET-2").label("scan").agent("scanner-2")));
-        assert!(!q.matches(&ticket("TICKET-3").label("report").agent("scanner-1")));
+        assert!(q.matches(&task("t-1").label("scan").agent("scanner-1")));
+        assert!(!q.matches(&task("t-2").label("scan").agent("scanner-2")));
+        assert!(!q.matches(&task("t-3").label("report").agent("scanner-1")));
     }
 
     #[test]
     fn default_status_applies_to_a_query_that_leaves_status_unset() {
         let q = parse("label = scan").default_status(Status::Finished);
-        assert!(q.matches(&ticket("TICKET-1").label("scan").finished(json!("ok"))));
-        assert!(!q.matches(&ticket("TICKET-2").label("scan")));
+        assert!(q.matches(&task("t-1").label("scan").finished(json!("ok"))));
+        assert!(!q.matches(&task("t-2").label("scan")));
     }
 
     #[test]
     fn default_status_leaves_a_query_that_sets_status_alone() {
         let q = parse("status = Todo").default_status(Status::Finished);
-        assert!(q.matches(&ticket("TICKET-1")));
+        assert!(q.matches(&task("t-1")));
     }
 
     #[test]
     fn default_status_finds_a_status_nested_in_a_group() {
         let q = parse("label = scan AND NOT (status = Failed)").default_status(Status::Finished);
-        assert!(q.matches(&ticket("TICKET-1").label("scan")));
+        assert!(q.matches(&task("t-1").label("scan")));
     }
 
     #[test]
     fn default_status_applies_to_a_closure_which_names_no_field() {
-        let q = (|t: &Ticket| t.has_label("scan"))
+        let q = (|t: &Task| t.has_label("scan"))
             .into_query()
             .default_status(Status::Finished);
-        assert!(q.matches(&ticket("TICKET-1").label("scan").finished(json!("ok"))));
-        assert!(!q.matches(&ticket("TICKET-2").label("scan")));
+        assert!(q.matches(&task("t-1").label("scan").finished(json!("ok"))));
+        assert!(!q.matches(&task("t-2").label("scan")));
     }
 
     #[test]
     fn and_status_applies_to_a_query_that_sets_status_of_its_own() {
         let q = parse("status = Todo").and_status(Status::Finished);
-        assert!(!q.matches(&ticket("TICKET-1")));
-        assert!(!q.matches(&ticket("TICKET-2").finished(json!("ok"))));
+        assert!(!q.matches(&task("t-1")));
+        assert!(!q.matches(&task("t-2").finished(json!("ok"))));
     }
 
     #[test]
-    fn a_closure_selects_the_tickets_it_accepts() {
-        let q = (|t: &Ticket| t.has_label("scan")).into_query();
-        assert!(q.matches(&ticket("TICKET-1").label("scan")));
-        assert!(!q.matches(&ticket("TICKET-2").label("report")));
+    fn a_closure_selects_the_tasks_it_accepts() {
+        let q = (|t: &Task| t.has_label("scan")).into_query();
+        assert!(q.matches(&task("t-1").label("scan")));
+        assert!(!q.matches(&task("t-2").label("report")));
     }
 
     #[test]
-    fn every_way_of_naming_a_label_selects_the_same_tickets() {
+    fn every_way_of_naming_a_label_selects_the_same_tasks() {
         let spellings = [
             ("Query::from", Query::from("scan")),
-            ("&str", Matcher::<Ticket>::into_query("scan")),
-            ("String", Matcher::<Ticket>::into_query("scan".to_string())),
+            ("&str", Matcher::<Task>::into_query("scan")),
+            ("String", Matcher::<Task>::into_query("scan".to_string())),
         ];
         for (spelling, q) in spellings {
-            assert!(q.matches(&ticket("TICKET-1").label("scan")), "{spelling}");
-            assert!(
-                !q.matches(&ticket("TICKET-2").label("report")),
-                "{spelling}"
-            );
-            assert!(!q.matches(&ticket("TICKET-3")), "{spelling}");
+            assert!(q.matches(&task("t-1").label("scan")), "{spelling}");
+            assert!(!q.matches(&task("t-2").label("report")), "{spelling}");
+            assert!(!q.matches(&task("t-3")), "{spelling}");
         }
     }
 
     #[test]
     fn equals_selects_the_named_value() {
         let q = parse("agent = scanner-1");
-        assert!(q.matches(&ticket("TICKET-1").agent("scanner-1")));
-        assert!(!q.matches(&ticket("TICKET-2").agent("scanner-2")));
+        assert!(q.matches(&task("t-1").agent("scanner-1")));
+        assert!(!q.matches(&task("t-2").agent("scanner-2")));
     }
 
     #[test]
     fn not_equals_excludes_the_named_value() {
         let q = parse("label != scan");
-        assert!(q.matches(&ticket("TICKET-1").label("report")));
-        assert!(!q.matches(&ticket("TICKET-2").label("scan")));
+        assert!(q.matches(&task("t-1").label("report")));
+        assert!(!q.matches(&task("t-2").label("scan")));
     }
 
     #[test]
     fn an_absent_field_fails_every_comparison() {
-        let unlabelled = ticket("TICKET-1");
+        let unlabelled = task("t-1");
         for query in [
             "label = scan",
             "label != scan",
@@ -1461,30 +1456,30 @@ mod tests {
     #[test]
     fn in_matches_any_listed_value() {
         let q = parse("label IN (scan, report)");
-        assert!(q.matches(&ticket("TICKET-1").label("scan")));
-        assert!(q.matches(&ticket("TICKET-2").label("report")));
-        assert!(!q.matches(&ticket("TICKET-3").label("review")));
+        assert!(q.matches(&task("t-1").label("scan")));
+        assert!(q.matches(&task("t-2").label("report")));
+        assert!(!q.matches(&task("t-3").label("review")));
     }
 
     #[test]
     fn not_in_excludes_every_listed_value() {
         let q = parse("status NOT IN (Finished, Failed)");
-        assert!(q.matches(&ticket("TICKET-1").status(Status::Todo)));
-        assert!(!q.matches(&ticket("TICKET-2").status(Status::Failed)));
+        assert!(q.matches(&task("t-1").status(Status::Todo)));
+        assert!(!q.matches(&task("t-2").status(Status::Failed)));
     }
 
     #[test]
     fn key_takes_in_like_any_other_field() {
-        let q = parse("key IN (TICKET-1, TICKET-2)");
-        assert!(q.matches(&ticket("TICKET-1")));
-        assert!(!q.matches(&ticket("TICKET-3")));
+        let q = parse("key IN (t-1, t-2)");
+        assert!(q.matches(&task("t-1")));
+        assert!(!q.matches(&task("t-3")));
     }
 
     #[test]
-    fn parent_selects_the_ticket_a_handover_came_from() {
-        let q = parse("parent = TICKET-1");
-        assert!(q.matches(&ticket("TICKET-2").parent("TICKET-1")));
-        assert!(!q.matches(&ticket("TICKET-3")));
+    fn parent_selects_the_task_a_handover_came_from() {
+        let q = parse("parent = t-1");
+        assert!(q.matches(&task("t-2").parent("t-1")));
+        assert!(!q.matches(&task("t-3")));
     }
 
     #[test]
@@ -1496,51 +1491,51 @@ mod tests {
     }
 
     #[test]
-    fn is_empty_matches_a_ticket_without_a_label() {
+    fn is_empty_matches_a_task_without_a_label() {
         let q = parse("label IS EMPTY");
-        assert!(q.matches(&ticket("TICKET-1")));
-        assert!(!q.matches(&ticket("TICKET-2").label("scan")));
+        assert!(q.matches(&task("t-1")));
+        assert!(!q.matches(&task("t-2").label("scan")));
     }
 
     #[test]
-    fn is_not_empty_matches_a_ticket_carrying_one() {
+    fn is_not_empty_matches_a_task_carrying_one() {
         let q = parse("label IS NOT EMPTY");
-        assert!(q.matches(&ticket("TICKET-1").label("scan")));
-        assert!(!q.matches(&ticket("TICKET-2")));
+        assert!(q.matches(&task("t-1").label("scan")));
+        assert!(!q.matches(&task("t-2")));
     }
 
     #[test]
-    fn result_is_empty_matches_a_ticket_carrying_no_result() {
+    fn result_is_empty_matches_a_task_carrying_no_result() {
         let q = parse("result IS EMPTY");
-        assert!(q.matches(&ticket("TICKET-1")));
-        assert!(!q.matches(&ticket("TICKET-2").finished(json!("done"))));
+        assert!(q.matches(&task("t-1")));
+        assert!(!q.matches(&task("t-2").finished(json!("done"))));
     }
 
     #[test]
     fn contains_matches_the_task_body_case_insensitively() {
         let q = parse("task ~ \"Retry Budget\"");
-        assert!(q.matches(&ticket("TICKET-1").task(json!("check the retry budget"))));
-        assert!(!q.matches(&ticket("TICKET-2").task(json!("check the upload path"))));
+        assert!(q.matches(&task("t-1").task(json!("check the retry budget"))));
+        assert!(!q.matches(&task("t-2").task(json!("check the upload path"))));
     }
 
     #[test]
     fn contains_matches_a_structured_task_by_its_json_text() {
         let q = parse("task ~ db.rs");
-        assert!(q.matches(&ticket("TICKET-1").task(json!({"file": "src/db.rs"}))));
+        assert!(q.matches(&task("t-1").task(json!({"file": "src/db.rs"}))));
     }
 
     #[test]
     fn omits_excludes_a_matching_task() {
         let q = parse("task !~ draft");
-        assert!(q.matches(&ticket("TICKET-1").task(json!("final report"))));
-        assert!(!q.matches(&ticket("TICKET-2").task(json!("draft report"))));
+        assert!(q.matches(&task("t-1").task(json!("final report"))));
+        assert!(!q.matches(&task("t-2").task(json!("draft report"))));
     }
 
     #[test]
     fn contains_matches_the_stored_result() {
         let q = parse("result ~ zip");
-        assert!(q.matches(&ticket("TICKET-1").finished(json!({"finding": "zip slip"}))));
-        assert!(!q.matches(&ticket("TICKET-2").finished(json!({"finding": "clean"}))));
+        assert!(q.matches(&task("t-1").finished(json!({"finding": "zip slip"}))));
+        assert!(!q.matches(&task("t-2").finished(json!({"finding": "clean"}))));
     }
 
     fn tool_failed(message: &str) -> crate::event::EventKind {
@@ -1553,17 +1548,17 @@ mod tests {
     }
 
     #[test]
-    fn errors_is_empty_matches_a_ticket_without_failures() {
+    fn errors_is_empty_matches_a_task_without_failures() {
         let q = parse("errors IS EMPTY");
-        assert!(q.matches(&ticket("TICKET-1")));
-        assert!(!q.matches(&ticket("TICKET-2").errored(tool_failed("boom"))));
+        assert!(q.matches(&task("t-1")));
+        assert!(!q.matches(&task("t-2").errored(tool_failed("boom"))));
     }
 
     #[test]
-    fn errors_is_not_empty_matches_a_ticket_that_failed() {
+    fn errors_is_not_empty_matches_a_task_that_failed() {
         let q = parse("errors IS NOT EMPTY");
-        assert!(q.matches(&ticket("TICKET-1").errored(tool_failed("boom"))));
-        assert!(!q.matches(&ticket("TICKET-2")));
+        assert!(q.matches(&task("t-1").errored(tool_failed("boom"))));
+        assert!(!q.matches(&task("t-2")));
     }
 
     #[test]
@@ -1574,84 +1569,84 @@ mod tests {
             message: "boom".into(),
         };
         let q = parse("errors ~ tool_call_failed");
-        assert!(q.matches(&ticket("TICKET-1").errored(tool_failed("boom"))));
+        assert!(q.matches(&task("t-1").errored(tool_failed("boom"))));
         // A different kind is excluded: the search selects by kind, not presence.
-        assert!(!q.matches(&ticket("TICKET-2").errored(request_failed)));
+        assert!(!q.matches(&task("t-2").errored(request_failed)));
     }
 
     #[test]
     fn contains_matches_a_failure_message() {
         let q = parse("errors ~ timeout");
-        assert!(q.matches(&ticket("TICKET-1").errored(tool_failed("connection timeout"))));
-        assert!(!q.matches(&ticket("TICKET-2").errored(tool_failed("no such file"))));
+        assert!(q.matches(&task("t-1").errored(tool_failed("connection timeout"))));
+        assert!(!q.matches(&task("t-2").errored(tool_failed("no such file"))));
     }
 
     #[test]
     fn omits_excludes_a_matching_failure() {
         let q = parse("errors !~ timeout");
-        assert!(q.matches(&ticket("TICKET-1").errored(tool_failed("no such file"))));
-        assert!(!q.matches(&ticket("TICKET-2").errored(tool_failed("connection timeout"))));
+        assert!(q.matches(&task("t-1").errored(tool_failed("no such file"))));
+        assert!(!q.matches(&task("t-2").errored(tool_failed("connection timeout"))));
     }
 
     #[test]
-    fn omits_does_not_match_a_ticket_without_failures() {
-        // An optional field the ticket does not carry fails every comparison,
-        // so `!~` excludes a clean ticket rather than including it.
+    fn omits_does_not_match_a_task_without_failures() {
+        // An optional field the task does not carry fails every comparison,
+        // so `!~` excludes a clean task rather than including it.
         let q = parse("errors !~ timeout");
-        assert!(!q.matches(&ticket("TICKET-1")));
-        assert!(q.matches(&ticket("TICKET-2").errored(tool_failed("no such file"))));
+        assert!(!q.matches(&task("t-1")));
+        assert!(q.matches(&task("t-2").errored(tool_failed("no such file"))));
     }
 
     #[test]
     fn contains_searches_every_recorded_failure() {
-        // A ticket accumulates many failures; the search reads the whole log,
+        // A task accumulates many failures; the search reads the whole log,
         // so a needle in the second failure still matches.
         let q = parse("errors ~ timeout");
-        let ticket = ticket("TICKET-1")
+        let task = task("t-1")
             .errored(tool_failed("no such file"))
             .errored(tool_failed("connection timeout"));
-        assert!(q.matches(&ticket));
+        assert!(q.matches(&task));
     }
 
     #[test]
     fn and_binds_tighter_than_or() {
         let q = parse("label = scan AND status = Todo OR label = report");
-        assert!(q.matches(&ticket("TICKET-1").label("scan").status(Status::Todo)));
-        assert!(!q.matches(&ticket("TICKET-2").label("scan").status(Status::Failed)));
-        assert!(q.matches(&ticket("TICKET-3").label("report").status(Status::Failed)));
+        assert!(q.matches(&task("t-1").label("scan").status(Status::Todo)));
+        assert!(!q.matches(&task("t-2").label("scan").status(Status::Failed)));
+        assert!(q.matches(&task("t-3").label("report").status(Status::Failed)));
     }
 
     #[test]
     fn parentheses_override_precedence() {
         let q = parse("(label = scan OR label = report) AND status = Todo");
-        assert!(q.matches(&ticket("TICKET-1").label("report").status(Status::Todo)));
-        assert!(!q.matches(&ticket("TICKET-2").label("report").status(Status::Failed)));
+        assert!(q.matches(&task("t-1").label("report").status(Status::Todo)));
+        assert!(!q.matches(&task("t-2").label("report").status(Status::Failed)));
     }
 
     #[test]
     fn not_inverts_a_group() {
         let q = parse("NOT (label = scan OR label = report)");
-        assert!(q.matches(&ticket("TICKET-1").label("review")));
-        assert!(!q.matches(&ticket("TICKET-2").label("scan")));
+        assert!(q.matches(&task("t-1").label("review")));
+        assert!(!q.matches(&task("t-2").label("scan")));
     }
 
     #[test]
     fn a_quoted_value_keeps_its_spaces() {
         let q = parse("label = \"needs review\"");
-        assert!(q.matches(&ticket("TICKET-1").label("needs review")));
-        assert!(!q.matches(&ticket("TICKET-2").label("needs")));
+        assert!(q.matches(&task("t-1").label("needs review")));
+        assert!(!q.matches(&task("t-2").label("needs")));
     }
 
     #[test]
     fn keywords_parse_in_any_case() {
         let q = parse("label in (scan, report) and agent is not empty order by key desc");
-        assert!(q.matches(&ticket("TICKET-1").label("scan").agent("scanner-1")));
-        assert!(!q.matches(&ticket("TICKET-2").label("scan")));
+        assert!(q.matches(&task("t-1").label("scan").agent("scanner-1")));
+        assert!(!q.matches(&task("t-2").label("scan")));
     }
 
     #[test]
     fn a_status_parses_in_both_spellings() {
-        let in_progress = ticket("TICKET-1").status(Status::InProgress);
+        let in_progress = task("t-1").status(Status::InProgress);
         assert!(parse("status = InProgress").matches(&in_progress));
         assert!(parse("status = in_progress").matches(&in_progress));
     }
@@ -1659,182 +1654,155 @@ mod tests {
     #[test]
     fn a_value_comparison_is_case_sensitive() {
         let q = parse("label = Scan");
-        assert!(!q.matches(&ticket("TICKET-1").label("scan")));
+        assert!(!q.matches(&task("t-1").label("scan")));
     }
 
     #[test]
     fn a_bare_word_selects_the_label() {
         let q = parse("scan");
-        assert!(q.matches(&ticket("TICKET-1").label("scan")));
-        assert!(!q.matches(&ticket("TICKET-2").label("report")));
+        assert!(q.matches(&task("t-1").label("scan")));
+        assert!(!q.matches(&task("t-2").label("report")));
     }
 
     #[test]
-    fn a_ticket_key_selects_that_one_ticket() {
-        let q = parse("TICKET-3");
-        assert!(q.matches(&ticket("TICKET-3").label("scan")));
-        assert!(!q.matches(&ticket("TICKET-4").label("scan")));
+    fn a_task_key_selects_that_one_task() {
+        let q = parse("t-3");
+        assert!(q.matches(&task("t-3").label("scan")));
+        assert!(!q.matches(&task("t-4").label("scan")));
     }
 
     #[test]
     fn a_bare_word_inside_a_group_selects_the_label() {
         let q = parse("(scan OR report) AND status = Todo");
-        assert!(q.matches(&ticket("TICKET-1").label("report").status(Status::Todo)));
-        assert!(!q.matches(&ticket("TICKET-2").label("review").status(Status::Todo)));
+        assert!(q.matches(&task("t-1").label("report").status(Status::Todo)));
+        assert!(!q.matches(&task("t-2").label("review").status(Status::Todo)));
     }
 
     #[test]
     fn a_label_named_like_a_key_needs_the_field() {
-        let odd = ticket("TICKET-1").label("TICKET-3");
-        assert!(!parse("TICKET-3").matches(&odd));
-        assert!(parse("label = TICKET-3").matches(&odd));
+        let odd = task("t-1").label("t-3");
+        assert!(!parse("t-3").matches(&odd));
+        assert!(parse("label = t-3").matches(&odd));
     }
 
     #[test]
     fn a_quoted_word_alone_selects_a_label_carrying_spaces() {
         let q = parse("\"needs review\"");
-        assert!(q.matches(&ticket("TICKET-1").label("needs review")));
+        assert!(q.matches(&task("t-1").label("needs review")));
     }
 
     #[test]
     fn order_by_sorts_ascending_by_default() {
-        let tickets = [
-            ticket("TICKET-1").agent("scanner-2"),
-            ticket("TICKET-2").agent("scanner-1"),
+        let tasks = [
+            task("t-1").agent("scanner-2"),
+            task("t-2").agent("scanner-1"),
         ];
-        assert_eq!(
-            ordered("ORDER BY agent", &tickets),
-            ["TICKET-2", "TICKET-1"]
-        );
+        assert_eq!(ordered("ORDER BY agent", &tasks), ["t-2", "t-1"]);
     }
 
     #[test]
     fn a_filter_and_an_order_compose() {
-        let tickets = [
-            ticket("TICKET-1").label("scan"),
-            ticket("TICKET-2").label("scan"),
-            ticket("TICKET-3").label("report"),
+        let tasks = [
+            task("t-1").label("scan"),
+            task("t-2").label("scan"),
+            task("t-3").label("report"),
         ];
         assert_eq!(
-            ordered("label = scan ORDER BY key DESC", &tickets),
-            ["TICKET-2", "TICKET-1"]
+            ordered("label = scan ORDER BY key DESC", &tasks),
+            ["t-2", "t-1"]
         );
     }
 
     #[test]
-    fn a_query_that_is_only_an_order_by_matches_every_ticket() {
+    fn a_query_that_is_only_an_order_by_matches_every_task() {
         let q = parse("ORDER BY key");
-        assert!(q.matches(&ticket("TICKET-1")));
-        assert!(q.matches(&ticket("TICKET-2").label("scan")));
+        assert!(q.matches(&task("t-1")));
+        assert!(q.matches(&task("t-2").label("scan")));
     }
 
     #[test]
     fn order_by_status_follows_the_lifecycle() {
-        let tickets = [
-            ticket("TICKET-1").status(Status::Failed),
-            ticket("TICKET-2").status(Status::Todo),
-            ticket("TICKET-3").status(Status::Finished),
+        let tasks = [
+            task("t-1").status(Status::Failed),
+            task("t-2").status(Status::Todo),
+            task("t-3").status(Status::Finished),
         ];
-        assert_eq!(
-            ordered("ORDER BY status", &tickets),
-            ["TICKET-2", "TICKET-3", "TICKET-1"]
-        );
+        assert_eq!(ordered("ORDER BY status", &tasks), ["t-2", "t-3", "t-1"]);
     }
 
     #[test]
     fn order_by_key_sorts_numerically_not_as_text() {
-        let tickets = [ticket("TICKET-10"), ticket("TICKET-2")];
-        assert_eq!(ordered("ORDER BY key", &tickets), ["TICKET-2", "TICKET-10"]);
+        let tasks = [task("t-10"), task("t-2")];
+        assert_eq!(ordered("ORDER BY key", &tasks), ["t-2", "t-10"]);
     }
 
     #[test]
-    fn a_ticket_missing_the_sort_field_sorts_last_in_both_directions() {
-        let tickets = [ticket("TICKET-1"), ticket("TICKET-2").agent("scanner-1")];
-        assert_eq!(
-            ordered("ORDER BY agent", &tickets),
-            ["TICKET-2", "TICKET-1"]
-        );
-        assert_eq!(
-            ordered("ORDER BY agent DESC", &tickets),
-            ["TICKET-2", "TICKET-1"]
-        );
+    fn a_task_missing_the_sort_field_sorts_last_in_both_directions() {
+        let tasks = [task("t-1"), task("t-2").agent("scanner-1")];
+        assert_eq!(ordered("ORDER BY agent", &tasks), ["t-2", "t-1"]);
+        assert_eq!(ordered("ORDER BY agent DESC", &tasks), ["t-2", "t-1"]);
     }
 
     #[test]
     fn equal_sort_values_keep_creation_order() {
         // The keys disagree with the creation times, so the assertion holds
         // only while creation order is what breaks the tie.
-        let tickets = [
-            ticket("TICKET-1").label("scan").created_at(2),
-            ticket("TICKET-2").label("scan").created_at(1),
+        let tasks = [
+            task("t-1").label("scan").created_at(2),
+            task("t-2").label("scan").created_at(1),
         ];
-        assert_eq!(
-            ordered("ORDER BY label", &tickets),
-            ["TICKET-2", "TICKET-1"]
-        );
+        assert_eq!(ordered("ORDER BY label", &tasks), ["t-2", "t-1"]);
     }
 
     #[test]
     fn a_query_without_an_order_by_answers_in_creation_order() {
-        let tickets = [
-            ticket("TICKET-1").label("scan").created_at(2),
-            ticket("TICKET-2").label("scan").created_at(1),
+        let tasks = [
+            task("t-1").label("scan").created_at(2),
+            task("t-2").label("scan").created_at(1),
         ];
-        assert_eq!(ordered("label = scan", &tickets), ["TICKET-2", "TICKET-1"]);
+        assert_eq!(ordered("label = scan", &tasks), ["t-2", "t-1"]);
     }
 
     #[test]
     fn order_by_asc_is_the_default_spelled_out() {
-        let tickets = [ticket("TICKET-2"), ticket("TICKET-1")];
+        let tasks = [task("t-2"), task("t-1")];
         assert_eq!(
-            ordered("ORDER BY key ASC", &tickets),
-            ordered("ORDER BY key", &tickets)
+            ordered("ORDER BY key ASC", &tasks),
+            ordered("ORDER BY key", &tasks)
         );
-        assert_eq!(
-            ordered("ORDER BY key ASC", &tickets),
-            ["TICKET-1", "TICKET-2"]
-        );
+        assert_eq!(ordered("ORDER BY key ASC", &tasks), ["t-1", "t-2"]);
     }
 
     #[test]
     fn order_by_finished_answers_the_most_recent_first() {
-        let tickets = [
-            ticket("TICKET-1").finished_at(100),
-            ticket("TICKET-2").finished_at(300),
-            ticket("TICKET-3").finished_at(200),
+        let tasks = [
+            task("t-1").finished_at(100),
+            task("t-2").finished_at(300),
+            task("t-3").finished_at(200),
         ];
         assert_eq!(
-            ordered("ORDER BY finished DESC", &tickets),
-            ["TICKET-2", "TICKET-3", "TICKET-1"]
+            ordered("ORDER BY finished DESC", &tasks),
+            ["t-2", "t-3", "t-1"]
         );
     }
 
     #[test]
     fn order_by_finished_sorts_numerically_not_as_text() {
-        let tickets = [
-            ticket("TICKET-1").finished_at(1000),
-            ticket("TICKET-2").finished_at(900),
-        ];
-        assert_eq!(
-            ordered("ORDER BY finished", &tickets),
-            ["TICKET-2", "TICKET-1"]
-        );
+        let tasks = [task("t-1").finished_at(1000), task("t-2").finished_at(900)];
+        assert_eq!(ordered("ORDER BY finished", &tasks), ["t-2", "t-1"]);
     }
 
     #[test]
-    fn a_ticket_still_running_sorts_last_by_finished() {
-        let tickets = [ticket("TICKET-1"), ticket("TICKET-2").finished_at(100)];
-        assert_eq!(
-            ordered("ORDER BY finished DESC", &tickets),
-            ["TICKET-2", "TICKET-1"]
-        );
+    fn a_task_still_running_sorts_last_by_finished() {
+        let tasks = [task("t-1"), task("t-2").finished_at(100)];
+        assert_eq!(ordered("ORDER BY finished DESC", &tasks), ["t-2", "t-1"]);
     }
 
     #[test]
-    fn finished_is_empty_matches_a_ticket_that_has_not_finished() {
+    fn finished_is_empty_matches_a_task_that_has_not_finished() {
         let q = parse("finished IS EMPTY");
-        assert!(q.matches(&ticket("TICKET-1")));
-        assert!(!q.matches(&ticket("TICKET-2").finished_at(100)));
+        assert!(q.matches(&task("t-1")));
+        assert!(!q.matches(&task("t-2").finished_at(100)));
     }
 
     #[test]
@@ -1856,32 +1824,32 @@ mod tests {
     }
 
     #[test]
-    fn after_selects_the_tickets_finished_since_the_moment() {
+    fn after_selects_the_tasks_finished_since_the_moment() {
         let q = parse("finished > 200");
-        assert!(q.matches(&ticket("TICKET-1").finished_at(300)));
-        assert!(!q.matches(&ticket("TICKET-2").finished_at(200)));
-        assert!(!q.matches(&ticket("TICKET-3").finished_at(100)));
+        assert!(q.matches(&task("t-1").finished_at(300)));
+        assert!(!q.matches(&task("t-2").finished_at(200)));
+        assert!(!q.matches(&task("t-3").finished_at(100)));
     }
 
     #[test]
     fn not_before_includes_the_moment_itself() {
         let q = parse("finished >= 200");
-        assert!(q.matches(&ticket("TICKET-1").finished_at(200)));
-        assert!(!q.matches(&ticket("TICKET-2").finished_at(199)));
+        assert!(q.matches(&task("t-1").finished_at(200)));
+        assert!(!q.matches(&task("t-2").finished_at(199)));
     }
 
     #[test]
-    fn before_selects_the_tickets_finished_up_to_the_moment() {
+    fn before_selects_the_tasks_finished_up_to_the_moment() {
         let q = parse("finished < 200");
-        assert!(q.matches(&ticket("TICKET-1").finished_at(100)));
-        assert!(!q.matches(&ticket("TICKET-2").finished_at(200)));
+        assert!(q.matches(&task("t-1").finished_at(100)));
+        assert!(!q.matches(&task("t-2").finished_at(200)));
     }
 
     #[test]
     fn not_after_includes_the_moment_itself() {
         let q = parse("finished <= 200");
-        assert!(q.matches(&ticket("TICKET-1").finished_at(200)));
-        assert!(!q.matches(&ticket("TICKET-2").finished_at(201)));
+        assert!(q.matches(&task("t-1").finished_at(200)));
+        assert!(!q.matches(&task("t-2").finished_at(201)));
     }
 
     #[test]
@@ -1889,23 +1857,23 @@ mod tests {
         // `reject_repeated_field` names one field twice a mistake, and this is
         // the shape that must survive it.
         let q = parse("finished >= 200 AND finished < 400");
-        assert!(q.matches(&ticket("TICKET-1").finished_at(300)));
-        assert!(!q.matches(&ticket("TICKET-2").finished_at(400)));
-        assert!(!q.matches(&ticket("TICKET-3").finished_at(100)));
+        assert!(q.matches(&task("t-1").finished_at(300)));
+        assert!(!q.matches(&task("t-2").finished_at(400)));
+        assert!(!q.matches(&task("t-3").finished_at(100)));
     }
 
     #[test]
     fn an_offset_selects_what_happened_inside_it() {
-        let now = crate::agents::tickets::now_millis();
+        let now = crate::agents::tasks::now_millis();
         let q = parse("created > -1h");
-        assert!(q.matches(&ticket("TICKET-1").created_at(now)));
-        assert!(!q.matches(&ticket("TICKET-2").created_at(now - 7_200_000)));
+        assert!(q.matches(&task("t-1").created_at(now)));
+        assert!(!q.matches(&task("t-2").created_at(now - 7_200_000)));
     }
 
     #[test]
     fn every_offset_unit_reaches_further_back() {
-        let now = crate::agents::tickets::now_millis();
-        let a_day_ago = ticket("TICKET-1").created_at(now - 86_400_000);
+        let now = crate::agents::tasks::now_millis();
+        let a_day_ago = task("t-1").created_at(now - 86_400_000);
         assert!(!parse("created > -1h").matches(&a_day_ago));
         assert!(!parse("created > -30m").matches(&a_day_ago));
         assert!(parse("created > -2d").matches(&a_day_ago));
@@ -1916,20 +1884,20 @@ mod tests {
     fn a_date_is_read_as_midnight_utc() {
         // 2026-08-24T00:00:00Z, the moment the date names.
         let q = parse("created >= 2026-08-24");
-        assert!(q.matches(&ticket("TICKET-1").created_at(1_787_529_600_000)));
-        assert!(!q.matches(&ticket("TICKET-2").created_at(1_787_529_599_999)));
+        assert!(q.matches(&task("t-1").created_at(1_787_529_600_000)));
+        assert!(!q.matches(&task("t-2").created_at(1_787_529_599_999)));
     }
 
     #[test]
     fn a_date_may_be_quoted() {
         let q = parse("created >= \"2026-08-24\"");
-        assert!(q.matches(&ticket("TICKET-1").created_at(1_787_529_600_000)));
+        assert!(q.matches(&task("t-1").created_at(1_787_529_600_000)));
     }
 
     #[test]
     fn an_absent_time_fails_every_comparison() {
         // The same rule an absent label follows: `IS EMPTY` is what reads it.
-        let running = ticket("TICKET-1");
+        let running = task("t-1");
         assert!(!parse("finished > 0").matches(&running));
         assert!(!parse("finished < 999").matches(&running));
         assert!(parse("finished IS EMPTY").matches(&running));
@@ -1961,7 +1929,7 @@ mod tests {
     #[test]
     fn a_comparison_needs_no_spaces_around_it() {
         let q = parse("finished>=200");
-        assert!(q.matches(&ticket("TICKET-1").finished_at(200)));
+        assert!(q.matches(&task("t-1").finished_at(200)));
     }
 
     #[test]
@@ -1994,8 +1962,8 @@ mod tests {
     #[test]
     fn two_equalities_on_one_label_are_allowed_under_or() {
         let q = parse("label = scan OR label = report");
-        assert!(q.matches(&ticket("TICKET-1").label("scan")));
-        assert!(q.matches(&ticket("TICKET-2").label("report")));
+        assert!(q.matches(&task("t-1").label("scan")));
+        assert!(q.matches(&task("t-2").label("report")));
     }
 
     #[test]
@@ -2026,7 +1994,7 @@ mod tests {
     }
 
     #[test]
-    fn is_empty_on_a_field_every_ticket_carries_is_rejected() {
+    fn is_empty_on_a_field_every_task_carries_is_rejected() {
         assert_eq!(
             error("key IS EMPTY"),
             QueryError::OperatorNotAllowed {
@@ -2062,7 +2030,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "invalid query")]
     fn a_malformed_query_string_panics_naming_the_input() {
-        Matcher::<Ticket>::into_query("label = ");
+        Matcher::<Task>::into_query("label = ");
     }
 }
 
@@ -2073,7 +2041,7 @@ mod event_tests {
     use crate::event::{EventKind, ToolFailureKind};
 
     fn event(kind: EventKind) -> Event {
-        Event::new("scout-1", "TICKET-1", None, kind)
+        Event::new("scout-1", "t-1", None, kind)
     }
 
     fn tool_failed(message: &str) -> EventKind {
@@ -2136,49 +2104,39 @@ mod event_tests {
 
     #[test]
     fn an_unknown_event_lists_the_ones_that_exist() {
-        let message = error("event = ticket_exploded").to_string();
-        assert!(message.contains("ticket_exploded"), "{message}");
-        assert!(message.contains("ticket_finished"), "{message}");
+        let message = error("event = task_exploded").to_string();
+        assert!(message.contains("task_exploded"), "{message}");
+        assert!(message.contains("task_finished"), "{message}");
     }
 
     #[test]
-    fn the_ticket_field_selects_the_events_of_one_ticket() {
-        let q = parse("ticket = TICKET-1");
+    fn the_task_field_selects_the_events_of_one_task() {
+        let q = parse("task = t-1");
         assert!(q.matches(&event(EventKind::TurnStarted)));
-        assert!(!q.matches(&Event::new(
-            "scout-1",
-            "TICKET-2",
-            None,
-            EventKind::TurnStarted
-        )));
+        assert!(!q.matches(&Event::new("scout-1", "t-2", None, EventKind::TurnStarted)));
     }
 
     #[test]
-    fn an_event_no_ticket_owns_reads_as_empty() {
-        // `RunStarted` and `RunFinished` carry no ticket key.
+    fn an_event_no_task_owns_reads_as_empty() {
+        // `RunStarted` and `RunFinished` carry no task key.
         let run = Event::new("", "", None, EventKind::RunStarted);
-        assert!(parse("ticket IS EMPTY").matches(&run));
+        assert!(parse("task IS EMPTY").matches(&run));
         assert!(parse("agent IS EMPTY").matches(&run));
-        assert!(!parse("ticket IS NOT EMPTY").matches(&run));
+        assert!(!parse("task IS NOT EMPTY").matches(&run));
     }
 
     #[test]
     fn the_agent_field_selects_who_emitted_it() {
         let q = parse("agent = scout-1");
         assert!(q.matches(&event(EventKind::TurnStarted)));
-        assert!(!q.matches(&Event::new(
-            "sniper-1",
-            "TICKET-1",
-            None,
-            EventKind::TurnStarted
-        )));
+        assert!(!q.matches(&Event::new("sniper-1", "t-1", None, EventKind::TurnStarted)));
     }
 
     #[test]
-    fn the_label_field_selects_the_pool_the_ticket_belongs_to() {
+    fn the_label_field_selects_the_pool_the_task_belongs_to() {
         let labelled = Event::new(
             "scout-1",
-            "TICKET-1",
+            "t-1",
             Some("scan".into()),
             EventKind::TurnStarted,
         );
@@ -2209,7 +2167,7 @@ mod event_tests {
     fn a_lone_word_naming_no_event_selects_the_label() {
         let labelled = Event::new(
             "scout-1",
-            "TICKET-1",
+            "t-1",
             Some("scan".into()),
             EventKind::TurnStarted,
         );
@@ -2219,26 +2177,21 @@ mod event_tests {
     }
 
     #[test]
-    fn a_lone_ticket_key_selects_that_ticket_s_events() {
-        let q = parse("TICKET-1");
+    fn a_lone_task_key_selects_that_task_s_events() {
+        let q = parse("t-1");
         assert!(q.matches(&event(EventKind::TurnStarted)));
-        assert!(!q.matches(&Event::new(
-            "scout-1",
-            "TICKET-2",
-            None,
-            EventKind::TurnStarted
-        )));
+        assert!(!q.matches(&Event::new("scout-1", "t-2", None, EventKind::TurnStarted)));
     }
 
     #[test]
-    fn created_takes_the_same_comparisons_tickets_take() {
+    fn created_takes_the_same_comparisons_tasks_take() {
         let q = parse("created > 200");
         assert!(q.matches(&at(300, EventKind::TurnStarted)));
         assert!(!q.matches(&at(100, EventKind::TurnStarted)));
     }
 
     #[test]
-    fn terms_combine_the_way_they_do_over_tickets() {
+    fn terms_combine_the_way_they_do_over_tasks() {
         let q = parse("agent = scout-1 AND (tool_call_failed OR turn_started)");
         assert!(q.matches(&event(EventKind::TurnStarted)));
         assert!(!q.matches(&event(EventKind::RunStarted)));
@@ -2271,7 +2224,7 @@ mod event_tests {
         let message = error("status = Finished").to_string();
         assert!(message.contains("status"), "{message}");
         assert!(message.contains("payload"), "{message}");
-        // The ticket fields are a different set, and the message says so.
+        // The task fields are a different set, and the message says so.
         assert!(!message.contains("parent"), "{message}");
     }
 

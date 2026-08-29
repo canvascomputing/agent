@@ -190,7 +190,7 @@ impl fmt::Display for RequestErrorKind {
 pub type ProviderResult<T> = std::result::Result<T, ProviderError>;
 
 // A proxy wraps another provider's error behind its own status and code, so the
-// vendor classifier gives up and the loop ends the ticket instead of compacting.
+// vendor classifier gives up and the loop ends the task instead of compacting.
 // The two banks below are read after that classifier, before the generic
 // fallback.
 
@@ -213,7 +213,7 @@ const OVERFLOW_PATTERNS: &[&str] = &[
     // LiteLLM's own prefix, for an upstream wording none of the above knows.
     "contextwindowexceedederror",
     // Broad on purpose: a false positive costs one compaction, a false negative
-    // the ticket.
+    // the task.
     "context window exceeded",
     "maximum context length",
 ];

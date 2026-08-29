@@ -19,7 +19,7 @@
 </div>
 
 
-<div align="center">agentwerk is a lightweight agentic loop optimized for small and fast LLMs: parallel agents, ticket-based coordination, built-in tools, schema-validated results, shared knowledge, and an event for every step.</div>
+<div align="center">agentwerk is a lightweight agentic loop optimized for small and fast LLMs: parallel agents, task-based coordination, built-in tools, schema-validated results, shared knowledge, and an event for every step.</div>
 
 ---
 
@@ -62,7 +62,7 @@ async fn main() {
         .tool(ReadFileTool)
         .tool(GrepTool);
 
-    agent.ticket("Find every `pub trait` defined under src/ and explain each in one sentence.");
+    agent.task("Find every `pub trait` defined under src/ and explain each in one sentence.");
 
     let work = agent.start();
     let result = work.finish_last().await.unwrap();
@@ -74,7 +74,7 @@ async fn main() {
 ## API
 
 - [Agents](#agents): Define roles, behavior and tasks.
-- [Tickets](#tickets): Coordinate complex work across agents.
+- [Tasks](#tasks): Coordinate complex work across agents.
 - [Tools](#tools): Define accessible tooling.
 - [Events](#events): Inspect requests, tool usage, failures and more.
 - [Knowledge](#knowledge): Let agents share notes for collaboration.
@@ -85,7 +85,7 @@ async fn main() {
   <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/assets/agents.gif" width="600" />
 </div>
 
-An `Agent` is the core entity of agentwerk. It has access to tools for solving tasks in the form of tickets.
+An `Agent` is the core entity of agentwerk. It has access to tools for solving tasks in the form of tasks.
 
 ```rust
 use agentwerk::tools::ReadFileTool;
@@ -94,7 +94,7 @@ let agent = Agent::from_env()
     .role("You are a release manager who prepares release notes.")
     .tool(ReadFileTool);
 
-agent.ticket("Read CHANGELOG.md and summarize the entries added since the last release.");
+agent.task("Read CHANGELOG.md and summarize the entries added since the last release.");
 
 agent.start();
 ```
@@ -108,20 +108,20 @@ Optionally, install the [`prompt` skill](skills/prompt/SKILL.md), which is optim
 |-|--------|-------------|
 | **Configure** | `role(role)` | Define who the agent is and how it should work. |
 | | `tool(tool)` / `tools(tools)` | Register a tool the agent may call. |
-| | `label(label)` | Restrict the agent to tickets carrying this label. |
+| | `label(label)` | Restrict the agent to tasks carrying this label. |
 | | `dir(dir)` | Set the directory the agent has access to. |
 | | `template(key, value)` | Inject data into prompts with template strings. |
 | | `templates(variables)` | Inject more than one entry into prompts. |
 | | `knowledge(store)` | Share a knowledge store with the agent. |
-| | `interactive()` | Let the agent wait for new instructions to keep a ticket in-progress. |
-| **Work** | `ticket(task)` | Submit a task, or a `Ticket` carrying a label or schema, and return its ticket key. |
-| | `start()` | Begin processing tickets. |
+| | `interactive()` | Let the agent wait for new instructions to keep a task in-progress. |
+| **Work** | `task(task)` | Submit a task, or a `Task` carrying a label or schema, and return its task key. |
+| | `start()` | Begin processing tasks. |
 | | `id()` | Get the unique identifier of an agent. |
 
 You can use the `{context}` variable to inject contextual information:
 
 ```markdown
-- Ticket: TICKET-7
+- Task: t-7
 - Date: 2026-05-06
 - Working directory: /Users/caro
 - Platform: darwin 25.1.0
@@ -131,18 +131,18 @@ You can use the `{context}` variable to inject contextual information:
 - Time remaining: 240s
 ```
 
-Every value is a variable of its own: `{ticket}`, `{date}`, `{dir}`, `{platform}`, `{os_version}`, `{turns_remaining}`, `{input_tokens_remaining}`, `{output_tokens_remaining}`, and `{time_remaining}`.
+Every value is a variable of its own: `{task}`, `{date}`, `{dir}`, `{platform}`, `{os_version}`, `{turns_remaining}`, `{input_tokens_remaining}`, `{output_tokens_remaining}`, and `{time_remaining}`.
 
 #### Interactive
 
-An interactive agent holds one ticket open across many turns, so a conversation spans a whole session.
+An interactive agent holds one task open across many turns, so a conversation spans a whole session.
 
 ```rust
 let agent = Agent::from_env().interactive();
-let key = agent.ticket("Where does the configuration get loaded?");
+let key = agent.task("Where does the configuration get loaded?");
 
 let chat = agent.start();
-chat.on_result(|_, ticket, result| println!("{}: {result}", ticket.key));
+chat.on_result(|_, task, result| println!("{}: {result}", task.key));
 chat.finish_all().await;
 
 chat.reply(&key, "And which environment variables override it?");
@@ -151,7 +151,7 @@ chat.finish_all().await;
 chat.set_finished(&key, "answered")?;
 ```
 
-An interactive agent never finishes its own ticket, because that would end the conversation. Every answer pauses the ticket instead: it stays `InProgress` with its agent, and each `finish_all().await` returns on the answer it waited for. `reply(key, content)` drives the next turn, and `set_finished(key, result)` ends the conversation, which is the result the hook reports. The answers in between arrive as [events](#events).
+An interactive agent never finishes its own task, because that would end the conversation. Every answer pauses the task instead: it stays `InProgress` with its agent, and each `finish_all().await` returns on the answer it waited for. `reply(key, content)` drives the next turn, and `set_finished(key, result)` ends the conversation, which is the result the hook reports. The answers in between arrive as [events](#events).
 
 See more: [`Agent`](https://docs.rs/agentwerk/latest/agentwerk/agents/agent/struct.Agent.html).
 
@@ -218,16 +218,16 @@ See [`Provider`](https://docs.rs/agentwerk/latest/agentwerk/providers/struct.Pro
 
 </details>
 
-## Tickets
+## Tasks
 
 <div align="left">
-  <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/assets/tickets.gif" width="600" />
+  <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/assets/tasks.gif" width="600" />
 </div>
 
-The `TicketQueue` is the core data structure of agentwerk for coordinating complex interactions.
+The `Queue` is the core data structure of agentwerk for coordinating complex interactions.
 
 ```rust
-use agentwerk::{Agent, Ticket, TicketQueue};
+use agentwerk::{Agent, Task, Queue};
 
 let analyst = Agent::from_env()
     .label("analysis");
@@ -235,49 +235,49 @@ let analyst = Agent::from_env()
 let writer = Agent::from_env()
     .label("report");
 
-let tickets = TicketQueue::new();
-tickets.agent(analyst).agent(writer);
+let tasks = Queue::new();
+tasks.agent(analyst).agent(writer);
 
-tickets.ticket(Ticket::labeled("analysis", "Rank all products by value."));
-tickets.ticket(Ticket::labeled("report", "Write up the ranking."));
+tasks.task(Task::labeled("analysis", "Rank all products by value."));
+tasks.task(Task::labeled("report", "Write up the ranking."));
 ```
 
 <details>
-<summary>All ticket methods</summary>
+<summary>All task methods</summary>
 
 | | Method | Description |
 |-|--------|-------------|
-| **Configure** | `agent(agent)` | Add an agent to this ticket queue. |
-| | `schemas(store)` | Enforce schemas for ticket results. |
+| **Configure** | `agent(agent)` | Add an agent to this task queue. |
+| | `schemas(store)` | Enforce schemas for task results. |
 | | `dir(dir)` | Define where a session is stored. |
 | | `get_dir()` | Get the session directory. |
-| **Submit** | `ticket(task)` | Submit a task, or a `Ticket` carrying a label or schema, and return its ticket key. |
-| **Read** | `results()` | Get the result of every finished ticket, in creation order. |
-| | `find_results(query)` | Get every result whose ticket matches an AQL query. |
-| | `find_result(query)` | Get the first result whose ticket matches an AQL query. |
-| | `tickets()` | Get every ticket in creation order. |
-| | `find_ticket(query)` | Get the first ticket matching an AQL query. |
-| | `find_tickets(query)` | Get every ticket matching an AQL query. |
-| | `get_ticket(key)` | Get one ticket by key. |
-| **Drive** | `reply(key, content)` | Add a reply to a ticket. |
-| | `edit_replies(key, editor)` | Rewrite a ticket's replies now. |
-| **Resolve** | `set_finished(key, result)` | Finish a ticket with a result. |
-| | `set_failed(key)` | Fail a ticket. |
+| **Submit** | `task(task)` | Submit a task, or a `Task` carrying a label or schema, and return its task key. |
+| **Read** | `results()` | Get the result of every finished task, in creation order. |
+| | `find_results(query)` | Get every result whose task matches an AQL query. |
+| | `find_result(query)` | Get the first result whose task matches an AQL query. |
+| | `tasks()` | Get every task in creation order. |
+| | `find_task(query)` | Get the first task matching an AQL query. |
+| | `find_tasks(query)` | Get every task matching an AQL query. |
+| | `get_task(key)` | Get one task by key. |
+| **Drive** | `reply(key, content)` | Add a reply to a task. |
+| | `edit_replies(key, editor)` | Rewrite a task's replies now. |
+| **Resolve** | `set_finished(key, result)` | Finish a task with a result. |
+| | `set_failed(key)` | Fail a task. |
 
-See [`TicketQueue`](https://docs.rs/agentwerk/latest/agentwerk/agents/tickets/struct.TicketQueue.html).
+See [`Queue`](https://docs.rs/agentwerk/latest/agentwerk/agents/tasks/struct.Queue.html).
 
 </details>
 
 ### Queries
 
-You can query tickets with AQL, the agentwerk query syntax.
+You can query tasks with AQL, the agentwerk query syntax.
 
 ```rust
-tickets.find_tickets("scan");
-tickets.find_results("TICKET-3");
-tickets.find_tickets("key IN (TICKET-3, TICKET-4)");
-tickets.find_tickets("label IN (scan, report) AND status = Finished");
-tickets.find_results("scan ORDER BY finished DESC");
+tasks.find_tasks("scan");
+tasks.find_results("t-3");
+tasks.find_tasks("key IN (t-3, t-4)");
+tasks.find_tasks("label IN (scan, report) AND status = Finished");
+tasks.find_results("scan ORDER BY finished DESC");
 ```
 
 <details>
@@ -287,22 +287,22 @@ tickets.find_results("scan ORDER BY finished DESC");
 
 | | Term | Description |
 |-|------|-------------|
-| **Match** | `label = scan` | Select the tickets carrying the label `scan`. |
-| | `label != scan` | Exclude that label, and every ticket carrying none. |
-| | `label IN (scan, report)` | Select the tickets carrying either label. |
+| **Match** | `label = scan` | Select the tasks carrying the label `scan`. |
+| | `label != scan` | Exclude that label, and every task carrying none. |
+| | `label IN (scan, report)` | Select the tasks carrying either label. |
 | | `label NOT IN (scan, report)` | Exclude both labels. |
-| | `label IS EMPTY` | Select the tickets carrying no label. |
-| | `label IS NOT EMPTY` | Select the tickets carrying one. |
+| | `label IS EMPTY` | Select the tasks carrying no label. |
+| | `label IS NOT EMPTY` | Select the tasks carrying one. |
 | **Search** | `task ~ "retry budget"` | Search the task body, ignoring case. |
 | | `task !~ draft` | Exclude the tasks the text appears in. |
-| **Compare** | `failed > -1h` | Select the tickets that failed inside the last hour. |
-| | `created >= 2026-08-24` | Select the tickets submitted on that date or later. |
+| **Compare** | `failed > -1h` | Select the tasks that failed inside the last hour. |
+| | `created >= 2026-08-24` | Select the tasks submitted on that date or later. |
 | **Combine** | `A AND B` | Require both terms; `AND` binds tighter than `OR`. |
 | | `A OR B` | Require either term. |
 | | `NOT A` | Invert a term or a group. |
 | | `(A OR B) AND C` | Group terms with parentheses. |
 | **Shorten** | `scan` | Select the label `scan`, the short form of `label = scan`. |
-| | `TICKET-3` | Select one ticket by key, the short form of `key = TICKET-3`. |
+| | `t-3` | Select one task by key, the short form of `key = t-3`. |
 | **Sort** | `ORDER BY finished DESC` | Answer with the most recently finished first. |
 | | `ORDER BY created` | Answer in creation order, which `ASC` also says. |
 
@@ -310,18 +310,18 @@ tickets.find_results("scan ORDER BY finished DESC");
 
 | | Field | Description |
 |-|-------|-------------|
-| **Match** | `key` | Match the ticket key, of the form `TICKET-N`. |
-| | `label` | Match the label the ticket carries. |
+| **Match** | `key` | Match the task key, of the form `t-N`. |
+| | `label` | Match the label the task carries. |
 | | `status` | Match `Todo`, `InProgress`, `Finished`, or `Failed`. |
-| | `agent` | Match the agent that claimed the ticket. |
-| | `parent` | Match the ticket a handover came from. |
+| | `agent` | Match the agent that claimed the task. |
+| | `parent` | Match the task a handover came from. |
 | **Search** | `task` | Search the work the agent was asked to do. |
 | | `result` | Search the result the agent produced. |
-| | `errors` | Search the failures recorded against the ticket. |
-| **Compare** | `created` | Compare or sort by when the ticket was submitted. |
-| | `started` | Compare or sort by when an agent claimed the ticket. |
-| | `finished` | Compare or sort by when the ticket reached the `Finished` status. |
-| | `failed` | Compare or sort by when the ticket reached the `Failed` status. |
+| | `errors` | Search the failures recorded against the task. |
+| **Compare** | `created` | Compare or sort by when the task was submitted. |
+| | `started` | Compare or sort by when an agent claimed the task. |
+| | `finished` | Compare or sort by when the task reached the `Finished` status. |
+| | `failed` | Compare or sort by when the task reached the `Failed` status. |
 
 #### Rules
 
@@ -330,7 +330,7 @@ tickets.find_results("scan ORDER BY finished DESC");
 - `key`, `label`, `status`, `agent`, and `parent` take `=`, `!=`, `IN`, and `NOT IN`, which compare exactly.
 - `task`, `result`, and `errors` take `~` and `!~`, which ignore case.
 - `created`, `started`, `finished`, and `failed` take `>`, `>=`, `<`, and `<=`.
-- `IS EMPTY` and `IS NOT EMPTY` read every field but `key`, `status`, `task`, and `created`, so `finished IS EMPTY` selects the tickets still open.
+- `IS EMPTY` and `IS NOT EMPTY` read every field but `key`, `status`, `task`, and `created`, so `finished IS EMPTY` selects the tasks still open.
 
 **Times**
 
@@ -340,28 +340,28 @@ tickets.find_results("scan ORDER BY finished DESC");
 **Order**
 
 - `ORDER BY` names one field and closes the query. Every field sorts, `key` by its number and `status` along the lifecycle.
-- Without `ORDER BY` tickets arrive in creation order.
+- Without `ORDER BY` tasks arrive in creation order.
 
 #### Examples
 
 ```rust
-tickets.find_results("report AND result ~ risk");           // reports that mention risk
-tickets.find_tickets("errors ~ tool_call_failed");          // saw a tool call fail
-tickets.find_tickets("status = Todo AND agent IS EMPTY");   // waiting, never claimed
-tickets.find_tickets("failed > -1h ORDER BY failed DESC");  // the last hour's failures
-tickets.find_tickets(|t: &Ticket| t.replies.len() > 4);     // a closure, for what no field carries
+tasks.find_results("report AND result ~ risk");           // reports that mention risk
+tasks.find_tasks("errors ~ tool_call_failed");          // saw a tool call fail
+tasks.find_tasks("status = Todo AND agent IS EMPTY");   // waiting, never claimed
+tasks.find_tasks("failed > -1h ORDER BY failed DESC");  // the last hour's failures
+tasks.find_tasks(|t: &Task| t.replies.len() > 4);     // a closure, for what no field carries
 ```
 
 </details>
 
 ### Execution
 
-The ticket queue schedules the work of your agents and returns their results.
+The task queue schedules the work of your agents and returns their results.
 
 ```rust
-tickets.start();
+tasks.start();
 
-if let Some(answer) = tickets.finish_last().await {
+if let Some(answer) = tasks.finish_last().await {
     println!("{answer}");
 }
 ```
@@ -371,42 +371,42 @@ if let Some(answer) = tickets.finish_last().await {
 
 | | Method | Description |
 |-|--------|-------------|
-| **Run** | `start()` | Begin processing tickets. |
-| **Wait** | `finish(query).await` | Wait for the matching tickets to be done and get their results. |
-| | `finish_all().await` | Wait for every ticket to be finished and get every result. |
-| | `finish_last().await` | Wait for every ticket to be finished and get the last result. |
+| **Run** | `start()` | Begin processing tasks. |
+| **Wait** | `finish(query).await` | Wait for the matching tasks to be done and get their results. |
+| | `finish_all().await` | Wait for every task to be finished and get every result. |
+| | `finish_last().await` | Wait for every task to be finished and get the last result. |
 | | `finish_reason()` | Get why the last run ended. |
-| **Stop** | `cancel(query)` | Stop work on the matching tickets. |
-| | `cancel_all()` | Stop work on every ticket. |
-| | `is_cancelled(ticket)` | Check whether a ticket has been cancelled. |
+| **Stop** | `cancel(query)` | Stop work on the matching tasks. |
+| | `cancel_all()` | Stop work on every task. |
+| | `is_cancelled(task)` | Check whether a task has been cancelled. |
 
-Ticket members:
+Task members:
 
 | | Member | Description |
 |-|--------|-------------|
-| **Identity** | `key` | Ticket key, of the form `TICKET-N`. |
+| **Identity** | `key` | Task key, of the form `t-N`. |
 | | `task` | The work the agent is asked to do. |
-| | `label` | Label carried by the ticket. |
-| | `parent` | Identifier of the parent ticket if a handover was performed. |
-| | `reporter` | Identifier of the agent that created the ticket. |
-| | `assignee` | Identifier of the agent that claimed the ticket. |
-| **Outcome** | `status` | The ticket lifecycle status. |
+| | `label` | Label carried by the task. |
+| | `parent` | Identifier of the parent task if a handover was performed. |
+| | `reporter` | Identifier of the agent that created the task. |
+| | `assignee` | Identifier of the agent that claimed the task. |
+| **Outcome** | `status` | The task lifecycle status. |
 | | `result` | The result the agent produced. |
-| | `errors` | The failures recorded against the ticket, as events. |
+| | `errors` | The failures recorded against the task, as events. |
 | | `replies` | Messages exchanged with the model. |
 | | `schema` | Optional schema the result must satisfy. |
 | **Timestamps** | `created_at` | Creation time, in milliseconds. |
 | | `started_at` | Claim time, in milliseconds. |
 | | `finished_at` | Finish time, in milliseconds. |
 | | `failed_at` | Failure time, in milliseconds. |
-| **Checks** | `has_label(label)` | Check whether the ticket carries a label. |
-| | `is_todo()` | Check whether the ticket is waiting to be claimed. |
-| | `is_in_progress()` | Check whether an agent is working on the ticket. |
-| | `is_finished()` | Check whether the ticket finished. |
-| | `is_failed()` | Check whether the ticket failed. |
-| | `is_pending()` | Check whether the ticket is still todo or in progress. |
+| **Checks** | `has_label(label)` | Check whether the task carries a label. |
+| | `is_todo()` | Check whether the task is waiting to be claimed. |
+| | `is_in_progress()` | Check whether an agent is working on the task. |
+| | `is_finished()` | Check whether the task finished. |
+| | `is_failed()` | Check whether the task failed. |
+| | `is_pending()` | Check whether the task is still todo or in progress. |
 
-See [`Ticket`](https://docs.rs/agentwerk/latest/agentwerk/agents/tickets/struct.Ticket.html).
+See [`Task`](https://docs.rs/agentwerk/latest/agentwerk/agents/tasks/struct.Task.html).
 
 </details>
 
@@ -414,16 +414,16 @@ See [`Ticket`](https://docs.rs/agentwerk/latest/agentwerk/agents/tickets/struct.
 
 Agents can share the results of their work in the following ways:
 
-1. **Create tickets**: the `finish` tool's `handover` option opens a child ticket carrying the result.
-2. **Read tickets**: the `tickets` tool allows reading any finished ticket's result, by key.
-3. **Read result file**: the `read_file` tool allows reading a ticket's `result.json` in the session directory.
+1. **Create tasks**: the `finish` tool's `handover` option opens a child task carrying the result.
+2. **Read tasks**: the `tasks` tool allows reading any finished task's result, by key.
+3. **Read result file**: the `read_file` tool allows reading a task's `result.json` in the session directory.
 4. **Share knowledge**: the `knowledge` tool allows sharing knowledge with other agents.
-5. **Register hooks**: the `on_result` hook allows creating follow-up tickets.
+5. **Register hooks**: the `on_result` hook allows creating follow-up tasks.
 
 <details>
 <summary>All ways agents pass data</summary>
 
-#### 1. Create tickets
+#### 1. Create tasks
 
 Name the receiving label in the role or in the task, and the agent hands over as it finishes:
 
@@ -437,33 +437,33 @@ let writer = Agent::from_env()
     .role("Write the board report from the ranking you were handed.");
 ```
 
-The child ticket is filed under `report` and names the analysis ticket as its `parent`. Its body is the result that was handed over, unless the agent passes a task of its own, which may carry `{parent_key}`, `{parent_result}`, and `{parent_result_path}`. Either way the body ends with the parent's key and the path of its result file.
+The child task is filed under `report` and names the analysis task as its `parent`. Its body is the result that was handed over, unless the agent passes a task of its own, which may carry `{parent_key}`, `{parent_result}`, and `{parent_result_path}`. Either way the body ends with the parent's key and the path of its result file.
 
-#### 2. Read tickets
+#### 2. Read tasks
 
-Give the writer `TicketsTool`, and it reads what any finished ticket produced, by key:
+Give the writer `TasksTool`, and it reads what any finished task produced, by key:
 
 ```rust
 let writer = Agent::from_env()
     .label("report")
-    .tool(TicketsTool);
+    .tool(TasksTool);
 
-writer.ticket("Read the result of TICKET-1, then write the board report.");
+writer.task("Read the result of t-1, then write the board report.");
 ```
 
 #### 3. Read result file
 
-Give the writer `ReadFileTool` instead, and it opens the result file named at the end of its ticket:
+Give the writer `ReadFileTool` instead, and it opens the result file named at the end of its task:
 
 ```rust
 let writer = Agent::from_env()
     .label("report")
     .tool(ReadFileTool);
 
-writer.ticket("Read .agentwerk/tickets/TICKET-1/result.json, then write the board report.");
+writer.task("Read .agentwerk/tasks/t-1/result.json, then write the board report.");
 ```
 
-Results live in the session directory, one `result.json` per ticket.
+Results live in the session directory, one `result.json` per task.
 
 #### 4. Share knowledge
 
@@ -475,17 +475,17 @@ let store = Knowledge::load(".agentwerk")?;
 let analyst = Agent::from_env().label("analysis").knowledge(&store);
 let writer = Agent::from_env().label("report").knowledge(&store);
 
-analyst.ticket("Rank the products by value, then save the ranking to your knowledge.");
+analyst.task("Rank the products by value, then save the ranking to your knowledge.");
 ```
 
 #### 5. Register hooks
 
-Use hooks to create new tickets when certain results arrived:
+Use hooks to create new tasks when certain results arrived:
 
 ```rust
-tickets.on_result(|queue, done, result| {
+tasks.on_result(|queue, done, result| {
     if done.has_label("research") {
-        queue.ticket(Ticket::labeled("report", result.clone()));
+        queue.task(Task::labeled("report", result.clone()));
     }
 });
 ```
@@ -494,7 +494,7 @@ tickets.on_result(|queue, done, result| {
 
 ### Schemas
 
-A `Schema` constrains the result an agent produces for a ticket. A violation triggers a retry until `max_schema_retries` is exhausted.
+A `Schema` constrains the result an agent produces for a task. A violation triggers a retry until `max_schema_retries` is exhausted.
 
 ```rust
 use agentwerk::schemas::Schema;
@@ -505,7 +505,7 @@ let schema = Schema::new(json!({
     "required": ["title"]
 }))?;
 
-tickets.ticket(Ticket::new("Write a report.").schema(schema));
+tasks.task(Task::new("Write a report.").schema(schema));
 ```
 
 <details>
@@ -519,9 +519,9 @@ tickets.ticket(Ticket::new("Write a report.").schema(schema));
 | **SchemaStore** | `SchemaStore::new()` | Create a store of schemas bound to labels. |
 | | `label(label, document)` | Bind a schema to a label. |
 | | `get(label)` | Read back the schema bound to a label. |
-| | `tickets.schemas(store)` | Enforce schemas for ticket results. |
+| | `tasks.schemas(store)` | Enforce schemas for task results. |
 
-A `SchemaStore` enforces schemas for all tickets with a certain label. Registering schemas centrally spares agents from passing complex schema structures during ticket creation (see `TicketsTool`) and handovers (see `FinishTool`):
+A `SchemaStore` enforces schemas for all tasks with a certain label. Registering schemas centrally spares agents from passing complex schema structures during task creation (see `TasksTool`) and handovers (see `FinishTool`):
 
 ```rust
 use agentwerk::SchemaStore;
@@ -533,7 +533,7 @@ schemas.label("report", json!({
     "required": ["title"]
 }))?;
 
-tickets.schemas(&schemas);
+tasks.schemas(&schemas);
 ```
 
 See [`Schema`](https://docs.rs/agentwerk/latest/agentwerk/schemas/struct.Schema.html) and [`SchemaStore`](https://docs.rs/agentwerk/latest/agentwerk/schemas/struct.SchemaStore.html).
@@ -545,7 +545,7 @@ See [`Schema`](https://docs.rs/agentwerk/latest/agentwerk/schemas/struct.Schema.
 A `Policy` limits the turns, tokens, and time a run may spend, and allows configuring retries and compaction.
 
 ```rust
-tickets.policy(Policy {
+tasks.policy(Policy {
     max_turns: Some(40),
     max_time: Some(std::time::Duration::from_secs(300)),
     ..Default::default()
@@ -573,10 +573,10 @@ tickets.policy(Policy {
 
 ### Compaction
 
-Compaction summarizes a ticket's older messages once they no longer fit the model's context window.
+Compaction summarizes a task's older messages once they no longer fit the model's context window.
 
 ```rust
-tickets.policy(Policy {
+tasks.policy(Policy {
     compaction_threshold: Some(0.7),
     ..Default::default()
 });
@@ -590,14 +590,14 @@ tickets.policy(Policy {
 Compaction also runs after the LLM provider reports the window exceeded. `CompactionStarted`, `CompactionProgress`, `CompactionFinished`, and `CompactionFailed` report each step, see [Events](#events).
 
 ```rust
-tickets.on_event(|_, event| {
+tasks.on_event(|_, event| {
     if let EventKind::CompactionFinished { reason } = &event.kind {
-        eprintln!("[{}] compacted {reason}", event.ticket_key);
+        eprintln!("[{}] compacted {reason}", event.task_key);
     }
 });
 ```
 
-Each of the compaction events carries the reason it ran: `Proactive` ahead of the failure, `Reactive` after it. Replies that still exceed the window after a reactive compaction fail the ticket.
+Each of the compaction events carries the reason it ran: `Proactive` ahead of the failure, `Reactive` after it. Replies that still exceed the window after a reactive compaction fail the task.
 
 </details>
 
@@ -635,12 +635,12 @@ See [prompts/directives](https://github.com/canvascomputing/agentwerk/tree/main/
   <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/assets/sessions.gif" width="600" />
 </div>
 
-A `TicketQueue` writes every ticket, reply, and event to its working directory (default `./.agentwerk`). You can continue a session from that directory.
+A `Queue` writes every task, reply, and event to its working directory (default `./.agentwerk`). You can continue a session from that directory.
 
 ```rust
-let tickets = TicketQueue::load(".agentwerk")?;
-tickets.agent(my_agent);
-tickets.start();
+let tasks = Queue::load(".agentwerk")?;
+tasks.agent(my_agent);
+tasks.start();
 ```
 
 <details>
@@ -649,9 +649,9 @@ tickets.start();
 ```
 .agentwerk/
 ├── events.jsonl                          every event (one per line)
-├── tickets/
-│   └── TICKET-1/
-│       ├── ticket.json                   the ticket without its messages (key, status, label, timestamps)
+├── tasks/
+│   └── t-1/
+│       ├── task.json                   the task without its messages (key, status, label, timestamps)
 │       ├── result.json                   the result the agent produced
 │       ├── replies.jsonl                 every message exchanged with the model, one per line
 │       └── outputs/<tool_use_id>.txt     full tool outputs spilled out of the messages
@@ -688,13 +688,13 @@ let agent = Agent::new()
 | | `ListDirectoryTool` | List files and directories. |
 | **Command** | `CommandTool` | Give access to specific commands. |
 | **Web** | `FetchUrlTool` | Fetch a URL and read its body. |
-| **Tickets** | `FinishTool` | Write the result for the current ticket and mark it finished. |
-| | `TicketsTool` | Read the ticket queue and create or edit tickets. |
+| **Tasks** | `FinishTool` | Write the result for the current task and mark it finished. |
+| | `TasksTool` | Read the task queue and create or edit tasks. |
 | **Knowledge** | `KnowledgeTool` | Write, read, remove, or list pages in a knowledge store. |
 
 #### `FinishTool` and `KnowledgeTool`
 
-`FinishTool` and `KnowledgeTool` are special tools, registered automatically on every agent. They are used for interacting with the `TicketQueue` or knowledge base. An [interactive agent](#interactive) gets no `FinishTool` by default, since finishing its ticket would end the conversation.
+`FinishTool` and `KnowledgeTool` are special tools, registered automatically on every agent. They are used for interacting with the `Queue` or knowledge base. An [interactive agent](#interactive) gets no `FinishTool` by default, since finishing its task would end the conversation.
 
 #### CommandTool
 
@@ -767,9 +767,9 @@ Events allow you to inspect all activities of your agents.
 ```rust
 use agentwerk::event::EventKind;
 
-tickets.on_event(|_, event| {
-    if let EventKind::TicketFinished = &event.kind {
-        eprintln!("[{}] done {} {:?}", event.agent_id, event.ticket_key, event.label);
+tasks.on_event(|_, event| {
+    if let EventKind::TaskFinished = &event.kind {
+        eprintln!("[{}] done {} {:?}", event.agent_id, event.task_key, event.label);
     }
 });
 ```
@@ -782,10 +782,10 @@ tickets.on_event(|_, event| {
 | **Run** | `RunStarted` | Execution began. |
 | | `RunFinished` | Execution ended, carrying the reason. |
 | | `PolicyViolated` | A limit was breached and execution stopped. |
-| **Ticket** | `TicketStarted` | An agent claimed a ticket. |
-| | `TicketFinished` | A ticket finished successfully. |
-| | `TicketFailed` | A ticket failed. |
-| | `TurnStarted` | The agent began another turn on its ticket. |
+| **Task** | `TaskStarted` | An agent claimed a task. |
+| | `TaskFinished` | A task finished successfully. |
+| | `TaskFailed` | A task failed. |
+| | `TurnStarted` | The agent began another turn on its task. |
 | | `SchemaRetried` | A tool call or result the model created was invalid. |
 | **LLM provider** | `RequestStarted` | A request went out to the model. |
 | | `RequestFinished` | A request finished and reported its token usage. |
@@ -796,7 +796,7 @@ tickets.on_event(|_, event| {
 | **Tool** | `ToolCallDeclined` | A tool call proposed by the model was declined. |
 | | `ToolCallStarted` | A tool invocation began. |
 | | `ToolCallFinished` | A tool invocation finished. |
-| | `ToolCallFailed` | A tool invocation failed but the ticket continues. |
+| | `ToolCallFailed` | A tool invocation failed but the task continues. |
 | **File** | `FileOpenFinished` | A tool opened a file. |
 | | `FileOpenFailed` | A tool could not open a file. |
 | **Knowledge** | `KnowledgeWritten` | A page was written. |
@@ -809,7 +809,7 @@ tickets.on_event(|_, event| {
 | | `CompactionFinished` | Compaction replaced the older messages. |
 | | `CompactionFailed` | Compaction could not finish. |
 
-Every event is written to the session log. You read events from the ticket queue, or from the session directory in `.agentwerk/events.jsonl`:
+Every event is written to the session log. You read events from the task queue, or from the session directory in `.agentwerk/events.jsonl`:
 
 | Method | Description |
 |--------|-------------|
@@ -821,26 +821,26 @@ Every event is written to the session log. You read events from the ticket queue
 You can query events with AQL syntax or closures.
 
 ```rust
-tickets.find_events("tool_call_failed");
-tickets.find_events("event = request_finished AND agent = research-1");
-tickets.find_events("ticket = TICKET-3 ORDER BY created DESC");
-tickets.find_events("payload ~ timeout AND created > -1h");
+tasks.find_events("tool_call_failed");
+tasks.find_events("event = request_finished AND agent = research-1");
+tasks.find_events("task = t-3 ORDER BY created DESC");
+tasks.find_events("payload ~ timeout AND created > -1h");
 ```
 
 | | Field | Description |
 |-|-------|-------------|
 | **Match** | `event` | Match the kind, as `run_started`, `tool_call_failed`, and the rest are spelled. |
 | | `agent` | Match the agent that emitted the event. |
-| | `ticket` | Match the ticket the event concerns, empty on `RunStarted` and `RunFinished`. |
-| | `label` | Match the label that ticket carries. |
+| | `task` | Match the task the event concerns, empty on `RunStarted` and `RunFinished`. |
+| | `label` | Match the label that task carries. |
 | **Search** | `payload` | Search what the kind carries, its name included. |
 | **Compare** | `created` | Compare or sort by when the event happened. |
 
-- An event query takes the same operators, `AND` / `OR` / `NOT`, and `ORDER BY` a [ticket query](#queries) does.
-- `IS EMPTY` and `IS NOT EMPTY` read `agent`, `ticket`, and `label`.
-- A lone word is the short form of `event = <word>` when it names an event, and of `label = <word>` when it does not. A lone `TICKET-N` is the short form of `ticket = TICKET-N`.
+- An event query takes the same operators, `AND` / `OR` / `NOT`, and `ORDER BY` a [task query](#queries) does.
+- `IS EMPTY` and `IS NOT EMPTY` read `agent`, `task`, and `label`.
+- A lone word is the short form of `event = <word>` when it names an event, and of `label = <word>` when it does not. A lone `t-N` is the short form of `task = t-N`.
 
-See [`EventKind`](https://docs.rs/agentwerk/latest/agentwerk/event/enum.EventKind.html) and [`TicketQueue`](https://docs.rs/agentwerk/latest/agentwerk/agents/tickets/struct.TicketQueue.html).
+See [`EventKind`](https://docs.rs/agentwerk/latest/agentwerk/event/enum.EventKind.html) and [`Queue`](https://docs.rs/agentwerk/latest/agentwerk/agents/tasks/struct.Queue.html).
 
 </details>
 
@@ -849,9 +849,9 @@ See [`EventKind`](https://docs.rs/agentwerk/latest/agentwerk/event/enum.EventKin
 Hooks allow you to react to events.
 
 ```rust
-tickets.on_failure(|queue, _, failed| {
+tasks.on_failure(|queue, _, failed| {
     if failed.has_label("scan") {
-        queue.ticket(Ticket::labeled("triage", failed.task.clone()));
+        queue.task(Task::labeled("triage", failed.task.clone()));
     }
 });
 ```
@@ -862,21 +862,21 @@ tickets.on_failure(|queue, _, failed| {
 | | Method | Description |
 |-|--------|-------------|
 | **Observe** | `on_event(handler)` | Read every event as it is emitted. |
-| | `on_result(handler)` | Read every finished ticket together with its result. |
-| | `on_failure(handler)` | Read every failure together with the ticket it happened in. |
-| | `on_ticket(handler)` | Read a ticket as it starts, finishes, or fails. |
+| | `on_result(handler)` | Read every finished task together with its result. |
+| | `on_failure(handler)` | Read every failure together with the task it happened in. |
+| | `on_task(handler)` | Read a task as it starts, finishes, or fails. |
 | **Await** | `on_event_async(handler)` | Read every event in an async handler. |
-| | `on_result_async(handler)` | Read every finished ticket with its result, in an async handler. |
-| | `on_failure_async(handler)` | Read every failure with its ticket, in an async handler. |
-| | `on_ticket_async(handler)` | Read a ticket lifecycle transition in an async handler. |
+| | `on_result_async(handler)` | Read every finished task with its result, in an async handler. |
+| | `on_failure_async(handler)` | Read every failure with its task, in an async handler. |
+| | `on_task_async(handler)` | Read a task lifecycle transition in an async handler. |
 
-Save replies of every finished ticket as a training example:
+Save replies of every finished task as a training example:
 
 ```rust
-tickets.on_ticket(|queue, event, ticket| {
-    if matches!(event.kind, EventKind::TicketFinished) {
+tasks.on_task(|queue, event, task| {
+    if matches!(event.kind, EventKind::TaskFinished) {
         let model = queue.model_for_agent(&event.agent_id);
-        let _ = Trajectory::from_ticket(&event.agent_id, model.as_deref(), ticket)
+        let _ = Trajectory::from_task(&event.agent_id, model.as_deref(), task)
             .save("datasets");
     }
 });
@@ -888,15 +888,15 @@ tickets.on_ticket(|queue, event, ticket| {
 
 ```rust
 let findings = Arc::clone(&database);
-tickets.on_result_async(move |_, ticket, result| {
+tasks.on_result_async(move |_, task, result| {
     let findings = Arc::clone(&findings);
     async move {
-        let _ = findings.insert(&ticket.key, &result).await;
+        let _ = findings.insert(&task.key, &result).await;
     }
 });
 ```
 
-See [`TicketQueue`](https://docs.rs/agentwerk/latest/agentwerk/agents/tickets/struct.TicketQueue.html).
+See [`Queue`](https://docs.rs/agentwerk/latest/agentwerk/agents/tasks/struct.Queue.html).
 
 </details>
 

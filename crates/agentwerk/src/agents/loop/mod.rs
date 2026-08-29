@@ -1,6 +1,6 @@
 //! Multi-agent loop driver. One tokio task per registered agent,
-//! reading the shared `TicketQueue` through the upgraded
-//! `Weak<TicketQueue>` set when the agent was added.
+//! reading the shared `Queue` through the upgraded
+//! `Weak<Queue>` set when the agent was added.
 
 use std::time::Duration;
 
@@ -17,11 +17,11 @@ pub(super) use self::main::run_main_loop;
 
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
 
-/// What the agent does next with its claimed ticket. A step gives back `None`
-/// when there is nothing more to do, whatever the ticket's status, and the
+/// What the agent does next with its claimed task. A step gives back `None`
+/// when there is nothing more to do, whatever the task's status, and the
 /// agent returns to claiming.
 enum Step {
-    /// Re-read the ticket: it may have been resolved or cancelled since.
+    /// Re-read the task: it may have been resolved or cancelled since.
     Evaluate,
     Compact(CompactReason),
     Request,
@@ -34,16 +34,16 @@ pub(crate) mod test_util;
 #[cfg(test)]
 mod tests {
     use crate::agents::r#loop::test_util::*;
-    use crate::agents::tickets::{Author, ReplyContent};
+    use crate::agents::tasks::{Author, ReplyContent};
 
     // Reply transcript
 
     #[tokio::test]
     async fn replies_capture_full_transcript() {
         let provider = MockProvider::with_results(vec![Ok(write_result_response("ok"))]);
-        let (_, _, ticket) = run_one(provider, 3, 10, None).await;
+        let (_, _, task) = run_one(provider, 3, 10, None).await;
 
-        let replies = &ticket.replies;
+        let replies = &task.replies;
         assert_eq!(replies.len(), 4, "got {replies:?}");
 
         assert_eq!(replies[0].author, Author::System);
@@ -81,7 +81,7 @@ mod tests {
     #[tokio::test]
     async fn replies_after_compaction_keep_only_system_and_summary() {
         let provider = MockProvider::with_results(vec![
-            Ok(tool_call_response("tickets")),
+            Ok(tool_call_response("tasks")),
             Err(crate::providers::ProviderError::ContextWindowExceeded {
                 message: "exceeded".into(),
             }),
@@ -91,9 +91,9 @@ mod tests {
             )),
             Ok(write_result_response("ok")),
         ]);
-        let (_, _, ticket) = run_one(provider, 0, 10, Some(string_schema())).await;
+        let (_, _, task) = run_one(provider, 0, 10, Some(string_schema())).await;
 
-        let replies = &ticket.replies;
+        let replies = &task.replies;
 
         assert_eq!(replies[0].author, Author::System);
 

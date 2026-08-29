@@ -8,7 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use super::common;
 
 use agentwerk::tools::WriteFileTool;
-use agentwerk::{Agent, Policy, TicketQueue};
+use agentwerk::{Agent, Policy, Queue};
 
 #[tokio::test]
 async fn creates_file_with_token() -> std::result::Result<(), Box<dyn std::error::Error>> {
@@ -18,9 +18,9 @@ async fn creates_file_with_token() -> std::result::Result<(), Box<dyn std::error
     let dir = crate::test_util::TempDir::new()?;
     let root = dir.path();
 
-    let tickets = TicketQueue::new();
+    let tasks = Queue::new();
 
-    tickets.policy(Policy {
+    tasks.policy(Policy {
         max_turns: Some(10),
         ..Default::default()
     });
@@ -33,21 +33,21 @@ async fn creates_file_with_token() -> std::result::Result<(), Box<dyn std::error
              Step 1: call `write_file` to create exactly the file the user \
              asks for, with exactly the content they specify (and nothing else). \
              Step 2: immediately call `finish` to settle the \
-             ticket. Do not write any prose: your only output must be tool \
+             task. Do not write any prose: your only output must be tool \
              calls.",
         )
         .tool(WriteFileTool);
-    tickets.agent(agent);
-    tickets.ticket(format!(
+    tasks.agent(agent);
+    tasks.task(format!(
         "Create a file named `report.md` in the working directory containing \
          exactly the line `token={token}`."
     ));
 
-    tickets.finish_all().await;
-    common::print_result(&tickets);
+    tasks.finish_all().await;
+    common::print_result(&tasks);
 
     assert!(
-        tickets.find_events("tool_call_started").len() >= 1,
+        tasks.find_events("tool_call_started").len() >= 1,
         "agent must call at least one tool"
     );
 

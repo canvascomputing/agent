@@ -1,10 +1,10 @@
-//! Context-window compaction: rewrite a ticket's replies before the next
+//! Context-window compaction: rewrite a task's replies before the next
 //! request would overflow, by summarizing them into one message.
 
 use std::sync::Arc;
 
 use crate::agents::policy::Policy;
-use crate::agents::tickets::{Author, Reply};
+use crate::agents::tasks::{Author, Reply};
 use crate::prompts::compaction_directive;
 use crate::prompts::directives::DirectiveStore;
 use crate::providers::types::StreamEvent;
@@ -580,7 +580,7 @@ mod tests {
         )
     }
 
-    /// The replies a ticket carries after one turn: the system prompt, the
+    /// The replies a task carries after one turn: the system prompt, the
     /// task, and an exchange with the model.
     fn worked_replies() -> Vec<Reply> {
         vec![
@@ -608,7 +608,7 @@ mod tests {
 
     #[tokio::test]
     async fn summarize_makes_no_request_for_replies_the_model_would_not_see() {
-        // A short ticket hands over a slice that maps to no messages, which an
+        // A short task hands over a slice that maps to no messages, which an
         // LLM provider would reject.
         for replies in [Vec::new(), vec![Reply::system_text("system prompt")]] {
             let provider = ScriptedProvider::new(Vec::new());
@@ -637,7 +637,7 @@ mod tests {
         assert_eq!(kept[0].author, Author::System);
         assert_eq!(kept[1].author, Author::User);
         assert!(
-            matches!(&kept[1].content[..], [crate::agents::tickets::ReplyContent::Text { text }] if text == "SUMMARY"),
+            matches!(&kept[1].content[..], [crate::agents::tasks::ReplyContent::Text { text }] if text == "SUMMARY"),
             "the summary must replace everything but the system reply, got {:?}",
             kept[1].content,
         );

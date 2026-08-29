@@ -1,5 +1,5 @@
 //! Lets an agent write, read, remove, and list the knowledge it shares across
-//! tickets and with other agents.
+//! tasks and with other agents.
 
 use std::sync::Arc;
 
@@ -385,15 +385,15 @@ mod tests {
 
     #[tokio::test]
     async fn self_reports_each_action_as_an_event() {
-        use crate::agents::tickets::TicketQueue;
+        use crate::agents::tasks::Queue;
         use crate::event::EventKind;
         use std::sync::Mutex;
 
         let (store, _dir) = fresh_store();
-        let tickets = TicketQueue::new();
+        let tasks = Queue::new();
         let reported = Arc::new(Mutex::new(Vec::new()));
         let seen = Arc::clone(&reported);
-        tickets.on_event(move |_, event| match &event.kind {
+        tasks.on_event(move |_, event| match &event.kind {
             EventKind::KnowledgeFailed { action, reason } => seen.lock().unwrap().push(format!(
                 "{}:{action}:{}",
                 event.kind.name(),
@@ -404,8 +404,7 @@ mod tests {
             }
             _ => {}
         });
-        let ctx =
-            ToolContext::new(std::env::current_dir().unwrap()).ticket_queue(Arc::clone(&tickets));
+        let ctx = ToolContext::new(std::env::current_dir().unwrap()).queue(Arc::clone(&tasks));
 
         run(
             &store,

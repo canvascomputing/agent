@@ -1,12 +1,12 @@
 //! Deep Research with handover chain.
 //!
-//! One `TicketQueue` holds the whole pipeline. The driver enqueues a
-//! single starter ticket pinned to `researcher_1`. Each researcher
-//! calls `brave_search`, reads its parent ticket via
-//! `tickets` to build on prior findings, and hands off to
+//! One `Queue` holds the whole pipeline. The driver enqueues a
+//! single starter task pinned to `researcher_1`. Each researcher
+//! calls `brave_search`, reads its parent task via
+//! `tasks` to build on prior findings, and hands off to
 //! the next agent via `finish` with a `handover`. A handover carries no
 //! schema, so the report schema is bound to the `report` label and the
-//! report writer's ticket takes it when that agent claims it. The report
+//! report writer's task takes it when that agent claims it. The report
 //! writer finishes the chain with a plain `finish`.
 //!
 //! Usage: deep-research <QUESTION>
@@ -20,8 +20,8 @@ use std::sync::Arc;
 use agentwerk::event::{Event, EventKind, EventName};
 use agentwerk::providers::{Model, Provider};
 use agentwerk::schemas::{Schema, SchemaStore};
-use agentwerk::tools::{FetchUrlTool, TicketsTool, Tool, ToolResult};
-use agentwerk::{Agent, FinishReason, Ticket, TicketQueue};
+use agentwerk::tools::{FetchUrlTool, TasksTool, Tool, ToolResult};
+use agentwerk::{Agent, FinishReason, Queue, Task};
 
 const RESEARCHER_1_ROLE: &str = include_str!("prompts/researcher_1.role.md");
 const RESEARCHER_2_ROLE: &str = include_str!("prompts/researcher_2.role.md");
@@ -40,20 +40,20 @@ async fn main() {
 
     let workdir = prepare_workdir();
 
-    let tickets = TicketQueue::new();
-    tickets.dir(workdir.clone());
+    let tasks = Queue::new();
+    tasks.dir(workdir.clone());
     let schemas = SchemaStore::new();
     schemas
         .label("report", final_report_schema_value())
         .expect("report schema is well-formed");
-    tickets.schemas(&schemas);
-    let on_ctrl_c = Arc::clone(&tickets);
+    tasks.schemas(&schemas);
+    let on_ctrl_c = Arc::clone(&tasks);
     tokio::spawn(async move {
         if tokio::signal::ctrl_c().await.is_ok() {
             on_ctrl_c.cancel_all();
         }
     });
-    tickets.on_event(move |_, e| event_handler(e));
+    tasks.on_event(move |_, e| event_handler(e));
 
     let researcher_1 = Agent::new()
         .provider(provider.clone())
@@ -62,7 +62,7 @@ async fn main() {
         .label("researcher_1")
         .tool(brave_search_tool(brave_key.clone()))
         .tool(FetchUrlTool::new().impersonate())
-        .tool(TicketsTool);
+        .tool(TasksTool);
 
     let researcher_2 = Agent::new()
         .provider(provider.clone())
@@ -71,18 +71,18 @@ async fn main() {
         .label("researcher_2")
         .tool(brave_search_tool(brave_key.clone()))
         .tool(FetchUrlTool::new().impersonate())
-        .tool(TicketsTool);
+        .tool(TasksTool);
 
     let report_writer = Agent::new()
         .provider(provider.clone())
         .model(Model::from_env().expect("model name required"))
         .role(REPORT_WRITER_ROLE)
         .label("report")
-        .tool(TicketsTool);
+        .tool(TasksTool);
 
-    tickets.agent(researcher_1);
-    tickets.agent(researcher_2);
-    tickets.agent(report_writer);
+    tasks.agent(researcher_1);
+    tasks.agent(researcher_2);
+    tasks.agent(report_writer);
 
     let starter = format!(
         "Question: {question}\n\nKick off the research chain. You are researcher_1; pick \
@@ -91,7 +91,7 @@ async fn main() {
     );
     // The schema-bound starter forces researcher_1 to produce a real
     // result: a text-only reply leaves none attached, and the loop's
-    // terminal-reply path then transitions the ticket to `Failed`
+    // terminal-reply path then transitions the task to `Failed`
     // rather than silently `Done`. The role prompt is what keeps the
     // chain going by requiring a `handover`.
     let starter_schema = Schema::new(serde_json::json!({
@@ -99,18 +99,18 @@ async fn main() {
         "minLength": 100
     }))
     .expect("starter schema is well-formed");
-    tickets.ticket(
-        Ticket::new(starter)
+    tasks.task(
+        Task::new(starter)
             .schema(starter_schema)
             .label("researcher_1"),
     );
 
-    tickets.finish_all().await;
-    let outcome = classify_outcome(&tickets);
+    tasks.finish_all().await;
+    let outcome = classify_outcome(&tasks);
 
-    print_chain_summary(&tickets);
-    print_stats(&tickets);
-    print_research_outcome(&tickets, &outcome);
+    print_chain_summary(&tasks);
+    print_stats(&tasks);
+    print_research_outcome(&tasks, &outcome);
 
     match outcome {
         Outcome::Report(_) => {}
@@ -119,7 +119,7 @@ async fn main() {
     }
 }
 
-fn print_research_outcome(tickets: &TicketQueue, outcome: &Outcome) {
+fn print_research_outcome(tasks: &Queue, outcome: &Outcome) {
     eprintln!("\n══════════════════════════════════════════════════════════");
     match outcome {
         Outcome::Report(report) => {
@@ -137,8 +137,8 @@ fn print_research_outcome(tickets: &TicketQueue, outcome: &Outcome) {
             };
             eprintln!(" {label}");
             eprintln!("══════════════════════════════════════════════════════════\n");
-            let researched: Vec<(String, String)> = tickets
-                .find_tickets(|t: &Ticket| t.is_finished() && !t.has_label("report"))
+            let researched: Vec<(String, String)> = tasks
+                .find_tasks(|t: &Task| t.is_finished() && !t.has_label("report"))
                 .iter()
                 .filter_map(|t| Some((t.key.clone(), plain_text(t.result.as_ref()?))))
                 .collect();
@@ -160,24 +160,24 @@ enum Outcome {
 }
 
 /// Read the run's outcome off the drained queue: a finished report
-/// ticket wins, an external cancel is surfaced, anything else means the
+/// task wins, an external cancel is surfaced, anything else means the
 /// chain stopped without reaching the report step.
-fn classify_outcome(tickets: &TicketQueue) -> Outcome {
-    let reported = tickets.find_results("report").pop();
+fn classify_outcome(tasks: &Queue) -> Outcome {
+    let reported = tasks.find_results("report").pop();
     if let Some(result) = reported {
         return Outcome::Report(result);
     }
-    if tickets.finish_reason() == Some(FinishReason::Cancelled) {
+    if tasks.finish_reason() == Some(FinishReason::Cancelled) {
         return Outcome::Cancelled;
     }
     Outcome::Stalled
 }
 
-fn print_chain_summary(tickets: &TicketQueue) {
+fn print_chain_summary(tasks: &Queue) {
     eprintln!("\nChain summary:");
-    let all = tickets.tickets();
+    let all = tasks.tasks();
     if all.is_empty() {
-        eprintln!("  (no tickets)");
+        eprintln!("  (no tasks)");
         return;
     }
     for t in &all {
@@ -203,26 +203,26 @@ fn print_chain_summary(tickets: &TicketQueue) {
     }
 }
 
-fn print_stats(tickets: &TicketQueue) {
+fn print_stats(tasks: &Queue) {
     eprintln!("\nStats:");
     eprintln!(
         "  Duration : {:?}",
-        tickets.execution_duration().unwrap_or_default()
+        tasks.execution_duration().unwrap_or_default()
     );
-    let count = |kind: EventName| tickets.find_events(kind.name()).len() as u64;
-    let done = count(EventName::TicketFinished);
-    let failed = count(EventName::TicketFailed);
+    let count = |kind: EventName| tasks.find_events(kind.name()).len() as u64;
+    let done = count(EventName::TaskFinished);
+    let failed = count(EventName::TaskFailed);
     let resolved = done + failed;
     let success = if resolved == 0 {
         0.0
     } else {
         done as f64 / resolved as f64 * 100.0
     };
-    eprintln!("  Tickets  : {done} done, {failed} failed ({success:.0}%)");
+    eprintln!("  Tasks  : {done} done, {failed} failed ({success:.0}%)");
     eprintln!(
         "  Tokens   : {} in, {} out",
-        tickets.input_tokens(),
-        tickets.output_tokens(),
+        tasks.input_tokens(),
+        tasks.output_tokens(),
     );
     eprintln!(
         "  Activity : {} requests · {} tool calls · {} failed requests",
@@ -313,9 +313,9 @@ async fn brave_search(api_key: &str, input: &serde_json::Value) -> ToolResult {
 
 fn log_event(event: &Event) {
     let agent = &event.agent_id;
-    let key = &event.ticket_key;
+    let key = &event.task_key;
     match &event.kind {
-        EventKind::TicketStarted => {
+        EventKind::TaskStarted => {
             eprintln!("\n┌─ [{agent}] picked up {key}");
         }
         EventKind::ToolCallStarted {
@@ -346,10 +346,10 @@ fn log_event(event: &Event) {
         EventKind::PolicyViolated { policy, limit } => {
             eprintln!("│  ⚠ policy: {policy:?} limit={limit}");
         }
-        EventKind::TicketFinished => {
+        EventKind::TaskFinished => {
             eprintln!("└─ ✓ finished {key}");
         }
-        EventKind::TicketFailed => {
+        EventKind::TaskFailed => {
             eprintln!("└─ ✗ failed {key}");
         }
         _ => {}
@@ -362,7 +362,7 @@ fn format_tool_call(tool_name: &str, input: &serde_json::Value) -> Vec<String> {
             "🔎 search: {}",
             truncate(input["query"].as_str().unwrap_or(""), 70),
         )],
-        "tickets" => {
+        "tasks" => {
             let action = input["action"].as_str().unwrap_or("?");
             let key = input.get("key").and_then(|v| v.as_str()).unwrap_or("");
             let suffix = if key.is_empty() {
@@ -370,7 +370,7 @@ fn format_tool_call(tool_name: &str, input: &serde_json::Value) -> Vec<String> {
             } else {
                 format!(" {key}")
             };
-            vec![format!("📖 read tickets {action}{suffix}")]
+            vec![format!("📖 read tasks {action}{suffix}")]
         }
         // A `handover` in the arguments is what tells a chaining finish
         // apart from the terminal one that ends the run.

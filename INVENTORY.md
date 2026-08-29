@@ -19,10 +19,10 @@ Signatures use one language-independent notation, so a Rust row and a Python row
 - `Option<T>` is `T?`, written that way rather than as a union because a `|` splits a table cell.
 - `Result<T, E>` is `T throws E`, `io::Result<T>` is `T throws io::Error`.
 - An `async fn` returns `Promise<T>`.
-- `Arc<T>`, `Box<T>`, `Rc<T>`, `Mutex<T>`, `RwLock<T>`, and `&T` unwrap to `T`. Every other wrapper keeps its name: `Weak<TicketQueue>`, `Sender<Event>`, `JoinHandle<void>`.
+- `Arc<T>`, `Box<T>`, `Rc<T>`, `Mutex<T>`, `RwLock<T>`, and `&T` unwrap to `T`. Every other wrapper keeps its name: `Weak<Queue>`, `Sender<Event>`, `JoinHandle<void>`.
 - A callback becomes an arrow: `Arc<dyn Fn(&Event) + Send + Sync>` is `(event: Event) => void`.
 - A generic bound erases to what the caller passes: `T: Serialize` is `json`. A type's own parameters stay: `ToolBuilder<D, H>`, `ProviderResult<T>`.
-- Domain type names stay as the code writes them: `Ticket`, `Event`, `Status`, `PolicyViolation`.
+- Domain type names stay as the code writes them: `Task`, `Event`, `Status`, `PolicyViolation`.
 - A constant shows `= value` when the value is one scalar or short string, and nothing when it is longer or computed.
 - Names are never re-cased: `is_todo`, never `isTodo`. Every name here is greppable in `src/`.
 
@@ -43,7 +43,7 @@ Signatures use one language-independent notation, so a Rust row and a Python row
 
 The rules the tables never repeat.
 
-- Every enum is its lowercase string: `ticket.status == "in_progress"`.
+- Every enum is its lowercase string: `task.status == "in_progress"`.
 - Every error type is `RuntimeError`.
 - Every bound type keeps its Rust name, and its Rust fields are not Python attributes: `Knowledge`, `Anthropic`. A unit struct takes no constructor arguments: `GlobTool()`.
 - Every `Duration` is a float named `seconds`. Every other parameter keeps its Rust name and drops its type.
@@ -51,7 +51,7 @@ The rules the tables never repeat.
 - Every `async` item is awaitable.
 - An argument Rust takes by `Serialize` takes any JSON-serializable value.
 - A `json` value is a dict, list, or scalar.
-- A reader with no arguments is an attribute: `ticket.key`, `agent.id`.
+- A reader with no arguments is an attribute: `task.key`, `agent.id`.
 
 ## `crates/agentwerk/src/agents/agent.rs`
 
@@ -59,7 +59,7 @@ The rules the tables never repeat.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `Agent { label: string?, interactive: boolean, ticket_queue: TicketQueueRef, id: OnceLock<string>, provider: Provider?, model: Model?, role: string, templates: [string, string][], tools: ToolRegistry, dir: string, knowledge: Knowledge, directives: DirectiveStore }` | pub |
+| Rust | `Agent { label: string?, interactive: boolean, queue: QueueRef, id: OnceLock<string>, provider: Provider?, model: Model?, role: string, templates: [string, string][], tools: ToolRegistry, dir: string, knowledge: Knowledge, directives: DirectiveStore }` | pub |
 | Rust | `impl Clone for Agent` | pub |
 | Rust | `.new(): this` | pub |
 | Python | `Agent()` | |
@@ -81,9 +81,9 @@ The rules the tables never repeat.
 | both | `.directives(compute: (key: string) => string?): this` | pub |
 | Rust | `.id(): string` | pub |
 | Python | `.id`: a property | |
-| both | `.ticket(ticket: Ticket): string` | pub |
-| both | `.ticket(task)`: a string or json value stands in for the `Ticket` | |
-| both | `.start(): TicketQueue` | pub |
+| both | `.task(task: Task): string` | pub |
+| both | `.task(task)`: a string or json value stands in for the `Task` | |
+| both | `.start(): Queue` | pub |
 | Python | `.start()`: raises `RuntimeError` where Rust panics on a missing provider or model | |
 
 ### Internal
@@ -92,12 +92,12 @@ The rules the tables never repeat.
 |----------|------|------------|
 | Rust | `AGENT_IDS: Record<string, number>` | private |
 | Rust | `next_id(label: string?): string` | private |
-| Rust | `TicketQueueRef` | crate |
-| Rust | `.Shared(TicketQueue)` | crate |
-| Rust | `.Private(TicketQueue)` | crate |
-| Rust | `.upgrade(): TicketQueue?` | crate |
+| Rust | `QueueRef` | crate |
+| Rust | `.Shared(Queue)` | crate |
+| Rust | `.Private(Queue)` | crate |
+| Rust | `.upgrade(): Queue?` | crate |
 | Rust | `Agent.is_interactive(): boolean` | super |
-| Rust | `.handles(agent_label: string?, ticket_label: string?): boolean` | super |
+| Rust | `.handles(agent_label: string?, task_label: string?): boolean` | super |
 | Rust | `.tool_registry(): ToolRegistry` | super |
 | Rust | `.get_provider(): Provider` | super |
 | Rust | `.get_model(): Model` | super |
@@ -106,10 +106,10 @@ The rules the tables never repeat.
 | Rust | `.get_dir(): string` | super |
 | Rust | `.require_provider_and_model(): void` | super |
 | Rust | `.register_finish_tool(): void` | super |
-| Rust | `.system_prompt(knowledge: string?, policy: Policy, stats: Stats, ticket_key: string): string` | super |
-| Rust | `.expand_context(role: string, policy: Policy, stats: Stats, ticket_key: string): string` | private |
+| Rust | `.system_prompt(knowledge: string?, policy: Policy, stats: Stats, task_key: string): string` | super |
+| Rust | `.expand_context(role: string, policy: Policy, stats: Stats, task_key: string): string` | private |
 | Rust | `.interpolate(s: string): string` | private |
-| Rust | `.dispatch(ticket: Ticket): string` | private |
+| Rust | `.dispatch(task: Task): string` | private |
 
 ## `crates/agentwerk/src/agents/compaction.rs`
 
@@ -146,7 +146,7 @@ The rules the tables never repeat.
 | Rust | `.DEFAULT_MAX_REQUEST_RETRIES: number = 10` | pub |
 | Rust | `.DEFAULT_REQUEST_RETRY_DELAY: number = 500` | pub |
 | Rust | `.DEFAULT_COMPACTION_THRESHOLD: number = 0.85` | pub |
-| Python | not bound: read the field back through `TicketQueue.get_policy()` | |
+| Python | not bound: read the field back through `Queue.get_policy()` | |
 | Rust | `impl Default for Policy` | pub |
 
 ## `crates/agentwerk/src/agents/knowledge.rs`
@@ -219,17 +219,17 @@ The rules the tables never repeat.
 | Language | Item | Visibility |
 |----------|------|------------|
 | Rust | `RESUME_OR_FINISH_DETAIL: string` | private |
-| Rust | `TicketContext { agent: Agent, model: Model, ticket_queue: TicketQueue, run: Run, ticket_key: string, system_prompt: string, policy: Policy, tools: ToolRegistry, consecutive_schema_failures: number }` | super |
+| Rust | `TaskContext { agent: Agent, model: Model, queue: Queue, run: Run, task_key: string, system_prompt: string, policy: Policy, tools: ToolRegistry, consecutive_schema_failures: number }` | super |
 | Rust | `.emit(kind: EventKind): Event` | super |
-| Rust | `.ticket(): Ticket?` | super |
+| Rust | `.task(): Task?` | super |
 | Rust | `.retry_directive(detail: string, event: Event): string` | super |
-| Rust | `.fail_ticket(): void` | super |
+| Rust | `.fail_task(): void` | super |
 | Rust | `.fail_with(reason: RequestErrorKind, message: string): void` | super |
 | Rust | `run_agent(agent: Agent): Promise<void>` | super |
-| Rust | `run_is_over(agent: Agent, ticket_queue: TicketQueue): boolean` | private |
-| Rust | `claim(agent: Agent, ticket_queue: TicketQueue): TicketContext?` | private |
-| Rust | `evaluate(context: TicketContext): Step?` | private |
-| Rust | `silence_retry(context: TicketContext): Step?` | private |
+| Rust | `run_is_over(agent: Agent, queue: Queue): boolean` | private |
+| Rust | `claim(agent: Agent, queue: Queue): TaskContext?` | private |
+| Rust | `evaluate(context: TaskContext): Step?` | private |
+| Rust | `silence_retry(context: TaskContext): Step?` | private |
 
 ## `crates/agentwerk/src/agents/loop/compact.rs`
 
@@ -237,8 +237,8 @@ The rules the tables never repeat.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `run(context: TicketContext, reason: CompactReason): Promise<Step?>` | super |
-| Rust | `proactive_compaction_needed(context: TicketContext, ticket: Ticket): boolean` | super |
+| Rust | `run(context: TaskContext, reason: CompactReason): Promise<Step?>` | super |
+| Rust | `proactive_compaction_needed(context: TaskContext, task: Task): boolean` | super |
 
 ## `crates/agentwerk/src/agents/loop/main.rs`
 
@@ -246,7 +246,7 @@ The rules the tables never repeat.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `run_main_loop(ticket_queue: TicketQueue): Promise<void>` | crate |
+| Rust | `run_main_loop(queue: Queue): Promise<void>` | crate |
 
 ## `crates/agentwerk/src/agents/loop/mod.rs`
 
@@ -268,7 +268,7 @@ The rules the tables never repeat.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `run(context: TicketContext): Promise<Step?>` | super |
+| Rust | `run(context: TaskContext): Promise<Step?>` | super |
 
 ## `crates/agentwerk/src/agents/loop/tool_call.rs`
 
@@ -276,7 +276,7 @@ The rules the tables never repeat.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `run(context: TicketContext, calls: ToolCall[]): Promise<Step?>` | super |
+| Rust | `run(context: TaskContext, calls: ToolCall[]): Promise<Step?>` | super |
 
 ## `crates/agentwerk/src/agents/mod.rs`
 
@@ -284,8 +284,8 @@ The rules the tables never repeat.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `mod agent`, `mod policy`, `mod knowledge`, `mod loop`, `mod tickets` | pub |
-| Rust | re-exports `Agent`, `Policy`, `Knowledge`, `Matcher`, `Query`, `QueryError`, `Reply`, `Status`, `Ticket`, `TicketError`, `TicketQueue`, `Trajectory` | pub |
+| Rust | `mod agent`, `mod policy`, `mod knowledge`, `mod loop`, `mod tasks` | pub |
+| Rust | re-exports `Agent`, `Policy`, `Knowledge`, `Matcher`, `Query`, `QueryError`, `Reply`, `Status`, `Task`, `TaskError`, `Queue`, `Trajectory` | pub |
 
 ### Internal
 
@@ -322,10 +322,10 @@ The rules the tables never repeat.
 | Rust | `.new(): this` | crate |
 | Rust | `.append(dir: string, event: Event): void throws io::Error` | crate |
 | Rust | `.record(event: Event): void` | crate |
-| Rust | `.usage_for_ticket(ticket_key: string): TokenUsage[]` | crate |
-| Rust | `.reset_usage(ticket_key: string): void` | crate |
+| Rust | `.usage_for_task(task_key: string): TokenUsage[]` | crate |
+| Rust | `.reset_usage(task_key: string): void` | crate |
 | Rust | `.restart_clock(): void` | crate |
-| Rust | `.record_usage(ticket_key: string, usage: TokenUsage): void` | private |
+| Rust | `.record_usage(task_key: string, usage: TokenUsage): void` | private |
 
 ## `crates/agentwerk/src/agents/query.rs`
 
@@ -339,7 +339,7 @@ The rules the tables never repeat.
 | Rust | `impl Matcher<R> for String` | pub |
 | Rust | `impl Matcher<R> for Query<R>` | pub |
 | Python | an AQL string or a callable stands in for the `Query` wherever one is accepted | |
-| Rust | `Query<R: Queryable = Ticket>(Compiled<R.Field>)` | pub |
+| Rust | `Query<R: Queryable = Task>(Compiled<R.Field>)` | pub |
 | Python | `Query(query: str)`: one class over both field sets, compiled over each at construction | |
 | Rust | `.new(query: string): this throws QueryError` | pub |
 | Rust | `.matches(record: R): boolean` | pub |
@@ -354,13 +354,13 @@ The rules the tables never repeat.
 | Language | Item | Visibility |
 |----------|------|------------|
 | Rust | `trait Queryable { Field }` | private |
-| Rust | `impl Queryable for Ticket` | private |
+| Rust | `impl Queryable for Task` | private |
 | Rust | `impl Queryable for Event` | private |
 | Rust | `Query.all(): this` | crate |
 | Rust | `.and(other: Query<R>): this` | crate |
 | Rust | `.is_ordered(): boolean` | crate |
 | Rust | `.sort(records: R[]): void` | crate |
-| Rust | `Query<Ticket>.default_status(status: Status): this` | crate |
+| Rust | `Query<Task>.default_status(status: Status): this` | crate |
 | Rust | `.and_status(status: Status): this` | crate |
 | Rust | `.and_result(): this` | crate |
 | Rust | `enum Condition<F: QueryField> { All(Condition<F>[]), Any(Condition<F>[]), Not(Condition<F>), Term(F, Match), Test(Predicate<F.Record>) }` | private |
@@ -381,12 +381,12 @@ The rules the tables never repeat.
 | Rust | `.is_ordered(): boolean` | private |
 | Rust | `.sort(records: T[]): void` | private |
 | Rust | `trait QueryField: Copy + PartialEq + Debug + 'static { Record, FIELDS, of, kind, is_optional, shorthand, label, tie_break, sort_unordered, canonical, compare, named, name, spellings, allows, operators }` | private |
-| Rust | `enum TicketField { Key, Label, Status, Agent, Parent, Task, Result, Errors, Created, Started, Finished, Failed }` | private |
-| Rust | `impl QueryField for TicketField` | private |
-| Rust | `enum EventField { Event, Agent, Ticket, Label, Created, Payload }` | private |
+| Rust | `enum TaskField { Key, Label, Status, Agent, Parent, Task, Result, Errors, Created, Started, Finished, Failed }` | private |
+| Rust | `impl QueryField for TaskField` | private |
+| Rust | `enum EventField { Event, Agent, Task, Label, Created, Payload }` | private |
 | Rust | `impl QueryField for EventField` | private |
 | Rust | `enum Kind { Value, Text, Time }` | private |
-| Rust | `is_ticket_key(word: string): boolean` | private |
+| Rust | `is_task_key(word: string): boolean` | private |
 | Rust | `carried(value: string): string?` | private |
 | Rust | `event_named(value: string): string?` | private |
 | Rust | `as_text(value: json): string` | private |
@@ -420,38 +420,38 @@ The rules the tables never repeat.
 | Rust | `one_or<F>(group: (Condition<F>[]) => Condition<F>, terms: Condition<F>[]): Condition<F>` | private |
 | Rust | `reject_repeated_field<F>(terms: Condition<F>[]): void throws QueryError` | private |
 
-## `crates/agentwerk/src/agents/tickets/error.rs`
+## `crates/agentwerk/src/agents/tasks/error.rs`
 
 ### Public
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `TicketError` | pub |
-| Python | `RuntimeError`: `TicketError::TicketMissing { key }` reads as `Ticket TICKET-1 not found` | |
-| Rust | `.TicketMissing { key: string }` | pub |
+| Rust | `TaskError` | pub |
+| Python | `RuntimeError`: `TaskError::TaskMissing { key }` reads as `Task t-1 not found` | |
+| Rust | `.TaskMissing { key: string }` | pub |
 | Rust | `.TransitionRejected { from: Status, to: Status }` | pub |
 | Rust | `.ResultRejected { message: string }` | pub |
-| Rust | `impl Display for TicketError` | pub |
-| Rust | `impl Error for TicketError` | pub |
+| Rust | `impl Display for TaskError` | pub |
+| Rust | `impl Error for TaskError` | pub |
 
-## `crates/agentwerk/src/agents/tickets/mod.rs`
+## `crates/agentwerk/src/agents/tasks/mod.rs`
 
 ### Public
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | re-exports `Author`, `Reply`, `ReplyContent`, `Status`, `Ticket`, `TicketError`, `TicketQueue`, `Trajectory` | pub |
+| Rust | re-exports `Author`, `Reply`, `ReplyContent`, `Status`, `Task`, `TaskError`, `Queue`, `Trajectory` | pub |
 
 ### Internal
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `mod error`, `mod reply`, `mod store`, `mod ticket`, `mod ticket_queue`, `mod trajectory` | private |
+| Rust | `mod error`, `mod reply`, `mod store`, `mod task`, `mod queue`, `mod trajectory` | private |
 | Rust | `policy_violated(policy: Policy, stats: Stats): [PolicyViolation, number]?` | crate |
 | Rust | `now_millis(): number` | crate |
 | Rust | `numeric_id(key: string): number` | crate |
 
-## `crates/agentwerk/src/agents/tickets/reply.rs`
+## `crates/agentwerk/src/agents/tasks/reply.rs`
 
 ### Public
 
@@ -485,14 +485,14 @@ The rules the tables never repeat.
 | Rust | `ReplyContent.from_block(b: ContentBlock, paths: Record<string, string>): this` | private |
 | Rust | `.to_block(): ContentBlock` | private |
 
-## `crates/agentwerk/src/agents/tickets/store.rs`
+## `crates/agentwerk/src/agents/tasks/store.rs`
 
 ### Public
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| both | `TicketQueue.set_finished(key: string, result: json): void throws TicketError` | pub |
-| both | `.set_failed(key: string): void throws TicketError` | pub |
+| both | `Queue.set_finished(key: string, result: json): void throws TaskError` | pub |
+| both | `.set_failed(key: string): void throws TaskError` | pub |
 | both | `.edit_replies(key: string, editor: (replies: Reply[]) => void): this` | pub |
 | Python | `.edit_replies(key, editor)`: the editor returns the new list, or `None` to keep the old one, where Rust mutates in place. An editor that raises, or returns anything but `Reply` objects, raises here | |
 
@@ -500,48 +500,48 @@ The rules the tables never repeat.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `max_existing_ticket_id(dir: string): number` | private |
-| Rust | `TicketQueue.insert(ticket: Ticket, reporter: string): string` | crate |
-| Rust | `.save_ticket(key: string): void` | private |
+| Rust | `max_existing_task_id(dir: string): number` | private |
+| Rust | `Queue.insert(task: Task, reporter: string): string` | crate |
+| Rust | `.save_task(key: string): void` | private |
 | Rust | `.write_tool_output(key: string, tool_use_id: string, content: string): string?` | crate |
 | Rust | `.claim(query: Query, agent_id: string): string?` | crate |
 | Rust | `.add_reply(key: string, reply: Reply): void` | crate |
-| Rust | `.set_finished_by(key: string, agent: string): void throws TicketError` | crate |
-| Rust | `.set_failed_by(key: string, agent: string): void throws TicketError` | crate |
-| Rust | `.set_final_status(key: string, status: Status, agent: string): void throws TicketError` | private |
+| Rust | `.set_finished_by(key: string, agent: string): void throws TaskError` | crate |
+| Rust | `.set_failed_by(key: string, agent: string): void throws TaskError` | crate |
+| Rust | `.set_final_status(key: string, status: Status, agent: string): void throws TaskError` | private |
 | Rust | `.set_result(key: string, result: json): [json, string[]] throws SchemaViolations` | crate |
-| Rust | `.edit(key: string, task: json?, label: string?): void throws TicketError` | crate |
+| Rust | `.edit(key: string, task: json?, label: string?): void throws TaskError` | crate |
 
-## `crates/agentwerk/src/agents/tickets/ticket.rs`
+## `crates/agentwerk/src/agents/tasks/task.rs`
 
 ### Public
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `Ticket { task: json, label: string?, schema: Schema?, key: string, status: Status, reporter: string, assignee: string?, created_at: number, started_at: number?, finished_at: number?, failed_at: number?, result: json?, errors: Event[], parent: string?, replies: Reply[] }` | pub |
-| Python | `Ticket`: same field names. `replies` is a list of `Reply` and `errors` a list of `Event`, converted on access | |
+| Rust | `Task { task: json, label: string?, schema: Schema?, key: string, status: Status, reporter: string, assignee: string?, created_at: number, started_at: number?, finished_at: number?, failed_at: number?, result: json?, errors: Event[], parent: string?, replies: Reply[] }` | pub |
+| Python | `Task`: same field names. `replies` is a list of `Reply` and `errors` a list of `Event`, converted on access | |
 | Rust | `.new(task: json): this` | pub |
-| Python | `Ticket(task)` | |
+| Python | `Task(task)` | |
 | Rust | `.labeled(label: string, task: json): this` | pub |
-| Python | `Ticket(task, label=l)` | |
+| Python | `Task(task, label=l)` | |
 | Rust | `.label(label: string): this` | pub |
-| Python | `Ticket(task, label=l)` | |
+| Python | `Task(task, label=l)` | |
 | Rust | `.schema(schema: Schema): this` | pub |
-| Python | `Ticket(task, schema=s)` | |
+| Python | `Task(task, schema=s)` | |
 | Rust | `.parent(key: string): this` | pub |
-| Python | `Ticket(task, parent=key)` | |
+| Python | `Task(task, parent=key)` | |
 | both | `.has_label(label: string): boolean` | pub |
 | both | `.is_todo(): boolean` | pub |
 | both | `.is_finished(): boolean` | pub |
 | both | `.is_failed(): boolean` | pub |
 | both | `.is_in_progress(): boolean` | pub |
 | both | `.is_pending(): boolean` | pub |
-| Rust | `impl From<&str> for Ticket` | pub |
-| Rust | `impl From<String> for Ticket` | pub |
-| Rust | `impl From<json> for Ticket` | pub |
-| Rust | `impl From<&Path> for Ticket`, `impl From<PathBuf> for Ticket`, and `impl From<&PathBuf> for Ticket`, reading the file as the task | pub |
-| Rust | `impl Persist for Ticket` | pub |
-| Rust | `impl AsUserMessage for Ticket` | pub |
+| Rust | `impl From<&str> for Task` | pub |
+| Rust | `impl From<String> for Task` | pub |
+| Rust | `impl From<json> for Task` | pub |
+| Rust | `impl From<&Path> for Task`, `impl From<PathBuf> for Task`, and `impl From<&PathBuf> for Task`, reading the file as the task | pub |
+| Rust | `impl Persist for Task` | pub |
+| Rust | `impl AsUserMessage for Task` | pub |
 | Rust | `Status` | pub |
 | Python | a string: `"todo"`, `"in_progress"`, `"finished"`, `"failed"`. The five `is_*` predicates read better than comparing it | |
 | Rust | `.Todo` | pub |
@@ -554,90 +554,90 @@ The rules the tables never repeat.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `Ticket.is_waiting_for_response(): boolean` | crate |
+| Rust | `Task.is_waiting_for_response(): boolean` | crate |
 | Rust | `.is_paused(): boolean` | crate |
 | Rust | `.to_messages(): Message[]` | crate |
 | Rust | `.stamp_transition(next: Status, now: number): void` | crate |
-| Rust | `TicketResult { key: string, value: json? }` | crate |
-| Rust | `impl Persist for TicketResult` | crate |
+| Rust | `TaskResult { key: string, value: json? }` | crate |
+| Rust | `impl Persist for TaskResult` | crate |
 | Rust | `Replies { key: string, entries: Reply[] }` | crate |
 | Rust | `.append(dir: string, key: string, reply: Reply): void throws io::Error` | crate |
 | Rust | `impl Persist for Replies` | crate |
-| Rust | `ticket_record_path(dir: string, key: string): string` | super |
+| Rust | `task_record_path(dir: string, key: string): string` | super |
 | Rust | `replies_path(dir: string, key: string): string` | private |
 | Rust | `result_path(dir: string, key: string): string` | super |
 
-## `crates/agentwerk/src/agents/tickets/ticket_queue.rs`
+## `crates/agentwerk/src/agents/tasks/queue.rs`
 
 ### Public
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| both | `TicketQueue { weak_self: Weak<TicketQueue>, tickets: Record<string, Ticket>, agents: Agent[], policy: Policy, run: Run, cancel_filters: Query[], terminal_transitions_in_flight: number, stats: Stats, event_handlers: EventHandler[], awaited_events: AwaitedEvents, event_stream: Sender<Event>, schemas: SchemaStore?, dir: string, events_lock: void, join_handle: JoinHandle<void>?, next_ticket_id: number? }` | pub |
+| both | `Queue { weak_self: Weak<Queue>, tasks: Record<string, Task>, agents: Agent[], policy: Policy, run: Run, cancel_filters: Query[], terminal_transitions_in_flight: number, stats: Stats, event_handlers: EventHandler[], awaited_events: AwaitedEvents, event_stream: Sender<Event>, schemas: SchemaStore?, dir: string, events_lock: void, join_handle: JoinHandle<void>?, next_task_id: number? }` | pub |
 | Rust | `.new(): this` | pub |
-| Python | `TicketQueue()` | |
-| both | `.load(tickets_dir: string): this throws io::Error` | pub |
+| Python | `Queue()` | |
+| both | `.load(tasks_dir: string): this throws io::Error` | pub |
 | both | `.input_tokens(): number` | pub |
 | both | `.output_tokens(): number` | pub |
 | both | `.execution_duration(): number?` | pub |
-| both | `.on_event(handler: (queue: TicketQueue, event: Event) => void): this` | pub |
-| both | `.on_event_async(handler: (queue: TicketQueue, event: Event) => Promise<void>): this` | pub |
+| both | `.on_event(handler: (queue: Queue, event: Event) => void): this` | pub |
+| both | `.on_event_async(handler: (queue: Queue, event: Event) => Promise<void>): this` | pub |
 | Python | `.on_event_async(handler)`: takes an `async def`, awaited on the event loop awaiting `finish`, so a handler that raises prints its traceback and does not stop the run | |
-| both | `.on_result(handler: (queue: TicketQueue, ticket: Ticket, result: json) => void): this` | pub |
-| both | `.on_result_async(handler: (queue: TicketQueue, ticket: Ticket, result: json) => Promise<void>): this` | pub |
+| both | `.on_result(handler: (queue: Queue, task: Task, result: json) => void): this` | pub |
+| both | `.on_result_async(handler: (queue: Queue, task: Task, result: json) => Promise<void>): this` | pub |
 | Python | `.on_result_async(handler)`: takes an `async def`, on the same terms as `on_event_async` | |
-| both | `.on_failure(handler: (queue: TicketQueue, event: Event, ticket: Ticket) => void): this` | pub |
-| both | `.on_failure_async(handler: (queue: TicketQueue, event: Event, ticket: Ticket) => Promise<void>): this` | pub |
+| both | `.on_failure(handler: (queue: Queue, event: Event, task: Task) => void): this` | pub |
+| both | `.on_failure_async(handler: (queue: Queue, event: Event, task: Task) => Promise<void>): this` | pub |
 | Python | `.on_failure_async(handler)`: takes an `async def`, on the same terms as `on_event_async` | |
-| both | `.on_ticket(handler: (queue: TicketQueue, event: Event, ticket: Ticket) => void): this` | pub |
-| both | `.on_ticket_async(handler: (queue: TicketQueue, event: Event, ticket: Ticket) => Promise<void>): this` | pub |
-| Python | `.on_ticket_async(handler)`: takes an `async def`, on the same terms as `on_event_async` | |
+| both | `.on_task(handler: (queue: Queue, event: Event, task: Task) => void): this` | pub |
+| both | `.on_task_async(handler: (queue: Queue, event: Event, task: Task) => Promise<void>): this` | pub |
+| Python | `.on_task_async(handler)`: takes an `async def`, on the same terms as `on_event_async` | |
 | both | `.model_for_agent(agent_id: string): string?` | pub |
 | both | `.policy(policy: Policy): this` | pub |
 | both | `.get_policy(): Policy` | pub |
 | both | `.dir(dir: string): this` | pub |
 | both | `.get_dir(): string` | pub |
 | both | `.schemas(store: SchemaStore): this` | pub |
-| both | `.ticket(ticket: Ticket): string` | pub |
-| both | `.ticket(task)`: a string or json value stands in for the `Ticket` | |
+| both | `.task(task: Task): string` | pub |
+| both | `.task(task)`: a string or json value stands in for the `Task` | |
 | both | `.reply(key: string, content: string): this` | pub |
-| both | `.get_ticket(key: string): Ticket?` | pub |
-| both | `.tickets(): Ticket[]` | pub |
-| both | `.find_tickets(predicate: Matcher<Ticket>): Ticket[]` | pub |
-| Python | `.find_tickets(predicate)`: accepts a `Query` or a callable | |
-| both | `.find_ticket(predicate: Matcher<Ticket>): Ticket?` | pub |
+| both | `.get_task(key: string): Task?` | pub |
+| both | `.tasks(): Task[]` | pub |
+| both | `.find_tasks(predicate: Matcher<Task>): Task[]` | pub |
+| Python | `.find_tasks(predicate)`: accepts a `Query` or a callable | |
+| both | `.find_task(predicate: Matcher<Task>): Task?` | pub |
 | both | `.find_events(matcher: Matcher<Event>): Event[]`: an AQL string stands in for the `Query<Event>` | pub |
 | both | `.find_event(matcher: Matcher<Event>): Event?` | pub |
-| both | `.cancel(matches: Matcher<Ticket>): this` | pub |
+| both | `.cancel(matches: Matcher<Task>): this` | pub |
 | Python | `.cancel(matches)`: accepts a `Query` or a callable | |
 | both | `.cancel_all(): this` | pub |
-| both | `.is_cancelled(ticket: Ticket): boolean` | pub |
+| both | `.is_cancelled(task: Task): boolean` | pub |
 | both | `.agent(agent: Agent): this` | pub |
 | both | `.start(): this` | pub |
-| both | `.finish(matches: Matcher<Ticket>): Promise<json[]>` | pub |
+| both | `.finish(matches: Matcher<Task>): Promise<json[]>` | pub |
 | Python | `.finish(matches)`: accepts a `Query` or a callable | |
 | both | `.finish_all(): Promise<json[]>` | pub |
 | both | `.finish_last(): Promise<json?>` | pub |
 | Rust | `.finish_reason(): FinishReason?` | pub |
 | Python | `.finish_reason(): str?`: the string it prints as, such as `policy_violated(turns)` | |
 | both | `.results(): json[]` | pub |
-| both | `.find_results(matches: Matcher<Ticket>): json[]` | pub |
+| both | `.find_results(matches: Matcher<Task>): json[]` | pub |
 | both | `.find_results(query)`: an AQL string stands in for the `Query` | |
-| both | `.find_result(matches: Matcher<Ticket>): json?` | pub |
+| both | `.find_result(matches: Matcher<Task>): json?` | pub |
 | both | `.find_result(query)`: an AQL string stands in for the `Query` | |
 
 ### Internal
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `EventHandler = (queue: TicketQueue, event: Event) => void` | private |
+| Rust | `EventHandler = (queue: Queue, event: Event) => void` | private |
 | Rust | `EVENT_STREAM_CAPACITY: number = 1024` | private |
-| Rust | `is_ticket_kind(kind: EventKind): boolean` | private |
+| Rust | `is_task_kind(kind: EventKind): boolean` | private |
 | Rust | `is_recorded_failure(kind: EventKind): boolean` | private |
-| Rust | `AsyncHandler = (queue: TicketQueue, event: Event, ticket: Ticket?) => HandlerWork` | private |
+| Rust | `AsyncHandler = (queue: Queue, event: Event, task: Task?) => HandlerWork` | private |
 | Rust | `HandlerWork = Promise<void>` | private |
 | Rust | `AwaitedHandler { matches: (kind: EventKind) => boolean, call: AsyncHandler }` | private |
-| Rust | `Delivery = [Event, Ticket?]` | private |
+| Rust | `Delivery = [Event, Task?]` | private |
 | Rust | `AwaitedEvents { handlers: AwaitedHandler[], queued: Delivery[], draining: void, queueing: void }` | super |
 | Rust | `Run { phase: Phase }` | crate |
 | Rust | `Phase` | private |
@@ -653,17 +653,17 @@ The rules the tables never repeat.
 | Rust | `.until_draining(): Promise<void>` | crate |
 | Rust | `.until_finished(): Promise<void>` | crate |
 | Rust | `.reset(): void` | private |
-| Rust | `TicketQueue.on_ticket_event(matches: (kind: EventKind) => boolean, handler: (queue: TicketQueue, event: Event, ticket: Ticket) => void): this` | private |
+| Rust | `Queue.on_task_event(matches: (kind: EventKind) => boolean, handler: (queue: Queue, event: Event, task: Task) => void): this` | private |
 | Rust | `.on_awaited(matches: (kind: EventKind) => boolean, call: AsyncHandler): this` | private |
 | Rust | `.queue_events(): void` | private |
 | Rust | `.await_handlers(): Promise<void>` | private |
 | Rust | `.emit(key: string, agent: string, kind: EventKind): Event` | crate |
 | Rust | `.label_for(key: string): string?` | private |
 | Rust | `.result_path(key: string): string` | crate |
-| Rust | `.dispatch(ticket: Ticket): string` | private |
-| Rust | `.matching_tickets(query: Query): Ticket[]` | private |
-| Rust | `.first_matching_ticket(query: Query): Ticket?` | private |
-| Python | `TicketQueue.find_ticket(predicate)`: accepts a `Query` or a callable | |
+| Rust | `.dispatch(task: Task): string` | private |
+| Rust | `.matching_tasks(query: Query): Task[]` | private |
+| Rust | `.first_matching_task(query: Query): Task?` | private |
+| Python | `Queue.find_task(predicate)`: accepts a `Query` or a callable | |
 | Rust | `.collect_events(query: Query<Event>, wanted: number): Event[]` | private |
 | Rust | `.pending(matches: Query): boolean` | crate |
 | Rust | `.ending_reason(): FinishReason?` | crate |
@@ -675,9 +675,9 @@ The rules the tables never repeat.
 | Rust | `.has_agent(id: string): boolean` | crate |
 | Rust | `.clone_agents(): Agent[]` | crate |
 | Rust | `.next_event_or_end(stream: Event): Promise<boolean>` | private |
-| Rust | `results_of(matches: Matcher<Ticket>): Query` | private |
+| Rust | `results_of(matches: Matcher<Task>): Query` | private |
 
-## `crates/agentwerk/src/agents/tickets/trajectory.rs`
+## `crates/agentwerk/src/agents/tasks/trajectory.rs`
 
 ### Public
 
@@ -685,7 +685,7 @@ The rules the tables never repeat.
 |----------|------|------------|
 | Rust | `Trajectory { key: string, model: string?, replies: Reply[] }` | pub |
 | Python | `Trajectory`: same field names. `replies` is a list of `Reply` | |
-| both | `.from_ticket(agent_id: string, model: string?, ticket: Ticket): this` | pub |
+| both | `.from_task(agent_id: string, model: string?, task: Task): this` | pub |
 | both | `.save(dir: string): void throws io::Error` | pub |
 | Rust | `impl Persist for Trajectory` | pub |
 
@@ -898,16 +898,16 @@ Not bound, like the rest of `codegrep`.
 | Rust | `.name(): string` | pub |
 | Python | not bound: the action is already a string | |
 | Rust | `impl Display for KnowledgeAction` | pub |
-| Rust | `Event { created_at: number, agent_id: string, ticket_key: string, label: string?, kind: EventKind }` | pub |
-| Python | `Event.created_at`, `.agent_id`, `.ticket_key`, `.label`, `.kind`, plus `.data`: a dict of the kind's fields | |
+| Rust | `Event { created_at: number, agent_id: string, task_key: string, label: string?, kind: EventKind }` | pub |
+| Python | `Event.created_at`, `.agent_id`, `.task_key`, `.label`, `.kind`, plus `.data`: a dict of the kind's fields | |
 | Rust | `EventKind` | pub |
 | Python | a string on `Event.kind`, its payload on `Event.data` | |
 | Rust | `.RunStarted` | pub |
 | Rust | `.RunFinished { reason: FinishReason }` | pub |
-| Rust | `.TicketCreated` | pub |
-| Rust | `.TicketStarted` | pub |
-| Rust | `.TicketFinished` | pub |
-| Rust | `.TicketFailed` | pub |
+| Rust | `.TaskCreated` | pub |
+| Rust | `.TaskStarted` | pub |
+| Rust | `.TaskFinished` | pub |
+| Rust | `.TaskFailed` | pub |
 | Rust | `.TurnStarted` | pub |
 | Rust | `.RequestStarted { model: string }` | pub |
 | Rust | `.RequestFinished { model: string, usage: TokenUsage }` | pub |
@@ -937,16 +937,16 @@ Not bound, like the rest of `codegrep`.
 | Rust | `.event_name(): EventName` | pub |
 | Python | not bound: `Event.kind` is already that name | |
 | Rust | `.is_failure(): boolean` | pub |
-| Python | not bound: `Event.kind` is a string, so ask `TicketQueue.on_failure(handler)` for the same six kinds | |
+| Python | not bound: `Event.kind` is a string, so ask `Queue.on_failure(handler)` for the same six kinds | |
 | Rust | `impl Display for EventKind` | pub |
 | Rust | `EventName` | pub |
 | Python | `EventName`: string constants, so `Event.kind == EventName.TURN_STARTED` | |
 | Rust | `.RunStarted` | pub |
 | Rust | `.RunFinished` | pub |
-| Rust | `.TicketCreated` | pub |
-| Rust | `.TicketStarted` | pub |
-| Rust | `.TicketFinished` | pub |
-| Rust | `.TicketFailed` | pub |
+| Rust | `.TaskCreated` | pub |
+| Rust | `.TaskStarted` | pub |
+| Rust | `.TaskFinished` | pub |
+| Rust | `.TaskFailed` | pub |
 | Rust | `.TurnStarted` | pub |
 | Rust | `.RequestStarted` | pub |
 | Rust | `.RequestFinished` | pub |
@@ -976,13 +976,13 @@ Not bound, like the rest of `codegrep`.
 | Python | not bound: the constants are already strings | |
 | Rust | `impl Display for EventName` | pub |
 | Rust | `default_logger(): (event: Event) => void` | pub |
-| Python | not bound: pass your own handler to `TicketQueue.on_event(handler)` | |
+| Python | not bound: pass your own handler to `Queue.on_event(handler)` | |
 
 ### Internal
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `Event.new(agent_id: string, ticket_key: string, label: string?, kind: EventKind): this` | crate |
+| Rust | `Event.new(agent_id: string, task_key: string, label: string?, kind: EventKind): this` | crate |
 | Rust | `compact_input(input: json): string` | private |
 
 ## `crates/agentwerk/src/lib.rs`
@@ -992,7 +992,7 @@ Not bound, like the rest of `codegrep`.
 | Language | Item | Visibility |
 |----------|------|------------|
 | Rust | `mod agents`, `mod codegrep`, `mod event`, `mod providers`, `mod schemas`, `mod tools` | pub |
-| Rust | re-exports `Agent`, `Query`, `Reply`, `Status`, `Ticket`, `TicketQueue`, `Policy`, `Knowledge`, `Trajectory`, `Schema`, `SchemaStore`, `Event`, `EventKind`, `FinishReason`, `Directive`, `Text` | pub |
+| Rust | re-exports `Agent`, `Query`, `Reply`, `Status`, `Task`, `Queue`, `Policy`, `Knowledge`, `Trajectory`, `Schema`, `SchemaStore`, `Event`, `EventKind`, `FinishReason`, `Directive`, `Text` | pub |
 | Python | `agentwerk` exports every bound class from one flat module | |
 
 ### Internal
@@ -1039,7 +1039,7 @@ One of the two public parts of `prompts`, beside `Text`: `Directive` reaches the
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `Directive.REPLY_REJECTED: string = "reply_rejected"`, and one constant per catalogue heading, each also a crate-private `const` under the same name that the render sites write: `NO_TOOL_CALLED`, `ARGUMENTS_REJECTED`, `ARGUMENTS_EXPECTED`, `RESULT_SCHEMA_REQUIRED`, `SUMMARY_REQUESTED`, `KNOWLEDGE_INDEX_TRUNCATED`, `TOOL_NOT_FOUND`, `NO_TOOLS_REGISTERED`, `TOOL_PANICKED`, `TOOL_OUTPUT_EMPTY`, `TOOL_OUTPUT_OFFLOADED`, `EDIT_FILE_READ_FAILED`, `EDIT_FILE_OLD_STRING_NOT_FOUND`, `EDIT_FILE_OLD_STRING_NOT_UNIQUE`, `EDIT_FILE_WRITE_FAILED`, `WRITE_FILE_PARENT_NOT_CREATED`, `WRITE_FILE_FAILED`, `READ_FILE_PATH_IS_DIRECTORY`, `READ_FILE_PATH_IS_DIRECTORY_WITH_ENTRIES`, `READ_FILE_IS_BINARY`, `READ_FILE_NOT_FOUND`, `READ_FILE_FAILED`, `LIST_DIRECTORY_PATH_IS_FILE`, `LIST_DIRECTORY_NOT_FOUND`, `LIST_DIRECTORY_FAILED`, `PATH_HINT_DIRECTORY_LISTED`, `PATH_HINT_SUGGESTION`, `PATH_HINT_WORKING_DIRECTORY`, `COMMAND_CANCELLED`, `COMMAND_TIMED_OUT`, `COMMAND_NOT_STARTED`, `COMMAND_MISSING`, `COMMAND_SHELL_OPERATOR_FOUND`, `COMMAND_QUOTE_UNTERMINATED`, `COMMAND_CONTROL_CHARACTER_FOUND`, `COMMAND_ASSIGNMENT_FOUND`, `COMMAND_FLAG_DENIED`, `COMMAND_PATTERN_DENIED`, `COMMAND_NOT_ALLOWED`, `COMMAND_FLAG_NOT_ALLOWED`, `GREP_CANCELLED`, `GREP_TIMED_OUT`, `GREP_FAILED`, `GREP_GLOB_REJECTED`, `GREP_FILE_TYPE_UNKNOWN`, `GREP_PATTERN_REJECTED`, `CODE_PATTERN_REJECTED`, `CODE_CONSTRAINT_INCOMPLETE`, `CODE_CONSTRAINT_METAVARIABLE_UNKNOWN`, `CODE_CONSTRAINT_REGEX_REJECTED`, `FETCH_URL_TOO_LONG`, `FETCH_URL_SCHEME_MISSING`, `FETCH_URL_SCHEME_UNSUPPORTED`, `FETCH_URL_CREDENTIALS_PRESENT`, `FETCH_URL_HOST_MISSING`, `FETCH_URL_HOST_NOT_RESOLVABLE`, `FETCH_URL_TOO_MANY_REDIRECTS`, `FETCH_URL_REQUEST_FAILED`, `FETCH_URL_BODY_NOT_READ`, `FETCH_URL_RESPONSE_TOO_LARGE`, `FETCH_URL_REDIRECT_LOCATION_MISSING`, `KNOWLEDGE_PAGE_NOT_FOUND`, `KNOWLEDGE_WRITE_FAILED`, `KNOWLEDGE_REMOVE_FAILED`, `TICKET_QUEUE_UNAVAILABLE`, `TICKET_KEY_MISSING`, `TICKET_NOT_ASSIGNED`, `TICKET_NOT_FOUND`, `TICKET_RESULT_MISSING`, `TICKET_QUERY_INVALID`, `TICKET_EDIT_INCOMPLETE`, `TICKET_TRANSITION_REJECTED`, `HANDOVER_RESULT_MISSING`, `FINISH_ARGUMENT_BLANK`, `SCHEMA_FALSE_REJECTED`, `SCHEMA_TYPE_MISMATCHED`, `SCHEMA_CONST_MISMATCHED`, `SCHEMA_ENUM_MISMATCHED`, `SCHEMA_ANY_OF_UNMATCHED`, `SCHEMA_ONE_OF_AMBIGUOUS`, `SCHEMA_NOT_MATCHED`, `SCHEMA_PROPERTY_MISSING`, `SCHEMA_PROPERTY_UNEXPECTED`, `SCHEMA_ARRAY_TOO_SHORT`, `SCHEMA_ARRAY_TOO_LONG`, `SCHEMA_STRING_TOO_SHORT`, `SCHEMA_STRING_TOO_LONG`, `SCHEMA_PATTERN_UNMATCHED`, `SCHEMA_NUMBER_TOO_SMALL`, `SCHEMA_NUMBER_TOO_LARGE`, `SCHEMA_HINT_UNQUOTE`, `SCHEMA_HINT_JSON`, `SCHEMA_HINT_QUOTE` | pub |
+| Rust | `Directive.REPLY_REJECTED: string = "reply_rejected"`, and one constant per catalogue heading, each also a crate-private `const` under the same name that the render sites write: `NO_TOOL_CALLED`, `ARGUMENTS_REJECTED`, `ARGUMENTS_EXPECTED`, `RESULT_SCHEMA_REQUIRED`, `SUMMARY_REQUESTED`, `KNOWLEDGE_INDEX_TRUNCATED`, `TOOL_NOT_FOUND`, `NO_TOOLS_REGISTERED`, `TOOL_PANICKED`, `TOOL_OUTPUT_EMPTY`, `TOOL_OUTPUT_OFFLOADED`, `EDIT_FILE_READ_FAILED`, `EDIT_FILE_OLD_STRING_NOT_FOUND`, `EDIT_FILE_OLD_STRING_NOT_UNIQUE`, `EDIT_FILE_WRITE_FAILED`, `WRITE_FILE_PARENT_NOT_CREATED`, `WRITE_FILE_FAILED`, `READ_FILE_PATH_IS_DIRECTORY`, `READ_FILE_PATH_IS_DIRECTORY_WITH_ENTRIES`, `READ_FILE_IS_BINARY`, `READ_FILE_NOT_FOUND`, `READ_FILE_FAILED`, `LIST_DIRECTORY_PATH_IS_FILE`, `LIST_DIRECTORY_NOT_FOUND`, `LIST_DIRECTORY_FAILED`, `PATH_HINT_DIRECTORY_LISTED`, `PATH_HINT_SUGGESTION`, `PATH_HINT_WORKING_DIRECTORY`, `COMMAND_CANCELLED`, `COMMAND_TIMED_OUT`, `COMMAND_NOT_STARTED`, `COMMAND_MISSING`, `COMMAND_SHELL_OPERATOR_FOUND`, `COMMAND_QUOTE_UNTERMINATED`, `COMMAND_CONTROL_CHARACTER_FOUND`, `COMMAND_ASSIGNMENT_FOUND`, `COMMAND_FLAG_DENIED`, `COMMAND_PATTERN_DENIED`, `COMMAND_NOT_ALLOWED`, `COMMAND_FLAG_NOT_ALLOWED`, `GREP_CANCELLED`, `GREP_TIMED_OUT`, `GREP_FAILED`, `GREP_GLOB_REJECTED`, `GREP_FILE_TYPE_UNKNOWN`, `GREP_PATTERN_REJECTED`, `CODE_PATTERN_REJECTED`, `CODE_CONSTRAINT_INCOMPLETE`, `CODE_CONSTRAINT_METAVARIABLE_UNKNOWN`, `CODE_CONSTRAINT_REGEX_REJECTED`, `FETCH_URL_TOO_LONG`, `FETCH_URL_SCHEME_MISSING`, `FETCH_URL_SCHEME_UNSUPPORTED`, `FETCH_URL_CREDENTIALS_PRESENT`, `FETCH_URL_HOST_MISSING`, `FETCH_URL_HOST_NOT_RESOLVABLE`, `FETCH_URL_TOO_MANY_REDIRECTS`, `FETCH_URL_REQUEST_FAILED`, `FETCH_URL_BODY_NOT_READ`, `FETCH_URL_RESPONSE_TOO_LARGE`, `FETCH_URL_REDIRECT_LOCATION_MISSING`, `KNOWLEDGE_PAGE_NOT_FOUND`, `KNOWLEDGE_WRITE_FAILED`, `KNOWLEDGE_REMOVE_FAILED`, `QUEUE_UNAVAILABLE`, `TASK_KEY_MISSING`, `TASK_NOT_ASSIGNED`, `TASK_NOT_FOUND`, `TASK_RESULT_MISSING`, `TASK_QUERY_INVALID`, `TASK_EDIT_INCOMPLETE`, `TASK_TRANSITION_REJECTED`, `HANDOVER_RESULT_MISSING`, `FINISH_ARGUMENT_BLANK`, `SCHEMA_FALSE_REJECTED`, `SCHEMA_TYPE_MISMATCHED`, `SCHEMA_CONST_MISMATCHED`, `SCHEMA_ENUM_MISMATCHED`, `SCHEMA_ANY_OF_UNMATCHED`, `SCHEMA_ONE_OF_AMBIGUOUS`, `SCHEMA_NOT_MATCHED`, `SCHEMA_PROPERTY_MISSING`, `SCHEMA_PROPERTY_UNEXPECTED`, `SCHEMA_ARRAY_TOO_SHORT`, `SCHEMA_ARRAY_TOO_LONG`, `SCHEMA_STRING_TOO_SHORT`, `SCHEMA_STRING_TOO_LONG`, `SCHEMA_PATTERN_UNMATCHED`, `SCHEMA_NUMBER_TOO_SMALL`, `SCHEMA_NUMBER_TOO_LARGE`, `SCHEMA_HINT_UNQUOTE`, `SCHEMA_HINT_JSON`, `SCHEMA_HINT_QUOTE` | pub |
 | Rust | `.ALL: string[]` | pub |
 | Python | `Directive.ALL` is not published; `register` walks it to set the key constants | |
 | Rust | `Directive { }`, the key namespace | pub |
@@ -1075,7 +1075,7 @@ Not bound, except what `directives.rs` and `text.rs` re-export through it.
 | Rust | `compaction_directive(): string` | crate |
 | Rust | `schema_directive(schema: Schema): string` | crate |
 | Rust | `arguments_retry_detail(tool_name: string, violations: string, schema: json?): string` | crate |
-| Rust | `context_values(dir: string, policy: Policy, stats: Stats, ticket_key: string): [string, string][]` | crate |
+| Rust | `context_values(dir: string, policy: Policy, stats: Stats, task_key: string): [string, string][]` | crate |
 | Rust | `optional(value: string?): string` | private |
 | Rust | `render_context(values: [string, string][]): string` | crate |
 | Rust | `format_current_date(): string` | private |
@@ -1923,14 +1923,14 @@ Not bound: it is how `CommandTool` reads one command line.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | re-exports `Tool`, `ToolContext`, `ToolResult`, `CommandTool`, `EditFileTool`, `FetchUrlTool`, `GlobTool`, `GrepTool`, `KnowledgeTool`, `ListDirectoryTool`, `ReadFileTool`, `FinishTool`, `TicketsTool`, `WriteFileTool` | pub |
+| Rust | re-exports `Tool`, `ToolContext`, `ToolResult`, `CommandTool`, `EditFileTool`, `FetchUrlTool`, `GlobTool`, `GrepTool`, `KnowledgeTool`, `ListDirectoryTool`, `ReadFileTool`, `FinishTool`, `TasksTool`, `WriteFileTool` | pub |
 
 ### Internal
 
 | Language | Item | Visibility |
 |----------|------|------------|
 | Rust | `mod util` | crate |
-| Rust | `mod tool`, `mod code`, `mod command`, `mod edit_file`, `mod fetch_url`, `mod glob`, `mod grep`, `mod knowledge`, `mod list_directory`, `mod read_file`, `mod tickets`, `mod write_file` | private |
+| Rust | `mod tool`, `mod code`, `mod command`, `mod edit_file`, `mod fetch_url`, `mod glob`, `mod grep`, `mod knowledge`, `mod list_directory`, `mod read_file`, `mod tasks`, `mod write_file` | private |
 
 ## `crates/agentwerk/src/tools/read_file.rs`
 
@@ -1951,7 +1951,7 @@ Not bound: it is how `CommandTool` reads one command line.
 | Rust | `run(args: ReadFileArgs, ctx: ToolContext): Promise<ToolResult>` | private |
 | Rust | `snap_to_char_boundary(s: string, pos: number): number` | private |
 
-## `crates/agentwerk/src/tools/tickets/finish.rs`
+## `crates/agentwerk/src/tools/tasks/finish.rs`
 
 ### Public
 
@@ -1969,59 +1969,59 @@ Not bound: it is how `CommandTool` reads one command line.
 | Rust | `FinishTool.NAME: string = "finish"` | crate |
 | Rust | `.from_schema(schema: Schema?): Tool` | crate |
 | Rust | `finish(input: json, ctx: ToolContext, schema: Schema?): ToolResult throws ToolResult` | private |
-| Rust | `hand_over(ticket_queue: TicketQueue, input: json, parent_key: string, agent: string, result: json, schema: Schema?, handover: string): ToolResult throws ToolResult` | private |
+| Rust | `hand_over(queue: Queue, input: json, parent_key: string, agent: string, result: json, schema: Schema?, handover: string): ToolResult throws ToolResult` | private |
 | Rust | `control_string(input: json, key: string): string? throws ToolResult` | private |
-| Rust | `mark_finished(ticket_queue: TicketQueue, key: string, agent: string): void throws ToolResult` | private |
+| Rust | `mark_finished(queue: Queue, key: string, agent: string): void throws ToolResult` | private |
 | Rust | `apply_handover_templates(task: string, parent_key: string, result_path: string, result: string): string` | private |
 | Rust | `append_parent_reference(body: string, parent_key: string, result_path: string): string` | private |
-| Rust | `attach_result(ticket_queue: TicketQueue, key: string, result: json, schema: Schema?): [json, string[]] throws ToolResult` | private |
+| Rust | `attach_result(queue: Queue, key: string, result: json, schema: Schema?): [json, string[]] throws ToolResult` | private |
 
-## `crates/agentwerk/src/tools/tickets/mod.rs`
+## `crates/agentwerk/src/tools/tasks/mod.rs`
 
 ### Public
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | re-exports `FinishTool`, `TicketsTool` | pub |
+| Rust | re-exports `FinishTool`, `TasksTool` | pub |
 
 ### Internal
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `mod finish`, `mod tickets` | private |
-| Rust | `TicketsArgs` | crate |
+| Rust | `mod finish`, `mod tasks` | private |
+| Rust | `TasksArgs` | crate |
 | Python | not bound: the model sends these fields as the tool's input | |
-| Rust | `.Ticket { key: string? }` | crate |
+| Rust | `.Task { key: string? }` | crate |
 | Rust | `.Result { key: string? }` | crate |
 | Rust | `.List { aql: string? }` | crate |
 | Rust | `.Create { task: json, label: string? }` | crate |
 | Rust | `.Edit { key: string?, task: json?, label: string? }` | crate |
-| Rust | `dispatch(args: TicketsArgs, ctx: ToolContext): ToolResult` | super |
-| Rust | `resolve_key(ticket_queue: TicketQueue, key: string?, ctx: ToolContext): string throws ToolResult` | private |
-| Rust | `resolve_current_key(ticket_queue: TicketQueue, ctx: ToolContext): string throws ToolResult` | super |
-| Rust | `ticket_error_message(err: TicketError): string` | super |
-| Rust | `render_ticket(t: Ticket): string` | private |
+| Rust | `dispatch(args: TasksArgs, ctx: ToolContext): ToolResult` | super |
+| Rust | `resolve_key(queue: Queue, key: string?, ctx: ToolContext): string throws ToolResult` | private |
+| Rust | `resolve_current_key(queue: Queue, ctx: ToolContext): string throws ToolResult` | super |
+| Rust | `task_error_message(err: TaskError): string` | super |
+| Rust | `render_task(t: Task): string` | private |
 | Rust | `render_result(key: string, path: string, result: json): string` | private |
 | Rust | `push_value(out: string, value: json): void` | private |
 | Rust | `status_label(s: Status): string` | private |
 | Rust | `truncate_for_preview(s: string, max: number): string` | private |
 | Rust | `SummaryRow = [string, string, Status, string?]` | private |
-| Rust | `render_summary_list(tickets: SummaryRow[]): string` | private |
+| Rust | `render_summary_list(tasks: SummaryRow[]): string` | private |
 | Rust | `task_preview(task: json): string` | private |
-| Rust | `action_ticket(ticket_queue: TicketQueue, key: string?, ctx: ToolContext): ToolResult` | private |
-| Rust | `action_result(ticket_queue: TicketQueue, key: string?, ctx: ToolContext): ToolResult` | private |
-| Rust | `action_list(ticket_queue: TicketQueue, aql: string?): ToolResult` | private |
-| Rust | `action_create(ticket_queue: TicketQueue, task: json, label: string?, ctx: ToolContext): ToolResult` | private |
-| Rust | `action_edit(ticket_queue: TicketQueue, key: string?, new_task: json?, new_label: string?, ctx: ToolContext): ToolResult` | private |
+| Rust | `action_task(queue: Queue, key: string?, ctx: ToolContext): ToolResult` | private |
+| Rust | `action_result(queue: Queue, key: string?, ctx: ToolContext): ToolResult` | private |
+| Rust | `action_list(queue: Queue, aql: string?): ToolResult` | private |
+| Rust | `action_create(queue: Queue, task: json, label: string?, ctx: ToolContext): ToolResult` | private |
+| Rust | `action_edit(queue: Queue, key: string?, new_task: json?, new_label: string?, ctx: ToolContext): ToolResult` | private |
 
-## `crates/agentwerk/src/tools/tickets/tickets.rs`
+## `crates/agentwerk/src/tools/tasks/tasks.rs`
 
 ### Public
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| both | `TicketsTool` | pub |
-| Rust | `impl From<TicketsTool> for Tool` | pub |
+| both | `TasksTool` | pub |
+| Rust | `impl From<TasksTool> for Tool` | pub |
 
 ## `crates/agentwerk/src/tools/tool.rs`
 
@@ -2029,7 +2029,7 @@ Not bound: it is how `CommandTool` reads one command line.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `ToolContext { dir: string, run: Run?, ticket_queue: TicketQueue?, agent_id: string?, ticket_key: string?, knowledge: Knowledge? }` | pub |
+| Rust | `ToolContext { dir: string, run: Run?, queue: Queue?, agent_id: string?, task_key: string?, knowledge: Knowledge? }` | pub |
 | Python | not bound: a `@tool` function receives its input as keyword arguments only | |
 | Rust | `.new(dir: string): this` | pub |
 | Rust | `.cancelled(): Promise<void>` | pub |
@@ -2077,9 +2077,9 @@ Not bound: it is how `CommandTool` reads one command line.
 | Rust | `PER_TURN_CAP: number = 200000` | private |
 | Rust | `PREVIEW_CHARS: number = 2000` | private |
 | Rust | `ToolContext.run(run: Run): this` | crate |
-| Rust | `.ticket_queue(queue: TicketQueue): this` | crate |
+| Rust | `.queue(queue: Queue): this` | crate |
 | Rust | `.agent_id(name: string): this` | crate |
-| Rust | `.ticket_key(key: string): this` | crate |
+| Rust | `.task_key(key: string): this` | crate |
 | Rust | `.knowledge(knowledge: Knowledge): this` | crate |
 | Rust | `.emit(kind: EventKind): void` | crate |
 | Rust | `ToolCall { id: string, name: string, input: json }` | crate |
@@ -2177,8 +2177,8 @@ Binds `agents/agent.rs`, whose section holds the Python spelling of each method.
 | Rust | `.directives(compute: any): this` | python |
 | Rust | `.tool(tool: any): this throws PyErr` | python |
 | Rust | `.tools(tools: any): this throws PyErr` | python |
-| Rust | `.ticket(ticket: PyTicket): string throws PyErr` | python |
-| Rust | `.start(): PyTicketQueue throws PyErr` | python |
+| Rust | `.task(task: PyTask): string throws PyErr` | python |
+| Rust | `.start(): PyQueue throws PyErr` | python |
 
 ### Internal
 
@@ -2248,7 +2248,7 @@ Binds `event.rs`.
 | Language | Item | Visibility |
 |----------|------|------------|
 | Rust | `event_names(): string[]` | python |
-| Rust | `PyEvent { kind: string, created_at: number, agent_id: string, ticket_key: string, label: string?, data: json }` | python |
+| Rust | `PyEvent { kind: string, created_at: number, agent_id: string, task_key: string, label: string?, data: json }` | python |
 | Rust | `.data(): any throws PyErr` | python |
 | Rust | `.__repr__(): string` | python |
 
@@ -2309,7 +2309,7 @@ Registers every bound class and function in the `_agentwerk` module.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `mod agent`, `mod policy`, `mod convert`, `mod directives`, `mod event`, `mod knowledge`, `mod providers`, `mod query`, `mod reply`, `mod schema`, `mod ticket`, `mod ticket_queue`, `mod tools`, `mod trajectory` | private |
+| Rust | `mod agent`, `mod policy`, `mod convert`, `mod directives`, `mod event`, `mod knowledge`, `mod providers`, `mod query`, `mod reply`, `mod schema`, `mod task`, `mod queue`, `mod tools`, `mod trajectory` | private |
 
 ## `crates/agentwerk-py/src/providers.rs`
 
@@ -2342,13 +2342,13 @@ Binds `providers/`.
 
 ## `crates/agentwerk-py/src/query.rs`
 
-Binds `agents/query.rs`. One class covers both field sets: Python carries no type parameter, so the string is compiled over the ticket fields and the event fields at once.
+Binds `agents/query.rs`. One class covers both field sets: Python carries no type parameter, so the string is compiled over the task fields and the event fields at once.
 
 ### Public
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `PyQuery { source: string, tickets: Query<Ticket> throws QueryError, events: Query<Event> throws QueryError }` | python |
+| Rust | `PyQuery { source: string, tasks: Query<Task> throws QueryError, events: Query<Event> throws QueryError }` | python |
 | Rust | `.new(query: string): this throws PyErr`, raising only where both field sets reject the string | python |
 | Rust | `.__repr__(): string` | python |
 
@@ -2356,16 +2356,16 @@ Binds `agents/query.rs`. One class covers both field sets: Python carries no typ
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `rejected(over_tickets: QueryError, over_events: QueryError): PyErr` | private |
+| Rust | `rejected(over_tasks: QueryError, over_events: QueryError): PyErr` | private |
 | Rust | `value_error(message: string): PyErr` | private |
-| Rust | `to_ticket_matcher(arg: any): Query<Ticket> throws PyErr` | crate |
+| Rust | `to_task_matcher(arg: any): Query<Task> throws PyErr` | crate |
 | Rust | `to_event_matcher(arg: any): Query<Event> throws PyErr` | crate |
-| Rust | `ticket_predicate(predicate: any, ticket: Ticket): boolean` | private |
+| Rust | `task_predicate(predicate: any, task: Task): boolean` | private |
 | Rust | `event_predicate(predicate: any, event: Event): boolean` | private |
 
 ## `crates/agentwerk-py/src/reply.rs`
 
-Binds `agents/tickets/reply.rs`, and owns the two reply converters the editors on `TicketQueue` use.
+Binds `agents/tasks/reply.rs`, and owns the two reply converters the editors on `Queue` use.
 
 ### Public
 
@@ -2410,15 +2410,15 @@ Binds `schemas/`.
 | Rust | `.label(label: string, document: any): this throws PyErr` | python |
 | Rust | `.get(label: string): PySchema?` | python |
 
-## `crates/agentwerk-py/src/ticket.rs`
+## `crates/agentwerk-py/src/task.rs`
 
-Binds `agents/tickets/ticket.rs`.
+Binds `agents/tasks/task.rs`.
 
 ### Public
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `PyTicket { inner: Ticket }` | python |
+| Rust | `PyTask { inner: Task }` | python |
 | Rust | `.new(task: any, label: string?, schema: PySchema?, parent: string?): this throws PyErr` | python |
 | Rust | `.has_label(label: string): boolean` | python |
 | Rust | `.is_todo(): boolean` | python |
@@ -2447,23 +2447,23 @@ Binds `agents/tickets/ticket.rs`.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `to_ticket(arg: any): Ticket throws PyErr`, reading an `os.PathLike` as the file holding the task | crate |
-| Rust | `PyTicket.from_ticket(ticket: Ticket): this` | crate |
-| Rust | `.to_ticket(): Ticket` | crate |
+| Rust | `to_task(arg: any): Task throws PyErr`, reading an `os.PathLike` as the file holding the task | crate |
+| Rust | `PyTask.from_task(task: Task): this` | crate |
+| Rust | `.to_task(): Task` | crate |
 
-## `crates/agentwerk-py/src/ticket_queue.rs`
+## `crates/agentwerk-py/src/queue.rs`
 
-Binds `agents/tickets/ticket_queue.rs` and `store.rs`.
+Binds `agents/tasks/queue.rs` and `store.rs`.
 
 ### Public
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `PyTicketQueue { inner: TicketQueue }` | python |
+| Rust | `PyQueue { inner: Queue }` | python |
 | Rust | `.new(): this` | python |
-| Rust | `.load(tickets_dir: string): this throws PyErr` | python |
+| Rust | `.load(tasks_dir: string): this throws PyErr` | python |
 | Rust | `.agent(agent: PyAgent): this throws PyErr` | python |
-| Rust | `.ticket(ticket: PyTicket): string throws PyErr` | python |
+| Rust | `.task(task: PyTask): string throws PyErr` | python |
 | Rust | `.reply(key: string, content: string): this` | python |
 | Rust | `.set_finished(key: string, result: any): void throws PyErr` | python |
 | Rust | `.set_failed(key: string): void throws PyErr` | python |
@@ -2479,12 +2479,12 @@ Binds `agents/tickets/ticket_queue.rs` and `store.rs`.
 | Rust | `.on_failure(handler: any): this` | python |
 | Rust | `.on_failure_async(handler: any): this` | python |
 | Rust | `.model_for_agent(agent_id: string): string?` | python |
-| Rust | `.get_ticket(key: string): PyTicket? throws PyErr` | python |
-| Rust | `.tickets(): PyTicket[] throws PyErr` | python |
-| Rust | `.find_tickets(predicate: any): PyTicket[] throws PyErr` | python |
-| Rust | `.find_ticket(predicate: any): PyTicket? throws PyErr` | python |
-| Rust | `.on_ticket(handler: any): this` | python |
-| Rust | `.on_ticket_async(handler: any): this` | python |
+| Rust | `.get_task(key: string): PyTask? throws PyErr` | python |
+| Rust | `.tasks(): PyTask[] throws PyErr` | python |
+| Rust | `.find_tasks(predicate: any): PyTask[] throws PyErr` | python |
+| Rust | `.find_task(predicate: any): PyTask? throws PyErr` | python |
+| Rust | `.on_task(handler: any): this` | python |
+| Rust | `.on_task_async(handler: any): this` | python |
 | Rust | `.edit_replies(key: string, editor: any): this throws PyErr` | python |
 | Rust | `.start(): this` | python |
 | Rust | `.finish(matches: any): Promise<any[]> throws PyErr` | python |
@@ -2493,7 +2493,7 @@ Binds `agents/tickets/ticket_queue.rs` and `store.rs`.
 | Rust | `.finish_reason(): string?` | python |
 | Rust | `.cancel(matches: any): this throws PyErr` | python |
 | Rust | `.cancel_all(): this` | python |
-| Rust | `.is_cancelled(ticket: PyTicket): boolean` | python |
+| Rust | `.is_cancelled(task: PyTask): boolean` | python |
 | Rust | `.find_events(matches: any): PyEvent[] throws PyErr` | python |
 | Rust | `.find_event(matches: any): PyEvent? throws PyErr` | python |
 | Rust | `.input_tokens(): number` | python |
@@ -2507,9 +2507,9 @@ Binds `agents/tickets/ticket_queue.rs` and `store.rs`.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `as_py_queue(py: Python, queue: TicketQueue): any throws PyErr` | private |
-| Rust | `call_with_result(py: Python, callable: any, queue: TicketQueue, ticket: Ticket, result: json): any throws PyErr` | private |
-| Rust | `call_with_ticket(py: Python, callable: any, queue: TicketQueue, event: Event, ticket: Ticket): any throws PyErr` | private |
+| Rust | `as_py_queue(py: Python, queue: Queue): any throws PyErr` | private |
+| Rust | `call_with_result(py: Python, callable: any, queue: Queue, task: Task, result: json): any throws PyErr` | private |
+| Rust | `call_with_task(py: Python, callable: any, queue: Queue, event: Event, task: Task): any throws PyErr` | private |
 | Rust | `await_coroutine(coroutine: Promise<any throws PyErr> throws PyErr): Promise<void>` | private |
 
 ## `crates/agentwerk-py/src/tools.rs`
@@ -2532,7 +2532,7 @@ Binds `tools/`.
 | Rust | `list_directory_tool(): PyTool` | python |
 | Rust | `knowledge_tool(store: PyKnowledge): PyTool` | python |
 | Rust | `finish_tool(): PyTool` | python |
-| Rust | `tickets_tool(): PyTool` | python |
+| Rust | `tasks_tool(): PyTool` | python |
 | Rust | `PyFetchUrlTool { inner: FetchUrlTool }` | python |
 | Rust | `.new(): this` | python |
 | Rust | `.impersonate(): this` | python |
@@ -2556,14 +2556,14 @@ Binds `tools/`.
 
 ## `crates/agentwerk-py/src/trajectory.rs`
 
-Binds `agents/tickets/trajectory.rs`.
+Binds `agents/tasks/trajectory.rs`.
 
 ### Public
 
 | Language | Item | Visibility |
 |----------|------|------------|
 | Rust | `PyTrajectory { inner: Trajectory }` | python |
-| Rust | `.from_ticket(agent_id: string, model: string?, ticket: PyTicket): this` | python |
+| Rust | `.from_task(agent_id: string, model: string?, task: PyTask): this` | python |
 | Rust | `.save(dir: string): void throws PyErr` | python |
 | Rust | `.key(): string` | python |
 | Rust | `.model(): string?` | python |

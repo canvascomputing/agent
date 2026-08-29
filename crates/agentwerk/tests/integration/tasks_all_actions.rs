@@ -1,10 +1,10 @@
-//! End-to-end: a real LLM walks the whole `tickets` action set on one ticket,
-//! reading its own ticket and its parent's result, listing the queue whole and
-//! then narrowing it with AQL, then creating and editing a ticket. The role
+//! End-to-end: a real LLM walks the whole `tasks` action set on one task,
+//! reading its own task and its parent's result, listing the queue whole and
+//! then narrowing it with AQL, then creating and editing a task. The role
 //! names intents, never actions or query syntax, so the tool's own description
 //! is what has to map each intent onto the right action and onto a query that
 //! compiles. The parent's result comes from a real handover, the only way a
-//! finished ticket with a result exists.
+//! finished task with a result exists.
 
 use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
@@ -12,23 +12,23 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::common;
 
-use agentwerk::tools::TicketsTool;
-use agentwerk::{Agent, EventKind, Policy, Query, Ticket, TicketQueue};
+use agentwerk::tools::TasksTool;
+use agentwerk::{Agent, EventKind, Policy, Query, Queue, Task};
 
-const ACTIONS: [&str; 5] = ["ticket", "result", "list", "create", "edit"];
+const ACTIONS: [&str; 5] = ["task", "result", "list", "create", "edit"];
 
 /// Sits unlabeled and unclaimed: both agents carry a label, so neither handles
 /// it. It exists to give `list` something to find.
 const DORMANT_NOTE: &str = "Quarterly inventory of the sealed archive room.";
 
 #[tokio::test]
-async fn walks_every_ticket_action() -> std::result::Result<(), Box<dyn std::error::Error>> {
+async fn walks_every_task_action() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let (provider, model) = common::build_provider();
 
     let secret = ten_digit_token();
 
-    let tickets = TicketQueue::new();
-    tickets.policy(Policy {
+    let tasks = Queue::new();
+    tasks.policy(Policy {
         max_turns: Some(20),
         max_time: Some(Duration::from_secs(120)),
         ..Default::default()
@@ -38,12 +38,12 @@ async fn walks_every_ticket_action() -> std::result::Result<(), Box<dyn std::err
     let written = Arc::new(Mutex::new(Vec::new()));
     let actions = Arc::clone(&seen);
     let queries = Arc::clone(&written);
-    tickets.on_event(move |_, e| {
+    tasks.on_event(move |_, e| {
         if let EventKind::ToolCallStarted {
             tool_name, input, ..
         } = &e.kind
         {
-            if tool_name == "tickets" {
+            if tool_name == "tasks" {
                 if let Some(action) = input["action"].as_str() {
                     actions.lock().unwrap().insert(action.to_string());
                 }
@@ -54,43 +54,43 @@ async fn walks_every_ticket_action() -> std::result::Result<(), Box<dyn std::err
         }
     });
 
-    tickets.agent(
+    tasks.agent(
         Agent::new()
             .provider(provider.clone())
             .model(&model)
             .label("archive")
             .role(
                 "{context}\n\n\
-                 Finish your ticket in a single call: pass the combination from \
+                 Finish your task in a single call: pass the combination from \
                  your task as your result, hand the work over to `auditor`, and \
-                 give the new ticket the task `Audit the archived record.`",
+                 give the new task the task `Audit the archived record.`",
             ),
     );
-    tickets.agent(
+    tasks.agent(
         Agent::new()
             .provider(provider)
             .model(&model)
             .label("auditor")
             .role(
                 "{context}\n\n\
-                 Work your ticket with the ticket tool, one call at a time, in \
+                 Work your task with the task tool, one call at a time, in \
                  this order, then call `finish`:\n\
-                 1. Read your own ticket and note the parent it names.\n\
+                 1. Read your own task and note the parent it names.\n\
                  2. Read what that parent produced: it holds a vault combination.\n\
-                 3. Find out how many tickets the queue holds right now.\n\
+                 3. Find out how many tasks the queue holds right now.\n\
                  4. Without reading the whole queue again, ask it for the one \
-                 ticket whose body carries the phrase `sealed archive room`.\n\
-                 5. File a new ticket recording the combination, in the \
+                 task whose body carries the phrase `sealed archive room`.\n\
+                 5. File a new task recording the combination, in the \
                  `records` scope so nobody picks it up.\n\
-                 6. Correct the wording of that new ticket.\n\
+                 6. Correct the wording of that new task.\n\
                  Finish by quoting the exact combination.",
             )
-            .tool(TicketsTool),
+            .tool(TasksTool),
     );
 
-    tickets.ticket(Ticket::new(DORMANT_NOTE));
-    tickets.ticket(
-        Ticket::new(format!(
+    tasks.task(Task::new(DORMANT_NOTE));
+    tasks.task(
+        Task::new(format!(
             "The vault combination is {secret}. Archive it and pass the audit on."
         ))
         .label("archive"),
@@ -99,10 +99,10 @@ async fn walks_every_ticket_action() -> std::result::Result<(), Box<dyn std::err
     // Not `finish_all`: the decoy and the record the agent files are labelled
     // for nobody, so they stay `Todo` and a wait on the whole queue only ever
     // ends at the time cap.
-    tickets
-        .finish(|t: &agentwerk::Ticket| t.has_label("archive") || t.has_label("auditor"))
+    tasks
+        .finish(|t: &agentwerk::Task| t.has_label("archive") || t.has_label("auditor"))
         .await;
-    common::print_result(&tickets);
+    common::print_result(&tasks);
 
     let used = seen.lock().unwrap().clone();
     let missing: Vec<&str> = ACTIONS
@@ -119,13 +119,13 @@ async fn walks_every_ticket_action() -> std::result::Result<(), Box<dyn std::err
     // the intent has to reach, not every attempt on the way there.
     let written = written.lock().unwrap().clone();
     assert!(
-        written.iter().any(|q| Query::<Ticket>::new(q).is_ok()),
+        written.iter().any(|q| Query::<Task>::new(q).is_ok()),
         "the narrowing intent reached no query that compiles; it wrote {written:?}"
     );
 
-    let audit = tickets
-        .find_ticket(|t: &agentwerk::Ticket| t.has_label("auditor") && t.is_finished())
-        .expect("the auditor must finish the ticket handed to it");
+    let audit = tasks
+        .find_task(|t: &agentwerk::Task| t.has_label("auditor") && t.is_finished())
+        .expect("the auditor must finish the task handed to it");
     let answer = audit.result.unwrap_or_default().to_string();
     assert!(
         answer.contains(&secret.to_string()),

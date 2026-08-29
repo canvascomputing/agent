@@ -1,14 +1,14 @@
-//! Shared `#[cfg(test)]` helpers for the inline `tickets::*` test modules.
+//! Shared `#[cfg(test)]` helpers for the inline `tasks::*` test modules.
 
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use super::ticket_queue::TicketQueue;
+use super::queue::Queue;
 use crate::agents::agent::Agent;
 use crate::event::{EventKind, FinishReason};
 
 /// Collect the reason from every `RunFinished`, since the queue keeps none.
-pub(super) fn collect_finish_reasons(queue: &TicketQueue) -> Arc<Mutex<Vec<FinishReason>>> {
+pub(super) fn collect_finish_reasons(queue: &Queue) -> Arc<Mutex<Vec<FinishReason>>> {
     let seen = Arc::new(Mutex::new(Vec::new()));
     let sink = Arc::clone(&seen);
     queue.on_event(move |_, event| {
@@ -27,17 +27,17 @@ pub(super) fn minimal_agent(label: &str) -> Agent {
         .model("mock")
 }
 
-/// Build a `TicketQueue` rooted at a fresh `TempDir` so the default
+/// Build a `Queue` rooted at a fresh `TempDir` so the default
 /// `.agentwerk` directory never lands in the source tree during tests.
 /// Hold the returned `TempDir` for the test's lifetime.
-pub(super) fn test_queue() -> (Arc<TicketQueue>, crate::test_util::TempDir) {
+pub(super) fn test_queue() -> (Arc<Queue>, crate::test_util::TempDir) {
     let dir = crate::test_util::TempDir::new().unwrap();
-    let built = TicketQueue::new();
+    let built = Queue::new();
     built.dir(dir.path().to_path_buf());
     (built, dir)
 }
 
-pub(super) fn attach_done_result(queue: &TicketQueue, key: &str, result: &str) {
+pub(super) fn attach_done_result(queue: &Queue, key: &str, result: &str) {
     queue
         .set_result(key, serde_json::Value::String(result.into()))
         .unwrap();

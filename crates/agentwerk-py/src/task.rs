@@ -1,41 +1,41 @@
-//! The ticket as Python sees it. One class in both directions: you set the
+//! The task as Python sees it. One class in both directions: you set the
 //! fields you own, and the same class comes back with its status and messages.
 //!
 //! Rust sets those fields with chained methods. A Python class cannot carry a
 //! `label` method and a `label` attribute, so they are keyword arguments here.
 
-use agentwerk::Ticket;
+use agentwerk::Task;
 use pyo3::prelude::*;
 
 use crate::convert::{py_to_text, py_to_value, value_to_py};
 use crate::schema::PySchema;
 
-/// Read a Python argument as a ticket: a `Ticket`, an `os.PathLike` naming the
+/// Read a Python argument as a task: a `Task`, an `os.PathLike` naming the
 /// file holding the task, or any value as the task itself.
 ///
 /// A `str` stays the task, since a task naming a file is still a task.
-pub fn to_ticket(arg: &Bound<'_, PyAny>) -> PyResult<Ticket> {
-    if let Ok(ticket) = arg.extract::<PyRef<'_, PyTicket>>() {
-        return Ok(ticket.to_ticket());
+pub fn to_task(arg: &Bound<'_, PyAny>) -> PyResult<Task> {
+    if let Ok(task) = arg.extract::<PyRef<'_, PyTask>>() {
+        return Ok(task.to_task());
     }
     if arg.hasattr("__fspath__")? {
-        return Ok(Ticket::new(py_to_text(arg)?));
+        return Ok(Task::new(py_to_text(arg)?));
     }
-    Ok(Ticket::new(py_to_value(arg)?))
+    Ok(Task::new(py_to_value(arg)?))
 }
 
-/// A `Ticket` is a task plus what assigns and validates it.
-#[pyclass(name = "Ticket")]
-pub struct PyTicket {
-    pub inner: Ticket,
+/// A `Task` is a task plus what assigns and validates it.
+#[pyclass(name = "Task")]
+pub struct PyTask {
+    pub inner: Task,
 }
 
 #[pymethods]
-impl PyTicket {
-    /// Create a ticket carrying `task`.
+impl PyTask {
+    /// Create a task carrying `task`.
     ///
     /// `label` assigns it to agents, `schema` is what the result must satisfy,
-    /// and `parent` names the ticket it came from.
+    /// and `parent` names the task it came from.
     #[new]
     #[pyo3(signature = (task, *, label=None, schema=None, parent=None))]
     fn new(
@@ -44,7 +44,7 @@ impl PyTicket {
         schema: Option<PyRef<'_, PySchema>>,
         parent: Option<String>,
     ) -> PyResult<Self> {
-        let mut inner = Ticket::new(py_to_value(task)?);
+        let mut inner = Task::new(py_to_value(task)?);
         if let Some(label) = label {
             inner = inner.label(label);
         }
@@ -54,35 +54,35 @@ impl PyTicket {
         if let Some(parent) = parent {
             inner = inner.parent(parent);
         }
-        Ok(PyTicket { inner })
+        Ok(PyTask { inner })
     }
 
-    /// Check whether the ticket carries a label.
+    /// Check whether the task carries a label.
     fn has_label(&self, label: &str) -> bool {
         self.inner.has_label(label)
     }
 
-    /// Check whether the ticket is waiting to be claimed.
+    /// Check whether the task is waiting to be claimed.
     fn is_todo(&self) -> bool {
         self.inner.is_todo()
     }
 
-    /// Check whether the ticket finished.
+    /// Check whether the task finished.
     fn is_finished(&self) -> bool {
         self.inner.is_finished()
     }
 
-    /// Check whether the ticket failed.
+    /// Check whether the task failed.
     fn is_failed(&self) -> bool {
         self.inner.is_failed()
     }
 
-    /// Check whether an agent is working on the ticket.
+    /// Check whether an agent is working on the task.
     fn is_in_progress(&self) -> bool {
         self.inner.is_in_progress()
     }
 
-    /// Check whether the ticket is still todo or in progress.
+    /// Check whether the task is still todo or in progress.
     fn is_pending(&self) -> bool {
         self.inner.is_pending()
     }
@@ -129,13 +129,13 @@ impl PyTicket {
         self.inner.parent.clone()
     }
 
-    /// Name of the agent that created the ticket.
+    /// Name of the agent that created the task.
     #[getter]
     fn reporter(&self) -> &str {
         &self.inner.reporter
     }
 
-    /// Name of the agent that claimed the ticket.
+    /// Name of the agent that claimed the task.
     #[getter]
     fn assignee(&self) -> Option<String> {
         self.inner.assignee.clone()
@@ -168,9 +168,9 @@ impl PyTicket {
         crate::reply::replies_to_py(&self.inner.replies)
     }
 
-    /// The failures recorded against the ticket, as events, in the order they
-    /// happened. A failed tool call or request does not fail the ticket, so a
-    /// finished ticket can carry some.
+    /// The failures recorded against the task, as events, in the order they
+    /// happened. A failed tool call or request does not fail the task, so a
+    /// finished task can carry some.
     #[getter]
     fn errors(&self) -> Vec<crate::event::PyEvent> {
         self.inner
@@ -181,38 +181,34 @@ impl PyTicket {
     }
 
     fn __repr__(&self) -> String {
-        format!(
-            "Ticket(key={:?}, status={:?})",
-            self.inner.key,
-            self.status()
-        )
+        format!("Task(key={:?}, status={:?})", self.inner.key, self.status())
     }
 }
 
-impl PyTicket {
-    /// Hand over a ticket the queue owns, messages included.
-    pub fn from_ticket(ticket: &Ticket) -> Self {
-        PyTicket {
-            inner: ticket.clone(),
+impl PyTask {
+    /// Hand over a task the queue owns, messages included.
+    pub fn from_task(task: &Task) -> Self {
+        PyTask {
+            inner: task.clone(),
         }
     }
 
-    /// Build the ticket to submit, copying only the fields you own.
+    /// Build the task to submit, copying only the fields you own.
     ///
     /// Submitting sets key, status, reporter, and result, but leaves the
-    /// messages and timestamps, so a ticket that came back out of the queue
+    /// messages and timestamps, so a task that came back out of the queue
     /// would otherwise carry its messages into the new one.
-    pub fn to_ticket(&self) -> Ticket {
-        let mut ticket = Ticket::new(self.inner.task.clone());
+    pub fn to_task(&self) -> Task {
+        let mut task = Task::new(self.inner.task.clone());
         if let Some(label) = &self.inner.label {
-            ticket = ticket.label(label.clone());
+            task = task.label(label.clone());
         }
         if let Some(schema) = &self.inner.schema {
-            ticket = ticket.schema(schema.clone());
+            task = task.schema(schema.clone());
         }
         if let Some(parent) = &self.inner.parent {
-            ticket = ticket.parent(parent.clone());
+            task = task.parent(parent.clone());
         }
-        ticket
+        task
     }
 }

@@ -1,6 +1,6 @@
 //! Divide-and-conquer sum of squares.
 //!
-//! Partitions `[1, N]` into K subranges and creates one ticket per
+//! Partitions `[1, N]` into K subranges and creates one task per
 //! subrange. Agents share the labelled queue, call the `python` tool
 //! for an exact integer, and finish via `finish` with a
 //! schema-validated `{"idx", "partial_sum"}`. The driver aggregates
@@ -20,8 +20,8 @@ use std::sync::Arc;
 use agentwerk::event::{Event, EventKind};
 use agentwerk::providers::{Model, Provider};
 use agentwerk::schemas::Schema;
-use agentwerk::tools::{TicketsTool, Tool, ToolResult};
-use agentwerk::{Agent, Policy, Ticket, TicketQueue};
+use agentwerk::tools::{TasksTool, Tool, ToolResult};
+use agentwerk::{Agent, Policy, Queue, Task};
 use serde_json::{json, Value};
 
 const ROLE: &str = include_str!("prompts/agent.role.md");
@@ -38,14 +38,14 @@ async fn main() {
     print_intro(args.n, partitions.len(), agents, &style);
 
     let schema = partial_sum_schema();
-    let tickets = TicketQueue::new();
-    let on_ctrl_c = Arc::clone(&tickets);
+    let tasks = Queue::new();
+    let on_ctrl_c = Arc::clone(&tasks);
     tokio::spawn(async move {
         if tokio::signal::ctrl_c().await.is_ok() {
             on_ctrl_c.cancel_all();
         }
     });
-    tickets.policy(Policy {
+    tasks.policy(Policy {
         max_turns: args.max_turns,
         ..Default::default()
     });
@@ -55,35 +55,35 @@ async fn main() {
             "Compute the partial sum S = sum_{{k={lo}}}^{{{hi}}} k^2.\n\
              lo={lo}\nhi={hi}\nidx={idx}",
         );
-        tickets.ticket(Ticket::new(body).schema(schema.clone()).label("compute"));
+        tasks.task(Task::new(body).schema(schema.clone()).label("compute"));
     }
 
     let event_handler = build_event_handler(args.verbose, style.clone(), partitions.len());
-    tickets.on_event(move |_, e| event_handler(e));
+    tasks.on_event(move |_, e| event_handler(e));
     for _ in 0..agents {
-        tickets.agent(
+        tasks.agent(
             Agent::new()
                 .provider(provider.clone())
                 .model(&model)
                 .role(ROLE)
                 .label("compute")
                 .tool(python_tool())
-                .tool(TicketsTool),
+                .tool(TasksTool),
         );
     }
 
-    tickets.finish_all().await;
+    tasks.finish_all().await;
 
-    aggregate_and_report(&tickets, &partitions, args.n, &style);
+    aggregate_and_report(&tasks, &partitions, args.n, &style);
 }
 
-fn aggregate_and_report(tickets: &TicketQueue, partitions: &[(u64, u64)], n: u64, style: &Style) {
+fn aggregate_and_report(tasks: &Queue, partitions: &[(u64, u64)], n: u64, style: &Style) {
     let total = partitions.len();
     let mut partials: Vec<Option<i128>> = vec![None; total];
     let mut failures = 0usize;
 
-    for ticket in tickets.tickets() {
-        match extract_partial(&ticket, total) {
+    for task in tasks.tasks() {
+        match extract_partial(&task, total) {
             Ok((idx, sum)) => {
                 let (lo, hi) = partitions[idx];
                 eprintln!(
@@ -98,7 +98,7 @@ fn aggregate_and_report(tickets: &TicketQueue, partitions: &[(u64, u64)], n: u64
                 failures += 1;
                 eprintln!(
                     "{red}│{reset} {key:<8} ✗ {reason}",
-                    key = ticket.key,
+                    key = task.key,
                     red = style.red,
                     reset = style.reset,
                 );
@@ -108,18 +108,15 @@ fn aggregate_and_report(tickets: &TicketQueue, partitions: &[(u64, u64)], n: u64
 
     let total_sum: i128 = partials.iter().flatten().sum();
     let expected = closed_form(n);
-    let elapsed = tickets
-        .execution_duration()
-        .unwrap_or_default()
-        .as_secs_f64();
-    let done = tickets
-        .find_events(|e: &Event| matches!(e.kind, EventKind::TicketFinished))
+    let elapsed = tasks.execution_duration().unwrap_or_default().as_secs_f64();
+    let done = tasks
+        .find_events(|e: &Event| matches!(e.kind, EventKind::TaskFinished))
         .len();
 
     eprintln!(
         "{dim}└ aggregated in {elapsed:.1}s · {done} done, {failures} failed · {} in / {} out tokens{reset}",
-        tickets.input_tokens(),
-        tickets.output_tokens(),
+        tasks.input_tokens(),
+        tasks.output_tokens(),
         dim = style.dim,
         reset = style.reset,
     );
@@ -151,15 +148,15 @@ fn aggregate_and_report(tickets: &TicketQueue, partitions: &[(u64, u64)], n: u64
     );
 }
 
-/// Pull a `(idx, partial_sum)` pair off a finished ticket. The schema
+/// Pull a `(idx, partial_sum)` pair off a finished task. The schema
 /// already guarantees the field shape; this also cross-checks `idx`
 /// against the `idx=` line in the task body so a wrongly assigned result
 /// can't quietly slot into the wrong partition.
-fn extract_partial(ticket: &Ticket, total: usize) -> Result<(usize, i128), String> {
-    if !ticket.is_finished() {
-        return Err(ticket.status.to_string());
+fn extract_partial(task: &Task, total: usize) -> Result<(usize, i128), String> {
+    if !task.is_finished() {
+        return Err(task.status.to_string());
     }
-    let attached = ticket.result.as_ref().ok_or("no result attached")?;
+    let attached = task.result.as_ref().ok_or("no result attached")?;
     let idx = attached
         .get("idx")
         .and_then(|v| v.as_u64())
@@ -172,7 +169,7 @@ fn extract_partial(ticket: &Ticket, total: usize) -> Result<(usize, i128), Strin
     if idx >= total {
         return Err(format!("idx {idx} out of range"));
     }
-    let body_idx = parse_idx_from_body(&ticket.task);
+    let body_idx = parse_idx_from_body(&task.task);
     if body_idx != Some(idx) {
         return Err(format!("idx mismatch: body={body_idx:?}, result={idx}"));
     }
@@ -265,16 +262,16 @@ fn build_event_handler(
     let width = digit_width(total);
     Arc::new(move |event: &Event| {
         let agent = &event.agent_id;
-        let key = &event.ticket_key;
+        let key = &event.task_key;
         match &event.kind {
-            EventKind::TicketStarted => eprintln!(
+            EventKind::TaskStarted => eprintln!(
                 "{dim}│       ▶ {agent:<10} {key} dispatched{reset}",
                 dim = style.dim,
                 reset = style.reset,
             ),
-            EventKind::TicketFinished | EventKind::TicketFailed => {
+            EventKind::TaskFinished | EventKind::TaskFailed => {
                 let n = done.fetch_add(1, Ordering::Relaxed) + 1;
-                let outcome = if matches!(event.kind, EventKind::TicketFinished) {
+                let outcome = if matches!(event.kind, EventKind::TaskFinished) {
                     "done"
                 } else {
                     "failed"
@@ -325,11 +322,11 @@ fn build_event_handler(
 
 fn print_intro(n: u64, partitions: usize, agents: usize, style: &Style) {
     eprintln!("divide-and-conquer   sum_{{k=1}}^{{{n}}} k^2   (verified via N(N+1)(2N+1)/6)\n");
-    eprintln!("  Split [1, {n}] into {partitions} contiguous subranges and enqueue one ticket per");
+    eprintln!("  Split [1, {n}] into {partitions} contiguous subranges and enqueue one task per");
     eprintln!("  subrange. {agents} agent(s) share the queue, each calling a `python` tool");
-    eprintln!("  to compute its partial sum exactly. Agents finish their tickets via");
+    eprintln!("  to compute its partial sum exactly. Agents finish their tasks via");
     eprintln!("  `finish` with `{{\"idx\", \"partial_sum\"}}`; the driver aggregates");
-    eprintln!("  once every ticket is finished and verifies against the closed-form total.\n");
+    eprintln!("  once every task is finished and verifies against the closed-form total.\n");
     eprintln!(
         "{dim}┌ {partitions} partitions · {agents} agent(s) sharing the queue{reset}",
         dim = style.dim,
@@ -466,7 +463,7 @@ impl CliArgs {
         eprintln!("Divide-and-conquer sum of squares.\n");
         eprintln!("Usage: divide-and-conquer [OPTIONS] [N]\n");
         eprintln!("Options:");
-        eprintln!("  -p, --partitions <K>   Number of ticket partitions (default: 16)");
+        eprintln!("  -p, --partitions <K>   Number of task partitions (default: 16)");
         eprintln!("  -c, --concurrency <N>  Number of agents sharing the queue (default: 8)");
         eprintln!("      --max-turns <N>    Per-queue turn limit (default: unlimited)");
         eprintln!("  -v, --verbose          Print per-agent tool calls as they happen");

@@ -12,7 +12,7 @@ triggers:
 
 # Prompt
 
-You write agentwerk's agent-facing text: role files, `*.tool.md` definitions, directives. Each one is a system prompt resent on every turn of every ticket, so its length is a cost the whole run pays. The consumer is the model running under it, which acts without re-reading you.
+You write agentwerk's agent-facing text: role files, `*.tool.md` definitions, directives. Each one is a system prompt resent on every turn of every task, so its length is a cost the whole run pays. The consumer is the model running under it, which acts without re-reading you.
 
 Compression is the style, not a level. There is no verbose mode and no flag.
 
@@ -83,7 +83,7 @@ One `finish` with:
 
 - <observable check the output passes>
 
-NOTE: <what this ticket is not>
+NOTE: <what this task is not>
 ````
 
 - `{context}` holds the runtime block and nothing static: session values break the prompt cache.

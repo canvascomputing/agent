@@ -1,7 +1,7 @@
 //! Run agentic workflows where many agents work in parallel on a shared
-//! ticket queue. An [`Agent`] picks up tickets from a [`TicketQueue`],
+//! task queue. An [`Agent`] picks up tasks from a [`Queue`],
 //! calls the LLM provider, runs the tools it requests, and writes results
-//! back. Tickets are assigned to agents by name or label; the queue
+//! back. Tasks are assigned to agents by name or label; the queue
 //! handles concurrency, automatic context compaction, schema validation,
 //! retries, and limits.
 //!
@@ -17,7 +17,7 @@
 //!     .tool(ReadFileTool)
 //!     .tool(GrepTool);
 //!
-//! agent.ticket("Find every `pub trait` defined under src/ and explain each in one sentence.");
+//! agent.task("Find every `pub trait` defined under src/ and explain each in one sentence.");
 //! let work = agent.start();
 //! let result = work.finish_last().await.unwrap();
 //!
@@ -28,14 +28,14 @@
 //! # Many agents working together
 //!
 //! ```no_run
-//! use agentwerk::{Agent, Ticket, TicketQueue};
+//! use agentwerk::{Agent, Task, Queue};
 //! use agentwerk::tools::FetchUrlTool;
 //!
 //! # async fn run() {
-//! let tickets = TicketQueue::new();
+//! let tasks = Queue::new();
 //!
 //! for _ in 0..4 {
-//!     tickets.agent(
+//!     tasks.agent(
 //!         Agent::from_env()
 //!             .label("research")
 //!             .tool(FetchUrlTool::new()),
@@ -48,14 +48,14 @@
 //!     "https://canvascomputing.org/products",
 //!     "https://canvascomputing.org/blog",
 //! ] {
-//!     tickets.ticket(Ticket::labeled("research", format!("Summarize {url}")));
+//!     tasks.task(Task::labeled("research", format!("Summarize {url}")));
 //! }
 //!
-//! tickets.finish_all().await;
+//! tasks.finish_all().await;
 //!
-//! for ticket in tickets.tickets() {
-//!     if let Some(result) = ticket.result {
-//!         println!("{}: {}", ticket.key, result);
+//! for task in tasks.tasks() {
+//!     if let Some(result) = task.result {
+//!         println!("{}: {}", task.key, result);
 //!     }
 //! }
 //! # }
@@ -63,12 +63,12 @@
 //!
 //! # Main types
 //!
-//! - [`Agent`]: picks up tickets and produces results.
-//! - [`TicketQueue`]: coordinates complex work across agents.
-//! - [`Ticket`]: a task plus the label and schema that assign and validate it.
-//! - [`Knowledge`]: durable memory the agent shares across tickets and other agents.
+//! - [`Agent`]: picks up tasks and produces results.
+//! - [`Queue`]: coordinates complex work across agents.
+//! - [`Task`]: a task plus the label and schema that assign and validate it.
+//! - [`Knowledge`]: durable memory the agent shares across tasks and other agents.
 //! - [`Event`]: requests, tool usage, failures and more.
-//! - [`tools`]: the built-in tools agents call, for files, search, commands, web, knowledge, and tickets.
+//! - [`tools`]: the built-in tools agents call, for files, search, commands, web, knowledge, and tasks.
 
 pub mod agents;
 pub mod codegrep;
@@ -82,13 +82,13 @@ pub mod tools;
 #[cfg(test)]
 pub(crate) mod test_util;
 
-// Workshop: agents pull tickets from the queue
+// Workshop: agents pull tasks from the queue
 pub use agents::Agent;
 pub use agents::Query;
+pub use agents::Queue;
 pub use agents::Reply;
 pub use agents::Status;
-pub use agents::Ticket;
-pub use agents::TicketQueue;
+pub use agents::Task;
 
 // Tuning, telemetry, durable state
 pub use agents::Knowledge;

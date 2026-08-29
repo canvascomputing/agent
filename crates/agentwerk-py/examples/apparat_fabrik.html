@@ -174,11 +174,11 @@ const state = {
   stationOf: new Map(),
   apparate: [],
   agents: new Map(),
-  // Crates are held under the part number stamped on them, not under a ticket:
-  // one piece travels through the Abnahme and the Montage under two tickets,
+  // Crates are held under the part number stamped on them, not under a task:
+  // one piece travels through the Abnahme and the Montage under two tasks,
   // and it is the same piece on the floor both times.
   parts: new Map(),
-  partOfTicket: new Map(),
+  partOfTask: new Map(),
   places: {},
   book: { entries: [], stamp: 0 },
   log: [],
@@ -356,12 +356,12 @@ function tell(line) {
     .join("");
 }
 
-/** The piece standing at the stop is the next one worked there. A ticket takes
+/** The piece standing at the stop is the next one worked there. A task takes
     the crate at the head of its queue rather than the one it happened to file,
-    and the two tickets trade crates, so every piece is collected at the stop
+    and the two tasks trade crates, so every piece is collected at the stop
     and none is ever fetched out of the intake. Crates carry their number in the
     Laufzettel, not on the lid, so trading them is only bookkeeping. */
-function claimAtStop(pool, ticket) {
+function claimAtStop(pool, task) {
   // A piece another worker is already on their way to is not at the head of
   // anything: it is spoken for.
   const spoken = new Set([...state.agents.values()].map((worker) => worker.fetching));
@@ -370,11 +370,11 @@ function claimAtStop(pool, ticket) {
   if (!waiting.length) return null;
   waiting.sort((first, second) => second.x - first.x);
   const front = waiting[0];
-  const mine = state.partOfTicket.get(ticket);
+  const mine = state.partOfTask.get(task);
   if (!mine || mine === front.key) return front;
-  const other = [...state.partOfTicket.entries()].find(([, key]) => key === front.key);
-  if (other) state.partOfTicket.set(other[0], mine);
-  state.partOfTicket.set(ticket, front.key);
+  const other = [...state.partOfTask.entries()].find(([, key]) => key === front.key);
+  if (other) state.partOfTask.set(other[0], mine);
+  state.partOfTask.set(task, front.key);
   const swapped = state.parts.get(mine);
   if (swapped) {
     const number = swapped.teil, title = swapped.plan;
@@ -386,9 +386,9 @@ function claimAtStop(pool, ticket) {
   return front;
 }
 
-/** The crate a ticket is about, whichever ticket the piece travels under now. */
-function crateFor(ticket) {
-  const key = state.partOfTicket.get(ticket);
+/** The crate a task is about, whichever task the piece travels under now. */
+function crateFor(task) {
+  const key = state.partOfTask.get(task);
   return key ? state.parts.get(key) || null : null;
 }
 
@@ -439,7 +439,7 @@ function keepClear() {
 
 /** Where a piece goes on the belt: the first clear spot between `from` and the
     stop it is bound for, and only behind `from` when that stretch is full. A
-    plan's worth of tickets then lands as a row running up to the machine
+    plan's worth of tasks then lands as a row running up to the machine
     instead of as a tail hanging off the back of the line. */
 function joinQueue(from, stop, head) {
   const ahead = freeSpot(from, SPACING);
@@ -503,25 +503,25 @@ const handle = {
     tell("Die Schicht tritt an. Das Band läuft.");
   },
 
-  ticket_created(frame) {
+  task_created(frame) {
     const part = partNumberIn(frame.task);
     const reporter = agentOf(frame.reporter || frame.agent);
     if (!part) {
       // A plan, not a part: it comes in at the intake and rides down to the
       // Prüfung, where a Prüfer takes it off.
       const pruefung = state.stationOf.get("pruefer");
-      const plan = crateAt(frame.ticket, {
+      const plan = crateAt(frame.task, {
         x: joinQueue(state.places.wareneingang.x, pruefung ? pruefung.x : state.feed.x1, state.feed.x0 + 10),
         y: state.feed.y,
       });
       plan.queue = "pruefer";
       plan.plan = (String(frame.task || "").match(/Bauplan ([^.]+)\./) || [0, "BAUPLAN"])[1];
       plan.tone = COLOR.teal;
-      state.partOfTicket.set(frame.ticket, frame.ticket);
+      state.partOfTask.set(frame.task, frame.task);
       return;
     }
-    state.partOfTicket.set(frame.ticket, part);
-    if (state.parts.has(part)) return;   // already on the floor, under its first ticket
+    state.partOfTask.set(frame.task, part);
+    if (state.parts.has(part)) return;   // already on the floor, under its first task
     // The parts a plan names go on the belt just past the stop they were
     // written at, and travel from there to the Abnahme.
     const pruefung = state.stationOf.get("pruefer");
@@ -540,12 +540,12 @@ const handle = {
     }
   },
 
-  ticket_started(frame) {
+  task_started(frame) {
     const agent = agentOf(frame.agent);
     if (!agent) return;
     const station = state.stationOf.get(agent.pool);
     if (station) station.glow = 1;
-    const crate = crateFor(frame.ticket);
+    const crate = crateFor(frame.task);
     if (!crate) {
       walk(agent, null);
       return;
@@ -576,7 +576,7 @@ const handle = {
       walk(agent, null);
     } else if (tool === "knowledge") {
       walk(agent, "pruefbuch");
-    } else if (tool === "manage_tickets") {
+    } else if (tool === "manage_tasks") {
       walk(agent, null);          // the Laufzettel is written at the bench
     }
   },
@@ -585,7 +585,7 @@ const handle = {
     const agent = agentOf(frame.agent);
     const said = frame.result;
     if (!agent || !said || typeof said !== "object" || !said.teil) return;
-    const crate = crateFor(frame.ticket) || state.parts.get(said.teil);
+    const crate = crateFor(frame.task) || state.parts.get(said.teil);
 
     if (said.eingebaut !== undefined) {          // a Monteur booked it
       agent.pocket.push({ teil: said.teil, passt: said.eingebaut });
@@ -661,10 +661,10 @@ const handle = {
     state.book.stamp = 1;
   },
 
-  ticket_finished(frame) {
+  task_finished(frame) {
     const agent = agentOf(frame.agent);
-    const crate = crateFor(frame.ticket);
-    state.partOfTicket.delete(frame.ticket);
+    const crate = crateFor(frame.task);
+    state.partOfTask.delete(frame.task);
     // A plan that is worked off is filed where it was read. Nothing travels
     // back up the hall: the way through the works is the way the belt runs.
     if (crate && crate.plan) state.parts.delete(crate.key);
@@ -673,10 +673,10 @@ const handle = {
     if (agent && !agent.delivering) walk(agent, null);
   },
 
-  ticket_failed(frame) {
+  task_failed(frame) {
     const agent = agentOf(frame.agent);
-    const crate = crateFor(frame.ticket);
-    state.partOfTicket.delete(frame.ticket);
+    const crate = crateFor(frame.task);
+    state.partOfTask.delete(frame.task);
     if (!agent) return;
     agent.shake = 1;
     agent.pocket.pop();
@@ -819,7 +819,7 @@ function update(step, now) {
       if (!crate) {
         agent.fetching = null;
       } else if (!crate.held) {
-        // Claiming a ticket does not stop the belt. The piece keeps its place
+        // Claiming a task does not stop the belt. The piece keeps its place
         // in the queue and runs on to the machine; the worker goes to the stop
         // it is headed for and takes it off there.
         stepToBelt(agent, crate.tx, crate.plan);

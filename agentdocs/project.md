@@ -20,17 +20,17 @@ agentwerk is a Rust crate for building LLM agents. An agent reads input, calls a
 
 ## Parallel by Default
 
-**Many agents share one `TicketQueue` and pick up tickets concurrently.**
+**Many agents share one `Queue` and pick up tasks concurrently.**
 
 ```rust
-tickets.agent(Agent::from_env().label("scan"));
-tickets.ticket(Ticket::new("Audit src/db.").label("scan"));
+tasks.agent(Agent::from_env().label("scan"));
+tasks.task(Task::new("Audit src/db.").label("scan"));
 ```
 
-- Each agent runs on its own tokio task; the shared queue claims a ticket exactly once.
-- An agent serves one label and a ticket carries one, so a label only one agent serves pins the ticket to that agent.
-- Agents are cloned and modified, then bound to a `TicketQueue`. No global registration, no implicit state.
-- A ticket carries a `Schema`; the loop validates the agent's result against it.
+- Each agent runs on its own tokio task; the shared queue claims a task exactly once.
+- An agent serves one label and a task carries one, so a label only one agent serves pins the task to that agent.
+- Agents are cloned and modified, then bound to a `Queue`. No global registration, no implicit state.
+- A task carries a `Schema`; the loop validates the agent's result against it.
 
 ## Provider-Agnostic
 

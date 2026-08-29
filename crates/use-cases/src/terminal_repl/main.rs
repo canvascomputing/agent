@@ -1,14 +1,14 @@
-//! Interactive terminal chat. One `TicketQueue` + `Agent` + `Knowledge`
-//! lives for the whole session, and one chat ticket spans every turn:
-//! the first input creates the ticket via `tickets.ticket(...)`, every
-//! subsequent input lands as a user reply via `tickets.reply(&key, ...)`.
+//! Interactive terminal chat. One `Queue` + `Agent` + `Knowledge`
+//! lives for the whole session, and one chat task spans every turn:
+//! the first input creates the task via `tasks.task(...)`, every
+//! subsequent input lands as a user reply via `tasks.reply(&key, ...)`.
 //! The agent loop's wait-for-input branch picks each comment up and
-//! drives the next model turn on the same growing set of replies. Tickets
+//! drives the next model turn on the same growing set of replies. Tasks
 //! and knowledge both persist to `./.agentwerk/`, so an existing chat
 //! resumes across process restarts.
 //! The model's response streams to stdout via
 //! `EventKind::TextChunkReceived`. Slash commands:
-//! `/new` starts a fresh chat ticket, `/list` lists every ticket,
+//! `/new` starts a fresh chat task, `/list` lists every task,
 //! `/stats` prints the statistics, `/clear` resets knowledge,
 //! `/bible [N]` injects N repetitions of Genesis (KJV) as a reply to
 //! drive context compaction (default N=1, ~52k tokens per repetition).
@@ -28,13 +28,13 @@ use std::io::{self, IsTerminal, Write};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
-use agentwerk::agents::tickets::{Reply, ReplyContent};
+use agentwerk::agents::tasks::{Reply, ReplyContent};
 use agentwerk::event::{Event, EventKind, EventName};
 use agentwerk::providers::Model;
 use agentwerk::tools::{
-    GlobTool, GrepTool, ListDirectoryTool, ReadFileTool, TicketsTool, WriteFileTool,
+    GlobTool, GrepTool, ListDirectoryTool, ReadFileTool, TasksTool, WriteFileTool,
 };
-use agentwerk::{Agent, Knowledge, Policy, Ticket, TicketQueue};
+use agentwerk::{Agent, Knowledge, Policy, Queue, Task};
 
 const ROLE: &str = include_str!("prompts/repl.role.md");
 const BIBLE_PASSAGE: &str = include_str!("prompts/bible.txt");
@@ -92,16 +92,16 @@ async fn main() {
 
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let store_dir = cwd.join(".agentwerk");
-    let tickets = TicketQueue::load(&store_dir).expect("open ticket store");
-    tickets.policy(Policy {
+    let tasks = Queue::load(&store_dir).expect("open task store");
+    tasks.policy(Policy {
         max_turns: Some(40),
         ..Default::default()
     });
 
     let knowledge = Knowledge::load(&store_dir).expect("open knowledge store");
 
-    tickets.on_event(move |_, e| handler(e));
-    let _agent = tickets.agent(
+    tasks.on_event(move |_, e| handler(e));
+    let _agent = tasks.agent(
         Agent::from_env()
             .interactive()
             .role(ROLE)
@@ -111,7 +111,7 @@ async fn main() {
             .tool(ListDirectoryTool)
             .tool(ReadFileTool)
             .tool(WriteFileTool)
-            .tool(TicketsTool)
+            .tool(TasksTool)
             .knowledge(&knowledge),
     );
 
@@ -121,10 +121,10 @@ async fn main() {
     let mut prev_input: u64 = 0;
     let mut prev_output: u64 = 0;
 
-    let failed = fail_stale_chats(&tickets, "orchestrator");
+    let failed = fail_stale_chats(&tasks, "orchestrator");
     if failed > 0 {
         eprintln!(
-            "{}failed {} stale chat ticket{}{}",
+            "{}failed {} stale chat task{}{}",
             style.dim,
             failed,
             if failed == 1 { "" } else { "s" },
@@ -134,9 +134,9 @@ async fn main() {
     let mut chat_key: Option<String> = None;
 
     // One long-running loop drives every turn; each user input flips the
-    // ticket out of the gate's pause and the next iteration redraws the
+    // task out of the gate's pause and the next iteration redraws the
     // prompt once the assistant has spoken.
-    tickets.start();
+    tasks.start();
 
     loop {
         let line = tokio::select! {
@@ -157,15 +157,15 @@ async fn main() {
             continue;
         }
         if let Some(first) = line.strip_prefix("/new ") {
-            let k = tickets.ticket(first.trim());
+            let k = tasks.task(first.trim());
             eprintln!("{}new chat {k}{}", style.dim, style.reset);
             chat_key = Some(k);
             continue;
         }
         if line == "/list" {
-            let all = tickets.tickets();
+            let all = tasks.tasks();
             if all.is_empty() {
-                eprintln!("{}(no tickets){}", style.dim, style.reset);
+                eprintln!("{}(no tasks){}", style.dim, style.reset);
             } else {
                 for t in all {
                     let preview = match &t.task {
@@ -192,7 +192,7 @@ async fn main() {
             continue;
         }
         if line == "/stats" {
-            let recorded = tickets.find_events(|_: &Event| true);
+            let recorded = tasks.find_events(|_: &Event| true);
             let count = |kind: EventName| counted(&recorded, kind);
             eprintln!(
                 "{}{} turns · {} requests · {} tools · {} in / {} out · {} created / {} done / {} failed{}",
@@ -200,11 +200,11 @@ async fn main() {
                 count(EventName::TurnStarted),
                 count(EventName::RequestFinished),
                 count(EventName::ToolCallStarted),
-                tickets.input_tokens(),
-                tickets.output_tokens(),
-                count(EventName::TicketCreated),
-                count(EventName::TicketFinished),
-                count(EventName::TicketFailed),
+                tasks.input_tokens(),
+                tasks.output_tokens(),
+                count(EventName::TaskCreated),
+                count(EventName::TaskFinished),
+                count(EventName::TaskFailed),
                 style.reset,
             );
             continue;
@@ -225,7 +225,7 @@ async fn main() {
                     eprintln!("{}usage: /scrub <word>{}", style.dim, style.reset);
                 }
                 Some(k) => {
-                    tickets.edit_replies(k, move |messages| redact(messages, &word));
+                    tasks.edit_replies(k, move |messages| redact(messages, &word));
                     eprintln!("{}scrubbed{}", style.dim, style.reset);
                 }
                 None => eprintln!("{}no active chat{}", style.dim, style.reset),
@@ -272,38 +272,38 @@ async fn main() {
         // breaks out before its own content.
         midstream.store(true, Ordering::Relaxed);
         let key = match chat_key.as_deref() {
-            Some(k) if tickets.get_ticket(k).is_some_and(|t| t.is_in_progress()) => {
-                tickets.reply(k, payload);
+            Some(k) if tasks.get_task(k).is_some_and(|t| t.is_in_progress()) => {
+                tasks.reply(k, payload);
                 k.to_string()
             }
-            _ => tickets.ticket(payload),
+            _ => tasks.task(payload),
         };
         chat_key = Some(key.clone());
 
         let cancelled = tokio::select! {
-            _ = wait_for_assistant_pause(&tickets, &key) => false,
+            _ = wait_for_assistant_pause(&tasks, &key) => false,
             _ = tokio::signal::ctrl_c() => {
-                tickets.cancel_all();
+                tasks.cancel_all();
                 if midstream.swap(false, Ordering::Relaxed) {
                     eprintln!();
                 }
                 eprintln!("{}cancelling…{}", style.dim, style.reset);
-                let winding_down = tickets.finish_all();
+                let winding_down = tasks.finish_all();
                 tokio::pin!(winding_down);
                 tokio::select! {
                     _ = &mut winding_down => {}
                     _ = tokio::signal::ctrl_c() => std::process::exit(130),
                 }
-                tickets.start();
+                tasks.start();
                 true
             }
         };
 
         // One read per turn, counted three ways, rather than one read per count.
-        let recorded = tickets.find_events(|_: &Event| true);
+        let recorded = tasks.find_events(|_: &Event| true);
         let count = |kind: EventName| counted(&recorded, kind);
         let outcome = {
-            let chat = chat_key.as_deref().and_then(|k| tickets.get_ticket(k));
+            let chat = chat_key.as_deref().and_then(|k| tasks.get_task(k));
             match chat {
                 Some(t) if t.is_finished() => {
                     chat_key = None;
@@ -321,13 +321,13 @@ async fn main() {
         let turns = count(EventName::TurnStarted).saturating_sub(prev_turns);
         let requests = count(EventName::RequestFinished).saturating_sub(prev_requests);
         let tool_calls = count(EventName::ToolCallStarted).saturating_sub(prev_tool_calls);
-        let input = tickets.input_tokens().saturating_sub(prev_input);
-        let output = tickets.output_tokens().saturating_sub(prev_output);
+        let input = tasks.input_tokens().saturating_sub(prev_input);
+        let output = tasks.output_tokens().saturating_sub(prev_output);
         prev_turns = count(EventName::TurnStarted);
         prev_requests = count(EventName::RequestFinished);
         prev_tool_calls = count(EventName::ToolCallStarted);
-        prev_input = tickets.input_tokens();
-        prev_output = tickets.output_tokens();
+        prev_input = tasks.input_tokens();
+        prev_output = tasks.output_tokens();
 
         if midstream.swap(false, Ordering::Relaxed) {
             eprintln!();
@@ -512,12 +512,12 @@ fn redact(messages: &mut [Reply], word: &str) {
     }
 }
 
-/// Block until the chat ticket has no work left for the agent: it is
+/// Block until the chat task has no work left for the agent: it is
 /// terminal (`finished`/`failed`), or the assistant has spoken and called
 /// no tool. A mid-turn reply carrying a tool call doesn't count, so the
 /// prompt never races the user against the loop.
-async fn wait_for_assistant_pause(tickets: &TicketQueue, key: &str) {
-    tickets.finish(key).await;
+async fn wait_for_assistant_pause(tasks: &Queue, key: &str) {
+    tasks.finish(key).await;
 }
 
 async fn read_line(prompt: &str) -> Option<String> {
@@ -560,18 +560,18 @@ impl Style {
     }
 }
 
-/// Transition every non-terminal ticket carrying `label` to Failed.
+/// Transition every non-terminal task carrying `label` to Failed.
 /// Catches both the active InProgress chat from the prior session and
 /// any orphan Todo left by an interrupted `/new <message>`.
-fn fail_stale_chats(tickets: &TicketQueue, label: &str) -> usize {
+fn fail_stale_chats(tasks: &Queue, label: &str) -> usize {
     let label = label.to_string();
-    let stale: Vec<String> = tickets
-        .find_tickets(move |t: &Ticket| t.is_pending() && t.has_label(&label))
+    let stale: Vec<String> = tasks
+        .find_tasks(move |t: &Task| t.is_pending() && t.has_label(&label))
         .iter()
         .map(|t| t.key.clone())
         .collect();
     for key in &stale {
-        let _ = tickets.set_failed(key);
+        let _ = tasks.set_failed(key);
     }
     stale.len()
 }
@@ -579,31 +579,31 @@ fn fail_stale_chats(tickets: &TicketQueue, label: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agentwerk::agents::tickets::{Author, Status, Ticket};
+    use agentwerk::agents::tasks::{Author, Status, Task};
 
     #[test]
-    fn fail_stale_chats_marks_every_matching_pending_ticket_as_failed() {
-        let tickets = TicketQueue::new();
+    fn fail_stale_chats_marks_every_matching_pending_task_as_failed() {
+        let tasks = Queue::new();
         let mut keys = Vec::new();
         for body in ["one", "two", "three"] {
-            let k = tickets.ticket(Ticket::labeled("orchestrator", body));
+            let k = tasks.task(Task::labeled("orchestrator", body));
             keys.push(k);
         }
-        let other = tickets.ticket(Ticket::labeled("analyst", "scanner"));
+        let other = tasks.task(Task::labeled("analyst", "scanner"));
 
-        let n = fail_stale_chats(&tickets, "orchestrator");
+        let n = fail_stale_chats(&tasks, "orchestrator");
 
         assert_eq!(n, 3);
         for k in &keys {
-            assert_eq!(tickets.get_ticket(k).unwrap().status, Status::Failed);
+            assert_eq!(tasks.get_task(k).unwrap().status, Status::Failed);
         }
-        assert_eq!(tickets.get_ticket(&other).unwrap().status, Status::Todo);
+        assert_eq!(tasks.get_task(&other).unwrap().status, Status::Todo);
     }
 
     #[test]
-    fn fail_stale_chats_returns_zero_when_no_matching_tickets_exist() {
-        let tickets = TicketQueue::new();
-        let n = fail_stale_chats(&tickets, "orchestrator");
+    fn fail_stale_chats_returns_zero_when_no_matching_tasks_exist() {
+        let tasks = Queue::new();
+        let n = fail_stale_chats(&tasks, "orchestrator");
         assert_eq!(n, 0);
     }
 

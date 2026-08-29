@@ -12,7 +12,7 @@ mod grep;
 mod knowledge;
 mod list_directory;
 mod read_file;
-mod tickets;
+mod tasks;
 mod write_file;
 
 pub use tool::{Tool, ToolContext, ToolResult};
@@ -26,5 +26,5 @@ pub use grep::GrepTool;
 pub use knowledge::KnowledgeTool;
 pub use list_directory::ListDirectoryTool;
 pub use read_file::ReadFileTool;
-pub use tickets::{FinishTool, TicketsTool};
+pub use tasks::{FinishTool, TasksTool};
 pub use write_file::WriteFileTool;

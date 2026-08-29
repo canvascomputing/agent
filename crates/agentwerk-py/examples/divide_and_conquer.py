@@ -1,9 +1,9 @@
 """Divide-and-conquer sum of squares, the Python port of the Rust use case.
 
-Partitions ``[1, N]`` into K subranges and enqueues one ticket per subrange.
+Partitions ``[1, N]`` into K subranges and enqueues one task per subrange.
 Agents share the labelled queue, call a ``python`` tool for an exact integer,
 and finish with a schema-validated ``{"idx", "partial_sum"}``. The driver
-aggregates once every ticket resolves and checks the total against the
+aggregates once every task resolves and checks the total against the
 closed form ``N(N+1)(2N+1)/6``.
 
 Usage: python divide_and_conquer.py [N] [PARTITIONS] [AGENTS]
@@ -18,9 +18,9 @@ from agentwerk import (
     Agent,
     Policy,
     Schema,
-    Ticket,
-    TicketQueue,
-    TicketsTool,
+    Task,
+    Queue,
+    TasksTool,
     ToolResult,
     tool,
 )
@@ -37,7 +37,7 @@ than guess.
 - Each task body gives the bounds `lo`, `hi`, and a partition index `idx`.
 - MUST call `python` with `{"code": "print(sum(k*k for k in range(LO, HI + 1)))"}`,
   substituting the bounds from the task.
-- Finish the ticket by calling `finish` with `result` holding `idx` and
+- Finish the task by calling `finish` with `result` holding `idx` and
   `partial_sum`, copying `idx` verbatim from the task.
 - NEVER add prose, code fences, or commentary outside the `finish` call.
 """
@@ -107,7 +107,7 @@ async def main(n, partitions, agents):
     agents = min(agents, len(bounds))
     print(f"sum_{{k=1}}^{{{n}}} k^2 over {len(bounds)} partitions, {agents} agent(s)\n")
 
-    tickets = TicketQueue().policy(Policy(max_turns=20 * len(bounds)))
+    tasks = Queue().policy(Policy(max_turns=20 * len(bounds)))
     # The finish reason is announced once and not kept, so catch it here. The
     # per-tool counts are the same story: the queue counts the run as a whole,
     # so a breakdown is folded off the events.
@@ -115,8 +115,8 @@ async def main(n, partitions, agents):
     tool_calls, tool_errors = Counter(), Counter()
 
     def trace(event):
-        if event.kind in ("ticket_started", "ticket_finished", "ticket_failed"):
-            print(f"  {event.kind:<20} {event.agent_id:<10} {event.ticket_key}")
+        if event.kind in ("task_started", "task_finished", "task_failed"):
+            print(f"  {event.kind:<20} {event.agent_id:<10} {event.task_key}")
         elif event.kind == "run_finished":
             finish_reason.append(event.data["reason"])
         elif event.kind == "tool_call_started":
@@ -124,19 +124,19 @@ async def main(n, partitions, agents):
         elif event.kind == "tool_call_failed":
             tool_errors[event.data["tool_name"]] += 1
 
-    tickets.on_event(trace)
+    tasks.on_event(trace)
 
     for a in range(agents):
-        tickets.agent(
+        tasks.agent(
             Agent.from_env()
             .role(ROLE.strip())
             .label("compute")
-            .tools([python, TicketsTool()])
+            .tools([python, TasksTool()])
         )
 
     for idx, (lo, hi) in enumerate(bounds):
-        tickets.ticket(
-            Ticket(
+        tasks.task(
+            Task(
                 f"Compute the partial sum S = sum_{{k={lo}}}^{{{hi}}} k^2.\n"
                 f"lo={lo}\nhi={hi}\nidx={idx}",
                 label="compute",
@@ -144,20 +144,20 @@ async def main(n, partitions, agents):
             )
         )
 
-    await tickets.finish_all()
+    await tasks.finish_all()
 
     partials, failures = {}, []
-    for ticket in tickets.tickets():
-        if ticket.is_finished():
-            partials[ticket.result["idx"]] = ticket.result["partial_sum"]
+    for task in tasks.tasks():
+        if task.is_finished():
+            partials[task.result["idx"]] = task.result["partial_sum"]
         else:
-            failures.append((ticket.key, ticket.status))
+            failures.append((task.key, task.status))
 
-    stats = tickets.stats()
+    stats = tasks.stats()
     print(
         f"\nfinished in {stats.execution_duration():.1f}s: "
-        f"{stats.event_count('ticket_finished')} done, "
-        f"{stats.event_count('ticket_failed')} failed, "
+        f"{stats.event_count('task_finished')} done, "
+        f"{stats.event_count('task_failed')} failed, "
         f"{stats.input_tokens()} in / {stats.output_tokens()} out tokens"
     )
     print(f"finish reason  : {finish_reason[-1]}")

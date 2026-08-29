@@ -12,7 +12,7 @@ use super::common;
 
 use agentwerk::event::{default_logger, Event, EventKind};
 use agentwerk::tools::{GlobTool, GrepTool, ListDirectoryTool, ReadFileTool};
-use agentwerk::{Agent, Policy, TicketQueue};
+use agentwerk::{Agent, Policy, Queue};
 
 #[derive(Clone)]
 struct CapturedCall {
@@ -81,14 +81,14 @@ async fn finds_every_lib_rs_in_nested_tree() -> std::result::Result<(), Box<dyn 
         logger(e);
     });
 
-    let tickets = TicketQueue::new();
+    let tasks = Queue::new();
 
-    tickets.policy(Policy {
+    tasks.policy(Policy {
         max_turns: Some(10),
         ..Default::default()
     });
-    tickets.on_event(move |_, e| event_handler(e));
-    tickets.agent(
+    tasks.on_event(move |_, e| event_handler(e));
+    tasks.agent(
         Agent::new()
             .provider(provider)
             .model(&model)
@@ -97,7 +97,7 @@ async fn finds_every_lib_rs_in_nested_tree() -> std::result::Result<(), Box<dyn 
                 "{context}\n\n\
                  Investigate the working directory and answer the user's question. \
                  Use the available tools: pick whichever one fits the question. \
-                 When you have the answer, settle the ticket via \
+                 When you have the answer, settle the task via \
                  `finish`.",
             )
             .tool(GlobTool)
@@ -105,12 +105,12 @@ async fn finds_every_lib_rs_in_nested_tree() -> std::result::Result<(), Box<dyn 
             .tool(ListDirectoryTool)
             .tool(ReadFileTool),
     );
-    tickets.ticket(
+    tasks.task(
         "Find every `lib.rs` file anywhere in the project tree, including nested directories.",
     );
 
-    tickets.finish_all().await;
-    common::print_result(&tickets);
+    tasks.finish_all().await;
+    common::print_result(&tasks);
 
     let recorded = calls.lock().unwrap().clone();
 

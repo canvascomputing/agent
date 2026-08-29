@@ -1,4 +1,4 @@
-//! Constrains the result an agent produces for a ticket.
+//! Constrains the result an agent produces for a task.
 //!
 //! The supported subset of JSON Schema is deliberately small: structure, the
 //! scalar bounds the model APIs do not enforce, the logical and conditional
@@ -46,7 +46,7 @@ mod store;
 
 pub use store::SchemaStore;
 
-/// A `Schema` constrains the result an agent produces for a ticket. A violation
+/// A `Schema` constrains the result an agent produces for a task. A violation
 /// triggers a retry until `max_schema_retries` is exhausted.
 ///
 /// Build one with [`Schema::new`]. Copying it is cheap, and validating

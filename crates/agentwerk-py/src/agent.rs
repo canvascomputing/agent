@@ -1,5 +1,5 @@
 //! The agent as Python sees it. `Agent()` configures itself and drives its own
-//! tickets, the way the Rust `Agent` does.
+//! tasks, the way the Rust `Agent` does.
 //!
 //! Rust configures through methods that consume and return the agent, which is
 //! why the agent sits in an `Option` here: a setter takes it out and puts the
@@ -15,12 +15,12 @@ use pyo3::prelude::*;
 use crate::convert::{py_to_text, runtime_error};
 use crate::knowledge::PyKnowledge;
 use crate::providers::{PyModel, PyProvider};
-use crate::ticket::to_ticket;
-use crate::ticket_queue::PyTicketQueue;
+use crate::queue::PyQueue;
+use crate::task::to_task;
 use crate::tools::extract_tool;
 
 /// An `Agent` is the core entity of agentwerk. It has access to tools for
-/// solving tasks in the form of tickets.
+/// solving tasks in the form of tasks.
 #[pyclass(name = "Agent")]
 pub struct PyAgent {
     /// Empty only while a setter has the agent.
@@ -120,7 +120,7 @@ impl PyAgent {
         Ok(slf)
     }
 
-    /// Restrict the agent to tickets carrying this label, and name it after
+    /// Restrict the agent to tasks carrying this label, and name it after
     /// the label. Calling it twice replaces the label.
     fn label(mut slf: PyRefMut<'_, Self>, label: String) -> PyRefMut<'_, Self> {
         slf.set(|agent| agent.label(label));
@@ -133,9 +133,9 @@ impl PyAgent {
         self.get().id()
     }
 
-    /// Let the agent wait for new instructions to keep a ticket in-progress.
+    /// Let the agent wait for new instructions to keep a task in-progress.
     ///
-    /// It gets no `FinishTool()`; the host closes the ticket with
+    /// It gets no `FinishTool()`; the host closes the task with
     /// `set_finished(key, result)`.
     fn interactive(mut slf: PyRefMut<'_, Self>) -> PyRefMut<'_, Self> {
         slf.set(|agent| agent.interactive());
@@ -146,7 +146,7 @@ impl PyAgent {
     ///
     /// `{key}` is replaced in the role and in any text task. Binding `context`
     /// replaces the built-in block the role expands, and binding one of its
-    /// value names, such as `ticket` or `turns_remaining`, replaces that value.
+    /// value names, such as `task` or `turns_remaining`, replaces that value.
     fn template(mut slf: PyRefMut<'_, Self>, key: String, value: String) -> PyRefMut<'_, Self> {
         slf.set(|agent| agent.template(key, value));
         slf
@@ -168,7 +168,7 @@ impl PyAgent {
     }
 
     /// Share a knowledge store, the durable memory the agent carries across
-    /// tickets and shares with other agents.
+    /// tasks and shares with other agents.
     fn knowledge<'py>(
         mut slf: PyRefMut<'py, Self>,
         store: PyRef<'_, PyKnowledge>,
@@ -211,24 +211,24 @@ impl PyAgent {
         Ok(slf)
     }
 
-    /// Submit a task and return its ticket key.
+    /// Submit a task and return its task key.
     ///
     /// A `str` is the task itself, and an `os.PathLike` names the file holding
-    /// it. A `Ticket` carries a custom label or schema with it. Call it as often
-    /// as you like: one agent can drive many tickets.
-    fn ticket(&self, ticket: &Bound<'_, PyAny>) -> PyResult<String> {
-        Ok(self.get().ticket(to_ticket(ticket)?))
+    /// it. A `Task` carries a custom label or schema with it. Call it as often
+    /// as you like: one agent can drive many tasks.
+    fn task(&self, task: &Bound<'_, PyAny>) -> PyResult<String> {
+        Ok(self.get().task(to_task(task)?))
     }
 
-    /// Begin processing tickets, and hand back the ticket queue so results,
+    /// Begin processing tasks, and hand back the task queue so results,
     /// waiting, and cancellation stay one call away.
     ///
     /// An agent without a provider or a model raises here.
-    fn start(&self) -> PyResult<PyTicketQueue> {
+    fn start(&self) -> PyResult<PyQueue> {
         // The run spawns onto the ambient Tokio runtime, which a pymethod call
         // does not have entered on its own thread.
         let _guard = pyo3_async_runtimes::tokio::get_runtime().enter();
-        Ok(PyTicketQueue {
+        Ok(PyQueue {
             inner: self.ready()?.start(),
         })
     }

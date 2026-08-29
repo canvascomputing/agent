@@ -4,7 +4,7 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
-/// Text handed to an agent, a tool, or a ticket.
+/// Text handed to an agent, a tool, or a task.
 ///
 /// A string is the text itself; a path names the file to read. Both arrive
 /// trimmed, because a file's closing newline would otherwise reach the model.

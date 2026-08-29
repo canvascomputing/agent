@@ -1,26 +1,26 @@
-//! What can go wrong changing a ticket.
+//! What can go wrong changing a task.
 
 use std::fmt;
 
-use super::ticket::Status;
+use super::task::Status;
 
-/// Errors raised by ticket-store mutations.
+/// Errors raised by task-store mutations.
 #[derive(Debug)]
 #[non_exhaustive]
-pub enum TicketError {
-    /// No ticket exists at `key`.
-    TicketMissing { key: String },
+pub enum TaskError {
+    /// No task exists at `key`.
+    TaskMissing { key: String },
     /// Status transition `from → to` is not allowed.
     TransitionRejected { from: Status, to: Status },
-    /// The result failed the ticket's schema. The message lists the
+    /// The result failed the task's schema. The message lists the
     /// violations.
     ResultRejected { message: String },
 }
 
-impl fmt::Display for TicketError {
+impl fmt::Display for TaskError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::TicketMissing { key } => write!(f, "Ticket {key} not found"),
+            Self::TaskMissing { key } => write!(f, "Task {key} not found"),
             Self::TransitionRejected { from, to } => {
                 write!(f, "Illegal transition {from:?} -> {to:?}")
             }
@@ -29,4 +29,4 @@ impl fmt::Display for TicketError {
     }
 }
 
-impl std::error::Error for TicketError {}
+impl std::error::Error for TaskError {}

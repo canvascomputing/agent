@@ -103,7 +103,7 @@ def frame_for(event, started_at, root=""):
         "t": time.monotonic() - started_at,
         "kind": event.kind,
         "agent": event.agent_id,
-        "ticket": event.ticket_key,
+        "task": event.task_key,
         "data": data,
     }
 

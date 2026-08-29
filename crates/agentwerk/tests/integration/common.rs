@@ -5,7 +5,7 @@
 
 use agentwerk::event::{Event, EventName};
 use agentwerk::providers::{Model, Provider};
-use agentwerk::TicketQueue;
+use agentwerk::Queue;
 
 pub fn build_provider() -> (Provider, Model) {
     (
@@ -15,16 +15,16 @@ pub fn build_provider() -> (Provider, Model) {
 }
 
 /// The most recent result's text body, empty when absent or non-string.
-pub fn last_result_text(tickets: &TicketQueue) -> String {
-    tickets
+pub fn last_result_text(tasks: &Queue) -> String {
+    tasks
         .results()
         .pop()
         .and_then(|v| v.as_str().map(str::to_owned))
         .unwrap_or_default()
 }
 
-pub fn print_result(tickets: &TicketQueue) {
-    let recorded = tickets.find_events(|_: &Event| true);
+pub fn print_result(tasks: &Queue) {
+    let recorded = tasks.find_events(|_: &Event| true);
     let count = |kind: EventName| {
         recorded
             .iter()
@@ -32,11 +32,11 @@ pub fn print_result(tickets: &TicketQueue) {
             .count()
     };
     let json = serde_json::json!({
-        "response": tickets.results().pop().unwrap_or_default(),
+        "response": tasks.results().pop().unwrap_or_default(),
         "turns": count(EventName::TurnStarted),
         "tool_calls": count(EventName::ToolCallStarted),
-        "tokens_in": tickets.input_tokens(),
-        "tokens_out": tickets.output_tokens(),
+        "tokens_in": tasks.input_tokens(),
+        "tokens_out": tasks.output_tokens(),
     });
     eprintln!("{}", serde_json::to_string_pretty(&json).unwrap());
 }

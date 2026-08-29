@@ -1,25 +1,25 @@
-//! The [`Trajectory`] value type: a ticket's replies captured as a
+//! The [`Trajectory`] value type: a task's replies captured as a
 //! single training example, plus its disk persistence.
 
 use std::io;
 use std::path::{Path, PathBuf};
 
-use super::{Author, Reply, ReplyContent, Ticket};
+use super::{Author, Reply, ReplyContent, Task};
 
 /// A finished agent run reduced to the one thing a training example needs:
 /// the messages, in agentwerk's own [`Reply`] shape. Build one with
-/// [`Trajectory::from_ticket`] from an [`on_ticket`] handler and [`save`] it
+/// [`Trajectory::from_task`] from an [`on_task`] handler and [`save`] it
 /// where the dataset belongs, leaving any ShareGPT / chat_template conversion
 /// to a downstream step.
 ///
-/// [`on_ticket`]: super::TicketQueue::on_ticket
+/// [`on_task`]: super::Queue::on_task
 /// [`save`]: Trajectory::save
 ///
 /// Each save also writes an `.html` sibling rendering the messages for
 /// debugging.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Trajectory {
-    /// Example id `<agent id>-<ticket>`; also the on-disk filename.
+    /// Example id `<agent id>-<task>`; also the on-disk filename.
     pub key: String,
     /// Name of the model that produced the replies. `None` when the
     /// producing agent could not be resolved at capture time.
@@ -30,14 +30,14 @@ pub struct Trajectory {
 }
 
 impl Trajectory {
-    /// Capture `ticket`'s replies as an example produced by `agent_id`
+    /// Capture `task`'s replies as an example produced by `agent_id`
     /// using `model`. Keeps every reply, including the system prompt: a
-    /// trainer wants it, where `Ticket::to_messages` would drop it.
-    pub fn from_ticket(agent_id: &str, model: Option<&str>, ticket: &Ticket) -> Self {
+    /// trainer wants it, where `Task::to_messages` would drop it.
+    pub fn from_task(agent_id: &str, model: Option<&str>, task: &Task) -> Self {
         Self {
-            key: format!("{agent_id}-{}", ticket.key),
+            key: format!("{agent_id}-{}", task.key),
             model: model.map(str::to_string),
-            replies: ticket.replies.clone(),
+            replies: task.replies.clone(),
         }
     }
 
@@ -165,17 +165,17 @@ mod tests {
     use crate::persistence::Persist;
     use crate::test_util::TempDir;
 
-    fn ticket_with_reply() -> Ticket {
-        let mut ticket = Ticket::new("scan the file");
-        ticket.key = "TICKET-1".into();
-        ticket.replies.push(Reply::user_text("hello"));
-        ticket
+    fn task_with_reply() -> Task {
+        let mut task = Task::new("scan the file");
+        task.key = "t-1".into();
+        task.replies.push(Reply::user_text("hello"));
+        task
     }
 
     #[test]
-    fn from_ticket_carries_replies() {
-        let trajectory = Trajectory::from_ticket("analyst", Some("gpt-4"), &ticket_with_reply());
-        assert_eq!(trajectory.key, "analyst-TICKET-1");
+    fn from_task_carries_replies() {
+        let trajectory = Trajectory::from_task("analyst", Some("gpt-4"), &task_with_reply());
+        assert_eq!(trajectory.key, "analyst-t-1");
         assert_eq!(trajectory.model.as_deref(), Some("gpt-4"));
         assert_eq!(trajectory.replies.len(), 1);
     }
@@ -183,13 +183,10 @@ mod tests {
     #[test]
     fn save_then_load_round_trips() {
         let dir = TempDir::new().unwrap();
-        let trajectory = Trajectory::from_ticket("analyst", Some("gpt-4"), &ticket_with_reply());
+        let trajectory = Trajectory::from_task("analyst", Some("gpt-4"), &task_with_reply());
         trajectory.save(dir.path()).unwrap();
 
-        let path = dir
-            .path()
-            .join("trajectories")
-            .join("analyst-TICKET-1.json");
+        let path = dir.path().join("trajectories").join("analyst-t-1.json");
         assert!(path.exists());
         let loaded = Trajectory::load(dir.path(), &trajectory.key).unwrap();
         assert_eq!(loaded.key, trajectory.key);
@@ -200,8 +197,7 @@ mod tests {
     #[test]
     fn save_writes_html_sibling() {
         let dir = TempDir::new().unwrap();
-        let mut trajectory =
-            Trajectory::from_ticket("analyst", Some("gpt-4"), &ticket_with_reply());
+        let mut trajectory = Trajectory::from_task("analyst", Some("gpt-4"), &task_with_reply());
         trajectory.replies.push(Reply {
             author: Author::Assistant,
             content: vec![ReplyContent::ToolUse {
@@ -213,10 +209,7 @@ mod tests {
         });
         trajectory.save(dir.path()).unwrap();
 
-        let path = dir
-            .path()
-            .join("trajectories")
-            .join("analyst-TICKET-1.html");
+        let path = dir.path().join("trajectories").join("analyst-t-1.html");
         let html = std::fs::read_to_string(&path).unwrap();
         assert!(html.contains("<div class=\"turn user\">"));
         assert!(html.contains("hello"));
@@ -227,13 +220,10 @@ mod tests {
     #[test]
     fn save_writes_html_without_model_line_when_model_is_none() {
         let dir = TempDir::new().unwrap();
-        let trajectory = Trajectory::from_ticket("analyst", None, &ticket_with_reply());
+        let trajectory = Trajectory::from_task("analyst", None, &task_with_reply());
         trajectory.save(dir.path()).unwrap();
 
-        let path = dir
-            .path()
-            .join("trajectories")
-            .join("analyst-TICKET-1.html");
+        let path = dir.path().join("trajectories").join("analyst-t-1.html");
         let html = std::fs::read_to_string(&path).unwrap();
         assert!(!html.contains("class=\"model\""));
     }
@@ -241,19 +231,15 @@ mod tests {
     #[test]
     fn html_escapes_message_text() {
         let dir = TempDir::new().unwrap();
-        let mut trajectory =
-            Trajectory::from_ticket("analyst", Some("gpt-4"), &ticket_with_reply());
+        let mut trajectory = Trajectory::from_task("analyst", Some("gpt-4"), &task_with_reply());
         trajectory
             .replies
             .push(Reply::user_text("<script>alert(1)</script>"));
         trajectory.save(dir.path()).unwrap();
 
-        let html = std::fs::read_to_string(
-            dir.path()
-                .join("trajectories")
-                .join("analyst-TICKET-1.html"),
-        )
-        .unwrap();
+        let html =
+            std::fs::read_to_string(dir.path().join("trajectories").join("analyst-t-1.html"))
+                .unwrap();
         assert!(html.contains("&lt;script&gt;alert(1)&lt;/script&gt;"));
         assert!(!html.contains("<script>alert(1)"));
     }

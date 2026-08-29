@@ -1,12 +1,12 @@
-//! The ticket queue as Python sees it: add agents, submit work, set limits,
+//! The task queue as Python sees it: add agents, submit work, set limits,
 //! install handlers, drive execution, and read results.
 
 use std::future::Future;
 use std::sync::Arc;
 
-use agentwerk::agents::tickets::Reply;
+use agentwerk::agents::tasks::Reply;
 use agentwerk::event::Event;
-use agentwerk::{Ticket, TicketQueue};
+use agentwerk::{Queue, Task};
 use pyo3::prelude::*;
 use serde_json::Value;
 
@@ -14,58 +14,58 @@ use crate::agent::PyAgent;
 use crate::convert::{py_to_value, runtime_error, value_to_py};
 use crate::event::{to_py_event, PyEvent};
 use crate::policy::PyPolicy;
-use crate::query::{to_event_matcher, to_ticket_matcher};
+use crate::query::{to_event_matcher, to_task_matcher};
 use crate::reply::{py_to_replies, replies_to_py};
 use crate::schema::PySchemaStore;
-use crate::ticket::{to_ticket, PyTicket};
+use crate::task::{to_task, PyTask};
 
 /// The core data structure of agentwerk, coordinating complex work across
 /// agents.
-#[pyclass(name = "TicketQueue")]
-pub struct PyTicketQueue {
-    pub inner: Arc<TicketQueue>,
+#[pyclass(name = "Queue")]
+pub struct PyQueue {
+    pub inner: Arc<Queue>,
 }
 
 #[pymethods]
-impl PyTicketQueue {
+impl PyQueue {
     #[new]
     fn new() -> Self {
-        PyTicketQueue {
-            inner: TicketQueue::new(),
+        PyQueue {
+            inner: Queue::new(),
         }
     }
 
     /// Continue a session from a directory written earlier.
     #[staticmethod]
-    fn load(tickets_dir: &str) -> PyResult<Self> {
-        let inner = TicketQueue::load(tickets_dir).map_err(runtime_error)?;
-        Ok(PyTicketQueue { inner })
+    fn load(tasks_dir: &str) -> PyResult<Self> {
+        let inner = Queue::load(tasks_dir).map_err(runtime_error)?;
+        Ok(PyQueue { inner })
     }
 
-    /// Add an agent to this ticket queue, moving any tickets it queued on its
+    /// Add an agent to this task queue, moving any tasks it queued on its
     /// own across first.
     fn agent<'py>(slf: PyRef<'py, Self>, agent: PyRef<'_, PyAgent>) -> PyResult<PyRef<'py, Self>> {
         slf.inner.agent(agent.ready()?.clone());
         Ok(slf)
     }
 
-    /// Submit a task and return its ticket key.
+    /// Submit a task and return its task key.
     ///
     /// A `str` is the task itself, and an `os.PathLike` names the file holding
-    /// it. A `Ticket` carries a custom label or schema with it.
-    fn ticket(slf: PyRef<'_, Self>, ticket: &Bound<'_, PyAny>) -> PyResult<String> {
-        Ok(slf.inner.ticket(to_ticket(ticket)?))
+    /// it. A `Task` carries a custom label or schema with it.
+    fn task(slf: PyRef<'_, Self>, task: &Bound<'_, PyAny>) -> PyResult<String> {
+        Ok(slf.inner.task(to_task(task)?))
     }
 
-    /// Add a reply to a ticket, which drives its next turn.
+    /// Add a reply to a task, which drives its next turn.
     fn reply<'py>(slf: PyRef<'py, Self>, key: &str, content: &str) -> PyRef<'py, Self> {
         slf.inner.reply(key, content);
         slf
     }
 
-    /// Finish a ticket with a result, from outside the execution.
+    /// Finish a task with a result, from outside the execution.
     ///
-    /// Raises when the key is unknown, or when the result misses the ticket's
+    /// Raises when the key is unknown, or when the result misses the task's
     /// schema.
     fn set_finished(&self, key: &str, result: &Bound<'_, PyAny>) -> PyResult<()> {
         self.inner
@@ -73,7 +73,7 @@ impl PyTicketQueue {
             .map_err(runtime_error)
     }
 
-    /// Fail a ticket, from outside the execution. Raises when the key is unknown.
+    /// Fail a task, from outside the execution. Raises when the key is unknown.
     fn set_failed(&self, key: &str) -> PyResult<()> {
         self.inner.set_failed(key).map_err(runtime_error)
     }
@@ -102,7 +102,7 @@ impl PyTicketQueue {
         self.inner.get_dir().display().to_string()
     }
 
-    /// Enforce schemas for ticket results. A ticket claimed under a label the
+    /// Enforce schemas for task results. A task claimed under a label the
     /// store knows takes that schema, unless it already carries one of its own.
     fn schemas<'py>(slf: PyRef<'py, Self>, store: PyRef<'_, PySchemaStore>) -> PyRef<'py, Self> {
         slf.inner.schemas(&store.inner);
@@ -113,7 +113,7 @@ impl PyTicketQueue {
     /// stderr.
     ///
     /// The queue arrives first, so a handler files follow-up work with
-    /// `queue.ticket(..)` and selects tickets and results with `queue.find_*`.
+    /// `queue.task(..)` and selects tasks and results with `queue.find_*`.
     fn on_event<'py>(slf: PyRef<'py, Self>, handler: Py<PyAny>) -> PyRef<'py, Self> {
         slf.inner.on_event(move |queue, event: &Event| {
             Python::attach(|py| {
@@ -150,13 +150,13 @@ impl PyTicketQueue {
         slf
     }
 
-    /// Read every finished ticket together with its result, already validated
-    /// against the ticket's schema.
+    /// Read every finished task together with its result, already validated
+    /// against the task's schema.
     fn on_result<'py>(slf: PyRef<'py, Self>, handler: Py<PyAny>) -> PyRef<'py, Self> {
         slf.inner
-            .on_result(move |queue, ticket: &Ticket, result: &Value| {
+            .on_result(move |queue, task: &Task, result: &Value| {
                 Python::attach(|py| {
-                    if let Err(err) = call_with_result(py, &handler, queue, ticket, result) {
+                    if let Err(err) = call_with_result(py, &handler, queue, task, result) {
                         err.print(py);
                     }
                 });
@@ -164,7 +164,7 @@ impl PyTicketQueue {
         slf
     }
 
-    /// Read every finished ticket together with its result, in an `async def`
+    /// Read every finished task together with its result, in an `async def`
     /// that `finish` waits for before it returns, on the terms
     /// `on_event_async` sets.
     ///
@@ -173,9 +173,9 @@ impl PyTicketQueue {
     /// handler is running inside.
     fn on_result_async<'py>(slf: PyRef<'py, Self>, handler: Py<PyAny>) -> PyRef<'py, Self> {
         slf.inner
-            .on_result_async(move |queue, ticket: Ticket, result: Value| {
+            .on_result_async(move |queue, task: Task, result: Value| {
                 let coroutine = Python::attach(|py| {
-                    let produced = call_with_result(py, &handler, &queue, &ticket, &result)?;
+                    let produced = call_with_result(py, &handler, &queue, &task, &result)?;
                     pyo3_async_runtimes::tokio::into_future(produced)
                 });
                 await_coroutine(coroutine)
@@ -183,14 +183,14 @@ impl PyTicketQueue {
         slf
     }
 
-    /// Read every failure together with the ticket it happened in: a failed
-    /// ticket, tool call, or request, a file that would not open, or compaction
+    /// Read every failure together with the task it happened in: a failed
+    /// task, tool call, or request, a file that would not open, or compaction
     /// that could not finish. Read `event.kind` to tell them apart.
     fn on_failure<'py>(slf: PyRef<'py, Self>, handler: Py<PyAny>) -> PyRef<'py, Self> {
         slf.inner
-            .on_failure(move |queue, event: &Event, ticket: &Ticket| {
+            .on_failure(move |queue, event: &Event, task: &Task| {
                 Python::attach(|py| {
-                    if let Err(err) = call_with_ticket(py, &handler, queue, event, ticket) {
+                    if let Err(err) = call_with_task(py, &handler, queue, event, task) {
                         err.print(py);
                     }
                 });
@@ -198,7 +198,7 @@ impl PyTicketQueue {
         slf
     }
 
-    /// Read every failure together with the ticket it happened in, in an
+    /// Read every failure together with the task it happened in, in an
     /// `async def` that `finish` waits for before it returns, on the terms
     /// `on_event_async` sets.
     ///
@@ -207,9 +207,9 @@ impl PyTicketQueue {
     /// handler is running inside.
     fn on_failure_async<'py>(slf: PyRef<'py, Self>, handler: Py<PyAny>) -> PyRef<'py, Self> {
         slf.inner
-            .on_failure_async(move |queue, event: Event, ticket: Ticket| {
+            .on_failure_async(move |queue, event: Event, task: Task| {
                 let coroutine = Python::attach(|py| {
-                    let produced = call_with_ticket(py, &handler, &queue, &event, &ticket)?;
+                    let produced = call_with_task(py, &handler, &queue, &event, &task)?;
                     pyo3_async_runtimes::tokio::into_future(produced)
                 });
                 await_coroutine(coroutine)
@@ -218,74 +218,73 @@ impl PyTicketQueue {
     }
 
     /// Get the model that agent runs, or `None` when no agent of that name is
-    /// added. `Trajectory.from_ticket` needs it.
+    /// added. `Trajectory.from_task` needs it.
     fn model_for_agent(&self, agent_id: &str) -> Option<String> {
         self.inner.model_for_agent(agent_id)
     }
 
-    /// Get one ticket by key.
-    fn get_ticket(&self, py: Python<'_>, key: &str) -> PyResult<Option<Py<PyTicket>>> {
-        match self.inner.get_ticket(key) {
-            Some(ticket) => Ok(Some(Py::new(py, PyTicket::from_ticket(&ticket))?)),
+    /// Get one task by key.
+    fn get_task(&self, py: Python<'_>, key: &str) -> PyResult<Option<Py<PyTask>>> {
+        match self.inner.get_task(key) {
+            Some(task) => Ok(Some(Py::new(py, PyTask::from_task(&task))?)),
             None => Ok(None),
         }
     }
 
-    /// Get every ticket in creation order.
-    fn tickets(&self, py: Python<'_>) -> PyResult<Vec<Py<PyTicket>>> {
+    /// Get every task in creation order.
+    fn tasks(&self, py: Python<'_>) -> PyResult<Vec<Py<PyTask>>> {
         self.inner
-            .tickets()
+            .tasks()
             .iter()
-            .map(|ticket| Py::new(py, PyTicket::from_ticket(ticket)))
+            .map(|task| Py::new(py, PyTask::from_task(task)))
             .collect()
     }
 
-    /// Get every ticket matching a Query or callable.
-    fn find_tickets(&self, py: Python<'_>, predicate: Py<PyAny>) -> PyResult<Vec<Py<PyTicket>>> {
-        let tickets = self.inner.find_tickets(to_ticket_matcher(py, &predicate)?);
-        tickets
+    /// Get every task matching a Query or callable.
+    fn find_tasks(&self, py: Python<'_>, predicate: Py<PyAny>) -> PyResult<Vec<Py<PyTask>>> {
+        let tasks = self.inner.find_tasks(to_task_matcher(py, &predicate)?);
+        tasks
             .iter()
-            .map(|ticket| Py::new(py, PyTicket::from_ticket(ticket)))
+            .map(|task| Py::new(py, PyTask::from_task(task)))
             .collect()
     }
 
-    /// Get the first ticket matching a Query or callable.
-    fn find_ticket(&self, py: Python<'_>, predicate: Py<PyAny>) -> PyResult<Option<Py<PyTicket>>> {
-        let ticket = self.inner.find_ticket(to_ticket_matcher(py, &predicate)?);
-        match ticket {
-            Some(ticket) => Ok(Some(Py::new(py, PyTicket::from_ticket(&ticket))?)),
+    /// Get the first task matching a Query or callable.
+    fn find_task(&self, py: Python<'_>, predicate: Py<PyAny>) -> PyResult<Option<Py<PyTask>>> {
+        let task = self.inner.find_task(to_task_matcher(py, &predicate)?);
+        match task {
+            Some(task) => Ok(Some(Py::new(py, PyTask::from_task(&task))?)),
             None => Ok(None),
         }
     }
 
-    /// Read a ticket as it starts, finishes, or fails.
+    /// Read a task as it starts, finishes, or fails.
     ///
     /// It arrives with its messages, so a handler can pass it straight to
-    /// `Trajectory.from_ticket`.
-    fn on_ticket<'py>(slf: PyRef<'py, Self>, handler: Py<PyAny>) -> PyRef<'py, Self> {
-        slf.inner
-            .on_ticket(move |queue, event: &Event, ticket: &Ticket| {
-                Python::attach(|py| {
-                    if let Err(err) = call_with_ticket(py, &handler, queue, event, ticket) {
-                        err.print(py);
-                    }
-                });
+    /// `Trajectory.from_task`.
+    fn on_task<'py>(slf: PyRef<'py, Self>, handler: Py<PyAny>) -> PyRef<'py, Self> {
+        slf.inner.on_task(move |queue, event: &Event, task: &Task| {
+            Python::attach(|py| {
+                if let Err(err) = call_with_task(py, &handler, queue, event, task) {
+                    err.print(py);
+                }
             });
+        });
         slf
     }
 
-    /// Read a ticket as it starts, finishes, or fails, in an `async def` that
+    /// Read a task as it starts, finishes, or fails, in an `async def` that
     /// `finish` waits for before it returns, on the terms `on_event_async`
     /// sets.
     ///
     /// Handlers run only while `finish` or `finish_all` is awaited, and MUST
     /// NOT call either themselves: that waits forever on the handover the
     /// handler is running inside.
-    fn on_ticket_async<'py>(slf: PyRef<'py, Self>, handler: Py<PyAny>) -> PyRef<'py, Self> {
+    fn on_task_async<'py>(slf: PyRef<'py, Self>, handler: Py<PyAny>) -> PyRef<'py, Self> {
         slf.inner
-            .on_ticket_async(move |queue, event: Event, ticket: Ticket| {
+            .on_task_async(move |queue, event: Event, task: Task| {
                 let coroutine = Python::attach(|py| {
-                    let produced = call_with_ticket(py, &handler, &queue, &event, &ticket)?;
+                    let produced = call_with_task(py, &handler, &queue, &event, &task)?;
                     pyo3_async_runtimes::tokio::into_future(produced)
                 });
                 await_coroutine(coroutine)
@@ -293,10 +292,10 @@ impl PyTicketQueue {
         slf
     }
 
-    /// Rewrite one ticket's replies now, without sending a request.
+    /// Rewrite one task's replies now, without sending a request.
     ///
     /// Your function receives the current replies and returns the new ones, or
-    /// `None` to change nothing. A ticket that does not exist changes nothing.
+    /// `None` to change nothing. A task that does not exist changes nothing.
     /// Raising, or returning anything but a list of `Reply`, raises here: this
     /// call has a Python frame to unwind into, so it does not guess.
     fn edit_replies<'py>(
@@ -327,10 +326,10 @@ impl PyTicketQueue {
         }
     }
 
-    /// Begin processing tickets, on a background task. An empty queue keeps the
+    /// Begin processing tasks, on a background task. An empty queue keeps the
     /// run alive; calling this while one is under way does nothing.
     fn start(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
-        // `TicketQueue::start` spawns onto the ambient Tokio runtime; a pymethod
+        // `Queue::start` spawns onto the ambient Tokio runtime; a pymethod
         // call has no runtime entered on its own thread, so enter the shared
         // one pyo3-async-runtimes already uses for `finish()`.
         let _guard = pyo3_async_runtimes::tokio::get_runtime().enter();
@@ -338,11 +337,11 @@ impl PyTicketQueue {
         slf
     }
 
-    /// Wait for the matching tickets to be done, then give back their results
+    /// Wait for the matching tasks to be done, then give back their results
     /// in creation order. Accepts a Query or callable. Awaitable.
     fn finish<'py>(&self, py: Python<'py>, matches: Py<PyAny>) -> PyResult<Bound<'py, PyAny>> {
         let inner = Arc::clone(&self.inner);
-        let query = to_ticket_matcher(py, &matches)?;
+        let query = to_task_matcher(py, &matches)?;
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let results = inner.finish(query).await;
             Python::attach(|py| {
@@ -354,7 +353,7 @@ impl PyTicketQueue {
         })
     }
 
-    /// Wait for every ticket to be done, then give back every result in
+    /// Wait for every task to be done, then give back every result in
     /// creation order. Awaitable.
     fn finish_all<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = Arc::clone(&self.inner);
@@ -369,8 +368,8 @@ impl PyTicketQueue {
         })
     }
 
-    /// Wait for every ticket to be done, then give back the last result in
-    /// creation order. `None` means no ticket finished with a result.
+    /// Wait for every task to be done, then give back the last result in
+    /// creation order. `None` means no task finished with a result.
     /// Awaitable.
     fn finish_last<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = Arc::clone(&self.inner);
@@ -389,22 +388,22 @@ impl PyTicketQueue {
         self.inner.finish_reason().map(|reason| reason.to_string())
     }
 
-    /// Take every matching ticket off the queue. Accepts a Query or callable.
+    /// Take every matching task off the queue. Accepts a Query or callable.
     fn cancel<'py>(slf: PyRef<'py, Self>, matches: Py<PyAny>) -> PyResult<PyRef<'py, Self>> {
-        slf.inner.cancel(to_ticket_matcher(slf.py(), &matches)?);
+        slf.inner.cancel(to_task_matcher(slf.py(), &matches)?);
         Ok(slf)
     }
 
-    /// Take every ticket off the queue, which ends the run.
+    /// Take every task off the queue, which ends the run.
     fn cancel_all(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
         slf.inner.cancel_all();
         slf
     }
 
-    /// Check whether a ticket has been cancelled. Ask before creating follow-up
-    /// work: a cancelled ticket is never claimed.
-    fn is_cancelled(&self, ticket: &PyTicket) -> bool {
-        self.inner.is_cancelled(&ticket.to_ticket())
+    /// Check whether a task has been cancelled. Ask before creating follow-up
+    /// work: a cancelled task is never claimed.
+    fn is_cancelled(&self, task: &PyTask) -> bool {
+        self.inner.is_cancelled(&task.to_task())
     }
 
     /// Get every recorded event matching a `Query`, an AQL string, or a
@@ -433,12 +432,12 @@ impl PyTicketQueue {
     }
 
     /// Get the elapsed execution duration in seconds, or `None` before the
-    /// first ticket starts.
+    /// first task starts.
     fn execution_duration(&self) -> Option<f64> {
         self.inner.execution_duration().map(|d| d.as_secs_f64())
     }
 
-    /// Get the result of every finished ticket, in creation order.
+    /// Get the result of every finished task, in creation order.
     fn results<'py>(&self, py: Python<'py>) -> PyResult<Vec<Bound<'py, PyAny>>> {
         self.inner
             .results()
@@ -447,25 +446,25 @@ impl PyTicketQueue {
             .collect()
     }
 
-    /// Get every result whose ticket matches the Query or callable, in creation
+    /// Get every result whose task matches the Query or callable, in creation
     /// order. Status defaults to `"finished"`.
     fn find_results<'py>(
         &self,
         py: Python<'py>,
         query: Py<PyAny>,
     ) -> PyResult<Vec<Bound<'py, PyAny>>> {
-        let results = self.inner.find_results(to_ticket_matcher(py, &query)?);
+        let results = self.inner.find_results(to_task_matcher(py, &query)?);
         results.iter().map(|value| value_to_py(py, value)).collect()
     }
 
-    /// Get the first result whose ticket matches the Query or callable.
+    /// Get the first result whose task matches the Query or callable.
     /// Status defaults to `"finished"`.
     fn find_result<'py>(
         &self,
         py: Python<'py>,
         query: Py<PyAny>,
     ) -> PyResult<Option<Bound<'py, PyAny>>> {
-        let result = self.inner.find_result(to_ticket_matcher(py, &query)?);
+        let result = self.inner.find_result(to_task_matcher(py, &query)?);
         match result {
             Some(value) => Ok(Some(value_to_py(py, &value)?)),
             None => Ok(None),
@@ -475,42 +474,42 @@ impl PyTicketQueue {
 
 /// Hand a hook the queue it is registered on. Built per call: a cached view
 /// would hold the queue that holds the handler, and neither would ever be freed.
-fn as_py_queue<'py>(py: Python<'py>, queue: &Arc<TicketQueue>) -> PyResult<Bound<'py, PyAny>> {
+fn as_py_queue<'py>(py: Python<'py>, queue: &Arc<Queue>) -> PyResult<Bound<'py, PyAny>> {
     let view = Py::new(
         py,
-        PyTicketQueue {
+        PyQueue {
             inner: Arc::clone(queue),
         },
     )?;
     Ok(view.into_bound(py).into_any())
 }
 
-/// Call a Python function with the queue, ticket, and result every `on_result`
+/// Call a Python function with the queue, task, and result every `on_result`
 /// hook hands over.
 fn call_with_result<'py>(
     py: Python<'py>,
     callable: &Py<PyAny>,
-    queue: &Arc<TicketQueue>,
-    ticket: &Ticket,
+    queue: &Arc<Queue>,
+    task: &Task,
     result: &Value,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let view = Py::new(py, PyTicket::from_ticket(ticket))?;
+    let view = Py::new(py, PyTask::from_task(task))?;
     let value = value_to_py(py, result)?;
     callable
         .bind(py)
         .call1((as_py_queue(py, queue)?, view, value))
 }
 
-/// Call a Python function with the queue, event, and ticket the `on_ticket` and
+/// Call a Python function with the queue, event, and task the `on_task` and
 /// `on_failure` hooks hand over.
-fn call_with_ticket<'py>(
+fn call_with_task<'py>(
     py: Python<'py>,
     callable: &Py<PyAny>,
-    queue: &Arc<TicketQueue>,
+    queue: &Arc<Queue>,
     event: &Event,
-    ticket: &Ticket,
+    task: &Task,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let view = Py::new(py, PyTicket::from_ticket(ticket))?;
+    let view = Py::new(py, PyTask::from_task(task))?;
     callable
         .bind(py)
         .call1((as_py_queue(py, queue)?, to_py_event(event), view))

@@ -1,4 +1,4 @@
-//! The smallest agentwerk program: one agent, one ticket, one answer.
+//! The smallest agentwerk program: one agent, one task, one answer.
 //!
 //! Builds an agent from the environment, submits a single task, waits for
 //! the queue to run dry, and prints the result. No tools, no labels, no
@@ -23,7 +23,7 @@ async fn main() {
     let agent =
         Agent::from_env().role("You are a friendly greeter who answers in one short sentence.");
 
-    agent.ticket(task);
+    agent.task(task);
 
     let work = agent.start();
     let mut results = work.finish_all().await;
@@ -31,7 +31,7 @@ async fn main() {
     match results.pop() {
         Some(result) => println!("{}", result.as_str().unwrap_or_default()),
         None => {
-            eprintln!("the agent finished no ticket");
+            eprintln!("the agent finished no task");
             std::process::exit(1);
         }
     }

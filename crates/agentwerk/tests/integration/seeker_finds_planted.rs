@@ -1,5 +1,5 @@
 //! End-to-end: the real Seeker role (used verbatim) is run for a fixed time
-//! budget, each ticket already naming one observed construct per planted
+//! budget, each task already naming one observed construct per planted
 //! language, over a directory seeded with planted malicious indicators across
 //! secrets, networking, and dynamic-execution categories.
 //!
@@ -18,7 +18,7 @@ use super::common;
 use agentwerk::agents::knowledge::Page;
 use agentwerk::event::{default_logger, Event, EventKind};
 use agentwerk::tools::GrepTool;
-use agentwerk::{Agent, Knowledge, Policy, Ticket, TicketQueue};
+use agentwerk::{Agent, Knowledge, Policy, Queue, Task};
 
 const SEEKER_AGENT: &str = include_str!("../../../use-cases/src/malware_scanner/agents/seeker.md");
 
@@ -148,18 +148,18 @@ async fn seeker_pool_finds_planted_indicators(
         logger(e);
     });
 
-    let tickets = TicketQueue::new();
-    tickets.policy(Policy {
+    let tasks = Queue::new();
+    tasks.policy(Policy {
         max_time: Some(TIME_BUDGET),
         max_turns: Some(80),
         ..Default::default()
     });
-    tickets.on_event(move |_, e| event_handler(e));
+    tasks.on_event(move |_, e| event_handler(e));
 
-    // The Seeker no longer derives a threat itself; each ticket already names one
+    // The Seeker no longer derives a threat itself; each task already names one
     // observed construct per planted language, the way a Tracer would hand it off.
     for _ in 0..2 {
-        tickets.agent(
+        tasks.agent(
             Agent::new()
                 .provider(provider.clone())
                 .model(&model)
@@ -172,8 +172,8 @@ async fn seeker_pool_finds_planted_indicators(
         );
     }
 
-    // Trivial consumer so handed-off `security_analysis` tickets resolve.
-    tickets.agent(
+    // Trivial consumer so handed-off `security_analysis` tasks resolve.
+    tasks.agent(
         Agent::new()
             .provider(provider.clone())
             .model(&model)
@@ -197,11 +197,11 @@ async fn seeker_pool_finds_planted_indicators(
          network exfiltration from a compiled binary",
     ];
     for threat in named_threats {
-        tickets.ticket(Ticket::new(threat).label(SEEKER_LABEL));
+        tasks.task(Task::new(threat).label(SEEKER_LABEL));
     }
 
-    tickets.finish_all().await;
-    common::print_result(&tickets);
+    tasks.finish_all().await;
+    common::print_result(&tasks);
 
     let calls = calls.lock().unwrap().clone();
     let outputs = outputs.lock().unwrap().clone();
