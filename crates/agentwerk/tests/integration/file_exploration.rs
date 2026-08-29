@@ -12,7 +12,7 @@ async fn test() -> std::result::Result<(), Box<dyn std::error::Error>> {
 
     let tasks = Queue::new();
 
-    tasks.policy(Policy {
+    tasks.set_policy(Policy {
         max_turns: Some(10),
         ..Default::default()
     });
@@ -28,10 +28,10 @@ async fn test() -> std::result::Result<(), Box<dyn std::error::Error>> {
         .tool(ReadFileTool)
         .tool(GlobTool)
         .tool(TasksTool);
-    tasks.agent(agent);
-    tasks.task("Find all Rust source files and describe what this project does.");
+    tasks.add_agent(agent);
+    tasks.add_task("Find all Rust source files and describe what this project does.");
 
-    tasks.finish_all().await;
+    tasks.finish_all_tasks().await;
     common::print_result(&tasks);
 
     assert!(tasks.find_events("tool_call_started").len() >= 1);

@@ -21,7 +21,7 @@ use agentwerk::event::{Event, EventKind};
 use agentwerk::providers::{Model, Provider};
 use agentwerk::schemas::Schema;
 use agentwerk::tools::{TasksTool, Tool, ToolResult};
-use agentwerk::{Agent, Policy, Queue, Task};
+use agentwerk::{Agent, Policy, Query, Queue, Task};
 use serde_json::{json, Value};
 
 const ROLE: &str = include_str!("prompts/agent.role.md");
@@ -42,10 +42,10 @@ async fn main() {
     let on_ctrl_c = Arc::clone(&tasks);
     tokio::spawn(async move {
         if tokio::signal::ctrl_c().await.is_ok() {
-            on_ctrl_c.cancel_all();
+            on_ctrl_c.cancel_all_tasks();
         }
     });
-    tasks.policy(Policy {
+    tasks.set_policy(Policy {
         max_turns: args.max_turns,
         ..Default::default()
     });
@@ -55,13 +55,13 @@ async fn main() {
             "Compute the partial sum S = sum_{{k={lo}}}^{{{hi}}} k^2.\n\
              lo={lo}\nhi={hi}\nidx={idx}",
         );
-        tasks.task(Task::new(body).schema(schema.clone()).label("compute"));
+        tasks.add_task(Task::new(body).schema(schema.clone()).label("compute"));
     }
 
     let event_handler = build_event_handler(args.verbose, style.clone(), partitions.len());
     tasks.on_event(move |_, e| event_handler(e));
     for _ in 0..agents {
-        tasks.agent(
+        tasks.add_agent(
             Agent::new()
                 .provider(provider.clone())
                 .model(&model)
@@ -72,7 +72,7 @@ async fn main() {
         );
     }
 
-    tasks.finish_all().await;
+    tasks.finish_all_tasks().await;
 
     aggregate_and_report(&tasks, &partitions, args.n, &style);
 }
@@ -82,7 +82,7 @@ fn aggregate_and_report(tasks: &Queue, partitions: &[(u64, u64)], n: u64, style:
     let mut partials: Vec<Option<i128>> = vec![None; total];
     let mut failures = 0usize;
 
-    for task in tasks.tasks() {
+    for task in tasks.get_tasks() {
         match extract_partial(&task, total) {
             Ok((idx, sum)) => {
                 let (lo, hi) = partitions[idx];
@@ -108,15 +108,15 @@ fn aggregate_and_report(tasks: &Queue, partitions: &[(u64, u64)], n: u64, style:
 
     let total_sum: i128 = partials.iter().flatten().sum();
     let expected = closed_form(n);
-    let elapsed = tasks.execution_duration().unwrap_or_default().as_secs_f64();
+    let elapsed = tasks.get_duration().unwrap_or_default().as_secs_f64();
     let done = tasks
         .find_events(|e: &Event| matches!(e.kind, EventKind::TaskFinished))
         .len();
 
     eprintln!(
         "{dim}└ aggregated in {elapsed:.1}s · {done} done, {failures} failed · {} in / {} out tokens{reset}",
-        tasks.input_tokens(),
-        tasks.output_tokens(),
+        tasks.get_input_tokens(),
+        tasks.get_output_tokens(),
         dim = style.dim,
         reset = style.reset,
     );
@@ -153,7 +153,7 @@ fn aggregate_and_report(tasks: &Queue, partitions: &[(u64, u64)], n: u64, style:
 /// against the `idx=` line in the task body so a wrongly assigned result
 /// can't quietly slot into the wrong partition.
 fn extract_partial(task: &Task, total: usize) -> Result<(usize, i128), String> {
-    if !task.is_finished() {
+    if !Query::from("status = Finished").matches(task) {
         return Err(task.status.to_string());
     }
     let attached = task.result.as_ref().ok_or("no result attached")?;

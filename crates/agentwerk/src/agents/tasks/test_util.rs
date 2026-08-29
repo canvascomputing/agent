@@ -33,7 +33,7 @@ pub(super) fn minimal_agent(label: &str) -> Agent {
 pub(super) fn test_queue() -> (Arc<Queue>, crate::test_util::TempDir) {
     let dir = crate::test_util::TempDir::new().unwrap();
     let built = Queue::new();
-    built.dir(dir.path().to_path_buf());
+    built.set_dir(dir.path().to_path_buf());
     (built, dir)
 }
 

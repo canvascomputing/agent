@@ -131,7 +131,7 @@ pub(super) async fn run(context: &mut TaskContext<'_>, mut calls: Vec<ToolCall>)
 
     context
         .queue
-        .add_reply(&context.task_key, Reply::user(&blocks, &offloaded));
+        .append_reply(&context.task_key, Reply::user(&blocks, &offloaded));
 
     // Emitted after the reply lands: a handler that rewrites this task's
     // replies must find the tool result the event announces.
@@ -309,22 +309,24 @@ mod tests {
             Ok(write_result_value(serde_json::json!({"partial_sum": 1}))),
         ]);
         let tasks = Queue::new();
-        tasks.dir(results_dir.path().to_path_buf()).policy(Policy {
-            max_request_retries: 0,
-            request_retry_delay: Duration::from_millis(1),
-            max_schema_retries: Some(10),
-            max_time: Some(Duration::from_millis(500)),
-            ..Default::default()
-        });
-        tasks.agent(
+        tasks
+            .set_dir(results_dir.path().to_path_buf())
+            .set_policy(Policy {
+                max_request_retries: 0,
+                request_retry_delay: Duration::from_millis(1),
+                max_schema_retries: Some(10),
+                max_time: Some(Duration::from_millis(500)),
+                ..Default::default()
+            });
+        tasks.add_agent(
             Agent::new()
                 .provider(provider.clone())
                 .model("mock")
                 .role("test"),
         );
-        tasks.task(Task::new("go").schema(schema_for_partial_sum()));
+        tasks.add_task(Task::new("go").schema(schema_for_partial_sum()));
 
-        let _ = tasks.finish_all().await;
+        let _ = tasks.finish_all_tasks().await;
 
         let second = &provider.received()[1];
         let answered = second
@@ -505,26 +507,28 @@ mod tests {
 
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let tasks = Queue::new();
-        tasks.dir(results_dir.path().to_path_buf()).policy(Policy {
-            max_request_retries: 0,
-            request_retry_delay: Duration::from_millis(1),
-            max_schema_retries: Some(2),
-            max_time: Some(Duration::from_millis(500)),
-            ..Default::default()
-        });
+        tasks
+            .set_dir(results_dir.path().to_path_buf())
+            .set_policy(Policy {
+                max_request_retries: 0,
+                request_retry_delay: Duration::from_millis(1),
+                max_schema_retries: Some(2),
+                max_time: Some(Duration::from_millis(500)),
+                ..Default::default()
+            });
         let collected = collect_events(&tasks);
-        tasks.agent(
+        tasks.add_agent(
             Agent::new()
                 .provider(provider)
                 .model("mock")
                 .role("test")
                 .tool(boom),
         );
-        tasks.task("go");
-        let _ = tasks.finish_all().await;
+        tasks.add_task("go");
+        let _ = tasks.finish_all_tasks().await;
 
         assert_eq!(
-            tasks.tasks().into_iter().next().unwrap().status,
+            tasks.get_tasks().into_iter().next().unwrap().status,
             Status::Failed
         );
         let events = collected.lock().unwrap().clone();
@@ -559,12 +563,14 @@ mod tests {
 
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let tasks = Queue::new();
-        tasks.dir(results_dir.path().to_path_buf()).policy(Policy {
-            max_request_retries: 0,
-            request_retry_delay: Duration::from_millis(1),
-            max_time: Some(Duration::from_millis(500)),
-            ..Default::default()
-        });
+        tasks
+            .set_dir(results_dir.path().to_path_buf())
+            .set_policy(Policy {
+                max_request_retries: 0,
+                request_retry_delay: Duration::from_millis(1),
+                max_time: Some(Duration::from_millis(500)),
+                ..Default::default()
+            });
         // `None` until the handler runs, so the assertion also proves it did.
         let stored: Arc<Mutex<Option<bool>>> = Arc::new(Mutex::new(None));
         let seen = Arc::clone(&stored);
@@ -586,15 +592,15 @@ mod tests {
             });
             *seen.lock().unwrap() = Some(landed);
         });
-        tasks.agent(
+        tasks.add_agent(
             Agent::new()
                 .provider(provider)
                 .model("mock")
                 .role("test")
                 .tool(boom),
         );
-        tasks.task("go");
-        let _ = tasks.finish_all().await;
+        tasks.add_task("go");
+        let _ = tasks.finish_all_tasks().await;
 
         assert_eq!(*stored.lock().unwrap(), Some(true));
     }
@@ -626,14 +632,16 @@ mod tests {
 
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let tasks = Queue::new();
-        tasks.dir(results_dir.path().to_path_buf()).policy(Policy {
-            max_request_retries: 0,
-            request_retry_delay: Duration::from_millis(1),
-            max_schema_retries: Some(2),
-            max_time: Some(Duration::from_millis(500)),
-            ..Default::default()
-        });
-        tasks.agent(
+        tasks
+            .set_dir(results_dir.path().to_path_buf())
+            .set_policy(Policy {
+                max_request_retries: 0,
+                request_retry_delay: Duration::from_millis(1),
+                max_schema_retries: Some(2),
+                max_time: Some(Duration::from_millis(500)),
+                ..Default::default()
+            });
+        tasks.add_agent(
             Agent::new()
                 .provider(provider)
                 .model("mock")
@@ -641,11 +649,11 @@ mod tests {
                 .tool(boom)
                 .tool(ping),
         );
-        tasks.task("go");
-        let _ = tasks.finish_all().await;
+        tasks.add_task("go");
+        let _ = tasks.finish_all_tasks().await;
 
         assert_eq!(
-            tasks.tasks().into_iter().next().unwrap().status,
+            tasks.get_tasks().into_iter().next().unwrap().status,
             Status::Finished
         );
     }
@@ -684,14 +692,16 @@ mod tests {
 
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let tasks = Queue::new();
-        tasks.dir(results_dir.path().to_path_buf()).policy(Policy {
-            max_request_retries: 0,
-            request_retry_delay: Duration::from_millis(1),
-            max_schema_retries: Some(10),
-            max_time: Some(Duration::from_secs(5)),
-            ..Default::default()
-        });
-        tasks.agent(
+        tasks
+            .set_dir(results_dir.path().to_path_buf())
+            .set_policy(Policy {
+                max_request_retries: 0,
+                request_retry_delay: Duration::from_millis(1),
+                max_schema_retries: Some(10),
+                max_time: Some(Duration::from_secs(5)),
+                ..Default::default()
+            });
+        tasks.add_agent(
             Agent::new()
                 .provider(provider)
                 .model("mock")
@@ -699,16 +709,16 @@ mod tests {
                 .tool(TasksTool)
                 .tool(slow_tool),
         );
-        tasks.task("go");
+        tasks.add_task("go");
 
         let unblock = async move {
             tool_started.notified().await;
             tool_unblocked.notify_one();
         };
 
-        tokio::join!(tasks.finish_all(), unblock);
+        tokio::join!(tasks.finish_all_tasks(), unblock);
         assert_eq!(
-            tasks.tasks().into_iter().next().unwrap().status,
+            tasks.get_tasks().into_iter().next().unwrap().status,
             Status::Finished
         );
     }
@@ -743,13 +753,15 @@ mod tests {
 
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let tasks = Queue::new();
-        tasks.dir(results_dir.path().to_path_buf()).policy(Policy {
-            max_request_retries: 0,
-            request_retry_delay: Duration::from_millis(1),
-            max_schema_retries: Some(10),
-            max_time: Some(Duration::from_millis(500)),
-            ..Default::default()
-        });
+        tasks
+            .set_dir(results_dir.path().to_path_buf())
+            .set_policy(Policy {
+                max_request_retries: 0,
+                request_retry_delay: Duration::from_millis(1),
+                max_schema_retries: Some(10),
+                max_time: Some(Duration::from_millis(500)),
+                ..Default::default()
+            });
 
         let dump = Tool::new("dump")
             .description("Returns ~800 KB of text")
@@ -757,18 +769,22 @@ mod tests {
             .build();
 
         tasks.on_event(move |_, e| handler(e));
-        tasks.agent(
+        tasks.add_agent(
             Agent::new()
                 .provider(provider.clone())
                 .model("claude-sonnet-4-20250514")
                 .role("test")
                 .tool(dump),
         );
-        tasks.task("go");
+        tasks.add_task("go");
 
-        let _ = tasks.finish_all().await;
+        let _ = tasks.finish_all_tasks().await;
         let events = collected.lock().unwrap().clone();
-        let task = tasks.tasks().into_iter().next().expect("task must exist");
+        let task = tasks
+            .get_tasks()
+            .into_iter()
+            .next()
+            .expect("task must exist");
 
         assert_eq!(provider.requests(), 2);
         assert!(failures_in(&events).is_empty());
@@ -846,13 +862,15 @@ mod tests {
 
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let tasks = Queue::new();
-        tasks.dir(results_dir.path().to_path_buf()).policy(Policy {
-            max_request_retries: 0,
-            request_retry_delay: Duration::from_millis(1),
-            max_schema_retries: Some(10),
-            max_time: Some(Duration::from_millis(500)),
-            ..Default::default()
-        });
+        tasks
+            .set_dir(results_dir.path().to_path_buf())
+            .set_policy(Policy {
+                max_request_retries: 0,
+                request_retry_delay: Duration::from_millis(1),
+                max_schema_retries: Some(10),
+                max_time: Some(Duration::from_millis(500)),
+                ..Default::default()
+            });
 
         let size_tool = Tool::new("size_tool")
             .description("Returns N bytes of 'x'")
@@ -868,17 +886,21 @@ mod tests {
             })
             .build();
 
-        tasks.agent(
+        tasks.add_agent(
             Agent::new()
                 .provider(provider.clone())
                 .model("mock")
                 .role("test")
                 .tool(size_tool),
         );
-        tasks.task("go");
+        tasks.add_task("go");
 
-        let _ = tasks.finish_all().await;
-        let task = tasks.tasks().into_iter().next().expect("task must exist");
+        let _ = tasks.finish_all_tasks().await;
+        let task = tasks
+            .get_tasks()
+            .into_iter()
+            .next()
+            .expect("task must exist");
         assert_eq!(task.status, Status::Finished);
 
         let second = &provider.received()[1];

@@ -20,7 +20,7 @@ async fn creates_file_with_token() -> std::result::Result<(), Box<dyn std::error
 
     let tasks = Queue::new();
 
-    tasks.policy(Policy {
+    tasks.set_policy(Policy {
         max_turns: Some(10),
         ..Default::default()
     });
@@ -37,13 +37,13 @@ async fn creates_file_with_token() -> std::result::Result<(), Box<dyn std::error
              calls.",
         )
         .tool(WriteFileTool);
-    tasks.agent(agent);
-    tasks.task(format!(
+    tasks.add_agent(agent);
+    tasks.add_task(format!(
         "Create a file named `report.md` in the working directory containing \
          exactly the line `token={token}`."
     ));
 
-    tasks.finish_all().await;
+    tasks.finish_all_tasks().await;
     common::print_result(&tasks);
 
     assert!(

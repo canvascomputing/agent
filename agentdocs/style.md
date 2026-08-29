@@ -117,8 +117,8 @@ ToolFailureKind::ExecutionFailed.name()   // "execution_failed"
 
 **A value undefined over an empty population returns `Option`. A sum returns its zero.**
 
-- `Option`: an average, a rate, and `execution_duration()`, which has no answer until execution starts.
-- Not `Option`: `input_tokens()`, `event_count(event)`. Zero is the honest answer for a sum over nothing.
+- `Option`: an average, a rate, and `get_duration()`, which has no answer until execution starts.
+- Not `Option`: `get_input_tokens()`, `event_count(event)`. Zero is the honest answer for a sum over nothing.
 - A sum is named `total`: the bare noun reads as one subject's value, not the population's. When a sum and its mean travel together they are two fields of one struct, not accessors prefixed `total_` and `avg_`.
 
 ## Persistence Verbs
@@ -156,22 +156,22 @@ ToolFailureKind::ExecutionFailed.name()   // "execution_failed"
 
 ## Lifecycle
 
-**Three verbs over one filter, each scoped verb paired with a whole-run form: `start` starts, `finish(matches)` and `finish_all()` wait, `cancel(matches)` and `cancel_all()` stop. A filter is a `Matcher<Task>`, so the same call names one task or one pool.**
+**Queue action names state their target: `finish_result(matches)`, `finish_results(matches)`, `finish_all_tasks()`, `cancel_tasks(matches)`, and `cancel_all_tasks()`. A filter is a `Matcher<Task>`, so the same call names one task or one pool.**
 
 ```rust
 tasks.start();
-tasks.finish(|t| t.has_label("scan")).await;   // one pool
-tasks.finish_all().await;                      // the whole run
-tasks.finish_last().await;                     // the whole run, one result
-tasks.cancel(|t| t.has_label("scan"));         // one pool
-tasks.cancel_all();                            // the whole run
+tasks.finish_results("label = scan").await;                 // one pool
+tasks.finish_all_tasks().await;                             // the whole run
+tasks.finish_result("ORDER BY created DESC").await;         // one result
+tasks.cancel_tasks("label = scan");                        // one pool
+tasks.cancel_all_tasks();                                   // the whole run
 ```
 
 - A verb takes a filter when it can mean part of the queue, and none when it cannot: `run` starts everything or nothing.
-- IMPORTANT: the filter says WHICH tasks, never WHAT to wait for. `finish(|t| t.is_finished())` is a mistake that returns at once: the filter selects the tasks, and "no work left" is the condition, fixed.
-- The whole-run case has exactly one spelling. `finish_all()` and `cancel_all()` are it; `|_| true` is never written at a call site.
-- A filterless form earns its place only by naming how many results the caller wants back, never by re-spelling a filter. `finish_last()` waits exactly as `finish_all()` does and gives the last result in creation order.
-- The two `_all` forms and `finish_last()` are the only filterless additions the family takes. Do not grow back the `cancel_label`, `cancel_on`, `cancel_*_on_*`, and `wait_for_*` methods a filter replaced.
+- IMPORTANT: the filter says WHICH tasks, never WHAT to wait for. `finish_results("status = Finished")` returns at once because the filter selects tasks and "no work left" is the fixed wait condition.
+- The whole-run case has exactly one spelling: `finish_all_tasks()` and `cancel_all_tasks()`.
+- `finish_result(matches)` follows the same wait and query order as `finish_results(matches)`, then returns the first available result.
+- Do not grow back label-, status-, or predicate-specific queue methods; fixed selections are AQL.
 
 ## Hooks
 
@@ -187,7 +187,7 @@ edit_replies(key, editor)            // act once, now
 - `on_<trigger>_async(handler)` is the same trigger in a handler whichever `finish` is waiting awaits. Every observer has one, and only observers do.
 - A bare `<action>(..)` acts once, now: `cancel`, `edit_replies`.
 - IMPORTANT: the trigger fixes the handler's parameters. `_on_event` hands over `&Event`, `_on_result` a `&Task` and its validated `&Value`, `_on_failure` the `&Event` and the `&Task` it happened in. Observing returns `()`.
-- IMPORTANT: an observer takes the queue first, `&Arc<Queue>` before the trigger's own parameters, owned in the `_async` twin. That is what a hook acts through, and why neither a `create_task_on_*` nor an `edit_replies_on_*` family exists: `queue.task(..)` inside `on_result`, and `queue.edit_replies(&event.task_key, ..)` inside `on_event`, are the whole of them.
+- IMPORTANT: an observer takes the queue first, `&Arc<Queue>` before the trigger's own parameters, owned in the `_async` twin. That is what a hook acts through, and why neither a `create_task_on_*` nor an `edit_replies_on_*` family exists: `queue.add_task(..)` inside `on_result`, and `queue.edit_replies(&event.task_key, ..)` inside `on_event`, are the whole of them.
 - A hook reacts to something agentwerk produces. Anything the caller already holds needs no hook: to stop a pool on a verdict, `finish` for it and `cancel`.
 - `on_task` sits outside the trigger grid, keying on a task rather than naming a trigger.
 - No hook registers something agentwerk calls in place of its own work. Compaction summarizes and says so through the four `Compaction*` events, and what agentwerk writes to correct the model is set once by `Agent::directives`, which takes one function over every directive.
@@ -406,7 +406,7 @@ Banned:
 Also:
 
 - Bare "provider" is spelled "LLM provider". Identifier names stay unqualified.
-- "execution" is the word for a run, in prose and in identifiers: `Queue::execution_duration()`. `run` survives only where it names the event itself, `EventKind::RunStarted` and `RunFinished`.
+- "execution" is the word for a run, in prose and in identifiers: `Queue::get_duration()`. `run` survives only where it names the event itself, `EventKind::RunStarted` and `RunFinished`.
 - The Knowledge store is described as durable memory the agent shares across tasks and other agents; the sharing is the headline, not a footnote.
 
 ## README Structure
@@ -435,7 +435,7 @@ Also:
 
 - One `h1` per file, the title. Every section is `h2`, every subsection `h3`. No wrapper heading above a group of sections.
 - `h2` is Title Case, `h3` is Sentence case.
-- A method placeholder is spelled as what the caller passes, never a single letter: `reply(key, content)`, `cancel(matches)`. In a bullet list the bare method name carries no parentheses at all.
+- A method placeholder is spelled as what the caller passes, never a single letter: `add_reply(key, content)`, `cancel_tasks(matches)`. In a bullet list the bare method name carries no parentheses at all.
 - Centered blocks use `<div align="center">`. `align` is not allowed on `<p>` by the crates.io sanitizer, so `<p align="center">` renders left-aligned there.
 
 ## README Tables
@@ -466,8 +466,8 @@ Also:
 
 - Groups do not interleave. The result rows run before the task rows in Results; the observers run before the cancels in Hooks.
 - One axis order is chosen and held across every group. Hooks is the model: `event`, `result`, `failure`.
-- Within a group, selectors run widest to narrowest: everything, then by label or agent, then by condition, then by key. Singular leads plural, and an action is followed by the query that reads it back: `cancel(matches)` then `is_cancelled(task)`.
-- One table holds one receiver. A method on another type goes in the fold's trailing prose, which is why `Queue::model_for_agent` is prose under the Providers fold rather than a fourth `Agent` row.
+- Queue tables follow caller workflow: configure, submit/interact, observe, run, cancel, inspect tasks, inspect results/events, then inspect run metadata. Setters stay beside getters, synchronous hooks beside async twins, and singular selectors before plural selectors.
+- One table holds one receiver. A method on another type goes in the fold's trailing prose.
 - The Execution fold holds everything that acts once over a run. The hooks fold holds only what registers a handler the queue calls back into on every matching event.
 
 ## README Examples

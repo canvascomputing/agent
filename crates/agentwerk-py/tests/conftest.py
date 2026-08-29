@@ -37,7 +37,7 @@ def pytest_collection_modifyitems(config, items):
 def queue(tmp_path):
     """A fresh, empty task queue with a session directory of its own, so one
     test's event log is never another's."""
-    return aw.Queue().dir(str(tmp_path))
+    return aw.Queue().set_dir(str(tmp_path))
 
 
 @pytest.fixture

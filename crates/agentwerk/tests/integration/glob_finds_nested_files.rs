@@ -83,12 +83,12 @@ async fn finds_every_lib_rs_in_nested_tree() -> std::result::Result<(), Box<dyn 
 
     let tasks = Queue::new();
 
-    tasks.policy(Policy {
+    tasks.set_policy(Policy {
         max_turns: Some(10),
         ..Default::default()
     });
     tasks.on_event(move |_, e| event_handler(e));
-    tasks.agent(
+    tasks.add_agent(
         Agent::new()
             .provider(provider)
             .model(&model)
@@ -105,11 +105,11 @@ async fn finds_every_lib_rs_in_nested_tree() -> std::result::Result<(), Box<dyn 
             .tool(ListDirectoryTool)
             .tool(ReadFileTool),
     );
-    tasks.task(
+    tasks.add_task(
         "Find every `lib.rs` file anywhere in the project tree, including nested directories.",
     );
 
-    tasks.finish_all().await;
+    tasks.finish_all_tasks().await;
     common::print_result(&tasks);
 
     let recorded = calls.lock().unwrap().clone();

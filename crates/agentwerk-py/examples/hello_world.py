@@ -22,7 +22,7 @@ async def main(task):
     agent.task(task)
 
     work = agent.start()
-    results = await work.finish_all()
+    results = await work.finish_all_tasks()
 
     if not results:
         print("the agent finished no task", file=sys.stderr)

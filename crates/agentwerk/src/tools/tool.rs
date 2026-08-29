@@ -1492,8 +1492,8 @@ mod tests {
     fn task_ctx() -> (ToolContext, Arc<Queue>, String, crate::test_util::TempDir) {
         let dir = crate::test_util::TempDir::new().unwrap();
         let queue = Queue::new();
-        queue.dir(dir.path().to_path_buf());
-        queue.task("seed");
+        queue.set_dir(dir.path().to_path_buf());
+        queue.add_task("seed");
         let key = "t-1".to_string();
         let ctx = test_ctx().queue(Arc::clone(&queue)).task_key(key.clone());
         (ctx, queue, key, dir)

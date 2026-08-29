@@ -26,7 +26,7 @@ async fn main() {
     agent.task(task);
 
     let work = agent.start();
-    let mut results = work.finish_all().await;
+    let mut results = work.finish_all_tasks().await;
 
     match results.pop() {
         Some(result) => println!("{}", result.as_str().unwrap_or_default()),

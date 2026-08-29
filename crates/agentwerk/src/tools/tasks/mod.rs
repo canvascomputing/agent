@@ -224,7 +224,7 @@ fn action_list(queue: &Queue, aql: Option<String>, directives: &DirectiveStore) 
                 directives.render(TASK_QUERY_INVALID, &[("error", &error.to_string())]),
             )
         }
-        None => queue.tasks(),
+        None => queue.get_tasks(),
     };
     if pool.is_empty() {
         return ToolResult::success("(no matching tasks)".to_string());
@@ -306,7 +306,7 @@ mod tests {
     /// leak into the source tree.
     fn shared_with_one_task(agent: &str) -> (Arc<Queue>, String) {
         let queue = Queue::new();
-        queue.dir(isolated_test_dir());
+        queue.set_dir(isolated_test_dir());
         queue.insert(Task::new("body").label(agent), "tester".into());
         let key = queue
             .claim(&Query::from("status = Todo"), agent)
@@ -405,7 +405,7 @@ mod tests {
     /// second still Todo and unlabelled.
     fn queue_with_two_tasks() -> Arc<Queue> {
         let queue = Queue::new();
-        queue.dir(isolated_test_dir());
+        queue.set_dir(isolated_test_dir());
         queue.insert(Task::new("a").label("review"), "tester".into());
         queue.insert(Task::new("b"), "tester".into());
         queue.claim(&Query::from("t-1"), "alice");
@@ -425,7 +425,7 @@ mod tests {
     #[tokio::test]
     async fn list_stops_at_fifty_tasks() {
         let queue = Queue::new();
-        queue.dir(isolated_test_dir());
+        queue.set_dir(isolated_test_dir());
         for i in 1..=51 {
             queue.insert(Task::new(format!("task {i}")), "tester".into());
         }
@@ -517,7 +517,7 @@ mod tests {
     #[tokio::test]
     async fn create_stamps_reporter_from_agent_id() {
         let queue = Queue::new();
-        queue.dir(isolated_test_dir());
+        queue.set_dir(isolated_test_dir());
         let ctx = ctx_with(Arc::clone(&queue), "alice");
         let result = call(
             TasksTool,
@@ -534,7 +534,7 @@ mod tests {
     #[tokio::test]
     async fn create_with_a_label_attaches_it() {
         let queue = Queue::new();
-        queue.dir(isolated_test_dir());
+        queue.set_dir(isolated_test_dir());
         let ctx = ctx_with(Arc::clone(&queue), "alice");
         let result = call(
             TasksTool,
@@ -548,14 +548,14 @@ mod tests {
         .await;
         assert!(matches!(result, ToolResult::Success { .. }));
         let t = queue.get_task("t-1").unwrap();
-        assert!(t.has_label("research"));
+        assert_eq!(t.label.as_deref(), Some("research"));
         assert_eq!(t.status, Status::Todo);
     }
 
     #[tokio::test]
     async fn create_with_named_label_routes_to_agent() {
         let queue = Queue::new();
-        queue.dir(isolated_test_dir());
+        queue.set_dir(isolated_test_dir());
         let ctx = ctx_with(Arc::clone(&queue), "alice");
         let result = call(
             TasksTool,
@@ -569,19 +569,19 @@ mod tests {
         .await;
         assert!(matches!(result, ToolResult::Success { .. }));
         let t = queue.get_task("t-1").unwrap();
-        assert!(t.has_label("alice"));
+        assert_eq!(t.label.as_deref(), Some("alice"));
         assert_eq!(t.status, Status::Todo);
     }
 
     #[tokio::test]
     async fn a_task_the_model_creates_takes_the_schema_bound_to_its_label() {
         let queue = Queue::new();
-        queue.dir(isolated_test_dir());
+        queue.set_dir(isolated_test_dir());
         let schemas = crate::schemas::SchemaStore::new();
         schemas
             .label("analysis", serde_json::json!({"type": "string"}))
             .unwrap();
-        queue.schemas(&schemas);
+        queue.set_schemas(&schemas);
 
         let ctx = ctx_with(Arc::clone(&queue), "alice");
         let result = call(
@@ -618,7 +618,7 @@ mod tests {
         assert!(matches!(result, ToolResult::Success { .. }));
         let t = queue.get_task(&key).unwrap();
         assert_eq!(t.task, serde_json::Value::String("new body".into()));
-        assert!(t.has_label("urgent"));
+        assert_eq!(t.label.as_deref(), Some("urgent"));
     }
 
     #[tokio::test]

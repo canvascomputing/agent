@@ -57,36 +57,6 @@ impl PyTask {
         Ok(PyTask { inner })
     }
 
-    /// Check whether the task carries a label.
-    fn has_label(&self, label: &str) -> bool {
-        self.inner.has_label(label)
-    }
-
-    /// Check whether the task is waiting to be claimed.
-    fn is_todo(&self) -> bool {
-        self.inner.is_todo()
-    }
-
-    /// Check whether the task finished.
-    fn is_finished(&self) -> bool {
-        self.inner.is_finished()
-    }
-
-    /// Check whether the task failed.
-    fn is_failed(&self) -> bool {
-        self.inner.is_failed()
-    }
-
-    /// Check whether an agent is working on the task.
-    fn is_in_progress(&self) -> bool {
-        self.inner.is_in_progress()
-    }
-
-    /// Check whether the task is still todo or in progress.
-    fn is_pending(&self) -> bool {
-        self.inner.is_pending()
-    }
-
     #[getter]
     fn key(&self) -> &str {
         &self.inner.key

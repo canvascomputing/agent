@@ -267,7 +267,7 @@ mod tests {
 
     fn one_task(agent: &str) -> (Arc<Queue>, String) {
         let queue = Queue::new();
-        queue.dir(shared_test_dir().to_path_buf());
+        queue.set_dir(shared_test_dir().to_path_buf());
         queue.insert(Task::new("body").label(agent), "tester".into());
         let key = queue
             .claim(&Query::from("status = Todo"), agent)
@@ -285,7 +285,7 @@ mod tests {
 
     /// Process-lifetime tempdir used as the default `Queue` root
     /// for tests in this module. Tests that need an isolated workspace
-    /// still call `queue.dir(...)` explicitly to override.
+    /// still call `queue.set_dir(...)` explicitly to override.
     fn shared_test_dir() -> &'static std::path::Path {
         use std::sync::OnceLock;
         static DIR: OnceLock<crate::test_util::TempDir> = OnceLock::new();
@@ -305,7 +305,7 @@ mod tests {
     /// Claim a task carrying an integer-typed `line`.
     fn line_task(dir: &std::path::Path) -> Arc<Queue> {
         let queue = Queue::new();
-        queue.dir(dir.to_path_buf());
+        queue.set_dir(dir.to_path_buf());
         queue.insert(
             Task::new("body").schema(line_schema()).label("alice"),
             "tester".into(),
@@ -418,7 +418,7 @@ mod tests {
     async fn a_result_field_named_like_a_control_key_survives_the_finish() {
         let dir = crate::test_util::TempDir::new().unwrap();
         let queue = Queue::new();
-        queue.dir(dir.path().to_path_buf());
+        queue.set_dir(dir.path().to_path_buf());
         queue.insert(
             Task::new("body").schema(colliding_schema()).label("alice"),
             "tester".into(),
@@ -448,7 +448,7 @@ mod tests {
         // object as JSON text. Dispatch decodes it against the nested schema.
         let dir = crate::test_util::TempDir::new().unwrap();
         let (queue, key) = one_task("alice");
-        queue.dir(dir.path().to_path_buf());
+        queue.set_dir(dir.path().to_path_buf());
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
         let mut registry = crate::tools::ToolRegistry::default();
         registry.register(FinishTool::from_schema(Some(object_schema())));
@@ -483,7 +483,7 @@ mod tests {
     async fn writes_string_result_and_marks_finished() {
         let dir = crate::test_util::TempDir::new().unwrap();
         let (queue, key) = one_task("alice");
-        queue.dir(dir.path().to_path_buf());
+        queue.set_dir(dir.path().to_path_buf());
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
         let outcome = Tool::from(FinishTool)
             .call(serde_json::json!({"result": "the answer"}), &ctx)
@@ -503,7 +503,7 @@ mod tests {
     async fn a_result_is_written_to_the_task_folder() {
         let dir = crate::test_util::TempDir::new().unwrap();
         let (queue, key) = one_task("alice");
-        queue.dir(dir.path().to_path_buf());
+        queue.set_dir(dir.path().to_path_buf());
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
         Tool::from(FinishTool)
             .call(serde_json::json!({"result": {"x": 1}}), &ctx)
@@ -525,7 +525,7 @@ mod tests {
     async fn a_reloaded_queue_reads_the_result_back() {
         let dir = crate::test_util::TempDir::new().unwrap();
         let (queue, key) = one_task("alice");
-        queue.dir(dir.path().to_path_buf());
+        queue.set_dir(dir.path().to_path_buf());
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
         Tool::from(FinishTool)
             .call(serde_json::json!({"result": "the answer"}), &ctx)
@@ -550,7 +550,7 @@ mod tests {
         ] {
             let dir = crate::test_util::TempDir::new().unwrap();
             let (queue, key) = one_task("alice");
-            queue.dir(dir.path().to_path_buf());
+            queue.set_dir(dir.path().to_path_buf());
             let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
             let outcome = Tool::from(FinishTool)
                 .call(serde_json::json!({"result": value}), &ctx)
@@ -568,7 +568,7 @@ mod tests {
     async fn accepts_structured_value_when_no_schema() {
         let dir = crate::test_util::TempDir::new().unwrap();
         let (queue, key) = one_task("alice");
-        queue.dir(dir.path().to_path_buf());
+        queue.set_dir(dir.path().to_path_buf());
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
         let outcome = Tool::from(FinishTool)
             .call(serde_json::json!({"result": {"x": 1, "y": [2, 3]}}), &ctx)
@@ -588,8 +588,8 @@ mod tests {
     async fn validates_against_schema() {
         let dir = crate::test_util::TempDir::new().unwrap();
         let queue = Queue::new();
-        queue.dir(shared_test_dir().to_path_buf());
-        queue.dir(dir.path().to_path_buf());
+        queue.set_dir(shared_test_dir().to_path_buf());
+        queue.set_dir(dir.path().to_path_buf());
         let schema = Schema::new(serde_json::json!({
             "type": "object",
             "properties": {"x": {"type": "string"}},
@@ -633,8 +633,8 @@ mod tests {
     async fn an_object_result_is_stored_as_the_object() {
         let dir = crate::test_util::TempDir::new().unwrap();
         let queue = Queue::new();
-        queue.dir(shared_test_dir().to_path_buf());
-        queue.dir(dir.path().to_path_buf());
+        queue.set_dir(shared_test_dir().to_path_buf());
+        queue.set_dir(dir.path().to_path_buf());
         let schema = Schema::new(serde_json::json!({
             "type": "object",
             "properties": {"x": {"type": "string"}},
@@ -663,8 +663,8 @@ mod tests {
     async fn stores_a_string_encoded_result_as_the_decoded_object() {
         let dir = crate::test_util::TempDir::new().unwrap();
         let queue = Queue::new();
-        queue.dir(shared_test_dir().to_path_buf());
-        queue.dir(dir.path().to_path_buf());
+        queue.set_dir(shared_test_dir().to_path_buf());
+        queue.set_dir(dir.path().to_path_buf());
         let schema = Schema::new(serde_json::json!({
             "type": "object",
             "properties": {"x": {"type": "string"}},
@@ -698,7 +698,7 @@ mod tests {
     async fn errors_when_no_current_task() {
         let dir = crate::test_util::TempDir::new().unwrap();
         let queue = Queue::new();
-        queue.dir(shared_test_dir().to_path_buf());
+        queue.set_dir(shared_test_dir().to_path_buf());
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
         let outcome = Tool::from(FinishTool)
             .call(serde_json::json!({"result": "x"}), &ctx)
@@ -710,8 +710,8 @@ mod tests {
     async fn appends_one_line_per_completed_task() {
         let dir = crate::test_util::TempDir::new().unwrap();
         let queue = Queue::new();
-        queue.dir(shared_test_dir().to_path_buf());
-        queue.dir(dir.path().to_path_buf());
+        queue.set_dir(shared_test_dir().to_path_buf());
+        queue.set_dir(dir.path().to_path_buf());
 
         queue.insert(Task::new("a").label("alice"), "tester".into());
         let key1 = queue
@@ -740,8 +740,8 @@ mod tests {
         const N: usize = 32;
         let dir = crate::test_util::TempDir::new().unwrap();
         let queue = Queue::new();
-        queue.dir(shared_test_dir().to_path_buf());
-        queue.dir(dir.path().to_path_buf());
+        queue.set_dir(shared_test_dir().to_path_buf());
+        queue.set_dir(dir.path().to_path_buf());
 
         let mut expected = Vec::with_capacity(N);
         for i in 0..N {
@@ -796,7 +796,7 @@ mod tests {
 
     fn one_task_in(agent: &str, dir: PathBuf) -> (Arc<Queue>, String) {
         let queue = Queue::new();
-        queue.dir(dir);
+        queue.set_dir(dir);
         queue.insert(Task::new("parent body").label(agent), "tester".into());
         let key = queue
             .claim(&Query::from("status = Todo"), agent)
@@ -832,7 +832,7 @@ mod tests {
         let child = queue.get_task("t-2").unwrap();
         assert_eq!(child.status, Status::Todo);
         assert_eq!(child.parent.as_deref(), Some(parent_key.as_str()));
-        assert!(child.has_label("bob"));
+        assert_eq!(child.label.as_deref(), Some("bob"));
         assert_eq!(child.reporter, "alice");
     }
 
@@ -847,7 +847,7 @@ mod tests {
                 serde_json::json!({"type": "object", "title": "verdict"}),
             )
             .unwrap();
-        queue.schemas(&schemas);
+        queue.set_schemas(&schemas);
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
 
         Tool::from(FinishTool)
@@ -904,7 +904,7 @@ mod tests {
         // the abort path this exercises.
         let dir = crate::test_util::TempDir::new().unwrap();
         let queue = Queue::new();
-        queue.dir(dir.path().to_path_buf());
+        queue.set_dir(dir.path().to_path_buf());
         let schema = Schema::new(serde_json::json!({
             "type": "string",
             "minLength": 50
@@ -955,7 +955,7 @@ mod tests {
 
     fn one_task_with_object_schema(agent: &str, dir: PathBuf) -> (Arc<Queue>, String) {
         let queue = Queue::new();
-        queue.dir(dir);
+        queue.set_dir(dir);
         queue.insert(
             Task::new("strict parent")
                 .schema(strict_object_schema())
@@ -1248,7 +1248,7 @@ mod tests {
     async fn handover_errors_when_no_current_task() {
         let dir = crate::test_util::TempDir::new().unwrap();
         let queue = Queue::new();
-        queue.dir(dir.path().to_path_buf());
+        queue.set_dir(dir.path().to_path_buf());
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
         let outcome = Tool::from(FinishTool)
             .call(

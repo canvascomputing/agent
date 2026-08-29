@@ -136,7 +136,7 @@ impl PyAgent {
     /// Let the agent wait for new instructions to keep a task in-progress.
     ///
     /// It gets no `FinishTool()`; the host closes the task with
-    /// `set_finished(key, result)`.
+    /// `set_task_finished(key, result)`.
     fn interactive(mut slf: PyRefMut<'_, Self>) -> PyRefMut<'_, Self> {
         slf.set(|agent| agent.interactive());
         slf

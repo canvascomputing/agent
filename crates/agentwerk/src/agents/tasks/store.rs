@@ -42,12 +42,18 @@ impl Queue {
             *base += 1;
             *base
         };
-        let mut store = self.tasks.lock().unwrap();
         task.key = format!("t-{id}");
         task.created_at = now_millis();
         task.reporter = reporter;
         task.result = None;
         task.status = Status::Todo;
+        task.cancelled = self
+            .cancel_filters
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|query| query.matches(&task));
+        let mut store = self.tasks.lock().unwrap();
         let key = task.key.clone();
         let reporter = task.reporter.clone();
         store.insert(key.clone(), task);
@@ -123,7 +129,7 @@ impl Queue {
     /// task is missing: the loop drops out shortly afterwards on the
     /// same condition. The task record is not rewritten; the replies
     /// live only in `replies.jsonl`.
-    pub(crate) fn add_reply(&self, key: &str, reply: Reply) {
+    pub(crate) fn append_reply(&self, key: &str, reply: Reply) {
         {
             let mut store = self.tasks.lock().unwrap();
             let Some(t) = store.get_mut(key) else { return };
@@ -148,12 +154,16 @@ impl Queue {
     /// # use agentwerk::Queue;
     /// # fn run() -> Result<(), Box<dyn std::error::Error>> {
     /// let tasks = Queue::new();
-    /// let key = tasks.task("Look up the cached answer.");
-    /// tasks.set_finished(&key, "42")?;
+    /// let key = tasks.add_task("Look up the cached answer.");
+    /// tasks.set_task_finished(&key, "42")?;
     /// # Ok(())
     /// # }
     /// ```
-    pub fn set_finished(&self, key: &str, result: impl serde::Serialize) -> Result<(), TaskError> {
+    pub fn set_task_finished(
+        &self,
+        key: &str,
+        result: impl serde::Serialize,
+    ) -> Result<(), TaskError> {
         let value = serde_json::to_value(result).expect("result is serializable");
         self.set_result(key, value)
             .map_err(|violations| TaskError::ResultRejected {
@@ -163,10 +173,10 @@ impl Queue {
     }
 
     /// Transition a task to `Failed`. No result argument, unlike
-    /// [`Self::set_finished`]: a failed task has none. The emitted
+    /// [`Self::set_task_finished`]: a failed task has none. The emitted
     /// `TaskFailed` carries an empty agent id, like the run-level
     /// events no single agent causes.
-    pub fn set_failed(&self, key: &str) -> Result<(), TaskError> {
+    pub fn set_task_failed(&self, key: &str) -> Result<(), TaskError> {
         self.set_final_status(key, Status::Failed, "")
     }
 
@@ -178,7 +188,7 @@ impl Queue {
 
     fn set_final_status(&self, key: &str, status: Status, agent: &str) -> Result<(), TaskError> {
         // Increment BEFORE the status flip and decrement only after the
-        // terminal event has been emitted: the drain check in `finish()`
+        // terminal event has been emitted: the drain check in `finish_results()`
         // must never observe (empty queue, zero counter) mid-transition,
         // or it drains before an event handler can enqueue follow-up work.
         struct InFlight<'a>(&'a std::sync::atomic::AtomicUsize);
@@ -362,7 +372,7 @@ mod tests {
     #[test]
     fn task_creates_task_with_user_reporter() {
         let (queue, _tmp) = test_queue();
-        queue.task("hello");
+        queue.add_task("hello");
         let t = queue.get_task("t-1").unwrap();
         assert_eq!(t.task, serde_json::Value::String("hello".into()));
         assert_eq!(t.reporter, "user");
@@ -372,18 +382,18 @@ mod tests {
     #[test]
     fn labeled_task_attaches_label_and_leaves_status_todo() {
         let (queue, _tmp) = test_queue();
-        queue.task(Task::new("hello").label("research"));
+        queue.add_task(Task::new("hello").label("research"));
         let t = queue.get_task("t-1").unwrap();
-        assert!(t.has_label("research"));
+        assert_eq!(t.label.as_deref(), Some("research"));
         assert_eq!(t.status, Status::Todo);
     }
 
     #[test]
     fn create_with_named_label_is_born_todo_and_carries_label() {
         let (queue, _tmp) = test_queue();
-        queue.task(Task::new("specific work for alice").label("alice"));
+        queue.add_task(Task::new("specific work for alice").label("alice"));
         let t = queue.get_task("t-1").unwrap();
-        assert!(t.has_label("alice"));
+        assert_eq!(t.label.as_deref(), Some("alice"));
         assert_eq!(t.status, Status::Todo);
     }
 
@@ -391,16 +401,16 @@ mod tests {
     fn create_with_label_and_schema_is_stored_verbatim() {
         let (queue, _tmp) = test_queue();
         let schema = crate::schemas::Schema::new(serde_json::json!({"type": "string"})).unwrap();
-        queue.task(Task::new("x").label("urgent").schema(schema));
+        queue.add_task(Task::new("x").label("urgent").schema(schema));
         let t = queue.get_task("t-1").unwrap();
-        assert!(t.has_label("urgent"));
+        assert_eq!(t.label.as_deref(), Some("urgent"));
         assert!(t.schema.is_some());
     }
 
     #[test]
     fn set_result_updates_task() {
         let (queue, _tmp) = test_queue();
-        queue.task("hi");
+        queue.add_task("hi");
         queue
             .set_result("t-1", serde_json::Value::String("answer".into()))
             .unwrap();
@@ -418,12 +428,12 @@ mod tests {
     #[test]
     fn done_and_failed_filter_by_status() {
         let (queue, _tmp) = test_queue();
-        queue.task("ok");
-        queue.task("oops");
-        queue.task("pending");
+        queue.add_task("ok");
+        queue.add_task("oops");
+        queue.add_task("pending");
         queue.claim(&Query::from("t-1"), "agent");
         queue.set_finished_by("t-1", "agent").unwrap();
-        queue.set_failed("t-2").unwrap();
+        queue.set_task_failed("t-2").unwrap();
         let done = queue.find_tasks(|t: &Task| t.status == Status::Finished);
         let failed = queue.find_tasks(|t: &Task| t.status == Status::Failed);
         assert_eq!(done.len(), 1);
@@ -435,14 +445,14 @@ mod tests {
     #[test]
     fn task_status_transitions_record_stats() {
         let (queue, _tmp) = test_queue();
-        queue.task("a");
-        queue.task("b");
-        queue.task("c");
+        queue.add_task("a");
+        queue.add_task("b");
+        queue.add_task("c");
         assert_eq!(queue.stats.event_count(EventName::TaskCreated), 3);
         queue.claim(&Query::from("t-1"), "agent");
         queue.set_finished_by("t-1", "agent").unwrap();
         queue.claim(&Query::from("t-2"), "agent");
-        queue.set_failed("t-2").unwrap();
+        queue.set_task_failed("t-2").unwrap();
         assert_eq!(queue.stats.event_count(EventName::TaskFinished), 1);
         assert_eq!(queue.stats.event_count(EventName::TaskFailed), 1);
     }
@@ -450,7 +460,7 @@ mod tests {
     #[test]
     fn a_task_logs_created_started_and_finished_in_order() {
         let (queue, dir) = test_queue();
-        queue.task("hello");
+        queue.add_task("hello");
         queue.claim(&Query::from("t-1"), "agent");
         queue.set_finished_by("t-1", "agent").unwrap();
         let lines = read_events_log(dir.path());
@@ -466,7 +476,7 @@ mod tests {
     #[test]
     fn streamed_chunks_stay_out_of_the_log() {
         let (queue, dir) = test_queue();
-        queue.task("seed");
+        queue.add_task("seed");
         queue.emit(
             "t-1",
             "agent",
@@ -485,8 +495,8 @@ mod tests {
     fn load_replays_the_token_totals_a_run_already_spent() {
         let dir = crate::test_util::TempDir::new().unwrap();
         let original = Queue::new();
-        original.dir(dir.path().to_path_buf());
-        original.task("seed");
+        original.set_dir(dir.path().to_path_buf());
+        original.add_task("seed");
         original.emit(
             "t-1",
             "agent",
@@ -510,8 +520,8 @@ mod tests {
     #[test]
     fn set_failed_logs_a_failure_without_a_start() {
         let (queue, dir) = test_queue();
-        queue.task("hello");
-        queue.set_failed("t-1").unwrap();
+        queue.add_task("hello");
+        queue.set_task_failed("t-1").unwrap();
         let lines = read_events_log(dir.path());
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[0]["event"], "task_created");
@@ -522,7 +532,7 @@ mod tests {
     #[test]
     fn a_logged_event_carries_the_task_label_when_pinned() {
         let (queue, dir) = test_queue();
-        queue.task(Task::new("specific").label("alice"));
+        queue.add_task(Task::new("specific").label("alice"));
         let lines = read_events_log(dir.path());
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0]["event"], "task_created");
@@ -532,12 +542,12 @@ mod tests {
     #[test]
     fn the_log_holds_one_line_per_lifecycle_turn_across_tasks() {
         let (queue, dir) = test_queue();
-        queue.task("a");
-        queue.task("b");
+        queue.add_task("a");
+        queue.add_task("b");
         queue.claim(&Query::from("t-1"), "agent");
         queue.set_finished_by("t-1", "agent").unwrap();
         queue.claim(&Query::from("t-2"), "agent");
-        queue.set_failed("t-2").unwrap();
+        queue.set_task_failed("t-2").unwrap();
         // 2 created + 2 started + 1 finished + 1 failed
         assert_eq!(read_events_log(dir.path()).len(), 6);
     }
@@ -545,7 +555,7 @@ mod tests {
     #[test]
     fn claim_transitions_todo_to_in_progress_and_sets_the_assignee() {
         let (queue, _tmp) = test_queue();
-        queue.task("hello");
+        queue.add_task("hello");
         let key = queue.claim(&Query::from("status = Todo"), "alice").unwrap();
         assert_eq!(key, "t-1");
         let t = queue.get_task(&key).unwrap();
@@ -557,22 +567,25 @@ mod tests {
     #[test]
     fn claim_leaves_the_label_the_task_was_filed_with() {
         let (queue, _tmp) = test_queue();
-        queue.task(Task::new("hello").label("analysis"));
+        queue.add_task(Task::new("hello").label("analysis"));
         let key = queue.claim(&Query::from("analysis"), "alice").unwrap();
-        assert!(queue.get_task(&key).unwrap().has_label("analysis"));
+        assert_eq!(
+            queue.get_task(&key).unwrap().label.as_deref(),
+            Some("analysis")
+        );
     }
 
     #[test]
     fn claim_returns_none_when_no_task_matches() {
         let (queue, _tmp) = test_queue();
-        queue.task("hello");
+        queue.add_task("hello");
         assert!(queue.claim(&Query::from("nonexistent"), "alice").is_none());
     }
 
     #[test]
     fn second_claim_of_same_task_returns_none() {
         let (queue, _tmp) = test_queue();
-        queue.task("hello");
+        queue.add_task("hello");
         let first = queue.claim(&Query::from("t-1"), "alice");
         assert!(first.is_some());
         // Second claim: task is now InProgress, not Todo.
@@ -583,9 +596,9 @@ mod tests {
     #[test]
     fn claim_picks_earliest_eligible_task() {
         let (queue, _tmp) = test_queue();
-        queue.task("a");
-        queue.task("b");
-        queue.task("c");
+        queue.add_task("a");
+        queue.add_task("b");
+        queue.add_task("c");
         let key = queue.claim(&Query::from("status = Todo"), "alice").unwrap();
         assert_eq!(key, "t-1");
     }
@@ -594,7 +607,7 @@ mod tests {
         let (queue, dir) = test_queue();
         let schemas = crate::schemas::SchemaStore::new();
         schemas.label("analysis", document("verdict")).unwrap();
-        queue.schemas(&schemas);
+        queue.set_schemas(&schemas);
         (queue, dir)
     }
 
@@ -613,7 +626,7 @@ mod tests {
     #[test]
     fn claim_takes_the_schema_bound_to_the_tasks_label() {
         let (queue, _tmp) = queue_with_analysis_schema();
-        queue.task(Task::new("audit").label("analysis"));
+        queue.add_task(Task::new("audit").label("analysis"));
         assert_eq!(bound_title(&queue, "t-1"), None);
 
         queue.claim(&Query::from("analysis"), "alice");
@@ -624,7 +637,7 @@ mod tests {
     fn claim_leaves_a_schema_the_task_already_carries() {
         let (queue, _tmp) = queue_with_analysis_schema();
         let own = crate::schemas::Schema::new(document("its own")).unwrap();
-        queue.task(Task::new("audit").label("analysis").schema(own));
+        queue.add_task(Task::new("audit").label("analysis").schema(own));
         assert_eq!(bound_title(&queue, "t-1").as_deref(), Some("its own"));
 
         queue.claim(&Query::from("analysis"), "alice");
@@ -637,8 +650,8 @@ mod tests {
         let schemas = crate::schemas::SchemaStore::new();
         schemas.label("analysis", document("by scope")).unwrap();
         schemas.label("alice", document("by agent")).unwrap();
-        queue.schemas(&schemas);
-        queue.task(Task::new("audit").label("analysis"));
+        queue.set_schemas(&schemas);
+        queue.add_task(Task::new("audit").label("analysis"));
         assert_eq!(bound_title(&queue, "t-1"), None);
 
         queue.claim(&Query::from("analysis"), "alice");
@@ -648,7 +661,7 @@ mod tests {
     #[test]
     fn claim_binds_no_schema_when_the_tasks_label_has_none() {
         let (queue, _tmp) = queue_with_analysis_schema();
-        queue.task(Task::new("search").label("discovery"));
+        queue.add_task(Task::new("search").label("discovery"));
         assert_eq!(bound_title(&queue, "t-1"), None);
 
         queue.claim(&Query::from("discovery"), "alice");
@@ -660,8 +673,8 @@ mod tests {
         let (queue, _tmp) = test_queue();
         let schemas = crate::schemas::SchemaStore::new();
         schemas.label("analysis", document("first")).unwrap();
-        queue.schemas(&schemas);
-        queue.task(Task::new("audit").label("analysis"));
+        queue.set_schemas(&schemas);
+        queue.add_task(Task::new("audit").label("analysis"));
         queue.claim(&Query::from("analysis"), "alice");
         assert_eq!(bound_title(&queue, "t-1").as_deref(), Some("first"));
 
@@ -677,11 +690,11 @@ mod tests {
     fn a_schema_bound_at_claim_survives_load() {
         let dir = crate::test_util::TempDir::new().unwrap();
         let original = Queue::new();
-        original.dir(dir.path().to_path_buf());
+        original.set_dir(dir.path().to_path_buf());
         let schemas = crate::schemas::SchemaStore::new();
         schemas.label("analysis", document("verdict")).unwrap();
-        original.schemas(&schemas);
-        original.task(Task::new("audit").label("analysis"));
+        original.set_schemas(&schemas);
+        original.add_task(Task::new("audit").label("analysis"));
         original.claim(&Query::from("analysis"), "alice");
         drop(original);
 
@@ -692,7 +705,7 @@ mod tests {
     #[test]
     fn claim_logs_the_task_starting() {
         let (queue, dir) = test_queue();
-        queue.task("hello");
+        queue.add_task("hello");
         queue.claim(&Query::from("status = Todo"), "alice");
         let lines = read_events_log(dir.path());
         assert_eq!(lines.len(), 2);
@@ -705,7 +718,7 @@ mod tests {
     #[test]
     fn set_finished_transitions_to_finished() {
         let (queue, _tmp) = test_queue();
-        let key = queue.task("hello");
+        let key = queue.add_task("hello");
         queue.claim(&Query::from("status = Todo"), "alice");
         queue.set_finished_by(&key, "alice").unwrap();
         let t = queue.get_task(&key).unwrap();
@@ -716,9 +729,9 @@ mod tests {
     #[test]
     fn set_failed_transitions_to_failed() {
         let (queue, _tmp) = test_queue();
-        let key = queue.task("hello");
+        let key = queue.add_task("hello");
         queue.claim(&Query::from("status = Todo"), "alice");
-        queue.set_failed(&key).unwrap();
+        queue.set_task_failed(&key).unwrap();
         let t = queue.get_task(&key).unwrap();
         assert_eq!(t.status, Status::Failed);
         assert!(t.failed_at.is_some());
@@ -727,9 +740,9 @@ mod tests {
     #[test]
     fn a_finished_task_is_not_reopened_by_a_later_failure() {
         let (queue, _tmp) = test_queue();
-        let key = queue.task("hello");
+        let key = queue.add_task("hello");
         queue.claim(&Query::from("status = Todo"), "alice");
-        queue.set_finished(&key, "host result").unwrap();
+        queue.set_task_finished(&key, "host result").unwrap();
 
         // Alice was still turning the task and gives up after the host
         // resolved it.
@@ -744,11 +757,11 @@ mod tests {
     #[test]
     fn a_failed_task_is_not_reopened_by_a_later_finish() {
         let (queue, _tmp) = test_queue();
-        let key = queue.task("hello");
+        let key = queue.add_task("hello");
         queue.claim(&Query::from("status = Todo"), "alice");
         queue.set_failed_by(&key, "alice").unwrap();
 
-        queue.set_finished(&key, "late result").unwrap();
+        queue.set_task_finished(&key, "late result").unwrap();
 
         let task = queue.get_task(&key).unwrap();
         assert_eq!(task.status, Status::Failed);
@@ -760,15 +773,15 @@ mod tests {
     #[test]
     fn set_finished_stores_the_result_and_resolves_the_task() {
         let (queue, _tmp) = test_queue();
-        queue.task("hello");
+        queue.add_task("hello");
         queue
-            .set_finished("t-1", serde_json::json!({"answer": 42}))
+            .set_task_finished("t-1", serde_json::json!({"answer": 42}))
             .unwrap();
         let t = queue.get_task("t-1").unwrap();
         assert_eq!(t.status, Status::Finished);
         assert_eq!(t.result, Some(serde_json::json!({"answer": 42})));
         assert_eq!(
-            queue.results().pop(),
+            queue.get_results().pop(),
             Some(serde_json::json!({"answer": 42}))
         );
     }
@@ -782,10 +795,10 @@ mod tests {
             "required": ["title"],
         }))
         .unwrap();
-        queue.task(Task::new("write a report").schema(schema));
+        queue.add_task(Task::new("write a report").schema(schema));
 
         let err = queue
-            .set_finished("t-1", serde_json::json!({"body": "no title"}))
+            .set_task_finished("t-1", serde_json::json!({"body": "no title"}))
             .unwrap_err();
         assert!(matches!(err, TaskError::ResultRejected { .. }));
         assert_eq!(queue.get_task("t-1").unwrap().status, Status::Todo);
@@ -794,14 +807,14 @@ mod tests {
     #[test]
     fn set_finished_errors_on_an_unknown_key() {
         let (queue, _tmp) = test_queue();
-        let err = queue.set_finished("t-9", "done").unwrap_err();
+        let err = queue.set_task_finished("t-9", "done").unwrap_err();
         assert!(matches!(err, TaskError::TaskMissing { .. }));
     }
 
     #[test]
     fn task_parent_builder_round_trips() {
         let (queue, _tmp) = test_queue();
-        queue.task(Task::new("child body").parent("t-1"));
+        queue.add_task(Task::new("child body").parent("t-1"));
         let stored = queue.get_task("t-1").unwrap();
         assert_eq!(stored.parent.as_deref(), Some("t-1"));
     }
@@ -809,7 +822,7 @@ mod tests {
     #[test]
     fn write_tool_output_returns_relative_path_and_writes_absolute() {
         let (queue, dir) = test_queue();
-        queue.task("seed");
+        queue.add_task("seed");
         let rel = queue
             .write_tool_output("t-1", "call-1", "the full content")
             .expect("write succeeds when dir exists");
@@ -822,7 +835,7 @@ mod tests {
     #[test]
     fn write_tool_output_creates_outputs_subdir_lazily() {
         let (queue, dir) = test_queue();
-        queue.task("seed");
+        queue.add_task("seed");
         let outputs = dir.path().join("tasks").join("t-1").join("outputs");
         assert!(!outputs.exists());
         queue.write_tool_output("t-1", "call-1", "payload").unwrap();
@@ -832,8 +845,8 @@ mod tests {
     #[test]
     fn a_logged_event_names_the_agent_that_caused_it() {
         let (queue, dir) = test_queue();
-        queue.task("first");
-        queue.task(Task::new("child").parent("t-1"));
+        queue.add_task("first");
+        queue.add_task(Task::new("child").parent("t-1"));
         let lines = read_events_log(dir.path());
         assert_eq!(lines.len(), 2);
         // The reporter, since a task is created by whoever filed it.
@@ -847,7 +860,7 @@ mod tests {
     fn load_creates_tasks_dir_when_missing() {
         let dir = crate::test_util::TempDir::new().unwrap();
         let queue = Queue::load(dir.path()).unwrap();
-        assert!(queue.tasks().is_empty());
+        assert!(queue.get_tasks().is_empty());
         assert!(dir.path().join("tasks").is_dir());
     }
 
@@ -858,9 +871,9 @@ mod tests {
     fn load_reports_a_task_whose_replies_cannot_be_read() {
         let dir = crate::test_util::TempDir::new().unwrap();
         let original = Queue::new();
-        original.dir(dir.path().to_path_buf());
-        original.task("seed work");
-        original.add_reply("t-1", Reply::user_text("hello"));
+        original.set_dir(dir.path().to_path_buf());
+        original.add_task("seed work");
+        original.append_reply("t-1", Reply::user_text("hello"));
         original.set_finished_by("t-1", "agent").unwrap();
         drop(original);
 
@@ -884,8 +897,8 @@ mod tests {
     fn load_restores_done_task_with_result_and_replies() {
         let dir = crate::test_util::TempDir::new().unwrap();
         let original = Queue::new();
-        original.dir(dir.path().to_path_buf());
-        original.task("seed work");
+        original.set_dir(dir.path().to_path_buf());
+        original.add_task("seed work");
         original
             .set_result("t-1", serde_json::json!({"ok": true}))
             .unwrap();
@@ -903,12 +916,12 @@ mod tests {
     fn insert_after_load_never_reuses_an_existing_key() {
         let dir = crate::test_util::TempDir::new().unwrap();
         let original = Queue::new();
-        original.dir(dir.path().to_path_buf());
-        original.task("seed work");
+        original.set_dir(dir.path().to_path_buf());
+        original.add_task("seed work");
         drop(original);
 
         let resumed = Queue::load(dir.path()).unwrap();
-        assert_eq!(resumed.task("more work"), "t-2");
+        assert_eq!(resumed.add_task("more work"), "t-2");
     }
 
     #[test]
@@ -917,21 +930,21 @@ mod tests {
         // prior run already wrote into: `new()` (not `load()`) plus `.dir(..)`.
         let dir = crate::test_util::TempDir::new().unwrap();
         let first = Queue::new();
-        first.dir(dir.path().to_path_buf());
-        first.task("seed work");
+        first.set_dir(dir.path().to_path_buf());
+        first.add_task("seed work");
         drop(first);
 
         let second = Queue::new();
-        second.dir(dir.path().to_path_buf());
-        assert_eq!(second.task("more work"), "t-2");
+        second.set_dir(dir.path().to_path_buf());
+        assert_eq!(second.add_task("more work"), "t-2");
     }
 
     #[test]
     fn load_seeds_next_task_id_without_rescanning_tasks_dir() {
         let dir = crate::test_util::TempDir::new().unwrap();
         let original = Queue::new();
-        original.dir(dir.path().to_path_buf());
-        original.task("seed work");
+        original.set_dir(dir.path().to_path_buf());
+        original.add_task("seed work");
         drop(original);
 
         let resumed = Queue::load(dir.path()).unwrap();
@@ -940,15 +953,15 @@ mod tests {
         // not rescan it, since a rescan would find nothing and wrongly
         // restart numbering at 1.
         std::fs::remove_dir_all(dir.path().join("tasks")).unwrap();
-        assert_eq!(resumed.task("more work"), "t-2");
+        assert_eq!(resumed.add_task("more work"), "t-2");
     }
 
     #[test]
     fn load_restores_in_progress_replies() {
         let dir = crate::test_util::TempDir::new().unwrap();
         let original = Queue::new();
-        original.dir(dir.path().to_path_buf());
-        original.task("mid flight");
+        original.set_dir(dir.path().to_path_buf());
+        original.add_task("mid flight");
         original
             .claim(&Query::from("status = Todo"), "alice")
             .unwrap();
@@ -964,12 +977,12 @@ mod tests {
     fn load_replays_the_event_log_into_the_counters() {
         let dir = crate::test_util::TempDir::new().unwrap();
         let original = Queue::new();
-        original.dir(dir.path().to_path_buf());
-        original.task("a");
-        original.task("b");
+        original.set_dir(dir.path().to_path_buf());
+        original.add_task("a");
+        original.add_task("b");
         original.set_result("t-1", serde_json::Value::Null).unwrap();
         original.set_finished_by("t-1", "agent").unwrap();
-        original.set_failed("t-2").unwrap();
+        original.set_task_failed("t-2").unwrap();
         drop(original);
 
         let resumed = Queue::load(dir.path()).unwrap();
@@ -981,8 +994,8 @@ mod tests {
     fn load_skips_dir_without_task_json() {
         let dir = crate::test_util::TempDir::new().unwrap();
         let original = Queue::new();
-        original.dir(dir.path().to_path_buf());
-        original.task("valid");
+        original.set_dir(dir.path().to_path_buf());
+        original.add_task("valid");
         drop(original);
 
         // A leftover directory with no `task.json` is ignored by the
@@ -1026,7 +1039,6 @@ mod tests {
         let resumed = Queue::load(dir.path()).unwrap();
         let task = resumed.get_task("t-1").expect("the task loads");
         assert_eq!(task.label, None);
-        assert!(!task.has_label("scan"));
     }
 
     #[test]
@@ -1051,8 +1063,8 @@ mod tests {
     fn task_json_does_not_carry_replies_field() {
         let dir = crate::test_util::TempDir::new().unwrap();
         let queue = Queue::new();
-        queue.dir(dir.path().to_path_buf());
-        queue.task("hello");
+        queue.set_dir(dir.path().to_path_buf());
+        queue.add_task("hello");
         let stored =
             std::fs::read_to_string(dir.path().join("tasks").join("t-1").join("task.json"))
                 .unwrap();
@@ -1064,11 +1076,30 @@ mod tests {
     }
 
     #[test]
+    fn task_json_does_not_persist_cancellation() {
+        let dir = crate::test_util::TempDir::new().unwrap();
+        let queue = Queue::new();
+        queue.set_dir(dir.path().to_path_buf());
+        let key = queue.add_task(Task::new("hello").label("scan"));
+        queue.cancel_tasks("label = scan");
+        queue.set_task_failed(&key).unwrap();
+
+        let stored =
+            std::fs::read_to_string(dir.path().join("tasks").join(&key).join("task.json")).unwrap();
+        let record: serde_json::Value = serde_json::from_str(&stored).unwrap();
+        assert!(record.get("cancelled").is_none());
+
+        let resumed = Queue::load(dir.path()).unwrap();
+        assert!(resumed.find_tasks("cancelled = true").is_empty());
+        assert_eq!(resumed.find_tasks("cancelled = false").len(), 1);
+    }
+
+    #[test]
     fn add_reply_appends_one_line_to_replies_jsonl() {
         let (queue, dir) = test_queue();
-        queue.task("hello");
-        queue.reply("t-1", "first");
-        queue.reply("t-1", "second");
+        queue.add_task("hello");
+        queue.add_reply("t-1", "first");
+        queue.add_reply("t-1", "second");
         let body =
             std::fs::read_to_string(dir.path().join("tasks").join("t-1").join("replies.jsonl"))
                 .unwrap();
@@ -1085,10 +1116,10 @@ mod tests {
         let dir = crate::test_util::TempDir::new().unwrap();
         {
             let queue = Queue::new();
-            queue.dir(dir.path().to_path_buf());
-            queue.task("hello");
-            queue.reply("t-1", "first");
-            queue.reply("t-1", "second");
+            queue.set_dir(dir.path().to_path_buf());
+            queue.add_task("hello");
+            queue.add_reply("t-1", "first");
+            queue.add_reply("t-1", "second");
         }
         let resumed = Queue::load(dir.path()).unwrap();
         let t = resumed.get_task("t-1").unwrap();
@@ -1106,7 +1137,7 @@ mod tests {
     #[test]
     fn task_lifecycle_writes_its_events_to_the_log() {
         let (queue, _dir) = test_queue();
-        queue.task("seed");
+        queue.add_task("seed");
         queue.claim(&Query::from("status = Todo"), "alice").unwrap();
         queue.set_result("t-1", serde_json::Value::Null).unwrap();
         queue.set_finished_by("t-1", "agent").unwrap();
@@ -1126,7 +1157,7 @@ mod tests {
             }
         });
 
-        queue.task("seed");
+        queue.add_task("seed");
 
         assert_eq!(queue.stats.event_count(EventName::TaskCreated), 1);
         assert_eq!(*reporters.lock().unwrap(), vec!["user".to_string()]);
@@ -1135,10 +1166,10 @@ mod tests {
     #[test]
     fn a_finished_task_failed_afterwards_is_not_counted_twice() {
         let (queue, _tmp) = test_queue();
-        let key = queue.task("seed");
+        let key = queue.add_task("seed");
         queue.set_finished_by(&key, "alice").unwrap();
         // Refused before the transition, so nothing is emitted to count.
-        queue.set_failed(&key).unwrap();
+        queue.set_task_failed(&key).unwrap();
 
         let stats = &queue.stats;
         assert_eq!(stats.event_count(EventName::TaskFinished), 1);
@@ -1149,14 +1180,14 @@ mod tests {
     fn task_with_json_schema_round_trips_through_load() {
         let dir = crate::test_util::TempDir::new().unwrap();
         let original = Queue::new();
-        original.dir(dir.path().to_path_buf());
+        original.set_dir(dir.path().to_path_buf());
         let schema_doc = serde_json::json!({
             "type": "object",
             "properties": { "n": { "type": "integer" } },
             "required": ["n"],
         });
         let schema = crate::schemas::Schema::new(schema_doc.clone()).unwrap();
-        original.task(Task::new("counted").schema(schema));
+        original.add_task(Task::new("counted").schema(schema));
         drop(original);
 
         let resumed = Queue::load(dir.path()).unwrap();
@@ -1170,9 +1201,9 @@ mod tests {
     fn edit_replies_rewrites_replies_without_touching_task() {
         use crate::agents::tasks::ReplyContent;
         let (queue, _tmp) = test_queue();
-        let key = queue.task("original task");
-        queue.add_reply(&key, Reply::user_text("keep me"));
-        queue.add_reply(&key, Reply::user_text("drop me"));
+        let key = queue.add_task("original task");
+        queue.append_reply(&key, Reply::user_text("keep me"));
+        queue.append_reply(&key, Reply::user_text("drop me"));
 
         queue.edit_replies(&key, |replies| {
             replies.retain(|reply| {
@@ -1198,8 +1229,8 @@ mod tests {
     #[test]
     fn edit_replies_that_changes_nothing_writes_nothing() {
         let (queue, _tmp) = test_queue();
-        let key = queue.task("go");
-        queue.add_reply(&key, Reply::user_text("keep me"));
+        let key = queue.add_task("go");
+        queue.append_reply(&key, Reply::user_text("keep me"));
         let task_dir = queue.get_dir().join("tasks").join(&key);
 
         queue.edit_replies(&key, |_replies| {}); // inspect, change nothing
@@ -1223,9 +1254,9 @@ mod tests {
     fn edit_rewrites_replies_in_place_without_a_snapshot_file() {
         use crate::agents::tasks::ReplyContent;
         let (queue, _tmp) = test_queue();
-        let key = queue.task("go");
-        queue.add_reply(&key, Reply::user_text("keep me"));
-        queue.add_reply(&key, Reply::user_text("drop me"));
+        let key = queue.add_task("go");
+        queue.append_reply(&key, Reply::user_text("keep me"));
+        queue.append_reply(&key, Reply::user_text("drop me"));
         let task_dir = queue.get_dir().join("tasks").join(&key);
 
         queue.edit_replies(&key, |replies| {
@@ -1256,11 +1287,11 @@ mod tests {
     fn compaction_then_edit_leaves_one_replies_file_and_no_leak() {
         use crate::agents::tasks::ReplyContent;
         let (queue, _tmp) = test_queue();
-        let key = queue.task("go");
-        queue.add_reply(&key, Reply::user_text("SECRET"));
+        let key = queue.add_task("go");
+        queue.append_reply(&key, Reply::user_text("SECRET"));
         // What compaction applies: the replies wholesale, rewritten in place.
         queue.edit_replies(&key, |replies| *replies = vec![Reply::user_text("summary")]);
-        queue.add_reply(&key, Reply::user_text("after"));
+        queue.append_reply(&key, Reply::user_text("after"));
         queue.edit_replies(&key, |replies| {
             replies.retain(|reply| {
                 !matches!(reply.content.first(), Some(ReplyContent::Text { text: t }) if t == "after")

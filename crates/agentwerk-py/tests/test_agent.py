@@ -88,7 +88,7 @@ def test_id_is_taken_from_the_label():
 
 def test_registering_an_agent_without_a_provider_is_rejected(queue):
     with pytest.raises(RuntimeError):
-        queue.agent(aw.Agent())
+        queue.add_agent(aw.Agent())
 
 
 def test_agent_enqueues_a_task_on_its_private_queue(offline_agent):
@@ -100,6 +100,6 @@ def test_binding_an_agent_drains_its_queue_into_the_shared_queue(
     offline_agent, queue
 ):
     offline_agent.task("count to three")
-    queue.agent(offline_agent)
+    queue.add_agent(offline_agent)
 
-    assert [t.task for t in queue.tasks()] == ["count to three"]
+    assert [t.task for t in queue.get_tasks()] == ["count to three"]

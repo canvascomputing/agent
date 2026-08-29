@@ -12,7 +12,7 @@ use super::{Schema, SchemaParseError};
 /// A `SchemaStore` holds one [`Schema`] per label and hands it to every task
 /// claimed under that label that carries no schema of its own.
 ///
-/// Share one store with a queue through `Queue::schemas`. A task built
+/// Share one store with a queue through `Queue::set_schemas`. A task built
 /// with `Task::schema` keeps what it was given.
 ///
 /// ```

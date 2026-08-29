@@ -186,14 +186,14 @@ impl Run {
 /// # async fn run() {
 /// let tasks = Queue::new();
 /// for _ in 0..4 {
-///     tasks.agent(
+///     tasks.add_agent(
 ///         Agent::from_env()
 ///             .label("research")
 ///             .tool(FetchUrlTool::new()),
 ///     );
 /// }
-/// tasks.task(Task::labeled("research", "Summarize https://canvascomputing.org"));
-/// tasks.finish_all().await;
+/// tasks.add_task(Task::labeled("research", "Summarize https://canvascomputing.org"));
+/// tasks.finish_all_tasks().await;
 /// # }
 /// ```
 ///
@@ -209,7 +209,7 @@ impl Run {
 ///
 /// # fn run() -> Result<(), Box<dyn std::error::Error>> {
 /// let tasks = Queue::load(".agentwerk")?;
-/// // Re-register the agents, then call .start() or .finish_all().await.
+/// // Re-register the agents, then call .start() or .finish_all_tasks().await.
 /// # let _ = tasks;
 /// # Ok(())
 /// # }
@@ -384,18 +384,18 @@ impl Queue {
     ///
     /// Counted as the requests finish, so this reports what the run has spent
     /// even when the log it wrote is gone.
-    pub fn input_tokens(&self) -> u64 {
+    pub fn get_input_tokens(&self) -> u64 {
         self.stats.input_tokens()
     }
 
     /// Get the output tokens across the run's finished requests.
-    pub fn output_tokens(&self) -> u64 {
+    pub fn get_output_tokens(&self) -> u64 {
         self.stats.output_tokens()
     }
 
     /// Get the elapsed duration, which keeps growing while agents work and
     /// stops when execution ends. `None` until the first task starts.
-    pub fn execution_duration(&self) -> Option<Duration> {
+    pub fn get_duration(&self) -> Option<Duration> {
         self.stats.execution_duration()
     }
 
@@ -413,7 +413,7 @@ impl Queue {
     /// let tasks = Queue::new();
     /// tasks.on_event(|queue, event| {
     ///     if matches!(event.kind, EventKind::TaskFailed) {
-    ///         queue.task(Task::labeled("triage", "Look into the failure."));
+    ///         queue.add_task(Task::labeled("triage", "Look into the failure."));
     ///     }
     /// });
     /// ```
@@ -422,7 +422,7 @@ impl Queue {
         self
     }
 
-    /// Read every event as it is emitted, in a handler [`Self::finish`] waits
+    /// Read every event as it is emitted, in a handler [`Self::finish_results`] waits
     /// for before it returns.
     ///
     /// [`Self::on_event`] cannot await: it runs on the agent task that emitted
@@ -436,7 +436,7 @@ impl Queue {
     /// waits in memory until a `finish` drains it. A host that streams a long
     /// reply and only calls [`Self::start`] uses `on_event`.
     ///
-    /// Your handler MUST NOT call `finish` or [`Self::finish_all`], or it waits
+    /// Your handler MUST NOT call `finish` or [`Self::finish_all_tasks`], or it waits
     /// forever on the handover it is running inside.
     ///
     /// ```no_run
@@ -446,7 +446,7 @@ impl Queue {
     /// tasks.on_event_async(|_, event| async move {
     ///     println!("{:?}", event.kind);
     /// });
-    /// tasks.finish_all().await;
+    /// tasks.finish_all_tasks().await;
     /// # }
     /// ```
     pub fn on_event_async<F, Fut>(&self, handler: F) -> &Self
@@ -488,7 +488,7 @@ impl Queue {
     /// let tasks = Queue::new();
     /// tasks.on_result(|queue, done, result| {
     ///     if result["needs_review"] == true {
-    ///         queue.task(Task::labeled("review", done.task.clone()).parent(&done.key));
+    ///         queue.add_task(Task::labeled("review", done.task.clone()).parent(&done.key));
     ///     }
     /// });
     /// ```
@@ -508,7 +508,7 @@ impl Queue {
     }
 
     /// Read every finished task together with its result, in a handler
-    /// [`Self::finish`] waits for before it returns.
+    /// [`Self::finish_results`] waits for before it returns.
     ///
     /// [`Self::on_result`] cannot await: it runs on the agent task that just
     /// finished the task, and that task has to carry on. This one hands the
@@ -516,7 +516,7 @@ impl Queue {
     /// [`Self::on_event_async`] sets, and each result waiting to be handed over
     /// holds a copy of its task and every reply in it.
     ///
-    /// Your handler MUST NOT call `finish` or [`Self::finish_all`], or it waits
+    /// Your handler MUST NOT call `finish` or [`Self::finish_all_tasks`], or it waits
     /// forever on the handover it is running inside.
     ///
     /// ```no_run
@@ -526,7 +526,7 @@ impl Queue {
     /// tasks.on_result_async(|_, task, result| async move {
     ///     println!("{} produced {result}", task.key);
     /// });
-    /// tasks.finish_all().await;
+    /// tasks.finish_all_tasks().await;
     /// # }
     /// ```
     pub fn on_result_async<F, Fut>(&self, handler: F) -> &Self
@@ -560,7 +560,7 @@ impl Queue {
     ///     // Count the attempts yourself, or a task that fails every time
     ///     // re-queues itself forever.
     ///     if matches!(event.kind, EventKind::TaskFailed) && failed.parent.is_none() {
-    ///         queue.task(Task::new(failed.task.clone()).parent(&failed.key));
+    ///         queue.add_task(Task::new(failed.task.clone()).parent(&failed.key));
     ///     }
     /// });
     /// ```
@@ -572,11 +572,11 @@ impl Queue {
     }
 
     /// Read every failure together with the task it happened in, in a handler
-    /// [`Self::finish`] waits for before it returns.
+    /// [`Self::finish_results`] waits for before it returns.
     ///
     /// [`Self::on_failure`] on the terms [`Self::on_event_async`] sets.
     ///
-    /// Your handler MUST NOT call `finish` or [`Self::finish_all`], or it waits
+    /// Your handler MUST NOT call `finish` or [`Self::finish_all_tasks`], or it waits
     /// forever on the handover it is running inside.
     pub fn on_failure_async<F, Fut>(&self, handler: F) -> &Self
     where
@@ -607,11 +607,11 @@ impl Queue {
     }
 
     /// Read a task as it starts, finishes, or fails, in a handler
-    /// [`Self::finish`] waits for before it returns.
+    /// [`Self::finish_results`] waits for before it returns.
     ///
     /// [`Self::on_task`] on the terms [`Self::on_event_async`] sets.
     ///
-    /// Your handler MUST NOT call `finish` or [`Self::finish_all`], or it waits
+    /// Your handler MUST NOT call `finish` or [`Self::finish_all_tasks`], or it waits
     /// forever on the handover it is running inside.
     pub fn on_task_async<F, Fut>(&self, handler: F) -> &Self
     where
@@ -767,7 +767,7 @@ impl Queue {
     /// its model, and [`Trajectory::from_task`] needs both.
     ///
     /// [`Trajectory::from_task`]: super::Trajectory::from_task
-    pub fn model_for_agent(&self, agent_id: &str) -> Option<String> {
+    pub fn get_model_for_agent(&self, agent_id: &str) -> Option<String> {
         self.agents
             .lock()
             .unwrap()
@@ -781,7 +781,7 @@ impl Queue {
     /// The whole `Policy` is replaced, so build one from the fields you want:
     /// `Policy { max_turns: Some(40), ..Default::default() }`. A
     /// `compaction_threshold` outside `0.0..=1.0` is clamped into it.
-    pub fn policy(&self, mut policy: Policy) -> &Self {
+    pub fn set_policy(&self, mut policy: Policy) -> &Self {
         // NaN survives `clamp` and would put the threshold at zero, compacting
         // every turn. A full window is the harmless reading of nonsense.
         policy.compaction_threshold = policy.compaction_threshold.map(|fraction| {
@@ -804,7 +804,7 @@ impl Queue {
     ///
     /// Pointing `Knowledge::load` at the same directory keeps the knowledge
     /// pages beside the session.
-    pub fn dir(&self, dir: impl Into<PathBuf>) -> &Self {
+    pub fn set_dir(&self, dir: impl Into<PathBuf>) -> &Self {
         *self.dir.lock().unwrap() = dir.into();
         self
     }
@@ -834,11 +834,11 @@ impl Queue {
     /// schemas.label("analysis", json!({ "type": "object" }))?;
     ///
     /// let tasks = Queue::new();
-    /// tasks.schemas(&schemas);
-    /// tasks.task(Task::labeled("analysis", "Audit src/db."));
+    /// tasks.set_schemas(&schemas);
+    /// tasks.add_task(Task::labeled("analysis", "Audit src/db."));
     /// # Ok::<(), agentwerk::schemas::SchemaParseError>(())
     /// ```
-    pub fn schemas(&self, store: &Arc<SchemaStore>) -> &Self {
+    pub fn set_schemas(&self, store: &Arc<SchemaStore>) -> &Self {
         *self.schemas.lock().unwrap() = Some(Arc::clone(store));
         self
     }
@@ -851,7 +851,7 @@ impl Queue {
     /// at insertion and overwrite whatever the task carried. A label decides
     /// which agents may claim it, so give an agent a label of its own to
     /// address it alone.
-    pub fn task(&self, task: impl Into<Task>) -> String {
+    pub fn add_task(&self, task: impl Into<Task>) -> String {
         self.dispatch(task.into())
     }
 
@@ -860,8 +860,8 @@ impl Queue {
     /// An agent that has just spoken waits on the task, and this reply is
     /// what sends the next turn. Use it to continue a conversation on one
     /// task instead of creating a new task per turn.
-    pub fn reply(&self, key: &str, content: impl Into<String>) -> &Self {
-        self.add_reply(key, Reply::user_text(content));
+    pub fn add_reply(&self, key: &str, content: impl Into<String>) -> &Self {
+        self.append_reply(key, Reply::user_text(content));
         self
     }
 
@@ -875,7 +875,7 @@ impl Queue {
     }
 
     /// Get every task in creation order.
-    pub fn tasks(&self) -> Vec<Task> {
+    pub fn get_tasks(&self) -> Vec<Task> {
         self.matching_tasks(&Query::all())
     }
 
@@ -967,7 +967,7 @@ impl Queue {
     /// A match is neither claimed nor resumed, and an agent already holding one
     /// is taken off it; the task stays `InProgress`. Nothing waits: this is
     /// not async, so it can be called from a ctrl-c handler, a drop guard, or
-    /// anywhere else. Use [`Self::cancel_all`] to stop the whole run.
+    /// anywhere else. Use [`Self::cancel_all_tasks`] to stop the whole run.
     ///
     /// Your filter MUST NOT call another `Queue` method that reads the
     /// task store, or the claim path deadlocks.
@@ -975,40 +975,31 @@ impl Queue {
     /// ```no_run
     /// # use agentwerk::Queue;
     /// let tasks = Queue::new();
-    /// tasks.cancel("scan");
+    /// tasks.cancel_tasks("scan");
     /// ```
-    pub fn cancel(&self, matches: impl Matcher<Task>) -> &Self {
-        self.cancel_filters
-            .lock()
-            .unwrap()
-            .push(matches.into_query());
+    pub fn cancel_tasks(&self, matches: impl Matcher<Task>) -> &Self {
+        let query = matches.into_query();
+        self.cancel_filters.lock().unwrap().push(query.clone());
+        for task in self.tasks.lock().unwrap().values_mut() {
+            if query.matches(task) {
+                task.cancelled = true;
+            }
+        }
         self
     }
 
     /// Take every task off the queue, which ends the run.
     ///
-    /// [`Self::finish_all`] then reports `FinishReason::Cancelled`. Like
-    /// [`Self::cancel`], nothing waits, so a ctrl-c handler can call it.
-    pub fn cancel_all(&self) -> &Self {
-        self.cancel(Query::all())
-    }
-
-    /// Check whether a task has been cancelled.
-    ///
-    /// Ask before creating follow-up work: a cancelled task is never claimed.
-    /// It reads no task state, so a condition passed to [`Self::find_task`]
-    /// or [`Self::find_tasks`] may call it.
-    pub fn is_cancelled(&self, task: &Task) -> bool {
-        // Cloned out first: a filter may hold a closure, and one that reaches
-        // back here would meet a lock it already holds.
-        let filters: Vec<Query> = self.cancel_filters.lock().unwrap().clone();
-        filters.iter().any(|matches| matches.matches(task))
+    /// [`Self::finish_all_tasks`] then reports `FinishReason::Cancelled`. Like
+    /// [`Self::cancel_tasks`], nothing waits, so a ctrl-c handler can call it.
+    pub fn cancel_all_tasks(&self) -> &Self {
+        self.cancel_tasks(Query::all())
     }
 
     /// True while any matching task still has work for an agent.
     ///
     /// The one definition of "not done yet": the main loop asks it of every
-    /// task to decide the run is over, and [`Self::finish`] asks it of a
+    /// task to decide the run is over, and [`Self::finish_results`] asks it of a
     /// subset. A task is pending while it is todo or in progress,
     /// uncancelled, and not paused for a caller reply.
     pub(crate) fn pending(&self, matches: &Query) -> bool {
@@ -1022,7 +1013,6 @@ impl Queue {
         tasks.values().any(|t| {
             matches.matches(t)
                 && t.is_pending()
-                && !self.is_cancelled(t)
                 && !(t.is_paused()
                     && t.assignee
                         .as_deref()
@@ -1035,7 +1025,7 @@ impl Queue {
     /// An empty queue is not an ending: a host that called [`Self::start`] may
     /// still be filing work, and a paused task revives on the next reply.
     /// Only a breached limit or a cancel that leaves nothing claimable ends a
-    /// run here; the drained ending is named by the [`Self::finish`] that waited
+    /// run here; the drained ending is named by the [`Self::finish_results`] that waited
     /// for it.
     pub(crate) fn ending_reason(&self) -> Option<FinishReason> {
         if let Some((violation, _)) = policy_violated(&self.get_policy(), &self.stats) {
@@ -1054,9 +1044,7 @@ impl Queue {
     /// ending check and [`Self::anything_pending`] ask for.
     fn anything_claimable(&self) -> bool {
         let tasks = self.tasks.lock().unwrap();
-        tasks
-            .values()
-            .any(|t| t.is_pending() && !self.is_cancelled(t))
+        tasks.values().any(Task::is_pending)
     }
 
     /// True while any task is still open. Stricter than [`Self::pending`]:
@@ -1135,7 +1123,7 @@ impl Queue {
     /// Any tasks the agent queued on its own move into this queue. An agent
     /// added while execution is under way picks up its first task within
     /// about 100 ms.
-    pub fn agent(&self, mut agent: Agent) -> &Self {
+    pub fn add_agent(&self, mut agent: Agent) -> &Self {
         self.bind_agent(&mut agent);
         self
     }
@@ -1143,8 +1131,8 @@ impl Queue {
     /// Begin processing tasks, on a background task.
     ///
     /// A task queued afterwards is picked up within about 100 ms, and an
-    /// empty queue keeps the run alive: only [`Self::finish`] and
-    /// [`Self::cancel`] end one. Calling this while a run is under way does
+    /// empty queue keeps the run alive: only [`Self::finish_results`] and
+    /// [`Self::cancel_tasks`] end one. Calling this while a run is under way does
     /// nothing; calling it after one ended starts a fresh run, which is how a
     /// host resumes after a cancel.
     pub fn start(&self) -> &Self {
@@ -1153,6 +1141,9 @@ impl Queue {
         }
         self.run.reset();
         self.cancel_filters.lock().unwrap().clear();
+        for task in self.tasks.lock().unwrap().values_mut() {
+            task.cancelled = false;
+        }
         let supervisor = self
             .weak_self
             .upgrade()
@@ -1164,17 +1155,17 @@ impl Queue {
     }
 
     /// Wait for the matching tasks to be done, then get their results in
-    /// creation order.
+    /// query order, or creation order when the query names none.
     ///
     /// Name a label to wait for one pool, or a key to wait for one task;
-    /// [`Self::finish_all`] waits for the whole run. The wait ends once no
+    /// [`Self::finish_all_tasks`] waits for the whole run. The wait ends once no
     /// matching task has work left for an agent, which covers one that
     /// finished, failed, was cancelled, or is paused awaiting your reply.
     ///
     /// A task contributes a result only when it finished with one, so this is
     /// shorter than the set the filter named rather than aligned with it, as
-    /// with [`Self::results`]. Read why the wait ended with
-    /// [`Self::finish_reason`].
+    /// with [`Self::get_results`]. Read why the wait ended with
+    /// [`Self::get_finish_reason`].
     ///
     /// Execution begins here when the queue has never run, and otherwise this
     /// waits on what is already under way. Once a run has ended it returns at
@@ -1186,12 +1177,12 @@ impl Queue {
     /// # use agentwerk::Queue;
     /// # async fn run() {
     /// let tasks = Queue::new();
-    /// for finding in tasks.finish("research").await {
+    /// for finding in tasks.finish_results("research").await {
     ///     println!("{finding}");
     /// }
     /// # }
     /// ```
-    pub async fn finish(&self, matches: impl Matcher<Task>) -> Vec<serde_json::Value> {
+    pub async fn finish_results(&self, matches: impl Matcher<Task>) -> Vec<serde_json::Value> {
         let query = matches.into_query();
         if self.join_handle.lock().unwrap().is_none() {
             self.start();
@@ -1230,7 +1221,7 @@ impl Queue {
     /// order.
     ///
     /// This is how a host waits for work it started: it returns once no task
-    /// has work left for an agent. [`Self::finish`] waits for one pool or one
+    /// has work left for an agent. [`Self::finish_results`] waits for one pool or one
     /// task instead, and everything it says about starting, restarting, and
     /// which tasks contribute a result holds here too.
     ///
@@ -1238,40 +1229,40 @@ impl Queue {
     /// # use agentwerk::Queue;
     /// # async fn run() {
     /// let tasks = Queue::new();
-    /// for finding in tasks.finish_all().await {
+    /// for finding in tasks.finish_all_tasks().await {
     ///     println!("{finding}");
     /// }
     /// # }
     /// ```
-    pub async fn finish_all(&self) -> Vec<serde_json::Value> {
-        self.finish(Query::all()).await
+    pub async fn finish_all_tasks(&self) -> Vec<serde_json::Value> {
+        self.finish_results(Query::all()).await
     }
 
-    /// Wait for every task to be done, then get the last result in creation
-    /// order.
+    /// Wait for the matching tasks to be done, then get the first available
+    /// result in query order.
     ///
-    /// The one-result form of [`Self::finish_all`], for a run whose answer is a
-    /// single value. `None` means no task finished with a result.
+    /// The one-result form of [`Self::finish_results`]. `None` means no
+    /// matching task finished with a result.
     ///
     /// ```no_run
     /// # use agentwerk::Queue;
     /// # async fn run() {
     /// let tasks = Queue::new();
-    /// if let Some(answer) = tasks.finish_last().await {
+    /// if let Some(answer) = tasks.finish_result("ORDER BY created DESC").await {
     ///     println!("{answer}");
     /// }
     /// # }
     /// ```
-    pub async fn finish_last(&self) -> Option<serde_json::Value> {
-        self.finish_all().await.pop()
+    pub async fn finish_result(&self, matches: impl Matcher<Task>) -> Option<serde_json::Value> {
+        self.finish_results(matches).await.into_iter().next()
     }
 
     /// Get why the last run ended, or `None` while one is still going.
     ///
     /// Cleared by [`Self::start`], so a re-started queue does not report the
-    /// previous run. A [`Self::finish`] over a subset can return while the run
+    /// previous run. A [`Self::finish_results`] over a subset can return while the run
     /// carries on, and this reads `None` until it ends.
-    pub fn finish_reason(&self) -> Option<FinishReason> {
+    pub fn get_finish_reason(&self) -> Option<FinishReason> {
         self.run.reason()
     }
 
@@ -1293,12 +1284,13 @@ impl Queue {
     ///
     /// Read a structured result back with `serde_json::from_value`. A task
     /// still running, or finished without a result, contributes nothing, so
-    /// this is shorter than [`Self::tasks`] rather than aligned with it.
-    pub fn results(&self) -> Vec<serde_json::Value> {
+    /// this is shorter than [`Self::get_tasks`] rather than aligned with it.
+    pub fn get_results(&self) -> Vec<serde_json::Value> {
         self.find_results(Query::all())
     }
 
-    /// Get every result whose task matches the query, in creation order.
+    /// Get every result whose task matches the query, in query order, or
+    /// creation order when the query names none.
     ///
     /// Status defaults to `Finished` when the filter names none, which is
     /// every closure and any query that leaves it unset. A caller that sets
@@ -1347,10 +1339,10 @@ mod tests {
     #[test]
     fn queue_handle_is_shared_between_caller_and_added_agent() {
         let (queue, _tmp) = test_queue();
-        let alice = queue.agent(minimal_agent("alice"));
+        let alice = queue.add_agent(minimal_agent("alice"));
         // Alice's task lands in the same queue.
-        alice.task("from alice");
-        queue.task("from queue");
+        alice.add_task("from alice");
+        queue.add_task("from queue");
         let all_keys: Vec<String> = queue
             .find_tasks(|t: &Task| t.status == Status::Todo)
             .iter()
@@ -1375,10 +1367,10 @@ mod tests {
     #[test]
     fn tasks_returns_all_in_creation_order() {
         let (queue, _tmp) = test_queue();
-        queue.task("a");
-        queue.task("b");
-        queue.task("c");
-        let all = queue.tasks();
+        queue.add_task("a");
+        queue.add_task("b");
+        queue.add_task("c");
+        let all = queue.get_tasks();
         assert_eq!(all.len(), 3);
         assert_eq!(all[0].key, "t-1");
         assert_eq!(all[1].key, "t-2");
@@ -1388,11 +1380,11 @@ mod tests {
     #[test]
     fn find_tasks_answers_in_creation_order() {
         let (queue, _tmp) = test_queue();
-        queue.task("a");
-        queue.task("b");
-        queue.task("c");
+        queue.add_task("a");
+        queue.add_task("b");
+        queue.add_task("c");
         let keys: Vec<String> = queue
-            .find_tasks(|t: &Task| t.is_todo())
+            .find_tasks("status = Todo")
             .into_iter()
             .map(|t| t.key)
             .collect();
@@ -1402,18 +1394,18 @@ mod tests {
     #[test]
     fn cancel_ignores_an_order_by_and_takes_every_task() {
         let (queue, _tmp) = test_queue();
-        queue.task("a");
-        queue.task("b");
-        queue.cancel("ORDER BY key DESC");
-        assert!(queue.tasks().iter().all(|t| queue.is_cancelled(t)));
+        queue.add_task("a");
+        queue.add_task("b");
+        queue.cancel_tasks("ORDER BY key DESC");
+        assert_eq!(queue.find_tasks("cancelled = true").len(), 2);
     }
 
     #[test]
     fn find_tasks_answers_in_the_order_the_query_names() {
         let (queue, _tmp) = test_queue();
-        queue.task("a");
-        queue.task("b");
-        queue.task("c");
+        queue.add_task("a");
+        queue.add_task("b");
+        queue.add_task("c");
         let keys: Vec<String> = queue
             .find_tasks("ORDER BY key DESC")
             .into_iter()
@@ -1425,8 +1417,8 @@ mod tests {
     #[test]
     fn find_task_answers_the_first_in_the_order_the_query_names() {
         let (queue, _tmp) = test_queue();
-        queue.task("a");
-        queue.task("b");
+        queue.add_task("a");
+        queue.add_task("b");
         let found = queue.find_task("ORDER BY key DESC").expect("a task");
         assert_eq!(found.key, "t-2");
     }
@@ -1434,8 +1426,8 @@ mod tests {
     #[test]
     fn find_results_answers_in_the_order_the_query_names() {
         let (queue, _tmp) = test_queue();
-        queue.task("a");
-        queue.task("b");
+        queue.add_task("a");
+        queue.add_task("b");
         attach_done_result(&queue, "t-1", "first");
         attach_done_result(&queue, "t-2", "second");
         assert_eq!(
@@ -1447,13 +1439,13 @@ mod tests {
     #[test]
     fn results_return_done_payloads_in_creation_order() {
         let (queue, _tmp) = test_queue();
-        queue.task("a");
-        queue.task("b");
-        queue.task("c");
+        queue.add_task("a");
+        queue.add_task("b");
+        queue.add_task("c");
         attach_done_result(&queue, "t-1", "first");
         attach_done_result(&queue, "t-3", "third");
         assert_eq!(
-            queue.results(),
+            queue.get_results(),
             vec![serde_json::json!("first"), serde_json::json!("third")]
         );
     }
@@ -1461,14 +1453,14 @@ mod tests {
     #[test]
     fn results_order_by_creation_regardless_of_done_order() {
         let (queue, _tmp) = test_queue();
-        queue.task("a");
-        queue.task("b");
-        queue.task("c");
+        queue.add_task("a");
+        queue.add_task("b");
+        queue.add_task("c");
         attach_done_result(&queue, "t-3", "third");
         attach_done_result(&queue, "t-1", "first");
         attach_done_result(&queue, "t-2", "second");
         assert_eq!(
-            queue.results(),
+            queue.get_results(),
             vec![
                 serde_json::json!("first"),
                 serde_json::json!("second"),
@@ -1480,15 +1472,15 @@ mod tests {
     #[test]
     fn results_are_empty_when_nothing_finished() {
         let (queue, _tmp) = test_queue();
-        queue.task("pending");
-        assert!(queue.results().is_empty());
+        queue.add_task("pending");
+        assert!(queue.get_results().is_empty());
     }
 
     #[test]
     fn find_results_takes_a_label_in_place_of_a_query() {
         let (queue, _tmp) = test_queue();
-        queue.task(Task::labeled("scan", "a"));
-        queue.task(Task::labeled("report", "b"));
+        queue.add_task(Task::labeled("scan", "a"));
+        queue.add_task(Task::labeled("report", "b"));
         attach_done_result(&queue, "t-1", "scanned");
         attach_done_result(&queue, "t-2", "reported");
         assert_eq!(
@@ -1500,8 +1492,8 @@ mod tests {
     #[test]
     fn find_results_defaults_to_finished_when_the_query_names_no_status() {
         let (queue, _tmp) = test_queue();
-        queue.task(Task::labeled("scan", "a"));
-        queue.task(Task::labeled("scan", "b"));
+        queue.add_task(Task::labeled("scan", "a"));
+        queue.add_task(Task::labeled("scan", "b"));
         attach_done_result(&queue, "t-1", "scanned");
         assert_eq!(
             queue.find_results("scan"),
@@ -1512,7 +1504,7 @@ mod tests {
     #[test]
     fn find_results_keeps_the_status_the_query_names() {
         let (queue, _tmp) = test_queue();
-        queue.task(Task::labeled("scan", "a"));
+        queue.add_task(Task::labeled("scan", "a"));
         attach_done_result(&queue, "t-1", "scanned");
         assert!(queue
             .find_results("label = scan AND status = Todo")
@@ -1522,12 +1514,12 @@ mod tests {
     #[test]
     fn find_results_takes_a_closure_in_place_of_a_query() {
         let (queue, _tmp) = test_queue();
-        queue.task(Task::labeled("scan", "a"));
-        queue.task(Task::labeled("report", "b"));
+        queue.add_task(Task::labeled("scan", "a"));
+        queue.add_task(Task::labeled("report", "b"));
         attach_done_result(&queue, "t-1", "scanned");
         attach_done_result(&queue, "t-2", "reported");
         assert_eq!(
-            queue.find_results(|t: &Task| t.has_label("scan")),
+            queue.find_results("label = scan"),
             vec![serde_json::json!("scanned")]
         );
     }
@@ -1535,22 +1527,20 @@ mod tests {
     #[test]
     fn find_results_defaults_a_closure_to_finished_tasks() {
         let (queue, _tmp) = test_queue();
-        queue.task(Task::labeled("scan", "a"));
+        queue.add_task(Task::labeled("scan", "a"));
         // A result attached without the finish transition, which the default
         // leaves out because a closure names no status of its own.
         queue
             .set_result("t-1", serde_json::json!("mid-flight"))
             .unwrap();
-        assert!(queue
-            .find_results(|t: &Task| t.has_label("scan"))
-            .is_empty());
+        assert!(queue.find_results("label = scan").is_empty());
     }
 
     #[test]
     fn find_tasks_compiles_the_string_as_a_query() {
         let (queue, _tmp) = test_queue();
-        queue.task(Task::labeled("scan", "a"));
-        queue.task(Task::labeled("report", "b"));
+        queue.add_task(Task::labeled("scan", "a"));
+        queue.add_task(Task::labeled("report", "b"));
         let found = queue.find_tasks("label = report AND status = Todo");
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].task, serde_json::json!("b"));
@@ -1559,14 +1549,14 @@ mod tests {
     #[test]
     fn pending_on_a_todo_task() {
         let (queue, _tmp) = test_queue();
-        queue.task("a");
+        queue.add_task("a");
         assert!(queue.pending(&Query::all()));
     }
 
     #[test]
     fn pending_only_for_the_matching_tasks() {
         let (queue, _tmp) = test_queue();
-        queue.task(Task::new("a").label("research"));
+        queue.add_task(Task::new("a").label("research"));
         assert!(queue.pending(&Query::from("research")));
         assert!(!queue.pending(&Query::from("report")));
     }
@@ -1574,7 +1564,7 @@ mod tests {
     #[test]
     fn pending_while_a_claimed_task_awaits_the_model() {
         let (queue, _tmp) = test_queue();
-        queue.task("x");
+        queue.add_task("x");
         queue.claim(&Query::from("status = Todo"), "agent").unwrap();
         assert!(queue.pending(&Query::all()));
     }
@@ -1582,9 +1572,9 @@ mod tests {
     #[test]
     fn pending_when_a_text_only_reply_pauses_a_non_interactive_agent() {
         let (queue, _tmp) = test_queue();
-        queue.task("x");
+        queue.add_task("x");
         let key = queue.claim(&Query::from("status = Todo"), "agent").unwrap();
-        queue.add_reply(
+        queue.append_reply(
             &key,
             Reply::assistant(&[crate::providers::ContentBlock::Text {
                 text: "hello".into(),
@@ -1597,20 +1587,20 @@ mod tests {
     #[test]
     fn not_pending_once_every_task_is_finished_or_failed() {
         let (queue, _tmp) = test_queue();
-        queue.task("a");
-        queue.task("b");
+        queue.add_task("a");
+        queue.add_task("b");
         let key_a = queue.claim(&Query::from("t-1"), "agent").unwrap();
         let key_b = queue.claim(&Query::from("t-2"), "agent").unwrap();
         queue.set_finished_by(&key_a, "agent").unwrap();
-        queue.set_failed(&key_b).unwrap();
+        queue.set_task_failed(&key_b).unwrap();
         assert!(!queue.pending(&Query::all()));
     }
 
     #[test]
     fn not_pending_on_a_cancelled_task() {
         let (queue, _tmp) = test_queue();
-        queue.task(Task::new("a").label("research"));
-        queue.cancel(|t: &Task| t.has_label("research"));
+        queue.add_task(Task::new("a").label("research"));
+        queue.cancel_tasks("label = research");
         assert!(!queue.pending(&Query::all()));
     }
 
@@ -1628,7 +1618,7 @@ mod tests {
             max_time: Some(Duration::from_secs(300)),
             compaction_threshold: Some(0.75),
         };
-        queue.policy(policy.clone());
+        queue.set_policy(policy.clone());
 
         assert_eq!(queue.get_policy(), policy);
     }
@@ -1643,7 +1633,7 @@ mod tests {
     fn compaction_threshold_clamps_a_fraction_outside_the_unit_range() {
         let (queue, _tmp) = test_queue();
         for (given, expected) in [(1.5, 1.0), (-0.2, 0.0), (f64::NAN, 1.0)] {
-            queue.policy(Policy {
+            queue.set_policy(Policy {
                 compaction_threshold: Some(given),
                 ..Default::default()
             });
@@ -1658,8 +1648,8 @@ mod tests {
     #[test]
     fn find_events_returns_the_matching_events_oldest_first() {
         let (queue, _tmp) = test_queue();
-        queue.task("a");
-        queue.task("b");
+        queue.add_task("a");
+        queue.add_task("b");
         queue.claim(&Query::from("t-1"), "alice");
 
         let created = queue.find_events(|e: &Event| matches!(e.kind, EventKind::TaskCreated));
@@ -1672,7 +1662,7 @@ mod tests {
     #[test]
     fn find_events_matching_nothing_is_empty() {
         let (queue, _tmp) = test_queue();
-        queue.task("a");
+        queue.add_task("a");
         assert!(queue
             .find_events(|e: &Event| matches!(e.kind, EventKind::RunFinished { .. }))
             .is_empty());
@@ -1687,8 +1677,8 @@ mod tests {
     #[test]
     fn find_event_returns_the_earliest_match() {
         let (queue, _tmp) = test_queue();
-        queue.task("a");
-        queue.task("b");
+        queue.add_task("a");
+        queue.add_task("b");
 
         let first = queue.find_event(|e: &Event| matches!(e.kind, EventKind::TaskCreated));
         assert_eq!(first.unwrap().task_key, "t-1");
@@ -1700,8 +1690,8 @@ mod tests {
     #[test]
     fn find_events_takes_the_same_syntax_a_task_query_is_written_in() {
         let (queue, _tmp) = test_queue();
-        queue.task(Task::new("scan").label("scout"));
-        queue.task("b");
+        queue.add_task(Task::new("scan").label("scout"));
+        queue.add_task("b");
         queue.claim(&Query::from("t-1"), "scout-1");
 
         assert_eq!(queue.find_events("task_created").len(), 2);
@@ -1714,8 +1704,8 @@ mod tests {
     #[test]
     fn find_event_answers_the_first_in_the_order_the_query_names() {
         let (queue, _tmp) = test_queue();
-        queue.task("a");
-        queue.task("b");
+        queue.add_task("a");
+        queue.add_task("b");
 
         let newest = queue.find_event("task_created ORDER BY created DESC");
         assert_eq!(newest.unwrap().task_key, "t-2");
@@ -1728,7 +1718,7 @@ mod tests {
         // What makes a per-label or per-agent breakdown possible without the
         // crate keeping one.
         let (queue, _tmp) = test_queue();
-        queue.task(Task::new("scan").label("scout"));
+        queue.add_task(Task::new("scan").label("scout"));
         queue.claim(&Query::from("scout"), "scout-1");
 
         assert_eq!(
@@ -1746,7 +1736,7 @@ mod tests {
     #[test]
     fn a_condition_naming_a_streamed_chunk_never_matches() {
         let (queue, _tmp) = test_queue();
-        queue.task("a");
+        queue.add_task("a");
         queue.emit(
             "t-1",
             "alice",
@@ -1766,7 +1756,7 @@ mod tests {
         // The counters are what the run spent; the finders are what it wrote
         // down. Deleting the log separates the two.
         let (queue, dir) = test_queue();
-        queue.task("a");
+        queue.add_task("a");
         queue.emit(
             "t-1",
             "alice",
@@ -1781,8 +1771,8 @@ mod tests {
 
         std::fs::remove_file(dir.path().join("events.jsonl")).unwrap();
 
-        assert_eq!(queue.input_tokens(), 900);
-        assert_eq!(queue.output_tokens(), 120);
+        assert_eq!(queue.get_input_tokens(), 900);
+        assert_eq!(queue.get_output_tokens(), 120);
         assert!(queue.find_events(|_: &Event| true).is_empty());
     }
 
@@ -1795,26 +1785,44 @@ mod tests {
     #[test]
     fn cancel_takes_only_the_matching_tasks_off_the_queue() {
         let (queue, _tmp) = test_queue();
-        queue.cancel(|t: &Task| t.has_label("research"));
+        let research = queue.add_task(Task::new("x").label("research"));
+        queue.add_task(Task::new("x").label("analysis"));
+        queue.add_task(Task::new("x"));
+        queue.cancel_tasks("label = research");
 
-        assert!(queue.is_cancelled(&Task::new("x").label("research")));
-        assert!(
-            !queue.is_cancelled(&Task::new("x").label("analysis")),
-            "other pools are untouched",
-        );
-        assert!(!queue.is_cancelled(&Task::new("x")));
+        let cancelled = queue.find_tasks("cancelled = true");
+        assert_eq!(cancelled.len(), 1);
+        assert_eq!(cancelled[0].key, research);
     }
 
     #[test]
-    fn is_cancelled_reads_back_what_cancel_took_off_the_queue() {
+    fn cancel_applies_to_matching_tasks_inserted_later() {
         let (queue, _tmp) = test_queue();
-        assert!(!queue.is_cancelled(&Task::new("x").label("research")));
-        queue.cancel(|t: &Task| t.has_label("research"));
-        assert!(queue.is_cancelled(&Task::new("x").label("research")));
-        assert!(
-            !queue.is_cancelled(&Task::new("x").label("analysis")),
-            "other pools stay claimable",
+        queue.cancel_tasks("label = research");
+        let research = queue.add_task(Task::new("x").label("research"));
+        queue.add_task(Task::new("x").label("analysis"));
+
+        assert_eq!(
+            queue.find_task("cancelled = true").map(|task| task.key),
+            Some(research),
         );
+        assert_eq!(queue.find_tasks("cancelled = false").len(), 1);
+    }
+
+    #[tokio::test]
+    async fn start_clears_cancellation_flags_and_filters() {
+        let (queue, _tmp) = test_queue();
+        queue.add_task(Task::new("first").label("research"));
+        queue.cancel_tasks("label = research");
+        assert_eq!(queue.find_tasks("cancelled = true").len(), 1);
+
+        queue.start();
+        queue.add_task(Task::new("second").label("research"));
+
+        assert!(queue.find_tasks("cancelled = true").is_empty());
+        assert_eq!(queue.find_tasks("pending = true").len(), 2);
+        queue.cancel_all_tasks();
+        queue.finish_all_tasks().await;
     }
 
     #[test]
@@ -1852,7 +1860,7 @@ mod tests {
                     .push((event.agent_id.clone(), event.label.clone()));
             }
         });
-        queue.task(Task::new("a").label("scan"));
+        queue.add_task(Task::new("a").label("scan"));
         let key = queue.claim(&Query::from("scan"), "scout").unwrap();
         queue.set_result(&key, serde_json::json!("done")).unwrap();
         queue.set_finished_by(&key, "scout").unwrap();
@@ -1866,7 +1874,7 @@ mod tests {
     #[tokio::test]
     async fn finish_returns_once_the_matching_task_resolves() {
         let (queue, _tmp) = test_queue();
-        let key = queue.task("work");
+        let key = queue.add_task("work");
         let writer = Arc::clone(&queue);
         let claimed = key.clone();
         tokio::spawn(async move {
@@ -1874,19 +1882,19 @@ mod tests {
             attach_done_result(&writer, &claimed, "done");
         });
         let target = key.clone();
-        queue.finish(move |t: &Task| t.key == target).await;
-        assert!(queue.get_task(&key).unwrap().is_finished());
+        queue.finish_results(move |t: &Task| t.key == target).await;
+        assert!(Query::from("status = Finished").matches(&queue.get_task(&key).unwrap()));
     }
 
     #[tokio::test]
     async fn finish_returns_without_an_event_when_nothing_matches_yet() {
         let (queue, _tmp) = test_queue();
-        let key = queue.task("work");
+        let key = queue.add_task("work");
         attach_done_result(&queue, &key, "done");
         // Nothing emits from here on, so only the check before the wait can
         // resolve this.
         assert_eq!(
-            queue.finish(move |t: &Task| t.key == key).await,
+            queue.finish_results(move |t: &Task| t.key == key).await,
             vec![serde_json::json!("done")]
         );
     }
@@ -1895,9 +1903,9 @@ mod tests {
     fn edit_replies_edits_the_transcript_on_demand() {
         use crate::agents::tasks::ReplyContent;
         let (queue, _tmp) = test_queue();
-        let key = queue.task("go");
-        queue.add_reply(&key, Reply::user_text("keep me"));
-        queue.add_reply(&key, Reply::user_text("drop me"));
+        let key = queue.add_task("go");
+        queue.append_reply(&key, Reply::user_text("keep me"));
+        queue.append_reply(&key, Reply::user_text("drop me"));
 
         queue.edit_replies(&key, |replies| {
             replies.retain(|reply| {
@@ -1925,7 +1933,7 @@ mod tests {
                 .unwrap()
                 .push((task.key.clone(), result.clone()))
         });
-        queue.task(Task::new("x").label("L"));
+        queue.add_task(Task::new("x").label("L"));
         let key = queue.claim(&Query::from("L"), "agent").unwrap();
 
         attach_done_result(&queue, &key, "lead");
@@ -1947,7 +1955,7 @@ mod tests {
                 .unwrap()
                 .push((event.kind.name(), task.key.clone()))
         });
-        let key = queue.task("work");
+        let key = queue.add_task("work");
 
         queue.emit(&key, "agent", EventKind::TurnStarted);
         queue.emit(
@@ -1960,7 +1968,7 @@ mod tests {
                 message: "no such directory".into(),
             },
         );
-        queue.set_failed(&key).unwrap();
+        queue.set_task_failed(&key).unwrap();
 
         assert_eq!(
             *seen.lock().unwrap(),
@@ -1974,7 +1982,7 @@ mod tests {
     #[test]
     fn failures_accumulate_on_the_task_in_order() {
         let (queue, dir) = test_queue();
-        let key = queue.task("work");
+        let key = queue.add_task("work");
 
         queue.emit(
             &key,
@@ -2020,7 +2028,7 @@ mod tests {
     #[test]
     fn a_recoverable_failure_stays_on_a_finished_task() {
         let (queue, _tmp) = test_queue();
-        let key = queue.task("work");
+        let key = queue.add_task("work");
 
         // A failed tool call the model recovered from: the task finishes.
         queue.emit(
@@ -2033,7 +2041,7 @@ mod tests {
                 message: "boom".into(),
             },
         );
-        queue.set_finished(&key, "done").unwrap();
+        queue.set_task_finished(&key, "done").unwrap();
 
         let task = queue.get_task(&key).unwrap();
         assert_eq!(task.status, Status::Finished);
@@ -2045,9 +2053,9 @@ mod tests {
     fn the_terminal_task_failed_is_not_recorded_as_an_error() {
         let dir = crate::test_util::TempDir::new().unwrap();
         let queue = Queue::new();
-        queue.dir(dir.path().to_path_buf());
-        let key = queue.task("work");
-        queue.set_failed(&key).unwrap();
+        queue.set_dir(dir.path().to_path_buf());
+        let key = queue.add_task("work");
+        queue.set_task_failed(&key).unwrap();
         assert!(queue.get_task(&key).unwrap().errors.is_empty());
 
         // The log carries `task_failed` either way, so a resumed session that
@@ -2061,8 +2069,8 @@ mod tests {
     fn a_failure_naming_a_task_the_directory_lost_is_skipped() {
         let dir = crate::test_util::TempDir::new().unwrap();
         let original = Queue::new();
-        original.dir(dir.path().to_path_buf());
-        let key = original.task("work");
+        original.set_dir(dir.path().to_path_buf());
+        let key = original.add_task("work");
         original.emit(
             &key,
             "agent",
@@ -2078,15 +2086,15 @@ mod tests {
 
         let resumed = Queue::load(dir.path()).unwrap();
         assert!(resumed.get_task(&key).is_none());
-        assert_eq!(resumed.input_tokens(), 0);
+        assert_eq!(resumed.get_input_tokens(), 0);
     }
 
     #[test]
     fn failures_round_trip_through_load() {
         let dir = crate::test_util::TempDir::new().unwrap();
         let original = Queue::new();
-        original.dir(dir.path().to_path_buf());
-        let key = original.task("work");
+        original.set_dir(dir.path().to_path_buf());
+        let key = original.add_task("work");
         original.emit(
             &key,
             "agent",
@@ -2110,12 +2118,12 @@ mod tests {
         let (queue, _tmp) = test_queue();
         queue.on_failure(|queue, _, failed| {
             if failed.parent.is_none() {
-                queue.task(Task::new(failed.task.clone()).parent(&failed.key));
+                queue.add_task(Task::new(failed.task.clone()).parent(&failed.key));
             }
         });
-        let key = queue.task("work");
+        let key = queue.add_task("work");
 
-        queue.set_failed(&key).unwrap();
+        queue.set_task_failed(&key).unwrap();
 
         let retry = queue.find_task(format!("parent = {key}")).unwrap();
         assert_eq!(retry.task, serde_json::json!("work"));
@@ -2126,28 +2134,28 @@ mod tests {
         let (queue, _tmp) = test_queue();
         queue.on_event(|queue, event| {
             if matches!(event.kind, EventKind::TurnStarted) {
-                queue.task(Task::new("report").label("report"));
+                queue.add_task(Task::new("report").label("report"));
             }
         });
-        let key = queue.task("work");
+        let key = queue.add_task("work");
 
         queue.emit(&key, "agent", EventKind::TurnStarted);
 
-        assert_eq!(queue.find_tasks(|t: &Task| t.has_label("report")).len(), 1);
+        assert_eq!(queue.find_tasks("label = report").len(), 1);
     }
 
     #[test]
     fn on_result_links_a_follow_up_to_the_finished_parent() {
         let (queue, _tmp) = test_queue();
-        queue.task(Task::new("scout").label("scout"));
+        queue.add_task(Task::new("scout").label("scout"));
         let key = queue.claim(&Query::from("scout"), "agent").unwrap();
         queue.set_result(&key, serde_json::json!("lead")).unwrap();
         queue.set_finished_by(&key, "agent").unwrap();
         queue.on_result(|queue, done, _| {
-            queue.task(Task::new("hunt").label("sniper").parent(&done.key));
+            queue.add_task(Task::new("hunt").label("sniper").parent(&done.key));
         });
         queue.emit(&key, "agent", EventKind::TaskFinished);
-        let spawned = queue.find_task(|t: &Task| t.has_label("sniper")).unwrap();
+        let spawned = queue.find_task("label = sniper").unwrap();
         assert_eq!(spawned.parent, Some(key));
     }
 
@@ -2155,10 +2163,10 @@ mod tests {
     fn on_result_ignores_unfinished_events() {
         let (queue, _tmp) = test_queue();
         queue.on_result(|queue, _, _| {
-            queue.task(Task::new("follow-up").label("next"));
+            queue.add_task(Task::new("follow-up").label("next"));
         });
         queue.emit("KEY", "agent", EventKind::TurnStarted);
-        assert!(queue.tasks().is_empty());
+        assert!(queue.get_tasks().is_empty());
     }
 
     #[test]
@@ -2174,7 +2182,7 @@ mod tests {
                 .push(queue.find_results("scan").len());
         });
         for key in scans(&queue, 2) {
-            queue.set_finished(&key, "clean").unwrap();
+            queue.set_task_finished(&key, "clean").unwrap();
         }
 
         assert_eq!(*counts.lock().unwrap(), vec![1, 2]);
@@ -2183,7 +2191,7 @@ mod tests {
     /// File `count` tasks labelled `scan`, all `Todo`.
     fn scans(queue: &Queue, count: usize) -> Vec<String> {
         (0..count)
-            .map(|i| queue.task(Task::new(format!("scan {i}")).label("scan")))
+            .map(|i| queue.add_task(Task::new(format!("scan {i}")).label("scan")))
             .collect()
     }
 
@@ -2196,10 +2204,10 @@ mod tests {
             let record = Arc::clone(&record);
             async move { record.lock().unwrap().push((task.key, result)) }
         });
-        let key = queue.task("scan the corpus");
-        queue.set_finished(&key, "clean").unwrap();
+        let key = queue.add_task("scan the corpus");
+        queue.set_task_finished(&key, "clean").unwrap();
 
-        queue.finish_all().await;
+        queue.finish_all_tasks().await;
 
         assert_eq!(
             *seen.lock().unwrap(),
@@ -2218,10 +2226,10 @@ mod tests {
                 async move { record.lock().unwrap().push(name) }
             });
         }
-        let key = queue.task("scan the corpus");
-        queue.set_finished(&key, "clean").unwrap();
+        let key = queue.add_task("scan the corpus");
+        queue.set_task_finished(&key, "clean").unwrap();
 
-        queue.finish_all().await;
+        queue.finish_all_tasks().await;
 
         // Two entries, not four: a second registration does not queue twice.
         assert_eq!(*seen.lock().unwrap(), vec!["first", "second"]);
@@ -2246,10 +2254,10 @@ mod tests {
                 });
             }
         });
-        let key = queue.task("scan the corpus");
-        queue.set_finished(&key, "clean").unwrap();
+        let key = queue.add_task("scan the corpus");
+        queue.set_task_finished(&key, "clean").unwrap();
 
-        queue.finish_all().await;
+        queue.finish_all_tasks().await;
 
         // Two entries, not four: neither thread installed a second hook.
         assert_eq!(seen.lock().unwrap().len(), 2);
@@ -2271,14 +2279,14 @@ mod tests {
                 }
             }
         });
-        let first = queue.task("scan the first half");
-        let second = queue.task("scan the second half");
-        queue.set_finished(&first, "clean").unwrap();
-        queue.set_finished(&second, "clean").unwrap();
+        let first = queue.add_task("scan the first half");
+        let second = queue.add_task("scan the second half");
+        queue.set_task_finished(&first, "clean").unwrap();
+        queue.set_task_finished(&second, "clean").unwrap();
 
-        let cancelled = tokio::time::timeout(Duration::from_millis(50), queue.finish_all());
+        let cancelled = tokio::time::timeout(Duration::from_millis(50), queue.finish_all_tasks());
         assert!(cancelled.await.is_err());
-        queue.finish_all().await;
+        queue.finish_all_tasks().await;
 
         assert_eq!(*seen.lock().unwrap(), vec![first, second]);
     }
@@ -2297,12 +2305,12 @@ mod tests {
                 record.lock().unwrap().push(format!("end {}", task.key));
             }
         });
-        let first = queue.task("scan the first half");
-        let second = queue.task("scan the second half");
-        queue.set_finished(&first, "clean").unwrap();
-        queue.set_finished(&second, "clean").unwrap();
+        let first = queue.add_task("scan the first half");
+        let second = queue.add_task("scan the second half");
+        queue.set_task_finished(&first, "clean").unwrap();
+        queue.set_task_finished(&second, "clean").unwrap();
 
-        queue.finish_all().await;
+        queue.finish_all_tasks().await;
 
         assert_eq!(
             *seen.lock().unwrap(),
@@ -2333,10 +2341,10 @@ mod tests {
                     .push(format!("task {}", event.kind.name()))
             }
         });
-        let key = queue.task("scan the corpus");
-        queue.set_finished(&key, 1).unwrap();
+        let key = queue.add_task("scan the corpus");
+        queue.set_task_finished(&key, 1).unwrap();
 
-        queue.finish_all().await;
+        queue.finish_all_tasks().await;
 
         // One entry each: the two kinds share one queueing hook.
         assert_eq!(
@@ -2356,7 +2364,7 @@ mod tests {
         });
         queue.emit("KEY", "agent", EventKind::TurnStarted);
 
-        queue.finish_all().await;
+        queue.finish_all_tasks().await;
 
         assert!(seen.lock().unwrap().contains(&"turn_started"));
     }
@@ -2375,10 +2383,10 @@ mod tests {
                     .push((event.kind.name(), task.key.clone()))
             }
         });
-        let key = queue.task("scan the corpus");
-        queue.set_failed(&key).unwrap();
+        let key = queue.add_task("scan the corpus");
+        queue.set_task_failed(&key).unwrap();
 
-        queue.finish_all().await;
+        queue.finish_all_tasks().await;
 
         assert_eq!(*seen.lock().unwrap(), vec![("task_failed", key)]);
     }
@@ -2387,14 +2395,14 @@ mod tests {
     async fn an_async_handler_files_a_follow_up_through_the_queue_it_is_handed() {
         let (queue, _tmp) = test_queue();
         queue.on_result_async(|queue, done, _| async move {
-            queue.task(Task::new("hunt").label("sniper").parent(&done.key));
+            queue.add_task(Task::new("hunt").label("sniper").parent(&done.key));
         });
-        let key = queue.task(Task::new("scout").label("scout"));
-        queue.set_finished(&key, "lead").unwrap();
+        let key = queue.add_task(Task::new("scout").label("scout"));
+        queue.set_task_finished(&key, "lead").unwrap();
 
-        queue.finish_all().await;
+        queue.finish_all_tasks().await;
 
-        let spawned = queue.find_task(|t: &Task| t.has_label("sniper")).unwrap();
+        let spawned = queue.find_task("label = sniper").unwrap();
         assert_eq!(spawned.parent, Some(key));
     }
 
@@ -2407,12 +2415,12 @@ mod tests {
             let record = Arc::clone(&record);
             async move { record.lock().unwrap().push(task.key) }
         });
-        let key = queue.task("scan the corpus");
+        let key = queue.add_task("scan the corpus");
 
-        queue.set_finished(&key, "clean").unwrap();
+        queue.set_task_finished(&key, "clean").unwrap();
         assert!(seen.lock().unwrap().is_empty());
 
-        queue.finish_all().await;
+        queue.finish_all_tasks().await;
         assert_eq!(*seen.lock().unwrap(), vec![key]);
     }
 
@@ -2425,10 +2433,10 @@ mod tests {
             let record = Arc::clone(&record);
             async move { record.lock().unwrap().push(task.key) }
         });
-        let key = queue.task("scan the corpus");
-        queue.set_failed(&key).unwrap();
+        let key = queue.add_task("scan the corpus");
+        queue.set_task_failed(&key).unwrap();
 
-        queue.finish_all().await;
+        queue.finish_all_tasks().await;
 
         assert!(seen.lock().unwrap().is_empty());
     }
@@ -2438,29 +2446,28 @@ mod tests {
         let (queue, _tmp) = test_queue();
         queue.on_result(|queue, _, _| {
             if queue.find_results("scan").len() == 2 {
-                queue.task(Task::new("write the report").label("report"));
+                queue.add_task(Task::new("write the report").label("report"));
             }
         });
         let scans = scans(&queue, 2);
 
-        queue.set_finished(&scans[0], "clean").unwrap();
-        assert!(queue
-            .find_tasks(|t: &Task| t.has_label("report"))
-            .is_empty());
+        queue.set_task_finished(&scans[0], "clean").unwrap();
+        assert!(queue.find_tasks("label = report").is_empty());
 
-        queue.set_finished(&scans[1], "clean").unwrap();
-        assert_eq!(queue.find_tasks(|t: &Task| t.has_label("report")).len(), 1);
+        queue.set_task_finished(&scans[1], "clean").unwrap();
+        assert_eq!(queue.find_tasks("label = report").len(), 1);
     }
 
     #[test]
     fn on_result_inserts_a_follow_up_before_drain_is_observable() {
         let (queue, _tmp) = test_queue();
-        queue.on_result(|queue, done, _| {
-            if done.has_label("scout") {
-                queue.task(Task::new("hunt").label("sniper"));
+        let scout = Query::from("label = scout");
+        queue.on_result(move |queue, done, _| {
+            if scout.matches(done) {
+                queue.add_task(Task::new("hunt").label("sniper"));
             }
         });
-        queue.task(Task::new("scout").label("scout"));
+        queue.add_task(Task::new("scout").label("scout"));
         let key = queue.claim(&Query::from("scout"), "agent").unwrap();
         queue.set_result(&key, serde_json::json!("lead")).unwrap();
         queue.set_finished_by(&key, "agent").unwrap();
@@ -2484,9 +2491,9 @@ mod tests {
                 ));
             }
         });
-        queue.task(Task::new("scan").label("scan"));
+        queue.add_task(Task::new("scan").label("scan"));
         let key = queue.claim(&Query::from("scan"), "analyst").unwrap();
-        queue.add_reply(&key, Reply::user_text("hello"));
+        queue.append_reply(&key, Reply::user_text("hello"));
         queue.set_result(&key, serde_json::json!("done")).unwrap();
         queue.set_finished_by(&key, "analyst").unwrap();
 
@@ -2508,7 +2515,7 @@ mod tests {
         let (queue, _tmp) = test_queue();
         let seen = Arc::new(Mutex::new(Vec::new()));
         let record = Arc::clone(&seen);
-        queue.task(Task::new("scan").label("scan"));
+        queue.add_task(Task::new("scan").label("scan"));
         let key = queue.claim(&Query::from("scan"), "analyst").unwrap();
         // Installed after the claim, so only the turn is in the handler's view.
         queue.on_task(move |_, _, task| record.lock().unwrap().push(task.key.clone()));
@@ -2535,7 +2542,7 @@ mod tests {
         let seen = Arc::new(Mutex::new(Vec::new()));
         let record = Arc::clone(&seen);
         queue.on_task(move |_, _, task| record.lock().unwrap().push(task.key.clone()));
-        queue.task(Task::new("scan").label("scan"));
+        queue.add_task(Task::new("scan").label("scan"));
         // The claim is the lifecycle event; no second emit needed.
         let key = queue.claim(&Query::from("scan"), "analyst").unwrap();
 
@@ -2565,7 +2572,7 @@ mod tests {
     async fn run_finished_reports_drained_on_empty_queue() {
         let (queue, _tmp) = test_queue();
         let reasons = collect_finish_reasons(&queue);
-        queue.finish_all().await;
+        queue.finish_all_tasks().await;
         assert_eq!(*reasons.lock().unwrap(), vec![FinishReason::Drained]);
     }
 
@@ -2573,39 +2580,39 @@ mod tests {
     async fn finish_reason_reports_nothing_until_the_run_ends() {
         let (queue, _tmp) = test_queue();
         queue.start();
-        assert_eq!(queue.finish_reason(), None);
-        queue.finish_all().await;
-        assert_eq!(queue.finish_reason(), Some(FinishReason::Drained));
+        assert_eq!(queue.get_finish_reason(), None);
+        queue.finish_all_tasks().await;
+        assert_eq!(queue.get_finish_reason(), Some(FinishReason::Drained));
     }
 
     #[tokio::test]
     async fn the_finish_reason_is_cleared_by_a_restart() {
         let (queue, _tmp) = test_queue();
         queue.start();
-        queue.cancel_all();
-        queue.finish_all().await;
-        assert_eq!(queue.finish_reason(), Some(FinishReason::Cancelled));
+        queue.cancel_all_tasks();
+        queue.finish_all_tasks().await;
+        assert_eq!(queue.get_finish_reason(), Some(FinishReason::Cancelled));
         queue.start();
-        assert_eq!(queue.finish_reason(), None);
+        assert_eq!(queue.get_finish_reason(), None);
     }
 
     #[tokio::test]
     async fn a_clean_drain_is_not_reported_as_cancelled() {
         let (queue, _tmp) = test_queue();
-        queue.finish_all().await;
-        assert_eq!(queue.finish_reason(), Some(FinishReason::Drained));
+        queue.finish_all_tasks().await;
+        assert_eq!(queue.get_finish_reason(), Some(FinishReason::Drained));
     }
 
     #[tokio::test]
     async fn finish_hands_back_only_the_results_its_filter_named() {
         let (queue, _tmp) = test_queue();
-        queue.task(Task::new("a").label("scan"));
-        queue.task(Task::new("b").label("report"));
+        queue.add_task(Task::new("a").label("scan"));
+        queue.add_task(Task::new("b").label("report"));
         attach_done_result(&queue, "t-1", "scanned");
         attach_done_result(&queue, "t-2", "reported");
 
         assert_eq!(
-            queue.finish(|t: &Task| t.has_label("scan")).await,
+            queue.finish_results("label = scan").await,
             vec![serde_json::json!("scanned")]
         );
     }
@@ -2613,38 +2620,38 @@ mod tests {
     #[tokio::test]
     async fn finish_all_hands_back_the_results_of_every_pool() {
         let (queue, _tmp) = test_queue();
-        queue.task(Task::new("a").label("scan"));
-        queue.task(Task::new("b").label("report"));
+        queue.add_task(Task::new("a").label("scan"));
+        queue.add_task(Task::new("b").label("report"));
         attach_done_result(&queue, "t-1", "scanned");
         attach_done_result(&queue, "t-2", "reported");
 
         assert_eq!(
-            queue.finish_all().await,
+            queue.finish_all_tasks().await,
             vec![serde_json::json!("scanned"), serde_json::json!("reported")]
         );
     }
 
     #[tokio::test]
-    async fn finish_last_hands_back_the_last_result_in_creation_order() {
+    async fn finish_result_hands_back_the_first_result_in_query_order() {
         let (queue, _tmp) = test_queue();
-        queue.task(Task::new("a").label("scan"));
-        queue.task(Task::new("b").label("report"));
+        queue.add_task(Task::new("a").label("scan"));
+        queue.add_task(Task::new("b").label("report"));
         // Resolved back to front, so the answer tells creation order from the
         // order the results landed in.
         attach_done_result(&queue, "t-2", "reported");
         attach_done_result(&queue, "t-1", "scanned");
 
         assert_eq!(
-            queue.finish_last().await,
+            queue.finish_result("ORDER BY key DESC").await,
             Some(serde_json::json!("reported"))
         );
     }
 
     #[tokio::test]
-    async fn finish_last_is_none_when_nothing_finished() {
+    async fn finish_result_is_none_when_nothing_finished() {
         let (queue, _tmp) = test_queue();
 
-        assert_eq!(queue.finish_last().await, None);
+        assert_eq!(queue.finish_result("status = Finished").await, None);
     }
 
     #[tokio::test]
@@ -2652,21 +2659,21 @@ mod tests {
         let (queue, _tmp) = test_queue();
         let reasons = collect_finish_reasons(&queue);
         queue.start();
-        queue.cancel_all();
-        queue.finish_all().await;
+        queue.cancel_all_tasks();
+        queue.finish_all_tasks().await;
         assert_eq!(*reasons.lock().unwrap(), vec![FinishReason::Cancelled]);
-        assert_eq!(queue.finish_reason(), Some(FinishReason::Cancelled));
+        assert_eq!(queue.get_finish_reason(), Some(FinishReason::Cancelled));
     }
 
     #[tokio::test]
     async fn run_finished_reports_policy_violated_when_max_turns_zero() {
         let (queue, _tmp) = test_queue();
         let reasons = collect_finish_reasons(&queue);
-        queue.policy(Policy {
+        queue.set_policy(Policy {
             max_turns: Some(0),
             ..Default::default()
         });
-        queue.finish_all().await;
+        queue.finish_all_tasks().await;
         assert_eq!(
             *reasons.lock().unwrap(),
             vec![FinishReason::PolicyViolated(
@@ -2679,9 +2686,9 @@ mod tests {
     async fn run_finished_is_emitted_again_after_a_restart() {
         let (queue, _tmp) = test_queue();
         let reasons = collect_finish_reasons(&queue);
-        queue.finish_all().await;
+        queue.finish_all_tasks().await;
         queue.start();
-        queue.finish_all().await;
+        queue.finish_all_tasks().await;
         assert_eq!(
             *reasons.lock().unwrap(),
             vec![FinishReason::Drained, FinishReason::Drained],
@@ -2701,7 +2708,7 @@ mod tests {
                 sink.lock().unwrap().push(format!("{:?}", e.kind));
             }
         });
-        queue.finish_all().await;
+        queue.finish_all_tasks().await;
         let entries = log.lock().unwrap();
         assert_eq!(entries.len(), 2, "expected RunStarted then RunFinished");
         assert!(entries[0].starts_with("RunStarted"));

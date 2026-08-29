@@ -113,7 +113,7 @@ impl Clone for Agent {
 impl Agent {
     /// Create an agent, with a task queue of its own so
     /// `.task(...)` and `.start()` work without one being set up.
-    /// `Queue::agent(...)` later moves those tasks into the shared queue.
+    /// `Queue::add_agent(...)` later moves those tasks into the shared queue.
     ///
     /// Give it a provider and a model before it starts work.
     pub fn new() -> Self {
@@ -196,9 +196,9 @@ impl Agent {
     /// Let the agent wait for new instructions to keep a task in-progress.
     ///
     /// The agent stops after a reply that calls no tool, and
-    /// `Queue::reply` drives the next turn. It gets no `FinishTool`,
+    /// `Queue::add_reply` drives the next turn. It gets no `FinishTool`,
     /// since ending the task would end the conversation; the host closes it
-    /// with `Queue::set_finished`. Register the tool by hand to give the
+    /// with `Queue::set_task_finished`. Register the tool by hand to give the
     /// agent one back.
     pub fn interactive(mut self) -> Self {
         self.interactive = true;
@@ -291,7 +291,7 @@ impl Agent {
     /// [`Event::agent_id`] and in [`Task::assignee`].
     ///
     /// The number is taken the first time this is called, directly or through
-    /// [`Self::task`], [`Self::start`], or `Queue::agent`. Label the
+    /// [`Self::task`], [`Self::start`], or `Queue::add_agent`. Label the
     /// agent before then.
     ///
     /// [`Event::agent_id`]: crate::Event::agent_id
@@ -444,7 +444,7 @@ impl Agent {
     /// # use agentwerk::Agent;
     /// # async fn run(agent: Agent) {
     /// let work = agent.start();
-    /// work.finish_all().await;
+    /// work.finish_all_tasks().await;
     /// # }
     /// ```
     pub fn start(&self) -> Arc<Queue> {
@@ -453,7 +453,7 @@ impl Agent {
             .upgrade()
             .expect("Agent::start requires a bound Queue");
         if !queue.has_agent(self.id()) {
-            queue.agent(self.clone());
+            queue.add_agent(self.clone());
         }
         queue.start();
         queue
@@ -738,12 +738,12 @@ mod tests {
     async fn dispatch_interpolates_string_task_body() {
         let dir = crate::test_util::TempDir::new().unwrap();
         let queue = crate::agents::Queue::new();
-        queue.dir(dir.path().to_path_buf());
+        queue.set_dir(dir.path().to_path_buf());
         let mut agent = callable(Agent::new().template("topic", "rust"));
         queue.bind_agent(&mut agent);
         agent.task("Search {topic} forums.");
         let stored = queue
-            .tasks()
+            .get_tasks()
             .into_iter()
             .next()
             .expect("task should have been enqueued");
@@ -757,14 +757,14 @@ mod tests {
     async fn a_task_body_keeps_the_context_placeholder_verbatim() {
         let dir = crate::test_util::TempDir::new().unwrap();
         let queue = crate::agents::Queue::new();
-        queue.dir(dir.path().to_path_buf());
+        queue.set_dir(dir.path().to_path_buf());
         // The block needs a task key and live budgets, neither of which
         // exists yet at dispatch. Only the role expands it.
         let mut agent = callable(Agent::new());
         queue.bind_agent(&mut agent);
         agent.task("Work on {context}.");
         let stored = queue
-            .tasks()
+            .get_tasks()
             .into_iter()
             .next()
             .expect("task should have been enqueued");
@@ -778,13 +778,13 @@ mod tests {
     async fn dispatch_leaves_object_task_unchanged() {
         let dir = crate::test_util::TempDir::new().unwrap();
         let queue = crate::agents::Queue::new();
-        queue.dir(dir.path().to_path_buf());
+        queue.set_dir(dir.path().to_path_buf());
         let mut agent = callable(Agent::new().template("topic", "rust"));
         queue.bind_agent(&mut agent);
         let value = serde_json::json!({"q": "Find {topic}"});
         agent.task(Task::new(value.clone()));
         let stored = queue
-            .tasks()
+            .get_tasks()
             .into_iter()
             .next()
             .expect("task should have been enqueued");

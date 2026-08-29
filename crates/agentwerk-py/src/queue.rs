@@ -44,8 +44,11 @@ impl PyQueue {
 
     /// Add an agent to this task queue, moving any tasks it queued on its
     /// own across first.
-    fn agent<'py>(slf: PyRef<'py, Self>, agent: PyRef<'_, PyAgent>) -> PyResult<PyRef<'py, Self>> {
-        slf.inner.agent(agent.ready()?.clone());
+    fn add_agent<'py>(
+        slf: PyRef<'py, Self>,
+        agent: PyRef<'_, PyAgent>,
+    ) -> PyResult<PyRef<'py, Self>> {
+        slf.inner.add_agent(agent.ready()?.clone());
         Ok(slf)
     }
 
@@ -53,13 +56,13 @@ impl PyQueue {
     ///
     /// A `str` is the task itself, and an `os.PathLike` names the file holding
     /// it. A `Task` carries a custom label or schema with it.
-    fn task(slf: PyRef<'_, Self>, task: &Bound<'_, PyAny>) -> PyResult<String> {
-        Ok(slf.inner.task(to_task(task)?))
+    fn add_task(slf: PyRef<'_, Self>, task: &Bound<'_, PyAny>) -> PyResult<String> {
+        Ok(slf.inner.add_task(to_task(task)?))
     }
 
     /// Add a reply to a task, which drives its next turn.
-    fn reply<'py>(slf: PyRef<'py, Self>, key: &str, content: &str) -> PyRef<'py, Self> {
-        slf.inner.reply(key, content);
+    fn add_reply<'py>(slf: PyRef<'py, Self>, key: &str, content: &str) -> PyRef<'py, Self> {
+        slf.inner.add_reply(key, content);
         slf
     }
 
@@ -67,20 +70,20 @@ impl PyQueue {
     ///
     /// Raises when the key is unknown, or when the result misses the task's
     /// schema.
-    fn set_finished(&self, key: &str, result: &Bound<'_, PyAny>) -> PyResult<()> {
+    fn set_task_finished(&self, key: &str, result: &Bound<'_, PyAny>) -> PyResult<()> {
         self.inner
-            .set_finished(key, py_to_value(result)?)
+            .set_task_finished(key, py_to_value(result)?)
             .map_err(runtime_error)
     }
 
     /// Fail a task, from outside the execution. Raises when the key is unknown.
-    fn set_failed(&self, key: &str) -> PyResult<()> {
-        self.inner.set_failed(key).map_err(runtime_error)
+    fn set_task_failed(&self, key: &str) -> PyResult<()> {
+        self.inner.set_task_failed(key).map_err(runtime_error)
     }
 
     /// Set the execution limits and retry tuning.
-    fn policy<'py>(slf: PyRef<'py, Self>, policy: PyRef<'_, PyPolicy>) -> PyRef<'py, Self> {
-        slf.inner.policy(policy.inner.clone());
+    fn set_policy<'py>(slf: PyRef<'py, Self>, policy: PyRef<'_, PyPolicy>) -> PyRef<'py, Self> {
+        slf.inner.set_policy(policy.inner.clone());
         slf
     }
 
@@ -92,8 +95,8 @@ impl PyQueue {
     }
 
     /// Define where a session is stored.
-    fn dir<'py>(slf: PyRef<'py, Self>, dir: &str) -> PyRef<'py, Self> {
-        slf.inner.dir(dir);
+    fn set_dir<'py>(slf: PyRef<'py, Self>, dir: &str) -> PyRef<'py, Self> {
+        slf.inner.set_dir(dir);
         slf
     }
 
@@ -104,8 +107,11 @@ impl PyQueue {
 
     /// Enforce schemas for task results. A task claimed under a label the
     /// store knows takes that schema, unless it already carries one of its own.
-    fn schemas<'py>(slf: PyRef<'py, Self>, store: PyRef<'_, PySchemaStore>) -> PyRef<'py, Self> {
-        slf.inner.schemas(&store.inner);
+    fn set_schemas<'py>(
+        slf: PyRef<'py, Self>,
+        store: PyRef<'_, PySchemaStore>,
+    ) -> PyRef<'py, Self> {
+        slf.inner.set_schemas(&store.inner);
         slf
     }
 
@@ -113,7 +119,7 @@ impl PyQueue {
     /// stderr.
     ///
     /// The queue arrives first, so a handler files follow-up work with
-    /// `queue.task(..)` and selects tasks and results with `queue.find_*`.
+    /// `queue.add_task(..)` and selects tasks and results with `queue.find_*`.
     fn on_event<'py>(slf: PyRef<'py, Self>, handler: Py<PyAny>) -> PyRef<'py, Self> {
         slf.inner.on_event(move |queue, event: &Event| {
             Python::attach(|py| {
@@ -135,7 +141,7 @@ impl PyQueue {
     /// Every kind reaches it, streamed reply chunks included, and each event
     /// waits in memory until a `finish` drains it.
     ///
-    /// Handlers run only while `finish` or `finish_all` is awaited, and MUST
+    /// Handlers run only while `finish_results` or `finish_all_tasks` is awaited, and MUST
     /// NOT call either themselves: that waits forever on the handover the
     /// handler is running inside.
     fn on_event_async<'py>(slf: PyRef<'py, Self>, handler: Py<PyAny>) -> PyRef<'py, Self> {
@@ -168,7 +174,7 @@ impl PyQueue {
     /// that `finish` waits for before it returns, on the terms
     /// `on_event_async` sets.
     ///
-    /// Handlers run only while `finish` or `finish_all` is awaited, and MUST
+    /// Handlers run only while `finish_results` or `finish_all_tasks` is awaited, and MUST
     /// NOT call either themselves: that waits forever on the handover the
     /// handler is running inside.
     fn on_result_async<'py>(slf: PyRef<'py, Self>, handler: Py<PyAny>) -> PyRef<'py, Self> {
@@ -202,7 +208,7 @@ impl PyQueue {
     /// `async def` that `finish` waits for before it returns, on the terms
     /// `on_event_async` sets.
     ///
-    /// Handlers run only while `finish` or `finish_all` is awaited, and MUST
+    /// Handlers run only while `finish_results` or `finish_all_tasks` is awaited, and MUST
     /// NOT call either themselves: that waits forever on the handover the
     /// handler is running inside.
     fn on_failure_async<'py>(slf: PyRef<'py, Self>, handler: Py<PyAny>) -> PyRef<'py, Self> {
@@ -219,8 +225,8 @@ impl PyQueue {
 
     /// Get the model that agent runs, or `None` when no agent of that name is
     /// added. `Trajectory.from_task` needs it.
-    fn model_for_agent(&self, agent_id: &str) -> Option<String> {
-        self.inner.model_for_agent(agent_id)
+    fn get_model_for_agent(&self, agent_id: &str) -> Option<String> {
+        self.inner.get_model_for_agent(agent_id)
     }
 
     /// Get one task by key.
@@ -232,9 +238,9 @@ impl PyQueue {
     }
 
     /// Get every task in creation order.
-    fn tasks(&self, py: Python<'_>) -> PyResult<Vec<Py<PyTask>>> {
+    fn get_tasks(&self, py: Python<'_>) -> PyResult<Vec<Py<PyTask>>> {
         self.inner
-            .tasks()
+            .get_tasks()
             .iter()
             .map(|task| Py::new(py, PyTask::from_task(task)))
             .collect()
@@ -277,7 +283,7 @@ impl PyQueue {
     /// `finish` waits for before it returns, on the terms `on_event_async`
     /// sets.
     ///
-    /// Handlers run only while `finish` or `finish_all` is awaited, and MUST
+    /// Handlers run only while `finish_results` or `finish_all_tasks` is awaited, and MUST
     /// NOT call either themselves: that waits forever on the handover the
     /// handler is running inside.
     fn on_task_async<'py>(slf: PyRef<'py, Self>, handler: Py<PyAny>) -> PyRef<'py, Self> {
@@ -331,19 +337,23 @@ impl PyQueue {
     fn start(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
         // `Queue::start` spawns onto the ambient Tokio runtime; a pymethod
         // call has no runtime entered on its own thread, so enter the shared
-        // one pyo3-async-runtimes already uses for `finish()`.
+        // one pyo3-async-runtimes already uses for `finish_results()`.
         let _guard = pyo3_async_runtimes::tokio::get_runtime().enter();
         slf.inner.start();
         slf
     }
 
     /// Wait for the matching tasks to be done, then give back their results
-    /// in creation order. Accepts a Query or callable. Awaitable.
-    fn finish<'py>(&self, py: Python<'py>, matches: Py<PyAny>) -> PyResult<Bound<'py, PyAny>> {
+    /// in query order. Accepts a Query or callable. Awaitable.
+    fn finish_results<'py>(
+        &self,
+        py: Python<'py>,
+        matches: Py<PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
         let inner = Arc::clone(&self.inner);
         let query = to_task_matcher(py, &matches)?;
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let results = inner.finish(query).await;
+            let results = inner.finish_results(query).await;
             Python::attach(|py| {
                 results
                     .iter()
@@ -355,10 +365,10 @@ impl PyQueue {
 
     /// Wait for every task to be done, then give back every result in
     /// creation order. Awaitable.
-    fn finish_all<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+    fn finish_all_tasks<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = Arc::clone(&self.inner);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let results = inner.finish_all().await;
+            let results = inner.finish_all_tasks().await;
             Python::attach(|py| {
                 results
                     .iter()
@@ -368,13 +378,18 @@ impl PyQueue {
         })
     }
 
-    /// Wait for every task to be done, then give back the last result in
-    /// creation order. `None` means no task finished with a result.
+    /// Wait for the matching tasks to be done, then give back the first result
+    /// in query order. `None` means no matching task finished with a result.
     /// Awaitable.
-    fn finish_last<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+    fn finish_result<'py>(
+        &self,
+        py: Python<'py>,
+        matches: Py<PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
         let inner = Arc::clone(&self.inner);
+        let query = to_task_matcher(py, &matches)?;
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let result = inner.finish_last().await;
+            let result = inner.finish_result(query).await;
             Python::attach(|py| {
                 result
                     .map(|value| Ok(value_to_py(py, &value)?.unbind()))
@@ -384,26 +399,22 @@ impl PyQueue {
     }
 
     /// Get why the last run ended, or `None` while one is still going.
-    fn finish_reason(&self) -> Option<String> {
-        self.inner.finish_reason().map(|reason| reason.to_string())
+    fn get_finish_reason(&self) -> Option<String> {
+        self.inner
+            .get_finish_reason()
+            .map(|reason| reason.to_string())
     }
 
     /// Take every matching task off the queue. Accepts a Query or callable.
-    fn cancel<'py>(slf: PyRef<'py, Self>, matches: Py<PyAny>) -> PyResult<PyRef<'py, Self>> {
-        slf.inner.cancel(to_task_matcher(slf.py(), &matches)?);
+    fn cancel_tasks<'py>(slf: PyRef<'py, Self>, matches: Py<PyAny>) -> PyResult<PyRef<'py, Self>> {
+        slf.inner.cancel_tasks(to_task_matcher(slf.py(), &matches)?);
         Ok(slf)
     }
 
     /// Take every task off the queue, which ends the run.
-    fn cancel_all(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
-        slf.inner.cancel_all();
+    fn cancel_all_tasks(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+        slf.inner.cancel_all_tasks();
         slf
-    }
-
-    /// Check whether a task has been cancelled. Ask before creating follow-up
-    /// work: a cancelled task is never claimed.
-    fn is_cancelled(&self, task: &PyTask) -> bool {
-        self.inner.is_cancelled(&task.to_task())
     }
 
     /// Get every recorded event matching a `Query`, an AQL string, or a
@@ -422,31 +433,31 @@ impl PyQueue {
     }
 
     /// Get the input tokens across the run's finished requests.
-    fn input_tokens(&self) -> u64 {
-        self.inner.input_tokens()
+    fn get_input_tokens(&self) -> u64 {
+        self.inner.get_input_tokens()
     }
 
     /// Get the output tokens across the run's finished requests.
-    fn output_tokens(&self) -> u64 {
-        self.inner.output_tokens()
+    fn get_output_tokens(&self) -> u64 {
+        self.inner.get_output_tokens()
     }
 
     /// Get the elapsed execution duration in seconds, or `None` before the
     /// first task starts.
-    fn execution_duration(&self) -> Option<f64> {
-        self.inner.execution_duration().map(|d| d.as_secs_f64())
+    fn get_duration(&self) -> Option<f64> {
+        self.inner.get_duration().map(|d| d.as_secs_f64())
     }
 
     /// Get the result of every finished task, in creation order.
-    fn results<'py>(&self, py: Python<'py>) -> PyResult<Vec<Bound<'py, PyAny>>> {
+    fn get_results<'py>(&self, py: Python<'py>) -> PyResult<Vec<Bound<'py, PyAny>>> {
         self.inner
-            .results()
+            .get_results()
             .iter()
             .map(|value| value_to_py(py, value))
             .collect()
     }
 
-    /// Get every result whose task matches the Query or callable, in creation
+    /// Get every result whose task matches the Query or callable, in query
     /// order. Status defaults to `"finished"`.
     fn find_results<'py>(
         &self,

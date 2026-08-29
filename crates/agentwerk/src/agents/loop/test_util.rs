@@ -312,16 +312,18 @@ pub async fn run_one(
 
     let results_dir = crate::test_util::TempDir::new().unwrap();
     let tasks = Queue::new();
-    tasks.dir(results_dir.path().to_path_buf()).policy(Policy {
-        max_request_retries: max_request_retries,
-        request_retry_delay: Duration::from_millis(1),
-        max_schema_retries: Some(max_schema_retries),
-        max_time: Some(Duration::from_millis(200)),
-        ..Default::default()
-    });
+    tasks
+        .set_dir(results_dir.path().to_path_buf())
+        .set_policy(Policy {
+            max_request_retries: max_request_retries,
+            request_retry_delay: Duration::from_millis(1),
+            max_schema_retries: Some(max_schema_retries),
+            max_time: Some(Duration::from_millis(200)),
+            ..Default::default()
+        });
 
     tasks.on_event(move |_, e| handler(e));
-    tasks.agent(
+    tasks.add_agent(
         Agent::new()
             .provider(provider.clone())
             .model("mock")
@@ -330,14 +332,18 @@ pub async fn run_one(
     );
 
     if let Some(schema) = schema {
-        tasks.task(Task::new("go").schema(schema));
+        tasks.add_task(Task::new("go").schema(schema));
     } else {
-        tasks.task("go");
+        tasks.add_task("go");
     }
 
-    let _ = tasks.finish_all().await;
+    let _ = tasks.finish_all_tasks().await;
     let events = collected.lock().unwrap().clone();
-    let task = tasks.tasks().into_iter().next().expect("task must exist");
+    let task = tasks
+        .get_tasks()
+        .into_iter()
+        .next()
+        .expect("task must exist");
     (events, provider, task)
 }
 
@@ -356,25 +362,31 @@ pub async fn run_with_context_window(
 
     let results_dir = crate::test_util::TempDir::new().unwrap();
     let tasks = Queue::new();
-    tasks.dir(results_dir.path().to_path_buf()).policy(Policy {
-        max_request_retries: 0,
-        request_retry_delay: Duration::from_millis(1),
-        max_schema_retries: Some(10),
-        max_time: Some(Duration::from_secs(5)),
-        ..Default::default()
-    });
+    tasks
+        .set_dir(results_dir.path().to_path_buf())
+        .set_policy(Policy {
+            max_request_retries: 0,
+            request_retry_delay: Duration::from_millis(1),
+            max_schema_retries: Some(10),
+            max_time: Some(Duration::from_secs(5)),
+            ..Default::default()
+        });
     tasks.on_event(move |_, e| handler(e));
-    tasks.agent(
+    tasks.add_agent(
         Agent::new()
             .provider(provider.clone())
             .model(Model::new("mock").context_window(context_window_size))
             .role("test"),
     );
-    tasks.task(task);
+    tasks.add_task(task);
 
-    let _ = tasks.finish_all().await;
+    let _ = tasks.finish_all_tasks().await;
     let events = collected.lock().unwrap().clone();
-    let task = tasks.tasks().into_iter().next().expect("task must exist");
+    let task = tasks
+        .get_tasks()
+        .into_iter()
+        .next()
+        .expect("task must exist");
     (events, provider, task)
 }
 
@@ -393,16 +405,18 @@ pub async fn run_compaction(
 
     let results_dir = crate::test_util::TempDir::new().unwrap();
     let tasks = Queue::new();
-    tasks.dir(results_dir.path().to_path_buf()).policy(Policy {
-        max_request_retries: 0,
-        request_retry_delay: Duration::from_millis(1),
-        max_schema_retries: Some(10),
-        max_time: Some(Duration::from_secs(30)),
-        ..Default::default()
-    });
+    tasks
+        .set_dir(results_dir.path().to_path_buf())
+        .set_policy(Policy {
+            max_request_retries: 0,
+            request_retry_delay: Duration::from_millis(1),
+            max_schema_retries: Some(10),
+            max_time: Some(Duration::from_secs(30)),
+            ..Default::default()
+        });
 
     tasks.on_event(move |_, e| handler(e));
-    tasks.agent(
+    tasks.add_agent(
         Agent::new()
             .provider(provider.clone())
             .model("claude-sonnet-4-20250514")
@@ -411,11 +425,15 @@ pub async fn run_compaction(
     );
     configure(&tasks);
     let schema = Schema::new(serde_json::json!({"type": "string"})).unwrap();
-    tasks.task(Task::new("go").schema(schema));
+    tasks.add_task(Task::new("go").schema(schema));
 
-    let _ = tasks.finish_all().await;
+    let _ = tasks.finish_all_tasks().await;
     let events = collected.lock().unwrap().clone();
-    let task = tasks.tasks().into_iter().next().expect("task must exist");
+    let task = tasks
+        .get_tasks()
+        .into_iter()
+        .next()
+        .expect("task must exist");
     (events, provider, task)
 }
 

@@ -47,6 +47,12 @@ pub struct Task {
     pub key: String,
     /// The task lifecycle status.
     pub status: Status,
+    /// Whether the current run has taken this task off the queue.
+    ///
+    /// Cancellation is run-local rather than a persisted lifecycle status:
+    /// [`Queue::start`] clears it so unfinished work may resume.
+    #[serde(skip)]
+    pub(crate) cancelled: bool,
     /// Identifier of the agent that created the task.
     pub reporter: String,
     /// Identifier of the agent that claimed the task.
@@ -94,6 +100,7 @@ impl Task {
             schema: None,
             key: String::new(),
             status: Status::Todo,
+            cancelled: false,
             reporter: String::new(),
             assignee: None,
             created_at: 0,
@@ -133,39 +140,19 @@ impl Task {
         self
     }
 
-    /// Check whether the task carries a label.
-    pub fn has_label(&self, label: &str) -> bool {
-        self.label.as_deref() == Some(label)
+    /// Check whether the task still has work for an agent in this run.
+    pub(crate) fn is_pending(&self) -> bool {
+        matches!(self.status, Status::Todo | Status::InProgress) && !self.cancelled
     }
 
-    /// Check whether the task is waiting to be claimed.
-    pub fn is_todo(&self) -> bool {
-        self.status == Status::Todo
-    }
-
-    /// Check whether the task finished.
-    pub fn is_finished(&self) -> bool {
-        self.status == Status::Finished
-    }
-
-    /// Check whether the task failed.
-    pub fn is_failed(&self) -> bool {
-        self.status == Status::Failed
-    }
-
-    /// Check whether an agent is working on the task.
-    pub fn is_in_progress(&self) -> bool {
-        self.status == Status::InProgress
-    }
-
-    /// Check whether the task is still todo or in progress.
-    pub fn is_pending(&self) -> bool {
-        matches!(self.status, Status::Todo | Status::InProgress)
+    /// Check whether this run has taken the task off the queue.
+    pub(crate) fn is_cancelled(&self) -> bool {
+        self.cancelled
     }
 
     /// False once the model has spoken. The agent then waits for the next
     /// reply, whether a tool result or one you add with
-    /// [`Queue::reply`].
+    /// [`Queue::add_reply`].
     pub(crate) fn is_waiting_for_response(&self) -> bool {
         self.replies
             .last()
@@ -437,7 +424,7 @@ mod tests {
     #[test]
     fn labeled_carries_both_the_label_and_the_task() {
         let task = Task::labeled("analysis", "Audit src/db.");
-        assert!(task.has_label("analysis"));
+        assert_eq!(task.label.as_deref(), Some("analysis"));
         assert_eq!(task.task, serde_json::json!("Audit src/db."));
     }
 
@@ -571,86 +558,19 @@ mod tests {
     #[test]
     fn label_replaces_the_previous_one() {
         let t = Task::new("body").label("research").label("urgent");
-        assert!(t.has_label("urgent"));
-        assert!(!t.has_label("research"));
+        assert_eq!(t.label.as_deref(), Some("urgent"));
     }
 
     #[test]
-    fn has_label_true_when_label_present() {
-        let t = Task::new("x").label("research");
-        assert!(t.has_label("research"));
-    }
-
-    #[test]
-    fn has_label_false_when_label_missing() {
-        let t = Task::new("x").label("research");
-        assert!(!t.has_label("urgent"));
-    }
-
-    #[test]
-    fn has_label_false_when_the_task_carries_no_label() {
-        let t = Task::new("x");
-        assert!(!t.has_label("anything"));
-    }
-
-    #[test]
-    fn is_todo_true_only_while_unclaimed() {
-        let mut t = Task::new("x");
-        assert!(t.is_todo());
-        for status in [Status::InProgress, Status::Finished, Status::Failed] {
-            t.status = status;
-            assert!(!t.is_todo(), "expected !is_todo for {status:?}");
-        }
-    }
-
-    #[test]
-    fn is_finished_true_for_finished_status() {
-        let mut t = Task::new("x");
-        t.status = Status::Finished;
-        assert!(t.is_finished());
-    }
-
-    #[test]
-    fn is_failed_true_only_for_failed_status() {
-        let mut t = Task::new("x");
-        t.status = Status::Failed;
-        assert!(t.is_failed());
-        for status in [Status::Todo, Status::InProgress, Status::Finished] {
-            t.status = status;
-            assert!(!t.is_failed(), "expected !is_failed for {status:?}");
-        }
-    }
-
-    #[test]
-    fn is_finished_false_for_todo_in_progress_failed() {
-        let mut t = Task::new("x");
-        for status in [Status::Todo, Status::InProgress, Status::Failed] {
-            t.status = status;
-            assert!(!t.is_finished(), "expected !is_finished for {status:?}");
-        }
-    }
-
-    #[test]
-    fn is_in_progress_true_only_while_claimed() {
-        let mut t = Task::new("x");
-        t.status = Status::InProgress;
-        assert!(t.is_in_progress());
-        for status in [Status::Todo, Status::Finished, Status::Failed] {
-            t.status = status;
-            assert!(
-                !t.is_in_progress(),
-                "expected !is_in_progress for {status:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn is_pending_true_for_todo_and_in_progress() {
+    fn is_pending_means_unfinished_and_not_cancelled() {
         let mut t = Task::new("x");
         for status in [Status::Todo, Status::InProgress] {
             t.status = status;
             assert!(t.is_pending(), "expected is_pending for {status:?}");
         }
+        t.cancelled = true;
+        assert!(!t.is_pending());
+        t.cancelled = false;
         for status in [Status::Finished, Status::Failed] {
             t.status = status;
             assert!(!t.is_pending(), "expected !is_pending for {status:?}");

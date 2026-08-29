@@ -23,6 +23,7 @@ from pathlib import Path
 from agentwerk import (
     Agent,
     Policy,
+    Query,
     GrepTool,
     Knowledge,
     ReadFileTool,
@@ -192,7 +193,7 @@ def worker_names(pruefer, meister, monteur):
 
 def build_shift(tasks, book, pruefer, meister, monteur):
     for _ in range(pruefer):
-        tasks.agent(
+        tasks.add_agent(
             Agent.from_env()
             .label("pruefung")
             .role(PRUEFER_ROLE.strip())
@@ -201,7 +202,7 @@ def build_shift(tasks, book, pruefer, meister, monteur):
             .tools([GrepTool(), ReadFileTool()])
         )
     for _ in range(meister):
-        tasks.agent(
+        tasks.add_agent(
             Agent.from_env()
             .label("abnahme")
             .role(MEISTER_ROLE.strip())
@@ -210,7 +211,7 @@ def build_shift(tasks, book, pruefer, meister, monteur):
             .tool(ReadFileTool())
         )
     for _ in range(monteur):
-        tasks.agent(
+        tasks.add_agent(
             Agent.from_env()
             .label("montage")
             .role(MONTEUR_ROLE.strip())
@@ -231,17 +232,19 @@ async def main(pruefer, meister, monteur):
     started_at = time.monotonic()
     # Every request resends the context, so the input-token limit is what bounds
     # the bill; the shift bell is the time limit, and both end the run on screen.
-    tasks = Queue().policy(
+    tasks = Queue().set_policy(
         Policy(max_time=SHIFT, max_input_tokens=2_000_000)
     )
 
     # One read plan opens one Abnahme per part it names, which is the fan-out
     # the line runs on.
+    pruefung = Query("label = pruefung")
+
     def open_abnahme(work, task, result):
-        if not task.has_label("pruefung"):
+        if not pruefung.matches(task):
             return
         for teil in result["teile"]:
-            work.task(
+            work.add_task(
                 Task(
                     f"Nimm {teil['teil']} ({teil['name']}) ab. Sollmaß {teil['soll']}, "
                     f"Toleranz {teil['toleranz']}. Der Bauplan liegt in {result['bauplan']}.",
@@ -254,9 +257,11 @@ async def main(pruefer, meister, monteur):
 
     # A part that passes the Abnahme is not done: it goes on to be fitted, so
     # the work fans forward instead of ending at the second station.
+    abnahme = Query("label = abnahme")
+
     def open_montage(work, task, result):
-        if task.has_label("abnahme") and result.get("passt"):
-            work.task(
+        if abnahme.matches(task) and result.get("passt"):
+            work.add_task(
                 Task(
                     f"Baue {result['teil']} ein und buche es. Der Laufzettel lautete: {task.task}",
                     label="montage",
@@ -309,7 +314,7 @@ async def main(pruefer, meister, monteur):
         }
     )
     for apparat in works:
-        tasks.task(
+        tasks.add_task(
             Task(
                 f"Prüfe den Bauplan {apparat['title']}. Er liegt in {apparat['name']}.",
                 label="pruefung",
@@ -318,33 +323,37 @@ async def main(pruefer, meister, monteur):
         )
 
     pages = asyncio.create_task(watch_pages(book, feed, started_at))
-    await tasks.finish_all()
+    await tasks.finish_all_tasks()
     pages.cancel()
 
-    stats = tasks.stats()
+    stats = {
+        "input_tokens": tasks.get_input_tokens(),
+        "output_tokens": tasks.get_output_tokens(),
+        "duration": tasks.get_duration(),
+    }
     feed.push(
         {
             "t": time.monotonic() - started_at,
             "kind": "bell",
-            "reason": tasks.finish_reason(),
-            "stats": stats.to_dict(),
+            "reason": tasks.get_finish_reason(),
+            "stats": stats,
         }
     )
     rulings = [
         task.result
-        for task in tasks.find_tasks(lambda t: t.has_label("abnahme"))
-        if task.is_finished() and isinstance(task.result, dict)
+        for task in tasks.find_tasks("label = abnahme AND status = Finished")
+        if isinstance(task.result, dict)
     ]
     fitted = [
         task.result
-        for task in tasks.find_tasks(lambda t: t.has_label("montage"))
-        if task.is_finished() and isinstance(task.result, dict) and task.result.get("eingebaut")
+        for task in tasks.find_tasks("label = montage AND status = Finished")
+        if isinstance(task.result, dict) and task.result.get("eingebaut")
     ]
     scrap = [ruling for ruling in rulings if not ruling.get("passt")]
     print(
         f"\n{len(rulings)} parts ruled on, {len(scrap)} rejected, {len(fitted)} fitted, "
         f"{len(book.pages().list())} entries in the Prüfbuch, "
-        f"{stats.input_tokens()} in / {stats.output_tokens()} out tokens",
+        f"{stats['input_tokens']} in / {stats['output_tokens']} out tokens",
         flush=True,
     )
     print(f"the hall stays at {url}; run again with --replay to watch it for free", flush=True)

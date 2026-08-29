@@ -79,7 +79,7 @@ async fn traces_three_hop_call_path() -> std::result::Result<(), Box<dyn std::er
 
     let tasks = Queue::new();
 
-    tasks.policy(Policy {
+    tasks.set_policy(Policy {
         max_turns: Some(15),
         ..Default::default()
     });
@@ -100,8 +100,8 @@ async fn traces_three_hop_call_path() -> std::result::Result<(), Box<dyn std::er
         .tool(GlobTool)
         .tool(ListDirectoryTool)
         .tool(ReadFileTool);
-    tasks.agent(agent);
-    tasks.task(
+    tasks.add_agent(agent);
+    tasks.add_task(
         Task::new(
             "Starting from the function `entry`, follow each function call \
              through the source files and report the full ordered call chain \
@@ -111,7 +111,10 @@ async fn traces_three_hop_call_path() -> std::result::Result<(), Box<dyn std::er
         .schema(schema),
     );
 
-    let json = tasks.finish_last().await.unwrap_or_default();
+    let json = tasks
+        .finish_result("ORDER BY created DESC")
+        .await
+        .unwrap_or_default();
     common::print_result(&tasks);
 
     assert!(

@@ -83,7 +83,7 @@ async fn main() {
     agent.task("Find every `pub trait` defined under src/ and explain each in one sentence.");
 
     let work = agent.start();
-    let result = work.finish_last().await.unwrap();
+    let result = work.finish_result("ORDER BY created DESC").await.unwrap();
 
     println!("{}", result.as_str().unwrap_or_default());
 }
@@ -161,15 +161,15 @@ let key = agent.task("Where does the configuration get loaded?");
 
 let chat = agent.start();
 chat.on_result(|_, task, result| println!("{}: {result}", task.key));
-chat.finish_all().await;
+chat.finish_all_tasks().await;
 
-chat.reply(&key, "And which environment variables override it?");
-chat.finish_all().await;
+chat.add_reply(&key, "And which environment variables override it?");
+chat.finish_all_tasks().await;
 
-chat.set_finished(&key, "answered")?;
+chat.set_task_finished(&key, "answered")?;
 ```
 
-An interactive agent never finishes its own task, because that would end the conversation. Every answer pauses the task instead: it stays `InProgress` with its agent, and each `finish_all().await` returns on the answer it waited for. `reply(key, content)` drives the next turn, and `set_finished(key, result)` ends the conversation, which is the result the hook reports. The answers in between arrive as [events](#events).
+An interactive agent never finishes its own task, because that would end the conversation. Every answer pauses the task instead: it stays `InProgress` with its agent, and each `finish_all_tasks().await` returns on the answer it waited for. `add_reply(key, content)` drives the next turn, and `set_task_finished(key, result)` ends the conversation, which is the result the hook reports. The answers in between arrive as [events](#events).
 
 See more: [`Agent`](https://docs.rs/agentwerk/latest/agentwerk/agents/agent/struct.Agent.html).
 
@@ -245,7 +245,7 @@ See [`Provider`](https://docs.rs/agentwerk/latest/agentwerk/providers/struct.Pro
 The `Queue` is the core data structure of agentwerk for coordinating complex interactions.
 
 ```rust
-use agentwerk::{Agent, Task, Queue};
+use agentwerk::{Agent, Query, Task, Queue};
 
 let analyst = Agent::from_env()
     .label("analysis");
@@ -254,33 +254,56 @@ let writer = Agent::from_env()
     .label("report");
 
 let tasks = Queue::new();
-tasks.agent(analyst).agent(writer);
+tasks.add_agent(analyst).add_agent(writer);
 
-tasks.task(Task::labeled("analysis", "Rank all products by value."));
-tasks.task(Task::labeled("report", "Write up the ranking."));
+tasks.add_task(Task::labeled("analysis", "Rank all products by value."));
+tasks.add_task(Task::labeled("report", "Write up the ranking."));
 ```
 
 <details>
-<summary>All task methods</summary>
+<summary>All Queue methods</summary>
 
 | | Method | Description |
 |-|--------|-------------|
-| **Configure** | `agent(agent)` | Add an agent to this task queue. |
-| | `schemas(store)` | Enforce schemas for task results. |
-| | `dir(dir)` | Define where a session is stored. |
+| **Configure** | `set_policy(policy)` | Set execution limits and retry tuning. |
+| | `get_policy()` | Get the policy in force. |
+| | `set_dir(dir)` | Define where a session is stored. |
 | | `get_dir()` | Get the session directory. |
-| **Submit** | `task(task)` | Submit a task, or a `Task` carrying a label or schema, and return its task key. |
-| **Read** | `results()` | Get the result of every finished task, in creation order. |
-| | `find_results(query)` | Get every result whose task matches an AQL query. |
-| | `find_result(query)` | Get the first result whose task matches an AQL query. |
-| | `tasks()` | Get every task in creation order. |
-| | `find_task(query)` | Get the first task matching an AQL query. |
-| | `find_tasks(query)` | Get every task matching an AQL query. |
-| | `get_task(key)` | Get one task by key. |
-| **Replies** | `reply(key, content)` | Continue a paused interactive task. |
+| | `set_schemas(store)` | Enforce schemas for task results. |
+| | `add_agent(agent)` | Add an agent to this task queue. |
+| **Submit and interact** | `add_task(task)` | Submit a task and return its task key. |
+| | `add_reply(key, content)` | Add a reply to a task. |
 | | `edit_replies(key, editor)` | Rewrite a task's replies now. |
-| **Resolve** | `set_finished(key, result)` | Finish a task with a result. |
-| | `set_failed(key)` | Fail a task. |
+| | `set_task_finished(key, result)` | Finish a task with a result. |
+| | `set_task_failed(key)` | Fail a task. |
+| **Observe** | `on_event(handler)` | Read every event as it is emitted. |
+| | `on_event_async(handler)` | Read every event in an async handler. |
+| | `on_result(handler)` | Read every finished task together with its result. |
+| | `on_result_async(handler)` | Read every finished task and result in an async handler. |
+| | `on_failure(handler)` | Read every failure together with its task. |
+| | `on_failure_async(handler)` | Read every failure and task in an async handler. |
+| | `on_task(handler)` | Read task lifecycle transitions. |
+| | `on_task_async(handler)` | Read task lifecycle transitions in an async handler. |
+| **Run** | `start()` | Begin processing tasks. |
+| | `finish_result(query)` | Wait for matching tasks and get the first result in query order. |
+| | `finish_results(query)` | Wait for matching tasks and get their results. |
+| | `finish_all_tasks()` | Wait for every task and get every result. |
+| **Cancel** | `cancel_tasks(query)` | Stop work on matching tasks. |
+| | `cancel_all_tasks()` | Stop work on every task. |
+| **Inspect tasks** | `get_task(key)` | Get one task by key. |
+| | `get_tasks()` | Get every task in creation order. |
+| | `find_task(query)` | Get the first matching task. |
+| | `find_tasks(query)` | Get every matching task. |
+| **Inspect results and events** | `get_results()` | Get every finished task result in creation order. |
+| | `find_result(query)` | Get the first result in query order. |
+| | `find_results(query)` | Get every result in query order. |
+| | `find_event(query)` | Get the first recorded event in query order. |
+| | `find_events(query)` | Get every recorded event in query order. |
+| **Inspect run metadata** | `get_finish_reason()` | Get why the last run ended. |
+| | `get_model_for_agent(agent_id)` | Get the model used by an agent. |
+| | `get_input_tokens()` | Get input tokens across finished requests. |
+| | `get_output_tokens()` | Get output tokens across finished requests. |
+| | `get_duration()` | Get the elapsed execution duration. |
 
 See [`Queue`](https://docs.rs/agentwerk/latest/agentwerk/agents/tasks/struct.Queue.html).
 
@@ -313,6 +336,8 @@ tasks.find_results("scan ORDER BY finished DESC");
 | | `label NOT IN (scan, report)` | Exclude both labels. |
 | | `label IS EMPTY` | Select the tasks carrying no label. |
 | | `label IS NOT EMPTY` | Select the tasks carrying one. |
+| | `pending = true` | Select unfinished tasks this run may still schedule. |
+| | `cancelled = true` | Select tasks this run has taken off the queue. |
 | **Search** | `task ~ "retry budget"` | Search the task body, ignoring case. |
 | | `task !~ draft` | Exclude the tasks the text appears in. |
 | **Compare** | `failed > -1h` | Select the tasks that failed inside the last hour. |
@@ -333,6 +358,8 @@ tasks.find_results("scan ORDER BY finished DESC");
 | **Match** | `key` | Match the task key, of the form `t-N`. |
 | | `label` | Match the label the task carries. |
 | | `status` | Match `Todo`, `InProgress`, `Finished`, or `Failed`. |
+| | `pending` | Match whether the task is unfinished and not cancelled. |
+| | `cancelled` | Match whether this run has taken the task off the queue. |
 | | `agent` | Match the agent that claimed the task. |
 | | `parent` | Match the task a handover came from. |
 | **Search** | `task` | Search the work the agent was asked to do. |
@@ -349,7 +376,7 @@ Operators depend on the field type:
 
 | Field kind | Fields | Operators |
 |------------|--------|-----------|
-| **Identity** | `key`, `label`, `status`, `agent`, `parent` | Exact match with `=`, `!=`, `IN (...)`, or `NOT IN (...)`. Status accepts `InProgress` and `in_progress`. |
+| **Identity** | `key`, `label`, `status`, `pending`, `cancelled`, `agent`, `parent` | Exact match with `=`, `!=`, `IN (...)`, or `NOT IN (...)`. Status accepts `InProgress` and `in_progress`. |
 | **Text** | `task`, `result`, `errors` | Case-insensitive contains with `~` or `!~`. |
 | **Time** | `created`, `started`, `finished`, `failed` | Compare with `>`, `>=`, `<`, or `<=` against a `YYYY-MM-DD` UTC date, epoch milliseconds, or an offset such as `-30m`, `-2h`, `-7d`, or `-1w`. |
 | **Presence** | Any optional field | Check with `IS EMPTY` or `IS NOT EMPTY`; `finished IS EMPTY` selects open tasks. |
@@ -381,7 +408,7 @@ The task queue schedules the work of your agents and returns their results.
 ```rust
 tasks.start();
 
-if let Some(answer) = tasks.finish_last().await {
+if let Some(answer) = tasks.finish_result("ORDER BY created DESC").await {
     println!("{answer}");
 }
 ```
@@ -392,13 +419,13 @@ if let Some(answer) = tasks.finish_last().await {
 | | Method | Description |
 |-|--------|-------------|
 | **Run** | `start()` | Begin processing tasks. |
-| **Wait** | `finish(query).await` | Wait for the matching tasks to be done and get their results. |
-| | `finish_all().await` | Wait for every task to be finished and get every result. |
-| | `finish_last().await` | Wait for every task to be finished and get the last result. |
-| | `finish_reason()` | Get why the last run ended. |
-| **Stop** | `cancel(query)` | Stop work on the matching tasks. |
-| | `cancel_all()` | Stop work on every task. |
-| | `is_cancelled(task)` | Check whether a task has been cancelled. |
+| | `finish_result(query).await` | Wait for matching tasks and get the first result in query order. |
+| | `finish_results(query).await` | Wait for matching tasks and get their results. |
+| | `finish_all_tasks().await` | Wait for every task and get every result. |
+| **Cancel** | `cancel_tasks(query)` | Stop work on matching tasks. |
+| | `cancel_all_tasks()` | Stop work on every task. |
+
+Cancellation is run-local: it does not change `status` or persist with the task. `start()` clears cancellation so unfinished tasks can resume. Use `cancelled = true` and `pending = true` to inspect either state.
 
 Task members:
 
@@ -419,12 +446,6 @@ Task members:
 | | `started_at` | Claim time, in milliseconds. |
 | | `finished_at` | Finish time, in milliseconds. |
 | | `failed_at` | Failure time, in milliseconds. |
-| **Checks** | `has_label(label)` | Check whether the task carries a label. |
-| | `is_todo()` | Check whether the task is waiting to be claimed. |
-| | `is_in_progress()` | Check whether an agent is working on the task. |
-| | `is_finished()` | Check whether the task finished. |
-| | `is_failed()` | Check whether the task failed. |
-| | `is_pending()` | Check whether the task is still todo or in progress. |
 
 See [`Task`](https://docs.rs/agentwerk/latest/agentwerk/agents/tasks/struct.Task.html).
 
@@ -503,9 +524,10 @@ analyst.task("Rank the products by value, then save the ranking to your knowledg
 Use hooks to create new tasks when certain results arrived:
 
 ```rust
-tasks.on_result(|queue, done, result| {
-    if done.has_label("research") {
-        queue.task(Task::labeled("report", result.clone()));
+let research = Query::from("label = research");
+tasks.on_result(move |queue, done, result| {
+    if research.matches(done) {
+        queue.add_task(Task::labeled("report", result.clone()));
     }
 });
 ```
@@ -525,7 +547,7 @@ let schema = Schema::new(json!({
     "required": ["title"]
 }))?;
 
-tasks.task(Task::new("Write a report.").schema(schema));
+tasks.add_task(Task::new("Write a report.").schema(schema));
 ```
 
 For small models, use shallow, focused schemas with few required fields, clear names, and simple enums. Split large results into labeled tasks with separate schemas, then combine them in a later task. Deep nesting, long property lists, and large `anyOf` or `oneOf` branches waste context and trigger retries.
@@ -541,7 +563,7 @@ For small models, use shallow, focused schemas with few required fields, clear n
 | **SchemaStore** | `SchemaStore::new()` | Create a store of schemas bound to labels. |
 | | `label(label, document)` | Bind a schema to a label. |
 | | `get(label)` | Read back the schema bound to a label. |
-| | `tasks.schemas(store)` | Enforce schemas for task results. |
+| | `tasks.set_schemas(store)` | Enforce schemas for task results. |
 
 A `SchemaStore` enforces schemas for all tasks with a certain label. Registering schemas centrally spares agents from passing complex schema structures during task creation (see `TasksTool`) and handovers (see `FinishTool`):
 
@@ -555,7 +577,7 @@ schemas.label("report", json!({
     "required": ["title"]
 }))?;
 
-tasks.schemas(&schemas);
+tasks.set_schemas(&schemas);
 ```
 
 See [`Schema`](https://docs.rs/agentwerk/latest/agentwerk/schemas/struct.Schema.html) and [`SchemaStore`](https://docs.rs/agentwerk/latest/agentwerk/schemas/struct.SchemaStore.html).
@@ -567,7 +589,7 @@ See [`Schema`](https://docs.rs/agentwerk/latest/agentwerk/schemas/struct.Schema.
 A `Policy` limits the turns, tokens, and time a run may spend, and allows configuring retries and compaction.
 
 ```rust
-tasks.policy(Policy {
+tasks.set_policy(Policy {
     max_turns: Some(40),
     max_time: Some(std::time::Duration::from_secs(300)),
     ..Default::default()
@@ -589,7 +611,7 @@ tasks.policy(Policy {
 | `request_retry_delay` | Wait this long between retries. |
 | `compaction_threshold` | Compact once the next request would fill this share of the window. |
 
-`policy(policy)` replaces the whole configuration, and `get_policy()` reads it back. A violated limit emits `EventKind::PolicyViolated`, see [`EventKind`](https://docs.rs/agentwerk/latest/agentwerk/event/enum.EventKind.html). `compaction_threshold` is the exception, see [Compaction](#compaction).
+`set_policy(policy)` replaces the whole configuration, and `get_policy()` reads it back. A violated limit emits `EventKind::PolicyViolated`, see [`EventKind`](https://docs.rs/agentwerk/latest/agentwerk/event/enum.EventKind.html). `compaction_threshold` is the exception, see [Compaction](#compaction).
 
 </details>
 
@@ -598,7 +620,7 @@ tasks.policy(Policy {
 Compaction summarizes a task's older messages once they no longer fit the model's context window.
 
 ```rust
-tasks.policy(Policy {
+tasks.set_policy(Policy {
     compaction_threshold: Some(0.7),
     ..Default::default()
 });
@@ -661,7 +683,7 @@ A `Queue` writes every task, reply, and event to its working directory (default 
 
 ```rust
 let tasks = Queue::load(".agentwerk")?;
-tasks.agent(my_agent);
+tasks.add_agent(my_agent);
 tasks.start();
 ```
 
@@ -837,8 +859,8 @@ Every event is written to the session log. You read events from the task queue, 
 |--------|-------------|
 | `find_event(query)` | Get the earliest recorded event matching an AQL query, or the first in the order it names. |
 | `find_events(query)` | Get every recorded event matching an AQL query, oldest first. |
-| `input_tokens()` / `output_tokens()` | Get token counts across the run's requests. |
-| `execution_duration()` | Get the elapsed execution duration. |
+| `get_input_tokens()` / `get_output_tokens()` | Get token counts across the run's requests. |
+| `get_duration()` | Get the elapsed execution duration. |
 
 You can query events with AQL syntax or closures.
 
@@ -871,9 +893,10 @@ See [`EventKind`](https://docs.rs/agentwerk/latest/agentwerk/event/enum.EventKin
 Hooks allow you to react to events.
 
 ```rust
-tasks.on_failure(|queue, _, failed| {
-    if failed.has_label("scan") {
-        queue.task(Task::labeled("triage", failed.task.clone()));
+let scan = Query::from("label = scan");
+tasks.on_failure(move |queue, _, failed| {
+    if scan.matches(failed) {
+        queue.add_task(Task::labeled("triage", failed.task.clone()));
     }
 });
 ```
@@ -884,12 +907,12 @@ tasks.on_failure(|queue, _, failed| {
 | | Method | Description |
 |-|--------|-------------|
 | **Observe** | `on_event(handler)` | Read every event as it is emitted. |
+| | `on_event_async(handler)` | Read every event in an async handler. |
 | | `on_result(handler)` | Read every finished task together with its result. |
-| | `on_failure(handler)` | Read every failure together with the task it happened in. |
-| | `on_task(handler)` | Read a task as it starts, finishes, or fails. |
-| **Await** | `on_event_async(handler)` | Read every event in an async handler. |
 | | `on_result_async(handler)` | Read every finished task with its result, in an async handler. |
+| | `on_failure(handler)` | Read every failure together with the task it happened in. |
 | | `on_failure_async(handler)` | Read every failure with its task, in an async handler. |
+| | `on_task(handler)` | Read a task as it starts, finishes, or fails. |
 | | `on_task_async(handler)` | Read a task lifecycle transition in an async handler. |
 
 Save replies of every finished task as a training example:
@@ -897,7 +920,7 @@ Save replies of every finished task as a training example:
 ```rust
 tasks.on_task(|queue, event, task| {
     if matches!(event.kind, EventKind::TaskFinished) {
-        let model = queue.model_for_agent(&event.agent_id);
+        let model = queue.get_model_for_agent(&event.agent_id);
         let _ = Trajectory::from_task(&event.agent_id, model.as_deref(), task)
             .save("datasets");
     }

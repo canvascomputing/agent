@@ -28,7 +28,7 @@ async fn walks_every_task_action() -> std::result::Result<(), Box<dyn std::error
     let secret = ten_digit_token();
 
     let tasks = Queue::new();
-    tasks.policy(Policy {
+    tasks.set_policy(Policy {
         max_turns: Some(20),
         max_time: Some(Duration::from_secs(120)),
         ..Default::default()
@@ -54,7 +54,7 @@ async fn walks_every_task_action() -> std::result::Result<(), Box<dyn std::error
         }
     });
 
-    tasks.agent(
+    tasks.add_agent(
         Agent::new()
             .provider(provider.clone())
             .model(&model)
@@ -66,7 +66,7 @@ async fn walks_every_task_action() -> std::result::Result<(), Box<dyn std::error
                  give the new task the task `Audit the archived record.`",
             ),
     );
-    tasks.agent(
+    tasks.add_agent(
         Agent::new()
             .provider(provider)
             .model(&model)
@@ -88,20 +88,18 @@ async fn walks_every_task_action() -> std::result::Result<(), Box<dyn std::error
             .tool(TasksTool),
     );
 
-    tasks.task(Task::new(DORMANT_NOTE));
-    tasks.task(
+    tasks.add_task(Task::new(DORMANT_NOTE));
+    tasks.add_task(
         Task::new(format!(
             "The vault combination is {secret}. Archive it and pass the audit on."
         ))
         .label("archive"),
     );
 
-    // Not `finish_all`: the decoy and the record the agent files are labelled
+    // Not `finish_all_tasks`: the decoy and the record the agent files are labelled
     // for nobody, so they stay `Todo` and a wait on the whole queue only ever
     // ends at the time cap.
-    tasks
-        .finish(|t: &agentwerk::Task| t.has_label("archive") || t.has_label("auditor"))
-        .await;
+    tasks.finish_results("label IN (archive, auditor)").await;
     common::print_result(&tasks);
 
     let used = seen.lock().unwrap().clone();
@@ -124,7 +122,7 @@ async fn walks_every_task_action() -> std::result::Result<(), Box<dyn std::error
     );
 
     let audit = tasks
-        .find_task(|t: &agentwerk::Task| t.has_label("auditor") && t.is_finished())
+        .find_task("label = auditor AND status = Finished")
         .expect("the auditor must finish the task handed to it");
     let answer = audit.result.unwrap_or_default().to_string();
     assert!(

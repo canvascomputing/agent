@@ -54,18 +54,20 @@ mod tests {
     async fn add_after_run_spawns_new_agent() {
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let tasks = Queue::new();
-        tasks.dir(results_dir.path().to_path_buf()).policy(Policy {
-            max_request_retries: 0,
-            request_retry_delay: Duration::from_millis(1),
-            ..Default::default()
-        });
+        tasks
+            .set_dir(results_dir.path().to_path_buf())
+            .set_policy(Policy {
+                max_request_retries: 0,
+                request_retry_delay: Duration::from_millis(1),
+                ..Default::default()
+            });
 
         let run_handle = tasks.start();
 
         tokio::time::sleep(Duration::from_millis(150)).await;
 
         let provider = MockProvider::with_results(vec![Ok(write_result_response("ok"))]);
-        tasks.agent(
+        tasks.add_agent(
             Agent::new()
                 .label("late")
                 .provider(provider.clone())
@@ -73,25 +75,25 @@ mod tests {
                 .role("test")
                 .tool(TasksTool),
         );
-        tasks.task(Task::new("hello").label("late"));
+        tasks.add_task(Task::new("hello").label("late"));
 
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
         loop {
             let done = tasks
-                .tasks()
+                .get_tasks()
                 .iter()
                 .any(|t| t.status == Status::Finished && t.task.as_str() == Some("hello"));
             if done {
                 break;
             }
             if tokio::time::Instant::now() > deadline {
-                run_handle.finish_all().await;
+                run_handle.finish_all_tasks().await;
                 panic!("late-added agent did not finish task within 5s");
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
 
-        run_handle.finish_all().await;
+        run_handle.finish_all_tasks().await;
 
         assert_eq!(provider.requests(), 1);
     }
@@ -100,23 +102,25 @@ mod tests {
     async fn host_finish_mid_run_walks_the_agent_off_and_still_drains() {
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let tasks = Queue::new();
-        tasks.dir(results_dir.path().to_path_buf()).policy(Policy {
-            max_request_retries: 0,
-            request_retry_delay: Duration::from_millis(1),
-            ..Default::default()
-        });
+        tasks
+            .set_dir(results_dir.path().to_path_buf())
+            .set_policy(Policy {
+                max_request_retries: 0,
+                request_retry_delay: Duration::from_millis(1),
+                ..Default::default()
+            });
 
         // The agent replies without calling its finish tool, so the task is
         // still in progress when the host resolves it out of band.
         let provider = MockProvider::with_results(vec![Ok(text_response("still working"))]);
-        tasks.agent(
+        tasks.add_agent(
             Agent::new()
                 .label("slow")
                 .provider(provider.clone())
                 .model("mock")
                 .role("test"),
         );
-        let key = tasks.task(Task::new("hello").label("slow"));
+        let key = tasks.add_task(Task::new("hello").label("slow"));
 
         // Resolved off the agent's own first turn rather than off a poll racing
         // it: polling made the host's win depend on scheduling, and losing it
@@ -125,11 +129,11 @@ mod tests {
         let resolved = key.clone();
         tasks.on_event(move |_, event| {
             if matches!(event.kind, EventKind::RequestFinished { .. }) {
-                let _ = host.set_finished(&resolved, "resolved by the host");
+                let _ = host.set_task_finished(&resolved, "resolved by the host");
             }
         });
 
-        tasks.finish_all().await;
+        tasks.finish_all_tasks().await;
 
         let task = tasks.get_task(&key).unwrap();
         assert_eq!(task.status, Status::Finished);
@@ -141,18 +145,20 @@ mod tests {
     async fn late_added_agent_joined_on_shutdown() {
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let tasks = Queue::new();
-        tasks.dir(results_dir.path().to_path_buf()).policy(Policy {
-            max_request_retries: 0,
-            request_retry_delay: Duration::from_millis(1),
-            ..Default::default()
-        });
+        tasks
+            .set_dir(results_dir.path().to_path_buf())
+            .set_policy(Policy {
+                max_request_retries: 0,
+                request_retry_delay: Duration::from_millis(1),
+                ..Default::default()
+            });
 
         let run_handle = tasks.start();
 
         tokio::time::sleep(Duration::from_millis(150)).await;
 
         let provider = MockProvider::with_results(vec![Ok(write_result_response("ok"))]);
-        tasks.agent(
+        tasks.add_agent(
             Agent::new()
                 .label("late")
                 .provider(provider)
@@ -160,25 +166,25 @@ mod tests {
                 .role("test")
                 .tool(TasksTool),
         );
-        tasks.task(Task::new("x").label("late"));
+        tasks.add_task(Task::new("x").label("late"));
 
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
         loop {
             let done = tasks
-                .tasks()
+                .get_tasks()
                 .iter()
                 .any(|t| t.status == Status::Finished && t.task.as_str() == Some("x"));
             if done {
                 break;
             }
             if tokio::time::Instant::now() > deadline {
-                run_handle.finish_all().await;
+                run_handle.finish_all_tasks().await;
                 panic!("late-added agent did not finish task within 5s");
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
 
-        tokio::time::timeout(Duration::from_secs(2), run_handle.finish_all())
+        tokio::time::timeout(Duration::from_secs(2), run_handle.finish_all_tasks())
             .await
             .expect("start() did not return within 2s of signal flip");
     }

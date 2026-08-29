@@ -149,7 +149,7 @@ async fn seeker_pool_finds_planted_indicators(
     });
 
     let tasks = Queue::new();
-    tasks.policy(Policy {
+    tasks.set_policy(Policy {
         max_time: Some(TIME_BUDGET),
         max_turns: Some(80),
         ..Default::default()
@@ -159,7 +159,7 @@ async fn seeker_pool_finds_planted_indicators(
     // The Seeker no longer derives a threat itself; each task already names one
     // observed construct per planted language, the way a Tracer would hand it off.
     for _ in 0..2 {
-        tasks.agent(
+        tasks.add_agent(
             Agent::new()
                 .provider(provider.clone())
                 .model(&model)
@@ -173,7 +173,7 @@ async fn seeker_pool_finds_planted_indicators(
     }
 
     // Trivial consumer so handed-off `security_analysis` tasks resolve.
-    tasks.agent(
+    tasks.add_agent(
         Agent::new()
             .provider(provider.clone())
             .model(&model)
@@ -197,10 +197,10 @@ async fn seeker_pool_finds_planted_indicators(
          network exfiltration from a compiled binary",
     ];
     for threat in named_threats {
-        tasks.task(Task::new(threat).label(SEEKER_LABEL));
+        tasks.add_task(Task::new(threat).label(SEEKER_LABEL));
     }
 
-    tasks.finish_all().await;
+    tasks.finish_all_tasks().await;
     common::print_result(&tasks);
 
     let calls = calls.lock().unwrap().clone();
