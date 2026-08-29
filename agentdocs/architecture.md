@@ -4,18 +4,18 @@ The invariants that shape how code fits together. Layout says where code lives; 
 
 ## Agent, Queue, Loop
 
-**A run has three stages: configure the `Agent`, bind it to a `Queue`, drive the queue with `start` (long-lived) or `finish` (process a fixed batch and return).**
+**A run has three stages: configure the `Agent`, bind it to a `Queue`, drive the queue with `start` or a `finish_*` wait.**
 
 ```rust
 let agent = Agent::from_env();
-tasks.agent(agent);
-tasks.finish_all().await;
+tasks.add_agent(agent);
+tasks.finish_all_tasks().await;
 ```
 
-- An `Agent` carries a `Weak<Queue>` that dangles until `agent(a)` binds it. `Queue::new` captures its own `Weak<Self>` through `Arc::new_cyclic` to have one to hand out.
-- `agent(a)` also drains tasks the agent queued in its private default queue into the shared one.
-- `start` and `finish` spawn one tokio task per registered agent. Each upgrades its `Weak` once and reads the shared store, policy, budget, and ending from the resulting `Arc`.
-- `tasks.task(value)` creates a task and returns its key; `tasks.reply(&key, content)` appends a text reply and the wait-for-input branch drives the next turn on the same replies. That is how multi-turn chat is built on one task.
+- An `Agent` carries a `Weak<Queue>` that dangles until `add_agent(a)` binds it. `Queue::new` captures its own `Weak<Self>` through `Arc::new_cyclic` to have one to hand out.
+- `add_agent(a)` also drains tasks the agent queued in its private default queue into the shared one.
+- `start` and the `finish_*` waits spawn one tokio task per registered agent. Each upgrades its `Weak` once and reads the shared store, policy, budget, and ending from the resulting `Arc`.
+- `tasks.add_task(value)` creates a task and returns its key; `tasks.add_reply(&key, content)` appends a text reply and the wait-for-input branch drives the next turn on the same replies. That is how multi-turn chat is built on one task.
 
 ## Shared Queue, Per-Agent Task
 
@@ -30,8 +30,8 @@ tasks.finish_all().await;
 **One label per agent, one label per task: the label is the only assignment mechanism, and the id `build` derives from it is the only identity. Neither does the other's job.**
 
 ```rust
-tasks.task(Task::new("Audit src/db.").label("scan")); // one scope
-tasks.task(Task::new("Audit src/db."));               // the default scope
+tasks.add_task(Task::new("Audit src/db.").label("scan")); // one scope
+tasks.add_task(Task::new("Audit src/db."));               // the default scope
 ```
 
 - `Agent::handles` is equality in both directions: an agent with no label matches only tasks with no label, the default scope. A label no agent serves never matches, since the queue never resolves one against the registered-agent set. It takes both labels rather than a receiver, because the loop's claim filter holds the label and the queue keeps that filter.
@@ -75,7 +75,7 @@ ToolResult::error(ctx.directives.render(EDIT_FILE_OLD_STRING_NOT_FOUND, &[("path
 
 `finish` records the result through `Queue::set_result`, which owns the result-validation-and-logging contract, then transitions the task to `Finished`. The loop enforces the rule on every agent but an interactive one: a turn that ends without a `finish` call is rejected and retried.
 
-- An interactive agent gets no `finish` at all, since ending the task would end the conversation. It pauses on a reply that calls no tool, and the host closes the task with `Queue::set_finished`. `bind_agent` is where the tool is registered, because only once the agent joins a queue is `interactive` final; registration only ever adds, so a host that registers `FinishTool` itself keeps it either way.
+- An interactive agent gets no `finish` at all, since ending the task would end the conversation. It pauses on a reply that calls no tool, and the host closes the task with `Queue::set_task_finished`. `bind_agent` is where the tool is registered, because only once the agent joins a queue is `interactive` final; registration only ever adds, so a host that registers `FinishTool` itself keeps it either way.
 - With `handover`, `finish` also inserts a child task pinned to that agent or label, with the current task recorded as its `parent`. The child's body is the result or the caller's `task` (with `{parent_key}`, `{parent_result_path}`, and `{parent_result}` substituted, the result last so nothing it carries is expanded again), and always ends with the parent key and its result file.
 - The child is inserted BEFORE the parent finishes, so a concurrent `work_left` check can never see an empty queue between them. `TaskFinished` and `TaskFailed` are emitted synchronously from the transition, and a count of in-flight transitions keeps `work_left` true until every handler returns, so an `on_result` follow-up lands first as well.
 - A turn that ends without a `finish` call pushes a corrective directive and retries, the same path a schema failure takes, bounded by `max_schema_retries`; exhaustion emits `PolicyViolated { MaxSchemaRetries, .. }` and `TaskFailed`. Both paths emit `SchemaRetried` first, and its `attempt` and `max_attempts` are bound into the directive that follows.
@@ -85,7 +85,7 @@ ToolResult::error(ctx.directives.render(EDIT_FILE_OLD_STRING_NOT_FOUND, &[("path
 
 Schemas and results:
 
-- `Task::schema(...)` attaches a `Schema` to one task. `Queue::schemas(&store)` binds a shared `SchemaStore` holding one schema per label, and `SchemaStore::label(label, document)` parses the document itself.
+- `Task::schema(...)` attaches a `Schema` to one task. `Queue::set_schemas(&store)` binds a shared `SchemaStore` holding one schema per label, and `SchemaStore::label(label, document)` parses the document itself.
 - `claim` reads the store once and writes the first match onto `Task::schema`, leaving a task that already carries one alone. Resolution happens there rather than in `insert` because a task the model filed gets its label there; `claim` ends in `save_task`, so the binding survives `load` and a resumed task keeps it.
 - That is what gives a task nobody could build a contract: a handover child, or one the model filed through `tasks`. No tool takes a schema document, since a small model does not write nested schemas reliably.
 - A handover validates its `result` against the parent's schema and carries none for the child, which takes one from its handover label at claim. A mismatch aborts before the child is inserted, so the operation stays atomic.
@@ -117,7 +117,7 @@ Schemas and results:
 `Queue::on_event(h)` pushes a handler onto an ordered chain. Every installed handler fires on every event, in installation order, and each is handed the queue and the same `&Event` rather than its own copy. When no handler is installed, `default_logger` runs in its place.
 
 - Every other hook is built on that chain, so a host's logger and a hook coexist.
-- The queue is the first parameter of every handler. That is what let the `create_task_on_*` and `edit_replies_on_event` hooks go: a handler files its own follow-up work through `queue.task(..)`, rewrites what the model reads next through `queue.edit_replies(&event.task_key, ..)`, and selects what it needs through `queue.find_*`, without an `Arc` into the queue that holds it.
+- The queue is the first parameter of every handler. That is what let the `create_task_on_*` and `edit_replies_on_event` hooks go: a handler files its own follow-up work through `queue.add_task(..)`, rewrites what the model reads next through `queue.edit_replies(&event.task_key, ..)`, and selects what it needs through `queue.find_*`, without an `Arc` into the queue that holds it.
 - `on_result` filters to `TaskFinished` and unwraps the stored result, `on_failure` filters on `EventKind::is_failure`, and `on_task` filters to the three lifecycle kinds. Each resolves `event.task_key` to a cloned `Task` first, which is why none fires on every kind: resolving on `TextChunkReceived` would copy a task's whole replies once per chunk. The queuing hook the `_async` twins share resolves a task on those same kinds only, for the same reason.
 - An event that announces a reply is emitted after that reply has landed in the store: `RequestFinished` after the assistant reply, `ToolCallFinished` and `ToolCallFailed` after the tool results of their turn. A handler therefore finds the message the event names, and what it rewrites through `queue.edit_replies` reaches the next request.
 - `RunStarted`, `RunFinished { reason }`, and a host-driven `set_failed` are emitted by the queue itself and arrive with an empty `agent_id`.
@@ -146,10 +146,10 @@ Schemas and results:
 
 ## The Lifecycle Is Three Verbs Over One Filter
 
-**`start` starts, `finish(matches)` waits, `cancel(matches)` stops. Both filters are a `Matcher<Task>`, so waiting for one pool or one task is the same call with a different filter, and `finish_all()` and `cancel_all()` pass the filter that names every task.**
+**`start` starts, `finish_results(matches)` waits, and `cancel_tasks(matches)` stops. `finish_all_tasks()` and `cancel_all_tasks()` name the whole queue; `finish_result(matches)` keeps the query but returns one value.**
 
-- `Queue::work_left(matches)` is the one definition of "not done yet", and both the main loop and `finish` ask it. A task has work left while it is pending, uncancelled, and not paused for a caller reply.
-- `Queue::cancel_filters` holds what `cancel` took off the queue. The claim and resume path reads it through `is_cancelled(task)`, so a cancelled task is neither claimed nor resumed and an agent already holding one is taken off it. The task stays `InProgress`.
+- `Queue::pending(matches)` is the scheduling definition of "not done yet", and both the main loop and `finish_results` ask it. AQL's `pending = true` means `Todo` or `InProgress` and not cancelled; the queue additionally excludes a task paused for a caller reply from a wait.
+- `Queue::cancel_filters` marks current matches through `Task::cancelled` and marks later insertions while the run remains active. Claim and resume both reject that private flag. `start()` clears filters and flags, so unfinished tasks resume without persisting cancellation.
 - A filter runs while the task store lock is held, so it MUST NOT call back into the queue: the same rule `find_task` and `find_tasks` carry.
 
 ## A String That Selects Anything Is AQL
@@ -195,7 +195,7 @@ tasks.find_events("tool_call_failed AND created > -1h");
 
 - `emit` writes the line before firing observers, so the log holds what every handler saw. One line per streamed token would outweigh every other line and repeats what `replies.jsonl` already carries, which is why the chunk kinds are excluded.
 - The write is best-effort, and a line this build cannot parse is skipped rather than costing every line after it, so a log written by another version still reports.
-- `find_events(condition)` reads the log; a count is `.len()` and any breakdown is a fold. `input_tokens()`, `output_tokens()`, and `execution_duration()` stay off the counters, because the limit check reads the same ones every 50ms.
+- `find_events(condition)` reads the log; a count is `.len()` and any breakdown is a fold. `get_input_tokens()`, `get_output_tokens()`, and `get_duration()` stay off the counters, because the limit check reads the same ones every 50ms.
 - The two sources can disagree, by design: delete the log mid-run and the three totals keep reporting while the finders find nothing.
 - `RequestFinished` is the one kind whose payload the statistics read: its `usage` adds to the two token totals. Every other kind contributes its count and nothing else.
 - `execution_duration` spans the first `TaskStarted` to the `RunFinished`, or to now while the run is going. `TaskStarted` is emitted from `claim`, so a host claiming a task without running the loop still starts the clock. `Queue::load` restarts it: `max_time` bounds the run resuming the session, not the one that wrote the log.
@@ -221,7 +221,7 @@ tasks.find_events("tool_call_failed AND created > -1h");
 **A run stops cleanly when any limit on `Policy` is breached. The check fires `EventKind::PolicyViolated` and exits the per-agent task.**
 
 - The loop calls `policy_violated` at each iteration; a non-`None` return takes the agent off the queue.
-- Token budgets read from the queue's live `Stats`; `max_time` reads from `Policy` and from `Stats::execution_duration()`. `finish_reason` reports the matching `FinishReason::PolicyViolated(violation)` once the run has ended.
-- `Queue::policy` replaces the whole value, so a host builds one from `Policy::default()`, and `get_policy` reads back what it stored, including the clamped `compaction_threshold`.
+- Token budgets read from the queue's live `Stats`; `max_time` reads from `Policy` and from `Stats::execution_duration()`. `get_finish_reason` reports the matching `FinishReason::PolicyViolated(violation)` once the run has ended.
+- `Queue::set_policy` replaces the whole value, so a host builds one from `Policy::default()`, and `get_policy` reads back what it stored, including the clamped `compaction_threshold`.
 - The schema-retry budget is applied per-task inside the result-writing path, not at the top of the loop.
 - `compaction_threshold` rides on `Policy` for the same per-queue snapshot every limit gets, but it is a trigger rather than a limit: `policy_violated` ignores it, and reaching it costs a compaction, not the run.

@@ -43,7 +43,7 @@ async fn separates_files_and_directories() -> std::result::Result<(), Box<dyn st
 
     let tasks = Queue::new();
 
-    tasks.policy(Policy {
+    tasks.set_policy(Policy {
         max_turns: Some(10),
         ..Default::default()
     });
@@ -62,15 +62,18 @@ async fn separates_files_and_directories() -> std::result::Result<(), Box<dyn st
              any text outside of tool calls.",
         )
         .tool(ListDirectoryTool);
-    tasks.agent(agent);
-    tasks.task(
+    tasks.add_agent(agent);
+    tasks.add_task(
         Task::new(
             "List the top-level entries in the working directory, separating files from directories.",
         )
         .schema(schema),
     );
 
-    let json = tasks.finish_last().await.unwrap_or_default();
+    let json = tasks
+        .finish_result("ORDER BY created DESC")
+        .await
+        .unwrap_or_default();
     common::print_result(&tasks);
 
     assert!(

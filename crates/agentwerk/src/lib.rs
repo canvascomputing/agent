@@ -19,7 +19,7 @@
 //!
 //! agent.task("Find every `pub trait` defined under src/ and explain each in one sentence.");
 //! let work = agent.start();
-//! let result = work.finish_last().await.unwrap();
+//! let result = work.finish_result("ORDER BY created DESC").await.unwrap();
 //!
 //! println!("{}", result.as_str().unwrap_or_default());
 //! # }
@@ -35,7 +35,7 @@
 //! let tasks = Queue::new();
 //!
 //! for _ in 0..4 {
-//!     tasks.agent(
+//!     tasks.add_agent(
 //!         Agent::from_env()
 //!             .label("research")
 //!             .tool(FetchUrlTool::new()),
@@ -48,12 +48,12 @@
 //!     "https://canvascomputing.org/products",
 //!     "https://canvascomputing.org/blog",
 //! ] {
-//!     tasks.task(Task::labeled("research", format!("Summarize {url}")));
+//!     tasks.add_task(Task::labeled("research", format!("Summarize {url}")));
 //! }
 //!
-//! tasks.finish_all().await;
+//! tasks.finish_all_tasks().await;
 //!
-//! for task in tasks.tasks() {
+//! for task in tasks.get_tasks() {
 //!     if let Some(result) = task.result {
 //!         println!("{}: {}", task.key, result);
 //!     }

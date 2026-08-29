@@ -17,7 +17,7 @@ pub fn build_provider() -> (Provider, Model) {
 /// The most recent result's text body, empty when absent or non-string.
 pub fn last_result_text(tasks: &Queue) -> String {
     tasks
-        .results()
+        .get_results()
         .pop()
         .and_then(|v| v.as_str().map(str::to_owned))
         .unwrap_or_default()
@@ -32,11 +32,11 @@ pub fn print_result(tasks: &Queue) {
             .count()
     };
     let json = serde_json::json!({
-        "response": tasks.results().pop().unwrap_or_default(),
+        "response": tasks.get_results().pop().unwrap_or_default(),
         "turns": count(EventName::TurnStarted),
         "tool_calls": count(EventName::ToolCallStarted),
-        "tokens_in": tasks.input_tokens(),
-        "tokens_out": tasks.output_tokens(),
+        "tokens_in": tasks.get_input_tokens(),
+        "tokens_out": tasks.get_output_tokens(),
     });
     eprintln!("{}", serde_json::to_string_pretty(&json).unwrap());
 }

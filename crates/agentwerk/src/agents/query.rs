@@ -43,7 +43,7 @@ impl Queryable for Event {
 /// let tasks = Queue::new();
 /// tasks.find_tasks("research");
 /// tasks.find_tasks(Query::new("label = research AND agent = research-1")?);
-/// tasks.find_tasks(|t: &Task| t.has_label("research"));
+/// tasks.find_tasks(|t: &Task| t.label.as_deref() == Some("research"));
 /// tasks.find_events("tool_call_failed");
 /// tasks.find_events(|e: &Event| e.kind.is_failure());
 /// # Ok(())
@@ -410,6 +410,8 @@ enum TaskField {
     Key,
     Label,
     Status,
+    Pending,
+    Cancelled,
     Agent,
     Parent,
     Task,
@@ -439,6 +441,8 @@ impl QueryField for TaskField {
         ("key", TaskField::Key),
         ("label", TaskField::Label),
         ("status", TaskField::Status),
+        ("pending", TaskField::Pending),
+        ("cancelled", TaskField::Cancelled),
         ("agent", TaskField::Agent),
         ("parent", TaskField::Parent),
         ("task", TaskField::Task),
@@ -455,6 +459,8 @@ impl QueryField for TaskField {
             TaskField::Key => Some(Cow::Borrowed(task.key.as_str())),
             TaskField::Label => task.label.as_deref().map(Cow::Borrowed),
             TaskField::Status => Some(Cow::Owned(task.status.to_string())),
+            TaskField::Pending => Some(Cow::Borrowed(bool_text(task.is_pending()))),
+            TaskField::Cancelled => Some(Cow::Borrowed(bool_text(task.is_cancelled()))),
             TaskField::Agent => task.assignee.as_deref().map(Cow::Borrowed),
             TaskField::Parent => task.parent.as_deref().map(Cow::Borrowed),
             TaskField::Task => Some(as_text(&task.task)),
@@ -698,6 +704,13 @@ const STATUSES: [Status; 4] = [
 
 fn millis_text<'a>(millis: u64) -> Cow<'a, str> {
     Cow::Owned(millis.to_string())
+}
+
+fn bool_text(value: bool) -> &'static str {
+    match value {
+        true => "true",
+        false => "false",
+    }
 }
 
 /// A time back from the text `of` wrote it as, the way `key` reads its own
@@ -1300,6 +1313,7 @@ mod tests {
         fn status(self, status: Status) -> Task;
         fn task(self, task: serde_json::Value) -> Task;
         fn finished(self, result: serde_json::Value) -> Task;
+        fn cancelled(self) -> Task;
         fn errored(self, kind: crate::event::EventKind) -> Task;
         fn created_at(self, millis: u64) -> Task;
         fn finished_at(self, millis: u64) -> Task;
@@ -1342,6 +1356,11 @@ mod tests {
         fn finished(mut self, result: serde_json::Value) -> Task {
             self.status = Status::Finished;
             self.result = Some(result);
+            self
+        }
+
+        fn cancelled(mut self) -> Task {
+            self.cancelled = true;
             self
         }
     }
@@ -1391,7 +1410,7 @@ mod tests {
 
     #[test]
     fn default_status_applies_to_a_closure_which_names_no_field() {
-        let q = (|t: &Task| t.has_label("scan"))
+        let q = (|t: &Task| t.label.as_deref() == Some("scan"))
             .into_query()
             .default_status(Status::Finished);
         assert!(q.matches(&task("t-1").label("scan").finished(json!("ok"))));
@@ -1407,7 +1426,7 @@ mod tests {
 
     #[test]
     fn a_closure_selects_the_tasks_it_accepts() {
-        let q = (|t: &Task| t.has_label("scan")).into_query();
+        let q = (|t: &Task| t.label.as_deref() == Some("scan")).into_query();
         assert!(q.matches(&task("t-1").label("scan")));
         assert!(!q.matches(&task("t-2").label("report")));
     }
@@ -1466,6 +1485,34 @@ mod tests {
         let q = parse("status NOT IN (Finished, Failed)");
         assert!(q.matches(&task("t-1").status(Status::Todo)));
         assert!(!q.matches(&task("t-2").status(Status::Failed)));
+    }
+
+    #[test]
+    fn pending_selects_unfinished_uncancelled_tasks() {
+        let pending = parse("pending = true");
+        let not_pending = parse("pending = false");
+        let tasks = [
+            task("t-1"),
+            task("t-2").status(Status::InProgress),
+            task("t-3").status(Status::Finished),
+            task("t-4").status(Status::Failed),
+            task("t-5").cancelled(),
+        ];
+
+        assert_eq!(ordered("pending = true", &tasks), ["t-1", "t-2"]);
+        assert_eq!(ordered("pending = false", &tasks), ["t-3", "t-4", "t-5"]);
+        assert!(pending.matches(&tasks[0]));
+        assert!(not_pending.matches(&tasks[4]));
+    }
+
+    #[test]
+    fn cancelled_selects_only_tasks_cancelled_in_this_run() {
+        let cancelled = parse("cancelled = true");
+        let active = parse("cancelled = false");
+
+        assert!(cancelled.matches(&task("t-1").cancelled()));
+        assert!(!cancelled.matches(&task("t-2")));
+        assert!(active.matches(&task("t-3")));
     }
 
     #[test]

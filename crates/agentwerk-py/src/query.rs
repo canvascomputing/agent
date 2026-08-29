@@ -40,6 +40,15 @@ impl PyQuery {
     fn __repr__(&self) -> String {
         format!("Query({:?})", self.source)
     }
+
+    /// Check whether a task matches this AQL query.
+    fn matches(&self, task: PyRef<'_, PyTask>) -> PyResult<bool> {
+        let query = self
+            .tasks
+            .as_ref()
+            .map_err(|error| value_error(error.to_string()))?;
+        Ok(query.matches(&task.inner))
+    }
 }
 
 /// The error a string neither field set accepts raises. One message where both

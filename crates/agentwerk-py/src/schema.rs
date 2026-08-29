@@ -42,7 +42,7 @@ impl PySchema {
 
 /// `SchemaStore` holds one schema per label and hands it to every task claimed
 /// under that label that carries no schema of its own. Give it to a task
-/// queue with `queue.schemas(store)`.
+/// queue with `queue.set_schemas(store)`.
 #[pyclass(name = "SchemaStore")]
 pub struct PySchemaStore {
     pub inner: Arc<SchemaStore>,

@@ -127,25 +127,22 @@ fn run_is_over(agent: &Agent, queue: &Queue) -> bool {
 /// Claim a `Todo` task for this agent, or resume one of its `InProgress`
 /// tasks; write the first message when there is none.
 fn claim<'a>(agent: &'a Agent, queue: &'a Arc<Queue>) -> Option<TaskContext<'a>> {
-    // Both filters own what they read: a compiled query outlives the call.
     let label = agent.label.clone();
-    let cancels = Arc::clone(queue);
     let claimable = (move |t: &Task| {
         t.status == Status::Todo
             && Agent::handles(label.as_deref(), t.label.as_deref())
-            && !cancels.is_cancelled(t)
+            && !t.is_cancelled()
     })
     .into_query();
     // On the id, not the label: agents sharing a label must not take over each
     // other's started tasks.
     let agent_id = agent.id().to_string();
     let interactive = agent.is_interactive();
-    let cancellations = Arc::clone(queue);
     let resumable = move |t: &Task| {
         t.status == Status::InProgress
             && t.assignee.as_deref() == Some(agent_id.as_str())
             && (t.is_waiting_for_response() || !interactive)
-            && !cancellations.is_cancelled(t)
+            && !t.is_cancelled()
     };
     let task_key = queue
         .claim(&claimable, agent.id())
@@ -169,14 +166,14 @@ fn claim<'a>(agent: &'a Agent, queue: &'a Arc<Queue>) -> Option<TaskContext<'a>>
     queue.emit(&task_key, agent_id, EventKind::TurnStarted);
 
     if task.replies.is_empty() {
-        queue.add_reply(&task_key, Reply::system_text(system_prompt.clone()));
+        queue.append_reply(&task_key, Reply::system_text(system_prompt.clone()));
         let Message::User {
             content: task_blocks,
         } = task.as_user_message()
         else {
             unreachable!("Task::as_user_message returns Message::User");
         };
-        queue.add_reply(&task_key, Reply::user(&task_blocks, &HashMap::new()));
+        queue.append_reply(&task_key, Reply::user(&task_blocks, &HashMap::new()));
     }
 
     Some(TaskContext {
@@ -206,7 +203,7 @@ fn evaluate(context: &mut TaskContext<'_>) -> Option<Step> {
     let Some(task) = context.task() else {
         return None;
     };
-    if context.queue.is_cancelled(&task) {
+    if task.is_cancelled() {
         return None;
     }
     // The transition itself already emitted the terminal event; the agent
@@ -249,7 +246,7 @@ fn silence_retry(context: &mut TaskContext<'_>) -> Option<Step> {
         max_attempts: max,
         message: detail.clone(),
     });
-    context.queue.add_reply(
+    context.queue.append_reply(
         &context.task_key,
         Reply::user_text(context.retry_directive(&detail, attempt, max)),
     );
@@ -268,7 +265,7 @@ mod tests {
     use crate::agents::agent::Agent;
     use crate::agents::r#loop::test_util::*;
     use crate::agents::tasks::{Author, Queue, Status, Task};
-    use crate::agents::Knowledge;
+    use crate::agents::{Knowledge, Query};
     use crate::tools::{FinishTool, TasksTool};
 
     // Run lifecycle
@@ -281,12 +278,14 @@ mod tests {
             Ok(write_result_response("b-done")),
         ]);
         let tasks = Queue::new();
-        tasks.dir(results_dir.path().to_path_buf()).policy(Policy {
-            max_request_retries: 0,
-            request_retry_delay: Duration::from_millis(1),
-            ..Default::default()
-        });
-        tasks.agent(
+        tasks
+            .set_dir(results_dir.path().to_path_buf())
+            .set_policy(Policy {
+                max_request_retries: 0,
+                request_retry_delay: Duration::from_millis(1),
+                ..Default::default()
+            });
+        tasks.add_agent(
             Agent::new()
                 .provider(provider)
                 .model("mock")
@@ -296,15 +295,15 @@ mod tests {
 
         tasks.start();
 
-        tasks.task("a");
-        tasks.task("b");
+        tasks.add_task("a");
+        tasks.add_task("b");
 
-        tokio::time::timeout(Duration::from_secs(5), tasks.finish_all())
+        tokio::time::timeout(Duration::from_secs(5), tasks.finish_all_tasks())
             .await
             .expect("finish did not finish within 5s");
 
-        assert_eq!(tasks.results().len(), 2);
-        assert_eq!(tasks.results().pop(), Some(serde_json::json!("b-done")));
+        assert_eq!(tasks.get_results().len(), 2);
+        assert_eq!(tasks.get_results().pop(), Some(serde_json::json!("b-done")));
     }
 
     // retry directive
@@ -317,13 +316,15 @@ mod tests {
             Ok(write_result_response("done")),
         ]);
         let tasks = Queue::new();
-        tasks.dir(results_dir.path().to_path_buf()).policy(Policy {
-            max_request_retries: 0,
-            request_retry_delay: Duration::from_millis(1),
-            max_schema_retries: Some(3),
-            ..Default::default()
-        });
-        tasks.agent(
+        tasks
+            .set_dir(results_dir.path().to_path_buf())
+            .set_policy(Policy {
+                max_request_retries: 0,
+                request_retry_delay: Duration::from_millis(1),
+                max_schema_retries: Some(3),
+                ..Default::default()
+            });
+        tasks.add_agent(
             Agent::new()
                 .provider(provider.clone())
                 .model("mock")
@@ -332,8 +333,8 @@ mod tests {
         );
 
         tasks.start();
-        tasks.task("go");
-        tokio::time::timeout(Duration::from_secs(5), tasks.finish_all())
+        tasks.add_task("go");
+        tokio::time::timeout(Duration::from_secs(5), tasks.finish_all_tasks())
             .await
             .expect("finish did not finish within 5s");
 
@@ -356,13 +357,15 @@ mod tests {
             Ok(write_result_response("done")),
         ]);
         let tasks = Queue::new();
-        tasks.dir(results_dir.path().to_path_buf()).policy(Policy {
-            max_request_retries: 0,
-            request_retry_delay: Duration::from_millis(1),
-            max_schema_retries: Some(3),
-            ..Default::default()
-        });
-        tasks.agent(
+        tasks
+            .set_dir(results_dir.path().to_path_buf())
+            .set_policy(Policy {
+                max_request_retries: 0,
+                request_retry_delay: Duration::from_millis(1),
+                max_schema_retries: Some(3),
+                ..Default::default()
+            });
+        tasks.add_agent(
             Agent::new()
                 .provider(provider.clone())
                 .model("mock")
@@ -371,8 +374,8 @@ mod tests {
         );
 
         tasks.start();
-        tasks.task("go");
-        tokio::time::timeout(Duration::from_secs(5), tasks.finish_all())
+        tasks.add_task("go");
+        tokio::time::timeout(Duration::from_secs(5), tasks.finish_all_tasks())
             .await
             .expect("finish did not finish within 5s");
 
@@ -395,17 +398,19 @@ mod tests {
             Ok(write_result_response("worker-done")),
         ]);
         let tasks = Queue::new();
-        tasks.dir(results_dir.path().to_path_buf()).policy(Policy {
-            max_request_retries: 0,
-            request_retry_delay: Duration::from_millis(1),
-            max_schema_retries: Some(3),
-            ..Default::default()
-        });
+        tasks
+            .set_dir(results_dir.path().to_path_buf())
+            .set_policy(Policy {
+                max_request_retries: 0,
+                request_retry_delay: Duration::from_millis(1),
+                max_schema_retries: Some(3),
+                ..Default::default()
+            });
         // An id is `<label>-<n>`, so the two agents read their own name back.
         fn addressed(_: &str) -> Option<&'static str> {
             Some("{agent}, CALL A TOOL")
         }
-        tasks.agent(
+        tasks.add_agent(
             Agent::new()
                 .label("scout")
                 .provider(scout.clone())
@@ -413,7 +418,7 @@ mod tests {
                 .role("test")
                 .directives(addressed),
         );
-        tasks.agent(
+        tasks.add_agent(
             Agent::new()
                 .label("worker")
                 .provider(worker.clone())
@@ -423,9 +428,9 @@ mod tests {
         );
 
         tasks.start();
-        tasks.task(Task::new("go").label("scout"));
-        tasks.task(Task::new("go").label("worker"));
-        tokio::time::timeout(Duration::from_secs(5), tasks.finish_all())
+        tasks.add_task(Task::new("go").label("scout"));
+        tasks.add_task(Task::new("go").label("worker"));
+        tokio::time::timeout(Duration::from_secs(5), tasks.finish_all_tasks())
             .await
             .expect("finish did not finish within 5s");
 
@@ -449,13 +454,15 @@ mod tests {
             Ok(write_result_response("done")),
         ]);
         let tasks = Queue::new();
-        tasks.dir(results_dir.path().to_path_buf()).policy(Policy {
-            max_request_retries: 0,
-            request_retry_delay: Duration::from_millis(1),
-            max_schema_retries: Some(3),
-            ..Default::default()
-        });
-        tasks.agent(
+        tasks
+            .set_dir(results_dir.path().to_path_buf())
+            .set_policy(Policy {
+                max_request_retries: 0,
+                request_retry_delay: Duration::from_millis(1),
+                max_schema_retries: Some(3),
+                ..Default::default()
+            });
+        tasks.add_agent(
             Agent::new()
                 .provider(provider.clone())
                 .model("mock")
@@ -463,8 +470,8 @@ mod tests {
         );
 
         tasks.start();
-        tasks.task("go");
-        tokio::time::timeout(Duration::from_secs(5), tasks.finish_all())
+        tasks.add_task("go");
+        tokio::time::timeout(Duration::from_secs(5), tasks.finish_all_tasks())
             .await
             .expect("finish did not finish within 5s");
 
@@ -486,13 +493,15 @@ mod tests {
             Ok(write_result_response("bob-done")),
         ]);
         let tasks = Queue::new();
-        tasks.dir(results_dir.path().to_path_buf()).policy(Policy {
-            max_request_retries: 0,
-            request_retry_delay: Duration::from_millis(1),
-            ..Default::default()
-        });
+        tasks
+            .set_dir(results_dir.path().to_path_buf())
+            .set_policy(Policy {
+                max_request_retries: 0,
+                request_retry_delay: Duration::from_millis(1),
+                ..Default::default()
+            });
         for label in ["alice", "bob"] {
-            tasks.agent(
+            tasks.add_agent(
                 Agent::new()
                     .label(label)
                     .provider(provider.clone())
@@ -503,13 +512,13 @@ mod tests {
         }
 
         tasks.start();
-        tasks.task(Task::new("a").label("alice"));
+        tasks.add_task(Task::new("a").label("alice"));
 
-        tokio::time::timeout(Duration::from_secs(5), tasks.finish_all())
+        tokio::time::timeout(Duration::from_secs(5), tasks.finish_all_tasks())
             .await
             .expect("finish did not finish within 5s");
 
-        assert_eq!(tasks.results().len(), 2);
+        assert_eq!(tasks.get_results().len(), 2);
         assert_eq!(tasks.get_task("t-2").unwrap().status, Status::Finished);
     }
 
@@ -524,17 +533,19 @@ mod tests {
             Ok(write_result_response("follow-up-done")),
         ]);
         let tasks = Queue::new();
-        tasks.dir(results_dir.path().to_path_buf()).policy(Policy {
-            max_request_retries: 0,
-            request_retry_delay: Duration::from_millis(1),
-            ..Default::default()
-        });
+        tasks
+            .set_dir(results_dir.path().to_path_buf())
+            .set_policy(Policy {
+                max_request_retries: 0,
+                request_retry_delay: Duration::from_millis(1),
+                ..Default::default()
+            });
         tasks.on_result(|queue, done, _| {
             if done.key == "t-1" {
-                queue.task(Task::new("follow up").label("alice"));
+                queue.add_task(Task::new("follow up").label("alice"));
             }
         });
-        tasks.agent(
+        tasks.add_agent(
             Agent::new()
                 .label("alice")
                 .provider(provider.clone())
@@ -543,13 +554,13 @@ mod tests {
         );
 
         tasks.start();
-        tasks.task(Task::new("a").label("alice"));
+        tasks.add_task(Task::new("a").label("alice"));
 
-        tokio::time::timeout(Duration::from_secs(5), tasks.finish_all())
+        tokio::time::timeout(Duration::from_secs(5), tasks.finish_all_tasks())
             .await
             .expect("finish did not finish within 5s");
 
-        assert_eq!(tasks.results().len(), 2);
+        assert_eq!(tasks.get_results().len(), 2);
         assert_eq!(tasks.get_task("t-2").unwrap().status, Status::Finished);
     }
 
@@ -567,18 +578,21 @@ mod tests {
             Ok(write_result_response("report-done")),
         ]);
         let tasks = Queue::new();
-        tasks.dir(results_dir.path().to_path_buf()).policy(Policy {
-            max_request_retries: 0,
-            request_retry_delay: Duration::from_millis(1),
-            ..Default::default()
-        });
+        tasks
+            .set_dir(results_dir.path().to_path_buf())
+            .set_policy(Policy {
+                max_request_retries: 0,
+                request_retry_delay: Duration::from_millis(1),
+                ..Default::default()
+            });
 
         // Both scans can finish at once, so the first handler to see the pair
         // takes the flag and the other returns: without it the report is filed
         // twice.
         let filed = Arc::new(AtomicBool::new(false));
+        let scan = Query::from("label = scan");
         tasks.on_result(move |queue, done, _| {
-            if !done.has_label("scan") {
+            if !scan.matches(done) {
                 return;
             }
             let scans = queue.find_results("label = scan AND status = Finished");
@@ -586,14 +600,14 @@ mod tests {
                 return;
             }
             let verdicts: Vec<String> = scans.iter().map(|scan| scan.to_string()).collect();
-            queue.task(Task::labeled(
+            queue.add_task(Task::labeled(
                 "report",
                 format!("Write the report from {}.", verdicts.join(" and ")),
             ));
         });
 
         for label in ["scan", "scan", "report"] {
-            tasks.agent(
+            tasks.add_agent(
                 Agent::new()
                     .label(label)
                     .provider(provider.clone())
@@ -603,10 +617,10 @@ mod tests {
         }
 
         tasks.start();
-        tasks.task(Task::labeled("scan", "scan a.py"));
-        tasks.task(Task::labeled("scan", "scan b.py"));
+        tasks.add_task(Task::labeled("scan", "scan a.py"));
+        tasks.add_task(Task::labeled("scan", "scan b.py"));
 
-        tokio::time::timeout(Duration::from_secs(5), tasks.finish_all())
+        tokio::time::timeout(Duration::from_secs(5), tasks.finish_all_tasks())
             .await
             .expect("finish did not finish within 5s");
 
@@ -629,11 +643,13 @@ mod tests {
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let provider = MockProvider::with_results(vec![Ok(write_result_response("done"))]);
         let tasks = Queue::new();
-        tasks.dir(results_dir.path().to_path_buf()).policy(Policy {
-            max_request_retries: 0,
-            request_retry_delay: Duration::from_millis(1),
-            ..Default::default()
-        });
+        tasks
+            .set_dir(results_dir.path().to_path_buf())
+            .set_policy(Policy {
+                max_request_retries: 0,
+                request_retry_delay: Duration::from_millis(1),
+                ..Default::default()
+            });
         let finished_events = Arc::new(AtomicUsize::new(0));
         let counter = Arc::clone(&finished_events);
         tasks.on_event(move |_, e| {
@@ -641,7 +657,7 @@ mod tests {
                 counter.fetch_add(1, Ordering::Relaxed);
             }
         });
-        tasks.agent(
+        tasks.add_agent(
             Agent::new()
                 .label("alice")
                 .provider(provider.clone())
@@ -650,9 +666,9 @@ mod tests {
         );
 
         tasks.start();
-        tasks.task(Task::new("a").label("alice"));
+        tasks.add_task(Task::new("a").label("alice"));
 
-        tokio::time::timeout(Duration::from_secs(5), tasks.finish_all())
+        tokio::time::timeout(Duration::from_secs(5), tasks.finish_all_tasks())
             .await
             .expect("finish did not finish within 5s");
 
@@ -668,23 +684,25 @@ mod tests {
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let provider = MockProvider::with_results(vec![Ok(text_response("hi"))]);
         let tasks = Queue::new();
-        tasks.dir(results_dir.path().to_path_buf()).policy(Policy {
-            max_request_retries: 0,
-            request_retry_delay: Duration::from_millis(1),
-            ..Default::default()
-        });
+        tasks
+            .set_dir(results_dir.path().to_path_buf())
+            .set_policy(Policy {
+                max_request_retries: 0,
+                request_retry_delay: Duration::from_millis(1),
+                ..Default::default()
+            });
         // Unfiltered on purpose: it also fires for the run-level events, whose
         // empty key names no task.
         tasks.on_event(|queue, event| {
             queue.edit_replies(&event.task_key, |_replies| {});
         });
-        tasks.agent(interactive_chatbot(&provider));
-        tasks.task("hello");
+        tasks.add_agent(interactive_chatbot(&provider));
+        tasks.add_task("hello");
         tasks.start();
 
         for _ in 0..200 {
             let last_is_assistant = tasks
-                .tasks()
+                .get_tasks()
                 .into_iter()
                 .next()
                 .and_then(|t| t.replies.last().map(|r| r.author == Author::Assistant))
@@ -697,7 +715,7 @@ mod tests {
         // Give the loop room to (wrongly) fire another request if buggy.
         tokio::time::sleep(Duration::from_millis(50)).await;
 
-        let task = tasks.tasks().into_iter().next().unwrap();
+        let task = tasks.get_tasks().into_iter().next().unwrap();
         assert_eq!(task.status, Status::InProgress);
         assert_eq!(
             task.replies.last().map(|r| r.author),
@@ -709,8 +727,8 @@ mod tests {
             "an edit must not trigger a re-request"
         );
 
-        tasks.cancel_all();
-        tasks.finish_all().await;
+        tasks.cancel_all_tasks();
+        tasks.finish_all_tasks().await;
     }
 
     #[tokio::test]
@@ -719,19 +737,21 @@ mod tests {
         let provider =
             MockProvider::with_results(vec![Ok(text_response("hi")), Ok(text_response("and now"))]);
         let tasks = Queue::new();
-        tasks.dir(results_dir.path().to_path_buf()).policy(Policy {
-            max_request_retries: 0,
-            request_retry_delay: Duration::from_millis(1),
-            ..Default::default()
-        });
-        tasks.agent(interactive_chatbot(&provider));
-        let key = tasks.task("hello");
+        tasks
+            .set_dir(results_dir.path().to_path_buf())
+            .set_policy(Policy {
+                max_request_retries: 0,
+                request_retry_delay: Duration::from_millis(1),
+                ..Default::default()
+            });
+        tasks.add_agent(interactive_chatbot(&provider));
+        let key = tasks.add_task("hello");
 
         let tasks_for_inject = Arc::clone(&tasks);
         let inject = async move {
             for _ in 0..200 {
                 let last_is_assistant = tasks_for_inject
-                    .tasks()
+                    .get_tasks()
                     .into_iter()
                     .next()
                     .and_then(|t| t.replies.last().map(|r| r.author == Author::Assistant))
@@ -742,7 +762,7 @@ mod tests {
                 tokio::time::sleep(Duration::from_millis(5)).await;
             }
             let task = tasks_for_inject
-                .tasks()
+                .get_tasks()
                 .into_iter()
                 .next()
                 .expect("task must exist");
@@ -752,7 +772,7 @@ mod tests {
                 Some(Author::Assistant),
                 "gate must pause on the assistant text reply",
             );
-            tasks_for_inject.reply(&key, "what next?");
+            tasks_for_inject.add_reply(&key, "what next?");
         };
 
         tokio::time::timeout(Duration::from_secs(5), async {
@@ -760,12 +780,16 @@ mod tests {
             // The pause is not the end of the task, so the reply lands first
             // and the finish then waits out the turn it sets off.
             inject.await;
-            tasks.finish_all().await;
+            tasks.finish_all_tasks().await;
         })
         .await
         .expect("test did not finish within 5s");
 
-        let task = tasks.tasks().into_iter().next().expect("task must exist");
+        let task = tasks
+            .get_tasks()
+            .into_iter()
+            .next()
+            .expect("task must exist");
         // The reply is what proves the resume: an interactive agent has no
         // `finish`, so the task pauses again instead of ending.
         assert_eq!(provider.requests(), 2, "the caller's reply drove a turn");
@@ -781,13 +805,15 @@ mod tests {
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let provider = MockProvider::with_results(vec![Ok(text_response("hi"))]);
         let tasks = Queue::new();
-        tasks.dir(results_dir.path().to_path_buf()).policy(Policy {
-            max_request_retries: 0,
-            max_time: Some(Duration::from_millis(500)),
-            ..Default::default()
-        });
-        tasks.agent(interactive_chatbot(&provider));
-        let key = tasks.task("hello");
+        tasks
+            .set_dir(results_dir.path().to_path_buf())
+            .set_policy(Policy {
+                max_request_retries: 0,
+                max_time: Some(Duration::from_millis(500)),
+                ..Default::default()
+            });
+        tasks.add_agent(interactive_chatbot(&provider));
+        let key = tasks.add_task("hello");
         tasks.start();
 
         // Pausing for input is no lifecycle transition and leaves the task
@@ -796,7 +822,7 @@ mod tests {
         let waited = key.clone();
         tokio::time::timeout(
             Duration::from_secs(5),
-            tasks.finish(move |t: &Task| t.key == waited),
+            tasks.finish_results(move |t: &Task| t.key == waited),
         )
         .await
         .expect("finish did not return within 5s");
@@ -806,7 +832,7 @@ mod tests {
             .replies
             .last()
             .is_some_and(|r| r.author == Author::Assistant));
-        tasks.cancel_all();
+        tasks.cancel_all_tasks();
     }
 
     #[tokio::test]
@@ -816,17 +842,19 @@ mod tests {
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let provider = MockProvider::with_results(vec![Ok(text_response("hi"))]);
         let tasks = Queue::new();
-        tasks.dir(results_dir.path().to_path_buf()).policy(Policy {
-            max_request_retries: 0,
-            request_retry_delay: Duration::from_millis(1),
-            max_time: Some(Duration::from_millis(500)),
-            ..Default::default()
-        });
+        tasks
+            .set_dir(results_dir.path().to_path_buf())
+            .set_policy(Policy {
+                max_request_retries: 0,
+                request_retry_delay: Duration::from_millis(1),
+                max_time: Some(Duration::from_millis(500)),
+                ..Default::default()
+            });
         let collected = collect_events(&tasks);
-        tasks.agent(interactive_chatbot(&provider));
-        tasks.task("hello");
+        tasks.add_agent(interactive_chatbot(&provider));
+        tasks.add_task("hello");
 
-        tokio::time::timeout(Duration::from_secs(5), tasks.finish_all())
+        tokio::time::timeout(Duration::from_secs(5), tasks.finish_all_tasks())
             .await
             .expect("test did not finish within 5s");
 
@@ -849,14 +877,16 @@ mod tests {
             Ok(text_response("hi again")),
         ]);
         let tasks = Queue::new();
-        tasks.dir(results_dir.path().to_path_buf()).policy(Policy {
-            max_request_retries: 0,
-            request_retry_delay: Duration::from_millis(1),
-            max_time: Some(Duration::from_millis(500)),
-            ..Default::default()
-        });
-        tasks.agent(interactive_chatbot(&provider));
-        let first_key = tasks.task("first chat");
+        tasks
+            .set_dir(results_dir.path().to_path_buf())
+            .set_policy(Policy {
+                max_request_retries: 0,
+                request_retry_delay: Duration::from_millis(1),
+                max_time: Some(Duration::from_millis(500)),
+                ..Default::default()
+            });
+        tasks.add_agent(interactive_chatbot(&provider));
+        let first_key = tasks.add_task("first chat");
         tasks.start();
 
         let tasks_for_drive = Arc::clone(&tasks);
@@ -871,7 +901,7 @@ mod tests {
                 }
                 tokio::time::sleep(Duration::from_millis(5)).await;
             }
-            let second_key = tasks_for_drive.task("second chat");
+            let second_key = tasks_for_drive.add_task("second chat");
             for _ in 0..400 {
                 if tasks_for_drive
                     .get_task(&second_key)
@@ -902,7 +932,7 @@ mod tests {
         };
 
         tokio::time::timeout(Duration::from_secs(5), async {
-            tokio::join!(tasks.finish_all(), drive);
+            tokio::join!(tasks.finish_all_tasks(), drive);
         })
         .await
         .expect("test did not finish within 5s");
@@ -915,21 +945,27 @@ mod tests {
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let provider = MockProvider::with_results(vec![Ok(text_response("hi"))]);
         let tasks = Queue::new();
-        tasks.dir(results_dir.path().to_path_buf()).policy(Policy {
-            max_request_retries: 0,
-            request_retry_delay: Duration::from_millis(1),
-            max_schema_retries: Some(1),
-            ..Default::default()
-        });
+        tasks
+            .set_dir(results_dir.path().to_path_buf())
+            .set_policy(Policy {
+                max_request_retries: 0,
+                request_retry_delay: Duration::from_millis(1),
+                max_schema_retries: Some(1),
+                ..Default::default()
+            });
         let collected = collect_events(&tasks);
-        tasks.agent(task_agent(&provider));
-        tasks.task("go");
+        tasks.add_agent(task_agent(&provider));
+        tasks.add_task("go");
 
-        tokio::time::timeout(Duration::from_secs(5), tasks.finish_all())
+        tokio::time::timeout(Duration::from_secs(5), tasks.finish_all_tasks())
             .await
             .expect("test did not finish within 5s");
 
-        let task = tasks.tasks().into_iter().next().expect("task must exist");
+        let task = tasks
+            .get_tasks()
+            .into_iter()
+            .next()
+            .expect("task must exist");
         assert_eq!(task.status, Status::Failed);
 
         let events = collected.lock().unwrap().clone();
@@ -957,22 +993,28 @@ mod tests {
             Ok(write_result_response("done")),
         ]);
         let tasks = Queue::new();
-        tasks.dir(results_dir.path().to_path_buf()).policy(Policy {
-            max_request_retries: 0,
-            request_retry_delay: Duration::from_millis(1),
-            max_schema_retries: Some(3),
-            ..Default::default()
-        });
-        tasks.agent(task_agent(&provider));
-        tasks.task("go");
+        tasks
+            .set_dir(results_dir.path().to_path_buf())
+            .set_policy(Policy {
+                max_request_retries: 0,
+                request_retry_delay: Duration::from_millis(1),
+                max_schema_retries: Some(3),
+                ..Default::default()
+            });
+        tasks.add_agent(task_agent(&provider));
+        tasks.add_task("go");
 
-        tokio::time::timeout(Duration::from_secs(5), tasks.finish_all())
+        tokio::time::timeout(Duration::from_secs(5), tasks.finish_all_tasks())
             .await
             .expect("test did not finish within 5s");
 
-        let task = tasks.tasks().into_iter().next().expect("task must exist");
+        let task = tasks
+            .get_tasks()
+            .into_iter()
+            .next()
+            .expect("task must exist");
         assert_eq!(task.status, Status::Finished);
-        assert_eq!(tasks.results().pop(), Some(serde_json::json!("done")));
+        assert_eq!(tasks.get_results().pop(), Some(serde_json::json!("done")));
     }
 
     #[tokio::test]
@@ -985,17 +1027,19 @@ mod tests {
             Ok(write_result_response("done")),
         ]);
         let tasks = Queue::new();
-        tasks.dir(results_dir.path().to_path_buf()).policy(Policy {
-            max_request_retries: 0,
-            request_retry_delay: Duration::from_millis(1),
-            max_schema_retries: Some(3),
-            ..Default::default()
-        });
+        tasks
+            .set_dir(results_dir.path().to_path_buf())
+            .set_policy(Policy {
+                max_request_retries: 0,
+                request_retry_delay: Duration::from_millis(1),
+                max_schema_retries: Some(3),
+                ..Default::default()
+            });
         let collected = collect_events(&tasks);
-        tasks.agent(task_agent(&provider));
-        tasks.task("go");
+        tasks.add_agent(task_agent(&provider));
+        tasks.add_task("go");
 
-        tokio::time::timeout(Duration::from_secs(5), tasks.finish_all())
+        tokio::time::timeout(Duration::from_secs(5), tasks.finish_all_tasks())
             .await
             .expect("test did not finish within 5s");
 
@@ -1023,16 +1067,18 @@ mod tests {
     async fn cancel_stops_a_running_workshop() {
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let tasks = Queue::new();
-        tasks.dir(results_dir.path().to_path_buf()).policy(Policy {
-            max_request_retries: 0,
-            request_retry_delay: Duration::from_millis(1),
-            ..Default::default()
-        });
+        tasks
+            .set_dir(results_dir.path().to_path_buf())
+            .set_policy(Policy {
+                max_request_retries: 0,
+                request_retry_delay: Duration::from_millis(1),
+                ..Default::default()
+            });
 
         tasks.start();
-        tasks.cancel_all();
+        tasks.cancel_all_tasks();
 
-        tokio::time::timeout(Duration::from_secs(2), tasks.finish_all())
+        tokio::time::timeout(Duration::from_secs(2), tasks.finish_all_tasks())
             .await
             .expect("run did not exit within 2s of cancel()");
     }
@@ -1041,22 +1087,24 @@ mod tests {
     async fn cancel_keeps_the_matching_pool_off_the_queue_while_others_run() {
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let tasks = Queue::new();
-        tasks.dir(results_dir.path().to_path_buf()).policy(Policy {
-            max_request_retries: 0,
-            request_retry_delay: Duration::from_millis(1),
-            ..Default::default()
-        });
+        tasks
+            .set_dir(results_dir.path().to_path_buf())
+            .set_policy(Policy {
+                max_request_retries: 0,
+                request_retry_delay: Duration::from_millis(1),
+                ..Default::default()
+            });
 
         let analyst = MockProvider::with_results(vec![Ok(write_result_response("analyzed"))]);
         let researcher = MockProvider::with_results(vec![Ok(write_result_response("hunted"))]);
-        tasks.agent(
+        tasks.add_agent(
             Agent::new()
                 .label("analysis")
                 .provider(analyst)
                 .model("mock")
                 .role("test"),
         );
-        tasks.agent(
+        tasks.add_agent(
             Agent::new()
                 .label("research")
                 .provider(researcher.clone())
@@ -1067,28 +1115,28 @@ mod tests {
         // Call off the research pool on the live run (start() resets signals), then
         // enqueue both tasks; the analysis pool runs on.
         tasks.start();
-        tasks.cancel(|t: &Task| t.has_label("research"));
-        tasks.task(Task::new("hunt").label("research"));
-        tasks.task(Task::new("triage").label("analysis"));
+        tasks.cancel_tasks("label = research");
+        tasks.add_task(Task::new("hunt").label("research"));
+        tasks.add_task(Task::new("triage").label("analysis"));
 
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
         loop {
             let analyzed = tasks
-                .tasks()
+                .get_tasks()
                 .iter()
                 .any(|t| t.status == Status::Finished && t.task.as_str() == Some("triage"));
             if analyzed {
                 break;
             }
             if tokio::time::Instant::now() > deadline {
-                tasks.cancel_all();
+                tasks.cancel_all_tasks();
                 panic!("analysis task did not finish within 5s");
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
 
         let hunt = tasks
-            .tasks()
+            .get_tasks()
             .into_iter()
             .find(|t| t.task.as_str() == Some("hunt"))
             .expect("research task exists");
@@ -1099,8 +1147,8 @@ mod tests {
         );
         assert_eq!(researcher.requests(), 0, "the researcher never ran");
 
-        tasks.cancel_all();
-        tokio::time::timeout(Duration::from_secs(2), tasks.finish_all())
+        tasks.cancel_all_tasks();
+        tokio::time::timeout(Duration::from_secs(2), tasks.finish_all_tasks())
             .await
             .expect("finish returns after cancel()");
     }
@@ -1113,12 +1161,14 @@ mod tests {
             Ok(write_result_response("second")),
         ]);
         let tasks = Queue::new();
-        tasks.dir(results_dir.path().to_path_buf()).policy(Policy {
-            max_request_retries: 0,
-            request_retry_delay: Duration::from_millis(1),
-            ..Default::default()
-        });
-        tasks.agent(
+        tasks
+            .set_dir(results_dir.path().to_path_buf())
+            .set_policy(Policy {
+                max_request_retries: 0,
+                request_retry_delay: Duration::from_millis(1),
+                ..Default::default()
+            });
+        tasks.add_agent(
             Agent::new()
                 .provider(provider)
                 .model("mock")
@@ -1126,15 +1176,15 @@ mod tests {
                 .tool(TasksTool),
         );
 
-        tasks.task("first");
-        tasks.finish_all().await;
-        assert_eq!(tasks.results().pop(), Some(serde_json::json!("first")));
+        tasks.add_task("first");
+        tasks.finish_all_tasks().await;
+        assert_eq!(tasks.get_results().pop(), Some(serde_json::json!("first")));
 
-        tasks.task("second");
-        tokio::time::timeout(Duration::from_secs(5), tasks.finish_all())
+        tasks.add_task("second");
+        tokio::time::timeout(Duration::from_secs(5), tasks.finish_all_tasks())
             .await
             .expect("second finish did not finish within 5s");
-        assert_eq!(tasks.results().pop(), Some(serde_json::json!("second")));
+        assert_eq!(tasks.get_results().pop(), Some(serde_json::json!("second")));
     }
 
     #[tokio::test]
@@ -1142,12 +1192,14 @@ mod tests {
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let provider = MockProvider::with_results(vec![Ok(write_result_response("forwarded"))]);
         let tasks = Queue::new();
-        tasks.dir(results_dir.path().to_path_buf()).policy(Policy {
-            max_request_retries: 0,
-            request_retry_delay: Duration::from_millis(1),
-            ..Default::default()
-        });
-        let agent = tasks.agent(
+        tasks
+            .set_dir(results_dir.path().to_path_buf())
+            .set_policy(Policy {
+                max_request_retries: 0,
+                request_retry_delay: Duration::from_millis(1),
+                ..Default::default()
+            });
+        let agent = tasks.add_agent(
             Agent::new()
                 .provider(provider)
                 .model("mock")
@@ -1155,12 +1207,15 @@ mod tests {
                 .tool(TasksTool),
         );
 
-        agent.task("hello");
+        agent.add_task("hello");
         let queue = agent.start();
-        tokio::time::timeout(Duration::from_secs(5), queue.finish_all())
+        tokio::time::timeout(Duration::from_secs(5), queue.finish_all_tasks())
             .await
             .expect("the run did not end within 5s");
-        assert_eq!(queue.results().pop(), Some(serde_json::json!("forwarded")));
+        assert_eq!(
+            queue.get_results().pop(),
+            Some(serde_json::json!("forwarded"))
+        );
     }
 
     // Cross-task memory
@@ -1188,23 +1243,25 @@ mod tests {
         ]);
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let tasks = Queue::new();
-        tasks.dir(results_dir.path().to_path_buf()).policy(Policy {
-            max_request_retries: 0,
-            request_retry_delay: Duration::from_millis(1),
-            max_schema_retries: Some(10),
-            max_time: Some(Duration::from_millis(500)),
-            ..Default::default()
-        });
-        tasks.agent(
+        tasks
+            .set_dir(results_dir.path().to_path_buf())
+            .set_policy(Policy {
+                max_request_retries: 0,
+                request_retry_delay: Duration::from_millis(1),
+                max_schema_retries: Some(10),
+                max_time: Some(Duration::from_millis(500)),
+                ..Default::default()
+            });
+        tasks.add_agent(
             Agent::new()
                 .provider(provider.clone())
                 .model("mock")
                 .role("test")
                 .tool(crate::tools::TasksTool),
         );
-        tasks.task("first");
-        tasks.task("second");
-        let _ = tasks.finish_all().await;
+        tasks.add_task("first");
+        tasks.add_task("second");
+        let _ = tasks.finish_all_tasks().await;
 
         let calls = provider.received();
         assert_eq!(calls.len(), 2);
@@ -1228,22 +1285,24 @@ mod tests {
         let store = Knowledge::load(knowledge_dir.path()).unwrap();
 
         let tasks = Queue::new();
-        tasks.dir(results_dir.path().to_path_buf()).policy(Policy {
-            max_request_retries: 0,
-            request_retry_delay: Duration::from_millis(1),
-            max_time: Some(Duration::from_millis(500)),
-            ..Default::default()
-        });
-        tasks.agent(
+        tasks
+            .set_dir(results_dir.path().to_path_buf())
+            .set_policy(Policy {
+                max_request_retries: 0,
+                request_retry_delay: Duration::from_millis(1),
+                max_time: Some(Duration::from_millis(500)),
+                ..Default::default()
+            });
+        tasks.add_agent(
             Agent::new()
                 .provider(provider.clone())
                 .model("mock")
                 .role("test")
                 .knowledge(&store),
         );
-        tasks.task("first");
-        tasks.task("second");
-        let _ = tasks.finish_all().await;
+        tasks.add_task("first");
+        tasks.add_task("second");
+        let _ = tasks.finish_all_tasks().await;
 
         let prompts = provider.received_system_prompts();
         assert_eq!(prompts.len(), 3);
@@ -1279,21 +1338,23 @@ mod tests {
         let store = Knowledge::load(knowledge_dir.path()).unwrap();
 
         let tasks = Queue::new();
-        tasks.dir(results_dir.path().to_path_buf()).policy(Policy {
-            max_request_retries: 0,
-            request_retry_delay: Duration::from_millis(1),
-            max_time: Some(Duration::from_millis(500)),
-            ..Default::default()
-        });
-        tasks.agent(
+        tasks
+            .set_dir(results_dir.path().to_path_buf())
+            .set_policy(Policy {
+                max_request_retries: 0,
+                request_retry_delay: Duration::from_millis(1),
+                max_time: Some(Duration::from_millis(500)),
+                ..Default::default()
+            });
+        tasks.add_agent(
             Agent::new()
                 .provider(provider.clone())
                 .model("mock")
                 .role("test")
                 .knowledge(&store),
         );
-        tasks.task("hi");
-        let _ = tasks.finish_all().await;
+        tasks.add_task("hi");
+        let _ = tasks.finish_all_tasks().await;
 
         let prompts = provider.received_system_prompts();
         assert_eq!(prompts.len(), 2);
@@ -1321,14 +1382,16 @@ mod tests {
         let store = Knowledge::load(knowledge_dir.path()).unwrap();
 
         let tasks = Queue::new();
-        tasks.dir(results_dir.path().to_path_buf()).policy(Policy {
-            max_request_retries: 0,
-            request_retry_delay: Duration::from_millis(1),
-            max_time: Some(Duration::from_millis(500)),
-            ..Default::default()
-        });
+        tasks
+            .set_dir(results_dir.path().to_path_buf())
+            .set_policy(Policy {
+                max_request_retries: 0,
+                request_retry_delay: Duration::from_millis(1),
+                max_time: Some(Duration::from_millis(500)),
+                ..Default::default()
+            });
 
-        tasks.agent(
+        tasks.add_agent(
             Agent::new()
                 .label("a")
                 .provider(p_a.clone())
@@ -1336,7 +1399,7 @@ mod tests {
                 .role("test")
                 .knowledge(&store),
         );
-        tasks.agent(
+        tasks.add_agent(
             Agent::new()
                 .label("b")
                 .provider(p_b.clone())
@@ -1345,12 +1408,12 @@ mod tests {
                 .knowledge(&store),
         );
 
-        tasks.task(Task::new("alice work").label("a"));
-        let _ = tasks.finish_all().await;
+        tasks.add_task(Task::new("alice work").label("a"));
+        let _ = tasks.finish_all_tasks().await;
         assert!(store.index().contains("alice-note"));
 
-        tasks.task(Task::new("bob work").label("b"));
-        let _ = tasks.finish_all().await;
+        tasks.add_task(Task::new("bob work").label("b"));
+        let _ = tasks.finish_all_tasks().await;
 
         let bob_prompts = p_b.received_system_prompts();
         assert_eq!(bob_prompts.len(), 1, "bob processed exactly one task");
@@ -1381,36 +1444,38 @@ mod tests {
             .unwrap();
 
         let tasks = Queue::new();
-        tasks.dir(results_dir.path().to_path_buf()).policy(Policy {
-            max_request_retries: 0,
-            request_retry_delay: Duration::from_millis(1),
-            max_time: Some(Duration::from_millis(500)),
-            ..Default::default()
-        });
-        tasks.schemas(&schemas);
-        tasks.agent(
+        tasks
+            .set_dir(results_dir.path().to_path_buf())
+            .set_policy(Policy {
+                max_request_retries: 0,
+                request_retry_delay: Duration::from_millis(1),
+                max_time: Some(Duration::from_millis(500)),
+                ..Default::default()
+            });
+        tasks.set_schemas(&schemas);
+        tasks.add_agent(
             Agent::new()
                 .provider(provider.clone())
                 .model("mock")
                 .role("test")
                 .label("analysis"),
         );
-        tasks.task(Task::new("audit").label("analysis"));
-        let _ = tasks.finish_all().await;
+        tasks.add_task(Task::new("audit").label("analysis"));
+        let _ = tasks.finish_all_tasks().await;
 
         let task_message = &user_texts(&provider.received()[0])[0];
         assert!(
             task_message.contains("verdict"),
             "the bound schema must be in the task message: {task_message:?}",
         );
-        assert_eq!(tasks.tasks()[0].status, Status::Finished);
+        assert_eq!(tasks.get_tasks()[0].status, Status::Finished);
     }
 
     #[tokio::test]
     async fn a_claimed_task_binds_its_schema_to_the_finish_tool() {
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let tasks = Queue::new();
-        tasks.dir(results_dir.path().to_path_buf());
+        tasks.set_dir(results_dir.path().to_path_buf());
         // Bound rather than cloned into the queue: `finish` is registered on
         // the agent that joins one, and this claims through that agent.
         let mut agent = Agent::new()
@@ -1418,7 +1483,7 @@ mod tests {
             .model("mock")
             .role("test");
         tasks.bind_agent(&mut agent);
-        tasks.task(
+        tasks.add_task(
             Task::new("audit").schema(
                 crate::schemas::Schema::new(serde_json::json!({
                     "type": "object",
@@ -1443,10 +1508,10 @@ mod tests {
     async fn a_claimed_task_offers_an_interactive_agent_no_finish_tool() {
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let tasks = Queue::new();
-        tasks.dir(results_dir.path().to_path_buf());
+        tasks.set_dir(results_dir.path().to_path_buf());
         let agent = interactive_chatbot(&MockProvider::with_results(vec![]));
-        tasks.agent(agent.clone());
-        tasks.task("hello");
+        tasks.add_agent(agent.clone());
+        tasks.add_task("hello");
 
         let context = claim(&agent, &tasks).expect("the task is claimable");
         assert!(context.tools.get("finish").is_none());
@@ -1456,7 +1521,7 @@ mod tests {
     async fn an_agent_leaves_a_task_its_label_mate_started_alone() {
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let tasks = Queue::new();
-        tasks.dir(results_dir.path().to_path_buf());
+        tasks.set_dir(results_dir.path().to_path_buf());
         let mut first = Agent::new()
             .label("resume_pool")
             .provider(MockProvider::with_results(vec![]))
@@ -1469,7 +1534,7 @@ mod tests {
             .role("test");
         tasks.bind_agent(&mut first);
         tasks.bind_agent(&mut second);
-        tasks.task(Task::new("work").label("resume_pool"));
+        tasks.add_task(Task::new("work").label("resume_pool"));
 
         claim(&first, &tasks).expect("the first agent claims the open task");
 
@@ -1501,22 +1566,24 @@ mod tests {
         let store = Knowledge::load(knowledge_dir.path()).unwrap();
 
         let tasks = Queue::new();
-        tasks.dir(results_dir.path().to_path_buf()).policy(Policy {
-            max_request_retries: 0,
-            request_retry_delay: Duration::from_millis(1),
-            max_time: Some(Duration::from_millis(500)),
-            ..Default::default()
-        });
-        tasks.agent(
+        tasks
+            .set_dir(results_dir.path().to_path_buf())
+            .set_policy(Policy {
+                max_request_retries: 0,
+                request_retry_delay: Duration::from_millis(1),
+                max_time: Some(Duration::from_millis(500)),
+                ..Default::default()
+            });
+        tasks.add_agent(
             Agent::new()
                 .provider(provider.clone())
                 .model("mock")
                 .role("test")
                 .knowledge(&store),
         );
-        tasks.task("first");
-        tasks.task("second");
-        let _ = tasks.finish_all().await;
+        tasks.add_task("first");
+        tasks.add_task("second");
+        let _ = tasks.finish_all_tasks().await;
 
         let prompts = provider.received_system_prompts();
         assert_eq!(prompts.len(), 4);

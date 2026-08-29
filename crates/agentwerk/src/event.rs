@@ -60,7 +60,7 @@ impl fmt::Display for PolicyViolation {
 /// Why execution ended.
 ///
 /// Carried by [`EventKind::RunFinished`], and handed back by
-/// `Queue::finish` once the wait is over.
+/// `Queue::finish_results` once the wait is over.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FinishReason {
@@ -223,7 +223,7 @@ impl fmt::Display for KnowledgeAction {
 ///         eprintln!("[{}] done {}", event.agent_id, event.task_key);
 ///     }
 /// });
-/// tasks.finish_all().await;
+/// tasks.finish_all_tasks().await;
 /// # }
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -267,7 +267,7 @@ impl Event {
 /// Most kinds name the agent they came from on the wrapping [`Event`].
 /// `RunStarted` and `RunFinished` come from the `Queue` itself and
 /// arrive with an empty `agent_id`, as does `TaskFailed` when the host
-/// fails a task through `Queue::set_failed`.
+/// fails a task through `Queue::set_task_failed`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum EventKind {

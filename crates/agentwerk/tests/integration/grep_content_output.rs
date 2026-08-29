@@ -81,12 +81,12 @@ async fn finds_string_buried_deep_in_line() -> std::result::Result<(), Box<dyn s
 
     let tasks = Queue::new();
 
-    tasks.policy(Policy {
+    tasks.set_policy(Policy {
         max_turns: Some(10),
         ..Default::default()
     });
     tasks.on_event(move |_, e| event_handler(e));
-    tasks.agent(
+    tasks.add_agent(
         Agent::new()
             .provider(provider)
             .model(&model)
@@ -103,12 +103,12 @@ async fn finds_string_buried_deep_in_line() -> std::result::Result<(), Box<dyn s
             .tool(ListDirectoryTool)
             .tool(ReadFileTool),
     );
-    tasks.task(format!(
+    tasks.add_task(format!(
         "Which source file contains the string `{NEEDLE}`? \
          Answer with the file path.",
     ));
 
-    tasks.finish_all().await;
+    tasks.finish_all_tasks().await;
     common::print_result(&tasks);
 
     let recorded = calls.lock().unwrap().clone();
@@ -225,12 +225,12 @@ async fn reads_column_slice_after_grep_locates_needle(
 
     let tasks = Queue::new();
 
-    tasks.policy(Policy {
+    tasks.set_policy(Policy {
         max_turns: Some(10),
         ..Default::default()
     });
     tasks.on_event(move |_, e| event_handler(e));
-    tasks.agent(
+    tasks.add_agent(
         Agent::new()
             .provider(provider)
             .model(&model)
@@ -245,14 +245,14 @@ async fn reads_column_slice_after_grep_locates_needle(
             .tool(GrepTool)
             .tool(ReadFileTool),
     );
-    tasks.task(format!(
+    tasks.add_task(format!(
         "Find the string `{NEEDLE}` in the working directory. \
          Use grep to locate it, then use read_file with column \
          and length to read just the surrounding context (not the \
          entire line). Report the file name.",
     ));
 
-    tasks.finish_all().await;
+    tasks.finish_all_tasks().await;
     common::print_result(&tasks);
 
     let recorded = calls.lock().unwrap().clone();

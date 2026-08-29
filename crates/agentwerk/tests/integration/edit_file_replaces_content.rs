@@ -22,7 +22,7 @@ async fn replaces_substring_in_place() -> std::result::Result<(), Box<dyn std::e
 
     let tasks = Queue::new();
 
-    tasks.policy(Policy {
+    tasks.set_policy(Policy {
         max_turns: Some(10),
         ..Default::default()
     });
@@ -39,13 +39,13 @@ async fn replaces_substring_in_place() -> std::result::Result<(), Box<dyn std::e
              calls.",
         )
         .tool(EditFileTool);
-    tasks.agent(agent);
-    tasks.task(
+    tasks.add_agent(agent);
+    tasks.add_task(
         "In `config.txt`, change the substring `old_value` to `new_value`. \
          Leave the rest of the file untouched.",
     );
 
-    tasks.finish_all().await;
+    tasks.finish_all_tasks().await;
     common::print_result(&tasks);
 
     assert!(

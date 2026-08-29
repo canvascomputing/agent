@@ -4,7 +4,7 @@
 use std::time::Duration;
 
 /// A `Policy` limits the turns, tokens, and time a run may spend, and allows
-/// configuring retries and compaction. Set it with `Queue::policy`,
+/// configuring retries and compaction. Set it with `Queue::set_policy`,
 /// building it from the fields you care about:
 /// `Policy { max_turns: Some(40), ..Default::default() }`.
 ///

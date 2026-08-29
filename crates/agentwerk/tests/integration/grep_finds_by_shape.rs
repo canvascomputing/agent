@@ -54,12 +54,12 @@ async fn grep_lists_unknown_function_names() -> std::result::Result<(), Box<dyn 
 
     let tasks = Queue::new();
 
-    tasks.policy(Policy {
+    tasks.set_policy(Policy {
         max_turns: Some(10),
         ..Default::default()
     });
     tasks.on_event(move |_, e| event_handler(e));
-    tasks.agent(
+    tasks.add_agent(
         Agent::new()
             .provider(provider)
             .model(&model)
@@ -72,12 +72,12 @@ async fn grep_lists_unknown_function_names() -> std::result::Result<(), Box<dyn 
             )
             .tool(GrepTool),
     );
-    tasks.task(
+    tasks.add_task(
         "List the names of every function defined in `geometry.rs`. The names are \
          not known in advance. Answer with the names.",
     );
 
-    tasks.finish_all().await;
+    tasks.finish_all_tasks().await;
     common::print_result(&tasks);
 
     let recorded = calls.lock().unwrap().clone();

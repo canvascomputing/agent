@@ -93,12 +93,12 @@ async fn finds_code_pattern_with_special_chars(
 
     let tasks = Queue::new();
 
-    tasks.policy(Policy {
+    tasks.set_policy(Policy {
         max_turns: Some(10),
         ..Default::default()
     });
     tasks.on_event(move |_, e| event_handler(e));
-    tasks.agent(
+    tasks.add_agent(
         Agent::new()
             .provider(provider)
             .model(&model)
@@ -115,12 +115,12 @@ async fn finds_code_pattern_with_special_chars(
             .tool(ListDirectoryTool)
             .tool(ReadFileTool),
     );
-    tasks.task(format!(
+    tasks.add_task(format!(
         "Which source file in this project contains the exact code \
          `{TARGET_SIGNATURE}`? Answer with the file's path."
     ));
 
-    tasks.finish_all().await;
+    tasks.finish_all_tasks().await;
     common::print_result(&tasks);
 
     let recorded = calls.lock().unwrap().clone();

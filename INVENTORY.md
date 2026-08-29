@@ -24,7 +24,7 @@ Signatures use one language-independent notation, so a Rust row and a Python row
 - A generic bound erases to what the caller passes: `T: Serialize` is `json`. A type's own parameters stay: `ToolBuilder<D, H>`, `ProviderResult<T>`.
 - Domain type names stay as the code writes them: `Task`, `Event`, `Status`, `PolicyViolation`.
 - A constant shows `= value` when the value is one scalar or short string, and nothing when it is longer or computed.
-- Names are never re-cased: `is_todo`, never `isTodo`. Every name here is greppable in `src/`.
+- Names are never re-cased: `get_tasks`, never `getTasks`. Every name here is greppable in `src/`.
 
 ## Rows
 
@@ -381,7 +381,7 @@ The rules the tables never repeat.
 | Rust | `.is_ordered(): boolean` | private |
 | Rust | `.sort(records: T[]): void` | private |
 | Rust | `trait QueryField: Copy + PartialEq + Debug + 'static { Record, FIELDS, of, kind, is_optional, shorthand, label, tie_break, sort_unordered, canonical, compare, named, name, spellings, allows, operators }` | private |
-| Rust | `enum TaskField { Key, Label, Status, Agent, Parent, Task, Result, Errors, Created, Started, Finished, Failed }` | private |
+| Rust | `enum TaskField { Key, Label, Status, Pending, Cancelled, Agent, Parent, Task, Result, Errors, Created, Started, Finished, Failed }` | private |
 | Rust | `impl QueryField for TaskField` | private |
 | Rust | `enum EventField { Event, Agent, Task, Label, Created, Payload }` | private |
 | Rust | `impl QueryField for EventField` | private |
@@ -394,6 +394,7 @@ The rules the tables never repeat.
 | Rust | `.compare(left: F.Record, right: F.Record): Ordering` | private |
 | Rust | `STATUSES: Status[]` | private |
 | Rust | `millis_text(millis: number): string` | private |
+| Rust | `bool_text(value: boolean): string` | private |
 | Rust | `millis(value: string): number` | private |
 | Rust | `time_value(field: F, value: string): number throws QueryError` | private |
 | Rust | `ago(offset: string): number?` | private |
@@ -491,8 +492,8 @@ The rules the tables never repeat.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| both | `Queue.set_finished(key: string, result: json): void throws TaskError` | pub |
-| both | `.set_failed(key: string): void throws TaskError` | pub |
+| both | `Queue.set_task_finished(key: string, result: json): void throws TaskError` | pub |
+| both | `.set_task_failed(key: string): void throws TaskError` | pub |
 | both | `.edit_replies(key: string, editor: (replies: Reply[]) => void): this` | pub |
 | Python | `.edit_replies(key, editor)`: the editor returns the new list, or `None` to keep the old one, where Rust mutates in place. An editor that raises, or returns anything but `Reply` objects, raises here | |
 
@@ -505,7 +506,7 @@ The rules the tables never repeat.
 | Rust | `.save_task(key: string): void` | private |
 | Rust | `.write_tool_output(key: string, tool_use_id: string, content: string): string?` | crate |
 | Rust | `.claim(query: Query, agent_id: string): string?` | crate |
-| Rust | `.add_reply(key: string, reply: Reply): void` | crate |
+| Rust | `.append_reply(key: string, reply: Reply): void` | crate |
 | Rust | `.set_finished_by(key: string, agent: string): void throws TaskError` | crate |
 | Rust | `.set_failed_by(key: string, agent: string): void throws TaskError` | crate |
 | Rust | `.set_final_status(key: string, status: Status, agent: string): void throws TaskError` | private |
@@ -530,12 +531,6 @@ The rules the tables never repeat.
 | Python | `Task(task, schema=s)` | |
 | Rust | `.parent(key: string): this` | pub |
 | Python | `Task(task, parent=key)` | |
-| both | `.has_label(label: string): boolean` | pub |
-| both | `.is_todo(): boolean` | pub |
-| both | `.is_finished(): boolean` | pub |
-| both | `.is_failed(): boolean` | pub |
-| both | `.is_in_progress(): boolean` | pub |
-| both | `.is_pending(): boolean` | pub |
 | Rust | `impl From<&str> for Task` | pub |
 | Rust | `impl From<String> for Task` | pub |
 | Rust | `impl From<json> for Task` | pub |
@@ -543,7 +538,7 @@ The rules the tables never repeat.
 | Rust | `impl Persist for Task` | pub |
 | Rust | `impl AsUserMessage for Task` | pub |
 | Rust | `Status` | pub |
-| Python | a string: `"todo"`, `"in_progress"`, `"finished"`, `"failed"`. The five `is_*` predicates read better than comparing it | |
+| Python | a string: `"todo"`, `"in_progress"`, `"finished"`, `"failed"` | |
 | Rust | `.Todo` | pub |
 | Rust | `.InProgress` | pub |
 | Rust | `.Finished` | pub |
@@ -556,6 +551,9 @@ The rules the tables never repeat.
 |----------|------|------------|
 | Rust | `Task.is_waiting_for_response(): boolean` | crate |
 | Rust | `.is_paused(): boolean` | crate |
+| Rust | `.is_pending(): boolean` | crate |
+| Rust | `.is_cancelled(): boolean` | crate |
+| Rust | `.cancelled: boolean`: transient and excluded from serialization | crate |
 | Rust | `.to_messages(): Message[]` | crate |
 | Rust | `.stamp_transition(next: Status, now: number): void` | crate |
 | Rust | `TaskResult { key: string, value: json? }` | crate |
@@ -577,9 +575,9 @@ The rules the tables never repeat.
 | Rust | `.new(): this` | pub |
 | Python | `Queue()` | |
 | both | `.load(tasks_dir: string): this throws io::Error` | pub |
-| both | `.input_tokens(): number` | pub |
-| both | `.output_tokens(): number` | pub |
-| both | `.execution_duration(): number?` | pub |
+| both | `.get_input_tokens(): number` | pub |
+| both | `.get_output_tokens(): number` | pub |
+| both | `.get_duration(): number?` | pub |
 | both | `.on_event(handler: (queue: Queue, event: Event) => void): this` | pub |
 | both | `.on_event_async(handler: (queue: Queue, event: Event) => Promise<void>): this` | pub |
 | Python | `.on_event_async(handler)`: takes an `async def`, awaited on the event loop awaiting `finish`, so a handler that raises prints its traceback and does not stop the run | |
@@ -592,35 +590,34 @@ The rules the tables never repeat.
 | both | `.on_task(handler: (queue: Queue, event: Event, task: Task) => void): this` | pub |
 | both | `.on_task_async(handler: (queue: Queue, event: Event, task: Task) => Promise<void>): this` | pub |
 | Python | `.on_task_async(handler)`: takes an `async def`, on the same terms as `on_event_async` | |
-| both | `.model_for_agent(agent_id: string): string?` | pub |
-| both | `.policy(policy: Policy): this` | pub |
+| both | `.get_model_for_agent(agent_id: string): string?` | pub |
+| both | `.set_policy(policy: Policy): this` | pub |
 | both | `.get_policy(): Policy` | pub |
-| both | `.dir(dir: string): this` | pub |
+| both | `.set_dir(dir: string): this` | pub |
 | both | `.get_dir(): string` | pub |
-| both | `.schemas(store: SchemaStore): this` | pub |
-| both | `.task(task: Task): string` | pub |
-| both | `.task(task)`: a string or json value stands in for the `Task` | |
-| both | `.reply(key: string, content: string): this` | pub |
+| both | `.set_schemas(store: SchemaStore): this` | pub |
+| both | `.add_task(task: Task): string` | pub |
+| both | `.add_task(task)`: a string or json value stands in for the `Task` | |
+| both | `.add_reply(key: string, content: string): this` | pub |
 | both | `.get_task(key: string): Task?` | pub |
-| both | `.tasks(): Task[]` | pub |
+| both | `.get_tasks(): Task[]` | pub |
 | both | `.find_tasks(predicate: Matcher<Task>): Task[]` | pub |
 | Python | `.find_tasks(predicate)`: accepts a `Query` or a callable | |
 | both | `.find_task(predicate: Matcher<Task>): Task?` | pub |
 | both | `.find_events(matcher: Matcher<Event>): Event[]`: an AQL string stands in for the `Query<Event>` | pub |
 | both | `.find_event(matcher: Matcher<Event>): Event?` | pub |
-| both | `.cancel(matches: Matcher<Task>): this` | pub |
-| Python | `.cancel(matches)`: accepts a `Query` or a callable | |
-| both | `.cancel_all(): this` | pub |
-| both | `.is_cancelled(task: Task): boolean` | pub |
-| both | `.agent(agent: Agent): this` | pub |
+| both | `.cancel_tasks(matches: Matcher<Task>): this` | pub |
+| Python | `.cancel_tasks(matches)`: accepts a `Query` or a callable | |
+| both | `.cancel_all_tasks(): this` | pub |
+| both | `.add_agent(agent: Agent): this` | pub |
 | both | `.start(): this` | pub |
-| both | `.finish(matches: Matcher<Task>): Promise<json[]>` | pub |
-| Python | `.finish(matches)`: accepts a `Query` or a callable | |
-| both | `.finish_all(): Promise<json[]>` | pub |
-| both | `.finish_last(): Promise<json?>` | pub |
-| Rust | `.finish_reason(): FinishReason?` | pub |
-| Python | `.finish_reason(): str?`: the string it prints as, such as `policy_violated(turns)` | |
-| both | `.results(): json[]` | pub |
+| both | `.finish_results(matches: Matcher<Task>): Promise<json[]>` | pub |
+| Python | `.finish_results(matches)`: accepts a `Query` or a callable | |
+| both | `.finish_all_tasks(): Promise<json[]>` | pub |
+| both | `.finish_result(matches: Matcher<Task>): Promise<json?>` | pub |
+| Rust | `.get_finish_reason(): FinishReason?` | pub |
+| Python | `.get_finish_reason(): str?`: the string it prints as, such as `policy_violated(turns)` | |
+| both | `.get_results(): json[]` | pub |
 | both | `.find_results(matches: Matcher<Task>): json[]` | pub |
 | both | `.find_results(query)`: an AQL string stands in for the `Query` | |
 | both | `.find_result(matches: Matcher<Task>): json?` | pub |
@@ -2350,6 +2347,7 @@ Binds `agents/query.rs`. One class covers both field sets: Python carries no typ
 |----------|------|------------|
 | Rust | `PyQuery { source: string, tasks: Query<Task> throws QueryError, events: Query<Event> throws QueryError }` | python |
 | Rust | `.new(query: string): this throws PyErr`, raising only where both field sets reject the string | python |
+| Rust | `.matches(task: PyTask): boolean throws PyErr` | python |
 | Rust | `.__repr__(): string` | python |
 
 ### Internal
@@ -2420,12 +2418,6 @@ Binds `agents/tasks/task.rs`.
 |----------|------|------------|
 | Rust | `PyTask { inner: Task }` | python |
 | Rust | `.new(task: any, label: string?, schema: PySchema?, parent: string?): this throws PyErr` | python |
-| Rust | `.has_label(label: string): boolean` | python |
-| Rust | `.is_todo(): boolean` | python |
-| Rust | `.is_finished(): boolean` | python |
-| Rust | `.is_failed(): boolean` | python |
-| Rust | `.is_in_progress(): boolean` | python |
-| Rust | `.is_pending(): boolean` | python |
 | Rust | `.key(): string` | python |
 | Rust | `.status(): string` | python |
 | Rust | `.task(): any throws PyErr` | python |
@@ -2462,44 +2454,43 @@ Binds `agents/tasks/queue.rs` and `store.rs`.
 | Rust | `PyQueue { inner: Queue }` | python |
 | Rust | `.new(): this` | python |
 | Rust | `.load(tasks_dir: string): this throws PyErr` | python |
-| Rust | `.agent(agent: PyAgent): this throws PyErr` | python |
-| Rust | `.task(task: PyTask): string throws PyErr` | python |
-| Rust | `.reply(key: string, content: string): this` | python |
-| Rust | `.set_finished(key: string, result: any): void throws PyErr` | python |
-| Rust | `.set_failed(key: string): void throws PyErr` | python |
-| Rust | `.policy(policy: PyPolicy): this` | python |
+| Rust | `.add_agent(agent: PyAgent): this throws PyErr` | python |
+| Rust | `.add_task(task: PyTask): string throws PyErr` | python |
+| Rust | `.add_reply(key: string, content: string): this` | python |
+| Rust | `.set_task_finished(key: string, result: any): void throws PyErr` | python |
+| Rust | `.set_task_failed(key: string): void throws PyErr` | python |
+| Rust | `.set_policy(policy: PyPolicy): this` | python |
 | Rust | `.get_policy(): PyPolicy` | python |
-| Rust | `.dir(dir: string): this` | python |
+| Rust | `.set_dir(dir: string): this` | python |
 | Rust | `.get_dir(): string` | python |
-| Rust | `.schemas(store: PySchemaStore): this` | python |
+| Rust | `.set_schemas(store: PySchemaStore): this` | python |
 | Rust | `.on_event(handler: any): this` | python |
 | Rust | `.on_event_async(handler: any): this` | python |
 | Rust | `.on_result(handler: any): this` | python |
 | Rust | `.on_result_async(handler: any): this` | python |
 | Rust | `.on_failure(handler: any): this` | python |
 | Rust | `.on_failure_async(handler: any): this` | python |
-| Rust | `.model_for_agent(agent_id: string): string?` | python |
+| Rust | `.get_model_for_agent(agent_id: string): string?` | python |
 | Rust | `.get_task(key: string): PyTask? throws PyErr` | python |
-| Rust | `.tasks(): PyTask[] throws PyErr` | python |
+| Rust | `.get_tasks(): PyTask[] throws PyErr` | python |
 | Rust | `.find_tasks(predicate: any): PyTask[] throws PyErr` | python |
 | Rust | `.find_task(predicate: any): PyTask? throws PyErr` | python |
 | Rust | `.on_task(handler: any): this` | python |
 | Rust | `.on_task_async(handler: any): this` | python |
 | Rust | `.edit_replies(key: string, editor: any): this throws PyErr` | python |
 | Rust | `.start(): this` | python |
-| Rust | `.finish(matches: any): Promise<any[]> throws PyErr` | python |
-| Rust | `.finish_all(): Promise<any[]> throws PyErr` | python |
-| Rust | `.finish_last(): Promise<any?> throws PyErr` | python |
-| Rust | `.finish_reason(): string?` | python |
-| Rust | `.cancel(matches: any): this throws PyErr` | python |
-| Rust | `.cancel_all(): this` | python |
-| Rust | `.is_cancelled(task: PyTask): boolean` | python |
+| Rust | `.finish_results(matches: any): Promise<any[]> throws PyErr` | python |
+| Rust | `.finish_all_tasks(): Promise<any[]> throws PyErr` | python |
+| Rust | `.finish_result(matches: any): Promise<any?> throws PyErr` | python |
+| Rust | `.get_finish_reason(): string?` | python |
+| Rust | `.cancel_tasks(matches: any): this throws PyErr` | python |
+| Rust | `.cancel_all_tasks(): this` | python |
 | Rust | `.find_events(matches: any): PyEvent[] throws PyErr` | python |
 | Rust | `.find_event(matches: any): PyEvent? throws PyErr` | python |
-| Rust | `.input_tokens(): number` | python |
-| Rust | `.output_tokens(): number` | python |
-| Rust | `.execution_duration(): number?` | python |
-| Rust | `.results(): any[] throws PyErr` | python |
+| Rust | `.get_input_tokens(): number` | python |
+| Rust | `.get_output_tokens(): number` | python |
+| Rust | `.get_duration(): number?` | python |
+| Rust | `.get_results(): any[] throws PyErr` | python |
 | Rust | `.find_results(query: any): any[] throws PyErr` | python |
 | Rust | `.find_result(query: any): any? throws PyErr` | python |
 

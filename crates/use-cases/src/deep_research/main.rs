@@ -41,16 +41,16 @@ async fn main() {
     let workdir = prepare_workdir();
 
     let tasks = Queue::new();
-    tasks.dir(workdir.clone());
+    tasks.set_dir(workdir.clone());
     let schemas = SchemaStore::new();
     schemas
         .label("report", final_report_schema_value())
         .expect("report schema is well-formed");
-    tasks.schemas(&schemas);
+    tasks.set_schemas(&schemas);
     let on_ctrl_c = Arc::clone(&tasks);
     tokio::spawn(async move {
         if tokio::signal::ctrl_c().await.is_ok() {
-            on_ctrl_c.cancel_all();
+            on_ctrl_c.cancel_all_tasks();
         }
     });
     tasks.on_event(move |_, e| event_handler(e));
@@ -80,9 +80,9 @@ async fn main() {
         .label("report")
         .tool(TasksTool);
 
-    tasks.agent(researcher_1);
-    tasks.agent(researcher_2);
-    tasks.agent(report_writer);
+    tasks.add_agent(researcher_1);
+    tasks.add_agent(researcher_2);
+    tasks.add_agent(report_writer);
 
     let starter = format!(
         "Question: {question}\n\nKick off the research chain. You are researcher_1; pick \
@@ -99,13 +99,13 @@ async fn main() {
         "minLength": 100
     }))
     .expect("starter schema is well-formed");
-    tasks.task(
+    tasks.add_task(
         Task::new(starter)
             .schema(starter_schema)
             .label("researcher_1"),
     );
 
-    tasks.finish_all().await;
+    tasks.finish_all_tasks().await;
     let outcome = classify_outcome(&tasks);
 
     print_chain_summary(&tasks);
@@ -138,7 +138,7 @@ fn print_research_outcome(tasks: &Queue, outcome: &Outcome) {
             eprintln!(" {label}");
             eprintln!("══════════════════════════════════════════════════════════\n");
             let researched: Vec<(String, String)> = tasks
-                .find_tasks(|t: &Task| t.is_finished() && !t.has_label("report"))
+                .find_tasks("status = Finished AND label != report")
                 .iter()
                 .filter_map(|t| Some((t.key.clone(), plain_text(t.result.as_ref()?))))
                 .collect();
@@ -167,7 +167,7 @@ fn classify_outcome(tasks: &Queue) -> Outcome {
     if let Some(result) = reported {
         return Outcome::Report(result);
     }
-    if tasks.finish_reason() == Some(FinishReason::Cancelled) {
+    if tasks.get_finish_reason() == Some(FinishReason::Cancelled) {
         return Outcome::Cancelled;
     }
     Outcome::Stalled
@@ -175,7 +175,7 @@ fn classify_outcome(tasks: &Queue) -> Outcome {
 
 fn print_chain_summary(tasks: &Queue) {
     eprintln!("\nChain summary:");
-    let all = tasks.tasks();
+    let all = tasks.get_tasks();
     if all.is_empty() {
         eprintln!("  (no tasks)");
         return;
@@ -207,7 +207,7 @@ fn print_stats(tasks: &Queue) {
     eprintln!("\nStats:");
     eprintln!(
         "  Duration : {:?}",
-        tasks.execution_duration().unwrap_or_default()
+        tasks.get_duration().unwrap_or_default()
     );
     let count = |kind: EventName| tasks.find_events(kind.name()).len() as u64;
     let done = count(EventName::TaskFinished);
@@ -221,8 +221,8 @@ fn print_stats(tasks: &Queue) {
     eprintln!("  Tasks  : {done} done, {failed} failed ({success:.0}%)");
     eprintln!(
         "  Tokens   : {} in, {} out",
-        tasks.input_tokens(),
-        tasks.output_tokens(),
+        tasks.get_input_tokens(),
+        tasks.get_output_tokens(),
     );
     eprintln!(
         "  Activity : {} requests · {} tool calls · {} failed requests",

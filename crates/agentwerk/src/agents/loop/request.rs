@@ -95,7 +95,7 @@ pub(super) async fn run(context: &mut TaskContext<'_>) -> Option<Step> {
         }
     };
 
-    context.queue.add_reply(
+    context.queue.append_reply(
         &context.task_key,
         crate::agents::tasks::Reply::assistant(&response.content),
     );
@@ -395,16 +395,18 @@ mod tests {
 
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let tasks = Queue::new();
-        tasks.dir(results_dir.path().to_path_buf()).policy(Policy {
-            max_request_retries: 3,
-            request_retry_delay: Duration::from_millis(1),
-            ..Default::default()
-        });
+        tasks
+            .set_dir(results_dir.path().to_path_buf())
+            .set_policy(Policy {
+                max_request_retries: 3,
+                request_retry_delay: Duration::from_millis(1),
+                ..Default::default()
+            });
         tasks.on_event(move |_, e| handler(e));
-        tasks.agent(Agent::new().provider(provider).model("mock").role("test"));
-        tasks.task("go");
+        tasks.add_agent(Agent::new().provider(provider).model("mock").role("test"));
+        tasks.add_task("go");
 
-        let run_fut = tasks.finish_all();
+        let run_fut = tasks.finish_all_tasks();
         let check_fut = async {
             for _ in 0..20 {
                 tokio::task::yield_now().await;
@@ -454,22 +456,24 @@ mod tests {
         };
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let tasks = Queue::new();
-        tasks.dir(results_dir.path().to_path_buf()).policy(Policy {
-            max_request_retries: 3,
-            request_retry_delay: Duration::from_secs(60),
-            ..Default::default()
-        });
+        tasks
+            .set_dir(results_dir.path().to_path_buf())
+            .set_policy(Policy {
+                max_request_retries: 3,
+                request_retry_delay: Duration::from_secs(60),
+                ..Default::default()
+            });
         tasks.on_event(move |_, e| handler(e));
-        tasks.agent(Agent::new().provider(provider).model("mock").role("test"));
-        tasks.task("go");
+        tasks.add_agent(Agent::new().provider(provider).model("mock").role("test"));
+        tasks.add_task("go");
 
-        let run_fut = tasks.finish_all();
+        let run_fut = tasks.finish_all_tasks();
         let cancel_handle = Arc::clone(&tasks);
         let cancel_fut = async {
             for _ in 0..20 {
                 tokio::task::yield_now().await;
             }
-            cancel_handle.cancel_all();
+            cancel_handle.cancel_all_tasks();
             tokio::time::advance(Duration::from_millis(100)).await;
             for _ in 0..20 {
                 tokio::task::yield_now().await;
@@ -512,25 +516,27 @@ mod tests {
             .build();
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let tasks = Queue::new();
-        tasks.dir(results_dir.path().to_path_buf()).policy(Policy {
-            max_request_retries: 0,
-            request_retry_delay: Duration::from_millis(1),
-            max_schema_retries: Some(10),
-            max_time: Some(Duration::from_millis(500)),
-            ..Default::default()
-        });
+        tasks
+            .set_dir(results_dir.path().to_path_buf())
+            .set_policy(Policy {
+                max_request_retries: 0,
+                request_retry_delay: Duration::from_millis(1),
+                max_schema_retries: Some(10),
+                max_time: Some(Duration::from_millis(500)),
+                ..Default::default()
+            });
         if let Some(handler) = handler {
             tasks.on_event(handler);
         }
-        tasks.agent(
+        tasks.add_agent(
             Agent::new()
                 .provider(provider.clone())
                 .model("mock")
                 .role("test")
                 .tool(boom),
         );
-        tasks.task("go");
-        let _ = tasks.finish_all().await;
+        tasks.add_task("go");
+        let _ = tasks.finish_all_tasks().await;
         (provider, tasks, results_dir)
     }
 
@@ -580,7 +586,7 @@ mod tests {
             "boom exchange must be gone: {:?}",
             provider.received()[1],
         );
-        assert_eq!(tasks.tasks()[0].status, Status::Finished);
+        assert_eq!(tasks.get_tasks()[0].status, Status::Finished);
     }
 
     #[tokio::test]
@@ -632,7 +638,7 @@ mod tests {
         let (_provider, _tasks, dir) = run_boom(Some(Box::new(drop_failed_exchange))).await;
 
         let reloaded = Queue::load(dir.path()).unwrap();
-        let task = reloaded.tasks().into_iter().next().unwrap();
+        let task = reloaded.get_tasks().into_iter().next().unwrap();
         // The boom exchange is gone; the later finish_task call remains.
         let keeps_boom = task.replies.iter().any(|reply| {
             reply.content.iter().any(|b| match b {
