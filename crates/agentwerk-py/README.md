@@ -438,7 +438,7 @@ if answer is not None:
 | **Cancel** | `cancel_tasks(query)` | Stop work on matching tasks. |
 | | `cancel_all_tasks()` | Stop work on every task. |
 
-Cancellation is run-local: it does not change `status` or persist with the task. `start()` clears cancellation so unfinished tasks can resume. Use `cancelled = true` and `pending = true` to inspect either state.
+Cancellation is run-local: it does not change `status` or persist with the task. `start()` clears cancellation so unfinished tasks can resume. Use `task.is_cancelled()` for a task you hold, or `cancelled = true` and `pending = true` to select by run state.
 
 Task members:
 
@@ -451,6 +451,7 @@ Task members:
 | | `reporter` | Identifier of the agent that created the task. |
 | | `assignee` | Identifier of the agent that claimed the task. |
 | **Outcome** | `status` | The task lifecycle status. |
+| | `is_cancelled()` | Check whether this run has taken the task off the queue. |
 | | `result` | The result the agent produced. |
 | | `errors` | The failures recorded against the task, as events. |
 | | `replies` | Messages exchanged with the model. |
