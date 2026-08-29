@@ -62,17 +62,30 @@ def test_task_selection_uses_aql_status_and_pending_fields(queue):
     assert not aw.Query("status = Failed").matches(task)
 
 
-def test_task_label_and_status_predicates_are_not_public(queue):
-    task = queue.get_task(queue.add_task("work"))
-    for name in (
-        "has_label",
-        "is_todo",
-        "is_in_progress",
-        "is_finished",
-        "is_failed",
-        "is_pending",
-    ):
-        assert not hasattr(task, name)
+def test_task_predicates_follow_label_status_and_cancellation(queue):
+    todo_key = queue.add_task(aw.Task("scan", label="scan"))
+    todo = queue.get_task(todo_key)
+    assert todo.has_label("scan")
+    assert not todo.has_label("report")
+    assert todo.is_todo()
+    assert todo.is_pending()
+    assert not todo.is_in_progress()
+    assert not todo.is_finished()
+    assert not todo.is_failed()
+    assert not todo.is_cancelled()
+
+    queue.cancel_tasks("label = scan")
+    cancelled = queue.get_task(todo_key)
+    assert cancelled.is_cancelled()
+    assert not cancelled.is_pending()
+
+    finished_key = queue.add_task("finish")
+    queue.set_task_finished(finished_key, "done")
+    assert queue.get_task(finished_key).is_finished()
+
+    failed_key = queue.add_task("fail")
+    queue.set_task_failed(failed_key)
+    assert queue.get_task(failed_key).is_failed()
 
 
 def test_removed_queue_names_are_not_compatibility_aliases(queue):

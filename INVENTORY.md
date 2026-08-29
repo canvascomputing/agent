@@ -531,6 +531,12 @@ The rules the tables never repeat.
 | Python | `Task(task, schema=s)` | |
 | Rust | `.parent(key: string): this` | pub |
 | Python | `Task(task, parent=key)` | |
+| both | `.has_label(label: string): boolean` | pub |
+| both | `.is_todo(): boolean` | pub |
+| both | `.is_finished(): boolean` | pub |
+| both | `.is_failed(): boolean` | pub |
+| both | `.is_in_progress(): boolean` | pub |
+| both | `.is_pending(): boolean` | pub |
 | both | `.is_cancelled(): boolean` | pub |
 | Rust | `impl From<&str> for Task` | pub |
 | Rust | `impl From<String> for Task` | pub |
@@ -552,7 +558,6 @@ The rules the tables never repeat.
 |----------|------|------------|
 | Rust | `Task.is_waiting_for_response(): boolean` | crate |
 | Rust | `.is_paused(): boolean` | crate |
-| Rust | `.is_pending(): boolean` | crate |
 | Rust | `.cancelled: boolean`: transient and excluded from serialization | crate |
 | Rust | `.to_messages(): Message[]` | crate |
 | Rust | `.stamp_transition(next: Status, now: number): void` | crate |
@@ -2418,6 +2423,12 @@ Binds `agents/tasks/task.rs`.
 |----------|------|------------|
 | Rust | `PyTask { inner: Task }` | python |
 | Rust | `.new(task: any, label: string?, schema: PySchema?, parent: string?): this throws PyErr` | python |
+| Rust | `.has_label(label: string): boolean` | python |
+| Rust | `.is_todo(): boolean` | python |
+| Rust | `.is_finished(): boolean` | python |
+| Rust | `.is_failed(): boolean` | python |
+| Rust | `.is_in_progress(): boolean` | python |
+| Rust | `.is_pending(): boolean` | python |
 | Rust | `.is_cancelled(): boolean` | python |
 | Rust | `.key(): string` | python |
 | Rust | `.status(): string` | python |
