@@ -237,42 +237,15 @@ impl Knowledge {
 /// `<dir>/knowledge/pages/<slug>.md` with its frontmatter above the body.
 #[derive(Debug, Clone)]
 pub struct Page {
-    pub(crate) slug: String,
+    pub slug: String,
     /// What kind of page this is, `Knowledge` by default.
-    pub(crate) kind: String,
-    pub(crate) description: String,
-    pub(crate) content: String,
-    pub(crate) tags: Vec<String>,
+    pub kind: String,
+    pub description: String,
+    pub content: String,
+    pub tags: Vec<String>,
 }
 
 impl Page {
-    /// Create a knowledge page with the default `Knowledge` kind and no tags.
-    pub fn new(
-        slug: impl Into<String>,
-        description: impl Into<String>,
-        content: impl Into<String>,
-    ) -> Self {
-        Self {
-            slug: slug.into(),
-            kind: DEFAULT_PAGE_TYPE.to_string(),
-            description: description.into(),
-            content: content.into(),
-            tags: Vec::new(),
-        }
-    }
-
-    /// Set the page kind.
-    pub fn kind(mut self, kind: impl Into<String>) -> Self {
-        self.kind = kind.into();
-        self
-    }
-
-    /// Set the page tags.
-    pub fn tags(mut self, tags: impl IntoIterator<Item = impl Into<String>>) -> Self {
-        self.tags = tags.into_iter().map(Into::into).collect();
-        self
-    }
-
     pub fn get_slug(&self) -> &str {
         &self.slug
     }
@@ -868,15 +841,25 @@ mod tests {
     }
 
     fn save_page(store: &Knowledge, slug: &str, description: &str, content: &str, tags: &[&str]) {
-        let page = Page::new(slug, description, content).tags(tags.iter().copied());
+        let page = Page {
+            slug: slug.to_string(),
+            kind: String::new(),
+            description: description.to_string(),
+            content: content.to_string(),
+            tags: tags.iter().map(|tag| tag.to_string()).collect(),
+        };
         store.get_pages().save(page).unwrap()
     }
 
     #[test]
-    fn page_constructor_builders_and_getters_expose_every_value() {
-        let page = Page::new("build", "How to build.", "Run make.")
-            .kind("Guide")
-            .tags(["build", "local"]);
+    fn page_getters_expose_every_field() {
+        let page = Page {
+            slug: "build".into(),
+            kind: "Guide".into(),
+            description: "How to build.".into(),
+            content: "Run make.".into(),
+            tags: vec!["build".into(), "local".into()],
+        };
         assert_eq!(page.get_slug(), "build");
         assert_eq!(page.get_kind(), "Guide");
         assert_eq!(page.get_description(), "How to build.");

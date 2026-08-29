@@ -167,11 +167,8 @@ The rules the tables never repeat.
 | both | `.get_index(): string` | pub |
 | both | `.get_pages(): Pages` | pub |
 | both | `.clear(): void throws KnowledgeError` | pub |
-| Rust | `Page { slug: string, kind: string, description: string, content: string, tags: string[] }` | pub with crate-private fields |
+| Rust | `Page { slug: string, kind: string, description: string, content: string, tags: string[] }` | pub |
 | Python | `Page(slug, description, content, kind=.., tags=..)`: a struct literal becomes a constructor, so the optional fields move last | |
-| Rust | `.new(slug: string, description: string, content: string): this` | pub |
-| Rust | `.kind(kind: string): this` | pub |
-| Rust | `.tags(tags: string[]): this` | pub |
 | both | `.get_slug(): string` | pub |
 | both | `.get_kind(): string` | pub |
 | both | `.get_description(): string` | pub |
