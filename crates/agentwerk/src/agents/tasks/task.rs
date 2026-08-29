@@ -140,8 +140,33 @@ impl Task {
         self
     }
 
+    /// Check whether the task carries `label`.
+    pub fn has_label(&self, label: &str) -> bool {
+        self.label.as_deref() == Some(label)
+    }
+
+    /// Check whether the task is waiting to be claimed.
+    pub fn is_todo(&self) -> bool {
+        self.status == Status::Todo
+    }
+
+    /// Check whether the task finished.
+    pub fn is_finished(&self) -> bool {
+        self.status == Status::Finished
+    }
+
+    /// Check whether the task failed.
+    pub fn is_failed(&self) -> bool {
+        self.status == Status::Failed
+    }
+
+    /// Check whether an agent is working on the task.
+    pub fn is_in_progress(&self) -> bool {
+        self.status == Status::InProgress
+    }
+
     /// Check whether the task still has work for an agent in this run.
-    pub(crate) fn is_pending(&self) -> bool {
+    pub fn is_pending(&self) -> bool {
         matches!(self.status, Status::Todo | Status::InProgress) && !self.cancelled
     }
 
@@ -559,6 +584,30 @@ mod tests {
     fn label_replaces_the_previous_one() {
         let t = Task::new("body").label("research").label("urgent");
         assert_eq!(t.label.as_deref(), Some("urgent"));
+    }
+
+    #[test]
+    fn public_predicates_follow_label_status_and_cancellation() {
+        let mut task = Task::new("body").label("scan");
+        assert!(task.has_label("scan"));
+        assert!(!task.has_label("report"));
+        assert!(task.is_todo());
+        assert!(task.is_pending());
+        assert!(!task.is_in_progress());
+        assert!(!task.is_finished());
+        assert!(!task.is_failed());
+        assert!(!task.is_cancelled());
+
+        task.status = Status::InProgress;
+        assert!(task.is_in_progress());
+        task.cancelled = true;
+        assert!(task.is_cancelled());
+        assert!(!task.is_pending());
+
+        task.status = Status::Finished;
+        assert!(task.is_finished());
+        task.status = Status::Failed;
+        assert!(task.is_failed());
     }
 
     #[test]

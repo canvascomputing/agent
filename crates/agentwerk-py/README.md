@@ -447,10 +447,16 @@ Task members:
 | **Identity** | `key` | Task key, of the form `t-N`. |
 | | `task` | The work the agent is asked to do. |
 | | `label` | Label carried by the task. |
+| | `has_label(label)` | Check whether the task carries a label. |
 | | `parent` | Identifier of the parent task if a handover was performed. |
 | | `reporter` | Identifier of the agent that created the task. |
 | | `assignee` | Identifier of the agent that claimed the task. |
 | **Outcome** | `status` | The task lifecycle status. |
+| | `is_todo()` | Check whether the task is waiting to be claimed. |
+| | `is_in_progress()` | Check whether an agent is working on the task. |
+| | `is_finished()` | Check whether the task finished. |
+| | `is_failed()` | Check whether the task failed. |
+| | `is_pending()` | Check whether the task has work in this run. |
 | | `is_cancelled()` | Check whether this run has taken the task off the queue. |
 | | `result` | The result the agent produced. |
 | | `errors` | The failures recorded against the task, as events. |
