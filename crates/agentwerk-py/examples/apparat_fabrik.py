@@ -269,11 +269,11 @@ async def main(pruefer, meister, monteur):
     workers = worker_names(pruefer, meister, monteur)
 
     def publish(work, event):
-        if event.get_kind() == "text_chunk_received":
+        if event.get_name() == "text_chunk_received":
             return
         frame = frame_for(event, started_at, str(REPO))
         frame["agent"] = workers.get(frame["agent"], frame["agent"])
-        if frame["task"] and event.get_kind().startswith("task_"):
+        if frame["task"] and event.get_name().startswith("task_"):
             task = work.get_task(frame["task"])
             if task is not None:
                 frame["label"] = task.get_label()

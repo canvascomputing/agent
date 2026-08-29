@@ -101,7 +101,7 @@ def frame_for(event, started_at, root=""):
         data["place"] = place
     return {
         "t": time.monotonic() - started_at,
-        "kind": event.get_kind(),
+        "name": event.get_name(),
         "agent": event.get_agent_id(),
         "task": event.get_task_key(),
         "data": data,

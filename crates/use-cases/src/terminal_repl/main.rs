@@ -7,7 +7,7 @@
 //! and knowledge both persist to `./.agentwerk/`, so an existing chat
 //! resumes across process restarts.
 //! The model's response streams to stdout via
-//! `EventKind::TextChunkReceived`. Slash commands:
+//! `Event::TEXT_CHUNK_RECEIVED`. Slash commands:
 //! `/new` starts a fresh chat task, `/list` lists every task,
 //! `/stats` prints the statistics, `/clear` resets knowledge,
 //! `/bible [N]` injects N repetitions of Genesis (KJV) as a reply to
@@ -29,7 +29,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use agentwerk::agents::tasks::{Reply, ReplyContent};
-use agentwerk::event::{Event, EventKind, EventName};
+use agentwerk::event::Event;
 use agentwerk::providers::Model;
 use agentwerk::tools::{
     GlobTool, GrepTool, ListDirectoryTool, ReadFileTool, TasksTool, WriteFileTool,
@@ -193,18 +193,18 @@ async fn main() {
         }
         if line == "/stats" {
             let recorded = tasks.find_events(|_: &Event| true);
-            let count = |kind: EventName| counted(&recorded, kind);
+            let count = |name: &str| counted(&recorded, name);
             eprintln!(
                 "{}{} turns · {} requests · {} tools · {} in / {} out · {} created / {} done / {} failed{}",
                 style.dim,
-                count(EventName::TurnStarted),
-                count(EventName::RequestFinished),
-                count(EventName::ToolCallStarted),
+                count(Event::TURN_STARTED),
+                count(Event::REQUEST_FINISHED),
+                count(Event::TOOL_CALL_STARTED),
                 tasks.get_input_tokens(),
                 tasks.get_output_tokens(),
-                count(EventName::TaskCreated),
-                count(EventName::TaskFinished),
-                count(EventName::TaskFailed),
+                count(Event::TASK_CREATED),
+                count(Event::TASK_FINISHED),
+                count(Event::TASK_FAILED),
                 style.reset,
             );
             continue;
@@ -301,7 +301,7 @@ async fn main() {
 
         // One read per turn, counted three ways, rather than one read per count.
         let recorded = tasks.find_events(|_: &Event| true);
-        let count = |kind: EventName| counted(&recorded, kind);
+        let count = |name: &str| counted(&recorded, name);
         let outcome = {
             let chat = chat_key.as_deref().and_then(|k| tasks.get_task(k));
             match chat {
@@ -318,14 +318,14 @@ async fn main() {
             }
         };
 
-        let turns = count(EventName::TurnStarted).saturating_sub(prev_turns);
-        let requests = count(EventName::RequestFinished).saturating_sub(prev_requests);
-        let tool_calls = count(EventName::ToolCallStarted).saturating_sub(prev_tool_calls);
+        let turns = count(Event::TURN_STARTED).saturating_sub(prev_turns);
+        let requests = count(Event::REQUEST_FINISHED).saturating_sub(prev_requests);
+        let tool_calls = count(Event::TOOL_CALL_STARTED).saturating_sub(prev_tool_calls);
         let input = tasks.get_input_tokens().saturating_sub(prev_input);
         let output = tasks.get_output_tokens().saturating_sub(prev_output);
-        prev_turns = count(EventName::TurnStarted);
-        prev_requests = count(EventName::RequestFinished);
-        prev_tool_calls = count(EventName::ToolCallStarted);
+        prev_turns = count(Event::TURN_STARTED);
+        prev_requests = count(Event::REQUEST_FINISHED);
+        prev_tool_calls = count(Event::TOOL_CALL_STARTED);
         prev_input = tasks.get_input_tokens();
         prev_output = tasks.get_output_tokens();
 
@@ -340,10 +340,10 @@ async fn main() {
 }
 
 /// How many of `recorded` are of one kind.
-fn counted(recorded: &[Event], kind: EventName) -> u64 {
+fn counted(recorded: &[Event], name: &str) -> u64 {
     recorded
         .iter()
-        .filter(|e| e.get_kind().get_event_name() == kind)
+        .filter(|event| event.get_name() == name)
         .count() as u64
 }
 
@@ -367,16 +367,17 @@ fn print_event(
             eprintln!();
         }
     };
-    match event.get_kind() {
-        EventKind::TextChunkReceived { content } => {
-            print!("{content}");
+    let data = event.get_data();
+    match event.get_name() {
+        Event::TEXT_CHUNK_RECEIVED => {
+            print!("{}", data["content"].as_str().unwrap_or_default());
             let _ = io::stdout().flush();
             midstream.store(true, Ordering::Relaxed);
         }
-        EventKind::ToolCallStarted {
-            tool_name, input, ..
-        } => {
+        Event::TOOL_CALL_STARTED => {
             break_stream();
+            let tool_name = data["tool_name"].as_str().unwrap_or_default();
+            let input = &data["input"];
             let arg = input["pattern"]
                 .as_str()
                 .or_else(|| input["path"].as_str())
@@ -388,17 +389,17 @@ fn print_event(
                 eprintln!("{}· {tool_name}({arg}){}", style.dim, style.reset);
             }
         }
-        EventKind::ToolCallFailed {
-            tool_name, message, ..
-        } => {
+        Event::TOOL_CALL_FAILED => {
             break_stream();
+            let tool_name = data["tool_name"].as_str().unwrap_or_default();
+            let message = data["message"].as_str().unwrap_or_default();
             eprintln!("{}✗ {tool_name}: {message}{}", style.red, style.reset);
         }
-        EventKind::RequestFinished { usage, .. } => {
-            last_input.store(usage.input_tokens, Ordering::Relaxed);
+        Event::REQUEST_FINISHED => {
+            let used = data["usage"]["input_tokens"].as_u64().unwrap_or_default();
+            last_input.store(used, Ordering::Relaxed);
             if let Some(window) = window {
                 break_stream();
-                let used = usage.input_tokens;
                 let remaining = window.saturating_sub(used);
                 let threshold = window.saturating_mul(7) / 10;
                 let (marker, color) = if used >= threshold {
@@ -412,8 +413,10 @@ fn print_event(
                 );
             }
         }
-        EventKind::CompactionStarted { reason, total } => {
+        Event::COMPACTION_STARTED => {
             break_stream();
+            let reason = &data["reason"];
+            let total = &data["total"];
             eprintln!(
                 "{}… compacting context ({reason:?}): {total} chunks{}{}",
                 style.dim,
@@ -421,16 +424,15 @@ fn print_event(
                 style.reset,
             );
         }
-        EventKind::CompactionProgress {
-            reason: _,
-            completed,
-            total,
-        } => {
+        Event::COMPACTION_PROGRESS => {
             break_stream();
+            let completed = &data["completed"];
+            let total = &data["total"];
             eprintln!("{}  ▸ {completed}/{total}{}", style.dim, style.reset,);
         }
-        EventKind::CompactionFinished { reason } => {
+        Event::COMPACTION_FINISHED => {
             break_stream();
+            let reason = &data["reason"];
             eprintln!(
                 "{}✓ context compacted ({reason:?}){}{}",
                 style.dim,
@@ -438,8 +440,10 @@ fn print_event(
                 style.reset,
             );
         }
-        EventKind::CompactionFailed { reason, message } => {
+        Event::COMPACTION_FAILED => {
             break_stream();
+            let reason = &data["reason"];
+            let message = data["message"].as_str().unwrap_or_default();
             eprintln!(
                 "{}✗ compaction failed ({reason:?}){}{}",
                 style.red,
@@ -448,30 +452,30 @@ fn print_event(
             );
             print_indented_detail(message, style);
         }
-        EventKind::RequestFailed {
-            reason, message, ..
-        } => {
+        Event::REQUEST_FAILED => {
             break_stream();
+            let reason = &data["reason"];
+            let message = data["message"].as_str().unwrap_or_default();
             eprintln!("{}✗ request failed ({reason:?}){}", style.red, style.reset);
             print_indented_detail(message, style);
         }
-        EventKind::RequestRetried {
-            attempt,
-            max_attempts,
-            reason,
-            message,
-            ..
-        } => {
+        Event::REQUEST_RETRIED => {
             break_stream();
+            let attempt = &data["attempt"];
+            let max_attempts = &data["max_attempts"];
+            let reason = &data["reason"];
+            let message = data["message"].as_str().unwrap_or_default();
             eprintln!(
                 "{}↻ retry {attempt}/{max_attempts} ({reason:?}){}",
                 style.dim, style.reset,
             );
             print_indented_detail(message, style);
         }
-        EventKind::SchemaRetried { .. } => {}
-        EventKind::PolicyViolated { policy, limit } => {
+        Event::SCHEMA_RETRIED => {}
+        Event::POLICY_VIOLATED => {
             break_stream();
+            let policy = &data["policy"];
+            let limit = &data["limit"];
             eprintln!(
                 "{}✗ policy {policy:?} (limit {limit}){}",
                 style.red, style.reset,

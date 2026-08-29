@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use crate::agents::knowledge::{Knowledge, KnowledgeError};
-use crate::event::{EventKind, KnowledgeAction, KnowledgeFailureKind};
+use crate::event::{Event, KnowledgeAction, KnowledgeFailureKind};
 use crate::prompts::directives::{
     KNOWLEDGE_PAGE_NOT_FOUND, KNOWLEDGE_REMOVE_FAILED, KNOWLEDGE_WRITE_FAILED,
 };
@@ -92,7 +92,7 @@ impl From<KnowledgeTool> for Tool {
 fn run(store: &Knowledge, args: KnowledgeArgs, ctx: &ToolContext) -> ToolResult {
     // The tool self-reports each outcome: only it can see a read/remove
     // miss, which returns Ok, so the shared tool-call loop cannot.
-    let record = |kind: EventKind| ctx.emit(kind);
+    let record = |event: Event| ctx.emit_event(event);
 
     match args {
         KnowledgeArgs::Write {
@@ -112,14 +112,17 @@ fn run(store: &Knowledge, args: KnowledgeArgs, ctx: &ToolContext) -> ToolResult 
             };
             match store.get_pages().save(page) {
                 Ok(()) => {
-                    record(EventKind::KnowledgeWritten { slug: written });
+                    record(
+                        Event::new(Event::KNOWLEDGE_WRITTEN)
+                            .data(serde_json::json!({ "slug": written })),
+                    );
                     ToolResult::success(usage_line("page written", &store))
                 }
                 Err(why) => {
-                    record(EventKind::KnowledgeFailed {
-                        action: KnowledgeAction::Write,
-                        reason: failure_kind(&why),
-                    });
+                    record(Event::new(Event::KNOWLEDGE_FAILED).data(serde_json::json!({
+                        "action": KnowledgeAction::Write,
+                        "reason": failure_kind(&why),
+                    })));
                     ToolResult::error(
                         ctx.directives
                             .render(KNOWLEDGE_WRITE_FAILED, &[("error", &why.to_string())]),
@@ -130,14 +133,14 @@ fn run(store: &Knowledge, args: KnowledgeArgs, ctx: &ToolContext) -> ToolResult 
 
         KnowledgeArgs::Read { slug } => match store.get_pages().get_page(&slug) {
             Ok(page) => {
-                record(EventKind::KnowledgeRead { slug });
+                record(Event::new(Event::KNOWLEDGE_READ).data(serde_json::json!({ "slug": slug })));
                 ToolResult::success(page.content)
             }
             Err(why) => {
-                record(EventKind::KnowledgeFailed {
-                    action: KnowledgeAction::Read,
-                    reason: failure_kind(&why),
-                });
+                record(Event::new(Event::KNOWLEDGE_FAILED).data(serde_json::json!({
+                    "action": KnowledgeAction::Read,
+                    "reason": failure_kind(&why),
+                })));
                 ToolResult::success(
                     ctx.directives
                         .render(KNOWLEDGE_PAGE_NOT_FOUND, &[("slug", &slug)]),
@@ -147,14 +150,16 @@ fn run(store: &Knowledge, args: KnowledgeArgs, ctx: &ToolContext) -> ToolResult 
 
         KnowledgeArgs::Remove { slug } => match store.get_pages().remove(&slug) {
             Ok(()) => {
-                record(EventKind::KnowledgeRemoved { slug });
+                record(
+                    Event::new(Event::KNOWLEDGE_REMOVED).data(serde_json::json!({ "slug": slug })),
+                );
                 ToolResult::success(usage_line("page removed", &store))
             }
             Err(why) => {
-                record(EventKind::KnowledgeFailed {
-                    action: KnowledgeAction::Remove,
-                    reason: failure_kind(&why),
-                });
+                record(Event::new(Event::KNOWLEDGE_FAILED).data(serde_json::json!({
+                    "action": KnowledgeAction::Remove,
+                    "reason": failure_kind(&why),
+                })));
                 ToolResult::error(
                     ctx.directives
                         .render(KNOWLEDGE_REMOVE_FAILED, &[("error", &why.to_string())]),
@@ -163,7 +168,7 @@ fn run(store: &Knowledge, args: KnowledgeArgs, ctx: &ToolContext) -> ToolResult 
         },
 
         KnowledgeArgs::List => {
-            record(EventKind::KnowledgeListed);
+            record(Event::new(Event::KNOWLEDGE_LISTED));
             // Not the prompt's limited view: this is how the agent sees
             // the pages the prompt had no room for.
             let index = store.full_index();
@@ -390,23 +395,22 @@ mod tests {
     #[tokio::test]
     async fn self_reports_each_action_as_an_event() {
         use crate::agents::tasks::Queue;
-        use crate::event::EventKind;
         use std::sync::Mutex;
 
         let (store, _dir) = fresh_store();
         let tasks = Queue::new();
         let reported = Arc::new(Mutex::new(Vec::new()));
         let seen = Arc::clone(&reported);
-        tasks.on_event(move |_, event| match &event.kind {
-            EventKind::KnowledgeFailed { action, reason } => seen.lock().unwrap().push(format!(
-                "{}:{action}:{}",
-                event.kind.get_name(),
-                reason.get_name()
-            )),
-            kind if kind.get_name().starts_with("knowledge_") => {
-                seen.lock().unwrap().push(kind.get_name().to_string())
+        tasks.on_event(move |_, event| {
+            if event.get_name() == crate::event::Event::KNOWLEDGE_FAILED {
+                let action = event.get_data()["action"].as_str().unwrap();
+                let reason = event.get_data()["reason"].as_str().unwrap();
+                seen.lock()
+                    .unwrap()
+                    .push(format!("{}:{action}:{reason}", event.get_name()));
+            } else if event.get_name().starts_with("knowledge_") {
+                seen.lock().unwrap().push(event.get_name().to_string());
             }
-            _ => {}
         });
         let ctx = ToolContext::new(std::env::current_dir().unwrap()).queue(Arc::clone(&tasks));
 

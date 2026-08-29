@@ -5,15 +5,21 @@ use std::sync::{Arc, Mutex};
 
 use super::queue::Queue;
 use crate::agents::agent::Agent;
-use crate::event::{EventKind, FinishReason};
+use crate::event::{Event, FinishReason};
 
 /// Collect the reason from every `RunFinished`, since the queue keeps none.
 pub(super) fn collect_finish_reasons(queue: &Queue) -> Arc<Mutex<Vec<FinishReason>>> {
     let seen = Arc::new(Mutex::new(Vec::new()));
     let sink = Arc::clone(&seen);
     queue.on_event(move |_, event| {
-        if let EventKind::RunFinished { reason } = event.kind {
-            sink.lock().unwrap().push(reason);
+        if event.get_name() == Event::RUN_FINISHED {
+            if let Some(reason) = event
+                .get_data()
+                .get("reason")
+                .and_then(|value| serde_json::from_value(value.clone()).ok())
+            {
+                sink.lock().unwrap().push(reason);
+            }
         }
     });
     seen

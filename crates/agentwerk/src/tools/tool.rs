@@ -10,7 +10,7 @@ use serde_json::Value;
 
 use crate::agents::knowledge::Knowledge;
 use crate::agents::tasks::{Queue, Run};
-use crate::event::{EventKind, ToolFailureKind};
+use crate::event::{Event, ToolFailureKind};
 use crate::prompts::directives::{
     DirectiveStore, NO_TOOLS_REGISTERED, TOOL_NOT_FOUND, TOOL_OUTPUT_EMPTY, TOOL_OUTPUT_OFFLOADED,
     TOOL_PANICKED,
@@ -107,15 +107,15 @@ impl ToolContext {
         self
     }
 
-    /// Publish `kind` for the task and agent this call runs for. A context
+    /// Publish `event` for the task and agent this call runs for. A context
     /// with no queue publishes nothing; the call still runs.
-    pub(crate) fn emit(&self, kind: EventKind) {
+    pub(crate) fn emit_event(&self, event: Event) {
         let Some(queue) = &self.queue else {
             return;
         };
         let key = self.task_key.as_deref().unwrap_or_default();
         let agent = self.agent_id.as_deref().unwrap_or_default();
-        queue.emit(key, agent, kind);
+        queue.emit_event(event.task_key(key).agent_id(agent));
     }
 
     /// Resolves once the run starts to finish, whether the caller cancelled it
@@ -173,7 +173,9 @@ pub enum ToolResult {
         offloaded: Option<PathBuf>,
         /// One note per repair validation made to accept this call, such as
         /// `/count retyped`. The loop reports each as
-        /// [`EventKind::ResponseRepaired`] under the call's tool name.
+        /// [`Event::RESPONSE_REPAIRED`] under the call's tool name.
+        ///
+        /// [`Event::RESPONSE_REPAIRED`]: crate::Event::RESPONSE_REPAIRED
         repaired: Vec<String>,
     },
     /// The tool failed, and the content tells the model how to recover.

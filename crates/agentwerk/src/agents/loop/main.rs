@@ -2,7 +2,7 @@
 //! and waits for them on shutdown.
 
 use crate::agents::tasks::Queue;
-use crate::event::{EventKind, FinishReason};
+use crate::event::{Event, FinishReason};
 
 use super::agent::run_agent;
 use super::POLL_INTERVAL;
@@ -31,7 +31,7 @@ pub(in crate::agents) async fn run_main_loop(queue: &Queue) {
         let _ = agent.await;
     }
     let reason = queue.run.reason().unwrap_or(FinishReason::Drained);
-    queue.emit("", "", EventKind::RunFinished { reason });
+    queue.emit_event(Event::new(Event::RUN_FINISHED).data(serde_json::json!({ "reason": reason })));
     // Last, so a caller that starts another run never overlaps this one.
     queue.run.set_finished();
 }
@@ -45,7 +45,7 @@ mod tests {
     use crate::agents::policy::Policy;
     use crate::agents::r#loop::test_util::*;
     use crate::agents::tasks::{Queue, Status, Task};
-    use crate::event::EventKind;
+    use crate::event::Event;
     use crate::tools::TasksTool;
 
     // Late-add agent tests
@@ -128,7 +128,7 @@ mod tests {
         let host = Arc::clone(&tasks);
         let resolved = key.clone();
         tasks.on_event(move |_, event| {
-            if matches!(event.kind, EventKind::RequestFinished { .. }) {
+            if event.get_name() == Event::REQUEST_FINISHED {
                 let _ = host.set_task_finished(&resolved, "resolved by the host");
             }
         });

@@ -66,6 +66,11 @@ impl PyQueue {
         slf
     }
 
+    /// Publish an event and return what every observer saw.
+    fn emit_event(&self, event: PyRef<'_, PyEvent>) -> PyEvent {
+        to_py_event(&self.inner.emit_event(event.inner.clone()))
+    }
+
     /// Finish a task with a result, from outside the execution.
     ///
     /// Raises when the key is unknown, or when the result misses the task's
@@ -191,7 +196,7 @@ impl PyQueue {
 
     /// Read every failure together with the task it happened in: a failed
     /// task, tool call, or request, a file that would not open, or compaction
-    /// that could not finish. Read `event.kind` to tell them apart.
+    /// that could not finish. Read `event.get_name()` to tell them apart.
     fn on_failure<'py>(slf: PyRef<'py, Self>, handler: Py<PyAny>) -> PyRef<'py, Self> {
         slf.inner
             .on_failure(move |queue, event: &Event, task: &Task| {

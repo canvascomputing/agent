@@ -6,9 +6,9 @@ Naming, comment, and prose rules, plus README structure. Skim the section matchi
 
 **A type earns a `pub use` at `lib.rs` only when it names a concept in the one-sentence description of the crate, or when root-level signatures hand it to the caller.**
 
-`Agent`, `Queue`, `Task`, `Policy`, `Knowledge`, `Directive`, `Text`, `Trajectory`, `Reply`, `Event`, `Status`, `EventKind`, `FinishReason`, `Schema`, `SchemaStore`
+`Agent`, `Queue`, `Task`, `Policy`, `Knowledge`, `Directive`, `Text`, `Trajectory`, `Reply`, `Event`, `Status`, `FinishReason`, `Schema`, `SchemaStore`
 
-- Discriminants callers match on earn a root slot: `Status`, `EventKind`, `FinishReason`.
+- Discriminants callers match on earn a root slot: `Status`, `FinishReason`.
 - Builder parameters and run outputs earn one when callers name them: `Schema`, `SchemaStore`, `Policy`, `Directive`, `Text`, `Reply`, `Trajectory`.
 - Errors and conversion traits do not. They live in their domain module.
 - Free functions at the root are forbidden: convert to an associated function or move to the domain module.
@@ -52,7 +52,7 @@ InvalidRequest, UnexpectedStatus, MissingKey, RequestError               // reje
 **Tuple for one payload. Struct for multiple fields or a meaningful field name.**
 
 - Tuple form: `Provider(ProviderError)`, `TodoItemNotFound(String)`, `IoFailed(io::Error)`.
-- Struct form: `EventKind::PolicyViolated { policy, limit }`, and also when a single field name carries meaning the type alone does not.
+- Struct form: `RequestRetried { attempt, max_attempts }`, and also when a single field name carries meaning the type alone does not.
 - Two-arm result enums use one word per variant: `Success` and `Error`, with no `is_*` predicates.
 
 ## Discriminant Members
@@ -65,8 +65,7 @@ ToolFailureKind::ExecutionFailed.name()   // "execution_failed"
 
 - `name()` returns the stable snake_case spelling, which is also what serde reads and writes.
 - No `as_str`, no `label`, and no second spelling of the same string.
-- A `pub const ALL` is added only where the crate itself enumerates the variants: `EventName`, which the Python `EventName` class is built from.
-- A variant carrying fields has no `name()`; `EventKind` reaches its through `event_name()`.
+- Built-in event names are associated constants on `Event`, with the same spelling in Rust and Python.
 
 ## Payload Fields
 
@@ -76,7 +75,7 @@ ToolFailureKind::ExecutionFailed.name()   // "execution_failed"
 - Wrapped underlying errors MUST be named `source`, as in `FooFailed { source: io::Error }`.
 - Typed metadata uses descriptive names: `status`, `retryable`, `retry_delay`, `tool_name`, `retries`, `after_ms`, `action`, `slug`.
 - A discriminant explaining why something happened is `reason`. `PolicyViolated` names its field `policy` instead, because `reason` next to `limit` reads as the limit's justification.
-- IMPORTANT: never name such a field `kind`. `Event` already carries `kind`, so `event.data["kind"]` and `event.kind` would be unrelated values one word apart. The type may still be named `PolicyViolation` or `ToolFailureKind`; only the field is constrained.
+- IMPORTANT: never name such a field `kind` when `reason` states the meaning more directly. The type may still be named `PolicyViolation` or `ToolFailureKind`; only the field is constrained.
 
 ## RAII Guard Fields
 
@@ -192,6 +191,17 @@ edit_replies(key, editor)            // act once, now
 - `on_task` sits outside the trigger grid, keying on a task rather than naming a trigger.
 - No hook registers something agentwerk calls in place of its own work. Compaction summarizes and says so through the four `Compaction*` events, and what agentwerk writes to correct the model is set once by `Agent::directives`, which takes one function over every directive.
 
+## Event Publication
+
+**Publishing is always `tasks.emit_event(event)`, from both host code and crate internals.**
+
+- Keep `event` in the verb. Bare `emit` is ambiguous beside provider streams and is not an event-publication API.
+- Construct events with `Event::new(name)`, then add `.data(value)`, `.task_key(key)`, or `.agent_id(id)` when those values apply. Builder names match the attributes they set. Do not use a struct literal: the queue owns the timestamp and derived task label.
+- Order Event members by relevance: `name`, `data`, `task_key`, `agent_id`, `label`, `created_at`; builders follow the constructor and readers follow in that same order.
+- Contextual helpers, when they remove repeated agent or task plumbing, are also named `emit_event` and delegate immediately to `Queue::emit_event`.
+- Do not add parallel names such as `emit`, `emit_custom`, or `publish_event`; every built-in and caller-defined event takes the same pipeline.
+- `Event.name` is the sole semantic discriminator. Internal code constructs the same `Event::new(name).data(value)` record as host code and branches defensively on its name and JSON data; do not introduce a parallel typed event model or provenance marker.
+
 ## Editors
 
 **An editor is `edit_<noun>`. Its last parameter is the `&mut` value it rewrites; anything before it is read-only context.**
@@ -207,7 +217,7 @@ edit_replies(key, editor)            // act once, now
 - Type-state collapses: `ToolBuilder<D, H>` folds into the class it builds and takes its name. The collapsed class validates at `build()`.
 - `Duration` becomes a float named `seconds`, with the unit repeated in the docstring: `Policy::request_retry_delay` binds as a float in seconds. Every other parameter keeps its Rust name.
 - A fieldless enum becomes its snake_case `Display` string. That `Display` impl is the single source, so the binding never formats a variant with `{:?}`.
-- An enum whose variants carry fields becomes a class with a `kind` string, a `data` dict, and one static constructor per variant. `Event` and `ReplyContent` are the two.
+- An enum whose variants carry fields becomes a class with a `kind` string, a `data` dict, and one static constructor per variant. `ReplyContent` does this; `Event` is instead a generic record whose Python API mirrors Rust.
 - A builder method whose name collides with a reader on the same Python class becomes a constructor keyword argument, because a Python class cannot carry both. `Task` needs this for `label`, `schema`, and `parent`.
 - A `&mut` editor becomes a callable that returns the replacement, or `None` to keep the current value, since Python cannot take a Rust `&mut`.
 - A conversion type a setter takes collapses into the Python types it converts from: `Text` is a `str` for the text itself and an `os.PathLike` for the file holding it.
@@ -406,7 +416,7 @@ Banned:
 Also:
 
 - Bare "provider" is spelled "LLM provider". Identifier names stay unqualified.
-- "execution" is the word for a run, in prose and in identifiers: `Queue::get_duration()`. `run` survives only where it names the event itself, `EventKind::RunStarted` and `RunFinished`.
+- "execution" is the word for a run, in prose and in identifiers: `Queue::get_duration()`. `run` survives only in built-in names such as `Event::RUN_STARTED` and `Event::RUN_FINISHED`.
 - The Knowledge store is described as durable memory the agent shares across tasks and other agents; the sharing is the headline, not a footnote.
 
 ## README Structure
@@ -424,7 +434,7 @@ Also:
 **Above the fold is what a reader needs. The exhaustive reference goes inside a `<details>` block at the end of the section.**
 
 - Nothing is deleted, only folded. A method that exists is documented somewhere, or the fold is not doing its job.
-- Folds are the last thing in a section. Every `<summary>` reads `All <what the fold holds>`: `All event kinds`, `All hooks`, `All session files`. One section holds one fold; a second catalogue earns its own `h3` with its own lead example.
+- Folds are the last thing in a section. Every `<summary>` reads `All <what the fold holds>`: `All event names`, `All hooks`, `All session files`. One section holds one fold; a second catalogue earns its own `h3` with its own lead example.
 - IMPORTANT: a blank line after `</summary>` and before `</details>`. `details` opens a raw-HTML block, so without the blank line every table inside renders as literal pipe characters on GitHub, crates.io, and PyPI alike.
 - Snippet budgets: eight lines for a section lead, five for a subsection lead. Quick Start gets sixteen.
 - Agent Swarms is the one exception and runs long, because it is the only place a whole system is shown at once: a pool working in parallel, a second pool the first hands tasks to, and one knowledge store between them.
@@ -444,7 +454,7 @@ Also:
 
 - Above the fold there is prose and one example, so a table there is a sign the section is doing reference work it should have folded.
 - Inside a fold the content is the reference, and a two-column grid is what a reader scans. Bullets there only hide the second column.
-- A catalogue with categories takes a third column on the left holding the bold group label: the built-in tools, the event kinds, the execution methods, and the hooks.
+- A catalogue with categories takes a third column on the left holding the bold group label: the built-in tools, the event names, the execution methods, and the hooks.
 - Prose still belongs in a fold when it is a caveat rather than an entry, as does a snippet showing how one of the entries is called.
 
 ## README Table Shape
@@ -475,7 +485,7 @@ Also:
 **Show the smallest snippet that demonstrates the feature.**
 
 - Example models are `claude-haiku-4-5-20251001` or `claude-sonnet-4-20250514`.
-- Update triggers: a new builder method, a new tool, a new event kind, a new environment variable, or a changed default.
+- Update triggers: a new builder method, a new tool, a new event name, a new environment variable, or a changed default.
 - A chain of more than two calls breaks one call per line, even where it would fit the formatter's width.
 - A code change edits only the doc sentences it made wrong. Surrounding prose is not rewritten unprompted.
 

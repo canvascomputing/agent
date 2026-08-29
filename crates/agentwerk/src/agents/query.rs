@@ -12,7 +12,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use super::tasks::{now_millis, numeric_id, Status, Task};
-use crate::event::{Event, EventName};
+use crate::event::Event;
 
 /// A record a query selects, and the field set AQL names it by.
 ///
@@ -45,7 +45,7 @@ impl Queryable for Event {
 /// tasks.find_tasks(Query::new("label = research AND agent = research-1")?);
 /// tasks.find_tasks(|t: &Task| t.get_label() == Some("research"));
 /// tasks.find_events("tool_call_failed");
-/// tasks.find_events(|e: &Event| e.get_kind().is_failure());
+/// tasks.find_events(|e: &Event| e.get_name().ends_with("_failed"));
 /// # Ok(())
 /// # }
 /// ```
@@ -345,6 +345,12 @@ trait QueryField: Copy + PartialEq + fmt::Debug + Sized + 'static {
         Ok(value)
     }
 
+    /// A quoted value, which fields read like an unquoted one unless quoting
+    /// deliberately escapes their canonical spelling.
+    fn literal(self, value: String) -> Result<String, QueryError> {
+        self.canonical(value)
+    }
+
     /// A time by the millisecond `of` wrote, everything else as text unless
     /// the field set says otherwise.
     fn compare(self, left: &str, right: &str) -> Ordering {
@@ -578,14 +584,17 @@ impl QueryField for EventField {
 
     fn of(self, event: &Event) -> Option<Cow<'_, str>> {
         match self {
-            EventField::Event => Some(Cow::Borrowed(event.kind.get_name())),
+            EventField::Event => Some(Cow::Borrowed(&event.name)),
             EventField::Agent => carried(&event.agent_id),
             EventField::Task => carried(&event.task_key),
             EventField::Label => event.label.as_deref().map(Cow::Borrowed),
             EventField::Created => Some(Cow::Owned(event.created_at.to_string())),
-            // The serialized kind, so `~` reaches both the name and whatever
-            // the payload carries.
-            EventField::Payload => serde_json::to_string(&event.kind).ok().map(Cow::Owned),
+            EventField::Payload => serde_json::to_string(&serde_json::json!({
+                "name": event.name,
+                "data": event.data,
+            }))
+            .ok()
+            .map(Cow::Owned),
         }
     }
 
@@ -625,16 +634,18 @@ impl QueryField for EventField {
         (event.created_at, 0)
     }
 
-    /// An event in the one snake_case spelling the log writes, so both
-    /// `tool_call_failed` and `ToolCallFailed` reach the same events.
+    /// A built-in event in the one snake_case spelling the log writes, so both
+    /// `tool_call_failed` and `ToolCallFailed` reach the same events. Application
+    /// event names are matched exactly.
     fn canonical(self, value: String) -> Result<String, QueryError> {
         if self != EventField::Event {
             return Ok(value);
         }
-        match event_named(&value) {
-            Some(name) => Ok(name.to_string()),
-            None => Err(QueryError::UnknownEvent { value }),
-        }
+        Ok(event_named(&value).map_or(value, str::to_string))
+    }
+
+    fn literal(self, value: String) -> Result<String, QueryError> {
+        Ok(value)
     }
 }
 
@@ -649,13 +660,15 @@ fn carried(value: &str) -> Option<Cow<'_, str>> {
 
 /// The snake_case spelling of an event, from either spelling of its name.
 fn event_named(value: &str) -> Option<&'static str> {
-    EventName::ALL
+    Event::BUILTIN_NAMES
         .iter()
         .find(|name| {
-            value.eq_ignore_ascii_case(name.get_name())
-                || value.eq_ignore_ascii_case(&format!("{name:?}"))
+            value.eq_ignore_ascii_case(name)
+                || value
+                    .replace('_', "")
+                    .eq_ignore_ascii_case(&name.replace('_', ""))
         })
-        .map(|name| name.get_name())
+        .copied()
 }
 
 /// A JSON value as the text a query compares against, matching what the
@@ -833,8 +846,6 @@ pub enum QueryError {
     UnknownField { name: String, known: String },
     /// No status is spelled this way.
     UnknownStatus { value: String },
-    /// No event is spelled this way.
-    UnknownEvent { value: String },
     /// The value a time was compared against is in none of the three spellings.
     InvalidTime { field: &'static str, value: String },
     /// The field does not take the operator it was given.
@@ -864,14 +875,6 @@ impl fmt::Display for QueryError {
                 f,
                 "No status named `{value}`. Use one of Todo, InProgress, Finished, Failed."
             ),
-            Self::UnknownEvent { value } => {
-                let known: Vec<&str> = EventName::ALL.iter().map(|name| name.get_name()).collect();
-                write!(
-                    f,
-                    "No event named `{value}`. Use one of {}.",
-                    known.join(", ")
-                )
-            }
             Self::InvalidTime { field, value } => write!(
                 f,
                 "`{field}` compares against a time, and `{value}` is not one. \
@@ -1217,7 +1220,7 @@ impl<F: QueryField> Parser<F> {
     fn value(&mut self, field: F) -> Result<String, QueryError> {
         match self.next().ok_or(QueryError::UnexpectedEnd)? {
             Token::Word(word) => field.canonical(word),
-            Token::Quoted(text) => field.canonical(text),
+            Token::Quoted(text) => field.literal(text),
             token => Err(QueryError::UnexpectedToken {
                 token: token.spelling(),
             }),
@@ -1314,7 +1317,7 @@ mod tests {
         fn task(self, task: serde_json::Value) -> Task;
         fn finished(self, result: serde_json::Value) -> Task;
         fn cancelled(self) -> Task;
-        fn errored(self, kind: crate::event::EventKind) -> Task;
+        fn errored(self, event: crate::event::Event) -> Task;
         fn created_at(self, millis: u64) -> Task;
         fn finished_at(self, millis: u64) -> Task;
     }
@@ -1325,10 +1328,9 @@ mod tests {
             self
         }
 
-        fn errored(mut self, kind: crate::event::EventKind) -> Task {
+        fn errored(mut self, event: crate::event::Event) -> Task {
             let key = self.key.clone();
-            self.errors
-                .push(crate::event::Event::new("agent", key, None, kind));
+            self.errors.push(event.task_key(key).agent_id("agent"));
             self
         }
 
@@ -1585,13 +1587,13 @@ mod tests {
         assert!(!q.matches(&task("t-2").finished(json!({"finding": "clean"}))));
     }
 
-    fn tool_failed(message: &str) -> crate::event::EventKind {
-        crate::event::EventKind::ToolCallFailed {
-            tool_name: "grep".into(),
-            call_id: "c1".into(),
-            reason: crate::event::ToolFailureKind::ExecutionFailed,
-            message: message.into(),
-        }
+    fn tool_failed(message: &str) -> crate::event::Event {
+        crate::event::Event::new(crate::event::Event::TOOL_CALL_FAILED).data(json!({
+            "tool_name": "grep",
+            "call_id": "c1",
+            "reason": crate::event::ToolFailureKind::ExecutionFailed,
+            "message": message,
+        }))
     }
 
     #[test]
@@ -1610,11 +1612,12 @@ mod tests {
 
     #[test]
     fn contains_matches_a_failure_by_kind() {
-        let request_failed = crate::event::EventKind::RequestFailed {
-            model: "mock".into(),
-            reason: crate::providers::RequestErrorKind::ConnectionFailed,
-            message: "boom".into(),
-        };
+        let request_failed =
+            crate::event::Event::new(crate::event::Event::REQUEST_FAILED).data(json!({
+                "model": "mock",
+                "reason": crate::providers::RequestErrorKind::ConnectionFailed,
+                "message": "boom",
+            }));
         let q = parse("errors ~ tool_call_failed");
         assert!(q.matches(&task("t-1").errored(tool_failed("boom"))));
         // A different kind is excluded: the search selects by kind, not presence.
@@ -2085,26 +2088,26 @@ mod tests {
 #[cfg(test)]
 mod event_tests {
     use super::*;
-    use crate::event::{EventKind, ToolFailureKind};
+    use crate::event::ToolFailureKind;
 
-    fn event(kind: EventKind) -> Event {
-        Event::new("scout-1", "t-1", None, kind)
+    fn event(event: Event) -> Event {
+        event.task_key("t-1").agent_id("scout-1")
     }
 
-    fn tool_failed(message: &str) -> EventKind {
-        EventKind::ToolCallFailed {
-            tool_name: "grep".into(),
-            call_id: "c1".into(),
-            reason: ToolFailureKind::ExecutionFailed,
-            message: message.into(),
-        }
+    fn tool_failed(message: &str) -> Event {
+        Event::new(Event::TOOL_CALL_FAILED).data(serde_json::json!({
+            "tool_name": "grep",
+            "call_id": "c1",
+            "reason": ToolFailureKind::ExecutionFailed,
+            "message": message,
+        }))
     }
 
     /// Pins the stamp, which `Event::new` would set to now.
-    fn at(created_at: u64, kind: EventKind) -> Event {
+    fn at(created_at: u64, value: Event) -> Event {
         Event {
             created_at,
-            ..event(kind)
+            ..event(value)
         }
     }
 
@@ -2132,7 +2135,7 @@ mod event_tests {
     fn an_event_is_selected_by_its_name() {
         let q = parse("event = tool_call_failed");
         assert!(q.matches(&event(tool_failed("boom"))));
-        assert!(!q.matches(&event(EventKind::TurnStarted)));
+        assert!(!q.matches(&event(Event::new(Event::TURN_STARTED))));
     }
 
     #[test]
@@ -2146,27 +2149,31 @@ mod event_tests {
     fn an_event_takes_in_like_any_other_field() {
         let q = parse("event IN (request_failed, tool_call_failed)");
         assert!(q.matches(&event(tool_failed("boom"))));
-        assert!(!q.matches(&event(EventKind::TurnStarted)));
+        assert!(!q.matches(&event(Event::new(Event::TURN_STARTED))));
     }
 
     #[test]
-    fn an_unknown_event_lists_the_ones_that_exist() {
-        let message = error("event = task_exploded").to_string();
-        assert!(message.contains("task_exploded"), "{message}");
-        assert!(message.contains("task_finished"), "{message}");
+    fn an_application_event_name_is_matched_exactly() {
+        let event = Event::new("TaskFinished");
+        assert!(parse(r#"event = "TaskFinished""#).matches(&event));
+        assert!(!parse("event = TaskFinished").matches(&event));
     }
 
     #[test]
     fn the_task_field_selects_the_events_of_one_task() {
         let q = parse("task = t-1");
-        assert!(q.matches(&event(EventKind::TurnStarted)));
-        assert!(!q.matches(&Event::new("scout-1", "t-2", None, EventKind::TurnStarted)));
+        assert!(q.matches(&event(Event::new(Event::TURN_STARTED))));
+        assert!(!q.matches(
+            &Event::new(Event::TURN_STARTED)
+                .task_key("t-2")
+                .agent_id("scout-1")
+        ));
     }
 
     #[test]
     fn an_event_no_task_owns_reads_as_empty() {
         // `RunStarted` and `RunFinished` carry no task key.
-        let run = Event::new("", "", None, EventKind::RunStarted);
+        let run = Event::new(Event::RUN_STARTED);
         assert!(parse("task IS EMPTY").matches(&run));
         assert!(parse("agent IS EMPTY").matches(&run));
         assert!(!parse("task IS NOT EMPTY").matches(&run));
@@ -2175,20 +2182,24 @@ mod event_tests {
     #[test]
     fn the_agent_field_selects_who_emitted_it() {
         let q = parse("agent = scout-1");
-        assert!(q.matches(&event(EventKind::TurnStarted)));
-        assert!(!q.matches(&Event::new("sniper-1", "t-1", None, EventKind::TurnStarted)));
+        assert!(q.matches(&event(Event::new(Event::TURN_STARTED))));
+        assert!(!q.matches(
+            &Event::new(Event::TURN_STARTED)
+                .task_key("t-1")
+                .agent_id("sniper-1")
+        ));
     }
 
     #[test]
     fn the_label_field_selects_the_pool_the_task_belongs_to() {
-        let labelled = Event::new(
-            "scout-1",
-            "t-1",
-            Some("scan".into()),
-            EventKind::TurnStarted,
-        );
+        let labelled = Event {
+            label: Some("scan".into()),
+            ..Event::new(Event::TURN_STARTED)
+                .task_key("t-1")
+                .agent_id("scout-1")
+        };
         assert!(parse("label = scan").matches(&labelled));
-        assert!(parse("label IS EMPTY").matches(&event(EventKind::TurnStarted)));
+        assert!(parse("label IS EMPTY").matches(&event(Event::new(Event::TURN_STARTED))));
     }
 
     #[test]
@@ -2207,49 +2218,53 @@ mod event_tests {
     fn a_lone_word_naming_an_event_selects_it() {
         let q = parse("tool_call_failed");
         assert!(q.matches(&event(tool_failed("boom"))));
-        assert!(!q.matches(&event(EventKind::TurnStarted)));
+        assert!(!q.matches(&event(Event::new(Event::TURN_STARTED))));
     }
 
     #[test]
     fn a_lone_word_naming_no_event_selects_the_label() {
-        let labelled = Event::new(
-            "scout-1",
-            "t-1",
-            Some("scan".into()),
-            EventKind::TurnStarted,
-        );
+        let labelled = Event {
+            label: Some("scan".into()),
+            ..Event::new(Event::TURN_STARTED)
+                .task_key("t-1")
+                .agent_id("scout-1")
+        };
         let q = parse("scan");
         assert!(q.matches(&labelled));
-        assert!(!q.matches(&event(EventKind::TurnStarted)));
+        assert!(!q.matches(&event(Event::new(Event::TURN_STARTED))));
     }
 
     #[test]
     fn a_lone_task_key_selects_that_task_s_events() {
         let q = parse("t-1");
-        assert!(q.matches(&event(EventKind::TurnStarted)));
-        assert!(!q.matches(&Event::new("scout-1", "t-2", None, EventKind::TurnStarted)));
+        assert!(q.matches(&event(Event::new(Event::TURN_STARTED))));
+        assert!(!q.matches(
+            &Event::new(Event::TURN_STARTED)
+                .task_key("t-2")
+                .agent_id("scout-1")
+        ));
     }
 
     #[test]
     fn created_takes_the_same_comparisons_tasks_take() {
         let q = parse("created > 200");
-        assert!(q.matches(&at(300, EventKind::TurnStarted)));
-        assert!(!q.matches(&at(100, EventKind::TurnStarted)));
+        assert!(q.matches(&at(300, Event::new(Event::TURN_STARTED))));
+        assert!(!q.matches(&at(100, Event::new(Event::TURN_STARTED))));
     }
 
     #[test]
     fn terms_combine_the_way_they_do_over_tasks() {
         let q = parse("agent = scout-1 AND (tool_call_failed OR turn_started)");
-        assert!(q.matches(&event(EventKind::TurnStarted)));
-        assert!(!q.matches(&event(EventKind::RunStarted)));
+        assert!(q.matches(&event(Event::new(Event::TURN_STARTED))));
+        assert!(!q.matches(&event(Event::new(Event::RUN_STARTED))));
     }
 
     #[test]
     fn order_by_created_desc_answers_the_newest_first() {
         let events = [
-            at(100, EventKind::TurnStarted),
-            at(300, EventKind::TurnStarted),
-            at(200, EventKind::TurnStarted),
+            at(100, Event::new(Event::TURN_STARTED)),
+            at(300, Event::new(Event::TURN_STARTED)),
+            at(200, Event::new(Event::TURN_STARTED)),
         ];
         assert_eq!(
             ordered("turn_started ORDER BY created DESC", &events),
@@ -2260,8 +2275,8 @@ mod event_tests {
     #[test]
     fn a_query_without_an_order_keeps_the_order_the_log_holds() {
         let events = [
-            at(300, EventKind::TurnStarted),
-            at(100, EventKind::TurnStarted),
+            at(300, Event::new(Event::TURN_STARTED)),
+            at(100, Event::new(Event::TURN_STARTED)),
         ];
         assert_eq!(ordered("turn_started", &events), [300, 100]);
     }
@@ -2284,16 +2299,16 @@ mod event_tests {
 
     #[test]
     fn a_closure_selects_the_events_it_accepts() {
-        let q = (|e: &Event| e.kind.is_failure()).into_query();
+        let q = (|e: &Event| e.get_name() == Event::TOOL_CALL_FAILED).into_query();
         assert!(q.matches(&event(tool_failed("boom"))));
-        assert!(!q.matches(&event(EventKind::TurnStarted)));
+        assert!(!q.matches(&event(Event::new(Event::TURN_STARTED))));
     }
 
     #[test]
     fn a_string_says_the_same_query_a_compiled_one_does() {
         let q = Matcher::<Event>::into_query("tool_call_failed");
         assert!(q.matches(&event(tool_failed("boom"))));
-        assert!(!q.matches(&event(EventKind::TurnStarted)));
+        assert!(!q.matches(&event(Event::new(Event::TURN_STARTED))));
     }
 
     #[test]

@@ -8,7 +8,7 @@ use crate::agents::agent::Agent;
 use crate::agents::policy::Policy;
 use crate::agents::query::Matcher;
 use crate::agents::tasks::{policy_violated, Queue, Reply, Run, Status, Task};
-use crate::event::{CompactReason, Event, EventKind, PolicyViolation};
+use crate::event::{CompactReason, Event, PolicyViolation};
 use crate::prompts::directives::{NO_TOOL_CALLED, REPLY_REJECTED};
 use crate::providers::{AsUserMessage, Message, Model, RequestErrorKind};
 use crate::tools::{FinishTool, ToolRegistry};
@@ -32,8 +32,9 @@ pub(super) struct TaskContext<'a> {
 }
 
 impl<'a> TaskContext<'a> {
-    pub(super) fn emit(&self, kind: EventKind) -> Event {
-        self.queue.emit(&self.task_key, self.agent.get_id(), kind)
+    pub(super) fn emit_event(&self, event: Event) -> Event {
+        self.queue
+            .emit_event(event.task_key(&self.task_key).agent_id(self.agent.get_id()))
     }
 
     pub(super) fn task(&self) -> Option<Task> {
@@ -69,11 +70,11 @@ impl<'a> TaskContext<'a> {
     /// request path, so `RequestFailed` never reports a request that was
     /// never made.
     pub(super) fn fail_with(&self, reason: RequestErrorKind, message: String) {
-        self.emit(EventKind::RequestFailed {
-            model: self.model.name.clone(),
-            reason,
-            message,
-        });
+        self.emit_event(Event::new(Event::REQUEST_FAILED).data(serde_json::json!({
+            "model": self.model.name,
+            "reason": reason,
+            "message": message,
+        })));
         self.fail_task();
     }
 }
@@ -113,13 +114,10 @@ fn run_is_over(agent: &Agent, queue: &Queue) -> bool {
     }
     let policy = queue.get_policy();
     if let Some((violation, limit)) = policy_violated(&policy, &queue.stats) {
-        queue.emit(
-            "",
-            agent.get_id(),
-            EventKind::PolicyViolated {
-                policy: violation,
-                limit,
-            },
+        queue.emit_event(
+            Event::new(Event::POLICY_VIOLATED)
+                .data(serde_json::json!({ "policy": violation, "limit": limit }))
+                .agent_id(agent.get_id()),
         );
         return true;
     }
@@ -165,7 +163,11 @@ fn claim<'a>(agent: &'a Agent, queue: &'a Arc<Queue>) -> Option<TaskContext<'a>>
         agent.system_prompt(Some(&knowledge_index), &policy, &queue.stats, &task_key);
     let agent_id = agent.get_id();
 
-    queue.emit(&task_key, agent_id, EventKind::TurnStarted);
+    queue.emit_event(
+        Event::new(Event::TURN_STARTED)
+            .task_key(&task_key)
+            .agent_id(agent_id),
+    );
 
     if task.replies.is_empty() {
         queue.append_reply(&task_key, Reply::system_text(system_prompt.clone()));
@@ -232,10 +234,10 @@ fn silence_retry(context: &mut TaskContext<'_>) -> Option<Step> {
     let max = context.policy.max_schema_retries.unwrap_or(u32::MAX);
     context.consecutive_schema_failures = context.consecutive_schema_failures.saturating_add(1);
     if context.consecutive_schema_failures >= max {
-        context.emit(EventKind::PolicyViolated {
-            policy: PolicyViolation::MaxSchemaRetries,
-            limit: u64::from(max),
-        });
+        context.emit_event(Event::new(Event::POLICY_VIOLATED).data(serde_json::json!({
+            "policy": PolicyViolation::MaxSchemaRetries,
+            "limit": u64::from(max),
+        })));
         let _ = context
             .queue
             .set_failed_by(&context.task_key, context.agent.get_id());
@@ -243,11 +245,11 @@ fn silence_retry(context: &mut TaskContext<'_>) -> Option<Step> {
     }
     let detail = context.agent.get_directives().render(NO_TOOL_CALLED, &[]);
     let attempt = context.consecutive_schema_failures;
-    context.emit(EventKind::SchemaRetried {
-        attempt,
-        max_attempts: max,
-        message: detail.clone(),
-    });
+    context.emit_event(Event::new(Event::SCHEMA_RETRIED).data(serde_json::json!({
+        "attempt": attempt,
+        "max_attempts": max,
+        "message": detail,
+    })));
     context.queue.append_reply(
         &context.task_key,
         Reply::user_text(context.retry_directive(&detail, attempt, max)),
@@ -654,7 +656,7 @@ mod tests {
         let finished_events = Arc::new(AtomicUsize::new(0));
         let counter = Arc::clone(&finished_events);
         tasks.on_event(move |_, e| {
-            if matches!(e.kind, crate::event::EventKind::TaskFinished) {
+            if e.get_name() == crate::event::Event::TASK_FINISHED {
                 counter.fetch_add(1, Ordering::Relaxed);
             }
         });
@@ -838,8 +840,6 @@ mod tests {
 
     #[tokio::test]
     async fn paused_interactive_task_emits_turn_started_exactly_once() {
-        use crate::event::EventKind;
-
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let provider = MockProvider::with_results(vec![Ok(text_response("hi"))]);
         let tasks = Queue::new();
@@ -862,7 +862,7 @@ mod tests {
         let events = collected.lock().unwrap().clone();
         let turn_started = events
             .iter()
-            .filter(|e| matches!(e.kind, EventKind::TurnStarted))
+            .filter(|e| e.get_name() == crate::event::Event::TURN_STARTED)
             .count();
         assert_eq!(
             turn_started, 1,
@@ -941,8 +941,6 @@ mod tests {
 
     #[tokio::test]
     async fn loop_fails_task_when_silence_exceeds_schema_retry_budget() {
-        use crate::event::{EventKind, PolicyViolation};
-
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let provider = MockProvider::with_results(vec![Ok(text_response("hi"))]);
         let tasks = Queue::new();
@@ -971,18 +969,14 @@ mod tests {
 
         let events = collected.lock().unwrap().clone();
         let policy_violated = events.iter().any(|e| {
-            matches!(
-                &e.kind,
-                EventKind::PolicyViolated {
-                    policy: PolicyViolation::MaxSchemaRetries,
-                    limit: 1,
-                },
-            )
+            e.get_name() == crate::event::Event::POLICY_VIOLATED
+                && e.get_data()["policy"] == "max_schema_retries"
+                && e.get_data()["limit"] == 1
         });
         assert!(policy_violated, "expected PolicyViolated MaxSchemaRetries");
         let task_failed = events
             .iter()
-            .any(|e| matches!(&e.kind, EventKind::TaskFailed));
+            .any(|e| e.get_name() == crate::event::Event::TASK_FAILED);
         assert!(task_failed, "expected TaskFailed");
     }
 
@@ -1020,8 +1014,6 @@ mod tests {
 
     #[tokio::test]
     async fn silence_retry_emits_schema_retried_event_with_attempt_1() {
-        use crate::event::EventKind;
-
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let provider = MockProvider::with_results(vec![
             Ok(text_response("hi")),
@@ -1045,13 +1037,15 @@ mod tests {
             .expect("test did not finish within 5s");
 
         let events = collected.lock().unwrap().clone();
-        let schema_retries: Vec<(u32, String)> = events
+        let schema_retries: Vec<(u64, String)> = events
             .iter()
-            .filter_map(|e| match &e.kind {
-                EventKind::SchemaRetried {
-                    attempt, message, ..
-                } => Some((*attempt, message.clone())),
-                _ => None,
+            .filter_map(|e| {
+                (e.get_name() == crate::event::Event::SCHEMA_RETRIED).then(|| {
+                    (
+                        e.get_data()["attempt"].as_u64().unwrap(),
+                        e.get_data()["message"].as_str().unwrap().to_owned(),
+                    )
+                })
             })
             .collect();
         assert_eq!(

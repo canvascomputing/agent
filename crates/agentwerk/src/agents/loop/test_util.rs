@@ -215,14 +215,14 @@ pub fn connection_failed(message: &str) -> ProviderError {
 pub fn retries_in(events: &[Event]) -> Vec<(u32, u32, String)> {
     events
         .iter()
-        .filter_map(|e| match &e.kind {
-            crate::event::EventKind::RequestRetried {
-                attempt,
-                max_attempts,
-                message,
-                ..
-            } => Some((*attempt, *max_attempts, message.clone())),
-            _ => None,
+        .filter_map(|event| {
+            (event.get_name() == Event::REQUEST_RETRIED).then(|| {
+                Some((
+                    event.get_data().get("attempt")?.as_u64()? as u32,
+                    event.get_data().get("max_attempts")?.as_u64()? as u32,
+                    event.get_data().get("message")?.as_str()?.to_string(),
+                ))
+            })?
         })
         .collect()
 }
@@ -230,10 +230,18 @@ pub fn retries_in(events: &[Event]) -> Vec<(u32, u32, String)> {
 pub fn failures_in(events: &[Event]) -> Vec<String> {
     events
         .iter()
-        .filter_map(|e| match &e.kind {
-            crate::event::EventKind::RequestFailed { message, .. }
-            | crate::event::EventKind::CompactionFailed { message, .. } => Some(message.clone()),
-            _ => None,
+        .filter_map(|event| {
+            matches!(
+                event.get_name(),
+                Event::REQUEST_FAILED | Event::COMPACTION_FAILED
+            )
+            .then(|| {
+                event
+                    .get_data()
+                    .get("message")?
+                    .as_str()
+                    .map(str::to_string)
+            })?
         })
         .collect()
 }
@@ -241,13 +249,14 @@ pub fn failures_in(events: &[Event]) -> Vec<String> {
 pub fn schema_retries_in(events: &[Event]) -> Vec<(u32, u32, String)> {
     events
         .iter()
-        .filter_map(|e| match &e.kind {
-            crate::event::EventKind::SchemaRetried {
-                attempt,
-                max_attempts,
-                message,
-            } => Some((*attempt, *max_attempts, message.clone())),
-            _ => None,
+        .filter_map(|event| {
+            (event.get_name() == Event::SCHEMA_RETRIED).then(|| {
+                Some((
+                    event.get_data().get("attempt")?.as_u64()? as u32,
+                    event.get_data().get("max_attempts")?.as_u64()? as u32,
+                    event.get_data().get("message")?.as_str()?.to_string(),
+                ))
+            })?
         })
         .collect()
 }

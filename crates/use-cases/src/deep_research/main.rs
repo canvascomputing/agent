@@ -17,7 +17,7 @@
 
 use std::sync::Arc;
 
-use agentwerk::event::{Event, EventKind, EventName};
+use agentwerk::event::Event;
 use agentwerk::providers::{Model, Provider};
 use agentwerk::schemas::{Schema, SchemaStore};
 use agentwerk::tools::{FetchUrlTool, TasksTool, Tool, ToolResult};
@@ -207,9 +207,9 @@ fn print_stats(tasks: &Queue) {
         "  Duration : {:?}",
         tasks.get_duration().unwrap_or_default()
     );
-    let count = |kind: EventName| tasks.find_events(kind.get_name()).len() as u64;
-    let done = count(EventName::TaskFinished);
-    let failed = count(EventName::TaskFailed);
+    let count = |name: &str| tasks.find_events(name).len() as u64;
+    let done = count(Event::TASK_FINISHED);
+    let failed = count(Event::TASK_FAILED);
     let resolved = done + failed;
     let success = if resolved == 0 {
         0.0
@@ -224,9 +224,9 @@ fn print_stats(tasks: &Queue) {
     );
     eprintln!(
         "  Activity : {} requests · {} tool calls · {} failed requests",
-        count(EventName::RequestFinished),
-        count(EventName::ToolCallStarted),
-        count(EventName::RequestFailed),
+        count(Event::REQUEST_FINISHED),
+        count(Event::TOOL_CALL_STARTED),
+        count(Event::REQUEST_FAILED),
     );
 }
 
@@ -312,42 +312,40 @@ async fn brave_search(api_key: &str, input: &serde_json::Value) -> ToolResult {
 fn log_event(event: &Event) {
     let agent = event.get_agent_id();
     let key = event.get_task_key();
-    match event.get_kind() {
-        EventKind::TaskStarted => {
+    let data = event.get_data();
+    match event.get_name() {
+        Event::TASK_STARTED => {
             eprintln!("\n┌─ [{agent}] picked up {key}");
         }
-        EventKind::ToolCallStarted {
-            tool_name, input, ..
-        } => {
-            for line in format_tool_call(tool_name, input) {
+        Event::TOOL_CALL_STARTED => {
+            let tool_name = data["tool_name"].as_str().unwrap_or_default();
+            for line in format_tool_call(tool_name, &data["input"]) {
                 eprintln!("│  {line}");
             }
         }
-        EventKind::ToolCallFailed {
-            tool_name,
-            message,
-            reason,
-            ..
-        } => {
-            eprintln!("│  ✗ {tool_name} ({reason:?}): {message}");
-        }
-        EventKind::SchemaRetried {
-            attempt,
-            max_attempts,
-            message,
-        } => {
+        Event::TOOL_CALL_FAILED => {
             eprintln!(
-                "│  ↻ retry {attempt}/{max_attempts}: {}",
-                truncate(message, 110)
+                "│  ✗ {} ({}): {}",
+                data["tool_name"].as_str().unwrap_or_default(),
+                data["reason"].as_str().unwrap_or_default(),
+                data["message"].as_str().unwrap_or_default(),
             );
         }
-        EventKind::PolicyViolated { policy, limit } => {
-            eprintln!("│  ⚠ policy: {policy:?} limit={limit}");
+        Event::SCHEMA_RETRIED => {
+            eprintln!(
+                "│  ↻ retry {}/{}: {}",
+                data["attempt"],
+                data["max_attempts"],
+                truncate(data["message"].as_str().unwrap_or_default(), 110)
+            );
         }
-        EventKind::TaskFinished => {
+        Event::POLICY_VIOLATED => {
+            eprintln!("│  ⚠ policy: {} limit={}", data["policy"], data["limit"]);
+        }
+        Event::TASK_FINISHED => {
             eprintln!("└─ ✓ finished {key}");
         }
-        EventKind::TaskFailed => {
+        Event::TASK_FAILED => {
             eprintln!("└─ ✗ failed {key}");
         }
         _ => {}

@@ -328,66 +328,40 @@ tasks.find_results("scan ORDER BY finished DESC");
 
 #### Terms
 
-| | Term | Description |
-|-|------|-------------|
-| **Match** | `label = scan` | Select the tasks carrying the label `scan`. |
-| | `label != scan` | Exclude that label, and every task carrying none. |
-| | `label IN (scan, report)` | Select the tasks carrying either label. |
-| | `label NOT IN (scan, report)` | Exclude both labels. |
-| | `label IS EMPTY` | Select the tasks carrying no label. |
-| | `label IS NOT EMPTY` | Select the tasks carrying one. |
-| | `pending = true` | Select unfinished tasks this run may still schedule. |
-| | `cancelled = true` | Select tasks this run has taken off the queue. |
-| **Search** | `task ~ "retry budget"` | Search the task body, ignoring case. |
-| | `task !~ draft` | Exclude the tasks the text appears in. |
-| **Compare** | `failed > -1h` | Select the tasks that failed inside the last hour. |
-| | `created >= 2026-08-24` | Select the tasks submitted on that date or later. |
-| **Combine** | `A AND B` | Require both terms; `AND` binds tighter than `OR`. |
-| | `A OR B` | Require either term. |
-| | `NOT A` | Invert a term or a group. |
-| | `(A OR B) AND C` | Group terms with parentheses. |
-| **Shorten** | `scan` | Select the label `scan`, the short form of `label = scan`. |
-| | `t-3` | Select one task by key, the short form of `key = t-3`. |
-| **Sort** | `ORDER BY finished DESC` | Answer with the most recently finished first. |
-| | `ORDER BY created` | Answer in creation order, which `ASC` also says. |
+| | Syntax | Meaning |
+|-|--------|---------|
+| **Match** | `field = value`, `field != value` | Include or exclude one exact value. |
+| | `field IN (a, b)`, `field NOT IN (a, b)` | Include or exclude a list. |
+| **Presence** | `field IS EMPTY`, `field IS NOT EMPTY` | Test whether an optional field has a value. |
+| **Search** | `field ~ text`, `field !~ text` | Include or exclude case-insensitive text. |
+| **Compare** | `field > value`, `>=`, `<`, `<=` | Compare a time field. |
+| **Combine** | `A AND B`, `A OR B`, `NOT A`, `(A OR B)` | Combine or group conditions. |
+| **Shorthand** | `scan`, `t-3` | Short for `label = scan` and `key = t-3`. |
+| **Sort** | `ORDER BY field DESC` | Sort matches; `ASC` is the default. |
 
 #### Fields
 
-| | Field | Description |
-|-|-------|-------------|
-| **Match** | `key` | Match the task key, of the form `t-N`. |
-| | `label` | Match the label the task carries. |
-| | `status` | Match `Todo`, `InProgress`, `Finished`, or `Failed`. |
-| | `pending` | Match whether the task is unfinished and not cancelled. |
-| | `cancelled` | Match whether this run has taken the task off the queue. |
-| | `agent` | Match the agent that claimed the task. |
-| | `parent` | Match the task a handover came from. |
-| **Search** | `task` | Search the work the agent was asked to do. |
-| | `result` | Search the result the agent produced. |
-| | `errors` | Search the failures recorded against the task. |
-| **Compare** | `created` | Compare or sort by when the task was submitted. |
-| | `started` | Compare or sort by when an agent claimed the task. |
-| | `finished` | Compare or sort by when the task reached the `Finished` status. |
-| | `failed` | Compare or sort by when the task reached the `Failed` status. |
+| Kind | Fields | Meaning |
+|------|--------|---------|
+| **Identity** | `key`, `label`, `status` | Task identity and lifecycle state (`Todo`, `InProgress`, `Finished`, or `Failed`). |
+| **Run state** | `pending`, `cancelled` | Whether this run may schedule the task. |
+| **Relationship** | `agent`, `parent` | Claiming agent and handover parent. |
+| **Text** | `task`, `result`, `errors` | Task body, result, and recorded failures. |
+| **Time** | `created`, `started`, `finished`, `failed` | Lifecycle timestamps. |
 
 #### Rules
 
-Operators depend on the field type:
+Choose the operator by what you are checking: `label = scan`, `result ~ timeout`, `failed > -1h`, or `agent IS EMPTY`.
 
-| Field kind | Fields | Operators |
-|------------|--------|-----------|
-| **Identity** | `key`, `label`, `status`, `pending`, `cancelled`, `agent`, `parent` | Exact match with `=`, `!=`, `IN (...)`, or `NOT IN (...)`. Status accepts `InProgress` and `in_progress`. |
-| **Text** | `task`, `result`, `errors` | Case-insensitive contains with `~` or `!~`. |
-| **Time** | `created`, `started`, `finished`, `failed` | Compare with `>`, `>=`, `<`, or `<=` against a `YYYY-MM-DD` UTC date, epoch milliseconds, or an offset such as `-30m`, `-2h`, `-7d`, or `-1w`. |
-| **Presence** | Any optional field | Check with `IS EMPTY` or `IS NOT EMPTY`; `finished IS EMPTY` selects open tasks. |
+Comparisons, including negative ones, skip missing values. `label != scan` therefore excludes unlabelled tasks. Include them with `label IS EMPTY OR label != scan`, or invert the comparison with `NOT label = scan`.
 
 Quote values containing spaces: `label = "needs review"`. Lists use parentheses: `label IN (scan, report)`.
 
-Relative times resolve when the query compiles.
-
 `NOT` applies to the next condition or group; `AND` binds before `OR`. Keywords ignore case, but exact labels, keys, and agent IDs do not.
 
-`ORDER BY field` defaults to `ASC`; add `DESC` to reverse it. Without it, tasks stay in creation order. Keys sort numerically and statuses by lifecycle.
+Times accept `YYYY-MM-DD` UTC dates, epoch milliseconds, or offsets such as `-30m`, `-2h`, `-7d`, and `-1w`. Relative times resolve when the query compiles.
+
+`ORDER BY field` defaults to `ASC`; add `DESC` to reverse it. Missing values sort last in either direction. Without it, tasks stay in creation order. Keys sort numerically and statuses by lifecycle.
 
 #### Examples
 
@@ -616,7 +590,7 @@ tasks.set_policy(Policy {
 | `request_retry_delay` | Wait this long between retries. |
 | `compaction_threshold` | Compact once the next request would fill this share of the window. |
 
-`set_policy(policy)` replaces the whole configuration, and `get_policy()` reads it back. A violated limit emits `EventKind::PolicyViolated`, see [`EventKind`](https://docs.rs/agentwerk/latest/agentwerk/event/enum.EventKind.html). `compaction_threshold` is the exception, see [Compaction](#compaction).
+`set_policy(policy)` replaces the whole configuration, and `get_policy()` reads it back. A violated limit emits `Event::POLICY_VIOLATED`. `compaction_threshold` is the exception, see [Compaction](#compaction).
 
 </details>
 
@@ -636,12 +610,12 @@ tasks.set_policy(Policy {
 
 `compaction_threshold` is a fraction of the model's context window, `0.85` by default. Reaching it summarizes the older messages and the agent carries on.
 
-Compaction also runs after the LLM provider reports the window exceeded. `CompactionStarted`, `CompactionProgress`, `CompactionFinished`, and `CompactionFailed` report each step, see [Events](#events).
+Compaction also runs after the LLM provider reports the window exceeded. `compaction_started`, `compaction_progress`, `compaction_finished`, and `compaction_failed` report each step, see [Events](#events).
 
 ```rust
 tasks.on_event(|_, event| {
-    if let EventKind::CompactionFinished { reason } = event.get_kind() {
-        eprintln!("[{}] compacted {reason}", event.get_task_key());
+    if event.get_name() == Event::COMPACTION_FINISHED {
+        eprintln!("[{}] compacted {}", event.get_task_key(), event.get_data()["reason"]);
     }
 });
 ```
@@ -814,58 +788,96 @@ See [`Tool`](https://docs.rs/agentwerk/latest/agentwerk/tools/struct.Tool.html).
 Events allow you to inspect all activities of your agents.
 
 ```rust
-use agentwerk::event::EventKind;
+use agentwerk::Event;
 
 tasks.on_event(|_, event| {
-    if let EventKind::TaskFinished = event.get_kind() {
+    if event.get_name() == Event::TASK_FINISHED {
         eprintln!("[{}] done {} {:?}", event.get_agent_id(), event.get_task_key(), event.get_label());
     }
 });
 ```
 
 <details>
-<summary>All event kinds and readers</summary>
+<summary>All event names and readers</summary>
 
 | | Kind | Description |
 |-|------|-------------|
-| **Run** | `RunStarted` | Execution began. |
-| | `RunFinished` | Execution ended, carrying the reason. |
-| | `PolicyViolated` | A limit was breached and execution stopped. |
-| **Task** | `TaskStarted` | An agent claimed a task. |
-| | `TaskFinished` | A task finished successfully. |
-| | `TaskFailed` | A task failed. |
-| | `TurnStarted` | The agent began another turn on its task. |
-| | `SchemaRetried` | A tool call or result the model created was invalid. |
-| **LLM provider** | `RequestStarted` | A request went out to the model. |
-| | `RequestFinished` | A request finished and reported its token usage. |
-| | `RequestFailed` | A request failed and was not retried. |
-| | `RequestRetried` | A transient provider error triggered a retry. |
-| | `TextChunkReceived` | A piece of the reply arrived. |
-| | `ResponseRepaired` | A tool call or value the model created was invalid and was corrected. |
-| **Tool** | `ToolCallDeclined` | A tool call proposed by the model was declined. |
-| | `ToolCallStarted` | A tool invocation began. |
-| | `ToolCallFinished` | A tool invocation finished. |
-| | `ToolCallFailed` | A tool invocation failed but the task continues. |
-| **File** | `FileOpenFinished` | A tool opened a file. |
-| | `FileOpenFailed` | A tool could not open a file. |
-| **Knowledge** | `KnowledgeWritten` | A page was written. |
-| | `KnowledgeRead` | A page was read. |
-| | `KnowledgeRemoved` | A page was removed. |
-| | `KnowledgeListed` | The pages were listed. |
-| | `KnowledgeFailed` | An action against the store did not go through. |
-| **Compaction** | `CompactionStarted` | Compaction is about to rewrite the older messages. |
-| | `CompactionProgress` | Compaction finished part of the work. |
-| | `CompactionFinished` | Compaction replaced the older messages. |
-| | `CompactionFailed` | Compaction could not finish. |
+| **Run** | `run_started` | Execution began. |
+| | `run_finished` | Execution ended, carrying the reason. |
+| | `policy_violated` | A limit was breached and execution stopped. |
+| **Task** | `task_started` | An agent claimed a task. |
+| | `task_finished` | A task finished successfully. |
+| | `task_failed` | A task failed. |
+| | `turn_started` | The agent began another turn on its task. |
+| | `schema_retried` | A tool call or result the model created was invalid. |
+| **LLM provider** | `request_started` | A request went out to the model. |
+| | `request_finished` | A request finished and reported its token usage. |
+| | `request_failed` | A request failed and was not retried. |
+| | `request_retried` | A transient provider error triggered a retry. |
+| | `text_chunk_received` | A piece of the reply arrived. |
+| | `response_repaired` | A tool call or value the model created was invalid and was corrected. |
+| **Tool** | `tool_call_declined` | A tool call proposed by the model was declined. |
+| | `tool_call_started` | A tool invocation began. |
+| | `tool_call_finished` | A tool invocation finished. |
+| | `tool_call_failed` | A tool invocation failed but the task continues. |
+| **File** | `file_open_finished` | A tool opened a file. |
+| | `file_open_failed` | A tool could not open a file. |
+| **Knowledge** | `knowledge_written` | A page was written. |
+| | `knowledge_read` | A page was read. |
+| | `knowledge_removed` | A page was removed. |
+| | `knowledge_listed` | The pages were listed. |
+| | `knowledge_failed` | An action against the store did not go through. |
+| **Compaction** | `compaction_started` | Compaction is about to rewrite the older messages. |
+| | `compaction_progress` | Compaction finished part of the work. |
+| | `compaction_finished` | Compaction replaced the older messages. |
+| | `compaction_failed` | Compaction could not finish. |
+| **Application** | caller-defined name | An event published with `emit_event`. |
 
-Every event is written to the session log. You read events from the task queue, or from the session directory in `.agentwerk/events.jsonl`:
+### Publish events
+
+Publish application events through the queue, adding agent or task context when relevant:
+
+```rust
+use agentwerk::Event;
+use serde_json::json;
+
+tasks.emit_event(
+    Event::new("document_indexed")
+        .data(json!({ "documents": 42 }))
+        .task_key("t-1")
+        .agent_id("indexer-1"),
+);
+
+tasks.emit_event(Event::new("index_refreshed"));
+```
+
+The first event's name, data, and context are stored as:
+
+```json
+{"name":"document_indexed","data":{"documents":42},"task_key":"t-1","agent_id":"indexer-1"}
+```
+
+Lowercase snake case keeps application names consistent with built-in events, but
+other names are accepted. Quote names containing spaces or punctuation in AQL,
+as in `event = "Document Indexed"`. `emit_event` adds the timestamp and a known
+task's label. Built-in names are available as `Event` constants. The name alone
+determines hooks, statistics, and persistence behavior, while publication does
+not perform the built-in event's associated state transition.
+
+Events other than streamed text chunks are written to the session log. You read events from the task queue, or from the session directory in `.agentwerk/events.jsonl`:
 
 | Method | Description |
 |--------|-------------|
-| `find_event(query)` | Get the earliest recorded event matching an AQL query, or the first in the order it names. |
-| `find_events(query)` | Get every recorded event matching an AQL query, oldest first. |
+| `emit_event(event)` | Publish an event for querying and observation. |
+| `find_event(query)` | Get the first matching event in query order; without `ORDER BY`, this is the earliest one. |
+| `find_events(query)` | Get every matching event in query order; without `ORDER BY`, this is oldest first. |
 | `get_input_tokens()` / `get_output_tokens()` | Get token counts across the run's requests. |
 | `get_duration()` | Get the elapsed execution duration. |
+
+</details>
+
+<details>
+<summary>All event query fields and rules</summary>
 
 You can query events with AQL syntax or closures.
 
@@ -878,20 +890,30 @@ tasks.find_events("payload ~ timeout AND created > -1h");
 
 | | Field | Description |
 |-|-------|-------------|
-| **Match** | `event` | Match the kind, as `run_started`, `tool_call_failed`, and the rest are spelled. |
-| | `agent` | Match the agent that emitted the event. |
-| | `task` | Match the task the event concerns, empty on `RunStarted` and `RunFinished`. |
-| | `label` | Match the label that task carries. |
-| **Search** | `payload` | Search what the kind carries, its name included. |
-| **Compare** | `created` | Compare or sort by when the event happened. |
+| **Match** | `event` | The event name, such as `run_started` or `tool_call_failed`. |
+| | `agent` | The attributed agent ID, when the event has agent context. |
+| | `task` | The attributed task key, when the event has task context. |
+| | `label` | The attributed task's label, when the task is known and labelled. |
+| **Search** | `payload` | The event name and serialized event data, searched together as text. |
+| **Compare** | `created` | When the event was recorded. |
 
-- An event query takes the same operators, `AND` / `OR` / `NOT`, and `ORDER BY` a [task query](#queries) does.
-- `IS EMPTY` and `IS NOT EMPTY` read `agent`, `task`, and `label`.
-- A lone word is the short form of `event = <word>` when it names an event, and of `label = <word>` when it does not. A lone `t-N` is the short form of `task = t-N`.
+Event queries use the same operators, boolean precedence, quoting, time values, and `ORDER BY` rules as [task queries](#queries). The event fields determine which operators are valid: use exact-value operators for `event`, `agent`, `task`, and `label`; text operators for `payload`; and time operators for `created`.
 
-See [`EventKind`](https://docs.rs/agentwerk/latest/agentwerk/event/enum.EventKind.html) and [`Queue`](https://docs.rs/agentwerk/latest/agentwerk/agents/tasks/struct.Queue.html).
+Only `agent`, `task`, and `label` can be missing from an event. Use `IS EMPTY` to select events without that context and `IS NOT EMPTY` to select events that carry it. As with task queries, `agent != research-1` does not match an event whose `agent` is missing.
+
+Without `ORDER BY`, matching events stay in log order, oldest first. When an event query does sort by an optional field such as `agent`, events without that field come last.
+
+A lone unquoted word is shorthand, resolved in this order:
+
+1. A task key such as `t-3` means `task = t-3`.
+2. A built-in event name such as `tool_call_failed` means `event = tool_call_failed`.
+3. Any other value such as `scan` means `label = scan`.
+
+Caller-defined event names are not recognized by the shorthand. Query them through the field explicitly, as in `event = document_indexed`. Likewise, use `label = tool_call_failed` when a label happens to have the same name as a built-in event.
 
 </details>
+
+See [`Event`](https://docs.rs/agentwerk/latest/agentwerk/event/struct.Event.html) and [`Queue`](https://docs.rs/agentwerk/latest/agentwerk/agents/tasks/struct.Queue.html).
 
 ### Hooks
 
@@ -923,7 +945,7 @@ Save replies of every finished task as a training example:
 
 ```rust
 tasks.on_task(|queue, event, task| {
-    if matches!(event.get_kind(), EventKind::TaskFinished) {
+    if event.get_name() == Event::TASK_FINISHED {
         let model = queue.get_model_for_agent(event.get_agent_id());
         let _ = Trajectory::from_task(event.get_agent_id(), model.as_deref(), task)
             .save("datasets");

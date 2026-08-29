@@ -13,7 +13,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use super::common;
 
 use agentwerk::tools::TasksTool;
-use agentwerk::{Agent, EventKind, Policy, Query, Queue, Task};
+use agentwerk::{Agent, Event, Policy, Query, Queue, Task};
 
 const ACTIONS: [&str; 5] = ["task", "result", "list", "create", "edit"];
 
@@ -39,11 +39,10 @@ async fn walks_every_task_action() -> std::result::Result<(), Box<dyn std::error
     let actions = Arc::clone(&seen);
     let queries = Arc::clone(&written);
     tasks.on_event(move |_, e| {
-        if let EventKind::ToolCallStarted {
-            tool_name, input, ..
-        } = e.get_kind()
-        {
-            if tool_name == "tasks" {
+        if e.get_name() == Event::TOOL_CALL_STARTED {
+            let data = e.get_data();
+            if data["tool_name"] == "tasks" {
+                let input = &data["input"];
                 if let Some(action) = input["action"].as_str() {
                     actions.lock().unwrap().insert(action.to_string());
                 }

@@ -16,7 +16,7 @@ use std::time::Duration;
 use super::common;
 
 use agentwerk::agents::knowledge::Page;
-use agentwerk::event::{default_logger, Event, EventKind};
+use agentwerk::event::{default_logger, Event};
 use agentwerk::tools::GrepTool;
 use agentwerk::{Agent, Knowledge, Policy, Queue, Task};
 
@@ -134,19 +134,18 @@ async fn seeker_pool_finds_planted_indicators(
     let outputs_c = Arc::clone(&outputs);
     let logger = default_logger();
     let event_handler = Arc::new(move |e: &Event| {
-        match e.get_kind() {
-            EventKind::ToolCallStarted {
-                tool_name, input, ..
-            } if tool_name == "grep" => {
+        match e.get_name() {
+            Event::TOOL_CALL_STARTED if e.get_data()["tool_name"] == "grep" => {
                 calls_c
                     .lock()
                     .unwrap()
-                    .push((e.get_agent_id().to_string(), input.clone()));
+                    .push((e.get_agent_id().to_string(), e.get_data()["input"].clone()));
             }
-            EventKind::ToolCallFinished {
-                tool_name, output, ..
-            } if tool_name == "grep" => {
-                outputs_c.lock().unwrap().push(output.clone());
+            Event::TOOL_CALL_FINISHED if e.get_data()["tool_name"] == "grep" => {
+                outputs_c
+                    .lock()
+                    .unwrap()
+                    .push(e.get_data()["output"].as_str().unwrap().to_string());
             }
             _ => {}
         }

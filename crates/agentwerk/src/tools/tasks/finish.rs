@@ -782,7 +782,7 @@ mod tests {
         for line in log.lines() {
             let parsed: serde_json::Value =
                 serde_json::from_str(line).unwrap_or_else(|e| panic!("corrupt line {line:?}: {e}"));
-            if parsed["event"] == "task_finished" {
+            if parsed["name"] == "task_finished" {
                 let task = parsed["task_key"].as_str().unwrap().to_string();
                 assert!(finished.insert(task), "duplicate task in log");
             }

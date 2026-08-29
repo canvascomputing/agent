@@ -17,7 +17,7 @@ use std::io::IsTerminal;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use agentwerk::event::{Event, EventKind};
+use agentwerk::event::Event;
 use agentwerk::providers::{Model, Provider};
 use agentwerk::schemas::Schema;
 use agentwerk::tools::{TasksTool, Tool, ToolResult};
@@ -110,7 +110,7 @@ fn aggregate_and_report(tasks: &Queue, partitions: &[(u64, u64)], n: u64, style:
     let expected = closed_form(n);
     let elapsed = tasks.get_duration().unwrap_or_default().as_secs_f64();
     let done = tasks
-        .find_events(|e: &Event| matches!(e.get_kind(), EventKind::TaskFinished))
+        .find_events(|event: &Event| event.get_name() == Event::TASK_FINISHED)
         .len();
 
     eprintln!(
@@ -263,15 +263,16 @@ fn build_event_handler(
     Arc::new(move |event: &Event| {
         let agent = event.get_agent_id();
         let key = event.get_task_key();
-        match event.get_kind() {
-            EventKind::TaskStarted => eprintln!(
+        let data = event.get_data();
+        match event.get_name() {
+            Event::TASK_STARTED => eprintln!(
                 "{dim}│       ▶ {agent:<10} {key} dispatched{reset}",
                 dim = style.dim,
                 reset = style.reset,
             ),
-            EventKind::TaskFinished | EventKind::TaskFailed => {
+            Event::TASK_FINISHED | Event::TASK_FAILED => {
                 let n = done.fetch_add(1, Ordering::Relaxed) + 1;
-                let outcome = if matches!(event.get_kind(), EventKind::TaskFinished) {
+                let outcome = if event.get_name() == Event::TASK_FINISHED {
                     "done"
                 } else {
                     "failed"
@@ -282,10 +283,9 @@ fn build_event_handler(
                     reset = style.reset,
                 );
             }
-            EventKind::ToolCallStarted {
-                tool_name, input, ..
-            } if verbose => {
-                let snippet = input
+            Event::TOOL_CALL_STARTED if verbose => {
+                let tool_name = data["tool_name"].as_str().unwrap_or_default();
+                let snippet = data["input"]
                     .get("code")
                     .and_then(|v| v.as_str())
                     .unwrap_or_default();
@@ -296,22 +296,23 @@ fn build_event_handler(
                     reset = style.reset,
                 );
             }
-            EventKind::ToolCallFailed {
-                tool_name, message, ..
-            } => eprintln!(
+            Event::TOOL_CALL_FAILED => eprintln!(
                 "{red}│    {agent} ✗ {tool_name}: {}{reset}",
-                truncate(message, 120),
+                truncate(data["message"].as_str().unwrap_or_default(), 120),
+                tool_name = data["tool_name"].as_str().unwrap_or_default(),
                 red = style.red,
                 reset = style.reset,
             ),
-            EventKind::RequestFailed { message, .. } => eprintln!(
+            Event::REQUEST_FAILED => eprintln!(
                 "{red}│    {agent} ✗ request failed: {}{reset}",
-                truncate(message, 120),
+                truncate(data["message"].as_str().unwrap_or_default(), 120),
                 red = style.red,
                 reset = style.reset,
             ),
-            EventKind::PolicyViolated { policy, limit } => eprintln!(
+            Event::POLICY_VIOLATED => eprintln!(
                 "{red}│    {agent} ✗ policy {policy:?} (limit {limit}){reset}",
+                policy = data["policy"],
+                limit = data["limit"],
                 red = style.red,
                 reset = style.reset,
             ),

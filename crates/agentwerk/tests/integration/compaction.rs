@@ -8,7 +8,6 @@ use std::sync::{Arc, Mutex};
 use super::common;
 
 use agentwerk::agents::tasks::Author;
-use agentwerk::event::EventKind;
 use agentwerk::{Agent, Event, Policy, Queue, Task};
 
 // Pins a known context window: the trigger stays quiet on a model whose window
@@ -151,15 +150,15 @@ async fn summariser_produces_text_when_compaction_fires_against_live_llm() {
 
     eprintln!("\n=== EVENTS ===");
     for e in all_events.iter() {
-        eprintln!("  {:?}", e.get_kind());
+        eprintln!("  {}", e.get_name());
     }
 
     let compacted = all_events
         .iter()
-        .any(|e| matches!(e.get_kind(), EventKind::CompactionStarted { .. }));
+        .any(|e| e.get_name() == Event::COMPACTION_STARTED);
     let compaction_succeeded = all_events
         .iter()
-        .any(|e| matches!(e.get_kind(), EventKind::CompactionFinished { .. }));
+        .any(|e| e.get_name() == Event::COMPACTION_FINISHED);
 
     eprintln!("\n=== AFTER COMPACTION ===");
     for task in tasks.get_tasks() {

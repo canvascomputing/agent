@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use crate::event::{Event, EventKind, EventName};
+use crate::event::Event;
 use crate::providers::TokenUsage;
 
 /// `Stats` counts a run as it happens, so the limit check that fires every
@@ -20,9 +20,9 @@ use crate::providers::TokenUsage;
 /// [`Queue`](crate::Queue) and folds anything finer out of the
 /// events themselves.
 pub(crate) struct Stats {
-    /// Count per event kind. Every recorded event lands here, and
+    /// Count per event name. Every recorded event lands here, and
     /// [`Stats::event_count`] is a lookup into this map.
-    event_counts: Mutex<HashMap<EventName, u64>>,
+    event_counts: Mutex<HashMap<String, u64>>,
     /// Input tokens across the finished requests.
     input_tokens: AtomicU64,
     /// Output tokens across the finished requests.
@@ -59,11 +59,11 @@ impl Stats {
 
     /// Get how many events of one kind were recorded. A kind that never
     /// happened reads zero.
-    pub(crate) fn event_count(&self, event: EventName) -> u64 {
+    pub(crate) fn event_count(&self, name: &str) -> u64 {
         self.event_counts
             .lock()
             .unwrap()
-            .get(&event)
+            .get(name)
             .copied()
             .unwrap_or(0)
     }
@@ -117,24 +117,31 @@ impl Stats {
     /// Fold one event in. The single writer, so a live queue and a log read
     /// back off disk arrive at the same figures.
     ///
-    /// Every kind is counted by its name, so a new variant needs no arm here.
+    /// Every event is counted by name, so a new name needs no arm here.
     pub(crate) fn record(&self, event: &Event) {
         *self
             .event_counts
             .lock()
             .unwrap()
-            .entry(event.kind.get_event_name())
+            .entry(event.name.clone())
             .or_default() += 1;
-        match &event.kind {
-            EventKind::RequestFinished { usage, .. } => {
+        match event.name.as_str() {
+            Event::REQUEST_FINISHED => {
+                let Some(usage) = event
+                    .data
+                    .get("usage")
+                    .and_then(|value| serde_json::from_value::<TokenUsage>(value.clone()).ok())
+                else {
+                    return;
+                };
                 self.input_tokens
                     .fetch_add(usage.input_tokens, Ordering::Relaxed);
                 self.output_tokens
                     .fetch_add(usage.output_tokens, Ordering::Relaxed);
-                self.record_usage(&event.task_key, usage.clone());
+                self.record_usage(&event.task_key, usage);
             }
             // The first claim starts the clock; the run ending stops it.
-            EventKind::TaskStarted => {
+            Event::TASK_STARTED => {
                 let _ = self.started_at.compare_exchange(
                     0,
                     event.created_at,
@@ -142,9 +149,7 @@ impl Stats {
                     Ordering::Relaxed,
                 );
             }
-            EventKind::RunFinished { .. } => {
-                self.finished_at.store(event.created_at, Ordering::Relaxed)
-            }
+            Event::RUN_FINISHED => self.finished_at.store(event.created_at, Ordering::Relaxed),
             _ => {}
         }
     }
@@ -153,7 +158,7 @@ impl Stats {
     ///
     /// Crate-internal: it is cleared when a task is compacted, so a caller
     /// reading it would get a silently truncated series. A host that wants
-    /// the figures reads `EventKind::RequestFinished`, which reports every
+    /// the figures reads `Event::REQUEST_FINISHED`, which reports every
     /// one as it happens and is never cleared.
     pub(crate) fn usage_for_task(&self, task_key: &str) -> Vec<TokenUsage> {
         self.token_usage
@@ -192,10 +197,11 @@ impl Stats {
 #[cfg(test)]
 impl Stats {
     /// Lets a test state the events it cares about without writing a log first.
-    pub(crate) fn of(kinds: impl IntoIterator<Item = EventKind>) -> Self {
+    pub(crate) fn of(events: impl IntoIterator<Item = Event>) -> Self {
         let stats = Stats::new();
-        for kind in kinds {
-            stats.record(&Event::new("", "", None, kind));
+        for mut event in events {
+            event.created_at = crate::agents::tasks::now_millis();
+            stats.record(&event);
         }
         stats
     }
@@ -204,26 +210,22 @@ impl Stats {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::event::FinishReason;
-
-    fn turn() -> EventKind {
-        EventKind::TurnStarted
+    fn turn() -> Event {
+        Event::new(Event::TURN_STARTED)
     }
 
-    fn request(input_tokens: u64, output_tokens: u64) -> EventKind {
-        EventKind::RequestFinished {
-            model: "m".into(),
-            usage: TokenUsage {
+    fn request(input_tokens: u64, output_tokens: u64) -> Event {
+        Event::new(Event::REQUEST_FINISHED).data(serde_json::json!({
+            "model": "m",
+            "usage": TokenUsage {
                 input_tokens,
                 output_tokens,
             },
-        }
+        }))
     }
 
-    fn run_finished() -> EventKind {
-        EventKind::RunFinished {
-            reason: FinishReason::Drained,
-        }
+    fn run_finished() -> Event {
+        Event::new(Event::RUN_FINISHED).data(serde_json::json!({ "reason": "drained" }))
     }
 
     /// The fold `Queue::load` runs over a session log as it resumes.
@@ -234,30 +236,30 @@ mod tests {
     }
 
     /// Pins the stamp, which the clock reads and `Event::new` would set to now.
-    fn at(created_at: u64, kind: EventKind) -> Event {
+    fn at(created_at: u64, event: Event) -> Event {
         Event {
             created_at,
-            ..Event::new("", "t-1", None, kind)
+            ..event.task_key("t-1")
         }
     }
 
     #[test]
     fn fresh_stats_are_zero() {
         let stats = Stats::new();
-        assert_eq!(stats.event_count(EventName::TurnStarted), 0);
+        assert_eq!(stats.event_count(Event::TURN_STARTED), 0);
         assert_eq!(stats.input_tokens(), 0);
         assert_eq!(stats.output_tokens(), 0);
         assert_eq!(stats.execution_duration(), None);
     }
 
     #[test]
-    fn every_kind_is_counted_by_its_name() {
-        let stats = Stats::of(crate::event::tests::all_variants());
-        for kind in crate::event::tests::all_variants() {
+    fn every_event_is_counted_by_its_name() {
+        let stats = Stats::of(crate::event::tests::all_events());
+        for event in crate::event::tests::all_events() {
             assert!(
-                stats.event_count(kind.get_event_name()) > 0,
+                stats.event_count(event.get_name()) > 0,
                 "{} was never counted",
-                kind.get_event_name(),
+                event.get_name(),
             );
         }
     }
@@ -267,7 +269,7 @@ mod tests {
         let stats = Stats::of([request(10, 5), request(2, 1)]);
         assert_eq!(stats.input_tokens(), 12);
         assert_eq!(stats.output_tokens(), 6);
-        assert_eq!(stats.event_count(EventName::RequestFinished), 2);
+        assert_eq!(stats.event_count(Event::REQUEST_FINISHED), 2);
     }
 
     #[test]
@@ -286,7 +288,7 @@ mod tests {
     fn reset_usage_clears_one_task_without_touching_others() {
         let stats = Stats::new();
         stats.record(&at(0, request(100, 10)));
-        stats.record(&Event::new("", "t-2", None, request(300, 30)));
+        stats.record(&request(300, 30).task_key("t-2"));
 
         stats.reset_usage("t-1");
 
@@ -297,8 +299,8 @@ mod tests {
     #[test]
     fn the_first_task_to_start_starts_the_clock() {
         let stats = Stats::new();
-        stats.record(&at(1_000, EventKind::TaskStarted));
-        stats.record(&at(2_000, EventKind::TaskStarted));
+        stats.record(&at(1_000, Event::new(Event::TASK_STARTED)));
+        stats.record(&at(2_000, Event::new(Event::TASK_STARTED)));
         stats.record(&at(4_500, run_finished()));
 
         assert_eq!(
@@ -310,7 +312,7 @@ mod tests {
     #[test]
     fn execution_duration_freezes_when_the_run_ends() {
         let stats = Stats::new();
-        stats.record(&at(1_000, EventKind::TaskStarted));
+        stats.record(&at(1_000, Event::new(Event::TASK_STARTED)));
         stats.record(&at(2_500, run_finished()));
 
         let frozen = stats.execution_duration();
@@ -320,14 +322,14 @@ mod tests {
 
     #[test]
     fn execution_duration_is_none_until_a_task_starts() {
-        let stats = Stats::of([EventKind::RunStarted, turn()]);
+        let stats = Stats::of([Event::new(Event::RUN_STARTED), turn()]);
         assert_eq!(stats.execution_duration(), None);
     }
 
     #[test]
     fn restart_clock_keeps_the_counts_a_resumed_run_already_spent() {
         let stats = Stats::new();
-        stats.record(&at(1_000, EventKind::TaskStarted));
+        stats.record(&at(1_000, Event::new(Event::TASK_STARTED)));
         stats.record(&at(2_000, request(900, 120)));
         stats.record(&at(3_000, run_finished()));
 
@@ -335,14 +337,14 @@ mod tests {
 
         assert_eq!(stats.execution_duration(), None);
         assert_eq!(stats.input_tokens(), 900);
-        assert_eq!(stats.event_count(EventName::TaskStarted), 1);
+        assert_eq!(stats.event_count(Event::TASK_STARTED), 1);
     }
 
     #[test]
     fn load_reads_a_directory_without_a_log_as_no_events() {
         let dir = crate::test_util::TempDir::new().unwrap();
         let stats = loaded(dir.path());
-        assert_eq!(stats.event_count(EventName::TaskCreated), 0);
+        assert_eq!(stats.event_count(Event::TASK_CREATED), 0);
         assert_eq!(stats.input_tokens(), 0);
         assert_eq!(stats.execution_duration(), None);
     }
@@ -351,7 +353,7 @@ mod tests {
     fn load_folds_back_what_a_run_wrote() {
         let dir = crate::test_util::TempDir::new().unwrap();
         for event in [
-            at(1_000, EventKind::TaskStarted),
+            at(1_000, Event::new(Event::TASK_STARTED)),
             at(2_000, request(900, 120)),
             at(2_000, turn()),
             at(5_000, run_finished()),
@@ -362,7 +364,7 @@ mod tests {
         let stats = loaded(dir.path());
         assert_eq!(stats.input_tokens(), 900);
         assert_eq!(stats.output_tokens(), 120);
-        assert_eq!(stats.event_count(EventName::TurnStarted), 1);
+        assert_eq!(stats.event_count(Event::TURN_STARTED), 1);
         assert_eq!(
             stats.execution_duration(),
             Some(Duration::from_millis(4_000))
@@ -381,25 +383,31 @@ mod tests {
         Stats::append(dir.path(), &at(0, turn())).unwrap();
 
         let stats = loaded(dir.path());
-        assert_eq!(stats.event_count(EventName::TurnStarted), 2);
+        assert_eq!(stats.event_count(Event::TURN_STARTED), 2);
     }
 
     #[test]
-    fn every_variant_survives_the_log() {
-        // The figures are folded from lines read back off disk, so a variant
-        // that cannot round-trip is a kind the statistics never see.
+    fn every_event_name_survives_the_log() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        for kind in crate::event::tests::all_variants() {
-            Stats::append(dir.path(), &Event::new("agent", "t-1", None, kind)).unwrap();
+        for event in crate::event::tests::all_events() {
+            Stats::append(dir.path(), &event.task_key("t-1").agent_id("agent")).unwrap();
         }
 
         let stats = loaded(dir.path());
-        for kind in crate::event::tests::all_variants() {
+        for event in crate::event::tests::all_events() {
             assert!(
-                stats.event_count(kind.get_event_name()) > 0,
+                stats.event_count(event.get_name()) > 0,
                 "{} missing from the log",
-                kind.get_event_name(),
+                event.get_name(),
             );
         }
+    }
+
+    #[test]
+    fn malformed_request_usage_is_counted_but_not_added_to_totals() {
+        let stats = Stats::of([Event::new(Event::REQUEST_FINISHED).data("not usage".into())]);
+        assert_eq!(stats.event_count(Event::REQUEST_FINISHED), 1);
+        assert_eq!(stats.input_tokens(), 0);
+        assert_eq!(stats.output_tokens(), 0);
     }
 }
