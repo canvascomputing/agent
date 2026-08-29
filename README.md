@@ -5,12 +5,13 @@
 <h1 align="center">agentwerk</h1>
 
 <div align="center">
-  <strong>A minimal agentic loop written in Rust & Python for building efficient harnesses.</strong>
+  <strong>A minimal agentic loop for building efficient harnesses.</strong>
 </div>
 
 <div align="center">
   <a href="#installation">Installation</a> •
-  <a href="crates/agentwerk-py/README.md">Python</a> •
+  <a href="#concepts">Concepts</a> •
+  <a href="crates/agentwerk-py/README.md">Python Binding</a> •
   <a href="#quick-start">Quick Start</a> •
   <a href="#api">API</a> •
   <a href="#use-cases">Use Cases</a> •
@@ -20,6 +21,9 @@
 
 
 <div align="center">agentwerk is a lightweight agentic loop optimized for small and fast LLMs: parallel agents, task-based coordination, built-in tools, schema-validated results, shared knowledge, and an event for every step.</div>
+
+> [!WARNING]
+> agentwerk is in beta. APIs stabilize in `0.2.0`.
 
 ---
 
@@ -38,6 +42,20 @@
 - **Complex interactions:** allow agents to collaborate through queues, event hooks and shared knowledge.
 - **Deep observability:** inspect every request, tool call, and failure.
 - **Facilitate training:** store trajectories based on granular events for fine-tuning models.
+
+## Concepts
+
+| Concept | Role |
+|---------|------|
+| **Agent** | A model, role, tools, and optional label that claims matching tasks. |
+| **Task** | A unit of work with a status, conversation, optional result schema, and result. |
+| **Queue** | Runs agents and tasks concurrently and persists the session. |
+| **Tool** | An action a model can call. |
+| **Schema** | A JSON contract for tool arguments or a task result. |
+| **Event** | A record of each step in a run. |
+| **Knowledge** | Shared Markdown notes for agents. |
+
+Agents use tools to finish tasks. Each task has its own conversation; near the model's context limit, [compaction](#compaction) summarizes older turns. Handovers create child tasks; hooks submit follow-ups.
 
 ## Installation
 
@@ -259,7 +277,7 @@ tasks.task(Task::labeled("report", "Write up the ranking."));
 | | `find_task(query)` | Get the first task matching an AQL query. |
 | | `find_tasks(query)` | Get every task matching an AQL query. |
 | | `get_task(key)` | Get one task by key. |
-| **Drive** | `reply(key, content)` | Add a reply to a task. |
+| **Replies** | `reply(key, content)` | Continue a paused interactive task. |
 | | `edit_replies(key, editor)` | Rewrite a task's replies now. |
 | **Resolve** | `set_finished(key, result)` | Finish a task with a result. |
 | | `set_failed(key)` | Fail a task. |
@@ -270,7 +288,9 @@ See [`Queue`](https://docs.rs/agentwerk/latest/agentwerk/agents/tasks/struct.Que
 
 ### Queries
 
-You can query tasks with AQL, the agentwerk query syntax.
+Use AQL to select and sort tasks. Combine `field operator value` conditions with `AND`, `OR`, or `NOT`; put optional `ORDER BY` last.
+
+`label IN (scan, report) AND status = Finished ORDER BY finished DESC` returns finished scans and reports, newest first.
 
 ```rust
 tasks.find_tasks("scan");
@@ -325,22 +345,22 @@ tasks.find_results("scan ORDER BY finished DESC");
 
 #### Rules
 
-**Operators**
+Operators depend on the field type:
 
-- `key`, `label`, `status`, `agent`, and `parent` take `=`, `!=`, `IN`, and `NOT IN`, which compare exactly.
-- `task`, `result`, and `errors` take `~` and `!~`, which ignore case.
-- `created`, `started`, `finished`, and `failed` take `>`, `>=`, `<`, and `<=`.
-- `IS EMPTY` and `IS NOT EMPTY` read every field but `key`, `status`, `task`, and `created`, so `finished IS EMPTY` selects the tasks still open.
+| Field kind | Fields | Operators |
+|------------|--------|-----------|
+| **Identity** | `key`, `label`, `status`, `agent`, `parent` | Exact match with `=`, `!=`, `IN (...)`, or `NOT IN (...)`. Status accepts `InProgress` and `in_progress`. |
+| **Text** | `task`, `result`, `errors` | Case-insensitive contains with `~` or `!~`. |
+| **Time** | `created`, `started`, `finished`, `failed` | Compare with `>`, `>=`, `<`, or `<=` against a `YYYY-MM-DD` UTC date, epoch milliseconds, or an offset such as `-30m`, `-2h`, `-7d`, or `-1w`. |
+| **Presence** | Any optional field | Check with `IS EMPTY` or `IS NOT EMPTY`; `finished IS EMPTY` selects open tasks. |
 
-**Times**
+Quote values containing spaces: `label = "needs review"`. Lists use parentheses: `label IN (scan, report)`.
 
-- A compared moment is a `YYYY-MM-DD` date at midnight UTC, an offset back from now spelled `-30m`, `-2h`, `-7d`, or `-1w`, or milliseconds since the epoch.
-- An offset is resolved when the query compiles.
+Relative times resolve when the query compiles.
 
-**Order**
+`NOT` applies to the next condition or group; `AND` binds before `OR`. Keywords ignore case, but exact labels, keys, and agent IDs do not.
 
-- `ORDER BY` names one field and closes the query. Every field sorts, `key` by its number and `status` along the lifecycle.
-- Without `ORDER BY` tasks arrive in creation order.
+`ORDER BY field` defaults to `ASC`; add `DESC` to reverse it. Without it, tasks stay in creation order. Keys sort numerically and statuses by lifecycle.
 
 #### Examples
 
@@ -494,7 +514,7 @@ tasks.on_result(|queue, done, result| {
 
 ### Schemas
 
-A `Schema` constrains the result an agent produces for a task. A violation triggers a retry until `max_schema_retries` is exhausted.
+A `Schema` constrains a task result. agentwerk repairs simple representation errors such as quoted numbers; otherwise, it returns the violation to the model and retries up to `max_schema_retries`.
 
 ```rust
 use agentwerk::schemas::Schema;
@@ -507,6 +527,8 @@ let schema = Schema::new(json!({
 
 tasks.task(Task::new("Write a report.").schema(schema));
 ```
+
+For small models, use shallow, focused schemas with few required fields, clear names, and simple enums. Split large results into labeled tasks with separate schemas, then combine them in a later task. Deep nesting, long property lists, and large `anyOf` or `oneOf` branches waste context and trigger retries.
 
 <details>
 <summary>All schema methods</summary>
@@ -603,7 +625,7 @@ Each of the compaction events carries the reason it ran: `Proactive` ahead of th
 
 ### Directives
 
-A directive is used when a model fails to perform a specific task. It is a message for correcting the agent's behavior. Directives have been optimized with many hours of testing. Still, you can change them to your needs.
+A directive tells the model how to recover: call a tool, match a schema, correct a path, narrow a search, or choose an allowed command. You can replace the built-in wording for your model or environment.
 
 ```rust
 use agentwerk::Directive;
@@ -623,7 +645,7 @@ let agent = Agent::from_env()
 | `directives(compute)` | Decide every directive's text with one function. |
 | `Directive::ALL` | Get every directive key, in the order the catalogue declares them. |
 
-The function returns a directive template. So you can access template variables, like `{detail}`, `{attempt}`, and `{path}`.
+Return `None` to keep the default. Replacements may use template variables such as `{detail}`, `{attempt}`, and `{path}`. Include the failure and next action.
 
 See [prompts/directives](https://github.com/canvascomputing/agentwerk/tree/main/crates/agentwerk/src/prompts/directives) for the built-in text.
 
