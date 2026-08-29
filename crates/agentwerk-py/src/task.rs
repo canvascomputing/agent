@@ -57,6 +57,11 @@ impl PyTask {
         Ok(PyTask { inner })
     }
 
+    /// Check whether this run has taken the task off the queue.
+    fn is_cancelled(&self) -> bool {
+        self.inner.is_cancelled()
+    }
+
     #[getter]
     fn key(&self) -> &str {
         &self.inner.key

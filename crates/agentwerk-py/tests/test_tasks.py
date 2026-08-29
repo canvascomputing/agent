@@ -62,7 +62,7 @@ def test_task_selection_uses_aql_status_and_pending_fields(queue):
     assert not aw.Query("status = Failed").matches(task)
 
 
-def test_task_predicates_are_not_public(queue):
+def test_task_label_and_status_predicates_are_not_public(queue):
     task = queue.get_task(queue.add_task("work"))
     for name in (
         "has_label",
@@ -71,7 +71,6 @@ def test_task_predicates_are_not_public(queue):
         "is_finished",
         "is_failed",
         "is_pending",
-        "is_cancelled",
     ):
         assert not hasattr(task, name)
 
@@ -309,6 +308,7 @@ def test_cancel_takes_the_matching_tasks_off_the_queue(queue):
 
     assert [task.key for task in queue.find_tasks("cancelled = true")] == [scan]
     assert [task.label for task in queue.find_tasks("cancelled = false")] == ["report"]
+    assert queue.get_task(scan).is_cancelled()
 
 
 def test_cancel_applies_to_matching_tasks_inserted_later(queue):

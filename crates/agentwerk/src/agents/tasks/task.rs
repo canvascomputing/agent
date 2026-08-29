@@ -146,7 +146,7 @@ impl Task {
     }
 
     /// Check whether this run has taken the task off the queue.
-    pub(crate) fn is_cancelled(&self) -> bool {
+    pub fn is_cancelled(&self) -> bool {
         self.cancelled
     }
 
