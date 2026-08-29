@@ -11,12 +11,17 @@ use super::ReasoningEffort;
 /// shrunk before the next request.
 #[derive(Debug, Clone)]
 pub struct Model {
-    pub name: String,
+    pub(crate) name: String,
     context_window: Option<u64>,
     reasoning_effort: ReasoningEffort,
 }
 
 impl Model {
+    /// The resolved model name.
+    pub fn get_name(&self) -> &str {
+        &self.name
+    }
+
     /// Build a `Model`, looking its context window up by name. An unknown name
     /// leaves `context_window` at `None`, so nothing is compacted and nothing
     /// fails.

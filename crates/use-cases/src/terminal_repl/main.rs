@@ -168,22 +168,22 @@ async fn main() {
                 eprintln!("{}(no tasks){}", style.dim, style.reset);
             } else {
                 for t in all {
-                    let preview = match &t.task {
+                    let preview = match t.get_task() {
                         serde_json::Value::String(s) => s.clone(),
                         other => other.to_string(),
                     };
                     let mut preview: String = preview.chars().take(60).collect();
-                    if preview.len() < t.task.to_string().len() {
+                    if preview.len() < t.get_task().to_string().len() {
                         preview.push('…');
                     }
-                    let active = chat_key.as_deref() == Some(t.key.as_str());
+                    let active = chat_key.as_deref() == Some(t.get_key());
                     let mark = if active { "▸ " } else { "  " };
                     eprintln!(
                         "{}{mark}{} [{}] · {} replies · {}{}",
                         style.dim,
-                        t.key,
-                        t.status,
-                        t.replies.len(),
+                        t.get_key(),
+                        t.get_status(),
+                        t.get_replies().len(),
                         preview,
                         style.reset,
                     );
@@ -343,7 +343,7 @@ async fn main() {
 fn counted(recorded: &[Event], kind: EventName) -> u64 {
     recorded
         .iter()
-        .filter(|e| e.kind.event_name() == kind)
+        .filter(|e| e.get_kind().get_event_name() == kind)
         .count() as u64
 }
 
@@ -367,7 +367,7 @@ fn print_event(
             eprintln!();
         }
     };
-    match &event.kind {
+    match event.get_kind() {
         EventKind::TextChunkReceived { content } => {
             print!("{content}");
             let _ = io::stdout().flush();
@@ -504,7 +504,7 @@ fn window_usage_suffix(window: Option<u64>, last_input: &AtomicU64) -> String {
 /// Replace every occurrence of `word` with `[redacted]` across the replies.
 fn redact(messages: &mut [Reply], word: &str) {
     for reply in messages.iter_mut() {
-        for block in &mut reply.content {
+        for block in reply.get_content_mut() {
             if let ReplyContent::Text { text } = block {
                 *text = text.replace(word, "[redacted]");
             }
@@ -566,9 +566,9 @@ impl Style {
 fn fail_stale_chats(tasks: &Queue, label: &str) -> usize {
     let label = label.to_string();
     let stale: Vec<String> = tasks
-        .find_tasks(move |task: &Task| task.has_label(&label) && task.is_pending())
+        .find_tasks(move |task: &Task| task.get_label() == Some(&label) && task.is_pending())
         .iter()
-        .map(|t| t.key.clone())
+        .map(|t| t.get_key().to_string())
         .collect();
     for key in &stale {
         let _ = tasks.set_task_failed(key);
@@ -595,9 +595,9 @@ mod tests {
 
         assert_eq!(n, 3);
         for k in &keys {
-            assert_eq!(tasks.get_task(k).unwrap().status, Status::Failed);
+            assert_eq!(tasks.get_task(k).unwrap().get_status(), Status::Failed);
         }
-        assert_eq!(tasks.get_task(&other).unwrap().status, Status::Todo);
+        assert_eq!(tasks.get_task(&other).unwrap().get_status(), Status::Todo);
     }
 
     #[test]
@@ -608,30 +608,25 @@ mod tests {
     }
 
     fn user_text(text: &str) -> Reply {
-        Reply {
-            author: Author::User,
-            content: vec![ReplyContent::Text { text: text.into() }],
-            created_at: 0,
-        }
+        Reply::new(Author::User, vec![ReplyContent::Text { text: text.into() }])
     }
 
     #[test]
     fn redact_replaces_the_word_in_every_reply() {
         let mut messages = vec![
             user_text("my token is hunter2"),
-            Reply {
-                author: Author::Assistant,
-                content: vec![ReplyContent::Text {
+            Reply::new(
+                Author::Assistant,
+                vec![ReplyContent::Text {
                     text: "noted, hunter2".into(),
                 }],
-                created_at: 0,
-            },
+            ),
         ];
 
         redact(&mut messages, "hunter2");
 
         for reply in &messages {
-            for block in &reply.content {
+            for block in reply.get_content() {
                 if let ReplyContent::Text { text } = block {
                     assert!(!text.contains("hunter2"), "leaked: {text}");
                     assert!(text.contains("[redacted]"));
@@ -645,7 +640,7 @@ mod tests {
         let mut messages = vec![user_text("just chatting")];
         redact(&mut messages, "hunter2");
         assert!(
-            matches!(&messages[0].content[0], ReplyContent::Text { text: t } if t == "just chatting")
+            matches!(&messages[0].get_content()[0], ReplyContent::Text { text: t } if t == "just chatting")
         );
     }
 }

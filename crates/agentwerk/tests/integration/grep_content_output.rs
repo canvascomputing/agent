@@ -52,7 +52,7 @@ async fn finds_string_buried_deep_in_line() -> std::result::Result<(), Box<dyn s
     let collected = Arc::clone(&calls);
     let logger = default_logger();
     let event_handler = Arc::new(move |e: &Event| {
-        match &e.kind {
+        match e.get_kind() {
             EventKind::ToolCallStarted {
                 tool_name, input, ..
             } => {
@@ -196,7 +196,7 @@ async fn reads_column_slice_after_grep_locates_needle(
     let collected = Arc::clone(&calls);
     let logger = default_logger();
     let event_handler = Arc::new(move |e: &Event| {
-        match &e.kind {
+        match e.get_kind() {
             EventKind::ToolCallStarted {
                 tool_name, input, ..
             } => {

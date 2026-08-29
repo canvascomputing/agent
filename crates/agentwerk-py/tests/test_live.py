@@ -19,8 +19,8 @@ async def test_runs_a_single_task_to_a_result(live_agent):
     work = live_agent.start()
     reasons = []
     work.on_event(
-        lambda _, event: reasons.append(event.data["reason"])
-        if event.kind == "run_finished"
+        lambda _, event: reasons.append(event.get_data()["reason"])
+        if event.get_kind() == "run_finished"
         else None
     )
     await work.finish_all_tasks()
@@ -62,8 +62,8 @@ async def test_invokes_a_python_tool_and_records_the_file_it_opened(tmp_path):
     work = agent.start()
     opened = []
     work.on_event(
-        lambda _, event: opened.append(event.data["path"])
-        if event.kind == aw.EventName.FILE_OPEN_FINISHED
+        lambda _, event: opened.append(event.get_data()["path"])
+        if event.get_kind() == aw.EventName.FILE_OPEN_FINISHED
         else None
     )
     await work.finish_all_tasks()
@@ -76,7 +76,7 @@ async def test_runs_two_labeled_agents_with_events_and_chaining():
     queue = aw.Queue().set_policy(aw.Policy(max_turns=30))
 
     kinds = []
-    queue.on_event(lambda _, event: kinds.append(event.kind))
+    queue.on_event(lambda _, event: kinds.append(event.get_kind()))
 
     queue.add_agent(
         aw.Agent.from_env().label("a").role("Reply with one word: alpha")
@@ -86,7 +86,7 @@ async def test_runs_two_labeled_agents_with_events_and_chaining():
     )
 
     def chain(work, task, result):
-        if task.has_label("a"):
+        if task.get_label() == "a":
             work.add_task(aw.Task("Reply beta", label="b"))
 
     queue.on_result(chain)
@@ -106,11 +106,11 @@ async def test_saves_the_messages_of_a_finished_task(tmp_path):
     captured = []
 
     def capture(_, event, task):
-        if event.kind == "task_finished":
-            model = queue.get_model_for_agent(event.agent_id)
-            trajectory = aw.Trajectory.from_task(event.agent_id, model, task)
+        if event.get_kind() == "task_finished":
+            model = queue.get_model_for_agent(event.get_agent_id())
+            trajectory = aw.Trajectory.from_task(event.get_agent_id(), model, task)
             trajectory.save(str(tmp_path))
-            captured.append((event.agent_id, len(trajectory.replies), trajectory.model))
+            captured.append((event.get_agent_id(), len(trajectory.get_replies()), trajectory.get_model()))
 
     queue.on_task(capture)
     key = queue.add_task("Reply with exactly the word: pong")
@@ -132,8 +132,8 @@ async def test_compaction_summarizes_the_replies_against_the_live_model(tmp_path
     queue.set_policy(aw.Policy(compaction_threshold=0.0))
     kinds = []
     queue.on_event(
-        lambda _, event: kinds.append(event.kind)
-        if event.kind.startswith("compaction_")
+        lambda _, event: kinds.append(event.get_kind())
+        if event.get_kind().startswith("compaction_")
         else None
     )
     queue.add_agent(
@@ -148,14 +148,14 @@ async def test_compaction_summarizes_the_replies_against_the_live_model(tmp_path
     await queue.finish_all_tasks()
 
     assert "compaction_failed" not in kinds
-    texts = [b.data.get("text", "") for r in queue.get_task(key).replies for b in r.content]
+    texts = [b.get_data().get("text", "") for r in queue.get_task(key).get_replies() for b in r.get_content()]
     assert task not in texts, "the summary must have replaced the task reply"
     assert any(text.strip() for text in texts), "the summary must carry text"
 
 
 def _answered(queue, key):
-    replies = queue.get_task(key).replies
-    return bool(replies) and replies[-1].author == "assistant"
+    replies = queue.get_task(key).get_replies()
+    return bool(replies) and replies[-1].get_author() == "assistant"
 
 
 async def _until(condition, timeout=120.0):

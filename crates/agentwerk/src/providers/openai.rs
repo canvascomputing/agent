@@ -250,9 +250,9 @@ fn serialize_tool(tool: &Tool) -> Value {
     serde_json::json!({
         "type": "function",
         "function": {
-            "name": tool.name(),
-            "description": tool.description(),
-            "parameters": tool.input_schema().get_raw_schema(),
+            "name": tool.get_name(),
+            "description": tool.get_description(),
+            "parameters": tool.get_input_schema().get_raw_schema(),
         }
     })
 }

@@ -412,7 +412,7 @@ impl Queue {
     /// # use agentwerk::event::EventKind;
     /// let tasks = Queue::new();
     /// tasks.on_event(|queue, event| {
-    ///     if matches!(event.kind, EventKind::TaskFailed) {
+    ///     if matches!(event.get_kind(), EventKind::TaskFailed) {
     ///         queue.add_task(Task::labeled("triage", "Look into the failure."));
     ///     }
     /// });
@@ -444,7 +444,7 @@ impl Queue {
     /// # async fn run() {
     /// let tasks = Queue::new();
     /// tasks.on_event_async(|_, event| async move {
-    ///     println!("{:?}", event.kind);
+    ///     println!("{:?}", event.get_kind());
     /// });
     /// tasks.finish_all_tasks().await;
     /// # }
@@ -488,7 +488,7 @@ impl Queue {
     /// let tasks = Queue::new();
     /// tasks.on_result(|queue, done, result| {
     ///     if result["needs_review"] == true {
-    ///         queue.add_task(Task::labeled("review", done.task.clone()).parent(&done.key));
+    ///         queue.add_task(Task::labeled("review", done.get_task().clone()).parent(done.get_key()));
     ///     }
     /// });
     /// ```
@@ -524,7 +524,7 @@ impl Queue {
     /// # async fn run() {
     /// let tasks = Queue::new();
     /// tasks.on_result_async(|_, task, result| async move {
-    ///     println!("{} produced {result}", task.key);
+    ///     println!("{} produced {result}", task.get_key());
     /// });
     /// tasks.finish_all_tasks().await;
     /// # }
@@ -548,7 +548,7 @@ impl Queue {
     /// `TaskFailed`, `RequestFailed`, `ToolCallFailed`, `FileOpenFailed`,
     /// `KnowledgeFailed`, and `CompactionFailed`.
     ///
-    /// Match on `event.kind` to tell a failure that ends the task from one
+    /// Match on `event.get_kind()` to tell a failure that ends the task from one
     /// the agent works around. Each call copies the task's replies, so an
     /// agent that fails many tool calls pays that copy once per failure.
     ///
@@ -559,8 +559,8 @@ impl Queue {
     /// tasks.on_failure(|queue, event, failed| {
     ///     // Count the attempts yourself, or a task that fails every time
     ///     // re-queues itself forever.
-    ///     if matches!(event.kind, EventKind::TaskFailed) && failed.parent.is_none() {
-    ///         queue.add_task(Task::new(failed.task.clone()).parent(&failed.key));
+    ///     if matches!(event.get_kind(), EventKind::TaskFailed) && failed.get_parent().is_none() {
+    ///         queue.add_task(Task::new(failed.get_task().clone()).parent(failed.get_key()));
     ///     }
     /// });
     /// ```
@@ -772,7 +772,7 @@ impl Queue {
             .lock()
             .unwrap()
             .iter()
-            .find(|a| a.id() == agent_id)
+            .find(|a| a.get_id() == agent_id)
             .map(|a| a.get_model().name.clone())
     }
 
@@ -1070,7 +1070,7 @@ impl Queue {
             .unwrap()
             .iter()
             .filter(|a| a.is_interactive())
-            .map(|a| a.id().to_string())
+            .map(|a| a.get_id().to_string())
             .collect()
     }
 
@@ -1092,7 +1092,7 @@ impl Queue {
                     let mut old = prior.tasks.lock().unwrap();
                     std::mem::take(&mut *old).into_values().collect()
                 };
-                let reporter = agent.id().to_string();
+                let reporter = agent.get_id().to_string();
                 for task in drained {
                     self.insert(task, reporter.clone());
                 }
@@ -1105,7 +1105,7 @@ impl Queue {
     /// Whether an agent under this id is registered. `Agent::start` asks
     /// before binding, so starting twice runs one agent, not two.
     pub(crate) fn has_agent(&self, id: &str) -> bool {
-        self.agents.lock().unwrap().iter().any(|a| a.id() == id)
+        self.agents.lock().unwrap().iter().any(|a| a.get_id() == id)
     }
 
     /// A copy of the registered agents.
@@ -1953,7 +1953,7 @@ mod tests {
             record
                 .lock()
                 .unwrap()
-                .push((event.kind.name(), task.key.clone()))
+                .push((event.kind.get_name(), task.key.clone()))
         });
         let key = queue.add_task("work");
 
@@ -2005,7 +2005,7 @@ mod tests {
         );
 
         let task = queue.get_task(&key).unwrap();
-        let names: Vec<&str> = task.errors.iter().map(|e| e.kind.name()).collect();
+        let names: Vec<&str> = task.errors.iter().map(|e| e.kind.get_name()).collect();
         assert_eq!(names, ["tool_call_failed", "request_failed"]);
 
         // Written once, to the session log, as a full event per line.
@@ -2014,7 +2014,7 @@ mod tests {
             .lines()
             .map(|line| serde_json::from_str::<crate::event::Event>(line).unwrap())
             .filter(|event| is_recorded_failure(&event.kind))
-            .map(|event| event.kind.name().to_string())
+            .map(|event| event.kind.get_name().to_string())
             .collect();
         assert_eq!(logged, names);
         assert!(!dir
@@ -2046,7 +2046,7 @@ mod tests {
         let task = queue.get_task(&key).unwrap();
         assert_eq!(task.status, Status::Finished);
         assert_eq!(task.errors.len(), 1);
-        assert_eq!(task.errors[0].kind.name(), "tool_call_failed");
+        assert_eq!(task.errors[0].kind.get_name(), "tool_call_failed");
     }
 
     #[test]
@@ -2110,7 +2110,7 @@ mod tests {
         let resumed = Queue::load(dir.path()).unwrap();
         let task = resumed.get_task(&key).unwrap();
         assert_eq!(task.errors.len(), 1);
-        assert_eq!(task.errors[0].kind.name(), "tool_call_failed");
+        assert_eq!(task.errors[0].kind.get_name(), "tool_call_failed");
     }
 
     #[test]
@@ -2338,7 +2338,7 @@ mod tests {
             async move {
                 each.lock()
                     .unwrap()
-                    .push(format!("task {}", event.kind.name()))
+                    .push(format!("task {}", event.kind.get_name()))
             }
         });
         let key = queue.add_task("scan the corpus");
@@ -2360,7 +2360,7 @@ mod tests {
         let record = Arc::clone(&seen);
         queue.on_event_async(move |_, event| {
             let record = Arc::clone(&record);
-            async move { record.lock().unwrap().push(event.kind.name()) }
+            async move { record.lock().unwrap().push(event.kind.get_name()) }
         });
         queue.emit("KEY", "agent", EventKind::TurnStarted);
 
@@ -2380,7 +2380,7 @@ mod tests {
                 record
                     .lock()
                     .unwrap()
-                    .push((event.kind.name(), task.key.clone()))
+                    .push((event.kind.get_name(), task.key.clone()))
             }
         });
         let key = queue.add_task("scan the corpus");
@@ -2462,7 +2462,7 @@ mod tests {
     fn on_result_inserts_a_follow_up_before_drain_is_observable() {
         let (queue, _tmp) = test_queue();
         queue.on_result(move |queue, done, _| {
-            if done.has_label("scout") {
+            if done.get_label() == Some("scout") {
                 queue.add_task(Task::new("hunt").label("sniper"));
             }
         });
@@ -2537,7 +2537,7 @@ mod tests {
         let (queue, _tmp) = test_queue();
         let logged = Arc::new(Mutex::new(Vec::new()));
         let log = Arc::clone(&logged);
-        queue.on_event(move |_, e| log.lock().unwrap().push(e.kind.name()));
+        queue.on_event(move |_, e| log.lock().unwrap().push(e.kind.get_name()));
         let seen = Arc::new(Mutex::new(Vec::new()));
         let record = Arc::clone(&seen);
         queue.on_task(move |_, _, task| record.lock().unwrap().push(task.key.clone()));

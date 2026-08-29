@@ -123,7 +123,7 @@ impl Stats {
             .event_counts
             .lock()
             .unwrap()
-            .entry(event.kind.event_name())
+            .entry(event.kind.get_event_name())
             .or_default() += 1;
         match &event.kind {
             EventKind::RequestFinished { usage, .. } => {
@@ -255,9 +255,9 @@ mod tests {
         let stats = Stats::of(crate::event::tests::all_variants());
         for kind in crate::event::tests::all_variants() {
             assert!(
-                stats.event_count(kind.event_name()) > 0,
+                stats.event_count(kind.get_event_name()) > 0,
                 "{} was never counted",
-                kind.event_name(),
+                kind.get_event_name(),
             );
         }
     }
@@ -396,9 +396,9 @@ mod tests {
         let stats = loaded(dir.path());
         for kind in crate::event::tests::all_variants() {
             assert!(
-                stats.event_count(kind.event_name()) > 0,
+                stats.event_count(kind.get_event_name()) > 0,
                 "{} missing from the log",
-                kind.event_name(),
+                kind.get_event_name(),
             );
         }
     }

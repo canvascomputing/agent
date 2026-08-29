@@ -233,7 +233,7 @@ pub enum ToolDeclineKind {
 
 impl ToolDeclineKind {
     /// The stable snake_case spelling, the one `Event.data["reason"]` carries.
-    pub fn name(&self) -> &'static str {
+    pub fn get_name(&self) -> &'static str {
         match self {
             ToolDeclineKind::OutputTruncated => "output_truncated",
             ToolDeclineKind::ReplyNotFinished => "not_finished",
@@ -244,7 +244,7 @@ impl ToolDeclineKind {
 
 impl std::fmt::Display for ToolDeclineKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.name())
+        f.write_str(self.get_name())
     }
 }
 

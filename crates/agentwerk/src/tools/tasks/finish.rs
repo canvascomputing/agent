@@ -378,7 +378,7 @@ mod tests {
     #[test]
     fn a_bound_task_schema_is_the_result_argument() {
         let declared = finish_for(object_schema())
-            .input_schema()
+            .get_input_schema()
             .get_raw_schema()
             .clone();
         assert_eq!(
@@ -394,7 +394,7 @@ mod tests {
     #[test]
     fn a_scalar_task_schema_is_the_result_argument_too() {
         let declared = finish_for(string_schema())
-            .input_schema()
+            .get_input_schema()
             .get_raw_schema()
             .clone();
         assert_eq!(
@@ -470,12 +470,12 @@ mod tests {
     #[test]
     fn an_unbound_finish_declares_the_registered_arguments() {
         let unbound = Tool::from(FinishTool);
-        assert!(unbound.input_schema().get_raw_schema()["properties"]["result"].is_object());
+        assert!(unbound.get_input_schema().get_raw_schema()["properties"]["result"].is_object());
         assert_eq!(
             FinishTool::from_schema(None)
-                .input_schema()
+                .get_input_schema()
                 .get_raw_schema(),
-            unbound.input_schema().get_raw_schema()
+            unbound.get_input_schema().get_raw_schema()
         );
     }
 
@@ -1210,7 +1210,7 @@ mod tests {
     fn a_number_where_the_declared_schema_asks_for_a_string_is_rejected() {
         // Stringifying `42` would pass the check with a task the model never
         // wrote; the violation names the field to fix instead.
-        let schema = Tool::from(FinishTool).input_schema().clone();
+        let schema = Tool::from(FinishTool).get_input_schema().clone();
         let violations = schema
             .validate(serde_json::json!({"handover": "bob", "task": 42, "result": "ok"}))
             .unwrap_err();

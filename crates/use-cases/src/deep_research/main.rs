@@ -140,7 +140,7 @@ fn print_research_outcome(tasks: &Queue, outcome: &Outcome) {
             let researched: Vec<(String, String)> = tasks
                 .find_tasks("status = Finished AND label != report")
                 .iter()
-                .filter_map(|t| Some((t.key.clone(), plain_text(t.result.as_ref()?))))
+                .filter_map(|t| Some((t.get_key().to_string(), plain_text(t.get_result()?))))
                 .collect();
             if researched.is_empty() {
                 eprintln!("(no researcher produced findings)");
@@ -182,23 +182,21 @@ fn print_chain_summary(tasks: &Queue) {
     }
     for t in &all {
         let parent = t
-            .parent
-            .as_deref()
+            .get_parent()
             .map(|p| format!(" ⟵ {p}"))
             .unwrap_or_default();
-        let label = match t.label.as_deref() {
+        let label = match t.get_label() {
             Some(l) => format!(" [{l}]"),
             None => String::new(),
         };
         let preview = t
-            .result
-            .as_ref()
+            .get_result()
             .map(|v| truncate(&plain_text(v), 100))
             .unwrap_or_else(|| "(no result)".into());
         eprintln!(
             "  {key} {status}{label}{parent}\n      → {preview}",
-            key = t.key,
-            status = t.status,
+            key = t.get_key(),
+            status = t.get_status(),
         );
     }
 }
@@ -209,7 +207,7 @@ fn print_stats(tasks: &Queue) {
         "  Duration : {:?}",
         tasks.get_duration().unwrap_or_default()
     );
-    let count = |kind: EventName| tasks.find_events(kind.name()).len() as u64;
+    let count = |kind: EventName| tasks.find_events(kind.get_name()).len() as u64;
     let done = count(EventName::TaskFinished);
     let failed = count(EventName::TaskFailed);
     let resolved = done + failed;
@@ -312,9 +310,9 @@ async fn brave_search(api_key: &str, input: &serde_json::Value) -> ToolResult {
 }
 
 fn log_event(event: &Event) {
-    let agent = &event.agent_id;
-    let key = &event.task_key;
-    match &event.kind {
+    let agent = event.get_agent_id();
+    let key = event.get_task_key();
+    match event.get_kind() {
         EventKind::TaskStarted => {
             eprintln!("\n┌─ [{agent}] picked up {key}");
         }

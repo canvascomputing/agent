@@ -37,7 +37,7 @@ pub(super) async fn run(context: &mut TaskContext<'_>) -> Option<Step> {
     let response = loop {
         let outcome = {
             let provider = context.agent.get_provider();
-            let agent_id = context.agent.id().to_string();
+            let agent_id = context.agent.get_id().to_string();
             let task_key = context.task_key.clone();
             let queue = Arc::clone(context.queue);
             let emit_stream: Arc<dyn Fn(StreamEvent) + Send + Sync> = Arc::new(move |event| {
@@ -202,9 +202,9 @@ mod tests {
         let tools = provider.received_tools();
         let finish = tools[0]
             .iter()
-            .find(|tool| tool.name() == "finish")
+            .find(|tool| tool.get_name() == "finish")
             .expect("finish is sent with every request");
-        let shown = finish.input_schema().get_raw_schema();
+        let shown = finish.get_input_schema().get_raw_schema();
         assert!(
             shown["properties"]["result"]["properties"]["verdict"].is_object(),
             "{shown}"

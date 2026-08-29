@@ -238,7 +238,7 @@ async def main(pruefer, meister, monteur):
     # One read plan opens one Abnahme per part it names, which is the fan-out
     # the line runs on.
     def open_abnahme(work, task, result):
-        if not task.has_label("pruefung"):
+        if task.get_label() != "pruefung":
             return
         for teil in result["teile"]:
             work.add_task(
@@ -255,10 +255,10 @@ async def main(pruefer, meister, monteur):
     # A part that passes the Abnahme is not done: it goes on to be fitted, so
     # the work fans forward instead of ending at the second station.
     def open_montage(work, task, result):
-        if task.has_label("abnahme") and result.get("passt"):
+        if task.get_label() == "abnahme" and result.get("passt"):
             work.add_task(
                 Task(
-                    f"Baue {result['teil']} ein und buche es. Der Laufzettel lautete: {task.task}",
+                    f"Baue {result['teil']} ein und buche es. Der Laufzettel lautete: {task.get_task()}",
                     label="montage",
                     schema=FITTING,
                 )
@@ -269,16 +269,16 @@ async def main(pruefer, meister, monteur):
     workers = worker_names(pruefer, meister, monteur)
 
     def publish(work, event):
-        if event.kind == "text_chunk_received":
+        if event.get_kind() == "text_chunk_received":
             return
         frame = frame_for(event, started_at, str(REPO))
         frame["agent"] = workers.get(frame["agent"], frame["agent"])
-        if frame["task"] and event.kind.startswith("task_"):
+        if frame["task"] and event.get_kind().startswith("task_"):
             task = work.get_task(frame["task"])
             if task is not None:
-                frame["label"] = task.label
-                frame["reporter"] = task.reporter
-                frame["task"] = str(task.task)[:160]
+                frame["label"] = task.get_label()
+                frame["reporter"] = task.get_reporter()
+                frame["task"] = str(task.get_task())[:160]
         loop.call_soon_threadsafe(feed.push, frame)
 
     def publish_result(_, task, result):
@@ -287,8 +287,8 @@ async def main(pruefer, meister, monteur):
             {
                 "t": time.monotonic() - started_at,
                 "kind": "ruling",
-                "task": task.key,
-                "agent": workers.get(task.assignee or "", task.assignee or ""),
+                "task": task.get_key(),
+                "agent": workers.get(task.get_assignee() or "", task.get_assignee() or ""),
                 "result": result,
             },
         )
@@ -335,19 +335,19 @@ async def main(pruefer, meister, monteur):
         }
     )
     rulings = [
-        task.result
+        task.get_result()
         for task in tasks.find_tasks("label = abnahme AND status = Finished")
-        if isinstance(task.result, dict)
+        if isinstance(task.get_result(), dict)
     ]
     fitted = [
-        task.result
+        task.get_result()
         for task in tasks.find_tasks("label = montage AND status = Finished")
-        if isinstance(task.result, dict) and task.result.get("eingebaut")
+        if isinstance(task.get_result(), dict) and task.get_result().get("eingebaut")
     ]
     scrap = [ruling for ruling in rulings if not ruling.get("passt")]
     print(
         f"\n{len(rulings)} parts ruled on, {len(scrap)} rejected, {len(fitted)} fitted, "
-        f"{len(book.pages().list())} entries in the Prüfbuch, "
+        f"{len(book.get_pages().get_pages())} entries in the Prüfbuch, "
         f"{stats['input_tokens']} in / {stats['output_tokens']} out tokens",
         flush=True,
     )

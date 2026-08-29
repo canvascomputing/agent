@@ -21,7 +21,7 @@ async fn test() -> std::result::Result<(), Box<dyn std::error::Error>> {
         .unwrap_or(default_model);
 
     let request = ModelRequest {
-        model: model.name,
+        model: model.get_name().to_string(),
         system_prompt: String::new(),
         messages: vec![Message::User {
             content: vec![ContentBlock::Text {

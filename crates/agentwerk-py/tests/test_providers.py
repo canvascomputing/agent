@@ -60,7 +60,7 @@ def test_provider_from_env_without_env_is_rejected(monkeypatch):
 
 def test_model_from_env_reads_the_model_variable(monkeypatch):
     monkeypatch.setenv("MODEL", "my-local-model")
-    assert aw.Model.from_env().name == "my-local-model"
+    assert aw.Model.from_env().get_name() == "my-local-model"
 
 
 def test_model_from_env_applies_the_window_override(monkeypatch):
@@ -84,18 +84,18 @@ def test_model_from_env_without_provider_env_is_rejected(monkeypatch):
 
 def test_knowledge_load_creates_an_empty_index(knowledge_dir):
     store = aw.Knowledge.load(knowledge_dir)
-    assert store.index() == ""
+    assert store.get_index() == ""
 
 
-def test_index_char_limit_chains(knowledge_dir):
-    store = aw.Knowledge.load(knowledge_dir).index_char_limit(24_000)
+def test_set_char_limit_chains(knowledge_dir):
+    store = aw.Knowledge.load(knowledge_dir).set_char_limit(24_000)
     assert isinstance(store, aw.Knowledge)
 
 
 def test_saved_page_is_readable_and_indexed(knowledge_dir):
     store = aw.Knowledge.load(knowledge_dir)
 
-    store.pages().save(
+    store.get_pages().save(
         aw.Page(
             "build-command",
             "How the project is built.",
@@ -104,62 +104,62 @@ def test_saved_page_is_readable_and_indexed(knowledge_dir):
         )
     )
 
-    page = store.pages().load("build-command")
-    assert page.description == "How the project is built."
-    assert page.tags == ["build"]
-    assert "build-command" in store.index()
+    page = store.get_pages().get_page("build-command")
+    assert page.get_description() == "How the project is built."
+    assert page.get_tags() == ["build"]
+    assert "build-command" in store.get_index()
 
 
 def test_page_kind_defaults_to_the_store_default(knowledge_dir):
     store = aw.Knowledge.load(knowledge_dir)
     page = aw.Page("scratch", "A note.", "Some content.")
 
-    store.pages().save(page)
+    store.get_pages().save(page)
 
-    assert page.kind == "Knowledge"
-    assert store.pages().load("scratch").kind == "Knowledge"
+    assert page.get_kind() == "Knowledge"
+    assert store.get_pages().get_page("scratch").get_kind() == "Knowledge"
 
 
 def test_list_returns_every_saved_page_in_index_order(knowledge_dir):
     store = aw.Knowledge.load(knowledge_dir)
-    store.pages().save(aw.Page("build", "How to build.", "Run make."))
-    store.pages().save(aw.Page("deploy", "How to deploy.", "Push the tag."))
+    store.get_pages().save(aw.Page("build", "How to build.", "Run make."))
+    store.get_pages().save(aw.Page("deploy", "How to deploy.", "Push the tag."))
 
-    pages = store.pages().list()
+    pages = store.get_pages().get_pages()
 
-    assert [page.slug for page in pages] == ["build", "deploy"]
-    assert pages[0].description == "How to build."
+    assert [page.get_slug() for page in pages] == ["build", "deploy"]
+    assert pages[0].get_description() == "How to build."
 
 
 def test_get_index_char_limit_returns_the_default_until_it_is_set(knowledge_dir):
     store = aw.Knowledge.load(knowledge_dir)
     assert store.get_index_char_limit() == 12_000
-    store.index_char_limit(80)
+    store.set_char_limit(80)
     assert store.get_index_char_limit() == 80
 
 
 def test_removed_page_leaves_the_index_empty(knowledge_dir):
     store = aw.Knowledge.load(knowledge_dir)
-    store.pages().save(aw.Page("scratch", "A note.", "Some content."))
+    store.get_pages().save(aw.Page("scratch", "A note.", "Some content."))
 
-    store.pages().remove("scratch")
+    store.get_pages().remove("scratch")
 
-    assert store.index() == ""
+    assert store.get_index() == ""
 
 
 def test_loading_an_unknown_page_is_rejected(knowledge_dir):
     store = aw.Knowledge.load(knowledge_dir)
     with pytest.raises(RuntimeError):
-        store.pages().load("does-not-exist")
+        store.get_pages().get_page("does-not-exist")
 
 
 def test_clear_empties_the_store(knowledge_dir):
     store = aw.Knowledge.load(knowledge_dir)
-    store.pages().save(aw.Page("scratch", "A note.", "Some content."))
+    store.get_pages().save(aw.Page("scratch", "A note.", "Some content."))
 
     store.clear()
 
-    assert store.index() == ""
+    assert store.get_index() == ""
 
 
 def test_agent_binds_a_knowledge_store(knowledge_dir):

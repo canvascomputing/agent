@@ -202,9 +202,9 @@ fn serialize_content_block(block: &ContentBlock) -> Option<Value> {
 
 fn serialize_tool(tool: &Tool) -> Value {
     serde_json::json!({
-        "name": tool.name(),
-        "description": tool.description(),
-        "input_schema": tool.input_schema().get_raw_schema(),
+        "name": tool.get_name(),
+        "description": tool.get_description(),
+        "input_schema": tool.get_input_schema().get_raw_schema(),
     })
 }
 

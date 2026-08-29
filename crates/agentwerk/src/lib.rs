@@ -54,8 +54,8 @@
 //! tasks.finish_all_tasks().await;
 //!
 //! for task in tasks.get_tasks() {
-//!     if let Some(result) = task.result {
-//!         println!("{}: {}", task.key, result);
+//!     if let Some(result) = task.get_result() {
+//!         println!("{}: {}", task.get_key(), result);
 //!     }
 //! }
 //! # }

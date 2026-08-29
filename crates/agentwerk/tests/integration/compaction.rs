@@ -151,15 +151,15 @@ async fn summariser_produces_text_when_compaction_fires_against_live_llm() {
 
     eprintln!("\n=== EVENTS ===");
     for e in all_events.iter() {
-        eprintln!("  {:?}", e.kind);
+        eprintln!("  {:?}", e.get_kind());
     }
 
     let compacted = all_events
         .iter()
-        .any(|e| matches!(e.kind, EventKind::CompactionStarted { .. }));
+        .any(|e| matches!(e.get_kind(), EventKind::CompactionStarted { .. }));
     let compaction_succeeded = all_events
         .iter()
-        .any(|e| matches!(e.kind, EventKind::CompactionFinished { .. }));
+        .any(|e| matches!(e.get_kind(), EventKind::CompactionFinished { .. }));
 
     eprintln!("\n=== AFTER COMPACTION ===");
     for task in tasks.get_tasks() {
@@ -184,9 +184,9 @@ async fn summariser_produces_text_when_compaction_fires_against_live_llm() {
         .get_tasks()
         .iter()
         .flat_map(|t| {
-            t.replies
+            t.get_replies()
                 .iter()
-                .filter(|c| c.author == Author::User)
+                .filter(|c| c.get_author() == Author::User)
                 .flat_map(|c| {
                     serde_json::to_value(c)
                         .ok()

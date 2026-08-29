@@ -42,7 +42,7 @@ async fn grep_lists_unknown_function_names() -> std::result::Result<(), Box<dyn 
     let event_handler = Arc::new(move |e: &Event| {
         if let EventKind::ToolCallStarted {
             tool_name, input, ..
-        } = &e.kind
+        } = e.get_kind()
         {
             collected.lock().unwrap().push(CapturedCall {
                 name: tool_name.clone(),

@@ -99,7 +99,7 @@ mod tests {
     #[test]
     fn every_example_the_schema_shows_deserializes_into_the_arguments() {
         let document = Tool::from(EditFileTool)
-            .input_schema()
+            .get_input_schema()
             .get_raw_schema()
             .clone();
         for example in document["examples"].as_array().expect("examples") {
@@ -132,7 +132,7 @@ mod tests {
             )
             .await;
 
-        let out = result.content();
+        let out = result.get_content();
         assert!(
             matches!(result, ToolResult::Success { .. }),
             "unexpected error: {out}"
@@ -160,7 +160,7 @@ mod tests {
             )
             .await;
 
-        let content = result.content();
+        let content = result.get_content();
         assert!(matches!(result, ToolResult::Error { .. }));
         assert!(content.contains("2"));
     }
@@ -185,7 +185,7 @@ mod tests {
             )
             .await;
 
-        let out = result.content();
+        let out = result.get_content();
         assert!(
             matches!(result, ToolResult::Success { .. }),
             "unexpected error: {out}"
@@ -213,7 +213,7 @@ mod tests {
             )
             .await;
 
-        let content = result.content();
+        let content = result.get_content();
         assert!(matches!(result, ToolResult::Error { .. }));
         assert!(content.contains("No `old_string` match"));
     }

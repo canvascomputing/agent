@@ -298,14 +298,14 @@ impl Queue {
     ///
     /// let tasks = Queue::new();
     /// tasks.on_event(|queue, event| {
-    ///     if !matches!(event.kind, EventKind::ToolCallFailed { .. }) {
+    ///     if !matches!(event.get_kind(), EventKind::ToolCallFailed { .. }) {
     ///         return;
     ///     }
-    ///     queue.edit_replies(&event.task_key, |replies| {
+    ///     queue.edit_replies(event.get_task_key(), |replies| {
     ///         // Drop both sides of the failed exchange: the assistant's tool_use
     ///         // and the failed tool_result, so no unpaired block is left behind.
     ///         replies.retain(|reply| {
-    ///             !reply.content.iter().any(|b| {
+    ///             !reply.get_content().iter().any(|b| {
     ///                 matches!(
     ///                     b,
     ///                     ReplyContent::ToolUse { .. }

@@ -88,22 +88,22 @@ def detail(arguments):
 
 def frame_for(event, started_at, root=""):
     """One event, cut down to what a page can draw."""
-    data = {key: value for key, value in event.data.items() if key in CARRIED}
-    message = event.data.get("message")
+    data = {key: value for key, value in event.get_data().items() if key in CARRIED}
+    message = event.get_data().get("message")
     if isinstance(message, str):
         data["message"] = message[:120]
-    arguments = event.data.get("input")
+    arguments = event.get_data().get("input")
     said = detail(arguments)
     if said:
         data["detail"] = said
-    place = where(arguments, event.data, root)
+    place = where(arguments, event.get_data(), root)
     if place:
         data["place"] = place
     return {
         "t": time.monotonic() - started_at,
-        "kind": event.kind,
-        "agent": event.agent_id,
-        "task": event.task_key,
+        "kind": event.get_kind(),
+        "agent": event.get_agent_id(),
+        "task": event.get_task_key(),
         "data": data,
     }
 
@@ -194,16 +194,16 @@ async def watch_pages(notes, feed, started_at):
     """Poll the store: an event says a page was written, never which one."""
     seen = set()
     while True:
-        for page in notes.pages().list():
-            if page.slug in seen:
+        for page in notes.get_pages().get_pages():
+            if page.get_slug() in seen:
                 continue
-            seen.add(page.slug)
+            seen.add(page.get_slug())
             feed.push(
                 {
                     "t": time.monotonic() - started_at,
                     "kind": "page",
-                    "slug": page.slug,
-                    "description": page.description,
+                    "slug": page.get_slug(),
+                    "description": page.get_description(),
                 }
             )
         await asyncio.sleep(1)

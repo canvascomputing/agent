@@ -437,7 +437,7 @@ mod tests {
     #[test]
     fn every_example_the_schema_shows_deserializes_into_the_arguments() {
         let document = Tool::from(CommandTool::new("echo"))
-            .input_schema()
+            .get_input_schema()
             .get_raw_schema()
             .clone();
         for example in document["examples"].as_array().expect("examples") {
@@ -457,7 +457,7 @@ mod tests {
 
     #[test]
     fn a_tool_takes_its_name_from_its_only_argument() {
-        assert_eq!(Tool::from(CommandTool::new("echo")).name(), "echo");
+        assert_eq!(Tool::from(CommandTool::new("echo")).get_name(), "echo");
     }
 
     #[test]
@@ -471,7 +471,7 @@ mod tests {
         let tool = CommandTool::new("git")
             .allow("git status")
             .deny("git push*");
-        let description = Tool::from(tool).description().to_string();
+        let description = Tool::from(tool).get_description().to_string();
         assert!(description.contains("Allowed: `git status`."));
         assert!(description.contains("Denied: `git push*`."));
     }
@@ -480,7 +480,7 @@ mod tests {
     fn a_description_names_the_bare_command_without_an_allowed_pattern() {
         let tool = CommandTool::new("git");
         assert!(Tool::from(tool)
-            .description()
+            .get_description()
             .contains("Allowed: only the bare command `git`."));
     }
 
@@ -489,7 +489,7 @@ mod tests {
         let tool = CommandTool::new("git")
             .description("Run git commands.")
             .allow("git *");
-        assert_eq!(Tool::from(tool).description(), "Run git commands.");
+        assert_eq!(Tool::from(tool).get_description(), "Run git commands.");
     }
 
     #[test]
@@ -500,7 +500,7 @@ mod tests {
         let tool = CommandTool::new("git")
             .description(file.as_path())
             .allow("git *");
-        assert_eq!(Tool::from(tool).description(), "Run git commands.");
+        assert_eq!(Tool::from(tool).get_description(), "Run git commands.");
     }
 
     #[tokio::test]
@@ -509,7 +509,7 @@ mod tests {
         let ctx = test_tool_context();
         let input = serde_json::json!({ "command": "echo hello" });
         let result = Tool::from(tool.clone()).call(input, &ctx).await;
-        let content = result.content();
+        let content = result.get_content();
         assert!(content.contains("hello"));
         assert!(matches!(result, ToolResult::Success { .. }));
     }
@@ -520,7 +520,7 @@ mod tests {
         let ctx = test_tool_context();
         let input = serde_json::json!({ "command": "sleep 10", "timeout_ms": 100 });
         let result = Tool::from(tool.clone()).call(input, &ctx).await;
-        let content = result.content();
+        let content = result.get_content();
         assert!(matches!(result, ToolResult::Error { .. }));
         assert!(content.contains("was stopped after 100ms"));
     }
@@ -545,9 +545,9 @@ mod tests {
             }
         ));
         assert!(
-            results[0].content().contains("`command`"),
+            results[0].get_content().contains("`command`"),
             "{}",
-            results[0].content()
+            results[0].get_content()
         );
     }
 
@@ -568,7 +568,7 @@ mod tests {
         let result = Tool::from(tool)
             .call(serde_json::json!({ "command": "echo hello" }), &ctx)
             .await;
-        let content = result.content();
+        let content = result.get_content();
         assert!(matches!(result, ToolResult::Error { .. }));
         assert!(content.contains("is not allowed by tool 'echo'"));
     }
@@ -580,7 +580,7 @@ mod tests {
         let result = Tool::from(tool)
             .call(serde_json::json!({ "command": "rm -rf /" }), &ctx)
             .await;
-        let content = result.content();
+        let content = result.get_content();
         assert!(matches!(result, ToolResult::Error { .. }));
         assert!(content.contains("Allowed: `echo *`."));
     }
@@ -635,7 +635,7 @@ mod tests {
         let result = Tool::from(tool)
             .call(serde_json::json!({ "command": "echo secret" }), &ctx)
             .await;
-        let content = result.content();
+        let content = result.get_content();
         assert!(matches!(result, ToolResult::Error { .. }));
         assert!(content.contains("denied pattern 'echo secret*'"));
     }
@@ -662,7 +662,7 @@ mod tests {
             .call(serde_json::json!({ "command": command }), &ctx)
             .await;
 
-        let content = result.content();
+        let content = result.get_content();
         assert!(
             matches!(result, ToolResult::Error { .. }),
             "{command:?} should be refused, got {content}"
@@ -710,7 +710,7 @@ mod tests {
             .call(serde_json::json!({ "command": "echo \"a && b\"" }), &ctx)
             .await;
 
-        let content = result.content();
+        let content = result.get_content();
         assert!(
             matches!(result, ToolResult::Success { .. }),
             "got {content}"
@@ -733,7 +733,7 @@ mod tests {
             )
             .await;
 
-        let content = result.content();
+        let content = result.get_content();
         assert!(
             matches!(result, ToolResult::Success { .. }),
             "got {content}"
@@ -748,7 +748,7 @@ mod tests {
             .call(serde_json::json!({ "command": "/bin/echo hi" }), &ctx)
             .await;
 
-        let content = result.content();
+        let content = result.get_content();
         assert!(
             matches!(result, ToolResult::Success { .. }),
             "got {content}"
@@ -765,7 +765,7 @@ mod tests {
         let result = Tool::from(tool)
             .call(serde_json::json!({ "command": "echo  push --force" }), &ctx)
             .await;
-        let content = result.content();
+        let content = result.get_content();
         assert!(
             content.contains("denied pattern 'echo push*'"),
             "got {content}"
@@ -779,7 +779,7 @@ mod tests {
         let result = Tool::from(tool)
             .call(serde_json::json!({ "command": "ls -a -l" }), &ctx)
             .await;
-        let content = result.content();
+        let content = result.get_content();
         assert!(content.contains("denied flag '-l'"), "got {content}");
     }
 
@@ -810,7 +810,7 @@ mod tests {
                 &ctx,
             )
             .await;
-        let content = result.content();
+        let content = result.get_content();
         assert!(
             content.contains("denied flag '-oProxyCommand=/bin/sh'"),
             "got {content}"
@@ -848,7 +848,7 @@ mod tests {
         let result = Tool::from(tool)
             .call(serde_json::json!({ "command": "echo -rf" }), &ctx)
             .await;
-        assert!(result.content().contains("denied flag '-rf'"));
+        assert!(result.get_content().contains("denied flag '-rf'"));
     }
 
     #[tokio::test]
@@ -861,7 +861,7 @@ mod tests {
         let refused = Tool::from(tool.clone())
             .call(serde_json::json!({ "command": "echo -rf" }), &ctx)
             .await;
-        assert!(refused.content().contains("denied flag '-rf'"));
+        assert!(refused.get_content().contains("denied flag '-rf'"));
 
         let allowed = Tool::from(tool)
             .call(serde_json::json!({ "command": "echo -r" }), &ctx)
@@ -913,7 +913,7 @@ mod tests {
         let result = Tool::from(tool)
             .call(serde_json::json!({ "command": "echo -n hi" }), &ctx)
             .await;
-        let content = result.content();
+        let content = result.get_content();
         assert!(content.contains("is not allowed by tool"), "got {content}");
     }
 
@@ -936,7 +936,7 @@ mod tests {
         let result = Tool::from(tool)
             .call(serde_json::json!({ "command": "echo -e hi" }), &ctx)
             .await;
-        let content = result.content();
+        let content = result.get_content();
         assert!(content.contains("carries the flag '-e'"), "got {content}");
         assert!(content.contains("Allowed flags: `-n`"), "got {content}");
     }
@@ -962,7 +962,7 @@ mod tests {
         let result = Tool::from(tool)
             .call(serde_json::json!({ "command": "echo -rf" }), &ctx)
             .await;
-        assert!(result.content().contains("carries the flag '-rf'"));
+        assert!(result.get_content().contains("carries the flag '-rf'"));
     }
 
     #[tokio::test]
@@ -978,7 +978,7 @@ mod tests {
         let result = Tool::from(tool)
             .call(serde_json::json!({ "command": "echo --force" }), &ctx)
             .await;
-        let content = result.content();
+        let content = result.get_content();
         assert!(content.contains("denied flag '--force'"), "got {content}");
     }
 
@@ -991,7 +991,7 @@ mod tests {
         let result = Tool::from(tool)
             .call(serde_json::json!({ "command": "echo two -e" }), &ctx)
             .await;
-        let content = result.content();
+        let content = result.get_content();
         assert!(content.contains("is not allowed by tool"), "got {content}");
     }
 
@@ -1017,7 +1017,7 @@ mod tests {
                 &ctx,
             )
             .await;
-        let content = result.content();
+        let content = result.get_content();
         assert!(content.contains("environment variable"), "got {content}");
     }
 
@@ -1030,7 +1030,7 @@ mod tests {
                 &ctx,
             )
             .await;
-        let content = result.content();
+        let content = result.get_content();
         assert!(content.contains("nonexistent_command_xyz"), "got {content}");
     }
 
@@ -1038,7 +1038,7 @@ mod tests {
     fn a_description_lists_the_denied_flags() {
         let tool = CommandTool::new("git").allow("git *").deny_flag("--force");
         assert!(Tool::from(tool)
-            .description()
+            .get_description()
             .contains("Denied flags: `--force`."));
     }
 
@@ -1046,7 +1046,7 @@ mod tests {
     fn a_description_lists_the_allowed_flags() {
         let tool = CommandTool::new("git").allow("git *").allow_flag("--all");
         assert!(Tool::from(tool)
-            .description()
+            .get_description()
             .contains("Allowed flags: `--all`, and no other."));
     }
 

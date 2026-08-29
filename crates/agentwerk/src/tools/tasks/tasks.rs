@@ -35,7 +35,7 @@ mod tests {
         // The schema and `TasksArgs` both describe the shape. The examples
         // are where they are held to the same one.
         let document = Tool::from(TasksTool)
-            .input_schema()
+            .get_input_schema()
             .get_raw_schema()
             .clone();
         for example in document["examples"].as_array().expect("examples") {
@@ -50,7 +50,7 @@ mod tests {
         // model is told about but `dispatch` never reads is silently dropped
         // rather than caught by the compiler.
         let tool = Tool::from(TasksTool);
-        let schema = tool.input_schema();
+        let schema = tool.get_input_schema();
         let advertised: BTreeSet<&str> = schema.get_raw_schema()["properties"]
             .as_object()
             .expect("properties is an object")

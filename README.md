@@ -134,7 +134,7 @@ Optionally, install the [`prompt` skill](skills/prompt/SKILL.md), which is optim
 | | `interactive()` | Let the agent wait for new instructions to keep a task in-progress. |
 | **Work** | `task(task)` | Submit a task, or a `Task` carrying a label or schema, and return its task key. |
 | | `start()` | Begin processing tasks. |
-| | `id()` | Get the unique identifier of an agent. |
+| | `get_id()` | Get the unique identifier of an agent. |
 
 You can use the `{context}` variable to inject contextual information:
 
@@ -160,7 +160,7 @@ let agent = Agent::from_env().interactive();
 let key = agent.task("Where does the configuration get loaded?");
 
 let chat = agent.start();
-chat.on_result(|_, task, result| println!("{}: {result}", task.key));
+chat.on_result(|_, task, result| println!("{}: {result}", task.get_key()));
 chat.finish_all_tasks().await;
 
 chat.add_reply(&key, "And which environment variables override it?");
@@ -396,7 +396,7 @@ tasks.find_results("report AND result ~ risk");           // reports that mentio
 tasks.find_tasks("errors ~ tool_call_failed");          // saw a tool call fail
 tasks.find_tasks("status = Todo AND agent IS EMPTY");   // waiting, never claimed
 tasks.find_tasks("failed > -1h ORDER BY failed DESC");  // the last hour's failures
-tasks.find_tasks(|t: &Task| t.replies.len() > 4);     // a closure, for what no field carries
+tasks.find_tasks(|t: &Task| t.get_replies().len() > 4);   // a closure, for what no field carries
 ```
 
 </details>
@@ -431,28 +431,27 @@ Task members:
 
 | | Member | Description |
 |-|--------|-------------|
-| **Identity** | `key` | Task key, of the form `t-N`. |
-| | `task` | The work the agent is asked to do. |
-| | `label` | Label carried by the task. |
-| | `has_label(label)` | Check whether the task carries a label. |
-| | `parent` | Identifier of the parent task if a handover was performed. |
-| | `reporter` | Identifier of the agent that created the task. |
-| | `assignee` | Identifier of the agent that claimed the task. |
-| **Outcome** | `status` | The task lifecycle status. |
+| **Identity** | `get_key()` | Task key, of the form `t-N`. |
+| | `get_task()` | The work the agent is asked to do. |
+| | `get_label()` | Label carried by the task. |
+| | `get_parent()` | Identifier of the parent task if a handover was performed. |
+| | `get_reporter()` | Identifier of the agent that created the task. |
+| | `get_assignee()` | Identifier of the agent that claimed the task. |
+| **Outcome** | `get_status()` | The task lifecycle status. |
 | | `is_todo()` | Check whether the task is waiting to be claimed. |
 | | `is_in_progress()` | Check whether an agent is working on the task. |
 | | `is_finished()` | Check whether the task finished. |
 | | `is_failed()` | Check whether the task failed. |
 | | `is_pending()` | Check whether the task has work in this run. |
 | | `is_cancelled()` | Check whether this run has taken the task off the queue. |
-| | `result` | The result the agent produced. |
-| | `errors` | The failures recorded against the task, as events. |
-| | `replies` | Messages exchanged with the model. |
-| | `schema` | Optional schema the result must satisfy. |
-| **Timestamps** | `created_at` | Creation time, in milliseconds. |
-| | `started_at` | Claim time, in milliseconds. |
-| | `finished_at` | Finish time, in milliseconds. |
-| | `failed_at` | Failure time, in milliseconds. |
+| | `get_result()` | The result the agent produced. |
+| | `get_errors()` | The failures recorded against the task, as events. |
+| | `get_replies()` | Messages exchanged with the model. |
+| | `get_schema()` | Optional schema the result must satisfy. |
+| **Timestamps** | `get_created_at()` | Creation time, in milliseconds. |
+| | `get_started_at()` | Claim time, in milliseconds. |
+| | `get_finished_at()` | Finish time, in milliseconds. |
+| | `get_failed_at()` | Failure time, in milliseconds. |
 
 See [`Task`](https://docs.rs/agentwerk/latest/agentwerk/agents/tasks/struct.Task.html).
 
@@ -532,7 +531,7 @@ Use hooks to create new tasks when certain results arrived:
 
 ```rust
 tasks.on_result(|queue, done, result| {
-    if done.has_label("research") {
+    if done.get_label() == Some("research") {
         queue.add_task(Task::labeled("report", result.clone()));
     }
 });
@@ -641,8 +640,8 @@ Compaction also runs after the LLM provider reports the window exceeded. `Compac
 
 ```rust
 tasks.on_event(|_, event| {
-    if let EventKind::CompactionFinished { reason } = &event.kind {
-        eprintln!("[{}] compacted {reason}", event.task_key);
+    if let EventKind::CompactionFinished { reason } = event.get_kind() {
+        eprintln!("[{}] compacted {reason}", event.get_task_key());
     }
 });
 ```
@@ -818,8 +817,8 @@ Events allow you to inspect all activities of your agents.
 use agentwerk::event::EventKind;
 
 tasks.on_event(|_, event| {
-    if let EventKind::TaskFinished = &event.kind {
-        eprintln!("[{}] done {} {:?}", event.agent_id, event.task_key, event.label);
+    if let EventKind::TaskFinished = event.get_kind() {
+        eprintln!("[{}] done {} {:?}", event.get_agent_id(), event.get_task_key(), event.get_label());
     }
 });
 ```
@@ -900,8 +899,8 @@ Hooks allow you to react to events.
 
 ```rust
 tasks.on_failure(|queue, _, failed| {
-    if failed.has_label("scan") {
-        queue.add_task(Task::labeled("triage", failed.task.clone()));
+    if failed.get_label() == Some("scan") {
+        queue.add_task(Task::labeled("triage", failed.get_task().clone()));
     }
 });
 ```
@@ -924,9 +923,9 @@ Save replies of every finished task as a training example:
 
 ```rust
 tasks.on_task(|queue, event, task| {
-    if matches!(event.kind, EventKind::TaskFinished) {
-        let model = queue.get_model_for_agent(&event.agent_id);
-        let _ = Trajectory::from_task(&event.agent_id, model.as_deref(), task)
+    if matches!(event.get_kind(), EventKind::TaskFinished) {
+        let model = queue.get_model_for_agent(event.get_agent_id());
+        let _ = Trajectory::from_task(event.get_agent_id(), model.as_deref(), task)
             .save("datasets");
     }
 });
@@ -941,7 +940,7 @@ let findings = Arc::clone(&database);
 tasks.on_result_async(move |_, task, result| {
     let findings = Arc::clone(&findings);
     async move {
-        let _ = findings.insert(&task.key, &result).await;
+        let _ = findings.insert(task.get_key(), &result).await;
     }
 });
 ```
@@ -973,30 +972,31 @@ Each page is written to `./notes/knowledge/pages/<slug>.md`, and every page gets
 
 | Method | Description |
 |--------|-------------|
-| `index()` | Get the index, which is injected into the agent prompt. |
-| `index_char_limit(count)` | Limit how much of the index is injected into the prompt. |
+| `get_index()` | Get the index, which is injected into the agent prompt. |
+| `set_char_limit(count)` | Limit how much of the index is injected into the prompt. |
 | `get_index_char_limit()` | Get the index size limit in force. |
-| `pages()` | Get the page collection for reading and writing pages. |
-| `pages().list()` | Get every page in the store. |
+| `get_pages()` | Get the page collection for reading and writing pages. |
+| `get_pages().get_pages()` | Get every page in the store. |
 | `clear()` | Remove every page from the store. |
 
-The prompt carries the index up to `index_char_limit`, 12 000 characters by default. Past it the prompt lists the pages that fit and names `index.md` for the agent to read the rest. No page is refused for the length of the index, and page bodies are never shortened.
+The prompt carries the index up to the configured character limit, 12 000 characters by default. Past it the prompt lists the pages that fit and names `index.md` for the agent to read the rest. No page is refused for the length of the index, and page bodies are never shortened.
 
 Programmatically create entries:
 
 ```rust
 use agentwerk::agents::knowledge::Page;
 
-store.pages().save(Page {
-    slug: "build-command".into(),
-    kind: String::new(),
-    description: "How the project is built.".into(),
-    content: "Run `make` to compile.".into(),
-    tags: vec!["build".into()],
-})?;
+store.get_pages().save(
+    Page::new(
+        "build-command",
+        "How the project is built.",
+        "Run `make` to compile.",
+    )
+    .tags(["build"]),
+)?;
 
-let page = store.pages().load("build-command")?;
-store.pages().remove("build-command")?;
+let page = store.get_pages().get_page("build-command")?;
+store.get_pages().remove("build-command")?;
 ```
 
 See [`Knowledge`](https://docs.rs/agentwerk/latest/agentwerk/agents/knowledge/struct.Knowledge.html).

@@ -204,7 +204,10 @@ mod tests {
 
     #[test]
     fn every_example_the_schema_shows_deserializes_into_the_arguments() {
-        let document = Tool::from(GlobTool).input_schema().get_raw_schema().clone();
+        let document = Tool::from(GlobTool)
+            .get_input_schema()
+            .get_raw_schema()
+            .clone();
         for example in document["examples"].as_array().expect("examples") {
             serde_json::from_value::<GlobArgs>(example.clone())
                 .unwrap_or_else(|error| panic!("{example}: {error}"));
@@ -231,7 +234,7 @@ mod tests {
             .call(serde_json::json!({"pattern": "**/*.rs"}), &ctx)
             .await;
 
-        let content = result.content();
+        let content = result.get_content();
         let lines: Vec<&str> = content.lines().collect();
         assert_eq!(lines.len(), 3);
         for line in &lines {
@@ -255,7 +258,7 @@ mod tests {
             .call(serde_json::json!({"pattern": "*.txt"}), &ctx)
             .await;
 
-        let content = result.content();
+        let content = result.get_content();
         let lines: Vec<&str> = content.lines().collect();
         assert_eq!(lines.len(), MAX_RESULTS);
     }

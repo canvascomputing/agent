@@ -41,7 +41,7 @@ async fn walks_every_task_action() -> std::result::Result<(), Box<dyn std::error
     tasks.on_event(move |_, e| {
         if let EventKind::ToolCallStarted {
             tool_name, input, ..
-        } = &e.kind
+        } = e.get_kind()
         {
             if tool_name == "tasks" {
                 if let Some(action) = input["action"].as_str() {
@@ -124,7 +124,7 @@ async fn walks_every_task_action() -> std::result::Result<(), Box<dyn std::error
     let audit = tasks
         .find_task("label = auditor AND status = Finished")
         .expect("the auditor must finish the task handed to it");
-    let answer = audit.result.unwrap_or_default().to_string();
+    let answer = audit.get_result().cloned().unwrap_or_default().to_string();
     assert!(
         answer.contains(&secret.to_string()),
         "the answer must quote the combination {secret}, which only the parent's \

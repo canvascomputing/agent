@@ -16,9 +16,9 @@ def test_enqueued_task_appears_with_its_status_and_label(queue):
     queue.add_task(aw.Task("scan the corpus", label="scan"))
 
     (task,) = queue.get_tasks()
-    assert task.task == "scan the corpus"
-    assert task.status == "todo"
-    assert task.label == "scan"
+    assert task.get_task() == "scan the corpus"
+    assert task.get_status() == "todo"
+    assert task.get_label() == "scan"
 
 
 def test_a_path_task_is_read_from_the_file(queue, tmp_path):
@@ -28,7 +28,7 @@ def test_a_path_task_is_read_from_the_file(queue, tmp_path):
     queue.add_task(task)
 
     (task,) = queue.get_tasks()
-    assert task.task == "scan the corpus"
+    assert task.get_task() == "scan the corpus"
 
 
 def test_a_string_task_stays_the_string_even_when_it_names_a_file(queue, tmp_path):
@@ -38,24 +38,24 @@ def test_a_string_task_stays_the_string_even_when_it_names_a_file(queue, tmp_pat
     queue.add_task(str(task_path))
 
     (task,) = queue.get_tasks()
-    assert task.task == str(task_path)
+    assert task.get_task() == str(task_path)
 
 
 def test_unstarted_task_carries_its_key_and_no_messages(queue):
     key = queue.add_task(aw.Task("scan the corpus", label="scan"))
 
     task = queue.get_task(key)
-    assert task.key == key
-    assert task.result is None
-    assert task.started_at is None
-    assert task.replies == []
+    assert task.get_key() == key
+    assert task.get_result() is None
+    assert task.get_started_at() is None
+    assert task.get_replies() == []
 
 
 def test_task_selection_uses_aql_status_and_pending_fields(queue):
     key = queue.add_task(aw.Task("scan the corpus"))
 
-    assert [task.key for task in queue.find_tasks("status = Todo")] == [key]
-    assert [task.key for task in queue.find_tasks("pending = true")] == [key]
+    assert [task.get_key() for task in queue.find_tasks("status = Todo")] == [key]
+    assert [task.get_key() for task in queue.find_tasks("pending = true")] == [key]
     assert queue.find_tasks("status = InProgress") == []
     assert queue.find_tasks("status = Finished") == []
     assert queue.find_tasks("status = Failed") == []
@@ -64,14 +64,16 @@ def test_task_selection_uses_aql_status_and_pending_fields(queue):
 def test_task_predicates_follow_label_status_and_cancellation(queue):
     todo_key = queue.add_task(aw.Task("scan", label="scan"))
     todo = queue.get_task(todo_key)
-    assert todo.has_label("scan")
-    assert not todo.has_label("report")
+    assert todo.get_label() == "scan"
     assert todo.is_todo()
     assert todo.is_pending()
     assert not todo.is_in_progress()
     assert not todo.is_finished()
     assert not todo.is_failed()
     assert not todo.is_cancelled()
+
+    unlabeled_key = queue.add_task(aw.Task("unscoped"))
+    assert queue.get_task(unlabeled_key).get_label() is None
 
     queue.cancel_tasks("label = scan")
     cancelled = queue.get_task(todo_key)
@@ -118,13 +120,13 @@ def test_parent_records_the_handover_trail(queue):
     parent = queue.add_task(aw.Task("survey the corpus"))
     child = queue.add_task(aw.Task("scan one file", parent=parent))
 
-    assert queue.get_task(child).parent == parent
+    assert queue.get_task(child).get_parent() == parent
 
 
 def test_valid_schema_parses_and_attaches_to_a_task():
     schema = aw.Schema({"type": "object", "properties": {"n": {"type": "integer"}}})
     task = aw.Task("write a report", schema=schema)
-    assert isinstance(task.schema, aw.Schema)
+    assert isinstance(task.get_schema(), aw.Schema)
 
 
 def test_schema_validate_returns_the_value_to_keep_and_no_repair():
@@ -160,8 +162,8 @@ def test_find_tasks_accepts_a_callable_for_dynamic_conditions(queue):
     queue.add_task(aw.Task("beta", label="b"))
 
     wanted = "a"
-    matches = queue.find_tasks(lambda task: task.label == wanted)
-    assert [t.task for t in matches] == ["alpha"]
+    matches = queue.find_tasks(lambda task: task.get_label() == wanted)
+    assert [t.get_task() for t in matches] == ["alpha"]
 
 
 def test_find_task_returns_the_first_match(queue):
@@ -169,7 +171,7 @@ def test_find_task_returns_the_first_match(queue):
     queue.add_task(aw.Task("beta", label="b"))
 
     found = queue.find_task("status = Todo")
-    assert found.task == "alpha"
+    assert found.get_task() == "alpha"
 
 
 def test_find_tasks_filters_by_query(queue):
@@ -177,15 +179,15 @@ def test_find_tasks_filters_by_query(queue):
     queue.add_task(aw.Task("beta", label="b"))
 
     matches = queue.find_tasks(aw.Query("label = a"))
-    assert [t.task for t in matches] == ["alpha"]
+    assert [t.get_task() for t in matches] == ["alpha"]
 
 
 def test_find_tasks_compiles_the_string_as_a_query(queue):
     queue.add_task(aw.Task("alpha", label="a"))
     queue.add_task(aw.Task("beta", label="b"))
 
-    assert [t.task for t in queue.find_tasks("b")] == ["beta"]
-    assert [t.task for t in queue.find_tasks("label = a")] == ["alpha"]
+    assert [t.get_task() for t in queue.find_tasks("b")] == ["beta"]
+    assert [t.get_task() for t in queue.find_tasks("label = a")] == ["alpha"]
 
 
 def test_a_malformed_query_string_raises_value_error(queue):
@@ -206,7 +208,7 @@ def test_an_event_query_raises_where_tasks_are_selected(queue):
 def test_task_takes_a_bare_task_without_a_task_object(queue):
     key = queue.add_task("scan the corpus")
 
-    assert queue.get_task(key).task == "scan the corpus"
+    assert queue.get_task(key).get_task() == "scan the corpus"
 
 
 def test_find_results_selects_by_label(queue):
@@ -225,7 +227,7 @@ def test_find_results_takes_a_callable(queue):
     queue.set_task_finished(scan, {"verdict": "clean"})
     queue.set_task_finished(report, {"summary": "nothing found"})
 
-    assert queue.find_results(lambda task: task.label == "scan") == [{"verdict": "clean"}]
+    assert queue.find_results(lambda task: task.get_label() == "scan") == [{"verdict": "clean"}]
 
 
 def test_get_task_returns_none_for_unknown_key(queue):
@@ -237,7 +239,7 @@ def test_set_failed_resolves_a_task_from_outside_the_run(queue):
 
     queue.set_task_failed(key)
 
-    assert queue.get_task(key).status == "failed"
+    assert queue.get_task(key).get_status() == "failed"
 
 
 def test_errors_is_a_list_and_excludes_the_terminal_failure(queue):
@@ -247,7 +249,7 @@ def test_errors_is_a_list_and_excludes_the_terminal_failure(queue):
 
     # A host fail is the terminal marker, not a recorded cause: the errors
     # list holds the failure events (failed requests, tool calls) the run saw.
-    assert queue.get_task(key).errors == []
+    assert queue.get_task(key).get_errors() == []
 
 
 def test_set_finished_resolves_a_task_with_its_result(queue):
@@ -255,7 +257,7 @@ def test_set_finished_resolves_a_task_with_its_result(queue):
 
     queue.set_task_finished(key, {"verdict": "clean"})
 
-    assert queue.get_task(key).status == "finished"
+    assert queue.get_task(key).get_status() == "finished"
     assert queue.get_results()[-1] == {"verdict": "clean"}
 
 
@@ -272,7 +274,7 @@ def test_set_finished_rejects_a_result_that_misses_the_schema(queue):
     with pytest.raises(RuntimeError):
         queue.set_task_finished(key, {"body": "no title"})
 
-    assert queue.get_task(key).status == "todo"
+    assert queue.get_task(key).get_status() == "todo"
 
 
 def test_set_failed_rejects_an_unknown_key(queue):
@@ -295,7 +297,7 @@ def test_find_tasks_returns_every_status_not_just_finished(queue):
     queue.add_task(aw.Task("alpha", label="a"))
     queue.add_task(aw.Task("beta", label="b"))
 
-    tasks = [task.task for task in queue.find_tasks("label = a")]
+    tasks = [task.get_task() for task in queue.find_tasks("label = a")]
     assert tasks == ["alpha"]
 
 
@@ -315,8 +317,8 @@ def test_cancel_takes_the_matching_tasks_off_the_queue(queue):
 
     assert isinstance(queue.cancel_tasks("label = scan"), aw.Queue)
 
-    assert [task.key for task in queue.find_tasks("cancelled = true")] == [scan]
-    assert [task.label for task in queue.find_tasks("cancelled = false")] == ["report"]
+    assert [task.get_key() for task in queue.find_tasks("cancelled = true")] == [scan]
+    assert [task.get_label() for task in queue.find_tasks("cancelled = false")] == ["report"]
     assert queue.get_task(scan).is_cancelled()
 
 
@@ -326,7 +328,7 @@ def test_cancel_applies_to_matching_tasks_inserted_later(queue):
     scan = queue.add_task(aw.Task("scan the corpus", label="scan"))
     queue.add_task(aw.Task("write it up", label="report"))
 
-    assert queue.find_task("cancelled = true").key == scan
+    assert queue.find_task("cancelled = true").get_key() == scan
 
 
 async def test_start_clears_cancellation_flags_and_filters(queue):
@@ -374,21 +376,21 @@ def test_a_condition_that_raises_reads_as_no_match(queue):
 
 def test_event_name_spells_the_kind_an_event_reports(queue):
     seen = []
-    queue.on_event(lambda _, event: seen.append(event.kind))
+    queue.on_event(lambda _, event: seen.append(event.get_kind()))
 
     queue.add_task("seed")
 
     assert aw.EventName.TASK_CREATED in seen
-    assert len(queue.find_events(lambda e: e.kind == aw.EventName.TASK_CREATED)) == 1
+    assert len(queue.find_events(lambda e: e.get_kind() == aw.EventName.TASK_CREATED)) == 1
 
 
 def test_find_event_returns_the_earliest_match(queue):
     queue.add_task("one")
     queue.add_task("two")
 
-    first = queue.find_event(lambda e: e.kind == aw.EventName.TASK_CREATED)
-    assert first.task_key == "t-1"
-    assert queue.find_event(lambda e: e.kind == aw.EventName.TASK_FAILED) is None
+    first = queue.find_event(lambda e: e.get_kind() == aw.EventName.TASK_CREATED)
+    assert first.get_task_key() == "t-1"
+    assert queue.find_event(lambda e: e.get_kind() == aw.EventName.TASK_FAILED) is None
 
 
 def test_find_events_takes_an_aql_string(queue):
@@ -401,7 +403,7 @@ def test_find_events_takes_an_aql_string(queue):
     assert queue.find_events("run_finished") == []
 
     newest = queue.find_event("task_created ORDER BY created DESC")
-    assert newest.task_key == "t-2"
+    assert newest.get_task_key() == "t-2"
 
 
 def test_find_events_takes_a_compiled_query(queue):
@@ -432,8 +434,8 @@ def test_an_event_carries_the_label_of_the_task_it_concerns(queue):
     created = Counter()
 
     def count_per_label(_, event):
-        if event.kind == aw.EventName.TASK_CREATED:
-            created[event.label] += 1
+        if event.get_kind() == aw.EventName.TASK_CREATED:
+            created[event.get_label()] += 1
 
     queue.on_event(count_per_label)
 
@@ -450,7 +452,7 @@ def test_model_for_agent_is_none_when_no_agent_is_bound(queue):
 
 def test_on_result_receives_the_finished_task_and_its_result(queue):
     seen = []
-    queue.on_result(lambda _, task, result: seen.append((task.key, result)))
+    queue.on_result(lambda _, task, result: seen.append((task.get_key(), result)))
     key = queue.add_task(aw.Task("scan the corpus"))
 
     queue.set_task_finished(key, {"verdict": "clean"})
@@ -482,16 +484,16 @@ def test_a_hook_waits_for_the_results_it_needs_before_filing_the_next_step(queue
     second = queue.add_task(aw.Task("scan b.py"))
 
     queue.set_task_finished(first, "clean")
-    assert queue.find_tasks(lambda t: t.label == "review") == []
+    assert queue.find_tasks(lambda t: t.get_label() == "review") == []
 
     queue.set_task_finished(second, "malicious")
-    filed = [t.task for t in queue.find_tasks(lambda t: t.label == "review")]
+    filed = [t.get_task() for t in queue.find_tasks(lambda t: t.get_label() == "review")]
     assert filed == ["clean", "malicious"]
 
 
 def test_on_failure_receives_the_failed_task(queue):
     seen = []
-    queue.on_failure(lambda _, event, task: seen.append((event.kind, task.key)))
+    queue.on_failure(lambda _, event, task: seen.append((event.get_kind(), task.get_key())))
     key = queue.add_task(aw.Task("scan the corpus"))
 
     queue.set_task_failed(key)
@@ -501,21 +503,21 @@ def test_on_failure_receives_the_failed_task(queue):
 
 def test_on_failure_files_a_retry_through_the_queue_it_is_handed(queue):
     def retry_once(work, _, failed):
-        if not failed.parent:
-            work.add_task(aw.Task(failed.task, parent=failed.key))
+        if not failed.get_parent():
+            work.add_task(aw.Task(failed.get_task(), parent=failed.get_key()))
 
     queue.on_failure(retry_once)
     key = queue.add_task(aw.Task("scan the corpus"))
 
     queue.set_task_failed(key)
 
-    retry = queue.find_task(lambda task: task.parent == key)
-    assert retry.task == "scan the corpus"
+    retry = queue.find_task(lambda task: task.get_parent() == key)
+    assert retry.get_task() == "scan the corpus"
 
 
 def test_on_event_files_a_follow_up_for_any_kind(queue):
     def report_when_done(work, event):
-        if event.kind == "task_finished":
+        if event.get_kind() == "task_finished":
             work.add_task(aw.Task("report", label="report"))
 
     queue.on_event(report_when_done)
@@ -524,13 +526,13 @@ def test_on_event_files_a_follow_up_for_any_kind(queue):
     queue.set_task_finished(key, {"verdict": "clean"})
 
     filed = queue.find_tasks("label = report")
-    assert [t.task for t in filed] == ["report"]
+    assert [t.get_task() for t in filed] == ["report"]
 
 
 def test_an_event_handler_rewrites_replies_through_the_queue(queue):
     def redact_when_done(work, event):
-        if event.kind == "task_finished":
-            work.edit_replies(event.task_key, lambda replies: [aw.Reply.user_text("[redacted]")])
+        if event.get_kind() == "task_finished":
+            work.edit_replies(event.get_task_key(), lambda replies: [aw.Reply.user_text("[redacted]")])
 
     queue.on_event(redact_when_done)
     key = queue.add_task(aw.Task("scan the corpus"))
@@ -538,7 +540,7 @@ def test_an_event_handler_rewrites_replies_through_the_queue(queue):
 
     queue.set_task_finished(key, {"verdict": "clean"})
 
-    texts = [r.content[0].data["text"] for r in queue.get_task(key).replies]
+    texts = [r.get_content()[0].get_data()["text"] for r in queue.get_task(key).get_replies()]
     assert texts == ["[redacted]"]
 
 
@@ -561,7 +563,7 @@ def test_edit_replies_on_an_unstarted_task_is_a_no_op(queue):
 
     queue.edit_replies(key, lambda replies: replies)
 
-    assert queue.get_task(key).replies == []
+    assert queue.get_task(key).get_replies() == []
 
 
 def test_edit_replies_drops_a_reply_from_a_non_empty_list(queue):
@@ -570,10 +572,10 @@ def test_edit_replies_drops_a_reply_from_a_non_empty_list(queue):
     queue.add_reply(key, "drop me")
 
     queue.edit_replies(
-        key, lambda replies: [r for r in replies if r.content[0].data["text"] != "drop me"]
+        key, lambda replies: [r for r in replies if r.get_content()[0].get_data()["text"] != "drop me"]
     )
 
-    remaining = [r.content[0].data["text"] for r in queue.get_task(key).replies]
+    remaining = [r.get_content()[0].get_data()["text"] for r in queue.get_task(key).get_replies()]
     assert remaining == ["keep me"]
 
 
@@ -583,7 +585,7 @@ def test_edit_replies_appends_a_reply_built_in_python(queue):
 
     queue.edit_replies(key, lambda replies: replies + [aw.Reply.user_text("second")])
 
-    texts = [r.content[0].data["text"] for r in queue.get_task(key).replies]
+    texts = [r.get_content()[0].get_data()["text"] for r in queue.get_task(key).get_replies()]
     assert texts == ["first", "second"]
 
 
@@ -609,8 +611,8 @@ def test_edit_replies_raises_when_the_editor_returns_dicts(queue):
 async def test_run_finished_announces_why_execution_ended(queue):
     reasons = []
     queue.on_event(
-        lambda _, event: reasons.append(event.data["reason"])
-        if event.kind == "run_finished"
+        lambda _, event: reasons.append(event.get_data()["reason"])
+        if event.get_kind() == "run_finished"
         else None
     )
     await queue.finish_all_tasks()
@@ -623,7 +625,7 @@ async def test_on_result_async_awaits_the_handler_before_finish_all_returns(queu
 
     async def persist(_, task, result):
         await asyncio.sleep(0)
-        seen.append((task.key, result))
+        seen.append((task.get_key(), result))
 
     queue.on_result_async(persist)
     key = queue.add_task("scan the corpus")
@@ -638,10 +640,10 @@ async def test_on_result_async_finishes_one_handler_before_starting_the_next(que
     seen = []
 
     async def persist(_, task, result):
-        seen.append(f"start {task.key}")
+        seen.append(f"start {task.get_key()}")
         # A scheduled-only coroutine would let the next one start here.
         await asyncio.sleep(0.01)
-        seen.append(f"end {task.key}")
+        seen.append(f"end {task.get_key()}")
 
     queue.on_result_async(persist)
     first = queue.add_task("scan a.py")
@@ -664,7 +666,7 @@ async def test_on_result_async_writes_every_result_to_a_database(queue, tmp_path
         database.commit()
 
     async def persist(_, task, result):
-        await asyncio.to_thread(insert, task.key, result["verdict"])
+        await asyncio.to_thread(insert, task.get_key(), result["verdict"])
 
     queue.on_result_async(persist)
     first = queue.add_task("scan a.py")
@@ -684,7 +686,7 @@ async def test_on_task_async_awaits_the_handler_before_finish_all_returns(queue)
 
     async def note(_, event, task):
         await asyncio.sleep(0)
-        seen.append((event.kind, task.key))
+        seen.append((event.get_kind(), task.get_key()))
 
     queue.on_task_async(note)
     key = queue.add_task("scan the corpus")
@@ -700,7 +702,7 @@ async def test_on_failure_async_awaits_the_handler_before_finish_all_returns(que
 
     async def note(_, event, task):
         await asyncio.sleep(0)
-        seen.append((event.kind, task.key))
+        seen.append((event.get_kind(), task.get_key()))
 
     queue.on_failure_async(note)
     key = queue.add_task("scan the corpus")
@@ -716,7 +718,7 @@ async def test_on_event_async_sees_the_kinds_no_task_hook_accepts(queue):
 
     async def note(_, event):
         await asyncio.sleep(0)
-        seen.append(event.kind)
+        seen.append(event.get_kind())
 
     queue.on_event_async(note)
     key = queue.add_task("scan the corpus")
@@ -746,7 +748,7 @@ async def test_on_result_async_runs_the_handler_on_the_callers_event_loop(queue)
 async def test_finish_hands_back_the_results_its_filter_named(queue):
     key = queue.add_task("work")
     queue.set_task_finished(key, {"verdict": "clean"})
-    assert await queue.finish_results(lambda t: t.key == key) == [{"verdict": "clean"}]
+    assert await queue.finish_results(lambda t: t.get_key() == key) == [{"verdict": "clean"}]
 
 
 async def test_finish_all_hands_back_the_results_of_every_pool(queue):
@@ -783,8 +785,8 @@ async def test_a_cancelled_run_reports_its_reason(queue):
 
 def test_assignee_is_unset_until_an_agent_claims_the_task(queue):
     key = queue.add_task("work")
-    assert queue.get_task(key).assignee is None
-    assert queue.find_tasks(lambda t: t.assignee == "scout") == []
+    assert queue.get_task(key).get_assignee() is None
+    assert queue.find_tasks(lambda t: t.get_assignee() == "scout") == []
 
 
 def test_load_reopens_a_session_directory(queue, tmp_path):
@@ -793,7 +795,7 @@ def test_load_reopens_a_session_directory(queue, tmp_path):
 
     reopened = aw.Queue.load(str(tmp_path))
 
-    assert reopened.get_task(key).task == "scan the corpus"
+    assert reopened.get_task(key).get_task() == "scan the corpus"
 
 
 def test_a_schema_is_read_back_by_the_label_it_was_bound_to():

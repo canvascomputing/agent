@@ -28,7 +28,7 @@ pub fn print_result(tasks: &Queue) {
     let count = |kind: EventName| {
         recorded
             .iter()
-            .filter(|e| e.kind.event_name() == kind)
+            .filter(|e| e.get_kind().get_event_name() == kind)
             .count()
     };
     let json = serde_json::json!({

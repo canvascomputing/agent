@@ -230,7 +230,7 @@ mod tests {
 
     async fn search(ctx: &ToolContext, input: Value) -> Value {
         let result = crate::tools::Tool::from(GrepTool).call(input, ctx).await;
-        let content = result.content();
+        let content = result.get_content();
         serde_json::from_str(content).unwrap_or_else(|_| Value::String(content.to_string()))
     }
 

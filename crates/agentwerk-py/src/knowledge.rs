@@ -1,7 +1,7 @@
 //! The knowledge store as Python sees it. Open one, limit its index, and hand it
 //! to one or more agents so they share what they learn.
 //!
-//! `pages()` is how you write those pages yourself, rather than leaving them to
+//! `get_pages()` is how you write those pages yourself, rather than leaving them to
 //! the agent.
 
 use std::sync::Arc;
@@ -31,8 +31,8 @@ impl PyKnowledge {
 
     /// Limit how much of the index is injected into the prompt, in characters.
     /// No write is ever refused for being too large.
-    fn index_char_limit<'py>(slf: PyRef<'py, Self>, count: usize) -> PyRef<'py, Self> {
-        slf.inner.index_char_limit(count);
+    fn set_char_limit<'py>(slf: PyRef<'py, Self>, count: usize) -> PyRef<'py, Self> {
+        slf.inner.set_char_limit(count);
         slf
     }
 
@@ -42,12 +42,12 @@ impl PyKnowledge {
     }
 
     /// Get the index, which is injected into the agent prompt.
-    fn index(&self) -> String {
-        self.inner.index()
+    fn get_index(&self) -> String {
+        self.inner.get_index()
     }
 
     /// Get the page collection for reading and writing pages.
-    fn pages(&self) -> PyPages {
+    fn get_pages(&self) -> PyPages {
         PyPages {
             store: Arc::clone(&self.inner),
         }
@@ -67,8 +67,8 @@ pub struct PyPages {
 }
 
 impl PyPages {
-    fn pages(&self) -> Pages<'_> {
-        self.store.pages()
+    fn collection(&self) -> Pages<'_> {
+        self.store.get_pages()
     }
 }
 
@@ -76,24 +76,26 @@ impl PyPages {
 impl PyPages {
     /// Create or replace a page, and its entry in the index.
     fn save(&self, page: PyRef<'_, PyPage>) -> PyResult<()> {
-        self.pages().save(page.to_page()).map_err(runtime_error)
+        self.collection()
+            .save(page.to_page())
+            .map_err(runtime_error)
     }
 
     /// Read one page by its slug. Raises when there is none.
-    fn load(&self, slug: &str) -> PyResult<PyPage> {
-        let page = self.pages().load(slug).map_err(runtime_error)?;
+    fn get_page(&self, slug: &str) -> PyResult<PyPage> {
+        let page = self.collection().get_page(slug).map_err(runtime_error)?;
         Ok(PyPage { inner: page })
     }
 
     /// Get every page in the store, in index order.
-    fn list(&self) -> PyResult<Vec<PyPage>> {
-        let pages = self.pages().list().map_err(runtime_error)?;
+    fn get_pages(&self) -> PyResult<Vec<PyPage>> {
+        let pages = self.collection().get_pages().map_err(runtime_error)?;
         Ok(pages.into_iter().map(|inner| PyPage { inner }).collect())
     }
 
     /// Remove one page and its entry in the index.
     fn remove(&self, slug: &str) -> PyResult<()> {
-        self.pages().remove(slug).map_err(runtime_error)
+        self.collection().remove(slug).map_err(runtime_error)
     }
 }
 
@@ -123,45 +125,37 @@ impl PyPage {
         tags: Option<Vec<String>>,
     ) -> Self {
         PyPage {
-            inner: Page {
-                slug,
-                kind: kind.to_string(),
-                description,
-                content,
-                tags: tags.unwrap_or_default(),
-            },
+            inner: Page::new(slug, description, content)
+                .kind(kind)
+                .tags(tags.unwrap_or_default()),
         }
     }
 
-    #[getter]
-    fn slug(&self) -> &str {
-        &self.inner.slug
+    fn get_slug(&self) -> &str {
+        self.inner.get_slug()
     }
 
-    #[getter]
-    fn kind(&self) -> &str {
-        &self.inner.kind
+    fn get_kind(&self) -> &str {
+        self.inner.get_kind()
     }
 
-    #[getter]
-    fn description(&self) -> &str {
-        &self.inner.description
+    fn get_description(&self) -> &str {
+        self.inner.get_description()
     }
 
-    #[getter]
-    fn content(&self) -> &str {
-        &self.inner.content
+    fn get_content(&self) -> &str {
+        self.inner.get_content()
     }
 
-    #[getter]
-    fn tags(&self) -> Vec<String> {
-        self.inner.tags.clone()
+    fn get_tags(&self) -> Vec<String> {
+        self.inner.get_tags().to_vec()
     }
 
     fn __repr__(&self) -> String {
         format!(
             "Page(slug={:?}, kind={:?})",
-            self.inner.slug, self.inner.kind
+            self.inner.get_slug(),
+            self.inner.get_kind()
         )
     }
 }

@@ -115,14 +115,14 @@ async def main(n, partitions, agents):
     tool_calls, tool_errors = Counter(), Counter()
 
     def trace(event):
-        if event.kind in ("task_started", "task_finished", "task_failed"):
-            print(f"  {event.kind:<20} {event.agent_id:<10} {event.task_key}")
-        elif event.kind == "run_finished":
-            finish_reason.append(event.data["reason"])
-        elif event.kind == "tool_call_started":
-            tool_calls[event.data["tool_name"]] += 1
-        elif event.kind == "tool_call_failed":
-            tool_errors[event.data["tool_name"]] += 1
+        if event.get_kind() in ("task_started", "task_finished", "task_failed"):
+            print(f"  {event.get_kind():<20} {event.get_agent_id():<10} {event.get_task_key()}")
+        elif event.get_kind() == "run_finished":
+            finish_reason.append(event.get_data()["reason"])
+        elif event.get_kind() == "tool_call_started":
+            tool_calls[event.get_data()["tool_name"]] += 1
+        elif event.get_kind() == "tool_call_failed":
+            tool_errors[event.get_data()["tool_name"]] += 1
 
     tasks.on_event(trace)
 
@@ -149,11 +149,11 @@ async def main(n, partitions, agents):
     partials, failures = {}, []
     for task in tasks.get_tasks():
         if task.is_finished():
-            partials[task.result["idx"]] = task.result["partial_sum"]
+            partials[task.get_result()["idx"]] = task.get_result()["partial_sum"]
         else:
-            failures.append((task.key, task.status))
+            failures.append((task.get_key(), task.get_status()))
 
-    event_counts = Counter(event.kind for event in tasks.find_events("ORDER BY created"))
+    event_counts = Counter(event.get_kind() for event in tasks.find_events("ORDER BY created"))
     duration = tasks.get_duration() or 0.0
     print(
         f"\nfinished in {duration:.1f}s: "

@@ -13,7 +13,7 @@ use super::{Schema, SchemaParseError};
 /// claimed under that label that carries no schema of its own.
 ///
 /// Share one store with a queue through `Queue::set_schemas`. A task built
-/// with `Task::schema` keeps what it was given.
+/// with `Task::schema` keeps what it was given; read it with `Task::get_schema`.
 ///
 /// ```
 /// use agentwerk::SchemaStore;

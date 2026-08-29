@@ -205,7 +205,7 @@ mod tests {
         let result = run_command(&command, Duration::from_millis(60_000), &ctx).await;
         let elapsed = started.elapsed();
 
-        let content = result.content();
+        let content = result.get_content();
         assert!(
             matches!(result, ToolResult::Error { .. }),
             "expected cancelled result"

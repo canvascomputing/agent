@@ -15,7 +15,7 @@ use super::stats::Stats;
 use super::tasks::{Queue, Task};
 use crate::prompts::directives::DirectiveStore;
 
-/// One counter per label, behind the ids [`Agent::id`] hands out.
+/// One counter per label, behind the ids [`Agent::get_id`] hands out.
 /// Numbering restarts at 1 for each label, so a host that creates the same
 /// agents in the same order gets the same ids after a restart, which is what
 /// [`Queue::load`] needs to resume an unfinished task.
@@ -94,7 +94,7 @@ impl Clone for Agent {
             QueueRef::Private(a) => QueueRef::Shared(Arc::downgrade(a)),
         };
         Self {
-            id: OnceLock::from(self.id().to_string()),
+            id: OnceLock::from(self.get_id().to_string()),
             label: self.label.clone(),
             interactive: self.interactive,
             directives: Arc::clone(&self.directives),
@@ -186,7 +186,7 @@ impl Agent {
     /// An agent serves one label and a task carries one, so an agent claims
     /// a task when the two are equal, and every agent serving that label may
     /// claim it. Calling this twice replaces the label, and the id
-    /// [`Agent::id`] hands back is built from whichever one is set when the id
+    /// [`Agent::get_id`] hands back is built from whichever one is set when the id
     /// is first read.
     pub fn label(mut self, label: impl Into<String>) -> Self {
         self.label = Some(label.into());
@@ -288,15 +288,15 @@ impl Agent {
 
     /// The unique identifier this agent works under, `<label>-<n>` for a
     /// labeled agent and `agent-<n>` for one without. It names the agent in
-    /// [`Event::agent_id`] and in [`Task::assignee`].
+    /// [`Event::get_agent_id`] and in [`Task::get_assignee`].
     ///
     /// The number is taken the first time this is called, directly or through
     /// [`Self::task`], [`Self::start`], or `Queue::add_agent`. Label the
     /// agent before then.
     ///
-    /// [`Event::agent_id`]: crate::Event::agent_id
-    /// [`Task::assignee`]: crate::Task::assignee
-    pub fn id(&self) -> &str {
+    /// [`Event::get_agent_id`]: crate::Event::get_agent_id
+    /// [`Task::get_assignee`]: crate::Task::get_assignee
+    pub fn get_id(&self) -> &str {
         self.id.get_or_init(|| next_id(self.label.as_deref()))
     }
 
@@ -431,7 +431,7 @@ impl Agent {
         if let serde_json::Value::String(s) = &task.task {
             task.task = serde_json::Value::String(self.interpolate(s));
         }
-        queue.insert(task, self.id().to_string())
+        queue.insert(task, self.get_id().to_string())
     }
 
     /// Begin processing tasks, and hand back the task queue so results,
@@ -452,7 +452,7 @@ impl Agent {
             .queue
             .upgrade()
             .expect("Agent::start requires a bound Queue");
-        if !queue.has_agent(self.id()) {
+        if !queue.has_agent(self.get_id()) {
             queue.add_agent(self.clone());
         }
         queue.start();
@@ -479,7 +479,7 @@ mod tests {
             .tool_registry()
             .tools()
             .into_iter()
-            .map(|tool| tool.name().to_string())
+            .map(|tool| tool.get_name().to_string())
             .collect();
         for name in ["read_file", "git", "greet"] {
             assert!(names.contains(&name.to_string()), "{names:?}");
@@ -540,24 +540,24 @@ mod tests {
     fn ids_are_numbered_per_label() {
         let first = Agent::new().label("ids_per_label");
         let second = Agent::new().label("ids_per_label");
-        assert_eq!(first.id(), "ids_per_label-1");
-        assert_eq!(second.id(), "ids_per_label-2");
+        assert_eq!(first.get_id(), "ids_per_label-1");
+        assert_eq!(second.get_id(), "ids_per_label-2");
     }
 
     #[test]
     fn an_unlabeled_agent_is_numbered_under_agent() {
         let agent = Agent::new();
         assert!(
-            agent.id().starts_with("agent-"),
+            agent.get_id().starts_with("agent-"),
             "unexpected id: {}",
-            agent.id()
+            agent.get_id()
         );
     }
 
     #[test]
     fn a_clone_keeps_the_id_of_the_agent_it_came_from() {
         let agent = Agent::new().label("cloned_id");
-        assert_eq!(agent.clone().id(), agent.id());
+        assert_eq!(agent.clone().get_id(), agent.get_id());
     }
 
     /// The system prompt with no live state and a fixed task key.
@@ -674,7 +674,7 @@ mod tests {
             .tool_registry()
             .tools()
             .into_iter()
-            .map(|tool| tool.name().to_string())
+            .map(|tool| tool.get_name().to_string())
             .collect()
     }
 
@@ -800,7 +800,7 @@ mod tests {
         let names: Vec<String> = registry
             .tools()
             .into_iter()
-            .map(|tool| tool.name().to_string())
+            .map(|tool| tool.get_name().to_string())
             .collect();
         assert!(
             names.iter().any(|n| n == "knowledge"),
@@ -815,7 +815,7 @@ mod tests {
         let agent = Agent::new().knowledge(&store);
         agent
             .knowledge
-            .pages()
+            .get_pages()
             .save(crate::agents::knowledge::Page {
                 slug: "from-store".into(),
                 kind: String::new(),
@@ -840,7 +840,7 @@ mod tests {
         let cloned = agent.clone();
         agent
             .knowledge
-            .pages()
+            .get_pages()
             .save(crate::agents::knowledge::Page {
                 slug: "shared".into(),
                 kind: String::new(),
@@ -849,7 +849,7 @@ mod tests {
                 tags: vec![],
             })
             .unwrap();
-        assert!(cloned.knowledge.index().contains("shared"));
+        assert!(cloned.knowledge.get_index().contains("shared"));
     }
 
     #[test]
@@ -860,7 +860,7 @@ mod tests {
         let bob = Agent::new().knowledge(&store);
         alice
             .knowledge
-            .pages()
+            .get_pages()
             .save(crate::agents::knowledge::Page {
                 slug: "from-alice".into(),
                 kind: String::new(),
@@ -869,7 +869,7 @@ mod tests {
                 tags: vec![],
             })
             .unwrap();
-        assert!(bob.knowledge.index().contains("from-alice"));
+        assert!(bob.knowledge.get_index().contains("from-alice"));
     }
 
     #[test]
@@ -893,7 +893,7 @@ mod tests {
         let names: Vec<String> = registry
             .tools()
             .into_iter()
-            .map(|tool| tool.name().to_string())
+            .map(|tool| tool.get_name().to_string())
             .collect();
         assert!(
             names.iter().any(|n| n == "knowledge"),
@@ -911,15 +911,15 @@ mod tests {
     #[test]
     fn the_label_set_before_the_id_is_read_names_it() {
         let agent = Agent::new().label("named_before_read");
-        assert_eq!(agent.id(), "named_before_read-1");
+        assert_eq!(agent.get_id(), "named_before_read-1");
     }
 
     #[test]
     fn a_label_set_after_the_id_was_read_leaves_it_alone() {
         let agent = Agent::new();
-        let before = agent.id().to_string();
+        let before = agent.get_id().to_string();
         let agent = agent.label("named_after_read");
-        assert_eq!(agent.id(), before);
+        assert_eq!(agent.get_id(), before);
     }
 
     #[tokio::test]

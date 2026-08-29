@@ -98,7 +98,7 @@ fn aggregate_and_report(tasks: &Queue, partitions: &[(u64, u64)], n: u64, style:
                 failures += 1;
                 eprintln!(
                     "{red}│{reset} {key:<8} ✗ {reason}",
-                    key = task.key,
+                    key = task.get_key(),
                     red = style.red,
                     reset = style.reset,
                 );
@@ -110,7 +110,7 @@ fn aggregate_and_report(tasks: &Queue, partitions: &[(u64, u64)], n: u64, style:
     let expected = closed_form(n);
     let elapsed = tasks.get_duration().unwrap_or_default().as_secs_f64();
     let done = tasks
-        .find_events(|e: &Event| matches!(e.kind, EventKind::TaskFinished))
+        .find_events(|e: &Event| matches!(e.get_kind(), EventKind::TaskFinished))
         .len();
 
     eprintln!(
@@ -154,9 +154,9 @@ fn aggregate_and_report(tasks: &Queue, partitions: &[(u64, u64)], n: u64, style:
 /// can't quietly slot into the wrong partition.
 fn extract_partial(task: &Task, total: usize) -> Result<(usize, i128), String> {
     if !task.is_finished() {
-        return Err(task.status.to_string());
+        return Err(task.get_status().to_string());
     }
-    let attached = task.result.as_ref().ok_or("no result attached")?;
+    let attached = task.get_result().ok_or("no result attached")?;
     let idx = attached
         .get("idx")
         .and_then(|v| v.as_u64())
@@ -169,7 +169,7 @@ fn extract_partial(task: &Task, total: usize) -> Result<(usize, i128), String> {
     if idx >= total {
         return Err(format!("idx {idx} out of range"));
     }
-    let body_idx = parse_idx_from_body(&task.task);
+    let body_idx = parse_idx_from_body(task.get_task());
     if body_idx != Some(idx) {
         return Err(format!("idx mismatch: body={body_idx:?}, result={idx}"));
     }
@@ -261,9 +261,9 @@ fn build_event_handler(
     let done = Arc::new(AtomicUsize::new(0));
     let width = digit_width(total);
     Arc::new(move |event: &Event| {
-        let agent = &event.agent_id;
-        let key = &event.task_key;
-        match &event.kind {
+        let agent = event.get_agent_id();
+        let key = event.get_task_key();
+        match event.get_kind() {
             EventKind::TaskStarted => eprintln!(
                 "{dim}│       ▶ {agent:<10} {key} dispatched{reset}",
                 dim = style.dim,
@@ -271,7 +271,7 @@ fn build_event_handler(
             ),
             EventKind::TaskFinished | EventKind::TaskFailed => {
                 let n = done.fetch_add(1, Ordering::Relaxed) + 1;
-                let outcome = if matches!(event.kind, EventKind::TaskFinished) {
+                let outcome = if matches!(event.get_kind(), EventKind::TaskFinished) {
                     "done"
                 } else {
                     "failed"

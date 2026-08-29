@@ -162,7 +162,7 @@ mod tests {
     #[test]
     fn every_example_the_schema_shows_deserializes_into_the_arguments() {
         let document = Tool::from(ReadFileTool)
-            .input_schema()
+            .get_input_schema()
             .get_raw_schema()
             .clone();
         for example in document["examples"].as_array().expect("examples") {
@@ -191,7 +191,7 @@ mod tests {
                 tool.opened_paths(&input),
                 vec!["src/lib.rs".to_string()],
                 "{} should report its path",
-                tool.name(),
+                tool.get_name(),
             );
         }
 
@@ -219,7 +219,7 @@ mod tests {
 
         let results = registry.execute(&calls, &test_ctx(dir.path())).await;
 
-        assert_eq!(results[0].content(), "2\tbeta\n3\tgamma");
+        assert_eq!(results[0].get_content(), "2\tbeta\n3\tgamma");
     }
 
     #[tokio::test]
@@ -285,7 +285,7 @@ mod tests {
         for case in cases {
             let result = Tool::from(ReadFileTool).call(case.input, &ctx).await;
             let is_error = matches!(result, ToolResult::Error { .. });
-            let content = result.content();
+            let content = result.get_content();
             assert_eq!(
                 is_error, case.expect_error,
                 "case '{}': expected is_error={}, got is_error={}",

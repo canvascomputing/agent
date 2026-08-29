@@ -496,7 +496,10 @@ mod tests {
 
     #[test]
     fn every_example_the_schema_shows_deserializes_into_the_arguments() {
-        let document = Tool::from(GrepTool).input_schema().get_raw_schema().clone();
+        let document = Tool::from(GrepTool)
+            .get_input_schema()
+            .get_raw_schema()
+            .clone();
         for example in document["examples"].as_array().expect("examples") {
             serde_json::from_value::<GrepArgs>(example.clone())
                 .unwrap_or_else(|error| panic!("{example}: {error}"));
@@ -531,7 +534,7 @@ mod tests {
 
     async fn search(ctx: &ToolContext, input: Value) -> Value {
         let result = Tool::from(GrepTool).call(input, ctx).await;
-        let content = result.content();
+        let content = result.get_content();
         serde_json::from_str(content).unwrap_or_else(|_| Value::String(content.to_string()))
     }
 
