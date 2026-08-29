@@ -21,7 +21,7 @@ pub(super) async fn run(context: &mut TaskContext<'_>, mut calls: Vec<ToolCall>)
         let Some(tool) = registry.get(&call.name) else {
             continue;
         };
-        let registered = tool.name().to_string();
+        let registered = tool.get_name().to_string();
         if registered != call.name {
             context.emit(EventKind::ResponseRepaired {
                 tool_name: registered.clone(),
@@ -43,7 +43,7 @@ pub(super) async fn run(context: &mut TaskContext<'_>, mut calls: Vec<ToolCall>)
     let tool_context = ToolContext::new(context.agent.get_dir())
         .run(Arc::clone(&context.run))
         .queue(Arc::clone(context.queue))
-        .agent_id(context.agent.id().to_string())
+        .agent_id(context.agent.get_id().to_string())
         .task_key(context.task_key.clone())
         .knowledge(context.agent.get_knowledge())
         .directives(context.agent.get_directives());

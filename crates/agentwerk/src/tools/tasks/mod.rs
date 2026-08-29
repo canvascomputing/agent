@@ -337,7 +337,7 @@ mod tests {
     }
 
     fn unwrap_text(result: &ToolResult) -> &str {
-        let s = result.content();
+        let s = result.get_content();
         s
     }
 

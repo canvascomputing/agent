@@ -148,7 +148,7 @@ mod tests {
     #[test]
     fn every_example_the_schema_shows_deserializes_into_the_arguments() {
         let document = Tool::from(ListDirectoryTool)
-            .input_schema()
+            .get_input_schema()
             .get_raw_schema()
             .clone();
         for example in document["examples"].as_array().expect("examples") {
@@ -173,7 +173,7 @@ mod tests {
         let ctx = test_ctx(tmp.path());
         let result = tool.call(serde_json::json!({}), &ctx).await;
 
-        let content = result.content();
+        let content = result.get_content();
         let lines: Vec<&str> = content.lines().collect();
         assert_eq!(lines.len(), 3);
         // Sorted alphabetically
@@ -196,7 +196,7 @@ mod tests {
             .call(serde_json::json!({"recursive": true}), &ctx)
             .await;
 
-        let content = result.content();
+        let content = result.get_content();
         assert!(content.contains("child/nested.txt") || content.contains("child\\nested.txt"));
         assert!(content.contains("root.txt"));
         // Should have at least 3 entries: root.txt, child, child/nested.txt

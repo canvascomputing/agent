@@ -43,9 +43,9 @@ impl Queryable for Event {
 /// let tasks = Queue::new();
 /// tasks.find_tasks("research");
 /// tasks.find_tasks(Query::new("label = research AND agent = research-1")?);
-/// tasks.find_tasks(|t: &Task| t.label.as_deref() == Some("research"));
+/// tasks.find_tasks(|t: &Task| t.get_label() == Some("research"));
 /// tasks.find_events("tool_call_failed");
-/// tasks.find_events(|e: &Event| e.kind.is_failure());
+/// tasks.find_events(|e: &Event| e.get_kind().is_failure());
 /// # Ok(())
 /// # }
 /// ```
@@ -578,7 +578,7 @@ impl QueryField for EventField {
 
     fn of(self, event: &Event) -> Option<Cow<'_, str>> {
         match self {
-            EventField::Event => Some(Cow::Borrowed(event.kind.name())),
+            EventField::Event => Some(Cow::Borrowed(event.kind.get_name())),
             EventField::Agent => carried(&event.agent_id),
             EventField::Task => carried(&event.task_key),
             EventField::Label => event.label.as_deref().map(Cow::Borrowed),
@@ -652,10 +652,10 @@ fn event_named(value: &str) -> Option<&'static str> {
     EventName::ALL
         .iter()
         .find(|name| {
-            value.eq_ignore_ascii_case(name.name())
+            value.eq_ignore_ascii_case(name.get_name())
                 || value.eq_ignore_ascii_case(&format!("{name:?}"))
         })
-        .map(|name| name.name())
+        .map(|name| name.get_name())
 }
 
 /// A JSON value as the text a query compares against, matching what the
@@ -865,7 +865,7 @@ impl fmt::Display for QueryError {
                 "No status named `{value}`. Use one of Todo, InProgress, Finished, Failed."
             ),
             Self::UnknownEvent { value } => {
-                let known: Vec<&str> = EventName::ALL.iter().map(|name| name.name()).collect();
+                let known: Vec<&str> = EventName::ALL.iter().map(|name| name.get_name()).collect();
                 write!(
                     f,
                     "No event named `{value}`. Use one of {}.",

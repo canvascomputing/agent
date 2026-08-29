@@ -46,7 +46,7 @@ const PREVIEW_CHARS: usize = 2_000;
 #[derive(Clone)]
 pub struct ToolContext {
     /// Directory the tool runs in. Resolve a relative path against it.
-    pub dir: PathBuf,
+    pub(crate) dir: PathBuf,
     pub(crate) run: Option<Arc<Run>>,
     pub(crate) queue: Option<Arc<Queue>>,
     pub(crate) agent_id: Option<String>,
@@ -70,6 +70,11 @@ impl ToolContext {
             knowledge: None,
             directives: Arc::new(DirectiveStore::default()),
         }
+    }
+
+    /// The directory this tool runs in.
+    pub fn get_dir(&self) -> &Path {
+        &self.dir
     }
 
     pub(crate) fn run(mut self, run: Arc<Run>) -> Self {
@@ -197,7 +202,7 @@ impl ToolResult {
     }
 
     /// Get the text, whichever outcome this is.
-    pub fn content(&self) -> &str {
+    pub fn get_content(&self) -> &str {
         match self {
             Self::Success { content, .. } | Self::Error { content, .. } => content,
         }
@@ -219,7 +224,7 @@ pub(crate) struct ToolRegistry {
 
 impl std::fmt::Debug for ToolRegistry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let names: Vec<&str> = self.tools.iter().map(|tool| tool.name()).collect();
+        let names: Vec<&str> = self.tools.iter().map(|tool| tool.get_name()).collect();
         f.debug_struct("ToolRegistry")
             .field("tools", &names)
             .finish()
@@ -233,7 +238,7 @@ impl ToolRegistry {
     /// is the one that counts.
     pub(crate) fn register(&mut self, tool: impl Into<Tool>) {
         let tool = Arc::new(tool.into());
-        self.tools.retain(|t| t.name() != tool.name());
+        self.tools.retain(|t| t.get_name() != tool.get_name());
         self.tools.push(tool);
     }
 
@@ -264,14 +269,14 @@ impl ToolRegistry {
     /// `_tool` suffix still reaches the right tool.
     pub(crate) fn get(&self, name: &str) -> Option<Arc<Tool>> {
         let name = name.trim();
-        if let Some(found) = self.tools.iter().find(|tool| tool.name() == name) {
+        if let Some(found) = self.tools.iter().find(|tool| tool.get_name() == name) {
             return Some(Arc::clone(found));
         }
         let key = lookup_key(name);
         let mut folded = self
             .tools
             .iter()
-            .filter(|tool| lookup_key(tool.name()) == key);
+            .filter(|tool| lookup_key(tool.get_name()) == key);
         let found = folded.next()?;
         // A key two tools share is ambiguous: refuse rather than guess.
         folded.next().is_none().then(|| Arc::clone(found))
@@ -280,7 +285,7 @@ impl ToolRegistry {
     /// True when a tool of exactly this name is registered. Exact where
     /// [`Self::get`] folds, so a near-miss never passes for the real tool.
     pub(crate) fn contains(&self, name: &str) -> bool {
-        self.tools.iter().any(|tool| tool.name() == name)
+        self.tools.iter().any(|tool| tool.get_name() == name)
     }
 
     /// Get the registered names, sorted, for the error that tells the model what
@@ -289,7 +294,7 @@ impl ToolRegistry {
         let mut names: Vec<String> = self
             .tools
             .iter()
-            .map(|tool| tool.name().to_string())
+            .map(|tool| tool.get_name().to_string())
             .collect();
         names.sort();
         names
@@ -515,23 +520,23 @@ impl Tool {
     }
 
     /// Run the tool on a call the registry has already checked against
-    /// [`input_schema`](Self::input_schema).
+    /// [`get_input_schema`](Self::get_input_schema).
     pub async fn call(&self, input: Value, ctx: &ToolContext) -> ToolResult {
         (self.handler)(input, ctx).await
     }
 
     /// The name the model calls the tool by.
-    pub fn name(&self) -> &str {
+    pub fn get_name(&self) -> &str {
         &self.name
     }
 
     /// What the tool does, in the words the model reads.
-    pub fn description(&self) -> &str {
+    pub fn get_description(&self) -> &str {
         &self.description
     }
 
     /// The arguments this tool accepts, compiled.
-    pub fn input_schema(&self) -> &Schema {
+    pub fn get_input_schema(&self) -> &Schema {
         &self.schema
     }
 
@@ -683,14 +688,14 @@ async fn invoke(
     // asked for and arguments it wrote as JSON text are decoded. What comes
     // back names the value that produced, which is the one the tool would have
     // received.
-    let (input, repairs) = match tool.input_schema().validate(call.input.clone()) {
+    let (input, repairs) = match tool.get_input_schema().validate(call.input.clone()) {
         Ok(validated) => validated,
         Err(violations) => {
             return ToolResult::Error {
                 content: crate::prompts::arguments_retry_detail(
-                    tool.name(),
+                    tool.get_name(),
                     &violations.to_string(),
-                    Some(tool.input_schema().get_raw_schema()),
+                    Some(tool.get_input_schema().get_raw_schema()),
                     &ctx.directives,
                 ),
                 kind: ToolFailureKind::SchemaValidationFailed,
@@ -776,7 +781,10 @@ fn cap_aggregate_outputs(
     per_turn_cap: usize,
 ) {
     loop {
-        let total: usize = results.iter().map(|result| result.content().len()).sum();
+        let total: usize = results
+            .iter()
+            .map(|result| result.get_content().len())
+            .sum();
         if total <= per_turn_cap {
             return;
         }
@@ -932,7 +940,7 @@ mod tests {
         let (tools, _dir) = built_in_tools();
         let declared: Vec<(&str, bool)> = tools
             .iter()
-            .map(|tool| (tool.name(), tool.is_concurrent()))
+            .map(|tool| (tool.get_name(), tool.is_concurrent()))
             .collect();
         assert_eq!(
             declared,
@@ -952,17 +960,17 @@ mod tests {
         );
         for tool in &tools {
             assert!(
-                !tool.description().is_empty(),
+                !tool.get_description().is_empty(),
                 "empty description for {}",
-                tool.name(),
+                tool.get_name(),
             );
             // The registry holds a call to this, so a tool that declares
             // something else loses the check that its arguments are an object.
             assert_eq!(
-                tool.input_schema().get_raw_schema()["type"],
+                tool.get_input_schema().get_raw_schema()["type"],
                 "object",
                 "arguments are not an object for {}",
-                tool.name(),
+                tool.get_name(),
             );
         }
     }
@@ -973,16 +981,20 @@ mod tests {
         // shape it will be corrected for.
         let (tools, _dir) = built_in_tools();
         for tool in &tools {
-            let schema = tool.input_schema();
+            let schema = tool.get_input_schema();
             let examples = schema.get_raw_schema()["examples"]
                 .as_array()
-                .unwrap_or_else(|| panic!("{} shows no examples", tool.name()))
+                .unwrap_or_else(|| panic!("{} shows no examples", tool.get_name()))
                 .clone();
             for example in examples {
                 let (_, repaired) = schema
                     .validate(example.clone())
-                    .unwrap_or_else(|violations| panic!("{}: {violations}", tool.name()));
-                assert!(repaired.is_empty(), "{} repaired {example}", tool.name());
+                    .unwrap_or_else(|violations| panic!("{}: {violations}", tool.get_name()));
+                assert!(
+                    repaired.is_empty(),
+                    "{} repaired {example}",
+                    tool.get_name()
+                );
             }
         }
     }
@@ -1054,7 +1066,7 @@ mod tests {
         registry.register(mock_tool("grep", true, "matches"));
 
         let tool = registry.get("grep_tool").expect("suffix should fold away");
-        assert_eq!(tool.name(), "grep");
+        assert_eq!(tool.get_name(), "grep");
     }
 
     #[test]
@@ -1065,7 +1077,7 @@ mod tests {
         let tool = registry
             .get("Read-File")
             .expect("case and hyphen should fold");
-        assert_eq!(tool.name(), "read_file");
+        assert_eq!(tool.get_name(), "read_file");
     }
 
     #[test]
@@ -1076,8 +1088,8 @@ mod tests {
 
         assert!(registry.get("Grep").is_none());
         // Each registered name still reaches its own tool: exact match wins.
-        assert_eq!(registry.get("grep").unwrap().name(), "grep");
-        assert_eq!(registry.get("grep_tool").unwrap().name(), "grep_tool");
+        assert_eq!(registry.get("grep").unwrap().get_name(), "grep");
+        assert_eq!(registry.get("grep_tool").unwrap().get_name(), "grep_tool");
     }
 
     #[test]
@@ -1087,7 +1099,7 @@ mod tests {
             .handler(|_: Value, _| async { ToolResult::success("") })
             .build();
         assert_eq!(
-            tool.description(),
+            tool.get_description(),
             "Do the demo thing.\n\n- Returns nothing useful."
         );
     }
@@ -1101,7 +1113,7 @@ mod tests {
             .description(file.as_path())
             .handler(|_: Value, _| async { ToolResult::success("") })
             .build();
-        assert_eq!(tool.description(), "Do the demo thing.");
+        assert_eq!(tool.get_description(), "Do the demo thing.");
     }
 
     #[test]
@@ -1113,7 +1125,7 @@ mod tests {
             )
             .handler(|_: Value, _| async { ToolResult::success("") })
             .build();
-        let document = tool.input_schema().get_raw_schema();
+        let document = tool.get_input_schema().get_raw_schema();
         assert_eq!(document["properties"]["x"]["type"], "string");
         assert_eq!(document["required"][0], "x");
     }
@@ -1126,8 +1138,8 @@ mod tests {
 
         let tools = registry.tools();
         assert_eq!(tools.len(), 2);
-        assert_eq!(tools[0].name(), "read");
-        assert_eq!(tools[1].name(), "write");
+        assert_eq!(tools[0].get_name(), "read");
+        assert_eq!(tools[1].get_name(), "write");
     }
 
     #[tokio::test]
@@ -1144,7 +1156,7 @@ mod tests {
         let shown = registry
             .get("finish")
             .expect("finish is registered")
-            .input_schema()
+            .get_input_schema()
             .get_raw_schema()
             .clone();
         let calls = vec![ToolCall {
@@ -1153,7 +1165,7 @@ mod tests {
             input: serde_json::json!({}),
         }];
         let content = registry.execute(&calls, &test_ctx()).await[0]
-            .content()
+            .get_content()
             .to_string();
 
         assert!(
@@ -1187,7 +1199,9 @@ mod tests {
         let results = registry.execute(&calls, &ctx).await;
         assert_eq!(results.len(), 1);
         assert!(matches!(results[0], ToolResult::Error { .. }));
-        assert!(results[0].content().contains("No tool named `nonexistent`"));
+        assert!(results[0]
+            .get_content()
+            .contains("No tool named `nonexistent`"));
     }
 
     #[tokio::test]
@@ -1209,7 +1223,7 @@ mod tests {
                 ..
             }
         ));
-        let content = results[0].content();
+        let content = results[0].get_content();
         assert!(
             content.contains("expected type object, got string"),
             "{content}"
@@ -1340,7 +1354,7 @@ mod tests {
 
         let results = registry.execute(&calls, &ctx).await;
         assert_eq!(
-            results[0].content(),
+            results[0].get_content(),
             DirectiveStore::default().render(
                 TOOL_NOT_FOUND,
                 &[("name", "ripgrep"), ("available", "grep, read_file")]
@@ -1409,7 +1423,7 @@ mod tests {
             "{:?}",
             results[0]
         );
-        assert_eq!(results[1].content(), "ok");
+        assert_eq!(results[1].get_content(), "ok");
     }
 
     #[tokio::test]
@@ -1427,7 +1441,7 @@ mod tests {
         let results = registry.execute(&calls, &ctx).await;
         assert_eq!(results.len(), 1);
         assert!(matches!(results[0], ToolResult::Success { .. }));
-        assert_eq!(results[0].content(), "written");
+        assert_eq!(results[0].get_content(), "written");
     }
 
     #[tokio::test]
@@ -1465,8 +1479,8 @@ mod tests {
         let outcome = cloned
             .call(serde_json::json!({"text": "hi"}), &test_ctx())
             .await;
-        assert_eq!(outcome.content(), "hi");
-        assert_eq!(cloned.name(), tool.name());
+        assert_eq!(outcome.get_content(), "hi");
+        assert_eq!(cloned.get_name(), tool.get_name());
     }
 
     #[test]
@@ -1483,7 +1497,7 @@ mod tests {
             })
             .build();
 
-        assert_eq!(tool.name(), "echo");
+        assert_eq!(tool.get_name(), "echo");
         assert!(tool.is_concurrent());
     }
 
@@ -1548,9 +1562,11 @@ mod tests {
         cap_oversized_result(&mut result, &ctx, "call-abs", 100);
         let absolute = absolute_outputs_path(dir.path(), &key, "call-abs");
         assert!(
-            result.content().contains(&absolute.display().to_string()),
+            result
+                .get_content()
+                .contains(&absolute.display().to_string()),
             "stub must give the model the joinable on-disk path: {}",
-            result.content()
+            result.get_content()
         );
     }
 
@@ -1559,7 +1575,7 @@ mod tests {
         let ctx = test_ctx();
         let mut result = ToolResult::success("hello");
         cap_oversized_result(&mut result, &ctx, "call-1", 100);
-        assert_eq!(result.content(), "hello");
+        assert_eq!(result.get_content(), "hello");
         assert!(offloaded_path(&result).is_none());
     }
 
@@ -1568,7 +1584,7 @@ mod tests {
         let (ctx, _queue, key, dir) = task_ctx();
         let mut result = ToolResult::success("a".repeat(500));
         cap_oversized_result(&mut result, &ctx, "call-xyz", 100);
-        let stub = result.content();
+        let stub = result.get_content();
         assert!(stub.starts_with("<persisted-output>"));
         assert!(stub.contains("Output too large"));
         assert!(stub.contains("Full output saved to:"));
@@ -1590,7 +1606,7 @@ mod tests {
         let ctx = test_ctx();
         let mut result = ToolResult::error("boom");
         cap_oversized_result(&mut result, &ctx, "call-1", 1);
-        assert_eq!(result.content(), "boom");
+        assert_eq!(result.get_content(), "boom");
         assert!(offloaded_path(&result).is_none());
     }
 
@@ -1600,7 +1616,7 @@ mod tests {
         let payload = "x".repeat(500);
         let mut result = ToolResult::success(payload.clone());
         cap_oversized_result(&mut result, &ctx, "call-1", 100);
-        assert_eq!(result.content(), payload);
+        assert_eq!(result.get_content(), payload);
         assert!(
             offloaded_path(&result).is_none(),
             "no task key means no offload"
@@ -1620,8 +1636,8 @@ mod tests {
         ];
         cap_aggregate_outputs(&calls, &mut results, &ctx, 100_000);
         // c2 (the largest) was offloaded; the other two stayed inline.
-        assert!(results[1].content().starts_with("<persisted-output>"));
-        assert!(results[1].content().contains("Full output saved to:"));
+        assert!(results[1].get_content().starts_with("<persisted-output>"));
+        assert!(results[1].get_content().contains("Full output saved to:"));
         assert_eq!(
             offloaded_path(&results[1]),
             Some(&relative_outputs_path(&key, "c2"))
@@ -1629,8 +1645,8 @@ mod tests {
         let body = std::fs::read_to_string(absolute_outputs_path(dir.path(), &key, "c2")).unwrap();
         assert_eq!(body, big);
 
-        assert_eq!(results[0].content().len(), 40_000);
-        assert_eq!(results[2].content().len(), 30_000);
+        assert_eq!(results[0].get_content().len(), 40_000);
+        assert_eq!(results[2].get_content().len(), 30_000);
         assert!(offloaded_path(&results[0]).is_none());
         assert!(offloaded_path(&results[2]).is_none());
     }
@@ -1649,9 +1665,15 @@ mod tests {
                 ))
             })
             .collect();
-        let before: Vec<String> = results.iter().map(|r| r.content().to_string()).collect();
+        let before: Vec<String> = results
+            .iter()
+            .map(|r| r.get_content().to_string())
+            .collect();
         cap_aggregate_outputs(&calls, &mut results, &ctx, 10);
-        let after: Vec<String> = results.iter().map(|r| r.content().to_string()).collect();
+        let after: Vec<String> = results
+            .iter()
+            .map(|r| r.get_content().to_string())
+            .collect();
         assert_eq!(
             before, after,
             "aggregate must be a no-op when only stubs remain"
@@ -1713,14 +1735,14 @@ mod tests {
     fn replace_empty_output_substitutes_placeholder() {
         let mut result = ToolResult::success("");
         replace_empty_output(&mut result, "bash", &DirectiveStore::default());
-        assert_eq!(result.content(), "(bash completed with no output)");
+        assert_eq!(result.get_content(), "(bash completed with no output)");
     }
 
     #[test]
     fn replace_empty_output_passes_non_empty_through() {
         let mut result = ToolResult::success("hello");
         replace_empty_output(&mut result, "bash", &DirectiveStore::default());
-        assert_eq!(result.content(), "hello");
+        assert_eq!(result.get_content(), "hello");
     }
 
     #[test]
@@ -1729,7 +1751,7 @@ mod tests {
         // failure message is left as the tool reported it.
         let mut result = ToolResult::error("");
         replace_empty_output(&mut result, "bash", &DirectiveStore::default());
-        assert_eq!(result.content(), "");
+        assert_eq!(result.get_content(), "");
     }
 
     #[test]
@@ -1740,7 +1762,7 @@ mod tests {
         let calls = vec![sized_call("c1")];
         let mut results = vec![ToolResult::error("e".repeat(50_000))];
         cap_aggregate_outputs(&calls, &mut results, &ctx, 10);
-        assert_eq!(results[0].content().len(), 50_000);
+        assert_eq!(results[0].get_content().len(), 50_000);
         assert!(offloaded_path(&results[0]).is_none());
     }
 }

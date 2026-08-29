@@ -139,7 +139,7 @@ agent.start()
 | | `interactive()` | Let the agent wait for new instructions to keep a task in-progress. |
 | **Work** | `task(task)` | Submit a task, or a `Task` carrying a label or schema, and return its task key. |
 | | `start()` | Begin processing tasks. |
-| | `id` | Get the unique identifier of an agent. |
+| | `get_id()` | Get the unique identifier of an agent. |
 
 You can use the `{context}` variable to inject contextual information:
 
@@ -162,7 +162,7 @@ An interactive agent holds one task open across many turns, so a conversation sp
 
 ```python
 def show(work, task, result):
-    print(f"{task.key}: {result}")
+    print(f"{task.get_key()}: {result}")
 
 
 agent = Agent.from_env().interactive()
@@ -409,7 +409,7 @@ tasks.find_results("report AND result ~ risk")           # reports that mention 
 tasks.find_tasks("errors ~ tool_call_failed")          # saw a tool call fail
 tasks.find_tasks("status = Todo AND agent IS EMPTY")   # waiting, never claimed
 tasks.find_tasks("failed > -1h ORDER BY failed DESC")  # the last hour's failures
-tasks.find_tasks(lambda t: len(t.replies) > 4)         # a callable, for what no field carries
+tasks.find_tasks(lambda t: len(t.get_replies()) > 4)       # a callable, for what no field carries
 ```
 
 </details>
@@ -444,28 +444,27 @@ Task members:
 
 | | Member | Description |
 |-|--------|-------------|
-| **Identity** | `key` | Task key, of the form `t-N`. |
-| | `task` | The work the agent is asked to do. |
-| | `label` | Label carried by the task. |
-| | `has_label(label)` | Check whether the task carries a label. |
-| | `parent` | Identifier of the parent task if a handover was performed. |
-| | `reporter` | Identifier of the agent that created the task. |
-| | `assignee` | Identifier of the agent that claimed the task. |
-| **Outcome** | `status` | The task lifecycle status. |
+| **Identity** | `get_key()` | Task key, of the form `t-N`. |
+| | `get_task()` | The work the agent is asked to do. |
+| | `get_label()` | Label carried by the task. |
+| | `get_parent()` | Identifier of the parent task if a handover was performed. |
+| | `get_reporter()` | Identifier of the agent that created the task. |
+| | `get_assignee()` | Identifier of the agent that claimed the task. |
+| **Outcome** | `get_status()` | The task lifecycle status. |
 | | `is_todo()` | Check whether the task is waiting to be claimed. |
 | | `is_in_progress()` | Check whether an agent is working on the task. |
 | | `is_finished()` | Check whether the task finished. |
 | | `is_failed()` | Check whether the task failed. |
 | | `is_pending()` | Check whether the task has work in this run. |
 | | `is_cancelled()` | Check whether this run has taken the task off the queue. |
-| | `result` | The result the agent produced. |
-| | `errors` | The failures recorded against the task, as events. |
-| | `replies` | Messages exchanged with the model. |
-| | `schema` | Optional schema the result must satisfy. |
-| **Timestamps** | `created_at` | Creation time, in milliseconds. |
-| | `started_at` | Claim time, in milliseconds. |
-| | `finished_at` | Finish time, in milliseconds. |
-| | `failed_at` | Failure time, in milliseconds. |
+| | `get_result()` | The result the agent produced. |
+| | `get_errors()` | The failures recorded against the task, as events. |
+| | `get_replies()` | Messages exchanged with the model. |
+| | `get_schema()` | Optional schema the result must satisfy. |
+| **Timestamps** | `get_created_at()` | Creation time, in milliseconds. |
+| | `get_started_at()` | Claim time, in milliseconds. |
+| | `get_finished_at()` | Finish time, in milliseconds. |
+| | `get_failed_at()` | Failure time, in milliseconds. |
 
 See [`Task`](https://docs.rs/agentwerk/latest/agentwerk/agents/tasks/struct.Task.html).
 
@@ -545,7 +544,7 @@ Use hooks to create new tasks when certain results arrived:
 
 ```python
 def hand_to_report(work, done, result):
-    if done.has_label("research"):
+    if done.get_label() == "research":
         work.add_task(Task(result, label="report"))
 
 
@@ -652,8 +651,8 @@ Compaction also runs after the LLM provider reports the window exceeded. `compac
 
 ```python
 def watch(work, event):
-    if event.kind == "compaction_finished":
-        print(f"[{event.task_key}] compacted {event.data['reason']}")
+    if event.get_kind() == "compaction_finished":
+        print(f"[{event.get_task_key()}] compacted {event.get_data()['reason']}")
 
 
 tasks.on_event(watch)
@@ -828,8 +827,8 @@ Events allow you to inspect all activities of your agents.
 
 ```python
 def log(work, event):
-    if event.kind == "task_finished":
-        print(f"[{event.agent_id}] done {event.task_key} {event.label}")
+    if event.get_kind() == "task_finished":
+        print(f"[{event.get_agent_id()}] done {event.get_task_key()} {event.get_label()}")
 
 
 tasks.on_event(log)
@@ -912,8 +911,8 @@ Hooks allow you to react to events.
 
 ```python
 def triage(work, event, failed):
-    if failed.has_label("scan"):
-        work.add_task(Task(failed.task, label="triage"))
+    if failed.get_label() == "scan":
+        work.add_task(Task(failed.get_task(), label="triage"))
 
 
 tasks.on_failure(triage)
@@ -937,9 +936,9 @@ Save replies of every finished task as a training example:
 
 ```python
 def capture(work, event, task):
-    if event.kind == "task_finished":
-        model = work.get_model_for_agent(event.agent_id)
-        Trajectory.from_task(event.agent_id, model, task).save("datasets")
+    if event.get_kind() == "task_finished":
+        model = work.get_model_for_agent(event.get_agent_id())
+        Trajectory.from_task(event.get_agent_id(), model, task).save("datasets")
 
 
 tasks.on_task(capture)
@@ -951,7 +950,7 @@ tasks.on_task(capture)
 
 ```python
 async def store(work, task, result):
-    await database.insert(task.key, result)
+    await database.insert(task.get_key(), result)
 
 
 tasks.on_result_async(store)
@@ -984,21 +983,21 @@ Each page is written to `./notes/knowledge/pages/<slug>.md`, and every page gets
 
 | Method | Description |
 |--------|-------------|
-| `index()` | Get the index, which is injected into the agent prompt. |
-| `index_char_limit(count)` | Limit how much of the index is injected into the prompt. |
+| `get_index()` | Get the index, which is injected into the agent prompt. |
+| `set_char_limit(count)` | Limit how much of the index is injected into the prompt. |
 | `get_index_char_limit()` | Get the index size limit in force. |
-| `pages()` | Get the page collection for reading and writing pages. |
-| `pages().list()` | Get every page in the store. |
+| `get_pages()` | Get the page collection for reading and writing pages. |
+| `get_pages().get_pages()` | Get every page in the store. |
 | `clear()` | Remove every page from the store. |
 
-The prompt carries the index up to `index_char_limit`, 12 000 characters by default. Past it the prompt lists the pages that fit and names `index.md` for the agent to read the rest. No page is refused for the length of the index, and page bodies are never shortened.
+The prompt carries the index up to the configured character limit, 12 000 characters by default. Past it the prompt lists the pages that fit and names `index.md` for the agent to read the rest. No page is refused for the length of the index, and page bodies are never shortened.
 
 Programmatically create entries:
 
 ```python
 from agentwerk import Page
 
-store.pages().save(
+store.get_pages().save(
     Page(
         "build-command",
         "How the project is built.",
@@ -1007,8 +1006,8 @@ store.pages().save(
     )
 )
 
-page = store.pages().load("build-command")
-store.pages().remove("build-command")
+page = store.get_pages().get_page("build-command")
+store.get_pages().remove("build-command")
 ```
 
 See [`Knowledge`](https://docs.rs/agentwerk/latest/agentwerk/agents/knowledge/struct.Knowledge.html).

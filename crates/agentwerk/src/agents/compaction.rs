@@ -78,8 +78,8 @@ fn block_bytes(block: &ContentBlock) -> usize {
 }
 
 fn tool_bytes(tool: &Tool) -> usize {
-    let schema = tool.input_schema().get_raw_schema();
-    tool.name().len() + tool.description().len() + schema.to_string().len()
+    let schema = tool.get_input_schema().get_raw_schema();
+    tool.get_name().len() + tool.get_description().len() + schema.to_string().len()
 }
 
 /// `true` when the estimated next-request input plus one more turn's

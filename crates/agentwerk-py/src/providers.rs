@@ -50,9 +50,8 @@ impl PyModel {
     }
 
     /// The resolved model name.
-    #[getter]
-    fn name(&self) -> String {
-        self.inner.name.clone()
+    fn get_name(&self) -> &str {
+        self.inner.get_name()
     }
 
     /// Set the context window size for a model, in tokens.

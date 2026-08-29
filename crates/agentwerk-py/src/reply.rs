@@ -27,19 +27,17 @@ impl PyReply {
     }
 
     /// `"system"`, `"user"`, or `"assistant"`.
-    #[getter]
-    fn author(&self) -> String {
-        match self.inner.author {
+    fn get_author(&self) -> String {
+        match self.inner.get_author() {
             Author::System => "system".into(),
             Author::User => "user".into(),
             Author::Assistant => "assistant".into(),
         }
     }
 
-    #[getter]
-    fn content(&self) -> Vec<PyReplyContent> {
+    fn get_content(&self) -> Vec<PyReplyContent> {
         self.inner
-            .content
+            .get_content()
             .iter()
             .cloned()
             .map(|inner| PyReplyContent { inner })
@@ -48,16 +46,15 @@ impl PyReply {
 
     /// Milliseconds since the epoch, zero on a reply built here until it is
     /// stored.
-    #[getter]
-    fn created_at(&self) -> u64 {
-        self.inner.created_at
+    fn get_created_at(&self) -> u64 {
+        self.inner.get_created_at()
     }
 
     fn __repr__(&self) -> String {
         format!(
             "Reply(author={:?}, content={})",
-            self.author(),
-            self.inner.content.len()
+            self.get_author(),
+            self.inner.get_content().len()
         )
     }
 }
@@ -122,21 +119,12 @@ impl PyReplyContent {
 
     /// The block's tag: `"text"`, `"tool_use"`, `"tool_result"`,
     /// `"thinking"`, or `"redacted_thinking"`.
-    #[getter]
-    fn kind(&self) -> String {
-        match &self.inner {
-            ReplyContent::Text { .. } => "text",
-            ReplyContent::ToolUse { .. } => "tool_use",
-            ReplyContent::ToolResult { .. } => "tool_result",
-            ReplyContent::Thinking { .. } => "thinking",
-            ReplyContent::RedactedThinking { .. } => "redacted_thinking",
-        }
-        .into()
+    fn get_kind(&self) -> &'static str {
+        self.inner.get_kind()
     }
 
     /// The block's fields as a dict, without `kind`.
-    #[getter]
-    fn data<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+    fn get_data<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let mut value = serde_json::to_value(&self.inner).map_err(runtime_error)?;
         if let Value::Object(fields) = &mut value {
             fields.remove("type");
@@ -145,7 +133,7 @@ impl PyReplyContent {
     }
 
     fn __repr__(&self) -> String {
-        format!("ReplyContent(kind={:?})", self.kind())
+        format!("ReplyContent(kind={:?})", self.get_kind())
     }
 }
 

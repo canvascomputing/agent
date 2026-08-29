@@ -110,7 +110,7 @@ fn run(store: &Knowledge, args: KnowledgeArgs, ctx: &ToolContext) -> ToolResult 
                 content,
                 tags: Vec::new(),
             };
-            match store.pages().save(page) {
+            match store.get_pages().save(page) {
                 Ok(()) => {
                     record(EventKind::KnowledgeWritten { slug: written });
                     ToolResult::success(usage_line("page written", &store))
@@ -128,7 +128,7 @@ fn run(store: &Knowledge, args: KnowledgeArgs, ctx: &ToolContext) -> ToolResult 
             }
         }
 
-        KnowledgeArgs::Read { slug } => match store.pages().load(&slug) {
+        KnowledgeArgs::Read { slug } => match store.get_pages().get_page(&slug) {
             Ok(page) => {
                 record(EventKind::KnowledgeRead { slug });
                 ToolResult::success(page.content)
@@ -145,7 +145,7 @@ fn run(store: &Knowledge, args: KnowledgeArgs, ctx: &ToolContext) -> ToolResult 
             }
         },
 
-        KnowledgeArgs::Remove { slug } => match store.pages().remove(&slug) {
+        KnowledgeArgs::Remove { slug } => match store.get_pages().remove(&slug) {
             Ok(()) => {
                 record(EventKind::KnowledgeRemoved { slug });
                 ToolResult::success(usage_line("page removed", &store))
@@ -196,7 +196,7 @@ mod tests {
             content: content.to_string(),
             tags: tags.iter().map(|s| s.to_string()).collect(),
         };
-        store.pages().save(page).unwrap();
+        store.get_pages().save(page).unwrap();
     }
 
     fn ctx() -> ToolContext {
@@ -238,7 +238,7 @@ mod tests {
             &ctx(),
         );
         assert_success(&r, "page written");
-        assert!(store.index().contains("test"));
+        assert!(store.get_index().contains("test"));
     }
 
     #[tokio::test]
@@ -300,7 +300,7 @@ mod tests {
             &ctx(),
         );
         assert_success(&r, "page removed");
-        assert!(store.index().is_empty());
+        assert!(store.get_index().is_empty());
     }
 
     #[tokio::test]
@@ -314,13 +314,17 @@ mod tests {
     #[tokio::test]
     async fn list_action_returns_every_page_past_the_index_limit() {
         let (store, _dir) = fresh_store();
-        store.index_char_limit(60);
+        store.set_char_limit(60);
         for i in 0..10 {
             save_page(&store, &format!("page-{i}"), "A note", "# Note", &[]);
         }
         let r = run(&store, KnowledgeArgs::List, &ctx());
 
-        assert!(!store.index().contains("page-9"), "{}", store.index());
+        assert!(
+            !store.get_index().contains("page-9"),
+            "{}",
+            store.get_index()
+        );
         assert_success(&r, "page-9");
     }
 
@@ -343,7 +347,7 @@ mod tests {
             input,
         }];
         let results = registry.execute(&calls, &ctx()).await;
-        results[0].content().to_string()
+        results[0].get_content().to_string()
     }
 
     #[tokio::test]
@@ -396,11 +400,11 @@ mod tests {
         tasks.on_event(move |_, event| match &event.kind {
             EventKind::KnowledgeFailed { action, reason } => seen.lock().unwrap().push(format!(
                 "{}:{action}:{}",
-                event.kind.name(),
-                reason.name()
+                event.kind.get_name(),
+                reason.get_name()
             )),
-            kind if kind.name().starts_with("knowledge_") => {
-                seen.lock().unwrap().push(kind.name().to_string())
+            kind if kind.get_name().starts_with("knowledge_") => {
+                seen.lock().unwrap().push(kind.get_name().to_string())
             }
             _ => {}
         });

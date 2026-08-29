@@ -24,10 +24,10 @@ pub enum Author {
 /// One entry in a task's replies.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Reply {
-    pub author: Author,
-    pub content: Vec<ReplyContent>,
+    pub(crate) author: Author,
+    pub(crate) content: Vec<ReplyContent>,
     /// Millis since epoch.
-    pub created_at: u64,
+    pub(crate) created_at: u64,
 }
 
 /// Task-side mirror of [`ContentBlock`]. Keeps the public task
@@ -66,6 +66,35 @@ pub enum ReplyContent {
 }
 
 impl Reply {
+    /// Build a reply from its author and content blocks.
+    pub fn new(author: Author, content: Vec<ReplyContent>) -> Self {
+        Self {
+            author,
+            content,
+            created_at: now_millis(),
+        }
+    }
+
+    /// Who wrote this reply.
+    pub fn get_author(&self) -> Author {
+        self.author
+    }
+
+    /// The blocks carried by this reply.
+    pub fn get_content(&self) -> &[ReplyContent] {
+        &self.content
+    }
+
+    /// The blocks carried by this reply, for reply editors.
+    pub fn get_content_mut(&mut self) -> &mut [ReplyContent] {
+        &mut self.content
+    }
+
+    /// Milliseconds since the epoch.
+    pub fn get_created_at(&self) -> u64 {
+        self.created_at
+    }
+
     /// Build a user reply from the provider blocks the loop sent.
     /// `paths` maps `tool_use_id → absolute path` for tool results whose
     /// full output was offloaded to disk; empty when nothing was offloaded.
@@ -82,11 +111,7 @@ impl Reply {
 
     /// Build a user reply carrying a single text payload.
     pub fn user_text(text: impl Into<String>) -> Self {
-        Self {
-            author: Author::User,
-            content: vec![ReplyContent::Text { text: text.into() }],
-            created_at: now_millis(),
-        }
+        Self::new(Author::User, vec![ReplyContent::Text { text: text.into() }])
     }
 
     /// Build an assistant reply from the model's response content.
@@ -129,6 +154,94 @@ impl Reply {
 }
 
 impl ReplyContent {
+    /// The stable snake_case tag for this block.
+    pub fn get_kind(&self) -> &'static str {
+        match self {
+            Self::Text { .. } => "text",
+            Self::ToolUse { .. } => "tool_use",
+            Self::ToolResult { .. } => "tool_result",
+            Self::Thinking { .. } => "thinking",
+            Self::RedactedThinking { .. } => "redacted_thinking",
+        }
+    }
+
+    pub fn get_text(&self) -> Option<&str> {
+        match self {
+            Self::Text { text } => Some(text),
+            _ => None,
+        }
+    }
+
+    pub fn get_id(&self) -> Option<&str> {
+        match self {
+            Self::ToolUse { id, .. } => Some(id),
+            _ => None,
+        }
+    }
+
+    pub fn get_name(&self) -> Option<&str> {
+        match self {
+            Self::ToolUse { name, .. } => Some(name),
+            _ => None,
+        }
+    }
+
+    pub fn get_input(&self) -> Option<&serde_json::Value> {
+        match self {
+            Self::ToolUse { input, .. } => Some(input),
+            _ => None,
+        }
+    }
+
+    pub fn get_tool_use_id(&self) -> Option<&str> {
+        match self {
+            Self::ToolResult { tool_use_id, .. } => Some(tool_use_id),
+            _ => None,
+        }
+    }
+
+    pub fn get_content(&self) -> Option<&str> {
+        match self {
+            Self::ToolResult { content, .. } => Some(content),
+            _ => None,
+        }
+    }
+
+    pub fn get_succeeded(&self) -> Option<bool> {
+        match self {
+            Self::ToolResult { succeeded, .. } => Some(*succeeded),
+            _ => None,
+        }
+    }
+
+    pub fn get_path(&self) -> Option<&std::path::Path> {
+        match self {
+            Self::ToolResult { path, .. } => path.as_deref(),
+            _ => None,
+        }
+    }
+
+    pub fn get_thinking(&self) -> Option<&str> {
+        match self {
+            Self::Thinking { thinking, .. } => Some(thinking),
+            _ => None,
+        }
+    }
+
+    pub fn get_signature(&self) -> Option<&str> {
+        match self {
+            Self::Thinking { signature, .. } => Some(signature),
+            _ => None,
+        }
+    }
+
+    pub fn get_data(&self) -> Option<&str> {
+        match self {
+            Self::RedactedThinking { data } => Some(data),
+            _ => None,
+        }
+    }
+
     fn from_block(b: &ContentBlock, paths: &HashMap<String, PathBuf>) -> Self {
         match b {
             ContentBlock::Text { text } => ReplyContent::Text { text: text.clone() },
@@ -195,6 +308,25 @@ impl ReplyContent {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reply_and_content_getters_expose_their_values() {
+        let reply = Reply::new(
+            Author::Assistant,
+            vec![ReplyContent::ToolUse {
+                id: "c1".into(),
+                name: "read_file".into(),
+                input: serde_json::json!({"path": "README.md"}),
+            }],
+        );
+        assert_eq!(reply.get_author(), Author::Assistant);
+        assert!(reply.get_created_at() > 0);
+        let content = &reply.get_content()[0];
+        assert_eq!(content.get_kind(), "tool_use");
+        assert_eq!(content.get_id(), Some("c1"));
+        assert_eq!(content.get_name(), Some("read_file"));
+        assert_eq!(content.get_input().unwrap()["path"], "README.md");
+    }
 
     #[test]
     fn thinking_block_round_trips_through_reply_content() {

@@ -83,7 +83,7 @@ def test_id_is_taken_from_the_label():
         .provider(aw.Anthropic("test-key"))
         .model("claude-sonnet-4-20250514")
     )
-    assert agent.id == "id_from_label-1"
+    assert agent.get_id() == "id_from_label-1"
 
 
 def test_registering_an_agent_without_a_provider_is_rejected(queue):
@@ -102,4 +102,4 @@ def test_binding_an_agent_drains_its_queue_into_the_shared_queue(
     offline_agent.task("count to three")
     queue.add_agent(offline_agent)
 
-    assert [t.task for t in queue.get_tasks()] == ["count to three"]
+    assert [t.get_task() for t in queue.get_tasks()] == ["count to three"]

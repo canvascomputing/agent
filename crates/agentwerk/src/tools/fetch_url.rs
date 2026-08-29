@@ -583,7 +583,7 @@ mod tests {
     #[test]
     fn every_example_the_schema_shows_deserializes_into_the_arguments() {
         let document = Tool::from(FetchUrlTool::new())
-            .input_schema()
+            .get_input_schema()
             .get_raw_schema()
             .clone();
         for example in document["examples"].as_array().expect("examples") {

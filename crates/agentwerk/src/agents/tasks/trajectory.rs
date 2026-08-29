@@ -20,16 +20,31 @@ use super::{Author, Reply, ReplyContent, Task};
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Trajectory {
     /// Example id `<agent id>-<task>`; also the on-disk filename.
-    pub key: String,
+    pub(crate) key: String,
     /// Name of the model that produced the replies. `None` when the
     /// producing agent could not be resolved at capture time.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model: Option<String>,
+    pub(crate) model: Option<String>,
     /// Every reply exchanged with the model.
-    pub replies: Vec<Reply>,
+    pub(crate) replies: Vec<Reply>,
 }
 
 impl Trajectory {
+    /// The example identifier, also used as its filename.
+    pub fn get_key(&self) -> &str {
+        &self.key
+    }
+
+    /// The model that produced the replies, if known.
+    pub fn get_model(&self) -> Option<&str> {
+        self.model.as_deref()
+    }
+
+    /// Every reply exchanged with the model.
+    pub fn get_replies(&self) -> &[Reply] {
+        &self.replies
+    }
+
     /// Capture `task`'s replies as an example produced by `agent_id`
     /// using `model`. Keeps every reply, including the system prompt: a
     /// trainer wants it, where `Task::to_messages` would drop it.
@@ -175,9 +190,9 @@ mod tests {
     #[test]
     fn from_task_carries_replies() {
         let trajectory = Trajectory::from_task("analyst", Some("gpt-4"), &task_with_reply());
-        assert_eq!(trajectory.key, "analyst-t-1");
-        assert_eq!(trajectory.model.as_deref(), Some("gpt-4"));
-        assert_eq!(trajectory.replies.len(), 1);
+        assert_eq!(trajectory.get_key(), "analyst-t-1");
+        assert_eq!(trajectory.get_model(), Some("gpt-4"));
+        assert_eq!(trajectory.get_replies().len(), 1);
     }
 
     #[test]

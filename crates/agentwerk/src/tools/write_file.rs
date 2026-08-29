@@ -63,7 +63,7 @@ mod tests {
     #[test]
     fn every_example_the_schema_shows_deserializes_into_the_arguments() {
         let document = Tool::from(WriteFileTool)
-            .input_schema()
+            .get_input_schema()
             .get_raw_schema()
             .clone();
         for example in document["examples"].as_array().expect("examples") {
@@ -90,7 +90,7 @@ mod tests {
             )
             .await;
 
-        let content = result.content();
+        let content = result.get_content();
         assert!(content.contains("File written: new.txt"));
 
         let written = std::fs::read_to_string(dir.path().join("new.txt")).unwrap();

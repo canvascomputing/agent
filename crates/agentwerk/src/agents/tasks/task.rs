@@ -15,8 +15,9 @@ use super::reply::{Author, Reply, ReplyContent};
 
 /// A `Task` is a task plus what assigns and validates it.
 ///
-/// You set `task`, `label`, `schema`, and `parent`. The rest is set for you at
-/// insertion time and as the agent works.
+/// You set the task with [`Task::new`] and optionally use the `label`, `schema`,
+/// and `parent` builders. The rest is set for you at insertion time and as the
+/// agent works.
 ///
 /// ```no_run
 /// use agentwerk::Task;
@@ -35,18 +36,18 @@ use super::reply::{Author, Reply, ReplyContent};
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Task {
     /// The work the agent is asked to do.
-    pub task: serde_json::Value,
+    pub(crate) task: serde_json::Value,
     /// Label carried by the task, naming the pool of agents that may claim
     /// it. `None` is the default scope, which only an unlabelled agent serves.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub label: Option<String>,
+    pub(crate) label: Option<String>,
     /// Optional schema the result must satisfy.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub schema: Option<crate::schemas::Schema>,
+    pub(crate) schema: Option<crate::schemas::Schema>,
     /// Task key, of the form `t-N`.
-    pub key: String,
+    pub(crate) key: String,
     /// The task lifecycle status.
-    pub status: Status,
+    pub(crate) status: Status,
     /// Whether the current run has taken this task off the queue.
     ///
     /// Cancellation is run-local rather than a persisted lifecycle status:
@@ -54,37 +55,37 @@ pub struct Task {
     #[serde(skip)]
     pub(crate) cancelled: bool,
     /// Identifier of the agent that created the task.
-    pub reporter: String,
+    pub(crate) reporter: String,
     /// Identifier of the agent that claimed the task.
     ///
     /// A label makes the task eligible for every agent serving it; this names
     /// the one that actually took it, and is what brings a resumed task back
     /// to it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub assignee: Option<String>,
+    pub(crate) assignee: Option<String>,
     /// Creation time, in milliseconds.
-    pub created_at: u64,
+    pub(crate) created_at: u64,
     /// Claim time, in milliseconds.
-    pub started_at: Option<u64>,
+    pub(crate) started_at: Option<u64>,
     /// Finish time, in milliseconds. Never set together with `failed_at`.
-    pub finished_at: Option<u64>,
+    pub(crate) finished_at: Option<u64>,
     /// Failure time, in milliseconds. Never set together with `finished_at`.
-    pub failed_at: Option<u64>,
+    pub(crate) failed_at: Option<u64>,
     /// The result the agent produced. Stored in its own file, so it is not part
     /// of the task record.
     #[serde(skip)]
-    pub result: Option<serde_json::Value>,
+    pub(crate) result: Option<serde_json::Value>,
     /// Failures recorded against the task, appended as they happen. A tool
     /// call or request that failed does not fail the task, so this can carry
     /// entries on a task that finished. Read back out of the session log by
     /// `Queue::load`, so it is not part of the task record.
     #[serde(skip)]
-    pub errors: Vec<Event>,
+    pub(crate) errors: Vec<Event>,
     /// The parent task if a handover was performed.
-    pub parent: Option<String>,
+    pub(crate) parent: Option<String>,
     /// Messages exchanged with the model.
     #[serde(skip)]
-    pub replies: Vec<Reply>,
+    pub(crate) replies: Vec<Reply>,
 }
 
 impl Task {
@@ -140,9 +141,79 @@ impl Task {
         self
     }
 
-    /// Check whether the task carries `label`.
-    pub fn has_label(&self, label: &str) -> bool {
-        self.label.as_deref() == Some(label)
+    /// The work the agent was asked to do.
+    pub fn get_task(&self) -> &serde_json::Value {
+        &self.task
+    }
+
+    /// The task's agent-pool label, if it has one.
+    pub fn get_label(&self) -> Option<&str> {
+        self.label.as_deref()
+    }
+
+    /// The optional schema the result must satisfy.
+    pub fn get_schema(&self) -> Option<&crate::schemas::Schema> {
+        self.schema.as_ref()
+    }
+
+    /// The task key, of the form `t-N`.
+    pub fn get_key(&self) -> &str {
+        &self.key
+    }
+
+    /// The task's lifecycle status.
+    pub fn get_status(&self) -> Status {
+        self.status
+    }
+
+    /// The agent that created the task.
+    pub fn get_reporter(&self) -> &str {
+        &self.reporter
+    }
+
+    /// The agent that claimed the task, if any.
+    pub fn get_assignee(&self) -> Option<&str> {
+        self.assignee.as_deref()
+    }
+
+    /// Creation time, in milliseconds.
+    pub fn get_created_at(&self) -> u64 {
+        self.created_at
+    }
+
+    /// Claim time, in milliseconds.
+    pub fn get_started_at(&self) -> Option<u64> {
+        self.started_at
+    }
+
+    /// Finish time, in milliseconds.
+    pub fn get_finished_at(&self) -> Option<u64> {
+        self.finished_at
+    }
+
+    /// Failure time, in milliseconds.
+    pub fn get_failed_at(&self) -> Option<u64> {
+        self.failed_at
+    }
+
+    /// The result the agent produced, if it finished with one.
+    pub fn get_result(&self) -> Option<&serde_json::Value> {
+        self.result.as_ref()
+    }
+
+    /// Failures recorded against the task.
+    pub fn get_errors(&self) -> &[Event] {
+        &self.errors
+    }
+
+    /// The parent task key, if any.
+    pub fn get_parent(&self) -> Option<&str> {
+        self.parent.as_deref()
+    }
+
+    /// Messages exchanged with the model.
+    pub fn get_replies(&self) -> &[Reply] {
+        &self.replies
     }
 
     /// Check whether the task is waiting to be claimed.
@@ -449,8 +520,27 @@ mod tests {
     #[test]
     fn labeled_carries_both_the_label_and_the_task() {
         let task = Task::labeled("analysis", "Audit src/db.");
-        assert_eq!(task.label.as_deref(), Some("analysis"));
-        assert_eq!(task.task, serde_json::json!("Audit src/db."));
+        assert_eq!(task.get_label(), Some("analysis"));
+        assert_eq!(task.get_task(), &serde_json::json!("Audit src/db."));
+    }
+
+    #[test]
+    fn new_exposes_runtime_state_through_getters() {
+        let task = Task::new("Audit src/db.");
+        assert_eq!(task.get_label(), None);
+        assert!(task.get_schema().is_none());
+        assert_eq!(task.get_key(), "");
+        assert_eq!(task.get_status(), Status::Todo);
+        assert_eq!(task.get_reporter(), "");
+        assert_eq!(task.get_assignee(), None);
+        assert_eq!(task.get_created_at(), 0);
+        assert_eq!(task.get_started_at(), None);
+        assert_eq!(task.get_finished_at(), None);
+        assert_eq!(task.get_failed_at(), None);
+        assert_eq!(task.get_result(), None);
+        assert!(task.get_errors().is_empty());
+        assert_eq!(task.get_parent(), None);
+        assert!(task.get_replies().is_empty());
     }
 
     #[test]
@@ -589,8 +679,8 @@ mod tests {
     #[test]
     fn public_predicates_follow_label_status_and_cancellation() {
         let mut task = Task::new("body").label("scan");
-        assert!(task.has_label("scan"));
-        assert!(!task.has_label("report"));
+        assert!(task.get_label() == Some("scan"));
+        assert!(task.get_label() != Some("report"));
         assert!(task.is_todo());
         assert!(task.is_pending());
         assert!(!task.is_in_progress());

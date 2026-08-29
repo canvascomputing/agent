@@ -21,7 +21,7 @@ pub(super) async fn run(context: &mut TaskContext<'_>, reason: CompactReason) ->
 
     let on_progress: Arc<dyn Fn(u32, u32) + Send + Sync> = {
         let queue = Arc::clone(context.queue);
-        let agent_id = context.agent.id().to_string();
+        let agent_id = context.agent.get_id().to_string();
         let task_key = context.task_key.clone();
         Arc::new(move |completed, total| {
             queue.emit(

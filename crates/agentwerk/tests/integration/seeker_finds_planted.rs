@@ -114,13 +114,17 @@ async fn seeker_pool_finds_planted_indicators(
     // representative pages are enough to exercise `knowledge` here
     // without duplicating the full attack-pattern catalogue.
     let knowledge = Knowledge::load(root.join(".knowledge"))?;
-    knowledge.pages().save(Page {
-        slug: "eval-atob-loader".to_string(),
-        kind: "AttackPattern".to_string(),
-        description: "JavaScript decode-then-eval loader: eval(atob(...)) reconstructs code from a base64 string at runtime.".to_string(),
-        content: "## Detectable signal\n`eval(atob(...))` or an equivalent decode-then-eval chain.".to_string(),
-        tags: vec![],
-    }).map_err(|e| format!("seed page: {e}"))?;
+    knowledge
+        .get_pages()
+        .save(
+            Page::new(
+                "eval-atob-loader",
+                "JavaScript decode-then-eval loader: eval(atob(...)) reconstructs code from a base64 string at runtime.",
+                "## Detectable signal\n`eval(atob(...))` or an equivalent decode-then-eval chain.",
+            )
+            .kind("AttackPattern"),
+        )
+        .map_err(|e| format!("seed page: {e}"))?;
 
     // Capture each grep call (agent + input) and each output.
     let calls: Arc<Mutex<Vec<(String, serde_json::Value)>>> = Arc::new(Mutex::new(Vec::new()));
@@ -129,14 +133,14 @@ async fn seeker_pool_finds_planted_indicators(
     let outputs_c = Arc::clone(&outputs);
     let logger = default_logger();
     let event_handler = Arc::new(move |e: &Event| {
-        match &e.kind {
+        match e.get_kind() {
             EventKind::ToolCallStarted {
                 tool_name, input, ..
             } if tool_name == "grep" => {
                 calls_c
                     .lock()
                     .unwrap()
-                    .push((e.agent_id.clone(), input.clone()));
+                    .push((e.get_agent_id().to_string(), input.clone()));
             }
             EventKind::ToolCallFinished {
                 tool_name, output, ..

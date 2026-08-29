@@ -150,13 +150,13 @@ impl Knowledge {
     /// the pages that fit and names `index.md` for the rest. Page bodies are
     /// never limited. Set it on the loaded store before handing the store to any
     /// agent.
-    pub fn index_char_limit(&self, count: usize) -> &Self {
+    pub fn set_char_limit(&self, count: usize) -> &Self {
         self.index_char_limit.store(count, Ordering::Relaxed);
         self
     }
 
     /// Get the index size limit in force, 12 000 until
-    /// [`Self::index_char_limit`] changes it.
+    /// [`Self::set_char_limit`] changes it.
     pub fn get_index_char_limit(&self) -> usize {
         self.index_char_limit.load(Ordering::Relaxed)
     }
@@ -164,10 +164,10 @@ impl Knowledge {
     /// Get the index, which is injected into the agent prompt. Empty while the
     /// store holds no pages.
     ///
-    /// Past [`Self::index_char_limit`] the listing stops at the last page that
+    /// Past [`Self::set_char_limit`] the listing stops at the last page that
     /// fits and a directive names `index.md` for the agent to read. That
     /// directive is a floor: a limit too small to hold it still gets it.
-    pub fn index(&self) -> String {
+    pub fn get_index(&self) -> String {
         let index = self.index.lock().unwrap();
         let listing = render_index(&index);
         let limit = self.get_index_char_limit();
@@ -193,10 +193,7 @@ impl Knowledge {
     }
 
     /// Get the page collection for reading and writing pages.
-    ///
-    /// Going through `pages()` keeps `save` and `load` bare, so opening the
-    /// store and loading one page do not share a name.
-    pub fn pages(&self) -> Pages<'_> {
+    pub fn get_pages(&self) -> Pages<'_> {
         Pages { inner: self }
     }
 
@@ -240,12 +237,61 @@ impl Knowledge {
 /// `<dir>/knowledge/pages/<slug>.md` with its frontmatter above the body.
 #[derive(Debug, Clone)]
 pub struct Page {
-    pub slug: String,
+    pub(crate) slug: String,
     /// What kind of page this is, `Knowledge` by default.
-    pub kind: String,
-    pub description: String,
-    pub content: String,
-    pub tags: Vec<String>,
+    pub(crate) kind: String,
+    pub(crate) description: String,
+    pub(crate) content: String,
+    pub(crate) tags: Vec<String>,
+}
+
+impl Page {
+    /// Create a knowledge page with the default `Knowledge` kind and no tags.
+    pub fn new(
+        slug: impl Into<String>,
+        description: impl Into<String>,
+        content: impl Into<String>,
+    ) -> Self {
+        Self {
+            slug: slug.into(),
+            kind: DEFAULT_PAGE_TYPE.to_string(),
+            description: description.into(),
+            content: content.into(),
+            tags: Vec::new(),
+        }
+    }
+
+    /// Set the page kind.
+    pub fn kind(mut self, kind: impl Into<String>) -> Self {
+        self.kind = kind.into();
+        self
+    }
+
+    /// Set the page tags.
+    pub fn tags(mut self, tags: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.tags = tags.into_iter().map(Into::into).collect();
+        self
+    }
+
+    pub fn get_slug(&self) -> &str {
+        &self.slug
+    }
+
+    pub fn get_kind(&self) -> &str {
+        &self.kind
+    }
+
+    pub fn get_description(&self) -> &str {
+        &self.description
+    }
+
+    pub fn get_content(&self) -> &str {
+        &self.content
+    }
+
+    pub fn get_tags(&self) -> &[String] {
+        &self.tags
+    }
 }
 
 impl Persist for Page {
@@ -269,7 +315,7 @@ impl Persist for Page {
     }
 }
 
-/// The page collection, returned by [`Knowledge::pages`]. Every write through
+/// The page collection, returned by [`Knowledge::get_pages`]. Every write through
 /// it updates the index; none is refused for the size of that index.
 pub struct Pages<'a> {
     inner: &'a Knowledge,
@@ -335,7 +381,7 @@ impl Pages<'_> {
     ///
     /// The index says where the file is, so a seeded page kept outside `pages/`
     /// is still readable.
-    pub fn load(&self, slug: &str) -> Result<Page, KnowledgeError> {
+    pub fn get_page(&self, slug: &str) -> Result<Page, KnowledgeError> {
         let slug = normalize_slug(slug)?;
         let relative = self
             .inner
@@ -365,7 +411,7 @@ impl Pages<'_> {
     }
 
     /// Get every page in the store, in index order.
-    pub fn list(&self) -> Result<Vec<Page>, KnowledgeError> {
+    pub fn get_pages(&self) -> Result<Vec<Page>, KnowledgeError> {
         let slugs: Vec<String> = self
             .inner
             .index
@@ -374,7 +420,7 @@ impl Pages<'_> {
             .iter()
             .map(|e| e.slug.clone())
             .collect();
-        slugs.iter().map(|slug| self.load(slug)).collect()
+        slugs.iter().map(|slug| self.get_page(slug)).collect()
     }
 
     /// Remove one page and its entry in the index.
@@ -822,14 +868,20 @@ mod tests {
     }
 
     fn save_page(store: &Knowledge, slug: &str, description: &str, content: &str, tags: &[&str]) {
-        let page = Page {
-            slug: slug.to_string(),
-            kind: String::new(),
-            description: description.to_string(),
-            content: content.to_string(),
-            tags: tags.iter().map(|s| s.to_string()).collect(),
-        };
-        store.pages().save(page).unwrap()
+        let page = Page::new(slug, description, content).tags(tags.iter().copied());
+        store.get_pages().save(page).unwrap()
+    }
+
+    #[test]
+    fn page_constructor_builders_and_getters_expose_every_value() {
+        let page = Page::new("build", "How to build.", "Run make.")
+            .kind("Guide")
+            .tags(["build", "local"]);
+        assert_eq!(page.get_slug(), "build");
+        assert_eq!(page.get_kind(), "Guide");
+        assert_eq!(page.get_description(), "How to build.");
+        assert_eq!(page.get_content(), "Run make.");
+        assert_eq!(page.get_tags(), &["build", "local"]);
     }
 
     #[test]
@@ -851,13 +903,13 @@ mod tests {
         )
         .unwrap();
         let store = Knowledge::load(dir.path()).unwrap();
-        assert!(store.index().is_empty());
+        assert!(store.get_index().is_empty());
     }
 
     #[test]
     fn load_with_no_existing_files_starts_empty() {
         let (store, _dir) = fresh_store();
-        assert!(store.index().is_empty());
+        assert!(store.get_index().is_empty());
     }
 
     #[test]
@@ -875,7 +927,7 @@ mod tests {
             .join("deploy-config.md")
             .exists());
         assert!(bundle(&dir).join(INDEX_FILE).exists());
-        let idx = store.index();
+        let idx = store.get_index();
         assert!(idx.contains("deploy-config"));
         assert!(idx.contains("Staging on port 8080"));
     }
@@ -885,7 +937,7 @@ mod tests {
         let (store, _dir) = fresh_store();
         save_page(&store, "config", "v1", "# Config\n\nVersion 1.", &[]);
         save_page(&store, "config", "v2", "# Config\n\nVersion 2.", &[]);
-        let idx = store.index();
+        let idx = store.get_index();
         assert!(idx.contains("v2"));
         assert!(!idx.contains("v1"));
         // Only one line in the index (the replaced entry).
@@ -902,7 +954,11 @@ mod tests {
             "# Test\n\nHello world.",
             &["tag1"],
         );
-        let body = store.pages().load("test").map(|p| p.content).unwrap();
+        let body = store
+            .get_pages()
+            .get_page("test")
+            .map(|p| p.content)
+            .unwrap();
         assert!(body.contains("# Test"));
         assert!(body.contains("Hello world."));
         assert!(!body.contains("---"));
@@ -913,7 +969,7 @@ mod tests {
     #[test]
     fn load_page_not_found() {
         let (store, _dir) = fresh_store();
-        let err = store.pages().load("nonexistent").unwrap_err();
+        let err = store.get_pages().get_page("nonexistent").unwrap_err();
         assert!(matches!(err, KnowledgeError::PageMissing { .. }));
         assert!(err.to_string().contains("not found"));
     }
@@ -924,7 +980,7 @@ mod tests {
         save_page(&store, "build", "How to build", "# Build\n\nRun make.", &[]);
         save_page(&store, "deploy", "How to deploy", "# Deploy\n\nPush.", &[]);
 
-        let pages = store.pages().list().unwrap();
+        let pages = store.get_pages().get_pages().unwrap();
         let slugs: Vec<&str> = pages.iter().map(|p| p.slug.as_str()).collect();
         assert_eq!(slugs, vec!["build", "deploy"]);
         assert_eq!(pages[0].description, "How to build");
@@ -935,14 +991,14 @@ mod tests {
     fn get_index_char_limit_returns_the_default_until_it_is_set() {
         let (store, _dir) = fresh_store();
         assert_eq!(store.get_index_char_limit(), DEFAULT_INDEX_CHAR_LIMIT);
-        store.index_char_limit(80);
+        store.set_char_limit(80);
         assert_eq!(store.get_index_char_limit(), 80);
     }
 
     #[test]
     fn list_is_empty_on_a_fresh_store() {
         let (store, _dir) = fresh_store();
-        assert!(store.pages().list().unwrap().is_empty());
+        assert!(store.get_pages().get_pages().unwrap().is_empty());
     }
 
     #[test]
@@ -950,15 +1006,15 @@ mod tests {
         let (store, dir) = fresh_store();
         save_page(&store, "temp", "Temporary", "# Temp\n\nWill delete.", &[]);
         assert!(bundle(&dir).join(PAGES_DIR).join("temp.md").exists());
-        store.pages().remove("temp").unwrap();
+        store.get_pages().remove("temp").unwrap();
         assert!(!bundle(&dir).join(PAGES_DIR).join("temp.md").exists());
-        assert!(store.index().is_empty());
+        assert!(store.get_index().is_empty());
     }
 
     #[test]
     fn remove_page_errors_when_not_in_index() {
         let (store, _dir) = fresh_store();
-        let err = store.pages().remove("nonexistent").unwrap_err();
+        let err = store.get_pages().remove("nonexistent").unwrap_err();
         assert!(matches!(err, KnowledgeError::PageMissing { .. }));
         assert!(err.to_string().contains("not found"));
     }
@@ -969,7 +1025,7 @@ mod tests {
         save_page(&store, "a", "Page A", "# A", &[]);
         save_page(&store, "b", "Page B", "# B", &[]);
         store.clear().unwrap();
-        assert!(store.index().is_empty());
+        assert!(store.get_index().is_empty());
         assert!(!bundle(&dir).join(INDEX_FILE).exists());
         // Pages directory exists but is empty.
         assert!(bundle(&dir).join(PAGES_DIR).exists());
@@ -1049,7 +1105,7 @@ mod tests {
         save_page(&store, "alpha", "First note", "# Alpha", &[]);
         save_page(&store, "beta", "Second note", "# Beta", &[]);
 
-        let index = store.index();
+        let index = store.get_index();
         assert!(index.contains("alpha"), "{index}");
         assert!(index.contains("beta"), "{index}");
         assert!(!index.contains(INDEX_FILE), "{index}");
@@ -1059,12 +1115,12 @@ mod tests {
     fn index_past_the_limit_lists_the_pages_that_fit_then_names_the_file() {
         let (store, dir) = fresh_store();
         // Room for the directive, which names an absolute path, plus a few pages.
-        let store = store.index_char_limit(500);
+        let store = store.set_char_limit(500);
         for i in 0..40 {
             save_page(&store, &format!("page-{i:02}"), "A note", "# Note", &[]);
         }
 
-        let index = store.index();
+        let index = store.get_index();
         assert!(index.contains("page-00"), "{index}");
         assert!(!index.contains("page-39"), "{index}");
         let listed = index.matches("- **").count();
@@ -1079,20 +1135,20 @@ mod tests {
     #[test]
     fn index_names_the_file_when_no_page_fits() {
         let (store, _dir) = fresh_store();
-        let store = store.index_char_limit(10);
+        let store = store.set_char_limit(10);
         save_page(&store, "alpha", "First note", "# Alpha", &[]);
 
-        let index = store.index();
+        let index = store.get_index();
         assert!(index.starts_with("1 more page is not listed"), "{index}");
     }
 
     #[test]
     fn a_write_past_the_limit_is_still_saved_and_listed_in_full() {
         let (store, _dir) = fresh_store();
-        let store = store.index_char_limit(80);
+        let store = store.set_char_limit(80);
         let long_description = "x".repeat(200);
         store
-            .pages()
+            .get_pages()
             .save(Page {
                 slug: "big".into(),
                 kind: String::new(),
@@ -1103,7 +1159,10 @@ mod tests {
             .unwrap();
 
         assert!(store.full_index().contains("big"));
-        assert_eq!(store.pages().load("big").unwrap().content, "# Big\n");
+        assert_eq!(
+            store.get_pages().get_page("big").unwrap().content,
+            "# Big\n"
+        );
 
         // Usage reports the custom limit.
         save_page(&store, "small", "ok", "# Small", &[]);
@@ -1132,7 +1191,7 @@ mod tests {
             "# Shared\n\nShared content.",
             &[],
         );
-        assert!(other.index().contains("shared"));
+        assert!(other.get_index().contains("shared"));
     }
 
     #[test]
@@ -1148,8 +1207,8 @@ mod tests {
         );
         drop(s1);
         let s2 = Knowledge::load(dir.path()).unwrap();
-        assert!(s2.index().contains("durable"));
-        assert!(s2.index().contains("Survives restart"));
+        assert!(s2.get_index().contains("durable"));
+        assert!(s2.get_index().contains("Survives restart"));
     }
 
     #[test]
@@ -1164,7 +1223,7 @@ mod tests {
         .unwrap();
         // Open without an existing index.md.
         let store = Knowledge::load(dir.path()).unwrap();
-        let idx = store.index();
+        let idx = store.get_index();
         assert!(idx.contains("my-page"));
         assert!(idx.contains("My Page"));
     }
@@ -1180,7 +1239,7 @@ mod tests {
         )
         .unwrap();
         let store = Knowledge::load(dir.path()).unwrap();
-        let idx = store.index();
+        let idx = store.get_index();
         assert!(idx.contains("legacy-notes"));
         assert!(idx.contains("2 entries"));
         // The legacy file should be renamed.
@@ -1195,8 +1254,8 @@ mod tests {
             .join("legacy-notes.md")
             .exists());
         let body = store
-            .pages()
-            .load("legacy-notes")
+            .get_pages()
+            .get_page("legacy-notes")
             .map(|p| p.content)
             .unwrap();
         assert!(body.contains("fact one"));
@@ -1221,7 +1280,7 @@ mod tests {
     fn write_page_rejects_empty_description() {
         let (store, _dir) = fresh_store();
         let err = store
-            .pages()
+            .get_pages()
             .save(Page {
                 slug: "test".into(),
                 kind: String::new(),
@@ -1237,7 +1296,7 @@ mod tests {
     fn write_page_rejects_empty_content() {
         let (store, _dir) = fresh_store();
         let err = store
-            .pages()
+            .get_pages()
             .save(Page {
                 slug: "test".into(),
                 kind: String::new(),
@@ -1253,7 +1312,7 @@ mod tests {
     fn remove_page_empties_index_usage() {
         let (store, _dir) = fresh_store();
         save_page(&store, "temp", "Temp", "# Temp", &[]);
-        store.pages().remove("temp").unwrap();
+        store.get_pages().remove("temp").unwrap();
         let (used, _, pages) = store.index_usage();
         assert_eq!(used, 0);
         assert_eq!(pages, 0);
@@ -1282,7 +1341,7 @@ mod tests {
     fn agent_set_type_round_trips_and_defaults_to_knowledge() {
         let (store, _dir) = fresh_store();
         store
-            .pages()
+            .get_pages()
             .save(Page {
                 slug: "verdict".into(),
                 kind: "Verdict".into(),
@@ -1291,10 +1350,16 @@ mod tests {
                 tags: vec![],
             })
             .unwrap();
-        assert_eq!(store.pages().load("verdict").unwrap().kind, "Verdict");
+        assert_eq!(
+            store.get_pages().get_page("verdict").unwrap().kind,
+            "Verdict"
+        );
         // An empty kind falls back to the default on write.
         save_page(&store, "note", "A note", "# Note", &[]);
-        assert_eq!(store.pages().load("note").unwrap().kind, "Knowledge");
+        assert_eq!(
+            store.get_pages().get_page("note").unwrap().kind,
+            "Knowledge"
+        );
     }
 
     #[test]
@@ -1308,11 +1373,11 @@ mod tests {
         )
         .unwrap();
         let store = Knowledge::load(dir.path()).unwrap();
-        let idx = store.index();
+        let idx = store.get_index();
         assert!(idx.contains("tables-orders"));
         assert!(idx.contains("One row per order."));
         // The nested concept stays readable through its flattened slug.
-        let page = store.pages().load("tables-orders").unwrap();
+        let page = store.get_pages().get_page("tables-orders").unwrap();
         assert_eq!(page.kind, "Table");
         assert!(page.content.contains("Body."));
     }
@@ -1328,6 +1393,9 @@ mod tests {
         )
         .unwrap();
         let store = Knowledge::load(dir.path()).unwrap();
-        assert_eq!(store.pages().load("bare").unwrap().kind, "Knowledge");
+        assert_eq!(
+            store.get_pages().get_page("bare").unwrap().kind,
+            "Knowledge"
+        );
     }
 }

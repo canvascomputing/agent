@@ -57,11 +57,6 @@ impl PyTask {
         Ok(PyTask { inner })
     }
 
-    /// Check whether the task carries `label`.
-    fn has_label(&self, label: &str) -> bool {
-        self.inner.has_label(label)
-    }
-
     /// Check whether the task is waiting to be claimed.
     fn is_todo(&self) -> bool {
         self.inner.is_todo()
@@ -92,101 +87,90 @@ impl PyTask {
         self.inner.is_cancelled()
     }
 
-    #[getter]
-    fn key(&self) -> &str {
-        &self.inner.key
+    fn get_key(&self) -> &str {
+        self.inner.get_key()
     }
 
     /// `"todo"`, `"in_progress"`, `"finished"`, or `"failed"`.
-    #[getter]
-    fn status(&self) -> String {
-        self.inner.status.to_string()
+    fn get_status(&self) -> String {
+        self.inner.get_status().to_string()
     }
 
-    #[getter]
-    fn task<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        value_to_py(py, &self.inner.task)
+    fn get_task<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        value_to_py(py, self.inner.get_task())
     }
 
-    #[getter]
-    fn result<'py>(&self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyAny>>> {
-        match &self.inner.result {
+    fn get_result<'py>(&self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyAny>>> {
+        match self.inner.get_result() {
             Some(result) => Ok(Some(value_to_py(py, result)?)),
             None => Ok(None),
         }
     }
 
-    #[getter]
-    fn label(&self) -> Option<String> {
-        self.inner.label.clone()
+    fn get_label(&self) -> Option<&str> {
+        self.inner.get_label()
     }
 
     /// Optional schema the result must satisfy.
-    #[getter]
-    fn schema(&self) -> Option<PySchema> {
-        self.inner.schema.as_ref().map(|schema| PySchema {
+    fn get_schema(&self) -> Option<PySchema> {
+        self.inner.get_schema().map(|schema| PySchema {
             inner: schema.clone(),
         })
     }
 
-    #[getter]
-    fn parent(&self) -> Option<String> {
-        self.inner.parent.clone()
+    fn get_parent(&self) -> Option<&str> {
+        self.inner.get_parent()
     }
 
     /// Name of the agent that created the task.
-    #[getter]
-    fn reporter(&self) -> &str {
-        &self.inner.reporter
+    fn get_reporter(&self) -> &str {
+        self.inner.get_reporter()
     }
 
     /// Name of the agent that claimed the task.
-    #[getter]
-    fn assignee(&self) -> Option<String> {
-        self.inner.assignee.clone()
+    fn get_assignee(&self) -> Option<&str> {
+        self.inner.get_assignee()
     }
 
-    #[getter]
-    fn created_at(&self) -> u64 {
-        self.inner.created_at
+    fn get_created_at(&self) -> u64 {
+        self.inner.get_created_at()
     }
 
-    #[getter]
-    fn started_at(&self) -> Option<u64> {
-        self.inner.started_at
+    fn get_started_at(&self) -> Option<u64> {
+        self.inner.get_started_at()
     }
 
-    #[getter]
-    fn finished_at(&self) -> Option<u64> {
-        self.inner.finished_at
+    fn get_finished_at(&self) -> Option<u64> {
+        self.inner.get_finished_at()
     }
 
-    #[getter]
-    fn failed_at(&self) -> Option<u64> {
-        self.inner.failed_at
+    fn get_failed_at(&self) -> Option<u64> {
+        self.inner.get_failed_at()
     }
 
     /// The messages exchanged with the model, built on access so a handler that
     /// never asks never pays for them.
-    #[getter]
-    fn replies(&self) -> Vec<crate::reply::PyReply> {
-        crate::reply::replies_to_py(&self.inner.replies)
+    fn get_replies(&self) -> Vec<crate::reply::PyReply> {
+        crate::reply::replies_to_py(self.inner.get_replies())
     }
 
     /// The failures recorded against the task, as events, in the order they
     /// happened. A failed tool call or request does not fail the task, so a
     /// finished task can carry some.
-    #[getter]
-    fn errors(&self) -> Vec<crate::event::PyEvent> {
+    fn get_errors(&self) -> Vec<crate::event::PyEvent> {
         self.inner
-            .errors
+            .get_errors()
             .iter()
             .map(crate::event::to_py_event)
             .collect()
     }
 
     fn __repr__(&self) -> String {
-        format!("Task(key={:?}, status={:?})", self.inner.key, self.status())
+        format!(
+            "Task(key={:?}, status={:?})",
+            self.inner.get_key(),
+            self.get_status()
+        )
     }
 }
 
@@ -204,15 +188,15 @@ impl PyTask {
     /// messages and timestamps, so a task that came back out of the queue
     /// would otherwise carry its messages into the new one.
     pub fn to_task(&self) -> Task {
-        let mut task = Task::new(self.inner.task.clone());
-        if let Some(label) = &self.inner.label {
-            task = task.label(label.clone());
+        let mut task = Task::new(self.inner.get_task().clone());
+        if let Some(label) = self.inner.get_label() {
+            task = task.label(label);
         }
-        if let Some(schema) = &self.inner.schema {
+        if let Some(schema) = self.inner.get_schema() {
             task = task.schema(schema.clone());
         }
-        if let Some(parent) = &self.inner.parent {
-            task = task.parent(parent.clone());
+        if let Some(parent) = self.inner.get_parent() {
+            task = task.parent(parent);
         }
         task
     }

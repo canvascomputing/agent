@@ -163,7 +163,7 @@ pub enum RequestErrorKind {
 impl RequestErrorKind {
     /// The stable snake_case spelling, which is also the counter this failure
     /// adds to under `models.<name>`.
-    pub fn name(&self) -> &'static str {
+    pub fn get_name(&self) -> &'static str {
         match self {
             RequestErrorKind::AuthenticationFailed => "authentication_failed",
             RequestErrorKind::PermissionDenied => "permission_denied",
@@ -182,7 +182,7 @@ impl RequestErrorKind {
 
 impl fmt::Display for RequestErrorKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.name())
+        f.write_str(self.get_name())
     }
 }
 

@@ -104,7 +104,7 @@ pub enum ToolFailureKind {
 
 impl ToolFailureKind {
     /// The stable snake_case spelling, which differs from the variant name.
-    pub fn name(&self) -> &'static str {
+    pub fn get_name(&self) -> &'static str {
         match self {
             ToolFailureKind::ToolNotFound => "not_found",
             ToolFailureKind::ExecutionFailed => "execution_failed",
@@ -115,7 +115,7 @@ impl ToolFailureKind {
 
 impl fmt::Display for ToolFailureKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.name())
+        f.write_str(self.get_name())
     }
 }
 
@@ -137,7 +137,7 @@ pub enum RepairKind {
 
 impl RepairKind {
     /// The stable snake_case spelling, the one `reason` carries.
-    pub fn name(&self) -> &'static str {
+    pub fn get_name(&self) -> &'static str {
         match self {
             RepairKind::CallMalformed => "call_malformed",
             RepairKind::ValueMistyped => "value_mistyped",
@@ -147,7 +147,7 @@ impl RepairKind {
 
 impl fmt::Display for RepairKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.name())
+        f.write_str(self.get_name())
     }
 }
 
@@ -165,7 +165,7 @@ pub enum KnowledgeFailureKind {
 
 impl KnowledgeFailureKind {
     /// The stable snake_case spelling, the one `reason` carries.
-    pub fn name(&self) -> &'static str {
+    pub fn get_name(&self) -> &'static str {
         match self {
             KnowledgeFailureKind::PageMissing => "page_missing",
             KnowledgeFailureKind::StoreRefused => "store_refused",
@@ -175,7 +175,7 @@ impl KnowledgeFailureKind {
 
 impl fmt::Display for KnowledgeFailureKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.name())
+        f.write_str(self.get_name())
     }
 }
 
@@ -193,7 +193,7 @@ pub enum KnowledgeAction {
 impl KnowledgeAction {
     /// The stable snake_case spelling, the one `action` carries. It is also
     /// what the model sends as the tool's `action`.
-    pub fn name(&self) -> &'static str {
+    pub fn get_name(&self) -> &'static str {
         match self {
             KnowledgeAction::Write => "write",
             KnowledgeAction::Read => "read",
@@ -205,7 +205,7 @@ impl KnowledgeAction {
 
 impl fmt::Display for KnowledgeAction {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.name())
+        f.write_str(self.get_name())
     }
 }
 
@@ -219,8 +219,8 @@ impl fmt::Display for KnowledgeAction {
 /// # async fn run() {
 /// let tasks = Queue::new();
 /// tasks.on_event(|_, event| {
-///     if let EventKind::TaskFinished = &event.kind {
-///         eprintln!("[{}] done {}", event.agent_id, event.task_key);
+///     if let EventKind::TaskFinished = event.get_kind() {
+///         eprintln!("[{}] done {}", event.get_agent_id(), event.get_task_key());
 ///     }
 /// });
 /// tasks.finish_all_tasks().await;
@@ -229,24 +229,49 @@ impl fmt::Display for KnowledgeAction {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Event {
     /// When this event happened, in milliseconds since the epoch.
-    pub created_at: u64,
-    pub agent_id: String,
+    pub(crate) created_at: u64,
+    pub(crate) agent_id: String,
     /// Key of the task this event concerns. Empty on `RunStarted` and
     /// `RunFinished`, which no task owns.
-    pub task_key: String,
+    pub(crate) task_key: String,
     /// Label the task carries, so a handler counting per label reads it
     /// without looking the task up. `None` when the event names no task,
     /// and when the task carries no label.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub label: Option<String>,
+    pub(crate) label: Option<String>,
     /// Flattened, so one logged line carries the kind's name and its payload
     /// beside the four fields here.
     #[serde(flatten)]
-    pub kind: EventKind,
+    pub(crate) kind: EventKind,
 }
 
 impl Event {
-    pub(crate) fn new(
+    /// When this event happened, in milliseconds since the epoch.
+    pub fn get_created_at(&self) -> u64 {
+        self.created_at
+    }
+
+    /// The agent that produced this event.
+    pub fn get_agent_id(&self) -> &str {
+        &self.agent_id
+    }
+
+    /// The task this event concerns, or an empty string for run events.
+    pub fn get_task_key(&self) -> &str {
+        &self.task_key
+    }
+
+    /// The task label captured by this event, if any.
+    pub fn get_label(&self) -> Option<&str> {
+        self.label.as_deref()
+    }
+
+    /// What happened.
+    pub fn get_kind(&self) -> &EventKind {
+        &self.kind
+    }
+
+    pub fn new(
         agent_id: impl Into<String>,
         task_key: impl Into<String>,
         label: Option<String>,
@@ -393,12 +418,12 @@ pub enum EventKind {
 
 impl EventKind {
     /// The stable snake_case spelling of this kind, as `events.jsonl` writes it.
-    pub fn name(&self) -> &'static str {
-        self.event_name().name()
+    pub fn get_name(&self) -> &'static str {
+        self.get_event_name().get_name()
     }
 
     /// Which count this event adds to.
-    pub fn event_name(&self) -> EventName {
+    pub fn get_event_name(&self) -> EventName {
         match self {
             EventKind::RunStarted => EventName::RunStarted,
             EventKind::RunFinished { .. } => EventName::RunFinished,
@@ -451,7 +476,7 @@ impl EventKind {
 
 impl fmt::Display for EventKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.name())
+        f.write_str(self.get_name())
     }
 }
 
@@ -529,7 +554,7 @@ impl EventName {
     ];
 
     /// The stable snake_case spelling, the same one serde reads and writes.
-    pub fn name(&self) -> &'static str {
+    pub fn get_name(&self) -> &'static str {
         match self {
             EventName::RunStarted => "run_started",
             EventName::RunFinished => "run_finished",
@@ -567,7 +592,7 @@ impl EventName {
 
 impl fmt::Display for EventName {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.name())
+        f.write_str(self.get_name())
     }
 }
 
@@ -807,7 +832,7 @@ pub(crate) mod tests {
         let failures: BTreeSet<&str> = all_variants()
             .iter()
             .filter(|kind| kind.is_failure())
-            .map(|kind| kind.name())
+            .map(|kind| kind.get_name())
             .collect();
         assert_eq!(
             failures,
@@ -826,19 +851,22 @@ pub(crate) mod tests {
     fn all_lists_the_name_of_every_event_kind() {
         // The bindings build Python's EventName from ALL, so a variant missing
         // here is a name Python never learns.
-        let named: BTreeSet<EventName> = all_variants().iter().map(EventKind::event_name).collect();
+        let named: BTreeSet<EventName> = all_variants()
+            .iter()
+            .map(EventKind::get_event_name)
+            .collect();
         assert_eq!(named, EventName::ALL.iter().copied().collect());
     }
 
     #[test]
     fn every_event_name_matches_its_serde_spelling() {
-        // `name()` is hand-written and `events.jsonl` is written by serde's
+        // `get_name()` is hand-written and `events.jsonl` is written by serde's
         // rename_all, so the two have to agree or a logged event reloads under
         // a name nothing asks for.
         for kind in all_variants() {
-            let event = kind.event_name();
+            let event = kind.get_event_name();
             let spelled = serde_json::to_value(event).unwrap();
-            assert_eq!(spelled.as_str(), Some(event.name()));
+            assert_eq!(spelled.as_str(), Some(event.get_name()));
         }
     }
 
@@ -853,10 +881,10 @@ pub(crate) mod tests {
     #[test]
     fn a_logged_kind_names_itself_the_way_event_name_spells_it() {
         for kind in all_variants() {
-            let name = kind.event_name();
+            let name = kind.get_event_name();
             let event = Event::new("agent", "t-1", None, kind);
             let line = serde_json::to_value(&event).unwrap();
-            assert_eq!(line["event"].as_str(), Some(name.name()));
+            assert_eq!(line["event"].as_str(), Some(name.get_name()));
         }
     }
 }

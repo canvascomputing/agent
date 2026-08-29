@@ -12,30 +12,44 @@ use crate::convert::value_to_py;
 /// Python side is built from this, so the two never carry different spellings.
 #[pyfunction]
 pub fn event_names() -> Vec<&'static str> {
-    EventName::ALL.iter().map(EventName::name).collect()
+    EventName::ALL.iter().map(EventName::get_name).collect()
 }
 
 /// An `Event` reports one thing that happened as agents work.
 #[pyclass(name = "Event")]
 pub struct PyEvent {
-    #[pyo3(get)]
     kind: String,
-    #[pyo3(get)]
     pub(crate) created_at: u64,
-    #[pyo3(get)]
     pub(crate) agent_id: String,
-    #[pyo3(get)]
     pub(crate) task_key: String,
-    #[pyo3(get)]
     pub(crate) label: Option<String>,
     data: Value,
 }
 
 #[pymethods]
 impl PyEvent {
+    fn get_kind(&self) -> &str {
+        &self.kind
+    }
+
+    fn get_created_at(&self) -> u64 {
+        self.created_at
+    }
+
+    fn get_agent_id(&self) -> &str {
+        &self.agent_id
+    }
+
+    fn get_task_key(&self) -> &str {
+        &self.task_key
+    }
+
+    fn get_label(&self) -> Option<&str> {
+        self.label.as_deref()
+    }
+
     /// What the event carries: model, tokens, tool name, message.
-    #[getter]
-    fn data<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+    fn get_data<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         value_to_py(py, &self.data)
     }
 
@@ -47,12 +61,12 @@ impl PyEvent {
 /// Build a `PyEvent` from a crate `Event`.
 pub fn to_py_event(event: &Event) -> PyEvent {
     PyEvent {
-        kind: event.kind.to_string(),
-        created_at: event.created_at,
-        agent_id: event.agent_id.clone(),
-        task_key: event.task_key.clone(),
-        label: event.label.clone(),
-        data: payload(&event.kind),
+        kind: event.get_kind().to_string(),
+        created_at: event.get_created_at(),
+        agent_id: event.get_agent_id().to_string(),
+        task_key: event.get_task_key().to_string(),
+        label: event.get_label().map(str::to_string),
+        data: payload(event.get_kind()),
     }
 }
 
@@ -89,10 +103,10 @@ fn payload(kind: &EventKind) -> Value {
             reason,
             message,
         } => {
-            json!({ "tool_name": tool_name, "reason": reason.name(), "message": message })
+            json!({ "tool_name": tool_name, "reason": reason.get_name(), "message": message })
         }
         ToolCallDeclined { tool_name, reason } => {
-            json!({ "tool_name": tool_name, "reason": reason.name() })
+            json!({ "tool_name": tool_name, "reason": reason.get_name() })
         }
         ToolCallStarted {
             tool_name,

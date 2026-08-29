@@ -54,7 +54,7 @@ async fn finds_every_lib_rs_in_nested_tree() -> std::result::Result<(), Box<dyn 
     let collected = Arc::clone(&calls);
     let logger = default_logger();
     let event_handler = Arc::new(move |e: &Event| {
-        match &e.kind {
+        match e.get_kind() {
             EventKind::ToolCallStarted {
                 tool_name, input, ..
             } => {

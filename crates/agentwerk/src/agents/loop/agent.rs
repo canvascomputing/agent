@@ -33,7 +33,7 @@ pub(super) struct TaskContext<'a> {
 
 impl<'a> TaskContext<'a> {
     pub(super) fn emit(&self, kind: EventKind) -> Event {
-        self.queue.emit(&self.task_key, self.agent.id(), kind)
+        self.queue.emit(&self.task_key, self.agent.get_id(), kind)
     }
 
     pub(super) fn task(&self) -> Option<Task> {
@@ -52,7 +52,7 @@ impl<'a> TaskContext<'a> {
                 ("attempt", &attempt.to_string()),
                 ("max_attempts", &max_attempts.to_string()),
                 ("task", &self.task_key),
-                ("agent", self.agent.id()),
+                ("agent", self.agent.get_id()),
             ],
         )
     }
@@ -60,7 +60,9 @@ impl<'a> TaskContext<'a> {
     /// Fail the task without naming a cause. The caller has already emitted
     /// the event that does.
     pub(super) fn fail_task(&self) {
-        let _ = self.queue.set_failed_by(&self.task_key, self.agent.id());
+        let _ = self
+            .queue
+            .set_failed_by(&self.task_key, self.agent.get_id());
     }
 
     /// Fail the task because a request did not come back. Reserved for the
@@ -113,7 +115,7 @@ fn run_is_over(agent: &Agent, queue: &Queue) -> bool {
     if let Some((violation, limit)) = policy_violated(&policy, &queue.stats) {
         queue.emit(
             "",
-            agent.id(),
+            agent.get_id(),
             EventKind::PolicyViolated {
                 policy: violation,
                 limit,
@@ -136,7 +138,7 @@ fn claim<'a>(agent: &'a Agent, queue: &'a Arc<Queue>) -> Option<TaskContext<'a>>
     .into_query();
     // On the id, not the label: agents sharing a label must not take over each
     // other's started tasks.
-    let agent_id = agent.id().to_string();
+    let agent_id = agent.get_id().to_string();
     let interactive = agent.is_interactive();
     let resumable = move |t: &Task| {
         t.status == Status::InProgress
@@ -145,7 +147,7 @@ fn claim<'a>(agent: &'a Agent, queue: &'a Arc<Queue>) -> Option<TaskContext<'a>>
             && !t.is_cancelled()
     };
     let task_key = queue
-        .claim(&claimable, agent.id())
+        .claim(&claimable, agent.get_id())
         .or_else(|| queue.find_task(resumable).map(|t| t.key.clone()))?;
     let task = queue.get_task(&task_key)?;
 
@@ -156,12 +158,12 @@ fn claim<'a>(agent: &'a Agent, queue: &'a Arc<Queue>) -> Option<TaskContext<'a>>
         tools.register(FinishTool::from_schema(task.schema.clone()));
     }
 
-    let knowledge_index = agent.get_knowledge().index();
+    let knowledge_index = agent.get_knowledge().get_index();
     let policy = queue.get_policy();
     // Lets the model see what knowledge pages it can read.
     let system_prompt =
         agent.system_prompt(Some(&knowledge_index), &policy, &queue.stats, &task_key);
-    let agent_id = agent.id();
+    let agent_id = agent.get_id();
 
     queue.emit(&task_key, agent_id, EventKind::TurnStarted);
 
@@ -236,7 +238,7 @@ fn silence_retry(context: &mut TaskContext<'_>) -> Option<Step> {
         });
         let _ = context
             .queue
-            .set_failed_by(&context.task_key, context.agent.id());
+            .set_failed_by(&context.task_key, context.agent.get_id());
         return None;
     }
     let detail = context.agent.get_directives().render(NO_TOOL_CALLED, &[]);
@@ -591,7 +593,7 @@ mod tests {
         // twice.
         let filed = Arc::new(AtomicBool::new(false));
         tasks.on_result(move |queue, done, _| {
-            if !done.has_label("scan") {
+            if done.get_label() != Some("scan") {
                 return;
             }
             let scans = queue.find_results("label = scan AND status = Finished");
@@ -1361,7 +1363,7 @@ mod tests {
             prompts[0], prompts[1],
             "mid-task knowledge write must not change the system prompt within the same task"
         );
-        assert!(store.index().contains("mid-task"));
+        assert!(store.get_index().contains("mid-task"));
     }
 
     #[tokio::test]
@@ -1409,7 +1411,7 @@ mod tests {
 
         tasks.add_task(Task::new("alice work").label("a"));
         let _ = tasks.finish_all_tasks().await;
-        assert!(store.index().contains("alice-note"));
+        assert!(store.get_index().contains("alice-note"));
 
         tasks.add_task(Task::new("bob work").label("b"));
         let _ = tasks.finish_all_tasks().await;
@@ -1496,7 +1498,7 @@ mod tests {
         let context = claim(&agent, &tasks).expect("the task is claimable");
         let finish = context.tools.get("finish").expect("finish is bound");
 
-        let declared = finish.input_schema().get_raw_schema();
+        let declared = finish.get_input_schema().get_raw_schema();
         assert!(
             declared["properties"]["result"]["properties"]["verdict"].is_object(),
             "{declared}"

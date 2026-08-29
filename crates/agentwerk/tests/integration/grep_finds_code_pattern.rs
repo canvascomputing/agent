@@ -64,7 +64,7 @@ async fn finds_code_pattern_with_special_chars(
     let collected = Arc::clone(&calls);
     let logger = default_logger();
     let event_handler = Arc::new(move |e: &Event| {
-        match &e.kind {
+        match e.get_kind() {
             EventKind::ToolCallStarted {
                 tool_name, input, ..
             } => {

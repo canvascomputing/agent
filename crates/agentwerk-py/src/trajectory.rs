@@ -32,27 +32,24 @@ impl PyTrajectory {
 
     /// The example's identifier, `<agent>-<task>`, which is also its file
     /// name.
-    #[getter]
-    fn key(&self) -> &str {
-        &self.inner.key
+    fn get_key(&self) -> &str {
+        self.inner.get_key()
     }
 
     /// Name of the model that produced the replies, when it was known.
-    #[getter]
-    fn model(&self) -> Option<&str> {
-        self.inner.model.as_deref()
+    fn get_model(&self) -> Option<&str> {
+        self.inner.get_model()
     }
 
-    #[getter]
-    fn replies(&self) -> Vec<crate::reply::PyReply> {
-        crate::reply::replies_to_py(&self.inner.replies)
+    fn get_replies(&self) -> Vec<crate::reply::PyReply> {
+        crate::reply::replies_to_py(self.inner.get_replies())
     }
 
     fn __repr__(&self) -> String {
         format!(
             "Trajectory(key={:?}, replies={})",
-            self.inner.key,
-            self.inner.replies.len()
+            self.inner.get_key(),
+            self.inner.get_replies().len()
         )
     }
 }

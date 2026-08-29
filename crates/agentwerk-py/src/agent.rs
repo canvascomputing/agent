@@ -128,9 +128,8 @@ impl PyAgent {
     }
 
     /// The id the agent works under, taken the first time it is read.
-    #[getter]
-    fn id(&self) -> &str {
-        self.get().id()
+    fn get_id(&self) -> &str {
+        self.get().get_id()
     }
 
     /// Let the agent wait for new instructions to keep a task in-progress.
