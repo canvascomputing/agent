@@ -85,10 +85,8 @@ async def test_runs_two_labeled_agents_with_events_and_chaining():
         aw.Agent.from_env().label("b").role("Reply with one word: beta")
     )
 
-    first_pool = aw.Query("label = a")
-
     def chain(work, task, result):
-        if first_pool.matches(task):
+        if task.has_label("a"):
             work.add_task(aw.Task("Reply beta", label="b"))
 
     queue.on_result(chain)

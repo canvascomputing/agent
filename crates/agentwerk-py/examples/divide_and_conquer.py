@@ -17,7 +17,6 @@ from collections import Counter
 from agentwerk import (
     Agent,
     Policy,
-    Query,
     Schema,
     Task,
     Queue,
@@ -148,9 +147,8 @@ async def main(n, partitions, agents):
     await tasks.finish_all_tasks()
 
     partials, failures = {}, []
-    finished = Query("status = Finished")
     for task in tasks.get_tasks():
-        if finished.matches(task):
+        if task.is_finished():
             partials[task.result["idx"]] = task.result["partial_sum"]
         else:
             failures.append((task.key, task.status))

@@ -265,7 +265,7 @@ mod tests {
     use crate::agents::agent::Agent;
     use crate::agents::r#loop::test_util::*;
     use crate::agents::tasks::{Author, Queue, Status, Task};
-    use crate::agents::{Knowledge, Query};
+    use crate::agents::Knowledge;
     use crate::tools::{FinishTool, TasksTool};
 
     // Run lifecycle
@@ -590,9 +590,8 @@ mod tests {
         // takes the flag and the other returns: without it the report is filed
         // twice.
         let filed = Arc::new(AtomicBool::new(false));
-        let scan = Query::from("label = scan");
         tasks.on_result(move |queue, done, _| {
-            if !scan.matches(done) {
+            if !done.has_label("scan") {
                 return;
             }
             let scans = queue.find_results("label = scan AND status = Finished");

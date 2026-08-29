@@ -254,7 +254,7 @@ See [`Provider`](https://docs.rs/agentwerk/latest/agentwerk/providers/struct.Pro
 The `Queue` is the core data structure of agentwerk for coordinating complex interactions.
 
 ```python
-from agentwerk import Agent, Query, Task, Queue
+from agentwerk import Agent, Task, Queue
 
 analyst = (
     Agent.from_env()
@@ -334,7 +334,6 @@ tasks.find_results("t-3")
 tasks.find_tasks("key IN (t-3, t-4)")
 tasks.find_tasks("label IN (scan, report) AND status = Finished")
 tasks.find_results("scan ORDER BY finished DESC")
-Query("label = scan AND pending = true").matches(tasks.get_task("t-1"))
 ```
 
 <details>

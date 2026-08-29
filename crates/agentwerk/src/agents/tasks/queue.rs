@@ -1883,7 +1883,7 @@ mod tests {
         });
         let target = key.clone();
         queue.finish_results(move |t: &Task| t.key == target).await;
-        assert!(Query::from("status = Finished").matches(&queue.get_task(&key).unwrap()));
+        assert!(queue.get_task(&key).unwrap().is_finished());
     }
 
     #[tokio::test]
@@ -2461,9 +2461,8 @@ mod tests {
     #[test]
     fn on_result_inserts_a_follow_up_before_drain_is_observable() {
         let (queue, _tmp) = test_queue();
-        let scout = Query::from("label = scout");
         queue.on_result(move |queue, done, _| {
-            if scout.matches(done) {
+            if done.has_label("scout") {
                 queue.add_task(Task::new("hunt").label("sniper"));
             }
         });

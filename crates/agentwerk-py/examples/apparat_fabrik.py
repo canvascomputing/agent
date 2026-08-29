@@ -23,7 +23,6 @@ from pathlib import Path
 from agentwerk import (
     Agent,
     Policy,
-    Query,
     GrepTool,
     Knowledge,
     ReadFileTool,
@@ -238,10 +237,8 @@ async def main(pruefer, meister, monteur):
 
     # One read plan opens one Abnahme per part it names, which is the fan-out
     # the line runs on.
-    pruefung = Query("label = pruefung")
-
     def open_abnahme(work, task, result):
-        if not pruefung.matches(task):
+        if not task.has_label("pruefung"):
             return
         for teil in result["teile"]:
             work.add_task(
@@ -257,10 +254,8 @@ async def main(pruefer, meister, monteur):
 
     # A part that passes the Abnahme is not done: it goes on to be fitted, so
     # the work fans forward instead of ending at the second station.
-    abnahme = Query("label = abnahme")
-
     def open_montage(work, task, result):
-        if abnahme.matches(task) and result.get("passt"):
+        if task.has_label("abnahme") and result.get("passt"):
             work.add_task(
                 Task(
                     f"Baue {result['teil']} ein und buche es. Der Laufzettel lautete: {task.task}",

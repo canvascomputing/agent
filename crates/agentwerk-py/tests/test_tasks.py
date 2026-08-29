@@ -54,12 +54,11 @@ def test_unstarted_task_carries_its_key_and_no_messages(queue):
 def test_task_selection_uses_aql_status_and_pending_fields(queue):
     key = queue.add_task(aw.Task("scan the corpus"))
 
-    task = queue.get_task(key)
-    assert aw.Query("status = Todo").matches(task)
-    assert aw.Query("pending = true").matches(task)
-    assert not aw.Query("status = InProgress").matches(task)
-    assert not aw.Query("status = Finished").matches(task)
-    assert not aw.Query("status = Failed").matches(task)
+    assert [task.key for task in queue.find_tasks("status = Todo")] == [key]
+    assert [task.key for task in queue.find_tasks("pending = true")] == [key]
+    assert queue.find_tasks("status = InProgress") == []
+    assert queue.find_tasks("status = Finished") == []
+    assert queue.find_tasks("status = Failed") == []
 
 
 def test_task_predicates_follow_label_status_and_cancellation(queue):
@@ -199,12 +198,9 @@ def test_a_query_compiles_its_string_on_construction():
         aw.Query("label =")
 
 
-def test_query_matches_a_task_and_rejects_an_event_only_query(queue):
-    task = queue.get_task(queue.add_task(aw.Task("alpha", label="a")))
-
-    assert aw.Query("label = a AND pending = true").matches(task)
+def test_an_event_query_raises_where_tasks_are_selected(queue):
     with pytest.raises(ValueError):
-        aw.Query("event = task_finished").matches(task)
+        queue.find_tasks(aw.Query("event = task_finished"))
 
 
 def test_task_takes_a_bare_task_without_a_task_object(queue):

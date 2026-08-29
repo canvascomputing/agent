@@ -342,7 +342,6 @@ The rules the tables never repeat.
 | Rust | `Query<R: Queryable = Task>(Compiled<R.Field>)` | pub |
 | Python | `Query(query: str)`: one class over both field sets, compiled over each at construction | |
 | Rust | `.new(query: string): this throws QueryError` | pub |
-| Rust | `.matches(record: R): boolean` | pub |
 | Rust | `impl From<&str> for Query<R>` | pub |
 | Rust | `impl From<String> for Query<R>` | pub |
 | Rust | `enum QueryError { Blank, UnknownField, UnknownStatus, UnknownEvent, InvalidTime, OperatorNotAllowed, RepeatedField, UnexpectedToken, UnexpectedEnd }` | pub |
@@ -357,6 +356,7 @@ The rules the tables never repeat.
 | Rust | `impl Queryable for Task` | private |
 | Rust | `impl Queryable for Event` | private |
 | Rust | `Query.all(): this` | crate |
+| Rust | `.matches(record: R): boolean` | crate |
 | Rust | `.and(other: Query<R>): this` | crate |
 | Rust | `.is_ordered(): boolean` | crate |
 | Rust | `.sort(records: R[]): void` | crate |
@@ -2352,7 +2352,6 @@ Binds `agents/query.rs`. One class covers both field sets: Python carries no typ
 |----------|------|------------|
 | Rust | `PyQuery { source: string, tasks: Query<Task> throws QueryError, events: Query<Event> throws QueryError }` | python |
 | Rust | `.new(query: string): this throws PyErr`, raising only where both field sets reject the string | python |
-| Rust | `.matches(task: PyTask): boolean throws PyErr` | python |
 | Rust | `.__repr__(): string` | python |
 
 ### Internal

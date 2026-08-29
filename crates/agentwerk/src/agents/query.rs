@@ -122,7 +122,7 @@ impl<R: Queryable> Query<R> {
         Compiled::new(query).map(Query)
     }
 
-    pub fn matches(&self, record: &R) -> bool {
+    pub(crate) fn matches(&self, record: &R) -> bool {
         self.0.matches(record)
     }
 
