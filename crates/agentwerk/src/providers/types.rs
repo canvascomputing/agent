@@ -215,7 +215,7 @@ pub struct ModelResponse {
 }
 
 /// Why a tool call a model wrote as text was not promoted to a real call,
-/// carried by `EventKind::ToolCallDeclined`.
+/// carried by `Event::TOOL_CALL_DECLINED`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum ToolDeclineKind {
     /// The reply hit a length limit, so the block may be cut short.

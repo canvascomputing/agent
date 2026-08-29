@@ -489,7 +489,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::event::EventKind;
+    use crate::event::Event;
     use crate::providers::TokenUsage;
 
     /// An agent a queue accepts: the provider and model joining one demands.
@@ -609,14 +609,14 @@ mod tests {
             ..Policy::default()
         };
         let stats = Stats::of([
-            EventKind::TurnStarted,
-            EventKind::RequestFinished {
-                model: "m".into(),
-                usage: TokenUsage {
+            Event::new(Event::TURN_STARTED),
+            Event::new(Event::REQUEST_FINISHED).data(serde_json::json!({
+                "model": "m",
+                "usage": TokenUsage {
                     input_tokens: 250,
                     output_tokens: 0,
                 },
-            },
+            })),
         ]);
 
         // The exact rendering is pinned in `prompts`; what matters here is
@@ -644,7 +644,7 @@ mod tests {
             max_turns: Some(3),
             ..Policy::default()
         };
-        let stats = Stats::of([EventKind::TurnStarted]);
+        let stats = Stats::of([Event::new(Event::TURN_STARTED)]);
 
         let rendered = agent.system_prompt(None, &policy, &stats, "T-1");
 

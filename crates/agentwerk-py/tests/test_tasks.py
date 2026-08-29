@@ -374,23 +374,23 @@ def test_a_condition_that_raises_reads_as_no_match(queue):
     assert queue.find_event(broken) is None
 
 
-def test_event_name_spells_the_kind_an_event_reports(queue):
+def test_event_constants_spell_the_name_an_event_reports(queue):
     seen = []
-    queue.on_event(lambda _, event: seen.append(event.get_kind()))
+    queue.on_event(lambda _, event: seen.append(event.get_name()))
 
     queue.add_task("seed")
 
-    assert aw.EventName.TASK_CREATED in seen
-    assert len(queue.find_events(lambda e: e.get_kind() == aw.EventName.TASK_CREATED)) == 1
+    assert aw.Event.TASK_CREATED in seen
+    assert len(queue.find_events(lambda e: e.get_name() == aw.Event.TASK_CREATED)) == 1
 
 
 def test_find_event_returns_the_earliest_match(queue):
     queue.add_task("one")
     queue.add_task("two")
 
-    first = queue.find_event(lambda e: e.get_kind() == aw.EventName.TASK_CREATED)
+    first = queue.find_event(lambda e: e.get_name() == aw.Event.TASK_CREATED)
     assert first.get_task_key() == "t-1"
-    assert queue.find_event(lambda e: e.get_kind() == aw.EventName.TASK_FAILED) is None
+    assert queue.find_event(lambda e: e.get_name() == aw.Event.TASK_FAILED) is None
 
 
 def test_find_events_takes_an_aql_string(queue):
@@ -410,10 +410,87 @@ def test_find_events_takes_a_compiled_query(queue):
     queue.add_task("seed")
 
     assert len(queue.find_events(aw.Query("task_created"))) == 1
-    with pytest.raises(ValueError):
-        aw.Query("event = task_exploded")
+    assert queue.find_events(aw.Query("event = task_exploded")) == []
     with pytest.raises(ValueError):
         queue.find_events("event = ")
+
+
+def test_emit_event_publishes_named_data_with_optional_context(queue, tmp_path):
+    queue.set_dir(str(tmp_path))
+    key = queue.add_task(aw.Task("scan", label="scout"))
+    seen = []
+    queue.on_event(lambda _, event: seen.append(event))
+
+    emitted = queue.emit_event(
+        aw.Event("document_indexed")
+        .data({"documents": 42})
+        .task_key(key)
+        .agent_id("scout-1")
+    )
+
+    assert emitted.get_name() == "document_indexed"
+    assert emitted.get_data() == {"documents": 42}
+    assert emitted.get_task_key() == key
+    assert emitted.get_agent_id() == "scout-1"
+    assert emitted.get_label() == "scout"
+    assert emitted.get_created_at() > 0
+    assert len(seen) == 1
+    assert seen[0].get_name() == "document_indexed"
+    assert seen[0].get_data() == {"documents": 42}
+    assert queue.find_event("event = document_indexed").get_data() == {"documents": 42}
+
+    reopened = aw.Queue.load(str(tmp_path))
+    restored = reopened.find_event("event = document_indexed")
+    assert restored.get_data() == {"documents": 42}
+    assert restored.get_label() == "scout"
+
+
+def test_emit_event_accepts_global_events(queue):
+    empty = queue.emit_event(aw.Event("cache_checked"))
+    emitted = queue.emit_event(aw.Event("index_refreshed").data([1, 2, 3]))
+
+    assert empty.get_data() == {}
+    assert emitted.get_agent_id() == ""
+    assert emitted.get_task_key() == ""
+    assert emitted.get_label() is None
+    assert emitted.get_data() == [1, 2, 3]
+
+
+def test_event_builders_replace_their_values(queue):
+    emitted = queue.emit_event(
+        aw.Event("document_indexed")
+        .data({"documents": 1})
+        .data({"documents": 42})
+        .task_key("t-1")
+        .task_key("t-2")
+        .agent_id("old")
+        .agent_id("indexer-1")
+    )
+
+    assert emitted.get_data() == {"documents": 42}
+    assert emitted.get_task_key() == "t-2"
+    assert emitted.get_agent_id() == "indexer-1"
+
+
+def test_emitting_a_builtin_name_activates_name_based_hooks_without_changing_state(queue):
+    key = queue.add_task("work")
+    seen = []
+    queue.on_task(lambda *args: seen.append("task"))
+    queue.on_result(lambda *args: seen.append("result"))
+    queue.on_failure(lambda *args: seen.append("failure"))
+
+    queue.emit_event(aw.Event(aw.Event.TASK_FINISHED).task_key(key))
+
+    assert queue.get_task(key).get_status() == "todo"
+    assert seen == ["task"]
+
+
+@pytest.mark.parametrize("name", ["Document Indexed", "document__indexed", "TaskFinished"])
+def test_emit_event_accepts_arbitrary_names(queue, name):
+    emitted = queue.emit_event(aw.Event(name))
+
+    assert emitted.get_name() == name
+    assert queue.find_event(f'event = "{name}"').get_name() == name
 
 
 def test_a_query_neither_field_set_accepts_raises_on_construction():
@@ -434,7 +511,7 @@ def test_an_event_carries_the_label_of_the_task_it_concerns(queue):
     created = Counter()
 
     def count_per_label(_, event):
-        if event.get_kind() == aw.EventName.TASK_CREATED:
+        if event.get_name() == aw.Event.TASK_CREATED:
             created[event.get_label()] += 1
 
     queue.on_event(count_per_label)
@@ -493,7 +570,7 @@ def test_a_hook_waits_for_the_results_it_needs_before_filing_the_next_step(queue
 
 def test_on_failure_receives_the_failed_task(queue):
     seen = []
-    queue.on_failure(lambda _, event, task: seen.append((event.get_kind(), task.get_key())))
+    queue.on_failure(lambda _, event, task: seen.append((event.get_name(), task.get_key())))
     key = queue.add_task(aw.Task("scan the corpus"))
 
     queue.set_task_failed(key)
@@ -517,7 +594,7 @@ def test_on_failure_files_a_retry_through_the_queue_it_is_handed(queue):
 
 def test_on_event_files_a_follow_up_for_any_kind(queue):
     def report_when_done(work, event):
-        if event.get_kind() == "task_finished":
+        if event.get_name() == aw.Event.TASK_FINISHED:
             work.add_task(aw.Task("report", label="report"))
 
     queue.on_event(report_when_done)
@@ -531,7 +608,7 @@ def test_on_event_files_a_follow_up_for_any_kind(queue):
 
 def test_an_event_handler_rewrites_replies_through_the_queue(queue):
     def redact_when_done(work, event):
-        if event.get_kind() == "task_finished":
+        if event.get_name() == aw.Event.TASK_FINISHED:
             work.edit_replies(event.get_task_key(), lambda replies: [aw.Reply.user_text("[redacted]")])
 
     queue.on_event(redact_when_done)
@@ -612,7 +689,7 @@ async def test_run_finished_announces_why_execution_ended(queue):
     reasons = []
     queue.on_event(
         lambda _, event: reasons.append(event.get_data()["reason"])
-        if event.get_kind() == "run_finished"
+        if event.get_name() == aw.Event.RUN_FINISHED
         else None
     )
     await queue.finish_all_tasks()
@@ -686,7 +763,7 @@ async def test_on_task_async_awaits_the_handler_before_finish_all_returns(queue)
 
     async def note(_, event, task):
         await asyncio.sleep(0)
-        seen.append((event.get_kind(), task.get_key()))
+        seen.append((event.get_name(), task.get_key()))
 
     queue.on_task_async(note)
     key = queue.add_task("scan the corpus")
@@ -702,7 +779,7 @@ async def test_on_failure_async_awaits_the_handler_before_finish_all_returns(que
 
     async def note(_, event, task):
         await asyncio.sleep(0)
-        seen.append((event.get_kind(), task.get_key()))
+        seen.append((event.get_name(), task.get_key()))
 
     queue.on_failure_async(note)
     key = queue.add_task("scan the corpus")
@@ -718,7 +795,7 @@ async def test_on_event_async_sees_the_kinds_no_task_hook_accepts(queue):
 
     async def note(_, event):
         await asyncio.sleep(0)
-        seen.append(event.get_kind())
+        seen.append(event.get_name())
 
     queue.on_event_async(note)
     key = queue.add_task("scan the corpus")
@@ -727,6 +804,22 @@ async def test_on_event_async_sees_the_kinds_no_task_hook_accepts(queue):
     await queue.finish_all_tasks()
 
     assert "task_created" in seen
+
+
+async def test_on_event_async_receives_named_events(queue):
+    seen = []
+
+    async def note(_, event):
+        await asyncio.sleep(0)
+        if event.get_name() == "document_indexed":
+            seen.append(event.get_name())
+
+    queue.on_event_async(note)
+    queue.emit_event(aw.Event("document_indexed"))
+
+    await queue.finish_all_tasks()
+
+    assert seen == ["document_indexed"]
 
 
 async def test_on_result_async_runs_the_handler_on_the_callers_event_loop(queue):

@@ -20,7 +20,7 @@ pub(crate) use text::Text;
 
 use crate::agents::policy::Policy;
 use crate::agents::stats::Stats;
-use crate::event::EventName;
+use crate::event::Event;
 use crate::schemas::Schema;
 
 const CONTEXT_TEMPLATE: &str = include_str!("context.md");
@@ -82,7 +82,7 @@ pub(crate) fn context_values(
         .unwrap_or_default();
     let turns = policy
         .max_turns
-        .map(|limit| u64::from(limit).saturating_sub(stats.event_count(EventName::TurnStarted)));
+        .map(|limit| u64::from(limit).saturating_sub(stats.event_count(Event::TURN_STARTED)));
     let input_tokens = policy
         .max_input_tokens
         .map(|limit| limit.saturating_sub(stats.input_tokens()));
@@ -164,23 +164,23 @@ fn format_current_date() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::event::EventKind;
+    use crate::event::Event;
     use crate::providers::TokenUsage;
     use std::path::PathBuf;
     use std::time::Duration;
 
-    fn turn() -> EventKind {
-        EventKind::TurnStarted
+    fn turn() -> Event {
+        Event::new(Event::TURN_STARTED)
     }
 
-    fn request(input_tokens: u64, output_tokens: u64) -> EventKind {
-        EventKind::RequestFinished {
-            model: "m".into(),
-            usage: TokenUsage {
+    fn request(input_tokens: u64, output_tokens: u64) -> Event {
+        Event::new(Event::REQUEST_FINISHED).data(serde_json::json!({
+            "model": "m",
+            "usage": TokenUsage {
                 input_tokens,
                 output_tokens,
             },
-        }
+        }))
     }
 
     #[test]
@@ -395,7 +395,7 @@ mod tests {
             max_time: Some(Duration::from_secs(3600)),
             ..Policy::default()
         };
-        let stats = Stats::of([EventKind::TaskStarted]);
+        let stats = Stats::of([Event::new(Event::TASK_STARTED)]);
 
         let rendered = context_body(&working_dir, &policy, &stats, "T-1");
 

@@ -31,7 +31,6 @@ fn _agentwerk(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<schema::PySchema>()?;
     m.add_class::<schema::PySchemaStore>()?;
     m.add_class::<event::PyEvent>()?;
-    m.add_function(wrap_pyfunction!(event::event_names, m)?)?;
     directives::register(m)?;
     m.add_class::<knowledge::PyKnowledge>()?;
     m.add_class::<knowledge::PyPages>()?;

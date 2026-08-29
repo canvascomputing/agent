@@ -3,7 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::event::EventKind;
+use crate::event::Event;
 use crate::persistence::Persist;
 use crate::schemas::SchemaViolations;
 
@@ -59,7 +59,11 @@ impl Queue {
         store.insert(key.clone(), task);
         drop(store);
         self.save_task(&key);
-        self.emit(&key, &reporter, EventKind::TaskCreated);
+        self.emit_event(
+            Event::new(Event::TASK_CREATED)
+                .task_key(&key)
+                .agent_id(&reporter),
+        );
         key
     }
 
@@ -121,7 +125,11 @@ impl Queue {
         self.save_task(&key);
         // Emitted here rather than from the loop: the claim is the moment a
         // task starts, so a host claiming one records it the same way.
-        self.emit(&key, agent_id, EventKind::TaskStarted);
+        self.emit_event(
+            Event::new(Event::TASK_STARTED)
+                .task_key(&key)
+                .agent_id(agent_id),
+        );
         Some(key)
     }
 
@@ -225,11 +233,11 @@ impl Queue {
         if !transitioned {
             return Ok(());
         }
-        let kind = match status {
-            Status::Finished => EventKind::TaskFinished,
-            _ => EventKind::TaskFailed,
+        let name = match status {
+            Status::Finished => Event::TASK_FINISHED,
+            _ => Event::TASK_FAILED,
         };
-        self.emit(key, agent, kind);
+        self.emit_event(Event::new(name).task_key(key).agent_id(agent));
         self.save_task(key);
         Ok(())
     }
@@ -293,12 +301,12 @@ impl Queue {
     ///
     /// ```no_run
     /// use agentwerk::Queue;
-    /// use agentwerk::event::EventKind;
+    /// use agentwerk::Event;
     /// use agentwerk::agents::tasks::{Reply, ReplyContent};
     ///
     /// let tasks = Queue::new();
     /// tasks.on_event(|queue, event| {
-    ///     if !matches!(event.get_kind(), EventKind::ToolCallFailed { .. }) {
+    ///     if event.get_name() != Event::TOOL_CALL_FAILED {
     ///         return;
     ///     }
     ///     queue.edit_replies(event.get_task_key(), |replies| {
@@ -366,8 +374,11 @@ impl Queue {
 mod tests {
     use super::super::test_util::*;
     use super::*;
-    use crate::event::EventName;
     use std::sync::{Arc, Mutex};
+
+    fn emit_event(queue: &Queue, key: &str, agent: &str, event: Event) -> Event {
+        queue.emit_event(event.task_key(key).agent_id(agent))
+    }
 
     #[test]
     fn task_creates_task_with_user_reporter() {
@@ -448,13 +459,13 @@ mod tests {
         queue.add_task("a");
         queue.add_task("b");
         queue.add_task("c");
-        assert_eq!(queue.stats.event_count(EventName::TaskCreated), 3);
+        assert_eq!(queue.stats.event_count(Event::TASK_CREATED), 3);
         queue.claim(&Query::from("t-1"), "agent");
         queue.set_finished_by("t-1", "agent").unwrap();
         queue.claim(&Query::from("t-2"), "agent");
         queue.set_task_failed("t-2").unwrap();
-        assert_eq!(queue.stats.event_count(EventName::TaskFinished), 1);
-        assert_eq!(queue.stats.event_count(EventName::TaskFailed), 1);
+        assert_eq!(queue.stats.event_count(Event::TASK_FINISHED), 1);
+        assert_eq!(queue.stats.event_count(Event::TASK_FAILED), 1);
     }
 
     #[test]
@@ -465,7 +476,7 @@ mod tests {
         queue.set_finished_by("t-1", "agent").unwrap();
         let lines = read_events_log(dir.path());
         assert_eq!(lines.len(), 3);
-        let names: Vec<&str> = lines.iter().map(|l| l["event"].as_str().unwrap()).collect();
+        let names: Vec<&str> = lines.iter().map(|l| l["name"].as_str().unwrap()).collect();
         assert_eq!(names, ["task_created", "task_started", "task_finished"]);
         for line in &lines {
             assert_eq!(line["task_key"], "t-1");
@@ -477,18 +488,18 @@ mod tests {
     fn streamed_chunks_stay_out_of_the_log() {
         let (queue, dir) = test_queue();
         queue.add_task("seed");
-        queue.emit(
+        emit_event(
+            &queue,
             "t-1",
             "agent",
-            EventKind::TextChunkReceived {
-                content: "a piece of the reply".into(),
-            },
+            Event::new(Event::TEXT_CHUNK_RECEIVED)
+                .data(serde_json::json!({ "content": "a piece of the reply" })),
         );
         // One line per token would outweigh every other line, and the replies
         // already hold the text.
         let lines = read_events_log(dir.path());
         assert_eq!(lines.len(), 1);
-        assert_eq!(lines[0]["event"], "task_created");
+        assert_eq!(lines[0]["name"], "task_created");
     }
 
     #[test]
@@ -497,16 +508,17 @@ mod tests {
         let original = Queue::new();
         original.set_dir(dir.path().to_path_buf());
         original.add_task("seed");
-        original.emit(
+        emit_event(
+            &original,
             "t-1",
             "agent",
-            EventKind::RequestFinished {
-                model: "m".into(),
-                usage: crate::providers::TokenUsage {
+            Event::new(Event::REQUEST_FINISHED).data(serde_json::json!({
+                "model": "m",
+                "usage": crate::providers::TokenUsage {
                     input_tokens: 900,
                     output_tokens: 120,
                 },
-            },
+            })),
         );
         drop(original);
 
@@ -524,8 +536,8 @@ mod tests {
         queue.set_task_failed("t-1").unwrap();
         let lines = read_events_log(dir.path());
         assert_eq!(lines.len(), 2);
-        assert_eq!(lines[0]["event"], "task_created");
-        assert_eq!(lines[1]["event"], "task_failed");
+        assert_eq!(lines[0]["name"], "task_created");
+        assert_eq!(lines[1]["name"], "task_failed");
         assert_eq!(lines[1]["task_key"], "t-1");
     }
 
@@ -535,7 +547,7 @@ mod tests {
         queue.add_task(Task::new("specific").label("alice"));
         let lines = read_events_log(dir.path());
         assert_eq!(lines.len(), 1);
-        assert_eq!(lines[0]["event"], "task_created");
+        assert_eq!(lines[0]["name"], "task_created");
         assert_eq!(lines[0]["label"], "alice");
     }
 
@@ -709,8 +721,8 @@ mod tests {
         queue.claim(&Query::from("status = Todo"), "alice");
         let lines = read_events_log(dir.path());
         assert_eq!(lines.len(), 2);
-        assert_eq!(lines[0]["event"], "task_created");
-        assert_eq!(lines[1]["event"], "task_started");
+        assert_eq!(lines[0]["name"], "task_created");
+        assert_eq!(lines[1]["name"], "task_started");
         assert_eq!(lines[1]["task_key"], "t-1");
         assert_eq!(lines[1]["agent_id"], "alice");
     }
@@ -986,9 +998,9 @@ mod tests {
         drop(original);
 
         let resumed = Queue::load(dir.path()).unwrap();
-        assert_eq!(resumed.stats.event_count(EventName::TaskCreated), 2);
-        assert_eq!(resumed.stats.event_count(EventName::TaskFinished), 1);
-        assert_eq!(resumed.stats.event_count(EventName::TaskFailed), 1);
+        assert_eq!(resumed.stats.event_count(Event::TASK_CREATED), 2);
+        assert_eq!(resumed.stats.event_count(Event::TASK_FINISHED), 1);
+        assert_eq!(resumed.stats.event_count(Event::TASK_FAILED), 1);
     }
     #[test]
     fn load_skips_dir_without_task_json() {
@@ -1152,14 +1164,14 @@ mod tests {
         let reporters = Arc::new(Mutex::new(Vec::new()));
         let seen = Arc::clone(&reporters);
         queue.on_event(move |_, event| {
-            if matches!(event.kind, EventKind::TaskCreated) {
+            if event.get_name() == Event::TASK_CREATED {
                 seen.lock().unwrap().push(event.agent_id.clone());
             }
         });
 
         queue.add_task("seed");
 
-        assert_eq!(queue.stats.event_count(EventName::TaskCreated), 1);
+        assert_eq!(queue.stats.event_count(Event::TASK_CREATED), 1);
         assert_eq!(*reporters.lock().unwrap(), vec!["user".to_string()]);
     }
 
@@ -1172,8 +1184,8 @@ mod tests {
         queue.set_task_failed(&key).unwrap();
 
         let stats = &queue.stats;
-        assert_eq!(stats.event_count(EventName::TaskFinished), 1);
-        assert_eq!(stats.event_count(EventName::TaskFailed), 0);
+        assert_eq!(stats.event_count(Event::TASK_FINISHED), 1);
+        assert_eq!(stats.event_count(Event::TASK_FAILED), 0);
     }
 
     #[test]

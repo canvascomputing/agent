@@ -2,7 +2,7 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::event::{EventName, PolicyViolation};
+use crate::event::{Event, PolicyViolation};
 
 use super::policy::Policy;
 use super::stats::Stats;
@@ -33,7 +33,7 @@ pub(crate) use task::{Replies, TaskResult};
 /// and the per-agent loop's pre-claim check.
 pub(crate) fn policy_violated(policy: &Policy, stats: &Stats) -> Option<(PolicyViolation, u64)> {
     if let Some(limit) = policy.max_turns {
-        if stats.event_count(EventName::TurnStarted) >= u64::from(limit) {
+        if stats.event_count(Event::TURN_STARTED) >= u64::from(limit) {
             return Some((PolicyViolation::Turns, u64::from(limit)));
         }
     }
@@ -88,7 +88,7 @@ mod tests {
         let stats = Stats::new();
         stats.record(&crate::event::Event {
             created_at: 1,
-            ..crate::event::Event::new("", "t-1", None, crate::event::EventKind::TaskStarted)
+            ..crate::event::Event::new(crate::event::Event::TASK_STARTED).task_key("t-1")
         });
         let trip = policy_violated(&policy, &stats);
         assert!(matches!(trip, Some((PolicyViolation::Time, _))));

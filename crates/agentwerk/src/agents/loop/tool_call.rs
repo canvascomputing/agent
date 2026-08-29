@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use crate::agents::tasks::Reply;
-use crate::event::{EventKind, PolicyViolation, RepairKind, ToolFailureKind};
+use crate::event::{Event, PolicyViolation, RepairKind, ToolFailureKind};
 use crate::providers::ContentBlock;
 use crate::tools::{ToolCall, ToolContext, ToolResult};
 
@@ -23,21 +23,25 @@ pub(super) async fn run(context: &mut TaskContext<'_>, mut calls: Vec<ToolCall>)
         };
         let registered = tool.get_name().to_string();
         if registered != call.name {
-            context.emit(EventKind::ResponseRepaired {
-                tool_name: registered.clone(),
-                reason: RepairKind::CallMalformed,
-                message: format!("resolved from `{}`", call.name),
-            });
+            context.emit_event(
+                Event::new(Event::RESPONSE_REPAIRED).data(serde_json::json!({
+                    "tool_name": registered,
+                    "reason": RepairKind::CallMalformed,
+                    "message": format!("resolved from `{}`", call.name),
+                })),
+            );
         }
         call.name = registered;
     }
 
     for call in &calls {
-        context.emit(EventKind::ToolCallStarted {
-            tool_name: call.name.clone(),
-            call_id: call.id.clone(),
-            input: call.input.clone(),
-        });
+        context.emit_event(
+            Event::new(Event::TOOL_CALL_STARTED).data(serde_json::json!({
+                "tool_name": call.name,
+                "call_id": call.id,
+                "input": call.input,
+            })),
+        );
     }
 
     let tool_context = ToolContext::new(context.agent.get_dir())
@@ -53,7 +57,7 @@ pub(super) async fn run(context: &mut TaskContext<'_>, mut calls: Vec<ToolCall>)
     let mut first_schema_failure: Option<String> = None;
     let mut offloaded = std::collections::HashMap::new();
     let mut blocks: Vec<ContentBlock> = Vec::with_capacity(results.len());
-    let mut kinds: Vec<EventKind> = Vec::with_capacity(results.len());
+    let mut events: Vec<Event> = Vec::with_capacity(results.len());
     for (call, result) in calls.iter().zip(results) {
         // Feeds the per-path open tally; empty for a tool that opens no file.
         let opened_paths = registry
@@ -70,20 +74,27 @@ pub(super) async fn run(context: &mut TaskContext<'_>, mut calls: Vec<ToolCall>)
                 // Any successful tool call is progress: clear the counter.
                 context.consecutive_schema_failures = 0;
                 for message in repaired {
-                    kinds.push(EventKind::ResponseRepaired {
-                        tool_name: call.name.clone(),
-                        reason: RepairKind::ValueMistyped,
-                        message,
-                    });
+                    events.push(
+                        Event::new(Event::RESPONSE_REPAIRED).data(serde_json::json!({
+                            "tool_name": call.name,
+                            "reason": RepairKind::ValueMistyped,
+                            "message": message,
+                        })),
+                    );
                 }
                 for path in opened_paths {
-                    kinds.push(EventKind::FileOpenFinished { path });
+                    events.push(
+                        Event::new(Event::FILE_OPEN_FINISHED)
+                            .data(serde_json::json!({ "path": path })),
+                    );
                 }
-                kinds.push(EventKind::ToolCallFinished {
-                    tool_name: call.name.clone(),
-                    call_id: call.id.clone(),
-                    output: content.clone(),
-                });
+                events.push(
+                    Event::new(Event::TOOL_CALL_FINISHED).data(serde_json::json!({
+                        "tool_name": call.name,
+                        "call_id": call.id,
+                        "output": content,
+                    })),
+                );
                 if let Some(path) = offload_path {
                     offloaded.insert(call.id.clone(), path);
                 }
@@ -101,14 +112,17 @@ pub(super) async fn run(context: &mut TaskContext<'_>, mut calls: Vec<ToolCall>)
                 // A path fails with the call that named it, so it carries the
                 // call's reason.
                 for path in opened_paths {
-                    kinds.push(EventKind::FileOpenFailed { path, reason: kind });
+                    events.push(
+                        Event::new(Event::FILE_OPEN_FAILED)
+                            .data(serde_json::json!({ "path": path, "reason": kind })),
+                    );
                 }
-                kinds.push(EventKind::ToolCallFailed {
-                    tool_name: call.name.clone(),
-                    call_id: call.id.clone(),
-                    reason: kind,
-                    message: content.clone(),
-                });
+                events.push(Event::new(Event::TOOL_CALL_FAILED).data(serde_json::json!({
+                    "tool_name": call.name,
+                    "call_id": call.id,
+                    "reason": kind,
+                    "message": content,
+                })));
                 content
             }
         };
@@ -122,11 +136,11 @@ pub(super) async fn run(context: &mut TaskContext<'_>, mut calls: Vec<ToolCall>)
     // The corrective message for a rejected call is already in its result, so
     // the reply carries nothing beyond the results themselves.
     if let Some(message) = first_schema_failure {
-        kinds.push(EventKind::SchemaRetried {
-            attempt: context.consecutive_schema_failures,
-            max_attempts: max_schema_retries,
-            message,
-        });
+        events.push(Event::new(Event::SCHEMA_RETRIED).data(serde_json::json!({
+            "attempt": context.consecutive_schema_failures,
+            "max_attempts": max_schema_retries,
+            "message": message,
+        })));
     }
 
     context
@@ -135,15 +149,15 @@ pub(super) async fn run(context: &mut TaskContext<'_>, mut calls: Vec<ToolCall>)
 
     // Emitted after the reply lands: a handler that rewrites this task's
     // replies must find the tool result the event announces.
-    for kind in kinds {
-        context.emit(kind);
+    for event in events {
+        context.emit_event(event);
     }
 
     if context.consecutive_schema_failures >= max_schema_retries {
-        context.emit(EventKind::PolicyViolated {
-            policy: PolicyViolation::MaxSchemaRetries,
-            limit: u64::from(max_schema_retries),
-        });
+        context.emit_event(Event::new(Event::POLICY_VIOLATED).data(serde_json::json!({
+            "policy": PolicyViolation::MaxSchemaRetries,
+            "limit": u64::from(max_schema_retries),
+        })));
         context.fail_task();
         return None;
     }
@@ -161,7 +175,7 @@ mod tests {
     use crate::agents::policy::Policy;
     use crate::agents::r#loop::test_util::*;
     use crate::agents::tasks::{Queue, Status, Task};
-    use crate::event::{EventKind, PolicyViolation, RepairKind};
+    use crate::event::{Event, RepairKind};
     use crate::schemas::Schema;
 
     #[tokio::test]
@@ -175,11 +189,11 @@ mod tests {
         assert_eq!(provider.requests(), 1);
         let done = events
             .iter()
-            .filter(|e| matches!(e.kind, EventKind::TaskFinished))
+            .filter(|e| e.get_name() == Event::TASK_FINISHED)
             .count();
         let failed = events
             .iter()
-            .filter(|e| matches!(e.kind, EventKind::TaskFailed))
+            .filter(|e| e.get_name() == Event::TASK_FAILED)
             .count();
         assert_eq!(done, 1);
         assert_eq!(failed, 0);
@@ -362,13 +376,9 @@ mod tests {
         let (events, _, task) = run_one(provider, 3, 2, Some(schema_for_partial_sum())).await;
 
         let policy_violated = events.iter().any(|e| {
-            matches!(
-                &e.kind,
-                EventKind::PolicyViolated {
-                    policy: PolicyViolation::MaxSchemaRetries,
-                    limit: 2,
-                },
-            )
+            e.get_name() == Event::POLICY_VIOLATED
+                && e.get_data()["policy"] == "max_schema_retries"
+                && e.get_data()["limit"] == 2
         });
         assert!(policy_violated, "expected MaxSchemaRetries PolicyViolated");
         assert_eq!(task.status, Status::Failed);
@@ -388,13 +398,11 @@ mod tests {
         let (events, _, task) = run_one(provider, 0, 3, None).await;
 
         assert!(
-            events.iter().any(|e| matches!(
-                &e.kind,
-                EventKind::PolicyViolated {
-                    policy: PolicyViolation::MaxSchemaRetries,
-                    limit: 3,
-                },
-            )),
+            events.iter().any(|e| {
+                e.get_name() == Event::POLICY_VIOLATED
+                    && e.get_data()["policy"] == "max_schema_retries"
+                    && e.get_data()["limit"] == 3
+            }),
             "expected MaxSchemaRetries PolicyViolated",
         );
         assert_eq!(task.status, Status::Failed);
@@ -411,9 +419,10 @@ mod tests {
         assert_eq!(task.status, Status::Finished);
         let names: Vec<&str> = events
             .iter()
-            .filter_map(|e| match &e.kind {
-                EventKind::ToolCallStarted { tool_name, .. } => Some(tool_name.as_str()),
-                _ => None,
+            .filter_map(|e| {
+                (e.get_name() == Event::TOOL_CALL_STARTED)
+                    .then(|| e.get_data()["tool_name"].as_str())
+                    .flatten()
             })
             .collect();
         assert_eq!(names, vec!["finish"]);
@@ -427,22 +436,23 @@ mod tests {
         ))]);
         let (events, _, _) = run_one(provider, 0, 3, None).await;
 
-        let repairs: Vec<(&str, RepairKind, &str)> = events
+        let repairs: Vec<(&str, &str, &str)> = events
             .iter()
-            .filter_map(|e| match &e.kind {
-                EventKind::ResponseRepaired {
-                    tool_name,
-                    reason,
-                    message,
-                } => Some((tool_name.as_str(), *reason, message.as_str())),
-                _ => None,
+            .filter_map(|e| {
+                (e.get_name() == Event::RESPONSE_REPAIRED).then(|| {
+                    Some((
+                        e.get_data()["tool_name"].as_str()?,
+                        e.get_data()["reason"].as_str()?,
+                        e.get_data()["message"].as_str()?,
+                    ))
+                })?
             })
             .collect();
         assert_eq!(
             repairs,
             vec![(
                 "finish",
-                RepairKind::CallMalformed,
+                RepairKind::CallMalformed.get_name(),
                 "resolved from `finish_tool`"
             )]
         );
@@ -455,7 +465,7 @@ mod tests {
 
         assert!(!events
             .iter()
-            .any(|e| matches!(e.kind, EventKind::ResponseRepaired { .. })));
+            .any(|e| e.get_name() == Event::RESPONSE_REPAIRED));
     }
 
     #[tokio::test]
@@ -467,22 +477,23 @@ mod tests {
         let (events, _, task) = run_one(provider, 3, 10, Some(schema_for_partial_sum())).await;
 
         assert_eq!(task.status, Status::Finished);
-        let repairs: Vec<(&str, RepairKind, &str)> = events
+        let repairs: Vec<(&str, &str, &str)> = events
             .iter()
-            .filter_map(|e| match &e.kind {
-                EventKind::ResponseRepaired {
-                    tool_name,
-                    reason,
-                    message,
-                } => Some((tool_name.as_str(), *reason, message.as_str())),
-                _ => None,
+            .filter_map(|e| {
+                (e.get_name() == Event::RESPONSE_REPAIRED).then(|| {
+                    Some((
+                        e.get_data()["tool_name"].as_str()?,
+                        e.get_data()["reason"].as_str()?,
+                        e.get_data()["message"].as_str()?,
+                    ))
+                })?
             })
             .collect();
         assert_eq!(
             repairs,
             vec![(
                 "finish",
-                RepairKind::ValueMistyped,
+                RepairKind::ValueMistyped.get_name(),
                 "/result/partial_sum retyped"
             )]
         );
@@ -532,13 +543,11 @@ mod tests {
             Status::Failed
         );
         let events = collected.lock().unwrap().clone();
-        assert!(events.iter().any(|e| matches!(
-            &e.kind,
-            EventKind::PolicyViolated {
-                policy: PolicyViolation::MaxSchemaRetries,
-                limit: 2,
-            },
-        )));
+        assert!(events.iter().any(|e| {
+            e.get_name() == Event::POLICY_VIOLATED
+                && e.get_data()["policy"] == "max_schema_retries"
+                && e.get_data()["limit"] == 2
+        }));
     }
 
     /// The whole reply-editing pattern rests on this: a handler that rewrites
@@ -575,7 +584,7 @@ mod tests {
         let stored: Arc<Mutex<Option<bool>>> = Arc::new(Mutex::new(None));
         let seen = Arc::clone(&stored);
         tasks.on_event(move |queue, event| {
-            if !matches!(event.kind, EventKind::ToolCallFailed { .. }) {
+            if event.get_name() != Event::TOOL_CALL_FAILED {
                 return;
             }
             let task = queue.get_task(&event.task_key).unwrap();

@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use crate::agents::retry::{ExponentialRetry, Retry};
-use crate::event::{CompactReason, EventKind, RepairKind};
+use crate::event::{CompactReason, Event, RepairKind};
 use crate::providers::types::StreamEvent;
 use crate::providers::{ContentBlock, ModelRequest, ProviderError};
 use crate::tools::ToolCall;
@@ -18,9 +18,9 @@ pub(super) async fn run(context: &mut TaskContext<'_>) -> Option<Step> {
     };
     let tools = context.tools.tools();
     let model_name = context.model.name.clone();
-    context.emit(EventKind::RequestStarted {
-        model: model_name.clone(),
-    });
+    context.emit_event(
+        Event::new(Event::REQUEST_STARTED).data(serde_json::json!({ "model": model_name })),
+    );
     let request = ModelRequest {
         model: model_name,
         system_prompt: context.system_prompt.clone(),
@@ -41,20 +41,24 @@ pub(super) async fn run(context: &mut TaskContext<'_>) -> Option<Step> {
             let task_key = context.task_key.clone();
             let queue = Arc::clone(context.queue);
             let emit_stream: Arc<dyn Fn(StreamEvent) + Send + Sync> = Arc::new(move |event| {
-                let kind = match event {
-                    StreamEvent::TextDelta { text, .. } => {
-                        EventKind::TextChunkReceived { content: text }
+                let event = match event {
+                    StreamEvent::TextDelta { text, .. } => Event::new(Event::TEXT_CHUNK_RECEIVED)
+                        .data(serde_json::json!({ "content": text })),
+                    StreamEvent::ToolCallRepaired { tool_name } => {
+                        Event::new(Event::RESPONSE_REPAIRED).data(serde_json::json!({
+                            "tool_name": tool_name,
+                            "reason": RepairKind::CallMalformed,
+                            "message": "rebuilt from text",
+                        }))
                     }
-                    StreamEvent::ToolCallRepaired { tool_name } => EventKind::ResponseRepaired {
-                        tool_name,
-                        reason: RepairKind::CallMalformed,
-                        message: "rebuilt from text".to_string(),
-                    },
                     StreamEvent::ToolCallDeclined { tool_name, reason } => {
-                        EventKind::ToolCallDeclined { tool_name, reason }
+                        Event::new(Event::TOOL_CALL_DECLINED).data(serde_json::json!({
+                            "tool_name": tool_name,
+                            "reason": reason,
+                        }))
                     }
                 };
-                queue.emit(&task_key, &agent_id, kind);
+                queue.emit_event(event.task_key(&task_key).agent_id(&agent_id));
             });
             tokio::select! {
                 biased;
@@ -70,13 +74,15 @@ pub(super) async fn run(context: &mut TaskContext<'_>) -> Option<Step> {
             Err(error) if error.is_retryable() => match retry.try_consume() {
                 Some(attempt) => {
                     let delay = retry.delay(error.retry_delay());
-                    context.emit(EventKind::RequestRetried {
-                        model: request.model.clone(),
-                        attempt,
-                        max_attempts: retry.max_attempts(),
-                        reason: error.kind(),
-                        message: error.to_string(),
-                    });
+                    context.emit_event(Event::new(Event::REQUEST_RETRIED).data(
+                        serde_json::json!({
+                            "model": request.model,
+                            "attempt": attempt,
+                            "max_attempts": retry.max_attempts(),
+                            "reason": error.kind(),
+                            "message": error.to_string(),
+                        }),
+                    ));
                     tokio::select! {
                         biased;
                         _ = context.run.until_draining() => return None,
@@ -102,10 +108,10 @@ pub(super) async fn run(context: &mut TaskContext<'_>) -> Option<Step> {
 
     // Emitted after the reply lands: a handler or a `finish` filter that
     // resolves the task must see the reply the event announces.
-    context.emit(EventKind::RequestFinished {
-        model: response.model.clone(),
-        usage: response.usage.clone(),
-    });
+    context.emit_event(Event::new(Event::REQUEST_FINISHED).data(serde_json::json!({
+        "model": response.model,
+        "usage": response.usage,
+    })));
 
     let calls: Vec<ToolCall> = response
         .content
@@ -376,7 +382,7 @@ mod tests {
     async fn request_retried_fires_after_backoff_sleep_not_before() {
         use crate::agents::agent::Agent;
         use crate::agents::tasks::Queue;
-        use crate::event::EventKind;
+        use crate::event::Event;
         use std::sync::{Arc, Mutex};
 
         let provider = MockProvider::with_results(vec![
@@ -416,7 +422,7 @@ mod tests {
                     .lock()
                     .unwrap()
                     .iter()
-                    .filter(|e| matches!(e.kind, EventKind::RequestRetried { .. }))
+                    .filter(|e| e.get_name() == Event::REQUEST_RETRIED)
                     .count()
             };
             assert_eq!(retries(), 1, "retry event fires immediately on Err");
@@ -494,7 +500,7 @@ mod tests {
 
     use crate::agents::agent::Agent;
     use crate::agents::tasks::{Queue, Reply, ReplyContent};
-    use crate::event::{Event, EventKind};
+    use crate::event::Event;
     use crate::providers::{ContentBlock, Message};
     use crate::tools::{Tool, ToolResult};
 
@@ -544,7 +550,7 @@ mod tests {
     /// fails: both the assistant's tool_use and the failed tool_result, so
     /// no unpaired block is left behind.
     fn drop_failed_exchange(queue: &Arc<Queue>, event: &Event) {
-        if !matches!(event.kind, EventKind::ToolCallFailed { .. }) {
+        if event.get_name() != Event::TOOL_CALL_FAILED {
             return;
         }
         queue.edit_replies(&event.task_key, |replies| {
@@ -593,7 +599,7 @@ mod tests {
     async fn an_event_handler_injects_a_message_into_the_next_request() {
         let (provider, _tasks, _dir) =
             run_boom(Some(Box::new(|queue: &Arc<Queue>, event: &Event| {
-                if !matches!(event.kind, EventKind::ToolCallFailed { .. }) {
+                if event.get_name() != Event::TOOL_CALL_FAILED {
                     return;
                 }
                 queue.edit_replies(&event.task_key, |replies| {
@@ -609,7 +615,7 @@ mod tests {
     async fn an_event_handler_rewrites_a_reply_in_place() {
         let (provider, _tasks, _dir) =
             run_boom(Some(Box::new(|queue: &Arc<Queue>, event: &Event| {
-                if !matches!(event.kind, EventKind::ToolCallFailed { .. }) {
+                if event.get_name() != Event::TOOL_CALL_FAILED {
                     return;
                 }
                 queue.edit_replies(&event.task_key, |replies| {

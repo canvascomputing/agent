@@ -20,7 +20,7 @@ async def test_runs_a_single_task_to_a_result(live_agent):
     reasons = []
     work.on_event(
         lambda _, event: reasons.append(event.get_data()["reason"])
-        if event.get_kind() == "run_finished"
+        if event.get_name() == "run_finished"
         else None
     )
     await work.finish_all_tasks()
@@ -63,7 +63,7 @@ async def test_invokes_a_python_tool_and_records_the_file_it_opened(tmp_path):
     opened = []
     work.on_event(
         lambda _, event: opened.append(event.get_data()["path"])
-        if event.get_kind() == aw.EventName.FILE_OPEN_FINISHED
+        if event.get_name() == aw.Event.FILE_OPEN_FINISHED
         else None
     )
     await work.finish_all_tasks()
@@ -76,7 +76,7 @@ async def test_runs_two_labeled_agents_with_events_and_chaining():
     queue = aw.Queue().set_policy(aw.Policy(max_turns=30))
 
     kinds = []
-    queue.on_event(lambda _, event: kinds.append(event.get_kind()))
+    queue.on_event(lambda _, event: kinds.append(event.get_name()))
 
     queue.add_agent(
         aw.Agent.from_env().label("a").role("Reply with one word: alpha")
@@ -106,7 +106,7 @@ async def test_saves_the_messages_of_a_finished_task(tmp_path):
     captured = []
 
     def capture(_, event, task):
-        if event.get_kind() == "task_finished":
+        if event.get_name() == "task_finished":
             model = queue.get_model_for_agent(event.get_agent_id())
             trajectory = aw.Trajectory.from_task(event.get_agent_id(), model, task)
             trajectory.save(str(tmp_path))
@@ -132,8 +132,8 @@ async def test_compaction_summarizes_the_replies_against_the_live_model(tmp_path
     queue.set_policy(aw.Policy(compaction_threshold=0.0))
     kinds = []
     queue.on_event(
-        lambda _, event: kinds.append(event.get_kind())
-        if event.get_kind().startswith("compaction_")
+        lambda _, event: kinds.append(event.get_name())
+        if event.get_name().startswith("compaction_")
         else None
     )
     queue.add_agent(

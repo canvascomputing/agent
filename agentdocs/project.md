@@ -45,7 +45,7 @@ tasks.add_task(Task::new("Audit src/db.").label("scan"));
 **The loop emits events. The caller decides what to do with them.**
 
 - No built-in UI, no required logging.
-- The event handler receives `Event { kind, ... }` at every lifecycle boundary.
+- The event handler receives `Event { name, data, ... }` at every lifecycle boundary.
 - The handler may log, forward, store, or discard each event.
 
 ## Correctness Over Convenience

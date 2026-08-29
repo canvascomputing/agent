@@ -38,19 +38,8 @@ from ._agentwerk import (
     TasksTool,
     FinishTool,
     CommandTool,
-    event_names,
     Directive,
 )
-
-# The names an `Event.kind` reports, as
-# constants rather than literals. Built from the crate's list so the two
-# cannot end up spelling a kind differently.
-EventName = type(
-    "EventName",
-    (),
-    {name.upper(): name for name in event_names()},
-)
-EventName.__doc__ = "Every event kind's name, the spelling `Event.kind` reports."
 
 
 def tool(
@@ -89,7 +78,6 @@ __all__ = [
     "Policy",
     "Directive",
     "Event",
-    "EventName",
     "Knowledge",
     "Model",
     "Page",

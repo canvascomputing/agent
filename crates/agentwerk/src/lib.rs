@@ -101,7 +101,6 @@ pub use schemas::SchemaStore;
 
 // Observation
 pub use event::Event;
-pub use event::EventKind;
 pub use event::FinishReason;
 
 // The public faces of `prompts`: what agentwerk tells the model when it has to

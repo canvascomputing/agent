@@ -3,9 +3,9 @@
 use std::fmt;
 use std::sync::Arc;
 
-use serde::{Deserialize, Serialize};
-
-use crate::providers::{RequestErrorKind, TokenUsage, ToolDeclineKind};
+use serde::de::Error as _;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde_json::{Map, Value};
 
 /// Why the older messages were summarized.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -27,7 +27,7 @@ impl fmt::Display for CompactReason {
     }
 }
 
-/// Which limit a [`EventKind::PolicyViolated`] refers to.
+/// Which limit a policy-violation event refers to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PolicyViolation {
@@ -59,7 +59,7 @@ impl fmt::Display for PolicyViolation {
 
 /// Why execution ended.
 ///
-/// Carried by [`EventKind::RunFinished`], and handed back by
+/// Carried by a run-finished event, and handed back by
 /// `Queue::finish_results` once the wait is over.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -84,9 +84,7 @@ impl fmt::Display for FinishReason {
     }
 }
 
-/// How a tool call failed, carried by [`EventKind::ToolCallFailed`] and by
-/// [`EventKind::FileOpenFailed`], since a path fails with the call that named
-/// it.
+/// How a tool call failed, carried by tool-call and file-open failure events.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum ToolFailureKind {
     /// No tool of that name is registered.
@@ -119,8 +117,7 @@ impl fmt::Display for ToolFailureKind {
     }
 }
 
-/// What was wrong with something the model sent, carried by
-/// [`EventKind::ResponseRepaired`]. Each variant names the defect, since the fix
+/// What was wrong with something the model sent. Each variant names the defect, since the fix
 /// already happened and the defect is what a prompt change would address.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum RepairKind {
@@ -151,8 +148,7 @@ impl fmt::Display for RepairKind {
     }
 }
 
-/// Why a knowledge operation did not go through, carried by
-/// [`EventKind::KnowledgeFailed`].
+/// Why a knowledge operation did not go through.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum KnowledgeFailureKind {
@@ -179,8 +175,7 @@ impl fmt::Display for KnowledgeFailureKind {
     }
 }
 
-/// Which action the store was asked for, carried by
-/// [`EventKind::KnowledgeFailed`]. A successful one is named by its own kind.
+/// Which action the store was asked for. A successful one is named by its own event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum KnowledgeAction {
@@ -209,56 +204,153 @@ impl fmt::Display for KnowledgeAction {
     }
 }
 
-/// An `Event` reports one thing that happened as agents work. It names the
-/// agent that produced it, the task it concerns, and what happened.
+/// One thing that happened as agents work. Agent and task attribution are
+/// optional and independent.
 ///
 /// ```no_run
-/// use agentwerk::Queue;
-/// use agentwerk::event::EventKind;
+/// use agentwerk::{Event, Queue};
+/// use serde_json::json;
 ///
-/// # async fn run() {
 /// let tasks = Queue::new();
-/// tasks.on_event(|_, event| {
-///     if let EventKind::TaskFinished = event.get_kind() {
-///         eprintln!("[{}] done {}", event.get_agent_id(), event.get_task_key());
-///     }
-/// });
-/// tasks.finish_all_tasks().await;
-/// # }
+/// tasks.emit_event(
+///     Event::new("document_indexed")
+///         .data(json!({ "documents": 42 }))
+///         .task_key("t-1")
+///         .agent_id("indexer-1"),
+/// );
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct Event {
+    /// The event name.
+    pub(crate) name: String,
+    /// The JSON value carried by the event.
+    pub(crate) data: Value,
+    /// Key of the task this event concerns, or empty when it has no task
+    /// context.
+    pub(crate) task_key: String,
+    /// Agent that produced the event, or empty when it has no agent context.
+    pub(crate) agent_id: String,
+    /// Label the task carries, so a handler counting per label reads it
+    /// without looking the task up. `None` when the event names no known task,
+    /// and when the task carries no label.
+    pub(crate) label: Option<String>,
     /// When this event happened, in milliseconds since the epoch.
     pub(crate) created_at: u64,
-    pub(crate) agent_id: String,
-    /// Key of the task this event concerns. Empty on `RunStarted` and
-    /// `RunFinished`, which no task owns.
-    pub(crate) task_key: String,
-    /// Label the task carries, so a handler counting per label reads it
-    /// without looking the task up. `None` when the event names no task,
-    /// and when the task carries no label.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) label: Option<String>,
-    /// Flattened, so one logged line carries the kind's name and its payload
-    /// beside the four fields here.
-    #[serde(flatten)]
-    pub(crate) kind: EventKind,
 }
 
 impl Event {
-    /// When this event happened, in milliseconds since the epoch.
-    pub fn get_created_at(&self) -> u64 {
-        self.created_at
+    pub const RUN_STARTED: &'static str = "run_started";
+    pub const RUN_FINISHED: &'static str = "run_finished";
+    pub const TASK_CREATED: &'static str = "task_created";
+    pub const TASK_STARTED: &'static str = "task_started";
+    pub const TASK_FINISHED: &'static str = "task_finished";
+    pub const TASK_FAILED: &'static str = "task_failed";
+    pub const TURN_STARTED: &'static str = "turn_started";
+    pub const REQUEST_STARTED: &'static str = "request_started";
+    pub const REQUEST_FINISHED: &'static str = "request_finished";
+    pub const REQUEST_FAILED: &'static str = "request_failed";
+    pub const REQUEST_RETRIED: &'static str = "request_retried";
+    pub const TEXT_CHUNK_RECEIVED: &'static str = "text_chunk_received";
+    pub const RESPONSE_REPAIRED: &'static str = "response_repaired";
+    pub const TOOL_CALL_DECLINED: &'static str = "tool_call_declined";
+    pub const TOOL_CALL_STARTED: &'static str = "tool_call_started";
+    pub const TOOL_CALL_FINISHED: &'static str = "tool_call_finished";
+    pub const TOOL_CALL_FAILED: &'static str = "tool_call_failed";
+    pub const FILE_OPEN_FINISHED: &'static str = "file_open_finished";
+    pub const FILE_OPEN_FAILED: &'static str = "file_open_failed";
+    pub const KNOWLEDGE_WRITTEN: &'static str = "knowledge_written";
+    pub const KNOWLEDGE_READ: &'static str = "knowledge_read";
+    pub const KNOWLEDGE_REMOVED: &'static str = "knowledge_removed";
+    pub const KNOWLEDGE_LISTED: &'static str = "knowledge_listed";
+    pub const KNOWLEDGE_FAILED: &'static str = "knowledge_failed";
+    pub const POLICY_VIOLATED: &'static str = "policy_violated";
+    pub const SCHEMA_RETRIED: &'static str = "schema_retried";
+    pub const COMPACTION_STARTED: &'static str = "compaction_started";
+    pub const COMPACTION_PROGRESS: &'static str = "compaction_progress";
+    pub const COMPACTION_FINISHED: &'static str = "compaction_finished";
+    pub const COMPACTION_FAILED: &'static str = "compaction_failed";
+
+    pub(crate) const BUILTIN_NAMES: &'static [&'static str] = &[
+        Self::RUN_STARTED,
+        Self::RUN_FINISHED,
+        Self::TASK_CREATED,
+        Self::TASK_STARTED,
+        Self::TASK_FINISHED,
+        Self::TASK_FAILED,
+        Self::TURN_STARTED,
+        Self::REQUEST_STARTED,
+        Self::REQUEST_FINISHED,
+        Self::REQUEST_FAILED,
+        Self::REQUEST_RETRIED,
+        Self::TEXT_CHUNK_RECEIVED,
+        Self::RESPONSE_REPAIRED,
+        Self::TOOL_CALL_DECLINED,
+        Self::TOOL_CALL_STARTED,
+        Self::TOOL_CALL_FINISHED,
+        Self::TOOL_CALL_FAILED,
+        Self::FILE_OPEN_FINISHED,
+        Self::FILE_OPEN_FAILED,
+        Self::KNOWLEDGE_WRITTEN,
+        Self::KNOWLEDGE_READ,
+        Self::KNOWLEDGE_REMOVED,
+        Self::KNOWLEDGE_LISTED,
+        Self::KNOWLEDGE_FAILED,
+        Self::POLICY_VIOLATED,
+        Self::SCHEMA_RETRIED,
+        Self::COMPACTION_STARTED,
+        Self::COMPACTION_PROGRESS,
+        Self::COMPACTION_FINISHED,
+        Self::COMPACTION_FAILED,
+    ];
+
+    /// Create an event with empty JSON-object data.
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            data: Value::Object(Map::new()),
+            task_key: String::new(),
+            agent_id: String::new(),
+            label: None,
+            created_at: 0,
+        }
     }
 
-    /// The agent that produced this event.
-    pub fn get_agent_id(&self) -> &str {
-        &self.agent_id
+    /// Set the JSON value carried by this event.
+    pub fn data(mut self, data: Value) -> Self {
+        self.data = data;
+        self
     }
 
-    /// The task this event concerns, or an empty string for run events.
+    /// Associate this event with a task key.
+    pub fn task_key(mut self, task_key: impl Into<String>) -> Self {
+        self.task_key = task_key.into();
+        self
+    }
+
+    /// Attribute this event to an agent id.
+    pub fn agent_id(mut self, agent_id: impl Into<String>) -> Self {
+        self.agent_id = agent_id.into();
+        self
+    }
+
+    /// The event name.
+    pub fn get_name(&self) -> &str {
+        &self.name
+    }
+
+    /// The JSON value carried by this event.
+    pub fn get_data(&self) -> &Value {
+        &self.data
+    }
+
+    /// The task this event concerns, or an empty string when omitted.
     pub fn get_task_key(&self) -> &str {
         &self.task_key
+    }
+
+    /// The agent that produced this event, or an empty string when omitted.
+    pub fn get_agent_id(&self) -> &str {
+        &self.agent_id
     }
 
     /// The task label captured by this event, if any.
@@ -266,333 +358,94 @@ impl Event {
         self.label.as_deref()
     }
 
-    /// What happened.
-    pub fn get_kind(&self) -> &EventKind {
-        &self.kind
+    /// When this event happened, in milliseconds since the epoch.
+    pub fn get_created_at(&self) -> u64 {
+        self.created_at
     }
+}
 
-    pub fn new(
-        agent_id: impl Into<String>,
-        task_key: impl Into<String>,
-        label: Option<String>,
-        kind: EventKind,
-    ) -> Self {
-        Self {
-            created_at: crate::agents::tasks::now_millis(),
-            agent_id: agent_id.into(),
-            task_key: task_key.into(),
+impl Serialize for Event {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut object = Map::new();
+        object.insert("name".into(), self.name.clone().into());
+        object.insert("data".into(), self.data.clone());
+        object.insert("task_key".into(), self.task_key.clone().into());
+        object.insert("agent_id".into(), self.agent_id.clone().into());
+        if let Some(label) = &self.label {
+            object.insert("label".into(), label.clone().into());
+        }
+        object.insert("created_at".into(), self.created_at.into());
+        object.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for Event {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let mut object = Map::<String, Value>::deserialize(deserializer)?;
+        let created_at = take_or(&mut object, "created_at", 0)?;
+        let agent_id = take_or(&mut object, "agent_id", String::new())?;
+        let task_key = take_or(&mut object, "task_key", String::new())?;
+        let label = match object.remove("label") {
+            Some(value) => serde_json::from_value(value).map_err(D::Error::custom)?,
+            None => None,
+        };
+        let (name, data) = match object.remove("name") {
+            Some(value) => {
+                let name: String = serde_json::from_value(value).map_err(D::Error::custom)?;
+                let data = object
+                    .remove("data")
+                    .unwrap_or_else(|| Value::Object(Map::new()));
+                (name, data)
+            }
+            None => {
+                let name: String = take(&mut object, "event")?;
+                let data = match object.remove("data") {
+                    Some(data) if object.is_empty() => data,
+                    Some(data) => {
+                        object.insert("data".into(), data);
+                        Value::Object(object)
+                    }
+                    None => Value::Object(object),
+                };
+                (name, data)
+            }
+        };
+        Ok(Self {
+            name,
+            data,
+            task_key,
+            agent_id,
             label,
-            kind,
-        }
+            created_at,
+        })
     }
 }
 
-/// What an [`Event`] reports.
-///
-/// Most kinds name the agent they came from on the wrapping [`Event`].
-/// `RunStarted` and `RunFinished` come from the `Queue` itself and
-/// arrive with an empty `agent_id`, as does `TaskFailed` when the host
-/// fails a task through `Queue::set_task_failed`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "event", rename_all = "snake_case")]
-pub enum EventKind {
-    /// Execution began.
-    RunStarted,
-    /// Execution ended, carrying the reason.
-    RunFinished { reason: FinishReason },
-    /// A task was filed. The agent id is its reporter.
-    TaskCreated,
-    /// An agent claimed a task.
-    TaskStarted,
-    /// A task finished successfully.
-    TaskFinished,
-    /// A task failed.
-    TaskFailed,
-    /// The agent began another turn on its task.
-    TurnStarted,
-    /// A request went out to the model.
-    RequestStarted { model: String },
-    /// A request finished and reported its token usage.
-    RequestFinished { model: String, usage: TokenUsage },
-    /// A request failed and was not retried. The task is about to fail.
-    RequestFailed {
-        model: String,
-        reason: RequestErrorKind,
-        message: String,
-    },
-    /// A transient provider error triggered a retry. `attempt` counts from one.
-    RequestRetried {
-        model: String,
-        attempt: u32,
-        max_attempts: u32,
-        reason: RequestErrorKind,
-        message: String,
-    },
-    /// A piece of the reply arrived.
-    TextChunkReceived { content: String },
-    /// A tool call or value the model created was invalid and was corrected
-    /// here, rather than asked for again. `message` says what was corrected.
-    /// Repeated repairs of one reason point at a prompt or tool description to
-    /// fix.
-    ResponseRepaired {
-        tool_name: String,
-        reason: RepairKind,
-        message: String,
-    },
-    /// A tool call proposed by the model was declined. `reason` says why it was
-    /// not promoted to a call that runs.
-    ToolCallDeclined {
-        tool_name: String,
-        reason: ToolDeclineKind,
-    },
-    /// A tool invocation began.
-    ToolCallStarted {
-        tool_name: String,
-        call_id: String,
-        input: serde_json::Value,
-    },
-    /// A tool invocation finished.
-    ToolCallFinished {
-        tool_name: String,
-        call_id: String,
-        output: String,
-    },
-    /// A tool invocation failed but the task continues. The message goes back
-    /// to the model as a tool result.
-    ToolCallFailed {
-        tool_name: String,
-        call_id: String,
-        reason: ToolFailureKind,
-        message: String,
-    },
-    /// A tool opened a file.
-    FileOpenFinished { path: String },
-    /// A tool could not open a file. The reason is the enclosing call's, since
-    /// a path fails with the call that named it.
-    FileOpenFailed {
-        path: String,
-        reason: ToolFailureKind,
-    },
-    /// A page was written.
-    KnowledgeWritten { slug: String },
-    /// A page was read.
-    KnowledgeRead { slug: String },
-    /// A page was removed.
-    KnowledgeRemoved { slug: String },
-    /// The pages were listed.
-    KnowledgeListed,
-    /// An action against the store did not go through.
-    KnowledgeFailed {
-        action: KnowledgeAction,
-        reason: KnowledgeFailureKind,
-    },
-    /// A limit was breached and execution stopped.
-    PolicyViolated { policy: PolicyViolation, limit: u64 },
-    /// A tool call or result the model created was invalid. The agent was asked
-    /// again; `attempt` counts from one.
-    SchemaRetried {
-        attempt: u32,
-        max_attempts: u32,
-        message: String,
-    },
-    /// Compaction is about to rewrite the older messages. `total` is how many
-    /// summaries the built-in summarizer intends to ask for, and `1` when an
-    /// editor is installed, since only the summarizer works in chunks.
-    CompactionStarted { reason: CompactReason, total: u32 },
-    /// Compaction finished part of the work. `completed` counts from one and
-    /// `total` repeats the matching `CompactionStarted`.
-    CompactionProgress {
-        reason: CompactReason,
-        completed: u32,
-        total: u32,
-    },
-    /// Compaction replaced the older messages with a summary.
-    CompactionFinished { reason: CompactReason },
-    /// Compaction could not finish. The task is about to fail the same way a
-    /// failed request ends it.
-    CompactionFailed {
-        reason: CompactReason,
-        message: String,
-    },
+fn take<T, E>(object: &mut Map<String, Value>, field: &'static str) -> Result<T, E>
+where
+    T: serde::de::DeserializeOwned,
+    E: serde::de::Error,
+{
+    let value = object
+        .remove(field)
+        .ok_or_else(|| E::missing_field(field))?;
+    serde_json::from_value(value).map_err(E::custom)
 }
 
-impl EventKind {
-    /// The stable snake_case spelling of this kind, as `events.jsonl` writes it.
-    pub fn get_name(&self) -> &'static str {
-        self.get_event_name().get_name()
-    }
-
-    /// Which count this event adds to.
-    pub fn get_event_name(&self) -> EventName {
-        match self {
-            EventKind::RunStarted => EventName::RunStarted,
-            EventKind::RunFinished { .. } => EventName::RunFinished,
-            EventKind::TaskCreated => EventName::TaskCreated,
-            EventKind::TaskStarted => EventName::TaskStarted,
-            EventKind::TaskFinished => EventName::TaskFinished,
-            EventKind::TaskFailed => EventName::TaskFailed,
-            EventKind::TurnStarted => EventName::TurnStarted,
-            EventKind::RequestStarted { .. } => EventName::RequestStarted,
-            EventKind::RequestFinished { .. } => EventName::RequestFinished,
-            EventKind::RequestFailed { .. } => EventName::RequestFailed,
-            EventKind::RequestRetried { .. } => EventName::RequestRetried,
-            EventKind::TextChunkReceived { .. } => EventName::TextChunkReceived,
-            EventKind::ResponseRepaired { .. } => EventName::ResponseRepaired,
-            EventKind::ToolCallDeclined { .. } => EventName::ToolCallDeclined,
-            EventKind::ToolCallStarted { .. } => EventName::ToolCallStarted,
-            EventKind::ToolCallFinished { .. } => EventName::ToolCallFinished,
-            EventKind::ToolCallFailed { .. } => EventName::ToolCallFailed,
-            EventKind::FileOpenFinished { .. } => EventName::FileOpenFinished,
-            EventKind::FileOpenFailed { .. } => EventName::FileOpenFailed,
-            EventKind::KnowledgeWritten { .. } => EventName::KnowledgeWritten,
-            EventKind::KnowledgeRead { .. } => EventName::KnowledgeRead,
-            EventKind::KnowledgeRemoved { .. } => EventName::KnowledgeRemoved,
-            EventKind::KnowledgeListed => EventName::KnowledgeListed,
-            EventKind::KnowledgeFailed { .. } => EventName::KnowledgeFailed,
-            EventKind::PolicyViolated { .. } => EventName::PolicyViolated,
-            EventKind::SchemaRetried { .. } => EventName::SchemaRetried,
-            EventKind::CompactionStarted { .. } => EventName::CompactionStarted,
-            EventKind::CompactionProgress { .. } => EventName::CompactionProgress,
-            EventKind::CompactionFinished { .. } => EventName::CompactionFinished,
-            EventKind::CompactionFailed { .. } => EventName::CompactionFailed,
-        }
-    }
-
-    /// Whether this kind reports something that went wrong. The kinds
-    /// `Queue::on_failure` fires on, so a handler on the plain event
-    /// chain can ask the same question.
-    pub fn is_failure(&self) -> bool {
-        matches!(
-            self,
-            EventKind::TaskFailed
-                | EventKind::RequestFailed { .. }
-                | EventKind::ToolCallFailed { .. }
-                | EventKind::FileOpenFailed { .. }
-                | EventKind::KnowledgeFailed { .. }
-                | EventKind::CompactionFailed { .. }
-        )
-    }
-}
-
-impl fmt::Display for EventKind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.get_name())
-    }
-}
-
-/// Which [`EventKind`] a count belongs to, without the payload the kind
-/// carries. Pass one to `Stats::event_count`; the snake_case spelling is the
-/// one `events.jsonl` uses.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum EventName {
-    RunStarted,
-    RunFinished,
-    TaskCreated,
-    TaskStarted,
-    TaskFinished,
-    TaskFailed,
-    TurnStarted,
-    RequestStarted,
-    RequestFinished,
-    RequestFailed,
-    RequestRetried,
-    TextChunkReceived,
-    ResponseRepaired,
-    ToolCallDeclined,
-    ToolCallStarted,
-    ToolCallFinished,
-    ToolCallFailed,
-    FileOpenFinished,
-    FileOpenFailed,
-    KnowledgeWritten,
-    KnowledgeRead,
-    KnowledgeRemoved,
-    KnowledgeListed,
-    KnowledgeFailed,
-    PolicyViolated,
-    SchemaRetried,
-    CompactionStarted,
-    CompactionProgress,
-    CompactionFinished,
-    CompactionFailed,
-}
-
-impl EventName {
-    /// Every name, in the order the kinds are declared.
-    pub const ALL: &'static [EventName] = &[
-        EventName::RunStarted,
-        EventName::RunFinished,
-        EventName::TaskCreated,
-        EventName::TaskStarted,
-        EventName::TaskFinished,
-        EventName::TaskFailed,
-        EventName::TurnStarted,
-        EventName::RequestStarted,
-        EventName::RequestFinished,
-        EventName::RequestFailed,
-        EventName::RequestRetried,
-        EventName::TextChunkReceived,
-        EventName::ResponseRepaired,
-        EventName::ToolCallDeclined,
-        EventName::ToolCallStarted,
-        EventName::ToolCallFinished,
-        EventName::ToolCallFailed,
-        EventName::FileOpenFinished,
-        EventName::FileOpenFailed,
-        EventName::KnowledgeWritten,
-        EventName::KnowledgeRead,
-        EventName::KnowledgeRemoved,
-        EventName::KnowledgeListed,
-        EventName::KnowledgeFailed,
-        EventName::PolicyViolated,
-        EventName::SchemaRetried,
-        EventName::CompactionStarted,
-        EventName::CompactionProgress,
-        EventName::CompactionFinished,
-        EventName::CompactionFailed,
-    ];
-
-    /// The stable snake_case spelling, the same one serde reads and writes.
-    pub fn get_name(&self) -> &'static str {
-        match self {
-            EventName::RunStarted => "run_started",
-            EventName::RunFinished => "run_finished",
-            EventName::TaskCreated => "task_created",
-            EventName::TaskStarted => "task_started",
-            EventName::TaskFinished => "task_finished",
-            EventName::TaskFailed => "task_failed",
-            EventName::TurnStarted => "turn_started",
-            EventName::RequestStarted => "request_started",
-            EventName::RequestFinished => "request_finished",
-            EventName::RequestFailed => "request_failed",
-            EventName::RequestRetried => "request_retried",
-            EventName::TextChunkReceived => "text_chunk_received",
-            EventName::ResponseRepaired => "response_repaired",
-            EventName::ToolCallDeclined => "tool_call_declined",
-            EventName::ToolCallStarted => "tool_call_started",
-            EventName::ToolCallFinished => "tool_call_finished",
-            EventName::ToolCallFailed => "tool_call_failed",
-            EventName::FileOpenFinished => "file_open_finished",
-            EventName::FileOpenFailed => "file_open_failed",
-            EventName::KnowledgeWritten => "knowledge_written",
-            EventName::KnowledgeRead => "knowledge_read",
-            EventName::KnowledgeRemoved => "knowledge_removed",
-            EventName::KnowledgeListed => "knowledge_listed",
-            EventName::KnowledgeFailed => "knowledge_failed",
-            EventName::PolicyViolated => "policy_violated",
-            EventName::SchemaRetried => "schema_retried",
-            EventName::CompactionStarted => "compaction_started",
-            EventName::CompactionProgress => "compaction_progress",
-            EventName::CompactionFinished => "compaction_finished",
-            EventName::CompactionFailed => "compaction_failed",
-        }
-    }
-}
-
-impl fmt::Display for EventName {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.get_name())
+fn take_or<T, E>(object: &mut Map<String, Value>, field: &'static str, default: T) -> Result<T, E>
+where
+    T: serde::de::DeserializeOwned,
+    E: serde::de::Error,
+{
+    match object.remove(field) {
+        Some(value) => serde_json::from_value(value).map_err(E::custom),
+        None => Ok(default),
     }
 }
 
@@ -603,78 +456,96 @@ impl fmt::Display for EventName {
 pub fn default_logger() -> Arc<dyn Fn(&Event) + Send + Sync> {
     Arc::new(|event: &Event| {
         let agent = &event.agent_id;
-        match &event.kind {
-            EventKind::RunStarted => {
-                eprintln!("run started");
+        match event.name.as_str() {
+            Event::RUN_STARTED => eprintln!("run started"),
+            Event::RUN_FINISHED => match data_str(event, "reason") {
+                Some(reason) => eprintln!("run finished: {reason}"),
+                None => eprintln!("run finished"),
+            },
+            Event::TASK_CREATED => eprintln!("[{agent}] created {}", event.task_key),
+            Event::TASK_STARTED => eprintln!("[{agent}] started {}", event.task_key),
+            Event::TASK_FINISHED => eprintln!("[{agent}] finished {}", event.task_key),
+            Event::TASK_FAILED => eprintln!("[{agent}] failed {}", event.task_key),
+            Event::TOOL_CALL_STARTED => {
+                if let (Some(tool_name), Some(input)) =
+                    (data_str(event, "tool_name"), event.data.get("input"))
+                {
+                    eprintln!("[{agent}] {tool_name}({})", compact_input(input));
+                }
             }
-            EventKind::RunFinished { reason } => {
-                eprintln!("run finished: {reason}");
+            Event::TOOL_CALL_FAILED => {
+                if let (Some(tool_name), Some(reason), Some(message)) = (
+                    data_str(event, "tool_name"),
+                    data_str(event, "reason"),
+                    data_str(event, "message"),
+                ) {
+                    eprintln!("[{agent}] {tool_name} failed ({reason}): {message}");
+                }
             }
-            EventKind::TaskCreated => {
-                eprintln!("[{agent}] created {}", event.task_key);
+            Event::REQUEST_FAILED => {
+                if let Some(message) = data_str(event, "message") {
+                    eprintln!("[{agent}] request failed: {message}");
+                }
             }
-            EventKind::TaskStarted => {
-                eprintln!("[{agent}] started {}", event.task_key);
+            Event::REQUEST_RETRIED | Event::SCHEMA_RETRIED => {
+                if let (Some(attempt), Some(max_attempts), Some(message)) = (
+                    data_u64(event, "attempt"),
+                    data_u64(event, "max_attempts"),
+                    data_str(event, "message"),
+                ) {
+                    let prefix = match event.name.as_str() {
+                        Event::REQUEST_RETRIED => "retry",
+                        _ => "schema retry",
+                    };
+                    eprintln!("[{agent}] {prefix} {attempt}/{max_attempts}: {message}");
+                }
             }
-            EventKind::TaskFinished => {
-                eprintln!("[{agent}] finished {}", event.task_key);
+            Event::POLICY_VIOLATED => {
+                if let (Some(policy), Some(limit)) =
+                    (data_str(event, "policy"), data_u64(event, "limit"))
+                {
+                    eprintln!("[{agent}] policy violated: {policy} limit={limit}");
+                }
             }
-            EventKind::TaskFailed => {
-                eprintln!("[{agent}] failed {}", event.task_key);
+            Event::COMPACTION_STARTED => {
+                if let (Some(reason), Some(total)) =
+                    (data_str(event, "reason"), data_u64(event, "total"))
+                {
+                    eprintln!("[{agent}] compacting context ({reason}): {total} chunks");
+                }
             }
-            EventKind::ToolCallStarted {
-                tool_name, input, ..
-            } => {
-                eprintln!("[{agent}] {tool_name}({})", compact_input(input));
+            Event::COMPACTION_PROGRESS => {
+                if let (Some(reason), Some(completed), Some(total)) = (
+                    data_str(event, "reason"),
+                    data_u64(event, "completed"),
+                    data_u64(event, "total"),
+                ) {
+                    eprintln!("[{agent}] compaction progress ({reason}): {completed}/{total}");
+                }
             }
-            EventKind::ToolCallFailed {
-                tool_name,
-                message,
-                reason,
-                ..
-            } => {
-                eprintln!("[{agent}] {tool_name} failed ({reason}): {message}");
+            Event::COMPACTION_FINISHED => {
+                if let Some(reason) = data_str(event, "reason") {
+                    eprintln!("[{agent}] context compacted ({reason})");
+                }
             }
-            EventKind::RequestFailed { message, .. } => {
-                eprintln!("[{agent}] request failed: {message}");
-            }
-            EventKind::RequestRetried {
-                attempt,
-                max_attempts,
-                message,
-                ..
-            } => {
-                eprintln!("[{agent}] retry {attempt}/{max_attempts}: {message}");
-            }
-            EventKind::SchemaRetried {
-                attempt,
-                max_attempts,
-                message,
-            } => {
-                eprintln!("[{agent}] schema retry {attempt}/{max_attempts}: {message}");
-            }
-            EventKind::PolicyViolated { policy, limit } => {
-                eprintln!("[{agent}] policy violated: {policy} limit={limit}");
-            }
-            EventKind::CompactionStarted { reason, total } => {
-                eprintln!("[{agent}] compacting context ({reason}): {total} chunks");
-            }
-            EventKind::CompactionProgress {
-                reason,
-                completed,
-                total,
-            } => {
-                eprintln!("[{agent}] compaction progress ({reason}): {completed}/{total}");
-            }
-            EventKind::CompactionFinished { reason } => {
-                eprintln!("[{agent}] context compacted ({reason})");
-            }
-            EventKind::CompactionFailed { reason, message } => {
-                eprintln!("[{agent}] compaction failed ({reason}): {message}");
+            Event::COMPACTION_FAILED => {
+                if let (Some(reason), Some(message)) =
+                    (data_str(event, "reason"), data_str(event, "message"))
+                {
+                    eprintln!("[{agent}] compaction failed ({reason}): {message}");
+                }
             }
             _ => {}
         }
     })
+}
+
+fn data_str<'a>(event: &'a Event, key: &str) -> Option<&'a str> {
+    event.data.get(key)?.as_str()
+}
+
+fn data_u64(event: &Event, key: &str) -> Option<u64> {
+    event.data.get(key)?.as_u64()
 }
 
 fn compact_input(input: &serde_json::Value) -> String {
@@ -691,183 +562,27 @@ fn compact_input(input: &serde_json::Value) -> String {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::providers::TokenUsage;
     use std::collections::BTreeSet;
 
-    pub(crate) fn all_variants() -> Vec<EventKind> {
-        vec![
-            EventKind::RunStarted,
-            EventKind::RunFinished {
-                reason: FinishReason::Drained,
-            },
-            EventKind::RunFinished {
-                reason: FinishReason::PolicyViolated(PolicyViolation::Time),
-            },
-            EventKind::RunFinished {
-                reason: FinishReason::Cancelled,
-            },
-            EventKind::TaskCreated,
-            EventKind::TaskStarted,
-            EventKind::TaskFinished,
-            EventKind::TaskFailed,
-            EventKind::TurnStarted,
-            EventKind::RequestStarted { model: "m".into() },
-            EventKind::RequestFinished {
-                model: "m".into(),
-                usage: TokenUsage::default(),
-            },
-            EventKind::RequestFailed {
-                model: "m".into(),
-                reason: RequestErrorKind::ConnectionFailed,
-                message: "timeout".into(),
-            },
-            EventKind::RequestRetried {
-                model: "m".into(),
-                attempt: 1,
-                max_attempts: 10,
-                reason: RequestErrorKind::ConnectionFailed,
-                message: "transient".into(),
-            },
-            EventKind::SchemaRetried {
-                attempt: 1,
-                max_attempts: 5,
-                message: "missing required field 'idx'".into(),
-            },
-            EventKind::TextChunkReceived {
-                content: "hello".into(),
-            },
-            EventKind::ResponseRepaired {
-                tool_name: "grep".into(),
-                reason: RepairKind::CallMalformed,
-                message: "rebuilt from text".into(),
-            },
-            EventKind::ToolCallDeclined {
-                tool_name: "grep".into(),
-                reason: ToolDeclineKind::OutputTruncated,
-            },
-            EventKind::ToolCallStarted {
-                tool_name: "bash".into(),
-                call_id: "c1".into(),
-                input: serde_json::json!({"cmd": "ls"}),
-            },
-            EventKind::ToolCallFinished {
-                tool_name: "bash".into(),
-                call_id: "c1".into(),
-                output: "file.txt".into(),
-            },
-            EventKind::ToolCallFailed {
-                tool_name: "bash".into(),
-                call_id: "c1".into(),
-                reason: ToolFailureKind::ToolNotFound,
-                message: "not found".into(),
-            },
-            EventKind::ToolCallFailed {
-                tool_name: "tasks".into(),
-                call_id: "c2".into(),
-                reason: ToolFailureKind::SchemaValidationFailed,
-                message: "Schema validation failed".into(),
-            },
-            EventKind::FileOpenFinished {
-                path: "src/lib.rs".into(),
-            },
-            EventKind::FileOpenFailed {
-                path: "src/missing.rs".into(),
-                reason: ToolFailureKind::ExecutionFailed,
-            },
-            EventKind::KnowledgeWritten {
-                slug: "notes".into(),
-            },
-            EventKind::KnowledgeRead {
-                slug: "notes".into(),
-            },
-            EventKind::KnowledgeRemoved {
-                slug: "notes".into(),
-            },
-            EventKind::KnowledgeListed,
-            EventKind::KnowledgeFailed {
-                action: KnowledgeAction::Read,
-                reason: KnowledgeFailureKind::PageMissing,
-            },
-            EventKind::PolicyViolated {
-                policy: PolicyViolation::Turns,
-                limit: 10,
-            },
-            EventKind::PolicyViolated {
-                policy: PolicyViolation::MaxSchemaRetries,
-                limit: 10,
-            },
-            EventKind::PolicyViolated {
-                policy: PolicyViolation::Time,
-                limit: 60_000,
-            },
-            EventKind::CompactionStarted {
-                reason: CompactReason::Proactive,
-                total: 3,
-            },
-            EventKind::CompactionProgress {
-                reason: CompactReason::Proactive,
-                completed: 1,
-                total: 3,
-            },
-            EventKind::CompactionFinished {
-                reason: CompactReason::Proactive,
-            },
-            EventKind::CompactionFailed {
-                reason: CompactReason::Reactive,
-                message: "summarize call failed".into(),
-            },
-        ]
+    pub(crate) fn all_events() -> Vec<Event> {
+        Event::BUILTIN_NAMES
+            .iter()
+            .map(|name| Event::new(*name))
+            .collect()
     }
 
     #[test]
-    fn default_logger_handles_every_variant() {
+    fn default_logger_handles_every_name_and_malformed_data() {
         let logger = default_logger();
-        for kind in all_variants() {
-            logger(&Event::new("agent", "T-1", None, kind));
+        for name in Event::BUILTIN_NAMES {
+            logger(&Event::new(*name).task_key("T-1").agent_id("agent"));
         }
     }
 
     #[test]
-    fn is_failure_covers_every_failed_kind() {
-        let failures: BTreeSet<&str> = all_variants()
-            .iter()
-            .filter(|kind| kind.is_failure())
-            .map(|kind| kind.get_name())
-            .collect();
-        assert_eq!(
-            failures,
-            BTreeSet::from([
-                "task_failed",
-                "request_failed",
-                "tool_call_failed",
-                "file_open_failed",
-                "knowledge_failed",
-                "compaction_failed",
-            ]),
-        );
-    }
-
-    #[test]
-    fn all_lists_the_name_of_every_event_kind() {
-        // The bindings build Python's EventName from ALL, so a variant missing
-        // here is a name Python never learns.
-        let named: BTreeSet<EventName> = all_variants()
-            .iter()
-            .map(EventKind::get_event_name)
-            .collect();
-        assert_eq!(named, EventName::ALL.iter().copied().collect());
-    }
-
-    #[test]
-    fn every_event_name_matches_its_serde_spelling() {
-        // `get_name()` is hand-written and `events.jsonl` is written by serde's
-        // rename_all, so the two have to agree or a logged event reloads under
-        // a name nothing asks for.
-        for kind in all_variants() {
-            let event = kind.get_event_name();
-            let spelled = serde_json::to_value(event).unwrap();
-            assert_eq!(spelled.as_str(), Some(event.get_name()));
-        }
+    fn built_in_event_names_are_unique() {
+        let names: BTreeSet<&str> = Event::BUILTIN_NAMES.iter().copied().collect();
+        assert_eq!(names.len(), Event::BUILTIN_NAMES.len());
     }
 
     #[test]
@@ -879,12 +594,71 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_logged_kind_names_itself_the_way_event_name_spells_it() {
-        for kind in all_variants() {
-            let name = kind.get_event_name();
-            let event = Event::new("agent", "t-1", None, kind);
+    fn a_logged_event_keeps_its_name() {
+        for name in Event::BUILTIN_NAMES {
+            let event = Event::new(*name).task_key("t-1").agent_id("agent");
             let line = serde_json::to_value(&event).unwrap();
-            assert_eq!(line["event"].as_str(), Some(name.get_name()));
+            assert_eq!(line["name"].as_str(), Some(*name));
         }
+    }
+
+    #[test]
+    fn event_builders_and_readers_follow_record_names() {
+        let event = Event::new("document_indexed")
+            .data(serde_json::json!({ "documents": 42 }))
+            .task_key("t-1")
+            .agent_id("indexer-1");
+        assert_eq!(event.get_name(), "document_indexed");
+        assert_eq!(event.get_data(), &serde_json::json!({ "documents": 42 }));
+        assert_eq!(event.get_task_key(), "t-1");
+        assert_eq!(event.get_agent_id(), "indexer-1");
+        assert_eq!(event.get_label(), None);
+        assert_eq!(event.get_created_at(), 0);
+    }
+
+    #[test]
+    fn new_event_records_serialize_with_name_and_data() {
+        let event = Event::new("document_indexed")
+            .data(serde_json::json!({ "documents": 42 }))
+            .task_key("t-1")
+            .agent_id("indexer-1");
+        assert_eq!(
+            serde_json::to_value(event).unwrap(),
+            serde_json::json!({
+                "name": "document_indexed",
+                "data": { "documents": 42 },
+                "task_key": "t-1",
+                "agent_id": "indexer-1",
+                "created_at": 0,
+            })
+        );
+    }
+
+    #[test]
+    fn legacy_flattened_built_in_events_still_load() {
+        let event: Event = serde_json::from_value(serde_json::json!({
+            "event": "request_finished",
+            "model": "small",
+            "usage": { "input_tokens": 12, "output_tokens": 3 },
+            "task_key": "t-1",
+            "agent_id": "worker-1",
+            "created_at": 100,
+        }))
+        .unwrap();
+        assert_eq!(event.get_name(), Event::REQUEST_FINISHED);
+        assert_eq!(event.get_data()["model"], "small");
+        assert_eq!(event.get_data()["usage"]["input_tokens"], 12);
+    }
+
+    #[test]
+    fn legacy_named_events_still_load() {
+        let event: Event = serde_json::from_value(serde_json::json!({
+            "event": "document_indexed",
+            "data": [1, 2, 3],
+            "created_at": 100,
+        }))
+        .unwrap();
+        assert_eq!(event.get_name(), "document_indexed");
+        assert_eq!(event.get_data(), &serde_json::json!([1, 2, 3]));
     }
 }

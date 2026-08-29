@@ -49,7 +49,7 @@ tasks.add_task(Task::new("Audit src/db."));               // the default scope
 - Every registered tool carries a compiled `Schema`, so a tool without one is unrepresentable. `ToolBuilder::schema` is the one place a document compiles, and it panics on one the compiler refuses, so a broken definition fails the build rather than a request.
 - `Schema::validate` is the only thing that rejects a call's arguments. It retypes what the schema names a type for, then checks what that produced, so the model reads back everything still wrong in one report per turn.
 - No tool checks its own arguments. A requirement that holds only for some values of a discriminator is stated with `allOf`/`if`/`then` in the tool's `.schema.json`; a rejection answers as a `ToolResult::Error` tagged `SchemaValidationFailed`.
-- The loop rewrites each call to the registered name before emitting `ToolCallStarted`, so `Event` and `Stats` never split one tool across spellings. Both repairs reach the host as `EventKind::ResponseRepaired` naming the tool, with `RepairKind::CallMalformed` for a folded name and `RepairKind::ValueMistyped` for a retyped value.
+- The loop rewrites each call to the registered name before emitting `tool_call_started`, so `Event` and `Stats` never split one tool across spellings. Both repairs reach the host as `response_repaired` events naming the tool, with `call_malformed` for a folded name and `value_mistyped` for a retyped value.
 - A name that resolves to nothing fails as `ToolFailureKind::ToolNotFound`, with a message naming every registered tool. Without that list each retry spends `max_schema_retries` until the task fails. A call the model wrote as text takes the same path.
 
 ## Every Directive Is a Catalogue Entry
@@ -91,7 +91,7 @@ Schemas and results:
 - A handover validates its `result` against the parent's schema and carries none for the child, which takes one from its handover label at claim. A mismatch aborts before the child is inserted, so the operation stays atomic.
 - `handover` and `task` are `finish`'s own arguments; the result is always `result`. A task schema declaring a property named `handover` needs no special case, because it sits inside `result`.
 - A successful finish writes `<dir>/tasks/<key>/result.json` (`Queue::dir(d)`, default `./.agentwerk`) and attaches the same value, read back through `Task::result()`. The full task state goes to `task.json` on every transition and the transition itself to `<dir>/events.jsonl`. Both writes are observational: errors are swallowed.
-- Failures are the plural mirror of the single result. `Queue::emit` pushes every failure event onto `Task::errors`, so a task accumulates the failed requests and tool calls it saw. A failure is not a transition: an entry lands whether or not the task goes on to fail, so a `Finished` task can carry some. Nothing is written for it: the line is already in `<dir>/events.jsonl`, and `Queue::load` folds the failures back onto each task in the one pass it makes over the log for `Stats`. `is_recorded_failure` is the single definition both paths read (`EventKind::is_failure()` bar the `TaskFailed` marker, which `status` and `failed_at` already carry), so a live task and a resumed one carry the same entries. There is no per-task errors file and no second writer to keep in step.
+- Failures are the plural mirror of the single result. `Queue::emit_event` pushes events with a failure name onto `Task::errors`, so a task accumulates the failed requests and tool calls it saw. A failure is not a transition: an entry lands whether or not the task goes on to fail, so a `Finished` task can carry some. Nothing is written for it: the line is already in `<dir>/events.jsonl`, and `Queue::load` folds the failures back onto each task in the one pass it makes over the log for `Stats`. There is no per-task errors file and no second writer to keep in step.
 
 ## Knowledge Is Opt-In and Shareable Across Agents
 
@@ -109,7 +109,7 @@ Schemas and results:
 
 **`Event` reports state. `ProviderError` reports a failed provider contract. The two channels carry independent information.**
 
-- State transitions exist only as `Event`. A failed request fires both `ProviderError` and a matching `Event` (`RequestFailed`, `PolicyViolated`).
+- Every state transition publishes an `Event`. A failed request fires both `ProviderError` and a matching `Event` (`RequestFailed`, `PolicyViolated`). `Event.name` is the sole semantic discriminator: caller-published built-in names receive the same hooks, statistics, and persistence behavior, but publication does not perform the associated transition.
 - A failed tool call is an `Event` alone: `ToolCallFailed` carries a `ToolFailureKind` and the model-visible message, which is all a tool failure is.
 - A model-fixable failure (wrong arguments, schema mismatch, missing file) goes back to the model as a `ToolResult::Error` content block. It still fires `ToolCallFailed` but does not stop the run.
 - Handlers MUST be cheap and non-blocking; the loop does not await them. The four `_async` twins are the exception, and the loop still never awaits: registering one only queues the event, and whichever `finish` is waiting drains it and awaits each handler on its own task. A handler that never returns therefore stalls the caller rather than an agent, and a `start()`-only host uses the blocking form.
@@ -118,7 +118,7 @@ Schemas and results:
 
 - Every other hook is built on that chain, so a host's logger and a hook coexist.
 - The queue is the first parameter of every handler. That is what let the `create_task_on_*` and `edit_replies_on_event` hooks go: a handler files its own follow-up work through `queue.add_task(..)`, rewrites what the model reads next through `queue.edit_replies(&event.task_key, ..)`, and selects what it needs through `queue.find_*`, without an `Arc` into the queue that holds it.
-- `on_result` filters to `TaskFinished` and unwraps the stored result, `on_failure` filters on `EventKind::is_failure`, and `on_task` filters to the three lifecycle kinds. Each resolves `event.task_key` to a cloned `Task` first, which is why none fires on every kind: resolving on `TextChunkReceived` would copy a task's whole replies once per chunk. The queuing hook the `_async` twins share resolves a task on those same kinds only, for the same reason.
+- `on_result` filters to `task_finished` and unwraps the stored result, `on_failure` filters to failure names, and `on_task` filters to the three lifecycle names. The event name activates these semantic hooks regardless of who published it. Each hook resolves the task only when needed, avoiding a full reply copy for every text chunk.
 - An event that announces a reply is emitted after that reply has landed in the store: `RequestFinished` after the assistant reply, `ToolCallFinished` and `ToolCallFailed` after the tool results of their turn. A handler therefore finds the message the event names, and what it rewrites through `queue.edit_replies` reaches the next request.
 - `RunStarted`, `RunFinished { reason }`, and a host-driven `set_failed` are emitted by the queue itself and arrive with an empty `agent_id`.
 
@@ -191,15 +191,17 @@ tasks.find_events("tool_call_failed AND created > -1h");
 
 ## Every Event Is Logged, Statistics Are Folded From It
 
-**`Queue::emit` folds every event into the crate-private `Stats` and appends it to `events.jsonl`, `TextChunkReceived` aside. A host reads the log back through `Queue::find_events`; the crate counts only what a limit check needs.**
+**`Queue::emit_event` is the single public and internal publication path. It stamps the time, resolves a known task's label, folds the event into crate-private `Stats`, and appends it to `events.jsonl`, `TextChunkReceived` aside. A host reads the log back through `Queue::find_events`; the crate counts only what a limit check needs.**
 
-- `emit` writes the line before firing observers, so the log holds what every handler saw. One line per streamed token would outweigh every other line and repeats what `replies.jsonl` already carries, which is why the chunk kinds are excluded.
+- Publication preserves one order: statistics, live streams, persistence, failure attachment, then handlers. The line is written before observers fire, so the log holds what every handler saw. One line per streamed token would outweigh every other line and repeats what `replies.jsonl` already carries, which is why `text_chunk_received` is excluded.
+- `Event::new(name)` creates a generic record with empty object data. `.data(value)`, `.task_key(key)`, and `.agent_id(id)` replace those values; task and agent context are optional and independent. Built-in names use lowercase snake case; application names are stored unchanged and matched exactly.
+- New log lines store `name` and `data`; the loader also accepts legacy lines that used `event` with flattened built-in data.
 - The write is best-effort, and a line this build cannot parse is skipped rather than costing every line after it, so a log written by another version still reports.
 - `find_events(condition)` reads the log; a count is `.len()` and any breakdown is a fold. `get_input_tokens()`, `get_output_tokens()`, and `get_duration()` stay off the counters, because the limit check reads the same ones every 50ms.
 - The two sources can disagree, by design: delete the log mid-run and the three totals keep reporting while the finders find nothing.
 - `RequestFinished` is the one kind whose payload the statistics read: its `usage` adds to the two token totals. Every other kind contributes its count and nothing else.
 - `execution_duration` spans the first `TaskStarted` to the `RunFinished`, or to now while the run is going. `TaskStarted` is emitted from `claim`, so a host claiming a task without running the loop still starts the clock. `Queue::load` restarts it: `max_time` bounds the run resuming the session, not the one that wrote the log.
-- Breakdowns are the host's, not the crate's. Per tool, per model, per file, per agent, or per label is a fold, on the `on_event` chain or over `find_events` afterwards, which is why an `Event` carries `agent_id`, `task_key`, and the task's `label` alongside the kind.
+- Breakdowns are the host's, not the crate's. Per tool, per model, per file, per agent, or per label is a fold, on the `on_event` chain or over `find_events` afterwards, which is why an `Event` carries `agent_id`, `task_key`, and the task's `label` alongside its name and data.
 - `Stats::record` is the single writer and takes the whole `Event`, so a live queue and `Stats::load` arrive at the same figures and a run never keeps a second set of counters. The per-task token series (`usage_for_task`) stays crate-internal, because compaction clears it and a caller would read a silently truncated series.
 
 ## Persistence Routes Through One Trait
@@ -218,7 +220,7 @@ tasks.find_events("tool_call_failed AND created > -1h");
 
 ## Policy Is Per-Queue, Checked at Turn Boundaries
 
-**A run stops cleanly when any limit on `Policy` is breached. The check fires `EventKind::PolicyViolated` and exits the per-agent task.**
+**A run stops cleanly when any limit on `Policy` is breached. The check emits `Event::POLICY_VIOLATED` and exits the per-agent task.**
 
 - The loop calls `policy_violated` at each iteration; a non-`None` return takes the agent off the queue.
 - Token budgets read from the queue's live `Stats`; `max_time` reads from `Policy` and from `Stats::execution_duration()`. `get_finish_reason` reports the matching `FinishReason::PolicyViolated(violation)` once the run has ended.

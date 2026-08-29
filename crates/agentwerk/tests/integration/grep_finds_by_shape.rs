@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 
 use super::common;
 
-use agentwerk::event::{default_logger, Event, EventKind};
+use agentwerk::event::{default_logger, Event};
 use agentwerk::tools::GrepTool;
 use agentwerk::{Agent, Policy, Queue};
 
@@ -40,13 +40,11 @@ async fn grep_lists_unknown_function_names() -> std::result::Result<(), Box<dyn 
     let collected = Arc::clone(&calls);
     let logger = default_logger();
     let event_handler = Arc::new(move |e: &Event| {
-        if let EventKind::ToolCallStarted {
-            tool_name, input, ..
-        } = e.get_kind()
-        {
+        if e.get_name() == Event::TOOL_CALL_STARTED {
+            let data = e.get_data();
             collected.lock().unwrap().push(CapturedCall {
-                name: tool_name.clone(),
-                input: input.clone(),
+                name: data["tool_name"].as_str().unwrap().to_string(),
+                input: data["input"].clone(),
             });
         }
         logger(e);

@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use crate::agents::compaction::{self as algo, Compaction};
 use crate::agents::tasks::Task;
-use crate::event::{CompactReason, EventKind};
+use crate::event::{CompactReason, Event};
 
 use super::agent::TaskContext;
 use super::Step;
@@ -17,21 +17,25 @@ pub(super) async fn run(context: &mut TaskContext<'_>, reason: CompactReason) ->
     };
     let window = context.model.get_context_window();
     let total = algo::chunks_for_window(&task.to_messages(), window).len() as u32;
-    context.emit(EventKind::CompactionStarted { reason, total });
+    context.emit_event(
+        Event::new(Event::COMPACTION_STARTED)
+            .data(serde_json::json!({ "reason": reason, "total": total })),
+    );
 
     let on_progress: Arc<dyn Fn(u32, u32) + Send + Sync> = {
         let queue = Arc::clone(context.queue);
         let agent_id = context.agent.get_id().to_string();
         let task_key = context.task_key.clone();
         Arc::new(move |completed, total| {
-            queue.emit(
-                &task_key,
-                &agent_id,
-                EventKind::CompactionProgress {
-                    reason,
-                    completed,
-                    total,
-                },
+            queue.emit_event(
+                Event::new(Event::COMPACTION_PROGRESS)
+                    .data(serde_json::json!({
+                        "reason": reason,
+                        "completed": completed,
+                        "total": total,
+                    }))
+                    .task_key(&task_key)
+                    .agent_id(&agent_id),
             );
         })
     };
@@ -50,10 +54,10 @@ pub(super) async fn run(context: &mut TaskContext<'_>, reason: CompactReason) ->
     let edited = match algo::summarize_replies(compaction, replies.clone()).await {
         Ok(edited) => edited,
         Err(error) => {
-            context.emit(EventKind::CompactionFailed {
-                reason,
-                message: error.to_string(),
-            });
+            context.emit_event(
+                Event::new(Event::COMPACTION_FAILED)
+                    .data(serde_json::json!({ "reason": reason, "message": error.to_string() })),
+            );
             context.fail_task();
             return None;
         }
@@ -70,15 +74,19 @@ pub(super) async fn run(context: &mut TaskContext<'_>, reason: CompactReason) ->
     }
 
     if !applied && matches!(reason, CompactReason::Reactive) {
-        context.emit(EventKind::CompactionFailed {
-            reason,
-            message: "context still exceeds window after compaction".into(),
-        });
+        context.emit_event(
+            Event::new(Event::COMPACTION_FAILED).data(serde_json::json!({
+                "reason": reason,
+                "message": "context still exceeds window after compaction",
+            })),
+        );
         context.fail_task();
         return None;
     }
 
-    context.emit(EventKind::CompactionFinished { reason });
+    context.emit_event(
+        Event::new(Event::COMPACTION_FINISHED).data(serde_json::json!({ "reason": reason })),
+    );
     match reason {
         // Proactive skips Evaluate, which would re-trigger its own threshold.
         CompactReason::Proactive => Some(Step::Request),
@@ -112,9 +120,9 @@ mod tests {
     ) -> usize {
         events
             .iter()
-            .filter(|e| match &e.kind {
-                crate::event::EventKind::CompactionStarted { reason, .. } => *reason == expected,
-                _ => false,
+            .filter(|e| {
+                e.get_name() == crate::event::Event::COMPACTION_STARTED
+                    && e.get_data()["reason"] == expected.to_string()
             })
             .count()
     }
@@ -125,9 +133,9 @@ mod tests {
     ) -> usize {
         events
             .iter()
-            .filter(|e| match &e.kind {
-                crate::event::EventKind::CompactionFinished { reason } => *reason == expected,
-                _ => false,
+            .filter(|e| {
+                e.get_name() == crate::event::Event::COMPACTION_FINISHED
+                    && e.get_data()["reason"] == expected.to_string()
             })
             .count()
     }
@@ -150,15 +158,15 @@ mod tests {
 
         let started_idx = events
             .iter()
-            .position(|e| matches!(&e.kind, crate::event::EventKind::CompactionStarted { .. }))
+            .position(|e| e.get_name() == crate::event::Event::COMPACTION_STARTED)
             .expect("compaction must have started");
         let finished_idx = events
             .iter()
-            .position(|e| matches!(&e.kind, crate::event::EventKind::CompactionFinished { .. }))
+            .position(|e| e.get_name() == crate::event::Event::COMPACTION_FINISHED)
             .expect("compaction must have finished");
         let request_failed_idx = events
             .iter()
-            .position(|e| matches!(&e.kind, crate::event::EventKind::RequestFailed { .. }))
+            .position(|e| e.get_name() == crate::event::Event::REQUEST_FAILED)
             .expect("the task must surface a request failure");
         assert!(started_idx < finished_idx);
         assert!(finished_idx < request_failed_idx);
@@ -282,7 +290,7 @@ mod tests {
         );
         let task_failed_count = events
             .iter()
-            .filter(|e| matches!(&e.kind, crate::event::EventKind::TaskFailed))
+            .filter(|e| e.get_name() == crate::event::Event::TASK_FAILED)
             .count();
         assert_eq!(task_failed_count, 1);
     }
@@ -302,7 +310,7 @@ mod tests {
         );
         let task_failed_count = events
             .iter()
-            .filter(|e| matches!(&e.kind, crate::event::EventKind::TaskFailed))
+            .filter(|e| e.get_name() == crate::event::Event::TASK_FAILED)
             .count();
         assert_eq!(task_failed_count, 1);
     }
@@ -369,17 +377,17 @@ mod tests {
 
         let started_idx = events
             .iter()
-            .position(|e| matches!(&e.kind, crate::event::EventKind::CompactionStarted { .. }))
+            .position(|e| e.get_name() == crate::event::Event::COMPACTION_STARTED)
             .expect("compaction must start");
         let finished_idx = events
             .iter()
-            .position(|e| matches!(&e.kind, crate::event::EventKind::CompactionFinished { .. }))
+            .position(|e| e.get_name() == crate::event::Event::COMPACTION_FINISHED)
             .expect("compaction must finish");
         let request_started: Vec<usize> = events
             .iter()
             .enumerate()
             .filter_map(|(i, e)| {
-                matches!(&e.kind, crate::event::EventKind::RequestStarted { .. }).then_some(i)
+                (e.get_name() == crate::event::Event::REQUEST_STARTED).then_some(i)
             })
             .collect();
         assert!(request_started.len() >= 2);
@@ -405,13 +413,13 @@ mod tests {
             compaction_starts(&events, crate::event::CompactReason::Proactive),
             1
         );
-        assert!(events.iter().any(|e| matches!(
-            &e.kind,
-            crate::event::EventKind::CompactionFailed {
-                reason: crate::event::CompactReason::Proactive,
-                message,
-            } if message.contains("rate limited"),
-        )),);
+        assert!(events.iter().any(|e| {
+            e.get_name() == crate::event::Event::COMPACTION_FAILED
+                && e.get_data()["reason"] == "proactive"
+                && e.get_data()["message"]
+                    .as_str()
+                    .is_some_and(|message| message.contains("rate limited"))
+        }));
         assert!(retries_in(&events).is_empty());
         let failures = failures_in(&events);
         assert!(!failures.is_empty());

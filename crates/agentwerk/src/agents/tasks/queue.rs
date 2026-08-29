@@ -12,7 +12,7 @@ use std::time::Duration;
 use tokio::sync::{broadcast, watch};
 use tokio::task::JoinHandle;
 
-use crate::event::{default_logger, Event, EventKind, FinishReason};
+use crate::event::{default_logger, Event, FinishReason};
 use crate::persistence::Persist;
 use crate::schemas::SchemaStore;
 
@@ -41,25 +41,37 @@ type AsyncHandler = dyn Fn(Arc<Queue>, Event, Option<Task>) -> HandlerWork + Sen
 /// Boxed so the queue can hold handlers with different future types.
 type HandlerWork = Pin<Box<dyn Future<Output = ()> + Send>>;
 
-/// The kinds that name a task the whole hook is about, as opposed to one
+/// The names that identify events whose whole subject is a task, as opposed to one
 /// step inside it.
-fn is_task_kind(kind: &EventKind) -> bool {
+fn is_task_event(event: &Event) -> bool {
     matches!(
-        kind,
-        EventKind::TaskStarted | EventKind::TaskFinished | EventKind::TaskFailed
+        event.name.as_str(),
+        Event::TASK_STARTED | Event::TASK_FINISHED | Event::TASK_FAILED
+    )
+}
+
+fn is_failure(event: &Event) -> bool {
+    matches!(
+        event.name.as_str(),
+        Event::TASK_FAILED
+            | Event::REQUEST_FAILED
+            | Event::TOOL_CALL_FAILED
+            | Event::FILE_OPEN_FAILED
+            | Event::KNOWLEDGE_FAILED
+            | Event::COMPACTION_FAILED
     )
 }
 
 /// `TaskFailed` is left out: it is the outcome, already carried by the
 /// task's status and `failed_at`, not a cause.
-fn is_recorded_failure(kind: &EventKind) -> bool {
-    kind.is_failure() && !matches!(kind, EventKind::TaskFailed)
+fn is_recorded_failure(event: &Event) -> bool {
+    is_failure(event) && event.name != Event::TASK_FAILED
 }
 
-/// An awaited handler and the kinds it accepts. The filter is read twice: once
+/// An awaited handler and the events it accepts. The filter is read twice: once
 /// to decide whether the event is worth queueing at all, once at handover.
 struct AwaitedHandler {
-    matches: fn(&EventKind) -> bool,
+    matches: fn(&Event) -> bool,
     call: Arc<AsyncHandler>,
 }
 
@@ -67,11 +79,11 @@ struct AwaitedHandler {
 /// when the event landed.
 type Delivery = (Event, Option<Task>);
 
-/// `emit` runs on an agent that has to carry on, so an event an awaited handler
+/// `emit_event` runs on an agent that has to carry on, so an event an awaited handler
 /// wants is only queued here; whichever `finish` is waiting drains it and awaits
 /// the handlers.
 ///
-/// `queued` and `draining` are separate locks because `emit` pushes without
+/// `queued` and `draining` are separate locks because `emit_event` pushes without
 /// awaiting, while the drain guard is held across handler awaits.
 #[derive(Default)]
 pub(super) struct AwaitedEvents {
@@ -344,7 +356,7 @@ impl Queue {
         let stats = Stats::new();
         let _ = Stats::for_each_event(&tasks_dir, |event| {
             stats.record(event);
-            if is_recorded_failure(&event.kind) {
+            if is_recorded_failure(event) {
                 if let Some(task) = tasks.get_mut(&event.task_key) {
                     task.errors.push(event.clone());
                 }
@@ -408,11 +420,10 @@ impl Queue {
     /// results and files follow-up work without holding one of its own.
     ///
     /// ```no_run
-    /// # use agentwerk::{Task, Queue};
-    /// # use agentwerk::event::EventKind;
+    /// # use agentwerk::{Event, Task, Queue};
     /// let tasks = Queue::new();
     /// tasks.on_event(|queue, event| {
-    ///     if matches!(event.get_kind(), EventKind::TaskFailed) {
+    ///     if event.get_name() == Event::TASK_FAILED {
     ///         queue.add_task(Task::labeled("triage", "Look into the failure."));
     ///     }
     /// });
@@ -432,7 +443,7 @@ impl Queue {
     /// work that has to stay serialized against the caller's own, such as a
     /// commit, can be.
     ///
-    /// Every kind reaches it, `TextChunkReceived` included, and each event
+    /// Every event reaches it, `TextChunkReceived` included, and each event
     /// waits in memory until a `finish` drains it. A host that streams a long
     /// reply and only calls [`Self::start`] uses `on_event`.
     ///
@@ -444,7 +455,7 @@ impl Queue {
     /// # async fn run() {
     /// let tasks = Queue::new();
     /// tasks.on_event_async(|_, event| async move {
-    ///     println!("{:?}", event.get_kind());
+    ///     println!("{}", event.get_name());
     /// });
     /// tasks.finish_all_tasks().await;
     /// # }
@@ -462,12 +473,12 @@ impl Queue {
 
     /// The filter-resolve-call shape the task handlers share. The queue is
     /// handed in so one that files follow-up work needs no upgrade of its own.
-    fn on_task_event<F>(&self, matches: fn(&EventKind) -> bool, handler: F) -> &Self
+    fn on_task_event<F>(&self, matches: fn(&Event) -> bool, handler: F) -> &Self
     where
         F: Fn(&Arc<Self>, &Event, &Task) + Send + Sync + 'static,
     {
         self.on_event(move |queue, event| {
-            if !matches(&event.kind) {
+            if !matches(event) {
                 return;
             }
             let Some(task) = queue.get_task(&event.task_key) else {
@@ -497,7 +508,7 @@ impl Queue {
         F: Fn(&Arc<Queue>, &Task, &serde_json::Value) + Send + Sync + 'static,
     {
         self.on_task_event(
-            |kind| matches!(kind, EventKind::TaskFinished),
+            |event| event.name == Event::TASK_FINISHED,
             move |queue, _, finished| {
                 let Some(result) = &finished.result else {
                     return;
@@ -535,7 +546,7 @@ impl Queue {
         Fut: Future<Output = ()> + Send + 'static,
     {
         self.on_awaited(
-            |kind| matches!(kind, EventKind::TaskFinished),
+            |event| event.name == Event::TASK_FINISHED,
             move |queue, _, finished| match finished.and_then(|t| t.result.clone().map(|r| (t, r)))
             {
                 Some((task, result)) => Box::pin(handler(queue, task, result)),
@@ -548,18 +559,17 @@ impl Queue {
     /// `TaskFailed`, `RequestFailed`, `ToolCallFailed`, `FileOpenFailed`,
     /// `KnowledgeFailed`, and `CompactionFailed`.
     ///
-    /// Match on `event.get_kind()` to tell a failure that ends the task from one
+    /// Read `event.get_name()` to tell a failure that ends the task from one
     /// the agent works around. Each call copies the task's replies, so an
     /// agent that fails many tool calls pays that copy once per failure.
     ///
     /// ```no_run
-    /// # use agentwerk::{Task, Queue};
-    /// # use agentwerk::event::EventKind;
+    /// # use agentwerk::{Event, Task, Queue};
     /// let tasks = Queue::new();
     /// tasks.on_failure(|queue, event, failed| {
     ///     // Count the attempts yourself, or a task that fails every time
     ///     // re-queues itself forever.
-    ///     if matches!(event.get_kind(), EventKind::TaskFailed) && failed.get_parent().is_none() {
+    ///     if event.get_name() == Event::TASK_FAILED && failed.get_parent().is_none() {
     ///         queue.add_task(Task::new(failed.get_task().clone()).parent(failed.get_key()));
     ///     }
     /// });
@@ -568,7 +578,7 @@ impl Queue {
     where
         F: Fn(&Arc<Queue>, &Event, &Task) + Send + Sync + 'static,
     {
-        self.on_task_event(EventKind::is_failure, handler)
+        self.on_task_event(is_failure, handler)
     }
 
     /// Read every failure together with the task it happened in, in a handler
@@ -583,13 +593,10 @@ impl Queue {
         F: Fn(Arc<Queue>, Event, Task) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = ()> + Send + 'static,
     {
-        self.on_awaited(
-            EventKind::is_failure,
-            move |queue, event, task| match task {
-                Some(task) => Box::pin(handler(queue, event, task)),
-                None => Box::pin(std::future::ready(())),
-            },
-        )
+        self.on_awaited(is_failure, move |queue, event, task| match task {
+            Some(task) => Box::pin(handler(queue, event, task)),
+            None => Box::pin(std::future::ready(())),
+        })
     }
 
     /// Read a task as it starts, finishes, or fails.
@@ -603,7 +610,7 @@ impl Queue {
     where
         F: Fn(&Arc<Queue>, &Event, &Task) + Send + Sync + 'static,
     {
-        self.on_task_event(is_task_kind, handler)
+        self.on_task_event(is_task_event, handler)
     }
 
     /// Read a task as it starts, finishes, or fails, in a handler
@@ -618,15 +625,15 @@ impl Queue {
         F: Fn(Arc<Queue>, Event, Task) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = ()> + Send + 'static,
     {
-        self.on_awaited(is_task_kind, move |queue, event, task| match task {
+        self.on_awaited(is_task_event, move |queue, event, task| match task {
             Some(task) => Box::pin(handler(queue, event, task)),
             None => Box::pin(std::future::ready(())),
         })
     }
 
-    /// Register an awaited handler and make sure the kinds it accepts are being
+    /// Register an awaited handler and make sure the events it accepts are being
     /// queued for it.
-    fn on_awaited<F>(&self, matches: fn(&EventKind) -> bool, call: F) -> &Self
+    fn on_awaited<F>(&self, matches: fn(&Event) -> bool, call: F) -> &Self
     where
         F: Fn(Arc<Queue>, Event, Option<Task>) -> HandlerWork + Send + Sync + 'static,
     {
@@ -653,7 +660,7 @@ impl Queue {
                     .lock()
                     .unwrap()
                     .iter()
-                    .any(|handler| (handler.matches)(&event.kind));
+                    .any(|handler| (handler.matches)(event));
                 if !anyone_wants_it {
                     return;
                 }
@@ -661,7 +668,7 @@ impl Queue {
                 // task as it was when the event landed. Only for the kinds a
                 // task-shaped hook accepts: resolving copies every reply,
                 // which on `TextChunkReceived` would cost once per piece.
-                let task = match is_task_kind(&event.kind) || EventKind::is_failure(&event.kind) {
+                let task = match is_task_event(event) || is_failure(event) {
                     true => queue.get_task(&event.task_key),
                     false => None,
                 };
@@ -679,7 +686,7 @@ impl Queue {
     /// behind it. One is taken per lock, so a `finish` dropped mid-handover, by
     /// a timeout or a panic, loses only the event it was on.
     async fn await_handlers(&self) {
-        let handlers: Vec<(fn(&EventKind) -> bool, Arc<AsyncHandler>)> = self
+        let handlers: Vec<(fn(&Event) -> bool, Arc<AsyncHandler>)> = self
             .awaited_events
             .handlers
             .lock()
@@ -702,17 +709,17 @@ impl Queue {
                 return;
             };
             for (matches, call) in &handlers {
-                if matches(&event.kind) {
+                if matches(&event) {
                     call(Arc::clone(&queue), event.clone(), task.clone()).await;
                 }
             }
         }
     }
 
-    /// Publish `kind` and hand back the event it became, so a caller that also
-    /// acts on it works from what every observer saw.
-    pub(crate) fn emit(&self, key: &str, agent: &str, kind: EventKind) -> Event {
-        let event = Event::new(agent, key, self.label_for(key), kind);
+    /// Publish an event and hand back what every observer saw.
+    pub fn emit_event(&self, mut event: Event) -> Event {
+        event.created_at = super::now_millis();
+        event.label = self.label_for(&event.task_key);
         self.stats.record(&event);
         // Published before the handlers run: a `finish` waiter competes
         // with them for nothing, and no handler can swallow the event. The
@@ -721,18 +728,18 @@ impl Queue {
         if self.event_stream.receiver_count() > 0 {
             let _ = self.event_stream.send(event.clone());
         }
-        // The chunk kinds are the exception: one per streamed token would
+        // Text chunks are the exception: one per streamed token would
         // outweigh every other line and repeats what `replies.jsonl` holds.
-        if !matches!(event.kind, EventKind::TextChunkReceived { .. }) {
+        if event.name != Event::TEXT_CHUNK_RECEIVED {
             let _guard = self.events_lock.lock().unwrap();
             let _ = Stats::append(&self.get_dir(), &event);
         }
         // Pushed before the handlers run, so one receiving the task sees
         // it. Nothing is written: the line is already in `events.jsonl`, and
         // `load` reads it back from there.
-        if is_recorded_failure(&event.kind) {
+        if is_recorded_failure(&event) {
             let mut store = self.tasks.lock().unwrap();
-            if let Some(task) = store.get_mut(key) {
+            if let Some(task) = store.get_mut(&event.task_key) {
                 task.errors.push(event.clone());
             }
         }
@@ -1148,7 +1155,7 @@ impl Queue {
             .weak_self
             .upgrade()
             .expect("Queue dropped during start");
-        self.emit("", "", EventKind::RunStarted);
+        self.emit_event(Event::new(Event::RUN_STARTED));
         let join = tokio::spawn(async move { run_main_loop(&supervisor).await });
         *self.join_handle.lock().unwrap() = Some(join);
         self
@@ -1335,6 +1342,19 @@ mod tests {
     use super::super::test_util::*;
     use super::*;
     use crate::event::ToolFailureKind;
+
+    fn emit_event(queue: &Queue, key: &str, agent: &str, event: Event) -> Event {
+        queue.emit_event(event.task_key(key).agent_id(agent))
+    }
+
+    fn tool_call_failed(message: &str) -> Event {
+        Event::new(Event::TOOL_CALL_FAILED).data(serde_json::json!({
+            "tool_name": "grep",
+            "call_id": "c1",
+            "reason": ToolFailureKind::ExecutionFailed,
+            "message": message,
+        }))
+    }
 
     #[test]
     fn queue_handle_is_shared_between_caller_and_added_agent() {
@@ -1652,7 +1672,7 @@ mod tests {
         queue.add_task("b");
         queue.claim(&Query::from("t-1"), "alice");
 
-        let created = queue.find_events(|e: &Event| matches!(e.kind, EventKind::TaskCreated));
+        let created = queue.find_events(|e: &Event| e.name == Event::TASK_CREATED);
         assert_eq!(created.len(), 2);
         assert_eq!(created[0].task_key, "t-1");
         assert_eq!(created[1].task_key, "t-2");
@@ -1664,7 +1684,7 @@ mod tests {
         let (queue, _tmp) = test_queue();
         queue.add_task("a");
         assert!(queue
-            .find_events(|e: &Event| matches!(e.kind, EventKind::RunFinished { .. }))
+            .find_events(|e: &Event| e.name == Event::RUN_FINISHED)
             .is_empty());
     }
 
@@ -1680,10 +1700,10 @@ mod tests {
         queue.add_task("a");
         queue.add_task("b");
 
-        let first = queue.find_event(|e: &Event| matches!(e.kind, EventKind::TaskCreated));
+        let first = queue.find_event(|e: &Event| e.name == Event::TASK_CREATED);
         assert_eq!(first.unwrap().task_key, "t-1");
         assert!(queue
-            .find_event(|e: &Event| matches!(e.kind, EventKind::TaskFailed))
+            .find_event(|e: &Event| e.name == Event::TASK_FAILED)
             .is_none());
     }
 
@@ -1699,6 +1719,132 @@ mod tests {
         assert_eq!(queue.find_events("event = task_started").len(), 1);
         assert_eq!(queue.find_events("agent = scout-1").len(), 1);
         assert!(queue.find_events("run_finished").is_empty());
+    }
+
+    #[test]
+    fn emit_event_accepts_each_optional_context_shape() {
+        let (queue, _tmp) = test_queue();
+        let key = queue.add_task(Task::new("work").label("scan"));
+
+        let global = queue.emit_event(Event::new("global_ready").data(serde_json::json!(null)));
+        let agent = queue.emit_event(
+            Event::new("agent_ready")
+                .data(serde_json::json!(null))
+                .agent_id("scout-1"),
+        );
+        let task = queue.emit_event(
+            Event::new("task_ready")
+                .data(serde_json::json!(null))
+                .task_key(&key),
+        );
+        let both = queue.emit_event(
+            Event::new("work_ready")
+                .data(serde_json::json!(null))
+                .task_key(&key)
+                .agent_id("scout-1"),
+        );
+        let unknown = queue.emit_event(Event::new("unknown_task_ready").task_key("t-404"));
+
+        assert!(global.created_at > 0);
+        assert_eq!(
+            (&global.agent_id, &global.task_key, &global.label),
+            (&"".into(), &"".into(), &None)
+        );
+        assert_eq!(
+            (&agent.agent_id, &agent.task_key, &agent.label),
+            (&"scout-1".into(), &"".into(), &None)
+        );
+        assert_eq!(
+            (&task.agent_id, &task.task_key, &task.label),
+            (&"".into(), &key, &Some("scan".into()))
+        );
+        assert_eq!(
+            (&both.agent_id, &both.task_key, &both.label),
+            (&"scout-1".into(), &key, &Some("scan".into()))
+        );
+        assert_eq!(unknown.label, None);
+    }
+
+    #[test]
+    fn a_named_event_round_trips_through_the_log_and_aql() {
+        let dir = crate::test_util::TempDir::new().unwrap();
+        let queue = Queue::new();
+        queue.set_dir(dir.path().to_path_buf());
+        queue.emit_event(
+            Event::new("Document Indexed").data(serde_json::json!({ "documents": 42 })),
+        );
+
+        let line = std::fs::read_to_string(dir.path().join("events.jsonl")).unwrap();
+        let wire: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
+        assert_eq!(wire["name"], "Document Indexed");
+        assert_eq!(wire["data"], serde_json::json!({ "documents": 42 }));
+        assert_eq!(wire["agent_id"], "");
+        assert_eq!(wire["task_key"], "");
+        assert!(wire.get("event").is_none());
+
+        drop(queue);
+
+        let resumed = Queue::load(dir.path()).unwrap();
+        let found = resumed.find_event(r#"event = "Document Indexed""#).unwrap();
+        assert_eq!(found.get_name(), "Document Indexed");
+        assert_eq!(found.get_data(), &serde_json::json!({ "documents": 42 }));
+    }
+
+    #[test]
+    fn named_events_do_not_fire_task_result_or_failure_hooks() {
+        let (queue, _tmp) = test_queue();
+        let key = queue.add_task("work");
+        let event_calls = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::clone(&event_calls);
+        queue.on_event(move |_, _| {
+            observed.fetch_add(1, Ordering::Relaxed);
+        });
+        let calls = Arc::new(AtomicUsize::new(0));
+        let task_calls = Arc::clone(&calls);
+        queue.on_task(move |_, _, _| {
+            task_calls.fetch_add(1, Ordering::Relaxed);
+        });
+        let result_calls = Arc::clone(&calls);
+        queue.on_result(move |_, _, _| {
+            result_calls.fetch_add(1, Ordering::Relaxed);
+        });
+        let failure_calls = Arc::clone(&calls);
+        queue.on_failure(move |_, _, _| {
+            failure_calls.fetch_add(1, Ordering::Relaxed);
+        });
+
+        queue.emit_event(Event::new("work_noted").task_key(key));
+
+        assert_eq!(calls.load(Ordering::Relaxed), 0);
+        assert_eq!(event_calls.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn an_emitted_builtin_uses_name_based_hooks_without_changing_task_state() {
+        let (queue, _tmp) = test_queue();
+        let key = queue.add_task("work");
+        queue
+            .set_result(&key, serde_json::json!("reported"))
+            .unwrap();
+        let task_calls = Arc::new(AtomicUsize::new(0));
+        let seen = Arc::clone(&task_calls);
+        queue.on_task(move |_, _, _| {
+            seen.fetch_add(1, Ordering::Relaxed);
+        });
+        let seen = Arc::clone(&task_calls);
+        queue.on_result(move |_, _, _| {
+            seen.fetch_add(1, Ordering::Relaxed);
+        });
+        let seen = Arc::clone(&task_calls);
+        queue.on_failure(move |_, _, _| {
+            seen.fetch_add(1, Ordering::Relaxed);
+        });
+
+        queue.emit_event(Event::new(Event::TASK_FINISHED).task_key(&key));
+
+        assert_eq!(queue.get_task(&key).unwrap().status, Status::Todo);
+        assert_eq!(queue.find_events("event = task_finished").len(), 1);
+        assert_eq!(task_calls.load(Ordering::Relaxed), 2);
     }
 
     #[test]
@@ -1737,17 +1883,17 @@ mod tests {
     fn a_condition_naming_a_streamed_chunk_never_matches() {
         let (queue, _tmp) = test_queue();
         queue.add_task("a");
-        queue.emit(
+        emit_event(
+            &queue,
             "t-1",
             "alice",
-            EventKind::TextChunkReceived {
-                content: "a piece of the reply".into(),
-            },
+            Event::new(Event::TEXT_CHUNK_RECEIVED)
+                .data(serde_json::json!({ "content": "a piece of the reply" })),
         );
 
         // Chunks are deliberately left out of the log, so nothing finds them.
         assert!(queue
-            .find_events(|e: &Event| matches!(e.kind, EventKind::TextChunkReceived { .. }))
+            .find_events(|e: &Event| e.name == Event::TEXT_CHUNK_RECEIVED)
             .is_empty());
     }
 
@@ -1757,16 +1903,17 @@ mod tests {
         // down. Deleting the log separates the two.
         let (queue, dir) = test_queue();
         queue.add_task("a");
-        queue.emit(
+        emit_event(
+            &queue,
             "t-1",
             "alice",
-            EventKind::RequestFinished {
-                model: "m".into(),
-                usage: crate::providers::TokenUsage {
+            Event::new(Event::REQUEST_FINISHED).data(serde_json::json!({
+                "model": "m",
+                "usage": crate::providers::TokenUsage {
                     input_tokens: 900,
                     output_tokens: 120,
                 },
-            },
+            })),
         );
 
         std::fs::remove_file(dir.path().join("events.jsonl")).unwrap();
@@ -1774,6 +1921,21 @@ mod tests {
         assert_eq!(queue.get_input_tokens(), 900);
         assert_eq!(queue.get_output_tokens(), 120);
         assert!(queue.find_events(|_: &Event| true).is_empty());
+    }
+
+    #[test]
+    fn malformed_builtin_data_still_publishes_without_changing_derived_statistics() {
+        let (queue, _tmp) = test_queue();
+
+        let emitted = queue.emit_event(
+            Event::new(Event::REQUEST_FINISHED).data(serde_json::json!({ "usage": "unknown" })),
+        );
+
+        assert_eq!(emitted.get_name(), Event::REQUEST_FINISHED);
+        assert_eq!(queue.stats.event_count(Event::REQUEST_FINISHED), 1);
+        assert_eq!(queue.get_input_tokens(), 0);
+        assert_eq!(queue.get_output_tokens(), 0);
+        assert_eq!(queue.find_events("event = request_finished").len(), 1);
     }
 
     #[test]
@@ -1834,16 +1996,16 @@ mod tests {
         let l2 = Arc::clone(&log);
         queue.on_event(move |_, _| l1.lock().unwrap().push(1));
         queue.on_event(move |_, _| l2.lock().unwrap().push(2));
-        queue.emit("KEY", "agent", EventKind::TurnStarted);
+        emit_event(&queue, "KEY", "agent", Event::new(Event::TURN_STARTED));
         assert_eq!(*log.lock().unwrap(), vec![1, 2]);
     }
 
     #[test]
     fn on_event_falls_back_to_default_logger_when_empty() {
         // No assertion target beyond "does not panic": with no installed
-        // handlers, emit() must run default_logger without crashing.
+        // handlers, emit_event() must run default_logger without crashing.
         let (queue, _tmp) = test_queue();
-        queue.emit("KEY", "agent", EventKind::TurnStarted);
+        emit_event(&queue, "KEY", "agent", Event::new(Event::TURN_STARTED));
     }
 
     #[test]
@@ -1854,7 +2016,7 @@ mod tests {
         let outcomes = Arc::new(Mutex::new(Vec::new()));
         let seen = Arc::clone(&outcomes);
         queue.on_event(move |_, event| {
-            if matches!(event.kind, EventKind::TaskFinished) {
+            if event.name == Event::TASK_FINISHED {
                 seen.lock()
                     .unwrap()
                     .push((event.agent_id.clone(), event.label.clone()));
@@ -1953,28 +2115,19 @@ mod tests {
             record
                 .lock()
                 .unwrap()
-                .push((event.kind.get_name(), task.key.clone()))
+                .push((event.get_name().to_string(), task.key.clone()))
         });
         let key = queue.add_task("work");
 
-        queue.emit(&key, "agent", EventKind::TurnStarted);
-        queue.emit(
-            &key,
-            "agent",
-            EventKind::ToolCallFailed {
-                tool_name: "grep".into(),
-                call_id: "c1".into(),
-                reason: ToolFailureKind::ExecutionFailed,
-                message: "no such directory".into(),
-            },
-        );
+        emit_event(&queue, &key, "agent", Event::new(Event::TURN_STARTED));
+        emit_event(&queue, &key, "agent", tool_call_failed("no such directory"));
         queue.set_task_failed(&key).unwrap();
 
         assert_eq!(
             *seen.lock().unwrap(),
             vec![
-                ("tool_call_failed", key.clone()),
-                ("task_failed", key.clone()),
+                ("tool_call_failed".to_string(), key.clone()),
+                ("task_failed".to_string(), key.clone()),
             ]
         );
     }
@@ -1984,28 +2137,24 @@ mod tests {
         let (queue, dir) = test_queue();
         let key = queue.add_task("work");
 
-        queue.emit(
+        emit_event(&queue, &key, "agent", tool_call_failed("no such directory"));
+        emit_event(
+            &queue,
             &key,
             "agent",
-            EventKind::ToolCallFailed {
-                tool_name: "grep".into(),
-                call_id: "c1".into(),
-                reason: ToolFailureKind::ExecutionFailed,
-                message: "no such directory".into(),
-            },
-        );
-        queue.emit(
-            &key,
-            "agent",
-            EventKind::RequestFailed {
-                model: "mock".into(),
-                reason: crate::providers::RequestErrorKind::ConnectionFailed,
-                message: "dns lookup failed".into(),
-            },
+            Event::new(Event::REQUEST_FAILED).data(serde_json::json!({
+                "model": "mock",
+                "reason": crate::providers::RequestErrorKind::ConnectionFailed,
+                "message": "dns lookup failed",
+            })),
         );
 
         let task = queue.get_task(&key).unwrap();
-        let names: Vec<&str> = task.errors.iter().map(|e| e.kind.get_name()).collect();
+        let names: Vec<String> = task
+            .errors
+            .iter()
+            .map(|e| e.get_name().to_string())
+            .collect();
         assert_eq!(names, ["tool_call_failed", "request_failed"]);
 
         // Written once, to the session log, as a full event per line.
@@ -2013,8 +2162,8 @@ mod tests {
         let logged: Vec<String> = body
             .lines()
             .map(|line| serde_json::from_str::<crate::event::Event>(line).unwrap())
-            .filter(|event| is_recorded_failure(&event.kind))
-            .map(|event| event.kind.get_name().to_string())
+            .filter(|event| is_recorded_failure(event))
+            .map(|event| event.get_name().to_string())
             .collect();
         assert_eq!(logged, names);
         assert!(!dir
@@ -2031,22 +2180,13 @@ mod tests {
         let key = queue.add_task("work");
 
         // A failed tool call the model recovered from: the task finishes.
-        queue.emit(
-            &key,
-            "agent",
-            EventKind::ToolCallFailed {
-                tool_name: "grep".into(),
-                call_id: "c1".into(),
-                reason: ToolFailureKind::ExecutionFailed,
-                message: "boom".into(),
-            },
-        );
+        emit_event(&queue, &key, "agent", tool_call_failed("boom"));
         queue.set_task_finished(&key, "done").unwrap();
 
         let task = queue.get_task(&key).unwrap();
         assert_eq!(task.status, Status::Finished);
         assert_eq!(task.errors.len(), 1);
-        assert_eq!(task.errors[0].kind.get_name(), "tool_call_failed");
+        assert_eq!(task.errors[0].get_name(), "tool_call_failed");
     }
 
     #[test]
@@ -2071,16 +2211,7 @@ mod tests {
         let original = Queue::new();
         original.set_dir(dir.path().to_path_buf());
         let key = original.add_task("work");
-        original.emit(
-            &key,
-            "agent",
-            EventKind::ToolCallFailed {
-                tool_name: "grep".into(),
-                call_id: "c1".into(),
-                reason: ToolFailureKind::ExecutionFailed,
-                message: "boom".into(),
-            },
-        );
+        emit_event(&original, &key, "agent", tool_call_failed("boom"));
         drop(original);
         std::fs::remove_dir_all(dir.path().join("tasks").join(&key)).unwrap();
 
@@ -2095,22 +2226,13 @@ mod tests {
         let original = Queue::new();
         original.set_dir(dir.path().to_path_buf());
         let key = original.add_task("work");
-        original.emit(
-            &key,
-            "agent",
-            EventKind::ToolCallFailed {
-                tool_name: "grep".into(),
-                call_id: "c1".into(),
-                reason: ToolFailureKind::ExecutionFailed,
-                message: "boom".into(),
-            },
-        );
+        emit_event(&original, &key, "agent", tool_call_failed("boom"));
         drop(original);
 
         let resumed = Queue::load(dir.path()).unwrap();
         let task = resumed.get_task(&key).unwrap();
         assert_eq!(task.errors.len(), 1);
-        assert_eq!(task.errors[0].kind.get_name(), "tool_call_failed");
+        assert_eq!(task.errors[0].get_name(), "tool_call_failed");
     }
 
     #[test]
@@ -2133,13 +2255,13 @@ mod tests {
     fn on_event_files_a_follow_up_for_any_kind() {
         let (queue, _tmp) = test_queue();
         queue.on_event(|queue, event| {
-            if matches!(event.kind, EventKind::TurnStarted) {
+            if event.name == Event::TURN_STARTED {
                 queue.add_task(Task::new("report").label("report"));
             }
         });
         let key = queue.add_task("work");
 
-        queue.emit(&key, "agent", EventKind::TurnStarted);
+        emit_event(&queue, &key, "agent", Event::new(Event::TURN_STARTED));
 
         assert_eq!(queue.find_tasks("label = report").len(), 1);
     }
@@ -2154,7 +2276,7 @@ mod tests {
         queue.on_result(|queue, done, _| {
             queue.add_task(Task::new("hunt").label("sniper").parent(&done.key));
         });
-        queue.emit(&key, "agent", EventKind::TaskFinished);
+        emit_event(&queue, &key, "agent", Event::new(Event::TASK_FINISHED));
         let spawned = queue.find_task("label = sniper").unwrap();
         assert_eq!(spawned.parent, Some(key));
     }
@@ -2165,7 +2287,7 @@ mod tests {
         queue.on_result(|queue, _, _| {
             queue.add_task(Task::new("follow-up").label("next"));
         });
-        queue.emit("KEY", "agent", EventKind::TurnStarted);
+        emit_event(&queue, "KEY", "agent", Event::new(Event::TURN_STARTED));
         assert!(queue.get_tasks().is_empty());
     }
 
@@ -2338,7 +2460,7 @@ mod tests {
             async move {
                 each.lock()
                     .unwrap()
-                    .push(format!("task {}", event.kind.get_name()))
+                    .push(format!("task {}", event.get_name()))
             }
         });
         let key = queue.add_task("scan the corpus");
@@ -2360,13 +2482,33 @@ mod tests {
         let record = Arc::clone(&seen);
         queue.on_event_async(move |_, event| {
             let record = Arc::clone(&record);
-            async move { record.lock().unwrap().push(event.kind.get_name()) }
+            async move { record.lock().unwrap().push(event.get_name().to_string()) }
         });
-        queue.emit("KEY", "agent", EventKind::TurnStarted);
+        emit_event(&queue, "KEY", "agent", Event::new(Event::TURN_STARTED));
 
         queue.finish_all_tasks().await;
 
-        assert!(seen.lock().unwrap().contains(&"turn_started"));
+        assert!(seen.lock().unwrap().contains(&"turn_started".to_string()));
+    }
+
+    #[tokio::test]
+    async fn on_event_async_receives_named_events() {
+        let (queue, _tmp) = test_queue();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let record = Arc::clone(&seen);
+        queue.on_event_async(move |_, event| {
+            let record = Arc::clone(&record);
+            async move {
+                if event.get_name() == "document_indexed" {
+                    record.lock().unwrap().push(event.get_name().to_string());
+                }
+            }
+        });
+        queue.emit_event(Event::new("document_indexed"));
+
+        queue.finish_all_tasks().await;
+
+        assert_eq!(*seen.lock().unwrap(), vec!["document_indexed"]);
     }
 
     #[tokio::test]
@@ -2380,7 +2522,7 @@ mod tests {
                 record
                     .lock()
                     .unwrap()
-                    .push((event.kind.get_name(), task.key.clone()))
+                    .push((event.get_name().to_string(), task.key.clone()))
             }
         });
         let key = queue.add_task("scan the corpus");
@@ -2388,7 +2530,10 @@ mod tests {
 
         queue.finish_all_tasks().await;
 
-        assert_eq!(*seen.lock().unwrap(), vec![("task_failed", key)]);
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec![("task_failed".to_string(), key)]
+        );
     }
 
     #[tokio::test]
@@ -2481,7 +2626,7 @@ mod tests {
         let seen = Arc::new(Mutex::new(Vec::new()));
         let record = Arc::clone(&seen);
         queue.on_task(move |_, event, task| {
-            if matches!(event.kind, EventKind::TaskFinished) {
+            if event.name == Event::TASK_FINISHED {
                 record.lock().unwrap().push((
                     event.agent_id.clone(),
                     task.key.clone(),
@@ -2518,7 +2663,7 @@ mod tests {
         let key = queue.claim(&Query::from("scan"), "analyst").unwrap();
         // Installed after the claim, so only the turn is in the handler's view.
         queue.on_task(move |_, _, task| record.lock().unwrap().push(task.key.clone()));
-        queue.emit(&key, "analyst", EventKind::TurnStarted);
+        emit_event(&queue, &key, "analyst", Event::new(Event::TURN_STARTED));
         assert!(seen.lock().unwrap().is_empty());
     }
 
@@ -2528,7 +2673,7 @@ mod tests {
         let seen = Arc::new(Mutex::new(Vec::new()));
         let record = Arc::clone(&seen);
         queue.on_task(move |_, _, task| record.lock().unwrap().push(task.key.clone()));
-        queue.emit("", "", EventKind::RunStarted);
+        emit_event(&queue, "", "", Event::new(Event::RUN_STARTED));
         assert!(seen.lock().unwrap().is_empty());
     }
 
@@ -2537,16 +2682,16 @@ mod tests {
         let (queue, _tmp) = test_queue();
         let logged = Arc::new(Mutex::new(Vec::new()));
         let log = Arc::clone(&logged);
-        queue.on_event(move |_, e| log.lock().unwrap().push(e.kind.get_name()));
+        queue.on_event(move |_, e| log.lock().unwrap().push(e.get_name().to_string()));
         let seen = Arc::new(Mutex::new(Vec::new()));
         let record = Arc::clone(&seen);
         queue.on_task(move |_, _, task| record.lock().unwrap().push(task.key.clone()));
         queue.add_task(Task::new("scan").label("scan"));
-        // The claim is the lifecycle event; no second emit needed.
+        // The claim is the lifecycle event; no second publication is needed.
         let key = queue.claim(&Query::from("scan"), "analyst").unwrap();
 
         assert_eq!(*seen.lock().unwrap(), vec![key]);
-        assert!(logged.lock().unwrap().contains(&"task_started"));
+        assert!(logged.lock().unwrap().contains(&"task_started".to_string()));
     }
 
     #[test]
@@ -2562,8 +2707,8 @@ mod tests {
         queue.on_event(move |_, _| {
             c2.fetch_add(10, Ordering::Relaxed);
         });
-        queue.emit("KEY", "agent", EventKind::TurnStarted);
-        queue.emit("KEY", "agent", EventKind::TurnStarted);
+        emit_event(&queue, "KEY", "agent", Event::new(Event::TURN_STARTED));
+        emit_event(&queue, "KEY", "agent", Event::new(Event::TURN_STARTED));
         assert_eq!(count.load(Ordering::Relaxed), 22);
     }
 
@@ -2700,17 +2845,14 @@ mod tests {
         let log = Arc::new(Mutex::new(Vec::new()));
         let sink = Arc::clone(&log);
         queue.on_event(move |_, e| {
-            if matches!(
-                e.kind,
-                EventKind::RunStarted | EventKind::RunFinished { .. }
-            ) {
-                sink.lock().unwrap().push(format!("{:?}", e.kind));
+            if matches!(e.get_name(), Event::RUN_STARTED | Event::RUN_FINISHED) {
+                sink.lock().unwrap().push(e.get_name().to_string());
             }
         });
         queue.finish_all_tasks().await;
         let entries = log.lock().unwrap();
         assert_eq!(entries.len(), 2, "expected RunStarted then RunFinished");
-        assert!(entries[0].starts_with("RunStarted"));
-        assert!(entries[1].starts_with("RunFinished"));
+        assert_eq!(entries[0], Event::RUN_STARTED);
+        assert_eq!(entries[1], Event::RUN_FINISHED);
     }
 }

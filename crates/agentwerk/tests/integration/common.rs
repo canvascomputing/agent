@@ -3,7 +3,7 @@
 
 #![allow(dead_code)]
 
-use agentwerk::event::{Event, EventName};
+use agentwerk::event::Event;
 use agentwerk::providers::{Model, Provider};
 use agentwerk::Queue;
 
@@ -25,16 +25,16 @@ pub fn last_result_text(tasks: &Queue) -> String {
 
 pub fn print_result(tasks: &Queue) {
     let recorded = tasks.find_events(|_: &Event| true);
-    let count = |kind: EventName| {
+    let count = |name: &str| {
         recorded
             .iter()
-            .filter(|e| e.get_kind().get_event_name() == kind)
+            .filter(|event| event.get_name() == name)
             .count()
     };
     let json = serde_json::json!({
         "response": tasks.get_results().pop().unwrap_or_default(),
-        "turns": count(EventName::TurnStarted),
-        "tool_calls": count(EventName::ToolCallStarted),
+        "turns": count(Event::TURN_STARTED),
+        "tool_calls": count(Event::TOOL_CALL_STARTED),
         "tokens_in": tasks.get_input_tokens(),
         "tokens_out": tasks.get_output_tokens(),
     });

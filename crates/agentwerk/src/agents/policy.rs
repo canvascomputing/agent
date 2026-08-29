@@ -10,9 +10,9 @@ use std::time::Duration;
 ///
 /// `None` means no limit, except on `compaction_threshold`, the one entry that
 /// cannot be breached: it moves a trigger rather than limiting anything. A
-/// breached limit emits [`EventKind::PolicyViolated`] and halts execution.
+/// breached limit emits [`Event::POLICY_VIOLATED`] and halts execution.
 ///
-/// [`EventKind::PolicyViolated`]: crate::EventKind::PolicyViolated
+/// [`Event::POLICY_VIOLATED`]: crate::Event::POLICY_VIOLATED
 #[derive(Clone, Debug, PartialEq)]
 pub struct Policy {
     /// Total turns across every agent.

@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 
 use super::common;
 
-use agentwerk::event::{default_logger, Event, EventKind};
+use agentwerk::event::{default_logger, Event};
 use agentwerk::tools::{GlobTool, GrepTool, ListDirectoryTool, ReadFileTool};
 use agentwerk::{Agent, Policy, Queue};
 
@@ -52,26 +52,25 @@ async fn finds_string_buried_deep_in_line() -> std::result::Result<(), Box<dyn s
     let collected = Arc::clone(&calls);
     let logger = default_logger();
     let event_handler = Arc::new(move |e: &Event| {
-        match e.get_kind() {
-            EventKind::ToolCallStarted {
-                tool_name, input, ..
-            } => {
+        match e.get_name() {
+            Event::TOOL_CALL_STARTED => {
+                let data = e.get_data();
                 collected.lock().unwrap().push(CapturedCall {
-                    name: tool_name.clone(),
-                    input: input.clone(),
+                    name: data["tool_name"].as_str().unwrap().to_string(),
+                    input: data["input"].clone(),
                     output: None,
                 });
             }
-            EventKind::ToolCallFinished {
-                tool_name, output, ..
-            } => {
+            Event::TOOL_CALL_FINISHED => {
+                let data = e.get_data();
+                let tool_name = data["tool_name"].as_str().unwrap();
                 let mut g = collected.lock().unwrap();
                 if let Some(slot) = g
                     .iter_mut()
                     .rev()
-                    .find(|c| &c.name == tool_name && c.output.is_none())
+                    .find(|c| c.name == tool_name && c.output.is_none())
                 {
-                    slot.output = Some(output.clone());
+                    slot.output = data["output"].as_str().map(str::to_string);
                 }
             }
             _ => {}
@@ -196,26 +195,25 @@ async fn reads_column_slice_after_grep_locates_needle(
     let collected = Arc::clone(&calls);
     let logger = default_logger();
     let event_handler = Arc::new(move |e: &Event| {
-        match e.get_kind() {
-            EventKind::ToolCallStarted {
-                tool_name, input, ..
-            } => {
+        match e.get_name() {
+            Event::TOOL_CALL_STARTED => {
+                let data = e.get_data();
                 collected.lock().unwrap().push(CapturedCall {
-                    name: tool_name.clone(),
-                    input: input.clone(),
+                    name: data["tool_name"].as_str().unwrap().to_string(),
+                    input: data["input"].clone(),
                     output: None,
                 });
             }
-            EventKind::ToolCallFinished {
-                tool_name, output, ..
-            } => {
+            Event::TOOL_CALL_FINISHED => {
+                let data = e.get_data();
+                let tool_name = data["tool_name"].as_str().unwrap();
                 let mut g = collected.lock().unwrap();
                 if let Some(slot) = g
                     .iter_mut()
                     .rev()
-                    .find(|c| &c.name == tool_name && c.output.is_none())
+                    .find(|c| c.name == tool_name && c.output.is_none())
                 {
-                    slot.output = Some(output.clone());
+                    slot.output = data["output"].as_str().map(str::to_string);
                 }
             }
             _ => {}

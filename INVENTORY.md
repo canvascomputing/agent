@@ -1,6 +1,6 @@
 # Inventory
 
-Every declaration in `crates/agentwerk/src` and `crates/agentwerk-py/src`, one section per source file, public rows before internal ones. `python/agentwerk/__init__.py` adds only `EventName` and `@tool`, which sit with the Rust items they wrap.
+Every declaration in `crates/agentwerk/src` and `crates/agentwerk-py/src`, one section per source file, public rows before internal ones. `python/agentwerk/__init__.py` adds only `@tool`, which sits with the Rust items it wraps.
 
 > A commit that adds, renames, removes, or re-types an item changes this file in the same commit.
 
@@ -9,7 +9,7 @@ Every declaration in `crates/agentwerk/src` and `crates/agentwerk-py/src`, one s
 Signatures use one language-independent notation, so a Rust row and a Python row read alike.
 
 - Receivers, borrows, and lifetimes drop: `fn record(&self, event: &Event)` is `Stats.record(event: Event): void`.
-- A type names itself once, on its first member: `Stats.event_count(event: EventName): number`. Every member below it starts at the dot, `.input_tokens(): number`, until another type or a free function takes over. A free function carries no owner.
+- A type names itself once, on its first member: `Stats.event_count(name: string): number`. Every member below it starts at the dot, `.input_tokens(): number`, until another type or a free function takes over. A free function carries no owner.
 - A method returning its own type returns `this`: `Agent.provider(provider: Provider): this`.
 - `u8`, `u32`, `u64`, `usize`, `f32`, `f64`, and `Duration` are `number`, and a `Duration` constant shows milliseconds.
 - `&str`, `String`, `impl Into<String>`, `&Path`, and `PathBuf` are `string`.
@@ -224,7 +224,7 @@ The rules the tables never repeat.
 |----------|------|------------|
 | Rust | `RESUME_OR_FINISH_DETAIL: string` | private |
 | Rust | `TaskContext { agent: Agent, model: Model, queue: Queue, run: Run, task_key: string, system_prompt: string, policy: Policy, tools: ToolRegistry, consecutive_schema_failures: number }` | super |
-| Rust | `.emit(kind: EventKind): Event` | super |
+| Rust | `.emit_event(event: Event): Event` | super |
 | Rust | `.task(): Task?` | super |
 | Rust | `.retry_directive(detail: string, event: Event): string` | super |
 | Rust | `.fail_task(): void` | super |
@@ -316,10 +316,10 @@ The rules the tables never repeat.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `Stats { event_counts: Record<EventName, number>, input_tokens: number, output_tokens: number, started_at: number, finished_at: number, token_usage: Record<string, TokenUsage[]> }` | crate |
+| Rust | `Stats { event_counts: Record<string, number>, input_tokens: number, output_tokens: number, started_at: number, finished_at: number, token_usage: Record<string, TokenUsage[]> }` | crate |
 | Rust | `.FILE: string = "events.jsonl"` | private |
 | Rust | `.for_each_event(dir: string, visit: (event: Event) => void): void throws io::Error` | crate |
-| Rust | `.event_count(event: EventName): number` | crate |
+| Rust | `.event_count(name: string): number` | crate |
 | Rust | `.input_tokens(): number` | crate |
 | Rust | `.output_tokens(): number` | crate |
 | Rust | `.execution_duration(): number?` | crate |
@@ -348,7 +348,7 @@ The rules the tables never repeat.
 | Rust | `.new(query: string): this throws QueryError` | pub |
 | Rust | `impl From<&str> for Query<R>` | pub |
 | Rust | `impl From<String> for Query<R>` | pub |
-| Rust | `enum QueryError { Blank, UnknownField, UnknownStatus, UnknownEvent, InvalidTime, OperatorNotAllowed, RepeatedField, UnexpectedToken, UnexpectedEnd }` | pub |
+| Rust | `enum QueryError { Blank, UnknownField, UnknownStatus, InvalidTime, OperatorNotAllowed, RepeatedField, UnexpectedToken, UnexpectedEnd }` | pub |
 | Rust | `impl Display for QueryError` | pub |
 | Rust | `impl Error for QueryError` | pub |
 
@@ -475,7 +475,7 @@ The rules the tables never repeat.
 | Rust | `.get_content_mut(): ReplyContent[]` | pub |
 | both | `.get_created_at(): number` | pub |
 | Rust | `ReplyContent` | pub |
-| Python | `ReplyContent.get_kind()` plus `.get_data()`, like `Event`. Built with `ReplyContent.text(..)`, `.tool_use(..)`, `.tool_result(..)`, `.thinking(..)`, `.redacted_thinking(..)` | |
+| Python | `ReplyContent.get_kind()` plus `.get_data()`. Built with `ReplyContent.text(..)`, `.tool_use(..)`, `.tool_result(..)`, `.thinking(..)`, `.redacted_thinking(..)` | |
 | Rust | `.Text { text: string }` | pub |
 | Rust | `.ToolUse { id: string, name: string, input: json }` | pub |
 | Rust | `.ToolResult { tool_use_id: string, content: string, succeeded: boolean, path: string? }` | pub |
@@ -628,6 +628,7 @@ The rules the tables never repeat.
 | both | `.add_task(task: Task): string` | pub |
 | both | `.add_task(task)`: a string or json value stands in for the `Task` | |
 | both | `.add_reply(key: string, content: string): this` | pub |
+| both | `.emit_event(event: Event): Event` | pub |
 | both | `.get_task(key: string): Task?` | pub |
 | both | `.get_tasks(): Task[]` | pub |
 | both | `.find_tasks(predicate: Matcher<Task>): Task[]` | pub |
@@ -658,11 +659,12 @@ The rules the tables never repeat.
 |----------|------|------------|
 | Rust | `EventHandler = (queue: Queue, event: Event) => void` | private |
 | Rust | `EVENT_STREAM_CAPACITY: number = 1024` | private |
-| Rust | `is_task_kind(kind: EventKind): boolean` | private |
-| Rust | `is_recorded_failure(kind: EventKind): boolean` | private |
+| Rust | `is_task_event(event: Event): boolean` | private |
+| Rust | `is_failure(event: Event): boolean` | private |
+| Rust | `is_recorded_failure(event: Event): boolean` | private |
 | Rust | `AsyncHandler = (queue: Queue, event: Event, task: Task?) => HandlerWork` | private |
 | Rust | `HandlerWork = Promise<void>` | private |
-| Rust | `AwaitedHandler { matches: (kind: EventKind) => boolean, call: AsyncHandler }` | private |
+| Rust | `AwaitedHandler { matches: (event: Event) => boolean, call: AsyncHandler }` | private |
 | Rust | `Delivery = [Event, Task?]` | private |
 | Rust | `AwaitedEvents { handlers: AwaitedHandler[], queued: Delivery[], draining: void, queueing: void }` | super |
 | Rust | `Run { phase: Phase }` | crate |
@@ -679,11 +681,10 @@ The rules the tables never repeat.
 | Rust | `.until_draining(): Promise<void>` | crate |
 | Rust | `.until_finished(): Promise<void>` | crate |
 | Rust | `.reset(): void` | private |
-| Rust | `Queue.on_task_event(matches: (kind: EventKind) => boolean, handler: (queue: Queue, event: Event, task: Task) => void): this` | private |
-| Rust | `.on_awaited(matches: (kind: EventKind) => boolean, call: AsyncHandler): this` | private |
+| Rust | `Queue.on_task_event(matches: (event: Event) => boolean, handler: (queue: Queue, event: Event, task: Task) => void): this` | private |
+| Rust | `.on_awaited(matches: (event: Event) => boolean, call: AsyncHandler): this` | private |
 | Rust | `.queue_events(): void` | private |
 | Rust | `.await_handlers(): Promise<void>` | private |
-| Rust | `.emit(key: string, agent: string, kind: EventKind): Event` | crate |
 | Rust | `.label_for(key: string): string?` | private |
 | Rust | `.result_path(key: string): string` | crate |
 | Rust | `.dispatch(task: Task): string` | private |
@@ -927,90 +928,22 @@ Not bound, like the rest of `codegrep`.
 | Rust | `.get_name(): string` | pub |
 | Python | not bound: the action is already a string | |
 | Rust | `impl Display for KnowledgeAction` | pub |
-| Rust | `Event { created_at: number, agent_id: string, task_key: string, label: string?, kind: EventKind }` | pub with crate-private fields |
-| Rust | `Event.new(agent_id: string, task_key: string, label: string?, kind: EventKind): this` | pub |
-| both | `.get_created_at(): number` | pub |
-| both | `.get_agent_id(): string` | pub |
+| Rust | `Event { name: string, data: json, task_key: string, agent_id: string, label: string?, created_at: number }` | pub with crate-private fields |
+| both | `.RUN_STARTED`, `.RUN_FINISHED`, `.TASK_CREATED`, `.TASK_STARTED`, `.TASK_FINISHED`, `.TASK_FAILED`, `.TURN_STARTED`: string | pub |
+| both | `.REQUEST_STARTED`, `.REQUEST_FINISHED`, `.REQUEST_FAILED`, `.REQUEST_RETRIED`, `.TEXT_CHUNK_RECEIVED`, `.RESPONSE_REPAIRED`: string | pub |
+| both | `.TOOL_CALL_DECLINED`, `.TOOL_CALL_STARTED`, `.TOOL_CALL_FINISHED`, `.TOOL_CALL_FAILED`: string | pub |
+| both | `.FILE_OPEN_FINISHED`, `.FILE_OPEN_FAILED`, `.KNOWLEDGE_WRITTEN`, `.KNOWLEDGE_READ`, `.KNOWLEDGE_REMOVED`, `.KNOWLEDGE_LISTED`, `.KNOWLEDGE_FAILED`: string | pub |
+| both | `.POLICY_VIOLATED`, `.SCHEMA_RETRIED`, `.COMPACTION_STARTED`, `.COMPACTION_PROGRESS`, `.COMPACTION_FINISHED`, `.COMPACTION_FAILED`: string | pub |
+| both | `Event.new(name: string): this` | pub |
+| both | `.data(value: json): this` | pub |
+| both | `.task_key(task_key: string): this` | pub |
+| both | `.agent_id(agent_id: string): this` | pub |
+| both | `.get_name(): string` | pub |
+| both | `.get_data(): json` | pub |
 | both | `.get_task_key(): string` | pub |
+| both | `.get_agent_id(): string` | pub |
 | both | `.get_label(): string?` | pub |
-| Rust | `.get_kind(): EventKind` | pub |
-| Python | `.get_kind(): string` | |
-| Python | `.get_data()`: a dict of the kind's fields | |
-| Rust | `EventKind` | pub |
-| Python | a string from `Event.get_kind()`, its payload from `Event.get_data()` | |
-| Rust | `.RunStarted` | pub |
-| Rust | `.RunFinished { reason: FinishReason }` | pub |
-| Rust | `.TaskCreated` | pub |
-| Rust | `.TaskStarted` | pub |
-| Rust | `.TaskFinished` | pub |
-| Rust | `.TaskFailed` | pub |
-| Rust | `.TurnStarted` | pub |
-| Rust | `.RequestStarted { model: string }` | pub |
-| Rust | `.RequestFinished { model: string, usage: TokenUsage }` | pub |
-| Rust | `.RequestFailed { model: string, reason: RequestErrorKind, message: string }` | pub |
-| Rust | `.RequestRetried { model: string, attempt: number, max_attempts: number, reason: RequestErrorKind, message: string }` | pub |
-| Rust | `.TextChunkReceived { content: string }` | pub |
-| Rust | `.ResponseRepaired { tool_name: string, reason: RepairKind, message: string }` | pub |
-| Rust | `.ToolCallDeclined { tool_name: string, reason: ToolDeclineKind }` | pub |
-| Rust | `.ToolCallStarted { tool_name: string, call_id: string, input: json }` | pub |
-| Rust | `.ToolCallFinished { tool_name: string, call_id: string, output: string }` | pub |
-| Rust | `.ToolCallFailed { tool_name: string, call_id: string, reason: ToolFailureKind, message: string }` | pub |
-| Rust | `.FileOpenFinished { path: string }` | pub |
-| Rust | `.FileOpenFailed { path: string, reason: ToolFailureKind }` | pub |
-| Rust | `.KnowledgeWritten { slug: string }` | pub |
-| Rust | `.KnowledgeRead { slug: string }` | pub |
-| Rust | `.KnowledgeRemoved { slug: string }` | pub |
-| Rust | `.KnowledgeListed` | pub |
-| Rust | `.KnowledgeFailed { action: KnowledgeAction, reason: KnowledgeFailureKind }` | pub |
-| Rust | `.PolicyViolated { policy: PolicyViolation, limit: number }` | pub |
-| Rust | `.SchemaRetried { attempt: number, max_attempts: number, message: string }` | pub |
-| Rust | `.CompactionStarted { reason: CompactReason, total: number }` | pub |
-| Rust | `.CompactionProgress { reason: CompactReason, completed: number, total: number }` | pub |
-| Rust | `.CompactionFinished { reason: CompactReason }` | pub |
-| Rust | `.CompactionFailed { reason: CompactReason, message: string }` | pub |
-| Rust | `.get_name(): string` | pub |
-| Python | not bound: `Event.get_kind()` is already that name | |
-| Rust | `.get_event_name(): EventName` | pub |
-| Python | not bound: `Event.get_kind()` is already that name | |
-| Rust | `.is_failure(): boolean` | pub |
-| Python | not bound: `Event.get_kind()` is a string, so ask `Queue.on_failure(handler)` for the same six kinds | |
-| Rust | `impl Display for EventKind` | pub |
-| Rust | `EventName` | pub |
-| Python | `EventName`: string constants, so `Event.get_kind() == EventName.TURN_STARTED` | |
-| Rust | `.RunStarted` | pub |
-| Rust | `.RunFinished` | pub |
-| Rust | `.TaskCreated` | pub |
-| Rust | `.TaskStarted` | pub |
-| Rust | `.TaskFinished` | pub |
-| Rust | `.TaskFailed` | pub |
-| Rust | `.TurnStarted` | pub |
-| Rust | `.RequestStarted` | pub |
-| Rust | `.RequestFinished` | pub |
-| Rust | `.RequestFailed` | pub |
-| Rust | `.RequestRetried` | pub |
-| Rust | `.TextChunkReceived` | pub |
-| Rust | `.ResponseRepaired` | pub |
-| Rust | `.ToolCallDeclined` | pub |
-| Rust | `.ToolCallStarted` | pub |
-| Rust | `.ToolCallFinished` | pub |
-| Rust | `.ToolCallFailed` | pub |
-| Rust | `.FileOpenFinished` | pub |
-| Rust | `.FileOpenFailed` | pub |
-| Rust | `.KnowledgeWritten` | pub |
-| Rust | `.KnowledgeRead` | pub |
-| Rust | `.KnowledgeRemoved` | pub |
-| Rust | `.KnowledgeListed` | pub |
-| Rust | `.KnowledgeFailed` | pub |
-| Rust | `.PolicyViolated` | pub |
-| Rust | `.SchemaRetried` | pub |
-| Rust | `.CompactionStarted` | pub |
-| Rust | `.CompactionProgress` | pub |
-| Rust | `.CompactionFinished` | pub |
-| Rust | `.CompactionFailed` | pub |
-| Rust | `.ALL: EventName[]` | pub |
-| Rust | `.get_name(): string` | pub |
-| Python | not bound: the constants are already strings | |
-| Rust | `impl Display for EventName` | pub |
+| both | `.get_created_at(): number` | pub |
 | Rust | `default_logger(): (event: Event) => void` | pub |
 | Python | not bound: pass your own handler to `Queue.on_event(handler)` | |
 
@@ -1018,6 +951,11 @@ Not bound, like the rest of `codegrep`.
 
 | Language | Item | Visibility |
 |----------|------|------------|
+| Rust | `Event.BUILTIN_NAMES: string[]` | crate |
+| Rust | `take(object: json, field: string): any` | private |
+| Rust | `take_or(object: json, field: string, default: any): any` | private |
+| Rust | `data_str(event: Event, key: string): string?` | private |
+| Rust | `data_u64(event: Event, key: string): number?` | private |
 | Rust | `compact_input(input: json): string` | private |
 
 ## `crates/agentwerk/src/lib.rs`
@@ -1027,7 +965,7 @@ Not bound, like the rest of `codegrep`.
 | Language | Item | Visibility |
 |----------|------|------------|
 | Rust | `mod agents`, `mod codegrep`, `mod event`, `mod providers`, `mod schemas`, `mod tools` | pub |
-| Rust | re-exports `Agent`, `Query`, `Reply`, `Status`, `Task`, `Queue`, `Policy`, `Knowledge`, `Trajectory`, `Schema`, `SchemaStore`, `Event`, `EventKind`, `FinishReason`, `Directive`, `Text` | pub |
+| Rust | re-exports `Agent`, `Query`, `Reply`, `Status`, `Task`, `Queue`, `Policy`, `Knowledge`, `Trajectory`, `Schema`, `SchemaStore`, `Event`, `FinishReason`, `Directive`, `Text` | pub |
 | Python | `agentwerk` exports every bound class from one flat module | |
 
 ### Internal
@@ -2117,7 +2055,7 @@ Not bound: it is how `CommandTool` reads one command line.
 | Rust | `.agent_id(name: string): this` | crate |
 | Rust | `.task_key(key: string): this` | crate |
 | Rust | `.knowledge(knowledge: Knowledge): this` | crate |
-| Rust | `.emit(kind: EventKind): void` | crate |
+| Rust | `.emit_event(event: Event): void` | crate |
 | Rust | `ToolCall { id: string, name: string, input: json }` | crate |
 | Python | not bound: a call reaches Python as the decorated function's arguments | |
 | Rust | `ToolRegistry { tools: Tool[] }` | crate |
@@ -2283,14 +2221,18 @@ Binds `event.rs`.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `event_names(): string[]` | python |
-| Rust | `PyEvent { kind: string, created_at: number, agent_id: string, task_key: string, label: string?, data: json }` | python |
-| Rust | `.get_kind(): string` | python |
-| Rust | `.get_created_at(): number` | python |
-| Rust | `.get_agent_id(): string` | python |
-| Rust | `.get_task_key(): string` | python |
-| Rust | `.get_label(): string?` | python |
+| Rust | `PyEvent { inner: Event }` | python |
+| Rust | built-in name class attributes matching `Event` | python |
+| Rust | `.new(name: string): this` | python |
+| Rust | `.data(value: any): this throws PyErr` | python |
+| Rust | `.task_key(task_key: string): this` | python |
+| Rust | `.agent_id(agent_id: string): this` | python |
+| Rust | `.get_name(): string` | python |
 | Rust | `.get_data(): any throws PyErr` | python |
+| Rust | `.get_task_key(): string` | python |
+| Rust | `.get_agent_id(): string` | python |
+| Rust | `.get_label(): string?` | python |
+| Rust | `.get_created_at(): number` | python |
 | Rust | `.__repr__(): string` | python |
 
 ### Internal
@@ -2298,7 +2240,6 @@ Binds `event.rs`.
 | Language | Item | Visibility |
 |----------|------|------------|
 | Rust | `to_py_event(event: Event): PyEvent` | crate |
-| Rust | `payload(kind: EventKind): json` | private |
 
 ## `crates/agentwerk-py/src/knowledge.rs`
 
@@ -2506,6 +2447,7 @@ Binds `agents/tasks/queue.rs` and `store.rs`.
 | Rust | `.add_agent(agent: PyAgent): this throws PyErr` | python |
 | Rust | `.add_task(task: PyTask): string throws PyErr` | python |
 | Rust | `.add_reply(key: string, content: string): this` | python |
+| Rust | `.emit_event(event: PyEvent): PyEvent` | python |
 | Rust | `.set_task_finished(key: string, result: any): void throws PyErr` | python |
 | Rust | `.set_task_failed(key: string): void throws PyErr` | python |
 | Rust | `.set_policy(policy: PyPolicy): this` | python |
