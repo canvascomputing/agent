@@ -125,9 +125,13 @@ impl PyPage {
         tags: Option<Vec<String>>,
     ) -> Self {
         PyPage {
-            inner: Page::new(slug, description, content)
-                .kind(kind)
-                .tags(tags.unwrap_or_default()),
+            inner: Page {
+                slug,
+                kind: kind.to_string(),
+                description,
+                content,
+                tags: tags.unwrap_or_default(),
+            },
         }
     }
 

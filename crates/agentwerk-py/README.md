@@ -990,7 +990,7 @@ Each page is written to `./notes/knowledge/pages/<slug>.md`, and every page gets
 | `get_pages().get_pages()` | Get every page in the store. |
 | `clear()` | Remove every page from the store. |
 
-The prompt carries the index up to the configured character limit, 12 000 characters by default. Past it the prompt lists the pages that fit and names `index.md` for the agent to read the rest. No page is refused for the length of the index, and page bodies are never shortened.
+The prompt includes up to 12 000 characters of the knowledge index by default. If the index exceeds the configured limit, the agent reads the remainder from `index.md`. Pages are always saved in full.
 
 Programmatically create entries:
 

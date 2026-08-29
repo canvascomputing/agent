@@ -117,12 +117,13 @@ async fn seeker_pool_finds_planted_indicators(
     knowledge
         .get_pages()
         .save(
-            Page::new(
-                "eval-atob-loader",
-                "JavaScript decode-then-eval loader: eval(atob(...)) reconstructs code from a base64 string at runtime.",
-                "## Detectable signal\n`eval(atob(...))` or an equivalent decode-then-eval chain.",
-            )
-            .kind("AttackPattern"),
+            Page {
+                slug: "eval-atob-loader".into(),
+                kind: "AttackPattern".into(),
+                description: "JavaScript decode-then-eval loader: eval(atob(...)) reconstructs code from a base64 string at runtime.".into(),
+                content: "## Detectable signal\n`eval(atob(...))` or an equivalent decode-then-eval chain.".into(),
+                tags: vec![],
+            },
         )
         .map_err(|e| format!("seed page: {e}"))?;
 
