@@ -97,8 +97,8 @@ fn aggregate_and_report(tasks: &Queue, partitions: &[(u64, u64)], n: u64, style:
             Err(reason) => {
                 failures += 1;
                 eprintln!(
-                    "{red}│{reset} {key:<8} ✗ {reason}",
-                    key = task.get_key(),
+                    "{red}│{reset} {id:<8} ✗ {reason}",
+                    id = task.get_id(),
                     red = style.red,
                     reset = style.reset,
                 );
@@ -262,11 +262,11 @@ fn build_event_handler(
     let width = digit_width(total);
     Arc::new(move |event: &Event| {
         let agent = event.get_agent_id();
-        let key = event.get_task_key();
+        let id = event.get_task_id();
         let data = event.get_data();
         match event.get_name() {
             Event::TASK_STARTED => eprintln!(
-                "{dim}│       ▶ {agent:<10} {key} dispatched{reset}",
+                "{dim}│       ▶ {agent:<10} {id} dispatched{reset}",
                 dim = style.dim,
                 reset = style.reset,
             ),
@@ -278,7 +278,7 @@ fn build_event_handler(
                     "failed"
                 };
                 eprintln!(
-                    "{dim}│ {n:>width$}/{total} ▾ {agent:<10} {key} {outcome}{reset}",
+                    "{dim}│ {n:>width$}/{total} ▾ {agent:<10} {id} {outcome}{reset}",
                     dim = style.dim,
                     reset = style.reset,
                 );

@@ -12,13 +12,13 @@
       ],
       "description": "Read: `task`, `result`, `list`. Write: `create`, `edit`."
     },
-    "key": {
+    "id": {
       "type": "string",
-      "description": "Task key (e.g. `t-3`). Used by `task`, `result`, `edit`. Defaults to the agent's current task. Ignored by `create`, `list`."
+      "description": "Task ID (e.g. `t-3`). Used by `task`, `result`, `edit`. Defaults to the agent's current task. Ignored by `create`, `list`."
     },
     "aql": {
       "type": "string",
-      "description": "For `list`: which tasks to answer with, in AQL. Fields are `key`, `label`, `status`, `agent`, `parent`, `task`, `result`, `errors`, `created`, `started`, `finished`, `failed`. Operators are `=`, `!=`, `IN (a, b)`, `NOT IN (a, b)`, `IS EMPTY`, `IS NOT EMPTY`, and on `task`, `result`, `errors` the case-insensitive `~` and `!~`. The four times take `>`, `>=`, `<`, `<=` against a date like `2026-08-24` or an offset back from now like `-30m`, `-2h`, `-7d`, `-1w`; `started`, `finished`, `failed` also read `IS EMPTY`. Combine terms with `AND`, `OR`, `NOT`, and parentheses. Close with `ORDER BY <field> ASC|DESC`; without it tasks arrive oldest first. A lone word is the label, a lone `t-N` that task. Status is `Todo`, `InProgress`, `Finished`, or `Failed`. Leave out to answer with every task."
+      "description": "For `list`: which tasks to answer with, in AQL. Fields are `id`, `label`, `status`, `agent`, `parent`, `task`, `result`, `errors`, `created`, `started`, `finished`, `failed`. Operators are `=`, `!=`, `IN (a, b)`, `NOT IN (a, b)`, `IS EMPTY`, `IS NOT EMPTY`, and on `task`, `result`, `errors` the case-insensitive `~` and `!~`. The four times take `>`, `>=`, `<`, `<=` against a date like `2026-08-24` or an offset back from now like `-30m`, `-2h`, `-7d`, `-1w`; `started`, `finished`, `failed` also read `IS EMPTY`. Combine terms with `AND`, `OR`, `NOT`, and parentheses. Close with `ORDER BY <field> ASC|DESC`; without it tasks arrive oldest first. A lone word is the label, a lone `t-N` that task. Status is `Todo`, `InProgress`, `Finished`, or `Failed`. Leave out to answer with every task."
     },
     "label": {
       "type": "string",
@@ -43,7 +43,7 @@
   ],
   "examples": [
     { "action": "task" },
-    { "action": "result", "key": "t-3" },
+    { "action": "result", "id": "t-3" },
     { "action": "list" },
     { "action": "list", "aql": "status = Todo AND label = review" },
     { "action": "list", "aql": "task ~ \"retry budget\" AND agent IS EMPTY" },
@@ -55,6 +55,6 @@
       "task": "Check the retry budget on the upload path.",
       "label": "review"
     },
-    { "action": "edit", "key": "t-3", "label": "review" }
+    { "action": "edit", "id": "t-3", "label": "review" }
   ]
 }

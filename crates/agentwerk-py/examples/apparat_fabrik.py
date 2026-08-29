@@ -287,7 +287,7 @@ async def main(pruefer, meister, monteur):
             {
                 "t": time.monotonic() - started_at,
                 "kind": "ruling",
-                "task": task.get_key(),
+                "task": task.get_id(),
                 "agent": workers.get(task.get_assignee() or "", task.get_assignee() or ""),
                 "result": result,
             },

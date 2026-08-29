@@ -50,7 +50,7 @@ pub struct ToolContext {
     pub(crate) run: Option<Arc<Run>>,
     pub(crate) queue: Option<Arc<Queue>>,
     pub(crate) agent_id: Option<String>,
-    pub(crate) task_key: Option<String>,
+    pub(crate) task_id: Option<String>,
     pub(crate) knowledge: Option<Arc<Knowledge>>,
     /// What this call's failures say. An agent shares its store here; a
     /// standalone call keeps the built-in text.
@@ -66,7 +66,7 @@ impl ToolContext {
             run: None,
             queue: None,
             agent_id: None,
-            task_key: None,
+            task_id: None,
             knowledge: None,
             directives: Arc::new(DirectiveStore::default()),
         }
@@ -92,8 +92,8 @@ impl ToolContext {
         self
     }
 
-    pub(crate) fn task_key(mut self, key: String) -> Self {
-        self.task_key = Some(key);
+    pub(crate) fn task_id(mut self, id: String) -> Self {
+        self.task_id = Some(id);
         self
     }
 
@@ -113,9 +113,9 @@ impl ToolContext {
         let Some(queue) = &self.queue else {
             return;
         };
-        let key = self.task_key.as_deref().unwrap_or_default();
+        let id = self.task_id.as_deref().unwrap_or_default();
         let agent = self.agent_id.as_deref().unwrap_or_default();
-        queue.emit_event(event.task_key(key).agent_id(agent));
+        queue.emit_event(event.task_id(id).agent_id(agent));
     }
 
     /// Resolves once the run starts to finish, whether the caller cancelled it
@@ -838,8 +838,8 @@ fn write_out(content: &mut String, ctx: &ToolContext, call_id: &str) -> Option<P
 /// the write fails. Like the rest of the logging, it is best effort.
 fn persist_output(ctx: &ToolContext, tool_use_id: &str, content: &str) -> Option<PersistedOutput> {
     let queue = ctx.queue.as_ref()?;
-    let key = ctx.task_key.as_deref()?;
-    let rel = queue.write_tool_output(key, tool_use_id, content)?;
+    let id = ctx.task_id.as_deref()?;
+    let rel = queue.write_tool_output(id, tool_use_id, content)?;
     let display = queue.get_dir().join(&rel);
     Some(PersistedOutput { rel, display })
 }
@@ -1510,9 +1510,9 @@ mod tests {
         let queue = Queue::new();
         queue.set_dir(dir.path().to_path_buf());
         queue.add_task("seed");
-        let key = "t-1".to_string();
-        let ctx = test_ctx().queue(Arc::clone(&queue)).task_key(key.clone());
-        (ctx, queue, key, dir)
+        let id = "t-1".to_string();
+        let ctx = test_ctx().queue(Arc::clone(&queue)).task_id(id.clone());
+        (ctx, queue, id, dir)
     }
 
     /// Where a capped result says its original went.
@@ -1532,24 +1532,24 @@ mod tests {
         }
     }
 
-    fn relative_outputs_path(key: &str, tool_use_id: &str) -> PathBuf {
+    fn relative_outputs_path(task_id: &str, tool_use_id: &str) -> PathBuf {
         PathBuf::from("tasks")
-            .join(key)
+            .join(task_id)
             .join("outputs")
             .join(format!("{tool_use_id}.txt"))
     }
 
-    fn absolute_outputs_path(dir: &std::path::Path, key: &str, tool_use_id: &str) -> PathBuf {
-        dir.join(relative_outputs_path(key, tool_use_id))
+    fn absolute_outputs_path(dir: &std::path::Path, task_id: &str, tool_use_id: &str) -> PathBuf {
+        dir.join(relative_outputs_path(task_id, tool_use_id))
     }
 
     #[test]
     fn write_tool_output_stores_relative_path_in_comment() {
-        let (ctx, _queue, key, _dir) = task_ctx();
+        let (ctx, _queue, id, _dir) = task_ctx();
         let mut result = ToolResult::success("z".repeat(500));
         cap_oversized_result(&mut result, &ctx, "call-rel", 100);
         let stored = offloaded_path(&result).expect("offload happened");
-        assert_eq!(stored, &relative_outputs_path(&key, "call-rel"));
+        assert_eq!(stored, &relative_outputs_path(&id, "call-rel"));
         assert!(
             stored.is_relative(),
             "comment path must stay portable: {}",
@@ -1559,10 +1559,10 @@ mod tests {
 
     #[test]
     fn persisted_output_renders_absolute_path_for_model() {
-        let (ctx, _queue, key, dir) = task_ctx();
+        let (ctx, _queue, id, dir) = task_ctx();
         let mut result = ToolResult::success("y".repeat(500));
         cap_oversized_result(&mut result, &ctx, "call-abs", 100);
-        let absolute = absolute_outputs_path(dir.path(), &key, "call-abs");
+        let absolute = absolute_outputs_path(dir.path(), &id, "call-abs");
         assert!(
             result
                 .get_content()
@@ -1583,14 +1583,14 @@ mod tests {
 
     #[test]
     fn cap_oversized_result_replaces_oversized_ok_with_stub() {
-        let (ctx, _queue, key, dir) = task_ctx();
+        let (ctx, _queue, id, dir) = task_ctx();
         let mut result = ToolResult::success("a".repeat(500));
         cap_oversized_result(&mut result, &ctx, "call-xyz", 100);
         let stub = result.get_content();
         assert!(stub.starts_with("<persisted-output>"));
         assert!(stub.contains("Output too large"));
         assert!(stub.contains("Full output saved to:"));
-        let absolute = absolute_outputs_path(dir.path(), &key, "call-xyz");
+        let absolute = absolute_outputs_path(dir.path(), &id, "call-xyz");
         assert!(
             stub.contains(&absolute.display().to_string()),
             "stub must name the absolute path so the model can read the file: {stub}"
@@ -1598,7 +1598,7 @@ mod tests {
         assert!(stub.contains("Preview (first"));
         assert!(stub.ends_with("</persisted-output>"));
         let path = offloaded_path(&result).expect("offload path");
-        assert_eq!(path, &relative_outputs_path(&key, "call-xyz"));
+        assert_eq!(path, &relative_outputs_path(&id, "call-xyz"));
         let body = std::fs::read_to_string(&absolute).unwrap();
         assert_eq!(body, "a".repeat(500));
     }
@@ -1613,7 +1613,7 @@ mod tests {
     }
 
     #[test]
-    fn cap_oversized_result_returns_raw_when_no_task_key() {
+    fn cap_oversized_result_returns_raw_when_no_task_id() {
         let ctx = test_ctx();
         let payload = "x".repeat(500);
         let mut result = ToolResult::success(payload.clone());
@@ -1621,13 +1621,13 @@ mod tests {
         assert_eq!(result.get_content(), payload);
         assert!(
             offloaded_path(&result).is_none(),
-            "no task key means no offload"
+            "no task ID means no offload"
         );
     }
 
     #[test]
     fn cap_aggregate_offloads_largest_first() {
-        let (ctx, _queue, key, dir) = task_ctx();
+        let (ctx, _queue, id, dir) = task_ctx();
         // Sizes chosen so the stub's own bytes (~200) don't dominate.
         let big = "b".repeat(80_000);
         let calls = vec![sized_call("c1"), sized_call("c2"), sized_call("c3")];
@@ -1642,9 +1642,9 @@ mod tests {
         assert!(results[1].get_content().contains("Full output saved to:"));
         assert_eq!(
             offloaded_path(&results[1]),
-            Some(&relative_outputs_path(&key, "c2"))
+            Some(&relative_outputs_path(&id, "c2"))
         );
-        let body = std::fs::read_to_string(absolute_outputs_path(dir.path(), &key, "c2")).unwrap();
+        let body = std::fs::read_to_string(absolute_outputs_path(dir.path(), &id, "c2")).unwrap();
         assert_eq!(body, big);
 
         assert_eq!(results[0].get_content().len(), 40_000);

@@ -116,7 +116,7 @@ async def main(n, partitions, agents):
 
     def trace(event):
         if event.get_name() in ("task_started", "task_finished", "task_failed"):
-            print(f"  {event.get_name():<20} {event.get_agent_id():<10} {event.get_task_key()}")
+            print(f"  {event.get_name():<20} {event.get_agent_id():<10} {event.get_task_id()}")
         elif event.get_name() == "run_finished":
             finish_reason.append(event.get_data()["reason"])
         elif event.get_name() == "tool_call_started":
@@ -151,7 +151,7 @@ async def main(n, partitions, agents):
         if task.is_finished():
             partials[task.get_result()["idx"]] = task.get_result()["partial_sum"]
         else:
-            failures.append((task.get_key(), task.get_status()))
+            failures.append((task.get_id(), task.get_status()))
 
     event_counts = Counter(event.get_name() for event in tasks.find_events("ORDER BY created"))
     duration = tasks.get_duration() or 0.0
@@ -170,8 +170,8 @@ async def main(n, partitions, agents):
     total, expected = sum(partials.values()), closed_form(n)
     print(f"\naggregated sum : {total}")
     print(f"closed form    : {expected}")
-    for key, status in failures:
-        print(f"x {key} {status}")
+    for id, status in failures:
+        print(f"x {id} {status}")
     if failures or total != expected:
         sys.exit(1)
     print("verified")

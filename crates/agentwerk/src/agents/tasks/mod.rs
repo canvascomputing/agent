@@ -62,10 +62,10 @@ pub(crate) fn now_millis() -> u64 {
         .unwrap_or(0)
 }
 
-/// Trailing numeric part of a `t-N` key. Falls back to `u32::MAX`
-/// so malformed keys sort last and tie-break stably.
-pub(crate) fn numeric_id(key: &str) -> u32 {
-    key.rsplit('-')
+/// Trailing numeric part of a `t-N` ID. Falls back to `u32::MAX`
+/// so malformed IDs sort last and tie-break stably.
+pub(crate) fn numeric_id(id: &str) -> u32 {
+    id.rsplit('-')
         .next()
         .and_then(|s| s.parse::<u32>().ok())
         .unwrap_or(u32::MAX)
@@ -88,7 +88,7 @@ mod tests {
         let stats = Stats::new();
         stats.record(&crate::event::Event {
             created_at: 1,
-            ..crate::event::Event::new(crate::event::Event::TASK_STARTED).task_key("t-1")
+            ..crate::event::Event::new(crate::event::Event::TASK_STARTED).task_id("t-1")
         });
         let trip = policy_violated(&policy, &stats);
         assert!(matches!(trip, Some((PolicyViolation::Time, _))));

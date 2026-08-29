@@ -92,8 +92,8 @@ def test_registering_an_agent_without_a_provider_is_rejected(queue):
 
 
 def test_agent_enqueues_a_task_on_its_private_queue(offline_agent):
-    key = offline_agent.task(aw.Task("scan the corpus", label="scan"))
-    assert key.startswith("t-")
+    id = offline_agent.task(aw.Task("scan the corpus", label="scan"))
+    assert id.startswith("t-")
 
 
 def test_binding_an_agent_drains_its_queue_into_the_shared_queue(

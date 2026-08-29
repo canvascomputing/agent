@@ -163,10 +163,10 @@ impl Agent {
     /// Define who the agent is and how it should work.
     ///
     /// A `{context}` placeholder anywhere in the text expands to the facts of
-    /// the moment as a bullet list: task key, date, working directory,
+    /// the moment as a bullet list: task ID, date, working directory,
     /// platform, and one line per configured limit. Each of those values is
     /// also a placeholder of its own, so a role can place one without the list:
-    /// `{task}`, `{date}`, `{dir}`, `{platform}`, `{os_version}`,
+    /// `{task_id}`, `{date}`, `{dir}`, `{platform}`, `{os_version}`,
     /// `{turns_remaining}`, `{input_tokens_remaining}`,
     /// `{output_tokens_remaining}`, and `{time_remaining}`. A limit left
     /// unconfigured expands to nothing and shows no bullet. Leave the
@@ -368,12 +368,12 @@ impl Agent {
         knowledge: Option<&str>,
         policy: &Policy,
         stats: &Stats,
-        task_key: &str,
+        task_id: &str,
     ) -> String {
         let mut b = PromptBuilder::default();
         if !self.role.is_empty() {
             let role = self.interpolate(&self.role);
-            b = b.role(self.expand_context(role, policy, stats, task_key));
+            b = b.role(self.expand_context(role, policy, stats, task_id));
         }
         if let Some(snap) = knowledge.filter(|s| !s.is_empty()) {
             b = b.knowledge(snap.to_string());
@@ -390,12 +390,12 @@ impl Agent {
         role: String,
         policy: &Policy,
         stats: &Stats,
-        task_key: &str,
+        task_id: &str,
     ) -> String {
         if !role.contains('{') {
             return role;
         }
-        let values = context_values(&self.dir, policy, stats, task_key);
+        let values = context_values(&self.dir, policy, stats, task_id);
         let mut out = role.replace("{context}", &render_context(&values));
         for (name, value) in &values {
             out = out.replace(&format!("{{{name}}}"), value);
@@ -414,7 +414,7 @@ impl Agent {
         out
     }
 
-    /// Submit a task and return its task key.
+    /// Submit a task and return its task ID.
     ///
     /// A string is the task itself, and a `&Path` or `PathBuf` names the file
     /// holding it. A [`Task`] carries a custom label or schema with it. Call
@@ -560,7 +560,7 @@ mod tests {
         assert_eq!(agent.clone().get_id(), agent.get_id());
     }
 
-    /// The system prompt with no live state and a fixed task key.
+    /// The system prompt with no live state and a fixed task ID.
     fn system_prompt(agent: &Agent, knowledge: Option<&str>) -> String {
         agent.system_prompt(knowledge, &Policy::default(), &Stats::new(), "T-1")
     }
@@ -638,7 +638,7 @@ mod tests {
     #[test]
     fn a_single_context_value_expands_without_the_block() {
         let agent = Agent::new()
-            .role("Task {task} in {dir}, {turns_remaining} turns left.")
+            .role("Task {task_id} in {dir}, {turns_remaining} turns left.")
             .dir("/tmp/check");
         let policy = Policy {
             max_turns: Some(3),
@@ -652,6 +652,13 @@ mod tests {
     }
 
     #[test]
+    fn task_is_not_an_alias_for_task_id() {
+        let agent = Agent::new().role("{task}");
+
+        assert_eq!(system_prompt(&agent, None), "{task}");
+    }
+
+    #[test]
     fn a_single_budget_value_expands_to_nothing_when_unconfigured() {
         let agent = Agent::new().role("Turns left: {turns_remaining}.");
         assert_eq!(system_prompt(&agent, None), "Turns left: .");
@@ -659,7 +666,7 @@ mod tests {
 
     #[test]
     fn a_bound_single_value_shadows_the_built_in_one() {
-        let agent = Agent::new().role("{task}").template("task", "mine");
+        let agent = Agent::new().role("{task_id}").template("task_id", "mine");
         assert_eq!(system_prompt(&agent, None), "mine");
     }
 
@@ -758,7 +765,7 @@ mod tests {
         let dir = crate::test_util::TempDir::new().unwrap();
         let queue = crate::agents::Queue::new();
         queue.set_dir(dir.path().to_path_buf());
-        // The block needs a task key and live budgets, neither of which
+        // The block needs a task ID and live budgets, neither of which
         // exists yet at dispatch. Only the role expands it.
         let mut agent = callable(Agent::new());
         queue.bind_agent(&mut agent);

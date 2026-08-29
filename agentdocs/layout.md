@@ -50,9 +50,9 @@ crates/
 `tasks/` holds the task value types and the orchestrator:
 
 - `mod.rs` re-exports them and hosts the free helpers `policy_violated`, `now_millis`, `numeric_id`.
-- `task.rs`: `Task`, `Status`, the `Replies` log helper, and the `tasks/<key>/...` path helpers. `reply.rs`: `Author`, `Reply`, `ReplyContent`, and their conversions to and from `providers::Message` and `ContentBlock`. `error.rs`: `TaskError`.
+- `task.rs`: `Task`, `Status`, the `Replies` log helper, and the `tasks/<id>/...` path helpers. `reply.rs`: `Author`, `Reply`, `ReplyContent`, and their conversions to and from `providers::Message` and `ContentBlock`. `error.rs`: `TaskError`.
 - `queue.rs`: constructors, configuration, task creation, agent binding, run lifecycle, results, and queries. `store.rs`: the store mutations (`insert`, `claim`, `set_task_finished`, `edit_replies`, transition recording).
-- `trajectory.rs`: `Trajectory`, a task's replies captured as a training example, its `trajectories/<key>.json` write, and the `.html` rendering written beside it.
+- `trajectory.rs`: `Trajectory`, a task's replies captured as a training example, its `trajectories/<id>.json` write, and the `.html` rendering written beside it.
 
 `loop/` holds the multi-agent loop, split by state:
 

@@ -55,7 +55,7 @@
 //!
 //! for task in tasks.get_tasks() {
 //!     if let Some(result) = task.get_result() {
-//!         println!("{}: {}", task.get_key(), result);
+//!         println!("{}: {}", task.get_id(), result);
 //!     }
 //! }
 //! # }

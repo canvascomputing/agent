@@ -140,13 +140,13 @@ fn print_research_outcome(tasks: &Queue, outcome: &Outcome) {
             let researched: Vec<(String, String)> = tasks
                 .find_tasks("status = Finished AND label != report")
                 .iter()
-                .filter_map(|t| Some((t.get_key().to_string(), plain_text(t.get_result()?))))
+                .filter_map(|t| Some((t.get_id().to_string(), plain_text(t.get_result()?))))
                 .collect();
             if researched.is_empty() {
                 eprintln!("(no researcher produced findings)");
             } else {
-                for (key, findings) in researched {
-                    println!("### {key}\n\n{findings}\n");
+                for (id, findings) in researched {
+                    println!("### {id}\n\n{findings}\n");
                 }
             }
         }
@@ -194,8 +194,8 @@ fn print_chain_summary(tasks: &Queue) {
             .map(|v| truncate(&plain_text(v), 100))
             .unwrap_or_else(|| "(no result)".into());
         eprintln!(
-            "  {key} {status}{label}{parent}\n      → {preview}",
-            key = t.get_key(),
+            "  {id} {status}{label}{parent}\n      → {preview}",
+            id = t.get_id(),
             status = t.get_status(),
         );
     }
@@ -311,11 +311,11 @@ async fn brave_search(api_key: &str, input: &serde_json::Value) -> ToolResult {
 
 fn log_event(event: &Event) {
     let agent = event.get_agent_id();
-    let key = event.get_task_key();
+    let id = event.get_task_id();
     let data = event.get_data();
     match event.get_name() {
         Event::TASK_STARTED => {
-            eprintln!("\n┌─ [{agent}] picked up {key}");
+            eprintln!("\n┌─ [{agent}] picked up {id}");
         }
         Event::TOOL_CALL_STARTED => {
             let tool_name = data["tool_name"].as_str().unwrap_or_default();
@@ -343,10 +343,10 @@ fn log_event(event: &Event) {
             eprintln!("│  ⚠ policy: {} limit={}", data["policy"], data["limit"]);
         }
         Event::TASK_FINISHED => {
-            eprintln!("└─ ✓ finished {key}");
+            eprintln!("└─ ✓ finished {id}");
         }
         Event::TASK_FAILED => {
-            eprintln!("└─ ✗ failed {key}");
+            eprintln!("└─ ✗ failed {id}");
         }
         _ => {}
     }
@@ -360,11 +360,11 @@ fn format_tool_call(tool_name: &str, input: &serde_json::Value) -> Vec<String> {
         )],
         "tasks" => {
             let action = input["action"].as_str().unwrap_or("?");
-            let key = input.get("key").and_then(|v| v.as_str()).unwrap_or("");
-            let suffix = if key.is_empty() {
+            let id = input.get("id").and_then(|v| v.as_str()).unwrap_or("");
+            let suffix = if id.is_empty() {
                 String::new()
             } else {
-                format!(" {key}")
+                format!(" {id}")
             };
             vec![format!("📖 read tasks {action}{suffix}")]
         }

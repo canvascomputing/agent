@@ -10,7 +10,7 @@
     },
     "task": {
       "type": "string",
-      "description": "Body of the follow-up task, for a `handover` only; when omitted it is your `result`. Pass it to tell the receiving agent something beyond the result. `{parent_key}`, `{parent_result}`, and `{parent_result_path}` are substituted with this task's key, result, and result file; unknown `{name}` placeholders pass through verbatim."
+      "description": "Body of the follow-up task, for a `handover` only; when omitted it is your `result`. Pass it to tell the receiving agent something beyond the result. `{parent_id}`, `{parent_result}`, and `{parent_result_path}` are substituted with this task's ID, result, and result file; unknown `{name}` placeholders pass through verbatim."
     }
   },
   "examples": [

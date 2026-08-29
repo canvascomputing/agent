@@ -138,7 +138,7 @@ impl Stats {
                     .fetch_add(usage.input_tokens, Ordering::Relaxed);
                 self.output_tokens
                     .fetch_add(usage.output_tokens, Ordering::Relaxed);
-                self.record_usage(&event.task_key, usage);
+                self.record_usage(&event.task_id, usage);
             }
             // The first claim starts the clock; the run ending stops it.
             Event::TASK_STARTED => {
@@ -160,19 +160,19 @@ impl Stats {
     /// reading it would get a silently truncated series. A host that wants
     /// the figures reads `Event::REQUEST_FINISHED`, which reports every
     /// one as it happens and is never cleared.
-    pub(crate) fn usage_for_task(&self, task_key: &str) -> Vec<TokenUsage> {
+    pub(crate) fn usage_for_task(&self, task_id: &str) -> Vec<TokenUsage> {
         self.token_usage
             .lock()
             .unwrap()
-            .get(task_key)
+            .get(task_id)
             .cloned()
             .unwrap_or_default()
     }
 
     /// Drop a task's token usage, once its older messages are summarized
     /// and the earlier trend no longer predicts the next request.
-    pub(crate) fn reset_usage(&self, task_key: &str) {
-        self.token_usage.lock().unwrap().remove(task_key);
+    pub(crate) fn reset_usage(&self, task_id: &str) {
+        self.token_usage.lock().unwrap().remove(task_id);
     }
 
     /// Start the clock over for a run resuming from a log that already holds
@@ -184,11 +184,11 @@ impl Stats {
     }
 
     /// Append `usage` to the per-task series.
-    fn record_usage(&self, task_key: &str, usage: TokenUsage) {
+    fn record_usage(&self, task_id: &str, usage: TokenUsage) {
         self.token_usage
             .lock()
             .unwrap()
-            .entry(task_key.to_string())
+            .entry(task_id.to_string())
             .or_default()
             .push(usage);
     }
@@ -239,7 +239,7 @@ mod tests {
     fn at(created_at: u64, event: Event) -> Event {
         Event {
             created_at,
-            ..event.task_key("t-1")
+            ..event.task_id("t-1")
         }
     }
 
@@ -288,7 +288,7 @@ mod tests {
     fn reset_usage_clears_one_task_without_touching_others() {
         let stats = Stats::new();
         stats.record(&at(0, request(100, 10)));
-        stats.record(&request(300, 30).task_key("t-2"));
+        stats.record(&request(300, 30).task_id("t-2"));
 
         stats.reset_usage("t-1");
 
@@ -390,7 +390,7 @@ mod tests {
     fn every_event_name_survives_the_log() {
         let dir = crate::test_util::TempDir::new().unwrap();
         for event in crate::event::tests::all_events() {
-            Stats::append(dir.path(), &event.task_key("t-1").agent_id("agent")).unwrap();
+            Stats::append(dir.path(), &event.task_id("t-1").agent_id("agent")).unwrap();
         }
 
         let stats = loaded(dir.path());

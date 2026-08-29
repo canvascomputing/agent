@@ -413,7 +413,7 @@ trait QueryField: Copy + PartialEq + fmt::Debug + Sized + 'static {
 /// A task field AQL names.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TaskField {
-    Key,
+    Id,
     Label,
     Status,
     Pending,
@@ -444,7 +444,7 @@ impl QueryField for TaskField {
     type Record = Task;
 
     const FIELDS: &'static [(&'static str, TaskField)] = &[
-        ("key", TaskField::Key),
+        ("id", TaskField::Id),
         ("label", TaskField::Label),
         ("status", TaskField::Status),
         ("pending", TaskField::Pending),
@@ -462,7 +462,7 @@ impl QueryField for TaskField {
 
     fn of(self, task: &Task) -> Option<Cow<'_, str>> {
         match self {
-            TaskField::Key => Some(Cow::Borrowed(task.key.as_str())),
+            TaskField::Id => Some(Cow::Borrowed(task.id.as_str())),
             TaskField::Label => task.label.as_deref().map(Cow::Borrowed),
             TaskField::Status => Some(Cow::Owned(task.status.to_string())),
             TaskField::Pending => Some(Cow::Borrowed(bool_text(task.is_pending()))),
@@ -506,11 +506,11 @@ impl QueryField for TaskField {
         }
     }
 
-    /// The task it names by key where it is spelled like one, and the label
+    /// The task it names by ID where it is spelled like one, and the label
     /// otherwise.
     fn shorthand(word: String) -> Condition<TaskField> {
-        match is_task_key(&word) {
-            true => Condition::Term(TaskField::Key, Match::Is(word)),
+        match is_task_id(&word) {
+            true => Condition::Term(TaskField::Id, Match::Is(word)),
             false => Condition::Term(TaskField::Label, Match::Is(word)),
         }
     }
@@ -520,7 +520,7 @@ impl QueryField for TaskField {
     }
 
     fn tie_break(task: &Task) -> (u64, u32) {
-        (task.created_at, numeric_id(&task.key))
+        (task.created_at, numeric_id(&task.id))
     }
 
     fn sort_unordered<T: Borrow<Task>>(tasks: &mut [T]) {
@@ -545,11 +545,11 @@ impl QueryField for TaskField {
         Err(QueryError::UnknownStatus { value })
     }
 
-    /// `key` by its number, so t-2 comes before t-10, and `status`
+    /// `id` by its number, so t-2 comes before t-10, and `status`
     /// along the lifecycle.
     fn compare(self, left: &str, right: &str) -> Ordering {
         match self {
-            TaskField::Key => numeric_id(left).cmp(&numeric_id(right)),
+            TaskField::Id => numeric_id(left).cmp(&numeric_id(right)),
             TaskField::Status => status_rank(left).cmp(&status_rank(right)),
             TaskField::Created | TaskField::Started | TaskField::Finished | TaskField::Failed => {
                 millis(left).cmp(&millis(right))
@@ -586,7 +586,7 @@ impl QueryField for EventField {
         match self {
             EventField::Event => Some(Cow::Borrowed(&event.name)),
             EventField::Agent => carried(&event.agent_id),
-            EventField::Task => carried(&event.task_key),
+            EventField::Task => carried(&event.task_id),
             EventField::Label => event.label.as_deref().map(Cow::Borrowed),
             EventField::Created => Some(Cow::Owned(event.created_at.to_string())),
             EventField::Payload => serde_json::to_string(&serde_json::json!({
@@ -614,9 +614,9 @@ impl QueryField for EventField {
     }
 
     /// The event it names where the word is one, the task where it is spelled
-    /// like a key, and the label otherwise.
+    /// like an ID, and the label otherwise.
     fn shorthand(word: String) -> Condition<EventField> {
-        if is_task_key(&word) {
+        if is_task_id(&word) {
             return Condition::Term(EventField::Task, Match::Is(word));
         }
         match event_named(&word) {
@@ -649,7 +649,7 @@ impl QueryField for EventField {
     }
 }
 
-fn is_task_key(word: &str) -> bool {
+fn is_task_id(word: &str) -> bool {
     numeric_id(word) != u32::MAX && word.starts_with("t-")
 }
 
@@ -726,7 +726,7 @@ fn bool_text(value: bool) -> &'static str {
     }
 }
 
-/// A time back from the text `of` wrote it as, the way `key` reads its own
+/// A time back from the text `of` wrote it as, the way `id` reads its own
 /// number back.
 fn millis(value: &str) -> u64 {
     value.parse().unwrap_or(0)
@@ -866,7 +866,7 @@ impl fmt::Display for QueryError {
         match self {
             Self::Blank => write!(
                 f,
-                "A query cannot be blank. Name a label, a task key, or a field."
+                "A query cannot be blank. Name a label, a task ID, or a field."
             ),
             Self::UnknownField { name, known } => {
                 write!(f, "No field named `{name}`. Use one of {known}.")
@@ -1303,9 +1303,9 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn task(key: &str) -> Task {
+    fn task(id: &str) -> Task {
         let mut task = Task::new("task");
-        task.key = key.to_string();
+        task.id = id.to_string();
         task
     }
 
@@ -1329,8 +1329,8 @@ mod tests {
         }
 
         fn errored(mut self, event: crate::event::Event) -> Task {
-            let key = self.key.clone();
-            self.errors.push(event.task_key(key).agent_id("agent"));
+            let id = self.id.clone();
+            self.errors.push(event.task_id(id).agent_id("agent"));
             self
         }
 
@@ -1375,12 +1375,12 @@ mod tests {
         Query::<Task>::new(query).expect_err("query must be rejected")
     }
 
-    /// The keys the query selects, in the order it puts them in.
+    /// The IDs the query selects, in the order it puts them in.
     fn ordered(query: &str, tasks: &[Task]) -> Vec<String> {
         let query = parse(query);
         let mut matching: Vec<&Task> = tasks.iter().filter(|t| query.matches(t)).collect();
         query.sort(&mut matching);
-        matching.into_iter().map(|t| t.key.clone()).collect()
+        matching.into_iter().map(|t| t.id.clone()).collect()
     }
 
     #[test]
@@ -1518,8 +1518,8 @@ mod tests {
     }
 
     #[test]
-    fn key_takes_in_like_any_other_field() {
-        let q = parse("key IN (t-1, t-2)");
+    fn id_takes_in_like_any_other_field() {
+        let q = parse("id IN (t-1, t-2)");
         assert!(q.matches(&task("t-1")));
         assert!(!q.matches(&task("t-3")));
     }
@@ -1689,7 +1689,7 @@ mod tests {
 
     #[test]
     fn keywords_parse_in_any_case() {
-        let q = parse("label in (scan, report) and agent is not empty order by key desc");
+        let q = parse("label in (scan, report) and agent is not empty order by id desc");
         assert!(q.matches(&task("t-1").label("scan").agent("scanner-1")));
         assert!(!q.matches(&task("t-2").label("scan")));
     }
@@ -1715,7 +1715,7 @@ mod tests {
     }
 
     #[test]
-    fn a_task_key_selects_that_one_task() {
+    fn a_task_id_selects_that_one_task() {
         let q = parse("t-3");
         assert!(q.matches(&task("t-3").label("scan")));
         assert!(!q.matches(&task("t-4").label("scan")));
@@ -1729,7 +1729,7 @@ mod tests {
     }
 
     #[test]
-    fn a_label_named_like_a_key_needs_the_field() {
+    fn a_label_named_like_an_id_needs_the_field() {
         let odd = task("t-1").label("t-3");
         assert!(!parse("t-3").matches(&odd));
         assert!(parse("label = t-3").matches(&odd));
@@ -1758,14 +1758,14 @@ mod tests {
             task("t-3").label("report"),
         ];
         assert_eq!(
-            ordered("label = scan ORDER BY key DESC", &tasks),
+            ordered("label = scan ORDER BY id DESC", &tasks),
             ["t-2", "t-1"]
         );
     }
 
     #[test]
     fn a_query_that_is_only_an_order_by_matches_every_task() {
-        let q = parse("ORDER BY key");
+        let q = parse("ORDER BY id");
         assert!(q.matches(&task("t-1")));
         assert!(q.matches(&task("t-2").label("scan")));
     }
@@ -1781,9 +1781,9 @@ mod tests {
     }
 
     #[test]
-    fn order_by_key_sorts_numerically_not_as_text() {
+    fn order_by_id_sorts_numerically_not_as_text() {
         let tasks = [task("t-10"), task("t-2")];
-        assert_eq!(ordered("ORDER BY key", &tasks), ["t-2", "t-10"]);
+        assert_eq!(ordered("ORDER BY id", &tasks), ["t-2", "t-10"]);
     }
 
     #[test]
@@ -1795,7 +1795,7 @@ mod tests {
 
     #[test]
     fn equal_sort_values_keep_creation_order() {
-        // The keys disagree with the creation times, so the assertion holds
+        // The IDs disagree with the creation times, so the assertion holds
         // only while creation order is what breaks the tie.
         let tasks = [
             task("t-1").label("scan").created_at(2),
@@ -1817,10 +1817,10 @@ mod tests {
     fn order_by_asc_is_the_default_spelled_out() {
         let tasks = [task("t-2"), task("t-1")];
         assert_eq!(
-            ordered("ORDER BY key ASC", &tasks),
-            ordered("ORDER BY key", &tasks)
+            ordered("ORDER BY id ASC", &tasks),
+            ordered("ORDER BY id", &tasks)
         );
-        assert_eq!(ordered("ORDER BY key ASC", &tasks), ["t-1", "t-2"]);
+        assert_eq!(ordered("ORDER BY id ASC", &tasks), ["t-1", "t-2"]);
     }
 
     #[test]
@@ -1997,7 +1997,7 @@ mod tests {
     #[test]
     fn an_order_without_by_is_rejected() {
         assert!(matches!(
-            error("ORDER key"),
+            error("ORDER id"),
             QueryError::UnexpectedToken { .. }
         ));
     }
@@ -2024,6 +2024,14 @@ mod tests {
     }
 
     #[test]
+    fn key_is_not_an_alias_for_id() {
+        assert!(matches!(
+            error("key = t-1"),
+            QueryError::UnknownField { name, .. } if name == "key"
+        ));
+    }
+
+    #[test]
     fn an_unknown_status_lists_the_four() {
         let message = error("status = Started").to_string();
         assert!(message.contains("InProgress"), "{message}");
@@ -2046,9 +2054,9 @@ mod tests {
     #[test]
     fn is_empty_on_a_field_every_task_carries_is_rejected() {
         assert_eq!(
-            error("key IS EMPTY"),
+            error("id IS EMPTY"),
             QueryError::OperatorNotAllowed {
-                field: "key",
+                field: "id",
                 operators: "=, !=, IN, NOT IN",
             }
         );
@@ -2091,7 +2099,7 @@ mod event_tests {
     use crate::event::ToolFailureKind;
 
     fn event(event: Event) -> Event {
-        event.task_key("t-1").agent_id("scout-1")
+        event.task_id("t-1").agent_id("scout-1")
     }
 
     fn tool_failed(message: &str) -> Event {
@@ -2165,14 +2173,14 @@ mod event_tests {
         assert!(q.matches(&event(Event::new(Event::TURN_STARTED))));
         assert!(!q.matches(
             &Event::new(Event::TURN_STARTED)
-                .task_key("t-2")
+                .task_id("t-2")
                 .agent_id("scout-1")
         ));
     }
 
     #[test]
     fn an_event_no_task_owns_reads_as_empty() {
-        // `RunStarted` and `RunFinished` carry no task key.
+        // `RunStarted` and `RunFinished` carry no task ID.
         let run = Event::new(Event::RUN_STARTED);
         assert!(parse("task IS EMPTY").matches(&run));
         assert!(parse("agent IS EMPTY").matches(&run));
@@ -2185,7 +2193,7 @@ mod event_tests {
         assert!(q.matches(&event(Event::new(Event::TURN_STARTED))));
         assert!(!q.matches(
             &Event::new(Event::TURN_STARTED)
-                .task_key("t-1")
+                .task_id("t-1")
                 .agent_id("sniper-1")
         ));
     }
@@ -2195,7 +2203,7 @@ mod event_tests {
         let labelled = Event {
             label: Some("scan".into()),
             ..Event::new(Event::TURN_STARTED)
-                .task_key("t-1")
+                .task_id("t-1")
                 .agent_id("scout-1")
         };
         assert!(parse("label = scan").matches(&labelled));
@@ -2226,7 +2234,7 @@ mod event_tests {
         let labelled = Event {
             label: Some("scan".into()),
             ..Event::new(Event::TURN_STARTED)
-                .task_key("t-1")
+                .task_id("t-1")
                 .agent_id("scout-1")
         };
         let q = parse("scan");
@@ -2235,12 +2243,12 @@ mod event_tests {
     }
 
     #[test]
-    fn a_lone_task_key_selects_that_task_s_events() {
+    fn a_lone_task_id_selects_that_task_s_events() {
         let q = parse("t-1");
         assert!(q.matches(&event(Event::new(Event::TURN_STARTED))));
         assert!(!q.matches(
             &Event::new(Event::TURN_STARTED)
-                .task_key("t-2")
+                .task_id("t-2")
                 .agent_id("scout-1")
         ));
     }

@@ -120,13 +120,13 @@ mod tests {
                 .model("mock")
                 .role("test"),
         );
-        let key = tasks.add_task(Task::new("hello").label("slow"));
+        let id = tasks.add_task(Task::new("hello").label("slow"));
 
         // Resolved off the agent's own first turn rather than off a poll racing
         // it: polling made the host's win depend on scheduling, and losing it
         // left the agent's own outcome on the task instead.
         let host = Arc::clone(&tasks);
-        let resolved = key.clone();
+        let resolved = id.clone();
         tasks.on_event(move |_, event| {
             if event.get_name() == Event::REQUEST_FINISHED {
                 let _ = host.set_task_finished(&resolved, "resolved by the host");
@@ -135,7 +135,7 @@ mod tests {
 
         tasks.finish_all_tasks().await;
 
-        let task = tasks.get_task(&key).unwrap();
+        let task = tasks.get_task(&id).unwrap();
         assert_eq!(task.status, Status::Finished);
         assert_eq!(task.result, Some(serde_json::json!("resolved by the host")));
         assert_eq!(provider.requests(), 1);

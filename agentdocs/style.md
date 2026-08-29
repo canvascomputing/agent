@@ -151,7 +151,7 @@ ToolFailureKind::ExecutionFailed.name()   // "execution_failed"
 
 - Example: `set_extension()`, `get_extension()`. Builder methods remain unprefixed.
 - A public method returning `bool` is `is_<state>` or `has_<thing>`. A bare past participle such as `label_cancelled` reads as a field, not a question.
-- `get_<name>` reads back a value a builder set where the bare noun would collide with the builder method on the same type: `Queue::get_dir`, `Model::get_context_window`, `Agent::get_provider`. A reader with no setter to collide with keeps the bare noun: `Tool::name`, `Agent::id`. A lookup by key keeps `get_` for the `HashMap::get` sense, which is why `get_task(key)` stands apart from `find_task(matches)`.
+- `get_<name>` reads back a value a builder set where the bare noun would collide with the builder method on the same type: `Queue::get_dir`, `Model::get_context_window`, `Agent::get_provider`. A reader with no setter to collide with keeps the bare noun: `Tool::name`, `Agent::id`. A lookup by ID keeps `get_` for the `HashMap::get` sense, which is why `get_task(id)` stands apart from `find_task(matches)`.
 
 ## Lifecycle
 
@@ -179,14 +179,14 @@ tasks.cancel_all_tasks();                                   // the whole run
 ```rust
 on_event(handler)                    // observe
 on_result_async(handler)             // observe, in a handler `finish` awaits
-edit_replies(key, editor)            // act once, now
+edit_replies(id, editor)             // act once, now
 ```
 
 - `on_<trigger>(handler)` observes: the handler sees every `<trigger>` and returns nothing.
 - `on_<trigger>_async(handler)` is the same trigger in a handler whichever `finish` is waiting awaits. Every observer has one, and only observers do.
 - A bare `<action>(..)` acts once, now: `cancel`, `edit_replies`.
 - IMPORTANT: the trigger fixes the handler's parameters. `_on_event` hands over `&Event`, `_on_result` a `&Task` and its validated `&Value`, `_on_failure` the `&Event` and the `&Task` it happened in. Observing returns `()`.
-- IMPORTANT: an observer takes the queue first, `&Arc<Queue>` before the trigger's own parameters, owned in the `_async` twin. That is what a hook acts through, and why neither a `create_task_on_*` nor an `edit_replies_on_*` family exists: `queue.add_task(..)` inside `on_result`, and `queue.edit_replies(&event.task_key, ..)` inside `on_event`, are the whole of them.
+- IMPORTANT: an observer takes the queue first, `&Arc<Queue>` before the trigger's own parameters, owned in the `_async` twin. That is what a hook acts through, and why neither a `create_task_on_*` nor an `edit_replies_on_*` family exists: `queue.add_task(..)` inside `on_result`, and `queue.edit_replies(&event.task_id, ..)` inside `on_event`, are the whole of them.
 - A hook reacts to something agentwerk produces. Anything the caller already holds needs no hook: to stop a pool on a verdict, `finish` for it and `cancel`.
 - `on_task` sits outside the trigger grid, keying on a task rather than naming a trigger.
 - No hook registers something agentwerk calls in place of its own work. Compaction summarizes and says so through the four `Compaction*` events, and what agentwerk writes to correct the model is set once by `Agent::directives`, which takes one function over every directive.
@@ -196,8 +196,8 @@ edit_replies(key, editor)            // act once, now
 **Publishing is always `tasks.emit_event(event)`, from both host code and crate internals.**
 
 - Keep `event` in the verb. Bare `emit` is ambiguous beside provider streams and is not an event-publication API.
-- Construct events with `Event::new(name)`, then add `.data(value)`, `.task_key(key)`, or `.agent_id(id)` when those values apply. Builder names match the attributes they set. Do not use a struct literal: the queue owns the timestamp and derived task label.
-- Order Event members by relevance: `name`, `data`, `task_key`, `agent_id`, `label`, `created_at`; builders follow the constructor and readers follow in that same order.
+- Construct events with `Event::new(name)`, then add `.data(value)`, `.task_id(id)`, or `.agent_id(id)` when those values apply. Builder names match the attributes they set. Do not use a struct literal: the queue owns the timestamp and derived task label.
+- Order Event members by relevance: `name`, `data`, `task_id`, `agent_id`, `label`, `created_at`; builders follow the constructor and readers follow in that same order.
 - Contextual helpers, when they remove repeated agent or task plumbing, are also named `emit_event` and delegate immediately to `Queue::emit_event`.
 - Do not add parallel names such as `emit`, `emit_custom`, or `publish_event`; every built-in and caller-defined event takes the same pipeline.
 - `Event.name` is the sole semantic discriminator. Internal code constructs the same `Event::new(name).data(value)` record as host code and branches defensively on its name and JSON data; do not introduce a parallel typed event model or provenance marker.
@@ -206,7 +206,7 @@ edit_replies(key, editor)            // act once, now
 
 **An editor is `edit_<noun>`. Its last parameter is the `&mut` value it rewrites; anything before it is read-only context.**
 
-- `edit_replies(key, FnOnce(&mut Vec<Reply>))`: the key is the read-only context, the replies are the value.
+- `edit_replies(id, FnOnce(&mut Vec<Reply>))`: the ID is the read-only context, the replies are the value.
 - The value arrives holding what agentwerk would otherwise have used, so an editor that writes nothing keeps the default. No editor returns `Option<T>`: there is nothing left to signal.
 - IMPORTANT: an editor acts once, on the value as it stands. Nothing is registered, so a second caller reads what the first left rather than replacing it.
 
@@ -221,7 +221,7 @@ edit_replies(key, editor)            // act once, now
 - A builder method whose name collides with a reader on the same Python class becomes a constructor keyword argument, because a Python class cannot carry both. `Task` needs this for `label`, `schema`, and `parent`.
 - A `&mut` editor becomes a callable that returns the replacement, or `None` to keep the current value, since Python cannot take a Rust `&mut`.
 - A conversion type a setter takes collapses into the Python types it converts from: `Text` is a `str` for the text itself and an `os.PathLike` for the file holding it.
-- A reader taking no argument becomes an attribute: `Agent::id()` is `agent.id`, `Task::key()` is `task.key`.
+- A reader taking no argument becomes an attribute: `Agent::id()` is `agent.id`, `Task::get_id()` is `task.get_id()`.
 - IMPORTANT: no `with_` prefix in either language, and no transform beyond this list.
 
 ## Free Functions
@@ -445,7 +445,7 @@ Also:
 
 - One `h1` per file, the title. Every section is `h2`, every subsection `h3`. No wrapper heading above a group of sections.
 - `h2` is Title Case, `h3` is Sentence case.
-- A method placeholder is spelled as what the caller passes, never a single letter: `add_reply(key, content)`, `cancel_tasks(matches)`. In a bullet list the bare method name carries no parentheses at all.
+- A method placeholder is spelled as what the caller passes, never a single letter: `add_reply(id, content)`, `cancel_tasks(matches)`. In a bullet list the bare method name carries no parentheses at all.
 - Centered blocks use `<div align="center">`. `align` is not allowed on `<p>` by the crates.io sanitizer, so `<p align="center">` renders left-aligned there.
 
 ## README Tables

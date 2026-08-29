@@ -274,9 +274,9 @@ pub struct Queue {
     /// The main loop, held so `start()` can join a previous one before starting
     /// the next.
     pub(super) join_handle: Mutex<Option<JoinHandle<()>>>,
-    /// Next `t-<N>` key to hand out, or `None` until it is known.
+    /// Next `t-<N>` ID to hand out, or `None` until it is known.
     /// `load()` seeds it from the tasks it just read off disk. `new()` leaves
-    /// it `None` and the first `insert()` scans for the highest existing key,
+    /// it `None` and the first `insert()` scans for the highest existing ID,
     /// since `new()` never reads the directory itself.
     pub(super) next_task_id: Mutex<Option<u64>>,
 }
@@ -312,8 +312,8 @@ impl Queue {
     /// `Knowledge::load` at the same directory keeps the knowledge pages beside
     /// the session.
     ///
-    /// An unfinished task is picked up again by the agent whose id it carries
-    /// as its assignee. Ids are numbered per label as agents take them, so
+    /// An unfinished task is picked up again by the agent whose ID it carries
+    /// as its assignee. IDs are numbered per label as agents take them, so
     /// create the same agents in the same order after a restart.
     ///
     /// A task that cannot be read stops the load and the returned error names
@@ -327,11 +327,11 @@ impl Queue {
         let mut tasks = HashMap::new();
         if let Ok(entries) = std::fs::read_dir(tasks_dir.join("tasks")) {
             for entry in entries.flatten() {
-                let key_dir = entry.path();
-                if !key_dir.is_dir() || !key_dir.join("task.json").is_file() {
+                let task_dir = entry.path();
+                if !task_dir.is_dir() || !task_dir.join("task.json").is_file() {
                     continue;
                 }
-                let Some(key) = key_dir
+                let Some(id) = task_dir
                     .file_name()
                     .and_then(|n| n.to_str())
                     .map(str::to_owned)
@@ -341,13 +341,13 @@ impl Queue {
                 // Skipping an unreadable task would drop its status, result
                 // and timestamps with it, leaving the queue to resume work it
                 // has no record of.
-                let task = Task::load(&tasks_dir, &key).map_err(|source| {
+                let task = Task::load(&tasks_dir, &id).map_err(|source| {
                     io::Error::new(
                         source.kind(),
-                        format!("task {key} could not be read: {source}"),
+                        format!("task {id} could not be read: {source}"),
                     )
                 })?;
-                tasks.insert(task.key.clone(), task);
+                tasks.insert(task.id.clone(), task);
             }
         }
 
@@ -357,7 +357,7 @@ impl Queue {
         let _ = Stats::for_each_event(&tasks_dir, |event| {
             stats.record(event);
             if is_recorded_failure(event) {
-                if let Some(task) = tasks.get_mut(&event.task_key) {
+                if let Some(task) = tasks.get_mut(&event.task_id) {
                     task.errors.push(event.clone());
                 }
             }
@@ -481,7 +481,7 @@ impl Queue {
             if !matches(event) {
                 return;
             }
-            let Some(task) = queue.get_task(&event.task_key) else {
+            let Some(task) = queue.get_task(&event.task_id) else {
                 return;
             };
             handler(queue, event, &task);
@@ -499,7 +499,7 @@ impl Queue {
     /// let tasks = Queue::new();
     /// tasks.on_result(|queue, done, result| {
     ///     if result["needs_review"] == true {
-    ///         queue.add_task(Task::labeled("review", done.get_task().clone()).parent(done.get_key()));
+    ///         queue.add_task(Task::labeled("review", done.get_task().clone()).parent(done.get_id()));
     ///     }
     /// });
     /// ```
@@ -535,7 +535,7 @@ impl Queue {
     /// # async fn run() {
     /// let tasks = Queue::new();
     /// tasks.on_result_async(|_, task, result| async move {
-    ///     println!("{} produced {result}", task.get_key());
+    ///     println!("{} produced {result}", task.get_id());
     /// });
     /// tasks.finish_all_tasks().await;
     /// # }
@@ -570,7 +570,7 @@ impl Queue {
     ///     // Count the attempts yourself, or a task that fails every time
     ///     // re-queues itself forever.
     ///     if event.get_name() == Event::TASK_FAILED && failed.get_parent().is_none() {
-    ///         queue.add_task(Task::new(failed.get_task().clone()).parent(failed.get_key()));
+    ///         queue.add_task(Task::new(failed.get_task().clone()).parent(failed.get_id()));
     ///     }
     /// });
     /// ```
@@ -669,7 +669,7 @@ impl Queue {
                 // task-shaped hook accepts: resolving copies every reply,
                 // which on `TextChunkReceived` would cost once per piece.
                 let task = match is_task_event(event) || is_failure(event) {
-                    true => queue.get_task(&event.task_key),
+                    true => queue.get_task(&event.task_id),
                     false => None,
                 };
                 queue
@@ -719,7 +719,7 @@ impl Queue {
     /// Publish an event and hand back what every observer saw.
     pub fn emit_event(&self, mut event: Event) -> Event {
         event.created_at = super::now_millis();
-        event.label = self.label_for(&event.task_key);
+        event.label = self.label_for(&event.task_id);
         self.stats.record(&event);
         // Published before the handlers run: a `finish` waiter competes
         // with them for nothing, and no handler can swallow the event. The
@@ -739,7 +739,7 @@ impl Queue {
         // `load` reads it back from there.
         if is_recorded_failure(&event) {
             let mut store = self.tasks.lock().unwrap();
-            if let Some(task) = store.get_mut(&event.task_key) {
+            if let Some(task) = store.get_mut(&event.task_id) {
                 task.errors.push(event.clone());
             }
         }
@@ -760,11 +760,11 @@ impl Queue {
         event
     }
 
-    fn label_for(&self, key: &str) -> Option<String> {
+    fn label_for(&self, id: &str) -> Option<String> {
         self.tasks
             .lock()
             .unwrap()
-            .get(key)
+            .get(id)
             .and_then(|t| t.label.clone())
     }
 
@@ -821,10 +821,10 @@ impl Queue {
         self.dir.lock().unwrap().clone()
     }
 
-    /// Where task `key`'s result is stored. Named for agents, which read a
+    /// Where task `id`'s result is stored. Named for agents, which read a
     /// result through this path or hand it to the next task.
-    pub(crate) fn result_path(&self, key: &str) -> PathBuf {
-        super::task::result_path(&self.get_dir(), key)
+    pub(crate) fn result_path(&self, id: &str) -> PathBuf {
+        super::task::result_path(&self.get_dir(), id)
     }
 
     /// Enforce schemas for task results.
@@ -850,11 +850,11 @@ impl Queue {
         self
     }
 
-    /// Submit a task and return its task key.
+    /// Submit a task and return its task ID.
     ///
     /// A string is the task itself, and a `&Path` or `PathBuf` names the file
     /// holding it. A [`Task`] carries a custom label or
-    /// schema with it. Key, reporter, creation time, status, and result are set
+    /// schema with it. ID, reporter, creation time, status, and result are set
     /// at insertion and overwrite whatever the task carried. A label decides
     /// which agents may claim it, so give an agent a label of its own to
     /// address it alone.
@@ -867,8 +867,8 @@ impl Queue {
     /// An agent that has just spoken waits on the task, and this reply is
     /// what sends the next turn. Use it to continue a conversation on one
     /// task instead of creating a new task per turn.
-    pub fn add_reply(&self, key: &str, content: impl Into<String>) -> &Self {
-        self.append_reply(key, Reply::user_text(content));
+    pub fn add_reply(&self, id: &str, content: impl Into<String>) -> &Self {
+        self.append_reply(id, Reply::user_text(content));
         self
     }
 
@@ -876,9 +876,9 @@ impl Queue {
         self.insert(task, "user".to_string())
     }
 
-    /// Get one task by key.
-    pub fn get_task(&self, key: &str) -> Option<Task> {
-        self.tasks.lock().unwrap().get(key).cloned()
+    /// Get one task by ID.
+    pub fn get_task(&self, id: &str) -> Option<Task> {
+        self.tasks.lock().unwrap().get(id).cloned()
     }
 
     /// Get every task in creation order.
@@ -1109,7 +1109,7 @@ impl Queue {
         self.agents.lock().unwrap().push(agent.clone());
     }
 
-    /// Whether an agent under this id is registered. `Agent::start` asks
+    /// Whether an agent under this ID is registered. `Agent::start` asks
     /// before binding, so starting twice runs one agent, not two.
     pub(crate) fn has_agent(&self, id: &str) -> bool {
         self.agents.lock().unwrap().iter().any(|a| a.get_id() == id)
@@ -1164,7 +1164,7 @@ impl Queue {
     /// Wait for the matching tasks to be done, then get their results in
     /// query order, or creation order when the query names none.
     ///
-    /// Name a label to wait for one pool, or a key to wait for one task;
+    /// Name a label to wait for one pool, or an ID to wait for one task;
     /// [`Self::finish_all_tasks`] waits for the whole run. The wait ends once no
     /// matching task has work left for an agent, which covers one that
     /// finished, failed, was cancelled, or is paused awaiting your reply.
@@ -1343,8 +1343,8 @@ mod tests {
     use super::*;
     use crate::event::ToolFailureKind;
 
-    fn emit_event(queue: &Queue, key: &str, agent: &str, event: Event) -> Event {
-        queue.emit_event(event.task_key(key).agent_id(agent))
+    fn emit_event(queue: &Queue, id: &str, agent: &str, event: Event) -> Event {
+        queue.emit_event(event.task_id(id).agent_id(agent))
     }
 
     fn tool_call_failed(message: &str) -> Event {
@@ -1363,12 +1363,12 @@ mod tests {
         // Alice's task lands in the same queue.
         alice.add_task("from alice");
         queue.add_task("from queue");
-        let all_keys: Vec<String> = queue
+        let all_ids: Vec<String> = queue
             .find_tasks(|t: &Task| t.status == Status::Todo)
             .iter()
-            .map(|t| t.key.clone())
+            .map(|t| t.id.clone())
             .collect();
-        assert_eq!(all_keys.len(), 2);
+        assert_eq!(all_ids.len(), 2);
     }
 
     #[test]
@@ -1392,9 +1392,9 @@ mod tests {
         queue.add_task("c");
         let all = queue.get_tasks();
         assert_eq!(all.len(), 3);
-        assert_eq!(all[0].key, "t-1");
-        assert_eq!(all[1].key, "t-2");
-        assert_eq!(all[2].key, "t-3");
+        assert_eq!(all[0].id, "t-1");
+        assert_eq!(all[1].id, "t-2");
+        assert_eq!(all[2].id, "t-3");
     }
 
     #[test]
@@ -1403,12 +1403,12 @@ mod tests {
         queue.add_task("a");
         queue.add_task("b");
         queue.add_task("c");
-        let keys: Vec<String> = queue
+        let ids: Vec<String> = queue
             .find_tasks("status = Todo")
             .into_iter()
-            .map(|t| t.key)
+            .map(|t| t.id)
             .collect();
-        assert_eq!(keys, ["t-1", "t-2", "t-3"]);
+        assert_eq!(ids, ["t-1", "t-2", "t-3"]);
     }
 
     #[test]
@@ -1416,7 +1416,7 @@ mod tests {
         let (queue, _tmp) = test_queue();
         queue.add_task("a");
         queue.add_task("b");
-        queue.cancel_tasks("ORDER BY key DESC");
+        queue.cancel_tasks("ORDER BY id DESC");
         assert_eq!(queue.find_tasks("cancelled = true").len(), 2);
     }
 
@@ -1426,12 +1426,12 @@ mod tests {
         queue.add_task("a");
         queue.add_task("b");
         queue.add_task("c");
-        let keys: Vec<String> = queue
-            .find_tasks("ORDER BY key DESC")
+        let ids: Vec<String> = queue
+            .find_tasks("ORDER BY id DESC")
             .into_iter()
-            .map(|t| t.key)
+            .map(|t| t.id)
             .collect();
-        assert_eq!(keys, ["t-3", "t-2", "t-1"]);
+        assert_eq!(ids, ["t-3", "t-2", "t-1"]);
     }
 
     #[test]
@@ -1439,8 +1439,8 @@ mod tests {
         let (queue, _tmp) = test_queue();
         queue.add_task("a");
         queue.add_task("b");
-        let found = queue.find_task("ORDER BY key DESC").expect("a task");
-        assert_eq!(found.key, "t-2");
+        let found = queue.find_task("ORDER BY id DESC").expect("a task");
+        assert_eq!(found.id, "t-2");
     }
 
     #[test]
@@ -1451,7 +1451,7 @@ mod tests {
         attach_done_result(&queue, "t-1", "first");
         attach_done_result(&queue, "t-2", "second");
         assert_eq!(
-            queue.find_results("ORDER BY key DESC"),
+            queue.find_results("ORDER BY id DESC"),
             vec![serde_json::json!("second"), serde_json::json!("first")]
         );
     }
@@ -1593,9 +1593,9 @@ mod tests {
     fn pending_when_a_text_only_reply_pauses_a_non_interactive_agent() {
         let (queue, _tmp) = test_queue();
         queue.add_task("x");
-        let key = queue.claim(&Query::from("status = Todo"), "agent").unwrap();
+        let id = queue.claim(&Query::from("status = Todo"), "agent").unwrap();
         queue.append_reply(
-            &key,
+            &id,
             Reply::assistant(&[crate::providers::ContentBlock::Text {
                 text: "hello".into(),
             }]),
@@ -1609,10 +1609,10 @@ mod tests {
         let (queue, _tmp) = test_queue();
         queue.add_task("a");
         queue.add_task("b");
-        let key_a = queue.claim(&Query::from("t-1"), "agent").unwrap();
-        let key_b = queue.claim(&Query::from("t-2"), "agent").unwrap();
-        queue.set_finished_by(&key_a, "agent").unwrap();
-        queue.set_task_failed(&key_b).unwrap();
+        let id_a = queue.claim(&Query::from("t-1"), "agent").unwrap();
+        let id_b = queue.claim(&Query::from("t-2"), "agent").unwrap();
+        queue.set_finished_by(&id_a, "agent").unwrap();
+        queue.set_task_failed(&id_b).unwrap();
         assert!(!queue.pending(&Query::all()));
     }
 
@@ -1674,8 +1674,8 @@ mod tests {
 
         let created = queue.find_events(|e: &Event| e.name == Event::TASK_CREATED);
         assert_eq!(created.len(), 2);
-        assert_eq!(created[0].task_key, "t-1");
-        assert_eq!(created[1].task_key, "t-2");
+        assert_eq!(created[0].task_id, "t-1");
+        assert_eq!(created[1].task_id, "t-2");
         assert!(created[0].created_at <= created[1].created_at);
     }
 
@@ -1701,7 +1701,7 @@ mod tests {
         queue.add_task("b");
 
         let first = queue.find_event(|e: &Event| e.name == Event::TASK_CREATED);
-        assert_eq!(first.unwrap().task_key, "t-1");
+        assert_eq!(first.unwrap().task_id, "t-1");
         assert!(queue
             .find_event(|e: &Event| e.name == Event::TASK_FAILED)
             .is_none());
@@ -1724,7 +1724,7 @@ mod tests {
     #[test]
     fn emit_event_accepts_each_optional_context_shape() {
         let (queue, _tmp) = test_queue();
-        let key = queue.add_task(Task::new("work").label("scan"));
+        let id = queue.add_task(Task::new("work").label("scan"));
 
         let global = queue.emit_event(Event::new("global_ready").data(serde_json::json!(null)));
         let agent = queue.emit_event(
@@ -1735,32 +1735,32 @@ mod tests {
         let task = queue.emit_event(
             Event::new("task_ready")
                 .data(serde_json::json!(null))
-                .task_key(&key),
+                .task_id(&id),
         );
         let both = queue.emit_event(
             Event::new("work_ready")
                 .data(serde_json::json!(null))
-                .task_key(&key)
+                .task_id(&id)
                 .agent_id("scout-1"),
         );
-        let unknown = queue.emit_event(Event::new("unknown_task_ready").task_key("t-404"));
+        let unknown = queue.emit_event(Event::new("unknown_task_ready").task_id("t-404"));
 
         assert!(global.created_at > 0);
         assert_eq!(
-            (&global.agent_id, &global.task_key, &global.label),
+            (&global.agent_id, &global.task_id, &global.label),
             (&"".into(), &"".into(), &None)
         );
         assert_eq!(
-            (&agent.agent_id, &agent.task_key, &agent.label),
+            (&agent.agent_id, &agent.task_id, &agent.label),
             (&"scout-1".into(), &"".into(), &None)
         );
         assert_eq!(
-            (&task.agent_id, &task.task_key, &task.label),
-            (&"".into(), &key, &Some("scan".into()))
+            (&task.agent_id, &task.task_id, &task.label),
+            (&"".into(), &id, &Some("scan".into()))
         );
         assert_eq!(
-            (&both.agent_id, &both.task_key, &both.label),
-            (&"scout-1".into(), &key, &Some("scan".into()))
+            (&both.agent_id, &both.task_id, &both.label),
+            (&"scout-1".into(), &id, &Some("scan".into()))
         );
         assert_eq!(unknown.label, None);
     }
@@ -1779,7 +1779,7 @@ mod tests {
         assert_eq!(wire["name"], "Document Indexed");
         assert_eq!(wire["data"], serde_json::json!({ "documents": 42 }));
         assert_eq!(wire["agent_id"], "");
-        assert_eq!(wire["task_key"], "");
+        assert_eq!(wire["task_id"], "");
         assert!(wire.get("event").is_none());
 
         drop(queue);
@@ -1793,7 +1793,7 @@ mod tests {
     #[test]
     fn named_events_do_not_fire_task_result_or_failure_hooks() {
         let (queue, _tmp) = test_queue();
-        let key = queue.add_task("work");
+        let id = queue.add_task("work");
         let event_calls = Arc::new(AtomicUsize::new(0));
         let observed = Arc::clone(&event_calls);
         queue.on_event(move |_, _| {
@@ -1813,7 +1813,7 @@ mod tests {
             failure_calls.fetch_add(1, Ordering::Relaxed);
         });
 
-        queue.emit_event(Event::new("work_noted").task_key(key));
+        queue.emit_event(Event::new("work_noted").task_id(id));
 
         assert_eq!(calls.load(Ordering::Relaxed), 0);
         assert_eq!(event_calls.load(Ordering::Relaxed), 1);
@@ -1822,9 +1822,9 @@ mod tests {
     #[test]
     fn an_emitted_builtin_uses_name_based_hooks_without_changing_task_state() {
         let (queue, _tmp) = test_queue();
-        let key = queue.add_task("work");
+        let id = queue.add_task("work");
         queue
-            .set_result(&key, serde_json::json!("reported"))
+            .set_result(&id, serde_json::json!("reported"))
             .unwrap();
         let task_calls = Arc::new(AtomicUsize::new(0));
         let seen = Arc::clone(&task_calls);
@@ -1840,9 +1840,9 @@ mod tests {
             seen.fetch_add(1, Ordering::Relaxed);
         });
 
-        queue.emit_event(Event::new(Event::TASK_FINISHED).task_key(&key));
+        queue.emit_event(Event::new(Event::TASK_FINISHED).task_id(&id));
 
-        assert_eq!(queue.get_task(&key).unwrap().status, Status::Todo);
+        assert_eq!(queue.get_task(&id).unwrap().status, Status::Todo);
         assert_eq!(queue.find_events("event = task_finished").len(), 1);
         assert_eq!(task_calls.load(Ordering::Relaxed), 2);
     }
@@ -1854,9 +1854,9 @@ mod tests {
         queue.add_task("b");
 
         let newest = queue.find_event("task_created ORDER BY created DESC");
-        assert_eq!(newest.unwrap().task_key, "t-2");
+        assert_eq!(newest.unwrap().task_id, "t-2");
         let oldest = queue.find_event("task_created");
-        assert_eq!(oldest.unwrap().task_key, "t-1");
+        assert_eq!(oldest.unwrap().task_id, "t-1");
     }
 
     #[test]
@@ -1954,7 +1954,7 @@ mod tests {
 
         let cancelled = queue.find_tasks("cancelled = true");
         assert_eq!(cancelled.len(), 1);
-        assert_eq!(cancelled[0].key, research);
+        assert_eq!(cancelled[0].id, research);
     }
 
     #[test]
@@ -1965,7 +1965,7 @@ mod tests {
         queue.add_task(Task::new("x").label("analysis"));
 
         assert_eq!(
-            queue.find_task("cancelled = true").map(|task| task.key),
+            queue.find_task("cancelled = true").map(|task| task.id),
             Some(research),
         );
         assert_eq!(queue.find_tasks("cancelled = false").len(), 1);
@@ -1996,7 +1996,7 @@ mod tests {
         let l2 = Arc::clone(&log);
         queue.on_event(move |_, _| l1.lock().unwrap().push(1));
         queue.on_event(move |_, _| l2.lock().unwrap().push(2));
-        emit_event(&queue, "KEY", "agent", Event::new(Event::TURN_STARTED));
+        emit_event(&queue, "ID", "agent", Event::new(Event::TURN_STARTED));
         assert_eq!(*log.lock().unwrap(), vec![1, 2]);
     }
 
@@ -2005,7 +2005,7 @@ mod tests {
         // No assertion target beyond "does not panic": with no installed
         // handlers, emit_event() must run default_logger without crashing.
         let (queue, _tmp) = test_queue();
-        emit_event(&queue, "KEY", "agent", Event::new(Event::TURN_STARTED));
+        emit_event(&queue, "ID", "agent", Event::new(Event::TURN_STARTED));
     }
 
     #[test]
@@ -2023,9 +2023,9 @@ mod tests {
             }
         });
         queue.add_task(Task::new("a").label("scan"));
-        let key = queue.claim(&Query::from("scan"), "scout").unwrap();
-        queue.set_result(&key, serde_json::json!("done")).unwrap();
-        queue.set_finished_by(&key, "scout").unwrap();
+        let id = queue.claim(&Query::from("scan"), "scout").unwrap();
+        queue.set_result(&id, serde_json::json!("done")).unwrap();
+        queue.set_finished_by(&id, "scout").unwrap();
 
         assert_eq!(
             *outcomes.lock().unwrap(),
@@ -2036,27 +2036,27 @@ mod tests {
     #[tokio::test]
     async fn finish_returns_once_the_matching_task_resolves() {
         let (queue, _tmp) = test_queue();
-        let key = queue.add_task("work");
+        let id = queue.add_task("work");
         let writer = Arc::clone(&queue);
-        let claimed = key.clone();
+        let claimed = id.clone();
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(30)).await;
             attach_done_result(&writer, &claimed, "done");
         });
-        let target = key.clone();
-        queue.finish_results(move |t: &Task| t.key == target).await;
-        assert!(queue.get_task(&key).unwrap().is_finished());
+        let target = id.clone();
+        queue.finish_results(move |t: &Task| t.id == target).await;
+        assert!(queue.get_task(&id).unwrap().is_finished());
     }
 
     #[tokio::test]
     async fn finish_returns_without_an_event_when_nothing_matches_yet() {
         let (queue, _tmp) = test_queue();
-        let key = queue.add_task("work");
-        attach_done_result(&queue, &key, "done");
+        let id = queue.add_task("work");
+        attach_done_result(&queue, &id, "done");
         // Nothing emits from here on, so only the check before the wait can
         // resolve this.
         assert_eq!(
-            queue.finish_results(move |t: &Task| t.key == key).await,
+            queue.finish_results(move |t: &Task| t.id == id).await,
             vec![serde_json::json!("done")]
         );
     }
@@ -2065,17 +2065,17 @@ mod tests {
     fn edit_replies_edits_the_transcript_on_demand() {
         use crate::agents::tasks::ReplyContent;
         let (queue, _tmp) = test_queue();
-        let key = queue.add_task("go");
-        queue.append_reply(&key, Reply::user_text("keep me"));
-        queue.append_reply(&key, Reply::user_text("drop me"));
+        let id = queue.add_task("go");
+        queue.append_reply(&id, Reply::user_text("keep me"));
+        queue.append_reply(&id, Reply::user_text("drop me"));
 
-        queue.edit_replies(&key, |replies| {
+        queue.edit_replies(&id, |replies| {
             replies.retain(|reply| {
                 !matches!(reply.content.first(), Some(ReplyContent::Text { text: t }) if t == "drop me")
             });
         });
 
-        let replies = queue.get_task(&key).unwrap().replies;
+        let replies = queue.get_task(&id).unwrap().replies;
         assert!(replies.iter().any(
             |r| matches!(r.content.first(), Some(ReplyContent::Text { text: t }) if t == "keep me")
         ));
@@ -2093,17 +2093,14 @@ mod tests {
             record
                 .lock()
                 .unwrap()
-                .push((task.key.clone(), result.clone()))
+                .push((task.id.clone(), result.clone()))
         });
         queue.add_task(Task::new("x").label("L"));
-        let key = queue.claim(&Query::from("L"), "agent").unwrap();
+        let id = queue.claim(&Query::from("L"), "agent").unwrap();
 
-        attach_done_result(&queue, &key, "lead");
+        attach_done_result(&queue, &id, "lead");
 
-        assert_eq!(
-            *seen.lock().unwrap(),
-            vec![(key, serde_json::json!("lead"))]
-        );
+        assert_eq!(*seen.lock().unwrap(), vec![(id, serde_json::json!("lead"))]);
     }
 
     #[test]
@@ -2115,19 +2112,19 @@ mod tests {
             record
                 .lock()
                 .unwrap()
-                .push((event.get_name().to_string(), task.key.clone()))
+                .push((event.get_name().to_string(), task.id.clone()))
         });
-        let key = queue.add_task("work");
+        let id = queue.add_task("work");
 
-        emit_event(&queue, &key, "agent", Event::new(Event::TURN_STARTED));
-        emit_event(&queue, &key, "agent", tool_call_failed("no such directory"));
-        queue.set_task_failed(&key).unwrap();
+        emit_event(&queue, &id, "agent", Event::new(Event::TURN_STARTED));
+        emit_event(&queue, &id, "agent", tool_call_failed("no such directory"));
+        queue.set_task_failed(&id).unwrap();
 
         assert_eq!(
             *seen.lock().unwrap(),
             vec![
-                ("tool_call_failed".to_string(), key.clone()),
-                ("task_failed".to_string(), key.clone()),
+                ("tool_call_failed".to_string(), id.clone()),
+                ("task_failed".to_string(), id.clone()),
             ]
         );
     }
@@ -2135,12 +2132,12 @@ mod tests {
     #[test]
     fn failures_accumulate_on_the_task_in_order() {
         let (queue, dir) = test_queue();
-        let key = queue.add_task("work");
+        let id = queue.add_task("work");
 
-        emit_event(&queue, &key, "agent", tool_call_failed("no such directory"));
+        emit_event(&queue, &id, "agent", tool_call_failed("no such directory"));
         emit_event(
             &queue,
-            &key,
+            &id,
             "agent",
             Event::new(Event::REQUEST_FAILED).data(serde_json::json!({
                 "model": "mock",
@@ -2149,7 +2146,7 @@ mod tests {
             })),
         );
 
-        let task = queue.get_task(&key).unwrap();
+        let task = queue.get_task(&id).unwrap();
         let names: Vec<String> = task
             .errors
             .iter()
@@ -2169,7 +2166,7 @@ mod tests {
         assert!(!dir
             .path()
             .join("tasks")
-            .join(&key)
+            .join(&id)
             .join("errors.jsonl")
             .exists());
     }
@@ -2177,13 +2174,13 @@ mod tests {
     #[test]
     fn a_recoverable_failure_stays_on_a_finished_task() {
         let (queue, _tmp) = test_queue();
-        let key = queue.add_task("work");
+        let id = queue.add_task("work");
 
         // A failed tool call the model recovered from: the task finishes.
-        emit_event(&queue, &key, "agent", tool_call_failed("boom"));
-        queue.set_task_finished(&key, "done").unwrap();
+        emit_event(&queue, &id, "agent", tool_call_failed("boom"));
+        queue.set_task_finished(&id, "done").unwrap();
 
-        let task = queue.get_task(&key).unwrap();
+        let task = queue.get_task(&id).unwrap();
         assert_eq!(task.status, Status::Finished);
         assert_eq!(task.errors.len(), 1);
         assert_eq!(task.errors[0].get_name(), "tool_call_failed");
@@ -2194,15 +2191,15 @@ mod tests {
         let dir = crate::test_util::TempDir::new().unwrap();
         let queue = Queue::new();
         queue.set_dir(dir.path().to_path_buf());
-        let key = queue.add_task("work");
-        queue.set_task_failed(&key).unwrap();
-        assert!(queue.get_task(&key).unwrap().errors.is_empty());
+        let id = queue.add_task("work");
+        queue.set_task_failed(&id).unwrap();
+        assert!(queue.get_task(&id).unwrap().errors.is_empty());
 
         // The log carries `task_failed` either way, so a resumed session that
         // read it back as a failure would disagree with the run that wrote it.
         drop(queue);
         let resumed = Queue::load(dir.path()).unwrap();
-        assert!(resumed.get_task(&key).unwrap().errors.is_empty());
+        assert!(resumed.get_task(&id).unwrap().errors.is_empty());
     }
 
     #[test]
@@ -2210,13 +2207,13 @@ mod tests {
         let dir = crate::test_util::TempDir::new().unwrap();
         let original = Queue::new();
         original.set_dir(dir.path().to_path_buf());
-        let key = original.add_task("work");
-        emit_event(&original, &key, "agent", tool_call_failed("boom"));
+        let id = original.add_task("work");
+        emit_event(&original, &id, "agent", tool_call_failed("boom"));
         drop(original);
-        std::fs::remove_dir_all(dir.path().join("tasks").join(&key)).unwrap();
+        std::fs::remove_dir_all(dir.path().join("tasks").join(&id)).unwrap();
 
         let resumed = Queue::load(dir.path()).unwrap();
-        assert!(resumed.get_task(&key).is_none());
+        assert!(resumed.get_task(&id).is_none());
         assert_eq!(resumed.get_input_tokens(), 0);
     }
 
@@ -2225,12 +2222,12 @@ mod tests {
         let dir = crate::test_util::TempDir::new().unwrap();
         let original = Queue::new();
         original.set_dir(dir.path().to_path_buf());
-        let key = original.add_task("work");
-        emit_event(&original, &key, "agent", tool_call_failed("boom"));
+        let id = original.add_task("work");
+        emit_event(&original, &id, "agent", tool_call_failed("boom"));
         drop(original);
 
         let resumed = Queue::load(dir.path()).unwrap();
-        let task = resumed.get_task(&key).unwrap();
+        let task = resumed.get_task(&id).unwrap();
         assert_eq!(task.errors.len(), 1);
         assert_eq!(task.errors[0].get_name(), "tool_call_failed");
     }
@@ -2240,14 +2237,14 @@ mod tests {
         let (queue, _tmp) = test_queue();
         queue.on_failure(|queue, _, failed| {
             if failed.parent.is_none() {
-                queue.add_task(Task::new(failed.task.clone()).parent(&failed.key));
+                queue.add_task(Task::new(failed.task.clone()).parent(&failed.id));
             }
         });
-        let key = queue.add_task("work");
+        let id = queue.add_task("work");
 
-        queue.set_task_failed(&key).unwrap();
+        queue.set_task_failed(&id).unwrap();
 
-        let retry = queue.find_task(format!("parent = {key}")).unwrap();
+        let retry = queue.find_task(format!("parent = {id}")).unwrap();
         assert_eq!(retry.task, serde_json::json!("work"));
     }
 
@@ -2259,9 +2256,9 @@ mod tests {
                 queue.add_task(Task::new("report").label("report"));
             }
         });
-        let key = queue.add_task("work");
+        let id = queue.add_task("work");
 
-        emit_event(&queue, &key, "agent", Event::new(Event::TURN_STARTED));
+        emit_event(&queue, &id, "agent", Event::new(Event::TURN_STARTED));
 
         assert_eq!(queue.find_tasks("label = report").len(), 1);
     }
@@ -2270,15 +2267,15 @@ mod tests {
     fn on_result_links_a_follow_up_to_the_finished_parent() {
         let (queue, _tmp) = test_queue();
         queue.add_task(Task::new("scout").label("scout"));
-        let key = queue.claim(&Query::from("scout"), "agent").unwrap();
-        queue.set_result(&key, serde_json::json!("lead")).unwrap();
-        queue.set_finished_by(&key, "agent").unwrap();
+        let id = queue.claim(&Query::from("scout"), "agent").unwrap();
+        queue.set_result(&id, serde_json::json!("lead")).unwrap();
+        queue.set_finished_by(&id, "agent").unwrap();
         queue.on_result(|queue, done, _| {
-            queue.add_task(Task::new("hunt").label("sniper").parent(&done.key));
+            queue.add_task(Task::new("hunt").label("sniper").parent(&done.id));
         });
-        emit_event(&queue, &key, "agent", Event::new(Event::TASK_FINISHED));
+        emit_event(&queue, &id, "agent", Event::new(Event::TASK_FINISHED));
         let spawned = queue.find_task("label = sniper").unwrap();
-        assert_eq!(spawned.parent, Some(key));
+        assert_eq!(spawned.parent, Some(id));
     }
 
     #[test]
@@ -2287,7 +2284,7 @@ mod tests {
         queue.on_result(|queue, _, _| {
             queue.add_task(Task::new("follow-up").label("next"));
         });
-        emit_event(&queue, "KEY", "agent", Event::new(Event::TURN_STARTED));
+        emit_event(&queue, "ID", "agent", Event::new(Event::TURN_STARTED));
         assert!(queue.get_tasks().is_empty());
     }
 
@@ -2303,8 +2300,8 @@ mod tests {
                 .unwrap()
                 .push(queue.find_results("scan").len());
         });
-        for key in scans(&queue, 2) {
-            queue.set_task_finished(&key, "clean").unwrap();
+        for id in scans(&queue, 2) {
+            queue.set_task_finished(&id, "clean").unwrap();
         }
 
         assert_eq!(*counts.lock().unwrap(), vec![1, 2]);
@@ -2324,16 +2321,16 @@ mod tests {
         let record = Arc::clone(&seen);
         queue.on_result_async(move |_, task, result| {
             let record = Arc::clone(&record);
-            async move { record.lock().unwrap().push((task.key, result)) }
+            async move { record.lock().unwrap().push((task.id, result)) }
         });
-        let key = queue.add_task("scan the corpus");
-        queue.set_task_finished(&key, "clean").unwrap();
+        let id = queue.add_task("scan the corpus");
+        queue.set_task_finished(&id, "clean").unwrap();
 
         queue.finish_all_tasks().await;
 
         assert_eq!(
             *seen.lock().unwrap(),
-            vec![(key, serde_json::json!("clean"))]
+            vec![(id, serde_json::json!("clean"))]
         );
     }
 
@@ -2348,8 +2345,8 @@ mod tests {
                 async move { record.lock().unwrap().push(name) }
             });
         }
-        let key = queue.add_task("scan the corpus");
-        queue.set_task_finished(&key, "clean").unwrap();
+        let id = queue.add_task("scan the corpus");
+        queue.set_task_finished(&id, "clean").unwrap();
 
         queue.finish_all_tasks().await;
 
@@ -2376,8 +2373,8 @@ mod tests {
                 });
             }
         });
-        let key = queue.add_task("scan the corpus");
-        queue.set_task_finished(&key, "clean").unwrap();
+        let id = queue.add_task("scan the corpus");
+        queue.set_task_finished(&id, "clean").unwrap();
 
         queue.finish_all_tasks().await;
 
@@ -2394,7 +2391,7 @@ mod tests {
             let record = Arc::clone(&record);
             async move {
                 let first = record.lock().unwrap().is_empty();
-                record.lock().unwrap().push(task.key);
+                record.lock().unwrap().push(task.id);
                 if first {
                     // Outlasts the timeout below, so the finish is dropped here.
                     tokio::time::sleep(Duration::from_secs(60)).await;
@@ -2421,10 +2418,10 @@ mod tests {
         queue.on_result_async(move |_, task, _| {
             let record = Arc::clone(&record);
             async move {
-                record.lock().unwrap().push(format!("start {}", task.key));
+                record.lock().unwrap().push(format!("start {}", task.id));
                 // A spawned handler would let the next one start here.
                 tokio::task::yield_now().await;
-                record.lock().unwrap().push(format!("end {}", task.key));
+                record.lock().unwrap().push(format!("end {}", task.id));
             }
         });
         let first = queue.add_task("scan the first half");
@@ -2463,8 +2460,8 @@ mod tests {
                     .push(format!("task {}", event.get_name()))
             }
         });
-        let key = queue.add_task("scan the corpus");
-        queue.set_task_finished(&key, 1).unwrap();
+        let id = queue.add_task("scan the corpus");
+        queue.set_task_finished(&id, 1).unwrap();
 
         queue.finish_all_tasks().await;
 
@@ -2484,7 +2481,7 @@ mod tests {
             let record = Arc::clone(&record);
             async move { record.lock().unwrap().push(event.get_name().to_string()) }
         });
-        emit_event(&queue, "KEY", "agent", Event::new(Event::TURN_STARTED));
+        emit_event(&queue, "ID", "agent", Event::new(Event::TURN_STARTED));
 
         queue.finish_all_tasks().await;
 
@@ -2522,33 +2519,30 @@ mod tests {
                 record
                     .lock()
                     .unwrap()
-                    .push((event.get_name().to_string(), task.key.clone()))
+                    .push((event.get_name().to_string(), task.id.clone()))
             }
         });
-        let key = queue.add_task("scan the corpus");
-        queue.set_task_failed(&key).unwrap();
+        let id = queue.add_task("scan the corpus");
+        queue.set_task_failed(&id).unwrap();
 
         queue.finish_all_tasks().await;
 
-        assert_eq!(
-            *seen.lock().unwrap(),
-            vec![("task_failed".to_string(), key)]
-        );
+        assert_eq!(*seen.lock().unwrap(), vec![("task_failed".to_string(), id)]);
     }
 
     #[tokio::test]
     async fn an_async_handler_files_a_follow_up_through_the_queue_it_is_handed() {
         let (queue, _tmp) = test_queue();
         queue.on_result_async(|queue, done, _| async move {
-            queue.add_task(Task::new("hunt").label("sniper").parent(&done.key));
+            queue.add_task(Task::new("hunt").label("sniper").parent(&done.id));
         });
-        let key = queue.add_task(Task::new("scout").label("scout"));
-        queue.set_task_finished(&key, "lead").unwrap();
+        let id = queue.add_task(Task::new("scout").label("scout"));
+        queue.set_task_finished(&id, "lead").unwrap();
 
         queue.finish_all_tasks().await;
 
         let spawned = queue.find_task("label = sniper").unwrap();
-        assert_eq!(spawned.parent, Some(key));
+        assert_eq!(spawned.parent, Some(id));
     }
 
     #[tokio::test]
@@ -2558,15 +2552,15 @@ mod tests {
         let record = Arc::clone(&seen);
         queue.on_result_async(move |_, task, _| {
             let record = Arc::clone(&record);
-            async move { record.lock().unwrap().push(task.key) }
+            async move { record.lock().unwrap().push(task.id) }
         });
-        let key = queue.add_task("scan the corpus");
+        let id = queue.add_task("scan the corpus");
 
-        queue.set_task_finished(&key, "clean").unwrap();
+        queue.set_task_finished(&id, "clean").unwrap();
         assert!(seen.lock().unwrap().is_empty());
 
         queue.finish_all_tasks().await;
-        assert_eq!(*seen.lock().unwrap(), vec![key]);
+        assert_eq!(*seen.lock().unwrap(), vec![id]);
     }
 
     #[tokio::test]
@@ -2576,10 +2570,10 @@ mod tests {
         let record = Arc::clone(&seen);
         queue.on_result_async(move |_, task, _| {
             let record = Arc::clone(&record);
-            async move { record.lock().unwrap().push(task.key) }
+            async move { record.lock().unwrap().push(task.id) }
         });
-        let key = queue.add_task("scan the corpus");
-        queue.set_task_failed(&key).unwrap();
+        let id = queue.add_task("scan the corpus");
+        queue.set_task_failed(&id).unwrap();
 
         queue.finish_all_tasks().await;
 
@@ -2612,9 +2606,9 @@ mod tests {
             }
         });
         queue.add_task(Task::new("scout").label("scout"));
-        let key = queue.claim(&Query::from("scout"), "agent").unwrap();
-        queue.set_result(&key, serde_json::json!("lead")).unwrap();
-        queue.set_finished_by(&key, "agent").unwrap();
+        let id = queue.claim(&Query::from("scout"), "agent").unwrap();
+        queue.set_result(&id, serde_json::json!("lead")).unwrap();
+        queue.set_finished_by(&id, "agent").unwrap();
         // The handler ran inside `set_finished_by`, so the queue is never
         // observably empty between the parent finishing and the follow-up.
         assert!(queue.pending(&Query::all()));
@@ -2629,17 +2623,17 @@ mod tests {
             if event.name == Event::TASK_FINISHED {
                 record.lock().unwrap().push((
                     event.agent_id.clone(),
-                    task.key.clone(),
+                    task.id.clone(),
                     task.replies.len(),
                     task.result.clone(),
                 ));
             }
         });
         queue.add_task(Task::new("scan").label("scan"));
-        let key = queue.claim(&Query::from("scan"), "analyst").unwrap();
-        queue.append_reply(&key, Reply::user_text("hello"));
-        queue.set_result(&key, serde_json::json!("done")).unwrap();
-        queue.set_finished_by(&key, "analyst").unwrap();
+        let id = queue.claim(&Query::from("scan"), "analyst").unwrap();
+        queue.append_reply(&id, Reply::user_text("hello"));
+        queue.set_result(&id, serde_json::json!("done")).unwrap();
+        queue.set_finished_by(&id, "analyst").unwrap();
 
         // `replies` is `#[serde(skip)]`, so a transcript here proves the
         // handler holds the in-memory task, not a disk round-trip.
@@ -2647,7 +2641,7 @@ mod tests {
             *seen.lock().unwrap(),
             vec![(
                 "analyst".to_string(),
-                key,
+                id,
                 1,
                 Some(serde_json::json!("done"))
             )]
@@ -2660,10 +2654,10 @@ mod tests {
         let seen = Arc::new(Mutex::new(Vec::new()));
         let record = Arc::clone(&seen);
         queue.add_task(Task::new("scan").label("scan"));
-        let key = queue.claim(&Query::from("scan"), "analyst").unwrap();
+        let id = queue.claim(&Query::from("scan"), "analyst").unwrap();
         // Installed after the claim, so only the turn is in the handler's view.
-        queue.on_task(move |_, _, task| record.lock().unwrap().push(task.key.clone()));
-        emit_event(&queue, &key, "analyst", Event::new(Event::TURN_STARTED));
+        queue.on_task(move |_, _, task| record.lock().unwrap().push(task.id.clone()));
+        emit_event(&queue, &id, "analyst", Event::new(Event::TURN_STARTED));
         assert!(seen.lock().unwrap().is_empty());
     }
 
@@ -2672,7 +2666,7 @@ mod tests {
         let (queue, _tmp) = test_queue();
         let seen = Arc::new(Mutex::new(Vec::new()));
         let record = Arc::clone(&seen);
-        queue.on_task(move |_, _, task| record.lock().unwrap().push(task.key.clone()));
+        queue.on_task(move |_, _, task| record.lock().unwrap().push(task.id.clone()));
         emit_event(&queue, "", "", Event::new(Event::RUN_STARTED));
         assert!(seen.lock().unwrap().is_empty());
     }
@@ -2685,12 +2679,12 @@ mod tests {
         queue.on_event(move |_, e| log.lock().unwrap().push(e.get_name().to_string()));
         let seen = Arc::new(Mutex::new(Vec::new()));
         let record = Arc::clone(&seen);
-        queue.on_task(move |_, _, task| record.lock().unwrap().push(task.key.clone()));
+        queue.on_task(move |_, _, task| record.lock().unwrap().push(task.id.clone()));
         queue.add_task(Task::new("scan").label("scan"));
         // The claim is the lifecycle event; no second publication is needed.
-        let key = queue.claim(&Query::from("scan"), "analyst").unwrap();
+        let id = queue.claim(&Query::from("scan"), "analyst").unwrap();
 
-        assert_eq!(*seen.lock().unwrap(), vec![key]);
+        assert_eq!(*seen.lock().unwrap(), vec![id]);
         assert!(logged.lock().unwrap().contains(&"task_started".to_string()));
     }
 
@@ -2707,8 +2701,8 @@ mod tests {
         queue.on_event(move |_, _| {
             c2.fetch_add(10, Ordering::Relaxed);
         });
-        emit_event(&queue, "KEY", "agent", Event::new(Event::TURN_STARTED));
-        emit_event(&queue, "KEY", "agent", Event::new(Event::TURN_STARTED));
+        emit_event(&queue, "ID", "agent", Event::new(Event::TURN_STARTED));
+        emit_event(&queue, "ID", "agent", Event::new(Event::TURN_STARTED));
         assert_eq!(count.load(Ordering::Relaxed), 22);
     }
 
@@ -2786,7 +2780,7 @@ mod tests {
         attach_done_result(&queue, "t-1", "scanned");
 
         assert_eq!(
-            queue.finish_result("ORDER BY key DESC").await,
+            queue.finish_result("ORDER BY id DESC").await,
             Some(serde_json::json!("reported"))
         );
     }

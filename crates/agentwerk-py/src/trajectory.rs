@@ -24,7 +24,7 @@ impl PyTrajectory {
         }
     }
 
-    /// Save the example under `dir` as `trajectories/<key>.json`, with an
+    /// Save the example under `dir` as `trajectories/<id>.json`, with an
     /// `.html` beside it for reading.
     fn save(&self, dir: &str) -> PyResult<()> {
         self.inner.save(dir).map_err(runtime_error)
@@ -32,8 +32,8 @@ impl PyTrajectory {
 
     /// The example's identifier, `<agent>-<task>`, which is also its file
     /// name.
-    fn get_key(&self) -> &str {
-        self.inner.get_key()
+    fn get_id(&self) -> &str {
+        self.inner.get_id()
     }
 
     /// Name of the model that produced the replies, when it was known.
@@ -47,8 +47,8 @@ impl PyTrajectory {
 
     fn __repr__(&self) -> String {
         format!(
-            "Trajectory(key={:?}, replies={})",
-            self.inner.get_key(),
+            "Trajectory(id={:?}, replies={})",
+            self.inner.get_id(),
             self.inner.get_replies().len()
         )
     }

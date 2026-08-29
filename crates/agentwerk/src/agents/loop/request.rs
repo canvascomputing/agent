@@ -38,7 +38,7 @@ pub(super) async fn run(context: &mut TaskContext<'_>) -> Option<Step> {
         let outcome = {
             let provider = context.agent.get_provider();
             let agent_id = context.agent.get_id().to_string();
-            let task_key = context.task_key.clone();
+            let task_id = context.task_id.clone();
             let queue = Arc::clone(context.queue);
             let emit_stream: Arc<dyn Fn(StreamEvent) + Send + Sync> = Arc::new(move |event| {
                 let event = match event {
@@ -58,7 +58,7 @@ pub(super) async fn run(context: &mut TaskContext<'_>) -> Option<Step> {
                         }))
                     }
                 };
-                queue.emit_event(event.task_key(&task_key).agent_id(&agent_id));
+                queue.emit_event(event.task_id(&task_id).agent_id(&agent_id));
             });
             tokio::select! {
                 biased;
@@ -102,7 +102,7 @@ pub(super) async fn run(context: &mut TaskContext<'_>) -> Option<Step> {
     };
 
     context.queue.append_reply(
-        &context.task_key,
+        &context.task_id,
         crate::agents::tasks::Reply::assistant(&response.content),
     );
 
@@ -553,7 +553,7 @@ mod tests {
         if event.get_name() != Event::TOOL_CALL_FAILED {
             return;
         }
-        queue.edit_replies(&event.task_key, |replies| {
+        queue.edit_replies(&event.task_id, |replies| {
             replies.retain(|reply| {
                 !reply.content.iter().any(|b| {
                     matches!(
@@ -602,7 +602,7 @@ mod tests {
                 if event.get_name() != Event::TOOL_CALL_FAILED {
                     return;
                 }
-                queue.edit_replies(&event.task_key, |replies| {
+                queue.edit_replies(&event.task_id, |replies| {
                     replies.push(Reply::user_text("HANDLER HINT: change approach"));
                 });
             })))
@@ -618,7 +618,7 @@ mod tests {
                 if event.get_name() != Event::TOOL_CALL_FAILED {
                     return;
                 }
-                queue.edit_replies(&event.task_key, |replies| {
+                queue.edit_replies(&event.task_id, |replies| {
                     for reply in replies.iter_mut() {
                         for block in reply.content.iter_mut() {
                             if let ReplyContent::ToolResult { content, .. } = block {
