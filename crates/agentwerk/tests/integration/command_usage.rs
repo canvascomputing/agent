@@ -1,12 +1,12 @@
 //! End-to-end: a real LLM drives three pattern-restricted `CommandTool`
-//! commands (`ls`, `cat`, `wc`) and finishes its ticket with a
-//! JSON result validated against the ticket schema.
+//! commands (`ls`, `cat`, `wc`) and finishes its task with a
+//! JSON result validated against the task schema.
 
 use super::common;
 
 use agentwerk::schemas::Schema;
 use agentwerk::tools::CommandTool;
-use agentwerk::{Agent, Policy, Ticket, TicketQueue};
+use agentwerk::{Agent, Policy, Queue, Task};
 
 #[tokio::test]
 async fn test() -> std::result::Result<(), Box<dyn std::error::Error>> {
@@ -32,9 +32,9 @@ async fn test() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let cat = CommandTool::new("cat").allow("cat *").concurrent(true);
     let wc = CommandTool::new("wc").allow("wc *").concurrent(true);
 
-    let tickets = TicketQueue::new();
+    let tasks = Queue::new();
 
-    tickets.policy(Policy {
+    tasks.policy(Policy {
         max_turns: Some(10),
         ..Default::default()
     });
@@ -54,17 +54,17 @@ async fn test() -> std::result::Result<(), Box<dyn std::error::Error>> {
         .tool(ls)
         .tool(cat)
         .tool(wc);
-    tickets.agent(agent);
-    tickets.ticket(
-        Ticket::new(
+    tasks.agent(agent);
+    tasks.task(
+        Task::new(
             "List the files in the current directory, read the Cargo.toml file, \
              and count its lines. Report the result.",
         )
         .schema(schema),
     );
 
-    let json = tickets.finish_last().await.unwrap_or_default();
-    common::print_result(&tickets);
+    let json = tasks.finish_last().await.unwrap_or_default();
+    common::print_result(&tasks);
 
     assert!(json["line_count"].as_u64().unwrap_or(0) > 1);
     assert!(json["files"].as_array().map_or(0, |a| a.len()) > 1);

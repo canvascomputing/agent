@@ -1,5 +1,5 @@
 //! Events as Python sees them: one object with `kind`, `agent_id`,
-//! `ticket_key`, `label`, and a `data` dict, so a handler reads any event
+//! `task_key`, `label`, and a `data` dict, so a handler reads any event
 //! without a class per kind.
 
 use agentwerk::event::{Event, EventKind, EventName};
@@ -25,7 +25,7 @@ pub struct PyEvent {
     #[pyo3(get)]
     pub(crate) agent_id: String,
     #[pyo3(get)]
-    pub(crate) ticket_key: String,
+    pub(crate) task_key: String,
     #[pyo3(get)]
     pub(crate) label: Option<String>,
     data: Value,
@@ -40,10 +40,7 @@ impl PyEvent {
     }
 
     fn __repr__(&self) -> String {
-        format!(
-            "Event(kind={:?}, ticket_key={:?})",
-            self.kind, self.ticket_key
-        )
+        format!("Event(kind={:?}, task_key={:?})", self.kind, self.task_key)
     }
 }
 
@@ -53,7 +50,7 @@ pub fn to_py_event(event: &Event) -> PyEvent {
         kind: event.kind.to_string(),
         created_at: event.created_at,
         agent_id: event.agent_id.clone(),
-        ticket_key: event.ticket_key.clone(),
+        task_key: event.task_key.clone(),
         label: event.label.clone(),
         data: payload(&event.kind),
     }
@@ -64,8 +61,9 @@ pub fn to_py_event(event: &Event) -> PyEvent {
 fn payload(kind: &EventKind) -> Value {
     use EventKind::*;
     match kind {
-        RunStarted | TicketCreated | TicketStarted | TicketFinished | TicketFailed
-        | TurnStarted => json!({}),
+        RunStarted | TaskCreated | TaskStarted | TaskFinished | TaskFailed | TurnStarted => {
+            json!({})
+        }
         RunFinished { reason } => json!({ "reason": reason.to_string() }),
         RequestStarted { model } => json!({ "model": model }),
         RequestFinished { model, usage } => {

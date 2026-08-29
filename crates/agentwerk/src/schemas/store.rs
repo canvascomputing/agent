@@ -1,4 +1,4 @@
-//! Binds a result contract to a label, so a ticket picks one up from whichever
+//! Binds a result contract to a label, so a task picks one up from whichever
 //! label routed it to an agent.
 
 use std::collections::HashMap;
@@ -9,11 +9,11 @@ use serde_json::Value;
 
 use super::{Schema, SchemaParseError};
 
-/// A `SchemaStore` holds one [`Schema`] per label and hands it to every ticket
+/// A `SchemaStore` holds one [`Schema`] per label and hands it to every task
 /// claimed under that label that carries no schema of its own.
 ///
-/// Share one store with a queue through `TicketQueue::schemas`. A ticket built
-/// with `Ticket::schema` keeps what it was given.
+/// Share one store with a queue through `Queue::schemas`. A task built
+/// with `Task::schema` keeps what it was given.
 ///
 /// ```
 /// use agentwerk::SchemaStore;

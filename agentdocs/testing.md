@@ -24,7 +24,7 @@ How tests are organized and written. Commands used to run them live in [workflow
 
 ```rust
 add_reply_appends_one_line_to_replies_jsonl        // accepted
-an_explicit_ticket_schema_overrides_the_label_default
+an_explicit_task_schema_overrides_the_label_default
 test_add_reply                                     // rejected
 test_schema_works
 ```

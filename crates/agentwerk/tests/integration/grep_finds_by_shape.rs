@@ -11,7 +11,7 @@ use super::common;
 
 use agentwerk::event::{default_logger, Event, EventKind};
 use agentwerk::tools::GrepTool;
-use agentwerk::{Agent, Policy, TicketQueue};
+use agentwerk::{Agent, Policy, Queue};
 
 #[derive(Clone)]
 struct CapturedCall {
@@ -52,14 +52,14 @@ async fn grep_lists_unknown_function_names() -> std::result::Result<(), Box<dyn 
         logger(e);
     });
 
-    let tickets = TicketQueue::new();
+    let tasks = Queue::new();
 
-    tickets.policy(Policy {
+    tasks.policy(Policy {
         max_turns: Some(10),
         ..Default::default()
     });
-    tickets.on_event(move |_, e| event_handler(e));
-    tickets.agent(
+    tasks.on_event(move |_, e| event_handler(e));
+    tasks.agent(
         Agent::new()
             .provider(provider)
             .model(&model)
@@ -67,18 +67,18 @@ async fn grep_lists_unknown_function_names() -> std::result::Result<(), Box<dyn 
             .role(
                 "{context}\n\n\
                  Investigate the working directory and answer the user's question. \
-                 Use the available tools. When you have the answer, finish the ticket \
+                 Use the available tools. When you have the answer, finish the task \
                  via `finish`.",
             )
             .tool(GrepTool),
     );
-    tickets.ticket(
+    tasks.task(
         "List the names of every function defined in `geometry.rs`. The names are \
          not known in advance. Answer with the names.",
     );
 
-    tickets.finish_all().await;
-    common::print_result(&tickets);
+    tasks.finish_all().await;
+    common::print_result(&tasks);
 
     let recorded = calls.lock().unwrap().clone();
 
@@ -93,7 +93,7 @@ async fn grep_lists_unknown_function_names() -> std::result::Result<(), Box<dyn 
     );
 
     // The final answer should report every function name it discovered.
-    let answer = common::last_result_text(&tickets);
+    let answer = common::last_result_text(&tasks);
     assert!(
         answer.contains("area") && answer.contains("perimeter") && answer.contains("clamp"),
         "model should report all three function names; got: {answer:?}"

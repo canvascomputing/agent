@@ -16,7 +16,7 @@ const CATALOGUE: &[&str] = &[
     include_str!("directives/search.md"),
     include_str!("directives/fetch_url.md"),
     include_str!("directives/knowledge.md"),
-    include_str!("directives/tickets.md"),
+    include_str!("directives/tasks.md"),
     include_str!("directives/schemas.md"),
 ];
 
@@ -110,14 +110,14 @@ directives! {
     KNOWLEDGE_PAGE_NOT_FOUND = "knowledge_page_not_found",
     KNOWLEDGE_WRITE_FAILED = "knowledge_write_failed",
     KNOWLEDGE_REMOVE_FAILED = "knowledge_remove_failed",
-    TICKET_QUEUE_UNAVAILABLE = "ticket_queue_unavailable",
-    TICKET_KEY_MISSING = "ticket_key_missing",
-    TICKET_NOT_ASSIGNED = "ticket_not_assigned",
-    TICKET_NOT_FOUND = "ticket_not_found",
-    TICKET_RESULT_MISSING = "ticket_result_missing",
-    TICKET_QUERY_INVALID = "ticket_query_invalid",
-    TICKET_EDIT_INCOMPLETE = "ticket_edit_incomplete",
-    TICKET_TRANSITION_REJECTED = "ticket_transition_rejected",
+    QUEUE_UNAVAILABLE = "queue_unavailable",
+    TASK_KEY_MISSING = "task_key_missing",
+    TASK_NOT_ASSIGNED = "task_not_assigned",
+    TASK_NOT_FOUND = "task_not_found",
+    TASK_RESULT_MISSING = "task_result_missing",
+    TASK_QUERY_INVALID = "task_query_invalid",
+    TASK_EDIT_INCOMPLETE = "task_edit_incomplete",
+    TASK_TRANSITION_REJECTED = "task_transition_rejected",
     HANDOVER_RESULT_MISSING = "handover_result_missing",
     FINISH_ARGUMENT_BLANK = "finish_argument_blank",
     SCHEMA_FALSE_REJECTED = "schema_false_rejected",
@@ -191,7 +191,7 @@ impl DirectiveStore {
 /// The catalogue text for `key`, with `values` bound and no store consulted.
 /// Three groups render through this, each composed where no agent is in reach:
 /// the schema violations, the knowledge index, and the result-schema block a
-/// ticket appends to its own task.
+/// task appends to its own task.
 pub(crate) fn built_in(key: &'static str, values: &[(&str, &str)]) -> String {
     bind(catalogue().get(key).copied().unwrap_or(key), values)
 }

@@ -9,11 +9,11 @@ use crate::providers::types::StreamEvent;
 use crate::providers::{ContentBlock, ModelRequest, ProviderError};
 use crate::tools::ToolCall;
 
-use super::agent::TicketContext;
+use super::agent::TaskContext;
 use super::Step;
 
-pub(super) async fn run(context: &mut TicketContext<'_>) -> Option<Step> {
-    let Some(ticket) = context.ticket() else {
+pub(super) async fn run(context: &mut TaskContext<'_>) -> Option<Step> {
+    let Some(task) = context.task() else {
         return None;
     };
     let tools = context.tools.tools();
@@ -24,7 +24,7 @@ pub(super) async fn run(context: &mut TicketContext<'_>) -> Option<Step> {
     let request = ModelRequest {
         model: model_name,
         system_prompt: context.system_prompt.clone(),
-        messages: ticket.to_messages(),
+        messages: task.to_messages(),
         tools,
         max_request_tokens: context.policy.max_request_tokens,
         reasoning_effort: context.model.get_reasoning_effort(),
@@ -38,8 +38,8 @@ pub(super) async fn run(context: &mut TicketContext<'_>) -> Option<Step> {
         let outcome = {
             let provider = context.agent.get_provider();
             let agent_id = context.agent.id().to_string();
-            let ticket_key = context.ticket_key.clone();
-            let ticket_queue = Arc::clone(context.ticket_queue);
+            let task_key = context.task_key.clone();
+            let queue = Arc::clone(context.queue);
             let emit_stream: Arc<dyn Fn(StreamEvent) + Send + Sync> = Arc::new(move |event| {
                 let kind = match event {
                     StreamEvent::TextDelta { text, .. } => {
@@ -54,7 +54,7 @@ pub(super) async fn run(context: &mut TicketContext<'_>) -> Option<Step> {
                         EventKind::ToolCallDeclined { tool_name, reason }
                     }
                 };
-                ticket_queue.emit(&ticket_key, &agent_id, kind);
+                queue.emit(&task_key, &agent_id, kind);
             });
             tokio::select! {
                 biased;
@@ -95,13 +95,13 @@ pub(super) async fn run(context: &mut TicketContext<'_>) -> Option<Step> {
         }
     };
 
-    context.ticket_queue.add_reply(
-        &context.ticket_key,
-        crate::agents::tickets::Reply::assistant(&response.content),
+    context.queue.add_reply(
+        &context.task_key,
+        crate::agents::tasks::Reply::assistant(&response.content),
     );
 
     // Emitted after the reply lands: a handler or a `finish` filter that
-    // resolves the ticket must see the reply the event announces.
+    // resolves the task must see the reply the event announces.
     context.emit(EventKind::RequestFinished {
         model: response.model.clone(),
         usage: response.usage.clone(),
@@ -132,7 +132,7 @@ mod tests {
 
     use crate::agents::policy::Policy;
     use crate::agents::r#loop::test_util::*;
-    use crate::agents::tickets::Status;
+    use crate::agents::tasks::Status;
 
     // Request retries
 
@@ -143,12 +143,12 @@ mod tests {
             Err(rate_limit()),
             Ok(write_result_response("ok")),
         ]);
-        let (events, provider, ticket) = run_one(provider, 3, 10, None).await;
+        let (events, provider, task) = run_one(provider, 3, 10, None).await;
 
         assert_eq!(provider.requests(), 3);
         assert_eq!(retries_in(&events).len(), 2);
         assert!(failures_in(&events).is_empty());
-        assert_eq!(ticket.status, Status::Finished);
+        assert_eq!(task.status, Status::Finished);
     }
 
     #[tokio::test]
@@ -186,7 +186,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_finish_tool_the_model_is_shown_carries_the_tickets_schema() {
+    async fn the_finish_tool_the_model_is_shown_carries_the_tasks_schema() {
         use crate::schemas::Schema;
         let schema = Schema::new(serde_json::json!({
             "type": "object",
@@ -215,11 +215,11 @@ mod tests {
     #[tokio::test]
     async fn happy_path_emits_no_request_failed() {
         let provider = MockProvider::with_results(vec![Ok(write_result_response("ok"))]);
-        let (events, _, ticket) = run_one(provider, 3, 10, None).await;
+        let (events, _, task) = run_one(provider, 3, 10, None).await;
 
         assert!(retries_in(&events).is_empty());
         assert!(failures_in(&events).is_empty());
-        assert_eq!(ticket.status, Status::Finished);
+        assert_eq!(task.status, Status::Finished);
     }
 
     #[tokio::test]
@@ -324,7 +324,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn terminal_provider_error_marks_ticket_failed() {
+    async fn terminal_provider_error_marks_task_failed() {
         use crate::providers::ProviderError;
         let cases: Vec<ProviderError> = vec![
             ProviderError::AuthenticationFailed {
@@ -346,27 +346,27 @@ mod tests {
 
         for err in cases {
             let provider = MockProvider::with_results(vec![Err(err)]);
-            let (_, _, ticket) = run_one(provider, 3, 10, None).await;
+            let (_, _, task) = run_one(provider, 3, 10, None).await;
             assert_eq!(
-                ticket.status,
+                task.status,
                 Status::Failed,
-                "terminal provider error must transition ticket to Failed"
+                "terminal provider error must transition task to Failed"
             );
         }
     }
 
     #[tokio::test]
-    async fn retry_exhausted_marks_ticket_failed() {
+    async fn retry_exhausted_marks_task_failed() {
         let provider = MockProvider::with_results(vec![
             Err(rate_limit()),
             Err(rate_limit()),
             Err(rate_limit()),
         ]);
-        let (_, _, ticket) = run_one(provider, 2, 10, None).await;
+        let (_, _, task) = run_one(provider, 2, 10, None).await;
         assert_eq!(
-            ticket.status,
+            task.status,
             Status::Failed,
-            "exhausted retry budget must transition ticket to Failed"
+            "exhausted retry budget must transition task to Failed"
         );
     }
 
@@ -375,7 +375,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn request_retried_fires_after_backoff_sleep_not_before() {
         use crate::agents::agent::Agent;
-        use crate::agents::tickets::TicketQueue;
+        use crate::agents::tasks::Queue;
         use crate::event::EventKind;
         use std::sync::{Arc, Mutex};
 
@@ -394,19 +394,17 @@ mod tests {
         };
 
         let results_dir = crate::test_util::TempDir::new().unwrap();
-        let tickets = TicketQueue::new();
-        tickets
-            .dir(results_dir.path().to_path_buf())
-            .policy(Policy {
-                max_request_retries: 3,
-                request_retry_delay: Duration::from_millis(1),
-                ..Default::default()
-            });
-        tickets.on_event(move |_, e| handler(e));
-        tickets.agent(Agent::new().provider(provider).model("mock").role("test"));
-        tickets.ticket("go");
+        let tasks = Queue::new();
+        tasks.dir(results_dir.path().to_path_buf()).policy(Policy {
+            max_request_retries: 3,
+            request_retry_delay: Duration::from_millis(1),
+            ..Default::default()
+        });
+        tasks.on_event(move |_, e| handler(e));
+        tasks.agent(Agent::new().provider(provider).model("mock").role("test"));
+        tasks.task("go");
 
-        let run_fut = tickets.finish_all();
+        let run_fut = tasks.finish_all();
         let check_fut = async {
             for _ in 0..20 {
                 tokio::task::yield_now().await;
@@ -440,7 +438,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn cancel_during_backoff_sleep_aborts_immediately() {
         use crate::agents::agent::Agent;
-        use crate::agents::tickets::TicketQueue;
+        use crate::agents::tasks::Queue;
         use std::sync::{Arc, Mutex};
 
         let provider =
@@ -455,20 +453,18 @@ mod tests {
             Arc::new(move |e: &crate::event::Event| c.lock().unwrap().push(e.clone()))
         };
         let results_dir = crate::test_util::TempDir::new().unwrap();
-        let tickets = TicketQueue::new();
-        tickets
-            .dir(results_dir.path().to_path_buf())
-            .policy(Policy {
-                max_request_retries: 3,
-                request_retry_delay: Duration::from_secs(60),
-                ..Default::default()
-            });
-        tickets.on_event(move |_, e| handler(e));
-        tickets.agent(Agent::new().provider(provider).model("mock").role("test"));
-        tickets.ticket("go");
+        let tasks = Queue::new();
+        tasks.dir(results_dir.path().to_path_buf()).policy(Policy {
+            max_request_retries: 3,
+            request_retry_delay: Duration::from_secs(60),
+            ..Default::default()
+        });
+        tasks.on_event(move |_, e| handler(e));
+        tasks.agent(Agent::new().provider(provider).model("mock").role("test"));
+        tasks.task("go");
 
-        let run_fut = tickets.finish_all();
-        let cancel_handle = Arc::clone(&tickets);
+        let run_fut = tasks.finish_all();
+        let cancel_handle = Arc::clone(&tasks);
         let cancel_fut = async {
             for _ in 0..20 {
                 tokio::task::yield_now().await;
@@ -493,23 +489,19 @@ mod tests {
     use serde_json::Value;
 
     use crate::agents::agent::Agent;
-    use crate::agents::tickets::{Reply, ReplyContent, TicketQueue};
+    use crate::agents::tasks::{Queue, Reply, ReplyContent};
     use crate::event::{Event, EventKind};
     use crate::providers::{ContentBlock, Message};
     use crate::tools::{Tool, ToolResult};
 
-    type BoomHandler = Box<dyn Fn(&Arc<TicketQueue>, &Event) + Send + Sync>;
+    type BoomHandler = Box<dyn Fn(&Arc<Queue>, &Event) + Send + Sync>;
 
-    /// Run a ticket whose first turn calls a tool that always fails, then
+    /// Run a task whose first turn calls a tool that always fails, then
     /// writes a result. Registers `handler` when one is given. Returns the
     /// provider and temp dir so callers can inspect the requests and reload.
     async fn run_boom(
         handler: Option<BoomHandler>,
-    ) -> (
-        Arc<MockProvider>,
-        Arc<TicketQueue>,
-        crate::test_util::TempDir,
-    ) {
+    ) -> (Arc<MockProvider>, Arc<Queue>, crate::test_util::TempDir) {
         let provider = MockProvider::with_results(vec![
             Ok(tool_call_response("boom")),
             Ok(write_result_response("done")),
@@ -519,39 +511,37 @@ mod tests {
             .handler(|_: Value, _| async move { ToolResult::error("boom") })
             .build();
         let results_dir = crate::test_util::TempDir::new().unwrap();
-        let tickets = TicketQueue::new();
-        tickets
-            .dir(results_dir.path().to_path_buf())
-            .policy(Policy {
-                max_request_retries: 0,
-                request_retry_delay: Duration::from_millis(1),
-                max_schema_retries: Some(10),
-                max_time: Some(Duration::from_millis(500)),
-                ..Default::default()
-            });
+        let tasks = Queue::new();
+        tasks.dir(results_dir.path().to_path_buf()).policy(Policy {
+            max_request_retries: 0,
+            request_retry_delay: Duration::from_millis(1),
+            max_schema_retries: Some(10),
+            max_time: Some(Duration::from_millis(500)),
+            ..Default::default()
+        });
         if let Some(handler) = handler {
-            tickets.on_event(handler);
+            tasks.on_event(handler);
         }
-        tickets.agent(
+        tasks.agent(
             Agent::new()
                 .provider(provider.clone())
                 .model("mock")
                 .role("test")
                 .tool(boom),
         );
-        tickets.ticket("go");
-        let _ = tickets.finish_all().await;
-        (provider, tickets, results_dir)
+        tasks.task("go");
+        let _ = tasks.finish_all().await;
+        (provider, tasks, results_dir)
     }
 
     /// Handler that drops the whole failed tool exchange once a tool call
     /// fails: both the assistant's tool_use and the failed tool_result, so
     /// no unpaired block is left behind.
-    fn drop_failed_exchange(queue: &Arc<TicketQueue>, event: &Event) {
+    fn drop_failed_exchange(queue: &Arc<Queue>, event: &Event) {
         if !matches!(event.kind, EventKind::ToolCallFailed { .. }) {
             return;
         }
-        queue.edit_replies(&event.ticket_key, |replies| {
+        queue.edit_replies(&event.task_key, |replies| {
             replies.retain(|reply| {
                 !reply.content.iter().any(|b| {
                     matches!(
@@ -581,7 +571,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_event_handler_drops_the_failed_tool_exchange() {
-        let (provider, tickets, _dir) = run_boom(Some(Box::new(drop_failed_exchange))).await;
+        let (provider, tasks, _dir) = run_boom(Some(Box::new(drop_failed_exchange))).await;
 
         // The handler dropped both sides of the boom exchange, so the second
         // request carries no tool blocks.
@@ -590,17 +580,17 @@ mod tests {
             "boom exchange must be gone: {:?}",
             provider.received()[1],
         );
-        assert_eq!(tickets.tickets()[0].status, Status::Finished);
+        assert_eq!(tasks.tasks()[0].status, Status::Finished);
     }
 
     #[tokio::test]
     async fn an_event_handler_injects_a_message_into_the_next_request() {
-        let (provider, _tickets, _dir) =
-            run_boom(Some(Box::new(|queue: &Arc<TicketQueue>, event: &Event| {
+        let (provider, _tasks, _dir) =
+            run_boom(Some(Box::new(|queue: &Arc<Queue>, event: &Event| {
                 if !matches!(event.kind, EventKind::ToolCallFailed { .. }) {
                     return;
                 }
-                queue.edit_replies(&event.ticket_key, |replies| {
+                queue.edit_replies(&event.task_key, |replies| {
                     replies.push(Reply::user_text("HANDLER HINT: change approach"));
                 });
             })))
@@ -611,12 +601,12 @@ mod tests {
 
     #[tokio::test]
     async fn an_event_handler_rewrites_a_reply_in_place() {
-        let (provider, _tickets, _dir) =
-            run_boom(Some(Box::new(|queue: &Arc<TicketQueue>, event: &Event| {
+        let (provider, _tasks, _dir) =
+            run_boom(Some(Box::new(|queue: &Arc<Queue>, event: &Event| {
                 if !matches!(event.kind, EventKind::ToolCallFailed { .. }) {
                     return;
                 }
-                queue.edit_replies(&event.ticket_key, |replies| {
+                queue.edit_replies(&event.task_key, |replies| {
                     for reply in replies.iter_mut() {
                         for block in reply.content.iter_mut() {
                             if let ReplyContent::ToolResult { content, .. } = block {
@@ -639,12 +629,12 @@ mod tests {
 
     #[tokio::test]
     async fn edit_survives_reload() {
-        let (_provider, _tickets, dir) = run_boom(Some(Box::new(drop_failed_exchange))).await;
+        let (_provider, _tasks, dir) = run_boom(Some(Box::new(drop_failed_exchange))).await;
 
-        let reloaded = TicketQueue::load(dir.path()).unwrap();
-        let ticket = reloaded.tickets().into_iter().next().unwrap();
-        // The boom exchange is gone; the later finish_ticket call remains.
-        let keeps_boom = ticket.replies.iter().any(|reply| {
+        let reloaded = Queue::load(dir.path()).unwrap();
+        let task = reloaded.tasks().into_iter().next().unwrap();
+        // The boom exchange is gone; the later finish_task call remains.
+        let keeps_boom = task.replies.iter().any(|reply| {
             reply.content.iter().any(|b| match b {
                 ReplyContent::ToolUse { name, .. } => name == "boom",
                 ReplyContent::ToolResult { succeeded, .. } => !succeeded,
@@ -656,7 +646,7 @@ mod tests {
 
     #[tokio::test]
     async fn no_handler_leaves_the_boom_exchange_in_the_replies() {
-        let (provider, _tickets, _dir) = run_boom(None).await;
+        let (provider, _tasks, _dir) = run_boom(None).await;
 
         assert!(
             has_tool_blocks(&provider.received()[1]),

@@ -3,15 +3,15 @@
 
 use std::sync::Arc;
 
-use crate::agents::tickets::Reply;
+use crate::agents::tasks::Reply;
 use crate::event::{EventKind, PolicyViolation, RepairKind, ToolFailureKind};
 use crate::providers::ContentBlock;
 use crate::tools::{ToolCall, ToolContext, ToolResult};
 
-use super::agent::TicketContext;
+use super::agent::TaskContext;
 use super::Step;
 
-pub(super) async fn run(context: &mut TicketContext<'_>, mut calls: Vec<ToolCall>) -> Option<Step> {
+pub(super) async fn run(context: &mut TaskContext<'_>, mut calls: Vec<ToolCall>) -> Option<Step> {
     let max_schema_retries = context.policy.max_schema_retries.unwrap_or(u32::MAX);
     let registry = context.tools.clone();
 
@@ -42,9 +42,9 @@ pub(super) async fn run(context: &mut TicketContext<'_>, mut calls: Vec<ToolCall
 
     let tool_context = ToolContext::new(context.agent.get_dir())
         .run(Arc::clone(&context.run))
-        .ticket_queue(Arc::clone(context.ticket_queue))
+        .queue(Arc::clone(context.queue))
         .agent_id(context.agent.id().to_string())
-        .ticket_key(context.ticket_key.clone())
+        .task_key(context.task_key.clone())
         .knowledge(context.agent.get_knowledge())
         .directives(context.agent.get_directives());
 
@@ -91,7 +91,7 @@ pub(super) async fn run(context: &mut TicketContext<'_>, mut calls: Vec<ToolCall
             }
             ToolResult::Error { content, kind } => {
                 // Every tool failure counts toward the budget, so a stuck agent
-                // fails its ticket instead of looping until the time limit.
+                // fails its task instead of looping until the time limit.
                 context.consecutive_schema_failures =
                     context.consecutive_schema_failures.saturating_add(1);
                 if kind == ToolFailureKind::SchemaValidationFailed && first_schema_failure.is_none()
@@ -130,10 +130,10 @@ pub(super) async fn run(context: &mut TicketContext<'_>, mut calls: Vec<ToolCall
     }
 
     context
-        .ticket_queue
-        .add_reply(&context.ticket_key, Reply::user(&blocks, &offloaded));
+        .queue
+        .add_reply(&context.task_key, Reply::user(&blocks, &offloaded));
 
-    // Emitted after the reply lands: a handler that rewrites this ticket's
+    // Emitted after the reply lands: a handler that rewrites this task's
     // replies must find the tool result the event announces.
     for kind in kinds {
         context.emit(kind);
@@ -144,7 +144,7 @@ pub(super) async fn run(context: &mut TicketContext<'_>, mut calls: Vec<ToolCall
             policy: PolicyViolation::MaxSchemaRetries,
             limit: u64::from(max_schema_retries),
         });
-        context.fail_ticket();
+        context.fail_task();
         return None;
     }
     Some(Step::Evaluate)
@@ -160,40 +160,40 @@ mod tests {
     use crate::agents::agent::Agent;
     use crate::agents::policy::Policy;
     use crate::agents::r#loop::test_util::*;
-    use crate::agents::tickets::{Status, Ticket, TicketQueue};
+    use crate::agents::tasks::{Queue, Status, Task};
     use crate::event::{EventKind, PolicyViolation, RepairKind};
     use crate::schemas::Schema;
 
     #[tokio::test]
-    async fn write_result_finishes_ticket_with_valid_json() {
+    async fn write_result_finishes_task_with_valid_json() {
         let provider = MockProvider::with_results(vec![Ok(write_result_value(
             serde_json::json!({"partial_sum": 42}),
         ))]);
-        let (events, provider, ticket) =
+        let (events, provider, task) =
             run_one(provider, 3, 10, Some(schema_for_partial_sum())).await;
 
         assert_eq!(provider.requests(), 1);
         let done = events
             .iter()
-            .filter(|e| matches!(e.kind, EventKind::TicketFinished))
+            .filter(|e| matches!(e.kind, EventKind::TaskFinished))
             .count();
         let failed = events
             .iter()
-            .filter(|e| matches!(e.kind, EventKind::TicketFailed))
+            .filter(|e| matches!(e.kind, EventKind::TaskFailed))
             .count();
         assert_eq!(done, 1);
         assert_eq!(failed, 0);
-        assert_eq!(ticket.status, Status::Finished);
-        assert_eq!(ticket.result.as_ref().unwrap()["partial_sum"], 42);
+        assert_eq!(task.status, Status::Finished);
+        assert_eq!(task.result.as_ref().unwrap()["partial_sum"], 42);
     }
 
     #[tokio::test]
-    async fn a_result_wrapper_against_an_inlined_ticket_is_rejected_and_names_the_fields() {
+    async fn a_result_wrapper_against_an_inlined_task_is_rejected_and_names_the_fields() {
         let provider = MockProvider::with_results(vec![
             Ok(write_result_response("wrapped")),
             Ok(write_result_value(serde_json::json!({"partial_sum": 1}))),
         ]);
-        let (events, _, ticket) = run_one(provider, 3, 10, Some(schema_for_partial_sum())).await;
+        let (events, _, task) = run_one(provider, 3, 10, Some(schema_for_partial_sum())).await;
 
         let schema_retries = schema_retries_in(&events);
         assert_eq!(schema_retries.len(), 1, "the wrapper is not unwrapped");
@@ -202,7 +202,7 @@ mod tests {
             "the rejection names the fields to send: {}",
             schema_retries[0].2
         );
-        assert_eq!(ticket.status, Status::Finished, "one retry recovers");
+        assert_eq!(task.status, Status::Finished, "one retry recovers");
     }
 
     // Schema retries
@@ -214,7 +214,7 @@ mod tests {
             Ok(write_result_response("not json again")),
             Ok(write_result_value(serde_json::json!({"partial_sum": 42}))),
         ]);
-        let (events, _, ticket) = run_one(provider, 3, 10, Some(schema_for_partial_sum())).await;
+        let (events, _, task) = run_one(provider, 3, 10, Some(schema_for_partial_sum())).await;
 
         let schema_retries = schema_retries_in(&events);
         let attempts: Vec<u32> = schema_retries.iter().map(|(a, ..)| *a).collect();
@@ -222,7 +222,7 @@ mod tests {
         for (_, max_attempts, _) in &schema_retries {
             assert_eq!(*max_attempts, 10);
         }
-        assert_eq!(ticket.status, Status::Finished);
+        assert_eq!(task.status, Status::Finished);
     }
 
     #[tokio::test]
@@ -244,7 +244,7 @@ mod tests {
     #[tokio::test]
     async fn an_argument_violation_retries_against_the_failing_tools_own_schema() {
         let provider = MockProvider::with_results(vec![
-            Ok(tool_call_response("tickets")),
+            Ok(tool_call_response("tasks")),
             Ok(write_result_value(serde_json::json!({"partial_sum": 1}))),
         ]);
         let (events, _, _) = run_one(provider, 3, 10, Some(schema_for_partial_sum())).await;
@@ -252,7 +252,7 @@ mod tests {
         let schema_retries = schema_retries_in(&events);
         assert_eq!(schema_retries.len(), 1);
         let message = &schema_retries[0].2;
-        assert!(message.contains("`tickets` rejected"), "{message}");
+        assert!(message.contains("`tasks` rejected"), "{message}");
         // `partial_sum` belongs to the finish tool's schema, which is the one
         // the message must not print.
         assert!(!message.contains("partial_sum"), "{message}");
@@ -308,25 +308,23 @@ mod tests {
             Ok(write_result_response("not json")),
             Ok(write_result_value(serde_json::json!({"partial_sum": 1}))),
         ]);
-        let tickets = TicketQueue::new();
-        tickets
-            .dir(results_dir.path().to_path_buf())
-            .policy(Policy {
-                max_request_retries: 0,
-                request_retry_delay: Duration::from_millis(1),
-                max_schema_retries: Some(10),
-                max_time: Some(Duration::from_millis(500)),
-                ..Default::default()
-            });
-        tickets.agent(
+        let tasks = Queue::new();
+        tasks.dir(results_dir.path().to_path_buf()).policy(Policy {
+            max_request_retries: 0,
+            request_retry_delay: Duration::from_millis(1),
+            max_schema_retries: Some(10),
+            max_time: Some(Duration::from_millis(500)),
+            ..Default::default()
+        });
+        tasks.agent(
             Agent::new()
                 .provider(provider.clone())
                 .model("mock")
                 .role("test"),
         );
-        tickets.ticket(Ticket::new("go").schema(schema_for_partial_sum()));
+        tasks.task(Task::new("go").schema(schema_for_partial_sum()));
 
-        let _ = tickets.finish_all().await;
+        let _ = tasks.finish_all().await;
 
         let second = &provider.received()[1];
         let answered = second
@@ -353,13 +351,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn schema_retry_exhausted_emits_policy_violated_and_force_fails_ticket() {
+    async fn schema_retry_exhausted_emits_policy_violated_and_force_fails_task() {
         let provider = MockProvider::with_results(vec![
             Ok(write_result_response("nope")),
             Ok(write_result_response("still nope")),
             Ok(write_result_response("never")),
         ]);
-        let (events, _, ticket) = run_one(provider, 3, 2, Some(schema_for_partial_sum())).await;
+        let (events, _, task) = run_one(provider, 3, 2, Some(schema_for_partial_sum())).await;
 
         let policy_violated = events.iter().any(|e| {
             matches!(
@@ -371,21 +369,21 @@ mod tests {
             )
         });
         assert!(policy_violated, "expected MaxSchemaRetries PolicyViolated");
-        assert_eq!(ticket.status, Status::Failed);
+        assert_eq!(task.status, Status::Failed);
     }
 
     // Repeated failed tool calls (not just schema failures) count toward the budget.
 
     #[tokio::test]
-    async fn repeated_unknown_tool_calls_trip_the_budget_and_fail_the_ticket() {
+    async fn repeated_unknown_tool_calls_trip_the_budget_and_fail_the_task() {
         // The tester agent has no `ghost_tool`, so every call is ToolNotFound;
-        // three of them exhaust a budget of three and fail the ticket.
+        // three of them exhaust a budget of three and fail the task.
         let provider = MockProvider::with_results(vec![
             Ok(tool_call_response("ghost_tool")),
             Ok(tool_call_response("ghost_tool")),
             Ok(tool_call_response("ghost_tool")),
         ]);
-        let (events, _, ticket) = run_one(provider, 0, 3, None).await;
+        let (events, _, task) = run_one(provider, 0, 3, None).await;
 
         assert!(
             events.iter().any(|e| matches!(
@@ -397,18 +395,18 @@ mod tests {
             )),
             "expected MaxSchemaRetries PolicyViolated",
         );
-        assert_eq!(ticket.status, Status::Failed);
+        assert_eq!(task.status, Status::Failed);
     }
 
     #[tokio::test]
-    async fn a_hallucinated_tool_name_finishes_the_ticket_under_the_registered_name() {
+    async fn a_hallucinated_tool_name_finishes_the_task_under_the_registered_name() {
         let provider = MockProvider::with_results(vec![Ok(write_result_response_named(
             "finish_tool",
             "done",
         ))]);
-        let (events, _, ticket) = run_one(provider, 0, 3, None).await;
+        let (events, _, task) = run_one(provider, 0, 3, None).await;
 
-        assert_eq!(ticket.status, Status::Finished);
+        assert_eq!(task.status, Status::Finished);
         let names: Vec<&str> = events
             .iter()
             .filter_map(|e| match &e.kind {
@@ -464,9 +462,9 @@ mod tests {
         let provider = MockProvider::with_results(vec![Ok(write_result_value(
             serde_json::json!({"partial_sum": "42"}),
         ))]);
-        let (events, _, ticket) = run_one(provider, 3, 10, Some(schema_for_partial_sum())).await;
+        let (events, _, task) = run_one(provider, 3, 10, Some(schema_for_partial_sum())).await;
 
-        assert_eq!(ticket.status, Status::Finished);
+        assert_eq!(task.status, Status::Finished);
         let repairs: Vec<(&str, RepairKind, &str)> = events
             .iter()
             .filter_map(|e| match &e.kind {
@@ -489,11 +487,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn repeated_execution_failures_trip_the_budget_and_fail_the_ticket() {
+    async fn repeated_execution_failures_trip_the_budget_and_fail_the_task() {
         use std::time::Duration;
 
         use crate::agents::agent::Agent;
-        use crate::agents::tickets::TicketQueue;
+        use crate::agents::tasks::Queue;
         use crate::tools::{Tool, ToolResult};
 
         let provider = MockProvider::with_results(vec![
@@ -506,29 +504,27 @@ mod tests {
             .build();
 
         let results_dir = crate::test_util::TempDir::new().unwrap();
-        let tickets = TicketQueue::new();
-        tickets
-            .dir(results_dir.path().to_path_buf())
-            .policy(Policy {
-                max_request_retries: 0,
-                request_retry_delay: Duration::from_millis(1),
-                max_schema_retries: Some(2),
-                max_time: Some(Duration::from_millis(500)),
-                ..Default::default()
-            });
-        let collected = collect_events(&tickets);
-        tickets.agent(
+        let tasks = Queue::new();
+        tasks.dir(results_dir.path().to_path_buf()).policy(Policy {
+            max_request_retries: 0,
+            request_retry_delay: Duration::from_millis(1),
+            max_schema_retries: Some(2),
+            max_time: Some(Duration::from_millis(500)),
+            ..Default::default()
+        });
+        let collected = collect_events(&tasks);
+        tasks.agent(
             Agent::new()
                 .provider(provider)
                 .model("mock")
                 .role("test")
                 .tool(boom),
         );
-        tickets.ticket("go");
-        let _ = tickets.finish_all().await;
+        tasks.task("go");
+        let _ = tasks.finish_all().await;
 
         assert_eq!(
-            tickets.tickets().into_iter().next().unwrap().status,
+            tasks.tasks().into_iter().next().unwrap().status,
             Status::Failed
         );
         let events = collected.lock().unwrap().clone();
@@ -549,7 +545,7 @@ mod tests {
         use std::time::Duration;
 
         use crate::agents::agent::Agent;
-        use crate::agents::tickets::{ReplyContent, TicketQueue};
+        use crate::agents::tasks::{Queue, ReplyContent};
         use crate::tools::{Tool, ToolResult};
 
         let provider = MockProvider::with_results(vec![
@@ -562,24 +558,22 @@ mod tests {
             .build();
 
         let results_dir = crate::test_util::TempDir::new().unwrap();
-        let tickets = TicketQueue::new();
-        tickets
-            .dir(results_dir.path().to_path_buf())
-            .policy(Policy {
-                max_request_retries: 0,
-                request_retry_delay: Duration::from_millis(1),
-                max_time: Some(Duration::from_millis(500)),
-                ..Default::default()
-            });
+        let tasks = Queue::new();
+        tasks.dir(results_dir.path().to_path_buf()).policy(Policy {
+            max_request_retries: 0,
+            request_retry_delay: Duration::from_millis(1),
+            max_time: Some(Duration::from_millis(500)),
+            ..Default::default()
+        });
         // `None` until the handler runs, so the assertion also proves it did.
         let stored: Arc<Mutex<Option<bool>>> = Arc::new(Mutex::new(None));
         let seen = Arc::clone(&stored);
-        tickets.on_event(move |queue, event| {
+        tasks.on_event(move |queue, event| {
             if !matches!(event.kind, EventKind::ToolCallFailed { .. }) {
                 return;
             }
-            let ticket = queue.get_ticket(&event.ticket_key).unwrap();
-            let landed = ticket.replies.iter().any(|reply| {
+            let task = queue.get_task(&event.task_key).unwrap();
+            let landed = task.replies.iter().any(|reply| {
                 reply.content.iter().any(|block| {
                     matches!(
                         block,
@@ -592,15 +586,15 @@ mod tests {
             });
             *seen.lock().unwrap() = Some(landed);
         });
-        tickets.agent(
+        tasks.agent(
             Agent::new()
                 .provider(provider)
                 .model("mock")
                 .role("test")
                 .tool(boom),
         );
-        tickets.ticket("go");
-        let _ = tickets.finish_all().await;
+        tasks.task("go");
+        let _ = tasks.finish_all().await;
 
         assert_eq!(*stored.lock().unwrap(), Some(true));
     }
@@ -610,7 +604,7 @@ mod tests {
         use std::time::Duration;
 
         use crate::agents::agent::Agent;
-        use crate::agents::tickets::TicketQueue;
+        use crate::agents::tasks::Queue;
         use crate::tools::{Tool, ToolResult};
 
         // boom, ping, boom, finish: a budget of two would trip on the second
@@ -631,17 +625,15 @@ mod tests {
             .build();
 
         let results_dir = crate::test_util::TempDir::new().unwrap();
-        let tickets = TicketQueue::new();
-        tickets
-            .dir(results_dir.path().to_path_buf())
-            .policy(Policy {
-                max_request_retries: 0,
-                request_retry_delay: Duration::from_millis(1),
-                max_schema_retries: Some(2),
-                max_time: Some(Duration::from_millis(500)),
-                ..Default::default()
-            });
-        tickets.agent(
+        let tasks = Queue::new();
+        tasks.dir(results_dir.path().to_path_buf()).policy(Policy {
+            max_request_retries: 0,
+            request_retry_delay: Duration::from_millis(1),
+            max_schema_retries: Some(2),
+            max_time: Some(Duration::from_millis(500)),
+            ..Default::default()
+        });
+        tasks.agent(
             Agent::new()
                 .provider(provider)
                 .model("mock")
@@ -649,11 +641,11 @@ mod tests {
                 .tool(boom)
                 .tool(ping),
         );
-        tickets.ticket("go");
-        let _ = tickets.finish_all().await;
+        tasks.task("go");
+        let _ = tasks.finish_all().await;
 
         assert_eq!(
-            tickets.tickets().into_iter().next().unwrap().status,
+            tasks.tasks().into_iter().next().unwrap().status,
             Status::Finished
         );
     }
@@ -664,8 +656,8 @@ mod tests {
         use tokio::sync::Notify;
 
         use crate::agents::agent::Agent;
-        use crate::agents::tickets::TicketQueue;
-        use crate::tools::{TicketsTool, Tool, ToolResult};
+        use crate::agents::tasks::Queue;
+        use crate::tools::{TasksTool, Tool, ToolResult};
 
         let tool_started = Arc::new(Notify::new());
         let tool_unblocked = Arc::new(Notify::new());
@@ -691,34 +683,32 @@ mod tests {
             .build();
 
         let results_dir = crate::test_util::TempDir::new().unwrap();
-        let tickets = TicketQueue::new();
-        tickets
-            .dir(results_dir.path().to_path_buf())
-            .policy(Policy {
-                max_request_retries: 0,
-                request_retry_delay: Duration::from_millis(1),
-                max_schema_retries: Some(10),
-                max_time: Some(Duration::from_secs(5)),
-                ..Default::default()
-            });
-        tickets.agent(
+        let tasks = Queue::new();
+        tasks.dir(results_dir.path().to_path_buf()).policy(Policy {
+            max_request_retries: 0,
+            request_retry_delay: Duration::from_millis(1),
+            max_schema_retries: Some(10),
+            max_time: Some(Duration::from_secs(5)),
+            ..Default::default()
+        });
+        tasks.agent(
             Agent::new()
                 .provider(provider)
                 .model("mock")
                 .role("test")
-                .tool(TicketsTool)
+                .tool(TasksTool)
                 .tool(slow_tool),
         );
-        tickets.ticket("go");
+        tasks.task("go");
 
         let unblock = async move {
             tool_started.notified().await;
             tool_unblocked.notify_one();
         };
 
-        tokio::join!(tickets.finish_all(), unblock);
+        tokio::join!(tasks.finish_all(), unblock);
         assert_eq!(
-            tickets.tickets().into_iter().next().unwrap().status,
+            tasks.tasks().into_iter().next().unwrap().status,
             Status::Finished
         );
     }
@@ -726,8 +716,8 @@ mod tests {
     // Tool result offloading
 
     #[tokio::test]
-    async fn huge_tool_result_is_persisted_to_ticket_outputs_dir_and_ticket_finishes_done() {
-        use crate::agents::tickets::ReplyContent;
+    async fn huge_tool_result_is_persisted_to_task_outputs_dir_and_task_finishes_done() {
+        use crate::agents::tasks::ReplyContent;
         use crate::tools::{Tool, ToolResult};
 
         let provider = MockProvider::with_results(vec![
@@ -752,52 +742,45 @@ mod tests {
         };
 
         let results_dir = crate::test_util::TempDir::new().unwrap();
-        let tickets = TicketQueue::new();
-        tickets
-            .dir(results_dir.path().to_path_buf())
-            .policy(Policy {
-                max_request_retries: 0,
-                request_retry_delay: Duration::from_millis(1),
-                max_schema_retries: Some(10),
-                max_time: Some(Duration::from_millis(500)),
-                ..Default::default()
-            });
+        let tasks = Queue::new();
+        tasks.dir(results_dir.path().to_path_buf()).policy(Policy {
+            max_request_retries: 0,
+            request_retry_delay: Duration::from_millis(1),
+            max_schema_retries: Some(10),
+            max_time: Some(Duration::from_millis(500)),
+            ..Default::default()
+        });
 
         let dump = Tool::new("dump")
             .description("Returns ~800 KB of text")
             .handler(|_: Value, _ctx| async move { ToolResult::success("x".repeat(800_000)) })
             .build();
 
-        tickets.on_event(move |_, e| handler(e));
-        tickets.agent(
+        tasks.on_event(move |_, e| handler(e));
+        tasks.agent(
             Agent::new()
                 .provider(provider.clone())
                 .model("claude-sonnet-4-20250514")
                 .role("test")
                 .tool(dump),
         );
-        tickets.ticket("go");
+        tasks.task("go");
 
-        let _ = tickets.finish_all().await;
+        let _ = tasks.finish_all().await;
         let events = collected.lock().unwrap().clone();
-        let ticket = tickets
-            .tickets()
-            .into_iter()
-            .next()
-            .expect("ticket must exist");
+        let task = tasks.tasks().into_iter().next().expect("task must exist");
 
         assert_eq!(provider.requests(), 2);
         assert!(failures_in(&events).is_empty());
-        assert_eq!(ticket.status, Status::Finished);
+        assert_eq!(task.status, Status::Finished);
 
-        let relative_path: std::path::PathBuf = ["tickets", "TICKET-1", "outputs", "call-1.txt"]
-            .iter()
-            .collect();
+        let relative_path: std::path::PathBuf =
+            ["tasks", "t-1", "outputs", "call-1.txt"].iter().collect();
         let output_path = results_dir.path().join(&relative_path);
         let body = std::fs::read_to_string(&output_path).expect("offload file must exist");
         assert_eq!(body, "x".repeat(800_000));
 
-        let tool_result_path = ticket.replies.iter().find_map(|r| {
+        let tool_result_path = task.replies.iter().find_map(|r| {
             r.content.iter().find_map(|b| match b {
                 ReplyContent::ToolResult {
                     tool_use_id, path, ..
@@ -862,16 +845,14 @@ mod tests {
         ]);
 
         let results_dir = crate::test_util::TempDir::new().unwrap();
-        let tickets = TicketQueue::new();
-        tickets
-            .dir(results_dir.path().to_path_buf())
-            .policy(Policy {
-                max_request_retries: 0,
-                request_retry_delay: Duration::from_millis(1),
-                max_schema_retries: Some(10),
-                max_time: Some(Duration::from_millis(500)),
-                ..Default::default()
-            });
+        let tasks = Queue::new();
+        tasks.dir(results_dir.path().to_path_buf()).policy(Policy {
+            max_request_retries: 0,
+            request_retry_delay: Duration::from_millis(1),
+            max_schema_retries: Some(10),
+            max_time: Some(Duration::from_millis(500)),
+            ..Default::default()
+        });
 
         let size_tool = Tool::new("size_tool")
             .description("Returns N bytes of 'x'")
@@ -887,22 +868,18 @@ mod tests {
             })
             .build();
 
-        tickets.agent(
+        tasks.agent(
             Agent::new()
                 .provider(provider.clone())
                 .model("mock")
                 .role("test")
                 .tool(size_tool),
         );
-        tickets.ticket("go");
+        tasks.task("go");
 
-        let _ = tickets.finish_all().await;
-        let ticket = tickets
-            .tickets()
-            .into_iter()
-            .next()
-            .expect("ticket must exist");
-        assert_eq!(ticket.status, Status::Finished);
+        let _ = tasks.finish_all().await;
+        let task = tasks.tasks().into_iter().next().expect("task must exist");
+        assert_eq!(task.status, Status::Finished);
 
         let second = &provider.received()[1];
         let tool_results: Vec<&String> = second
@@ -930,8 +907,8 @@ mod tests {
             .expect("stub must be present");
         let expected_path = results_dir
             .path()
-            .join("tickets")
-            .join("TICKET-1")
+            .join("tasks")
+            .join("t-1")
             .join("outputs")
             .join("c1.txt");
         assert!(stub.contains(expected_path.to_string_lossy().as_ref()));

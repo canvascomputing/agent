@@ -7,12 +7,12 @@ use std::time::Duration;
 
 use crate::agents::agent::Agent;
 use crate::agents::policy::Policy;
-use crate::agents::tickets::{Ticket, TicketQueue};
+use crate::agents::tasks::{Queue, Task};
 use crate::event::Event;
 use crate::providers::types::{ModelResponse, ResponseStatus, TokenUsage};
 use crate::providers::{ContentBlock, Message, ProviderError, ProviderResult};
 use crate::schemas::Schema;
-use crate::tools::{TicketsTool, Tool};
+use crate::tools::{TasksTool, Tool};
 
 // Mock provider
 
@@ -286,13 +286,13 @@ pub fn task_agent(provider: &Arc<MockProvider>) -> Agent {
         .role("test")
 }
 
-pub fn collect_events(tickets: &TicketQueue) -> Arc<Mutex<Vec<Event>>> {
+pub fn collect_events(tasks: &Queue) -> Arc<Mutex<Vec<Event>>> {
     let collected: Arc<Mutex<Vec<Event>>> = Arc::new(Mutex::new(Vec::new()));
     let handler: Arc<dyn Fn(&Event) + Send + Sync> = {
         let c = Arc::clone(&collected);
         Arc::new(move |e: &Event| c.lock().unwrap().push(e.clone()))
     };
-    tickets.on_event(move |_, e| handler(e));
+    tasks.on_event(move |_, e| handler(e));
     collected
 }
 
@@ -303,7 +303,7 @@ pub async fn run_one(
     max_request_retries: u32,
     max_schema_retries: u32,
     schema: Option<Schema>,
-) -> (Vec<Event>, Arc<MockProvider>, Ticket) {
+) -> (Vec<Event>, Arc<MockProvider>, Task) {
     let collected: Arc<Mutex<Vec<Event>>> = Arc::new(Mutex::new(Vec::new()));
     let handler: Arc<dyn Fn(&Event) + Send + Sync> = {
         let c = Arc::clone(&collected);
@@ -311,47 +311,41 @@ pub async fn run_one(
     };
 
     let results_dir = crate::test_util::TempDir::new().unwrap();
-    let tickets = TicketQueue::new();
-    tickets
-        .dir(results_dir.path().to_path_buf())
-        .policy(Policy {
-            max_request_retries: max_request_retries,
-            request_retry_delay: Duration::from_millis(1),
-            max_schema_retries: Some(max_schema_retries),
-            max_time: Some(Duration::from_millis(200)),
-            ..Default::default()
-        });
+    let tasks = Queue::new();
+    tasks.dir(results_dir.path().to_path_buf()).policy(Policy {
+        max_request_retries: max_request_retries,
+        request_retry_delay: Duration::from_millis(1),
+        max_schema_retries: Some(max_schema_retries),
+        max_time: Some(Duration::from_millis(200)),
+        ..Default::default()
+    });
 
-    tickets.on_event(move |_, e| handler(e));
-    tickets.agent(
+    tasks.on_event(move |_, e| handler(e));
+    tasks.agent(
         Agent::new()
             .provider(provider.clone())
             .model("mock")
             .role("test")
-            .tool(TicketsTool),
+            .tool(TasksTool),
     );
 
     if let Some(schema) = schema {
-        tickets.ticket(Ticket::new("go").schema(schema));
+        tasks.task(Task::new("go").schema(schema));
     } else {
-        tickets.ticket("go");
+        tasks.task("go");
     }
 
-    let _ = tickets.finish_all().await;
+    let _ = tasks.finish_all().await;
     let events = collected.lock().unwrap().clone();
-    let ticket = tickets
-        .tickets()
-        .into_iter()
-        .next()
-        .expect("ticket must exist");
-    (events, provider, ticket)
+    let task = tasks.tasks().into_iter().next().expect("task must exist");
+    (events, provider, task)
 }
 
 pub async fn run_with_context_window(
     provider: Arc<MockProvider>,
     context_window_size: u64,
     task: impl Into<String>,
-) -> (Vec<Event>, Arc<MockProvider>, Ticket) {
+) -> (Vec<Event>, Arc<MockProvider>, Task) {
     let task: String = task.into();
     use crate::providers::Model;
     let collected: Arc<Mutex<Vec<Event>>> = Arc::new(Mutex::new(Vec::new()));
@@ -361,42 +355,36 @@ pub async fn run_with_context_window(
     };
 
     let results_dir = crate::test_util::TempDir::new().unwrap();
-    let tickets = TicketQueue::new();
-    tickets
-        .dir(results_dir.path().to_path_buf())
-        .policy(Policy {
-            max_request_retries: 0,
-            request_retry_delay: Duration::from_millis(1),
-            max_schema_retries: Some(10),
-            max_time: Some(Duration::from_secs(5)),
-            ..Default::default()
-        });
-    tickets.on_event(move |_, e| handler(e));
-    tickets.agent(
+    let tasks = Queue::new();
+    tasks.dir(results_dir.path().to_path_buf()).policy(Policy {
+        max_request_retries: 0,
+        request_retry_delay: Duration::from_millis(1),
+        max_schema_retries: Some(10),
+        max_time: Some(Duration::from_secs(5)),
+        ..Default::default()
+    });
+    tasks.on_event(move |_, e| handler(e));
+    tasks.agent(
         Agent::new()
             .provider(provider.clone())
             .model(Model::new("mock").context_window(context_window_size))
             .role("test"),
     );
-    tickets.ticket(task);
+    tasks.task(task);
 
-    let _ = tickets.finish_all().await;
+    let _ = tasks.finish_all().await;
     let events = collected.lock().unwrap().clone();
-    let ticket = tickets
-        .tickets()
-        .into_iter()
-        .next()
-        .expect("ticket must exist");
-    (events, provider, ticket)
+    let task = tasks.tasks().into_iter().next().expect("task must exist");
+    (events, provider, task)
 }
 
-/// Drive one ticket on a model with a 200 000-token window, so the proactive
+/// Drive one task on a model with a 200 000-token window, so the proactive
 /// threshold is reachable. `configure` runs before the agents start: for
 /// installing a compaction editor, or moving the trigger.
 pub async fn run_compaction(
     provider: Arc<MockProvider>,
-    configure: impl FnOnce(&Arc<TicketQueue>),
-) -> (Vec<Event>, Arc<MockProvider>, Ticket) {
+    configure: impl FnOnce(&Arc<Queue>),
+) -> (Vec<Event>, Arc<MockProvider>, Task) {
     let collected: Arc<Mutex<Vec<Event>>> = Arc::new(Mutex::new(Vec::new()));
     let handler: Arc<dyn Fn(&Event) + Send + Sync> = {
         let c = Arc::clone(&collected);
@@ -404,37 +392,31 @@ pub async fn run_compaction(
     };
 
     let results_dir = crate::test_util::TempDir::new().unwrap();
-    let tickets = TicketQueue::new();
-    tickets
-        .dir(results_dir.path().to_path_buf())
-        .policy(Policy {
-            max_request_retries: 0,
-            request_retry_delay: Duration::from_millis(1),
-            max_schema_retries: Some(10),
-            max_time: Some(Duration::from_secs(30)),
-            ..Default::default()
-        });
+    let tasks = Queue::new();
+    tasks.dir(results_dir.path().to_path_buf()).policy(Policy {
+        max_request_retries: 0,
+        request_retry_delay: Duration::from_millis(1),
+        max_schema_retries: Some(10),
+        max_time: Some(Duration::from_secs(30)),
+        ..Default::default()
+    });
 
-    tickets.on_event(move |_, e| handler(e));
-    tickets.agent(
+    tasks.on_event(move |_, e| handler(e));
+    tasks.agent(
         Agent::new()
             .provider(provider.clone())
             .model("claude-sonnet-4-20250514")
             .role("test")
-            .tool(TicketsTool),
+            .tool(TasksTool),
     );
-    configure(&tickets);
+    configure(&tasks);
     let schema = Schema::new(serde_json::json!({"type": "string"})).unwrap();
-    tickets.ticket(Ticket::new("go").schema(schema));
+    tasks.task(Task::new("go").schema(schema));
 
-    let _ = tickets.finish_all().await;
+    let _ = tasks.finish_all().await;
     let events = collected.lock().unwrap().clone();
-    let ticket = tickets
-        .tickets()
-        .into_iter()
-        .next()
-        .expect("ticket must exist");
-    (events, provider, ticket)
+    let task = tasks.tasks().into_iter().next().expect("task must exist");
+    (events, provider, task)
 }
 
 pub fn string_schema() -> Schema {

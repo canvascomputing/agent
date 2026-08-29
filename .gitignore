@@ -11,7 +11,7 @@
 # Default knowledge store directory created by every bound agent.
 **/.agentwerk
 
-# Malware-scanner working folder (tickets, knowledge, analysis output).
+# Malware-scanner working folder (tasks, knowledge, analysis output).
 **/.malware-scanner
 
 # Per-contributor integration-test env (see agentdocs/workflow.md).

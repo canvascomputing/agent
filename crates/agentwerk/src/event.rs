@@ -38,7 +38,7 @@ pub enum PolicyViolation {
     /// `max_output_tokens`: the total output-token limit.
     OutputTokens,
     /// `max_schema_retries`: consecutive failed tool calls or silent
-    /// no-tool replies on one ticket. Any successful call resets the count.
+    /// no-tool replies on one task. Any successful call resets the count.
     MaxSchemaRetries,
     /// `max_time`: the elapsed-duration limit. The matching event reports its
     /// `limit` in milliseconds.
@@ -60,7 +60,7 @@ impl fmt::Display for PolicyViolation {
 /// Why execution ended.
 ///
 /// Carried by [`EventKind::RunFinished`], and handed back by
-/// `TicketQueue::finish` once the wait is over.
+/// `Queue::finish` once the wait is over.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FinishReason {
@@ -210,20 +210,20 @@ impl fmt::Display for KnowledgeAction {
 }
 
 /// An `Event` reports one thing that happened as agents work. It names the
-/// agent that produced it, the ticket it concerns, and what happened.
+/// agent that produced it, the task it concerns, and what happened.
 ///
 /// ```no_run
-/// use agentwerk::TicketQueue;
+/// use agentwerk::Queue;
 /// use agentwerk::event::EventKind;
 ///
 /// # async fn run() {
-/// let tickets = TicketQueue::new();
-/// tickets.on_event(|_, event| {
-///     if let EventKind::TicketFinished = &event.kind {
-///         eprintln!("[{}] done {}", event.agent_id, event.ticket_key);
+/// let tasks = Queue::new();
+/// tasks.on_event(|_, event| {
+///     if let EventKind::TaskFinished = &event.kind {
+///         eprintln!("[{}] done {}", event.agent_id, event.task_key);
 ///     }
 /// });
-/// tickets.finish_all().await;
+/// tasks.finish_all().await;
 /// # }
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -231,12 +231,12 @@ pub struct Event {
     /// When this event happened, in milliseconds since the epoch.
     pub created_at: u64,
     pub agent_id: String,
-    /// Key of the ticket this event concerns. Empty on `RunStarted` and
-    /// `RunFinished`, which no ticket owns.
-    pub ticket_key: String,
-    /// Label the ticket carries, so a handler counting per label reads it
-    /// without looking the ticket up. `None` when the event names no ticket,
-    /// and when the ticket carries no label.
+    /// Key of the task this event concerns. Empty on `RunStarted` and
+    /// `RunFinished`, which no task owns.
+    pub task_key: String,
+    /// Label the task carries, so a handler counting per label reads it
+    /// without looking the task up. `None` when the event names no task,
+    /// and when the task carries no label.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
     /// Flattened, so one logged line carries the kind's name and its payload
@@ -248,14 +248,14 @@ pub struct Event {
 impl Event {
     pub(crate) fn new(
         agent_id: impl Into<String>,
-        ticket_key: impl Into<String>,
+        task_key: impl Into<String>,
         label: Option<String>,
         kind: EventKind,
     ) -> Self {
         Self {
-            created_at: crate::agents::tickets::now_millis(),
+            created_at: crate::agents::tasks::now_millis(),
             agent_id: agent_id.into(),
-            ticket_key: ticket_key.into(),
+            task_key: task_key.into(),
             label,
             kind,
         }
@@ -265,9 +265,9 @@ impl Event {
 /// What an [`Event`] reports.
 ///
 /// Most kinds name the agent they came from on the wrapping [`Event`].
-/// `RunStarted` and `RunFinished` come from the `TicketQueue` itself and
-/// arrive with an empty `agent_id`, as does `TicketFailed` when the host
-/// fails a ticket through `TicketQueue::set_failed`.
+/// `RunStarted` and `RunFinished` come from the `Queue` itself and
+/// arrive with an empty `agent_id`, as does `TaskFailed` when the host
+/// fails a task through `Queue::set_failed`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum EventKind {
@@ -275,21 +275,21 @@ pub enum EventKind {
     RunStarted,
     /// Execution ended, carrying the reason.
     RunFinished { reason: FinishReason },
-    /// A ticket was filed. The agent id is its reporter.
-    TicketCreated,
-    /// An agent claimed a ticket.
-    TicketStarted,
-    /// A ticket finished successfully.
-    TicketFinished,
-    /// A ticket failed.
-    TicketFailed,
-    /// The agent began another turn on its ticket.
+    /// A task was filed. The agent id is its reporter.
+    TaskCreated,
+    /// An agent claimed a task.
+    TaskStarted,
+    /// A task finished successfully.
+    TaskFinished,
+    /// A task failed.
+    TaskFailed,
+    /// The agent began another turn on its task.
     TurnStarted,
     /// A request went out to the model.
     RequestStarted { model: String },
     /// A request finished and reported its token usage.
     RequestFinished { model: String, usage: TokenUsage },
-    /// A request failed and was not retried. The ticket is about to fail.
+    /// A request failed and was not retried. The task is about to fail.
     RequestFailed {
         model: String,
         reason: RequestErrorKind,
@@ -332,7 +332,7 @@ pub enum EventKind {
         call_id: String,
         output: String,
     },
-    /// A tool invocation failed but the ticket continues. The message goes back
+    /// A tool invocation failed but the task continues. The message goes back
     /// to the model as a tool result.
     ToolCallFailed {
         tool_name: String,
@@ -383,7 +383,7 @@ pub enum EventKind {
     },
     /// Compaction replaced the older messages with a summary.
     CompactionFinished { reason: CompactReason },
-    /// Compaction could not finish. The ticket is about to fail the same way a
+    /// Compaction could not finish. The task is about to fail the same way a
     /// failed request ends it.
     CompactionFailed {
         reason: CompactReason,
@@ -402,10 +402,10 @@ impl EventKind {
         match self {
             EventKind::RunStarted => EventName::RunStarted,
             EventKind::RunFinished { .. } => EventName::RunFinished,
-            EventKind::TicketCreated => EventName::TicketCreated,
-            EventKind::TicketStarted => EventName::TicketStarted,
-            EventKind::TicketFinished => EventName::TicketFinished,
-            EventKind::TicketFailed => EventName::TicketFailed,
+            EventKind::TaskCreated => EventName::TaskCreated,
+            EventKind::TaskStarted => EventName::TaskStarted,
+            EventKind::TaskFinished => EventName::TaskFinished,
+            EventKind::TaskFailed => EventName::TaskFailed,
             EventKind::TurnStarted => EventName::TurnStarted,
             EventKind::RequestStarted { .. } => EventName::RequestStarted,
             EventKind::RequestFinished { .. } => EventName::RequestFinished,
@@ -434,12 +434,12 @@ impl EventKind {
     }
 
     /// Whether this kind reports something that went wrong. The kinds
-    /// `TicketQueue::on_failure` fires on, so a handler on the plain event
+    /// `Queue::on_failure` fires on, so a handler on the plain event
     /// chain can ask the same question.
     pub fn is_failure(&self) -> bool {
         matches!(
             self,
-            EventKind::TicketFailed
+            EventKind::TaskFailed
                 | EventKind::RequestFailed { .. }
                 | EventKind::ToolCallFailed { .. }
                 | EventKind::FileOpenFailed { .. }
@@ -463,10 +463,10 @@ impl fmt::Display for EventKind {
 pub enum EventName {
     RunStarted,
     RunFinished,
-    TicketCreated,
-    TicketStarted,
-    TicketFinished,
-    TicketFailed,
+    TaskCreated,
+    TaskStarted,
+    TaskFinished,
+    TaskFailed,
     TurnStarted,
     RequestStarted,
     RequestFinished,
@@ -498,10 +498,10 @@ impl EventName {
     pub const ALL: &'static [EventName] = &[
         EventName::RunStarted,
         EventName::RunFinished,
-        EventName::TicketCreated,
-        EventName::TicketStarted,
-        EventName::TicketFinished,
-        EventName::TicketFailed,
+        EventName::TaskCreated,
+        EventName::TaskStarted,
+        EventName::TaskFinished,
+        EventName::TaskFailed,
         EventName::TurnStarted,
         EventName::RequestStarted,
         EventName::RequestFinished,
@@ -533,10 +533,10 @@ impl EventName {
         match self {
             EventName::RunStarted => "run_started",
             EventName::RunFinished => "run_finished",
-            EventName::TicketCreated => "ticket_created",
-            EventName::TicketStarted => "ticket_started",
-            EventName::TicketFinished => "ticket_finished",
-            EventName::TicketFailed => "ticket_failed",
+            EventName::TaskCreated => "task_created",
+            EventName::TaskStarted => "task_started",
+            EventName::TaskFinished => "task_finished",
+            EventName::TaskFailed => "task_failed",
             EventName::TurnStarted => "turn_started",
             EventName::RequestStarted => "request_started",
             EventName::RequestFinished => "request_finished",
@@ -573,7 +573,7 @@ impl fmt::Display for EventName {
 
 /// The handler that runs when you install none of your own.
 ///
-/// It prints ticket lifecycle, tool activity, limit breaches, and failed
+/// It prints task lifecycle, tool activity, limit breaches, and failed
 /// requests to stderr, and drops the rest.
 pub fn default_logger() -> Arc<dyn Fn(&Event) + Send + Sync> {
     Arc::new(|event: &Event| {
@@ -585,17 +585,17 @@ pub fn default_logger() -> Arc<dyn Fn(&Event) + Send + Sync> {
             EventKind::RunFinished { reason } => {
                 eprintln!("run finished: {reason}");
             }
-            EventKind::TicketCreated => {
-                eprintln!("[{agent}] created {}", event.ticket_key);
+            EventKind::TaskCreated => {
+                eprintln!("[{agent}] created {}", event.task_key);
             }
-            EventKind::TicketStarted => {
-                eprintln!("[{agent}] started {}", event.ticket_key);
+            EventKind::TaskStarted => {
+                eprintln!("[{agent}] started {}", event.task_key);
             }
-            EventKind::TicketFinished => {
-                eprintln!("[{agent}] finished {}", event.ticket_key);
+            EventKind::TaskFinished => {
+                eprintln!("[{agent}] finished {}", event.task_key);
             }
-            EventKind::TicketFailed => {
-                eprintln!("[{agent}] failed {}", event.ticket_key);
+            EventKind::TaskFailed => {
+                eprintln!("[{agent}] failed {}", event.task_key);
             }
             EventKind::ToolCallStarted {
                 tool_name, input, ..
@@ -681,10 +681,10 @@ pub(crate) mod tests {
             EventKind::RunFinished {
                 reason: FinishReason::Cancelled,
             },
-            EventKind::TicketCreated,
-            EventKind::TicketStarted,
-            EventKind::TicketFinished,
-            EventKind::TicketFailed,
+            EventKind::TaskCreated,
+            EventKind::TaskStarted,
+            EventKind::TaskFinished,
+            EventKind::TaskFailed,
             EventKind::TurnStarted,
             EventKind::RequestStarted { model: "m".into() },
             EventKind::RequestFinished {
@@ -737,7 +737,7 @@ pub(crate) mod tests {
                 message: "not found".into(),
             },
             EventKind::ToolCallFailed {
-                tool_name: "tickets".into(),
+                tool_name: "tasks".into(),
                 call_id: "c2".into(),
                 reason: ToolFailureKind::SchemaValidationFailed,
                 message: "Schema validation failed".into(),
@@ -812,7 +812,7 @@ pub(crate) mod tests {
         assert_eq!(
             failures,
             BTreeSet::from([
-                "ticket_failed",
+                "task_failed",
                 "request_failed",
                 "tool_call_failed",
                 "file_open_failed",
@@ -854,7 +854,7 @@ pub(crate) mod tests {
     fn a_logged_kind_names_itself_the_way_event_name_spells_it() {
         for kind in all_variants() {
             let name = kind.event_name();
-            let event = Event::new("agent", "TICKET-1", None, kind);
+            let event = Event::new("agent", "t-1", None, kind);
             let line = serde_json::to_value(&event).unwrap();
             assert_eq!(line["event"].as_str(), Some(name.name()));
         }

@@ -1,4 +1,4 @@
-//! Durable memory an agent shares across tickets and with other agents, stored
+//! Durable memory an agent shares across tasks and with other agents, stored
 //! as markdown pages on disk.
 
 use std::fmt;
@@ -69,7 +69,7 @@ fn io_failed(message: impl Into<String>) -> impl FnOnce(io::Error) -> KnowledgeE
 }
 
 /// `Knowledge` allows agents to share insights or learnings, kept on disk so
-/// they outlive the ticket that produced them.
+/// they outlive the task that produced them.
 ///
 /// Pages are created in the Open Knowledge Format (OKF) v0.1 under
 /// `<dir>/knowledge/pages/<slug>.md`, each carrying `type`, `description`, and

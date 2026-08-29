@@ -14,7 +14,7 @@ pytestmark = pytest.mark.live
 
 
 async def test_runs_a_single_task_to_a_result(live_agent):
-    live_agent.ticket("Reply with exactly the word: pong")
+    live_agent.task("Reply with exactly the word: pong")
     # The reason is only announced, so the handler goes on before the run ends.
     work = live_agent.start()
     reasons = []
@@ -36,7 +36,7 @@ async def test_invokes_a_builtin_tool(tmp_path):
         .dir(str(tmp_path))
         .tool(aw.ReadFileTool())
     )
-    agent.ticket("Read secret.txt and report the exact token it contains.")
+    agent.task("Read secret.txt and report the exact token it contains.")
     work = agent.start()
     assert "THE-TOKEN-IS-42" in str(await work.finish_last())
 
@@ -56,7 +56,7 @@ async def test_invokes_a_python_tool_and_records_the_file_it_opened(tmp_path):
         .role("Call the slurp tool on the given file, then finish.")
         .tool(slurp)
     )
-    agent.ticket("Read note.txt with the slurp tool and report the token it contains.")
+    agent.task("Read note.txt with the slurp tool and report the token it contains.")
     work = agent.start()
     opened = []
     work.on_event(
@@ -71,7 +71,7 @@ async def test_invokes_a_python_tool_and_records_the_file_it_opened(tmp_path):
 
 
 async def test_runs_two_labeled_agents_with_events_and_chaining():
-    queue = aw.TicketQueue().policy(aw.Policy(max_turns=30))
+    queue = aw.Queue().policy(aw.Policy(max_turns=30))
 
     kinds = []
     queue.on_event(lambda _, event: kinds.append(event.kind))
@@ -83,35 +83,35 @@ async def test_runs_two_labeled_agents_with_events_and_chaining():
         aw.Agent.from_env().label("b").role("Reply with one word: beta")
     )
 
-    def chain(work, ticket, result):
-        if ticket.has_label("a"):
-            work.ticket(aw.Ticket("Reply beta", label="b"))
+    def chain(work, task, result):
+        if task.has_label("a"):
+            work.task(aw.Task("Reply beta", label="b"))
 
     queue.on_result(chain)
-    queue.ticket(aw.Ticket("Reply alpha", label="a"))
+    queue.task(aw.Task("Reply alpha", label="a"))
     await queue.finish_all()
 
     assert len(queue.results()) == 2
-    assert "ticket_finished" in kinds
+    assert "task_finished" in kinds
 
 
-async def test_saves_the_messages_of_a_finished_ticket(tmp_path):
-    queue = aw.TicketQueue().policy(aw.Policy(max_turns=10))
+async def test_saves_the_messages_of_a_finished_task(tmp_path):
+    queue = aw.Queue().policy(aw.Policy(max_turns=10))
     queue.agent(
         aw.Agent.from_env().role("Reply with one word: pong")
     )
 
     captured = []
 
-    def capture(_, event, ticket):
-        if event.kind == "ticket_finished":
+    def capture(_, event, task):
+        if event.kind == "task_finished":
             model = queue.model_for_agent(event.agent_id)
-            trajectory = aw.Trajectory.from_ticket(event.agent_id, model, ticket)
+            trajectory = aw.Trajectory.from_task(event.agent_id, model, task)
             trajectory.save(str(tmp_path))
             captured.append((event.agent_id, len(trajectory.replies), trajectory.model))
 
-    queue.on_ticket(capture)
-    key = queue.ticket("Reply with exactly the word: pong")
+    queue.on_task(capture)
+    key = queue.task("Reply with exactly the word: pong")
     await queue.finish_all()
 
     (agent_id, replies, model), = captured
@@ -122,11 +122,11 @@ async def test_saves_the_messages_of_a_finished_ticket(tmp_path):
 
 
 async def test_compaction_summarizes_the_replies_against_the_live_model(tmp_path):
-    # An interactive agent carries no finish tool, so the ticket cannot end on
+    # An interactive agent carries no finish tool, so the task cannot end on
     # turn one and skip compaction. The follow-up reply drives the request that
     # a threshold of zero compacts before.
     task = "Name one colour and say why you picked it."
-    queue = aw.TicketQueue().dir(str(tmp_path))
+    queue = aw.Queue().dir(str(tmp_path))
     queue.policy(aw.Policy(compaction_threshold=0.0))
     kinds = []
     queue.on_event(
@@ -138,7 +138,7 @@ async def test_compaction_summarizes_the_replies_against_the_live_model(tmp_path
         aw.Agent.from_env().role("Answer in plain text.").interactive()
     )
     queue.start()
-    key = queue.ticket(task)
+    key = queue.task(task)
     await _until(lambda: _answered(queue, key))
     queue.reply(key, "Now name a second colour.")
     await _until(lambda: "compaction_finished" in kinds)
@@ -146,13 +146,13 @@ async def test_compaction_summarizes_the_replies_against_the_live_model(tmp_path
     await queue.finish_all()
 
     assert "compaction_failed" not in kinds
-    texts = [b.data.get("text", "") for r in queue.get_ticket(key).replies for b in r.content]
+    texts = [b.data.get("text", "") for r in queue.get_task(key).replies for b in r.content]
     assert task not in texts, "the summary must have replaced the task reply"
     assert any(text.strip() for text in texts), "the summary must carry text"
 
 
 def _answered(queue, key):
-    replies = queue.get_ticket(key).replies
+    replies = queue.get_task(key).replies
     return bool(replies) and replies[-1].author == "assistant"
 
 

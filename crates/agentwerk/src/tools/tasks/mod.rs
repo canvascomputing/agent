@@ -1,33 +1,32 @@
-//! The tools an agent reaches its own ticket queue through: reading it, adding
-//! to it, and finishing the ticket it holds.
+//! The tools an agent reaches its own task queue through: reading it, adding
+//! to it, and finishing the task it holds.
 
 use std::path::Path;
 
 use serde_json::Value;
 
-use crate::agents::tickets::{Status, Ticket, TicketError, TicketQueue};
+use crate::agents::tasks::{Queue, Status, Task, TaskError};
 use crate::agents::Query;
 use crate::prompts::directives::{
-    DirectiveStore, TICKET_EDIT_INCOMPLETE, TICKET_KEY_MISSING, TICKET_NOT_ASSIGNED,
-    TICKET_NOT_FOUND, TICKET_QUERY_INVALID, TICKET_QUEUE_UNAVAILABLE, TICKET_RESULT_MISSING,
-    TICKET_TRANSITION_REJECTED,
+    DirectiveStore, QUEUE_UNAVAILABLE, TASK_EDIT_INCOMPLETE, TASK_KEY_MISSING, TASK_NOT_ASSIGNED,
+    TASK_NOT_FOUND, TASK_QUERY_INVALID, TASK_RESULT_MISSING, TASK_TRANSITION_REJECTED,
 };
 
 use super::tool::{ToolContext, ToolResult};
 
 mod finish;
-mod tickets;
+mod tasks;
 
 pub use finish::FinishTool;
-pub use tickets::TicketsTool;
+pub use tasks::TasksTool;
 
 /// What the model asks the queue to do. The schema declares `action` as the
 /// discriminator and states which fields each one requires; the variants say
 /// the same in Rust, so `search` cannot arrive without a `query`.
 #[derive(serde::Deserialize)]
 #[serde(tag = "action", rename_all = "lowercase")]
-pub enum TicketsArgs {
-    Ticket {
+pub enum TasksArgs {
+    Task {
         key: Option<String>,
     },
     Result {
@@ -47,37 +46,34 @@ pub enum TicketsArgs {
     },
 }
 
-pub(super) fn dispatch(args: TicketsArgs, ctx: &ToolContext) -> ToolResult {
-    let Some(queue) = ctx.ticket_queue.clone() else {
-        return ToolResult::error(ctx.directives.render(TICKET_QUEUE_UNAVAILABLE, &[]));
+pub(super) fn dispatch(args: TasksArgs, ctx: &ToolContext) -> ToolResult {
+    let Some(queue) = ctx.queue.clone() else {
+        return ToolResult::error(ctx.directives.render(QUEUE_UNAVAILABLE, &[]));
     };
 
     match args {
-        TicketsArgs::Ticket { key } => action_ticket(&queue, key, ctx),
-        TicketsArgs::Result { key } => action_result(&queue, key, ctx),
-        TicketsArgs::List { aql } => action_list(&queue, aql, &ctx.directives),
-        TicketsArgs::Create { task, label } => action_create(&queue, task, label, ctx),
-        TicketsArgs::Edit { key, task, label } => action_edit(&queue, key, task, label, ctx),
+        TasksArgs::Task { key } => action_task(&queue, key, ctx),
+        TasksArgs::Result { key } => action_result(&queue, key, ctx),
+        TasksArgs::List { aql } => action_list(&queue, aql, &ctx.directives),
+        TasksArgs::Create { task, label } => action_create(&queue, task, label, ctx),
+        TasksArgs::Edit { key, task, label } => action_edit(&queue, key, task, label, ctx),
     }
 }
 
-/// The ticket an action names, or the one this agent is holding.
+/// The task an action names, or the one this agent is holding.
 fn resolve_key(
-    ticket_queue: &TicketQueue,
+    queue: &Queue,
     key: Option<String>,
     ctx: &ToolContext,
 ) -> Result<String, ToolResult> {
     match key {
         Some(key) => Ok(key),
-        None => resolve_current_key(ticket_queue, ctx),
+        None => resolve_current_key(queue, ctx),
     }
 }
 
-pub(super) fn resolve_current_key(
-    ticket_queue: &TicketQueue,
-    ctx: &ToolContext,
-) -> Result<String, ToolResult> {
-    if let Some(key) = ctx.ticket_key.as_deref() {
+pub(super) fn resolve_current_key(queue: &Queue, ctx: &ToolContext) -> Result<String, ToolResult> {
+    if let Some(key) = ctx.task_key.as_deref() {
         return Ok(key.to_string());
     }
     // A closure, never `agent = {id}`: an id derives from a host-supplied label,
@@ -85,22 +81,22 @@ pub(super) fn resolve_current_key(
     let agent_id = ctx
         .agent_id
         .clone()
-        .ok_or_else(|| ToolResult::error(ctx.directives.render(TICKET_KEY_MISSING, &[])))?;
-    match ticket_queue.find_ticket(move |t: &Ticket| {
+        .ok_or_else(|| ToolResult::error(ctx.directives.render(TASK_KEY_MISSING, &[])))?;
+    match queue.find_task(move |t: &Task| {
         t.status == Status::InProgress && t.assignee.as_deref() == Some(agent_id.as_str())
     }) {
         Some(t) => Ok(t.key.clone()),
         None => Err(ToolResult::error(
-            ctx.directives.render(TICKET_NOT_ASSIGNED, &[]),
+            ctx.directives.render(TASK_NOT_ASSIGNED, &[]),
         )),
     }
 }
 
-pub(super) fn ticket_error_message(err: TicketError, directives: &DirectiveStore) -> String {
-    directives.render(TICKET_TRANSITION_REJECTED, &[("error", &err.to_string())])
+pub(super) fn task_error_message(err: TaskError, directives: &DirectiveStore) -> String {
+    directives.render(TASK_TRANSITION_REJECTED, &[("error", &err.to_string())])
 }
 
-fn render_ticket(t: &Ticket) -> String {
+fn render_task(t: &Task) -> String {
     let mut out = String::new();
     out.push_str(&format!("# {}\n", t.key));
     out.push_str(&format!("- status: {}\n", status_label(t.status)));
@@ -122,7 +118,7 @@ fn render_ticket(t: &Ticket) -> String {
     out
 }
 
-/// The result of ticket `key`, with the file it is stored in, so the agent
+/// The result of task `key`, with the file it is stored in, so the agent
 /// can read it again without asking for it.
 fn render_result(key: &str, path: &Path, result: &Value) -> String {
     let mut out = format!("# {key} result\n- file: {}\n\n", path.display());
@@ -167,10 +163,10 @@ fn truncate_for_preview(s: &str, max: usize) -> String {
 
 type SummaryRow<'a> = (&'a str, &'a str, Status, Option<&'a str>);
 
-fn render_summary_list(tickets: &[SummaryRow<'_>]) -> String {
+fn render_summary_list(tasks: &[SummaryRow<'_>]) -> String {
     let mut out = String::new();
-    for (key, task_preview, status, label) in tickets {
-        // An unlabelled ticket prints no marker: a scan of up to 50 rows does
+    for (key, task_preview, status, label) in tasks {
+        // An unlabelled task prints no marker: a scan of up to 50 rows does
         // not need "(none)" on every default-scope line.
         let label = match label {
             Some(l) => format!("[{l}] "),
@@ -192,52 +188,46 @@ fn task_preview(task: &serde_json::Value) -> String {
     truncate_for_preview(&raw, 80)
 }
 
-fn action_ticket(ticket_queue: &TicketQueue, key: Option<String>, ctx: &ToolContext) -> ToolResult {
-    let key = match resolve_key(ticket_queue, key, ctx) {
+fn action_task(queue: &Queue, key: Option<String>, ctx: &ToolContext) -> ToolResult {
+    let key = match resolve_key(queue, key, ctx) {
         Ok(k) => k,
         Err(e) => return e,
     };
-    match ticket_queue.get_ticket(&key) {
-        Some(t) => ToolResult::success(render_ticket(&t)),
-        None => ToolResult::error(ctx.directives.render(TICKET_NOT_FOUND, &[("key", &key)])),
+    match queue.get_task(&key) {
+        Some(t) => ToolResult::success(render_task(&t)),
+        None => ToolResult::error(ctx.directives.render(TASK_NOT_FOUND, &[("key", &key)])),
     }
 }
 
-fn action_result(ticket_queue: &TicketQueue, key: Option<String>, ctx: &ToolContext) -> ToolResult {
-    let key = match resolve_key(ticket_queue, key, ctx) {
+fn action_result(queue: &Queue, key: Option<String>, ctx: &ToolContext) -> ToolResult {
+    let key = match resolve_key(queue, key, ctx) {
         Ok(k) => k,
         Err(e) => return e,
     };
-    let Some(ticket) = ticket_queue.get_ticket(&key) else {
-        return ToolResult::error(ctx.directives.render(TICKET_NOT_FOUND, &[("key", &key)]));
+    let Some(task) = queue.get_task(&key) else {
+        return ToolResult::error(ctx.directives.render(TASK_NOT_FOUND, &[("key", &key)]));
     };
-    match ticket.result.as_ref() {
-        Some(result) => {
-            ToolResult::success(render_result(&key, &ticket_queue.result_path(&key), result))
-        }
+    match task.result.as_ref() {
+        Some(result) => ToolResult::success(render_result(&key, &queue.result_path(&key), result)),
         None => ToolResult::error(ctx.directives.render(
-            TICKET_RESULT_MISSING,
-            &[("key", &key), ("status", status_label(ticket.status))],
+            TASK_RESULT_MISSING,
+            &[("key", &key), ("status", status_label(task.status))],
         )),
     }
 }
 
-fn action_list(
-    ticket_queue: &TicketQueue,
-    aql: Option<String>,
-    directives: &DirectiveStore,
-) -> ToolResult {
-    let pool: Vec<Ticket> = match aql.as_deref().map(Query::new) {
-        Some(Ok(query)) => ticket_queue.find_tickets(query),
+fn action_list(queue: &Queue, aql: Option<String>, directives: &DirectiveStore) -> ToolResult {
+    let pool: Vec<Task> = match aql.as_deref().map(Query::new) {
+        Some(Ok(query)) => queue.find_tasks(query),
         Some(Err(error)) => {
             return ToolResult::error(
-                directives.render(TICKET_QUERY_INVALID, &[("error", &error.to_string())]),
+                directives.render(TASK_QUERY_INVALID, &[("error", &error.to_string())]),
             )
         }
-        None => ticket_queue.tickets(),
+        None => queue.tasks(),
     };
     if pool.is_empty() {
-        return ToolResult::success("(no matching tickets)".to_string());
+        return ToolResult::success("(no matching tasks)".to_string());
     }
     let previews: Vec<String> = pool
         .iter()
@@ -254,14 +244,14 @@ fn action_list(
 }
 
 fn action_create(
-    ticket_queue: &TicketQueue,
+    queue: &Queue,
     task: Value,
     label: Option<String>,
     ctx: &ToolContext,
 ) -> ToolResult {
-    let mut ticket = Ticket::new(task);
+    let mut task = Task::new(task);
     if let Some(label) = label {
-        ticket = ticket.label(label);
+        task = task.label(label);
     }
 
     let reporter = ctx
@@ -269,65 +259,65 @@ fn action_create(
         .as_deref()
         .expect("agent_id on ToolContext")
         .to_string();
-    let key = ticket_queue.insert(ticket, reporter);
-    ToolResult::success(format!("Created ticket {key}"))
+    let key = queue.insert(task, reporter);
+    ToolResult::success(format!("Created task {key}"))
 }
 
 fn action_edit(
-    ticket_queue: &TicketQueue,
+    queue: &Queue,
     key: Option<String>,
     new_task: Option<Value>,
     new_label: Option<String>,
     ctx: &ToolContext,
 ) -> ToolResult {
-    let key = match resolve_key(ticket_queue, key, ctx) {
+    let key = match resolve_key(queue, key, ctx) {
         Ok(k) => k,
         Err(e) => return e,
     };
     if new_task.is_none() && new_label.is_none() {
-        return ToolResult::error(ctx.directives.render(TICKET_EDIT_INCOMPLETE, &[]));
+        return ToolResult::error(ctx.directives.render(TASK_EDIT_INCOMPLETE, &[]));
     }
 
-    match ticket_queue.edit(&key, new_task, new_label) {
-        Ok(()) => ToolResult::success(format!("Edited ticket {key}")),
-        Err(e) => ToolResult::error(ticket_error_message(e, &ctx.directives)),
+    match queue.edit(&key, new_task, new_label) {
+        Ok(()) => ToolResult::success(format!("Edited task {key}")),
+        Err(e) => ToolResult::error(task_error_message(e, &ctx.directives)),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agents::tickets::TicketQueue;
+    use crate::agents::tasks::Queue;
     use std::path::PathBuf;
     use std::sync::Arc;
 
     /// Build a context for a tool test, optionally with a "current
-    /// ticket" already InProgress and assigned to `agent`.
-    fn ctx_with(ticket_queue: Arc<TicketQueue>, agent: &str) -> ToolContext {
+    /// task" already InProgress and assigned to `agent`.
+    fn ctx_with(queue: Arc<Queue>, agent: &str) -> ToolContext {
         ToolContext::new(PathBuf::from("/tmp"))
-            .ticket_queue(ticket_queue)
+            .queue(queue)
             .agent_id(agent.to_string())
     }
 
-    /// Insert one Todo ticket, claim it for `agent` (atomically labels +
-    /// transitions to InProgress), so `queue.find_ticket(...)` resolves it
-    /// as the current ticket for `agent`. The queue is rooted at its own
+    /// Insert one Todo task, claim it for `agent` (atomically labels +
+    /// transitions to InProgress), so `queue.find_task(...)` resolves it
+    /// as the current task for `agent`. The queue is rooted at its own
     /// isolated temp directory so the default `.agentwerk` writes never
     /// leak into the source tree.
-    fn shared_with_one_ticket(agent: &str) -> (Arc<TicketQueue>, String) {
-        let queue = TicketQueue::new();
+    fn shared_with_one_task(agent: &str) -> (Arc<Queue>, String) {
+        let queue = Queue::new();
         queue.dir(isolated_test_dir());
-        queue.insert(Ticket::new("body").label(agent), "tester".into());
+        queue.insert(Task::new("body").label(agent), "tester".into());
         let key = queue
             .claim(&Query::from("status = Todo"), agent)
             .expect("claim must succeed");
         (queue, key)
     }
 
-    /// A fresh directory for each `TicketQueue` under a process-lifetime,
+    /// A fresh directory for each `Queue` under a process-lifetime,
     /// self-deleting temp root. Per-call isolation matters because `insert`
-    /// numbers new keys past the highest `TICKET-<N>` folder already on disk,
-    /// so a shared directory would leak ticket ids between tests.
+    /// numbers new keys past the highest `t-<N>` folder already on disk,
+    /// so a shared directory would leak task ids between tests.
     fn isolated_test_dir() -> std::path::PathBuf {
         use std::sync::atomic::{AtomicU64, Ordering};
         use std::sync::OnceLock;
@@ -352,25 +342,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ticket_defaults_key_to_current_ticket() {
-        let (queue, key) = shared_with_one_ticket("alice");
+    async fn task_defaults_key_to_current_task() {
+        let (queue, key) = shared_with_one_task("alice");
         let ctx = ctx_with(Arc::clone(&queue), "alice");
-        let result = call(TicketsTool, serde_json::json!({"action": "ticket"}), &ctx).await;
+        let result = call(TasksTool, serde_json::json!({"action": "task"}), &ctx).await;
         let text = unwrap_text(&result);
         assert!(text.contains(&key), "expected key in output: {text}");
         assert!(text.contains("body"));
     }
 
     #[tokio::test]
-    async fn result_returns_the_result_of_another_agents_ticket() {
-        let (queue, key) = shared_with_one_ticket("alice");
+    async fn result_returns_the_result_of_another_agents_task() {
+        let (queue, key) = shared_with_one_task("alice");
         queue
             .set_result(&key, serde_json::json!({"finding": "a lead"}))
             .unwrap();
 
         let ctx = ctx_with(Arc::clone(&queue), "bob");
         let result = call(
-            TicketsTool,
+            TasksTool,
             serde_json::json!({"action": "result", "key": key}),
             &ctx,
         )
@@ -385,24 +375,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn result_defaults_key_to_current_ticket() {
-        let (queue, key) = shared_with_one_ticket("alice");
+    async fn result_defaults_key_to_current_task() {
+        let (queue, key) = shared_with_one_task("alice");
         queue
             .set_result(&key, serde_json::json!("what alice found"))
             .unwrap();
 
         let ctx = ctx_with(Arc::clone(&queue), "alice");
-        let result = call(TicketsTool, serde_json::json!({"action": "result"}), &ctx).await;
+        let result = call(TasksTool, serde_json::json!({"action": "result"}), &ctx).await;
         let text = unwrap_text(&result);
         assert!(text.contains("what alice found"), "{text}");
     }
 
     #[tokio::test]
-    async fn result_errors_while_the_ticket_has_no_result() {
-        let (queue, key) = shared_with_one_ticket("alice");
+    async fn result_errors_while_the_task_has_no_result() {
+        let (queue, key) = shared_with_one_task("alice");
         let ctx = ctx_with(Arc::clone(&queue), "alice");
         let result = call(
-            TicketsTool,
+            TasksTool,
             serde_json::json!({"action": "result", "key": key}),
             &ctx,
         )
@@ -411,111 +401,111 @@ mod tests {
         assert!(unwrap_text(&result).contains("InProgress"));
     }
 
-    /// Two tickets, the first claimed by `alice` and labelled `review`, the
+    /// Two tasks, the first claimed by `alice` and labelled `review`, the
     /// second still Todo and unlabelled.
-    fn queue_with_two_tickets() -> Arc<TicketQueue> {
-        let queue = TicketQueue::new();
+    fn queue_with_two_tasks() -> Arc<Queue> {
+        let queue = Queue::new();
         queue.dir(isolated_test_dir());
-        queue.insert(Ticket::new("a").label("review"), "tester".into());
-        queue.insert(Ticket::new("b"), "tester".into());
-        queue.claim(&Query::from("TICKET-1"), "alice");
+        queue.insert(Task::new("a").label("review"), "tester".into());
+        queue.insert(Task::new("b"), "tester".into());
+        queue.claim(&Query::from("t-1"), "alice");
         queue
     }
 
     #[tokio::test]
-    async fn list_without_a_filter_returns_every_ticket() {
-        let queue = queue_with_two_tickets();
+    async fn list_without_a_filter_returns_every_task() {
+        let queue = queue_with_two_tasks();
         let ctx = ctx_with(Arc::clone(&queue), "alice");
-        let result = call(TicketsTool, serde_json::json!({"action": "list"}), &ctx).await;
+        let result = call(TasksTool, serde_json::json!({"action": "list"}), &ctx).await;
         let text = unwrap_text(&result);
-        assert!(text.contains("TICKET-1"), "{text}");
-        assert!(text.contains("TICKET-2"), "{text}");
+        assert!(text.contains("t-1"), "{text}");
+        assert!(text.contains("t-2"), "{text}");
     }
 
     #[tokio::test]
-    async fn list_stops_at_fifty_tickets() {
-        let queue = TicketQueue::new();
+    async fn list_stops_at_fifty_tasks() {
+        let queue = Queue::new();
         queue.dir(isolated_test_dir());
         for i in 1..=51 {
-            queue.insert(Ticket::new(format!("task {i}")), "tester".into());
+            queue.insert(Task::new(format!("task {i}")), "tester".into());
         }
         let ctx = ctx_with(Arc::clone(&queue), "alice");
-        let result = call(TicketsTool, serde_json::json!({"action": "list"}), &ctx).await;
+        let result = call(TasksTool, serde_json::json!({"action": "list"}), &ctx).await;
         let text = unwrap_text(&result);
         assert_eq!(text.lines().count(), 50, "{text}");
-        assert!(!text.contains("TICKET-51"), "{text}");
+        assert!(!text.contains("t-51"), "{text}");
     }
 
     #[tokio::test]
     async fn list_filters_by_the_status_the_aql_names() {
-        let queue = queue_with_two_tickets();
+        let queue = queue_with_two_tasks();
         let ctx = ctx_with(Arc::clone(&queue), "alice");
         let result = call(
-            TicketsTool,
+            TasksTool,
             serde_json::json!({"action": "list", "aql": "status = InProgress"}),
             &ctx,
         )
         .await;
         let text = unwrap_text(&result);
-        assert!(text.contains("TICKET-1"), "{text}");
-        assert!(!text.contains("TICKET-2"), "{text}");
+        assert!(text.contains("t-1"), "{text}");
+        assert!(!text.contains("t-2"), "{text}");
     }
 
     #[tokio::test]
     async fn list_answers_in_the_order_the_aql_names() {
-        let queue = queue_with_two_tickets();
+        let queue = queue_with_two_tasks();
         let ctx = ctx_with(Arc::clone(&queue), "alice");
         let result = call(
-            TicketsTool,
+            TasksTool,
             serde_json::json!({"action": "list", "aql": "ORDER BY key DESC"}),
             &ctx,
         )
         .await;
         let text = unwrap_text(&result);
-        assert!(text.find("TICKET-2") < text.find("TICKET-1"), "{text}");
+        assert!(text.find("t-2") < text.find("t-1"), "{text}");
     }
 
     #[tokio::test]
     async fn list_filters_by_the_window_the_aql_names() {
-        let queue = queue_with_two_tickets();
+        let queue = queue_with_two_tasks();
         let ctx = ctx_with(Arc::clone(&queue), "alice");
         let result = call(
-            TicketsTool,
+            TasksTool,
             serde_json::json!({"action": "list", "aql": "created > -1h"}),
             &ctx,
         )
         .await;
         let text = unwrap_text(&result);
-        assert!(text.contains("TICKET-1"), "{text}");
+        assert!(text.contains("t-1"), "{text}");
 
         let result = call(
-            TicketsTool,
+            TasksTool,
             serde_json::json!({"action": "list", "aql": "created < -1h"}),
             &ctx,
         )
         .await;
-        assert!(unwrap_text(&result).contains("no matching tickets"));
+        assert!(unwrap_text(&result).contains("no matching tasks"));
     }
 
     #[tokio::test]
-    async fn list_answers_no_matching_tickets_when_the_aql_selects_none() {
-        let queue = queue_with_two_tickets();
+    async fn list_answers_no_matching_tasks_when_the_aql_selects_none() {
+        let queue = queue_with_two_tasks();
         let ctx = ctx_with(Arc::clone(&queue), "alice");
         let result = call(
-            TicketsTool,
+            TasksTool,
             serde_json::json!({"action": "list", "aql": "status = Finished"}),
             &ctx,
         )
         .await;
-        assert!(unwrap_text(&result).contains("no matching tickets"));
+        assert!(unwrap_text(&result).contains("no matching tasks"));
     }
 
     #[tokio::test]
     async fn an_invalid_aql_answers_with_the_parse_error() {
-        let queue = queue_with_two_tickets();
+        let queue = queue_with_two_tasks();
         let ctx = ctx_with(Arc::clone(&queue), "alice");
         let result = call(
-            TicketsTool,
+            TasksTool,
             serde_json::json!({"action": "list", "aql": "assignee = alice"}),
             &ctx,
         )
@@ -526,28 +516,28 @@ mod tests {
 
     #[tokio::test]
     async fn create_stamps_reporter_from_agent_id() {
-        let queue = TicketQueue::new();
+        let queue = Queue::new();
         queue.dir(isolated_test_dir());
         let ctx = ctx_with(Arc::clone(&queue), "alice");
         let result = call(
-            TicketsTool,
-            serde_json::json!({"action": "create", "task": "new ticket"}),
+            TasksTool,
+            serde_json::json!({"action": "create", "task": "new task"}),
             &ctx,
         )
         .await;
         assert!(matches!(result, ToolResult::Success { .. }));
-        let t = queue.get_ticket("TICKET-1").unwrap();
-        assert_eq!(t.task, serde_json::Value::String("new ticket".into()));
+        let t = queue.get_task("t-1").unwrap();
+        assert_eq!(t.task, serde_json::Value::String("new task".into()));
         assert_eq!(t.reporter, "alice");
     }
 
     #[tokio::test]
     async fn create_with_a_label_attaches_it() {
-        let queue = TicketQueue::new();
+        let queue = Queue::new();
         queue.dir(isolated_test_dir());
         let ctx = ctx_with(Arc::clone(&queue), "alice");
         let result = call(
-            TicketsTool,
+            TasksTool,
             serde_json::json!({
                 "action": "create",
                 "task": "new",
@@ -557,18 +547,18 @@ mod tests {
         )
         .await;
         assert!(matches!(result, ToolResult::Success { .. }));
-        let t = queue.get_ticket("TICKET-1").unwrap();
+        let t = queue.get_task("t-1").unwrap();
         assert!(t.has_label("research"));
         assert_eq!(t.status, Status::Todo);
     }
 
     #[tokio::test]
     async fn create_with_named_label_routes_to_agent() {
-        let queue = TicketQueue::new();
+        let queue = Queue::new();
         queue.dir(isolated_test_dir());
         let ctx = ctx_with(Arc::clone(&queue), "alice");
         let result = call(
-            TicketsTool,
+            TasksTool,
             serde_json::json!({
                 "action": "create",
                 "task": "new",
@@ -578,14 +568,14 @@ mod tests {
         )
         .await;
         assert!(matches!(result, ToolResult::Success { .. }));
-        let t = queue.get_ticket("TICKET-1").unwrap();
+        let t = queue.get_task("t-1").unwrap();
         assert!(t.has_label("alice"));
         assert_eq!(t.status, Status::Todo);
     }
 
     #[tokio::test]
-    async fn a_ticket_the_model_creates_takes_the_schema_bound_to_its_label() {
-        let queue = TicketQueue::new();
+    async fn a_task_the_model_creates_takes_the_schema_bound_to_its_label() {
+        let queue = Queue::new();
         queue.dir(isolated_test_dir());
         let schemas = crate::schemas::SchemaStore::new();
         schemas
@@ -595,7 +585,7 @@ mod tests {
 
         let ctx = ctx_with(Arc::clone(&queue), "alice");
         let result = call(
-            TicketsTool,
+            TasksTool,
             serde_json::json!({
                 "action": "create",
                 "task": "new",
@@ -605,18 +595,18 @@ mod tests {
         )
         .await;
         assert!(matches!(result, ToolResult::Success { .. }));
-        assert!(queue.get_ticket("TICKET-1").unwrap().schema.is_none());
+        assert!(queue.get_task("t-1").unwrap().schema.is_none());
 
         queue.claim(&Query::from("analysis"), "bob");
-        assert!(queue.get_ticket("TICKET-1").unwrap().schema.is_some());
+        assert!(queue.get_task("t-1").unwrap().schema.is_some());
     }
 
     #[tokio::test]
     async fn edit_replaces_the_task_and_the_label() {
-        let (queue, key) = shared_with_one_ticket("alice");
+        let (queue, key) = shared_with_one_task("alice");
         let ctx = ctx_with(Arc::clone(&queue), "alice");
         let result = call(
-            TicketsTool,
+            TasksTool,
             serde_json::json!({
                 "action": "edit",
                 "task": "new body",
@@ -626,17 +616,17 @@ mod tests {
         )
         .await;
         assert!(matches!(result, ToolResult::Success { .. }));
-        let t = queue.get_ticket(&key).unwrap();
+        let t = queue.get_task(&key).unwrap();
         assert_eq!(t.task, serde_json::Value::String("new body".into()));
         assert!(t.has_label("urgent"));
     }
 
     #[tokio::test]
     async fn unsupported_actions_are_rejected() {
-        let (queue, _key) = shared_with_one_ticket("alice");
+        let (queue, _key) = shared_with_one_task("alice");
         let ctx = ctx_with(Arc::clone(&queue), "alice");
         for action in ["done", "transition", "comment", "assign", "attach"] {
-            let result = call(TicketsTool, serde_json::json!({"action": action}), &ctx).await;
+            let result = call(TasksTool, serde_json::json!({"action": action}), &ctx).await;
             assert!(
                 matches!(result, ToolResult::Error { .. }),
                 "{action}: {result:?}"

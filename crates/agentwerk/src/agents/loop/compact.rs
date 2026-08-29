@@ -1,31 +1,31 @@
-//! Rewriting a ticket's replies to fit the context window: ahead of it filling
+//! Rewriting a task's replies to fit the context window: ahead of it filling
 //! up, and after the LLM provider reports it has. The older messages are
 //! summarized; the four `Compaction*` events report each step of it.
 
 use std::sync::Arc;
 
 use crate::agents::compaction::{self as algo, Compaction};
-use crate::agents::tickets::Ticket;
+use crate::agents::tasks::Task;
 use crate::event::{CompactReason, EventKind};
 
-use super::agent::TicketContext;
+use super::agent::TaskContext;
 use super::Step;
 
-pub(super) async fn run(context: &mut TicketContext<'_>, reason: CompactReason) -> Option<Step> {
-    let Some(mut ticket) = context.ticket() else {
+pub(super) async fn run(context: &mut TaskContext<'_>, reason: CompactReason) -> Option<Step> {
+    let Some(mut task) = context.task() else {
         return None;
     };
     let window = context.model.get_context_window();
-    let total = algo::chunks_for_window(&ticket.to_messages(), window).len() as u32;
+    let total = algo::chunks_for_window(&task.to_messages(), window).len() as u32;
     context.emit(EventKind::CompactionStarted { reason, total });
 
     let on_progress: Arc<dyn Fn(u32, u32) + Send + Sync> = {
-        let ticket_queue = Arc::clone(context.ticket_queue);
+        let queue = Arc::clone(context.queue);
         let agent_id = context.agent.id().to_string();
-        let ticket_key = context.ticket_key.clone();
+        let task_key = context.task_key.clone();
         Arc::new(move |completed, total| {
-            ticket_queue.emit(
-                &ticket_key,
+            queue.emit(
+                &task_key,
                 &agent_id,
                 EventKind::CompactionProgress {
                     reason,
@@ -37,9 +37,9 @@ pub(super) async fn run(context: &mut TicketContext<'_>, reason: CompactReason) 
     };
 
     // Moved out rather than cloned: the summarizer gets the replies as its own
-    // argument, so a second copy on the ticket would only be one more thing to
+    // argument, so a second copy on the task would only be one more thing to
     // read them from.
-    let replies = std::mem::take(&mut ticket.replies);
+    let replies = std::mem::take(&mut task.replies);
     let compaction = Compaction::new(
         context.agent.get_provider(),
         context.model.name.clone(),
@@ -54,7 +54,7 @@ pub(super) async fn run(context: &mut TicketContext<'_>, reason: CompactReason) 
                 reason,
                 message: error.to_string(),
             });
-            context.fail_ticket();
+            context.fail_task();
             return None;
         }
     };
@@ -63,10 +63,10 @@ pub(super) async fn run(context: &mut TicketContext<'_>, reason: CompactReason) 
     let applied = edited != replies;
     if applied {
         context
-            .ticket_queue
-            .edit_replies(&context.ticket_key, |current| *current = edited);
+            .queue
+            .edit_replies(&context.task_key, |current| *current = edited);
         // The last response's input tokens no longer describe the next request.
-        context.ticket_queue.stats.reset_usage(&context.ticket_key);
+        context.queue.stats.reset_usage(&context.task_key);
     }
 
     if !applied && matches!(reason, CompactReason::Reactive) {
@@ -74,7 +74,7 @@ pub(super) async fn run(context: &mut TicketContext<'_>, reason: CompactReason) 
             reason,
             message: "context still exceeds window after compaction".into(),
         });
-        context.fail_ticket();
+        context.fail_task();
         return None;
     }
 
@@ -86,19 +86,16 @@ pub(super) async fn run(context: &mut TicketContext<'_>, reason: CompactReason) 
     }
 }
 
-pub(super) fn proactive_compaction_needed(context: &TicketContext<'_>, ticket: &Ticket) -> bool {
+pub(super) fn proactive_compaction_needed(context: &TaskContext<'_>, task: &Task) -> bool {
     let tools = context.tools.tools();
     let window = context.model.get_context_window();
-    let history = context
-        .ticket_queue
-        .stats
-        .usage_for_ticket(&context.ticket_key);
+    let history = context.queue.stats.usage_for_task(&context.task_key);
 
     algo::should_compact_proactively(
         window,
         context.policy.compaction_threshold,
         &history,
-        &ticket.to_messages(),
+        &task.to_messages(),
         &context.system_prompt,
         &tools,
     )
@@ -107,7 +104,7 @@ pub(super) fn proactive_compaction_needed(context: &TicketContext<'_>, ticket: &
 #[cfg(test)]
 mod tests {
     use crate::agents::r#loop::test_util::*;
-    use crate::agents::tickets::Status;
+    use crate::agents::tasks::Status;
 
     fn compaction_starts(
         events: &[crate::event::Event],
@@ -162,7 +159,7 @@ mod tests {
         let request_failed_idx = events
             .iter()
             .position(|e| matches!(&e.kind, crate::event::EventKind::RequestFailed { .. }))
-            .expect("the ticket must surface a request failure");
+            .expect("the task must surface a request failure");
         assert!(started_idx < finished_idx);
         assert!(finished_idx < request_failed_idx);
     }
@@ -181,13 +178,13 @@ mod tests {
             )),
             Ok(write_result_response("ok")),
         ]);
-        let (events, provider, ticket) = run_one(provider, 0, 10, Some(string_schema())).await;
+        let (events, provider, task) = run_one(provider, 0, 10, Some(string_schema())).await;
 
         assert_eq!(provider.requests(), 4);
         assert_eq!(compaction_starts(&events, CompactReason::Reactive), 1);
         assert_eq!(compaction_finishes(&events, CompactReason::Reactive), 1);
         assert!(failures_in(&events).is_empty());
-        assert_eq!(ticket.status, Status::Finished);
+        assert_eq!(task.status, Status::Finished);
 
         let fourth = &provider.received()[3];
         assert_eq!(user_texts(fourth), vec!["SUMMARY".to_string()]);
@@ -208,13 +205,13 @@ mod tests {
             )),
             Ok(write_result_response("ok")),
         ]);
-        let (events, provider, ticket) = run_one(provider, 0, 10, Some(string_schema())).await;
+        let (events, provider, task) = run_one(provider, 0, 10, Some(string_schema())).await;
 
         assert_eq!(provider.requests(), 4);
         assert_eq!(compaction_starts(&events, CompactReason::Reactive), 1);
         assert_eq!(compaction_finishes(&events, CompactReason::Reactive), 1);
         assert!(failures_in(&events).is_empty());
-        assert_eq!(ticket.status, Status::Finished);
+        assert_eq!(task.status, Status::Finished);
     }
 
     #[tokio::test]
@@ -231,13 +228,13 @@ mod tests {
             )),
             Ok(write_result_response("ok")),
         ]);
-        let (events, provider, ticket) = run_one(provider, 0, 10, Some(string_schema())).await;
+        let (events, provider, task) = run_one(provider, 0, 10, Some(string_schema())).await;
 
         assert_eq!(provider.requests(), 4);
         assert_eq!(compaction_starts(&events, CompactReason::Reactive), 1);
         assert_eq!(compaction_finishes(&events, CompactReason::Reactive), 1);
         assert!(failures_in(&events).is_empty());
-        assert_eq!(ticket.status, Status::Finished);
+        assert_eq!(task.status, Status::Finished);
     }
 
     #[tokio::test]
@@ -258,60 +255,60 @@ mod tests {
             )),
             Ok(write_result_response("ok")),
         ]);
-        let (events, provider, ticket) =
+        let (events, provider, task) =
             run_with_context_window(provider, 10_000, "x\n".repeat(25_000)).await;
 
         assert_eq!(provider.requests(), 4);
         assert_eq!(compaction_starts(&events, CompactReason::Reactive), 1);
         assert_eq!(compaction_finishes(&events, CompactReason::Reactive), 1);
         assert!(failures_in(&events).is_empty());
-        assert_eq!(ticket.status, Status::Finished);
+        assert_eq!(task.status, Status::Finished);
     }
 
     #[tokio::test]
-    async fn compaction_terminal_failure_transitions_ticket_to_failed() {
+    async fn compaction_terminal_failure_transitions_task_to_failed() {
         let provider = MockProvider::with_results(vec![Err(
             crate::providers::ProviderError::ContextWindowExceeded {
                 message: "overflow".into(),
             },
         )]);
-        let (events, _, ticket) =
+        let (events, _, task) =
             run_with_context_window(provider, 10_000, "x\n".repeat(25_000)).await;
 
         assert_eq!(
-            ticket.status,
+            task.status,
             Status::Failed,
-            "terminal compaction failure must transition the ticket to Failed",
+            "terminal compaction failure must transition the task to Failed",
         );
-        let ticket_failed_count = events
+        let task_failed_count = events
             .iter()
-            .filter(|e| matches!(&e.kind, crate::event::EventKind::TicketFailed))
+            .filter(|e| matches!(&e.kind, crate::event::EventKind::TaskFailed))
             .count();
-        assert_eq!(ticket_failed_count, 1);
+        assert_eq!(task_failed_count, 1);
     }
 
     #[tokio::test]
-    async fn still_oversized_after_compaction_transitions_ticket_to_failed() {
+    async fn still_oversized_after_compaction_transitions_task_to_failed() {
         let provider = MockProvider::with_results(vec![Ok(text_response_with_usage(
             "SUMMARY",
             crate::providers::types::TokenUsage::default(),
         ))]);
-        let (events, _, ticket) = run_with_context_window(provider, 1_000, "hi").await;
+        let (events, _, task) = run_with_context_window(provider, 1_000, "hi").await;
 
         assert_eq!(
-            ticket.status,
+            task.status,
             Status::Failed,
-            "post-compaction window check must transition the ticket to Failed",
+            "post-compaction window check must transition the task to Failed",
         );
-        let ticket_failed_count = events
+        let task_failed_count = events
             .iter()
-            .filter(|e| matches!(&e.kind, crate::event::EventKind::TicketFailed))
+            .filter(|e| matches!(&e.kind, crate::event::EventKind::TaskFailed))
             .count();
-        assert_eq!(ticket_failed_count, 1);
+        assert_eq!(task_failed_count, 1);
     }
 
     #[tokio::test]
-    async fn reactive_overflow_twice_in_a_row_fails_the_ticket() {
+    async fn reactive_overflow_twice_in_a_row_fails_the_task() {
         let provider = MockProvider::with_results(vec![
             Ok(tool_call_response("primer")),
             Err(crate::providers::ProviderError::ContextWindowExceeded {
@@ -325,7 +322,7 @@ mod tests {
                 message: "second overflow".into(),
             }),
         ]);
-        let (events, _, ticket) = run_one(provider, 0, 10, Some(string_schema())).await;
+        let (events, _, task) = run_one(provider, 0, 10, Some(string_schema())).await;
 
         assert_eq!(
             compaction_finishes(&events, crate::event::CompactReason::Reactive),
@@ -333,7 +330,7 @@ mod tests {
         );
         let failures = failures_in(&events);
         assert!(!failures.is_empty());
-        assert_eq!(ticket.status, Status::Failed);
+        assert_eq!(task.status, Status::Failed);
     }
 
     #[tokio::test]
@@ -353,12 +350,12 @@ mod tests {
             )),
             Ok(write_result_response("done")),
         ]);
-        let (events, provider, ticket) = run_compaction(provider, |_| {}).await;
+        let (events, provider, task) = run_compaction(provider, |_| {}).await;
 
         assert_eq!(provider.requests(), 3);
         assert_eq!(compaction_starts(&events, CompactReason::Proactive), 1);
         assert_eq!(compaction_finishes(&events, CompactReason::Proactive), 1);
-        assert_eq!(ticket.status, Status::Finished);
+        assert_eq!(task.status, Status::Finished);
 
         let third = &provider.received()[2];
         assert_eq!(third.len(), 1);
@@ -391,7 +388,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn summarize_rate_limited_kills_ticket_without_retry() {
+    async fn summarize_rate_limited_kills_task_without_retry() {
         let provider = MockProvider::with_results(vec![
             Ok(tool_call_response_with_usage(
                 "primer",
@@ -437,7 +434,7 @@ mod tests {
             )),
             Ok(write_result_response("done")),
         ]);
-        let (events, provider, ticket) = run_compaction(provider, |_| {}).await;
+        let (events, provider, task) = run_compaction(provider, |_| {}).await;
 
         assert_eq!(
             compaction_starts(&events, crate::event::CompactReason::Proactive),
@@ -447,7 +444,7 @@ mod tests {
             compaction_finishes(&events, crate::event::CompactReason::Proactive),
             1
         );
-        assert_eq!(ticket.status, Status::Finished);
+        assert_eq!(task.status, Status::Finished);
 
         let third = &provider.received()[2];
         assert_eq!(third.len(), 1);
@@ -485,7 +482,7 @@ mod tests {
             )),
             Ok(write_result_response("done")),
         ]);
-        let (events, provider, ticket) = run_compaction(provider, |_| {}).await;
+        let (events, provider, task) = run_compaction(provider, |_| {}).await;
 
         assert_eq!(provider.requests(), 6);
         assert_eq!(compaction_starts(&events, CompactReason::Proactive), 1);
@@ -493,11 +490,11 @@ mod tests {
         assert_eq!(compaction_starts(&events, CompactReason::Reactive), 1);
         assert_eq!(compaction_finishes(&events, CompactReason::Reactive), 1);
         assert!(failures_in(&events).is_empty());
-        assert_eq!(ticket.status, Status::Finished);
+        assert_eq!(task.status, Status::Finished);
     }
 
     #[tokio::test]
-    async fn compaction_clears_the_ticket_usage() {
+    async fn compaction_clears_the_task_usage() {
         let provider = MockProvider::with_results(vec![
             Ok(tool_call_response_with_usage(
                 "primer",
@@ -515,15 +512,15 @@ mod tests {
         let queue_handle: std::sync::Arc<std::sync::Mutex<Option<_>>> =
             std::sync::Arc::new(std::sync::Mutex::new(None));
         let captured = std::sync::Arc::clone(&queue_handle);
-        let (_, _, ticket) = run_compaction(provider, move |tickets| {
-            *captured.lock().unwrap() = Some(std::sync::Arc::clone(tickets));
+        let (_, _, task) = run_compaction(provider, move |tasks| {
+            *captured.lock().unwrap() = Some(std::sync::Arc::clone(tasks));
         })
         .await;
 
         // The 180 000-token anchor that tripped the trigger described replies
-        // the ticket no longer holds, so it must not survive compaction.
-        let tickets = queue_handle.lock().unwrap().take().expect("queue captured");
-        let history = tickets.stats.usage_for_ticket(&ticket.key);
+        // the task no longer holds, so it must not survive compaction.
+        let tasks = queue_handle.lock().unwrap().take().expect("queue captured");
+        let history = tasks.stats.usage_for_task(&task.key);
         assert!(
             history.len() <= 1,
             "expected the pre-compaction usage to be dropped, got {history:?}",
@@ -546,16 +543,16 @@ mod tests {
             )),
             Ok(write_result_response("done")),
         ]);
-        let (events, _, ticket) = run_compaction(provider, |_| {}).await;
+        let (events, _, task) = run_compaction(provider, |_| {}).await;
 
         assert_eq!(
             compaction_finishes(&events, crate::event::CompactReason::Proactive),
             1
         );
         assert_eq!(
-            ticket.task,
+            task.task,
             serde_json::Value::String("go".into()),
-            "the ticket must still say what was asked",
+            "the task must still say what was asked",
         );
     }
 

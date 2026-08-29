@@ -6,7 +6,7 @@ Naming, comment, and prose rules, plus README structure. Skim the section matchi
 
 **A type earns a `pub use` at `lib.rs` only when it names a concept in the one-sentence description of the crate, or when root-level signatures hand it to the caller.**
 
-`Agent`, `TicketQueue`, `Ticket`, `Policy`, `Knowledge`, `Directive`, `Text`, `Trajectory`, `Reply`, `Event`, `Status`, `EventKind`, `FinishReason`, `Schema`, `SchemaStore`
+`Agent`, `Queue`, `Task`, `Policy`, `Knowledge`, `Directive`, `Text`, `Trajectory`, `Reply`, `Event`, `Status`, `EventKind`, `FinishReason`, `Schema`, `SchemaStore`
 
 - Discriminants callers match on earn a root slot: `Status`, `EventKind`, `FinishReason`.
 - Builder parameters and run outputs earn one when callers name them: `Schema`, `SchemaStore`, `Policy`, `Directive`, `Text`, `Reply`, `Trajectory`.
@@ -19,8 +19,8 @@ Naming, comment, and prose rules, plus README structure. Skim the section matchi
 **Types live next to the abstraction, owner, or protocol they belong to.**
 
 - Concrete implementations live with their abstraction: `Anthropic` under `providers::`, `CommandTool` under `tools::`.
-- Companion types and handles live with their owner: `Ticket`, `Status`, `TicketError`, `Reply`, and `ReplyContent` under `agents::tickets`.
-- Domain errors live with their domain: `ProviderError` under `providers::`, `TicketError` under `agents::tickets`.
+- Companion types and handles live with their owner: `Task`, `Status`, `TaskError`, `Reply`, and `ReplyContent` under `agents::tasks`.
+- Domain errors live with their domain: `ProviderError` under `providers::`, `TaskError` under `agents::tasks`.
 - Request and response types live with the protocol: `ModelRequest`, `Message`, `TokenUsage` under `providers::`.
 - Free functions live in their module, never at the crate root: the env readers in `providers::environment`, helpers in `tools::util`.
 
@@ -28,7 +28,7 @@ Naming, comment, and prose rules, plus README structure. Skim the section matchi
 
 **Names are disambiguated through content, not through redundant prefixes.**
 
-- Specific compound names stand alone: `TicketQueue`, `SchemaStore`, `PolicyViolation`.
+- Specific compound names stand alone: `Queue`, `SchemaStore`, `PolicyViolation`.
 - A concrete LLM provider is named for its vendor alone. Acronyms follow Rust API guidelines, so `OpenAi`, not `OpenAI`.
 - Two structs may not share a bare name within one module; both stay qualified.
 - When a trait and the concrete type callers hold want the same name, the bare noun goes to the type and the trait takes a `Like` suffix: `Provider` / `ProviderLike`.
@@ -97,7 +97,7 @@ ToolFailureKind::ExecutionFailed.name()   // "execution_failed"
 
 **A directory path uses `_dir`. A file path uses `_file`. The bare suffix `_path` is used only when the value can be either.**
 
-- Directories: `results_dir`, `knowledge_dir`, `ticket_dir`, `working_dir`. Matches `std::fs::read_dir` and `std::env::current_dir`.
+- Directories: `results_dir`, `knowledge_dir`, `task_dir`, `working_dir`. Matches `std::fs::read_dir` and `std::env::current_dir`.
 - Files: `page_file`. The value is always a concrete file on disk.
 - `_path` is for genuinely ambiguous cases: input that could name either, or a value passed through as opaque.
 - IMPORTANT: `folder` is never used; it has no std analog. Doc comments and environment labels may still say "working directory" in English prose.
@@ -125,7 +125,7 @@ ToolFailureKind::ExecutionFailed.name()   // "execution_failed"
 
 **Two traits cover every read and write in the crate. The trait dictates the verb; the implementer's type name binds the file location.**
 
-- `Persist` (in `persistence`): `save(&self, dir)` and `load(dir, &Self::Key)`. Service bootstrap (`TicketQueue::load`, `Knowledge::load`) uses the same `load` verb by convention.
+- `Persist` (in `persistence`): `save(&self, dir)` and `load(dir, &Self::Key)`. Service bootstrap (`Queue::load`, `Knowledge::load`) uses the same `load` verb by convention.
 - `append(dir, ..)` is the inherent verb on a type that owns an append-only log: `Stats` and `Replies`. Each encodes its own filename, so the wrong file cannot be reached through the wrong type.
 - No `open` for bootstrap, no `write_X_to_dir`, no `to_json` or `from_json`, and no `checkpoint`, `snapshot`, `persist`, or `counter` in names.
 - Function names do not embed the type names of their arguments: `Stats::append(dir, &event)`, not `append_event`.
@@ -138,7 +138,7 @@ ToolFailureKind::ExecutionFailed.name()   // "execution_failed"
 
 - The `with_` prefix is reserved for a bare name that would be ambiguous even with an inherent and trait split; no current builder needs it.
 - A value the caller owns before execution consumes itself: `Agent` and `ToolBuilder` take `mut self` and return `Self`. `Agent` configures itself rather than through a second type, so a provider or model left unset is caught when it joins a queue.
-- A type handed out as `Arc` configures through `&self` and returns `&Self`: `TicketQueue` and `Knowledge`. A third shape, `self: Arc<Self> -> Arc<Self>`, is not used.
+- A type handed out as `Arc` configures through `&self` and returns `&Self`: `Queue` and `Knowledge`. A third shape, `self: Arc<Self> -> Arc<Self>`, is not used.
 
 ## Constructors
 
@@ -152,23 +152,23 @@ ToolFailureKind::ExecutionFailed.name()   // "execution_failed"
 
 - Example: `set_extension()`, `get_extension()`. Builder methods remain unprefixed.
 - A public method returning `bool` is `is_<state>` or `has_<thing>`. A bare past participle such as `label_cancelled` reads as a field, not a question.
-- `get_<name>` reads back a value a builder set where the bare noun would collide with the builder method on the same type: `TicketQueue::get_dir`, `Model::get_context_window`, `Agent::get_provider`. A reader with no setter to collide with keeps the bare noun: `Tool::name`, `Agent::id`. A lookup by key keeps `get_` for the `HashMap::get` sense, which is why `get_ticket(key)` stands apart from `find_ticket(matches)`.
+- `get_<name>` reads back a value a builder set where the bare noun would collide with the builder method on the same type: `Queue::get_dir`, `Model::get_context_window`, `Agent::get_provider`. A reader with no setter to collide with keeps the bare noun: `Tool::name`, `Agent::id`. A lookup by key keeps `get_` for the `HashMap::get` sense, which is why `get_task(key)` stands apart from `find_task(matches)`.
 
 ## Lifecycle
 
-**Three verbs over one filter, each scoped verb paired with a whole-run form: `start` starts, `finish(matches)` and `finish_all()` wait, `cancel(matches)` and `cancel_all()` stop. A filter is a `Matcher<Ticket>`, so the same call names one ticket or one pool.**
+**Three verbs over one filter, each scoped verb paired with a whole-run form: `start` starts, `finish(matches)` and `finish_all()` wait, `cancel(matches)` and `cancel_all()` stop. A filter is a `Matcher<Task>`, so the same call names one task or one pool.**
 
 ```rust
-tickets.start();
-tickets.finish(|t| t.has_label("scan")).await;   // one pool
-tickets.finish_all().await;                      // the whole run
-tickets.finish_last().await;                     // the whole run, one result
-tickets.cancel(|t| t.has_label("scan"));         // one pool
-tickets.cancel_all();                            // the whole run
+tasks.start();
+tasks.finish(|t| t.has_label("scan")).await;   // one pool
+tasks.finish_all().await;                      // the whole run
+tasks.finish_last().await;                     // the whole run, one result
+tasks.cancel(|t| t.has_label("scan"));         // one pool
+tasks.cancel_all();                            // the whole run
 ```
 
 - A verb takes a filter when it can mean part of the queue, and none when it cannot: `run` starts everything or nothing.
-- IMPORTANT: the filter says WHICH tickets, never WHAT to wait for. `finish(|t| t.is_finished())` is a mistake that returns at once: the filter selects the tickets, and "no work left" is the condition, fixed.
+- IMPORTANT: the filter says WHICH tasks, never WHAT to wait for. `finish(|t| t.is_finished())` is a mistake that returns at once: the filter selects the tasks, and "no work left" is the condition, fixed.
 - The whole-run case has exactly one spelling. `finish_all()` and `cancel_all()` are it; `|_| true` is never written at a call site.
 - A filterless form earns its place only by naming how many results the caller wants back, never by re-spelling a filter. `finish_last()` waits exactly as `finish_all()` does and gives the last result in creation order.
 - The two `_all` forms and `finish_last()` are the only filterless additions the family takes. Do not grow back the `cancel_label`, `cancel_on`, `cancel_*_on_*`, and `wait_for_*` methods a filter replaced.
@@ -186,10 +186,10 @@ edit_replies(key, editor)            // act once, now
 - `on_<trigger>(handler)` observes: the handler sees every `<trigger>` and returns nothing.
 - `on_<trigger>_async(handler)` is the same trigger in a handler whichever `finish` is waiting awaits. Every observer has one, and only observers do.
 - A bare `<action>(..)` acts once, now: `cancel`, `edit_replies`.
-- IMPORTANT: the trigger fixes the handler's parameters. `_on_event` hands over `&Event`, `_on_result` a `&Ticket` and its validated `&Value`, `_on_failure` the `&Event` and the `&Ticket` it happened in. Observing returns `()`.
-- IMPORTANT: an observer takes the queue first, `&Arc<TicketQueue>` before the trigger's own parameters, owned in the `_async` twin. That is what a hook acts through, and why neither a `create_ticket_on_*` nor an `edit_replies_on_*` family exists: `queue.ticket(..)` inside `on_result`, and `queue.edit_replies(&event.ticket_key, ..)` inside `on_event`, are the whole of them.
+- IMPORTANT: the trigger fixes the handler's parameters. `_on_event` hands over `&Event`, `_on_result` a `&Task` and its validated `&Value`, `_on_failure` the `&Event` and the `&Task` it happened in. Observing returns `()`.
+- IMPORTANT: an observer takes the queue first, `&Arc<Queue>` before the trigger's own parameters, owned in the `_async` twin. That is what a hook acts through, and why neither a `create_task_on_*` nor an `edit_replies_on_*` family exists: `queue.task(..)` inside `on_result`, and `queue.edit_replies(&event.task_key, ..)` inside `on_event`, are the whole of them.
 - A hook reacts to something agentwerk produces. Anything the caller already holds needs no hook: to stop a pool on a verdict, `finish` for it and `cancel`.
-- `on_ticket` sits outside the trigger grid, keying on a ticket rather than naming a trigger.
+- `on_task` sits outside the trigger grid, keying on a task rather than naming a trigger.
 - No hook registers something agentwerk calls in place of its own work. Compaction summarizes and says so through the four `Compaction*` events, and what agentwerk writes to correct the model is set once by `Agent::directives`, which takes one function over every directive.
 
 ## Editors
@@ -208,10 +208,10 @@ edit_replies(key, editor)            // act once, now
 - `Duration` becomes a float named `seconds`, with the unit repeated in the docstring: `Policy::request_retry_delay` binds as a float in seconds. Every other parameter keeps its Rust name.
 - A fieldless enum becomes its snake_case `Display` string. That `Display` impl is the single source, so the binding never formats a variant with `{:?}`.
 - An enum whose variants carry fields becomes a class with a `kind` string, a `data` dict, and one static constructor per variant. `Event` and `ReplyContent` are the two.
-- A builder method whose name collides with a reader on the same Python class becomes a constructor keyword argument, because a Python class cannot carry both. `Ticket` needs this for `label`, `schema`, and `parent`.
+- A builder method whose name collides with a reader on the same Python class becomes a constructor keyword argument, because a Python class cannot carry both. `Task` needs this for `label`, `schema`, and `parent`.
 - A `&mut` editor becomes a callable that returns the replacement, or `None` to keep the current value, since Python cannot take a Rust `&mut`.
 - A conversion type a setter takes collapses into the Python types it converts from: `Text` is a `str` for the text itself and an `os.PathLike` for the file holding it.
-- A reader taking no argument becomes an attribute: `Agent::id()` is `agent.id`, `Ticket::key()` is `ticket.key`.
+- A reader taking no argument becomes an attribute: `Agent::id()` is `agent.id`, `Task::key()` is `task.key`.
 - IMPORTANT: no `with_` prefix in either language, and no transform beyond this list.
 
 ## Free Functions
@@ -233,7 +233,7 @@ Forbidden:
 - A free helper called from exactly one private method. Make it a private method or a nested `fn`.
 - An associated function that takes no `self` and does not return `Self` or `Result<Self>`. Move it to the module.
 
-Naming is `snake_case`. Tool structs keep the `{Name}Tool` suffix. The name the model calls is a separate namespace and takes no suffix: `read_file`, `grep`, `tickets`. It is written once, in the tool's `From<XTool> for Tool` conversion, and never at a call site: a host registers `ReadFileTool`, not the string.
+Naming is `snake_case`. Tool structs keep the `{Name}Tool` suffix. The name the model calls is a separate namespace and takes no suffix: `read_file`, `grep`, `tasks`. It is written once, in the tool's `From<XTool> for Tool` conversion, and never at a call site: a host registers `ReadFileTool`, not the string.
 
 ## Doc Comments (`///`)
 
@@ -242,8 +242,8 @@ Naming is `snake_case`. Tool structs keep the `{Name}Tool` suffix. The name the 
 ```rust
 /// Set the LLM provider.            // builder: imperative configuration verb
 /// Get the elapsed duration.        // accessor: Get
-/// Begin processing tickets.        // action: imperative effect
-/// A ticket finished successfully.  // event: past-tense state sentence
+/// Begin processing tasks.        // action: imperative effect
+/// A task finished successfully.  // event: past-tense state sentence
 ```
 
 - Noun phrase for types and fields; verb for functions. No "This function…" or "Returns…".
@@ -300,13 +300,13 @@ Not allowed:
 
 ```rust
 // GOOD: states what the file contributes
-//! Runs many agents in parallel, each in its own tokio task, over one shared ticket store.
+//! Runs many agents in parallel, each in its own tokio task, over one shared task store.
 // BAD: lists contents
 //! Agent loop.
 //! - `run_main_loop`: entry point.
 
 // GOOD: purpose and invariant
-/// A ticket. Caller-settable fields: `task`, `label`, `schema`, `parent`. System-managed fields are set at insertion time.
+/// A task. Caller-settable fields: `task`, `label`, `schema`, `parent`. System-managed fields are set at insertion time.
 // BAD: restates the name
 /// The task field.
 
@@ -322,8 +322,8 @@ Not allowed:
 **One idea per sentence. A section lead is one sentence, and so is a table cell.**
 
 ```markdown
-GOOD: A `Schema` constrains the result an agent produces for a ticket.
-BAD:  A `Schema` is a JSON Schema document that gets attached to a ticket and,
+GOOD: A `Schema` constrains the result an agent produces for a task.
+BAD:  A `Schema` is a JSON Schema document that gets attached to a task and,
       when the result comes back, is used to validate it; failures retry.
 ```
 
@@ -347,7 +347,7 @@ BAD:  A `Schema` is a JSON Schema document that gets attached to a ticket and,
 
 ```markdown
 An `Agent` is the core entity of agentwerk.
-A `Schema` constrains the result an agent produces for a ticket.
+A `Schema` constrains the result an agent produces for a task.
 `Knowledge` allows agents to share insights or learnings.
 ```
 
@@ -387,7 +387,7 @@ Replaced:
 - "settle" and "settled" become "finish", "mark done", or "done"; "upsert" becomes "creates or replaces".
 - "smoke test" becomes "high-signal set", "starting point", or "core checks"; "drift" becomes the specific verb, "safety margin", or "stays anchored".
 - "park" and other vehicle metaphors become what actually happens: "stays `InProgress`", "is not re-claimed".
-- "stamp", "trip", "walk off", and "mint" are internal metaphors for writing a timestamp, breaching a limit, releasing a ticket, and creating one. Use the plain verb.
+- "stamp", "trip", "walk off", and "mint" are internal metaphors for writing a timestamp, breaching a limit, releasing a task, and creating one. Use the plain verb.
 - Rust async primitive nouns ("future", "closure", "predicate", "callback") become "another task that finishes", "a condition you supply", "your function". The Rust identifiers stay as identifiers.
 - Abstract pronouns and fractions ("one half", "the other", "either side") leave the reader guessing. Name the subject: not "detect one half from the environment and override the other", but "read only the provider from the environment, or only the model".
 
@@ -401,13 +401,13 @@ Banned:
 - "stream" and "streaming": say "print as it arrives", "forward", or "show live", or name the SSE layer when describing the implementation.
 - "drives the provider/tool loop" is slang. An agent calls the LLM provider and runs the tools it requests.
 - "the loop" and "the agent loop": say "agentwerk", "the agent", or name the subject. The phrase is fine in `agentdocs/architecture.md` and `agentdocs/layout.md`.
-- "header" and "ticket header" for the on-disk file holding a `Ticket` without its `replies`: say "the ticket" or "the ticket without its messages". The internal helper `ticket_header_path` and `architecture.md` may keep the term.
+- "header" and "task header" for the on-disk file holding a `Task` without its `replies`: say "the task" or "the task without its messages". The internal helper `task_header_path` and `architecture.md` may keep the term.
 
 Also:
 
 - Bare "provider" is spelled "LLM provider". Identifier names stay unqualified.
-- "execution" is the word for a run, in prose and in identifiers: `TicketQueue::execution_duration()`. `run` survives only where it names the event itself, `EventKind::RunStarted` and `RunFinished`.
-- The Knowledge store is described as durable memory the agent shares across tickets and other agents; the sharing is the headline, not a footnote.
+- "execution" is the word for a run, in prose and in identifiers: `Queue::execution_duration()`. `run` survives only where it names the event itself, `EventKind::RunStarted` and `RunFinished`.
+- The Knowledge store is described as durable memory the agent shares across tasks and other agents; the sharing is the headline, not a footnote.
 
 ## README Structure
 
@@ -415,7 +415,7 @@ Also:
 
 - Fixed section order: Why use agentwerk?, Installation, Quick Start, Agent Swarms, Demo, the API sections, Use Cases, Security, Development.
 - The opening section is one bullet per reason to reach for the crate: `**Reason:** one short sentence`. A reason with nothing behind it is marketing and is cut. It runs before the reader has met a single agentwerk concept, so it carries no identifier, no type or function name, and none of the domain vocabulary the API sections introduce. "Task" and "agent" are the only nouns assumed.
-- API sections run in the order a new reader needs them: Agents, Tickets, Tools, Events, Knowledge. Sessions is a subsection of Tickets.
+- API sections run in the order a new reader needs them: Agents, Tasks, Tools, Events, Knowledge. Sessions is a subsection of Tasks.
 - Prompting has no section of its own. `role`, `task`, and the template bindings configure an agent, so they live in Agents next to `name` and `tool`.
 - Every section leads with one minimal example, then at most three sentences. Facts live in one place; other sections cross-link rather than repeat.
 
@@ -427,7 +427,7 @@ Also:
 - Folds are the last thing in a section. Every `<summary>` reads `All <what the fold holds>`: `All event kinds`, `All hooks`, `All session files`. One section holds one fold; a second catalogue earns its own `h3` with its own lead example.
 - IMPORTANT: a blank line after `</summary>` and before `</details>`. `details` opens a raw-HTML block, so without the blank line every table inside renders as literal pipe characters on GitHub, crates.io, and PyPI alike.
 - Snippet budgets: eight lines for a section lead, five for a subsection lead. Quick Start gets sixteen.
-- Agent Swarms is the one exception and runs long, because it is the only place a whole system is shown at once: a pool working in parallel, a second pool the first hands tickets to, and one knowledge store between them.
+- Agent Swarms is the one exception and runs long, because it is the only place a whole system is shown at once: a pool working in parallel, a second pool the first hands tasks to, and one knowledge store between them.
 
 ## README Mechanics
 
@@ -452,10 +452,10 @@ Also:
 **Each table picks one cell shape and holds it. Mixing shapes inside one table is a defect.**
 
 - Builder rows lead with an imperative configuration verb: `Set the LLM provider.`
-- Action rows lead with the imperative effect: `Begin processing tickets.`
-- Accessor rows lead with `Get`: `Get every finished ticket's result.`
+- Action rows lead with the imperative effect: `Begin processing tasks.`
+- Accessor rows lead with `Get`: `Get every finished task's result.`
 - Tool rows lead with the imperative action the agent takes: `Fetch a URL and read its body.`
-- Event rows are past-tense state sentences: `A ticket finished successfully.`
+- Event rows are past-tense state sentences: `A task finished successfully.`
 - Every row is a description, not a constraint fragment. A cell that does not lead with a verb is a defect.
 - A tool does not act; the agent does. The table intro carries that framing once so individual rows stay terse.
 - The prose verb "Return" stays for instructions to the caller, as in "Return `ToolResult::error(message)` for a failure the model should work around".
@@ -464,10 +464,10 @@ Also:
 
 **Rows are grouped by subject, and one axis order is repeated in every group.**
 
-- Groups do not interleave. The result rows run before the ticket rows in Results; the observers run before the cancels in Hooks.
+- Groups do not interleave. The result rows run before the task rows in Results; the observers run before the cancels in Hooks.
 - One axis order is chosen and held across every group. Hooks is the model: `event`, `result`, `failure`.
-- Within a group, selectors run widest to narrowest: everything, then by label or agent, then by condition, then by key. Singular leads plural, and an action is followed by the query that reads it back: `cancel(matches)` then `is_cancelled(ticket)`.
-- One table holds one receiver. A method on another type goes in the fold's trailing prose, which is why `TicketQueue::model_for_agent` is prose under the Providers fold rather than a fourth `Agent` row.
+- Within a group, selectors run widest to narrowest: everything, then by label or agent, then by condition, then by key. Singular leads plural, and an action is followed by the query that reads it back: `cancel(matches)` then `is_cancelled(task)`.
+- One table holds one receiver. A method on another type goes in the fold's trailing prose, which is why `Queue::model_for_agent` is prose under the Providers fold rather than a fourth `Agent` row.
 - The Execution fold holds everything that acts once over a run. The hooks fold holds only what registers a handler the queue calls back into on every matching event.
 
 ## README Examples

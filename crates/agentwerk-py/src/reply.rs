@@ -2,14 +2,14 @@
 //! list of `ReplyContent` blocks; each block is flattened to a `kind` plus a
 //! `data` dict, the same shape `Event` uses for a payload-carrying variant.
 
-use agentwerk::agents::tickets::{Author, Reply, ReplyContent};
+use agentwerk::agents::tasks::{Author, Reply, ReplyContent};
 use pyo3::prelude::*;
 
 use serde_json::Value;
 
 use crate::convert::{py_to_value, runtime_error, value_to_py};
 
-/// One entry in a ticket's replies, which an editor hands back.
+/// One entry in a task's replies, which an editor hands back.
 #[pyclass(name = "Reply", from_py_object)]
 #[derive(Clone)]
 pub struct PyReply {

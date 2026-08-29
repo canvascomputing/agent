@@ -27,8 +27,8 @@ from agentwerk import (
     Knowledge,
     ReadFileTool,
     Schema,
-    Ticket,
-    TicketQueue,
+    Task,
+    Queue,
 )
 
 import apparate
@@ -50,7 +50,7 @@ PRUEFER_ROLE = """
 {context}
 
 You work the intake of an apparatus works. You take one Bauplan and send every
-part it names down the line, one ticket per part.
+part it names down the line, one task per part.
 
 - MUST call `grep` with `{"pattern": "TEIL-[0-9]+", "path": "<the plan named in
   the task>", "output_mode": "content", "-C": 1, "head_limit": 20}`. The plan is
@@ -76,7 +76,7 @@ fitted to the apparatus.
 
 - MUST call `read_file` on that part's card in the Lager. A card for part
   `TEIL-1234` is the file `.agentwerk/fabrik/lager/teil-1234.md`, in lower case.
-- The card gives `Gemessen`. The ticket gives the Sollmaß and the Toleranz.
+- The card gives `Gemessen`. The task gives the Sollmaß and the Toleranz.
   A part fits when the measured size is within the tolerance of the nominal one,
   in either direction, and the decimals are written with a comma.
 - `passt` is true when it fits and false when it does not. Do the comparison on
@@ -95,7 +95,7 @@ MONTEUR_ROLE = """
 
 You fit a cleared part into its apparatus and book it against the plan.
 
-- The ticket names the part and repeats the Laufzettel it travelled with, which
+- The task names the part and repeats the Laufzettel it travelled with, which
   names the Bauplan it belongs to.
 - MUST call `read_file` on that Bauplan and check that the part number really
   stands in its table. A part that is not on the plan is not fitted, whatever
@@ -190,9 +190,9 @@ def worker_names(pruefer, meister, monteur):
     }
 
 
-def build_shift(tickets, book, pruefer, meister, monteur):
+def build_shift(tasks, book, pruefer, meister, monteur):
     for _ in range(pruefer):
-        tickets.agent(
+        tasks.agent(
             Agent.from_env()
             .label("pruefung")
             .role(PRUEFER_ROLE.strip())
@@ -201,7 +201,7 @@ def build_shift(tickets, book, pruefer, meister, monteur):
             .tools([GrepTool(), ReadFileTool()])
         )
     for _ in range(meister):
-        tickets.agent(
+        tasks.agent(
             Agent.from_env()
             .label("abnahme")
             .role(MEISTER_ROLE.strip())
@@ -210,7 +210,7 @@ def build_shift(tickets, book, pruefer, meister, monteur):
             .tool(ReadFileTool())
         )
     for _ in range(monteur):
-        tickets.agent(
+        tasks.agent(
             Agent.from_env()
             .label("montage")
             .role(MONTEUR_ROLE.strip())
@@ -231,18 +231,18 @@ async def main(pruefer, meister, monteur):
     started_at = time.monotonic()
     # Every request resends the context, so the input-token limit is what bounds
     # the bill; the shift bell is the time limit, and both end the run on screen.
-    tickets = TicketQueue().policy(
+    tasks = Queue().policy(
         Policy(max_time=SHIFT, max_input_tokens=2_000_000)
     )
 
     # One read plan opens one Abnahme per part it names, which is the fan-out
     # the line runs on.
-    def open_abnahme(work, ticket, result):
-        if not ticket.has_label("pruefung"):
+    def open_abnahme(work, task, result):
+        if not task.has_label("pruefung"):
             return
         for teil in result["teile"]:
-            work.ticket(
-                Ticket(
+            work.task(
+                Task(
                     f"Nimm {teil['teil']} ({teil['name']}) ab. Sollmaß {teil['soll']}, "
                     f"Toleranz {teil['toleranz']}. Der Bauplan liegt in {result['bauplan']}.",
                     label="abnahme",
@@ -250,21 +250,21 @@ async def main(pruefer, meister, monteur):
                 )
             )
 
-    tickets.on_result(open_abnahme)
+    tasks.on_result(open_abnahme)
 
     # A part that passes the Abnahme is not done: it goes on to be fitted, so
     # the work fans forward instead of ending at the second station.
-    def open_montage(work, ticket, result):
-        if ticket.has_label("abnahme") and result.get("passt"):
-            work.ticket(
-                Ticket(
-                    f"Baue {result['teil']} ein und buche es. Der Laufzettel lautete: {ticket.task}",
+    def open_montage(work, task, result):
+        if task.has_label("abnahme") and result.get("passt"):
+            work.task(
+                Task(
+                    f"Baue {result['teil']} ein und buche es. Der Laufzettel lautete: {task.task}",
                     label="montage",
                     schema=FITTING,
                 )
             )
 
-    tickets.on_result(open_montage)
+    tasks.on_result(open_montage)
 
     workers = worker_names(pruefer, meister, monteur)
 
@@ -273,29 +273,29 @@ async def main(pruefer, meister, monteur):
             return
         frame = frame_for(event, started_at, str(REPO))
         frame["agent"] = workers.get(frame["agent"], frame["agent"])
-        if frame["ticket"] and event.kind.startswith("ticket_"):
-            ticket = work.get_ticket(frame["ticket"])
-            if ticket is not None:
-                frame["label"] = ticket.label
-                frame["reporter"] = ticket.reporter
-                frame["task"] = str(ticket.task)[:160]
+        if frame["task"] and event.kind.startswith("task_"):
+            task = work.get_task(frame["task"])
+            if task is not None:
+                frame["label"] = task.label
+                frame["reporter"] = task.reporter
+                frame["task"] = str(task.task)[:160]
         loop.call_soon_threadsafe(feed.push, frame)
 
-    def publish_result(_, ticket, result):
+    def publish_result(_, task, result):
         loop.call_soon_threadsafe(
             feed.push,
             {
                 "t": time.monotonic() - started_at,
                 "kind": "ruling",
-                "ticket": ticket.key,
-                "agent": workers.get(ticket.assignee or "", ticket.assignee or ""),
+                "task": task.key,
+                "agent": workers.get(task.assignee or "", task.assignee or ""),
                 "result": result,
             },
         )
 
-    tickets.on_event(publish)
-    tickets.on_result(publish_result)
-    build_shift(tickets, book, pruefer, meister, monteur)
+    tasks.on_event(publish)
+    tasks.on_result(publish_result)
+    build_shift(tasks, book, pruefer, meister, monteur)
 
     works = apparate.build(WORKS_DIR, REPO)
     feed.push({"t": 0, "kind": "world", "shift": SHIFT, "stations": STATIONS, "apparate": works})
@@ -309,8 +309,8 @@ async def main(pruefer, meister, monteur):
         }
     )
     for apparat in works:
-        tickets.ticket(
-            Ticket(
+        tasks.task(
+            Task(
                 f"Prüfe den Bauplan {apparat['title']}. Er liegt in {apparat['name']}.",
                 label="pruefung",
                 schema=PLAN,
@@ -318,27 +318,27 @@ async def main(pruefer, meister, monteur):
         )
 
     pages = asyncio.create_task(watch_pages(book, feed, started_at))
-    await tickets.finish_all()
+    await tasks.finish_all()
     pages.cancel()
 
-    stats = tickets.stats()
+    stats = tasks.stats()
     feed.push(
         {
             "t": time.monotonic() - started_at,
             "kind": "bell",
-            "reason": tickets.finish_reason(),
+            "reason": tasks.finish_reason(),
             "stats": stats.to_dict(),
         }
     )
     rulings = [
-        ticket.result
-        for ticket in tickets.find_tickets(lambda t: t.has_label("abnahme"))
-        if ticket.is_finished() and isinstance(ticket.result, dict)
+        task.result
+        for task in tasks.find_tasks(lambda t: t.has_label("abnahme"))
+        if task.is_finished() and isinstance(task.result, dict)
     ]
     fitted = [
-        ticket.result
-        for ticket in tickets.find_tickets(lambda t: t.has_label("montage"))
-        if ticket.is_finished() and isinstance(ticket.result, dict) and ticket.result.get("eingebaut")
+        task.result
+        for task in tasks.find_tasks(lambda t: t.has_label("montage"))
+        if task.is_finished() and isinstance(task.result, dict) and task.result.get("eingebaut")
     ]
     scrap = [ruling for ruling in rulings if not ruling.get("passt")]
     print(

@@ -8,7 +8,7 @@ use super::common;
 
 use agentwerk::schemas::Schema;
 use agentwerk::tools::ListDirectoryTool;
-use agentwerk::{Agent, Policy, Ticket, TicketQueue};
+use agentwerk::{Agent, Policy, Queue, Task};
 
 #[tokio::test]
 async fn separates_files_and_directories() -> std::result::Result<(), Box<dyn std::error::Error>> {
@@ -41,9 +41,9 @@ async fn separates_files_and_directories() -> std::result::Result<(), Box<dyn st
         "required": ["files", "directories"]
     }))?;
 
-    let tickets = TicketQueue::new();
+    let tasks = Queue::new();
 
-    tickets.policy(Policy {
+    tasks.policy(Policy {
         max_turns: Some(10),
         ..Default::default()
     });
@@ -62,19 +62,19 @@ async fn separates_files_and_directories() -> std::result::Result<(), Box<dyn st
              any text outside of tool calls.",
         )
         .tool(ListDirectoryTool);
-    tickets.agent(agent);
-    tickets.ticket(
-        Ticket::new(
+    tasks.agent(agent);
+    tasks.task(
+        Task::new(
             "List the top-level entries in the working directory, separating files from directories.",
         )
         .schema(schema),
     );
 
-    let json = tickets.finish_last().await.unwrap_or_default();
-    common::print_result(&tickets);
+    let json = tasks.finish_last().await.unwrap_or_default();
+    common::print_result(&tasks);
 
     assert!(
-        tickets.find_events("tool_call_started").len() >= 1,
+        tasks.find_events("tool_call_started").len() >= 1,
         "agent must call at least one tool"
     );
 

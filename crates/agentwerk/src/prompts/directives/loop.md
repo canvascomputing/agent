@@ -8,7 +8,7 @@ Your previous reply was not accepted.
 Do not write any text. Your next reply must be a tool call only.
 
 ## no_tool_called
-Your last reply called no tool. Call `finish` with your result when the work is complete, or another tool to continue. A reply with no tool call leaves the ticket unfinished.
+Your last reply called no tool. Call `finish` with your result when the work is complete, or another tool to continue. A reply with no tool call leaves the task unfinished.
 
 ## arguments_rejected
 `{tool}` rejected your arguments. Call it again with arguments that match its schema.

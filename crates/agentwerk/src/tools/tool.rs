@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::agents::knowledge::Knowledge;
-use crate::agents::tickets::{Run, TicketQueue};
+use crate::agents::tasks::{Queue, Run};
 use crate::event::{EventKind, ToolFailureKind};
 use crate::prompts::directives::{
     DirectiveStore, NO_TOOLS_REGISTERED, TOOL_NOT_FOUND, TOOL_OUTPUT_EMPTY, TOOL_OUTPUT_OFFLOADED,
@@ -22,7 +22,7 @@ use crate::schemas::Schema;
 const MAX_CONCURRENT_CALLS: usize = 10;
 
 /// The largest result one tool may return. Anything longer is written to
-/// `<ticket-dir>/outputs/<tool_use_id>.txt` and replaced with a short stub.
+/// `<task-dir>/outputs/<tool_use_id>.txt` and replaced with a short stub.
 /// Roughly 12 500 tokens.
 const PER_TOOL_CAP: usize = 50_000;
 
@@ -48,9 +48,9 @@ pub struct ToolContext {
     /// Directory the tool runs in. Resolve a relative path against it.
     pub dir: PathBuf,
     pub(crate) run: Option<Arc<Run>>,
-    pub(crate) ticket_queue: Option<Arc<TicketQueue>>,
+    pub(crate) queue: Option<Arc<Queue>>,
     pub(crate) agent_id: Option<String>,
-    pub(crate) ticket_key: Option<String>,
+    pub(crate) task_key: Option<String>,
     pub(crate) knowledge: Option<Arc<Knowledge>>,
     /// What this call's failures say. An agent shares its store here; a
     /// standalone call keeps the built-in text.
@@ -64,9 +64,9 @@ impl ToolContext {
         Self {
             dir,
             run: None,
-            ticket_queue: None,
+            queue: None,
             agent_id: None,
-            ticket_key: None,
+            task_key: None,
             knowledge: None,
             directives: Arc::new(DirectiveStore::default()),
         }
@@ -77,8 +77,8 @@ impl ToolContext {
         self
     }
 
-    pub(crate) fn ticket_queue(mut self, queue: Arc<TicketQueue>) -> Self {
-        self.ticket_queue = Some(queue);
+    pub(crate) fn queue(mut self, queue: Arc<Queue>) -> Self {
+        self.queue = Some(queue);
         self
     }
 
@@ -87,8 +87,8 @@ impl ToolContext {
         self
     }
 
-    pub(crate) fn ticket_key(mut self, key: String) -> Self {
-        self.ticket_key = Some(key);
+    pub(crate) fn task_key(mut self, key: String) -> Self {
+        self.task_key = Some(key);
         self
     }
 
@@ -102,13 +102,13 @@ impl ToolContext {
         self
     }
 
-    /// Publish `kind` for the ticket and agent this call runs for. A context
+    /// Publish `kind` for the task and agent this call runs for. A context
     /// with no queue publishes nothing; the call still runs.
     pub(crate) fn emit(&self, kind: EventKind) {
-        let Some(queue) = &self.ticket_queue else {
+        let Some(queue) = &self.queue else {
             return;
         };
-        let key = self.ticket_key.as_deref().unwrap_or_default();
+        let key = self.task_key.as_deref().unwrap_or_default();
         let agent = self.agent_id.as_deref().unwrap_or_default();
         queue.emit(key, agent, kind);
     }
@@ -132,7 +132,7 @@ impl std::fmt::Debug for ToolContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ToolContext")
             .field("dir", &self.dir)
-            .field("has_ticket_queue", &self.ticket_queue.is_some())
+            .field("has_queue", &self.queue.is_some())
             .finish()
     }
 }
@@ -742,7 +742,7 @@ fn replace_empty_output(result: &mut ToolResult, tool_name: &str, directives: &D
 }
 
 /// Replace an oversized result with a stub, writing the original under the
-/// ticket's outputs directory.
+/// task's outputs directory.
 ///
 /// A failure passes through, being short by construction, and so does the raw
 /// content when the write fails.
@@ -808,7 +808,7 @@ fn largest_inline_success<'a>(
         .max_by_key(|(_, content, _)| content.len())
 }
 
-/// Write `content` out under the ticket's outputs directory and leave the stub
+/// Write `content` out under the task's outputs directory and leave the stub
 /// the model reads in its place, giving back where the original went.
 ///
 /// `None` when the write fails, and then `content` is left as it was.
@@ -821,14 +821,14 @@ fn write_out(content: &mut String, ctx: &ToolContext, call_id: &str) -> Option<P
     Some(output.rel)
 }
 
-/// Write `content` under the ticket's outputs directory, reporting both the
+/// Write `content` under the task's outputs directory, reporting both the
 /// path relative to the session and the path on disk.
 ///
-/// `None` when the context names no ticket, no ticket queue is attached, or
+/// `None` when the context names no task, no task queue is attached, or
 /// the write fails. Like the rest of the logging, it is best effort.
 fn persist_output(ctx: &ToolContext, tool_use_id: &str, content: &str) -> Option<PersistedOutput> {
-    let queue = ctx.ticket_queue.as_ref()?;
-    let key = ctx.ticket_key.as_deref()?;
+    let queue = ctx.queue.as_ref()?;
+    let key = ctx.task_key.as_deref()?;
     let rel = queue.write_tool_output(key, tool_use_id, content)?;
     let display = queue.get_dir().join(&rel);
     Some(PersistedOutput { rel, display })
@@ -918,7 +918,7 @@ mod tests {
             crate::tools::KnowledgeTool::new(store).into(),
             crate::tools::CommandTool::new("git").allow("git *").into(),
             crate::tools::FinishTool.into(),
-            crate::tools::TicketsTool.into(),
+            crate::tools::TasksTool.into(),
         ];
         (tools, dir)
     }
@@ -947,7 +947,7 @@ mod tests {
                 ("knowledge", false),
                 ("git", false),
                 ("finish", false),
-                ("tickets", false),
+                ("tasks", false),
             ]
         );
         for tool in &tools {
@@ -1132,14 +1132,14 @@ mod tests {
 
     #[tokio::test]
     async fn a_rejected_call_reads_back_the_one_schema_its_tool_holds() {
-        let ticket = Schema::new(serde_json::json!({
+        let task = Schema::new(serde_json::json!({
             "type": "object",
             "properties": {"partial_sum": {"type": "integer"}},
             "required": ["partial_sum"],
         }))
         .unwrap();
         let mut registry = ToolRegistry::default();
-        registry.register(crate::tools::FinishTool::from_schema(Some(ticket)));
+        registry.register(crate::tools::FinishTool::from_schema(Some(task)));
 
         let shown = registry
             .get("finish")
@@ -1489,20 +1489,13 @@ mod tests {
 
     // Layer 1: result-cap helpers
 
-    fn ticket_ctx() -> (
-        ToolContext,
-        Arc<TicketQueue>,
-        String,
-        crate::test_util::TempDir,
-    ) {
+    fn task_ctx() -> (ToolContext, Arc<Queue>, String, crate::test_util::TempDir) {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let queue = TicketQueue::new();
+        let queue = Queue::new();
         queue.dir(dir.path().to_path_buf());
-        queue.ticket("seed");
-        let key = "TICKET-1".to_string();
-        let ctx = test_ctx()
-            .ticket_queue(Arc::clone(&queue))
-            .ticket_key(key.clone());
+        queue.task("seed");
+        let key = "t-1".to_string();
+        let ctx = test_ctx().queue(Arc::clone(&queue)).task_key(key.clone());
         (ctx, queue, key, dir)
     }
 
@@ -1524,7 +1517,7 @@ mod tests {
     }
 
     fn relative_outputs_path(key: &str, tool_use_id: &str) -> PathBuf {
-        PathBuf::from("tickets")
+        PathBuf::from("tasks")
             .join(key)
             .join("outputs")
             .join(format!("{tool_use_id}.txt"))
@@ -1536,7 +1529,7 @@ mod tests {
 
     #[test]
     fn write_tool_output_stores_relative_path_in_comment() {
-        let (ctx, _queue, key, _dir) = ticket_ctx();
+        let (ctx, _queue, key, _dir) = task_ctx();
         let mut result = ToolResult::success("z".repeat(500));
         cap_oversized_result(&mut result, &ctx, "call-rel", 100);
         let stored = offloaded_path(&result).expect("offload happened");
@@ -1550,7 +1543,7 @@ mod tests {
 
     #[test]
     fn persisted_output_renders_absolute_path_for_model() {
-        let (ctx, _queue, key, dir) = ticket_ctx();
+        let (ctx, _queue, key, dir) = task_ctx();
         let mut result = ToolResult::success("y".repeat(500));
         cap_oversized_result(&mut result, &ctx, "call-abs", 100);
         let absolute = absolute_outputs_path(dir.path(), &key, "call-abs");
@@ -1572,7 +1565,7 @@ mod tests {
 
     #[test]
     fn cap_oversized_result_replaces_oversized_ok_with_stub() {
-        let (ctx, _queue, key, dir) = ticket_ctx();
+        let (ctx, _queue, key, dir) = task_ctx();
         let mut result = ToolResult::success("a".repeat(500));
         cap_oversized_result(&mut result, &ctx, "call-xyz", 100);
         let stub = result.content();
@@ -1602,7 +1595,7 @@ mod tests {
     }
 
     #[test]
-    fn cap_oversized_result_returns_raw_when_no_ticket_key() {
+    fn cap_oversized_result_returns_raw_when_no_task_key() {
         let ctx = test_ctx();
         let payload = "x".repeat(500);
         let mut result = ToolResult::success(payload.clone());
@@ -1610,13 +1603,13 @@ mod tests {
         assert_eq!(result.content(), payload);
         assert!(
             offloaded_path(&result).is_none(),
-            "no ticket key means no offload"
+            "no task key means no offload"
         );
     }
 
     #[test]
     fn cap_aggregate_offloads_largest_first() {
-        let (ctx, _queue, key, dir) = ticket_ctx();
+        let (ctx, _queue, key, dir) = task_ctx();
         // Sizes chosen so the stub's own bytes (~200) don't dominate.
         let big = "b".repeat(80_000);
         let calls = vec![sized_call("c1"), sized_call("c2"), sized_call("c3")];
@@ -1644,7 +1637,7 @@ mod tests {
 
     #[test]
     fn cap_aggregate_stops_when_only_small_results_remain() {
-        let (ctx, _queue, _key, _dir) = ticket_ctx();
+        let (ctx, _queue, _key, _dir) = task_ctx();
         // Many small results whose total far exceeds the cap, but
         // each is already stub-marked. Aggregate should bail
         // rather than spin: stubs are skipped, so no candidates.
@@ -1668,7 +1661,7 @@ mod tests {
 
     #[test]
     fn format_oversized_tool_result_renders_template() {
-        let path = PathBuf::from("/tmp/agentwerk/tickets/TICKET-1/outputs/call-1.txt");
+        let path = PathBuf::from("/tmp/agentwerk/tasks/t-1/outputs/call-1.txt");
         let stub = format_oversized_tool_result(
             1_048_576,
             &path,
@@ -1677,8 +1670,7 @@ mod tests {
         );
         assert!(stub.starts_with("<persisted-output>"));
         assert!(stub.contains("Output too large (1.0 MB)."));
-        assert!(stub
-            .contains("Full output saved to: /tmp/agentwerk/tickets/TICKET-1/outputs/call-1.txt"));
+        assert!(stub.contains("Full output saved to: /tmp/agentwerk/tasks/t-1/outputs/call-1.txt"));
         assert!(stub.contains("Preview (first 12 B):"));
         assert!(stub.contains("preview-body"));
         assert!(stub.ends_with("</persisted-output>"));
@@ -1744,7 +1736,7 @@ mod tests {
     fn cap_aggregate_skips_a_failed_result() {
         // A failure's message is what the model must read to recover, so the
         // aggregate cap never writes it out.
-        let (ctx, _queue, _key, _dir) = ticket_ctx();
+        let (ctx, _queue, _key, _dir) = task_ctx();
         let calls = vec![sized_call("c1")];
         let mut results = vec![ToolResult::error("e".repeat(50_000))];
         cap_aggregate_outputs(&calls, &mut results, &ctx, 10);

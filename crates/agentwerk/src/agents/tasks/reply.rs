@@ -1,6 +1,6 @@
-//! One ticket's replies and how they become
+//! One task's replies and how they become
 //! provider [`Message`] values. [`ReplyContent`] mirrors
-//! [`ContentBlock`] so the ticket surface stays free of provider types.
+//! [`ContentBlock`] so the task surface stays free of provider types.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -21,7 +21,7 @@ pub enum Author {
     Assistant,
 }
 
-/// One entry in a ticket's replies.
+/// One entry in a task's replies.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Reply {
     pub author: Author,
@@ -30,10 +30,10 @@ pub struct Reply {
     pub created_at: u64,
 }
 
-/// Ticket-side mirror of [`ContentBlock`]. Keeps the public ticket
+/// Task-side mirror of [`ContentBlock`]. Keeps the public task
 /// surface free of provider types while still recording every payload
 /// shape the agent loop sends. Carries the same tags as `ContentBlock`
-/// so both serialize alike; `ToolResult::path` is the one ticket-side
+/// so both serialize alike; `ToolResult::path` is the one task-side
 /// field the provider block has no counterpart for.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -237,7 +237,7 @@ mod tests {
     }
 
     /// Every variant must serialize exactly like the `ContentBlock` it
-    /// mirrors, so one shape reaches callers whether they read a ticket's
+    /// mirrors, so one shape reaches callers whether they read a task's
     /// replies or a provider message. `Text` is the trap: as a newtype
     /// variant it cannot carry the `type` tag at all, and serde only
     /// discovers that at run time.

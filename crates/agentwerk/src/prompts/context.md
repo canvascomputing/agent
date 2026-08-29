@@ -1,4 +1,4 @@
-- Ticket: {ticket}
+- Task: {task}
 - Date: {date}
 - Working directory: {dir}
 - Platform: {platform} {os_version}

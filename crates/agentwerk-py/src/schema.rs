@@ -1,5 +1,5 @@
 //! The schema as Python sees it: built from a dict or a JSON string, then
-//! attached to a ticket or bound to a label through a `SchemaStore`.
+//! attached to a task or bound to a label through a `SchemaStore`.
 
 use std::sync::Arc;
 
@@ -8,8 +8,8 @@ use pyo3::prelude::*;
 
 use crate::convert::{py_to_value, runtime_error, value_to_py};
 
-/// A `Schema` constrains the result an agent produces for a ticket. Copying it
-/// is cheap, so a ticket and a label can share one.
+/// A `Schema` constrains the result an agent produces for a task. Copying it
+/// is cheap, so a task and a label can share one.
 #[pyclass(name = "Schema")]
 pub struct PySchema {
     pub inner: Schema,
@@ -40,8 +40,8 @@ impl PySchema {
     }
 }
 
-/// `SchemaStore` holds one schema per label and hands it to every ticket claimed
-/// under that label that carries no schema of its own. Give it to a ticket
+/// `SchemaStore` holds one schema per label and hands it to every task claimed
+/// under that label that carries no schema of its own. Give it to a task
 /// queue with `queue.schemas(store)`.
 #[pyclass(name = "SchemaStore")]
 pub struct PySchemaStore {

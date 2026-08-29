@@ -12,13 +12,13 @@ use crate::tools::{FinishTool, KnowledgeTool, Tool, ToolRegistry};
 use super::knowledge::Knowledge;
 use super::policy::Policy;
 use super::stats::Stats;
-use super::tickets::{Ticket, TicketQueue};
+use super::tasks::{Queue, Task};
 use crate::prompts::directives::DirectiveStore;
 
 /// One counter per label, behind the ids [`Agent::id`] hands out.
 /// Numbering restarts at 1 for each label, so a host that creates the same
 /// agents in the same order gets the same ids after a restart, which is what
-/// [`TicketQueue::load`] needs to resume an unfinished ticket.
+/// [`Queue::load`] needs to resume an unfinished task.
 static AGENT_IDS: Mutex<BTreeMap<String, u64>> = Mutex::new(BTreeMap::new());
 
 fn next_id(label: Option<&str>) -> String {
@@ -29,15 +29,15 @@ fn next_id(label: Option<&str>) -> String {
     format!("{prefix}-{count}")
 }
 
-/// How an `Agent` reaches its `TicketQueue`. A new agent carries `Private`
+/// How an `Agent` reaches its `Queue`. A new agent carries `Private`
 /// until it is added to a queue; everything else carries `Shared`.
-pub(crate) enum TicketQueueRef {
-    Shared(Weak<TicketQueue>),
-    Private(Arc<TicketQueue>),
+pub(crate) enum QueueRef {
+    Shared(Weak<Queue>),
+    Private(Arc<Queue>),
 }
 
-impl TicketQueueRef {
-    pub(crate) fn upgrade(&self) -> Option<Arc<TicketQueue>> {
+impl QueueRef {
+    pub(crate) fn upgrade(&self) -> Option<Arc<Queue>> {
         match self {
             Self::Shared(w) => w.upgrade(),
             Self::Private(a) => Some(Arc::clone(a)),
@@ -46,9 +46,9 @@ impl TicketQueueRef {
 }
 
 /// An `Agent` is the core entity of agentwerk. It has access to tools for
-/// solving tasks in the form of tickets.
+/// solving tasks in the form of tasks.
 ///
-/// It claims the tickets its label matches, calls the LLM provider, runs
+/// It claims the tasks its label matches, calls the LLM provider, runs
 /// the tools the model asks for, and writes the result back.
 ///
 /// ```no_run
@@ -64,10 +64,10 @@ impl TicketQueueRef {
 /// # }
 /// ```
 pub struct Agent {
-    // pub(crate): read by loop, TicketQueue, or assignment code
+    // pub(crate): read by loop, Queue, or assignment code
     pub(crate) label: Option<String>,
     pub(crate) interactive: bool,
-    pub(crate) ticket_queue: TicketQueueRef,
+    pub(crate) queue: QueueRef,
     // private: accessed through methods within agents::
     /// Taken the first time anything needs it, since the label it is built from
     /// is set after construction.
@@ -84,21 +84,21 @@ pub struct Agent {
 
 impl Clone for Agent {
     /// A clone is the same agent, id included: `bind_agent` keeps one, and the
-    /// two would otherwise disagree about which tickets are theirs. Reading the
+    /// two would otherwise disagree about which tasks are theirs. Reading the
     /// id here is what fixes it for both. The clone points at the shared queue,
-    /// so rebinding the original cannot leave it filing tickets into a queue
+    /// so rebinding the original cannot leave it filing tasks into a queue
     /// nothing reads.
     fn clone(&self) -> Self {
-        let ticket_queue = match &self.ticket_queue {
-            TicketQueueRef::Shared(w) => TicketQueueRef::Shared(w.clone()),
-            TicketQueueRef::Private(a) => TicketQueueRef::Shared(Arc::downgrade(a)),
+        let queue = match &self.queue {
+            QueueRef::Shared(w) => QueueRef::Shared(w.clone()),
+            QueueRef::Private(a) => QueueRef::Shared(Arc::downgrade(a)),
         };
         Self {
             id: OnceLock::from(self.id().to_string()),
             label: self.label.clone(),
             interactive: self.interactive,
             directives: Arc::clone(&self.directives),
-            ticket_queue,
+            queue,
             provider: self.provider.clone(),
             model: self.model.clone(),
             role: self.role.clone(),
@@ -111,9 +111,9 @@ impl Clone for Agent {
 }
 
 impl Agent {
-    /// Create an agent, with a ticket queue of its own so
-    /// `.ticket(...)` and `.start()` work without one being set up.
-    /// `TicketQueue::agent(...)` later moves those tickets into the shared queue.
+    /// Create an agent, with a task queue of its own so
+    /// `.task(...)` and `.start()` work without one being set up.
+    /// `Queue::agent(...)` later moves those tasks into the shared queue.
     ///
     /// Give it a provider and a model before it starts work.
     pub fn new() -> Self {
@@ -127,7 +127,7 @@ impl Agent {
             role: String::new(),
             label: None,
             interactive: false,
-            ticket_queue: TicketQueueRef::Private(TicketQueue::new()),
+            queue: QueueRef::Private(Queue::new()),
             templates: Vec::new(),
             tools,
             dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
@@ -163,10 +163,10 @@ impl Agent {
     /// Define who the agent is and how it should work.
     ///
     /// A `{context}` placeholder anywhere in the text expands to the facts of
-    /// the moment as a bullet list: ticket key, date, working directory,
+    /// the moment as a bullet list: task key, date, working directory,
     /// platform, and one line per configured limit. Each of those values is
     /// also a placeholder of its own, so a role can place one without the list:
-    /// `{ticket}`, `{date}`, `{dir}`, `{platform}`, `{os_version}`,
+    /// `{task}`, `{date}`, `{dir}`, `{platform}`, `{os_version}`,
     /// `{turns_remaining}`, `{input_tokens_remaining}`,
     /// `{output_tokens_remaining}`, and `{time_remaining}`. A limit left
     /// unconfigured expands to nothing and shows no bullet. Leave the
@@ -180,11 +180,11 @@ impl Agent {
         self
     }
 
-    /// Restrict the agent to tickets carrying this label, and name it after
+    /// Restrict the agent to tasks carrying this label, and name it after
     /// the label.
     ///
-    /// An agent serves one label and a ticket carries one, so an agent claims
-    /// a ticket when the two are equal, and every agent serving that label may
+    /// An agent serves one label and a task carries one, so an agent claims
+    /// a task when the two are equal, and every agent serving that label may
     /// claim it. Calling this twice replaces the label, and the id
     /// [`Agent::id`] hands back is built from whichever one is set when the id
     /// is first read.
@@ -193,12 +193,12 @@ impl Agent {
         self
     }
 
-    /// Let the agent wait for new instructions to keep a ticket in-progress.
+    /// Let the agent wait for new instructions to keep a task in-progress.
     ///
     /// The agent stops after a reply that calls no tool, and
-    /// `TicketQueue::reply` drives the next turn. It gets no `FinishTool`,
-    /// since ending the ticket would end the conversation; the host closes it
-    /// with `TicketQueue::set_finished`. Register the tool by hand to give the
+    /// `Queue::reply` drives the next turn. It gets no `FinishTool`,
+    /// since ending the task would end the conversation; the host closes it
+    /// with `Queue::set_finished`. Register the tool by hand to give the
     /// agent one back.
     pub fn interactive(mut self) -> Self {
         self.interactive = true;
@@ -253,7 +253,7 @@ impl Agent {
     }
 
     /// Share a knowledge store, the durable memory the agent carries across
-    /// tickets and shares with other agents.
+    /// tasks and shares with other agents.
     ///
     /// It replaces the store opened by default, both for what the prompt shows
     /// and for what `KnowledgeTool` writes to. Hand the same store to
@@ -288,14 +288,14 @@ impl Agent {
 
     /// The unique identifier this agent works under, `<label>-<n>` for a
     /// labeled agent and `agent-<n>` for one without. It names the agent in
-    /// [`Event::agent_id`] and in [`Ticket::assignee`].
+    /// [`Event::agent_id`] and in [`Task::assignee`].
     ///
     /// The number is taken the first time this is called, directly or through
-    /// [`Self::ticket`], [`Self::start`], or `TicketQueue::agent`. Label the
+    /// [`Self::task`], [`Self::start`], or `Queue::agent`. Label the
     /// agent before then.
     ///
     /// [`Event::agent_id`]: crate::Event::agent_id
-    /// [`Ticket::assignee`]: crate::Ticket::assignee
+    /// [`Task::assignee`]: crate::Task::assignee
     pub fn id(&self) -> &str {
         self.id.get_or_init(|| next_id(self.label.as_deref()))
     }
@@ -307,8 +307,8 @@ impl Agent {
     /// Equality in both directions: an agent with no label serves the default
     /// scope and nothing else. Both labels rather than a receiver, since the
     /// loop's claim filter holds the label and cannot hold the agent.
-    pub(super) fn handles(agent_label: Option<&str>, ticket_label: Option<&str>) -> bool {
-        agent_label == ticket_label
+    pub(super) fn handles(agent_label: Option<&str>, task_label: Option<&str>) -> bool {
+        agent_label == task_label
     }
 
     pub(super) fn tool_registry(&self) -> &ToolRegistry {
@@ -352,7 +352,7 @@ impl Agent {
         );
     }
 
-    /// Give the agent the tool that ends a ticket, unless it is interactive.
+    /// Give the agent the tool that ends a task, unless it is interactive.
     ///
     /// Here rather than in [`Self::new`], because only when the agent joins a
     /// queue is `interactive` final. Nothing is ever removed, so an
@@ -368,12 +368,12 @@ impl Agent {
         knowledge: Option<&str>,
         policy: &Policy,
         stats: &Stats,
-        ticket_key: &str,
+        task_key: &str,
     ) -> String {
         let mut b = PromptBuilder::default();
         if !self.role.is_empty() {
             let role = self.interpolate(&self.role);
-            b = b.role(self.expand_context(role, policy, stats, ticket_key));
+            b = b.role(self.expand_context(role, policy, stats, task_key));
         }
         if let Some(snap) = knowledge.filter(|s| !s.is_empty()) {
             b = b.knowledge(snap.to_string());
@@ -390,12 +390,12 @@ impl Agent {
         role: String,
         policy: &Policy,
         stats: &Stats,
-        ticket_key: &str,
+        task_key: &str,
     ) -> String {
         if !role.contains('{') {
             return role;
         }
-        let values = context_values(&self.dir, policy, stats, ticket_key);
+        let values = context_values(&self.dir, policy, stats, task_key);
         let mut out = role.replace("{context}", &render_context(&values));
         for (name, value) in &values {
             out = out.replace(&format!("{{{name}}}"), value);
@@ -414,27 +414,27 @@ impl Agent {
         out
     }
 
-    /// Submit a task and return its ticket key.
+    /// Submit a task and return its task key.
     ///
     /// A string is the task itself, and a `&Path` or `PathBuf` names the file
-    /// holding it. A [`Ticket`] carries a custom label or schema with it. Call
-    /// it as often as you like: one agent can drive many tickets.
-    pub fn ticket(&self, ticket: impl Into<Ticket>) -> String {
-        self.dispatch(ticket.into())
+    /// holding it. A [`Task`] carries a custom label or schema with it. Call
+    /// it as often as you like: one agent can drive many tasks.
+    pub fn task(&self, task: impl Into<Task>) -> String {
+        self.dispatch(task.into())
     }
 
-    fn dispatch(&self, mut ticket: Ticket) -> String {
+    fn dispatch(&self, mut task: Task) -> String {
         let queue = self
-            .ticket_queue
+            .queue
             .upgrade()
-            .expect("Agent::task requires a bound TicketQueue");
-        if let serde_json::Value::String(s) = &ticket.task {
-            ticket.task = serde_json::Value::String(self.interpolate(s));
+            .expect("Agent::task requires a bound Queue");
+        if let serde_json::Value::String(s) = &task.task {
+            task.task = serde_json::Value::String(self.interpolate(s));
         }
-        queue.insert(ticket, self.id().to_string())
+        queue.insert(task, self.id().to_string())
     }
 
-    /// Begin processing tickets, and hand back the ticket queue so results,
+    /// Begin processing tasks, and hand back the task queue so results,
     /// waiting, and cancellation stay one call away.
     ///
     /// The queue takes the agent as it stands, so configure it first: a
@@ -447,11 +447,11 @@ impl Agent {
     /// work.finish_all().await;
     /// # }
     /// ```
-    pub fn start(&self) -> Arc<TicketQueue> {
+    pub fn start(&self) -> Arc<Queue> {
         let queue = self
-            .ticket_queue
+            .queue
             .upgrade()
-            .expect("Agent::start requires a bound TicketQueue");
+            .expect("Agent::start requires a bound Queue");
         if !queue.has_agent(self.id()) {
             queue.agent(self.clone());
         }
@@ -500,19 +500,19 @@ mod tests {
             .model("test")
     }
 
-    fn handles(agent: &Agent, ticket_label: Option<&str>) -> bool {
-        Agent::handles(agent.label.as_deref(), ticket_label)
+    fn handles(agent: &Agent, task_label: Option<&str>) -> bool {
+        Agent::handles(agent.label.as_deref(), task_label)
     }
 
     #[test]
-    fn handles_default_scope_only_picks_unlabeled_tickets() {
+    fn handles_default_scope_only_picks_unlabeled_tasks() {
         let agent = Agent::new();
         assert!(handles(&agent, None));
         assert!(!handles(&agent, Some("research")));
     }
 
     #[test]
-    fn handles_only_the_ticket_carrying_its_own_label() {
+    fn handles_only_the_task_carrying_its_own_label() {
         let agent = Agent::new().label("research");
         assert!(handles(&agent, Some("research")));
         assert!(!handles(&agent, Some("report")));
@@ -560,7 +560,7 @@ mod tests {
         assert_eq!(agent.clone().id(), agent.id());
     }
 
-    /// The system prompt with no live state and a fixed ticket key.
+    /// The system prompt with no live state and a fixed task key.
     fn system_prompt(agent: &Agent, knowledge: Option<&str>) -> String {
         agent.system_prompt(knowledge, &Policy::default(), &Stats::new(), "T-1")
     }
@@ -594,7 +594,7 @@ mod tests {
         let agent = Agent::new().role("ROLE\n\n{context}").dir("/tmp/check");
         let prompt = system_prompt(&agent, None);
         assert!(prompt.starts_with("ROLE\n\n"));
-        assert!(prompt.contains("- Ticket: T-1"));
+        assert!(prompt.contains("- Task: T-1"));
         assert!(prompt.contains("- Working directory: /tmp/check"));
         assert!(prompt.contains("- Platform: "));
         assert!(prompt.contains("- Date: "));
@@ -638,7 +638,7 @@ mod tests {
     #[test]
     fn a_single_context_value_expands_without_the_block() {
         let agent = Agent::new()
-            .role("Ticket {ticket} in {dir}, {turns_remaining} turns left.")
+            .role("Task {task} in {dir}, {turns_remaining} turns left.")
             .dir("/tmp/check");
         let policy = Policy {
             max_turns: Some(3),
@@ -648,7 +648,7 @@ mod tests {
 
         let rendered = agent.system_prompt(None, &policy, &stats, "T-1");
 
-        assert_eq!(rendered, "Ticket T-1 in /tmp/check, 2 turns left.");
+        assert_eq!(rendered, "Task T-1 in /tmp/check, 2 turns left.");
     }
 
     #[test]
@@ -659,7 +659,7 @@ mod tests {
 
     #[test]
     fn a_bound_single_value_shadows_the_built_in_one() {
-        let agent = Agent::new().role("{ticket}").template("ticket", "mine");
+        let agent = Agent::new().role("{task}").template("task", "mine");
         assert_eq!(system_prompt(&agent, None), "mine");
     }
 
@@ -681,7 +681,7 @@ mod tests {
     /// The tools the agent runs with, which `finish` only joins at the queue.
     fn tool_names_in_a_queue(agent: Agent) -> Vec<String> {
         let mut agent = callable(agent);
-        crate::agents::TicketQueue::new().bind_agent(&mut agent);
+        crate::agents::Queue::new().bind_agent(&mut agent);
         tool_names(&agent)
     }
 
@@ -696,7 +696,7 @@ mod tests {
         let names = tool_names_in_a_queue(Agent::new().interactive());
         assert!(
             !names.iter().any(|n| n == "finish"),
-            "an interactive agent ends its ticket through the host: {names:?}",
+            "an interactive agent ends its task through the host: {names:?}",
         );
     }
 
@@ -737,16 +737,16 @@ mod tests {
     #[tokio::test]
     async fn dispatch_interpolates_string_task_body() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let queue = crate::agents::TicketQueue::new();
+        let queue = crate::agents::Queue::new();
         queue.dir(dir.path().to_path_buf());
         let mut agent = callable(Agent::new().template("topic", "rust"));
         queue.bind_agent(&mut agent);
-        agent.ticket("Search {topic} forums.");
+        agent.task("Search {topic} forums.");
         let stored = queue
-            .tickets()
+            .tasks()
             .into_iter()
             .next()
-            .expect("ticket should have been enqueued");
+            .expect("task should have been enqueued");
         assert_eq!(
             stored.task,
             serde_json::Value::String("Search rust forums.".into()),
@@ -756,18 +756,18 @@ mod tests {
     #[tokio::test]
     async fn a_task_body_keeps_the_context_placeholder_verbatim() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let queue = crate::agents::TicketQueue::new();
+        let queue = crate::agents::Queue::new();
         queue.dir(dir.path().to_path_buf());
-        // The block needs a ticket key and live budgets, neither of which
+        // The block needs a task key and live budgets, neither of which
         // exists yet at dispatch. Only the role expands it.
         let mut agent = callable(Agent::new());
         queue.bind_agent(&mut agent);
-        agent.ticket("Work on {context}.");
+        agent.task("Work on {context}.");
         let stored = queue
-            .tickets()
+            .tasks()
             .into_iter()
             .next()
-            .expect("ticket should have been enqueued");
+            .expect("task should have been enqueued");
         assert_eq!(
             stored.task,
             serde_json::Value::String("Work on {context}.".into()),
@@ -777,17 +777,17 @@ mod tests {
     #[tokio::test]
     async fn dispatch_leaves_object_task_unchanged() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let queue = crate::agents::TicketQueue::new();
+        let queue = crate::agents::Queue::new();
         queue.dir(dir.path().to_path_buf());
         let mut agent = callable(Agent::new().template("topic", "rust"));
         queue.bind_agent(&mut agent);
         let value = serde_json::json!({"q": "Find {topic}"});
-        agent.ticket(Ticket::new(value.clone()));
+        agent.task(Task::new(value.clone()));
         let stored = queue
-            .tickets()
+            .tasks()
             .into_iter()
             .next()
-            .expect("ticket should have been enqueued");
+            .expect("task should have been enqueued");
         assert_eq!(stored.task, value);
     }
 
@@ -905,7 +905,7 @@ mod tests {
     #[should_panic(expected = "provider required")]
     fn joining_a_queue_without_a_provider_panics() {
         let mut agent = Agent::new().model("test");
-        crate::agents::TicketQueue::new().bind_agent(&mut agent);
+        crate::agents::Queue::new().bind_agent(&mut agent);
     }
 
     #[test]
@@ -934,7 +934,7 @@ mod tests {
     async fn binding_agent_with_explicit_knowledge_keeps_explicit_store() {
         let dir = crate::test_util::TempDir::new().unwrap();
         let store = Knowledge::load(dir.path()).unwrap();
-        let queue = crate::agents::TicketQueue::new();
+        let queue = crate::agents::Queue::new();
         let mut agent = callable(Agent::new().knowledge(&store));
         queue.bind_agent(&mut agent);
         assert!(Arc::ptr_eq(&store, &agent.knowledge));

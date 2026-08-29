@@ -1,15 +1,15 @@
 //! Core check on summarizing: `compaction_threshold: Some(0.0)` puts the threshold at zero, so
 //! proactive compaction fires between turns. The loop calls compact and the
-//! summariser must return non-empty text. The ticket does not need to
+//! summariser must return non-empty text. The task does not need to
 //! complete: verifying the summariser is the sole purpose of this test.
 
 use std::sync::{Arc, Mutex};
 
 use super::common;
 
-use agentwerk::agents::tickets::Author;
+use agentwerk::agents::tasks::Author;
 use agentwerk::event::EventKind;
-use agentwerk::{Agent, Event, Policy, Ticket, TicketQueue};
+use agentwerk::{Agent, Event, Policy, Queue, Task};
 
 // Pins a known context window: the trigger stays quiet on a model whose window
 // it cannot look up, and the model here comes from the environment. The first
@@ -123,29 +123,29 @@ async fn summariser_produces_text_when_compaction_fires_against_live_llm() {
 
     eprintln!("\n=== BEFORE COMPACTION ===\n{TASK}\n");
 
-    let tickets = TicketQueue::new();
+    let tasks = Queue::new();
     // Two iterations: turn 1 lets the model respond once (appending one entry
     // to `token_usage`); turn 2's proactive guard then trips because a
     // threshold of zero is always crossed.
-    tickets.policy(Policy {
+    tasks.policy(Policy {
         max_turns: Some(2),
         compaction_threshold: Some(0.0),
         ..Default::default()
     });
-    tickets.on_event(move |_, e| log.lock().unwrap().push(e.clone()));
-    tickets.agent(
+    tasks.on_event(move |_, e| log.lock().unwrap().push(e.clone()));
+    tasks.agent(
         Agent::new()
             .provider(provider)
             .model(model.context_window(LOCAL_CTX))
             .role("{context}\n\nAnswer the question in plain text. Do not call any tools."),
     );
-    tickets.ticket(Ticket::new(TASK));
+    tasks.task(Task::new(TASK));
     assert!(
-        tickets.results().pop().is_none(),
+        tasks.results().pop().is_none(),
         "no result before run starts"
     );
 
-    tickets.finish_all().await;
+    tasks.finish_all().await;
 
     let all_events = events.lock().unwrap();
 
@@ -162,11 +162,11 @@ async fn summariser_produces_text_when_compaction_fires_against_live_llm() {
         .any(|e| matches!(e.kind, EventKind::CompactionFinished { .. }));
 
     eprintln!("\n=== AFTER COMPACTION ===");
-    for ticket in tickets.tickets() {
-        eprintln!("{}", serde_json::to_string_pretty(&ticket).unwrap());
+    for task in tasks.tasks() {
+        eprintln!("{}", serde_json::to_string_pretty(&task).unwrap());
     }
 
-    common::print_result(&tickets);
+    common::print_result(&tasks);
 
     assert!(
         compacted,
@@ -177,11 +177,11 @@ async fn summariser_produces_text_when_compaction_fires_against_live_llm() {
         "CompactionFinished must fire: summariser must return text"
     );
 
-    // The summary replaces all non-system comments in the ticket. Verify
+    // The summary replaces all non-system comments in the task. Verify
     // it is substantive: a degenerate "ok" or empty response would pass
     // CompactionFinished but fail here.
-    let summary_chars: usize = tickets
-        .tickets()
+    let summary_chars: usize = tasks
+        .tasks()
         .iter()
         .flat_map(|t| {
             t.replies

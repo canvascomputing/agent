@@ -1,4 +1,4 @@
-//! Agents, the tickets they work from, and the loop that drives them.
+//! Agents, the tasks they work from, and the loop that drives them.
 
 pub mod agent;
 pub(crate) mod compaction;
@@ -8,10 +8,10 @@ pub mod policy;
 mod query;
 pub(crate) mod retry;
 pub(crate) mod stats;
-pub mod tickets;
+pub mod tasks;
 
 pub use agent::Agent;
 pub use knowledge::Knowledge;
 pub use policy::Policy;
 pub use query::{Matcher, Query, QueryError};
-pub use tickets::{Reply, Status, Ticket, TicketError, TicketQueue, Trajectory};
+pub use tasks::{Queue, Reply, Status, Task, TaskError, Trajectory};

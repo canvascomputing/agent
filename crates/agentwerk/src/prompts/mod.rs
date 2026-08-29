@@ -73,7 +73,7 @@ pub(crate) fn context_values(
     dir: &Path,
     policy: &Policy,
     stats: &Stats,
-    ticket_key: &str,
+    task_key: &str,
 ) -> Vec<(&'static str, String)> {
     let os_version = std::process::Command::new("uname")
         .arg("-r")
@@ -91,7 +91,7 @@ pub(crate) fn context_values(
         .map(|limit| limit.saturating_sub(stats.output_tokens()));
     let time = policy.max_time.zip(stats.execution_duration());
     vec![
-        ("ticket", ticket_key.to_string()),
+        ("task", task_key.to_string()),
         ("date", format_current_date()),
         ("dir", dir.display().to_string()),
         ("platform", std::env::consts::OS.to_string()),
@@ -191,7 +191,7 @@ mod tests {
                 "properties": {"summary": {"type": "string"}},
                 "required": ["summary"],
             }),
-            // A ticket field named like a control key needs no special prose:
+            // A task field named like a control key needs no special prose:
             // it sits inside `result`, not next to `handover`.
             serde_json::json!({
                 "type": "object",
@@ -253,9 +253,9 @@ mod tests {
         dir: &std::path::Path,
         policy: &Policy,
         stats: &Stats,
-        ticket_key: &str,
+        task_key: &str,
     ) -> String {
-        render_context(&context_values(dir, policy, stats, ticket_key))
+        render_context(&context_values(dir, policy, stats, task_key))
     }
 
     #[test]
@@ -264,10 +264,10 @@ mod tests {
             &PathBuf::from("/tmp/check"),
             &Policy::default(),
             &Stats::new(),
-            "TICKET-7",
+            "t-7",
         );
         let lines: Vec<&str> = rendered.lines().collect();
-        assert_eq!(lines[0], "- Ticket: TICKET-7");
+        assert_eq!(lines[0], "- Task: t-7");
         assert!(lines[1].starts_with("- Date: "));
         assert_eq!(lines[2], "- Working directory: /tmp/check");
         assert!(lines[3].starts_with("- Platform: "));
@@ -280,7 +280,7 @@ mod tests {
             &PathBuf::from("/tmp/check"),
             &Policy::default(),
             &Stats::new(),
-            "TICKET-7",
+            "t-7",
         );
         // The role prompt owns any framing and heading around the facts.
         assert!(rendered.lines().all(|line| line.starts_with("- ")));
@@ -293,7 +293,7 @@ mod tests {
             &PathBuf::from("/tmp/check"),
             &Policy::default(),
             &Stats::new(),
-            "TICKET-7",
+            "t-7",
         );
         let value = |name| {
             values
@@ -301,7 +301,7 @@ mod tests {
                 .find(|(key, _)| *key == name)
                 .map(|(_, value)| value.as_str())
         };
-        assert_eq!(value("ticket"), Some("TICKET-7"));
+        assert_eq!(value("task"), Some("t-7"));
         assert_eq!(value("turns_remaining"), Some(""));
         assert_eq!(value("time_remaining"), Some(""));
     }
@@ -381,7 +381,7 @@ mod tests {
 
         let rendered = context_body(&working_dir, &policy, &stats, "T-1");
 
-        // No ticket ever started, so `Stats::execution_duration` is `None` and
+        // No task ever started, so `Stats::execution_duration` is `None` and
         // the time bullet must not appear.
         let baseline = context_body(&working_dir, &Policy::default(), &Stats::new(), "T-1");
         assert_eq!(rendered, baseline);
@@ -395,7 +395,7 @@ mod tests {
             max_time: Some(Duration::from_secs(3600)),
             ..Policy::default()
         };
-        let stats = Stats::of([EventKind::TicketStarted]);
+        let stats = Stats::of([EventKind::TaskStarted]);
 
         let rendered = context_body(&working_dir, &policy, &stats, "T-1");
 

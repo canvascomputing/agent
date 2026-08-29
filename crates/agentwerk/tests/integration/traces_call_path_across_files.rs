@@ -9,7 +9,7 @@ use super::common;
 
 use agentwerk::schemas::Schema;
 use agentwerk::tools::{GlobTool, GrepTool, ListDirectoryTool, ReadFileTool};
-use agentwerk::{Agent, Policy, Ticket, TicketQueue};
+use agentwerk::{Agent, Policy, Queue, Task};
 
 #[tokio::test]
 async fn traces_three_hop_call_path() -> std::result::Result<(), Box<dyn std::error::Error>> {
@@ -77,9 +77,9 @@ async fn traces_three_hop_call_path() -> std::result::Result<(), Box<dyn std::er
         "required": ["call_path"]
     }))?;
 
-    let tickets = TicketQueue::new();
+    let tasks = Queue::new();
 
-    tickets.policy(Policy {
+    tasks.policy(Policy {
         max_turns: Some(15),
         ..Default::default()
     });
@@ -93,16 +93,16 @@ async fn traces_three_hop_call_path() -> std::result::Result<(), Box<dyn std::er
              available read-only tools as you see fit. Multiple functions in \
              this codebase share names: rely on the source of each function, \
              not just its name, to decide what calls what. When you have the \
-             full chain, finish the ticket via `finish` with the \
+             full chain, finish the task via `finish` with the \
              result shaped to match the schema.",
         )
         .tool(GrepTool)
         .tool(GlobTool)
         .tool(ListDirectoryTool)
         .tool(ReadFileTool);
-    tickets.agent(agent);
-    tickets.ticket(
-        Ticket::new(
+    tasks.agent(agent);
+    tasks.task(
+        Task::new(
             "Starting from the function `entry`, follow each function call \
              through the source files and report the full ordered call chain \
              until you reach a function that does not call any other function \
@@ -111,11 +111,11 @@ async fn traces_three_hop_call_path() -> std::result::Result<(), Box<dyn std::er
         .schema(schema),
     );
 
-    let json = tickets.finish_last().await.unwrap_or_default();
-    common::print_result(&tickets);
+    let json = tasks.finish_last().await.unwrap_or_default();
+    common::print_result(&tasks);
 
     assert!(
-        tickets.find_events("tool_call_started").len() >= 2,
+        tasks.find_events("tool_call_started").len() >= 2,
         "tracing a call path requires at least two read-only tool calls"
     );
 

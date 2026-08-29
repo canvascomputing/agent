@@ -10,7 +10,7 @@ use super::common;
 
 use agentwerk::event::{default_logger, Event, EventKind};
 use agentwerk::tools::{GlobTool, GrepTool, ListDirectoryTool, ReadFileTool};
-use agentwerk::{Agent, Policy, TicketQueue};
+use agentwerk::{Agent, Policy, Queue};
 
 const NEEDLE: &str = "XYZZY_PLUGH_42";
 
@@ -79,14 +79,14 @@ async fn finds_string_buried_deep_in_line() -> std::result::Result<(), Box<dyn s
         logger(e);
     });
 
-    let tickets = TicketQueue::new();
+    let tasks = Queue::new();
 
-    tickets.policy(Policy {
+    tasks.policy(Policy {
         max_turns: Some(10),
         ..Default::default()
     });
-    tickets.on_event(move |_, e| event_handler(e));
-    tickets.agent(
+    tasks.on_event(move |_, e| event_handler(e));
+    tasks.agent(
         Agent::new()
             .provider(provider)
             .model(&model)
@@ -95,7 +95,7 @@ async fn finds_string_buried_deep_in_line() -> std::result::Result<(), Box<dyn s
                 "{context}\n\n\
                  Investigate the working directory and answer the user's question. \
                  Use the available tools: pick whichever one fits. \
-                 When you have the answer, settle the ticket via \
+                 When you have the answer, settle the task via \
                  `finish`.",
             )
             .tool(GrepTool)
@@ -103,13 +103,13 @@ async fn finds_string_buried_deep_in_line() -> std::result::Result<(), Box<dyn s
             .tool(ListDirectoryTool)
             .tool(ReadFileTool),
     );
-    tickets.ticket(format!(
+    tasks.task(format!(
         "Which source file contains the string `{NEEDLE}`? \
          Answer with the file path.",
     ));
 
-    tickets.finish_all().await;
-    common::print_result(&tickets);
+    tasks.finish_all().await;
+    common::print_result(&tasks);
 
     let recorded = calls.lock().unwrap().clone();
 
@@ -164,7 +164,7 @@ async fn finds_string_buried_deep_in_line() -> std::result::Result<(), Box<dyn s
     }
 
     // The agent's final answer should name config.rs.
-    let answer = common::last_result_text(&tickets);
+    let answer = common::last_result_text(&tasks);
     assert!(
         answer.contains("config.rs"),
         "agent should report config.rs; got: {answer:?}"
@@ -223,14 +223,14 @@ async fn reads_column_slice_after_grep_locates_needle(
         logger(e);
     });
 
-    let tickets = TicketQueue::new();
+    let tasks = Queue::new();
 
-    tickets.policy(Policy {
+    tasks.policy(Policy {
         max_turns: Some(10),
         ..Default::default()
     });
-    tickets.on_event(move |_, e| event_handler(e));
-    tickets.agent(
+    tasks.on_event(move |_, e| event_handler(e));
+    tasks.agent(
         Agent::new()
             .provider(provider)
             .model(&model)
@@ -239,21 +239,21 @@ async fn reads_column_slice_after_grep_locates_needle(
                 "{context}\n\n\
                  Investigate the working directory and answer the user's question. \
                  Use the available tools: pick whichever one fits. \
-                 When you have the answer, settle the ticket via \
+                 When you have the answer, settle the task via \
                  `finish`.",
             )
             .tool(GrepTool)
             .tool(ReadFileTool),
     );
-    tickets.ticket(format!(
+    tasks.task(format!(
         "Find the string `{NEEDLE}` in the working directory. \
          Use grep to locate it, then use read_file with column \
          and length to read just the surrounding context (not the \
          entire line). Report the file name.",
     ));
 
-    tickets.finish_all().await;
-    common::print_result(&tickets);
+    tasks.finish_all().await;
+    common::print_result(&tasks);
 
     let recorded = calls.lock().unwrap().clone();
 
@@ -284,7 +284,7 @@ async fn reads_column_slice_after_grep_locates_needle(
     );
 
     // The agent's final answer should name bundle.min.js.
-    let answer = common::last_result_text(&tickets);
+    let answer = common::last_result_text(&tasks);
     assert!(
         answer.contains("bundle.min.js"),
         "agent should report bundle.min.js; got: {answer:?}"

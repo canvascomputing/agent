@@ -188,7 +188,7 @@ mod tests {
     use std::sync::Arc;
     use std::time::Instant;
 
-    use crate::agents::tickets::Run;
+    use crate::agents::tasks::Run;
     use crate::event::FinishReason;
 
     #[tokio::test]

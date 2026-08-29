@@ -1,4 +1,4 @@
-//! Every change a [`TicketQueue`] makes to its tickets, and the events each
+//! Every change a [`Queue`] makes to its tasks, and the events each
 //! change emits.
 
 use std::path::{Path, PathBuf};
@@ -8,17 +8,17 @@ use crate::persistence::Persist;
 use crate::schemas::SchemaViolations;
 
 use super::super::query::Query;
-use super::error::TicketError;
+use super::error::TaskError;
+use super::queue::Queue;
 use super::reply::Reply;
-use super::ticket::{Status, Ticket};
-use super::ticket_queue::TicketQueue;
-use super::{now_millis, numeric_id, Replies, TicketResult};
+use super::task::{Status, Task};
+use super::{now_millis, numeric_id, Replies, TaskResult};
 
-/// Highest `TICKET-<N>` already on disk under `<dir>/tickets/`, or 0 if
+/// Highest `t-<N>` already on disk under `<dir>/tasks/`, or 0 if
 /// none. Only needed for a queue built via `new()`, which never reads
 /// the directory itself; `load()` derives this from what it already read.
-fn max_existing_ticket_id(dir: &Path) -> u64 {
-    std::fs::read_dir(dir.join("tickets"))
+fn max_existing_task_id(dir: &Path) -> u64 {
+    std::fs::read_dir(dir.join("tasks"))
         .into_iter()
         .flatten()
         .flatten()
@@ -31,43 +31,43 @@ fn max_existing_ticket_id(dir: &Path) -> u64 {
         .unwrap_or(0)
 }
 
-impl TicketQueue {
-    /// Insert `ticket`, filling in the fields agentwerk owns. The ticket is always born
+impl Queue {
+    /// Insert `task`, filling in the fields agentwerk owns. The task is always born
     /// `Todo`; to pin it to a specific agent, label it with the agent's
-    /// name. Returns the inserted ticket's key.
-    pub(crate) fn insert(&self, mut ticket: Ticket, reporter: String) -> String {
+    /// name. Returns the inserted task's key.
+    pub(crate) fn insert(&self, mut task: Task, reporter: String) -> String {
         let id = {
-            let mut next = self.next_ticket_id.lock().unwrap();
-            let base = next.get_or_insert_with(|| max_existing_ticket_id(&self.get_dir()));
+            let mut next = self.next_task_id.lock().unwrap();
+            let base = next.get_or_insert_with(|| max_existing_task_id(&self.get_dir()));
             *base += 1;
             *base
         };
-        let mut store = self.tickets.lock().unwrap();
-        ticket.key = format!("TICKET-{id}");
-        ticket.created_at = now_millis();
-        ticket.reporter = reporter;
-        ticket.result = None;
-        ticket.status = Status::Todo;
-        let key = ticket.key.clone();
-        let reporter = ticket.reporter.clone();
-        store.insert(key.clone(), ticket);
+        let mut store = self.tasks.lock().unwrap();
+        task.key = format!("t-{id}");
+        task.created_at = now_millis();
+        task.reporter = reporter;
+        task.result = None;
+        task.status = Status::Todo;
+        let key = task.key.clone();
+        let reporter = task.reporter.clone();
+        store.insert(key.clone(), task);
         drop(store);
-        self.save_ticket(&key);
-        self.emit(&key, &reporter, EventKind::TicketCreated);
+        self.save_task(&key);
+        self.emit(&key, &reporter, EventKind::TaskCreated);
         key
     }
 
-    /// Write the ticket at `key` to disk. No-op when the ticket is missing.
-    fn save_ticket(&self, key: &str) {
-        if let Some(t) = self.get_ticket(key) {
+    /// Write the task at `key` to disk. No-op when the task is missing.
+    fn save_task(&self, key: &str) {
+        if let Some(t) = self.get_task(key) {
             let _ = t.save(&self.get_dir());
         }
     }
 
-    /// Write a tool's full output to `<dir>/tickets/<key>/outputs/<tool_use_id>.txt`.
+    /// Write a tool's full output to `<dir>/tasks/<key>/outputs/<tool_use_id>.txt`.
     /// Returns the path relative to the configured `dir` on success,
     /// `None` when the write fails. The relative form keeps the
-    /// replies portable across moves of the tickets dir; join with
+    /// replies portable across moves of the tasks dir; join with
     /// [`Self::get_dir`] to recover the on-disk path. Best-effort,
     /// matching the surrounding observational-persistence contract.
     pub(crate) fn write_tool_output(
@@ -83,105 +83,100 @@ impl TicketQueue {
             .map(|_| rel)
     }
 
-    /// Atomically find a `Todo` ticket the query selects, assign it to
+    /// Atomically find a `Todo` task the query selects, assign it to
     /// `agent_id`, and transition to `InProgress`.
     ///
     /// The earliest candidate must itself be `Todo`, so a query naming no
-    /// status never reaches past a ticket already claimed.
+    /// status never reaches past a task already claimed.
     pub(crate) fn claim(&self, query: &Query, agent_id: &str) -> Option<String> {
         let now = now_millis();
         let schemas = self.schemas.lock().unwrap().clone();
         let key = {
-            let mut store = self.tickets.lock().unwrap();
-            let mut candidates: Vec<&Ticket> =
-                store.values().filter(|t| query.matches(t)).collect();
+            let mut store = self.tasks.lock().unwrap();
+            let mut candidates: Vec<&Task> = store.values().filter(|t| query.matches(t)).collect();
             query.sort(&mut candidates);
             let key = candidates.first()?.key.clone();
-            let ticket = store.get_mut(&key)?;
-            if ticket.status != Status::Todo {
+            let task = store.get_mut(&key)?;
+            if task.status != Status::Todo {
                 return None;
             }
-            ticket.assignee = Some(agent_id.to_string());
-            if ticket.schema.is_none() {
+            task.assignee = Some(agent_id.to_string());
+            if task.schema.is_none() {
                 let bound = schemas
                     .as_ref()
-                    .zip(ticket.label.as_deref())
+                    .zip(task.label.as_deref())
                     .and_then(|(s, label)| s.get(label));
-                ticket.schema = bound;
+                task.schema = bound;
             }
-            ticket.stamp_transition(Status::InProgress, now);
-            ticket.status = Status::InProgress;
+            task.stamp_transition(Status::InProgress, now);
+            task.status = Status::InProgress;
             key
         };
-        self.save_ticket(&key);
+        self.save_task(&key);
         // Emitted here rather than from the loop: the claim is the moment a
-        // ticket starts, so a host claiming one records it the same way.
-        self.emit(&key, agent_id, EventKind::TicketStarted);
+        // task starts, so a host claiming one records it the same way.
+        self.emit(&key, agent_id, EventKind::TaskStarted);
         Some(key)
     }
 
-    /// Append `reply` to the ticket's replies. No-op when the
-    /// ticket is missing: the loop drops out shortly afterwards on the
-    /// same condition. The ticket record is not rewritten; the replies
+    /// Append `reply` to the task's replies. No-op when the
+    /// task is missing: the loop drops out shortly afterwards on the
+    /// same condition. The task record is not rewritten; the replies
     /// live only in `replies.jsonl`.
     pub(crate) fn add_reply(&self, key: &str, reply: Reply) {
         {
-            let mut store = self.tickets.lock().unwrap();
+            let mut store = self.tasks.lock().unwrap();
             let Some(t) = store.get_mut(key) else { return };
             t.replies.push(reply.clone());
         }
         let _ = Replies::append(&self.get_dir(), key, &reply);
     }
 
-    /// Transition a ticket to `Finished`, emitting `TicketFinished`
+    /// Transition a task to `Finished`, emitting `TaskFinished`
     /// under `agent`'s name.
-    pub(crate) fn set_finished_by(&self, key: &str, agent: &str) -> Result<(), TicketError> {
+    pub(crate) fn set_finished_by(&self, key: &str, agent: &str) -> Result<(), TaskError> {
         self.set_final_status(key, Status::Finished, agent)
     }
 
-    /// Attach `result` to the ticket and transition it to `Finished`,
-    /// resolving it from outside the run. Validates against the ticket's
+    /// Attach `result` to the task and transition it to `Finished`,
+    /// resolving it from outside the run. Validates against the task's
     /// schema first, so a host finish and an agent finish record the same
-    /// contract. The emitted `TicketFinished` carries an empty agent id,
+    /// contract. The emitted `TaskFinished` carries an empty agent id,
     /// like the run-level events no single agent causes.
     ///
     /// ```no_run
-    /// # use agentwerk::TicketQueue;
+    /// # use agentwerk::Queue;
     /// # fn run() -> Result<(), Box<dyn std::error::Error>> {
-    /// let tickets = TicketQueue::new();
-    /// let key = tickets.ticket("Look up the cached answer.");
-    /// tickets.set_finished(&key, "42")?;
+    /// let tasks = Queue::new();
+    /// let key = tasks.task("Look up the cached answer.");
+    /// tasks.set_finished(&key, "42")?;
     /// # Ok(())
     /// # }
     /// ```
-    pub fn set_finished(
-        &self,
-        key: &str,
-        result: impl serde::Serialize,
-    ) -> Result<(), TicketError> {
+    pub fn set_finished(&self, key: &str, result: impl serde::Serialize) -> Result<(), TaskError> {
         let value = serde_json::to_value(result).expect("result is serializable");
         self.set_result(key, value)
-            .map_err(|violations| TicketError::ResultRejected {
+            .map_err(|violations| TaskError::ResultRejected {
                 message: violations.to_string(),
             })?;
         self.set_final_status(key, Status::Finished, "")
     }
 
-    /// Transition a ticket to `Failed`. No result argument, unlike
-    /// [`Self::set_finished`]: a failed ticket has none. The emitted
-    /// `TicketFailed` carries an empty agent id, like the run-level
+    /// Transition a task to `Failed`. No result argument, unlike
+    /// [`Self::set_finished`]: a failed task has none. The emitted
+    /// `TaskFailed` carries an empty agent id, like the run-level
     /// events no single agent causes.
-    pub fn set_failed(&self, key: &str) -> Result<(), TicketError> {
+    pub fn set_failed(&self, key: &str) -> Result<(), TaskError> {
         self.set_final_status(key, Status::Failed, "")
     }
 
-    /// Transition a ticket to `Failed`, emitting `TicketFailed` under
+    /// Transition a task to `Failed`, emitting `TaskFailed` under
     /// `agent`'s name. The loop's failure paths route through this.
-    pub(crate) fn set_failed_by(&self, key: &str, agent: &str) -> Result<(), TicketError> {
+    pub(crate) fn set_failed_by(&self, key: &str, agent: &str) -> Result<(), TaskError> {
         self.set_final_status(key, Status::Failed, agent)
     }
 
-    fn set_final_status(&self, key: &str, status: Status, agent: &str) -> Result<(), TicketError> {
+    fn set_final_status(&self, key: &str, status: Status, agent: &str) -> Result<(), TaskError> {
         // Increment BEFORE the status flip and decrement only after the
         // terminal event has been emitted: the drain check in `finish()`
         // must never observe (empty queue, zero counter) mid-transition,
@@ -198,23 +193,21 @@ impl TicketQueue {
 
         let now = now_millis();
         let transitioned = {
-            let mut store = self.tickets.lock().unwrap();
-            let ticket = store
-                .get_mut(key)
-                .ok_or_else(|| TicketError::TicketMissing {
-                    key: key.to_string(),
-                })?;
-            // First outcome wins. The host resolving a ticket an agent is still
+            let mut store = self.tasks.lock().unwrap();
+            let task = store.get_mut(key).ok_or_else(|| TaskError::TaskMissing {
+                key: key.to_string(),
+            })?;
+            // First outcome wins. The host resolving a task an agent is still
             // turning, and the agent giving up on one the host just resolved,
             // are the same race from either side; without this the loser's
-            // status overwrites the winner's and leaves, say, a `Failed` ticket
+            // status overwrites the winner's and leaves, say, a `Failed` task
             // carrying a result. Checked under the lock the write happens
             // under, so two racing transitions cannot both pass it.
-            match ticket.status {
+            match task.status {
                 Status::Finished | Status::Failed => false,
                 _ => {
-                    ticket.stamp_transition(status, now);
-                    ticket.status = status;
+                    task.stamp_transition(status, now);
+                    task.status = status;
                     true
                 }
             }
@@ -223,25 +216,25 @@ impl TicketQueue {
             return Ok(());
         }
         let kind = match status {
-            Status::Finished => EventKind::TicketFinished,
-            _ => EventKind::TicketFailed,
+            Status::Finished => EventKind::TaskFinished,
+            _ => EventKind::TaskFailed,
         };
         self.emit(key, agent, kind);
-        self.save_ticket(key);
+        self.save_task(key);
         Ok(())
     }
 
-    /// Validate `result` against the ticket's schema, write it to the ticket's
-    /// `result.json`, and store the validated result on the ticket, which it
+    /// Validate `result` against the task's schema, write it to the task's
+    /// `result.json`, and store the validated result on the task, which it
     /// returns alongside the JSON pointer of every value validation repaired to
-    /// accept it. Does not finish the ticket: the caller does.
+    /// accept it. Does not finish the task: the caller does.
     pub(crate) fn set_result(
         &self,
         key: &str,
         result: serde_json::Value,
     ) -> Result<(serde_json::Value, Vec<String>), SchemaViolations> {
         let schema = self
-            .tickets
+            .tasks
             .lock()
             .unwrap()
             .get(key)
@@ -251,22 +244,22 @@ impl TicketQueue {
             None => (result, Vec::new()),
         };
         let attached = {
-            let mut store = self.tickets.lock().unwrap();
-            // A ticket that already reached an outcome keeps the result that
+            let mut store = self.tasks.lock().unwrap();
+            // A task that already reached an outcome keeps the result that
             // outcome carried, the way its status does: the agent's result
-            // arriving after the host resolved the ticket, or the reverse, is
+            // arriving after the host resolved the task, or the reverse, is
             // the same race, and either way the late one is not the answer.
             match store.get_mut(key) {
-                Some(ticket) if ticket.is_pending() => {
-                    ticket.result = Some(result.clone());
+                Some(task) if task.is_pending() => {
+                    task.result = Some(result.clone());
                     true
                 }
                 _ => false,
             }
         };
-        // A missing ticket records nothing: no phantom results line, no file.
+        // A missing task records nothing: no phantom results line, no file.
         if attached {
-            let record = TicketResult {
+            let record = TaskResult {
                 key: key.to_string(),
                 value: Some(result.clone()),
             };
@@ -277,28 +270,28 @@ impl TicketQueue {
         Ok((result, repairs))
     }
 
-    /// Apply `editor` to ticket `key`'s replies now, then rewrite them
+    /// Apply `editor` to task `key`'s replies now, then rewrite them
     /// in place so the change survives resumption. Triggers no request.
-    /// No-op when the ticket is missing. The edit must keep the replies
+    /// No-op when the task is missing. The edit must keep the replies
     /// well-formed (matched tool_use/tool_result pairs); they are sent
     /// as-is. Leaves the task and the token accounting untouched, which
     /// is why compaction resets the usage history itself.
     ///
     /// Inside [`Self::on_event`] it rewrites what the model reads next: the
     /// reply the event announces is stored, and the next request re-reads
-    /// the ticket.
+    /// the task.
     ///
     /// ```no_run
-    /// use agentwerk::TicketQueue;
+    /// use agentwerk::Queue;
     /// use agentwerk::event::EventKind;
-    /// use agentwerk::agents::tickets::{Reply, ReplyContent};
+    /// use agentwerk::agents::tasks::{Reply, ReplyContent};
     ///
-    /// let tickets = TicketQueue::new();
-    /// tickets.on_event(|queue, event| {
+    /// let tasks = Queue::new();
+    /// tasks.on_event(|queue, event| {
     ///     if !matches!(event.kind, EventKind::ToolCallFailed { .. }) {
     ///         return;
     ///     }
-    ///     queue.edit_replies(&event.ticket_key, |replies| {
+    ///     queue.edit_replies(&event.task_key, |replies| {
     ///         // Drop both sides of the failed exchange: the assistant's tool_use
     ///         // and the failed tool_result, so no unpaired block is left behind.
     ///         replies.retain(|reply| {
@@ -315,23 +308,23 @@ impl TicketQueue {
     /// });
     /// ```
     pub fn edit_replies(&self, key: &str, editor: impl FnOnce(&mut Vec<Reply>)) -> &Self {
-        let ticket_copy = {
-            let mut store = self.tickets.lock().unwrap();
-            let Some(ticket) = store.get_mut(key) else {
+        let task_copy = {
+            let mut store = self.tasks.lock().unwrap();
+            let Some(task) = store.get_mut(key) else {
                 return self;
             };
-            let before = ticket.replies.clone();
-            editor(&mut ticket.replies);
+            let before = task.replies.clone();
+            editor(&mut task.replies);
             // An editor that inspected without changing anything must not
             // trigger a rewrite: leave the on-disk files alone.
-            if ticket.replies == before {
+            if task.replies == before {
                 return self;
             }
-            ticket.clone()
+            task.clone()
         };
         let replies = Replies {
             key: key.to_string(),
-            entries: ticket_copy.replies,
+            entries: task_copy.replies,
         };
         let _ = replies.save(&self.get_dir());
         self
@@ -342,20 +335,18 @@ impl TicketQueue {
     pub(crate) fn edit(
         &self,
         key: &str,
-        task: Option<serde_json::Value>,
+        new_task: Option<serde_json::Value>,
         label: Option<String>,
-    ) -> Result<(), TicketError> {
-        let mut store = self.tickets.lock().unwrap();
-        let ticket = store
-            .get_mut(key)
-            .ok_or_else(|| TicketError::TicketMissing {
-                key: key.to_string(),
-            })?;
-        if let Some(t) = task {
-            ticket.task = t;
+    ) -> Result<(), TaskError> {
+        let mut store = self.tasks.lock().unwrap();
+        let task = store.get_mut(key).ok_or_else(|| TaskError::TaskMissing {
+            key: key.to_string(),
+        })?;
+        if let Some(t) = new_task {
+            task.task = t;
         }
         if let Some(l) = label {
-            ticket.label = Some(l);
+            task.label = Some(l);
         }
         Ok(())
     }
@@ -369,20 +360,20 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     #[test]
-    fn task_creates_ticket_with_user_reporter() {
+    fn task_creates_task_with_user_reporter() {
         let (queue, _tmp) = test_queue();
-        queue.ticket("hello");
-        let t = queue.get_ticket("TICKET-1").unwrap();
+        queue.task("hello");
+        let t = queue.get_task("t-1").unwrap();
         assert_eq!(t.task, serde_json::Value::String("hello".into()));
         assert_eq!(t.reporter, "user");
         assert_eq!(t.status, Status::Todo);
     }
 
     #[test]
-    fn labeled_ticket_attaches_label_and_leaves_status_todo() {
+    fn labeled_task_attaches_label_and_leaves_status_todo() {
         let (queue, _tmp) = test_queue();
-        queue.ticket(Ticket::new("hello").label("research"));
-        let t = queue.get_ticket("TICKET-1").unwrap();
+        queue.task(Task::new("hello").label("research"));
+        let t = queue.get_task("t-1").unwrap();
         assert!(t.has_label("research"));
         assert_eq!(t.status, Status::Todo);
     }
@@ -390,8 +381,8 @@ mod tests {
     #[test]
     fn create_with_named_label_is_born_todo_and_carries_label() {
         let (queue, _tmp) = test_queue();
-        queue.ticket(Ticket::new("specific work for alice").label("alice"));
-        let t = queue.get_ticket("TICKET-1").unwrap();
+        queue.task(Task::new("specific work for alice").label("alice"));
+        let t = queue.get_task("t-1").unwrap();
         assert!(t.has_label("alice"));
         assert_eq!(t.status, Status::Todo);
     }
@@ -400,20 +391,20 @@ mod tests {
     fn create_with_label_and_schema_is_stored_verbatim() {
         let (queue, _tmp) = test_queue();
         let schema = crate::schemas::Schema::new(serde_json::json!({"type": "string"})).unwrap();
-        queue.ticket(Ticket::new("x").label("urgent").schema(schema));
-        let t = queue.get_ticket("TICKET-1").unwrap();
+        queue.task(Task::new("x").label("urgent").schema(schema));
+        let t = queue.get_task("t-1").unwrap();
         assert!(t.has_label("urgent"));
         assert!(t.schema.is_some());
     }
 
     #[test]
-    fn set_result_updates_ticket() {
+    fn set_result_updates_task() {
         let (queue, _tmp) = test_queue();
-        queue.ticket("hi");
+        queue.task("hi");
         queue
-            .set_result("TICKET-1", serde_json::Value::String("answer".into()))
+            .set_result("t-1", serde_json::Value::String("answer".into()))
             .unwrap();
-        let stored = queue.get_ticket("TICKET-1").unwrap();
+        let stored = queue.get_task("t-1").unwrap();
         assert_eq!(
             stored.result.as_ref(),
             Some(&serde_json::Value::String("answer".into()))
@@ -427,50 +418,47 @@ mod tests {
     #[test]
     fn done_and_failed_filter_by_status() {
         let (queue, _tmp) = test_queue();
-        queue.ticket("ok");
-        queue.ticket("oops");
-        queue.ticket("pending");
-        queue.claim(&Query::from("TICKET-1"), "agent");
-        queue.set_finished_by("TICKET-1", "agent").unwrap();
-        queue.set_failed("TICKET-2").unwrap();
-        let done = queue.find_tickets(|t: &Ticket| t.status == Status::Finished);
-        let failed = queue.find_tickets(|t: &Ticket| t.status == Status::Failed);
+        queue.task("ok");
+        queue.task("oops");
+        queue.task("pending");
+        queue.claim(&Query::from("t-1"), "agent");
+        queue.set_finished_by("t-1", "agent").unwrap();
+        queue.set_failed("t-2").unwrap();
+        let done = queue.find_tasks(|t: &Task| t.status == Status::Finished);
+        let failed = queue.find_tasks(|t: &Task| t.status == Status::Failed);
         assert_eq!(done.len(), 1);
-        assert_eq!(done[0].key, "TICKET-1");
+        assert_eq!(done[0].key, "t-1");
         assert_eq!(failed.len(), 1);
-        assert_eq!(failed[0].key, "TICKET-2");
+        assert_eq!(failed[0].key, "t-2");
     }
 
     #[test]
-    fn ticket_status_transitions_record_stats() {
+    fn task_status_transitions_record_stats() {
         let (queue, _tmp) = test_queue();
-        queue.ticket("a");
-        queue.ticket("b");
-        queue.ticket("c");
-        assert_eq!(queue.stats.event_count(EventName::TicketCreated), 3);
-        queue.claim(&Query::from("TICKET-1"), "agent");
-        queue.set_finished_by("TICKET-1", "agent").unwrap();
-        queue.claim(&Query::from("TICKET-2"), "agent");
-        queue.set_failed("TICKET-2").unwrap();
-        assert_eq!(queue.stats.event_count(EventName::TicketFinished), 1);
-        assert_eq!(queue.stats.event_count(EventName::TicketFailed), 1);
+        queue.task("a");
+        queue.task("b");
+        queue.task("c");
+        assert_eq!(queue.stats.event_count(EventName::TaskCreated), 3);
+        queue.claim(&Query::from("t-1"), "agent");
+        queue.set_finished_by("t-1", "agent").unwrap();
+        queue.claim(&Query::from("t-2"), "agent");
+        queue.set_failed("t-2").unwrap();
+        assert_eq!(queue.stats.event_count(EventName::TaskFinished), 1);
+        assert_eq!(queue.stats.event_count(EventName::TaskFailed), 1);
     }
 
     #[test]
-    fn a_ticket_logs_created_started_and_finished_in_order() {
+    fn a_task_logs_created_started_and_finished_in_order() {
         let (queue, dir) = test_queue();
-        queue.ticket("hello");
-        queue.claim(&Query::from("TICKET-1"), "agent");
-        queue.set_finished_by("TICKET-1", "agent").unwrap();
+        queue.task("hello");
+        queue.claim(&Query::from("t-1"), "agent");
+        queue.set_finished_by("t-1", "agent").unwrap();
         let lines = read_events_log(dir.path());
         assert_eq!(lines.len(), 3);
         let names: Vec<&str> = lines.iter().map(|l| l["event"].as_str().unwrap()).collect();
-        assert_eq!(
-            names,
-            ["ticket_created", "ticket_started", "ticket_finished"]
-        );
+        assert_eq!(names, ["task_created", "task_started", "task_finished"]);
         for line in &lines {
-            assert_eq!(line["ticket_key"], "TICKET-1");
+            assert_eq!(line["task_key"], "t-1");
             assert!(line["created_at"].is_u64());
         }
     }
@@ -478,9 +466,9 @@ mod tests {
     #[test]
     fn streamed_chunks_stay_out_of_the_log() {
         let (queue, dir) = test_queue();
-        queue.ticket("seed");
+        queue.task("seed");
         queue.emit(
-            "TICKET-1",
+            "t-1",
             "agent",
             EventKind::TextChunkReceived {
                 content: "a piece of the reply".into(),
@@ -490,17 +478,17 @@ mod tests {
         // already hold the text.
         let lines = read_events_log(dir.path());
         assert_eq!(lines.len(), 1);
-        assert_eq!(lines[0]["event"], "ticket_created");
+        assert_eq!(lines[0]["event"], "task_created");
     }
 
     #[test]
     fn load_replays_the_token_totals_a_run_already_spent() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let original = TicketQueue::new();
+        let original = Queue::new();
         original.dir(dir.path().to_path_buf());
-        original.ticket("seed");
+        original.task("seed");
         original.emit(
-            "TICKET-1",
+            "t-1",
             "agent",
             EventKind::RequestFinished {
                 model: "m".into(),
@@ -514,7 +502,7 @@ mod tests {
 
         // The token limits divide against these, so a resumed run that read
         // them back as zero would silently start its budget over.
-        let resumed = TicketQueue::load(dir.path()).unwrap();
+        let resumed = Queue::load(dir.path()).unwrap();
         assert_eq!(resumed.stats.input_tokens(), 900);
         assert_eq!(resumed.stats.output_tokens(), 120);
     }
@@ -522,34 +510,34 @@ mod tests {
     #[test]
     fn set_failed_logs_a_failure_without_a_start() {
         let (queue, dir) = test_queue();
-        queue.ticket("hello");
-        queue.set_failed("TICKET-1").unwrap();
+        queue.task("hello");
+        queue.set_failed("t-1").unwrap();
         let lines = read_events_log(dir.path());
         assert_eq!(lines.len(), 2);
-        assert_eq!(lines[0]["event"], "ticket_created");
-        assert_eq!(lines[1]["event"], "ticket_failed");
-        assert_eq!(lines[1]["ticket_key"], "TICKET-1");
+        assert_eq!(lines[0]["event"], "task_created");
+        assert_eq!(lines[1]["event"], "task_failed");
+        assert_eq!(lines[1]["task_key"], "t-1");
     }
 
     #[test]
-    fn a_logged_event_carries_the_ticket_label_when_pinned() {
+    fn a_logged_event_carries_the_task_label_when_pinned() {
         let (queue, dir) = test_queue();
-        queue.ticket(Ticket::new("specific").label("alice"));
+        queue.task(Task::new("specific").label("alice"));
         let lines = read_events_log(dir.path());
         assert_eq!(lines.len(), 1);
-        assert_eq!(lines[0]["event"], "ticket_created");
+        assert_eq!(lines[0]["event"], "task_created");
         assert_eq!(lines[0]["label"], "alice");
     }
 
     #[test]
-    fn the_log_holds_one_line_per_lifecycle_turn_across_tickets() {
+    fn the_log_holds_one_line_per_lifecycle_turn_across_tasks() {
         let (queue, dir) = test_queue();
-        queue.ticket("a");
-        queue.ticket("b");
-        queue.claim(&Query::from("TICKET-1"), "agent");
-        queue.set_finished_by("TICKET-1", "agent").unwrap();
-        queue.claim(&Query::from("TICKET-2"), "agent");
-        queue.set_failed("TICKET-2").unwrap();
+        queue.task("a");
+        queue.task("b");
+        queue.claim(&Query::from("t-1"), "agent");
+        queue.set_finished_by("t-1", "agent").unwrap();
+        queue.claim(&Query::from("t-2"), "agent");
+        queue.set_failed("t-2").unwrap();
         // 2 created + 2 started + 1 finished + 1 failed
         assert_eq!(read_events_log(dir.path()).len(), 6);
     }
@@ -557,52 +545,52 @@ mod tests {
     #[test]
     fn claim_transitions_todo_to_in_progress_and_sets_the_assignee() {
         let (queue, _tmp) = test_queue();
-        queue.ticket("hello");
+        queue.task("hello");
         let key = queue.claim(&Query::from("status = Todo"), "alice").unwrap();
-        assert_eq!(key, "TICKET-1");
-        let t = queue.get_ticket(&key).unwrap();
+        assert_eq!(key, "t-1");
+        let t = queue.get_task(&key).unwrap();
         assert_eq!(t.status, Status::InProgress);
         assert_eq!(t.assignee.as_deref(), Some("alice"));
         assert!(t.started_at.is_some());
     }
 
     #[test]
-    fn claim_leaves_the_label_the_ticket_was_filed_with() {
+    fn claim_leaves_the_label_the_task_was_filed_with() {
         let (queue, _tmp) = test_queue();
-        queue.ticket(Ticket::new("hello").label("analysis"));
+        queue.task(Task::new("hello").label("analysis"));
         let key = queue.claim(&Query::from("analysis"), "alice").unwrap();
-        assert!(queue.get_ticket(&key).unwrap().has_label("analysis"));
+        assert!(queue.get_task(&key).unwrap().has_label("analysis"));
     }
 
     #[test]
-    fn claim_returns_none_when_no_ticket_matches() {
+    fn claim_returns_none_when_no_task_matches() {
         let (queue, _tmp) = test_queue();
-        queue.ticket("hello");
+        queue.task("hello");
         assert!(queue.claim(&Query::from("nonexistent"), "alice").is_none());
     }
 
     #[test]
-    fn second_claim_of_same_ticket_returns_none() {
+    fn second_claim_of_same_task_returns_none() {
         let (queue, _tmp) = test_queue();
-        queue.ticket("hello");
-        let first = queue.claim(&Query::from("TICKET-1"), "alice");
+        queue.task("hello");
+        let first = queue.claim(&Query::from("t-1"), "alice");
         assert!(first.is_some());
-        // Second claim: ticket is now InProgress, not Todo.
-        let second = queue.claim(&Query::from("TICKET-1"), "bob");
+        // Second claim: task is now InProgress, not Todo.
+        let second = queue.claim(&Query::from("t-1"), "bob");
         assert!(second.is_none());
     }
 
     #[test]
-    fn claim_picks_earliest_eligible_ticket() {
+    fn claim_picks_earliest_eligible_task() {
         let (queue, _tmp) = test_queue();
-        queue.ticket("a");
-        queue.ticket("b");
-        queue.ticket("c");
+        queue.task("a");
+        queue.task("b");
+        queue.task("c");
         let key = queue.claim(&Query::from("status = Todo"), "alice").unwrap();
-        assert_eq!(key, "TICKET-1");
+        assert_eq!(key, "t-1");
     }
 
-    fn queue_with_analysis_schema() -> (std::sync::Arc<TicketQueue>, crate::test_util::TempDir) {
+    fn queue_with_analysis_schema() -> (std::sync::Arc<Queue>, crate::test_util::TempDir) {
         let (queue, dir) = test_queue();
         let schemas = crate::schemas::SchemaStore::new();
         schemas.label("analysis", document("verdict")).unwrap();
@@ -615,115 +603,112 @@ mod tests {
         serde_json::json!({ "type": "object", "title": title })
     }
 
-    /// The `title` of the schema bound to a ticket, naming which one it took.
-    fn bound_title(queue: &TicketQueue, key: &str) -> Option<String> {
-        let schema = queue.get_ticket(key)?.schema?;
+    /// The `title` of the schema bound to a task, naming which one it took.
+    fn bound_title(queue: &Queue, key: &str) -> Option<String> {
+        let schema = queue.get_task(key)?.schema?;
         let document = serde_json::to_value(schema).ok()?;
         Some(document["title"].as_str().unwrap_or_default().to_string())
     }
 
     #[test]
-    fn claim_takes_the_schema_bound_to_the_tickets_label() {
+    fn claim_takes_the_schema_bound_to_the_tasks_label() {
         let (queue, _tmp) = queue_with_analysis_schema();
-        queue.ticket(Ticket::new("audit").label("analysis"));
-        assert_eq!(bound_title(&queue, "TICKET-1"), None);
+        queue.task(Task::new("audit").label("analysis"));
+        assert_eq!(bound_title(&queue, "t-1"), None);
 
         queue.claim(&Query::from("analysis"), "alice");
-        assert_eq!(bound_title(&queue, "TICKET-1").as_deref(), Some("verdict"));
+        assert_eq!(bound_title(&queue, "t-1").as_deref(), Some("verdict"));
     }
 
     #[test]
-    fn claim_leaves_a_schema_the_ticket_already_carries() {
+    fn claim_leaves_a_schema_the_task_already_carries() {
         let (queue, _tmp) = queue_with_analysis_schema();
         let own = crate::schemas::Schema::new(document("its own")).unwrap();
-        queue.ticket(Ticket::new("audit").label("analysis").schema(own));
-        assert_eq!(bound_title(&queue, "TICKET-1").as_deref(), Some("its own"));
+        queue.task(Task::new("audit").label("analysis").schema(own));
+        assert_eq!(bound_title(&queue, "t-1").as_deref(), Some("its own"));
 
         queue.claim(&Query::from("analysis"), "alice");
-        assert_eq!(bound_title(&queue, "TICKET-1").as_deref(), Some("its own"));
+        assert_eq!(bound_title(&queue, "t-1").as_deref(), Some("its own"));
     }
 
     #[test]
-    fn claim_prefers_the_label_the_ticket_was_filed_under_to_the_agent_id() {
+    fn claim_prefers_the_label_the_task_was_filed_under_to_the_agent_id() {
         let (queue, _tmp) = test_queue();
         let schemas = crate::schemas::SchemaStore::new();
         schemas.label("analysis", document("by scope")).unwrap();
         schemas.label("alice", document("by agent")).unwrap();
         queue.schemas(&schemas);
-        queue.ticket(Ticket::new("audit").label("analysis"));
-        assert_eq!(bound_title(&queue, "TICKET-1"), None);
+        queue.task(Task::new("audit").label("analysis"));
+        assert_eq!(bound_title(&queue, "t-1"), None);
 
         queue.claim(&Query::from("analysis"), "alice");
-        assert_eq!(bound_title(&queue, "TICKET-1").as_deref(), Some("by scope"));
+        assert_eq!(bound_title(&queue, "t-1").as_deref(), Some("by scope"));
     }
 
     #[test]
-    fn claim_binds_no_schema_when_the_tickets_label_has_none() {
+    fn claim_binds_no_schema_when_the_tasks_label_has_none() {
         let (queue, _tmp) = queue_with_analysis_schema();
-        queue.ticket(Ticket::new("search").label("discovery"));
-        assert_eq!(bound_title(&queue, "TICKET-1"), None);
+        queue.task(Task::new("search").label("discovery"));
+        assert_eq!(bound_title(&queue, "t-1"), None);
 
         queue.claim(&Query::from("discovery"), "alice");
-        assert_eq!(bound_title(&queue, "TICKET-1"), None);
+        assert_eq!(bound_title(&queue, "t-1"), None);
     }
 
     #[test]
-    fn a_ticket_already_in_progress_keeps_the_schema_its_claim_bound() {
+    fn a_task_already_in_progress_keeps_the_schema_its_claim_bound() {
         let (queue, _tmp) = test_queue();
         let schemas = crate::schemas::SchemaStore::new();
         schemas.label("analysis", document("first")).unwrap();
         queue.schemas(&schemas);
-        queue.ticket(Ticket::new("audit").label("analysis"));
+        queue.task(Task::new("audit").label("analysis"));
         queue.claim(&Query::from("analysis"), "alice");
-        assert_eq!(bound_title(&queue, "TICKET-1").as_deref(), Some("first"));
+        assert_eq!(bound_title(&queue, "t-1").as_deref(), Some("first"));
 
         schemas.label("analysis", document("second")).unwrap();
 
-        // The loop resumes an `InProgress` ticket through `find_ticket`, never
+        // The loop resumes an `InProgress` task through `find_task`, never
         // through a second `claim`, so a later binding cannot reach it.
         assert!(queue.claim(&Query::from("analysis"), "alice").is_none());
-        assert_eq!(bound_title(&queue, "TICKET-1").as_deref(), Some("first"));
+        assert_eq!(bound_title(&queue, "t-1").as_deref(), Some("first"));
     }
 
     #[test]
     fn a_schema_bound_at_claim_survives_load() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let original = TicketQueue::new();
+        let original = Queue::new();
         original.dir(dir.path().to_path_buf());
         let schemas = crate::schemas::SchemaStore::new();
         schemas.label("analysis", document("verdict")).unwrap();
         original.schemas(&schemas);
-        original.ticket(Ticket::new("audit").label("analysis"));
+        original.task(Task::new("audit").label("analysis"));
         original.claim(&Query::from("analysis"), "alice");
         drop(original);
 
-        let resumed = TicketQueue::load(dir.path()).unwrap();
-        assert_eq!(
-            bound_title(&resumed, "TICKET-1").as_deref(),
-            Some("verdict")
-        );
+        let resumed = Queue::load(dir.path()).unwrap();
+        assert_eq!(bound_title(&resumed, "t-1").as_deref(), Some("verdict"));
     }
 
     #[test]
-    fn claim_logs_the_ticket_starting() {
+    fn claim_logs_the_task_starting() {
         let (queue, dir) = test_queue();
-        queue.ticket("hello");
+        queue.task("hello");
         queue.claim(&Query::from("status = Todo"), "alice");
         let lines = read_events_log(dir.path());
         assert_eq!(lines.len(), 2);
-        assert_eq!(lines[0]["event"], "ticket_created");
-        assert_eq!(lines[1]["event"], "ticket_started");
-        assert_eq!(lines[1]["ticket_key"], "TICKET-1");
+        assert_eq!(lines[0]["event"], "task_created");
+        assert_eq!(lines[1]["event"], "task_started");
+        assert_eq!(lines[1]["task_key"], "t-1");
         assert_eq!(lines[1]["agent_id"], "alice");
     }
 
     #[test]
     fn set_finished_transitions_to_finished() {
         let (queue, _tmp) = test_queue();
-        let key = queue.ticket("hello");
+        let key = queue.task("hello");
         queue.claim(&Query::from("status = Todo"), "alice");
         queue.set_finished_by(&key, "alice").unwrap();
-        let t = queue.get_ticket(&key).unwrap();
+        let t = queue.get_task(&key).unwrap();
         assert_eq!(t.status, Status::Finished);
         assert!(t.finished_at.is_some());
     }
@@ -731,55 +716,55 @@ mod tests {
     #[test]
     fn set_failed_transitions_to_failed() {
         let (queue, _tmp) = test_queue();
-        let key = queue.ticket("hello");
+        let key = queue.task("hello");
         queue.claim(&Query::from("status = Todo"), "alice");
         queue.set_failed(&key).unwrap();
-        let t = queue.get_ticket(&key).unwrap();
+        let t = queue.get_task(&key).unwrap();
         assert_eq!(t.status, Status::Failed);
         assert!(t.failed_at.is_some());
     }
 
     #[test]
-    fn a_finished_ticket_is_not_reopened_by_a_later_failure() {
+    fn a_finished_task_is_not_reopened_by_a_later_failure() {
         let (queue, _tmp) = test_queue();
-        let key = queue.ticket("hello");
+        let key = queue.task("hello");
         queue.claim(&Query::from("status = Todo"), "alice");
         queue.set_finished(&key, "host result").unwrap();
 
-        // Alice was still turning the ticket and gives up after the host
+        // Alice was still turning the task and gives up after the host
         // resolved it.
         queue.set_failed_by(&key, "alice").unwrap();
 
-        let ticket = queue.get_ticket(&key).unwrap();
-        assert_eq!(ticket.status, Status::Finished);
-        assert_eq!(ticket.result, Some(serde_json::json!("host result")));
-        assert!(ticket.failed_at.is_none());
+        let task = queue.get_task(&key).unwrap();
+        assert_eq!(task.status, Status::Finished);
+        assert_eq!(task.result, Some(serde_json::json!("host result")));
+        assert!(task.failed_at.is_none());
     }
 
     #[test]
-    fn a_failed_ticket_is_not_reopened_by_a_later_finish() {
+    fn a_failed_task_is_not_reopened_by_a_later_finish() {
         let (queue, _tmp) = test_queue();
-        let key = queue.ticket("hello");
+        let key = queue.task("hello");
         queue.claim(&Query::from("status = Todo"), "alice");
         queue.set_failed_by(&key, "alice").unwrap();
 
         queue.set_finished(&key, "late result").unwrap();
 
-        let ticket = queue.get_ticket(&key).unwrap();
-        assert_eq!(ticket.status, Status::Failed);
-        assert!(ticket.finished_at.is_none());
-        // The result too, or the ticket reads as failed while carrying an answer.
-        assert_eq!(ticket.result, None);
+        let task = queue.get_task(&key).unwrap();
+        assert_eq!(task.status, Status::Failed);
+        assert!(task.finished_at.is_none());
+        // The result too, or the task reads as failed while carrying an answer.
+        assert_eq!(task.result, None);
     }
 
     #[test]
-    fn set_finished_stores_the_result_and_resolves_the_ticket() {
+    fn set_finished_stores_the_result_and_resolves_the_task() {
         let (queue, _tmp) = test_queue();
-        queue.ticket("hello");
+        queue.task("hello");
         queue
-            .set_finished("TICKET-1", serde_json::json!({"answer": 42}))
+            .set_finished("t-1", serde_json::json!({"answer": 42}))
             .unwrap();
-        let t = queue.get_ticket("TICKET-1").unwrap();
+        let t = queue.get_task("t-1").unwrap();
         assert_eq!(t.status, Status::Finished);
         assert_eq!(t.result, Some(serde_json::json!({"answer": 42})));
         assert_eq!(
@@ -789,7 +774,7 @@ mod tests {
     }
 
     #[test]
-    fn set_finished_rejects_a_result_that_misses_the_ticket_schema() {
+    fn set_finished_rejects_a_result_that_misses_the_task_schema() {
         let (queue, _tmp) = test_queue();
         let schema = crate::schemas::Schema::new(serde_json::json!({
             "type": "object",
@@ -797,40 +782,38 @@ mod tests {
             "required": ["title"],
         }))
         .unwrap();
-        queue.ticket(Ticket::new("write a report").schema(schema));
+        queue.task(Task::new("write a report").schema(schema));
 
         let err = queue
-            .set_finished("TICKET-1", serde_json::json!({"body": "no title"}))
+            .set_finished("t-1", serde_json::json!({"body": "no title"}))
             .unwrap_err();
-        assert!(matches!(err, TicketError::ResultRejected { .. }));
-        assert_eq!(queue.get_ticket("TICKET-1").unwrap().status, Status::Todo);
+        assert!(matches!(err, TaskError::ResultRejected { .. }));
+        assert_eq!(queue.get_task("t-1").unwrap().status, Status::Todo);
     }
 
     #[test]
     fn set_finished_errors_on_an_unknown_key() {
         let (queue, _tmp) = test_queue();
-        let err = queue.set_finished("TICKET-9", "done").unwrap_err();
-        assert!(matches!(err, TicketError::TicketMissing { .. }));
+        let err = queue.set_finished("t-9", "done").unwrap_err();
+        assert!(matches!(err, TaskError::TaskMissing { .. }));
     }
 
     #[test]
-    fn ticket_parent_builder_round_trips() {
+    fn task_parent_builder_round_trips() {
         let (queue, _tmp) = test_queue();
-        queue.ticket(Ticket::new("child body").parent("TICKET-1"));
-        let stored = queue.get_ticket("TICKET-1").unwrap();
-        assert_eq!(stored.parent.as_deref(), Some("TICKET-1"));
+        queue.task(Task::new("child body").parent("t-1"));
+        let stored = queue.get_task("t-1").unwrap();
+        assert_eq!(stored.parent.as_deref(), Some("t-1"));
     }
 
     #[test]
     fn write_tool_output_returns_relative_path_and_writes_absolute() {
         let (queue, dir) = test_queue();
-        queue.ticket("seed");
+        queue.task("seed");
         let rel = queue
-            .write_tool_output("TICKET-1", "call-1", "the full content")
+            .write_tool_output("t-1", "call-1", "the full content")
             .expect("write succeeds when dir exists");
-        let expected_rel: PathBuf = ["tickets", "TICKET-1", "outputs", "call-1.txt"]
-            .iter()
-            .collect();
+        let expected_rel: PathBuf = ["tasks", "t-1", "outputs", "call-1.txt"].iter().collect();
         assert_eq!(rel, expected_rel);
         let body = std::fs::read_to_string(dir.path().join(&rel)).unwrap();
         assert_eq!(body, "the full content");
@@ -839,80 +822,78 @@ mod tests {
     #[test]
     fn write_tool_output_creates_outputs_subdir_lazily() {
         let (queue, dir) = test_queue();
-        queue.ticket("seed");
-        let outputs = dir.path().join("tickets").join("TICKET-1").join("outputs");
+        queue.task("seed");
+        let outputs = dir.path().join("tasks").join("t-1").join("outputs");
         assert!(!outputs.exists());
-        queue
-            .write_tool_output("TICKET-1", "call-1", "payload")
-            .unwrap();
+        queue.write_tool_output("t-1", "call-1", "payload").unwrap();
         assert!(outputs.is_dir());
     }
 
     #[test]
     fn a_logged_event_names_the_agent_that_caused_it() {
         let (queue, dir) = test_queue();
-        queue.ticket("first");
-        queue.ticket(Ticket::new("child").parent("TICKET-1"));
+        queue.task("first");
+        queue.task(Task::new("child").parent("t-1"));
         let lines = read_events_log(dir.path());
         assert_eq!(lines.len(), 2);
-        // The reporter, since a ticket is created by whoever filed it.
+        // The reporter, since a task is created by whoever filed it.
         assert_eq!(lines[0]["agent_id"], "user");
         assert_eq!(lines[1]["agent_id"], "user");
     }
 
-    // Resumption: TicketQueue::load
+    // Resumption: Queue::load
 
     #[test]
-    fn load_creates_tickets_dir_when_missing() {
+    fn load_creates_tasks_dir_when_missing() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let queue = TicketQueue::load(dir.path()).unwrap();
-        assert!(queue.tickets().is_empty());
-        assert!(dir.path().join("tickets").is_dir());
+        let queue = Queue::load(dir.path()).unwrap();
+        assert!(queue.tasks().is_empty());
+        assert!(dir.path().join("tasks").is_dir());
     }
 
     /// A replies file written by an older version no longer parses. The
-    /// ticket must not be skipped: its status and result would vanish with
+    /// task must not be skipped: its status and result would vanish with
     /// it, and the caller would receive a short store reporting success.
     #[test]
-    fn load_reports_a_ticket_whose_replies_cannot_be_read() {
+    fn load_reports_a_task_whose_replies_cannot_be_read() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let original = TicketQueue::new();
+        let original = Queue::new();
         original.dir(dir.path().to_path_buf());
-        original.ticket("seed work");
-        original.add_reply("TICKET-1", Reply::user_text("hello"));
-        original.set_finished_by("TICKET-1", "agent").unwrap();
+        original.task("seed work");
+        original.add_reply("t-1", Reply::user_text("hello"));
+        original.set_finished_by("t-1", "agent").unwrap();
         drop(original);
 
-        let replies = dir.path().join("tickets/TICKET-1/replies.jsonl");
+        let replies = dir.path().join("tasks/t-1/replies.jsonl");
         std::fs::write(
             &replies,
             "{\"author\":\"user\",\"content\":[{\"Text\":\"hello\"}]}\n",
         )
         .unwrap();
 
-        let Err(error) = TicketQueue::load(dir.path()) else {
-            panic!("load must fail when a ticket's replies cannot be read");
+        let Err(error) = Queue::load(dir.path()) else {
+            panic!("load must fail when a task's replies cannot be read");
         };
         assert!(
-            error.to_string().contains("TICKET-1"),
-            "the failure must name the ticket: {error}",
+            error.to_string().contains("t-1"),
+            "the failure must name the task: {error}",
         );
     }
 
     #[test]
-    fn load_restores_done_ticket_with_result_and_replies() {
+    fn load_restores_done_task_with_result_and_replies() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let original = TicketQueue::new();
+        let original = Queue::new();
         original.dir(dir.path().to_path_buf());
-        original.ticket("seed work");
+        original.task("seed work");
         original
-            .set_result("TICKET-1", serde_json::json!({"ok": true}))
+            .set_result("t-1", serde_json::json!({"ok": true}))
             .unwrap();
-        original.set_finished_by("TICKET-1", "agent").unwrap();
+        original.set_finished_by("t-1", "agent").unwrap();
         drop(original);
 
-        let resumed = TicketQueue::load(dir.path()).unwrap();
-        let t = resumed.get_ticket("TICKET-1").unwrap();
+        let resumed = Queue::load(dir.path()).unwrap();
+        let t = resumed.get_task("t-1").unwrap();
         assert_eq!(t.status, Status::Finished);
         assert_eq!(t.result.as_ref(), Some(&serde_json::json!({"ok": true})));
         assert_eq!(t.task, serde_json::Value::String("seed work".into()));
@@ -921,13 +902,13 @@ mod tests {
     #[test]
     fn insert_after_load_never_reuses_an_existing_key() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let original = TicketQueue::new();
+        let original = Queue::new();
         original.dir(dir.path().to_path_buf());
-        original.ticket("seed work");
+        original.task("seed work");
         drop(original);
 
-        let resumed = TicketQueue::load(dir.path()).unwrap();
-        assert_eq!(resumed.ticket("more work"), "TICKET-2");
+        let resumed = Queue::load(dir.path()).unwrap();
+        assert_eq!(resumed.task("more work"), "t-2");
     }
 
     #[test]
@@ -935,46 +916,46 @@ mod tests {
         // The pattern a fresh process actually uses against a directory a
         // prior run already wrote into: `new()` (not `load()`) plus `.dir(..)`.
         let dir = crate::test_util::TempDir::new().unwrap();
-        let first = TicketQueue::new();
+        let first = Queue::new();
         first.dir(dir.path().to_path_buf());
-        first.ticket("seed work");
+        first.task("seed work");
         drop(first);
 
-        let second = TicketQueue::new();
+        let second = Queue::new();
         second.dir(dir.path().to_path_buf());
-        assert_eq!(second.ticket("more work"), "TICKET-2");
+        assert_eq!(second.task("more work"), "t-2");
     }
 
     #[test]
-    fn load_seeds_next_ticket_id_without_rescanning_tickets_dir() {
+    fn load_seeds_next_task_id_without_rescanning_tasks_dir() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let original = TicketQueue::new();
+        let original = Queue::new();
         original.dir(dir.path().to_path_buf());
-        original.ticket("seed work");
+        original.task("seed work");
         drop(original);
 
-        let resumed = TicketQueue::load(dir.path()).unwrap();
+        let resumed = Queue::load(dir.path()).unwrap();
         // `load()` already knows the highest key from what it just read
         // into memory; removing the directory here proves `insert()` does
         // not rescan it, since a rescan would find nothing and wrongly
         // restart numbering at 1.
-        std::fs::remove_dir_all(dir.path().join("tickets")).unwrap();
-        assert_eq!(resumed.ticket("more work"), "TICKET-2");
+        std::fs::remove_dir_all(dir.path().join("tasks")).unwrap();
+        assert_eq!(resumed.task("more work"), "t-2");
     }
 
     #[test]
     fn load_restores_in_progress_replies() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let original = TicketQueue::new();
+        let original = Queue::new();
         original.dir(dir.path().to_path_buf());
-        original.ticket("mid flight");
+        original.task("mid flight");
         original
             .claim(&Query::from("status = Todo"), "alice")
             .unwrap();
         drop(original);
 
-        let resumed = TicketQueue::load(dir.path()).unwrap();
-        let t = resumed.get_ticket("TICKET-1").unwrap();
+        let resumed = Queue::load(dir.path()).unwrap();
+        let t = resumed.get_task("t-1").unwrap();
         assert_eq!(t.status, Status::InProgress);
         assert_eq!(t.assignee.as_deref(), Some("alice"));
     }
@@ -982,53 +963,51 @@ mod tests {
     #[test]
     fn load_replays_the_event_log_into_the_counters() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let original = TicketQueue::new();
+        let original = Queue::new();
         original.dir(dir.path().to_path_buf());
-        original.ticket("a");
-        original.ticket("b");
-        original
-            .set_result("TICKET-1", serde_json::Value::Null)
-            .unwrap();
-        original.set_finished_by("TICKET-1", "agent").unwrap();
-        original.set_failed("TICKET-2").unwrap();
+        original.task("a");
+        original.task("b");
+        original.set_result("t-1", serde_json::Value::Null).unwrap();
+        original.set_finished_by("t-1", "agent").unwrap();
+        original.set_failed("t-2").unwrap();
         drop(original);
 
-        let resumed = TicketQueue::load(dir.path()).unwrap();
-        assert_eq!(resumed.stats.event_count(EventName::TicketCreated), 2);
-        assert_eq!(resumed.stats.event_count(EventName::TicketFinished), 1);
-        assert_eq!(resumed.stats.event_count(EventName::TicketFailed), 1);
+        let resumed = Queue::load(dir.path()).unwrap();
+        assert_eq!(resumed.stats.event_count(EventName::TaskCreated), 2);
+        assert_eq!(resumed.stats.event_count(EventName::TaskFinished), 1);
+        assert_eq!(resumed.stats.event_count(EventName::TaskFailed), 1);
     }
     #[test]
-    fn load_skips_dir_without_ticket_json() {
+    fn load_skips_dir_without_task_json() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let original = TicketQueue::new();
+        let original = Queue::new();
         original.dir(dir.path().to_path_buf());
-        original.ticket("valid");
+        original.task("valid");
         drop(original);
 
-        // A leftover directory with no `ticket.json` is ignored by the
+        // A leftover directory with no `task.json` is ignored by the
         // loader: there is no migration from the pre-split layout.
-        let stray_dir = dir.path().join("tickets").join("TICKET-99");
+        let stray_dir = dir.path().join("tasks").join("t-99");
         std::fs::create_dir_all(&stray_dir).unwrap();
         std::fs::write(stray_dir.join("anything.json"), "not json").unwrap();
 
-        let resumed = TicketQueue::load(dir.path()).unwrap();
-        assert!(resumed.get_ticket("TICKET-1").is_some());
-        assert!(resumed.get_ticket("TICKET-99").is_none());
+        let resumed = Queue::load(dir.path()).unwrap();
+        assert!(resumed.get_task("t-1").is_some());
+        assert!(resumed.get_task("t-99").is_none());
     }
 
     #[test]
-    fn load_drops_the_label_of_a_ticket_written_before_it_was_singular() {
-        // The accepted cost of the clean break: a pre-singular `ticket.json`
-        // still loads, but its label is gone, so the ticket falls to the
+    fn load_drops_the_label_of_a_task_written_before_it_was_singular() {
+        // The accepted cost of the clean break: a pre-singular `task.json`
+        // still loads, but its label is gone, so the task falls to the
         // default scope instead of its pool. Documented in architecture.md.
         let dir = crate::test_util::TempDir::new().unwrap();
-        let ticket_dir = dir.path().join("tickets").join("TICKET-1");
-        std::fs::create_dir_all(&ticket_dir).unwrap();
+        let task_dir = dir.path().join("tasks").join("t-1");
+        std::fs::create_dir_all(&task_dir).unwrap();
         let body = serde_json::json!({
             "task": "scan the tree",
             "labels": ["scan"],
-            "key": "TICKET-1",
+            "key": "t-1",
             "status": "Todo",
             "reporter": "user",
             "created_at": 1,
@@ -1039,71 +1018,60 @@ mod tests {
             "parent": null,
         });
         std::fs::write(
-            ticket_dir.join("ticket.json"),
+            task_dir.join("task.json"),
             serde_json::to_vec(&body).unwrap(),
         )
         .unwrap();
 
-        let resumed = TicketQueue::load(dir.path()).unwrap();
-        let ticket = resumed.get_ticket("TICKET-1").expect("the ticket loads");
-        assert_eq!(ticket.label, None);
-        assert!(!ticket.has_label("scan"));
+        let resumed = Queue::load(dir.path()).unwrap();
+        let task = resumed.get_task("t-1").expect("the task loads");
+        assert_eq!(task.label, None);
+        assert!(!task.has_label("scan"));
     }
 
     #[test]
-    fn load_reports_a_malformed_ticket_json() {
+    fn load_reports_a_malformed_task_json() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        std::fs::create_dir_all(dir.path().join("tickets").join("TICKET-7")).unwrap();
+        std::fs::create_dir_all(dir.path().join("tasks").join("t-7")).unwrap();
         std::fs::write(
-            dir.path()
-                .join("tickets")
-                .join("TICKET-7")
-                .join("ticket.json"),
+            dir.path().join("tasks").join("t-7").join("task.json"),
             "not json",
         )
         .unwrap();
-        let Err(error) = TicketQueue::load(dir.path()) else {
-            panic!("load must fail on a malformed ticket.json");
+        let Err(error) = Queue::load(dir.path()) else {
+            panic!("load must fail on a malformed task.json");
         };
         assert!(
-            error.to_string().contains("TICKET-7"),
-            "the failure must name the ticket: {error}",
+            error.to_string().contains("t-7"),
+            "the failure must name the task: {error}",
         );
     }
 
     #[test]
-    fn ticket_json_does_not_carry_replies_field() {
+    fn task_json_does_not_carry_replies_field() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let queue = TicketQueue::new();
+        let queue = Queue::new();
         queue.dir(dir.path().to_path_buf());
-        queue.ticket("hello");
-        let stored = std::fs::read_to_string(
-            dir.path()
-                .join("tickets")
-                .join("TICKET-1")
-                .join("ticket.json"),
-        )
-        .unwrap();
+        queue.task("hello");
+        let stored =
+            std::fs::read_to_string(dir.path().join("tasks").join("t-1").join("task.json"))
+                .unwrap();
         let v: serde_json::Value = serde_json::from_str(&stored).unwrap();
         assert!(
             v.as_object().unwrap().get("replies").is_none(),
-            "ticket.json must not carry a `replies` field; got: {stored}",
+            "task.json must not carry a `replies` field; got: {stored}",
         );
     }
 
     #[test]
     fn add_reply_appends_one_line_to_replies_jsonl() {
         let (queue, dir) = test_queue();
-        queue.ticket("hello");
-        queue.reply("TICKET-1", "first");
-        queue.reply("TICKET-1", "second");
-        let body = std::fs::read_to_string(
-            dir.path()
-                .join("tickets")
-                .join("TICKET-1")
-                .join("replies.jsonl"),
-        )
-        .unwrap();
+        queue.task("hello");
+        queue.reply("t-1", "first");
+        queue.reply("t-1", "second");
+        let body =
+            std::fs::read_to_string(dir.path().join("tasks").join("t-1").join("replies.jsonl"))
+                .unwrap();
         let lines: Vec<_> = body.lines().collect();
         assert_eq!(lines.len(), 2);
         // Each line is a single, parseable JSON object.
@@ -1112,18 +1080,18 @@ mod tests {
     }
 
     #[test]
-    fn load_replays_replies_jsonl_into_in_memory_ticket() {
+    fn load_replays_replies_jsonl_into_in_memory_task() {
         use super::super::reply::ReplyContent;
         let dir = crate::test_util::TempDir::new().unwrap();
         {
-            let queue = TicketQueue::new();
+            let queue = Queue::new();
             queue.dir(dir.path().to_path_buf());
-            queue.ticket("hello");
-            queue.reply("TICKET-1", "first");
-            queue.reply("TICKET-1", "second");
+            queue.task("hello");
+            queue.reply("t-1", "first");
+            queue.reply("t-1", "second");
         }
-        let resumed = TicketQueue::load(dir.path()).unwrap();
-        let t = resumed.get_ticket("TICKET-1").unwrap();
+        let resumed = Queue::load(dir.path()).unwrap();
+        let t = resumed.get_task("t-1").unwrap();
         let texts: Vec<_> = t
             .replies
             .iter()
@@ -1136,53 +1104,51 @@ mod tests {
     }
 
     #[test]
-    fn ticket_lifecycle_writes_its_events_to_the_log() {
+    fn task_lifecycle_writes_its_events_to_the_log() {
         let (queue, _dir) = test_queue();
-        queue.ticket("seed");
+        queue.task("seed");
         queue.claim(&Query::from("status = Todo"), "alice").unwrap();
-        queue
-            .set_result("TICKET-1", serde_json::Value::Null)
-            .unwrap();
-        queue.set_finished_by("TICKET-1", "agent").unwrap();
+        queue.set_result("t-1", serde_json::Value::Null).unwrap();
+        queue.set_finished_by("t-1", "agent").unwrap();
 
-        assert_eq!(queue.find_events("ticket_created").len(), 1);
-        assert_eq!(queue.find_events("ticket_finished").len(), 1);
+        assert_eq!(queue.find_events("task_created").len(), 1);
+        assert_eq!(queue.find_events("task_finished").len(), 1);
     }
 
     #[test]
-    fn creating_a_ticket_names_the_reporter_on_its_event() {
+    fn creating_a_task_names_the_reporter_on_its_event() {
         let (queue, _tmp) = test_queue();
         let reporters = Arc::new(Mutex::new(Vec::new()));
         let seen = Arc::clone(&reporters);
         queue.on_event(move |_, event| {
-            if matches!(event.kind, EventKind::TicketCreated) {
+            if matches!(event.kind, EventKind::TaskCreated) {
                 seen.lock().unwrap().push(event.agent_id.clone());
             }
         });
 
-        queue.ticket("seed");
+        queue.task("seed");
 
-        assert_eq!(queue.stats.event_count(EventName::TicketCreated), 1);
+        assert_eq!(queue.stats.event_count(EventName::TaskCreated), 1);
         assert_eq!(*reporters.lock().unwrap(), vec!["user".to_string()]);
     }
 
     #[test]
-    fn a_finished_ticket_failed_afterwards_is_not_counted_twice() {
+    fn a_finished_task_failed_afterwards_is_not_counted_twice() {
         let (queue, _tmp) = test_queue();
-        let key = queue.ticket("seed");
+        let key = queue.task("seed");
         queue.set_finished_by(&key, "alice").unwrap();
         // Refused before the transition, so nothing is emitted to count.
         queue.set_failed(&key).unwrap();
 
         let stats = &queue.stats;
-        assert_eq!(stats.event_count(EventName::TicketFinished), 1);
-        assert_eq!(stats.event_count(EventName::TicketFailed), 0);
+        assert_eq!(stats.event_count(EventName::TaskFinished), 1);
+        assert_eq!(stats.event_count(EventName::TaskFailed), 0);
     }
 
     #[test]
-    fn ticket_with_json_schema_round_trips_through_load() {
+    fn task_with_json_schema_round_trips_through_load() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let original = TicketQueue::new();
+        let original = Queue::new();
         original.dir(dir.path().to_path_buf());
         let schema_doc = serde_json::json!({
             "type": "object",
@@ -1190,11 +1156,11 @@ mod tests {
             "required": ["n"],
         });
         let schema = crate::schemas::Schema::new(schema_doc.clone()).unwrap();
-        original.ticket(Ticket::new("counted").schema(schema));
+        original.task(Task::new("counted").schema(schema));
         drop(original);
 
-        let resumed = TicketQueue::load(dir.path()).unwrap();
-        let t = resumed.get_ticket("TICKET-1").unwrap();
+        let resumed = Queue::load(dir.path()).unwrap();
+        let t = resumed.get_task("t-1").unwrap();
         let restored = t.schema.expect("JSON schema must restore");
         assert!(restored.validate(serde_json::json!({"n": 3})).is_ok());
         assert!(restored.validate(serde_json::json!({})).is_err());
@@ -1202,9 +1168,9 @@ mod tests {
 
     #[test]
     fn edit_replies_rewrites_replies_without_touching_task() {
-        use crate::agents::tickets::ReplyContent;
+        use crate::agents::tasks::ReplyContent;
         let (queue, _tmp) = test_queue();
-        let key = queue.ticket("original task");
+        let key = queue.task("original task");
         queue.add_reply(&key, Reply::user_text("keep me"));
         queue.add_reply(&key, Reply::user_text("drop me"));
 
@@ -1215,15 +1181,12 @@ mod tests {
         });
 
         // Unlike summarize, the task is left as it was.
-        let ticket = queue.get_ticket(&key).unwrap();
-        assert_eq!(
-            ticket.task,
-            serde_json::Value::String("original task".into())
-        );
+        let task = queue.get_task(&key).unwrap();
+        assert_eq!(task.task, serde_json::Value::String("original task".into()));
 
         // The drop is committed and reloads from disk.
-        let reloaded = TicketQueue::load(queue.get_dir()).unwrap();
-        let replies = reloaded.get_ticket(&key).unwrap().replies;
+        let reloaded = Queue::load(queue.get_dir()).unwrap();
+        let replies = reloaded.get_task(&key).unwrap().replies;
         assert!(replies.iter().any(
             |r| matches!(r.content.first(), Some(ReplyContent::Text { text: t }) if t == "keep me")
         ));
@@ -1235,13 +1198,13 @@ mod tests {
     #[test]
     fn edit_replies_that_changes_nothing_writes_nothing() {
         let (queue, _tmp) = test_queue();
-        let key = queue.ticket("go");
+        let key = queue.task("go");
         queue.add_reply(&key, Reply::user_text("keep me"));
-        let ticket_dir = queue.get_dir().join("tickets").join(&key);
+        let task_dir = queue.get_dir().join("tasks").join(&key);
 
         queue.edit_replies(&key, |_replies| {}); // inspect, change nothing
 
-        let rewrites = std::fs::read_dir(&ticket_dir)
+        let rewrites = std::fs::read_dir(&task_dir)
             .unwrap()
             .flatten()
             .filter(|entry| {
@@ -1258,12 +1221,12 @@ mod tests {
 
     #[test]
     fn edit_rewrites_replies_in_place_without_a_snapshot_file() {
-        use crate::agents::tickets::ReplyContent;
+        use crate::agents::tasks::ReplyContent;
         let (queue, _tmp) = test_queue();
-        let key = queue.ticket("go");
+        let key = queue.task("go");
         queue.add_reply(&key, Reply::user_text("keep me"));
         queue.add_reply(&key, Reply::user_text("drop me"));
-        let ticket_dir = queue.get_dir().join("tickets").join(&key);
+        let task_dir = queue.get_dir().join("tasks").join(&key);
 
         queue.edit_replies(&key, |replies| {
             replies.retain(|reply| {
@@ -1272,7 +1235,7 @@ mod tests {
         });
 
         // The edit landed in the base file, and minted no replies.<ts>.jsonl.
-        let names: Vec<String> = std::fs::read_dir(&ticket_dir)
+        let names: Vec<String> = std::fs::read_dir(&task_dir)
             .unwrap()
             .flatten()
             .map(|e| e.file_name().to_string_lossy().into_owned())
@@ -1284,16 +1247,16 @@ mod tests {
                 .any(|n| n.starts_with("replies.") && n != "replies.jsonl"),
             "no snapshot file expected, found: {names:?}",
         );
-        let body = std::fs::read_to_string(ticket_dir.join("replies.jsonl")).unwrap();
+        let body = std::fs::read_to_string(task_dir.join("replies.jsonl")).unwrap();
         assert!(body.contains("keep me"));
         assert!(!body.contains("drop me"));
     }
 
     #[test]
     fn compaction_then_edit_leaves_one_replies_file_and_no_leak() {
-        use crate::agents::tickets::ReplyContent;
+        use crate::agents::tasks::ReplyContent;
         let (queue, _tmp) = test_queue();
-        let key = queue.ticket("go");
+        let key = queue.task("go");
         queue.add_reply(&key, Reply::user_text("SECRET"));
         // What compaction applies: the replies wholesale, rewritten in place.
         queue.edit_replies(&key, |replies| *replies = vec![Reply::user_text("summary")]);
@@ -1305,15 +1268,15 @@ mod tests {
         });
 
         // One replies file, no snapshots, and neither dropped string survives.
-        let ticket_dir = queue.get_dir().join("tickets").join(&key);
-        let replies_files: Vec<String> = std::fs::read_dir(&ticket_dir)
+        let task_dir = queue.get_dir().join("tasks").join(&key);
+        let replies_files: Vec<String> = std::fs::read_dir(&task_dir)
             .unwrap()
             .flatten()
             .map(|e| e.file_name().to_string_lossy().into_owned())
             .filter(|n| n.starts_with("replies."))
             .collect();
         assert_eq!(replies_files, vec!["replies.jsonl".to_string()]);
-        let body = std::fs::read_to_string(ticket_dir.join("replies.jsonl")).unwrap();
+        let body = std::fs::read_to_string(task_dir.join("replies.jsonl")).unwrap();
         assert!(
             !body.contains("SECRET") && !body.contains("after"),
             "leaked: {body}"

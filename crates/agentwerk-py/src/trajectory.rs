@@ -1,13 +1,13 @@
-//! A ticket's messages captured as a training example, as Python sees it.
-//! Mirrors `Trajectory::from_ticket(agent_id, ticket).save(dir)`.
+//! A task's messages captured as a training example, as Python sees it.
+//! Mirrors `Trajectory::from_task(agent_id, task).save(dir)`.
 
 use agentwerk::agents::Trajectory;
 use pyo3::prelude::*;
 
 use crate::convert::runtime_error;
-use crate::ticket::PyTicket;
+use crate::task::PyTask;
 
-/// A `Trajectory` is one finished ticket kept as a training example.
+/// A `Trajectory` is one finished task kept as a training example.
 #[pyclass(name = "Trajectory")]
 pub struct PyTrajectory {
     inner: Trajectory,
@@ -15,12 +15,12 @@ pub struct PyTrajectory {
 
 #[pymethods]
 impl PyTrajectory {
-    /// Capture `ticket`'s messages as an example produced by `agent` using
-    /// `model`, whose name `TicketQueue.model_for_agent` gives you.
+    /// Capture `task`'s messages as an example produced by `agent` using
+    /// `model`, whose name `Queue.model_for_agent` gives you.
     #[staticmethod]
-    fn from_ticket(agent_id: &str, model: Option<&str>, ticket: PyRef<'_, PyTicket>) -> Self {
+    fn from_task(agent_id: &str, model: Option<&str>, task: PyRef<'_, PyTask>) -> Self {
         PyTrajectory {
-            inner: Trajectory::from_ticket(agent_id, model, &ticket.inner),
+            inner: Trajectory::from_task(agent_id, model, &task.inner),
         }
     }
 
@@ -30,7 +30,7 @@ impl PyTrajectory {
         self.inner.save(dir).map_err(runtime_error)
     }
 
-    /// The example's identifier, `<agent>-<ticket>`, which is also its file
+    /// The example's identifier, `<agent>-<task>`, which is also its file
     /// name.
     #[getter]
     fn key(&self) -> &str {

@@ -6,7 +6,7 @@ use std::sync::Arc;
 use agentwerk::schemas::Schema;
 use agentwerk::tools::{
     CommandTool, EditFileTool, FetchUrlTool, FinishTool, GlobTool, GrepTool, KnowledgeTool,
-    ListDirectoryTool, ReadFileTool, TicketsTool, Tool, ToolContext, ToolResult, WriteFileTool,
+    ListDirectoryTool, ReadFileTool, TasksTool, Tool, ToolContext, ToolResult, WriteFileTool,
 };
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -200,8 +200,8 @@ fn knowledge_tool(store: PyRef<'_, PyKnowledge>) -> PyTool {
     handle(KnowledgeTool::new(Arc::clone(&store.inner)))
 }
 
-/// Write the result for the current ticket and mark it finished, handing work
-/// on to a child ticket when needed. Registered on every agent.
+/// Write the result for the current task and mark it finished, handing work
+/// on to a child task when needed. Registered on every agent.
 #[pyfunction]
 #[pyo3(name = "FinishTool")]
 fn finish_tool() -> PyTool {
@@ -209,9 +209,9 @@ fn finish_tool() -> PyTool {
 }
 
 #[pyfunction]
-#[pyo3(name = "TicketsTool")]
-fn tickets_tool() -> PyTool {
-    handle(TicketsTool)
+#[pyo3(name = "TasksTool")]
+fn tasks_tool() -> PyTool {
+    handle(TasksTool)
 }
 
 /// Fetch a URL and read its body, passed to `Agent.tool(...)`. Requests carry
@@ -318,6 +318,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(list_directory_tool, m)?)?;
     m.add_function(wrap_pyfunction!(knowledge_tool, m)?)?;
     m.add_function(wrap_pyfunction!(finish_tool, m)?)?;
-    m.add_function(wrap_pyfunction!(tickets_tool, m)?)?;
+    m.add_function(wrap_pyfunction!(tasks_tool, m)?)?;
     Ok(())
 }
