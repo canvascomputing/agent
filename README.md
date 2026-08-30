@@ -10,7 +10,6 @@
 
 <div align="center">
   <a href="#installation">Installation</a> •
-  <a href="#concepts">Concepts</a> •
   <a href="crates/agentwerk-py/README.md">Python Binding</a> •
   <a href="#quick-start">Quick Start</a> •
   <a href="#api">API</a> •
@@ -42,20 +41,6 @@
 - **Complex interactions:** allow agents to collaborate through queues, event hooks and shared knowledge.
 - **Deep observability:** inspect every request, tool call, and failure.
 - **Facilitate training:** store trajectories based on granular events for fine-tuning models.
-
-## Concepts
-
-| Concept | Role |
-|---------|------|
-| **Agent** | A model, role, tools, and optional label that claims matching tasks. |
-| **Task** | A unit of work with a status, conversation, optional result schema, and result. |
-| **Queue** | Runs agents and tasks concurrently and persists the session. |
-| **Tool** | An action a model can call. |
-| **Schema** | A JSON contract for tool arguments or a task result. |
-| **Event** | A record of each step in a run. |
-| **Knowledge** | Shared Markdown notes for agents. |
-
-Agents use tools to finish tasks. Each task has its own conversation; near the model's context limit, [compaction](#compaction) summarizes older turns. Handovers create child tasks; hooks submit follow-ups.
 
 ## Installation
 
@@ -351,17 +336,29 @@ tasks.find_results("scan ORDER BY finished DESC");
 
 #### Rules
 
-Choose the operator by what you are checking: `label = scan`, `result ~ timeout`, `failed > -1h`, or `agent IS EMPTY`.
+Write the field, followed by what it must match:
 
-Comparisons, including negative ones, skip missing values. `label != scan` therefore excludes unlabelled tasks. Include them with `label IS EMPTY OR label != scan`, or invert the comparison with `NOT label = scan`.
+- Exact value: `label = scan`
+- Contains text: `result ~ timeout`
+- Time range: `failed > -1h`
+- Has no value: `agent IS EMPTY`
 
-Quote values containing spaces: `label = "needs review"`. Lists use parentheses: `label IN (scan, report)`.
+Missing values do not match `!=`. For example, `label != scan` leaves out tasks
+with no label. To include them, use `label IS EMPTY OR label != scan`.
 
-`NOT` applies to the next condition or group; `AND` binds before `OR`. Keywords ignore case, but exact labels, task IDs, and agent IDs do not.
+Quote values containing spaces: `label = "needs review"`. Put lists in
+parentheses: `label IN (scan, report)`.
 
-Times accept `YYYY-MM-DD` UTC dates, epoch milliseconds, or offsets such as `-30m`, `-2h`, `-7d`, and `-1w`. Relative times resolve when the query compiles.
+Use parentheses when mixing `AND` and `OR` to make the order clear. `NOT` applies
+to the condition or parenthesized group after it. Query words such as `AND` ignore
+case; labels and IDs do not.
 
-`ORDER BY field` defaults to `ASC`; add `DESC` to reverse it. Missing values sort last in either direction. Without it, tasks stay in creation order. IDs sort numerically and statuses by lifecycle.
+Times accept UTC dates such as `2026-08-30`, epoch milliseconds, or offsets such
+as `-30m`, `-2h`, `-7d`, and `-1w`.
+
+`ORDER BY field` sorts from lowest to highest. Add `DESC` for the reverse. Tasks
+with no value for that field come last. Without `ORDER BY`, tasks remain in
+creation order.
 
 #### Examples
 
@@ -835,7 +832,7 @@ tasks.on_event(|_, event| {
 
 ### Publish events
 
-Publish application events through the queue, adding agent or task context when relevant:
+Publish custom events through the queue. Add agent or task context when relevant:
 
 ```rust
 use agentwerk::Event;
@@ -857,14 +854,14 @@ The first event's name, data, and context are stored as:
 {"name":"document_indexed","data":{"documents":42},"task_id":"t-1","agent_id":"indexer-1"}
 ```
 
-Lowercase snake case keeps application names consistent with built-in events, but
-other names are accepted. Quote names containing spaces or punctuation in AQL,
-as in `event = "Document Indexed"`. `emit_event` adds the timestamp and a known
-task's label. Built-in names are available as `Event` constants. The name alone
-determines hooks, statistics, and persistence behavior, while publication does
-not perform the built-in event's associated state transition.
+`emit_event` adds the timestamp and a known task's label. Lowercase snake case is
+conventional, but other names are accepted; quote names containing spaces or
+punctuation in AQL. Built-in names are available as `Event` constants, such as
+`Event::TASK_FINISHED`. Publishing one triggers its hooks, statistics, and
+persistence behavior, but not its state transition.
 
-Events other than streamed text chunks are written to the session log. You read events from the task queue, or from the session directory in `.agentwerk/events.jsonl`:
+Events are saved to `.agentwerk/events.jsonl`. Streamed text chunks are not
+saved. Read events through the queue with these methods:
 
 | Method | Description |
 |--------|-------------|
@@ -897,19 +894,19 @@ tasks.find_events("payload ~ timeout AND created > -1h");
 | **Search** | `payload` | The event name and serialized event data, searched together as text. |
 | **Compare** | `created` | When the event was recorded. |
 
-Event queries use the same operators, boolean precedence, quoting, time values, and `ORDER BY` rules as [task queries](#queries). The event fields determine which operators are valid: use exact-value operators for `event`, `agent`, `task`, and `label`; text operators for `payload`; and time operators for `created`.
+Event queries follow the same [rules as task queries](#queries). Match `event`,
+`agent`, `task`, and `label` exactly; use `~` to search `payload`; and use `<` or
+`>` with `created`. Some events have no agent, task, or label. Find them with
+`IS EMPTY`. Without `ORDER BY`, events remain oldest first.
 
-Only `agent`, `task`, and `label` can be missing from an event. Use `IS EMPTY` to select events without that context and `IS NOT EMPTY` to select events that carry it. As with task queries, `agent != research-1` does not match an event whose `agent` is missing.
-
-Without `ORDER BY`, matching events stay in log order, oldest first. When an event query does sort by an optional field such as `agent`, events without that field come last.
-
-A lone unquoted word is shorthand, resolved in this order:
+You can also search with one word. Agentwerk reads it as:
 
 1. A task ID such as `t-3` means `task = t-3`.
 2. A built-in event name such as `tool_call_failed` means `event = tool_call_failed`.
 3. Any other value such as `scan` means `label = scan`.
 
-Caller-defined event names are not recognized by the shorthand. Query them through the field explicitly, as in `event = document_indexed`. Likewise, use `label = tool_call_failed` when a label happens to have the same name as a built-in event.
+For your own event names, write `event = document_indexed`. If a label has the
+same name as a built-in event, write `label = knowledge_read`.
 
 </details>
 
