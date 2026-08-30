@@ -36,7 +36,6 @@ impl From<EditFileTool> for Tool {
             .schema(include_str!("edit_file.schema.json"))
             .paths(["path"])
             .handler(run)
-            .build()
     }
 }
 

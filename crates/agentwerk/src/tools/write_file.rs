@@ -29,7 +29,6 @@ impl From<WriteFileTool> for Tool {
             .schema(include_str!("write_file.schema.json"))
             .paths(["path"])
             .handler(run)
-            .build()
     }
 }
 

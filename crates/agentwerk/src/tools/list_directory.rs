@@ -39,7 +39,6 @@ impl From<ListDirectoryTool> for Tool {
             .schema(include_str!("list_directory.schema.json"))
             .concurrent(true)
             .handler(run)
-            .build()
     }
 }
 

@@ -44,7 +44,6 @@ impl From<ReadFileTool> for Tool {
             .concurrent(true)
             .paths(["path"])
             .handler(run)
-            .build()
     }
 }
 

@@ -38,7 +38,6 @@ impl From<GlobTool> for Tool {
             .schema(include_str!("glob.schema.json"))
             .concurrent(true)
             .handler(run)
-            .build()
     }
 }
 

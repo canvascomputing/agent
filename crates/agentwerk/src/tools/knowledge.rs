@@ -85,7 +85,6 @@ impl From<KnowledgeTool> for Tool {
                 let store = Arc::clone(&store);
                 async move { run(&store, args, &ctx) }
             })
-            .build()
     }
 }
 

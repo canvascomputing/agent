@@ -21,7 +21,6 @@ impl From<TasksTool> for Tool {
             .description(include_str!("tasks.tool.md"))
             .schema(include_str!("tasks.schema.json"))
             .handler(|args: super::TasksArgs, ctx: ToolContext| async move { dispatch(args, &ctx) })
-            .build()
     }
 }
 
