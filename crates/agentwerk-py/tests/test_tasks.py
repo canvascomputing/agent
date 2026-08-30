@@ -102,6 +102,7 @@ def test_removed_queue_names_are_not_compatibility_aliases(queue):
         "cancel",
         "cancel_all",
         "finish",
+        "finish_result",
         "finish_results",
         "finish_all",
         "finish_last",
@@ -861,7 +862,7 @@ async def test_finish_all_hands_back_the_results_of_every_pool(queue):
     assert await queue.finish_all_tasks() == [{"verdict": "clean"}, {"pages": 2}]
 
 
-async def test_finish_result_hands_back_the_first_result_in_query_order(queue):
+async def test_finish_task_hands_back_the_first_result_in_query_order(queue):
     scan = queue.add_task(aw.Task("scan the corpus", label="scan"))
     report = queue.add_task(aw.Task("write it up", label="report"))
     # Resolved back to front, so the answer tells creation order from the order
@@ -869,11 +870,11 @@ async def test_finish_result_hands_back_the_first_result_in_query_order(queue):
     queue.set_task_finished(report, {"pages": 2})
     queue.set_task_finished(scan, {"verdict": "clean"})
 
-    assert await queue.finish_result("ORDER BY id DESC") == {"pages": 2}
+    assert await queue.finish_task("ORDER BY id DESC") == {"pages": 2}
 
 
-async def test_finish_result_is_none_when_nothing_finished(queue):
-    assert await queue.finish_result("status = Finished") is None
+async def test_finish_task_is_none_when_nothing_finished(queue):
+    assert await queue.finish_task("status = Finished") is None
 
 
 async def test_a_cancelled_run_reports_its_reason(queue):

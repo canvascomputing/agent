@@ -386,15 +386,11 @@ impl PyQueue {
     /// Wait for the matching tasks to be done, then give back the first result
     /// in query order. `None` means no matching task finished with a result.
     /// Awaitable.
-    fn finish_result<'py>(
-        &self,
-        py: Python<'py>,
-        matches: Py<PyAny>,
-    ) -> PyResult<Bound<'py, PyAny>> {
+    fn finish_task<'py>(&self, py: Python<'py>, matches: Py<PyAny>) -> PyResult<Bound<'py, PyAny>> {
         let inner = Arc::clone(&self.inner);
         let query = to_task_matcher(py, &matches)?;
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let result = inner.finish_result(query).await;
+            let result = inner.finish_task(query).await;
             Python::attach(|py| {
                 result
                     .map(|value| Ok(value_to_py(py, &value)?.unbind()))

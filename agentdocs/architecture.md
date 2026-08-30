@@ -148,7 +148,7 @@ Schemas and results:
 
 ## The Lifecycle Is Three Verbs Over One Filter
 
-**`start` starts, `finish_tasks(matches)` waits, and `cancel_tasks(matches)` stops. `finish_all_tasks()` and `cancel_all_tasks()` name the whole queue; `finish_result(matches)` keeps the query but returns one value.**
+**`start` starts, `finish_tasks(matches)` waits, and `cancel_tasks(matches)` stops. `finish_all_tasks()` and `cancel_all_tasks()` name the whole queue; `finish_task(matches)` keeps the query but returns one value.**
 
 - `Queue::pending(matches)` is the scheduling definition of "not done yet", and both the main loop and `finish_tasks` ask it. AQL's `pending = true` means `Todo` or `InProgress` and not cancelled; the queue additionally excludes a task paused for a caller reply from a wait.
 - `Queue::cancel_filters` marks current matches through `Task::cancelled` and marks later insertions while the run remains active. Claim and resume both reject that private flag. `start()` clears filters and flags, so unfinished tasks resume without persisting cancellation.

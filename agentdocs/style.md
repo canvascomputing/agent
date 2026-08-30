@@ -156,13 +156,13 @@ event.get_data()["kind"]                 // "execution_failed"
 
 ## Lifecycle
 
-**Queue action names state their target: `finish_result(matches)`, `finish_tasks(matches)`, `finish_all_tasks()`, `cancel_tasks(matches)`, and `cancel_all_tasks()`. A filter is a `Matcher<Task>`, so the same call names one task or one pool.**
+**Queue action names state their target: `finish_task(matches)`, `finish_tasks(matches)`, `finish_all_tasks()`, `cancel_tasks(matches)`, and `cancel_all_tasks()`. A filter is a `Matcher<Task>`, so the same call names one task or one pool.**
 
 ```rust
 tasks.start();
 tasks.finish_tasks("label = scan").await;                   // one pool
 tasks.finish_all_tasks().await;                             // the whole run
-tasks.finish_result("ORDER BY created DESC").await;         // one result
+tasks.finish_task("ORDER BY created DESC").await;           // one result
 tasks.cancel_tasks("label = scan");                        // one pool
 tasks.cancel_all_tasks();                                   // the whole run
 ```
@@ -170,7 +170,7 @@ tasks.cancel_all_tasks();                                   // the whole run
 - A verb takes a filter when it can mean part of the queue, and none when it cannot: `run` starts everything or nothing.
 - IMPORTANT: the filter says WHICH tasks, never WHAT to wait for. `finish_tasks("status = Finished")` returns at once because the filter selects tasks and "no work left" is the fixed wait condition.
 - The whole-run case has exactly one spelling: `finish_all_tasks()` and `cancel_all_tasks()`.
-- `finish_result(matches)` follows the same wait and query order as `finish_tasks(matches)`, then returns the first available result.
+- `finish_task(matches)` follows the same wait and query order as `finish_tasks(matches)`, then returns the first available result.
 - Do not grow back label-, status-, or predicate-specific queue methods; fixed selections are AQL.
 
 ## Hooks

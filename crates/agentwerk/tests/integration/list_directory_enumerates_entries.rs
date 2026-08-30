@@ -71,7 +71,7 @@ async fn separates_files_and_directories() -> std::result::Result<(), Box<dyn st
     );
 
     let json = tasks
-        .finish_result("ORDER BY created DESC")
+        .finish_task("ORDER BY created DESC")
         .await
         .unwrap_or_default();
     common::print_result(&tasks);
