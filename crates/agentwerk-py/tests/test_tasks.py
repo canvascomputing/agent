@@ -102,6 +102,7 @@ def test_removed_queue_names_are_not_compatibility_aliases(queue):
         "cancel",
         "cancel_all",
         "finish",
+        "finish_results",
         "finish_all",
         "finish_last",
         "finish_reason",
@@ -848,7 +849,7 @@ async def test_on_result_async_runs_the_handler_on_the_callers_event_loop(queue)
 async def test_finish_hands_back_the_results_its_filter_named(queue):
     id = queue.add_task("work")
     queue.set_task_finished(id, {"verdict": "clean"})
-    assert await queue.finish_results(lambda t: t.get_id() == id) == [{"verdict": "clean"}]
+    assert await queue.finish_tasks(lambda t: t.get_id() == id) == [{"verdict": "clean"}]
 
 
 async def test_finish_all_hands_back_the_results_of_every_pool(queue):

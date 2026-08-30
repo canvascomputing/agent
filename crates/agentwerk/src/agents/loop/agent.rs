@@ -824,7 +824,7 @@ mod tests {
         let waited = id.clone();
         tokio::time::timeout(
             Duration::from_secs(5),
-            tasks.finish_results(move |t: &Task| t.id == waited),
+            tasks.finish_tasks(move |t: &Task| t.id == waited),
         )
         .await
         .expect("finish did not return within 5s");

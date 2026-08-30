@@ -289,7 +289,7 @@ tasks.add_task(Task("Write up the ranking.", label="report"))
 | | `on_task_async(handler)` | Read task state changes in an async handler. |
 | **Run** | `start()` | Begin processing tasks. |
 | | `finish_result(query)` | Wait for matching tasks and get the first result in query order. |
-| | `finish_results(query)` | Wait for matching tasks and get their results. |
+| | `finish_tasks(query)` | Wait for matching tasks and get their results. |
 | | `finish_all_tasks()` | Wait for every task and get every result. |
 | **Cancel** | `cancel_tasks(query)` | Stop work on matching tasks. |
 | | `cancel_all_tasks()` | Stop work on every task. |
@@ -409,7 +409,7 @@ if answer is not None:
 |-|--------|-------------|
 | **Run** | `start()` | Begin processing tasks. |
 | | `await finish_result(query)` | Wait for matching tasks and get the first result in query order. |
-| | `await finish_results(query)` | Wait for matching tasks and get their results. |
+| | `await finish_tasks(query)` | Wait for matching tasks and get their results. |
 | | `await finish_all_tasks()` | Wait for every task and get every result. |
 | **Cancel** | `cancel_tasks(query)` | Stop work on matching tasks. |
 | | `cancel_all_tasks()` | Stop work on every task. |

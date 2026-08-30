@@ -651,8 +651,8 @@ The rules the tables never repeat.
 | both | `.cancel_all_tasks(): this` | pub |
 | both | `.add_agent(agent: Agent): this` | pub |
 | both | `.start(): this` | pub |
-| both | `.finish_results(matches: Matcher<Task>): Promise<json[]>` | pub |
-| Python | `.finish_results(matches)`: accepts a `Query` or a callable | |
+| both | `.finish_tasks(matches: Matcher<Task>): Promise<json[]>` | pub |
+| Python | `.finish_tasks(matches)`: accepts a `Query` or a callable | |
 | both | `.finish_all_tasks(): Promise<json[]>` | pub |
 | both | `.finish_result(matches: Matcher<Task>): Promise<json?>` | pub |
 | Rust | `.get_finish_reason(): FinishReason?` | pub |
@@ -2422,7 +2422,7 @@ Binds `agents/tasks/queue.rs` and `store.rs`.
 | Rust | `.on_task_async(handler: any): this` | python |
 | Rust | `.edit_replies(id: string, editor: any): this throws PyErr` | python |
 | Rust | `.start(): this` | python |
-| Rust | `.finish_results(matches: any): Promise<any[]> throws PyErr` | python |
+| Rust | `.finish_tasks(matches: any): Promise<any[]> throws PyErr` | python |
 | Rust | `.finish_all_tasks(): Promise<any[]> throws PyErr` | python |
 | Rust | `.finish_result(matches: any): Promise<any?> throws PyErr` | python |
 | Rust | `.get_finish_reason(): string?` | python |

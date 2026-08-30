@@ -196,7 +196,7 @@ impl Queue {
 
     fn set_final_status(&self, id: &str, status: Status, agent: &str) -> Result<(), TaskError> {
         // Increment BEFORE the status flip and decrement only after the
-        // terminal event has been emitted: the drain check in `finish_results()`
+        // terminal event has been emitted: the drain check in `finish_tasks()`
         // must never observe (empty queue, zero counter) mid-transition,
         // or it drains before an event handler can enqueue follow-up work.
         struct InFlight<'a>(&'a std::sync::atomic::AtomicUsize);

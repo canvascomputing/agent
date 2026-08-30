@@ -146,7 +146,7 @@ impl PyQueue {
     /// Every kind reaches it, streamed reply chunks included, and each event
     /// waits in memory until a `finish` drains it.
     ///
-    /// Handlers run only while `finish_results` or `finish_all_tasks` is awaited, and MUST
+    /// Handlers run only while `finish_tasks` or `finish_all_tasks` is awaited, and MUST
     /// NOT call either themselves: that waits forever on the handover the
     /// handler is running inside.
     fn on_event_async<'py>(slf: PyRef<'py, Self>, handler: Py<PyAny>) -> PyRef<'py, Self> {
@@ -179,7 +179,7 @@ impl PyQueue {
     /// that `finish` waits for before it returns, on the terms
     /// `on_event_async` sets.
     ///
-    /// Handlers run only while `finish_results` or `finish_all_tasks` is awaited, and MUST
+    /// Handlers run only while `finish_tasks` or `finish_all_tasks` is awaited, and MUST
     /// NOT call either themselves: that waits forever on the handover the
     /// handler is running inside.
     fn on_result_async<'py>(slf: PyRef<'py, Self>, handler: Py<PyAny>) -> PyRef<'py, Self> {
@@ -213,7 +213,7 @@ impl PyQueue {
     /// `async def` that `finish` waits for before it returns, on the terms
     /// `on_event_async` sets.
     ///
-    /// Handlers run only while `finish_results` or `finish_all_tasks` is awaited, and MUST
+    /// Handlers run only while `finish_tasks` or `finish_all_tasks` is awaited, and MUST
     /// NOT call either themselves: that waits forever on the handover the
     /// handler is running inside.
     fn on_failure_async<'py>(slf: PyRef<'py, Self>, handler: Py<PyAny>) -> PyRef<'py, Self> {
@@ -288,7 +288,7 @@ impl PyQueue {
     /// `finish` waits for before it returns, on the terms `on_event_async`
     /// sets.
     ///
-    /// Handlers run only while `finish_results` or `finish_all_tasks` is awaited, and MUST
+    /// Handlers run only while `finish_tasks` or `finish_all_tasks` is awaited, and MUST
     /// NOT call either themselves: that waits forever on the handover the
     /// handler is running inside.
     fn on_task_async<'py>(slf: PyRef<'py, Self>, handler: Py<PyAny>) -> PyRef<'py, Self> {
@@ -342,7 +342,7 @@ impl PyQueue {
     fn start(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
         // `Queue::start` spawns onto the ambient Tokio runtime; a pymethod
         // call has no runtime entered on its own thread, so enter the shared
-        // one pyo3-async-runtimes already uses for `finish_results()`.
+        // one pyo3-async-runtimes already uses for `finish_tasks()`.
         let _guard = pyo3_async_runtimes::tokio::get_runtime().enter();
         slf.inner.start();
         slf
@@ -350,7 +350,7 @@ impl PyQueue {
 
     /// Wait for the matching tasks to be done, then give back their results
     /// in query order. Accepts a Query or callable. Awaitable.
-    fn finish_results<'py>(
+    fn finish_tasks<'py>(
         &self,
         py: Python<'py>,
         matches: Py<PyAny>,
@@ -358,7 +358,7 @@ impl PyQueue {
         let inner = Arc::clone(&self.inner);
         let query = to_task_matcher(py, &matches)?;
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let results = inner.finish_results(query).await;
+            let results = inner.finish_tasks(query).await;
             Python::attach(|py| {
                 results
                     .iter()

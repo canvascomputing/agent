@@ -276,7 +276,7 @@ tasks.add_task(Task::labeled("report", "Write up the ranking."));
 | | `on_task_async(handler)` | Read task state changes in an async handler. |
 | **Run** | `start()` | Begin processing tasks. |
 | | `finish_result(query)` | Wait for matching tasks and get the first result in query order. |
-| | `finish_results(query)` | Wait for matching tasks and get their results. |
+| | `finish_tasks(query)` | Wait for matching tasks and get their results. |
 | | `finish_all_tasks()` | Wait for every task and get every result. |
 | **Cancel** | `cancel_tasks(query)` | Stop work on matching tasks. |
 | | `cancel_all_tasks()` | Stop work on every task. |
@@ -396,7 +396,7 @@ if let Some(answer) = tasks.finish_result("ORDER BY created DESC").await {
 |-|--------|-------------|
 | **Run** | `start()` | Begin processing tasks. |
 | | `finish_result(query).await` | Wait for matching tasks and get the first result in query order. |
-| | `finish_results(query).await` | Wait for matching tasks and get their results. |
+| | `finish_tasks(query).await` | Wait for matching tasks and get their results. |
 | | `finish_all_tasks().await` | Wait for every task and get every result. |
 | **Cancel** | `cancel_tasks(query)` | Stop work on matching tasks. |
 | | `cancel_all_tasks()` | Stop work on every task. |
