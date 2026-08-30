@@ -78,7 +78,7 @@ crates/
 - `tool.rs` defines `Tool`, `ToolRegistry`, `ToolContext`, and `ToolCall`.
 - `read_file.rs`, `write_file.rs`, `edit_file.rs`, `glob.rs`, `grep.rs`, and `list_directory.rs` are filesystem tools; `code.rs` backs `grep`'s `syntax: "code"` shape matching, delegating to the `codegrep` engine. `fetch_url.rs` is the web fetch tool.
 - `command/tool.rs` is the command tool, restricted through `new()` and widened through `allow()`; it runs one program per call and never a shell. `command/parse.rs` splits a line into one command and classifies its arguments, which is how the tool refuses anything that is not one command.
-- `tasks/` holds `TaskTool` and `FinishTool`; `knowledge.rs` is the model-facing wrapper around `Knowledge`. `util.rs` is a shared helper.
+- `event.rs` owns `EventTool` and the completion engine; `tasks/finish.rs` wraps its `task_finished` branch, while `tasks/` also holds `TaskTool`. `knowledge.rs` is the model-facing wrapper around `Knowledge`. `util.rs` is a shared helper.
 - Each built-in tool pairs with a `<tool>.tool.md` definition (the prose shown to the model) and a `<tool>.schema.json` (the input schema). Both reach the tool through `include_str!` in its `From<XTool> for Tool` conversion, which is also where the name and concurrency are stated.
 
 ## The `prompts/` and `schemas/` Modules

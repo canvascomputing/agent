@@ -696,6 +696,17 @@ mod tests {
     fn an_agent_that_joined_a_queue_has_finish_registered() {
         let names = tool_names_in_a_queue(Agent::new());
         assert!(names.iter().any(|n| n == "finish"), "{names:?}");
+        assert!(
+            !names.iter().any(|n| n == "event"),
+            "event remains opt-in: {names:?}",
+        );
+    }
+
+    #[test]
+    fn an_agent_keeps_an_event_tool_it_registered_explicitly() {
+        let names = tool_names_in_a_queue(Agent::new().tool(crate::tools::EventTool));
+        assert!(names.iter().any(|n| n == "event"), "{names:?}");
+        assert!(names.iter().any(|n| n == "finish"), "{names:?}");
     }
 
     #[test]
@@ -711,6 +722,13 @@ mod tests {
     fn an_interactive_agent_keeps_a_finish_tool_it_registered_itself() {
         let names = tool_names_in_a_queue(Agent::new().interactive().tool(FinishTool));
         assert!(names.iter().any(|n| n == "finish"), "{names:?}");
+    }
+
+    #[test]
+    fn an_interactive_agent_keeps_an_event_tool_it_registered_itself() {
+        let names = tool_names_in_a_queue(Agent::new().interactive().tool(crate::tools::EventTool));
+        assert!(names.iter().any(|n| n == "event"), "{names:?}");
+        assert!(!names.iter().any(|n| n == "finish"), "{names:?}");
     }
 
     #[test]

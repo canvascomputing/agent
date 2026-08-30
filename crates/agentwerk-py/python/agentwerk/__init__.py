@@ -35,6 +35,7 @@ from ._agentwerk import (
     FetchTool,
     KnowledgeTool,
     TaskTool,
+    EventTool,
     FinishTool,
     CommandTool,
     Directive,
@@ -104,6 +105,7 @@ __all__ = [
     "FetchTool",
     "KnowledgeTool",
     "TaskTool",
+    "EventTool",
     "FinishTool",
     "CommandTool",
 ]

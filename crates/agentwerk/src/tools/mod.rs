@@ -6,6 +6,7 @@ pub(crate) mod util;
 mod code;
 mod command;
 mod edit_file;
+mod event;
 mod fetch_url;
 mod glob;
 mod grep;
@@ -20,6 +21,7 @@ pub(crate) use tool::{ToolCall, ToolRegistry};
 
 pub use command::CommandTool;
 pub use edit_file::EditFileTool;
+pub use event::EventTool;
 pub use fetch_url::FetchTool;
 pub use glob::GlobTool;
 pub use grep::GrepTool;

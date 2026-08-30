@@ -985,6 +985,7 @@ mod tests {
             crate::tools::FetchTool::new().into(),
             crate::tools::KnowledgeTool::new(store).into(),
             crate::tools::CommandTool::new("git").allow("git *").into(),
+            crate::tools::EventTool.into(),
             crate::tools::FinishTool.into(),
             crate::tools::TaskTool.into(),
         ];
@@ -1014,6 +1015,7 @@ mod tests {
                 ("fetch_url", true),
                 ("knowledge", false),
                 ("git", false),
+                ("event", false),
                 ("finish", false),
                 ("tasks", false),
             ]
