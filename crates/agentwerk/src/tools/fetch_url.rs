@@ -100,7 +100,6 @@ impl From<FetchUrlTool> for Tool {
             .handler(move |args: FetchUrlArgs, ctx: ToolContext| async move {
                 run(args, ctx, impersonate).await
             })
-            .build()
     }
 }
 

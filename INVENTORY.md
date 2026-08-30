@@ -21,7 +21,7 @@ Signatures use one language-independent notation, so a Rust row and a Python row
 - An `async fn` returns `Promise<T>`.
 - `Arc<T>`, `Box<T>`, `Rc<T>`, `Mutex<T>`, `RwLock<T>`, and `&T` unwrap to `T`. Every other wrapper keeps its name: `Weak<Queue>`, `Sender<Event>`, `JoinHandle<void>`.
 - A callback becomes an arrow: `Arc<dyn Fn(&Event) + Send + Sync>` is `(event: Event) => void`.
-- A generic bound erases to what the caller passes: `T: Serialize` is `json`. A type's own parameters stay: `ToolBuilder<D, H>`, `ProviderResult<T>`.
+- A generic bound erases to what the caller passes: `T: Serialize` is `json`. A type's own parameters stay, as in `ProviderResult<T>`.
 - Domain type names stay as the code writes them: `Task`, `Event`, `Status`, `PolicyViolation`.
 - A constant shows `= value` when the value is one scalar or short string, and nothing when it is longer or computed.
 - Names are never re-cased: `get_tasks`, never `getTasks`. Every name here is greppable in `src/`.
@@ -1969,12 +1969,11 @@ Not bound: it is how `CommandTool` reads one command line.
 | Rust | `.cancelled(): Promise<void>` | pub |
 | Rust | `impl Debug for ToolContext` | pub |
 | both | terminal `Event`: `tool_call_finished` carries `data.output` plus optional `data.output_path` and `data.repairs`; `tool_call_failed` carries `data.message` and `data.kind` | pub |
-| Rust | `ToolBuilder<D, H> { name: string, description: D, schema: Schema, concurrent: boolean, paths: string[], handler: H }` | pub |
-| Python | folded into the `@tool` decorator: the type changes as the description and handler are attached, which Python cannot hold across calls | |
-| Rust | `Tool { name: string, description: string, schema: Schema, concurrent: boolean, paths: string[], handler: ToolHandler }` | pub with private fields |
+| Python | custom tools are folded into the `@tool` decorator; Python does not expose incremental `Tool` configuration | |
+| Rust | `Tool { name: string, description: string?, schema: Schema, concurrent: boolean, paths: string[], handler: ToolHandler? }` | pub with private fields |
 | Python | `Tool`: an opaque handle the built-in tool functions return. An ad-hoc tool is a decorated function, not a `Tool` | |
 | Rust | `impl Debug for Tool` | pub |
-| Rust | `.new(name: string): ToolBuilder` | pub |
+| Rust | `.new(name: string): Tool` | pub |
 | Python | the `@tool` decorator: a decorated function carries the name, description, and schema | |
 | Rust | `.call(input: json, ctx: ToolContext): Promise<Event>` | pub |
 | Python | not bound: the loop calls the decorated function | |
@@ -1983,7 +1982,7 @@ Not bound: it is how `CommandTool` reads one command line.
 | Rust | `.get_input_schema(): Schema` | pub |
 | Rust | `.is_concurrent(): boolean` | pub |
 | Rust | `.opened_paths(input: json): string[]` | pub |
-| Rust | `ToolBuilder.schema(schema: json): this` | pub |
+| Rust | `.schema(schema: json): this` | pub |
 | Python | `@tool(schema=..)`: raises `ValueError` when `.tool(fn)` registers it, one call later than the Rust panic | |
 | Rust | `.concurrent(concurrent: boolean): this` | pub |
 | Python | `@tool(concurrent=..)` | |
@@ -1993,8 +1992,7 @@ Not bound: it is how `CommandTool` reads one command line.
 | Python | `@tool(description=..)`, defaulting to the decorated function's docstring: a `str` is the description, an `os.PathLike` names the file holding it | |
 | Rust | `.handler(handler: (input: json, ctx: ToolContext) => Promise<Event>): this` | pub |
 | Python | the decorated function itself | |
-| Rust | `.build(): Tool` | pub |
-| Python | not bound: the decorator builds the tool | |
+| Rust | registration panics when description or handler is missing | internal validation of public configuration |
 
 ### Internal
 

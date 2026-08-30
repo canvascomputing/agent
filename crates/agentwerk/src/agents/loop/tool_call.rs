@@ -528,8 +528,7 @@ mod tests {
         ]);
         let boom = Tool::new("boom")
             .description("Always fails")
-            .handler(|_: Value, _| async move { Event::error("boom") })
-            .build();
+            .handler(|_: Value, _| async move { Event::error("boom") });
 
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let tasks = Queue::new();
@@ -582,8 +581,7 @@ mod tests {
         ]);
         let boom = Tool::new("boom")
             .description("Always fails")
-            .handler(|_: Value, _| async move { Event::error("boom") })
-            .build();
+            .handler(|_: Value, _| async move { Event::error("boom") });
 
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let tasks = Queue::new();
@@ -647,12 +645,10 @@ mod tests {
         ]);
         let boom = Tool::new("boom")
             .description("Always fails")
-            .handler(|_: Value, _| async move { Event::error("boom") })
-            .build();
+            .handler(|_: Value, _| async move { Event::error("boom") });
         let ping = Tool::new("ping")
             .description("Always succeeds")
-            .handler(|_: Value, _| async move { Event::success("pong") })
-            .build();
+            .handler(|_: Value, _| async move { Event::success("pong") });
 
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let tasks = Queue::new();
@@ -711,8 +707,7 @@ mod tests {
                     u.notified().await;
                     Event::success("ok")
                 }
-            })
-            .build();
+            });
 
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let tasks = Queue::new();
@@ -789,8 +784,7 @@ mod tests {
 
         let dump = Tool::new("dump")
             .description("Returns ~800 KB of text")
-            .handler(|_: Value, _ctx| async move { Event::success("x".repeat(800_000)) })
-            .build();
+            .handler(|_: Value, _ctx| async move { Event::success("x".repeat(800_000)) });
 
         tasks.on_event(move |_, e| handler(e));
         tasks.add_agent(
@@ -912,8 +906,7 @@ mod tests {
             .handler(|input: Value, _ctx| async move {
                 let bytes = input["bytes"].as_u64().unwrap_or(0) as usize;
                 Event::success("x".repeat(bytes))
-            })
-            .build();
+            });
 
         tasks.add_agent(
             Agent::new()

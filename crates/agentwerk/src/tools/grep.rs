@@ -50,7 +50,6 @@ impl From<GrepTool> for Tool {
             .schema(include_str!("grep.schema.json"))
             .concurrent(true)
             .handler(run)
-            .build()
     }
 }
 

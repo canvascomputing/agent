@@ -424,7 +424,6 @@ impl From<CommandTool> for Tool {
                 let config = Arc::clone(&config);
                 async move { config.run(args, ctx).await }
             })
-            .build()
     }
 }
 

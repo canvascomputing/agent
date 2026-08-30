@@ -473,8 +473,7 @@ mod tests {
             CommandTool::new("git").allow("git *").into(),
             Tool::new("greet")
                 .description("Say hello.")
-                .handler(|_: serde_json::Value, _| async { Event::success("hi") })
-                .build(),
+                .handler(|_: serde_json::Value, _| async { Event::success("hi") }),
         ]);
         let names: Vec<String> = agent
             .tool_registry()

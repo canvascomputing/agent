@@ -137,7 +137,7 @@ event.get_data()["kind"]                 // "execution_failed"
 `.name()`, `.model()`, `.tool()`, `.label()`, `.concurrent()`
 
 - The `with_` prefix is reserved for a bare name that would be ambiguous even with an inherent and trait split; no current builder needs it.
-- A value the caller owns before execution consumes itself: `Agent` and `ToolBuilder` take `mut self` and return `Self`. `Agent` configures itself rather than through a second type, so a provider or model left unset is caught when it joins a queue.
+- A value the caller owns before execution consumes itself: `Agent` and `Tool` take `mut self` and return `Self`. Both configure themselves rather than through a second type; missing agent configuration is caught when it joins a queue, and missing tool configuration when it is registered.
 - A type handed out as `Arc` configures through `&self` and returns `&Self`: `Queue` and `Knowledge`. A third shape, `self: Arc<Self> -> Arc<Self>`, is not used.
 
 ## Constructors
@@ -215,7 +215,7 @@ edit_replies(id, editor)             // act once, now
 
 **Every public Rust item has a Python counterpart of the same name. The transforms below are permitted; nothing else.**
 
-- Type-state collapses: `ToolBuilder<D, H>` folds into the class it builds and takes its name. The collapsed class validates at `build()`.
+- Rust configuration types collapse into the class they configure. Python `Tool` is the opaque handle for a complete built-in or decorated tool.
 - `Duration` becomes a float named `seconds`, with the unit repeated in the docstring: `Policy::request_retry_delay` binds as a float in seconds. Every other parameter keeps its Rust name.
 - A fieldless enum becomes its snake_case `Display` string. That `Display` impl is the single source, so the binding never formats a variant with `{:?}`.
 - An enum whose variants carry fields becomes a class with a `kind` string, a `data` dict, and one static constructor per variant. `ReplyContent` does this; `Event` is instead a generic record whose Python API mirrors Rust.

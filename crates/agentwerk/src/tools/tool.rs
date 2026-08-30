@@ -256,7 +256,9 @@ impl ToolRegistry {
     /// A request carrying one name twice is rejected, so the last registration
     /// is the one that counts.
     pub(crate) fn register(&mut self, tool: impl Into<Tool>) {
-        let tool = Arc::new(tool.into());
+        let tool = tool.into();
+        tool.require_description_and_handler();
+        let tool = Arc::new(tool);
         self.tools.retain(|t| t.get_name() != tool.get_name());
         self.tools.push(tool);
     }
@@ -457,18 +459,6 @@ type ToolHandler = Arc<
     dyn Fn(Value, &ToolContext) -> Pin<Box<dyn Future<Output = Event> + Send + '_>> + Send + Sync,
 >;
 
-/// Collects what a [`Tool`] needs. `.build()` exists only once a description
-/// and a handler are installed, so a tool an agent cannot read or run is
-/// unrepresentable.
-pub struct ToolBuilder<D, H> {
-    name: String,
-    description: D,
-    schema: Schema,
-    concurrent: bool,
-    paths: Vec<String>,
-    handler: H,
-}
-
 /// A tool an agent may call: a name, a description, a JSON Schema for the
 /// arguments, and the handler that runs.
 ///
@@ -494,28 +484,28 @@ pub struct ToolBuilder<D, H> {
 ///     .concurrent(true)
 ///     .handler(|input: Value, _ctx| async move {
 ///         let name = input["name"].as_str().unwrap_or("world");
-///         Event::success(format!("Hello, {name}!"))
-///     })
-///     .build();
+///         Event::tool_call_finished(format!("Hello, {name}!"))
+///     });
 ///
 /// Agent::new().tool(greet);
 /// ```
 ///
-/// A tool the model could not read, or that runs nothing, has no `build()`:
+/// An incomplete tool is rejected when it is registered:
 ///
-/// ```compile_fail
+/// ```should_panic
+/// use agentwerk::Agent;
 /// use agentwerk::tools::Tool;
 ///
-/// let unusable = Tool::new("greet").build();
+/// let _agent = Agent::new().tool(Tool::new("greet"));
 /// ```
 #[derive(Clone)]
 pub struct Tool {
     name: String,
-    description: String,
+    description: Option<String>,
     schema: Schema,
     concurrent: bool,
     paths: Vec<String>,
-    handler: ToolHandler,
+    handler: Option<ToolHandler>,
 }
 
 impl std::fmt::Debug for Tool {
@@ -528,60 +518,30 @@ impl std::fmt::Debug for Tool {
 }
 
 impl Tool {
-    /// Start building the tool the model calls by `name`. Say what it does with
-    /// `.description(...)`, what it accepts with `.schema(...)`, what it runs
-    /// with `.handler(...)`, and finish with `.build()`.
-    pub fn new(name: impl Into<String>) -> ToolBuilder<(), ()> {
-        ToolBuilder {
+    /// Create the tool the model calls by `name`. Say what it does with
+    /// `.description(...)`, what it accepts with `.schema(...)`, and what it
+    /// runs with `.handler(...)` before registering it on an agent.
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
             name: name.into(),
-            description: (),
+            description: None,
             schema: Schema::new(serde_json::json!({"type": "object", "properties": {}}))
                 .expect("a literal object schema compiles"),
             concurrent: false,
             paths: Vec::new(),
-            handler: (),
+            handler: None,
         }
     }
 
-    /// Run the tool on a call the registry has already checked against
-    /// [`get_input_schema`](Self::get_input_schema).
-    pub async fn call(&self, input: Value, ctx: &ToolContext) -> Event {
-        (self.handler)(input, ctx).await
+    /// Say what the tool does, in the words the model reads.
+    ///
+    /// A string is the description itself; a `&Path` or `PathBuf` names the
+    /// file holding it, which panics when that file cannot be read.
+    pub fn description(mut self, description: impl Into<Text>) -> Self {
+        self.description = Some(description.into().into_string());
+        self
     }
 
-    /// The name the model calls the tool by.
-    pub fn get_name(&self) -> &str {
-        &self.name
-    }
-
-    /// What the tool does, in the words the model reads.
-    pub fn get_description(&self) -> &str {
-        &self.description
-    }
-
-    /// The arguments this tool accepts, compiled.
-    pub fn get_input_schema(&self) -> &Schema {
-        &self.schema
-    }
-
-    /// Whether the agent may run this tool alongside the turn's other
-    /// concurrent calls.
-    pub fn is_concurrent(&self) -> bool {
-        self.concurrent
-    }
-
-    /// The file paths this call opens, read from the fields the builder's
-    /// `paths` named, so they reach `Stats`.
-    pub fn opened_paths(&self, input: &Value) -> Vec<String> {
-        self.paths
-            .iter()
-            .filter_map(|field| input.get(field).and_then(|v| v.as_str()))
-            .map(str::to_string)
-            .collect()
-    }
-}
-
-impl<D, H> ToolBuilder<D, H> {
     /// Define what the tool accepts, as a JSON Schema document or the text of
     /// one. Panics on a document `Schema` refuses, naming this tool: an
     /// uncheckable tool is a mistake here, not one the agent should discover at
@@ -618,56 +578,78 @@ impl<D, H> ToolBuilder<D, H> {
         self.paths = fields.into_iter().map(Into::into).collect();
         self
     }
-}
 
-impl<H> ToolBuilder<(), H> {
-    /// Say what the tool does, in the words the model reads.
-    ///
-    /// A string is the description itself; a `&Path` or `PathBuf` names the
-    /// file holding it, which panics when that file cannot be read.
-    pub fn description(self, description: impl Into<Text>) -> ToolBuilder<String, H> {
-        ToolBuilder {
-            name: self.name,
-            description: description.into().into_string(),
-            schema: self.schema,
-            concurrent: self.concurrent,
-            paths: self.paths,
-            handler: self.handler,
-        }
-    }
-}
-
-impl<D> ToolBuilder<D, ()> {
     /// Define what runs when the model calls this tool. A bare `async` block
     /// works, and the handler names the type its arguments are read into.
-    pub fn handler<A, F, Fut>(self, handler: F) -> ToolBuilder<D, ToolHandler>
+    pub fn handler<A, F, Fut>(mut self, handler: F) -> Self
     where
         A: serde::de::DeserializeOwned + Send + 'static,
         F: Fn(A, ToolContext) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Event> + Send + 'static,
     {
-        ToolBuilder {
-            handler: read_arguments_then(self.name.clone(), handler),
-            name: self.name,
-            description: self.description,
-            schema: self.schema,
-            concurrent: self.concurrent,
-            paths: self.paths,
-        }
+        self.handler = Some(read_arguments_then(self.name.clone(), handler));
+        self
     }
-}
 
-impl ToolBuilder<String, ToolHandler> {
-    /// Create the tool, ready for `Agent::tool(...)`.
-    pub fn build(self) -> Tool {
-        Tool {
-            name: self.name,
-            description: self.description,
-            schema: self.schema,
-            concurrent: self.concurrent,
-            paths: self.paths,
-            handler: self.handler,
-        }
+    fn require_description_and_handler(&self) {
+        assert!(
+            self.description.is_some(),
+            "description required for tool `{}`: call Tool::description(..)",
+            self.name
+        );
+        assert!(
+            self.handler.is_some(),
+            "handler required for tool `{}`: call Tool::handler(..)",
+            self.name
+        );
+    }
+
+    /// Run the tool on a call the registry has already checked against
+    /// [`get_input_schema`](Self::get_input_schema).
+    pub async fn call(&self, input: Value, ctx: &ToolContext) -> Event {
+        (self.handler.as_ref().unwrap_or_else(|| {
+            panic!(
+                "handler required for tool `{}`: call Tool::handler(..)",
+                self.name
+            )
+        }))(input, ctx)
+        .await
+    }
+
+    /// The name the model calls the tool by.
+    pub fn get_name(&self) -> &str {
+        &self.name
+    }
+
+    /// What the tool does, in the words the model reads.
+    pub fn get_description(&self) -> &str {
+        self.description.as_deref().unwrap_or_else(|| {
+            panic!(
+                "description required for tool `{}`: call Tool::description(..)",
+                self.name
+            )
+        })
+    }
+
+    /// The arguments this tool accepts, compiled.
+    pub fn get_input_schema(&self) -> &Schema {
+        &self.schema
+    }
+
+    /// Whether the agent may run this tool alongside the turn's other
+    /// concurrent calls.
+    pub fn is_concurrent(&self) -> bool {
+        self.concurrent
+    }
+
+    /// The file paths this call opens, read from the fields `paths` named, so
+    /// they reach `Stats`.
+    pub fn opened_paths(&self, input: &Value) -> Vec<String> {
+        self.paths
+            .iter()
+            .filter_map(|field| input.get(field).and_then(|v| v.as_str()))
+            .map(str::to_string)
+            .collect()
     }
 }
 
@@ -1089,12 +1071,41 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "description required for tool `incomplete`")]
+    fn registering_a_tool_without_a_description_panics() {
+        ToolRegistry::default()
+            .register(Tool::new("incomplete").handler(|_: Value, _| async { Event::success("") }));
+    }
+
+    #[test]
+    #[should_panic(expected = "handler required for tool `incomplete`")]
+    fn registering_a_tool_without_a_handler_panics() {
+        ToolRegistry::default().register(Tool::new("incomplete").description("incomplete"));
+    }
+
+    #[tokio::test]
+    async fn repeated_configuration_keeps_the_last_value() {
+        let tool = Tool::new("configured")
+            .description("first")
+            .description("second")
+            .handler(|_: Value, _| async { Event::success("first") })
+            .handler(|_: Value, _| async { Event::success("second") });
+
+        assert_eq!(tool.get_description(), "second");
+        assert_eq!(
+            tool.call(serde_json::json!({}), &test_ctx())
+                .await
+                .get_content(),
+            "second"
+        );
+    }
+
+    #[test]
     fn paths_reports_the_named_input_fields() {
         let tool = Tool::new("cat")
             .description("Read a file.")
             .paths(["path", "into"])
-            .handler(|_: Value, _ctx| async move { Event::success("ok") })
-            .build();
+            .handler(|_: Value, _ctx| async move { Event::success("ok") });
 
         let input = serde_json::json!({"path": "src/lib.rs", "limit": 20});
         assert_eq!(tool.opened_paths(&input), vec!["src/lib.rs".to_string()]);
@@ -1111,7 +1122,6 @@ mod tests {
                 let result = result.clone();
                 async move { Event::success(result) }
             })
-            .build()
     }
 
     fn test_ctx() -> ToolContext {
@@ -1174,8 +1184,7 @@ mod tests {
     fn a_description_read_from_a_file_keeps_its_prose_and_loses_the_closing_newline() {
         let tool = Tool::new("demo")
             .description("Do the demo thing.\n\n- Returns nothing useful.\n")
-            .handler(|_: Value, _| async { Event::success("") })
-            .build();
+            .handler(|_: Value, _| async { Event::success("") });
         assert_eq!(
             tool.get_description(),
             "Do the demo thing.\n\n- Returns nothing useful."
@@ -1189,8 +1198,7 @@ mod tests {
         std::fs::write(&file, "Do the demo thing.\n").unwrap();
         let tool = Tool::new("demo")
             .description(file.as_path())
-            .handler(|_: Value, _| async { Event::success("") })
-            .build();
+            .handler(|_: Value, _| async { Event::success("") });
         assert_eq!(tool.get_description(), "Do the demo thing.");
     }
 
@@ -1201,8 +1209,7 @@ mod tests {
             .schema(
                 r#"{"type": "object", "properties": {"x": {"type": "string"}}, "required": ["x"]}"#,
             )
-            .handler(|_: Value, _| async { Event::success("") })
-            .build();
+            .handler(|_: Value, _| async { Event::success("") });
         let document = tool.get_input_schema().get_raw_schema();
         assert_eq!(document["properties"]["x"]["type"], "string");
         assert_eq!(document["required"][0], "x");
@@ -1319,7 +1326,6 @@ mod tests {
                 "required": ["count"],
             }))
             .handler(|input: Value, _ctx| async move { Event::success(input["count"].to_string()) })
-            .build()
     }
 
     async fn call_typed(input: Value) -> (String, bool) {
@@ -1461,8 +1467,7 @@ mod tests {
                 .concurrent(true)
                 .handler(|_: Value, _ctx| async {
                     panic!("boom");
-                })
-                .build(),
+                }),
         );
         registry.register(mock_tool("steady", true, "ok"));
         let ctx = test_ctx();
@@ -1512,8 +1517,7 @@ mod tests {
     async fn malformed_tool_event_becomes_a_recoverable_failure() {
         let tool = Tool::new("broken")
             .description("broken")
-            .handler(|_: Value, _| async { Event::new("not_a_terminal_event") })
-            .build();
+            .handler(|_: Value, _| async { Event::new("not_a_terminal_event") });
         let mut registry = ToolRegistry::default();
         registry.register(tool);
         let calls = vec![ToolCall {
@@ -1594,8 +1598,7 @@ mod tests {
         }
         let tool = Tool::new("typed")
             .description("typed")
-            .handler(|_: Args, _ctx| async move { Event::success("ran") })
-            .build();
+            .handler(|_: Args, _ctx| async move { Event::success("ran") });
         let outcome = tool.call(serde_json::json!({}), &test_ctx()).await;
         assert!(
             outcome.get_name() == Event::TOOL_CALL_FAILED
@@ -1610,12 +1613,11 @@ mod tests {
     async fn a_cloned_tool_runs_the_same_handler() {
         // The bindings register one tool on several agents; the clones must
         // share the handler, not lose it.
-        let tool = Tool::new("echo")
-            .description("Echoes input")
-            .handler(|input: Value, _ctx| async move {
+        let tool = Tool::new("echo").description("Echoes input").handler(
+            |input: Value, _ctx| async move {
                 Event::success(input["text"].as_str().unwrap_or("").to_string())
-            })
-            .build();
+            },
+        );
         let cloned = tool.clone();
         let outcome = cloned
             .call(serde_json::json!({"text": "hi"}), &test_ctx())
@@ -1635,8 +1637,7 @@ mod tests {
             .handler(|input: Value, _ctx| async move {
                 let text = input["text"].as_str().unwrap_or("").to_string();
                 Event::success(text)
-            })
-            .build();
+            });
 
         assert_eq!(tool.get_name(), "echo");
         assert!(tool.is_concurrent());

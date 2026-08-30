@@ -252,7 +252,6 @@ fn python_tool() -> Tool {
                 }
             }
         })
-        .build()
 }
 
 fn build_event_handler(

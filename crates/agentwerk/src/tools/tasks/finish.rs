@@ -60,8 +60,8 @@ impl FinishTool {
         };
         let tool = Tool::new(Self::NAME).description(DEFINITION).handler(run);
         match arguments {
-            Some(document) => tool.schema(document).build(),
-            None => tool.schema(SCHEMA).build(),
+            Some(document) => tool.schema(document),
+            None => tool.schema(SCHEMA),
         }
     }
 }

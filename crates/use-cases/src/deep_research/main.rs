@@ -265,7 +265,6 @@ fn brave_search_tool(api_key: String) -> Tool {
             let api_key = api_key.clone();
             async move { brave_search(&api_key, &input).await }
         })
-        .build()
 }
 
 async fn brave_search(api_key: &str, input: &serde_json::Value) -> Event {

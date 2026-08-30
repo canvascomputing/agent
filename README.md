@@ -770,8 +770,7 @@ let greet = Tool::new("greet")
     .handler(|input: Value, _context| async move {
         let name = input["name"].as_str().unwrap_or("world");
         Event::tool_call_finished(format!("Hello, {name}!"))
-    })
-    .build();
+    });
 ```
 
 Return a `tool_call_failed` event with a string `message` for a failure the model should work around.

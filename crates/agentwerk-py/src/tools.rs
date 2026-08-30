@@ -78,7 +78,7 @@ pub fn extract_tool(obj: &Bound<'_, PyAny>) -> PyResult<Tool> {
         let document = py_to_value(&obj.getattr("_agentwerk_schema")?)?;
         // Reported here rather than absorbed: a schema that does not compile
         // would leave this tool checked against nothing, and the author is
-        // right here to fix it. `ToolBuilder::schema` below cannot panic on a
+        // right here to fix it. `Tool::schema` below cannot panic on a
         // document this compiled.
         Schema::new(document.clone()).map_err(|error| {
             pyo3::exceptions::PyValueError::new_err(format!(
@@ -113,8 +113,7 @@ pub fn extract_tool(obj: &Bound<'_, PyAny>) -> PyResult<Tool> {
                         ),
                     }
                 }
-            })
-            .build();
+            });
         return Ok(tool);
     }
     Err(pyo3::exceptions::PyTypeError::new_err(

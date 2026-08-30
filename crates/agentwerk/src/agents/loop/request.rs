@@ -519,8 +519,7 @@ mod tests {
         ]);
         let boom = Tool::new("boom")
             .description("Always fails")
-            .handler(|_: Value, _| async move { Event::error("boom") })
-            .build();
+            .handler(|_: Value, _| async move { Event::error("boom") });
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let tasks = Queue::new();
         tasks
