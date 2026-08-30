@@ -1682,6 +1682,34 @@ Not bound: it is how `CommandTool` reads one command line.
 | Python | not bound: the model sends these fields as the tool's input | |
 | Rust | `run(args: EditFileArgs, ctx: ToolContext): Promise<Event>` | private |
 
+## `crates/agentwerk/src/tools/event.rs`
+
+### Public
+
+| Language | Item | Visibility |
+|----------|------|------------|
+| both | `EventTool` | pub |
+| Rust | `impl From<EventTool> for Tool` | pub |
+
+### Internal
+
+| Language | Item | Visibility |
+|----------|------|------------|
+| Rust | `DEFINITION: string` | private |
+| Rust | `SCHEMA: string` | private |
+| Rust | `FINISH_SCHEMA: string` | private |
+| Rust | `EventTool.NAME: string = "event"` | crate |
+| Rust | `.from_schema(schema: Schema?): Tool` | crate |
+| Rust | `task_finished_schema(schema: Schema?): json` | super |
+| Rust | `dispatch(input: json, ctx: ToolContext, schema: Schema?, tool_name: string): Event throws Event` | super |
+| Rust | `finish(queue: Queue, input: json, ctx: ToolContext, schema: Schema?, tool_name: string): Event throws Event` | private |
+| Rust | `hand_over(queue: Queue, input: json, parent_id: string, agent: string, result: json, schema: Schema?, tool_name: string, handover: string, directives: DirectiveStore): Event throws Event` | private |
+| Rust | `control_string(input: json, key: string, directives: DirectiveStore): string? throws Event` | private |
+| Rust | `mark_finished(queue: Queue, id: string, agent: string, directives: DirectiveStore): void throws Event` | private |
+| Rust | `apply_handover_templates(task: string, parent_id: string, result_path: string, result: string): string` | private |
+| Rust | `append_parent_reference(body: string, parent_id: string, result_path: string): string` | private |
+| Rust | `attach_result(queue: Queue, id: string, result: json, schema: Schema?, tool_name: string, directives: DirectiveStore): [json, string[]] throws Event` | private |
+
 ## `crates/agentwerk/src/tools/fetch_url.rs`
 
 ### Public
@@ -1856,14 +1884,14 @@ Not bound: it is how `CommandTool` reads one command line.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | re-exports `Tool`, `ToolContext`, `CommandTool`, `EditFileTool`, `FetchTool`, `GlobTool`, `GrepTool`, `KnowledgeTool`, `ListDirectoryTool`, `ReadFileTool`, `FinishTool`, `TaskTool`, `WriteFileTool` | pub |
+| Rust | re-exports `Tool`, `ToolContext`, `CommandTool`, `EditFileTool`, `EventTool`, `FetchTool`, `GlobTool`, `GrepTool`, `KnowledgeTool`, `ListDirectoryTool`, `ReadFileTool`, `FinishTool`, `TaskTool`, `WriteFileTool` | pub |
 
 ### Internal
 
 | Language | Item | Visibility |
 |----------|------|------------|
 | Rust | `mod util` | crate |
-| Rust | `mod tool`, `mod code`, `mod command`, `mod edit_file`, `mod fetch_url`, `mod glob`, `mod grep`, `mod knowledge`, `mod list_directory`, `mod read_file`, `mod tasks`, `mod write_file` | private |
+| Rust | `mod tool`, `mod code`, `mod command`, `mod edit_file`, `mod event`, `mod fetch_url`, `mod glob`, `mod grep`, `mod knowledge`, `mod list_directory`, `mod read_file`, `mod tasks`, `mod write_file` | private |
 
 ## `crates/agentwerk/src/tools/read_file.rs`
 
@@ -1898,16 +1926,8 @@ Not bound: it is how `CommandTool` reads one command line.
 | Language | Item | Visibility |
 |----------|------|------------|
 | Rust | `DEFINITION: string` | private |
-| Rust | `SCHEMA: string` | private |
 | Rust | `FinishTool.NAME: string = "finish"` | crate |
 | Rust | `.from_schema(schema: Schema?): Tool` | crate |
-| Rust | `finish(input: json, ctx: ToolContext, schema: Schema?): Event throws Event` | private |
-| Rust | `hand_over(queue: Queue, input: json, parent_id: string, agent: string, result: json, schema: Schema?, handover: string): Event throws Event` | private |
-| Rust | `control_string(input: json, key: string): string? throws Event` | private |
-| Rust | `mark_finished(queue: Queue, id: string, agent: string): void throws Event` | private |
-| Rust | `apply_handover_templates(task: string, parent_id: string, result_path: string, result: string): string` | private |
-| Rust | `append_parent_reference(body: string, parent_id: string, result_path: string): string` | private |
-| Rust | `attach_result(queue: Queue, id: string, result: json, schema: Schema?): [json, string[]] throws Event` | private |
 
 ## `crates/agentwerk/src/tools/tasks/mod.rs`
 
@@ -2465,6 +2485,7 @@ Binds `tools/`.
 | Rust | `glob_tool(): PyTool` | python |
 | Rust | `list_directory_tool(): PyTool` | python |
 | Rust | `knowledge_tool(store: PyKnowledge): PyTool` | python |
+| Rust | `event_tool(): PyTool` | python |
 | Rust | `finish_tool(): PyTool` | python |
 | Rust | `task_tool(): PyTool` | python |
 | Rust | `PyFetchTool { inner: FetchTool }` | python |

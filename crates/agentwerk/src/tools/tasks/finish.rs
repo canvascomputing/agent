@@ -1,21 +1,14 @@
-//! Lets an agent write the result for its task and mark it finished, handing
-//! the work on to another agent in the same call when it needs to.
+//! The legacy `finish` tool, backed by `EventTool`'s `task_finished` event.
 
 use serde_json::Value;
 
-use crate::agents::tasks::{Queue, Task};
 use crate::event::Event;
-use crate::prompts::directives::{
-    DirectiveStore, FINISH_ARGUMENT_BLANK, HANDOVER_RESULT_MISSING, QUEUE_UNAVAILABLE,
-};
 use crate::schemas::Schema;
 
-use super::super::tool::{retype_message, Tool, ToolContext};
-use super::resolve_current_id;
+use super::super::event;
+use super::super::tool::{Tool, ToolContext};
 
-/// The two files the tool is described by.
 const DEFINITION: &str = include_str!("finish.tool.md");
-const SCHEMA: &str = include_str!("finish.schema.json");
 
 /// Write a task's result and mark it finished, optionally handing
 /// follow-up work to another agent.
@@ -42,201 +35,26 @@ impl FinishTool {
     /// The name the model calls, and the name the loop looks the tool up under.
     pub(crate) const NAME: &str = "finish";
 
-    /// The finish tool declaring `schema` as its `result` argument, so
-    /// dispatch validates the result before the handler runs and the shape the
-    /// model is shown is the shape a call is checked against.
+    /// Preserve the legacy input shape while routing its call through the
+    /// `task_finished` branch of `EventTool`.
     pub(crate) fn from_schema(schema: Option<Schema>) -> Tool {
-        let arguments = schema.as_ref().map(|task| {
-            let mut document: Value =
-                serde_json::from_str(SCHEMA).expect("finish.schema.json is valid JSON");
-            document["properties"]["result"] = task.get_raw_schema().clone();
-            document["required"] = serde_json::json!(["result"]);
-            document
-        });
+        let arguments = event::task_finished_schema(schema.as_ref());
         let run = move |input: Value, ctx: ToolContext| {
-            // `Fn`, not `FnOnce`: the closure cannot move `schema` out.
             let schema = schema.clone();
-            async move { finish(&input, &ctx, schema.as_ref()).unwrap_or_else(|failure| failure) }
+            async move {
+                let event = serde_json::json!({
+                    "name": Event::TASK_FINISHED,
+                    "data": input,
+                });
+                event::dispatch(&event, &ctx, schema.as_ref(), FinishTool::NAME)
+                    .unwrap_or_else(|failure| failure)
+            }
         };
-        let tool = Tool::new(Self::NAME).description(DEFINITION).handler(run);
-        match arguments {
-            Some(document) => tool.schema(document),
-            None => tool.schema(SCHEMA),
-        }
+        Tool::new(Self::NAME)
+            .description(DEFINITION)
+            .schema(arguments)
+            .handler(run)
     }
-}
-
-/// The whole flow behind [`FinishTool::call`], so every argument or queue
-/// failure can surface through `?` as the `Event` it reads back as. A
-/// success carries the repair notes its result took, for the loop to report.
-fn finish(input: &Value, ctx: &ToolContext, schema: Option<&Schema>) -> Result<Event, Event> {
-    let queue = ctx.queue.clone().ok_or_else(|| {
-        Event::error(ctx.directives.render(QUEUE_UNAVAILABLE, &[])).directive(QUEUE_UNAVAILABLE)
-    })?;
-    let parent_id = resolve_current_id(&queue, ctx)?;
-    let agent = ctx.agent_id.clone().unwrap_or_default();
-
-    let result = input.get("result").cloned().unwrap_or(Value::Null);
-
-    let Some(handover) = control_string(input, "handover", &ctx.directives)? else {
-        let (_, repaired) = attach_result(&queue, &parent_id, result, schema, &ctx.directives)?;
-        mark_finished(&queue, &parent_id, &agent, &ctx.directives)?;
-        let mut event = Event::success(format!("Task {parent_id} marked finished"));
-        event.prepend_repairs(repaired);
-        return Ok(event);
-    };
-    hand_over(
-        &queue,
-        input,
-        &parent_id,
-        &agent,
-        result,
-        schema,
-        handover.trim().to_string(),
-        &ctx.directives,
-    )
-}
-
-/// The chaining path: attach the parent's result, file the child task under
-/// the `handover` label, then finish the parent.
-fn hand_over(
-    queue: &Queue,
-    input: &Value,
-    parent_id: &str,
-    agent: &str,
-    result: Value,
-    schema: Option<&Schema>,
-    handover: String,
-    directives: &DirectiveStore,
-) -> Result<Event, Event> {
-    // An omitted `task` defaults to the parent result below: the
-    // common handoff forwards the finding verbatim.
-    let task = control_string(input, "task", directives)?;
-
-    // A task carrying no schema declares no `required`, so nothing else
-    // stops a handover that passes on an empty result.
-    if matches!(&result, Value::Null) || result.as_str().is_some_and(str::is_empty) {
-        return Err(Event::error(
-            directives.render(HANDOVER_RESULT_MISSING, &[]),
-        ));
-    }
-
-    // A schema failure returns here, before any child exists.
-    let (validated_result, repaired) = attach_result(queue, parent_id, result, schema, directives)?;
-
-    // `{parent_result}` needs a string.
-    let parent_result = match validated_result {
-        Value::String(s) => s,
-        other => serde_json::to_string(&other).unwrap_or_default(),
-    };
-    let result_path = queue.result_path(parent_id);
-    let result_path = result_path.display().to_string();
-
-    let body = match task {
-        Some(task) => apply_handover_templates(&task, parent_id, &result_path, &parent_result),
-        None => parent_result,
-    };
-    let body = append_parent_reference(&body, parent_id, &result_path);
-    let child = Task::new(body).label(&handover).parent(parent_id);
-
-    // Insert the child BEFORE finishing the parent: the child is already
-    // `Todo` when the parent leaves the queue, so a concurrent `pending`
-    // check never reads false and `finish` cannot end the chain mid-handover.
-    // `parent_id` is resolved and `InProgress`, so `set_finished_by` cannot
-    // miss it and leave the inserted child orphaned.
-    let child_id = queue.insert(child, agent.to_string());
-    mark_finished(queue, parent_id, agent, directives)?;
-
-    let mut event = Event::success(format!(
-        "Task {parent_id} marked finished; handed off to {child_id} (handover: {handover})"
-    ));
-    event.prepend_repairs(repaired);
-    Ok(event)
-}
-
-/// Read an optional control argument. Absent and null both mean "not given".
-/// A value that is present but blank or not a string is refused rather than
-/// read as absent: a finish asked to hand over must not quietly finish
-/// without doing so. The one place the rule lives, for the model and for a
-/// host calling the tool directly.
-fn control_string(
-    input: &Value,
-    key: &str,
-    directives: &DirectiveStore,
-) -> Result<Option<String>, Event> {
-    let Some(value) = input.get(key).filter(|value| !value.is_null()) else {
-        return Ok(None);
-    };
-    match value.as_str() {
-        Some(text) if !text.trim().is_empty() => Ok(Some(text.to_string())),
-        _ => Err(Event::error(directives.render(
-            FINISH_ARGUMENT_BLANK,
-            &[("argument", key), ("value", &value.to_string())],
-        ))),
-    }
-}
-
-fn mark_finished(
-    queue: &Queue,
-    id: &str,
-    agent: &str,
-    directives: &DirectiveStore,
-) -> Result<(), Event> {
-    queue
-        .set_finished_by(id, agent)
-        .map_err(|error| Event::error(super::task_error_message(error, directives)))
-}
-
-/// Reserved placeholders substituted into the child task's `task`
-/// string at handover time: `{parent_id}`, `{parent_result_path}`, and
-/// `{parent_result}`. Single-pass `str::replace` over each in turn, the
-/// result last so text it carries is never expanded again; unknown
-/// `{name}` placeholders pass through verbatim.
-fn apply_handover_templates(
-    task: &str,
-    parent_id: &str,
-    result_path: &str,
-    result: &str,
-) -> String {
-    task.replace("{parent_id}", parent_id)
-        .replace("{parent_result_path}", result_path)
-        .replace("{parent_result}", result)
-}
-
-/// End the child's body with where the work came from, so the receiving
-/// agent can read the whole result even when the body carries a summary
-/// of it or something else entirely.
-fn append_parent_reference(body: &str, parent_id: &str, result_path: &str) -> String {
-    format!("{body}\n\nHanded over from {parent_id}, result file: {result_path}")
-}
-
-/// Validate the result against the task's schema, attach it, and give back
-/// a note for every repair it took to get there, so a prompt or a schema that
-/// keeps causing one stays discoverable once the loop reports them. A result
-/// that failed carries no notes: the violations already say what was wrong.
-/// The task is not finished here, since a handover inserts its child first.
-fn attach_result(
-    queue: &Queue,
-    id: &str,
-    result: Value,
-    schema: Option<&Schema>,
-    directives: &DirectiveStore,
-) -> Result<(Value, Vec<String>), Event> {
-    let (validated, repaired) = queue.set_result(id, result).map_err(|violations| {
-        // Composed here, where the task's schema is known: the loop
-        // passes the content to the model as-is.
-        Event::tool_failure(
-            crate::prompts::arguments_retry_detail(
-                FinishTool::NAME,
-                &violations.to_string(),
-                schema.map(Schema::get_raw_schema),
-                directives,
-            ),
-            "schema_failed",
-        )
-    })?;
-    let notes = repaired.iter().map(|pointer| retype_message(pointer));
-    Ok((validated, notes.collect()))
 }
 
 #[cfg(test)]

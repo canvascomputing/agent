@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use agentwerk::schemas::Schema;
 use agentwerk::tools::{
-    CommandTool, EditFileTool, FetchTool, FinishTool, GlobTool, GrepTool, KnowledgeTool,
+    CommandTool, EditFileTool, EventTool, FetchTool, FinishTool, GlobTool, GrepTool, KnowledgeTool,
     ListDirectoryTool, ReadFileTool, TaskTool, Tool, ToolContext, WriteFileTool,
 };
 use agentwerk::Event;
@@ -178,6 +178,13 @@ fn knowledge_tool(store: PyRef<'_, PyKnowledge>) -> PyTool {
     handle(KnowledgeTool::new(Arc::clone(&store.inner)))
 }
 
+/// Publish an event for the current task and agent. Registered explicitly.
+#[pyfunction]
+#[pyo3(name = "EventTool")]
+fn event_tool() -> PyTool {
+    handle(EventTool)
+}
+
 /// Write the result for the current task and mark it finished, handing work
 /// on to a child task when needed. Registered on every agent.
 #[pyfunction]
@@ -294,6 +301,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(glob_tool, m)?)?;
     m.add_function(wrap_pyfunction!(list_directory_tool, m)?)?;
     m.add_function(wrap_pyfunction!(knowledge_tool, m)?)?;
+    m.add_function(wrap_pyfunction!(event_tool, m)?)?;
     m.add_function(wrap_pyfunction!(finish_tool, m)?)?;
     m.add_function(wrap_pyfunction!(task_tool, m)?)?;
     Ok(())

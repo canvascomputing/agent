@@ -1,0 +1,39 @@
+{
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Event name. Lowercase snake case is conventional; every custom or built-in name is accepted."
+    },
+    "data": {
+      "description": "JSON value carried by the event. Defaults to an empty object. For `task_finished`, use an object with the result and optional handover controls this schema declares."
+    }
+  },
+  "required": [
+    "name"
+  ],
+  "allOf": [
+    {
+      "if": {
+        "required": ["name"],
+        "properties": { "name": { "const": "task_finished" } }
+      },
+      "then": {
+        "required": ["data"],
+        "properties": {
+          "data": {}
+        }
+      }
+    }
+  ],
+  "examples": [
+    {
+      "name": "candidate_found",
+      "data": { "path": "src/auth.rs", "line": 42 }
+    },
+    {
+      "name": "task_finished",
+      "data": { "result": "The upload path retries three times." }
+    }
+  ]
+}

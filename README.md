@@ -715,13 +715,40 @@ let agent = Agent::new()
 | | `ListDirectoryTool` | List files and directories. |
 | **Command** | `CommandTool` | Give access to specific commands. |
 | **Web** | `FetchTool` | Fetch a URL and read its body. |
+| **Events** | `EventTool` | Publish an event; `task_finished` additionally completes the current task. |
 | **Tasks** | `FinishTool` | Write the result for the current task and mark it finished. |
 | | `TaskTool` | Read the task queue and create or edit tasks. |
 | **Knowledge** | `KnowledgeTool` | Write, read, remove, or list pages in a knowledge store. |
 
 #### `FinishTool` and `KnowledgeTool`
 
-`FinishTool` and `KnowledgeTool` are registered automatically on every agent. Agents use them to finish queued tasks or work with shared knowledge. An [interactive agent](#interactive) gets no `FinishTool` by default, since finishing its task would end the conversation.
+`FinishTool` and `KnowledgeTool` are registered automatically on every agent. Agents use them to finish queued tasks or work with shared knowledge. An [interactive agent](#interactive) gets no `FinishTool` by default, since finishing its task would end the conversation. `FinishTool` is the compatibility wrapper around `EventTool`'s `task_finished` event; `EventTool` remains opt-in.
+
+#### EventTool
+
+Give an agent `EventTool` to let it publish custom or built-in events under its own task and agent context:
+
+```rust
+use agentwerk::tools::EventTool;
+
+let agent = Agent::new().tool(EventTool);
+```
+
+The model passes an event `name` and optional JSON `data` to `event`. Normally,
+this only publishes the event; the current task keeps running.
+
+To finish the current task, the model emits `task_finished`:
+
+```json
+{
+  "name": "task_finished",
+  "data": { "result": { "verdict": "safe" } }
+}
+```
+
+Put the task's final output in `data.result`. If the task defines a result
+schema, this value must satisfy it. To hand off follow-up work, put `handover`
+and an optional `task` beside `result` inside `data`, just as with `finish`.
 
 #### CommandTool
 
@@ -865,6 +892,12 @@ conventional, but other names are accepted; quote names containing spaces or
 punctuation in AQL. Built-in events have named constructors, such as
 `Event::task_finished()` and `Event::request_started("model")`; their names are
 also available as constants. Publishing one runs its hooks and updates its statistics. It is saved according to the event's normal rules, but it does not change task or execution state.
+
+`Queue::emit_event` never changes a task's status. To let a model finish its
+current task through an event, register `EventTool` on its agent. When the model
+emits `task_finished`, the tool validates and stores `data.result`, optionally
+creates a handover task, and marks the current task finished. All other names
+only publish an event.
 
 Events are saved to `.agentwerk/events.jsonl`. `text_chunk_received` events are not saved. Read events through the queue with these methods:
 

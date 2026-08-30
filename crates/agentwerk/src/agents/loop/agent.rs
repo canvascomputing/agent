@@ -11,7 +11,7 @@ use crate::agents::tasks::{policy_violated, Queue, Reply, Run, Status, Task};
 use crate::event::Event;
 use crate::prompts::directives::{NO_TOOL_CALLED, REPLY_REJECTED};
 use crate::providers::{AsUserMessage, Message, Model, RequestErrorKind};
-use crate::tools::{FinishTool, ToolRegistry};
+use crate::tools::{EventTool, FinishTool, ToolRegistry};
 
 use super::{compact, request, tool_call, CompactReason, Step, POLL_INTERVAL};
 
@@ -153,6 +153,9 @@ fn claim<'a>(agent: &'a Agent, queue: &'a Arc<Queue>) -> Option<TaskContext<'a>>
     if tools.contains(FinishTool::NAME) {
         tools.register(FinishTool::from_schema(task.schema.clone()));
     }
+    if tools.contains(EventTool::NAME) {
+        tools.register(EventTool::from_schema(task.schema.clone()));
+    }
 
     let knowledge_index = agent.get_knowledge().get_index();
     let policy = queue.get_policy();
@@ -269,7 +272,7 @@ mod tests {
     use crate::agents::r#loop::test_util::*;
     use crate::agents::tasks::{Author, Queue, Status, Task};
     use crate::agents::Knowledge;
-    use crate::tools::{FinishTool, TaskTool};
+    use crate::tools::{EventTool, FinishTool, TaskTool};
 
     // Run lifecycle
 
@@ -675,6 +678,71 @@ mod tests {
             .expect("finish did not finish within 5s");
 
         assert_eq!(finished_events.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn event_tool_finishes_its_current_task_without_a_silence_retry() {
+        let results_dir = crate::test_util::TempDir::new().unwrap();
+        let provider = MockProvider::with_results(vec![Ok(crate::providers::ModelResponse {
+            content: vec![crate::providers::ContentBlock::ToolUse {
+                id: "call-1".into(),
+                name: "event".into(),
+                input: serde_json::json!({
+                    "name": crate::event::Event::TASK_FINISHED,
+                    "data": { "result": { "verdict": "safe" } }
+                }),
+            }],
+            status: crate::providers::ResponseStatus::ToolUse,
+            usage: crate::providers::TokenUsage::default(),
+            model: "mock".into(),
+        })]);
+        let tasks = Queue::new();
+        tasks
+            .set_dir(results_dir.path().to_path_buf())
+            .set_policy(Policy {
+                max_request_retries: 0,
+                request_retry_delay: Duration::from_millis(1),
+                max_schema_retries: Some(2),
+                ..Default::default()
+            });
+        let events = collect_events(&tasks);
+        tasks.add_agent(
+            Agent::new()
+                .label("alice")
+                .provider(provider.clone())
+                .model("mock")
+                .role("test")
+                .tool(EventTool),
+        );
+        tasks.add_task(
+            Task::new("audit").label("alice").schema(
+                crate::schemas::Schema::new(serde_json::json!({
+                    "type": "object",
+                    "properties": { "verdict": { "type": "string" } },
+                    "required": ["verdict"]
+                }))
+                .unwrap(),
+            ),
+        );
+
+        let results = tokio::time::timeout(Duration::from_secs(5), tasks.finish_all_tasks())
+            .await
+            .expect("event did not finish the task within 5s");
+
+        assert_eq!(provider.requests(), 1);
+        assert_eq!(results, vec![serde_json::json!({ "verdict": "safe" })]);
+        let events = events.lock().unwrap();
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.get_name() == crate::event::Event::TASK_FINISHED)
+                .count(),
+            1,
+        );
+        assert!(!events.iter().any(|event| {
+            event.get_name() == crate::event::Event::SCHEMA_RETRIED
+                && event.get_data()["kind"] == "tool_not_called"
+        }));
     }
 
     #[tokio::test]
@@ -1495,6 +1563,39 @@ mod tests {
         assert!(
             declared["properties"]["result"]["properties"]["verdict"].is_object(),
             "{declared}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_claimed_task_binds_its_schema_inside_the_event_tool() {
+        let results_dir = crate::test_util::TempDir::new().unwrap();
+        let tasks = Queue::new();
+        tasks.set_dir(results_dir.path().to_path_buf());
+        let mut agent = Agent::new()
+            .provider(MockProvider::with_results(vec![]))
+            .model("mock")
+            .role("test")
+            .tool(crate::tools::EventTool);
+        tasks.bind_agent(&mut agent);
+        tasks.add_task(
+            Task::new("audit").schema(
+                crate::schemas::Schema::new(serde_json::json!({
+                    "type": "object",
+                    "properties": { "verdict": { "type": "string" } },
+                    "required": ["verdict"],
+                }))
+                .unwrap(),
+            ),
+        );
+
+        let context = claim(&agent, &tasks).expect("the task is claimable");
+        let event = context.tools.get("event").expect("event is bound");
+        let declared = event.get_input_schema().get_raw_schema();
+
+        assert!(
+            declared["allOf"][0]["then"]["properties"]["data"]["properties"]["result"]
+                ["properties"]["verdict"]
+                .is_object()
         );
     }
 

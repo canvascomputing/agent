@@ -12,6 +12,7 @@ BUILTIN_FACTORIES = [
     aw.GlobTool,
     aw.ListDirectoryTool,
     aw.TaskTool,
+    aw.EventTool,
     aw.FinishTool,
 ]
 
