@@ -1561,7 +1561,11 @@ mod tests {
 
         let declared = finish.get_input_schema().get_raw_schema();
         assert!(
-            declared["properties"]["result"]["properties"]["verdict"].is_object(),
+            declared["then"]["properties"]["result"]["properties"]["verdict"].is_object(),
+            "{declared}"
+        );
+        assert!(
+            declared["else"]["allOf"][1]["properties"]["verdict"].is_object(),
             "{declared}"
         );
     }

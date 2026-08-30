@@ -461,10 +461,8 @@ mod tests {
             "required": ["verdict"]
         }))
         .unwrap();
-        let declared = EventTool::from_schema(Some(schema))
-            .get_input_schema()
-            .get_raw_schema()
-            .clone();
+        let tool = EventTool::from_schema(Some(schema));
+        let declared = tool.get_input_schema().get_raw_schema().clone();
 
         assert!(declared["properties"]["data"].get("properties").is_none());
         assert_eq!(
@@ -476,5 +474,12 @@ mod tests {
                 ["properties"]["verdict"]
                 .is_object()
         );
+        assert!(tool
+            .get_input_schema()
+            .validate(serde_json::json!({
+                "name": Event::TASK_FINISHED,
+                "data": { "verdict": "safe" }
+            }))
+            .is_err());
     }
 }

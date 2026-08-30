@@ -1,8 +1,9 @@
 {
   "type": "object",
+  "description": "Finish the current task, optionally handing follow-up work to another agent.",
   "properties": {
     "result": {
-      "description": "Your final answer as a JSON value; omit when there is nothing to report. With `handover` it is required: `null` or an empty string is rejected."
+      "description": "Your final answer as a JSON value. Omit when there is nothing to report. A handover requires this value and rejects `null` or an empty string."
     },
     "handover": {
       "type": "string",

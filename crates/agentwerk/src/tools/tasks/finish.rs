@@ -38,10 +38,13 @@ impl FinishTool {
     /// Preserve the legacy input shape while routing its call through the
     /// `task_finished` branch of `EventTool`.
     pub(crate) fn from_schema(schema: Option<Schema>) -> Tool {
-        let arguments = event::task_finished_schema(schema.as_ref());
+        let envelope = event::task_finished_schema(schema.as_ref());
+        let arguments = arguments_schema(schema.as_ref(), envelope.clone());
         let run = move |input: Value, ctx: ToolContext| {
             let schema = schema.clone();
+            let envelope = envelope.clone();
             async move {
+                let input = normalize_input(input, &envelope);
                 let event = serde_json::json!({
                     "name": Event::TASK_FINISHED,
                     "data": input,
@@ -54,6 +57,64 @@ impl FinishTool {
             .description(DEFINITION)
             .schema(arguments)
             .handler(run)
+    }
+}
+
+/// Accept a bare object result unless the call uses the established finish
+/// envelope. The conditional keeps repair inside the selected schema branch;
+/// `anyOf` cannot safely choose a branch while rewriting values.
+fn arguments_schema(schema: Option<&Schema>, envelope: Value) -> Value {
+    let bare = schema
+        .map(|schema| schema.get_raw_schema().clone())
+        .unwrap_or_else(|| serde_json::json!({ "type": "object" }));
+    let mut envelope_cases = vec![serde_json::json!({ "const": {} })];
+    envelope_cases.extend(
+        envelope["properties"]
+            .as_object()
+            .expect("finish schema properties are an object")
+            .keys()
+            .map(|name| serde_json::json!({ "required": [name] })),
+    );
+    serde_json::json!({
+        "type": "object",
+        "if": {
+            "anyOf": envelope_cases
+        },
+        "then": envelope,
+        "else": {
+            "allOf": [
+                { "type": "object" },
+                bare
+            ]
+        },
+        "examples": [
+            { "summary": "The upload path retries three times, then fails the task." },
+            { "result": "The upload path retries three times, then fails the task." },
+            {
+                "result": "Two candidates need a second opinion.",
+                "handover": "review",
+                "task": "Confirm the two candidates in {parent_result_path}."
+            }
+        ]
+    })
+}
+
+/// Turn the bare form into the event engine's stable `data.result` envelope.
+/// Empty objects and calls containing a reserved argument keep their legacy
+/// meaning, including finishing without a result.
+fn normalize_input(input: Value, envelope: &Value) -> Value {
+    let envelope_fields = envelope["properties"]
+        .as_object()
+        .expect("finish schema properties are an object");
+    let is_bare = input.as_object().is_some_and(|arguments| {
+        !arguments.is_empty()
+            && envelope_fields
+                .keys()
+                .all(|name| !arguments.contains_key(name))
+    });
+    match is_bare {
+        true => serde_json::json!({ "result": input }),
+        false => input,
     }
 }
 
@@ -178,13 +239,19 @@ mod tests {
             .get_raw_schema()
             .clone();
         assert_eq!(
-            declared["properties"]["result"],
+            declared["then"]["properties"]["result"],
             *object_schema().get_raw_schema()
         );
-        assert_eq!(declared["properties"]["handover"]["type"], "string");
-        assert_eq!(declared["required"], serde_json::json!(["result"]));
-        // A task field never reaches the top level, whatever it is called.
-        assert!(declared["properties"].get("status").is_none(), "{declared}");
+        assert_eq!(declared["then"]["properties"]["handover"]["type"], "string");
+        assert_eq!(declared["then"]["required"], serde_json::json!(["result"]));
+        assert_eq!(
+            declared["else"]["allOf"][1],
+            *object_schema().get_raw_schema()
+        );
+        // A task field is accepted only by the bare branch, never alongside
+        // the envelope's controls.
+        assert!(declared.get("properties").is_none(), "{declared}");
+        assert!(declared["then"]["properties"].get("status").is_none());
     }
 
     #[test]
@@ -194,8 +261,107 @@ mod tests {
             .get_raw_schema()
             .clone();
         assert_eq!(
-            declared["properties"]["result"],
+            declared["then"]["properties"]["result"],
             *string_schema().get_raw_schema()
+        );
+        assert_eq!(
+            declared["else"]["allOf"][1],
+            *string_schema().get_raw_schema()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_bare_object_is_stored_as_the_result() {
+        let dir = crate::test_util::TempDir::new().unwrap();
+        let (queue, id) = one_task("alice");
+        queue.set_dir(dir.path().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
+
+        let outcome = Tool::from(FinishTool)
+            .call(
+                serde_json::json!({"status": "done", "note": "direct"}),
+                &ctx,
+            )
+            .await;
+
+        assert_eq!(outcome.get_name(), Event::TOOL_CALL_FINISHED);
+        assert_eq!(
+            queue.get_task(&id).unwrap().get_result(),
+            Some(&serde_json::json!({"status": "done", "note": "direct"}))
+        );
+    }
+
+    #[tokio::test]
+    async fn a_bare_object_uses_bound_schema_repair_and_rejection() {
+        let dir = crate::test_util::TempDir::new().unwrap();
+        let queue = line_task(dir.path());
+        let id = queue
+            .find_task("status = InProgress")
+            .unwrap()
+            .get_id()
+            .to_string();
+        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
+        let mut registry = crate::tools::ToolRegistry::default();
+        registry.register(finish_for(line_schema()));
+
+        let rejected = registry
+            .execute(
+                &[crate::tools::ToolCall {
+                    id: "call-1".into(),
+                    name: "finish".into(),
+                    input: serde_json::json!({"line": "about 42"}),
+                }],
+                &ctx,
+            )
+            .await
+            .remove(0);
+
+        assert_eq!(rejected.get_name(), Event::TOOL_CALL_FAILED);
+        assert_eq!(rejected.get_data()["kind"], "schema_failed");
+        assert!(queue.get_task(&id).unwrap().is_in_progress());
+
+        let repaired = registry
+            .execute(
+                &[crate::tools::ToolCall {
+                    id: "call-2".into(),
+                    name: "finish".into(),
+                    input: serde_json::json!({"line": "42"}),
+                }],
+                &ctx,
+            )
+            .await
+            .remove(0);
+
+        assert_eq!(repaired.get_name(), Event::TOOL_CALL_FINISHED);
+        assert_eq!(
+            repaired.repairs().collect::<Vec<_>>(),
+            vec!["/line retyped"]
+        );
+        assert_eq!(
+            queue.get_task(&id).unwrap().get_result().unwrap()["line"],
+            42
+        );
+    }
+
+    #[tokio::test]
+    async fn an_empty_call_keeps_its_legacy_null_result() {
+        let dir = crate::test_util::TempDir::new().unwrap();
+        let (queue, id) = one_task("alice");
+        queue.set_dir(dir.path().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
+
+        let outcome = Tool::from(FinishTool)
+            .call(serde_json::json!({}), &ctx)
+            .await;
+
+        assert_eq!(outcome.get_name(), Event::TOOL_CALL_FINISHED);
+        assert_eq!(
+            queue.get_task(&id).unwrap().get_result(),
+            Some(&serde_json::Value::Null)
+        );
+        assert_eq!(
+            queue.find_event(Event::TASK_FINISHED).unwrap().get_data()["result"],
+            serde_json::Value::Null
         );
     }
 
@@ -272,7 +438,13 @@ mod tests {
     #[test]
     fn an_unbound_finish_declares_the_registered_arguments() {
         let unbound = Tool::from(FinishTool);
-        assert!(unbound.get_input_schema().get_raw_schema()["properties"]["result"].is_object());
+        assert!(
+            unbound.get_input_schema().get_raw_schema()["then"]["properties"]["result"].is_object()
+        );
+        assert_eq!(
+            unbound.get_input_schema().get_raw_schema()["else"]["allOf"][0]["type"],
+            "object"
+        );
         assert_eq!(
             FinishTool::from_schema(None)
                 .get_input_schema()
@@ -349,6 +521,8 @@ mod tests {
         for value in [
             serde_json::json!(""),
             serde_json::json!(null),
+            serde_json::json!(42),
+            serde_json::json!(true),
             serde_json::json!({}),
             serde_json::json!([]),
         ] {

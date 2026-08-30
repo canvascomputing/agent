@@ -740,6 +740,18 @@ agent = (
 
 `FinishTool()` and `KnowledgeTool(store)` are registered automatically on every agent. Agents use them to finish queued tasks or work with shared knowledge. An [interactive agent](#interactive) gets no `FinishTool()` by default, since finishing its task would end the conversation. `FinishTool()` is the compatibility wrapper around `EventTool()`'s `task_finished` event; `EventTool()` remains opt-in.
 
+Pass object results directly, such as `finish({"verdict":"safe"})`. Put the
+value in `result` for handovers, non-object results, or object results containing
+`result`, `handover`, or `task`:
+
+```json
+{
+  "result": { "verdict": "unsafe" },
+  "handover": "tracing",
+  "task": "Trace the finding."
+}
+```
+
 #### EventTool
 
 Give an agent `EventTool()` to let it publish custom or built-in events under its own task and agent context:
