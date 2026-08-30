@@ -1282,12 +1282,12 @@ impl Queue {
     /// # use agentwerk::Queue;
     /// # async fn run() {
     /// let tasks = Queue::new();
-    /// if let Some(answer) = tasks.finish_result("ORDER BY created DESC").await {
+    /// if let Some(answer) = tasks.finish_task("ORDER BY created DESC").await {
     ///     println!("{answer}");
     /// }
     /// # }
     /// ```
-    pub async fn finish_result(&self, matches: impl Matcher<Task>) -> Option<serde_json::Value> {
+    pub async fn finish_task(&self, matches: impl Matcher<Task>) -> Option<serde_json::Value> {
         self.finish_tasks(matches).await.into_iter().next()
     }
 
@@ -2802,7 +2802,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn finish_result_hands_back_the_first_result_in_query_order() {
+    async fn finish_task_hands_back_the_first_result_in_query_order() {
         let (queue, _tmp) = test_queue();
         queue.add_task(Task::new("a").label("scan"));
         queue.add_task(Task::new("b").label("report"));
@@ -2812,16 +2812,16 @@ mod tests {
         attach_done_result(&queue, "t-1", "scanned");
 
         assert_eq!(
-            queue.finish_result("ORDER BY id DESC").await,
+            queue.finish_task("ORDER BY id DESC").await,
             Some(serde_json::json!("reported"))
         );
     }
 
     #[tokio::test]
-    async fn finish_result_is_none_when_nothing_finished() {
+    async fn finish_task_is_none_when_nothing_finished() {
         let (queue, _tmp) = test_queue();
 
-        assert_eq!(queue.finish_result("status = Finished").await, None);
+        assert_eq!(queue.finish_task("status = Finished").await, None);
     }
 
     #[tokio::test]

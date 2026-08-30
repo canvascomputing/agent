@@ -654,7 +654,7 @@ The rules the tables never repeat.
 | both | `.finish_tasks(matches: Matcher<Task>): Promise<json[]>` | pub |
 | Python | `.finish_tasks(matches)`: accepts a `Query` or a callable | |
 | both | `.finish_all_tasks(): Promise<json[]>` | pub |
-| both | `.finish_result(matches: Matcher<Task>): Promise<json?>` | pub |
+| both | `.finish_task(matches: Matcher<Task>): Promise<json?>` | pub |
 | Rust | `.get_finish_reason(): FinishReason?` | pub |
 | Python | `.get_finish_reason(): str?`: the string it prints as, such as `policy_violated(turns)` | |
 | both | `.get_results(): json[]` | pub |
@@ -2424,7 +2424,7 @@ Binds `agents/tasks/queue.rs` and `store.rs`.
 | Rust | `.start(): this` | python |
 | Rust | `.finish_tasks(matches: any): Promise<any[]> throws PyErr` | python |
 | Rust | `.finish_all_tasks(): Promise<any[]> throws PyErr` | python |
-| Rust | `.finish_result(matches: any): Promise<any?> throws PyErr` | python |
+| Rust | `.finish_task(matches: any): Promise<any?> throws PyErr` | python |
 | Rust | `.get_finish_reason(): string?` | python |
 | Rust | `.cancel_tasks(matches: any): this throws PyErr` | python |
 | Rust | `.cancel_all_tasks(): this` | python |

@@ -74,7 +74,7 @@ async def main():
     )
 
     work = agent.start()
-    result = await work.finish_result("ORDER BY created DESC")
+    result = await work.finish_task("ORDER BY created DESC")
 
     print(result)
 
@@ -288,7 +288,7 @@ tasks.add_task(Task("Write up the ranking.", label="report"))
 | | `on_task(handler)` | Read task state changes. |
 | | `on_task_async(handler)` | Read task state changes in an async handler. |
 | **Run** | `start()` | Begin processing tasks. |
-| | `finish_result(query)` | Wait for matching tasks and get the first result in query order. |
+| | `finish_task(query)` | Wait for matching tasks and get the first result in query order. |
 | | `finish_tasks(query)` | Wait for matching tasks and get their results. |
 | | `finish_all_tasks()` | Wait for every task and get every result. |
 | **Cancel** | `cancel_tasks(query)` | Stop work on matching tasks. |
@@ -397,7 +397,7 @@ The task queue schedules the work of your agents and returns their results.
 ```python
 tasks.start()
 
-answer = await tasks.finish_result("ORDER BY created DESC")
+answer = await tasks.finish_task("ORDER BY created DESC")
 if answer is not None:
     print(answer)
 ```
@@ -408,7 +408,7 @@ if answer is not None:
 | | Method | Description |
 |-|--------|-------------|
 | **Run** | `start()` | Begin processing tasks. |
-| | `await finish_result(query)` | Wait for matching tasks and get the first result in query order. |
+| | `await finish_task(query)` | Wait for matching tasks and get the first result in query order. |
 | | `await finish_tasks(query)` | Wait for matching tasks and get their results. |
 | | `await finish_all_tasks()` | Wait for every task and get every result. |
 | **Cancel** | `cancel_tasks(query)` | Stop work on matching tasks. |
