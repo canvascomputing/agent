@@ -799,7 +799,7 @@ Events allow you to inspect all activities of your agents.
 ```python
 def log(work, event):
     if event.get_name() == Event.TASK_FINISHED:
-        print(f"[{event.get_agent_id()}] done {event.get_task_id()} {event.get_label()}")
+        print(event.get_data().get("result"))
 
 
 tasks.on_event(log)
@@ -814,7 +814,7 @@ tasks.on_event(log)
 | | `run_finished` | Execution ended, carrying its outcome. |
 | | `policy_violated` | A limit was breached and execution stopped. |
 | **Task** | `task_started` | An agent claimed a task. |
-| | `task_finished` | A task finished successfully. |
+| | `task_finished` | A task finished successfully, carrying its result when it has one. |
 | | `task_failed` | A task failed. |
 | | `turn_started` | The agent began another turn on its task. |
 | | `schema_retried` | A tool call or result the model created was invalid. |

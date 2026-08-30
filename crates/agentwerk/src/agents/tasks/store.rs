@@ -210,7 +210,7 @@ impl Queue {
         let _in_flight = InFlight(&self.terminal_transitions_in_flight);
 
         let now = now_millis();
-        let transitioned = {
+        let result = {
             let mut store = self.tasks.lock().unwrap();
             let task = store
                 .get_mut(id)
@@ -221,23 +221,22 @@ impl Queue {
             // status overwrites the winner's and leaves, say, a `Failed` task
             // carrying a result. Checked under the lock the write happens
             // under, so two racing transitions cannot both pass it.
-            match task.status {
-                Status::Finished | Status::Failed => false,
-                _ => {
-                    task.stamp_transition(status, now);
-                    task.status = status;
-                    true
-                }
+            if matches!(task.status, Status::Finished | Status::Failed) {
+                return Ok(());
             }
+            task.stamp_transition(status, now);
+            task.status = status;
+            task.result.clone()
         };
-        if !transitioned {
-            return Ok(());
-        }
         let name = match status {
             Status::Finished => Event::TASK_FINISHED,
             _ => Event::TASK_FAILED,
         };
-        self.emit_event(Event::new(name).task_id(id).agent_id(agent));
+        let mut event = Event::new(name).task_id(id).agent_id(agent);
+        if let (Status::Finished, Some(result)) = (status, result) {
+            event = event.data(serde_json::json!({ "result": result }));
+        }
+        self.emit_event(event);
         self.save_task(id);
         Ok(())
     }
@@ -739,6 +738,55 @@ mod tests {
     }
 
     #[test]
+    fn task_finished_event_carries_the_stored_result() {
+        let (queue, dir) = test_queue();
+        let id = queue.add_task("hello");
+        queue
+            .set_task_finished(&id, serde_json::json!({"answer": 42}))
+            .unwrap();
+
+        let lines = read_events_log(dir.path());
+        let event = lines.last().unwrap();
+        assert_eq!(event["name"], Event::TASK_FINISHED);
+        assert_eq!(event["data"]["result"], serde_json::json!({"answer": 42}));
+    }
+
+    #[test]
+    fn task_finished_event_distinguishes_no_result_from_null() {
+        let (queue, dir) = test_queue();
+        let without = queue.add_task("without");
+        queue.set_finished_by(&without, "alice").unwrap();
+        let with_null = queue.add_task("with null");
+        queue.set_task_finished(&with_null, ()).unwrap();
+
+        let lines = read_events_log(dir.path());
+        let finished: Vec<&serde_json::Value> = lines
+            .iter()
+            .filter(|event| event["name"] == Event::TASK_FINISHED)
+            .collect();
+        assert!(finished[0]["data"].get("result").is_none());
+        assert_eq!(
+            finished[1]["data"].get("result"),
+            Some(&serde_json::Value::Null)
+        );
+    }
+
+    #[test]
+    fn task_finished_result_round_trips_through_the_event_log() {
+        let dir = crate::test_util::TempDir::new().unwrap();
+        let queue = Queue::new();
+        queue.set_dir(dir.path().to_path_buf());
+        let id = queue.add_task("hello");
+        queue.set_task_finished(&id, "done").unwrap();
+        drop(queue);
+
+        let resumed = Queue::load(dir.path()).unwrap();
+        let event = resumed.find_event(Event::TASK_FINISHED).unwrap();
+        assert_eq!(event.get_data()["result"], "done");
+        assert_eq!(resumed.get_results(), vec![serde_json::json!("done")]);
+    }
+
+    #[test]
     fn set_failed_transitions_to_failed() {
         let (queue, _tmp) = test_queue();
         let id = queue.add_task("hello");
@@ -764,6 +812,11 @@ mod tests {
         assert_eq!(task.status, Status::Finished);
         assert_eq!(task.result, Some(serde_json::json!("host result")));
         assert!(task.failed_at.is_none());
+        let terminal = queue.find_events(|event: &Event| {
+            matches!(event.get_name(), Event::TASK_FINISHED | Event::TASK_FAILED)
+        });
+        assert_eq!(terminal.len(), 1);
+        assert_eq!(terminal[0].get_data()["result"], "host result");
     }
 
     #[test]

@@ -789,7 +789,7 @@ use agentwerk::Event;
 
 tasks.on_event(|_, event| {
     if event.get_name() == Event::TASK_FINISHED {
-        eprintln!("[{}] done {} {:?}", event.get_agent_id(), event.get_task_id(), event.get_label());
+        eprintln!("{}", event.get_data()["result"]);
     }
 });
 ```
@@ -803,7 +803,7 @@ tasks.on_event(|_, event| {
 | | `run_finished` | Execution ended, carrying its outcome. |
 | | `policy_violated` | A limit was breached and execution stopped. |
 | **Task** | `task_started` | An agent claimed a task. |
-| | `task_finished` | A task finished successfully. |
+| | `task_finished` | A task finished successfully, carrying its result when it has one. |
 | | `task_failed` | A task failed. |
 | | `turn_started` | The agent began another turn on its task. |
 | | `schema_retried` | A tool call or result the model created was invalid. |
