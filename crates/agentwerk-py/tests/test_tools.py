@@ -92,12 +92,11 @@ def test_knowledge_tool_binds_a_store(knowledge_dir):
     assert isinstance(aw.KnowledgeTool(store), aw.Tool)
 
 
-def test_tool_result_constructors_produce_a_tool_result():
-    for result in (
-        aw.ToolResult.success("done"),
-        aw.ToolResult.error("nope"),
-    ):
-        assert isinstance(result, aw.ToolResult)
+def test_terminal_tool_events_are_events():
+    finished = aw.Event(aw.Event.TOOL_CALL_FINISHED).data({"output": "done"})
+    failed = aw.Event(aw.Event.TOOL_CALL_FAILED).data({"message": "nope"})
+    assert isinstance(finished, aw.Event)
+    assert isinstance(failed, aw.Event)
 
 
 def test_agent_accepts_a_builtin_tool():

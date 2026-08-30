@@ -12,7 +12,7 @@ use serde_json::Value;
 use super::grep::{
     render_content, render_count, render_files, OutputMode, Query, MAX_LINE_COLUMNS,
 };
-use super::tool::ToolResult;
+use super::tool::Event;
 use crate::codegrep::{self, Conf, Pattern};
 use crate::prompts::directives::{
     DirectiveStore, CODE_CONSTRAINT_INCOMPLETE, CODE_CONSTRAINT_METAVARIABLE_UNKNOWN,
@@ -28,20 +28,20 @@ pub(super) fn run(
     interrupt: &AtomicBool,
     deadline: Instant,
     directives: &DirectiveStore,
-) -> ToolResult {
+) -> Event {
     let mut conf = Conf::default_multiline();
     conf.caseless = query.case_insensitive;
     let pattern = match Pattern::parse(&query.pattern, &conf) {
         Ok(pattern) => pattern,
         Err(error) => {
-            return ToolResult::error(
+            return Event::error(
                 directives.render(CODE_PATTERN_REJECTED, &[("error", &error.to_string())]),
             )
         }
     };
     let constraints = match parse_constraints(&query.constraints, &pattern, directives) {
         Ok(constraints) => constraints,
-        Err(message) => return ToolResult::error(message),
+        Err(message) => return Event::error(message),
     };
 
     match query.output_mode {

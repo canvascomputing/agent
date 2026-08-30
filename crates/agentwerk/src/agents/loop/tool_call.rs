@@ -7,7 +7,7 @@ use crate::agents::tasks::Reply;
 use crate::agents::PolicyViolation;
 use crate::event::Event;
 use crate::providers::ContentBlock;
-use crate::tools::{ToolCall, ToolContext, ToolFailureKind, ToolResult};
+use crate::tools::{ToolCall, ToolContext};
 
 use super::agent::TaskContext;
 use super::Step;
@@ -65,67 +65,65 @@ pub(super) async fn run(context: &mut TaskContext<'_>, mut calls: Vec<ToolCall>)
             .get(&call.name)
             .map(|tool| tool.opened_paths(&call.input))
             .unwrap_or_default();
-        let succeeded = matches!(result, ToolResult::Success { .. });
-        let content = match result {
-            ToolResult::Success {
-                content,
-                offloaded: offload_path,
-                repaired,
-            } => {
-                // Any successful tool call is progress: clear the counter.
-                context.consecutive_schema_failures = 0;
-                for message in repaired {
-                    events.push(
-                        Event::new(Event::RESPONSE_REPAIRED).data(serde_json::json!({
-                            "tool_name": call.name,
-                            "reason": "value_mistyped",
-                            "message": message,
-                        })),
-                    );
-                }
-                for path in opened_paths {
-                    events.push(
-                        Event::new(Event::FILE_OPEN_FINISHED)
-                            .data(serde_json::json!({ "path": path })),
-                    );
-                }
+        let succeeded = result.get_name() == Event::TOOL_CALL_FINISHED;
+        let content = if succeeded {
+            let content = result.get_content().to_string();
+            // Any successful tool call is progress: clear the counter.
+            context.consecutive_schema_failures = 0;
+            for message in &result.repaired {
                 events.push(
-                    Event::new(Event::TOOL_CALL_FINISHED).data(serde_json::json!({
+                    Event::new(Event::RESPONSE_REPAIRED).data(serde_json::json!({
                         "tool_name": call.name,
-                        "call_id": call.id,
-                        "output": content,
+                        "reason": "value_mistyped",
+                        "message": message,
                     })),
                 );
-                if let Some(path) = offload_path {
-                    offloaded.insert(call.id.clone(), path);
-                }
-                content
             }
-            ToolResult::Error { content, kind } => {
-                // Every tool failure counts toward the budget, so a stuck agent
-                // fails its task instead of looping until the time limit.
-                context.consecutive_schema_failures =
-                    context.consecutive_schema_failures.saturating_add(1);
-                if kind == ToolFailureKind::SchemaValidationFailed && first_schema_failure.is_none()
-                {
-                    first_schema_failure = Some(content.clone());
-                }
-                // A path fails with the call that named it, so it carries the
-                // call's reason.
-                for path in opened_paths {
-                    events.push(
-                        Event::new(Event::FILE_OPEN_FAILED)
-                            .data(serde_json::json!({ "path": path, "reason": kind })),
-                    );
-                }
-                events.push(Event::new(Event::TOOL_CALL_FAILED).data(serde_json::json!({
-                    "tool_name": call.name,
-                    "call_id": call.id,
-                    "reason": kind,
-                    "message": content,
-                })));
-                content
+            for path in opened_paths {
+                events.push(
+                    Event::new(Event::FILE_OPEN_FINISHED).data(serde_json::json!({ "path": path })),
+                );
             }
+            let mut event = result.clone();
+            if let Some(data) = event.data.as_object_mut() {
+                data.insert("tool_name".into(), call.name.clone().into());
+                data.insert("call_id".into(), call.id.clone().into());
+            }
+            events.push(event);
+            if let Some(path) = &result.offloaded {
+                offloaded.insert(call.id.clone(), path.clone());
+            }
+            content
+        } else {
+            let content = result.get_content().to_string();
+            let kind = result.get_data()["reason"]
+                .as_str()
+                .unwrap_or("execution_failed");
+            // Every tool failure counts toward the budget, so a stuck agent
+            // fails its task instead of looping until the time limit.
+            context.consecutive_schema_failures =
+                context.consecutive_schema_failures.saturating_add(1);
+            if kind == "schema_failed" && first_schema_failure.is_none() {
+                first_schema_failure = Some(content.clone());
+            }
+            // A path fails with the call that named it, so it carries the
+            // call's reason.
+            for path in opened_paths {
+                let mut event = Event::new(Event::FILE_OPEN_FAILED)
+                    .data(serde_json::json!({ "path": path, "reason": kind, "message": content }));
+                if let Some(directive) = result.get_directive() {
+                    event = event.directive(directive);
+                }
+                events.push(event);
+            }
+            let mut event = result.clone();
+            if let Some(data) = event.data.as_object_mut() {
+                data.insert("tool_name".into(), call.name.clone().into());
+                data.insert("call_id".into(), call.id.clone().into());
+                data.insert("reason".into(), kind.into());
+            }
+            events.push(event);
+            content
         };
         blocks.push(ContentBlock::ToolResult {
             tool_use_id: call.id.clone(),
@@ -498,7 +496,7 @@ mod tests {
 
         use crate::agents::agent::Agent;
         use crate::agents::tasks::Queue;
-        use crate::tools::{Tool, ToolResult};
+        use crate::tools::Tool;
 
         let provider = MockProvider::with_results(vec![
             Ok(tool_call_response("boom")),
@@ -506,7 +504,7 @@ mod tests {
         ]);
         let boom = Tool::new("boom")
             .description("Always fails")
-            .handler(|_: Value, _| async move { ToolResult::error("boom") })
+            .handler(|_: Value, _| async move { Event::error("boom") })
             .build();
 
         let results_dir = crate::test_util::TempDir::new().unwrap();
@@ -552,7 +550,7 @@ mod tests {
 
         use crate::agents::agent::Agent;
         use crate::agents::tasks::{Queue, ReplyContent};
-        use crate::tools::{Tool, ToolResult};
+        use crate::tools::Tool;
 
         let provider = MockProvider::with_results(vec![
             Ok(tool_call_response("boom")),
@@ -560,7 +558,7 @@ mod tests {
         ]);
         let boom = Tool::new("boom")
             .description("Always fails")
-            .handler(|_: Value, _| async move { ToolResult::error("boom") })
+            .handler(|_: Value, _| async move { Event::error("boom") })
             .build();
 
         let results_dir = crate::test_util::TempDir::new().unwrap();
@@ -613,7 +611,7 @@ mod tests {
 
         use crate::agents::agent::Agent;
         use crate::agents::tasks::Queue;
-        use crate::tools::{Tool, ToolResult};
+        use crate::tools::Tool;
 
         // boom, ping, boom, finish: a budget of two would trip on the second
         // boom if the ping success did not reset the counter in between.
@@ -625,11 +623,11 @@ mod tests {
         ]);
         let boom = Tool::new("boom")
             .description("Always fails")
-            .handler(|_: Value, _| async move { ToolResult::error("boom") })
+            .handler(|_: Value, _| async move { Event::error("boom") })
             .build();
         let ping = Tool::new("ping")
             .description("Always succeeds")
-            .handler(|_: Value, _| async move { ToolResult::success("pong") })
+            .handler(|_: Value, _| async move { Event::success("pong") })
             .build();
 
         let results_dir = crate::test_util::TempDir::new().unwrap();
@@ -667,7 +665,7 @@ mod tests {
 
         use crate::agents::agent::Agent;
         use crate::agents::tasks::Queue;
-        use crate::tools::{TasksTool, Tool, ToolResult};
+        use crate::tools::{TasksTool, Tool};
 
         let tool_started = Arc::new(Notify::new());
         let tool_unblocked = Arc::new(Notify::new());
@@ -687,7 +685,7 @@ mod tests {
                 async move {
                     s.notify_one();
                     u.notified().await;
-                    ToolResult::success("ok")
+                    Event::success("ok")
                 }
             })
             .build();
@@ -730,7 +728,7 @@ mod tests {
     #[tokio::test]
     async fn huge_tool_result_is_persisted_to_task_outputs_dir_and_task_finishes_done() {
         use crate::agents::tasks::ReplyContent;
-        use crate::tools::{Tool, ToolResult};
+        use crate::tools::Tool;
 
         let provider = MockProvider::with_results(vec![
             Ok(crate::providers::types::ModelResponse {
@@ -767,7 +765,7 @@ mod tests {
 
         let dump = Tool::new("dump")
             .description("Returns ~800 KB of text")
-            .handler(|_: Value, _ctx| async move { ToolResult::success("x".repeat(800_000)) })
+            .handler(|_: Value, _ctx| async move { Event::success("x".repeat(800_000)) })
             .build();
 
         tasks.on_event(move |_, e| handler(e));
@@ -824,7 +822,7 @@ mod tests {
 
     #[tokio::test]
     async fn parallel_moderate_results_aggregate_offloads_largest_first() {
-        use crate::tools::{Tool, ToolResult};
+        use crate::tools::Tool;
 
         let provider = MockProvider::with_results(vec![
             Ok(crate::providers::types::ModelResponse {
@@ -884,7 +882,7 @@ mod tests {
             .concurrent(true)
             .handler(|input: Value, _ctx| async move {
                 let bytes = input["bytes"].as_u64().unwrap_or(0) as usize;
-                ToolResult::success("x".repeat(bytes))
+                Event::success("x".repeat(bytes))
             })
             .build();
 

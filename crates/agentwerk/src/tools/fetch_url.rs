@@ -1,6 +1,6 @@
 //! Fetches a URL and returns its extracted text. Gives an agent access to external documentation the prompt cannot enumerate up front.
 
-use super::tool::{Tool, ToolContext, ToolResult};
+use super::tool::{Event, Tool, ToolContext};
 use crate::prompts::directives::{
     DirectiveStore, FETCH_URL_BODY_NOT_READ, FETCH_URL_CREDENTIALS_PRESENT, FETCH_URL_HOST_MISSING,
     FETCH_URL_HOST_NOT_RESOLVABLE, FETCH_URL_REDIRECT_LOCATION_MISSING, FETCH_URL_REQUEST_FAILED,
@@ -104,17 +104,17 @@ impl From<FetchUrlTool> for Tool {
     }
 }
 
-async fn run(args: FetchUrlArgs, ctx: ToolContext, impersonate: bool) -> ToolResult {
+async fn run(args: FetchUrlArgs, ctx: ToolContext, impersonate: bool) -> Event {
     let FetchUrlArgs { url, max_length } = args;
 
     let validated_url = match validate_url(&url, &ctx.directives) {
         Ok(u) => u,
-        Err(msg) => return ToolResult::error(msg),
+        Err(msg) => return Event::error(msg),
     };
 
     let text = match fetch_url(&validated_url, impersonate, &ctx.directives).await {
         Ok(text) => text,
-        Err(msg) => return ToolResult::error(msg),
+        Err(msg) => return Event::error(msg),
     };
     if let FetchedContent::Redirect {
         original_url,
@@ -129,7 +129,7 @@ async fn run(args: FetchUrlArgs, ctx: ToolContext, impersonate: bool) -> ToolRes
              Status: {status}\n\n\
              To fetch the content, make a new fetch_url request with the redirect URL."
         );
-        return ToolResult::success(msg);
+        return Event::success(msg);
     }
     let FetchedContent::Page {
         body,
@@ -142,7 +142,7 @@ async fn run(args: FetchUrlArgs, ctx: ToolContext, impersonate: bool) -> ToolRes
     };
 
     let output = format_output(&url, &body, status, &content_type, bytes, max_length);
-    ToolResult::success(output)
+    Event::success(output)
 }
 
 // Fetching

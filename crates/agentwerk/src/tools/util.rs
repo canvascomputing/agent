@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use super::command::Command;
-use super::tool::{ToolContext, ToolResult};
+use super::tool::{Event, ToolContext};
 use crate::prompts::directives::{
     DirectiveStore, COMMAND_CANCELLED, COMMAND_NOT_STARTED, COMMAND_TIMED_OUT,
     PATH_HINT_DIRECTORY_LISTED, PATH_HINT_SUGGESTION, PATH_HINT_WORKING_DIRECTORY,
@@ -20,11 +20,7 @@ use crate::prompts::directives::{
 /// Bounded by `timeout` and interruptible via [`ToolContext::cancelled`]: it
 /// drops the pending output future, and `kill_on_drop(true)` cascades SIGKILL
 /// to the subprocess so a hanging `python3` / `sleep` doesn't outlive the run.
-pub(crate) async fn run_command(
-    command: &Command,
-    timeout: Duration,
-    ctx: &ToolContext,
-) -> ToolResult {
+pub(crate) async fn run_command(command: &Command, timeout: Duration, ctx: &ToolContext) -> Event {
     let output_fut = tokio::process::Command::new(command.program_path(&ctx.dir))
         .args(&command.arguments)
         .current_dir(&ctx.dir)
@@ -33,22 +29,24 @@ pub(crate) async fn run_command(
 
     let result = tokio::select! {
         biased;
-        _ = ctx.cancelled() => return ToolResult::error(ctx.directives.render(COMMAND_CANCELLED, &[])),
+        _ = ctx.cancelled() => return Event::error(ctx.directives.render(COMMAND_CANCELLED, &[])).directive(COMMAND_CANCELLED),
         r = tokio::time::timeout(timeout, output_fut) => r,
     };
 
     match result {
-        Err(_) => ToolResult::error(ctx.directives.render(
+        Err(_) => Event::error(ctx.directives.render(
             COMMAND_TIMED_OUT,
             &[
                 ("program", &command.program),
                 ("milliseconds", &timeout.as_millis().to_string()),
             ],
-        )),
-        Ok(Err(e)) => ToolResult::error(ctx.directives.render(
+        ))
+        .directive(COMMAND_TIMED_OUT),
+        Ok(Err(e)) => Event::error(ctx.directives.render(
             COMMAND_NOT_STARTED,
             &[("program", &command.program), ("error", &e.to_string())],
-        )),
+        ))
+        .directive(COMMAND_NOT_STARTED),
         Ok(Ok(output)) => {
             let mut content = String::from_utf8_lossy(&output.stdout).into_owned();
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -59,9 +57,9 @@ pub(crate) async fn run_command(
             }
 
             if output.status.success() {
-                ToolResult::success(content)
+                Event::success(content)
             } else {
-                ToolResult::error(content)
+                Event::error(content)
             }
         }
     }
@@ -207,10 +205,11 @@ mod tests {
 
         let content = result.get_content();
         assert!(
-            matches!(result, ToolResult::Error { .. }),
+            result.get_name() == Event::TOOL_CALL_FAILED,
             "expected cancelled result"
         );
         assert!(content.contains("cancelled"));
+        assert_eq!(result.get_directive(), Some(COMMAND_CANCELLED));
         assert!(
             elapsed < Duration::from_millis(500),
             "cancel should return within 500ms, took {elapsed:?}",

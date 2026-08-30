@@ -4,13 +4,13 @@
 use serde_json::Value;
 
 use crate::agents::tasks::{Queue, Task};
+use crate::event::Event;
 use crate::prompts::directives::{
     DirectiveStore, FINISH_ARGUMENT_BLANK, HANDOVER_RESULT_MISSING, QUEUE_UNAVAILABLE,
 };
 use crate::schemas::Schema;
-use crate::tools::ToolFailureKind;
 
-use super::super::tool::{retype_message, Tool, ToolContext, ToolResult};
+use super::super::tool::{retype_message, Tool, ToolContext};
 use super::resolve_current_id;
 
 /// The two files the tool is described by.
@@ -67,17 +67,12 @@ impl FinishTool {
 }
 
 /// The whole flow behind [`FinishTool::call`], so every argument or queue
-/// failure can surface through `?` as the `ToolResult` it reads back as. A
+/// failure can surface through `?` as the `Event` it reads back as. A
 /// success carries the repair notes its result took, for the loop to report.
-fn finish(
-    input: &Value,
-    ctx: &ToolContext,
-    schema: Option<&Schema>,
-) -> Result<ToolResult, ToolResult> {
-    let queue = ctx
-        .queue
-        .clone()
-        .ok_or_else(|| ToolResult::error(ctx.directives.render(QUEUE_UNAVAILABLE, &[])))?;
+fn finish(input: &Value, ctx: &ToolContext, schema: Option<&Schema>) -> Result<Event, Event> {
+    let queue = ctx.queue.clone().ok_or_else(|| {
+        Event::error(ctx.directives.render(QUEUE_UNAVAILABLE, &[])).directive(QUEUE_UNAVAILABLE)
+    })?;
     let parent_id = resolve_current_id(&queue, ctx)?;
     let agent = ctx.agent_id.clone().unwrap_or_default();
 
@@ -86,11 +81,9 @@ fn finish(
     let Some(handover) = control_string(input, "handover", &ctx.directives)? else {
         let (_, repaired) = attach_result(&queue, &parent_id, result, schema, &ctx.directives)?;
         mark_finished(&queue, &parent_id, &agent, &ctx.directives)?;
-        return Ok(ToolResult::Success {
-            content: format!("Task {parent_id} marked finished"),
-            offloaded: None,
-            repaired,
-        });
+        let mut event = Event::success(format!("Task {parent_id} marked finished"));
+        event.repaired = repaired;
+        return Ok(event);
     };
     hand_over(
         &queue,
@@ -115,7 +108,7 @@ fn hand_over(
     schema: Option<&Schema>,
     handover: String,
     directives: &DirectiveStore,
-) -> Result<ToolResult, ToolResult> {
+) -> Result<Event, Event> {
     // An omitted `task` defaults to the parent result below: the
     // common handoff forwards the finding verbatim.
     let task = control_string(input, "task", directives)?;
@@ -123,7 +116,7 @@ fn hand_over(
     // A task carrying no schema declares no `required`, so nothing else
     // stops a handover that passes on an empty result.
     if matches!(&result, Value::Null) || result.as_str().is_some_and(str::is_empty) {
-        return Err(ToolResult::error(
+        return Err(Event::error(
             directives.render(HANDOVER_RESULT_MISSING, &[]),
         ));
     }
@@ -154,13 +147,11 @@ fn hand_over(
     let child_id = queue.insert(child, agent.to_string());
     mark_finished(queue, parent_id, agent, directives)?;
 
-    Ok(ToolResult::Success {
-        content: format!(
-            "Task {parent_id} marked finished; handed off to {child_id} (handover: {handover})"
-        ),
-        offloaded: None,
-        repaired,
-    })
+    let mut event = Event::success(format!(
+        "Task {parent_id} marked finished; handed off to {child_id} (handover: {handover})"
+    ));
+    event.repaired = repaired;
+    Ok(event)
 }
 
 /// Read an optional control argument. Absent and null both mean "not given".
@@ -172,13 +163,13 @@ fn control_string(
     input: &Value,
     key: &str,
     directives: &DirectiveStore,
-) -> Result<Option<String>, ToolResult> {
+) -> Result<Option<String>, Event> {
     let Some(value) = input.get(key).filter(|value| !value.is_null()) else {
         return Ok(None);
     };
     match value.as_str() {
         Some(text) if !text.trim().is_empty() => Ok(Some(text.to_string())),
-        _ => Err(ToolResult::error(directives.render(
+        _ => Err(Event::error(directives.render(
             FINISH_ARGUMENT_BLANK,
             &[("argument", key), ("value", &value.to_string())],
         ))),
@@ -190,10 +181,10 @@ fn mark_finished(
     id: &str,
     agent: &str,
     directives: &DirectiveStore,
-) -> Result<(), ToolResult> {
+) -> Result<(), Event> {
     queue
         .set_finished_by(id, agent)
-        .map_err(|error| ToolResult::error(super::task_error_message(error, directives)))
+        .map_err(|error| Event::error(super::task_error_message(error, directives)))
 }
 
 /// Reserved placeholders substituted into the child task's `task`
@@ -230,19 +221,19 @@ fn attach_result(
     result: Value,
     schema: Option<&Schema>,
     directives: &DirectiveStore,
-) -> Result<(Value, Vec<String>), ToolResult> {
+) -> Result<(Value, Vec<String>), Event> {
     let (validated, repaired) = queue.set_result(id, result).map_err(|violations| {
         // Composed here, where the task's schema is known: the loop
         // passes the content to the model as-is.
-        ToolResult::Error {
-            content: crate::prompts::arguments_retry_detail(
+        Event::tool_failure(
+            crate::prompts::arguments_retry_detail(
                 FinishTool::NAME,
                 &violations.to_string(),
                 schema.map(Schema::get_raw_schema),
                 directives,
             ),
-            kind: ToolFailureKind::SchemaValidationFailed,
-        }
+            "schema_failed",
+        )
     })?;
     let notes = repaired.iter().map(|pointer| retype_message(pointer));
     Ok((validated, notes.collect()))
@@ -330,13 +321,7 @@ mod tests {
             .call(serde_json::json!({"result": {"line": "42"}}), &ctx)
             .await;
 
-        assert!(
-            matches!(
-                &outcome,
-                ToolResult::Success { repaired, .. } if repaired == &vec!["/line retyped".to_string()]
-            ),
-            "{outcome:?}"
-        );
+        assert_eq!(outcome.repaired, vec!["/line retyped"]);
     }
 
     #[tokio::test]
@@ -350,13 +335,7 @@ mod tests {
             .call(serde_json::json!({"result": {"line": "about 42"}}), &ctx)
             .await;
 
-        assert!(matches!(
-            outcome,
-            ToolResult::Error {
-                kind: ToolFailureKind::SchemaValidationFailed,
-                ..
-            }
-        ));
+        assert_eq!(outcome.get_data()["reason"], "schema_failed");
     }
 
     // Argument shape
@@ -431,7 +410,10 @@ mod tests {
             .call(serde_json::json!({"result": {"handover": "x"}}), &ctx)
             .await;
 
-        assert!(matches!(outcome, ToolResult::Success { .. }), "{outcome:?}");
+        assert!(
+            outcome.get_name() == Event::TOOL_CALL_FINISHED,
+            "{outcome:?}"
+        );
         let task = queue.get_task(&id).unwrap();
         assert_eq!(task.status, Status::Finished);
         assert_eq!(
@@ -459,7 +441,10 @@ mod tests {
         }];
         let outcome = registry.execute(&calls, &ctx).await.remove(0);
 
-        assert!(matches!(outcome, ToolResult::Success { .. }), "{outcome:?}");
+        assert!(
+            outcome.get_name() == Event::TOOL_CALL_FINISHED,
+            "{outcome:?}"
+        );
         assert_eq!(
             queue.get_task(&id).unwrap().result.as_ref(),
             Some(&serde_json::json!({ "status": "malicious" }))
@@ -487,7 +472,7 @@ mod tests {
         let outcome = Tool::from(FinishTool)
             .call(serde_json::json!({"result": "the answer"}), &ctx)
             .await;
-        assert!(matches!(outcome, ToolResult::Success { .. }));
+        assert!(outcome.get_name() == Event::TOOL_CALL_FINISHED);
         let t = queue.get_task(&id).unwrap();
         assert_eq!(t.status, Status::Finished);
         assert_eq!(
@@ -555,7 +540,7 @@ mod tests {
                 .call(serde_json::json!({"result": value}), &ctx)
                 .await;
             assert!(
-                matches!(outcome, ToolResult::Success { .. }),
+                outcome.get_name() == Event::TOOL_CALL_FINISHED,
                 "expected success for {value:?}"
             );
             let t = queue.get_task(&id).unwrap();
@@ -572,7 +557,7 @@ mod tests {
         let outcome = Tool::from(FinishTool)
             .call(serde_json::json!({"result": {"x": 1, "y": [2, 3]}}), &ctx)
             .await;
-        assert!(matches!(outcome, ToolResult::Success { .. }));
+        assert!(outcome.get_name() == Event::TOOL_CALL_FINISHED);
         let t = queue.get_task(&id).unwrap();
         assert_eq!(t.status, Status::Finished);
         assert_eq!(t.result.as_ref().unwrap()["x"], 1);
@@ -609,20 +594,14 @@ mod tests {
         let outcome = Tool::from(FinishTool)
             .call(serde_json::json!({"result": {"x": {}}}), &ctx)
             .await;
-        assert!(matches!(
-            outcome,
-            ToolResult::Error {
-                kind: ToolFailureKind::SchemaValidationFailed,
-                ..
-            }
-        ));
+        assert_eq!(outcome.get_data()["reason"], "schema_failed");
         let t = queue.get_task(&id).unwrap();
         assert_eq!(t.status, Status::InProgress);
 
         let outcome = Tool::from(FinishTool)
             .call(serde_json::json!({"result": {"x": "ok"}}), &ctx)
             .await;
-        assert!(matches!(outcome, ToolResult::Success { .. }));
+        assert!(outcome.get_name() == Event::TOOL_CALL_FINISHED);
         let t = queue.get_task(&id).unwrap();
         assert_eq!(t.status, Status::Finished);
         assert_eq!(t.result.as_ref().unwrap()["x"], "ok");
@@ -652,7 +631,7 @@ mod tests {
         let outcome = finish_for(schema)
             .call(serde_json::json!({"result": {"x": "ok"}}), &ctx)
             .await;
-        assert!(matches!(outcome, ToolResult::Success { .. }));
+        assert!(outcome.get_name() == Event::TOOL_CALL_FINISHED);
         let t = queue.get_task(&id).unwrap();
         assert_eq!(t.status, Status::Finished);
         assert_eq!(t.result.as_ref().unwrap(), &serde_json::json!({"x": "ok"}));
@@ -683,7 +662,7 @@ mod tests {
         let outcome = Tool::from(FinishTool)
             .call(serde_json::json!({"result": "{\"x\": \"ok\"}"}), &ctx)
             .await;
-        assert!(matches!(outcome, ToolResult::Success { .. }));
+        assert!(outcome.get_name() == Event::TOOL_CALL_FINISHED);
 
         let t = queue.get_task(&id).unwrap();
         assert_eq!(t.status, Status::Finished);
@@ -702,7 +681,7 @@ mod tests {
         let outcome = Tool::from(FinishTool)
             .call(serde_json::json!({"result": "x"}), &ctx)
             .await;
-        assert!(matches!(outcome, ToolResult::Error { .. }));
+        assert!(outcome.get_name() == Event::TOOL_CALL_FAILED);
     }
 
     #[tokio::test]
@@ -771,7 +750,7 @@ mod tests {
             }));
         }
         for h in handles {
-            assert!(matches!(h.await.unwrap(), ToolResult::Success { .. }));
+            assert!(h.await.unwrap().get_name() == Event::TOOL_CALL_FINISHED);
         }
 
         // Every finish appends to the one shared log, so a torn line here is
@@ -819,7 +798,7 @@ mod tests {
                 &ctx,
             )
             .await;
-        assert!(matches!(outcome, ToolResult::Success { .. }));
+        assert!(outcome.get_name() == Event::TOOL_CALL_FINISHED);
 
         let parent = queue.get_task(&parent_id).unwrap();
         assert_eq!(parent.status, Status::Finished);
@@ -924,13 +903,7 @@ mod tests {
                 &ctx,
             )
             .await;
-        assert!(matches!(
-            outcome,
-            ToolResult::Error {
-                kind: ToolFailureKind::SchemaValidationFailed,
-                ..
-            }
-        ));
+        assert_eq!(outcome.get_data()["reason"], "schema_failed");
 
         let parent = queue.get_task(&parent_id).unwrap();
         assert_eq!(parent.status, Status::InProgress);
@@ -980,7 +953,7 @@ mod tests {
             )
             .await
             ;
-        assert!(matches!(outcome, ToolResult::Success { .. }));
+        assert!(outcome.get_name() == Event::TOOL_CALL_FINISHED);
 
         let parent = queue.get_task(&parent_id).unwrap();
         assert_eq!(parent.status, Status::Finished);
@@ -1008,7 +981,7 @@ mod tests {
                 &ctx,
             )
             .await;
-        assert!(matches!(outcome, ToolResult::Success { .. }));
+        assert!(outcome.get_name() == Event::TOOL_CALL_FINISHED);
 
         let parent = queue.get_task(&parent_id).unwrap();
         assert_eq!(parent.status, Status::Finished);
@@ -1053,13 +1026,7 @@ mod tests {
                 &ctx,
             )
             .await;
-        assert!(matches!(
-            outcome,
-            ToolResult::Error {
-                kind: ToolFailureKind::SchemaValidationFailed,
-                ..
-            }
-        ));
+        assert_eq!(outcome.get_data()["reason"], "schema_failed");
 
         let parent = queue.get_task(&parent_id).unwrap();
         assert_eq!(parent.status, Status::InProgress);
@@ -1079,7 +1046,7 @@ mod tests {
         let outcome = Tool::from(FinishTool)
             .call(serde_json::json!({"result": "done"}), &ctx)
             .await;
-        assert!(matches!(outcome, ToolResult::Success { .. }));
+        assert!(outcome.get_name() == Event::TOOL_CALL_FINISHED);
         assert_eq!(queue.get_task(&parent_id).unwrap().status, Status::Finished);
         assert!(queue.get_task("t-2").is_none());
     }
@@ -1095,7 +1062,10 @@ mod tests {
                 &ctx,
             )
             .await;
-        assert!(matches!(outcome, ToolResult::Success { .. }), "{outcome:?}");
+        assert!(
+            outcome.get_name() == Event::TOOL_CALL_FINISHED,
+            "{outcome:?}"
+        );
 
         let child = queue.get_task("t-2").unwrap();
         assert!(child_body(&child).starts_with("alice's findings"));
@@ -1168,7 +1138,8 @@ mod tests {
         ] {
             let outcome = Tool::from(FinishTool).call(body, &ctx).await;
             assert!(
-                matches!(&outcome, ToolResult::Error { content: message, .. } if message.contains("needs a result")),
+                outcome.get_name() == Event::TOOL_CALL_FAILED
+                    && outcome.get_content().contains("needs a result"),
                 "{outcome:?}",
             );
         }
@@ -1193,7 +1164,7 @@ mod tests {
                     &ctx,
                 )
                 .await;
-            assert!(matches!(outcome, ToolResult::Success { .. }));
+            assert!(outcome.get_name() == Event::TOOL_CALL_FINISHED);
 
             let parent = queue.get_task(&parent_id).unwrap();
             assert_eq!(parent.status, Status::Finished);
@@ -1230,7 +1201,8 @@ mod tests {
         ] {
             let outcome = Tool::from(FinishTool).call(body, &ctx).await;
             assert!(
-                matches!(&outcome, ToolResult::Error { content: message, .. } if message.contains("non-blank")),
+                outcome.get_name() == Event::TOOL_CALL_FAILED
+                    && outcome.get_content().contains("non-blank"),
                 "{outcome:?}",
             );
         }
@@ -1252,7 +1224,7 @@ mod tests {
                 &ctx,
             )
             .await;
-        assert!(matches!(outcome, ToolResult::Error { .. }));
+        assert!(outcome.get_name() == Event::TOOL_CALL_FAILED);
     }
 
     #[tokio::test]

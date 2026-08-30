@@ -756,7 +756,7 @@ You can define custom tools for specific needs with the following parameters:
 Describe the tool, then hand it the code it runs:
 
 ```rust
-use agentwerk::tools::{Tool, ToolResult};
+use agentwerk::{Event, tools::Tool};
 use serde_json::Value;
 
 let greet = Tool::new("greet")
@@ -769,12 +769,14 @@ let greet = Tool::new("greet")
     .concurrent(true)
     .handler(|input: Value, _context| async move {
         let name = input["name"].as_str().unwrap_or("world");
-        ToolResult::success(format!("Hello, {name}!"))
+        Event::new(Event::TOOL_CALL_FINISHED).data(json!({
+            "output": format!("Hello, {name}!")
+        }))
     })
     .build();
 ```
 
-Return `ToolResult::error(message)` for a failure the model should work around.
+Return a `tool_call_failed` event with a string `message` for a failure the model should work around.
 
 See [`Tool`](https://docs.rs/agentwerk/latest/agentwerk/tools/struct.Tool.html).
 

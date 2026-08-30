@@ -48,16 +48,18 @@ tasks.add_task(Task::new("Audit src/db."));               // the default scope
 - `get` is the only entry point: dispatch, `partition_tool_calls`, and the `opened_paths` lookup all go through it.
 - Every registered tool carries a compiled `Schema`, so a tool without one is unrepresentable. `ToolBuilder::schema` is the one place a document compiles, and it panics on one the compiler refuses, so a broken definition fails the build rather than a request.
 - `Schema::validate` is the only thing that rejects a call's arguments. It retypes what the schema names a type for, then checks what that produced, so the model reads back everything still wrong in one report per turn.
-- No tool checks its own arguments. A requirement that holds only for some values of a discriminator is stated with `allOf`/`if`/`then` in the tool's `.schema.json`; a rejection answers as a `ToolResult::Error` tagged `SchemaValidationFailed`.
+- No tool checks its own arguments. A requirement that holds only for some values of a discriminator is stated with `allOf`/`if`/`then` in the tool's `.schema.json`; a rejection answers as `tool_call_failed` with `reason: schema_failed`.
 - The loop rewrites each call to the registered name before emitting `tool_call_started`, so `Event` and `Stats` never split one tool across spellings. Both repairs reach the host as `response_repaired` events naming the tool, with `call_malformed` for a folded name and `value_mistyped` for a retyped value.
-- A name that resolves to nothing fails as `ToolFailureKind::ToolNotFound`, with a message naming every registered tool. Without that list each retry spends `max_schema_retries` until the task fails. A call the model wrote as text takes the same path.
+- A name that resolves to nothing returns `tool_call_failed` with `reason: not_found` and a message naming every registered tool. Without that list each retry spends `max_schema_retries` until the task fails. A call the model wrote as text takes the same path.
 
 ## Every Directive Is a Catalogue Entry
 
 **Text agentwerk sends the model to report a failure or correct its behavior is one entry in `prompts/directives/*.md`, named by a `pub const` beside it, and the function an agent takes through `Agent::directives` decides what it renders as. No call site writes one inline.**
 
 ```rust
-ToolResult::error(ctx.directives.render(EDIT_FILE_OLD_STRING_NOT_FOUND, &[("path", &path)]))
+Event::new(Event::TOOL_CALL_FAILED)
+    .directive(EDIT_FILE_OLD_STRING_NOT_FOUND)
+    .data(json!({ "reason": "execution_failed", "message": message }))
 ```
 
 - `DirectiveStore::render(key, values)` hands that function the key, then binds `{name}` into what comes back, or into the catalogue text when it answers `None`. A store therefore varies a directive by which one it is, and the values reach the model through the template rather than through the function. It takes a `&str`, so the constants rather than the compiler are what keep the 94 call sites honest.
@@ -110,8 +112,8 @@ Schemas and results:
 **`Event` reports state. `ProviderError` reports a failed provider contract. The two channels carry independent information.**
 
 - Every state transition publishes an `Event`. A failed request fires both `ProviderError` and a matching `Event` (`RequestFailed`, `PolicyViolated`). `Event.name` is the sole semantic discriminator: caller-published built-in names receive the same hooks, statistics, and persistence behavior, but publication does not perform the associated transition.
-- A failed tool call is an `Event` alone: runtime handling keeps a typed `ToolFailureKind`, while `ToolCallFailed` carries its stable string and the model-visible message.
-- A model-fixable failure (wrong arguments, schema mismatch, missing file) goes back to the model as a `ToolResult::Error` content block. It still fires `ToolCallFailed` but does not stop the run.
+- A tool returns one terminal `Event`. `tool_call_finished` carries `output`; `tool_call_failed` carries the stable `reason`, model-visible `message`, and optional top-level `directive`.
+- A model-fixable failure (wrong arguments, schema mismatch, missing file) becomes a failed tool-result content block for the provider. It still fires `ToolCallFailed` but does not stop the run.
 - Handlers MUST be cheap and non-blocking; the loop does not await them. The four `_async` twins are the exception, and the loop still never awaits: registering one only queues the event, and whichever `finish` is waiting drains it and awaits each handler on its own task. A handler that never returns therefore stalls the caller rather than an agent, and a `start()`-only host uses the blocking form.
 
 `Queue::on_event(h)` pushes a handler onto an ordered chain. Every installed handler fires on every event, in installation order, and each is handed the queue and the same `&Event` rather than its own copy. When no handler is installed, `default_logger` runs in its place.
@@ -128,8 +130,8 @@ Schemas and results:
 
 - Reached a state: `Event` only.
 - Could not fulfil a contract: typed error in the matching domain.
-- Both at once (terminal request failure, breached limit): define both. Share the payload type when observer-friendly (`PolicyViolation`); introduce a stripped `Kind` enum when the error carries observer-hostile detail (`RequestErrorKind`, `ToolFailureKind`).
-- Model-fixable failure: `ToolResult::Error(String)`; still fires `ToolCallFailed` but is recoverable.
+- Both at once (terminal request failure, breached limit): define both. Share the payload type when observer-friendly (`PolicyViolation`); keep observer-hostile request detail in `RequestErrorKind`.
+- Model-fixable failure: a `tool_call_failed` event; still recoverable.
 - A public error enum carries `#[non_exhaustive]`, which covers new variants only: adding a field to an existing struct variant still breaks a caller that matches it without `..`, so prefer a new variant to widening an old one.
 
 ## Providers Own Their Client
@@ -174,7 +176,7 @@ tasks.find_events("tool_call_failed AND created > -1h");
 - `cancel`, `finish`, and `pending` read `matches` alone, so an `ORDER BY` handed to them does nothing. Nothing there is ordered.
 - `find_results` and `find_result` share `results_of`, which is `default_status(Finished)` plus `and_result`. `default_status` adds its term only when the tree mentions no status, and `Condition::Test` mentions no field, so a closure always takes the default. `and_result` is why `find_result` answers with the first match carrying a result rather than the first match. `finish` uses `and_status` instead, which adds `status = Finished` whatever the filter said.
 - Two equalities on one single-valued field are a parse error rather than a query no task satisfies, and the message names `IN` as the fix. An absent field fails every comparison, so `label != scan` never reaches an unlabelled task and `IS EMPTY` is what does.
-- The `tasks` tool takes the same syntax as its one `aql` argument, and answers a `QueryError` as a `ToolResult::Error` through `task_query_invalid`. Nothing on that path panics. The tool reads tasks only: the event set is a host API.
+- The `tasks` tool takes the same syntax as its one `aql` argument, and answers a `QueryError` as `tool_call_failed` through `task_query_invalid`. Nothing on that path panics. The tool reads tasks only: the event set is a host API.
 - A selection an agent's id or label goes into stays a closure. AQL has no way to bind a value, and both derive from a host-supplied label, so `agent = {id}` would let a label carrying `=`, a quote, or a space change the query. `resolve_current_id` and the loop's own claim filter are the two.
 - `EventField::sort_unordered` leaves the log order alone, where `TaskField`'s sorts by creation, because `find_events` reads a file that is already in order and the task store is a map. That is also what lets `find_event` stop at the first match when the query names no order, instead of copying the whole log to sort it.
 - The four time fields take `>`, `>=`, `<`, `<=` against a date, an offset back from now, or milliseconds. An offset resolves in `Query::new`, not in `matches`, so one compiled query answers one set however long it is held.

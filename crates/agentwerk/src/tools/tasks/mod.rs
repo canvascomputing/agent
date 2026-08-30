@@ -12,7 +12,7 @@ use crate::prompts::directives::{
     TASK_NOT_FOUND, TASK_QUERY_INVALID, TASK_RESULT_MISSING, TASK_TRANSITION_REJECTED,
 };
 
-use super::tool::{ToolContext, ToolResult};
+use super::tool::{Event, ToolContext};
 
 mod finish;
 mod tasks;
@@ -46,9 +46,10 @@ pub enum TasksArgs {
     },
 }
 
-pub(super) fn dispatch(args: TasksArgs, ctx: &ToolContext) -> ToolResult {
+pub(super) fn dispatch(args: TasksArgs, ctx: &ToolContext) -> Event {
     let Some(queue) = ctx.queue.clone() else {
-        return ToolResult::error(ctx.directives.render(QUEUE_UNAVAILABLE, &[]));
+        return Event::error(ctx.directives.render(QUEUE_UNAVAILABLE, &[]))
+            .directive(QUEUE_UNAVAILABLE);
     };
 
     match args {
@@ -61,30 +62,27 @@ pub(super) fn dispatch(args: TasksArgs, ctx: &ToolContext) -> ToolResult {
 }
 
 /// The task an action names, or the one this agent is holding.
-fn resolve_id(queue: &Queue, id: Option<String>, ctx: &ToolContext) -> Result<String, ToolResult> {
+fn resolve_id(queue: &Queue, id: Option<String>, ctx: &ToolContext) -> Result<String, Event> {
     match id {
         Some(id) => Ok(id),
         None => resolve_current_id(queue, ctx),
     }
 }
 
-pub(super) fn resolve_current_id(queue: &Queue, ctx: &ToolContext) -> Result<String, ToolResult> {
+pub(super) fn resolve_current_id(queue: &Queue, ctx: &ToolContext) -> Result<String, Event> {
     if let Some(id) = ctx.task_id.as_deref() {
         return Ok(id.to_string());
     }
     // A closure, never `agent = {id}`: an id derives from a host-supplied label,
     // and AQL binds no values, so one carrying `=` or a quote rewrites the query.
-    let agent_id = ctx
-        .agent_id
-        .clone()
-        .ok_or_else(|| ToolResult::error(ctx.directives.render(TASK_ID_MISSING, &[])))?;
+    let agent_id = ctx.agent_id.clone().ok_or_else(|| {
+        Event::error(ctx.directives.render(TASK_ID_MISSING, &[])).directive(TASK_ID_MISSING)
+    })?;
     match queue.find_task(move |t: &Task| {
         t.status == Status::InProgress && t.assignee.as_deref() == Some(agent_id.as_str())
     }) {
         Some(t) => Ok(t.id.clone()),
-        None => Err(ToolResult::error(
-            ctx.directives.render(TASK_NOT_ASSIGNED, &[]),
-        )),
+        None => Err(Event::error(ctx.directives.render(TASK_NOT_ASSIGNED, &[]))),
     }
 }
 
@@ -184,46 +182,48 @@ fn task_preview(task: &serde_json::Value) -> String {
     truncate_for_preview(&raw, 80)
 }
 
-fn action_task(queue: &Queue, id: Option<String>, ctx: &ToolContext) -> ToolResult {
+fn action_task(queue: &Queue, id: Option<String>, ctx: &ToolContext) -> Event {
     let id = match resolve_id(queue, id, ctx) {
         Ok(k) => k,
         Err(e) => return e,
     };
     match queue.get_task(&id) {
-        Some(t) => ToolResult::success(render_task(&t)),
-        None => ToolResult::error(ctx.directives.render(TASK_NOT_FOUND, &[("id", &id)])),
+        Some(t) => Event::success(render_task(&t)),
+        None => Event::error(ctx.directives.render(TASK_NOT_FOUND, &[("id", &id)]))
+            .directive(TASK_NOT_FOUND),
     }
 }
 
-fn action_result(queue: &Queue, id: Option<String>, ctx: &ToolContext) -> ToolResult {
+fn action_result(queue: &Queue, id: Option<String>, ctx: &ToolContext) -> Event {
     let id = match resolve_id(queue, id, ctx) {
         Ok(k) => k,
         Err(e) => return e,
     };
     let Some(task) = queue.get_task(&id) else {
-        return ToolResult::error(ctx.directives.render(TASK_NOT_FOUND, &[("id", &id)]));
+        return Event::error(ctx.directives.render(TASK_NOT_FOUND, &[("id", &id)]))
+            .directive(TASK_NOT_FOUND);
     };
     match task.result.as_ref() {
-        Some(result) => ToolResult::success(render_result(&id, &queue.result_path(&id), result)),
-        None => ToolResult::error(ctx.directives.render(
+        Some(result) => Event::success(render_result(&id, &queue.result_path(&id), result)),
+        None => Event::error(ctx.directives.render(
             TASK_RESULT_MISSING,
             &[("id", &id), ("status", status_label(task.status))],
         )),
     }
 }
 
-fn action_list(queue: &Queue, aql: Option<String>, directives: &DirectiveStore) -> ToolResult {
+fn action_list(queue: &Queue, aql: Option<String>, directives: &DirectiveStore) -> Event {
     let pool: Vec<Task> = match aql.as_deref().map(Query::new) {
         Some(Ok(query)) => queue.find_tasks(query),
         Some(Err(error)) => {
-            return ToolResult::error(
+            return Event::error(
                 directives.render(TASK_QUERY_INVALID, &[("error", &error.to_string())]),
             )
         }
         None => queue.get_tasks(),
     };
     if pool.is_empty() {
-        return ToolResult::success("(no matching tasks)".to_string());
+        return Event::success("(no matching tasks)".to_string());
     }
     let previews: Vec<String> = pool
         .iter()
@@ -236,15 +236,10 @@ fn action_list(queue: &Queue, aql: Option<String>, directives: &DirectiveStore) 
         .zip(previews.iter())
         .map(|(t, p)| (t.id.as_str(), p.as_str(), t.status, t.label.as_deref()))
         .collect();
-    ToolResult::success(render_summary_list(&rows))
+    Event::success(render_summary_list(&rows))
 }
 
-fn action_create(
-    queue: &Queue,
-    task: Value,
-    label: Option<String>,
-    ctx: &ToolContext,
-) -> ToolResult {
+fn action_create(queue: &Queue, task: Value, label: Option<String>, ctx: &ToolContext) -> Event {
     let mut task = Task::new(task);
     if let Some(label) = label {
         task = task.label(label);
@@ -256,7 +251,7 @@ fn action_create(
         .expect("agent_id on ToolContext")
         .to_string();
     let id = queue.insert(task, reporter);
-    ToolResult::success(format!("Created task {id}"))
+    Event::success(format!("Created task {id}"))
 }
 
 fn action_edit(
@@ -265,18 +260,19 @@ fn action_edit(
     new_task: Option<Value>,
     new_label: Option<String>,
     ctx: &ToolContext,
-) -> ToolResult {
+) -> Event {
     let id = match resolve_id(queue, id, ctx) {
         Ok(k) => k,
         Err(e) => return e,
     };
     if new_task.is_none() && new_label.is_none() {
-        return ToolResult::error(ctx.directives.render(TASK_EDIT_INCOMPLETE, &[]));
+        return Event::error(ctx.directives.render(TASK_EDIT_INCOMPLETE, &[]))
+            .directive(TASK_EDIT_INCOMPLETE);
     }
 
     match queue.edit(&id, new_task, new_label) {
-        Ok(()) => ToolResult::success(format!("Edited task {id}")),
-        Err(e) => ToolResult::error(task_error_message(e, &ctx.directives)),
+        Ok(()) => Event::success(format!("Edited task {id}")),
+        Err(e) => Event::error(task_error_message(e, &ctx.directives)),
     }
 }
 
@@ -328,11 +324,11 @@ mod tests {
         tool: impl Into<crate::tools::Tool>,
         input: serde_json::Value,
         ctx: &ToolContext,
-    ) -> ToolResult {
+    ) -> Event {
         tool.into().call(input, ctx).await
     }
 
-    fn unwrap_text(result: &ToolResult) -> &str {
+    fn unwrap_text(result: &Event) -> &str {
         let s = result.get_content();
         s
     }
@@ -362,7 +358,7 @@ mod tests {
         )
         .await;
         let text = unwrap_text(&result);
-        assert!(matches!(result, ToolResult::Success { .. }), "{text}");
+        assert!(result.get_name() == Event::TOOL_CALL_FINISHED, "{text}");
         assert!(text.contains("a lead"), "expected the result: {text}");
         assert!(
             text.contains("result.json"),
@@ -397,7 +393,7 @@ mod tests {
         )
         .await;
 
-        assert!(matches!(result, ToolResult::Error { .. }));
+        assert!(result.get_name() == Event::TOOL_CALL_FAILED);
         assert!(unwrap_text(&result).contains("`id` is missing"));
     }
 
@@ -414,7 +410,7 @@ mod tests {
         )
         .await;
 
-        assert!(matches!(result, ToolResult::Error { .. }));
+        assert!(result.get_name() == Event::TOOL_CALL_FAILED);
         assert!(unwrap_text(&result).contains("No task t-404"));
     }
 
@@ -428,7 +424,7 @@ mod tests {
             &ctx,
         )
         .await;
-        assert!(matches!(result, ToolResult::Error { .. }), "{result:?}");
+        assert!(result.get_name() == Event::TOOL_CALL_FAILED, "{result:?}");
         assert!(unwrap_text(&result).contains("InProgress"));
     }
 
@@ -541,7 +537,7 @@ mod tests {
             &ctx,
         )
         .await;
-        assert!(matches!(result, ToolResult::Error { .. }), "{result:?}");
+        assert!(result.get_name() == Event::TOOL_CALL_FAILED, "{result:?}");
         assert!(unwrap_text(&result).contains("agent"));
     }
 
@@ -556,7 +552,7 @@ mod tests {
             &ctx,
         )
         .await;
-        assert!(matches!(result, ToolResult::Success { .. }));
+        assert!(result.get_name() == Event::TOOL_CALL_FINISHED);
         let t = queue.get_task("t-1").unwrap();
         assert_eq!(t.task, serde_json::Value::String("new task".into()));
         assert_eq!(t.reporter, "alice");
@@ -577,7 +573,7 @@ mod tests {
             &ctx,
         )
         .await;
-        assert!(matches!(result, ToolResult::Success { .. }));
+        assert!(result.get_name() == Event::TOOL_CALL_FINISHED);
         let t = queue.get_task("t-1").unwrap();
         assert_eq!(t.label.as_deref(), Some("research"));
         assert_eq!(t.status, Status::Todo);
@@ -598,7 +594,7 @@ mod tests {
             &ctx,
         )
         .await;
-        assert!(matches!(result, ToolResult::Success { .. }));
+        assert!(result.get_name() == Event::TOOL_CALL_FINISHED);
         let t = queue.get_task("t-1").unwrap();
         assert_eq!(t.label.as_deref(), Some("alice"));
         assert_eq!(t.status, Status::Todo);
@@ -625,7 +621,7 @@ mod tests {
             &ctx,
         )
         .await;
-        assert!(matches!(result, ToolResult::Success { .. }));
+        assert!(result.get_name() == Event::TOOL_CALL_FINISHED);
         assert!(queue.get_task("t-1").unwrap().schema.is_none());
 
         queue.claim(&Query::from("analysis"), "bob");
@@ -646,7 +642,7 @@ mod tests {
             &ctx,
         )
         .await;
-        assert!(matches!(result, ToolResult::Success { .. }));
+        assert!(result.get_name() == Event::TOOL_CALL_FINISHED);
         let t = queue.get_task(&id).unwrap();
         assert_eq!(t.task, serde_json::Value::String("new body".into()));
         assert_eq!(t.label.as_deref(), Some("urgent"));
@@ -659,7 +655,7 @@ mod tests {
         for action in ["done", "transition", "comment", "assign", "attach"] {
             let result = call(TasksTool, serde_json::json!({"action": action}), &ctx).await;
             assert!(
-                matches!(result, ToolResult::Error { .. }),
+                result.get_name() == Event::TOOL_CALL_FAILED,
                 "{action}: {result:?}"
             );
         }

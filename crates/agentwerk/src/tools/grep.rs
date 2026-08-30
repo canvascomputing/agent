@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use grep::searcher::sinks::UTF8;
 use serde_json::{Map, Value};
 
-use super::tool::{Tool, ToolContext, ToolResult};
+use super::tool::{Event, Tool, ToolContext};
 use crate::prompts::directives::{
     DirectiveStore, GREP_CANCELLED, GREP_FAILED, GREP_FILE_TYPE_UNKNOWN, GREP_GLOB_REJECTED,
     GREP_PATTERN_REJECTED, GREP_TIMED_OUT,
@@ -54,7 +54,7 @@ impl From<GrepTool> for Tool {
     }
 }
 
-async fn run(args: GrepArgs, ctx: ToolContext) -> ToolResult {
+async fn run(args: GrepArgs, ctx: ToolContext) -> Event {
     let query = Query::from_args(args);
 
     // The `grep`/`ignore` engine is synchronous, so run it on a blocking
@@ -72,13 +72,13 @@ async fn run(args: GrepArgs, ctx: ToolContext) -> ToolResult {
 
     let outcome = tokio::select! {
         biased;
-        _ = ctx.cancelled() => ToolResult::error(ctx.directives.render(GREP_CANCELLED, &[])),
+        _ = ctx.cancelled() => Event::error(ctx.directives.render(GREP_CANCELLED, &[])).directive(GREP_CANCELLED),
         r = tokio::time::timeout(SEARCH_TIMEOUT, handle) => match r {
-            Err(_) => ToolResult::error(ctx.directives.render(
+            Err(_) => Event::error(ctx.directives.render(
                 GREP_TIMED_OUT,
                 &[("seconds", &SEARCH_TIMEOUT.as_secs().to_string())],
             )),
-            Ok(Err(_)) => ToolResult::error(ctx.directives.render(GREP_FAILED, &[])),
+            Ok(Err(_)) => Event::error(ctx.directives.render(GREP_FAILED, &[])).directive(GREP_FAILED),
             Ok(Ok(result)) => result,
         },
     };
@@ -215,7 +215,7 @@ fn search_corpus(
     interrupt: &AtomicBool,
     deadline: Instant,
     directives: &DirectiveStore,
-) -> ToolResult {
+) -> Event {
     let root = match &query.path {
         Some(path) => dir.join(path),
         None => dir.to_path_buf(),
@@ -230,7 +230,7 @@ fn search_corpus(
                 walk.overrides(overrides);
             }
             Err(error) => {
-                return ToolResult::error(
+                return Event::error(
                     directives.render(GREP_GLOB_REJECTED, &[("error", &error.to_string())]),
                 )
             }
@@ -245,7 +245,7 @@ fn search_corpus(
                 walk.types(types);
             }
             Err(error) => {
-                return ToolResult::error(directives.render(
+                return Event::error(directives.render(
                     GREP_FILE_TYPE_UNKNOWN,
                     &[("file_type", file_type), ("error", &error.to_string())],
                 ))
@@ -270,7 +270,7 @@ fn run_regex(
     interrupt: &AtomicBool,
     deadline: Instant,
     directives: &DirectiveStore,
-) -> ToolResult {
+) -> Event {
     // Ripgrep's Rust-regex matcher, line-oriented. `dot_matches_new_line` and the
     // searcher's multi-line mode are tied to `multiline` so `.` spans newlines only
     // on request.
@@ -286,7 +286,7 @@ fn run_regex(
         // paren) is invalid. Name the remedy so the caller escapes rather than
         // re-sending the same doomed pattern.
         Err(error) => {
-            return ToolResult::error(
+            return Event::error(
                 directives.render(GREP_PATTERN_REJECTED, &[("error", &error.to_string())]),
             )
         }
@@ -442,11 +442,11 @@ fn note_pagination(map: &mut Map<String, Value>, query: &Query, truncated: bool)
     }
 }
 
-fn object_result(map: Map<String, Value>) -> ToolResult {
-    ToolResult::success(serde_json::to_string(&Value::Object(map)).unwrap_or_default())
+fn object_result(map: Map<String, Value>) -> Event {
+    Event::success(serde_json::to_string(&Value::Object(map)).unwrap_or_default())
 }
 
-pub(super) fn render_content(text: &str, query: &Query) -> ToolResult {
+pub(super) fn render_content(text: &str, query: &Query) -> Event {
     let lines: Vec<&str> = text.lines().collect();
     let (page, truncated) = paginate(&lines, query);
 
@@ -460,7 +460,7 @@ pub(super) fn render_content(text: &str, query: &Query) -> ToolResult {
     object_result(map)
 }
 
-pub(super) fn render_files(hits: &[String], query: &Query) -> ToolResult {
+pub(super) fn render_files(hits: &[String], query: &Query) -> Event {
     let (page, truncated) = paginate(hits, query);
 
     let mut map = Map::new();
@@ -471,7 +471,7 @@ pub(super) fn render_files(hits: &[String], query: &Query) -> ToolResult {
     object_result(map)
 }
 
-pub(super) fn render_count(rows: &[(String, u64)], query: &Query) -> ToolResult {
+pub(super) fn render_count(rows: &[(String, u64)], query: &Query) -> Event {
     let (page, truncated) = paginate(rows, query);
     let content = page
         .iter()

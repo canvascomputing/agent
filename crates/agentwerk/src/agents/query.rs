@@ -1591,7 +1591,7 @@ mod tests {
         crate::event::Event::new(crate::event::Event::TOOL_CALL_FAILED).data(json!({
             "tool_name": "grep",
             "call_id": "c1",
-            "reason": crate::tools::ToolFailureKind::ExecutionFailed,
+            "reason": "execution_failed",
             "message": message,
         }))
     }
@@ -2096,7 +2096,6 @@ mod tests {
 #[cfg(test)]
 mod event_tests {
     use super::*;
-    use crate::tools::ToolFailureKind;
 
     fn event(event: Event) -> Event {
         event.task_id("t-1").agent_id("scout-1")
@@ -2106,7 +2105,7 @@ mod event_tests {
         Event::new(Event::TOOL_CALL_FAILED).data(serde_json::json!({
             "tool_name": "grep",
             "call_id": "c1",
-            "reason": ToolFailureKind::ExecutionFailed,
+            "reason": "execution_failed",
             "message": message,
         }))
     }
