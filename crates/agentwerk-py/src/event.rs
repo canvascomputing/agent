@@ -38,7 +38,7 @@ impl PyEvent {
     #[classattr]
     const TEXT_CHUNK_RECEIVED: &'static str = Event::TEXT_CHUNK_RECEIVED;
     #[classattr]
-    const RESPONSE_REPAIRED: &'static str = Event::RESPONSE_REPAIRED;
+    const TOOL_CALL_REPAIRED: &'static str = Event::TOOL_CALL_REPAIRED;
     #[classattr]
     const TOOL_CALL_DECLINED: &'static str = Event::TOOL_CALL_DECLINED;
     #[classattr]

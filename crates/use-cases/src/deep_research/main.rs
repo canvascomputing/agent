@@ -281,12 +281,12 @@ async fn brave_search(api_key: &str, input: &serde_json::Value) -> Event {
         .await
     {
         Ok(r) => r,
-        Err(e) => return Event::new(Event::TOOL_CALL_FAILED).data(serde_json::json!({"reason": "execution_failed", "message": format!("Brave search failed: {e}")})),
+        Err(e) => return Event::new(Event::TOOL_CALL_FAILED).data(serde_json::json!({"kind": "execution_failed", "message": format!("Brave search failed: {e}")})),
     };
 
     let json: serde_json::Value = match response.json().await {
         Ok(j) => j,
-        Err(e) => return Event::new(Event::TOOL_CALL_FAILED).data(serde_json::json!({"reason": "execution_failed", "message": format!("Failed to parse response: {e}")})),
+        Err(e) => return Event::new(Event::TOOL_CALL_FAILED).data(serde_json::json!({"kind": "execution_failed", "message": format!("Failed to parse response: {e}")})),
     };
 
     let Some(results) = json["web"]["results"].as_array() else {
@@ -328,7 +328,7 @@ fn log_event(event: &Event) {
             eprintln!(
                 "│  ✗ {} ({}): {}",
                 data["tool_name"].as_str().unwrap_or_default(),
-                data["reason"].as_str().unwrap_or_default(),
+                data["kind"].as_str().unwrap_or_default(),
                 data["message"].as_str().unwrap_or_default(),
             );
         }

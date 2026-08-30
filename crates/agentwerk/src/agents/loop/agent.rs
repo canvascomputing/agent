@@ -70,7 +70,7 @@ impl<'a> TaskContext<'a> {
     pub(super) fn fail_with(&self, reason: RequestErrorKind, message: String) {
         self.emit_event(Event::new(Event::REQUEST_FAILED).data(serde_json::json!({
             "model": self.model.name,
-            "reason": reason,
+            "kind": reason,
             "message": message,
         })));
         self.fail_task();
@@ -246,6 +246,7 @@ fn silence_retry(context: &mut TaskContext<'_>) -> Option<Step> {
     context.emit_event(Event::new(Event::SCHEMA_RETRIED).data(serde_json::json!({
         "attempt": attempt,
         "max_attempts": max,
+        "kind": "tool_not_called",
         "message": detail,
     })));
     context.queue.append_reply(

@@ -225,7 +225,7 @@ mod tests {
     }
 
     fn run_finished() -> Event {
-        Event::new(Event::RUN_FINISHED).data(serde_json::json!({ "reason": "drained" }))
+        Event::new(Event::RUN_FINISHED).data(serde_json::json!({ "outcome": "drained" }))
     }
 
     /// The fold `Queue::load` runs over a session log as it resumes.

@@ -1591,7 +1591,7 @@ mod tests {
         crate::event::Event::new(crate::event::Event::TOOL_CALL_FAILED).data(json!({
             "tool_name": "grep",
             "call_id": "c1",
-            "reason": "execution_failed",
+            "kind": "execution_failed",
             "message": message,
         }))
     }
@@ -1615,7 +1615,7 @@ mod tests {
         let request_failed =
             crate::event::Event::new(crate::event::Event::REQUEST_FAILED).data(json!({
                 "model": "mock",
-                "reason": crate::providers::RequestErrorKind::ConnectionFailed,
+                "kind": crate::providers::RequestErrorKind::ConnectionFailed,
                 "message": "boom",
             }));
         let q = parse("errors ~ tool_call_failed");
@@ -2105,7 +2105,7 @@ mod event_tests {
         Event::new(Event::TOOL_CALL_FAILED).data(serde_json::json!({
             "tool_name": "grep",
             "call_id": "c1",
-            "reason": "execution_failed",
+            "kind": "execution_failed",
             "message": message,
         }))
     }

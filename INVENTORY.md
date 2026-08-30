@@ -890,7 +890,7 @@ Not bound, like the rest of `codegrep`.
 |----------|------|------------|
 | Rust | `Event { name: string, data: json, task_id: string, agent_id: string, label: string?, created_at: number }` | pub with crate-private fields |
 | both | `.RUN_STARTED`, `.RUN_FINISHED`, `.TASK_CREATED`, `.TASK_STARTED`, `.TASK_FINISHED`, `.TASK_FAILED`, `.TURN_STARTED`: string | pub |
-| both | `.REQUEST_STARTED`, `.REQUEST_FINISHED`, `.REQUEST_FAILED`, `.REQUEST_RETRIED`, `.TEXT_CHUNK_RECEIVED`, `.RESPONSE_REPAIRED`: string | pub |
+| both | `.REQUEST_STARTED`, `.REQUEST_FINISHED`, `.REQUEST_FAILED`, `.REQUEST_RETRIED`, `.TEXT_CHUNK_RECEIVED`, `.TOOL_CALL_REPAIRED`: string | pub |
 | both | `.TOOL_CALL_DECLINED`, `.TOOL_CALL_STARTED`, `.TOOL_CALL_FINISHED`, `.TOOL_CALL_FAILED`: string | pub |
 | both | `.FILE_OPEN_FINISHED`, `.FILE_OPEN_FAILED`, `.KNOWLEDGE_WRITTEN`, `.KNOWLEDGE_READ`, `.KNOWLEDGE_REMOVED`, `.KNOWLEDGE_LISTED`, `.KNOWLEDGE_FAILED`: string | pub |
 | both | `.POLICY_VIOLATED`, `.SCHEMA_RETRIED`, `.COMPACTION_STARTED`, `.COMPACTION_PROGRESS`, `.COMPACTION_FINISHED`, `.COMPACTION_FAILED`: string | pub |
@@ -1157,7 +1157,7 @@ Not bound: `Provider.from_env()` and `Model.from_env()` read these variables.
 | Rust | `impl Display for ProviderError` | pub |
 | Rust | `impl Error for ProviderError` | pub |
 | Rust | `RequestErrorKind` | pub |
-| Python | a string inside `Event.get_data()`: `data["reason"]` | |
+| Python | a string inside `Event.get_data()`: `data["kind"]` | |
 | Rust | `.AuthenticationFailed` | pub |
 | Rust | `.PermissionDenied` | pub |
 | Rust | `.ModelNotFound` | pub |
@@ -1442,7 +1442,7 @@ Not bound, apart from `ReasoningEffort` and `ToolDeclineKind`: Python binds the 
 | Rust | `impl AddAssign<TokenUsage> for TokenUsage` | pub |
 | Rust | `ModelResponse { content: ContentBlock[], status: ResponseStatus, usage: TokenUsage, model: string }` | pub |
 | Rust | `ToolDeclineKind` | pub |
-| Python | a string inside `Event.get_data()`: `data["reason"]` | |
+| Python | a string inside `Event.get_data()`: `data["kind"]` | |
 | Rust | `.OutputTruncated` | pub |
 | Rust | `.ReplyNotFinished` | pub |
 | Rust | `.AlreadyDelivered` | pub |
@@ -1450,8 +1450,8 @@ Not bound, apart from `ReasoningEffort` and `ToolDeclineKind`: Python binds the 
 | Rust | `impl Display for ToolDeclineKind` | pub |
 | Rust | `StreamEvent` | pub |
 | Rust | `.TextDelta { text: string }` | pub |
-| Rust | `.ToolCallRepaired { tool_name: string }` | pub |
-| Rust | `.ToolCallDeclined { tool_name: string, reason: ToolDeclineKind }` | pub |
+| Rust | `.ToolCallRepaired { tool_name: string, call_id: string }` | pub |
+| Rust | `.ToolCallDeclined { tool_name: string, kind: ToolDeclineKind }` | pub |
 
 ### Internal
 
@@ -1968,7 +1968,7 @@ Not bound: it is how `CommandTool` reads one command line.
 | Rust | `.get_dir(): string` | pub |
 | Rust | `.cancelled(): Promise<void>` | pub |
 | Rust | `impl Debug for ToolContext` | pub |
-| both | terminal `Event`: `tool_call_finished` carries `data.output` plus optional `data.output_path` and `data.repairs`; `tool_call_failed` carries `data.message` and `data.reason` | pub |
+| both | terminal `Event`: `tool_call_finished` carries `data.output` plus optional `data.output_path` and `data.repairs`; `tool_call_failed` carries `data.message` and `data.kind` | pub |
 | Rust | `ToolBuilder<D, H> { name: string, description: D, schema: Schema, concurrent: boolean, paths: string[], handler: H }` | pub |
 | Python | folded into the `@tool` decorator: the type changes as the description and handler are attached, which Python cannot hold across calls | |
 | Rust | `Tool { name: string, description: string, schema: Schema, concurrent: boolean, paths: string[], handler: ToolHandler }` | pub with private fields |

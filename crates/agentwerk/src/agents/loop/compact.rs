@@ -19,7 +19,7 @@ pub(super) async fn run(context: &mut TaskContext<'_>, reason: CompactReason) ->
     let total = algo::chunks_for_window(&task.to_messages(), window).len() as u32;
     context.emit_event(
         Event::new(Event::COMPACTION_STARTED)
-            .data(serde_json::json!({ "reason": reason, "total": total })),
+            .data(serde_json::json!({ "trigger": reason, "total": total })),
     );
 
     let on_progress: Arc<dyn Fn(u32, u32) + Send + Sync> = {
@@ -30,7 +30,7 @@ pub(super) async fn run(context: &mut TaskContext<'_>, reason: CompactReason) ->
             queue.emit_event(
                 Event::new(Event::COMPACTION_PROGRESS)
                     .data(serde_json::json!({
-                        "reason": reason,
+                        "trigger": reason,
                         "completed": completed,
                         "total": total,
                     }))
@@ -55,8 +55,11 @@ pub(super) async fn run(context: &mut TaskContext<'_>, reason: CompactReason) ->
         Ok(edited) => edited,
         Err(error) => {
             context.emit_event(
-                Event::new(Event::COMPACTION_FAILED)
-                    .data(serde_json::json!({ "reason": reason, "message": error.to_string() })),
+                Event::new(Event::COMPACTION_FAILED).data(serde_json::json!({
+                    "trigger": reason,
+                    "kind": "summarization_failed",
+                    "message": error.to_string(),
+                })),
             );
             context.fail_task();
             return None;
@@ -76,7 +79,8 @@ pub(super) async fn run(context: &mut TaskContext<'_>, reason: CompactReason) ->
     if !applied && matches!(reason, CompactReason::Reactive) {
         context.emit_event(
             Event::new(Event::COMPACTION_FAILED).data(serde_json::json!({
-                "reason": reason,
+                "trigger": reason,
+                "kind": "context_still_exceeded",
                 "message": "context still exceeds window after compaction",
             })),
         );
@@ -85,7 +89,7 @@ pub(super) async fn run(context: &mut TaskContext<'_>, reason: CompactReason) ->
     }
 
     context.emit_event(
-        Event::new(Event::COMPACTION_FINISHED).data(serde_json::json!({ "reason": reason })),
+        Event::new(Event::COMPACTION_FINISHED).data(serde_json::json!({ "trigger": reason })),
     );
     match reason {
         // Proactive skips Evaluate, which would re-trigger its own threshold.
@@ -122,7 +126,7 @@ mod tests {
             .iter()
             .filter(|e| {
                 e.get_name() == crate::event::Event::COMPACTION_STARTED
-                    && e.get_data()["reason"] == expected
+                    && e.get_data()["trigger"] == expected
             })
             .count()
     }
@@ -133,7 +137,7 @@ mod tests {
             .iter()
             .filter(|e| {
                 e.get_name() == crate::event::Event::COMPACTION_FINISHED
-                    && e.get_data()["reason"] == expected
+                    && e.get_data()["trigger"] == expected
             })
             .count()
     }
@@ -326,6 +330,11 @@ mod tests {
         let (events, _, task) = run_one(provider, 0, 10, Some(string_schema())).await;
 
         assert_eq!(compaction_finishes(&events, CompactReason::Reactive), 1);
+        assert!(events.iter().any(|event| {
+            event.get_name() == crate::event::Event::COMPACTION_FAILED
+                && event.get_data()["trigger"] == "reactive"
+                && event.get_data()["kind"] == "context_still_exceeded"
+        }));
         let failures = failures_in(&events);
         assert!(!failures.is_empty());
         assert_eq!(task.status, Status::Failed);
@@ -401,7 +410,8 @@ mod tests {
         assert_eq!(compaction_starts(&events, CompactReason::Proactive), 1);
         assert!(events.iter().any(|e| {
             e.get_name() == crate::event::Event::COMPACTION_FAILED
-                && e.get_data()["reason"] == "proactive"
+                && e.get_data()["trigger"] == "proactive"
+                && e.get_data()["kind"] == "summarization_failed"
                 && e.get_data()["message"]
                     .as_str()
                     .is_some_and(|message| message.contains("rate limited"))

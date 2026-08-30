@@ -121,7 +121,9 @@ fn run(store: &Knowledge, args: KnowledgeArgs, ctx: &ToolContext) -> Event {
                 Err(why) => {
                     record(Event::new(Event::KNOWLEDGE_FAILED).data(serde_json::json!({
                         "action": "write",
-                        "reason": failure_reason(&why),
+                        "slug": written,
+                        "kind": failure_reason(&why),
+                        "message": why.to_string(),
                     })));
                     Event::error(
                         ctx.directives
@@ -139,7 +141,9 @@ fn run(store: &Knowledge, args: KnowledgeArgs, ctx: &ToolContext) -> Event {
             Err(why) => {
                 record(Event::new(Event::KNOWLEDGE_FAILED).data(serde_json::json!({
                     "action": "read",
-                    "reason": failure_reason(&why),
+                    "slug": slug,
+                    "kind": failure_reason(&why),
+                    "message": why.to_string(),
                 })));
                 Event::success(
                     ctx.directives
@@ -158,7 +162,9 @@ fn run(store: &Knowledge, args: KnowledgeArgs, ctx: &ToolContext) -> Event {
             Err(why) => {
                 record(Event::new(Event::KNOWLEDGE_FAILED).data(serde_json::json!({
                     "action": "remove",
-                    "reason": failure_reason(&why),
+                    "slug": slug,
+                    "kind": failure_reason(&why),
+                    "message": why.to_string(),
                 })));
                 Event::error(
                     ctx.directives
@@ -400,10 +406,13 @@ mod tests {
         tasks.on_event(move |_, event| {
             if event.get_name() == crate::event::Event::KNOWLEDGE_FAILED {
                 let action = event.get_data()["action"].as_str().unwrap();
-                let reason = event.get_data()["reason"].as_str().unwrap();
-                seen.lock()
-                    .unwrap()
-                    .push(format!("{}:{action}:{reason}", event.get_name()));
+                let slug = event.get_data()["slug"].as_str().unwrap();
+                let kind = event.get_data()["kind"].as_str().unwrap();
+                let message = event.get_data()["message"].as_str().unwrap();
+                seen.lock().unwrap().push(format!(
+                    "{}:{action}:{slug}:{kind}:{message}",
+                    event.get_name()
+                ));
             } else if event.get_name().starts_with("knowledge_") {
                 seen.lock().unwrap().push(event.get_name().to_string());
             }
@@ -443,14 +452,14 @@ mod tests {
         );
 
         // Every action reports itself under its own kind, and the read of an
-        // absent slug reports the action and the reason it did not go through.
+        // absent slug reports the complete failure contract.
         assert_eq!(
             *reported.lock().unwrap(),
             vec![
                 "knowledge_written",
                 "knowledge_listed",
                 "knowledge_read",
-                "knowledge_failed:read:page_missing",
+                "knowledge_failed:read:ghost:page_missing:Page `ghost` not found",
                 "knowledge_removed",
             ],
         );

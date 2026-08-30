@@ -17,7 +17,7 @@ pub(super) fn collect_finish_reasons(queue: &Queue) -> Arc<Mutex<Vec<FinishReaso
         if event.get_name() == Event::RUN_FINISHED {
             if let Some(reason) = event
                 .get_data()
-                .get("reason")
+                .get("outcome")
                 .and_then(|value| serde_json::from_value(value.clone()).ok())
             {
                 sink.lock().unwrap().push(reason);

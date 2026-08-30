@@ -232,7 +232,7 @@ pub enum ToolDeclineKind {
 }
 
 impl ToolDeclineKind {
-    /// The stable snake_case spelling, the one `Event.data["reason"]` carries.
+    /// The stable snake_case spelling, the one `Event.data["kind"]` carries.
     pub fn get_name(&self) -> &'static str {
         match self {
             ToolDeclineKind::OutputTruncated => "output_truncated",
@@ -258,13 +258,13 @@ pub enum StreamEvent {
     /// A tool call the endpoint did not deliver usably, written as text or
     /// delivered without its arguments, was rebuilt from the text the model
     /// wrote; it will run.
-    ToolCallRepaired { tool_name: String },
+    ToolCallRepaired { tool_name: String, call_id: String },
 
     /// A framed tool call was found in the reply and declined, with the
     /// reason it was not promoted.
     ToolCallDeclined {
         tool_name: String,
-        reason: ToolDeclineKind,
+        kind: ToolDeclineKind,
     },
 }
 

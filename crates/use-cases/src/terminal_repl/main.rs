@@ -415,10 +415,10 @@ fn print_event(
         }
         Event::COMPACTION_STARTED => {
             break_stream();
-            let reason = &data["reason"];
+            let trigger = &data["trigger"];
             let total = &data["total"];
             eprintln!(
-                "{}… compacting context ({reason:?}): {total} chunks{}{}",
+                "{}… compacting context ({trigger:?}): {total} chunks{}{}",
                 style.dim,
                 window_usage_suffix(window, last_input),
                 style.reset,
@@ -432,9 +432,9 @@ fn print_event(
         }
         Event::COMPACTION_FINISHED => {
             break_stream();
-            let reason = &data["reason"];
+            let trigger = &data["trigger"];
             eprintln!(
-                "{}✓ context compacted ({reason:?}){}{}",
+                "{}✓ context compacted ({trigger:?}){}{}",
                 style.dim,
                 window_usage_suffix(window, last_input),
                 style.reset,
@@ -442,10 +442,10 @@ fn print_event(
         }
         Event::COMPACTION_FAILED => {
             break_stream();
-            let reason = &data["reason"];
+            let trigger = &data["trigger"];
             let message = data["message"].as_str().unwrap_or_default();
             eprintln!(
-                "{}✗ compaction failed ({reason:?}){}{}",
+                "{}✗ compaction failed ({trigger:?}){}{}",
                 style.red,
                 window_usage_suffix(window, last_input),
                 style.reset,
@@ -454,19 +454,19 @@ fn print_event(
         }
         Event::REQUEST_FAILED => {
             break_stream();
-            let reason = &data["reason"];
+            let kind = &data["kind"];
             let message = data["message"].as_str().unwrap_or_default();
-            eprintln!("{}✗ request failed ({reason:?}){}", style.red, style.reset);
+            eprintln!("{}✗ request failed ({kind:?}){}", style.red, style.reset);
             print_indented_detail(message, style);
         }
         Event::REQUEST_RETRIED => {
             break_stream();
             let attempt = &data["attempt"];
             let max_attempts = &data["max_attempts"];
-            let reason = &data["reason"];
+            let kind = &data["kind"];
             let message = data["message"].as_str().unwrap_or_default();
             eprintln!(
-                "{}↻ retry {attempt}/{max_attempts} ({reason:?}){}",
+                "{}↻ retry {attempt}/{max_attempts} ({kind:?}){}",
                 style.dim, style.reset,
             );
             print_indented_detail(message, style);

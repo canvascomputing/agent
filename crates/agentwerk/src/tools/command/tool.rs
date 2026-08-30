@@ -535,7 +535,7 @@ mod tests {
             input: serde_json::json!({}),
         }];
         let results = registry.execute(&calls, &test_tool_context()).await;
-        assert_eq!(results[0].get_data()["reason"], "schema_failed");
+        assert_eq!(results[0].get_data()["kind"], "schema_failed");
         assert!(
             results[0].get_content().contains("`command`"),
             "{}",

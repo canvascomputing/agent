@@ -695,7 +695,7 @@ def test_edit_replies_raises_when_the_editor_returns_dicts(queue):
 async def test_run_finished_announces_why_execution_ended(queue):
     reasons = []
     queue.on_event(
-        lambda _, event: reasons.append(event.get_data()["reason"])
+        lambda _, event: reasons.append(event.get_data()["outcome"])
         if event.get_name() == aw.Event.RUN_FINISHED
         else None
     )

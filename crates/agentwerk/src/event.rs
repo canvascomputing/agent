@@ -55,7 +55,7 @@ impl Event {
     pub const REQUEST_FAILED: &'static str = "request_failed";
     pub const REQUEST_RETRIED: &'static str = "request_retried";
     pub const TEXT_CHUNK_RECEIVED: &'static str = "text_chunk_received";
-    pub const RESPONSE_REPAIRED: &'static str = "response_repaired";
+    pub const TOOL_CALL_REPAIRED: &'static str = "tool_call_repaired";
     pub const TOOL_CALL_DECLINED: &'static str = "tool_call_declined";
     pub const TOOL_CALL_STARTED: &'static str = "tool_call_started";
     pub const TOOL_CALL_FINISHED: &'static str = "tool_call_finished";
@@ -87,7 +87,7 @@ impl Event {
         Self::REQUEST_FAILED,
         Self::REQUEST_RETRIED,
         Self::TEXT_CHUNK_RECEIVED,
-        Self::RESPONSE_REPAIRED,
+        Self::TOOL_CALL_REPAIRED,
         Self::TOOL_CALL_DECLINED,
         Self::TOOL_CALL_STARTED,
         Self::TOOL_CALL_FINISHED,
@@ -282,8 +282,8 @@ pub fn default_logger() -> Arc<dyn Fn(&Event) + Send + Sync> {
         let agent = &event.agent_id;
         match event.name.as_str() {
             Event::RUN_STARTED => eprintln!("run started"),
-            Event::RUN_FINISHED => match data_str(event, "reason") {
-                Some(reason) => eprintln!("run finished: {reason}"),
+            Event::RUN_FINISHED => match data_str(event, "outcome") {
+                Some(outcome) => eprintln!("run finished: {outcome}"),
                 None => eprintln!("run finished"),
             },
             Event::TASK_CREATED => eprintln!("[{agent}] created {}", event.task_id),
@@ -300,7 +300,7 @@ pub fn default_logger() -> Arc<dyn Fn(&Event) + Send + Sync> {
             Event::TOOL_CALL_FAILED => {
                 if let (Some(tool_name), Some(reason), Some(message)) = (
                     data_str(event, "tool_name"),
-                    data_str(event, "reason"),
+                    data_str(event, "kind"),
                     data_str(event, "message"),
                 ) {
                     eprintln!("[{agent}] {tool_name} failed ({reason}): {message}");
@@ -333,14 +333,14 @@ pub fn default_logger() -> Arc<dyn Fn(&Event) + Send + Sync> {
             }
             Event::COMPACTION_STARTED => {
                 if let (Some(reason), Some(total)) =
-                    (data_str(event, "reason"), data_u64(event, "total"))
+                    (data_str(event, "trigger"), data_u64(event, "total"))
                 {
                     eprintln!("[{agent}] compacting context ({reason}): {total} chunks");
                 }
             }
             Event::COMPACTION_PROGRESS => {
                 if let (Some(reason), Some(completed), Some(total)) = (
-                    data_str(event, "reason"),
+                    data_str(event, "trigger"),
                     data_u64(event, "completed"),
                     data_u64(event, "total"),
                 ) {
@@ -348,15 +348,15 @@ pub fn default_logger() -> Arc<dyn Fn(&Event) + Send + Sync> {
                 }
             }
             Event::COMPACTION_FINISHED => {
-                if let Some(reason) = data_str(event, "reason") {
-                    eprintln!("[{agent}] context compacted ({reason})");
+                if let Some(trigger) = data_str(event, "trigger") {
+                    eprintln!("[{agent}] context compacted ({trigger})");
                 }
             }
             Event::COMPACTION_FAILED => {
-                if let (Some(reason), Some(message)) =
-                    (data_str(event, "reason"), data_str(event, "message"))
+                if let (Some(trigger), Some(message)) =
+                    (data_str(event, "trigger"), data_str(event, "message"))
                 {
-                    eprintln!("[{agent}] compaction failed ({reason}): {message}");
+                    eprintln!("[{agent}] compaction failed ({trigger}): {message}");
                 }
             }
             _ => {}

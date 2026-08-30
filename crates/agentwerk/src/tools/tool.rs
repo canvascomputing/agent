@@ -161,7 +161,7 @@ impl Event {
     #[doc(hidden)]
     pub(crate) fn error(content: impl Into<String>) -> Self {
         Event::new(Event::TOOL_CALL_FAILED).data(serde_json::json!({
-            "reason": "execution_failed",
+            "kind": "execution_failed",
             "message": content.into(),
         }))
     }
@@ -186,7 +186,7 @@ impl Event {
 
     pub(crate) fn tool_failure(content: impl Into<String>, reason: &'static str) -> Self {
         Event::new(Event::TOOL_CALL_FAILED).data(serde_json::json!({
-            "reason": reason,
+            "kind": reason,
             "message": content.into(),
         }))
     }
@@ -747,7 +747,10 @@ fn validate_tool_event(tool: &str, mut event: Event) -> Event {
                         .is_some_and(|repairs| repairs.iter().all(Value::is_string))
                 })
         }
-        Event::TOOL_CALL_FAILED => event.data.get("message").is_some_and(Value::is_string),
+        Event::TOOL_CALL_FAILED => {
+            event.data.get("message").is_some_and(Value::is_string)
+                && event.data.get("reason").is_none()
+        }
         _ => false,
     };
     if !valid {
@@ -758,13 +761,13 @@ fn validate_tool_event(tool: &str, mut event: Event) -> Event {
     if event.name == Event::TOOL_CALL_FAILED {
         let data = event.data.as_object_mut().expect("validated object data");
         let reason = data
-            .entry("reason")
+            .entry("kind")
             .or_insert_with(|| "execution_failed".into());
         if !matches!(
             reason.as_str(),
             Some("not_found" | "execution_failed" | "schema_failed")
         ) {
-            return Event::error(format!("tool `{tool}` returned an invalid failure reason"));
+            return Event::error(format!("tool `{tool}` returned an invalid failure kind"));
         }
     } else {
         // Only successful persistence by the registry may name an offloaded
@@ -1294,7 +1297,7 @@ mod tests {
         }];
 
         let results = registry.execute(&calls, &ctx).await;
-        assert_eq!(results[0].get_data()["reason"], "schema_failed");
+        assert_eq!(results[0].get_data()["kind"], "schema_failed");
         let content = results[0].get_content();
         assert!(
             content.contains("expected type object, got string"),
@@ -1524,7 +1527,7 @@ mod tests {
 
         let event = registry.execute(&calls, &test_ctx()).await.remove(0);
         assert_eq!(event.get_name(), Event::TOOL_CALL_FAILED);
-        assert_eq!(event.get_data()["reason"], "execution_failed");
+        assert_eq!(event.get_data()["kind"], "execution_failed");
         assert!(event.get_content().contains("returned an invalid event"));
     }
 
@@ -1539,6 +1542,19 @@ mod tests {
             assert_eq!(event.get_name(), Event::TOOL_CALL_FAILED);
             assert!(event.get_content().contains("returned an invalid event"));
         }
+    }
+
+    #[test]
+    fn legacy_failure_reason_is_rejected() {
+        let event = validate_tool_event(
+            "old",
+            Event::new(Event::TOOL_CALL_FAILED)
+                .data(serde_json::json!({"reason": "not_found", "message": "missing"})),
+        );
+
+        assert_eq!(event.get_data()["kind"], "execution_failed");
+        assert!(event.get_content().contains("returned an invalid event"));
+        assert!(event.get_data().get("reason").is_none());
     }
 
     #[test]

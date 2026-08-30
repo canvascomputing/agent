@@ -44,17 +44,18 @@ pub(super) async fn run(context: &mut TaskContext<'_>) -> Option<Step> {
                 let event = match event {
                     StreamEvent::TextDelta { text, .. } => Event::new(Event::TEXT_CHUNK_RECEIVED)
                         .data(serde_json::json!({ "content": text })),
-                    StreamEvent::ToolCallRepaired { tool_name } => {
-                        Event::new(Event::RESPONSE_REPAIRED).data(serde_json::json!({
+                    StreamEvent::ToolCallRepaired { tool_name, call_id } => {
+                        Event::new(Event::TOOL_CALL_REPAIRED).data(serde_json::json!({
                             "tool_name": tool_name,
-                            "reason": "call_malformed",
+                            "call_id": call_id,
+                            "kind": "call_malformed",
                             "message": "rebuilt from text",
                         }))
                     }
-                    StreamEvent::ToolCallDeclined { tool_name, reason } => {
+                    StreamEvent::ToolCallDeclined { tool_name, kind } => {
                         Event::new(Event::TOOL_CALL_DECLINED).data(serde_json::json!({
                             "tool_name": tool_name,
-                            "reason": reason,
+                            "kind": kind,
                         }))
                     }
                 };
@@ -79,7 +80,7 @@ pub(super) async fn run(context: &mut TaskContext<'_>) -> Option<Step> {
                             "model": request.model,
                             "attempt": attempt,
                             "max_attempts": retry.max_attempts(),
-                            "reason": error.kind(),
+                            "kind": error.kind(),
                             "message": error.to_string(),
                         }),
                     ));
