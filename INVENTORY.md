@@ -139,6 +139,10 @@ The rules the tables never repeat.
 
 | Language | Item | Visibility |
 |----------|------|------------|
+| Rust | `PolicyViolation` | pub |
+| Python | a string inside `Event.get_data()`: `data["policy"]` | |
+| Rust | `.Turns`, `.InputTokens`, `.OutputTokens`, `.MaxSchemaRetries`, `.Time` | pub |
+| Rust | `impl Display for PolicyViolation` | pub |
 | Rust | `Policy { max_turns: number?, max_input_tokens: number?, max_output_tokens: number?, max_request_tokens: number?, max_schema_retries: number?, max_request_retries: number, request_retry_delay: number, max_time: number?, compaction_threshold: number? }` | pub |
 | Python | `Policy(*, max_turns=None, ..., compaction_threshold=None)`: keyword-only, `max_time` and `request_retry_delay` in seconds, and a field left out takes its default rather than meaning "no limit" | |
 | Rust | `.DEFAULT_MAX_SCHEMA_RETRIES: number = 10` | pub |
@@ -260,6 +264,8 @@ The rules the tables never repeat.
 |----------|------|------------|
 | Rust | `mod agent`, `mod compact`, `mod main`, `mod request`, `mod tool_call` | private |
 | Rust | `POLL_INTERVAL: number = 50` | private |
+| Rust | `CompactReason` | private |
+| Rust | `.Proactive`, `.Reactive` | private |
 | Rust | `Step` | private |
 | Rust | `.Evaluate` | private |
 | Rust | `.Compact(CompactReason)` | private |
@@ -289,7 +295,7 @@ The rules the tables never repeat.
 | Language | Item | Visibility |
 |----------|------|------------|
 | Rust | `mod agent`, `mod policy`, `mod knowledge`, `mod loop`, `mod tasks` | pub |
-| Rust | re-exports `Agent`, `Policy`, `Knowledge`, `Matcher`, `Query`, `QueryError`, `Reply`, `Status`, `Task`, `TaskError`, `Queue`, `Trajectory` | pub |
+| Rust | re-exports `Agent`, `Policy`, `PolicyViolation`, `Knowledge`, `Matcher`, `Query`, `QueryError`, `Reply`, `Status`, `Task`, `TaskError`, `Queue`, `Trajectory` | pub |
 
 ### Internal
 
@@ -445,7 +451,7 @@ The rules the tables never repeat.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | re-exports `Author`, `Reply`, `ReplyContent`, `Status`, `Task`, `TaskError`, `Queue`, `Trajectory` | pub |
+| Rust | re-exports `Author`, `Reply`, `ReplyContent`, `Status`, `Task`, `TaskError`, `FinishReason`, `Queue`, `Trajectory` | pub |
 
 ### Internal
 
@@ -600,6 +606,10 @@ The rules the tables never repeat.
 
 | Language | Item | Visibility |
 |----------|------|------------|
+| Rust | `FinishReason` | pub |
+| Python | a string, such as `policy_violated(turns)` | |
+| Rust | `.Drained`, `.PolicyViolated(PolicyViolation)`, `.Cancelled` | pub |
+| Rust | `impl Display for FinishReason` | pub |
 | both | `Queue { weak_self: Weak<Queue>, tasks: Record<string, Task>, agents: Agent[], policy: Policy, run: Run, cancel_filters: Query[], terminal_transitions_in_flight: number, stats: Stats, event_handlers: EventHandler[], awaited_events: AwaitedEvents, event_stream: Sender<Event>, schemas: SchemaStore?, dir: string, events_lock: void, join_handle: JoinHandle<void>?, next_task_id: number? }` | pub |
 | Rust | `.new(): this` | pub |
 | Python | `Queue()` | |
@@ -878,56 +888,6 @@ Not bound, like the rest of `codegrep`.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `CompactReason` | pub |
-| Python | a string inside `Event.get_data()`, under the field's own name: `data["reason"]` | |
-| Rust | `.Proactive` | pub |
-| Rust | `.Reactive` | pub |
-| Rust | `impl Display for CompactReason` | pub |
-| Rust | `PolicyViolation` | pub |
-| Python | a string inside `Event.get_data()`: `data["policy"]` | |
-| Rust | `.Turns` | pub |
-| Rust | `.InputTokens` | pub |
-| Rust | `.OutputTokens` | pub |
-| Rust | `.MaxSchemaRetries` | pub |
-| Rust | `.Time` | pub |
-| Rust | `impl Display for PolicyViolation` | pub |
-| Rust | `FinishReason` | pub |
-| Python | a string, such as `policy_violated(turns)` | |
-| Rust | `.Drained` | pub |
-| Rust | `.PolicyViolated(PolicyViolation)` | pub |
-| Rust | `.Cancelled` | pub |
-| Rust | `impl Display for FinishReason` | pub |
-| Rust | `ToolFailureKind` | pub |
-| Python | a string inside `Event.get_data()`: `data["reason"]` | |
-| Rust | `.ToolNotFound` | pub |
-| Rust | `.ExecutionFailed` | pub |
-| Rust | `.SchemaValidationFailed` | pub |
-| Rust | `.get_name(): string` | pub |
-| Python | not bound: the kind is already a string | |
-| Rust | `impl Display for ToolFailureKind` | pub |
-| Rust | `RepairKind` | pub |
-| Python | a string inside `Event.get_data()`: `data["reason"]` | |
-| Rust | `.CallMalformed` | pub |
-| Rust | `.ValueMistyped` | pub |
-| Rust | `.get_name(): string` | pub |
-| Python | not bound: the kind is already a string | |
-| Rust | `impl Display for RepairKind` | pub |
-| Rust | `KnowledgeFailureKind` | pub |
-| Python | a string inside `Event.get_data()`: `data["reason"]` | |
-| Rust | `.PageMissing` | pub |
-| Rust | `.StoreRefused` | pub |
-| Rust | `.get_name(): string` | pub |
-| Python | not bound: the kind is already a string | |
-| Rust | `impl Display for KnowledgeFailureKind` | pub |
-| Rust | `KnowledgeAction` | pub |
-| Python | a string inside `Event.get_data()`: `data["action"]` | |
-| Rust | `.Write` | pub |
-| Rust | `.Read` | pub |
-| Rust | `.Remove` | pub |
-| Rust | `.List` | pub |
-| Rust | `.get_name(): string` | pub |
-| Python | not bound: the action is already a string | |
-| Rust | `impl Display for KnowledgeAction` | pub |
 | Rust | `Event { name: string, data: json, task_id: string, agent_id: string, label: string?, created_at: number }` | pub with crate-private fields |
 | both | `.RUN_STARTED`, `.RUN_FINISHED`, `.TASK_CREATED`, `.TASK_STARTED`, `.TASK_FINISHED`, `.TASK_FAILED`, `.TURN_STARTED`: string | pub |
 | both | `.REQUEST_STARTED`, `.REQUEST_FINISHED`, `.REQUEST_FAILED`, `.REQUEST_RETRIED`, `.TEXT_CHUNK_RECEIVED`, `.RESPONSE_REPAIRED`: string | pub |
@@ -965,7 +925,7 @@ Not bound, like the rest of `codegrep`.
 | Language | Item | Visibility |
 |----------|------|------------|
 | Rust | `mod agents`, `mod codegrep`, `mod event`, `mod providers`, `mod schemas`, `mod tools` | pub |
-| Rust | re-exports `Agent`, `Query`, `Reply`, `Status`, `Task`, `Queue`, `Policy`, `Knowledge`, `Trajectory`, `Schema`, `SchemaStore`, `Event`, `FinishReason`, `Directive`, `Text` | pub |
+| Rust | re-exports `Agent`, `Query`, `Reply`, `Status`, `Task`, `Queue`, `Policy`, `PolicyViolation`, `Knowledge`, `Trajectory`, `Schema`, `SchemaStore`, `Event`, `FinishReason`, `Directive`, `Text` | pub |
 | Python | `agentwerk` exports every bound class from one flat module | |
 
 ### Internal
@@ -1860,7 +1820,7 @@ Not bound: it is how `CommandTool` reads one command line.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `failure_kind(error: KnowledgeError): KnowledgeFailureKind` | private |
+| Rust | `failure_reason(error: KnowledgeError): string` | private |
 | Rust | `usage_line(message: string, store: Knowledge): string` | private |
 | Rust | `KnowledgeArgs` | crate |
 | Python | not bound: the model sends these fields as the tool's input | |
@@ -1896,7 +1856,7 @@ Not bound: it is how `CommandTool` reads one command line.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | re-exports `Tool`, `ToolContext`, `ToolResult`, `CommandTool`, `EditFileTool`, `FetchUrlTool`, `GlobTool`, `GrepTool`, `KnowledgeTool`, `ListDirectoryTool`, `ReadFileTool`, `FinishTool`, `TasksTool`, `WriteFileTool` | pub |
+| Rust | re-exports `Tool`, `ToolContext`, `ToolFailureKind`, `ToolResult`, `CommandTool`, `EditFileTool`, `FetchUrlTool`, `GlobTool`, `GrepTool`, `KnowledgeTool`, `ListDirectoryTool`, `ReadFileTool`, `FinishTool`, `TasksTool`, `WriteFileTool` | pub |
 
 ### Internal
 
@@ -2002,6 +1962,11 @@ Not bound: it is how `CommandTool` reads one command line.
 
 | Language | Item | Visibility |
 |----------|------|------------|
+| Rust | `ToolFailureKind` | pub |
+| Python | a string inside `Event.get_data()`: `data["reason"]` | |
+| Rust | `.ToolNotFound`, `.ExecutionFailed`, `.SchemaValidationFailed` | pub |
+| Rust | `.get_name(): string` | pub |
+| Rust | `impl Display for ToolFailureKind` | pub |
 | Rust | `ToolContext { dir: string, run: Run?, queue: Queue?, agent_id: string?, task_id: string?, knowledge: Knowledge? }` | pub with crate-private fields |
 | Python | not bound: a `@tool` function receives its input as keyword arguments only | |
 | Rust | `.new(dir: string): this` | pub |

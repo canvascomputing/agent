@@ -2,7 +2,8 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::event::{Event, PolicyViolation};
+use crate::agents::PolicyViolation;
+use crate::event::Event;
 
 use super::policy::Policy;
 use super::stats::Stats;
@@ -18,7 +19,7 @@ mod trajectory;
 pub(super) mod test_util;
 
 pub use error::TaskError;
-pub use queue::Queue;
+pub use queue::{FinishReason, Queue};
 pub use reply::{Author, Reply, ReplyContent};
 pub use task::{Status, Task};
 pub use trajectory::Trajectory;

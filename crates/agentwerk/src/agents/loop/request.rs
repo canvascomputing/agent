@@ -4,13 +4,13 @@
 use std::sync::Arc;
 
 use crate::agents::retry::{ExponentialRetry, Retry};
-use crate::event::{CompactReason, Event, RepairKind};
+use crate::event::Event;
 use crate::providers::types::StreamEvent;
 use crate::providers::{ContentBlock, ModelRequest, ProviderError};
 use crate::tools::ToolCall;
 
 use super::agent::TaskContext;
-use super::Step;
+use super::{CompactReason, Step};
 
 pub(super) async fn run(context: &mut TaskContext<'_>) -> Option<Step> {
     let Some(task) = context.task() else {
@@ -47,7 +47,7 @@ pub(super) async fn run(context: &mut TaskContext<'_>) -> Option<Step> {
                     StreamEvent::ToolCallRepaired { tool_name } => {
                         Event::new(Event::RESPONSE_REPAIRED).data(serde_json::json!({
                             "tool_name": tool_name,
-                            "reason": RepairKind::CallMalformed,
+                            "reason": "call_malformed",
                             "message": "rebuilt from text",
                         }))
                     }

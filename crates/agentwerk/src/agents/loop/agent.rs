@@ -5,15 +5,15 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::agents::agent::Agent;
-use crate::agents::policy::Policy;
+use crate::agents::policy::{Policy, PolicyViolation};
 use crate::agents::query::Matcher;
 use crate::agents::tasks::{policy_violated, Queue, Reply, Run, Status, Task};
-use crate::event::{CompactReason, Event, PolicyViolation};
+use crate::event::Event;
 use crate::prompts::directives::{NO_TOOL_CALLED, REPLY_REJECTED};
 use crate::providers::{AsUserMessage, Message, Model, RequestErrorKind};
 use crate::tools::{FinishTool, ToolRegistry};
 
-use super::{compact, request, tool_call, Step, POLL_INTERVAL};
+use super::{compact, request, tool_call, CompactReason, Step, POLL_INTERVAL};
 
 pub(super) struct TaskContext<'a> {
     pub(super) agent: &'a Agent,

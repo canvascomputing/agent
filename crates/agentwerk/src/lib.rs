@@ -93,6 +93,7 @@ pub use agents::Task;
 // Tuning, telemetry, durable state
 pub use agents::Knowledge;
 pub use agents::Policy;
+pub use agents::PolicyViolation;
 pub use agents::Trajectory;
 
 // Validation
@@ -100,8 +101,8 @@ pub use schemas::Schema;
 pub use schemas::SchemaStore;
 
 // Observation
+pub use agents::tasks::FinishReason;
 pub use event::Event;
-pub use event::FinishReason;
 
 // The public faces of `prompts`: what agentwerk tells the model when it has to
 // correct it, and the text a prompt is set from. The rest of the module

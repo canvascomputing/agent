@@ -4,11 +4,11 @@
 use serde_json::Value;
 
 use crate::agents::tasks::{Queue, Task};
-use crate::event::ToolFailureKind;
 use crate::prompts::directives::{
     DirectiveStore, FINISH_ARGUMENT_BLANK, HANDOVER_RESULT_MISSING, QUEUE_UNAVAILABLE,
 };
 use crate::schemas::Schema;
+use crate::tools::ToolFailureKind;
 
 use super::super::tool::{retype_message, Tool, ToolContext, ToolResult};
 use super::resolve_current_id;

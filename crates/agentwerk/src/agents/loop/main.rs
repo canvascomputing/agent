@@ -1,8 +1,8 @@
 //! Starts one tokio task per registered agent, decides when the run is over,
 //! and waits for them on shutdown.
 
-use crate::agents::tasks::Queue;
-use crate::event::{Event, FinishReason};
+use crate::agents::tasks::{FinishReason, Queue};
+use crate::event::Event;
 
 use super::agent::run_agent;
 use super::POLL_INTERVAL;

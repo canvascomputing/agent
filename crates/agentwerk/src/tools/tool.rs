@@ -10,7 +10,7 @@ use serde_json::Value;
 
 use crate::agents::knowledge::Knowledge;
 use crate::agents::tasks::{Queue, Run};
-use crate::event::{Event, ToolFailureKind};
+use crate::event::Event;
 use crate::prompts::directives::{
     DirectiveStore, NO_TOOLS_REGISTERED, TOOL_NOT_FOUND, TOOL_OUTPUT_EMPTY, TOOL_OUTPUT_OFFLOADED,
     TOOL_PANICKED,
@@ -35,6 +35,39 @@ const PER_TURN_CAP: usize = 200_000;
 /// newline in that window, or at a character boundary, so a multi-byte
 /// character is never cut in half.
 const PREVIEW_CHARS: usize = 2_000;
+
+/// How a tool call failed, carried by tool-call and file-open failure events.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum ToolFailureKind {
+    /// No tool of that name is registered.
+    #[serde(rename = "not_found")]
+    ToolNotFound,
+    /// The tool ran and returned an error.
+    #[serde(rename = "execution_failed")]
+    ExecutionFailed,
+    /// The tool rejected its input. This is the failure whose result shows
+    /// the model the schema back; every kind counts against
+    /// `max_schema_retries`.
+    #[serde(rename = "schema_failed")]
+    SchemaValidationFailed,
+}
+
+impl ToolFailureKind {
+    /// The stable snake_case spelling, which differs from the variant name.
+    pub fn get_name(&self) -> &'static str {
+        match self {
+            ToolFailureKind::ToolNotFound => "not_found",
+            ToolFailureKind::ExecutionFailed => "execution_failed",
+            ToolFailureKind::SchemaValidationFailed => "schema_failed",
+        }
+    }
+}
+
+impl std::fmt::Display for ToolFailureKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.get_name())
+    }
+}
 
 /// What a tool receives when it runs.
 ///
@@ -911,6 +944,20 @@ fn utf8_boundary_floor(content: &str, mut index: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failure_kind_names_are_stable() {
+        let cases = [
+            (ToolFailureKind::ToolNotFound, "not_found"),
+            (ToolFailureKind::ExecutionFailed, "execution_failed"),
+            (ToolFailureKind::SchemaValidationFailed, "schema_failed"),
+        ];
+        for (kind, expected) in cases {
+            assert_eq!(kind.get_name(), expected);
+            assert_eq!(kind.to_string(), expected);
+            assert_eq!(serde_json::to_value(kind).unwrap(), expected);
+        }
+    }
 
     /// Every tool agentwerk registers, for the checks that hold across all of
     /// them. The knowledge store is temporary; its tool is read, not used.

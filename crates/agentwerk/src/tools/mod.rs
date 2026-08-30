@@ -15,7 +15,7 @@ mod read_file;
 mod tasks;
 mod write_file;
 
-pub use tool::{Tool, ToolContext, ToolResult};
+pub use tool::{Tool, ToolContext, ToolFailureKind, ToolResult};
 pub(crate) use tool::{ToolCall, ToolRegistry};
 
 pub use command::CommandTool;

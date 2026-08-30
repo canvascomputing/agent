@@ -4,9 +4,10 @@
 use std::sync::Arc;
 
 use crate::agents::tasks::Reply;
-use crate::event::{Event, PolicyViolation, RepairKind, ToolFailureKind};
+use crate::agents::PolicyViolation;
+use crate::event::Event;
 use crate::providers::ContentBlock;
-use crate::tools::{ToolCall, ToolContext, ToolResult};
+use crate::tools::{ToolCall, ToolContext, ToolFailureKind, ToolResult};
 
 use super::agent::TaskContext;
 use super::Step;
@@ -26,7 +27,7 @@ pub(super) async fn run(context: &mut TaskContext<'_>, mut calls: Vec<ToolCall>)
             context.emit_event(
                 Event::new(Event::RESPONSE_REPAIRED).data(serde_json::json!({
                     "tool_name": registered,
-                    "reason": RepairKind::CallMalformed,
+                    "reason": "call_malformed",
                     "message": format!("resolved from `{}`", call.name),
                 })),
             );
@@ -77,7 +78,7 @@ pub(super) async fn run(context: &mut TaskContext<'_>, mut calls: Vec<ToolCall>)
                     events.push(
                         Event::new(Event::RESPONSE_REPAIRED).data(serde_json::json!({
                             "tool_name": call.name,
-                            "reason": RepairKind::ValueMistyped,
+                            "reason": "value_mistyped",
                             "message": message,
                         })),
                     );
@@ -175,7 +176,7 @@ mod tests {
     use crate::agents::policy::Policy;
     use crate::agents::r#loop::test_util::*;
     use crate::agents::tasks::{Queue, Status, Task};
-    use crate::event::{Event, RepairKind};
+    use crate::event::Event;
     use crate::schemas::Schema;
 
     #[tokio::test]
@@ -450,11 +451,7 @@ mod tests {
             .collect();
         assert_eq!(
             repairs,
-            vec![(
-                "finish",
-                RepairKind::CallMalformed.get_name(),
-                "resolved from `finish_tool`"
-            )]
+            vec![("finish", "call_malformed", "resolved from `finish_tool`")]
         );
     }
 
@@ -491,11 +488,7 @@ mod tests {
             .collect();
         assert_eq!(
             repairs,
-            vec![(
-                "finish",
-                RepairKind::ValueMistyped.get_name(),
-                "/result/partial_sum retyped"
-            )]
+            vec![("finish", "value_mistyped", "/result/partial_sum retyped")]
         );
     }
 
