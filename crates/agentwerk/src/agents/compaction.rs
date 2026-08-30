@@ -294,7 +294,7 @@ fn find_split_index(text: &str, target: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tools::ToolResult;
+    use crate::event::Event;
     use serde_json::Value;
 
     #[test]
@@ -357,7 +357,7 @@ mod tests {
         let messages = [Message::user("hi!!")];
         let tools = vec![Tool::new("tot")
             .description("x".repeat(50))
-            .handler(|_: Value, _| async { ToolResult::success("") })
+            .handler(|_: Value, _| async { Event::success("") })
             .build()];
         let system_prompt = "x".repeat(100);
         let got = estimate_next_request_tokens(&history, &messages, &system_prompt, &tools);

@@ -1,5 +1,6 @@
 //! Insights into the lifecycle and activities of an agent's work.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde::de::Error as _;
@@ -25,6 +26,8 @@ use serde_json::{Map, Value};
 pub struct Event {
     /// The event name.
     pub(crate) name: String,
+    /// The model-facing directive that explains this event, when one applies.
+    pub(crate) directive: Option<String>,
     /// The JSON value carried by the event.
     pub(crate) data: Value,
     /// ID of the task this event concerns, or empty when it has no task
@@ -38,6 +41,10 @@ pub struct Event {
     pub(crate) label: Option<String>,
     /// When this event happened, in milliseconds since the epoch.
     pub(crate) created_at: u64,
+    /// Tool-execution bookkeeping, never serialized as event data.
+    pub(crate) offloaded: Option<PathBuf>,
+    /// Accepted argument repairs waiting to be emitted by the agent loop.
+    pub(crate) repaired: Vec<String>,
 }
 
 impl Event {
@@ -109,12 +116,21 @@ impl Event {
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
+            directive: None,
             data: Value::Object(Map::new()),
             task_id: String::new(),
             agent_id: String::new(),
             label: None,
             created_at: 0,
+            offloaded: None,
+            repaired: Vec::new(),
         }
+    }
+
+    /// Associate the event with the directive used to explain it to the model.
+    pub fn directive(mut self, directive: impl Into<String>) -> Self {
+        self.directive = Some(directive.into());
+        self
     }
 
     /// Set the JSON value carried by this event.
@@ -138,6 +154,11 @@ impl Event {
     /// The event name.
     pub fn get_name(&self) -> &str {
         &self.name
+    }
+
+    /// The directive used to explain this event to the model, if any.
+    pub fn get_directive(&self) -> Option<&str> {
+        self.directive.as_deref()
     }
 
     /// The JSON value carried by this event.
@@ -173,6 +194,9 @@ impl Serialize for Event {
     {
         let mut object = Map::new();
         object.insert("name".into(), self.name.clone().into());
+        if let Some(directive) = &self.directive {
+            object.insert("directive".into(), directive.clone().into());
+        }
         object.insert("data".into(), self.data.clone());
         object.insert("task_id".into(), self.task_id.clone().into());
         object.insert("agent_id".into(), self.agent_id.clone().into());
@@ -191,6 +215,10 @@ impl<'de> Deserialize<'de> for Event {
     {
         let mut object = Map::<String, Value>::deserialize(deserializer)?;
         let created_at = take_or(&mut object, "created_at", 0)?;
+        let directive = match object.remove("directive") {
+            Some(value) => serde_json::from_value(value).map_err(D::Error::custom)?,
+            None => None,
+        };
         let agent_id = take_or(&mut object, "agent_id", String::new())?;
         let task_id = take_or(&mut object, "task_id", String::new())?;
         let label = match object.remove("label") {
@@ -220,11 +248,14 @@ impl<'de> Deserialize<'de> for Event {
         };
         Ok(Self {
             name,
+            directive,
             data,
             task_id,
             agent_id,
             label,
             created_at,
+            offloaded: None,
+            repaired: Vec::new(),
         })
     }
 }
@@ -426,6 +457,22 @@ pub(crate) mod tests {
                 "created_at": 0,
             })
         );
+    }
+
+    #[test]
+    fn directive_is_optional_and_round_trips_at_the_top_level() {
+        let plain = Event::new(Event::TOOL_CALL_FAILED);
+        assert_eq!(plain.get_directive(), None);
+        assert!(serde_json::to_value(&plain)
+            .unwrap()
+            .get("directive")
+            .is_none());
+
+        let event = plain.directive("command_timed_out");
+        let value = serde_json::to_value(&event).unwrap();
+        assert_eq!(value["directive"], "command_timed_out");
+        let restored: Event = serde_json::from_value(value).unwrap();
+        assert_eq!(restored.get_directive(), Some("command_timed_out"));
     }
 
     #[test]

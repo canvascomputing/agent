@@ -20,7 +20,7 @@ use std::sync::Arc;
 use agentwerk::event::Event;
 use agentwerk::providers::{Model, Provider};
 use agentwerk::schemas::{Schema, SchemaStore};
-use agentwerk::tools::{FetchUrlTool, TasksTool, Tool, ToolResult};
+use agentwerk::tools::{FetchUrlTool, TasksTool, Tool};
 use agentwerk::{Agent, FinishReason, Queue, Task};
 
 const RESEARCHER_1_ROLE: &str = include_str!("prompts/researcher_1.role.md");
@@ -268,7 +268,7 @@ fn brave_search_tool(api_key: String) -> Tool {
         .build()
 }
 
-async fn brave_search(api_key: &str, input: &serde_json::Value) -> ToolResult {
+async fn brave_search(api_key: &str, input: &serde_json::Value) -> Event {
     let query = input["query"].as_str().unwrap_or("").trim();
     let count = input["count"].as_u64().unwrap_or(5).min(20).to_string();
 
@@ -281,16 +281,17 @@ async fn brave_search(api_key: &str, input: &serde_json::Value) -> ToolResult {
         .await
     {
         Ok(r) => r,
-        Err(e) => return ToolResult::error(format!("Brave search failed: {e}")),
+        Err(e) => return Event::new(Event::TOOL_CALL_FAILED).data(serde_json::json!({"reason": "execution_failed", "message": format!("Brave search failed: {e}")})),
     };
 
     let json: serde_json::Value = match response.json().await {
         Ok(j) => j,
-        Err(e) => return ToolResult::error(format!("Failed to parse response: {e}")),
+        Err(e) => return Event::new(Event::TOOL_CALL_FAILED).data(serde_json::json!({"reason": "execution_failed", "message": format!("Failed to parse response: {e}")})),
     };
 
     let Some(results) = json["web"]["results"].as_array() else {
-        return ToolResult::success("No results found.");
+        return Event::new(Event::TOOL_CALL_FINISHED)
+            .data(serde_json::json!({"output": "No results found."}));
     };
 
     let text = results
@@ -306,7 +307,7 @@ async fn brave_search(api_key: &str, input: &serde_json::Value) -> ToolResult {
         .collect::<Vec<_>>()
         .join("\n");
 
-    ToolResult::success(text)
+    Event::new(Event::TOOL_CALL_FINISHED).data(serde_json::json!({"output": text}))
 }
 
 fn log_event(event: &Event) {

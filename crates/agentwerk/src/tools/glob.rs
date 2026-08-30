@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use super::tool::{Tool, ToolContext, ToolResult};
+use super::tool::{Event, Tool, ToolContext};
 
 /// Find files matching a glob pattern under the working directory. Concurrent.
 /// Sorted by modification time (newest first); capped at 200 results.
@@ -42,7 +42,7 @@ impl From<GlobTool> for Tool {
     }
 }
 
-async fn run(args: GlobArgs, ctx: ToolContext) -> ToolResult {
+async fn run(args: GlobArgs, ctx: ToolContext) -> Event {
     let GlobArgs {
         pattern,
         path: base_str,
@@ -70,7 +70,7 @@ async fn run(args: GlobArgs, ctx: ToolContext) -> ToolResult {
         })
         .collect();
 
-    ToolResult::success(lines.join("\n"))
+    Event::success(lines.join("\n"))
 }
 
 /// Recursively walk the directory tree and collect files matching the glob pattern.

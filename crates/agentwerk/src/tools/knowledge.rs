@@ -9,7 +9,7 @@ use crate::prompts::directives::{
     KNOWLEDGE_PAGE_NOT_FOUND, KNOWLEDGE_REMOVE_FAILED, KNOWLEDGE_WRITE_FAILED,
 };
 
-use super::tool::{Tool, ToolContext, ToolResult};
+use super::tool::{Tool, ToolContext};
 
 /// The model's four-action handle on a `Knowledge` store:
 /// `write`, `read`, `remove`, `list`. Registered automatically on every
@@ -89,7 +89,7 @@ impl From<KnowledgeTool> for Tool {
     }
 }
 
-fn run(store: &Knowledge, args: KnowledgeArgs, ctx: &ToolContext) -> ToolResult {
+fn run(store: &Knowledge, args: KnowledgeArgs, ctx: &ToolContext) -> Event {
     // The tool self-reports each outcome: only it can see a read/remove
     // miss, which returns Ok, so the shared tool-call loop cannot.
     let record = |event: Event| ctx.emit_event(event);
@@ -116,14 +116,14 @@ fn run(store: &Knowledge, args: KnowledgeArgs, ctx: &ToolContext) -> ToolResult 
                         Event::new(Event::KNOWLEDGE_WRITTEN)
                             .data(serde_json::json!({ "slug": written })),
                     );
-                    ToolResult::success(usage_line("page written", &store))
+                    Event::success(usage_line("page written", &store))
                 }
                 Err(why) => {
                     record(Event::new(Event::KNOWLEDGE_FAILED).data(serde_json::json!({
                         "action": "write",
                         "reason": failure_reason(&why),
                     })));
-                    ToolResult::error(
+                    Event::error(
                         ctx.directives
                             .render(KNOWLEDGE_WRITE_FAILED, &[("error", &why.to_string())]),
                     )
@@ -134,14 +134,14 @@ fn run(store: &Knowledge, args: KnowledgeArgs, ctx: &ToolContext) -> ToolResult 
         KnowledgeArgs::Read { slug } => match store.get_pages().get_page(&slug) {
             Ok(page) => {
                 record(Event::new(Event::KNOWLEDGE_READ).data(serde_json::json!({ "slug": slug })));
-                ToolResult::success(page.content)
+                Event::success(page.content)
             }
             Err(why) => {
                 record(Event::new(Event::KNOWLEDGE_FAILED).data(serde_json::json!({
                     "action": "read",
                     "reason": failure_reason(&why),
                 })));
-                ToolResult::success(
+                Event::success(
                     ctx.directives
                         .render(KNOWLEDGE_PAGE_NOT_FOUND, &[("slug", &slug)]),
                 )
@@ -153,14 +153,14 @@ fn run(store: &Knowledge, args: KnowledgeArgs, ctx: &ToolContext) -> ToolResult 
                 record(
                     Event::new(Event::KNOWLEDGE_REMOVED).data(serde_json::json!({ "slug": slug })),
                 );
-                ToolResult::success(usage_line("page removed", &store))
+                Event::success(usage_line("page removed", &store))
             }
             Err(why) => {
                 record(Event::new(Event::KNOWLEDGE_FAILED).data(serde_json::json!({
                     "action": "remove",
                     "reason": failure_reason(&why),
                 })));
-                ToolResult::error(
+                Event::error(
                     ctx.directives
                         .render(KNOWLEDGE_REMOVE_FAILED, &[("error", &why.to_string())]),
                 )
@@ -177,7 +177,7 @@ fn run(store: &Knowledge, args: KnowledgeArgs, ctx: &ToolContext) -> ToolResult 
             } else {
                 index
             };
-            ToolResult::success(body)
+            Event::success(body)
         }
     }
 }
@@ -208,13 +208,13 @@ mod tests {
         ToolContext::new(std::env::current_dir().unwrap())
     }
 
-    fn assert_success(result: &ToolResult, fragment: &str) {
-        match result {
-            ToolResult::Success { content: s, .. } => {
-                assert!(s.contains(fragment), "expected `{fragment}` in `{s}`")
-            }
-            other => panic!("expected Success, got {other:?}"),
-        }
+    fn assert_success(result: &Event, fragment: &str) {
+        assert_eq!(result.get_name(), Event::TOOL_CALL_FINISHED, "{result:?}");
+        let content = result.get_content();
+        assert!(
+            content.contains(fragment),
+            "expected `{fragment}` in `{content}`"
+        );
     }
 
     #[test]
@@ -284,13 +284,9 @@ mod tests {
             },
             &ctx(),
         );
-        match &r {
-            ToolResult::Success { content: s, .. } => {
-                assert!(!s.contains("---"));
-                assert!(!s.contains("timestamp:"));
-            }
-            _ => panic!("expected Success"),
-        }
+        assert_eq!(r.get_name(), Event::TOOL_CALL_FINISHED, "{r:?}");
+        assert!(!r.get_content().contains("---"));
+        assert!(!r.get_content().contains("timestamp:"));
     }
 
     #[tokio::test]

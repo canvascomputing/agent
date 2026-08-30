@@ -1,6 +1,6 @@
 //! In-place find-and-replace on a file, so a model can modify existing code without restating the whole file.
 
-use super::tool::{Tool, ToolContext, ToolResult};
+use super::tool::{Event, Tool, ToolContext};
 use crate::prompts::directives::{
     EDIT_FILE_OLD_STRING_NOT_FOUND, EDIT_FILE_OLD_STRING_NOT_UNIQUE, EDIT_FILE_READ_FAILED,
     EDIT_FILE_WRITE_FAILED,
@@ -40,7 +40,7 @@ impl From<EditFileTool> for Tool {
     }
 }
 
-async fn run(args: EditFileArgs, ctx: ToolContext) -> ToolResult {
+async fn run(args: EditFileArgs, ctx: ToolContext) -> Event {
     let EditFileArgs {
         path,
         old_string,
@@ -54,27 +54,30 @@ async fn run(args: EditFileArgs, ctx: ToolContext) -> ToolResult {
     let content = match std::fs::read_to_string(&resolved) {
         Ok(c) => c,
         Err(e) => {
-            return ToolResult::error(ctx.directives.render(
+            return Event::error(ctx.directives.render(
                 EDIT_FILE_READ_FAILED,
                 &[("path", &path), ("error", &e.to_string())],
-            ));
+            ))
+            .directive(EDIT_FILE_READ_FAILED);
         }
     };
 
     let count = content.matches(old_string).count();
 
     if count == 0 {
-        return ToolResult::error(
+        return Event::error(
             ctx.directives
                 .render(EDIT_FILE_OLD_STRING_NOT_FOUND, &[("path", &path)]),
-        );
+        )
+        .directive(EDIT_FILE_OLD_STRING_NOT_FOUND);
     }
 
     if count > 1 && !replace_all {
-        return ToolResult::error(ctx.directives.render(
+        return Event::error(ctx.directives.render(
             EDIT_FILE_OLD_STRING_NOT_UNIQUE,
             &[("path", &path), ("count", &count.to_string())],
-        ));
+        ))
+        .directive(EDIT_FILE_OLD_STRING_NOT_UNIQUE);
     }
 
     let new_content = if replace_all {
@@ -84,11 +87,12 @@ async fn run(args: EditFileArgs, ctx: ToolContext) -> ToolResult {
     };
 
     match std::fs::write(&resolved, &new_content) {
-        Ok(()) => ToolResult::success(format!("Edited {path}: replaced {count} occurrence(s)")),
-        Err(e) => ToolResult::error(ctx.directives.render(
+        Ok(()) => Event::success(format!("Edited {path}: replaced {count} occurrence(s)")),
+        Err(e) => Event::error(ctx.directives.render(
             EDIT_FILE_WRITE_FAILED,
             &[("path", &path), ("error", &e.to_string())],
-        )),
+        ))
+        .directive(EDIT_FILE_WRITE_FAILED),
     }
 }
 
@@ -134,7 +138,7 @@ mod tests {
 
         let out = result.get_content();
         assert!(
-            matches!(result, ToolResult::Success { .. }),
+            result.get_name() == Event::TOOL_CALL_FINISHED,
             "unexpected error: {out}"
         );
         let content = std::fs::read_to_string(dir.path().join("f.txt")).unwrap();
@@ -161,7 +165,7 @@ mod tests {
             .await;
 
         let content = result.get_content();
-        assert!(matches!(result, ToolResult::Error { .. }));
+        assert!(result.get_name() == Event::TOOL_CALL_FAILED);
         assert!(content.contains("2"));
     }
 
@@ -187,7 +191,7 @@ mod tests {
 
         let out = result.get_content();
         assert!(
-            matches!(result, ToolResult::Success { .. }),
+            result.get_name() == Event::TOOL_CALL_FINISHED,
             "unexpected error: {out}"
         );
         let content = std::fs::read_to_string(dir.path().join("f.txt")).unwrap();
@@ -214,7 +218,7 @@ mod tests {
             .await;
 
         let content = result.get_content();
-        assert!(matches!(result, ToolResult::Error { .. }));
+        assert!(result.get_name() == Event::TOOL_CALL_FAILED);
         assert!(content.contains("No `old_string` match"));
     }
 }

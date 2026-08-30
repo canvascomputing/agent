@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use super::super::tool::{Tool, ToolContext, ToolResult};
+use super::super::tool::{Event, Tool, ToolContext};
 use super::super::util::{glob_match, run_command};
 use super::parse::{Argument, Command, Refusal};
 use crate::prompts::directives::{
@@ -388,7 +388,7 @@ pub struct CommandArgs {
 }
 
 impl CommandTool {
-    async fn run(&self, args: CommandArgs, ctx: ToolContext) -> ToolResult {
+    async fn run(&self, args: CommandArgs, ctx: ToolContext) -> Event {
         let CommandArgs {
             command,
             timeout_ms,
@@ -396,7 +396,7 @@ impl CommandTool {
 
         let command = match self.check(&command, &ctx.directives) {
             Ok(command) => command,
-            Err(refusal) => return ToolResult::error(refusal),
+            Err(refusal) => return Event::error(refusal),
         };
 
         let timeout = timeout_ms
@@ -431,8 +431,6 @@ impl From<CommandTool> for Tool {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    use crate::tools::ToolFailureKind;
 
     #[test]
     fn every_example_the_schema_shows_deserializes_into_the_arguments() {
@@ -511,7 +509,7 @@ mod tests {
         let result = Tool::from(tool.clone()).call(input, &ctx).await;
         let content = result.get_content();
         assert!(content.contains("hello"));
-        assert!(matches!(result, ToolResult::Success { .. }));
+        assert!(result.get_name() == Event::TOOL_CALL_FINISHED);
     }
 
     #[tokio::test]
@@ -521,7 +519,7 @@ mod tests {
         let input = serde_json::json!({ "command": "sleep 10", "timeout_ms": 100 });
         let result = Tool::from(tool.clone()).call(input, &ctx).await;
         let content = result.get_content();
-        assert!(matches!(result, ToolResult::Error { .. }));
+        assert!(result.get_name() == Event::TOOL_CALL_FAILED);
         assert!(content.contains("was stopped after 100ms"));
     }
 
@@ -537,13 +535,7 @@ mod tests {
             input: serde_json::json!({}),
         }];
         let results = registry.execute(&calls, &test_tool_context()).await;
-        assert!(matches!(
-            results[0],
-            ToolResult::Error {
-                kind: ToolFailureKind::SchemaValidationFailed,
-                ..
-            }
-        ));
+        assert_eq!(results[0].get_data()["reason"], "schema_failed");
         assert!(
             results[0].get_content().contains("`command`"),
             "{}",
@@ -558,7 +550,7 @@ mod tests {
         let result = Tool::from(tool)
             .call(serde_json::json!({ "command": "echo" }), &ctx)
             .await;
-        assert!(matches!(result, ToolResult::Success { .. }));
+        assert!(result.get_name() == Event::TOOL_CALL_FINISHED);
     }
 
     #[tokio::test]
@@ -569,7 +561,7 @@ mod tests {
             .call(serde_json::json!({ "command": "echo hello" }), &ctx)
             .await;
         let content = result.get_content();
-        assert!(matches!(result, ToolResult::Error { .. }));
+        assert!(result.get_name() == Event::TOOL_CALL_FAILED);
         assert!(content.contains("is not allowed by tool 'echo'"));
     }
 
@@ -581,7 +573,7 @@ mod tests {
             .call(serde_json::json!({ "command": "rm -rf /" }), &ctx)
             .await;
         let content = result.get_content();
-        assert!(matches!(result, ToolResult::Error { .. }));
+        assert!(result.get_name() == Event::TOOL_CALL_FAILED);
         assert!(content.contains("Allowed: `echo *`."));
     }
 
@@ -595,7 +587,7 @@ mod tests {
             let result = Tool::from(tool.clone())
                 .call(serde_json::json!({ "command": command }), &ctx)
                 .await;
-            assert!(matches!(result, ToolResult::Success { .. }));
+            assert!(result.get_name() == Event::TOOL_CALL_FINISHED);
         }
     }
 
@@ -613,7 +605,10 @@ mod tests {
                 &test_tool_context(),
             )
             .await;
-        assert!(matches!(allowed, ToolResult::Success { .. }), "{allowed:?}");
+        assert!(
+            allowed.get_name() == Event::TOOL_CALL_FINISHED,
+            "{allowed:?}"
+        );
         let denied = tool
             .call(
                 serde_json::json!({"command": "echo secret"}),
@@ -621,7 +616,8 @@ mod tests {
             )
             .await;
         assert!(
-            matches!(&denied, ToolResult::Error { content: message, .. } if message.contains("denied pattern")),
+            denied.get_name() == Event::TOOL_CALL_FAILED
+                && denied.get_content().contains("denied pattern"),
             "{denied:?}"
         );
     }
@@ -636,7 +632,7 @@ mod tests {
             .call(serde_json::json!({ "command": "echo secret" }), &ctx)
             .await;
         let content = result.get_content();
-        assert!(matches!(result, ToolResult::Error { .. }));
+        assert!(result.get_name() == Event::TOOL_CALL_FAILED);
         assert!(content.contains("denied pattern 'echo secret*'"));
     }
 
@@ -647,7 +643,7 @@ mod tests {
         let result = Tool::from(tool)
             .call(serde_json::json!({ "command": "echo" }), &ctx)
             .await;
-        assert!(matches!(result, ToolResult::Error { .. }));
+        assert!(result.get_name() == Event::TOOL_CALL_FAILED);
     }
 
     /// Run `command` through a tool whose pattern matches the whole line, so a
@@ -664,7 +660,7 @@ mod tests {
 
         let content = result.get_content();
         assert!(
-            matches!(result, ToolResult::Error { .. }),
+            result.get_name() == Event::TOOL_CALL_FAILED,
             "{command:?} should be refused, got {content}"
         );
         assert!(
@@ -684,7 +680,7 @@ mod tests {
             .call(serde_json::json!({ "command": "touch chained.txt" }), &ctx)
             .await;
 
-        assert!(matches!(result, ToolResult::Success { .. }));
+        assert!(result.get_name() == Event::TOOL_CALL_FINISHED);
         assert!(dir.path().join("chained.txt").exists());
     }
 
@@ -712,7 +708,7 @@ mod tests {
 
         let content = result.get_content();
         assert!(
-            matches!(result, ToolResult::Success { .. }),
+            result.get_name() == Event::TOOL_CALL_FINISHED,
             "got {content}"
         );
         assert!(content.contains("a && b"));
@@ -735,7 +731,7 @@ mod tests {
 
         let content = result.get_content();
         assert!(
-            matches!(result, ToolResult::Success { .. }),
+            result.get_name() == Event::TOOL_CALL_FINISHED,
             "got {content}"
         );
         assert!(content.contains("two words.txt"), "got {content}");
@@ -750,7 +746,7 @@ mod tests {
 
         let content = result.get_content();
         assert!(
-            matches!(result, ToolResult::Success { .. }),
+            result.get_name() == Event::TOOL_CALL_FINISHED,
             "got {content}"
         );
         assert!(content.contains("hi"));
@@ -793,7 +789,7 @@ mod tests {
                 &ctx,
             )
             .await;
-        assert!(matches!(result, ToolResult::Error { .. }));
+        assert!(result.get_name() == Event::TOOL_CALL_FAILED);
     }
 
     #[tokio::test]
@@ -826,7 +822,7 @@ mod tests {
         let result = Tool::from(tool)
             .call(serde_json::json!({ "command": "echo --force" }), &ctx)
             .await;
-        assert!(matches!(result, ToolResult::Success { .. }));
+        assert!(result.get_name() == Event::TOOL_CALL_FINISHED);
     }
 
     #[tokio::test]
@@ -838,7 +834,7 @@ mod tests {
         let result = Tool::from(tool)
             .call(serde_json::json!({ "command": "echo -f" }), &ctx)
             .await;
-        assert!(matches!(result, ToolResult::Success { .. }));
+        assert!(result.get_name() == Event::TOOL_CALL_FINISHED);
     }
 
     #[tokio::test]
@@ -866,7 +862,7 @@ mod tests {
         let allowed = Tool::from(tool)
             .call(serde_json::json!({ "command": "echo -r" }), &ctx)
             .await;
-        assert!(matches!(allowed, ToolResult::Success { .. }));
+        assert!(allowed.get_name() == Event::TOOL_CALL_FINISHED);
     }
 
     #[tokio::test]
@@ -876,7 +872,7 @@ mod tests {
         let result = Tool::from(tool)
             .call(serde_json::json!({ "command": "echo -n hi" }), &ctx)
             .await;
-        assert!(matches!(result, ToolResult::Success { .. }));
+        assert!(result.get_name() == Event::TOOL_CALL_FINISHED);
     }
 
     #[tokio::test]
@@ -886,7 +882,7 @@ mod tests {
         let result = Tool::from(tool)
             .call(serde_json::json!({ "command": "echo -n hi" }), &ctx)
             .await;
-        assert!(matches!(result, ToolResult::Success { .. }));
+        assert!(result.get_name() == Event::TOOL_CALL_FINISHED);
     }
 
     #[tokio::test]
@@ -900,7 +896,7 @@ mod tests {
             let result = Tool::from(tool.clone())
                 .call(serde_json::json!({ "command": command }), &ctx)
                 .await;
-            assert!(matches!(result, ToolResult::Success { .. }));
+            assert!(result.get_name() == Event::TOOL_CALL_FINISHED);
         }
     }
 
@@ -926,7 +922,7 @@ mod tests {
         let result = Tool::from(tool)
             .call(serde_json::json!({ "command": "echo -- --force" }), &ctx)
             .await;
-        assert!(matches!(result, ToolResult::Success { .. }));
+        assert!(result.get_name() == Event::TOOL_CALL_FINISHED);
     }
 
     #[tokio::test]
@@ -950,7 +946,7 @@ mod tests {
         let result = Tool::from(tool)
             .call(serde_json::json!({ "command": "echo --format=%H" }), &ctx)
             .await;
-        assert!(matches!(result, ToolResult::Success { .. }));
+        assert!(result.get_name() == Event::TOOL_CALL_FINISHED);
     }
 
     #[tokio::test]
@@ -1004,7 +1000,7 @@ mod tests {
         let result = Tool::from(tool)
             .call(serde_json::json!({ "command": "/bin/echo hi" }), &ctx)
             .await;
-        assert!(matches!(result, ToolResult::Error { .. }));
+        assert!(result.get_name() == Event::TOOL_CALL_FAILED);
     }
 
     #[tokio::test]
@@ -1081,7 +1077,7 @@ mod tests {
         let result = Tool::from(tool)
             .call(serde_json::json!({ "command": "echo -- --force" }), &ctx)
             .await;
-        assert!(matches!(result, ToolResult::Success { .. }));
+        assert!(result.get_name() == Event::TOOL_CALL_FINISHED);
     }
 
     #[tokio::test]
@@ -1094,7 +1090,7 @@ mod tests {
         let result = Tool::from(tool)
             .call(serde_json::json!({ "command": "echo \"a b\"" }), &ctx)
             .await;
-        assert!(matches!(result, ToolResult::Success { .. }));
+        assert!(result.get_name() == Event::TOOL_CALL_FINISHED);
     }
 
     #[tokio::test]
@@ -1106,7 +1102,7 @@ mod tests {
         let result = Tool::from(tool)
             .call(serde_json::json!({ "command": "ECHO hi" }), &ctx)
             .await;
-        assert!(matches!(result, ToolResult::Error { .. }));
+        assert!(result.get_name() == Event::TOOL_CALL_FAILED);
     }
 
     #[tokio::test]
@@ -1127,6 +1123,6 @@ mod tests {
         // Without the allowed file, the absent marker would prove nothing.
         assert!(dir.path().join("allowed.txt").exists());
         assert!(!dir.path().join("marker.txt").exists());
-        assert!(matches!(result, ToolResult::Error { .. }));
+        assert!(result.get_name() == Event::TOOL_CALL_FAILED);
     }
 }

@@ -21,7 +21,7 @@ from agentwerk import (
     Task,
     Queue,
     TasksTool,
-    ToolResult,
+    Event,
     tool,
 )
 
@@ -78,12 +78,12 @@ def python(code: str = "") -> object:
     """Run a short Python 3 snippet and return its stdout, trimmed. Use this for
     exact integer arithmetic."""
     if not code:
-        return ToolResult.error("missing required field `code`")
+        return Event(Event.TOOL_CALL_FAILED).data({"message": "missing required field `code`"})
     done = subprocess.run(
         [sys.executable, "-c", code], capture_output=True, text=True, timeout=30
     )
     if done.returncode != 0:
-        return ToolResult.error(f"python error: {done.stderr}")
+        return Event(Event.TOOL_CALL_FAILED).data({"message": f"python error: {done.stderr}"})
     return done.stdout.strip()
 
 

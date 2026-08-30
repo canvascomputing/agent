@@ -1368,7 +1368,6 @@ fn results_of(matches: impl Matcher<Task>) -> Query {
 mod tests {
     use super::super::test_util::*;
     use super::*;
-    use crate::tools::ToolFailureKind;
 
     #[test]
     fn policy_finish_reason_keeps_its_public_spelling() {
@@ -1384,7 +1383,7 @@ mod tests {
         Event::new(Event::TOOL_CALL_FAILED).data(serde_json::json!({
             "tool_name": "grep",
             "call_id": "c1",
-            "reason": ToolFailureKind::ExecutionFailed,
+            "reason": "execution_failed",
             "message": message,
         }))
     }

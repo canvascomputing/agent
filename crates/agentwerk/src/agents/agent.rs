@@ -465,14 +465,15 @@ mod tests {
 
     #[test]
     fn tools_accepts_a_mixed_list_of_tools() {
-        use crate::tools::{CommandTool, ReadFileTool, Tool, ToolResult};
+        use crate::event::Event;
+        use crate::tools::{CommandTool, ReadFileTool, Tool};
 
         let agent = Agent::new().tools(vec![
             Tool::from(ReadFileTool),
             CommandTool::new("git").allow("git *").into(),
             Tool::new("greet")
                 .description("Say hello.")
-                .handler(|_: serde_json::Value, _| async { ToolResult::success("hi") })
+                .handler(|_: serde_json::Value, _| async { Event::success("hi") })
                 .build(),
         ]);
         let names: Vec<String> = agent

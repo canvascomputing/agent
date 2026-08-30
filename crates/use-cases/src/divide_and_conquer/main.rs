@@ -20,7 +20,7 @@ use std::sync::Arc;
 use agentwerk::event::Event;
 use agentwerk::providers::{Model, Provider};
 use agentwerk::schemas::Schema;
-use agentwerk::tools::{TasksTool, Tool, ToolResult};
+use agentwerk::tools::{TasksTool, Tool};
 use agentwerk::{Agent, Policy, Queue, Task};
 use serde_json::{json, Value};
 
@@ -225,7 +225,9 @@ fn python_tool() -> Tool {
                 .and_then(|v| v.as_str())
                 .unwrap_or_default();
             if code.is_empty() {
-                return ToolResult::error("missing required field `code`");
+                return Event::new(Event::TOOL_CALL_FAILED).data(serde_json::json!({
+                    "reason": "execution_failed", "message": "missing required field `code`"
+                }));
             }
 
             let output_fut = tokio::process::Command::new("python3")
@@ -236,16 +238,16 @@ fn python_tool() -> Tool {
 
             tokio::select! {
                 biased;
-                _ = ctx.cancelled() => ToolResult::error("cancelled"),
+                _ = ctx.cancelled() => Event::new(Event::TOOL_CALL_FAILED).data(serde_json::json!({"reason": "execution_failed", "message": "cancelled"})),
                 result = output_fut => match result {
-                    Err(e) => ToolResult::error(format!("failed to spawn python3: {e}")),
+                    Err(e) => Event::new(Event::TOOL_CALL_FAILED).data(serde_json::json!({"reason": "execution_failed", "message": format!("failed to spawn python3: {e}")})),
                     Ok(out) if out.status.success() => {
                         let stdout = String::from_utf8_lossy(&out.stdout);
-                        ToolResult::success(stdout.trim().to_string())
+                        Event::new(Event::TOOL_CALL_FINISHED).data(serde_json::json!({"output": stdout.trim()}))
                     }
                     Ok(out) => {
                         let stderr = String::from_utf8_lossy(&out.stderr);
-                        ToolResult::error(format!("python error: {stderr}"))
+                        Event::new(Event::TOOL_CALL_FAILED).data(serde_json::json!({"reason": "execution_failed", "message": format!("python error: {stderr}")}))
                     }
                 }
             }

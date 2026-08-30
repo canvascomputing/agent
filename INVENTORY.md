@@ -1560,7 +1560,7 @@ Not bound: it backs `grep`'s `syntax: "code"` shape matching.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `run(files: [string, string][], query: Query, interrupt: boolean, deadline: Instant): ToolResult` | super |
+| Rust | `run(files: [string, string][], query: Query, interrupt: boolean, deadline: Instant): Event` | super |
 | Rust | `for_each_file(files: [string, string][], interrupt: boolean, deadline: Instant, visit: (path: string, content: string) => void): void` | private |
 | Rust | `line_and_byte_column(content: string, byte_offset: number): [number, number]` | private |
 | Rust | `render_summary(substring: string): string` | private |
@@ -1662,7 +1662,7 @@ Not bound: it is how `CommandTool` reads one command line.
 | Rust | `quoted(patterns: string[]): string` | private |
 | Rust | `CommandArgs { command: string, timeout_ms: number? }` | crate |
 | Python | not bound: the model sends these fields as the tool's input | |
-| Rust | `CommandTool.run(args: CommandArgs, ctx: ToolContext): Promise<ToolResult>` | private |
+| Rust | `CommandTool.run(args: CommandArgs, ctx: ToolContext): Promise<Event>` | private |
 
 ## `crates/agentwerk/src/tools/edit_file.rs`
 
@@ -1680,7 +1680,7 @@ Not bound: it is how `CommandTool` reads one command line.
 |----------|------|------------|
 | Rust | `EditFileArgs { path: string, old_string: string, new_string: string, replace_all: boolean }` | crate |
 | Python | not bound: the model sends these fields as the tool's input | |
-| Rust | `run(args: EditFileArgs, ctx: ToolContext): Promise<ToolResult>` | private |
+| Rust | `run(args: EditFileArgs, ctx: ToolContext): Promise<Event>` | private |
 
 ## `crates/agentwerk/src/tools/fetch_url.rs`
 
@@ -1714,7 +1714,7 @@ Not bound: it is how `CommandTool` reads one command line.
 | Rust | `FetchUrlArgs { url: string, max_length: number }` | crate |
 | Python | not bound: the model sends these fields as the tool's input | |
 | Rust | `default_max_length(): number` | private |
-| Rust | `run(args: FetchUrlArgs, ctx: ToolContext, impersonate: boolean): Promise<ToolResult>` | private |
+| Rust | `run(args: FetchUrlArgs, ctx: ToolContext, impersonate: boolean): Promise<Event>` | private |
 | Rust | `FetchedContent` | private |
 | Rust | `.Page { body: string, status: number, content_type: string, bytes: number }` | private |
 | Rust | `.Redirect { original_url: string, redirect_url: string, status: number }` | private |
@@ -1755,7 +1755,7 @@ Not bound: it is how `CommandTool` reads one command line.
 | Rust | `GlobArgs { pattern: string, path: string }` | crate |
 | Python | not bound: the model sends these fields as the tool's input | |
 | Rust | `here(): string` | private |
-| Rust | `run(args: GlobArgs, ctx: ToolContext): Promise<ToolResult>` | private |
+| Rust | `run(args: GlobArgs, ctx: ToolContext): Promise<Event>` | private |
 | Rust | `collect_matches(current: string, base: string, pattern_segments: string[], results: [string, SystemTime][]): void` | private |
 | Rust | `glob_matches(pattern: string[], path: string[]): boolean` | private |
 | Rust | `glob_match_recursive(pattern: string[], path: string[]): boolean` | private |
@@ -1778,7 +1778,7 @@ Not bound: it is how `CommandTool` reads one command line.
 | Rust | `DEFAULT_HEAD_LIMIT: number = 250` | private |
 | Rust | `MAX_LINE_COLUMNS: number = 250` | super |
 | Rust | `SEARCH_TIMEOUT: number = 180000` | private |
-| Rust | `run(args: GrepArgs, ctx: ToolContext): Promise<ToolResult>` | private |
+| Rust | `run(args: GrepArgs, ctx: ToolContext): Promise<Event>` | private |
 | Rust | `OutputMode` | crate |
 | Python | not bound: the model sends `output_mode` as a string | |
 | Rust | `.Content` | crate |
@@ -1795,15 +1795,15 @@ Not bound: it is how `CommandTool` reads one command line.
 | Python | not bound: the model sends these fields as the tool's input | |
 | Rust | `yes(): boolean` | private |
 | Rust | `default_head_limit(): number` | private |
-| Rust | `search_corpus(dir: string, query: Query, interrupt: boolean, deadline: Instant): ToolResult` | private |
-| Rust | `run_regex(files: [string, string][], query: Query, interrupt: boolean, deadline: Instant): ToolResult` | private |
+| Rust | `search_corpus(dir: string, query: Query, interrupt: boolean, deadline: Instant): Event` | private |
+| Rust | `run_regex(files: [string, string][], query: Query, interrupt: boolean, deadline: Instant): Event` | private |
 | Rust | `collect_files(walk: ignore::Walk, dir: string, interrupt: boolean, deadline: Instant): [string, string][]` | private |
 | Rust | `paginate(rows: T[], query: Query): [T[], boolean]` | private |
 | Rust | `note_pagination(map: Record<string, json>, query: Query, truncated: boolean): void` | private |
-| Rust | `object_result(map: Record<string, json>): ToolResult` | private |
-| Rust | `render_content(text: string, query: Query): ToolResult` | super |
-| Rust | `render_files(hits: string[], query: Query): ToolResult` | super |
-| Rust | `render_count(rows: [string, number][], query: Query): ToolResult` | super |
+| Rust | `object_result(map: Record<string, json>): Event` | private |
+| Rust | `render_content(text: string, query: Query): Event` | super |
+| Rust | `render_files(hits: string[], query: Query): Event` | super |
+| Rust | `render_count(rows: [string, number][], query: Query): Event` | super |
 
 ## `crates/agentwerk/src/tools/knowledge.rs`
 
@@ -1828,7 +1828,7 @@ Not bound: it is how `CommandTool` reads one command line.
 | Rust | `.Read { slug: string }` | crate |
 | Rust | `.Remove { slug: string }` | crate |
 | Rust | `.List` | crate |
-| Rust | `run(store: Knowledge, args: KnowledgeArgs, ctx: ToolContext): ToolResult` | private |
+| Rust | `run(store: Knowledge, args: KnowledgeArgs, ctx: ToolContext): Event` | private |
 
 ## `crates/agentwerk/src/tools/list_directory.rs`
 
@@ -1846,7 +1846,7 @@ Not bound: it is how `CommandTool` reads one command line.
 | Rust | `ListDirectoryArgs { path: string, recursive: boolean }` | crate |
 | Python | not bound: the model sends these fields as the tool's input | |
 | Rust | `here(): string` | private |
-| Rust | `run(args: ListDirectoryArgs, ctx: ToolContext): Promise<ToolResult>` | private |
+| Rust | `run(args: ListDirectoryArgs, ctx: ToolContext): Promise<Event>` | private |
 | Rust | `EntryInfo { display_name: string, kind: string, size: number? }` | private |
 | Rust | `list_entries(dir: string, base: string, recursive: boolean): EntryInfo[] throws io::Error` | private |
 
@@ -1856,7 +1856,7 @@ Not bound: it is how `CommandTool` reads one command line.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | re-exports `Tool`, `ToolContext`, `ToolFailureKind`, `ToolResult`, `CommandTool`, `EditFileTool`, `FetchUrlTool`, `GlobTool`, `GrepTool`, `KnowledgeTool`, `ListDirectoryTool`, `ReadFileTool`, `FinishTool`, `TasksTool`, `WriteFileTool` | pub |
+| Rust | re-exports `Tool`, `ToolContext`, `CommandTool`, `EditFileTool`, `FetchUrlTool`, `GlobTool`, `GrepTool`, `KnowledgeTool`, `ListDirectoryTool`, `ReadFileTool`, `FinishTool`, `TasksTool`, `WriteFileTool` | pub |
 
 ### Internal
 
@@ -1881,7 +1881,7 @@ Not bound: it is how `CommandTool` reads one command line.
 | Rust | `ReadFileArgs { path: string, offset: number, limit: number?, column: number?, length: number? }` | crate |
 | Python | not bound: the model sends these fields as the tool's input | |
 | Rust | `first_line(): number` | private |
-| Rust | `run(args: ReadFileArgs, ctx: ToolContext): Promise<ToolResult>` | private |
+| Rust | `run(args: ReadFileArgs, ctx: ToolContext): Promise<Event>` | private |
 | Rust | `snap_to_char_boundary(s: string, pos: number): number` | private |
 
 ## `crates/agentwerk/src/tools/tasks/finish.rs`
@@ -1901,13 +1901,13 @@ Not bound: it is how `CommandTool` reads one command line.
 | Rust | `SCHEMA: string` | private |
 | Rust | `FinishTool.NAME: string = "finish"` | crate |
 | Rust | `.from_schema(schema: Schema?): Tool` | crate |
-| Rust | `finish(input: json, ctx: ToolContext, schema: Schema?): ToolResult throws ToolResult` | private |
-| Rust | `hand_over(queue: Queue, input: json, parent_id: string, agent: string, result: json, schema: Schema?, handover: string): ToolResult throws ToolResult` | private |
-| Rust | `control_string(input: json, key: string): string? throws ToolResult` | private |
-| Rust | `mark_finished(queue: Queue, id: string, agent: string): void throws ToolResult` | private |
+| Rust | `finish(input: json, ctx: ToolContext, schema: Schema?): Event throws Event` | private |
+| Rust | `hand_over(queue: Queue, input: json, parent_id: string, agent: string, result: json, schema: Schema?, handover: string): Event throws Event` | private |
+| Rust | `control_string(input: json, key: string): string? throws Event` | private |
+| Rust | `mark_finished(queue: Queue, id: string, agent: string): void throws Event` | private |
 | Rust | `apply_handover_templates(task: string, parent_id: string, result_path: string, result: string): string` | private |
 | Rust | `append_parent_reference(body: string, parent_id: string, result_path: string): string` | private |
-| Rust | `attach_result(queue: Queue, id: string, result: json, schema: Schema?): [json, string[]] throws ToolResult` | private |
+| Rust | `attach_result(queue: Queue, id: string, result: json, schema: Schema?): [json, string[]] throws Event` | private |
 
 ## `crates/agentwerk/src/tools/tasks/mod.rs`
 
@@ -1929,9 +1929,9 @@ Not bound: it is how `CommandTool` reads one command line.
 | Rust | `.List { aql: string? }` | crate |
 | Rust | `.Create { task: json, label: string? }` | crate |
 | Rust | `.Edit { id: string?, task: json?, label: string? }` | crate |
-| Rust | `dispatch(args: TasksArgs, ctx: ToolContext): ToolResult` | super |
-| Rust | `resolve_id(queue: Queue, id: string?, ctx: ToolContext): string throws ToolResult` | private |
-| Rust | `resolve_current_id(queue: Queue, ctx: ToolContext): string throws ToolResult` | super |
+| Rust | `dispatch(args: TasksArgs, ctx: ToolContext): Event` | super |
+| Rust | `resolve_id(queue: Queue, id: string?, ctx: ToolContext): string throws Event` | private |
+| Rust | `resolve_current_id(queue: Queue, ctx: ToolContext): string throws Event` | super |
 | Rust | `task_error_message(err: TaskError): string` | super |
 | Rust | `render_task(t: Task): string` | private |
 | Rust | `render_result(id: string, path: string, result: json): string` | private |
@@ -1941,11 +1941,11 @@ Not bound: it is how `CommandTool` reads one command line.
 | Rust | `SummaryRow = [string, string, Status, string?]` | private |
 | Rust | `render_summary_list(tasks: SummaryRow[]): string` | private |
 | Rust | `task_preview(task: json): string` | private |
-| Rust | `action_task(queue: Queue, id: string?, ctx: ToolContext): ToolResult` | private |
-| Rust | `action_result(queue: Queue, id: string?, ctx: ToolContext): ToolResult` | private |
-| Rust | `action_list(queue: Queue, aql: string?): ToolResult` | private |
-| Rust | `action_create(queue: Queue, task: json, label: string?, ctx: ToolContext): ToolResult` | private |
-| Rust | `action_edit(queue: Queue, id: string?, new_task: json?, new_label: string?, ctx: ToolContext): ToolResult` | private |
+| Rust | `action_task(queue: Queue, id: string?, ctx: ToolContext): Event` | private |
+| Rust | `action_result(queue: Queue, id: string?, ctx: ToolContext): Event` | private |
+| Rust | `action_list(queue: Queue, aql: string?): Event` | private |
+| Rust | `action_create(queue: Queue, task: json, label: string?, ctx: ToolContext): Event` | private |
+| Rust | `action_edit(queue: Queue, id: string?, new_task: json?, new_label: string?, ctx: ToolContext): Event` | private |
 
 ## `crates/agentwerk/src/tools/tasks/tasks.rs`
 
@@ -1962,24 +1962,13 @@ Not bound: it is how `CommandTool` reads one command line.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `ToolFailureKind` | pub |
-| Python | a string inside `Event.get_data()`: `data["reason"]` | |
-| Rust | `.ToolNotFound`, `.ExecutionFailed`, `.SchemaValidationFailed` | pub |
-| Rust | `.get_name(): string` | pub |
-| Rust | `impl Display for ToolFailureKind` | pub |
 | Rust | `ToolContext { dir: string, run: Run?, queue: Queue?, agent_id: string?, task_id: string?, knowledge: Knowledge? }` | pub with crate-private fields |
 | Python | not bound: a `@tool` function receives its input as keyword arguments only | |
 | Rust | `.new(dir: string): this` | pub |
 | Rust | `.get_dir(): string` | pub |
 | Rust | `.cancelled(): Promise<void>` | pub |
 | Rust | `impl Debug for ToolContext` | pub |
-| both | `ToolResult` | pub |
-| Rust | `.Success { content: string, offloaded: string?, repaired: string[] }` | pub |
-| Rust | `.Error { content: string, kind: ToolFailureKind }` | pub |
-| both | `.success(content: string): this` | pub |
-| both | `.error(content: string): this` | pub |
-| Rust | `.get_content(): string` | pub |
-| Rust | `.into_content(): string` | pub |
+| both | terminal `Event`: `tool_call_finished` carries `data.output`; `tool_call_failed` carries `data.message` and `data.reason` | pub |
 | Rust | `ToolBuilder<D, H> { name: string, description: D, schema: Schema, concurrent: boolean, paths: string[], handler: H }` | pub |
 | Python | folded into the `@tool` decorator: the type changes as the description and handler are attached, which Python cannot hold across calls | |
 | Rust | `Tool { name: string, description: string, schema: Schema, concurrent: boolean, paths: string[], handler: ToolHandler }` | pub with private fields |
@@ -1987,7 +1976,7 @@ Not bound: it is how `CommandTool` reads one command line.
 | Rust | `impl Debug for Tool` | pub |
 | Rust | `.new(name: string): ToolBuilder` | pub |
 | Python | the `@tool` decorator: a decorated function carries the name, description, and schema | |
-| Rust | `.call(input: json, ctx: ToolContext): Promise<ToolResult>` | pub |
+| Rust | `.call(input: json, ctx: ToolContext): Promise<Event>` | pub |
 | Python | not bound: the loop calls the decorated function | |
 | Rust | `.get_name(): string` | pub |
 | Rust | `.get_description(): string` | pub |
@@ -2002,7 +1991,7 @@ Not bound: it is how `CommandTool` reads one command line.
 | Python | `@tool(paths=[..])` | |
 | Rust | `.description(description: Text): this` | pub |
 | Python | `@tool(description=..)`, defaulting to the decorated function's docstring: a `str` is the description, an `os.PathLike` names the file holding it | |
-| Rust | `.handler(handler: (input: json, ctx: ToolContext) => Promise<ToolResult>): this` | pub |
+| Rust | `.handler(handler: (input: json, ctx: ToolContext) => Promise<Event>): this` | pub |
 | Python | the decorated function itself | |
 | Rust | `.build(): Tool` | pub |
 | Python | not bound: the decorator builds the tool | |
@@ -2031,23 +2020,23 @@ Not bound: it is how `CommandTool` reads one command line.
 | Rust | `.contains(name: string): boolean` | crate |
 | Rust | `.names(): string[]` | private |
 | Rust | `.tools(): Tool[]` | crate |
-| Rust | `.execute(calls: ToolCall[], ctx: ToolContext): Promise<ToolResult[]>` | crate |
-| Rust | `.run_concurrently(batch: [number, ToolCall][], ctx: ToolContext, semaphore: tokio::sync::Semaphore): Promise<[number, ToolResult][]>` | private |
+| Rust | `.execute(calls: ToolCall[], ctx: ToolContext): Promise<Event[]>` | crate |
+| Rust | `.run_concurrently(batch: [number, ToolCall][], ctx: ToolContext, semaphore: tokio::sync::Semaphore): Promise<[number, Event][]>` | private |
 | Rust | `ToolBatch` | private |
 | Rust | `.Concurrent([number, ToolCall][])` | private |
 | Rust | `.Serial(number, ToolCall)` | private |
 | Rust | `partition_tool_calls(calls: ToolCall[], registry: ToolRegistry): ToolBatch[]` | private |
-| Rust | `answer_every_call(calls: ToolCall[], answers: ToolResult?[]): ToolResult[]` | private |
+| Rust | `answer_every_call(calls: ToolCall[], answers: Event?[]): Event[]` | private |
 | Rust | `lookup_key(name: string): string` | private |
-| Rust | `ToolHandler = (input: json, ctx: ToolContext) => Promise<ToolResult>` | private |
-| Rust | `read_arguments_then(name: string, handler: (input: json, ctx: ToolContext) => Promise<ToolResult>): ToolHandler` | private |
-| Rust | `invoke(resolved: Tool throws string, call: ToolCall, ctx: ToolContext): Promise<ToolResult>` | private |
+| Rust | `ToolHandler = (input: json, ctx: ToolContext) => Promise<Event>` | private |
+| Rust | `read_arguments_then(name: string, handler: (input: json, ctx: ToolContext) => Promise<Event>): ToolHandler` | private |
+| Rust | `invoke(resolved: Tool throws string, call: ToolCall, ctx: ToolContext): Promise<Event>` | private |
 | Rust | `retype_message(pointer: string): string` | crate |
-| Rust | `cap_results(calls: ToolCall[], results: ToolResult[], ctx: ToolContext): void` | private |
-| Rust | `replace_empty_output(result: ToolResult, tool_name: string): void` | private |
-| Rust | `cap_oversized_result(result: ToolResult, ctx: ToolContext, call_id: string, per_tool_cap: number): void` | private |
-| Rust | `cap_aggregate_outputs(calls: ToolCall[], results: ToolResult[], ctx: ToolContext, per_turn_cap: number): void` | private |
-| Rust | `largest_inline_success(calls: ToolCall[], results: ToolResult[]): [ToolCall, string, string?]?` | private |
+| Rust | `cap_results(calls: ToolCall[], results: Event[], ctx: ToolContext): void` | private |
+| Rust | `replace_empty_output(result: Event, tool_name: string): void` | private |
+| Rust | `cap_oversized_result(result: Event, ctx: ToolContext, call_id: string, per_tool_cap: number): void` | private |
+| Rust | `cap_aggregate_outputs(calls: ToolCall[], results: Event[], ctx: ToolContext, per_turn_cap: number): void` | private |
+| Rust | `largest_inline_success(calls: ToolCall[], results: Event[]): [ToolCall, string, string?]?` | private |
 | Rust | `write_out(content: string, ctx: ToolContext, call_id: string): string?` | private |
 | Rust | `persist_output(ctx: ToolContext, tool_use_id: string, content: string): PersistedOutput?` | private |
 | Rust | `PersistedOutput { rel: string, display: string }` | private |
@@ -2066,7 +2055,7 @@ Not bound: shared helpers behind the built-in tools.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `run_command(command: Command, timeout: number, ctx: ToolContext): Promise<ToolResult>` | crate |
+| Rust | `run_command(command: Command, timeout: number, ctx: ToolContext): Promise<Event>` | crate |
 | Rust | `glob_match(pattern: string, text: string): boolean` | crate |
 | Rust | `glob_match_bytes(pattern: number[], text: number[]): boolean` | private |
 | Rust | `MAX_DIR_ENTRIES: number = 100` | crate |
@@ -2090,7 +2079,7 @@ Not bound: shared helpers behind the built-in tools.
 |----------|------|------------|
 | Rust | `WriteFileArgs { path: string, content: string }` | crate |
 | Python | not bound: the model sends these fields as the tool's input | |
-| Rust | `run(args: WriteFileArgs, ctx: ToolContext): Promise<ToolResult>` | private |
+| Rust | `run(args: WriteFileArgs, ctx: ToolContext): Promise<Event>` | private |
 
 ## `crates/agentwerk-py/src/agent.rs`
 
@@ -2468,7 +2457,7 @@ Binds `tools/`.
 | Language | Item | Visibility |
 |----------|------|------------|
 | Rust | `PyTool { inner: Tool }` | python |
-| Rust | `PyToolResult { inner: ToolResult }` | python |
+| Rust | `PyEvent { inner: Event }` | python |
 | Rust | `.success(content: string): this` | python |
 | Rust | `.error(content: string): this` | python |
 | Rust | `read_file_tool(): PyTool` | python |
@@ -2496,7 +2485,7 @@ Binds `tools/`.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `invoke_python(py: Python, func: any, input: json): ToolResult throws PyErr` | private |
+| Rust | `invoke_python(py: Python, func: any, input: json): Event throws PyErr` | private |
 | Rust | `extract_tool(obj: any): Tool throws PyErr` | crate |
 | Rust | `handle(inner: Tool): PyTool` | private |
 | Rust | `register(m: PyModule): void throws PyErr` | crate |

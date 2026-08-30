@@ -6,8 +6,9 @@ use std::sync::Arc;
 use agentwerk::schemas::Schema;
 use agentwerk::tools::{
     CommandTool, EditFileTool, FetchUrlTool, FinishTool, GlobTool, GrepTool, KnowledgeTool,
-    ListDirectoryTool, ReadFileTool, TasksTool, Tool, ToolContext, ToolResult, WriteFileTool,
+    ListDirectoryTool, ReadFileTool, TasksTool, Tool, ToolContext, WriteFileTool,
 };
+use agentwerk::Event;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use serde_json::Value;
@@ -22,9 +23,9 @@ pub struct PyTool {
     pub inner: Tool,
 }
 
-/// Call the Python tool and turn what it returns into a `ToolResult`. The input
+/// Call the Python tool and turn what it returns into a terminal `Event`. The input
 /// arrives as keyword arguments, and an async function is awaited.
-fn invoke_python(py: Python<'_>, func: &Py<PyAny>, input: &Value) -> PyResult<ToolResult> {
+fn invoke_python(py: Python<'_>, func: &Py<PyAny>, input: &Value) -> PyResult<Event> {
     let arg = value_to_py(py, input)?;
     let bound = func.bind(py);
     let mut result = match arg.cast::<PyDict>() {
@@ -42,42 +43,19 @@ fn invoke_python(py: Python<'_>, func: &Py<PyAny>, input: &Value) -> PyResult<To
     }
 
     if result.is_none() {
-        return Ok(ToolResult::success(String::new()));
+        return Ok(Event::new(Event::TOOL_CALL_FINISHED).data(serde_json::json!({"output": ""})));
     }
-    if let Ok(explicit) = result.extract::<PyRef<PyToolResult>>() {
+    if let Ok(explicit) = result.extract::<PyRef<crate::event::PyEvent>>() {
         return Ok(explicit.inner.clone());
     }
     if let Ok(text) = result.extract::<String>() {
-        return Ok(ToolResult::success(text));
+        return Ok(Event::new(Event::TOOL_CALL_FINISHED).data(serde_json::json!({"output": text})));
     }
     let value = py_to_value(&result)?;
-    Ok(ToolResult::success(value.to_string()))
-}
-
-/// What a tool reports back when a bare return value is not enough. Returning a
-/// plain string or dict is the same as `ToolResult.success(...)`.
-#[pyclass(name = "ToolResult")]
-pub struct PyToolResult {
-    inner: ToolResult,
-}
-
-#[pymethods]
-impl PyToolResult {
-    /// The tool did its work, and `content` goes back to the model.
-    #[staticmethod]
-    fn success(content: String) -> Self {
-        PyToolResult {
-            inner: ToolResult::success(content),
-        }
-    }
-
-    /// The tool failed, and `content` says why so the model can work around it.
-    #[staticmethod]
-    fn error(content: String) -> Self {
-        PyToolResult {
-            inner: ToolResult::error(content),
-        }
-    }
+    Ok(
+        Event::new(Event::TOOL_CALL_FINISHED)
+            .data(serde_json::json!({"output": value.to_string()})),
+    )
 }
 
 /// Read a usable tool out of whatever Python passed to `.tool(...)`: a built-in
@@ -119,19 +97,20 @@ pub fn extract_tool(obj: &Bound<'_, PyAny>) -> PyResult<Tool> {
                     // Concurrent tool calls are spawned onto a multi-thread
                     // runtime, so the GIL work must run on a blocking thread,
                     // not the async worker.
-                    let outcome: Result<ToolResult, String> =
-                        tokio::task::spawn_blocking(move || {
-                            Python::attach(|py| {
-                                invoke_python(py, &func, &input).map_err(|e| e.to_string())
-                            })
+                    let outcome: Result<Event, String> = tokio::task::spawn_blocking(move || {
+                        Python::attach(|py| {
+                            invoke_python(py, &func, &input).map_err(|e| e.to_string())
                         })
-                        .await
-                        .unwrap_or_else(|join| Err(format!("tool thread panicked: {join}")));
+                    })
+                    .await
+                    .unwrap_or_else(|join| Err(format!("tool thread panicked: {join}")));
                     // A Python exception is a recoverable failure shown back to
                     // the model, not a hard error that stops the run.
                     match outcome {
                         Ok(result) => result,
-                        Err(message) => ToolResult::error(message),
+                        Err(message) => Event::new(Event::TOOL_CALL_FAILED).data(
+                            serde_json::json!({"reason": "execution_failed", "message": message}),
+                        ),
                     }
                 }
             })
@@ -309,7 +288,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyTool>()?;
     m.add_class::<PyCommandTool>()?;
     m.add_class::<PyFetchUrlTool>()?;
-    m.add_class::<PyToolResult>()?;
     m.add_function(wrap_pyfunction!(read_file_tool, m)?)?;
     m.add_function(wrap_pyfunction!(write_file_tool, m)?)?;
     m.add_function(wrap_pyfunction!(edit_file_tool, m)?)?;

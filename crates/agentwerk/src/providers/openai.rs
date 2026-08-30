@@ -550,7 +550,7 @@ mod tests {
                 .schema(
                     serde_json::json!({"type": "object", "properties": {"city": {"type": "string"}}}),
                 )
-                .handler(|_: Value, _| async { crate::tools::ToolResult::success("") })
+                .handler(|_: Value, _| async { crate::Event::success("") })
                 .build()],
             max_request_tokens: Some(1024),
             reasoning_effort: Default::default(),

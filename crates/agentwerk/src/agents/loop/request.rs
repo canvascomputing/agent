@@ -502,7 +502,7 @@ mod tests {
     use crate::agents::tasks::{Queue, Reply, ReplyContent};
     use crate::event::Event;
     use crate::providers::{ContentBlock, Message};
-    use crate::tools::{Tool, ToolResult};
+    use crate::tools::Tool;
 
     type BoomHandler = Box<dyn Fn(&Arc<Queue>, &Event) + Send + Sync>;
 
@@ -518,7 +518,7 @@ mod tests {
         ]);
         let boom = Tool::new("boom")
             .description("Always fails")
-            .handler(|_: Value, _| async move { ToolResult::error("boom") })
+            .handler(|_: Value, _| async move { Event::error("boom") })
             .build();
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let tasks = Queue::new();

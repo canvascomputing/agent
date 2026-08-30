@@ -12,7 +12,7 @@ Naming, comment, and prose rules, plus README structure. Skim the section matchi
 - Builder parameters and run outputs earn one when callers name them: `Schema`, `SchemaStore`, `Policy`, `Directive`, `Text`, `Reply`, `Trajectory`.
 - Errors and conversion traits do not. They live in their domain module.
 - Free functions at the root are forbidden: convert to an associated function or move to the domain module.
-- Name collisions at the root are forbidden; `ToolResult` next to `Result` is not acceptable.
+- Name collisions at the root are forbidden.
 
 ## Where Non-Root Types Live
 
@@ -60,7 +60,7 @@ InvalidRequest, UnexpectedStatus, MissingKey, RequestError               // reje
 **A fieldless discriminant exposes `name()`, and `Display` prints what `name()` returns.**
 
 ```rust
-ToolFailureKind::ExecutionFailed.name()   // "execution_failed"
+event.get_data()["reason"]               // "execution_failed"
 ```
 
 - `name()` returns the stable snake_case spelling, which is also what serde reads and writes.
@@ -75,7 +75,7 @@ ToolFailureKind::ExecutionFailed.name()   // "execution_failed"
 - Wrapped underlying errors MUST be named `source`, as in `FooFailed { source: io::Error }`.
 - Typed metadata uses descriptive names: `status`, `retryable`, `retry_delay`, `tool_name`, `retries`, `after_ms`, `action`, `slug`.
 - A discriminant explaining why something happened is `reason`. `PolicyViolated` names its field `policy` instead, because `reason` next to `limit` reads as the limit's justification.
-- IMPORTANT: never name such a field `kind` when `reason` states the meaning more directly. The type may still be named `PolicyViolation` or `ToolFailureKind`; only the field is constrained.
+- IMPORTANT: never name such a field `kind` when `reason` states the meaning more directly.
 
 ## RAII Guard Fields
 
@@ -468,7 +468,7 @@ Also:
 - Event rows are past-tense state sentences: `A task finished successfully.`
 - Every row is a description, not a constraint fragment. A cell that does not lead with a verb is a defect.
 - A tool does not act; the agent does. The table intro carries that framing once so individual rows stay terse.
-- The prose verb "Return" stays for instructions to the caller, as in "Return `ToolResult::error(message)` for a failure the model should work around".
+- The prose verb "Return" stays for instructions to the caller, as in "Return a `tool_call_failed` event for a failure the model should work around".
 
 ## README Table Order
 

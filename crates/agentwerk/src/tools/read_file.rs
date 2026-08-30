@@ -1,6 +1,6 @@
 //! The agent's eyes on the filesystem. Lets a model read a file it did not receive in the prompt.
 
-use super::tool::{Tool, ToolContext, ToolResult};
+use super::tool::{Event, Tool, ToolContext};
 use crate::prompts::directives::{
     READ_FILE_FAILED, READ_FILE_IS_BINARY, READ_FILE_NOT_FOUND, READ_FILE_PATH_IS_DIRECTORY,
     READ_FILE_PATH_IS_DIRECTORY_WITH_ENTRIES,
@@ -48,7 +48,7 @@ impl From<ReadFileTool> for Tool {
     }
 }
 
-async fn run(args: ReadFileArgs, ctx: ToolContext) -> ToolResult {
+async fn run(args: ReadFileArgs, ctx: ToolContext) -> Event {
     let ReadFileArgs {
         path,
         offset,
@@ -69,7 +69,7 @@ async fn run(args: ReadFileArgs, ctx: ToolContext) -> ToolResult {
                 .directives
                 .render(READ_FILE_PATH_IS_DIRECTORY, &[("path", &path)]),
         };
-        return ToolResult::error(message);
+        return Event::error(message);
     }
 
     let content = match std::fs::read(&resolved) {
@@ -81,7 +81,7 @@ async fn run(args: ReadFileArgs, ctx: ToolContext) -> ToolResult {
             // templates. Otherwise decode lossily so odd-encoded source
             // stays inspectable, the point of a scan.
             if bytes.contains(&0) {
-                return ToolResult::success(ctx.directives.render(
+                return Event::success(ctx.directives.render(
                     READ_FILE_IS_BINARY,
                     &[("path", &path), ("bytes", &bytes.len().to_string())],
                 ));
@@ -89,7 +89,7 @@ async fn run(args: ReadFileArgs, ctx: ToolContext) -> ToolResult {
             String::from_utf8_lossy(&bytes).into_owned()
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return ToolResult::error(ctx.directives.render(
+            return Event::error(ctx.directives.render(
                 READ_FILE_NOT_FOUND,
                 &[
                     ("path", &path),
@@ -101,7 +101,7 @@ async fn run(args: ReadFileArgs, ctx: ToolContext) -> ToolResult {
             ));
         }
         Err(e) => {
-            return ToolResult::error(ctx.directives.render(
+            return Event::error(ctx.directives.render(
                 READ_FILE_FAILED,
                 &[("path", &path), ("error", &e.to_string())],
             ));
@@ -143,7 +143,7 @@ async fn run(args: ReadFileArgs, ctx: ToolContext) -> ToolResult {
         }
     }
 
-    ToolResult::success(result)
+    Event::success(result)
 }
 
 fn snap_to_char_boundary(s: &str, pos: usize) -> usize {
@@ -284,7 +284,7 @@ mod tests {
 
         for case in cases {
             let result = Tool::from(ReadFileTool).call(case.input, &ctx).await;
-            let is_error = matches!(result, ToolResult::Error { .. });
+            let is_error = result.get_name() == Event::TOOL_CALL_FAILED;
             let content = result.get_content();
             assert_eq!(
                 is_error, case.expect_error,
@@ -312,9 +312,8 @@ mod tests {
             .call(serde_json::json!({ "path": "." }), &test_ctx(dir.path()))
             .await;
 
-        let ToolResult::Error { content, .. } = &result else {
-            panic!("reading a directory should return an error result, got {result:?}");
-        };
+        assert_eq!(result.get_name(), Event::TOOL_CALL_FAILED, "{result:?}");
+        let content = result.get_content();
         assert!(content.contains("is a directory"), "got {content:?}");
         assert!(content.contains("__init__.py"), "got {content:?}");
         assert!(content.contains("sessions.py"), "got {content:?}");
@@ -337,9 +336,8 @@ mod tests {
             )
             .await;
 
-        let ToolResult::Success { content, .. } = &result else {
-            panic!("a non-UTF-8 file should read lossily, not error, got {result:?}");
-        };
+        assert_eq!(result.get_name(), Event::TOOL_CALL_FINISHED, "{result:?}");
+        let content = result.get_content();
         // The readable text survives; the bad byte becomes the replacement char.
         assert!(content.contains("import os"), "got {content:?}");
         assert!(content.contains("x = 1"), "got {content:?}");
@@ -362,9 +360,8 @@ mod tests {
             )
             .await;
 
-        let ToolResult::Success { content, .. } = &result else {
-            panic!("a binary file should report concisely as success, got {result:?}");
-        };
+        assert_eq!(result.get_name(), Event::TOOL_CALL_FINISHED, "{result:?}");
+        let content = result.get_content();
         assert!(content.contains("binary file"), "got {content:?}");
         // No decoded garbage: the message is short, not the raw bytes.
         assert!(
@@ -386,9 +383,8 @@ mod tests {
             )
             .await;
 
-        let ToolResult::Error { content, .. } = &result else {
-            panic!("a missing file should return an error result, got {result:?}");
-        };
+        assert_eq!(result.get_name(), Event::TOOL_CALL_FAILED, "{result:?}");
+        let content = result.get_content();
         assert!(content.contains("File does not exist"), "got {content:?}");
         assert!(
             content.contains("contains:") && content.contains("helpers.py"),
@@ -413,9 +409,8 @@ mod tests {
             )
             .await;
 
-        let ToolResult::Error { content, .. } = &result else {
-            panic!("a missing file should return an error result, got {result:?}");
-        };
+        assert_eq!(result.get_name(), Event::TOOL_CALL_FAILED, "{result:?}");
+        let content = result.get_content();
         assert!(content.contains("File does not exist"), "got {content:?}");
         assert!(
             content.contains(&cwd.display().to_string()),
@@ -439,9 +434,8 @@ mod tests {
             )
             .await;
 
-        let ToolResult::Success { content, .. } = &result else {
-            panic!("offset past EOF should succeed with an empty slice, got {result:?}");
-        };
+        assert_eq!(result.get_name(), Event::TOOL_CALL_FINISHED, "{result:?}");
+        let content = result.get_content();
         assert_eq!(content, "");
     }
 
@@ -458,9 +452,8 @@ mod tests {
             )
             .await;
 
-        let ToolResult::Success { content, .. } = &result else {
-            panic!("slicing mid-codepoint should succeed, got {result:?}");
-        };
+        assert_eq!(result.get_name(), Event::TOOL_CALL_FINISHED, "{result:?}");
+        let content = result.get_content();
         // The slice starts at the next char boundary instead of splitting 'é'.
         assert_eq!(content, "1:6\tx");
     }

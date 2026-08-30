@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use super::tool::{Tool, ToolContext, ToolResult};
+use super::tool::{Event, Tool, ToolContext};
 use crate::prompts::directives::{
     LIST_DIRECTORY_FAILED, LIST_DIRECTORY_NOT_FOUND, LIST_DIRECTORY_PATH_IS_FILE,
 };
@@ -43,7 +43,7 @@ impl From<ListDirectoryTool> for Tool {
     }
 }
 
-async fn run(args: ListDirectoryArgs, ctx: ToolContext) -> ToolResult {
+async fn run(args: ListDirectoryArgs, ctx: ToolContext) -> Event {
     let ListDirectoryArgs {
         path: path_str,
         recursive,
@@ -51,7 +51,7 @@ async fn run(args: ListDirectoryArgs, ctx: ToolContext) -> ToolResult {
     let base = ctx.dir.join(&path_str);
 
     if base.exists() && !base.is_dir() {
-        return ToolResult::error(
+        return Event::error(
             ctx.directives
                 .render(LIST_DIRECTORY_PATH_IS_FILE, &[("path", &path_str)]),
         );
@@ -71,21 +71,19 @@ async fn run(args: ListDirectoryArgs, ctx: ToolContext) -> ToolResult {
                     _ => format!("{}  {} bytes", e.display_name, e.size.unwrap_or(0)),
                 })
                 .collect();
-            ToolResult::success(lines.join("\n"))
+            Event::success(lines.join("\n"))
         }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            ToolResult::error(ctx.directives.render(
-                LIST_DIRECTORY_NOT_FOUND,
-                &[
-                    ("path", &path_str),
-                    (
-                        "hint",
-                        &super::util::not_found_hint(&ctx.dir, &base, &ctx.directives),
-                    ),
-                ],
-            ))
-        }
-        Err(e) => ToolResult::error(ctx.directives.render(
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Event::error(ctx.directives.render(
+            LIST_DIRECTORY_NOT_FOUND,
+            &[
+                ("path", &path_str),
+                (
+                    "hint",
+                    &super::util::not_found_hint(&ctx.dir, &base, &ctx.directives),
+                ),
+            ],
+        )),
+        Err(e) => Event::error(ctx.directives.render(
             LIST_DIRECTORY_FAILED,
             &[("path", &path_str), ("error", &e.to_string())],
         )),
@@ -215,9 +213,8 @@ mod tests {
             )
             .await;
 
-        let ToolResult::Error { content, .. } = &result else {
-            panic!("listing a file should return an error result, got {result:?}");
-        };
+        assert_eq!(result.get_name(), Event::TOOL_CALL_FAILED, "{result:?}");
+        let content = result.get_content();
         assert!(
             content.contains("Path is not a directory"),
             "got {content:?}"
@@ -234,9 +231,8 @@ mod tests {
             .call(serde_json::json!({ "path": "nope" }), &test_ctx(tmp.path()))
             .await;
 
-        let ToolResult::Error { content, .. } = &result else {
-            panic!("a missing directory should return an error result, got {result:?}");
-        };
+        assert_eq!(result.get_name(), Event::TOOL_CALL_FAILED, "{result:?}");
+        let content = result.get_content();
         assert!(
             content.contains("Directory does not exist"),
             "got {content:?}"
@@ -262,9 +258,8 @@ mod tests {
             )
             .await;
 
-        let ToolResult::Error { content, .. } = &result else {
-            panic!("a missing directory should return an error result, got {result:?}");
-        };
+        assert_eq!(result.get_name(), Event::TOOL_CALL_FAILED, "{result:?}");
+        let content = result.get_content();
         assert!(
             content.contains("Directory does not exist"),
             "got {content:?}"
