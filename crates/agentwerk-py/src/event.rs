@@ -81,6 +81,248 @@ impl PyEvent {
         }
     }
 
+    #[staticmethod]
+    fn run_started() -> Self {
+        Self {
+            inner: Event::run_started(),
+        }
+    }
+
+    #[staticmethod]
+    fn run_finished(outcome: &Bound<'_, PyAny>) -> PyResult<Self> {
+        Ok(Self {
+            inner: Event::new(Event::RUN_FINISHED)
+                .data(serde_json::json!({ "outcome": py_to_value(outcome)? })),
+        })
+    }
+
+    #[staticmethod]
+    fn task_created() -> Self {
+        Self {
+            inner: Event::task_created(),
+        }
+    }
+
+    #[staticmethod]
+    fn task_started() -> Self {
+        Self {
+            inner: Event::task_started(),
+        }
+    }
+
+    #[staticmethod]
+    fn task_finished() -> Self {
+        Self {
+            inner: Event::task_finished(),
+        }
+    }
+
+    #[staticmethod]
+    fn task_failed() -> Self {
+        Self {
+            inner: Event::task_failed(),
+        }
+    }
+
+    #[staticmethod]
+    fn turn_started() -> Self {
+        Self {
+            inner: Event::turn_started(),
+        }
+    }
+
+    #[staticmethod]
+    fn request_started(model: &str) -> Self {
+        Self {
+            inner: Event::request_started(model),
+        }
+    }
+
+    #[staticmethod]
+    fn request_finished(model: &str, usage: &Bound<'_, PyAny>) -> PyResult<Self> {
+        Ok(Self {
+            inner: Event::new(Event::REQUEST_FINISHED).data(serde_json::json!({
+                "model": model,
+                "usage": py_to_value(usage)?,
+            })),
+        })
+    }
+
+    #[staticmethod]
+    fn request_failed(model: &str, kind: &str, message: &str) -> Self {
+        Self {
+            inner: Event::new(Event::REQUEST_FAILED).data(serde_json::json!({
+                "model": model,
+                "kind": kind,
+                "message": message,
+            })),
+        }
+    }
+
+    #[staticmethod]
+    fn request_retried(
+        model: &str,
+        attempt: u32,
+        max_attempts: u32,
+        kind: &str,
+        message: &str,
+    ) -> Self {
+        Self {
+            inner: Event::new(Event::REQUEST_RETRIED).data(serde_json::json!({
+                "model": model,
+                "attempt": attempt,
+                "max_attempts": max_attempts,
+                "kind": kind,
+                "message": message,
+            })),
+        }
+    }
+
+    #[staticmethod]
+    fn text_chunk_received(content: &str) -> Self {
+        Self {
+            inner: Event::text_chunk_received(content),
+        }
+    }
+
+    #[staticmethod]
+    fn tool_call_repaired(tool_name: &str, call_id: &str, kind: &str, message: &str) -> Self {
+        Self {
+            inner: Event::tool_call_repaired(tool_name, call_id, kind, message),
+        }
+    }
+
+    #[staticmethod]
+    fn tool_call_declined(tool_name: &str, kind: &str) -> Self {
+        Self {
+            inner: Event::new(Event::TOOL_CALL_DECLINED)
+                .data(serde_json::json!({ "tool_name": tool_name, "kind": kind })),
+        }
+    }
+
+    #[staticmethod]
+    fn tool_call_started(
+        tool_name: &str,
+        call_id: &str,
+        input: &Bound<'_, PyAny>,
+    ) -> PyResult<Self> {
+        Ok(Self {
+            inner: Event::tool_call_started(tool_name, call_id, py_to_value(input)?),
+        })
+    }
+
+    #[staticmethod]
+    fn tool_call_finished(output: &str) -> Self {
+        Self {
+            inner: Event::tool_call_finished(output),
+        }
+    }
+
+    #[staticmethod]
+    fn tool_call_failed(message: &str) -> Self {
+        Self {
+            inner: Event::tool_call_failed(message),
+        }
+    }
+
+    #[staticmethod]
+    fn file_open_finished(path: &str, tool_name: &str, call_id: &str) -> Self {
+        Self {
+            inner: Event::file_open_finished(path, tool_name, call_id),
+        }
+    }
+
+    #[staticmethod]
+    fn file_open_failed(
+        path: &str,
+        tool_name: &str,
+        call_id: &str,
+        kind: &str,
+        message: &str,
+    ) -> Self {
+        Self {
+            inner: Event::file_open_failed(path, tool_name, call_id, kind, message),
+        }
+    }
+
+    #[staticmethod]
+    fn knowledge_written(slug: &str) -> Self {
+        Self {
+            inner: Event::knowledge_written(slug),
+        }
+    }
+
+    #[staticmethod]
+    fn knowledge_read(slug: &str) -> Self {
+        Self {
+            inner: Event::knowledge_read(slug),
+        }
+    }
+
+    #[staticmethod]
+    fn knowledge_removed(slug: &str) -> Self {
+        Self {
+            inner: Event::knowledge_removed(slug),
+        }
+    }
+
+    #[staticmethod]
+    fn knowledge_listed() -> Self {
+        Self {
+            inner: Event::knowledge_listed(),
+        }
+    }
+
+    #[staticmethod]
+    fn knowledge_failed(action: &str, slug: &str, kind: &str, message: &str) -> Self {
+        Self {
+            inner: Event::knowledge_failed(action, slug, kind, message),
+        }
+    }
+
+    #[staticmethod]
+    fn policy_violated(policy: &str, limit: u64) -> Self {
+        Self {
+            inner: Event::new(Event::POLICY_VIOLATED)
+                .data(serde_json::json!({ "policy": policy, "limit": limit })),
+        }
+    }
+
+    #[staticmethod]
+    fn schema_retried(attempt: u32, max_attempts: u32, kind: &str, message: &str) -> Self {
+        Self {
+            inner: Event::schema_retried(attempt, max_attempts, kind, message),
+        }
+    }
+
+    #[staticmethod]
+    fn compaction_started(trigger: &str, total: u32) -> Self {
+        Self {
+            inner: Event::compaction_started(trigger, total),
+        }
+    }
+
+    #[staticmethod]
+    fn compaction_progress(trigger: &str, completed: u32, total: u32) -> Self {
+        Self {
+            inner: Event::compaction_progress(trigger, completed, total),
+        }
+    }
+
+    #[staticmethod]
+    fn compaction_finished(trigger: &str) -> Self {
+        Self {
+            inner: Event::compaction_finished(trigger),
+        }
+    }
+
+    #[staticmethod]
+    fn compaction_failed(trigger: &str, kind: &str, message: &str) -> Self {
+        Self {
+            inner: Event::compaction_failed(trigger, kind, message),
+        }
+    }
+
     fn data<'py>(
         mut slf: PyRefMut<'py, Self>,
         data: &Bound<'_, PyAny>,

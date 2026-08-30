@@ -197,11 +197,11 @@ edit_replies(id, editor)             // act once, now
 **Publishing is always `tasks.emit_event(event)`, from both host code and crate internals.**
 
 - Keep `event` in the verb. Bare `emit` is ambiguous beside provider streams and is not an event-publication API.
-- Construct events with `Event::new(name)`, then add `.data(value)`, `.task_id(id)`, or `.agent_id(id)` when those values apply. Builder names match the attributes they set. Do not use a struct literal: the queue owns the timestamp and derived task label.
+- Construct built-in events with their schema-aware `Event::<name>(...)` constructor. Construct application events with `Event::new(name)`, then add `.data(value)`. Add `.task_id(id)` or `.agent_id(id)` when context applies. Do not use a struct literal: the queue owns the timestamp and derived task label.
 - Order Event members by relevance: `name`, `data`, `task_id`, `agent_id`, `label`, `created_at`; builders follow the constructor and readers follow in that same order.
 - Contextual helpers, when they remove repeated agent or task plumbing, are also named `emit_event` and delegate immediately to `Queue::emit_event`.
 - Do not add parallel names such as `emit`, `emit_custom`, or `publish_event`; every built-in and caller-defined event takes the same pipeline.
-- `Event.name` is the sole semantic discriminator. Internal code constructs the same `Event::new(name).data(value)` record as host code and branches defensively on its name and JSON data; do not introduce a parallel typed event model or provenance marker.
+- `Event.name` is the sole semantic discriminator. Named constructors produce the same generic record as `Event::new(name).data(value)`; branch defensively on its name and JSON data, and do not introduce a parallel typed event model or provenance marker.
 
 ## Editors
 

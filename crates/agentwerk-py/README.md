@@ -866,8 +866,9 @@ The first event's name, data, and context are stored as:
 
 `emit_event` adds the timestamp and a known task's label. Lowercase snake case is
 conventional, but other names are accepted; quote names containing spaces or
-punctuation in AQL. Built-in names are available as `Event` constants, such as
-`Event.TASK_FINISHED`. Publishing one triggers its hooks, statistics, and
+punctuation in AQL. Built-in events have named constructors, such as
+`Event.task_finished()` and `Event.request_started("model")`; their names are
+also available as constants. Publishing one triggers its hooks, statistics, and
 persistence behavior, but not its state transition.
 
 Events are saved to `.agentwerk/events.jsonl`. Streamed text chunks are not
