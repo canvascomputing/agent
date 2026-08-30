@@ -714,7 +714,7 @@ let agent = Agent::new()
 | | `GrepTool` | Search file contents by regular expression, or by code shape with `syntax: "code"`. |
 | | `ListDirectoryTool` | List files and directories. |
 | **Command** | `CommandTool` | Give access to specific commands. |
-| **Web** | `FetchUrlTool` | Fetch a URL and read its body. |
+| **Web** | `FetchTool` | Fetch a URL and read its body. |
 | **Tasks** | `FinishTool` | Write the result for the current task and mark it finished. |
 | | `TaskTool` | Read the task queue and create or edit tasks. |
 | **Knowledge** | `KnowledgeTool` | Write, read, remove, or list pages in a knowledge store. |
@@ -743,12 +743,12 @@ let cargo = CommandTool::new("cargo")
     .allow_flag("--all-features");
 ```
 
-#### FetchUrlTool
+#### FetchTool
 
-The `FetchUrlTool` fetches a URL and returns its text with the user agent `agentwerk/<version>`. `impersonate()` uses the headers and HTTP/2 settings of a browser.
+The `FetchTool` fetches a URL and returns its text with the user agent `agentwerk/<version>`. `impersonate()` uses the headers and HTTP/2 settings of a browser.
 
 ```rust
-let web = FetchUrlTool::new().impersonate();
+let web = FetchTool::new().impersonate();
 ```
 
 #### Custom Tools

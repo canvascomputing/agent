@@ -1688,12 +1688,12 @@ Not bound: it is how `CommandTool` reads one command line.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `FetchUrlTool { impersonate: boolean }` | pub |
-| Python | `FetchUrlTool`: a class carrying the builder method, where every other built-in tool except `CommandTool` is a function returning a handle | |
+| Rust | `FetchTool { impersonate: boolean }` | pub |
+| Python | `FetchTool`: a class carrying the builder method, where every other built-in tool except `CommandTool` is a function returning a handle | |
 | Rust | `.new(): this` | pub |
-| Python | `FetchUrlTool()` | |
+| Python | `FetchTool()` | |
 | both | `.impersonate(): this` | pub |
-| Rust | `impl From<FetchUrlTool> for Tool` | pub |
+| Rust | `impl From<FetchTool> for Tool` | pub |
 
 ### Internal
 
@@ -1856,7 +1856,7 @@ Not bound: it is how `CommandTool` reads one command line.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | re-exports `Tool`, `ToolContext`, `CommandTool`, `EditFileTool`, `FetchUrlTool`, `GlobTool`, `GrepTool`, `KnowledgeTool`, `ListDirectoryTool`, `ReadFileTool`, `FinishTool`, `TaskTool`, `WriteFileTool` | pub |
+| Rust | re-exports `Tool`, `ToolContext`, `CommandTool`, `EditFileTool`, `FetchTool`, `GlobTool`, `GrepTool`, `KnowledgeTool`, `ListDirectoryTool`, `ReadFileTool`, `FinishTool`, `TaskTool`, `WriteFileTool` | pub |
 
 ### Internal
 
@@ -2467,7 +2467,7 @@ Binds `tools/`.
 | Rust | `knowledge_tool(store: PyKnowledge): PyTool` | python |
 | Rust | `finish_tool(): PyTool` | python |
 | Rust | `task_tool(): PyTool` | python |
-| Rust | `PyFetchUrlTool { inner: FetchUrlTool }` | python |
+| Rust | `PyFetchTool { inner: FetchTool }` | python |
 | Rust | `.new(): this` | python |
 | Rust | `.impersonate(): this` | python |
 | Rust | `PyCommandTool { inner: CommandTool }` | python |

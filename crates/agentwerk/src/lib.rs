@@ -29,7 +29,7 @@
 //!
 //! ```no_run
 //! use agentwerk::{Agent, Task, Queue};
-//! use agentwerk::tools::FetchUrlTool;
+//! use agentwerk::tools::FetchTool;
 //!
 //! # async fn run() {
 //! let tasks = Queue::new();
@@ -38,7 +38,7 @@
 //!     tasks.add_agent(
 //!         Agent::from_env()
 //!             .label("research")
-//!             .tool(FetchUrlTool::new()),
+//!             .tool(FetchTool::new()),
 //!     );
 //! }
 //!

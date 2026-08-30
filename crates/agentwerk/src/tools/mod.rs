@@ -20,7 +20,7 @@ pub(crate) use tool::{ToolCall, ToolRegistry};
 
 pub use command::CommandTool;
 pub use edit_file::EditFileTool;
-pub use fetch_url::FetchUrlTool;
+pub use fetch_url::FetchTool;
 pub use glob::GlobTool;
 pub use grep::GrepTool;
 pub use knowledge::KnowledgeTool;

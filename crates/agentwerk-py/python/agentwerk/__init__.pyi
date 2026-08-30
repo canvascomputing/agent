@@ -49,11 +49,11 @@ def KnowledgeTool(store: "Knowledge") -> Tool: ...
 def TaskTool() -> Tool: ...
 def FinishTool() -> Tool: ...
 
-class FetchUrlTool:
+class FetchTool:
     """Fetch a URL and read its body, passed to ``Agent.tool(...)``."""
 
     def __init__(self) -> None: ...
-    def impersonate(self) -> "FetchUrlTool":
+    def impersonate(self) -> "FetchTool":
         """Send the headers and HTTP/2 settings a browser sends. The TLS
         handshake is unchanged, so a site reading the ClientHello rather than
         the headers refuses the request either way."""

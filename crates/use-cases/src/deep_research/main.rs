@@ -20,7 +20,7 @@ use std::sync::Arc;
 use agentwerk::event::Event;
 use agentwerk::providers::{Model, Provider};
 use agentwerk::schemas::{Schema, SchemaStore};
-use agentwerk::tools::{FetchUrlTool, TaskTool, Tool};
+use agentwerk::tools::{FetchTool, TaskTool, Tool};
 use agentwerk::{Agent, FinishReason, Queue, Task};
 
 const RESEARCHER_1_ROLE: &str = include_str!("prompts/researcher_1.role.md");
@@ -61,7 +61,7 @@ async fn main() {
         .role(RESEARCHER_1_ROLE)
         .label("researcher_1")
         .tool(brave_search_tool(brave_key.clone()))
-        .tool(FetchUrlTool::new().impersonate())
+        .tool(FetchTool::new().impersonate())
         .tool(TaskTool);
 
     let researcher_2 = Agent::new()
@@ -70,7 +70,7 @@ async fn main() {
         .role(RESEARCHER_2_ROLE)
         .label("researcher_2")
         .tool(brave_search_tool(brave_key.clone()))
-        .tool(FetchUrlTool::new().impersonate())
+        .tool(FetchTool::new().impersonate())
         .tool(TaskTool);
 
     let report_writer = Agent::new()

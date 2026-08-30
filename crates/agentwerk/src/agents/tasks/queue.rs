@@ -220,7 +220,7 @@ impl Run {
 ///
 /// ```no_run
 /// use agentwerk::{Agent, Task, Queue};
-/// use agentwerk::tools::FetchUrlTool;
+/// use agentwerk::tools::FetchTool;
 ///
 /// # async fn run() {
 /// let tasks = Queue::new();
@@ -228,7 +228,7 @@ impl Run {
 ///     tasks.add_agent(
 ///         Agent::from_env()
 ///             .label("research")
-///             .tool(FetchUrlTool::new()),
+///             .tool(FetchTool::new()),
 ///     );
 /// }
 /// tasks.add_task(Task::labeled("research", "Summarize https://canvascomputing.org"));
