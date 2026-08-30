@@ -20,7 +20,7 @@ use std::sync::Arc;
 use agentwerk::event::Event;
 use agentwerk::providers::{Model, Provider};
 use agentwerk::schemas::Schema;
-use agentwerk::tools::{TasksTool, Tool};
+use agentwerk::tools::{TaskTool, Tool};
 use agentwerk::{Agent, Policy, Queue, Task};
 use serde_json::{json, Value};
 
@@ -68,7 +68,7 @@ async fn main() {
                 .role(ROLE)
                 .label("compute")
                 .tool(python_tool())
-                .tool(TasksTool),
+                .tool(TaskTool),
         );
     }
 

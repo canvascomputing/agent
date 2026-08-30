@@ -464,12 +464,12 @@ The child task is filed under `report` and names the analysis task as its `paren
 
 #### 2. Read tasks
 
-Give the writer `TasksTool`, and it reads what any finished task produced, by ID:
+Give the writer `TaskTool`, and it reads what any finished task produced, by ID:
 
 ```rust
 let writer = Agent::from_env()
     .label("report")
-    .tool(TasksTool);
+    .tool(TaskTool);
 
 writer.task("Read the result of t-1, then write the board report.");
 ```
@@ -546,7 +546,7 @@ For small models, use shallow, focused schemas with few required fields, clear n
 | | `get(label)` | Read back the schema bound to a label. |
 | | `tasks.set_schemas(store)` | Enforce schemas for task results. |
 
-A `SchemaStore` enforces schemas for all tasks with a certain label. Registering schemas centrally spares agents from passing complex schema structures during task creation (see `TasksTool`) and handovers (see `FinishTool`):
+A `SchemaStore` enforces schemas for all tasks with a certain label. Registering schemas centrally spares agents from passing complex schema structures during task creation (see `TaskTool`) and handovers (see `FinishTool`):
 
 ```rust
 use agentwerk::SchemaStore;
@@ -716,7 +716,7 @@ let agent = Agent::new()
 | **Command** | `CommandTool` | Give access to specific commands. |
 | **Web** | `FetchUrlTool` | Fetch a URL and read its body. |
 | **Tasks** | `FinishTool` | Write the result for the current task and mark it finished. |
-| | `TasksTool` | Read the task queue and create or edit tasks. |
+| | `TaskTool` | Read the task queue and create or edit tasks. |
 | **Knowledge** | `KnowledgeTool` | Write, read, remove, or list pages in a knowledge store. |
 
 #### `FinishTool` and `KnowledgeTool`

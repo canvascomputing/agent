@@ -34,7 +34,7 @@ from ._agentwerk import (
     ListDirectoryTool,
     FetchUrlTool,
     KnowledgeTool,
-    TasksTool,
+    TaskTool,
     FinishTool,
     CommandTool,
     Directive,
@@ -103,7 +103,7 @@ __all__ = [
     "ListDirectoryTool",
     "FetchUrlTool",
     "KnowledgeTool",
-    "TasksTool",
+    "TaskTool",
     "FinishTool",
     "CommandTool",
 ]

@@ -269,7 +269,7 @@ mod tests {
     use crate::agents::r#loop::test_util::*;
     use crate::agents::tasks::{Author, Queue, Status, Task};
     use crate::agents::Knowledge;
-    use crate::tools::{FinishTool, TasksTool};
+    use crate::tools::{FinishTool, TaskTool};
 
     // Run lifecycle
 
@@ -293,7 +293,7 @@ mod tests {
                 .provider(provider)
                 .model("mock")
                 .role("test")
-                .tool(TasksTool),
+                .tool(TaskTool),
         );
 
         tasks.start();
@@ -1167,7 +1167,7 @@ mod tests {
                 .provider(provider)
                 .model("mock")
                 .role("test")
-                .tool(TasksTool),
+                .tool(TaskTool),
         );
 
         tasks.add_task("first");
@@ -1198,7 +1198,7 @@ mod tests {
                 .provider(provider)
                 .model("mock")
                 .role("test")
-                .tool(TasksTool),
+                .tool(TaskTool),
         );
 
         agent.add_task("hello");
@@ -1251,7 +1251,7 @@ mod tests {
                 .provider(provider.clone())
                 .model("mock")
                 .role("test")
-                .tool(crate::tools::TasksTool),
+                .tool(crate::tools::TaskTool),
         );
         tasks.add_task("first");
         tasks.add_task("second");

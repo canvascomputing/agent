@@ -9,14 +9,14 @@ use super::dispatch;
 ///
 /// ```
 /// use agentwerk::Agent;
-/// use agentwerk::tools::TasksTool;
+/// use agentwerk::tools::TaskTool;
 ///
-/// Agent::new().tool(TasksTool);
+/// Agent::new().tool(TaskTool);
 /// ```
-pub struct TasksTool;
+pub struct TaskTool;
 
-impl From<TasksTool> for Tool {
-    fn from(_: TasksTool) -> Tool {
+impl From<TaskTool> for Tool {
+    fn from(_: TaskTool) -> Tool {
         Tool::new("tasks")
             .description(include_str!("tasks.tool.md"))
             .schema(include_str!("tasks.schema.json"))
@@ -33,7 +33,7 @@ mod tests {
     fn every_example_the_schema_shows_deserializes_into_the_arguments() {
         // The schema and `TasksArgs` both describe the shape. The examples
         // are where they are held to the same one.
-        let document = Tool::from(TasksTool)
+        let document = Tool::from(TaskTool)
             .get_input_schema()
             .get_raw_schema()
             .clone();
@@ -48,7 +48,7 @@ mod tests {
         // The schema is parsed from markdown at runtime, so a property the
         // model is told about but `dispatch` never reads is silently dropped
         // rather than caught by the compiler.
-        let tool = Tool::from(TasksTool);
+        let tool = Tool::from(TaskTool);
         let schema = tool.get_input_schema();
         let advertised: BTreeSet<&str> = schema.get_raw_schema()["properties"]
             .as_object()

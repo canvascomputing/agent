@@ -986,7 +986,7 @@ mod tests {
             crate::tools::KnowledgeTool::new(store).into(),
             crate::tools::CommandTool::new("git").allow("git *").into(),
             crate::tools::FinishTool.into(),
-            crate::tools::TasksTool.into(),
+            crate::tools::TaskTool.into(),
         ];
         (tools, dir)
     }

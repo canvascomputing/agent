@@ -32,7 +32,7 @@ use agentwerk::agents::tasks::{Reply, ReplyContent};
 use agentwerk::event::Event;
 use agentwerk::providers::Model;
 use agentwerk::tools::{
-    GlobTool, GrepTool, ListDirectoryTool, ReadFileTool, TasksTool, WriteFileTool,
+    GlobTool, GrepTool, ListDirectoryTool, ReadFileTool, TaskTool, WriteFileTool,
 };
 use agentwerk::{Agent, Knowledge, Policy, Queue, Task};
 
@@ -111,7 +111,7 @@ async fn main() {
             .tool(ListDirectoryTool)
             .tool(ReadFileTool)
             .tool(WriteFileTool)
-            .tool(TasksTool)
+            .tool(TaskTool)
             .knowledge(&knowledge),
     );
 

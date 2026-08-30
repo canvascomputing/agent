@@ -18,7 +18,7 @@ mod finish;
 mod tasks;
 
 pub use finish::FinishTool;
-pub use tasks::TasksTool;
+pub use tasks::TaskTool;
 
 /// What the model asks the queue to do. The schema declares `action` as the
 /// discriminator and states which fields each one requires; the variants say
@@ -337,7 +337,7 @@ mod tests {
     async fn task_defaults_id_to_current_task() {
         let (queue, id) = shared_with_one_task("alice");
         let ctx = ctx_with(Arc::clone(&queue), "alice");
-        let result = call(TasksTool, serde_json::json!({"action": "task"}), &ctx).await;
+        let result = call(TaskTool, serde_json::json!({"action": "task"}), &ctx).await;
         let text = unwrap_text(&result);
         assert!(text.contains(&id), "expected id in output: {text}");
         assert!(text.contains("body"));
@@ -352,7 +352,7 @@ mod tests {
 
         let ctx = ctx_with(Arc::clone(&queue), "bob");
         let result = call(
-            TasksTool,
+            TaskTool,
             serde_json::json!({"action": "result", "id": id}),
             &ctx,
         )
@@ -374,7 +374,7 @@ mod tests {
             .unwrap();
 
         let ctx = ctx_with(Arc::clone(&queue), "alice");
-        let result = call(TasksTool, serde_json::json!({"action": "result"}), &ctx).await;
+        let result = call(TaskTool, serde_json::json!({"action": "result"}), &ctx).await;
         let text = unwrap_text(&result);
         assert!(text.contains("what alice found"), "{text}");
     }
@@ -387,7 +387,7 @@ mod tests {
         let ctx = ToolContext::new(PathBuf::from("/tmp")).queue(queue);
 
         let result = call(
-            TasksTool,
+            TaskTool,
             serde_json::json!({"action": "task", "key": "t-1"}),
             &ctx,
         )
@@ -404,7 +404,7 @@ mod tests {
         let ctx = ToolContext::new(PathBuf::from("/tmp")).queue(queue);
 
         let result = call(
-            TasksTool,
+            TaskTool,
             serde_json::json!({"action": "task", "id": "t-404"}),
             &ctx,
         )
@@ -419,7 +419,7 @@ mod tests {
         let (queue, id) = shared_with_one_task("alice");
         let ctx = ctx_with(Arc::clone(&queue), "alice");
         let result = call(
-            TasksTool,
+            TaskTool,
             serde_json::json!({"action": "result", "id": id}),
             &ctx,
         )
@@ -443,7 +443,7 @@ mod tests {
     async fn list_without_a_filter_returns_every_task() {
         let queue = queue_with_two_tasks();
         let ctx = ctx_with(Arc::clone(&queue), "alice");
-        let result = call(TasksTool, serde_json::json!({"action": "list"}), &ctx).await;
+        let result = call(TaskTool, serde_json::json!({"action": "list"}), &ctx).await;
         let text = unwrap_text(&result);
         assert!(text.contains("t-1"), "{text}");
         assert!(text.contains("t-2"), "{text}");
@@ -457,7 +457,7 @@ mod tests {
             queue.insert(Task::new(format!("task {i}")), "tester".into());
         }
         let ctx = ctx_with(Arc::clone(&queue), "alice");
-        let result = call(TasksTool, serde_json::json!({"action": "list"}), &ctx).await;
+        let result = call(TaskTool, serde_json::json!({"action": "list"}), &ctx).await;
         let text = unwrap_text(&result);
         assert_eq!(text.lines().count(), 50, "{text}");
         assert!(!text.contains("t-51"), "{text}");
@@ -468,7 +468,7 @@ mod tests {
         let queue = queue_with_two_tasks();
         let ctx = ctx_with(Arc::clone(&queue), "alice");
         let result = call(
-            TasksTool,
+            TaskTool,
             serde_json::json!({"action": "list", "aql": "status = InProgress"}),
             &ctx,
         )
@@ -483,7 +483,7 @@ mod tests {
         let queue = queue_with_two_tasks();
         let ctx = ctx_with(Arc::clone(&queue), "alice");
         let result = call(
-            TasksTool,
+            TaskTool,
             serde_json::json!({"action": "list", "aql": "ORDER BY id DESC"}),
             &ctx,
         )
@@ -497,7 +497,7 @@ mod tests {
         let queue = queue_with_two_tasks();
         let ctx = ctx_with(Arc::clone(&queue), "alice");
         let result = call(
-            TasksTool,
+            TaskTool,
             serde_json::json!({"action": "list", "aql": "created > -1h"}),
             &ctx,
         )
@@ -506,7 +506,7 @@ mod tests {
         assert!(text.contains("t-1"), "{text}");
 
         let result = call(
-            TasksTool,
+            TaskTool,
             serde_json::json!({"action": "list", "aql": "created < -1h"}),
             &ctx,
         )
@@ -519,7 +519,7 @@ mod tests {
         let queue = queue_with_two_tasks();
         let ctx = ctx_with(Arc::clone(&queue), "alice");
         let result = call(
-            TasksTool,
+            TaskTool,
             serde_json::json!({"action": "list", "aql": "status = Finished"}),
             &ctx,
         )
@@ -532,7 +532,7 @@ mod tests {
         let queue = queue_with_two_tasks();
         let ctx = ctx_with(Arc::clone(&queue), "alice");
         let result = call(
-            TasksTool,
+            TaskTool,
             serde_json::json!({"action": "list", "aql": "assignee = alice"}),
             &ctx,
         )
@@ -547,7 +547,7 @@ mod tests {
         queue.set_dir(isolated_test_dir());
         let ctx = ctx_with(Arc::clone(&queue), "alice");
         let result = call(
-            TasksTool,
+            TaskTool,
             serde_json::json!({"action": "create", "task": "new task"}),
             &ctx,
         )
@@ -564,7 +564,7 @@ mod tests {
         queue.set_dir(isolated_test_dir());
         let ctx = ctx_with(Arc::clone(&queue), "alice");
         let result = call(
-            TasksTool,
+            TaskTool,
             serde_json::json!({
                 "action": "create",
                 "task": "new",
@@ -585,7 +585,7 @@ mod tests {
         queue.set_dir(isolated_test_dir());
         let ctx = ctx_with(Arc::clone(&queue), "alice");
         let result = call(
-            TasksTool,
+            TaskTool,
             serde_json::json!({
                 "action": "create",
                 "task": "new",
@@ -612,7 +612,7 @@ mod tests {
 
         let ctx = ctx_with(Arc::clone(&queue), "alice");
         let result = call(
-            TasksTool,
+            TaskTool,
             serde_json::json!({
                 "action": "create",
                 "task": "new",
@@ -633,7 +633,7 @@ mod tests {
         let (queue, id) = shared_with_one_task("alice");
         let ctx = ctx_with(Arc::clone(&queue), "alice");
         let result = call(
-            TasksTool,
+            TaskTool,
             serde_json::json!({
                 "action": "edit",
                 "task": "new body",
@@ -653,7 +653,7 @@ mod tests {
         let (queue, _id) = shared_with_one_task("alice");
         let ctx = ctx_with(Arc::clone(&queue), "alice");
         for action in ["done", "transition", "comment", "assign", "attach"] {
-            let result = call(TasksTool, serde_json::json!({"action": action}), &ctx).await;
+            let result = call(TaskTool, serde_json::json!({"action": action}), &ctx).await;
             assert!(
                 result.get_name() == Event::TOOL_CALL_FAILED,
                 "{action}: {result:?}"

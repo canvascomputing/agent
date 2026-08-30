@@ -685,7 +685,7 @@ mod tests {
 
         use crate::agents::agent::Agent;
         use crate::agents::tasks::Queue;
-        use crate::tools::{TasksTool, Tool};
+        use crate::tools::{TaskTool, Tool};
 
         let tool_started = Arc::new(Notify::new());
         let tool_unblocked = Arc::new(Notify::new());
@@ -725,7 +725,7 @@ mod tests {
                 .provider(provider)
                 .model("mock")
                 .role("test")
-                .tool(TasksTool)
+                .tool(TaskTool)
                 .tool(slow_tool),
         );
         tasks.add_task("go");

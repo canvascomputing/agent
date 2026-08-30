@@ -12,7 +12,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::common;
 
-use agentwerk::tools::TasksTool;
+use agentwerk::tools::TaskTool;
 use agentwerk::{Agent, Event, Policy, Query, Queue, Task};
 
 const ACTIONS: [&str; 5] = ["task", "result", "list", "create", "edit"];
@@ -84,7 +84,7 @@ async fn walks_every_task_action() -> std::result::Result<(), Box<dyn std::error
                  6. Correct the wording of that new task.\n\
                  Finish by quoting the exact combination.",
             )
-            .tool(TasksTool),
+            .tool(TaskTool),
     );
 
     tasks.add_task(Task::new(DORMANT_NOTE));
