@@ -26,5 +26,5 @@ pub use grep::GrepTool;
 pub use knowledge::KnowledgeTool;
 pub use list_directory::ListDirectoryTool;
 pub use read_file::ReadFileTool;
-pub use tasks::{FinishTool, TasksTool};
+pub use tasks::{FinishTool, TaskTool};
 pub use write_file::WriteFileTool;

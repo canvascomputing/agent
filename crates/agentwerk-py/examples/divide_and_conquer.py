@@ -20,7 +20,7 @@ from agentwerk import (
     Schema,
     Task,
     Queue,
-    TasksTool,
+    TaskTool,
     Event,
     tool,
 )
@@ -131,7 +131,7 @@ async def main(n, partitions, agents):
             Agent.from_env()
             .role(ROLE.strip())
             .label("compute")
-            .tools([python, TasksTool()])
+            .tools([python, TaskTool()])
         )
 
     for idx, (lo, hi) in enumerate(bounds):

@@ -47,7 +47,7 @@ mod tests {
     use crate::agents::r#loop::test_util::*;
     use crate::agents::tasks::{Queue, Status, Task};
     use crate::event::Event;
-    use crate::tools::TasksTool;
+    use crate::tools::TaskTool;
 
     // Late-add agent tests
 
@@ -74,7 +74,7 @@ mod tests {
                 .provider(provider.clone())
                 .model("mock")
                 .role("test")
-                .tool(TasksTool),
+                .tool(TaskTool),
         );
         tasks.add_task(Task::new("hello").label("late"));
 
@@ -165,7 +165,7 @@ mod tests {
                 .provider(provider)
                 .model("mock")
                 .role("test")
-                .tool(TasksTool),
+                .tool(TaskTool),
         );
         tasks.add_task(Task::new("x").label("late"));
 

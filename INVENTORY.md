@@ -1856,7 +1856,7 @@ Not bound: it is how `CommandTool` reads one command line.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | re-exports `Tool`, `ToolContext`, `CommandTool`, `EditFileTool`, `FetchUrlTool`, `GlobTool`, `GrepTool`, `KnowledgeTool`, `ListDirectoryTool`, `ReadFileTool`, `FinishTool`, `TasksTool`, `WriteFileTool` | pub |
+| Rust | re-exports `Tool`, `ToolContext`, `CommandTool`, `EditFileTool`, `FetchUrlTool`, `GlobTool`, `GrepTool`, `KnowledgeTool`, `ListDirectoryTool`, `ReadFileTool`, `FinishTool`, `TaskTool`, `WriteFileTool` | pub |
 
 ### Internal
 
@@ -1915,7 +1915,7 @@ Not bound: it is how `CommandTool` reads one command line.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | re-exports `FinishTool`, `TasksTool` | pub |
+| Rust | re-exports `FinishTool`, `TaskTool` | pub |
 
 ### Internal
 
@@ -1953,8 +1953,8 @@ Not bound: it is how `CommandTool` reads one command line.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| both | `TasksTool` | pub |
-| Rust | `impl From<TasksTool> for Tool` | pub |
+| both | `TaskTool` | pub |
+| Rust | `impl From<TaskTool> for Tool` | pub |
 
 ## `crates/agentwerk/src/tools/tool.rs`
 
@@ -2466,7 +2466,7 @@ Binds `tools/`.
 | Rust | `list_directory_tool(): PyTool` | python |
 | Rust | `knowledge_tool(store: PyKnowledge): PyTool` | python |
 | Rust | `finish_tool(): PyTool` | python |
-| Rust | `tasks_tool(): PyTool` | python |
+| Rust | `task_tool(): PyTool` | python |
 | Rust | `PyFetchUrlTool { inner: FetchUrlTool }` | python |
 | Rust | `.new(): this` | python |
 | Rust | `.impersonate(): this` | python |

@@ -6,7 +6,7 @@ use std::sync::Arc;
 use agentwerk::schemas::Schema;
 use agentwerk::tools::{
     CommandTool, EditFileTool, FetchUrlTool, FinishTool, GlobTool, GrepTool, KnowledgeTool,
-    ListDirectoryTool, ReadFileTool, TasksTool, Tool, ToolContext, WriteFileTool,
+    ListDirectoryTool, ReadFileTool, TaskTool, Tool, ToolContext, WriteFileTool,
 };
 use agentwerk::Event;
 use pyo3::prelude::*;
@@ -187,9 +187,9 @@ fn finish_tool() -> PyTool {
 }
 
 #[pyfunction]
-#[pyo3(name = "TasksTool")]
-fn tasks_tool() -> PyTool {
-    handle(TasksTool)
+#[pyo3(name = "TaskTool")]
+fn task_tool() -> PyTool {
+    handle(TaskTool)
 }
 
 /// Fetch a URL and read its body, passed to `Agent.tool(...)`. Requests carry
@@ -295,6 +295,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(list_directory_tool, m)?)?;
     m.add_function(wrap_pyfunction!(knowledge_tool, m)?)?;
     m.add_function(wrap_pyfunction!(finish_tool, m)?)?;
-    m.add_function(wrap_pyfunction!(tasks_tool, m)?)?;
+    m.add_function(wrap_pyfunction!(task_tool, m)?)?;
     Ok(())
 }
