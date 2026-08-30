@@ -1256,7 +1256,11 @@ mod tests {
             .to_string();
 
         assert!(
-            shown["properties"]["result"]["properties"]["partial_sum"].is_object(),
+            shown["then"]["properties"]["result"]["properties"]["partial_sum"].is_object(),
+            "{shown}"
+        );
+        assert!(
+            shown["else"]["allOf"][1]["properties"]["partial_sum"].is_object(),
             "{shown}"
         );
         assert!(
