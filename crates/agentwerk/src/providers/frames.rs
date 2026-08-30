@@ -76,7 +76,7 @@ fn report_declined(
 ) {
     on_event(StreamEvent::ToolCallDeclined {
         tool_name: call.name.clone(),
-        reason,
+        kind: reason,
     });
 }
 
@@ -123,19 +123,21 @@ fn apply_framed_calls(
                 // what the model wrote here has nowhere left to go.
                 report_declined(call, ToolDeclineKind::AlreadyDelivered, on_event);
             } else {
+                let call_id = format!("repaired_{offset}");
                 added.push(ContentBlock::ToolUse {
-                    id: format!("repaired_{offset}"),
+                    id: call_id.clone(),
                     name: call.name.clone(),
                     input: arguments_as_object(call),
                 });
-                report_repaired(call, on_event);
+                report_repaired(call, call_id, on_event);
             }
             continue;
         };
 
+        let (call_id, input) = input;
         if input.as_object().is_none_or(|fields| fields.is_empty()) {
             *input = arguments_as_object(call);
-            report_repaired(call, on_event);
+            report_repaired(call, call_id, on_event);
         } else if !is_same_call(call, input) {
             report_declined(call, ToolDeclineKind::AlreadyDelivered, on_event);
         }
@@ -161,24 +163,30 @@ fn nth_delivered_input<'a>(
     response: &'a mut ModelResponse,
     name: &str,
     at: usize,
-) -> Option<&'a mut Value> {
+) -> Option<(String, &'a mut Value)> {
     response
         .content
         .iter_mut()
         .filter_map(|block| match block {
             ContentBlock::ToolUse {
+                id,
                 name: delivered,
                 input,
                 ..
-            } if delivered == name => Some(input),
+            } if delivered == name => Some((id.clone(), input)),
             _ => None,
         })
         .nth(at)
 }
 
-fn report_repaired(call: &FramedCall, on_event: &Arc<dyn Fn(StreamEvent) + Send + Sync>) {
+fn report_repaired(
+    call: &FramedCall,
+    call_id: impl Into<String>,
+    on_event: &Arc<dyn Fn(StreamEvent) + Send + Sync>,
+) {
     on_event(StreamEvent::ToolCallRepaired {
         tool_name: call.name.clone(),
+        call_id: call_id.into(),
     });
 }
 
@@ -421,7 +429,8 @@ mod tests {
         ));
         assert!(matches!(
             &events[..],
-            [StreamEvent::ToolCallRepaired { tool_name }] if tool_name == "read_file"
+            [StreamEvent::ToolCallRepaired { tool_name, call_id }]
+                if tool_name == "read_file" && call_id == "repaired_0"
         ));
     }
 
@@ -444,9 +453,10 @@ mod tests {
         assert!(matches!(
             &events[..],
             [
-                StreamEvent::ToolCallRepaired { tool_name: first },
-                StreamEvent::ToolCallRepaired { tool_name: second },
+                StreamEvent::ToolCallRepaired { tool_name: first, call_id: first_id },
+                StreamEvent::ToolCallRepaired { tool_name: second, call_id: second_id },
             ] if first == "read_file" && second == "read_file"
+                && first_id == "repaired_0" && second_id == "repaired_1"
         ));
     }
 
@@ -478,7 +488,8 @@ mod tests {
         ));
         assert!(matches!(
             &events[..],
-            [StreamEvent::ToolCallRepaired { tool_name }] if tool_name == "grep"
+            [StreamEvent::ToolCallRepaired { tool_name, call_id }]
+                if tool_name == "grep" && call_id == "repaired_0"
         ));
     }
 
@@ -503,8 +514,8 @@ mod tests {
         assert_eq!(content.iter().filter(|b| is_tool_use(b)).count(), 1);
         assert!(matches!(
             &events[..],
-            [StreamEvent::ToolCallDeclined { tool_name, reason }]
-                if tool_name == "read_file" && *reason == ToolDeclineKind::AlreadyDelivered
+            [StreamEvent::ToolCallDeclined { tool_name, kind }]
+                if tool_name == "read_file" && *kind == ToolDeclineKind::AlreadyDelivered
         ));
     }
 
@@ -546,7 +557,8 @@ mod tests {
         ));
         assert!(matches!(
             &events[..],
-            [StreamEvent::ToolCallRepaired { tool_name }] if tool_name == "read_file"
+            [StreamEvent::ToolCallRepaired { tool_name, call_id }]
+                if tool_name == "read_file" && call_id == "call_1"
         ));
     }
 
@@ -605,8 +617,8 @@ mod tests {
             &events[..],
             [
                 StreamEvent::ToolCallRepaired { .. },
-                StreamEvent::ToolCallDeclined { reason, .. },
-            ] if *reason == ToolDeclineKind::AlreadyDelivered
+                StreamEvent::ToolCallDeclined { kind, .. },
+            ] if *kind == ToolDeclineKind::AlreadyDelivered
         ));
     }
 
@@ -648,8 +660,8 @@ mod tests {
         assert!(matches!(&content[1], ContentBlock::ToolUse { input, .. } if *input == delivered));
         assert!(matches!(
             &events[..],
-            [StreamEvent::ToolCallDeclined { reason, .. }]
-                if *reason == ToolDeclineKind::AlreadyDelivered
+            [StreamEvent::ToolCallDeclined { kind, .. }]
+                if *kind == ToolDeclineKind::AlreadyDelivered
         ));
     }
 
@@ -679,8 +691,8 @@ mod tests {
         assert!(!content.iter().any(is_tool_use));
         assert!(matches!(
             &events[..],
-            [StreamEvent::ToolCallDeclined { reason, .. }]
-                if *reason == ToolDeclineKind::OutputTruncated
+            [StreamEvent::ToolCallDeclined { kind, .. }]
+                if *kind == ToolDeclineKind::OutputTruncated
         ));
     }
 
@@ -692,8 +704,8 @@ mod tests {
         assert!(!content.iter().any(is_tool_use));
         assert!(matches!(
             &events[..],
-            [StreamEvent::ToolCallDeclined { reason, .. }]
-                if *reason == ToolDeclineKind::ReplyNotFinished
+            [StreamEvent::ToolCallDeclined { kind, .. }]
+                if *kind == ToolDeclineKind::ReplyNotFinished
         ));
     }
 
@@ -712,7 +724,8 @@ mod tests {
         ));
         assert!(matches!(
             &events[..],
-            [StreamEvent::ToolCallRepaired { tool_name }] if tool_name == "grep"
+            [StreamEvent::ToolCallRepaired { tool_name, call_id }]
+                if tool_name == "grep" && call_id == "repaired_0"
         ));
     }
 
@@ -750,7 +763,8 @@ mod tests {
         ));
         assert!(matches!(
             &events[..],
-            [StreamEvent::ToolCallRepaired { tool_name }] if tool_name == "read_file"
+            [StreamEvent::ToolCallRepaired { tool_name, call_id }]
+                if tool_name == "read_file" && call_id == "repaired_0"
         ));
     }
 

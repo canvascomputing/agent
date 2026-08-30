@@ -109,7 +109,7 @@ pub fn extract_tool(obj: &Bound<'_, PyAny>) -> PyResult<Tool> {
                     match outcome {
                         Ok(result) => result,
                         Err(message) => Event::new(Event::TOOL_CALL_FAILED).data(
-                            serde_json::json!({"reason": "execution_failed", "message": message}),
+                            serde_json::json!({"kind": "execution_failed", "message": message}),
                         ),
                     }
                 }

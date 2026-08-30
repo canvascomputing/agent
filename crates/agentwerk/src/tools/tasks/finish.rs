@@ -335,7 +335,7 @@ mod tests {
             .call(serde_json::json!({"result": {"line": "about 42"}}), &ctx)
             .await;
 
-        assert_eq!(outcome.get_data()["reason"], "schema_failed");
+        assert_eq!(outcome.get_data()["kind"], "schema_failed");
     }
 
     // Argument shape
@@ -594,7 +594,7 @@ mod tests {
         let outcome = Tool::from(FinishTool)
             .call(serde_json::json!({"result": {"x": {}}}), &ctx)
             .await;
-        assert_eq!(outcome.get_data()["reason"], "schema_failed");
+        assert_eq!(outcome.get_data()["kind"], "schema_failed");
         let t = queue.get_task(&id).unwrap();
         assert_eq!(t.status, Status::InProgress);
 
@@ -903,7 +903,7 @@ mod tests {
                 &ctx,
             )
             .await;
-        assert_eq!(outcome.get_data()["reason"], "schema_failed");
+        assert_eq!(outcome.get_data()["kind"], "schema_failed");
 
         let parent = queue.get_task(&parent_id).unwrap();
         assert_eq!(parent.status, Status::InProgress);
@@ -1026,7 +1026,7 @@ mod tests {
                 &ctx,
             )
             .await;
-        assert_eq!(outcome.get_data()["reason"], "schema_failed");
+        assert_eq!(outcome.get_data()["kind"], "schema_failed");
 
         let parent = queue.get_task(&parent_id).unwrap();
         assert_eq!(parent.status, Status::InProgress);

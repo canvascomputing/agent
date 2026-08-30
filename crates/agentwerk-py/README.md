@@ -623,13 +623,13 @@ Compaction also runs after the LLM provider reports the window exceeded. `compac
 ```python
 def watch(work, event):
     if event.get_name() == Event.COMPACTION_FINISHED:
-        print(f"[{event.get_task_id()}] compacted {event.get_data()['reason']}")
+        print(f"[{event.get_task_id()}] compacted {event.get_data()['trigger']}")
 
 
 tasks.on_event(watch)
 ```
 
-Each of the compaction events carries the reason it ran: `proactive` ahead of the failure, `reactive` after it. Replies that still exceed the window after a reactive compaction fail the task.
+Each compaction event carries the trigger: `proactive` ahead of a failure or `reactive` after one. A failure also carries a stable `kind` and human-readable `message`.
 
 </details>
 
@@ -811,7 +811,7 @@ tasks.on_event(log)
 | | Kind | Description |
 |-|------|-------------|
 | **Run** | `run_started` | Execution began. |
-| | `run_finished` | Execution ended, carrying the reason. |
+| | `run_finished` | Execution ended, carrying its outcome. |
 | | `policy_violated` | A limit was breached and execution stopped. |
 | **Task** | `task_started` | An agent claimed a task. |
 | | `task_finished` | A task finished successfully. |
@@ -823,8 +823,8 @@ tasks.on_event(log)
 | | `request_failed` | A request failed and was not retried. |
 | | `request_retried` | A transient provider error triggered a retry. |
 | | `text_chunk_received` | A piece of the reply arrived. |
-| | `response_repaired` | A tool call or value the model created was invalid and was corrected. |
 | **Tool** | `tool_call_declined` | A tool call proposed by the model was declined. |
+| | `tool_call_repaired` | A tool call or value the model created was invalid and was corrected. |
 | | `tool_call_started` | A tool invocation began. |
 | | `tool_call_finished` | A tool invocation finished. |
 | | `tool_call_failed` | A tool invocation failed but the task continues. |

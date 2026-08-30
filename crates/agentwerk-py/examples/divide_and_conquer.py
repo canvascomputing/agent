@@ -118,7 +118,7 @@ async def main(n, partitions, agents):
         if event.get_name() in ("task_started", "task_finished", "task_failed"):
             print(f"  {event.get_name():<20} {event.get_agent_id():<10} {event.get_task_id()}")
         elif event.get_name() == "run_finished":
-            finish_reason.append(event.get_data()["reason"])
+            finish_reason.append(event.get_data()["outcome"])
         elif event.get_name() == "tool_call_started":
             tool_calls[event.get_data()["tool_name"]] += 1
         elif event.get_name() == "tool_call_failed":

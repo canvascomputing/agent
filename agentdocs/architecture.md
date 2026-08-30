@@ -48,9 +48,9 @@ tasks.add_task(Task::new("Audit src/db."));               // the default scope
 - `get` is the only entry point: dispatch, `partition_tool_calls`, and the `opened_paths` lookup all go through it.
 - Every registered tool carries a compiled `Schema`, so a tool without one is unrepresentable. `ToolBuilder::schema` is the one place a document compiles, and it panics on one the compiler refuses, so a broken definition fails the build rather than a request.
 - `Schema::validate` is the only thing that rejects a call's arguments. It retypes what the schema names a type for, then checks what that produced, so the model reads back everything still wrong in one report per turn.
-- No tool checks its own arguments. A requirement that holds only for some values of a discriminator is stated with `allOf`/`if`/`then` in the tool's `.schema.json`; a rejection answers as `tool_call_failed` with `reason: schema_failed`.
-- The loop rewrites each call to the registered name before emitting `tool_call_started`, so `Event` and `Stats` never split one tool across spellings. Both repairs reach the host as `response_repaired` events naming the tool, with `call_malformed` for a folded name and `value_mistyped` for a retyped value.
-- A name that resolves to nothing returns `tool_call_failed` with `reason: not_found` and a message naming every registered tool. Without that list each retry spends `max_schema_retries` until the task fails. A call the model wrote as text takes the same path.
+- No tool checks its own arguments. A requirement that holds only for some values of a discriminator is stated with `allOf`/`if`/`then` in the tool's `.schema.json`; a rejection answers as `tool_call_failed` with `kind: schema_failed`.
+- The loop rewrites each call to the registered name before emitting `tool_call_started`, so `Event` and `Stats` never split one tool across spellings. Both repairs reach the host as `tool_call_repaired` events carrying `tool_name`, `call_id`, and either `call_malformed` or `value_mistyped` as their `kind`.
+- A name that resolves to nothing returns `tool_call_failed` with `kind: not_found` and a message naming every registered tool. Without that list each retry spends `max_schema_retries` until the task fails. A call the model wrote as text takes the same path.
 
 ## Every Directive Is a Catalogue Entry
 
@@ -59,7 +59,7 @@ tasks.add_task(Task::new("Audit src/db."));               // the default scope
 ```rust
 Event::new(Event::TOOL_CALL_FAILED)
     .directive(EDIT_FILE_OLD_STRING_NOT_FOUND)
-    .data(json!({ "reason": "execution_failed", "message": message }))
+    .data(json!({ "kind": "execution_failed", "message": message }))
 ```
 
 - `DirectiveStore::render(key, values)` hands that function the key, then binds `{name}` into what comes back, or into the catalogue text when it answers `None`. A store therefore varies a directive by which one it is, and the values reach the model through the template rather than through the function. It takes a `&str`, so the constants rather than the compiler are what keep the 94 call sites honest.
@@ -112,7 +112,7 @@ Schemas and results:
 **`Event` reports state. `ProviderError` reports a failed provider contract. The two channels carry independent information.**
 
 - Every state transition publishes an `Event`. A failed request fires both `ProviderError` and a matching `Event` (`RequestFailed`, `PolicyViolated`). `Event.name` is the sole semantic discriminator: caller-published built-in names receive the same hooks, statistics, and persistence behavior, but publication does not perform the associated transition.
-- A tool returns one terminal `Event`. `tool_call_finished` carries `output` plus optional `output_path` and `repairs` in its data; `tool_call_failed` carries the stable `reason`, model-visible `message`, and optional top-level `directive`.
+- A tool returns one terminal `Event`. `tool_call_finished` carries `output` plus optional `output_path` and `repairs` in its data; `tool_call_failed` carries the stable `kind`, model-visible `message`, and optional top-level `directive`.
 - A model-fixable failure (wrong arguments, schema mismatch, missing file) becomes a failed tool-result content block for the provider. It still fires `ToolCallFailed` but does not stop the run.
 - Handlers MUST be cheap and non-blocking; the loop does not await them. The four `_async` twins are the exception, and the loop still never awaits: registering one only queues the event, and whichever `finish` is waiting drains it and awaits each handler on its own task. A handler that never returns therefore stalls the caller rather than an agent, and a `start()`-only host uses the blocking form.
 
@@ -122,7 +122,7 @@ Schemas and results:
 - The queue is the first parameter of every handler. That is what let the `create_task_on_*` and `edit_replies_on_event` hooks go: a handler files its own follow-up work through `queue.add_task(..)`, rewrites what the model reads next through `queue.edit_replies(&event.task_id, ..)`, and selects what it needs through `queue.find_*`, without an `Arc` into the queue that holds it.
 - `on_result` filters to `task_finished` and unwraps the stored result, `on_failure` filters to failure names, and `on_task` filters to the three lifecycle names. The event name activates these semantic hooks regardless of who published it. Each hook resolves the task only when needed, avoiding a full reply copy for every text chunk.
 - An event that announces a reply is emitted after that reply has landed in the store: `RequestFinished` after the assistant reply, `ToolCallFinished` and `ToolCallFailed` after the tool results of their turn. A handler therefore finds the message the event names, and what it rewrites through `queue.edit_replies` reaches the next request.
-- `RunStarted`, `RunFinished { reason }`, and a host-driven `set_failed` are emitted by the queue itself and arrive with an empty `agent_id`.
+- `RunStarted`, `RunFinished { outcome }`, and a host-driven `set_failed` are emitted by the queue itself and arrive with an empty `agent_id`.
 
 ## New Observables Pick a Channel
 
@@ -188,7 +188,7 @@ tasks.find_events("tool_call_failed AND created > -1h");
 - `Queue::run` is one `Arc<Run>` over a `watch` channel of three phases: `Working`, `Draining(reason)` while the agents stop, and `Finished(reason)` once `RunFinished` has been announced. The channel is both the value and the wake, and a run complete without a reason cannot be written.
 - `ending_reason()` names `FinishReason::PolicyViolated(kind)` for a breached limit and `FinishReason::Cancelled` once a cancel leaves nothing claimable. An empty queue is not an ending: a host that called `start()` may still be filing work, and a paused task revives on the next reply.
 - `FinishReason::Drained` is named by the `finish` that waited for it, and only when no task at all is still open. That is what keeps an interactive chat alive between turns.
-- The main loop joins its agents and emits `RunFinished { reason }` before `Run::set_finished`, so a caller that starts another run never overlaps the previous one.
+- The main loop joins its agents and emits `RunFinished { outcome }` before `Run::set_finished`, so a caller that starts another run never overlaps the previous one.
 - Tools observe the ending through `ToolContext::cancelled`; pair it with `tokio::select!` so it drops the losing branch promptly. Dropping the `Queue` while agents still hold a `Weak` is the public way to abort: the upgrade fails and each task panics out cleanly.
 
 ## Every Event Is Logged, Statistics Are Folded From It

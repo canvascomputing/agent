@@ -60,7 +60,7 @@ InvalidRequest, UnexpectedStatus, MissingKey, RequestError               // reje
 **A fieldless discriminant exposes `name()`, and `Display` prints what `name()` returns.**
 
 ```rust
-event.get_data()["reason"]               // "execution_failed"
+event.get_data()["kind"]                 // "execution_failed"
 ```
 
 - `name()` returns the stable snake_case spelling, which is also what serde reads and writes.
@@ -74,8 +74,9 @@ event.get_data()["reason"]               // "execution_failed"
 - Human-readable strings MUST be named `message: String`, never `error`.
 - Wrapped underlying errors MUST be named `source`, as in `FooFailed { source: io::Error }`.
 - Typed metadata uses descriptive names: `status`, `retryable`, `retry_delay`, `tool_name`, `retries`, `after_ms`, `action`, `slug`.
-- A discriminant explaining why something happened is `reason`. `PolicyViolated` names its field `policy` instead, because `reason` next to `limit` reads as the limit's justification.
-- IMPORTANT: never name such a field `kind` when `reason` states the meaning more directly.
+- A stable machine-readable category is `kind`; a human-readable explanation is `message`.
+- An initiating condition is `trigger`, a successful termination value is `outcome`, and a breached policy is `policy`.
+- IMPORTANT: do not overload one payload key across these meanings; generic event readers depend on the distinction.
 
 ## RAII Guard Fields
 

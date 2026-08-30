@@ -25,9 +25,10 @@ pub(super) async fn run(context: &mut TaskContext<'_>, mut calls: Vec<ToolCall>)
         let registered = tool.get_name().to_string();
         if registered != call.name {
             context.emit_event(
-                Event::new(Event::RESPONSE_REPAIRED).data(serde_json::json!({
+                Event::new(Event::TOOL_CALL_REPAIRED).data(serde_json::json!({
                     "tool_name": registered,
-                    "reason": "call_malformed",
+                    "call_id": call.id,
+                    "kind": "call_malformed",
                     "message": format!("resolved from `{}`", call.name),
                 })),
             );
@@ -72,16 +73,21 @@ pub(super) async fn run(context: &mut TaskContext<'_>, mut calls: Vec<ToolCall>)
             context.consecutive_schema_failures = 0;
             for message in result.repairs() {
                 events.push(
-                    Event::new(Event::RESPONSE_REPAIRED).data(serde_json::json!({
+                    Event::new(Event::TOOL_CALL_REPAIRED).data(serde_json::json!({
                         "tool_name": call.name,
-                        "reason": "value_mistyped",
+                        "call_id": call.id,
+                        "kind": "value_mistyped",
                         "message": message,
                     })),
                 );
             }
             for path in opened_paths {
                 events.push(
-                    Event::new(Event::FILE_OPEN_FINISHED).data(serde_json::json!({ "path": path })),
+                    Event::new(Event::FILE_OPEN_FINISHED).data(serde_json::json!({
+                        "path": path,
+                        "tool_name": call.name,
+                        "call_id": call.id,
+                    })),
                 );
             }
             let mut event = result.clone();
@@ -96,7 +102,7 @@ pub(super) async fn run(context: &mut TaskContext<'_>, mut calls: Vec<ToolCall>)
             content
         } else {
             let content = result.get_content().to_string();
-            let kind = result.get_data()["reason"]
+            let kind = result.get_data()["kind"]
                 .as_str()
                 .unwrap_or("execution_failed");
             // Every tool failure counts toward the budget, so a stuck agent
@@ -109,18 +115,19 @@ pub(super) async fn run(context: &mut TaskContext<'_>, mut calls: Vec<ToolCall>)
             // A path fails with the call that named it, so it carries the
             // call's reason.
             for path in opened_paths {
-                let mut event = Event::new(Event::FILE_OPEN_FAILED)
-                    .data(serde_json::json!({ "path": path, "reason": kind, "message": content }));
-                if let Some(directive) = result.get_directive() {
-                    event = event.directive(directive);
-                }
-                events.push(event);
+                events.push(Event::new(Event::FILE_OPEN_FAILED).data(serde_json::json!({
+                    "path": path,
+                    "tool_name": call.name,
+                    "call_id": call.id,
+                    "kind": kind,
+                    "message": content,
+                })));
             }
             let mut event = result.clone();
             if let Some(data) = event.data.as_object_mut() {
                 data.insert("tool_name".into(), call.name.clone().into());
                 data.insert("call_id".into(), call.id.clone().into());
-                data.insert("reason".into(), kind.into());
+                data.insert("kind".into(), kind.into());
             }
             events.push(event);
             content
@@ -138,6 +145,7 @@ pub(super) async fn run(context: &mut TaskContext<'_>, mut calls: Vec<ToolCall>)
         events.push(Event::new(Event::SCHEMA_RETRIED).data(serde_json::json!({
             "attempt": context.consecutive_schema_failures,
             "max_attempts": max_schema_retries,
+            "kind": "schema_failed",
             "message": message,
         })));
     }
@@ -435,13 +443,14 @@ mod tests {
         ))]);
         let (events, _, _) = run_one(provider, 0, 3, None).await;
 
-        let repairs: Vec<(&str, &str, &str)> = events
+        let repairs: Vec<(&str, &str, &str, &str)> = events
             .iter()
             .filter_map(|e| {
-                (e.get_name() == Event::RESPONSE_REPAIRED).then(|| {
+                (e.get_name() == Event::TOOL_CALL_REPAIRED).then(|| {
                     Some((
                         e.get_data()["tool_name"].as_str()?,
-                        e.get_data()["reason"].as_str()?,
+                        e.get_data()["call_id"].as_str()?,
+                        e.get_data()["kind"].as_str()?,
                         e.get_data()["message"].as_str()?,
                     ))
                 })?
@@ -449,7 +458,12 @@ mod tests {
             .collect();
         assert_eq!(
             repairs,
-            vec![("finish", "call_malformed", "resolved from `finish_tool`")]
+            vec![(
+                "finish",
+                "call-1",
+                "call_malformed",
+                "resolved from `finish_tool`"
+            )]
         );
     }
 
@@ -460,7 +474,7 @@ mod tests {
 
         assert!(!events
             .iter()
-            .any(|e| e.get_name() == Event::RESPONSE_REPAIRED));
+            .any(|e| e.get_name() == Event::TOOL_CALL_REPAIRED));
     }
 
     #[tokio::test]
@@ -472,13 +486,14 @@ mod tests {
         let (events, _, task) = run_one(provider, 3, 10, Some(schema_for_partial_sum())).await;
 
         assert_eq!(task.status, Status::Finished);
-        let repairs: Vec<(&str, &str, &str)> = events
+        let repairs: Vec<(&str, &str, &str, &str)> = events
             .iter()
             .filter_map(|e| {
-                (e.get_name() == Event::RESPONSE_REPAIRED).then(|| {
+                (e.get_name() == Event::TOOL_CALL_REPAIRED).then(|| {
                     Some((
                         e.get_data()["tool_name"].as_str()?,
-                        e.get_data()["reason"].as_str()?,
+                        e.get_data()["call_id"].as_str()?,
+                        e.get_data()["kind"].as_str()?,
                         e.get_data()["message"].as_str()?,
                     ))
                 })?
@@ -486,7 +501,12 @@ mod tests {
             .collect();
         assert_eq!(
             repairs,
-            vec![("finish", "value_mistyped", "/result/partial_sum retyped")]
+            vec![(
+                "finish",
+                "call-1",
+                "value_mistyped",
+                "/result/partial_sum retyped"
+            )]
         );
         assert!(events.iter().any(|event| {
             event.get_name() == Event::TOOL_CALL_FINISHED

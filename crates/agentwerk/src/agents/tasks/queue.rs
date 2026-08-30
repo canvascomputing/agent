@@ -1383,7 +1383,7 @@ mod tests {
         Event::new(Event::TOOL_CALL_FAILED).data(serde_json::json!({
             "tool_name": "grep",
             "call_id": "c1",
-            "reason": "execution_failed",
+            "kind": "execution_failed",
             "message": message,
         }))
     }
@@ -2173,7 +2173,7 @@ mod tests {
             "agent",
             Event::new(Event::REQUEST_FAILED).data(serde_json::json!({
                 "model": "mock",
-                "reason": crate::providers::RequestErrorKind::ConnectionFailed,
+                "kind": crate::providers::RequestErrorKind::ConnectionFailed,
                 "message": "dns lookup failed",
             })),
         );

@@ -31,7 +31,8 @@ pub(in crate::agents) async fn run_main_loop(queue: &Queue) {
         let _ = agent.await;
     }
     let reason = queue.run.reason().unwrap_or(FinishReason::Drained);
-    queue.emit_event(Event::new(Event::RUN_FINISHED).data(serde_json::json!({ "reason": reason })));
+    queue
+        .emit_event(Event::new(Event::RUN_FINISHED).data(serde_json::json!({ "outcome": reason })));
     // Last, so a caller that starts another run never overlaps this one.
     queue.run.set_finished();
 }

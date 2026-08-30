@@ -19,7 +19,7 @@ async def test_runs_a_single_task_to_a_result(live_agent):
     work = live_agent.start()
     reasons = []
     work.on_event(
-        lambda _, event: reasons.append(event.get_data()["reason"])
+        lambda _, event: reasons.append(event.get_data()["outcome"])
         if event.get_name() == "run_finished"
         else None
     )

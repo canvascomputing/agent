@@ -226,7 +226,7 @@ fn python_tool() -> Tool {
                 .unwrap_or_default();
             if code.is_empty() {
                 return Event::new(Event::TOOL_CALL_FAILED).data(serde_json::json!({
-                    "reason": "execution_failed", "message": "missing required field `code`"
+                    "kind": "execution_failed", "message": "missing required field `code`"
                 }));
             }
 
@@ -238,16 +238,16 @@ fn python_tool() -> Tool {
 
             tokio::select! {
                 biased;
-                _ = ctx.cancelled() => Event::new(Event::TOOL_CALL_FAILED).data(serde_json::json!({"reason": "execution_failed", "message": "cancelled"})),
+                _ = ctx.cancelled() => Event::new(Event::TOOL_CALL_FAILED).data(serde_json::json!({"kind": "execution_failed", "message": "cancelled"})),
                 result = output_fut => match result {
-                    Err(e) => Event::new(Event::TOOL_CALL_FAILED).data(serde_json::json!({"reason": "execution_failed", "message": format!("failed to spawn python3: {e}")})),
+                    Err(e) => Event::new(Event::TOOL_CALL_FAILED).data(serde_json::json!({"kind": "execution_failed", "message": format!("failed to spawn python3: {e}")})),
                     Ok(out) if out.status.success() => {
                         let stdout = String::from_utf8_lossy(&out.stdout);
                         Event::new(Event::TOOL_CALL_FINISHED).data(serde_json::json!({"output": stdout.trim()}))
                     }
                     Ok(out) => {
                         let stderr = String::from_utf8_lossy(&out.stderr);
-                        Event::new(Event::TOOL_CALL_FAILED).data(serde_json::json!({"reason": "execution_failed", "message": format!("python error: {stderr}")}))
+                        Event::new(Event::TOOL_CALL_FAILED).data(serde_json::json!({"kind": "execution_failed", "message": format!("python error: {stderr}")}))
                     }
                 }
             }
