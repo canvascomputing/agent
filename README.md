@@ -19,10 +19,11 @@
 </div>
 
 
-<div align="center">agentwerk is a lightweight agentic loop optimized for small and fast LLMs: parallel agents, task-based coordination, built-in tools, schema-validated results, shared knowledge, and an event for every step.</div>
+<div align="center">Coordinate agent fleets across complex tasks, with shared knowledge and detailed observability.</div>
 
-> [!WARNING]
-> agentwerk is in beta. APIs stabilize in `0.2.0`.
+<br />
+
+<div align="center"><strong>Beta:</strong> The API might introduce breaking changes before <code>0.2.0</code>.</div>
 
 ---
 
@@ -30,7 +31,7 @@
   <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/assets/demo.gif" width="800" />
 </div>
 <div align="center"><a href="crates/agentwerk-py/examples/apparat_fabrik.py">Apparat Fabrik</a></div>
-<div align="center"><em>agentwerk pairs "agent" with the German "Werk", a word for both factory and artwork: machinery for building agentic systems.</em></div>
+<div align="center"><em>“Werk” is German for both a factory and a work of art.</em></div>
 
 ---
 
@@ -44,15 +45,17 @@
 
 ## Installation
 
+Install the Rust crate from crates.io or follow the [separate guide](crates/agentwerk-py/README.md) for its Python bindings.
+
 ### Rust
 
 ```bash
 cargo add agentwerk
 ```
 
-Also see: [Python implementation](crates/agentwerk-py/README.md).
-
 ## Quick Start
+
+This example gives one agent read-only tools to search Rust source files, then waits for one result.
 
 ```rust
 use agentwerk::Agent;
@@ -76,19 +79,21 @@ async fn main() {
 
 ## API
 
-- [Agents](#agents): Define roles, behavior and tasks.
-- [Tasks](#tasks): Coordinate complex work across agents.
-- [Tools](#tools): Define accessible tooling.
-- [Events](#events): Inspect requests, tool usage, failures and more.
-- [Knowledge](#knowledge): Let agents share notes for collaboration.
+The public API has five parts, ordered by how you build and inspect an agent system:
+
+- [Agents](#agents): Set agent roles, behavior, and tasks.
+- [Tasks](#tasks): Assign work and collect results across agents.
+- [Tools](#tools): Give agents controlled ways to act.
+- [Events](#events): Inspect requests, tool calls, and failures.
+- [Knowledge](#knowledge): Share durable memory across agents and tasks.
 
 ## Agents
+
+An `Agent` uses a language model and the tools you provide to complete tasks.
 
 <div align="left">
   <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/assets/agents.gif" width="600" />
 </div>
-
-An `Agent` is the core entity of agentwerk. It has access to tools for solving tasks in the form of tasks.
 
 ```rust
 use agentwerk::tools::ReadFileTool;
@@ -102,7 +107,7 @@ agent.task("Read CHANGELOG.md and summarize the entries added since the last rel
 agent.start();
 ```
 
-Optionally, install the [`prompt` skill](skills/prompt/SKILL.md), which is optimized for highly efficient agents with a proven structure for effectiveness.
+The optional [`prompt` skill](skills/prompt/SKILL.md) provides a compact template for writing agent roles.
 
 <details>
 <summary>All agent methods</summary>
@@ -154,7 +159,7 @@ chat.finish_all_tasks().await;
 chat.set_task_finished(&id, "answered")?;
 ```
 
-An interactive agent never finishes its own task, because that would end the conversation. Every answer pauses the task instead: it stays `InProgress` with its agent, and each `finish_all_tasks().await` returns on the answer it waited for. `add_reply(id, content)` drives the next turn, and `set_task_finished(id, result)` ends the conversation, which is the result the hook reports. The answers in between arrive as [events](#events).
+An interactive agent never finishes its own task, because that would end the conversation. Every answer pauses the task instead: it stays `InProgress` with its agent, and each `finish_all_tasks().await` returns on the answer it waited for. `add_reply(id, content)` supplies the next message, and `set_task_finished(id, result)` ends the conversation with the result reported to the hook. The answers in between arrive as [events](#events).
 
 See more: [`Agent`](https://docs.rs/agentwerk/latest/agentwerk/agents/agent/struct.Agent.html).
 
@@ -162,7 +167,7 @@ See more: [`Agent`](https://docs.rs/agentwerk/latest/agentwerk/agents/agent/stru
 
 ### Providers
 
-A `Provider` gives agents access to LLMs: Anthropic, OpenAI, Mistral, and a LiteLLM proxy.
+An LLM provider connects agents to Anthropic, OpenAI, Mistral, or a LiteLLM proxy.
 
 ```rust
 use agentwerk::providers::Anthropic;
@@ -186,11 +191,11 @@ You can also read the model or provider individually: `.provider(Provider::from_
 | Variable | Description |
 |----------|-------------|
 | `LITELLM_PROVIDER` | Choose `anthropic`, `mistral`, `openai`, or `litellm` outright, ahead of the keys below. |
-| `LITELLM_API_KEY`, `MISTRAL_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` | Authenticate against that vendor. The first one set picks the provider, in this order. |
-| `LITELLM_BASE_URL`, `MISTRAL_BASE_URL`, `ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL` | Point that vendor at a different endpoint. |
+| `LITELLM_API_KEY`, `MISTRAL_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` | Authenticate with that vendor. The first one set picks the LLM provider, in this order. |
+| `LITELLM_BASE_URL`, `MISTRAL_BASE_URL`, `ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL` | Set a different API address for that vendor. |
 | `SSL_CERT_FILE`, `SSL_CERT_DIR` | Trust these CA certificates instead of the built-in root store. |
 
-You can configure models to set a custom context window size or the applied reasoning. Claude, GPT, Mistral, and Qwen families are pre-configured.
+Set a model's context window or reasoning level when the defaults do not fit. Claude, GPT, Mistral, and Qwen families have built-in settings.
 
 | Method | Description |
 |--------|-------------|
@@ -223,11 +228,11 @@ See [`Provider`](https://docs.rs/agentwerk/latest/agentwerk/providers/struct.Pro
 
 ## Tasks
 
+A `Queue` stores tasks, assigns them to matching agents, and records their results.
+
 <div align="left">
   <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/assets/tasks.gif" width="600" />
 </div>
-
-The `Queue` is the core data structure of agentwerk for coordinating complex interactions.
 
 ```rust
 use agentwerk::{Agent, Task, Queue};
@@ -250,7 +255,7 @@ tasks.add_task(Task::labeled("report", "Write up the ranking."));
 
 | | Method | Description |
 |-|--------|-------------|
-| **Configure** | `set_policy(policy)` | Set execution limits and retry tuning. |
+| **Configure** | `set_policy(policy)` | Set execution limits and retry settings. |
 | | `get_policy()` | Get the policy in force. |
 | | `set_dir(dir)` | Define where a session is stored. |
 | | `get_dir()` | Get the session directory. |
@@ -267,8 +272,8 @@ tasks.add_task(Task::labeled("report", "Write up the ranking."));
 | | `on_result_async(handler)` | Read every finished task and result in an async handler. |
 | | `on_failure(handler)` | Read every failure together with its task. |
 | | `on_failure_async(handler)` | Read every failure and task in an async handler. |
-| | `on_task(handler)` | Read task lifecycle transitions. |
-| | `on_task_async(handler)` | Read task lifecycle transitions in an async handler. |
+| | `on_task(handler)` | Read task state changes. |
+| | `on_task_async(handler)` | Read task state changes in an async handler. |
 | **Run** | `start()` | Begin processing tasks. |
 | | `finish_result(query)` | Wait for matching tasks and get the first result in query order. |
 | | `finish_results(query)` | Wait for matching tasks and get their results. |
@@ -284,7 +289,7 @@ tasks.add_task(Task::labeled("report", "Write up the ranking."));
 | | `find_results(query)` | Get every result in query order. |
 | | `find_event(query)` | Get the first recorded event in query order. |
 | | `find_events(query)` | Get every recorded event in query order. |
-| **Inspect run metadata** | `get_finish_reason()` | Get why the last run ended. |
+| **Inspect execution** | `get_finish_reason()` | Get why the last execution ended. |
 | | `get_model_for_agent(agent_id)` | Get the model used by an agent. |
 | | `get_input_tokens()` | Get input tokens across finished requests. |
 | | `get_output_tokens()` | Get output tokens across finished requests. |
@@ -296,7 +301,7 @@ See [`Queue`](https://docs.rs/agentwerk/latest/agentwerk/agents/tasks/struct.Que
 
 ### Queries
 
-Use AQL to select and sort tasks. Combine `field operator value` conditions with `AND`, `OR`, or `NOT`; put optional `ORDER BY` last.
+Agentwerk Query Language (AQL) filters and sorts tasks by fields such as label, status, and creation time.
 
 `label IN (scan, report) AND status = Finished ORDER BY finished DESC` returns finished scans and reports, newest first.
 
@@ -328,11 +333,11 @@ tasks.find_results("scan ORDER BY finished DESC");
 
 | Kind | Fields | Meaning |
 |------|--------|---------|
-| **Identity** | `id`, `label`, `status` | Task identity and lifecycle state (`Todo`, `InProgress`, `Finished`, or `Failed`). |
+| **Identity** | `id`, `label`, `status` | Task identity and current state (`Todo`, `InProgress`, `Finished`, or `Failed`). |
 | **Run state** | `pending`, `cancelled` | Whether this run may schedule the task. |
 | **Relationship** | `agent`, `parent` | Claiming agent and handover parent. |
 | **Text** | `task`, `result`, `errors` | Task body, result, and recorded failures. |
-| **Time** | `created`, `started`, `finished`, `failed` | Lifecycle timestamps. |
+| **Time** | `created`, `started`, `finished`, `failed` | Creation, start, finish, and failure times. |
 
 #### Rules
 
@@ -396,7 +401,7 @@ if let Some(answer) = tasks.finish_result("ORDER BY created DESC").await {
 | **Cancel** | `cancel_tasks(query)` | Stop work on matching tasks. |
 | | `cancel_all_tasks()` | Stop work on every task. |
 
-Cancellation is run-local: it does not change `status` or persist with the task. `start()` clears cancellation so unfinished tasks can resume. Use `task.is_cancelled()` for a task you hold, or `cancelled = true` and `pending = true` to select by run state.
+Cancellation applies only to the current execution: it does not change `status` or remain attached to the task. `start()` clears cancellation so unfinished tasks can resume. Use `task.is_cancelled()` for a task you hold, or `cancelled = true` and `pending = true` to select by execution state.
 
 Task members:
 
@@ -408,7 +413,7 @@ Task members:
 | | `get_parent()` | Identifier of the parent task if a handover was performed. |
 | | `get_reporter()` | Identifier of the agent that created the task. |
 | | `get_assignee()` | Identifier of the agent that claimed the task. |
-| **Outcome** | `get_status()` | The task lifecycle status. |
+| **Outcome** | `get_status()` | Get the task's current status. |
 | | `is_todo()` | Check whether the task is waiting to be claimed. |
 | | `is_in_progress()` | Check whether an agent is working on the task. |
 | | `is_finished()` | Check whether the task finished. |
@@ -430,7 +435,7 @@ See [`Task`](https://docs.rs/agentwerk/latest/agentwerk/agents/tasks/struct.Task
 
 ### Handover
 
-Agents can share the results of their work in the following ways:
+Agents can pass work and results in five ways:
 
 1. **Create tasks**: the `finish` tool's `handover` option opens a child task carrying the result.
 2. **Read tasks**: the `tasks` tool allows reading any finished task's result, by ID.
@@ -498,7 +503,7 @@ analyst.task("Rank the products by value, then save the ranking to your knowledg
 
 #### 5. Register hooks
 
-Use hooks to create new tasks when certain results arrived:
+Use hooks to create new tasks when certain results arrive:
 
 ```rust
 tasks.on_result(|queue, done, result| {
@@ -512,7 +517,7 @@ tasks.on_result(|queue, done, result| {
 
 ### Schemas
 
-A `Schema` constrains a task result. agentwerk repairs simple representation errors such as quoted numbers; otherwise, it returns the violation to the model and retries up to `max_schema_retries`.
+A `Schema` defines the required shape of a task result. agentwerk fixes simple formatting errors such as quoted numbers. For other violations, it asks the model to retry up to `max_schema_retries`.
 
 ```rust
 use agentwerk::schemas::Schema;
@@ -526,7 +531,7 @@ let schema = Schema::new(json!({
 tasks.add_task(Task::new("Write a report.").schema(schema));
 ```
 
-For small models, use shallow, focused schemas with few required fields, clear names, and simple enums. Split large results into labeled tasks with separate schemas, then combine them in a later task. Deep nesting, long property lists, and large `anyOf` or `oneOf` branches waste context and trigger retries.
+For small models, use shallow, focused schemas with few required fields, clear names, and short lists of allowed values. Split large results into labeled tasks with separate schemas, then combine them in a later task. Deep nesting, long property lists, and large `anyOf` or `oneOf` branches use more context and trigger retries.
 
 <details>
 <summary>All schema methods</summary>
@@ -562,7 +567,7 @@ See [`Schema`](https://docs.rs/agentwerk/latest/agentwerk/schemas/struct.Schema.
 
 ### Configuration
 
-A `Policy` limits the turns, tokens, and time a run may spend, and allows configuring retries and compaction.
+A `Policy` sets limits for turns, tokens, elapsed time, retries, and compaction.
 
 ```rust
 tasks.set_policy(Policy {
@@ -605,9 +610,9 @@ tasks.set_policy(Policy {
 <details>
 <summary>When compaction runs and what it reports</summary>
 
-`compaction_threshold` is a fraction of the model's context window, `0.85` by default. Reaching it summarizes the older messages and the agent carries on.
+`compaction_threshold` is a fraction of the model's context window, `0.85` by default. Reaching it summarizes the older messages and the agent continues its task.
 
-Compaction also runs after the LLM provider reports the window exceeded. `compaction_started`, `compaction_progress`, `compaction_finished`, and `compaction_failed` report each step, see [Events](#events).
+Compaction also runs after the LLM provider reports that the window was exceeded. `compaction_started`, `compaction_progress`, `compaction_finished`, and `compaction_failed` report each step, see [Events](#events).
 
 ```rust
 tasks.on_event(|_, event| {
@@ -617,7 +622,7 @@ tasks.on_event(|_, event| {
 });
 ```
 
-Each compaction event carries the trigger: `proactive` ahead of a failure or `reactive` after one. A failure also carries a stable `kind` and human-readable `message`.
+Each compaction event carries the trigger: `proactive` before a context-window error or `reactive` after one. A failure also carries a stable `kind` and human-readable `message`.
 
 </details>
 
@@ -641,7 +646,7 @@ let agent = Agent::from_env()
 | Method | Description |
 |--------|-------------|
 | `directives(compute)` | Decide every directive's text with one function. |
-| `Directive::ALL` | Get every directive key, in the order the catalogue declares them. |
+| `Directive::ALL` | Get every directive key in its defined order. |
 
 Return `None` to keep the default. Replacements may use template variables such as `{detail}`, `{attempt}`, and `{path}`. Include the failure and next action.
 
@@ -651,11 +656,13 @@ See [prompts/directives](https://github.com/canvascomputing/agentwerk/tree/main/
 
 ### Sessions
 
+A `Queue` saves every task, reply, and event so you can continue the same session later.
+
 <div align="left">
   <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/assets/sessions.gif" width="600" />
 </div>
 
-A `Queue` writes every task, reply, and event to its working directory (default `./.agentwerk`). You can continue a session from that directory.
+The working directory is `./.agentwerk` by default.
 
 ```rust
 let tasks = Queue::load(".agentwerk")?;
@@ -684,7 +691,7 @@ tasks.start();
 
 ## Tools
 
-Tools allow agents to perform their work.
+Tools give agents controlled access to files, commands, URLs, tasks, and shared knowledge.
 
 ```rust
 use agentwerk::tools::{CommandTool, GrepTool, ReadFileTool};
@@ -714,11 +721,11 @@ let agent = Agent::new()
 
 #### `FinishTool` and `KnowledgeTool`
 
-`FinishTool` and `KnowledgeTool` are special tools, registered automatically on every agent. They are used for interacting with the `Queue` or knowledge base. An [interactive agent](#interactive) gets no `FinishTool` by default, since finishing its task would end the conversation.
+`FinishTool` and `KnowledgeTool` are registered automatically on every agent. Agents use them to finish queued tasks or work with shared knowledge. An [interactive agent](#interactive) gets no `FinishTool` by default, since finishing its task would end the conversation.
 
 #### CommandTool
 
-The `CommandTool` allows you to granularly define what commands are allowed and what commands are denied.
+The `CommandTool` lets you specify exactly which commands and flags are allowed or denied.
 
 ```rust
 let git = CommandTool::new("git")
@@ -738,7 +745,7 @@ let cargo = CommandTool::new("cargo")
 
 #### FetchUrlTool
 
-The `FetchUrlTool` fetches a URL and returns its text, requesting it with the user agent `agentwerk/<version>`. `impersonate()` swaps in the headers and HTTP/2 settings a browser sends.
+The `FetchUrlTool` fetches a URL and returns its text with the user agent `agentwerk/<version>`. `impersonate()` uses the headers and HTTP/2 settings of a browser.
 
 ```rust
 let web = FetchUrlTool::new().impersonate();
@@ -746,12 +753,12 @@ let web = FetchUrlTool::new().impersonate();
 
 #### Custom Tools
 
-You can define custom tools for specific needs with the following parameters:
+A custom tool runs a function you provide and describes its inputs to the model.
 
 | Method | Description |
 |--------|-------------|
-| `concurrent(true)` | If a tool has no side-effects you can run it in parallel with this option. |
-| `paths(["path"])` | Name file path used for a tool call, so the files are included in statistics. |
+| `concurrent(true)` | Run a tool in parallel when it does not change external state. |
+| `paths(["path"])` | Identify file paths in a tool call so they are included in statistics. |
 
 Describe the tool, then hand it the code it runs:
 
@@ -781,7 +788,7 @@ See [`Tool`](https://docs.rs/agentwerk/latest/agentwerk/tools/struct.Tool.html).
 
 ## Events
 
-Events allow you to inspect all activities of your agents.
+Events record what agents, tools, and LLM providers do during execution.
 
 ```rust
 use agentwerk::Event;
@@ -809,13 +816,13 @@ tasks.on_event(|_, event| {
 | **LLM provider** | `request_started` | A request went out to the model. |
 | | `request_finished` | A request finished and reported its token usage. |
 | | `request_failed` | A request failed and was not retried. |
-| | `request_retried` | A transient provider error triggered a retry. |
-| | `text_chunk_received` | A piece of the reply arrived. |
+| | `request_retried` | A temporary LLM provider error triggered a retry. |
+| | `text_chunk_received` | Part of the reply arrived. |
 | **Tool** | `tool_call_declined` | A tool call proposed by the model was declined. |
 | | `tool_call_repaired` | A tool call or value the model created was invalid and was corrected. |
-| | `tool_call_started` | A tool invocation began. |
-| | `tool_call_finished` | A tool invocation finished. |
-| | `tool_call_failed` | A tool invocation failed but the task continues. |
+| | `tool_call_started` | A tool call began. |
+| | `tool_call_finished` | A tool call finished. |
+| | `tool_call_failed` | A tool call failed but the task continues. |
 | **File** | `file_open_finished` | A tool opened a file. |
 | | `file_open_failed` | A tool could not open a file. |
 | **Knowledge** | `knowledge_written` | A page was written. |
@@ -827,7 +834,7 @@ tasks.on_event(|_, event| {
 | | `compaction_progress` | Compaction finished part of the work. |
 | | `compaction_finished` | Compaction replaced the older messages. |
 | | `compaction_failed` | Compaction could not finish. |
-| **Application** | caller-defined name | An event published with `emit_event`. |
+| **Application** | name chosen by your application | An event published with `emit_event`. |
 
 ### Publish events
 
@@ -857,11 +864,9 @@ The first event's name, data, and context are stored as:
 conventional, but other names are accepted; quote names containing spaces or
 punctuation in AQL. Built-in events have named constructors, such as
 `Event::task_finished()` and `Event::request_started("model")`; their names are
-also available as constants. Publishing one triggers its hooks, statistics, and
-persistence behavior, but not its state transition.
+also available as constants. Publishing one runs its hooks and updates its statistics. It is saved according to the event's normal rules, but it does not change task or execution state.
 
-Events are saved to `.agentwerk/events.jsonl`. Streamed text chunks are not
-saved. Read events through the queue with these methods:
+Events are saved to `.agentwerk/events.jsonl`. `text_chunk_received` events are not saved. Read events through the queue with these methods:
 
 | Method | Description |
 |--------|-------------|
@@ -876,7 +881,7 @@ saved. Read events through the queue with these methods:
 <details>
 <summary>All event query fields and rules</summary>
 
-You can query events with AQL syntax or closures.
+You can query events with AQL or a condition you supply.
 
 ```rust
 tasks.find_events("tool_call_failed");
@@ -891,7 +896,7 @@ tasks.find_events("payload ~ timeout AND created > -1h");
 | | `agent` | The attributed agent ID, when the event has agent context. |
 | | `task` | The attributed task ID, when the event has task context. |
 | | `label` | The attributed task's label, when the task is known and labelled. |
-| **Search** | `payload` | The event name and serialized event data, searched together as text. |
+| **Search** | `payload` | Search the event name and data together as text. |
 | **Compare** | `created` | When the event was recorded. |
 
 Event queries follow the same [rules as task queries](#queries). Match `event`,
@@ -914,7 +919,7 @@ See [`Event`](https://docs.rs/agentwerk/latest/agentwerk/event/struct.Event.html
 
 ### Hooks
 
-Hooks allow you to react to events.
+A hook runs your function when an event, result, failure, or task state change occurs.
 
 ```rust
 tasks.on_failure(|queue, _, failed| {
@@ -936,7 +941,7 @@ tasks.on_failure(|queue, _, failed| {
 | | `on_failure(handler)` | Read every failure together with the task it happened in. |
 | | `on_failure_async(handler)` | Read every failure with its task, in an async handler. |
 | | `on_task(handler)` | Read a task as it starts, finishes, or fails. |
-| | `on_task_async(handler)` | Read a task lifecycle transition in an async handler. |
+| | `on_task_async(handler)` | Read a task state change in an async handler. |
 
 Save replies of every finished task as a training example:
 
@@ -952,7 +957,7 @@ tasks.on_task(|queue, event, task| {
 
 #### Async handlers
 
-`on_result` is blocking and prevents an agent continuing its work till the hook is finished. If you perform time-consuming operations use `on_result_async` instead: storing results in a database, posting them to an HTTP API, or uploading them to object storage.
+`on_result` pauses the agent until the hook finishes. Use `on_result_async` for slower work such as storing results in a database, posting them to an HTTP API, or uploading them to object storage.
 
 ```rust
 let findings = Arc::clone(&database);
@@ -970,11 +975,13 @@ See [`Queue`](https://docs.rs/agentwerk/latest/agentwerk/agents/tasks/struct.Que
 
 ## Knowledge
 
+`Knowledge` provides durable memory that agents share across tasks and with other agents.
+
 <div align="left">
   <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/assets/knowledge.gif" width="600" />
 </div>
 
-`Knowledge` allows agents to share insights or learnings. Knowledge pages are created in the Open Knowledge Format (OKF).
+Pages use the Open Knowledge Format (OKF).
 
 ```rust
 use agentwerk::Knowledge;
@@ -1000,7 +1007,7 @@ Each page is written to `./notes/knowledge/pages/<slug>.md`, and every page gets
 
 The prompt includes up to 12 000 characters of the knowledge index by default. If the index exceeds the configured limit, the agent reads the remainder from `index.md`. Pages are always saved in full.
 
-Programmatically create entries:
+Create entries in code:
 
 ```rust
 use agentwerk::agents::knowledge::Page;
@@ -1026,10 +1033,10 @@ See [`Knowledge`](https://docs.rs/agentwerk/latest/agentwerk/agents/knowledge/st
 Example projects built with agentwerk:
 
 - [Hello World](crates/use-cases/src/hello_world/): basic example
-- [Terminal REPL](crates/use-cases/src/terminal_repl/): minimal interactive chat
-- [Divide and Conquer](crates/use-cases/src/divide_and_conquer/): arithmetic problem shared across agents
-- [Deep Research](crates/use-cases/src/deep_research/): deep research pipeline (requires `BRAVE_API_KEY`)
-- [Malware Scanner](crates/use-cases/src/malware_scanner/): identify indicators of compromise in a software package
+- [Terminal REPL](crates/use-cases/src/terminal_repl/): interactive terminal chat
+- [Divide and Conquer](crates/use-cases/src/divide_and_conquer/): split an arithmetic problem across agents
+- [Deep Research](crates/use-cases/src/deep_research/): research across several sources (requires `BRAVE_API_KEY`)
+- [Malware Scanner](crates/use-cases/src/malware_scanner/): find signs of malware in a software package
 
 > Configure an LLM provider first (see [Environment](DEVELOPMENT.md#environment)).
 
@@ -1044,4 +1051,4 @@ Report a vulnerability to security@canvascomputing.org, not in a public issue. S
 
 ## Development
 
-See [DEVELOPMENT.md](DEVELOPMENT.md).
+See [DEVELOPMENT.md](DEVELOPMENT.md) for build, test, and release instructions.
