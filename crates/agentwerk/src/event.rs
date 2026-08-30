@@ -120,6 +120,256 @@ impl Event {
         }
     }
 
+    /// Create a run-started event.
+    pub fn run_started() -> Self {
+        Self::new(Self::RUN_STARTED)
+    }
+
+    /// Create a run-finished event.
+    pub fn run_finished(outcome: crate::agents::tasks::FinishReason) -> Self {
+        Self::new(Self::RUN_FINISHED).data(serde_json::json!({ "outcome": outcome }))
+    }
+
+    /// Create a task-created event.
+    pub fn task_created() -> Self {
+        Self::new(Self::TASK_CREATED)
+    }
+
+    /// Create a task-started event.
+    pub fn task_started() -> Self {
+        Self::new(Self::TASK_STARTED)
+    }
+
+    /// Create a task-finished event.
+    pub fn task_finished() -> Self {
+        Self::new(Self::TASK_FINISHED)
+    }
+
+    /// Create a task-failed event.
+    pub fn task_failed() -> Self {
+        Self::new(Self::TASK_FAILED)
+    }
+
+    /// Create a turn-started event.
+    pub fn turn_started() -> Self {
+        Self::new(Self::TURN_STARTED)
+    }
+
+    /// Create a request-started event.
+    pub fn request_started(model: impl Into<String>) -> Self {
+        Self::new(Self::REQUEST_STARTED).data(serde_json::json!({ "model": model.into() }))
+    }
+
+    /// Create a request-finished event.
+    pub fn request_finished(model: impl Into<String>, usage: crate::providers::TokenUsage) -> Self {
+        Self::new(Self::REQUEST_FINISHED)
+            .data(serde_json::json!({ "model": model.into(), "usage": usage }))
+    }
+
+    /// Create a request-failed event.
+    pub fn request_failed(
+        model: impl Into<String>,
+        kind: crate::providers::RequestErrorKind,
+        message: impl Into<String>,
+    ) -> Self {
+        Self::new(Self::REQUEST_FAILED).data(serde_json::json!({
+            "model": model.into(),
+            "kind": kind,
+            "message": message.into(),
+        }))
+    }
+
+    /// Create a request-retried event.
+    pub fn request_retried(
+        model: impl Into<String>,
+        attempt: u32,
+        max_attempts: u32,
+        kind: crate::providers::RequestErrorKind,
+        message: impl Into<String>,
+    ) -> Self {
+        Self::new(Self::REQUEST_RETRIED).data(serde_json::json!({
+            "model": model.into(),
+            "attempt": attempt,
+            "max_attempts": max_attempts,
+            "kind": kind,
+            "message": message.into(),
+        }))
+    }
+
+    /// Create a text-chunk-received event.
+    pub fn text_chunk_received(content: impl Into<String>) -> Self {
+        Self::new(Self::TEXT_CHUNK_RECEIVED).data(serde_json::json!({ "content": content.into() }))
+    }
+
+    /// Create a tool-call-repaired event.
+    pub fn tool_call_repaired(
+        tool_name: impl Into<String>,
+        call_id: impl Into<String>,
+        kind: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
+        Self::new(Self::TOOL_CALL_REPAIRED).data(serde_json::json!({
+            "tool_name": tool_name.into(),
+            "call_id": call_id.into(),
+            "kind": kind.into(),
+            "message": message.into(),
+        }))
+    }
+
+    /// Create a tool-call-declined event.
+    pub fn tool_call_declined(
+        tool_name: impl Into<String>,
+        kind: crate::providers::ToolDeclineKind,
+    ) -> Self {
+        Self::new(Self::TOOL_CALL_DECLINED)
+            .data(serde_json::json!({ "tool_name": tool_name.into(), "kind": kind }))
+    }
+
+    /// Create a tool-call-started event.
+    pub fn tool_call_started(
+        tool_name: impl Into<String>,
+        call_id: impl Into<String>,
+        input: Value,
+    ) -> Self {
+        Self::new(Self::TOOL_CALL_STARTED).data(serde_json::json!({
+            "tool_name": tool_name.into(),
+            "call_id": call_id.into(),
+            "input": input,
+        }))
+    }
+
+    /// Create a successful terminal tool-call event.
+    pub fn tool_call_finished(output: impl Into<String>) -> Self {
+        Self::new(Self::TOOL_CALL_FINISHED).data(serde_json::json!({ "output": output.into() }))
+    }
+
+    /// Create a failed terminal tool-call event.
+    pub fn tool_call_failed(message: impl Into<String>) -> Self {
+        Self::new(Self::TOOL_CALL_FAILED).data(serde_json::json!({
+            "kind": "execution_failed",
+            "message": message.into(),
+        }))
+    }
+
+    /// Create a file-open-finished event.
+    pub fn file_open_finished(
+        path: impl Into<String>,
+        tool_name: impl Into<String>,
+        call_id: impl Into<String>,
+    ) -> Self {
+        Self::new(Self::FILE_OPEN_FINISHED).data(serde_json::json!({
+            "path": path.into(),
+            "tool_name": tool_name.into(),
+            "call_id": call_id.into(),
+        }))
+    }
+
+    /// Create a file-open-failed event.
+    pub fn file_open_failed(
+        path: impl Into<String>,
+        tool_name: impl Into<String>,
+        call_id: impl Into<String>,
+        kind: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
+        Self::new(Self::FILE_OPEN_FAILED).data(serde_json::json!({
+            "path": path.into(),
+            "tool_name": tool_name.into(),
+            "call_id": call_id.into(),
+            "kind": kind.into(),
+            "message": message.into(),
+        }))
+    }
+
+    /// Create a knowledge-written event.
+    pub fn knowledge_written(slug: impl Into<String>) -> Self {
+        Self::new(Self::KNOWLEDGE_WRITTEN).data(serde_json::json!({ "slug": slug.into() }))
+    }
+
+    /// Create a knowledge-read event.
+    pub fn knowledge_read(slug: impl Into<String>) -> Self {
+        Self::new(Self::KNOWLEDGE_READ).data(serde_json::json!({ "slug": slug.into() }))
+    }
+
+    /// Create a knowledge-removed event.
+    pub fn knowledge_removed(slug: impl Into<String>) -> Self {
+        Self::new(Self::KNOWLEDGE_REMOVED).data(serde_json::json!({ "slug": slug.into() }))
+    }
+
+    /// Create a knowledge-listed event.
+    pub fn knowledge_listed() -> Self {
+        Self::new(Self::KNOWLEDGE_LISTED)
+    }
+
+    /// Create a knowledge-failed event.
+    pub fn knowledge_failed(
+        action: impl Into<String>,
+        slug: impl Into<String>,
+        kind: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
+        Self::new(Self::KNOWLEDGE_FAILED).data(serde_json::json!({
+            "action": action.into(),
+            "slug": slug.into(),
+            "kind": kind.into(),
+            "message": message.into(),
+        }))
+    }
+
+    /// Create a policy-violated event.
+    pub fn policy_violated(policy: crate::agents::PolicyViolation, limit: u64) -> Self {
+        Self::new(Self::POLICY_VIOLATED)
+            .data(serde_json::json!({ "policy": policy, "limit": limit }))
+    }
+
+    /// Create a schema-retried event.
+    pub fn schema_retried(
+        attempt: u32,
+        max_attempts: u32,
+        kind: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
+        Self::new(Self::SCHEMA_RETRIED).data(serde_json::json!({
+            "attempt": attempt,
+            "max_attempts": max_attempts,
+            "kind": kind.into(),
+            "message": message.into(),
+        }))
+    }
+
+    /// Create a compaction-started event.
+    pub fn compaction_started(trigger: impl Into<String>, total: u32) -> Self {
+        Self::new(Self::COMPACTION_STARTED)
+            .data(serde_json::json!({ "trigger": trigger.into(), "total": total }))
+    }
+
+    /// Create a compaction-progress event.
+    pub fn compaction_progress(trigger: impl Into<String>, completed: u32, total: u32) -> Self {
+        Self::new(Self::COMPACTION_PROGRESS).data(serde_json::json!({
+            "trigger": trigger.into(),
+            "completed": completed,
+            "total": total,
+        }))
+    }
+
+    /// Create a compaction-finished event.
+    pub fn compaction_finished(trigger: impl Into<String>) -> Self {
+        Self::new(Self::COMPACTION_FINISHED).data(serde_json::json!({ "trigger": trigger.into() }))
+    }
+
+    /// Create a compaction-failed event.
+    pub fn compaction_failed(
+        trigger: impl Into<String>,
+        kind: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
+        Self::new(Self::COMPACTION_FAILED).data(serde_json::json!({
+            "trigger": trigger.into(),
+            "kind": kind.into(),
+            "message": message.into(),
+        }))
+    }
+
     /// Associate the event with the directive used to explain it to the model.
     pub fn directive(mut self, directive: impl Into<String>) -> Self {
         self.directive = Some(directive.into());
@@ -407,6 +657,174 @@ pub(crate) mod tests {
     fn built_in_event_names_are_unique() {
         let names: BTreeSet<&str> = Event::BUILTIN_NAMES.iter().copied().collect();
         assert_eq!(names.len(), Event::BUILTIN_NAMES.len());
+    }
+
+    #[test]
+    fn named_constructors_cover_every_built_in_payload() {
+        use crate::agents::tasks::FinishReason;
+        use crate::agents::PolicyViolation;
+        use crate::providers::{RequestErrorKind, TokenUsage, ToolDeclineKind};
+
+        let empty = serde_json::json!({});
+        let cases = vec![
+            (Event::run_started(), empty.clone()),
+            (
+                Event::run_finished(FinishReason::Drained),
+                serde_json::json!({ "outcome": "drained" }),
+            ),
+            (Event::task_created(), empty.clone()),
+            (Event::task_started(), empty.clone()),
+            (Event::task_finished(), empty.clone()),
+            (Event::task_failed(), empty.clone()),
+            (Event::turn_started(), empty.clone()),
+            (
+                Event::request_started("model"),
+                serde_json::json!({ "model": "model" }),
+            ),
+            (
+                Event::request_finished(
+                    "model",
+                    TokenUsage {
+                        input_tokens: 3,
+                        output_tokens: 5,
+                    },
+                ),
+                serde_json::json!({
+                    "model": "model",
+                    "usage": { "input_tokens": 3, "output_tokens": 5 },
+                }),
+            ),
+            (
+                Event::request_failed("model", RequestErrorKind::ConnectionFailed, "offline"),
+                serde_json::json!({
+                    "model": "model",
+                    "kind": "connection_failed",
+                    "message": "offline",
+                }),
+            ),
+            (
+                Event::request_retried("model", 2, 4, RequestErrorKind::RateLimited, "later"),
+                serde_json::json!({
+                    "model": "model",
+                    "attempt": 2,
+                    "max_attempts": 4,
+                    "kind": "rate_limited",
+                    "message": "later",
+                }),
+            ),
+            (
+                Event::text_chunk_received("hello"),
+                serde_json::json!({ "content": "hello" }),
+            ),
+            (
+                Event::tool_call_repaired("grep", "c-1", "value_mistyped", "fixed"),
+                serde_json::json!({
+                    "tool_name": "grep",
+                    "call_id": "c-1",
+                    "kind": "value_mistyped",
+                    "message": "fixed",
+                }),
+            ),
+            (
+                Event::tool_call_declined("grep", ToolDeclineKind::AlreadyDelivered),
+                serde_json::json!({ "tool_name": "grep", "kind": "already_delivered" }),
+            ),
+            (
+                Event::tool_call_started("grep", "c-1", serde_json::json!({ "q": "x" })),
+                serde_json::json!({
+                    "tool_name": "grep",
+                    "call_id": "c-1",
+                    "input": { "q": "x" },
+                }),
+            ),
+            (
+                Event::tool_call_finished("done"),
+                serde_json::json!({ "output": "done" }),
+            ),
+            (
+                Event::tool_call_failed("nope"),
+                serde_json::json!({ "kind": "execution_failed", "message": "nope" }),
+            ),
+            (
+                Event::file_open_finished("src/lib.rs", "read_file", "c-1"),
+                serde_json::json!({
+                    "path": "src/lib.rs",
+                    "tool_name": "read_file",
+                    "call_id": "c-1",
+                }),
+            ),
+            (
+                Event::file_open_failed("missing.rs", "read_file", "c-2", "not_found", "missing"),
+                serde_json::json!({
+                    "path": "missing.rs",
+                    "tool_name": "read_file",
+                    "call_id": "c-2",
+                    "kind": "not_found",
+                    "message": "missing",
+                }),
+            ),
+            (
+                Event::knowledge_written("notes"),
+                serde_json::json!({ "slug": "notes" }),
+            ),
+            (
+                Event::knowledge_read("notes"),
+                serde_json::json!({ "slug": "notes" }),
+            ),
+            (
+                Event::knowledge_removed("notes"),
+                serde_json::json!({ "slug": "notes" }),
+            ),
+            (Event::knowledge_listed(), empty),
+            (
+                Event::knowledge_failed("read", "notes", "not_found", "missing"),
+                serde_json::json!({
+                    "action": "read",
+                    "slug": "notes",
+                    "kind": "not_found",
+                    "message": "missing",
+                }),
+            ),
+            (
+                Event::policy_violated(PolicyViolation::Turns, 10),
+                serde_json::json!({ "policy": "turns", "limit": 10 }),
+            ),
+            (
+                Event::schema_retried(2, 4, "schema_failed", "invalid"),
+                serde_json::json!({
+                    "attempt": 2,
+                    "max_attempts": 4,
+                    "kind": "schema_failed",
+                    "message": "invalid",
+                }),
+            ),
+            (
+                Event::compaction_started("proactive", 5),
+                serde_json::json!({ "trigger": "proactive", "total": 5 }),
+            ),
+            (
+                Event::compaction_progress("proactive", 2, 5),
+                serde_json::json!({ "trigger": "proactive", "completed": 2, "total": 5 }),
+            ),
+            (
+                Event::compaction_finished("proactive"),
+                serde_json::json!({ "trigger": "proactive" }),
+            ),
+            (
+                Event::compaction_failed("reactive", "summarization_failed", "bad reply"),
+                serde_json::json!({
+                    "trigger": "reactive",
+                    "kind": "summarization_failed",
+                    "message": "bad reply",
+                }),
+            ),
+        ];
+
+        assert_eq!(cases.len(), Event::BUILTIN_NAMES.len());
+        for ((event, expected_data), expected_name) in cases.into_iter().zip(Event::BUILTIN_NAMES) {
+            assert_eq!(event.get_name(), *expected_name);
+            assert_eq!(event.get_data(), &expected_data, "{}", event.get_name());
+        }
     }
 
     #[test]

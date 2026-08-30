@@ -155,15 +155,12 @@ pub struct ToolCall {
 impl Event {
     #[doc(hidden)]
     pub(crate) fn success(content: impl Into<String>) -> Self {
-        Event::new(Event::TOOL_CALL_FINISHED).data(serde_json::json!({ "output": content.into() }))
+        Event::tool_call_finished(content)
     }
 
     #[doc(hidden)]
     pub(crate) fn error(content: impl Into<String>) -> Self {
-        Event::new(Event::TOOL_CALL_FAILED).data(serde_json::json!({
-            "kind": "execution_failed",
-            "message": content.into(),
-        }))
+        Event::tool_call_failed(content)
     }
 
     /// The text returned to the model by a terminal tool-call event.
