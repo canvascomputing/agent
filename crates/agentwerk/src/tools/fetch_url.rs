@@ -14,11 +14,11 @@ const DEFAULT_MAX_LENGTH: usize = 100_000;
 const FETCH_TIMEOUT_SECS: u64 = 60;
 const MAX_REDIRECT_HOPS: usize = 10;
 
-/// What the tool identifies itself as until [`FetchUrlTool::impersonate`]
+/// What the tool identifies itself as until [`FetchTool::impersonate`]
 /// changes that. The version comes from `Cargo.toml`, so a release moves it.
 const DEFAULT_USER_AGENT: &str = concat!("agentwerk/", env!("CARGO_PKG_VERSION"));
 
-/// The one browser [`FetchUrlTool::impersonate`] presents itself as. Pinned
+/// The one browser [`FetchTool::impersonate`] presents itself as. Pinned
 /// rather than chosen, since the two values must agree on a version.
 const BROWSER_USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) \
     AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36";
@@ -41,18 +41,18 @@ const BROWSER_MAX_FRAME_SIZE: u32 = 16_384;
 ///
 /// ```
 /// use agentwerk::Agent;
-/// use agentwerk::tools::FetchUrlTool;
+/// use agentwerk::tools::FetchTool;
 ///
-/// Agent::new().tool(FetchUrlTool::new());
+/// Agent::new().tool(FetchTool::new());
 /// ```
 #[derive(Clone, Default)]
-pub struct FetchUrlTool {
+pub struct FetchTool {
     impersonate: bool,
 }
 
-impl FetchUrlTool {
+impl FetchTool {
     /// Create the tool. Requests carry agentwerk's own user agent until
-    /// [`FetchUrlTool::impersonate`] changes that.
+    /// [`FetchTool::impersonate`] changes that.
     pub fn new() -> Self {
         Self::default()
     }
@@ -69,9 +69,9 @@ impl FetchUrlTool {
     ///
     /// ```
     /// use agentwerk::Agent;
-    /// use agentwerk::tools::FetchUrlTool;
+    /// use agentwerk::tools::FetchTool;
     ///
-    /// Agent::new().tool(FetchUrlTool::new().impersonate());
+    /// Agent::new().tool(FetchTool::new().impersonate());
     /// ```
     pub fn impersonate(mut self) -> Self {
         self.impersonate = true;
@@ -90,8 +90,8 @@ fn default_max_length() -> usize {
     DEFAULT_MAX_LENGTH
 }
 
-impl From<FetchUrlTool> for Tool {
-    fn from(tool: FetchUrlTool) -> Tool {
+impl From<FetchTool> for Tool {
+    fn from(tool: FetchTool) -> Tool {
         let impersonate = tool.impersonate;
         Tool::new("fetch_url")
             .description(include_str!("fetch_url.tool.md"))
@@ -581,7 +581,7 @@ mod tests {
 
     #[test]
     fn every_example_the_schema_shows_deserializes_into_the_arguments() {
-        let document = Tool::from(FetchUrlTool::new())
+        let document = Tool::from(FetchTool::new())
             .get_input_schema()
             .get_raw_schema()
             .clone();

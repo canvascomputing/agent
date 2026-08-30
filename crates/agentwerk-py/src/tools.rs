@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use agentwerk::schemas::Schema;
 use agentwerk::tools::{
-    CommandTool, EditFileTool, FetchUrlTool, FinishTool, GlobTool, GrepTool, KnowledgeTool,
+    CommandTool, EditFileTool, FetchTool, FinishTool, GlobTool, GrepTool, KnowledgeTool,
     ListDirectoryTool, ReadFileTool, TaskTool, Tool, ToolContext, WriteFileTool,
 };
 use agentwerk::Event;
@@ -67,7 +67,7 @@ pub fn extract_tool(obj: &Bound<'_, PyAny>) -> PyResult<Tool> {
     if let Ok(command) = obj.extract::<PyRef<PyCommandTool>>() {
         return Ok(command.inner.clone().into());
     }
-    if let Ok(fetch_url) = obj.extract::<PyRef<PyFetchUrlTool>>() {
+    if let Ok(fetch_url) = obj.extract::<PyRef<PyFetchTool>>() {
         return Ok(fetch_url.inner.clone().into());
     }
     if obj.hasattr("_agentwerk_tool")? {
@@ -194,17 +194,17 @@ fn task_tool() -> PyTool {
 
 /// Fetch a URL and read its body, passed to `Agent.tool(...)`. Requests carry
 /// agentwerk's own user agent until `impersonate()` changes that.
-#[pyclass(name = "FetchUrlTool")]
-pub struct PyFetchUrlTool {
-    inner: FetchUrlTool,
+#[pyclass(name = "FetchTool")]
+pub struct PyFetchTool {
+    inner: FetchTool,
 }
 
 #[pymethods]
-impl PyFetchUrlTool {
+impl PyFetchTool {
     #[new]
     fn new() -> Self {
-        PyFetchUrlTool {
-            inner: FetchUrlTool::new(),
+        PyFetchTool {
+            inner: FetchTool::new(),
         }
     }
 
@@ -286,7 +286,7 @@ impl PyCommandTool {
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyTool>()?;
     m.add_class::<PyCommandTool>()?;
-    m.add_class::<PyFetchUrlTool>()?;
+    m.add_class::<PyFetchTool>()?;
     m.add_function(wrap_pyfunction!(read_file_tool, m)?)?;
     m.add_function(wrap_pyfunction!(write_file_tool, m)?)?;
     m.add_function(wrap_pyfunction!(edit_file_tool, m)?)?;

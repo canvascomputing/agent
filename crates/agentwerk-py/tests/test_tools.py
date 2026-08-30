@@ -55,14 +55,18 @@ def test_an_agent_accepts_a_command_tool():
     assert isinstance(agent, aw.Agent)
 
 
-def test_fetch_url_tool_configuration_chains_on_one_object():
-    tool = aw.FetchUrlTool()
+def test_fetch_tool_configuration_chains_on_one_object():
+    tool = aw.FetchTool()
     assert tool.impersonate() is tool
 
 
-def test_an_agent_accepts_a_fetch_url_tool():
-    agent = aw.Agent().tool(aw.FetchUrlTool().impersonate())
+def test_an_agent_accepts_a_fetch_tool():
+    agent = aw.Agent().tool(aw.FetchTool().impersonate())
     assert isinstance(agent, aw.Agent)
+
+
+def test_fetch_url_tool_is_not_a_compatibility_alias():
+    assert not hasattr(aw, "FetchUrlTool")
 
 
 def test_tool_decorator_records_name_doc_and_concurrent():
