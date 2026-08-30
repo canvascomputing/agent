@@ -27,7 +27,7 @@ use super::{numeric_id, policy_violated, Reply};
 /// Why execution ended.
 ///
 /// Carried by a run-finished event, and handed back by
-/// `Queue::finish_results` once the wait is over.
+/// `Queue::finish_tasks` once the wait is over.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FinishReason {
@@ -460,7 +460,7 @@ impl Queue {
         self
     }
 
-    /// Read every event as it is emitted, in a handler [`Self::finish_results`] waits
+    /// Read every event as it is emitted, in a handler [`Self::finish_tasks`] waits
     /// for before it returns.
     ///
     /// [`Self::on_event`] cannot await: it runs on the agent task that emitted
@@ -546,7 +546,7 @@ impl Queue {
     }
 
     /// Read every finished task together with its result, in a handler
-    /// [`Self::finish_results`] waits for before it returns.
+    /// [`Self::finish_tasks`] waits for before it returns.
     ///
     /// [`Self::on_result`] cannot await: it runs on the agent task that just
     /// finished the task, and that task has to carry on. This one hands the
@@ -609,7 +609,7 @@ impl Queue {
     }
 
     /// Read every failure together with the task it happened in, in a handler
-    /// [`Self::finish_results`] waits for before it returns.
+    /// [`Self::finish_tasks`] waits for before it returns.
     ///
     /// [`Self::on_failure`] on the terms [`Self::on_event_async`] sets.
     ///
@@ -641,7 +641,7 @@ impl Queue {
     }
 
     /// Read a task as it starts, finishes, or fails, in a handler
-    /// [`Self::finish_results`] waits for before it returns.
+    /// [`Self::finish_tasks`] waits for before it returns.
     ///
     /// [`Self::on_task`] on the terms [`Self::on_event_async`] sets.
     ///
@@ -1033,7 +1033,7 @@ impl Queue {
     /// True while any matching task still has work for an agent.
     ///
     /// The one definition of "not done yet": the main loop asks it of every
-    /// task to decide the run is over, and [`Self::finish_results`] asks it of a
+    /// task to decide the run is over, and [`Self::finish_tasks`] asks it of a
     /// subset. A task is pending while it is todo or in progress,
     /// uncancelled, and not paused for a caller reply.
     pub(crate) fn pending(&self, matches: &Query) -> bool {
@@ -1059,7 +1059,7 @@ impl Queue {
     /// An empty queue is not an ending: a host that called [`Self::start`] may
     /// still be filing work, and a paused task revives on the next reply.
     /// Only a breached limit or a cancel that leaves nothing claimable ends a
-    /// run here; the drained ending is named by the [`Self::finish_results`] that waited
+    /// run here; the drained ending is named by the [`Self::finish_tasks`] that waited
     /// for it.
     pub(crate) fn ending_reason(&self) -> Option<FinishReason> {
         if let Some((violation, _)) = policy_violated(&self.get_policy(), &self.stats) {
@@ -1165,7 +1165,7 @@ impl Queue {
     /// Begin processing tasks, on a background task.
     ///
     /// A task queued afterwards is picked up within about 100 ms, and an
-    /// empty queue keeps the run alive: only [`Self::finish_results`] and
+    /// empty queue keeps the run alive: only [`Self::finish_tasks`] and
     /// [`Self::cancel_tasks`] end one. Calling this while a run is under way does
     /// nothing; calling it after one ended starts a fresh run, which is how a
     /// host resumes after a cancel.
@@ -1211,12 +1211,12 @@ impl Queue {
     /// # use agentwerk::Queue;
     /// # async fn run() {
     /// let tasks = Queue::new();
-    /// for finding in tasks.finish_results("research").await {
+    /// for finding in tasks.finish_tasks("research").await {
     ///     println!("{finding}");
     /// }
     /// # }
     /// ```
-    pub async fn finish_results(&self, matches: impl Matcher<Task>) -> Vec<serde_json::Value> {
+    pub async fn finish_tasks(&self, matches: impl Matcher<Task>) -> Vec<serde_json::Value> {
         let query = matches.into_query();
         if self.join_handle.lock().unwrap().is_none() {
             self.start();
@@ -1255,7 +1255,7 @@ impl Queue {
     /// order.
     ///
     /// This is how a host waits for work it started: it returns once no task
-    /// has work left for an agent. [`Self::finish_results`] waits for one pool or one
+    /// has work left for an agent. [`Self::finish_tasks`] waits for one pool or one
     /// task instead, and everything it says about starting, restarting, and
     /// which tasks contribute a result holds here too.
     ///
@@ -1269,13 +1269,13 @@ impl Queue {
     /// # }
     /// ```
     pub async fn finish_all_tasks(&self) -> Vec<serde_json::Value> {
-        self.finish_results(Query::all()).await
+        self.finish_tasks(Query::all()).await
     }
 
     /// Wait for the matching tasks to be done, then get the first available
     /// result in query order.
     ///
-    /// The one-result form of [`Self::finish_results`]. `None` means no
+    /// The one-result form of [`Self::finish_tasks`]. `None` means no
     /// matching task finished with a result.
     ///
     /// ```no_run
@@ -1288,13 +1288,13 @@ impl Queue {
     /// # }
     /// ```
     pub async fn finish_result(&self, matches: impl Matcher<Task>) -> Option<serde_json::Value> {
-        self.finish_results(matches).await.into_iter().next()
+        self.finish_tasks(matches).await.into_iter().next()
     }
 
     /// Get why the last run ended, or `None` while one is still going.
     ///
     /// Cleared by [`Self::start`], so a re-started queue does not report the
-    /// previous run. A [`Self::finish_results`] over a subset can return while the run
+    /// previous run. A [`Self::finish_tasks`] over a subset can return while the run
     /// carries on, and this reads `None` until it ends.
     pub fn get_finish_reason(&self) -> Option<FinishReason> {
         self.run.reason()
@@ -2076,7 +2076,7 @@ mod tests {
             attach_done_result(&writer, &claimed, "done");
         });
         let target = id.clone();
-        queue.finish_results(move |t: &Task| t.id == target).await;
+        queue.finish_tasks(move |t: &Task| t.id == target).await;
         assert!(queue.get_task(&id).unwrap().is_finished());
     }
 
@@ -2088,7 +2088,7 @@ mod tests {
         // Nothing emits from here on, so only the check before the wait can
         // resolve this.
         assert_eq!(
-            queue.finish_results(move |t: &Task| t.id == id).await,
+            queue.finish_tasks(move |t: &Task| t.id == id).await,
             vec![serde_json::json!("done")]
         );
     }
@@ -2782,7 +2782,7 @@ mod tests {
         attach_done_result(&queue, "t-2", "reported");
 
         assert_eq!(
-            queue.finish_results("label = scan").await,
+            queue.finish_tasks("label = scan").await,
             vec![serde_json::json!("scanned")]
         );
     }

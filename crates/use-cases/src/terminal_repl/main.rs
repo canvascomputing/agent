@@ -521,7 +521,7 @@ fn redact(messages: &mut [Reply], word: &str) {
 /// no tool. A mid-turn reply carrying a tool call doesn't count, so the
 /// prompt never races the user against the loop.
 async fn wait_for_assistant_pause(tasks: &Queue, id: &str) {
-    tasks.finish_results(id).await;
+    tasks.finish_tasks(id).await;
 }
 
 async fn read_line(prompt: &str) -> Option<String> {

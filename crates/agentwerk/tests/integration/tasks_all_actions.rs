@@ -98,7 +98,7 @@ async fn walks_every_task_action() -> std::result::Result<(), Box<dyn std::error
     // Not `finish_all_tasks`: the decoy and the record the agent files are labelled
     // for nobody, so they stay `Todo` and a wait on the whole queue only ever
     // ends at the time cap.
-    tasks.finish_results("label IN (archive, auditor)").await;
+    tasks.finish_tasks("label IN (archive, auditor)").await;
     common::print_result(&tasks);
 
     let used = seen.lock().unwrap().clone();
