@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use crate::agents::knowledge::{Knowledge, KnowledgeError};
-use crate::event::{Event, KnowledgeAction, KnowledgeFailureKind};
+use crate::event::Event;
 use crate::prompts::directives::{
     KNOWLEDGE_PAGE_NOT_FOUND, KNOWLEDGE_REMOVE_FAILED, KNOWLEDGE_WRITE_FAILED,
 };
@@ -39,10 +39,10 @@ impl KnowledgeTool {
 
 /// Which failure the statistics count this under. Everything but a missing
 /// page is the store refusing: rejected values or IO.
-fn failure_kind(error: &KnowledgeError) -> KnowledgeFailureKind {
+fn failure_reason(error: &KnowledgeError) -> &'static str {
     match error {
-        KnowledgeError::PageMissing { .. } => KnowledgeFailureKind::PageMissing,
-        _ => KnowledgeFailureKind::StoreRefused,
+        KnowledgeError::PageMissing { .. } => "page_missing",
+        _ => "store_refused",
     }
 }
 
@@ -120,8 +120,8 @@ fn run(store: &Knowledge, args: KnowledgeArgs, ctx: &ToolContext) -> ToolResult 
                 }
                 Err(why) => {
                     record(Event::new(Event::KNOWLEDGE_FAILED).data(serde_json::json!({
-                        "action": KnowledgeAction::Write,
-                        "reason": failure_kind(&why),
+                        "action": "write",
+                        "reason": failure_reason(&why),
                     })));
                     ToolResult::error(
                         ctx.directives
@@ -138,8 +138,8 @@ fn run(store: &Knowledge, args: KnowledgeArgs, ctx: &ToolContext) -> ToolResult 
             }
             Err(why) => {
                 record(Event::new(Event::KNOWLEDGE_FAILED).data(serde_json::json!({
-                    "action": KnowledgeAction::Read,
-                    "reason": failure_kind(&why),
+                    "action": "read",
+                    "reason": failure_reason(&why),
                 })));
                 ToolResult::success(
                     ctx.directives
@@ -157,8 +157,8 @@ fn run(store: &Knowledge, args: KnowledgeArgs, ctx: &ToolContext) -> ToolResult 
             }
             Err(why) => {
                 record(Event::new(Event::KNOWLEDGE_FAILED).data(serde_json::json!({
-                    "action": KnowledgeAction::Remove,
-                    "reason": failure_kind(&why),
+                    "action": "remove",
+                    "reason": failure_reason(&why),
                 })));
                 ToolResult::error(
                     ctx.directives

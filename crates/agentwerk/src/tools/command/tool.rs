@@ -432,7 +432,7 @@ impl From<CommandTool> for Tool {
 mod tests {
     use super::*;
 
-    use crate::event::ToolFailureKind;
+    use crate::tools::ToolFailureKind;
 
     #[test]
     fn every_example_the_schema_shows_deserializes_into_the_arguments() {

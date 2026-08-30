@@ -6,10 +6,10 @@ use std::sync::Arc;
 
 use crate::agents::compaction::{self as algo, Compaction};
 use crate::agents::tasks::Task;
-use crate::event::{CompactReason, Event};
+use crate::event::Event;
 
 use super::agent::TaskContext;
-use super::Step;
+use super::{CompactReason, Step};
 
 pub(super) async fn run(context: &mut TaskContext<'_>, reason: CompactReason) -> Option<Step> {
     let Some(mut task) = context.task() else {
@@ -114,28 +114,26 @@ mod tests {
     use crate::agents::r#loop::test_util::*;
     use crate::agents::tasks::Status;
 
-    fn compaction_starts(
-        events: &[crate::event::Event],
-        expected: crate::event::CompactReason,
-    ) -> usize {
+    use super::CompactReason;
+
+    fn compaction_starts(events: &[crate::event::Event], expected: CompactReason) -> usize {
+        let expected = serde_json::to_value(expected).unwrap();
         events
             .iter()
             .filter(|e| {
                 e.get_name() == crate::event::Event::COMPACTION_STARTED
-                    && e.get_data()["reason"] == expected.to_string()
+                    && e.get_data()["reason"] == expected
             })
             .count()
     }
 
-    fn compaction_finishes(
-        events: &[crate::event::Event],
-        expected: crate::event::CompactReason,
-    ) -> usize {
+    fn compaction_finishes(events: &[crate::event::Event], expected: CompactReason) -> usize {
+        let expected = serde_json::to_value(expected).unwrap();
         events
             .iter()
             .filter(|e| {
                 e.get_name() == crate::event::Event::COMPACTION_FINISHED
-                    && e.get_data()["reason"] == expected.to_string()
+                    && e.get_data()["reason"] == expected
             })
             .count()
     }
@@ -174,7 +172,6 @@ mod tests {
 
     #[tokio::test]
     async fn reactive_overflow_compacts_then_succeeds() {
-        use crate::event::CompactReason;
         let provider = MockProvider::with_results(vec![
             Ok(tool_call_response("primer")),
             Err(crate::providers::ProviderError::ContextWindowExceeded {
@@ -200,7 +197,6 @@ mod tests {
 
     #[tokio::test]
     async fn reactive_overflow_recovers_with_token_arithmetic_message() {
-        use crate::event::CompactReason;
         let provider = MockProvider::with_results(vec![
             Ok(tool_call_response("primer")),
             Err(crate::providers::ProviderError::ContextWindowExceeded {
@@ -224,7 +220,6 @@ mod tests {
 
     #[tokio::test]
     async fn reactive_overflow_recovers_with_context_capacity_message() {
-        use crate::event::CompactReason;
         let provider = MockProvider::with_results(vec![
             Ok(tool_call_response("primer")),
             Err(crate::providers::ProviderError::ContextWindowExceeded {
@@ -247,8 +242,6 @@ mod tests {
 
     #[tokio::test]
     async fn oversized_single_user_message_recovers_via_chunked_summarization() {
-        use crate::event::CompactReason;
-
         let provider = MockProvider::with_results(vec![
             Err(crate::providers::ProviderError::ContextWindowExceeded {
                 message: "prompt token count exceeds context window".into(),
@@ -332,10 +325,7 @@ mod tests {
         ]);
         let (events, _, task) = run_one(provider, 0, 10, Some(string_schema())).await;
 
-        assert_eq!(
-            compaction_finishes(&events, crate::event::CompactReason::Reactive),
-            1
-        );
+        assert_eq!(compaction_finishes(&events, CompactReason::Reactive), 1);
         let failures = failures_in(&events);
         assert!(!failures.is_empty());
         assert_eq!(task.status, Status::Failed);
@@ -343,7 +333,6 @@ mod tests {
 
     #[tokio::test]
     async fn proactive_threshold_triggers_compaction_before_next_request() {
-        use crate::event::CompactReason;
         let provider = MockProvider::with_results(vec![
             Ok(tool_call_response_with_usage(
                 "primer",
@@ -409,10 +398,7 @@ mod tests {
         ]);
         let (events, _, _) = run_compaction(provider, |_| {}).await;
 
-        assert_eq!(
-            compaction_starts(&events, crate::event::CompactReason::Proactive),
-            1
-        );
+        assert_eq!(compaction_starts(&events, CompactReason::Proactive), 1);
         assert!(events.iter().any(|e| {
             e.get_name() == crate::event::Event::COMPACTION_FAILED
                 && e.get_data()["reason"] == "proactive"
@@ -444,14 +430,8 @@ mod tests {
         ]);
         let (events, provider, task) = run_compaction(provider, |_| {}).await;
 
-        assert_eq!(
-            compaction_starts(&events, crate::event::CompactReason::Proactive),
-            1
-        );
-        assert_eq!(
-            compaction_finishes(&events, crate::event::CompactReason::Proactive),
-            1
-        );
+        assert_eq!(compaction_starts(&events, CompactReason::Proactive), 1);
+        assert_eq!(compaction_finishes(&events, CompactReason::Proactive), 1);
         assert_eq!(task.status, Status::Finished);
 
         let third = &provider.received()[2];
@@ -467,7 +447,6 @@ mod tests {
 
     #[tokio::test]
     async fn proactive_compact_does_not_consume_reactive_budget() {
-        use crate::event::CompactReason;
         let provider = MockProvider::with_results(vec![
             Ok(tool_call_response_with_usage(
                 "primer",
@@ -553,10 +532,7 @@ mod tests {
         ]);
         let (events, _, task) = run_compaction(provider, |_| {}).await;
 
-        assert_eq!(
-            compaction_finishes(&events, crate::event::CompactReason::Proactive),
-            1
-        );
+        assert_eq!(compaction_finishes(&events, CompactReason::Proactive), 1);
         assert_eq!(
             task.task,
             serde_json::Value::String("go".into()),

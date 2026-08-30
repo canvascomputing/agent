@@ -189,7 +189,7 @@ mod tests {
     use std::time::Instant;
 
     use crate::agents::tasks::Run;
-    use crate::event::FinishReason;
+    use crate::FinishReason;
 
     #[tokio::test]
     async fn cancel_interrupts_long_running_subprocess() {

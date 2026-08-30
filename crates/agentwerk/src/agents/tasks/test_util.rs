@@ -5,7 +5,9 @@ use std::sync::{Arc, Mutex};
 
 use super::queue::Queue;
 use crate::agents::agent::Agent;
-use crate::event::{Event, FinishReason};
+use crate::event::Event;
+
+use super::FinishReason;
 
 /// Collect the reason from every `RunFinished`, since the queue keeps none.
 pub(super) fn collect_finish_reasons(queue: &Queue) -> Arc<Mutex<Vec<FinishReason>>> {

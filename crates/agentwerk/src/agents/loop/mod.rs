@@ -4,7 +4,6 @@
 
 use std::time::Duration;
 
-use crate::event::CompactReason;
 use crate::tools::ToolCall;
 
 mod agent;
@@ -16,6 +15,17 @@ mod tool_call;
 pub(super) use self::main::run_main_loop;
 
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
+
+/// Why the older messages were summarized.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum CompactReason {
+    /// The next request was estimated to be too long for the model, ahead of
+    /// any failure.
+    Proactive,
+    /// The LLM provider reported the context window exceeded.
+    Reactive,
+}
 
 /// What the agent does next with its claimed task. A step gives back `None`
 /// when there is nothing more to do, whatever the task's status, and the

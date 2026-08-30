@@ -3,6 +3,38 @@
 
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
+
+/// Which limit a policy-violation event refers to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PolicyViolation {
+    /// `max_turns`: the turn limit across all agents.
+    Turns,
+    /// `max_input_tokens`: the total input-token limit.
+    InputTokens,
+    /// `max_output_tokens`: the total output-token limit.
+    OutputTokens,
+    /// `max_schema_retries`: consecutive failed tool calls or silent
+    /// no-tool replies on one task. Any successful call resets the count.
+    MaxSchemaRetries,
+    /// `max_time`: the elapsed-duration limit. The matching event reports its
+    /// `limit` in milliseconds.
+    Time,
+}
+
+impl std::fmt::Display for PolicyViolation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            PolicyViolation::Turns => "turns",
+            PolicyViolation::InputTokens => "input_tokens",
+            PolicyViolation::OutputTokens => "output_tokens",
+            PolicyViolation::MaxSchemaRetries => "max_schema_retries",
+            PolicyViolation::Time => "time",
+        })
+    }
+}
+
 /// A `Policy` limits the turns, tokens, and time a run may spend, and allows
 /// configuring retries and compaction. Set it with `Queue::set_policy`,
 /// building it from the fields you care about:
@@ -68,6 +100,21 @@ impl Default for Policy {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn violation_names_are_stable() {
+        let cases = [
+            (PolicyViolation::Turns, "turns"),
+            (PolicyViolation::InputTokens, "input_tokens"),
+            (PolicyViolation::OutputTokens, "output_tokens"),
+            (PolicyViolation::MaxSchemaRetries, "max_schema_retries"),
+            (PolicyViolation::Time, "time"),
+        ];
+        for (violation, expected) in cases {
+            assert_eq!(violation.to_string(), expected);
+            assert_eq!(serde_json::to_value(violation).unwrap(), expected);
+        }
+    }
 
     #[test]
     fn defaults_match_documented_values() {
