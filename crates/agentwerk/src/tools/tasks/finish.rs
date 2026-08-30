@@ -82,7 +82,7 @@ fn finish(input: &Value, ctx: &ToolContext, schema: Option<&Schema>) -> Result<E
         let (_, repaired) = attach_result(&queue, &parent_id, result, schema, &ctx.directives)?;
         mark_finished(&queue, &parent_id, &agent, &ctx.directives)?;
         let mut event = Event::success(format!("Task {parent_id} marked finished"));
-        event.repaired = repaired;
+        event.prepend_repairs(repaired);
         return Ok(event);
     };
     hand_over(
@@ -150,7 +150,7 @@ fn hand_over(
     let mut event = Event::success(format!(
         "Task {parent_id} marked finished; handed off to {child_id} (handover: {handover})"
     ));
-    event.repaired = repaired;
+    event.prepend_repairs(repaired);
     Ok(event)
 }
 
@@ -321,7 +321,7 @@ mod tests {
             .call(serde_json::json!({"result": {"line": "42"}}), &ctx)
             .await;
 
-        assert_eq!(outcome.repaired, vec!["/line retyped"]);
+        assert_eq!(outcome.repairs().collect::<Vec<_>>(), vec!["/line retyped"]);
     }
 
     #[tokio::test]

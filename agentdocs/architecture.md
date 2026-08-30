@@ -112,7 +112,7 @@ Schemas and results:
 **`Event` reports state. `ProviderError` reports a failed provider contract. The two channels carry independent information.**
 
 - Every state transition publishes an `Event`. A failed request fires both `ProviderError` and a matching `Event` (`RequestFailed`, `PolicyViolated`). `Event.name` is the sole semantic discriminator: caller-published built-in names receive the same hooks, statistics, and persistence behavior, but publication does not perform the associated transition.
-- A tool returns one terminal `Event`. `tool_call_finished` carries `output`; `tool_call_failed` carries the stable `reason`, model-visible `message`, and optional top-level `directive`.
+- A tool returns one terminal `Event`. `tool_call_finished` carries `output` plus optional `output_path` and `repairs` in its data; `tool_call_failed` carries the stable `reason`, model-visible `message`, and optional top-level `directive`.
 - A model-fixable failure (wrong arguments, schema mismatch, missing file) becomes a failed tool-result content block for the provider. It still fires `ToolCallFailed` but does not stop the run.
 - Handlers MUST be cheap and non-blocking; the loop does not await them. The four `_async` twins are the exception, and the loop still never awaits: registering one only queues the event, and whichever `finish` is waiting drains it and awaits each handler on its own task. A handler that never returns therefore stalls the caller rather than an agent, and a `start()`-only host uses the blocking form.
 

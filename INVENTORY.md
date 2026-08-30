@@ -1968,7 +1968,7 @@ Not bound: it is how `CommandTool` reads one command line.
 | Rust | `.get_dir(): string` | pub |
 | Rust | `.cancelled(): Promise<void>` | pub |
 | Rust | `impl Debug for ToolContext` | pub |
-| both | terminal `Event`: `tool_call_finished` carries `data.output`; `tool_call_failed` carries `data.message` and `data.reason` | pub |
+| both | terminal `Event`: `tool_call_finished` carries `data.output` plus optional `data.output_path` and `data.repairs`; `tool_call_failed` carries `data.message` and `data.reason` | pub |
 | Rust | `ToolBuilder<D, H> { name: string, description: D, schema: Schema, concurrent: boolean, paths: string[], handler: H }` | pub |
 | Python | folded into the `@tool` decorator: the type changes as the description and handler are attached, which Python cannot hold across calls | |
 | Rust | `Tool { name: string, description: string, schema: Schema, concurrent: boolean, paths: string[], handler: ToolHandler }` | pub with private fields |
