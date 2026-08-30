@@ -1,6 +1,5 @@
 //! Insights into the lifecycle and activities of an agent's work.
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde::de::Error as _;
@@ -41,10 +40,6 @@ pub struct Event {
     pub(crate) label: Option<String>,
     /// When this event happened, in milliseconds since the epoch.
     pub(crate) created_at: u64,
-    /// Tool-execution bookkeeping, never serialized as event data.
-    pub(crate) offloaded: Option<PathBuf>,
-    /// Accepted argument repairs waiting to be emitted by the agent loop.
-    pub(crate) repaired: Vec<String>,
 }
 
 impl Event {
@@ -122,8 +117,6 @@ impl Event {
             agent_id: String::new(),
             label: None,
             created_at: 0,
-            offloaded: None,
-            repaired: Vec::new(),
         }
     }
 
@@ -254,8 +247,6 @@ impl<'de> Deserialize<'de> for Event {
             agent_id,
             label,
             created_at,
-            offloaded: None,
-            repaired: Vec::new(),
         })
     }
 }
@@ -473,6 +464,20 @@ pub(crate) mod tests {
         assert_eq!(value["directive"], "command_timed_out");
         let restored: Event = serde_json::from_value(value).unwrap();
         assert_eq!(restored.get_directive(), Some("command_timed_out"));
+    }
+
+    #[test]
+    fn terminal_tool_details_round_trip_inside_data() {
+        let event = Event::new(Event::TOOL_CALL_FINISHED).data(serde_json::json!({
+            "output": "saved",
+            "output_path": "tasks/t-1/outputs/c-1.txt",
+            "repairs": ["/count retyped"],
+        }));
+
+        let value = serde_json::to_value(&event).unwrap();
+        let restored: Event = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(value["data"], event.get_data().clone());
+        assert_eq!(restored.get_data(), event.get_data());
     }
 
     #[test]

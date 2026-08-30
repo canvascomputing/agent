@@ -70,7 +70,7 @@ pub(super) async fn run(context: &mut TaskContext<'_>, mut calls: Vec<ToolCall>)
             let content = result.get_content().to_string();
             // Any successful tool call is progress: clear the counter.
             context.consecutive_schema_failures = 0;
-            for message in &result.repaired {
+            for message in result.repairs() {
                 events.push(
                     Event::new(Event::RESPONSE_REPAIRED).data(serde_json::json!({
                         "tool_name": call.name,
@@ -90,8 +90,8 @@ pub(super) async fn run(context: &mut TaskContext<'_>, mut calls: Vec<ToolCall>)
                 data.insert("call_id".into(), call.id.clone().into());
             }
             events.push(event);
-            if let Some(path) = &result.offloaded {
-                offloaded.insert(call.id.clone(), path.clone());
+            if let Some(path) = result.output_path() {
+                offloaded.insert(call.id.clone(), path.into());
             }
             content
         } else {
@@ -488,6 +488,10 @@ mod tests {
             repairs,
             vec![("finish", "value_mistyped", "/result/partial_sum retyped")]
         );
+        assert!(events.iter().any(|event| {
+            event.get_name() == Event::TOOL_CALL_FINISHED
+                && event.get_data()["repairs"] == serde_json::json!(["/result/partial_sum retyped"])
+        }));
     }
 
     #[tokio::test]
@@ -805,6 +809,11 @@ mod tests {
             })
         });
         assert_eq!(tool_result_path.as_deref(), Some(relative_path.as_path()));
+        assert!(events.iter().any(|event| {
+            event.get_name() == Event::TOOL_CALL_FINISHED
+                && event.get_data()["call_id"] == "call-1"
+                && event.get_data()["output_path"] == relative_path.to_string_lossy().as_ref()
+        }));
 
         let stub_visible = provider.received()[1].iter().any(|m| match m {
             crate::providers::Message::User { content } => content.iter().any(|b| match b {

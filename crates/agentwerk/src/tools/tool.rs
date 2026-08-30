@@ -202,6 +202,40 @@ impl Event {
             _ => None,
         }
     }
+
+    pub(crate) fn repairs(&self) -> impl Iterator<Item = &str> {
+        self.data
+            .get("repairs")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+    }
+
+    pub(crate) fn prepend_repairs(&mut self, repairs: impl IntoIterator<Item = String>) {
+        let mut combined: Vec<Value> = repairs.into_iter().map(Value::String).collect();
+        combined.extend(self.repairs().map(|repair| repair.to_string().into()));
+        if !combined.is_empty() {
+            self.data
+                .as_object_mut()
+                .expect("validated tool event data")
+                .insert("repairs".into(), combined.into());
+        }
+    }
+
+    pub(crate) fn output_path(&self) -> Option<&str> {
+        self.data.get("output_path").and_then(Value::as_str)
+    }
+
+    fn set_output_path(&mut self, path: &std::path::Path) {
+        self.data
+            .as_object_mut()
+            .expect("validated tool event data")
+            .insert(
+                "output_path".into(),
+                path.to_string_lossy().into_owned().into(),
+            );
+    }
 }
 
 /// The tools one agent may call.
@@ -697,16 +731,22 @@ async fn invoke(
     // Argument retypes go in front of notes the tool itself added, keeping
     // the notes in the order the repairs happened.
     if result.name == Event::TOOL_CALL_FINISHED {
-        result
-            .repaired
-            .splice(0..0, repairs.iter().map(|pointer| retype_message(pointer)));
+        result.prepend_repairs(repairs.iter().map(|pointer| retype_message(pointer)));
     }
     result
 }
 
 fn validate_tool_event(tool: &str, mut event: Event) -> Event {
     let valid = match event.name.as_str() {
-        Event::TOOL_CALL_FINISHED => event.data.get("output").is_some_and(Value::is_string),
+        Event::TOOL_CALL_FINISHED => {
+            event.data.get("output").is_some_and(Value::is_string)
+                && event.data.get("output_path").is_none_or(Value::is_string)
+                && event.data.get("repairs").is_none_or(|repairs| {
+                    repairs
+                        .as_array()
+                        .is_some_and(|repairs| repairs.iter().all(Value::is_string))
+                })
+        }
         Event::TOOL_CALL_FAILED => event.data.get("message").is_some_and(Value::is_string),
         _ => false,
     };
@@ -725,6 +765,26 @@ fn validate_tool_event(tool: &str, mut event: Event) -> Event {
             Some("not_found" | "execution_failed" | "schema_failed")
         ) {
             return Event::error(format!("tool `{tool}` returned an invalid failure reason"));
+        }
+    } else {
+        // Only successful persistence by the registry may name an offloaded
+        // output; a handler cannot claim it wrote a file the loop should keep.
+        event
+            .data
+            .as_object_mut()
+            .expect("validated object data")
+            .remove("output_path");
+        if event
+            .data
+            .get("repairs")
+            .and_then(Value::as_array)
+            .is_some_and(Vec::is_empty)
+        {
+            event
+                .data
+                .as_object_mut()
+                .expect("validated object data")
+                .remove("repairs");
         }
     }
     event
@@ -784,7 +844,7 @@ fn cap_oversized_result(result: &mut Event, ctx: &ToolContext, call_id: &str, pe
         return;
     }
     if let Some(path) = write_out(content, ctx, call_id) {
-        result.offloaded = Some(path);
+        result.set_output_path(&path);
     }
 }
 
@@ -815,7 +875,7 @@ fn cap_aggregate_outputs(
             // Persistence failed; nothing further this pass can do.
             return;
         };
-        result.offloaded = Some(path);
+        result.set_output_path(&path);
     }
 }
 
@@ -1330,11 +1390,11 @@ mod tests {
     #[tokio::test]
     async fn a_retyped_argument_is_noted_on_the_result() {
         let result = typed_result(serde_json::json!({"count": "3"})).await;
-        assert_eq!(result.repaired, vec!["/count retyped"]);
+        assert_eq!(result.repairs().collect::<Vec<_>>(), vec!["/count retyped"]);
 
         // No pointer names a whole payload the model wrote as text.
         let result = typed_result(Value::String(r#"{"count": 3}"#.into())).await;
-        assert_eq!(result.repaired, vec!["retyped"]);
+        assert_eq!(result.repairs().collect::<Vec<_>>(), vec!["retyped"]);
     }
 
     #[tokio::test]
@@ -1468,6 +1528,48 @@ mod tests {
         assert!(event.get_content().contains("returned an invalid event"));
     }
 
+    #[test]
+    fn malformed_terminal_metadata_becomes_a_recoverable_failure() {
+        for data in [
+            serde_json::json!({"output": "ok", "output_path": 42}),
+            serde_json::json!({"output": "ok", "repairs": ["valid", 42]}),
+        ] {
+            let event =
+                validate_tool_event("broken", Event::new(Event::TOOL_CALL_FINISHED).data(data));
+            assert_eq!(event.get_name(), Event::TOOL_CALL_FAILED);
+            assert!(event.get_content().contains("returned an invalid event"));
+        }
+    }
+
+    #[test]
+    fn valid_handler_repairs_survive_but_output_path_is_registry_owned() {
+        let event = validate_tool_event(
+            "custom",
+            Event::new(Event::TOOL_CALL_FINISHED).data(serde_json::json!({
+                "output": "ok",
+                "output_path": "claimed.txt",
+                "repairs": ["tool repaired its result"],
+            })),
+        );
+
+        assert_eq!(event.output_path(), None);
+        assert_eq!(
+            event.repairs().collect::<Vec<_>>(),
+            vec!["tool repaired its result"]
+        );
+    }
+
+    #[test]
+    fn empty_handler_repairs_are_omitted() {
+        let event = validate_tool_event(
+            "custom",
+            Event::new(Event::TOOL_CALL_FINISHED)
+                .data(serde_json::json!({"output": "ok", "repairs": []})),
+        );
+
+        assert!(event.get_data().get("repairs").is_none());
+    }
+
     #[tokio::test]
     async fn a_typed_handler_that_cannot_read_its_arguments_names_the_author() {
         // The default schema accepts `{}`, so the mismatch is between the
@@ -1540,8 +1642,8 @@ mod tests {
     }
 
     /// Where a capped result says its original went.
-    fn offloaded_path(result: &Event) -> Option<&PathBuf> {
-        result.offloaded.as_ref()
+    fn offloaded_path(result: &Event) -> Option<PathBuf> {
+        result.output_path().map(PathBuf::from)
     }
 
     /// The call an aggregate test answers with a synthetic result.
@@ -1570,7 +1672,7 @@ mod tests {
         let mut result = Event::success("z".repeat(500));
         cap_oversized_result(&mut result, &ctx, "call-rel", 100);
         let stored = offloaded_path(&result).expect("offload happened");
-        assert_eq!(stored, &relative_outputs_path(&id, "call-rel"));
+        assert_eq!(stored, relative_outputs_path(&id, "call-rel"));
         assert!(
             stored.is_relative(),
             "comment path must stay portable: {}",
@@ -1619,7 +1721,7 @@ mod tests {
         assert!(stub.contains("Preview (first"));
         assert!(stub.ends_with("</persisted-output>"));
         let path = offloaded_path(&result).expect("offload path");
-        assert_eq!(path, &relative_outputs_path(&id, "call-xyz"));
+        assert_eq!(path, relative_outputs_path(&id, "call-xyz"));
         let body = std::fs::read_to_string(&absolute).unwrap();
         assert_eq!(body, "a".repeat(500));
     }
@@ -1663,7 +1765,7 @@ mod tests {
         assert!(results[1].get_content().contains("Full output saved to:"));
         assert_eq!(
             offloaded_path(&results[1]),
-            Some(&relative_outputs_path(&id, "c2"))
+            Some(relative_outputs_path(&id, "c2"))
         );
         let body = std::fs::read_to_string(absolute_outputs_path(dir.path(), &id, "c2")).unwrap();
         assert_eq!(body, big);
