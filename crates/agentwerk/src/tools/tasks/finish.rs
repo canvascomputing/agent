@@ -479,6 +479,8 @@ mod tests {
             t.result.as_ref().and_then(|v| v.as_str()),
             Some("the answer")
         );
+        let event = queue.find_event(Event::TASK_FINISHED).unwrap();
+        assert_eq!(event.get_data()["result"], "the answer");
 
         assert_eq!(read_result(dir.path(), &id), Some("the answer".into()));
     }

@@ -140,7 +140,10 @@ impl Event {
         Self::new(Self::TASK_STARTED)
     }
 
-    /// Create a task-finished event.
+    /// Create a task-finished event with no result payload.
+    ///
+    /// Events emitted by a queue transition carry the stored result under
+    /// `data.result` when the task has one.
     pub fn task_finished() -> Self {
         Self::new(Self::TASK_FINISHED)
     }
