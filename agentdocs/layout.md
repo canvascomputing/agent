@@ -89,7 +89,6 @@ crates/
 - `prompts/directives.rs` holds `Directive`, the key namespace, the crate-private `DirectiveStore` carrying the function an agent decides its text with, and one `directives!` block declaring every key as a constant and an `ALL` entry. The text lives in `prompts/directives/*.md`, one file per area, each entry under a `## key` heading; a test pairs every key with its heading. It reaches the caller as the root re-export `agentwerk::Directive`.
 - `prompts/text.rs` holds `Text`, the text a role, a description, or a task is set from, reading a file where the caller names a path. It reaches the caller as the root re-export `agentwerk::Text`.
 - `schemas/mod.rs` holds `Schema`, `SchemaParseError`, and `SchemaViolation`.
-- `schemas/store.rs` holds `SchemaStore`, the label-keyed store a `Queue` reads on each claim. It sits beside the compiler rather than inside it: binding a contract to a label is a separate concern from validating one.
 
 ## Tests
 

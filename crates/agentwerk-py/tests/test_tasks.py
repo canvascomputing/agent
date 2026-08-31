@@ -898,25 +898,3 @@ def test_load_reopens_a_session_directory(queue, tmp_path):
     reopened = aw.Queue.load(str(tmp_path))
 
     assert reopened.get_task(id).get_task() == "scan the corpus"
-
-
-def test_a_schema_is_read_back_by_the_label_it_was_bound_to():
-    schemas = aw.SchemaStore()
-    schemas.label("analysis", {"type": "object", "required": ["verdict"]})
-
-    assert schemas.get("analysis").validate({"verdict": "clean"}) == ({"verdict": "clean"}, [])
-    assert schemas.get("discovery") is None
-
-
-def test_label_raises_on_a_document_that_is_not_a_schema():
-    schemas = aw.SchemaStore()
-    with pytest.raises(RuntimeError):
-        schemas.label("analysis", {"uniqueItems": True})
-    assert schemas.get("analysis") is None
-
-
-def test_a_queue_accepts_a_schema_store(queue):
-    schemas = aw.SchemaStore()
-    schemas.label("analysis", {"type": "string"})
-
-    assert queue.set_schemas(schemas) is queue

@@ -8,7 +8,7 @@ use std::sync::Arc;
 use serde_json::Value;
 
 use crate::agents::knowledge::Knowledge;
-use crate::agents::tasks::{Queue, Run};
+use crate::agents::tasks::{Queue, Run, Task};
 pub(crate) use crate::event::Event;
 use crate::prompts::directives::{
     DirectiveStore, ARGUMENTS_REJECTED, NO_TOOLS_REGISTERED, TOOL_NOT_FOUND, TOOL_OUTPUT_EMPTY,
@@ -16,6 +16,9 @@ use crate::prompts::directives::{
 };
 use crate::prompts::Text;
 use crate::schemas::Schema;
+
+use super::event::EventTool;
+use super::tasks::FinishTool;
 
 /// How many calls one turn runs at the same time. The rest wait their turn.
 const MAX_CONCURRENT_CALLS: usize = 10;
@@ -261,6 +264,18 @@ impl ToolRegistry {
         let tool = Arc::new(tool);
         self.tools.retain(|t| t.get_name() != tool.get_name());
         self.tools.push(tool);
+    }
+
+    /// Bind terminal tools to the task an agent is about to work on. Tools the
+    /// agent did not register stay absent.
+    pub(crate) fn completion(mut self, schema: Option<Schema>, handover: Option<Task>) -> Self {
+        if self.contains(FinishTool::NAME) {
+            self.register(FinishTool::from_schema(schema.clone(), handover.clone()));
+        }
+        if self.contains(EventTool::NAME) {
+            self.register(EventTool::from_schema(schema, handover));
+        }
+        self
     }
 
     /// Get the tool a call reaches, owned, so a concurrent batch can move it
@@ -1238,7 +1253,7 @@ mod tests {
         }))
         .unwrap();
         let mut registry = ToolRegistry::default();
-        registry.register(crate::tools::FinishTool::from_schema(Some(task)));
+        registry.register(crate::tools::FinishTool::from_schema(Some(task), None));
 
         let shown = registry
             .get("finish")
@@ -1255,14 +1270,8 @@ mod tests {
             .get_content()
             .to_string();
 
-        assert!(
-            shown["then"]["properties"]["result"]["properties"]["partial_sum"].is_object(),
-            "{shown}"
-        );
-        assert!(
-            shown["else"]["allOf"][1]["properties"]["partial_sum"].is_object(),
-            "{shown}"
-        );
+        assert!(shown["properties"]["partial_sum"].is_object(), "{shown}");
+        assert_eq!(shown["required"], serde_json::json!(["partial_sum"]));
         assert!(
             content.contains(&serde_json::to_string_pretty(&shown).unwrap()),
             "{content}"

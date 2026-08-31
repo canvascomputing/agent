@@ -98,7 +98,6 @@ pub use agents::Trajectory;
 
 // Validation
 pub use schemas::Schema;
-pub use schemas::SchemaStore;
 
 // Observation
 pub use agents::tasks::FinishReason;

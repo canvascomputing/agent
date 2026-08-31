@@ -100,7 +100,6 @@ impl Queue {
     /// status never reaches past a task already claimed.
     pub(crate) fn claim(&self, query: &Query, agent_id: &str) -> Option<String> {
         let now = now_millis();
-        let schemas = self.schemas.lock().unwrap().clone();
         let id = {
             let mut store = self.tasks.lock().unwrap();
             let mut candidates: Vec<&Task> = store.values().filter(|t| query.matches(t)).collect();
@@ -111,13 +110,6 @@ impl Queue {
                 return None;
             }
             task.assignee = Some(agent_id.to_string());
-            if task.schema.is_none() {
-                let bound = schemas
-                    .as_ref()
-                    .zip(task.label.as_deref())
-                    .and_then(|(s, label)| s.get(label));
-                task.schema = bound;
-            }
             task.stamp_transition(Status::InProgress, now);
             task.status = Status::InProgress;
             id
@@ -612,105 +604,6 @@ mod tests {
         queue.add_task("c");
         let id = queue.claim(&Query::from("status = Todo"), "alice").unwrap();
         assert_eq!(id, "t-1");
-    }
-
-    fn queue_with_analysis_schema() -> (std::sync::Arc<Queue>, crate::test_util::TempDir) {
-        let (queue, dir) = test_queue();
-        let schemas = crate::schemas::SchemaStore::new();
-        schemas.label("analysis", document("verdict")).unwrap();
-        queue.set_schemas(&schemas);
-        (queue, dir)
-    }
-
-    /// A schema document the assertions can tell apart by its `title`.
-    fn document(title: &str) -> serde_json::Value {
-        serde_json::json!({ "type": "object", "title": title })
-    }
-
-    /// The `title` of the schema bound to a task, naming which one it took.
-    fn bound_title(queue: &Queue, id: &str) -> Option<String> {
-        let schema = queue.get_task(id)?.schema?;
-        let document = serde_json::to_value(schema).ok()?;
-        Some(document["title"].as_str().unwrap_or_default().to_string())
-    }
-
-    #[test]
-    fn claim_takes_the_schema_bound_to_the_tasks_label() {
-        let (queue, _tmp) = queue_with_analysis_schema();
-        queue.add_task(Task::new("audit").label("analysis"));
-        assert_eq!(bound_title(&queue, "t-1"), None);
-
-        queue.claim(&Query::from("analysis"), "alice");
-        assert_eq!(bound_title(&queue, "t-1").as_deref(), Some("verdict"));
-    }
-
-    #[test]
-    fn claim_leaves_a_schema_the_task_already_carries() {
-        let (queue, _tmp) = queue_with_analysis_schema();
-        let own = crate::schemas::Schema::new(document("its own")).unwrap();
-        queue.add_task(Task::new("audit").label("analysis").schema(own));
-        assert_eq!(bound_title(&queue, "t-1").as_deref(), Some("its own"));
-
-        queue.claim(&Query::from("analysis"), "alice");
-        assert_eq!(bound_title(&queue, "t-1").as_deref(), Some("its own"));
-    }
-
-    #[test]
-    fn claim_prefers_the_label_the_task_was_filed_under_to_the_agent_id() {
-        let (queue, _tmp) = test_queue();
-        let schemas = crate::schemas::SchemaStore::new();
-        schemas.label("analysis", document("by scope")).unwrap();
-        schemas.label("alice", document("by agent")).unwrap();
-        queue.set_schemas(&schemas);
-        queue.add_task(Task::new("audit").label("analysis"));
-        assert_eq!(bound_title(&queue, "t-1"), None);
-
-        queue.claim(&Query::from("analysis"), "alice");
-        assert_eq!(bound_title(&queue, "t-1").as_deref(), Some("by scope"));
-    }
-
-    #[test]
-    fn claim_binds_no_schema_when_the_tasks_label_has_none() {
-        let (queue, _tmp) = queue_with_analysis_schema();
-        queue.add_task(Task::new("search").label("discovery"));
-        assert_eq!(bound_title(&queue, "t-1"), None);
-
-        queue.claim(&Query::from("discovery"), "alice");
-        assert_eq!(bound_title(&queue, "t-1"), None);
-    }
-
-    #[test]
-    fn a_task_already_in_progress_keeps_the_schema_its_claim_bound() {
-        let (queue, _tmp) = test_queue();
-        let schemas = crate::schemas::SchemaStore::new();
-        schemas.label("analysis", document("first")).unwrap();
-        queue.set_schemas(&schemas);
-        queue.add_task(Task::new("audit").label("analysis"));
-        queue.claim(&Query::from("analysis"), "alice");
-        assert_eq!(bound_title(&queue, "t-1").as_deref(), Some("first"));
-
-        schemas.label("analysis", document("second")).unwrap();
-
-        // The loop resumes an `InProgress` task through `find_task`, never
-        // through a second `claim`, so a later binding cannot reach it.
-        assert!(queue.claim(&Query::from("analysis"), "alice").is_none());
-        assert_eq!(bound_title(&queue, "t-1").as_deref(), Some("first"));
-    }
-
-    #[test]
-    fn a_schema_bound_at_claim_survives_load() {
-        let dir = crate::test_util::TempDir::new().unwrap();
-        let original = Queue::new();
-        original.set_dir(dir.path().to_path_buf());
-        let schemas = crate::schemas::SchemaStore::new();
-        schemas.label("analysis", document("verdict")).unwrap();
-        original.set_schemas(&schemas);
-        original.add_task(Task::new("audit").label("analysis"));
-        original.claim(&Query::from("analysis"), "alice");
-        drop(original);
-
-        let resumed = Queue::load(dir.path()).unwrap();
-        assert_eq!(bound_title(&resumed, "t-1").as_deref(), Some("verdict"));
     }
 
     #[test]

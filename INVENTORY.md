@@ -59,7 +59,7 @@ The rules the tables never repeat.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `Agent { label: string?, interactive: boolean, queue: QueueRef, id: OnceLock<string>, provider: Provider?, model: Model?, role: string, templates: [string, string][], tools: ToolRegistry, dir: string, knowledge: Knowledge, directives: DirectiveStore }` | pub with private fields |
+| Rust | `Agent { label: string?, interactive: boolean, queue: QueueRef, id: OnceLock<string>, provider: Provider?, model: Model?, role: string, templates: [string, string][], handover: Task?, tools: ToolRegistry, dir: string, knowledge: Knowledge, directives: DirectiveStore }` | pub with private fields |
 | Rust | `impl Clone for Agent` | pub |
 | Rust | `.new(): this` | pub |
 | Python | `Agent()` | |
@@ -74,6 +74,7 @@ The rules the tables never repeat.
 | both | `.template(key: string, value: string): this` | pub |
 | Rust | `.templates(variables: [string, string][]): this` | pub |
 | Python | `.templates(variables)`: a mapping, so the bulk bind applies in key order where Rust preserves insertion order | |
+| both | `.handover(task: Task): this` | pub |
 | both | `.tool(tool: Tool): this` | pub |
 | both | `.tools(tools: Tool[]): this` | pub |
 | both | `.dir(dir: string): this` | pub |
@@ -97,7 +98,7 @@ The rules the tables never repeat.
 | Rust | `.upgrade(): Queue?` | crate |
 | Rust | `Agent.is_interactive(): boolean` | super |
 | Rust | `.handles(agent_label: string?, task_label: string?): boolean` | super |
-| Rust | `.tool_registry(): ToolRegistry` | super |
+| Rust | `.get_tools(task: Task): ToolRegistry` | super |
 | Rust | `.get_provider(): Provider` | super |
 | Rust | `.get_model(): Model` | super |
 | Rust | `.get_knowledge(): Knowledge` | super |
@@ -610,7 +611,7 @@ The rules the tables never repeat.
 | Python | a string, such as `policy_violated(turns)` | |
 | Rust | `.Drained`, `.PolicyViolated(PolicyViolation)`, `.Cancelled` | pub |
 | Rust | `impl Display for FinishReason` | pub |
-| both | `Queue { weak_self: Weak<Queue>, tasks: Record<string, Task>, agents: Agent[], policy: Policy, run: Run, cancel_filters: Query[], terminal_transitions_in_flight: number, stats: Stats, event_handlers: EventHandler[], awaited_events: AwaitedEvents, event_stream: Sender<Event>, schemas: SchemaStore?, dir: string, events_lock: void, join_handle: JoinHandle<void>?, next_task_id: number? }` | pub |
+| both | `Queue { weak_self: Weak<Queue>, tasks: Record<string, Task>, agents: Agent[], policy: Policy, run: Run, cancel_filters: Query[], terminal_transitions_in_flight: number, stats: Stats, event_handlers: EventHandler[], awaited_events: AwaitedEvents, event_stream: Sender<Event>, dir: string, events_lock: void, join_handle: JoinHandle<void>?, next_task_id: number? }` | pub |
 | Rust | `.new(): this` | pub |
 | Python | `Queue()` | |
 | both | `.load(tasks_dir: string): this throws io::Error` | pub |
@@ -634,7 +635,6 @@ The rules the tables never repeat.
 | both | `.get_policy(): Policy` | pub |
 | both | `.set_dir(dir: string): this` | pub |
 | both | `.get_dir(): string` | pub |
-| both | `.set_schemas(store: SchemaStore): this` | pub |
 | both | `.add_task(task: Task): string` | pub |
 | both | `.add_task(task)`: a string or json value stands in for the `Task` | |
 | both | `.add_reply(id: string, content: string): this` | pub |
@@ -925,7 +925,7 @@ Not bound, like the rest of `codegrep`.
 | Language | Item | Visibility |
 |----------|------|------------|
 | Rust | `mod agents`, `mod codegrep`, `mod event`, `mod providers`, `mod schemas`, `mod tools` | pub |
-| Rust | re-exports `Agent`, `Query`, `Reply`, `Status`, `Task`, `Queue`, `Policy`, `PolicyViolation`, `Knowledge`, `Trajectory`, `Schema`, `SchemaStore`, `Event`, `FinishReason`, `Directive`, `Text` | pub |
+| Rust | re-exports `Agent`, `Query`, `Reply`, `Status`, `Task`, `Queue`, `Policy`, `PolicyViolation`, `Knowledge`, `Trajectory`, `Schema`, `Event`, `FinishReason`, `Directive`, `Text` | pub |
 | Python | `agentwerk` exports every bound class from one flat module | |
 
 ### Internal
@@ -972,7 +972,7 @@ One of the two public parts of `prompts`, beside `Text`: `Directive` reaches the
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `Directive.REPLY_REJECTED: string = "reply_rejected"`, and one constant per catalogue heading, each also a crate-private `const` under the same name that the render sites write: `NO_TOOL_CALLED`, `ARGUMENTS_REJECTED`, `ARGUMENTS_EXPECTED`, `RESULT_SCHEMA_REQUIRED`, `SUMMARY_REQUESTED`, `KNOWLEDGE_INDEX_TRUNCATED`, `TOOL_NOT_FOUND`, `NO_TOOLS_REGISTERED`, `TOOL_PANICKED`, `TOOL_OUTPUT_EMPTY`, `TOOL_OUTPUT_OFFLOADED`, `EDIT_FILE_READ_FAILED`, `EDIT_FILE_OLD_STRING_NOT_FOUND`, `EDIT_FILE_OLD_STRING_NOT_UNIQUE`, `EDIT_FILE_WRITE_FAILED`, `WRITE_FILE_PARENT_NOT_CREATED`, `WRITE_FILE_FAILED`, `READ_FILE_PATH_IS_DIRECTORY`, `READ_FILE_PATH_IS_DIRECTORY_WITH_ENTRIES`, `READ_FILE_IS_BINARY`, `READ_FILE_NOT_FOUND`, `READ_FILE_FAILED`, `LIST_DIRECTORY_PATH_IS_FILE`, `LIST_DIRECTORY_NOT_FOUND`, `LIST_DIRECTORY_FAILED`, `PATH_HINT_DIRECTORY_LISTED`, `PATH_HINT_SUGGESTION`, `PATH_HINT_WORKING_DIRECTORY`, `COMMAND_CANCELLED`, `COMMAND_TIMED_OUT`, `COMMAND_NOT_STARTED`, `COMMAND_MISSING`, `COMMAND_SHELL_OPERATOR_FOUND`, `COMMAND_QUOTE_UNTERMINATED`, `COMMAND_CONTROL_CHARACTER_FOUND`, `COMMAND_ASSIGNMENT_FOUND`, `COMMAND_FLAG_DENIED`, `COMMAND_PATTERN_DENIED`, `COMMAND_NOT_ALLOWED`, `COMMAND_FLAG_NOT_ALLOWED`, `GREP_CANCELLED`, `GREP_TIMED_OUT`, `GREP_FAILED`, `GREP_GLOB_REJECTED`, `GREP_FILE_TYPE_UNKNOWN`, `GREP_PATTERN_REJECTED`, `CODE_PATTERN_REJECTED`, `CODE_CONSTRAINT_INCOMPLETE`, `CODE_CONSTRAINT_METAVARIABLE_UNKNOWN`, `CODE_CONSTRAINT_REGEX_REJECTED`, `FETCH_URL_TOO_LONG`, `FETCH_URL_SCHEME_MISSING`, `FETCH_URL_SCHEME_UNSUPPORTED`, `FETCH_URL_CREDENTIALS_PRESENT`, `FETCH_URL_HOST_MISSING`, `FETCH_URL_HOST_NOT_RESOLVABLE`, `FETCH_URL_TOO_MANY_REDIRECTS`, `FETCH_URL_REQUEST_FAILED`, `FETCH_URL_BODY_NOT_READ`, `FETCH_URL_RESPONSE_TOO_LARGE`, `FETCH_URL_REDIRECT_LOCATION_MISSING`, `KNOWLEDGE_PAGE_NOT_FOUND`, `KNOWLEDGE_WRITE_FAILED`, `KNOWLEDGE_REMOVE_FAILED`, `QUEUE_UNAVAILABLE`, `TASK_ID_MISSING`, `TASK_NOT_ASSIGNED`, `TASK_NOT_FOUND`, `TASK_RESULT_MISSING`, `TASK_QUERY_INVALID`, `TASK_EDIT_INCOMPLETE`, `TASK_TRANSITION_REJECTED`, `HANDOVER_RESULT_MISSING`, `FINISH_ARGUMENT_BLANK`, `SCHEMA_FALSE_REJECTED`, `SCHEMA_TYPE_MISMATCHED`, `SCHEMA_CONST_MISMATCHED`, `SCHEMA_ENUM_MISMATCHED`, `SCHEMA_ANY_OF_UNMATCHED`, `SCHEMA_ONE_OF_AMBIGUOUS`, `SCHEMA_NOT_MATCHED`, `SCHEMA_PROPERTY_MISSING`, `SCHEMA_PROPERTY_UNEXPECTED`, `SCHEMA_ARRAY_TOO_SHORT`, `SCHEMA_ARRAY_TOO_LONG`, `SCHEMA_STRING_TOO_SHORT`, `SCHEMA_STRING_TOO_LONG`, `SCHEMA_PATTERN_UNMATCHED`, `SCHEMA_NUMBER_TOO_SMALL`, `SCHEMA_NUMBER_TOO_LARGE`, `SCHEMA_HINT_UNQUOTE`, `SCHEMA_HINT_JSON`, `SCHEMA_HINT_QUOTE` | pub |
+| Rust | `Directive.REPLY_REJECTED: string = "reply_rejected"`, and one constant per catalogue heading, each also a crate-private `const` under the same name that the render sites write: `NO_TOOL_CALLED`, `ARGUMENTS_REJECTED`, `ARGUMENTS_EXPECTED`, `RESULT_SCHEMA_REQUIRED`, `SUMMARY_REQUESTED`, `KNOWLEDGE_INDEX_TRUNCATED`, `TOOL_NOT_FOUND`, `NO_TOOLS_REGISTERED`, `TOOL_PANICKED`, `TOOL_OUTPUT_EMPTY`, `TOOL_OUTPUT_OFFLOADED`, `EDIT_FILE_READ_FAILED`, `EDIT_FILE_OLD_STRING_NOT_FOUND`, `EDIT_FILE_OLD_STRING_NOT_UNIQUE`, `EDIT_FILE_WRITE_FAILED`, `WRITE_FILE_PARENT_NOT_CREATED`, `WRITE_FILE_FAILED`, `READ_FILE_PATH_IS_DIRECTORY`, `READ_FILE_PATH_IS_DIRECTORY_WITH_ENTRIES`, `READ_FILE_IS_BINARY`, `READ_FILE_NOT_FOUND`, `READ_FILE_FAILED`, `LIST_DIRECTORY_PATH_IS_FILE`, `LIST_DIRECTORY_NOT_FOUND`, `LIST_DIRECTORY_FAILED`, `PATH_HINT_DIRECTORY_LISTED`, `PATH_HINT_SUGGESTION`, `PATH_HINT_WORKING_DIRECTORY`, `COMMAND_CANCELLED`, `COMMAND_TIMED_OUT`, `COMMAND_NOT_STARTED`, `COMMAND_MISSING`, `COMMAND_SHELL_OPERATOR_FOUND`, `COMMAND_QUOTE_UNTERMINATED`, `COMMAND_CONTROL_CHARACTER_FOUND`, `COMMAND_ASSIGNMENT_FOUND`, `COMMAND_FLAG_DENIED`, `COMMAND_PATTERN_DENIED`, `COMMAND_NOT_ALLOWED`, `COMMAND_FLAG_NOT_ALLOWED`, `GREP_CANCELLED`, `GREP_TIMED_OUT`, `GREP_FAILED`, `GREP_GLOB_REJECTED`, `GREP_FILE_TYPE_UNKNOWN`, `GREP_PATTERN_REJECTED`, `CODE_PATTERN_REJECTED`, `CODE_CONSTRAINT_INCOMPLETE`, `CODE_CONSTRAINT_METAVARIABLE_UNKNOWN`, `CODE_CONSTRAINT_REGEX_REJECTED`, `FETCH_URL_TOO_LONG`, `FETCH_URL_SCHEME_MISSING`, `FETCH_URL_SCHEME_UNSUPPORTED`, `FETCH_URL_CREDENTIALS_PRESENT`, `FETCH_URL_HOST_MISSING`, `FETCH_URL_HOST_NOT_RESOLVABLE`, `FETCH_URL_TOO_MANY_REDIRECTS`, `FETCH_URL_REQUEST_FAILED`, `FETCH_URL_BODY_NOT_READ`, `FETCH_URL_RESPONSE_TOO_LARGE`, `FETCH_URL_REDIRECT_LOCATION_MISSING`, `KNOWLEDGE_PAGE_NOT_FOUND`, `KNOWLEDGE_WRITE_FAILED`, `KNOWLEDGE_REMOVE_FAILED`, `QUEUE_UNAVAILABLE`, `TASK_ID_MISSING`, `TASK_NOT_ASSIGNED`, `TASK_NOT_FOUND`, `TASK_RESULT_MISSING`, `TASK_QUERY_INVALID`, `TASK_EDIT_INCOMPLETE`, `TASK_TRANSITION_REJECTED`, `HANDOVER_RESULT_MISSING`, `HANDOVER_SCHEMA_INVALID`, `SCHEMA_FALSE_REJECTED`, `SCHEMA_TYPE_MISMATCHED`, `SCHEMA_CONST_MISMATCHED`, `SCHEMA_ENUM_MISMATCHED`, `SCHEMA_ANY_OF_UNMATCHED`, `SCHEMA_ONE_OF_AMBIGUOUS`, `SCHEMA_NOT_MATCHED`, `SCHEMA_PROPERTY_MISSING`, `SCHEMA_PROPERTY_UNEXPECTED`, `SCHEMA_ARRAY_TOO_SHORT`, `SCHEMA_ARRAY_TOO_LONG`, `SCHEMA_STRING_TOO_SHORT`, `SCHEMA_STRING_TOO_LONG`, `SCHEMA_PATTERN_UNMATCHED`, `SCHEMA_NUMBER_TOO_SMALL`, `SCHEMA_NUMBER_TOO_LARGE`, `SCHEMA_HINT_UNQUOTE`, `SCHEMA_HINT_JSON`, `SCHEMA_HINT_QUOTE` | pub |
 | Rust | `.ALL: string[]` | pub |
 | Python | `Directive.ALL` is not published; `register` walks it to set the key constants | |
 | Rust | `Directive { }`, the key namespace | pub |
@@ -1538,20 +1538,6 @@ Not bound, apart from `ReasoningEffort` and `ToolDeclineKind`: Python binds the 
 | Rust | `retype_boolean(text: string): json?` | private |
 | Rust | `decode_json(text: string, fits: (value: json) => boolean): json?` | private |
 
-## `crates/agentwerk/src/schemas/store.rs`
-
-### Public
-
-| Language | Item | Visibility |
-|----------|------|------------|
-| both | `SchemaStore { entries: Record<string, Schema> }` | pub |
-| Rust | `.new(): this` | pub |
-| Python | `SchemaStore()` | |
-| Rust | `.label(label: string, document: json): this throws SchemaParseError` | pub |
-| Python | `.label(label, document)`: raises on a document that is not a schema | |
-| both | `.get(label: string): Schema?` | pub |
-| Rust | `impl Debug for SchemaStore` | pub |
-
 ## `crates/agentwerk/src/tools/code.rs`
 
 Not bound: it backs `grep`'s `syntax: "code"` shape matching.
@@ -1699,15 +1685,17 @@ Not bound: it is how `CommandTool` reads one command line.
 | Rust | `SCHEMA: string` | private |
 | Rust | `FINISH_SCHEMA: string` | private |
 | Rust | `EventTool.NAME: string = "event"` | crate |
-| Rust | `.from_schema(schema: Schema?): Tool` | crate |
-| Rust | `task_finished_schema(schema: Schema?): json` | super |
-| Rust | `dispatch(input: json, ctx: ToolContext, schema: Schema?, tool_name: string): Event throws Event` | super |
-| Rust | `finish(queue: Queue, input: json, ctx: ToolContext, schema: Schema?, tool_name: string): Event throws Event` | private |
-| Rust | `hand_over(queue: Queue, input: json, parent_id: string, agent: string, result: json, schema: Schema?, tool_name: string, handover: string, directives: DirectiveStore): Event throws Event` | private |
-| Rust | `control_string(input: json, key: string, directives: DirectiveStore): string? throws Event` | private |
+| Rust | `.from_schema(schema: Schema?, handover: Task?): Tool` | crate |
+| Rust | `task_finished_schema(schema: Schema?, handover: Task?): json` | super |
+| Rust | `dispatch(input: json, ctx: ToolContext, schema: Schema?, handover: Task?, tool_name: string): Event throws Event` | super |
+| Rust | `finish(queue: Queue, input: json, ctx: ToolContext, schema: Schema?, handover: Task?, tool_name: string): Event throws Event` | private |
+| Rust | `hand_over(queue: Queue, parent_id: string, agent: string, result: json, schema: Schema?, tool_name: string, child: Task, directives: DirectiveStore): Event throws Event` | private |
+| Rust | `resolve_handover(input: json, configured: Task?, directives: DirectiveStore): Task? throws Event` | private |
+| Rust | `required_label(fields: Record<string, json>): string throws Event` | private |
+| Rust | `invalid_handover_schema(error: string, directives: DirectiveStore): Event` | private |
 | Rust | `mark_finished(queue: Queue, id: string, agent: string, directives: DirectiveStore): void throws Event` | private |
-| Rust | `apply_handover_templates(task: string, parent_id: string, result_path: string, result: string): string` | private |
-| Rust | `append_parent_reference(body: string, parent_id: string, result_path: string): string` | private |
+| Rust | `apply_handover_templates(task: json, parent_id: string, result_path: string, result: string): void` | private |
+| Rust | `substitute_handover_text(text: string, parent_id: string, result_path: string, result: string): string` | private |
 | Rust | `attach_result(queue: Queue, id: string, result: json, schema: Schema?, tool_name: string, directives: DirectiveStore): [json, string[]] throws Event` | private |
 
 ## `crates/agentwerk/src/tools/fetch_url.rs`
@@ -1927,7 +1915,7 @@ Not bound: it is how `CommandTool` reads one command line.
 |----------|------|------------|
 | Rust | `DEFINITION: string` | private |
 | Rust | `FinishTool.NAME: string = "finish"` | crate |
-| Rust | `.from_schema(schema: Schema?): Tool` | crate |
+| Rust | `.from_schema(schema: Schema?, handover: Task?): Tool` | crate |
 | Rust | `arguments_schema(schema: Schema?, envelope: json): json` | private |
 | Rust | `normalize_input(input: json, envelope: json): json` | private |
 
@@ -2035,6 +2023,7 @@ Not bound: it is how `CommandTool` reads one command line.
 | Rust | `ToolRegistry { tools: Tool[] }` | crate |
 | Rust | `impl Debug for ToolRegistry` | crate |
 | Rust | `.register(tool: Tool): void` | crate |
+| Rust | `.completion(schema: Schema?, handover: Task?): this` | crate |
 | Rust | `.resolve(name: string): Tool throws string` | private |
 | Rust | `.get(name: string): Tool?` | crate |
 | Rust | `.contains(name: string): boolean` | crate |
@@ -2120,6 +2109,7 @@ Binds `agents/agent.rs`, whose section holds the Python spelling of each method.
 | Rust | `.interactive(): this` | python |
 | Rust | `.template(key: string, value: string): this` | python |
 | Rust | `.templates(variables: Record<string, string>): this` | python |
+| Rust | `.handover(task: PyTask): this throws PyErr` | python |
 | Rust | `.dir(dir: string): this` | python |
 | Rust | `.knowledge(store: PyKnowledge): this` | python |
 | Rust | `.directives(compute: any): this` | python |
@@ -2361,10 +2351,6 @@ Binds `schemas/`.
 | Rust | `PySchema { inner: Schema }` | python |
 | Rust | `.new(document: any): this throws PyErr` | python |
 | Rust | `.validate(value: any): [any, string[]] throws PyErr` | python |
-| Rust | `PySchemaStore { inner: SchemaStore }` | python |
-| Rust | `.new(): this` | python |
-| Rust | `.label(label: string, document: any): this throws PyErr` | python |
-| Rust | `.get(label: string): PySchema?` | python |
 
 ## `crates/agentwerk-py/src/task.rs`
 
@@ -2428,7 +2414,6 @@ Binds `agents/tasks/queue.rs` and `store.rs`.
 | Rust | `.get_policy(): PyPolicy` | python |
 | Rust | `.set_dir(dir: string): this` | python |
 | Rust | `.get_dir(): string` | python |
-| Rust | `.set_schemas(store: PySchemaStore): this` | python |
 | Rust | `.on_event(handler: any): this` | python |
 | Rust | `.on_event_async(handler: any): this` | python |
 | Rust | `.on_result(handler: any): this` | python |

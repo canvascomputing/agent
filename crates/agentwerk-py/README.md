@@ -122,6 +122,7 @@ agent.start()
 | **Configure** | `role(role)` | Define who the agent is and how it should work. |
 | | `tool(tool)` / `tools(tools)` | Register a tool the agent may call. |
 | | `label(label)` | Restrict the agent to tasks carrying this label. |
+| | `handover(task)` | Set the task this agent creates when it finishes. |
 | | `dir(dir)` | Set the directory the agent has access to. |
 | | `template(key, value)` | Inject data into prompts with template strings. |
 | | `templates(variables)` | Inject more than one entry into prompts. |
@@ -272,7 +273,6 @@ tasks.add_task(Task("Write up the ranking.", label="report"))
 | | `get_policy()` | Get the policy in force. |
 | | `set_dir(dir)` | Define where a session is stored. |
 | | `get_dir()` | Get the session directory. |
-| | `set_schemas(store)` | Enforce schemas for task results. |
 | | `add_agent(agent)` | Add an agent to this task queue. |
 | **Submit and interact** | `add_task(task)` | Submit a task and return its task ID. |
 | | `add_reply(id, content)` | Add a reply to a task. |
@@ -450,58 +450,54 @@ See [`Task`](https://docs.rs/agentwerk/latest/agentwerk/agents/tasks/struct.Task
 
 Agents can pass work and results in five ways:
 
-1. **Create tasks**: the `finish` tool's `handover` option opens a child task carrying the result.
-2. **Read tasks**: the `tasks` tool allows reading any finished task's result, by ID.
-3. **Read result file**: the `read_file` tool allows reading a task's `result.json` in the session directory.
-4. **Share knowledge**: the `knowledge` tool allows sharing knowledge with other agents.
-5. **Register hooks**: the `on_result` hook allows creating follow-up tasks.
+1. **Agent handover API**: `Agent.handover` creates a configured child task when the agent finishes.
+2. **Result hook**: `on_result` creates follow-up tasks from completed work.
+3. **Knowledge**: the `knowledge` tool shares durable pages between agents.
+4. **Tasks tool**: the `tasks` tool reads any finished task's result by ID.
+5. **Read result file**: the `read_file` tool opens a task's `result.json` in the session directory.
 
 <details>
 <summary>All ways agents pass data</summary>
 
-#### 1. Create tasks
+#### 1. Agent handover API
 
-Name the receiving label in the role or in the task, and the agent hands over as it finishes:
+Set the follow-up task on the first agent. The model can then finish with only its result:
 
 ```python
 analyst = (
     Agent.from_env()
     .label("analysis")
-    .role("Rank the products by value, then hand the ranking over to `report`.")
+    .role("You are a product analyst.")
+    .handover(Task("Write the board report from {parent_result}.", label="report"))
 )
 
 writer = (
     Agent.from_env()
     .label("report")
-    .role("Write the board report from the ranking you were handed.")
+    .role("You write concise board reports.")
 )
+
+tasks = Queue()
+tasks.add_agent(analyst).add_agent(writer)
+tasks.add_task(Task("Rank all products by value.", label="analysis"))
 ```
 
-The child task is filed under `report` and names the analysis task as its `parent`. Its body is the result that was handed over, unless the agent passes a task of its own, which may carry `{parent_id}`, `{parent_result}`, and `{parent_result_path}`. Either way the body ends with the parent's ID and the path of its result file.
+Finishing the analysis creates the `report` task and links it to its parent. The task may use `{parent_id}`, `{parent_result}`, and `{parent_result_path}`. Calling `handover` again replaces it. Bound object results keep this handover host-owned; the legacy envelope for scalar or unbound results may override its task or schema, but not its label.
 
-#### 2. Read tasks
+#### 2. Result hook
 
-Give the writer `TaskTool()`, and it reads what any finished task produced, by ID:
+Use hooks to create new tasks when certain results arrive:
 
 ```python
-writer = Agent.from_env().label("report").tool(TaskTool())
+def hand_to_report(work, done, result):
+    if done.get_label() == "research":
+        work.add_task(Task(result, label="report"))
 
-writer.task("Read the result of t-1, then write the board report.")
+
+tasks.on_result(hand_to_report)
 ```
 
-#### 3. Read result file
-
-Give the writer `ReadFileTool()` instead, and it opens the result file named at the end of its task:
-
-```python
-writer = Agent.from_env().label("report").tool(ReadFileTool())
-
-writer.task("Read .agentwerk/tasks/t-1/result.json, then write the board report.")
-```
-
-Results live in the session directory, one `result.json` per task.
-
-#### 4. Share knowledge
+#### 3. Knowledge
 
 Hand both agents one store, and either can write a page the other reads:
 
@@ -514,18 +510,27 @@ writer = Agent.from_env().label("report").knowledge(store)
 analyst.task("Rank the products by value, then save the ranking to your knowledge.")
 ```
 
-#### 5. Register hooks
+#### 4. Tasks tool
 
-Use hooks to create new tasks when certain results arrive:
+Give the writer `TaskTool()`, and it reads what any finished task produced, by ID:
 
 ```python
-def hand_to_report(work, done, result):
-    if done.get_label() == "research":
-        work.add_task(Task(result, label="report"))
+writer = Agent.from_env().label("report").tool(TaskTool())
 
-
-tasks.on_result(hand_to_report)
+writer.task("Read the result of t-1, then write the board report.")
 ```
+
+#### 5. Read result file
+
+Give the writer `ReadFileTool()` instead, and it opens the result file named at the end of its task:
+
+```python
+writer = Agent.from_env().label("report").tool(ReadFileTool())
+
+writer.task("Read .agentwerk/tasks/t-1/result.json, then write the board report.")
+```
+
+Results live in the session directory, one `result.json` per task.
 
 </details>
 
@@ -556,30 +561,23 @@ For small models, use shallow, focused schemas with few required fields, clear n
 |-|--------|-------------|
 | **Schema** | `Schema(document)` | Create a schema. |
 | | `validate(value)` | Validate content. |
-| **SchemaStore** | `SchemaStore()` | Create a store of schemas bound to labels. |
-| | `label(label, document)` | Bind a schema to a label. |
-| | `get(label)` | Read back the schema bound to a label. |
-| | `tasks.set_schemas(store)` | Enforce schemas for task results. |
-
-A `SchemaStore` enforces schemas for all tasks with a certain label. Registering schemas centrally spares agents from passing complex schema structures during task creation (see `TaskTool`) and handovers (see `FinishTool`):
+A schema for a handover child belongs on its configured `Task`. This lets a small model create the child with a result-only `finish` call:
 
 ```python
-from agentwerk import SchemaStore
-
-schemas = SchemaStore()
-schemas.label(
-    "report",
+report_schema = Schema(
     {
         "type": "object",
         "properties": {"title": {"type": "string"}},
         "required": ["title"],
-    },
+    }
 )
 
-tasks.set_schemas(schemas)
+analyst = Agent.from_env().handover(
+    Task("Write the report from {parent_result}", label="report", schema=report_schema)
+)
 ```
 
-See [`Schema`](https://docs.rs/agentwerk/latest/agentwerk/schemas/struct.Schema.html) and [`SchemaStore`](https://docs.rs/agentwerk/latest/agentwerk/schemas/struct.SchemaStore.html).
+See [`Schema`](https://docs.rs/agentwerk/latest/agentwerk/schemas/struct.Schema.html).
 
 </details>
 
@@ -740,21 +738,24 @@ agent = (
 
 `FinishTool()` and `KnowledgeTool(store)` are registered automatically on every agent. Agents use them to finish queued tasks or work with shared knowledge. An [interactive agent](#interactive) gets no `FinishTool()` by default, since finishing its task would end the conversation. `FinishTool()` is the compatibility wrapper around `EventTool()`'s `task_finished` event; `EventTool()` remains opt-in.
 
-Pass object results directly, such as `finish({"verdict":"safe"})`. Put the
-value in `result` for handovers, non-object results, or object results containing
-`result`, `handover`, or `task`:
+When a task carries an object schema, its displayed fields are the `finish` call:
+pass them directly. Its configured handover runs automatically. Scalar and
+unbound tasks retain the explicit `result` envelope, which also supports an
+inline handover:
 
 ```json
 {
-  "result": { "verdict": "unsafe" },
-  "handover": "tracing",
-  "task": "Trace the finding."
+  "result": "...",
+  "handover": {
+    "label": "...",
+    "task": "..."
+  }
 }
 ```
 
 #### EventTool
 
-Give an agent `EventTool()` to let it publish custom or built-in events under its own task and agent context:
+Give an agent `EventTool()` to let it publish application events:
 
 ```python
 from agentwerk import EventTool
@@ -762,21 +763,34 @@ from agentwerk import EventTool
 agent = Agent().tool(EventTool())
 ```
 
-The model passes an event `name` and optional JSON `data` to `event`. Normally,
-this only publishes the event; the current task keeps running.
+The model supplies a name and optional JSON data:
 
-To finish the current task, the model emits `task_finished`:
+```json
+{
+  "name": "...",
+  "data": {}
+}
+```
+
+Agentwerk records the current task and agent on every event. Queue handlers can
+react as events arrive, and queries can retrieve them later:
+
+```python
+tasks.on_event(lambda _, event: print(event.get_name()))
+events = tasks.find_events("event = event_name")
+```
+
+Event names are open-ended; lowercase snake case is conventional. Publishing an
+event does not change the task's status. The exception is the built-in
+`task_finished` event, which has the same result and handover behavior as
+`FinishTool()`:
 
 ```json
 {
   "name": "task_finished",
-  "data": { "result": { "verdict": "safe" } }
+  "data": { "result": "..." }
 }
 ```
-
-Put the task's final output in `data.result`. If the task defines a result
-schema, this value must satisfy it. To hand off follow-up work, put `handover`
-and an optional `task` beside `result` inside `data`, just as with `finish`.
 
 #### CommandTool
 

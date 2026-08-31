@@ -119,7 +119,7 @@ directives! {
     TASK_EDIT_INCOMPLETE = "task_edit_incomplete",
     TASK_TRANSITION_REJECTED = "task_transition_rejected",
     HANDOVER_RESULT_MISSING = "handover_result_missing",
-    FINISH_ARGUMENT_BLANK = "finish_argument_blank",
+    HANDOVER_SCHEMA_INVALID = "handover_schema_invalid",
     SCHEMA_FALSE_REJECTED = "schema_false_rejected",
     SCHEMA_TYPE_MISMATCHED = "schema_type_mismatched",
     SCHEMA_CONST_MISMATCHED = "schema_const_mismatched",

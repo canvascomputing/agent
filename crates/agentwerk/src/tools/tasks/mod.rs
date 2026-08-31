@@ -601,34 +601,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_task_the_model_creates_takes_the_schema_bound_to_its_label() {
-        let queue = Queue::new();
-        queue.set_dir(isolated_test_dir());
-        let schemas = crate::schemas::SchemaStore::new();
-        schemas
-            .label("analysis", serde_json::json!({"type": "string"}))
-            .unwrap();
-        queue.set_schemas(&schemas);
-
-        let ctx = ctx_with(Arc::clone(&queue), "alice");
-        let result = call(
-            TaskTool,
-            serde_json::json!({
-                "action": "create",
-                "task": "new",
-                "label": "analysis"
-            }),
-            &ctx,
-        )
-        .await;
-        assert!(result.get_name() == Event::TOOL_CALL_FINISHED);
-        assert!(queue.get_task("t-1").unwrap().schema.is_none());
-
-        queue.claim(&Query::from("analysis"), "bob");
-        assert!(queue.get_task("t-1").unwrap().schema.is_some());
-    }
-
-    #[tokio::test]
     async fn edit_replaces_the_task_and_the_label() {
         let (queue, id) = shared_with_one_task("alice");
         let ctx = ctx_with(Arc::clone(&queue), "alice");

@@ -3,10 +3,10 @@
 
 use serde_json::Value;
 
-use crate::agents::tasks::{Queue, Task};
+use crate::agents::tasks::{Queue, Status, Task, TaskError};
 use crate::event::Event;
 use crate::prompts::directives::{
-    DirectiveStore, FINISH_ARGUMENT_BLANK, HANDOVER_RESULT_MISSING, QUEUE_UNAVAILABLE,
+    DirectiveStore, HANDOVER_RESULT_MISSING, HANDOVER_SCHEMA_INVALID, QUEUE_UNAVAILABLE,
 };
 use crate::schemas::Schema;
 
@@ -32,7 +32,7 @@ pub struct EventTool;
 
 impl From<EventTool> for Tool {
     fn from(_: EventTool) -> Tool {
-        EventTool::from_schema(None)
+        EventTool::from_schema(None, None)
     }
 }
 
@@ -41,16 +41,24 @@ impl EventTool {
 
     /// Bind the current task's result schema inside `data.result` while
     /// leaving every non-terminal event's data unconstrained.
-    pub(crate) fn from_schema(schema: Option<Schema>) -> Tool {
+    pub(crate) fn from_schema(schema: Option<Schema>, handover: Option<Task>) -> Tool {
         let mut document: Value =
             serde_json::from_str(SCHEMA).expect("event.schema.json is valid JSON");
-        document["allOf"][0]["then"]["properties"]["data"] = task_finished_schema(schema.as_ref());
+        document["allOf"][0]["then"]["properties"]["data"] =
+            task_finished_schema(schema.as_ref(), handover.as_ref());
 
         let run = move |input: Value, ctx: ToolContext| {
             let schema = schema.clone();
+            let handover = handover.clone();
             async move {
-                dispatch(&input, &ctx, schema.as_ref(), EventTool::NAME)
-                    .unwrap_or_else(|failure| failure)
+                dispatch(
+                    &input,
+                    &ctx,
+                    schema.as_ref(),
+                    handover.as_ref(),
+                    EventTool::NAME,
+                )
+                .unwrap_or_else(|failure| failure)
             }
         };
         Tool::new(Self::NAME)
@@ -60,13 +68,22 @@ impl EventTool {
     }
 }
 
-/// The legacy `finish` arguments, also used as `task_finished` event data.
-pub(super) fn task_finished_schema(schema: Option<&Schema>) -> Value {
+/// The `finish` arguments, also used as `task_finished` event data.
+pub(super) fn task_finished_schema(schema: Option<&Schema>, handover: Option<&Task>) -> Value {
     let mut document: Value =
         serde_json::from_str(FINISH_SCHEMA).expect("finish.schema.json is valid JSON");
     if let Some(task) = schema {
         document["properties"]["result"] = task.get_raw_schema().clone();
+    }
+    if schema.is_some() || handover.is_some() {
         document["required"] = serde_json::json!(["result"]);
+    }
+    let handover_schema = &mut document["properties"]["handover"];
+    if let Some(task) = handover {
+        handover_schema["properties"]["label"]["const"] =
+            serde_json::json!(task.get_label().expect("configured handover has a label"));
+    } else {
+        handover_schema["required"] = serde_json::json!(["label", "task"]);
     }
     document
 }
@@ -77,6 +94,7 @@ pub(super) fn dispatch(
     input: &Value,
     ctx: &ToolContext,
     schema: Option<&Schema>,
+    handover: Option<&Task>,
     tool_name: &str,
 ) -> Result<Event, Event> {
     let queue = ctx.queue.clone().ok_or_else(|| {
@@ -89,7 +107,7 @@ pub(super) fn dispatch(
         .unwrap_or_else(|| serde_json::json!({}));
 
     if name == Event::TASK_FINISHED {
-        return finish(&queue, &data, ctx, schema, tool_name);
+        return finish(&queue, &data, ctx, schema, handover, tool_name);
     }
 
     let task_id = ctx.task_id.as_deref().unwrap_or_default();
@@ -108,13 +126,28 @@ fn finish(
     input: &Value,
     ctx: &ToolContext,
     schema: Option<&Schema>,
+    configured_handover: Option<&Task>,
     tool_name: &str,
 ) -> Result<Event, Event> {
     let parent_id = resolve_current_id(queue, ctx)?;
     let agent = ctx.agent_id.clone().unwrap_or_default();
     let result = input.get("result").cloned().unwrap_or(Value::Null);
 
-    let Some(handover) = control_string(input, "handover", &ctx.directives)? else {
+    let handover = resolve_handover(input, configured_handover, &ctx.directives)?;
+    let parent = queue.get_task(&parent_id).ok_or_else(|| {
+        let error = TaskError::TaskMissing {
+            id: parent_id.clone(),
+        };
+        Event::error(task_error_message(error, &ctx.directives))
+    })?;
+    if handover.is_some() && !parent.is_in_progress() {
+        let error = TaskError::TransitionRejected {
+            from: parent.get_status(),
+            to: Status::Finished,
+        };
+        return Err(Event::error(task_error_message(error, &ctx.directives)));
+    }
+    let Some(mut child) = handover else {
         let (_, repaired) = attach_result(
             queue,
             &parent_id,
@@ -130,29 +163,26 @@ fn finish(
     };
     hand_over(
         queue,
-        input,
         &parent_id,
         &agent,
         result,
         schema,
         tool_name,
-        handover.trim().to_string(),
+        &mut child,
         &ctx.directives,
     )
 }
 
 fn hand_over(
     queue: &Queue,
-    input: &Value,
     parent_id: &str,
     agent: &str,
     result: Value,
     schema: Option<&Schema>,
     tool_name: &str,
-    handover: String,
+    child: &mut Task,
     directives: &DirectiveStore,
 ) -> Result<Event, Event> {
-    let task = control_string(input, "task", directives)?;
     if matches!(&result, Value::Null) || result.as_str().is_some_and(str::is_empty) {
         return Err(Event::error(
             directives.render(HANDOVER_RESULT_MISSING, &[]),
@@ -166,14 +196,11 @@ fn hand_over(
         other => serde_json::to_string(&other).unwrap_or_default(),
     };
     let result_path = queue.result_path(parent_id).display().to_string();
-    let body = match task {
-        Some(task) => apply_handover_templates(&task, parent_id, &result_path, &parent_result),
-        None => parent_result,
-    };
-    let body = append_parent_reference(&body, parent_id, &result_path);
-    let child = Task::new(body).label(&handover).parent(parent_id);
+    apply_handover_templates(&mut child.task, parent_id, &result_path, &parent_result);
+    child.parent = Some(parent_id.to_string());
+    let handover = child.label.clone().expect("resolved handover has a label");
 
-    let child_id = queue.insert(child, agent.to_string());
+    let child_id = queue.insert(child.clone(), agent.to_string());
     mark_finished(queue, parent_id, agent, directives)?;
 
     let mut event = Event::success(format!(
@@ -183,21 +210,65 @@ fn hand_over(
     Ok(event)
 }
 
-fn control_string(
+fn resolve_handover(
     input: &Value,
-    key: &str,
+    configured: Option<&Task>,
     directives: &DirectiveStore,
-) -> Result<Option<String>, Event> {
-    let Some(value) = input.get(key).filter(|value| !value.is_null()) else {
-        return Ok(None);
+) -> Result<Option<Task>, Event> {
+    let Some(value) = input.get("handover") else {
+        return Ok(configured.cloned());
     };
-    match value.as_str() {
-        Some(text) if !text.trim().is_empty() => Ok(Some(text.to_string())),
-        _ => Err(Event::error(directives.render(
-            FINISH_ARGUMENT_BLANK,
-            &[("argument", key), ("value", &value.to_string())],
-        ))),
+    let Some(fields) = value.as_object() else {
+        return Err(Event::error("`handover` must be an object"));
+    };
+
+    let mut child = match configured {
+        Some(task) => task.clone(),
+        None => {
+            let label = required_label(fields)?;
+            let task = fields
+                .get("task")
+                .cloned()
+                .ok_or_else(|| Event::error("`task` is required"))?;
+            Task::new(task).label(label)
+        }
+    };
+
+    if let Some(label) = fields.get("label") {
+        let label = label
+            .as_str()
+            .filter(|label| !label.trim().is_empty())
+            .ok_or_else(|| Event::error("`label` must be a non-blank string"))?;
+        if child.get_label() != Some(label) {
+            return Err(Event::error(
+                "`label` cannot replace the configured handover label",
+            ));
+        }
     }
+    if let Some(task) = fields.get("task") {
+        child.task = task.clone();
+    }
+    if let Some(document) = fields.get("schema") {
+        child.schema = Some(
+            Schema::new(document.clone())
+                .map_err(|error| invalid_handover_schema(&error.to_string(), directives))?,
+        );
+    }
+    Ok(Some(child))
+}
+
+fn required_label(fields: &serde_json::Map<String, Value>) -> Result<String, Event> {
+    fields
+        .get("label")
+        .and_then(Value::as_str)
+        .filter(|label| !label.trim().is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| Event::error("`label` is required"))
+}
+
+fn invalid_handover_schema(error: &str, directives: &DirectiveStore) -> Event {
+    Event::error(directives.render(HANDOVER_SCHEMA_INVALID, &[("error", error)]))
+        .directive(HANDOVER_SCHEMA_INVALID)
 }
 
 fn mark_finished(
@@ -211,19 +282,57 @@ fn mark_finished(
         .map_err(|error| Event::error(task_error_message(error, directives)))
 }
 
-fn apply_handover_templates(
-    task: &str,
+fn apply_handover_templates(task: &mut Value, parent_id: &str, result_path: &str, result: &str) {
+    match task {
+        Value::String(text) => {
+            *text = substitute_handover_text(text, parent_id, result_path, result);
+        }
+        Value::Array(values) => {
+            for value in values {
+                apply_handover_templates(value, parent_id, result_path, result);
+            }
+        }
+        Value::Object(fields) => {
+            for value in fields.values_mut() {
+                apply_handover_templates(value, parent_id, result_path, result);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn substitute_handover_text(
+    text: &str,
     parent_id: &str,
     result_path: &str,
     result: &str,
 ) -> String {
-    task.replace("{parent_id}", parent_id)
-        .replace("{parent_result_path}", result_path)
-        .replace("{parent_result}", result)
-}
-
-fn append_parent_reference(body: &str, parent_id: &str, result_path: &str) -> String {
-    format!("{body}\n\nHanded over from {parent_id}, result file: {result_path}")
+    let replacements = [
+        ("{parent_id}", parent_id),
+        ("{parent_result_path}", result_path),
+        ("{parent_result}", result),
+    ];
+    let mut output = String::with_capacity(text.len());
+    let mut remaining = text;
+    while let Some(start) = remaining.find('{') {
+        output.push_str(&remaining[..start]);
+        remaining = &remaining[start..];
+        match replacements
+            .iter()
+            .find(|(placeholder, _)| remaining.starts_with(placeholder))
+        {
+            Some((placeholder, value)) => {
+                output.push_str(value);
+                remaining = &remaining[placeholder.len()..];
+            }
+            None => {
+                output.push('{');
+                remaining = &remaining[1..];
+            }
+        }
+    }
+    output.push_str(remaining);
+    output
 }
 
 fn attach_result(
@@ -378,8 +487,10 @@ mod tests {
                     "name": Event::TASK_FINISHED,
                     "data": {
                         "result": "a lead",
-                        "handover": "review",
-                        "task": "Check {parent_result_path}."
+                        "handover": {
+                            "label": "review",
+                            "task": "Check {parent_result_path}."
+                        }
                     }
                 }),
                 &ctx,
@@ -396,6 +507,40 @@ mod tests {
             .as_str()
             .unwrap_or_default()
             .contains(&queue.result_path(&id).display().to_string()));
+    }
+
+    #[tokio::test]
+    async fn task_finished_uses_the_configured_handover_from_result_only() {
+        let (_dir, queue, id, ctx) = claimed_task();
+        let child_schema = Schema::new(serde_json::json!({
+            "type": "object",
+            "properties": {"verdict": {"type": "string"}}
+        }))
+        .unwrap();
+        let tool = EventTool::from_schema(
+            None,
+            Some(
+                Task::labeled("review", serde_json::json!({"source": "{parent_id}"}))
+                    .schema(child_schema),
+            ),
+        );
+
+        let outcome = tool
+            .call(
+                serde_json::json!({
+                    "name": Event::TASK_FINISHED,
+                    "data": {"result": "a lead"}
+                }),
+                &ctx,
+            )
+            .await;
+
+        assert_eq!(outcome.get_name(), Event::TOOL_CALL_FINISHED);
+        assert!(queue.get_task(&id).unwrap().is_finished());
+        let child = queue.get_task("t-2").expect("handover child created");
+        assert_eq!(child.get_label(), Some("review"));
+        assert_eq!(child.get_task()["source"], id);
+        assert!(child.get_schema().is_some());
     }
 
     #[tokio::test]
@@ -420,7 +565,7 @@ mod tests {
             .queue(Arc::clone(&queue))
             .task_id(id.clone())
             .agent_id("alice".into());
-        let tool = EventTool::from_schema(Some(schema));
+        let tool = EventTool::from_schema(Some(schema), None);
 
         let rejected = tool
             .call(
@@ -461,7 +606,7 @@ mod tests {
             "required": ["verdict"]
         }))
         .unwrap();
-        let tool = EventTool::from_schema(Some(schema));
+        let tool = EventTool::from_schema(Some(schema), None);
         let declared = tool.get_input_schema().get_raw_schema().clone();
 
         assert!(declared["properties"]["data"].get("properties").is_none());
@@ -481,5 +626,18 @@ mod tests {
                 "data": { "verdict": "safe" }
             }))
             .is_err());
+    }
+
+    #[test]
+    fn handover_template_replacements_are_not_expanded_again() {
+        assert_eq!(
+            substitute_handover_text(
+                "{parent_id}|{parent_result_path}|{parent_result}",
+                "{parent_result}",
+                "/tmp/{parent_id}",
+                "{parent_result_path}",
+            ),
+            "{parent_result}|/tmp/{parent_id}|{parent_result_path}"
+        );
     }
 }

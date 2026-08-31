@@ -11,7 +11,7 @@ use crate::agents::tasks::{policy_violated, Queue, Reply, Run, Status, Task};
 use crate::event::Event;
 use crate::prompts::directives::{NO_TOOL_CALLED, REPLY_REJECTED};
 use crate::providers::{AsUserMessage, Message, Model, RequestErrorKind};
-use crate::tools::{EventTool, FinishTool, ToolRegistry};
+use crate::tools::ToolRegistry;
 
 use super::{compact, request, tool_call, CompactReason, Step, POLL_INTERVAL};
 
@@ -147,15 +147,7 @@ fn claim<'a>(agent: &'a Agent, queue: &'a Arc<Queue>) -> Option<TaskContext<'a>>
         .or_else(|| queue.find_task(resumable).map(|t| t.id.clone()))?;
     let task = queue.get_task(&task_id)?;
 
-    let mut tools = agent.tool_registry().clone();
-    // Rebinding, not registering: an interactive agent carries no `finish`
-    // unless it asked for one, and this must not hand it back.
-    if tools.contains(FinishTool::NAME) {
-        tools.register(FinishTool::from_schema(task.schema.clone()));
-    }
-    if tools.contains(EventTool::NAME) {
-        tools.register(EventTool::from_schema(task.schema.clone()));
-    }
+    let tools = agent.get_tools(&task);
 
     let knowledge_index = agent.get_knowledge().get_index();
     let policy = queue.get_policy();
@@ -495,7 +487,7 @@ mod tests {
         // empty queue in between and drain the chain early.
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let provider = MockProvider::with_results(vec![
-            Ok(handover_response("bob", "continue", "alice-done")),
+            Ok(write_result_response("alice-done")),
             Ok(write_result_response("bob-done")),
         ]);
         let tasks = Queue::new();
@@ -506,16 +498,23 @@ mod tests {
                 request_retry_delay: Duration::from_millis(1),
                 ..Default::default()
             });
-        for label in ["alice", "bob"] {
-            tasks.add_agent(
-                Agent::new()
-                    .label(label)
-                    .provider(provider.clone())
-                    .model("mock")
-                    .role("test")
-                    .tool(FinishTool),
-            );
-        }
+        tasks.add_agent(
+            Agent::new()
+                .label("alice")
+                .provider(provider.clone())
+                .model("mock")
+                .role("test")
+                .handover(Task::labeled("bob", "continue"))
+                .tool(FinishTool),
+        );
+        tasks.add_agent(
+            Agent::new()
+                .label("bob")
+                .provider(provider.clone())
+                .model("mock")
+                .role("test")
+                .tool(FinishTool),
+        );
 
         tasks.start();
         tasks.add_task(Task::new("a").label("alice"));
@@ -1487,23 +1486,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_schema_bound_to_a_label_reaches_the_first_message_of_its_task() {
+    async fn a_task_schema_reaches_the_first_message_of_its_task() {
         let provider = MockProvider::with_results(vec![Ok(write_result_value(
             serde_json::json!({"verdict": "done"}),
         ))]);
         let results_dir = crate::test_util::TempDir::new().unwrap();
 
-        let schemas = crate::schemas::SchemaStore::new();
-        schemas
-            .label(
-                "analysis",
-                serde_json::json!({
-                    "type": "object",
-                    "properties": { "verdict": { "type": "string" } },
-                    "required": ["verdict"],
-                }),
-            )
-            .unwrap();
+        let schema = crate::schemas::Schema::new(serde_json::json!({
+            "type": "object",
+            "properties": { "verdict": { "type": "string" } },
+            "required": ["verdict"],
+        }))
+        .unwrap();
 
         let tasks = Queue::new();
         tasks
@@ -1514,7 +1508,6 @@ mod tests {
                 max_time: Some(Duration::from_millis(500)),
                 ..Default::default()
             });
-        tasks.set_schemas(&schemas);
         tasks.add_agent(
             Agent::new()
                 .provider(provider.clone())
@@ -1522,13 +1515,13 @@ mod tests {
                 .role("test")
                 .label("analysis"),
         );
-        tasks.add_task(Task::new("audit").label("analysis"));
+        tasks.add_task(Task::new("audit").label("analysis").schema(schema));
         let _ = tasks.finish_all_tasks().await;
 
         let task_message = &user_texts(&provider.received()[0])[0];
         assert!(
             task_message.contains("verdict"),
-            "the bound schema must be in the task message: {task_message:?}",
+            "the task schema must be in the task message: {task_message:?}",
         );
         assert_eq!(tasks.get_tasks()[0].status, Status::Finished);
     }
@@ -1560,14 +1553,8 @@ mod tests {
         let finish = context.tools.get("finish").expect("finish is bound");
 
         let declared = finish.get_input_schema().get_raw_schema();
-        assert!(
-            declared["then"]["properties"]["result"]["properties"]["verdict"].is_object(),
-            "{declared}"
-        );
-        assert!(
-            declared["else"]["allOf"][1]["properties"]["verdict"].is_object(),
-            "{declared}"
-        );
+        assert!(declared["properties"]["verdict"].is_object(), "{declared}");
+        assert_eq!(declared["required"], serde_json::json!(["verdict"]));
     }
 
     #[tokio::test]

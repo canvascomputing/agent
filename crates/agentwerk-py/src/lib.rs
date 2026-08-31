@@ -29,7 +29,6 @@ fn _agentwerk(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<reply::PyReplyContent>()?;
     m.add_class::<trajectory::PyTrajectory>()?;
     m.add_class::<schema::PySchema>()?;
-    m.add_class::<schema::PySchemaStore>()?;
     m.add_class::<event::PyEvent>()?;
     directives::register(m)?;
     m.add_class::<knowledge::PyKnowledge>()?;

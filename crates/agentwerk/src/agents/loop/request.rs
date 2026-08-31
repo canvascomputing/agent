@@ -212,19 +212,8 @@ mod tests {
             .find(|tool| tool.get_name() == "finish")
             .expect("finish is sent with every request");
         let shown = finish.get_input_schema().get_raw_schema();
-        assert!(
-            shown["then"]["properties"]["result"]["properties"]["verdict"].is_object(),
-            "{shown}"
-        );
-        assert!(
-            shown["else"]["allOf"][1]["properties"]["verdict"].is_object(),
-            "{shown}"
-        );
-        assert_eq!(
-            shown["then"]["required"],
-            serde_json::json!(["result"]),
-            "{shown}"
-        );
+        assert!(shown["properties"]["verdict"].is_object(), "{shown}");
+        assert_eq!(shown["required"], serde_json::json!(["verdict"]), "{shown}");
     }
 
     #[tokio::test]
