@@ -3,10 +3,10 @@
   "properties": {
     "name": {
       "type": "string",
-      "description": "Event name. Lowercase snake case is conventional; every custom or built-in name is accepted."
+      "description": "Event identifier. Lowercase snake case is conventional; every custom or built-in name is accepted."
     },
     "data": {
-      "description": "JSON value carried by the event. Defaults to an empty object. For `task_finished`, use an object with the result and optional handover controls this schema declares."
+      "description": "Details reported with the event. Omit it for an empty object. When `name` is `task_finished`, put the completion arguments shown for this call inside `data`."
     }
   },
   "required": [
@@ -28,12 +28,12 @@
   ],
   "examples": [
     {
-      "name": "candidate_found",
-      "data": { "path": "src/auth.rs", "line": 42 }
+      "name": "...",
+      "data": {}
     },
     {
       "name": "task_finished",
-      "data": { "result": "The upload path retries three times." }
+      "data": { "result": "..." }
     }
   ]
 }

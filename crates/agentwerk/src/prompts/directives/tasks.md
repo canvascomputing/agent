@@ -1,31 +1,31 @@
 <!-- What the task tools say when an ID, a result, or a handover is missing. -->
 
 ## queue_unavailable
-No task queue is available here, so no task can be read or changed.
+Task actions are unavailable here, so no task can be read or changed.
 
 ## task_id_missing
-`id` is missing and this call carries no agent, so there is no task to act on. Name the task with `id`.
+No task was selected. Provide its `id` and retry.
 
 ## task_not_assigned
-`id` is missing and you hold no task, so there is nothing to act on. Name the task with `id`.
+No task is assigned to you. Provide a task `id` and retry.
 
 ## task_not_found
-No task {id}. The `list` action shows every task that exists.
+No task with `id` {id} exists. Use `list` to see the available tasks.
 
 ## task_result_missing
-Task {id} has no result yet, it is {status}. Read it again once it is finished.
+Task {id} is {status} and has no result yet. Read it again after it finishes.
 
 ## task_query_invalid
 {error}
 
 ## task_edit_incomplete
-An edit needs at least one of `task` or `label`. Give the one you want changed.
+An edit requires `task`, `label`, or both. Provide the fields to change and retry.
 
 ## task_transition_rejected
 {error}
 
 ## handover_result_missing
-A handover needs a result to pass on. Call `finish` again with a `result`, or without `handover` to finish without passing work on.
+A follow-up requires a non-null, non-empty result. Retry the completion call with a value that meets those requirements.
 
-## finish_argument_blank
-`{argument}` must be a non-blank string when given, got {value}. Give text, or leave it out.
+## handover_schema_invalid
+`handover.schema` is not a valid JSON Schema: {error}. Correct that field or omit it.

@@ -42,10 +42,6 @@ use crate::prompts::directives::{
     SCHEMA_STRING_TOO_SHORT, SCHEMA_TYPE_MISMATCHED,
 };
 
-mod store;
-
-pub use store::SchemaStore;
-
 /// A `Schema` constrains the result an agent produces for a task. A violation
 /// triggers a retry until `max_schema_retries` is exhausted.
 ///

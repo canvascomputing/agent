@@ -16,7 +16,7 @@ use crate::convert::{py_to_text, runtime_error};
 use crate::knowledge::PyKnowledge;
 use crate::providers::{PyModel, PyProvider};
 use crate::queue::PyQueue;
-use crate::task::to_task;
+use crate::task::{to_task, PyTask};
 use crate::tools::extract_tool;
 
 /// An `Agent` is the core entity of agentwerk. It has access to tools for
@@ -158,6 +158,23 @@ impl PyAgent {
     ) -> PyRefMut<'_, Self> {
         slf.set(|agent| agent.templates(variables));
         slf
+    }
+
+    /// Configure the one labeled task this agent creates when it finishes.
+    /// Calling this again replaces the previous handover.
+    fn handover<'py>(
+        mut slf: PyRefMut<'py, Self>,
+        task: PyRef<'_, PyTask>,
+    ) -> PyResult<PyRefMut<'py, Self>> {
+        let resolved = task.inner.clone();
+        if !resolved
+            .get_label()
+            .is_some_and(|label| !label.trim().is_empty())
+        {
+            return Err(runtime_error("Agent.handover requires a labeled Task"));
+        }
+        slf.set(|agent| agent.handover(resolved));
+        Ok(slf)
     }
 
     /// Set the directory the agent has access to.

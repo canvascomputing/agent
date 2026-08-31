@@ -12,10 +12,6 @@ use std::time::Duration;
 use tokio::sync::{broadcast, watch};
 use tokio::task::JoinHandle;
 
-use crate::event::{default_logger, Event};
-use crate::persistence::Persist;
-use crate::schemas::SchemaStore;
-
 use super::super::agent::{Agent, QueueRef};
 use super::super::policy::Policy;
 use super::super::query::{Matcher, Query};
@@ -23,6 +19,8 @@ use super::super::r#loop::run_main_loop;
 use super::super::stats::Stats;
 use super::task::{Status, Task};
 use super::{numeric_id, policy_violated, Reply};
+use crate::event::{default_logger, Event};
+use crate::persistence::Persist;
 
 /// Why execution ended.
 ///
@@ -293,9 +291,6 @@ pub struct Queue {
     /// life of the queue, so one registered per call would grow without bound
     /// in a host that awaits in a loop.
     pub(super) event_stream: broadcast::Sender<Event>,
-    /// The result contracts bound to labels, read once per claim. `None` leaves
-    /// every task with whatever schema it was built with.
-    pub(super) schemas: Mutex<Option<Arc<SchemaStore>>>,
     pub(super) dir: Mutex<PathBuf>,
     pub(super) events_lock: Mutex<()>,
     /// The main loop, held so `start()` can join a previous one before starting
@@ -323,7 +318,6 @@ impl Queue {
             event_handlers: Mutex::new(Vec::new()),
             awaited_events: AwaitedEvents::default(),
             event_stream: broadcast::Sender::new(EVENT_STREAM_CAPACITY),
-            schemas: Mutex::new(None),
             dir: Mutex::new(PathBuf::from(".agentwerk")),
             events_lock: Mutex::new(()),
             join_handle: Mutex::new(None),
@@ -411,7 +405,6 @@ impl Queue {
             event_handlers: Mutex::new(Vec::new()),
             awaited_events: AwaitedEvents::default(),
             event_stream: broadcast::Sender::new(EVENT_STREAM_CAPACITY),
-            schemas: Mutex::new(None),
             dir: Mutex::new(tasks_dir),
             events_lock: Mutex::new(()),
             join_handle: Mutex::new(None),
@@ -854,29 +847,6 @@ impl Queue {
         super::task::result_path(&self.get_dir(), id)
     }
 
-    /// Enforce schemas for task results.
-    ///
-    /// A task claimed under a label the store knows takes that schema, unless
-    /// it already carries one of its own. It is how a task nobody could
-    /// attach a schema to gets one: a handover child, or a task the model
-    /// filed through `tasks`.
-    ///
-    /// ```no_run
-    /// # use agentwerk::{SchemaStore, Task, Queue};
-    /// # use serde_json::json;
-    /// let schemas = SchemaStore::new();
-    /// schemas.label("analysis", json!({ "type": "object" }))?;
-    ///
-    /// let tasks = Queue::new();
-    /// tasks.set_schemas(&schemas);
-    /// tasks.add_task(Task::labeled("analysis", "Audit src/db."));
-    /// # Ok::<(), agentwerk::schemas::SchemaParseError>(())
-    /// ```
-    pub fn set_schemas(&self, store: &Arc<SchemaStore>) -> &Self {
-        *self.schemas.lock().unwrap() = Some(Arc::clone(store));
-        self
-    }
-
     /// Submit a task and return its task ID.
     ///
     /// A string is the task itself, and a `&Path` or `PathBuf` names the file
@@ -1218,7 +1188,9 @@ impl Queue {
     /// ```
     pub async fn finish_tasks(&self, matches: impl Matcher<Task>) -> Vec<serde_json::Value> {
         let query = matches.into_query();
-        if self.join_handle.lock().unwrap().is_none() {
+        if self.join_handle.lock().unwrap().is_none()
+            && (!self.run.is_finished() || self.anything_claimable())
+        {
             self.start();
         }
         let mut stream = self.event_stream.subscribe();
@@ -2015,6 +1987,24 @@ mod tests {
 
         assert!(queue.find_tasks("cancelled = true").is_empty());
         assert_eq!(queue.find_tasks("pending = true").len(), 2);
+        queue.cancel_all_tasks();
+        queue.finish_all_tasks().await;
+    }
+
+    #[tokio::test]
+    async fn finish_does_not_restart_a_run_that_ended_by_cancellation() {
+        let (queue, _tmp) = test_queue();
+        queue.add_task(Task::new("work").label("research"));
+        queue.start();
+        queue.cancel_tasks("pending = true AND label = research");
+        queue.finish_all_tasks().await;
+
+        assert_eq!(queue.find_events("event = run_started").len(), 1);
+        queue.finish_tasks("label = research").await;
+        assert_eq!(queue.find_events("event = run_started").len(), 1);
+
+        queue.start();
+        assert_eq!(queue.find_events("event = run_started").len(), 2);
         queue.cancel_all_tasks();
         queue.finish_all_tasks().await;
     }

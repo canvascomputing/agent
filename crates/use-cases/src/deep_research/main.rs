@@ -1,13 +1,11 @@
 //! Deep Research with handover chain.
 //!
 //! One `Queue` holds the whole pipeline. The driver enqueues a
-//! single starter task pinned to `researcher_1`. Each researcher
-//! calls `brave_search`, reads its parent task via
-//! `tasks` to build on prior findings, and hands off to
-//! the next agent via `finish` with a `handover`. A handover carries no
-//! schema, so the report schema is bound to the `report` label and the
-//! report writer's task takes it when that agent claims it. The report
-//! writer finishes the chain with a plain `finish`.
+//! single starter task pinned to `researcher_1`. Each researcher calls
+//! `brave_search` and hands off to the next agent through its configured
+//! handover. The report contract is attached to the task researcher_2 creates.
+//! The report writer reads that research chain and finishes it with a plain
+//! `finish`.
 //!
 //! Usage: deep-research <QUESTION>
 //!
@@ -19,7 +17,7 @@ use std::sync::Arc;
 
 use agentwerk::event::Event;
 use agentwerk::providers::{Model, Provider};
-use agentwerk::schemas::{Schema, SchemaStore};
+use agentwerk::schemas::Schema;
 use agentwerk::tools::{FetchTool, TaskTool, Tool};
 use agentwerk::{Agent, FinishReason, Queue, Task};
 
@@ -42,11 +40,6 @@ async fn main() {
 
     let tasks = Queue::new();
     tasks.set_dir(workdir.clone());
-    let schemas = SchemaStore::new();
-    schemas
-        .label("report", final_report_schema_value())
-        .expect("report schema is well-formed");
-    tasks.set_schemas(&schemas);
     let on_ctrl_c = Arc::clone(&tasks);
     tokio::spawn(async move {
         if tokio::signal::ctrl_c().await.is_ok() {
@@ -60,18 +53,30 @@ async fn main() {
         .model(Model::from_env().expect("model name required"))
         .role(RESEARCHER_1_ROLE)
         .label("researcher_1")
+        .handover(Task::labeled(
+            "researcher_2",
+            "Researcher 1 task: {parent_id}\n\nResearcher 1 findings:\n{parent_result}\n\nDeepen and broaden these facts with causes, consequences, criticisms, or alternative perspectives.",
+        ))
         .tool(brave_search_tool(brave_key.clone()))
-        .tool(FetchTool::new().impersonate())
-        .tool(TaskTool);
+        .tool(FetchTool::new().impersonate());
 
     let researcher_2 = Agent::new()
         .provider(provider.clone())
         .model(Model::from_env().expect("model name required"))
         .role(RESEARCHER_2_ROLE)
         .label("researcher_2")
+        .handover(
+            Task::labeled(
+                "report",
+                "Synthesize both research passes into a structured final report.\n\nResearcher 2 task: {parent_id}\n\nResearcher 2 findings:\n{parent_result}",
+            )
+            .schema(
+                Schema::new(final_report_schema_value())
+                    .expect("report schema is well-formed"),
+            ),
+        )
         .tool(brave_search_tool(brave_key.clone()))
-        .tool(FetchTool::new().impersonate())
-        .tool(TaskTool);
+        .tool(FetchTool::new().impersonate());
 
     let report_writer = Agent::new()
         .provider(provider.clone())
@@ -84,16 +89,12 @@ async fn main() {
     tasks.add_agent(researcher_2);
     tasks.add_agent(report_writer);
 
-    let starter = format!(
-        "Question: {question}\n\nKick off the research chain. You are researcher_1; pick \
-         one angle and produce evidence with sources. The next two researchers will \
-         extend the coverage."
-    );
+    let starter =
+        format!("Question: {question}\n\nEstablish one angle with source-backed evidence.");
     // The schema-bound starter forces researcher_1 to produce a real
     // result: a text-only reply leaves none attached, and the loop's
     // terminal-reply path then transitions the task to `Failed`
-    // rather than silently `Done`. The role prompt is what keeps the
-    // chain going by requiring a `handover`.
+    // rather than silently `Done`. Configured handovers keep the chain going.
     let starter_schema = Schema::new(serde_json::json!({
         "type": "string",
         "minLength": 100

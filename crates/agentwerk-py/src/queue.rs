@@ -16,7 +16,6 @@ use crate::event::{to_py_event, PyEvent};
 use crate::policy::PyPolicy;
 use crate::query::{to_event_matcher, to_task_matcher};
 use crate::reply::{py_to_replies, replies_to_py};
-use crate::schema::PySchemaStore;
 use crate::task::{to_task, PyTask};
 
 /// The core data structure of agentwerk, coordinating complex work across
@@ -108,16 +107,6 @@ impl PyQueue {
     /// Get the session directory, `./.agentwerk` until `dir` changes it.
     fn get_dir(&self) -> String {
         self.inner.get_dir().display().to_string()
-    }
-
-    /// Enforce schemas for task results. A task claimed under a label the
-    /// store knows takes that schema, unless it already carries one of its own.
-    fn set_schemas<'py>(
-        slf: PyRef<'py, Self>,
-        store: PyRef<'_, PySchemaStore>,
-    ) -> PyRef<'py, Self> {
-        slf.inner.set_schemas(&store.inner);
-        slf
     }
 
     /// Read every event as it is emitted. It replaces the handler that prints to

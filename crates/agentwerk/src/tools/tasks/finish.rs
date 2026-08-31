@@ -27,7 +27,7 @@ impl From<FinishTool> for Tool {
     /// Unbound: the registered arguments, reading the result out of `result`.
     /// The loop rebinds it to the task's schema at claim.
     fn from(_: FinishTool) -> Tool {
-        FinishTool::from_schema(None)
+        FinishTool::from_schema(None, None)
     }
 }
 
@@ -35,22 +35,30 @@ impl FinishTool {
     /// The name the model calls, and the name the loop looks the tool up under.
     pub(crate) const NAME: &str = "finish";
 
-    /// Preserve the legacy input shape while routing its call through the
-    /// `task_finished` branch of `EventTool`.
-    pub(crate) fn from_schema(schema: Option<Schema>) -> Tool {
-        let envelope = event::task_finished_schema(schema.as_ref());
+    /// Bind object results directly and preserve the legacy envelope for the
+    /// other shapes, routing both through `EventTool`'s completion branch.
+    pub(crate) fn from_schema(schema: Option<Schema>, handover: Option<crate::Task>) -> Tool {
+        let envelope = event::task_finished_schema(schema.as_ref(), handover.as_ref());
+        let bound_object = schema.as_ref().is_some_and(declares_object);
         let arguments = arguments_schema(schema.as_ref(), envelope.clone());
         let run = move |input: Value, ctx: ToolContext| {
             let schema = schema.clone();
+            let handover = handover.clone();
             let envelope = envelope.clone();
             async move {
-                let input = normalize_input(input, &envelope);
+                let input = normalize_input(input, &envelope, bound_object);
                 let event = serde_json::json!({
                     "name": Event::TASK_FINISHED,
                     "data": input,
                 });
-                event::dispatch(&event, &ctx, schema.as_ref(), FinishTool::NAME)
-                    .unwrap_or_else(|failure| failure)
+                event::dispatch(
+                    &event,
+                    &ctx,
+                    schema.as_ref(),
+                    handover.as_ref(),
+                    FinishTool::NAME,
+                )
+                .unwrap_or_else(|failure| failure)
             }
         };
         Tool::new(Self::NAME)
@@ -60,10 +68,12 @@ impl FinishTool {
     }
 }
 
-/// Accept a bare object result unless the call uses the established finish
-/// envelope. The conditional keeps repair inside the selected schema branch;
-/// `anyOf` cannot safely choose a branch while rewriting values.
+/// A bound object is the call itself. Scalars and unbound calls retain the
+/// legacy envelope; the conditional keeps repair inside its selected branch.
 fn arguments_schema(schema: Option<&Schema>, envelope: Value) -> Value {
+    if let Some(schema) = schema.filter(|schema| declares_object(schema)) {
+        return schema.get_raw_schema().clone();
+    }
     let bare = schema
         .map(|schema| schema.get_raw_schema().clone())
         .unwrap_or_else(|| serde_json::json!({ "type": "object" }));
@@ -88,21 +98,29 @@ fn arguments_schema(schema: Option<&Schema>, envelope: Value) -> Value {
             ]
         },
         "examples": [
-            { "summary": "The upload path retries three times, then fails the task." },
-            { "result": "The upload path retries three times, then fails the task." },
+            { "result": "..." },
             {
-                "result": "Two candidates need a second opinion.",
-                "handover": "review",
-                "task": "Confirm the two candidates in {parent_result_path}."
+                "result": "...",
+                "handover": {
+                    "label": "...",
+                    "task": "..."
+                }
             }
         ]
     })
 }
 
-/// Turn the bare form into the event engine's stable `data.result` envelope.
-/// Empty objects and calls containing a reserved argument keep their legacy
-/// meaning, including finishing without a result.
-fn normalize_input(input: Value, envelope: &Value) -> Value {
+fn declares_object(schema: &Schema) -> bool {
+    schema.get_raw_schema()["type"] == "object"
+}
+
+/// Put a bound object under the event engine's stable `data.result` key.
+/// Legacy calls are bare only when non-empty and free of reserved arguments;
+/// an empty call still means finishing without a result.
+fn normalize_input(input: Value, envelope: &Value, bound_object: bool) -> Value {
+    if bound_object {
+        return serde_json::json!({ "result": input });
+    }
     let envelope_fields = envelope["properties"]
         .as_object()
         .expect("finish schema properties are an object");
@@ -187,7 +205,7 @@ mod tests {
 
     /// The finish tool as the loop binds it at claim.
     fn finish_for(schema: Schema) -> Tool {
-        FinishTool::from_schema(Some(schema))
+        FinishTool::from_schema(Some(schema), None)
     }
 
     #[tokio::test]
@@ -197,7 +215,7 @@ mod tests {
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
 
         let outcome = finish_for(line_schema())
-            .call(serde_json::json!({"result": {"line": "42"}}), &ctx)
+            .call(serde_json::json!({"line": "42"}), &ctx)
             .await;
 
         assert_eq!(outcome.repairs().collect::<Vec<_>>(), vec!["/line retyped"]);
@@ -211,7 +229,7 @@ mod tests {
 
         // `line` is beyond repair.
         let outcome = finish_for(line_schema())
-            .call(serde_json::json!({"result": {"line": "about 42"}}), &ctx)
+            .call(serde_json::json!({"line": "about 42"}), &ctx)
             .await;
 
         assert_eq!(outcome.get_data()["kind"], "schema_failed");
@@ -233,25 +251,14 @@ mod tests {
     }
 
     #[test]
-    fn a_bound_task_schema_is_the_result_argument() {
+    fn a_bound_object_schema_is_the_finish_arguments() {
         let declared = finish_for(object_schema())
             .get_input_schema()
             .get_raw_schema()
             .clone();
-        assert_eq!(
-            declared["then"]["properties"]["result"],
-            *object_schema().get_raw_schema()
-        );
-        assert_eq!(declared["then"]["properties"]["handover"]["type"], "string");
-        assert_eq!(declared["then"]["required"], serde_json::json!(["result"]));
-        assert_eq!(
-            declared["else"]["allOf"][1],
-            *object_schema().get_raw_schema()
-        );
-        // A task field is accepted only by the bare branch, never alongside
-        // the envelope's controls.
-        assert!(declared.get("properties").is_none(), "{declared}");
-        assert!(declared["then"]["properties"].get("status").is_none());
+        assert_eq!(declared, *object_schema().get_raw_schema());
+        assert_eq!(declared["properties"]["status"]["type"], "string");
+        assert!(declared["properties"].get("result").is_none());
     }
 
     #[test]
@@ -344,6 +351,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_bound_object_rejects_the_legacy_result_wrapper() {
+        let dir = crate::test_util::TempDir::new().unwrap();
+        let queue = line_task(dir.path());
+        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
+        let mut registry = crate::tools::ToolRegistry::default();
+        registry.register(finish_for(line_schema()));
+
+        let outcome = registry
+            .execute(
+                &[crate::tools::ToolCall {
+                    id: "call-1".into(),
+                    name: "finish".into(),
+                    input: serde_json::json!({"result": {"line": 42}}),
+                }],
+                &ctx,
+            )
+            .await
+            .remove(0);
+
+        assert_eq!(outcome.get_name(), Event::TOOL_CALL_FAILED);
+        assert_eq!(outcome.get_data()["kind"], "schema_failed");
+    }
+
+    #[tokio::test]
     async fn an_empty_call_keeps_its_legacy_null_result() {
         let dir = crate::test_util::TempDir::new().unwrap();
         let (queue, id) = one_task("alice");
@@ -390,8 +421,8 @@ mod tests {
             .expect("claim must succeed");
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
 
-        let outcome = Tool::from(FinishTool)
-            .call(serde_json::json!({"result": {"handover": "x"}}), &ctx)
+        let outcome = FinishTool::from_schema(Some(colliding_schema()), None)
+            .call(serde_json::json!({"handover": "x"}), &ctx)
             .await;
 
         assert!(
@@ -408,20 +439,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_double_encoded_result_decodes_through_the_bound_schema() {
-        // The whole reason the flat shape existed: a model that writes the
-        // object as JSON text. Dispatch decodes it against the nested schema.
+    async fn a_whole_object_encoded_as_text_decodes_through_the_bound_schema() {
         let dir = crate::test_util::TempDir::new().unwrap();
         let (queue, id) = one_task("alice");
         queue.set_dir(dir.path().to_path_buf());
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
         let mut registry = crate::tools::ToolRegistry::default();
-        registry.register(FinishTool::from_schema(Some(object_schema())));
+        registry.register(FinishTool::from_schema(Some(object_schema()), None));
 
         let calls = vec![crate::tools::ToolCall {
             id: "call-1".to_string(),
             name: "finish".to_string(),
-            input: serde_json::json!({ "result": "{\"status\": \"malicious\"}" }),
+            input: serde_json::json!("{\"status\": \"malicious\"}"),
         }];
         let outcome = registry.execute(&calls, &ctx).await.remove(0);
 
@@ -446,7 +475,7 @@ mod tests {
             "object"
         );
         assert_eq!(
-            FinishTool::from_schema(None)
+            FinishTool::from_schema(None, None)
                 .get_input_schema()
                 .get_raw_schema(),
             unbound.get_input_schema().get_raw_schema()
@@ -623,7 +652,7 @@ mod tests {
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
 
         let outcome = finish_for(schema)
-            .call(serde_json::json!({"result": {"x": "ok"}}), &ctx)
+            .call(serde_json::json!({"x": "ok"}), &ctx)
             .await;
         assert!(outcome.get_name() == Event::TOOL_CALL_FINISHED);
         let t = queue.get_task(&id).unwrap();
@@ -785,8 +814,7 @@ mod tests {
         let outcome = Tool::from(FinishTool)
             .call(
                 serde_json::json!({
-                    "handover": "bob",
-                    "task": "continue with X",
+                    "handover": {"label": "bob", "task": "continue with X"},
                     "result": "summary of alice's work"
                 }),
                 &ctx,
@@ -809,31 +837,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn handover_child_takes_the_schema_bound_to_its_label() {
+    async fn inline_handover_attaches_its_schema_to_the_child() {
         let dir = crate::test_util::TempDir::new().unwrap();
         let (queue, _parent_id) = one_task_in("alice", dir.path().to_path_buf());
-        let schemas = crate::schemas::SchemaStore::new();
-        schemas
-            .label(
-                "bob",
-                serde_json::json!({"type": "object", "title": "verdict"}),
-            )
-            .unwrap();
-        queue.set_schemas(&schemas);
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
 
         Tool::from(FinishTool)
             .call(
-                serde_json::json!({"handover": "bob", "result": "a lead worth tracing"}),
+                serde_json::json!({
+                    "result": "a lead worth tracing",
+                    "handover": {
+                        "label": "bob",
+                        "task": "trace the lead",
+                        "schema": {"type": "object", "title": "verdict"}
+                    }
+                }),
                 &ctx,
             )
             .await;
 
-        // `finish` cannot attach a schema to the child it inserts, so the
-        // child is born without one and picks the label's up at claim.
-        assert!(queue.get_task("t-2").unwrap().schema.is_none());
-
-        queue.claim(&Query::from("bob"), "bob");
         let bound = queue.get_task("t-2").unwrap().schema.unwrap();
         assert_eq!(title_of(&bound), "verdict");
     }
@@ -854,7 +876,10 @@ mod tests {
 
         Tool::from(FinishTool)
             .call(
-                serde_json::json!({"handover": "bob", "task": "next", "result": "done part 1"}),
+                serde_json::json!({
+                    "handover": {"label": "bob", "task": "next"},
+                    "result": "done part 1"
+                }),
                 &ctx,
             )
             .await;
@@ -893,7 +918,10 @@ mod tests {
 
         let outcome = Tool::from(FinishTool)
             .call(
-                serde_json::json!({"handover": "bob", "task": "next", "result": "too short"}),
+                serde_json::json!({
+                    "handover": {"label": "bob", "task": "next"},
+                    "result": "too short"
+                }),
                 &ctx,
             )
             .await;
@@ -942,11 +970,13 @@ mod tests {
 
         let outcome = Tool::from(FinishTool)
             .call(
-                serde_json::json!({"handover": "bob", "task": "next", "result": {"status": "done"}}),
+                serde_json::json!({
+                    "handover": {"label": "bob", "task": "next"},
+                    "result": {"status": "done"}
+                }),
                 &ctx,
             )
-            .await
-            ;
+            .await;
         assert!(outcome.get_name() == Event::TOOL_CALL_FINISHED);
 
         let parent = queue.get_task(&parent_id).unwrap();
@@ -964,17 +994,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn handover_takes_an_object_result_alongside_the_control_keys() {
+    async fn a_bound_object_uses_its_configured_handover() {
         let dir = crate::test_util::TempDir::new().unwrap();
         let (queue, parent_id) = one_task_with_object_schema("alice", dir.path().to_path_buf());
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
 
-        let outcome = finish_for(strict_object_schema())
-            .call(
-                serde_json::json!({"handover": "bob", "task": "next", "result": {"status": "done"}}),
-                &ctx,
-            )
-            .await;
+        let outcome = FinishTool::from_schema(
+            Some(strict_object_schema()),
+            Some(Task::labeled("bob", "next")),
+        )
+        .call(serde_json::json!({"status": "done"}), &ctx)
+        .await;
         assert!(outcome.get_name() == Event::TOOL_CALL_FINISHED);
 
         let parent = queue.get_task(&parent_id).unwrap();
@@ -983,6 +1013,7 @@ mod tests {
             parent.result.as_ref(),
             Some(&serde_json::json!({"status": "done"}))
         );
+        assert_eq!(queue.get_task("t-2").unwrap().get_label(), Some("bob"));
     }
 
     #[tokio::test]
@@ -995,11 +1026,13 @@ mod tests {
 
         Tool::from(FinishTool)
             .call(
-                serde_json::json!({"handover": "bob", "task": "next", "result": "{\"status\":\"done\"}"}),
+                serde_json::json!({
+                    "handover": {"label": "bob", "task": "next"},
+                    "result": "{\"status\":\"done\"}"
+                }),
                 &ctx,
             )
-            .await
-            ;
+            .await;
 
         let parent = queue.get_task(&parent_id).unwrap();
         assert_eq!(
@@ -1016,7 +1049,10 @@ mod tests {
 
         let outcome = Tool::from(FinishTool)
             .call(
-                serde_json::json!({"handover": "bob", "task": "next", "result": {"wrong": 1}}),
+                serde_json::json!({
+                    "handover": {"label": "bob", "task": "next"},
+                    "result": {"wrong": 1}
+                }),
                 &ctx,
             )
             .await;
@@ -1046,45 +1082,242 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn omitted_task_defaults_child_body_to_the_parent_result() {
+    async fn configured_handover_creates_a_child_from_result_only() {
         let dir = crate::test_util::TempDir::new().unwrap();
         let (queue, _id) = one_task_in("alice", dir.path().to_path_buf());
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
-        let outcome = Tool::from(FinishTool)
-            .call(
-                serde_json::json!({"handover": "bob", "result": "alice's findings"}),
-                &ctx,
-            )
-            .await;
+        let outcome =
+            FinishTool::from_schema(None, Some(Task::labeled("bob", "Review {parent_result}")))
+                .call(serde_json::json!({"result": "alice's findings"}), &ctx)
+                .await;
         assert!(
             outcome.get_name() == Event::TOOL_CALL_FINISHED,
             "{outcome:?}"
         );
 
         let child = queue.get_task("t-2").unwrap();
-        assert!(child_body(&child).starts_with("alice's findings"));
+        assert_eq!(child_body(&child), "Review alice's findings");
     }
 
     #[tokio::test]
-    async fn handover_ends_the_child_body_with_the_parent_id_and_result_file() {
+    async fn configured_handover_accepts_its_label_and_overrides_task_and_schema() {
+        let dir = crate::test_util::TempDir::new().unwrap();
+        let (queue, _id) = one_task_in("alice", dir.path().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
+        let configured_schema = Schema::new(serde_json::json!({
+            "type": "string",
+            "title": "configured"
+        }))
+        .unwrap();
+        let tool = FinishTool::from_schema(
+            None,
+            Some(Task::labeled("bob", "configured body").schema(configured_schema)),
+        );
+
+        let outcome = tool
+            .call(
+                serde_json::json!({
+                    "result": "done",
+                    "handover": {
+                        "label": "bob",
+                        "task": {"kind": "review", "source": "{parent_id}"},
+                        "schema": {"type": "object", "title": "override"}
+                    }
+                }),
+                &ctx,
+            )
+            .await;
+
+        assert_eq!(outcome.get_name(), Event::TOOL_CALL_FINISHED);
+        let child = queue.get_task("t-2").unwrap();
+        assert_eq!(child.get_label(), Some("bob"));
+        assert_eq!(child.get_task()["kind"], "review");
+        assert_eq!(child.get_task()["source"], "t-1");
+        assert_eq!(title_of(child.get_schema().unwrap()), "override");
+    }
+
+    #[tokio::test]
+    async fn configured_handover_accepts_an_override_without_repeating_its_label() {
+        let dir = crate::test_util::TempDir::new().unwrap();
+        let (queue, _id) = one_task_in("alice", dir.path().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
+
+        FinishTool::from_schema(None, Some(Task::labeled("bob", "configured body")))
+            .call(
+                serde_json::json!({
+                    "result": "done",
+                    "handover": {"task": "overridden body"}
+                }),
+                &ctx,
+            )
+            .await;
+
+        let child = queue.get_task("t-2").unwrap();
+        assert_eq!(child.get_label(), Some("bob"));
+        assert_eq!(child.get_task(), "overridden body");
+    }
+
+    #[tokio::test]
+    async fn configured_handover_rejects_a_different_label_atomically() {
+        let dir = crate::test_util::TempDir::new().unwrap();
+        let (queue, parent_id) = one_task_in("alice", dir.path().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
+        let mut registry = crate::tools::ToolRegistry::default();
+        registry.register(FinishTool::from_schema(
+            None,
+            Some(Task::labeled("bob", "review")),
+        ));
+
+        let outcome = registry
+            .execute(
+                &[crate::tools::ToolCall {
+                    id: "call-1".into(),
+                    name: "finish".into(),
+                    input: serde_json::json!({
+                    "result": "done",
+                    "handover": {"label": "charlie"}
+                    }),
+                }],
+                &ctx,
+            )
+            .await
+            .remove(0);
+
+        assert_eq!(outcome.get_data()["kind"], "schema_failed");
+        let parent = queue.get_task(&parent_id).unwrap();
+        assert_eq!(parent.get_status(), Status::InProgress);
+        assert_eq!(parent.get_result(), None);
+        assert_eq!(read_result(dir.path(), &parent_id), None);
+        assert!(queue.get_task("t-2").is_none());
+    }
+
+    #[tokio::test]
+    async fn configured_handover_cannot_create_a_second_child_after_finish() {
+        let dir = crate::test_util::TempDir::new().unwrap();
+        let (queue, parent_id) = one_task_in("alice", dir.path().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
+        let tool = FinishTool::from_schema(None, Some(Task::labeled("bob", "review")));
+
+        let first = tool
+            .call(serde_json::json!({"result": "first"}), &ctx)
+            .await;
+        let second = tool
+            .call(serde_json::json!({"result": "second"}), &ctx)
+            .await;
+
+        assert_eq!(first.get_name(), Event::TOOL_CALL_FINISHED);
+        assert_eq!(second.get_name(), Event::TOOL_CALL_FAILED);
+        assert_eq!(
+            queue.get_task(&parent_id).unwrap().get_result(),
+            Some(&serde_json::json!("first"))
+        );
+        assert!(queue.get_task("t-2").is_some());
+        assert!(queue.get_task("t-3").is_none());
+    }
+
+    #[tokio::test]
+    async fn invalid_inline_handover_schema_is_atomic() {
+        let dir = crate::test_util::TempDir::new().unwrap();
+        let (queue, parent_id) = one_task_in("alice", dir.path().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
+        let mut registry = crate::tools::ToolRegistry::default();
+        registry.register(Tool::from(FinishTool));
+
+        let outcome = registry
+            .execute(
+                &[crate::tools::ToolCall {
+                    id: "call-1".into(),
+                    name: "finish".into(),
+                    input: serde_json::json!({
+                    "result": "done",
+                    "handover": {
+                        "label": "bob",
+                        "task": "review",
+                        "schema": {"unsupported": true}
+                    }
+                    }),
+                }],
+                &ctx,
+            )
+            .await
+            .remove(0);
+
+        assert_eq!(outcome.get_directive(), Some("handover_schema_invalid"));
+        let parent = queue.get_task(&parent_id).unwrap();
+        assert_eq!(parent.get_status(), Status::InProgress);
+        assert_eq!(parent.get_result(), None);
+        assert_eq!(read_result(dir.path(), &parent_id), None);
+        assert!(queue.get_task("t-2").is_none());
+    }
+
+    #[tokio::test]
+    async fn configured_handover_requires_a_nonempty_result() {
+        for result in [serde_json::Value::Null, serde_json::json!("")] {
+            let dir = crate::test_util::TempDir::new().unwrap();
+            let (queue, parent_id) = one_task_in("alice", dir.path().to_path_buf());
+            let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
+
+            let outcome = FinishTool::from_schema(None, Some(Task::labeled("bob", "review")))
+                .call(serde_json::json!({"result": result}), &ctx)
+                .await;
+
+            assert!(outcome
+                .get_content()
+                .contains("requires a non-null, non-empty result"));
+            assert_eq!(
+                queue.get_task(&parent_id).unwrap().get_status(),
+                Status::InProgress
+            );
+            assert!(queue.get_task("t-2").is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn handover_preserves_structure_and_substitutes_every_string_leaf() {
         let dir = crate::test_util::TempDir::new().unwrap();
         let (queue, parent_id) = one_task_in("alice", dir.path().to_path_buf());
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
 
         Tool::from(FinishTool)
             .call(
-                serde_json::json!({"handover": "bob", "result": "alice's findings"}),
+                serde_json::json!({
+                    "result": {"verdict": "safe"},
+                    "handover": {
+                        "label": "bob",
+                        "task": {
+                            "parent": "{parent_id}",
+                            "steps": ["Read {parent_result_path}", 2, {"input": "{parent_result}"}]
+                        }
+                    }
+                }),
                 &ctx,
             )
             .await;
 
         let child = queue.get_task("t-2").unwrap();
-        let body = child_body(&child);
-        assert!(body.contains(&parent_id), "{body}");
-        assert!(
-            body.contains(&queue.result_path(&parent_id).display().to_string()),
-            "{body}"
+        assert_eq!(child.get_task()["parent"], parent_id);
+        assert_eq!(child.get_task()["steps"][1], 2);
+        assert_eq!(
+            child.get_task()["steps"][2]["input"],
+            serde_json::json!({"verdict": "safe"}).to_string()
         );
+        assert_eq!(child.get_parent(), Some(parent_id.as_str()));
+    }
+
+    #[tokio::test]
+    async fn configured_handover_does_not_append_parent_metadata() {
+        let dir = crate::test_util::TempDir::new().unwrap();
+        let (queue, parent_id) = one_task_in("alice", dir.path().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
+
+        FinishTool::from_schema(None, Some(Task::labeled("bob", "Review it")))
+            .call(serde_json::json!({"result": "alice's findings"}), &ctx)
+            .await;
+
+        let child = queue.get_task("t-2").unwrap();
+        let body = child_body(&child);
+        assert_eq!(body, "Review it");
+        assert_eq!(child.parent.as_deref(), Some(parent_id.as_str()));
     }
 
     #[tokio::test]
@@ -1096,8 +1329,10 @@ mod tests {
         Tool::from(FinishTool)
             .call(
                 serde_json::json!({
-                    "handover": "bob",
-                    "task": "Read {parent_result_path} and continue",
+                    "handover": {
+                        "label": "bob",
+                        "task": "Read {parent_result_path} and continue"
+                    },
                     "result": "alice's findings"
                 }),
                 &ctx,
@@ -1113,7 +1348,7 @@ mod tests {
         );
     }
 
-    /// The child's task as text, which every handover writes as a string.
+    /// Read a text task from a child used by these string-specific tests.
     fn child_body(child: &Task) -> String {
         child.task.as_str().expect("a task string").to_string()
     }
@@ -1126,14 +1361,16 @@ mod tests {
         let (queue, _id) = one_task_in("alice", dir.path().to_path_buf());
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
         for body in [
-            serde_json::json!({"handover": "bob", "task": "x"}),
-            serde_json::json!({"handover": "bob", "task": "x", "result": null}),
-            serde_json::json!({"handover": "bob", "task": "x", "result": ""}),
+            serde_json::json!({"handover": {"label": "bob", "task": "x"}}),
+            serde_json::json!({"handover": {"label": "bob", "task": "x"}, "result": null}),
+            serde_json::json!({"handover": {"label": "bob", "task": "x"}, "result": ""}),
         ] {
             let outcome = Tool::from(FinishTool).call(body, &ctx).await;
             assert!(
                 outcome.get_name() == Event::TOOL_CALL_FAILED
-                    && outcome.get_content().contains("needs a result"),
+                    && outcome
+                        .get_content()
+                        .contains("requires a non-null, non-empty result"),
                 "{outcome:?}",
             );
         }
@@ -1154,7 +1391,10 @@ mod tests {
 
             let outcome = Tool::from(FinishTool)
                 .call(
-                    serde_json::json!({"handover": "bob", "task": "next", "result": result_value}),
+                    serde_json::json!({
+                        "handover": {"label": "bob", "task": "next"},
+                        "result": result_value
+                    }),
                     &ctx,
                 )
                 .await;
@@ -1168,37 +1408,79 @@ mod tests {
     }
 
     #[test]
-    fn a_number_where_the_declared_schema_asks_for_a_string_is_rejected() {
-        // Stringifying `42` would pass the check with a task the model never
-        // wrote; the violation names the field to fix instead.
+    fn a_non_schema_handover_schema_is_rejected() {
         let schema = Tool::from(FinishTool).get_input_schema().clone();
         let violations = schema
-            .validate(serde_json::json!({"handover": "bob", "task": 42, "result": "ok"}))
+            .validate(serde_json::json!({
+                "handover": {"label": "bob", "task": 42, "schema": "string"},
+                "result": "ok"
+            }))
             .unwrap_err();
         assert!(
-            violations.iter().any(|v| v.instance_path == "/task"),
+            violations
+                .iter()
+                .any(|v| v.instance_path == "/handover/schema"),
             "{violations}"
         );
     }
 
     #[tokio::test]
+    async fn malformed_handover_arguments_are_rejected_by_the_registry_atomically() {
+        for input in [
+            serde_json::json!({"handover": 7, "result": "x"}),
+            serde_json::json!({"handover": {"task": "x"}, "result": "x"}),
+            serde_json::json!({"handover": {"label": "bob"}, "result": "x"}),
+            serde_json::json!({
+                "handover": {"label": "  ", "task": "x"},
+                "result": "x"
+            }),
+            serde_json::json!({
+                "handover": {"label": "bob", "task": "x", "schema": "string"},
+                "result": "x"
+            }),
+        ] {
+            let dir = crate::test_util::TempDir::new().unwrap();
+            let (queue, parent_id) = one_task_in("alice", dir.path().to_path_buf());
+            let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
+            let mut registry = crate::tools::ToolRegistry::default();
+            registry.register(Tool::from(FinishTool));
+
+            let outcome = registry
+                .execute(
+                    &[crate::tools::ToolCall {
+                        id: "call-1".into(),
+                        name: "finish".into(),
+                        input,
+                    }],
+                    &ctx,
+                )
+                .await
+                .remove(0);
+
+            assert_eq!(outcome.get_data()["kind"], "schema_failed");
+            let parent = queue.get_task(&parent_id).unwrap();
+            assert_eq!(parent.get_status(), Status::InProgress);
+            assert_eq!(parent.get_result(), None);
+            assert_eq!(read_result(dir.path(), &parent_id), None);
+            assert!(queue.get_task("t-2").is_none());
+        }
+    }
+
+    #[tokio::test]
     async fn a_blank_handover_from_a_direct_call_is_an_error() {
-        // Model or host, a caller asking to hand over must hear a refusal
-        // rather than finish without the handover it asked for.
+        // Hosts that bypass registry validation still fail without mutating
+        // the queue, but do not receive a model-facing directive.
         let dir = crate::test_util::TempDir::new().unwrap();
         let (queue, parent_id) = one_task_in("alice", dir.path().to_path_buf());
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
         for body in [
-            serde_json::json!({"handover": "  ", "result": "x"}),
-            serde_json::json!({"handover": "bob", "task": "  ", "result": "x"}),
+            serde_json::json!({"handover": {"label": "  ", "task": "x"}, "result": "x"}),
+            serde_json::json!({"handover": {"task": "x"}, "result": "x"}),
             serde_json::json!({"handover": 7, "result": "x"}),
         ] {
             let outcome = Tool::from(FinishTool).call(body, &ctx).await;
-            assert!(
-                outcome.get_name() == Event::TOOL_CALL_FAILED
-                    && outcome.get_content().contains("non-blank"),
-                "{outcome:?}",
-            );
+            assert_eq!(outcome.get_name(), Event::TOOL_CALL_FAILED);
+            assert_eq!(outcome.get_directive(), None);
         }
         assert_eq!(
             queue.get_task(&parent_id).unwrap().status,
@@ -1214,7 +1496,10 @@ mod tests {
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
         let outcome = Tool::from(FinishTool)
             .call(
-                serde_json::json!({"handover": "bob", "task": "x", "result": "y"}),
+                serde_json::json!({
+                    "handover": {"label": "bob", "task": "x"},
+                    "result": "y"
+                }),
                 &ctx,
             )
             .await;
@@ -1230,8 +1515,10 @@ mod tests {
         Tool::from(FinishTool)
             .call(
                 serde_json::json!({
-                    "handover": "bob",
-                    "task": "Continue {parent_id}: {parent_result}",
+                    "handover": {
+                        "label": "bob",
+                        "task": "Continue {parent_id}: {parent_result}"
+                    },
                     "result": "alice's findings"
                 }),
                 &ctx,
@@ -1251,8 +1538,10 @@ mod tests {
         Tool::from(FinishTool)
             .call(
                 serde_json::json!({
-                    "handover": "bob",
-                    "task": "See {parent_id} and {unknown}",
+                    "handover": {
+                        "label": "bob",
+                        "task": "See {parent_id} and {unknown}"
+                    },
                     "result": "ok"
                 }),
                 &ctx,
@@ -1272,8 +1561,7 @@ mod tests {
         Tool::from(FinishTool)
             .call(
                 serde_json::json!({
-                    "handover": "bob",
-                    "task": "See {parent_key}",
+                    "handover": {"label": "bob", "task": "See {parent_key}"},
                     "result": "ok"
                 }),
                 &ctx,
@@ -1296,8 +1584,7 @@ mod tests {
         Tool::from(FinishTool)
             .call(
                 serde_json::json!({
-                    "handover": "bob",
-                    "task": "[{parent_result}]",
+                    "handover": {"label": "bob", "task": "[{parent_result}]"},
                     "result": "{parent_id}"
                 }),
                 &ctx,

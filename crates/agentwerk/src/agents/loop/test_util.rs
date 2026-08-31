@@ -106,26 +106,13 @@ pub fn write_result_response_named(tool_name: &str, result: &str) -> ModelRespon
     }
 }
 
-/// A finish call carrying a result that is not a plain string.
+/// A finish call carrying a structured result as its top-level arguments.
 pub fn write_result_value(result: serde_json::Value) -> ModelResponse {
     ModelResponse {
         content: vec![ContentBlock::ToolUse {
             id: "call-1".into(),
             name: "finish".into(),
-            input: serde_json::json!({ "result": result }),
-        }],
-        status: ResponseStatus::ToolUse,
-        usage: TokenUsage::default(),
-        model: "mock".into(),
-    }
-}
-
-pub fn handover_response(to: &str, task: &str, result: &str) -> ModelResponse {
-    ModelResponse {
-        content: vec![ContentBlock::ToolUse {
-            id: "call-1".into(),
-            name: "finish".into(),
-            input: serde_json::json!({ "handover": to, "task": task, "result": result }),
+            input: result,
         }],
         status: ResponseStatus::ToolUse,
         usage: TokenUsage::default(),

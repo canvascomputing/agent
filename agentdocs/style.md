@@ -6,10 +6,10 @@ Naming, comment, and prose rules, plus README structure. Skim the section matchi
 
 **A type earns a `pub use` at `lib.rs` only when it names a concept in the one-sentence description of the crate, or when root-level signatures hand it to the caller.**
 
-`Agent`, `Queue`, `Task`, `Policy`, `PolicyViolation`, `Knowledge`, `Directive`, `Text`, `Trajectory`, `Reply`, `Event`, `Status`, `FinishReason`, `Schema`, `SchemaStore`
+`Agent`, `Queue`, `Task`, `Policy`, `PolicyViolation`, `Knowledge`, `Directive`, `Text`, `Trajectory`, `Reply`, `Event`, `Status`, `FinishReason`, `Schema`
 
 - Discriminants callers match on earn a root slot: `Status`, `FinishReason`, `PolicyViolation`.
-- Builder parameters and run outputs earn one when callers name them: `Schema`, `SchemaStore`, `Policy`, `Directive`, `Text`, `Reply`, `Trajectory`.
+- Builder parameters and run outputs earn one when callers name them: `Schema`, `Policy`, `Directive`, `Text`, `Reply`, `Trajectory`.
 - Errors and conversion traits do not. They live in their domain module.
 - Free functions at the root are forbidden: convert to an associated function or move to the domain module.
 - Name collisions at the root are forbidden.
@@ -28,7 +28,7 @@ Naming, comment, and prose rules, plus README structure. Skim the section matchi
 
 **Names are disambiguated through content, not through redundant prefixes.**
 
-- Specific compound names stand alone: `Queue`, `SchemaStore`, `PolicyViolation`.
+- Specific compound names stand alone: `Queue`, `PolicyViolation`.
 - A concrete LLM provider is named for its vendor alone. Acronyms follow Rust API guidelines, so `OpenAi`, not `OpenAI`.
 - Two structs may not share a bare name within one module; both stay qualified.
 - When a trait and the concrete type callers hold want the same name, the bare noun goes to the type and the trait takes a `Like` suffix: `Provider` / `ProviderLike`.

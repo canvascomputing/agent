@@ -501,16 +501,11 @@ mod tests {
             .collect();
         assert_eq!(
             repairs,
-            vec![(
-                "finish",
-                "call-1",
-                "value_mistyped",
-                "/result/partial_sum retyped"
-            )]
+            vec![("finish", "call-1", "value_mistyped", "/partial_sum retyped")]
         );
         assert!(events.iter().any(|event| {
             event.get_name() == Event::TOOL_CALL_FINISHED
-                && event.get_data()["repairs"] == serde_json::json!(["/result/partial_sum retyped"])
+                && event.get_data()["repairs"] == serde_json::json!(["/partial_sum retyped"])
         }));
     }
 
