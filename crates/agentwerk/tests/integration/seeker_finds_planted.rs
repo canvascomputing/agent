@@ -18,7 +18,7 @@ use super::common;
 use agentwerk::agents::knowledge::Page;
 use agentwerk::event::{default_logger, Event};
 use agentwerk::tools::GrepTool;
-use agentwerk::{Agent, Knowledge, Policy, Queue, Task};
+use agentwerk::{Agent, Knowledge, Policy, Task, Werk};
 
 const SEEKER_AGENT: &str = include_str!("../../../use-cases/src/malware_scanner/agents/seeker.md");
 
@@ -152,7 +152,7 @@ async fn seeker_pool_finds_planted_indicators(
         logger(e);
     });
 
-    let tasks = Queue::new();
+    let tasks = Werk::new();
     tasks.set_policy(Policy {
         max_time: Some(TIME_BUDGET),
         max_turns: Some(80),

@@ -1,4 +1,4 @@
-//! Interactive terminal chat. One `Queue` + `Agent` + `Knowledge`
+//! Interactive terminal chat. One `Werk` + `Agent` + `Knowledge`
 //! lives for the whole session, and one chat task spans every turn:
 //! the first input creates the task via `tasks.add_task(...)`, every
 //! subsequent input lands as a user reply via `tasks.add_reply(&id, ...)`.
@@ -34,7 +34,7 @@ use agentwerk::providers::Model;
 use agentwerk::tools::{
     GlobTool, GrepTool, ListDirectoryTool, ReadFileTool, TaskTool, WriteFileTool,
 };
-use agentwerk::{Agent, Knowledge, Policy, Queue, Task};
+use agentwerk::{Agent, Knowledge, Policy, Task, Werk};
 
 const ROLE: &str = include_str!("prompts/repl.role.md");
 const BIBLE_PASSAGE: &str = include_str!("prompts/bible.txt");
@@ -92,7 +92,7 @@ async fn main() {
 
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let store_dir = cwd.join(".agentwerk");
-    let tasks = Queue::load(&store_dir).expect("open task store");
+    let tasks = Werk::load(&store_dir).expect("open task store");
     tasks.set_policy(Policy {
         max_turns: Some(40),
         ..Default::default()
@@ -520,7 +520,7 @@ fn redact(messages: &mut [Reply], word: &str) {
 /// terminal (`finished`/`failed`), or the assistant has spoken and called
 /// no tool. A mid-turn reply carrying a tool call doesn't count, so the
 /// prompt never races the user against the loop.
-async fn wait_for_assistant_pause(tasks: &Queue, id: &str) {
+async fn wait_for_assistant_pause(tasks: &Werk, id: &str) {
     tasks.finish_tasks(id).await;
 }
 
@@ -567,7 +567,7 @@ impl Style {
 /// Transition every non-terminal task carrying `label` to Failed.
 /// Catches both the active InProgress chat from the prior session and
 /// any orphan Todo left by an interrupted `/new <message>`.
-fn fail_stale_chats(tasks: &Queue, label: &str) -> usize {
+fn fail_stale_chats(tasks: &Werk, label: &str) -> usize {
     let label = label.to_string();
     let stale: Vec<String> = tasks
         .find_tasks(move |task: &Task| task.get_label() == Some(&label) && task.is_pending())
@@ -587,7 +587,7 @@ mod tests {
 
     #[test]
     fn fail_stale_chats_marks_every_matching_pending_task_as_failed() {
-        let tasks = Queue::new();
+        let tasks = Werk::new();
         let mut ids = Vec::new();
         for body in ["one", "two", "three"] {
             let id = tasks.add_task(Task::labeled("orchestrator", body));
@@ -606,7 +606,7 @@ mod tests {
 
     #[test]
     fn fail_stale_chats_returns_zero_when_no_matching_tasks_exist() {
-        let tasks = Queue::new();
+        let tasks = Werk::new();
         let n = fail_stale_chats(&tasks, "orchestrator");
         assert_eq!(n, 0);
     }

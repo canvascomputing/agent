@@ -14,4 +14,4 @@ pub use agent::Agent;
 pub use knowledge::Knowledge;
 pub use policy::{Policy, PolicyViolation};
 pub use query::{Matcher, Query, QueryError};
-pub use tasks::{Queue, Reply, Status, Task, TaskError, Trajectory};
+pub use tasks::{Reply, Status, Task, TaskError, Trajectory, Werk};

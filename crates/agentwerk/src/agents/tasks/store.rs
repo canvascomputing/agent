@@ -1,4 +1,4 @@
-//! Every change a [`Queue`] makes to its tasks, and the events each
+//! Every change a [`Werk`] makes to its tasks, and the events each
 //! change emits.
 
 use std::path::{Path, PathBuf};
@@ -9,13 +9,13 @@ use crate::schemas::SchemaViolations;
 
 use super::super::query::Query;
 use super::error::TaskError;
-use super::queue::Queue;
 use super::reply::Reply;
 use super::task::{Status, Task};
+use super::werk::Werk;
 use super::{now_millis, numeric_id, Replies, TaskResult};
 
 /// Highest `t-<N>` already on disk under `<dir>/tasks/`, or 0 if
-/// none. Only needed for a queue built via `new()`, which never reads
+/// none. Only needed for a Werk built via `new()`, which never reads
 /// the directory itself; `load()` derives this from what it already read.
 fn max_existing_task_id(dir: &Path) -> u64 {
     std::fs::read_dir(dir.join("tasks"))
@@ -31,7 +31,7 @@ fn max_existing_task_id(dir: &Path) -> u64 {
         .unwrap_or(0)
 }
 
-impl Queue {
+impl Werk {
     /// Insert `task`, filling in the fields agentwerk owns. The task is always born
     /// `Todo`; to pin it to a specific agent, label it with the agent's
     /// name. Returns the inserted task's ID.
@@ -151,9 +151,9 @@ impl Queue {
     /// like the run-level events no single agent causes.
     ///
     /// ```no_run
-    /// # use agentwerk::Queue;
+    /// # use agentwerk::Werk;
     /// # fn run() -> Result<(), Box<dyn std::error::Error>> {
-    /// let tasks = Queue::new();
+    /// let tasks = Werk::new();
     /// let id = tasks.add_task("Look up the cached answer.");
     /// tasks.set_task_finished(&id, "42")?;
     /// # Ok(())
@@ -189,7 +189,7 @@ impl Queue {
     fn set_final_status(&self, id: &str, status: Status, agent: &str) -> Result<(), TaskError> {
         // Increment BEFORE the status flip and decrement only after the
         // terminal event has been emitted: the drain check in `finish_tasks()`
-        // must never observe (empty queue, zero counter) mid-transition,
+        // must never observe (empty Werk, zero counter) mid-transition,
         // or it drains before an event handler can enqueue follow-up work.
         struct InFlight<'a>(&'a std::sync::atomic::AtomicUsize);
         impl Drop for InFlight<'_> {
@@ -291,16 +291,16 @@ impl Queue {
     /// the task.
     ///
     /// ```no_run
-    /// use agentwerk::Queue;
+    /// use agentwerk::Werk;
     /// use agentwerk::Event;
     /// use agentwerk::agents::tasks::{Reply, ReplyContent};
     ///
-    /// let tasks = Queue::new();
-    /// tasks.on_event(|queue, event| {
+    /// let tasks = Werk::new();
+    /// tasks.on_event(|werk, event| {
     ///     if event.get_name() != Event::TOOL_CALL_FAILED {
     ///         return;
     ///     }
-    ///     queue.edit_replies(event.get_task_id(), |replies| {
+    ///     werk.edit_replies(event.get_task_id(), |replies| {
     ///         // Drop both sides of the failed exchange: the assistant's tool_use
     ///         // and the failed tool_result, so no unpaired block is left behind.
     ///         replies.retain(|reply| {
@@ -367,15 +367,15 @@ mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
 
-    fn emit_event(queue: &Queue, id: &str, agent: &str, event: Event) -> Event {
-        queue.emit_event(event.task_id(id).agent_id(agent))
+    fn emit_event(werk: &Werk, id: &str, agent: &str, event: Event) -> Event {
+        werk.emit_event(event.task_id(id).agent_id(agent))
     }
 
     #[test]
     fn task_creates_task_with_user_reporter() {
-        let (queue, _tmp) = test_queue();
-        queue.add_task("hello");
-        let t = queue.get_task("t-1").unwrap();
+        let (werk, _tmp) = test_werk();
+        werk.add_task("hello");
+        let t = werk.get_task("t-1").unwrap();
         assert_eq!(t.task, serde_json::Value::String("hello".into()));
         assert_eq!(t.reporter, "user");
         assert_eq!(t.status, Status::Todo);
@@ -383,40 +383,39 @@ mod tests {
 
     #[test]
     fn labeled_task_attaches_label_and_leaves_status_todo() {
-        let (queue, _tmp) = test_queue();
-        queue.add_task(Task::new("hello").label("research"));
-        let t = queue.get_task("t-1").unwrap();
+        let (werk, _tmp) = test_werk();
+        werk.add_task(Task::new("hello").label("research"));
+        let t = werk.get_task("t-1").unwrap();
         assert_eq!(t.label.as_deref(), Some("research"));
         assert_eq!(t.status, Status::Todo);
     }
 
     #[test]
     fn create_with_named_label_is_born_todo_and_carries_label() {
-        let (queue, _tmp) = test_queue();
-        queue.add_task(Task::new("specific work for alice").label("alice"));
-        let t = queue.get_task("t-1").unwrap();
+        let (werk, _tmp) = test_werk();
+        werk.add_task(Task::new("specific work for alice").label("alice"));
+        let t = werk.get_task("t-1").unwrap();
         assert_eq!(t.label.as_deref(), Some("alice"));
         assert_eq!(t.status, Status::Todo);
     }
 
     #[test]
     fn create_with_label_and_schema_is_stored_verbatim() {
-        let (queue, _tmp) = test_queue();
+        let (werk, _tmp) = test_werk();
         let schema = crate::schemas::Schema::new(serde_json::json!({"type": "string"})).unwrap();
-        queue.add_task(Task::new("x").label("urgent").schema(schema));
-        let t = queue.get_task("t-1").unwrap();
+        werk.add_task(Task::new("x").label("urgent").schema(schema));
+        let t = werk.get_task("t-1").unwrap();
         assert_eq!(t.label.as_deref(), Some("urgent"));
         assert!(t.schema.is_some());
     }
 
     #[test]
     fn set_result_updates_task() {
-        let (queue, _tmp) = test_queue();
-        queue.add_task("hi");
-        queue
-            .set_result("t-1", serde_json::Value::String("answer".into()))
+        let (werk, _tmp) = test_werk();
+        werk.add_task("hi");
+        werk.set_result("t-1", serde_json::Value::String("answer".into()))
             .unwrap();
-        let stored = queue.get_task("t-1").unwrap();
+        let stored = werk.get_task("t-1").unwrap();
         assert_eq!(
             stored.result.as_ref(),
             Some(&serde_json::Value::String("answer".into()))
@@ -429,15 +428,15 @@ mod tests {
 
     #[test]
     fn done_and_failed_filter_by_status() {
-        let (queue, _tmp) = test_queue();
-        queue.add_task("ok");
-        queue.add_task("oops");
-        queue.add_task("pending");
-        queue.claim(&Query::from("t-1"), "agent");
-        queue.set_finished_by("t-1", "agent").unwrap();
-        queue.set_task_failed("t-2").unwrap();
-        let done = queue.find_tasks(|t: &Task| t.status == Status::Finished);
-        let failed = queue.find_tasks(|t: &Task| t.status == Status::Failed);
+        let (werk, _tmp) = test_werk();
+        werk.add_task("ok");
+        werk.add_task("oops");
+        werk.add_task("pending");
+        werk.claim(&Query::from("t-1"), "agent");
+        werk.set_finished_by("t-1", "agent").unwrap();
+        werk.set_task_failed("t-2").unwrap();
+        let done = werk.find_tasks(|t: &Task| t.status == Status::Finished);
+        let failed = werk.find_tasks(|t: &Task| t.status == Status::Failed);
         assert_eq!(done.len(), 1);
         assert_eq!(done[0].id, "t-1");
         assert_eq!(failed.len(), 1);
@@ -446,25 +445,25 @@ mod tests {
 
     #[test]
     fn task_status_transitions_record_stats() {
-        let (queue, _tmp) = test_queue();
-        queue.add_task("a");
-        queue.add_task("b");
-        queue.add_task("c");
-        assert_eq!(queue.stats.event_count(Event::TASK_CREATED), 3);
-        queue.claim(&Query::from("t-1"), "agent");
-        queue.set_finished_by("t-1", "agent").unwrap();
-        queue.claim(&Query::from("t-2"), "agent");
-        queue.set_task_failed("t-2").unwrap();
-        assert_eq!(queue.stats.event_count(Event::TASK_FINISHED), 1);
-        assert_eq!(queue.stats.event_count(Event::TASK_FAILED), 1);
+        let (werk, _tmp) = test_werk();
+        werk.add_task("a");
+        werk.add_task("b");
+        werk.add_task("c");
+        assert_eq!(werk.stats.event_count(Event::TASK_CREATED), 3);
+        werk.claim(&Query::from("t-1"), "agent");
+        werk.set_finished_by("t-1", "agent").unwrap();
+        werk.claim(&Query::from("t-2"), "agent");
+        werk.set_task_failed("t-2").unwrap();
+        assert_eq!(werk.stats.event_count(Event::TASK_FINISHED), 1);
+        assert_eq!(werk.stats.event_count(Event::TASK_FAILED), 1);
     }
 
     #[test]
     fn a_task_logs_created_started_and_finished_in_order() {
-        let (queue, dir) = test_queue();
-        queue.add_task("hello");
-        queue.claim(&Query::from("t-1"), "agent");
-        queue.set_finished_by("t-1", "agent").unwrap();
+        let (werk, dir) = test_werk();
+        werk.add_task("hello");
+        werk.claim(&Query::from("t-1"), "agent");
+        werk.set_finished_by("t-1", "agent").unwrap();
         let lines = read_events_log(dir.path());
         assert_eq!(lines.len(), 3);
         let names: Vec<&str> = lines.iter().map(|l| l["name"].as_str().unwrap()).collect();
@@ -477,10 +476,10 @@ mod tests {
 
     #[test]
     fn streamed_chunks_stay_out_of_the_log() {
-        let (queue, dir) = test_queue();
-        queue.add_task("seed");
+        let (werk, dir) = test_werk();
+        werk.add_task("seed");
         emit_event(
-            &queue,
+            &werk,
             "t-1",
             "agent",
             Event::new(Event::TEXT_CHUNK_RECEIVED)
@@ -496,7 +495,7 @@ mod tests {
     #[test]
     fn load_replays_the_token_totals_a_run_already_spent() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let original = Queue::new();
+        let original = Werk::new();
         original.set_dir(dir.path().to_path_buf());
         original.add_task("seed");
         emit_event(
@@ -515,16 +514,16 @@ mod tests {
 
         // The token limits divide against these, so a resumed run that read
         // them back as zero would silently start its budget over.
-        let resumed = Queue::load(dir.path()).unwrap();
+        let resumed = Werk::load(dir.path()).unwrap();
         assert_eq!(resumed.stats.input_tokens(), 900);
         assert_eq!(resumed.stats.output_tokens(), 120);
     }
 
     #[test]
     fn set_failed_logs_a_failure_without_a_start() {
-        let (queue, dir) = test_queue();
-        queue.add_task("hello");
-        queue.set_task_failed("t-1").unwrap();
+        let (werk, dir) = test_werk();
+        werk.add_task("hello");
+        werk.set_task_failed("t-1").unwrap();
         let lines = read_events_log(dir.path());
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[0]["name"], "task_created");
@@ -534,8 +533,8 @@ mod tests {
 
     #[test]
     fn a_logged_event_carries_the_task_label_when_pinned() {
-        let (queue, dir) = test_queue();
-        queue.add_task(Task::new("specific").label("alice"));
+        let (werk, dir) = test_werk();
+        werk.add_task(Task::new("specific").label("alice"));
         let lines = read_events_log(dir.path());
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0]["name"], "task_created");
@@ -544,24 +543,24 @@ mod tests {
 
     #[test]
     fn the_log_holds_one_line_per_lifecycle_turn_across_tasks() {
-        let (queue, dir) = test_queue();
-        queue.add_task("a");
-        queue.add_task("b");
-        queue.claim(&Query::from("t-1"), "agent");
-        queue.set_finished_by("t-1", "agent").unwrap();
-        queue.claim(&Query::from("t-2"), "agent");
-        queue.set_task_failed("t-2").unwrap();
+        let (werk, dir) = test_werk();
+        werk.add_task("a");
+        werk.add_task("b");
+        werk.claim(&Query::from("t-1"), "agent");
+        werk.set_finished_by("t-1", "agent").unwrap();
+        werk.claim(&Query::from("t-2"), "agent");
+        werk.set_task_failed("t-2").unwrap();
         // 2 created + 2 started + 1 finished + 1 failed
         assert_eq!(read_events_log(dir.path()).len(), 6);
     }
 
     #[test]
     fn claim_transitions_todo_to_in_progress_and_sets_the_assignee() {
-        let (queue, _tmp) = test_queue();
-        queue.add_task("hello");
-        let id = queue.claim(&Query::from("status = Todo"), "alice").unwrap();
+        let (werk, _tmp) = test_werk();
+        werk.add_task("hello");
+        let id = werk.claim(&Query::from("status = Todo"), "alice").unwrap();
         assert_eq!(id, "t-1");
-        let t = queue.get_task(&id).unwrap();
+        let t = werk.get_task(&id).unwrap();
         assert_eq!(t.status, Status::InProgress);
         assert_eq!(t.assignee.as_deref(), Some("alice"));
         assert!(t.started_at.is_some());
@@ -569,48 +568,48 @@ mod tests {
 
     #[test]
     fn claim_leaves_the_label_the_task_was_filed_with() {
-        let (queue, _tmp) = test_queue();
-        queue.add_task(Task::new("hello").label("analysis"));
-        let id = queue.claim(&Query::from("analysis"), "alice").unwrap();
+        let (werk, _tmp) = test_werk();
+        werk.add_task(Task::new("hello").label("analysis"));
+        let id = werk.claim(&Query::from("analysis"), "alice").unwrap();
         assert_eq!(
-            queue.get_task(&id).unwrap().label.as_deref(),
+            werk.get_task(&id).unwrap().label.as_deref(),
             Some("analysis")
         );
     }
 
     #[test]
     fn claim_returns_none_when_no_task_matches() {
-        let (queue, _tmp) = test_queue();
-        queue.add_task("hello");
-        assert!(queue.claim(&Query::from("nonexistent"), "alice").is_none());
+        let (werk, _tmp) = test_werk();
+        werk.add_task("hello");
+        assert!(werk.claim(&Query::from("nonexistent"), "alice").is_none());
     }
 
     #[test]
     fn second_claim_of_same_task_returns_none() {
-        let (queue, _tmp) = test_queue();
-        queue.add_task("hello");
-        let first = queue.claim(&Query::from("t-1"), "alice");
+        let (werk, _tmp) = test_werk();
+        werk.add_task("hello");
+        let first = werk.claim(&Query::from("t-1"), "alice");
         assert!(first.is_some());
         // Second claim: task is now InProgress, not Todo.
-        let second = queue.claim(&Query::from("t-1"), "bob");
+        let second = werk.claim(&Query::from("t-1"), "bob");
         assert!(second.is_none());
     }
 
     #[test]
     fn claim_picks_earliest_eligible_task() {
-        let (queue, _tmp) = test_queue();
-        queue.add_task("a");
-        queue.add_task("b");
-        queue.add_task("c");
-        let id = queue.claim(&Query::from("status = Todo"), "alice").unwrap();
+        let (werk, _tmp) = test_werk();
+        werk.add_task("a");
+        werk.add_task("b");
+        werk.add_task("c");
+        let id = werk.claim(&Query::from("status = Todo"), "alice").unwrap();
         assert_eq!(id, "t-1");
     }
 
     #[test]
     fn claim_logs_the_task_starting() {
-        let (queue, dir) = test_queue();
-        queue.add_task("hello");
-        queue.claim(&Query::from("status = Todo"), "alice");
+        let (werk, dir) = test_werk();
+        werk.add_task("hello");
+        werk.claim(&Query::from("status = Todo"), "alice");
         let lines = read_events_log(dir.path());
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[0]["name"], "task_created");
@@ -621,21 +620,20 @@ mod tests {
 
     #[test]
     fn set_finished_transitions_to_finished() {
-        let (queue, _tmp) = test_queue();
-        let id = queue.add_task("hello");
-        queue.claim(&Query::from("status = Todo"), "alice");
-        queue.set_finished_by(&id, "alice").unwrap();
-        let t = queue.get_task(&id).unwrap();
+        let (werk, _tmp) = test_werk();
+        let id = werk.add_task("hello");
+        werk.claim(&Query::from("status = Todo"), "alice");
+        werk.set_finished_by(&id, "alice").unwrap();
+        let t = werk.get_task(&id).unwrap();
         assert_eq!(t.status, Status::Finished);
         assert!(t.finished_at.is_some());
     }
 
     #[test]
     fn task_finished_event_carries_the_stored_result() {
-        let (queue, dir) = test_queue();
-        let id = queue.add_task("hello");
-        queue
-            .set_task_finished(&id, serde_json::json!({"answer": 42}))
+        let (werk, dir) = test_werk();
+        let id = werk.add_task("hello");
+        werk.set_task_finished(&id, serde_json::json!({"answer": 42}))
             .unwrap();
 
         let lines = read_events_log(dir.path());
@@ -646,11 +644,11 @@ mod tests {
 
     #[test]
     fn task_finished_event_distinguishes_no_result_from_null() {
-        let (queue, dir) = test_queue();
-        let without = queue.add_task("without");
-        queue.set_finished_by(&without, "alice").unwrap();
-        let with_null = queue.add_task("with null");
-        queue.set_task_finished(&with_null, ()).unwrap();
+        let (werk, dir) = test_werk();
+        let without = werk.add_task("without");
+        werk.set_finished_by(&without, "alice").unwrap();
+        let with_null = werk.add_task("with null");
+        werk.set_task_finished(&with_null, ()).unwrap();
 
         let lines = read_events_log(dir.path());
         let finished: Vec<&serde_json::Value> = lines
@@ -667,13 +665,13 @@ mod tests {
     #[test]
     fn task_finished_result_round_trips_through_the_event_log() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let queue = Queue::new();
-        queue.set_dir(dir.path().to_path_buf());
-        let id = queue.add_task("hello");
-        queue.set_task_finished(&id, "done").unwrap();
-        drop(queue);
+        let werk = Werk::new();
+        werk.set_dir(dir.path().to_path_buf());
+        let id = werk.add_task("hello");
+        werk.set_task_finished(&id, "done").unwrap();
+        drop(werk);
 
-        let resumed = Queue::load(dir.path()).unwrap();
+        let resumed = Werk::load(dir.path()).unwrap();
         let event = resumed.find_event(Event::TASK_FINISHED).unwrap();
         assert_eq!(event.get_data()["result"], "done");
         assert_eq!(resumed.get_results(), vec![serde_json::json!("done")]);
@@ -681,31 +679,31 @@ mod tests {
 
     #[test]
     fn set_failed_transitions_to_failed() {
-        let (queue, _tmp) = test_queue();
-        let id = queue.add_task("hello");
-        queue.claim(&Query::from("status = Todo"), "alice");
-        queue.set_task_failed(&id).unwrap();
-        let t = queue.get_task(&id).unwrap();
+        let (werk, _tmp) = test_werk();
+        let id = werk.add_task("hello");
+        werk.claim(&Query::from("status = Todo"), "alice");
+        werk.set_task_failed(&id).unwrap();
+        let t = werk.get_task(&id).unwrap();
         assert_eq!(t.status, Status::Failed);
         assert!(t.failed_at.is_some());
     }
 
     #[test]
     fn a_finished_task_is_not_reopened_by_a_later_failure() {
-        let (queue, _tmp) = test_queue();
-        let id = queue.add_task("hello");
-        queue.claim(&Query::from("status = Todo"), "alice");
-        queue.set_task_finished(&id, "host result").unwrap();
+        let (werk, _tmp) = test_werk();
+        let id = werk.add_task("hello");
+        werk.claim(&Query::from("status = Todo"), "alice");
+        werk.set_task_finished(&id, "host result").unwrap();
 
         // Alice was still turning the task and gives up after the host
         // resolved it.
-        queue.set_failed_by(&id, "alice").unwrap();
+        werk.set_failed_by(&id, "alice").unwrap();
 
-        let task = queue.get_task(&id).unwrap();
+        let task = werk.get_task(&id).unwrap();
         assert_eq!(task.status, Status::Finished);
         assert_eq!(task.result, Some(serde_json::json!("host result")));
         assert!(task.failed_at.is_none());
-        let terminal = queue.find_events(|event: &Event| {
+        let terminal = werk.find_events(|event: &Event| {
             matches!(event.get_name(), Event::TASK_FINISHED | Event::TASK_FAILED)
         });
         assert_eq!(terminal.len(), 1);
@@ -714,14 +712,14 @@ mod tests {
 
     #[test]
     fn a_failed_task_is_not_reopened_by_a_later_finish() {
-        let (queue, _tmp) = test_queue();
-        let id = queue.add_task("hello");
-        queue.claim(&Query::from("status = Todo"), "alice");
-        queue.set_failed_by(&id, "alice").unwrap();
+        let (werk, _tmp) = test_werk();
+        let id = werk.add_task("hello");
+        werk.claim(&Query::from("status = Todo"), "alice");
+        werk.set_failed_by(&id, "alice").unwrap();
 
-        queue.set_task_finished(&id, "late result").unwrap();
+        werk.set_task_finished(&id, "late result").unwrap();
 
-        let task = queue.get_task(&id).unwrap();
+        let task = werk.get_task(&id).unwrap();
         assert_eq!(task.status, Status::Failed);
         assert!(task.finished_at.is_none());
         // The result too, or the task reads as failed while carrying an answer.
@@ -730,58 +728,57 @@ mod tests {
 
     #[test]
     fn set_finished_stores_the_result_and_resolves_the_task() {
-        let (queue, _tmp) = test_queue();
-        queue.add_task("hello");
-        queue
-            .set_task_finished("t-1", serde_json::json!({"answer": 42}))
+        let (werk, _tmp) = test_werk();
+        werk.add_task("hello");
+        werk.set_task_finished("t-1", serde_json::json!({"answer": 42}))
             .unwrap();
-        let t = queue.get_task("t-1").unwrap();
+        let t = werk.get_task("t-1").unwrap();
         assert_eq!(t.status, Status::Finished);
         assert_eq!(t.result, Some(serde_json::json!({"answer": 42})));
         assert_eq!(
-            queue.get_results().pop(),
+            werk.get_results().pop(),
             Some(serde_json::json!({"answer": 42}))
         );
     }
 
     #[test]
     fn set_finished_rejects_a_result_that_misses_the_task_schema() {
-        let (queue, _tmp) = test_queue();
+        let (werk, _tmp) = test_werk();
         let schema = crate::schemas::Schema::new(serde_json::json!({
             "type": "object",
             "properties": {"title": {"type": "string"}},
             "required": ["title"],
         }))
         .unwrap();
-        queue.add_task(Task::new("write a report").schema(schema));
+        werk.add_task(Task::new("write a report").schema(schema));
 
-        let err = queue
+        let err = werk
             .set_task_finished("t-1", serde_json::json!({"body": "no title"}))
             .unwrap_err();
         assert!(matches!(err, TaskError::ResultRejected { .. }));
-        assert_eq!(queue.get_task("t-1").unwrap().status, Status::Todo);
+        assert_eq!(werk.get_task("t-1").unwrap().status, Status::Todo);
     }
 
     #[test]
     fn set_finished_errors_on_an_unknown_id() {
-        let (queue, _tmp) = test_queue();
-        let err = queue.set_task_finished("t-9", "done").unwrap_err();
+        let (werk, _tmp) = test_werk();
+        let err = werk.set_task_finished("t-9", "done").unwrap_err();
         assert!(matches!(err, TaskError::TaskMissing { .. }));
     }
 
     #[test]
     fn task_parent_builder_round_trips() {
-        let (queue, _tmp) = test_queue();
-        queue.add_task(Task::new("child body").parent("t-1"));
-        let stored = queue.get_task("t-1").unwrap();
+        let (werk, _tmp) = test_werk();
+        werk.add_task(Task::new("child body").parent("t-1"));
+        let stored = werk.get_task("t-1").unwrap();
         assert_eq!(stored.parent.as_deref(), Some("t-1"));
     }
 
     #[test]
     fn write_tool_output_returns_relative_path_and_writes_absolute() {
-        let (queue, dir) = test_queue();
-        queue.add_task("seed");
-        let rel = queue
+        let (werk, dir) = test_werk();
+        werk.add_task("seed");
+        let rel = werk
             .write_tool_output("t-1", "call-1", "the full content")
             .expect("write succeeds when dir exists");
         let expected_rel: PathBuf = ["tasks", "t-1", "outputs", "call-1.txt"].iter().collect();
@@ -792,19 +789,19 @@ mod tests {
 
     #[test]
     fn write_tool_output_creates_outputs_subdir_lazily() {
-        let (queue, dir) = test_queue();
-        queue.add_task("seed");
+        let (werk, dir) = test_werk();
+        werk.add_task("seed");
         let outputs = dir.path().join("tasks").join("t-1").join("outputs");
         assert!(!outputs.exists());
-        queue.write_tool_output("t-1", "call-1", "payload").unwrap();
+        werk.write_tool_output("t-1", "call-1", "payload").unwrap();
         assert!(outputs.is_dir());
     }
 
     #[test]
     fn a_logged_event_names_the_agent_that_caused_it() {
-        let (queue, dir) = test_queue();
-        queue.add_task("first");
-        queue.add_task(Task::new("child").parent("t-1"));
+        let (werk, dir) = test_werk();
+        werk.add_task("first");
+        werk.add_task(Task::new("child").parent("t-1"));
         let lines = read_events_log(dir.path());
         assert_eq!(lines.len(), 2);
         // The reporter, since a task is created by whoever filed it.
@@ -812,13 +809,13 @@ mod tests {
         assert_eq!(lines[1]["agent_id"], "user");
     }
 
-    // Resumption: Queue::load
+    // Resumption: Werk::load
 
     #[test]
     fn load_creates_tasks_dir_when_missing() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let queue = Queue::load(dir.path()).unwrap();
-        assert!(queue.get_tasks().is_empty());
+        let werk = Werk::load(dir.path()).unwrap();
+        assert!(werk.get_tasks().is_empty());
         assert!(dir.path().join("tasks").is_dir());
     }
 
@@ -828,7 +825,7 @@ mod tests {
     #[test]
     fn load_reports_a_task_whose_replies_cannot_be_read() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let original = Queue::new();
+        let original = Werk::new();
         original.set_dir(dir.path().to_path_buf());
         original.add_task("seed work");
         original.append_reply("t-1", Reply::user_text("hello"));
@@ -842,7 +839,7 @@ mod tests {
         )
         .unwrap();
 
-        let Err(error) = Queue::load(dir.path()) else {
+        let Err(error) = Werk::load(dir.path()) else {
             panic!("load must fail when a task's replies cannot be read");
         };
         assert!(
@@ -854,7 +851,7 @@ mod tests {
     #[test]
     fn load_restores_done_task_with_result_and_replies() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let original = Queue::new();
+        let original = Werk::new();
         original.set_dir(dir.path().to_path_buf());
         original.add_task("seed work");
         original
@@ -863,7 +860,7 @@ mod tests {
         original.set_finished_by("t-1", "agent").unwrap();
         drop(original);
 
-        let resumed = Queue::load(dir.path()).unwrap();
+        let resumed = Werk::load(dir.path()).unwrap();
         let t = resumed.get_task("t-1").unwrap();
         assert_eq!(t.status, Status::Finished);
         assert_eq!(t.result.as_ref(), Some(&serde_json::json!({"ok": true})));
@@ -873,12 +870,12 @@ mod tests {
     #[test]
     fn insert_after_load_never_reuses_an_existing_id() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let original = Queue::new();
+        let original = Werk::new();
         original.set_dir(dir.path().to_path_buf());
         original.add_task("seed work");
         drop(original);
 
-        let resumed = Queue::load(dir.path()).unwrap();
+        let resumed = Werk::load(dir.path()).unwrap();
         assert_eq!(resumed.add_task("more work"), "t-2");
     }
 
@@ -887,12 +884,12 @@ mod tests {
         // The pattern a fresh process actually uses against a directory a
         // prior run already wrote into: `new()` (not `load()`) plus `.dir(..)`.
         let dir = crate::test_util::TempDir::new().unwrap();
-        let first = Queue::new();
+        let first = Werk::new();
         first.set_dir(dir.path().to_path_buf());
         first.add_task("seed work");
         drop(first);
 
-        let second = Queue::new();
+        let second = Werk::new();
         second.set_dir(dir.path().to_path_buf());
         assert_eq!(second.add_task("more work"), "t-2");
     }
@@ -900,12 +897,12 @@ mod tests {
     #[test]
     fn load_seeds_next_task_id_without_rescanning_tasks_dir() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let original = Queue::new();
+        let original = Werk::new();
         original.set_dir(dir.path().to_path_buf());
         original.add_task("seed work");
         drop(original);
 
-        let resumed = Queue::load(dir.path()).unwrap();
+        let resumed = Werk::load(dir.path()).unwrap();
         // `load()` already knows the highest ID from what it just read
         // into memory; removing the directory here proves `insert()` does
         // not rescan it, since a rescan would find nothing and wrongly
@@ -917,7 +914,7 @@ mod tests {
     #[test]
     fn load_restores_in_progress_replies() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let original = Queue::new();
+        let original = Werk::new();
         original.set_dir(dir.path().to_path_buf());
         original.add_task("mid flight");
         original
@@ -925,7 +922,7 @@ mod tests {
             .unwrap();
         drop(original);
 
-        let resumed = Queue::load(dir.path()).unwrap();
+        let resumed = Werk::load(dir.path()).unwrap();
         let t = resumed.get_task("t-1").unwrap();
         assert_eq!(t.status, Status::InProgress);
         assert_eq!(t.assignee.as_deref(), Some("alice"));
@@ -934,7 +931,7 @@ mod tests {
     #[test]
     fn load_replays_the_event_log_into_the_counters() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let original = Queue::new();
+        let original = Werk::new();
         original.set_dir(dir.path().to_path_buf());
         original.add_task("a");
         original.add_task("b");
@@ -943,7 +940,7 @@ mod tests {
         original.set_task_failed("t-2").unwrap();
         drop(original);
 
-        let resumed = Queue::load(dir.path()).unwrap();
+        let resumed = Werk::load(dir.path()).unwrap();
         assert_eq!(resumed.stats.event_count(Event::TASK_CREATED), 2);
         assert_eq!(resumed.stats.event_count(Event::TASK_FINISHED), 1);
         assert_eq!(resumed.stats.event_count(Event::TASK_FAILED), 1);
@@ -951,7 +948,7 @@ mod tests {
     #[test]
     fn load_skips_dir_without_task_json() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let original = Queue::new();
+        let original = Werk::new();
         original.set_dir(dir.path().to_path_buf());
         original.add_task("valid");
         drop(original);
@@ -962,7 +959,7 @@ mod tests {
         std::fs::create_dir_all(&stray_dir).unwrap();
         std::fs::write(stray_dir.join("anything.json"), "not json").unwrap();
 
-        let resumed = Queue::load(dir.path()).unwrap();
+        let resumed = Werk::load(dir.path()).unwrap();
         assert!(resumed.get_task("t-1").is_some());
         assert!(resumed.get_task("t-99").is_none());
     }
@@ -994,7 +991,7 @@ mod tests {
         )
         .unwrap();
 
-        let resumed = Queue::load(dir.path()).unwrap();
+        let resumed = Werk::load(dir.path()).unwrap();
         let task = resumed.get_task("t-1").expect("the task loads");
         assert_eq!(task.label, None);
     }
@@ -1008,7 +1005,7 @@ mod tests {
             "not json",
         )
         .unwrap();
-        let Err(error) = Queue::load(dir.path()) else {
+        let Err(error) = Werk::load(dir.path()) else {
             panic!("load must fail on a malformed task.json");
         };
         assert!(
@@ -1039,15 +1036,15 @@ mod tests {
         )
         .unwrap();
 
-        assert!(Queue::load(dir.path()).is_err());
+        assert!(Werk::load(dir.path()).is_err());
     }
 
     #[test]
     fn task_json_uses_id_without_a_key_alias() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let queue = Queue::new();
-        queue.set_dir(dir.path().to_path_buf());
-        queue.add_task("hello");
+        let werk = Werk::new();
+        werk.set_dir(dir.path().to_path_buf());
+        werk.add_task("hello");
         let stored =
             std::fs::read_to_string(dir.path().join("tasks").join("t-1").join("task.json"))
                 .unwrap();
@@ -1060,9 +1057,9 @@ mod tests {
     #[test]
     fn task_json_does_not_carry_replies_field() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let queue = Queue::new();
-        queue.set_dir(dir.path().to_path_buf());
-        queue.add_task("hello");
+        let werk = Werk::new();
+        werk.set_dir(dir.path().to_path_buf());
+        werk.add_task("hello");
         let stored =
             std::fs::read_to_string(dir.path().join("tasks").join("t-1").join("task.json"))
                 .unwrap();
@@ -1076,28 +1073,28 @@ mod tests {
     #[test]
     fn task_json_does_not_persist_cancellation() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let queue = Queue::new();
-        queue.set_dir(dir.path().to_path_buf());
-        let id = queue.add_task(Task::new("hello").label("scan"));
-        queue.cancel_tasks("label = scan");
-        queue.set_task_failed(&id).unwrap();
+        let werk = Werk::new();
+        werk.set_dir(dir.path().to_path_buf());
+        let id = werk.add_task(Task::new("hello").label("scan"));
+        werk.cancel_tasks("label = scan");
+        werk.set_task_failed(&id).unwrap();
 
         let stored =
             std::fs::read_to_string(dir.path().join("tasks").join(&id).join("task.json")).unwrap();
         let record: serde_json::Value = serde_json::from_str(&stored).unwrap();
         assert!(record.get("cancelled").is_none());
 
-        let resumed = Queue::load(dir.path()).unwrap();
+        let resumed = Werk::load(dir.path()).unwrap();
         assert!(resumed.find_tasks("cancelled = true").is_empty());
         assert_eq!(resumed.find_tasks("cancelled = false").len(), 1);
     }
 
     #[test]
     fn add_reply_appends_one_line_to_replies_jsonl() {
-        let (queue, dir) = test_queue();
-        queue.add_task("hello");
-        queue.add_reply("t-1", "first");
-        queue.add_reply("t-1", "second");
+        let (werk, dir) = test_werk();
+        werk.add_task("hello");
+        werk.add_reply("t-1", "first");
+        werk.add_reply("t-1", "second");
         let body =
             std::fs::read_to_string(dir.path().join("tasks").join("t-1").join("replies.jsonl"))
                 .unwrap();
@@ -1113,13 +1110,13 @@ mod tests {
         use super::super::reply::ReplyContent;
         let dir = crate::test_util::TempDir::new().unwrap();
         {
-            let queue = Queue::new();
-            queue.set_dir(dir.path().to_path_buf());
-            queue.add_task("hello");
-            queue.add_reply("t-1", "first");
-            queue.add_reply("t-1", "second");
+            let werk = Werk::new();
+            werk.set_dir(dir.path().to_path_buf());
+            werk.add_task("hello");
+            werk.add_reply("t-1", "first");
+            werk.add_reply("t-1", "second");
         }
-        let resumed = Queue::load(dir.path()).unwrap();
+        let resumed = Werk::load(dir.path()).unwrap();
         let t = resumed.get_task("t-1").unwrap();
         let texts: Vec<_> = t
             .replies
@@ -1134,42 +1131,42 @@ mod tests {
 
     #[test]
     fn task_lifecycle_writes_its_events_to_the_log() {
-        let (queue, _dir) = test_queue();
-        queue.add_task("seed");
-        queue.claim(&Query::from("status = Todo"), "alice").unwrap();
-        queue.set_result("t-1", serde_json::Value::Null).unwrap();
-        queue.set_finished_by("t-1", "agent").unwrap();
+        let (werk, _dir) = test_werk();
+        werk.add_task("seed");
+        werk.claim(&Query::from("status = Todo"), "alice").unwrap();
+        werk.set_result("t-1", serde_json::Value::Null).unwrap();
+        werk.set_finished_by("t-1", "agent").unwrap();
 
-        assert_eq!(queue.find_events("task_created").len(), 1);
-        assert_eq!(queue.find_events("task_finished").len(), 1);
+        assert_eq!(werk.find_events("task_created").len(), 1);
+        assert_eq!(werk.find_events("task_finished").len(), 1);
     }
 
     #[test]
     fn creating_a_task_names_the_reporter_on_its_event() {
-        let (queue, _tmp) = test_queue();
+        let (werk, _tmp) = test_werk();
         let reporters = Arc::new(Mutex::new(Vec::new()));
         let seen = Arc::clone(&reporters);
-        queue.on_event(move |_, event| {
+        werk.on_event(move |_, event| {
             if event.get_name() == Event::TASK_CREATED {
                 seen.lock().unwrap().push(event.agent_id.clone());
             }
         });
 
-        queue.add_task("seed");
+        werk.add_task("seed");
 
-        assert_eq!(queue.stats.event_count(Event::TASK_CREATED), 1);
+        assert_eq!(werk.stats.event_count(Event::TASK_CREATED), 1);
         assert_eq!(*reporters.lock().unwrap(), vec!["user".to_string()]);
     }
 
     #[test]
     fn a_finished_task_failed_afterwards_is_not_counted_twice() {
-        let (queue, _tmp) = test_queue();
-        let id = queue.add_task("seed");
-        queue.set_finished_by(&id, "alice").unwrap();
+        let (werk, _tmp) = test_werk();
+        let id = werk.add_task("seed");
+        werk.set_finished_by(&id, "alice").unwrap();
         // Refused before the transition, so nothing is emitted to count.
-        queue.set_task_failed(&id).unwrap();
+        werk.set_task_failed(&id).unwrap();
 
-        let stats = &queue.stats;
+        let stats = &werk.stats;
         assert_eq!(stats.event_count(Event::TASK_FINISHED), 1);
         assert_eq!(stats.event_count(Event::TASK_FAILED), 0);
     }
@@ -1177,7 +1174,7 @@ mod tests {
     #[test]
     fn task_with_json_schema_round_trips_through_load() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let original = Queue::new();
+        let original = Werk::new();
         original.set_dir(dir.path().to_path_buf());
         let schema_doc = serde_json::json!({
             "type": "object",
@@ -1188,7 +1185,7 @@ mod tests {
         original.add_task(Task::new("counted").schema(schema));
         drop(original);
 
-        let resumed = Queue::load(dir.path()).unwrap();
+        let resumed = Werk::load(dir.path()).unwrap();
         let t = resumed.get_task("t-1").unwrap();
         let restored = t.schema.expect("JSON schema must restore");
         assert!(restored.validate(serde_json::json!({"n": 3})).is_ok());
@@ -1198,23 +1195,23 @@ mod tests {
     #[test]
     fn edit_replies_rewrites_replies_without_touching_task() {
         use crate::agents::tasks::ReplyContent;
-        let (queue, _tmp) = test_queue();
-        let id = queue.add_task("original task");
-        queue.append_reply(&id, Reply::user_text("keep me"));
-        queue.append_reply(&id, Reply::user_text("drop me"));
+        let (werk, _tmp) = test_werk();
+        let id = werk.add_task("original task");
+        werk.append_reply(&id, Reply::user_text("keep me"));
+        werk.append_reply(&id, Reply::user_text("drop me"));
 
-        queue.edit_replies(&id, |replies| {
+        werk.edit_replies(&id, |replies| {
             replies.retain(|reply| {
                 !matches!(reply.content.first(), Some(ReplyContent::Text { text: t }) if t == "drop me")
             });
         });
 
         // Unlike summarize, the task is left as it was.
-        let task = queue.get_task(&id).unwrap();
+        let task = werk.get_task(&id).unwrap();
         assert_eq!(task.task, serde_json::Value::String("original task".into()));
 
         // The drop is committed and reloads from disk.
-        let reloaded = Queue::load(queue.get_dir()).unwrap();
+        let reloaded = Werk::load(werk.get_dir()).unwrap();
         let replies = reloaded.get_task(&id).unwrap().replies;
         assert!(replies.iter().any(
             |r| matches!(r.content.first(), Some(ReplyContent::Text { text: t }) if t == "keep me")
@@ -1226,12 +1223,12 @@ mod tests {
 
     #[test]
     fn edit_replies_that_changes_nothing_writes_nothing() {
-        let (queue, _tmp) = test_queue();
-        let id = queue.add_task("go");
-        queue.append_reply(&id, Reply::user_text("keep me"));
-        let task_dir = queue.get_dir().join("tasks").join(&id);
+        let (werk, _tmp) = test_werk();
+        let id = werk.add_task("go");
+        werk.append_reply(&id, Reply::user_text("keep me"));
+        let task_dir = werk.get_dir().join("tasks").join(&id);
 
-        queue.edit_replies(&id, |_replies| {}); // inspect, change nothing
+        werk.edit_replies(&id, |_replies| {}); // inspect, change nothing
 
         let rewrites = std::fs::read_dir(&task_dir)
             .unwrap()
@@ -1251,13 +1248,13 @@ mod tests {
     #[test]
     fn edit_rewrites_replies_in_place_without_a_snapshot_file() {
         use crate::agents::tasks::ReplyContent;
-        let (queue, _tmp) = test_queue();
-        let id = queue.add_task("go");
-        queue.append_reply(&id, Reply::user_text("keep me"));
-        queue.append_reply(&id, Reply::user_text("drop me"));
-        let task_dir = queue.get_dir().join("tasks").join(&id);
+        let (werk, _tmp) = test_werk();
+        let id = werk.add_task("go");
+        werk.append_reply(&id, Reply::user_text("keep me"));
+        werk.append_reply(&id, Reply::user_text("drop me"));
+        let task_dir = werk.get_dir().join("tasks").join(&id);
 
-        queue.edit_replies(&id, |replies| {
+        werk.edit_replies(&id, |replies| {
             replies.retain(|reply| {
                 !matches!(reply.content.first(), Some(ReplyContent::Text { text: t }) if t == "drop me")
             });
@@ -1284,20 +1281,20 @@ mod tests {
     #[test]
     fn compaction_then_edit_leaves_one_replies_file_and_no_leak() {
         use crate::agents::tasks::ReplyContent;
-        let (queue, _tmp) = test_queue();
-        let id = queue.add_task("go");
-        queue.append_reply(&id, Reply::user_text("SECRET"));
+        let (werk, _tmp) = test_werk();
+        let id = werk.add_task("go");
+        werk.append_reply(&id, Reply::user_text("SECRET"));
         // What compaction applies: the replies wholesale, rewritten in place.
-        queue.edit_replies(&id, |replies| *replies = vec![Reply::user_text("summary")]);
-        queue.append_reply(&id, Reply::user_text("after"));
-        queue.edit_replies(&id, |replies| {
+        werk.edit_replies(&id, |replies| *replies = vec![Reply::user_text("summary")]);
+        werk.append_reply(&id, Reply::user_text("after"));
+        werk.edit_replies(&id, |replies| {
             replies.retain(|reply| {
                 !matches!(reply.content.first(), Some(ReplyContent::Text { text: t }) if t == "after")
             });
         });
 
         // One replies file, no snapshots, and neither dropped string survives.
-        let task_dir = queue.get_dir().join("tasks").join(&id);
+        let task_dir = werk.get_dir().join("tasks").join(&id);
         let replies_files: Vec<String> = std::fs::read_dir(&task_dir)
             .unwrap()
             .flatten()

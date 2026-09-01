@@ -110,7 +110,7 @@ directives! {
     KNOWLEDGE_PAGE_NOT_FOUND = "knowledge_page_not_found",
     KNOWLEDGE_WRITE_FAILED = "knowledge_write_failed",
     KNOWLEDGE_REMOVE_FAILED = "knowledge_remove_failed",
-    QUEUE_UNAVAILABLE = "queue_unavailable",
+    WERK_UNAVAILABLE = "werk_unavailable",
     TASK_ID_MISSING = "task_id_missing",
     TASK_NOT_ASSIGNED = "task_not_assigned",
     TASK_NOT_FOUND = "task_not_found",

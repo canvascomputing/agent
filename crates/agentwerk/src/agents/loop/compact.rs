@@ -7,7 +7,7 @@ use std::sync::Arc;
 use crate::agents::agent::Agent;
 use crate::agents::compaction::{self as algo, Compaction};
 use crate::agents::policy::Policy;
-use crate::agents::tasks::{Queue, Task};
+use crate::agents::tasks::{Task, Werk};
 use crate::event::Event;
 use crate::tools::Tool;
 
@@ -16,29 +16,29 @@ use super::CompactReason;
 impl Agent {
     pub(super) async fn compact(
         &self,
-        queue: &Arc<Queue>,
+        werk: &Arc<Werk>,
         task_id: &str,
         reason: CompactReason,
     ) -> bool {
-        let Some(mut task) = queue.get_task(task_id) else {
+        let Some(mut task) = werk.get_task(task_id) else {
             return false;
         };
         let model = self.get_model();
         let window = model.get_context_window();
         let total = algo::chunks_for_window(&task.to_messages(), window).len() as u32;
         self.emit_event(
-            queue,
+            werk,
             task_id,
             Event::new(Event::COMPACTION_STARTED)
                 .data(serde_json::json!({ "trigger": reason, "total": total })),
         );
 
         let on_progress: Arc<dyn Fn(u32, u32) + Send + Sync> = {
-            let queue = Arc::clone(queue);
+            let werk = Arc::clone(werk);
             let agent_id = self.get_id().to_string();
             let task_id = task_id.to_string();
             Arc::new(move |completed, total| {
-                queue.emit_event(
+                werk.emit_event(
                     Event::new(Event::COMPACTION_PROGRESS)
                         .data(serde_json::json!({
                             "trigger": reason,
@@ -63,7 +63,7 @@ impl Agent {
             Ok(edited) => edited,
             Err(error) => {
                 self.emit_event(
-                    queue,
+                    werk,
                     task_id,
                     Event::new(Event::COMPACTION_FAILED).data(serde_json::json!({
                         "trigger": reason,
@@ -71,20 +71,20 @@ impl Agent {
                         "message": error.to_string(),
                     })),
                 );
-                self.fail_task(queue, task_id);
+                self.fail_task(werk, task_id);
                 return false;
             }
         };
 
         let applied = edited != replies;
         if applied {
-            queue.edit_replies(task_id, |current| *current = edited);
-            queue.stats.reset_usage(task_id);
+            werk.edit_replies(task_id, |current| *current = edited);
+            werk.stats.reset_usage(task_id);
         }
 
         if !applied && matches!(reason, CompactReason::Reactive) {
             self.emit_event(
-                queue,
+                werk,
                 task_id,
                 Event::new(Event::COMPACTION_FAILED).data(serde_json::json!({
                     "trigger": reason,
@@ -92,12 +92,12 @@ impl Agent {
                     "message": "context still exceeds window after compaction",
                 })),
             );
-            self.fail_task(queue, task_id);
+            self.fail_task(werk, task_id);
             return false;
         }
 
         self.emit_event(
-            queue,
+            werk,
             task_id,
             Event::new(Event::COMPACTION_FINISHED).data(serde_json::json!({ "trigger": reason })),
         );
@@ -106,14 +106,14 @@ impl Agent {
 
     pub(super) fn needs_compaction(
         &self,
-        queue: &Queue,
+        werk: &Werk,
         task_id: &str,
         task: &Task,
         system_prompt: &str,
         policy: &Policy,
         tools: &[Tool],
     ) -> bool {
-        let history = queue.stats.usage_for_task(task_id);
+        let history = werk.stats.usage_for_task(task_id);
         algo::should_compact_proactively(
             self.get_model().get_context_window(),
             policy.compaction_threshold,
@@ -518,9 +518,9 @@ mod tests {
             )),
             Ok(write_result_response("done")),
         ]);
-        let queue_handle: std::sync::Arc<std::sync::Mutex<Option<_>>> =
+        let werk_handle: std::sync::Arc<std::sync::Mutex<Option<_>>> =
             std::sync::Arc::new(std::sync::Mutex::new(None));
-        let captured = std::sync::Arc::clone(&queue_handle);
+        let captured = std::sync::Arc::clone(&werk_handle);
         let (_, _, task) = run_compaction(provider, move |tasks| {
             *captured.lock().unwrap() = Some(std::sync::Arc::clone(tasks));
         })
@@ -528,7 +528,7 @@ mod tests {
 
         // The 180 000-token anchor that tripped the trigger described replies
         // the task no longer holds, so it must not survive compaction.
-        let tasks = queue_handle.lock().unwrap().take().expect("queue captured");
+        let tasks = werk_handle.lock().unwrap().take().expect("Werk captured");
         let history = tasks.stats.usage_for_task(&task.id);
         assert!(
             history.len() <= 1,

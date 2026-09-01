@@ -1,7 +1,7 @@
 //! Run agentic workflows where many agents work in parallel on a shared
-//! task queue. An [`Agent`] picks up tasks from a [`Queue`],
+//! Werk. An [`Agent`] picks up tasks from a [`Werk`],
 //! calls the LLM provider, runs the tools it requests, and writes results
-//! back. Tasks are assigned to agents by name or label; the queue
+//! back. Tasks are assigned to agents by name or label; the Werk
 //! handles concurrency, automatic context compaction, schema validation,
 //! retries, and limits.
 //!
@@ -28,14 +28,14 @@
 //! # Many agents working together
 //!
 //! ```no_run
-//! use agentwerk::{Agent, Task, Queue};
+//! use agentwerk::{Agent, Task, Werk};
 //! use agentwerk::tools::FetchTool;
 //!
 //! # async fn run() {
-//! let tasks = Queue::new();
+//! let werk = Werk::new();
 //!
 //! for _ in 0..4 {
-//!     tasks.add_agent(
+//!     werk.add_agent(
 //!         Agent::from_env()
 //!             .label("research")
 //!             .tool(FetchTool::new()),
@@ -48,12 +48,12 @@
 //!     "https://canvascomputing.org/products",
 //!     "https://canvascomputing.org/blog",
 //! ] {
-//!     tasks.add_task(Task::labeled("research", format!("Summarize {url}")));
+//!     werk.add_task(Task::labeled("research", format!("Summarize {url}")));
 //! }
 //!
-//! tasks.finish_all_tasks().await;
+//! werk.finish_all_tasks().await;
 //!
-//! for task in tasks.get_tasks() {
+//! for task in werk.get_tasks() {
 //!     if let Some(result) = task.get_result() {
 //!         println!("{}: {}", task.get_id(), result);
 //!     }
@@ -64,7 +64,7 @@
 //! # Main types
 //!
 //! - [`Agent`]: picks up tasks and produces results.
-//! - [`Queue`]: coordinates complex work across agents.
+//! - [`Werk`]: coordinates complex work across agents.
 //! - [`Task`]: a task plus the label and schema that assign and validate it.
 //! - [`Knowledge`]: durable memory the agent shares across tasks and other agents.
 //! - [`Event`]: requests, tool usage, failures and more.
@@ -82,13 +82,13 @@ pub mod tools;
 #[cfg(test)]
 pub(crate) mod test_util;
 
-// Workshop: agents pull tasks from the queue
+// Workshop: agents pull tasks from the Werk
 pub use agents::Agent;
 pub use agents::Query;
-pub use agents::Queue;
 pub use agents::Reply;
 pub use agents::Status;
 pub use agents::Task;
+pub use agents::Werk;
 
 // Tuning, telemetry, durable state
 pub use agents::Knowledge;

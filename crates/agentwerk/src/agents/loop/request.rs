@@ -6,7 +6,7 @@ use std::sync::Arc;
 use crate::agents::agent::Agent;
 use crate::agents::policy::Policy;
 use crate::agents::retry::{ExponentialRetry, Retry};
-use crate::agents::tasks::{Queue, Reply};
+use crate::agents::tasks::{Reply, Werk};
 use crate::event::Event;
 use crate::providers::types::StreamEvent;
 use crate::providers::{ContentBlock, ModelRequest, ProviderError};
@@ -15,18 +15,18 @@ use crate::tools::Tool;
 impl Agent {
     pub(super) async fn request(
         &self,
-        queue: &Arc<Queue>,
+        werk: &Arc<Werk>,
         task_id: &str,
         system_prompt: &str,
         policy: &Policy,
         tools: &[Tool],
     ) -> Result<Option<Vec<ContentBlock>>, ProviderError> {
-        let Some(task) = queue.get_task(task_id) else {
+        let Some(task) = werk.get_task(task_id) else {
             return Ok(None);
         };
         let model = self.get_model();
         self.emit_event(
-            queue,
+            werk,
             task_id,
             Event::new(Event::REQUEST_STARTED).data(serde_json::json!({ "model": model.name })),
         );
@@ -45,7 +45,7 @@ impl Agent {
             let provider = self.get_provider();
             let agent_id = self.get_id().to_string();
             let stream_task_id = task_id.to_string();
-            let stream_queue = Arc::clone(queue);
+            let stream_werk = Arc::clone(werk);
             let emit_stream: Arc<dyn Fn(StreamEvent) + Send + Sync> = Arc::new(move |event| {
                 let event = match event {
                     StreamEvent::TextDelta { text, .. } => Event::new(Event::TEXT_CHUNK_RECEIVED)
@@ -65,11 +65,11 @@ impl Agent {
                         }))
                     }
                 };
-                stream_queue.emit_event(event.task_id(&stream_task_id).agent_id(&agent_id));
+                stream_werk.emit_event(event.task_id(&stream_task_id).agent_id(&agent_id));
             });
             let outcome = tokio::select! {
                 biased;
-                _ = queue.run.until_draining() => return Ok(None),
+                _ = werk.run.until_draining() => return Ok(None),
                 result = provider.respond(request.clone(), emit_stream) => result,
             };
             match outcome {
@@ -79,7 +79,7 @@ impl Agent {
                     Some(attempt) => {
                         let delay = retry.delay(error.retry_delay());
                         self.emit_event(
-                            queue,
+                            werk,
                             task_id,
                             Event::new(Event::REQUEST_RETRIED).data(serde_json::json!({
                                 "model": request.model,
@@ -91,25 +91,25 @@ impl Agent {
                         );
                         tokio::select! {
                             biased;
-                            _ = queue.run.until_draining() => return Ok(None),
+                            _ = werk.run.until_draining() => return Ok(None),
                             _ = tokio::time::sleep(delay) => {}
                         }
                     }
                     None => {
-                        self.fail_request(queue, task_id, &error);
+                        self.fail_request(werk, task_id, &error);
                         return Err(error);
                     }
                 },
                 Err(error) => {
-                    self.fail_request(queue, task_id, &error);
+                    self.fail_request(werk, task_id, &error);
                     return Err(error);
                 }
             }
         };
 
-        queue.append_reply(task_id, Reply::assistant(&response.content));
+        werk.append_reply(task_id, Reply::assistant(&response.content));
         self.emit_event(
-            queue,
+            werk,
             task_id,
             Event::new(Event::REQUEST_FINISHED).data(serde_json::json!({
                 "model": response.model,
@@ -125,9 +125,9 @@ impl Agent {
         ))
     }
 
-    fn fail_request(&self, queue: &Queue, task_id: &str, error: &ProviderError) {
+    fn fail_request(&self, werk: &Werk, task_id: &str, error: &ProviderError) {
         self.emit_event(
-            queue,
+            werk,
             task_id,
             Event::new(Event::REQUEST_FAILED).data(serde_json::json!({
                 "model": self.get_model().name,
@@ -135,7 +135,7 @@ impl Agent {
                 "message": error.to_string(),
             })),
         );
-        self.fail_task(queue, task_id);
+        self.fail_task(werk, task_id);
     }
 }
 
@@ -385,7 +385,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn request_retried_fires_after_backoff_sleep_not_before() {
         use crate::agents::agent::Agent;
-        use crate::agents::tasks::Queue;
+        use crate::agents::tasks::Werk;
         use crate::event::Event;
         use std::sync::{Arc, Mutex};
 
@@ -404,7 +404,7 @@ mod tests {
         };
 
         let results_dir = crate::test_util::TempDir::new().unwrap();
-        let tasks = Queue::new();
+        let tasks = Werk::new();
         tasks
             .set_dir(results_dir.path().to_path_buf())
             .set_policy(Policy {
@@ -450,7 +450,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn cancel_during_backoff_sleep_aborts_immediately() {
         use crate::agents::agent::Agent;
-        use crate::agents::tasks::Queue;
+        use crate::agents::tasks::Werk;
         use std::sync::{Arc, Mutex};
 
         let provider =
@@ -465,7 +465,7 @@ mod tests {
             Arc::new(move |e: &crate::event::Event| c.lock().unwrap().push(e.clone()))
         };
         let results_dir = crate::test_util::TempDir::new().unwrap();
-        let tasks = Queue::new();
+        let tasks = Werk::new();
         tasks
             .set_dir(results_dir.path().to_path_buf())
             .set_policy(Policy {
@@ -503,19 +503,19 @@ mod tests {
     use serde_json::Value;
 
     use crate::agents::agent::Agent;
-    use crate::agents::tasks::{Queue, Reply, ReplyContent};
+    use crate::agents::tasks::{Reply, ReplyContent, Werk};
     use crate::event::Event;
     use crate::providers::{ContentBlock, Message};
     use crate::tools::Tool;
 
-    type BoomHandler = Box<dyn Fn(&Arc<Queue>, &Event) + Send + Sync>;
+    type BoomHandler = Box<dyn Fn(&Arc<Werk>, &Event) + Send + Sync>;
 
     /// Run a task whose first turn calls a tool that always fails, then
     /// writes a result. Registers `handler` when one is given. Returns the
     /// provider and temp dir so callers can inspect the requests and reload.
     async fn run_boom(
         handler: Option<BoomHandler>,
-    ) -> (Arc<MockProvider>, Arc<Queue>, crate::test_util::TempDir) {
+    ) -> (Arc<MockProvider>, Arc<Werk>, crate::test_util::TempDir) {
         let provider = MockProvider::with_results(vec![
             Ok(tool_call_response("boom")),
             Ok(write_result_response("done")),
@@ -524,7 +524,7 @@ mod tests {
             .description("Always fails")
             .handler(|_: Value| async move { Event::error("boom") });
         let results_dir = crate::test_util::TempDir::new().unwrap();
-        let tasks = Queue::new();
+        let tasks = Werk::new();
         tasks
             .set_dir(results_dir.path().to_path_buf())
             .set_policy(Policy {
@@ -552,11 +552,11 @@ mod tests {
     /// Handler that drops the whole failed tool exchange once a tool call
     /// fails: both the assistant's tool_use and the failed tool_result, so
     /// no unpaired block is left behind.
-    fn drop_failed_exchange(queue: &Arc<Queue>, event: &Event) {
+    fn drop_failed_exchange(werk: &Arc<Werk>, event: &Event) {
         if event.get_name() != Event::TOOL_CALL_FAILED {
             return;
         }
-        queue.edit_replies(&event.task_id, |replies| {
+        werk.edit_replies(&event.task_id, |replies| {
             replies.retain(|reply| {
                 !reply.content.iter().any(|b| {
                     matches!(
@@ -601,11 +601,11 @@ mod tests {
     #[tokio::test]
     async fn an_event_handler_injects_a_message_into_the_next_request() {
         let (provider, _tasks, _dir) =
-            run_boom(Some(Box::new(|queue: &Arc<Queue>, event: &Event| {
+            run_boom(Some(Box::new(|werk: &Arc<Werk>, event: &Event| {
                 if event.get_name() != Event::TOOL_CALL_FAILED {
                     return;
                 }
-                queue.edit_replies(&event.task_id, |replies| {
+                werk.edit_replies(&event.task_id, |replies| {
                     replies.push(Reply::user_text("HANDLER HINT: change approach"));
                 });
             })))
@@ -617,11 +617,11 @@ mod tests {
     #[tokio::test]
     async fn an_event_handler_rewrites_a_reply_in_place() {
         let (provider, _tasks, _dir) =
-            run_boom(Some(Box::new(|queue: &Arc<Queue>, event: &Event| {
+            run_boom(Some(Box::new(|werk: &Arc<Werk>, event: &Event| {
                 if event.get_name() != Event::TOOL_CALL_FAILED {
                     return;
                 }
-                queue.edit_replies(&event.task_id, |replies| {
+                werk.edit_replies(&event.task_id, |replies| {
                     for reply in replies.iter_mut() {
                         for block in reply.content.iter_mut() {
                             if let ReplyContent::ToolResult { content, .. } = block {
@@ -646,7 +646,7 @@ mod tests {
     async fn edit_survives_reload() {
         let (_provider, _tasks, dir) = run_boom(Some(Box::new(drop_failed_exchange))).await;
 
-        let reloaded = Queue::load(dir.path()).unwrap();
+        let reloaded = Werk::load(dir.path()).unwrap();
         let task = reloaded.get_tasks().into_iter().next().unwrap();
         // The boom exchange is gone; the later finish_task call remains.
         let keeps_boom = task.replies.iter().any(|reply| {

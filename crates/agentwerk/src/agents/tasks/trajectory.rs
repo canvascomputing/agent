@@ -12,7 +12,7 @@ use super::{Author, Reply, ReplyContent, Task};
 /// where the dataset belongs, leaving any ShareGPT / chat_template conversion
 /// to a downstream step.
 ///
-/// [`on_task`]: super::Queue::on_task
+/// [`on_task`]: super::Werk::on_task
 /// [`save`]: Trajectory::save
 ///
 /// Each save also writes an `.html` sibling rendering the messages for

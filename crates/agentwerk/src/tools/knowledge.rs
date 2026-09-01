@@ -390,11 +390,11 @@ mod tests {
 
     #[tokio::test]
     async fn self_reports_each_action_as_an_event() {
-        use crate::agents::tasks::Queue;
+        use crate::agents::tasks::Werk;
         use std::sync::Mutex;
 
         let (store, _dir) = fresh_store();
-        let tasks = Queue::new();
+        let tasks = Werk::new();
         let reported = Arc::new(Mutex::new(Vec::new()));
         let seen = Arc::clone(&reported);
         tasks.on_event(move |_, event| {
@@ -411,7 +411,7 @@ mod tests {
                 seen.lock().unwrap().push(event.get_name().to_string());
             }
         });
-        let ctx = ToolContext::new(std::env::current_dir().unwrap()).queue(Arc::clone(&tasks));
+        let ctx = ToolContext::new(std::env::current_dir().unwrap()).werk(Arc::clone(&tasks));
 
         run(
             &store,

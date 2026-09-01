@@ -8,7 +8,7 @@ use super::common;
 
 use agentwerk::schemas::Schema;
 use agentwerk::tools::ListDirectoryTool;
-use agentwerk::{Agent, Policy, Queue, Task};
+use agentwerk::{Agent, Policy, Task, Werk};
 
 #[tokio::test]
 async fn separates_files_and_directories() -> std::result::Result<(), Box<dyn std::error::Error>> {
@@ -41,7 +41,7 @@ async fn separates_files_and_directories() -> std::result::Result<(), Box<dyn st
         "required": ["files", "directories"]
     }))?;
 
-    let tasks = Queue::new();
+    let tasks = Werk::new();
 
     tasks.set_policy(Policy {
         max_turns: Some(10),

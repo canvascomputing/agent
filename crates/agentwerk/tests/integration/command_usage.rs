@@ -6,7 +6,7 @@ use super::common;
 
 use agentwerk::schemas::Schema;
 use agentwerk::tools::CommandTool;
-use agentwerk::{Agent, Policy, Queue, Task};
+use agentwerk::{Agent, Policy, Task, Werk};
 
 #[tokio::test]
 async fn test() -> std::result::Result<(), Box<dyn std::error::Error>> {
@@ -32,7 +32,7 @@ async fn test() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let cat = CommandTool::new("cat").allow("cat *").concurrent(true);
     let wc = CommandTool::new("wc").allow("wc *").concurrent(true);
 
-    let tasks = Queue::new();
+    let tasks = Werk::new();
 
     tasks.set_policy(Policy {
         max_turns: Some(10),

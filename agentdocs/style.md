@@ -6,7 +6,7 @@ Naming, comment, and prose rules, plus README structure. Skim the section matchi
 
 **A type earns a `pub use` at `lib.rs` only when it names a concept in the one-sentence description of the crate, or when root-level signatures hand it to the caller.**
 
-`Agent`, `Queue`, `Task`, `Policy`, `PolicyViolation`, `Knowledge`, `Directive`, `Text`, `Trajectory`, `Reply`, `Event`, `Status`, `FinishReason`, `Schema`
+`Agent`, `Werk`, `Task`, `Policy`, `PolicyViolation`, `Knowledge`, `Directive`, `Text`, `Trajectory`, `Reply`, `Event`, `Status`, `FinishReason`, `Schema`
 
 - Discriminants callers match on earn a root slot: `Status`, `FinishReason`, `PolicyViolation`.
 - Builder parameters and run outputs earn one when callers name them: `Schema`, `Policy`, `Directive`, `Text`, `Reply`, `Trajectory`.
@@ -28,7 +28,7 @@ Naming, comment, and prose rules, plus README structure. Skim the section matchi
 
 **Names are disambiguated through content, not through redundant prefixes.**
 
-- Specific compound names stand alone: `Queue`, `PolicyViolation`.
+- Specific compound names stand alone: `Werk`, `PolicyViolation`.
 - A concrete LLM provider is named for its vendor alone. Acronyms follow Rust API guidelines, so `OpenAi`, not `OpenAI`.
 - Two structs may not share a bare name within one module; both stay qualified.
 - When a trait and the concrete type callers hold want the same name, the bare noun goes to the type and the trait takes a `Like` suffix: `Provider` / `ProviderLike`.
@@ -125,7 +125,7 @@ event.get_data()["kind"]                 // "execution_failed"
 
 **Two traits cover every read and write in the crate. The trait dictates the verb; the implementer's type name binds the file location.**
 
-- `Persist` (in `persistence`): `save(&self, dir)` and `load(dir, &Self::Key)`. Service bootstrap (`Queue::load`, `Knowledge::load`) uses the same `load` verb by convention.
+- `Persist` (in `persistence`): `save(&self, dir)` and `load(dir, &Self::Key)`. Service bootstrap (`Werk::load`, `Knowledge::load`) uses the same `load` verb by convention.
 - `append(dir, ..)` is the inherent verb on a type that owns an append-only log: `Stats` and `Replies`. Each encodes its own filename, so the wrong file cannot be reached through the wrong type.
 - No `open` for bootstrap, no `write_X_to_dir`, no `to_json` or `from_json`, and no `checkpoint`, `snapshot`, `persist`, or `counter` in names.
 - Function names do not embed the type names of their arguments: `Stats::append(dir, &event)`, not `append_event`.
@@ -137,8 +137,8 @@ event.get_data()["kind"]                 // "execution_failed"
 `.name()`, `.model()`, `.tool()`, `.label()`, `.concurrent()`
 
 - The `with_` prefix is reserved for a bare name that would be ambiguous even with an inherent and trait split; no current builder needs it.
-- A value the caller owns before execution consumes itself: `Agent` and `Tool` take `mut self` and return `Self`. Both configure themselves rather than through a second type; missing agent configuration is caught when it joins a queue, and missing tool configuration when it is registered.
-- A type handed out as `Arc` configures through `&self` and returns `&Self`: `Queue` and `Knowledge`. A third shape, `self: Arc<Self> -> Arc<Self>`, is not used.
+- A value the caller owns before execution consumes itself: `Agent` and `Tool` take `mut self` and return `Self`. Both configure themselves rather than through a second type; missing agent configuration is caught when it joins a Werk, and missing tool configuration when it is registered.
+- A type handed out as `Arc` configures through `&self` and returns `&Self`: `Werk` and `Knowledge`. A third shape, `self: Arc<Self> -> Arc<Self>`, is not used.
 
 ## Constructors
 
@@ -152,11 +152,11 @@ event.get_data()["kind"]                 // "execution_failed"
 
 - Example: `set_extension()`, `get_extension()`. Builder methods remain unprefixed.
 - A public method returning `bool` is `is_<state>` or `has_<thing>`. A bare past participle such as `label_cancelled` reads as a field, not a question.
-- `get_<name>` reads back a value a builder set where the bare noun would collide with the builder method on the same type: `Queue::get_dir`, `Model::get_context_window`, `Agent::get_provider`. A reader with no setter to collide with keeps the bare noun: `Tool::name`, `Agent::id`. A lookup by ID keeps `get_` for the `HashMap::get` sense, which is why `get_task(id)` stands apart from `find_task(matches)`.
+- `get_<name>` reads back a value a builder set where the bare noun would collide with the builder method on the same type: `Werk::get_dir`, `Model::get_context_window`, `Agent::get_provider`. A reader with no setter to collide with keeps the bare noun: `Tool::name`, `Agent::id`. A lookup by ID keeps `get_` for the `HashMap::get` sense, which is why `get_task(id)` stands apart from `find_task(matches)`.
 
 ## Lifecycle
 
-**Queue action names state their target: `finish_task(matches)`, `finish_tasks(matches)`, `finish_all_tasks()`, `cancel_tasks(matches)`, and `cancel_all_tasks()`. A filter is a `Matcher<Task>`, so the same call names one task or one pool.**
+**Werk action names state their target: `finish_task(matches)`, `finish_tasks(matches)`, `finish_all_tasks()`, `cancel_tasks(matches)`, and `cancel_all_tasks()`. A filter is a `Matcher<Task>`, so the same call names one task or one pool.**
 
 ```rust
 tasks.start();
@@ -167,11 +167,11 @@ tasks.cancel_tasks("label = scan");                        // one pool
 tasks.cancel_all_tasks();                                   // the whole run
 ```
 
-- A verb takes a filter when it can mean part of the queue, and none when it cannot: `run` starts everything or nothing.
+- A verb takes a filter when it can mean part of the Werk, and none when it cannot: `run` starts everything or nothing.
 - IMPORTANT: the filter says WHICH tasks, never WHAT to wait for. `finish_tasks("status = Finished")` returns at once because the filter selects tasks and "no work left" is the fixed wait condition.
 - The whole-run case has exactly one spelling: `finish_all_tasks()` and `cancel_all_tasks()`.
 - `finish_task(matches)` follows the same wait and query order as `finish_tasks(matches)`, then returns the first available result.
-- Do not grow back label-, status-, or predicate-specific queue methods; fixed selections are AQL.
+- Do not grow back label-, status-, or predicate-specific Werk methods; fixed selections are AQL.
 
 ## Hooks
 
@@ -187,7 +187,7 @@ edit_replies(id, editor)             // act once, now
 - `on_<trigger>_async(handler)` is the same trigger in a handler whichever `finish` is waiting awaits. Every observer has one, and only observers do.
 - A bare `<action>(..)` acts once, now: `cancel`, `edit_replies`.
 - IMPORTANT: the trigger fixes the handler's parameters. `_on_event` hands over `&Event`, `_on_result` a `&Task` and its validated `&Value`, `_on_failure` the `&Event` and the `&Task` it happened in. Observing returns `()`.
-- IMPORTANT: an observer takes the queue first, `&Arc<Queue>` before the trigger's own parameters, owned in the `_async` twin. That is what a hook acts through, and why neither a `create_task_on_*` nor an `edit_replies_on_*` family exists: `queue.add_task(..)` inside `on_result`, and `queue.edit_replies(&event.task_id, ..)` inside `on_event`, are the whole of them.
+- IMPORTANT: an observer takes the Werk first, `&Arc<Werk>` before the trigger's own parameters, owned in the `_async` twin. That is what a hook acts through, and why neither a `create_task_on_*` nor an `edit_replies_on_*` family exists: `werk.add_task(..)` inside `on_result`, and `werk.edit_replies(&event.task_id, ..)` inside `on_event`, are the whole of them.
 - A hook reacts to something agentwerk produces. Anything the caller already holds needs no hook: to stop a pool on a verdict, `finish` for it and `cancel`.
 - `on_task` sits outside the trigger grid, keying on a task rather than naming a trigger.
 - No hook registers something agentwerk calls in place of its own work. Compaction summarizes and says so through the four `Compaction*` events, and what agentwerk writes to correct the model is set once by `Agent::directives`, which takes one function over every directive.
@@ -197,9 +197,9 @@ edit_replies(id, editor)             // act once, now
 **Publishing is always `tasks.emit_event(event)`, from both host code and crate internals.**
 
 - Keep `event` in the verb. Bare `emit` is ambiguous beside provider streams and is not an event-publication API.
-- Construct built-in events with their schema-aware `Event::<name>(...)` constructor. Construct application events with `Event::new(name)`, then add `.data(value)`. Add `.task_id(id)` or `.agent_id(id)` when context applies. Do not use a struct literal: the queue owns the timestamp and derived task label.
+- Construct built-in events with their schema-aware `Event::<name>(...)` constructor. Construct application events with `Event::new(name)`, then add `.data(value)`. Add `.task_id(id)` or `.agent_id(id)` when context applies. Do not use a struct literal: the Werk owns the timestamp and derived task label.
 - Order Event members by relevance: `name`, `data`, `task_id`, `agent_id`, `label`, `created_at`; builders follow the constructor and readers follow in that same order.
-- Contextual helpers, when they remove repeated agent or task plumbing, are also named `emit_event` and delegate immediately to `Queue::emit_event`.
+- Contextual helpers, when they remove repeated agent or task plumbing, are also named `emit_event` and delegate immediately to `Werk::emit_event`.
 - Do not add parallel names such as `emit`, `emit_custom`, or `publish_event`; every built-in and caller-defined event takes the same pipeline.
 - `Event.name` is the sole semantic discriminator. Named constructors produce the same generic record as `Event::new(name).data(value)`; branch defensively on its name and JSON data, and do not introduce a parallel typed event model or provenance marker.
 
@@ -364,7 +364,7 @@ A `Schema` constrains the result an agent produces for a task.
 
 - A second sentence is added only for a constraint: "A violation triggers a retry until `max_schema_retries` is exhausted."
 - The type's `///` and its README lead use the same shape, so the two read alike.
-- Name the type's job, not its implementation: not "the shared work queue holding an `Arc<Mutex<..>>`", but "the core data structure of agentwerk for coordinating complex interactions".
+- Name the type's job, not its implementation: not "the shared Werk holding an `Arc<Mutex<..>>`", but "the core data structure of agentwerk for coordinating complex interactions".
 
 ## Abstraction Level
 
@@ -417,7 +417,7 @@ Banned:
 Also:
 
 - Bare "provider" is spelled "LLM provider". Identifier names stay unqualified.
-- "execution" is the word for a run, in prose and in identifiers: `Queue::get_duration()`. `run` survives only in built-in names such as `Event::RUN_STARTED` and `Event::RUN_FINISHED`.
+- "execution" is the word for a run, in prose and in identifiers: `Werk::get_duration()`. `run` survives only in built-in names such as `Event::RUN_STARTED` and `Event::RUN_FINISHED`.
 - The Knowledge store is described as durable memory the agent shares across tasks and other agents; the sharing is the headline, not a footnote.
 
 ## README Structure
@@ -477,9 +477,9 @@ Also:
 
 - Groups do not interleave. The result rows run before the task rows in Results; the observers run before the cancels in Hooks.
 - One axis order is chosen and held across every group. Hooks is the model: `event`, `result`, `failure`.
-- Queue tables follow caller workflow: configure, submit/interact, observe, run, cancel, inspect tasks, inspect results/events, then inspect run metadata. Setters stay beside getters, synchronous hooks beside async twins, and singular selectors before plural selectors.
+- Werk tables follow caller workflow: configure, submit/interact, observe, run, cancel, inspect tasks, inspect results/events, then inspect run metadata. Setters stay beside getters, synchronous hooks beside async twins, and singular selectors before plural selectors.
 - One table holds one receiver. A method on another type goes in the fold's trailing prose.
-- The Execution fold holds everything that acts once over a run. The hooks fold holds only what registers a handler the queue calls back into on every matching event.
+- The Execution fold holds everything that acts once over a run. The hooks fold holds only what registers a handler the Werk calls back into on every matching event.
 
 ## README Examples
 

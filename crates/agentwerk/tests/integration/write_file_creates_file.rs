@@ -8,7 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use super::common;
 
 use agentwerk::tools::WriteFileTool;
-use agentwerk::{Agent, Policy, Queue};
+use agentwerk::{Agent, Policy, Werk};
 
 #[tokio::test]
 async fn creates_file_with_token() -> std::result::Result<(), Box<dyn std::error::Error>> {
@@ -18,7 +18,7 @@ async fn creates_file_with_token() -> std::result::Result<(), Box<dyn std::error
     let dir = crate::test_util::TempDir::new()?;
     let root = dir.path();
 
-    let tasks = Queue::new();
+    let tasks = Werk::new();
 
     tasks.set_policy(Policy {
         max_turns: Some(10),

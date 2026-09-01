@@ -18,6 +18,10 @@ def test_re_exports_every_name_in_all():
         assert hasattr(aw, name), name
 
 
+def test_queue_is_not_a_compatibility_alias():
+    assert not hasattr(aw, "Queue")
+
+
 def test_chaining_returns_the_same_agent():
     agent = aw.Agent()
     assert agent.role("r").label("x").dir(".") is agent
@@ -96,20 +100,20 @@ def test_id_is_taken_from_the_label():
     assert agent.get_id() == "id_from_label-1"
 
 
-def test_registering_an_agent_without_a_provider_is_rejected(queue):
+def test_registering_an_agent_without_a_provider_is_rejected(werk):
     with pytest.raises(RuntimeError):
-        queue.add_agent(aw.Agent())
+        werk.add_agent(aw.Agent())
 
 
-def test_agent_enqueues_a_task_on_its_private_queue(offline_agent):
+def test_agent_enqueues_a_task_on_its_private_werk(offline_agent):
     id = offline_agent.task(aw.Task("scan the corpus", label="scan"))
     assert id.startswith("t-")
 
 
-def test_binding_an_agent_drains_its_queue_into_the_shared_queue(
-    offline_agent, queue
+def test_binding_an_agent_drains_its_private_werk_into_the_shared_werk(
+    offline_agent, werk
 ):
     offline_agent.task("count to three")
-    queue.add_agent(offline_agent)
+    werk.add_agent(offline_agent)
 
-    assert [t.get_task() for t in queue.get_tasks()] == ["count to three"]
+    assert [t.get_task() for t in werk.get_tasks()] == ["count to three"]

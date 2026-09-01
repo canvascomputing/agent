@@ -238,14 +238,14 @@ See [`Provider`](https://docs.rs/agentwerk/latest/agentwerk/providers/struct.Pro
 
 ## Tasks
 
-A `Queue` stores tasks, assigns them to matching agents, and records their results.
+A `Werk` stores tasks, assigns them to matching agents, and records their results.
 
 <div align="left">
   <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/assets/tasks.gif" width="600" />
 </div>
 
 ```python
-from agentwerk import Agent, Task, Queue
+from agentwerk import Agent, Task, Werk
 
 analyst = (
     Agent.from_env()
@@ -257,15 +257,15 @@ writer = (
     .label("report")
 )
 
-tasks = Queue()
-tasks.add_agent(analyst).add_agent(writer)
+werk = Werk()
+werk.add_agent(analyst).add_agent(writer)
 
-tasks.add_task(Task("Rank all products by value.", label="analysis"))
-tasks.add_task(Task("Write up the ranking.", label="report"))
+werk.add_task(Task("Rank all products by value.", label="analysis"))
+werk.add_task(Task("Write up the ranking.", label="report"))
 ```
 
 <details>
-<summary>All Queue methods</summary>
+<summary>All Werk methods</summary>
 
 | | Method | Description |
 |-|--------|-------------|
@@ -273,7 +273,7 @@ tasks.add_task(Task("Write up the ranking.", label="report"))
 | | `get_policy()` | Get the policy in force. |
 | | `set_dir(dir)` | Define where a session is stored. |
 | | `get_dir()` | Get the session directory. |
-| | `add_agent(agent)` | Add an agent to this task queue. |
+| | `add_agent(agent)` | Add an agent to this Werk. |
 | **Submit and interact** | `add_task(task)` | Submit a task and return its task ID. |
 | | `add_reply(id, content)` | Add a reply to a task. |
 | | `edit_replies(id, editor)` | Rewrite a task's replies now. |
@@ -308,7 +308,7 @@ tasks.add_task(Task("Write up the ranking.", label="report"))
 | | `get_output_tokens()` | Get output tokens across finished requests. |
 | | `get_duration()` | Get the elapsed execution duration. |
 
-See [`Queue`](https://docs.rs/agentwerk/latest/agentwerk/agents/tasks/struct.Queue.html).
+See [`Werk`](https://docs.rs/agentwerk/latest/agentwerk/agents/tasks/struct.Werk.html).
 
 </details>
 
@@ -392,7 +392,7 @@ tasks.find_tasks(lambda t: len(t.get_replies()) > 4)       # a callable, for wha
 
 ### Execution
 
-The task queue schedules the work of your agents and returns their results.
+The Werk schedules the work of your agents and returns their results.
 
 ```python
 tasks.start()
@@ -432,7 +432,7 @@ Task members:
 | | `is_finished()` | Check whether the task finished. |
 | | `is_failed()` | Check whether the task failed. |
 | | `is_pending()` | Check whether the task has work in this run. |
-| | `is_cancelled()` | Check whether this run has taken the task off the queue. |
+| | `is_cancelled()` | Check whether this run has excluded the task from scheduling. |
 | | `get_result()` | The result the agent produced. |
 | | `get_errors()` | The failures recorded against the task, as events. |
 | | `get_replies()` | Messages exchanged with the model. |
@@ -477,7 +477,7 @@ writer = (
     .role("You write concise board reports.")
 )
 
-tasks = Queue()
+tasks = Werk()
 tasks.add_agent(analyst).add_agent(writer)
 tasks.add_task(Task("Rank all products by value.", label="analysis"))
 ```
@@ -668,7 +668,7 @@ See [prompts/directives](https://github.com/canvascomputing/agentwerk/tree/main/
 
 ### Sessions
 
-A `Queue` saves every task, reply, and event so you can continue the same session later.
+A `Werk` saves every task, reply, and event so you can continue the same session later.
 
 <div align="left">
   <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/assets/sessions.gif" width="600" />
@@ -677,7 +677,7 @@ A `Queue` saves every task, reply, and event so you can continue the same sessio
 The working directory is `./.agentwerk` by default.
 
 ```python
-tasks = Queue.load(".agentwerk")
+tasks = Werk.load(".agentwerk")
 tasks.add_agent(my_agent)
 tasks.start()
 ```
@@ -731,7 +731,7 @@ agent = (
 | **Web** | `FetchTool()` | Fetch a URL and read its body. |
 | **Events** | `EventTool()` | Publish an event; `task_finished` additionally completes the current task. |
 | **Tasks** | `FinishTool()` | Write the result for the current task and mark it finished. |
-| | `TaskTool()` | Read the task queue and create or edit tasks. |
+| | `TaskTool()` | Read the Werk and create or edit tasks. |
 | **Knowledge** | `KnowledgeTool(store)` | Write, read, remove, or list pages in a knowledge store. |
 
 #### `FinishTool` and `KnowledgeTool`
@@ -772,7 +772,7 @@ The model supplies a name and optional JSON data:
 }
 ```
 
-Agentwerk records the current task and agent on every event. Queue handlers can
+Agentwerk records the current task and agent on every event. Werk handlers can
 react as events arrive, and queries can retrieve them later:
 
 ```python
@@ -897,7 +897,7 @@ tasks.on_event(log)
 
 ### Publish events
 
-Publish custom events through the queue. Add agent or task context when relevant:
+Publish custom events through the Werk. Add agent or task context when relevant:
 
 ```python
 from agentwerk import Event
@@ -924,13 +924,13 @@ punctuation in AQL. Built-in events have named constructors, such as
 `Event.task_finished()` and `Event.request_started("model")`; their names are
 also available as constants. Publishing one runs its hooks and updates its statistics. It is saved according to the event's normal rules, but it does not change task or execution state.
 
-`Queue.emit_event()` never changes a task's status. To let a model finish its
+`Werk.emit_event()` never changes a task's status. To let a model finish its
 current task through an event, register `EventTool()` on its agent. When the
 model emits `task_finished`, the tool validates and stores `data.result`,
 optionally creates a handover task, and marks the current task finished. All
 other names only publish an event.
 
-Events are saved to `.agentwerk/events.jsonl`. `text_chunk_received` events are not saved. Read events through the queue with these methods:
+Events are saved to `.agentwerk/events.jsonl`. `text_chunk_received` events are not saved. Read events through the Werk with these methods:
 
 | Method | Description |
 |--------|-------------|
@@ -981,7 +981,7 @@ An invalid query string raises `ValueError`. `Query(query)` checks a query witho
 
 </details>
 
-See [`Event`](https://docs.rs/agentwerk/latest/agentwerk/event/struct.Event.html) and [`Queue`](https://docs.rs/agentwerk/latest/agentwerk/agents/tasks/struct.Queue.html).
+See [`Event`](https://docs.rs/agentwerk/latest/agentwerk/event/struct.Event.html) and [`Werk`](https://docs.rs/agentwerk/latest/agentwerk/agents/tasks/struct.Werk.html).
 
 ### Hooks
 
@@ -1034,7 +1034,7 @@ async def store(work, task, result):
 tasks.on_result_async(store)
 ```
 
-See [`Queue`](https://docs.rs/agentwerk/latest/agentwerk/agents/tasks/struct.Queue.html).
+See [`Werk`](https://docs.rs/agentwerk/latest/agentwerk/agents/tasks/struct.Werk.html).
 
 </details>
 

@@ -37,10 +37,10 @@ impl Queryable for Event {
 /// `Fn(&R) -> bool` keeps closures working unchanged.
 ///
 /// ```no_run
-/// use agentwerk::{Event, Query, Task, Queue};
+/// use agentwerk::{Event, Query, Task, Werk};
 ///
 /// # fn run() -> Result<(), Box<dyn std::error::Error>> {
-/// let tasks = Queue::new();
+/// let tasks = Werk::new();
 /// tasks.find_tasks("research");
 /// tasks.find_tasks(Query::new("label = research AND agent = research-1")?);
 /// tasks.find_tasks(|t: &Task| t.get_label() == Some("research"));
@@ -52,7 +52,7 @@ impl Queryable for Event {
 #[allow(private_bounds)]
 pub trait Matcher<R: Queryable> {
     /// Compile into a [`Query`]. A closure becomes a condition of its own, so
-    /// the queue holds one kind of filter however the caller wrote it.
+    /// the Werk holds one kind of filter however the caller wrote it.
     fn into_query(self) -> Query<R>;
 }
 
@@ -89,7 +89,7 @@ impl<R: Queryable> Matcher<R> for Query<R> {
 /// the same syntax and a different field set.
 ///
 /// A string says the same query wherever a matcher is taken. Compile it here
-/// when the same filter runs over a large queue or a long log, or when a
+/// when the same filter runs over a large Werk or a long log, or when a
 /// string built at run time should answer with an error rather than a panic.
 #[allow(private_bounds)]
 #[derive(Debug, Clone)]
@@ -1309,7 +1309,7 @@ mod tests {
         task
     }
 
-    /// The fields the queue writes as a task is worked, which `Task`'s own
+    /// The fields the Werk writes as a task is worked, which `Task`'s own
     /// chainable methods do not set.
     trait Fixture {
         fn agent(self, agent: &str) -> Task;

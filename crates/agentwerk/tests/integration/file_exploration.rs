@@ -4,13 +4,13 @@
 use super::common;
 
 use agentwerk::tools::{GlobTool, ReadFileTool, TaskTool};
-use agentwerk::{Agent, Policy, Queue};
+use agentwerk::{Agent, Policy, Werk};
 
 #[tokio::test]
 async fn test() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let (provider, model) = common::build_provider();
 
-    let tasks = Queue::new();
+    let tasks = Werk::new();
 
     tasks.set_policy(Policy {
         max_turns: Some(10),

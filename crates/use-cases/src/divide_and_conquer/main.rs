@@ -1,7 +1,7 @@
 //! Divide-and-conquer sum of squares.
 //!
 //! Partitions `[1, N]` into K subranges and creates one task per
-//! subrange. Agents share the labelled queue, call the `python` tool
+//! subrange. Agents share the labelled Werk, call the `python` tool
 //! for an exact integer, and finish via `finish` with a
 //! schema-validated `{"idx", "partial_sum"}`. The driver aggregates
 //! after `finish` returns and verifies the total against the
@@ -21,7 +21,7 @@ use agentwerk::event::Event;
 use agentwerk::providers::{Model, Provider};
 use agentwerk::schemas::Schema;
 use agentwerk::tools::{TaskTool, Tool};
-use agentwerk::{Agent, Policy, Queue, Task};
+use agentwerk::{Agent, Policy, Task, Werk};
 use serde_json::{json, Value};
 
 const ROLE: &str = include_str!("prompts/agent.role.md");
@@ -38,7 +38,7 @@ async fn main() {
     print_intro(args.n, partitions.len(), agents, &style);
 
     let schema = partial_sum_schema();
-    let tasks = Queue::new();
+    let tasks = Werk::new();
     let on_ctrl_c = Arc::clone(&tasks);
     tokio::spawn(async move {
         if tokio::signal::ctrl_c().await.is_ok() {
@@ -77,7 +77,7 @@ async fn main() {
     aggregate_and_report(&tasks, &partitions, args.n, &style);
 }
 
-fn aggregate_and_report(tasks: &Queue, partitions: &[(u64, u64)], n: u64, style: &Style) {
+fn aggregate_and_report(tasks: &Werk, partitions: &[(u64, u64)], n: u64, style: &Style) {
     let total = partitions.len();
     let mut partials: Vec<Option<i128>> = vec![None; total];
     let mut failures = 0usize;
@@ -318,12 +318,12 @@ fn build_event_handler(
 fn print_intro(n: u64, partitions: usize, agents: usize, style: &Style) {
     eprintln!("divide-and-conquer   sum_{{k=1}}^{{{n}}} k^2   (verified via N(N+1)(2N+1)/6)\n");
     eprintln!("  Split [1, {n}] into {partitions} contiguous subranges and enqueue one task per");
-    eprintln!("  subrange. {agents} agent(s) share the queue, each calling a `python` tool");
+    eprintln!("  subrange. {agents} agent(s) share the Werk, each calling a `python` tool");
     eprintln!("  to compute its partial sum exactly. Agents finish their tasks via");
     eprintln!("  `finish` with `{{\"idx\", \"partial_sum\"}}`; the driver aggregates");
     eprintln!("  once every task is finished and verifies against the closed-form total.\n");
     eprintln!(
-        "{dim}┌ {partitions} partitions · {agents} agent(s) sharing the queue{reset}",
+        "{dim}┌ {partitions} partitions · {agents} agent(s) sharing the Werk{reset}",
         dim = style.dim,
         reset = style.reset,
     );
@@ -459,8 +459,8 @@ impl CliArgs {
         eprintln!("Usage: divide-and-conquer [OPTIONS] [N]\n");
         eprintln!("Options:");
         eprintln!("  -p, --partitions <K>   Number of task partitions (default: 16)");
-        eprintln!("  -c, --concurrency <N>  Number of agents sharing the queue (default: 8)");
-        eprintln!("      --max-turns <N>    Per-queue turn limit (default: unlimited)");
+        eprintln!("  -c, --concurrency <N>  Number of agents sharing the Werk (default: 8)");
+        eprintln!("      --max-turns <N>    per-Werk turn limit (default: unlimited)");
         eprintln!("  -v, --verbose          Print per-agent tool calls as they happen");
         eprintln!("  -h, --help             Show this help\n");
         eprintln!("Examples:");

@@ -1,6 +1,6 @@
 //! Multi-agent loop driver. One tokio task per registered agent,
-//! reading the shared `Queue` through the upgraded
-//! `Weak<Queue>` set when the agent was added.
+//! reading the shared `Werk` through the upgraded
+//! `Weak<Werk>` set when the agent was added.
 
 use std::time::Duration;
 

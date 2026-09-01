@@ -66,15 +66,15 @@ async def test_invokes_a_python_tool(tmp_path):
 
 
 async def test_runs_two_labeled_agents_with_events_and_chaining():
-    queue = aw.Queue().set_policy(aw.Policy(max_turns=30))
+    werk = aw.Werk().set_policy(aw.Policy(max_turns=30))
 
     kinds = []
-    queue.on_event(lambda _, event: kinds.append(event.get_name()))
+    werk.on_event(lambda _, event: kinds.append(event.get_name()))
 
-    queue.add_agent(
+    werk.add_agent(
         aw.Agent.from_env().label("a").role("Reply with one word: alpha")
     )
-    queue.add_agent(
+    werk.add_agent(
         aw.Agent.from_env().label("b").role("Reply with one word: beta")
     )
 
@@ -82,17 +82,17 @@ async def test_runs_two_labeled_agents_with_events_and_chaining():
         if task.get_label() == "a":
             work.add_task(aw.Task("Reply beta", label="b"))
 
-    queue.on_result(chain)
-    queue.add_task(aw.Task("Reply alpha", label="a"))
-    await queue.finish_all_tasks()
+    werk.on_result(chain)
+    werk.add_task(aw.Task("Reply alpha", label="a"))
+    await werk.finish_all_tasks()
 
-    assert len(queue.get_results()) == 2
+    assert len(werk.get_results()) == 2
     assert "task_finished" in kinds
 
 
 async def test_saves_the_messages_of_a_finished_task(tmp_path):
-    queue = aw.Queue().set_policy(aw.Policy(max_turns=10))
-    queue.add_agent(
+    werk = aw.Werk().set_policy(aw.Policy(max_turns=10))
+    werk.add_agent(
         aw.Agent.from_env().role("Reply with one word: pong")
     )
 
@@ -100,14 +100,14 @@ async def test_saves_the_messages_of_a_finished_task(tmp_path):
 
     def capture(_, event, task):
         if event.get_name() == "task_finished":
-            model = queue.get_model_for_agent(event.get_agent_id())
+            model = werk.get_model_for_agent(event.get_agent_id())
             trajectory = aw.Trajectory.from_task(event.get_agent_id(), model, task)
             trajectory.save(str(tmp_path))
             captured.append((event.get_agent_id(), len(trajectory.get_replies()), trajectory.get_model()))
 
-    queue.on_task(capture)
-    id = queue.add_task("Reply with exactly the word: pong")
-    await queue.finish_all_tasks()
+    werk.on_task(capture)
+    id = werk.add_task("Reply with exactly the word: pong")
+    await werk.finish_all_tasks()
 
     (agent_id, replies, model), = captured
     written = sorted(p.name for p in (tmp_path / "trajectories").iterdir())
@@ -121,33 +121,33 @@ async def test_compaction_summarizes_the_replies_against_the_live_model(tmp_path
     # turn one and skip compaction. The follow-up reply drives the request that
     # a threshold of zero compacts before.
     task = "Name one colour and say why you picked it."
-    queue = aw.Queue().set_dir(str(tmp_path))
-    queue.set_policy(aw.Policy(compaction_threshold=0.0))
+    werk = aw.Werk().set_dir(str(tmp_path))
+    werk.set_policy(aw.Policy(compaction_threshold=0.0))
     kinds = []
-    queue.on_event(
+    werk.on_event(
         lambda _, event: kinds.append(event.get_name())
         if event.get_name().startswith("compaction_")
         else None
     )
-    queue.add_agent(
+    werk.add_agent(
         aw.Agent.from_env().role("Answer in plain text.").interactive()
     )
-    queue.start()
-    id = queue.add_task(task)
-    await _until(lambda: _answered(queue, id))
-    queue.add_reply(id, "Now name a second colour.")
+    werk.start()
+    id = werk.add_task(task)
+    await _until(lambda: _answered(werk, id))
+    werk.add_reply(id, "Now name a second colour.")
     await _until(lambda: "compaction_finished" in kinds)
-    queue.cancel_all_tasks()
-    await queue.finish_all_tasks()
+    werk.cancel_all_tasks()
+    await werk.finish_all_tasks()
 
     assert "compaction_failed" not in kinds
-    texts = [b.get_data().get("text", "") for r in queue.get_task(id).get_replies() for b in r.get_content()]
+    texts = [b.get_data().get("text", "") for r in werk.get_task(id).get_replies() for b in r.get_content()]
     assert task not in texts, "the summary must have replaced the task reply"
     assert any(text.strip() for text in texts), "the summary must carry text"
 
 
-def _answered(queue, id):
-    replies = queue.get_task(id).get_replies()
+def _answered(werk, id):
+    replies = werk.get_task(id).get_replies()
     return bool(replies) and replies[-1].get_author() == "assistant"
 
 

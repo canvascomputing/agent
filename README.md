@@ -82,7 +82,7 @@ async fn main() {
 The public API has five parts, ordered by how you build and inspect an agent system:
 
 - [Agents](#agents): Set agent roles, behavior, and tasks.
-- [Tasks](#tasks): Assign work and collect results across agents.
+- [Werk](#werk): Assign work and collect results across agents.
 - [Tools](#tools): Give agents controlled ways to act.
 - [Events](#events): Inspect requests, tool calls, and failures.
 - [Knowledge](#knowledge): Share durable memory across agents and tasks.
@@ -227,16 +227,16 @@ See [`Provider`](https://docs.rs/agentwerk/latest/agentwerk/providers/struct.Pro
 
 </details>
 
-## Tasks
+## Werk
 
-A `Queue` stores tasks, assigns them to matching agents, and records their results.
+A `Werk` stores tasks, assigns them to matching agents, and records their results.
 
 <div align="left">
   <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/assets/tasks.gif" width="600" />
 </div>
 
 ```rust
-use agentwerk::{Agent, Task, Queue};
+use agentwerk::{Agent, Task, Werk};
 
 let analyst = Agent::from_env()
     .label("analysis");
@@ -244,15 +244,15 @@ let analyst = Agent::from_env()
 let writer = Agent::from_env()
     .label("report");
 
-let tasks = Queue::new();
-tasks.add_agent(analyst).add_agent(writer);
+let werk = Werk::new();
+werk.add_agent(analyst).add_agent(writer);
 
-tasks.add_task(Task::labeled("analysis", "Rank all products by value."));
-tasks.add_task(Task::labeled("report", "Write up the ranking."));
+werk.add_task(Task::labeled("analysis", "Rank all products by value."));
+werk.add_task(Task::labeled("report", "Write up the ranking."));
 ```
 
 <details>
-<summary>All Queue methods</summary>
+<summary>All Werk methods</summary>
 
 | | Method | Description |
 |-|--------|-------------|
@@ -260,7 +260,7 @@ tasks.add_task(Task::labeled("report", "Write up the ranking."));
 | | `get_policy()` | Get the policy in force. |
 | | `set_dir(dir)` | Define where a session is stored. |
 | | `get_dir()` | Get the session directory. |
-| | `add_agent(agent)` | Add an agent to this task queue. |
+| | `add_agent(agent)` | Add an agent to this Werk. |
 | **Submit and interact** | `add_task(task)` | Submit a task and return its task ID. |
 | | `add_reply(id, content)` | Add a reply to a task. |
 | | `edit_replies(id, editor)` | Rewrite a task's replies now. |
@@ -295,7 +295,7 @@ tasks.add_task(Task::labeled("report", "Write up the ranking."));
 | | `get_output_tokens()` | Get output tokens across finished requests. |
 | | `get_duration()` | Get the elapsed execution duration. |
 
-See [`Queue`](https://docs.rs/agentwerk/latest/agentwerk/agents/tasks/struct.Queue.html).
+See [`Werk`](https://docs.rs/agentwerk/latest/agentwerk/agents/tasks/struct.Werk.html).
 
 </details>
 
@@ -379,7 +379,7 @@ tasks.find_tasks(|t: &Task| t.get_replies().len() > 4);   // a closure, for what
 
 ### Execution
 
-The task queue schedules the work of your agents and returns their results.
+The Werk schedules the work of your agents and returns their results.
 
 ```rust
 tasks.start();
@@ -419,7 +419,7 @@ Task members:
 | | `is_finished()` | Check whether the task finished. |
 | | `is_failed()` | Check whether the task failed. |
 | | `is_pending()` | Check whether the task has work in this run. |
-| | `is_cancelled()` | Check whether this run has taken the task off the queue. |
+| | `is_cancelled()` | Check whether this run has excluded the task from scheduling. |
 | | `get_result()` | The result the agent produced. |
 | | `get_errors()` | The failures recorded against the task, as events. |
 | | `get_replies()` | Messages exchanged with the model. |
@@ -463,7 +463,7 @@ let writer = Agent::from_env()
     .label("report")
     .role("You write concise board reports.");
 
-let tasks = Queue::new();
+let tasks = Werk::new();
 tasks.add_agent(analyst).add_agent(writer);
 tasks.add_task(Task::labeled("analysis", "Rank all products by value."));
 ```
@@ -475,9 +475,9 @@ Finishing the analysis creates the `report` task and links it to its parent. The
 Use hooks to create new tasks when certain results arrive:
 
 ```rust
-tasks.on_result(|queue, done, result| {
+tasks.on_result(|werk, done, result| {
     if done.get_label() == Some("research") {
-        queue.add_task(Task::labeled("report", result.clone()));
+        werk.add_task(Task::labeled("report", result.clone()));
     }
 });
 ```
@@ -659,7 +659,7 @@ See [prompts/directives](https://github.com/canvascomputing/agentwerk/tree/main/
 
 ### Sessions
 
-A `Queue` saves every task, reply, and event so you can continue the same session later.
+A `Werk` saves every task, reply, and event so you can continue the same session later.
 
 <div align="left">
   <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/assets/sessions.gif" width="600" />
@@ -668,7 +668,7 @@ A `Queue` saves every task, reply, and event so you can continue the same sessio
 The working directory is `./.agentwerk` by default.
 
 ```rust
-let tasks = Queue::load(".agentwerk")?;
+let tasks = Werk::load(".agentwerk")?;
 tasks.add_agent(my_agent);
 tasks.start();
 ```
@@ -720,7 +720,7 @@ let agent = Agent::new()
 | **Web** | `FetchTool` | Fetch a URL and read its body. |
 | **Events** | `EventTool` | Publish an event; `task_finished` additionally completes the current task. |
 | **Tasks** | `FinishTool` | Write the result for the current task and mark it finished. |
-| | `TaskTool` | Read the task queue and create or edit tasks. |
+| | `TaskTool` | Read the Werk and create or edit tasks. |
 | **Knowledge** | `KnowledgeTool` | Write, read, remove, or list pages in a knowledge store. |
 
 #### `FinishTool` and `KnowledgeTool`
@@ -761,7 +761,7 @@ The model supplies a name and optional JSON data:
 }
 ```
 
-Agentwerk records the current task and agent on every event. Queue handlers can
+Agentwerk records the current task and agent on every event. Werk handlers can
 react as events arrive, and queries can retrieve them later:
 
 ```rust
@@ -893,7 +893,7 @@ tasks.on_event(|_, event| {
 
 ### Publish events
 
-Publish custom events through the queue. Add agent or task context when relevant:
+Publish custom events through the Werk. Add agent or task context when relevant:
 
 ```rust
 use agentwerk::Event;
@@ -921,13 +921,13 @@ punctuation in AQL. Built-in events have named constructors, such as
 `Event::task_finished()` and `Event::request_started("model")`; their names are
 also available as constants. Publishing one runs its hooks and updates its statistics. It is saved according to the event's normal rules, but it does not change task or execution state.
 
-`Queue::emit_event` never changes a task's status. To let a model finish its
+`Werk::emit_event` never changes a task's status. To let a model finish its
 current task through an event, register `EventTool` on its agent. When the model
 emits `task_finished`, the tool validates and stores `data.result`, optionally
 creates a handover task, and marks the current task finished. All other names
 only publish an event.
 
-Events are saved to `.agentwerk/events.jsonl`. `text_chunk_received` events are not saved. Read events through the queue with these methods:
+Events are saved to `.agentwerk/events.jsonl`. `text_chunk_received` events are not saved. Read events through the Werk with these methods:
 
 | Method | Description |
 |--------|-------------|
@@ -976,16 +976,16 @@ same name as a built-in event, write `label = knowledge_read`.
 
 </details>
 
-See [`Event`](https://docs.rs/agentwerk/latest/agentwerk/event/struct.Event.html) and [`Queue`](https://docs.rs/agentwerk/latest/agentwerk/agents/tasks/struct.Queue.html).
+See [`Event`](https://docs.rs/agentwerk/latest/agentwerk/event/struct.Event.html) and [`Werk`](https://docs.rs/agentwerk/latest/agentwerk/agents/tasks/struct.Werk.html).
 
 ### Hooks
 
 A hook runs your function when an event, result, failure, or task state change occurs.
 
 ```rust
-tasks.on_failure(|queue, _, failed| {
+tasks.on_failure(|werk, _, failed| {
     if failed.get_label() == Some("scan") {
-        queue.add_task(Task::labeled("triage", failed.get_task().clone()));
+        werk.add_task(Task::labeled("triage", failed.get_task().clone()));
     }
 });
 ```
@@ -1007,9 +1007,9 @@ tasks.on_failure(|queue, _, failed| {
 Save replies of every finished task as a training example:
 
 ```rust
-tasks.on_task(|queue, event, task| {
+tasks.on_task(|werk, event, task| {
     if event.get_name() == Event::TASK_FINISHED {
-        let model = queue.get_model_for_agent(event.get_agent_id());
+        let model = werk.get_model_for_agent(event.get_agent_id());
         let _ = Trajectory::from_task(event.get_agent_id(), model.as_deref(), task)
             .save("datasets");
     }
@@ -1030,7 +1030,7 @@ tasks.on_result_async(move |_, task, result| {
 });
 ```
 
-See [`Queue`](https://docs.rs/agentwerk/latest/agentwerk/agents/tasks/struct.Queue.html).
+See [`Werk`](https://docs.rs/agentwerk/latest/agentwerk/agents/tasks/struct.Werk.html).
 
 </details>
 

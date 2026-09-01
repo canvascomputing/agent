@@ -16,7 +16,7 @@ pub struct PyTrajectory {
 #[pymethods]
 impl PyTrajectory {
     /// Capture `task`'s messages as an example produced by `agent` using
-    /// `model`, whose name `Queue.get_model_for_agent` gives you.
+    /// `model`, whose name `Werk.get_model_for_agent` gives you.
     #[staticmethod]
     fn from_task(agent_id: &str, model: Option<&str>, task: PyRef<'_, PyTask>) -> Self {
         PyTrajectory {
