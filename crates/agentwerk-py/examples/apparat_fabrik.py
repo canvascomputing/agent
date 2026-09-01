@@ -192,7 +192,7 @@ def worker_names(pruefer, meister, monteur):
 
 def build_shift(tasks, book, pruefer, meister, monteur):
     for _ in range(pruefer):
-        tasks.add_agent(
+        werk.add_agent(
             Agent.from_env()
             .label("pruefung")
             .role(PRUEFER_ROLE.strip())
@@ -201,7 +201,7 @@ def build_shift(tasks, book, pruefer, meister, monteur):
             .tools([GrepTool(), ReadFileTool()])
         )
     for _ in range(meister):
-        tasks.add_agent(
+        werk.add_agent(
             Agent.from_env()
             .label("abnahme")
             .role(MEISTER_ROLE.strip())
@@ -210,7 +210,7 @@ def build_shift(tasks, book, pruefer, meister, monteur):
             .tool(ReadFileTool())
         )
     for _ in range(monteur):
-        tasks.add_agent(
+        werk.add_agent(
             Agent.from_env()
             .label("montage")
             .role(MONTEUR_ROLE.strip())
@@ -231,17 +231,17 @@ async def main(pruefer, meister, monteur):
     started_at = time.monotonic()
     # Every request resends the context, so the input-token limit is what bounds
     # the bill; the shift bell is the time limit, and both end the run on screen.
-    tasks = Werk().set_policy(
+    werk = Werk().set_policy(
         Policy(max_time=SHIFT, max_input_tokens=2_000_000)
     )
 
     # One read plan opens one Abnahme per part it names, which is the fan-out
     # the line runs on.
-    def open_abnahme(work, task, result):
+    def open_abnahme(callback_werk, task, result):
         if task.get_label() != "pruefung":
             return
         for teil in result["teile"]:
-            work.add_task(
+            callback_werk.add_task(
                 Task(
                     f"Nimm {teil['teil']} ({teil['name']}) ab. Sollmaß {teil['soll']}, "
                     f"Toleranz {teil['toleranz']}. Der Bauplan liegt in {result['bauplan']}.",
@@ -250,13 +250,13 @@ async def main(pruefer, meister, monteur):
                 )
             )
 
-    tasks.on_result(open_abnahme)
+    werk.on_result(open_abnahme)
 
     # A part that passes the Abnahme is not done: it goes on to be fitted, so
     # the work fans forward instead of ending at the second station.
-    def open_montage(work, task, result):
+    def open_montage(callback_werk, task, result):
         if task.get_label() == "abnahme" and result.get("passt"):
-            work.add_task(
+            callback_werk.add_task(
                 Task(
                     f"Baue {result['teil']} ein und buche es. Der Laufzettel lautete: {task.get_task()}",
                     label="montage",
@@ -264,17 +264,17 @@ async def main(pruefer, meister, monteur):
                 )
             )
 
-    tasks.on_result(open_montage)
+    werk.on_result(open_montage)
 
     workers = worker_names(pruefer, meister, monteur)
 
-    def publish(work, event):
+    def publish(callback_werk, event):
         if event.get_name() == "text_chunk_received":
             return
         frame = frame_for(event, started_at, str(REPO))
         frame["agent"] = workers.get(frame["agent"], frame["agent"])
         if frame["task"] and event.get_name().startswith("task_"):
-            task = work.get_task(frame["task"])
+            task = callback_werk.get_task(frame["task"])
             if task is not None:
                 frame["label"] = task.get_label()
                 frame["reporter"] = task.get_reporter()
@@ -293,8 +293,8 @@ async def main(pruefer, meister, monteur):
             },
         )
 
-    tasks.on_event(publish)
-    tasks.on_result(publish_result)
+    werk.on_event(publish)
+    werk.on_result(publish_result)
     build_shift(tasks, book, pruefer, meister, monteur)
 
     works = apparate.build(WORKS_DIR, REPO)
@@ -309,7 +309,7 @@ async def main(pruefer, meister, monteur):
         }
     )
     for apparat in works:
-        tasks.add_task(
+        werk.add_task(
             Task(
                 f"Prüfe den Bauplan {apparat['title']}. Er liegt in {apparat['name']}.",
                 label="pruefung",
@@ -318,36 +318,36 @@ async def main(pruefer, meister, monteur):
         )
 
     pages = asyncio.create_task(watch_pages(book, feed, started_at))
-    await tasks.finish_all_tasks()
+    await werk.finish_all_tasks()
     pages.cancel()
 
     stats = {
-        "input_tokens": tasks.get_input_tokens(),
-        "output_tokens": tasks.get_output_tokens(),
-        "duration": tasks.get_duration(),
+        "input_tokens": werk.get_input_tokens(),
+        "output_tokens": werk.get_output_tokens(),
+        "duration": werk.get_duration(),
     }
     feed.push(
         {
             "t": time.monotonic() - started_at,
             "kind": "bell",
-            "reason": tasks.get_finish_reason(),
+            "reason": werk.get_finish_reason(),
             "stats": stats,
         }
     )
     rulings = [
         task.get_result()
-        for task in tasks.find_tasks("label = abnahme AND status = Finished")
+        for task in werk.find_tasks("label = abnahme AND status = finished")
         if isinstance(task.get_result(), dict)
     ]
     fitted = [
         task.get_result()
-        for task in tasks.find_tasks("label = montage AND status = Finished")
+        for task in werk.find_tasks("label = montage AND status = finished")
         if isinstance(task.get_result(), dict) and task.get_result().get("eingebaut")
     ]
     scrap = [ruling for ruling in rulings if not ruling.get("passt")]
     print(
         f"\n{len(rulings)} parts ruled on, {len(scrap)} rejected, {len(fitted)} fitted, "
-        f"{len(book.get_pages().get_pages())} entries in the Prüfbuch, "
+        f"{len(book.get_pages().get_all())} entries in the Prüfbuch, "
         f"{stats['input_tokens']} in / {stats['output_tokens']} out tokens",
         flush=True,
     )

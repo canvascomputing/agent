@@ -41,7 +41,7 @@ impl KnowledgeTool {
 /// page is the store refusing: rejected values or IO.
 fn failure_reason(error: &KnowledgeError) -> &'static str {
     match error {
-        KnowledgeError::PageMissing { .. } => "page_missing",
+        KnowledgeError::PageNotFound { .. } => "page_missing",
         _ => "store_refused",
     }
 }
@@ -115,7 +115,7 @@ fn run(store: &Knowledge, args: KnowledgeArgs, ctx: &ToolContext) -> Event {
                         Event::new(Event::KNOWLEDGE_WRITTEN)
                             .data(serde_json::json!({ "slug": written })),
                     );
-                    Event::success(usage_line("page written", &store))
+                    Event::success(usage_line("page written", store))
                 }
                 Err(why) => {
                     record(Event::new(Event::KNOWLEDGE_FAILED).data(serde_json::json!({
@@ -156,7 +156,7 @@ fn run(store: &Knowledge, args: KnowledgeArgs, ctx: &ToolContext) -> Event {
                 record(
                     Event::new(Event::KNOWLEDGE_REMOVED).data(serde_json::json!({ "slug": slug })),
                 );
-                Event::success(usage_line("page removed", &store))
+                Event::success(usage_line("page removed", store))
             }
             Err(why) => {
                 record(Event::new(Event::KNOWLEDGE_FAILED).data(serde_json::json!({
@@ -320,7 +320,7 @@ mod tests {
     #[tokio::test]
     async fn list_action_returns_every_page_past_the_index_limit() {
         let (store, _dir) = fresh_store();
-        store.set_char_limit(60);
+        store.set_index_char_limit(60);
         for i in 0..10 {
             save_page(&store, &format!("page-{i}"), "A note", "# Note", &[]);
         }
@@ -394,10 +394,10 @@ mod tests {
         use std::sync::Mutex;
 
         let (store, _dir) = fresh_store();
-        let tasks = Werk::new();
+        let werk = Werk::new();
         let reported = Arc::new(Mutex::new(Vec::new()));
         let seen = Arc::clone(&reported);
-        tasks.on_event(move |_, event| {
+        werk.on_event(move |_, event| {
             if event.get_name() == crate::event::Event::KNOWLEDGE_FAILED {
                 let action = event.get_data()["action"].as_str().unwrap();
                 let slug = event.get_data()["slug"].as_str().unwrap();
@@ -411,7 +411,7 @@ mod tests {
                 seen.lock().unwrap().push(event.get_name().to_string());
             }
         });
-        let ctx = ToolContext::new(std::env::current_dir().unwrap()).werk(Arc::clone(&tasks));
+        let ctx = ToolContext::new(std::env::current_dir().unwrap()).werk(Arc::clone(&werk));
 
         run(
             &store,

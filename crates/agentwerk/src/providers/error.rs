@@ -11,46 +11,81 @@ use serde::{Deserialize, Serialize};
 #[non_exhaustive]
 pub enum ProviderError {
     /// HTTP 401: invalid, revoked, or missing credentials.
-    AuthenticationFailed { message: String },
+    AuthenticationFailed {
+        /// Provider error detail.
+        message: String,
+    },
     /// HTTP 403: authenticated but not allowed to use the resource.
-    PermissionDenied { message: String },
+    PermissionDenied {
+        /// Provider error detail.
+        message: String,
+    },
     /// HTTP 400/404: unknown model id.
-    ModelNotFound { message: String },
+    ModelNotFound {
+        /// Provider error detail.
+        message: String,
+    },
     /// HTTP 400 pre-flight: request tokens exceed the model's context window.
-    ContextWindowExceeded { message: String },
+    ContextWindowExceeded {
+        /// Provider error detail.
+        message: String,
+    },
     /// Provider-side safety filter blocked the request input.
-    SafetyFilterTriggered { message: String },
+    SafetyFilterTriggered {
+        /// Provider error detail.
+        message: String,
+    },
     /// HTTP 429 / 529: retry with backoff, honouring `retry_delay` if set.
     RateLimited {
+        /// Provider error detail.
         message: String,
+        /// HTTP status code.
         status: u16,
+        /// Provider-requested delay before retrying.
         retry_delay: Option<Duration>,
     },
     /// HTTP error with no more specific classification (unclassified 4xx,
     /// generic 5xx). `retryable` is true for standard transient server
     /// errors (500/502/503/504).
     StatusUnclassified {
+        /// HTTP status code.
         status: u16,
+        /// Provider error detail.
         message: String,
+        /// Whether the status represents a transient failure.
         retryable: bool,
+        /// Provider-requested delay before retrying.
         retry_delay: Option<Duration>,
     },
     /// Network / TLS / connection failure before any HTTP response.
-    ConnectionFailed { message: String },
+    ConnectionFailed {
+        /// Transport error detail.
+        message: String,
+    },
     /// The stream was cut off mid-body after headers arrived. Distinct from
     /// `ConnectionFailed` (pre-response) and `ResponseMalformed` (structurally
     /// broken payload): the transport broke while chunks were still in flight.
-    StreamInterrupted { message: String },
+    StreamInterrupted {
+        /// Stream error detail.
+        message: String,
+    },
     /// The response arrived but its body could not be read: malformed JSON, an
     /// unexpected shape, or a broken frame.
-    ResponseMalformed { message: String },
+    ResponseMalformed {
+        /// Parsing error detail.
+        message: String,
+    },
     /// No provider could be resolved from the environment: none was detected,
     /// a required variable was unset, or `LITELLM_PROVIDER` named one that does
     /// not exist. `message` states which.
-    ProviderUnrecognized { message: String },
+    ProviderUnrecognized {
+        /// Configuration error detail.
+        message: String,
+    },
 }
 
 impl ProviderError {
+    /// Return whether the request may succeed when retried.
     pub fn is_retryable(&self) -> bool {
         matches!(
             self,
@@ -64,7 +99,8 @@ impl ProviderError {
         )
     }
 
-    pub fn retry_delay(&self) -> Option<Duration> {
+    /// Return the provider-requested retry delay, when supplied.
+    pub fn get_retry_delay(&self) -> Option<Duration> {
         match self {
             ProviderError::RateLimited { retry_delay, .. } => *retry_delay,
             ProviderError::StatusUnclassified { retry_delay, .. } => *retry_delay,
@@ -72,7 +108,8 @@ impl ProviderError {
         }
     }
 
-    pub fn kind(&self) -> RequestErrorKind {
+    /// Return the fieldless category for this error.
+    pub fn get_kind(&self) -> RequestErrorKind {
         match self {
             ProviderError::AuthenticationFailed { .. } => RequestErrorKind::AuthenticationFailed,
             ProviderError::PermissionDenied { .. } => RequestErrorKind::PermissionDenied,
@@ -147,16 +184,27 @@ impl std::error::Error for ProviderError {}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RequestErrorKind {
+    /// Invalid, revoked, or missing credentials.
     AuthenticationFailed,
+    /// Authenticated request without permission.
     PermissionDenied,
+    /// Unknown model identifier.
     ModelNotFound,
+    /// Request exceeds the model context window.
     ContextWindowExceeded,
+    /// Safety policy blocked the request.
     SafetyFilterTriggered,
+    /// Provider rate limit.
     RateLimited,
+    /// HTTP status without a more specific category.
     StatusUnclassified,
+    /// Connection or TLS failure.
     ConnectionFailed,
+    /// Response stream ended prematurely.
     StreamInterrupted,
+    /// Response payload could not be parsed.
     ResponseMalformed,
+    /// Provider configuration could not be resolved.
     ProviderUnrecognized,
 }
 
@@ -267,6 +315,26 @@ mod tests {
     use super::*;
 
     #[test]
+    fn request_error_kind_serde_display_and_get_name_share_one_spelling() {
+        for kind in [
+            RequestErrorKind::AuthenticationFailed,
+            RequestErrorKind::PermissionDenied,
+            RequestErrorKind::ModelNotFound,
+            RequestErrorKind::ContextWindowExceeded,
+            RequestErrorKind::SafetyFilterTriggered,
+            RequestErrorKind::RateLimited,
+            RequestErrorKind::StatusUnclassified,
+            RequestErrorKind::ConnectionFailed,
+            RequestErrorKind::StreamInterrupted,
+            RequestErrorKind::ResponseMalformed,
+            RequestErrorKind::ProviderUnrecognized,
+        ] {
+            assert_eq!(kind.to_string(), kind.get_name());
+            assert_eq!(serde_json::to_value(kind).unwrap(), kind.get_name());
+        }
+    }
+
+    #[test]
     fn rate_limited_is_retryable_and_carries_retry_after() {
         let err = ProviderError::RateLimited {
             message: "slow down".into(),
@@ -274,7 +342,7 @@ mod tests {
             retry_delay: Some(Duration::from_millis(500)),
         };
         assert!(err.is_retryable());
-        assert_eq!(err.retry_delay(), Some(Duration::from_millis(500)));
+        assert_eq!(err.get_retry_delay(), Some(Duration::from_millis(500)));
     }
 
     #[test]
@@ -283,7 +351,7 @@ mod tests {
             message: "dns".into(),
         };
         assert!(err.is_retryable());
-        assert_eq!(err.retry_delay(), None);
+        assert_eq!(err.get_retry_delay(), None);
     }
 
     #[test]
@@ -292,7 +360,7 @@ mod tests {
             message: "error decoding response body".into(),
         };
         assert!(err.is_retryable());
-        assert_eq!(err.retry_delay(), None);
+        assert_eq!(err.get_retry_delay(), None);
         assert!(err.to_string().starts_with("Stream interrupted:"));
     }
 
@@ -382,7 +450,7 @@ mod tests {
                 message: "no provider".into(),
             },
         ];
-        let kinds: Vec<RequestErrorKind> = every.iter().map(|e| e.kind()).collect();
+        let kinds: Vec<RequestErrorKind> = every.iter().map(|e| e.get_kind()).collect();
         assert_eq!(kinds.len(), 11);
     }
 

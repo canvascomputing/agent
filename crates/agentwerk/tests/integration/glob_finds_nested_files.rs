@@ -80,14 +80,14 @@ async fn finds_every_lib_rs_in_nested_tree() -> std::result::Result<(), Box<dyn 
         logger(e);
     });
 
-    let tasks = Werk::new();
+    let werk = Werk::new();
 
-    tasks.set_policy(Policy {
+    werk.set_policy(Policy {
         max_turns: Some(10),
         ..Default::default()
     });
-    tasks.on_event(move |_, e| event_handler(e));
-    tasks.add_agent(
+    werk.on_event(move |_, e| event_handler(e));
+    werk.add_agent(
         Agent::new()
             .provider(provider)
             .model(&model)
@@ -104,12 +104,12 @@ async fn finds_every_lib_rs_in_nested_tree() -> std::result::Result<(), Box<dyn 
             .tool(ListDirectoryTool)
             .tool(ReadFileTool),
     );
-    tasks.add_task(
+    werk.add_task(
         "Find every `lib.rs` file anywhere in the project tree, including nested directories.",
     );
 
-    tasks.finish_all_tasks().await;
-    common::print_result(&tasks);
+    werk.finish_all_tasks().await;
+    common::print_result(&werk);
 
     let recorded = calls.lock().unwrap().clone();
 

@@ -2,7 +2,7 @@
 //! list of `ReplyContent` blocks; each block is flattened to a `kind` plus a
 //! `data` dict, the same shape `Event` uses for a payload-carrying variant.
 
-use agentwerk::agents::tasks::{Author, Reply, ReplyContent};
+use agentwerk::agents::tasks::{Reply, ReplyContent};
 use pyo3::prelude::*;
 
 use serde_json::Value;
@@ -28,11 +28,7 @@ impl PyReply {
 
     /// `"system"`, `"user"`, or `"assistant"`.
     fn get_author(&self) -> String {
-        match self.inner.get_author() {
-            Author::System => "system".into(),
-            Author::User => "user".into(),
-            Author::Assistant => "assistant".into(),
-        }
+        self.inner.get_author().get_name().into()
     }
 
     fn get_content(&self) -> Vec<PyReplyContent> {

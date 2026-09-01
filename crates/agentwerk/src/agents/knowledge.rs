@@ -37,18 +37,29 @@ struct IndexEntry {
 #[derive(Debug)]
 pub enum KnowledgeError {
     /// A slug, description, or content value was rejected.
-    PageRejected { message: String },
+    PageRejected {
+        /// Why the page was rejected.
+        message: String,
+    },
     /// No page exists at `slug`.
-    PageMissing { slug: String },
+    PageNotFound {
+        /// Slug that was not found.
+        slug: String,
+    },
     /// The underlying file operation failed.
-    IoFailed { message: String, source: io::Error },
+    IoFailed {
+        /// Operation that failed.
+        message: String,
+        /// Underlying I/O error.
+        source: io::Error,
+    },
 }
 
 impl fmt::Display for KnowledgeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::PageRejected { message } => write!(f, "{message}"),
-            Self::PageMissing { slug } => write!(f, "Page `{slug}` not found"),
+            Self::PageNotFound { slug } => write!(f, "Page `{slug}` not found"),
             Self::IoFailed { message, source } => write!(f, "{message}: {source}"),
         }
     }
@@ -150,13 +161,13 @@ impl Knowledge {
     /// the pages that fit and names `index.md` for the rest. Page bodies are
     /// never limited. Set it on the loaded store before handing the store to any
     /// agent.
-    pub fn set_char_limit(&self, count: usize) -> &Self {
+    pub fn set_index_char_limit(&self, count: usize) -> &Self {
         self.index_char_limit.store(count, Ordering::Relaxed);
         self
     }
 
     /// Get the index size limit in force, 12 000 until
-    /// [`Self::set_char_limit`] changes it.
+    /// [`Self::set_index_char_limit`] changes it.
     pub fn get_index_char_limit(&self) -> usize {
         self.index_char_limit.load(Ordering::Relaxed)
     }
@@ -164,7 +175,7 @@ impl Knowledge {
     /// Get the index, which is injected into the agent prompt. Empty while the
     /// store holds no pages.
     ///
-    /// Past [`Self::set_char_limit`] the listing stops at the last page that
+    /// Past [`Self::set_index_char_limit`] the listing stops at the last page that
     /// fits and a directive names `index.md` for the agent to read. That
     /// directive is a floor: a limit too small to hold it still gets it.
     pub fn get_index(&self) -> String {
@@ -237,31 +248,40 @@ impl Knowledge {
 /// `<dir>/knowledge/pages/<slug>.md` with its frontmatter above the body.
 #[derive(Debug, Clone)]
 pub struct Page {
+    /// Stable page identifier and filename stem.
     pub slug: String,
     /// What kind of page this is, `Knowledge` by default.
     pub kind: String,
+    /// Short description shown in the knowledge index.
     pub description: String,
+    /// Markdown page body.
     pub content: String,
+    /// Terms associated with the page.
     pub tags: Vec<String>,
 }
 
 impl Page {
+    /// Return the page slug.
     pub fn get_slug(&self) -> &str {
         &self.slug
     }
 
+    /// Return the page kind.
     pub fn get_kind(&self) -> &str {
         &self.kind
     }
 
+    /// Return the index description.
     pub fn get_description(&self) -> &str {
         &self.description
     }
 
+    /// Return the markdown content.
     pub fn get_content(&self) -> &str {
         &self.content
     }
 
+    /// Return the page tags.
     pub fn get_tags(&self) -> &[String] {
         &self.tags
     }
@@ -369,7 +389,7 @@ impl Pages<'_> {
             None => page_path(&self.inner.knowledge_dir, &slug),
         };
         if !path.exists() {
-            return Err(KnowledgeError::PageMissing { slug });
+            return Err(KnowledgeError::PageNotFound { slug });
         }
         let raw = fs::read_to_string(&path)
             .map_err(io_failed(format!("Failed to read page `{slug}`")))?;
@@ -384,7 +404,7 @@ impl Pages<'_> {
     }
 
     /// Get every page in the store, in index order.
-    pub fn get_pages(&self) -> Result<Vec<Page>, KnowledgeError> {
+    pub fn get_all(&self) -> Result<Vec<Page>, KnowledgeError> {
         let slugs: Vec<String> = self
             .inner
             .index
@@ -405,7 +425,7 @@ impl Pages<'_> {
         let pos = index
             .iter()
             .position(|e| e.slug == slug)
-            .ok_or(KnowledgeError::PageMissing { slug })?;
+            .ok_or(KnowledgeError::PageNotFound { slug })?;
         let removed = index.remove(pos);
 
         let page_file = self.inner.knowledge_dir.join(&removed.path);
@@ -953,7 +973,7 @@ mod tests {
     fn load_page_not_found() {
         let (store, _dir) = fresh_store();
         let err = store.get_pages().get_page("nonexistent").unwrap_err();
-        assert!(matches!(err, KnowledgeError::PageMissing { .. }));
+        assert!(matches!(err, KnowledgeError::PageNotFound { .. }));
         assert!(err.to_string().contains("not found"));
     }
 
@@ -963,7 +983,7 @@ mod tests {
         save_page(&store, "build", "How to build", "# Build\n\nRun make.", &[]);
         save_page(&store, "deploy", "How to deploy", "# Deploy\n\nPush.", &[]);
 
-        let pages = store.get_pages().get_pages().unwrap();
+        let pages = store.get_pages().get_all().unwrap();
         let slugs: Vec<&str> = pages.iter().map(|p| p.slug.as_str()).collect();
         assert_eq!(slugs, vec!["build", "deploy"]);
         assert_eq!(pages[0].description, "How to build");
@@ -974,14 +994,14 @@ mod tests {
     fn get_index_char_limit_returns_the_default_until_it_is_set() {
         let (store, _dir) = fresh_store();
         assert_eq!(store.get_index_char_limit(), DEFAULT_INDEX_CHAR_LIMIT);
-        store.set_char_limit(80);
+        store.set_index_char_limit(80);
         assert_eq!(store.get_index_char_limit(), 80);
     }
 
     #[test]
     fn list_is_empty_on_a_fresh_store() {
         let (store, _dir) = fresh_store();
-        assert!(store.get_pages().get_pages().unwrap().is_empty());
+        assert!(store.get_pages().get_all().unwrap().is_empty());
     }
 
     #[test]
@@ -998,7 +1018,7 @@ mod tests {
     fn remove_page_errors_when_not_in_index() {
         let (store, _dir) = fresh_store();
         let err = store.get_pages().remove("nonexistent").unwrap_err();
-        assert!(matches!(err, KnowledgeError::PageMissing { .. }));
+        assert!(matches!(err, KnowledgeError::PageNotFound { .. }));
         assert!(err.to_string().contains("not found"));
     }
 
@@ -1098,9 +1118,9 @@ mod tests {
     fn index_past_the_limit_lists_the_pages_that_fit_then_names_the_file() {
         let (store, dir) = fresh_store();
         // Room for the directive, which names an absolute path, plus a few pages.
-        let store = store.set_char_limit(500);
+        let store = store.set_index_char_limit(500);
         for i in 0..40 {
-            save_page(&store, &format!("page-{i:02}"), "A note", "# Note", &[]);
+            save_page(store, &format!("page-{i:02}"), "A note", "# Note", &[]);
         }
 
         let index = store.get_index();
@@ -1118,8 +1138,8 @@ mod tests {
     #[test]
     fn index_names_the_file_when_no_page_fits() {
         let (store, _dir) = fresh_store();
-        let store = store.set_char_limit(10);
-        save_page(&store, "alpha", "First note", "# Alpha", &[]);
+        let store = store.set_index_char_limit(10);
+        save_page(store, "alpha", "First note", "# Alpha", &[]);
 
         let index = store.get_index();
         assert!(index.starts_with("1 more page is not listed"), "{index}");
@@ -1128,7 +1148,7 @@ mod tests {
     #[test]
     fn a_write_past_the_limit_is_still_saved_and_listed_in_full() {
         let (store, _dir) = fresh_store();
-        let store = store.set_char_limit(80);
+        let store = store.set_index_char_limit(80);
         let long_description = "x".repeat(200);
         store
             .get_pages()
@@ -1148,7 +1168,7 @@ mod tests {
         );
 
         // Usage reports the custom limit.
-        save_page(&store, "small", "ok", "# Small", &[]);
+        save_page(store, "small", "ok", "# Small", &[]);
         let (_, limit, _) = store.index_usage();
         assert_eq!(limit, 80);
     }

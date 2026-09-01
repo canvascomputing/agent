@@ -31,8 +31,8 @@ impl PyKnowledge {
 
     /// Limit how much of the index is injected into the prompt, in characters.
     /// No write is ever refused for being too large.
-    fn set_char_limit<'py>(slf: PyRef<'py, Self>, count: usize) -> PyRef<'py, Self> {
-        slf.inner.set_char_limit(count);
+    fn set_index_char_limit<'py>(slf: PyRef<'py, Self>, count: usize) -> PyRef<'py, Self> {
+        slf.inner.set_index_char_limit(count);
         slf
     }
 
@@ -88,8 +88,8 @@ impl PyPages {
     }
 
     /// Get every page in the store, in index order.
-    fn get_pages(&self) -> PyResult<Vec<PyPage>> {
-        let pages = self.collection().get_pages().map_err(runtime_error)?;
+    fn get_all(&self) -> PyResult<Vec<PyPage>> {
+        let pages = self.collection().get_all().map_err(runtime_error)?;
         Ok(pages.into_iter().map(|inner| PyPage { inner }).collect())
     }
 

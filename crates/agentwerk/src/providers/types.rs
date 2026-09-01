@@ -15,30 +15,34 @@ use crate::tools::Tool;
 /// model's own default. This shapes only the request: whatever reasoning comes
 /// back is always kept as a `Thinking` [`ContentBlock`].
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ReasoningEffort {
+    /// Do not send an explicit reasoning setting.
     #[default]
     Off,
+    /// Request low reasoning effort.
     Low,
+    /// Request medium reasoning effort.
     Medium,
+    /// Request high reasoning effort.
     High,
 }
 
 impl ReasoningEffort {
-    /// The value sent with the request, `"low"`, `"medium"`, or `"high"`, or
-    /// `None` when off. Every supported LLM provider takes these same words.
-    pub(crate) fn label(self) -> Option<&'static str> {
+    /// The stable snake_case spelling.
+    pub fn get_name(self) -> &'static str {
         match self {
-            ReasoningEffort::Off => None,
-            ReasoningEffort::Low => Some("low"),
-            ReasoningEffort::Medium => Some("medium"),
-            ReasoningEffort::High => Some("high"),
+            ReasoningEffort::Off => "off",
+            ReasoningEffort::Low => "low",
+            ReasoningEffort::Medium => "medium",
+            ReasoningEffort::High => "high",
         }
     }
 }
 
 impl fmt::Display for ReasoningEffort {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.label().unwrap_or("off"))
+        f.write_str(self.get_name())
     }
 }
 
@@ -70,13 +74,22 @@ pub struct ModelRequest {
 pub enum Message {
     /// System-role message: the prompt frame the provider sees first.
     #[serde(rename = "system")]
-    System { content: String },
+    System {
+        /// Message text.
+        content: String,
+    },
     /// User-role message: input from the caller or tool results.
     #[serde(rename = "user")]
-    User { content: Vec<ContentBlock> },
+    User {
+        /// User and tool-result blocks.
+        content: Vec<ContentBlock>,
+    },
     /// Assistant-role message: model output.
     #[serde(rename = "assistant")]
-    Assistant { content: Vec<ContentBlock> },
+    Assistant {
+        /// Model-produced blocks.
+        content: Vec<ContentBlock>,
+    },
 }
 
 impl Message {
@@ -106,6 +119,7 @@ impl Message {
 /// that becomes one turn's input, such as `Task`, whose task agentwerk sends
 /// on the first turn.
 pub trait AsUserMessage {
+    /// Convert this value into a user-role message.
     fn as_user_message(&self) -> Message;
 }
 
@@ -115,19 +129,28 @@ pub trait AsUserMessage {
 pub enum ContentBlock {
     /// Plain text block.
     #[serde(rename = "text")]
-    Text { text: String },
+    Text {
+        /// Text body.
+        text: String,
+    },
     /// Tool invocation the model requested.
     #[serde(rename = "tool_use")]
     ToolUse {
+        /// Provider call ID.
         id: String,
+        /// Tool name.
         name: String,
+        /// JSON arguments.
         input: serde_json::Value,
     },
     /// Outcome of a tool invocation sent back to the model.
     #[serde(rename = "tool_result")]
     ToolResult {
+        /// ID of the matching tool call.
         tool_use_id: String,
+        /// Result text.
         content: String,
+        /// Whether execution succeeded.
         #[serde(default = "default_true")]
         succeeded: bool,
     },
@@ -136,12 +159,20 @@ pub enum ContentBlock {
     /// the provider will accept the block; empty for the OpenAI-compatible
     /// endpoints, which carry no such token and regenerate reasoning instead.
     #[serde(rename = "thinking")]
-    Thinking { thinking: String, signature: String },
+    Thinking {
+        /// Reasoning text.
+        thinking: String,
+        /// Opaque provider replay signature.
+        signature: String,
+    },
     /// Extended-thinking the provider returned encrypted, when Anthropic's
     /// safety systems redact the reasoning. `data` is opaque and echoed back
     /// unchanged to replay the turn.
     #[serde(rename = "redacted_thinking")]
-    RedactedThinking { data: String },
+    RedactedThinking {
+        /// Opaque provider payload.
+        data: String,
+    },
 }
 
 fn default_true() -> bool {
@@ -182,6 +213,26 @@ pub enum ResponseStatus {
     /// Server-side tool loop hit its iteration limit.
     /// Anthropic: `pause_turn`
     PauseTurn,
+}
+
+impl ResponseStatus {
+    /// The stable snake_case spelling.
+    pub fn get_name(&self) -> &'static str {
+        match self {
+            Self::EndTurn => "end_turn",
+            Self::StopSequence => "stop_sequence",
+            Self::ToolUse => "tool_use",
+            Self::OutputTruncated => "output_truncated",
+            Self::Refused => "refused",
+            Self::PauseTurn => "pause_turn",
+        }
+    }
+}
+
+impl fmt::Display for ResponseStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.get_name())
+    }
 }
 
 /// Token counts the provider reported for one response.
@@ -253,17 +304,27 @@ impl std::fmt::Display for ToolDeclineKind {
 #[derive(Debug, Clone)]
 pub enum StreamEvent {
     /// Text the model just produced, to be shown as it arrives.
-    TextDelta { text: String },
+    TextDelta {
+        /// Text fragment.
+        text: String,
+    },
 
     /// A tool call the endpoint did not deliver usably, written as text or
     /// delivered without its arguments, was rebuilt from the text the model
     /// wrote; it will run.
-    ToolCallRepaired { tool_name: String, call_id: String },
+    ToolCallRepaired {
+        /// Tool that will run.
+        tool_name: String,
+        /// Provider call ID.
+        call_id: String,
+    },
 
     /// A framed tool call was found in the reply and declined, with the
     /// reason it was not promoted.
     ToolCallDeclined {
+        /// Tool named by the declined call.
         tool_name: String,
+        /// Reason the call was declined.
         kind: ToolDeclineKind,
     },
 }
@@ -271,6 +332,38 @@ pub enum StreamEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fieldless_types_serialize_with_their_display_names() {
+        for value in [
+            ReasoningEffort::Off,
+            ReasoningEffort::Low,
+            ReasoningEffort::Medium,
+            ReasoningEffort::High,
+        ] {
+            assert_eq!(value.to_string(), value.get_name());
+            assert_eq!(serde_json::to_value(value).unwrap(), value.get_name());
+        }
+        for value in [
+            ResponseStatus::EndTurn,
+            ResponseStatus::StopSequence,
+            ResponseStatus::ToolUse,
+            ResponseStatus::OutputTruncated,
+            ResponseStatus::Refused,
+            ResponseStatus::PauseTurn,
+        ] {
+            assert_eq!(value.to_string(), value.get_name());
+            assert_eq!(serde_json::to_value(&value).unwrap(), value.get_name());
+        }
+        for value in [
+            ToolDeclineKind::OutputTruncated,
+            ToolDeclineKind::ReplyNotFinished,
+            ToolDeclineKind::AlreadyDelivered,
+        ] {
+            assert_eq!(value.to_string(), value.get_name());
+            assert_eq!(serde_json::to_value(value).unwrap(), value.get_name());
+        }
+    }
 
     #[test]
     fn message_serde_round_trip() {

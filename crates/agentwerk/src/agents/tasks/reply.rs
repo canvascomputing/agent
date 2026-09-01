@@ -16,9 +16,29 @@ use super::now_millis;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Author {
+    /// Internal system context.
     System,
+    /// Host or end-user input.
     User,
+    /// Model output.
     Assistant,
+}
+
+impl Author {
+    /// The stable lowercase spelling.
+    pub fn get_name(&self) -> &'static str {
+        match self {
+            Self::System => "system",
+            Self::User => "user",
+            Self::Assistant => "assistant",
+        }
+    }
+}
+
+impl std::fmt::Display for Author {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.get_name())
+    }
 }
 
 /// One entry in a task's replies.
@@ -38,17 +58,27 @@ pub struct Reply {
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ReplyContent {
+    /// Plain text.
     Text {
+        /// Text body.
         text: String,
     },
+    /// Tool call requested by the model.
     ToolUse {
+        /// Provider call ID.
         id: String,
+        /// Tool name.
         name: String,
+        /// JSON arguments.
         input: serde_json::Value,
     },
+    /// Result returned for a tool call.
     ToolResult {
+        /// ID of the matching tool call.
         tool_use_id: String,
+        /// Inline result or preview.
         content: String,
+        /// Whether the call completed successfully.
         succeeded: bool,
         /// Absolute path of the offloaded full payload when the inline
         /// `content` carries only a preview. `None` when the full output
@@ -56,11 +86,16 @@ pub enum ReplyContent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         path: Option<PathBuf>,
     },
+    /// Model reasoning retained for the next request.
     Thinking {
+        /// Reasoning text.
         thinking: String,
+        /// Provider signature for the reasoning block.
         signature: String,
     },
+    /// Provider-redacted reasoning payload.
     RedactedThinking {
+        /// Opaque provider data.
         data: String,
     },
 }
@@ -165,6 +200,7 @@ impl ReplyContent {
         }
     }
 
+    /// Return text for a text block.
     pub fn get_text(&self) -> Option<&str> {
         match self {
             Self::Text { text } => Some(text),
@@ -172,6 +208,7 @@ impl ReplyContent {
         }
     }
 
+    /// Return the provider call ID for a tool-use block.
     pub fn get_id(&self) -> Option<&str> {
         match self {
             Self::ToolUse { id, .. } => Some(id),
@@ -179,6 +216,7 @@ impl ReplyContent {
         }
     }
 
+    /// Return the tool name for a tool-use block.
     pub fn get_name(&self) -> Option<&str> {
         match self {
             Self::ToolUse { name, .. } => Some(name),
@@ -186,6 +224,7 @@ impl ReplyContent {
         }
     }
 
+    /// Return the arguments for a tool-use block.
     pub fn get_input(&self) -> Option<&serde_json::Value> {
         match self {
             Self::ToolUse { input, .. } => Some(input),
@@ -193,6 +232,7 @@ impl ReplyContent {
         }
     }
 
+    /// Return the matching call ID for a tool-result block.
     pub fn get_tool_use_id(&self) -> Option<&str> {
         match self {
             Self::ToolResult { tool_use_id, .. } => Some(tool_use_id),
@@ -200,6 +240,7 @@ impl ReplyContent {
         }
     }
 
+    /// Return the inline content for a tool-result block.
     pub fn get_content(&self) -> Option<&str> {
         match self {
             Self::ToolResult { content, .. } => Some(content),
@@ -207,6 +248,7 @@ impl ReplyContent {
         }
     }
 
+    /// Return whether a tool-result block succeeded.
     pub fn get_succeeded(&self) -> Option<bool> {
         match self {
             Self::ToolResult { succeeded, .. } => Some(*succeeded),
@@ -214,6 +256,7 @@ impl ReplyContent {
         }
     }
 
+    /// Return the offloaded output path for a tool-result block.
     pub fn get_path(&self) -> Option<&std::path::Path> {
         match self {
             Self::ToolResult { path, .. } => path.as_deref(),
@@ -221,6 +264,7 @@ impl ReplyContent {
         }
     }
 
+    /// Return reasoning text for a thinking block.
     pub fn get_thinking(&self) -> Option<&str> {
         match self {
             Self::Thinking { thinking, .. } => Some(thinking),
@@ -228,6 +272,7 @@ impl ReplyContent {
         }
     }
 
+    /// Return the provider signature for a thinking block.
     pub fn get_signature(&self) -> Option<&str> {
         match self {
             Self::Thinking { signature, .. } => Some(signature),
@@ -235,6 +280,7 @@ impl ReplyContent {
         }
     }
 
+    /// Return opaque data for a redacted-thinking block.
     pub fn get_data(&self) -> Option<&str> {
         match self {
             Self::RedactedThinking { data } => Some(data),
@@ -308,6 +354,14 @@ impl ReplyContent {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn author_serde_display_and_get_name_share_one_spelling() {
+        for author in [Author::System, Author::User, Author::Assistant] {
+            assert_eq!(author.to_string(), author.get_name());
+            assert_eq!(serde_json::to_value(author).unwrap(), author.get_name());
+        }
+    }
 
     #[test]
     fn reply_and_content_getters_expose_their_values() {

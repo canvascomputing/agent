@@ -12,7 +12,7 @@ use std::time::Duration;
 use tokio::sync::{broadcast, watch};
 use tokio::task::JoinHandle;
 
-use super::super::agent::{Agent, WerkRef};
+use super::super::agent::Agent;
 use super::super::policy::Policy;
 use super::super::query::{Matcher, Query};
 use super::super::r#loop::run_main_loop;
@@ -63,6 +63,8 @@ const EVENT_STREAM_CAPACITY: usize = 1024;
 /// out what its own handler takes.
 type AsyncHandler = dyn Fn(Arc<Werk>, Event, Option<Task>) -> HandlerWork + Send + Sync;
 
+type AwaitedHandlerRef = (fn(&Event) -> bool, Arc<AsyncHandler>);
+
 /// Boxed so the Werk can hold handlers with different future types.
 type HandlerWork = Pin<Box<dyn Future<Output = ()> + Send>>;
 
@@ -86,7 +88,7 @@ fn is_failure(event: &Event) -> bool {
     )
 }
 
-/// `TaskFailed` is left out: it is the outcome, already carried by the
+/// `task_failed` is left out: it is the outcome, already carried by the
 /// task's status and `failed_at`, not a cause.
 fn is_recorded_failure(event: &Event) -> bool {
     is_failure(event) && event.name != Event::TASK_FAILED
@@ -220,16 +222,16 @@ impl Run {
 /// use agentwerk::tools::FetchTool;
 ///
 /// # async fn run() {
-/// let tasks = Werk::new();
+/// let werk = Werk::new();
 /// for _ in 0..4 {
-///     tasks.add_agent(
+///     werk.add_agent(
 ///         Agent::from_env()
 ///             .label("research")
 ///             .tool(FetchTool::new()),
 ///     );
 /// }
-/// tasks.add_task(Task::labeled("research", "Summarize https://canvascomputing.org"));
-/// tasks.finish_all_tasks().await;
+/// werk.add_task(Task::labeled("research", "Summarize https://canvascomputing.org"));
+/// werk.finish_all_tasks().await;
 /// # }
 /// ```
 ///
@@ -244,9 +246,9 @@ impl Run {
 /// use agentwerk::Werk;
 ///
 /// # fn run() -> Result<(), Box<dyn std::error::Error>> {
-/// let tasks = Werk::load(".agentwerk")?;
+/// let werk = Werk::load(".agentwerk")?;
 /// // Re-register the agents, then call .start() or .finish_all_tasks().await.
-/// # let _ = tasks;
+/// # let _ = werk;
 /// # Ok(())
 /// # }
 /// ```
@@ -324,7 +326,7 @@ impl Werk {
         })
     }
 
-    /// Continue a session from `tasks_dir`, or start one there when it is empty.
+    /// Continue a session from `werk_dir`, or start one there when it is empty.
     ///
     /// Every task is read back with its status, result, and messages, and the
     /// statistics resume from `events.jsonl`, so the turn and token budgets
@@ -340,12 +342,12 @@ impl Werk {
     /// it, rather than handing back a store quietly missing that task. Files
     /// written by an older version are the usual cause: delete the session
     /// directory, or migrate it, and load again.
-    pub fn load(tasks_dir: impl Into<PathBuf>) -> io::Result<Arc<Self>> {
-        let tasks_dir = tasks_dir.into();
-        std::fs::create_dir_all(tasks_dir.join("tasks"))?;
+    pub fn load(werk_dir: impl Into<PathBuf>) -> io::Result<Arc<Self>> {
+        let werk_dir = werk_dir.into();
+        std::fs::create_dir_all(werk_dir.join("tasks"))?;
 
         let mut tasks = HashMap::new();
-        if let Ok(entries) = std::fs::read_dir(tasks_dir.join("tasks")) {
+        if let Ok(entries) = std::fs::read_dir(werk_dir.join("tasks")) {
             for entry in entries.flatten() {
                 let task_dir = entry.path();
                 if !task_dir.is_dir() || !task_dir.join("task.json").is_file() {
@@ -361,7 +363,7 @@ impl Werk {
                 // Skipping an unreadable task would drop its status, result
                 // and timestamps with it, leaving the Werk to resume work it
                 // has no record of.
-                let task = Task::load(&tasks_dir, &id).map_err(|source| {
+                let task = Task::load(&werk_dir, &id).map_err(|source| {
                     io::Error::new(
                         source.kind(),
                         format!("task {id} could not be read: {source}"),
@@ -374,7 +376,7 @@ impl Werk {
         // One pass over the log fills both: the figures the run resumes on, and
         // the failures each task saw, which no task file carries.
         let stats = Stats::new();
-        let _ = Stats::for_each_event(&tasks_dir, |event| {
+        let _ = Stats::for_each_event(&werk_dir, |event| {
             stats.record(event);
             if is_recorded_failure(event) {
                 if let Some(task) = tasks.get_mut(&event.task_id) {
@@ -404,7 +406,7 @@ impl Werk {
             event_handlers: Mutex::new(Vec::new()),
             awaited_events: AwaitedEvents::default(),
             event_stream: broadcast::Sender::new(EVENT_STREAM_CAPACITY),
-            dir: Mutex::new(tasks_dir),
+            dir: Mutex::new(werk_dir),
             events_lock: Mutex::new(()),
             join_handle: Mutex::new(None),
             next_task_id: Mutex::new(Some(next_id)),
@@ -440,8 +442,8 @@ impl Werk {
     ///
     /// ```no_run
     /// # use agentwerk::{Event, Task, Werk};
-    /// let tasks = Werk::new();
-    /// tasks.on_event(|werk, event| {
+    /// let werk = Werk::new();
+    /// werk.on_event(|werk, event| {
     ///     if event.get_name() == Event::TASK_FAILED {
     ///         werk.add_task(Task::labeled("triage", "Look into the failure."));
     ///     }
@@ -472,11 +474,11 @@ impl Werk {
     /// ```no_run
     /// # use agentwerk::Werk;
     /// # async fn run() {
-    /// let tasks = Werk::new();
-    /// tasks.on_event_async(|_, event| async move {
+    /// let werk = Werk::new();
+    /// werk.on_event_async(|_, event| async move {
     ///     println!("{}", event.get_name());
     /// });
-    /// tasks.finish_all_tasks().await;
+    /// werk.finish_all_tasks().await;
     /// # }
     /// ```
     pub fn on_event_async<F, Fut>(&self, handler: F) -> &Self
@@ -515,8 +517,8 @@ impl Werk {
     ///
     /// ```no_run
     /// # use agentwerk::{Task, Werk};
-    /// let tasks = Werk::new();
-    /// tasks.on_result(|werk, done, result| {
+    /// let werk = Werk::new();
+    /// werk.on_result(|werk, done, result| {
     ///     if result["needs_review"] == true {
     ///         werk.add_task(Task::labeled("review", done.get_task().clone()).parent(done.get_id()));
     ///     }
@@ -552,11 +554,11 @@ impl Werk {
     /// ```no_run
     /// # use agentwerk::Werk;
     /// # async fn run() {
-    /// let tasks = Werk::new();
-    /// tasks.on_result_async(|_, task, result| async move {
+    /// let werk = Werk::new();
+    /// werk.on_result_async(|_, task, result| async move {
     ///     println!("{} produced {result}", task.get_id());
     /// });
-    /// tasks.finish_all_tasks().await;
+    /// werk.finish_all_tasks().await;
     /// # }
     /// ```
     pub fn on_result_async<F, Fut>(&self, handler: F) -> &Self
@@ -574,8 +576,8 @@ impl Werk {
     }
 
     /// Read every failure together with the task it happened in:
-    /// `TaskFailed`, `RequestFailed`, `ToolCallFailed`, `FileOpenFailed`,
-    /// `KnowledgeFailed`, and `CompactionFailed`.
+    /// `task_failed`, `request_failed`, `tool_call_failed`, `file_open_failed`,
+    /// `knowledge_failed`, and `compaction_failed`.
     ///
     /// Read `event.get_name()` to tell a failure that ends the task from one
     /// the agent works around. Each call copies the task's replies, so an
@@ -583,8 +585,8 @@ impl Werk {
     ///
     /// ```no_run
     /// # use agentwerk::{Event, Task, Werk};
-    /// let tasks = Werk::new();
-    /// tasks.on_failure(|werk, event, failed| {
+    /// let werk = Werk::new();
+    /// werk.on_failure(|werk, event, failed| {
     ///     // Count the attempts yourself, or a task that fails every time
     ///     // re-queues itself forever.
     ///     if event.get_name() == Event::TASK_FAILED && failed.get_parent().is_none() {
@@ -703,7 +705,7 @@ impl Werk {
     /// behind it. One is taken per lock, so a `finish` dropped mid-handover, by
     /// a timeout or a panic, loses only the event it was on.
     async fn await_handlers(&self) {
-        let handlers: Vec<(fn(&Event) -> bool, Arc<AsyncHandler>)> = self
+        let handlers: Vec<AwaitedHandlerRef> = self
             .awaited_events
             .handlers
             .lock()
@@ -921,8 +923,8 @@ impl Werk {
     ///
     /// ```no_run
     /// # use agentwerk::Werk;
-    /// let tasks = Werk::new();
-    /// tasks.find_events("tool_call_failed AND created > -1h");
+    /// let werk = Werk::new();
+    /// werk.find_events("tool_call_failed AND created > -1h");
     /// ```
     ///
     /// Read from the session's `events.jsonl`, so this answers for a run that
@@ -966,7 +968,7 @@ impl Werk {
     /// Take every matching task off the Werk.
     ///
     /// A match is neither claimed nor resumed, and an agent already holding one
-    /// is taken off it; the task stays `InProgress`. Nothing waits: this is
+    /// is taken off it; the task stays `in_progress`. Nothing waits: this is
     /// not async, so it can be called from a ctrl-c handler, a drop guard, or
     /// anywhere else. Use [`Self::cancel_all_tasks`] to stop the whole run.
     ///
@@ -975,8 +977,8 @@ impl Werk {
     ///
     /// ```no_run
     /// # use agentwerk::Werk;
-    /// let tasks = Werk::new();
-    /// tasks.cancel_tasks("scan");
+    /// let werk = Werk::new();
+    /// werk.cancel_tasks("scan");
     /// ```
     pub fn cancel_tasks(&self, matches: impl Matcher<Task>) -> &Self {
         let query = matches.into_query();
@@ -1099,7 +1101,7 @@ impl Werk {
                 }
             }
         }
-        agent.werk = WerkRef::Shared(self.weak_self.clone());
+        agent.werk.bind(self.weak_self.clone());
         self.agents.lock().unwrap().push(agent.clone());
     }
 
@@ -1174,8 +1176,8 @@ impl Werk {
     /// ```no_run
     /// # use agentwerk::Werk;
     /// # async fn run() {
-    /// let tasks = Werk::new();
-    /// for finding in tasks.finish_tasks("research").await {
+    /// let werk = Werk::new();
+    /// for finding in werk.finish_tasks("research").await {
     ///     println!("{finding}");
     /// }
     /// # }
@@ -1210,7 +1212,7 @@ impl Werk {
             self.join_handle.lock().unwrap().take();
         }
         // `and_status`, not the `find_results` default: a caller who waited on
-        // `status = Todo` is handed the results that landed, not the todos.
+        // `status = todo` is handed the results that landed, not the todos.
         self.matching_tasks(&query.and_status(Status::Finished))
             .into_iter()
             .filter_map(|t| t.result)
@@ -1228,8 +1230,8 @@ impl Werk {
     /// ```no_run
     /// # use agentwerk::Werk;
     /// # async fn run() {
-    /// let tasks = Werk::new();
-    /// for finding in tasks.finish_all_tasks().await {
+    /// let werk = Werk::new();
+    /// for finding in werk.finish_all_tasks().await {
     ///     println!("{finding}");
     /// }
     /// # }
@@ -1247,8 +1249,8 @@ impl Werk {
     /// ```no_run
     /// # use agentwerk::Werk;
     /// # async fn run() {
-    /// let tasks = Werk::new();
-    /// if let Some(answer) = tasks.finish_task("ORDER BY created DESC").await {
+    /// let werk = Werk::new();
+    /// if let Some(answer) = werk.finish_task("ORDER BY created DESC").await {
     ///     println!("{answer}");
     /// }
     /// # }
@@ -1292,7 +1294,7 @@ impl Werk {
     /// Get every result whose task matches the query, in query order, or
     /// creation order when the query names none.
     ///
-    /// Status defaults to `Finished` when the filter names none, which is
+    /// Status defaults to `finished` when the filter names none, which is
     /// every closure and any query that leaves it unset. A caller that sets
     /// `.status(Status::Failed)` keeps that filter. A task contributes a
     /// result only when it has one, so this is shorter than the set the
@@ -1300,8 +1302,8 @@ impl Werk {
     ///
     /// ```no_run
     /// # use agentwerk::Werk;
-    /// let tasks = Werk::new();
-    /// let scans = tasks.find_results("scan");
+    /// let werk = Werk::new();
+    /// let scans = werk.find_results("scan");
     /// ```
     pub fn find_results(&self, matches: impl Matcher<Task>) -> Vec<serde_json::Value> {
         self.matching_tasks(&results_of(matches))
@@ -1312,7 +1314,7 @@ impl Werk {
 
     /// Get the first result whose task matches the query.
     ///
-    /// Status defaults to `Finished` as in [`Self::find_results`], and the
+    /// Status defaults to `finished` as in [`Self::find_results`], and the
     /// order is that method's too.
     pub fn find_result(&self, matches: impl Matcher<Task>) -> Option<serde_json::Value> {
         self.first_matching_task(&results_of(matches))
@@ -1374,8 +1376,8 @@ mod tests {
         let (werk, _tmp) = test_werk();
         let mut alice = minimal_agent("alice");
         werk.bind_agent(&mut alice);
-        alice.task("first");
-        alice.task("second");
+        alice.add_task("first");
+        alice.add_task("second");
         assert_eq!(
             werk.find_tasks(|t: &Task| t.status == Status::Todo).len(),
             2
@@ -1402,7 +1404,7 @@ mod tests {
         werk.add_task("b");
         werk.add_task("c");
         let ids: Vec<String> = werk
-            .find_tasks("status = Todo")
+            .find_tasks("status = todo")
             .into_iter()
             .map(|t| t.id)
             .collect();
@@ -1525,7 +1527,7 @@ mod tests {
         werk.add_task(Task::labeled("scan", "a"));
         attach_done_result(&werk, "t-1", "scanned");
         assert!(werk
-            .find_results("label = scan AND status = Todo")
+            .find_results("label = scan AND status = todo")
             .is_empty());
     }
 
@@ -1558,7 +1560,7 @@ mod tests {
         let (werk, _tmp) = test_werk();
         werk.add_task(Task::labeled("scan", "a"));
         werk.add_task(Task::labeled("report", "b"));
-        let found = werk.find_tasks("label = report AND status = Todo");
+        let found = werk.find_tasks("label = report AND status = todo");
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].task, serde_json::json!("b"));
     }
@@ -1582,7 +1584,7 @@ mod tests {
     fn pending_while_a_claimed_task_awaits_the_model() {
         let (werk, _tmp) = test_werk();
         werk.add_task("x");
-        werk.claim(&Query::from("status = Todo"), "agent").unwrap();
+        werk.claim(&Query::from("status = todo"), "agent").unwrap();
         assert!(werk.pending(&Query::all()));
     }
 
@@ -1590,7 +1592,7 @@ mod tests {
     fn pending_when_a_text_only_reply_pauses_a_non_interactive_agent() {
         let (werk, _tmp) = test_werk();
         werk.add_task("x");
-        let id = werk.claim(&Query::from("status = Todo"), "agent").unwrap();
+        let id = werk.claim(&Query::from("status = todo"), "agent").unwrap();
         werk.append_reply(
             &id,
             Reply::assistant(&[crate::providers::ContentBlock::Text {
@@ -2171,7 +2173,7 @@ mod tests {
         let logged: Vec<String> = body
             .lines()
             .map(|line| serde_json::from_str::<crate::event::Event>(line).unwrap())
-            .filter(|event| is_recorded_failure(event))
+            .filter(is_recorded_failure)
             .map(|event| event.get_name().to_string())
             .collect();
         assert_eq!(logged, names);
@@ -2316,7 +2318,7 @@ mod tests {
         assert_eq!(*counts.lock().unwrap(), vec![1, 2]);
     }
 
-    /// File `count` tasks labelled `scan`, all `Todo`.
+    /// File `count` tasks labelled `scan`, all `todo`.
     fn scans(werk: &Werk, count: usize) -> Vec<String> {
         (0..count)
             .map(|i| werk.add_task(Task::new(format!("scan {i}")).label("scan")))
@@ -2798,7 +2800,7 @@ mod tests {
     async fn finish_task_is_none_when_nothing_finished() {
         let (werk, _tmp) = test_werk();
 
-        assert_eq!(werk.finish_task("status = Finished").await, None);
+        assert_eq!(werk.finish_task("status = finished").await, None);
     }
 
     #[tokio::test]

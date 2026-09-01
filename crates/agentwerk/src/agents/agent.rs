@@ -29,24 +29,39 @@ fn next_id(label: Option<&str>) -> String {
     format!("{prefix}-{count}")
 }
 
-/// How an `Agent` reaches its `Werk`. A new agent carries `Private`
-/// until it is added to a Werk; everything else carries `Shared`.
-pub(crate) enum WerkRef {
+/// How every clone of an `Agent` reaches the same `Werk`.
+pub(crate) struct WerkRef(Arc<Mutex<WerkTarget>>);
+
+enum WerkTarget {
     Shared(Weak<Werk>),
     Private(Arc<Werk>),
 }
 
 impl WerkRef {
+    fn private(werk: Arc<Werk>) -> Self {
+        Self(Arc::new(Mutex::new(WerkTarget::Private(werk))))
+    }
+
     pub(crate) fn upgrade(&self) -> Option<Arc<Werk>> {
-        match self {
-            Self::Shared(w) => w.upgrade(),
-            Self::Private(a) => Some(Arc::clone(a)),
+        match &*self.0.lock().unwrap() {
+            WerkTarget::Shared(werk) => werk.upgrade(),
+            WerkTarget::Private(werk) => Some(Arc::clone(werk)),
         }
+    }
+
+    pub(crate) fn bind(&self, werk: Weak<Werk>) {
+        *self.0.lock().unwrap() = WerkTarget::Shared(werk);
     }
 }
 
-/// An `Agent` is the core entity of agentwerk. It has access to tools for
-/// solving tasks in the form of tasks.
+impl Clone for WerkRef {
+    fn clone(&self) -> Self {
+        Self(Arc::clone(&self.0))
+    }
+}
+
+/// An `Agent` is the core entity of agentwerk. It uses tools to solve tasks
+/// assigned through a Werk.
 ///
 /// It claims the tasks its label matches, calls the LLM provider, runs
 /// the tools the model asks for, and writes the result back.
@@ -84,22 +99,16 @@ pub struct Agent {
 }
 
 impl Clone for Agent {
-    /// A clone is the same agent, id included: `bind_agent` keeps one, and the
-    /// two would otherwise disagree about which tasks are theirs. Reading the
-    /// id here is what fixes it for both. The clone points at the shared Werk,
-    /// so rebinding the original cannot leave it filing tasks into a Werk
-    /// nothing reads.
+    /// A clone is the same agent, id and Werk binding included. Reading the id
+    /// here fixes it for both copies, and the shared binding lets either copy
+    /// submit work after one is added to a Werk.
     fn clone(&self) -> Self {
-        let werk = match &self.werk {
-            WerkRef::Shared(w) => WerkRef::Shared(w.clone()),
-            WerkRef::Private(a) => WerkRef::Shared(Arc::downgrade(a)),
-        };
         Self {
             id: OnceLock::from(self.get_id().to_string()),
             label: self.label.clone(),
             interactive: self.interactive,
             directives: Arc::clone(&self.directives),
-            werk,
+            werk: self.werk.clone(),
             provider: self.provider.clone(),
             model: self.model.clone(),
             role: self.role.clone(),
@@ -112,9 +121,15 @@ impl Clone for Agent {
     }
 }
 
+impl Default for Agent {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Agent {
     /// Create an agent, with a Werk of its own so
-    /// `.task(...)` and `.start()` work without one being set up.
+    /// `.add_task(...)` and `.start()` work without one being set up.
     /// `Werk::add_agent(...)` later moves those tasks into the shared Werk.
     ///
     /// Give it a provider and a model before it starts work.
@@ -127,7 +142,7 @@ impl Agent {
             role: String::new(),
             label: None,
             interactive: false,
-            werk: WerkRef::Private(Werk::new()),
+            werk: WerkRef::private(Werk::new()),
             templates: Vec::new(),
             handover: None,
             tools: Vec::new(),
@@ -314,7 +329,7 @@ impl Agent {
     /// [`Event::get_agent_id`] and in [`Task::get_assignee`].
     ///
     /// The number is taken the first time this is called, directly or through
-    /// [`Self::task`], [`Self::start`], or `Werk::add_agent`. Label the
+    /// [`Self::add_task`], [`Self::start`], or `Werk::add_agent`. Label the
     /// agent before then.
     ///
     /// [`Event::get_agent_id`]: crate::Event::get_agent_id
@@ -496,7 +511,7 @@ impl Agent {
     /// A string is the task itself, and a `&Path` or `PathBuf` names the file
     /// holding it. A [`Task`] carries a custom label or schema with it. Call
     /// it as often as you like: one agent can drive many tasks.
-    pub fn task(&self, task: impl Into<Task>) -> String {
+    pub fn add_task(&self, task: impl Into<Task>) -> String {
         self.dispatch(task.into())
     }
 
@@ -504,7 +519,7 @@ impl Agent {
         let werk = self
             .werk
             .upgrade()
-            .expect("Agent::task requires a bound Werk");
+            .expect("Agent::add_task requires a bound Werk");
         if let serde_json::Value::String(s) = &task.task {
             task.task = serde_json::Value::String(self.interpolate(s));
         }
@@ -520,8 +535,8 @@ impl Agent {
     /// ```no_run
     /// # use agentwerk::Agent;
     /// # async fn run(agent: Agent) {
-    /// let work = agent.start();
-    /// work.finish_all_tasks().await;
+    /// let werk = agent.start();
+    /// werk.finish_all_tasks().await;
     /// # }
     /// ```
     pub fn start(&self) -> Arc<Werk> {
@@ -877,13 +892,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn dispatch_interpolates_string_task_body() {
+    async fn add_task_interpolates_string_task_body() {
         let dir = crate::test_util::TempDir::new().unwrap();
         let werk = crate::agents::Werk::new();
         werk.set_dir(dir.path().to_path_buf());
         let mut agent = callable(Agent::new().template("topic", "rust"));
         werk.bind_agent(&mut agent);
-        agent.task("Search {topic} forums.");
+        agent.add_task("Search {topic} forums.");
         let stored = werk
             .get_tasks()
             .into_iter()
@@ -904,7 +919,7 @@ mod tests {
         // exists yet at dispatch. Only the role expands it.
         let mut agent = callable(Agent::new());
         werk.bind_agent(&mut agent);
-        agent.task("Work on {context}.");
+        agent.add_task("Work on {context}.");
         let stored = werk
             .get_tasks()
             .into_iter()
@@ -917,20 +932,41 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn dispatch_leaves_object_task_unchanged() {
+    async fn add_task_leaves_object_task_unchanged() {
         let dir = crate::test_util::TempDir::new().unwrap();
         let werk = crate::agents::Werk::new();
         werk.set_dir(dir.path().to_path_buf());
         let mut agent = callable(Agent::new().template("topic", "rust"));
         werk.bind_agent(&mut agent);
         let value = serde_json::json!({"q": "Find {topic}"});
-        agent.task(Task::new(value.clone()));
+        agent.add_task(Task::new(value.clone()));
         let stored = werk
             .get_tasks()
             .into_iter()
             .next()
             .expect("task should have been enqueued");
         assert_eq!(stored.task, value);
+    }
+
+    #[test]
+    fn add_task_returns_an_id_on_the_private_werk() {
+        let agent = Agent::new();
+        let id = agent.add_task(Task::new("inspect"));
+        let private = agent.werk.upgrade().expect("private Werk exists");
+
+        assert!(id.starts_with("t-"));
+        assert_eq!(private.get_task(&id).unwrap().get_task(), "inspect");
+    }
+
+    #[test]
+    fn add_task_uses_the_shared_werk_after_registration() {
+        let werk = Werk::new();
+        let agent = callable(Agent::new().template("target", "src"));
+        werk.add_agent(agent.clone());
+
+        let id = agent.add_task("Inspect {target}.");
+
+        assert_eq!(werk.get_task(&id).unwrap().get_task(), "Inspect src.");
     }
 
     #[test]

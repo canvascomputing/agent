@@ -1,4 +1,4 @@
-//! Lets an agent read the Werk and create or edit tasks in it.
+//! The model-facing tool for reading and editing tasks in a Werk.
 
 use super::super::tool::{Tool, ToolContext};
 use super::dispatch;
@@ -17,10 +17,10 @@ pub struct TaskTool;
 
 impl From<TaskTool> for Tool {
     fn from(_: TaskTool) -> Tool {
-        Tool::new("tasks")
-            .description(include_str!("tasks.tool.md"))
-            .schema(include_str!("tasks.schema.json"))
-            .handler_with_context(|args: super::TasksArgs, ctx: ToolContext| async move {
+        Tool::new("task")
+            .description(include_str!("task.tool.md"))
+            .schema(include_str!("task.schema.json"))
+            .handler_with_context(|args: super::TaskArgs, ctx: ToolContext| async move {
                 dispatch(args, &ctx)
             })
     }
@@ -33,14 +33,14 @@ mod tests {
 
     #[test]
     fn every_example_the_schema_shows_deserializes_into_the_arguments() {
-        // The schema and `TasksArgs` both describe the shape. The examples
+        // The schema and `TaskArgs` both describe the shape. The examples
         // are where they are held to the same one.
         let document = Tool::from(TaskTool)
             .get_input_schema()
             .get_raw_schema()
             .clone();
         for example in document["examples"].as_array().expect("examples") {
-            serde_json::from_value::<super::super::TasksArgs>(example.clone())
+            serde_json::from_value::<super::super::TaskArgs>(example.clone())
                 .unwrap_or_else(|error| panic!("{example}: {error}"));
         }
     }

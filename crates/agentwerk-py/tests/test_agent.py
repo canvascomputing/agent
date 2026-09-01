@@ -61,7 +61,7 @@ def test_handover_rejects_an_unlabeled_task():
 
 
 def test_an_explicit_provider_and_model_let_the_agent_take_a_task(offline_agent):
-    assert offline_agent.task("go").startswith("t-")
+    assert offline_agent.add_task("go").startswith("t-")
 
 
 def test_model_accepts_a_tuned_model_object():
@@ -70,7 +70,7 @@ def test_model_accepts_a_tuned_model_object():
         .provider(aw.Anthropic("test-key"))
         .model(aw.Model("claude-sonnet-4-20250514").context_window(128_000))
     )
-    assert agent.task("go").startswith("t-")
+    assert agent.add_task("go").startswith("t-")
 
 
 def test_starting_without_a_provider_is_rejected():
@@ -106,14 +106,28 @@ def test_registering_an_agent_without_a_provider_is_rejected(werk):
 
 
 def test_agent_enqueues_a_task_on_its_private_werk(offline_agent):
-    id = offline_agent.task(aw.Task("scan the corpus", label="scan"))
+    id = offline_agent.add_task(aw.Task("scan the corpus", label="scan"))
     assert id.startswith("t-")
 
 
 def test_binding_an_agent_drains_its_private_werk_into_the_shared_werk(
     offline_agent, werk
 ):
-    offline_agent.task("count to three")
+    offline_agent.add_task("count to three")
     werk.add_agent(offline_agent)
 
     assert [t.get_task() for t in werk.get_tasks()] == ["count to three"]
+
+
+def test_add_task_uses_the_shared_werk_after_binding(offline_agent, werk):
+    offline_agent.template("topic", "parity")
+    werk.add_agent(offline_agent)
+
+    id = offline_agent.add_task("check {topic}")
+
+    assert id.startswith("t-")
+    assert werk.get_task(id).get_task() == "check parity"
+
+
+def test_agent_task_is_not_a_compatibility_alias():
+    assert not hasattr(aw.Agent, "task")

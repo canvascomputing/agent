@@ -10,12 +10,12 @@ use crate::prompts::directives::{
 };
 use crate::schemas::Schema;
 
-use super::tasks::{resolve_current_id, task_error_message};
+use super::task::{resolve_current_id, task_error_message};
 use super::tool::{retype_message, Tool, ToolContext};
 
 const DEFINITION: &str = include_str!("event.tool.md");
 const SCHEMA: &str = include_str!("event.schema.json");
-const FINISH_SCHEMA: &str = include_str!("tasks/finish.schema.json");
+const FINISH_SCHEMA: &str = include_str!("task/finish.schema.json");
 
 /// Publish an event for the current task and agent. A `task_finished` event
 /// records the task's result and completes it.
@@ -58,7 +58,7 @@ impl EventTool {
                     handover.as_ref(),
                     EventTool::NAME,
                 )
-                .unwrap_or_else(|failure| failure)
+                .unwrap_or_else(|event| *event)
             }
         };
         Tool::new(Self::NAME)
@@ -96,7 +96,7 @@ pub(super) fn dispatch(
     schema: Option<&Schema>,
     handover: Option<&Task>,
     tool_name: &str,
-) -> Result<Event, Event> {
+) -> Result<Event, Box<Event>> {
     let werk = ctx.werk.clone().ok_or_else(|| {
         Event::error(ctx.directives.render(WERK_UNAVAILABLE, &[])).directive(WERK_UNAVAILABLE)
     })?;
@@ -128,14 +128,14 @@ fn finish(
     schema: Option<&Schema>,
     configured_handover: Option<&Task>,
     tool_name: &str,
-) -> Result<Event, Event> {
+) -> Result<Event, Box<Event>> {
     let parent_id = resolve_current_id(werk, ctx)?;
     let agent = ctx.agent_id.clone().unwrap_or_default();
     let result = input.get("result").cloned().unwrap_or(Value::Null);
 
     let handover = resolve_handover(input, configured_handover, &ctx.directives)?;
     let parent = werk.get_task(&parent_id).ok_or_else(|| {
-        let error = TaskError::TaskMissing {
+        let error = TaskError::TaskNotFound {
             id: parent_id.clone(),
         };
         Event::error(task_error_message(error, &ctx.directives))
@@ -145,75 +145,96 @@ fn finish(
             from: parent.get_status(),
             to: Status::Finished,
         };
-        return Err(Event::error(task_error_message(error, &ctx.directives)));
+        return Err(Event::error(task_error_message(error, &ctx.directives)).into());
     }
+    let completion = CompletionContext {
+        werk,
+        schema,
+        tool_name,
+        directives: &ctx.directives,
+    };
     let Some(mut child) = handover else {
-        let (_, repaired) =
-            attach_result(werk, &parent_id, result, schema, tool_name, &ctx.directives)?;
-        mark_finished(werk, &parent_id, &agent, &ctx.directives)?;
+        let (_, repaired) = completion.attach_result(&parent_id, result)?;
+        completion.mark_finished(&parent_id, &agent)?;
         let mut event = Event::success(format!("Task {parent_id} marked finished"));
         event.prepend_repairs(repaired);
         return Ok(event);
     };
-    hand_over(
-        werk,
-        &parent_id,
-        &agent,
-        result,
-        schema,
-        tool_name,
-        &mut child,
-        &ctx.directives,
-    )
+    completion.hand_over(&parent_id, &agent, result, &mut child)
 }
 
-fn hand_over(
-    werk: &Werk,
-    parent_id: &str,
-    agent: &str,
-    result: Value,
-    schema: Option<&Schema>,
-    tool_name: &str,
-    child: &mut Task,
-    directives: &DirectiveStore,
-) -> Result<Event, Event> {
-    if matches!(&result, Value::Null) || result.as_str().is_some_and(str::is_empty) {
-        return Err(Event::error(
-            directives.render(HANDOVER_RESULT_MISSING, &[]),
+struct CompletionContext<'a> {
+    werk: &'a Werk,
+    schema: Option<&'a Schema>,
+    tool_name: &'a str,
+    directives: &'a DirectiveStore,
+}
+
+impl CompletionContext<'_> {
+    fn hand_over(
+        &self,
+        parent_id: &str,
+        agent: &str,
+        result: Value,
+        child: &mut Task,
+    ) -> Result<Event, Box<Event>> {
+        if matches!(&result, Value::Null) || result.as_str().is_some_and(str::is_empty) {
+            return Err(Event::error(self.directives.render(HANDOVER_RESULT_MISSING, &[])).into());
+        }
+
+        let (validated_result, repaired) = self.attach_result(parent_id, result)?;
+        let parent_result = match validated_result {
+            Value::String(s) => s,
+            other => serde_json::to_string(&other).unwrap_or_default(),
+        };
+        let result_path = self.werk.result_path(parent_id).display().to_string();
+        apply_handover_templates(&mut child.task, parent_id, &result_path, &parent_result);
+        child.parent = Some(parent_id.to_string());
+        let handover = child.label.clone().expect("resolved handover has a label");
+
+        let child_id = self.werk.insert(child.clone(), agent.to_string());
+        self.mark_finished(parent_id, agent)?;
+
+        let mut event = Event::success(format!(
+            "Task {parent_id} marked finished; handed off to {child_id} (handover: {handover})"
         ));
+        event.prepend_repairs(repaired);
+        Ok(event)
     }
 
-    let (validated_result, repaired) =
-        attach_result(werk, parent_id, result, schema, tool_name, directives)?;
-    let parent_result = match validated_result {
-        Value::String(s) => s,
-        other => serde_json::to_string(&other).unwrap_or_default(),
-    };
-    let result_path = werk.result_path(parent_id).display().to_string();
-    apply_handover_templates(&mut child.task, parent_id, &result_path, &parent_result);
-    child.parent = Some(parent_id.to_string());
-    let handover = child.label.clone().expect("resolved handover has a label");
+    fn mark_finished(&self, id: &str, agent: &str) -> Result<(), Box<Event>> {
+        self.werk
+            .set_finished_by(id, agent)
+            .map_err(|error| Event::error(task_error_message(error, self.directives)).into())
+    }
 
-    let child_id = werk.insert(child.clone(), agent.to_string());
-    mark_finished(werk, parent_id, agent, directives)?;
-
-    let mut event = Event::success(format!(
-        "Task {parent_id} marked finished; handed off to {child_id} (handover: {handover})"
-    ));
-    event.prepend_repairs(repaired);
-    Ok(event)
+    fn attach_result(&self, id: &str, result: Value) -> Result<(Value, Vec<String>), Box<Event>> {
+        let (validated, repaired) = self.werk.set_result(id, result).map_err(|violations| {
+            Event::tool_failure(
+                crate::prompts::arguments_retry_detail(
+                    self.tool_name,
+                    &violations.to_string(),
+                    self.schema.map(Schema::get_raw_schema),
+                    self.directives,
+                ),
+                "schema_failed",
+            )
+        })?;
+        let notes = repaired.iter().map(|pointer| retype_message(pointer));
+        Ok((validated, notes.collect()))
+    }
 }
 
 fn resolve_handover(
     input: &Value,
     configured: Option<&Task>,
     directives: &DirectiveStore,
-) -> Result<Option<Task>, Event> {
+) -> Result<Option<Task>, Box<Event>> {
     let Some(value) = input.get("handover") else {
         return Ok(configured.cloned());
     };
     let Some(fields) = value.as_object() else {
-        return Err(Event::error("`handover` must be an object"));
+        return Err(Event::error("`handover` must be an object").into());
     };
 
     let mut child = match configured {
@@ -234,9 +255,9 @@ fn resolve_handover(
             .filter(|label| !label.trim().is_empty())
             .ok_or_else(|| Event::error("`label` must be a non-blank string"))?;
         if child.get_label() != Some(label) {
-            return Err(Event::error(
-                "`label` cannot replace the configured handover label",
-            ));
+            return Err(
+                Event::error("`label` cannot replace the configured handover label").into(),
+            );
         }
     }
     if let Some(task) = fields.get("task") {
@@ -251,28 +272,18 @@ fn resolve_handover(
     Ok(Some(child))
 }
 
-fn required_label(fields: &serde_json::Map<String, Value>) -> Result<String, Event> {
+fn required_label(fields: &serde_json::Map<String, Value>) -> Result<String, Box<Event>> {
     fields
         .get("label")
         .and_then(Value::as_str)
         .filter(|label| !label.trim().is_empty())
         .map(str::to_string)
-        .ok_or_else(|| Event::error("`label` is required"))
+        .ok_or_else(|| Event::error("`label` is required").into())
 }
 
 fn invalid_handover_schema(error: &str, directives: &DirectiveStore) -> Event {
     Event::error(directives.render(HANDOVER_SCHEMA_INVALID, &[("error", error)]))
         .directive(HANDOVER_SCHEMA_INVALID)
-}
-
-fn mark_finished(
-    werk: &Werk,
-    id: &str,
-    agent: &str,
-    directives: &DirectiveStore,
-) -> Result<(), Event> {
-    werk.set_finished_by(id, agent)
-        .map_err(|error| Event::error(task_error_message(error, directives)))
 }
 
 fn apply_handover_templates(task: &mut Value, parent_id: &str, result_path: &str, result: &str) {
@@ -328,29 +339,6 @@ fn substitute_handover_text(
     output
 }
 
-fn attach_result(
-    werk: &Werk,
-    id: &str,
-    result: Value,
-    schema: Option<&Schema>,
-    tool_name: &str,
-    directives: &DirectiveStore,
-) -> Result<(Value, Vec<String>), Event> {
-    let (validated, repaired) = werk.set_result(id, result).map_err(|violations| {
-        Event::tool_failure(
-            crate::prompts::arguments_retry_detail(
-                tool_name,
-                &violations.to_string(),
-                schema.map(Schema::get_raw_schema),
-                directives,
-            ),
-            "schema_failed",
-        )
-    })?;
-    let notes = repaired.iter().map(|pointer| retype_message(pointer));
-    Ok((validated, notes.collect()))
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, Mutex};
@@ -366,7 +354,7 @@ mod tests {
         werk.set_dir(path.clone());
         werk.insert(Task::new("work").label("alice"), "tester".into());
         let id = werk
-            .claim(&Query::from("status = Todo"), "alice")
+            .claim(&Query::from("status = todo"), "alice")
             .expect("claim must succeed");
         let ctx = ToolContext::new(path)
             .werk(Arc::clone(&werk))
@@ -552,7 +540,7 @@ mod tests {
             "tester".into(),
         );
         let id = werk
-            .claim(&Query::from("status = Todo"), "alice")
+            .claim(&Query::from("status = todo"), "alice")
             .expect("claim must succeed");
         let ctx = ToolContext::new(dir.path().to_path_buf())
             .werk(Arc::clone(&werk))

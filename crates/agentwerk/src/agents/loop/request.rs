@@ -77,7 +77,7 @@ impl Agent {
                 Err(error @ ProviderError::ContextWindowExceeded { .. }) => return Err(error),
                 Err(error) if error.is_retryable() => match retry.try_consume() {
                     Some(attempt) => {
-                        let delay = retry.delay(error.retry_delay());
+                        let delay = retry.delay(error.get_retry_delay());
                         self.emit_event(
                             werk,
                             task_id,
@@ -85,7 +85,7 @@ impl Agent {
                                 "model": request.model,
                                 "attempt": attempt,
                                 "max_attempts": retry.max_attempts(),
-                                "kind": error.kind(),
+                                "kind": error.get_kind(),
                                 "message": error.to_string(),
                             })),
                         );
@@ -131,7 +131,7 @@ impl Agent {
             task_id,
             Event::new(Event::REQUEST_FAILED).data(serde_json::json!({
                 "model": self.get_model().name,
-                "kind": error.kind(),
+                "kind": error.get_kind(),
                 "message": error.to_string(),
             })),
         );
@@ -404,19 +404,18 @@ mod tests {
         };
 
         let results_dir = crate::test_util::TempDir::new().unwrap();
-        let tasks = Werk::new();
-        tasks
-            .set_dir(results_dir.path().to_path_buf())
+        let werk = Werk::new();
+        werk.set_dir(results_dir.path().to_path_buf())
             .set_policy(Policy {
                 max_request_retries: 3,
                 request_retry_delay: Duration::from_millis(1),
                 ..Default::default()
             });
-        tasks.on_event(move |_, e| handler(e));
-        tasks.add_agent(Agent::new().provider(provider).model("mock").role("test"));
-        tasks.add_task("go");
+        werk.on_event(move |_, e| handler(e));
+        werk.add_agent(Agent::new().provider(provider).model("mock").role("test"));
+        werk.add_task("go");
 
-        let run_fut = tasks.finish_all_tasks();
+        let run_fut = werk.finish_all_tasks();
         let check_fut = async {
             for _ in 0..20 {
                 tokio::task::yield_now().await;
@@ -465,20 +464,19 @@ mod tests {
             Arc::new(move |e: &crate::event::Event| c.lock().unwrap().push(e.clone()))
         };
         let results_dir = crate::test_util::TempDir::new().unwrap();
-        let tasks = Werk::new();
-        tasks
-            .set_dir(results_dir.path().to_path_buf())
+        let werk = Werk::new();
+        werk.set_dir(results_dir.path().to_path_buf())
             .set_policy(Policy {
                 max_request_retries: 3,
                 request_retry_delay: Duration::from_secs(60),
                 ..Default::default()
             });
-        tasks.on_event(move |_, e| handler(e));
-        tasks.add_agent(Agent::new().provider(provider).model("mock").role("test"));
-        tasks.add_task("go");
+        werk.on_event(move |_, e| handler(e));
+        werk.add_agent(Agent::new().provider(provider).model("mock").role("test"));
+        werk.add_task("go");
 
-        let run_fut = tasks.finish_all_tasks();
-        let cancel_handle = Arc::clone(&tasks);
+        let run_fut = werk.finish_all_tasks();
+        let cancel_handle = Arc::clone(&werk);
         let cancel_fut = async {
             for _ in 0..20 {
                 tokio::task::yield_now().await;
@@ -524,9 +522,8 @@ mod tests {
             .description("Always fails")
             .handler(|_: Value| async move { Event::error("boom") });
         let results_dir = crate::test_util::TempDir::new().unwrap();
-        let tasks = Werk::new();
-        tasks
-            .set_dir(results_dir.path().to_path_buf())
+        let werk = Werk::new();
+        werk.set_dir(results_dir.path().to_path_buf())
             .set_policy(Policy {
                 max_request_retries: 0,
                 request_retry_delay: Duration::from_millis(1),
@@ -535,18 +532,18 @@ mod tests {
                 ..Default::default()
             });
         if let Some(handler) = handler {
-            tasks.on_event(handler);
+            werk.on_event(handler);
         }
-        tasks.add_agent(
+        werk.add_agent(
             Agent::new()
                 .provider(provider.clone())
                 .model("mock")
                 .role("test")
                 .tool(boom),
         );
-        tasks.add_task("go");
-        let _ = tasks.finish_all_tasks().await;
-        (provider, tasks, results_dir)
+        werk.add_task("go");
+        let _ = werk.finish_all_tasks().await;
+        (provider, werk, results_dir)
     }
 
     /// Handler that drops the whole failed tool exchange once a tool call
@@ -586,7 +583,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_event_handler_drops_the_failed_tool_exchange() {
-        let (provider, tasks, _dir) = run_boom(Some(Box::new(drop_failed_exchange))).await;
+        let (provider, werk, _dir) = run_boom(Some(Box::new(drop_failed_exchange))).await;
 
         // The handler dropped both sides of the boom exchange, so the second
         // request carries no tool blocks.
@@ -595,7 +592,7 @@ mod tests {
             "boom exchange must be gone: {:?}",
             provider.received()[1],
         );
-        assert_eq!(tasks.get_tasks()[0].status, Status::Finished);
+        assert_eq!(werk.get_tasks()[0].status, Status::Finished);
     }
 
     #[tokio::test]

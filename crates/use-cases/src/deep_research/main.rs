@@ -21,8 +21,8 @@ use agentwerk::schemas::Schema;
 use agentwerk::tools::{FetchTool, TaskTool, Tool};
 use agentwerk::{Agent, FinishReason, Task, Werk};
 
-const RESEARCHER_1_ROLE: &str = include_str!("prompts/researcher_1.role.md");
-const RESEARCHER_2_ROLE: &str = include_str!("prompts/researcher_2.role.md");
+const RESEARCHER_1_ROLE: &str = include_str!("prompts/researcher-1.role.md");
+const RESEARCHER_2_ROLE: &str = include_str!("prompts/researcher-2.role.md");
 const REPORT_WRITER_ROLE: &str = include_str!("prompts/report-writer.role.md");
 
 #[tokio::main]
@@ -38,15 +38,15 @@ async fn main() {
 
     let workdir = prepare_workdir();
 
-    let tasks = Werk::new();
-    tasks.set_dir(workdir.clone());
-    let on_ctrl_c = Arc::clone(&tasks);
+    let werk = Werk::new();
+    werk.set_dir(workdir.clone());
+    let on_ctrl_c = Arc::clone(&werk);
     tokio::spawn(async move {
         if tokio::signal::ctrl_c().await.is_ok() {
             on_ctrl_c.cancel_all_tasks();
         }
     });
-    tasks.on_event(move |_, e| event_handler(e));
+    werk.on_event(move |_, e| event_handler(e));
 
     let researcher_1 = Agent::new()
         .provider(provider.clone())
@@ -85,33 +85,33 @@ async fn main() {
         .label("report")
         .tool(TaskTool);
 
-    tasks.add_agent(researcher_1);
-    tasks.add_agent(researcher_2);
-    tasks.add_agent(report_writer);
+    werk.add_agent(researcher_1);
+    werk.add_agent(researcher_2);
+    werk.add_agent(report_writer);
 
     let starter =
         format!("Question: {question}\n\nEstablish one angle with source-backed evidence.");
     // The schema-bound starter forces researcher_1 to produce a real
     // result: a text-only reply leaves none attached, and the loop's
-    // terminal-reply path then transitions the task to `Failed`
+    // terminal-reply path then transitions the task to `failed`
     // rather than silently `Done`. Configured handovers keep the chain going.
     let starter_schema = Schema::new(serde_json::json!({
         "type": "string",
         "minLength": 100
     }))
     .expect("starter schema is well-formed");
-    tasks.add_task(
+    werk.add_task(
         Task::new(starter)
             .schema(starter_schema)
             .label("researcher_1"),
     );
 
-    tasks.finish_all_tasks().await;
-    let outcome = classify_outcome(&tasks);
+    werk.finish_all_tasks().await;
+    let outcome = classify_outcome(&werk);
 
-    print_chain_summary(&tasks);
-    print_stats(&tasks);
-    print_research_outcome(&tasks, &outcome);
+    print_chain_summary(&werk);
+    print_stats(&werk);
+    print_research_outcome(&werk, &outcome);
 
     match outcome {
         Outcome::Report(_) => {}
@@ -120,7 +120,7 @@ async fn main() {
     }
 }
 
-fn print_research_outcome(tasks: &Werk, outcome: &Outcome) {
+fn print_research_outcome(werk: &Werk, outcome: &Outcome) {
     eprintln!("\n══════════════════════════════════════════════════════════");
     match outcome {
         Outcome::Report(report) => {
@@ -138,8 +138,8 @@ fn print_research_outcome(tasks: &Werk, outcome: &Outcome) {
             };
             eprintln!(" {label}");
             eprintln!("══════════════════════════════════════════════════════════\n");
-            let researched: Vec<(String, String)> = tasks
-                .find_tasks("status = Finished AND label != report")
+            let researched: Vec<(String, String)> = werk
+                .find_tasks("status = finished AND label != report")
                 .iter()
                 .filter_map(|t| Some((t.get_id().to_string(), plain_text(t.get_result()?))))
                 .collect();
@@ -163,20 +163,20 @@ enum Outcome {
 /// Read the run's outcome off the drained Werk: a finished report
 /// task wins, an external cancel is surfaced, anything else means the
 /// chain stopped without reaching the report step.
-fn classify_outcome(tasks: &Werk) -> Outcome {
-    let reported = tasks.find_results("report").pop();
+fn classify_outcome(werk: &Werk) -> Outcome {
+    let reported = werk.find_results("report").pop();
     if let Some(result) = reported {
         return Outcome::Report(result);
     }
-    if tasks.get_finish_reason() == Some(FinishReason::Cancelled) {
+    if werk.get_finish_reason() == Some(FinishReason::Cancelled) {
         return Outcome::Cancelled;
     }
     Outcome::Stalled
 }
 
-fn print_chain_summary(tasks: &Werk) {
+fn print_chain_summary(werk: &Werk) {
     eprintln!("\nChain summary:");
-    let all = tasks.get_tasks();
+    let all = werk.get_tasks();
     if all.is_empty() {
         eprintln!("  (no tasks)");
         return;
@@ -202,13 +202,10 @@ fn print_chain_summary(tasks: &Werk) {
     }
 }
 
-fn print_stats(tasks: &Werk) {
+fn print_stats(werk: &Werk) {
     eprintln!("\nStats:");
-    eprintln!(
-        "  Duration : {:?}",
-        tasks.get_duration().unwrap_or_default()
-    );
-    let count = |name: &str| tasks.find_events(name).len() as u64;
+    eprintln!("  Duration : {:?}", werk.get_duration().unwrap_or_default());
+    let count = |name: &str| werk.find_events(name).len() as u64;
     let done = count(Event::TASK_FINISHED);
     let failed = count(Event::TASK_FAILED);
     let resolved = done + failed;
@@ -220,8 +217,8 @@ fn print_stats(tasks: &Werk) {
     eprintln!("  Tasks  : {done} done, {failed} failed ({success:.0}%)");
     eprintln!(
         "  Tokens   : {} in, {} out",
-        tasks.get_input_tokens(),
-        tasks.get_output_tokens(),
+        werk.get_input_tokens(),
+        werk.get_output_tokens(),
     );
     eprintln!(
         "  Activity : {} requests · {} tool calls · {} failed requests",
@@ -359,7 +356,7 @@ fn format_tool_call(tool_name: &str, input: &serde_json::Value) -> Vec<String> {
             "🔎 search: {}",
             truncate(input["query"].as_str().unwrap_or(""), 70),
         )],
-        "tasks" => {
+        "task" => {
             let action = input["action"].as_str().unwrap_or("?");
             let id = input.get("id").and_then(|v| v.as_str()).unwrap_or("");
             let suffix = if id.is_empty() {

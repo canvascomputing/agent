@@ -196,7 +196,7 @@ async def watch_pages(notes, feed, started_at):
     """Poll the store: an event says a page was written, never which one."""
     seen = set()
     while True:
-        for page in notes.get_pages().get_pages():
+        for page in notes.get_pages().get_all():
             if page.get_slug() in seen:
                 continue
             seen.add(page.get_slug())

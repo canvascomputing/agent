@@ -1,4 +1,4 @@
-.PHONY: build test test_integration fmt clean update use_case litellm bump doc hooks skills python python_test python_test_integration
+.PHONY: build test test_integration fmt clean update use_case litellm bump doc hooks skills python python_test python_test_integration check_names
 
 CLAUDE_SKILLS_DIR := $(HOME)/.claude/skills
 OPENCODE_SKILLS_DIR := $(HOME)/.config/opencode/skills
@@ -46,6 +46,11 @@ python_test_integration: python
 doc:
 	RUSTDOCFLAGS="-D warnings -D rustdoc::broken-intra-doc-links -D rustdoc::private-intra-doc-links" \
 	  cargo doc --no-deps -p agentwerk
+
+# Reject removed API spellings and ensure every non-test source file remains
+# represented in the project inventory.
+check_names:
+	@sh tools/check-names.sh
 
 # Format all code
 fmt:

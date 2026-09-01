@@ -50,14 +50,14 @@ async fn grep_lists_unknown_function_names() -> std::result::Result<(), Box<dyn 
         logger(e);
     });
 
-    let tasks = Werk::new();
+    let werk = Werk::new();
 
-    tasks.set_policy(Policy {
+    werk.set_policy(Policy {
         max_turns: Some(10),
         ..Default::default()
     });
-    tasks.on_event(move |_, e| event_handler(e));
-    tasks.add_agent(
+    werk.on_event(move |_, e| event_handler(e));
+    werk.add_agent(
         Agent::new()
             .provider(provider)
             .model(&model)
@@ -70,13 +70,13 @@ async fn grep_lists_unknown_function_names() -> std::result::Result<(), Box<dyn 
             )
             .tool(GrepTool),
     );
-    tasks.add_task(
+    werk.add_task(
         "List the names of every function defined in `geometry.rs`. The names are \
          not known in advance. Answer with the names.",
     );
 
-    tasks.finish_all_tasks().await;
-    common::print_result(&tasks);
+    werk.finish_all_tasks().await;
+    common::print_result(&werk);
 
     let recorded = calls.lock().unwrap().clone();
 
@@ -91,7 +91,7 @@ async fn grep_lists_unknown_function_names() -> std::result::Result<(), Box<dyn 
     );
 
     // The final answer should report every function name it discovered.
-    let answer = common::last_result_text(&tasks);
+    let answer = common::last_result_text(&werk);
     assert!(
         answer.contains("area") && answer.contains("perimeter") && answer.contains("clamp"),
         "model should report all three function names; got: {answer:?}"

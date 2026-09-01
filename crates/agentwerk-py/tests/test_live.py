@@ -14,17 +14,17 @@ pytestmark = pytest.mark.live
 
 
 async def test_runs_a_single_task_to_a_result(live_agent):
-    live_agent.task("Reply with exactly the word: pong")
+    live_agent.add_task("Reply with exactly the word: pong")
     # The reason is only announced, so the handler goes on before the run ends.
-    work = live_agent.start()
+    werk = live_agent.start()
     reasons = []
-    work.on_event(
+    werk.on_event(
         lambda _, event: reasons.append(event.get_data()["outcome"])
         if event.get_name() == "run_finished"
         else None
     )
-    await work.finish_all_tasks()
-    assert work.get_results()
+    await werk.finish_all_tasks()
+    assert werk.get_results()
     assert reasons == ["drained"]
 
 
@@ -36,10 +36,10 @@ async def test_invokes_a_builtin_tool(tmp_path):
         .dir(str(tmp_path))
         .tool(aw.ReadFileTool())
     )
-    agent.task("Read secret.txt and report the exact token it contains.")
-    work = agent.start()
+    agent.add_task("Read secret.txt and report the exact token it contains.")
+    werk = agent.start()
     assert "THE-TOKEN-IS-42" in str(
-        await work.finish_task("ORDER BY created DESC")
+        await werk.finish_task("ORDER BY created DESC")
     )
 
 
@@ -58,9 +58,9 @@ async def test_invokes_a_python_tool(tmp_path):
         .role("Call the slurp tool on the given file, then finish.")
         .tool(slurp)
     )
-    agent.task("Read note.txt with the slurp tool and report the token it contains.")
-    work = agent.start()
-    await work.finish_all_tasks()
+    agent.add_task("Read note.txt with the slurp tool and report the token it contains.")
+    werk = agent.start()
+    await werk.finish_all_tasks()
 
     assert calls, "the python tool was never invoked"
 
@@ -78,9 +78,9 @@ async def test_runs_two_labeled_agents_with_events_and_chaining():
         aw.Agent.from_env().label("b").role("Reply with one word: beta")
     )
 
-    def chain(work, task, result):
+    def chain(callback_werk, task, result):
         if task.get_label() == "a":
-            work.add_task(aw.Task("Reply beta", label="b"))
+            callback_werk.add_task(aw.Task("Reply beta", label="b"))
 
     werk.on_result(chain)
     werk.add_task(aw.Task("Reply alpha", label="a"))

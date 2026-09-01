@@ -245,6 +245,7 @@ impl std::error::Error for SchemaViolations {}
 /// value failing a schema that is fine.
 #[derive(Debug, Clone)]
 pub struct SchemaParseError {
+    /// Validation message produced while parsing the schema.
     pub message: String,
 }
 

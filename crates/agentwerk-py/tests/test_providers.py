@@ -87,8 +87,8 @@ def test_knowledge_load_creates_an_empty_index(knowledge_dir):
     assert store.get_index() == ""
 
 
-def test_set_char_limit_chains(knowledge_dir):
-    store = aw.Knowledge.load(knowledge_dir).set_char_limit(24_000)
+def test_set_index_char_limit_chains(knowledge_dir):
+    store = aw.Knowledge.load(knowledge_dir).set_index_char_limit(24_000)
     assert isinstance(store, aw.Knowledge)
 
 
@@ -125,7 +125,7 @@ def test_list_returns_every_saved_page_in_index_order(knowledge_dir):
     store.get_pages().save(aw.Page("build", "How to build.", "Run make."))
     store.get_pages().save(aw.Page("deploy", "How to deploy.", "Push the tag."))
 
-    pages = store.get_pages().get_pages()
+    pages = store.get_pages().get_all()
 
     assert [page.get_slug() for page in pages] == ["build", "deploy"]
     assert pages[0].get_description() == "How to build."
@@ -134,7 +134,7 @@ def test_list_returns_every_saved_page_in_index_order(knowledge_dir):
 def test_get_index_char_limit_returns_the_default_until_it_is_set(knowledge_dir):
     store = aw.Knowledge.load(knowledge_dir)
     assert store.get_index_char_limit() == 12_000
-    store.set_char_limit(80)
+    store.set_index_char_limit(80)
     assert store.get_index_char_limit() == 80
 
 

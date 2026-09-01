@@ -66,8 +66,12 @@ def test_an_agent_accepts_a_fetch_tool():
     assert isinstance(agent, aw.Agent)
 
 
-def test_fetch_url_tool_is_not_a_compatibility_alias():
+def test_fetch_tool_is_not_a_compatibility_alias():
     assert not hasattr(aw, "FetchUrlTool")
+
+
+def test_task_tool_is_not_exposed_under_the_old_plural_name():
+    assert not hasattr(aw, "TasksTool")
 
 
 def test_tool_decorator_records_name_doc_and_concurrent():

@@ -13,8 +13,8 @@ use serde_json::{Map, Value};
 /// use agentwerk::{Event, Werk};
 /// use serde_json::json;
 ///
-/// let tasks = Werk::new();
-/// tasks.emit_event(
+/// let werk = Werk::new();
+/// werk.emit_event(
 ///     Event::new("document_indexed")
 ///         .data(json!({ "documents": 42 }))
 ///         .task_id("t-1")
@@ -43,33 +43,61 @@ pub struct Event {
 }
 
 impl Event {
+    /// Event name emitted when a run begins.
     pub const RUN_STARTED: &'static str = "run_started";
+    /// Event name emitted when a run ends.
     pub const RUN_FINISHED: &'static str = "run_finished";
+    /// Event name emitted when a task is created.
     pub const TASK_CREATED: &'static str = "task_created";
+    /// Event name emitted when a task is claimed.
     pub const TASK_STARTED: &'static str = "task_started";
+    /// Event name emitted when a task finishes.
     pub const TASK_FINISHED: &'static str = "task_finished";
+    /// Event name emitted when a task fails.
     pub const TASK_FAILED: &'static str = "task_failed";
+    /// Event name emitted when an agent turn begins.
     pub const TURN_STARTED: &'static str = "turn_started";
+    /// Event name emitted before a provider request.
     pub const REQUEST_STARTED: &'static str = "request_started";
+    /// Event name emitted after a provider request succeeds.
     pub const REQUEST_FINISHED: &'static str = "request_finished";
+    /// Event name emitted after a provider request fails.
     pub const REQUEST_FAILED: &'static str = "request_failed";
+    /// Event name emitted before retrying a provider request.
     pub const REQUEST_RETRIED: &'static str = "request_retried";
+    /// Event name emitted for a streamed text fragment.
     pub const TEXT_CHUNK_RECEIVED: &'static str = "text_chunk_received";
+    /// Event name emitted when malformed tool arguments are repaired.
     pub const TOOL_CALL_REPAIRED: &'static str = "tool_call_repaired";
+    /// Event name emitted when a textual tool call is not executed.
     pub const TOOL_CALL_DECLINED: &'static str = "tool_call_declined";
+    /// Event name emitted before a tool call runs.
     pub const TOOL_CALL_STARTED: &'static str = "tool_call_started";
+    /// Event name emitted after a tool call succeeds.
     pub const TOOL_CALL_FINISHED: &'static str = "tool_call_finished";
+    /// Event name emitted after a tool call fails.
     pub const TOOL_CALL_FAILED: &'static str = "tool_call_failed";
+    /// Event name emitted when a knowledge page is written.
     pub const KNOWLEDGE_WRITTEN: &'static str = "knowledge_written";
+    /// Event name emitted when a knowledge page is read.
     pub const KNOWLEDGE_READ: &'static str = "knowledge_read";
+    /// Event name emitted when a knowledge page is removed.
     pub const KNOWLEDGE_REMOVED: &'static str = "knowledge_removed";
+    /// Event name emitted when knowledge pages are listed.
     pub const KNOWLEDGE_LISTED: &'static str = "knowledge_listed";
+    /// Event name emitted when a knowledge operation fails.
     pub const KNOWLEDGE_FAILED: &'static str = "knowledge_failed";
+    /// Event name emitted when a run exceeds policy.
     pub const POLICY_VIOLATED: &'static str = "policy_violated";
+    /// Event name emitted before retrying result-schema validation.
     pub const SCHEMA_RETRIED: &'static str = "schema_retried";
+    /// Event name emitted when context compaction starts.
     pub const COMPACTION_STARTED: &'static str = "compaction_started";
+    /// Event name emitted as context compaction advances.
     pub const COMPACTION_PROGRESS: &'static str = "compaction_progress";
+    /// Event name emitted when context compaction succeeds.
     pub const COMPACTION_FINISHED: &'static str = "compaction_finished";
+    /// Event name emitted when context compaction fails.
     pub const COMPACTION_FAILED: &'static str = "compaction_failed";
 
     pub(crate) const BUILTIN_NAMES: &'static [&'static str] = &[

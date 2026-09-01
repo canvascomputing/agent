@@ -1,4 +1,4 @@
-//! Parsing and matching configuration for codegrep.
+//! Parsing and matching configuration.
 //!
 //! Plain data: word characters, bracket pairs, and the case and
 //! multiline switches.

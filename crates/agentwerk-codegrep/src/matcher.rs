@@ -1,4 +1,4 @@
-//! Match record, location, and the `search` entry point.
+//! Match records, locations, and the `search` entry point.
 
 use super::ast::{MetavariableKind, Node, Pattern};
 use super::token::{self, Token};

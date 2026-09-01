@@ -47,15 +47,18 @@ const DEFAULT_BASE_URL: &str = "http://localhost:4000";
 pub struct LiteLlm(Endpoint);
 
 impl LiteLlm {
+    /// Create an endpoint using the API key.
     pub fn new(api_key: impl Into<String>) -> Self {
         Self(Endpoint::new(api_key, DEFAULT_BASE_URL))
     }
 
+    /// Replace the provider API base URL.
     pub fn base_url(mut self, url: impl Into<String>) -> Self {
         self.0 = self.0.base_url(url);
         self
     }
 
+    /// Set the request timeout.
     pub fn timeout(mut self, duration: Duration) -> Self {
         self.0 = self.0.timeout(duration);
         self

@@ -109,7 +109,7 @@ impl Event {
     }
 
     /// The text returned to the model by a terminal tool-call event.
-    pub fn get_content(&self) -> &str {
+    pub(crate) fn get_content(&self) -> &str {
         let key = if self.name == Event::TOOL_CALL_FINISHED {
             "output"
         } else {
@@ -119,11 +119,6 @@ impl Event {
             .get(key)
             .and_then(Value::as_str)
             .unwrap_or_default()
-    }
-
-    /// Take the text returned to the model by a terminal tool-call event.
-    pub fn into_content(self) -> String {
-        self.get_content().to_string()
     }
 
     pub(crate) fn tool_failure(content: impl Into<String>, reason: &'static str) -> Self {
@@ -742,12 +737,12 @@ mod tests {
                 ("glob", true),
                 ("grep", true),
                 ("list_directory", true),
-                ("fetch_url", true),
+                ("fetch", true),
                 ("knowledge", false),
                 ("git", false),
                 ("event", false),
                 ("finish", false),
-                ("tasks", false),
+                ("task", false),
             ]
         );
         for tool in &tools {
@@ -1024,7 +1019,7 @@ mod tests {
     async fn call_typed_in(input: Value, ctx: &ToolContext) -> (String, bool) {
         let result = typed_tool().invoke(input, ctx).await;
         let succeeded = result.get_name() == Event::TOOL_CALL_FINISHED;
-        (result.into_content(), succeeded)
+        (result.get_content().to_string(), succeeded)
     }
 
     #[tokio::test]
@@ -1225,7 +1220,7 @@ mod tests {
     }
 
     #[test]
-    fn tool_basic() {
+    fn tool_builder_preserves_name_schema_and_concurrency() {
         let tool = Tool::new("echo")
             .description("Echoes input")
             .schema(

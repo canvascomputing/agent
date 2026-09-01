@@ -152,18 +152,18 @@ async fn seeker_pool_finds_planted_indicators(
         logger(e);
     });
 
-    let tasks = Werk::new();
-    tasks.set_policy(Policy {
+    let werk = Werk::new();
+    werk.set_policy(Policy {
         max_time: Some(TIME_BUDGET),
         max_turns: Some(80),
         ..Default::default()
     });
-    tasks.on_event(move |_, e| event_handler(e));
+    werk.on_event(move |_, e| event_handler(e));
 
     // The Seeker no longer derives a threat itself; each task already names one
     // observed construct per planted language, the way a Tracer would hand it off.
     for _ in 0..2 {
-        tasks.add_agent(
+        werk.add_agent(
             Agent::new()
                 .provider(provider.clone())
                 .model(&model)
@@ -177,7 +177,7 @@ async fn seeker_pool_finds_planted_indicators(
     }
 
     // Trivial consumer so handed-off `security_analysis` tasks resolve.
-    tasks.add_agent(
+    werk.add_agent(
         Agent::new()
             .provider(provider.clone())
             .model(&model)
@@ -201,11 +201,11 @@ async fn seeker_pool_finds_planted_indicators(
          network exfiltration from a compiled binary",
     ];
     for threat in named_threats {
-        tasks.add_task(Task::new(threat).label(SEEKER_LABEL));
+        werk.add_task(Task::new(threat).label(SEEKER_LABEL));
     }
 
-    tasks.finish_all_tasks().await;
-    common::print_result(&tasks);
+    werk.finish_all_tasks().await;
+    common::print_result(&werk);
 
     let calls = calls.lock().unwrap().clone();
     let outputs = outputs.lock().unwrap().clone();

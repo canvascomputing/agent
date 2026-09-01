@@ -351,7 +351,7 @@ mod tests {
     #[tokio::test]
     async fn an_argument_violation_retries_against_the_failing_tools_own_schema() {
         let provider = MockProvider::with_results(vec![
-            Ok(tool_call_response("tasks")),
+            Ok(tool_call_response("task")),
             Ok(write_result_value(serde_json::json!({"partial_sum": 1}))),
         ]);
         let (events, _, _) = run_one(provider, 3, 10, Some(schema_for_partial_sum())).await;
@@ -359,7 +359,7 @@ mod tests {
         let schema_retries = schema_retries_in(&events);
         assert_eq!(schema_retries.len(), 1);
         let message = &schema_retries[0].2;
-        assert!(message.contains("`tasks` rejected"), "{message}");
+        assert!(message.contains("`task` rejected"), "{message}");
         // `partial_sum` belongs to the finish tool's schema, which is the one
         // the message must not print.
         assert!(!message.contains("partial_sum"), "{message}");
@@ -415,9 +415,8 @@ mod tests {
             Ok(write_result_response("not json")),
             Ok(write_result_value(serde_json::json!({"partial_sum": 1}))),
         ]);
-        let tasks = Werk::new();
-        tasks
-            .set_dir(results_dir.path().to_path_buf())
+        let werk = Werk::new();
+        werk.set_dir(results_dir.path().to_path_buf())
             .set_policy(Policy {
                 max_request_retries: 0,
                 request_retry_delay: Duration::from_millis(1),
@@ -425,15 +424,15 @@ mod tests {
                 max_time: Some(Duration::from_millis(500)),
                 ..Default::default()
             });
-        tasks.add_agent(
+        werk.add_agent(
             Agent::new()
                 .provider(provider.clone())
                 .model("mock")
                 .role("test"),
         );
-        tasks.add_task(Task::new("go").schema(schema_for_partial_sum()));
+        werk.add_task(Task::new("go").schema(schema_for_partial_sum()));
 
-        let _ = tasks.finish_all_tasks().await;
+        let _ = werk.finish_all_tasks().await;
 
         let second = &provider.received()[1];
         let answered = second
@@ -581,16 +580,15 @@ mod tests {
         };
 
         let results_dir = crate::test_util::TempDir::new().unwrap();
-        let tasks = Werk::new();
-        tasks
-            .set_dir(results_dir.path().to_path_buf())
+        let werk = Werk::new();
+        werk.set_dir(results_dir.path().to_path_buf())
             .set_policy(Policy {
                 max_request_retries: 0,
                 request_retry_delay: Duration::from_millis(1),
                 max_time: Some(Duration::from_secs(1)),
                 ..Default::default()
             });
-        tasks.add_agent(
+        werk.add_agent(
             Agent::new()
                 .provider(provider)
                 .model("mock")
@@ -598,12 +596,12 @@ mod tests {
                 .tool(work)
                 .tool(serial),
         );
-        tasks.add_task("go");
-        let _ = tasks.finish_all_tasks().await;
+        werk.add_task("go");
+        let _ = werk.finish_all_tasks().await;
 
         assert_eq!(completed.load(Ordering::SeqCst), 3);
         assert!(serial_ran.load(Ordering::SeqCst));
-        assert_eq!(tasks.get_tasks()[0].status, Status::Finished);
+        assert_eq!(werk.get_tasks()[0].status, Status::Finished);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -640,17 +638,16 @@ mod tests {
             .concurrent(true)
             .handler(|_: Value| async { Event::success("ok") });
         let results_dir = crate::test_util::TempDir::new().unwrap();
-        let tasks = Werk::new();
-        tasks
-            .set_dir(results_dir.path().to_path_buf())
+        let werk = Werk::new();
+        werk.set_dir(results_dir.path().to_path_buf())
             .set_policy(Policy {
                 max_request_retries: 0,
                 request_retry_delay: Duration::from_millis(1),
                 max_time: Some(Duration::from_secs(1)),
                 ..Default::default()
             });
-        let events = collect_events(&tasks);
-        tasks.add_agent(
+        let events = collect_events(&werk);
+        werk.add_agent(
             Agent::new()
                 .provider(provider)
                 .model("mock")
@@ -658,8 +655,8 @@ mod tests {
                 .tool(explode)
                 .tool(steady),
         );
-        tasks.add_task("go");
-        let _ = tasks.finish_all_tasks().await;
+        werk.add_task("go");
+        let _ = werk.finish_all_tasks().await;
 
         let events = events.lock().unwrap();
         assert!(events.iter().any(|event| {
@@ -672,7 +669,7 @@ mod tests {
                 && event.get_data()["tool_name"] == "steady"
                 && event.get_content() == "ok"
         }));
-        assert_eq!(tasks.get_tasks()[0].status, Status::Finished);
+        assert_eq!(werk.get_tasks()[0].status, Status::Finished);
     }
 
     #[tokio::test]
@@ -786,9 +783,8 @@ mod tests {
             .handler(|_: Value| async move { Event::error("boom") });
 
         let results_dir = crate::test_util::TempDir::new().unwrap();
-        let tasks = Werk::new();
-        tasks
-            .set_dir(results_dir.path().to_path_buf())
+        let werk = Werk::new();
+        werk.set_dir(results_dir.path().to_path_buf())
             .set_policy(Policy {
                 max_request_retries: 0,
                 request_retry_delay: Duration::from_millis(1),
@@ -796,19 +792,19 @@ mod tests {
                 max_time: Some(Duration::from_millis(500)),
                 ..Default::default()
             });
-        let collected = collect_events(&tasks);
-        tasks.add_agent(
+        let collected = collect_events(&werk);
+        werk.add_agent(
             Agent::new()
                 .provider(provider)
                 .model("mock")
                 .role("test")
                 .tool(boom),
         );
-        tasks.add_task("go");
-        let _ = tasks.finish_all_tasks().await;
+        werk.add_task("go");
+        let _ = werk.finish_all_tasks().await;
 
         assert_eq!(
-            tasks.get_tasks().into_iter().next().unwrap().status,
+            werk.get_tasks().into_iter().next().unwrap().status,
             Status::Failed
         );
         let events = collected.lock().unwrap().clone();
@@ -839,9 +835,8 @@ mod tests {
             .handler(|_: Value| async move { Event::error("boom") });
 
         let results_dir = crate::test_util::TempDir::new().unwrap();
-        let tasks = Werk::new();
-        tasks
-            .set_dir(results_dir.path().to_path_buf())
+        let werk = Werk::new();
+        werk.set_dir(results_dir.path().to_path_buf())
             .set_policy(Policy {
                 max_request_retries: 0,
                 request_retry_delay: Duration::from_millis(1),
@@ -851,7 +846,7 @@ mod tests {
         // `None` until the handler runs, so the assertion also proves it did.
         let stored: Arc<Mutex<Option<bool>>> = Arc::new(Mutex::new(None));
         let seen = Arc::clone(&stored);
-        tasks.on_event(move |werk, event| {
+        werk.on_event(move |werk, event| {
             if event.get_name() != Event::TOOL_CALL_FAILED {
                 return;
             }
@@ -869,15 +864,15 @@ mod tests {
             });
             *seen.lock().unwrap() = Some(landed);
         });
-        tasks.add_agent(
+        werk.add_agent(
             Agent::new()
                 .provider(provider)
                 .model("mock")
                 .role("test")
                 .tool(boom),
         );
-        tasks.add_task("go");
-        let _ = tasks.finish_all_tasks().await;
+        werk.add_task("go");
+        let _ = werk.finish_all_tasks().await;
 
         assert_eq!(*stored.lock().unwrap(), Some(true));
     }
@@ -906,9 +901,8 @@ mod tests {
             .handler(|_: Value| async move { Event::success("pong") });
 
         let results_dir = crate::test_util::TempDir::new().unwrap();
-        let tasks = Werk::new();
-        tasks
-            .set_dir(results_dir.path().to_path_buf())
+        let werk = Werk::new();
+        werk.set_dir(results_dir.path().to_path_buf())
             .set_policy(Policy {
                 max_request_retries: 0,
                 request_retry_delay: Duration::from_millis(1),
@@ -916,7 +910,7 @@ mod tests {
                 max_time: Some(Duration::from_millis(500)),
                 ..Default::default()
             });
-        tasks.add_agent(
+        werk.add_agent(
             Agent::new()
                 .provider(provider)
                 .model("mock")
@@ -924,11 +918,11 @@ mod tests {
                 .tool(boom)
                 .tool(ping),
         );
-        tasks.add_task("go");
-        let _ = tasks.finish_all_tasks().await;
+        werk.add_task("go");
+        let _ = werk.finish_all_tasks().await;
 
         assert_eq!(
-            tasks.get_tasks().into_iter().next().unwrap().status,
+            werk.get_tasks().into_iter().next().unwrap().status,
             Status::Finished
         );
     }
@@ -965,9 +959,8 @@ mod tests {
             });
 
         let results_dir = crate::test_util::TempDir::new().unwrap();
-        let tasks = Werk::new();
-        tasks
-            .set_dir(results_dir.path().to_path_buf())
+        let werk = Werk::new();
+        werk.set_dir(results_dir.path().to_path_buf())
             .set_policy(Policy {
                 max_request_retries: 0,
                 request_retry_delay: Duration::from_millis(1),
@@ -975,7 +968,7 @@ mod tests {
                 max_time: Some(Duration::from_secs(5)),
                 ..Default::default()
             });
-        tasks.add_agent(
+        werk.add_agent(
             Agent::new()
                 .provider(provider)
                 .model("mock")
@@ -983,16 +976,16 @@ mod tests {
                 .tool(TaskTool)
                 .tool(slow_tool),
         );
-        tasks.add_task("go");
+        werk.add_task("go");
 
         let unblock = async move {
             tool_started.notified().await;
             tool_unblocked.notify_one();
         };
 
-        tokio::join!(tasks.finish_all_tasks(), unblock);
+        tokio::join!(werk.finish_all_tasks(), unblock);
         assert_eq!(
-            tasks.get_tasks().into_iter().next().unwrap().status,
+            werk.get_tasks().into_iter().next().unwrap().status,
             Status::Finished
         );
     }
@@ -1026,9 +1019,8 @@ mod tests {
         };
 
         let results_dir = crate::test_util::TempDir::new().unwrap();
-        let tasks = Werk::new();
-        tasks
-            .set_dir(results_dir.path().to_path_buf())
+        let werk = Werk::new();
+        werk.set_dir(results_dir.path().to_path_buf())
             .set_policy(Policy {
                 max_request_retries: 0,
                 request_retry_delay: Duration::from_millis(1),
@@ -1041,19 +1033,19 @@ mod tests {
             .description("Returns ~800 KB of text")
             .handler(|_: Value| async move { Event::success("x".repeat(800_000)) });
 
-        tasks.on_event(move |_, e| handler(e));
-        tasks.add_agent(
+        werk.on_event(move |_, e| handler(e));
+        werk.add_agent(
             Agent::new()
                 .provider(provider.clone())
                 .model("claude-sonnet-4-20250514")
                 .role("test")
                 .tool(dump),
         );
-        tasks.add_task("go");
+        werk.add_task("go");
 
-        let _ = tasks.finish_all_tasks().await;
+        let _ = werk.finish_all_tasks().await;
         let events = collected.lock().unwrap().clone();
-        let task = tasks
+        let task = werk
             .get_tasks()
             .into_iter()
             .next()
@@ -1139,9 +1131,8 @@ mod tests {
         ]);
 
         let results_dir = crate::test_util::TempDir::new().unwrap();
-        let tasks = Werk::new();
-        tasks
-            .set_dir(results_dir.path().to_path_buf())
+        let werk = Werk::new();
+        werk.set_dir(results_dir.path().to_path_buf())
             .set_policy(Policy {
                 max_request_retries: 0,
                 request_retry_delay: Duration::from_millis(1),
@@ -1163,17 +1154,17 @@ mod tests {
                 Event::success("x".repeat(bytes))
             });
 
-        tasks.add_agent(
+        werk.add_agent(
             Agent::new()
                 .provider(provider.clone())
                 .model("mock")
                 .role("test")
                 .tool(size_tool),
         );
-        tasks.add_task("go");
+        werk.add_task("go");
 
-        let _ = tasks.finish_all_tasks().await;
-        let task = tasks
+        let _ = werk.finish_all_tasks().await;
+        let task = werk
             .get_tasks()
             .into_iter()
             .next()

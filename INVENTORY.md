@@ -81,8 +81,8 @@ The rules the tables never repeat.
 | both | `.knowledge(store: Knowledge): this` | pub |
 | both | `.directives(compute: (key: string) => string?): this` | pub |
 | both | `.get_id(): string` | pub |
-| both | `.task(task: Task): string` | pub |
-| both | `.task(task)`: a string or json value stands in for the `Task` | |
+| both | `.add_task(task: Task): string` | pub |
+| both | `.add_task(task)`: a string or json value stands in for the `Task` | |
 | both | `.start(): Werk` | pub |
 | Python | `.start()`: raises `RuntimeError` where Rust panics on a missing provider or model | |
 
@@ -163,13 +163,13 @@ The rules the tables never repeat.
 |----------|------|------------|
 | both | `KnowledgeError` | pub |
 | Rust | `.PageRejected { message: string }` | pub |
-| Rust | `.PageMissing { slug: string }` | pub |
+| Rust | `.PageNotFound { slug: string }` | pub |
 | Rust | `.IoFailed { message: string, source: io::Error }` | pub |
 | Rust | `impl Display for KnowledgeError` | pub |
 | Rust | `impl Error for KnowledgeError` | pub |
 | both | `Knowledge { knowledge_dir: string, index: IndexEntry[], write_lock: void, index_char_limit: number }` | pub with private fields |
 | both | `.load(store_dir: string): this throws io::Error` | pub |
-| both | `.set_char_limit(count: number): this` | pub |
+| both | `.set_index_char_limit(count: number): this` | pub |
 | both | `.get_index_char_limit(): number` | pub |
 | both | `.get_index(): string` | pub |
 | both | `.get_pages(): Pages` | pub |
@@ -351,7 +351,7 @@ The rules the tables never repeat.
 | Rust | `.new(query: string): this throws QueryError` | pub |
 | Rust | `impl From<&str> for Query<R>` | pub |
 | Rust | `impl From<String> for Query<R>` | pub |
-| Rust | `enum QueryError { Blank, UnknownField, UnknownStatus, InvalidTime, OperatorNotAllowed, RepeatedField, UnexpectedToken, UnexpectedEnd }` | pub |
+| Rust | `enum QueryError { TermsMissing, FieldUnrecognized, StatusUnrecognized, TimeMalformed, OperatorNotAllowed, FieldRepeated, TokenRejected, TermUnfinished }` | pub |
 | Rust | `impl Display for QueryError` | pub |
 | Rust | `impl Error for QueryError` | pub |
 
@@ -435,8 +435,8 @@ The rules the tables never repeat.
 | Language | Item | Visibility |
 |----------|------|------------|
 | Rust | `TaskError` | pub |
-| Python | `RuntimeError`: `TaskError::TaskMissing { id }` reads as `Task t-1 not found` | |
-| Rust | `.TaskMissing { id: string }` | pub |
+| Python | `RuntimeError`: `TaskError::TaskNotFound { id }` reads as `Task t-1 not found` | |
+| Rust | `.TaskNotFound { id: string }` | pub |
 | Rust | `.TransitionRejected { from: Status, to: Status }` | pub |
 | Rust | `.ResultRejected { message: string }` | pub |
 | Rust | `impl Display for TaskError` | pub |
@@ -610,7 +610,7 @@ The rules the tables never repeat.
 | both | `Werk { weak_self: Weak<Werk>, tasks: Record<string, Task>, agents: Agent[], policy: Policy, run: Run, cancel_filters: Query[], terminal_transitions_in_flight: number, stats: Stats, event_handlers: EventHandler[], awaited_events: AwaitedEvents, event_stream: Sender<Event>, dir: string, events_lock: void, join_handle: JoinHandle<void>?, next_task_id: number? }` | pub |
 | Rust | `.new(): this` | pub |
 | Python | `Werk()` | |
-| both | `.load(tasks_dir: string): this throws io::Error` | pub |
+| both | `.load(werk_dir: string): this throws io::Error` | pub |
 | both | `.get_input_tokens(): number` | pub |
 | both | `.get_output_tokens(): number` | pub |
 | both | `.get_duration(): number?` | pub |
@@ -733,9 +733,9 @@ The rules the tables never repeat.
 | Rust | `HTML_HEAD: string` | private |
 | Rust | `trajectory_path(dir: string, id: string): string` | private |
 
-## `crates/agentwerk/src/codegrep/ast.rs`
+## `crates/agentwerk-codegrep/src/ast.rs`
 
-Not bound: the whole `codegrep` module is reachable from Python through `GrepTool()` with `syntax="code"`.
+Unpublished internal crate, reached by agentwerk and use-cases through `agentwerk-codegrep`; Python reaches it through `GrepTool()` with `syntax="code"`.
 
 ### Public
 
@@ -772,7 +772,7 @@ Not bound: the whole `codegrep` module is reachable from Python through `GrepToo
 | Rust | `walk_metavars(nodes: Node[], seen: Record<string, MetavariableKind>): void throws ParseError` | private |
 | Rust | `record_kind(name: string, kind: MetavariableKind, seen: Record<string, MetavariableKind>): void throws ParseError` | private |
 
-## `crates/agentwerk/src/codegrep/conf.rs`
+## `crates/agentwerk-codegrep/src/conf.rs`
 
 Not bound, like the rest of `codegrep`.
 
@@ -794,7 +794,7 @@ Not bound, like the rest of `codegrep`.
 |----------|------|------------|
 | Rust | `word_chars(): string[]` | private |
 
-## `crates/agentwerk/src/codegrep/matcher.rs`
+## `crates/agentwerk-codegrep/src/matcher.rs`
 
 Not bound, like the rest of `codegrep`.
 
@@ -834,7 +834,7 @@ Not bound, like the rest of `codegrep`.
 | Rust | `is_multiline_ellipsis(node: Node, params: MatchParams): boolean` | private |
 | Rust | `word_eq(a: string, b: string, caseless: boolean): boolean` | private |
 
-## `crates/agentwerk/src/codegrep/mod.rs`
+## `crates/agentwerk-codegrep/src/lib.rs`
 
 Not bound, like the rest of `codegrep`.
 
@@ -845,7 +845,7 @@ Not bound, like the rest of `codegrep`.
 | Rust | `mod ast`, `mod conf`, `mod matcher`, `mod token` | pub |
 | Rust | re-exports `MetavariableKind`, `Node`, `ParseError`, `Pattern`, `Conf`, `ConfError`, `search`, `search_tokens`, `Loc`, `Match`, `Metavariable`, `tokenize_pattern`, `tokenize_target`, `Token` | pub |
 
-## `crates/agentwerk/src/codegrep/token.rs`
+## `crates/agentwerk-codegrep/src/token.rs`
 
 Not bound, like the rest of `codegrep`.
 
@@ -891,10 +891,13 @@ Not bound, like the rest of `codegrep`.
 | both | `.KNOWLEDGE_WRITTEN`, `.KNOWLEDGE_READ`, `.KNOWLEDGE_REMOVED`, `.KNOWLEDGE_LISTED`, `.KNOWLEDGE_FAILED`: string | pub |
 | both | `.POLICY_VIOLATED`, `.SCHEMA_RETRIED`, `.COMPACTION_STARTED`, `.COMPACTION_PROGRESS`, `.COMPACTION_FINISHED`, `.COMPACTION_FAILED`: string | pub |
 | both | `Event.new(name: string): this` | pub |
+| both | named constructors for every built-in event, from `run_started` through `compaction_failed` | pub |
 | both | `.data(value: json): this` | pub |
+| both | `.directive(directive: string): this` | pub |
 | both | `.task_id(task_id: string): this` | pub |
 | both | `.agent_id(agent_id: string): this` | pub |
 | both | `.get_name(): string` | pub |
+| both | `.get_directive(): string?` | pub |
 | both | `.get_data(): json` | pub |
 | both | `.get_task_id(): string` | pub |
 | both | `.get_agent_id(): string` | pub |
@@ -920,7 +923,7 @@ Not bound, like the rest of `codegrep`.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `mod agents`, `mod codegrep`, `mod event`, `mod providers`, `mod schemas`, `mod tools` | pub |
+| Rust | `mod agents`, `mod event`, `mod providers`, `mod schemas`, `mod tools` | pub |
 | Rust | re-exports `Agent`, `Query`, `Reply`, `Status`, `Task`, `Werk`, `Policy`, `PolicyViolation`, `Knowledge`, `Trajectory`, `Schema`, `Event`, `FinishReason`, `Directive`, `Text` | pub |
 | Python | `agentwerk` exports every bound class from one flat module | |
 
@@ -968,7 +971,7 @@ One of the two public parts of `prompts`, beside `Text`: `Directive` reaches the
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `Directive.REPLY_REJECTED: string = "reply_rejected"`, and one constant per catalogue heading, each also a crate-private `const` under the same name that the render sites write: `NO_TOOL_CALLED`, `ARGUMENTS_REJECTED`, `ARGUMENTS_EXPECTED`, `RESULT_SCHEMA_REQUIRED`, `SUMMARY_REQUESTED`, `KNOWLEDGE_INDEX_TRUNCATED`, `TOOL_NOT_FOUND`, `NO_TOOLS_REGISTERED`, `TOOL_PANICKED`, `TOOL_OUTPUT_EMPTY`, `TOOL_OUTPUT_OFFLOADED`, `EDIT_FILE_READ_FAILED`, `EDIT_FILE_OLD_STRING_NOT_FOUND`, `EDIT_FILE_OLD_STRING_NOT_UNIQUE`, `EDIT_FILE_WRITE_FAILED`, `WRITE_FILE_PARENT_NOT_CREATED`, `WRITE_FILE_FAILED`, `READ_FILE_PATH_IS_DIRECTORY`, `READ_FILE_PATH_IS_DIRECTORY_WITH_ENTRIES`, `READ_FILE_IS_BINARY`, `READ_FILE_NOT_FOUND`, `READ_FILE_FAILED`, `LIST_DIRECTORY_PATH_IS_FILE`, `LIST_DIRECTORY_NOT_FOUND`, `LIST_DIRECTORY_FAILED`, `PATH_HINT_DIRECTORY_LISTED`, `PATH_HINT_SUGGESTION`, `PATH_HINT_WORKING_DIRECTORY`, `COMMAND_CANCELLED`, `COMMAND_TIMED_OUT`, `COMMAND_NOT_STARTED`, `COMMAND_MISSING`, `COMMAND_SHELL_OPERATOR_FOUND`, `COMMAND_QUOTE_UNTERMINATED`, `COMMAND_CONTROL_CHARACTER_FOUND`, `COMMAND_ASSIGNMENT_FOUND`, `COMMAND_FLAG_DENIED`, `COMMAND_PATTERN_DENIED`, `COMMAND_NOT_ALLOWED`, `COMMAND_FLAG_NOT_ALLOWED`, `GREP_CANCELLED`, `GREP_TIMED_OUT`, `GREP_FAILED`, `GREP_GLOB_REJECTED`, `GREP_FILE_TYPE_UNKNOWN`, `GREP_PATTERN_REJECTED`, `CODE_PATTERN_REJECTED`, `CODE_CONSTRAINT_INCOMPLETE`, `CODE_CONSTRAINT_METAVARIABLE_UNKNOWN`, `CODE_CONSTRAINT_REGEX_REJECTED`, `FETCH_URL_TOO_LONG`, `FETCH_URL_SCHEME_MISSING`, `FETCH_URL_SCHEME_UNSUPPORTED`, `FETCH_URL_CREDENTIALS_PRESENT`, `FETCH_URL_HOST_MISSING`, `FETCH_URL_HOST_NOT_RESOLVABLE`, `FETCH_URL_TOO_MANY_REDIRECTS`, `FETCH_URL_REQUEST_FAILED`, `FETCH_URL_BODY_NOT_READ`, `FETCH_URL_RESPONSE_TOO_LARGE`, `FETCH_URL_REDIRECT_LOCATION_MISSING`, `KNOWLEDGE_PAGE_NOT_FOUND`, `KNOWLEDGE_WRITE_FAILED`, `KNOWLEDGE_REMOVE_FAILED`, `WERK_UNAVAILABLE`, `TASK_ID_MISSING`, `TASK_NOT_ASSIGNED`, `TASK_NOT_FOUND`, `TASK_RESULT_MISSING`, `TASK_QUERY_INVALID`, `TASK_EDIT_INCOMPLETE`, `TASK_TRANSITION_REJECTED`, `HANDOVER_RESULT_MISSING`, `HANDOVER_SCHEMA_INVALID`, `SCHEMA_FALSE_REJECTED`, `SCHEMA_TYPE_MISMATCHED`, `SCHEMA_CONST_MISMATCHED`, `SCHEMA_ENUM_MISMATCHED`, `SCHEMA_ANY_OF_UNMATCHED`, `SCHEMA_ONE_OF_AMBIGUOUS`, `SCHEMA_NOT_MATCHED`, `SCHEMA_PROPERTY_MISSING`, `SCHEMA_PROPERTY_UNEXPECTED`, `SCHEMA_ARRAY_TOO_SHORT`, `SCHEMA_ARRAY_TOO_LONG`, `SCHEMA_STRING_TOO_SHORT`, `SCHEMA_STRING_TOO_LONG`, `SCHEMA_PATTERN_UNMATCHED`, `SCHEMA_NUMBER_TOO_SMALL`, `SCHEMA_NUMBER_TOO_LARGE`, `SCHEMA_HINT_UNQUOTE`, `SCHEMA_HINT_JSON`, `SCHEMA_HINT_QUOTE` | pub |
+| Rust | `Directive.REPLY_REJECTED: string = "reply_rejected"`, and one constant per catalogue heading, each also a crate-private `const` under the same name that the render sites write: `NO_TOOL_CALLED`, `ARGUMENTS_REJECTED`, `ARGUMENTS_EXPECTED`, `RESULT_SCHEMA_REQUIRED`, `SUMMARY_REQUESTED`, `KNOWLEDGE_INDEX_TRUNCATED`, `TOOL_NOT_FOUND`, `NO_TOOLS_REGISTERED`, `TOOL_PANICKED`, `TOOL_OUTPUT_EMPTY`, `TOOL_OUTPUT_OFFLOADED`, `EDIT_FILE_READ_FAILED`, `EDIT_FILE_OLD_STRING_NOT_FOUND`, `EDIT_FILE_OLD_STRING_NOT_UNIQUE`, `EDIT_FILE_WRITE_FAILED`, `WRITE_FILE_PARENT_NOT_CREATED`, `WRITE_FILE_FAILED`, `READ_FILE_PATH_IS_DIRECTORY`, `READ_FILE_PATH_IS_DIRECTORY_WITH_ENTRIES`, `READ_FILE_IS_BINARY`, `READ_FILE_NOT_FOUND`, `READ_FILE_FAILED`, `LIST_DIRECTORY_PATH_IS_FILE`, `LIST_DIRECTORY_NOT_FOUND`, `LIST_DIRECTORY_FAILED`, `PATH_HINT_DIRECTORY_LISTED`, `PATH_HINT_SUGGESTION`, `PATH_HINT_WORKING_DIRECTORY`, `COMMAND_CANCELLED`, `COMMAND_TIMED_OUT`, `COMMAND_NOT_STARTED`, `COMMAND_MISSING`, `COMMAND_SHELL_OPERATOR_FOUND`, `COMMAND_QUOTE_UNTERMINATED`, `COMMAND_CONTROL_CHARACTER_FOUND`, `COMMAND_ASSIGNMENT_FOUND`, `COMMAND_FLAG_DENIED`, `COMMAND_PATTERN_DENIED`, `COMMAND_NOT_ALLOWED`, `COMMAND_FLAG_NOT_ALLOWED`, `GREP_CANCELLED`, `GREP_TIMED_OUT`, `GREP_FAILED`, `GREP_GLOB_REJECTED`, `GREP_FILE_TYPE_UNKNOWN`, `GREP_PATTERN_REJECTED`, `CODE_PATTERN_REJECTED`, `CODE_CONSTRAINT_INCOMPLETE`, `CODE_CONSTRAINT_METAVARIABLE_UNKNOWN`, `CODE_CONSTRAINT_REGEX_REJECTED`, `FETCH_TOO_LONG`, `FETCH_SCHEME_MISSING`, `FETCH_SCHEME_UNSUPPORTED`, `FETCH_CREDENTIALS_PRESENT`, `FETCH_HOST_MISSING`, `FETCH_HOST_NOT_RESOLVABLE`, `FETCH_TOO_MANY_REDIRECTS`, `FETCH_REQUEST_FAILED`, `FETCH_BODY_NOT_READ`, `FETCH_RESPONSE_TOO_LARGE`, `FETCH_REDIRECT_LOCATION_MISSING`, `KNOWLEDGE_PAGE_NOT_FOUND`, `KNOWLEDGE_WRITE_FAILED`, `KNOWLEDGE_REMOVE_FAILED`, `WERK_UNAVAILABLE`, `TASK_ID_MISSING`, `TASK_NOT_ASSIGNED`, `TASK_NOT_FOUND`, `TASK_RESULT_MISSING`, `TASK_QUERY_INVALID`, `TASK_EDIT_INCOMPLETE`, `TASK_TRANSITION_REJECTED`, `HANDOVER_RESULT_MISSING`, `HANDOVER_SCHEMA_INVALID`, `SCHEMA_FALSE_REJECTED`, `SCHEMA_TYPE_MISMATCHED`, `SCHEMA_CONST_MISMATCHED`, `SCHEMA_ENUM_MISMATCHED`, `SCHEMA_ANY_OF_UNMATCHED`, `SCHEMA_ONE_OF_AMBIGUOUS`, `SCHEMA_NOT_MATCHED`, `SCHEMA_PROPERTY_MISSING`, `SCHEMA_PROPERTY_UNEXPECTED`, `SCHEMA_ARRAY_TOO_SHORT`, `SCHEMA_ARRAY_TOO_LONG`, `SCHEMA_STRING_TOO_SHORT`, `SCHEMA_STRING_TOO_LONG`, `SCHEMA_PATTERN_UNMATCHED`, `SCHEMA_NUMBER_TOO_SMALL`, `SCHEMA_NUMBER_TOO_LARGE`, `SCHEMA_HINT_UNQUOTE`, `SCHEMA_HINT_JSON`, `SCHEMA_HINT_QUOTE` | pub |
 | Rust | `.ALL: string[]` | pub |
 | Python | `Directive.ALL` is not published; `register` walks it to set the key constants | |
 | Rust | `Directive { }`, the key namespace | pub |
@@ -1146,9 +1149,9 @@ Not bound: `Provider.from_env()` and `Model.from_env()` read these variables.
 | Rust | `.ProviderUnrecognized { message: string }` | pub |
 | Rust | `.is_retryable(): boolean` | pub |
 | Python | not bound: the error arrives as `RuntimeError` | |
-| Rust | `.retry_delay(): number?` | pub |
+| Rust | `.get_retry_delay(): number?` | pub |
 | Python | not bound: the error arrives as `RuntimeError` | |
-| Rust | `.kind(): RequestErrorKind` | pub |
+| Rust | `.get_kind(): RequestErrorKind` | pub |
 | Python | not bound: the error arrives as `RuntimeError` | |
 | Rust | `impl Display for ProviderError` | pub |
 | Rust | `impl Error for ProviderError` | pub |
@@ -1694,7 +1697,7 @@ Not bound: it is how `CommandTool` reads one command line.
 | Rust | `substitute_handover_text(text: string, parent_id: string, result_path: string, result: string): string` | private |
 | Rust | `attach_result(werk: Werk, id: string, result: json, schema: Schema?, tool_name: string, directives: DirectiveStore): [json, string[]] throws Event` | private |
 
-## `crates/agentwerk/src/tools/fetch_url.rs`
+## `crates/agentwerk/src/tools/fetch.rs`
 
 ### Public
 
@@ -1723,14 +1726,14 @@ Not bound: it is how `CommandTool` reads one command line.
 | Rust | `BROWSER_STREAM_WINDOW: number = 6291456` | private |
 | Rust | `BROWSER_CONNECTION_WINDOW: number = 15728640` | private |
 | Rust | `BROWSER_MAX_FRAME_SIZE: number = 16384` | private |
-| Rust | `FetchUrlArgs { url: string, max_length: number }` | crate |
+| Rust | `FetchArgs { url: string, max_length: number }` | crate |
 | Python | not bound: the model sends these fields as the tool's input | |
 | Rust | `default_max_length(): number` | private |
-| Rust | `run(args: FetchUrlArgs, ctx: ToolContext, impersonate: boolean): Promise<Event>` | private |
+| Rust | `run(args: FetchArgs, ctx: ToolContext, impersonate: boolean): Promise<Event>` | private |
 | Rust | `FetchedContent` | private |
 | Rust | `.Page { body: string, status: number, content_type: string, bytes: number }` | private |
 | Rust | `.Redirect { original_url: string, redirect_url: string, status: number }` | private |
-| Rust | `fetch_url(url: string, impersonate: boolean): Promise<FetchedContent throws string>` | private |
+| Rust | `fetch(url: string, impersonate: boolean): Promise<FetchedContent throws string>` | private |
 | Rust | `format_output(url: string, body: string, status: number, content_type: string, bytes: number, max_length: number): string` | private |
 | Rust | `FollowResult` | private |
 | Rust | `.Ok(reqwest::Response)` | private |
@@ -1875,7 +1878,7 @@ Not bound: it is how `CommandTool` reads one command line.
 | Language | Item | Visibility |
 |----------|------|------------|
 | Rust | `mod util` | crate |
-| Rust | `mod tool`, `mod code`, `mod command`, `mod edit_file`, `mod event`, `mod fetch_url`, `mod glob`, `mod grep`, `mod knowledge`, `mod list_directory`, `mod read_file`, `mod tasks`, `mod write_file` | private |
+| Rust | `mod tool`, `mod code`, `mod command`, `mod edit_file`, `mod event`, `mod fetch`, `mod glob`, `mod grep`, `mod knowledge`, `mod list_directory`, `mod read_file`, `mod task`, `mod write_file` | private |
 
 ## `crates/agentwerk/src/tools/read_file.rs`
 
@@ -1896,7 +1899,7 @@ Not bound: it is how `CommandTool` reads one command line.
 | Rust | `run(args: ReadFileArgs, ctx: ToolContext): Promise<Event>` | private |
 | Rust | `snap_to_char_boundary(s: string, pos: number): number` | private |
 
-## `crates/agentwerk/src/tools/tasks/finish.rs`
+## `crates/agentwerk/src/tools/task/finish.rs`
 
 ### Public
 
@@ -1915,7 +1918,7 @@ Not bound: it is how `CommandTool` reads one command line.
 | Rust | `arguments_schema(schema: Schema?, envelope: json): json` | private |
 | Rust | `normalize_input(input: json, envelope: json): json` | private |
 
-## `crates/agentwerk/src/tools/tasks/mod.rs`
+## `crates/agentwerk/src/tools/task/mod.rs`
 
 ### Public
 
@@ -1927,15 +1930,15 @@ Not bound: it is how `CommandTool` reads one command line.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `mod finish`, `mod tasks` | private |
-| Rust | `TasksArgs` | crate |
+| Rust | `mod finish`, `mod tool` | private |
+| Rust | `TaskArgs` | crate |
 | Python | not bound: the model sends these fields as the tool's input | |
 | Rust | `.Task { id: string? }` | crate |
 | Rust | `.Result { id: string? }` | crate |
 | Rust | `.List { aql: string? }` | crate |
 | Rust | `.Create { task: json, label: string? }` | crate |
 | Rust | `.Edit { id: string?, task: json?, label: string? }` | crate |
-| Rust | `dispatch(args: TasksArgs, ctx: ToolContext): Event` | super |
+| Rust | `dispatch(args: TaskArgs, ctx: ToolContext): Event` | super |
 | Rust | `resolve_id(werk: Werk, id: string?, ctx: ToolContext): string throws Event` | private |
 | Rust | `resolve_current_id(werk: Werk, ctx: ToolContext): string throws Event` | super |
 | Rust | `task_error_message(err: TaskError): string` | super |
@@ -1953,7 +1956,7 @@ Not bound: it is how `CommandTool` reads one command line.
 | Rust | `action_create(werk: Werk, task: json, label: string?, ctx: ToolContext): Event` | private |
 | Rust | `action_edit(werk: Werk, id: string?, new_task: json?, new_label: string?, ctx: ToolContext): Event` | private |
 
-## `crates/agentwerk/src/tools/tasks/tasks.rs`
+## `crates/agentwerk/src/tools/task/tool.rs`
 
 ### Public
 
@@ -2089,7 +2092,7 @@ Binds `agents/agent.rs`, whose section holds the Python spelling of each method.
 | Rust | `.directives(compute: any): this` | python |
 | Rust | `.tool(tool: any): this throws PyErr` | python |
 | Rust | `.tools(tools: any): this throws PyErr` | python |
-| Rust | `.task(task: PyTask): string throws PyErr` | python |
+| Rust | `.add_task(task: PyTask): string throws PyErr` | python |
 | Rust | `.start(): PyWerk throws PyErr` | python |
 
 ### Internal
@@ -2163,9 +2166,11 @@ Binds `event.rs`.
 | Rust | built-in name class attributes matching `Event` | python |
 | Rust | `.new(name: string): this` | python |
 | Rust | `.data(value: any): this throws PyErr` | python |
+| Rust | `.directive(directive: string): this` | python |
 | Rust | `.task_id(task_id: string): this` | python |
 | Rust | `.agent_id(agent_id: string): this` | python |
 | Rust | `.get_name(): string` | python |
+| Rust | `.get_directive(): string?` | python |
 | Rust | `.get_data(): any throws PyErr` | python |
 | Rust | `.get_task_id(): string` | python |
 | Rust | `.get_agent_id(): string` | python |
@@ -2189,7 +2194,7 @@ Binds `agents/knowledge.rs`.
 |----------|------|------------|
 | Rust | `PyKnowledge { inner: Knowledge }` | python |
 | Rust | `.load(store_dir: string): this throws PyErr` | python |
-| Rust | `.set_char_limit(count: number): this` | python |
+| Rust | `.set_index_char_limit(count: number): this` | python |
 | Rust | `.get_index_char_limit(): number` | python |
 | Rust | `.get_index(): string` | python |
 | Rust | `.get_pages(): PyPages` | python |
@@ -2241,6 +2246,7 @@ Binds `providers/`.
 |----------|------|------------|
 | Rust | `PyProvider { inner: Provider }` | python |
 | Rust | `.from_env(): this throws PyErr` | python |
+| Rust | `.verify(model: string): Promise<void> throws PyErr` | python |
 | Rust | `PyModel { inner: Model }` | python |
 | Rust | `.new(name: string): this` | python |
 | Rust | `.from_env(): this throws PyErr` | python |
@@ -2377,7 +2383,7 @@ Binds `agents/tasks/werk.rs` and `store.rs`.
 |----------|------|------------|
 | Rust | `PyWerk { inner: Werk }` | python |
 | Rust | `.new(): this` | python |
-| Rust | `.load(tasks_dir: string): this throws PyErr` | python |
+| Rust | `.load(werk_dir: string): this throws PyErr` | python |
 | Rust | `.add_agent(agent: PyAgent): this throws PyErr` | python |
 | Rust | `.add_task(task: PyTask): string throws PyErr` | python |
 | Rust | `.add_reply(id: string, content: string): this` | python |

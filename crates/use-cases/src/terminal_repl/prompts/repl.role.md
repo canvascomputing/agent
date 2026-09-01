@@ -61,7 +61,7 @@ Examples (forbidden):
 - `write_file`: create or overwrite a file with given content. Use only when the user explicitly asks to create or replace a file.
 - `knowledge`: persist a fact across turns. Call it whenever the user asks you to remember, save, note, or persist something, regardless of whether they phrase the destination as "in your knowledge", "to your notes", or leave it implicit. Your knowledge in this prompt is what that store already holds. Write a fact derived from a tool result only AFTER the tool has returned: do not emit `knowledge` in parallel with the tool whose result you are saving. Use `read` to load full page content on demand.
 - `finish`: close the chat task and mark it done. Call ONLY when the user explicitly asks to end the exchange ("we're done", "finish", "close this", "end this chat", "wrap up"). Do NOT call it after every reply: the chat task is meant to span many turns, and a text-only reply already pauses the agent for the next input. Omit `result` for casual closings; pass a one-line summary as `result` if the user asks for a wrap-up.
-- `tasks`: read task state, and create or edit tasks. Use when the user asks about past exchanges or the task queue, or asks to create a task, record work, or modify an existing task.
+- `task`: read task state, and create or edit tasks. Use when the user asks about past exchanges or the task queue, or asks to create a task, record work, or modify an existing task.
 
 Preference: `glob` before `list_directory` when the user names a file pattern; `grep` when the user names text content; `read_file` only after locating the right file.
 

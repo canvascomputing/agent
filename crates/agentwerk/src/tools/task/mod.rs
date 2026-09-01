@@ -15,17 +15,17 @@ use crate::prompts::directives::{
 use super::tool::{Event, ToolContext};
 
 mod finish;
-mod tasks;
+mod tool;
 
 pub use finish::FinishTool;
-pub use tasks::TaskTool;
+pub use tool::TaskTool;
 
 /// What the model asks the Werk to do. The schema declares `action` as the
 /// discriminator and states which fields each one requires; the variants say
 /// the same in Rust, so `search` cannot arrive without a `query`.
 #[derive(serde::Deserialize)]
 #[serde(tag = "action", rename_all = "lowercase")]
-pub enum TasksArgs {
+pub enum TaskArgs {
     Task {
         id: Option<String>,
     },
@@ -46,30 +46,30 @@ pub enum TasksArgs {
     },
 }
 
-pub(super) fn dispatch(args: TasksArgs, ctx: &ToolContext) -> Event {
+pub(super) fn dispatch(args: TaskArgs, ctx: &ToolContext) -> Event {
     let Some(werk) = ctx.werk.clone() else {
         return Event::error(ctx.directives.render(WERK_UNAVAILABLE, &[]))
             .directive(WERK_UNAVAILABLE);
     };
 
     match args {
-        TasksArgs::Task { id } => action_task(&werk, id, ctx),
-        TasksArgs::Result { id } => action_result(&werk, id, ctx),
-        TasksArgs::List { aql } => action_list(&werk, aql, &ctx.directives),
-        TasksArgs::Create { task, label } => action_create(&werk, task, label, ctx),
-        TasksArgs::Edit { id, task, label } => action_edit(&werk, id, task, label, ctx),
+        TaskArgs::Task { id } => action_task(&werk, id, ctx),
+        TaskArgs::Result { id } => action_result(&werk, id, ctx),
+        TaskArgs::List { aql } => action_list(&werk, aql, &ctx.directives),
+        TaskArgs::Create { task, label } => action_create(&werk, task, label, ctx),
+        TaskArgs::Edit { id, task, label } => action_edit(&werk, id, task, label, ctx),
     }
 }
 
 /// The task an action names, or the one this agent is holding.
-fn resolve_id(werk: &Werk, id: Option<String>, ctx: &ToolContext) -> Result<String, Event> {
+fn resolve_id(werk: &Werk, id: Option<String>, ctx: &ToolContext) -> Result<String, Box<Event>> {
     match id {
         Some(id) => Ok(id),
         None => resolve_current_id(werk, ctx),
     }
 }
 
-pub(super) fn resolve_current_id(werk: &Werk, ctx: &ToolContext) -> Result<String, Event> {
+pub(super) fn resolve_current_id(werk: &Werk, ctx: &ToolContext) -> Result<String, Box<Event>> {
     if let Some(id) = ctx.task_id.as_deref() {
         return Ok(id.to_string());
     }
@@ -82,7 +82,7 @@ pub(super) fn resolve_current_id(werk: &Werk, ctx: &ToolContext) -> Result<Strin
         t.status == Status::InProgress && t.assignee.as_deref() == Some(agent_id.as_str())
     }) {
         Some(t) => Ok(t.id.clone()),
-        None => Err(Event::error(ctx.directives.render(TASK_NOT_ASSIGNED, &[]))),
+        None => Err(Event::error(ctx.directives.render(TASK_NOT_ASSIGNED, &[])).into()),
     }
 }
 
@@ -137,12 +137,7 @@ fn push_value(out: &mut String, value: &Value) {
 }
 
 fn status_label(s: Status) -> &'static str {
-    match s {
-        Status::Todo => "Todo",
-        Status::InProgress => "InProgress",
-        Status::Finished => "Finished",
-        Status::Failed => "Failed",
-    }
+    s.get_name()
 }
 
 fn truncate_for_preview(s: &str, max: usize) -> String {
@@ -185,7 +180,7 @@ fn task_preview(task: &serde_json::Value) -> String {
 fn action_task(werk: &Werk, id: Option<String>, ctx: &ToolContext) -> Event {
     let id = match resolve_id(werk, id, ctx) {
         Ok(k) => k,
-        Err(e) => return e,
+        Err(event) => return *event,
     };
     match werk.get_task(&id) {
         Some(t) => Event::success(render_task(&t)),
@@ -197,7 +192,7 @@ fn action_task(werk: &Werk, id: Option<String>, ctx: &ToolContext) -> Event {
 fn action_result(werk: &Werk, id: Option<String>, ctx: &ToolContext) -> Event {
     let id = match resolve_id(werk, id, ctx) {
         Ok(k) => k,
-        Err(e) => return e,
+        Err(event) => return *event,
     };
     let Some(task) = werk.get_task(&id) else {
         return Event::error(ctx.directives.render(TASK_NOT_FOUND, &[("id", &id)]))
@@ -263,7 +258,7 @@ fn action_edit(
 ) -> Event {
     let id = match resolve_id(werk, id, ctx) {
         Ok(k) => k,
-        Err(e) => return e,
+        Err(event) => return *event,
     };
     if new_task.is_none() && new_label.is_none() {
         return Event::error(ctx.directives.render(TASK_EDIT_INCOMPLETE, &[]))
@@ -291,8 +286,8 @@ mod tests {
             .agent_id(agent.to_string())
     }
 
-    /// Insert one Todo task, claim it for `agent` (atomically labels +
-    /// transitions to InProgress), so `werk.find_task(...)` resolves it
+    /// Insert one `todo` task, claim it for `agent` (atomically labels +
+    /// transitions to `in_progress`), so `werk.find_task(...)` resolves it
     /// as the current task for `agent`. The Werk is rooted at its own
     /// isolated temp directory so the default `.agentwerk` writes never
     /// leak into the source tree.
@@ -301,7 +296,7 @@ mod tests {
         werk.set_dir(isolated_test_dir());
         werk.insert(Task::new("body").label(agent), "tester".into());
         let id = werk
-            .claim(&Query::from("status = Todo"), agent)
+            .claim(&Query::from("status = todo"), agent)
             .expect("claim must succeed");
         (werk, id)
     }
@@ -423,7 +418,7 @@ mod tests {
         )
         .await;
         assert!(result.get_name() == Event::TOOL_CALL_FAILED, "{result:?}");
-        assert!(unwrap_text(&result).contains("InProgress"));
+        assert!(unwrap_text(&result).contains("in_progress"));
     }
 
     /// Two tasks, the first claimed by `alice` and labelled `review`, the
@@ -467,7 +462,7 @@ mod tests {
         let ctx = ctx_with(Arc::clone(&werk), "alice");
         let result = call(
             TaskTool,
-            serde_json::json!({"action": "list", "aql": "status = InProgress"}),
+            serde_json::json!({"action": "list", "aql": "status = in_progress"}),
             &ctx,
         )
         .await;
@@ -518,7 +513,7 @@ mod tests {
         let ctx = ctx_with(Arc::clone(&werk), "alice");
         let result = call(
             TaskTool,
-            serde_json::json!({"action": "list", "aql": "status = Finished"}),
+            serde_json::json!({"action": "list", "aql": "status = finished"}),
             &ctx,
         )
         .await;

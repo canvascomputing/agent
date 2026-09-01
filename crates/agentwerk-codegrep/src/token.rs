@@ -1,4 +1,4 @@
-//! Token types and tokenizer entry points.
+//! Token types and tokenizer entry points for patterns and targets.
 //!
 //! Patterns recognise three forms on top of the input grammar: ellipsis
 //! (`...`, `....`) and metavariable variants (`$NAME`, `$...NAME`,

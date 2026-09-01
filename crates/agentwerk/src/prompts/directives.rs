@@ -14,9 +14,9 @@ const CATALOGUE: &[&str] = &[
     include_str!("directives/files.md"),
     include_str!("directives/command.md"),
     include_str!("directives/search.md"),
-    include_str!("directives/fetch_url.md"),
+    include_str!("directives/fetch.md"),
     include_str!("directives/knowledge.md"),
-    include_str!("directives/tasks.md"),
+    include_str!("directives/task.md"),
     include_str!("directives/schemas.md"),
 ];
 
@@ -96,17 +96,17 @@ directives! {
     CODE_CONSTRAINT_INCOMPLETE = "code_constraint_incomplete",
     CODE_CONSTRAINT_METAVARIABLE_UNKNOWN = "code_constraint_metavariable_unknown",
     CODE_CONSTRAINT_REGEX_REJECTED = "code_constraint_regex_rejected",
-    FETCH_URL_TOO_LONG = "fetch_url_too_long",
-    FETCH_URL_SCHEME_MISSING = "fetch_url_scheme_missing",
-    FETCH_URL_SCHEME_UNSUPPORTED = "fetch_url_scheme_unsupported",
-    FETCH_URL_CREDENTIALS_PRESENT = "fetch_url_credentials_present",
-    FETCH_URL_HOST_MISSING = "fetch_url_host_missing",
-    FETCH_URL_HOST_NOT_RESOLVABLE = "fetch_url_host_not_resolvable",
-    FETCH_URL_TOO_MANY_REDIRECTS = "fetch_url_too_many_redirects",
-    FETCH_URL_REQUEST_FAILED = "fetch_url_request_failed",
-    FETCH_URL_BODY_NOT_READ = "fetch_url_body_not_read",
-    FETCH_URL_RESPONSE_TOO_LARGE = "fetch_url_response_too_large",
-    FETCH_URL_REDIRECT_LOCATION_MISSING = "fetch_url_redirect_location_missing",
+    FETCH_TOO_LONG = "fetch_too_long",
+    FETCH_SCHEME_MISSING = "fetch_scheme_missing",
+    FETCH_SCHEME_UNSUPPORTED = "fetch_scheme_unsupported",
+    FETCH_CREDENTIALS_PRESENT = "fetch_credentials_present",
+    FETCH_HOST_MISSING = "fetch_host_missing",
+    FETCH_HOST_NOT_RESOLVABLE = "fetch_host_not_resolvable",
+    FETCH_TOO_MANY_REDIRECTS = "fetch_too_many_redirects",
+    FETCH_REQUEST_FAILED = "fetch_request_failed",
+    FETCH_BODY_NOT_READ = "fetch_body_not_read",
+    FETCH_RESPONSE_TOO_LARGE = "fetch_response_too_large",
+    FETCH_REDIRECT_LOCATION_MISSING = "fetch_redirect_location_missing",
     KNOWLEDGE_PAGE_NOT_FOUND = "knowledge_page_not_found",
     KNOWLEDGE_WRITE_FAILED = "knowledge_write_failed",
     KNOWLEDGE_REMOVE_FAILED = "knowledge_remove_failed",
@@ -159,11 +159,13 @@ directives! {
 /// ```
 pub struct Directive;
 
+type DirectiveComputer = dyn Fn(&str) -> Option<String> + Send + Sync;
+
 /// The function an agent decides its directives with, as the agent holds it.
 /// A host writes one for [`Agent::directives`](crate::Agent::directives)
 /// and never names this type.
 pub(crate) struct DirectiveStore {
-    compute: Arc<dyn Fn(&str) -> Option<String> + Send + Sync>,
+    compute: Arc<DirectiveComputer>,
 }
 
 impl DirectiveStore {

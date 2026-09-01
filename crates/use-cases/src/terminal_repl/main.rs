@@ -1,7 +1,7 @@
 //! Interactive terminal chat. One `Werk` + `Agent` + `Knowledge`
 //! lives for the whole session, and one chat task spans every turn:
-//! the first input creates the task via `tasks.add_task(...)`, every
-//! subsequent input lands as a user reply via `tasks.add_reply(&id, ...)`.
+//! the first input creates the task via `werk.add_task(...)`, every
+//! subsequent input lands as a user reply via `werk.add_reply(&id, ...)`.
 //! The agent loop's wait-for-input branch picks each comment up and
 //! drives the next model turn on the same growing set of replies. Tasks
 //! and knowledge both persist to `./.agentwerk/`, so an existing chat
@@ -22,7 +22,7 @@
 //! plain `return`: the stdin reader runs on a tokio blocking thread
 //! blocked in `read(2)`, which the runtime cannot cancel on shutdown.
 //! Exiting the process directly bypasses the runtime drop and avoids
-//! a hang on outstanding blocking tasks.
+//! a hang on outstanding blocking work.
 
 use std::io::{self, IsTerminal, Write};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -82,7 +82,7 @@ async fn main() {
     let handler_last_input = Arc::clone(&last_input);
     let handler: Arc<dyn Fn(&Event) + Send + Sync> = Arc::new(move |e: &Event| {
         print_event(
-            &e,
+            e,
             &event_style,
             effective_window,
             &handler_midstream,
@@ -92,16 +92,16 @@ async fn main() {
 
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let store_dir = cwd.join(".agentwerk");
-    let tasks = Werk::load(&store_dir).expect("open task store");
-    tasks.set_policy(Policy {
+    let werk = Werk::load(&store_dir).expect("open task store");
+    werk.set_policy(Policy {
         max_turns: Some(40),
         ..Default::default()
     });
 
     let knowledge = Knowledge::load(&store_dir).expect("open knowledge store");
 
-    tasks.on_event(move |_, e| handler(e));
-    let _agent = tasks.add_agent(
+    werk.on_event(move |_, e| handler(e));
+    let _agent = werk.add_agent(
         Agent::from_env()
             .interactive()
             .role(ROLE)
@@ -121,7 +121,7 @@ async fn main() {
     let mut prev_input: u64 = 0;
     let mut prev_output: u64 = 0;
 
-    let failed = fail_stale_chats(&tasks, "orchestrator");
+    let failed = fail_stale_chats(&werk, "orchestrator");
     if failed > 0 {
         eprintln!(
             "{}failed {} stale chat task{}{}",
@@ -136,7 +136,7 @@ async fn main() {
     // One long-running loop drives every turn; each user input flips the
     // task out of the gate's pause and the next iteration redraws the
     // prompt once the assistant has spoken.
-    tasks.start();
+    werk.start();
 
     loop {
         let line = tokio::select! {
@@ -157,13 +157,13 @@ async fn main() {
             continue;
         }
         if let Some(first) = line.strip_prefix("/new ") {
-            let id = tasks.add_task(first.trim());
+            let id = werk.add_task(first.trim());
             eprintln!("{}new chat {id}{}", style.dim, style.reset);
             chat_id = Some(id);
             continue;
         }
         if line == "/list" {
-            let all = tasks.get_tasks();
+            let all = werk.get_tasks();
             if all.is_empty() {
                 eprintln!("{}(no tasks){}", style.dim, style.reset);
             } else {
@@ -192,7 +192,7 @@ async fn main() {
             continue;
         }
         if line == "/stats" {
-            let recorded = tasks.find_events(|_: &Event| true);
+            let recorded = werk.find_events(|_: &Event| true);
             let count = |name: &str| counted(&recorded, name);
             eprintln!(
                 "{}{} turns · {} requests · {} tools · {} in / {} out · {} created / {} done / {} failed{}",
@@ -200,8 +200,8 @@ async fn main() {
                 count(Event::TURN_STARTED),
                 count(Event::REQUEST_FINISHED),
                 count(Event::TOOL_CALL_STARTED),
-                tasks.get_input_tokens(),
-                tasks.get_output_tokens(),
+                werk.get_input_tokens(),
+                werk.get_output_tokens(),
                 count(Event::TASK_CREATED),
                 count(Event::TASK_FINISHED),
                 count(Event::TASK_FAILED),
@@ -225,7 +225,7 @@ async fn main() {
                     eprintln!("{}usage: /scrub <word>{}", style.dim, style.reset);
                 }
                 Some(id) => {
-                    tasks.edit_replies(id, move |messages| redact(messages, &word));
+                    werk.edit_replies(id, move |messages| redact(messages, &word));
                     eprintln!("{}scrubbed{}", style.dim, style.reset);
                 }
                 None => eprintln!("{}no active chat{}", style.dim, style.reset),
@@ -272,38 +272,38 @@ async fn main() {
         // breaks out before its own content.
         midstream.store(true, Ordering::Relaxed);
         let id = match chat_id.as_deref() {
-            Some(id) if tasks.get_task(id).is_some_and(|t| t.is_in_progress()) => {
-                tasks.add_reply(id, payload);
+            Some(id) if werk.get_task(id).is_some_and(|t| t.is_in_progress()) => {
+                werk.add_reply(id, payload);
                 id.to_string()
             }
-            _ => tasks.add_task(payload),
+            _ => werk.add_task(payload),
         };
         chat_id = Some(id.clone());
 
         let cancelled = tokio::select! {
-            _ = wait_for_assistant_pause(&tasks, &id) => false,
+            _ = wait_for_assistant_pause(&werk, &id) => false,
             _ = tokio::signal::ctrl_c() => {
-                tasks.cancel_all_tasks();
+                werk.cancel_all_tasks();
                 if midstream.swap(false, Ordering::Relaxed) {
                     eprintln!();
                 }
                 eprintln!("{}cancelling…{}", style.dim, style.reset);
-                let winding_down = tasks.finish_all_tasks();
+                let winding_down = werk.finish_all_tasks();
                 tokio::pin!(winding_down);
                 tokio::select! {
                     _ = &mut winding_down => {}
                     _ = tokio::signal::ctrl_c() => std::process::exit(130),
                 }
-                tasks.start();
+                werk.start();
                 true
             }
         };
 
         // One read per turn, counted three ways, rather than one read per count.
-        let recorded = tasks.find_events(|_: &Event| true);
+        let recorded = werk.find_events(|_: &Event| true);
         let count = |name: &str| counted(&recorded, name);
         let outcome = {
-            let chat = chat_id.as_deref().and_then(|id| tasks.get_task(id));
+            let chat = chat_id.as_deref().and_then(|id| werk.get_task(id));
             match chat {
                 Some(t) if t.is_finished() => {
                     chat_id = None;
@@ -321,13 +321,13 @@ async fn main() {
         let turns = count(Event::TURN_STARTED).saturating_sub(prev_turns);
         let requests = count(Event::REQUEST_FINISHED).saturating_sub(prev_requests);
         let tool_calls = count(Event::TOOL_CALL_STARTED).saturating_sub(prev_tool_calls);
-        let input = tasks.get_input_tokens().saturating_sub(prev_input);
-        let output = tasks.get_output_tokens().saturating_sub(prev_output);
+        let input = werk.get_input_tokens().saturating_sub(prev_input);
+        let output = werk.get_output_tokens().saturating_sub(prev_output);
         prev_turns = count(Event::TURN_STARTED);
         prev_requests = count(Event::REQUEST_FINISHED);
         prev_tool_calls = count(Event::TOOL_CALL_STARTED);
-        prev_input = tasks.get_input_tokens();
-        prev_output = tasks.get_output_tokens();
+        prev_input = werk.get_input_tokens();
+        prev_output = werk.get_output_tokens();
 
         if midstream.swap(false, Ordering::Relaxed) {
             eprintln!();
@@ -520,8 +520,8 @@ fn redact(messages: &mut [Reply], word: &str) {
 /// terminal (`finished`/`failed`), or the assistant has spoken and called
 /// no tool. A mid-turn reply carrying a tool call doesn't count, so the
 /// prompt never races the user against the loop.
-async fn wait_for_assistant_pause(tasks: &Werk, id: &str) {
-    tasks.finish_tasks(id).await;
+async fn wait_for_assistant_pause(werk: &Werk, id: &str) {
+    werk.finish_tasks(id).await;
 }
 
 async fn read_line(prompt: &str) -> Option<String> {
@@ -567,15 +567,15 @@ impl Style {
 /// Transition every non-terminal task carrying `label` to Failed.
 /// Catches both the active InProgress chat from the prior session and
 /// any orphan Todo left by an interrupted `/new <message>`.
-fn fail_stale_chats(tasks: &Werk, label: &str) -> usize {
+fn fail_stale_chats(werk: &Werk, label: &str) -> usize {
     let label = label.to_string();
-    let stale: Vec<String> = tasks
+    let stale: Vec<String> = werk
         .find_tasks(move |task: &Task| task.get_label() == Some(&label) && task.is_pending())
         .iter()
         .map(|t| t.get_id().to_string())
         .collect();
     for id in &stale {
-        let _ = tasks.set_task_failed(id);
+        let _ = werk.set_task_failed(id);
     }
     stale.len()
 }
@@ -587,27 +587,27 @@ mod tests {
 
     #[test]
     fn fail_stale_chats_marks_every_matching_pending_task_as_failed() {
-        let tasks = Werk::new();
+        let werk = Werk::new();
         let mut ids = Vec::new();
         for body in ["one", "two", "three"] {
-            let id = tasks.add_task(Task::labeled("orchestrator", body));
+            let id = werk.add_task(Task::labeled("orchestrator", body));
             ids.push(id);
         }
-        let other = tasks.add_task(Task::labeled("analyst", "scanner"));
+        let other = werk.add_task(Task::labeled("analyst", "scanner"));
 
-        let n = fail_stale_chats(&tasks, "orchestrator");
+        let n = fail_stale_chats(&werk, "orchestrator");
 
         assert_eq!(n, 3);
         for id in &ids {
-            assert_eq!(tasks.get_task(id).unwrap().get_status(), Status::Failed);
+            assert_eq!(werk.get_task(id).unwrap().get_status(), Status::Failed);
         }
-        assert_eq!(tasks.get_task(&other).unwrap().get_status(), Status::Todo);
+        assert_eq!(werk.get_task(&other).unwrap().get_status(), Status::Todo);
     }
 
     #[test]
     fn fail_stale_chats_returns_zero_when_no_matching_tasks_exist() {
-        let tasks = Werk::new();
-        let n = fail_stale_chats(&tasks, "orchestrator");
+        let werk = Werk::new();
+        let n = fail_stale_chats(&werk, "orchestrator");
         assert_eq!(n, 0);
     }
 

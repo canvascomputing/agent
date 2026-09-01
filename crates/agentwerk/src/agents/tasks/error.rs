@@ -9,18 +9,29 @@ use super::task::Status;
 #[non_exhaustive]
 pub enum TaskError {
     /// No task exists with `id`.
-    TaskMissing { id: String },
+    TaskNotFound {
+        /// Requested task ID.
+        id: String,
+    },
     /// Status transition `from → to` is not allowed.
-    TransitionRejected { from: Status, to: Status },
+    TransitionRejected {
+        /// Current status.
+        from: Status,
+        /// Requested status.
+        to: Status,
+    },
     /// The result failed the task's schema. The message lists the
     /// violations.
-    ResultRejected { message: String },
+    ResultRejected {
+        /// Schema violation detail.
+        message: String,
+    },
 }
 
 impl fmt::Display for TaskError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::TaskMissing { id } => write!(f, "Task {id} not found"),
+            Self::TaskNotFound { id } => write!(f, "Task {id} not found"),
             Self::TransitionRejected { from, to } => {
                 write!(f, "Illegal transition {from:?} -> {to:?}")
             }
