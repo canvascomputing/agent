@@ -16,8 +16,8 @@ mod read_file;
 mod tasks;
 mod write_file;
 
-pub use tool::{Tool, ToolContext};
-pub(crate) use tool::{ToolCall, ToolRegistry};
+pub use tool::Tool;
+pub(crate) use tool::ToolContext;
 
 pub use command::CommandTool;
 pub use edit_file::EditFileTool;

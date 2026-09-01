@@ -357,7 +357,7 @@ mod tests {
         let messages = [Message::user("hi!!")];
         let tools = vec![Tool::new("tot")
             .description("x".repeat(50))
-            .handler(|_: Value, _| async { Event::success("") })];
+            .handler(|_: Value| async { Event::success("") })];
         let system_prompt = "x".repeat(100);
         let got = estimate_next_request_tokens(&history, &messages, &system_prompt, &tools);
         assert_eq!(got, 47);

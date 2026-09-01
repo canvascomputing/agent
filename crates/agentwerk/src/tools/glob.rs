@@ -37,7 +37,7 @@ impl From<GlobTool> for Tool {
             .description(include_str!("glob.tool.md"))
             .schema(include_str!("glob.schema.json"))
             .concurrent(true)
-            .handler(run)
+            .handler_with_context(run)
     }
 }
 

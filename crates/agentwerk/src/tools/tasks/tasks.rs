@@ -20,7 +20,9 @@ impl From<TaskTool> for Tool {
         Tool::new("tasks")
             .description(include_str!("tasks.tool.md"))
             .schema(include_str!("tasks.schema.json"))
-            .handler(|args: super::TasksArgs, ctx: ToolContext| async move { dispatch(args, &ctx) })
+            .handler_with_context(|args: super::TasksArgs, ctx: ToolContext| async move {
+                dispatch(args, &ctx)
+            })
     }
 }
 

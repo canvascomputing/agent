@@ -1,4 +1,4 @@
-//! The actions agents can take, and the registry an agent's tools live in.
+//! The actions agents can take and the private machinery that executes them.
 
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -7,21 +7,14 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
-use crate::agents::knowledge::Knowledge;
-use crate::agents::tasks::{Queue, Run, Task};
+use crate::agents::tasks::{Queue, Run};
 pub(crate) use crate::event::Event;
 use crate::prompts::directives::{
-    DirectiveStore, ARGUMENTS_REJECTED, NO_TOOLS_REGISTERED, TOOL_NOT_FOUND, TOOL_OUTPUT_EMPTY,
-    TOOL_OUTPUT_OFFLOADED, TOOL_PANICKED,
+    DirectiveStore, ARGUMENTS_REJECTED, TOOL_OUTPUT_EMPTY, TOOL_OUTPUT_OFFLOADED,
 };
 use crate::prompts::Text;
+use crate::providers::ContentBlock;
 use crate::schemas::Schema;
-
-use super::event::EventTool;
-use super::tasks::FinishTool;
-
-/// How many calls one turn runs at the same time. The rest wait their turn.
-const MAX_CONCURRENT_CALLS: usize = 10;
 
 /// The largest result one tool may return. Anything longer is written to
 /// `<task-dir>/outputs/<tool_use_id>.txt` and replaced with a short stub.
@@ -38,45 +31,26 @@ const PER_TURN_CAP: usize = 200_000;
 /// character is never cut in half.
 const PREVIEW_CHARS: usize = 2_000;
 
-/// What a tool receives when it runs.
-///
-/// Writing your own tool, you need two of these:
-/// - `dir`: the agent's working directory.
-/// - `cancelled()`: resolves when the current call is given up on.
-///
-/// agentwerk fills in the rest for the built-in tools.
 #[derive(Clone)]
-pub struct ToolContext {
-    /// Directory the tool runs in. Resolve a relative path against it.
+pub(crate) struct ToolContext {
     pub(crate) dir: PathBuf,
     pub(crate) run: Option<Arc<Run>>,
     pub(crate) queue: Option<Arc<Queue>>,
     pub(crate) agent_id: Option<String>,
     pub(crate) task_id: Option<String>,
-    pub(crate) knowledge: Option<Arc<Knowledge>>,
-    /// What this call's failures say. An agent shares its store here; a
-    /// standalone call keeps the built-in text.
     pub(crate) directives: Arc<DirectiveStore>,
 }
 
 impl ToolContext {
-    /// A context rooted at `dir` that is never cancelled. Use it standalone or
-    /// in tests; agentwerk installs its own at call time.
-    pub fn new(dir: PathBuf) -> Self {
+    pub(crate) fn new(dir: PathBuf) -> Self {
         Self {
             dir,
             run: None,
             queue: None,
             agent_id: None,
             task_id: None,
-            knowledge: None,
             directives: Arc::new(DirectiveStore::default()),
         }
-    }
-
-    /// The directory this tool runs in.
-    pub fn get_dir(&self) -> &Path {
-        &self.dir
     }
 
     pub(crate) fn run(mut self, run: Arc<Run>) -> Self {
@@ -99,11 +73,6 @@ impl ToolContext {
         self
     }
 
-    pub(crate) fn knowledge(mut self, knowledge: Arc<Knowledge>) -> Self {
-        self.knowledge = Some(knowledge);
-        self
-    }
-
     pub(crate) fn directives(mut self, directives: Arc<DirectiveStore>) -> Self {
         self.directives = directives;
         self
@@ -120,39 +89,12 @@ impl ToolContext {
         queue.emit_event(event.task_id(id).agent_id(agent));
     }
 
-    /// Resolves once the run starts to finish, whether the caller cancelled it
-    /// or a limit was breached: either way this call is being given up on.
-    ///
-    /// Pair it with `tokio::select!` so the losing branch is dropped, which
-    /// aborts an in-flight HTTP request and, with `kill_on_drop(true)`, ends a
-    /// subprocess. On a standalone context it never resolves, and the `select!`
-    /// behaves like a plain await.
-    pub async fn cancelled(&self) {
+    pub(crate) async fn cancelled(&self) {
         match &self.run {
             Some(run) => run.until_draining().await,
             None => std::future::pending::<()>().await,
         }
     }
-}
-
-impl std::fmt::Debug for ToolContext {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ToolContext")
-            .field("dir", &self.dir)
-            .field("has_queue", &self.queue.is_some())
-            .finish()
-    }
-}
-
-/// One tool call the model asked for.
-#[derive(Debug, Clone)]
-pub struct ToolCall {
-    /// Identifier for this call, sent back with the result.
-    pub id: String,
-    /// Name of the tool the model chose.
-    pub name: String,
-    /// Arguments the model supplied, matching the tool's input schema.
-    pub input: Value,
 }
 
 impl Event {
@@ -236,237 +178,13 @@ impl Event {
                 path.to_string_lossy().into_owned().into(),
             );
     }
-}
 
-/// The tools one agent may call.
-#[derive(Clone, Default)]
-pub(crate) struct ToolRegistry {
-    tools: Vec<Arc<Tool>>,
-}
-
-impl std::fmt::Debug for ToolRegistry {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let names: Vec<&str> = self.tools.iter().map(|tool| tool.get_name()).collect();
-        f.debug_struct("ToolRegistry")
-            .field("tools", &names)
-            .finish()
-    }
-}
-
-impl ToolRegistry {
-    /// Register a tool, replacing one already registered under that name.
-    ///
-    /// A request carrying one name twice is rejected, so the last registration
-    /// is the one that counts.
-    pub(crate) fn register(&mut self, tool: impl Into<Tool>) {
-        let tool = tool.into();
-        tool.require_description_and_handler();
-        let tool = Arc::new(tool);
-        self.tools.retain(|t| t.get_name() != tool.get_name());
-        self.tools.push(tool);
-    }
-
-    /// Bind terminal tools to the task an agent is about to work on. Tools the
-    /// agent did not register stay absent.
-    pub(crate) fn completion(mut self, schema: Option<Schema>, handover: Option<Task>) -> Self {
-        if self.contains(FinishTool::NAME) {
-            self.register(FinishTool::from_schema(schema.clone(), handover.clone()));
-        }
-        if self.contains(EventTool::NAME) {
-            self.register(EventTool::from_schema(schema, handover));
-        }
-        self
-    }
-
-    /// Get the tool a call reaches, owned, so a concurrent batch can move it
-    /// into its task, or the message naming what could have been called.
-    fn resolve(
-        &self,
-        name: &str,
-        directives: &DirectiveStore,
-    ) -> std::result::Result<Arc<Tool>, (String, &'static str)> {
-        if let Some(tool) = self.get(name) {
-            return Ok(tool);
-        }
-        let names = self.names();
-        if names.is_empty() {
-            return Err((
-                directives.render(NO_TOOLS_REGISTERED, &[("name", name)]),
-                NO_TOOLS_REGISTERED,
-            ));
-        }
-        Err((
-            directives.render(
-                TOOL_NOT_FOUND,
-                &[("name", name), ("available", &names.join(", "))],
-            ),
-            TOOL_NOT_FOUND,
-        ))
-    }
-
-    /// Get the tool a call names.
-    ///
-    /// An exact match wins. Otherwise a spelling that reduces to the same key as
-    /// exactly one registered tool resolves to it, so a model that adds a
-    /// `_tool` suffix still reaches the right tool.
-    pub(crate) fn get(&self, name: &str) -> Option<Arc<Tool>> {
-        let name = name.trim();
-        if let Some(found) = self.tools.iter().find(|tool| tool.get_name() == name) {
-            return Some(Arc::clone(found));
-        }
-        let key = lookup_key(name);
-        let mut folded = self
-            .tools
-            .iter()
-            .filter(|tool| lookup_key(tool.get_name()) == key);
-        let found = folded.next()?;
-        // A key two tools share is ambiguous: refuse rather than guess.
-        folded.next().is_none().then(|| Arc::clone(found))
-    }
-
-    /// True when a tool of exactly this name is registered. Exact where
-    /// [`Self::get`] folds, so a near-miss never passes for the real tool.
-    pub(crate) fn contains(&self, name: &str) -> bool {
-        self.tools.iter().any(|tool| tool.get_name() == name)
-    }
-
-    /// Get the registered names, sorted, for the error that tells the model what
-    /// it could have called.
-    fn names(&self) -> Vec<String> {
-        let mut names: Vec<String> = self
-            .tools
-            .iter()
-            .map(|tool| tool.get_name().to_string())
-            .collect();
-        names.sort();
-        names
-    }
-
-    /// Get the tools sent to the model.
-    pub(crate) fn tools(&self) -> Vec<Tool> {
-        self.tools.iter().map(|tool| Tool::clone(tool)).collect()
-    }
-
-    /// Run the calls, concurrent ones together and the rest one at a time,
-    /// answering each in the order it was asked, with every answer capped to
-    /// fit one turn's reply.
-    pub(crate) async fn execute(&self, calls: &[ToolCall], ctx: &ToolContext) -> Vec<Event> {
-        let semaphore = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_CALLS));
-        let mut answers: Vec<Option<Event>> = calls.iter().map(|_| None).collect();
-
-        for batch in partition_tool_calls(calls, self) {
-            match batch {
-                ToolBatch::Concurrent(batch_calls) => {
-                    let answered = self.run_concurrently(batch_calls, ctx, &semaphore).await;
-                    for (index, result) in answered {
-                        answers[index] = Some(result);
-                    }
-                }
-                ToolBatch::Serial(index, call) => {
-                    answers[index] =
-                        Some(invoke(self.resolve(&call.name, &ctx.directives), &call, ctx).await);
-                }
-            }
-        }
-
-        let mut results = answer_every_call(calls, answers, &ctx.directives);
-        cap_results(calls, &mut results, ctx);
-        results
-    }
-
-    /// Run one batch's calls at the same time, giving back each call's index
-    /// with its answer. A call whose task panicked is left out.
-    async fn run_concurrently(
-        &self,
-        batch: Vec<(usize, ToolCall)>,
+    pub(crate) fn cap_tool_results(
+        calls: &[ContentBlock],
+        results: &mut [Event],
         ctx: &ToolContext,
-        semaphore: &Arc<tokio::sync::Semaphore>,
-    ) -> Vec<(usize, Event)> {
-        let mut set = tokio::task::JoinSet::new();
-        for (index, call) in batch {
-            let semaphore = Arc::clone(semaphore);
-            let ctx = ctx.clone();
-            // Resolved before the spawn: the task outlives this borrow of the
-            // registry.
-            let resolved = self.resolve(&call.name, &ctx.directives);
-            set.spawn(async move {
-                let _permit = semaphore.acquire().await.unwrap();
-                (index, invoke(resolved, &call, &ctx).await)
-            });
-        }
-
-        let mut answers = Vec::new();
-        while let Some(joined) = set.join_next().await {
-            if let Ok(answer) = joined {
-                answers.push(answer);
-            }
-        }
-        answers
-    }
-}
-
-enum ToolBatch {
-    Concurrent(Vec<(usize, ToolCall)>),
-    Serial(usize, ToolCall),
-}
-
-/// Split a turn's calls into runs of concurrent ones and the serial calls
-/// between them, each call carrying the index it was asked at.
-fn partition_tool_calls(calls: &[ToolCall], registry: &ToolRegistry) -> Vec<ToolBatch> {
-    let mut batches: Vec<ToolBatch> = Vec::new();
-    let mut concurrent_batch: Vec<(usize, ToolCall)> = Vec::new();
-
-    for (index, call) in calls.iter().enumerate() {
-        let concurrent = registry
-            .get(&call.name)
-            .is_some_and(|tool| tool.is_concurrent());
-        if concurrent {
-            concurrent_batch.push((index, call.clone()));
-            continue;
-        }
-
-        if !concurrent_batch.is_empty() {
-            batches.push(ToolBatch::Concurrent(std::mem::take(&mut concurrent_batch)));
-        }
-        batches.push(ToolBatch::Serial(index, call.clone()));
-    }
-
-    if !concurrent_batch.is_empty() {
-        batches.push(ToolBatch::Concurrent(concurrent_batch));
-    }
-
-    batches
-}
-
-/// Give every call an answer, standing in for one whose task panicked: a reply
-/// with a `tool_use` block and no result upsets LLM providers.
-fn answer_every_call(
-    calls: &[ToolCall],
-    answers: Vec<Option<Event>>,
-    directives: &DirectiveStore,
-) -> Vec<Event> {
-    calls
-        .iter()
-        .zip(answers)
-        .map(|(call, answer)| {
-            answer.unwrap_or_else(|| {
-                Event::error(directives.render(TOOL_PANICKED, &[("tool", &call.name)]))
-                    .directive(TOOL_PANICKED)
-            })
-        })
-        .collect()
-}
-
-/// Reduce a tool name to the key lookups match on, so capitalization, hyphens,
-/// or a trailing `_tool` still reach the tool.
-///
-/// The reduction only removes information, so it cannot invent a name nobody
-/// asked for. Where two tools share a key, [`ToolRegistry::get`] refuses.
-fn lookup_key(name: &str) -> String {
-    let key = name.trim().to_lowercase().replace('-', "_");
-    match key.strip_suffix("_tool") {
-        Some(stem) if !stem.is_empty() => stem.to_string(),
-        _ => key,
+    ) {
+        cap_results(calls, results, ctx);
     }
 }
 
@@ -497,7 +215,7 @@ type ToolHandler = Arc<
 ///         "required": ["name"]
 ///     }))
 ///     .concurrent(true)
-///     .handler(|input: Value, _ctx| async move {
+///     .handler(|input: Value| async move {
 ///         let name = input["name"].as_str().unwrap_or("world");
 ///         Event::tool_call_finished(format!("Hello, {name}!"))
 ///     });
@@ -513,13 +231,20 @@ type ToolHandler = Arc<
 ///
 /// let _agent = Agent::new().tool(Tool::new("greet"));
 /// ```
+///
+/// Path declarations are not part of a tool definition:
+///
+/// ```compile_fail
+/// use agentwerk::tools::Tool;
+///
+/// let _tool = Tool::new("read").paths(["path"]);
+/// ```
 #[derive(Clone)]
 pub struct Tool {
     name: String,
     description: Option<String>,
     schema: Schema,
     concurrent: bool,
-    paths: Vec<String>,
     handler: Option<ToolHandler>,
 }
 
@@ -543,7 +268,6 @@ impl Tool {
             schema: Schema::new(serde_json::json!({"type": "object", "properties": {}}))
                 .expect("a literal object schema compiles"),
             concurrent: false,
-            paths: Vec::new(),
             handler: None,
         }
     }
@@ -582,21 +306,32 @@ impl Tool {
         self
     }
 
-    /// Name the input fields holding a file path, so the files a call opens are
-    /// included in statistics. A field that is absent or not a string is
-    /// skipped.
-    pub fn paths<I, S>(mut self, fields: I) -> Self
-    where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
-    {
-        self.paths = fields.into_iter().map(Into::into).collect();
-        self
-    }
-
     /// Define what runs when the model calls this tool. A bare `async` block
     /// works, and the handler names the type its arguments are read into.
     pub fn handler<A, F, Fut>(mut self, handler: F) -> Self
+    where
+        A: serde::de::DeserializeOwned + Send + 'static,
+        F: Fn(A) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Event> + Send + 'static,
+    {
+        let handler = Arc::new(handler);
+        self.handler = Some(read_arguments_then(
+            self.name.clone(),
+            move |args, ctx: ToolContext| {
+                let handler = Arc::clone(&handler);
+                async move {
+                    tokio::select! {
+                        biased;
+                        _ = ctx.cancelled() => Event::error("tool call cancelled"),
+                        result = handler(args) => result,
+                    }
+                }
+            },
+        ));
+        self
+    }
+
+    pub(crate) fn handler_with_context<A, F, Fut>(mut self, handler: F) -> Self
     where
         A: serde::de::DeserializeOwned + Send + 'static,
         F: Fn(A, ToolContext) -> Fut + Send + Sync + 'static,
@@ -606,7 +341,7 @@ impl Tool {
         self
     }
 
-    fn require_description_and_handler(&self) {
+    pub(crate) fn require_description_and_handler(&self) {
         assert!(
             self.description.is_some(),
             "description required for tool `{}`: call Tool::description(..)",
@@ -619,9 +354,8 @@ impl Tool {
         );
     }
 
-    /// Run the tool on a call the registry has already checked against
-    /// [`get_input_schema`](Self::get_input_schema).
-    pub async fn call(&self, input: Value, ctx: &ToolContext) -> Event {
+    /// Run this tool's handler on arguments already checked by the agent.
+    pub(crate) async fn call(&self, input: Value, ctx: &ToolContext) -> Event {
         (self.handler.as_ref().unwrap_or_else(|| {
             panic!(
                 "handler required for tool `{}`: call Tool::handler(..)",
@@ -629,6 +363,31 @@ impl Tool {
             )
         }))(input, ctx)
         .await
+    }
+
+    /// Validate one call against this tool's schema, run its handler, and
+    /// validate the terminal event it returns.
+    pub(crate) async fn invoke(&self, input: Value, ctx: &ToolContext) -> Event {
+        let (input, repairs) = match self.schema.validate(input) {
+            Ok(validated) => validated,
+            Err(violations) => {
+                return Event::tool_failure(
+                    crate::prompts::arguments_retry_detail(
+                        self.get_name(),
+                        &violations.to_string(),
+                        Some(self.schema.get_raw_schema()),
+                        &ctx.directives,
+                    ),
+                    "schema_failed",
+                )
+                .directive(ARGUMENTS_REJECTED);
+            }
+        };
+        let mut result = validate_tool_event(self.get_name(), self.call(input, ctx).await);
+        if result.name == Event::TOOL_CALL_FINISHED {
+            result.prepend_repairs(repairs.iter().map(|pointer| retype_message(pointer)));
+        }
+        result
     }
 
     /// The name the model calls the tool by.
@@ -653,18 +412,8 @@ impl Tool {
 
     /// Whether the agent may run this tool alongside the turn's other
     /// concurrent calls.
-    pub fn is_concurrent(&self) -> bool {
+    pub(crate) fn is_concurrent(&self) -> bool {
         self.concurrent
-    }
-
-    /// The file paths this call opens, read from the fields `paths` named, so
-    /// they reach `Stats`.
-    pub fn opened_paths(&self, input: &Value) -> Vec<String> {
-        self.paths
-            .iter()
-            .filter_map(|field| input.get(field).and_then(|v| v.as_str()))
-            .map(str::to_string)
-            .collect()
     }
 }
 
@@ -686,48 +435,6 @@ where
             "`{name}` could not read its arguments: {error}"
         )))),
     })
-}
-
-/// Check the arguments against the schema the tool registered, then run it on
-/// what survives. A rejection answers with the complete corrective message,
-/// composed here where the schema is known.
-async fn invoke(
-    resolved: std::result::Result<Arc<Tool>, (String, &'static str)>,
-    call: &ToolCall,
-    ctx: &ToolContext,
-) -> Event {
-    let tool = match resolved {
-        Ok(tool) => tool,
-        Err((content, directive)) => {
-            return Event::tool_failure(content, "not_found").directive(directive);
-        }
-    };
-    // Retyped rather than refused, so a quoted number runs the call the model
-    // asked for and arguments it wrote as JSON text are decoded. What comes
-    // back names the value that produced, which is the one the tool would have
-    // received.
-    let (input, repairs) = match tool.get_input_schema().validate(call.input.clone()) {
-        Ok(validated) => validated,
-        Err(violations) => {
-            return Event::tool_failure(
-                crate::prompts::arguments_retry_detail(
-                    tool.get_name(),
-                    &violations.to_string(),
-                    Some(tool.get_input_schema().get_raw_schema()),
-                    &ctx.directives,
-                ),
-                "schema_failed",
-            )
-            .directive(ARGUMENTS_REJECTED);
-        }
-    };
-    let mut result = validate_tool_event(tool.get_name(), tool.call(input, ctx).await);
-    // Argument retypes go in front of notes the tool itself added, keeping
-    // the notes in the order the repairs happened.
-    if result.name == Event::TOOL_CALL_FINISHED {
-        result.prepend_repairs(repairs.iter().map(|pointer| retype_message(pointer)));
-    }
-    result
 }
 
 fn validate_tool_event(tool: &str, mut event: Event) -> Event {
@@ -764,7 +471,7 @@ fn validate_tool_event(tool: &str, mut event: Event) -> Event {
             return Event::error(format!("tool `{tool}` returned an invalid failure kind"));
         }
     } else {
-        // Only successful persistence by the registry may name an offloaded
+        // Only successful persistence by the runtime may name an offloaded
         // output; a handler cannot claim it wrote a file the loop should keep.
         event
             .data
@@ -803,10 +510,13 @@ pub(crate) fn retype_message(pointer: &str) -> String {
 /// `results` answer `calls`, in the same order. Only a
 /// `tool_call_finished` output is ever rewritten: a failure's message is what the
 /// model must read to recover, and is short by construction.
-fn cap_results(calls: &[ToolCall], results: &mut [Event], ctx: &ToolContext) {
+fn cap_results(calls: &[ContentBlock], results: &mut [Event], ctx: &ToolContext) {
     for (call, result) in calls.iter().zip(results.iter_mut()) {
-        replace_empty_output(result, &call.name, &ctx.directives);
-        cap_oversized_result(result, ctx, &call.id, PER_TOOL_CAP);
+        let ContentBlock::ToolUse { id, name, .. } = call else {
+            continue;
+        };
+        replace_empty_output(result, name, &ctx.directives);
+        cap_oversized_result(result, ctx, id, PER_TOOL_CAP);
     }
     cap_aggregate_outputs(calls, results, ctx, PER_TURN_CAP);
 }
@@ -849,7 +559,7 @@ fn cap_oversized_result(result: &mut Event, ctx: &ToolContext, call_id: &str, pe
 /// success that is not already a stub. It stops once the turn fits, or once
 /// nothing left can be written out.
 fn cap_aggregate_outputs(
-    calls: &[ToolCall],
+    calls: &[ContentBlock],
     results: &mut [Event],
     ctx: &ToolContext,
     per_turn_cap: usize,
@@ -862,13 +572,13 @@ fn cap_aggregate_outputs(
         if total <= per_turn_cap {
             return;
         }
-        let Some((call, result)) = largest_inline_success(calls, results) else {
+        let Some((call_id, result)) = largest_inline_success(calls, results) else {
             return;
         };
         let Some(content) = result.content_mut() else {
             return;
         };
-        let Some(path) = write_out(content, ctx, &call.id) else {
+        let Some(path) = write_out(content, ctx, call_id) else {
             // Persistence failed; nothing further this pass can do.
             return;
         };
@@ -878,15 +588,19 @@ fn cap_aggregate_outputs(
 
 /// The largest success still inline, which is the next one to write out.
 fn largest_inline_success<'a>(
-    calls: &'a [ToolCall],
+    calls: &'a [ContentBlock],
     results: &'a mut [Event],
-) -> Option<(&'a ToolCall, &'a mut Event)> {
+) -> Option<(&'a str, &'a mut Event)> {
     calls
         .iter()
         .zip(results.iter_mut())
-        .filter(|(_, result)| {
-            result.name == Event::TOOL_CALL_FINISHED
-                && !result.get_content().starts_with(OVERSIZED_STUB_TAG_OPEN)
+        .filter_map(|(call, result)| {
+            let ContentBlock::ToolUse { id, .. } = call else {
+                return None;
+            };
+            (result.name == Event::TOOL_CALL_FINISHED
+                && !result.get_content().starts_with(OVERSIZED_STUB_TAG_OPEN))
+            .then_some((id.as_str(), result))
         })
         .max_by_key(|(_, result)| result.get_content().len())
 }
@@ -984,6 +698,7 @@ fn utf8_boundary_floor(content: &str, mut index: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agents::agent::Agent;
 
     /// Every tool agentwerk registers, for the checks that hold across all of
     /// them. The knowledge store is temporary; its tool is read, not used.
@@ -1041,7 +756,7 @@ mod tests {
                 "empty description for {}",
                 tool.get_name(),
             );
-            // The registry holds a call to this, so a tool that declares
+            // Execution relies on this, so a tool that declares
             // something else loses the check that its arguments are an object.
             assert_eq!(
                 tool.get_input_schema().get_raw_schema()["type"],
@@ -1078,26 +793,27 @@ mod tests {
 
     #[test]
     fn registering_a_name_twice_leaves_the_later_tool() {
-        let mut registry = ToolRegistry::default();
-        registry.register(mock_tool("echo", true, "first"));
-        registry.register(mock_tool("echo", true, "second"));
-
-        let definitions = registry.tools();
-        assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].name, "echo");
+        let agent = Agent::new()
+            .tool(mock_tool("echo", true, "first"))
+            .tool(mock_tool("echo", true, "second"));
+        let echoes: Vec<_> = agent
+            .tool_list()
+            .iter()
+            .filter(|tool| tool.get_name() == "echo")
+            .collect();
+        assert_eq!(echoes.len(), 1);
     }
 
     #[test]
     #[should_panic(expected = "description required for tool `incomplete`")]
     fn registering_a_tool_without_a_description_panics() {
-        ToolRegistry::default()
-            .register(Tool::new("incomplete").handler(|_: Value, _| async { Event::success("") }));
+        Agent::new().tool(Tool::new("incomplete").handler(|_: Value| async { Event::success("") }));
     }
 
     #[test]
     #[should_panic(expected = "handler required for tool `incomplete`")]
     fn registering_a_tool_without_a_handler_panics() {
-        ToolRegistry::default().register(Tool::new("incomplete").description("incomplete"));
+        Agent::new().tool(Tool::new("incomplete").description("incomplete"));
     }
 
     #[tokio::test]
@@ -1105,8 +821,8 @@ mod tests {
         let tool = Tool::new("configured")
             .description("first")
             .description("second")
-            .handler(|_: Value, _| async { Event::success("first") })
-            .handler(|_: Value, _| async { Event::success("second") });
+            .handler(|_: Value| async { Event::success("first") })
+            .handler(|_: Value| async { Event::success("second") });
 
         assert_eq!(tool.get_description(), "second");
         assert_eq!(
@@ -1117,17 +833,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn paths_reports_the_named_input_fields() {
-        let tool = Tool::new("cat")
-            .description("Read a file.")
-            .paths(["path", "into"])
-            .handler(|_: Value, _ctx| async move { Event::success("ok") });
-
-        let input = serde_json::json!({"path": "src/lib.rs", "limit": 20});
-        assert_eq!(tool.opened_paths(&input), vec!["src/lib.rs".to_string()]);
-    }
-
     /// The mock the registry tests share.
     fn mock_tool(name: &str, concurrent: bool, result: &str) -> Tool {
         let result = result.to_string();
@@ -1135,7 +840,7 @@ mod tests {
             .description("mock")
             .schema(serde_json::json!({"type": "object"}))
             .concurrent(concurrent)
-            .handler(move |_: Value, _ctx| {
+            .handler(move |_: Value| {
                 let result = result.clone();
                 async move { Event::success(result) }
             })
@@ -1146,62 +851,70 @@ mod tests {
     }
 
     #[test]
-    fn registry_register_and_get() {
-        let mut registry = ToolRegistry::default();
-        registry.register(mock_tool("read_file", true, "file contents"));
-        assert!(registry.get("read_file").is_some());
-        assert!(registry.get("nonexistent").is_none());
+    fn registration_and_lookup() {
+        let agent = Agent::new().tool(mock_tool("read_file", true, "file contents"));
+        assert!(agent.get_tool(agent.tool_list(), "read_file").is_some());
+        assert!(agent.get_tool(agent.tool_list(), "nonexistent").is_none());
     }
 
     #[test]
     fn contains_answers_on_the_exact_name_only() {
-        let mut registry = ToolRegistry::default();
-        registry.register(mock_tool("grep", true, "matches"));
-        assert!(registry.contains("grep"));
-        assert!(!registry.contains("glob"));
+        let agent = Agent::new().tool(mock_tool("grep", true, "matches"));
+        let exact = |name: &str| agent.tool_list().iter().any(|tool| tool.get_name() == name);
+        assert!(exact("grep"));
+        assert!(!exact("glob"));
         assert!(
-            !registry.contains("grep_tool"),
+            !exact("grep_tool"),
             "a folded spelling is not the registered name",
         );
     }
 
     #[test]
     fn resolves_a_name_carrying_a_tool_suffix() {
-        let mut registry = ToolRegistry::default();
-        registry.register(mock_tool("grep", true, "matches"));
-
-        let tool = registry.get("grep_tool").expect("suffix should fold away");
+        let agent = Agent::new().tool(mock_tool("grep", true, "matches"));
+        let tool = agent
+            .get_tool(agent.tool_list(), "grep_tool")
+            .expect("suffix should fold away");
         assert_eq!(tool.get_name(), "grep");
     }
 
     #[test]
     fn resolves_a_name_the_model_hyphenated() {
-        let mut registry = ToolRegistry::default();
-        registry.register(mock_tool("read_file", true, "file contents"));
-
-        let tool = registry
-            .get("Read-File")
+        let agent = Agent::new().tool(mock_tool("read_file", true, "file contents"));
+        let tool = agent
+            .get_tool(agent.tool_list(), "Read-File")
             .expect("case and hyphen should fold");
         assert_eq!(tool.get_name(), "read_file");
     }
 
     #[test]
     fn refuses_a_name_two_tools_share_a_key() {
-        let mut registry = ToolRegistry::default();
-        registry.register(mock_tool("grep", true, "builtin"));
-        registry.register(mock_tool("grep_tool", true, "host tool"));
-
-        assert!(registry.get("Grep").is_none());
+        let agent = Agent::new()
+            .tool(mock_tool("grep", true, "builtin"))
+            .tool(mock_tool("grep_tool", true, "host tool"));
+        assert!(agent.get_tool(agent.tool_list(), "Grep").is_none());
         // Each registered name still reaches its own tool: exact match wins.
-        assert_eq!(registry.get("grep").unwrap().get_name(), "grep");
-        assert_eq!(registry.get("grep_tool").unwrap().get_name(), "grep_tool");
+        assert_eq!(
+            agent
+                .get_tool(agent.tool_list(), "grep")
+                .unwrap()
+                .get_name(),
+            "grep"
+        );
+        assert_eq!(
+            agent
+                .get_tool(agent.tool_list(), "grep_tool")
+                .unwrap()
+                .get_name(),
+            "grep_tool"
+        );
     }
 
     #[test]
     fn a_description_read_from_a_file_keeps_its_prose_and_loses_the_closing_newline() {
         let tool = Tool::new("demo")
             .description("Do the demo thing.\n\n- Returns nothing useful.\n")
-            .handler(|_: Value, _| async { Event::success("") });
+            .handler(|_: Value| async { Event::success("") });
         assert_eq!(
             tool.get_description(),
             "Do the demo thing.\n\n- Returns nothing useful."
@@ -1215,7 +928,7 @@ mod tests {
         std::fs::write(&file, "Do the demo thing.\n").unwrap();
         let tool = Tool::new("demo")
             .description(file.as_path())
-            .handler(|_: Value, _| async { Event::success("") });
+            .handler(|_: Value| async { Event::success("") });
         assert_eq!(tool.get_description(), "Do the demo thing.");
     }
 
@@ -1226,22 +939,19 @@ mod tests {
             .schema(
                 r#"{"type": "object", "properties": {"x": {"type": "string"}}, "required": ["x"]}"#,
             )
-            .handler(|_: Value, _| async { Event::success("") });
+            .handler(|_: Value| async { Event::success("") });
         let document = tool.get_input_schema().get_raw_schema();
         assert_eq!(document["properties"]["x"]["type"], "string");
         assert_eq!(document["required"][0], "x");
     }
 
     #[test]
-    fn registry_lists_every_registered_tool() {
-        let mut registry = ToolRegistry::default();
-        registry.register(mock_tool("read", true, "ok"));
-        registry.register(mock_tool("write", false, "ok"));
-
-        let tools = registry.tools();
-        assert_eq!(tools.len(), 2);
-        assert_eq!(tools[0].get_name(), "read");
-        assert_eq!(tools[1].get_name(), "write");
+    fn registration_keeps_every_distinct_tool() {
+        let agent = Agent::new()
+            .tool(mock_tool("read", true, "ok"))
+            .tool(mock_tool("write", false, "ok"));
+        assert!(agent.get_tool(agent.tool_list(), "read").is_some());
+        assert!(agent.get_tool(agent.tool_list(), "write").is_some());
     }
 
     #[tokio::test]
@@ -1252,21 +962,11 @@ mod tests {
             "required": ["partial_sum"],
         }))
         .unwrap();
-        let mut registry = ToolRegistry::default();
-        registry.register(crate::tools::FinishTool::from_schema(Some(task), None));
-
-        let shown = registry
-            .get("finish")
-            .expect("finish is registered")
-            .get_input_schema()
-            .get_raw_schema()
-            .clone();
-        let calls = vec![ToolCall {
-            id: "c1".to_string(),
-            name: "finish".to_string(),
-            input: serde_json::json!({}),
-        }];
-        let content = registry.execute(&calls, &test_ctx()).await[0]
+        let finish = crate::tools::FinishTool::from_schema(Some(task), None);
+        let shown = finish.get_input_schema().get_raw_schema().clone();
+        let content = finish
+            .invoke(serde_json::json!({}), &test_ctx())
+            .await
             .get_content()
             .to_string();
 
@@ -1279,45 +979,19 @@ mod tests {
     }
 
     #[test]
-    fn registry_clone() {
-        let mut registry = ToolRegistry::default();
-        registry.register(mock_tool("t", true, "ok"));
-        let cloned = registry.clone();
-        assert_eq!(cloned.tools().len(), 1);
-    }
-
-    #[tokio::test]
-    async fn execute_unknown_tool_returns_error() {
-        let registry = ToolRegistry::default();
-        let ctx = test_ctx();
-        let calls = vec![ToolCall {
-            id: "c1".into(),
-            name: "nonexistent".into(),
-            input: serde_json::json!({}),
-        }];
-
-        let results = registry.execute(&calls, &ctx).await;
-        assert_eq!(results.len(), 1);
-        assert!(results[0].get_name() == Event::TOOL_CALL_FAILED);
-        assert!(results[0]
-            .get_content()
-            .contains("No tool named `nonexistent`"));
+    fn a_tool_list_clone_keeps_its_tools() {
+        let tools = vec![mock_tool("t", true, "ok")];
+        let cloned = tools.clone();
+        assert_eq!(cloned.len(), 1);
     }
 
     #[tokio::test]
     async fn non_object_input_is_reported_as_such_and_never_reaches_the_tool() {
-        let mut registry = ToolRegistry::default();
-        registry.register(mock_tool("grep", true, "matches"));
-        let ctx = test_ctx();
-        let calls = vec![ToolCall {
-            id: "c1".into(),
-            name: "grep".into(),
-            input: Value::String(r#"{"pattern": "exec""#.into()),
-        }];
-
-        let results = registry.execute(&calls, &ctx).await;
-        assert_eq!(results[0].get_data()["kind"], "schema_failed");
-        let content = results[0].get_content();
+        let result = mock_tool("grep", true, "matches")
+            .invoke(Value::String(r#"{"pattern": "exec""#.into()), &test_ctx())
+            .await;
+        assert_eq!(result.get_data()["kind"], "schema_failed");
+        let content = result.get_content();
         assert!(
             content.contains("expected type object, got string"),
             "{content}"
@@ -1340,7 +1014,7 @@ mod tests {
                 "properties": { "count": { "type": "integer" } },
                 "required": ["count"],
             }))
-            .handler(|input: Value, _ctx| async move { Event::success(input["count"].to_string()) })
+            .handler(|input: Value| async move { Event::success(input["count"].to_string()) })
     }
 
     async fn call_typed(input: Value) -> (String, bool) {
@@ -1348,15 +1022,7 @@ mod tests {
     }
 
     async fn call_typed_in(input: Value, ctx: &ToolContext) -> (String, bool) {
-        let mut registry = ToolRegistry::default();
-        registry.register(typed_tool());
-        let calls = vec![ToolCall {
-            id: "c1".into(),
-            name: "typed".into(),
-            input,
-        }];
-        let mut results = registry.execute(&calls, ctx).await;
-        let result = results.remove(0);
+        let result = typed_tool().invoke(input, ctx).await;
         let succeeded = result.get_name() == Event::TOOL_CALL_FINISHED;
         (result.into_content(), succeeded)
     }
@@ -1398,14 +1064,7 @@ mod tests {
 
     /// One retyped call's result, for the tests reading its repair notes.
     async fn typed_result(input: Value) -> Event {
-        let mut registry = ToolRegistry::default();
-        registry.register(typed_tool());
-        let calls = vec![ToolCall {
-            id: "c1".into(),
-            name: "typed".into(),
-            input,
-        }];
-        registry.execute(&calls, &test_ctx()).await.remove(0)
+        typed_tool().invoke(input, &test_ctx()).await
     }
 
     #[tokio::test]
@@ -1426,125 +1085,48 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unknown_tool_error_names_the_registered_tools() {
-        let mut registry = ToolRegistry::default();
-        registry.register(mock_tool("grep", true, "matches"));
-        registry.register(mock_tool("read_file", true, "file contents"));
-        let ctx = test_ctx();
-        let calls = vec![ToolCall {
-            id: "c1".into(),
-            name: "ripgrep".into(),
-            input: serde_json::json!({}),
-        }];
-
-        let results = registry.execute(&calls, &ctx).await;
-        assert_eq!(
-            results[0].get_content(),
-            DirectiveStore::default().render(
-                TOOL_NOT_FOUND,
-                &[("name", "ripgrep"), ("available", "grep, read_file")]
-            )
-        );
-    }
-
-    #[tokio::test]
-    async fn execute_concurrent_tools_at_the_same_time() {
-        let mut registry = ToolRegistry::default();
-        registry.register(mock_tool("read1", true, "result1"));
-        registry.register(mock_tool("read2", true, "result2"));
-        let ctx = test_ctx();
-
-        let calls = vec![
-            ToolCall {
-                id: "c1".into(),
-                name: "read1".into(),
-                input: serde_json::json!({}),
-            },
-            ToolCall {
-                id: "c2".into(),
-                name: "read2".into(),
-                input: serde_json::json!({}),
-            },
-        ];
-
-        let results = registry.execute(&calls, &ctx).await;
-        assert_eq!(results.len(), 2);
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn a_call_whose_task_panics_is_still_answered() {
-        // Leaving the slot empty would send the model a `tool_use` block with
-        // no result, which providers reject.
-        let mut registry = ToolRegistry::default();
-        registry.register(
-            Tool::new("explode")
-                .description("panics")
-                .concurrent(true)
-                .handler(|_: Value, _ctx| async {
-                    panic!("boom");
-                }),
-        );
-        registry.register(mock_tool("steady", true, "ok"));
-        let ctx = test_ctx();
-        let calls = vec![
-            ToolCall {
-                id: "c1".into(),
-                name: "explode".into(),
-                input: serde_json::json!({}),
-            },
-            ToolCall {
-                id: "c2".into(),
-                name: "steady".into(),
-                input: serde_json::json!({}),
-            },
-        ];
-
-        let results = registry.execute(&calls, &ctx).await;
-
-        assert_eq!(results.len(), 2);
-        assert!(
-            results[0].get_content().contains("panicked"),
-            "{:?}",
-            results[0]
-        );
-        assert_eq!(results[1].get_content(), "ok");
-    }
-
-    #[tokio::test]
-    async fn execute_serial_tool() {
-        let mut registry = ToolRegistry::default();
-        registry.register(mock_tool("write_file", false, "written"));
-        let ctx = test_ctx();
-
-        let calls = vec![ToolCall {
-            id: "c1".into(),
-            name: "write_file".into(),
-            input: serde_json::json!({"path": "/tmp/test"}),
-        }];
-
-        let results = registry.execute(&calls, &ctx).await;
-        assert_eq!(results.len(), 1);
-        assert!(results[0].get_name() == Event::TOOL_CALL_FINISHED);
-        assert_eq!(results[0].get_content(), "written");
-    }
-
-    #[tokio::test]
     async fn malformed_tool_event_becomes_a_recoverable_failure() {
         let tool = Tool::new("broken")
             .description("broken")
-            .handler(|_: Value, _| async { Event::new("not_a_terminal_event") });
-        let mut registry = ToolRegistry::default();
-        registry.register(tool);
-        let calls = vec![ToolCall {
-            id: "c1".into(),
-            name: "broken".into(),
-            input: serde_json::json!({}),
-        }];
-
-        let event = registry.execute(&calls, &test_ctx()).await.remove(0);
+            .handler(|_: Value| async { Event::new("not_a_terminal_event") });
+        let event = tool.invoke(serde_json::json!({}), &test_ctx()).await;
         assert_eq!(event.get_name(), Event::TOOL_CALL_FAILED);
         assert_eq!(event.get_data()["kind"], "execution_failed");
         assert!(event.get_content().contains("returned an invalid event"));
+    }
+
+    #[tokio::test]
+    async fn cancelling_a_run_drops_a_public_handler_future() {
+        struct Dropped(Arc<std::sync::atomic::AtomicBool>);
+
+        impl Drop for Dropped {
+            fn drop(&mut self) {
+                self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+
+        let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let marker = Arc::clone(&dropped);
+        let tool = Tool::new("wait")
+            .description("wait forever")
+            .handler(move |_: Value| {
+                let guard = Dropped(Arc::clone(&marker));
+                async move {
+                    let _guard = guard;
+                    std::future::pending::<Event>().await
+                }
+            });
+        let run = Arc::new(Run::default());
+        let ctx = test_ctx().run(Arc::clone(&run));
+        let call = tokio::spawn(async move { tool.call(serde_json::json!({}), &ctx).await });
+
+        tokio::task::yield_now().await;
+        run.set_draining(crate::agents::tasks::FinishReason::Cancelled);
+        let event = call.await.unwrap();
+
+        assert_eq!(event.get_name(), Event::TOOL_CALL_FAILED);
+        assert_eq!(event.get_content(), "tool call cancelled");
+        assert!(dropped.load(std::sync::atomic::Ordering::SeqCst));
     }
 
     #[test]
@@ -1574,7 +1156,7 @@ mod tests {
     }
 
     #[test]
-    fn valid_handler_repairs_survive_but_output_path_is_registry_owned() {
+    fn valid_handler_repairs_survive_but_output_path_is_runtime_owned() {
         let event = validate_tool_event(
             "custom",
             Event::new(Event::TOOL_CALL_FINISHED).data(serde_json::json!({
@@ -1613,7 +1195,7 @@ mod tests {
         }
         let tool = Tool::new("typed")
             .description("typed")
-            .handler(|_: Args, _ctx| async move { Event::success("ran") });
+            .handler(|_: Args| async move { Event::success("ran") });
         let outcome = tool.call(serde_json::json!({}), &test_ctx()).await;
         assert!(
             outcome.get_name() == Event::TOOL_CALL_FAILED
@@ -1628,11 +1210,12 @@ mod tests {
     async fn a_cloned_tool_runs_the_same_handler() {
         // The bindings register one tool on several agents; the clones must
         // share the handler, not lose it.
-        let tool = Tool::new("echo").description("Echoes input").handler(
-            |input: Value, _ctx| async move {
-                Event::success(input["text"].as_str().unwrap_or("").to_string())
-            },
-        );
+        let tool =
+            Tool::new("echo")
+                .description("Echoes input")
+                .handler(|input: Value| async move {
+                    Event::success(input["text"].as_str().unwrap_or("").to_string())
+                });
         let cloned = tool.clone();
         let outcome = cloned
             .call(serde_json::json!({"text": "hi"}), &test_ctx())
@@ -1649,7 +1232,7 @@ mod tests {
                 serde_json::json!({"type": "object", "properties": {"text": {"type": "string"}}}),
             )
             .concurrent(true)
-            .handler(|input: Value, _ctx| async move {
+            .handler(|input: Value| async move {
                 let text = input["text"].as_str().unwrap_or("").to_string();
                 Event::success(text)
             });
@@ -1676,8 +1259,8 @@ mod tests {
     }
 
     /// The call an aggregate test answers with a synthetic result.
-    fn sized_call(id: &str) -> ToolCall {
-        ToolCall {
+    fn sized_call(id: &str) -> ContentBlock {
+        ContentBlock::ToolUse {
             id: id.into(),
             name: "dump".into(),
             input: serde_json::json!({}),
@@ -1811,7 +1394,7 @@ mod tests {
         // Many small results whose total far exceeds the cap, but
         // each is already stub-marked. Aggregate should bail
         // rather than spin: stubs are skipped, so no candidates.
-        let calls: Vec<ToolCall> = (0..5).map(|i| sized_call(&format!("c{i}"))).collect();
+        let calls: Vec<ContentBlock> = (0..5).map(|i| sized_call(&format!("c{i}"))).collect();
         let mut results: Vec<Event> = (0..5)
             .map(|i| {
                 Event::success(format!(

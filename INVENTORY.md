@@ -59,7 +59,7 @@ The rules the tables never repeat.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `Agent { label: string?, interactive: boolean, queue: QueueRef, id: OnceLock<string>, provider: Provider?, model: Model?, role: string, templates: [string, string][], handover: Task?, tools: ToolRegistry, dir: string, knowledge: Knowledge, directives: DirectiveStore }` | pub with private fields |
+| Rust | `Agent { label: string?, interactive: boolean, queue: QueueRef, id: OnceLock<string>, provider: Provider?, model: Model?, role: string, templates: [string, string][], handover: Task?, tools: Tool[], dir: string, knowledge: Knowledge, directives: DirectiveStore }` | pub with private fields |
 | Rust | `impl Clone for Agent` | pub |
 | Rust | `.new(): this` | pub |
 | Python | `Agent()` | |
@@ -98,7 +98,9 @@ The rules the tables never repeat.
 | Rust | `.upgrade(): Queue?` | crate |
 | Rust | `Agent.is_interactive(): boolean` | super |
 | Rust | `.handles(agent_label: string?, task_label: string?): boolean` | super |
-| Rust | `.get_tools(task: Task): ToolRegistry` | super |
+| Rust | `.get_tools(task: Task): Tool[]` | super |
+| Rust | `.get_tool(tools: Tool[], tool_name: string): Tool?` | crate |
+| Rust | `.register_tool(tool: Tool): void` | private |
 | Rust | `.get_provider(): Provider` | super |
 | Rust | `.get_model(): Model` | super |
 | Rust | `.get_knowledge(): Knowledge` | super |
@@ -227,18 +229,13 @@ The rules the tables never repeat.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `RESUME_OR_FINISH_DETAIL: string` | private |
-| Rust | `TaskContext { agent: Agent, model: Model, queue: Queue, run: Run, task_id: string, system_prompt: string, policy: Policy, tools: ToolRegistry, consecutive_schema_failures: number }` | super |
-| Rust | `.emit_event(event: Event): Event` | super |
-| Rust | `.task(): Task?` | super |
-| Rust | `.retry_directive(detail: string, event: Event): string` | super |
-| Rust | `.fail_task(): void` | super |
-| Rust | `.fail_with(reason: RequestErrorKind, message: string): void` | super |
-| Rust | `run_agent(agent: Agent): Promise<void>` | super |
-| Rust | `run_is_over(agent: Agent, queue: Queue): boolean` | private |
-| Rust | `claim(agent: Agent, queue: Queue): TaskContext?` | private |
-| Rust | `evaluate(context: TaskContext): Step?` | private |
-| Rust | `silence_retry(context: TaskContext): Step?` | private |
+| Rust | `Agent.run(): Promise<void>` | super |
+| Rust | `.run_task(queue: Queue, task: Task): Promise<void>` | private |
+| Rust | `.run_is_over(queue: Queue): boolean` | private |
+| Rust | `.claim_task(queue: Queue): Task?` | private |
+| Rust | `.emit_event(queue: Queue, task_id: string, event: Event): Event` | super |
+| Rust | `.fail_task(queue: Queue, task_id: string): void` | super |
+| Rust | `.silence_retry(queue: Queue, task_id: string, policy: Policy, consecutive_schema_failures: number): boolean` | private |
 
 ## `crates/agentwerk/src/agents/loop/compact.rs`
 
@@ -246,8 +243,8 @@ The rules the tables never repeat.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `run(context: TaskContext, reason: CompactReason): Promise<Step?>` | super |
-| Rust | `proactive_compaction_needed(context: TaskContext, task: Task): boolean` | super |
+| Rust | `Agent.compact(queue: Queue, task_id: string, reason: CompactReason): Promise<boolean>` | super |
+| Rust | `.needs_compaction(queue: Queue, task_id: string, task: Task, system_prompt: string, policy: Policy, tools: Tool[]): boolean` | super |
 
 ## `crates/agentwerk/src/agents/loop/main.rs`
 
@@ -267,11 +264,6 @@ The rules the tables never repeat.
 | Rust | `POLL_INTERVAL: number = 50` | private |
 | Rust | `CompactReason` | private |
 | Rust | `.Proactive`, `.Reactive` | private |
-| Rust | `Step` | private |
-| Rust | `.Evaluate` | private |
-| Rust | `.Compact(CompactReason)` | private |
-| Rust | `.Request` | private |
-| Rust | `.ToolCalls(ToolCall[])` | private |
 
 ## `crates/agentwerk/src/agents/loop/request.rs`
 
@@ -279,7 +271,8 @@ The rules the tables never repeat.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `run(context: TaskContext): Promise<Step?>` | super |
+| Rust | `Agent.request(queue: Queue, task_id: string, system_prompt: string, policy: Policy, tools: Tool[]): Promise<ContentBlock[]? throws ProviderError>` | super |
+| Rust | `.fail_request(queue: Queue, task_id: string, error: ProviderError): void` | private |
 
 ## `crates/agentwerk/src/agents/loop/tool_call.rs`
 
@@ -287,7 +280,10 @@ The rules the tables never repeat.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `run(context: TaskContext, calls: ToolCall[]): Promise<Step?>` | super |
+| Rust | `MAX_CONCURRENT_CALLS: number = 10` | private |
+| Rust | `Agent.call_tools(queue: Queue, task_id: string, tools: Tool[], calls: ContentBlock[], policy: Policy, consecutive_schema_failures: number): Promise<boolean>` | super |
+| Rust | `.tool_is_concurrent(tools: Tool[], call: ContentBlock): boolean` | private |
+| Rust | `.call_tool(tools: Tool[], call: ContentBlock, context: ToolContext): Promise<Event>` | private |
 
 ## `crates/agentwerk/src/agents/mod.rs`
 
@@ -892,7 +888,7 @@ Not bound, like the rest of `codegrep`.
 | both | `.RUN_STARTED`, `.RUN_FINISHED`, `.TASK_CREATED`, `.TASK_STARTED`, `.TASK_FINISHED`, `.TASK_FAILED`, `.TURN_STARTED`: string | pub |
 | both | `.REQUEST_STARTED`, `.REQUEST_FINISHED`, `.REQUEST_FAILED`, `.REQUEST_RETRIED`, `.TEXT_CHUNK_RECEIVED`, `.TOOL_CALL_REPAIRED`: string | pub |
 | both | `.TOOL_CALL_DECLINED`, `.TOOL_CALL_STARTED`, `.TOOL_CALL_FINISHED`, `.TOOL_CALL_FAILED`: string | pub |
-| both | `.FILE_OPEN_FINISHED`, `.FILE_OPEN_FAILED`, `.KNOWLEDGE_WRITTEN`, `.KNOWLEDGE_READ`, `.KNOWLEDGE_REMOVED`, `.KNOWLEDGE_LISTED`, `.KNOWLEDGE_FAILED`: string | pub |
+| both | `.KNOWLEDGE_WRITTEN`, `.KNOWLEDGE_READ`, `.KNOWLEDGE_REMOVED`, `.KNOWLEDGE_LISTED`, `.KNOWLEDGE_FAILED`: string | pub |
 | both | `.POLICY_VIOLATED`, `.SCHEMA_RETRIED`, `.COMPACTION_STARTED`, `.COMPACTION_PROGRESS`, `.COMPACTION_FINISHED`, `.COMPACTION_FAILED`: string | pub |
 | both | `Event.new(name: string): this` | pub |
 | both | `.data(value: json): this` | pub |
@@ -1872,7 +1868,7 @@ Not bound: it is how `CommandTool` reads one command line.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | re-exports `Tool`, `ToolContext`, `CommandTool`, `EditFileTool`, `EventTool`, `FetchTool`, `GlobTool`, `GrepTool`, `KnowledgeTool`, `ListDirectoryTool`, `ReadFileTool`, `FinishTool`, `TaskTool`, `WriteFileTool` | pub |
+| Rust | re-exports `Tool`, `CommandTool`, `EditFileTool`, `EventTool`, `FetchTool`, `GlobTool`, `GrepTool`, `KnowledgeTool`, `ListDirectoryTool`, `ReadFileTool`, `FinishTool`, `TaskTool`, `WriteFileTool` | pub |
 
 ### Internal
 
@@ -1972,35 +1968,24 @@ Not bound: it is how `CommandTool` reads one command line.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `ToolContext { dir: string, run: Run?, queue: Queue?, agent_id: string?, task_id: string?, knowledge: Knowledge? }` | pub with crate-private fields |
 | Python | not bound: a `@tool` function receives its input as keyword arguments only | |
-| Rust | `.new(dir: string): this` | pub |
-| Rust | `.get_dir(): string` | pub |
-| Rust | `.cancelled(): Promise<void>` | pub |
-| Rust | `impl Debug for ToolContext` | pub |
 | both | terminal `Event`: `tool_call_finished` carries `data.output` plus optional `data.output_path` and `data.repairs`; `tool_call_failed` carries `data.message` and `data.kind` | pub |
 | Python | custom tools are folded into the `@tool` decorator; Python does not expose incremental `Tool` configuration | |
-| Rust | `Tool { name: string, description: string?, schema: Schema, concurrent: boolean, paths: string[], handler: ToolHandler? }` | pub with private fields |
+| Rust | `Tool { name: string, description: string?, schema: Schema, concurrent: boolean, handler: ToolHandler? }` | pub with private fields |
 | Python | `Tool`: an opaque handle the built-in tool functions return. An ad-hoc tool is a decorated function, not a `Tool` | |
 | Rust | `impl Debug for Tool` | pub |
 | Rust | `.new(name: string): Tool` | pub |
 | Python | the `@tool` decorator: a decorated function carries the name, description, and schema | |
-| Rust | `.call(input: json, ctx: ToolContext): Promise<Event>` | pub |
-| Python | not bound: the loop calls the decorated function | |
 | Rust | `.get_name(): string` | pub |
 | Rust | `.get_description(): string` | pub |
 | Rust | `.get_input_schema(): Schema` | pub |
-| Rust | `.is_concurrent(): boolean` | pub |
-| Rust | `.opened_paths(input: json): string[]` | pub |
 | Rust | `.schema(schema: json): this` | pub |
 | Python | `@tool(schema=..)`: raises `ValueError` when `.tool(fn)` registers it, one call later than the Rust panic | |
 | Rust | `.concurrent(concurrent: boolean): this` | pub |
 | Python | `@tool(concurrent=..)` | |
-| Rust | `.paths(fields: string[]): this` | pub |
-| Python | `@tool(paths=[..])` | |
 | Rust | `.description(description: Text): this` | pub |
 | Python | `@tool(description=..)`, defaulting to the decorated function's docstring: a `str` is the description, an `os.PathLike` names the file holding it | |
-| Rust | `.handler(handler: (input: json, ctx: ToolContext) => Promise<Event>): this` | pub |
+| Rust | `.handler(handler: (input: json) => Promise<Event>): this` | pub |
 | Python | the decorated function itself | |
 | Rust | registration panics when description or handler is missing | internal validation of public configuration |
 
@@ -2008,44 +1993,33 @@ Not bound: it is how `CommandTool` reads one command line.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `MAX_CONCURRENT_CALLS: number = 10` | private |
 | Rust | `PER_TOOL_CAP: number = 50000` | private |
 | Rust | `PER_TURN_CAP: number = 200000` | private |
 | Rust | `PREVIEW_CHARS: number = 2000` | private |
+| Rust | `ToolContext { dir: string, run: Run?, queue: Queue?, agent_id: string?, task_id: string?, directives: DirectiveStore }` | crate |
+| Rust | `.new(dir: string): this` | crate |
 | Rust | `ToolContext.run(run: Run): this` | crate |
 | Rust | `.queue(queue: Queue): this` | crate |
 | Rust | `.agent_id(name: string): this` | crate |
 | Rust | `.task_id(id: string): this` | crate |
-| Rust | `.knowledge(knowledge: Knowledge): this` | crate |
+| Rust | `.directives(directives: DirectiveStore): this` | crate |
+| Rust | `.cancelled(): Promise<void>` | crate |
 | Rust | `.emit_event(event: Event): void` | crate |
-| Rust | `ToolCall { id: string, name: string, input: json }` | crate |
+| Rust | `.call(input: json, ctx: ToolContext): Promise<Event>` | crate |
+| Rust | `.invoke(input: json, ctx: ToolContext): Promise<Event>` | crate |
+| Rust | `.is_concurrent(): boolean` | crate |
+| Rust | `.handler_with_context(handler: (input: json, ctx: ToolContext) => Promise<Event>): this` | crate |
 | Python | not bound: a call reaches Python as the decorated function's arguments | |
-| Rust | `ToolRegistry { tools: Tool[] }` | crate |
-| Rust | `impl Debug for ToolRegistry` | crate |
-| Rust | `.register(tool: Tool): void` | crate |
-| Rust | `.completion(schema: Schema?, handover: Task?): this` | crate |
-| Rust | `.resolve(name: string): Tool throws string` | private |
-| Rust | `.get(name: string): Tool?` | crate |
-| Rust | `.contains(name: string): boolean` | crate |
-| Rust | `.names(): string[]` | private |
-| Rust | `.tools(): Tool[]` | crate |
-| Rust | `.execute(calls: ToolCall[], ctx: ToolContext): Promise<Event[]>` | crate |
-| Rust | `.run_concurrently(batch: [number, ToolCall][], ctx: ToolContext, semaphore: tokio::sync::Semaphore): Promise<[number, Event][]>` | private |
-| Rust | `ToolBatch` | private |
-| Rust | `.Concurrent([number, ToolCall][])` | private |
-| Rust | `.Serial(number, ToolCall)` | private |
-| Rust | `partition_tool_calls(calls: ToolCall[], registry: ToolRegistry): ToolBatch[]` | private |
-| Rust | `answer_every_call(calls: ToolCall[], answers: Event?[]): Event[]` | private |
-| Rust | `lookup_key(name: string): string` | private |
 | Rust | `ToolHandler = (input: json, ctx: ToolContext) => Promise<Event>` | private |
 | Rust | `read_arguments_then(name: string, handler: (input: json, ctx: ToolContext) => Promise<Event>): ToolHandler` | private |
-| Rust | `invoke(resolved: Tool throws string, call: ToolCall, ctx: ToolContext): Promise<Event>` | private |
+| Rust | `validate_tool_event(tool: string, event: Event): Event` | private |
 | Rust | `retype_message(pointer: string): string` | crate |
-| Rust | `cap_results(calls: ToolCall[], results: Event[], ctx: ToolContext): void` | private |
+| Rust | `Event.cap_tool_results(calls: ContentBlock[], results: Event[], ctx: ToolContext): void` | crate |
+| Rust | `cap_results(calls: ContentBlock[], results: Event[], ctx: ToolContext): void` | private |
 | Rust | `replace_empty_output(result: Event, tool_name: string): void` | private |
 | Rust | `cap_oversized_result(result: Event, ctx: ToolContext, call_id: string, per_tool_cap: number): void` | private |
-| Rust | `cap_aggregate_outputs(calls: ToolCall[], results: Event[], ctx: ToolContext, per_turn_cap: number): void` | private |
-| Rust | `largest_inline_success(calls: ToolCall[], results: Event[]): [ToolCall, string, string?]?` | private |
+| Rust | `cap_aggregate_outputs(calls: ContentBlock[], results: Event[], ctx: ToolContext, per_turn_cap: number): void` | private |
+| Rust | `largest_inline_success(calls: ContentBlock[], results: Event[]): [string, Event]?` | private |
 | Rust | `write_out(content: string, ctx: ToolContext, call_id: string): string?` | private |
 | Rust | `persist_output(ctx: ToolContext, tool_use_id: string, content: string): PersistedOutput?` | private |
 | Rust | `PersistedOutput { rel: string, display: string }` | private |

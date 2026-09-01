@@ -394,7 +394,7 @@ mod tests {
         .await;
 
         assert!(result.get_name() == Event::TOOL_CALL_FAILED);
-        assert!(unwrap_text(&result).contains("`id` is missing"));
+        assert!(unwrap_text(&result).contains("Provide its `id`"));
     }
 
     #[tokio::test]
@@ -411,7 +411,7 @@ mod tests {
         .await;
 
         assert!(result.get_name() == Event::TOOL_CALL_FAILED);
-        assert!(unwrap_text(&result).contains("No task t-404"));
+        assert!(unwrap_text(&result).contains("No task with `id` t-404"));
     }
 
     #[tokio::test]

@@ -420,7 +420,7 @@ impl From<CommandTool> for Tool {
             .description(description)
             .schema(SCHEMA)
             .concurrent(concurrent)
-            .handler(move |args: CommandArgs, ctx: ToolContext| {
+            .handler_with_context(move |args: CommandArgs, ctx: ToolContext| {
                 let config = Arc::clone(&config);
                 async move { config.run(args, ctx).await }
             })
@@ -526,19 +526,14 @@ mod tests {
     async fn a_call_without_a_command_is_rejected() {
         // The schema requires `command`, so dispatch rejects the call before
         // the tool runs and names the property.
-        let mut registry = crate::tools::ToolRegistry::default();
-        registry.register(CommandTool::new("echo"));
-        let calls = vec![crate::tools::ToolCall {
-            id: "c1".into(),
-            name: "echo".into(),
-            input: serde_json::json!({}),
-        }];
-        let results = registry.execute(&calls, &test_tool_context()).await;
-        assert_eq!(results[0].get_data()["kind"], "schema_failed");
+        let result = Tool::from(CommandTool::new("echo"))
+            .invoke(serde_json::json!({}), &test_tool_context())
+            .await;
+        assert_eq!(result.get_data()["kind"], "schema_failed");
         assert!(
-            results[0].get_content().contains("`command`"),
+            result.get_content().contains("`command`"),
             "{}",
-            results[0].get_content()
+            result.get_content()
         );
     }
 

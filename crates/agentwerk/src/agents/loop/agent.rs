@@ -7,248 +7,209 @@ use std::sync::Arc;
 use crate::agents::agent::Agent;
 use crate::agents::policy::{Policy, PolicyViolation};
 use crate::agents::query::Matcher;
-use crate::agents::tasks::{policy_violated, Queue, Reply, Run, Status, Task};
+use crate::agents::tasks::{policy_violated, Queue, Reply, Status, Task};
 use crate::event::Event;
 use crate::prompts::directives::{NO_TOOL_CALLED, REPLY_REJECTED};
-use crate::providers::{AsUserMessage, Message, Model, RequestErrorKind};
-use crate::tools::ToolRegistry;
+use crate::providers::{AsUserMessage, Message, ProviderError};
 
-use super::{compact, request, tool_call, CompactReason, Step, POLL_INTERVAL};
+use super::{CompactReason, POLL_INTERVAL};
 
-pub(super) struct TaskContext<'a> {
-    pub(super) agent: &'a Agent,
-    pub(super) model: &'a Model,
-    pub(super) queue: &'a Arc<Queue>,
-    pub(super) run: Arc<Run>,
+impl Agent {
+    pub(super) async fn run(self) {
+        let queue = self
+            .queue
+            .upgrade()
+            .expect("Agent's Queue was dropped before run() finished");
 
-    pub(super) task_id: String,
-    pub(super) system_prompt: String,
-    pub(super) policy: Policy,
-
-    pub(super) tools: ToolRegistry,
-
-    // Spans turns; trips max_schema_retries.
-    pub(super) consecutive_schema_failures: u32,
-}
-
-impl<'a> TaskContext<'a> {
-    pub(super) fn emit_event(&self, event: Event) -> Event {
-        self.queue
-            .emit_event(event.task_id(&self.task_id).agent_id(self.agent.get_id()))
+        loop {
+            if self.run_is_over(&queue) {
+                return;
+            }
+            let Some(task) = self.claim_task(&queue) else {
+                tokio::time::sleep(POLL_INTERVAL).await;
+                continue;
+            };
+            self.run_task(&queue, task).await;
+        }
     }
 
-    pub(super) fn task(&self) -> Option<Task> {
-        self.queue.get_task(&self.task_id)
+    async fn run_task(&self, queue: &Arc<Queue>, task: Task) {
+        let task_id = task.id.clone();
+        let tools = self.get_tools(&task);
+        let policy = queue.get_policy();
+        let knowledge_index = self.get_knowledge().get_index();
+        let system_prompt =
+            self.system_prompt(Some(&knowledge_index), &policy, &queue.stats, &task_id);
+        let mut consecutive_schema_failures = 0;
+
+        self.emit_event(queue, &task_id, Event::new(Event::TURN_STARTED));
+        if task.replies.is_empty() {
+            queue.append_reply(&task_id, Reply::system_text(system_prompt.clone()));
+            let Message::User {
+                content: task_blocks,
+            } = task.as_user_message()
+            else {
+                unreachable!("Task::as_user_message returns Message::User");
+            };
+            queue.append_reply(&task_id, Reply::user(&task_blocks, &HashMap::new()));
+        }
+
+        loop {
+            if !queue.run.is_working() || policy_violated(&policy, &queue.stats).is_some() {
+                break;
+            }
+            let Some(task) = queue.get_task(&task_id) else {
+                break;
+            };
+            if task.is_cancelled() || !task.is_pending() {
+                break;
+            }
+            if !task.is_waiting_for_response() {
+                if self.is_interactive()
+                    || !self.silence_retry(
+                        queue,
+                        &task_id,
+                        &policy,
+                        &mut consecutive_schema_failures,
+                    )
+                {
+                    break;
+                }
+                continue;
+            }
+            if self.needs_compaction(queue, &task_id, &task, &system_prompt, &policy, &tools)
+                && !self
+                    .compact(queue, &task_id, CompactReason::Proactive)
+                    .await
+            {
+                break;
+            }
+
+            let calls = match self
+                .request(queue, &task_id, &system_prompt, &policy, &tools)
+                .await
+            {
+                Ok(Some(calls)) => calls,
+                Ok(None) => break,
+                Err(ProviderError::ContextWindowExceeded { .. }) => {
+                    if self.compact(queue, &task_id, CompactReason::Reactive).await {
+                        continue;
+                    }
+                    break;
+                }
+                Err(_) => break,
+            };
+            if calls.is_empty() {
+                continue;
+            }
+            if !self
+                .call_tools(
+                    queue,
+                    &task_id,
+                    &tools,
+                    calls,
+                    &policy,
+                    &mut consecutive_schema_failures,
+                )
+                .await
+            {
+                break;
+            }
+        }
     }
 
-    /// The corrective directive to inject for `detail`. Everything the
-    /// `SchemaRetried` this retry emitted carries is bound alongside it, so a
-    /// replacement can read how far into the budget this is and who it
-    /// addresses without reaching for an event.
-    pub(super) fn retry_directive(&self, detail: &str, attempt: u32, max_attempts: u32) -> String {
-        self.agent.get_directives().render(
+    fn run_is_over(&self, queue: &Queue) -> bool {
+        if !queue.run.is_working() {
+            return true;
+        }
+        let policy = queue.get_policy();
+        if let Some((violation, limit)) = policy_violated(&policy, &queue.stats) {
+            queue.emit_event(
+                Event::new(Event::POLICY_VIOLATED)
+                    .data(serde_json::json!({ "policy": violation, "limit": limit }))
+                    .agent_id(self.get_id()),
+            );
+            return true;
+        }
+        false
+    }
+
+    fn claim_task(&self, queue: &Arc<Queue>) -> Option<Task> {
+        let label = self.label.clone();
+        let claimable = (move |task: &Task| {
+            task.status == Status::Todo
+                && Agent::handles(label.as_deref(), task.label.as_deref())
+                && !task.is_cancelled()
+        })
+        .into_query();
+        let agent_id = self.get_id().to_string();
+        let interactive = self.is_interactive();
+        let resumable = move |task: &Task| {
+            task.status == Status::InProgress
+                && task.assignee.as_deref() == Some(agent_id.as_str())
+                && (task.is_waiting_for_response() || !interactive)
+                && !task.is_cancelled()
+        };
+        let task_id = queue
+            .claim(&claimable, self.get_id())
+            .or_else(|| queue.find_task(resumable).map(|task| task.id.clone()))?;
+        queue.get_task(&task_id)
+    }
+
+    pub(super) fn emit_event(&self, queue: &Queue, task_id: &str, event: Event) -> Event {
+        queue.emit_event(event.task_id(task_id).agent_id(self.get_id()))
+    }
+
+    pub(super) fn fail_task(&self, queue: &Queue, task_id: &str) {
+        let _ = queue.set_failed_by(task_id, self.get_id());
+    }
+
+    fn silence_retry(
+        &self,
+        queue: &Queue,
+        task_id: &str,
+        policy: &Policy,
+        consecutive_schema_failures: &mut u32,
+    ) -> bool {
+        let max = policy.max_schema_retries.unwrap_or(u32::MAX);
+        *consecutive_schema_failures = consecutive_schema_failures.saturating_add(1);
+        if *consecutive_schema_failures >= max {
+            self.emit_event(
+                queue,
+                task_id,
+                Event::new(Event::POLICY_VIOLATED).data(serde_json::json!({
+                    "policy": PolicyViolation::MaxSchemaRetries,
+                    "limit": u64::from(max),
+                })),
+            );
+            self.fail_task(queue, task_id);
+            return false;
+        }
+        let detail = self.get_directives().render(NO_TOOL_CALLED, &[]);
+        let attempt = *consecutive_schema_failures;
+        self.emit_event(
+            queue,
+            task_id,
+            Event::new(Event::SCHEMA_RETRIED).data(serde_json::json!({
+                "attempt": attempt,
+                "max_attempts": max,
+                "kind": "tool_not_called",
+                "message": detail,
+            })),
+        );
+        let directive = self.get_directives().render(
             REPLY_REJECTED,
             &[
-                ("detail", detail),
+                ("detail", &detail),
                 ("attempt", &attempt.to_string()),
-                ("max_attempts", &max_attempts.to_string()),
-                ("task_id", &self.task_id),
-                ("agent", self.agent.get_id()),
+                ("max_attempts", &max.to_string()),
+                ("task_id", task_id),
+                ("agent", self.get_id()),
             ],
-        )
-    }
-
-    /// Fail the task without naming a cause. The caller has already emitted
-    /// the event that does.
-    pub(super) fn fail_task(&self) {
-        let _ = self.queue.set_failed_by(&self.task_id, self.agent.get_id());
-    }
-
-    /// Fail the task because a request did not come back. Reserved for the
-    /// request path, so `RequestFailed` never reports a request that was
-    /// never made.
-    pub(super) fn fail_with(&self, reason: RequestErrorKind, message: String) {
-        self.emit_event(Event::new(Event::REQUEST_FAILED).data(serde_json::json!({
-            "model": self.model.name,
-            "kind": reason,
-            "message": message,
-        })));
-        self.fail_task();
-    }
-}
-
-pub(super) async fn run_agent(agent: Agent) {
-    let queue = agent
-        .queue
-        .upgrade()
-        .expect("Agent's Queue was dropped before run() finished");
-
-    loop {
-        if run_is_over(&agent, &queue) {
-            return;
-        }
-        let Some(mut context) = claim(&agent, &queue) else {
-            tokio::time::sleep(POLL_INTERVAL).await;
-            continue;
-        };
-        let mut step = Some(Step::Evaluate);
-        while let Some(current) = step {
-            step = match current {
-                Step::Evaluate => evaluate(&mut context),
-                Step::Compact(reason) => compact::run(&mut context, reason).await,
-                Step::Request => request::run(&mut context).await,
-                Step::ToolCalls(calls) => tool_call::run(&mut context, calls).await,
-            };
-        }
-    }
-}
-
-/// True once the agent has no reason to claim again: the run has left
-/// `Working`, or a limit is breached. It emits the `PolicyViolated` for a
-/// breach, so only the outer loop calls it, once, on the way out.
-fn run_is_over(agent: &Agent, queue: &Queue) -> bool {
-    if !queue.run.is_working() {
-        return true;
-    }
-    let policy = queue.get_policy();
-    if let Some((violation, limit)) = policy_violated(&policy, &queue.stats) {
-        queue.emit_event(
-            Event::new(Event::POLICY_VIOLATED)
-                .data(serde_json::json!({ "policy": violation, "limit": limit }))
-                .agent_id(agent.get_id()),
         );
-        return true;
+        queue.append_reply(task_id, Reply::user_text(directive));
+        true
     }
-    false
-}
-
-/// Claim a `Todo` task for this agent, or resume one of its `InProgress`
-/// tasks; write the first message when there is none.
-fn claim<'a>(agent: &'a Agent, queue: &'a Arc<Queue>) -> Option<TaskContext<'a>> {
-    let label = agent.label.clone();
-    let claimable = (move |t: &Task| {
-        t.status == Status::Todo
-            && Agent::handles(label.as_deref(), t.label.as_deref())
-            && !t.is_cancelled()
-    })
-    .into_query();
-    // On the id, not the label: agents sharing a label must not take over each
-    // other's started tasks.
-    let agent_id = agent.get_id().to_string();
-    let interactive = agent.is_interactive();
-    let resumable = move |t: &Task| {
-        t.status == Status::InProgress
-            && t.assignee.as_deref() == Some(agent_id.as_str())
-            && (t.is_waiting_for_response() || !interactive)
-            && !t.is_cancelled()
-    };
-    let task_id = queue
-        .claim(&claimable, agent.get_id())
-        .or_else(|| queue.find_task(resumable).map(|t| t.id.clone()))?;
-    let task = queue.get_task(&task_id)?;
-
-    let tools = agent.get_tools(&task);
-
-    let knowledge_index = agent.get_knowledge().get_index();
-    let policy = queue.get_policy();
-    // Lets the model see what knowledge pages it can read.
-    let system_prompt =
-        agent.system_prompt(Some(&knowledge_index), &policy, &queue.stats, &task_id);
-    let agent_id = agent.get_id();
-
-    queue.emit_event(
-        Event::new(Event::TURN_STARTED)
-            .task_id(&task_id)
-            .agent_id(agent_id),
-    );
-
-    if task.replies.is_empty() {
-        queue.append_reply(&task_id, Reply::system_text(system_prompt.clone()));
-        let Message::User {
-            content: task_blocks,
-        } = task.as_user_message()
-        else {
-            unreachable!("Task::as_user_message returns Message::User");
-        };
-        queue.append_reply(&task_id, Reply::user(&task_blocks, &HashMap::new()));
-    }
-
-    Some(TaskContext {
-        agent,
-        model: agent.get_model(),
-        queue,
-        run: Arc::clone(&queue.run),
-
-        task_id,
-        system_prompt,
-        policy,
-        tools,
-
-        consecutive_schema_failures: 0,
-    })
-}
-
-/// Re-read the task and decide the next step.
-fn evaluate(context: &mut TaskContext<'_>) -> Option<Step> {
-    // The pure check, not `run_is_over`: the outer loop emits the
-    // `PolicyViolated` a moment later, and emitting it twice would double-count.
-    if !context.queue.run.is_working()
-        || policy_violated(&context.policy, &context.queue.stats).is_some()
-    {
-        return None;
-    }
-    let Some(task) = context.task() else {
-        return None;
-    };
-    if task.is_cancelled() {
-        return None;
-    }
-    // The transition itself already emitted the terminal event; the agent
-    // only moves on to fresh work.
-    if !task.is_pending() {
-        return None;
-    }
-    if !task.is_waiting_for_response() {
-        if context.agent.is_interactive() {
-            // Pause until a caller reply lands; the resume claim re-checks.
-            return None;
-        }
-        return silence_retry(context);
-    }
-    if compact::proactive_compaction_needed(context, &task) {
-        return Some(Step::Compact(CompactReason::Proactive));
-    }
-    Some(Step::Request)
-}
-
-/// The model replied without a tool call: prompt it to resume or finish,
-/// counting the silence toward the schema-retry budget.
-fn silence_retry(context: &mut TaskContext<'_>) -> Option<Step> {
-    let max = context.policy.max_schema_retries.unwrap_or(u32::MAX);
-    context.consecutive_schema_failures = context.consecutive_schema_failures.saturating_add(1);
-    if context.consecutive_schema_failures >= max {
-        context.emit_event(Event::new(Event::POLICY_VIOLATED).data(serde_json::json!({
-            "policy": PolicyViolation::MaxSchemaRetries,
-            "limit": u64::from(max),
-        })));
-        let _ = context
-            .queue
-            .set_failed_by(&context.task_id, context.agent.get_id());
-        return None;
-    }
-    let detail = context.agent.get_directives().render(NO_TOOL_CALLED, &[]);
-    let attempt = context.consecutive_schema_failures;
-    context.emit_event(Event::new(Event::SCHEMA_RETRIED).data(serde_json::json!({
-        "attempt": attempt,
-        "max_attempts": max,
-        "kind": "tool_not_called",
-        "message": detail,
-    })));
-    context.queue.append_reply(
-        &context.task_id,
-        Reply::user_text(context.retry_directive(&detail, attempt, max)),
-    );
-    Some(Step::Evaluate)
 }
 
 #[cfg(test)]
@@ -259,7 +220,6 @@ mod tests {
     use crate::agents::policy::Policy;
     use crate::prompts::directives::DirectiveStore;
 
-    use super::claim;
     use crate::agents::agent::Agent;
     use crate::agents::r#loop::test_util::*;
     use crate::agents::tasks::{Author, Queue, Status, Task};
@@ -1549,8 +1509,9 @@ mod tests {
             ),
         );
 
-        let context = claim(&agent, &tasks).expect("the task is claimable");
-        let finish = context.tools.get("finish").expect("finish is bound");
+        let task = agent.claim_task(&tasks).expect("the task is claimable");
+        let tools = agent.get_tools(&task);
+        let finish = agent.get_tool(&tools, "finish").expect("finish is bound");
 
         let declared = finish.get_input_schema().get_raw_schema();
         assert!(declared["properties"]["verdict"].is_object(), "{declared}");
@@ -1579,8 +1540,9 @@ mod tests {
             ),
         );
 
-        let context = claim(&agent, &tasks).expect("the task is claimable");
-        let event = context.tools.get("event").expect("event is bound");
+        let task = agent.claim_task(&tasks).expect("the task is claimable");
+        let tools = agent.get_tools(&task);
+        let event = agent.get_tool(&tools, "event").expect("event is bound");
         let declared = event.get_input_schema().get_raw_schema();
 
         assert!(
@@ -1599,8 +1561,9 @@ mod tests {
         tasks.add_agent(agent.clone());
         tasks.add_task("hello");
 
-        let context = claim(&agent, &tasks).expect("the task is claimable");
-        assert!(context.tools.get("finish").is_none());
+        let task = agent.claim_task(&tasks).expect("the task is claimable");
+        let tools = agent.get_tools(&task);
+        assert!(agent.get_tool(&tools, "finish").is_none());
     }
 
     #[tokio::test]
@@ -1622,14 +1585,16 @@ mod tests {
         tasks.bind_agent(&mut second);
         tasks.add_task(Task::new("work").label("resume_pool"));
 
-        claim(&first, &tasks).expect("the first agent claims the open task");
+        first
+            .claim_task(&tasks)
+            .expect("the first agent claims the open task");
 
         assert!(
-            claim(&second, &tasks).is_none(),
+            second.claim_task(&tasks).is_none(),
             "a label mate must not take over a started task",
         );
         assert!(
-            claim(&first, &tasks).is_some(),
+            first.claim_task(&tasks).is_some(),
             "the agent that started it resumes it",
         );
     }

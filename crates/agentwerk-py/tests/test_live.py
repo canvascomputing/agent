@@ -43,11 +43,11 @@ async def test_invokes_a_builtin_tool(tmp_path):
     )
 
 
-async def test_invokes_a_python_tool_and_records_the_file_it_opened(tmp_path):
+async def test_invokes_a_python_tool(tmp_path):
     (tmp_path / "note.txt").write_text("THE-TOKEN-IS-42\n")
     calls = []
 
-    @aw.tool(concurrent=True, paths=["path"])
+    @aw.tool(concurrent=True)
     def slurp(path: str) -> str:
         """Return the contents of the file at `path`."""
         calls.append(path)
@@ -60,16 +60,9 @@ async def test_invokes_a_python_tool_and_records_the_file_it_opened(tmp_path):
     )
     agent.task("Read note.txt with the slurp tool and report the token it contains.")
     work = agent.start()
-    opened = []
-    work.on_event(
-        lambda _, event: opened.append(event.get_data()["path"])
-        if event.get_name() == aw.Event.FILE_OPEN_FINISHED
-        else None
-    )
     await work.finish_all_tasks()
 
     assert calls, "the python tool was never invoked"
-    assert any("note.txt" in path for path in opened)
 
 
 async def test_runs_two_labeled_agents_with_events_and_chaining():

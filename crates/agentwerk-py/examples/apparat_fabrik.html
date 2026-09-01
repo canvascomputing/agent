@@ -704,14 +704,6 @@ const handle = {
     if (agent) agent.shake = 1;
   },
 
-  file_open_failed(frame) {
-    const agent = agentOf(frame.agent);
-    if (!agent) return;
-    agent.shake = 1;
-    flash(agent, COLOR.vermilion);
-    tell(`<b>${agent.name}</b> greift nach einer Karte, die nicht im Lager liegt.`);
-  },
-
   policy_violated(frame) {
     tell(frame.data.policy === "time" ? "Die Schichtglocke geht." : "Dem Werk geht die Kraft aus.");
   },

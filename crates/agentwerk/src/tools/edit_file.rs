@@ -34,8 +34,7 @@ impl From<EditFileTool> for Tool {
         Tool::new("edit_file")
             .description(include_str!("edit_file.tool.md"))
             .schema(include_str!("edit_file.schema.json"))
-            .paths(["path"])
-            .handler(run)
+            .handler_with_context(run)
     }
 }
 

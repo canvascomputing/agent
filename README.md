@@ -814,12 +814,8 @@ let web = FetchTool::new().impersonate();
 
 #### Custom Tools
 
-A custom tool runs a function you provide and describes its inputs to the model.
-
-| Method | Description |
-|--------|-------------|
-| `concurrent(true)` | Run a tool in parallel when it does not change external state. |
-| `paths(["path"])` | Identify file paths in a tool call so they are included in statistics. |
+Use `concurrent(true)` when a custom tool has no side effects and may run in
+parallel with other calls.
 
 Describe the tool, then hand it the code it runs:
 
@@ -835,7 +831,7 @@ let greet = Tool::new("greet")
         "required": ["name"]
     }))
     .concurrent(true)
-    .handler(|input: Value, _context| async move {
+    .handler(|input: Value| async move {
         let name = input["name"].as_str().unwrap_or("world");
         Event::tool_call_finished(format!("Hello, {name}!"))
     });
@@ -881,11 +877,9 @@ tasks.on_event(|_, event| {
 | | `text_chunk_received` | Part of the reply arrived. |
 | **Tool** | `tool_call_declined` | A tool call proposed by the model was declined. |
 | | `tool_call_repaired` | A tool call or value the model created was invalid and was corrected. |
-| | `tool_call_started` | A tool call began. |
-| | `tool_call_finished` | A tool call finished. |
-| | `tool_call_failed` | A tool call failed but the task continues. |
-| **File** | `file_open_finished` | A tool opened a file. |
-| | `file_open_failed` | A tool could not open a file. |
+| | `tool_call_started` | A tool invocation began, carrying its registered name, call ID, and raw input. |
+| | `tool_call_finished` | A tool invocation finished. |
+| | `tool_call_failed` | A tool invocation failed but the task continues. |
 | **Knowledge** | `knowledge_written` | A page was written. |
 | | `knowledge_read` | A page was read. |
 | | `knowledge_removed` | A page was removed. |

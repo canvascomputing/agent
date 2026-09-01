@@ -48,10 +48,6 @@ impl PyEvent {
     #[classattr]
     const TOOL_CALL_FAILED: &'static str = Event::TOOL_CALL_FAILED;
     #[classattr]
-    const FILE_OPEN_FINISHED: &'static str = Event::FILE_OPEN_FINISHED;
-    #[classattr]
-    const FILE_OPEN_FAILED: &'static str = Event::FILE_OPEN_FAILED;
-    #[classattr]
     const KNOWLEDGE_WRITTEN: &'static str = Event::KNOWLEDGE_WRITTEN;
     #[classattr]
     const KNOWLEDGE_READ: &'static str = Event::KNOWLEDGE_READ;
@@ -222,26 +218,6 @@ impl PyEvent {
     fn tool_call_failed(message: &str) -> Self {
         Self {
             inner: Event::tool_call_failed(message),
-        }
-    }
-
-    #[staticmethod]
-    fn file_open_finished(path: &str, tool_name: &str, call_id: &str) -> Self {
-        Self {
-            inner: Event::file_open_finished(path, tool_name, call_id),
-        }
-    }
-
-    #[staticmethod]
-    fn file_open_failed(
-        path: &str,
-        tool_name: &str,
-        call_id: &str,
-        kind: &str,
-        message: &str,
-    ) -> Self {
-        Self {
-            inner: Event::file_open_failed(path, tool_name, call_id, kind, message),
         }
     }
 

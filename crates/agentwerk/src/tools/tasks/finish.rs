@@ -64,7 +64,7 @@ impl FinishTool {
         Tool::new(Self::NAME)
             .description(DEFINITION)
             .schema(arguments)
-            .handler(run)
+            .handler_with_context(run)
     }
 }
 
@@ -308,36 +308,16 @@ mod tests {
             .get_id()
             .to_string();
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
-        let mut registry = crate::tools::ToolRegistry::default();
-        registry.register(finish_for(line_schema()));
-
-        let rejected = registry
-            .execute(
-                &[crate::tools::ToolCall {
-                    id: "call-1".into(),
-                    name: "finish".into(),
-                    input: serde_json::json!({"line": "about 42"}),
-                }],
-                &ctx,
-            )
-            .await
-            .remove(0);
+        let finish = finish_for(line_schema());
+        let rejected = finish
+            .invoke(serde_json::json!({"line": "about 42"}), &ctx)
+            .await;
 
         assert_eq!(rejected.get_name(), Event::TOOL_CALL_FAILED);
         assert_eq!(rejected.get_data()["kind"], "schema_failed");
         assert!(queue.get_task(&id).unwrap().is_in_progress());
 
-        let repaired = registry
-            .execute(
-                &[crate::tools::ToolCall {
-                    id: "call-2".into(),
-                    name: "finish".into(),
-                    input: serde_json::json!({"line": "42"}),
-                }],
-                &ctx,
-            )
-            .await
-            .remove(0);
+        let repaired = finish.invoke(serde_json::json!({"line": "42"}), &ctx).await;
 
         assert_eq!(repaired.get_name(), Event::TOOL_CALL_FINISHED);
         assert_eq!(
@@ -355,20 +335,9 @@ mod tests {
         let dir = crate::test_util::TempDir::new().unwrap();
         let queue = line_task(dir.path());
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
-        let mut registry = crate::tools::ToolRegistry::default();
-        registry.register(finish_for(line_schema()));
-
-        let outcome = registry
-            .execute(
-                &[crate::tools::ToolCall {
-                    id: "call-1".into(),
-                    name: "finish".into(),
-                    input: serde_json::json!({"result": {"line": 42}}),
-                }],
-                &ctx,
-            )
-            .await
-            .remove(0);
+        let outcome = finish_for(line_schema())
+            .invoke(serde_json::json!({"result": {"line": 42}}), &ctx)
+            .await;
 
         assert_eq!(outcome.get_name(), Event::TOOL_CALL_FAILED);
         assert_eq!(outcome.get_data()["kind"], "schema_failed");
@@ -444,15 +413,9 @@ mod tests {
         let (queue, id) = one_task("alice");
         queue.set_dir(dir.path().to_path_buf());
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
-        let mut registry = crate::tools::ToolRegistry::default();
-        registry.register(FinishTool::from_schema(Some(object_schema()), None));
-
-        let calls = vec![crate::tools::ToolCall {
-            id: "call-1".to_string(),
-            name: "finish".to_string(),
-            input: serde_json::json!("{\"status\": \"malicious\"}"),
-        }];
-        let outcome = registry.execute(&calls, &ctx).await.remove(0);
+        let outcome = FinishTool::from_schema(Some(object_schema()), None)
+            .invoke(serde_json::json!("{\"status\": \"malicious\"}"), &ctx)
+            .await;
 
         assert!(
             outcome.get_name() == Event::TOOL_CALL_FINISHED,
@@ -1162,26 +1125,15 @@ mod tests {
         let dir = crate::test_util::TempDir::new().unwrap();
         let (queue, parent_id) = one_task_in("alice", dir.path().to_path_buf());
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
-        let mut registry = crate::tools::ToolRegistry::default();
-        registry.register(FinishTool::from_schema(
-            None,
-            Some(Task::labeled("bob", "review")),
-        ));
-
-        let outcome = registry
-            .execute(
-                &[crate::tools::ToolCall {
-                    id: "call-1".into(),
-                    name: "finish".into(),
-                    input: serde_json::json!({
-                    "result": "done",
-                    "handover": {"label": "charlie"}
-                    }),
-                }],
+        let outcome = FinishTool::from_schema(None, Some(Task::labeled("bob", "review")))
+            .invoke(
+                serde_json::json!({
+                "result": "done",
+                "handover": {"label": "charlie"}
+                }),
                 &ctx,
             )
-            .await
-            .remove(0);
+            .await;
 
         assert_eq!(outcome.get_data()["kind"], "schema_failed");
         let parent = queue.get_task(&parent_id).unwrap();
@@ -1220,27 +1172,19 @@ mod tests {
         let dir = crate::test_util::TempDir::new().unwrap();
         let (queue, parent_id) = one_task_in("alice", dir.path().to_path_buf());
         let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
-        let mut registry = crate::tools::ToolRegistry::default();
-        registry.register(Tool::from(FinishTool));
-
-        let outcome = registry
-            .execute(
-                &[crate::tools::ToolCall {
-                    id: "call-1".into(),
-                    name: "finish".into(),
-                    input: serde_json::json!({
-                    "result": "done",
-                    "handover": {
-                        "label": "bob",
-                        "task": "review",
-                        "schema": {"unsupported": true}
-                    }
-                    }),
-                }],
+        let outcome = Tool::from(FinishTool)
+            .invoke(
+                serde_json::json!({
+                "result": "done",
+                "handover": {
+                    "label": "bob",
+                    "task": "review",
+                    "schema": {"unsupported": true}
+                }
+                }),
                 &ctx,
             )
-            .await
-            .remove(0);
+            .await;
 
         assert_eq!(outcome.get_directive(), Some("handover_schema_invalid"));
         let parent = queue.get_task(&parent_id).unwrap();
@@ -1425,7 +1369,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn malformed_handover_arguments_are_rejected_by_the_registry_atomically() {
+    async fn malformed_handover_arguments_are_rejected_atomically() {
         for input in [
             serde_json::json!({"handover": 7, "result": "x"}),
             serde_json::json!({"handover": {"task": "x"}, "result": "x"}),
@@ -1442,20 +1386,7 @@ mod tests {
             let dir = crate::test_util::TempDir::new().unwrap();
             let (queue, parent_id) = one_task_in("alice", dir.path().to_path_buf());
             let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
-            let mut registry = crate::tools::ToolRegistry::default();
-            registry.register(Tool::from(FinishTool));
-
-            let outcome = registry
-                .execute(
-                    &[crate::tools::ToolCall {
-                        id: "call-1".into(),
-                        name: "finish".into(),
-                        input,
-                    }],
-                    &ctx,
-                )
-                .await
-                .remove(0);
+            let outcome = Tool::from(FinishTool).invoke(input, &ctx).await;
 
             assert_eq!(outcome.get_data()["kind"], "schema_failed");
             let parent = queue.get_task(&parent_id).unwrap();
@@ -1468,7 +1399,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_blank_handover_from_a_direct_call_is_an_error() {
-        // Hosts that bypass registry validation still fail without mutating
+        // Hosts that bypass runtime validation still fail without mutating
         // the queue, but do not receive a model-facing directive.
         let dir = crate::test_util::TempDir::new().unwrap();
         let (queue, parent_id) = one_task_in("alice", dir.path().to_path_buf());
