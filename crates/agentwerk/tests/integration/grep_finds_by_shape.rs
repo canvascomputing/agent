@@ -1,8 +1,4 @@
-//! End-to-end: a real LLM is given only `grep` and asked to list function
-//! names it cannot know in advance. Proves `grep` answers a find-by-shape
-//! question end-to-end: the model locates the definitions and reports the
-//! names. (The code `syntax` is exercised directly in the unit tests; a
-//! live model tends to reach for a regex `grep` here, and that is fine.)
+//! Verifies a real LLM can use grep to discover and report function names it does not know in advance. Unit tests cover the code-specific syntax directly.
 
 use std::fs;
 use std::sync::{Arc, Mutex};
@@ -80,7 +76,6 @@ async fn grep_lists_unknown_function_names() -> std::result::Result<(), Box<dyn 
 
     let recorded = calls.lock().unwrap().clone();
 
-    // The model must have used `grep` to locate the definitions.
     assert!(
         recorded.iter().any(|c| c.name == "grep"),
         "model should use `grep` to find the functions; instead called: {:?}",
@@ -90,7 +85,6 @@ async fn grep_lists_unknown_function_names() -> std::result::Result<(), Box<dyn 
             .collect::<Vec<_>>()
     );
 
-    // The final answer should report every function name it discovered.
     let answer = common::last_result_text(&werk);
     assert!(
         answer.contains("area") && answer.contains("perimeter") && answer.contains("clamp"),

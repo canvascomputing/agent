@@ -1,4 +1,4 @@
-"""Built-in tools and the @tool decorator, at the Agent.tool interface."""
+"""Test built-in tools and the ``@tool`` decorator through ``Agent.tool``."""
 
 import pytest
 

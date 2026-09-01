@@ -1,4 +1,4 @@
-//! Pattern AST and its parser entry point.
+//! Defines the pattern AST and parses source text into it.
 
 use super::conf::Conf;
 use super::token::{self, Token};

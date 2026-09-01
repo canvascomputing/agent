@@ -1,6 +1,4 @@
-//! The one place JSON crosses between Rust and Python, and the errors that
-//! crossing can raise. Tool inputs, task bodies, and results all pass here, and
-//! so does the text a prompt is set from.
+//! Converts JSON-compatible values and prompt text between Rust and Python.
 
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;

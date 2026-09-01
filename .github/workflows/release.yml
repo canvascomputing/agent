@@ -58,9 +58,8 @@ jobs:
         with:
           packages-dir: dist
 
-  # Publish the crate only after PyPI succeeds: crates.io versions are
-  # immutable, so gating on the brittler wheel/PyPI release keeps a failed run
-  # from burning the version — the same tag can be retried.
+  # Publish the crate only after PyPI succeeds. crates.io versions are immutable,
+  # while the wheel and PyPI release can be retried with the same tag.
   publish-crate:
     needs: publish-wheels
     runs-on: ubuntu-latest

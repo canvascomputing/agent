@@ -1,10 +1,6 @@
-"""The browser feed behind the Apparat Fabrik: one frame per event.
+"""Serve and replay the Apparat Fabrik browser feed.
 
-Frames are fanned out over server-sent events to every page connected, and
-this file holds the small server that carries them, so the example beside it
-is about the shift rather than about HTTP. A run can record its frames, and
-`replay` pushes that file back out at the speed it happened, which shows a run
-again without calling a model.
+Convert each event into a browser frame and broadcast it with server-sent events. Recording and replay show a prior run without calling a model.
 """
 
 import asyncio
@@ -14,9 +10,8 @@ import webbrowser
 
 HOST = "127.0.0.1"
 
-# What a frame carries beyond the event's own name. Tool input, tool output and
-# reply chunks are left out: they run to megabytes over one run, and no page
-# draws them.
+# Keep only event fields the page renders. Tool input, tool output, and reply
+# chunks can grow to megabytes and are not displayed.
 CARRIED = (
     "tool_name",
     "action",
@@ -33,7 +28,7 @@ CARRIED = (
 
 
 class Feed:
-    """The frames a page draws, fanned out to every browser connected."""
+    """Broadcast browser frames to every connected page."""
 
     def __init__(self, record_file=None):
         self.history = []
@@ -63,7 +58,7 @@ class Feed:
 
 
 def where(arguments, event_data, root):
-    """The place a call is about: the file it opened or the path it searched."""
+    """Get the file or search path associated with a tool call."""
     place = event_data.get("path")
     if not place and isinstance(arguments, dict):
         place = arguments.get("path")
@@ -74,14 +69,14 @@ def where(arguments, event_data, root):
 
 
 def detail(arguments):
-    """The one field of a call worth showing: what was searched or read."""
+    """Get the first tool argument the browser feed can display."""
     if not isinstance(arguments, dict):
         return None
     for key in ("pattern", "query", "path", "slug", "action", "command"):
         value = arguments.get(key)
         if isinstance(value, str):
-            # A path is only recognisable by its tail, and a page draws the
-            # label across its width, so an absolute one is cut to two parts.
+            # Keep the last two path components so the label fits while
+            # preserving the recognizable filename.
             if "/" in value:
                 value = "/".join(value.rsplit("/", 2)[-2:])
             return value[:40]
@@ -89,7 +84,7 @@ def detail(arguments):
 
 
 def frame_for(event, started_at, root=""):
-    """One event, cut down to what a page can draw."""
+    """Convert an event into a browser frame."""
     data = {key: value for key, value in event.get_data().items() if key in CARRIED}
     message = event.get_data().get("message")
     if isinstance(message, str):
@@ -138,7 +133,7 @@ async def stream(writer, feed):
 
 
 async def serve(reader, writer, feed, page):
-    """One request: the page itself, or the event stream it reads."""
+    """Serve the page or its event stream for one request."""
     try:
         request = await reader.readline()
         while (await reader.readline()) not in (b"\r\n", b"\n", b""):
@@ -162,7 +157,7 @@ async def serve(reader, writer, feed, page):
 
 
 async def open_view(feed, page, port):
-    """Serve the page, open it, and hold until it is watching."""
+    """Serve and open the page, then wait for its event stream connection."""
     server = await asyncio.start_server(lambda r, w: serve(r, w, feed, page), HOST, port)
     url = f"http://{HOST}:{port}"
     print(f"{page.stem}: {url}", flush=True)
@@ -175,17 +170,14 @@ async def open_view(feed, page, port):
 
 
 async def replay(feed, frames_file, speed=1.0):
-    """Push a recorded run back out at the speed it happened.
+    """Replay a recorded run with its original event timing.
 
-    `speed` below one plays it slower, which is what a screen recording wants:
-    a capture of a few frames a second then samples movement that has not
-    jumped far between one frame and the next.
+    A `speed` below one slows playback for smoother screen recording.
     """
     frames = [json.loads(line) for line in frames_file.read_text().splitlines() if line]
     started_at = time.monotonic()
     for frame in frames:
-        # A quiet stretch is dead air on screen, so the longest wait is two
-        # seconds however long the run paused there.
+        # Cap idle pauses at two seconds so replay keeps moving.
         wait = frame.get("t", 0) / speed - (time.monotonic() - started_at)
         if wait > 0:
             await asyncio.sleep(min(wait, 2.0))
@@ -193,7 +185,7 @@ async def replay(feed, frames_file, speed=1.0):
 
 
 async def watch_pages(notes, feed, started_at):
-    """Poll the store: an event says a page was written, never which one."""
+    """Poll for new pages because write events do not identify the page."""
     seen = set()
     while True:
         for page in notes.get_pages().get_all():

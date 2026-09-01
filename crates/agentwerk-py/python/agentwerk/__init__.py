@@ -1,7 +1,6 @@
-"""agentwerk: a minimal Python library for running many agents in parallel.
+"""A minimal Python library for running many agents in parallel.
 
-The compiled extension (`._agentwerk`) holds the real types, and this package
-re-exports them so `from agentwerk import Agent, ReadFileTool` works.
+This package re-exports the compiled extension so you can import its API directly from ``agentwerk``.
 """
 
 from ._agentwerk import (
@@ -64,7 +63,6 @@ def tool(
         fn._agentwerk_schema = schema if schema is not None else {"type": "object"}
         return fn
 
-    # Support both @tool and @tool(...).
     return decorate if func is None else decorate(func)
 
 

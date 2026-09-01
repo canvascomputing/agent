@@ -5,19 +5,18 @@ OPENCODE_SKILLS_DIR := $(HOME)/.config/opencode/skills
 SKILL_DESTS := $(CLAUDE_SKILLS_DIR) $(OPENCODE_SKILLS_DIR)
 SKILL_NAMES := $(notdir $(shell find $(CURDIR)/skills -mindepth 1 -maxdepth 1 -type d))
 
-# Build the project (warnings are errors)
+# Build the workspace with warnings as errors.
 build: fmt
 	RUSTFLAGS="-D warnings" cargo build
 
-# Run unit tests (warnings are errors) — inline `#[cfg(test)] mod tests` blocks,
-# the doctests in `///` examples, and the tests inside the use-case binaries,
-# which `--lib` alone reaches none of.
+# Run offline Rust tests with warnings as errors. This includes inline test modules,
+# doctests, and tests inside the use-case binaries.
 test:
 	RUSTFLAGS="-D warnings" cargo test --workspace --lib
 	RUSTFLAGS="-D warnings" cargo test --workspace --exclude agentwerk-py --doc
 	RUSTFLAGS="-D warnings" cargo test -p use-cases --bins
 
-# Run integration tests against whatever LLM provider the environment names.
+# Run integration tests against the LLM provider selected by the environment.
 # Export the provider's variables in your shell first; nothing is read from a file.
 # Usage: make test_integration              (run all)
 #        make test_integration name=command_usage  (run one file)
@@ -28,21 +27,21 @@ else
 	RUSTFLAGS="-D warnings" cargo test --test integration -- --nocapture --test-threads=1
 endif
 
-# Build and install the Python bindings into the active environment
+# Build and install the Python bindings into the active environment.
 python:
 	cd crates/agentwerk-py && maturin develop
 
-# Run the offline Python binding tests (no network, no provider needed)
+# Run the offline Python binding tests without an LLM provider.
 python_test: python
 	@cd crates/agentwerk-py && python3 -m pip install -q pytest pytest-asyncio && \
 	  python3 -m pytest tests -q -m "not live"
 
-# Run the live Python binding tests against the provider the environment names
+# Run the live Python binding tests against the provider selected by the environment.
 python_test_integration: python
 	@cd crates/agentwerk-py && python3 -m pip install -q pytest pytest-asyncio && \
 	  python3 -m pytest tests -q -m live
 
-# Build rustdoc (warnings are errors; broken intra-doc links fail)
+# Build rustdoc with warnings and broken links as errors.
 doc:
 	RUSTDOCFLAGS="-D warnings -D rustdoc::broken-intra-doc-links -D rustdoc::private-intra-doc-links" \
 	  cargo doc --no-deps -p agentwerk
@@ -52,21 +51,21 @@ doc:
 check_names:
 	@sh tools/check-names.sh
 
-# Format all code
+# Format all code.
 fmt:
 	cargo fmt
 
-# Remove build artifacts
+# Remove build artifacts.
 clean:
 	cargo clean
 
-# Update dependencies
+# Update dependencies.
 update:
 	cargo update
 
-# Run a use_case binary
+# Run a use-case binary.
 # Usage: make use_case name=deep-research args="Should we use Rust or Go?"
-# Note: use args= not -- to pass arguments
+# Pass arguments with `args=`, not `--`.
 # Exit 2 is the malware-scanner's malicious-verdict signal under --fail-fast,
 # not a build failure, so it is tolerated; every other non-zero code still fails.
 use_case:
@@ -79,8 +78,8 @@ else
 	@echo "Run with: make use_case name=<name> args=\"...\""
 endif
 
-# Bump version, test, commit, and tag for release: make bump part=patch (default), minor, or major
-# GitHub Actions handles the crates.io publish via trusted publishing after you push the tag
+# Bump the version, test, commit, and tag a release. Use `part=patch` (default), `minor`, or `major`.
+# GitHub Actions publishes to crates.io through trusted publishing after you push the tag.
 part ?= patch
 bump: test
 	@current=$$(grep '^version' crates/agentwerk/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/'); \
@@ -101,15 +100,15 @@ bump: test
 	echo "Tagged v$$new — now run:" && \
 	echo "  git push && git push --tags"
 
-# Install Claude Code hooks into .claude/settings.local.json
+# Install Claude Code hooks into `.claude/settings.local.json`.
 hooks:
 	@if [ ! -f .claude/settings.local.json ]; then echo '{}' > .claude/settings.local.json; fi
 	@jq -s '.[0] * .[1]' .claude/settings.local.json hooks/hooks.json > .claude/settings.local.tmp \
 		&& mv .claude/settings.local.tmp .claude/settings.local.json
 	@echo "Hooks installed into .claude/settings.local.json"
 
-# Symlink every skill under skills/ into each tool's skills directory
-# A skill of the same name already installed there is replaced
+# Symlink every skill under `skills/` into each tool's skills directory.
+# Replace any installed skill with the same name.
 skills:
 	@for dest in $(SKILL_DESTS); do \
 		mkdir -p "$$dest"; \
@@ -120,13 +119,13 @@ skills:
 		done; \
 	done
 
-# Start a LiteLLM proxy on localhost:4000
-# Forwards the provider's API key from your environment (never leaked in commands)
+# Start a LiteLLM proxy on `localhost:4000`.
+# Pass the provider API key through the environment without placing it in the command.
 # Usage: make litellm                  (default: anthropic, uses ANTHROPIC_API_KEY)
 #        make litellm LITELLM_PROVIDER=openai  (uses OPENAI_API_KEY)
 LITELLM_PROVIDER ?= anthropic
 
-# Map LITELLM_PROVIDER to its API key env var
+# Map `LITELLM_PROVIDER` to its API key environment variable.
 ifeq ($(LITELLM_PROVIDER),anthropic)
   LITELLM_KEY_ENV     := ANTHROPIC_API_KEY
   LITELLM_MODEL_ENV   := ANTHROPIC_MODEL

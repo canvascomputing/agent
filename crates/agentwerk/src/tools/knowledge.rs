@@ -29,7 +29,7 @@ pub struct KnowledgeTool {
 
 impl KnowledgeTool {
     /// Bind the tool to `store` without making it the agent's own knowledge.
-    /// `Agent::knowledge` is the usual route: it does this and also
+    /// `Agent::knowledge` is the usual entry point: it does this and also
     /// renders the store's index into the system prompt. Reach for the
     /// constructor when an agent should write to a store it is not told about.
     pub fn new(store: Arc<Knowledge>) -> Self {

@@ -384,7 +384,7 @@ pub async fn run_with_context_window(
     (events, provider, task)
 }
 
-/// Drive one task on a model with a 200 000-token window, so the proactive
+/// Run one task on a model with a 200 000-token window, so the proactive
 /// threshold is reachable. `configure` runs before the agents start: for
 /// installing a compaction editor, or moving the trigger.
 pub async fn run_compaction(

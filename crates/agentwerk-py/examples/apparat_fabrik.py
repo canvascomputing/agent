@@ -1,13 +1,6 @@
-"""A shift on the line of an Apparat Fabrik.
+"""Run the multi-agent Apparat Fabrik inspection example.
 
-The works are written to disk before the shift: one Bauplan per apparatus,
-naming the parts it is built from with a nominal size and a tolerance, and one
-card in the Lager per part saying what it actually measured. Prüfer take a plan
-and send every part it names down the belt. Meister take a part off the belt,
-fetch its card, and rule whether it may be fitted. A ruling counts for the one
-who made it only once that Meister has stamped it into the Prüfbuch, so the
-tally measures what the shift wrote down rather than what it merely knew, and
-anything still in a pocket at the bell is lost.
+Prüfer create one task for each part in a plan. Meister compare each part's measured size with its nominal size and tolerance. Only verdicts written to the Prüfbuch count in the final tally.
 
 Usage:
   python apparat_fabrik.py [PRÜFER] [MEISTER] [MONTEUR]
@@ -178,7 +171,7 @@ STATIONS = [
 
 
 def worker_names(pruefer, meister, monteur):
-    """Agent id to shift name: agentwerk numbers each label from 1 in build order."""
+    """Map agent IDs to shift names. agentwerk numbers each label from one in build order."""
     return {
         f"{label}-{i + 1}": name
         for label, names, count in (

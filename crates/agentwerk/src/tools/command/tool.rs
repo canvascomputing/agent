@@ -25,10 +25,7 @@ const SCHEMA: &str = include_str!("command.schema.json");
 ///
 /// One call runs one program, without a shell.
 ///
-/// This is a parsing guarantee, not a privilege boundary. One allowed command
-/// can still reach arbitrary code: `git -c alias.x='!cmd' x`, `find -exec`,
-/// `ssh -o ProxyCommand`, and any interpreter such as `sh -c` all do. Confine an
-/// agent with an operating-system sandbox, not with these rules alone.
+/// These parsing rules are not a privilege boundary. One allowed command can still reach arbitrary code: `git -c alias.x='!cmd' x`, `find -exec`, `ssh -o ProxyCommand`, and any interpreter such as `sh -c` all do. Confine an agent with an operating-system sandbox, not with these rules alone.
 ///
 /// # Examples
 ///

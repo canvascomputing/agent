@@ -1,5 +1,4 @@
-//! The core entity of agentwerk: who an agent is, what it may call, and which
-//! Werk it works from.
+//! Defines agents that claim tasks and use LLMs and tools to complete them.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -60,11 +59,7 @@ impl Clone for WerkRef {
     }
 }
 
-/// An `Agent` is the core entity of agentwerk. It uses tools to solve tasks
-/// assigned through a Werk.
-///
-/// It claims the tasks its label matches, calls the LLM provider, runs
-/// the tools the model asks for, and writes the result back.
+/// Use an LLM and registered tools to complete tasks claimed from a `Werk`.
 ///
 /// ```no_run
 /// use agentwerk::Agent;
@@ -79,11 +74,9 @@ impl Clone for WerkRef {
 /// # }
 /// ```
 pub struct Agent {
-    // pub(crate): read by loop, Werk, or assignment code
     pub(crate) label: Option<String>,
     pub(crate) interactive: bool,
     pub(crate) werk: WerkRef,
-    // private: accessed through methods within agents::
     /// Taken the first time anything needs it, since the label it is built from
     /// is set after construction.
     id: OnceLock<String>,
@@ -214,7 +207,7 @@ impl Agent {
     /// Let the agent wait for new instructions to keep a task in-progress.
     ///
     /// The agent stops after a reply that calls no tool, and
-    /// `Werk::add_reply` drives the next turn. It gets no `FinishTool`,
+    /// `Werk::add_reply` starts the next turn. It gets no `FinishTool`,
     /// since ending the task would end the conversation; the host closes it
     /// with `Werk::set_task_finished`. Register the tool by hand to give the
     /// agent one back.
@@ -510,7 +503,7 @@ impl Agent {
     ///
     /// A string is the task itself, and a `&Path` or `PathBuf` names the file
     /// holding it. A [`Task`] carries a custom label or schema with it. Call
-    /// it as often as you like: one agent can drive many tasks.
+    /// it as often as you like: one agent can work on many tasks.
     pub fn add_task(&self, task: impl Into<Task>) -> String {
         self.dispatch(task.into())
     }

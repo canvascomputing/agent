@@ -1,4 +1,4 @@
-"""The module surface and agent configuration."""
+"""Test the module surface and agent configuration."""
 
 import pytest
 

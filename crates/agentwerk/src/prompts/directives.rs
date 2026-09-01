@@ -1,5 +1,4 @@
-//! The catalogue of texts agentwerk sends the model to report a failure or
-//! correct its behavior, and the store a host decides them with.
+//! Defines corrective model instructions and lets the host select their text.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -161,9 +160,7 @@ pub struct Directive;
 
 type DirectiveComputer = dyn Fn(&str) -> Option<String> + Send + Sync;
 
-/// The function an agent decides its directives with, as the agent holds it.
-/// A host writes one for [`Agent::directives`](crate::Agent::directives)
-/// and never names this type.
+/// Holds the function an agent uses to select directive text. Callers provide it through [`Agent::directives`](crate::Agent::directives) without naming this type.
 pub(crate) struct DirectiveStore {
     compute: Arc<DirectiveComputer>,
 }

@@ -36,7 +36,7 @@ impl FinishTool {
     pub(crate) const NAME: &str = "finish";
 
     /// Bind object results directly and preserve the legacy envelope for the
-    /// other shapes, routing both through `EventTool`'s completion branch.
+    /// other shapes, using `EventTool`'s completion branch for both.
     pub(crate) fn from_schema(schema: Option<Schema>, handover: Option<crate::Task>) -> Tool {
         let envelope = event::task_finished_schema(schema.as_ref(), handover.as_ref());
         let bound_object = schema.as_ref().is_some_and(declares_object);

@@ -1,12 +1,11 @@
-//! What a run may spend, how it retries, and when it compacts, as Python sees it.
+//! Exposes execution limits, request retries, and compaction settings through Python.
 
 use std::time::Duration;
 
 use agentwerk::Policy;
 use pyo3::prelude::*;
 
-/// A `Policy` limits the turns, tokens, and time a run may spend, and allows
-/// configuring retries and compaction.
+/// Set execution limits, request retries, and compaction behavior.
 #[pyclass(name = "Policy")]
 pub struct PyPolicy {
     pub inner: Policy,

@@ -1,4 +1,4 @@
-//! The agent's eyes on the filesystem. Lets a model read a file it did not receive in the prompt.
+//! Lets an agent read files that were not included in its prompt.
 
 use super::tool::{Event, Tool, ToolContext};
 use crate::prompts::directives::{
@@ -75,7 +75,7 @@ async fn run(args: ReadFileArgs, ctx: ToolContext) -> Event {
             // A NUL byte marks a true binary (image, archive, compiled
             // object); text, even minified or lightly obfuscated, never
             // contains one. Report it concisely instead of dumping decoded
-            // garbage that floods the transcript and breaks strict chat
+            // garbage that floods the conversation and breaks strict chat
             // templates. Otherwise decode lossily so odd-encoded source
             // stays inspectable, the point of a scan.
             if bytes.contains(&0) {
@@ -410,7 +410,7 @@ mod tests {
     #[tokio::test]
     async fn column_snaps_to_char_boundary() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        // 'é' is two bytes; column 5 lands on its second byte.
+        // 'é' is two bytes, so column 5 points to its second byte.
         std::fs::write(dir.path().join("test.txt"), "caféx\n").unwrap();
 
         let result = Tool::from(ReadFileTool)

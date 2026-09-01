@@ -18,10 +18,7 @@ const DEFAULT_BASE_URL: &str = "http://localhost:4000";
 /// chat completions to a local or remote LiteLLM instance, so the model name on
 /// the request decides which upstream backend handles it.
 ///
-/// Reads `LITELLM_API_KEY` (optional) and `LITELLM_BASE_URL` (defaults to
-/// `http://localhost:4000`) when built via [`Provider::from_env`]. Override
-/// the endpoint with [`base_url`] and the per-request timeout with
-/// [`timeout`].
+/// Build it through [`Provider::from_env`] to read the optional `LITELLM_API_KEY` and `LITELLM_BASE_URL`, which defaults to `http://localhost:4000`. Override the endpoint with [`base_url`] and the per-request timeout with [`timeout`].
 ///
 /// # Examples
 ///

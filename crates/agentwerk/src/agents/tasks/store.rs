@@ -74,12 +74,7 @@ impl Werk {
         }
     }
 
-    /// Write a tool's full output to `<dir>/tasks/<id>/outputs/<tool_use_id>.txt`.
-    /// Returns the path relative to the configured `dir` on success,
-    /// `None` when the write fails. The relative form keeps the
-    /// replies portable across moves of the tasks dir; join with
-    /// [`Self::get_dir`] to recover the on-disk path. Best-effort,
-    /// matching the surrounding observational-persistence contract.
+    /// Write a tool's full output and get its path relative to the configured `dir`, or `None` when the write fails. The relative path keeps replies portable when the task directory moves; join it with [`Self::get_dir`] to recover the on-disk path. The write is best-effort like the surrounding observational persistence.
     pub(crate) fn write_tool_output(
         &self,
         id: &str,
@@ -181,7 +176,7 @@ impl Werk {
     }
 
     /// Transition a task to `failed`, emitting `task_failed` under
-    /// `agent`'s name. The loop's failure paths route through this.
+    /// `agent`'s name. All agent failures use this transition.
     pub(crate) fn set_failed_by(&self, id: &str, agent: &str) -> Result<(), TaskError> {
         self.set_final_status(id, Status::Failed, agent)
     }
@@ -1100,7 +1095,6 @@ mod tests {
                 .unwrap();
         let lines: Vec<_> = body.lines().collect();
         assert_eq!(lines.len(), 2);
-        // Each line is a single, parseable JSON object.
         let _: Reply = serde_json::from_str(lines[0]).unwrap();
         let _: Reply = serde_json::from_str(lines[1]).unwrap();
     }
@@ -1206,11 +1200,9 @@ mod tests {
             });
         });
 
-        // Unlike summarize, the task is left as it was.
         let task = werk.get_task(&id).unwrap();
         assert_eq!(task.task, serde_json::Value::String("original task".into()));
 
-        // The drop is committed and reloads from disk.
         let reloaded = Werk::load(werk.get_dir()).unwrap();
         let replies = reloaded.get_task(&id).unwrap().replies;
         assert!(replies.iter().any(
@@ -1260,7 +1252,7 @@ mod tests {
             });
         });
 
-        // The edit landed in the base file, and minted no replies.<ts>.jsonl.
+        // The edit changed the base file without creating a replies.<ts>.jsonl copy.
         let names: Vec<String> = std::fs::read_dir(&task_dir)
             .unwrap()
             .flatten()
@@ -1293,7 +1285,7 @@ mod tests {
             });
         });
 
-        // One replies file, no snapshots, and neither dropped string survives.
+        // Rewriting replaces the one replies file, so removed content cannot survive in another copy.
         let task_dir = werk.get_dir().join("tasks").join(&id);
         let replies_files: Vec<String> = std::fs::read_dir(&task_dir)
             .unwrap()

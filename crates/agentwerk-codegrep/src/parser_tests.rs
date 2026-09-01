@@ -1,7 +1,4 @@
-//! Tests for the pattern parser.
-//!
-//! Each test parses a pattern string under a configuration and asserts
-//! the resulting node sequence.
+//! Tests the node sequences the pattern parser produces for supported forms.
 
 use super::ast::{Node, Pattern};
 use super::conf::Conf;

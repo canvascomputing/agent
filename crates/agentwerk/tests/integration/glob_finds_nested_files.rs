@@ -1,9 +1,4 @@
-//! End-to-end: a real LLM is asked to find every `lib.rs` anywhere in a
-//! nested project tree. The role does NOT name `glob` and does NOT
-//! describe its argument shape. Proves the tool's *description* is good
-//! enough for a model to (1) pick filename pattern matching, and (2)
-//! produce a recursive `**/lib.rs` pattern instead of a flat `*.rs`,
-//! which would miss every nested file.
+//! Verifies the tool description leads a real LLM to choose `GlobTool` and a recursive pattern for nested `lib.rs` files. The role does not name the tool or its arguments.
 
 use std::fs;
 use std::sync::{Arc, Mutex};

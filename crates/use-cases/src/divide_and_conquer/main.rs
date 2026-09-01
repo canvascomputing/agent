@@ -3,7 +3,7 @@
 //! Partitions `[1, N]` into K subranges and creates one task per
 //! subrange. Agents share the labelled Werk, call the `python` tool
 //! for an exact integer, and finish via `finish` with a
-//! schema-validated `{"idx", "partial_sum"}`. The driver aggregates
+//! schema-validated `{"idx", "partial_sum"}`. The program aggregates
 //! after `finish` returns and verifies the total against the
 //! closed-form `N(N+1)(2N+1)/6`.
 //!

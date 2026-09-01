@@ -1,9 +1,9 @@
 //! Interactive terminal chat. One `Werk` + `Agent` + `Knowledge`
 //! lives for the whole session, and one chat task spans every turn:
 //! the first input creates the task via `werk.add_task(...)`, every
-//! subsequent input lands as a user reply via `werk.add_reply(&id, ...)`.
-//! The agent loop's wait-for-input branch picks each comment up and
-//! drives the next model turn on the same growing set of replies. Tasks
+//! subsequent input is added as a user reply via `werk.add_reply(&id, ...)`.
+//! The agent loop's wait-for-input branch picks each reply up and
+//! starts the next model turn on the same growing set of replies. Tasks
 //! and knowledge both persist to `./.agentwerk/`, so an existing chat
 //! resumes across process restarts.
 //! The model's response streams to stdout via
@@ -11,7 +11,7 @@
 //! `/new` starts a fresh chat task, `/list` lists every task,
 //! `/stats` prints the statistics, `/clear` resets knowledge,
 //! `/bible [N]` injects N repetitions of Genesis (KJV) as a reply to
-//! drive context compaction (default N=1, ~52k tokens per repetition).
+//! trigger context compaction (default N=1, ~52k tokens per repetition).
 //! `/scrub <word>` redacts that word from the replies in place (via
 //! `edit_replies`) with no model turn; the word is gone on disk too.
 //! Ctrl-C at the prompt exits with code 130; Ctrl-D exits with
@@ -133,7 +133,7 @@ async fn main() {
     }
     let mut chat_id: Option<String> = None;
 
-    // One long-running loop drives every turn; each user input flips the
+    // One long-running loop processes every turn; each user input flips the
     // task out of the gate's pause and the next iteration redraws the
     // prompt once the assistant has spoken.
     werk.start();
@@ -360,7 +360,7 @@ fn print_event(
     last_input: &AtomicU64,
 ) {
     // Emit a single leading newline only when streamed model text just
-    // landed on stdout without a trailing newline; subsequent events
+    // reached stdout without a trailing newline; subsequent events
     // print directly on their own line.
     let break_stream = || {
         if midstream.swap(false, Ordering::Relaxed) {

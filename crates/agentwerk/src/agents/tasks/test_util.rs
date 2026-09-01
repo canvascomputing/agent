@@ -36,7 +36,7 @@ pub(super) fn minimal_agent(label: &str) -> Agent {
 }
 
 /// Build a `Werk` rooted at a fresh `TempDir` so the default
-/// `.agentwerk` directory never lands in the source tree during tests.
+/// `.agentwerk` directory is never created in the source tree during tests.
 /// Hold the returned `TempDir` for the test's lifetime.
 pub(super) fn test_werk() -> (Arc<Werk>, crate::test_util::TempDir) {
     let dir = crate::test_util::TempDir::new().unwrap();

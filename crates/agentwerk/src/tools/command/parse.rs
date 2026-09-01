@@ -74,9 +74,7 @@ impl Command {
 
     /// Get the program and arguments joined by single spaces.
     ///
-    /// This is the form the command tool matches its patterns against, because
-    /// it is what runs: quoting and spacing that would otherwise hide a command
-    /// from a rule are gone.
+    /// Get the form matched against command rules. Quoting and spacing that could hide a command are gone.
     pub(crate) fn normalized(&self) -> String {
         let mut line = self.program.clone();
         for argument in &self.arguments {

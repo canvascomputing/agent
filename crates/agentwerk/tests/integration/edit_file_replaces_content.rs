@@ -1,6 +1,4 @@
-//! End-to-end: a real LLM uses `EditFileTool` to swap one substring in a
-//! pre-populated file while leaving the rest untouched. We assert on the
-//! final file contents, not on the model's text response.
+//! Verifies a real LLM can replace one substring with `EditFileTool` without changing the rest of the file.
 
 use std::fs;
 

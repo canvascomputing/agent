@@ -1,6 +1,4 @@
-//! End-to-end: a real LLM drives three pattern-restricted `CommandTool`
-//! commands (`ls`, `cat`, `wc`) and finishes its task with a
-//! JSON result validated against the task schema.
+//! Verifies a real LLM can use restricted `ls`, `cat`, and `wc` commands and return a schema-valid result.
 
 use super::common;
 

@@ -1,6 +1,4 @@
-//! Replies as Python sees them. `Reply` carries its author, timestamp, and a
-//! list of `ReplyContent` blocks; each block is flattened to a `kind` plus a
-//! `data` dict, the same shape `Event` uses for a payload-carrying variant.
+//! Exposes task replies as Python objects with flattened content blocks.
 
 use agentwerk::agents::tasks::{Reply, ReplyContent};
 use pyo3::prelude::*;

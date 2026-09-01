@@ -13,7 +13,7 @@ use crate::providers::{AsUserMessage, Message};
 
 use super::reply::{Author, Reply, ReplyContent};
 
-/// A `Task` is a task plus what assigns and validates it.
+/// Define work with an optional assignment label and result schema.
 ///
 /// You set the task with [`Task::new`] and optionally use the `label`, `schema`,
 /// and `parent` builders. The rest is set for you at insertion time and as the

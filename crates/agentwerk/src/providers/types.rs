@@ -1,7 +1,4 @@
-//! Every value agentwerk and an LLM provider exchange, in the order a turn
-//! happens: the request and its parts, the messages and content blocks both
-//! sides use, then the reply, its token usage, its stop reason, and the pieces
-//! of it as they arrive.
+//! Defines request, response, message, token, and streaming values shared by LLM providers.
 
 use std::fmt;
 

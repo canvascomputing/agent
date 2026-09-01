@@ -1,4 +1,4 @@
-"""Tasks, schemas, and Werk state, exercised through the public API."""
+"""Test tasks, schemas, and Werk state through the public API."""
 
 import asyncio
 import json
@@ -843,7 +843,7 @@ async def test_on_result_async_runs_the_handler_on_the_callers_event_loop(werk):
 
     await werk.finish_all_tasks()
 
-    # The whole point: a commit here can be serialized against the caller's own.
+    # Running on the caller's loop lets the caller serialize its own database work with the handler.
     assert loops == [asyncio.get_running_loop()]
 
 
@@ -865,8 +865,7 @@ async def test_finish_all_hands_back_the_results_of_every_pool(werk):
 async def test_finish_task_hands_back_the_first_result_in_query_order(werk):
     scan = werk.add_task(aw.Task("scan the corpus", label="scan"))
     report = werk.add_task(aw.Task("write it up", label="report"))
-    # Resolved back to front, so the answer tells creation order from the order
-    # the results landed in.
+    # Resolve back to front so the answer distinguishes creation order from completion order.
     werk.set_task_finished(report, {"pages": 2})
     werk.set_task_finished(scan, {"verdict": "clean"})
 

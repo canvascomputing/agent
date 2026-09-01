@@ -1,4 +1,4 @@
-//! The shared Werk agents claim tasks from, and the lifecycle that drives them.
+//! Stores, assigns, and executes tasks for a shared `Werk`.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::future::Future;
@@ -102,7 +102,7 @@ struct AwaitedHandler {
 }
 
 /// An event held for the awaited handlers, with its task resolved as it was
-/// when the event landed.
+/// when the event was emitted.
 type Delivery = (Event, Option<Task>);
 
 /// `emit_event` runs on an agent that has to carry on, so an event an awaited handler
@@ -189,8 +189,8 @@ impl Run {
 
     /// Resolves once the run is no longer working, whatever the reason.
     pub(crate) async fn until_draining(&self) {
-        // `wait_for` reads the current value before it waits, so a phase
-        // landing between the two cannot be missed.
+        // `wait_for` reads the current value before waiting, so it cannot miss
+        // a phase change between those operations.
         let _ = self
             .phase
             .subscribe()
@@ -213,9 +213,7 @@ impl Run {
     }
 }
 
-/// The core data structure of agentwerk, coordinating complex work across
-/// agents. Many agents share one `Werk` and pick up tasks
-/// concurrently; a label assigns work to the right agents.
+/// Store tasks, assign them to agents by label, and run agents concurrently.
 ///
 /// ```no_run
 /// use agentwerk::{Agent, Task, Werk};
@@ -459,8 +457,8 @@ impl Werk {
     ///
     /// [`Self::on_event`] cannot await: it runs on the agent task that emitted
     /// the event, and that task has to carry on. This one hands the work to
-    /// whichever `finish` is waiting, which awaits each handler as the events
-    /// land. In Python that puts the handler on the caller's event loop, so
+    /// whichever `finish` is waiting, which awaits each handler as events
+    /// arrive. In Python that puts the handler on the caller's event loop, so
     /// work that has to stay serialized against the caller's own, such as a
     /// commit, can be.
     ///
@@ -685,7 +683,7 @@ impl Werk {
                     return;
                 }
                 // Resolved now rather than at handover, so a handler sees the
-                // task as it was when the event landed. Only for the kinds a
+                // task as it was when the event arrived. Only for the kinds a
                 // task-shaped hook accepts: resolving copies every reply,
                 // which on `TextChunkReceived` would cost once per piece.
                 let task = match is_task_event(event) || is_failure(event) {
@@ -802,7 +800,7 @@ impl Werk {
             .map(|a| a.get_model().name.clone())
     }
 
-    /// Set the execution limits and retry tuning.
+    /// Set execution limits and retry settings.
     ///
     /// The whole `Policy` is replaced, so build one from the fields you want:
     /// `Policy { max_turns: Some(40), ..Default::default() }`. A
@@ -821,7 +819,7 @@ impl Werk {
         self
     }
 
-    /// Get the execution limits and retry tuning in force.
+    /// Get the execution limits and retry settings in force.
     pub fn get_policy(&self) -> Policy {
         self.policy.lock().unwrap().clone()
     }
@@ -1197,7 +1195,7 @@ impl Werk {
                 break;
             }
         }
-        // Again after the wait, for whatever landed in its last turn.
+        // Check again after the wait for events emitted during the last turn.
         self.await_handlers().await;
         // Nothing this filter named is left. When no task at all is open, the
         // run is over too, so start it finishing and let it announce the reason.
@@ -1206,13 +1204,12 @@ impl Werk {
                 .set_draining(self.ending_reason().unwrap_or(FinishReason::Drained));
             self.run.until_finished().await;
         }
-        // Releasing the handle lets a later finish start a fresh run, the way a
-        // host adds more work once the Werk has run dry.
+        // Releasing the handle lets a later finish start a fresh execution after the current tasks are done.
         if self.run.is_finished() {
             self.join_handle.lock().unwrap().take();
         }
         // `and_status`, not the `find_results` default: a caller who waited on
-        // `status = todo` is handed the results that landed, not the todos.
+        // `status = todo` receives finished results, not the matching unfinished tasks.
         self.matching_tasks(&query.and_status(Status::Finished))
             .into_iter()
             .filter_map(|t| t.result)
@@ -1222,10 +1219,7 @@ impl Werk {
     /// Wait for every task to be done, then get every result in creation
     /// order.
     ///
-    /// This is how a host waits for work it started: it returns once no task
-    /// has work left for an agent. [`Self::finish_tasks`] waits for one pool or one
-    /// task instead, and everything it says about starting, restarting, and
-    /// which tasks contribute a result holds here too.
+    /// Wait until no task has work left for an agent. [`Self::finish_tasks`] applies the same behavior to one pool or task.
     ///
     /// ```no_run
     /// # use agentwerk::Werk;
@@ -1360,7 +1354,6 @@ mod tests {
     fn werk_handle_is_shared_between_caller_and_added_agent() {
         let (werk, _tmp) = test_werk();
         let alice = werk.add_agent(minimal_agent("alice"));
-        // Alice's task lands in the same Werk.
         alice.add_task("from alice");
         werk.add_task("from Werk");
         let all_ids: Vec<String> = werk
@@ -2646,7 +2639,7 @@ mod tests {
         werk.set_result(&id, serde_json::json!("done")).unwrap();
         werk.set_finished_by(&id, "analyst").unwrap();
 
-        // `replies` is `#[serde(skip)]`, so a transcript here proves the
+        // `replies` is `#[serde(skip)]`, so replies here prove the
         // handler holds the in-memory task, not a disk round-trip.
         assert_eq!(
             *seen.lock().unwrap(),
@@ -2785,8 +2778,7 @@ mod tests {
         let (werk, _tmp) = test_werk();
         werk.add_task(Task::new("a").label("scan"));
         werk.add_task(Task::new("b").label("report"));
-        // Resolved back to front, so the answer tells creation order from the
-        // order the results landed in.
+        // Resolve back to front so the answer distinguishes creation order from completion order.
         attach_done_result(&werk, "t-2", "reported");
         attach_done_result(&werk, "t-1", "scanned");
 

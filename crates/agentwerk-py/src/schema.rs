@@ -1,5 +1,4 @@
-//! The schema as Python sees it: built from a dict or another JSON-like value,
-//! then attached to a task.
+//! Exposes result schemas built from Python JSON-like values.
 
 use agentwerk::Schema;
 use pyo3::prelude::*;

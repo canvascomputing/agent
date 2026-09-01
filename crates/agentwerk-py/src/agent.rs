@@ -1,5 +1,4 @@
-//! The agent as Python sees it. `Agent()` configures itself and drives its own
-//! tasks, the way the Rust `Agent` does.
+//! Exposes Rust agents through Python with the same task behavior.
 //!
 //! Rust configures through methods that consume and return the agent, which is
 //! why the agent sits in an `Option` here: a setter takes it out and puts the
@@ -19,8 +18,7 @@ use crate::task::{to_task, PyTask};
 use crate::tools::extract_tool;
 use crate::werk::PyWerk;
 
-/// An `Agent` is the core entity of agentwerk. It uses tools to solve tasks
-/// assigned through a Werk.
+/// Use an LLM and registered tools to complete tasks claimed from a `Werk`.
 #[pyclass(name = "Agent")]
 pub struct PyAgent {
     /// Empty only while a setter has the agent.
@@ -231,7 +229,7 @@ impl PyAgent {
     ///
     /// A `str` is the task itself, and an `os.PathLike` names the file holding
     /// it. A `Task` carries a custom label or schema with it. Call it as often
-    /// as you like: one agent can drive many tasks.
+    /// as you like: one agent can work on many tasks.
     fn add_task(&self, task: &Bound<'_, PyAny>) -> PyResult<String> {
         Ok(self.get().add_task(to_task(task)?))
     }

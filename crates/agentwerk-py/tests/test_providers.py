@@ -1,4 +1,4 @@
-"""Providers, model tuning, and the knowledge store."""
+"""Test LLM providers, model settings, and the knowledge store."""
 
 import pytest
 

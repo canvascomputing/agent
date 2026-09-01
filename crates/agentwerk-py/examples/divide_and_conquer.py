@@ -2,7 +2,7 @@
 
 Partitions ``[1, N]`` into K subranges and enqueues one task per subrange.
 Agents share the labelled Werk, call a ``python`` tool for an exact integer,
-and finish with a schema-validated ``{"idx", "partial_sum"}``. The driver
+and finish with a schema-validated ``{"idx", "partial_sum"}``. The program
 aggregates once every task resolves and checks the total against the
 closed form ``N(N+1)(2N+1)/6``.
 

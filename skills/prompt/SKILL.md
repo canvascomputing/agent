@@ -7,7 +7,7 @@ description: Write or rewrite agentwerk role files, tool definitions, and direct
 
 You write agentwerk's agent-facing text: role files, `*.tool.md` definitions, directives. Each one contains only what the model needs to act and return a valid result. Every sentence must change an action, tool choice, decision, output, or recovery.
 
-Compression is the style, not a level. There is no verbose mode and no flag.
+Use the same compressed style in every mode.
 
 ## Modes
 
@@ -24,13 +24,13 @@ Drop:
 - Connective fluff: however, furthermore, additionally, in addition.
 - Implementation rationales. State the required behavior and its task-facing consequence instead.
 - Restatements. Each fact appears once, in one section.
-- Capability framing. A strengths block changes no decision the agent makes.
+- Capability framing. A strengths block does not change the agent's decisions.
 - Internal data structures, hidden state, storage, queues, schema machinery, routing, orchestration mechanics, and parser internals. Describe only observable inputs and outcomes.
 
 Keep:
 
-- Every marker: `IMPORTANT`, `CRITICAL`, `NEVER`, `DO NOT`, `MUST`, `NOT`, `ONLY`. One severity each, never interchangeably. The marker is what carries a compressed rule: it stands in for the reason clause that used to make the rule stick.
-- `not`, `never`, `no`, `only`, `except`. A flipped meaning costs more than every token the file saves.
+- Every marker: `IMPORTANT`, `CRITICAL`, `NEVER`, `DO NOT`, `MUST`, `NOT`, `ONLY`. Each has a distinct severity. Preserve it exactly.
+- `not`, `never`, `no`, `only`, `except`. Preserve the meaning of every restriction.
 - One task-facing reason or consequence where a rule is non-obvious or a prohibition needs weight. Attach it after a colon. NEVER an em dash: `agentdocs/style.md` bans it repo-wide.
 
 Verbatim, never compressed:
@@ -41,7 +41,7 @@ Verbatim, never compressed:
 
 NEVER invent an abbreviation (`cfg`, `impl`, `req`, `res`, `fn`): it obscures meaning without reliably reducing length. No arrows as a because-linker. No emoji, no decorative banners.
 
-IMPORTANT: stop compressing where an ordered procedure goes ambiguous without its conjunctions. Order beats brevity.
+IMPORTANT: keep every conjunction needed to make an ordered procedure unambiguous.
 
 ## Role file
 
@@ -80,12 +80,12 @@ One `finish` with:
 NOTE: <what this task is not>
 ````
 
-- Tool list on one line. A per-tool bullet earns its place ONLY when the agent picks the wrong tool without it.
+- Keep the tool list on one line. Include a per-tool bullet ONLY when omitting it would make the agent choose the wrong tool.
 - One example output, added ONLY when the field list leaves the shape unclear and a neutral example is possible.
 - Examples teach shape ONLY. Use inert values such as `"..."`; NEVER seed a verdict, recommendation, label, status, path, filename, factual answer, or strategy the model could copy.
 - List enums and decision rules outside examples. Omit an example when no valid neutral shape exists.
 - Cap every text field with a character or sentence budget. Uncapped fields run long.
-- NEVER grant a tool the input did not name: the model calls it and burns the turn.
+- NEVER grant a tool the input did not name: an unavailable tool call wastes the turn.
 
 ## Tool definition
 
@@ -107,7 +107,7 @@ NOTE: <what this task is not>
 
 ## Directive
 
-No skeleton. State the failure and next action without subsystem or state-management details.
+State the failure and next action without a fixed template or state-management details.
 
 ## Shared fragments
 

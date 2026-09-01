@@ -1,4 +1,4 @@
-//! Match records, locations, and the `search` entry point.
+//! Searches tokenized source and returns structural matches and locations.
 
 use super::ast::{MetavariableKind, Node, Pattern};
 use super::token::{self, Token};
@@ -453,7 +453,6 @@ fn match_ellipsis(
             }
             *env = snapshot;
         }
-        // Advance by one structural unit.
         let token = tokens.get(current_end)?;
         if is_excluded_close(token, excluded_close) {
             return None;

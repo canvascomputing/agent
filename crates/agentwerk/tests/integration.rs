@@ -1,5 +1,4 @@
-//! Integration tests that hit a live LLM provider.
-//! Run with provider env vars set (e.g. `ANTHROPIC_API_KEY` + `MODEL`).
+//! Runs integration tests against the LLM provider selected by environment variables.
 
 #[path = "integration/common.rs"]
 mod common;

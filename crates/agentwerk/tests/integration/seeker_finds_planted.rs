@@ -1,13 +1,6 @@
-//! End-to-end: the real Seeker role (used verbatim) is run for a fixed time
-//! budget, each task already naming one observed construct per planted
-//! language, over a directory seeded with planted malicious indicators across
-//! secrets, networking, and dynamic-execution categories.
+//! Verifies the real Seeker role can find planted malicious indicators within a fixed time budget.
 //!
-//! It prints every `grep` call the agents made and a found / missed
-//! coverage breakdown, then asserts (tolerantly) that the pool surfaced at least
-//! one planted indicator. The printed calls are the point: they show how the live
-//! model turns a named threat into regex queries, which is what the prompt
-//! and tool docs are tuned against.
+//! The test prints grep calls and coverage to show how the live model converts named threats into queries. It requires at least one planted indicator rather than exact coverage.
 
 use std::fs;
 use std::sync::{Arc, Mutex};
@@ -211,7 +204,7 @@ async fn seeker_pool_finds_planted_indicators(
     let outputs = outputs.lock().unwrap().clone();
     let all_text = outputs.join("\n");
 
-    // Every grep call the agents made: the raw material for tuning the prompt.
+    // Every grep call the agents made: the evidence used to improve the prompt.
     eprintln!("\n--- grep calls ({}) ---", calls.len());
     for (agent, input) in &calls {
         eprintln!("[{agent}] grep({})", serde_json::to_string(input).unwrap());

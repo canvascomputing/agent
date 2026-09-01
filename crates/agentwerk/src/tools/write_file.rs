@@ -1,4 +1,4 @@
-//! Lets an agent create or overwrite a file on disk. Pairs with `read_file` and `edit_file` to give a model full file-editing reach.
+//! Lets an agent create or overwrite files.
 
 use super::tool::{Event, Tool, ToolContext};
 use crate::prompts::directives::{WRITE_FILE_FAILED, WRITE_FILE_PARENT_NOT_CREATED};

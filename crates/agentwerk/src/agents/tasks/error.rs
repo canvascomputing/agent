@@ -13,7 +13,7 @@ pub enum TaskError {
         /// Requested task ID.
         id: String,
     },
-    /// Status transition `from → to` is not allowed.
+    /// Status transition from `from` to `to` is not allowed.
     TransitionRejected {
         /// Current status.
         from: Status,

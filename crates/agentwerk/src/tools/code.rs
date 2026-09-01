@@ -1,7 +1,4 @@
-//! Grep's code-shape matcher, the `syntax: "code"` mode. Matches by the
-//! shape of code (`fn $NAME(...)`) rather than by regex, driving the `codegrep`
-//! engine while reusing grep's file walk, output modes, and structured output.
-//! `run` is handed the already-collected file list by `grep::search_corpus`.
+//! Adds structural code matching to grep's `syntax: "code"` mode.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};

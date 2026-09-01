@@ -1,5 +1,4 @@
-//! The Python bindings wrap the Rust crate, which stays the one source of
-//! truth, and expose its agents, tools, LLM providers, and Werk.
+//! Exposes the Rust agentwerk API through Python.
 
 use pyo3::prelude::*;
 

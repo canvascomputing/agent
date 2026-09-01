@@ -157,7 +157,7 @@ mod tests {
     #[tokio::test]
     async fn first_overflow_attempts_compaction_before_request_failed() {
         let provider = MockProvider::with_results(vec![
-            // A single-message transcript collapses to a no-op, so prime
+            // A single-message conversation collapses to a no-op, so prime
             // one turn before the overflow to give compaction something.
             Ok(tool_call_response("primer")),
             Err(crate::providers::ProviderError::ContextWindowExceeded {

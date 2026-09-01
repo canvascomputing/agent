@@ -1,7 +1,4 @@
-//! End-to-end: a real LLM agent is asked to locate a unique string
-//! buried deep inside a long line, past column 100. The role does NOT
-//! hint at grep or content mode. Proves the agent can find the match
-//! and that `grep` reports the correct column position.
+//! Verifies a real LLM can choose grep, find text past column 100, and use the reported column. The role does not name grep or its content mode.
 
 use std::fs;
 use std::sync::{Arc, Mutex};
@@ -29,11 +26,9 @@ async fn finds_string_buried_deep_in_line() -> std::result::Result<(), Box<dyn s
     let root = dir.path();
     fs::create_dir_all(root.join("src"))?;
 
-    // Decoy files, none containing the needle.
     fs::write(root.join("src/main.rs"), "fn main() { run(); }\n")?;
     fs::write(root.join("src/server.rs"), "pub fn run() { loop {} }\n")?;
 
-    // Bury the needle past column 100 inside a long line.
     let filler = "x".repeat(120);
     let target_line = format!("const DATA: &str = \"{filler}{NEEDLE}\";");
     fs::write(
@@ -41,7 +36,6 @@ async fn finds_string_buried_deep_in_line() -> std::result::Result<(), Box<dyn s
         format!("// config\n{target_line}\n"),
     )?;
 
-    // Derive the expected column from what we just wrote.
     let expected_col = target_line.find(NEEDLE).unwrap() + 1;
     assert!(
         expected_col > 100,
@@ -112,7 +106,6 @@ async fn finds_string_buried_deep_in_line() -> std::result::Result<(), Box<dyn s
 
     let recorded = calls.lock().unwrap().clone();
 
-    // The agent must have called grep with the needle.
     let grep_call = recorded
         .iter()
         .find(|c| {
@@ -138,7 +131,6 @@ async fn finds_string_buried_deep_in_line() -> std::result::Result<(), Box<dyn s
         .as_deref()
         .expect("grep call should have produced output");
 
-    // grep must find the needle in config.rs, not in any decoy.
     assert!(
         output.contains("config.rs"),
         "grep should find the needle in config.rs; got: {output:?}"
@@ -148,7 +140,6 @@ async fn finds_string_buried_deep_in_line() -> std::result::Result<(), Box<dyn s
         "grep should not match decoy files; got: {output:?}"
     );
 
-    // If content mode was used, the column must be present.
     if grep_call
         .input
         .get("output_mode")
@@ -162,7 +153,6 @@ async fn finds_string_buried_deep_in_line() -> std::result::Result<(), Box<dyn s
         );
     }
 
-    // The agent's final answer should name config.rs.
     let answer = common::last_result_text(&werk);
     assert!(
         answer.contains("config.rs"),
@@ -255,7 +245,6 @@ async fn reads_column_slice_after_grep_locates_needle(
 
     let recorded = calls.lock().unwrap().clone();
 
-    // The agent must have called grep with the needle.
     assert!(
         recorded.iter().any(|c| c.name == "grep"
             && c.input
@@ -269,7 +258,6 @@ async fn reads_column_slice_after_grep_locates_needle(
             .collect::<Vec<_>>()
     );
 
-    // The agent must have called read_file with column set.
     assert!(
         recorded
             .iter()
@@ -281,7 +269,6 @@ async fn reads_column_slice_after_grep_locates_needle(
             .collect::<Vec<_>>()
     );
 
-    // The agent's final answer should name bundle.min.js.
     let answer = common::last_result_text(&werk);
     assert!(
         answer.contains("bundle.min.js"),

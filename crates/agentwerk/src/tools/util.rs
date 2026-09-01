@@ -154,11 +154,7 @@ pub(crate) fn not_found_hint(
     }
 }
 
-/// Dropped-folder heuristic: when the model built an absolute path that lands
-/// outside the working directory, some trailing slice of it often exists *under*
-/// the working directory (the model dropped or mis-nested leading folders).
-/// Returns the longest trailing suffix that exists under `ctx_dir`; `None` when
-/// the path is already under the working directory or no suffix matches.
+/// Find the longest trailing suffix that exists under `ctx_dir` when a model drops or misplaces leading directories. A path already under `ctx_dir`, or one with no matching suffix, produces `None`.
 fn suggest_path(ctx_dir: &Path, resolved: &Path) -> Option<PathBuf> {
     if resolved.starts_with(ctx_dir) {
         return None;
@@ -257,7 +253,7 @@ mod tests {
     #[test]
     fn suggest_path_none_when_path_is_under_working_directory() {
         let tmp = crate::test_util::TempDir::new().unwrap();
-        // A relative-resolved miss lands under cwd; dropped-folder does not apply.
+        // A relative miss resolves under cwd, so the dropped-directory heuristic does not apply.
         let resolved = tmp.path().join("missing.py");
         assert_eq!(suggest_path(tmp.path(), &resolved), None);
     }

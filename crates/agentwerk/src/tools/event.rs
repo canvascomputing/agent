@@ -88,7 +88,7 @@ pub(super) fn task_finished_schema(schema: Option<&Schema>, handover: Option<&Ta
     document
 }
 
-/// Publish one event. `task_finished` routes through the task transition so
+/// Publish one event. `task_finished` uses the task transition so
 /// validation, persistence, handover ordering, and observers stay in one path.
 pub(super) fn dispatch(
     input: &Value,

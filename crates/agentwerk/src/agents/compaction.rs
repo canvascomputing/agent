@@ -382,7 +382,7 @@ mod tests {
 
     #[test]
     fn should_compact_proactively_is_false_when_history_empty() {
-        // No samples yet → the trigger cannot reason about growth and
+        // With no samples, the trigger cannot reason about growth and
         // defers; the loop has not produced a request to anchor against.
         let messages = [Message::user("hi")];
         assert!(!should_compact_proactively(
@@ -435,7 +435,7 @@ mod tests {
     fn should_compact_proactively_uses_last_delta_to_fire_one_turn_early() {
         // Threshold = 200_000 * 0.85 = 170_000. The current estimate sits at
         // 165_000 (under threshold), but the last per-turn delta was 10_000:
-        // the next request after this one would land at ~175_000 and overflow.
+        // the next request would reach ~175_000 and overflow.
         // Trigger must fire now, not next turn.
         let history = [
             TokenUsage {

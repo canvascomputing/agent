@@ -1,5 +1,4 @@
-//! End-to-end: a real LLM combines `GlobTool` and `ReadFileTool` to
-//! explore a directory.
+//! Verifies a real LLM can explore a directory with `GlobTool` and `ReadFileTool`.
 
 use super::common;
 

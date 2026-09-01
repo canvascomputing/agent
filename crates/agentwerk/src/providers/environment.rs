@@ -44,11 +44,11 @@ pub(crate) fn env_opt(name: &str) -> Option<String> {
 /// set one on the agent.
 ///
 /// Detection order:
-///   0. `LITELLM_PROVIDER` → explicit selection (`anthropic`, `mistral`, `openai`, `litellm`)
-///   1. `LITELLM_API_KEY`  → LiteLLM proxy (URL from `LITELLM_BASE_URL`, default `http://localhost:4000`)
-///   2. `MISTRAL_API_KEY`  → Mistral
-///   3. `ANTHROPIC_API_KEY` → Anthropic
-///   4. `OPENAI_API_KEY`   → OpenAI
+///   0. `LITELLM_PROVIDER`: explicit selection (`anthropic`, `mistral`, `openai`, `litellm`)
+///   1. `LITELLM_API_KEY`: LiteLLM proxy (URL from `LITELLM_BASE_URL`, default `http://localhost:4000`)
+///   2. `MISTRAL_API_KEY`: Mistral
+///   3. `ANTHROPIC_API_KEY`: Anthropic
+///   4. `OPENAI_API_KEY`: OpenAI
 ///
 /// Empty env vars are treated as unset.
 pub(crate) fn provider_from_env() -> ProviderResult<Provider> {

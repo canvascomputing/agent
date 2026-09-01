@@ -1,6 +1,4 @@
-//! The query as Python sees it. One class over both field sets: Python carries
-//! no type parameter, so the string is compiled over the task fields and the
-//! event fields at once, and each call reads the compilation it needs.
+//! Exposes AQL queries over tasks and events through one Python class.
 
 use agentwerk::agents::{Matcher, QueryError};
 use agentwerk::event::Event;

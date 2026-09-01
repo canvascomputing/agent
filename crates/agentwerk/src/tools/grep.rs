@@ -17,7 +17,7 @@ use crate::prompts::directives::{
 
 /// Search the working directory for a regular-expression `pattern` and return a
 /// structured result: matching lines, matching file names, or per-file counts,
-/// per `output_mode`. The body drives ripgrep's search engine in-process, so a
+/// per `output_mode`. The body runs ripgrep's search engine in-process, so a
 /// match is found the same way `rg pattern` would. Concurrent.
 ///
 /// # Examples

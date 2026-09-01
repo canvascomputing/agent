@@ -1,4 +1,4 @@
-"""Shared fixtures and the live-provider gate.
+"""Provide shared fixtures and skip live tests without a provider.
 
 Offline tests run with no network. Tests marked ``live`` need a real LLM
 provider and are skipped automatically when none is configured.
@@ -19,7 +19,7 @@ PROVIDER_ENV_KEYS = (
 
 
 def has_provider() -> bool:
-    """True when any supported provider is configured in the environment."""
+    """Return whether the environment configures a supported provider."""
     return any(os.environ.get(key) for key in PROVIDER_ENV_KEYS)
 
 
@@ -35,15 +35,13 @@ def pytest_collection_modifyitems(config, items):
 
 @pytest.fixture
 def werk(tmp_path):
-    """A fresh, empty Werk with a session directory of its own, so one
-    test's event log is never another's."""
+    """Provide an empty Werk with an isolated session directory."""
     return aw.Werk().set_dir(str(tmp_path))
 
 
 @pytest.fixture
 def offline_agent():
-    """An agent with a dummy provider: configures without any network, so
-    configuration, enqueue, and query behavior is testable offline."""
+    """Provide an agent that supports offline configuration and query tests."""
     return (
         aw.Agent()
         .provider(aw.Anthropic("test-key"))
@@ -53,11 +51,11 @@ def offline_agent():
 
 @pytest.fixture
 def live_agent():
-    """An agent resolved from the environment; only used by ``live`` tests."""
+    """Provide an agent from the environment for ``live`` tests."""
     return aw.Agent.from_env().role("You answer in one short word.")
 
 
 @pytest.fixture
 def knowledge_dir(tmp_path):
-    """A temp directory for an Open Knowledge Format bundle."""
+    """Provide a temporary directory for an Open Knowledge Format bundle."""
     return str(tmp_path / "kb")

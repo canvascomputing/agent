@@ -173,7 +173,6 @@ mod tests {
         let content = result.get_content();
         let lines: Vec<&str> = content.lines().collect();
         assert_eq!(lines.len(), 3);
-        // Sorted alphabetically
         assert!(lines[0].starts_with("alpha.txt"));
         assert!(lines[0].contains("5 bytes"));
         assert!(lines[1].starts_with("beta.txt"));
@@ -196,7 +195,6 @@ mod tests {
         let content = result.get_content();
         assert!(content.contains("child/nested.txt") || content.contains("child\\nested.txt"));
         assert!(content.contains("root.txt"));
-        // Should have at least 3 entries: root.txt, child, child/nested.txt
         assert!(content.lines().count() >= 3);
     }
 
@@ -225,7 +223,6 @@ mod tests {
         let tmp = crate::test_util::TempDir::new().unwrap();
         fs::create_dir(tmp.path().join("pkg")).unwrap();
 
-        // Guess a non-existent directory directly under cwd.
         let result = Tool::from(ListDirectoryTool)
             .call(serde_json::json!({ "path": "nope" }), &test_ctx(tmp.path()))
             .await;

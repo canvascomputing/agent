@@ -6,21 +6,20 @@
 - `crates/agentwerk-py/`: the Python bindings, built with maturin.
 - `crates/use-cases/`: runnable example binaries that depend on the library.
 
-## Building and testing
+## Build and Test
 
 ```bash
 make                # build (warnings are errors)
-make test           # unit tests bundled by tests/unit (workspace --lib)
+make test           # library, doctest, and use-case tests
 make fmt            # format code
 make clean          # remove build artifacts
 make update         # update dependencies
 make hooks          # install Claude Code hooks
 ```
 
-## Python bindings
+## Python Bindings
 
-Create a virtualenv at the repo root and activate it; maturin installs into it,
-and the test targets call the `python3` on your PATH.
+Create a virtual environment at the repository root and activate it. Maturin installs into the active environment, and the test targets use the `python3` on your `PATH`.
 
 ```bash
 python3 -m venv .venv
@@ -31,16 +30,16 @@ make python_test               # offline pytest suite
 make python_test_integration   # the tests marked live
 ```
 
-## Integration tests
+## Integration Tests
 
 > Configure an LLM provider first (see [Environment](#environment)).
 
 ```bash
 make test_integration                     # run all
-make test_integration name=command_usage     # run one
+make test_integration name=command_usage  # run one
 ```
 
-## Use cases
+## Use Cases
 
 ```bash
 make use_case                                                 # list available
@@ -64,7 +63,7 @@ GitHub Actions handles the crates.io publish via trusted publishing once the new
 make doc                   # cargo doc --no-deps -p agentwerk (strict rustdoc)
 ```
 
-## LiteLLM proxy
+## LiteLLM Proxy
 
 Start a local LiteLLM proxy on port 4000 that forwards to a provider. Requires Docker.
 
@@ -74,7 +73,7 @@ make litellm LITELLM_PROVIDER=openai       # use OpenAI
 make litellm LITELLM_PROVIDER=mistral      # use Mistral
 ```
 
-## Local inference servers
+## Local Inference Servers
 
 agentwerk relies on server-side tool calling. Enable it through the following flags:
 
@@ -85,48 +84,47 @@ agentwerk relies on server-side tool calling. Enable it through the following fl
 
 ## Environment
 
-Use cases and integration tests use the following environment variables, or a
-`.env` file sourced by the Makefile targets.
+Use cases and integration tests read these environment variables from the shell. Source a `.env` file yourself before running a target.
 
 **General**
 
 | Variable | Description |
 |----------|-------------|
-| `MODEL` | Generic model override for `Model::from_env()`. |
-| `MODEL_CONTEXT_WINDOW` | Context window size in tokens, applied by `Model::from_env()` over the registry's value for the name. |
-| `BRAVE_API_KEY` | Required by the `deep-research` example. |
-| `SSL_CERT_FILE` | PEM bundle of CA certificates to trust instead of the built-in root store. |
-| `SSL_CERT_DIR` | Directory of PEM CA certificate files to trust instead of the built-in root store. |
+| `MODEL` | Set the model returned by `Model::from_env()`. |
+| `MODEL_CONTEXT_WINDOW` | Set its context window in tokens, overriding the model registry. |
+| `BRAVE_API_KEY` | Authenticate the `deep-research` example. |
+| `SSL_CERT_FILE` | Trust a PEM CA bundle instead of the built-in root store. |
+| `SSL_CERT_DIR` | Trust PEM CA certificate files from a directory instead of the built-in root store. |
 
 **Anthropic**
 
 | Variable | Description |
 |----------|-------------|
-| `ANTHROPIC_API_KEY` | API key (required) |
-| `ANTHROPIC_BASE_URL` | API URL (default: `https://api.anthropic.com`) |
-| `ANTHROPIC_MODEL` | Model (default: `claude-sonnet-4-20250514`) |
+| `ANTHROPIC_API_KEY` | Authenticate with Anthropic. Required. |
+| `ANTHROPIC_BASE_URL` | Set the API URL. Defaults to `https://api.anthropic.com`. |
+| `ANTHROPIC_MODEL` | Set the model. Defaults to `claude-sonnet-4-20250514`. |
 
 **Mistral**
 
 | Variable | Description |
 |----------|-------------|
-| `MISTRAL_API_KEY` | API key (required) |
-| `MISTRAL_BASE_URL` | API URL (default: `https://api.mistral.ai`) |
-| `MISTRAL_MODEL` | Model (default: `mistral-medium-2508`) |
+| `MISTRAL_API_KEY` | Authenticate with Mistral. Required. |
+| `MISTRAL_BASE_URL` | Set the API URL. Defaults to `https://api.mistral.ai`. |
+| `MISTRAL_MODEL` | Set the model. Defaults to `mistral-medium-2508`. |
 
 **OpenAI**
 
 | Variable | Description |
 |----------|-------------|
-| `OPENAI_API_KEY` | API key (required) |
-| `OPENAI_BASE_URL` | API URL (default: `https://api.openai.com`) |
-| `OPENAI_MODEL` | Model (default: `gpt-4o`) |
+| `OPENAI_API_KEY` | Authenticate with OpenAI. Required. |
+| `OPENAI_BASE_URL` | Set the API URL. Defaults to `https://api.openai.com`. |
+| `OPENAI_MODEL` | Set the model. Defaults to `gpt-4o`. |
 
 **LiteLLM proxy**
 
 | Variable | Description |
 |----------|-------------|
-| `LITELLM_BASE_URL` | Proxy URL (default: `http://localhost:4000`) |
-| `LITELLM_API_KEY` | Auth key (required to select via `Provider::from_env()`) |
-| `LITELLM_MODEL` | Model (default: `claude-sonnet-4-20250514`) |
-| `LITELLM_PROVIDER` | LLM provider (`anthropic`, `mistral`, `openai`, `litellm`): explicit selection that overrides API-key auto-detection. |
+| `LITELLM_BASE_URL` | Set the proxy URL. Defaults to `http://localhost:4000`. |
+| `LITELLM_API_KEY` | Authenticate with LiteLLM and select it through `Provider::from_env()`. |
+| `LITELLM_MODEL` | Set the model. Defaults to `claude-sonnet-4-20250514`. |
+| `LITELLM_PROVIDER` | Select `anthropic`, `mistral`, `openai`, or `litellm` before API-key detection. |

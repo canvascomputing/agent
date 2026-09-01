@@ -56,9 +56,7 @@ class FetchTool:
 
     def __init__(self) -> None: ...
     def impersonate(self) -> "FetchTool":
-        """Send the headers and HTTP/2 settings a browser sends. The TLS
-        handshake is unchanged, so a site reading the ClientHello rather than
-        the headers refuses the request either way."""
+        """Send browser headers and HTTP/2 settings without changing the TLS ClientHello."""
         ...
 
 class CommandTool:
@@ -120,13 +118,9 @@ class Reply:
     def __repr__(self) -> str: ...
 
 class Query:
-    """Selects tasks or recorded events by field values, compiled from AQL.
+    """Select tasks or recorded events with AQL.
 
-    The string is the same syntax a query argument carries, `ORDER BY <field>
-    ASC | DESC` included. It is read over the task fields where tasks are
-    selected and over the event fields where events are, so one the two field
-    sets both reject raises `ValueError` here, and one only the other set
-    accepts raises where it is used.
+    The query may include ``ORDER BY <field> ASC | DESC``. Construction raises ``ValueError`` only when both task and event fields reject the query; a query valid for one field set may still fail when used with the other.
     """
 
     def __init__(self, query: str) -> None: ...
@@ -410,8 +404,7 @@ class Directive:
     SCHEMA_HINT_QUOTE: str
 
 class Agent:
-    """The core entity of agentwerk. It has access to tools for solving tasks in
-    the form of tasks."""
+    """An LLM agent that uses the tools you provide to complete tasks."""
 
     def __init__(self) -> None: ...
     @staticmethod
