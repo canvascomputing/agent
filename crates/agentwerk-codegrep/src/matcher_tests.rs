@@ -1,4 +1,4 @@
-//! Matcher behaviour tests.
+//! Tests for matcher behaviour.
 //!
 //! Each test parses one pattern, runs `search`, and asserts a single
 //! observable outcome through the public `Match` / `Loc` / `Metavariable`

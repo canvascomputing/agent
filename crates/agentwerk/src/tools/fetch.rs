@@ -2,10 +2,10 @@
 
 use super::tool::{Event, Tool, ToolContext};
 use crate::prompts::directives::{
-    DirectiveStore, FETCH_URL_BODY_NOT_READ, FETCH_URL_CREDENTIALS_PRESENT, FETCH_URL_HOST_MISSING,
-    FETCH_URL_HOST_NOT_RESOLVABLE, FETCH_URL_REDIRECT_LOCATION_MISSING, FETCH_URL_REQUEST_FAILED,
-    FETCH_URL_RESPONSE_TOO_LARGE, FETCH_URL_SCHEME_MISSING, FETCH_URL_SCHEME_UNSUPPORTED,
-    FETCH_URL_TOO_LONG, FETCH_URL_TOO_MANY_REDIRECTS,
+    DirectiveStore, FETCH_BODY_NOT_READ, FETCH_CREDENTIALS_PRESENT, FETCH_HOST_MISSING,
+    FETCH_HOST_NOT_RESOLVABLE, FETCH_REDIRECT_LOCATION_MISSING, FETCH_REQUEST_FAILED,
+    FETCH_RESPONSE_TOO_LARGE, FETCH_SCHEME_MISSING, FETCH_SCHEME_UNSUPPORTED, FETCH_TOO_LONG,
+    FETCH_TOO_MANY_REDIRECTS,
 };
 
 const MAX_URL_LENGTH: usize = 2000;
@@ -80,7 +80,7 @@ impl FetchTool {
 }
 
 #[derive(serde::Deserialize)]
-pub struct FetchUrlArgs {
+pub struct FetchArgs {
     url: String,
     #[serde(default = "default_max_length")]
     max_length: usize,
@@ -93,25 +93,25 @@ fn default_max_length() -> usize {
 impl From<FetchTool> for Tool {
     fn from(tool: FetchTool) -> Tool {
         let impersonate = tool.impersonate;
-        Tool::new("fetch_url")
-            .description(include_str!("fetch_url.tool.md"))
-            .schema(include_str!("fetch_url.schema.json"))
+        Tool::new("fetch")
+            .description(include_str!("fetch.tool.md"))
+            .schema(include_str!("fetch.schema.json"))
             .concurrent(true)
-            .handler_with_context(move |args: FetchUrlArgs, ctx: ToolContext| async move {
+            .handler_with_context(move |args: FetchArgs, ctx: ToolContext| async move {
                 run(args, ctx, impersonate).await
             })
     }
 }
 
-async fn run(args: FetchUrlArgs, ctx: ToolContext, impersonate: bool) -> Event {
-    let FetchUrlArgs { url, max_length } = args;
+async fn run(args: FetchArgs, ctx: ToolContext, impersonate: bool) -> Event {
+    let FetchArgs { url, max_length } = args;
 
     let validated_url = match validate_url(&url, &ctx.directives) {
         Ok(u) => u,
         Err(msg) => return Event::error(msg),
     };
 
-    let text = match fetch_url(&validated_url, impersonate, &ctx.directives).await {
+    let text = match fetch(&validated_url, impersonate, &ctx.directives).await {
         Ok(text) => text,
         Err(msg) => return Event::error(msg),
     };
@@ -126,7 +126,7 @@ async fn run(args: FetchUrlArgs, ctx: ToolContext, impersonate: bool) -> Event {
              Original URL: {original_url}\n\
              Redirect URL: {redirect_url}\n\
              Status: {status}\n\n\
-             To fetch the content, make a new fetch_url request with the redirect URL."
+             To fetch the content, make a new fetch request with the redirect URL."
         );
         return Event::success(msg);
     }
@@ -160,7 +160,7 @@ enum FetchedContent {
     },
 }
 
-async fn fetch_url(
+async fn fetch(
     url: &str,
     impersonate: bool,
     directives: &DirectiveStore,
@@ -205,10 +205,10 @@ async fn fetch_url(
     let bytes = response
         .bytes()
         .await
-        .map_err(|e| directives.render(FETCH_URL_BODY_NOT_READ, &[("error", &e.to_string())]))?;
+        .map_err(|e| directives.render(FETCH_BODY_NOT_READ, &[("error", &e.to_string())]))?;
     if bytes.len() > MAX_RESPONSE_BYTES {
         return Err(directives.render(
-            FETCH_URL_RESPONSE_TOO_LARGE,
+            FETCH_RESPONSE_TOO_LARGE,
             &[
                 ("bytes", &bytes.len().to_string()),
                 ("limit", &MAX_RESPONSE_BYTES.to_string()),
@@ -322,9 +322,10 @@ async fn follow_safe_redirects(
         for (name, value) in request_headers(impersonate, hop == 0) {
             request = request.header(name, value);
         }
-        let response = request.send().await.map_err(|e| {
-            directives.render(FETCH_URL_REQUEST_FAILED, &[("error", &e.to_string())])
-        })?;
+        let response = request
+            .send()
+            .await
+            .map_err(|e| directives.render(FETCH_REQUEST_FAILED, &[("error", &e.to_string())]))?;
 
         let status = response.status().as_u16();
         if !is_redirect(status) {
@@ -335,7 +336,7 @@ async fn follow_safe_redirects(
             .headers()
             .get("location")
             .and_then(|v| v.to_str().ok())
-            .ok_or_else(|| directives.render(FETCH_URL_REDIRECT_LOCATION_MISSING, &[]))?;
+            .ok_or_else(|| directives.render(FETCH_REDIRECT_LOCATION_MISSING, &[]))?;
 
         let redirect_url = resolve_redirect_location(&current_url, location);
 
@@ -351,7 +352,7 @@ async fn follow_safe_redirects(
     }
 
     Err(directives.render(
-        FETCH_URL_TOO_MANY_REDIRECTS,
+        FETCH_TOO_MANY_REDIRECTS,
         &[("limit", &MAX_REDIRECT_HOPS.to_string())],
     ))
 }
@@ -431,7 +432,7 @@ fn resolve_redirect_location(base_url: &str, location: &str) -> String {
 fn validate_url(url: &str, directives: &DirectiveStore) -> std::result::Result<String, String> {
     if url.len() > MAX_URL_LENGTH {
         return Err(directives.render(
-            FETCH_URL_TOO_LONG,
+            FETCH_TOO_LONG,
             &[
                 ("length", &url.len().to_string()),
                 ("limit", &MAX_URL_LENGTH.to_string()),
@@ -441,22 +442,22 @@ fn validate_url(url: &str, directives: &DirectiveStore) -> std::result::Result<S
 
     let (scheme, rest) = url
         .split_once("://")
-        .ok_or_else(|| directives.render(FETCH_URL_SCHEME_MISSING, &[]))?;
+        .ok_or_else(|| directives.render(FETCH_SCHEME_MISSING, &[]))?;
     if !matches!(scheme, "http" | "https") {
-        return Err(directives.render(FETCH_URL_SCHEME_UNSUPPORTED, &[("scheme", scheme)]));
+        return Err(directives.render(FETCH_SCHEME_UNSUPPORTED, &[("scheme", scheme)]));
     }
 
     let authority = rest.split('/').next().unwrap_or(rest);
     if authority.contains('@') {
-        return Err(directives.render(FETCH_URL_CREDENTIALS_PRESENT, &[]));
+        return Err(directives.render(FETCH_CREDENTIALS_PRESENT, &[]));
     }
 
     let host = authority.split(':').next().unwrap_or(authority);
     if host.is_empty() {
-        return Err(directives.render(FETCH_URL_HOST_MISSING, &[]));
+        return Err(directives.render(FETCH_HOST_MISSING, &[]));
     }
     if host.split('.').count() < 2 {
-        return Err(directives.render(FETCH_URL_HOST_NOT_RESOLVABLE, &[("host", host)]));
+        return Err(directives.render(FETCH_HOST_NOT_RESOLVABLE, &[("host", host)]));
     }
 
     if scheme == "http" {
@@ -566,6 +567,11 @@ fn collapse_whitespace(text: &str) -> String {
     result.trim().to_string()
 }
 
+#[cfg(test)]
+fn validate_url_for_test(url: &str) -> std::result::Result<String, String> {
+    validate_url(url, &DirectiveStore::default())
+}
+
 // Tests
 
 #[cfg(test)]
@@ -586,7 +592,7 @@ mod tests {
             .get_raw_schema()
             .clone();
         for example in document["examples"].as_array().expect("examples") {
-            serde_json::from_value::<FetchUrlArgs>(example.clone())
+            serde_json::from_value::<FetchArgs>(example.clone())
                 .unwrap_or_else(|error| panic!("{example}: {error}"));
         }
     }
@@ -826,7 +832,7 @@ mod tests {
     // HTML stripping
 
     #[test]
-    fn strip_html_basic() {
+    fn strip_html_removes_markup_and_preserves_text() {
         let text = strip_html("<html><body><h1>Hello</h1><p>World</p></body></html>");
         assert!(text.contains("Hello"));
         assert!(text.contains("World"));
@@ -898,9 +904,4 @@ mod tests {
             "line1\n\nline2"
         );
     }
-}
-
-#[cfg(test)]
-fn validate_url_for_test(url: &str) -> std::result::Result<String, String> {
-    validate_url(url, &DirectiveStore::default())
 }

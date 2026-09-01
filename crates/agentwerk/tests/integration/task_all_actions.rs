@@ -1,4 +1,4 @@
-//! End-to-end: a real LLM walks the whole `tasks` action set on one task,
+//! End-to-end: a real LLM walks the whole `task` action set on one task,
 //! reading its own task and its parent's result, listing the Werk whole and
 //! then narrowing it with AQL, then creating and editing a task. The role
 //! names intents, never actions or query syntax, so the tool's own description
@@ -27,8 +27,8 @@ async fn walks_every_task_action() -> std::result::Result<(), Box<dyn std::error
 
     let secret = ten_digit_token();
 
-    let tasks = Werk::new();
-    tasks.set_policy(Policy {
+    let werk = Werk::new();
+    werk.set_policy(Policy {
         max_turns: Some(20),
         max_time: Some(Duration::from_secs(120)),
         ..Default::default()
@@ -38,10 +38,10 @@ async fn walks_every_task_action() -> std::result::Result<(), Box<dyn std::error
     let written = Arc::new(Mutex::new(Vec::new()));
     let actions = Arc::clone(&seen);
     let queries = Arc::clone(&written);
-    tasks.on_event(move |_, e| {
+    werk.on_event(move |_, e| {
         if e.get_name() == Event::TOOL_CALL_STARTED {
             let data = e.get_data();
-            if data["tool_name"] == "tasks" {
+            if data["tool_name"] == "task" {
                 let input = &data["input"];
                 if let Some(action) = input["action"].as_str() {
                     actions.lock().unwrap().insert(action.to_string());
@@ -53,7 +53,7 @@ async fn walks_every_task_action() -> std::result::Result<(), Box<dyn std::error
         }
     });
 
-    tasks.add_agent(
+    werk.add_agent(
         Agent::new()
             .provider(provider.clone())
             .model(&model)
@@ -65,7 +65,7 @@ async fn walks_every_task_action() -> std::result::Result<(), Box<dyn std::error
                  give the new task the task `Audit the archived record.`",
             ),
     );
-    tasks.add_agent(
+    werk.add_agent(
         Agent::new()
             .provider(provider)
             .model(&model)
@@ -87,8 +87,8 @@ async fn walks_every_task_action() -> std::result::Result<(), Box<dyn std::error
             .tool(TaskTool),
     );
 
-    tasks.add_task(Task::new(DORMANT_NOTE));
-    tasks.add_task(
+    werk.add_task(Task::new(DORMANT_NOTE));
+    werk.add_task(
         Task::new(format!(
             "The vault combination is {secret}. Archive it and pass the audit on."
         ))
@@ -96,10 +96,10 @@ async fn walks_every_task_action() -> std::result::Result<(), Box<dyn std::error
     );
 
     // Not `finish_all_tasks`: the decoy and the record the agent files are labelled
-    // for nobody, so they stay `Todo` and a wait on the whole Werk only ever
+    // for nobody, so they stay `todo` and a wait on the whole Werk only ever
     // ends at the time cap.
-    tasks.finish_tasks("label IN (archive, auditor)").await;
-    common::print_result(&tasks);
+    werk.finish_tasks("label IN (archive, auditor)").await;
+    common::print_result(&werk);
 
     let used = seen.lock().unwrap().clone();
     let missing: Vec<&str> = ACTIONS
@@ -120,8 +120,8 @@ async fn walks_every_task_action() -> std::result::Result<(), Box<dyn std::error
         "the narrowing intent reached no query that compiles; it wrote {written:?}"
     );
 
-    let audit = tasks
-        .find_task("label = auditor AND status = Finished")
+    let audit = werk
+        .find_task("label = auditor AND status = finished")
         .expect("the auditor must finish the task handed to it");
     let answer = audit.get_result().cloned().unwrap_or_default().to_string();
     assert!(

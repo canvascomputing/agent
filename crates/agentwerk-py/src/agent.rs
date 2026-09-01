@@ -19,8 +19,8 @@ use crate::task::{to_task, PyTask};
 use crate::tools::extract_tool;
 use crate::werk::PyWerk;
 
-/// An `Agent` is the core entity of agentwerk. It has access to tools for
-/// solving tasks in the form of tasks.
+/// An `Agent` is the core entity of agentwerk. It uses tools to solve tasks
+/// assigned through a Werk.
 #[pyclass(name = "Agent")]
 pub struct PyAgent {
     /// Empty only while a setter has the agent.
@@ -167,9 +167,9 @@ impl PyAgent {
         task: PyRef<'_, PyTask>,
     ) -> PyResult<PyRefMut<'py, Self>> {
         let resolved = task.inner.clone();
-        if !resolved
+        if resolved
             .get_label()
-            .is_some_and(|label| !label.trim().is_empty())
+            .is_none_or(|label| label.trim().is_empty())
         {
             return Err(runtime_error("Agent.handover requires a labeled Task"));
         }
@@ -232,8 +232,8 @@ impl PyAgent {
     /// A `str` is the task itself, and an `os.PathLike` names the file holding
     /// it. A `Task` carries a custom label or schema with it. Call it as often
     /// as you like: one agent can drive many tasks.
-    fn task(&self, task: &Bound<'_, PyAny>) -> PyResult<String> {
-        Ok(self.get().task(to_task(task)?))
+    fn add_task(&self, task: &Bound<'_, PyAny>) -> PyResult<String> {
+        Ok(self.get().add_task(to_task(task)?))
     }
 
     /// Begin processing tasks, and hand back the Werk so results,

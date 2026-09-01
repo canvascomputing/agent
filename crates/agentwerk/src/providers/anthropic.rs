@@ -12,7 +12,8 @@ use super::error::{ProviderError, ProviderResult};
 use super::provider::{self, Protocol, ProviderLike};
 use super::stream::{ResponseBuilder, ToolCallKey};
 use super::types::{
-    ContentBlock, Message, ModelRequest, ModelResponse, ResponseStatus, StreamEvent,
+    ContentBlock, Message, ModelRequest, ModelResponse, ReasoningEffort, ResponseStatus,
+    StreamEvent,
 };
 use crate::tools::Tool;
 
@@ -48,15 +49,18 @@ const DEFAULT_BASE_URL: &str = "https://api.anthropic.com";
 pub struct Anthropic(Endpoint);
 
 impl Anthropic {
+    /// Create an endpoint using the API key.
     pub fn new(api_key: impl Into<String>) -> Self {
         Self(Endpoint::new(api_key, DEFAULT_BASE_URL))
     }
 
+    /// Replace the provider API base URL.
     pub fn base_url(mut self, url: impl Into<String>) -> Self {
         self.0 = self.0.base_url(url);
         self
     }
 
+    /// Set the request timeout.
     pub fn timeout(mut self, duration: Duration) -> Self {
         self.0 = self.0.timeout(duration);
         self
@@ -126,7 +130,8 @@ impl Protocol for AnthropicMessages {
         // adaptive form. Older Anthropic models used a different request field we
         // no longer send, so they get none; parsing still keeps the thinking of
         // any model that returns it.
-        if let Some(effort) = request.reasoning_effort.label() {
+        if request.reasoning_effort != ReasoningEffort::Off {
+            let effort = request.reasoning_effort.get_name();
             if supports_adaptive_thinking(&request.model) {
                 body["thinking"] = serde_json::json!({"type": "adaptive", "display": "summarized"});
                 body["output_config"] = serde_json::json!({"effort": effort});

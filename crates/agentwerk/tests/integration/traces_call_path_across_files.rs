@@ -77,9 +77,9 @@ async fn traces_three_hop_call_path() -> std::result::Result<(), Box<dyn std::er
         "required": ["call_path"]
     }))?;
 
-    let tasks = Werk::new();
+    let werk = Werk::new();
 
-    tasks.set_policy(Policy {
+    werk.set_policy(Policy {
         max_turns: Some(15),
         ..Default::default()
     });
@@ -100,8 +100,8 @@ async fn traces_three_hop_call_path() -> std::result::Result<(), Box<dyn std::er
         .tool(GlobTool)
         .tool(ListDirectoryTool)
         .tool(ReadFileTool);
-    tasks.add_agent(agent);
-    tasks.add_task(
+    werk.add_agent(agent);
+    werk.add_task(
         Task::new(
             "Starting from the function `entry`, follow each function call \
              through the source files and report the full ordered call chain \
@@ -111,14 +111,14 @@ async fn traces_three_hop_call_path() -> std::result::Result<(), Box<dyn std::er
         .schema(schema),
     );
 
-    let json = tasks
+    let json = werk
         .finish_task("ORDER BY created DESC")
         .await
         .unwrap_or_default();
-    common::print_result(&tasks);
+    common::print_result(&werk);
 
     assert!(
-        tasks.find_events("tool_call_started").len() >= 2,
+        werk.find_events("tool_call_started").len() >= 2,
         "tracing a call path requires at least two read-only tool calls"
     );
 

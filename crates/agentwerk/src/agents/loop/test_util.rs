@@ -282,13 +282,13 @@ pub fn task_agent(provider: &Arc<MockProvider>) -> Agent {
         .role("test")
 }
 
-pub fn collect_events(tasks: &Werk) -> Arc<Mutex<Vec<Event>>> {
+pub fn collect_events(werk: &Werk) -> Arc<Mutex<Vec<Event>>> {
     let collected: Arc<Mutex<Vec<Event>>> = Arc::new(Mutex::new(Vec::new()));
     let handler: Arc<dyn Fn(&Event) + Send + Sync> = {
         let c = Arc::clone(&collected);
         Arc::new(move |e: &Event| c.lock().unwrap().push(e.clone()))
     };
-    tasks.on_event(move |_, e| handler(e));
+    werk.on_event(move |_, e| handler(e));
     collected
 }
 
@@ -307,19 +307,18 @@ pub async fn run_one(
     };
 
     let results_dir = crate::test_util::TempDir::new().unwrap();
-    let tasks = Werk::new();
-    tasks
-        .set_dir(results_dir.path().to_path_buf())
+    let werk = Werk::new();
+    werk.set_dir(results_dir.path().to_path_buf())
         .set_policy(Policy {
-            max_request_retries: max_request_retries,
+            max_request_retries,
             request_retry_delay: Duration::from_millis(1),
             max_schema_retries: Some(max_schema_retries),
             max_time: Some(Duration::from_millis(200)),
             ..Default::default()
         });
 
-    tasks.on_event(move |_, e| handler(e));
-    tasks.add_agent(
+    werk.on_event(move |_, e| handler(e));
+    werk.add_agent(
         Agent::new()
             .provider(provider.clone())
             .model("mock")
@@ -328,14 +327,14 @@ pub async fn run_one(
     );
 
     if let Some(schema) = schema {
-        tasks.add_task(Task::new("go").schema(schema));
+        werk.add_task(Task::new("go").schema(schema));
     } else {
-        tasks.add_task("go");
+        werk.add_task("go");
     }
 
-    let _ = tasks.finish_all_tasks().await;
+    let _ = werk.finish_all_tasks().await;
     let events = collected.lock().unwrap().clone();
-    let task = tasks
+    let task = werk
         .get_tasks()
         .into_iter()
         .next()
@@ -357,9 +356,8 @@ pub async fn run_with_context_window(
     };
 
     let results_dir = crate::test_util::TempDir::new().unwrap();
-    let tasks = Werk::new();
-    tasks
-        .set_dir(results_dir.path().to_path_buf())
+    let werk = Werk::new();
+    werk.set_dir(results_dir.path().to_path_buf())
         .set_policy(Policy {
             max_request_retries: 0,
             request_retry_delay: Duration::from_millis(1),
@@ -367,18 +365,18 @@ pub async fn run_with_context_window(
             max_time: Some(Duration::from_secs(5)),
             ..Default::default()
         });
-    tasks.on_event(move |_, e| handler(e));
-    tasks.add_agent(
+    werk.on_event(move |_, e| handler(e));
+    werk.add_agent(
         Agent::new()
             .provider(provider.clone())
             .model(Model::new("mock").context_window(context_window_size))
             .role("test"),
     );
-    tasks.add_task(task);
+    werk.add_task(task);
 
-    let _ = tasks.finish_all_tasks().await;
+    let _ = werk.finish_all_tasks().await;
     let events = collected.lock().unwrap().clone();
-    let task = tasks
+    let task = werk
         .get_tasks()
         .into_iter()
         .next()
@@ -400,9 +398,8 @@ pub async fn run_compaction(
     };
 
     let results_dir = crate::test_util::TempDir::new().unwrap();
-    let tasks = Werk::new();
-    tasks
-        .set_dir(results_dir.path().to_path_buf())
+    let werk = Werk::new();
+    werk.set_dir(results_dir.path().to_path_buf())
         .set_policy(Policy {
             max_request_retries: 0,
             request_retry_delay: Duration::from_millis(1),
@@ -411,21 +408,21 @@ pub async fn run_compaction(
             ..Default::default()
         });
 
-    tasks.on_event(move |_, e| handler(e));
-    tasks.add_agent(
+    werk.on_event(move |_, e| handler(e));
+    werk.add_agent(
         Agent::new()
             .provider(provider.clone())
             .model("claude-sonnet-4-20250514")
             .role("test")
             .tool(TaskTool),
     );
-    configure(&tasks);
+    configure(&werk);
     let schema = Schema::new(serde_json::json!({"type": "string"})).unwrap();
-    tasks.add_task(Task::new("go").schema(schema));
+    werk.add_task(Task::new("go").schema(schema));
 
-    let _ = tasks.finish_all_tasks().await;
+    let _ = werk.finish_all_tasks().await;
     let events = collected.lock().unwrap().clone();
-    let task = tasks
+    let task = werk
         .get_tasks()
         .into_iter()
         .next()

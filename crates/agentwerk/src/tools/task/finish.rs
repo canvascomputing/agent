@@ -1,4 +1,4 @@
-//! The legacy `finish` tool, backed by `EventTool`'s `task_finished` event.
+//! The `finish` compatibility tool, backed by `EventTool`'s `task_finished` event.
 
 use serde_json::Value;
 
@@ -58,7 +58,7 @@ impl FinishTool {
                     handover.as_ref(),
                     FinishTool::NAME,
                 )
-                .unwrap_or_else(|failure| failure)
+                .unwrap_or_else(|event| *event)
             }
         };
         Tool::new(Self::NAME)
@@ -155,7 +155,7 @@ mod tests {
         werk.set_dir(shared_test_dir().to_path_buf());
         werk.insert(Task::new("body").label(agent), "tester".into());
         let id = werk
-            .claim(&Query::from("status = Todo"), agent)
+            .claim(&Query::from("status = todo"), agent)
             .expect("claim must succeed");
         (werk, id)
     }
@@ -195,7 +195,7 @@ mod tests {
             Task::new("body").schema(line_schema()).label("alice"),
             "tester".into(),
         );
-        werk.claim(&Query::from("status = Todo"), "alice")
+        werk.claim(&Query::from("status = todo"), "alice")
             .expect("claim must succeed");
         werk
     }
@@ -300,7 +300,7 @@ mod tests {
         let dir = crate::test_util::TempDir::new().unwrap();
         let werk = line_task(dir.path());
         let id = werk
-            .find_task("status = InProgress")
+            .find_task("status = in_progress")
             .unwrap()
             .get_id()
             .to_string();
@@ -383,7 +383,7 @@ mod tests {
             "tester".into(),
         );
         let id = werk
-            .claim(&Query::from("status = Todo"), "alice")
+            .claim(&Query::from("status = todo"), "alice")
             .expect("claim must succeed");
         let ctx = ctx_with(Arc::clone(&werk), "alice", dir.path().to_path_buf());
 
@@ -568,7 +568,7 @@ mod tests {
             "tester".into(),
         );
         let id = werk
-            .claim(&Query::from("status = Todo"), "alice")
+            .claim(&Query::from("status = todo"), "alice")
             .expect("claim must succeed");
         let ctx = ctx_with(Arc::clone(&werk), "alice", dir.path().to_path_buf());
 
@@ -607,7 +607,7 @@ mod tests {
             "tester".into(),
         );
         let id = werk
-            .claim(&Query::from("status = Todo"), "alice")
+            .claim(&Query::from("status = todo"), "alice")
             .expect("claim must succeed");
         let ctx = ctx_with(Arc::clone(&werk), "alice", dir.path().to_path_buf());
 
@@ -637,7 +637,7 @@ mod tests {
             "tester".into(),
         );
         let id = werk
-            .claim(&Query::from("status = Todo"), "alice")
+            .claim(&Query::from("status = todo"), "alice")
             .expect("claim must succeed");
         let ctx = ctx_with(Arc::clone(&werk), "alice", dir.path().to_path_buf());
 
@@ -713,7 +713,7 @@ mod tests {
             );
             let id = werk
                 .claim(
-                    &Query::from(format!("status = Todo AND label = {agent}")),
+                    &Query::from(format!("status = todo AND label = {agent}")),
                     &agent,
                 )
                 .expect("claim must succeed");
@@ -760,7 +760,7 @@ mod tests {
         werk.set_dir(dir);
         werk.insert(Task::new("parent body").label(agent), "tester".into());
         let id = werk
-            .claim(&Query::from("status = Todo"), agent)
+            .claim(&Query::from("status = todo"), agent)
             .expect("claim must succeed");
         (werk, id)
     }
@@ -872,7 +872,7 @@ mod tests {
             "tester".into(),
         );
         let parent_id = werk
-            .claim(&Query::from("status = Todo"), "alice")
+            .claim(&Query::from("status = todo"), "alice")
             .expect("claim must succeed");
         let ctx = ctx_with(Arc::clone(&werk), "alice", dir.path().to_path_buf());
 
@@ -917,7 +917,7 @@ mod tests {
             "tester".into(),
         );
         let id = werk
-            .claim(&Query::from("status = Todo"), agent)
+            .claim(&Query::from("status = todo"), agent)
             .expect("claim must succeed");
         (werk, id)
     }

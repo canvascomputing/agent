@@ -1,7 +1,7 @@
 [workspace]
-members = ["crates/agentwerk", "crates/agentwerk-py", "crates/use-cases"]
+members = ["crates/agentwerk", "crates/agentwerk-codegrep", "crates/agentwerk-py", "crates/use-cases"]
 # agentwerk-py is a pyo3 cdylib that only links against a Python interpreter
 # (built via maturin). Keeping it out of the default set lets plain `cargo
 # build`/`cargo test` skip it so they do not fail on the missing Python symbols.
-default-members = ["crates/agentwerk", "crates/use-cases"]
+default-members = ["crates/agentwerk", "crates/agentwerk-codegrep", "crates/use-cases"]
 resolver = "2"

@@ -1,4 +1,4 @@
-//! Codegrep: a language-agnostic structural pattern matcher.
+//! A language-agnostic structural pattern matcher used inside the workspace.
 //!
 //! Patterns combine literal text, balanced brackets, metavariables
 //! (`$NAME`), and ellipsis (`...` and `....`) to express structural
@@ -11,10 +11,10 @@ pub mod conf;
 pub mod matcher;
 pub mod token;
 
-pub use ast::{MetavariableKind, Node, ParseError, Pattern};
-pub use conf::{Conf, ConfError};
+pub use ast::Pattern;
+pub use conf::Conf;
 pub use matcher::{search, search_tokens, Loc, Match, Metavariable};
-pub use token::{tokenize_pattern, tokenize_target, Token};
+pub use token::tokenize_target;
 
 #[cfg(test)]
 mod parser_tests;

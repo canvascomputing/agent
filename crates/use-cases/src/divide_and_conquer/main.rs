@@ -38,14 +38,14 @@ async fn main() {
     print_intro(args.n, partitions.len(), agents, &style);
 
     let schema = partial_sum_schema();
-    let tasks = Werk::new();
-    let on_ctrl_c = Arc::clone(&tasks);
+    let werk = Werk::new();
+    let on_ctrl_c = Arc::clone(&werk);
     tokio::spawn(async move {
         if tokio::signal::ctrl_c().await.is_ok() {
             on_ctrl_c.cancel_all_tasks();
         }
     });
-    tasks.set_policy(Policy {
+    werk.set_policy(Policy {
         max_turns: args.max_turns,
         ..Default::default()
     });
@@ -55,13 +55,13 @@ async fn main() {
             "Compute the partial sum S = sum_{{k={lo}}}^{{{hi}}} k^2.\n\
              lo={lo}\nhi={hi}\nidx={idx}",
         );
-        tasks.add_task(Task::new(body).schema(schema.clone()).label("compute"));
+        werk.add_task(Task::new(body).schema(schema.clone()).label("compute"));
     }
 
     let event_handler = build_event_handler(args.verbose, style.clone(), partitions.len());
-    tasks.on_event(move |_, e| event_handler(e));
+    werk.on_event(move |_, e| event_handler(e));
     for _ in 0..agents {
-        tasks.add_agent(
+        werk.add_agent(
             Agent::new()
                 .provider(provider.clone())
                 .model(&model)
@@ -72,17 +72,17 @@ async fn main() {
         );
     }
 
-    tasks.finish_all_tasks().await;
+    werk.finish_all_tasks().await;
 
-    aggregate_and_report(&tasks, &partitions, args.n, &style);
+    aggregate_and_report(&werk, &partitions, args.n, &style);
 }
 
-fn aggregate_and_report(tasks: &Werk, partitions: &[(u64, u64)], n: u64, style: &Style) {
+fn aggregate_and_report(werk: &Werk, partitions: &[(u64, u64)], n: u64, style: &Style) {
     let total = partitions.len();
     let mut partials: Vec<Option<i128>> = vec![None; total];
     let mut failures = 0usize;
 
-    for task in tasks.get_tasks() {
+    for task in werk.get_tasks() {
         match extract_partial(&task, total) {
             Ok((idx, sum)) => {
                 let (lo, hi) = partitions[idx];
@@ -108,15 +108,15 @@ fn aggregate_and_report(tasks: &Werk, partitions: &[(u64, u64)], n: u64, style: 
 
     let total_sum: i128 = partials.iter().flatten().sum();
     let expected = closed_form(n);
-    let elapsed = tasks.get_duration().unwrap_or_default().as_secs_f64();
-    let done = tasks
+    let elapsed = werk.get_duration().unwrap_or_default().as_secs_f64();
+    let done = werk
         .find_events(|event: &Event| event.get_name() == Event::TASK_FINISHED)
         .len();
 
     eprintln!(
         "{dim}└ aggregated in {elapsed:.1}s · {done} done, {failures} failed · {} in / {} out tokens{reset}",
-        tasks.get_input_tokens(),
-        tasks.get_output_tokens(),
+        werk.get_input_tokens(),
+        werk.get_output_tokens(),
         dim = style.dim,
         reset = style.reset,
     );

@@ -1,4 +1,4 @@
-//! Pattern parser tests.
+//! Tests for the pattern parser.
 //!
 //! Each test parses a pattern string under a configuration and asserts
 //! the resulting node sequence.

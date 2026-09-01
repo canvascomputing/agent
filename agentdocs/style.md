@@ -6,10 +6,10 @@ Naming, comment, and prose rules, plus README structure. Skim the section matchi
 
 **A type earns a `pub use` at `lib.rs` only when it names a concept in the one-sentence description of the crate, or when root-level signatures hand it to the caller.**
 
-`Agent`, `Werk`, `Task`, `Policy`, `PolicyViolation`, `Knowledge`, `Directive`, `Text`, `Trajectory`, `Reply`, `Event`, `Status`, `FinishReason`, `Schema`
+`Agent`, `Werk`, `Task`, `Query`, `Policy`, `PolicyViolation`, `Knowledge`, `Directive`, `Text`, `Trajectory`, `Reply`, `Event`, `Status`, `FinishReason`, `Schema`
 
 - Discriminants callers match on earn a root slot: `Status`, `FinishReason`, `PolicyViolation`.
-- Builder parameters and run outputs earn one when callers name them: `Schema`, `Policy`, `Directive`, `Text`, `Reply`, `Trajectory`.
+- Builder parameters, selectors, and run outputs earn one when callers name them: `Schema`, `Query`, `Policy`, `Directive`, `Text`, `Reply`, `Trajectory`.
 - Errors and conversion traits do not. They live in their domain module.
 - Free functions at the root are forbidden: convert to an associated function or move to the domain module.
 - Name collisions at the root are forbidden.
@@ -108,7 +108,7 @@ event.get_data()["kind"]                 // "execution_failed"
 
 `requests`, `tool_calls`, `turns`, `input_tokens`, `output_tokens`
 
-- Event payloads follow suit: `usage` on `RequestFinished` carries token counts, not a `token_count`. Accessor methods mirror the field form.
+- Event payloads follow suit: `usage` on `request_finished` carries token counts, not a `token_count`. Accessor methods mirror the field form.
 - The `_count` suffix is reserved for the rare case where the plural would clash with a sibling collection field on the same type.
 - The ban is on scalars: a map keyed by subject is `<subject>_counts()` for a bare count and `<subject>_stats()` for a struct.
 - Bare `<subject>s()` stays reserved for a collection of the subject itself, which is why `find_events(condition)` hands back the events themselves.
@@ -134,7 +134,7 @@ event.get_data()["kind"]                 // "execution_failed"
 
 **Builder methods are bare nouns. No `with_` prefix.**
 
-`.name()`, `.model()`, `.tool()`, `.label()`, `.concurrent()`
+`.model()`, `.tool()`, `.label()`, `.concurrent()`
 
 - The `with_` prefix is reserved for a bare name that would be ambiguous even with an inherent and trait split; no current builder needs it.
 - A value the caller owns before execution consumes itself: `Agent` and `Tool` take `mut self` and return `Self`. Both configure themselves rather than through a second type; missing agent configuration is caught when it joins a Werk, and missing tool configuration when it is registered.
@@ -148,27 +148,27 @@ event.get_data()["kind"]                 // "execution_failed"
 
 ## Getters and Setters
 
-**Mutable accessors use `set_` and `get_` prefixes to distinguish them from builders.**
+**Every public reader uses `get_`; mutable accessors use `set_`; builders remain bare nouns.**
 
 - Example: `set_extension()`, `get_extension()`. Builder methods remain unprefixed.
 - A public method returning `bool` is `is_<state>` or `has_<thing>`. A bare past participle such as `label_cancelled` reads as a field, not a question.
-- `get_<name>` reads back a value a builder set where the bare noun would collide with the builder method on the same type: `Werk::get_dir`, `Model::get_context_window`, `Agent::get_provider`. A reader with no setter to collide with keeps the bare noun: `Tool::name`, `Agent::id`. A lookup by ID keeps `get_` for the `HashMap::get` sense, which is why `get_task(id)` stands apart from `find_task(matches)`.
+- `get_<name>` is the only reader spelling: `Werk::get_dir`, `Model::get_context_window`, `Agent::get_provider`, `Tool::get_name`, and `Agent::get_id`. A lookup by ID keeps `get_` for the same rule, which is why `get_task(id)` stands apart from `find_task(matches)`.
 
 ## Lifecycle
 
 **Werk action names state their target: `finish_task(matches)`, `finish_tasks(matches)`, `finish_all_tasks()`, `cancel_tasks(matches)`, and `cancel_all_tasks()`. A filter is a `Matcher<Task>`, so the same call names one task or one pool.**
 
 ```rust
-tasks.start();
-tasks.finish_tasks("label = scan").await;                   // one pool
-tasks.finish_all_tasks().await;                             // the whole run
-tasks.finish_task("ORDER BY created DESC").await;           // one result
-tasks.cancel_tasks("label = scan");                        // one pool
-tasks.cancel_all_tasks();                                   // the whole run
+werk.start();
+werk.finish_tasks("label = scan").await;                   // one pool
+werk.finish_all_tasks().await;                             // the whole run
+werk.finish_task("ORDER BY created DESC").await;           // one result
+werk.cancel_tasks("label = scan");                        // one pool
+werk.cancel_all_tasks();                                   // the whole run
 ```
 
 - A verb takes a filter when it can mean part of the Werk, and none when it cannot: `run` starts everything or nothing.
-- IMPORTANT: the filter says WHICH tasks, never WHAT to wait for. `finish_tasks("status = Finished")` returns at once because the filter selects tasks and "no work left" is the fixed wait condition.
+- IMPORTANT: the filter says WHICH tasks, never WHAT to wait for. `finish_tasks("status = finished")` returns at once because the filter selects tasks and "no work left" is the fixed wait condition.
 - The whole-run case has exactly one spelling: `finish_all_tasks()` and `cancel_all_tasks()`.
 - `finish_task(matches)` follows the same wait and query order as `finish_tasks(matches)`, then returns the first available result.
 - Do not grow back label-, status-, or predicate-specific Werk methods; fixed selections are AQL.
@@ -194,7 +194,7 @@ edit_replies(id, editor)             // act once, now
 
 ## Event Publication
 
-**Publishing is always `tasks.emit_event(event)`, from both host code and crate internals.**
+**Publishing is always `werk.emit_event(event)`, from both host code and crate internals.**
 
 - Keep `event` in the verb. Bare `emit` is ambiguous beside provider streams and is not an event-publication API.
 - Construct built-in events with their schema-aware `Event::<name>(...)` constructor. Construct application events with `Event::new(name)`, then add `.data(value)`. Add `.task_id(id)` or `.agent_id(id)` when context applies. Do not use a struct literal: the Werk owns the timestamp and derived task label.
@@ -218,11 +218,14 @@ edit_replies(id, editor)             // act once, now
 - Rust configuration types collapse into the class they configure. Python `Tool` is the opaque handle for a complete built-in or decorated tool.
 - `Duration` becomes a float named `seconds`, with the unit repeated in the docstring: `Policy::request_retry_delay` binds as a float in seconds. Every other parameter keeps its Rust name.
 - A fieldless enum becomes its snake_case `Display` string. That `Display` impl is the single source, so the binding never formats a variant with `{:?}`.
+- `Status`, `Author`, `ReasoningEffort`, `PolicyViolation`, `ResponseStatus`, `RequestErrorKind`, and `ToolDeclineKind` expose that source through `get_name()`; serde and Python output use the same spelling.
+- The task tool is `TaskTool` and model name `task`; the fetch tool is `FetchTool` and model name `fetch`. Singular names extend to modules, schemas, prompts, and argument types.
+- Public API requires `///` documentation and the crate keeps `missing_docs` enabled. Crate-private implementation detail stays private instead of being documented into an accidental contract.
 - An enum whose variants carry fields becomes a class with a `kind` string, a `data` dict, and one static constructor per variant. `ReplyContent` does this; `Event` is instead a generic record whose Python API mirrors Rust.
 - A builder method whose name collides with a reader on the same Python class becomes a constructor keyword argument, because a Python class cannot carry both. `Task` needs this for `label`, `schema`, and `parent`.
 - A `&mut` editor becomes a callable that returns the replacement, or `None` to keep the current value, since Python cannot take a Rust `&mut`.
 - A conversion type a setter takes collapses into the Python types it converts from: `Text` is a `str` for the text itself and an `os.PathLike` for the file holding it.
-- A reader taking no argument becomes an attribute: `Agent::id()` is `agent.id`, `Task::get_id()` is `task.get_id()`.
+- Readers keep their Rust `get_*` names in Python: `Agent::get_id()` is `agent.get_id()` and `Task::get_id()` is `task.get_id()`.
 - IMPORTANT: no `with_` prefix in either language, and no transform beyond this list.
 
 ## Free Functions
@@ -244,7 +247,7 @@ Forbidden:
 - A free helper called from exactly one private method. Make it a private method or a nested `fn`.
 - An associated function that takes no `self` and does not return `Self` or `Result<Self>`. Move it to the module.
 
-Naming is `snake_case`. Tool structs keep the `{Name}Tool` suffix. The name the model calls is a separate namespace and takes no suffix: `read_file`, `grep`, `tasks`. It is written once, in the tool's `From<XTool> for Tool` conversion, and never at a call site: a host registers `ReadFileTool`, not the string.
+Naming is `snake_case`. Tool structs keep the `{Name}Tool` suffix. The name the model calls is a separate namespace and takes no suffix: `read_file`, `grep`, `task`. It is written once, in the tool's `From<XTool> for Tool` conversion, and never at a call site: a host registers `ReadFileTool`, not the string.
 
 ## Doc Comments (`///`)
 
@@ -397,7 +400,7 @@ Replaced:
 - "counters" becomes "statistics"; "wall-clock" becomes "elapsed duration", "max time", or "time cap".
 - "settle" and "settled" become "finish", "mark done", or "done"; "upsert" becomes "creates or replaces".
 - "smoke test" becomes "high-signal set", "starting point", or "core checks"; "drift" becomes the specific verb, "safety margin", or "stays anchored".
-- "park" and other vehicle metaphors become what actually happens: "stays `InProgress`", "is not re-claimed".
+- "park" and other vehicle metaphors become what actually happens: "stays `in_progress`", "is not re-claimed".
 - "stamp", "trip", "walk off", and "mint" are internal metaphors for writing a timestamp, breaching a limit, releasing a task, and creating one. Use the plain verb.
 - Rust async primitive nouns ("future", "closure", "predicate", "callback") become "another task that finishes", "a condition you supply", "your function". The Rust identifiers stay as identifiers.
 - Abstract pronouns and fractions ("one half", "the other", "either side") leave the reader guessing. Name the subject: not "detect one half from the environment and override the other", but "read only the provider from the environment, or only the model".

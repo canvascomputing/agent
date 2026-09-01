@@ -7,12 +7,13 @@ use agentwerk::tools::{GlobTool, ReadFileTool, TaskTool};
 use agentwerk::{Agent, Policy, Werk};
 
 #[tokio::test]
-async fn test() -> std::result::Result<(), Box<dyn std::error::Error>> {
+async fn file_tools_explore_the_repository() -> std::result::Result<(), Box<dyn std::error::Error>>
+{
     let (provider, model) = common::build_provider();
 
-    let tasks = Werk::new();
+    let werk = Werk::new();
 
-    tasks.set_policy(Policy {
+    werk.set_policy(Policy {
         max_turns: Some(10),
         ..Default::default()
     });
@@ -22,19 +23,18 @@ async fn test() -> std::result::Result<(), Box<dyn std::error::Error>> {
         .role(
             "{context}\n\n\
              Explore the repository to answer the task. When you have an answer, \
-             settle the task via `tasks` with `action: \"done\"` \
-             and `result` set to your answer.",
+             finish the task with your answer.",
         )
         .tool(ReadFileTool)
         .tool(GlobTool)
         .tool(TaskTool);
-    tasks.add_agent(agent);
-    tasks.add_task("Find all Rust source files and describe what this project does.");
+    werk.add_agent(agent);
+    werk.add_task("Find all Rust source files and describe what this project does.");
 
-    tasks.finish_all_tasks().await;
-    common::print_result(&tasks);
+    werk.finish_all_tasks().await;
+    common::print_result(&werk);
 
-    assert!(tasks.find_events("tool_call_started").len() >= 1);
+    assert!(!werk.find_events("tool_call_started").is_empty());
 
     Ok(())
 }

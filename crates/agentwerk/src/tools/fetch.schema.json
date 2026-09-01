@@ -1,5 +1,6 @@
 {
   "type": "object",
+  "description": "Fetch one URL as text.",
   "properties": {
     "url": {
       "type": "string",

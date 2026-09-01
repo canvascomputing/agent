@@ -1,4 +1,4 @@
-<!-- What the task tools say when an ID, a result, or a handover is missing. -->
+<!-- What task operations say when an ID, a result, or a handover is missing. -->
 
 ## werk_unavailable
 Task actions are unavailable here, so no task can be read or changed.

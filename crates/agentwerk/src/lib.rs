@@ -1,7 +1,9 @@
+#![warn(missing_docs)]
+
 //! Run agentic workflows where many agents work in parallel on a shared
 //! Werk. An [`Agent`] picks up tasks from a [`Werk`],
 //! calls the LLM provider, runs the tools it requests, and writes results
-//! back. Tasks are assigned to agents by name or label; the Werk
+//! back. Tasks are assigned to agents by label; the Werk
 //! handles concurrency, automatic context compaction, schema validation,
 //! retries, and limits.
 //!
@@ -17,9 +19,9 @@
 //!     .tool(ReadFileTool)
 //!     .tool(GrepTool);
 //!
-//! agent.task("Find every `pub trait` defined under src/ and explain each in one sentence.");
-//! let work = agent.start();
-//! let result = work.finish_task("ORDER BY created DESC").await.unwrap();
+//! agent.add_task("Find every `pub trait` defined under src/ and explain each in one sentence.");
+//! let werk = agent.start();
+//! let result = werk.finish_task("ORDER BY created DESC").await.unwrap();
 //!
 //! println!("{}", result.as_str().unwrap_or_default());
 //! # }
@@ -66,12 +68,12 @@
 //! - [`Agent`]: picks up tasks and produces results.
 //! - [`Werk`]: coordinates complex work across agents.
 //! - [`Task`]: a task plus the label and schema that assign and validate it.
+//! - [`Query`]: a reusable AQL task selection.
 //! - [`Knowledge`]: durable memory the agent shares across tasks and other agents.
 //! - [`Event`]: requests, tool usage, failures and more.
 //! - [`tools`]: the built-in tools agents call, for files, search, commands, web, knowledge, and tasks.
 
 pub mod agents;
-pub mod codegrep;
 pub mod event;
 pub(crate) mod persistence;
 pub(crate) mod prompts;
@@ -82,7 +84,7 @@ pub mod tools;
 #[cfg(test)]
 pub(crate) mod test_util;
 
-// Workshop: agents pull tasks from the Werk
+// Agents pull tasks from the Werk.
 pub use agents::Agent;
 pub use agents::Query;
 pub use agents::Reply;

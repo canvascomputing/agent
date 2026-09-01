@@ -122,29 +122,29 @@ async fn summariser_produces_text_when_compaction_fires_against_live_llm() {
 
     eprintln!("\n=== BEFORE COMPACTION ===\n{TASK}\n");
 
-    let tasks = Werk::new();
+    let werk = Werk::new();
     // Two iterations: turn 1 lets the model respond once (appending one entry
     // to `token_usage`); turn 2's proactive guard then trips because a
     // threshold of zero is always crossed.
-    tasks.set_policy(Policy {
+    werk.set_policy(Policy {
         max_turns: Some(2),
         compaction_threshold: Some(0.0),
         ..Default::default()
     });
-    tasks.on_event(move |_, e| log.lock().unwrap().push(e.clone()));
-    tasks.add_agent(
+    werk.on_event(move |_, e| log.lock().unwrap().push(e.clone()));
+    werk.add_agent(
         Agent::new()
             .provider(provider)
             .model(model.context_window(LOCAL_CTX))
             .role("{context}\n\nAnswer the question in plain text. Do not call any tools."),
     );
-    tasks.add_task(Task::new(TASK));
+    werk.add_task(Task::new(TASK));
     assert!(
-        tasks.get_results().pop().is_none(),
+        werk.get_results().pop().is_none(),
         "no result before run starts"
     );
 
-    tasks.finish_all_tasks().await;
+    werk.finish_all_tasks().await;
 
     let all_events = events.lock().unwrap();
 
@@ -161,11 +161,11 @@ async fn summariser_produces_text_when_compaction_fires_against_live_llm() {
         .any(|e| e.get_name() == Event::COMPACTION_FINISHED);
 
     eprintln!("\n=== AFTER COMPACTION ===");
-    for task in tasks.get_tasks() {
+    for task in werk.get_tasks() {
         eprintln!("{}", serde_json::to_string_pretty(&task).unwrap());
     }
 
-    common::print_result(&tasks);
+    common::print_result(&werk);
 
     assert!(
         compacted,
@@ -179,7 +179,7 @@ async fn summariser_produces_text_when_compaction_fires_against_live_llm() {
     // The summary replaces all non-system comments in the task. Verify
     // it is substantive: a degenerate "ok" or empty response would pass
     // CompactionFinished but fail here.
-    let summary_chars: usize = tasks
+    let summary_chars: usize = werk
         .get_tasks()
         .iter()
         .flat_map(|t| {

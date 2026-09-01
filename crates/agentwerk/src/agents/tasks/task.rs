@@ -474,16 +474,33 @@ impl AsUserMessage for Task {
 
 /// Where a task is in its lifecycle.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Status {
     /// Created, waiting for an agent.
+    #[serde(alias = "Todo")]
     Todo,
     /// Claimed by an agent and under way.
+    #[serde(alias = "InProgress")]
     InProgress,
     /// Finished, carrying a result.
+    #[serde(alias = "Finished")]
     Finished,
     /// Failed after exhausted schema retries, exhausted missing-`finish`
     /// retries, or a limit being breached.
+    #[serde(alias = "Failed")]
     Failed,
+}
+
+impl Status {
+    /// The stable snake_case spelling.
+    pub fn get_name(&self) -> &'static str {
+        match self {
+            Self::Todo => "todo",
+            Self::InProgress => "in_progress",
+            Self::Finished => "finished",
+            Self::Failed => "failed",
+        }
+    }
 }
 
 impl fmt::Display for Status {
@@ -492,13 +509,7 @@ impl fmt::Display for Status {
     /// It is the one source for that spelling, used by the event log and by
     /// anyone printing a status.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let s = match self {
-            Status::Todo => "todo",
-            Status::InProgress => "in_progress",
-            Status::Finished => "finished",
-            Status::Failed => "failed",
-        };
-        f.write_str(s)
+        f.write_str(self.get_name())
     }
 }
 
@@ -515,6 +526,34 @@ mod tests {
             created_at: 0,
         });
         task
+    }
+
+    #[test]
+    fn status_serializes_with_its_canonical_name() {
+        for status in [
+            Status::Todo,
+            Status::InProgress,
+            Status::Finished,
+            Status::Failed,
+        ] {
+            assert_eq!(
+                serde_json::to_string(&status).unwrap(),
+                format!("\"{}\"", status.get_name()),
+            );
+            assert_eq!(status.to_string(), status.get_name());
+        }
+    }
+
+    #[test]
+    fn persisted_pascal_case_statuses_still_deserialize() {
+        for (stored, expected) in [
+            ("\"Todo\"", Status::Todo),
+            ("\"InProgress\"", Status::InProgress),
+            ("\"Finished\"", Status::Finished),
+            ("\"Failed\"", Status::Failed),
+        ] {
+            assert_eq!(serde_json::from_str::<Status>(stored).unwrap(), expected);
+        }
     }
 
     #[test]

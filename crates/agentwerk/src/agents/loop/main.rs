@@ -52,21 +52,20 @@ mod tests {
     #[tokio::test]
     async fn add_after_run_spawns_new_agent() {
         let results_dir = crate::test_util::TempDir::new().unwrap();
-        let tasks = Werk::new();
-        tasks
-            .set_dir(results_dir.path().to_path_buf())
+        let werk = Werk::new();
+        werk.set_dir(results_dir.path().to_path_buf())
             .set_policy(Policy {
                 max_request_retries: 0,
                 request_retry_delay: Duration::from_millis(1),
                 ..Default::default()
             });
 
-        let run_handle = tasks.start();
+        let run_handle = werk.start();
 
         tokio::time::sleep(Duration::from_millis(150)).await;
 
         let provider = MockProvider::with_results(vec![Ok(write_result_response("ok"))]);
-        tasks.add_agent(
+        werk.add_agent(
             Agent::new()
                 .label("late")
                 .provider(provider.clone())
@@ -74,11 +73,11 @@ mod tests {
                 .role("test")
                 .tool(TaskTool),
         );
-        tasks.add_task(Task::new("hello").label("late"));
+        werk.add_task(Task::new("hello").label("late"));
 
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
         loop {
-            let done = tasks
+            let done = werk
                 .get_tasks()
                 .iter()
                 .any(|t| t.status == Status::Finished && t.task.as_str() == Some("hello"));
@@ -100,9 +99,8 @@ mod tests {
     #[tokio::test]
     async fn host_finish_mid_run_walks_the_agent_off_and_still_drains() {
         let results_dir = crate::test_util::TempDir::new().unwrap();
-        let tasks = Werk::new();
-        tasks
-            .set_dir(results_dir.path().to_path_buf())
+        let werk = Werk::new();
+        werk.set_dir(results_dir.path().to_path_buf())
             .set_policy(Policy {
                 max_request_retries: 0,
                 request_retry_delay: Duration::from_millis(1),
@@ -112,29 +110,29 @@ mod tests {
         // The agent replies without calling its finish tool, so the task is
         // still in progress when the host resolves it out of band.
         let provider = MockProvider::with_results(vec![Ok(text_response("still working"))]);
-        tasks.add_agent(
+        werk.add_agent(
             Agent::new()
                 .label("slow")
                 .provider(provider.clone())
                 .model("mock")
                 .role("test"),
         );
-        let id = tasks.add_task(Task::new("hello").label("slow"));
+        let id = werk.add_task(Task::new("hello").label("slow"));
 
         // Resolved off the agent's own first turn rather than off a poll racing
         // it: polling made the host's win depend on scheduling, and losing it
         // left the agent's own outcome on the task instead.
-        let host = Arc::clone(&tasks);
+        let host = Arc::clone(&werk);
         let resolved = id.clone();
-        tasks.on_event(move |_, event| {
+        werk.on_event(move |_, event| {
             if event.get_name() == Event::REQUEST_FINISHED {
                 let _ = host.set_task_finished(&resolved, "resolved by the host");
             }
         });
 
-        tasks.finish_all_tasks().await;
+        werk.finish_all_tasks().await;
 
-        let task = tasks.get_task(&id).unwrap();
+        let task = werk.get_task(&id).unwrap();
         assert_eq!(task.status, Status::Finished);
         assert_eq!(task.result, Some(serde_json::json!("resolved by the host")));
         assert_eq!(provider.requests(), 1);
@@ -143,21 +141,20 @@ mod tests {
     #[tokio::test]
     async fn late_added_agent_joined_on_shutdown() {
         let results_dir = crate::test_util::TempDir::new().unwrap();
-        let tasks = Werk::new();
-        tasks
-            .set_dir(results_dir.path().to_path_buf())
+        let werk = Werk::new();
+        werk.set_dir(results_dir.path().to_path_buf())
             .set_policy(Policy {
                 max_request_retries: 0,
                 request_retry_delay: Duration::from_millis(1),
                 ..Default::default()
             });
 
-        let run_handle = tasks.start();
+        let run_handle = werk.start();
 
         tokio::time::sleep(Duration::from_millis(150)).await;
 
         let provider = MockProvider::with_results(vec![Ok(write_result_response("ok"))]);
-        tasks.add_agent(
+        werk.add_agent(
             Agent::new()
                 .label("late")
                 .provider(provider)
@@ -165,11 +162,11 @@ mod tests {
                 .role("test")
                 .tool(TaskTool),
         );
-        tasks.add_task(Task::new("x").label("late"));
+        werk.add_task(Task::new("x").label("late"));
 
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
         loop {
-            let done = tasks
+            let done = werk
                 .get_tasks()
                 .iter()
                 .any(|t| t.status == Status::Finished && t.task.as_str() == Some("x"));

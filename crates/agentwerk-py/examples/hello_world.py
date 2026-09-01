@@ -19,10 +19,10 @@ async def main(task):
         "You are a friendly greeter who answers in one short sentence."
     )
 
-    agent.task(task)
+    agent.add_task(task)
 
-    work = agent.start()
-    results = await work.finish_all_tasks()
+    werk = agent.start()
+    results = await werk.finish_all_tasks()
 
     if not results:
         print("the agent finished no task", file=sys.stderr)

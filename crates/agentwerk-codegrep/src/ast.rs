@@ -1,4 +1,4 @@
-//! Pattern AST and parser entry point.
+//! Pattern AST and its parser entry point.
 
 use super::conf::Conf;
 use super::token::{self, Token};

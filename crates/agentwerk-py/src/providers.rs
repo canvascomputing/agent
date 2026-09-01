@@ -23,6 +23,14 @@ impl PyProvider {
         let inner = Provider::from_env().map_err(runtime_error)?;
         Ok(PyProvider { inner })
     }
+
+    /// Verify that the provider can answer with `model`. Awaitable.
+    fn verify<'py>(&self, py: Python<'py>, model: String) -> PyResult<Bound<'py, PyAny>> {
+        let provider = self.inner.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            provider.verify(&model).await.map_err(runtime_error)
+        })
+    }
 }
 
 /// A model name, with an optional context window size and reasoning level,

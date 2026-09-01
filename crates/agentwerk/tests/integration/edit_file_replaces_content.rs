@@ -20,9 +20,9 @@ async fn replaces_substring_in_place() -> std::result::Result<(), Box<dyn std::e
     let path = root.join("config.txt");
     fs::write(&path, ORIGINAL)?;
 
-    let tasks = Werk::new();
+    let werk = Werk::new();
 
-    tasks.set_policy(Policy {
+    werk.set_policy(Policy {
         max_turns: Some(10),
         ..Default::default()
     });
@@ -39,17 +39,17 @@ async fn replaces_substring_in_place() -> std::result::Result<(), Box<dyn std::e
              calls.",
         )
         .tool(EditFileTool);
-    tasks.add_agent(agent);
-    tasks.add_task(
+    werk.add_agent(agent);
+    werk.add_task(
         "In `config.txt`, change the substring `old_value` to `new_value`. \
          Leave the rest of the file untouched.",
     );
 
-    tasks.finish_all_tasks().await;
-    common::print_result(&tasks);
+    werk.finish_all_tasks().await;
+    common::print_result(&werk);
 
     assert!(
-        tasks.find_events("tool_call_started").len() >= 1,
+        !werk.find_events("tool_call_started").is_empty(),
         "agent must call at least one tool"
     );
 

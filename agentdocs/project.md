@@ -23,8 +23,8 @@ agentwerk is a Rust crate for building LLM agents. An agent reads input, calls a
 **Many agents share one `Werk` and pick up tasks concurrently.**
 
 ```rust
-tasks.add_agent(Agent::from_env().label("scan"));
-tasks.add_task(Task::new("Audit src/db.").label("scan"));
+werk.add_agent(Agent::from_env().label("scan"));
+werk.add_task(Task::new("Audit src/db.").label("scan"));
 ```
 
 - Each agent runs on its own tokio task; the shared Werk claims a task exactly once.

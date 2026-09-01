@@ -9,7 +9,8 @@ use agentwerk::tools::CommandTool;
 use agentwerk::{Agent, Policy, Task, Werk};
 
 #[tokio::test]
-async fn test() -> std::result::Result<(), Box<dyn std::error::Error>> {
+async fn command_tools_produce_the_schema_bound_result(
+) -> std::result::Result<(), Box<dyn std::error::Error>> {
     let (provider, model) = common::build_provider();
 
     let schema = Schema::new(serde_json::json!({
@@ -32,9 +33,9 @@ async fn test() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let cat = CommandTool::new("cat").allow("cat *").concurrent(true);
     let wc = CommandTool::new("wc").allow("wc *").concurrent(true);
 
-    let tasks = Werk::new();
+    let werk = Werk::new();
 
-    tasks.set_policy(Policy {
+    werk.set_policy(Policy {
         max_turns: Some(10),
         ..Default::default()
     });
@@ -54,8 +55,8 @@ async fn test() -> std::result::Result<(), Box<dyn std::error::Error>> {
         .tool(ls)
         .tool(cat)
         .tool(wc);
-    tasks.add_agent(agent);
-    tasks.add_task(
+    werk.add_agent(agent);
+    werk.add_task(
         Task::new(
             "List the files in the current directory, read the Cargo.toml file, \
              and count its lines. Report the result.",
@@ -63,11 +64,11 @@ async fn test() -> std::result::Result<(), Box<dyn std::error::Error>> {
         .schema(schema),
     );
 
-    let json = tasks
+    let json = werk
         .finish_task("ORDER BY created DESC")
         .await
         .unwrap_or_default();
-    common::print_result(&tasks);
+    common::print_result(&werk);
 
     assert!(json["line_count"].as_u64().unwrap_or(0) > 1);
     assert!(json["files"].as_array().map_or(0, |a| a.len()) > 1);

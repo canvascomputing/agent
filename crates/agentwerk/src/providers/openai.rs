@@ -14,7 +14,8 @@ use super::frames;
 use super::provider::{self, Protocol, ProviderLike};
 use super::stream::ResponseBuilder;
 use super::types::{
-    ContentBlock, Message, ModelRequest, ModelResponse, ResponseStatus, StreamEvent,
+    ContentBlock, Message, ModelRequest, ModelResponse, ReasoningEffort, ResponseStatus,
+    StreamEvent,
 };
 use crate::tools::Tool;
 
@@ -51,15 +52,18 @@ const DEFAULT_BASE_URL: &str = "https://api.openai.com";
 pub struct OpenAi(Endpoint);
 
 impl OpenAi {
+    /// Create an endpoint using the API key.
     pub fn new(api_key: impl Into<String>) -> Self {
         Self(Endpoint::new(api_key, DEFAULT_BASE_URL))
     }
 
+    /// Replace the provider API base URL.
     pub fn base_url(mut self, url: impl Into<String>) -> Self {
         self.0 = self.0.base_url(url);
         self
     }
 
+    /// Set the request timeout.
     pub fn timeout(mut self, duration: Duration) -> Self {
         self.0 = self.0.timeout(duration);
         self
@@ -126,7 +130,8 @@ impl Protocol for OpenAiChat {
         }
         // The OpenAI-standard reasoning knob; the litellm proxy maps it to the
         // backend's own thinking switch.
-        if let Some(effort) = request.reasoning_effort.label() {
+        if request.reasoning_effort != ReasoningEffort::Off {
+            let effort = request.reasoning_effort.get_name();
             body["reasoning_effort"] = Value::from(effort);
         }
         body

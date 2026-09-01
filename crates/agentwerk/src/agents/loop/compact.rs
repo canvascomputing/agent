@@ -521,15 +521,15 @@ mod tests {
         let werk_handle: std::sync::Arc<std::sync::Mutex<Option<_>>> =
             std::sync::Arc::new(std::sync::Mutex::new(None));
         let captured = std::sync::Arc::clone(&werk_handle);
-        let (_, _, task) = run_compaction(provider, move |tasks| {
-            *captured.lock().unwrap() = Some(std::sync::Arc::clone(tasks));
+        let (_, _, task) = run_compaction(provider, move |werk| {
+            *captured.lock().unwrap() = Some(std::sync::Arc::clone(werk));
         })
         .await;
 
         // The 180 000-token anchor that tripped the trigger described replies
         // the task no longer holds, so it must not survive compaction.
-        let tasks = werk_handle.lock().unwrap().take().expect("Werk captured");
-        let history = tasks.stats.usage_for_task(&task.id);
+        let werk = werk_handle.lock().unwrap().take().expect("Werk captured");
+        let history = werk.stats.usage_for_task(&task.id);
         assert!(
             history.len() <= 1,
             "expected the pre-compaction usage to be dropped, got {history:?}",

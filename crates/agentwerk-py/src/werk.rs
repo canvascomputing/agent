@@ -34,8 +34,8 @@ impl PyWerk {
 
     /// Continue a session from a directory written earlier.
     #[staticmethod]
-    fn load(tasks_dir: &str) -> PyResult<Self> {
-        let inner = Werk::load(tasks_dir).map_err(runtime_error)?;
+    fn load(werk_dir: &str) -> PyResult<Self> {
+        let inner = Werk::load(werk_dir).map_err(runtime_error)?;
         Ok(PyWerk { inner })
     }
 

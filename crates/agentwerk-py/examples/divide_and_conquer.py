@@ -108,7 +108,7 @@ async def main(n, partitions, agents):
     agents = min(agents, len(bounds))
     print(f"sum_{{k=1}}^{{{n}}} k^2 over {len(bounds)} partitions, {agents} agent(s)\n")
 
-    tasks = Werk().set_policy(Policy(max_turns=20 * len(bounds)))
+    werk = Werk().set_policy(Policy(max_turns=20 * len(bounds)))
     # The finish reason is announced once and not kept, so catch it here. The
     # per-tool counts are the same story: the Werk counts the run as a whole,
     # so a breakdown is folded off the events.
@@ -125,10 +125,10 @@ async def main(n, partitions, agents):
         elif event.get_name() == "tool_call_failed":
             tool_errors[event.get_data()["tool_name"]] += 1
 
-    tasks.on_event(trace)
+    werk.on_event(trace)
 
     for a in range(agents):
-        tasks.add_agent(
+        werk.add_agent(
             Agent.from_env()
             .role(ROLE.strip())
             .label("compute")
@@ -136,7 +136,7 @@ async def main(n, partitions, agents):
         )
 
     for idx, (lo, hi) in enumerate(bounds):
-        tasks.add_task(
+        werk.add_task(
             Task(
                 f"Compute the partial sum S = sum_{{k={lo}}}^{{{hi}}} k^2.\n"
                 f"lo={lo}\nhi={hi}\nidx={idx}",
@@ -145,22 +145,22 @@ async def main(n, partitions, agents):
             )
         )
 
-    await tasks.finish_all_tasks()
+    await werk.finish_all_tasks()
 
     partials, failures = {}, []
-    for task in tasks.get_tasks():
+    for task in werk.get_tasks():
         if task.is_finished():
             partials[task.get_result()["idx"]] = task.get_result()["partial_sum"]
         else:
             failures.append((task.get_id(), task.get_status()))
 
-    event_counts = Counter(event.get_name() for event in tasks.find_events("ORDER BY created"))
-    duration = tasks.get_duration() or 0.0
+    event_counts = Counter(event.get_name() for event in werk.find_events("ORDER BY created"))
+    duration = werk.get_duration() or 0.0
     print(
         f"\nfinished in {duration:.1f}s: "
         f"{event_counts['task_finished']} done, "
         f"{event_counts['task_failed']} failed, "
-        f"{tasks.get_input_tokens()} in / {tasks.get_output_tokens()} out tokens"
+        f"{werk.get_input_tokens()} in / {werk.get_output_tokens()} out tokens"
     )
     print(f"finish reason  : {finish_reason[-1]}")
     for name in sorted(tool_calls):

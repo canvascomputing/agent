@@ -4,11 +4,12 @@ Where code lives and the rules that govern placement.
 
 ## Crates
 
-**Three crates: one library, one binding layer, one example set.**
+**Four crates: one library, one internal search engine, one binding layer, and one example set.**
 
 ```
 crates/
 ├── agentwerk/      the library
+├── agentwerk-codegrep/ unpublished code-shape search engine
 ├── agentwerk-py/   the Python bindings
 └── use-cases/      runnable example binaries
 ```
@@ -30,7 +31,7 @@ crates/
 
 **Each top-level source file is one concern the caller observes directly.**
 
-- `lib.rs` holds public re-exports only. Extension types live in `tools::` and `default_logger` in `event::`.
+- `lib.rs` holds public re-exports only. `Query` is part of the documented root contract. Extension types live in `tools::` and `default_logger` in `event::`.
 - `event.rs` defines the generic `Event` record, its built-in name constants, and `default_logger`. Runtime discriminants live with the policy, Werk, loop, or tool behavior they control; event-only payload vocabulary stays as strings. Internal and caller-published events use the same record, and the name is their semantic discriminator.
 - `persistence.rs` holds the `Persist` trait and the shared `write_atomic`, `append_line`, and `output_path` helpers. It is `pub(crate)` and not re-exported.
 - The root `INVENTORY.md` lists every declaration of both crates, one section per source file, public rows before internal ones. It changes in the same commit that adds, renames, removes, or re-types an item.
@@ -43,7 +44,7 @@ crates/
 - `agent.rs`: `Agent`, its configuration methods, and task-dispatch helpers.
 - `compaction.rs`: the summarizer that compaction runs, and the threshold and chunking arithmetic behind it.
 - `policy.rs`: the public `Policy`, what a run may spend, how it retries, and when it compacts.
-- `knowledge.rs`: `Knowledge`, the cross-task store, an OKF v0.1 bundle in `<dir>/knowledge/`. Pages are curated through the `pages()` handle (`save`, `load`, `remove`) plus `clear`; failures are typed as `KnowledgeError`.
+- `knowledge.rs`: `Knowledge`, the cross-task store, an OKF v0.1 bundle in `<dir>/knowledge/`. Pages are curated through the `get_pages()` handle (`save`, `load`, `remove`, `get_all`) plus `clear`; failures are typed as `KnowledgeError`.
 - `stats.rs`: the crate-private `Stats`, the counters a limit check reads and the one reader over `events.jsonl`.
 - `query.rs`: AQL. The tokenizer, the parser, the private `Queryable`, `QueryField`, and `Compiled<F>`, and the two field sets: `TaskField` behind `Query<Task>`, `EventField` behind `Query<Event>`. `Matcher<R>` and `QueryError` live here too.
 
@@ -76,9 +77,9 @@ crates/
 **`tool.rs` holds tool construction and execution; every other file is one built-in tool or a helper.**
 
 - `tool.rs` defines the public `Tool` builder and the private execution functions over `Vec<Tool>`.
-- `read_file.rs`, `write_file.rs`, `edit_file.rs`, `glob.rs`, `grep.rs`, and `list_directory.rs` are filesystem tools; `code.rs` backs `grep`'s `syntax: "code"` shape matching, delegating to the `codegrep` engine. `fetch_url.rs` is the web fetch tool.
+- `read_file.rs`, `write_file.rs`, `edit_file.rs`, `glob.rs`, `grep.rs`, and `list_directory.rs` are filesystem tools; `code.rs` backs `grep`'s `syntax: "code"` shape matching, delegating to the `codegrep` engine. `fetch.rs` is the web fetch tool.
 - `command/tool.rs` is the command tool, restricted through `new()` and widened through `allow()`; it runs one program per call and never a shell. `command/parse.rs` splits a line into one command and classifies its arguments, which is how the tool refuses anything that is not one command.
-- `event.rs` owns `EventTool` and the completion engine; `tasks/finish.rs` wraps its `task_finished` branch, while `tasks/` also holds `TaskTool`. `knowledge.rs` is the model-facing wrapper around `Knowledge`. `util.rs` is a shared helper.
+- `event.rs` owns `EventTool` and the completion engine; `task/finish.rs` wraps its `task_finished` branch, while `task/tool.rs` holds `TaskTool`. `knowledge.rs` is the model-facing wrapper around `Knowledge`. `util.rs` is a shared helper.
 - Each built-in tool pairs with a `<tool>.tool.md` definition (the prose shown to the model) and a `<tool>.schema.json` (the input schema). Both reach the tool through `include_str!` in its `From<XTool> for Tool` conversion, which is also where the name and concurrency are stated.
 
 ## The `prompts/` and `schemas/` Modules

@@ -38,7 +38,7 @@
 
 - **Simple interface:** create agents with a few lines of code.
 - **Efficient harness:** optimized for small and fast LLMs with low memory footprint.
-- **Complex interactions:** allow agents to collaborate through queues, event hooks and shared knowledge.
+- **Complex interactions:** let agents collaborate through a shared Werk, event hooks, and knowledge.
 - **Deep observability:** inspect every request, tool call, and failure.
 - **Facilitate training:** store trajectories based on granular events for fine-tuning models.
 
@@ -69,12 +69,12 @@ async def main():
         .tool(GrepTool())
     )
 
-    agent.task(
+    agent.add_task(
         "Find every `pub trait` defined under src/ and explain each in one sentence."
     )
 
-    work = agent.start()
-    result = await work.finish_task("ORDER BY created DESC")
+    werk = agent.start()
+    result = await werk.finish_task("ORDER BY created DESC")
 
     print(result)
 
@@ -87,7 +87,7 @@ asyncio.run(main())
 The public API has five parts, ordered by how you build and inspect an agent system:
 
 - [Agents](#agents): Set agent roles, behavior, and tasks.
-- [Tasks](#tasks): Assign work and collect results across agents.
+- [Werk](#werk): Assign work and collect results across agents.
 - [Tools](#tools): Give agents controlled ways to act.
 - [Events](#events): Inspect requests, tool calls, and failures.
 - [Knowledge](#knowledge): Share durable memory across agents and tasks.
@@ -109,7 +109,7 @@ agent = (
     .tool(ReadFileTool())
 )
 
-agent.task("Read CHANGELOG.md and summarize the entries added since the last release.")
+agent.add_task("Read CHANGELOG.md and summarize the entries added since the last release.")
 
 agent.start()
 ```
@@ -128,7 +128,7 @@ agent.start()
 | | `templates(variables)` | Inject more than one entry into prompts. |
 | | `knowledge(store)` | Share a knowledge store with the agent. |
 | | `interactive()` | Let the agent wait for new instructions to keep a task in-progress. |
-| **Work** | `task(task)` | Submit a task, or a `Task` carrying a label or schema, and return its task ID. |
+| **Work** | `add_task(task)` | Submit a task, or a `Task` carrying a label or schema, and return its task ID. |
 | | `start()` | Begin processing tasks. |
 | | `get_id()` | Get the unique identifier of an agent. |
 
@@ -152,24 +152,24 @@ Every value is a variable of its own: `{task_id}`, `{date}`, `{dir}`, `{platform
 An interactive agent holds one task open across many turns, so a conversation spans a whole session.
 
 ```python
-def show(work, task, result):
+def show(werk, task, result):
     print(f"{task.get_id()}: {result}")
 
 
 agent = Agent.from_env().interactive()
-id = agent.task("Where does the configuration get loaded?")
+id = agent.add_task("Where does the configuration get loaded?")
 
-chat = agent.start()
-chat.on_result(show)
-await chat.finish_all_tasks()
+werk = agent.start()
+werk.on_result(show)
+await werk.finish_all_tasks()
 
-chat.add_reply(id, "And which environment variables override it?")
-await chat.finish_all_tasks()
+werk.add_reply(id, "And which environment variables override it?")
+await werk.finish_all_tasks()
 
-chat.set_task_finished(id, "answered")
+werk.set_task_finished(id, "answered")
 ```
 
-An interactive agent never finishes its own task, because that would end the conversation. Every answer pauses the task instead: it stays `InProgress` with its agent, and each `await chat.finish_all_tasks()` returns on the answer it waited for. `add_reply(id, content)` supplies the next message, and `set_task_finished(id, result)` ends the conversation with the result reported to the hook. The answers in between arrive as [events](#events).
+An interactive agent never finishes its own task, because that would end the conversation. Every answer pauses the task instead: it stays `in_progress` with its agent, and each `await werk.finish_all_tasks()` returns on the answer it waited for. `add_reply(id, content)` supplies the next message, and `set_task_finished(id, result)` ends the conversation with the result reported to the hook. The answers in between arrive as [events](#events).
 
 See more: [`Agent`](https://docs.rs/agentwerk/latest/agentwerk/agents/agent/struct.Agent.html).
 
@@ -197,6 +197,8 @@ agent = (
 | `provider(provider)` | Define the LLM provider. |
 | `model(model)` | Set the model. |
 | `Agent.from_env()` | Read the provider and the model from environment variables. |
+| `await provider.verify(model)` | Verify that the provider can answer with a model. |
+| `Anthropic(key, base_url=..., timeout=...)` | Configure an Anthropic endpoint. `OpenAi`, `Mistral`, and `LiteLlm` accept the same options. |
 
 You can also read the model or provider individually: `.provider(Provider.from_env())` or `.model(Model.from_env())`.
 
@@ -236,12 +238,12 @@ See [`Provider`](https://docs.rs/agentwerk/latest/agentwerk/providers/struct.Pro
 
 </details>
 
-## Tasks
+## Werk
 
 A `Werk` stores tasks, assigns them to matching agents, and records their results.
 
 <div align="left">
-  <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/assets/tasks.gif" width="600" />
+  <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/assets/werk.gif" width="600" />
 </div>
 
 ```python
@@ -308,7 +310,7 @@ werk.add_task(Task("Write up the ranking.", label="report"))
 | | `get_output_tokens()` | Get output tokens across finished requests. |
 | | `get_duration()` | Get the elapsed execution duration. |
 
-See [`Werk`](https://docs.rs/agentwerk/latest/agentwerk/agents/tasks/struct.Werk.html).
+See [`Werk`](https://docs.rs/agentwerk/latest/agentwerk/struct.Werk.html).
 
 </details>
 
@@ -316,14 +318,14 @@ See [`Werk`](https://docs.rs/agentwerk/latest/agentwerk/agents/tasks/struct.Werk
 
 Agentwerk Query Language (AQL) filters and sorts tasks by fields such as label, status, and creation time.
 
-For example, `label IN (scan, report) AND status = Finished ORDER BY finished DESC` selects finished tasks labelled `scan` or `report`, then puts the most recently finished task first.
+For example, `label IN (scan, report) AND status = finished ORDER BY finished DESC` selects finished tasks labelled `scan` or `report`, then puts the most recently finished task first.
 
 ```python
-tasks.find_tasks("scan")
-tasks.find_results("t-3")
-tasks.find_tasks("id IN (t-3, t-4)")
-tasks.find_tasks("label IN (scan, report) AND status = Finished")
-tasks.find_results("scan ORDER BY finished DESC")
+werk.find_tasks("scan")
+werk.find_results("t-3")
+werk.find_tasks("id IN (t-3, t-4)")
+werk.find_tasks("label IN (scan, report) AND status = finished")
+werk.find_results("scan ORDER BY finished DESC")
 ```
 
 <details>
@@ -381,11 +383,11 @@ creation order.
 #### Examples
 
 ```python
-tasks.find_results("report AND result ~ risk")           # reports that mention risk
-tasks.find_tasks("errors ~ tool_call_failed")          # saw a tool call fail
-tasks.find_tasks("status = Todo AND agent IS EMPTY")   # waiting, never claimed
-tasks.find_tasks("failed > -1h ORDER BY failed DESC")  # the last hour's failures
-tasks.find_tasks(lambda t: len(t.get_replies()) > 4)       # a callable, for what no field carries
+werk.find_results("report AND result ~ risk")           # reports that mention risk
+werk.find_tasks("errors ~ tool_call_failed")          # saw a tool call fail
+werk.find_tasks("status = todo AND agent IS EMPTY")   # waiting, never claimed
+werk.find_tasks("failed > -1h ORDER BY failed DESC")  # the last hour's failures
+werk.find_tasks(lambda t: len(t.get_replies()) > 4)       # a callable, for what no field carries
 ```
 
 </details>
@@ -395,9 +397,9 @@ tasks.find_tasks(lambda t: len(t.get_replies()) > 4)       # a callable, for wha
 The Werk schedules the work of your agents and returns their results.
 
 ```python
-tasks.start()
+werk.start()
 
-answer = await tasks.finish_task("ORDER BY created DESC")
+answer = await werk.finish_task("ORDER BY created DESC")
 if answer is not None:
     print(answer)
 ```
@@ -442,7 +444,7 @@ Task members:
 | | `get_finished_at()` | Finish time, in milliseconds. |
 | | `get_failed_at()` | Failure time, in milliseconds. |
 
-See [`Task`](https://docs.rs/agentwerk/latest/agentwerk/agents/tasks/struct.Task.html).
+See [`Task`](https://docs.rs/agentwerk/latest/agentwerk/struct.Task.html).
 
 </details>
 
@@ -453,7 +455,7 @@ Agents can pass work and results in five ways:
 1. **Agent handover API**: `Agent.handover` creates a configured child task when the agent finishes.
 2. **Result hook**: `on_result` creates follow-up tasks from completed work.
 3. **Knowledge**: the `knowledge` tool shares durable pages between agents.
-4. **Tasks tool**: the `tasks` tool reads any finished task's result by ID.
+4. **Task tool**: the `task` tool reads any finished task's result by ID.
 5. **Read result file**: the `read_file` tool opens a task's `result.json` in the session directory.
 
 <details>
@@ -477,9 +479,9 @@ writer = (
     .role("You write concise board reports.")
 )
 
-tasks = Werk()
-tasks.add_agent(analyst).add_agent(writer)
-tasks.add_task(Task("Rank all products by value.", label="analysis"))
+werk = Werk()
+werk.add_agent(analyst).add_agent(writer)
+werk.add_task(Task("Rank all products by value.", label="analysis"))
 ```
 
 Finishing the analysis creates the `report` task and links it to its parent. The task may use `{parent_id}`, `{parent_result}`, and `{parent_result_path}`. Calling `handover` again replaces it. Bound object results keep this handover host-owned; the legacy envelope for scalar or unbound results may override its task or schema, but not its label.
@@ -489,12 +491,12 @@ Finishing the analysis creates the `report` task and links it to its parent. The
 Use hooks to create new tasks when certain results arrive:
 
 ```python
-def hand_to_report(work, done, result):
+def hand_to_report(werk, done, result):
     if done.get_label() == "research":
-        work.add_task(Task(result, label="report"))
+        werk.add_task(Task(result, label="report"))
 
 
-tasks.on_result(hand_to_report)
+werk.on_result(hand_to_report)
 ```
 
 #### 3. Knowledge
@@ -507,17 +509,17 @@ store = Knowledge.load(".agentwerk")
 analyst = Agent.from_env().label("analysis").knowledge(store)
 writer = Agent.from_env().label("report").knowledge(store)
 
-analyst.task("Rank the products by value, then save the ranking to your knowledge.")
+analyst.add_task("Rank the products by value, then save the ranking to your knowledge.")
 ```
 
-#### 4. Tasks tool
+#### 4. Task tool
 
 Give the writer `TaskTool()`, and it reads what any finished task produced, by ID:
 
 ```python
 writer = Agent.from_env().label("report").tool(TaskTool())
 
-writer.task("Read the result of t-1, then write the board report.")
+writer.add_task("Read the result of t-1, then write the board report.")
 ```
 
 #### 5. Read result file
@@ -527,7 +529,7 @@ Give the writer `ReadFileTool()` instead, and it opens the result file named at 
 ```python
 writer = Agent.from_env().label("report").tool(ReadFileTool())
 
-writer.task("Read .agentwerk/tasks/t-1/result.json, then write the board report.")
+writer.add_task("Read .agentwerk/tasks/t-1/result.json, then write the board report.")
 ```
 
 Results live in the session directory, one `result.json` per task.
@@ -549,7 +551,7 @@ schema = Schema(
     }
 )
 
-tasks.add_task(Task("Write a report.", schema=schema))
+werk.add_task(Task("Write a report.", schema=schema))
 ```
 
 For small models, use shallow, focused schemas with few required fields, clear names, and short lists of allowed values. Split large results into labeled tasks with separate schemas, then combine them in a later task. Deep nesting, long property lists, and large `anyOf` or `oneOf` branches use more context and trigger retries.
@@ -586,7 +588,7 @@ See [`Schema`](https://docs.rs/agentwerk/latest/agentwerk/schemas/struct.Schema.
 A `Policy` sets limits for turns, tokens, elapsed time, retries, and compaction.
 
 ```python
-tasks.set_policy(Policy(max_turns=40, max_time=300.0))
+werk.set_policy(Policy(max_turns=40, max_time=300.0))
 ```
 
 <details>
@@ -613,7 +615,7 @@ tasks.set_policy(Policy(max_turns=40, max_time=300.0))
 Compaction summarizes a task's older messages once they no longer fit the model's context window.
 
 ```python
-tasks.set_policy(Policy(compaction_threshold=0.7))
+werk.set_policy(Policy(compaction_threshold=0.7))
 ```
 
 <details>
@@ -624,12 +626,12 @@ tasks.set_policy(Policy(compaction_threshold=0.7))
 Compaction also runs after the LLM provider reports that the window was exceeded. `compaction_started`, `compaction_progress`, `compaction_finished`, and `compaction_failed` report each step, see [Events](#events).
 
 ```python
-def watch(work, event):
+def watch(werk, event):
     if event.get_name() == Event.COMPACTION_FINISHED:
         print(f"[{event.get_task_id()}] compacted {event.get_data()['trigger']}")
 
 
-tasks.on_event(watch)
+werk.on_event(watch)
 ```
 
 Each compaction event carries the trigger: `proactive` before a context-window error or `reactive` after one. A failure also carries a stable `kind` and human-readable `message`.
@@ -677,9 +679,9 @@ A `Werk` saves every task, reply, and event so you can continue the same session
 The working directory is `./.agentwerk` by default.
 
 ```python
-tasks = Werk.load(".agentwerk")
-tasks.add_agent(my_agent)
-tasks.start()
+werk = Werk.load(".agentwerk")
+werk.add_agent(my_agent)
+werk.start()
 ```
 
 <details>
@@ -776,8 +778,8 @@ Agentwerk records the current task and agent on every event. Werk handlers can
 react as events arrive, and queries can retrieve them later:
 
 ```python
-tasks.on_event(lambda _, event: print(event.get_name()))
-events = tasks.find_events("event = event_name")
+werk.on_event(lambda _, event: print(event.get_name()))
+events = werk.find_events("event = event_name")
 ```
 
 Event names are open-ended; lowercase snake case is conventional. Publishing an
@@ -853,12 +855,12 @@ See [`Tool`](https://docs.rs/agentwerk/latest/agentwerk/tools/struct.Tool.html).
 Events record what agents, tools, and LLM providers do during execution.
 
 ```python
-def log(work, event):
+def log(werk, event):
     if event.get_name() == Event.TASK_FINISHED:
         print(event.get_data().get("result"))
 
 
-tasks.on_event(log)
+werk.on_event(log)
 ```
 
 <details>
@@ -870,6 +872,7 @@ tasks.on_event(log)
 | | `run_finished` | Execution ended, carrying its outcome. |
 | | `policy_violated` | A limit was breached and execution stopped. |
 | **Task** | `task_started` | An agent claimed a task. |
+| | `task_created` | A task was added to the Werk. |
 | | `task_finished` | A task finished successfully, carrying its result when it has one. |
 | | `task_failed` | A task failed. |
 | | `turn_started` | The agent began another turn on its task. |
@@ -902,14 +905,14 @@ Publish custom events through the Werk. Add agent or task context when relevant:
 ```python
 from agentwerk import Event
 
-tasks.emit_event(
+werk.emit_event(
     Event("document_indexed")
     .data({"documents": 42})
     .task_id("t-1")
     .agent_id("indexer-1")
 )
 
-tasks.emit_event(Event("index_refreshed"))
+werk.emit_event(Event("index_refreshed"))
 ```
 
 The first event's name, data, and context are stored as:
@@ -940,6 +943,12 @@ Events are saved to `.agentwerk/events.jsonl`. `text_chunk_received` events are 
 | `get_input_tokens()` / `get_output_tokens()` | Get token counts across the run's requests. |
 | `get_duration()` | Get the elapsed execution duration. |
 
+An event handler usually checks `get_name()` and then reads its payload with
+`get_data()`. Use `get_task_id()`, `get_agent_id()`, and `get_label()` to trace
+where it came from, and `get_created_at()` to read its timestamp. Application
+events can attach a model-facing instruction with `directive(value)` and read
+it back with `get_directive()`.
+
 </details>
 
 <details>
@@ -948,10 +957,10 @@ Events are saved to `.agentwerk/events.jsonl`. `text_chunk_received` events are 
 You can query events with AQL or a condition you supply.
 
 ```python
-tasks.find_events("tool_call_failed")
-tasks.find_events("event = request_finished AND agent = research-1")
-tasks.find_events("task = t-3 ORDER BY created DESC")
-tasks.find_events("payload ~ timeout AND created > -1h")
+werk.find_events("tool_call_failed")
+werk.find_events("event = request_finished AND agent = research-1")
+werk.find_events("task = t-3 ORDER BY created DESC")
+werk.find_events("payload ~ timeout AND created > -1h")
 ```
 
 | | Field | Description |
@@ -981,19 +990,19 @@ An invalid query string raises `ValueError`. `Query(query)` checks a query witho
 
 </details>
 
-See [`Event`](https://docs.rs/agentwerk/latest/agentwerk/event/struct.Event.html) and [`Werk`](https://docs.rs/agentwerk/latest/agentwerk/agents/tasks/struct.Werk.html).
+See [`Event`](https://docs.rs/agentwerk/latest/agentwerk/event/struct.Event.html) and [`Werk`](https://docs.rs/agentwerk/latest/agentwerk/struct.Werk.html).
 
 ### Hooks
 
 A hook runs your function when an event, result, failure, or task state change occurs.
 
 ```python
-def triage(work, event, failed):
+def triage(werk, event, failed):
     if failed.get_label() == "scan":
-        work.add_task(Task(failed.get_task(), label="triage"))
+        werk.add_task(Task(failed.get_task(), label="triage"))
 
 
-tasks.on_failure(triage)
+werk.on_failure(triage)
 ```
 
 <details>
@@ -1013,13 +1022,13 @@ tasks.on_failure(triage)
 Save replies of every finished task as a training example:
 
 ```python
-def capture(work, event, task):
+def capture(werk, event, task):
     if event.get_name() == Event.TASK_FINISHED:
-        model = work.get_model_for_agent(event.get_agent_id())
+        model = werk.get_model_for_agent(event.get_agent_id())
         Trajectory.from_task(event.get_agent_id(), model, task).save("datasets")
 
 
-tasks.on_task(capture)
+werk.on_task(capture)
 ```
 
 #### Async handlers
@@ -1027,14 +1036,14 @@ tasks.on_task(capture)
 `on_result` pauses the agent until the hook finishes. Use `on_result_async` for slower work such as storing results in a database, posting them to an HTTP API, or uploading them to object storage. It takes an `async def` that runs on the same event loop waiting for results.
 
 ```python
-async def store(work, task, result):
+async def store(werk, task, result):
     await database.insert(task.get_id(), result)
 
 
-tasks.on_result_async(store)
+werk.on_result_async(store)
 ```
 
-See [`Werk`](https://docs.rs/agentwerk/latest/agentwerk/agents/tasks/struct.Werk.html).
+See [`Werk`](https://docs.rs/agentwerk/latest/agentwerk/struct.Werk.html).
 
 </details>
 
@@ -1064,10 +1073,10 @@ Each page is written to `./notes/knowledge/pages/<slug>.md`, and every page gets
 | Method | Description |
 |--------|-------------|
 | `get_index()` | Get the index, which is injected into the agent prompt. |
-| `set_char_limit(count)` | Limit how much of the index is injected into the prompt. |
+| `set_index_char_limit(count)` | Limit how much of the index is injected into the prompt. |
 | `get_index_char_limit()` | Get the index size limit in force. |
 | `get_pages()` | Get the page collection for reading and writing pages. |
-| `get_pages().get_pages()` | Get every page in the store. |
+| `get_pages().get_all()` | Get every page in the store. |
 | `clear()` | Remove every page from the store. |
 
 The prompt includes up to 12 000 characters of the knowledge index by default. If the index exceeds the configured limit, the agent reads the remainder from `index.md`. Pages are always saved in full.

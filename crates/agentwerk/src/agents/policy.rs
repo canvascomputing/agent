@@ -25,13 +25,20 @@ pub enum PolicyViolation {
 
 impl std::fmt::Display for PolicyViolation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
+        f.write_str(self.get_name())
+    }
+}
+
+impl PolicyViolation {
+    /// The stable snake_case spelling.
+    pub fn get_name(&self) -> &'static str {
+        match self {
             PolicyViolation::Turns => "turns",
             PolicyViolation::InputTokens => "input_tokens",
             PolicyViolation::OutputTokens => "output_tokens",
             PolicyViolation::MaxSchemaRetries => "max_schema_retries",
             PolicyViolation::Time => "time",
-        })
+        }
     }
 }
 
@@ -70,8 +77,11 @@ pub struct Policy {
 }
 
 impl Policy {
+    /// Default number of result-schema retries.
     pub const DEFAULT_MAX_SCHEMA_RETRIES: u32 = 10;
+    /// Default number of provider-request retries.
     pub const DEFAULT_MAX_REQUEST_RETRIES: u32 = 10;
+    /// Default base delay between provider-request retries.
     pub const DEFAULT_REQUEST_RETRY_DELAY: Duration = Duration::from_millis(500);
     /// How full the context window gets before compaction fires, when the host
     /// sets no fraction of its own. What is left over covers the model's
@@ -111,6 +121,7 @@ mod tests {
             (PolicyViolation::Time, "time"),
         ];
         for (violation, expected) in cases {
+            assert_eq!(violation.get_name(), expected);
             assert_eq!(violation.to_string(), expected);
             assert_eq!(serde_json::to_value(violation).unwrap(), expected);
         }

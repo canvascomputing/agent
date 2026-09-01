@@ -3,7 +3,7 @@
 pub mod agent;
 pub(crate) mod compaction;
 pub mod knowledge;
-pub mod r#loop;
+pub(crate) mod r#loop;
 pub mod policy;
 mod query;
 pub(crate) mod retry;

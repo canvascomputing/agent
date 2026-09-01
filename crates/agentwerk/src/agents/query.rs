@@ -40,12 +40,12 @@ impl Queryable for Event {
 /// use agentwerk::{Event, Query, Task, Werk};
 ///
 /// # fn run() -> Result<(), Box<dyn std::error::Error>> {
-/// let tasks = Werk::new();
-/// tasks.find_tasks("research");
-/// tasks.find_tasks(Query::new("label = research AND agent = research-1")?);
-/// tasks.find_tasks(|t: &Task| t.get_label() == Some("research"));
-/// tasks.find_events("tool_call_failed");
-/// tasks.find_events(|e: &Event| e.get_name().ends_with("_failed"));
+/// let werk = Werk::new();
+/// werk.find_tasks("research");
+/// werk.find_tasks(Query::new("label = research AND agent = research-1")?);
+/// werk.find_tasks(|t: &Task| t.get_label() == Some("research"));
+/// werk.find_events("tool_call_failed");
+/// werk.find_events(|e: &Event| e.get_name().ends_with("_failed"));
 /// # Ok(())
 /// # }
 /// ```
@@ -103,10 +103,10 @@ impl<R: Queryable> Query<R> {
     /// use agentwerk::{Event, Query, Task};
     ///
     /// # fn run() -> Result<(), Box<dyn std::error::Error>> {
-    /// Query::<Task>::new("status = Finished AND label IN (scan, report)")?;
+    /// Query::<Task>::new("status = finished AND label IN (scan, report)")?;
     /// Query::<Task>::new("task ~ \"retry budget\" AND agent IS EMPTY")?;
     /// Query::<Task>::new("t-3")?;
-    /// Query::<Task>::new("status = Finished ORDER BY finished DESC")?;
+    /// Query::<Task>::new("status = finished ORDER BY finished DESC")?;
     /// Query::<Task>::new("finished IS EMPTY ORDER BY created")?;
     /// Query::<Task>::new("failed > -1h")?;
     /// Query::<Task>::new("created >= 2026-08-24 AND created < 2026-08-25")?;
@@ -527,22 +527,18 @@ impl QueryField for TaskField {
         tasks.sort_by_key(|t| Self::tie_break(t.borrow()));
     }
 
-    /// A status in the one spelling `Status::Display` writes, so both the
-    /// `InProgress` the tool schema documents and the `in_progress` the
-    /// bindings use reach the same task.
+    /// A status in the one spelling `Status::Display` writes.
     fn canonical(self, value: String) -> Result<String, QueryError> {
         if self != TaskField::Status {
             return Ok(value);
         }
         for status in STATUSES {
             let spelling = status.to_string();
-            if value.eq_ignore_ascii_case(&spelling)
-                || value.eq_ignore_ascii_case(&format!("{status:?}"))
-            {
+            if value.eq_ignore_ascii_case(&spelling) {
                 return Ok(spelling);
             }
         }
-        Err(QueryError::UnknownStatus { value })
+        Err(QueryError::StatusUnrecognized { value })
     }
 
     /// `id` by its number, so t-2 comes before t-10, and `status`
@@ -634,9 +630,8 @@ impl QueryField for EventField {
         (event.created_at, 0)
     }
 
-    /// A built-in event in the one snake_case spelling the log writes, so both
-    /// `tool_call_failed` and `ToolCallFailed` reach the same events. Application
-    /// event names are matched exactly.
+    /// A built-in event in the one snake_case spelling the log writes.
+    /// Application event names are matched exactly.
     fn canonical(self, value: String) -> Result<String, QueryError> {
         if self != EventField::Event {
             return Ok(value);
@@ -658,16 +653,11 @@ fn carried(value: &str) -> Option<Cow<'_, str>> {
     (!value.is_empty()).then_some(Cow::Borrowed(value))
 }
 
-/// The snake_case spelling of an event, from either spelling of its name.
+/// A built-in event in its canonical snake_case spelling.
 fn event_named(value: &str) -> Option<&'static str> {
     Event::BUILTIN_NAMES
         .iter()
-        .find(|name| {
-            value.eq_ignore_ascii_case(name)
-                || value
-                    .replace('_', "")
-                    .eq_ignore_ascii_case(&name.replace('_', ""))
-        })
+        .find(|name| **name == value)
         .copied()
 }
 
@@ -745,7 +735,7 @@ fn time_value<F: QueryField>(field: F, value: &str) -> Result<u64, QueryError> {
             false => date_millis(value),
         },
     };
-    resolved.ok_or_else(|| QueryError::InvalidTime {
+    resolved.ok_or_else(|| QueryError::TimeMalformed {
         field: field.name(),
         value: value.to_string(),
     })
@@ -840,42 +830,63 @@ impl Match {
 #[non_exhaustive]
 pub enum QueryError {
     /// The query carried no terms at all.
-    Blank,
+    TermsMissing,
     /// No field is named this. `known` is the field set the query was compiled
     /// against, which is the task one or the event one.
-    UnknownField { name: String, known: String },
+    FieldUnrecognized {
+        /// Field supplied by the query.
+        name: String,
+        /// Valid fields for this record type.
+        known: String,
+    },
     /// No status is spelled this way.
-    UnknownStatus { value: String },
+    StatusUnrecognized {
+        /// Unrecognized status spelling.
+        value: String,
+    },
     /// The value a time was compared against is in none of the three spellings.
-    InvalidTime { field: &'static str, value: String },
+    TimeMalformed {
+        /// Time field being compared.
+        field: &'static str,
+        /// Value that could not be parsed.
+        value: String,
+    },
     /// The field does not take the operator it was given.
     OperatorNotAllowed {
+        /// Field that rejected the operator.
         field: &'static str,
+        /// Operators accepted by the field.
         operators: &'static str,
     },
     /// Two equalities on one single-valued field, which no record satisfies.
-    RepeatedField { field: &'static str },
+    FieldRepeated {
+        /// Single-valued field repeated by the query.
+        field: &'static str,
+    },
     /// A token that cannot appear where it did.
-    UnexpectedToken { token: String },
+    TokenRejected {
+        /// Token that cannot appear at this position.
+        token: String,
+    },
     /// The query stopped in the middle of a term.
-    UnexpectedEnd,
+    TermUnfinished,
 }
 
 impl fmt::Display for QueryError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Blank => write!(
+            Self::TermsMissing => write!(
                 f,
                 "A query cannot be blank. Name a label, a task ID, or a field."
             ),
-            Self::UnknownField { name, known } => {
+            Self::FieldUnrecognized { name, known } => {
                 write!(f, "No field named `{name}`. Use one of {known}.")
             }
-            Self::UnknownStatus { value } => write!(
+            Self::StatusUnrecognized { value } => write!(
                 f,
-                "No status named `{value}`. Use one of Todo, InProgress, Finished, Failed."
+                "No status named `{value}`. Use one of todo, in_progress, finished, failed."
             ),
-            Self::InvalidTime { field, value } => write!(
+            Self::TimeMalformed { field, value } => write!(
                 f,
                 "`{field}` compares against a time, and `{value}` is not one. \
                  Write milliseconds since the epoch, a date like `2026-08-24`, \
@@ -884,12 +895,12 @@ impl fmt::Display for QueryError {
             Self::OperatorNotAllowed { field, operators } => {
                 write!(f, "`{field}` takes {operators}.")
             }
-            Self::RepeatedField { field } => write!(
+            Self::FieldRepeated { field } => write!(
                 f,
                 "`{field}` holds one value per task; use `{field} IN (a, b)` to match either."
             ),
-            Self::UnexpectedToken { token } => write!(f, "Unexpected `{token}` in the query."),
-            Self::UnexpectedEnd => write!(f, "The query ends in the middle of a term."),
+            Self::TokenRejected { token } => write!(f, "Unexpected `{token}` in the query."),
+            Self::TermUnfinished => write!(f, "The query ends in the middle of a term."),
         }
     }
 }
@@ -967,7 +978,7 @@ fn tokenize(query: &str) -> Result<Vec<Token>, QueryError> {
             '!' => match chars.next() {
                 Some('=') => tokens.push(Token::NotEquals),
                 Some('~') => tokens.push(Token::Omits),
-                _ => return Err(QueryError::UnexpectedToken { token: "!".into() }),
+                _ => return Err(QueryError::TokenRejected { token: "!".into() }),
             },
             '"' => {
                 let mut text = String::new();
@@ -975,7 +986,7 @@ fn tokenize(query: &str) -> Result<Vec<Token>, QueryError> {
                     match chars.next() {
                         Some('"') => break,
                         Some(c) => text.push(c),
-                        None => return Err(QueryError::UnexpectedEnd),
+                        None => return Err(QueryError::TermUnfinished),
                     }
                 }
                 tokens.push(Token::Quoted(text));
@@ -999,7 +1010,7 @@ fn tokenize(query: &str) -> Result<Vec<Token>, QueryError> {
 fn parse_query<F: QueryField>(query: &str) -> Result<(Condition<F>, Option<Sort<F>>), QueryError> {
     let tokens = tokenize(query)?;
     if tokens.is_empty() {
-        return Err(QueryError::Blank);
+        return Err(QueryError::TermsMissing);
     }
     let mut parser = Parser {
         tokens,
@@ -1014,7 +1025,7 @@ fn parse_query<F: QueryField>(query: &str) -> Result<(Condition<F>, Option<Sort<
     };
     let order = parser.order_by()?;
     match parser.peek() {
-        Some(token) => Err(QueryError::UnexpectedToken {
+        Some(token) => Err(QueryError::TokenRejected {
             token: token.spelling(),
         }),
         None => Ok((condition, order)),
@@ -1065,13 +1076,13 @@ impl<F: QueryField> Parser<F> {
         let name = match self.next() {
             Some(Token::Word(word)) => word,
             Some(token) => {
-                return Err(QueryError::UnexpectedToken {
+                return Err(QueryError::TokenRejected {
                     token: token.spelling(),
                 })
             }
-            None => return Err(QueryError::UnexpectedEnd),
+            None => return Err(QueryError::TermUnfinished),
         };
-        let field = F::named(&name).ok_or_else(|| QueryError::UnknownField {
+        let field = F::named(&name).ok_or_else(|| QueryError::FieldUnrecognized {
             name,
             known: F::spellings(),
         })?;
@@ -1112,10 +1123,10 @@ impl<F: QueryField> Parser<F> {
             let inner = self.any()?;
             return match self.next() {
                 Some(Token::Close) => Ok(inner),
-                Some(token) => Err(QueryError::UnexpectedToken {
+                Some(token) => Err(QueryError::TokenRejected {
                     token: token.spelling(),
                 }),
-                None => Err(QueryError::UnexpectedEnd),
+                None => Err(QueryError::TermUnfinished),
             };
         }
         self.term()
@@ -1124,12 +1135,12 @@ impl<F: QueryField> Parser<F> {
     /// `field operator value?`, or a lone word standing for the record it
     /// names, which each field set reads its own way.
     fn term(&mut self) -> Result<Condition<F>, QueryError> {
-        let token = self.next().ok_or(QueryError::UnexpectedEnd)?;
+        let token = self.next().ok_or(QueryError::TermUnfinished)?;
         let word = match token {
             Token::Word(word) => word,
             Token::Quoted(text) => return Ok(Condition::Term(F::label(), Match::Is(text))),
             other => {
-                return Err(QueryError::UnexpectedToken {
+                return Err(QueryError::TokenRejected {
                     token: other.spelling(),
                 })
             }
@@ -1140,7 +1151,7 @@ impl<F: QueryField> Parser<F> {
         if !self.at_operator() {
             return Ok(F::shorthand(word));
         }
-        let field = F::named(&word).ok_or_else(|| QueryError::UnknownField {
+        let field = F::named(&word).ok_or_else(|| QueryError::FieldUnrecognized {
             name: word,
             known: F::spellings(),
         })?;
@@ -1177,7 +1188,7 @@ impl<F: QueryField> Parser<F> {
     }
 
     fn operator(&mut self, field: F) -> Result<Match, QueryError> {
-        match self.next().ok_or(QueryError::UnexpectedEnd)? {
+        match self.next().ok_or(QueryError::TermUnfinished)? {
             Token::Equals => Ok(Match::Is(self.value(field)?)),
             Token::NotEquals => Ok(Match::IsNot(self.value(field)?)),
             Token::Contains => Ok(Match::Contains(self.value(field)?.to_lowercase())),
@@ -1189,7 +1200,7 @@ impl<F: QueryField> Parser<F> {
             token if token.is_keyword("in") => Ok(Match::In(self.values(field)?)),
             token if token.is_keyword("not") => {
                 if !self.take_keyword("in") {
-                    return Err(QueryError::UnexpectedToken {
+                    return Err(QueryError::TokenRejected {
                         token: "not".into(),
                     });
                 }
@@ -1199,10 +1210,10 @@ impl<F: QueryField> Parser<F> {
                 let negated = self.take_keyword("not");
                 if !self.take_keyword("empty") {
                     return Err(match self.next() {
-                        Some(token) => QueryError::UnexpectedToken {
+                        Some(token) => QueryError::TokenRejected {
                             token: token.spelling(),
                         },
-                        None => QueryError::UnexpectedEnd,
+                        None => QueryError::TermUnfinished,
                     });
                 }
                 Ok(if negated {
@@ -1211,17 +1222,17 @@ impl<F: QueryField> Parser<F> {
                     Match::Empty
                 })
             }
-            token => Err(QueryError::UnexpectedToken {
+            token => Err(QueryError::TokenRejected {
                 token: token.spelling(),
             }),
         }
     }
 
     fn value(&mut self, field: F) -> Result<String, QueryError> {
-        match self.next().ok_or(QueryError::UnexpectedEnd)? {
+        match self.next().ok_or(QueryError::TermUnfinished)? {
             Token::Word(word) => field.canonical(word),
             Token::Quoted(text) => field.literal(text),
-            token => Err(QueryError::UnexpectedToken {
+            token => Err(QueryError::TokenRejected {
                 token: token.spelling(),
             }),
         }
@@ -1231,12 +1242,12 @@ impl<F: QueryField> Parser<F> {
     /// the operator, so `label > x` answers that `label` takes no `>` rather
     /// than complaining about `x`.
     fn time(&mut self, field: F) -> Result<u64, QueryError> {
-        match self.next().ok_or(QueryError::UnexpectedEnd)? {
+        match self.next().ok_or(QueryError::TermUnfinished)? {
             Token::Word(word) | Token::Quoted(word) => match field.kind() {
                 Kind::Time => time_value(field, &word),
                 _ => Ok(0),
             },
-            token => Err(QueryError::UnexpectedToken {
+            token => Err(QueryError::TokenRejected {
                 token: token.spelling(),
             }),
         }
@@ -1247,11 +1258,11 @@ impl<F: QueryField> Parser<F> {
         match self.next() {
             Some(Token::Open) => {}
             Some(token) => {
-                return Err(QueryError::UnexpectedToken {
+                return Err(QueryError::TokenRejected {
                     token: token.spelling(),
                 })
             }
-            None => return Err(QueryError::UnexpectedEnd),
+            None => return Err(QueryError::TermUnfinished),
         }
         let mut values = vec![self.value(field)?];
         loop {
@@ -1259,11 +1270,11 @@ impl<F: QueryField> Parser<F> {
                 Some(Token::Comma) => values.push(self.value(field)?),
                 Some(Token::Close) => return Ok(values),
                 Some(token) => {
-                    return Err(QueryError::UnexpectedToken {
+                    return Err(QueryError::TokenRejected {
                         token: token.spelling(),
                     })
                 }
-                None => return Err(QueryError::UnexpectedEnd),
+                None => return Err(QueryError::TermUnfinished),
             }
         }
     }
@@ -1289,7 +1300,7 @@ fn reject_repeated_field<F: QueryField>(terms: &[Condition<F>]) -> Result<(), Qu
             continue;
         };
         if seen.contains(field) {
-            return Err(QueryError::RepeatedField {
+            return Err(QueryError::FieldRepeated {
                 field: field.name(),
             });
         }
@@ -1400,13 +1411,13 @@ mod tests {
 
     #[test]
     fn default_status_leaves_a_query_that_sets_status_alone() {
-        let q = parse("status = Todo").default_status(Status::Finished);
+        let q = parse("status = todo").default_status(Status::Finished);
         assert!(q.matches(&task("t-1")));
     }
 
     #[test]
     fn default_status_finds_a_status_nested_in_a_group() {
-        let q = parse("label = scan AND NOT (status = Failed)").default_status(Status::Finished);
+        let q = parse("label = scan AND NOT (status = failed)").default_status(Status::Finished);
         assert!(q.matches(&task("t-1").label("scan")));
     }
 
@@ -1421,7 +1432,7 @@ mod tests {
 
     #[test]
     fn and_status_applies_to_a_query_that_sets_status_of_its_own() {
-        let q = parse("status = Todo").and_status(Status::Finished);
+        let q = parse("status = todo").and_status(Status::Finished);
         assert!(!q.matches(&task("t-1")));
         assert!(!q.matches(&task("t-2").finished(json!("ok"))));
     }
@@ -1535,7 +1546,7 @@ mod tests {
     fn an_empty_in_list_is_rejected() {
         assert!(matches!(
             error("label IN ()"),
-            QueryError::UnexpectedToken { .. }
+            QueryError::TokenRejected { .. }
         ));
     }
 
@@ -1660,7 +1671,7 @@ mod tests {
 
     #[test]
     fn and_binds_tighter_than_or() {
-        let q = parse("label = scan AND status = Todo OR label = report");
+        let q = parse("label = scan AND status = todo OR label = report");
         assert!(q.matches(&task("t-1").label("scan").status(Status::Todo)));
         assert!(!q.matches(&task("t-2").label("scan").status(Status::Failed)));
         assert!(q.matches(&task("t-3").label("report").status(Status::Failed)));
@@ -1668,7 +1679,7 @@ mod tests {
 
     #[test]
     fn parentheses_override_precedence() {
-        let q = parse("(label = scan OR label = report) AND status = Todo");
+        let q = parse("(label = scan OR label = report) AND status = todo");
         assert!(q.matches(&task("t-1").label("report").status(Status::Todo)));
         assert!(!q.matches(&task("t-2").label("report").status(Status::Failed)));
     }
@@ -1695,9 +1706,8 @@ mod tests {
     }
 
     #[test]
-    fn a_status_parses_in_both_spellings() {
+    fn a_status_parses_in_its_canonical_spelling() {
         let in_progress = task("t-1").status(Status::InProgress);
-        assert!(parse("status = InProgress").matches(&in_progress));
         assert!(parse("status = in_progress").matches(&in_progress));
     }
 
@@ -1723,7 +1733,7 @@ mod tests {
 
     #[test]
     fn a_bare_word_inside_a_group_selects_the_label() {
-        let q = parse("(scan OR report) AND status = Todo");
+        let q = parse("(scan OR report) AND status = todo");
         assert!(q.matches(&task("t-1").label("report").status(Status::Todo)));
         assert!(!q.matches(&task("t-2").label("review").status(Status::Todo)));
     }
@@ -1965,7 +1975,7 @@ mod tests {
     fn an_offset_in_no_unit_is_rejected() {
         assert!(matches!(
             error("created > -5y"),
-            QueryError::InvalidTime { .. }
+            QueryError::TimeMalformed { .. }
         ));
     }
 
@@ -1991,14 +2001,14 @@ mod tests {
 
     #[test]
     fn an_order_by_without_a_field_is_rejected() {
-        assert_eq!(error("scan ORDER BY"), QueryError::UnexpectedEnd);
+        assert_eq!(error("scan ORDER BY"), QueryError::TermUnfinished);
     }
 
     #[test]
     fn an_order_without_by_is_rejected() {
         assert!(matches!(
             error("ORDER id"),
-            QueryError::UnexpectedToken { .. }
+            QueryError::TokenRejected { .. }
         ));
     }
 
@@ -2027,14 +2037,14 @@ mod tests {
     fn key_is_not_an_alias_for_id() {
         assert!(matches!(
             error("key = t-1"),
-            QueryError::UnknownField { name, .. } if name == "key"
+            QueryError::FieldUnrecognized { name, .. } if name == "key"
         ));
     }
 
     #[test]
     fn an_unknown_status_lists_the_four() {
         let message = error("status = Started").to_string();
-        assert!(message.contains("InProgress"), "{message}");
+        assert!(message.contains("in_progress"), "{message}");
     }
 
     #[test]
@@ -2064,25 +2074,25 @@ mod tests {
 
     #[test]
     fn an_unclosed_group_is_rejected() {
-        assert_eq!(error("(label = scan"), QueryError::UnexpectedEnd);
+        assert_eq!(error("(label = scan"), QueryError::TermUnfinished);
     }
 
     #[test]
     fn an_unterminated_quote_is_rejected() {
-        assert_eq!(error("label = \"needs review"), QueryError::UnexpectedEnd);
+        assert_eq!(error("label = \"needs review"), QueryError::TermUnfinished);
     }
 
     #[test]
     fn a_lone_bang_is_rejected() {
         assert!(matches!(
             error("label ! scan"),
-            QueryError::UnexpectedToken { .. }
+            QueryError::TokenRejected { .. }
         ));
     }
 
     #[test]
     fn a_blank_query_is_rejected() {
-        assert_eq!(error("   "), QueryError::Blank);
+        assert_eq!(error("   "), QueryError::TermsMissing);
     }
 
     #[test]
@@ -2146,10 +2156,10 @@ mod event_tests {
     }
 
     #[test]
-    fn an_event_name_parses_in_both_spellings() {
+    fn a_builtin_event_name_uses_only_its_canonical_spelling() {
         let failed = event(tool_failed("boom"));
         assert!(parse("event = tool_call_failed").matches(&failed));
-        assert!(parse("event = ToolCallFailed").matches(&failed));
+        assert!(!parse("event = ToolCallFailed").matches(&failed));
     }
 
     #[test]
@@ -2160,10 +2170,11 @@ mod event_tests {
     }
 
     #[test]
-    fn an_application_event_name_is_matched_exactly() {
+    fn an_application_event_name_is_never_reinterpreted_as_a_builtin() {
         let event = Event::new("TaskFinished");
         assert!(parse(r#"event = "TaskFinished""#).matches(&event));
-        assert!(!parse("event = TaskFinished").matches(&event));
+        assert!(parse("event = TaskFinished").matches(&event));
+        assert!(!parse("event = task_finished").matches(&event));
     }
 
     #[test]
@@ -2290,7 +2301,7 @@ mod event_tests {
 
     #[test]
     fn an_unknown_field_lists_the_event_fields() {
-        let message = error("status = Finished").to_string();
+        let message = error("status = finished").to_string();
         assert!(message.contains("status"), "{message}");
         assert!(message.contains("payload"), "{message}");
         // The task fields are a different set, and the message says so.

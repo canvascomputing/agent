@@ -33,7 +33,7 @@ fn max_existing_task_id(dir: &Path) -> u64 {
 
 impl Werk {
     /// Insert `task`, filling in the fields agentwerk owns. The task is always born
-    /// `Todo`; to pin it to a specific agent, label it with the agent's
+    /// `todo`; to pin it to a specific agent, label it with the agent's
     /// name. Returns the inserted task's ID.
     pub(crate) fn insert(&self, mut task: Task, reporter: String) -> String {
         let id = {
@@ -93,10 +93,10 @@ impl Werk {
             .map(|_| rel)
     }
 
-    /// Atomically find a `Todo` task the query selects, assign it to
-    /// `agent_id`, and transition to `InProgress`.
+    /// Atomically find a `todo` task the query selects, assign it to
+    /// `agent_id`, and transition to `in_progress`.
     ///
-    /// The earliest candidate must itself be `Todo`, so a query naming no
+    /// The earliest candidate must itself be `todo`, so a query naming no
     /// status never reaches past a task already claimed.
     pub(crate) fn claim(&self, query: &Query, agent_id: &str) -> Option<String> {
         let now = now_millis();
@@ -138,24 +138,24 @@ impl Werk {
         let _ = Replies::append(&self.get_dir(), id, &reply);
     }
 
-    /// Transition a task to `Finished`, emitting `TaskFinished`
+    /// Transition a task to `finished`, emitting `task_finished`
     /// under `agent`'s name.
     pub(crate) fn set_finished_by(&self, id: &str, agent: &str) -> Result<(), TaskError> {
         self.set_final_status(id, Status::Finished, agent)
     }
 
-    /// Attach `result` to the task and transition it to `Finished`,
+    /// Attach `result` to the task and transition it to `finished`,
     /// resolving it from outside the run. Validates against the task's
     /// schema first, so a host finish and an agent finish record the same
-    /// contract. The emitted `TaskFinished` carries an empty agent ID,
+    /// contract. The emitted `task_finished` carries an empty agent ID,
     /// like the run-level events no single agent causes.
     ///
     /// ```no_run
     /// # use agentwerk::Werk;
     /// # fn run() -> Result<(), Box<dyn std::error::Error>> {
-    /// let tasks = Werk::new();
-    /// let id = tasks.add_task("Look up the cached answer.");
-    /// tasks.set_task_finished(&id, "42")?;
+    /// let werk = Werk::new();
+    /// let id = werk.add_task("Look up the cached answer.");
+    /// werk.set_task_finished(&id, "42")?;
     /// # Ok(())
     /// # }
     /// ```
@@ -172,15 +172,15 @@ impl Werk {
         self.set_final_status(id, Status::Finished, "")
     }
 
-    /// Transition a task to `Failed`. No result argument, unlike
+    /// Transition a task to `failed`. No result argument, unlike
     /// [`Self::set_task_finished`]: a failed task has none. The emitted
-    /// `TaskFailed` carries an empty agent ID, like the run-level
+    /// `task_failed` carries an empty agent ID, like the run-level
     /// events no single agent causes.
     pub fn set_task_failed(&self, id: &str) -> Result<(), TaskError> {
         self.set_final_status(id, Status::Failed, "")
     }
 
-    /// Transition a task to `Failed`, emitting `TaskFailed` under
+    /// Transition a task to `failed`, emitting `task_failed` under
     /// `agent`'s name. The loop's failure paths route through this.
     pub(crate) fn set_failed_by(&self, id: &str, agent: &str) -> Result<(), TaskError> {
         self.set_final_status(id, Status::Failed, agent)
@@ -206,11 +206,11 @@ impl Werk {
             let mut store = self.tasks.lock().unwrap();
             let task = store
                 .get_mut(id)
-                .ok_or_else(|| TaskError::TaskMissing { id: id.to_string() })?;
+                .ok_or_else(|| TaskError::TaskNotFound { id: id.to_string() })?;
             // First outcome wins. The host resolving a task an agent is still
             // turning, and the agent giving up on one the host just resolved,
             // are the same race from either side; without this the loser's
-            // status overwrites the winner's and leaves, say, a `Failed` task
+            // status overwrites the winner's and leaves, say, a `failed` task
             // carrying a result. Checked under the lock the write happens
             // under, so two racing transitions cannot both pass it.
             if matches!(task.status, Status::Finished | Status::Failed) {
@@ -295,8 +295,8 @@ impl Werk {
     /// use agentwerk::Event;
     /// use agentwerk::agents::tasks::{Reply, ReplyContent};
     ///
-    /// let tasks = Werk::new();
-    /// tasks.on_event(|werk, event| {
+    /// let werk = Werk::new();
+    /// werk.on_event(|werk, event| {
     ///     if event.get_name() != Event::TOOL_CALL_FAILED {
     ///         return;
     ///     }
@@ -350,7 +350,7 @@ impl Werk {
         let mut store = self.tasks.lock().unwrap();
         let task = store
             .get_mut(id)
-            .ok_or_else(|| TaskError::TaskMissing { id: id.to_string() })?;
+            .ok_or_else(|| TaskError::TaskNotFound { id: id.to_string() })?;
         if let Some(t) = new_task {
             task.task = t;
         }
@@ -558,7 +558,7 @@ mod tests {
     fn claim_transitions_todo_to_in_progress_and_sets_the_assignee() {
         let (werk, _tmp) = test_werk();
         werk.add_task("hello");
-        let id = werk.claim(&Query::from("status = Todo"), "alice").unwrap();
+        let id = werk.claim(&Query::from("status = todo"), "alice").unwrap();
         assert_eq!(id, "t-1");
         let t = werk.get_task(&id).unwrap();
         assert_eq!(t.status, Status::InProgress);
@@ -601,7 +601,7 @@ mod tests {
         werk.add_task("a");
         werk.add_task("b");
         werk.add_task("c");
-        let id = werk.claim(&Query::from("status = Todo"), "alice").unwrap();
+        let id = werk.claim(&Query::from("status = todo"), "alice").unwrap();
         assert_eq!(id, "t-1");
     }
 
@@ -609,7 +609,7 @@ mod tests {
     fn claim_logs_the_task_starting() {
         let (werk, dir) = test_werk();
         werk.add_task("hello");
-        werk.claim(&Query::from("status = Todo"), "alice");
+        werk.claim(&Query::from("status = todo"), "alice");
         let lines = read_events_log(dir.path());
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[0]["name"], "task_created");
@@ -622,7 +622,7 @@ mod tests {
     fn set_finished_transitions_to_finished() {
         let (werk, _tmp) = test_werk();
         let id = werk.add_task("hello");
-        werk.claim(&Query::from("status = Todo"), "alice");
+        werk.claim(&Query::from("status = todo"), "alice");
         werk.set_finished_by(&id, "alice").unwrap();
         let t = werk.get_task(&id).unwrap();
         assert_eq!(t.status, Status::Finished);
@@ -681,7 +681,7 @@ mod tests {
     fn set_failed_transitions_to_failed() {
         let (werk, _tmp) = test_werk();
         let id = werk.add_task("hello");
-        werk.claim(&Query::from("status = Todo"), "alice");
+        werk.claim(&Query::from("status = todo"), "alice");
         werk.set_task_failed(&id).unwrap();
         let t = werk.get_task(&id).unwrap();
         assert_eq!(t.status, Status::Failed);
@@ -692,7 +692,7 @@ mod tests {
     fn a_finished_task_is_not_reopened_by_a_later_failure() {
         let (werk, _tmp) = test_werk();
         let id = werk.add_task("hello");
-        werk.claim(&Query::from("status = Todo"), "alice");
+        werk.claim(&Query::from("status = todo"), "alice");
         werk.set_task_finished(&id, "host result").unwrap();
 
         // Alice was still turning the task and gives up after the host
@@ -714,7 +714,7 @@ mod tests {
     fn a_failed_task_is_not_reopened_by_a_later_finish() {
         let (werk, _tmp) = test_werk();
         let id = werk.add_task("hello");
-        werk.claim(&Query::from("status = Todo"), "alice");
+        werk.claim(&Query::from("status = todo"), "alice");
         werk.set_failed_by(&id, "alice").unwrap();
 
         werk.set_task_finished(&id, "late result").unwrap();
@@ -763,7 +763,7 @@ mod tests {
     fn set_finished_errors_on_an_unknown_id() {
         let (werk, _tmp) = test_werk();
         let err = werk.set_task_finished("t-9", "done").unwrap_err();
-        assert!(matches!(err, TaskError::TaskMissing { .. }));
+        assert!(matches!(err, TaskError::TaskNotFound { .. }));
     }
 
     #[test]
@@ -918,7 +918,7 @@ mod tests {
         original.set_dir(dir.path().to_path_buf());
         original.add_task("mid flight");
         original
-            .claim(&Query::from("status = Todo"), "alice")
+            .claim(&Query::from("status = todo"), "alice")
             .unwrap();
         drop(original);
 
@@ -1133,7 +1133,7 @@ mod tests {
     fn task_lifecycle_writes_its_events_to_the_log() {
         let (werk, _dir) = test_werk();
         werk.add_task("seed");
-        werk.claim(&Query::from("status = Todo"), "alice").unwrap();
+        werk.claim(&Query::from("status = todo"), "alice").unwrap();
         werk.set_result("t-1", serde_json::Value::Null).unwrap();
         werk.set_finished_by("t-1", "agent").unwrap();
 

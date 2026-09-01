@@ -86,7 +86,14 @@ def live_parameters(member):
 
 
 def test_every_exported_name_is_declared_in_the_stub():
-    assert set(aw.__all__) <= stub_top_level_names()
+    assert set(aw.__all__) == stub_top_level_names()
+
+
+def test_removed_api_names_are_absent_from_runtime_exports_and_stub():
+    removed = {"TasksTool", "FetchUrlTool"}
+    assert removed.isdisjoint(aw.__all__)
+    assert removed.isdisjoint(stub_top_level_names())
+    assert "task" not in stub_class_members("Agent")
 
 
 def test_every_class_member_is_declared_in_the_stub():

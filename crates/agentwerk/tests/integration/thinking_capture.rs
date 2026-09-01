@@ -14,7 +14,8 @@ use agentwerk::providers::{
 };
 
 #[tokio::test]
-async fn test() -> std::result::Result<(), Box<dyn std::error::Error>> {
+async fn reasoning_effort_captures_thinking_before_visible_text(
+) -> std::result::Result<(), Box<dyn std::error::Error>> {
     let (provider, default_model) = common::build_provider();
     let model = std::env::var("THINKING_MODEL")
         .map(Model::new)

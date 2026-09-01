@@ -13,11 +13,11 @@ use super::grep::{
     render_content, render_count, render_files, OutputMode, Query, MAX_LINE_COLUMNS,
 };
 use super::tool::Event;
-use crate::codegrep::{self, Conf, Pattern};
 use crate::prompts::directives::{
     DirectiveStore, CODE_CONSTRAINT_INCOMPLETE, CODE_CONSTRAINT_METAVARIABLE_UNKNOWN,
     CODE_CONSTRAINT_REGEX_REJECTED, CODE_PATTERN_REJECTED,
 };
+use agentwerk_codegrep::{self as codegrep, Conf, Pattern};
 
 /// Match every file with the `codegrep` engine and render per `output_mode`,
 /// reusing `grep`'s renderers so code results carry the same structured

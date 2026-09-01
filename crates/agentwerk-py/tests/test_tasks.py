@@ -54,11 +54,11 @@ def test_unstarted_task_carries_its_id_and_no_messages(werk):
 def test_task_selection_uses_aql_status_and_pending_fields(werk):
     id = werk.add_task(aw.Task("scan the corpus"))
 
-    assert [task.get_id() for task in werk.find_tasks("status = Todo")] == [id]
+    assert [task.get_id() for task in werk.find_tasks("status = todo")] == [id]
     assert [task.get_id() for task in werk.find_tasks("pending = true")] == [id]
-    assert werk.find_tasks("status = InProgress") == []
-    assert werk.find_tasks("status = Finished") == []
-    assert werk.find_tasks("status = Failed") == []
+    assert werk.find_tasks("status = in_progress") == []
+    assert werk.find_tasks("status = finished") == []
+    assert werk.find_tasks("status = failed") == []
 
 
 def test_task_predicates_follow_label_status_and_cancellation(werk):
@@ -172,7 +172,7 @@ def test_find_task_returns_the_first_match(werk):
     werk.add_task(aw.Task("alpha", label="a"))
     werk.add_task(aw.Task("beta", label="b"))
 
-    found = werk.find_task("status = Todo")
+    found = werk.find_task("status = todo")
     assert found.get_task() == "alpha"
 
 
@@ -509,7 +509,7 @@ def test_a_query_neither_field_set_accepts_raises_on_construction():
 
 def test_a_task_query_raises_where_events_are_selected(werk):
     werk.add_task("seed")
-    tasks_only = aw.Query("status = Finished")
+    tasks_only = aw.Query("status = finished")
 
     assert werk.find_tasks(tasks_only) == []
     with pytest.raises(ValueError):
@@ -548,7 +548,7 @@ def test_on_result_receives_the_finished_task_and_its_result(werk):
 
 def test_a_hook_reads_the_results_that_landed_before_it(werk):
     seen = []
-    werk.on_result(lambda work, _, __: seen.append(work.get_results()))
+    werk.on_result(lambda callback_werk, _, __: seen.append(callback_werk.get_results()))
     first = werk.add_task(aw.Task("scan a.py"))
     second = werk.add_task(aw.Task("scan b.py"))
 
@@ -559,11 +559,11 @@ def test_a_hook_reads_the_results_that_landed_before_it(werk):
 
 
 def test_a_hook_waits_for_the_results_it_needs_before_filing_the_next_step(werk):
-    def review_once_both_landed(work, _, __):
-        results = work.get_results()
+    def review_once_both_landed(callback_werk, _, __):
+        results = callback_werk.get_results()
         if len(results) == 2:
             for result in results:
-                work.add_task(aw.Task(result, label="review"))
+                callback_werk.add_task(aw.Task(result, label="review"))
 
     werk.on_result(review_once_both_landed)
     first = werk.add_task(aw.Task("scan a.py"))
@@ -588,9 +588,9 @@ def test_on_failure_receives_the_failed_task(werk):
 
 
 def test_on_failure_files_a_retry_through_the_werk_it_is_handed(werk):
-    def retry_once(work, _, failed):
+    def retry_once(callback_werk, _, failed):
         if not failed.get_parent():
-            work.add_task(aw.Task(failed.get_task(), parent=failed.get_id()))
+            callback_werk.add_task(aw.Task(failed.get_task(), parent=failed.get_id()))
 
     werk.on_failure(retry_once)
     id = werk.add_task(aw.Task("scan the corpus"))
@@ -602,9 +602,9 @@ def test_on_failure_files_a_retry_through_the_werk_it_is_handed(werk):
 
 
 def test_on_event_files_a_follow_up_for_any_kind(werk):
-    def report_when_done(work, event):
+    def report_when_done(callback_werk, event):
         if event.get_name() == aw.Event.TASK_FINISHED:
-            work.add_task(aw.Task("report", label="report"))
+            callback_werk.add_task(aw.Task("report", label="report"))
 
     werk.on_event(report_when_done)
     id = werk.add_task(aw.Task("scan the corpus"))
@@ -616,9 +616,9 @@ def test_on_event_files_a_follow_up_for_any_kind(werk):
 
 
 def test_an_event_handler_rewrites_replies_through_the_werk(werk):
-    def redact_when_done(work, event):
+    def redact_when_done(callback_werk, event):
         if event.get_name() == aw.Event.TASK_FINISHED:
-            work.edit_replies(event.get_task_id(), lambda replies: [aw.Reply.user_text("[redacted]")])
+            callback_werk.edit_replies(event.get_task_id(), lambda replies: [aw.Reply.user_text("[redacted]")])
 
     werk.on_event(redact_when_done)
     id = werk.add_task(aw.Task("scan the corpus"))
@@ -874,7 +874,7 @@ async def test_finish_task_hands_back_the_first_result_in_query_order(werk):
 
 
 async def test_finish_task_is_none_when_nothing_finished(werk):
-    assert await werk.finish_task("status = Finished") is None
+    assert await werk.finish_task("status = finished") is None
 
 
 async def test_a_cancelled_run_reports_its_reason(werk):

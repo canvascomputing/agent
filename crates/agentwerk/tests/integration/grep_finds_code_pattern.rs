@@ -90,14 +90,14 @@ async fn finds_code_pattern_with_special_chars(
         logger(e);
     });
 
-    let tasks = Werk::new();
+    let werk = Werk::new();
 
-    tasks.set_policy(Policy {
+    werk.set_policy(Policy {
         max_turns: Some(10),
         ..Default::default()
     });
-    tasks.on_event(move |_, e| event_handler(e));
-    tasks.add_agent(
+    werk.on_event(move |_, e| event_handler(e));
+    werk.add_agent(
         Agent::new()
             .provider(provider)
             .model(&model)
@@ -114,13 +114,13 @@ async fn finds_code_pattern_with_special_chars(
             .tool(ListDirectoryTool)
             .tool(ReadFileTool),
     );
-    tasks.add_task(format!(
+    werk.add_task(format!(
         "Which source file in this project contains the exact code \
          `{TARGET_SIGNATURE}`? Answer with the file's path."
     ));
 
-    tasks.finish_all_tasks().await;
-    common::print_result(&tasks);
+    werk.finish_all_tasks().await;
+    common::print_result(&werk);
 
     let recorded = calls.lock().unwrap().clone();
 
@@ -157,7 +157,7 @@ async fn finds_code_pattern_with_special_chars(
     );
 
     // The agent's final answer should name calc.rs.
-    let answer = common::last_result_text(&tasks);
+    let answer = common::last_result_text(&werk);
     assert!(
         answer.contains("calc.rs"),
         "agent should report calc.rs; got: {answer:?}"

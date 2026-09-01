@@ -41,9 +41,9 @@ async fn separates_files_and_directories() -> std::result::Result<(), Box<dyn st
         "required": ["files", "directories"]
     }))?;
 
-    let tasks = Werk::new();
+    let werk = Werk::new();
 
-    tasks.set_policy(Policy {
+    werk.set_policy(Policy {
         max_turns: Some(10),
         ..Default::default()
     });
@@ -62,22 +62,22 @@ async fn separates_files_and_directories() -> std::result::Result<(), Box<dyn st
              any text outside of tool calls.",
         )
         .tool(ListDirectoryTool);
-    tasks.add_agent(agent);
-    tasks.add_task(
+    werk.add_agent(agent);
+    werk.add_task(
         Task::new(
             "List the top-level entries in the working directory, separating files from directories.",
         )
         .schema(schema),
     );
 
-    let json = tasks
+    let json = werk
         .finish_task("ORDER BY created DESC")
         .await
         .unwrap_or_default();
-    common::print_result(&tasks);
+    common::print_result(&werk);
 
     assert!(
-        tasks.find_events("tool_call_started").len() >= 1,
+        !werk.find_events("tool_call_started").is_empty(),
         "agent must call at least one tool"
     );
 

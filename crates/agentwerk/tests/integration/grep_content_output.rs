@@ -78,14 +78,14 @@ async fn finds_string_buried_deep_in_line() -> std::result::Result<(), Box<dyn s
         logger(e);
     });
 
-    let tasks = Werk::new();
+    let werk = Werk::new();
 
-    tasks.set_policy(Policy {
+    werk.set_policy(Policy {
         max_turns: Some(10),
         ..Default::default()
     });
-    tasks.on_event(move |_, e| event_handler(e));
-    tasks.add_agent(
+    werk.on_event(move |_, e| event_handler(e));
+    werk.add_agent(
         Agent::new()
             .provider(provider)
             .model(&model)
@@ -102,13 +102,13 @@ async fn finds_string_buried_deep_in_line() -> std::result::Result<(), Box<dyn s
             .tool(ListDirectoryTool)
             .tool(ReadFileTool),
     );
-    tasks.add_task(format!(
+    werk.add_task(format!(
         "Which source file contains the string `{NEEDLE}`? \
          Answer with the file path.",
     ));
 
-    tasks.finish_all_tasks().await;
-    common::print_result(&tasks);
+    werk.finish_all_tasks().await;
+    common::print_result(&werk);
 
     let recorded = calls.lock().unwrap().clone();
 
@@ -163,7 +163,7 @@ async fn finds_string_buried_deep_in_line() -> std::result::Result<(), Box<dyn s
     }
 
     // The agent's final answer should name config.rs.
-    let answer = common::last_result_text(&tasks);
+    let answer = common::last_result_text(&werk);
     assert!(
         answer.contains("config.rs"),
         "agent should report config.rs; got: {answer:?}"
@@ -221,14 +221,14 @@ async fn reads_column_slice_after_grep_locates_needle(
         logger(e);
     });
 
-    let tasks = Werk::new();
+    let werk = Werk::new();
 
-    tasks.set_policy(Policy {
+    werk.set_policy(Policy {
         max_turns: Some(10),
         ..Default::default()
     });
-    tasks.on_event(move |_, e| event_handler(e));
-    tasks.add_agent(
+    werk.on_event(move |_, e| event_handler(e));
+    werk.add_agent(
         Agent::new()
             .provider(provider)
             .model(&model)
@@ -243,15 +243,15 @@ async fn reads_column_slice_after_grep_locates_needle(
             .tool(GrepTool)
             .tool(ReadFileTool),
     );
-    tasks.add_task(format!(
+    werk.add_task(format!(
         "Find the string `{NEEDLE}` in the working directory. \
          Use grep to locate it, then use read_file with column \
          and length to read just the surrounding context (not the \
          entire line). Report the file name.",
     ));
 
-    tasks.finish_all_tasks().await;
-    common::print_result(&tasks);
+    werk.finish_all_tasks().await;
+    common::print_result(&werk);
 
     let recorded = calls.lock().unwrap().clone();
 
@@ -282,7 +282,7 @@ async fn reads_column_slice_after_grep_locates_needle(
     );
 
     // The agent's final answer should name bundle.min.js.
-    let answer = common::last_result_text(&tasks);
+    let answer = common::last_result_text(&werk);
     assert!(
         answer.contains("bundle.min.js"),
         "agent should report bundle.min.js; got: {answer:?}"

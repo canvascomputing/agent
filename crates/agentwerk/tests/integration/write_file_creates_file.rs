@@ -18,9 +18,9 @@ async fn creates_file_with_token() -> std::result::Result<(), Box<dyn std::error
     let dir = crate::test_util::TempDir::new()?;
     let root = dir.path();
 
-    let tasks = Werk::new();
+    let werk = Werk::new();
 
-    tasks.set_policy(Policy {
+    werk.set_policy(Policy {
         max_turns: Some(10),
         ..Default::default()
     });
@@ -37,17 +37,17 @@ async fn creates_file_with_token() -> std::result::Result<(), Box<dyn std::error
              calls.",
         )
         .tool(WriteFileTool);
-    tasks.add_agent(agent);
-    tasks.add_task(format!(
+    werk.add_agent(agent);
+    werk.add_task(format!(
         "Create a file named `report.md` in the working directory containing \
          exactly the line `token={token}`."
     ));
 
-    tasks.finish_all_tasks().await;
-    common::print_result(&tasks);
+    werk.finish_all_tasks().await;
+    common::print_result(&werk);
 
     assert!(
-        tasks.find_events("tool_call_started").len() >= 1,
+        !werk.find_events("tool_call_started").is_empty(),
         "agent must call at least one tool"
     );
 

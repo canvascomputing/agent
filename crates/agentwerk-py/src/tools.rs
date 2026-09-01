@@ -29,7 +29,7 @@ fn invoke_python(py: Python<'_>, func: &Py<PyAny>, input: &Value) -> PyResult<Ev
     let arg = value_to_py(py, input)?;
     let bound = func.bind(py);
     let mut result = match arg.cast::<PyDict>() {
-        Ok(kwargs) => bound.call((), Some(&kwargs))?,
+        Ok(kwargs) => bound.call((), Some(kwargs))?,
         Err(_) => bound.call1((arg,))?,
     };
 
@@ -67,8 +67,8 @@ pub fn extract_tool(obj: &Bound<'_, PyAny>) -> PyResult<Tool> {
     if let Ok(command) = obj.extract::<PyRef<PyCommandTool>>() {
         return Ok(command.inner.clone().into());
     }
-    if let Ok(fetch_url) = obj.extract::<PyRef<PyFetchTool>>() {
-        return Ok(fetch_url.inner.clone().into());
+    if let Ok(fetch) = obj.extract::<PyRef<PyFetchTool>>() {
+        return Ok(fetch.inner.clone().into());
     }
     if obj.hasattr("_agentwerk_tool")? {
         let name: String = obj.getattr("_agentwerk_name")?.extract()?;
