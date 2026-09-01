@@ -50,7 +50,7 @@ fn failure_reason(error: &KnowledgeError) -> &'static str {
 /// index budget is consumed.
 fn usage_line(message: &str, store: &Knowledge) -> String {
     let (used, limit, pages) = store.index_usage();
-    let pct = if limit > 0 { (used * 100) / limit } else { 0 };
+    let pct = (used * 100).checked_div(limit).unwrap_or(0);
     format!("{message} ({pages} pages, {pct}%, {used}/{limit} chars)")
 }
 
