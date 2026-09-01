@@ -1,6 +1,6 @@
 <!-- What the task tools say when an ID, a result, or a handover is missing. -->
 
-## queue_unavailable
+## werk_unavailable
 Task actions are unavailable here, so no task can be read or changed.
 
 ## task_id_missing

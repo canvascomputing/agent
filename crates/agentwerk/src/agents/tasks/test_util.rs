@@ -3,17 +3,17 @@
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use super::queue::Queue;
+use super::werk::Werk;
 use crate::agents::agent::Agent;
 use crate::event::Event;
 
 use super::FinishReason;
 
-/// Collect the reason from every `RunFinished`, since the queue keeps none.
-pub(super) fn collect_finish_reasons(queue: &Queue) -> Arc<Mutex<Vec<FinishReason>>> {
+/// Collect the reason from every `RunFinished`, since the Werk keeps none.
+pub(super) fn collect_finish_reasons(werk: &Werk) -> Arc<Mutex<Vec<FinishReason>>> {
     let seen = Arc::new(Mutex::new(Vec::new()));
     let sink = Arc::clone(&seen);
-    queue.on_event(move |_, event| {
+    werk.on_event(move |_, event| {
         if event.get_name() == Event::RUN_FINISHED {
             if let Some(reason) = event
                 .get_data()
@@ -35,21 +35,20 @@ pub(super) fn minimal_agent(label: &str) -> Agent {
         .model("mock")
 }
 
-/// Build a `Queue` rooted at a fresh `TempDir` so the default
+/// Build a `Werk` rooted at a fresh `TempDir` so the default
 /// `.agentwerk` directory never lands in the source tree during tests.
 /// Hold the returned `TempDir` for the test's lifetime.
-pub(super) fn test_queue() -> (Arc<Queue>, crate::test_util::TempDir) {
+pub(super) fn test_werk() -> (Arc<Werk>, crate::test_util::TempDir) {
     let dir = crate::test_util::TempDir::new().unwrap();
-    let built = Queue::new();
+    let built = Werk::new();
     built.set_dir(dir.path().to_path_buf());
     (built, dir)
 }
 
-pub(super) fn attach_done_result(queue: &Queue, id: &str, result: &str) {
-    queue
-        .set_result(id, serde_json::Value::String(result.into()))
+pub(super) fn attach_done_result(werk: &Werk, id: &str, result: &str) {
+    werk.set_result(id, serde_json::Value::String(result.into()))
         .unwrap();
-    queue.set_finished_by(id, "agent").unwrap();
+    werk.set_finished_by(id, "agent").unwrap();
 }
 
 pub(super) fn read_events_log(dir: &Path) -> Vec<serde_json::Value> {

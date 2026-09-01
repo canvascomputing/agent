@@ -51,7 +51,7 @@ class Feed:
             self.record.flush()
 
     def subscribe(self):
-        client = asyncio.Queue()
+        client = asyncio.Werk()
         for frame in self.history:
             client.put_nowait(frame)
         self.clients.add(client)

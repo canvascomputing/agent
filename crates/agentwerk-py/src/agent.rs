@@ -15,9 +15,9 @@ use pyo3::prelude::*;
 use crate::convert::{py_to_text, runtime_error};
 use crate::knowledge::PyKnowledge;
 use crate::providers::{PyModel, PyProvider};
-use crate::queue::PyQueue;
 use crate::task::{to_task, PyTask};
 use crate::tools::extract_tool;
+use crate::werk::PyWerk;
 
 /// An `Agent` is the core entity of agentwerk. It has access to tools for
 /// solving tasks in the form of tasks.
@@ -25,7 +25,7 @@ use crate::tools::extract_tool;
 pub struct PyAgent {
     /// Empty only while a setter has the agent.
     agent: Option<Agent>,
-    /// Rust panics when an agent without these joins a queue. Python answers
+    /// Rust panics when an agent without these joins a Werk. Python answers
     /// with the error it has always raised, so these record what was set.
     has_provider: bool,
     has_model: bool,
@@ -236,15 +236,15 @@ impl PyAgent {
         Ok(self.get().task(to_task(task)?))
     }
 
-    /// Begin processing tasks, and hand back the task queue so results,
+    /// Begin processing tasks, and hand back the Werk so results,
     /// waiting, and cancellation stay one call away.
     ///
     /// An agent without a provider or a model raises here.
-    fn start(&self) -> PyResult<PyQueue> {
+    fn start(&self) -> PyResult<PyWerk> {
         // The run spawns onto the ambient Tokio runtime, which a pymethod call
         // does not have entered on its own thread.
         let _guard = pyo3_async_runtimes::tokio::get_runtime().enter();
-        Ok(PyQueue {
+        Ok(PyWerk {
             inner: self.ready()?.start(),
         })
     }

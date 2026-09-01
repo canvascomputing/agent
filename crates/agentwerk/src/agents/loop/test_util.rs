@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use crate::agents::agent::Agent;
 use crate::agents::policy::Policy;
-use crate::agents::tasks::{Queue, Task};
+use crate::agents::tasks::{Task, Werk};
 use crate::event::Event;
 use crate::providers::types::{ModelResponse, ResponseStatus, TokenUsage};
 use crate::providers::{ContentBlock, Message, ProviderError, ProviderResult};
@@ -282,7 +282,7 @@ pub fn task_agent(provider: &Arc<MockProvider>) -> Agent {
         .role("test")
 }
 
-pub fn collect_events(tasks: &Queue) -> Arc<Mutex<Vec<Event>>> {
+pub fn collect_events(tasks: &Werk) -> Arc<Mutex<Vec<Event>>> {
     let collected: Arc<Mutex<Vec<Event>>> = Arc::new(Mutex::new(Vec::new()));
     let handler: Arc<dyn Fn(&Event) + Send + Sync> = {
         let c = Arc::clone(&collected);
@@ -307,7 +307,7 @@ pub async fn run_one(
     };
 
     let results_dir = crate::test_util::TempDir::new().unwrap();
-    let tasks = Queue::new();
+    let tasks = Werk::new();
     tasks
         .set_dir(results_dir.path().to_path_buf())
         .set_policy(Policy {
@@ -357,7 +357,7 @@ pub async fn run_with_context_window(
     };
 
     let results_dir = crate::test_util::TempDir::new().unwrap();
-    let tasks = Queue::new();
+    let tasks = Werk::new();
     tasks
         .set_dir(results_dir.path().to_path_buf())
         .set_policy(Policy {
@@ -391,7 +391,7 @@ pub async fn run_with_context_window(
 /// installing a compaction editor, or moving the trigger.
 pub async fn run_compaction(
     provider: Arc<MockProvider>,
-    configure: impl FnOnce(&Arc<Queue>),
+    configure: impl FnOnce(&Arc<Werk>),
 ) -> (Vec<Event>, Arc<MockProvider>, Task) {
     let collected: Arc<Mutex<Vec<Event>>> = Arc::new(Mutex::new(Vec::new()));
     let handler: Arc<dyn Fn(&Event) + Send + Sync> = {
@@ -400,7 +400,7 @@ pub async fn run_compaction(
     };
 
     let results_dir = crate::test_util::TempDir::new().unwrap();
-    let tasks = Queue::new();
+    let tasks = Werk::new();
     tasks
         .set_dir(results_dir.path().to_path_buf())
         .set_policy(Policy {

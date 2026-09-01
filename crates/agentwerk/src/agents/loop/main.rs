@@ -1,7 +1,7 @@
 //! Starts one tokio task per registered agent, decides when the run is over,
 //! and waits for them on shutdown.
 
-use crate::agents::tasks::{FinishReason, Queue};
+use crate::agents::tasks::{FinishReason, Werk};
 use crate::event::Event;
 
 use super::POLL_INTERVAL;
@@ -9,18 +9,18 @@ use super::POLL_INTERVAL;
 /// Runs until nothing is left to work on, then names the ending exactly once.
 /// Deciding here rather than in whichever caller happens to await means a
 /// limit breached while the host is busy elsewhere still ends the run.
-pub(in crate::agents) async fn run_main_loop(queue: &Queue) {
+pub(in crate::agents) async fn run_main_loop(werk: &Werk) {
     let mut running_agents: Vec<tokio::task::JoinHandle<()>> = Vec::new();
     let mut agents_already_started: usize = 0;
 
-    while queue.run.is_working() {
-        let registry = queue.clone_agents();
+    while werk.run.is_working() {
+        let registry = werk.clone_agents();
         for newly_registered_agent in registry.into_iter().skip(agents_already_started) {
             running_agents.push(tokio::spawn(newly_registered_agent.run()));
             agents_already_started += 1;
         }
-        if let Some(reason) = queue.ending_reason() {
-            queue.run.set_draining(reason);
+        if let Some(reason) = werk.ending_reason() {
+            werk.run.set_draining(reason);
             break;
         }
         tokio::time::sleep(POLL_INTERVAL).await;
@@ -29,11 +29,10 @@ pub(in crate::agents) async fn run_main_loop(queue: &Queue) {
     for agent in running_agents {
         let _ = agent.await;
     }
-    let reason = queue.run.reason().unwrap_or(FinishReason::Drained);
-    queue
-        .emit_event(Event::new(Event::RUN_FINISHED).data(serde_json::json!({ "outcome": reason })));
+    let reason = werk.run.reason().unwrap_or(FinishReason::Drained);
+    werk.emit_event(Event::new(Event::RUN_FINISHED).data(serde_json::json!({ "outcome": reason })));
     // Last, so a caller that starts another run never overlaps this one.
-    queue.run.set_finished();
+    werk.run.set_finished();
 }
 
 #[cfg(test)]
@@ -44,7 +43,7 @@ mod tests {
     use crate::agents::agent::Agent;
     use crate::agents::policy::Policy;
     use crate::agents::r#loop::test_util::*;
-    use crate::agents::tasks::{Queue, Status, Task};
+    use crate::agents::tasks::{Status, Task, Werk};
     use crate::event::Event;
     use crate::tools::TaskTool;
 
@@ -53,7 +52,7 @@ mod tests {
     #[tokio::test]
     async fn add_after_run_spawns_new_agent() {
         let results_dir = crate::test_util::TempDir::new().unwrap();
-        let tasks = Queue::new();
+        let tasks = Werk::new();
         tasks
             .set_dir(results_dir.path().to_path_buf())
             .set_policy(Policy {
@@ -101,7 +100,7 @@ mod tests {
     #[tokio::test]
     async fn host_finish_mid_run_walks_the_agent_off_and_still_drains() {
         let results_dir = crate::test_util::TempDir::new().unwrap();
-        let tasks = Queue::new();
+        let tasks = Werk::new();
         tasks
             .set_dir(results_dir.path().to_path_buf())
             .set_policy(Policy {
@@ -144,7 +143,7 @@ mod tests {
     #[tokio::test]
     async fn late_added_agent_joined_on_shutdown() {
         let results_dir = crate::test_util::TempDir::new().unwrap();
-        let tasks = Queue::new();
+        let tasks = Werk::new();
         tasks
             .set_dir(results_dir.path().to_path_buf())
             .set_policy(Policy {

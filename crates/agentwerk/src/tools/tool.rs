@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
-use crate::agents::tasks::{Queue, Run};
+use crate::agents::tasks::{Run, Werk};
 pub(crate) use crate::event::Event;
 use crate::prompts::directives::{
     DirectiveStore, ARGUMENTS_REJECTED, TOOL_OUTPUT_EMPTY, TOOL_OUTPUT_OFFLOADED,
@@ -35,7 +35,7 @@ const PREVIEW_CHARS: usize = 2_000;
 pub(crate) struct ToolContext {
     pub(crate) dir: PathBuf,
     pub(crate) run: Option<Arc<Run>>,
-    pub(crate) queue: Option<Arc<Queue>>,
+    pub(crate) werk: Option<Arc<Werk>>,
     pub(crate) agent_id: Option<String>,
     pub(crate) task_id: Option<String>,
     pub(crate) directives: Arc<DirectiveStore>,
@@ -46,7 +46,7 @@ impl ToolContext {
         Self {
             dir,
             run: None,
-            queue: None,
+            werk: None,
             agent_id: None,
             task_id: None,
             directives: Arc::new(DirectiveStore::default()),
@@ -58,8 +58,8 @@ impl ToolContext {
         self
     }
 
-    pub(crate) fn queue(mut self, queue: Arc<Queue>) -> Self {
-        self.queue = Some(queue);
+    pub(crate) fn werk(mut self, werk: Arc<Werk>) -> Self {
+        self.werk = Some(werk);
         self
     }
 
@@ -79,14 +79,14 @@ impl ToolContext {
     }
 
     /// Publish `event` for the task and agent this call runs for. A context
-    /// with no queue publishes nothing; the call still runs.
+    /// with no Werk publishes nothing; the call still runs.
     pub(crate) fn emit_event(&self, event: Event) {
-        let Some(queue) = &self.queue else {
+        let Some(werk) = &self.werk else {
             return;
         };
         let id = self.task_id.as_deref().unwrap_or_default();
         let agent = self.agent_id.as_deref().unwrap_or_default();
-        queue.emit_event(event.task_id(id).agent_id(agent));
+        werk.emit_event(event.task_id(id).agent_id(agent));
     }
 
     pub(crate) async fn cancelled(&self) {
@@ -621,13 +621,13 @@ fn write_out(content: &mut String, ctx: &ToolContext, call_id: &str) -> Option<P
 /// Write `content` under the task's outputs directory, reporting both the
 /// path relative to the session and the path on disk.
 ///
-/// `None` when the context names no task, no task queue is attached, or
+/// `None` when the context names no task, no Werk is attached, or
 /// the write fails. Like the rest of the logging, it is best effort.
 fn persist_output(ctx: &ToolContext, tool_use_id: &str, content: &str) -> Option<PersistedOutput> {
-    let queue = ctx.queue.as_ref()?;
+    let werk = ctx.werk.as_ref()?;
     let id = ctx.task_id.as_deref()?;
-    let rel = queue.write_tool_output(id, tool_use_id, content)?;
-    let display = queue.get_dir().join(&rel);
+    let rel = werk.write_tool_output(id, tool_use_id, content)?;
+    let display = werk.get_dir().join(&rel);
     Some(PersistedOutput { rel, display })
 }
 
@@ -1243,14 +1243,14 @@ mod tests {
 
     // Layer 1: result-cap helpers
 
-    fn task_ctx() -> (ToolContext, Arc<Queue>, String, crate::test_util::TempDir) {
+    fn task_ctx() -> (ToolContext, Arc<Werk>, String, crate::test_util::TempDir) {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let queue = Queue::new();
-        queue.set_dir(dir.path().to_path_buf());
-        queue.add_task("seed");
+        let werk = Werk::new();
+        werk.set_dir(dir.path().to_path_buf());
+        werk.add_task("seed");
         let id = "t-1".to_string();
-        let ctx = test_ctx().queue(Arc::clone(&queue)).task_id(id.clone());
-        (ctx, queue, id, dir)
+        let ctx = test_ctx().werk(Arc::clone(&werk)).task_id(id.clone());
+        (ctx, werk, id, dir)
     }
 
     /// Where a capped result says its original went.
@@ -1280,7 +1280,7 @@ mod tests {
 
     #[test]
     fn write_tool_output_stores_relative_path_in_comment() {
-        let (ctx, _queue, id, _dir) = task_ctx();
+        let (ctx, _werk, id, _dir) = task_ctx();
         let mut result = Event::success("z".repeat(500));
         cap_oversized_result(&mut result, &ctx, "call-rel", 100);
         let stored = offloaded_path(&result).expect("offload happened");
@@ -1294,7 +1294,7 @@ mod tests {
 
     #[test]
     fn persisted_output_renders_absolute_path_for_model() {
-        let (ctx, _queue, id, dir) = task_ctx();
+        let (ctx, _werk, id, dir) = task_ctx();
         let mut result = Event::success("y".repeat(500));
         cap_oversized_result(&mut result, &ctx, "call-abs", 100);
         let absolute = absolute_outputs_path(dir.path(), &id, "call-abs");
@@ -1318,7 +1318,7 @@ mod tests {
 
     #[test]
     fn cap_oversized_result_replaces_oversized_ok_with_stub() {
-        let (ctx, _queue, id, dir) = task_ctx();
+        let (ctx, _werk, id, dir) = task_ctx();
         let mut result = Event::success("a".repeat(500));
         cap_oversized_result(&mut result, &ctx, "call-xyz", 100);
         let stub = result.get_content();
@@ -1362,7 +1362,7 @@ mod tests {
 
     #[test]
     fn cap_aggregate_offloads_largest_first() {
-        let (ctx, _queue, id, dir) = task_ctx();
+        let (ctx, _werk, id, dir) = task_ctx();
         // Sizes chosen so the stub's own bytes (~200) don't dominate.
         let big = "b".repeat(80_000);
         let calls = vec![sized_call("c1"), sized_call("c2"), sized_call("c3")];
@@ -1390,7 +1390,7 @@ mod tests {
 
     #[test]
     fn cap_aggregate_stops_when_only_small_results_remain() {
-        let (ctx, _queue, _key, _dir) = task_ctx();
+        let (ctx, _werk, _key, _dir) = task_ctx();
         // Many small results whose total far exceeds the cap, but
         // each is already stub-marked. Aggregate should bail
         // rather than spin: stubs are skipped, so no candidates.
@@ -1495,7 +1495,7 @@ mod tests {
     fn cap_aggregate_skips_a_failed_result() {
         // A failure's message is what the model must read to recover, so the
         // aggregate cap never writes it out.
-        let (ctx, _queue, _key, _dir) = task_ctx();
+        let (ctx, _werk, _key, _dir) = task_ctx();
         let calls = vec![sized_call("c1")];
         let mut results = vec![Event::error("e".repeat(50_000))];
         cap_aggregate_outputs(&calls, &mut results, &ctx, 10);

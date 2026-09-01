@@ -142,24 +142,22 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::agents::tasks::{Queue, Status, Task};
+    use crate::agents::tasks::{Status, Task, Werk};
     use crate::agents::Query;
     use crate::schemas::Schema;
 
-    fn ctx_with(queue: Arc<Queue>, agent: &str, dir: PathBuf) -> ToolContext {
-        ToolContext::new(dir)
-            .queue(queue)
-            .agent_id(agent.to_string())
+    fn ctx_with(werk: Arc<Werk>, agent: &str, dir: PathBuf) -> ToolContext {
+        ToolContext::new(dir).werk(werk).agent_id(agent.to_string())
     }
 
-    fn one_task(agent: &str) -> (Arc<Queue>, String) {
-        let queue = Queue::new();
-        queue.set_dir(shared_test_dir().to_path_buf());
-        queue.insert(Task::new("body").label(agent), "tester".into());
-        let id = queue
+    fn one_task(agent: &str) -> (Arc<Werk>, String) {
+        let werk = Werk::new();
+        werk.set_dir(shared_test_dir().to_path_buf());
+        werk.insert(Task::new("body").label(agent), "tester".into());
+        let id = werk
             .claim(&Query::from("status = Todo"), agent)
             .expect("claim must succeed");
-        (queue, id)
+        (werk, id)
     }
 
     /// Read a task's result back from `tasks/<id>/result.json`, or `None`
@@ -170,9 +168,9 @@ mod tests {
         serde_json::from_str(&body).ok()
     }
 
-    /// Process-lifetime tempdir used as the default `Queue` root
+    /// Process-lifetime tempdir used as the default `Werk` root
     /// for tests in this module. Tests that need an isolated workspace
-    /// still call `queue.set_dir(...)` explicitly to override.
+    /// still call `werk.set_dir(...)` explicitly to override.
     fn shared_test_dir() -> &'static std::path::Path {
         use std::sync::OnceLock;
         static DIR: OnceLock<crate::test_util::TempDir> = OnceLock::new();
@@ -190,17 +188,16 @@ mod tests {
     }
 
     /// Claim a task carrying an integer-typed `line`.
-    fn line_task(dir: &std::path::Path) -> Arc<Queue> {
-        let queue = Queue::new();
-        queue.set_dir(dir.to_path_buf());
-        queue.insert(
+    fn line_task(dir: &std::path::Path) -> Arc<Werk> {
+        let werk = Werk::new();
+        werk.set_dir(dir.to_path_buf());
+        werk.insert(
             Task::new("body").schema(line_schema()).label("alice"),
             "tester".into(),
         );
-        queue
-            .claim(&Query::from("status = Todo"), "alice")
+        werk.claim(&Query::from("status = Todo"), "alice")
             .expect("claim must succeed");
-        queue
+        werk
     }
 
     /// The finish tool as the loop binds it at claim.
@@ -211,8 +208,8 @@ mod tests {
     #[tokio::test]
     async fn finish_notes_every_repair_its_result_needed() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let queue = line_task(dir.path());
-        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
+        let werk = line_task(dir.path());
+        let ctx = ctx_with(Arc::clone(&werk), "alice", dir.path().to_path_buf());
 
         let outcome = finish_for(line_schema())
             .call(serde_json::json!({"line": "42"}), &ctx)
@@ -224,8 +221,8 @@ mod tests {
     #[tokio::test]
     async fn finish_notes_no_repair_for_a_result_it_rejected() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let queue = line_task(dir.path());
-        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
+        let werk = line_task(dir.path());
+        let ctx = ctx_with(Arc::clone(&werk), "alice", dir.path().to_path_buf());
 
         // `line` is beyond repair.
         let outcome = finish_for(line_schema())
@@ -280,9 +277,9 @@ mod tests {
     #[tokio::test]
     async fn a_bare_object_is_stored_as_the_result() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (queue, id) = one_task("alice");
-        queue.set_dir(dir.path().to_path_buf());
-        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
+        let (werk, id) = one_task("alice");
+        werk.set_dir(dir.path().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&werk), "alice", dir.path().to_path_buf());
 
         let outcome = Tool::from(FinishTool)
             .call(
@@ -293,7 +290,7 @@ mod tests {
 
         assert_eq!(outcome.get_name(), Event::TOOL_CALL_FINISHED);
         assert_eq!(
-            queue.get_task(&id).unwrap().get_result(),
+            werk.get_task(&id).unwrap().get_result(),
             Some(&serde_json::json!({"status": "done", "note": "direct"}))
         );
     }
@@ -301,13 +298,13 @@ mod tests {
     #[tokio::test]
     async fn a_bare_object_uses_bound_schema_repair_and_rejection() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let queue = line_task(dir.path());
-        let id = queue
+        let werk = line_task(dir.path());
+        let id = werk
             .find_task("status = InProgress")
             .unwrap()
             .get_id()
             .to_string();
-        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&werk), "alice", dir.path().to_path_buf());
         let finish = finish_for(line_schema());
         let rejected = finish
             .invoke(serde_json::json!({"line": "about 42"}), &ctx)
@@ -315,7 +312,7 @@ mod tests {
 
         assert_eq!(rejected.get_name(), Event::TOOL_CALL_FAILED);
         assert_eq!(rejected.get_data()["kind"], "schema_failed");
-        assert!(queue.get_task(&id).unwrap().is_in_progress());
+        assert!(werk.get_task(&id).unwrap().is_in_progress());
 
         let repaired = finish.invoke(serde_json::json!({"line": "42"}), &ctx).await;
 
@@ -325,7 +322,7 @@ mod tests {
             vec!["/line retyped"]
         );
         assert_eq!(
-            queue.get_task(&id).unwrap().get_result().unwrap()["line"],
+            werk.get_task(&id).unwrap().get_result().unwrap()["line"],
             42
         );
     }
@@ -333,8 +330,8 @@ mod tests {
     #[tokio::test]
     async fn a_bound_object_rejects_the_legacy_result_wrapper() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let queue = line_task(dir.path());
-        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
+        let werk = line_task(dir.path());
+        let ctx = ctx_with(Arc::clone(&werk), "alice", dir.path().to_path_buf());
         let outcome = finish_for(line_schema())
             .invoke(serde_json::json!({"result": {"line": 42}}), &ctx)
             .await;
@@ -346,9 +343,9 @@ mod tests {
     #[tokio::test]
     async fn an_empty_call_keeps_its_legacy_null_result() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (queue, id) = one_task("alice");
-        queue.set_dir(dir.path().to_path_buf());
-        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
+        let (werk, id) = one_task("alice");
+        werk.set_dir(dir.path().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&werk), "alice", dir.path().to_path_buf());
 
         let outcome = Tool::from(FinishTool)
             .call(serde_json::json!({}), &ctx)
@@ -356,11 +353,11 @@ mod tests {
 
         assert_eq!(outcome.get_name(), Event::TOOL_CALL_FINISHED);
         assert_eq!(
-            queue.get_task(&id).unwrap().get_result(),
+            werk.get_task(&id).unwrap().get_result(),
             Some(&serde_json::Value::Null)
         );
         assert_eq!(
-            queue.find_event(Event::TASK_FINISHED).unwrap().get_data()["result"],
+            werk.find_event(Event::TASK_FINISHED).unwrap().get_data()["result"],
             serde_json::Value::Null
         );
     }
@@ -379,16 +376,16 @@ mod tests {
     #[tokio::test]
     async fn a_result_field_named_like_a_control_key_survives_the_finish() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let queue = Queue::new();
-        queue.set_dir(dir.path().to_path_buf());
-        queue.insert(
+        let werk = Werk::new();
+        werk.set_dir(dir.path().to_path_buf());
+        werk.insert(
             Task::new("body").schema(colliding_schema()).label("alice"),
             "tester".into(),
         );
-        let id = queue
+        let id = werk
             .claim(&Query::from("status = Todo"), "alice")
             .expect("claim must succeed");
-        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&werk), "alice", dir.path().to_path_buf());
 
         let outcome = FinishTool::from_schema(Some(colliding_schema()), None)
             .call(serde_json::json!({"handover": "x"}), &ctx)
@@ -398,21 +395,21 @@ mod tests {
             outcome.get_name() == Event::TOOL_CALL_FINISHED,
             "{outcome:?}"
         );
-        let task = queue.get_task(&id).unwrap();
+        let task = werk.get_task(&id).unwrap();
         assert_eq!(task.status, Status::Finished);
         assert_eq!(
             task.result.as_ref(),
             Some(&serde_json::json!({"handover": "x"})),
         );
-        assert!(queue.get_task("t-2").is_none(), "no child filed");
+        assert!(werk.get_task("t-2").is_none(), "no child filed");
     }
 
     #[tokio::test]
     async fn a_whole_object_encoded_as_text_decodes_through_the_bound_schema() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (queue, id) = one_task("alice");
-        queue.set_dir(dir.path().to_path_buf());
-        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
+        let (werk, id) = one_task("alice");
+        werk.set_dir(dir.path().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&werk), "alice", dir.path().to_path_buf());
         let outcome = FinishTool::from_schema(Some(object_schema()), None)
             .invoke(serde_json::json!("{\"status\": \"malicious\"}"), &ctx)
             .await;
@@ -422,7 +419,7 @@ mod tests {
             "{outcome:?}"
         );
         assert_eq!(
-            queue.get_task(&id).unwrap().result.as_ref(),
+            werk.get_task(&id).unwrap().result.as_ref(),
             Some(&serde_json::json!({ "status": "malicious" }))
         );
     }
@@ -448,20 +445,20 @@ mod tests {
     #[tokio::test]
     async fn writes_string_result_and_marks_finished() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (queue, id) = one_task("alice");
-        queue.set_dir(dir.path().to_path_buf());
-        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
+        let (werk, id) = one_task("alice");
+        werk.set_dir(dir.path().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&werk), "alice", dir.path().to_path_buf());
         let outcome = Tool::from(FinishTool)
             .call(serde_json::json!({"result": "the answer"}), &ctx)
             .await;
         assert!(outcome.get_name() == Event::TOOL_CALL_FINISHED);
-        let t = queue.get_task(&id).unwrap();
+        let t = werk.get_task(&id).unwrap();
         assert_eq!(t.status, Status::Finished);
         assert_eq!(
             t.result.as_ref().and_then(|v| v.as_str()),
             Some("the answer")
         );
-        let event = queue.find_event(Event::TASK_FINISHED).unwrap();
+        let event = werk.find_event(Event::TASK_FINISHED).unwrap();
         assert_eq!(event.get_data()["result"], "the answer");
 
         assert_eq!(read_result(dir.path(), &id), Some("the answer".into()));
@@ -470,9 +467,9 @@ mod tests {
     #[tokio::test]
     async fn a_result_is_written_to_the_task_folder() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (queue, id) = one_task("alice");
-        queue.set_dir(dir.path().to_path_buf());
-        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
+        let (werk, id) = one_task("alice");
+        werk.set_dir(dir.path().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&werk), "alice", dir.path().to_path_buf());
         Tool::from(FinishTool)
             .call(serde_json::json!({"result": {"x": 1}}), &ctx)
             .await;
@@ -490,16 +487,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_reloaded_queue_reads_the_result_back() {
+    async fn a_reloaded_werk_reads_the_result_back() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (queue, id) = one_task("alice");
-        queue.set_dir(dir.path().to_path_buf());
-        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
+        let (werk, id) = one_task("alice");
+        werk.set_dir(dir.path().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&werk), "alice", dir.path().to_path_buf());
         Tool::from(FinishTool)
             .call(serde_json::json!({"result": "the answer"}), &ctx)
             .await;
 
-        let reloaded = Queue::load(dir.path()).unwrap();
+        let reloaded = Werk::load(dir.path()).unwrap();
         let task = reloaded.get_task(&id).unwrap();
         assert_eq!(
             task.result.as_ref().and_then(|v| v.as_str()),
@@ -519,9 +516,9 @@ mod tests {
             serde_json::json!([]),
         ] {
             let dir = crate::test_util::TempDir::new().unwrap();
-            let (queue, id) = one_task("alice");
-            queue.set_dir(dir.path().to_path_buf());
-            let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
+            let (werk, id) = one_task("alice");
+            werk.set_dir(dir.path().to_path_buf());
+            let ctx = ctx_with(Arc::clone(&werk), "alice", dir.path().to_path_buf());
             let outcome = Tool::from(FinishTool)
                 .call(serde_json::json!({"result": value}), &ctx)
                 .await;
@@ -529,7 +526,7 @@ mod tests {
                 outcome.get_name() == Event::TOOL_CALL_FINISHED,
                 "expected success for {value:?}"
             );
-            let t = queue.get_task(&id).unwrap();
+            let t = werk.get_task(&id).unwrap();
             assert_eq!(t.status, Status::Finished);
         }
     }
@@ -537,14 +534,14 @@ mod tests {
     #[tokio::test]
     async fn accepts_structured_value_when_no_schema() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (queue, id) = one_task("alice");
-        queue.set_dir(dir.path().to_path_buf());
-        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
+        let (werk, id) = one_task("alice");
+        werk.set_dir(dir.path().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&werk), "alice", dir.path().to_path_buf());
         let outcome = Tool::from(FinishTool)
             .call(serde_json::json!({"result": {"x": 1, "y": [2, 3]}}), &ctx)
             .await;
         assert!(outcome.get_name() == Event::TOOL_CALL_FINISHED);
-        let t = queue.get_task(&id).unwrap();
+        let t = werk.get_task(&id).unwrap();
         assert_eq!(t.status, Status::Finished);
         assert_eq!(t.result.as_ref().unwrap()["x"], 1);
 
@@ -557,23 +554,23 @@ mod tests {
     #[tokio::test]
     async fn validates_against_schema() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let queue = Queue::new();
-        queue.set_dir(shared_test_dir().to_path_buf());
-        queue.set_dir(dir.path().to_path_buf());
+        let werk = Werk::new();
+        werk.set_dir(shared_test_dir().to_path_buf());
+        werk.set_dir(dir.path().to_path_buf());
         let schema = Schema::new(serde_json::json!({
             "type": "object",
             "properties": {"x": {"type": "string"}},
             "required": ["x"]
         }))
         .unwrap();
-        queue.insert(
+        werk.insert(
             Task::new("hi").schema(schema).label("alice"),
             "tester".into(),
         );
-        let id = queue
+        let id = werk
             .claim(&Query::from("status = Todo"), "alice")
             .expect("claim must succeed");
-        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&werk), "alice", dir.path().to_path_buf());
 
         // An object where a string belongs: no retype recovers it, unlike a
         // quoted scalar.
@@ -581,14 +578,14 @@ mod tests {
             .call(serde_json::json!({"result": {"x": {}}}), &ctx)
             .await;
         assert_eq!(outcome.get_data()["kind"], "schema_failed");
-        let t = queue.get_task(&id).unwrap();
+        let t = werk.get_task(&id).unwrap();
         assert_eq!(t.status, Status::InProgress);
 
         let outcome = Tool::from(FinishTool)
             .call(serde_json::json!({"result": {"x": "ok"}}), &ctx)
             .await;
         assert!(outcome.get_name() == Event::TOOL_CALL_FINISHED);
-        let t = queue.get_task(&id).unwrap();
+        let t = werk.get_task(&id).unwrap();
         assert_eq!(t.status, Status::Finished);
         assert_eq!(t.result.as_ref().unwrap()["x"], "ok");
     }
@@ -596,29 +593,29 @@ mod tests {
     #[tokio::test]
     async fn an_object_result_is_stored_as_the_object() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let queue = Queue::new();
-        queue.set_dir(shared_test_dir().to_path_buf());
-        queue.set_dir(dir.path().to_path_buf());
+        let werk = Werk::new();
+        werk.set_dir(shared_test_dir().to_path_buf());
+        werk.set_dir(dir.path().to_path_buf());
         let schema = Schema::new(serde_json::json!({
             "type": "object",
             "properties": {"x": {"type": "string"}},
             "required": ["x"]
         }))
         .unwrap();
-        queue.insert(
+        werk.insert(
             Task::new("hi").schema(schema.clone()).label("alice"),
             "tester".into(),
         );
-        let id = queue
+        let id = werk
             .claim(&Query::from("status = Todo"), "alice")
             .expect("claim must succeed");
-        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&werk), "alice", dir.path().to_path_buf());
 
         let outcome = finish_for(schema)
             .call(serde_json::json!({"x": "ok"}), &ctx)
             .await;
         assert!(outcome.get_name() == Event::TOOL_CALL_FINISHED);
-        let t = queue.get_task(&id).unwrap();
+        let t = werk.get_task(&id).unwrap();
         assert_eq!(t.status, Status::Finished);
         assert_eq!(t.result.as_ref().unwrap(), &serde_json::json!({"x": "ok"}));
     }
@@ -626,23 +623,23 @@ mod tests {
     #[tokio::test]
     async fn stores_a_string_encoded_result_as_the_decoded_object() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let queue = Queue::new();
-        queue.set_dir(shared_test_dir().to_path_buf());
-        queue.set_dir(dir.path().to_path_buf());
+        let werk = Werk::new();
+        werk.set_dir(shared_test_dir().to_path_buf());
+        werk.set_dir(dir.path().to_path_buf());
         let schema = Schema::new(serde_json::json!({
             "type": "object",
             "properties": {"x": {"type": "string"}},
             "required": ["x"]
         }))
         .unwrap();
-        queue.insert(
+        werk.insert(
             Task::new("hi").schema(schema).label("alice"),
             "tester".into(),
         );
-        let id = queue
+        let id = werk
             .claim(&Query::from("status = Todo"), "alice")
             .expect("claim must succeed");
-        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&werk), "alice", dir.path().to_path_buf());
 
         // The agent double-encoded the conforming object as a JSON string.
         let outcome = Tool::from(FinishTool)
@@ -650,7 +647,7 @@ mod tests {
             .await;
         assert!(outcome.get_name() == Event::TOOL_CALL_FINISHED);
 
-        let t = queue.get_task(&id).unwrap();
+        let t = werk.get_task(&id).unwrap();
         assert_eq!(t.status, Status::Finished);
         // Stored as the decoded object, not the raw string.
         assert!(t.result.as_ref().unwrap().is_object());
@@ -661,9 +658,9 @@ mod tests {
     #[tokio::test]
     async fn errors_when_no_current_task() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let queue = Queue::new();
-        queue.set_dir(shared_test_dir().to_path_buf());
-        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
+        let werk = Werk::new();
+        werk.set_dir(shared_test_dir().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&werk), "alice", dir.path().to_path_buf());
         let outcome = Tool::from(FinishTool)
             .call(serde_json::json!({"result": "x"}), &ctx)
             .await;
@@ -673,24 +670,24 @@ mod tests {
     #[tokio::test]
     async fn appends_one_line_per_completed_task() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let queue = Queue::new();
-        queue.set_dir(shared_test_dir().to_path_buf());
-        queue.set_dir(dir.path().to_path_buf());
+        let werk = Werk::new();
+        werk.set_dir(shared_test_dir().to_path_buf());
+        werk.set_dir(dir.path().to_path_buf());
 
-        queue.insert(Task::new("a").label("alice"), "tester".into());
-        let id1 = queue
+        werk.insert(Task::new("a").label("alice"), "tester".into());
+        let id1 = werk
             .claim(&Query::from("t-1"), "alice")
             .expect("claim must succeed");
-        let ctx_alice = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
+        let ctx_alice = ctx_with(Arc::clone(&werk), "alice", dir.path().to_path_buf());
         Tool::from(FinishTool)
             .call(serde_json::json!({"result": "from alice"}), &ctx_alice)
             .await;
 
-        queue.insert(Task::new("b").label("bob"), "tester".into());
-        let id2 = queue
+        werk.insert(Task::new("b").label("bob"), "tester".into());
+        let id2 = werk
             .claim(&Query::from("t-2"), "bob")
             .expect("claim must succeed");
-        let ctx_bob = ctx_with(Arc::clone(&queue), "bob", dir.path().to_path_buf());
+        let ctx_bob = ctx_with(Arc::clone(&werk), "bob", dir.path().to_path_buf());
         Tool::from(FinishTool)
             .call(serde_json::json!({"result": "from bob"}), &ctx_bob)
             .await;
@@ -703,18 +700,18 @@ mod tests {
     async fn concurrent_writes_produce_one_intact_line_per_task() {
         const N: usize = 32;
         let dir = crate::test_util::TempDir::new().unwrap();
-        let queue = Queue::new();
-        queue.set_dir(shared_test_dir().to_path_buf());
-        queue.set_dir(dir.path().to_path_buf());
+        let werk = Werk::new();
+        werk.set_dir(shared_test_dir().to_path_buf());
+        werk.set_dir(dir.path().to_path_buf());
 
         let mut expected = Vec::with_capacity(N);
         for i in 0..N {
             let agent = format!("agent_{i}");
-            queue.insert(
+            werk.insert(
                 Task::new(format!("body_{i}")).label(&agent),
                 "tester".into(),
             );
-            let id = queue
+            let id = werk
                 .claim(
                     &Query::from(format!("status = Todo AND label = {agent}")),
                     &agent,
@@ -725,11 +722,11 @@ mod tests {
 
         let mut handles = Vec::with_capacity(N);
         for (i, (agent, _)) in expected.iter().enumerate() {
-            let queue = Arc::clone(&queue);
+            let werk = Arc::clone(&werk);
             let dir_path = dir.path().to_path_buf();
             let agent = agent.clone();
             handles.push(tokio::spawn(async move {
-                let ctx = ctx_with(queue, &agent, dir_path);
+                let ctx = ctx_with(werk, &agent, dir_path);
                 Tool::from(FinishTool)
                     .call(serde_json::json!({"result": format!("payload_{i}")}), &ctx)
                     .await
@@ -758,21 +755,21 @@ mod tests {
 
     // Handover
 
-    fn one_task_in(agent: &str, dir: PathBuf) -> (Arc<Queue>, String) {
-        let queue = Queue::new();
-        queue.set_dir(dir);
-        queue.insert(Task::new("parent body").label(agent), "tester".into());
-        let id = queue
+    fn one_task_in(agent: &str, dir: PathBuf) -> (Arc<Werk>, String) {
+        let werk = Werk::new();
+        werk.set_dir(dir);
+        werk.insert(Task::new("parent body").label(agent), "tester".into());
+        let id = werk
             .claim(&Query::from("status = Todo"), agent)
             .expect("claim must succeed");
-        (queue, id)
+        (werk, id)
     }
 
     #[tokio::test]
     async fn handover_finishes_parent_creates_child_with_parent_link() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (queue, parent_id) = one_task_in("alice", dir.path().to_path_buf());
-        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
+        let (werk, parent_id) = one_task_in("alice", dir.path().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&werk), "alice", dir.path().to_path_buf());
 
         let outcome = Tool::from(FinishTool)
             .call(
@@ -785,14 +782,14 @@ mod tests {
             .await;
         assert!(outcome.get_name() == Event::TOOL_CALL_FINISHED);
 
-        let parent = queue.get_task(&parent_id).unwrap();
+        let parent = werk.get_task(&parent_id).unwrap();
         assert_eq!(parent.status, Status::Finished);
         assert_eq!(
             parent.result.as_ref().and_then(|v| v.as_str()),
             Some("summary of alice's work")
         );
 
-        let child = queue.get_task("t-2").unwrap();
+        let child = werk.get_task("t-2").unwrap();
         assert_eq!(child.status, Status::Todo);
         assert_eq!(child.parent.as_deref(), Some(parent_id.as_str()));
         assert_eq!(child.label.as_deref(), Some("bob"));
@@ -802,8 +799,8 @@ mod tests {
     #[tokio::test]
     async fn inline_handover_attaches_its_schema_to_the_child() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (queue, _parent_id) = one_task_in("alice", dir.path().to_path_buf());
-        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
+        let (werk, _parent_id) = one_task_in("alice", dir.path().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&werk), "alice", dir.path().to_path_buf());
 
         Tool::from(FinishTool)
             .call(
@@ -819,7 +816,7 @@ mod tests {
             )
             .await;
 
-        let bound = queue.get_task("t-2").unwrap().schema.unwrap();
+        let bound = werk.get_task("t-2").unwrap().schema.unwrap();
         assert_eq!(title_of(&bound), "verdict");
     }
 
@@ -834,8 +831,8 @@ mod tests {
     #[tokio::test]
     async fn handover_appends_one_ndjson_line_for_parent_result() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (queue, parent_id) = one_task_in("alice", dir.path().to_path_buf());
-        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
+        let (werk, parent_id) = one_task_in("alice", dir.path().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&werk), "alice", dir.path().to_path_buf());
 
         Tool::from(FinishTool)
             .call(
@@ -863,21 +860,21 @@ mod tests {
         // A short string passes the type check and fails `minLength`, which is
         // the abort path this exercises.
         let dir = crate::test_util::TempDir::new().unwrap();
-        let queue = Queue::new();
-        queue.set_dir(dir.path().to_path_buf());
+        let werk = Werk::new();
+        werk.set_dir(dir.path().to_path_buf());
         let schema = Schema::new(serde_json::json!({
             "type": "string",
             "minLength": 50
         }))
         .unwrap();
-        queue.insert(
+        werk.insert(
             Task::new("strict parent").schema(schema).label("alice"),
             "tester".into(),
         );
-        let parent_id = queue
+        let parent_id = werk
             .claim(&Query::from("status = Todo"), "alice")
             .expect("claim must succeed");
-        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&werk), "alice", dir.path().to_path_buf());
 
         let outcome = Tool::from(FinishTool)
             .call(
@@ -890,11 +887,11 @@ mod tests {
             .await;
         assert_eq!(outcome.get_data()["kind"], "schema_failed");
 
-        let parent = queue.get_task(&parent_id).unwrap();
+        let parent = werk.get_task(&parent_id).unwrap();
         assert_eq!(parent.status, Status::InProgress);
         assert!(parent.result.is_none());
         assert!(
-            queue.get_task("t-2").is_none(),
+            werk.get_task("t-2").is_none(),
             "no child created on schema failure"
         );
         assert_eq!(read_result(dir.path(), &parent_id), None);
@@ -910,26 +907,26 @@ mod tests {
         .unwrap()
     }
 
-    fn one_task_with_object_schema(agent: &str, dir: PathBuf) -> (Arc<Queue>, String) {
-        let queue = Queue::new();
-        queue.set_dir(dir);
-        queue.insert(
+    fn one_task_with_object_schema(agent: &str, dir: PathBuf) -> (Arc<Werk>, String) {
+        let werk = Werk::new();
+        werk.set_dir(dir);
+        werk.insert(
             Task::new("strict parent")
                 .schema(strict_object_schema())
                 .label(agent),
             "tester".into(),
         );
-        let id = queue
+        let id = werk
             .claim(&Query::from("status = Todo"), agent)
             .expect("claim must succeed");
-        (queue, id)
+        (werk, id)
     }
 
     #[tokio::test]
     async fn handover_structured_result_validated_against_parent_schema_is_stored_as_object() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (queue, parent_id) = one_task_with_object_schema("alice", dir.path().to_path_buf());
-        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
+        let (werk, parent_id) = one_task_with_object_schema("alice", dir.path().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&werk), "alice", dir.path().to_path_buf());
 
         let outcome = Tool::from(FinishTool)
             .call(
@@ -942,13 +939,13 @@ mod tests {
             .await;
         assert!(outcome.get_name() == Event::TOOL_CALL_FINISHED);
 
-        let parent = queue.get_task(&parent_id).unwrap();
+        let parent = werk.get_task(&parent_id).unwrap();
         assert_eq!(parent.status, Status::Finished);
         assert_eq!(
             parent.result.as_ref(),
             Some(&serde_json::json!({"status": "done"}))
         );
-        assert!(queue.get_task("t-2").is_some());
+        assert!(werk.get_task("t-2").is_some());
 
         assert_eq!(
             read_result(dir.path(), &parent_id),
@@ -959,8 +956,8 @@ mod tests {
     #[tokio::test]
     async fn a_bound_object_uses_its_configured_handover() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (queue, parent_id) = one_task_with_object_schema("alice", dir.path().to_path_buf());
-        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
+        let (werk, parent_id) = one_task_with_object_schema("alice", dir.path().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&werk), "alice", dir.path().to_path_buf());
 
         let outcome = FinishTool::from_schema(
             Some(strict_object_schema()),
@@ -970,13 +967,13 @@ mod tests {
         .await;
         assert!(outcome.get_name() == Event::TOOL_CALL_FINISHED);
 
-        let parent = queue.get_task(&parent_id).unwrap();
+        let parent = werk.get_task(&parent_id).unwrap();
         assert_eq!(parent.status, Status::Finished);
         assert_eq!(
             parent.result.as_ref(),
             Some(&serde_json::json!({"status": "done"}))
         );
-        assert_eq!(queue.get_task("t-2").unwrap().get_label(), Some("bob"));
+        assert_eq!(werk.get_task("t-2").unwrap().get_label(), Some("bob"));
     }
 
     #[tokio::test]
@@ -984,8 +981,8 @@ mod tests {
         // The agent double-encodes the object as a JSON string; the parent
         // schema's validation decodes it so the stored value is the object.
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (queue, parent_id) = one_task_with_object_schema("alice", dir.path().to_path_buf());
-        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
+        let (werk, parent_id) = one_task_with_object_schema("alice", dir.path().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&werk), "alice", dir.path().to_path_buf());
 
         Tool::from(FinishTool)
             .call(
@@ -997,7 +994,7 @@ mod tests {
             )
             .await;
 
-        let parent = queue.get_task(&parent_id).unwrap();
+        let parent = werk.get_task(&parent_id).unwrap();
         assert_eq!(
             parent.result.as_ref(),
             Some(&serde_json::json!({"status": "done"}))
@@ -1007,8 +1004,8 @@ mod tests {
     #[tokio::test]
     async fn handover_object_schema_violation_aborts_atomically() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (queue, parent_id) = one_task_with_object_schema("alice", dir.path().to_path_buf());
-        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
+        let (werk, parent_id) = one_task_with_object_schema("alice", dir.path().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&werk), "alice", dir.path().to_path_buf());
 
         let outcome = Tool::from(FinishTool)
             .call(
@@ -1021,11 +1018,11 @@ mod tests {
             .await;
         assert_eq!(outcome.get_data()["kind"], "schema_failed");
 
-        let parent = queue.get_task(&parent_id).unwrap();
+        let parent = werk.get_task(&parent_id).unwrap();
         assert_eq!(parent.status, Status::InProgress);
         assert!(parent.result.is_none());
         assert!(
-            queue.get_task("t-2").is_none(),
+            werk.get_task("t-2").is_none(),
             "no child created on schema failure"
         );
         assert_eq!(read_result(dir.path(), &parent_id), None);
@@ -1034,21 +1031,21 @@ mod tests {
     #[tokio::test]
     async fn omitted_handover_finishes_without_a_child() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (queue, parent_id) = one_task_in("alice", dir.path().to_path_buf());
-        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
+        let (werk, parent_id) = one_task_in("alice", dir.path().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&werk), "alice", dir.path().to_path_buf());
         let outcome = Tool::from(FinishTool)
             .call(serde_json::json!({"result": "done"}), &ctx)
             .await;
         assert!(outcome.get_name() == Event::TOOL_CALL_FINISHED);
-        assert_eq!(queue.get_task(&parent_id).unwrap().status, Status::Finished);
-        assert!(queue.get_task("t-2").is_none());
+        assert_eq!(werk.get_task(&parent_id).unwrap().status, Status::Finished);
+        assert!(werk.get_task("t-2").is_none());
     }
 
     #[tokio::test]
     async fn configured_handover_creates_a_child_from_result_only() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (queue, _id) = one_task_in("alice", dir.path().to_path_buf());
-        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
+        let (werk, _id) = one_task_in("alice", dir.path().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&werk), "alice", dir.path().to_path_buf());
         let outcome =
             FinishTool::from_schema(None, Some(Task::labeled("bob", "Review {parent_result}")))
                 .call(serde_json::json!({"result": "alice's findings"}), &ctx)
@@ -1058,15 +1055,15 @@ mod tests {
             "{outcome:?}"
         );
 
-        let child = queue.get_task("t-2").unwrap();
+        let child = werk.get_task("t-2").unwrap();
         assert_eq!(child_body(&child), "Review alice's findings");
     }
 
     #[tokio::test]
     async fn configured_handover_accepts_its_label_and_overrides_task_and_schema() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (queue, _id) = one_task_in("alice", dir.path().to_path_buf());
-        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
+        let (werk, _id) = one_task_in("alice", dir.path().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&werk), "alice", dir.path().to_path_buf());
         let configured_schema = Schema::new(serde_json::json!({
             "type": "string",
             "title": "configured"
@@ -1092,7 +1089,7 @@ mod tests {
             .await;
 
         assert_eq!(outcome.get_name(), Event::TOOL_CALL_FINISHED);
-        let child = queue.get_task("t-2").unwrap();
+        let child = werk.get_task("t-2").unwrap();
         assert_eq!(child.get_label(), Some("bob"));
         assert_eq!(child.get_task()["kind"], "review");
         assert_eq!(child.get_task()["source"], "t-1");
@@ -1102,8 +1099,8 @@ mod tests {
     #[tokio::test]
     async fn configured_handover_accepts_an_override_without_repeating_its_label() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (queue, _id) = one_task_in("alice", dir.path().to_path_buf());
-        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
+        let (werk, _id) = one_task_in("alice", dir.path().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&werk), "alice", dir.path().to_path_buf());
 
         FinishTool::from_schema(None, Some(Task::labeled("bob", "configured body")))
             .call(
@@ -1115,7 +1112,7 @@ mod tests {
             )
             .await;
 
-        let child = queue.get_task("t-2").unwrap();
+        let child = werk.get_task("t-2").unwrap();
         assert_eq!(child.get_label(), Some("bob"));
         assert_eq!(child.get_task(), "overridden body");
     }
@@ -1123,8 +1120,8 @@ mod tests {
     #[tokio::test]
     async fn configured_handover_rejects_a_different_label_atomically() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (queue, parent_id) = one_task_in("alice", dir.path().to_path_buf());
-        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
+        let (werk, parent_id) = one_task_in("alice", dir.path().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&werk), "alice", dir.path().to_path_buf());
         let outcome = FinishTool::from_schema(None, Some(Task::labeled("bob", "review")))
             .invoke(
                 serde_json::json!({
@@ -1136,18 +1133,18 @@ mod tests {
             .await;
 
         assert_eq!(outcome.get_data()["kind"], "schema_failed");
-        let parent = queue.get_task(&parent_id).unwrap();
+        let parent = werk.get_task(&parent_id).unwrap();
         assert_eq!(parent.get_status(), Status::InProgress);
         assert_eq!(parent.get_result(), None);
         assert_eq!(read_result(dir.path(), &parent_id), None);
-        assert!(queue.get_task("t-2").is_none());
+        assert!(werk.get_task("t-2").is_none());
     }
 
     #[tokio::test]
     async fn configured_handover_cannot_create_a_second_child_after_finish() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (queue, parent_id) = one_task_in("alice", dir.path().to_path_buf());
-        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
+        let (werk, parent_id) = one_task_in("alice", dir.path().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&werk), "alice", dir.path().to_path_buf());
         let tool = FinishTool::from_schema(None, Some(Task::labeled("bob", "review")));
 
         let first = tool
@@ -1160,18 +1157,18 @@ mod tests {
         assert_eq!(first.get_name(), Event::TOOL_CALL_FINISHED);
         assert_eq!(second.get_name(), Event::TOOL_CALL_FAILED);
         assert_eq!(
-            queue.get_task(&parent_id).unwrap().get_result(),
+            werk.get_task(&parent_id).unwrap().get_result(),
             Some(&serde_json::json!("first"))
         );
-        assert!(queue.get_task("t-2").is_some());
-        assert!(queue.get_task("t-3").is_none());
+        assert!(werk.get_task("t-2").is_some());
+        assert!(werk.get_task("t-3").is_none());
     }
 
     #[tokio::test]
     async fn invalid_inline_handover_schema_is_atomic() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (queue, parent_id) = one_task_in("alice", dir.path().to_path_buf());
-        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
+        let (werk, parent_id) = one_task_in("alice", dir.path().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&werk), "alice", dir.path().to_path_buf());
         let outcome = Tool::from(FinishTool)
             .invoke(
                 serde_json::json!({
@@ -1187,19 +1184,19 @@ mod tests {
             .await;
 
         assert_eq!(outcome.get_directive(), Some("handover_schema_invalid"));
-        let parent = queue.get_task(&parent_id).unwrap();
+        let parent = werk.get_task(&parent_id).unwrap();
         assert_eq!(parent.get_status(), Status::InProgress);
         assert_eq!(parent.get_result(), None);
         assert_eq!(read_result(dir.path(), &parent_id), None);
-        assert!(queue.get_task("t-2").is_none());
+        assert!(werk.get_task("t-2").is_none());
     }
 
     #[tokio::test]
     async fn configured_handover_requires_a_nonempty_result() {
         for result in [serde_json::Value::Null, serde_json::json!("")] {
             let dir = crate::test_util::TempDir::new().unwrap();
-            let (queue, parent_id) = one_task_in("alice", dir.path().to_path_buf());
-            let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
+            let (werk, parent_id) = one_task_in("alice", dir.path().to_path_buf());
+            let ctx = ctx_with(Arc::clone(&werk), "alice", dir.path().to_path_buf());
 
             let outcome = FinishTool::from_schema(None, Some(Task::labeled("bob", "review")))
                 .call(serde_json::json!({"result": result}), &ctx)
@@ -1209,18 +1206,18 @@ mod tests {
                 .get_content()
                 .contains("requires a non-null, non-empty result"));
             assert_eq!(
-                queue.get_task(&parent_id).unwrap().get_status(),
+                werk.get_task(&parent_id).unwrap().get_status(),
                 Status::InProgress
             );
-            assert!(queue.get_task("t-2").is_none());
+            assert!(werk.get_task("t-2").is_none());
         }
     }
 
     #[tokio::test]
     async fn handover_preserves_structure_and_substitutes_every_string_leaf() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (queue, parent_id) = one_task_in("alice", dir.path().to_path_buf());
-        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
+        let (werk, parent_id) = one_task_in("alice", dir.path().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&werk), "alice", dir.path().to_path_buf());
 
         Tool::from(FinishTool)
             .call(
@@ -1238,7 +1235,7 @@ mod tests {
             )
             .await;
 
-        let child = queue.get_task("t-2").unwrap();
+        let child = werk.get_task("t-2").unwrap();
         assert_eq!(child.get_task()["parent"], parent_id);
         assert_eq!(child.get_task()["steps"][1], 2);
         assert_eq!(
@@ -1251,14 +1248,14 @@ mod tests {
     #[tokio::test]
     async fn configured_handover_does_not_append_parent_metadata() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (queue, parent_id) = one_task_in("alice", dir.path().to_path_buf());
-        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
+        let (werk, parent_id) = one_task_in("alice", dir.path().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&werk), "alice", dir.path().to_path_buf());
 
         FinishTool::from_schema(None, Some(Task::labeled("bob", "Review it")))
             .call(serde_json::json!({"result": "alice's findings"}), &ctx)
             .await;
 
-        let child = queue.get_task("t-2").unwrap();
+        let child = werk.get_task("t-2").unwrap();
         let body = child_body(&child);
         assert_eq!(body, "Review it");
         assert_eq!(child.parent.as_deref(), Some(parent_id.as_str()));
@@ -1267,8 +1264,8 @@ mod tests {
     #[tokio::test]
     async fn handover_substitutes_the_parent_result_file_in_the_task() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (queue, parent_id) = one_task_in("alice", dir.path().to_path_buf());
-        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
+        let (werk, parent_id) = one_task_in("alice", dir.path().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&werk), "alice", dir.path().to_path_buf());
 
         Tool::from(FinishTool)
             .call(
@@ -1283,8 +1280,8 @@ mod tests {
             )
             .await;
 
-        let child = queue.get_task("t-2").unwrap();
-        let path = queue.result_path(&parent_id);
+        let child = werk.get_task("t-2").unwrap();
+        let path = werk.result_path(&parent_id);
         assert!(
             child_body(&child).starts_with(&format!("Read {} and continue", path.display())),
             "{}",
@@ -1302,8 +1299,8 @@ mod tests {
         // Absent, null, and empty all leave the receiving agent a body that
         // says nothing, and this task carries no schema to require one.
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (queue, _id) = one_task_in("alice", dir.path().to_path_buf());
-        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
+        let (werk, _id) = one_task_in("alice", dir.path().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&werk), "alice", dir.path().to_path_buf());
         for body in [
             serde_json::json!({"handover": {"label": "bob", "task": "x"}}),
             serde_json::json!({"handover": {"label": "bob", "task": "x"}, "result": null}),
@@ -1330,8 +1327,8 @@ mod tests {
             serde_json::json!({"k": "v"}),
         ] {
             let dir = crate::test_util::TempDir::new().unwrap();
-            let (queue, parent_id) = one_task_in("alice", dir.path().to_path_buf());
-            let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
+            let (werk, parent_id) = one_task_in("alice", dir.path().to_path_buf());
+            let ctx = ctx_with(Arc::clone(&werk), "alice", dir.path().to_path_buf());
 
             let outcome = Tool::from(FinishTool)
                 .call(
@@ -1344,10 +1341,10 @@ mod tests {
                 .await;
             assert!(outcome.get_name() == Event::TOOL_CALL_FINISHED);
 
-            let parent = queue.get_task(&parent_id).unwrap();
+            let parent = werk.get_task(&parent_id).unwrap();
             assert_eq!(parent.status, Status::Finished);
             assert_eq!(parent.result.as_ref(), Some(&result_value));
-            assert!(queue.get_task("t-2").is_some());
+            assert!(werk.get_task("t-2").is_some());
         }
     }
 
@@ -1384,26 +1381,26 @@ mod tests {
             }),
         ] {
             let dir = crate::test_util::TempDir::new().unwrap();
-            let (queue, parent_id) = one_task_in("alice", dir.path().to_path_buf());
-            let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
+            let (werk, parent_id) = one_task_in("alice", dir.path().to_path_buf());
+            let ctx = ctx_with(Arc::clone(&werk), "alice", dir.path().to_path_buf());
             let outcome = Tool::from(FinishTool).invoke(input, &ctx).await;
 
             assert_eq!(outcome.get_data()["kind"], "schema_failed");
-            let parent = queue.get_task(&parent_id).unwrap();
+            let parent = werk.get_task(&parent_id).unwrap();
             assert_eq!(parent.get_status(), Status::InProgress);
             assert_eq!(parent.get_result(), None);
             assert_eq!(read_result(dir.path(), &parent_id), None);
-            assert!(queue.get_task("t-2").is_none());
+            assert!(werk.get_task("t-2").is_none());
         }
     }
 
     #[tokio::test]
     async fn a_blank_handover_from_a_direct_call_is_an_error() {
         // Hosts that bypass runtime validation still fail without mutating
-        // the queue, but do not receive a model-facing directive.
+        // the Werk, but do not receive a model-facing directive.
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (queue, parent_id) = one_task_in("alice", dir.path().to_path_buf());
-        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
+        let (werk, parent_id) = one_task_in("alice", dir.path().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&werk), "alice", dir.path().to_path_buf());
         for body in [
             serde_json::json!({"handover": {"label": "  ", "task": "x"}, "result": "x"}),
             serde_json::json!({"handover": {"task": "x"}, "result": "x"}),
@@ -1414,7 +1411,7 @@ mod tests {
             assert_eq!(outcome.get_directive(), None);
         }
         assert_eq!(
-            queue.get_task(&parent_id).unwrap().status,
+            werk.get_task(&parent_id).unwrap().status,
             Status::InProgress,
         );
     }
@@ -1422,9 +1419,9 @@ mod tests {
     #[tokio::test]
     async fn handover_errors_when_no_current_task() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let queue = Queue::new();
-        queue.set_dir(dir.path().to_path_buf());
-        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
+        let werk = Werk::new();
+        werk.set_dir(dir.path().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&werk), "alice", dir.path().to_path_buf());
         let outcome = Tool::from(FinishTool)
             .call(
                 serde_json::json!({
@@ -1440,8 +1437,8 @@ mod tests {
     #[tokio::test]
     async fn substitutes_parent_id_and_result_in_task() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (queue, parent_id) = one_task_in("alice", dir.path().to_path_buf());
-        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
+        let (werk, parent_id) = one_task_in("alice", dir.path().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&werk), "alice", dir.path().to_path_buf());
 
         Tool::from(FinishTool)
             .call(
@@ -1456,15 +1453,15 @@ mod tests {
             )
             .await;
 
-        let child = queue.get_task("t-2").unwrap();
+        let child = werk.get_task("t-2").unwrap();
         assert!(child_body(&child).starts_with(&format!("Continue {parent_id}: alice's findings")));
     }
 
     #[tokio::test]
     async fn unknown_placeholders_pass_through() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (queue, parent_id) = one_task_in("alice", dir.path().to_path_buf());
-        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
+        let (werk, parent_id) = one_task_in("alice", dir.path().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&werk), "alice", dir.path().to_path_buf());
 
         Tool::from(FinishTool)
             .call(
@@ -1479,15 +1476,15 @@ mod tests {
             )
             .await;
 
-        let child = queue.get_task("t-2").unwrap();
+        let child = werk.get_task("t-2").unwrap();
         assert!(child_body(&child).starts_with(&format!("See {parent_id} and {{unknown}}")));
     }
 
     #[tokio::test]
     async fn parent_key_is_not_an_alias_for_parent_id() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (queue, _parent_id) = one_task_in("alice", dir.path().to_path_buf());
-        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
+        let (werk, _parent_id) = one_task_in("alice", dir.path().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&werk), "alice", dir.path().to_path_buf());
 
         Tool::from(FinishTool)
             .call(
@@ -1499,7 +1496,7 @@ mod tests {
             )
             .await;
 
-        let child = queue.get_task("t-2").unwrap();
+        let child = werk.get_task("t-2").unwrap();
         assert!(child_body(&child).starts_with("See {parent_key}"));
     }
 
@@ -1509,8 +1506,8 @@ mod tests {
         // must NOT be re-expanded: the substitution pass runs once
         // per placeholder, not recursively.
         let dir = crate::test_util::TempDir::new().unwrap();
-        let (queue, parent_id) = one_task_in("alice", dir.path().to_path_buf());
-        let ctx = ctx_with(Arc::clone(&queue), "alice", dir.path().to_path_buf());
+        let (werk, parent_id) = one_task_in("alice", dir.path().to_path_buf());
+        let ctx = ctx_with(Arc::clone(&werk), "alice", dir.path().to_path_buf());
 
         Tool::from(FinishTool)
             .call(
@@ -1522,7 +1519,7 @@ mod tests {
             )
             .await;
 
-        let child = queue.get_task("t-2").unwrap();
+        let child = werk.get_task("t-2").unwrap();
         assert!(
             child_body(&child).starts_with("[{parent_id}]"),
             "result containing `{{parent_id}}` should be inserted literally, \

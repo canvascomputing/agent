@@ -1,15 +1,15 @@
-//! The tools an agent reaches its own task queue through: reading it, adding
+//! The tools an agent reaches its own Werk through: reading it, adding
 //! to it, and finishing the task it holds.
 
 use std::path::Path;
 
 use serde_json::Value;
 
-use crate::agents::tasks::{Queue, Status, Task, TaskError};
+use crate::agents::tasks::{Status, Task, TaskError, Werk};
 use crate::agents::Query;
 use crate::prompts::directives::{
-    DirectiveStore, QUEUE_UNAVAILABLE, TASK_EDIT_INCOMPLETE, TASK_ID_MISSING, TASK_NOT_ASSIGNED,
-    TASK_NOT_FOUND, TASK_QUERY_INVALID, TASK_RESULT_MISSING, TASK_TRANSITION_REJECTED,
+    DirectiveStore, TASK_EDIT_INCOMPLETE, TASK_ID_MISSING, TASK_NOT_ASSIGNED, TASK_NOT_FOUND,
+    TASK_QUERY_INVALID, TASK_RESULT_MISSING, TASK_TRANSITION_REJECTED, WERK_UNAVAILABLE,
 };
 
 use super::tool::{Event, ToolContext};
@@ -20,7 +20,7 @@ mod tasks;
 pub use finish::FinishTool;
 pub use tasks::TaskTool;
 
-/// What the model asks the queue to do. The schema declares `action` as the
+/// What the model asks the Werk to do. The schema declares `action` as the
 /// discriminator and states which fields each one requires; the variants say
 /// the same in Rust, so `search` cannot arrive without a `query`.
 #[derive(serde::Deserialize)]
@@ -47,29 +47,29 @@ pub enum TasksArgs {
 }
 
 pub(super) fn dispatch(args: TasksArgs, ctx: &ToolContext) -> Event {
-    let Some(queue) = ctx.queue.clone() else {
-        return Event::error(ctx.directives.render(QUEUE_UNAVAILABLE, &[]))
-            .directive(QUEUE_UNAVAILABLE);
+    let Some(werk) = ctx.werk.clone() else {
+        return Event::error(ctx.directives.render(WERK_UNAVAILABLE, &[]))
+            .directive(WERK_UNAVAILABLE);
     };
 
     match args {
-        TasksArgs::Task { id } => action_task(&queue, id, ctx),
-        TasksArgs::Result { id } => action_result(&queue, id, ctx),
-        TasksArgs::List { aql } => action_list(&queue, aql, &ctx.directives),
-        TasksArgs::Create { task, label } => action_create(&queue, task, label, ctx),
-        TasksArgs::Edit { id, task, label } => action_edit(&queue, id, task, label, ctx),
+        TasksArgs::Task { id } => action_task(&werk, id, ctx),
+        TasksArgs::Result { id } => action_result(&werk, id, ctx),
+        TasksArgs::List { aql } => action_list(&werk, aql, &ctx.directives),
+        TasksArgs::Create { task, label } => action_create(&werk, task, label, ctx),
+        TasksArgs::Edit { id, task, label } => action_edit(&werk, id, task, label, ctx),
     }
 }
 
 /// The task an action names, or the one this agent is holding.
-fn resolve_id(queue: &Queue, id: Option<String>, ctx: &ToolContext) -> Result<String, Event> {
+fn resolve_id(werk: &Werk, id: Option<String>, ctx: &ToolContext) -> Result<String, Event> {
     match id {
         Some(id) => Ok(id),
-        None => resolve_current_id(queue, ctx),
+        None => resolve_current_id(werk, ctx),
     }
 }
 
-pub(super) fn resolve_current_id(queue: &Queue, ctx: &ToolContext) -> Result<String, Event> {
+pub(super) fn resolve_current_id(werk: &Werk, ctx: &ToolContext) -> Result<String, Event> {
     if let Some(id) = ctx.task_id.as_deref() {
         return Ok(id.to_string());
     }
@@ -78,7 +78,7 @@ pub(super) fn resolve_current_id(queue: &Queue, ctx: &ToolContext) -> Result<Str
     let agent_id = ctx.agent_id.clone().ok_or_else(|| {
         Event::error(ctx.directives.render(TASK_ID_MISSING, &[])).directive(TASK_ID_MISSING)
     })?;
-    match queue.find_task(move |t: &Task| {
+    match werk.find_task(move |t: &Task| {
         t.status == Status::InProgress && t.assignee.as_deref() == Some(agent_id.as_str())
     }) {
         Some(t) => Ok(t.id.clone()),
@@ -182,29 +182,29 @@ fn task_preview(task: &serde_json::Value) -> String {
     truncate_for_preview(&raw, 80)
 }
 
-fn action_task(queue: &Queue, id: Option<String>, ctx: &ToolContext) -> Event {
-    let id = match resolve_id(queue, id, ctx) {
+fn action_task(werk: &Werk, id: Option<String>, ctx: &ToolContext) -> Event {
+    let id = match resolve_id(werk, id, ctx) {
         Ok(k) => k,
         Err(e) => return e,
     };
-    match queue.get_task(&id) {
+    match werk.get_task(&id) {
         Some(t) => Event::success(render_task(&t)),
         None => Event::error(ctx.directives.render(TASK_NOT_FOUND, &[("id", &id)]))
             .directive(TASK_NOT_FOUND),
     }
 }
 
-fn action_result(queue: &Queue, id: Option<String>, ctx: &ToolContext) -> Event {
-    let id = match resolve_id(queue, id, ctx) {
+fn action_result(werk: &Werk, id: Option<String>, ctx: &ToolContext) -> Event {
+    let id = match resolve_id(werk, id, ctx) {
         Ok(k) => k,
         Err(e) => return e,
     };
-    let Some(task) = queue.get_task(&id) else {
+    let Some(task) = werk.get_task(&id) else {
         return Event::error(ctx.directives.render(TASK_NOT_FOUND, &[("id", &id)]))
             .directive(TASK_NOT_FOUND);
     };
     match task.result.as_ref() {
-        Some(result) => Event::success(render_result(&id, &queue.result_path(&id), result)),
+        Some(result) => Event::success(render_result(&id, &werk.result_path(&id), result)),
         None => Event::error(ctx.directives.render(
             TASK_RESULT_MISSING,
             &[("id", &id), ("status", status_label(task.status))],
@@ -212,15 +212,15 @@ fn action_result(queue: &Queue, id: Option<String>, ctx: &ToolContext) -> Event 
     }
 }
 
-fn action_list(queue: &Queue, aql: Option<String>, directives: &DirectiveStore) -> Event {
+fn action_list(werk: &Werk, aql: Option<String>, directives: &DirectiveStore) -> Event {
     let pool: Vec<Task> = match aql.as_deref().map(Query::new) {
-        Some(Ok(query)) => queue.find_tasks(query),
+        Some(Ok(query)) => werk.find_tasks(query),
         Some(Err(error)) => {
             return Event::error(
                 directives.render(TASK_QUERY_INVALID, &[("error", &error.to_string())]),
             )
         }
-        None => queue.get_tasks(),
+        None => werk.get_tasks(),
     };
     if pool.is_empty() {
         return Event::success("(no matching tasks)".to_string());
@@ -239,7 +239,7 @@ fn action_list(queue: &Queue, aql: Option<String>, directives: &DirectiveStore) 
     Event::success(render_summary_list(&rows))
 }
 
-fn action_create(queue: &Queue, task: Value, label: Option<String>, ctx: &ToolContext) -> Event {
+fn action_create(werk: &Werk, task: Value, label: Option<String>, ctx: &ToolContext) -> Event {
     let mut task = Task::new(task);
     if let Some(label) = label {
         task = task.label(label);
@@ -250,18 +250,18 @@ fn action_create(queue: &Queue, task: Value, label: Option<String>, ctx: &ToolCo
         .as_deref()
         .expect("agent_id on ToolContext")
         .to_string();
-    let id = queue.insert(task, reporter);
+    let id = werk.insert(task, reporter);
     Event::success(format!("Created task {id}"))
 }
 
 fn action_edit(
-    queue: &Queue,
+    werk: &Werk,
     id: Option<String>,
     new_task: Option<Value>,
     new_label: Option<String>,
     ctx: &ToolContext,
 ) -> Event {
-    let id = match resolve_id(queue, id, ctx) {
+    let id = match resolve_id(werk, id, ctx) {
         Ok(k) => k,
         Err(e) => return e,
     };
@@ -270,7 +270,7 @@ fn action_edit(
             .directive(TASK_EDIT_INCOMPLETE);
     }
 
-    match queue.edit(&id, new_task, new_label) {
+    match werk.edit(&id, new_task, new_label) {
         Ok(()) => Event::success(format!("Edited task {id}")),
         Err(e) => Event::error(task_error_message(e, &ctx.directives)),
     }
@@ -279,34 +279,34 @@ fn action_edit(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agents::tasks::Queue;
+    use crate::agents::tasks::Werk;
     use std::path::PathBuf;
     use std::sync::Arc;
 
     /// Build a context for a tool test, optionally with a "current
     /// task" already InProgress and assigned to `agent`.
-    fn ctx_with(queue: Arc<Queue>, agent: &str) -> ToolContext {
+    fn ctx_with(werk: Arc<Werk>, agent: &str) -> ToolContext {
         ToolContext::new(PathBuf::from("/tmp"))
-            .queue(queue)
+            .werk(werk)
             .agent_id(agent.to_string())
     }
 
     /// Insert one Todo task, claim it for `agent` (atomically labels +
-    /// transitions to InProgress), so `queue.find_task(...)` resolves it
-    /// as the current task for `agent`. The queue is rooted at its own
+    /// transitions to InProgress), so `werk.find_task(...)` resolves it
+    /// as the current task for `agent`. The Werk is rooted at its own
     /// isolated temp directory so the default `.agentwerk` writes never
     /// leak into the source tree.
-    fn shared_with_one_task(agent: &str) -> (Arc<Queue>, String) {
-        let queue = Queue::new();
-        queue.set_dir(isolated_test_dir());
-        queue.insert(Task::new("body").label(agent), "tester".into());
-        let id = queue
+    fn shared_with_one_task(agent: &str) -> (Arc<Werk>, String) {
+        let werk = Werk::new();
+        werk.set_dir(isolated_test_dir());
+        werk.insert(Task::new("body").label(agent), "tester".into());
+        let id = werk
             .claim(&Query::from("status = Todo"), agent)
             .expect("claim must succeed");
-        (queue, id)
+        (werk, id)
     }
 
-    /// A fresh directory for each `Queue` under a process-lifetime,
+    /// A fresh directory for each `Werk` under a process-lifetime,
     /// self-deleting temp root. Per-call isolation matters because `insert`
     /// numbers new IDs past the highest `t-<N>` folder already on disk,
     /// so a shared directory would leak task IDs between tests.
@@ -317,7 +317,7 @@ mod tests {
         static COUNTER: AtomicU64 = AtomicU64::new(0);
         let root = ROOT.get_or_init(|| crate::test_util::TempDir::new().unwrap());
         root.path()
-            .join(format!("queue-{}", COUNTER.fetch_add(1, Ordering::Relaxed)))
+            .join(format!("werk-{}", COUNTER.fetch_add(1, Ordering::Relaxed)))
     }
 
     async fn call(
@@ -335,8 +335,8 @@ mod tests {
 
     #[tokio::test]
     async fn task_defaults_id_to_current_task() {
-        let (queue, id) = shared_with_one_task("alice");
-        let ctx = ctx_with(Arc::clone(&queue), "alice");
+        let (werk, id) = shared_with_one_task("alice");
+        let ctx = ctx_with(Arc::clone(&werk), "alice");
         let result = call(TaskTool, serde_json::json!({"action": "task"}), &ctx).await;
         let text = unwrap_text(&result);
         assert!(text.contains(&id), "expected id in output: {text}");
@@ -345,12 +345,11 @@ mod tests {
 
     #[tokio::test]
     async fn result_returns_the_result_of_another_agents_task() {
-        let (queue, id) = shared_with_one_task("alice");
-        queue
-            .set_result(&id, serde_json::json!({"finding": "a lead"}))
+        let (werk, id) = shared_with_one_task("alice");
+        werk.set_result(&id, serde_json::json!({"finding": "a lead"}))
             .unwrap();
 
-        let ctx = ctx_with(Arc::clone(&queue), "bob");
+        let ctx = ctx_with(Arc::clone(&werk), "bob");
         let result = call(
             TaskTool,
             serde_json::json!({"action": "result", "id": id}),
@@ -368,12 +367,11 @@ mod tests {
 
     #[tokio::test]
     async fn result_defaults_id_to_current_task() {
-        let (queue, id) = shared_with_one_task("alice");
-        queue
-            .set_result(&id, serde_json::json!("what alice found"))
+        let (werk, id) = shared_with_one_task("alice");
+        werk.set_result(&id, serde_json::json!("what alice found"))
             .unwrap();
 
-        let ctx = ctx_with(Arc::clone(&queue), "alice");
+        let ctx = ctx_with(Arc::clone(&werk), "alice");
         let result = call(TaskTool, serde_json::json!({"action": "result"}), &ctx).await;
         let text = unwrap_text(&result);
         assert!(text.contains("what alice found"), "{text}");
@@ -381,10 +379,10 @@ mod tests {
 
     #[tokio::test]
     async fn key_is_not_an_alias_for_id() {
-        let queue = Queue::new();
-        queue.set_dir(isolated_test_dir());
-        queue.add_task("body");
-        let ctx = ToolContext::new(PathBuf::from("/tmp")).queue(queue);
+        let werk = Werk::new();
+        werk.set_dir(isolated_test_dir());
+        werk.add_task("body");
+        let ctx = ToolContext::new(PathBuf::from("/tmp")).werk(werk);
 
         let result = call(
             TaskTool,
@@ -399,9 +397,9 @@ mod tests {
 
     #[tokio::test]
     async fn task_not_found_directive_binds_the_id() {
-        let queue = Queue::new();
-        queue.set_dir(isolated_test_dir());
-        let ctx = ToolContext::new(PathBuf::from("/tmp")).queue(queue);
+        let werk = Werk::new();
+        werk.set_dir(isolated_test_dir());
+        let ctx = ToolContext::new(PathBuf::from("/tmp")).werk(werk);
 
         let result = call(
             TaskTool,
@@ -416,8 +414,8 @@ mod tests {
 
     #[tokio::test]
     async fn result_errors_while_the_task_has_no_result() {
-        let (queue, id) = shared_with_one_task("alice");
-        let ctx = ctx_with(Arc::clone(&queue), "alice");
+        let (werk, id) = shared_with_one_task("alice");
+        let ctx = ctx_with(Arc::clone(&werk), "alice");
         let result = call(
             TaskTool,
             serde_json::json!({"action": "result", "id": id}),
@@ -430,19 +428,19 @@ mod tests {
 
     /// Two tasks, the first claimed by `alice` and labelled `review`, the
     /// second still Todo and unlabelled.
-    fn queue_with_two_tasks() -> Arc<Queue> {
-        let queue = Queue::new();
-        queue.set_dir(isolated_test_dir());
-        queue.insert(Task::new("a").label("review"), "tester".into());
-        queue.insert(Task::new("b"), "tester".into());
-        queue.claim(&Query::from("t-1"), "alice");
-        queue
+    fn werk_with_two_tasks() -> Arc<Werk> {
+        let werk = Werk::new();
+        werk.set_dir(isolated_test_dir());
+        werk.insert(Task::new("a").label("review"), "tester".into());
+        werk.insert(Task::new("b"), "tester".into());
+        werk.claim(&Query::from("t-1"), "alice");
+        werk
     }
 
     #[tokio::test]
     async fn list_without_a_filter_returns_every_task() {
-        let queue = queue_with_two_tasks();
-        let ctx = ctx_with(Arc::clone(&queue), "alice");
+        let werk = werk_with_two_tasks();
+        let ctx = ctx_with(Arc::clone(&werk), "alice");
         let result = call(TaskTool, serde_json::json!({"action": "list"}), &ctx).await;
         let text = unwrap_text(&result);
         assert!(text.contains("t-1"), "{text}");
@@ -451,12 +449,12 @@ mod tests {
 
     #[tokio::test]
     async fn list_stops_at_fifty_tasks() {
-        let queue = Queue::new();
-        queue.set_dir(isolated_test_dir());
+        let werk = Werk::new();
+        werk.set_dir(isolated_test_dir());
         for i in 1..=51 {
-            queue.insert(Task::new(format!("task {i}")), "tester".into());
+            werk.insert(Task::new(format!("task {i}")), "tester".into());
         }
-        let ctx = ctx_with(Arc::clone(&queue), "alice");
+        let ctx = ctx_with(Arc::clone(&werk), "alice");
         let result = call(TaskTool, serde_json::json!({"action": "list"}), &ctx).await;
         let text = unwrap_text(&result);
         assert_eq!(text.lines().count(), 50, "{text}");
@@ -465,8 +463,8 @@ mod tests {
 
     #[tokio::test]
     async fn list_filters_by_the_status_the_aql_names() {
-        let queue = queue_with_two_tasks();
-        let ctx = ctx_with(Arc::clone(&queue), "alice");
+        let werk = werk_with_two_tasks();
+        let ctx = ctx_with(Arc::clone(&werk), "alice");
         let result = call(
             TaskTool,
             serde_json::json!({"action": "list", "aql": "status = InProgress"}),
@@ -480,8 +478,8 @@ mod tests {
 
     #[tokio::test]
     async fn list_answers_in_the_order_the_aql_names() {
-        let queue = queue_with_two_tasks();
-        let ctx = ctx_with(Arc::clone(&queue), "alice");
+        let werk = werk_with_two_tasks();
+        let ctx = ctx_with(Arc::clone(&werk), "alice");
         let result = call(
             TaskTool,
             serde_json::json!({"action": "list", "aql": "ORDER BY id DESC"}),
@@ -494,8 +492,8 @@ mod tests {
 
     #[tokio::test]
     async fn list_filters_by_the_window_the_aql_names() {
-        let queue = queue_with_two_tasks();
-        let ctx = ctx_with(Arc::clone(&queue), "alice");
+        let werk = werk_with_two_tasks();
+        let ctx = ctx_with(Arc::clone(&werk), "alice");
         let result = call(
             TaskTool,
             serde_json::json!({"action": "list", "aql": "created > -1h"}),
@@ -516,8 +514,8 @@ mod tests {
 
     #[tokio::test]
     async fn list_answers_no_matching_tasks_when_the_aql_selects_none() {
-        let queue = queue_with_two_tasks();
-        let ctx = ctx_with(Arc::clone(&queue), "alice");
+        let werk = werk_with_two_tasks();
+        let ctx = ctx_with(Arc::clone(&werk), "alice");
         let result = call(
             TaskTool,
             serde_json::json!({"action": "list", "aql": "status = Finished"}),
@@ -529,8 +527,8 @@ mod tests {
 
     #[tokio::test]
     async fn an_invalid_aql_answers_with_the_parse_error() {
-        let queue = queue_with_two_tasks();
-        let ctx = ctx_with(Arc::clone(&queue), "alice");
+        let werk = werk_with_two_tasks();
+        let ctx = ctx_with(Arc::clone(&werk), "alice");
         let result = call(
             TaskTool,
             serde_json::json!({"action": "list", "aql": "assignee = alice"}),
@@ -543,9 +541,9 @@ mod tests {
 
     #[tokio::test]
     async fn create_stamps_reporter_from_agent_id() {
-        let queue = Queue::new();
-        queue.set_dir(isolated_test_dir());
-        let ctx = ctx_with(Arc::clone(&queue), "alice");
+        let werk = Werk::new();
+        werk.set_dir(isolated_test_dir());
+        let ctx = ctx_with(Arc::clone(&werk), "alice");
         let result = call(
             TaskTool,
             serde_json::json!({"action": "create", "task": "new task"}),
@@ -553,16 +551,16 @@ mod tests {
         )
         .await;
         assert!(result.get_name() == Event::TOOL_CALL_FINISHED);
-        let t = queue.get_task("t-1").unwrap();
+        let t = werk.get_task("t-1").unwrap();
         assert_eq!(t.task, serde_json::Value::String("new task".into()));
         assert_eq!(t.reporter, "alice");
     }
 
     #[tokio::test]
     async fn create_with_a_label_attaches_it() {
-        let queue = Queue::new();
-        queue.set_dir(isolated_test_dir());
-        let ctx = ctx_with(Arc::clone(&queue), "alice");
+        let werk = Werk::new();
+        werk.set_dir(isolated_test_dir());
+        let ctx = ctx_with(Arc::clone(&werk), "alice");
         let result = call(
             TaskTool,
             serde_json::json!({
@@ -574,16 +572,16 @@ mod tests {
         )
         .await;
         assert!(result.get_name() == Event::TOOL_CALL_FINISHED);
-        let t = queue.get_task("t-1").unwrap();
+        let t = werk.get_task("t-1").unwrap();
         assert_eq!(t.label.as_deref(), Some("research"));
         assert_eq!(t.status, Status::Todo);
     }
 
     #[tokio::test]
     async fn create_with_named_label_routes_to_agent() {
-        let queue = Queue::new();
-        queue.set_dir(isolated_test_dir());
-        let ctx = ctx_with(Arc::clone(&queue), "alice");
+        let werk = Werk::new();
+        werk.set_dir(isolated_test_dir());
+        let ctx = ctx_with(Arc::clone(&werk), "alice");
         let result = call(
             TaskTool,
             serde_json::json!({
@@ -595,15 +593,15 @@ mod tests {
         )
         .await;
         assert!(result.get_name() == Event::TOOL_CALL_FINISHED);
-        let t = queue.get_task("t-1").unwrap();
+        let t = werk.get_task("t-1").unwrap();
         assert_eq!(t.label.as_deref(), Some("alice"));
         assert_eq!(t.status, Status::Todo);
     }
 
     #[tokio::test]
     async fn edit_replaces_the_task_and_the_label() {
-        let (queue, id) = shared_with_one_task("alice");
-        let ctx = ctx_with(Arc::clone(&queue), "alice");
+        let (werk, id) = shared_with_one_task("alice");
+        let ctx = ctx_with(Arc::clone(&werk), "alice");
         let result = call(
             TaskTool,
             serde_json::json!({
@@ -615,15 +613,15 @@ mod tests {
         )
         .await;
         assert!(result.get_name() == Event::TOOL_CALL_FINISHED);
-        let t = queue.get_task(&id).unwrap();
+        let t = werk.get_task(&id).unwrap();
         assert_eq!(t.task, serde_json::Value::String("new body".into()));
         assert_eq!(t.label.as_deref(), Some("urgent"));
     }
 
     #[tokio::test]
     async fn unsupported_actions_are_rejected() {
-        let (queue, _id) = shared_with_one_task("alice");
-        let ctx = ctx_with(Arc::clone(&queue), "alice");
+        let (werk, _id) = shared_with_one_task("alice");
+        let ctx = ctx_with(Arc::clone(&werk), "alice");
         for action in ["done", "transition", "comment", "assign", "attach"] {
             let result = call(TaskTool, serde_json::json!({"action": action}), &ctx).await;
             assert!(

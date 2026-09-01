@@ -11,7 +11,7 @@ use super::common;
 
 use agentwerk::event::{default_logger, Event};
 use agentwerk::tools::GrepTool;
-use agentwerk::{Agent, Policy, Queue};
+use agentwerk::{Agent, Policy, Werk};
 
 #[derive(Clone)]
 struct CapturedCall {
@@ -50,7 +50,7 @@ async fn grep_lists_unknown_function_names() -> std::result::Result<(), Box<dyn 
         logger(e);
     });
 
-    let tasks = Queue::new();
+    let tasks = Werk::new();
 
     tasks.set_policy(Policy {
         max_turns: Some(10),

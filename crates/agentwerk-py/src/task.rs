@@ -82,7 +82,7 @@ impl PyTask {
         self.inner.is_pending()
     }
 
-    /// Check whether this run has taken the task off the queue.
+    /// Check whether this run has excluded the task from scheduling.
     fn is_cancelled(&self) -> bool {
         self.inner.is_cancelled()
     }
@@ -175,7 +175,7 @@ impl PyTask {
 }
 
 impl PyTask {
-    /// Hand over a task the queue owns, messages included.
+    /// Hand over a task the Werk owns, messages included.
     pub fn from_task(task: &Task) -> Self {
         PyTask {
             inner: task.clone(),
@@ -185,7 +185,7 @@ impl PyTask {
     /// Build the task to submit, copying only the fields you own.
     ///
     /// Submitting sets ID, status, reporter, and result, but leaves the
-    /// messages and timestamps, so a task that came back out of the queue
+    /// messages and timestamps, so a task that came back out of the Werk
     /// would otherwise carry its messages into the new one.
     pub fn to_task(&self) -> Task {
         let mut task = Task::new(self.inner.get_task().clone());

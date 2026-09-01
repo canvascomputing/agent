@@ -13,11 +13,11 @@ use crate::providers::TokenUsage;
 /// `Stats` counts a run as it happens, so the limit check that fires every
 /// 50ms, the remaining turns and tokens a system prompt reports, and the
 /// compaction estimate all read the current figures without touching the
-/// filesystem. `Queue::load` folds a session's log back into one, so a
+/// filesystem. `Werk::load` folds a session's log back into one, so a
 /// resumed run keeps what it already spent.
 ///
 /// Crate-internal on purpose. A host reads the three totals off
-/// [`Queue`](crate::Queue) and folds anything finer out of the
+/// [`Werk`](crate::Werk) and folds anything finer out of the
 /// events themselves.
 pub(crate) struct Stats {
     /// Count per event name. Every recorded event lands here, and
@@ -114,7 +114,7 @@ impl Stats {
         crate::persistence::append_line(&dir.join(Self::FILE), &line)
     }
 
-    /// Fold one event in. The single writer, so a live queue and a log read
+    /// Fold one event in. The single writer, so a live Werk and a log read
     /// back off disk arrive at the same figures.
     ///
     /// Every event is counted by name, so a new name needs no arm here.
@@ -228,7 +228,7 @@ mod tests {
         Event::new(Event::RUN_FINISHED).data(serde_json::json!({ "outcome": "drained" }))
     }
 
-    /// The fold `Queue::load` runs over a session log as it resumes.
+    /// The fold `Werk::load` runs over a session log as it resumes.
     fn loaded(dir: &std::path::Path) -> Stats {
         let stats = Stats::new();
         Stats::for_each_event(dir, |event| stats.record(event)).unwrap();

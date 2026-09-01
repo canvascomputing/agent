@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use super::common;
 
 use agentwerk::agents::tasks::Author;
-use agentwerk::{Agent, Event, Policy, Queue, Task};
+use agentwerk::{Agent, Event, Policy, Task, Werk};
 
 // Pins a known context window: the trigger stays quiet on a model whose window
 // it cannot look up, and the model here comes from the environment. The first
@@ -122,7 +122,7 @@ async fn summariser_produces_text_when_compaction_fires_against_live_llm() {
 
     eprintln!("\n=== BEFORE COMPACTION ===\n{TASK}\n");
 
-    let tasks = Queue::new();
+    let tasks = Werk::new();
     // Two iterations: turn 1 lets the model respond once (appending one entry
     // to `token_usage`); turn 2's proactive guard then trips because a
     // threshold of zero is always crossed.

@@ -9,7 +9,7 @@ use super::common;
 
 use agentwerk::schemas::Schema;
 use agentwerk::tools::{GlobTool, GrepTool, ListDirectoryTool, ReadFileTool};
-use agentwerk::{Agent, Policy, Queue, Task};
+use agentwerk::{Agent, Policy, Task, Werk};
 
 #[tokio::test]
 async fn traces_three_hop_call_path() -> std::result::Result<(), Box<dyn std::error::Error>> {
@@ -77,7 +77,7 @@ async fn traces_three_hop_call_path() -> std::result::Result<(), Box<dyn std::er
         "required": ["call_path"]
     }))?;
 
-    let tasks = Queue::new();
+    let tasks = Werk::new();
 
     tasks.set_policy(Policy {
         max_turns: Some(15),

@@ -7,7 +7,7 @@ use std::sync::Arc;
 use crate::agents::agent::Agent;
 use crate::agents::policy::{Policy, PolicyViolation};
 use crate::agents::query::Matcher;
-use crate::agents::tasks::{policy_violated, Queue, Reply, Status, Task};
+use crate::agents::tasks::{policy_violated, Reply, Status, Task, Werk};
 use crate::event::Event;
 use crate::prompts::directives::{NO_TOOL_CALLED, REPLY_REJECTED};
 use crate::providers::{AsUserMessage, Message, ProviderError};
@@ -16,49 +16,49 @@ use super::{CompactReason, POLL_INTERVAL};
 
 impl Agent {
     pub(super) async fn run(self) {
-        let queue = self
-            .queue
+        let werk = self
+            .werk
             .upgrade()
-            .expect("Agent's Queue was dropped before run() finished");
+            .expect("Agent's Werk was dropped before run() finished");
 
         loop {
-            if self.run_is_over(&queue) {
+            if self.run_is_over(&werk) {
                 return;
             }
-            let Some(task) = self.claim_task(&queue) else {
+            let Some(task) = self.claim_task(&werk) else {
                 tokio::time::sleep(POLL_INTERVAL).await;
                 continue;
             };
-            self.run_task(&queue, task).await;
+            self.run_task(&werk, task).await;
         }
     }
 
-    async fn run_task(&self, queue: &Arc<Queue>, task: Task) {
+    async fn run_task(&self, werk: &Arc<Werk>, task: Task) {
         let task_id = task.id.clone();
         let tools = self.get_tools(&task);
-        let policy = queue.get_policy();
+        let policy = werk.get_policy();
         let knowledge_index = self.get_knowledge().get_index();
         let system_prompt =
-            self.system_prompt(Some(&knowledge_index), &policy, &queue.stats, &task_id);
+            self.system_prompt(Some(&knowledge_index), &policy, &werk.stats, &task_id);
         let mut consecutive_schema_failures = 0;
 
-        self.emit_event(queue, &task_id, Event::new(Event::TURN_STARTED));
+        self.emit_event(werk, &task_id, Event::new(Event::TURN_STARTED));
         if task.replies.is_empty() {
-            queue.append_reply(&task_id, Reply::system_text(system_prompt.clone()));
+            werk.append_reply(&task_id, Reply::system_text(system_prompt.clone()));
             let Message::User {
                 content: task_blocks,
             } = task.as_user_message()
             else {
                 unreachable!("Task::as_user_message returns Message::User");
             };
-            queue.append_reply(&task_id, Reply::user(&task_blocks, &HashMap::new()));
+            werk.append_reply(&task_id, Reply::user(&task_blocks, &HashMap::new()));
         }
 
         loop {
-            if !queue.run.is_working() || policy_violated(&policy, &queue.stats).is_some() {
+            if !werk.run.is_working() || policy_violated(&policy, &werk.stats).is_some() {
                 break;
             }
-            let Some(task) = queue.get_task(&task_id) else {
+            let Some(task) = werk.get_task(&task_id) else {
                 break;
             };
             if task.is_cancelled() || !task.is_pending() {
@@ -67,7 +67,7 @@ impl Agent {
             if !task.is_waiting_for_response() {
                 if self.is_interactive()
                     || !self.silence_retry(
-                        queue,
+                        werk,
                         &task_id,
                         &policy,
                         &mut consecutive_schema_failures,
@@ -77,22 +77,20 @@ impl Agent {
                 }
                 continue;
             }
-            if self.needs_compaction(queue, &task_id, &task, &system_prompt, &policy, &tools)
-                && !self
-                    .compact(queue, &task_id, CompactReason::Proactive)
-                    .await
+            if self.needs_compaction(werk, &task_id, &task, &system_prompt, &policy, &tools)
+                && !self.compact(werk, &task_id, CompactReason::Proactive).await
             {
                 break;
             }
 
             let calls = match self
-                .request(queue, &task_id, &system_prompt, &policy, &tools)
+                .request(werk, &task_id, &system_prompt, &policy, &tools)
                 .await
             {
                 Ok(Some(calls)) => calls,
                 Ok(None) => break,
                 Err(ProviderError::ContextWindowExceeded { .. }) => {
-                    if self.compact(queue, &task_id, CompactReason::Reactive).await {
+                    if self.compact(werk, &task_id, CompactReason::Reactive).await {
                         continue;
                     }
                     break;
@@ -104,7 +102,7 @@ impl Agent {
             }
             if !self
                 .call_tools(
-                    queue,
+                    werk,
                     &task_id,
                     &tools,
                     calls,
@@ -118,13 +116,13 @@ impl Agent {
         }
     }
 
-    fn run_is_over(&self, queue: &Queue) -> bool {
-        if !queue.run.is_working() {
+    fn run_is_over(&self, werk: &Werk) -> bool {
+        if !werk.run.is_working() {
             return true;
         }
-        let policy = queue.get_policy();
-        if let Some((violation, limit)) = policy_violated(&policy, &queue.stats) {
-            queue.emit_event(
+        let policy = werk.get_policy();
+        if let Some((violation, limit)) = policy_violated(&policy, &werk.stats) {
+            werk.emit_event(
                 Event::new(Event::POLICY_VIOLATED)
                     .data(serde_json::json!({ "policy": violation, "limit": limit }))
                     .agent_id(self.get_id()),
@@ -134,7 +132,7 @@ impl Agent {
         false
     }
 
-    fn claim_task(&self, queue: &Arc<Queue>) -> Option<Task> {
+    fn claim_task(&self, werk: &Arc<Werk>) -> Option<Task> {
         let label = self.label.clone();
         let claimable = (move |task: &Task| {
             task.status == Status::Todo
@@ -150,23 +148,23 @@ impl Agent {
                 && (task.is_waiting_for_response() || !interactive)
                 && !task.is_cancelled()
         };
-        let task_id = queue
+        let task_id = werk
             .claim(&claimable, self.get_id())
-            .or_else(|| queue.find_task(resumable).map(|task| task.id.clone()))?;
-        queue.get_task(&task_id)
+            .or_else(|| werk.find_task(resumable).map(|task| task.id.clone()))?;
+        werk.get_task(&task_id)
     }
 
-    pub(super) fn emit_event(&self, queue: &Queue, task_id: &str, event: Event) -> Event {
-        queue.emit_event(event.task_id(task_id).agent_id(self.get_id()))
+    pub(super) fn emit_event(&self, werk: &Werk, task_id: &str, event: Event) -> Event {
+        werk.emit_event(event.task_id(task_id).agent_id(self.get_id()))
     }
 
-    pub(super) fn fail_task(&self, queue: &Queue, task_id: &str) {
-        let _ = queue.set_failed_by(task_id, self.get_id());
+    pub(super) fn fail_task(&self, werk: &Werk, task_id: &str) {
+        let _ = werk.set_failed_by(task_id, self.get_id());
     }
 
     fn silence_retry(
         &self,
-        queue: &Queue,
+        werk: &Werk,
         task_id: &str,
         policy: &Policy,
         consecutive_schema_failures: &mut u32,
@@ -175,20 +173,20 @@ impl Agent {
         *consecutive_schema_failures = consecutive_schema_failures.saturating_add(1);
         if *consecutive_schema_failures >= max {
             self.emit_event(
-                queue,
+                werk,
                 task_id,
                 Event::new(Event::POLICY_VIOLATED).data(serde_json::json!({
                     "policy": PolicyViolation::MaxSchemaRetries,
                     "limit": u64::from(max),
                 })),
             );
-            self.fail_task(queue, task_id);
+            self.fail_task(werk, task_id);
             return false;
         }
         let detail = self.get_directives().render(NO_TOOL_CALLED, &[]);
         let attempt = *consecutive_schema_failures;
         self.emit_event(
-            queue,
+            werk,
             task_id,
             Event::new(Event::SCHEMA_RETRIED).data(serde_json::json!({
                 "attempt": attempt,
@@ -207,7 +205,7 @@ impl Agent {
                 ("agent", self.get_id()),
             ],
         );
-        queue.append_reply(task_id, Reply::user_text(directive));
+        werk.append_reply(task_id, Reply::user_text(directive));
         true
     }
 }
@@ -222,7 +220,7 @@ mod tests {
 
     use crate::agents::agent::Agent;
     use crate::agents::r#loop::test_util::*;
-    use crate::agents::tasks::{Author, Queue, Status, Task};
+    use crate::agents::tasks::{Author, Status, Task, Werk};
     use crate::agents::Knowledge;
     use crate::tools::{EventTool, FinishTool, TaskTool};
 
@@ -235,7 +233,7 @@ mod tests {
             Ok(write_result_response("a-done")),
             Ok(write_result_response("b-done")),
         ]);
-        let tasks = Queue::new();
+        let tasks = Werk::new();
         tasks
             .set_dir(results_dir.path().to_path_buf())
             .set_policy(Policy {
@@ -273,7 +271,7 @@ mod tests {
             Ok(text_response("just thinking, no tool call")),
             Ok(write_result_response("done")),
         ]);
-        let tasks = Queue::new();
+        let tasks = Werk::new();
         tasks
             .set_dir(results_dir.path().to_path_buf())
             .set_policy(Policy {
@@ -314,7 +312,7 @@ mod tests {
             Ok(text_response("just thinking, no tool call")),
             Ok(write_result_response("done")),
         ]);
-        let tasks = Queue::new();
+        let tasks = Werk::new();
         tasks
             .set_dir(results_dir.path().to_path_buf())
             .set_policy(Policy {
@@ -355,7 +353,7 @@ mod tests {
             Ok(text_response("just thinking, no tool call")),
             Ok(write_result_response("worker-done")),
         ]);
-        let tasks = Queue::new();
+        let tasks = Werk::new();
         tasks
             .set_dir(results_dir.path().to_path_buf())
             .set_policy(Policy {
@@ -411,7 +409,7 @@ mod tests {
             Ok(text_response("just thinking, no tool call")),
             Ok(write_result_response("done")),
         ]);
-        let tasks = Queue::new();
+        let tasks = Werk::new();
         tasks
             .set_dir(results_dir.path().to_path_buf())
             .set_policy(Policy {
@@ -444,13 +442,13 @@ mod tests {
     async fn finish_waits_through_handover_chain() {
         // alice hands t-1 off to bob. The handover inserts the child
         // before finishing the parent, so finish() must not observe an
-        // empty queue in between and drain the chain early.
+        // empty Werk in between and drain the chain early.
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let provider = MockProvider::with_results(vec![
             Ok(write_result_response("alice-done")),
             Ok(write_result_response("bob-done")),
         ]);
-        let tasks = Queue::new();
+        let tasks = Werk::new();
         tasks
             .set_dir(results_dir.path().to_path_buf())
             .set_policy(Policy {
@@ -497,7 +495,7 @@ mod tests {
             Ok(write_result_response("first-done")),
             Ok(write_result_response("follow-up-done")),
         ]);
-        let tasks = Queue::new();
+        let tasks = Werk::new();
         tasks
             .set_dir(results_dir.path().to_path_buf())
             .set_policy(Policy {
@@ -505,9 +503,9 @@ mod tests {
                 request_retry_delay: Duration::from_millis(1),
                 ..Default::default()
             });
-        tasks.on_result(|queue, done, _| {
+        tasks.on_result(|werk, done, _| {
             if done.id == "t-1" {
-                queue.add_task(Task::new("follow up").label("alice"));
+                werk.add_task(Task::new("follow up").label("alice"));
             }
         });
         tasks.add_agent(
@@ -542,7 +540,7 @@ mod tests {
             Ok(write_result_response("clean")),
             Ok(write_result_response("report-done")),
         ]);
-        let tasks = Queue::new();
+        let tasks = Werk::new();
         tasks
             .set_dir(results_dir.path().to_path_buf())
             .set_policy(Policy {
@@ -555,16 +553,16 @@ mod tests {
         // takes the flag and the other returns: without it the report is filed
         // twice.
         let filed = Arc::new(AtomicBool::new(false));
-        tasks.on_result(move |queue, done, _| {
+        tasks.on_result(move |werk, done, _| {
             if done.get_label() != Some("scan") {
                 return;
             }
-            let scans = queue.find_results("label = scan AND status = Finished");
+            let scans = werk.find_results("label = scan AND status = Finished");
             if scans.len() < 2 || filed.swap(true, Ordering::SeqCst) {
                 return;
             }
             let verdicts: Vec<String> = scans.iter().map(|scan| scan.to_string()).collect();
-            queue.add_task(Task::labeled(
+            werk.add_task(Task::labeled(
                 "report",
                 format!("Write the report from {}.", verdicts.join(" and ")),
             ));
@@ -606,7 +604,7 @@ mod tests {
 
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let provider = MockProvider::with_results(vec![Ok(write_result_response("done"))]);
-        let tasks = Queue::new();
+        let tasks = Werk::new();
         tasks
             .set_dir(results_dir.path().to_path_buf())
             .set_policy(Policy {
@@ -655,7 +653,7 @@ mod tests {
             usage: crate::providers::TokenUsage::default(),
             model: "mock".into(),
         })]);
-        let tasks = Queue::new();
+        let tasks = Werk::new();
         tasks
             .set_dir(results_dir.path().to_path_buf())
             .set_policy(Policy {
@@ -712,7 +710,7 @@ mod tests {
         // task, so `requests == 1` and `InProgress` prove the gate held.
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let provider = MockProvider::with_results(vec![Ok(text_response("hi"))]);
-        let tasks = Queue::new();
+        let tasks = Werk::new();
         tasks
             .set_dir(results_dir.path().to_path_buf())
             .set_policy(Policy {
@@ -722,8 +720,8 @@ mod tests {
             });
         // Unfiltered on purpose: it also fires for the run-level events, whose
         // empty ID names no task.
-        tasks.on_event(|queue, event| {
-            queue.edit_replies(&event.task_id, |_replies| {});
+        tasks.on_event(|werk, event| {
+            werk.edit_replies(&event.task_id, |_replies| {});
         });
         tasks.add_agent(interactive_chatbot(&provider));
         tasks.add_task("hello");
@@ -765,7 +763,7 @@ mod tests {
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let provider =
             MockProvider::with_results(vec![Ok(text_response("hi")), Ok(text_response("and now"))]);
-        let tasks = Queue::new();
+        let tasks = Werk::new();
         tasks
             .set_dir(results_dir.path().to_path_buf())
             .set_policy(Policy {
@@ -833,7 +831,7 @@ mod tests {
     async fn finish_returns_when_an_interactive_agent_pauses_for_input() {
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let provider = MockProvider::with_results(vec![Ok(text_response("hi"))]);
-        let tasks = Queue::new();
+        let tasks = Werk::new();
         tasks
             .set_dir(results_dir.path().to_path_buf())
             .set_policy(Policy {
@@ -868,7 +866,7 @@ mod tests {
     async fn paused_interactive_task_emits_turn_started_exactly_once() {
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let provider = MockProvider::with_results(vec![Ok(text_response("hi"))]);
-        let tasks = Queue::new();
+        let tasks = Werk::new();
         tasks
             .set_dir(results_dir.path().to_path_buf())
             .set_policy(Policy {
@@ -903,7 +901,7 @@ mod tests {
             Ok(text_response("hi")),
             Ok(text_response("hi again")),
         ]);
-        let tasks = Queue::new();
+        let tasks = Werk::new();
         tasks
             .set_dir(results_dir.path().to_path_buf())
             .set_policy(Policy {
@@ -969,7 +967,7 @@ mod tests {
     async fn loop_fails_task_when_silence_exceeds_schema_retry_budget() {
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let provider = MockProvider::with_results(vec![Ok(text_response("hi"))]);
-        let tasks = Queue::new();
+        let tasks = Werk::new();
         tasks
             .set_dir(results_dir.path().to_path_buf())
             .set_policy(Policy {
@@ -1013,7 +1011,7 @@ mod tests {
             Ok(text_response("hi")),
             Ok(write_result_response("done")),
         ]);
-        let tasks = Queue::new();
+        let tasks = Werk::new();
         tasks
             .set_dir(results_dir.path().to_path_buf())
             .set_policy(Policy {
@@ -1045,7 +1043,7 @@ mod tests {
             Ok(text_response("hi")),
             Ok(write_result_response("done")),
         ]);
-        let tasks = Queue::new();
+        let tasks = Werk::new();
         tasks
             .set_dir(results_dir.path().to_path_buf())
             .set_policy(Policy {
@@ -1087,7 +1085,7 @@ mod tests {
     #[tokio::test]
     async fn cancel_stops_a_running_workshop() {
         let results_dir = crate::test_util::TempDir::new().unwrap();
-        let tasks = Queue::new();
+        let tasks = Werk::new();
         tasks
             .set_dir(results_dir.path().to_path_buf())
             .set_policy(Policy {
@@ -1107,7 +1105,7 @@ mod tests {
     #[tokio::test]
     async fn cancel_keeps_the_matching_pool_off_the_queue_while_others_run() {
         let results_dir = crate::test_util::TempDir::new().unwrap();
-        let tasks = Queue::new();
+        let tasks = Werk::new();
         tasks
             .set_dir(results_dir.path().to_path_buf())
             .set_policy(Policy {
@@ -1181,7 +1179,7 @@ mod tests {
             Ok(write_result_response("first")),
             Ok(write_result_response("second")),
         ]);
-        let tasks = Queue::new();
+        let tasks = Werk::new();
         tasks
             .set_dir(results_dir.path().to_path_buf())
             .set_policy(Policy {
@@ -1209,10 +1207,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn agent_finish_forwards_to_bound_queue() {
+    async fn agent_finish_forwards_to_bound_werk() {
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let provider = MockProvider::with_results(vec![Ok(write_result_response("forwarded"))]);
-        let tasks = Queue::new();
+        let tasks = Werk::new();
         tasks
             .set_dir(results_dir.path().to_path_buf())
             .set_policy(Policy {
@@ -1229,12 +1227,12 @@ mod tests {
         );
 
         agent.add_task("hello");
-        let queue = agent.start();
-        tokio::time::timeout(Duration::from_secs(5), queue.finish_all_tasks())
+        let werk = agent.start();
+        tokio::time::timeout(Duration::from_secs(5), werk.finish_all_tasks())
             .await
             .expect("the run did not end within 5s");
         assert_eq!(
-            queue.get_results().pop(),
+            werk.get_results().pop(),
             Some(serde_json::json!("forwarded"))
         );
     }
@@ -1263,7 +1261,7 @@ mod tests {
             Ok(write_result_response("ok")),
         ]);
         let results_dir = crate::test_util::TempDir::new().unwrap();
-        let tasks = Queue::new();
+        let tasks = Werk::new();
         tasks
             .set_dir(results_dir.path().to_path_buf())
             .set_policy(Policy {
@@ -1305,7 +1303,7 @@ mod tests {
         let knowledge_dir = crate::test_util::TempDir::new().unwrap();
         let store = Knowledge::load(knowledge_dir.path()).unwrap();
 
-        let tasks = Queue::new();
+        let tasks = Werk::new();
         tasks
             .set_dir(results_dir.path().to_path_buf())
             .set_policy(Policy {
@@ -1358,7 +1356,7 @@ mod tests {
         let knowledge_dir = crate::test_util::TempDir::new().unwrap();
         let store = Knowledge::load(knowledge_dir.path()).unwrap();
 
-        let tasks = Queue::new();
+        let tasks = Werk::new();
         tasks
             .set_dir(results_dir.path().to_path_buf())
             .set_policy(Policy {
@@ -1402,7 +1400,7 @@ mod tests {
         let knowledge_dir = crate::test_util::TempDir::new().unwrap();
         let store = Knowledge::load(knowledge_dir.path()).unwrap();
 
-        let tasks = Queue::new();
+        let tasks = Werk::new();
         tasks
             .set_dir(results_dir.path().to_path_buf())
             .set_policy(Policy {
@@ -1459,7 +1457,7 @@ mod tests {
         }))
         .unwrap();
 
-        let tasks = Queue::new();
+        let tasks = Werk::new();
         tasks
             .set_dir(results_dir.path().to_path_buf())
             .set_policy(Policy {
@@ -1489,9 +1487,9 @@ mod tests {
     #[tokio::test]
     async fn a_claimed_task_binds_its_schema_to_the_finish_tool() {
         let results_dir = crate::test_util::TempDir::new().unwrap();
-        let tasks = Queue::new();
+        let tasks = Werk::new();
         tasks.set_dir(results_dir.path().to_path_buf());
-        // Bound rather than cloned into the queue: `finish` is registered on
+        // Bound rather than cloned into the Werk: `finish` is registered on
         // the agent that joins one, and this claims through that agent.
         let mut agent = Agent::new()
             .provider(MockProvider::with_results(vec![]))
@@ -1521,7 +1519,7 @@ mod tests {
     #[tokio::test]
     async fn a_claimed_task_binds_its_schema_inside_the_event_tool() {
         let results_dir = crate::test_util::TempDir::new().unwrap();
-        let tasks = Queue::new();
+        let tasks = Werk::new();
         tasks.set_dir(results_dir.path().to_path_buf());
         let mut agent = Agent::new()
             .provider(MockProvider::with_results(vec![]))
@@ -1555,7 +1553,7 @@ mod tests {
     #[tokio::test]
     async fn a_claimed_task_offers_an_interactive_agent_no_finish_tool() {
         let results_dir = crate::test_util::TempDir::new().unwrap();
-        let tasks = Queue::new();
+        let tasks = Werk::new();
         tasks.set_dir(results_dir.path().to_path_buf());
         let agent = interactive_chatbot(&MockProvider::with_results(vec![]));
         tasks.add_agent(agent.clone());
@@ -1569,7 +1567,7 @@ mod tests {
     #[tokio::test]
     async fn an_agent_leaves_a_task_its_label_mate_started_alone() {
         let results_dir = crate::test_util::TempDir::new().unwrap();
-        let tasks = Queue::new();
+        let tasks = Werk::new();
         tasks.set_dir(results_dir.path().to_path_buf());
         let mut first = Agent::new()
             .label("resume_pool")
@@ -1616,7 +1614,7 @@ mod tests {
         let knowledge_dir = crate::test_util::TempDir::new().unwrap();
         let store = Knowledge::load(knowledge_dir.path()).unwrap();
 
-        let tasks = Queue::new();
+        let tasks = Werk::new();
         tasks
             .set_dir(results_dir.path().to_path_buf())
             .set_policy(Policy {

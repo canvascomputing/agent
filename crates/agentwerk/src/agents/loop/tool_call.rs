@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use crate::agents::agent::Agent;
 use crate::agents::policy::Policy;
-use crate::agents::tasks::{Queue, Reply};
+use crate::agents::tasks::{Reply, Werk};
 use crate::agents::PolicyViolation;
 use crate::event::Event;
 use crate::prompts::directives::{NO_TOOLS_REGISTERED, TOOL_NOT_FOUND, TOOL_PANICKED};
@@ -17,7 +17,7 @@ const MAX_CONCURRENT_CALLS: usize = 10;
 impl Agent {
     pub(super) async fn call_tools(
         &self,
-        queue: &Arc<Queue>,
+        werk: &Arc<Werk>,
         task_id: &str,
         tools: &[Tool],
         mut calls: Vec<ContentBlock>,
@@ -36,7 +36,7 @@ impl Agent {
             let registered = tool.get_name().to_string();
             if registered != *name {
                 self.emit_event(
-                    queue,
+                    werk,
                     task_id,
                     Event::new(Event::TOOL_CALL_REPAIRED).data(serde_json::json!({
                         "tool_name": registered,
@@ -54,7 +54,7 @@ impl Agent {
                 continue;
             };
             self.emit_event(
-                queue,
+                werk,
                 task_id,
                 Event::new(Event::TOOL_CALL_STARTED).data(serde_json::json!({
                     "tool_name": name,
@@ -65,8 +65,8 @@ impl Agent {
         }
 
         let tool_context = ToolContext::new(self.get_dir())
-            .run(Arc::clone(&queue.run))
-            .queue(Arc::clone(queue))
+            .run(Arc::clone(&werk.run))
+            .werk(Arc::clone(werk))
             .agent_id(self.get_id().to_string())
             .task_id(task_id.to_string())
             .directives(self.get_directives());
@@ -186,21 +186,21 @@ impl Agent {
                 "message": message,
             })));
         }
-        queue.append_reply(task_id, Reply::user(&blocks, &offloaded));
+        werk.append_reply(task_id, Reply::user(&blocks, &offloaded));
         for event in events {
-            self.emit_event(queue, task_id, event);
+            self.emit_event(werk, task_id, event);
         }
 
         if *consecutive_schema_failures >= max_schema_retries {
             self.emit_event(
-                queue,
+                werk,
                 task_id,
                 Event::new(Event::POLICY_VIOLATED).data(serde_json::json!({
                     "policy": PolicyViolation::MaxSchemaRetries,
                     "limit": u64::from(max_schema_retries),
                 })),
             );
-            self.fail_task(queue, task_id);
+            self.fail_task(werk, task_id);
             return false;
         }
         true
@@ -267,7 +267,7 @@ mod tests {
     use crate::agents::agent::Agent;
     use crate::agents::policy::Policy;
     use crate::agents::r#loop::test_util::*;
-    use crate::agents::tasks::{Queue, Status, Task};
+    use crate::agents::tasks::{Status, Task, Werk};
     use crate::event::Event;
     use crate::schemas::Schema;
 
@@ -415,7 +415,7 @@ mod tests {
             Ok(write_result_response("not json")),
             Ok(write_result_value(serde_json::json!({"partial_sum": 1}))),
         ]);
-        let tasks = Queue::new();
+        let tasks = Werk::new();
         tasks
             .set_dir(results_dir.path().to_path_buf())
             .set_policy(Policy {
@@ -581,7 +581,7 @@ mod tests {
         };
 
         let results_dir = crate::test_util::TempDir::new().unwrap();
-        let tasks = Queue::new();
+        let tasks = Werk::new();
         tasks
             .set_dir(results_dir.path().to_path_buf())
             .set_policy(Policy {
@@ -640,7 +640,7 @@ mod tests {
             .concurrent(true)
             .handler(|_: Value| async { Event::success("ok") });
         let results_dir = crate::test_util::TempDir::new().unwrap();
-        let tasks = Queue::new();
+        let tasks = Werk::new();
         tasks
             .set_dir(results_dir.path().to_path_buf())
             .set_policy(Policy {
@@ -774,7 +774,7 @@ mod tests {
         use std::time::Duration;
 
         use crate::agents::agent::Agent;
-        use crate::agents::tasks::Queue;
+        use crate::agents::tasks::Werk;
         use crate::tools::Tool;
 
         let provider = MockProvider::with_results(vec![
@@ -786,7 +786,7 @@ mod tests {
             .handler(|_: Value| async move { Event::error("boom") });
 
         let results_dir = crate::test_util::TempDir::new().unwrap();
-        let tasks = Queue::new();
+        let tasks = Werk::new();
         tasks
             .set_dir(results_dir.path().to_path_buf())
             .set_policy(Policy {
@@ -827,7 +827,7 @@ mod tests {
         use std::time::Duration;
 
         use crate::agents::agent::Agent;
-        use crate::agents::tasks::{Queue, ReplyContent};
+        use crate::agents::tasks::{ReplyContent, Werk};
         use crate::tools::Tool;
 
         let provider = MockProvider::with_results(vec![
@@ -839,7 +839,7 @@ mod tests {
             .handler(|_: Value| async move { Event::error("boom") });
 
         let results_dir = crate::test_util::TempDir::new().unwrap();
-        let tasks = Queue::new();
+        let tasks = Werk::new();
         tasks
             .set_dir(results_dir.path().to_path_buf())
             .set_policy(Policy {
@@ -851,11 +851,11 @@ mod tests {
         // `None` until the handler runs, so the assertion also proves it did.
         let stored: Arc<Mutex<Option<bool>>> = Arc::new(Mutex::new(None));
         let seen = Arc::clone(&stored);
-        tasks.on_event(move |queue, event| {
+        tasks.on_event(move |werk, event| {
             if event.get_name() != Event::TOOL_CALL_FAILED {
                 return;
             }
-            let task = queue.get_task(&event.task_id).unwrap();
+            let task = werk.get_task(&event.task_id).unwrap();
             let landed = task.replies.iter().any(|reply| {
                 reply.content.iter().any(|block| {
                     matches!(
@@ -887,7 +887,7 @@ mod tests {
         use std::time::Duration;
 
         use crate::agents::agent::Agent;
-        use crate::agents::tasks::Queue;
+        use crate::agents::tasks::Werk;
         use crate::tools::Tool;
 
         // boom, ping, boom, finish: a budget of two would trip on the second
@@ -906,7 +906,7 @@ mod tests {
             .handler(|_: Value| async move { Event::success("pong") });
 
         let results_dir = crate::test_util::TempDir::new().unwrap();
-        let tasks = Queue::new();
+        let tasks = Werk::new();
         tasks
             .set_dir(results_dir.path().to_path_buf())
             .set_policy(Policy {
@@ -939,7 +939,7 @@ mod tests {
         use tokio::sync::Notify;
 
         use crate::agents::agent::Agent;
-        use crate::agents::tasks::Queue;
+        use crate::agents::tasks::Werk;
         use crate::tools::{TaskTool, Tool};
 
         let tool_started = Arc::new(Notify::new());
@@ -965,7 +965,7 @@ mod tests {
             });
 
         let results_dir = crate::test_util::TempDir::new().unwrap();
-        let tasks = Queue::new();
+        let tasks = Werk::new();
         tasks
             .set_dir(results_dir.path().to_path_buf())
             .set_policy(Policy {
@@ -1026,7 +1026,7 @@ mod tests {
         };
 
         let results_dir = crate::test_util::TempDir::new().unwrap();
-        let tasks = Queue::new();
+        let tasks = Werk::new();
         tasks
             .set_dir(results_dir.path().to_path_buf())
             .set_policy(Policy {
@@ -1139,7 +1139,7 @@ mod tests {
         ]);
 
         let results_dir = crate::test_util::TempDir::new().unwrap();
-        let tasks = Queue::new();
+        let tasks = Werk::new();
         tasks
             .set_dir(results_dir.path().to_path_buf())
             .set_policy(Policy {

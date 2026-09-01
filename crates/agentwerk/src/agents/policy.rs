@@ -36,7 +36,7 @@ impl std::fmt::Display for PolicyViolation {
 }
 
 /// A `Policy` limits the turns, tokens, and time a run may spend, and allows
-/// configuring retries and compaction. Set it with `Queue::set_policy`,
+/// configuring retries and compaction. Set it with `Werk::set_policy`,
 /// building it from the fields you care about:
 /// `Policy { max_turns: Some(40), ..Default::default() }`.
 ///

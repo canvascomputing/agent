@@ -10,10 +10,10 @@ use serde_json::{Map, Value};
 /// optional and independent.
 ///
 /// ```no_run
-/// use agentwerk::{Event, Queue};
+/// use agentwerk::{Event, Werk};
 /// use serde_json::json;
 ///
-/// let tasks = Queue::new();
+/// let tasks = Werk::new();
 /// tasks.emit_event(
 ///     Event::new("document_indexed")
 ///         .data(json!({ "documents": 42 }))
@@ -138,7 +138,7 @@ impl Event {
 
     /// Create a task-finished event with no result payload.
     ///
-    /// Events emitted by a queue transition carry the stored result under
+    /// Events emitted by a Werk transition carry the stored result under
     /// `data.result` when the task has one.
     pub fn task_finished() -> Self {
         Self::new(Self::TASK_FINISHED)

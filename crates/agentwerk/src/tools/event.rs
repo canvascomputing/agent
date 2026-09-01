@@ -3,10 +3,10 @@
 
 use serde_json::Value;
 
-use crate::agents::tasks::{Queue, Status, Task, TaskError};
+use crate::agents::tasks::{Status, Task, TaskError, Werk};
 use crate::event::Event;
 use crate::prompts::directives::{
-    DirectiveStore, HANDOVER_RESULT_MISSING, HANDOVER_SCHEMA_INVALID, QUEUE_UNAVAILABLE,
+    DirectiveStore, HANDOVER_RESULT_MISSING, HANDOVER_SCHEMA_INVALID, WERK_UNAVAILABLE,
 };
 use crate::schemas::Schema;
 
@@ -97,8 +97,8 @@ pub(super) fn dispatch(
     handover: Option<&Task>,
     tool_name: &str,
 ) -> Result<Event, Event> {
-    let queue = ctx.queue.clone().ok_or_else(|| {
-        Event::error(ctx.directives.render(QUEUE_UNAVAILABLE, &[])).directive(QUEUE_UNAVAILABLE)
+    let werk = ctx.werk.clone().ok_or_else(|| {
+        Event::error(ctx.directives.render(WERK_UNAVAILABLE, &[])).directive(WERK_UNAVAILABLE)
     })?;
     let name = input["name"].as_str().unwrap_or_default();
     let data = input
@@ -107,12 +107,12 @@ pub(super) fn dispatch(
         .unwrap_or_else(|| serde_json::json!({}));
 
     if name == Event::TASK_FINISHED {
-        return finish(&queue, &data, ctx, schema, handover, tool_name);
+        return finish(&werk, &data, ctx, schema, handover, tool_name);
     }
 
     let task_id = ctx.task_id.as_deref().unwrap_or_default();
     let agent_id = ctx.agent_id.as_deref().unwrap_or_default();
-    queue.emit_event(
+    werk.emit_event(
         Event::new(name)
             .data(data)
             .task_id(task_id)
@@ -122,19 +122,19 @@ pub(super) fn dispatch(
 }
 
 fn finish(
-    queue: &Queue,
+    werk: &Werk,
     input: &Value,
     ctx: &ToolContext,
     schema: Option<&Schema>,
     configured_handover: Option<&Task>,
     tool_name: &str,
 ) -> Result<Event, Event> {
-    let parent_id = resolve_current_id(queue, ctx)?;
+    let parent_id = resolve_current_id(werk, ctx)?;
     let agent = ctx.agent_id.clone().unwrap_or_default();
     let result = input.get("result").cloned().unwrap_or(Value::Null);
 
     let handover = resolve_handover(input, configured_handover, &ctx.directives)?;
-    let parent = queue.get_task(&parent_id).ok_or_else(|| {
+    let parent = werk.get_task(&parent_id).ok_or_else(|| {
         let error = TaskError::TaskMissing {
             id: parent_id.clone(),
         };
@@ -148,21 +148,15 @@ fn finish(
         return Err(Event::error(task_error_message(error, &ctx.directives)));
     }
     let Some(mut child) = handover else {
-        let (_, repaired) = attach_result(
-            queue,
-            &parent_id,
-            result,
-            schema,
-            tool_name,
-            &ctx.directives,
-        )?;
-        mark_finished(queue, &parent_id, &agent, &ctx.directives)?;
+        let (_, repaired) =
+            attach_result(werk, &parent_id, result, schema, tool_name, &ctx.directives)?;
+        mark_finished(werk, &parent_id, &agent, &ctx.directives)?;
         let mut event = Event::success(format!("Task {parent_id} marked finished"));
         event.prepend_repairs(repaired);
         return Ok(event);
     };
     hand_over(
-        queue,
+        werk,
         &parent_id,
         &agent,
         result,
@@ -174,7 +168,7 @@ fn finish(
 }
 
 fn hand_over(
-    queue: &Queue,
+    werk: &Werk,
     parent_id: &str,
     agent: &str,
     result: Value,
@@ -190,18 +184,18 @@ fn hand_over(
     }
 
     let (validated_result, repaired) =
-        attach_result(queue, parent_id, result, schema, tool_name, directives)?;
+        attach_result(werk, parent_id, result, schema, tool_name, directives)?;
     let parent_result = match validated_result {
         Value::String(s) => s,
         other => serde_json::to_string(&other).unwrap_or_default(),
     };
-    let result_path = queue.result_path(parent_id).display().to_string();
+    let result_path = werk.result_path(parent_id).display().to_string();
     apply_handover_templates(&mut child.task, parent_id, &result_path, &parent_result);
     child.parent = Some(parent_id.to_string());
     let handover = child.label.clone().expect("resolved handover has a label");
 
-    let child_id = queue.insert(child.clone(), agent.to_string());
-    mark_finished(queue, parent_id, agent, directives)?;
+    let child_id = werk.insert(child.clone(), agent.to_string());
+    mark_finished(werk, parent_id, agent, directives)?;
 
     let mut event = Event::success(format!(
         "Task {parent_id} marked finished; handed off to {child_id} (handover: {handover})"
@@ -272,13 +266,12 @@ fn invalid_handover_schema(error: &str, directives: &DirectiveStore) -> Event {
 }
 
 fn mark_finished(
-    queue: &Queue,
+    werk: &Werk,
     id: &str,
     agent: &str,
     directives: &DirectiveStore,
 ) -> Result<(), Event> {
-    queue
-        .set_finished_by(id, agent)
+    werk.set_finished_by(id, agent)
         .map_err(|error| Event::error(task_error_message(error, directives)))
 }
 
@@ -336,14 +329,14 @@ fn substitute_handover_text(
 }
 
 fn attach_result(
-    queue: &Queue,
+    werk: &Werk,
     id: &str,
     result: Value,
     schema: Option<&Schema>,
     tool_name: &str,
     directives: &DirectiveStore,
 ) -> Result<(Value, Vec<String>), Event> {
-    let (validated, repaired) = queue.set_result(id, result).map_err(|violations| {
+    let (validated, repaired) = werk.set_result(id, result).map_err(|violations| {
         Event::tool_failure(
             crate::prompts::arguments_retry_detail(
                 tool_name,
@@ -366,28 +359,28 @@ mod tests {
     use crate::agents::tasks::Task;
     use crate::agents::Query;
 
-    fn claimed_task() -> (crate::test_util::TempDir, Arc<Queue>, String, ToolContext) {
+    fn claimed_task() -> (crate::test_util::TempDir, Arc<Werk>, String, ToolContext) {
         let dir = crate::test_util::TempDir::new().unwrap();
         let path = dir.path().to_path_buf();
-        let queue = Queue::new();
-        queue.set_dir(path.clone());
-        queue.insert(Task::new("work").label("alice"), "tester".into());
-        let id = queue
+        let werk = Werk::new();
+        werk.set_dir(path.clone());
+        werk.insert(Task::new("work").label("alice"), "tester".into());
+        let id = werk
             .claim(&Query::from("status = Todo"), "alice")
             .expect("claim must succeed");
         let ctx = ToolContext::new(path)
-            .queue(Arc::clone(&queue))
+            .werk(Arc::clone(&werk))
             .task_id(id.clone())
             .agent_id("alice".into());
-        (dir, queue, id, ctx)
+        (dir, werk, id, ctx)
     }
 
     #[tokio::test]
     async fn a_custom_event_reaches_observers_with_call_context() {
-        let (_dir, queue, id, ctx) = claimed_task();
+        let (_dir, werk, id, ctx) = claimed_task();
         let seen = Arc::new(Mutex::new(None));
         let captured = Arc::clone(&seen);
-        queue.on_event(move |_, event| {
+        werk.on_event(move |_, event| {
             if event.get_name() == "candidate_found" {
                 *captured.lock().unwrap() = Some(event.clone());
             }
@@ -409,18 +402,18 @@ mod tests {
         assert_eq!(event.get_agent_id(), "alice");
         assert_eq!(event.get_label(), Some("alice"));
         assert_eq!(event.get_data()["line"], 42);
-        assert_eq!(queue.stats.event_count("candidate_found"), 1);
-        let persisted = queue
+        assert_eq!(werk.stats.event_count("candidate_found"), 1);
+        let persisted = werk
             .find_event(r#"event = "candidate_found""#)
             .expect("event persisted to the session log");
         assert_eq!(persisted.get_task_id(), id);
         assert_eq!(persisted.get_data()["path"], "src/auth.rs");
-        assert!(queue.get_task(&id).unwrap().is_in_progress());
+        assert!(werk.get_task(&id).unwrap().is_in_progress());
     }
 
     #[tokio::test]
     async fn a_nonterminal_builtin_event_does_not_change_task_state() {
-        let (_dir, queue, id, ctx) = claimed_task();
+        let (_dir, werk, id, ctx) = claimed_task();
 
         Tool::from(EventTool)
             .call(
@@ -429,16 +422,16 @@ mod tests {
             )
             .await;
 
-        assert!(queue.get_task(&id).unwrap().is_in_progress());
+        assert!(werk.get_task(&id).unwrap().is_in_progress());
         assert_eq!(
-            queue.find_event(Event::TASK_FAILED).unwrap().get_data()["reason"],
+            werk.find_event(Event::TASK_FAILED).unwrap().get_data()["reason"],
             "reported"
         );
     }
 
     #[tokio::test]
     async fn task_finished_records_the_result_and_transitions_once() {
-        let (_dir, queue, id, ctx) = claimed_task();
+        let (_dir, werk, id, ctx) = claimed_task();
         let tool = Tool::from(EventTool);
 
         let outcome = tool
@@ -452,7 +445,7 @@ mod tests {
             .await;
 
         assert_eq!(outcome.get_name(), Event::TOOL_CALL_FINISHED);
-        let task = queue.get_task(&id).unwrap();
+        let task = werk.get_task(&id).unwrap();
         assert!(task.is_finished());
         assert_eq!(
             task.get_result(),
@@ -471,15 +464,15 @@ mod tests {
 
         assert_eq!(second.get_name(), Event::TOOL_CALL_FINISHED);
         assert_eq!(
-            queue.get_task(&id).unwrap().get_result(),
+            werk.get_task(&id).unwrap().get_result(),
             Some(&serde_json::json!({ "verdict": "safe" }))
         );
-        assert_eq!(queue.find_events(Event::TASK_FINISHED).len(), 1);
+        assert_eq!(werk.find_events(Event::TASK_FINISHED).len(), 1);
     }
 
     #[tokio::test]
     async fn task_finished_hands_work_over_through_its_data() {
-        let (_dir, queue, id, ctx) = claimed_task();
+        let (_dir, werk, id, ctx) = claimed_task();
 
         let outcome = Tool::from(EventTool)
             .call(
@@ -498,20 +491,20 @@ mod tests {
             .await;
 
         assert_eq!(outcome.get_name(), Event::TOOL_CALL_FINISHED);
-        assert!(queue.get_task(&id).unwrap().is_finished());
-        let child = queue.get_task("t-2").expect("handover child created");
+        assert!(werk.get_task(&id).unwrap().is_finished());
+        let child = werk.get_task("t-2").expect("handover child created");
         assert_eq!(child.get_parent(), Some(id.as_str()));
         assert_eq!(child.get_label(), Some("review"));
         assert!(child
             .get_task()
             .as_str()
             .unwrap_or_default()
-            .contains(&queue.result_path(&id).display().to_string()));
+            .contains(&werk.result_path(&id).display().to_string()));
     }
 
     #[tokio::test]
     async fn task_finished_uses_the_configured_handover_from_result_only() {
-        let (_dir, queue, id, ctx) = claimed_task();
+        let (_dir, werk, id, ctx) = claimed_task();
         let child_schema = Schema::new(serde_json::json!({
             "type": "object",
             "properties": {"verdict": {"type": "string"}}
@@ -536,8 +529,8 @@ mod tests {
             .await;
 
         assert_eq!(outcome.get_name(), Event::TOOL_CALL_FINISHED);
-        assert!(queue.get_task(&id).unwrap().is_finished());
-        let child = queue.get_task("t-2").expect("handover child created");
+        assert!(werk.get_task(&id).unwrap().is_finished());
+        let child = werk.get_task("t-2").expect("handover child created");
         assert_eq!(child.get_label(), Some("review"));
         assert_eq!(child.get_task()["source"], id);
         assert!(child.get_schema().is_some());
@@ -546,23 +539,23 @@ mod tests {
     #[tokio::test]
     async fn task_finished_repairs_its_bound_result_schema() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let queue = Queue::new();
-        queue.set_dir(dir.path().to_path_buf());
+        let werk = Werk::new();
+        werk.set_dir(dir.path().to_path_buf());
         let schema = Schema::new(serde_json::json!({
             "type": "object",
             "properties": { "line": { "type": "integer" } },
             "required": ["line"]
         }))
         .unwrap();
-        queue.insert(
+        werk.insert(
             Task::new("work").schema(schema.clone()).label("alice"),
             "tester".into(),
         );
-        let id = queue
+        let id = werk
             .claim(&Query::from("status = Todo"), "alice")
             .expect("claim must succeed");
         let ctx = ToolContext::new(dir.path().to_path_buf())
-            .queue(Arc::clone(&queue))
+            .werk(Arc::clone(&werk))
             .task_id(id.clone())
             .agent_id("alice".into());
         let tool = EventTool::from_schema(Some(schema), None);
@@ -578,7 +571,7 @@ mod tests {
             .await;
 
         assert_eq!(rejected.get_name(), Event::TOOL_CALL_FAILED);
-        assert!(queue.get_task(&id).unwrap().is_in_progress());
+        assert!(werk.get_task(&id).unwrap().is_in_progress());
 
         let outcome = tool
             .call(
@@ -592,7 +585,7 @@ mod tests {
 
         assert_eq!(outcome.get_name(), Event::TOOL_CALL_FINISHED);
         assert_eq!(
-            queue.get_task(&id).unwrap().get_result().unwrap()["line"],
+            werk.get_task(&id).unwrap().get_result().unwrap()["line"],
             42
         );
         assert_eq!(outcome.repairs().collect::<Vec<_>>(), vec!["/line retyped"]);

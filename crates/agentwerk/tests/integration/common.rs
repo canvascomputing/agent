@@ -5,7 +5,7 @@
 
 use agentwerk::event::Event;
 use agentwerk::providers::{Model, Provider};
-use agentwerk::Queue;
+use agentwerk::Werk;
 
 pub fn build_provider() -> (Provider, Model) {
     (
@@ -15,7 +15,7 @@ pub fn build_provider() -> (Provider, Model) {
 }
 
 /// The most recent result's text body, empty when absent or non-string.
-pub fn last_result_text(tasks: &Queue) -> String {
+pub fn last_result_text(tasks: &Werk) -> String {
     tasks
         .get_results()
         .pop()
@@ -23,7 +23,7 @@ pub fn last_result_text(tasks: &Queue) -> String {
         .unwrap_or_default()
 }
 
-pub fn print_result(tasks: &Queue) {
+pub fn print_result(tasks: &Werk) {
     let recorded = tasks.find_events(|_: &Event| true);
     let count = |name: &str| {
         recorded

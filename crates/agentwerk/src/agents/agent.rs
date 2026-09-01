@@ -1,5 +1,5 @@
 //! The core entity of agentwerk: who an agent is, what it may call, and which
-//! queue it works from.
+//! Werk it works from.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -12,13 +12,13 @@ use crate::tools::{EventTool, FinishTool, KnowledgeTool, Tool};
 use super::knowledge::Knowledge;
 use super::policy::Policy;
 use super::stats::Stats;
-use super::tasks::{Queue, Task};
+use super::tasks::{Task, Werk};
 use crate::prompts::directives::DirectiveStore;
 
 /// One counter per label, behind the ids [`Agent::get_id`] hands out.
 /// Numbering restarts at 1 for each label, so a host that creates the same
 /// agents in the same order gets the same ids after a restart, which is what
-/// [`Queue::load`] needs to resume an unfinished task.
+/// [`Werk::load`] needs to resume an unfinished task.
 static AGENT_IDS: Mutex<BTreeMap<String, u64>> = Mutex::new(BTreeMap::new());
 
 fn next_id(label: Option<&str>) -> String {
@@ -29,15 +29,15 @@ fn next_id(label: Option<&str>) -> String {
     format!("{prefix}-{count}")
 }
 
-/// How an `Agent` reaches its `Queue`. A new agent carries `Private`
-/// until it is added to a queue; everything else carries `Shared`.
-pub(crate) enum QueueRef {
-    Shared(Weak<Queue>),
-    Private(Arc<Queue>),
+/// How an `Agent` reaches its `Werk`. A new agent carries `Private`
+/// until it is added to a Werk; everything else carries `Shared`.
+pub(crate) enum WerkRef {
+    Shared(Weak<Werk>),
+    Private(Arc<Werk>),
 }
 
-impl QueueRef {
-    pub(crate) fn upgrade(&self) -> Option<Arc<Queue>> {
+impl WerkRef {
+    pub(crate) fn upgrade(&self) -> Option<Arc<Werk>> {
         match self {
             Self::Shared(w) => w.upgrade(),
             Self::Private(a) => Some(Arc::clone(a)),
@@ -64,10 +64,10 @@ impl QueueRef {
 /// # }
 /// ```
 pub struct Agent {
-    // pub(crate): read by loop, Queue, or assignment code
+    // pub(crate): read by loop, Werk, or assignment code
     pub(crate) label: Option<String>,
     pub(crate) interactive: bool,
-    pub(crate) queue: QueueRef,
+    pub(crate) werk: WerkRef,
     // private: accessed through methods within agents::
     /// Taken the first time anything needs it, since the label it is built from
     /// is set after construction.
@@ -86,20 +86,20 @@ pub struct Agent {
 impl Clone for Agent {
     /// A clone is the same agent, id included: `bind_agent` keeps one, and the
     /// two would otherwise disagree about which tasks are theirs. Reading the
-    /// id here is what fixes it for both. The clone points at the shared queue,
-    /// so rebinding the original cannot leave it filing tasks into a queue
+    /// id here is what fixes it for both. The clone points at the shared Werk,
+    /// so rebinding the original cannot leave it filing tasks into a Werk
     /// nothing reads.
     fn clone(&self) -> Self {
-        let queue = match &self.queue {
-            QueueRef::Shared(w) => QueueRef::Shared(w.clone()),
-            QueueRef::Private(a) => QueueRef::Shared(Arc::downgrade(a)),
+        let werk = match &self.werk {
+            WerkRef::Shared(w) => WerkRef::Shared(w.clone()),
+            WerkRef::Private(a) => WerkRef::Shared(Arc::downgrade(a)),
         };
         Self {
             id: OnceLock::from(self.get_id().to_string()),
             label: self.label.clone(),
             interactive: self.interactive,
             directives: Arc::clone(&self.directives),
-            queue,
+            werk,
             provider: self.provider.clone(),
             model: self.model.clone(),
             role: self.role.clone(),
@@ -113,9 +113,9 @@ impl Clone for Agent {
 }
 
 impl Agent {
-    /// Create an agent, with a task queue of its own so
+    /// Create an agent, with a Werk of its own so
     /// `.task(...)` and `.start()` work without one being set up.
-    /// `Queue::add_agent(...)` later moves those tasks into the shared queue.
+    /// `Werk::add_agent(...)` later moves those tasks into the shared Werk.
     ///
     /// Give it a provider and a model before it starts work.
     pub fn new() -> Self {
@@ -127,7 +127,7 @@ impl Agent {
             role: String::new(),
             label: None,
             interactive: false,
-            queue: QueueRef::Private(Queue::new()),
+            werk: WerkRef::Private(Werk::new()),
             templates: Vec::new(),
             handover: None,
             tools: Vec::new(),
@@ -199,9 +199,9 @@ impl Agent {
     /// Let the agent wait for new instructions to keep a task in-progress.
     ///
     /// The agent stops after a reply that calls no tool, and
-    /// `Queue::add_reply` drives the next turn. It gets no `FinishTool`,
+    /// `Werk::add_reply` drives the next turn. It gets no `FinishTool`,
     /// since ending the task would end the conversation; the host closes it
-    /// with `Queue::set_task_finished`. Register the tool by hand to give the
+    /// with `Werk::set_task_finished`. Register the tool by hand to give the
     /// agent one back.
     pub fn interactive(mut self) -> Self {
         self.interactive = true;
@@ -314,7 +314,7 @@ impl Agent {
     /// [`Event::get_agent_id`] and in [`Task::get_assignee`].
     ///
     /// The number is taken the first time this is called, directly or through
-    /// [`Self::task`], [`Self::start`], or `Queue::add_agent`. Label the
+    /// [`Self::task`], [`Self::start`], or `Werk::add_agent`. Label the
     /// agent before then.
     ///
     /// [`Event::get_agent_id`]: crate::Event::get_agent_id
@@ -390,13 +390,13 @@ impl Agent {
     pub(super) fn get_provider(&self) -> Provider {
         self.provider
             .clone()
-            .expect("agent joined a queue without a provider")
+            .expect("agent joined a Werk without a provider")
     }
 
     pub(super) fn get_model(&self) -> &Model {
         self.model
             .as_ref()
-            .expect("agent joined a queue without a model")
+            .expect("agent joined a Werk without a model")
     }
 
     pub(super) fn get_knowledge(&self) -> Arc<Knowledge> {
@@ -416,7 +416,7 @@ impl Agent {
         self.dir.clone()
     }
 
-    /// Refuse an agent that cannot call an LLM, at the moment it joins a queue
+    /// Refuse an agent that cannot call an LLM, at the moment it joins a Werk
     /// rather than on its first request.
     pub(super) fn require_provider_and_model(&self) {
         assert!(
@@ -432,7 +432,7 @@ impl Agent {
     /// Give the agent the tool that ends a task, unless it is interactive.
     ///
     /// Here rather than in [`Self::new`], because only when the agent joins a
-    /// queue is `interactive` final. Nothing is ever removed, so an
+    /// Werk is `interactive` final. Nothing is ever removed, so an
     /// interactive agent that registered `FinishTool` itself keeps it.
     pub(super) fn register_finish_tool(&mut self) {
         if !self.interactive {
@@ -501,20 +501,20 @@ impl Agent {
     }
 
     fn dispatch(&self, mut task: Task) -> String {
-        let queue = self
-            .queue
+        let werk = self
+            .werk
             .upgrade()
-            .expect("Agent::task requires a bound Queue");
+            .expect("Agent::task requires a bound Werk");
         if let serde_json::Value::String(s) = &task.task {
             task.task = serde_json::Value::String(self.interpolate(s));
         }
-        queue.insert(task, self.get_id().to_string())
+        werk.insert(task, self.get_id().to_string())
     }
 
-    /// Begin processing tasks, and hand back the task queue so results,
+    /// Begin processing tasks, and hand back the Werk so results,
     /// waiting, and cancellation stay one call away.
     ///
-    /// The queue takes the agent as it stands, so configure it first: a
+    /// The Werk takes the agent as it stands, so configure it first: a
     /// setter called afterwards leaves the running copy untouched.
     ///
     /// ```no_run
@@ -524,16 +524,16 @@ impl Agent {
     /// work.finish_all_tasks().await;
     /// # }
     /// ```
-    pub fn start(&self) -> Arc<Queue> {
-        let queue = self
-            .queue
+    pub fn start(&self) -> Arc<Werk> {
+        let werk = self
+            .werk
             .upgrade()
-            .expect("Agent::start requires a bound Queue");
-        if !queue.has_agent(self.get_id()) {
-            queue.add_agent(self.clone());
+            .expect("Agent::start requires a bound Werk");
+        if !werk.has_agent(self.get_id()) {
+            werk.add_agent(self.clone());
         }
-        queue.start();
-        queue
+        werk.start();
+        werk
     }
 }
 
@@ -569,7 +569,7 @@ mod tests {
     use crate::event::Event;
     use crate::providers::TokenUsage;
 
-    /// An agent a queue accepts: the provider and model joining one demands.
+    /// An agent a Werk accepts: the provider and model joining one demands.
     fn callable(agent: Agent) -> Agent {
         use crate::agents::r#loop::test_util::MockProvider;
         agent
@@ -802,16 +802,16 @@ mod tests {
             .collect()
     }
 
-    /// The tools the agent runs with, which `finish` only joins at the queue.
-    fn tool_names_in_a_queue(agent: Agent) -> Vec<String> {
+    /// The tools the agent runs with, which `finish` only joins at the Werk.
+    fn tool_names_in_a_werk(agent: Agent) -> Vec<String> {
         let mut agent = callable(agent);
-        crate::agents::Queue::new().bind_agent(&mut agent);
+        crate::agents::Werk::new().bind_agent(&mut agent);
         tool_names(&agent)
     }
 
     #[test]
-    fn an_agent_that_joined_a_queue_has_finish_registered() {
-        let names = tool_names_in_a_queue(Agent::new());
+    fn an_agent_that_joined_a_werk_has_finish_registered() {
+        let names = tool_names_in_a_werk(Agent::new());
         assert!(names.iter().any(|n| n == "finish"), "{names:?}");
         assert!(
             !names.iter().any(|n| n == "event"),
@@ -821,14 +821,14 @@ mod tests {
 
     #[test]
     fn an_agent_keeps_an_event_tool_it_registered_explicitly() {
-        let names = tool_names_in_a_queue(Agent::new().tool(crate::tools::EventTool));
+        let names = tool_names_in_a_werk(Agent::new().tool(crate::tools::EventTool));
         assert!(names.iter().any(|n| n == "event"), "{names:?}");
         assert!(names.iter().any(|n| n == "finish"), "{names:?}");
     }
 
     #[test]
     fn an_interactive_agent_has_no_finish_tool() {
-        let names = tool_names_in_a_queue(Agent::new().interactive());
+        let names = tool_names_in_a_werk(Agent::new().interactive());
         assert!(
             !names.iter().any(|n| n == "finish"),
             "an interactive agent ends its task through the host: {names:?}",
@@ -837,13 +837,13 @@ mod tests {
 
     #[test]
     fn an_interactive_agent_keeps_a_finish_tool_it_registered_itself() {
-        let names = tool_names_in_a_queue(Agent::new().interactive().tool(FinishTool));
+        let names = tool_names_in_a_werk(Agent::new().interactive().tool(FinishTool));
         assert!(names.iter().any(|n| n == "finish"), "{names:?}");
     }
 
     #[test]
     fn an_interactive_agent_keeps_an_event_tool_it_registered_itself() {
-        let names = tool_names_in_a_queue(Agent::new().interactive().tool(crate::tools::EventTool));
+        let names = tool_names_in_a_werk(Agent::new().interactive().tool(crate::tools::EventTool));
         assert!(names.iter().any(|n| n == "event"), "{names:?}");
         assert!(!names.iter().any(|n| n == "finish"), "{names:?}");
     }
@@ -879,12 +879,12 @@ mod tests {
     #[tokio::test]
     async fn dispatch_interpolates_string_task_body() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let queue = crate::agents::Queue::new();
-        queue.set_dir(dir.path().to_path_buf());
+        let werk = crate::agents::Werk::new();
+        werk.set_dir(dir.path().to_path_buf());
         let mut agent = callable(Agent::new().template("topic", "rust"));
-        queue.bind_agent(&mut agent);
+        werk.bind_agent(&mut agent);
         agent.task("Search {topic} forums.");
-        let stored = queue
+        let stored = werk
             .get_tasks()
             .into_iter()
             .next()
@@ -898,14 +898,14 @@ mod tests {
     #[tokio::test]
     async fn a_task_body_keeps_the_context_placeholder_verbatim() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let queue = crate::agents::Queue::new();
-        queue.set_dir(dir.path().to_path_buf());
+        let werk = crate::agents::Werk::new();
+        werk.set_dir(dir.path().to_path_buf());
         // The block needs a task ID and live budgets, neither of which
         // exists yet at dispatch. Only the role expands it.
         let mut agent = callable(Agent::new());
-        queue.bind_agent(&mut agent);
+        werk.bind_agent(&mut agent);
         agent.task("Work on {context}.");
-        let stored = queue
+        let stored = werk
             .get_tasks()
             .into_iter()
             .next()
@@ -919,13 +919,13 @@ mod tests {
     #[tokio::test]
     async fn dispatch_leaves_object_task_unchanged() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let queue = crate::agents::Queue::new();
-        queue.set_dir(dir.path().to_path_buf());
+        let werk = crate::agents::Werk::new();
+        werk.set_dir(dir.path().to_path_buf());
         let mut agent = callable(Agent::new().template("topic", "rust"));
-        queue.bind_agent(&mut agent);
+        werk.bind_agent(&mut agent);
         let value = serde_json::json!({"q": "Find {topic}"});
         agent.task(Task::new(value.clone()));
-        let stored = queue
+        let stored = werk
             .get_tasks()
             .into_iter()
             .next()
@@ -1043,9 +1043,9 @@ mod tests {
 
     #[test]
     #[should_panic(expected = "provider required")]
-    fn joining_a_queue_without_a_provider_panics() {
+    fn joining_a_werk_without_a_provider_panics() {
         let mut agent = Agent::new().model("test");
-        crate::agents::Queue::new().bind_agent(&mut agent);
+        crate::agents::Werk::new().bind_agent(&mut agent);
     }
 
     #[test]
@@ -1065,18 +1065,18 @@ mod tests {
     #[tokio::test]
     async fn starting_twice_registers_the_agent_once() {
         let agent = callable(Agent::new());
-        let queue = agent.start();
+        let werk = agent.start();
         agent.start();
-        assert_eq!(queue.clone_agents().len(), 1);
+        assert_eq!(werk.clone_agents().len(), 1);
     }
 
     #[tokio::test]
     async fn binding_agent_with_explicit_knowledge_keeps_explicit_store() {
         let dir = crate::test_util::TempDir::new().unwrap();
         let store = Knowledge::load(dir.path()).unwrap();
-        let queue = crate::agents::Queue::new();
+        let werk = crate::agents::Werk::new();
         let mut agent = callable(Agent::new().knowledge(&store));
-        queue.bind_agent(&mut agent);
+        werk.bind_agent(&mut agent);
         assert!(Arc::ptr_eq(&store, &agent.knowledge));
     }
 }

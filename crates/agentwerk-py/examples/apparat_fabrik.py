@@ -28,7 +28,7 @@ from agentwerk import (
     ReadFileTool,
     Schema,
     Task,
-    Queue,
+    Werk,
 )
 
 import apparate
@@ -231,7 +231,7 @@ async def main(pruefer, meister, monteur):
     started_at = time.monotonic()
     # Every request resends the context, so the input-token limit is what bounds
     # the bill; the shift bell is the time limit, and both end the run on screen.
-    tasks = Queue().set_policy(
+    tasks = Werk().set_policy(
         Policy(max_time=SHIFT, max_input_tokens=2_000_000)
     )
 

@@ -1,4 +1,4 @@
-//! The task queue agents coordinate through, and the tasks themselves.
+//! The Werk agents coordinate through, and the tasks themselves.
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -9,23 +9,23 @@ use super::policy::Policy;
 use super::stats::Stats;
 
 mod error;
-mod queue;
 mod reply;
 mod store;
 mod task;
 mod trajectory;
+mod werk;
 
 #[cfg(test)]
 pub(super) mod test_util;
 
 pub use error::TaskError;
-pub use queue::{FinishReason, Queue};
 pub use reply::{Author, Reply, ReplyContent};
 pub use task::{Status, Task};
 pub use trajectory::Trajectory;
+pub use werk::{FinishReason, Werk};
 
-pub(crate) use queue::Run;
 pub(crate) use task::{Replies, TaskResult};
+pub(crate) use werk::Run;
 
 /// Whether the run-wide policy have been exceeded by the current
 /// stats reading. Returns the tripping `PolicyViolation` and the

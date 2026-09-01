@@ -1,4 +1,4 @@
-//! The task queue as Python sees it: add agents, submit work, set limits,
+//! The Werk as Python sees it: add agents, submit work, set limits,
 //! install handlers, drive execution, and read results.
 
 use std::future::Future;
@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use agentwerk::agents::tasks::Reply;
 use agentwerk::event::Event;
-use agentwerk::{Queue, Task};
+use agentwerk::{Task, Werk};
 use pyo3::prelude::*;
 use serde_json::Value;
 
@@ -20,28 +20,26 @@ use crate::task::{to_task, PyTask};
 
 /// The core data structure of agentwerk, coordinating complex work across
 /// agents.
-#[pyclass(name = "Queue")]
-pub struct PyQueue {
-    pub inner: Arc<Queue>,
+#[pyclass(name = "Werk")]
+pub struct PyWerk {
+    pub inner: Arc<Werk>,
 }
 
 #[pymethods]
-impl PyQueue {
+impl PyWerk {
     #[new]
     fn new() -> Self {
-        PyQueue {
-            inner: Queue::new(),
-        }
+        PyWerk { inner: Werk::new() }
     }
 
     /// Continue a session from a directory written earlier.
     #[staticmethod]
     fn load(tasks_dir: &str) -> PyResult<Self> {
-        let inner = Queue::load(tasks_dir).map_err(runtime_error)?;
-        Ok(PyQueue { inner })
+        let inner = Werk::load(tasks_dir).map_err(runtime_error)?;
+        Ok(PyWerk { inner })
     }
 
-    /// Add an agent to this task queue, moving any tasks it queued on its
+    /// Add an agent to this Werk, moving any tasks it queued on its
     /// own across first.
     fn add_agent<'py>(
         slf: PyRef<'py, Self>,
@@ -112,12 +110,12 @@ impl PyQueue {
     /// Read every event as it is emitted. It replaces the handler that prints to
     /// stderr.
     ///
-    /// The queue arrives first, so a handler files follow-up work with
-    /// `queue.add_task(..)` and selects tasks and results with `queue.find_*`.
+    /// The Werk arrives first, so a handler files follow-up work with
+    /// `werk.add_task(..)` and selects tasks and results with `werk.find_*`.
     fn on_event<'py>(slf: PyRef<'py, Self>, handler: Py<PyAny>) -> PyRef<'py, Self> {
-        slf.inner.on_event(move |queue, event: &Event| {
+        slf.inner.on_event(move |werk, event: &Event| {
             Python::attach(|py| {
-                let handled = as_py_queue(py, queue)
+                let handled = as_py_werk(py, werk)
                     .and_then(|view| handler.bind(py).call1((view, to_py_event(event))));
                 if let Err(err) = handled {
                     err.print(py);
@@ -139,9 +137,9 @@ impl PyQueue {
     /// NOT call either themselves: that waits forever on the handover the
     /// handler is running inside.
     fn on_event_async<'py>(slf: PyRef<'py, Self>, handler: Py<PyAny>) -> PyRef<'py, Self> {
-        slf.inner.on_event_async(move |queue, event: Event| {
+        slf.inner.on_event_async(move |werk, event: Event| {
             let coroutine = Python::attach(|py| {
-                let view = as_py_queue(py, &queue)?;
+                let view = as_py_werk(py, &werk)?;
                 let produced = handler.bind(py).call1((view, to_py_event(&event)))?;
                 pyo3_async_runtimes::tokio::into_future(produced)
             });
@@ -154,9 +152,9 @@ impl PyQueue {
     /// against the task's schema.
     fn on_result<'py>(slf: PyRef<'py, Self>, handler: Py<PyAny>) -> PyRef<'py, Self> {
         slf.inner
-            .on_result(move |queue, task: &Task, result: &Value| {
+            .on_result(move |werk, task: &Task, result: &Value| {
                 Python::attach(|py| {
-                    if let Err(err) = call_with_result(py, &handler, queue, task, result) {
+                    if let Err(err) = call_with_result(py, &handler, werk, task, result) {
                         err.print(py);
                     }
                 });
@@ -173,9 +171,9 @@ impl PyQueue {
     /// handler is running inside.
     fn on_result_async<'py>(slf: PyRef<'py, Self>, handler: Py<PyAny>) -> PyRef<'py, Self> {
         slf.inner
-            .on_result_async(move |queue, task: Task, result: Value| {
+            .on_result_async(move |werk, task: Task, result: Value| {
                 let coroutine = Python::attach(|py| {
-                    let produced = call_with_result(py, &handler, &queue, &task, &result)?;
+                    let produced = call_with_result(py, &handler, &werk, &task, &result)?;
                     pyo3_async_runtimes::tokio::into_future(produced)
                 });
                 await_coroutine(coroutine)
@@ -188,9 +186,9 @@ impl PyQueue {
     /// that could not finish. Read `event.get_name()` to tell them apart.
     fn on_failure<'py>(slf: PyRef<'py, Self>, handler: Py<PyAny>) -> PyRef<'py, Self> {
         slf.inner
-            .on_failure(move |queue, event: &Event, task: &Task| {
+            .on_failure(move |werk, event: &Event, task: &Task| {
                 Python::attach(|py| {
-                    if let Err(err) = call_with_task(py, &handler, queue, event, task) {
+                    if let Err(err) = call_with_task(py, &handler, werk, event, task) {
                         err.print(py);
                     }
                 });
@@ -207,9 +205,9 @@ impl PyQueue {
     /// handler is running inside.
     fn on_failure_async<'py>(slf: PyRef<'py, Self>, handler: Py<PyAny>) -> PyRef<'py, Self> {
         slf.inner
-            .on_failure_async(move |queue, event: Event, task: Task| {
+            .on_failure_async(move |werk, event: Event, task: Task| {
                 let coroutine = Python::attach(|py| {
-                    let produced = call_with_task(py, &handler, &queue, &event, &task)?;
+                    let produced = call_with_task(py, &handler, &werk, &event, &task)?;
                     pyo3_async_runtimes::tokio::into_future(produced)
                 });
                 await_coroutine(coroutine)
@@ -263,9 +261,9 @@ impl PyQueue {
     /// It arrives with its messages, so a handler can pass it straight to
     /// `Trajectory.from_task`.
     fn on_task<'py>(slf: PyRef<'py, Self>, handler: Py<PyAny>) -> PyRef<'py, Self> {
-        slf.inner.on_task(move |queue, event: &Event, task: &Task| {
+        slf.inner.on_task(move |werk, event: &Event, task: &Task| {
             Python::attach(|py| {
-                if let Err(err) = call_with_task(py, &handler, queue, event, task) {
+                if let Err(err) = call_with_task(py, &handler, werk, event, task) {
                     err.print(py);
                 }
             });
@@ -282,9 +280,9 @@ impl PyQueue {
     /// handler is running inside.
     fn on_task_async<'py>(slf: PyRef<'py, Self>, handler: Py<PyAny>) -> PyRef<'py, Self> {
         slf.inner
-            .on_task_async(move |queue, event: Event, task: Task| {
+            .on_task_async(move |werk, event: Event, task: Task| {
                 let coroutine = Python::attach(|py| {
-                    let produced = call_with_task(py, &handler, &queue, &event, &task)?;
+                    let produced = call_with_task(py, &handler, &werk, &event, &task)?;
                     pyo3_async_runtimes::tokio::into_future(produced)
                 });
                 await_coroutine(coroutine)
@@ -326,10 +324,10 @@ impl PyQueue {
         }
     }
 
-    /// Begin processing tasks, on a background task. An empty queue keeps the
+    /// Begin processing tasks, on a background task. An empty Werk keeps the
     /// run alive; calling this while one is under way does nothing.
     fn start(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
-        // `Queue::start` spawns onto the ambient Tokio runtime; a pymethod
+        // `Werk::start` spawns onto the ambient Tokio runtime; a pymethod
         // call has no runtime entered on its own thread, so enter the shared
         // one pyo3-async-runtimes already uses for `finish_tasks()`.
         let _guard = pyo3_async_runtimes::tokio::get_runtime().enter();
@@ -395,13 +393,13 @@ impl PyQueue {
             .map(|reason| reason.to_string())
     }
 
-    /// Take every matching task off the queue. Accepts a Query or callable.
+    /// Take every matching task off the Werk. Accepts a Query or callable.
     fn cancel_tasks<'py>(slf: PyRef<'py, Self>, matches: Py<PyAny>) -> PyResult<PyRef<'py, Self>> {
         slf.inner.cancel_tasks(to_task_matcher(slf.py(), &matches)?);
         Ok(slf)
     }
 
-    /// Take every task off the queue, which ends the run.
+    /// Take every task off the Werk, which ends the run.
     fn cancel_all_tasks(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
         slf.inner.cancel_all_tasks();
         slf
@@ -473,24 +471,24 @@ impl PyQueue {
     }
 }
 
-/// Hand a hook the queue it is registered on. Built per call: a cached view
-/// would hold the queue that holds the handler, and neither would ever be freed.
-fn as_py_queue<'py>(py: Python<'py>, queue: &Arc<Queue>) -> PyResult<Bound<'py, PyAny>> {
+/// Hand a hook the Werk it is registered on. Built per call: a cached view
+/// would hold the Werk that holds the handler, and neither would ever be freed.
+fn as_py_werk<'py>(py: Python<'py>, werk: &Arc<Werk>) -> PyResult<Bound<'py, PyAny>> {
     let view = Py::new(
         py,
-        PyQueue {
-            inner: Arc::clone(queue),
+        PyWerk {
+            inner: Arc::clone(werk),
         },
     )?;
     Ok(view.into_bound(py).into_any())
 }
 
-/// Call a Python function with the queue, task, and result every `on_result`
+/// Call a Python function with the Werk, task, and result every `on_result`
 /// hook hands over.
 fn call_with_result<'py>(
     py: Python<'py>,
     callable: &Py<PyAny>,
-    queue: &Arc<Queue>,
+    werk: &Arc<Werk>,
     task: &Task,
     result: &Value,
 ) -> PyResult<Bound<'py, PyAny>> {
@@ -498,22 +496,22 @@ fn call_with_result<'py>(
     let value = value_to_py(py, result)?;
     callable
         .bind(py)
-        .call1((as_py_queue(py, queue)?, view, value))
+        .call1((as_py_werk(py, werk)?, view, value))
 }
 
-/// Call a Python function with the queue, event, and task the `on_task` and
+/// Call a Python function with the Werk, event, and task the `on_task` and
 /// `on_failure` hooks hand over.
 fn call_with_task<'py>(
     py: Python<'py>,
     callable: &Py<PyAny>,
-    queue: &Arc<Queue>,
+    werk: &Arc<Werk>,
     event: &Event,
     task: &Task,
 ) -> PyResult<Bound<'py, PyAny>> {
     let view = Py::new(py, PyTask::from_task(task))?;
     callable
         .bind(py)
-        .call1((as_py_queue(py, queue)?, to_py_event(event), view))
+        .call1((as_py_werk(py, werk)?, to_py_event(event), view))
 }
 
 /// Await what an `async def` handler returned, printing whatever it raised:

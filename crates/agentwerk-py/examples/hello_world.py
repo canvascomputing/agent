@@ -1,7 +1,7 @@
 """The smallest agentwerk program, the Python port of the Rust use case.
 
 Builds an agent from the environment, submits a single task, waits for the
-queue to run dry, and prints the result. No tools, no labels, no schema.
+werk to run dry, and prints the result. No tools, no labels, no schema.
 
 Usage: python hello_world.py [TASK]
 """

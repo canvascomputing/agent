@@ -1,4 +1,4 @@
-//! The shared queue agents claim tasks from, and the lifecycle that drives them.
+//! The shared Werk agents claim tasks from, and the lifecycle that drives them.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::future::Future;
@@ -12,7 +12,7 @@ use std::time::Duration;
 use tokio::sync::{broadcast, watch};
 use tokio::task::JoinHandle;
 
-use super::super::agent::{Agent, QueueRef};
+use super::super::agent::{Agent, WerkRef};
 use super::super::policy::Policy;
 use super::super::query::{Matcher, Query};
 use super::super::r#loop::run_main_loop;
@@ -25,11 +25,11 @@ use crate::persistence::Persist;
 /// Why execution ended.
 ///
 /// Carried by a run-finished event, and handed back by
-/// `Queue::finish_tasks` once the wait is over.
+/// `Werk::finish_tasks` once the wait is over.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FinishReason {
-    /// The queue emptied; nothing more to do.
+    /// The Werk emptied; nothing more to do.
     Drained,
     /// A limit was breached.
     PolicyViolated(crate::agents::PolicyViolation),
@@ -49,9 +49,9 @@ impl std::fmt::Display for FinishReason {
     }
 }
 
-/// The queue arrives first so a handler selects tasks and files follow-up work
-/// without capturing an `Arc` into the queue that holds it.
-type EventHandler = dyn Fn(&Arc<Queue>, &Event) + Send + Sync;
+/// The Werk arrives first so a handler selects tasks and files follow-up work
+/// without capturing an `Arc` into the Werk that holds it.
+type EventHandler = dyn Fn(&Arc<Werk>, &Event) + Send + Sync;
 
 /// How many events a `finish` waiter may fall behind before it starts
 /// missing them. `TextChunkReceived` fires once per streaming delta and sets
@@ -61,9 +61,9 @@ const EVENT_STREAM_CAPACITY: usize = 1024;
 /// One shape for every awaited hook: the task is `None` for the kinds no
 /// task-shaped hook accepts, and the wrapper each `on_*_async` installs picks
 /// out what its own handler takes.
-type AsyncHandler = dyn Fn(Arc<Queue>, Event, Option<Task>) -> HandlerWork + Send + Sync;
+type AsyncHandler = dyn Fn(Arc<Werk>, Event, Option<Task>) -> HandlerWork + Send + Sync;
 
-/// Boxed so the queue can hold handlers with different future types.
+/// Boxed so the Werk can hold handlers with different future types.
 type HandlerWork = Pin<Box<dyn Future<Output = ()> + Send>>;
 
 /// The names that identify events whose whole subject is a task, as opposed to one
@@ -212,15 +212,15 @@ impl Run {
 }
 
 /// The core data structure of agentwerk, coordinating complex work across
-/// agents. Many agents share one `Queue` and pick up tasks
+/// agents. Many agents share one `Werk` and pick up tasks
 /// concurrently; a label assigns work to the right agents.
 ///
 /// ```no_run
-/// use agentwerk::{Agent, Task, Queue};
+/// use agentwerk::{Agent, Task, Werk};
 /// use agentwerk::tools::FetchTool;
 ///
 /// # async fn run() {
-/// let tasks = Queue::new();
+/// let tasks = Werk::new();
 /// for _ in 0..4 {
 ///     tasks.add_agent(
 ///         Agent::from_env()
@@ -235,16 +235,16 @@ impl Run {
 ///
 /// # Sessions
 ///
-/// A `Queue` writes every task, reply, statistic, and lifecycle
+/// A `Werk` writes every task, reply, statistic, and lifecycle
 /// event to its working directory (default `./.agentwerk`). That directory is
-/// the session: stop the process, and `Queue::load(dir)` reopens it
+/// the session: stop the process, and `Werk::load(dir)` reopens it
 /// from disk and continues from where it stopped.
 ///
 /// ```no_run
-/// use agentwerk::Queue;
+/// use agentwerk::Werk;
 ///
 /// # fn run() -> Result<(), Box<dyn std::error::Error>> {
-/// let tasks = Queue::load(".agentwerk")?;
+/// let tasks = Werk::load(".agentwerk")?;
 /// // Re-register the agents, then call .start() or .finish_all_tasks().await.
 /// # let _ = tasks;
 /// # Ok(())
@@ -266,15 +266,15 @@ impl Run {
 ///     ├── pages/<slug>.md                   knowledge pages
 ///     └── index.md                          knowledge index
 /// ```
-pub struct Queue {
-    pub(super) weak_self: Weak<Queue>,
+pub struct Werk {
+    pub(super) weak_self: Weak<Werk>,
     pub(crate) tasks: Mutex<HashMap<String, Task>>,
     pub(super) agents: Mutex<Vec<Agent>>,
     pub(super) policy: Mutex<Policy>,
     /// Why the run ended, once the main loop decides. The agent tasks, the
     /// tools, and every `finish` read it to know the run is over.
     pub(crate) run: Arc<Run>,
-    /// What `cancel` has taken off the queue. A matching task is neither
+    /// What `cancel` has taken off the Werk. A matching task is neither
     /// claimed nor resumed, and an agent already holding one is taken off it,
     /// while the rest of the run continues.
     pub(crate) cancel_filters: Mutex<Vec<Query>>,
@@ -287,7 +287,7 @@ pub struct Queue {
     pub(super) awaited_events: AwaitedEvents,
     /// Every emitted event, for `finish` to wake on. A separate channel rather
     /// than one more `on_event` entry: a handler stays on the chain for the
-    /// life of the queue, so one registered per call would grow without bound
+    /// life of the Werk, so one registered per call would grow without bound
     /// in a host that awaits in a loop.
     pub(super) event_stream: broadcast::Sender<Event>,
     pub(super) dir: Mutex<PathBuf>,
@@ -302,8 +302,8 @@ pub struct Queue {
     pub(super) next_task_id: Mutex<Option<u64>>,
 }
 
-impl Queue {
-    /// Create an empty task queue, shared through an `Arc`.
+impl Werk {
+    /// Create an empty Werk, shared through an `Arc`.
     pub fn new() -> Arc<Self> {
         Arc::new_cyclic(|weak| Self {
             weak_self: weak.clone(),
@@ -359,7 +359,7 @@ impl Queue {
                     continue;
                 };
                 // Skipping an unreadable task would drop its status, result
-                // and timestamps with it, leaving the queue to resume work it
+                // and timestamps with it, leaving the Werk to resume work it
                 // has no record of.
                 let task = Task::load(&tasks_dir, &id).map_err(|source| {
                     io::Error::new(
@@ -435,19 +435,19 @@ impl Queue {
     /// must be cheap and non-blocking. When no handler has been
     /// installed, [`default_logger`] runs in its place.
     ///
-    /// The queue arrives with the event, so a handler selects tasks and
+    /// The Werk arrives with the event, so a handler selects tasks and
     /// results and files follow-up work without holding one of its own.
     ///
     /// ```no_run
-    /// # use agentwerk::{Event, Task, Queue};
-    /// let tasks = Queue::new();
-    /// tasks.on_event(|queue, event| {
+    /// # use agentwerk::{Event, Task, Werk};
+    /// let tasks = Werk::new();
+    /// tasks.on_event(|werk, event| {
     ///     if event.get_name() == Event::TASK_FAILED {
-    ///         queue.add_task(Task::labeled("triage", "Look into the failure."));
+    ///         werk.add_task(Task::labeled("triage", "Look into the failure."));
     ///     }
     /// });
     /// ```
-    pub fn on_event(&self, handler: impl Fn(&Arc<Queue>, &Event) + Send + Sync + 'static) -> &Self {
+    pub fn on_event(&self, handler: impl Fn(&Arc<Werk>, &Event) + Send + Sync + 'static) -> &Self {
         self.event_handlers.lock().unwrap().push(Arc::new(handler));
         self
     }
@@ -470,9 +470,9 @@ impl Queue {
     /// forever on the handover it is running inside.
     ///
     /// ```no_run
-    /// # use agentwerk::Queue;
+    /// # use agentwerk::Werk;
     /// # async fn run() {
-    /// let tasks = Queue::new();
+    /// let tasks = Werk::new();
     /// tasks.on_event_async(|_, event| async move {
     ///     println!("{}", event.get_name());
     /// });
@@ -481,29 +481,29 @@ impl Queue {
     /// ```
     pub fn on_event_async<F, Fut>(&self, handler: F) -> &Self
     where
-        F: Fn(Arc<Queue>, Event) -> Fut + Send + Sync + 'static,
+        F: Fn(Arc<Werk>, Event) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = ()> + Send + 'static,
     {
         self.on_awaited(
             |_| true,
-            move |queue, event, _| Box::pin(handler(queue, event)),
+            move |werk, event, _| Box::pin(handler(werk, event)),
         )
     }
 
-    /// The filter-resolve-call shape the task handlers share. The queue is
+    /// The filter-resolve-call shape the task handlers share. The Werk is
     /// handed in so one that files follow-up work needs no upgrade of its own.
     fn on_task_event<F>(&self, matches: fn(&Event) -> bool, handler: F) -> &Self
     where
         F: Fn(&Arc<Self>, &Event, &Task) + Send + Sync + 'static,
     {
-        self.on_event(move |queue, event| {
+        self.on_event(move |werk, event| {
             if !matches(event) {
                 return;
             }
-            let Some(task) = queue.get_task(&event.task_id) else {
+            let Some(task) = werk.get_task(&event.task_id) else {
                 return;
             };
-            handler(queue, event, &task);
+            handler(werk, event, &task);
         })
     }
 
@@ -514,25 +514,25 @@ impl Queue {
     /// more entry on the [`Self::on_event`] chain.
     ///
     /// ```no_run
-    /// # use agentwerk::{Task, Queue};
-    /// let tasks = Queue::new();
-    /// tasks.on_result(|queue, done, result| {
+    /// # use agentwerk::{Task, Werk};
+    /// let tasks = Werk::new();
+    /// tasks.on_result(|werk, done, result| {
     ///     if result["needs_review"] == true {
-    ///         queue.add_task(Task::labeled("review", done.get_task().clone()).parent(done.get_id()));
+    ///         werk.add_task(Task::labeled("review", done.get_task().clone()).parent(done.get_id()));
     ///     }
     /// });
     /// ```
     pub fn on_result<F>(&self, handler: F) -> &Self
     where
-        F: Fn(&Arc<Queue>, &Task, &serde_json::Value) + Send + Sync + 'static,
+        F: Fn(&Arc<Werk>, &Task, &serde_json::Value) + Send + Sync + 'static,
     {
         self.on_task_event(
             |event| event.name == Event::TASK_FINISHED,
-            move |queue, _, finished| {
+            move |werk, _, finished| {
                 let Some(result) = &finished.result else {
                     return;
                 };
-                handler(queue, finished, result);
+                handler(werk, finished, result);
             },
         )
     }
@@ -550,9 +550,9 @@ impl Queue {
     /// forever on the handover it is running inside.
     ///
     /// ```no_run
-    /// # use agentwerk::Queue;
+    /// # use agentwerk::Werk;
     /// # async fn run() {
-    /// let tasks = Queue::new();
+    /// let tasks = Werk::new();
     /// tasks.on_result_async(|_, task, result| async move {
     ///     println!("{} produced {result}", task.get_id());
     /// });
@@ -561,14 +561,13 @@ impl Queue {
     /// ```
     pub fn on_result_async<F, Fut>(&self, handler: F) -> &Self
     where
-        F: Fn(Arc<Queue>, Task, serde_json::Value) -> Fut + Send + Sync + 'static,
+        F: Fn(Arc<Werk>, Task, serde_json::Value) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = ()> + Send + 'static,
     {
         self.on_awaited(
             |event| event.name == Event::TASK_FINISHED,
-            move |queue, _, finished| match finished.and_then(|t| t.result.clone().map(|r| (t, r)))
-            {
-                Some((task, result)) => Box::pin(handler(queue, task, result)),
+            move |werk, _, finished| match finished.and_then(|t| t.result.clone().map(|r| (t, r))) {
+                Some((task, result)) => Box::pin(handler(werk, task, result)),
                 None => Box::pin(std::future::ready(())),
             },
         )
@@ -583,19 +582,19 @@ impl Queue {
     /// agent that fails many tool calls pays that copy once per failure.
     ///
     /// ```no_run
-    /// # use agentwerk::{Event, Task, Queue};
-    /// let tasks = Queue::new();
-    /// tasks.on_failure(|queue, event, failed| {
+    /// # use agentwerk::{Event, Task, Werk};
+    /// let tasks = Werk::new();
+    /// tasks.on_failure(|werk, event, failed| {
     ///     // Count the attempts yourself, or a task that fails every time
     ///     // re-queues itself forever.
     ///     if event.get_name() == Event::TASK_FAILED && failed.get_parent().is_none() {
-    ///         queue.add_task(Task::new(failed.get_task().clone()).parent(failed.get_id()));
+    ///         werk.add_task(Task::new(failed.get_task().clone()).parent(failed.get_id()));
     ///     }
     /// });
     /// ```
     pub fn on_failure<F>(&self, handler: F) -> &Self
     where
-        F: Fn(&Arc<Queue>, &Event, &Task) + Send + Sync + 'static,
+        F: Fn(&Arc<Werk>, &Event, &Task) + Send + Sync + 'static,
     {
         self.on_task_event(is_failure, handler)
     }
@@ -609,11 +608,11 @@ impl Queue {
     /// forever on the handover it is running inside.
     pub fn on_failure_async<F, Fut>(&self, handler: F) -> &Self
     where
-        F: Fn(Arc<Queue>, Event, Task) -> Fut + Send + Sync + 'static,
+        F: Fn(Arc<Werk>, Event, Task) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = ()> + Send + 'static,
     {
-        self.on_awaited(is_failure, move |queue, event, task| match task {
-            Some(task) => Box::pin(handler(queue, event, task)),
+        self.on_awaited(is_failure, move |werk, event, task| match task {
+            Some(task) => Box::pin(handler(werk, event, task)),
             None => Box::pin(std::future::ready(())),
         })
     }
@@ -627,7 +626,7 @@ impl Queue {
     /// reply.
     pub fn on_task<F>(&self, handler: F) -> &Self
     where
-        F: Fn(&Arc<Queue>, &Event, &Task) + Send + Sync + 'static,
+        F: Fn(&Arc<Werk>, &Event, &Task) + Send + Sync + 'static,
     {
         self.on_task_event(is_task_event, handler)
     }
@@ -641,11 +640,11 @@ impl Queue {
     /// forever on the handover it is running inside.
     pub fn on_task_async<F, Fut>(&self, handler: F) -> &Self
     where
-        F: Fn(Arc<Queue>, Event, Task) -> Fut + Send + Sync + 'static,
+        F: Fn(Arc<Werk>, Event, Task) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = ()> + Send + 'static,
     {
-        self.on_awaited(is_task_event, move |queue, event, task| match task {
-            Some(task) => Box::pin(handler(queue, event, task)),
+        self.on_awaited(is_task_event, move |werk, event, task| match task {
+            Some(task) => Box::pin(handler(werk, event, task)),
             None => Box::pin(std::future::ready(())),
         })
     }
@@ -654,7 +653,7 @@ impl Queue {
     /// queued for it.
     fn on_awaited<F>(&self, matches: fn(&Event) -> bool, call: F) -> &Self
     where
-        F: Fn(Arc<Queue>, Event, Option<Task>) -> HandlerWork + Send + Sync + 'static,
+        F: Fn(Arc<Werk>, Event, Option<Task>) -> HandlerWork + Send + Sync + 'static,
     {
         self.queue_events();
         self.awaited_events
@@ -672,8 +671,8 @@ impl Queue {
     /// twice.
     fn queue_events(&self) {
         self.awaited_events.queueing.get_or_init(|| {
-            self.on_event(|queue, event| {
-                let anyone_wants_it = queue
+            self.on_event(|werk, event| {
+                let anyone_wants_it = werk
                     .awaited_events
                     .handlers
                     .lock()
@@ -688,11 +687,10 @@ impl Queue {
                 // task-shaped hook accepts: resolving copies every reply,
                 // which on `TextChunkReceived` would cost once per piece.
                 let task = match is_task_event(event) || is_failure(event) {
-                    true => queue.get_task(&event.task_id),
+                    true => werk.get_task(&event.task_id),
                     false => None,
                 };
-                queue
-                    .awaited_events
+                werk.awaited_events
                     .queued
                     .lock()
                     .unwrap()
@@ -716,7 +714,7 @@ impl Queue {
         if handlers.is_empty() {
             return;
         }
-        let Some(queue) = self.weak_self.upgrade() else {
+        let Some(werk) = self.weak_self.upgrade() else {
             return;
         };
         // Waits rather than skips, or a second `finish` could return while its
@@ -729,7 +727,7 @@ impl Queue {
             };
             for (matches, call) in &handlers {
                 if matches(&event) {
-                    call(Arc::clone(&queue), event.clone(), task.clone()).await;
+                    call(Arc::clone(&werk), event.clone(), task.clone()).await;
                 }
             }
         }
@@ -768,13 +766,13 @@ impl Queue {
             return event;
         }
         // Handed to every handler, so one that files follow-up work needs no
-        // reference of its own. Gone only while the queue is being dropped,
+        // reference of its own. Gone only while the Werk is being dropped,
         // when there is nothing left for a handler to act on.
-        let Some(queue) = self.weak_self.upgrade() else {
+        let Some(werk) = self.weak_self.upgrade() else {
             return event;
         };
         for h in &handlers {
-            h(&queue, &event);
+            h(&werk, &event);
         }
         event
     }
@@ -885,7 +883,7 @@ impl Queue {
     /// Get every task matching a condition, in creation order unless the
     /// query names another with `ORDER BY`.
     ///
-    /// Your condition MUST NOT call another `Queue` method that reads
+    /// Your condition MUST NOT call another `Werk` method that reads
     /// the task store, or the call deadlocks.
     pub fn find_tasks(&self, predicate: impl Matcher<Task>) -> Vec<Task> {
         self.matching_tasks(&predicate.into_query())
@@ -894,7 +892,7 @@ impl Queue {
     /// Get the first task matching a condition, the earliest one unless the
     /// query names another order.
     ///
-    /// Your condition MUST NOT call another `Queue` method that reads
+    /// Your condition MUST NOT call another `Werk` method that reads
     /// the task store, or the call deadlocks.
     pub fn find_task(&self, predicate: impl Matcher<Task>) -> Option<Task> {
         self.first_matching_task(&predicate.into_query())
@@ -922,8 +920,8 @@ impl Queue {
     /// closure, the way [`Self::find_tasks`] takes any of the three.
     ///
     /// ```no_run
-    /// # use agentwerk::Queue;
-    /// let tasks = Queue::new();
+    /// # use agentwerk::Werk;
+    /// let tasks = Werk::new();
     /// tasks.find_events("tool_call_failed AND created > -1h");
     /// ```
     ///
@@ -965,19 +963,19 @@ impl Queue {
         out
     }
 
-    /// Take every matching task off the queue.
+    /// Take every matching task off the Werk.
     ///
     /// A match is neither claimed nor resumed, and an agent already holding one
     /// is taken off it; the task stays `InProgress`. Nothing waits: this is
     /// not async, so it can be called from a ctrl-c handler, a drop guard, or
     /// anywhere else. Use [`Self::cancel_all_tasks`] to stop the whole run.
     ///
-    /// Your filter MUST NOT call another `Queue` method that reads the
+    /// Your filter MUST NOT call another `Werk` method that reads the
     /// task store, or the claim path deadlocks.
     ///
     /// ```no_run
-    /// # use agentwerk::Queue;
-    /// let tasks = Queue::new();
+    /// # use agentwerk::Werk;
+    /// let tasks = Werk::new();
     /// tasks.cancel_tasks("scan");
     /// ```
     pub fn cancel_tasks(&self, matches: impl Matcher<Task>) -> &Self {
@@ -991,7 +989,7 @@ impl Queue {
         self
     }
 
-    /// Take every task off the queue, which ends the run.
+    /// Take every task off the Werk, which ends the run.
     ///
     /// [`Self::finish_all_tasks`] then reports `FinishReason::Cancelled`. Like
     /// [`Self::cancel_tasks`], nothing waits, so a ctrl-c handler can call it.
@@ -1025,7 +1023,7 @@ impl Queue {
 
     /// Why the run is over, or `None` while it should keep going.
     ///
-    /// An empty queue is not an ending: a host that called [`Self::start`] may
+    /// An empty Werk is not an ending: a host that called [`Self::start`] may
     /// still be filing work, and a paused task revives on the next reply.
     /// Only a breached limit or a cancel that leaves nothing claimable ends a
     /// run here; the drained ending is named by the [`Self::finish_tasks`] that waited
@@ -1038,7 +1036,7 @@ impl Queue {
             return None;
         }
         // A cancel is a statement that work should stop, so it ends a run with
-        // nothing claimable left even when the queue was already empty.
+        // nothing claimable left even when the Werk was already empty.
         let cancelled = !self.cancel_filters.lock().unwrap().is_empty();
         cancelled.then_some(FinishReason::Cancelled)
     }
@@ -1077,13 +1075,13 @@ impl Queue {
             .collect()
     }
 
-    /// Attach `agent` to this queue, moving any tasks it queued in its own
-    /// private queue across first. The prior queue is freed once nothing else
+    /// Attach `agent` to this Werk, moving any tasks it queued in its own
+    /// private Werk across first. The prior Werk is freed once nothing else
     /// holds it.
     pub(crate) fn bind_agent(&self, agent: &mut Agent) {
         agent.require_provider_and_model();
         agent.register_finish_tool();
-        if let Some(prior) = agent.queue.upgrade() {
+        if let Some(prior) = agent.werk.upgrade() {
             if !Arc::ptr_eq(
                 &prior,
                 &self
@@ -1101,7 +1099,7 @@ impl Queue {
                 }
             }
         }
-        agent.queue = QueueRef::Shared(self.weak_self.clone());
+        agent.werk = WerkRef::Shared(self.weak_self.clone());
         self.agents.lock().unwrap().push(agent.clone());
     }
 
@@ -1121,9 +1119,9 @@ impl Queue {
         self.agents.lock().unwrap().clone()
     }
 
-    /// Add an agent to this task queue.
+    /// Add an agent to this Werk.
     ///
-    /// Any tasks the agent queued on its own move into this queue. An agent
+    /// Any tasks the agent queued on its own move into this Werk. An agent
     /// added while execution is under way picks up its first task within
     /// about 100 ms.
     pub fn add_agent(&self, mut agent: Agent) -> &Self {
@@ -1134,7 +1132,7 @@ impl Queue {
     /// Begin processing tasks, on a background task.
     ///
     /// A task queued afterwards is picked up within about 100 ms, and an
-    /// empty queue keeps the run alive: only [`Self::finish_tasks`] and
+    /// empty Werk keeps the run alive: only [`Self::finish_tasks`] and
     /// [`Self::cancel_tasks`] end one. Calling this while a run is under way does
     /// nothing; calling it after one ended starts a fresh run, which is how a
     /// host resumes after a cancel.
@@ -1147,10 +1145,7 @@ impl Queue {
         for task in self.tasks.lock().unwrap().values_mut() {
             task.cancelled = false;
         }
-        let supervisor = self
-            .weak_self
-            .upgrade()
-            .expect("Queue dropped during start");
+        let supervisor = self.weak_self.upgrade().expect("Werk dropped during start");
         self.emit_event(Event::new(Event::RUN_STARTED));
         let join = tokio::spawn(async move { run_main_loop(&supervisor).await });
         *self.join_handle.lock().unwrap() = Some(join);
@@ -1170,16 +1165,16 @@ impl Queue {
     /// with [`Self::get_results`]. Read why the wait ended with
     /// [`Self::get_finish_reason`].
     ///
-    /// Execution begins here when the queue has never run, and otherwise this
+    /// Execution begins here when the Werk has never run, and otherwise this
     /// waits on what is already under way. Once a run has ended it returns at
     /// once: only [`Self::start`] starts another. Your filter MUST NOT call
-    /// another `Queue` method that reads the task store, or the call
+    /// another `Werk` method that reads the task store, or the call
     /// deadlocks.
     ///
     /// ```no_run
-    /// # use agentwerk::Queue;
+    /// # use agentwerk::Werk;
     /// # async fn run() {
-    /// let tasks = Queue::new();
+    /// let tasks = Werk::new();
     /// for finding in tasks.finish_tasks("research").await {
     ///     println!("{finding}");
     /// }
@@ -1210,7 +1205,7 @@ impl Queue {
             self.run.until_finished().await;
         }
         // Releasing the handle lets a later finish start a fresh run, the way a
-        // host adds more work once the queue has run dry.
+        // host adds more work once the Werk has run dry.
         if self.run.is_finished() {
             self.join_handle.lock().unwrap().take();
         }
@@ -1231,9 +1226,9 @@ impl Queue {
     /// which tasks contribute a result holds here too.
     ///
     /// ```no_run
-    /// # use agentwerk::Queue;
+    /// # use agentwerk::Werk;
     /// # async fn run() {
-    /// let tasks = Queue::new();
+    /// let tasks = Werk::new();
     /// for finding in tasks.finish_all_tasks().await {
     ///     println!("{finding}");
     /// }
@@ -1250,9 +1245,9 @@ impl Queue {
     /// matching task finished with a result.
     ///
     /// ```no_run
-    /// # use agentwerk::Queue;
+    /// # use agentwerk::Werk;
     /// # async fn run() {
-    /// let tasks = Queue::new();
+    /// let tasks = Werk::new();
     /// if let Some(answer) = tasks.finish_task("ORDER BY created DESC").await {
     ///     println!("{answer}");
     /// }
@@ -1264,7 +1259,7 @@ impl Queue {
 
     /// Get why the last run ended, or `None` while one is still going.
     ///
-    /// Cleared by [`Self::start`], so a re-started queue does not report the
+    /// Cleared by [`Self::start`], so a re-started Werk does not report the
     /// previous run. A [`Self::finish_tasks`] over a subset can return while the run
     /// carries on, and this reads `None` until it ends.
     pub fn get_finish_reason(&self) -> Option<FinishReason> {
@@ -1304,8 +1299,8 @@ impl Queue {
     /// filter named.
     ///
     /// ```no_run
-    /// # use agentwerk::Queue;
-    /// let tasks = Queue::new();
+    /// # use agentwerk::Werk;
+    /// let tasks = Werk::new();
     /// let scans = tasks.find_results("scan");
     /// ```
     pub fn find_results(&self, matches: impl Matcher<Task>) -> Vec<serde_json::Value> {
@@ -1346,8 +1341,8 @@ mod tests {
         assert_eq!(reason.to_string(), "policy_violated(turns)");
     }
 
-    fn emit_event(queue: &Queue, id: &str, agent: &str, event: Event) -> Event {
-        queue.emit_event(event.task_id(id).agent_id(agent))
+    fn emit_event(werk: &Werk, id: &str, agent: &str, event: Event) -> Event {
+        werk.emit_event(event.task_id(id).agent_id(agent))
     }
 
     fn tool_call_failed(message: &str) -> Event {
@@ -1360,13 +1355,13 @@ mod tests {
     }
 
     #[test]
-    fn queue_handle_is_shared_between_caller_and_added_agent() {
-        let (queue, _tmp) = test_queue();
-        let alice = queue.add_agent(minimal_agent("alice"));
-        // Alice's task lands in the same queue.
+    fn werk_handle_is_shared_between_caller_and_added_agent() {
+        let (werk, _tmp) = test_werk();
+        let alice = werk.add_agent(minimal_agent("alice"));
+        // Alice's task lands in the same Werk.
         alice.add_task("from alice");
-        queue.add_task("from queue");
-        let all_ids: Vec<String> = queue
+        werk.add_task("from Werk");
+        let all_ids: Vec<String> = werk
             .find_tasks(|t: &Task| t.status == Status::Todo)
             .iter()
             .map(|t| t.id.clone())
@@ -1375,25 +1370,25 @@ mod tests {
     }
 
     #[test]
-    fn repeated_task_calls_route_to_shared_queue_after_rebind() {
-        let (queue, _tmp) = test_queue();
+    fn repeated_task_calls_route_to_shared_werk_after_rebind() {
+        let (werk, _tmp) = test_werk();
         let mut alice = minimal_agent("alice");
-        queue.bind_agent(&mut alice);
+        werk.bind_agent(&mut alice);
         alice.task("first");
         alice.task("second");
         assert_eq!(
-            queue.find_tasks(|t: &Task| t.status == Status::Todo).len(),
+            werk.find_tasks(|t: &Task| t.status == Status::Todo).len(),
             2
         );
     }
 
     #[test]
     fn tasks_returns_all_in_creation_order() {
-        let (queue, _tmp) = test_queue();
-        queue.add_task("a");
-        queue.add_task("b");
-        queue.add_task("c");
-        let all = queue.get_tasks();
+        let (werk, _tmp) = test_werk();
+        werk.add_task("a");
+        werk.add_task("b");
+        werk.add_task("c");
+        let all = werk.get_tasks();
         assert_eq!(all.len(), 3);
         assert_eq!(all[0].id, "t-1");
         assert_eq!(all[1].id, "t-2");
@@ -1402,11 +1397,11 @@ mod tests {
 
     #[test]
     fn find_tasks_answers_in_creation_order() {
-        let (queue, _tmp) = test_queue();
-        queue.add_task("a");
-        queue.add_task("b");
-        queue.add_task("c");
-        let ids: Vec<String> = queue
+        let (werk, _tmp) = test_werk();
+        werk.add_task("a");
+        werk.add_task("b");
+        werk.add_task("c");
+        let ids: Vec<String> = werk
             .find_tasks("status = Todo")
             .into_iter()
             .map(|t| t.id)
@@ -1416,20 +1411,20 @@ mod tests {
 
     #[test]
     fn cancel_ignores_an_order_by_and_takes_every_task() {
-        let (queue, _tmp) = test_queue();
-        queue.add_task("a");
-        queue.add_task("b");
-        queue.cancel_tasks("ORDER BY id DESC");
-        assert_eq!(queue.find_tasks("cancelled = true").len(), 2);
+        let (werk, _tmp) = test_werk();
+        werk.add_task("a");
+        werk.add_task("b");
+        werk.cancel_tasks("ORDER BY id DESC");
+        assert_eq!(werk.find_tasks("cancelled = true").len(), 2);
     }
 
     #[test]
     fn find_tasks_answers_in_the_order_the_query_names() {
-        let (queue, _tmp) = test_queue();
-        queue.add_task("a");
-        queue.add_task("b");
-        queue.add_task("c");
-        let ids: Vec<String> = queue
+        let (werk, _tmp) = test_werk();
+        werk.add_task("a");
+        werk.add_task("b");
+        werk.add_task("c");
+        let ids: Vec<String> = werk
             .find_tasks("ORDER BY id DESC")
             .into_iter()
             .map(|t| t.id)
@@ -1439,51 +1434,51 @@ mod tests {
 
     #[test]
     fn find_task_answers_the_first_in_the_order_the_query_names() {
-        let (queue, _tmp) = test_queue();
-        queue.add_task("a");
-        queue.add_task("b");
-        let found = queue.find_task("ORDER BY id DESC").expect("a task");
+        let (werk, _tmp) = test_werk();
+        werk.add_task("a");
+        werk.add_task("b");
+        let found = werk.find_task("ORDER BY id DESC").expect("a task");
         assert_eq!(found.id, "t-2");
     }
 
     #[test]
     fn find_results_answers_in_the_order_the_query_names() {
-        let (queue, _tmp) = test_queue();
-        queue.add_task("a");
-        queue.add_task("b");
-        attach_done_result(&queue, "t-1", "first");
-        attach_done_result(&queue, "t-2", "second");
+        let (werk, _tmp) = test_werk();
+        werk.add_task("a");
+        werk.add_task("b");
+        attach_done_result(&werk, "t-1", "first");
+        attach_done_result(&werk, "t-2", "second");
         assert_eq!(
-            queue.find_results("ORDER BY id DESC"),
+            werk.find_results("ORDER BY id DESC"),
             vec![serde_json::json!("second"), serde_json::json!("first")]
         );
     }
 
     #[test]
     fn results_return_done_payloads_in_creation_order() {
-        let (queue, _tmp) = test_queue();
-        queue.add_task("a");
-        queue.add_task("b");
-        queue.add_task("c");
-        attach_done_result(&queue, "t-1", "first");
-        attach_done_result(&queue, "t-3", "third");
+        let (werk, _tmp) = test_werk();
+        werk.add_task("a");
+        werk.add_task("b");
+        werk.add_task("c");
+        attach_done_result(&werk, "t-1", "first");
+        attach_done_result(&werk, "t-3", "third");
         assert_eq!(
-            queue.get_results(),
+            werk.get_results(),
             vec![serde_json::json!("first"), serde_json::json!("third")]
         );
     }
 
     #[test]
     fn results_order_by_creation_regardless_of_done_order() {
-        let (queue, _tmp) = test_queue();
-        queue.add_task("a");
-        queue.add_task("b");
-        queue.add_task("c");
-        attach_done_result(&queue, "t-3", "third");
-        attach_done_result(&queue, "t-1", "first");
-        attach_done_result(&queue, "t-2", "second");
+        let (werk, _tmp) = test_werk();
+        werk.add_task("a");
+        werk.add_task("b");
+        werk.add_task("c");
+        attach_done_result(&werk, "t-3", "third");
+        attach_done_result(&werk, "t-1", "first");
+        attach_done_result(&werk, "t-2", "second");
         assert_eq!(
-            queue.get_results(),
+            werk.get_results(),
             vec![
                 serde_json::json!("first"),
                 serde_json::json!("second"),
@@ -1494,142 +1489,141 @@ mod tests {
 
     #[test]
     fn results_are_empty_when_nothing_finished() {
-        let (queue, _tmp) = test_queue();
-        queue.add_task("pending");
-        assert!(queue.get_results().is_empty());
+        let (werk, _tmp) = test_werk();
+        werk.add_task("pending");
+        assert!(werk.get_results().is_empty());
     }
 
     #[test]
     fn find_results_takes_a_label_in_place_of_a_query() {
-        let (queue, _tmp) = test_queue();
-        queue.add_task(Task::labeled("scan", "a"));
-        queue.add_task(Task::labeled("report", "b"));
-        attach_done_result(&queue, "t-1", "scanned");
-        attach_done_result(&queue, "t-2", "reported");
+        let (werk, _tmp) = test_werk();
+        werk.add_task(Task::labeled("scan", "a"));
+        werk.add_task(Task::labeled("report", "b"));
+        attach_done_result(&werk, "t-1", "scanned");
+        attach_done_result(&werk, "t-2", "reported");
         assert_eq!(
-            queue.find_results("scan"),
+            werk.find_results("scan"),
             vec![serde_json::json!("scanned")]
         );
     }
 
     #[test]
     fn find_results_defaults_to_finished_when_the_query_names_no_status() {
-        let (queue, _tmp) = test_queue();
-        queue.add_task(Task::labeled("scan", "a"));
-        queue.add_task(Task::labeled("scan", "b"));
-        attach_done_result(&queue, "t-1", "scanned");
+        let (werk, _tmp) = test_werk();
+        werk.add_task(Task::labeled("scan", "a"));
+        werk.add_task(Task::labeled("scan", "b"));
+        attach_done_result(&werk, "t-1", "scanned");
         assert_eq!(
-            queue.find_results("scan"),
+            werk.find_results("scan"),
             vec![serde_json::json!("scanned")]
         );
     }
 
     #[test]
     fn find_results_keeps_the_status_the_query_names() {
-        let (queue, _tmp) = test_queue();
-        queue.add_task(Task::labeled("scan", "a"));
-        attach_done_result(&queue, "t-1", "scanned");
-        assert!(queue
+        let (werk, _tmp) = test_werk();
+        werk.add_task(Task::labeled("scan", "a"));
+        attach_done_result(&werk, "t-1", "scanned");
+        assert!(werk
             .find_results("label = scan AND status = Todo")
             .is_empty());
     }
 
     #[test]
     fn find_results_takes_a_closure_in_place_of_a_query() {
-        let (queue, _tmp) = test_queue();
-        queue.add_task(Task::labeled("scan", "a"));
-        queue.add_task(Task::labeled("report", "b"));
-        attach_done_result(&queue, "t-1", "scanned");
-        attach_done_result(&queue, "t-2", "reported");
+        let (werk, _tmp) = test_werk();
+        werk.add_task(Task::labeled("scan", "a"));
+        werk.add_task(Task::labeled("report", "b"));
+        attach_done_result(&werk, "t-1", "scanned");
+        attach_done_result(&werk, "t-2", "reported");
         assert_eq!(
-            queue.find_results("label = scan"),
+            werk.find_results("label = scan"),
             vec![serde_json::json!("scanned")]
         );
     }
 
     #[test]
     fn find_results_defaults_a_closure_to_finished_tasks() {
-        let (queue, _tmp) = test_queue();
-        queue.add_task(Task::labeled("scan", "a"));
+        let (werk, _tmp) = test_werk();
+        werk.add_task(Task::labeled("scan", "a"));
         // A result attached without the finish transition, which the default
         // leaves out because a closure names no status of its own.
-        queue
-            .set_result("t-1", serde_json::json!("mid-flight"))
+        werk.set_result("t-1", serde_json::json!("mid-flight"))
             .unwrap();
-        assert!(queue.find_results("label = scan").is_empty());
+        assert!(werk.find_results("label = scan").is_empty());
     }
 
     #[test]
     fn find_tasks_compiles_the_string_as_a_query() {
-        let (queue, _tmp) = test_queue();
-        queue.add_task(Task::labeled("scan", "a"));
-        queue.add_task(Task::labeled("report", "b"));
-        let found = queue.find_tasks("label = report AND status = Todo");
+        let (werk, _tmp) = test_werk();
+        werk.add_task(Task::labeled("scan", "a"));
+        werk.add_task(Task::labeled("report", "b"));
+        let found = werk.find_tasks("label = report AND status = Todo");
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].task, serde_json::json!("b"));
     }
 
     #[test]
     fn pending_on_a_todo_task() {
-        let (queue, _tmp) = test_queue();
-        queue.add_task("a");
-        assert!(queue.pending(&Query::all()));
+        let (werk, _tmp) = test_werk();
+        werk.add_task("a");
+        assert!(werk.pending(&Query::all()));
     }
 
     #[test]
     fn pending_only_for_the_matching_tasks() {
-        let (queue, _tmp) = test_queue();
-        queue.add_task(Task::new("a").label("research"));
-        assert!(queue.pending(&Query::from("research")));
-        assert!(!queue.pending(&Query::from("report")));
+        let (werk, _tmp) = test_werk();
+        werk.add_task(Task::new("a").label("research"));
+        assert!(werk.pending(&Query::from("research")));
+        assert!(!werk.pending(&Query::from("report")));
     }
 
     #[test]
     fn pending_while_a_claimed_task_awaits_the_model() {
-        let (queue, _tmp) = test_queue();
-        queue.add_task("x");
-        queue.claim(&Query::from("status = Todo"), "agent").unwrap();
-        assert!(queue.pending(&Query::all()));
+        let (werk, _tmp) = test_werk();
+        werk.add_task("x");
+        werk.claim(&Query::from("status = Todo"), "agent").unwrap();
+        assert!(werk.pending(&Query::all()));
     }
 
     #[test]
     fn pending_when_a_text_only_reply_pauses_a_non_interactive_agent() {
-        let (queue, _tmp) = test_queue();
-        queue.add_task("x");
-        let id = queue.claim(&Query::from("status = Todo"), "agent").unwrap();
-        queue.append_reply(
+        let (werk, _tmp) = test_werk();
+        werk.add_task("x");
+        let id = werk.claim(&Query::from("status = Todo"), "agent").unwrap();
+        werk.append_reply(
             &id,
             Reply::assistant(&[crate::providers::ContentBlock::Text {
                 text: "hello".into(),
             }]),
         );
         // Only an interactive agent waits on the caller; the rest are retried.
-        assert!(queue.pending(&Query::all()));
+        assert!(werk.pending(&Query::all()));
     }
 
     #[test]
     fn not_pending_once_every_task_is_finished_or_failed() {
-        let (queue, _tmp) = test_queue();
-        queue.add_task("a");
-        queue.add_task("b");
-        let id_a = queue.claim(&Query::from("t-1"), "agent").unwrap();
-        let id_b = queue.claim(&Query::from("t-2"), "agent").unwrap();
-        queue.set_finished_by(&id_a, "agent").unwrap();
-        queue.set_task_failed(&id_b).unwrap();
-        assert!(!queue.pending(&Query::all()));
+        let (werk, _tmp) = test_werk();
+        werk.add_task("a");
+        werk.add_task("b");
+        let id_a = werk.claim(&Query::from("t-1"), "agent").unwrap();
+        let id_b = werk.claim(&Query::from("t-2"), "agent").unwrap();
+        werk.set_finished_by(&id_a, "agent").unwrap();
+        werk.set_task_failed(&id_b).unwrap();
+        assert!(!werk.pending(&Query::all()));
     }
 
     #[test]
     fn not_pending_on_a_cancelled_task() {
-        let (queue, _tmp) = test_queue();
-        queue.add_task(Task::new("a").label("research"));
-        queue.cancel_tasks("label = research");
-        assert!(!queue.pending(&Query::all()));
+        let (werk, _tmp) = test_werk();
+        werk.add_task(Task::new("a").label("research"));
+        werk.cancel_tasks("label = research");
+        assert!(!werk.pending(&Query::all()));
     }
 
     #[test]
     fn policy_round_trips_through_get_policy() {
-        let (queue, _tmp) = test_queue();
+        let (werk, _tmp) = test_werk();
         let policy = Policy {
             max_turns: Some(40),
             max_input_tokens: Some(200_000),
@@ -1641,27 +1635,27 @@ mod tests {
             max_time: Some(Duration::from_secs(300)),
             compaction_threshold: Some(0.75),
         };
-        queue.set_policy(policy.clone());
+        werk.set_policy(policy.clone());
 
-        assert_eq!(queue.get_policy(), policy);
+        assert_eq!(werk.get_policy(), policy);
     }
 
     #[test]
     fn get_policy_returns_the_defaults_before_policy_is_called() {
-        let (queue, _tmp) = test_queue();
-        assert_eq!(queue.get_policy(), Policy::default());
+        let (werk, _tmp) = test_werk();
+        assert_eq!(werk.get_policy(), Policy::default());
     }
 
     #[test]
     fn compaction_threshold_clamps_a_fraction_outside_the_unit_range() {
-        let (queue, _tmp) = test_queue();
+        let (werk, _tmp) = test_werk();
         for (given, expected) in [(1.5, 1.0), (-0.2, 0.0), (f64::NAN, 1.0)] {
-            queue.set_policy(Policy {
+            werk.set_policy(Policy {
                 compaction_threshold: Some(given),
                 ..Default::default()
             });
             assert_eq!(
-                queue.get_policy().compaction_threshold,
+                werk.get_policy().compaction_threshold,
                 Some(expected),
                 "given {given}"
             );
@@ -1670,12 +1664,12 @@ mod tests {
 
     #[test]
     fn find_events_returns_the_matching_events_oldest_first() {
-        let (queue, _tmp) = test_queue();
-        queue.add_task("a");
-        queue.add_task("b");
-        queue.claim(&Query::from("t-1"), "alice");
+        let (werk, _tmp) = test_werk();
+        werk.add_task("a");
+        werk.add_task("b");
+        werk.claim(&Query::from("t-1"), "alice");
 
-        let created = queue.find_events(|e: &Event| e.name == Event::TASK_CREATED);
+        let created = werk.find_events(|e: &Event| e.name == Event::TASK_CREATED);
         assert_eq!(created.len(), 2);
         assert_eq!(created[0].task_id, "t-1");
         assert_eq!(created[1].task_id, "t-2");
@@ -1684,69 +1678,69 @@ mod tests {
 
     #[test]
     fn find_events_matching_nothing_is_empty() {
-        let (queue, _tmp) = test_queue();
-        queue.add_task("a");
-        assert!(queue
+        let (werk, _tmp) = test_werk();
+        werk.add_task("a");
+        assert!(werk
             .find_events(|e: &Event| e.name == Event::RUN_FINISHED)
             .is_empty());
     }
 
     #[test]
     fn find_events_without_a_log_is_empty() {
-        let (queue, _tmp) = test_queue();
-        assert!(queue.find_events(|_: &Event| true).is_empty());
+        let (werk, _tmp) = test_werk();
+        assert!(werk.find_events(|_: &Event| true).is_empty());
     }
 
     #[test]
     fn find_event_returns_the_earliest_match() {
-        let (queue, _tmp) = test_queue();
-        queue.add_task("a");
-        queue.add_task("b");
+        let (werk, _tmp) = test_werk();
+        werk.add_task("a");
+        werk.add_task("b");
 
-        let first = queue.find_event(|e: &Event| e.name == Event::TASK_CREATED);
+        let first = werk.find_event(|e: &Event| e.name == Event::TASK_CREATED);
         assert_eq!(first.unwrap().task_id, "t-1");
-        assert!(queue
+        assert!(werk
             .find_event(|e: &Event| e.name == Event::TASK_FAILED)
             .is_none());
     }
 
     #[test]
     fn find_events_takes_the_same_syntax_a_task_query_is_written_in() {
-        let (queue, _tmp) = test_queue();
-        queue.add_task(Task::new("scan").label("scout"));
-        queue.add_task("b");
-        queue.claim(&Query::from("t-1"), "scout-1");
+        let (werk, _tmp) = test_werk();
+        werk.add_task(Task::new("scan").label("scout"));
+        werk.add_task("b");
+        werk.claim(&Query::from("t-1"), "scout-1");
 
-        assert_eq!(queue.find_events("task_created").len(), 2);
-        assert_eq!(queue.find_events("t-1").len(), 2);
-        assert_eq!(queue.find_events("event = task_started").len(), 1);
-        assert_eq!(queue.find_events("agent = scout-1").len(), 1);
-        assert!(queue.find_events("run_finished").is_empty());
+        assert_eq!(werk.find_events("task_created").len(), 2);
+        assert_eq!(werk.find_events("t-1").len(), 2);
+        assert_eq!(werk.find_events("event = task_started").len(), 1);
+        assert_eq!(werk.find_events("agent = scout-1").len(), 1);
+        assert!(werk.find_events("run_finished").is_empty());
     }
 
     #[test]
     fn emit_event_accepts_each_optional_context_shape() {
-        let (queue, _tmp) = test_queue();
-        let id = queue.add_task(Task::new("work").label("scan"));
+        let (werk, _tmp) = test_werk();
+        let id = werk.add_task(Task::new("work").label("scan"));
 
-        let global = queue.emit_event(Event::new("global_ready").data(serde_json::json!(null)));
-        let agent = queue.emit_event(
+        let global = werk.emit_event(Event::new("global_ready").data(serde_json::json!(null)));
+        let agent = werk.emit_event(
             Event::new("agent_ready")
                 .data(serde_json::json!(null))
                 .agent_id("scout-1"),
         );
-        let task = queue.emit_event(
+        let task = werk.emit_event(
             Event::new("task_ready")
                 .data(serde_json::json!(null))
                 .task_id(&id),
         );
-        let both = queue.emit_event(
+        let both = werk.emit_event(
             Event::new("work_ready")
                 .data(serde_json::json!(null))
                 .task_id(&id)
                 .agent_id("scout-1"),
         );
-        let unknown = queue.emit_event(Event::new("unknown_task_ready").task_id("t-404"));
+        let unknown = werk.emit_event(Event::new("unknown_task_ready").task_id("t-404"));
 
         assert!(global.created_at > 0);
         assert_eq!(
@@ -1771,9 +1765,9 @@ mod tests {
     #[test]
     fn a_named_event_round_trips_through_the_log_and_aql() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let queue = Queue::new();
-        queue.set_dir(dir.path().to_path_buf());
-        queue.emit_event(
+        let werk = Werk::new();
+        werk.set_dir(dir.path().to_path_buf());
+        werk.emit_event(
             Event::new("Document Indexed").data(serde_json::json!({ "documents": 42 })),
         );
 
@@ -1785,9 +1779,9 @@ mod tests {
         assert_eq!(wire["task_id"], "");
         assert!(wire.get("event").is_none());
 
-        drop(queue);
+        drop(werk);
 
-        let resumed = Queue::load(dir.path()).unwrap();
+        let resumed = Werk::load(dir.path()).unwrap();
         let found = resumed.find_event(r#"event = "Document Indexed""#).unwrap();
         assert_eq!(found.get_name(), "Document Indexed");
         assert_eq!(found.get_data(), &serde_json::json!({ "documents": 42 }));
@@ -1795,28 +1789,28 @@ mod tests {
 
     #[test]
     fn named_events_do_not_fire_task_result_or_failure_hooks() {
-        let (queue, _tmp) = test_queue();
-        let id = queue.add_task("work");
+        let (werk, _tmp) = test_werk();
+        let id = werk.add_task("work");
         let event_calls = Arc::new(AtomicUsize::new(0));
         let observed = Arc::clone(&event_calls);
-        queue.on_event(move |_, _| {
+        werk.on_event(move |_, _| {
             observed.fetch_add(1, Ordering::Relaxed);
         });
         let calls = Arc::new(AtomicUsize::new(0));
         let task_calls = Arc::clone(&calls);
-        queue.on_task(move |_, _, _| {
+        werk.on_task(move |_, _, _| {
             task_calls.fetch_add(1, Ordering::Relaxed);
         });
         let result_calls = Arc::clone(&calls);
-        queue.on_result(move |_, _, _| {
+        werk.on_result(move |_, _, _| {
             result_calls.fetch_add(1, Ordering::Relaxed);
         });
         let failure_calls = Arc::clone(&calls);
-        queue.on_failure(move |_, _, _| {
+        werk.on_failure(move |_, _, _| {
             failure_calls.fetch_add(1, Ordering::Relaxed);
         });
 
-        queue.emit_event(Event::new("work_noted").task_id(id));
+        werk.emit_event(Event::new("work_noted").task_id(id));
 
         assert_eq!(calls.load(Ordering::Relaxed), 0);
         assert_eq!(event_calls.load(Ordering::Relaxed), 1);
@@ -1824,41 +1818,39 @@ mod tests {
 
     #[test]
     fn an_emitted_builtin_uses_name_based_hooks_without_changing_task_state() {
-        let (queue, _tmp) = test_queue();
-        let id = queue.add_task("work");
-        queue
-            .set_result(&id, serde_json::json!("reported"))
-            .unwrap();
+        let (werk, _tmp) = test_werk();
+        let id = werk.add_task("work");
+        werk.set_result(&id, serde_json::json!("reported")).unwrap();
         let task_calls = Arc::new(AtomicUsize::new(0));
         let seen = Arc::clone(&task_calls);
-        queue.on_task(move |_, _, _| {
+        werk.on_task(move |_, _, _| {
             seen.fetch_add(1, Ordering::Relaxed);
         });
         let seen = Arc::clone(&task_calls);
-        queue.on_result(move |_, _, _| {
+        werk.on_result(move |_, _, _| {
             seen.fetch_add(1, Ordering::Relaxed);
         });
         let seen = Arc::clone(&task_calls);
-        queue.on_failure(move |_, _, _| {
+        werk.on_failure(move |_, _, _| {
             seen.fetch_add(1, Ordering::Relaxed);
         });
 
-        queue.emit_event(Event::new(Event::TASK_FINISHED).task_id(&id));
+        werk.emit_event(Event::new(Event::TASK_FINISHED).task_id(&id));
 
-        assert_eq!(queue.get_task(&id).unwrap().status, Status::Todo);
-        assert_eq!(queue.find_events("event = task_finished").len(), 1);
+        assert_eq!(werk.get_task(&id).unwrap().status, Status::Todo);
+        assert_eq!(werk.find_events("event = task_finished").len(), 1);
         assert_eq!(task_calls.load(Ordering::Relaxed), 2);
     }
 
     #[test]
     fn find_event_answers_the_first_in_the_order_the_query_names() {
-        let (queue, _tmp) = test_queue();
-        queue.add_task("a");
-        queue.add_task("b");
+        let (werk, _tmp) = test_werk();
+        werk.add_task("a");
+        werk.add_task("b");
 
-        let newest = queue.find_event("task_created ORDER BY created DESC");
+        let newest = werk.find_event("task_created ORDER BY created DESC");
         assert_eq!(newest.unwrap().task_id, "t-2");
-        let oldest = queue.find_event("task_created");
+        let oldest = werk.find_event("task_created");
         assert_eq!(oldest.unwrap().task_id, "t-1");
     }
 
@@ -1866,28 +1858,27 @@ mod tests {
     fn a_condition_reads_the_label_and_the_agent_that_caused_the_event() {
         // What makes a per-label or per-agent breakdown possible without the
         // crate keeping one.
-        let (queue, _tmp) = test_queue();
-        queue.add_task(Task::new("scan").label("scout"));
-        queue.claim(&Query::from("scout"), "scout-1");
+        let (werk, _tmp) = test_werk();
+        werk.add_task(Task::new("scan").label("scout"));
+        werk.claim(&Query::from("scout"), "scout-1");
 
         assert_eq!(
-            queue
-                .find_events(|e: &Event| e.label.as_deref() == Some("scout"))
+            werk.find_events(|e: &Event| e.label.as_deref() == Some("scout"))
                 .len(),
             2
         );
         assert_eq!(
-            queue.find_events(|e: &Event| e.agent_id == "scout-1").len(),
+            werk.find_events(|e: &Event| e.agent_id == "scout-1").len(),
             1
         );
     }
 
     #[test]
     fn a_condition_naming_a_streamed_chunk_never_matches() {
-        let (queue, _tmp) = test_queue();
-        queue.add_task("a");
+        let (werk, _tmp) = test_werk();
+        werk.add_task("a");
         emit_event(
-            &queue,
+            &werk,
             "t-1",
             "alice",
             Event::new(Event::TEXT_CHUNK_RECEIVED)
@@ -1895,7 +1886,7 @@ mod tests {
         );
 
         // Chunks are deliberately left out of the log, so nothing finds them.
-        assert!(queue
+        assert!(werk
             .find_events(|e: &Event| e.name == Event::TEXT_CHUNK_RECEIVED)
             .is_empty());
     }
@@ -1904,10 +1895,10 @@ mod tests {
     fn the_totals_keep_reporting_once_the_log_is_gone() {
         // The counters are what the run spent; the finders are what it wrote
         // down. Deleting the log separates the two.
-        let (queue, dir) = test_queue();
-        queue.add_task("a");
+        let (werk, dir) = test_werk();
+        werk.add_task("a");
         emit_event(
-            &queue,
+            &werk,
             "t-1",
             "alice",
             Event::new(Event::REQUEST_FINISHED).data(serde_json::json!({
@@ -1921,103 +1912,103 @@ mod tests {
 
         std::fs::remove_file(dir.path().join("events.jsonl")).unwrap();
 
-        assert_eq!(queue.get_input_tokens(), 900);
-        assert_eq!(queue.get_output_tokens(), 120);
-        assert!(queue.find_events(|_: &Event| true).is_empty());
+        assert_eq!(werk.get_input_tokens(), 900);
+        assert_eq!(werk.get_output_tokens(), 120);
+        assert!(werk.find_events(|_: &Event| true).is_empty());
     }
 
     #[test]
     fn malformed_builtin_data_still_publishes_without_changing_derived_statistics() {
-        let (queue, _tmp) = test_queue();
+        let (werk, _tmp) = test_werk();
 
-        let emitted = queue.emit_event(
+        let emitted = werk.emit_event(
             Event::new(Event::REQUEST_FINISHED).data(serde_json::json!({ "usage": "unknown" })),
         );
 
         assert_eq!(emitted.get_name(), Event::REQUEST_FINISHED);
-        assert_eq!(queue.stats.event_count(Event::REQUEST_FINISHED), 1);
-        assert_eq!(queue.get_input_tokens(), 0);
-        assert_eq!(queue.get_output_tokens(), 0);
-        assert_eq!(queue.find_events("event = request_finished").len(), 1);
+        assert_eq!(werk.stats.event_count(Event::REQUEST_FINISHED), 1);
+        assert_eq!(werk.get_input_tokens(), 0);
+        assert_eq!(werk.get_output_tokens(), 0);
+        assert_eq!(werk.find_events("event = request_finished").len(), 1);
     }
 
     #[test]
     fn get_dir_reads_back_the_configured_directory() {
-        let (queue, tmp) = test_queue();
-        assert_eq!(queue.get_dir(), tmp.path());
+        let (werk, tmp) = test_werk();
+        assert_eq!(werk.get_dir(), tmp.path());
     }
 
     #[test]
-    fn cancel_takes_only_the_matching_tasks_off_the_queue() {
-        let (queue, _tmp) = test_queue();
-        let research = queue.add_task(Task::new("x").label("research"));
-        queue.add_task(Task::new("x").label("analysis"));
-        queue.add_task(Task::new("x"));
-        queue.cancel_tasks("label = research");
+    fn cancel_takes_only_the_matching_tasks_off_the_werk() {
+        let (werk, _tmp) = test_werk();
+        let research = werk.add_task(Task::new("x").label("research"));
+        werk.add_task(Task::new("x").label("analysis"));
+        werk.add_task(Task::new("x"));
+        werk.cancel_tasks("label = research");
 
-        let cancelled = queue.find_tasks("cancelled = true");
+        let cancelled = werk.find_tasks("cancelled = true");
         assert_eq!(cancelled.len(), 1);
         assert_eq!(cancelled[0].id, research);
     }
 
     #[test]
     fn cancel_applies_to_matching_tasks_inserted_later() {
-        let (queue, _tmp) = test_queue();
-        queue.cancel_tasks("label = research");
-        let research = queue.add_task(Task::new("x").label("research"));
-        queue.add_task(Task::new("x").label("analysis"));
+        let (werk, _tmp) = test_werk();
+        werk.cancel_tasks("label = research");
+        let research = werk.add_task(Task::new("x").label("research"));
+        werk.add_task(Task::new("x").label("analysis"));
 
         assert_eq!(
-            queue.find_task("cancelled = true").map(|task| task.id),
+            werk.find_task("cancelled = true").map(|task| task.id),
             Some(research),
         );
-        assert_eq!(queue.find_tasks("cancelled = false").len(), 1);
+        assert_eq!(werk.find_tasks("cancelled = false").len(), 1);
     }
 
     #[tokio::test]
     async fn start_clears_cancellation_flags_and_filters() {
-        let (queue, _tmp) = test_queue();
-        queue.add_task(Task::new("first").label("research"));
-        queue.cancel_tasks("label = research");
-        assert_eq!(queue.find_tasks("cancelled = true").len(), 1);
+        let (werk, _tmp) = test_werk();
+        werk.add_task(Task::new("first").label("research"));
+        werk.cancel_tasks("label = research");
+        assert_eq!(werk.find_tasks("cancelled = true").len(), 1);
 
-        queue.start();
-        queue.add_task(Task::new("second").label("research"));
+        werk.start();
+        werk.add_task(Task::new("second").label("research"));
 
-        assert!(queue.find_tasks("cancelled = true").is_empty());
-        assert_eq!(queue.find_tasks("pending = true").len(), 2);
-        queue.cancel_all_tasks();
-        queue.finish_all_tasks().await;
+        assert!(werk.find_tasks("cancelled = true").is_empty());
+        assert_eq!(werk.find_tasks("pending = true").len(), 2);
+        werk.cancel_all_tasks();
+        werk.finish_all_tasks().await;
     }
 
     #[tokio::test]
     async fn finish_does_not_restart_a_run_that_ended_by_cancellation() {
-        let (queue, _tmp) = test_queue();
-        queue.add_task(Task::new("work").label("research"));
-        queue.start();
-        queue.cancel_tasks("pending = true AND label = research");
-        queue.finish_all_tasks().await;
+        let (werk, _tmp) = test_werk();
+        werk.add_task(Task::new("work").label("research"));
+        werk.start();
+        werk.cancel_tasks("pending = true AND label = research");
+        werk.finish_all_tasks().await;
 
-        assert_eq!(queue.find_events("event = run_started").len(), 1);
-        queue.finish_tasks("label = research").await;
-        assert_eq!(queue.find_events("event = run_started").len(), 1);
+        assert_eq!(werk.find_events("event = run_started").len(), 1);
+        werk.finish_tasks("label = research").await;
+        assert_eq!(werk.find_events("event = run_started").len(), 1);
 
-        queue.start();
-        assert_eq!(queue.find_events("event = run_started").len(), 2);
-        queue.cancel_all_tasks();
-        queue.finish_all_tasks().await;
+        werk.start();
+        assert_eq!(werk.find_events("event = run_started").len(), 2);
+        werk.cancel_all_tasks();
+        werk.finish_all_tasks().await;
     }
 
     #[test]
     fn on_event_appends_handlers_in_installation_order() {
         use std::sync::Mutex;
-        let (queue, _tmp) = test_queue();
+        let (werk, _tmp) = test_werk();
         let log: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
         let l1 = Arc::clone(&log);
         let l2 = Arc::clone(&log);
-        queue.on_event(move |_, _| l1.lock().unwrap().push(1));
-        queue.on_event(move |_, _| l2.lock().unwrap().push(2));
-        emit_event(&queue, "ID", "agent", Event::new(Event::TURN_STARTED));
+        werk.on_event(move |_, _| l1.lock().unwrap().push(1));
+        werk.on_event(move |_, _| l2.lock().unwrap().push(2));
+        emit_event(&werk, "ID", "agent", Event::new(Event::TURN_STARTED));
         assert_eq!(*log.lock().unwrap(), vec![1, 2]);
     }
 
@@ -2025,28 +2016,28 @@ mod tests {
     fn on_event_falls_back_to_default_logger_when_empty() {
         // No assertion target beyond "does not panic": with no installed
         // handlers, emit_event() must run default_logger without crashing.
-        let (queue, _tmp) = test_queue();
-        emit_event(&queue, "ID", "agent", Event::new(Event::TURN_STARTED));
+        let (werk, _tmp) = test_werk();
+        emit_event(&werk, "ID", "agent", Event::new(Event::TURN_STARTED));
     }
 
     #[test]
     fn an_event_names_the_agent_and_the_tasks_label() {
         // What a handler needs to count per agent or per label, which is where
         // those figures live now that `Stats` counts the run as a whole.
-        let (queue, _tmp) = test_queue();
+        let (werk, _tmp) = test_werk();
         let outcomes = Arc::new(Mutex::new(Vec::new()));
         let seen = Arc::clone(&outcomes);
-        queue.on_event(move |_, event| {
+        werk.on_event(move |_, event| {
             if event.name == Event::TASK_FINISHED {
                 seen.lock()
                     .unwrap()
                     .push((event.agent_id.clone(), event.label.clone()));
             }
         });
-        queue.add_task(Task::new("a").label("scan"));
-        let id = queue.claim(&Query::from("scan"), "scout").unwrap();
-        queue.set_result(&id, serde_json::json!("done")).unwrap();
-        queue.set_finished_by(&id, "scout").unwrap();
+        werk.add_task(Task::new("a").label("scan"));
+        let id = werk.claim(&Query::from("scan"), "scout").unwrap();
+        werk.set_result(&id, serde_json::json!("done")).unwrap();
+        werk.set_finished_by(&id, "scout").unwrap();
 
         assert_eq!(
             *outcomes.lock().unwrap(),
@@ -2056,28 +2047,28 @@ mod tests {
 
     #[tokio::test]
     async fn finish_returns_once_the_matching_task_resolves() {
-        let (queue, _tmp) = test_queue();
-        let id = queue.add_task("work");
-        let writer = Arc::clone(&queue);
+        let (werk, _tmp) = test_werk();
+        let id = werk.add_task("work");
+        let writer = Arc::clone(&werk);
         let claimed = id.clone();
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(30)).await;
             attach_done_result(&writer, &claimed, "done");
         });
         let target = id.clone();
-        queue.finish_tasks(move |t: &Task| t.id == target).await;
-        assert!(queue.get_task(&id).unwrap().is_finished());
+        werk.finish_tasks(move |t: &Task| t.id == target).await;
+        assert!(werk.get_task(&id).unwrap().is_finished());
     }
 
     #[tokio::test]
     async fn finish_returns_without_an_event_when_nothing_matches_yet() {
-        let (queue, _tmp) = test_queue();
-        let id = queue.add_task("work");
-        attach_done_result(&queue, &id, "done");
+        let (werk, _tmp) = test_werk();
+        let id = werk.add_task("work");
+        attach_done_result(&werk, &id, "done");
         // Nothing emits from here on, so only the check before the wait can
         // resolve this.
         assert_eq!(
-            queue.finish_tasks(move |t: &Task| t.id == id).await,
+            werk.finish_tasks(move |t: &Task| t.id == id).await,
             vec![serde_json::json!("done")]
         );
     }
@@ -2085,18 +2076,18 @@ mod tests {
     #[test]
     fn edit_replies_edits_the_transcript_on_demand() {
         use crate::agents::tasks::ReplyContent;
-        let (queue, _tmp) = test_queue();
-        let id = queue.add_task("go");
-        queue.append_reply(&id, Reply::user_text("keep me"));
-        queue.append_reply(&id, Reply::user_text("drop me"));
+        let (werk, _tmp) = test_werk();
+        let id = werk.add_task("go");
+        werk.append_reply(&id, Reply::user_text("keep me"));
+        werk.append_reply(&id, Reply::user_text("drop me"));
 
-        queue.edit_replies(&id, |replies| {
+        werk.edit_replies(&id, |replies| {
             replies.retain(|reply| {
                 !matches!(reply.content.first(), Some(ReplyContent::Text { text: t }) if t == "drop me")
             });
         });
 
-        let replies = queue.get_task(&id).unwrap().replies;
+        let replies = werk.get_task(&id).unwrap().replies;
         assert!(replies.iter().any(
             |r| matches!(r.content.first(), Some(ReplyContent::Text { text: t }) if t == "keep me")
         ));
@@ -2107,39 +2098,39 @@ mod tests {
 
     #[test]
     fn on_result_receives_the_finished_task_and_its_result() {
-        let (queue, _tmp) = test_queue();
+        let (werk, _tmp) = test_werk();
         let seen = Arc::new(Mutex::new(Vec::new()));
         let record = Arc::clone(&seen);
-        queue.on_result(move |_, task, result| {
+        werk.on_result(move |_, task, result| {
             record
                 .lock()
                 .unwrap()
                 .push((task.id.clone(), result.clone()))
         });
-        queue.add_task(Task::new("x").label("L"));
-        let id = queue.claim(&Query::from("L"), "agent").unwrap();
+        werk.add_task(Task::new("x").label("L"));
+        let id = werk.claim(&Query::from("L"), "agent").unwrap();
 
-        attach_done_result(&queue, &id, "lead");
+        attach_done_result(&werk, &id, "lead");
 
         assert_eq!(*seen.lock().unwrap(), vec![(id, serde_json::json!("lead"))]);
     }
 
     #[test]
     fn on_failure_fires_for_a_tool_call_failure_not_only_a_failed_task() {
-        let (queue, _tmp) = test_queue();
+        let (werk, _tmp) = test_werk();
         let seen = Arc::new(Mutex::new(Vec::new()));
         let record = Arc::clone(&seen);
-        queue.on_failure(move |_, event, task| {
+        werk.on_failure(move |_, event, task| {
             record
                 .lock()
                 .unwrap()
                 .push((event.get_name().to_string(), task.id.clone()))
         });
-        let id = queue.add_task("work");
+        let id = werk.add_task("work");
 
-        emit_event(&queue, &id, "agent", Event::new(Event::TURN_STARTED));
-        emit_event(&queue, &id, "agent", tool_call_failed("no such directory"));
-        queue.set_task_failed(&id).unwrap();
+        emit_event(&werk, &id, "agent", Event::new(Event::TURN_STARTED));
+        emit_event(&werk, &id, "agent", tool_call_failed("no such directory"));
+        werk.set_task_failed(&id).unwrap();
 
         assert_eq!(
             *seen.lock().unwrap(),
@@ -2152,12 +2143,12 @@ mod tests {
 
     #[test]
     fn failures_accumulate_on_the_task_in_order() {
-        let (queue, dir) = test_queue();
-        let id = queue.add_task("work");
+        let (werk, dir) = test_werk();
+        let id = werk.add_task("work");
 
-        emit_event(&queue, &id, "agent", tool_call_failed("no such directory"));
+        emit_event(&werk, &id, "agent", tool_call_failed("no such directory"));
         emit_event(
-            &queue,
+            &werk,
             &id,
             "agent",
             Event::new(Event::REQUEST_FAILED).data(serde_json::json!({
@@ -2167,7 +2158,7 @@ mod tests {
             })),
         );
 
-        let task = queue.get_task(&id).unwrap();
+        let task = werk.get_task(&id).unwrap();
         let names: Vec<String> = task
             .errors
             .iter()
@@ -2194,14 +2185,14 @@ mod tests {
 
     #[test]
     fn a_recoverable_failure_stays_on_a_finished_task() {
-        let (queue, _tmp) = test_queue();
-        let id = queue.add_task("work");
+        let (werk, _tmp) = test_werk();
+        let id = werk.add_task("work");
 
         // A failed tool call the model recovered from: the task finishes.
-        emit_event(&queue, &id, "agent", tool_call_failed("boom"));
-        queue.set_task_finished(&id, "done").unwrap();
+        emit_event(&werk, &id, "agent", tool_call_failed("boom"));
+        werk.set_task_finished(&id, "done").unwrap();
 
-        let task = queue.get_task(&id).unwrap();
+        let task = werk.get_task(&id).unwrap();
         assert_eq!(task.status, Status::Finished);
         assert_eq!(task.errors.len(), 1);
         assert_eq!(task.errors[0].get_name(), "tool_call_failed");
@@ -2210,30 +2201,30 @@ mod tests {
     #[test]
     fn the_terminal_task_failed_is_not_recorded_as_an_error() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let queue = Queue::new();
-        queue.set_dir(dir.path().to_path_buf());
-        let id = queue.add_task("work");
-        queue.set_task_failed(&id).unwrap();
-        assert!(queue.get_task(&id).unwrap().errors.is_empty());
+        let werk = Werk::new();
+        werk.set_dir(dir.path().to_path_buf());
+        let id = werk.add_task("work");
+        werk.set_task_failed(&id).unwrap();
+        assert!(werk.get_task(&id).unwrap().errors.is_empty());
 
         // The log carries `task_failed` either way, so a resumed session that
         // read it back as a failure would disagree with the run that wrote it.
-        drop(queue);
-        let resumed = Queue::load(dir.path()).unwrap();
+        drop(werk);
+        let resumed = Werk::load(dir.path()).unwrap();
         assert!(resumed.get_task(&id).unwrap().errors.is_empty());
     }
 
     #[test]
     fn a_failure_naming_a_task_the_directory_lost_is_skipped() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let original = Queue::new();
+        let original = Werk::new();
         original.set_dir(dir.path().to_path_buf());
         let id = original.add_task("work");
         emit_event(&original, &id, "agent", tool_call_failed("boom"));
         drop(original);
         std::fs::remove_dir_all(dir.path().join("tasks").join(&id)).unwrap();
 
-        let resumed = Queue::load(dir.path()).unwrap();
+        let resumed = Werk::load(dir.path()).unwrap();
         assert!(resumed.get_task(&id).is_none());
         assert_eq!(resumed.get_input_tokens(), 0);
     }
@@ -2241,113 +2232,110 @@ mod tests {
     #[test]
     fn failures_round_trip_through_load() {
         let dir = crate::test_util::TempDir::new().unwrap();
-        let original = Queue::new();
+        let original = Werk::new();
         original.set_dir(dir.path().to_path_buf());
         let id = original.add_task("work");
         emit_event(&original, &id, "agent", tool_call_failed("boom"));
         drop(original);
 
-        let resumed = Queue::load(dir.path()).unwrap();
+        let resumed = Werk::load(dir.path()).unwrap();
         let task = resumed.get_task(&id).unwrap();
         assert_eq!(task.errors.len(), 1);
         assert_eq!(task.errors[0].get_name(), "tool_call_failed");
     }
 
     #[test]
-    fn on_failure_files_a_retry_through_the_queue_it_is_handed() {
-        let (queue, _tmp) = test_queue();
-        queue.on_failure(|queue, _, failed| {
+    fn on_failure_files_a_retry_through_the_werk_it_is_handed() {
+        let (werk, _tmp) = test_werk();
+        werk.on_failure(|werk, _, failed| {
             if failed.parent.is_none() {
-                queue.add_task(Task::new(failed.task.clone()).parent(&failed.id));
+                werk.add_task(Task::new(failed.task.clone()).parent(&failed.id));
             }
         });
-        let id = queue.add_task("work");
+        let id = werk.add_task("work");
 
-        queue.set_task_failed(&id).unwrap();
+        werk.set_task_failed(&id).unwrap();
 
-        let retry = queue.find_task(format!("parent = {id}")).unwrap();
+        let retry = werk.find_task(format!("parent = {id}")).unwrap();
         assert_eq!(retry.task, serde_json::json!("work"));
     }
 
     #[test]
     fn on_event_files_a_follow_up_for_any_kind() {
-        let (queue, _tmp) = test_queue();
-        queue.on_event(|queue, event| {
+        let (werk, _tmp) = test_werk();
+        werk.on_event(|werk, event| {
             if event.name == Event::TURN_STARTED {
-                queue.add_task(Task::new("report").label("report"));
+                werk.add_task(Task::new("report").label("report"));
             }
         });
-        let id = queue.add_task("work");
+        let id = werk.add_task("work");
 
-        emit_event(&queue, &id, "agent", Event::new(Event::TURN_STARTED));
+        emit_event(&werk, &id, "agent", Event::new(Event::TURN_STARTED));
 
-        assert_eq!(queue.find_tasks("label = report").len(), 1);
+        assert_eq!(werk.find_tasks("label = report").len(), 1);
     }
 
     #[test]
     fn on_result_links_a_follow_up_to_the_finished_parent() {
-        let (queue, _tmp) = test_queue();
-        queue.add_task(Task::new("scout").label("scout"));
-        let id = queue.claim(&Query::from("scout"), "agent").unwrap();
-        queue.set_result(&id, serde_json::json!("lead")).unwrap();
-        queue.set_finished_by(&id, "agent").unwrap();
-        queue.on_result(|queue, done, _| {
-            queue.add_task(Task::new("hunt").label("sniper").parent(&done.id));
+        let (werk, _tmp) = test_werk();
+        werk.add_task(Task::new("scout").label("scout"));
+        let id = werk.claim(&Query::from("scout"), "agent").unwrap();
+        werk.set_result(&id, serde_json::json!("lead")).unwrap();
+        werk.set_finished_by(&id, "agent").unwrap();
+        werk.on_result(|werk, done, _| {
+            werk.add_task(Task::new("hunt").label("sniper").parent(&done.id));
         });
-        emit_event(&queue, &id, "agent", Event::new(Event::TASK_FINISHED));
-        let spawned = queue.find_task("label = sniper").unwrap();
+        emit_event(&werk, &id, "agent", Event::new(Event::TASK_FINISHED));
+        let spawned = werk.find_task("label = sniper").unwrap();
         assert_eq!(spawned.parent, Some(id));
     }
 
     #[test]
     fn on_result_ignores_unfinished_events() {
-        let (queue, _tmp) = test_queue();
-        queue.on_result(|queue, _, _| {
-            queue.add_task(Task::new("follow-up").label("next"));
+        let (werk, _tmp) = test_werk();
+        werk.on_result(|werk, _, _| {
+            werk.add_task(Task::new("follow-up").label("next"));
         });
-        emit_event(&queue, "ID", "agent", Event::new(Event::TURN_STARTED));
-        assert!(queue.get_tasks().is_empty());
+        emit_event(&werk, "ID", "agent", Event::new(Event::TURN_STARTED));
+        assert!(werk.get_tasks().is_empty());
     }
 
     #[test]
     fn on_result_reads_the_results_that_landed_before_it() {
         // A condition across results, which the handler selects for itself.
-        let (queue, _tmp) = test_queue();
+        let (werk, _tmp) = test_werk();
         let counts = Arc::new(Mutex::new(Vec::new()));
         let record = Arc::clone(&counts);
-        queue.on_result(move |queue, _, _| {
-            record
-                .lock()
-                .unwrap()
-                .push(queue.find_results("scan").len());
+        werk.on_result(move |werk, _, _| {
+            record.lock().unwrap().push(werk.find_results("scan").len());
         });
-        for id in scans(&queue, 2) {
-            queue.set_task_finished(&id, "clean").unwrap();
+        for id in scans(&werk, 2) {
+            werk.set_task_finished(&id, "clean").unwrap();
         }
 
         assert_eq!(*counts.lock().unwrap(), vec![1, 2]);
     }
 
     /// File `count` tasks labelled `scan`, all `Todo`.
-    fn scans(queue: &Queue, count: usize) -> Vec<String> {
+    fn scans(werk: &Werk, count: usize) -> Vec<String> {
         (0..count)
-            .map(|i| queue.add_task(Task::new(format!("scan {i}")).label("scan")))
+            .map(|i| werk.add_task(Task::new(format!("scan {i}")).label("scan")))
             .collect()
     }
 
     #[tokio::test]
     async fn on_result_async_handlers_run_before_finish_all_returns() {
-        let (queue, _tmp) = test_queue();
+        let (werk, _tmp) = test_werk();
         let seen = Arc::new(Mutex::new(Vec::new()));
         let record = Arc::clone(&seen);
-        queue.on_result_async(move |_, task, result| {
+        werk.on_result_async(move |_, task, result| {
             let record = Arc::clone(&record);
             async move { record.lock().unwrap().push((task.id, result)) }
         });
-        let id = queue.add_task("scan the corpus");
-        queue.set_task_finished(&id, "clean").unwrap();
+        let id = werk.add_task("scan the corpus");
+        werk.set_task_finished(&id, "clean").unwrap();
 
-        queue.finish_all_tasks().await;
+        werk.finish_all_tasks().await;
 
         assert_eq!(
             *seen.lock().unwrap(),
@@ -2357,19 +2345,19 @@ mod tests {
 
     #[tokio::test]
     async fn on_result_async_runs_every_handler_once_per_result() {
-        let (queue, _tmp) = test_queue();
+        let (werk, _tmp) = test_werk();
         let seen = Arc::new(Mutex::new(Vec::new()));
         for name in ["first", "second"] {
             let record = Arc::clone(&seen);
-            queue.on_result_async(move |_, _, _| {
+            werk.on_result_async(move |_, _, _| {
                 let record = Arc::clone(&record);
                 async move { record.lock().unwrap().push(name) }
             });
         }
-        let id = queue.add_task("scan the corpus");
-        queue.set_task_finished(&id, "clean").unwrap();
+        let id = werk.add_task("scan the corpus");
+        werk.set_task_finished(&id, "clean").unwrap();
 
-        queue.finish_all_tasks().await;
+        werk.finish_all_tasks().await;
 
         // Two entries, not four: a second registration does not queue twice.
         assert_eq!(*seen.lock().unwrap(), vec!["first", "second"]);
@@ -2377,27 +2365,27 @@ mod tests {
 
     #[tokio::test]
     async fn registering_from_two_threads_at_once_queues_each_result_once() {
-        let (queue, _tmp) = test_queue();
+        let (werk, _tmp) = test_werk();
         let seen = Arc::new(Mutex::new(Vec::new()));
         let start = std::sync::Barrier::new(2);
         std::thread::scope(|threads| {
             for name in ["first", "second"] {
-                let queue = Arc::clone(&queue);
+                let werk = Arc::clone(&werk);
                 let record = Arc::clone(&seen);
                 let start = &start;
                 threads.spawn(move || {
                     start.wait();
-                    queue.on_result_async(move |_, _, _| {
+                    werk.on_result_async(move |_, _, _| {
                         let record = Arc::clone(&record);
                         async move { record.lock().unwrap().push(name) }
                     });
                 });
             }
         });
-        let id = queue.add_task("scan the corpus");
-        queue.set_task_finished(&id, "clean").unwrap();
+        let id = werk.add_task("scan the corpus");
+        werk.set_task_finished(&id, "clean").unwrap();
 
-        queue.finish_all_tasks().await;
+        werk.finish_all_tasks().await;
 
         // Two entries, not four: neither thread installed a second hook.
         assert_eq!(seen.lock().unwrap().len(), 2);
@@ -2405,10 +2393,10 @@ mod tests {
 
     #[tokio::test]
     async fn a_cancelled_finish_leaves_the_rest_of_the_queue_for_the_next_one() {
-        let (queue, _tmp) = test_queue();
+        let (werk, _tmp) = test_werk();
         let seen = Arc::new(Mutex::new(Vec::new()));
         let record = Arc::clone(&seen);
-        queue.on_result_async(move |_, task, _| {
+        werk.on_result_async(move |_, task, _| {
             let record = Arc::clone(&record);
             async move {
                 let first = record.lock().unwrap().is_empty();
@@ -2419,24 +2407,24 @@ mod tests {
                 }
             }
         });
-        let first = queue.add_task("scan the first half");
-        let second = queue.add_task("scan the second half");
-        queue.set_task_finished(&first, "clean").unwrap();
-        queue.set_task_finished(&second, "clean").unwrap();
+        let first = werk.add_task("scan the first half");
+        let second = werk.add_task("scan the second half");
+        werk.set_task_finished(&first, "clean").unwrap();
+        werk.set_task_finished(&second, "clean").unwrap();
 
-        let cancelled = tokio::time::timeout(Duration::from_millis(50), queue.finish_all_tasks());
+        let cancelled = tokio::time::timeout(Duration::from_millis(50), werk.finish_all_tasks());
         assert!(cancelled.await.is_err());
-        queue.finish_all_tasks().await;
+        werk.finish_all_tasks().await;
 
         assert_eq!(*seen.lock().unwrap(), vec![first, second]);
     }
 
     #[tokio::test]
     async fn on_result_async_finishes_one_handler_before_starting_the_next() {
-        let (queue, _tmp) = test_queue();
+        let (werk, _tmp) = test_werk();
         let seen = Arc::new(Mutex::new(Vec::new()));
         let record = Arc::clone(&seen);
-        queue.on_result_async(move |_, task, _| {
+        werk.on_result_async(move |_, task, _| {
             let record = Arc::clone(&record);
             async move {
                 record.lock().unwrap().push(format!("start {}", task.id));
@@ -2445,12 +2433,12 @@ mod tests {
                 record.lock().unwrap().push(format!("end {}", task.id));
             }
         });
-        let first = queue.add_task("scan the first half");
-        let second = queue.add_task("scan the second half");
-        queue.set_task_finished(&first, "clean").unwrap();
-        queue.set_task_finished(&second, "clean").unwrap();
+        let first = werk.add_task("scan the first half");
+        let second = werk.add_task("scan the second half");
+        werk.set_task_finished(&first, "clean").unwrap();
+        werk.set_task_finished(&second, "clean").unwrap();
 
-        queue.finish_all_tasks().await;
+        werk.finish_all_tasks().await;
 
         assert_eq!(
             *seen.lock().unwrap(),
@@ -2465,15 +2453,15 @@ mod tests {
 
     #[tokio::test]
     async fn every_kind_of_async_handler_sees_its_event_once() {
-        let (queue, _tmp) = test_queue();
+        let (werk, _tmp) = test_werk();
         let seen = Arc::new(Mutex::new(Vec::new()));
         let one = Arc::clone(&seen);
-        queue.on_result_async(move |_, _, result| {
+        werk.on_result_async(move |_, _, result| {
             let one = Arc::clone(&one);
             async move { one.lock().unwrap().push(format!("result {result}")) }
         });
         let each = Arc::clone(&seen);
-        queue.on_task_async(move |_, event, _| {
+        werk.on_task_async(move |_, event, _| {
             let each = Arc::clone(&each);
             async move {
                 each.lock()
@@ -2481,10 +2469,10 @@ mod tests {
                     .push(format!("task {}", event.get_name()))
             }
         });
-        let id = queue.add_task("scan the corpus");
-        queue.set_task_finished(&id, 1).unwrap();
+        let id = werk.add_task("scan the corpus");
+        werk.set_task_finished(&id, 1).unwrap();
 
-        queue.finish_all_tasks().await;
+        werk.finish_all_tasks().await;
 
         // One entry each: the two kinds share one queueing hook.
         assert_eq!(
@@ -2495,26 +2483,26 @@ mod tests {
 
     #[tokio::test]
     async fn on_event_async_sees_the_kinds_no_task_hook_accepts() {
-        let (queue, _tmp) = test_queue();
+        let (werk, _tmp) = test_werk();
         let seen = Arc::new(Mutex::new(Vec::new()));
         let record = Arc::clone(&seen);
-        queue.on_event_async(move |_, event| {
+        werk.on_event_async(move |_, event| {
             let record = Arc::clone(&record);
             async move { record.lock().unwrap().push(event.get_name().to_string()) }
         });
-        emit_event(&queue, "ID", "agent", Event::new(Event::TURN_STARTED));
+        emit_event(&werk, "ID", "agent", Event::new(Event::TURN_STARTED));
 
-        queue.finish_all_tasks().await;
+        werk.finish_all_tasks().await;
 
         assert!(seen.lock().unwrap().contains(&"turn_started".to_string()));
     }
 
     #[tokio::test]
     async fn on_event_async_receives_named_events() {
-        let (queue, _tmp) = test_queue();
+        let (werk, _tmp) = test_werk();
         let seen = Arc::new(Mutex::new(Vec::new()));
         let record = Arc::clone(&seen);
-        queue.on_event_async(move |_, event| {
+        werk.on_event_async(move |_, event| {
             let record = Arc::clone(&record);
             async move {
                 if event.get_name() == "document_indexed" {
@@ -2522,19 +2510,19 @@ mod tests {
                 }
             }
         });
-        queue.emit_event(Event::new("document_indexed"));
+        werk.emit_event(Event::new("document_indexed"));
 
-        queue.finish_all_tasks().await;
+        werk.finish_all_tasks().await;
 
         assert_eq!(*seen.lock().unwrap(), vec!["document_indexed"]);
     }
 
     #[tokio::test]
     async fn on_failure_async_hands_over_the_failed_task() {
-        let (queue, _tmp) = test_queue();
+        let (werk, _tmp) = test_werk();
         let seen = Arc::new(Mutex::new(Vec::new()));
         let record = Arc::clone(&seen);
-        queue.on_failure_async(move |_, event, task| {
+        werk.on_failure_async(move |_, event, task| {
             let record = Arc::clone(&record);
             async move {
                 record
@@ -2543,104 +2531,104 @@ mod tests {
                     .push((event.get_name().to_string(), task.id.clone()))
             }
         });
-        let id = queue.add_task("scan the corpus");
-        queue.set_task_failed(&id).unwrap();
+        let id = werk.add_task("scan the corpus");
+        werk.set_task_failed(&id).unwrap();
 
-        queue.finish_all_tasks().await;
+        werk.finish_all_tasks().await;
 
         assert_eq!(*seen.lock().unwrap(), vec![("task_failed".to_string(), id)]);
     }
 
     #[tokio::test]
-    async fn an_async_handler_files_a_follow_up_through_the_queue_it_is_handed() {
-        let (queue, _tmp) = test_queue();
-        queue.on_result_async(|queue, done, _| async move {
-            queue.add_task(Task::new("hunt").label("sniper").parent(&done.id));
+    async fn an_async_handler_files_a_follow_up_through_the_werk_it_is_handed() {
+        let (werk, _tmp) = test_werk();
+        werk.on_result_async(|werk, done, _| async move {
+            werk.add_task(Task::new("hunt").label("sniper").parent(&done.id));
         });
-        let id = queue.add_task(Task::new("scout").label("scout"));
-        queue.set_task_finished(&id, "lead").unwrap();
+        let id = werk.add_task(Task::new("scout").label("scout"));
+        werk.set_task_finished(&id, "lead").unwrap();
 
-        queue.finish_all_tasks().await;
+        werk.finish_all_tasks().await;
 
-        let spawned = queue.find_task("label = sniper").unwrap();
+        let spawned = werk.find_task("label = sniper").unwrap();
         assert_eq!(spawned.parent, Some(id));
     }
 
     #[tokio::test]
     async fn an_async_handler_waits_for_a_finish_to_run_it() {
-        let (queue, _tmp) = test_queue();
+        let (werk, _tmp) = test_werk();
         let seen = Arc::new(Mutex::new(Vec::new()));
         let record = Arc::clone(&seen);
-        queue.on_result_async(move |_, task, _| {
+        werk.on_result_async(move |_, task, _| {
             let record = Arc::clone(&record);
             async move { record.lock().unwrap().push(task.id) }
         });
-        let id = queue.add_task("scan the corpus");
+        let id = werk.add_task("scan the corpus");
 
-        queue.set_task_finished(&id, "clean").unwrap();
+        werk.set_task_finished(&id, "clean").unwrap();
         assert!(seen.lock().unwrap().is_empty());
 
-        queue.finish_all_tasks().await;
+        werk.finish_all_tasks().await;
         assert_eq!(*seen.lock().unwrap(), vec![id]);
     }
 
     #[tokio::test]
     async fn on_result_async_leaves_a_failed_task_alone() {
-        let (queue, _tmp) = test_queue();
+        let (werk, _tmp) = test_werk();
         let seen = Arc::new(Mutex::new(Vec::new()));
         let record = Arc::clone(&seen);
-        queue.on_result_async(move |_, task, _| {
+        werk.on_result_async(move |_, task, _| {
             let record = Arc::clone(&record);
             async move { record.lock().unwrap().push(task.id) }
         });
-        let id = queue.add_task("scan the corpus");
-        queue.set_task_failed(&id).unwrap();
+        let id = werk.add_task("scan the corpus");
+        werk.set_task_failed(&id).unwrap();
 
-        queue.finish_all_tasks().await;
+        werk.finish_all_tasks().await;
 
         assert!(seen.lock().unwrap().is_empty());
     }
 
     #[test]
     fn a_hook_waits_for_the_results_it_needs_before_filing_the_next_step() {
-        let (queue, _tmp) = test_queue();
-        queue.on_result(|queue, _, _| {
-            if queue.find_results("scan").len() == 2 {
-                queue.add_task(Task::new("write the report").label("report"));
+        let (werk, _tmp) = test_werk();
+        werk.on_result(|werk, _, _| {
+            if werk.find_results("scan").len() == 2 {
+                werk.add_task(Task::new("write the report").label("report"));
             }
         });
-        let scans = scans(&queue, 2);
+        let scans = scans(&werk, 2);
 
-        queue.set_task_finished(&scans[0], "clean").unwrap();
-        assert!(queue.find_tasks("label = report").is_empty());
+        werk.set_task_finished(&scans[0], "clean").unwrap();
+        assert!(werk.find_tasks("label = report").is_empty());
 
-        queue.set_task_finished(&scans[1], "clean").unwrap();
-        assert_eq!(queue.find_tasks("label = report").len(), 1);
+        werk.set_task_finished(&scans[1], "clean").unwrap();
+        assert_eq!(werk.find_tasks("label = report").len(), 1);
     }
 
     #[test]
     fn on_result_inserts_a_follow_up_before_drain_is_observable() {
-        let (queue, _tmp) = test_queue();
-        queue.on_result(move |queue, done, _| {
+        let (werk, _tmp) = test_werk();
+        werk.on_result(move |werk, done, _| {
             if done.get_label() == Some("scout") {
-                queue.add_task(Task::new("hunt").label("sniper"));
+                werk.add_task(Task::new("hunt").label("sniper"));
             }
         });
-        queue.add_task(Task::new("scout").label("scout"));
-        let id = queue.claim(&Query::from("scout"), "agent").unwrap();
-        queue.set_result(&id, serde_json::json!("lead")).unwrap();
-        queue.set_finished_by(&id, "agent").unwrap();
-        // The handler ran inside `set_finished_by`, so the queue is never
+        werk.add_task(Task::new("scout").label("scout"));
+        let id = werk.claim(&Query::from("scout"), "agent").unwrap();
+        werk.set_result(&id, serde_json::json!("lead")).unwrap();
+        werk.set_finished_by(&id, "agent").unwrap();
+        // The handler ran inside `set_finished_by`, so the Werk is never
         // observably empty between the parent finishing and the follow-up.
-        assert!(queue.pending(&Query::all()));
+        assert!(werk.pending(&Query::all()));
     }
 
     #[test]
     fn on_task_hands_the_handler_the_finished_task() {
-        let (queue, _tmp) = test_queue();
+        let (werk, _tmp) = test_werk();
         let seen = Arc::new(Mutex::new(Vec::new()));
         let record = Arc::clone(&seen);
-        queue.on_task(move |_, event, task| {
+        werk.on_task(move |_, event, task| {
             if event.name == Event::TASK_FINISHED {
                 record.lock().unwrap().push((
                     event.agent_id.clone(),
@@ -2650,11 +2638,11 @@ mod tests {
                 ));
             }
         });
-        queue.add_task(Task::new("scan").label("scan"));
-        let id = queue.claim(&Query::from("scan"), "analyst").unwrap();
-        queue.append_reply(&id, Reply::user_text("hello"));
-        queue.set_result(&id, serde_json::json!("done")).unwrap();
-        queue.set_finished_by(&id, "analyst").unwrap();
+        werk.add_task(Task::new("scan").label("scan"));
+        let id = werk.claim(&Query::from("scan"), "analyst").unwrap();
+        werk.append_reply(&id, Reply::user_text("hello"));
+        werk.set_result(&id, serde_json::json!("done")).unwrap();
+        werk.set_finished_by(&id, "analyst").unwrap();
 
         // `replies` is `#[serde(skip)]`, so a transcript here proves the
         // handler holds the in-memory task, not a disk round-trip.
@@ -2671,39 +2659,39 @@ mod tests {
 
     #[test]
     fn on_task_skips_events_that_are_not_lifecycle_transitions() {
-        let (queue, _tmp) = test_queue();
+        let (werk, _tmp) = test_werk();
         let seen = Arc::new(Mutex::new(Vec::new()));
         let record = Arc::clone(&seen);
-        queue.add_task(Task::new("scan").label("scan"));
-        let id = queue.claim(&Query::from("scan"), "analyst").unwrap();
+        werk.add_task(Task::new("scan").label("scan"));
+        let id = werk.claim(&Query::from("scan"), "analyst").unwrap();
         // Installed after the claim, so only the turn is in the handler's view.
-        queue.on_task(move |_, _, task| record.lock().unwrap().push(task.id.clone()));
-        emit_event(&queue, &id, "analyst", Event::new(Event::TURN_STARTED));
+        werk.on_task(move |_, _, task| record.lock().unwrap().push(task.id.clone()));
+        emit_event(&werk, &id, "analyst", Event::new(Event::TURN_STARTED));
         assert!(seen.lock().unwrap().is_empty());
     }
 
     #[test]
     fn on_task_skips_events_that_name_no_task() {
-        let (queue, _tmp) = test_queue();
+        let (werk, _tmp) = test_werk();
         let seen = Arc::new(Mutex::new(Vec::new()));
         let record = Arc::clone(&seen);
-        queue.on_task(move |_, _, task| record.lock().unwrap().push(task.id.clone()));
-        emit_event(&queue, "", "", Event::new(Event::RUN_STARTED));
+        werk.on_task(move |_, _, task| record.lock().unwrap().push(task.id.clone()));
+        emit_event(&werk, "", "", Event::new(Event::RUN_STARTED));
         assert!(seen.lock().unwrap().is_empty());
     }
 
     #[test]
     fn on_task_coexists_with_a_user_handler() {
-        let (queue, _tmp) = test_queue();
+        let (werk, _tmp) = test_werk();
         let logged = Arc::new(Mutex::new(Vec::new()));
         let log = Arc::clone(&logged);
-        queue.on_event(move |_, e| log.lock().unwrap().push(e.get_name().to_string()));
+        werk.on_event(move |_, e| log.lock().unwrap().push(e.get_name().to_string()));
         let seen = Arc::new(Mutex::new(Vec::new()));
         let record = Arc::clone(&seen);
-        queue.on_task(move |_, _, task| record.lock().unwrap().push(task.id.clone()));
-        queue.add_task(Task::new("scan").label("scan"));
+        werk.on_task(move |_, _, task| record.lock().unwrap().push(task.id.clone()));
+        werk.add_task(Task::new("scan").label("scan"));
         // The claim is the lifecycle event; no second publication is needed.
-        let id = queue.claim(&Query::from("scan"), "analyst").unwrap();
+        let id = werk.claim(&Query::from("scan"), "analyst").unwrap();
 
         assert_eq!(*seen.lock().unwrap(), vec![id]);
         assert!(logged.lock().unwrap().contains(&"task_started".to_string()));
@@ -2712,127 +2700,127 @@ mod tests {
     #[test]
     fn on_event_fires_every_handler_per_event() {
         use std::sync::atomic::AtomicU32;
-        let (queue, _tmp) = test_queue();
+        let (werk, _tmp) = test_werk();
         let count = Arc::new(AtomicU32::new(0));
         let c1 = Arc::clone(&count);
         let c2 = Arc::clone(&count);
-        queue.on_event(move |_, _| {
+        werk.on_event(move |_, _| {
             c1.fetch_add(1, Ordering::Relaxed);
         });
-        queue.on_event(move |_, _| {
+        werk.on_event(move |_, _| {
             c2.fetch_add(10, Ordering::Relaxed);
         });
-        emit_event(&queue, "ID", "agent", Event::new(Event::TURN_STARTED));
-        emit_event(&queue, "ID", "agent", Event::new(Event::TURN_STARTED));
+        emit_event(&werk, "ID", "agent", Event::new(Event::TURN_STARTED));
+        emit_event(&werk, "ID", "agent", Event::new(Event::TURN_STARTED));
         assert_eq!(count.load(Ordering::Relaxed), 22);
     }
 
     #[tokio::test]
-    async fn run_finished_reports_drained_on_empty_queue() {
-        let (queue, _tmp) = test_queue();
-        let reasons = collect_finish_reasons(&queue);
-        queue.finish_all_tasks().await;
+    async fn run_finished_reports_drained_on_empty_werk() {
+        let (werk, _tmp) = test_werk();
+        let reasons = collect_finish_reasons(&werk);
+        werk.finish_all_tasks().await;
         assert_eq!(*reasons.lock().unwrap(), vec![FinishReason::Drained]);
     }
 
     #[tokio::test]
     async fn finish_reason_reports_nothing_until_the_run_ends() {
-        let (queue, _tmp) = test_queue();
-        queue.start();
-        assert_eq!(queue.get_finish_reason(), None);
-        queue.finish_all_tasks().await;
-        assert_eq!(queue.get_finish_reason(), Some(FinishReason::Drained));
+        let (werk, _tmp) = test_werk();
+        werk.start();
+        assert_eq!(werk.get_finish_reason(), None);
+        werk.finish_all_tasks().await;
+        assert_eq!(werk.get_finish_reason(), Some(FinishReason::Drained));
     }
 
     #[tokio::test]
     async fn the_finish_reason_is_cleared_by_a_restart() {
-        let (queue, _tmp) = test_queue();
-        queue.start();
-        queue.cancel_all_tasks();
-        queue.finish_all_tasks().await;
-        assert_eq!(queue.get_finish_reason(), Some(FinishReason::Cancelled));
-        queue.start();
-        assert_eq!(queue.get_finish_reason(), None);
+        let (werk, _tmp) = test_werk();
+        werk.start();
+        werk.cancel_all_tasks();
+        werk.finish_all_tasks().await;
+        assert_eq!(werk.get_finish_reason(), Some(FinishReason::Cancelled));
+        werk.start();
+        assert_eq!(werk.get_finish_reason(), None);
     }
 
     #[tokio::test]
     async fn a_clean_drain_is_not_reported_as_cancelled() {
-        let (queue, _tmp) = test_queue();
-        queue.finish_all_tasks().await;
-        assert_eq!(queue.get_finish_reason(), Some(FinishReason::Drained));
+        let (werk, _tmp) = test_werk();
+        werk.finish_all_tasks().await;
+        assert_eq!(werk.get_finish_reason(), Some(FinishReason::Drained));
     }
 
     #[tokio::test]
     async fn finish_hands_back_only_the_results_its_filter_named() {
-        let (queue, _tmp) = test_queue();
-        queue.add_task(Task::new("a").label("scan"));
-        queue.add_task(Task::new("b").label("report"));
-        attach_done_result(&queue, "t-1", "scanned");
-        attach_done_result(&queue, "t-2", "reported");
+        let (werk, _tmp) = test_werk();
+        werk.add_task(Task::new("a").label("scan"));
+        werk.add_task(Task::new("b").label("report"));
+        attach_done_result(&werk, "t-1", "scanned");
+        attach_done_result(&werk, "t-2", "reported");
 
         assert_eq!(
-            queue.finish_tasks("label = scan").await,
+            werk.finish_tasks("label = scan").await,
             vec![serde_json::json!("scanned")]
         );
     }
 
     #[tokio::test]
     async fn finish_all_hands_back_the_results_of_every_pool() {
-        let (queue, _tmp) = test_queue();
-        queue.add_task(Task::new("a").label("scan"));
-        queue.add_task(Task::new("b").label("report"));
-        attach_done_result(&queue, "t-1", "scanned");
-        attach_done_result(&queue, "t-2", "reported");
+        let (werk, _tmp) = test_werk();
+        werk.add_task(Task::new("a").label("scan"));
+        werk.add_task(Task::new("b").label("report"));
+        attach_done_result(&werk, "t-1", "scanned");
+        attach_done_result(&werk, "t-2", "reported");
 
         assert_eq!(
-            queue.finish_all_tasks().await,
+            werk.finish_all_tasks().await,
             vec![serde_json::json!("scanned"), serde_json::json!("reported")]
         );
     }
 
     #[tokio::test]
     async fn finish_task_hands_back_the_first_result_in_query_order() {
-        let (queue, _tmp) = test_queue();
-        queue.add_task(Task::new("a").label("scan"));
-        queue.add_task(Task::new("b").label("report"));
+        let (werk, _tmp) = test_werk();
+        werk.add_task(Task::new("a").label("scan"));
+        werk.add_task(Task::new("b").label("report"));
         // Resolved back to front, so the answer tells creation order from the
         // order the results landed in.
-        attach_done_result(&queue, "t-2", "reported");
-        attach_done_result(&queue, "t-1", "scanned");
+        attach_done_result(&werk, "t-2", "reported");
+        attach_done_result(&werk, "t-1", "scanned");
 
         assert_eq!(
-            queue.finish_task("ORDER BY id DESC").await,
+            werk.finish_task("ORDER BY id DESC").await,
             Some(serde_json::json!("reported"))
         );
     }
 
     #[tokio::test]
     async fn finish_task_is_none_when_nothing_finished() {
-        let (queue, _tmp) = test_queue();
+        let (werk, _tmp) = test_werk();
 
-        assert_eq!(queue.finish_task("status = Finished").await, None);
+        assert_eq!(werk.finish_task("status = Finished").await, None);
     }
 
     #[tokio::test]
     async fn run_finished_reports_cancelled_when_cancel_fires_during_run() {
-        let (queue, _tmp) = test_queue();
-        let reasons = collect_finish_reasons(&queue);
-        queue.start();
-        queue.cancel_all_tasks();
-        queue.finish_all_tasks().await;
+        let (werk, _tmp) = test_werk();
+        let reasons = collect_finish_reasons(&werk);
+        werk.start();
+        werk.cancel_all_tasks();
+        werk.finish_all_tasks().await;
         assert_eq!(*reasons.lock().unwrap(), vec![FinishReason::Cancelled]);
-        assert_eq!(queue.get_finish_reason(), Some(FinishReason::Cancelled));
+        assert_eq!(werk.get_finish_reason(), Some(FinishReason::Cancelled));
     }
 
     #[tokio::test]
     async fn run_finished_reports_policy_violated_when_max_turns_zero() {
-        let (queue, _tmp) = test_queue();
-        let reasons = collect_finish_reasons(&queue);
-        queue.set_policy(Policy {
+        let (werk, _tmp) = test_werk();
+        let reasons = collect_finish_reasons(&werk);
+        werk.set_policy(Policy {
             max_turns: Some(0),
             ..Default::default()
         });
-        queue.finish_all_tasks().await;
+        werk.finish_all_tasks().await;
         assert_eq!(
             *reasons.lock().unwrap(),
             vec![FinishReason::PolicyViolated(crate::PolicyViolation::Turns)],
@@ -2841,11 +2829,11 @@ mod tests {
 
     #[tokio::test]
     async fn run_finished_is_emitted_again_after_a_restart() {
-        let (queue, _tmp) = test_queue();
-        let reasons = collect_finish_reasons(&queue);
-        queue.finish_all_tasks().await;
-        queue.start();
-        queue.finish_all_tasks().await;
+        let (werk, _tmp) = test_werk();
+        let reasons = collect_finish_reasons(&werk);
+        werk.finish_all_tasks().await;
+        werk.start();
+        werk.finish_all_tasks().await;
         assert_eq!(
             *reasons.lock().unwrap(),
             vec![FinishReason::Drained, FinishReason::Drained],
@@ -2854,15 +2842,15 @@ mod tests {
 
     #[tokio::test]
     async fn run_started_emitted_before_run_finished() {
-        let (queue, _tmp) = test_queue();
+        let (werk, _tmp) = test_werk();
         let log = Arc::new(Mutex::new(Vec::new()));
         let sink = Arc::clone(&log);
-        queue.on_event(move |_, e| {
+        werk.on_event(move |_, e| {
             if matches!(e.get_name(), Event::RUN_STARTED | Event::RUN_FINISHED) {
                 sink.lock().unwrap().push(e.get_name().to_string());
             }
         });
-        queue.finish_all_tasks().await;
+        werk.finish_all_tasks().await;
         let entries = log.lock().unwrap();
         assert_eq!(entries.len(), 2, "expected RunStarted then RunFinished");
         assert_eq!(entries[0], Event::RUN_STARTED);

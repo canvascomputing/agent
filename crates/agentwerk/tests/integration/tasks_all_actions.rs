@@ -1,5 +1,5 @@
 //! End-to-end: a real LLM walks the whole `tasks` action set on one task,
-//! reading its own task and its parent's result, listing the queue whole and
+//! reading its own task and its parent's result, listing the Werk whole and
 //! then narrowing it with AQL, then creating and editing a task. The role
 //! names intents, never actions or query syntax, so the tool's own description
 //! is what has to map each intent onto the right action and onto a query that
@@ -13,7 +13,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use super::common;
 
 use agentwerk::tools::TaskTool;
-use agentwerk::{Agent, Event, Policy, Query, Queue, Task};
+use agentwerk::{Agent, Event, Policy, Query, Task, Werk};
 
 const ACTIONS: [&str; 5] = ["task", "result", "list", "create", "edit"];
 
@@ -27,7 +27,7 @@ async fn walks_every_task_action() -> std::result::Result<(), Box<dyn std::error
 
     let secret = ten_digit_token();
 
-    let tasks = Queue::new();
+    let tasks = Werk::new();
     tasks.set_policy(Policy {
         max_turns: Some(20),
         max_time: Some(Duration::from_secs(120)),
@@ -76,8 +76,8 @@ async fn walks_every_task_action() -> std::result::Result<(), Box<dyn std::error
                  this order, then call `finish`:\n\
                  1. Read your own task and note the parent it names.\n\
                  2. Read what that parent produced: it holds a vault combination.\n\
-                 3. Find out how many tasks the queue holds right now.\n\
-                 4. Without reading the whole queue again, ask it for the one \
+                 3. Find out how many tasks the Werk holds right now.\n\
+                 4. Without reading the whole Werk again, ask it for the one \
                  task whose body carries the phrase `sealed archive room`.\n\
                  5. File a new task recording the combination, in the \
                  `records` scope so nobody picks it up.\n\
@@ -96,7 +96,7 @@ async fn walks_every_task_action() -> std::result::Result<(), Box<dyn std::error
     );
 
     // Not `finish_all_tasks`: the decoy and the record the agent files are labelled
-    // for nobody, so they stay `Todo` and a wait on the whole queue only ever
+    // for nobody, so they stay `Todo` and a wait on the whole Werk only ever
     // ends at the time cap.
     tasks.finish_tasks("label IN (archive, auditor)").await;
     common::print_result(&tasks);

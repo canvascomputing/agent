@@ -1,6 +1,6 @@
 //! Deep Research with handover chain.
 //!
-//! One `Queue` holds the whole pipeline. The driver enqueues a
+//! One `Werk` holds the whole pipeline. The driver enqueues a
 //! single starter task pinned to `researcher_1`. Each researcher calls
 //! `brave_search` and hands off to the next agent through its configured
 //! handover. The report contract is attached to the task researcher_2 creates.
@@ -19,7 +19,7 @@ use agentwerk::event::Event;
 use agentwerk::providers::{Model, Provider};
 use agentwerk::schemas::Schema;
 use agentwerk::tools::{FetchTool, TaskTool, Tool};
-use agentwerk::{Agent, FinishReason, Queue, Task};
+use agentwerk::{Agent, FinishReason, Task, Werk};
 
 const RESEARCHER_1_ROLE: &str = include_str!("prompts/researcher_1.role.md");
 const RESEARCHER_2_ROLE: &str = include_str!("prompts/researcher_2.role.md");
@@ -38,7 +38,7 @@ async fn main() {
 
     let workdir = prepare_workdir();
 
-    let tasks = Queue::new();
+    let tasks = Werk::new();
     tasks.set_dir(workdir.clone());
     let on_ctrl_c = Arc::clone(&tasks);
     tokio::spawn(async move {
@@ -120,7 +120,7 @@ async fn main() {
     }
 }
 
-fn print_research_outcome(tasks: &Queue, outcome: &Outcome) {
+fn print_research_outcome(tasks: &Werk, outcome: &Outcome) {
     eprintln!("\n══════════════════════════════════════════════════════════");
     match outcome {
         Outcome::Report(report) => {
@@ -160,10 +160,10 @@ enum Outcome {
     Stalled,
 }
 
-/// Read the run's outcome off the drained queue: a finished report
+/// Read the run's outcome off the drained Werk: a finished report
 /// task wins, an external cancel is surfaced, anything else means the
 /// chain stopped without reaching the report step.
-fn classify_outcome(tasks: &Queue) -> Outcome {
+fn classify_outcome(tasks: &Werk) -> Outcome {
     let reported = tasks.find_results("report").pop();
     if let Some(result) = reported {
         return Outcome::Report(result);
@@ -174,7 +174,7 @@ fn classify_outcome(tasks: &Queue) -> Outcome {
     Outcome::Stalled
 }
 
-fn print_chain_summary(tasks: &Queue) {
+fn print_chain_summary(tasks: &Werk) {
     eprintln!("\nChain summary:");
     let all = tasks.get_tasks();
     if all.is_empty() {
@@ -202,7 +202,7 @@ fn print_chain_summary(tasks: &Queue) {
     }
 }
 
-fn print_stats(tasks: &Queue) {
+fn print_stats(tasks: &Werk) {
     eprintln!("\nStats:");
     eprintln!(
         "  Duration : {:?}",

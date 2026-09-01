@@ -19,7 +19,7 @@ crates/
 
 **One file per bound concept, mirroring the library. Naming rules live in [style.md](style.md).**
 
-- `src/lib.rs` is the `#[pymodule]` and registers every class and function. `agent.rs`, `task.rs`, `queue.rs`, `reply.rs`, `trajectory.rs`, `knowledge.rs`, `schema.rs`, `event.rs`, `providers.rs`, and `tools.rs` each bind the library module of the same name.
+- `src/lib.rs` is the `#[pymodule]` and registers every class and function. `agent.rs`, `task.rs`, `werk.rs`, `reply.rs`, `trajectory.rs`, `knowledge.rs`, `schema.rs`, `event.rs`, `providers.rs`, and `tools.rs` each bind the library module of the same name.
 - `src/query.rs` binds `Query`, which covers both field sets: Python carries no type parameter, so the class compiles its string over tasks and over events at once and each call reads the compilation it needs.
 - `src/convert.rs` holds the only JSON boundary: `py_to_value` and `value_to_py` over `pythonize`, plus `py_to_text` for a prompt argument and `runtime_error`.
 - The compiled extension is `_agentwerk`. `python/agentwerk/__init__.py` re-exports it and holds the `@tool` decorator, the one piece of pure-Python logic. `__init__.pyi` declares the surface and MUST match the module, which `tests/test_parity.py` enforces.
@@ -31,14 +31,14 @@ crates/
 **Each top-level source file is one concern the caller observes directly.**
 
 - `lib.rs` holds public re-exports only. Extension types live in `tools::` and `default_logger` in `event::`.
-- `event.rs` defines the generic `Event` record, its built-in name constants, and `default_logger`. Runtime discriminants live with the policy, queue, loop, or tool behavior they control; event-only payload vocabulary stays as strings. Internal and caller-published events use the same record, and the name is their semantic discriminator.
+- `event.rs` defines the generic `Event` record, its built-in name constants, and `default_logger`. Runtime discriminants live with the policy, Werk, loop, or tool behavior they control; event-only payload vocabulary stays as strings. Internal and caller-published events use the same record, and the name is their semantic discriminator.
 - `persistence.rs` holds the `Persist` trait and the shared `write_atomic`, `append_line`, and `output_path` helpers. It is `pub(crate)` and not re-exported.
 - The root `INVENTORY.md` lists every declaration of both crates, one section per source file, public rows before internal ones. It changes in the same commit that adds, renames, removes, or re-types an item.
-- The `agents/`, `prompts/`, `providers/`, `schemas/`, and `tools/` modules each own their domain. `agents/` and `tools/` re-export their headline types, so `use agentwerk::agents::{Agent, Queue}` works without descending into leaf files.
+- The `agents/`, `prompts/`, `providers/`, `schemas/`, and `tools/` modules each own their domain. `agents/` and `tools/` re-export their headline types, so `use agentwerk::agents::{Agent, Werk}` works without descending into leaf files.
 
 ## The `agents/` Module
 
-**Holds the agent, the task queue, and the multi-agent loop.**
+**Holds the agent, the Werk, and the multi-agent loop.**
 
 - `agent.rs`: `Agent`, its configuration methods, and task-dispatch helpers.
 - `compaction.rs`: the summarizer that compaction runs, and the threshold and chunking arithmetic behind it.
@@ -51,7 +51,7 @@ crates/
 
 - `mod.rs` re-exports them and hosts the free helpers `policy_violated`, `now_millis`, `numeric_id`.
 - `task.rs`: `Task`, `Status`, the `Replies` log helper, and the `tasks/<id>/...` path helpers. `reply.rs`: `Author`, `Reply`, `ReplyContent`, and their conversions to and from `providers::Message` and `ContentBlock`. `error.rs`: `TaskError`.
-- `queue.rs`: constructors, configuration, task creation, agent binding, run lifecycle, results, and queries. `store.rs`: the store mutations (`insert`, `claim`, `set_task_finished`, `edit_replies`, transition recording).
+- `werk.rs`: constructors, configuration, task creation, agent binding, run lifecycle, results, and queries. `store.rs`: the store mutations (`insert`, `claim`, `set_task_finished`, `edit_replies`, transition recording).
 - `trajectory.rs`: `Trajectory`, a task's replies captured as a training example, its `trajectories/<id>.json` write, and the `.html` rendering written beside it.
 
 `loop/` holds the multi-agent loop, split by operation:

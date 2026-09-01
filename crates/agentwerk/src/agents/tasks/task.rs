@@ -48,10 +48,10 @@ pub struct Task {
     pub(crate) id: String,
     /// The task lifecycle status.
     pub(crate) status: Status,
-    /// Whether the current run has taken this task off the queue.
+    /// Whether the current run has excluded this task from scheduling.
     ///
     /// Cancellation is run-local rather than a persisted lifecycle status:
-    /// [`Queue::start`] clears it so unfinished work may resume.
+    /// [`Werk::start`] clears it so unfinished work may resume.
     #[serde(skip)]
     pub(crate) cancelled: bool,
     /// Identifier of the agent that created the task.
@@ -78,7 +78,7 @@ pub struct Task {
     /// Failures recorded against the task, appended as they happen. A tool
     /// call or request that failed does not fail the task, so this can carry
     /// entries on a task that finished. Read back out of the session log by
-    /// `Queue::load`, so it is not part of the task record.
+    /// `Werk::load`, so it is not part of the task record.
     #[serde(skip)]
     pub(crate) errors: Vec<Event>,
     /// The parent task if a handover was performed.
@@ -241,14 +241,14 @@ impl Task {
         matches!(self.status, Status::Todo | Status::InProgress) && !self.cancelled
     }
 
-    /// Check whether this run has taken the task off the queue.
+    /// Check whether this run has excluded the task from scheduling.
     pub fn is_cancelled(&self) -> bool {
         self.cancelled
     }
 
     /// False once the model has spoken. The agent then waits for the next
     /// reply, whether a tool result or one you add with
-    /// [`Queue::add_reply`].
+    /// [`Werk::add_reply`].
     pub(crate) fn is_waiting_for_response(&self) -> bool {
         self.replies
             .last()
@@ -345,7 +345,7 @@ impl crate::persistence::Persist for Task {
     }
 
     /// `errors` stays empty: the failures live in the session log, and
-    /// `Queue::load` fills them in the pass it makes over it.
+    /// `Werk::load` fills them in the pass it makes over it.
     fn load(dir: &Path, id: &Self::Key) -> io::Result<Self> {
         let bytes = std::fs::read(task_record_path(dir, id))?;
         let mut task: Task = serde_json::from_slice(&bytes).map_err(io::Error::other)?;

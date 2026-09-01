@@ -10,7 +10,7 @@ use super::common;
 
 use agentwerk::event::{default_logger, Event};
 use agentwerk::tools::{GlobTool, GrepTool, ListDirectoryTool, ReadFileTool};
-use agentwerk::{Agent, Policy, Queue};
+use agentwerk::{Agent, Policy, Werk};
 
 const NEEDLE: &str = "XYZZY_PLUGH_42";
 
@@ -78,7 +78,7 @@ async fn finds_string_buried_deep_in_line() -> std::result::Result<(), Box<dyn s
         logger(e);
     });
 
-    let tasks = Queue::new();
+    let tasks = Werk::new();
 
     tasks.set_policy(Policy {
         max_turns: Some(10),
@@ -221,7 +221,7 @@ async fn reads_column_slice_after_grep_locates_needle(
         logger(e);
     });
 
-    let tasks = Queue::new();
+    let tasks = Werk::new();
 
     tasks.set_policy(Policy {
         max_turns: Some(10),

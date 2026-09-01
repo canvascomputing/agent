@@ -1,7 +1,7 @@
 """Divide-and-conquer sum of squares, the Python port of the Rust use case.
 
 Partitions ``[1, N]`` into K subranges and enqueues one task per subrange.
-Agents share the labelled queue, call a ``python`` tool for an exact integer,
+Agents share the labelled Werk, call a ``python`` tool for an exact integer,
 and finish with a schema-validated ``{"idx", "partial_sum"}``. The driver
 aggregates once every task resolves and checks the total against the
 closed form ``N(N+1)(2N+1)/6``.
@@ -19,7 +19,7 @@ from agentwerk import (
     Policy,
     Schema,
     Task,
-    Queue,
+    Werk,
     TaskTool,
     Event,
     tool,
@@ -108,9 +108,9 @@ async def main(n, partitions, agents):
     agents = min(agents, len(bounds))
     print(f"sum_{{k=1}}^{{{n}}} k^2 over {len(bounds)} partitions, {agents} agent(s)\n")
 
-    tasks = Queue().set_policy(Policy(max_turns=20 * len(bounds)))
+    tasks = Werk().set_policy(Policy(max_turns=20 * len(bounds)))
     # The finish reason is announced once and not kept, so catch it here. The
-    # per-tool counts are the same story: the queue counts the run as a whole,
+    # per-tool counts are the same story: the Werk counts the run as a whole,
     # so a breakdown is folded off the events.
     finish_reason = []
     tool_calls, tool_errors = Counter(), Counter()

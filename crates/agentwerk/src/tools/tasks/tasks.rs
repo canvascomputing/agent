@@ -1,4 +1,4 @@
-//! Lets an agent read the task queue and create or edit tasks in it.
+//! Lets an agent read the Werk and create or edit tasks in it.
 
 use super::super::tool::{Tool, ToolContext};
 use super::dispatch;

@@ -1,5 +1,5 @@
 //! The Python bindings wrap the Rust crate, which stays the one source of
-//! truth, and expose its agents, tools, LLM providers, and task queue.
+//! truth, and expose its agents, tools, LLM providers, and Werk.
 
 use pyo3::prelude::*;
 
@@ -11,17 +11,17 @@ mod knowledge;
 mod policy;
 mod providers;
 mod query;
-mod queue;
 mod reply;
 mod schema;
 mod task;
 mod tools;
 mod trajectory;
+mod werk;
 
 #[pymodule]
 fn _agentwerk(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<agent::PyAgent>()?;
-    m.add_class::<queue::PyQueue>()?;
+    m.add_class::<werk::PyWerk>()?;
     m.add_class::<policy::PyPolicy>()?;
     m.add_class::<task::PyTask>()?;
     m.add_class::<query::PyQuery>()?;
