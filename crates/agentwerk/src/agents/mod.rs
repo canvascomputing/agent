@@ -1,4 +1,4 @@
-//! Agents, the tasks they work from, and the loop that drives them.
+//! Defines agents and the execution loop they use to claim tasks.
 
 pub mod agent;
 pub(crate) mod compaction;

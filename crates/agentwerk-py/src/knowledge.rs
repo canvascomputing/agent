@@ -1,8 +1,4 @@
-//! The knowledge store as Python sees it. Open one, limit its index, and hand it
-//! to one or more agents so they share what they learn.
-//!
-//! `get_pages()` is how you write those pages yourself, rather than leaving them to
-//! the agent.
+//! Exposes durable shared knowledge and host-managed pages through Python.
 
 use std::sync::Arc;
 

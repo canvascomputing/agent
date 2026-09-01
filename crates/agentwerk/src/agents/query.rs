@@ -1,10 +1,4 @@
-//! AQL, the one string syntax a selection is written in, and the [`Query`] it
-//! parses into: over tasks by default, over recorded events as
-//! `Query<Event>`.
-//!
-//! The tokenizer, the parser, and the condition tree are shared. A field set
-//! implements [`QueryField`], which is all that separates the two grammars,
-//! and [`Queryable`] names the field set a record is selected by.
+//! Parses AQL into queries over tasks and recorded events.
 
 use std::borrow::{Borrow, Cow};
 use std::cmp::Ordering;
@@ -82,8 +76,7 @@ impl<R: Queryable> Matcher<R> for Query<R> {
     }
 }
 
-/// Selects records by field values, compiled from AQL, the agentwerk query
-/// syntax.
+/// Select records by field values expressed in AQL.
 ///
 /// `Query` selects tasks and `Query<Event>` selects recorded events, over
 /// the same syntax and a different field set.

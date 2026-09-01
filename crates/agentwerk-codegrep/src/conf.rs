@@ -1,7 +1,4 @@
-//! Parsing and matching configuration.
-//!
-//! Plain data: word characters, bracket pairs, and the case and
-//! multiline switches.
+//! Configures word characters, bracket pairs, case matching, and multiline matching.
 
 /// Word characters, bracket pairs, and switches that control whitespace
 /// and case behaviour during parsing and matching.

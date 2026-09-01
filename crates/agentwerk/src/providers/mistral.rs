@@ -16,9 +16,7 @@ const DEFAULT_BASE_URL: &str = "https://api.mistral.ai";
 /// LLM provider for the Mistral API. Sends the same request shape as OpenAI's
 /// chat completions against `api.mistral.ai`.
 ///
-/// Reads `MISTRAL_API_KEY` (and optional `MISTRAL_BASE_URL`) when built
-/// via [`Provider::from_env`]. Override the endpoint with [`base_url`] and
-/// the per-request timeout with [`timeout`].
+/// Build it through [`Provider::from_env`] to read `MISTRAL_API_KEY` and the optional `MISTRAL_BASE_URL`. Override the endpoint with [`base_url`] and the per-request timeout with [`timeout`].
 ///
 /// # Examples
 ///

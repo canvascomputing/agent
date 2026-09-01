@@ -1,4 +1,4 @@
-//! The actions agents can take and the private machinery that executes them.
+//! Defines callable agent tools and executes their handlers.
 
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -659,8 +659,7 @@ fn format_oversized_tool_result(
 /// The first `PREVIEW_CHARS` bytes of `content`, ending at the last newline in
 /// that window or at a character boundary.
 ///
-/// The window is moved to a character boundary first: `PREVIEW_CHARS` can land
-/// inside a multi-byte character, and slicing there would panic.
+/// Move the window to a character boundary because `PREVIEW_CHARS` may split a multibyte character.
 fn truncate_preview(content: &str) -> &str {
     let window = utf8_boundary_floor(content, PREVIEW_CHARS.min(content.len()));
     let cut = content[..window]

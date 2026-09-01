@@ -1,7 +1,4 @@
-//! Core check on summarizing: `compaction_threshold: Some(0.0)` puts the threshold at zero, so
-//! proactive compaction fires between turns. The loop calls compact and the
-//! summariser must return non-empty text. The task does not need to
-//! complete: verifying the summariser is the sole purpose of this test.
+//! Verifies proactive compaction calls the live model and returns a non-empty summary. A zero threshold triggers compaction between turns; task completion is not required.
 
 use std::sync::{Arc, Mutex};
 

@@ -1,6 +1,4 @@
-//! End-to-end: a real LLM uses `WriteFileTool` to create a file containing
-//! a fresh random token, and we verify the file landed on disk with the
-//! expected contents. No JSON schema: the disk state is the assertion.
+//! Verifies a real LLM can create a file with `WriteFileTool`. The file contents provide the assertion without a result schema.
 
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};

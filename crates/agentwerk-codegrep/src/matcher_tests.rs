@@ -1,8 +1,4 @@
-//! Tests for matcher behaviour.
-//!
-//! Each test parses one pattern, runs `search`, and asserts a single
-//! observable outcome through the public `Match` / `Loc` / `Metavariable`
-//! surface.
+//! Tests matcher behavior through the public `Match`, `Loc`, and `Metavariable` API.
 
 use super::ast::{MetavariableKind, Pattern};
 use super::conf::Conf;
@@ -732,8 +728,8 @@ fn ellipsis_reports_empty_line_as_a_zero_width_match() {
 
 #[test]
 fn span_backref_skips_a_candidate_whose_length_splits_a_multibyte_char() {
-    // Re-checking the backref starts at '→' with a 1-byte capture, so here_end lands
-    // inside the 3-byte char; the matcher must skip the split, not slice mid-char.
+    // Re-checking the backreference starts at '→' with a 1-byte capture, so
+    // `here_end` splits the 3-byte character. Skip it instead of slicing there.
     let matches = parse_and_search(&multiline(), "[$...A $...A]", "[x →x]");
     assert_eq!(matches.len(), 0);
 }

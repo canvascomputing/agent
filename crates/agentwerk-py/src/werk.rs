@@ -1,5 +1,4 @@
-//! The Werk as Python sees it: add agents, submit work, set limits,
-//! install handlers, drive execution, and read results.
+//! Exposes shared task storage and execution through Python.
 
 use std::future::Future;
 use std::sync::Arc;
@@ -57,7 +56,7 @@ impl PyWerk {
         Ok(slf.inner.add_task(to_task(task)?))
     }
 
-    /// Add a reply to a task, which drives its next turn.
+    /// Add a reply to a task and start its next turn.
     fn add_reply<'py>(slf: PyRef<'py, Self>, id: &str, content: &str) -> PyRef<'py, Self> {
         slf.inner.add_reply(id, content);
         slf
@@ -83,13 +82,13 @@ impl PyWerk {
         self.inner.set_task_failed(id).map_err(runtime_error)
     }
 
-    /// Set the execution limits and retry tuning.
+    /// Set execution limits and retry settings.
     fn set_policy<'py>(slf: PyRef<'py, Self>, policy: PyRef<'_, PyPolicy>) -> PyRef<'py, Self> {
         slf.inner.set_policy(policy.inner.clone());
         slf
     }
 
-    /// Get the execution limits and retry tuning in force.
+    /// Get the execution limits and retry settings in force.
     fn get_policy(&self) -> PyPolicy {
         PyPolicy {
             inner: self.inner.get_policy(),

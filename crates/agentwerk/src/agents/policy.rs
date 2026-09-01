@@ -1,5 +1,4 @@
-//! What a run may spend, how it retries, and when it compacts, read by the
-//! loop before each turn.
+//! Defines execution limits, request retries, and compaction settings.
 
 use std::time::Duration;
 
@@ -42,9 +41,9 @@ impl PolicyViolation {
     }
 }
 
-/// A `Policy` limits the turns, tokens, and time a run may spend, and allows
-/// configuring retries and compaction. Set it with `Werk::set_policy`,
-/// building it from the fields you care about:
+/// Set execution limits, request retries, and compaction behavior.
+///
+/// Apply a policy with `Werk::set_policy`, building it from the fields you need:
 /// `Policy { max_turns: Some(40), ..Default::default() }`.
 ///
 /// `None` means no limit, except on `compaction_threshold`, the one entry that

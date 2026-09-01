@@ -1,5 +1,4 @@
-//! The built-in tools as Python sees them, and how a Python tool object becomes
-//! one the agent builder can register.
+//! Exposes built-in and Python-defined tools for agent registration.
 
 use std::sync::Arc;
 
@@ -168,7 +167,7 @@ fn list_directory_tool() -> PyTool {
 
 /// Point the knowledge tool at `store` without making it the agent's own.
 ///
-/// `Agent.knowledge(store)` is the usual route, and also shows the store's index
+/// `Agent.knowledge(store)` is the usual entry point, and also shows the store's index
 /// in the prompt.
 #[pyfunction]
 #[pyo3(name = "KnowledgeTool")]

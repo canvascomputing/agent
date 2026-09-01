@@ -209,9 +209,9 @@ Set a model's context window or reasoning level when the defaults do not fit. Cl
 
 | Variable | Description |
 |----------|-------------|
-| `MODEL` | Model name. |
-| `ANTHROPIC_MODEL`, `OPENAI_MODEL`, `MISTRAL_MODEL`, `LITELLM_MODEL` | Model name for the detected provider, read when `MODEL` is unset. |
-| `MODEL_CONTEXT_WINDOW` | Context window size in tokens. |
+| `MODEL` | Set the model name. |
+| `ANTHROPIC_MODEL`, `OPENAI_MODEL`, `MISTRAL_MODEL`, `LITELLM_MODEL` | Set the model for the detected provider when `MODEL` is unset. |
+| `MODEL_CONTEXT_WINDOW` | Set the context window size in tokens. |
 
 Configure a custom model:
 
@@ -350,22 +350,15 @@ Write the field, followed by what it must match:
 - Time range: `failed > -1h`
 - Has no value: `agent IS EMPTY`
 
-Missing values do not match `!=`. For example, `label != scan` leaves out tasks
-with no label. To include them, use `label IS EMPTY OR label != scan`.
+Missing values do not match `!=`. For example, `label != scan` leaves out tasks with no label. To include them, use `label IS EMPTY OR label != scan`.
 
-Quote values containing spaces: `label = "needs review"`. Put lists in
-parentheses: `label IN (scan, report)`.
+Quote values containing spaces: `label = "needs review"`. Put lists in parentheses: `label IN (scan, report)`.
 
-Use parentheses when mixing `AND` and `OR` to make the order clear. `NOT` applies
-to the condition or parenthesized group after it. Query words such as `AND` ignore
-case; labels and IDs do not.
+Use parentheses when mixing `AND` and `OR` to make the order clear. `NOT` applies to the condition or parenthesized group after it. Query words such as `AND` ignore case; labels and IDs do not.
 
-Times accept UTC dates such as `2026-08-30`, epoch milliseconds, or offsets such
-as `-30m`, `-2h`, `-7d`, and `-1w`.
+Times accept UTC dates such as `2026-08-30`, epoch milliseconds, or offsets such as `-30m`, `-2h`, `-7d`, and `-1w`.
 
-`ORDER BY field` sorts from lowest to highest. Add `DESC` for the reverse. Tasks
-with no value for that field come last. Without `ORDER BY`, tasks remain in
-creation order.
+`ORDER BY field` sorts from lowest to highest. Add `DESC` for the reverse. Tasks with no value for that field come last. Without `ORDER BY`, tasks remain in creation order.
 
 #### Examples
 
@@ -409,12 +402,12 @@ Task members:
 
 | | Member | Description |
 |-|--------|-------------|
-| **Identity** | `get_id()` | Task ID, of the form `t-N`. |
-| | `get_task()` | The work the agent is asked to do. |
-| | `get_label()` | Label carried by the task. |
-| | `get_parent()` | Identifier of the parent task if a handover was performed. |
-| | `get_reporter()` | Identifier of the agent that created the task. |
-| | `get_assignee()` | Identifier of the agent that claimed the task. |
+| **Identity** | `get_id()` | Get the task ID, of the form `t-N`. |
+| | `get_task()` | Get the work the agent is asked to do. |
+| | `get_label()` | Get the label carried by the task. |
+| | `get_parent()` | Get the parent task ID after a handover. |
+| | `get_reporter()` | Get the ID of the agent that created the task. |
+| | `get_assignee()` | Get the ID of the agent that claimed the task. |
 | **Outcome** | `get_status()` | Get the task's current status. |
 | | `is_todo()` | Check whether the task is waiting to be claimed. |
 | | `is_in_progress()` | Check whether an agent is working on the task. |
@@ -422,14 +415,14 @@ Task members:
 | | `is_failed()` | Check whether the task failed. |
 | | `is_pending()` | Check whether the task has work in this run. |
 | | `is_cancelled()` | Check whether this run has excluded the task from scheduling. |
-| | `get_result()` | The result the agent produced. |
-| | `get_errors()` | The failures recorded against the task, as events. |
-| | `get_replies()` | Messages exchanged with the model. |
-| | `get_schema()` | Optional schema the result must satisfy. |
-| **Timestamps** | `get_created_at()` | Creation time, in milliseconds. |
-| | `get_started_at()` | Claim time, in milliseconds. |
-| | `get_finished_at()` | Finish time, in milliseconds. |
-| | `get_failed_at()` | Failure time, in milliseconds. |
+| | `get_result()` | Get the result the agent produced. |
+| | `get_errors()` | Get failures recorded against the task as events. |
+| | `get_replies()` | Get messages exchanged with the model. |
+| | `get_schema()` | Get the optional schema the result must satisfy. |
+| **Timestamps** | `get_created_at()` | Get the creation time in milliseconds. |
+| | `get_started_at()` | Get the claim time in milliseconds. |
+| | `get_finished_at()` | Get the finish time in milliseconds. |
+| | `get_failed_at()` | Get the failure time in milliseconds. |
 
 See [`Task`](https://docs.rs/agentwerk/latest/agentwerk/struct.Task.html).
 
@@ -720,7 +713,7 @@ let agent = Agent::new()
 | | `ListDirectoryTool` | List files and directories. |
 | **Command** | `CommandTool` | Give access to specific commands. |
 | **Web** | `FetchTool` | Fetch a URL and read its body. |
-| **Events** | `EventTool` | Publish an event; `task_finished` additionally completes the current task. |
+| **Events** | `EventTool` | Publish an event. `task_finished` also completes the current task. |
 | **Tasks** | `FinishTool` | Write the result for the current task and mark it finished. |
 | | `TaskTool` | Read the Werk and create or edit tasks. |
 | **Knowledge** | `KnowledgeTool` | Write, read, remove, or list pages in a knowledge store. |
@@ -729,10 +722,7 @@ let agent = Agent::new()
 
 `FinishTool` and `KnowledgeTool` are registered automatically on every agent. Agents use them to finish queued tasks or work with shared knowledge. An [interactive agent](#interactive) gets no `FinishTool` by default, since finishing its task would end the conversation. `FinishTool` is the compatibility wrapper around `EventTool`'s `task_finished` event; `EventTool` remains opt-in.
 
-When a task carries an object schema, its displayed fields are the `finish` call:
-pass them directly. Its configured handover runs automatically. Scalar and
-unbound tasks retain the explicit `result` envelope, which also supports an
-inline handover:
+When a task carries an object schema, its displayed fields are the `finish` call: pass them directly. Its configured handover runs automatically. Scalar and unbound tasks retain the explicit `result` envelope, which also supports an inline handover:
 
 ```json
 {
@@ -763,8 +753,7 @@ The model supplies a name and optional JSON data:
 }
 ```
 
-Agentwerk records the current task and agent on every event. Werk handlers can
-react as events arrive, and queries can retrieve them later:
+Agentwerk records the current task and agent on every event. Werk handlers can react as events arrive, and queries can retrieve them later:
 
 ```rust
 werk.on_event(|_, event| {
@@ -774,10 +763,7 @@ werk.on_event(|_, event| {
 let events = werk.find_events("event = event_name");
 ```
 
-Event names are open-ended; lowercase snake case is conventional. Publishing an
-event does not change the task's status. The exception is the built-in
-`task_finished` event, which has the same result and handover behavior as
-`FinishTool`:
+Event names are open-ended; lowercase snake case is conventional. Publishing an event does not change the task's status. The exception is the built-in `task_finished` event, which has the same result and handover behavior as `FinishTool`:
 
 ```json
 {
@@ -816,8 +802,7 @@ let web = FetchTool::new().impersonate();
 
 #### Custom Tools
 
-Use `concurrent(true)` when a custom tool has no side effects and may run in
-parallel with other calls.
+Use `concurrent(true)` when a custom tool has no side effects and may run in parallel with other calls.
 
 Describe the tool, then hand it the code it runs:
 
@@ -918,34 +903,21 @@ The first event's name, data, and context are stored as:
 {"name":"document_indexed","data":{"documents":42},"task_id":"t-1","agent_id":"indexer-1"}
 ```
 
-`emit_event` adds the timestamp and a known task's label. Lowercase snake case is
-conventional, but other names are accepted; quote names containing spaces or
-punctuation in AQL. Built-in events have named constructors, such as
-`Event::task_finished()` and `Event::request_started("model")`; their names are
-also available as constants. Publishing one runs its hooks and updates its statistics. It is saved according to the event's normal rules, but it does not change task or execution state.
+`emit_event` adds the timestamp and a known task's label. Lowercase snake case is conventional, but other names are accepted; quote names containing spaces or punctuation in AQL. Built-in events have named constructors, such as `Event::task_finished()` and `Event::request_started("model")`; their names are also available as constants. Publishing one runs its hooks and updates its statistics. It is saved according to the event's normal rules, but it does not change task or execution state.
 
-`Werk::emit_event` never changes a task's status. To let a model finish its
-current task through an event, register `EventTool` on its agent. When the model
-emits `task_finished`, the tool validates and stores `data.result`, optionally
-creates a handover task, and marks the current task finished. All other names
-only publish an event.
+`Werk::emit_event` never changes a task's status. To let a model finish its current task through an event, register `EventTool` on its agent. When the model emits `task_finished`, the tool validates and stores `data.result`, optionally creates a handover task, and marks the current task finished. All other names only publish an event.
 
 Events are saved to `.agentwerk/events.jsonl`. `text_chunk_received` events are not saved. Read events through the Werk with these methods:
 
 | Method | Description |
 |--------|-------------|
 | `emit_event(event)` | Publish an event for querying and observation. |
-| `find_event(query)` | Get the first matching event in query order; without `ORDER BY`, this is the earliest one. |
-| `find_events(query)` | Get every matching event in query order; without `ORDER BY`, this is oldest first. |
+| `find_event(query)` | Get the first matching event in query order. Without `ORDER BY`, this is the earliest one. |
+| `find_events(query)` | Get every matching event in query order. Without `ORDER BY`, this is oldest first. |
 | `get_input_tokens()` / `get_output_tokens()` | Get token counts across the run's requests. |
 | `get_duration()` | Get the elapsed execution duration. |
 
-An event handler usually checks `get_name()` and then reads its payload with
-`get_data()`. Use `get_task_id()`, `get_agent_id()`, and `get_label()` to trace
-where it came from, and `get_created_at()` to read its timestamp. Application
-events can attach a model-facing instruction with `directive(value)` and read
-it back with `get_directive()`. Agentwerk uses `event::default_logger()` when
-you do not install an event handler.
+An event handler usually checks `get_name()` and then reads its payload with `get_data()`. Use `get_task_id()`, `get_agent_id()`, and `get_label()` to trace where it came from, and `get_created_at()` to read its timestamp. Application events can attach a model-facing instruction with `directive(value)` and read it back with `get_directive()`. Agentwerk uses `event::default_logger()` when you do not install an event handler.
 
 </details>
 
@@ -970,10 +942,7 @@ werk.find_events("payload ~ timeout AND created > -1h");
 | **Search** | `payload` | Search the event name and data together as text. |
 | **Compare** | `created` | When the event was recorded. |
 
-Event queries follow the same [rules as task queries](#queries). Match `event`,
-`agent`, `task`, and `label` exactly; use `~` to search `payload`; and use `<` or
-`>` with `created`. Some events have no agent, task, or label. Find them with
-`IS EMPTY`. Without `ORDER BY`, events remain oldest first.
+Event queries follow the same [rules as task queries](#queries). Match `event`, `agent`, `task`, and `label` exactly; use `~` to search `payload`; and use `<` or `>` with `created`. Some events have no agent, task, or label. Find them with `IS EMPTY`. Without `ORDER BY`, events remain oldest first.
 
 You can also search with one word. Agentwerk reads it as:
 
@@ -981,8 +950,7 @@ You can also search with one word. Agentwerk reads it as:
 2. A built-in event name such as `tool_call_failed` means `event = tool_call_failed`.
 3. Any other value such as `scan` means `label = scan`.
 
-For your own event names, write `event = document_indexed`. If a label has the
-same name as a built-in event, write `label = knowledge_read`.
+For your own event names, write `event = document_indexed`. If a label has the same name as a built-in event, write `label = knowledge_read`.
 
 </details>
 

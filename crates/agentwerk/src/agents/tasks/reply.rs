@@ -131,7 +131,7 @@ impl Reply {
     }
 
     /// Build a user reply from the provider blocks the loop sent.
-    /// `paths` maps `tool_use_id → absolute path` for tool results whose
+    /// `paths` maps each `tool_use_id` to the absolute path for a tool result whose
     /// full output was offloaded to disk; empty when nothing was offloaded.
     pub(crate) fn user(blocks: &[ContentBlock], paths: &HashMap<String, PathBuf>) -> Self {
         Self {

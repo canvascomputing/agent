@@ -79,8 +79,7 @@ fn io_failed(message: impl Into<String>) -> impl FnOnce(io::Error) -> KnowledgeE
     |source| KnowledgeError::IoFailed { message, source }
 }
 
-/// `Knowledge` allows agents to share insights or learnings, kept on disk so
-/// they outlive the task that produced them.
+/// Store durable knowledge pages that agents share across tasks.
 ///
 /// Pages are created in the Open Knowledge Format (OKF) v0.1 under
 /// `<dir>/knowledge/pages/<slug>.md`, each carrying `type`, `description`, and
@@ -469,9 +468,8 @@ pub(crate) fn normalize_slug(raw: &str) -> Result<String, KnowledgeError> {
         })
         .collect();
 
-    // Collapse runs of hyphens, trim leading/trailing hyphens.
     let mut collapsed = String::with_capacity(slug.len());
-    let mut prev_hyphen = true; // true → skip leading hyphens
+    let mut prev_hyphen = true;
     for c in slug.chars() {
         if c == '-' {
             if !prev_hyphen {
@@ -483,7 +481,6 @@ pub(crate) fn normalize_slug(raw: &str) -> Result<String, KnowledgeError> {
             prev_hyphen = false;
         }
     }
-    // Trim trailing hyphen.
     while collapsed.ends_with('-') {
         collapsed.pop();
     }
@@ -494,7 +491,6 @@ pub(crate) fn normalize_slug(raw: &str) -> Result<String, KnowledgeError> {
         });
     }
 
-    // Truncate to 60 chars on a hyphen boundary when possible.
     if collapsed.len() > 60 {
         collapsed.truncate(60);
         if let Some(last_hyphen) = collapsed.rfind('-') {
@@ -805,11 +801,9 @@ fn migrate_memory_jsonl(store_dir: &Path, knowledge_dir: &Path) -> io::Result<Ve
         vec![entry]
     };
 
-    // Write the index.
     let index_body = render_index_file(&entries);
     write_atomic(&knowledge_dir.join(INDEX_FILE), index_body.as_bytes())?;
 
-    // Rename the legacy file.
     let migrated_path = store_dir.join(format!("{LEGACY_MEMORY_FILE}{MIGRATED_SUFFIX}"));
     fs::rename(&legacy_path, &migrated_path)?;
 
@@ -943,7 +937,6 @@ mod tests {
         let idx = store.get_index();
         assert!(idx.contains("v2"));
         assert!(!idx.contains("v1"));
-        // Only one line in the index (the replaced entry).
         assert_eq!(idx.lines().count(), 1);
     }
 
@@ -1030,7 +1023,6 @@ mod tests {
         store.clear().unwrap();
         assert!(store.get_index().is_empty());
         assert!(!bundle(&dir).join(INDEX_FILE).exists());
-        // Pages directory exists but is empty.
         assert!(bundle(&dir).join(PAGES_DIR).exists());
         let page_count = fs::read_dir(bundle(&dir).join(PAGES_DIR)).unwrap().count();
         assert_eq!(page_count, 0);
@@ -1167,7 +1159,6 @@ mod tests {
             "# Big\n"
         );
 
-        // Usage reports the custom limit.
         save_page(store, "small", "ok", "# Small", &[]);
         let (_, limit, _) = store.index_usage();
         assert_eq!(limit, 80);
@@ -1224,7 +1215,6 @@ mod tests {
             "---\nupdated: 2026-01-01T00:00:00Z\n---\n# My Page\n\nContent here.",
         )
         .unwrap();
-        // Open without an existing index.md.
         let store = Knowledge::load(dir.path()).unwrap();
         let idx = store.get_index();
         assert!(idx.contains("my-page"));
@@ -1245,13 +1235,11 @@ mod tests {
         let idx = store.get_index();
         assert!(idx.contains("legacy-notes"));
         assert!(idx.contains("2 entries"));
-        // The legacy file should be renamed.
         assert!(!legacy.exists());
         assert!(dir
             .path()
             .join(format!("{LEGACY_MEMORY_FILE}{MIGRATED_SUFFIX}"))
             .exists());
-        // The page should exist.
         assert!(bundle(&dir)
             .join(PAGES_DIR)
             .join("legacy-notes.md")

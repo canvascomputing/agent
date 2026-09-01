@@ -1,7 +1,6 @@
-"""Live tests: a small high-signal set that drives a real provider end to end.
+"""Test core behavior end to end against a real provider.
 
-All marked ``live`` and skipped automatically without a provider (see conftest).
-Prompts are tiny to bound cost.
+Every test is marked ``live`` and skipped when no provider is configured. Short prompts limit cost.
 """
 
 import asyncio
@@ -118,7 +117,7 @@ async def test_saves_the_messages_of_a_finished_task(tmp_path):
 
 async def test_compaction_summarizes_the_replies_against_the_live_model(tmp_path):
     # An interactive agent carries no finish tool, so the task cannot end on
-    # turn one and skip compaction. The follow-up reply drives the request that
+    # turn one and skip compaction. The follow-up reply starts the request that
     # a threshold of zero compacts before.
     task = "Name one colour and say why you picked it."
     werk = aw.Werk().set_dir(str(tmp_path))

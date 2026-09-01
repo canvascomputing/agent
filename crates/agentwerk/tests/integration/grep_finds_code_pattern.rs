@@ -1,11 +1,4 @@
-//! End-to-end: a real LLM is asked to find the file that contains a
-//! specific code pattern with regex-special characters (`<`, `>`, `(`,
-//! `)`, `,`, `:`). The role does NOT name `grep`, does NOT describe
-//! its argument shape, and does NOT mention regex semantics. `grep` treats
-//! `pattern` as a regular expression, so the `(` and `)` in the signature
-//! must be escaped to match literally; left raw they act as groups and the
-//! search zeroes out. Proves the tool's *description* is good enough for a
-//! model to pick content search and escape the metacharacters correctly.
+//! Verifies the tool description leads a real LLM to choose grep and escape regex metacharacters in a code signature. The role does not name grep, its arguments, or regex behavior.
 
 use std::fs;
 use std::sync::{Arc, Mutex};
@@ -156,7 +149,6 @@ async fn finds_code_pattern_with_special_chars(
         "grep output should NOT match the look-alike signatures; got: {output:?}"
     );
 
-    // The agent's final answer should name calc.rs.
     let answer = common::last_result_text(&werk);
     assert!(
         answer.contains("calc.rs"),

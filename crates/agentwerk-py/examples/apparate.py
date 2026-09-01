@@ -1,10 +1,6 @@
-"""The works the Apparat Fabrik runs, written to disk before the shift.
+"""Generate the Apparat Fabrik plans and stock cards.
 
-Every apparatus gets a Bauplan naming the parts it is built from, each with a
-nominal size and a tolerance, and every part gets a card in the Lager saying
-what it actually measured. The work over it is real and has a right answer: a
-part fits or it does not, and finding out means reading the plan, finding the
-card, and comparing two numbers.
+Each plan names its parts, nominal sizes, and tolerances. Each stock card records a measured size. Comparing the two records determines whether a part fits.
 """
 
 import random
@@ -39,8 +35,8 @@ BEMERKUNGEN = [
     "Die Kanten sind entgratet, die Bohrung ist mittig.",
 ]
 
-# The plans are the only place a nominal size is written down, and the cards
-# are the only place a measured one is: neither file answers the question alone.
+# Store nominal sizes only in plans and measured sizes only in cards so each
+# decision requires both files.
 NOMINAL = [4.0, 6.5, 8.0, 12.0, 16.5, 20.0, 24.0, 32.0]
 TOLERANCES = [0.02, 0.05, 0.10]
 
@@ -92,7 +88,7 @@ def lagerkarte(name, number, measured, dice):
 
 
 def build(root, base, seed=7):
-    """Write the plans and the stock cards, and hand back the apparatus list."""
+    """Write the plans and stock cards, then return the apparatus list."""
     shutil.rmtree(root, ignore_errors=True)
     (root / "baupläne").mkdir(parents=True, exist_ok=True)
     (root / "lager").mkdir(parents=True, exist_ok=True)
@@ -105,8 +101,7 @@ def build(root, base, seed=7):
             number = part_number(dice, taken)
             nominal = dice.choice(NOMINAL)
             tolerance = dice.choice(TOLERANCES)
-            # A third of the stock is off: without those the shift has nothing
-            # to decide and every card reads the same.
+            # Make one third of the stock invalid so the example exercises both outcomes.
             off = dice.random() < 0.34
             stray = tolerance * (dice.uniform(1.4, 3.0) if off else dice.uniform(0, 0.7))
             measured = nominal + stray * dice.choice([1, -1])

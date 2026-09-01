@@ -1,6 +1,4 @@
-//! End-to-end: a real LLM uses `ListDirectoryTool` to enumerate a tempdir
-//! with known files and subdirectories, and reports the split via a
-//! schema-validated JSON object.
+//! Verifies a real LLM can list known files and directories and return a schema-valid result.
 
 use std::fs;
 

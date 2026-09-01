@@ -1,5 +1,4 @@
-//! Drives one agent: it claims a task, then works it through requests, tool
-//! calls, and summarizing until the task is resolved.
+//! Runs one agent from task claim through requests, tool calls, compaction, and resolution.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -224,7 +223,7 @@ mod tests {
     use crate::agents::Knowledge;
     use crate::tools::{EventTool, FinishTool, TaskTool};
 
-    // Run lifecycle
+    // Execution lifecycle
 
     #[tokio::test]
     async fn finish_drains_late_added_tasks() {
@@ -481,7 +480,7 @@ mod tests {
 
     #[tokio::test]
     async fn finish_waits_through_an_on_result_follow_up() {
-        // The handler mints a follow-up when t-1 finishes. finish()
+        // The handler creates a follow-up when t-1 finishes. finish()
         // must not drain in the window between the finish transition and
         // the handler's insert.
         let results_dir = crate::test_util::TempDir::new().unwrap();
@@ -728,7 +727,7 @@ mod tests {
             }
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
-        // Give the loop room to (wrongly) fire another request if buggy.
+        // Wait long enough to catch an incorrect second request.
         tokio::time::sleep(Duration::from_millis(50)).await;
 
         let task = werk.get_tasks().into_iter().next().unwrap();
@@ -792,7 +791,7 @@ mod tests {
 
         tokio::time::timeout(Duration::from_secs(5), async {
             werk.start();
-            // The pause is not the end of the task, so the reply lands first
+            // The pause is not the end of the task, so the reply arrives first
             // and the finish then waits out the turn it sets off.
             inject.await;
             werk.finish_all_tasks().await;
@@ -1110,8 +1109,7 @@ mod tests {
                 .role("test"),
         );
 
-        // Call off the research pool on the live run (start() resets signals), then
-        // enqueue both tasks; the analysis pool runs on.
+        // Cancel research tasks in the current execution before adding both tasks; analysis continues.
         werk.start();
         werk.cancel_tasks("label = research");
         werk.add_task(Task::new("hunt").label("research"));

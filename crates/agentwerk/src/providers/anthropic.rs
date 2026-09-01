@@ -21,9 +21,7 @@ const DEFAULT_BASE_URL: &str = "https://api.anthropic.com";
 
 /// LLM provider for the Anthropic Messages API.
 ///
-/// Reads `ANTHROPIC_API_KEY` (and optional `ANTHROPIC_BASE_URL`) when built
-/// via [`Provider::from_env`]. Override the endpoint with [`base_url`] and
-/// the per-request timeout with [`timeout`].
+/// Build it through [`Provider::from_env`] to read `ANTHROPIC_API_KEY` and the optional `ANTHROPIC_BASE_URL`. Override the endpoint with [`base_url`] and the per-request timeout with [`timeout`].
 ///
 /// # Examples
 ///
@@ -215,7 +213,7 @@ fn serialize_tool(tool: &Tool) -> Value {
 
 /// True for the Anthropic generation that takes `thinking:{type:"adaptive"}`
 /// plus `output_config.effort` (Opus/Sonnet 4.6 and later, Fable, Mythos). The
-/// `[1m]` context suffix rides on the base name, so `opus-4-8[1m]` matches.
+/// A `[1m]` context suffix follows the base name, so `opus-4-8[1m]` matches.
 fn supports_adaptive_thinking(model: &str) -> bool {
     const ADAPTIVE: &[&str] = &[
         "opus-4-6",

@@ -1,5 +1,4 @@
-//! The task as Python sees it. One class in both directions: you set the
-//! fields you own, and the same class comes back with its status and messages.
+//! Exposes tasks for both submission and inspection through Python.
 //!
 //! Rust sets those fields with chained methods. A Python class cannot carry a
 //! `label` method and a `label` attribute, so they are keyword arguments here.

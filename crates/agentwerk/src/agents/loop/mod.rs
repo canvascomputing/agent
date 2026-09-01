@@ -1,6 +1,4 @@
-//! Multi-agent loop driver. One tokio task per registered agent,
-//! reading the shared `Werk` through the upgraded
-//! `Weak<Werk>` set when the agent was added.
+//! Runs each registered agent concurrently against the shared `Werk`.
 
 use std::time::Duration;
 
@@ -32,8 +30,6 @@ pub(crate) mod test_util;
 mod tests {
     use crate::agents::r#loop::test_util::*;
     use crate::agents::tasks::{Author, ReplyContent};
-
-    // Reply transcript
 
     #[tokio::test]
     async fn replies_capture_full_transcript() {

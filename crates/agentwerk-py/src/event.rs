@@ -1,4 +1,4 @@
-//! Events as Python sees them.
+//! Exposes recorded events through Python.
 
 use agentwerk::event::Event;
 use pyo3::prelude::*;

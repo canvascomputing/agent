@@ -1,7 +1,7 @@
 #![warn(missing_docs)]
 
 //! Run agentic workflows where many agents work in parallel on a shared
-//! Werk. An [`Agent`] picks up tasks from a [`Werk`],
+//! [`Werk`]. An [`Agent`] picks up tasks from a Werk,
 //! calls the LLM provider, runs the tools it requests, and writes results
 //! back. Tasks are assigned to agents by label; the Werk
 //! handles concurrency, automatic context compaction, schema validation,
@@ -66,11 +66,11 @@
 //! # Main types
 //!
 //! - [`Agent`]: picks up tasks and produces results.
-//! - [`Werk`]: coordinates complex work across agents.
-//! - [`Task`]: a task plus the label and schema that assign and validate it.
+//! - [`Werk`]: stores tasks and runs agents.
+//! - [`Task`]: defines work with an optional label and schema.
 //! - [`Query`]: a reusable AQL task selection.
 //! - [`Knowledge`]: durable memory the agent shares across tasks and other agents.
-//! - [`Event`]: requests, tool usage, failures and more.
+//! - [`Event`]: records requests, tool usage, failures, and other activity.
 //! - [`tools`]: the built-in tools agents call, for files, search, commands, web, knowledge, and tasks.
 
 pub mod agents;
@@ -84,7 +84,6 @@ pub mod tools;
 #[cfg(test)]
 pub(crate) mod test_util;
 
-// Agents pull tasks from the Werk.
 pub use agents::Agent;
 pub use agents::Query;
 pub use agents::Reply;
@@ -92,16 +91,13 @@ pub use agents::Status;
 pub use agents::Task;
 pub use agents::Werk;
 
-// Tuning, telemetry, durable state
 pub use agents::Knowledge;
 pub use agents::Policy;
 pub use agents::PolicyViolation;
 pub use agents::Trajectory;
 
-// Validation
 pub use schemas::Schema;
 
-// Observation
 pub use agents::tasks::FinishReason;
 pub use event::Event;
 

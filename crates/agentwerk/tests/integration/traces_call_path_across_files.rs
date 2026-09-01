@@ -1,7 +1,4 @@
-//! End-to-end: a real LLM combines grep + read_file across multiple files
-//! to reconstruct a 3-hop call chain starting from a named entry function.
-//! Decoy functions share names with real callees so the model must read
-//! source, not just match identifiers, to resolve the chain.
+//! Verifies a real LLM can combine grep and file reads to reconstruct a three-hop call chain. Decoy functions require reading source instead of matching identifiers alone.
 
 use std::fs;
 

@@ -1,6 +1,4 @@
-//! The LLM providers and models as Python sees them. Reading the environment
-//! covers the common case; the per-vendor constructors and `Model` cover a local
-//! endpoint, a different context window, or a different reasoning level.
+//! Exposes LLM providers, models, and environment-based configuration through Python.
 
 use std::time::Duration;
 

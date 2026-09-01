@@ -548,7 +548,7 @@ mod tests {
 
     #[test]
     fn a_high_number_from_the_endpoint_adds_only_the_one_call() {
-        // The endpoint supplies the number, so it routes without sizing anything.
+        // The endpoint supplies the number, so it selects the call without sizing anything.
         let (mut reply, _) = builder();
         reply.open_tool_call(Some(100_000), "call_1", "grep");
         assert_eq!(content(reply).len(), 1);

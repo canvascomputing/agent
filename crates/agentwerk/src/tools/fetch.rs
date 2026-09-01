@@ -247,8 +247,8 @@ fn format_output(
 
     let remaining = max_length.saturating_sub(output.len());
     if body.len() > remaining {
-        // Slicing the raw byte index panics when it lands inside a multi-byte
-        // character, which any non-ASCII page reaches sooner or later.
+        // A raw byte index may split a multibyte character, which would make
+        // slicing panic on non-ASCII content.
         let mut cut = remaining;
         while cut > 0 && !body.is_char_boundary(cut) {
             cut -= 1;
@@ -571,8 +571,6 @@ fn collapse_whitespace(text: &str) -> String {
 fn validate_url_for_test(url: &str) -> std::result::Result<String, String> {
     validate_url(url, &DirectiveStore::default())
 }
-
-// Tests
 
 #[cfg(test)]
 mod tests {

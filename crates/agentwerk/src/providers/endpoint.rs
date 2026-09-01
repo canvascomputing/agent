@@ -304,9 +304,7 @@ mod tests {
         ));
     }
 
-    /// Generates a throwaway self-signed cert at `cert_path` via the `openssl` CLI.
-    /// Returns `false` when `openssl` isn't on `PATH`, so callers can skip
-    /// gracefully instead of failing on a machine without it installed.
+    /// Generate a throwaway self-signed certificate through `openssl`, or report `false` when the command is unavailable.
     fn generate_self_signed_cert(cert_path: &std::path::Path) -> bool {
         let key_path = cert_path.with_extension("key");
         let output = match std::process::Command::new("openssl")

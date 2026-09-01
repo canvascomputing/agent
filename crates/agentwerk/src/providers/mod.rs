@@ -1,10 +1,6 @@
-//! The `Provider` handle, the `ProviderLike` trait behind it, and the
-//! vendor implementations that speak to Anthropic, OpenAI-compatible APIs,
-//! Mistral, and LiteLLM.
+//! Connects agents to Anthropic, OpenAI-compatible APIs, Mistral, and LiteLLM.
 //!
-//! The types a request and a response are made of (`Message`, `ContentBlock`,
-//! `ModelRequest`, `ModelResponse`, `StreamEvent`) are reachable by name but
-//! kept out of the index: they matter only when implementing [`ProviderLike`].
+//! Request and response types remain available for custom [`ProviderLike`] implementations.
 
 mod anthropic;
 mod endpoint;

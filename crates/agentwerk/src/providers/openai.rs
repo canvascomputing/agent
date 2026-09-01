@@ -24,9 +24,7 @@ const DEFAULT_BASE_URL: &str = "https://api.openai.com";
 /// LLM provider for the OpenAI Chat Completions API and any compatible
 /// endpoint that accepts the same request shape.
 ///
-/// Reads `OPENAI_API_KEY` (and optional `OPENAI_BASE_URL`) when built via
-/// [`Provider::from_env`]. Override the endpoint with [`base_url`] and the
-/// per-request timeout with [`timeout`].
+/// Build it through [`Provider::from_env`] to read `OPENAI_API_KEY` and the optional `OPENAI_BASE_URL`. Override the endpoint with [`base_url`] and the per-request timeout with [`timeout`].
 ///
 /// # Examples
 ///
@@ -419,7 +417,7 @@ mod tests {
 
     #[test]
     fn a_high_tool_call_index_adds_only_the_one_call() {
-        // The endpoint supplies the index, so it routes without sizing anything.
+        // The endpoint supplies the index, so it selects the call without sizing anything.
         let content = decode_blocks(&[serde_json::json!({"choices":[{"delta":{"tool_calls":[
             {"index": 100000, "id": "call_1", "function": {"name": "grep", "arguments": "{}"}}
         ]}}]})]);

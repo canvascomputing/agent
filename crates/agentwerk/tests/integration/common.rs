@@ -1,5 +1,4 @@
-//! Shared setup for integration tests: provider construction from env
-//! and a JSON result printer.
+//! Provides live-provider setup and result printing for integration tests.
 
 #![allow(dead_code)]
 

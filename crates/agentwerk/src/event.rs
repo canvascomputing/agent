@@ -1,4 +1,4 @@
-//! Insights into the lifecycle and activities of an agent's work.
+//! Records task, agent, tool, provider, and execution activity.
 
 use std::sync::Arc;
 

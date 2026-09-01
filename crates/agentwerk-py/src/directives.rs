@@ -1,6 +1,4 @@
-//! Every directive agentwerk can send, as Python sees it. The keys ride on the
-//! class in both languages, so a host reads the same name whichever one they
-//! write in.
+//! Exposes directive keys and text selection through Python.
 
 use agentwerk::Directive;
 use pyo3::prelude::*;

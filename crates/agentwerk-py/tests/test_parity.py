@@ -1,9 +1,6 @@
-"""The type stubs against the compiled module.
+"""Compare the type stubs with the compiled module.
 
-Every gap this catches shipped at least once: a method lands in `src/` and the
-`.pyi` never learns about it, so editors and type checkers deny an API that
-works. Parsing the stub with `ast` keeps the check honest without a second
-source of truth.
+Missing stub methods hide working APIs from editors and type checkers. Parse the stub with ``ast`` so the test does not require another API inventory.
 """
 
 import ast

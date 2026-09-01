@@ -1,7 +1,7 @@
 //! The smallest agentwerk program: one agent, one task, one answer.
 //!
-//! Builds an agent from the environment, submits a single task, waits for
-//! the Werk to run dry, and prints the result. No tools, no labels, no
+//! Builds an agent from the environment, submits a single task, waits
+//! until no task remains, and prints the result. No tools, no labels, no
 //! schema.
 //!
 //! Usage: hello-world [TASK]

@@ -1,6 +1,6 @@
 //! Deep Research with handover chain.
 //!
-//! One `Werk` holds the whole pipeline. The driver enqueues a
+//! One `Werk` holds both research stages. The program enqueues a
 //! single starter task pinned to `researcher_1`. Each researcher calls
 //! `brave_search` and hands off to the next agent through its configured
 //! handover. The report contract is attached to the task researcher_2 creates.

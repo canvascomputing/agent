@@ -1,10 +1,4 @@
-//! End-to-end: a real LLM walks the whole `task` action set on one task,
-//! reading its own task and its parent's result, listing the Werk whole and
-//! then narrowing it with AQL, then creating and editing a task. The role
-//! names intents, never actions or query syntax, so the tool's own description
-//! is what has to map each intent onto the right action and onto a query that
-//! compiles. The parent's result comes from a real handover, the only way a
-//! finished task with a result exists.
+//! Verifies a real LLM can read, list, query, create, and edit tasks from intent-only instructions. A real handover provides the parent result, and the role does not name actions or query syntax.
 
 use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};

@@ -1,5 +1,4 @@
-//! Builder that assembles a prompt envelope from typed sections,
-//! mirroring `Agent::role` and the canonical Role → Tools → Task order.
+//! Assembles prompt sections in role, tools, then task order.
 
 use std::borrow::Cow;
 

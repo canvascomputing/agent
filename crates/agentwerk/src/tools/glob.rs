@@ -53,10 +53,8 @@ async fn run(args: GlobArgs, ctx: ToolContext) -> Event {
     let mut matches: Vec<(PathBuf, SystemTime)> = Vec::new();
     collect_matches(&base, &base, &pattern_segments, &mut matches);
 
-    // Sort by modification time, newest first
     matches.sort_by_key(|item| std::cmp::Reverse(item.1));
 
-    // Cap at MAX_RESULTS
     matches.truncate(MAX_RESULTS);
 
     let lines: Vec<String> = matches
@@ -239,14 +237,12 @@ mod tests {
         for line in &lines {
             assert!(line.ends_with(".rs"), "Expected .rs file, got: {line}");
         }
-        // Should NOT include readme.md
         assert!(!content.contains("readme.md"));
     }
 
     #[tokio::test]
     async fn max_results_cap() {
         let tmp = crate::test_util::TempDir::new().unwrap();
-        // Create 210 .txt files
         for i in 0..210 {
             fs::write(tmp.path().join(format!("file_{i:04}.txt")), "x").unwrap();
         }

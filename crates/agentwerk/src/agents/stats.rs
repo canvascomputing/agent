@@ -20,7 +20,7 @@ use crate::providers::TokenUsage;
 /// [`Werk`](crate::Werk) and folds anything finer out of the
 /// events themselves.
 pub(crate) struct Stats {
-    /// Count per event name. Every recorded event lands here, and
+    /// Count per event name. Every recorded event contributes here, and
     /// [`Stats::event_count`] is a lookup into this map.
     event_counts: Mutex<HashMap<String, u64>>,
     /// Input tokens across the finished requests.

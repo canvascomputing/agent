@@ -1,5 +1,4 @@
-//! The command tool and the parsing behind it: a line becomes one program and
-//! its arguments, and one argument becomes the flag a rule can name.
+//! Runs explicitly permitted commands without a shell.
 
 mod parse;
 mod tool;

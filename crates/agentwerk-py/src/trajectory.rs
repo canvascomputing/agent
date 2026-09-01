@@ -1,5 +1,4 @@
-//! A task's messages captured as a training example, as Python sees it.
-//! Mirrors `Trajectory::from_task(agent_id, task).save(dir)`.
+//! Exposes finished task conversations as savable training examples through Python.
 
 use agentwerk::agents::Trajectory;
 use pyo3::prelude::*;

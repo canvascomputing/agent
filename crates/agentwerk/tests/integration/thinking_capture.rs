@@ -1,9 +1,4 @@
-//! End-to-end: a reasoning model streams its thinking back and the
-//! provider assembles it into a `ContentBlock::Thinking` ahead of the
-//! visible `Text`. Overrides the env model with `THINKING_MODEL` (a
-//! reasoning-capable model, e.g. `claude-haiku-4-5`) and requests
-//! `High` effort, so this exercises the reasoning-capture parse path
-//! rather than the default chat model.
+//! Verifies a reasoning model streams a `ContentBlock::Thinking` before visible text. Set `THINKING_MODEL` to a reasoning-capable model; the test requests `High` effort.
 
 use std::sync::Arc;
 
@@ -52,7 +47,6 @@ async fn reasoning_effort_captures_thinking_before_visible_text(
         !thinking.is_empty(),
         "Thinking block should carry reasoning"
     );
-    // The Thinking block precedes the visible answer.
     assert!(matches!(
         response.content.first(),
         Some(ContentBlock::Thinking { .. })

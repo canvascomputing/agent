@@ -1,5 +1,4 @@
-//! The tools an agent reaches its own Werk through: reading it, adding
-//! to it, and finishing the task it holds.
+//! Lets an agent read and edit its `Werk` or finish its current task.
 
 use std::path::Path;
 
