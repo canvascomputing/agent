@@ -68,18 +68,15 @@ async fn main() {
         .tool(ReadFileTool)
         .tool(GrepTool);
 
-    agent.add_task("Find every `pub trait` defined under src/ and explain each in one sentence.");
+    let task = agent.add_task("Find every `pub trait` defined under src/ and explain each in one sentence.");
 
-    let werk = agent.start();
-    let result = werk.finish_task("ORDER BY created DESC").await.unwrap();
+    let result = agent.start().finish_task(task).await.unwrap();
 
     println!("{}", result.as_str().unwrap_or_default());
 }
 ```
 
 ## API
-
-The public API has five parts, ordered by how you build and inspect an agent system:
 
 - [Agents](#agents): Set agent roles, behavior, and tasks.
 - [Werk](#werk): Assign work and collect results across agents.
@@ -107,7 +104,7 @@ agent.add_task("Read CHANGELOG.md and summarize the entries added since the last
 agent.start();
 ```
 
-The optional [`prompt` skill](skills/prompt/SKILL.md) provides a compact template for writing agent roles.
+The [prompt skill](skills/prompt/SKILL.md) provides a compact template for writing agent roles.
 
 <details>
 <summary>All agent methods</summary>
@@ -303,16 +300,12 @@ See [`Werk`](https://docs.rs/agentwerk/latest/agentwerk/struct.Werk.html).
 
 ### Queries
 
-Agentwerk Query Language (AQL) filters and sorts tasks by fields such as label, status, and creation time.
-
-`label IN (scan, report) AND status = finished ORDER BY finished DESC` returns finished scans and reports, newest first.
+Use queries to choose tasks by label, ID, status, or time.
 
 ```rust
-werk.find_tasks("scan");
-werk.find_results("t-3");
-werk.find_tasks("id IN (t-3, t-4)");
-werk.find_tasks("label IN (scan, report) AND status = finished");
-werk.find_results("scan ORDER BY finished DESC");
+werk.find_tasks("scan");                          // Tasks labeled scan.
+werk.find_results("t-3");                         // The result of task t-3.
+werk.find_results("scan ORDER BY finished DESC"); // Scan results, newest first.
 ```
 
 <details>
@@ -377,9 +370,9 @@ werk.find_tasks(|t: &Task| t.get_replies().len() > 4);   // a closure, for what 
 The Werk schedules the work of your agents and returns their results.
 
 ```rust
-werk.start();
+let task = werk.add_task("Write a report.");
 
-if let Some(answer) = werk.finish_task("ORDER BY created DESC").await {
+if let Some(answer) = werk.finish_task(task).await {
     println!("{answer}");
 }
 ```
@@ -534,10 +527,10 @@ let schema = Schema::new(json!({
 werk.add_task(Task::new("Write a report.").schema(schema));
 ```
 
-For small models, use shallow, focused schemas with few required fields, clear names, and short lists of allowed values. Split large results into labeled tasks with separate schemas, then combine them in a later task. Deep nesting, long property lists, and large `anyOf` or `oneOf` branches use more context and trigger retries.
-
 <details>
 <summary>All schema methods</summary>
+
+For small models, use shallow, focused schemas with few required fields, clear names, and short lists of allowed values. Split large results into labeled tasks with separate schemas, then combine them in a later task. Deep nesting, long property lists, and large `anyOf` or `oneOf` branches use more context and trigger retries.
 
 | | Method | Description |
 |-|--------|-------------|
