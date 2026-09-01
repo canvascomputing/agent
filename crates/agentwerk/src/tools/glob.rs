@@ -54,7 +54,7 @@ async fn run(args: GlobArgs, ctx: ToolContext) -> Event {
     collect_matches(&base, &base, &pattern_segments, &mut matches);
 
     // Sort by modification time, newest first
-    matches.sort_by(|a, b| b.1.cmp(&a.1));
+    matches.sort_by_key(|item| std::cmp::Reverse(item.1));
 
     // Cap at MAX_RESULTS
     matches.truncate(MAX_RESULTS);
