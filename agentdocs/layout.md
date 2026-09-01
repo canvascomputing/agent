@@ -1,99 +1,70 @@
 # Layout
 
-Where code lives and the rules that govern placement.
+Where code, tests, bindings, examples, and repository guidance live.
 
-## Crates
+## Workspace
 
-**Four crates: one library, one internal search engine, one binding layer, and one example set.**
+**Keep each crate responsible for one layer.**
 
-```
-crates/
-├── agentwerk/      the library
-├── agentwerk-codegrep/ unpublished code-shape search engine
-├── agentwerk-py/   the Python bindings
-└── use-cases/      runnable example binaries
-```
+- `crates/agentwerk/` contains the public Rust library.
+- `crates/agentwerk-codegrep/` contains the unpublished structural matcher used by `GrepTool`.
+- `crates/agentwerk-py/` contains the PyO3 bindings and the pure-Python package surface.
+- `crates/use-cases/` contains runnable examples and depends on the libraries, never the reverse.
+- Keep `agentwerk-py` outside `default-members` because its extension links against Python.
 
-- `use-cases` depends on the library, never the other way round, and nothing in it is re-exported.
+## Library Root
 
-## The `agentwerk-py` Crate
+**Place code under the domain that owns its behavior.**
 
-**One file per bound concept, mirroring the library. Naming rules live in [style.md](style.md).**
+- `src/lib.rs` declares modules and re-exports the small root API.
+- `src/event.rs` owns `Event`; `src/persistence.rs` owns shared file primitives and stays crate-private.
+- `src/agents/` owns agent configuration, tasks, orchestration, policy, queries, statistics, retries, compaction, and knowledge.
+- `src/providers/`, `src/tools/`, and `src/schemas/` own LLM providers, agent actions, and result validation.
+- `src/prompts/` owns prompt assembly, `Text`, and the directive catalogue.
 
-- `src/lib.rs` is the `#[pymodule]` and registers every class and function. `agent.rs`, `task.rs`, `werk.rs`, `reply.rs`, `trajectory.rs`, `knowledge.rs`, `schema.rs`, `event.rs`, `providers.rs`, and `tools.rs` each bind the library module of the same name.
-- `src/query.rs` binds `Query`, which covers both field sets: Python carries no type parameter, so the class compiles its string over tasks and over events at once and each call reads the compilation it needs.
-- `src/convert.rs` holds the only JSON boundary: `py_to_value` and `value_to_py` over `pythonize`, plus `py_to_text` for a prompt argument and `runtime_error`.
-- The compiled extension is `_agentwerk`. `python/agentwerk/__init__.py` re-exports it and holds the `@tool` decorator, the one piece of pure-Python logic. `__init__.pyi` declares the surface and MUST match the module, which `tests/test_parity.py` enforces.
-- The root `INVENTORY.md` lists every declaration of both crates, Rust rows next to Python rows. A binding missing from it, or a divergence its cells do not state, is a bug in one of the two.
-- The crate is a workspace member but not a default member: `cargo build` and `cargo test` skip it because it links against a Python interpreter. Its commands live in [workflow.md](workflow.md).
+## Agents and Tasks
 
-## Top-Level Files
+**Separate orchestration state from one agent's current operation.**
 
-**Each top-level source file is one concern the caller observes directly.**
+- `agents/agent.rs` configures `Agent`; `agents/tasks/werk.rs` exposes `Werk`.
+- `agents/tasks/` owns `Task`, `Reply`, storage transitions, trajectories, and task errors.
+- `agents/loop/` splits execution into the main scheduler, per-agent work, provider requests, compaction, and tool calls.
+- `agents/query.rs` owns AQL; `policy.rs`, `stats.rs`, and `retry.rs` own limits, statistics, and retry timing.
+- `agents/knowledge.rs` owns `Knowledge`, pages, and the OKF bundle under `<dir>/knowledge/`.
 
-- `lib.rs` holds public re-exports only. `Query` is part of the documented root contract. Extension types live in `tools::` and `default_logger` in `event::`.
-- `event.rs` defines the generic `Event` record, its built-in name constants, and `default_logger`. Runtime discriminants live with the policy, Werk, loop, or tool behavior they control; event-only payload vocabulary stays as strings. Internal and caller-published events use the same record, and the name is their semantic discriminator.
-- `persistence.rs` holds the `Persist` trait and the shared `write_atomic`, `append_line`, and `output_path` helpers. It is `pub(crate)` and not re-exported.
-- The root `INVENTORY.md` lists every declaration of both crates, one section per source file, public rows before internal ones. It changes in the same commit that adds, renames, removes, or re-types an item.
-- The `agents/`, `prompts/`, `providers/`, `schemas/`, and `tools/` modules each own their domain. `agents/` and `tools/` re-export their headline types, so `use agentwerk::agents::{Agent, Werk}` works without descending into leaf files.
+## Providers
 
-## The `agents/` Module
+**Keep vendor formats at the edge and shared transport in the center.**
 
-**Holds the agent, the Werk, and the multi-agent loop.**
+- `providers/provider.rs` defines `ProviderLike`, `Provider`, and the internal `Protocol` boundary.
+- `anthropic.rs`, `openai.rs`, `mistral.rs`, and `litellm.rs` adapt vendor authentication and payloads.
+- `endpoint.rs` owns HTTP execution; `stream.rs` and `frames.rs` rebuild model responses.
+- `types.rs`, `error.rs`, `model.rs`, and `environment.rs` own shared values, failures, model settings, and environment selection.
 
-- `agent.rs`: `Agent`, its configuration methods, and task-dispatch helpers.
-- `compaction.rs`: the summarizer that compaction runs, and the threshold and chunking arithmetic behind it.
-- `policy.rs`: the public `Policy`, what a run may spend, how it retries, and when it compacts.
-- `knowledge.rs`: `Knowledge`, the cross-task store, an OKF v0.1 bundle in `<dir>/knowledge/`. Pages are curated through the `get_pages()` handle (`save`, `load`, `remove`, `get_all`) plus `clear`; failures are typed as `KnowledgeError`.
-- `stats.rs`: the crate-private `Stats`, the counters a limit check reads and the one reader over `events.jsonl`.
-- `query.rs`: AQL. The tokenizer, the parser, the private `Queryable`, `QueryField`, and `Compiled<F>`, and the two field sets: `TaskField` behind `Query<Task>`, `EventField` behind `Query<Event>`. `Matcher<R>` and `QueryError` live here too.
+## Tools and Prompts
 
-`tasks/` holds the task value types and the orchestrator:
+**Keep each built-in tool beside its model-facing contract.**
 
-- `mod.rs` re-exports them and hosts the free helpers `policy_violated`, `now_millis`, `numeric_id`.
-- `task.rs`: `Task`, `Status`, the `Replies` log helper, and the `tasks/<id>/...` path helpers. `reply.rs`: `Author`, `Reply`, `ReplyContent`, and their conversions to and from `providers::Message` and `ContentBlock`. `error.rs`: `TaskError`.
-- `werk.rs`: constructors, configuration, task creation, agent binding, run lifecycle, results, and queries. `store.rs`: the store mutations (`insert`, `claim`, `set_task_finished`, `edit_replies`, transition recording).
-- `trajectory.rs`: `Trajectory`, a task's replies captured as a training example, its `trajectories/<id>.json` write, and the `.html` rendering written beside it.
+- `tools/tool.rs` owns the public `Tool` builder and internal execution context.
+- A built-in tool keeps its Rust implementation, `<name>.tool.md`, and `<name>.schema.json` together.
+- `tools/command/` and `tools/task/` use submodules because parsing and completion have separate concerns.
+- `prompts/directives.rs` indexes the entries under `prompts/directives/*.md`; `builder.rs`, `section.rs`, and `text.rs` assemble prompt text.
 
-`loop/` holds the multi-agent loop, split by operation:
+## Python Bindings
 
-- `main.rs`: `run_main_loop`, which spawns one tokio task per registered agent, decides when the run is over, joins them, and emits `RunFinished`.
-- `agent.rs`: `Agent::run` and its one explicit task loop. Task-specific tools, prompts, policy, and failure counts remain local to that loop.
-- `compact.rs`, `request.rs`, `tool_call.rs`: private `Agent` methods for compaction, the provider round-trip with retry and backoff, and `call_tools` with output offloading and the tool-failure budget.
+**Mirror Rust concepts without duplicating Rust behavior.**
 
-## The `providers/` Module
+- `crates/agentwerk-py/src/` has one binding module per exposed domain, including `policy.rs` and `directives.rs`.
+- `src/convert.rs` owns Python and JSON conversion helpers; `src/lib.rs` registers the extension surface.
+- `python/agentwerk/__init__.py` re-exports `_agentwerk` and owns the pure-Python `@tool` decorator.
+- `python/agentwerk/__init__.pyi` declares the Python surface and is checked by `tests/test_parity.py`.
 
-**Holds every concrete LLM provider plus the shared request and response types.**
+## Tests and Repository Docs
 
-- `provider.rs` defines the behavior: `ProviderLike`, the `Provider` handle over it, the crate-internal `Protocol` trait, and the generic `respond` every provider answers through.
-- `types.rs` defines every value the two sides exchange, in the order a turn happens: `ModelRequest`, `ReasoningEffort`, `Message`, `AsUserMessage`, `ContentBlock`, `ModelResponse`, `TokenUsage`, `ResponseStatus`, `ToolDeclineKind`, `StreamEvent`.
-- `anthropic.rs`, `openai.rs`, `mistral.rs`, and `litellm.rs` are concrete providers, each a newtype over one `Endpoint` whose `respond` names a `Protocol`. `mistral.rs` and `litellm.rs` name `OpenAiChat` too, so the OpenAI request shape is written once.
-- `endpoint.rs` holds `Endpoint`, the one HTTP call every provider makes. `environment.rs` reads the variables behind `Provider::from_env()` and `Model::from_env()`. `model.rs` holds `Model` and the one table of context window sizes.
-- `error.rs` holds `ProviderError`, `ProviderResult`, `RequestErrorKind`, and the bank of upstream wordings a proxy wraps.
-- `stream.rs` takes an HTTP response and gives back a `ModelResponse`: `read_reply`, the SSE reader, and `ResponseBuilder`, the one place a `StreamEvent` is emitted from. `frames.rs` recovers the calls a model wrote as prose rather than emitting through the tool channel.
+**Put verification next to its layer and keep inventories separate from conventions.**
 
-## The `tools/` Module
-
-**`tool.rs` holds tool construction and execution; every other file is one built-in tool or a helper.**
-
-- `tool.rs` defines the public `Tool` builder and the private execution functions over `Vec<Tool>`.
-- `read_file.rs`, `write_file.rs`, `edit_file.rs`, `glob.rs`, `grep.rs`, and `list_directory.rs` are filesystem tools; `code.rs` backs `grep`'s `syntax: "code"` shape matching, delegating to the `codegrep` engine. `fetch.rs` is the web fetch tool.
-- `command/tool.rs` is the command tool, restricted through `new()` and widened through `allow()`; it runs one program per call and never a shell. `command/parse.rs` splits a line into one command and classifies its arguments, which is how the tool refuses anything that is not one command.
-- `event.rs` owns `EventTool` and the completion engine; `task/finish.rs` wraps its `task_finished` branch, while `task/tool.rs` holds `TaskTool`. `knowledge.rs` is the model-facing wrapper around `Knowledge`. `util.rs` is a shared helper.
-- Each built-in tool pairs with a `<tool>.tool.md` definition (the prose shown to the model) and a `<tool>.schema.json` (the input schema). Both reach the tool through `include_str!` in its `From<XTool> for Tool` conversion, which is also where the name and concurrency are stated.
-
-## The `prompts/` and `schemas/` Modules
-
-**Composable prompt assembly and JSON-Schema validation.**
-
-- `prompts/builder.rs` and `prompts/section.rs` hold `PromptBuilder` and `Section`, which assemble role and knowledge blocks.
-- `prompts/directives.rs` holds `Directive`, the key namespace, the crate-private `DirectiveStore` carrying the function an agent decides its text with, and one `directives!` block declaring every key as a constant and an `ALL` entry. The text lives in `prompts/directives/*.md`, one file per area, each entry under a `## key` heading; a test pairs every key with its heading. It reaches the caller as the root re-export `agentwerk::Directive`.
-- `prompts/text.rs` holds `Text`, the text a role, a description, or a task is set from, reading a file where the caller names a path. It reaches the caller as the root re-export `agentwerk::Text`.
-- `schemas/mod.rs` holds `Schema`, `SchemaParseError`, and `SchemaViolation`.
-
-## Tests
-
-**Integration tests live in their own directory; everything else is inline.**
-
-- `crates/agentwerk/tests/integration/` holds real-provider tests, bundled by `tests/integration.rs`, with shared helpers in `common.rs`.
-- Every module also carries its own `#[cfg(test)] mod tests` for mock-free unit coverage.
+- Keep Rust unit tests inline under `#[cfg(test)]`; keep live-provider tests under `crates/agentwerk/tests/integration/`.
+- Keep Python tests under `crates/agentwerk-py/tests/` and use the `live` marker for provider-dependent cases.
+- Keep use-case-specific tests inside their binary modules so the binary test pass reaches them.
+- Use `INVENTORY.md` for declaration-level API tracking; use `agentdocs/` only for decisions the code does not state.
+- Keep reusable agent skills under `skills/`, hook configuration under `hooks/`, and repository checks under `tools/`.

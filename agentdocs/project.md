@@ -1,58 +1,46 @@
 # Project
 
-agentwerk is a Rust crate for building LLM agents. An agent reads input, calls an LLM provider, optionally invokes tools, and returns an output.
+agentwerk is a Rust library for composing LLM agents, tools, tasks, and shared execution state.
 
-## Library, Not Framework
+## Library Boundary
 
-**The crate provides building blocks. The caller composes them.**
+**Provide building blocks that a caller composes inside its own application.**
 
-- No runtime to boot, and no traits the caller must implement to get started.
-- No required structure for the consuming application.
-- Every feature is optional.
+- Keep startup, process structure, logging, and UI in the consuming application.
+- Let callers begin with `Agent::from_env()` without implementing framework traits.
+- Add an abstraction only when it removes more caller complexity than it introduces.
 
 ## Minimal Surface
 
-**Each abstraction must remove more complexity than it adds.**
+**Make every public concept earn its maintenance cost.**
 
-- Dependencies are limited to tokio, serde, serde_json, reqwest, and futures-util.
-- No transport abstractions and no plugin registries: providers own a `reqwest::Client` directly.
-- Indirection without a concrete benefit is not added.
+- Prefer extending `Agent`, `Werk`, `Task`, `Tool`, `Event`, or `Knowledge` over adding a parallel concept.
+- Keep features optional unless correctness requires them.
+- Reject registries, adapters, and aliases that only rename existing behavior.
+- Put exhaustive API detail in rustdoc and `README.md`, not in convention files.
 
-## Parallel by Default
+## Parallel Composition
 
-**Many agents share one `Werk` and pick up tasks concurrently.**
+**Use one `Werk` to coordinate agents over shared tasks.**
 
-```rust
-werk.add_agent(Agent::from_env().label("scan"));
-werk.add_task(Task::new("Audit src/db.").label("scan"));
-```
+- Assign tasks through one optional label on `Agent` and `Task`.
+- Claim each task once while allowing agents with the same label to work concurrently.
+- Attach a `Schema` when a task result needs a machine-checked shape.
+- Keep agent configuration local: no global agent or tool registration.
 
-- Each agent runs on its own tokio task; the shared Werk claims a task exactly once.
-- An agent serves one label and a task carries one, so a label only one agent serves pins the task to that agent.
-- Agents are cloned and modified, then bound to a `Werk`. No global registration, no implicit state.
-- A task carries a `Schema`; the loop validates the agent's result against it.
+## Provider Independence
 
-## Provider-Agnostic
+**Keep orchestration independent of the selected LLM provider.**
 
-**The same agent code runs against any supported LLM provider.**
+- Support Anthropic, OpenAI, Mistral, and LiteLLM through `ProviderLike` and `Provider`.
+- Keep tasks, tools, schemas, events, and policies unchanged when provider configuration changes.
+- Isolate vendor request and response formats under `providers/`.
 
-- Anthropic, OpenAI, Mistral, and LiteLLM are supported, and share one retry policy.
-- Switching providers changes only the `.model(...)` call.
-- `Provider::from_env()` and `Model::from_env()` select a provider and model from environment variables.
+## Observable State
 
-## Observe, Do Not Prescribe
+**Expose behavior through tasks, results, events, and optional durable state.**
 
-**The loop emits events. The caller decides what to do with them.**
-
-- No built-in UI, no required logging.
-- The event handler receives `Event { name, data, ... }` at every lifecycle boundary.
-- The handler may log, forward, store, or discard each event.
-
-## Correctness Over Convenience
-
-**Zero warnings, typed errors, no silent fallbacks.**
-
-- The build MUST pass with `RUSTFLAGS="-D warnings"`: any warning fails it.
-- Schema validation retries on mismatch, then fails explicitly.
-- IMPORTANT: no blanket `From<io::Error>` or `From<serde_json::Error>`. Every conversion is an explicit mapping into a typed variant.
-- Misconfigured builders panic at build time.
+- Publish lifecycle and failure information as `Event` records without requiring a logger.
+- Persist sessions under the directory configured by `Werk::set_dir`.
+- Share durable facts through `Knowledge` only when the caller opts in.
+- Report invalid configuration and exhausted retries explicitly; do not silently fall back.

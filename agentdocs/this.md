@@ -2,116 +2,83 @@
 
 How every file under `agentdocs/` is written. This file is itself an example of the format.
 
-## File Shape
+## File shape
 
 **One topic per file. Start with a title and a one-sentence description.**
 
-```markdown
-# Style
-
-Naming and comment rules, plus README structure. Skim the section matching what is being written.
-```
-
 - `# Title`: one word or short phrase, no trailing punctuation.
-- Sections use plain headings: `## Title Cased Heading`. No numbers, so adding a section forces no renumbering.
-- Each section is self-contained, so a reader can skip straight to it.
+- One sentence under the title states what the file covers.
+- Sections use plain `##` headings without numbers.
+- Make each section self-contained so a reader can skip to it directly.
 
-## Section Shape
+## Section shape
 
-**Bold rule first. One example second. Bullets last.**
+**Put the rule first and supporting bullets second.**
 
-```markdown
-## Builders
-
-**Builder methods are bare nouns. No `with_` prefix.**
-
-`.name()`, `.model()`, `.tool()`, `.label()`, `.concurrent()`
-
-- The `with_` prefix is reserved for a bare name that would be ambiguous.
-```
-
-- The first line after the heading is a bold one-liner stating the rule as an instruction.
-- An example follows whenever the rule is about code or about the shape of text. Use the smallest form that shows the rule: a fence, a line of identifiers, or a good and bad pair.
-- A section whose own text already demonstrates the rule needs no separate example.
-- Bullets carry what the rule and the example do not. A closing sentence is added only when it carries information the bullets cannot.
+- Start each section with a bold one-line instruction.
+- Add three to five bullets that unpack only what the rule does not say.
+- Add an example only when it makes the rule materially clearer.
+- Add a closing sentence only when it carries new information.
 
 ## Bullets
 
-**Three to five bullets per section. One line each. Imperative voice.**
+**Use imperative, one-line bullets.**
 
-- Start with a capital letter; end with a period.
-- Lead with the verb or with the thing being forbidden.
-- Two short sentences per bullet are acceptable; longer bullets are not.
-- Nested bullets are used only under a parent line ending in a colon.
+- Start with a capital letter and end with a period.
+- Lead with the action or the thing forbidden.
+- Keep each bullet to one idea; use two short sentences only when needed.
+- Nest bullets only under a parent line ending in a colon.
 
 ## Enumerations
 
-**Use bullets, not tables.**
+**Use bullets instead of tables.**
 
-```markdown
-- `Persist`: `save(&self, dir)` and `load(dir, &Self::Key)`.
-- `Append`: `append(dir, &Self::Record)`.
-```
-
-- Tables produce wide rows that are hard to compare.
-- For `name: description` pairs, write `` `Name`: description. ``
-- Group related bullets under a one-line header ending in a colon.
-- Tables belong in the README, where a `<details>` fold gives them a place to sit. These files have no folds.
-
-## Punctuation
-
-**Colons, not em dashes.**
-
-- Use `:` where an em dash would otherwise appear.
-- Use commas or parentheses for short parenthetical asides.
-- `>` blockquotes are reserved for callouts at the top of a file.
+- Write name and description pairs as `` `Name`: description. ``
+- Group related bullets under a short framing line when needed.
+- Keep commands and small examples in code fences.
+- Reserve tables for public reference documents such as `README.md`.
 
 ## Voice
 
-**Direct and neutral. No marketing language. No unnecessary jargon.**
+**Write direct, neutral instructions without decoration.**
 
-```markdown
-GOOD: `Stats` records every event and exposes read accessors.
-BAD:  `Stats` seamlessly wires a powerful metrics plane into the kernel.
-```
-
-- State the rule; justify only when the rule is not obvious on its own.
+- State the rule and justify only what a reader would question.
 - Prefer present tense and second person over passive voice.
-- Avoid adjectives that do not carry information ("powerful", "clean", "seamless").
-- Avoid borrowed metaphors ("kernel", "plane", "seam", "pipeline") unless they are the precise technical term.
+- Remove marketing language, hedging, and unnecessary jargon.
+- Reserve blockquotes for important callouts at the top of a file.
 
 ## Emphasis
 
-**Use MUST for non-negotiable rules. Use IMPORTANT for easy-to-miss gotchas.**
+**Use MUST for correctness and IMPORTANT for easy-to-miss consequences.**
 
-- MUST: correctness-critical rules where a violation breaks compilation, the shape exchanged with LLM providers, or an architectural invariant.
-- IMPORTANT: prefixes a bullet that a reader skimming would miss and regret later.
-- Most rules need neither: the bold one-liner is already the rule.
-- SHOULD, MAY, and CAN are not used: RFC-2119 without the full spec is noise.
+- Use MUST when violating a rule breaks compilation, a public contract, or an architectural invariant.
+- Prefix an easy-to-miss operational consequence with IMPORTANT.
+- Let the bold lead carry ordinary emphasis.
+- Avoid RFC-style SHOULD, MAY, and CAN outside a formal specification.
 
-## Code Grounding
+## Code grounding
 
-**Rules name identifiers that exist in the crate. No invented vocabulary.**
+**Name real project identifiers and keep each statement true to the code.**
 
-- A type, function, field, or method named in a rule MUST be greppable in `crates/agentwerk/src/`.
-- Verbs describe what the code does, not how it feels: avoid "wires", "magic", "ergonomic", "seamless".
-- A rule that cannot point at code is opinion, not architecture: drop it or move it to the consuming application.
-- When a name changes in code, the docs change in the same commit.
+- Verify named types, functions, fields, methods, and paths under `crates/`.
+- Describe what code does with concrete verbs.
+- Drop opinions that cannot point to code or a documented repository decision.
+- Update a rule in the same change as the code that invalidates it.
 
-## Cross-Linking
+## Cross-linking
 
-**Each fact lives in one file. Other files link to it.**
+**Give each fact one home and link to it elsewhere.**
 
-- Commands belong in `workflow.md`; other files link there rather than restating them.
-- File and module placement belongs in `layout.md`; `architecture.md` describes invariants and assumes placement is known.
-- Naming and comment rules belong in `style.md`; `testing.md` covers test-specific naming and links out for the rest.
-- A duplicated fact is a future inconsistency: when two files would say the same thing, one of them links instead.
+- Put commands in `workflow.md`.
+- Put file placement in `layout.md` and cross-module invariants in `architecture.md`.
+- Put naming and comment rules in `style.md` and test-specific rules in `testing.md`.
+- Replace duplicated facts with a link to their authoritative file.
 
 ## Length
 
-**If agentdocs are getting too long, consolidate them. Information loss is acceptable.**
+**Optimize for retrieval, not completeness.**
 
-- Drop sections that restate what a careful reader of the code would already see.
-- Merge two short, overlapping sections before splitting one long section.
-- A rule that has not earned its line is cut, not rewritten shorter.
-- Skim cost matters more than completeness: a forgotten file teaches nothing.
+- Drop facts a careful reader can recover immediately from code or `INVENTORY.md`.
+- Keep constraints, exceptions, negations, and surprising behavior.
+- Merge overlapping sections before adding another file.
+- Cut a rule that has not earned its skim cost.
