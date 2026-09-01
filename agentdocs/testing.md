@@ -1,69 +1,49 @@
 # Testing
 
-How tests are organized and written. Commands used to run them live in [workflow.md](workflow.md).
+How Rust, Python, documentation, and live-provider tests demonstrate behavior.
 
-## Layers
+## Offline Layers
 
-**Two layers: integration and inline.**
+**Put each deterministic test at the narrowest public boundary that proves the contract.**
 
-- `tests/integration/` uses a real LLM provider; bundled by `tests/integration.rs`, with shared helpers in `tests/integration/common.rs`.
-- Inline `#[cfg(test)] mod tests` lives next to the code it covers and runs without a network.
+- Keep Rust unit tests in inline `#[cfg(test)] mod tests` blocks beside the implementation.
+- Keep rustdoc examples runnable as part of the offline suite.
+- Keep binary-specific tests inside `crates/use-cases/src/` so the `--bins` pass reaches them.
+- Keep offline Python behavior under `crates/agentwerk-py/tests/` without the `live` marker.
 
-## Purpose
+## Live Providers
 
-**One test, one observable behavior.**
+**Separate provider-dependent behavior from the offline suite.**
 
-- A test exists because a single contract would otherwise go undemonstrated.
-- A failure points to one cause: no grab-bag assertions across unrelated concerns.
-- A sibling covering the same branch with trivial input changes is merged or removed.
-- Behavior is tested at the layer where it lives: unit, integration, or inline.
+- Put Rust live tests under `crates/agentwerk/tests/integration/` and register them through `tests/integration.rs`.
+- Put shared live helpers in `tests/integration/common.rs`.
+- Mark provider-dependent Python tests with `@pytest.mark.live`.
+- Require explicit provider environment variables; do not silently skip a requested live suite.
 
-## Naming
+## Test Shape
 
-**The name states the behavior, not the method called.**
+**Make one test demonstrate one observable behavior.**
 
-```rust
-add_reply_appends_one_line_to_replies_jsonl        // accepted
-an_explicit_task_schema_overrides_the_label_default
-test_add_reply                                     // rejected
-test_schema_works
-```
+- Name the behavior and expected outcome, such as `add_reply_appends_one_line_to_replies_jsonl`.
+- Exercise the public entry point when the contract is public; use private access only for a private algorithm.
+- Assert state through readers such as `Task::get_status`, `Task::get_result`, or `Werk::find_events`.
+- Cover rejected transitions and verify the original state remains unchanged.
+- Merge sibling cases when one parameterized or table-driven test expresses the same rule more clearly.
 
-- The body verifies what the name claims, with no surprise assertions.
-- The name is the first line of the documentation the test provides.
+## Boundaries
 
-## API Focus
+**Use real in-process state and isolate only external trust boundaries.**
 
-**Tests exercise the public surface the way callers hold it.**
+- Prefer temporary directories, real stores, and real serialization over mocks of agentwerk internals.
+- Fake network responses, elapsed time, or provider output only at the boundary that owns them.
+- Keep the action under test visible; move repeated setup into `test_util` helpers.
+- Comment only when a test protects an architectural invariant that its name cannot express.
 
-- Call the public entry point; do not poke at private fields, patched internals, or field assignments.
-- Mock at trust boundaries (network, clock, disk), never at the subject under test.
-- Assert observable outcomes, not call logs or the order internal methods ran in.
-- The arrange, act, and assert shape mirrors how a real caller would use the API.
+## Surface Parity
 
-## State Transitions
+**Treat tests as executable API documentation.**
 
-**Actions and the resulting state MUST be visible through the public API.**
-
-- Build the starting state by calling real actions, not by field assignment that bypasses invariants.
-- Read the resulting state back through a public query, not by peeking at private fields.
-- Assert both the starting and the final state so the transition is shown, not implied.
-- Cover illegal transitions and verify state is unchanged after a rejection.
-- One transition per test, so a failure locates the exact broken action.
-
-## Clarity
-
-**Setup is hidden. Intent is highlighted.**
-
-- Push scaffolding into factories, builders, and fixtures so the body reads as a short story.
-- Name literals that carry meaning: `EXPIRED_COUPON`, not `42`.
-- Keep the act step a single visible line; do not bury it in setup.
-- Comments are justified only to pin an architectural invariant the test guards.
-
-## Coverage Shape
-
-**Every public operation has a test that demonstrates intended usage.**
-
-- Error cases, edge conditions, and boundaries sit at the same interface level as the happy path.
-- A missing behavior is added before a duplicate case is kept for symmetry.
-- IMPORTANT: a public method with no test is a documentation gap, not just a coverage gap.
+- Add a happy path, failure path, and meaningful boundary for each public operation.
+- Update Rust doctests when public examples change.
+- Update `crates/agentwerk-py/tests/test_parity.py` when Rust or Python exports change.
+- Follow [workflow.md](workflow.md) for the exact commands and live-test prerequisites.

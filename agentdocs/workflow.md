@@ -1,80 +1,89 @@
 # Workflow
 
-Commands used to build, test, release, and run example agents.
+Commands for building, testing, documenting, running, and releasing the workspace.
 
 ## Build
 
-**Every build MUST run with `-D warnings`. Any warning fails it.**
+**Use the Make targets so warnings and documentation checks stay consistent.**
 
 ```bash
-make        # compile the crate
-make fmt    # format the code
-make clean  # remove build artifacts
+make                 # format and build with warnings denied
+make fmt             # format Rust code
+make doc             # build strict rustdoc for agentwerk
+make check_names     # reject removed names and missing inventory files
+make clean           # remove build artifacts
+make update          # update dependencies
 ```
 
-## Test
+- Run `make` after Rust changes.
+- Run `make doc` after public API or rustdoc changes.
+- Update `INVENTORY.md` with every added, removed, renamed, or retyped declaration.
 
-**Test layout and writing rules live in [testing.md](testing.md).**
+## Rust Tests
 
-- `make test` runs three passes: `--lib` (every crate's inline `#[cfg(test)] mod tests`), `--doc` (the examples in `///` comments), and `-p use-cases --bins` (the tests inside the use-case binaries).
-- `--lib` alone reaches neither of the last two.
-- `make test_integration` runs the live-provider tests bundled by `tests/integration.rs`.
+**Run the offline suite before any live-provider suite.**
+
+```bash
+make test
+make test_integration
+make test_integration name=command_usage
+```
+
+- `make test` runs workspace library tests, rustdoc examples, and the `use-cases` binary tests.
+- `make test_integration` runs `crates/agentwerk/tests/integration.rs` against the configured LLM provider.
+- Set `name=<test name>` to filter the Rust integration binary.
+- Export provider variables in the shell before live tests; the target does not load a `.env` file.
 
 ## Python Bindings
 
-**`make python` runs `maturin develop` in `crates/agentwerk-py/`, building the extension into the active virtualenv.**
-
-- Create the virtualenv first with `python3 -m venv .venv` at the repo root and activate it. maturin fails without one, and the test targets resolve `python3` off the PATH, so an unactivated virtualenv imports the system interpreter instead.
-- `make python_test` runs the offline pytest suite: no network, no LLM provider.
-- `make python_test_integration` runs the tests marked `live`, which call a real LLM provider.
-- Both test targets depend on `make python`, so an edit to the binding crate is picked up automatically.
-
-## Integration Environment
-
-**Integration tests read LLM provider configuration from the environment. Export it in your shell before running them; no target reads a file.**
+**Build and test the extension inside an activated virtual environment.**
 
 ```bash
-export OPENAI_API_KEY=sk-local
-export OPENAI_BASE_URL=http://localhost:8095
-make test_integration
+python3 -m venv .venv
+source .venv/bin/activate
+make python
+make python_test
+make python_test_integration
 ```
 
-- `OPENAI_BASE_URL` points at a local OpenAI-compatible proxy on port 8095.
-- A target that finds no provider fails at the first request rather than skipping, so an unset variable is loud.
-- Keeping a `.env` and sourcing it yourself still works, since the targets inherit whatever the shell exports.
-
-## Release
-
-**`make bump` runs tests, bumps the patch version, commits, and tags.**
-
-- `make bump part=minor` and `make bump part=major` bump the other two parts.
-- Push the new tag with `git push --tags`.
-
-## Hooks
-
-**`make hooks` installs Claude Code hooks into `.claude/settings.local.json`.**
-
-- Source files live in `hooks/` (tracked); `make hooks` copies them into `.claude/hooks/` (ignored) and merges the configuration.
-- `check-conventions.sh` injects `agentdocs/style.md` and `agentdocs/architecture.md` as context after each Rust file edit.
-
-## Skills
-
-**`make skills` symlinks every directory under `skills/` into `~/.claude/skills` and `~/.config/opencode/skills`.**
-
-- `skills/prompt` writes and rewrites the crate's agent-facing text: role files, `*.tool.md` definitions, directives.
-- IMPORTANT: the destinations are shared across every project. A skill of the same name already installed there is replaced, so `make skills` changes what `/prompt` means everywhere, not just here.
+- `make python` runs `maturin develop` in `crates/agentwerk-py/`.
+- `make python_test` runs tests not marked `live`.
+- `make python_test_integration` runs only tests marked `live` against the configured provider.
+- Keep the virtual environment active because both maturin and pytest use `python3` from `PATH`.
 
 ## Use Cases
 
-**Example agents live in `crates/use-cases/src/` and run through `make use_case`.**
+**Run examples through `make use_case`.**
 
 ```bash
-make use_case                # list available names
-make use_case name=<name>    # run one
+make use_case
+make use_case name=terminal-repl
+make use_case name=deep-research args="What is a good life?"
 ```
 
-- `hello-world` is the smallest program the crate allows: one agent, one task, one printed answer.
-- `terminal-repl` is a per-turn interactive chat that prints output as it arrives.
-- `divide-and-conquer` partitions an arithmetic problem across agents sharing one Werk.
-- `deep-research` is a two-phase research pipeline with web search, and requires `BRAVE_API_KEY`.
-- `malware-scanner` identifies indicators of compromise in a software package.
+- Use the empty target to list names from `crates/use-cases/Cargo.toml`.
+- Pass program arguments through `args=`, not after `--`.
+- Set `BRAVE_API_KEY` before running `deep-research`.
+
+## Local Tooling
+
+**Treat setup targets as changes outside the repository.**
+
+- `make hooks` merges `hooks/hooks.json` into `.claude/settings.local.json`.
+- `make skills` replaces same-named skills under `~/.claude/skills` and `~/.config/opencode/skills` with repository symlinks.
+- `make litellm` starts a Docker proxy on port 4000; set `LITELLM_PROVIDER` to `anthropic`, `openai`, or `mistral`.
+
+## Release
+
+**Use `make bump` only when a versioned release is intended.**
+
+```bash
+make bump
+make bump part=minor
+make bump part=major
+git push && git push --tags
+```
+
+- The target runs tests, updates both crate versions, commits, and creates a `v<version>` tag.
+- Omit `part` for a patch release; use only `patch`, `minor`, or `major`.
+- GitHub Actions publishes after the tag is pushed.
