@@ -49,7 +49,7 @@ impl From<GrepTool> for Tool {
             .description(include_str!("grep.tool.md"))
             .schema(include_str!("grep.schema.json"))
             .concurrent(true)
-            .handler(run)
+            .handler_with_context(run)
     }
 }
 

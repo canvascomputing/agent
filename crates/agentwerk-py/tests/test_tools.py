@@ -81,15 +81,9 @@ def test_tool_decorator_records_name_doc_and_concurrent():
     assert sample._agentwerk_concurrent is True
 
 
-def test_tool_decorator_records_path_fields():
-    @aw.tool(concurrent=True, paths=["path"])
-    def cat(path: str) -> str:
-        """Read a file."""
-        return path
-
-    assert cat._agentwerk_paths == ["path"]
-    agent = aw.Agent()
-    assert agent.tool(cat) is agent
+def test_tool_decorator_has_no_path_configuration():
+    with pytest.raises(TypeError):
+        aw.tool(paths=["path"])
 
 
 def test_knowledge_tool_binds_a_store(knowledge_dir):
@@ -160,22 +154,6 @@ def test_named_event_constructors_cover_every_builtin_payload():
             aw.Event.TOOL_CALL_FAILED,
             {"kind": "execution_failed", "message": "nope"},
         ),
-        (
-            aw.Event.file_open_finished("src/lib.rs", "read_file", "c-1"),
-            aw.Event.FILE_OPEN_FINISHED,
-            {"path": "src/lib.rs", "tool_name": "read_file", "call_id": "c-1"},
-        ),
-        (
-            aw.Event.file_open_failed("missing.rs", "read_file", "c-2", "not_found", "missing"),
-            aw.Event.FILE_OPEN_FAILED,
-            {
-                "path": "missing.rs",
-                "tool_name": "read_file",
-                "call_id": "c-2",
-                "kind": "not_found",
-                "message": "missing",
-            },
-        ),
         (aw.Event.knowledge_written("notes"), aw.Event.KNOWLEDGE_WRITTEN, {"slug": "notes"}),
         (aw.Event.knowledge_read("notes"), aw.Event.KNOWLEDGE_READ, {"slug": "notes"}),
         (aw.Event.knowledge_removed("notes"), aw.Event.KNOWLEDGE_REMOVED, {"slug": "notes"}),
@@ -217,7 +195,7 @@ def test_named_event_constructors_cover_every_builtin_payload():
         ),
     ]
 
-    assert len(cases) == 30
+    assert len(cases) == 28
     for event, name, data in cases:
         assert event.get_name() == name
         assert event.get_data() == data

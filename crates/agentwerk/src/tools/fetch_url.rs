@@ -97,7 +97,7 @@ impl From<FetchTool> for Tool {
             .description(include_str!("fetch_url.tool.md"))
             .schema(include_str!("fetch_url.schema.json"))
             .concurrent(true)
-            .handler(move |args: FetchUrlArgs, ctx: ToolContext| async move {
+            .handler_with_context(move |args: FetchUrlArgs, ctx: ToolContext| async move {
                 run(args, ctx, impersonate).await
             })
     }

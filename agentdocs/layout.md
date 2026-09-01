@@ -54,11 +54,11 @@ crates/
 - `queue.rs`: constructors, configuration, task creation, agent binding, run lifecycle, results, and queries. `store.rs`: the store mutations (`insert`, `claim`, `set_task_finished`, `edit_replies`, transition recording).
 - `trajectory.rs`: `Trajectory`, a task's replies captured as a training example, its `trajectories/<id>.json` write, and the `.html` rendering written beside it.
 
-`loop/` holds the multi-agent loop, split by state:
+`loop/` holds the multi-agent loop, split by operation:
 
 - `main.rs`: `run_main_loop`, which spawns one tokio task per registered agent, decides when the run is over, joins them, and emits `RunFinished`.
-- `agent.rs`: `run_agent` (outer claim loop plus the inner `Step` match), `TaskContext`, the task check, and the silence retry. `mod.rs` names the `Step` enum itself.
-- `compact.rs`, `request.rs`, `tool_call.rs`: compaction dispatched to the summarizer; the provider round-trip with retry and backoff; tool dispatch, output offloading, and the tool-failure budget.
+- `agent.rs`: `Agent::run` and its one explicit task loop. Task-specific tools, prompts, policy, and failure counts remain local to that loop.
+- `compact.rs`, `request.rs`, `tool_call.rs`: private `Agent` methods for compaction, the provider round-trip with retry and backoff, and `call_tools` with output offloading and the tool-failure budget.
 
 ## The `providers/` Module
 
@@ -73,9 +73,9 @@ crates/
 
 ## The `tools/` Module
 
-**`tool.rs` holds the trait and registry; every other file is one built-in tool or a helper.**
+**`tool.rs` holds tool construction and execution; every other file is one built-in tool or a helper.**
 
-- `tool.rs` defines `Tool`, `ToolRegistry`, `ToolContext`, and `ToolCall`.
+- `tool.rs` defines the public `Tool` builder and the private execution functions over `Vec<Tool>`.
 - `read_file.rs`, `write_file.rs`, `edit_file.rs`, `glob.rs`, `grep.rs`, and `list_directory.rs` are filesystem tools; `code.rs` backs `grep`'s `syntax: "code"` shape matching, delegating to the `codegrep` engine. `fetch_url.rs` is the web fetch tool.
 - `command/tool.rs` is the command tool, restricted through `new()` and widened through `allow()`; it runs one program per call and never a shell. `command/parse.rs` splits a line into one command and classifies its arguments, which is how the tool refuses anything that is not one command.
 - `event.rs` owns `EventTool` and the completion engine; `tasks/finish.rs` wraps its `task_finished` branch, while `tasks/` also holds `TaskTool`. `knowledge.rs` is the model-facing wrapper around `Knowledge`. `util.rs` is a shared helper.

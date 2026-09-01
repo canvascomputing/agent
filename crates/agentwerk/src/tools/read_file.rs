@@ -42,8 +42,7 @@ impl From<ReadFileTool> for Tool {
             .description(include_str!("read_file.tool.md"))
             .schema(include_str!("read_file.schema.json"))
             .concurrent(true)
-            .paths(["path"])
-            .handler(run)
+            .handler_with_context(run)
     }
 }
 
@@ -175,50 +174,20 @@ mod tests {
         ToolContext::new(PathBuf::from(dir))
     }
 
-    #[test]
-    fn opened_paths_reports_the_file_argument_for_file_tools() {
-        use crate::tools::{EditFileTool, GlobTool, GrepTool, ListDirectoryTool, WriteFileTool};
-
-        let input = serde_json::json!({"path": "src/lib.rs"});
-        let openers: Vec<Tool> = vec![
-            ReadFileTool.into(),
-            WriteFileTool.into(),
-            EditFileTool.into(),
-        ];
-        for tool in &openers {
-            assert_eq!(
-                tool.opened_paths(&input),
-                vec!["src/lib.rs".to_string()],
-                "{} should report its path",
-                tool.get_name(),
-            );
-        }
-
-        // Directory, pattern, and content-search tools open no file.
-        assert!(Tool::from(ListDirectoryTool)
-            .opened_paths(&input)
-            .is_empty());
-        assert!(Tool::from(GlobTool).opened_paths(&input).is_empty());
-        assert!(Tool::from(GrepTool).opened_paths(&input).is_empty());
-    }
-
     #[tokio::test]
     async fn a_slice_the_model_quoted_reads_the_lines_it_asked_for() {
         // Dispatch retypes against the advertised schema, which is what keeps
         // these `as_u64` reads from silently defaulting to the whole file.
         let dir = crate::test_util::TempDir::new().unwrap();
         std::fs::write(dir.path().join("test.txt"), "alpha\nbeta\ngamma\ndelta\n").unwrap();
-        let mut registry = crate::tools::tool::ToolRegistry::default();
-        registry.register(ReadFileTool);
-        let calls = vec![crate::tools::ToolCall {
-            id: "c1".into(),
-            name: "read_file".into(),
-            input: serde_json::json!({"path": "test.txt", "offset": "2", "limit": "2"}),
-        }];
+        let result = Tool::from(ReadFileTool)
+            .invoke(
+                serde_json::json!({"path": "test.txt", "offset": "2", "limit": "2"}),
+                &test_ctx(dir.path()),
+            )
+            .await;
 
-        let results = registry.execute(&calls, &test_ctx(dir.path())).await;
-
-        assert_eq!(results[0].get_content(), "2\tbeta\n3\tgamma");
+        assert_eq!(result.get_content(), "2\tbeta\n3\tgamma");
     }
 
     #[tokio::test]

@@ -81,7 +81,7 @@ impl From<KnowledgeTool> for Tool {
         Tool::new("knowledge")
             .description(include_str!("knowledge.tool.md"))
             .schema(include_str!("knowledge.schema.json"))
-            .handler(move |args: KnowledgeArgs, ctx: ToolContext| {
+            .handler_with_context(move |args: KnowledgeArgs, ctx: ToolContext| {
                 let store = Arc::clone(&store);
                 async move { run(&store, args, &ctx) }
             })
@@ -341,19 +341,14 @@ mod tests {
         assert_success(&r, "(no pages)");
     }
 
-    /// Run a call the way an agent does: through the registry, which checks the
-    /// arguments against the schema before the tool sees them. The tests below
-    /// read what the model would.
+    /// Run a call through the tool's schema before its handler sees it. The
+    /// tests below read what the model would.
     async fn dispatch(store: &Arc<Knowledge>, input: serde_json::Value) -> String {
-        let mut registry = crate::tools::ToolRegistry::default();
-        registry.register(KnowledgeTool::new(Arc::clone(store)));
-        let calls = vec![crate::tools::ToolCall {
-            id: "c1".into(),
-            name: "knowledge".into(),
-            input,
-        }];
-        let results = registry.execute(&calls, &ctx()).await;
-        results[0].get_content().to_string()
+        Tool::from(KnowledgeTool::new(Arc::clone(store)))
+            .invoke(input, &ctx())
+            .await
+            .get_content()
+            .to_string()
     }
 
     #[tokio::test]

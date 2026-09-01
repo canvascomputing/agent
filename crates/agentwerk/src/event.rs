@@ -60,8 +60,6 @@ impl Event {
     pub const TOOL_CALL_STARTED: &'static str = "tool_call_started";
     pub const TOOL_CALL_FINISHED: &'static str = "tool_call_finished";
     pub const TOOL_CALL_FAILED: &'static str = "tool_call_failed";
-    pub const FILE_OPEN_FINISHED: &'static str = "file_open_finished";
-    pub const FILE_OPEN_FAILED: &'static str = "file_open_failed";
     pub const KNOWLEDGE_WRITTEN: &'static str = "knowledge_written";
     pub const KNOWLEDGE_READ: &'static str = "knowledge_read";
     pub const KNOWLEDGE_REMOVED: &'static str = "knowledge_removed";
@@ -92,8 +90,6 @@ impl Event {
         Self::TOOL_CALL_STARTED,
         Self::TOOL_CALL_FINISHED,
         Self::TOOL_CALL_FAILED,
-        Self::FILE_OPEN_FINISHED,
-        Self::FILE_OPEN_FAILED,
         Self::KNOWLEDGE_WRITTEN,
         Self::KNOWLEDGE_READ,
         Self::KNOWLEDGE_REMOVED,
@@ -250,36 +246,6 @@ impl Event {
     pub fn tool_call_failed(message: impl Into<String>) -> Self {
         Self::new(Self::TOOL_CALL_FAILED).data(serde_json::json!({
             "kind": "execution_failed",
-            "message": message.into(),
-        }))
-    }
-
-    /// Create a file-open-finished event.
-    pub fn file_open_finished(
-        path: impl Into<String>,
-        tool_name: impl Into<String>,
-        call_id: impl Into<String>,
-    ) -> Self {
-        Self::new(Self::FILE_OPEN_FINISHED).data(serde_json::json!({
-            "path": path.into(),
-            "tool_name": tool_name.into(),
-            "call_id": call_id.into(),
-        }))
-    }
-
-    /// Create a file-open-failed event.
-    pub fn file_open_failed(
-        path: impl Into<String>,
-        tool_name: impl Into<String>,
-        call_id: impl Into<String>,
-        kind: impl Into<String>,
-        message: impl Into<String>,
-    ) -> Self {
-        Self::new(Self::FILE_OPEN_FAILED).data(serde_json::json!({
-            "path": path.into(),
-            "tool_name": tool_name.into(),
-            "call_id": call_id.into(),
-            "kind": kind.into(),
             "message": message.into(),
         }))
     }
@@ -747,24 +713,6 @@ pub(crate) mod tests {
             (
                 Event::tool_call_failed("nope"),
                 serde_json::json!({ "kind": "execution_failed", "message": "nope" }),
-            ),
-            (
-                Event::file_open_finished("src/lib.rs", "read_file", "c-1"),
-                serde_json::json!({
-                    "path": "src/lib.rs",
-                    "tool_name": "read_file",
-                    "call_id": "c-1",
-                }),
-            ),
-            (
-                Event::file_open_failed("missing.rs", "read_file", "c-2", "not_found", "missing"),
-                serde_json::json!({
-                    "path": "missing.rs",
-                    "tool_name": "read_file",
-                    "call_id": "c-2",
-                    "kind": "not_found",
-                    "message": "missing",
-                }),
             ),
             (
                 Event::knowledge_written("notes"),

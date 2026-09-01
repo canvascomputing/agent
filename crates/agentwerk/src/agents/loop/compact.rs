@@ -4,113 +4,125 @@
 
 use std::sync::Arc;
 
+use crate::agents::agent::Agent;
 use crate::agents::compaction::{self as algo, Compaction};
-use crate::agents::tasks::Task;
+use crate::agents::policy::Policy;
+use crate::agents::tasks::{Queue, Task};
 use crate::event::Event;
+use crate::tools::Tool;
 
-use super::agent::TaskContext;
-use super::{CompactReason, Step};
+use super::CompactReason;
 
-pub(super) async fn run(context: &mut TaskContext<'_>, reason: CompactReason) -> Option<Step> {
-    let Some(mut task) = context.task() else {
-        return None;
-    };
-    let window = context.model.get_context_window();
-    let total = algo::chunks_for_window(&task.to_messages(), window).len() as u32;
-    context.emit_event(
-        Event::new(Event::COMPACTION_STARTED)
-            .data(serde_json::json!({ "trigger": reason, "total": total })),
-    );
+impl Agent {
+    pub(super) async fn compact(
+        &self,
+        queue: &Arc<Queue>,
+        task_id: &str,
+        reason: CompactReason,
+    ) -> bool {
+        let Some(mut task) = queue.get_task(task_id) else {
+            return false;
+        };
+        let model = self.get_model();
+        let window = model.get_context_window();
+        let total = algo::chunks_for_window(&task.to_messages(), window).len() as u32;
+        self.emit_event(
+            queue,
+            task_id,
+            Event::new(Event::COMPACTION_STARTED)
+                .data(serde_json::json!({ "trigger": reason, "total": total })),
+        );
 
-    let on_progress: Arc<dyn Fn(u32, u32) + Send + Sync> = {
-        let queue = Arc::clone(context.queue);
-        let agent_id = context.agent.get_id().to_string();
-        let task_id = context.task_id.clone();
-        Arc::new(move |completed, total| {
-            queue.emit_event(
-                Event::new(Event::COMPACTION_PROGRESS)
-                    .data(serde_json::json!({
+        let on_progress: Arc<dyn Fn(u32, u32) + Send + Sync> = {
+            let queue = Arc::clone(queue);
+            let agent_id = self.get_id().to_string();
+            let task_id = task_id.to_string();
+            Arc::new(move |completed, total| {
+                queue.emit_event(
+                    Event::new(Event::COMPACTION_PROGRESS)
+                        .data(serde_json::json!({
+                            "trigger": reason,
+                            "completed": completed,
+                            "total": total,
+                        }))
+                        .task_id(&task_id)
+                        .agent_id(&agent_id),
+                );
+            })
+        };
+
+        let replies = std::mem::take(&mut task.replies);
+        let compaction = Compaction::new(
+            self.get_provider(),
+            model.name.clone(),
+            window,
+            on_progress,
+            self.get_directives(),
+        );
+        let edited = match algo::summarize_replies(compaction, replies.clone()).await {
+            Ok(edited) => edited,
+            Err(error) => {
+                self.emit_event(
+                    queue,
+                    task_id,
+                    Event::new(Event::COMPACTION_FAILED).data(serde_json::json!({
                         "trigger": reason,
-                        "completed": completed,
-                        "total": total,
-                    }))
-                    .task_id(&task_id)
-                    .agent_id(&agent_id),
-            );
-        })
-    };
+                        "kind": "summarization_failed",
+                        "message": error.to_string(),
+                    })),
+                );
+                self.fail_task(queue, task_id);
+                return false;
+            }
+        };
 
-    // Moved out rather than cloned: the summarizer gets the replies as its own
-    // argument, so a second copy on the task would only be one more thing to
-    // read them from.
-    let replies = std::mem::take(&mut task.replies);
-    let compaction = Compaction::new(
-        context.agent.get_provider(),
-        context.model.name.clone(),
-        window,
-        on_progress,
-        context.agent.get_directives(),
-    );
-    let edited = match algo::summarize_replies(compaction, replies.clone()).await {
-        Ok(edited) => edited,
-        Err(error) => {
-            context.emit_event(
+        let applied = edited != replies;
+        if applied {
+            queue.edit_replies(task_id, |current| *current = edited);
+            queue.stats.reset_usage(task_id);
+        }
+
+        if !applied && matches!(reason, CompactReason::Reactive) {
+            self.emit_event(
+                queue,
+                task_id,
                 Event::new(Event::COMPACTION_FAILED).data(serde_json::json!({
                     "trigger": reason,
-                    "kind": "summarization_failed",
-                    "message": error.to_string(),
+                    "kind": "context_still_exceeded",
+                    "message": "context still exceeds window after compaction",
                 })),
             );
-            context.fail_task();
-            return None;
+            self.fail_task(queue, task_id);
+            return false;
         }
-    };
 
-    // Replies handed back untouched say compaction found nothing to drop.
-    let applied = edited != replies;
-    if applied {
-        context
-            .queue
-            .edit_replies(&context.task_id, |current| *current = edited);
-        // The last response's input tokens no longer describe the next request.
-        context.queue.stats.reset_usage(&context.task_id);
-    }
-
-    if !applied && matches!(reason, CompactReason::Reactive) {
-        context.emit_event(
-            Event::new(Event::COMPACTION_FAILED).data(serde_json::json!({
-                "trigger": reason,
-                "kind": "context_still_exceeded",
-                "message": "context still exceeds window after compaction",
-            })),
+        self.emit_event(
+            queue,
+            task_id,
+            Event::new(Event::COMPACTION_FINISHED).data(serde_json::json!({ "trigger": reason })),
         );
-        context.fail_task();
-        return None;
+        true
     }
 
-    context.emit_event(
-        Event::new(Event::COMPACTION_FINISHED).data(serde_json::json!({ "trigger": reason })),
-    );
-    match reason {
-        // Proactive skips Evaluate, which would re-trigger its own threshold.
-        CompactReason::Proactive => Some(Step::Request),
-        CompactReason::Reactive => Some(Step::Evaluate),
+    pub(super) fn needs_compaction(
+        &self,
+        queue: &Queue,
+        task_id: &str,
+        task: &Task,
+        system_prompt: &str,
+        policy: &Policy,
+        tools: &[Tool],
+    ) -> bool {
+        let history = queue.stats.usage_for_task(task_id);
+        algo::should_compact_proactively(
+            self.get_model().get_context_window(),
+            policy.compaction_threshold,
+            &history,
+            &task.to_messages(),
+            system_prompt,
+            tools,
+        )
     }
-}
-
-pub(super) fn proactive_compaction_needed(context: &TaskContext<'_>, task: &Task) -> bool {
-    let tools = context.tools.tools();
-    let window = context.model.get_context_window();
-    let history = context.queue.stats.usage_for_task(&context.task_id);
-
-    algo::should_compact_proactively(
-        window,
-        context.policy.compaction_threshold,
-        &history,
-        &task.to_messages(),
-        &context.system_prompt,
-        &tools,
-    )
 }
 
 #[cfg(test)]

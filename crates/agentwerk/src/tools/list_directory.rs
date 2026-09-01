@@ -38,7 +38,7 @@ impl From<ListDirectoryTool> for Tool {
             .description(include_str!("list_directory.tool.md"))
             .schema(include_str!("list_directory.schema.json"))
             .concurrent(true)
-            .handler(run)
+            .handler_with_context(run)
     }
 }
 

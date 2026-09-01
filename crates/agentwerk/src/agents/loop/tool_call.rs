@@ -3,172 +3,258 @@
 
 use std::sync::Arc;
 
-use crate::agents::tasks::Reply;
+use crate::agents::agent::Agent;
+use crate::agents::policy::Policy;
+use crate::agents::tasks::{Queue, Reply};
 use crate::agents::PolicyViolation;
 use crate::event::Event;
+use crate::prompts::directives::{NO_TOOLS_REGISTERED, TOOL_NOT_FOUND, TOOL_PANICKED};
 use crate::providers::ContentBlock;
-use crate::tools::{ToolCall, ToolContext};
+use crate::tools::{Tool, ToolContext};
 
-use super::agent::TaskContext;
-use super::Step;
+const MAX_CONCURRENT_CALLS: usize = 10;
 
-pub(super) async fn run(context: &mut TaskContext<'_>, mut calls: Vec<ToolCall>) -> Option<Step> {
-    let max_schema_retries = context.policy.max_schema_retries.unwrap_or(u32::MAX);
-    let registry = context.tools.clone();
+impl Agent {
+    pub(super) async fn call_tools(
+        &self,
+        queue: &Arc<Queue>,
+        task_id: &str,
+        tools: &[Tool],
+        mut calls: Vec<ContentBlock>,
+        policy: &Policy,
+        consecutive_schema_failures: &mut u32,
+    ) -> bool {
+        let max_schema_retries = policy.max_schema_retries.unwrap_or(u32::MAX);
 
-    // Report the registered name, so a model alternating spellings of one tool
-    // still reports every call under the one name a handler counts by.
-    for call in &mut calls {
-        let Some(tool) = registry.get(&call.name) else {
-            continue;
-        };
-        let registered = tool.get_name().to_string();
-        if registered != call.name {
-            context.emit_event(
-                Event::new(Event::TOOL_CALL_REPAIRED).data(serde_json::json!({
-                    "tool_name": registered,
-                    "call_id": call.id,
-                    "kind": "call_malformed",
-                    "message": format!("resolved from `{}`", call.name),
+        for call in &mut calls {
+            let ContentBlock::ToolUse { id, name, .. } = call else {
+                continue;
+            };
+            let Some(tool) = self.get_tool(tools, name) else {
+                continue;
+            };
+            let registered = tool.get_name().to_string();
+            if registered != *name {
+                self.emit_event(
+                    queue,
+                    task_id,
+                    Event::new(Event::TOOL_CALL_REPAIRED).data(serde_json::json!({
+                        "tool_name": registered,
+                        "call_id": id,
+                        "kind": "call_malformed",
+                        "message": format!("resolved from `{name}`"),
+                    })),
+                );
+                *name = registered;
+            }
+        }
+
+        for call in &calls {
+            let ContentBlock::ToolUse { id, name, input } = call else {
+                continue;
+            };
+            self.emit_event(
+                queue,
+                task_id,
+                Event::new(Event::TOOL_CALL_STARTED).data(serde_json::json!({
+                    "tool_name": name,
+                    "call_id": id,
+                    "input": input,
                 })),
             );
         }
-        call.name = registered;
+
+        let tool_context = ToolContext::new(self.get_dir())
+            .run(Arc::clone(&queue.run))
+            .queue(Arc::clone(queue))
+            .agent_id(self.get_id().to_string())
+            .task_id(task_id.to_string())
+            .directives(self.get_directives());
+        let semaphore = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_CALLS));
+        let mut answers: Vec<Option<Event>> = calls.iter().map(|_| None).collect();
+        let mut cursor = 0;
+
+        while cursor < calls.len() {
+            let concurrent = self.tool_is_concurrent(tools, &calls[cursor]);
+            if !concurrent {
+                let future = self.call_tool(tools, &calls[cursor], &tool_context);
+                answers[cursor] = tokio::spawn(future).await.ok();
+                cursor += 1;
+                continue;
+            }
+
+            let start = cursor;
+            while cursor < calls.len() && self.tool_is_concurrent(tools, &calls[cursor]) {
+                cursor += 1;
+            }
+            let mut running = tokio::task::JoinSet::new();
+            for (offset, call) in calls[start..cursor].iter().enumerate() {
+                let index = start + offset;
+                let semaphore = Arc::clone(&semaphore);
+                let future = self.call_tool(tools, call, &tool_context);
+                running.spawn(async move {
+                    let _permit = semaphore.acquire().await.unwrap();
+                    (index, future.await)
+                });
+            }
+            while let Some(joined) = running.join_next().await {
+                if let Ok((index, result)) = joined {
+                    answers[index] = Some(result);
+                }
+            }
+        }
+
+        let directives = self.get_directives();
+        let mut results: Vec<Event> = calls
+            .iter()
+            .zip(answers)
+            .map(|(call, answer)| {
+                let tool_name = match call {
+                    ContentBlock::ToolUse { name, .. } => name.as_str(),
+                    _ => "unknown",
+                };
+                answer.unwrap_or_else(|| {
+                    Event::error(directives.render(TOOL_PANICKED, &[("tool", tool_name)]))
+                        .directive(TOOL_PANICKED)
+                })
+            })
+            .collect();
+        Event::cap_tool_results(&calls, &mut results, &tool_context);
+
+        let mut first_schema_failure: Option<String> = None;
+        let mut offloaded = std::collections::HashMap::new();
+        let mut blocks: Vec<ContentBlock> = Vec::with_capacity(results.len());
+        let mut events: Vec<Event> = Vec::with_capacity(results.len());
+        for (call, result) in calls.iter().zip(results) {
+            let ContentBlock::ToolUse { id, name, .. } = call else {
+                continue;
+            };
+            let succeeded = result.get_name() == Event::TOOL_CALL_FINISHED;
+            let content = if succeeded {
+                let content = result.get_content().to_string();
+                *consecutive_schema_failures = 0;
+                for message in result.repairs() {
+                    events.push(
+                        Event::new(Event::TOOL_CALL_REPAIRED).data(serde_json::json!({
+                            "tool_name": name,
+                            "call_id": id,
+                            "kind": "value_mistyped",
+                            "message": message,
+                        })),
+                    );
+                }
+                let mut event = result.clone();
+                if let Some(data) = event.data.as_object_mut() {
+                    data.insert("tool_name".into(), name.clone().into());
+                    data.insert("call_id".into(), id.clone().into());
+                }
+                events.push(event);
+                if let Some(path) = result.output_path() {
+                    offloaded.insert(id.clone(), path.into());
+                }
+                content
+            } else {
+                let content = result.get_content().to_string();
+                let kind = result.get_data()["kind"]
+                    .as_str()
+                    .unwrap_or("execution_failed");
+                *consecutive_schema_failures = consecutive_schema_failures.saturating_add(1);
+                if kind == "schema_failed" && first_schema_failure.is_none() {
+                    first_schema_failure = Some(content.clone());
+                }
+                let mut event = result.clone();
+                if let Some(data) = event.data.as_object_mut() {
+                    data.insert("tool_name".into(), name.clone().into());
+                    data.insert("call_id".into(), id.clone().into());
+                    data.insert("kind".into(), kind.into());
+                }
+                events.push(event);
+                content
+            };
+            blocks.push(ContentBlock::ToolResult {
+                tool_use_id: id.clone(),
+                content,
+                succeeded,
+            });
+        }
+
+        if let Some(message) = first_schema_failure {
+            events.push(Event::new(Event::SCHEMA_RETRIED).data(serde_json::json!({
+                "attempt": consecutive_schema_failures,
+                "max_attempts": max_schema_retries,
+                "kind": "schema_failed",
+                "message": message,
+            })));
+        }
+        queue.append_reply(task_id, Reply::user(&blocks, &offloaded));
+        for event in events {
+            self.emit_event(queue, task_id, event);
+        }
+
+        if *consecutive_schema_failures >= max_schema_retries {
+            self.emit_event(
+                queue,
+                task_id,
+                Event::new(Event::POLICY_VIOLATED).data(serde_json::json!({
+                    "policy": PolicyViolation::MaxSchemaRetries,
+                    "limit": u64::from(max_schema_retries),
+                })),
+            );
+            self.fail_task(queue, task_id);
+            return false;
+        }
+        true
     }
 
-    for call in &calls {
-        context.emit_event(
-            Event::new(Event::TOOL_CALL_STARTED).data(serde_json::json!({
-                "tool_name": call.name,
-                "call_id": call.id,
-                "input": call.input,
-            })),
-        );
-    }
-
-    let tool_context = ToolContext::new(context.agent.get_dir())
-        .run(Arc::clone(&context.run))
-        .queue(Arc::clone(context.queue))
-        .agent_id(context.agent.get_id().to_string())
-        .task_id(context.task_id.clone())
-        .knowledge(context.agent.get_knowledge())
-        .directives(context.agent.get_directives());
-
-    let results = registry.execute(&calls, &tool_context).await;
-
-    let mut first_schema_failure: Option<String> = None;
-    let mut offloaded = std::collections::HashMap::new();
-    let mut blocks: Vec<ContentBlock> = Vec::with_capacity(results.len());
-    let mut events: Vec<Event> = Vec::with_capacity(results.len());
-    for (call, result) in calls.iter().zip(results) {
-        // Feeds the per-path open tally; empty for a tool that opens no file.
-        let opened_paths = registry
-            .get(&call.name)
-            .map(|tool| tool.opened_paths(&call.input))
-            .unwrap_or_default();
-        let succeeded = result.get_name() == Event::TOOL_CALL_FINISHED;
-        let content = if succeeded {
-            let content = result.get_content().to_string();
-            // Any successful tool call is progress: clear the counter.
-            context.consecutive_schema_failures = 0;
-            for message in result.repairs() {
-                events.push(
-                    Event::new(Event::TOOL_CALL_REPAIRED).data(serde_json::json!({
-                        "tool_name": call.name,
-                        "call_id": call.id,
-                        "kind": "value_mistyped",
-                        "message": message,
-                    })),
-                );
-            }
-            for path in opened_paths {
-                events.push(
-                    Event::new(Event::FILE_OPEN_FINISHED).data(serde_json::json!({
-                        "path": path,
-                        "tool_name": call.name,
-                        "call_id": call.id,
-                    })),
-                );
-            }
-            let mut event = result.clone();
-            if let Some(data) = event.data.as_object_mut() {
-                data.insert("tool_name".into(), call.name.clone().into());
-                data.insert("call_id".into(), call.id.clone().into());
-            }
-            events.push(event);
-            if let Some(path) = result.output_path() {
-                offloaded.insert(call.id.clone(), path.into());
-            }
-            content
-        } else {
-            let content = result.get_content().to_string();
-            let kind = result.get_data()["kind"]
-                .as_str()
-                .unwrap_or("execution_failed");
-            // Every tool failure counts toward the budget, so a stuck agent
-            // fails its task instead of looping until the time limit.
-            context.consecutive_schema_failures =
-                context.consecutive_schema_failures.saturating_add(1);
-            if kind == "schema_failed" && first_schema_failure.is_none() {
-                first_schema_failure = Some(content.clone());
-            }
-            // A path fails with the call that named it, so it carries the
-            // call's reason.
-            for path in opened_paths {
-                events.push(Event::new(Event::FILE_OPEN_FAILED).data(serde_json::json!({
-                    "path": path,
-                    "tool_name": call.name,
-                    "call_id": call.id,
-                    "kind": kind,
-                    "message": content,
-                })));
-            }
-            let mut event = result.clone();
-            if let Some(data) = event.data.as_object_mut() {
-                data.insert("tool_name".into(), call.name.clone().into());
-                data.insert("call_id".into(), call.id.clone().into());
-                data.insert("kind".into(), kind.into());
-            }
-            events.push(event);
-            content
+    fn tool_is_concurrent(&self, tools: &[Tool], call: &ContentBlock) -> bool {
+        let ContentBlock::ToolUse { name, .. } = call else {
+            return false;
         };
-        blocks.push(ContentBlock::ToolResult {
-            tool_use_id: call.id.clone(),
-            content,
-            succeeded,
-        });
+        self.get_tool(tools, name)
+            .is_some_and(|tool| tool.is_concurrent())
     }
 
-    // The corrective message for a rejected call is already in its result, so
-    // the reply carries nothing beyond the results themselves.
-    if let Some(message) = first_schema_failure {
-        events.push(Event::new(Event::SCHEMA_RETRIED).data(serde_json::json!({
-            "attempt": context.consecutive_schema_failures,
-            "max_attempts": max_schema_retries,
-            "kind": "schema_failed",
-            "message": message,
-        })));
+    fn call_tool(
+        &self,
+        tools: &[Tool],
+        call: &ContentBlock,
+        context: &ToolContext,
+    ) -> impl std::future::Future<Output = Event> + Send + 'static {
+        let ContentBlock::ToolUse { name, input, .. } = call else {
+            unreachable!("Agent::request returns only tool-use blocks");
+        };
+        let tool_name = name.clone();
+        let input = input.clone();
+        let context = context.clone();
+        let tool = self.get_tool(tools, name);
+        let available = {
+            let mut names: Vec<_> = tools.iter().map(Tool::get_name).collect();
+            names.sort();
+            names.join(", ")
+        };
+        async move {
+            let Some(tool) = tool else {
+                let (directive, content) = if available.is_empty() {
+                    (
+                        NO_TOOLS_REGISTERED,
+                        context
+                            .directives
+                            .render(NO_TOOLS_REGISTERED, &[("name", &tool_name)]),
+                    )
+                } else {
+                    (
+                        TOOL_NOT_FOUND,
+                        context.directives.render(
+                            TOOL_NOT_FOUND,
+                            &[("name", &tool_name), ("available", &available)],
+                        ),
+                    )
+                };
+                return Event::tool_failure(content, "not_found").directive(directive);
+            };
+            tool.invoke(input, &context).await
+        }
     }
-
-    context
-        .queue
-        .append_reply(&context.task_id, Reply::user(&blocks, &offloaded));
-
-    // Emitted after the reply lands: a handler that rewrites this task's
-    // replies must find the tool result the event announces.
-    for event in events {
-        context.emit_event(event);
-    }
-
-    if context.consecutive_schema_failures >= max_schema_retries {
-        context.emit_event(Event::new(Event::POLICY_VIOLATED).data(serde_json::json!({
-            "policy": PolicyViolation::MaxSchemaRetries,
-            "limit": u64::from(max_schema_retries),
-        })));
-        context.fail_task();
-        return None;
-    }
-    Some(Step::Evaluate)
 }
 
 #[cfg(test)]
@@ -415,6 +501,180 @@ mod tests {
         assert_eq!(task.status, Status::Failed);
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn concurrent_calls_finish_before_the_serial_call_between_batches() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+        use crate::providers::types::{ModelResponse, ResponseStatus, TokenUsage};
+        use crate::providers::ContentBlock;
+        use crate::tools::Tool;
+
+        let response = ModelResponse {
+            content: vec![
+                ContentBlock::ToolUse {
+                    id: "c1".into(),
+                    name: "work".into(),
+                    input: serde_json::json!({"step": 1}),
+                },
+                ContentBlock::ToolUse {
+                    id: "c2".into(),
+                    name: "work".into(),
+                    input: serde_json::json!({"step": 2}),
+                },
+                ContentBlock::ToolUse {
+                    id: "c3".into(),
+                    name: "serial".into(),
+                    input: serde_json::json!({}),
+                },
+                ContentBlock::ToolUse {
+                    id: "c4".into(),
+                    name: "work".into(),
+                    input: serde_json::json!({"step": 3}),
+                },
+            ],
+            status: ResponseStatus::ToolUse,
+            usage: TokenUsage::default(),
+            model: "mock".into(),
+        };
+        let provider =
+            MockProvider::with_results(vec![Ok(response), Ok(write_result_response("done"))]);
+        let barrier = Arc::new(tokio::sync::Barrier::new(2));
+        let completed = Arc::new(AtomicUsize::new(0));
+        let serial_ran = Arc::new(AtomicBool::new(false));
+        let work = {
+            let barrier = Arc::clone(&barrier);
+            let completed = Arc::clone(&completed);
+            let serial_ran = Arc::clone(&serial_ran);
+            Tool::new("work")
+                .description("concurrent work")
+                .concurrent(true)
+                .handler(move |input: Value| {
+                    let barrier = Arc::clone(&barrier);
+                    let completed = Arc::clone(&completed);
+                    let serial_ran = Arc::clone(&serial_ran);
+                    async move {
+                        let step = input["step"].as_u64().unwrap();
+                        if step < 3 {
+                            barrier.wait().await;
+                        } else {
+                            assert!(serial_ran.load(Ordering::SeqCst));
+                        }
+                        completed.fetch_add(1, Ordering::SeqCst);
+                        Event::success("done")
+                    }
+                })
+        };
+        let serial = {
+            let completed = Arc::clone(&completed);
+            let serial_ran = Arc::clone(&serial_ran);
+            Tool::new("serial")
+                .description("serial work")
+                .handler(move |_: Value| {
+                    let completed = Arc::clone(&completed);
+                    let serial_ran = Arc::clone(&serial_ran);
+                    async move {
+                        assert_eq!(completed.load(Ordering::SeqCst), 2);
+                        serial_ran.store(true, Ordering::SeqCst);
+                        Event::success("done")
+                    }
+                })
+        };
+
+        let results_dir = crate::test_util::TempDir::new().unwrap();
+        let tasks = Queue::new();
+        tasks
+            .set_dir(results_dir.path().to_path_buf())
+            .set_policy(Policy {
+                max_request_retries: 0,
+                request_retry_delay: Duration::from_millis(1),
+                max_time: Some(Duration::from_secs(1)),
+                ..Default::default()
+            });
+        tasks.add_agent(
+            Agent::new()
+                .provider(provider)
+                .model("mock")
+                .role("test")
+                .tool(work)
+                .tool(serial),
+        );
+        tasks.add_task("go");
+        let _ = tasks.finish_all_tasks().await;
+
+        assert_eq!(completed.load(Ordering::SeqCst), 3);
+        assert!(serial_ran.load(Ordering::SeqCst));
+        assert_eq!(tasks.get_tasks()[0].status, Status::Finished);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_panicking_call_is_answered_without_losing_the_other_results() {
+        use crate::providers::types::{ModelResponse, ResponseStatus, TokenUsage};
+        use crate::providers::ContentBlock;
+        use crate::tools::Tool;
+
+        let response = ModelResponse {
+            content: vec![
+                ContentBlock::ToolUse {
+                    id: "c1".into(),
+                    name: "explode".into(),
+                    input: serde_json::json!({}),
+                },
+                ContentBlock::ToolUse {
+                    id: "c2".into(),
+                    name: "steady".into(),
+                    input: serde_json::json!({}),
+                },
+            ],
+            status: ResponseStatus::ToolUse,
+            usage: TokenUsage::default(),
+            model: "mock".into(),
+        };
+        let provider =
+            MockProvider::with_results(vec![Ok(response), Ok(write_result_response("done"))]);
+        let explode = Tool::new("explode")
+            .description("panics")
+            .concurrent(true)
+            .handler(|_: Value| async { panic!("boom") });
+        let steady = Tool::new("steady")
+            .description("succeeds")
+            .concurrent(true)
+            .handler(|_: Value| async { Event::success("ok") });
+        let results_dir = crate::test_util::TempDir::new().unwrap();
+        let tasks = Queue::new();
+        tasks
+            .set_dir(results_dir.path().to_path_buf())
+            .set_policy(Policy {
+                max_request_retries: 0,
+                request_retry_delay: Duration::from_millis(1),
+                max_time: Some(Duration::from_secs(1)),
+                ..Default::default()
+            });
+        let events = collect_events(&tasks);
+        tasks.add_agent(
+            Agent::new()
+                .provider(provider)
+                .model("mock")
+                .role("test")
+                .tool(explode)
+                .tool(steady),
+        );
+        tasks.add_task("go");
+        let _ = tasks.finish_all_tasks().await;
+
+        let events = events.lock().unwrap();
+        assert!(events.iter().any(|event| {
+            event.get_name() == Event::TOOL_CALL_FAILED
+                && event.get_data()["tool_name"] == "explode"
+                && event.get_content().contains("panicked")
+        }));
+        assert!(events.iter().any(|event| {
+            event.get_name() == Event::TOOL_CALL_FINISHED
+                && event.get_data()["tool_name"] == "steady"
+                && event.get_content() == "ok"
+        }));
+        assert_eq!(tasks.get_tasks()[0].status, Status::Finished);
+    }
+
     #[tokio::test]
     async fn a_hallucinated_tool_name_finishes_the_task_under_the_registered_name() {
         let provider = MockProvider::with_results(vec![Ok(write_result_response_named(
@@ -523,7 +783,7 @@ mod tests {
         ]);
         let boom = Tool::new("boom")
             .description("Always fails")
-            .handler(|_: Value, _| async move { Event::error("boom") });
+            .handler(|_: Value| async move { Event::error("boom") });
 
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let tasks = Queue::new();
@@ -576,7 +836,7 @@ mod tests {
         ]);
         let boom = Tool::new("boom")
             .description("Always fails")
-            .handler(|_: Value, _| async move { Event::error("boom") });
+            .handler(|_: Value| async move { Event::error("boom") });
 
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let tasks = Queue::new();
@@ -640,10 +900,10 @@ mod tests {
         ]);
         let boom = Tool::new("boom")
             .description("Always fails")
-            .handler(|_: Value, _| async move { Event::error("boom") });
+            .handler(|_: Value| async move { Event::error("boom") });
         let ping = Tool::new("ping")
             .description("Always succeeds")
-            .handler(|_: Value, _| async move { Event::success("pong") });
+            .handler(|_: Value| async move { Event::success("pong") });
 
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let tasks = Queue::new();
@@ -694,7 +954,7 @@ mod tests {
 
         let slow_tool = Tool::new("slow_tool")
             .description("Blocks until released")
-            .handler(move |_: Value, _| {
+            .handler(move |_: Value| {
                 let s = Arc::clone(&tool_started_clone);
                 let u = Arc::clone(&tool_unblocked_clone);
                 async move {
@@ -779,7 +1039,7 @@ mod tests {
 
         let dump = Tool::new("dump")
             .description("Returns ~800 KB of text")
-            .handler(|_: Value, _ctx| async move { Event::success("x".repeat(800_000)) });
+            .handler(|_: Value| async move { Event::success("x".repeat(800_000)) });
 
         tasks.on_event(move |_, e| handler(e));
         tasks.add_agent(
@@ -898,7 +1158,7 @@ mod tests {
                 "required": ["bytes"],
             }))
             .concurrent(true)
-            .handler(|input: Value, _ctx| async move {
+            .handler(|input: Value| async move {
                 let bytes = input["bytes"].as_u64().unwrap_or(0) as usize;
                 Event::success("x".repeat(bytes))
             });

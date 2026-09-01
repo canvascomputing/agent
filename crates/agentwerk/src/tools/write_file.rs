@@ -27,8 +27,7 @@ impl From<WriteFileTool> for Tool {
         Tool::new("write_file")
             .description(include_str!("write_file.tool.md"))
             .schema(include_str!("write_file.schema.json"))
-            .paths(["path"])
-            .handler(run)
+            .handler_with_context(run)
     }
 }
 

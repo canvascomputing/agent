@@ -64,7 +64,7 @@ impl EventTool {
         Tool::new(Self::NAME)
             .description(DEFINITION)
             .schema(document)
-            .handler(run)
+            .handler_with_context(run)
     }
 }
 

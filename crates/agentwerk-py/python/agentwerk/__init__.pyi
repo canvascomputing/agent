@@ -77,7 +77,6 @@ def tool(func: Callable[..., Any]) -> Callable[..., Any]: ...
 def tool(
     *,
     concurrent: bool = ...,
-    paths: Optional[list[str]] = ...,
     schema: Optional[dict] = ...,
     name: Optional[str] = ...,
     description: Optional["str | os.PathLike[str]"] = ...,
@@ -224,8 +223,6 @@ class Event:
     TOOL_CALL_STARTED: str
     TOOL_CALL_FINISHED: str
     TOOL_CALL_FAILED: str
-    FILE_OPEN_FINISHED: str
-    FILE_OPEN_FAILED: str
     KNOWLEDGE_WRITTEN: str
     KNOWLEDGE_READ: str
     KNOWLEDGE_REMOVED: str
@@ -276,12 +273,6 @@ class Event:
     def tool_call_finished(output: str) -> "Event": ...
     @staticmethod
     def tool_call_failed(message: str) -> "Event": ...
-    @staticmethod
-    def file_open_finished(path: str, tool_name: str, call_id: str) -> "Event": ...
-    @staticmethod
-    def file_open_failed(
-        path: str, tool_name: str, call_id: str, kind: str, message: str
-    ) -> "Event": ...
     @staticmethod
     def knowledge_written(slug: str) -> "Event": ...
     @staticmethod

@@ -276,7 +276,7 @@ Naming is `snake_case`. Tool structs keep the `{Name}Tool` suffix. The name the 
 **A type a public trait or extension point hands to callers is documented; a genuinely internal type is `pub(crate)`.**
 
 - The request and response types under `providers::` are documented: implementing `ProviderLike` is supported, and implementors name them.
-- `tools::ToolRegistry` is the example of the other case: callers reach it through `Agent::tool(..)` and never name the struct.
+- Tool execution state is the other case: callers reach it through `Agent::tool(..)` and never name the private context or collection.
 - `#[doc(hidden)]` is reserved for items a macro or trait forces `pub` that are useless even to implementors; there are currently none.
 
 ## Line Comments (`//`)

@@ -81,7 +81,6 @@ fn is_failure(event: &Event) -> bool {
         Event::TASK_FAILED
             | Event::REQUEST_FAILED
             | Event::TOOL_CALL_FAILED
-            | Event::FILE_OPEN_FAILED
             | Event::KNOWLEDGE_FAILED
             | Event::COMPACTION_FAILED
     )

@@ -4,7 +4,6 @@
 use crate::agents::tasks::{FinishReason, Queue};
 use crate::event::Event;
 
-use super::agent::run_agent;
 use super::POLL_INTERVAL;
 
 /// Runs until nothing is left to work on, then names the ending exactly once.
@@ -17,7 +16,7 @@ pub(in crate::agents) async fn run_main_loop(queue: &Queue) {
     while queue.run.is_working() {
         let registry = queue.clone_agents();
         for newly_registered_agent in registry.into_iter().skip(agents_already_started) {
-            running_agents.push(tokio::spawn(run_agent(newly_registered_agent)));
+            running_agents.push(tokio::spawn(newly_registered_agent.run()));
             agents_already_started += 1;
         }
         if let Some(reason) = queue.ending_reason() {

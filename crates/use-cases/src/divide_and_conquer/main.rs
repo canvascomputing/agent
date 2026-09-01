@@ -219,15 +219,13 @@ fn python_tool() -> Tool {
             "required": ["code"]
         }))
         .concurrent(true)
-        .handler(|input: serde_json::Value, ctx| async move {
+        .handler(|input: serde_json::Value| async move {
             let code = input
                 .get("code")
                 .and_then(|v| v.as_str())
                 .unwrap_or_default();
             if code.is_empty() {
-                return Event::new(Event::TOOL_CALL_FAILED).data(serde_json::json!({
-                    "kind": "execution_failed", "message": "missing required field `code`"
-                }));
+                return Event::tool_call_failed("missing required field `code`");
             }
 
             let output_fut = tokio::process::Command::new("python3")
@@ -236,20 +234,15 @@ fn python_tool() -> Tool {
                 .kill_on_drop(true)
                 .output();
 
-            tokio::select! {
-                biased;
-                _ = ctx.cancelled() => Event::new(Event::TOOL_CALL_FAILED).data(serde_json::json!({"kind": "execution_failed", "message": "cancelled"})),
-                result = output_fut => match result {
-                    Err(e) => Event::new(Event::TOOL_CALL_FAILED).data(serde_json::json!({"kind": "execution_failed", "message": format!("failed to spawn python3: {e}")})),
-                    Ok(out) if out.status.success() => {
-                        let stdout = String::from_utf8_lossy(&out.stdout);
-                        Event::new(Event::TOOL_CALL_FINISHED).data(serde_json::json!({"output": stdout.trim()}))
-                    }
-                    Ok(out) => {
-                        let stderr = String::from_utf8_lossy(&out.stderr);
-                        Event::new(Event::TOOL_CALL_FAILED).data(serde_json::json!({"kind": "execution_failed", "message": format!("python error: {stderr}")}))
-                    }
+            match output_fut.await {
+                Err(error) => Event::tool_call_failed(format!("failed to spawn python3: {error}")),
+                Ok(output) if output.status.success() => {
+                    Event::tool_call_finished(String::from_utf8_lossy(&output.stdout).trim())
                 }
+                Ok(output) => Event::tool_call_failed(format!(
+                    "python error: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                )),
             }
         })
 }

@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 use crate::prompts::{context_values, render_context, PromptBuilder, Text};
 use crate::providers::{Model, Provider};
-use crate::tools::{FinishTool, KnowledgeTool, Tool, ToolRegistry};
+use crate::tools::{EventTool, FinishTool, KnowledgeTool, Tool};
 
 use super::knowledge::Knowledge;
 use super::policy::Policy;
@@ -77,7 +77,7 @@ pub struct Agent {
     role: String,
     templates: Vec<(String, String)>,
     handover: Option<Task>,
-    tools: ToolRegistry,
+    tools: Vec<Tool>,
     dir: PathBuf,
     knowledge: Arc<Knowledge>,
     directives: Arc<DirectiveStore>,
@@ -120,9 +120,7 @@ impl Agent {
     /// Give it a provider and a model before it starts work.
     pub fn new() -> Self {
         let knowledge = Knowledge::load(".agentwerk").expect("open knowledge store");
-        let mut tools = ToolRegistry::default();
-        tools.register(KnowledgeTool::new(Arc::clone(&knowledge)));
-        Self {
+        let mut agent = Self {
             id: OnceLock::new(),
             provider: None,
             model: None,
@@ -132,11 +130,13 @@ impl Agent {
             queue: QueueRef::Private(Queue::new()),
             templates: Vec::new(),
             handover: None,
-            tools,
+            tools: Vec::new(),
             dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             knowledge,
             directives: Arc::new(DirectiveStore::default()),
-        }
+        };
+        agent.register_tool(KnowledgeTool::new(Arc::clone(&agent.knowledge)));
+        agent
     }
 
     /// Create an agent with the provider and model from the environment.
@@ -253,7 +253,7 @@ impl Agent {
 
     /// Register a tool the agent may call.
     pub fn tool(mut self, tool: impl Into<Tool>) -> Self {
-        self.tools.register(tool);
+        self.register_tool(tool);
         self
     }
 
@@ -264,7 +264,7 @@ impl Agent {
         I::Item: Into<Tool>,
     {
         for t in tools {
-            self.tools.register(t);
+            self.register_tool(t);
         }
         self
     }
@@ -282,7 +282,7 @@ impl Agent {
     /// and for what `KnowledgeTool` writes to. Hand the same store to
     /// several agents to share it between them.
     pub fn knowledge(mut self, store: &Arc<Knowledge>) -> Self {
-        self.tools.register(KnowledgeTool::new(Arc::clone(store)));
+        self.register_tool(KnowledgeTool::new(Arc::clone(store)));
         self.knowledge = Arc::clone(store);
         self
     }
@@ -334,14 +334,56 @@ impl Agent {
         agent_label == task_label
     }
 
-    pub(super) fn get_tools(&self, task: &Task) -> ToolRegistry {
+    pub(super) fn get_tools(&self, task: &Task) -> Vec<Tool> {
+        let mut tools = self.tools.clone();
+        if tools.iter().any(|tool| tool.get_name() == FinishTool::NAME) {
+            tools.retain(|tool| tool.get_name() != FinishTool::NAME);
+            tools.push(FinishTool::from_schema(
+                task.schema.clone(),
+                self.handover.clone(),
+            ));
+        }
+        if tools.iter().any(|tool| tool.get_name() == EventTool::NAME) {
+            tools.retain(|tool| tool.get_name() != EventTool::NAME);
+            tools.push(EventTool::from_schema(
+                task.schema.clone(),
+                self.handover.clone(),
+            ));
+        }
+        tools
+    }
+
+    pub(crate) fn get_tool(&self, tools: &[Tool], tool_name: &str) -> Option<Tool> {
+        let tool_name = tool_name.trim();
+        if let Some(found) = tools.iter().find(|tool| tool.get_name() == tool_name) {
+            return Some(found.clone());
+        }
+
+        let normalize = |tool_name: &str| {
+            let name = tool_name.trim().to_lowercase().replace('-', "_");
+            match name.strip_suffix("_tool") {
+                Some(stem) if !stem.is_empty() => stem.to_string(),
+                _ => name,
+            }
+        };
+        let tool_name = normalize(tool_name);
+        let mut folded = tools
+            .iter()
+            .filter(|tool| normalize(tool.get_name()) == tool_name);
+        let found = folded.next()?;
+        folded.next().is_none().then(|| found.clone())
+    }
+
+    fn register_tool(&mut self, tool: impl Into<Tool>) {
+        let tool = tool.into();
+        tool.require_description_and_handler();
         self.tools
-            .clone()
-            .completion(task.schema.clone(), self.handover.clone())
+            .retain(|registered| registered.get_name() != tool.get_name());
+        self.tools.push(tool);
     }
 
     #[cfg(test)]
-    fn tool_registry(&self) -> &ToolRegistry {
+    pub(crate) fn tool_list(&self) -> &[Tool] {
         &self.tools
     }
 
@@ -394,7 +436,7 @@ impl Agent {
     /// interactive agent that registered `FinishTool` itself keeps it.
     pub(super) fn register_finish_tool(&mut self) {
         if !self.interactive {
-            self.tools.register(FinishTool);
+            self.register_tool(FinishTool);
         }
     }
 
@@ -508,12 +550,11 @@ mod tests {
             CommandTool::new("git").allow("git *").into(),
             Tool::new("greet")
                 .description("Say hello.")
-                .handler(|_: serde_json::Value, _| async { Event::success("hi") }),
+                .handler(|_: serde_json::Value| async { Event::success("hi") }),
         ]);
         let names: Vec<String> = agent
-            .tool_registry()
-            .tools()
-            .into_iter()
+            .tool_list()
+            .iter()
             .map(|tool| tool.get_name().to_string())
             .collect();
         for name in ["read_file", "git", "greet"] {
@@ -755,9 +796,8 @@ mod tests {
 
     fn tool_names(agent: &Agent) -> Vec<String> {
         agent
-            .tool_registry()
-            .tools()
-            .into_iter()
+            .tool_list()
+            .iter()
             .map(|tool| tool.get_name().to_string())
             .collect()
     }
@@ -898,10 +938,9 @@ mod tests {
         let dir = crate::test_util::TempDir::new().unwrap();
         let store = Knowledge::load(dir.path()).unwrap();
         let agent = Agent::new().knowledge(&store);
-        let registry = agent.tool_registry();
+        let registry = agent.tool_list();
         let names: Vec<String> = registry
-            .tools()
-            .into_iter()
+            .iter()
             .map(|tool| tool.get_name().to_string())
             .collect();
         assert!(
@@ -991,10 +1030,9 @@ mod tests {
     #[test]
     fn new_agent_has_the_knowledge_tool_registered() {
         let agent = Agent::new();
-        let registry = agent.tool_registry();
+        let registry = agent.tool_list();
         let names: Vec<String> = registry
-            .tools()
-            .into_iter()
+            .iter()
             .map(|tool| tool.get_name().to_string())
             .collect();
         assert!(

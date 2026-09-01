@@ -3,43 +3,49 @@
 
 use std::sync::Arc;
 
+use crate::agents::agent::Agent;
+use crate::agents::policy::Policy;
 use crate::agents::retry::{ExponentialRetry, Retry};
+use crate::agents::tasks::{Queue, Reply};
 use crate::event::Event;
 use crate::providers::types::StreamEvent;
 use crate::providers::{ContentBlock, ModelRequest, ProviderError};
-use crate::tools::ToolCall;
+use crate::tools::Tool;
 
-use super::agent::TaskContext;
-use super::{CompactReason, Step};
+impl Agent {
+    pub(super) async fn request(
+        &self,
+        queue: &Arc<Queue>,
+        task_id: &str,
+        system_prompt: &str,
+        policy: &Policy,
+        tools: &[Tool],
+    ) -> Result<Option<Vec<ContentBlock>>, ProviderError> {
+        let Some(task) = queue.get_task(task_id) else {
+            return Ok(None);
+        };
+        let model = self.get_model();
+        self.emit_event(
+            queue,
+            task_id,
+            Event::new(Event::REQUEST_STARTED).data(serde_json::json!({ "model": model.name })),
+        );
+        let request = ModelRequest {
+            model: model.name.clone(),
+            system_prompt: system_prompt.to_string(),
+            messages: task.to_messages(),
+            tools: tools.to_vec(),
+            max_request_tokens: policy.max_request_tokens,
+            reasoning_effort: model.get_reasoning_effort(),
+        };
 
-pub(super) async fn run(context: &mut TaskContext<'_>) -> Option<Step> {
-    let Some(task) = context.task() else {
-        return None;
-    };
-    let tools = context.tools.tools();
-    let model_name = context.model.name.clone();
-    context.emit_event(
-        Event::new(Event::REQUEST_STARTED).data(serde_json::json!({ "model": model_name })),
-    );
-    let request = ModelRequest {
-        model: model_name,
-        system_prompt: context.system_prompt.clone(),
-        messages: task.to_messages(),
-        tools,
-        max_request_tokens: context.policy.max_request_tokens,
-        reasoning_effort: context.model.get_reasoning_effort(),
-    };
-
-    let mut retry = ExponentialRetry::new(
-        context.policy.request_retry_delay,
-        context.policy.max_request_retries,
-    );
-    let response = loop {
-        let outcome = {
-            let provider = context.agent.get_provider();
-            let agent_id = context.agent.get_id().to_string();
-            let task_id = context.task_id.clone();
-            let queue = Arc::clone(context.queue);
+        let mut retry =
+            ExponentialRetry::new(policy.request_retry_delay, policy.max_request_retries);
+        let response = loop {
+            let provider = self.get_provider();
+            let agent_id = self.get_id().to_string();
+            let stream_task_id = task_id.to_string();
+            let stream_queue = Arc::clone(queue);
             let emit_stream: Arc<dyn Fn(StreamEvent) + Send + Sync> = Arc::new(move |event| {
                 let event = match event {
                     StreamEvent::TextDelta { text, .. } => Event::new(Event::TEXT_CHUNK_RECEIVED)
@@ -59,77 +65,77 @@ pub(super) async fn run(context: &mut TaskContext<'_>) -> Option<Step> {
                         }))
                     }
                 };
-                queue.emit_event(event.task_id(&task_id).agent_id(&agent_id));
+                stream_queue.emit_event(event.task_id(&stream_task_id).agent_id(&agent_id));
             });
-            tokio::select! {
+            let outcome = tokio::select! {
                 biased;
-                _ = context.run.until_draining() => return None,
+                _ = queue.run.until_draining() => return Ok(None),
                 result = provider.respond(request.clone(), emit_stream) => result,
+            };
+            match outcome {
+                Ok(response) => break response,
+                Err(error @ ProviderError::ContextWindowExceeded { .. }) => return Err(error),
+                Err(error) if error.is_retryable() => match retry.try_consume() {
+                    Some(attempt) => {
+                        let delay = retry.delay(error.retry_delay());
+                        self.emit_event(
+                            queue,
+                            task_id,
+                            Event::new(Event::REQUEST_RETRIED).data(serde_json::json!({
+                                "model": request.model,
+                                "attempt": attempt,
+                                "max_attempts": retry.max_attempts(),
+                                "kind": error.kind(),
+                                "message": error.to_string(),
+                            })),
+                        );
+                        tokio::select! {
+                            biased;
+                            _ = queue.run.until_draining() => return Ok(None),
+                            _ = tokio::time::sleep(delay) => {}
+                        }
+                    }
+                    None => {
+                        self.fail_request(queue, task_id, &error);
+                        return Err(error);
+                    }
+                },
+                Err(error) => {
+                    self.fail_request(queue, task_id, &error);
+                    return Err(error);
+                }
             }
         };
-        match outcome {
-            Ok(response) => break response,
-            Err(ProviderError::ContextWindowExceeded { .. }) => {
-                return Some(Step::Compact(CompactReason::Reactive));
-            }
-            Err(error) if error.is_retryable() => match retry.try_consume() {
-                Some(attempt) => {
-                    let delay = retry.delay(error.retry_delay());
-                    context.emit_event(Event::new(Event::REQUEST_RETRIED).data(
-                        serde_json::json!({
-                            "model": request.model,
-                            "attempt": attempt,
-                            "max_attempts": retry.max_attempts(),
-                            "kind": error.kind(),
-                            "message": error.to_string(),
-                        }),
-                    ));
-                    tokio::select! {
-                        biased;
-                        _ = context.run.until_draining() => return None,
-                        _ = tokio::time::sleep(delay) => {}
-                    }
-                }
-                None => {
-                    context.fail_with(error.kind(), error.to_string());
-                    return None;
-                }
-            },
-            Err(error) => {
-                context.fail_with(error.kind(), error.to_string());
-                return None;
-            }
-        }
-    };
 
-    context.queue.append_reply(
-        &context.task_id,
-        crate::agents::tasks::Reply::assistant(&response.content),
-    );
+        queue.append_reply(task_id, Reply::assistant(&response.content));
+        self.emit_event(
+            queue,
+            task_id,
+            Event::new(Event::REQUEST_FINISHED).data(serde_json::json!({
+                "model": response.model,
+                "usage": response.usage,
+            })),
+        );
+        Ok(Some(
+            response
+                .content
+                .into_iter()
+                .filter(|block| matches!(block, ContentBlock::ToolUse { .. }))
+                .collect(),
+        ))
+    }
 
-    // Emitted after the reply lands: a handler or a `finish` filter that
-    // resolves the task must see the reply the event announces.
-    context.emit_event(Event::new(Event::REQUEST_FINISHED).data(serde_json::json!({
-        "model": response.model,
-        "usage": response.usage,
-    })));
-
-    let calls: Vec<ToolCall> = response
-        .content
-        .iter()
-        .filter_map(|block| match block {
-            ContentBlock::ToolUse { id, name, input } => Some(ToolCall {
-                id: id.clone(),
-                name: name.clone(),
-                input: input.clone(),
-            }),
-            _ => None,
-        })
-        .collect();
-    if calls.is_empty() {
-        Some(Step::Evaluate)
-    } else {
-        Some(Step::ToolCalls(calls))
+    fn fail_request(&self, queue: &Queue, task_id: &str, error: &ProviderError) {
+        self.emit_event(
+            queue,
+            task_id,
+            Event::new(Event::REQUEST_FAILED).data(serde_json::json!({
+                "model": self.get_model().name,
+                "kind": error.kind(),
+                "message": error.to_string(),
+            })),
+        );
+        self.fail_task(queue, task_id);
     }
 }
 
@@ -516,7 +522,7 @@ mod tests {
         ]);
         let boom = Tool::new("boom")
             .description("Always fails")
-            .handler(|_: Value, _| async move { Event::error("boom") });
+            .handler(|_: Value| async move { Event::error("boom") });
         let results_dir = crate::test_util::TempDir::new().unwrap();
         let tasks = Queue::new();
         tasks

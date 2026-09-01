@@ -6,7 +6,7 @@ use std::sync::Arc;
 use agentwerk::schemas::Schema;
 use agentwerk::tools::{
     CommandTool, EditFileTool, EventTool, FetchTool, FinishTool, GlobTool, GrepTool, KnowledgeTool,
-    ListDirectoryTool, ReadFileTool, TaskTool, Tool, ToolContext, WriteFileTool,
+    ListDirectoryTool, ReadFileTool, TaskTool, Tool, WriteFileTool,
 };
 use agentwerk::Event;
 use pyo3::prelude::*;
@@ -74,7 +74,6 @@ pub fn extract_tool(obj: &Bound<'_, PyAny>) -> PyResult<Tool> {
         let name: String = obj.getattr("_agentwerk_name")?.extract()?;
         let description = py_to_text(&obj.getattr("_agentwerk_description")?)?;
         let concurrent = obj.getattr("_agentwerk_concurrent")?.extract()?;
-        let paths: Vec<String> = obj.getattr("_agentwerk_paths")?.extract()?;
         let document = py_to_value(&obj.getattr("_agentwerk_schema")?)?;
         // Reported here rather than absorbed: a schema that does not compile
         // would leave this tool checked against nothing, and the author is
@@ -90,8 +89,7 @@ pub fn extract_tool(obj: &Bound<'_, PyAny>) -> PyResult<Tool> {
             .description(description)
             .schema(document)
             .concurrent(concurrent)
-            .paths(paths)
-            .handler(move |input: Value, _ctx: ToolContext| {
+            .handler(move |input: Value| {
                 let func = Python::attach(|py| func.clone_ref(py));
                 async move {
                     // Concurrent tool calls are spawned onto a multi-thread

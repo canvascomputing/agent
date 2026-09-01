@@ -4,8 +4,6 @@
 
 use std::time::Duration;
 
-use crate::tools::ToolCall;
-
 mod agent;
 mod compact;
 mod main;
@@ -25,17 +23,6 @@ enum CompactReason {
     Proactive,
     /// The LLM provider reported the context window exceeded.
     Reactive,
-}
-
-/// What the agent does next with its claimed task. A step gives back `None`
-/// when there is nothing more to do, whatever the task's status, and the
-/// agent returns to claiming.
-enum Step {
-    /// Re-read the task: it may have been resolved or cancelled since.
-    Evaluate,
-    Compact(CompactReason),
-    Request,
-    ToolCalls(Vec<ToolCall>),
 }
 
 #[cfg(test)]

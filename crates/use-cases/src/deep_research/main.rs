@@ -262,7 +262,7 @@ fn brave_search_tool(api_key: String) -> Tool {
             "required": ["query"]
         }))
         .concurrent(true)
-        .handler(move |input: serde_json::Value, _ctx| {
+        .handler(move |input: serde_json::Value| {
             let api_key = api_key.clone();
             async move { brave_search(&api_key, &input).await }
         })
