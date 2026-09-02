@@ -70,7 +70,7 @@ make use_case name=deep-research args="What is a good life?"
 **Treat setup targets as changes outside the repository.**
 
 - `make hooks` merges `hooks/hooks.json` into `.claude/settings.local.json`.
-- `make skills` replaces same-named skills under `~/.claude/skills` and `~/.config/opencode/skills` with repository symlinks.
+- `make skills` replaces same-named skills under `~/.claude/skills`, `~/.config/opencode/skills`, and `~/.agents/skills` with repository symlinks.
 - `make litellm` starts a Docker proxy on port 4000; set `LITELLM_PROVIDER` to `anthropic`, `openai`, or `mistral`.
 
 ## Release

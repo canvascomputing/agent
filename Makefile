@@ -2,7 +2,8 @@
 
 CLAUDE_SKILLS_DIR := $(HOME)/.claude/skills
 OPENCODE_SKILLS_DIR := $(HOME)/.config/opencode/skills
-SKILL_DESTS := $(CLAUDE_SKILLS_DIR) $(OPENCODE_SKILLS_DIR)
+CODEX_SKILLS_DIR := $(HOME)/.agents/skills
+SKILL_DESTS := $(CLAUDE_SKILLS_DIR) $(OPENCODE_SKILLS_DIR) $(CODEX_SKILLS_DIR)
 SKILL_NAMES := $(notdir $(shell find $(CURDIR)/skills -mindepth 1 -maxdepth 1 -type d))
 
 # Build the workspace with warnings as errors.
