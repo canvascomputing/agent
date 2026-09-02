@@ -397,7 +397,7 @@ def test_find_event_returns_the_earliest_match(werk):
     assert werk.find_event(lambda e: e.get_name() == aw.Event.TASK_FAILED) is None
 
 
-def test_find_events_takes_an_aql_string(werk):
+def test_find_events_takes_an_aql_string(werk, tmp_path):
     werk.add_task(aw.Task("scan", label="scout"))
     werk.add_task("two")
 
@@ -405,6 +405,12 @@ def test_find_events_takes_an_aql_string(werk):
     assert len(werk.find_events("event = task_created AND label = scout")) == 1
     assert len(werk.find_events("t-2")) == 1
     assert werk.find_events("run_finished") == []
+
+    events_path = tmp_path / "events.jsonl"
+    records = [json.loads(line) for line in events_path.read_text().splitlines()]
+    for record, created_at in zip(records, (100, 200)):
+        record["created_at"] = created_at
+    events_path.write_text("".join(f"{json.dumps(record)}\n" for record in records))
 
     newest = werk.find_event("task_created ORDER BY created DESC")
     assert newest.get_task_id() == "t-2"
