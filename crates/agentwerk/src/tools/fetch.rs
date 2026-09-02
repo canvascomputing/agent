@@ -7,6 +7,7 @@ use crate::prompts::directives::{
     FETCH_RESPONSE_TOO_LARGE, FETCH_SCHEME_MISSING, FETCH_SCHEME_UNSUPPORTED, FETCH_TOO_LONG,
     FETCH_TOO_MANY_REDIRECTS,
 };
+use std::time::Duration;
 
 const MAX_URL_LENGTH: usize = 2000;
 const MAX_RESPONSE_BYTES: usize = 10 * 1024 * 1024;
@@ -48,6 +49,7 @@ const BROWSER_MAX_FRAME_SIZE: u32 = 16_384;
 #[derive(Clone, Default)]
 pub struct FetchTool {
     impersonate: bool,
+    timeout: Option<Duration>,
 }
 
 impl FetchTool {
@@ -77,6 +79,24 @@ impl FetchTool {
         self.impersonate = true;
         self
     }
+
+    /// Limit one fetch. [`Duration::ZERO`] means no limit.
+    ///
+    /// Without an override, a fetch is limited to 60 seconds.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// use agentwerk::Agent;
+    /// use agentwerk::tools::FetchTool;
+    ///
+    /// Agent::new().tool(FetchTool::new().timeout(Duration::from_secs(30)));
+    /// ```
+    pub fn timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = Some(timeout);
+        self
+    }
 }
 
 #[derive(serde::Deserialize)]
@@ -93,13 +113,19 @@ fn default_max_length() -> usize {
 impl From<FetchTool> for Tool {
     fn from(tool: FetchTool) -> Tool {
         let impersonate = tool.impersonate;
-        Tool::new("fetch")
+        let timeout = tool.timeout;
+        let mut tool = Tool::new("fetch")
             .description(include_str!("fetch.tool.md"))
             .schema(include_str!("fetch.schema.json"))
             .concurrent(true)
+            .default_timeout(Duration::from_secs(FETCH_TIMEOUT_SECS))
             .handler_with_context(move |args: FetchArgs, ctx: ToolContext| async move {
                 run(args, ctx, impersonate).await
-            })
+            });
+        if let Some(timeout) = timeout {
+            tool = tool.timeout(timeout);
+        }
+        tool
     }
 }
 
@@ -166,9 +192,7 @@ async fn fetch(
     directives: &DirectiveStore,
 ) -> std::result::Result<FetchedContent, String> {
     // Manual redirect handling prevents open-redirect exploitation across domains.
-    let mut builder = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(FETCH_TIMEOUT_SECS))
-        .redirect(reqwest::redirect::Policy::none());
+    let mut builder = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none());
     if impersonate {
         builder = builder
             .http2_initial_stream_window_size(BROWSER_STREAM_WINDOW)

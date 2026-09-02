@@ -3,9 +3,6 @@
 ## grep_cancelled
 Search cancelled: the run is ending.
 
-## grep_timed_out
-The search was stopped after {seconds}s. Narrow `pattern` or `path` before calling `grep` again.
-
 ## grep_failed
 The search did not run. Narrow `path` and call `grep` once more; an identical retry fails the same way.
 

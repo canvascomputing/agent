@@ -1,6 +1,7 @@
 //! Exposes built-in and Python-defined tools for agent registration.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use agentwerk::schemas::Schema;
 use agentwerk::tools::{
@@ -20,6 +21,26 @@ use crate::knowledge::PyKnowledge;
 #[pyclass(name = "Tool")]
 pub struct PyTool {
     pub inner: Tool,
+}
+
+#[pymethods]
+impl PyTool {
+    /// Limit one invocation in seconds. Zero means no limit.
+    fn timeout<'py>(mut slf: PyRefMut<'py, Self>, seconds: f64) -> PyResult<PyRefMut<'py, Self>> {
+        slf.inner = slf.inner.clone().timeout(timeout_duration(seconds)?);
+        Ok(slf)
+    }
+}
+
+fn timeout_duration(seconds: f64) -> PyResult<Duration> {
+    if !seconds.is_finite() || seconds < 0.0 {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "timeout must be a finite, non-negative number of seconds",
+        ));
+    }
+    Duration::try_from_secs_f64(seconds).map_err(|_| {
+        pyo3::exceptions::PyValueError::new_err("timeout is too large to represent as a duration")
+    })
 }
 
 /// Call the Python tool and turn what it returns into a terminal `Event`. The input
@@ -64,7 +85,11 @@ pub fn extract_tool(obj: &Bound<'_, PyAny>) -> PyResult<Tool> {
         return Ok(handle.inner.clone());
     }
     if let Ok(command) = obj.extract::<PyRef<PyCommandTool>>() {
-        return Ok(command.inner.clone().into());
+        let mut tool = Tool::from(command.inner.clone());
+        if let Some(timeout) = command.timeout {
+            tool = tool.timeout(timeout);
+        }
+        return Ok(tool);
     }
     if let Ok(fetch) = obj.extract::<PyRef<PyFetchTool>>() {
         return Ok(fetch.inner.clone().into());
@@ -84,7 +109,7 @@ pub fn extract_tool(obj: &Bound<'_, PyAny>) -> PyResult<Tool> {
             ))
         })?;
         let func = obj.clone().unbind();
-        let tool = Tool::new(name)
+        let mut tool = Tool::new(name)
             .description(description)
             .schema(document)
             .concurrent(concurrent)
@@ -111,6 +136,10 @@ pub fn extract_tool(obj: &Bound<'_, PyAny>) -> PyResult<Tool> {
                     }
                 }
             });
+        if obj.hasattr("_agentwerk_timeout")? {
+            let seconds = obj.getattr("_agentwerk_timeout")?.extract::<f64>()?;
+            tool = tool.timeout(timeout_duration(seconds)?);
+        }
         return Ok(tool);
     }
     Err(pyo3::exceptions::PyTypeError::new_err(
@@ -220,6 +249,12 @@ impl PyFetchTool {
         slf.inner = slf.inner.clone().impersonate();
         slf
     }
+
+    /// Limit one invocation in seconds. Zero means no limit.
+    fn timeout<'py>(mut slf: PyRefMut<'py, Self>, seconds: f64) -> PyResult<PyRefMut<'py, Self>> {
+        slf.inner = slf.inner.clone().timeout(timeout_duration(seconds)?);
+        Ok(slf)
+    }
 }
 
 /// Run a command the model calls by `name`, passed to `Agent.tool(...)`.
@@ -227,6 +262,7 @@ impl PyFetchTool {
 #[pyclass(name = "CommandTool")]
 pub struct PyCommandTool {
     inner: CommandTool,
+    timeout: Option<Duration>,
 }
 
 #[pymethods]
@@ -235,6 +271,7 @@ impl PyCommandTool {
     fn new(name: &str) -> Self {
         PyCommandTool {
             inner: CommandTool::new(name),
+            timeout: None,
         }
     }
 
@@ -284,6 +321,12 @@ impl PyCommandTool {
     fn concurrent<'py>(mut slf: PyRefMut<'py, Self>, concurrent: bool) -> PyRefMut<'py, Self> {
         slf.inner = slf.inner.clone().concurrent(concurrent);
         slf
+    }
+
+    /// Limit one invocation in seconds. Zero means no limit.
+    fn timeout<'py>(mut slf: PyRefMut<'py, Self>, seconds: f64) -> PyResult<PyRefMut<'py, Self>> {
+        slf.timeout = Some(timeout_duration(seconds)?);
+        Ok(slf)
     }
 }
 

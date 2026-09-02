@@ -4,13 +4,14 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
 
 use serde_json::Value;
 
 use crate::agents::tasks::{Run, Werk};
 pub(crate) use crate::event::Event;
 use crate::prompts::directives::{
-    DirectiveStore, ARGUMENTS_REJECTED, TOOL_OUTPUT_EMPTY, TOOL_OUTPUT_OFFLOADED,
+    DirectiveStore, ARGUMENTS_REJECTED, TOOL_OUTPUT_EMPTY, TOOL_OUTPUT_OFFLOADED, TOOL_TIMED_OUT,
 };
 use crate::prompts::Text;
 use crate::providers::ContentBlock;
@@ -108,6 +109,21 @@ impl Event {
         Event::tool_call_failed(content)
     }
 
+    pub(crate) fn tool_timed_out(
+        tool: &str,
+        timeout: Duration,
+        directives: &DirectiveStore,
+    ) -> Self {
+        Event::error(directives.render(
+            TOOL_TIMED_OUT,
+            &[
+                ("tool", tool),
+                ("milliseconds", &timeout.as_millis().to_string()),
+            ],
+        ))
+        .directive(TOOL_TIMED_OUT)
+    }
+
     /// The text returned to the model by a terminal tool-call event.
     pub(crate) fn get_content(&self) -> &str {
         let key = if self.name == Event::TOOL_CALL_FINISHED {
@@ -187,6 +203,38 @@ type ToolHandler = Arc<
     dyn Fn(Value, &ToolContext) -> Pin<Box<dyn Future<Output = Event> + Send + '_>> + Send + Sync,
 >;
 
+/// How a tool determines the limit for one invocation.
+#[derive(Clone)]
+enum TimeoutPolicy {
+    Unlimited,
+    Fixed(Duration),
+    Input {
+        field: &'static str,
+        default: Duration,
+        maximum: Duration,
+    },
+}
+
+impl TimeoutPolicy {
+    fn resolve(&self, input: &Value) -> Option<Duration> {
+        let duration = match self {
+            TimeoutPolicy::Unlimited => return None,
+            TimeoutPolicy::Fixed(timeout) => return Some(*timeout),
+            TimeoutPolicy::Input {
+                field,
+                default,
+                maximum,
+            } => input
+                .get(*field)
+                .and_then(Value::as_u64)
+                .map(Duration::from_millis)
+                .unwrap_or(*default)
+                .min(*maximum),
+        };
+        (!duration.is_zero()).then_some(duration)
+    }
+}
+
 /// A tool an agent may call: a name, a description, a JSON Schema for the
 /// arguments, and the handler that runs.
 ///
@@ -240,6 +288,7 @@ pub struct Tool {
     description: Option<String>,
     schema: Schema,
     concurrent: bool,
+    timeout: TimeoutPolicy,
     handler: Option<ToolHandler>,
 }
 
@@ -263,6 +312,7 @@ impl Tool {
             schema: Schema::new(serde_json::json!({"type": "object", "properties": {}}))
                 .expect("a literal object schema compiles"),
             concurrent: false,
+            timeout: TimeoutPolicy::Unlimited,
             handler: None,
         }
     }
@@ -298,6 +348,39 @@ impl Tool {
     /// for a tool with no side effects.
     pub fn concurrent(mut self, concurrent: bool) -> Self {
         self.concurrent = concurrent;
+        self
+    }
+
+    /// Limit one invocation of this tool. [`Duration::ZERO`] means no limit.
+    ///
+    /// The limit starts after the arguments have been validated and the call
+    /// has been admitted for execution. Calling this replaces a built-in
+    /// tool's default timeout.
+    pub fn timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = if timeout.is_zero() {
+            TimeoutPolicy::Unlimited
+        } else {
+            TimeoutPolicy::Fixed(timeout)
+        };
+        self
+    }
+
+    pub(crate) fn default_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = TimeoutPolicy::Fixed(timeout);
+        self
+    }
+
+    pub(crate) fn timeout_from_input(
+        mut self,
+        field: &'static str,
+        default: Duration,
+        maximum: Duration,
+    ) -> Self {
+        self.timeout = TimeoutPolicy::Input {
+            field,
+            default,
+            maximum,
+        };
         self
     }
 
@@ -378,7 +461,16 @@ impl Tool {
                 .directive(ARGUMENTS_REJECTED);
             }
         };
-        let mut result = validate_tool_event(self.get_name(), self.call(input, ctx).await);
+        let timeout = self.timeout.resolve(&input);
+        let call = self.call(input, ctx);
+        let event = match timeout {
+            Some(duration) => match tokio::time::timeout(duration, call).await {
+                Ok(event) => event,
+                Err(_) => Event::tool_timed_out(self.get_name(), duration, &ctx.directives),
+            },
+            None => call.await,
+        };
+        let mut result = validate_tool_event(self.get_name(), event);
         if result.name == Event::TOOL_CALL_FINISHED {
             result.prepend_repairs(repairs.iter().map(|pointer| retype_message(pointer)));
         }
@@ -714,6 +806,149 @@ mod tests {
             crate::tools::TaskTool.into(),
         ];
         (tools, dir)
+    }
+
+    #[tokio::test]
+    async fn a_tool_over_its_configured_timeout_fails() {
+        let tool = Tool::new("slow")
+            .description("slow")
+            .timeout(Duration::from_millis(10))
+            .handler(|_: Value| async {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                Event::success("late")
+            });
+
+        let result = tool.invoke(serde_json::json!({}), &test_ctx()).await;
+
+        assert_eq!(result.get_name(), Event::TOOL_CALL_FAILED);
+        assert_eq!(result.get_directive(), Some(TOOL_TIMED_OUT));
+        assert_eq!(result.get_data()["kind"], "execution_failed");
+        assert!(result.get_content().contains("slow"));
+        assert!(result.get_content().contains("10ms"));
+    }
+
+    #[tokio::test]
+    async fn a_fetch_timeout_uses_the_shared_tool_event() {
+        let tool = Tool::from(crate::tools::FetchTool::new())
+            .timeout(Duration::from_millis(10))
+            .handler(|_: Value| async {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                Event::success("late")
+            });
+
+        let result = tool
+            .invoke(
+                serde_json::json!({"url": "https://example.com"}),
+                &test_ctx(),
+            )
+            .await;
+
+        assert_eq!(result.get_name(), Event::TOOL_CALL_FAILED);
+        assert_eq!(result.get_directive(), Some(TOOL_TIMED_OUT));
+        assert!(result
+            .get_content()
+            .contains("Tool `fetch` timed out after 10ms"));
+    }
+
+    #[tokio::test]
+    async fn a_zero_tool_timeout_is_infinite() {
+        let tool = Tool::new("patient")
+            .description("patient")
+            .timeout(Duration::ZERO)
+            .handler(|_: Value| async {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                Event::success("done")
+            });
+
+        let result = tool.invoke(serde_json::json!({}), &test_ctx()).await;
+
+        assert_eq!(result.get_name(), Event::TOOL_CALL_FINISHED);
+        assert_eq!(result.get_content(), "done");
+    }
+
+    #[tokio::test]
+    async fn argument_validation_happens_before_the_tool_deadline_starts() {
+        let tool = Tool::new("strict")
+            .description("strict")
+            .schema(serde_json::json!({
+                "type": "object",
+                "properties": {"required": {"type": "string"}},
+                "required": ["required"],
+            }))
+            .timeout(Duration::from_nanos(1))
+            .handler(|_: Value| async { Event::success("unreachable") });
+
+        let result = tool.invoke(serde_json::json!({}), &test_ctx()).await;
+
+        assert_eq!(result.get_name(), Event::TOOL_CALL_FAILED);
+        assert_eq!(result.get_directive(), Some(ARGUMENTS_REJECTED));
+    }
+
+    #[test]
+    fn built_in_timeout_defaults_and_command_input_are_preserved() {
+        let empty = serde_json::json!({});
+        assert_eq!(Tool::new("custom").timeout.resolve(&empty), None);
+        assert_eq!(
+            Tool::from(crate::tools::FetchTool::new())
+                .timeout
+                .resolve(&empty),
+            Some(Duration::from_secs(60))
+        );
+        assert_eq!(
+            Tool::from(crate::tools::GrepTool).timeout.resolve(&empty),
+            Some(Duration::from_secs(180))
+        );
+        assert_eq!(
+            Tool::from(crate::tools::GrepTool)
+                .timeout(Duration::from_secs(5))
+                .timeout
+                .resolve(&empty),
+            Some(Duration::from_secs(5))
+        );
+
+        let command = Tool::from(crate::tools::CommandTool::new("echo"));
+        assert_eq!(
+            command.timeout.resolve(&empty),
+            Some(Duration::from_secs(120))
+        );
+        assert_eq!(
+            command
+                .timeout
+                .resolve(&serde_json::json!({"timeout_ms": 900_000})),
+            Some(Duration::from_secs(600))
+        );
+        assert_eq!(
+            command
+                .timeout
+                .resolve(&serde_json::json!({"timeout_ms": 0})),
+            None
+        );
+    }
+
+    #[test]
+    fn fetch_timeout_overrides_its_default_before_conversion() {
+        let input = serde_json::json!({});
+        let before_impersonation = Tool::from(
+            crate::tools::FetchTool::new()
+                .timeout(Duration::from_secs(15))
+                .impersonate(),
+        );
+        let after_impersonation = Tool::from(
+            crate::tools::FetchTool::new()
+                .impersonate()
+                .timeout(Duration::from_secs(30)),
+        );
+        let unlimited = Tool::from(crate::tools::FetchTool::new().timeout(Duration::ZERO));
+
+        assert_eq!(
+            before_impersonation.timeout.resolve(&input),
+            Some(Duration::from_secs(15))
+        );
+        assert_eq!(
+            after_impersonation.timeout.resolve(&input),
+            Some(Duration::from_secs(30))
+        );
+        assert_eq!(unlimited.timeout.resolve(&input), None);
     }
 
     /// Each built-in states its name and concurrency as a literal in its `From`

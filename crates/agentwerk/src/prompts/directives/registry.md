@@ -9,6 +9,9 @@ No tool named `{name}`. No tools are registered here, so no call resolves.
 ## tool_panicked
 `{tool}` did not finish: it panicked. Its work did not happen; call it again or take another route.
 
+## tool_timed_out
+Tool `{tool}` timed out after {milliseconds}ms.
+
 ## tool_output_empty
 ({tool} completed with no output)
 

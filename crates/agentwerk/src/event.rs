@@ -856,11 +856,11 @@ pub(crate) mod tests {
             .get("directive")
             .is_none());
 
-        let event = plain.directive("command_timed_out");
+        let event = plain.directive("tool_timed_out");
         let value = serde_json::to_value(&event).unwrap();
-        assert_eq!(value["directive"], "command_timed_out");
+        assert_eq!(value["directive"], "tool_timed_out");
         let restored: Event = serde_json::from_value(value).unwrap();
-        assert_eq!(restored.get_directive(), Some("command_timed_out"));
+        assert_eq!(restored.get_directive(), Some("tool_timed_out"));
     }
 
     #[test]

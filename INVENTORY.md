@@ -971,7 +971,7 @@ One of the two public parts of `prompts`, beside `Text`: `Directive` reaches the
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `Directive.REPLY_REJECTED: string = "reply_rejected"`, and one constant per catalogue heading, each also a crate-private `const` under the same name that the render sites write: `NO_TOOL_CALLED`, `ARGUMENTS_REJECTED`, `ARGUMENTS_EXPECTED`, `RESULT_SCHEMA_REQUIRED`, `SUMMARY_REQUESTED`, `KNOWLEDGE_INDEX_TRUNCATED`, `TOOL_NOT_FOUND`, `NO_TOOLS_REGISTERED`, `TOOL_PANICKED`, `TOOL_OUTPUT_EMPTY`, `TOOL_OUTPUT_OFFLOADED`, `EDIT_FILE_READ_FAILED`, `EDIT_FILE_OLD_STRING_NOT_FOUND`, `EDIT_FILE_OLD_STRING_NOT_UNIQUE`, `EDIT_FILE_WRITE_FAILED`, `WRITE_FILE_PARENT_NOT_CREATED`, `WRITE_FILE_FAILED`, `READ_FILE_PATH_IS_DIRECTORY`, `READ_FILE_PATH_IS_DIRECTORY_WITH_ENTRIES`, `READ_FILE_IS_BINARY`, `READ_FILE_NOT_FOUND`, `READ_FILE_FAILED`, `LIST_DIRECTORY_PATH_IS_FILE`, `LIST_DIRECTORY_NOT_FOUND`, `LIST_DIRECTORY_FAILED`, `PATH_HINT_DIRECTORY_LISTED`, `PATH_HINT_SUGGESTION`, `PATH_HINT_WORKING_DIRECTORY`, `COMMAND_CANCELLED`, `COMMAND_TIMED_OUT`, `COMMAND_NOT_STARTED`, `COMMAND_MISSING`, `COMMAND_SHELL_OPERATOR_FOUND`, `COMMAND_QUOTE_UNTERMINATED`, `COMMAND_CONTROL_CHARACTER_FOUND`, `COMMAND_ASSIGNMENT_FOUND`, `COMMAND_FLAG_DENIED`, `COMMAND_PATTERN_DENIED`, `COMMAND_NOT_ALLOWED`, `COMMAND_FLAG_NOT_ALLOWED`, `GREP_CANCELLED`, `GREP_TIMED_OUT`, `GREP_FAILED`, `GREP_GLOB_REJECTED`, `GREP_FILE_TYPE_UNKNOWN`, `GREP_PATTERN_REJECTED`, `CODE_PATTERN_REJECTED`, `CODE_CONSTRAINT_INCOMPLETE`, `CODE_CONSTRAINT_METAVARIABLE_UNKNOWN`, `CODE_CONSTRAINT_REGEX_REJECTED`, `FETCH_TOO_LONG`, `FETCH_SCHEME_MISSING`, `FETCH_SCHEME_UNSUPPORTED`, `FETCH_CREDENTIALS_PRESENT`, `FETCH_HOST_MISSING`, `FETCH_HOST_NOT_RESOLVABLE`, `FETCH_TOO_MANY_REDIRECTS`, `FETCH_REQUEST_FAILED`, `FETCH_BODY_NOT_READ`, `FETCH_RESPONSE_TOO_LARGE`, `FETCH_REDIRECT_LOCATION_MISSING`, `KNOWLEDGE_PAGE_NOT_FOUND`, `KNOWLEDGE_WRITE_FAILED`, `KNOWLEDGE_REMOVE_FAILED`, `WERK_UNAVAILABLE`, `TASK_ID_MISSING`, `TASK_NOT_ASSIGNED`, `TASK_NOT_FOUND`, `TASK_RESULT_MISSING`, `TASK_QUERY_INVALID`, `TASK_EDIT_INCOMPLETE`, `TASK_TRANSITION_REJECTED`, `HANDOVER_RESULT_MISSING`, `HANDOVER_SCHEMA_INVALID`, `SCHEMA_FALSE_REJECTED`, `SCHEMA_TYPE_MISMATCHED`, `SCHEMA_CONST_MISMATCHED`, `SCHEMA_ENUM_MISMATCHED`, `SCHEMA_ANY_OF_UNMATCHED`, `SCHEMA_ONE_OF_AMBIGUOUS`, `SCHEMA_NOT_MATCHED`, `SCHEMA_PROPERTY_MISSING`, `SCHEMA_PROPERTY_UNEXPECTED`, `SCHEMA_ARRAY_TOO_SHORT`, `SCHEMA_ARRAY_TOO_LONG`, `SCHEMA_STRING_TOO_SHORT`, `SCHEMA_STRING_TOO_LONG`, `SCHEMA_PATTERN_UNMATCHED`, `SCHEMA_NUMBER_TOO_SMALL`, `SCHEMA_NUMBER_TOO_LARGE`, `SCHEMA_HINT_UNQUOTE`, `SCHEMA_HINT_JSON`, `SCHEMA_HINT_QUOTE` | pub |
+| Rust | `Directive.REPLY_REJECTED: string = "reply_rejected"`, and one constant per catalogue heading, each also a crate-private `const` under the same name that the render sites write: `NO_TOOL_CALLED`, `ARGUMENTS_REJECTED`, `ARGUMENTS_EXPECTED`, `RESULT_SCHEMA_REQUIRED`, `SUMMARY_REQUESTED`, `KNOWLEDGE_INDEX_TRUNCATED`, `TOOL_NOT_FOUND`, `NO_TOOLS_REGISTERED`, `TOOL_PANICKED`, `TOOL_TIMED_OUT`, `TOOL_OUTPUT_EMPTY`, `TOOL_OUTPUT_OFFLOADED`, `EDIT_FILE_READ_FAILED`, `EDIT_FILE_OLD_STRING_NOT_FOUND`, `EDIT_FILE_OLD_STRING_NOT_UNIQUE`, `EDIT_FILE_WRITE_FAILED`, `WRITE_FILE_PARENT_NOT_CREATED`, `WRITE_FILE_FAILED`, `READ_FILE_PATH_IS_DIRECTORY`, `READ_FILE_PATH_IS_DIRECTORY_WITH_ENTRIES`, `READ_FILE_IS_BINARY`, `READ_FILE_NOT_FOUND`, `READ_FILE_FAILED`, `LIST_DIRECTORY_PATH_IS_FILE`, `LIST_DIRECTORY_NOT_FOUND`, `LIST_DIRECTORY_FAILED`, `PATH_HINT_DIRECTORY_LISTED`, `PATH_HINT_SUGGESTION`, `PATH_HINT_WORKING_DIRECTORY`, `COMMAND_CANCELLED`, `COMMAND_NOT_STARTED`, `COMMAND_MISSING`, `COMMAND_SHELL_OPERATOR_FOUND`, `COMMAND_QUOTE_UNTERMINATED`, `COMMAND_CONTROL_CHARACTER_FOUND`, `COMMAND_ASSIGNMENT_FOUND`, `COMMAND_FLAG_DENIED`, `COMMAND_PATTERN_DENIED`, `COMMAND_NOT_ALLOWED`, `COMMAND_FLAG_NOT_ALLOWED`, `GREP_CANCELLED`, `GREP_FAILED`, `GREP_GLOB_REJECTED`, `GREP_FILE_TYPE_UNKNOWN`, `GREP_PATTERN_REJECTED`, `CODE_PATTERN_REJECTED`, `CODE_CONSTRAINT_INCOMPLETE`, `CODE_CONSTRAINT_METAVARIABLE_UNKNOWN`, `CODE_CONSTRAINT_REGEX_REJECTED`, `FETCH_TOO_LONG`, `FETCH_SCHEME_MISSING`, `FETCH_SCHEME_UNSUPPORTED`, `FETCH_CREDENTIALS_PRESENT`, `FETCH_HOST_MISSING`, `FETCH_HOST_NOT_RESOLVABLE`, `FETCH_TOO_MANY_REDIRECTS`, `FETCH_REQUEST_FAILED`, `FETCH_BODY_NOT_READ`, `FETCH_RESPONSE_TOO_LARGE`, `FETCH_REDIRECT_LOCATION_MISSING`, `KNOWLEDGE_PAGE_NOT_FOUND`, `KNOWLEDGE_WRITE_FAILED`, `KNOWLEDGE_REMOVE_FAILED`, `WERK_UNAVAILABLE`, `TASK_ID_MISSING`, `TASK_NOT_ASSIGNED`, `TASK_NOT_FOUND`, `TASK_RESULT_MISSING`, `TASK_QUERY_INVALID`, `TASK_EDIT_INCOMPLETE`, `TASK_TRANSITION_REJECTED`, `HANDOVER_RESULT_MISSING`, `HANDOVER_SCHEMA_INVALID`, `SCHEMA_FALSE_REJECTED`, `SCHEMA_TYPE_MISMATCHED`, `SCHEMA_CONST_MISMATCHED`, `SCHEMA_ENUM_MISMATCHED`, `SCHEMA_ANY_OF_UNMATCHED`, `SCHEMA_ONE_OF_AMBIGUOUS`, `SCHEMA_NOT_MATCHED`, `SCHEMA_PROPERTY_MISSING`, `SCHEMA_PROPERTY_UNEXPECTED`, `SCHEMA_ARRAY_TOO_SHORT`, `SCHEMA_ARRAY_TOO_LONG`, `SCHEMA_STRING_TOO_SHORT`, `SCHEMA_STRING_TOO_LONG`, `SCHEMA_PATTERN_UNMATCHED`, `SCHEMA_NUMBER_TOO_SMALL`, `SCHEMA_NUMBER_TOO_LARGE`, `SCHEMA_HINT_UNQUOTE`, `SCHEMA_HINT_JSON`, `SCHEMA_HINT_QUOTE` | pub |
 | Rust | `.ALL: string[]` | pub |
 | Python | `Directive.ALL` is not published; `register` walks it to set the key constants | |
 | Rust | `Directive { }`, the key namespace | pub |
@@ -1495,7 +1495,7 @@ Not bound, apart from `ReasoningEffort` and `ToolDeclineKind`: Python binds the 
 | Rust | `mod store` | private |
 | Rust | `SchemaBody { compiled: Node, raw_document: json }` | private |
 | Rust | `Schema.check(instance: json): void throws SchemaViolation[]` | private |
-| Rust | `Node { types: JsonType[]?, enum_values: json[]?, const_value: json?, all_of: Node[]?, any_of: Node[]?, one_of: Node[]?, not: Node?, if_schema: Node?, then_schema: Node?, else_schema: Node?, properties: [string, Node][]?, required: string[]?, additional_properties_forbidden: boolean, items: Node?, min_items: number?, max_items: number?, minimum: number?, maximum: number?, min_length: number?, max_length: number?, pattern: regex::Regex? }` | private |
+| Rust | `Node { types: JsonType[]?, enum_values: json[]?, const_value: json?, all_of: Node[]?, any_of: Node[]?, one_of: Node[]?, not: Node?, if_schema: Node?, then_schema: Node?, else_schema: Node?, properties: [string, Node][]?, required: string[]?, additional_properties_forbidden: boolean, items: Node?, prefix_items: Node[]?, min_items: number?, max_items: number?, minimum: number?, maximum: number?, min_length: number?, max_length: number?, pattern: regex::Regex? }` | private |
 | Rust | `JsonType` | private |
 | Rust | `.Object` | private |
 | Rust | `.Array` | private |
@@ -1645,7 +1645,7 @@ Not bound: it is how `CommandTool` reads one command line.
 | Rust | `flag_rule(method: string, flag: string): string` | private |
 | Rust | `is_assignment(token: string): boolean` | private |
 | Rust | `quoted(patterns: string[]): string` | private |
-| Rust | `CommandArgs { command: string, timeout_ms: number? }` | crate |
+| Rust | `CommandArgs { command: string, timeout_ms: number? }`; `Tool` resolves `timeout_ms` before deserialization | crate |
 | Python | not bound: the model sends these fields as the tool's input | |
 | Rust | `CommandTool.run(args: CommandArgs, ctx: ToolContext): Promise<Event>` | private |
 
@@ -1703,11 +1703,12 @@ Not bound: it is how `CommandTool` reads one command line.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `FetchTool { impersonate: boolean }` | pub |
+| Rust | `FetchTool { impersonate: boolean, timeout: duration? }` | pub |
 | Python | `FetchTool`: a class carrying the builder method, where every other built-in tool except `CommandTool` is a function returning a handle | |
 | Rust | `.new(): this` | pub |
 | Python | `FetchTool()` | |
 | both | `.impersonate(): this` | pub |
+| both | `.timeout(duration/seconds): this`; zero means unlimited | pub |
 | Rust | `impl From<FetchTool> for Tool` | pub |
 
 ### Internal
@@ -1973,12 +1974,12 @@ Not bound: it is how `CommandTool` reads one command line.
 |----------|------|------------|
 | Python | not bound: a `@tool` function receives its input as keyword arguments only | |
 | both | terminal `Event`: `tool_call_finished` carries `data.output` plus optional `data.output_path` and `data.repairs`; `tool_call_failed` carries `data.message` and `data.kind` | pub |
-| Python | custom tools are folded into the `@tool` decorator; Python does not expose incremental `Tool` configuration | |
-| Rust | `Tool { name: string, description: string?, schema: Schema, concurrent: boolean, handler: ToolHandler? }` | pub with private fields |
+| Python | custom tools are folded into the `@tool` decorator; opaque `Tool` handles expose timeout configuration | |
+| Rust | `Tool { name: string, description: string?, schema: Schema, concurrent: boolean, timeout: TimeoutPolicy, handler: ToolHandler? }` | pub with private fields |
 | Python | `Tool`: an opaque handle the built-in tool functions return. An ad-hoc tool is a decorated function, not a `Tool` | |
 | Rust | `impl Debug for Tool` | pub |
 | Rust | `.new(name: string): Tool` | pub |
-| Python | the `@tool` decorator: a decorated function carries the name, description, and schema | |
+| Python | the `@tool` decorator: a decorated function carries the name, description, signature-derived or explicit schema, and optional timeout | |
 | Rust | `.get_name(): string` | pub |
 | Rust | `.get_description(): string` | pub |
 | Rust | `.get_input_schema(): Schema` | pub |
@@ -1986,6 +1987,8 @@ Not bound: it is how `CommandTool` reads one command line.
 | Python | `@tool(schema=..)`: raises `ValueError` when `.tool(fn)` registers it, one call later than the Rust panic | |
 | Rust | `.concurrent(concurrent: boolean): this` | pub |
 | Python | `@tool(concurrent=..)` | |
+| both | `.timeout(duration/seconds): this`; zero means unlimited | pub |
+| Python | `@tool(timeout=..)`; zero means unlimited | |
 | Rust | `.description(description: Text): this` | pub |
 | Python | `@tool(description=..)`, defaulting to the decorated function's docstring: a `str` is the description, an `os.PathLike` names the file holding it | |
 | Rust | `.handler(handler: (input: json) => Promise<Event>): this` | pub |
@@ -2014,6 +2017,8 @@ Not bound: it is how `CommandTool` reads one command line.
 | Rust | `.handler_with_context(handler: (input: json, ctx: ToolContext) => Promise<Event>): this` | crate |
 | Python | not bound: a call reaches Python as the decorated function's arguments | |
 | Rust | `ToolHandler = (input: json, ctx: ToolContext) => Promise<Event>` | private |
+| Rust | `TimeoutPolicy`: resolves a fixed or input-derived invocation deadline | private |
+| Rust | `Event.tool_timed_out(tool: string, timeout: number, directives: DirectiveStore): Event` | crate |
 | Rust | `read_arguments_then(name: string, handler: (input: json, ctx: ToolContext) => Promise<Event>): ToolHandler` | private |
 | Rust | `validate_tool_event(tool: string, event: Event): Event` | private |
 | Rust | `retype_message(pointer: string): string` | crate |
@@ -2442,6 +2447,7 @@ Binds `tools/`.
 | Language | Item | Visibility |
 |----------|------|------------|
 | Rust | `PyTool { inner: Tool }` | python |
+| Rust | `.timeout(seconds: number): this throws PyErr` | python |
 | Rust | `PyEvent { inner: Event }` | python |
 | Rust | `.success(content: string): this` | python |
 | Rust | `.error(content: string): this` | python |
@@ -2458,7 +2464,8 @@ Binds `tools/`.
 | Rust | `PyFetchTool { inner: FetchTool }` | python |
 | Rust | `.new(): this` | python |
 | Rust | `.impersonate(): this` | python |
-| Rust | `PyCommandTool { inner: CommandTool }` | python |
+| Rust | `PyFetchTool.timeout(seconds: number): this throws PyErr` | python |
+| Rust | `PyCommandTool { inner: CommandTool, timeout: duration? }` | python |
 | Rust | `.new(name: string): this` | python |
 | Rust | `.allow(pattern: string): this` | python |
 | Rust | `.allow_flag(flag: string): this` | python |
@@ -2466,6 +2473,7 @@ Binds `tools/`.
 | Rust | `.deny_flag(flag: string): this` | python |
 | Rust | `.description(description: any): this throws PyErr` | python |
 | Rust | `.concurrent(concurrent: boolean): this` | python |
+| Rust | `PyCommandTool.timeout(seconds: number): this throws PyErr` | python |
 
 ### Internal
 

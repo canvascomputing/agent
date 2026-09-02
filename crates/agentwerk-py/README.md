@@ -189,6 +189,17 @@ agent = (
 )
 ```
 
+Set a tool's timeout with `timeout(seconds)`; zero disables it. Defaults are no
+timeout for custom tools, 60 seconds for `FetchTool()`, 180 seconds for
+`GrepTool()`, and the call's `timeout_ms`, falling back to 120 seconds, for
+`CommandTool()`. When a Python tool times out, the agent stops waiting, but its
+worker thread may continue in the background.
+
+```python
+quick_grep = GrepTool().timeout(15)
+patient_fetch = FetchTool().timeout(0)
+```
+
 <details>
 <summary>All provider and model settings</summary>
 
@@ -812,20 +823,16 @@ web = FetchTool().impersonate()
 
 Use `concurrent=True` when a custom tool has no side effects and may run in parallel with other calls.
 
-Describe the tool, then hand it the code it runs:
+Agentwerk uses type annotations to tell the model which arguments it can pass.
+Arguments without default values are required. It understands lists,
+dictionaries, tuples, `Literal`, `Optional`, and unions. Use `schema=` when
+annotations are not enough.
 
 ```python
 from agentwerk import tool
 
 
-@tool(
-    concurrent=True,
-    schema={
-        "type": "object",
-        "properties": {"name": {"type": "string"}},
-        "required": ["name"],
-    },
-)
+@tool(concurrent=True, timeout=5)
 def greet(name: str) -> str:
     """Say hello."""
     return f"Hello, {name}!"
