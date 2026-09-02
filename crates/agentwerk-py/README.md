@@ -125,6 +125,7 @@ The [prompt skill](../../skills/prompt/SKILL.md) provides a compact template for
 | | `dir(dir)` | Set the directory the agent has access to. |
 | | `template(key, value)` | Inject data into prompts with template strings. |
 | | `templates(variables)` | Inject more than one entry into prompts. |
+| | `directive(key, template)` / `directives(overrides)` | Set directive templates by key. |
 | | `knowledge(store)` | Share a knowledge store with the agent. |
 | | `interactive()` | Let the agent wait for new instructions to keep a task in-progress. |
 | **Work** | `add_task(task)` | Submit a task, or a `Task` carrying a label or schema, and return its task ID. |
