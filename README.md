@@ -475,7 +475,7 @@ werk.on_result(|werk, done, result| {
 Hand both agents one store, and either can write a page the other reads:
 
 ```rust
-let store = Knowledge::load(".agentwerk")?;
+let store = Knowledge::load(".agentwerk/knowledge")?;
 
 let analyst = Agent::from_env().label("analysis").knowledge(&store);
 let writer = Agent::from_env().label("report").knowledge(&store);
@@ -1023,10 +1023,10 @@ let alice = Agent::new().knowledge(&store);
 let bob = Agent::new().knowledge(&store);
 ```
 
-Each page is written to `./notes/knowledge/pages/<slug>.md`, and every page gets one line in `./notes/knowledge/index.md`. That list is injected into the prompt of every agent sharing the store, so each of them knows which pages it can read.
-
 <details>
-<summary>All knowledge methods</summary>
+<summary>Knowledge details</summary>
+
+Each page is written to `./notes/pages/<slug>.md`, and every page gets one line in `./notes/index.md`. That list is injected into the prompt of every agent sharing the store, so each of them knows which pages it can read.
 
 | Method | Description |
 |--------|-------------|

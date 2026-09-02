@@ -492,7 +492,7 @@ werk.on_result(hand_to_report)
 Hand both agents one store, and either can write a page the other reads:
 
 ```python
-store = Knowledge.load(".agentwerk")
+store = Knowledge.load(".agentwerk/knowledge")
 
 analyst = Agent.from_env().label("analysis").knowledge(store)
 writer = Agent.from_env().label("report").knowledge(store)
@@ -1029,10 +1029,10 @@ alice = Agent().knowledge(store)
 bob = Agent().knowledge(store)
 ```
 
-Each page is written to `./notes/knowledge/pages/<slug>.md`, and every page gets one line in `./notes/knowledge/index.md`. That list is injected into the prompt of every agent sharing the store, so each of them knows which pages it can read.
-
 <details>
-<summary>All knowledge methods</summary>
+<summary>Knowledge details</summary>
+
+Each page is written to `./notes/pages/<slug>.md`, and every page gets one line in `./notes/index.md`. That list is injected into the prompt of every agent sharing the store, so each of them knows which pages it can read.
 
 | Method | Description |
 |--------|-------------|

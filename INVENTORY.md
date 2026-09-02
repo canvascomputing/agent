@@ -168,7 +168,7 @@ The rules the tables never repeat.
 | Rust | `impl Display for KnowledgeError` | pub |
 | Rust | `impl Error for KnowledgeError` | pub |
 | both | `Knowledge { knowledge_dir: string, index: IndexEntry[], write_lock: void, index_char_limit: number }` | pub with private fields |
-| both | `.load(store_dir: string): this throws io::Error` | pub |
+| both | `.load(knowledge_dir: string): this throws io::Error` | pub |
 | both | `.set_index_char_limit(count: number): this` | pub |
 | both | `.get_index_char_limit(): number` | pub |
 | both | `.get_index(): string` | pub |
@@ -193,7 +193,6 @@ The rules the tables never repeat.
 | Language | Item | Visibility |
 |----------|------|------------|
 | Rust | `INDEX_FILE: string = "index.md"` | private |
-| Rust | `BUNDLE_DIR: string = "knowledge"` | private |
 | Rust | `PAGES_DIR: string = "pages"` | private |
 | Rust | `DEFAULT_INDEX_CHAR_LIMIT: number = 12000` | private |
 | Rust | `DEFAULT_PAGE_TYPE: string = "Knowledge"` | private |
@@ -220,7 +219,7 @@ The rules the tables never repeat.
 | Rust | `bundle_slug(root: string, path: string): string throws KnowledgeError` | private |
 | Rust | `extract_h1_summary(body: string): string` | private |
 | Rust | `LegacyMemoryRecord { content: string, added_at: number }` | private |
-| Rust | `migrate_memory_jsonl(store_dir: string, knowledge_dir: string): IndexEntry[] throws io::Error` | private |
+| Rust | `migrate_memory_jsonl(knowledge_dir: string): IndexEntry[] throws io::Error` | private |
 | Rust | `format_iso8601_now(): string` | private |
 
 ## `crates/agentwerk/src/agents/loop/agent.rs`
@@ -2193,7 +2192,7 @@ Binds `agents/knowledge.rs`.
 | Language | Item | Visibility |
 |----------|------|------------|
 | Rust | `PyKnowledge { inner: Knowledge }` | python |
-| Rust | `.load(store_dir: string): this throws PyErr` | python |
+| Rust | `.load(knowledge_dir: string): this throws PyErr` | python |
 | Rust | `.set_index_char_limit(count: number): this` | python |
 | Rust | `.get_index_char_limit(): number` | python |
 | Rust | `.get_index(): string` | python |

@@ -30,7 +30,7 @@ Where code, tests, bindings, examples, and repository guidance live.
 - `agents/tasks/` owns `Task`, `Reply`, storage transitions, trajectories, and task errors.
 - `agents/loop/` splits execution into the main scheduler, per-agent work, provider requests, compaction, and tool calls.
 - `agents/query.rs` owns AQL; `policy.rs`, `stats.rs`, and `retry.rs` own limits, statistics, and retry timing.
-- `agents/knowledge.rs` owns `Knowledge`, pages, and the OKF bundle under `<dir>/knowledge/`.
+- `agents/knowledge.rs` owns `Knowledge`, pages, and the OKF bundle rooted at the directory passed to `Knowledge::load`.
 
 ## Providers
 

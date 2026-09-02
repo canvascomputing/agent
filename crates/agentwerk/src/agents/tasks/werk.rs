@@ -328,9 +328,8 @@ impl Werk {
     ///
     /// Every task is read back with its status, result, and messages, and the
     /// statistics resume from `events.jsonl`, so the turn and token budgets
-    /// limit checks stay continuous across restarts. Pointing this and
-    /// `Knowledge::load` at the same directory keeps the knowledge pages beside
-    /// the session.
+    /// limit checks stay continuous across restarts. Loading knowledge from
+    /// `<werk_dir>/knowledge` keeps its pages beside the session.
     ///
     /// An unfinished task is picked up again by the agent whose ID it carries
     /// as its assignee. IDs are numbered per label as agents take them, so
@@ -826,8 +825,8 @@ impl Werk {
 
     /// Define where a session is stored, `./.agentwerk` by default.
     ///
-    /// Pointing `Knowledge::load` at the same directory keeps the knowledge
-    /// pages beside the session.
+    /// Loading knowledge from `<dir>/knowledge` keeps its pages beside the
+    /// session.
     pub fn set_dir(&self, dir: impl Into<PathBuf>) -> &Self {
         *self.dir.lock().unwrap() = dir.into();
         self
