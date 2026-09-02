@@ -47,7 +47,7 @@ The invariants that govern orchestration, tools, providers, events, and durable 
 - Resolve the model's exact tool name first, then its lowercase hyphen-to-underscore form with one trailing `_tool` removed.
 - Reject an ambiguous folded name instead of choosing one registered tool.
 - Compile input rules through `Tool::schema` and validate arguments through `Schema::validate`; do not repeat schema checks inside each tool.
-- Keep model-facing recovery text in `prompts/directives/*.md`; `DirectiveStore` applies exact per-agent overrides before rendering it.
+- Keep model-facing recovery text in `prompts/directives/*.md`; the crate-private `DirectiveStore` applies exact per-agent overrides before rendering it.
 - Emit `tool_call_repaired` when a name or value is corrected and `tool_call_failed` when the model must recover.
 
 ## Events and Hooks
