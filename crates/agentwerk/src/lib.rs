@@ -74,6 +74,7 @@
 //! - [`tools`]: the built-in tools agents call, for files, search, commands, web, knowledge, and tasks.
 
 pub mod agents;
+pub mod codegrep;
 pub mod event;
 pub(crate) mod persistence;
 pub(crate) mod prompts;

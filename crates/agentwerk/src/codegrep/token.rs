@@ -21,19 +21,40 @@ pub enum Token {
     /// `$....NAME`: pattern-only.
     LongMetavarEllipsis(String),
     /// A run of `word_chars` from the source.
-    Word { text: String, start: usize },
+    Word {
+        /// Text in the word.
+        text: String,
+        /// Zero-based byte offset where the word starts.
+        start: usize,
+    },
     /// An opening bracket; `close` is the expected matching close character.
     Open {
+        /// Opening bracket found in the source.
         open: char,
+        /// Closing bracket expected for this opening bracket.
         close: char,
+        /// Zero-based byte offset where the bracket starts.
         start: usize,
     },
     /// A closing bracket.
-    Close { close: char, start: usize },
+    Close {
+        /// Closing bracket found in the source.
+        close: char,
+        /// Zero-based byte offset where the bracket starts.
+        start: usize,
+    },
     /// Singleline mode only: a literal newline.
-    Newline { start: usize },
+    Newline {
+        /// Zero-based byte offset where the newline starts.
+        start: usize,
+    },
     /// Any single character not covered by the cases above.
-    Other { text: String, start: usize },
+    Other {
+        /// Text of the character.
+        text: String,
+        /// Zero-based byte offset where the character starts.
+        start: usize,
+    },
 }
 
 impl Token {

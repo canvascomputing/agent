@@ -20,7 +20,7 @@ if rg -n 'Tool::new\("(tasks|fetch_url)"\)' crates README.md agentdocs INVENTORY
 fi
 
 missing=0
-for file in $(find crates/agentwerk/src crates/agentwerk-py/src crates/agentwerk-codegrep/src \
+for file in $(find crates/agentwerk/src crates/agentwerk-py/src \
     -name '*.rs' ! -name '*_tests.rs' ! -name 'test_util.rs' | sort); do
     if ! rg -q "^## \`$file\`$" INVENTORY.md; then
         echo "INVENTORY.md is missing $file" >&2
