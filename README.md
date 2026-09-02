@@ -515,7 +515,7 @@ Results live in the session directory, one `result.json` per task.
 
 ### Schemas
 
-A `Schema` defines the required shape of a task result. agentwerk fixes simple formatting errors such as quoted numbers. For other violations, it asks the model to retry up to `max_schema_retries`.
+A `Schema` defines the required shape of a task result. agentwerk decodes quoted JSON numbers, booleans, objects, and arrays, and corrects case or outer whitespace when a string names one string enum value. Enum correction never changes JSON type. For other violations, it asks the model to retry up to `max_schema_retries`.
 
 ```rust
 use agentwerk::schemas::Schema;

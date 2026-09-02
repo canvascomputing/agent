@@ -1190,22 +1190,33 @@ Not bound: it repairs a reply before the loop reads it.
 | Rust | `FUNCTION_CLOSE: string = "</function>"` | private |
 | Rust | `PARAMETER_OPEN: string = "<parameter="` | private |
 | Rust | `PARAMETER_CLOSE: string = "</parameter>"` | private |
-| Rust | `recover_framed_calls(response: ModelResponse, on_event: (event: StreamEvent) => void): void` | crate |
-| Rust | `find_framed_calls(response: ModelResponse): FramedCall[]` | private |
-| Rust | `strip_framed_syntax(response: ModelResponse): void` | private |
-| Rust | `report_declined(call: FramedCall, reason: ToolDeclineKind, on_event: (event: StreamEvent) => void): void` | private |
-| Rust | `decline_reason(status: ResponseStatus): ToolDeclineKind?` | private |
-| Rust | `apply_framed_calls(response: ModelResponse, framed: FramedCall[], on_event: (event: StreamEvent) => void): void` | private |
-| Rust | `tool_call_name(block: ContentBlock): string?` | private |
-| Rust | `nth_delivered_input(response: ModelResponse, name: string, at: number): json?` | private |
-| Rust | `report_repaired(call: FramedCall, on_event: (event: StreamEvent) => void): void` | private |
-| Rust | `arguments_as_object(call: FramedCall): json` | private |
-| Rust | `is_same_call(framed: FramedCall, delivered: json): boolean` | private |
-| Rust | `FramedCall { name: string, arguments: [string, string][] }` | private |
-| Rust | `split_framed_calls(text: string): [string, FramedCall[]]` | private |
-| Rust | `read_function_block(body: string): FramedCall?` | private |
-| Rust | `read_parameters(body: string): [string, string][]` | private |
-| Rust | `is_tool_name(name: string): boolean` | private |
+| Rust | `FrameRecovery { request: ModelRequest, response: ModelResponse, on_event: (event: StreamEvent) => void, calls: FramedCall[], native_calls: NativeCall[], native_positions: Record<string, number[]>, used_call_ids: string[], next_call_id: number, applied_frames: AppliedFrames, input_updates: [number, json][], added_calls: ContentBlock[] }` | crate |
+| Rust | `FrameRecovery.new(request: ModelRequest, response: ModelResponse, on_event: (event: StreamEvent) => void): FrameRecovery` | crate |
+| Rust | `FrameRecovery.recover_response(): void` | crate |
+| Rust | `FrameRecovery.parse_calls(): void` | private |
+| Rust | `FrameRecovery.index_native_calls(): void` | private |
+| Rust | `FrameRecovery.collect_call_ids(): void` | private |
+| Rust | `FrameRecovery.reconcile_calls(): void` | private |
+| Rust | `FrameRecovery.commit_inputs(): void` | private |
+| Rust | `FrameRecovery.remove_frames(): void` | private |
+| Rust | `FrameRecovery.commit_status(): void` | private |
+| Rust | `FrameRecovery.allocate_call_id(): string` | private |
+| Rust | `FrameRecovery.resolve_tool_identity(name: string): string` | private |
+| Rust | `FrameRecovery.determine_decline_reason(status: ResponseStatus): ToolDeclineKind?` | private |
+| Rust | `FrameRecovery.emit_decline(call: FramedCall, kind: ToolDeclineKind): void` | private |
+| Rust | `FrameRecovery.emit_repair(call: FramedCall, call_id: string): void` | private |
+| Rust | `NativeCall { content_index: number, id: string, identity: string, input: json }` | private |
+| Rust | `FrameSource = Text { content_index: number } | Thinking` | private |
+| Rust | `AppliedFrames { spans: Record<number, Range[]> }` | private |
+| Rust | `AppliedFrames.record_frame(call: FramedCall): void` | private |
+| Rust | `AppliedFrames.rebuild_response(response: ModelResponse): void` | private |
+| Rust | `FramedCall { source: FrameSource, span: Range, name: string, arguments: [string, string][] }` | private |
+| Rust | `FramedCall.parse_frame(source: FrameSource, span: Range, body: string): FramedCall?` | private |
+| Rust | `FramedCall.parse_parameters(body: string): [string, string][]?` | private |
+| Rust | `FramedCall.build_input(): json` | private |
+| Rust | `FramedCall.matches_native_input(input: json): boolean` | private |
+| Rust | `FramedCall.remove_layout_newline(value: string): string` | private |
+| Rust | `FramedCall.validate_tool_name(name: string): boolean` | private |
 
 ## `crates/agentwerk/src/providers/litellm.rs`
 
@@ -1345,7 +1356,7 @@ Not bound: it repairs a reply before the loop reads it.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `Protocol { PATH: string, authenticate(posted: reqwest::RequestBuilder, api_key: string): reqwest::RequestBuilder, serialize(request: ModelRequest): json, classify_error(status: number, body: string): ProviderError?, decode(payload: json, reply: ResponseBuilder): void, recover(reply: ModelResponse, on_event: (event: StreamEvent) => void): void }` | crate |
+| Rust | `Protocol { PATH: string, authenticate(posted: reqwest::RequestBuilder, api_key: string): reqwest::RequestBuilder, serialize(request: ModelRequest): json, classify_error(status: number, body: string): ProviderError?, decode(payload: json, reply: ResponseBuilder): void, recover(request: ModelRequest, reply: ModelResponse, on_event: (event: StreamEvent) => void): void }` | crate |
 | Rust | `respond(endpoint: Endpoint, request: ModelRequest, on_event: (event: StreamEvent) => void): Promise<ModelResponse throws ProviderError>` | crate |
 
 ## `crates/agentwerk/src/providers/stream.rs`
@@ -1525,7 +1536,6 @@ Not bound, apart from `ReasoningEffort` and `ToolDeclineKind`: Python binds the 
 | Rust | `retype_hint(types: JsonType[], instance: json): string?` | private |
 | Rust | `Node.coerce(value: json, instance_path: string, out: string[]): void` | private |
 | Rust | `.enum_candidate(value: json): json?` | private |
-| Rust | `text_form(value: json): string` | private |
 | Rust | `JsonType.retype(value: json): json?` | private |
 | Rust | `retype_integer(text: string): json?` | private |
 | Rust | `retype_number(text: string): json?` | private |
@@ -1970,7 +1980,7 @@ Not bound: it is how `CommandTool` reads one command line.
 | Language | Item | Visibility |
 |----------|------|------------|
 | Python | not bound: a `@tool` function receives its input as keyword arguments only | |
-| both | terminal `Event`: `tool_call_finished` carries `data.output` plus optional `data.output_path` and `data.repairs`; `tool_call_failed` carries `data.message` and `data.kind` | pub |
+| both | terminal `Event`: `tool_call_finished` carries `data.output` plus optional `data.output_path`; `tool_call_failed` carries `data.message` and `data.kind`; either may carry `data.repairs` | pub |
 | Python | custom tools are folded into the `@tool` decorator; opaque `Tool` handles expose timeout configuration | |
 | Rust | `Tool { name: string, description: string?, schema: Schema, concurrent: boolean, timeout: TimeoutPolicy, handler: ToolHandler? }` | pub with private fields |
 | Python | `Tool`: an opaque handle the built-in tool functions return. An ad-hoc tool is a decorated function, not a `Tool` | |
@@ -2016,6 +2026,8 @@ Not bound: it is how `CommandTool` reads one command line.
 | Rust | `ToolHandler = (input: json, ctx: ToolContext) => Promise<Event>` | private |
 | Rust | `TimeoutPolicy`: resolves a fixed or input-derived invocation deadline | private |
 | Rust | `Event.tool_timed_out(tool: string, timeout: number, directives: DirectiveStore): Event` | crate |
+| Rust | `Tool.find_tool(tools: Tool[], tool_name: string): Tool?` | crate |
+| Rust | `.normalize_name(tool_name: string): string` | private |
 | Rust | `read_arguments_then(name: string, handler: (input: json, ctx: ToolContext) => Promise<Event>): ToolHandler` | private |
 | Rust | `validate_tool_event(tool: string, event: Event): Event` | private |
 | Rust | `retype_message(pointer: string): string` | crate |

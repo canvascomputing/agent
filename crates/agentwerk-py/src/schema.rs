@@ -22,8 +22,9 @@ impl PySchema {
     }
 
     /// Validate content and give back the value to keep, plus the JSON pointer
-    /// of every value it repaired. A value the agent quoted or wrote as JSON
-    /// text comes back retyped. Raises on a violation.
+    /// of every value it repaired. Quoted JSON values come back retyped;
+    /// string enums may be corrected for case or outer whitespace, but never
+    /// converted to another JSON type. Raises on a violation.
     fn validate<'py>(
         &self,
         py: Python<'py>,

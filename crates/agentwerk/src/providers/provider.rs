@@ -142,7 +142,12 @@ pub(crate) trait Protocol {
 
     /// Only a model that writes its calls as text rather than emitting them
     /// needs this.
-    fn recover(_reply: &mut ModelResponse, _on_event: &Arc<dyn Fn(StreamEvent) + Send + Sync>) {}
+    fn recover(
+        _request: &ModelRequest,
+        _reply: &mut ModelResponse,
+        _on_event: &Arc<dyn Fn(StreamEvent) + Send + Sync>,
+    ) {
+    }
 }
 
 /// Run one turn of `P` against `endpoint`. Every provider answers through here,
@@ -157,7 +162,7 @@ pub(crate) fn respond<P: Protocol>(
         let posted = P::authenticate(endpoint.post(P::PATH, &body), endpoint.api_key());
         let streamed = endpoint.send(posted, P::classify_error).await?;
         let mut reply = read_reply(streamed, &on_event, P::decode).await?;
-        P::recover(&mut reply, &on_event);
+        P::recover(&request, &mut reply, &on_event);
         Ok(reply)
     })
 }

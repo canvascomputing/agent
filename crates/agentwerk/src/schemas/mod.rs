@@ -91,9 +91,11 @@ impl Schema {
     /// A value that satisfies the schema comes back unchanged and repaired
     /// nowhere. A value that does not is retyped against the schema and then
     /// checked: a scalar an agent quoted becomes the type declared for it, and
-    /// a structure it wrote as JSON text is decoded. The violations describe
-    /// what the retype produced, so one report names everything still wrong
-    /// instead of one problem per attempt.
+    /// a structure it wrote as JSON text is decoded. String enum values may
+    /// lose outer whitespace or change case when that names one candidate;
+    /// enum correction never changes JSON type. The violations describe the
+    /// repaired value, so one report names everything still wrong instead of
+    /// one problem per attempt.
     ///
     /// ```
     /// use agentwerk::schemas::Schema;
@@ -1056,7 +1058,7 @@ impl Node {
         }
     }
 
-    /// The one declared value `value` names, read without case or padding.
+    /// The one declared string `value` names, read without case or padding.
     /// Two candidates naming it means the spelling picks neither, so nothing
     /// is rewritten.
     fn enum_candidate(&self, value: &Value) -> Option<Value> {
@@ -1064,21 +1066,14 @@ impl Node {
         if candidates.iter().any(|candidate| candidate == value) {
             return None;
         }
-        let written = text_form(value);
-        let mut named = candidates
-            .iter()
-            .filter(|candidate| text_form(candidate) == written);
+        let written = value.as_str()?.trim().to_lowercase();
+        let mut named = candidates.iter().filter(|candidate| {
+            candidate
+                .as_str()
+                .is_some_and(|text| text.trim().to_lowercase() == written)
+        });
         let candidate = named.next()?;
         named.next().is_none().then(|| candidate.clone())
-    }
-}
-
-/// The text a value reads as, folded so a capitalised or padded spelling still
-/// names the declared one.
-fn text_form(value: &Value) -> String {
-    match value {
-        Value::String(text) => text.trim().to_lowercase(),
-        other => other.to_string(),
     }
 }
 
@@ -1106,6 +1101,9 @@ fn retype_integer(text: &str) -> Option<Value> {
     if let Ok(number) = text.parse::<i64>() {
         return Some(Value::from(number));
     }
+    if let Ok(number) = text.parse::<u64>() {
+        return Some(Value::from(number));
+    }
     // `"42.0"` and `"1e3"` are the same slip. Past 2^53 a float no longer names
     // one integer, so the rewrite stops there.
     let number = text.parse::<f64>().ok()?;
@@ -1114,9 +1112,10 @@ fn retype_integer(text: &str) -> Option<Value> {
 }
 
 fn retype_number(text: &str) -> Option<Value> {
-    // Rust parses `"inf"` and `"NaN"`, and `Value::from` turns both into null.
-    let number = text.trim().parse::<f64>().ok()?;
-    number.is_finite().then(|| Value::from(number))
+    match serde_json::from_str::<Value>(text.trim()).ok()? {
+        Value::Number(number) => Some(Value::Number(number)),
+        _ => None,
+    }
 }
 
 fn retype_boolean(text: &str) -> Option<Value> {
@@ -1266,19 +1265,14 @@ mod tests {
     }
 
     #[test]
-    fn validate_reads_an_enum_value_the_model_capitalised() {
+    fn a_unique_string_enum_ignores_case_and_outer_whitespace() {
         let schema = Schema::new(json!({"type": "string", "enum": ["content", "count"]})).unwrap();
         assert_eq!(kept(&schema, json!("Content")), json!("content"));
+        assert_eq!(kept(&schema, json!(" count ")), json!("count"));
     }
 
     #[test]
-    fn validate_reads_an_enum_value_the_model_padded() {
-        let schema = Schema::new(json!({"type": "string", "enum": ["content"]})).unwrap();
-        assert_eq!(kept(&schema, json!(" content ")), json!("content"));
-    }
-
-    #[test]
-    fn validate_leaves_a_value_two_enum_candidates_read_as_alone() {
+    fn an_ambiguous_string_enum_is_not_rewritten() {
         // Neither spelling is the one meant, so the violation names the value.
         let schema = Schema::new(json!({"enum": ["draft", "Draft"]})).unwrap();
         assert!(schema.validate(json!("DRAFT")).is_err());
@@ -1288,6 +1282,17 @@ mod tests {
     fn validate_reads_an_enum_value_with_no_declared_type() {
         let schema = Schema::new(json!({"enum": ["open", "closed"]})).unwrap();
         assert_eq!(kept(&schema, json!("OPEN")), json!("open"));
+    }
+
+    #[test]
+    fn a_string_never_matches_a_non_string_enum_candidate() {
+        for (schema, written) in [
+            (json!({"enum": [null]}), json!("null")),
+            (json!({"enum": [true]}), json!("true")),
+            (json!({"enum": [1]}), json!("1")),
+        ] {
+            assert!(Schema::new(schema).unwrap().validate(written).is_err());
+        }
     }
 
     #[test]
@@ -1750,9 +1755,24 @@ mod tests {
     }
 
     #[test]
-    fn validate_retypes_a_quoted_number() {
+    fn a_quoted_decimal_remains_a_number() {
         let schema = Schema::new(json!({"type": "number"})).unwrap();
         assert_eq!(kept(&schema, json!("2.5")), json!(2.5));
+    }
+
+    #[test]
+    fn a_quoted_large_number_keeps_its_exact_integer() {
+        let schema = Schema::new(json!({"type": "number"})).unwrap();
+        assert_eq!(
+            kept(&schema, json!("9007199254740993")),
+            json!(9_007_199_254_740_993_u64)
+        );
+    }
+
+    #[test]
+    fn a_quoted_unsigned_integer_keeps_its_exact_value() {
+        let schema = Schema::new(json!({"type": "integer"})).unwrap();
+        assert_eq!(kept(&schema, json!(u64::MAX.to_string())), json!(u64::MAX));
     }
 
     #[test]
@@ -1781,11 +1801,11 @@ mod tests {
     }
 
     #[test]
-    fn validate_leaves_a_non_finite_number_string_alone() {
-        // Rust parses "inf", and `Value::from` turns a non-finite float into
-        // null, which this nullable schema would then accept.
+    fn malformed_and_non_finite_numbers_are_rejected() {
         let schema = Schema::new(json!({"type": ["number", "null"]})).unwrap();
-        assert!(schema.validate(json!("inf")).is_err());
+        for written in ["inf", "NaN", "01", "+1"] {
+            assert!(schema.validate(json!(written)).is_err(), "{written}");
+        }
     }
 
     #[test]

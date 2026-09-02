@@ -157,8 +157,12 @@ impl Protocol for OpenAiChat {
         }
     }
 
-    fn recover(reply: &mut ModelResponse, on_event: &Arc<dyn Fn(StreamEvent) + Send + Sync>) {
-        frames::recover_framed_calls(reply, on_event);
+    fn recover(
+        request: &ModelRequest,
+        reply: &mut ModelResponse,
+        on_event: &Arc<dyn Fn(StreamEvent) + Send + Sync>,
+    ) {
+        frames::FrameRecovery::new(request, reply, on_event).recover_response();
     }
 }
 
