@@ -215,7 +215,7 @@ mod tests {
     use std::time::Duration;
 
     use crate::agents::policy::Policy;
-    use crate::prompts::directives::DirectiveStore;
+    use crate::prompts::directives::{DirectiveStore, REPLY_REJECTED};
 
     use crate::agents::agent::Agent;
     use crate::agents::r#loop::test_util::*;
@@ -282,7 +282,7 @@ mod tests {
                 .provider(provider.clone())
                 .model("mock")
                 .role("test")
-                .directives(|_| Some("PLEASE CALL A TOOL NOW")),
+                .directive(REPLY_REJECTED, "PLEASE CALL A TOOL NOW"),
         );
 
         werk.start();
@@ -322,7 +322,7 @@ mod tests {
                 .provider(provider.clone())
                 .model("mock")
                 .role("test")
-                .directives(|_| Some("attempt {attempt} of {max_attempts}")),
+                .directive(REPLY_REJECTED, "attempt {attempt} of {max_attempts}"),
         );
 
         werk.start();
@@ -358,16 +358,13 @@ mod tests {
                 ..Default::default()
             });
         // An id is `<label>-<n>`, so the two agents read their own name back.
-        fn addressed(_: &str) -> Option<&'static str> {
-            Some("{agent}, CALL A TOOL")
-        }
         werk.add_agent(
             Agent::new()
                 .label("scout")
                 .provider(scout.clone())
                 .model("mock")
                 .role("test")
-                .directives(addressed),
+                .directive(REPLY_REJECTED, "{agent}, CALL A TOOL"),
         );
         werk.add_agent(
             Agent::new()
@@ -375,7 +372,7 @@ mod tests {
                 .provider(worker.clone())
                 .model("mock")
                 .role("test")
-                .directives(addressed),
+                .directive(REPLY_REJECTED, "{agent}, CALL A TOOL"),
         );
 
         werk.start();

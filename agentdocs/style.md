@@ -36,6 +36,7 @@ Naming, API, comment, binding, and README conventions for this workspace.
 **Let the receiver and operation determine the method name.**
 
 - Use bare nouns for builders: `model`, `tool`, `label`, `concurrent`; do not add `with_`.
+- Pair singular and bulk builders such as `directive` / `directives`, `template` / `templates`, and `tool` / `tools`.
 - Use `get_` for public readers, `set_` for mutation, and `is_` or `has_` for boolean questions.
 - Use `new` for the primary constructor and a semantic name such as `load`, `from_env`, `success`, or `error` for another path.
 - Use `save` and `load` for whole values, and `append` for append-only logs.

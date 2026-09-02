@@ -54,7 +54,7 @@ Where code, tests, bindings, examples, and repository guidance live.
 
 **Mirror Rust concepts without duplicating Rust behavior.**
 
-- `crates/agentwerk-py/src/` has one binding module per exposed domain, including `policy.rs` and `directives.rs`.
+- `crates/agentwerk-py/src/` has one binding module per exposed domain, including `policy.rs` and `providers.rs`.
 - `src/convert.rs` owns Python and JSON conversion helpers; `src/lib.rs` registers the extension surface.
 - `python/agentwerk/__init__.py` re-exports `_agentwerk` and owns the pure-Python `@tool` decorator.
 - `python/agentwerk/__init__.pyi` declares the Python surface and is checked by `tests/test_parity.py`.

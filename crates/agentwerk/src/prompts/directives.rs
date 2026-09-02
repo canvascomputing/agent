@@ -1,8 +1,8 @@
-//! Defines corrective model instructions and lets the host select their text.
+//! Defines corrective model instructions and lets the host override their text.
 
 use std::collections::HashMap;
 use std::fmt;
-use std::sync::{Arc, OnceLock};
+use std::sync::OnceLock;
 
 /// The catalogue, one file per area, each holding its entries under `## key`
 /// headings. A `{name}` is bound by the call site; one with no value renders as
@@ -19,27 +19,17 @@ const CATALOGUE: &[&str] = &[
     include_str!("directives/schemas.md"),
 ];
 
-/// Declare every directive once: the name a render site inside the crate
-/// writes, the one a host matches on, and the entry in [`Directive::ALL`]. One
-/// literal produces all three, so a key cannot be spelled two ways. A key with
-/// no `## ` heading behind it is caught by the tests below.
+/// Declare every directive once: the constant a render site writes and its
+/// catalogue key. A key with no `## ` heading behind it is caught by the tests
+/// below.
 macro_rules! directives {
     ($($name:ident = $key:literal),* $(,)?) => {
         $(
-            #[doc = concat!("The `", $key, "` directive.")]
             pub(crate) const $name: &str = $key;
         )*
 
-        impl Directive {
-            $(
-                #[doc = concat!("The `", $key, "` directive.")]
-                pub const $name: &'static str = $key;
-            )*
-
-            /// Every key, in the order they are declared. The binding crate
-            /// walks it to publish the same constants to Python.
-            pub const ALL: &'static [&'static str] = &[$($key),*];
-        }
+        #[cfg(test)]
+        const ALL: &[&str] = &[$($key),*];
     };
 }
 
@@ -139,50 +129,30 @@ directives! {
     SCHEMA_HINT_QUOTE = "schema_hint_quote",
 }
 
-/// Every directive agentwerk can send, one constant per key.
-///
-/// [`Agent::directives`](crate::Agent::directives) takes the
-/// function deciding all of them. Match the key it hands you against these
-/// constants, and answer `None` for the ones you leave as they are; the arms
-/// are constants, so a misspelled one does not compile.
-///
-/// ```no_run
-/// use agentwerk::{Agent, Directive};
-///
-/// let agent = Agent::from_env()
-///     .directives(|key| match key {
-///         Directive::GREP_CANCELLED => Some("Stop searching."),
-///         _ => None,
-///     });
-/// ```
-pub struct Directive;
-
-type DirectiveComputer = dyn Fn(&str) -> Option<String> + Send + Sync;
-
-/// Holds the function an agent uses to select directive text. Callers provide it through [`Agent::directives`](crate::Agent::directives) without naming this type.
+/// Holds one agent's explicit directive overrides.
+#[derive(Clone, Default)]
 pub(crate) struct DirectiveStore {
-    compute: Arc<DirectiveComputer>,
+    overrides: HashMap<String, String>,
 }
 
 impl DirectiveStore {
-    /// Decide every directive's text with `compute`, keeping the catalogue text
-    /// wherever it answers `None`. What it returns is a template, bound
-    /// afterwards, so a `{name}` it carries still resolves.
-    pub(crate) fn new<T: Into<String>>(
-        compute: impl Fn(&str) -> Option<T> + Send + Sync + 'static,
-    ) -> DirectiveStore {
-        DirectiveStore {
-            compute: Arc::new(move |key| compute(key).map(Into::into)),
-        }
+    pub(crate) fn insert(&mut self, key: impl Into<String>, template: impl Into<String>) {
+        self.overrides.insert(key.into(), template.into());
     }
 
     /// Render the directive `key` names, binding every `{name}` it holds from
     /// `values`. A key the catalogue does not carry renders as itself.
-    pub(crate) fn render(&self, key: &'static str, values: &[(&str, &str)]) -> String {
-        match (self.compute)(key) {
-            Some(template) => bind(&template, values),
-            None => built_in(key, values),
-        }
+    pub(crate) fn render(&self, key: &str, values: &[(&str, &str)]) -> String {
+        self.render_override(key, values)
+            .unwrap_or_else(|| built_in(key, values))
+    }
+
+    /// Render only an explicit override, without falling back to the built-in
+    /// catalogue. Custom event names use this path.
+    pub(crate) fn render_override(&self, key: &str, values: &[(&str, &str)]) -> Option<String> {
+        self.overrides
+            .get(key)
+            .map(|template| bind(template, values))
     }
 }
 
@@ -190,15 +160,8 @@ impl DirectiveStore {
 /// Three groups render through this, each composed where no agent is in reach:
 /// the schema violations, the knowledge index, and the result-schema block a
 /// task appends to its own task.
-pub(crate) fn built_in(key: &'static str, values: &[(&str, &str)]) -> String {
+pub(crate) fn built_in(key: &str, values: &[(&str, &str)]) -> String {
     bind(catalogue().get(key).copied().unwrap_or(key), values)
-}
-
-impl Default for DirectiveStore {
-    /// The built-in text, unchanged.
-    fn default() -> Self {
-        DirectiveStore::new(|_| None::<&str>)
-    }
 }
 
 impl fmt::Debug for DirectiveStore {
@@ -258,7 +221,7 @@ mod tests {
 
     #[test]
     fn every_key_has_a_heading() {
-        for key in Directive::ALL {
+        for key in ALL {
             assert!(
                 catalogue().contains_key(key),
                 "no `## {key}` heading in the catalogue",
@@ -270,7 +233,7 @@ mod tests {
     fn every_heading_has_a_key() {
         for key in catalogue().keys() {
             assert!(
-                Directive::ALL.contains(key),
+                ALL.contains(key),
                 "`## {key}` in the catalogue names no key"
             );
         }
@@ -278,15 +241,15 @@ mod tests {
 
     #[test]
     fn no_key_is_declared_twice() {
-        let mut seen = Directive::ALL.to_vec();
+        let mut seen = ALL.to_vec();
         seen.sort_unstable();
         seen.dedup();
-        assert_eq!(seen.len(), Directive::ALL.len());
+        assert_eq!(seen.len(), ALL.len());
     }
 
     #[test]
     fn no_directive_body_is_empty() {
-        for key in Directive::ALL {
+        for key in ALL {
             assert!(
                 !built_in().render(key, &[]).is_empty(),
                 "{key} renders empty"
@@ -323,7 +286,8 @@ mod tests {
 
     #[test]
     fn what_a_store_returns_is_bound_afterwards() {
-        let store = DirectiveStore::new(|_| Some("Stop searching in {dir}."));
+        let mut store = DirectiveStore::default();
+        store.insert(GREP_CANCELLED, "Stop searching in {dir}.");
 
         assert_eq!(
             store.render(GREP_CANCELLED, &[("dir", "src")]),
@@ -333,10 +297,8 @@ mod tests {
 
     #[test]
     fn a_key_the_store_does_not_name_keeps_its_built_in_text() {
-        let store = DirectiveStore::new(|key| match key {
-            GREP_CANCELLED => Some("Stop searching."),
-            _ => None,
-        });
+        let mut store = DirectiveStore::default();
+        store.insert(GREP_CANCELLED, "Stop searching.");
 
         assert_eq!(store.render(GREP_CANCELLED, &[]), "Stop searching.");
         assert_eq!(
@@ -347,17 +309,33 @@ mod tests {
 
     #[test]
     fn two_stores_render_the_same_key_differently() {
-        let one = DirectiveStore::new(|_| Some("one"));
-        let other = DirectiveStore::new(|_| Some("other"));
+        let mut one = DirectiveStore::default();
+        one.insert(GREP_CANCELLED, "one");
+        let mut other = DirectiveStore::default();
+        other.insert(GREP_CANCELLED, "other");
 
         assert_eq!(one.render(GREP_CANCELLED, &[]), "one");
         assert_eq!(other.render(GREP_CANCELLED, &[]), "other");
     }
 
     #[test]
-    fn a_store_reads_the_key_it_is_rendering() {
-        let store = DirectiveStore::new(|key: &str| Some(key.to_string()));
+    fn a_later_override_replaces_an_earlier_one() {
+        let mut store = DirectiveStore::default();
+        store.insert(GREP_FAILED, "one");
+        store.insert(GREP_FAILED, "two");
 
-        assert_eq!(store.render(GREP_FAILED, &[]), "grep_failed");
+        assert_eq!(store.render(GREP_FAILED, &[]), "two");
+    }
+
+    #[test]
+    fn an_explicit_custom_key_has_no_catalogue_fallback() {
+        let mut store = DirectiveStore::default();
+        store.insert("cache_miss", "No cache entry for {path}.");
+
+        assert_eq!(
+            store.render_override("cache_miss", &[("path", "index")]),
+            Some("No cache entry for index.".to_string()),
+        );
+        assert_eq!(store.render_override("another_event", &[]), None);
     }
 }

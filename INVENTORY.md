@@ -79,7 +79,9 @@ The rules the tables never repeat.
 | both | `.tools(tools: Tool[]): this` | pub |
 | both | `.dir(dir: string): this` | pub |
 | both | `.knowledge(store: Knowledge): this` | pub |
-| both | `.directives(compute: (key: string) => string?): this` | pub |
+| both | `.directive(key: string, template: string): this` | pub |
+| Rust | `.directives(overrides: [string, string][]): this` | pub |
+| Python | `.directives(overrides: Record<string, string>): this` | |
 | both | `.get_id(): string` | pub |
 | both | `.add_task(task: Task): string` | pub |
 | both | `.add_task(task)`: a string or json value stands in for the `Task` | |
@@ -923,7 +925,7 @@ Not bound, like the rest of `codegrep`.
 | Language | Item | Visibility |
 |----------|------|------------|
 | Rust | `mod agents`, `mod event`, `mod providers`, `mod schemas`, `mod tools` | pub |
-| Rust | re-exports `Agent`, `Query`, `Reply`, `Status`, `Task`, `Werk`, `Policy`, `PolicyViolation`, `Knowledge`, `Trajectory`, `Schema`, `Event`, `FinishReason`, `Directive`, `Text` | pub |
+| Rust | re-exports `Agent`, `Query`, `Reply`, `Status`, `Task`, `Werk`, `Policy`, `PolicyViolation`, `Knowledge`, `Trajectory`, `Schema`, `Event`, `FinishReason`, `Text` | pub |
 | Python | `agentwerk` exports every bound class from one flat module | |
 
 ### Internal
@@ -964,27 +966,21 @@ Not bound: `prompts` is crate-internal, reached through `Agent.role(..)`.
 
 ## `crates/agentwerk/src/prompts/directives.rs`
 
-One of the two public parts of `prompts`, beside `Text`: `Directive` reaches the caller as a root re-export and carries nothing but the key constants, one per catalogue heading. `Agent::directives` takes the function deciding all of them, which sees a key and answers a template. `DirectiveStore` is the crate-private carrier of that function, which no host names. The constants sit on `Directive` in both languages, so `Directive::GREP_FAILED` and `Directive.GREP_FAILED` are the same name.
-
-### Public
-
-| Language | Item | Visibility |
-|----------|------|------------|
-| Rust | `Directive.REPLY_REJECTED: string = "reply_rejected"`, and one constant per catalogue heading, each also a crate-private `const` under the same name that the render sites write: `NO_TOOL_CALLED`, `ARGUMENTS_REJECTED`, `ARGUMENTS_EXPECTED`, `RESULT_SCHEMA_REQUIRED`, `SUMMARY_REQUESTED`, `KNOWLEDGE_INDEX_TRUNCATED`, `TOOL_NOT_FOUND`, `NO_TOOLS_REGISTERED`, `TOOL_PANICKED`, `TOOL_TIMED_OUT`, `TOOL_OUTPUT_EMPTY`, `TOOL_OUTPUT_OFFLOADED`, `EDIT_FILE_READ_FAILED`, `EDIT_FILE_OLD_STRING_NOT_FOUND`, `EDIT_FILE_OLD_STRING_NOT_UNIQUE`, `EDIT_FILE_WRITE_FAILED`, `WRITE_FILE_PARENT_NOT_CREATED`, `WRITE_FILE_FAILED`, `READ_FILE_PATH_IS_DIRECTORY`, `READ_FILE_PATH_IS_DIRECTORY_WITH_ENTRIES`, `READ_FILE_IS_BINARY`, `READ_FILE_NOT_FOUND`, `READ_FILE_FAILED`, `LIST_DIRECTORY_PATH_IS_FILE`, `LIST_DIRECTORY_NOT_FOUND`, `LIST_DIRECTORY_FAILED`, `PATH_HINT_DIRECTORY_LISTED`, `PATH_HINT_SUGGESTION`, `PATH_HINT_WORKING_DIRECTORY`, `COMMAND_CANCELLED`, `COMMAND_NOT_STARTED`, `COMMAND_MISSING`, `COMMAND_SHELL_OPERATOR_FOUND`, `COMMAND_QUOTE_UNTERMINATED`, `COMMAND_CONTROL_CHARACTER_FOUND`, `COMMAND_ASSIGNMENT_FOUND`, `COMMAND_FLAG_DENIED`, `COMMAND_PATTERN_DENIED`, `COMMAND_NOT_ALLOWED`, `COMMAND_FLAG_NOT_ALLOWED`, `GREP_CANCELLED`, `GREP_FAILED`, `GREP_GLOB_REJECTED`, `GREP_FILE_TYPE_UNKNOWN`, `GREP_PATTERN_REJECTED`, `CODE_PATTERN_REJECTED`, `CODE_CONSTRAINT_INCOMPLETE`, `CODE_CONSTRAINT_METAVARIABLE_UNKNOWN`, `CODE_CONSTRAINT_REGEX_REJECTED`, `FETCH_TOO_LONG`, `FETCH_SCHEME_MISSING`, `FETCH_SCHEME_UNSUPPORTED`, `FETCH_CREDENTIALS_PRESENT`, `FETCH_HOST_MISSING`, `FETCH_HOST_NOT_RESOLVABLE`, `FETCH_TOO_MANY_REDIRECTS`, `FETCH_REQUEST_FAILED`, `FETCH_BODY_NOT_READ`, `FETCH_RESPONSE_TOO_LARGE`, `FETCH_REDIRECT_LOCATION_MISSING`, `KNOWLEDGE_PAGE_NOT_FOUND`, `KNOWLEDGE_WRITE_FAILED`, `KNOWLEDGE_REMOVE_FAILED`, `WERK_UNAVAILABLE`, `TASK_ID_MISSING`, `TASK_NOT_ASSIGNED`, `TASK_NOT_FOUND`, `TASK_RESULT_MISSING`, `TASK_QUERY_INVALID`, `TASK_EDIT_INCOMPLETE`, `TASK_TRANSITION_REJECTED`, `HANDOVER_RESULT_MISSING`, `HANDOVER_SCHEMA_INVALID`, `SCHEMA_FALSE_REJECTED`, `SCHEMA_TYPE_MISMATCHED`, `SCHEMA_CONST_MISMATCHED`, `SCHEMA_ENUM_MISMATCHED`, `SCHEMA_ANY_OF_UNMATCHED`, `SCHEMA_ONE_OF_AMBIGUOUS`, `SCHEMA_NOT_MATCHED`, `SCHEMA_PROPERTY_MISSING`, `SCHEMA_PROPERTY_UNEXPECTED`, `SCHEMA_ARRAY_TOO_SHORT`, `SCHEMA_ARRAY_TOO_LONG`, `SCHEMA_STRING_TOO_SHORT`, `SCHEMA_STRING_TOO_LONG`, `SCHEMA_PATTERN_UNMATCHED`, `SCHEMA_NUMBER_TOO_SMALL`, `SCHEMA_NUMBER_TOO_LARGE`, `SCHEMA_HINT_UNQUOTE`, `SCHEMA_HINT_JSON`, `SCHEMA_HINT_QUOTE` | pub |
-| Rust | `.ALL: string[]` | pub |
-| Python | `Directive.ALL` is not published; `register` walks it to set the key constants | |
-| Rust | `Directive { }`, the key namespace | pub |
+Not bound directly: callers configure its crate-private store through `Agent.directive(..)` and `Agent.directives(..)`.
 
 ### Internal
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `directives!(name = key, ..)`, declaring each key's crate-private `const`, its `Directive` constant, and its `ALL` entry | private |
+| Rust | crate-private key constants, one per catalogue heading: `REPLY_REJECTED`, `NO_TOOL_CALLED`, `ARGUMENTS_REJECTED`, `ARGUMENTS_EXPECTED`, `RESULT_SCHEMA_REQUIRED`, `SUMMARY_REQUESTED`, `KNOWLEDGE_INDEX_TRUNCATED`, `TOOL_NOT_FOUND`, `NO_TOOLS_REGISTERED`, `TOOL_PANICKED`, `TOOL_TIMED_OUT`, `TOOL_OUTPUT_EMPTY`, `TOOL_OUTPUT_OFFLOADED`, `EDIT_FILE_READ_FAILED`, `EDIT_FILE_OLD_STRING_NOT_FOUND`, `EDIT_FILE_OLD_STRING_NOT_UNIQUE`, `EDIT_FILE_WRITE_FAILED`, `WRITE_FILE_PARENT_NOT_CREATED`, `WRITE_FILE_FAILED`, `READ_FILE_PATH_IS_DIRECTORY`, `READ_FILE_PATH_IS_DIRECTORY_WITH_ENTRIES`, `READ_FILE_IS_BINARY`, `READ_FILE_NOT_FOUND`, `READ_FILE_FAILED`, `LIST_DIRECTORY_PATH_IS_FILE`, `LIST_DIRECTORY_NOT_FOUND`, `LIST_DIRECTORY_FAILED`, `PATH_HINT_DIRECTORY_LISTED`, `PATH_HINT_SUGGESTION`, `PATH_HINT_WORKING_DIRECTORY`, `COMMAND_CANCELLED`, `COMMAND_NOT_STARTED`, `COMMAND_MISSING`, `COMMAND_SHELL_OPERATOR_FOUND`, `COMMAND_QUOTE_UNTERMINATED`, `COMMAND_CONTROL_CHARACTER_FOUND`, `COMMAND_ASSIGNMENT_FOUND`, `COMMAND_FLAG_DENIED`, `COMMAND_PATTERN_DENIED`, `COMMAND_NOT_ALLOWED`, `COMMAND_FLAG_NOT_ALLOWED`, `GREP_CANCELLED`, `GREP_FAILED`, `GREP_GLOB_REJECTED`, `GREP_FILE_TYPE_UNKNOWN`, `GREP_PATTERN_REJECTED`, `CODE_PATTERN_REJECTED`, `CODE_CONSTRAINT_INCOMPLETE`, `CODE_CONSTRAINT_METAVARIABLE_UNKNOWN`, `CODE_CONSTRAINT_REGEX_REJECTED`, `FETCH_TOO_LONG`, `FETCH_SCHEME_MISSING`, `FETCH_SCHEME_UNSUPPORTED`, `FETCH_CREDENTIALS_PRESENT`, `FETCH_HOST_MISSING`, `FETCH_HOST_NOT_RESOLVABLE`, `FETCH_TOO_MANY_REDIRECTS`, `FETCH_REQUEST_FAILED`, `FETCH_BODY_NOT_READ`, `FETCH_RESPONSE_TOO_LARGE`, `FETCH_REDIRECT_LOCATION_MISSING`, `KNOWLEDGE_PAGE_NOT_FOUND`, `KNOWLEDGE_WRITE_FAILED`, `KNOWLEDGE_REMOVE_FAILED`, `WERK_UNAVAILABLE`, `TASK_ID_MISSING`, `TASK_NOT_ASSIGNED`, `TASK_NOT_FOUND`, `TASK_RESULT_MISSING`, `TASK_QUERY_INVALID`, `TASK_EDIT_INCOMPLETE`, `TASK_TRANSITION_REJECTED`, `HANDOVER_RESULT_MISSING`, `HANDOVER_SCHEMA_INVALID`, `SCHEMA_FALSE_REJECTED`, `SCHEMA_TYPE_MISMATCHED`, `SCHEMA_CONST_MISMATCHED`, `SCHEMA_ENUM_MISMATCHED`, `SCHEMA_ANY_OF_UNMATCHED`, `SCHEMA_ONE_OF_AMBIGUOUS`, `SCHEMA_NOT_MATCHED`, `SCHEMA_PROPERTY_MISSING`, `SCHEMA_PROPERTY_UNEXPECTED`, `SCHEMA_ARRAY_TOO_SHORT`, `SCHEMA_ARRAY_TOO_LONG`, `SCHEMA_STRING_TOO_SHORT`, `SCHEMA_STRING_TOO_LONG`, `SCHEMA_PATTERN_UNMATCHED`, `SCHEMA_NUMBER_TOO_SMALL`, `SCHEMA_NUMBER_TOO_LARGE`, `SCHEMA_HINT_UNQUOTE`, `SCHEMA_HINT_JSON`, `SCHEMA_HINT_QUOTE` | crate |
+| Rust | `directives!(name = key, ..)`, declaring each crate-private key constant and its `ALL` entry | private |
+| Rust | `ALL: string[]` | private, test only |
 | Rust | `CATALOGUE: string[]` | private |
-| Rust | `DirectiveStore { compute: (key: string) => string? }` | crate |
-| Rust | `.new(compute: (key: string) => string?): this` | crate |
+| Rust | `DirectiveStore { overrides: Record<string, string> }` | crate |
+| Rust | `impl Clone, Default for DirectiveStore` | crate |
+| Rust | `.insert(key: string, template: string): void` | crate |
 | Rust | `.render(key: string, values: [string, string][]): string` | crate |
-| Rust | `impl Default for DirectiveStore`, the built-in text | crate |
+| Rust | `.render_override(key: string, values: [string, string][]): string?` | crate |
 | Rust | `impl Debug for DirectiveStore` | crate |
 | Rust | `built_in(key: string, values: [string, string][]): string` | crate |
 | Rust | `bind(template: string, values: [string, string][]): string` | private |
@@ -993,7 +989,7 @@ One of the two public parts of `prompts`, beside `Text`: `Directive` reaches the
 
 ## `crates/agentwerk/src/prompts/mod.rs`
 
-Not bound, except what `directives.rs` and `text.rs` re-export through it.
+Not bound, except `Text`, which `lib.rs` re-exports from `text.rs`.
 
 ### Internal
 
@@ -1686,6 +1682,8 @@ Not bound: it is how `CommandTool` reads one command line.
 | Rust | `.from_schema(schema: Schema?, handover: Task?): Tool` | crate |
 | Rust | `task_finished_schema(schema: Schema?, handover: Task?): json` | super |
 | Rust | `dispatch(input: json, ctx: ToolContext, schema: Schema?, handover: Task?, tool_name: string): Event throws Event` | super |
+| Rust | `event_directive(name: string, data: json, directives: DirectiveStore): string?` | private |
+| Rust | `json_template_value(value: json): string` | private |
 | Rust | `finish(werk: Werk, input: json, ctx: ToolContext, schema: Schema?, handover: Task?, tool_name: string): Event throws Event` | private |
 | Rust | `hand_over(werk: Werk, parent_id: string, agent: string, result: json, schema: Schema?, tool_name: string, child: Task, directives: DirectiveStore): Event throws Event` | private |
 | Rust | `resolve_handover(input: json, configured: Task?, directives: DirectiveStore): Task? throws Event` | private |
@@ -2093,7 +2091,8 @@ Binds `agents/agent.rs`, whose section holds the Python spelling of each method.
 | Rust | `.handover(task: PyTask): this throws PyErr` | python |
 | Rust | `.dir(dir: string): this` | python |
 | Rust | `.knowledge(store: PyKnowledge): this` | python |
-| Rust | `.directives(compute: any): this` | python |
+| Rust | `.directive(key: string, template: string): this` | python |
+| Rust | `.directives(overrides: Record<string, string>): this` | python |
 | Rust | `.tool(tool: any): this throws PyErr` | python |
 | Rust | `.tools(tools: any): this throws PyErr` | python |
 | Rust | `.add_task(task: PyTask): string throws PyErr` | python |
@@ -2140,23 +2139,6 @@ Not bound: the one JSON boundary between the two languages.
 | Rust | `py_to_value(obj: any): json throws PyErr` | crate |
 | Rust | `py_to_text(obj: any): string throws PyErr` | crate |
 | Rust | `runtime_error(message: string): PyErr` | crate |
-
-## `crates/agentwerk-py/src/directives.rs`
-
-Binds `prompts/directives.rs`.
-
-### Public
-
-| Language | Item | Visibility |
-|----------|------|------------|
-| Rust | `PyDirective { }`, exposed as `Directive`, the key namespace | python |
-
-### Internal
-
-| Language | Item | Visibility |
-|----------|------|------------|
-| Rust | `compute(compute: any): (key: string) => string?`, which prints a raising call's traceback and keeps the catalogue text | crate |
-| Rust | `register(module: PyModule): void throws PyErr`, which also sets each key as an uppercase attribute on `Directive` | crate |
 
 ## `crates/agentwerk-py/src/event.rs`
 

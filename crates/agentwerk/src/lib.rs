@@ -101,8 +101,6 @@ pub use schemas::Schema;
 pub use agents::tasks::FinishReason;
 pub use event::Event;
 
-// The public faces of `prompts`: what agentwerk tells the model when it has to
-// correct it, and the text a prompt is set from. The rest of the module
-// assembles a role and stays internal.
-pub use prompts::directives::Directive;
+// The public face of `prompts`: text a prompt is set from. The rest of the
+// module assembles prompts and stays internal.
 pub use prompts::text::Text;

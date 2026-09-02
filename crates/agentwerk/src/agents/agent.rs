@@ -295,25 +295,29 @@ impl Agent {
         self
     }
 
-    /// Decide what the agent tells the model when a call fails.
+    /// Override one model-facing directive.
     ///
-    /// `compute` sees the key of every directive before it renders. Match it
-    /// against the constants [`crate::Directive`] carries, and answer `None` for the
-    /// ones you leave as they are. What it returns is a template, bound
-    /// afterwards, so a `{name}` it carries still resolves.
+    /// The key is exact and may name a built-in directive or an application
+    /// event published through `EventTool`. Runtime placeholders such as
+    /// `{path}` remain available in the replacement.
+    pub fn directive(mut self, key: impl Into<String>, template: impl Into<String>) -> Self {
+        Arc::make_mut(&mut self.directives).insert(key, template);
+        self
+    }
+
+    /// Override several model-facing directives.
     ///
-    /// ```no_run
-    /// # use agentwerk::{Agent, Directive};
-    /// Agent::from_env().directives(|key| match key {
-    ///     Directive::GREP_FAILED => Some("The search did not run. Narrow `path`."),
-    ///     _ => None,
-    /// });
-    /// ```
-    pub fn directives<T: Into<String>>(
-        mut self,
-        compute: impl Fn(&str) -> Option<T> + Send + Sync + 'static,
-    ) -> Self {
-        self.directives = Arc::new(DirectiveStore::new(compute));
+    /// Later entries replace earlier entries carrying the same key.
+    pub fn directives<I, K, V>(mut self, overrides: I) -> Self
+    where
+        I: IntoIterator<Item = (K, V)>,
+        K: Into<String>,
+        V: Into<String>,
+    {
+        let directives = Arc::make_mut(&mut self.directives);
+        for (key, template) in overrides {
+            directives.insert(key, template);
+        }
         self
     }
 
@@ -684,6 +688,59 @@ mod tests {
     fn a_clone_keeps_the_id_of_the_agent_it_came_from() {
         let agent = Agent::new().label("cloned_id");
         assert_eq!(agent.clone().get_id(), agent.get_id());
+    }
+
+    #[test]
+    fn directive_and_directives_apply_overrides_in_order() {
+        let agent = Agent::new()
+            .directive("cache_miss", "one")
+            .directives([("cache_miss", "two"), ("cache_hit", "three")]);
+        let directives = agent.get_directives();
+
+        assert_eq!(
+            directives.render_override("cache_miss", &[]).as_deref(),
+            Some("two"),
+        );
+        assert_eq!(
+            directives.render_override("cache_hit", &[]).as_deref(),
+            Some("three"),
+        );
+    }
+
+    #[test]
+    fn adding_an_override_to_a_clone_does_not_change_the_original() {
+        let original = Agent::new().directive("cache_miss", "original");
+        let changed = original.clone().directive("cache_miss", "changed");
+
+        assert_eq!(
+            original
+                .get_directives()
+                .render_override("cache_miss", &[])
+                .as_deref(),
+            Some("original"),
+        );
+        assert_eq!(
+            changed
+                .get_directives()
+                .render_override("cache_miss", &[])
+                .as_deref(),
+            Some("changed"),
+        );
+    }
+
+    #[test]
+    fn agent_template_values_do_not_bind_directive_placeholders() {
+        let agent = Agent::new()
+            .template("path", "src/lib.rs")
+            .directive("cache_miss", "Missing {path}");
+
+        assert_eq!(
+            agent
+                .get_directives()
+                .render_override("cache_miss", &[])
+                .as_deref(),
+            Some("Missing {path}"),
+        );
     }
 
     /// The system prompt with no live state and a fixed task ID.

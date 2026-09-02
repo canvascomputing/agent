@@ -359,7 +359,7 @@ async def test_positive_python_timeout_fails_the_call_and_the_agent_continues(
         lambda event: event.get_name() == aw.Event.TOOL_CALL_FAILED
         and event.get_data().get("tool_name") == "wait"
     )
-    assert failure.get_directive() == aw.Directive.TOOL_TIMED_OUT
+    assert failure.get_directive() == "tool_timed_out"
     assert results == ["done"]
     assert completed == []
 

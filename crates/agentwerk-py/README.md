@@ -642,30 +642,24 @@ Each compaction event carries the trigger: `proactive` before a context-window e
 A directive tells the model how to recover: call a tool, match a schema, correct a path, narrow a search, or choose an allowed command. You can replace the built-in wording for your model or environment.
 
 ```python
-from agentwerk import Agent, Directive
+from agentwerk import Agent
 
 
-def tune(key):
-    if key == Directive.GREP_FAILED:
-        return "The search did not run. Narrow `path`."
-    return None
-
-
-agent = Agent.from_env().directives(tune)
+agent = (
+    Agent.from_env()
+    .directive("grep_failed", "The search did not run. Narrow `path`.")
+    .directives(
+        {
+            "tool_timed_out": "Reduce the command scope.",
+            "cache_miss": "No cache entry exists for {path}.",
+        }
+    )
+)
 ```
 
-<details>
-<summary>All directive settings</summary>
-
-| Method | Description |
-|--------|-------------|
-| `directives(compute)` | Decide every directive's text with one function. |
-
-Return `None` to keep the default. Replacements may use template variables such as `{detail}`, `{attempt}`, and `{path}`. Include the failure and next action.
+Use a built-in directive key such as `grep_failed` to replace recovery text. To replace the message returned after `EventTool` publishes an event, use that event's name as the key. Built-ins without a replacement keep their default wording. Templates may use runtime values such as `{detail}`, `{attempt}`, and `{path}`; placeholders without a value remain unchanged. Recovery text should state what failed and what the model should do next.
 
 See [prompts/directives](https://github.com/canvascomputing/agentwerk/tree/main/crates/agentwerk/src/prompts/directives) for the built-in text.
-
-</details>
 
 ### Sessions
 
@@ -785,6 +779,8 @@ Event names are open-ended; lowercase snake case is conventional. Publishing an 
   "data": { "result": "..." }
 }
 ```
+
+After publishing a non-terminal event, `EventTool` normally returns `Event <name> published` to the model. A directive with the event's name replaces this message. Its template can reference `{data}` for the complete JSON payload or any top-level field by name. The published event and tool result both record the directive key.
 
 #### CommandTool
 
