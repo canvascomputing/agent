@@ -693,6 +693,18 @@ let agent = Agent::new()
     .tool(CommandTool::new("git").allow("git *"));
 ```
 
+Replace one tool's timeout with `timeout`. Zero means no timeout. Without an
+override, custom tools have no timeout, Fetch uses 60 seconds, Grep uses 180
+seconds, and Command uses the call's `timeout_ms` or 120 seconds.
+
+```rust
+use std::time::Duration;
+use agentwerk::tools::FetchTool;
+
+let quick_fetch = FetchTool::new().timeout(Duration::from_secs(15));
+let patient_fetch = FetchTool::new().timeout(Duration::ZERO);
+```
+
 <details>
 <summary>All built-in and custom tools</summary>
 
@@ -811,6 +823,7 @@ let greet = Tool::new("greet")
         "required": ["name"]
     }))
     .concurrent(true)
+    .timeout(std::time::Duration::from_secs(5))
     .handler(|input: Value| async move {
         let name = input["name"].as_str().unwrap_or("world");
         Event::tool_call_finished(format!("Hello, {name}!"))

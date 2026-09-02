@@ -38,6 +38,8 @@ def LiteLlm(
 class Tool:
     """A tool an agent may call, passed to ``Agent.tool(...)``."""
 
+    def timeout(self, seconds: float) -> "Tool": ...
+
 def ReadFileTool() -> Tool: ...
 def WriteFileTool() -> Tool: ...
 def EditFileTool() -> Tool: ...
@@ -58,6 +60,7 @@ class FetchTool:
     def impersonate(self) -> "FetchTool":
         """Send browser headers and HTTP/2 settings without changing the TLS ClientHello."""
         ...
+    def timeout(self, seconds: float) -> "FetchTool": ...
 
 class CommandTool:
     """A command an agent may call, passed to ``Agent.tool(...)``."""
@@ -69,6 +72,7 @@ class CommandTool:
     def deny_flag(self, flag: str) -> "CommandTool": ...
     def description(self, description: "str | os.PathLike[str]") -> "CommandTool": ...
     def concurrent(self, concurrent: bool) -> "CommandTool": ...
+    def timeout(self, seconds: float) -> "CommandTool": ...
 
 @overload
 def tool(func: Callable[..., Any]) -> Callable[..., Any]: ...
@@ -79,6 +83,7 @@ def tool(
     schema: Optional[dict] = ...,
     name: Optional[str] = ...,
     description: Optional["str | os.PathLike[str]"] = ...,
+    timeout: float = ...,
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]: ...
 
 class Schema:
@@ -318,6 +323,7 @@ class Directive:
     TOOL_NOT_FOUND: str
     NO_TOOLS_REGISTERED: str
     TOOL_PANICKED: str
+    TOOL_TIMED_OUT: str
     TOOL_OUTPUT_EMPTY: str
     TOOL_OUTPUT_OFFLOADED: str
     EDIT_FILE_READ_FAILED: str
@@ -338,7 +344,6 @@ class Directive:
     PATH_HINT_SUGGESTION: str
     PATH_HINT_WORKING_DIRECTORY: str
     COMMAND_CANCELLED: str
-    COMMAND_TIMED_OUT: str
     COMMAND_NOT_STARTED: str
     COMMAND_MISSING: str
     COMMAND_SHELL_OPERATOR_FOUND: str
@@ -350,7 +355,6 @@ class Directive:
     COMMAND_NOT_ALLOWED: str
     COMMAND_FLAG_NOT_ALLOWED: str
     GREP_CANCELLED: str
-    GREP_TIMED_OUT: str
     GREP_FAILED: str
     GREP_GLOB_REJECTED: str
     GREP_FILE_TYPE_UNKNOWN: str

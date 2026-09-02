@@ -7,7 +7,7 @@
     },
     "timeout_ms": {
       "type": "integer",
-      "description": "Per-command timeout in milliseconds (default: 120000, max: 600000). The process is killed on timeout."
+      "description": "Per-command timeout in milliseconds (default: 120000, max: 600000). Set to 0 for no timeout. The process is killed on timeout."
     }
   },
   "required": [

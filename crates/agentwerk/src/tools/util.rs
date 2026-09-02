@@ -4,23 +4,22 @@
 //! list, so an operator inside one is text rather than a second command.
 
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use super::command::Command;
 use super::tool::{Event, ToolContext};
 use crate::prompts::directives::{
-    DirectiveStore, COMMAND_CANCELLED, COMMAND_NOT_STARTED, COMMAND_TIMED_OUT,
-    PATH_HINT_DIRECTORY_LISTED, PATH_HINT_SUGGESTION, PATH_HINT_WORKING_DIRECTORY,
+    DirectiveStore, COMMAND_CANCELLED, COMMAND_NOT_STARTED, PATH_HINT_DIRECTORY_LISTED,
+    PATH_HINT_SUGGESTION, PATH_HINT_WORKING_DIRECTORY,
 };
 
 /// Execute one program directly, returning combined stdout/stderr. No shell is
 /// involved, so an operator in an argument is text the program receives rather
 /// than a second command.
 ///
-/// Bounded by `timeout` and interruptible via [`ToolContext::cancelled`]: it
-/// drops the pending output future, and `kill_on_drop(true)` cascades SIGKILL
-/// to the subprocess so a hanging `python3` / `sleep` doesn't outlive the run.
-pub(crate) async fn run_command(command: &Command, timeout: Duration, ctx: &ToolContext) -> Event {
+/// Interruptible via [`ToolContext::cancelled`]. Dropping the pending future
+/// also cascades SIGKILL through `kill_on_drop(true)`, so a timeout or a
+/// cancelled run cannot leave a hanging `python3` / `sleep` behind.
+pub(crate) async fn run_command(command: &Command, ctx: &ToolContext) -> Event {
     let output_fut = tokio::process::Command::new(command.program_path(&ctx.dir))
         .args(&command.arguments)
         .current_dir(&ctx.dir)
@@ -30,24 +29,16 @@ pub(crate) async fn run_command(command: &Command, timeout: Duration, ctx: &Tool
     let result = tokio::select! {
         biased;
         _ = ctx.cancelled() => return Event::error(ctx.directives.render(COMMAND_CANCELLED, &[])).directive(COMMAND_CANCELLED),
-        r = tokio::time::timeout(timeout, output_fut) => r,
+        r = output_fut => r,
     };
 
     match result {
-        Err(_) => Event::error(ctx.directives.render(
-            COMMAND_TIMED_OUT,
-            &[
-                ("program", &command.program),
-                ("milliseconds", &timeout.as_millis().to_string()),
-            ],
-        ))
-        .directive(COMMAND_TIMED_OUT),
-        Ok(Err(e)) => Event::error(ctx.directives.render(
+        Err(e) => Event::error(ctx.directives.render(
             COMMAND_NOT_STARTED,
             &[("program", &command.program), ("error", &e.to_string())],
         ))
         .directive(COMMAND_NOT_STARTED),
-        Ok(Ok(output)) => {
+        Ok(output) => {
             let mut content = String::from_utf8_lossy(&output.stdout).into_owned();
             let stderr = String::from_utf8_lossy(&output.stderr);
 
@@ -180,7 +171,7 @@ fn suggest_path(ctx_dir: &Path, resolved: &Path) -> Option<PathBuf> {
 mod tests {
     use super::*;
     use std::sync::Arc;
-    use std::time::Instant;
+    use std::time::{Duration, Instant};
 
     use crate::agents::tasks::Run;
     use crate::FinishReason;
@@ -196,7 +187,7 @@ mod tests {
 
         let command = Command::split("sleep 30").unwrap();
         let started = Instant::now();
-        let result = run_command(&command, Duration::from_millis(60_000), &ctx).await;
+        let result = run_command(&command, &ctx).await;
         let elapsed = started.elapsed();
 
         let content = result.get_content();

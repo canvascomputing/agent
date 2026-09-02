@@ -1,5 +1,9 @@
 """Test built-in tools and the ``@tool`` decorator through ``Agent.tool``."""
 
+import asyncio
+import time
+from typing import Annotated, Any, Dict, List, Literal, Mapping, Optional, Sequence, Tuple, Union
+
 import pytest
 
 import agentwerk as aw
@@ -16,10 +20,48 @@ BUILTIN_FACTORIES = [
     aw.FinishTool,
 ]
 
+TIMEOUT_TOOL_FACTORIES = [
+    pytest.param(aw.GrepTool, id="tool"),
+    pytest.param(aw.FetchTool, id="fetch"),
+    pytest.param(lambda: aw.CommandTool("echo"), id="command"),
+]
+
+
+async def run_scripted_agent(scripted_openai, tmp_path, tool):
+    agent = (
+        aw.Agent()
+        .provider(scripted_openai.provider())
+        .model("mock")
+        .role("Follow the scripted tool calls.")
+        .tool(tool)
+    )
+    werk = (
+        aw.Werk()
+        .set_dir(str(tmp_path))
+        .set_policy(aw.Policy(max_request_retries=0, max_time=2.0))
+        .add_agent(agent)
+    )
+    werk.add_task("Run the tool, then finish.")
+    results = await werk.finish_all_tasks()
+    return werk, results
+
+
+async def run_scripted_tool(scripted_openai, tmp_path, tool, name, arguments):
+    scripted_openai.respond_with_tool(name, arguments)
+    scripted_openai.respond_with_tool("finish", {"result": "done"})
+    return await run_scripted_agent(scripted_openai, tmp_path, tool)
+
 
 @pytest.mark.parametrize("factory", BUILTIN_FACTORIES)
 def test_builtin_factories_return_a_tool(factory):
     assert isinstance(factory(), aw.Tool)
+
+
+@pytest.mark.parametrize("factory", TIMEOUT_TOOL_FACTORIES)
+def test_timeout_configuration_is_fluent(factory):
+    tool = factory()
+    assert tool.timeout(30.0) is tool
+    assert tool.timeout(0) is tool
 
 
 def test_command_tool_configuration_chains_on_one_object():
@@ -61,6 +103,22 @@ def test_fetch_tool_configuration_chains_on_one_object():
     assert tool.impersonate() is tool
 
 
+@pytest.mark.parametrize("factory", TIMEOUT_TOOL_FACTORIES)
+@pytest.mark.parametrize(
+    ("timeout", "error"),
+    [
+        pytest.param(None, TypeError, id="none"),
+        pytest.param(-1, ValueError, id="negative"),
+        pytest.param(float("nan"), ValueError, id="nan"),
+        pytest.param(float("inf"), ValueError, id="infinite"),
+        pytest.param(1e300, ValueError, id="too-large"),
+    ],
+)
+def test_tool_timeout_rejects_invalid_values(factory, timeout, error):
+    with pytest.raises(error):
+        factory().timeout(timeout)
+
+
 def test_an_agent_accepts_a_fetch_tool():
     agent = aw.Agent().tool(aw.FetchTool().impersonate())
     assert isinstance(agent, aw.Agent)
@@ -83,6 +141,283 @@ def test_tool_decorator_records_name_doc_and_concurrent():
     assert sample._agentwerk_name == "sample"
     assert sample._agentwerk_description == "Describe the sample."
     assert sample._agentwerk_concurrent is True
+
+
+def test_inferred_schema_marks_only_parameters_without_defaults_as_required():
+    @aw.tool
+    def sample(required: str, defaulted: int = 1, unannotated=None):
+        return required
+
+    schema = sample._agentwerk_schema
+    assert schema["required"] == ["required"]
+    assert set(schema["properties"]) == {"required", "defaulted", "unannotated"}
+
+
+@pytest.mark.parametrize(
+    ("annotation", "expected"),
+    [
+        pytest.param(str, {"type": "string"}, id="string"),
+        pytest.param(bool, {"type": "boolean"}, id="boolean"),
+        pytest.param(int, {"type": "integer"}, id="integer"),
+        pytest.param(float, {"type": "number"}, id="number"),
+        pytest.param(
+            Optional[List[str]],
+            {
+                "anyOf": [
+                    {"type": "array", "items": {"type": "string"}},
+                    {"type": "null"},
+                ]
+            },
+            id="optional-array",
+        ),
+        pytest.param(
+            Literal["fast", "safe"], {"enum": ["fast", "safe"]}, id="literal"
+        ),
+        pytest.param(
+            Union[str, int],
+            {"anyOf": [{"type": "string"}, {"type": "integer"}]},
+            id="union",
+        ),
+        pytest.param(
+            Annotated[str, "metadata"], {"type": "string"}, id="annotated"
+        ),
+        pytest.param(Any, {}, id="any"),
+        pytest.param(
+            List[Tuple[int, ...]],
+            {
+                "type": "array",
+                "items": {"type": "array", "items": {"type": "integer"}},
+            },
+            id="nested-variable-tuple",
+        ),
+        pytest.param(
+            Tuple[int, str],
+            {
+                "type": "array",
+                "prefixItems": [{"type": "integer"}, {"type": "string"}],
+                "minItems": 2,
+                "maxItems": 2,
+            },
+            id="fixed-tuple",
+        ),
+        pytest.param(Dict[str, str], {"type": "object"}, id="dictionary"),
+        pytest.param(
+            Sequence[str],
+            {"type": "array", "items": {"type": "string"}},
+            id="sequence",
+        ),
+        pytest.param(Mapping[str, int], {"type": "object"}, id="mapping"),
+    ],
+)
+def test_inferred_schema_metadata_maps_supported_annotations(annotation, expected):
+    def sample(value):
+        return value
+
+    sample.__annotations__["value"] = annotation
+    decorated = aw.tool(sample)
+
+    assert decorated._agentwerk_schema["properties"]["value"] == expected
+
+
+def test_fixed_tuple_schema_enforces_length_and_position():
+    @aw.tool
+    def sample(value: Tuple[int, str]):
+        return value
+
+    schema = aw.Schema(sample._agentwerk_schema["properties"]["value"])
+
+    assert schema.validate([1, "one"])[0] == [1, "one"]
+    with pytest.raises(RuntimeError):
+        schema.validate(["one", 1])
+    with pytest.raises(RuntimeError):
+        schema.validate([1])
+
+
+async def test_inferred_schema_is_sent_to_the_model(scripted_openai, tmp_path):
+    @aw.tool
+    def lookup(path: str, limit: int = 20):
+        return path
+
+    scripted_openai.respond_with_tool("finish", {"result": "done"})
+    await run_scripted_agent(scripted_openai, tmp_path, lookup)
+
+    tools = scripted_openai.requests[0]["tools"]
+    lookup_schema = next(
+        tool["function"]["parameters"]
+        for tool in tools
+        if tool["function"]["name"] == "lookup"
+    )
+    assert lookup_schema == {
+        "type": "object",
+        "properties": {
+            "path": {"type": "string"},
+            "limit": {"type": "integer"},
+        },
+        "required": ["path"],
+    }
+
+
+def test_explicit_tool_schema_bypasses_signature_inference():
+    explicit = {"type": "object", "properties": {"raw": {"type": "string"}}}
+
+    @aw.tool(schema=explicit)
+    def sample(value: int) -> str:
+        return str(value)
+
+    assert sample._agentwerk_schema is explicit
+
+
+def test_inferred_schema_metadata_leaves_unknown_annotations_unconstrained():
+    def sample(known, plain, unresolved: "MissingType" = None):
+        return plain
+
+    sample.__annotations__["known"] = "str"
+    sample = aw.tool(sample)
+
+    assert sample._agentwerk_schema == {
+        "type": "object",
+        "properties": {
+            "known": {"type": "string"},
+            "plain": {},
+            "unresolved": {},
+        },
+        "required": ["known", "plain"],
+    }
+
+
+def test_inferred_schema_omits_variadic_parameters():
+    @aw.tool
+    def sample(path: str, *args, **kwargs):
+        return path
+
+    assert sample._agentwerk_schema["properties"] == {"path": {"type": "string"}}
+
+
+def test_inferred_schema_rejects_positional_only_parameters():
+    with pytest.raises(TypeError, match="positional-only"):
+
+        @aw.tool
+        def sample(path: str, /):
+            return path
+
+
+def test_explicit_schema_still_rejects_positional_only_parameters():
+    with pytest.raises(TypeError, match="positional-only"):
+
+        @aw.tool(schema={"type": "object"})
+        def explicit(path: str, /):
+            return path
+
+
+@pytest.mark.parametrize(
+    ("timeout", "error"),
+    [
+        pytest.param(None, TypeError, id="none"),
+        pytest.param(-1, ValueError, id="negative"),
+        pytest.param(float("nan"), ValueError, id="nan"),
+        pytest.param(float("inf"), ValueError, id="infinite"),
+        pytest.param(1e300, ValueError, id="too-large"),
+        pytest.param(10**1000, ValueError, id="integer-overflow"),
+    ],
+)
+def test_tool_decorator_rejects_invalid_timeout(timeout, error):
+    with pytest.raises(error):
+
+        @aw.tool(timeout=timeout)
+        def sample():
+            return ""
+
+
+def test_failed_timeout_decoration_does_not_modify_the_function():
+    def sample():
+        return ""
+
+    with pytest.raises(ValueError, match="too large"):
+        aw.tool(timeout=1e300)(sample)
+
+    assert not any(
+        attribute.startswith("_agentwerk_") for attribute in vars(sample)
+    )
+
+
+async def test_positive_python_timeout_fails_the_call_and_the_agent_continues(
+    scripted_openai, tmp_path
+):
+    completed = []
+
+    @aw.tool(timeout=0.01)
+    def wait(seconds: float):
+        time.sleep(seconds)
+        completed.append(True)
+        return "late"
+
+    werk, results = await run_scripted_tool(
+        scripted_openai, tmp_path, wait, "wait", {"seconds": 1.0}
+    )
+
+    failure = werk.find_event(
+        lambda event: event.get_name() == aw.Event.TOOL_CALL_FAILED
+        and event.get_data().get("tool_name") == "wait"
+    )
+    assert failure.get_directive() == aw.Directive.TOOL_TIMED_OUT
+    assert results == ["done"]
+    assert completed == []
+
+
+async def test_zero_python_timeout_allows_the_call_to_finish(scripted_openai, tmp_path):
+    @aw.tool(timeout=0)
+    def wait(seconds: float):
+        time.sleep(seconds)
+        return "completed"
+
+    werk, _ = await run_scripted_tool(
+        scripted_openai, tmp_path, wait, "wait", {"seconds": 0.02}
+    )
+
+    finished = werk.find_event(
+        lambda event: event.get_name() == aw.Event.TOOL_CALL_FINISHED
+        and event.get_data().get("tool_name") == "wait"
+    )
+    assert finished.get_data()["output"] == "completed"
+
+
+async def test_sync_python_tool_receives_keyword_arguments(scripted_openai, tmp_path):
+    received = []
+
+    @aw.tool
+    def combine(left: str, right: str):
+        received.append((left, right))
+        return left + right
+
+    await run_scripted_tool(
+        scripted_openai,
+        tmp_path,
+        combine,
+        "combine",
+        {"left": "agent", "right": "werk"},
+    )
+
+    assert received == [("agent", "werk")]
+
+
+async def test_async_python_tool_receives_keyword_arguments(scripted_openai, tmp_path):
+    received = []
+
+    @aw.tool
+    async def combine(left: str, right: str):
+        await asyncio.sleep(0)
+        received.append((left, right))
+        return left + right
+
+    await run_scripted_tool(
+        scripted_openai,
+        tmp_path,
+        combine,
+        "combine",
+        {"left": "agent", "right": "werk"},
+    )
+
+    assert received == [("agent", "werk")]
 
 
 def test_tool_decorator_has_no_path_configuration():

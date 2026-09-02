@@ -672,6 +672,82 @@ mod tests {
         assert_eq!(werk.get_tasks()[0].status, Status::Finished);
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn concurrent_calls_have_independent_timeouts_and_the_agent_continues() {
+        use crate::providers::types::{ModelResponse, ResponseStatus, TokenUsage};
+        use crate::providers::ContentBlock;
+        use crate::tools::Tool;
+
+        let response = ModelResponse {
+            content: vec![
+                ContentBlock::ToolUse {
+                    id: "c1".into(),
+                    name: "wait".into(),
+                    input: serde_json::json!({"milliseconds": 500}),
+                },
+                ContentBlock::ToolUse {
+                    id: "c2".into(),
+                    name: "wait".into(),
+                    input: serde_json::json!({"milliseconds": 1}),
+                },
+            ],
+            status: ResponseStatus::ToolUse,
+            usage: TokenUsage::default(),
+            model: "mock".into(),
+        };
+        let provider =
+            MockProvider::with_results(vec![Ok(response), Ok(write_result_response("done"))]);
+        let wait = Tool::new("wait")
+            .description("Wait for the requested duration")
+            .schema(serde_json::json!({
+                "type": "object",
+                "properties": {"milliseconds": {"type": "integer"}},
+                "required": ["milliseconds"],
+            }))
+            .concurrent(true)
+            .timeout(Duration::from_millis(100))
+            .handler(|input: Value| async move {
+                tokio::time::sleep(Duration::from_millis(
+                    input["milliseconds"].as_u64().unwrap(),
+                ))
+                .await;
+                Event::success("done")
+            });
+        let results_dir = crate::test_util::TempDir::new().unwrap();
+        let werk = Werk::new();
+        werk.set_dir(results_dir.path().to_path_buf())
+            .set_policy(Policy {
+                max_request_retries: 0,
+                request_retry_delay: Duration::from_millis(1),
+                max_time: Some(Duration::from_secs(2)),
+                ..Default::default()
+            });
+        let events = collect_events(&werk);
+        werk.add_agent(
+            Agent::new()
+                .provider(provider)
+                .model("mock")
+                .role("test")
+                .tool(wait),
+        );
+        werk.add_task("go");
+
+        let _ = werk.finish_all_tasks().await;
+
+        let events = events.lock().unwrap();
+        assert!(events.iter().any(|event| {
+            event.get_name() == Event::TOOL_CALL_FAILED
+                && event.get_data()["tool_name"] == "wait"
+                && event.get_directive() == Some(crate::prompts::directives::TOOL_TIMED_OUT)
+        }));
+        assert!(events.iter().any(|event| {
+            event.get_name() == Event::TOOL_CALL_FINISHED
+                && event.get_data()["tool_name"] == "wait"
+                && event.get_content() == "done"
+        }));
+        assert_eq!(werk.get_tasks()[0].status, Status::Finished);
+    }
+
     #[tokio::test]
     async fn a_hallucinated_tool_name_finishes_the_task_under_the_registered_name() {
         let provider = MockProvider::with_results(vec![Ok(write_result_response_named(

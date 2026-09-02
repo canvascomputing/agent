@@ -3,9 +3,6 @@
 ## command_cancelled
 Command cancelled: the run is ending.
 
-## command_timed_out
-`{program}` was stopped after {milliseconds}ms. Narrow the work before calling it again, because the same command times out again.
-
 ## command_not_started
 `{program}` could not be started: {error}. Check the program name before calling again.
 

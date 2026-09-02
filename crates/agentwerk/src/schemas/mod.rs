@@ -275,6 +275,7 @@ struct Node {
     required: Option<Vec<String>>,
     additional_properties_forbidden: bool,
     items: Option<Box<Node>>,
+    prefix_items: Option<Vec<Node>>,
     min_items: Option<usize>,
     max_items: Option<usize>,
     minimum: Option<f64>,
@@ -352,6 +353,7 @@ const SUPPORTED_KEYWORDS: &[&str] = &[
     "properties",
     "additionalProperties",
     "items",
+    "prefixItems",
     "enum",
     "const",
     "minimum",
@@ -514,6 +516,8 @@ fn compile(value: &Value, schema_path: &str) -> Result<Node, SchemaParseError> {
         }
     };
 
+    let prefix_items = parse_subschema_array(obj, "prefixItems", schema_path)?;
+
     let pattern = match obj.get("pattern") {
         None => None,
         Some(Value::String(s)) => Some(compile_regex(s, schema_path, "pattern")?),
@@ -537,6 +541,7 @@ fn compile(value: &Value, schema_path: &str) -> Result<Node, SchemaParseError> {
         required,
         additional_properties_forbidden,
         items,
+        prefix_items,
         min_items: parse_usize(obj.get("minItems"), schema_path, "minItems")?,
         max_items: parse_usize(obj.get("maxItems"), schema_path, "maxItems")?,
         minimum: parse_number(obj.get("minimum"), schema_path, "minimum")?,
@@ -567,8 +572,7 @@ fn parse_subschema(
     }
 }
 
-/// Read the nested schemas of `allOf`, `anyOf`, or `oneOf`, of which there must
-/// be at least one.
+/// Read a non-empty array of nested schemas.
 fn parse_subschema_array(
     obj: &Map<String, Value>,
     key: &str,
@@ -850,10 +854,17 @@ impl Node {
                 );
             }
         }
+        let prefix_len = self.prefix_items.as_ref().map_or(0, Vec::len);
         if let Some(items_schema) = &self.items {
-            for (i, item) in arr.iter().enumerate() {
+            for (i, item) in arr.iter().enumerate().skip(prefix_len) {
                 let child_path = format!("{instance_path}/{i}");
                 items_schema.check(item, &child_path, out);
+            }
+        }
+        if let Some(prefix_items) = &self.prefix_items {
+            for (i, (item, item_schema)) in arr.iter().zip(prefix_items).enumerate() {
+                let child_path = format!("{instance_path}/{i}");
+                item_schema.check(item, &child_path, out);
             }
         }
     }
@@ -998,8 +1009,8 @@ impl Node {
         }
 
         // Recurse once the value holds its final shape. `additionalProperties`
-        // carries no subschema here and `items` has no tuple form, so a
-        // property and an element are the only children to reach.
+        // carries no subschema here, so object properties and array elements
+        // are the only children to reach.
         match value {
             Value::Object(map) => {
                 for (name, sub) in self.properties.iter().flatten() {
@@ -1010,8 +1021,15 @@ impl Node {
                 }
             }
             Value::Array(items) => {
+                if let Some(prefix_items) = &self.prefix_items {
+                    for (i, (item, item_schema)) in items.iter_mut().zip(prefix_items).enumerate() {
+                        let child_path = format!("{instance_path}/{i}");
+                        item_schema.coerce(item, &child_path, out);
+                    }
+                }
                 if let Some(items_schema) = &self.items {
-                    for (i, item) in items.iter_mut().enumerate() {
+                    let prefix_len = self.prefix_items.as_ref().map_or(0, Vec::len);
+                    for (i, item) in items.iter_mut().enumerate().skip(prefix_len) {
                         let child_path = format!("{instance_path}/{i}");
                         items_schema.coerce(item, &child_path, out);
                     }
@@ -1351,6 +1369,36 @@ mod tests {
         assert!(schema.validate(json!([1, 2, 3])).is_ok());
         let violations = schema.validate(json!([0, -1])).unwrap_err();
         assert!(violations.iter().any(|v| v.instance_path == "/1"));
+    }
+
+    #[test]
+    fn validate_prefix_items_uses_each_positional_schema() {
+        let schema = Schema::new(json!({
+            "type": "array",
+            "prefixItems": [{"type": "integer"}, {"type": "string"}],
+            "minItems": 2,
+            "maxItems": 2,
+        }))
+        .unwrap();
+
+        assert!(schema.validate(json!([1, "one"])).is_ok());
+        let violations = schema.validate(json!(["one", {}])).unwrap_err();
+        assert!(violations.iter().any(|v| v.instance_path == "/0"));
+        assert!(violations.iter().any(|v| v.instance_path == "/1"));
+    }
+
+    #[test]
+    fn validate_items_starts_after_prefix_items() {
+        let schema = Schema::new(json!({
+            "type": "array",
+            "prefixItems": [{"type": "integer"}],
+            "items": {"type": "string"},
+        }))
+        .unwrap();
+
+        assert!(schema.validate(json!([1, "one"])).is_ok());
+        let violations = schema.validate(json!([1, {}])).unwrap_err();
+        assert_eq!(violations[0].instance_path, "/1");
     }
 
     #[test]

@@ -381,29 +381,18 @@ fn quoted(patterns: &[String]) -> String {
 #[derive(serde::Deserialize)]
 pub struct CommandArgs {
     command: String,
-    timeout_ms: Option<u64>,
 }
 
 impl CommandTool {
     async fn run(&self, args: CommandArgs, ctx: ToolContext) -> Event {
-        let CommandArgs {
-            command,
-            timeout_ms,
-        } = args;
+        let CommandArgs { command } = args;
 
         let command = match self.check(&command, &ctx.directives) {
             Ok(command) => command,
             Err(refusal) => return Event::error(refusal),
         };
 
-        let timeout = timeout_ms
-            .map(Duration::from_millis)
-            .unwrap_or(Self::DEFAULT_TIMEOUT)
-            // The schema advertises the ceiling, so honour it rather than
-            // letting a call name any number it likes.
-            .min(Self::MAX_TIMEOUT);
-
-        run_command(&command, timeout, &ctx).await
+        run_command(&command, &ctx).await
     }
 }
 
@@ -417,6 +406,11 @@ impl From<CommandTool> for Tool {
             .description(description)
             .schema(SCHEMA)
             .concurrent(concurrent)
+            .timeout_from_input(
+                "timeout_ms",
+                CommandTool::DEFAULT_TIMEOUT,
+                CommandTool::MAX_TIMEOUT,
+            )
             .handler_with_context(move |args: CommandArgs, ctx: ToolContext| {
                 let config = Arc::clone(&config);
                 async move { config.run(args, ctx).await }
@@ -427,6 +421,7 @@ impl From<CommandTool> for Tool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::prompts::directives::TOOL_TIMED_OUT;
 
     #[test]
     fn every_example_the_schema_shows_deserializes_into_the_arguments() {
@@ -502,7 +497,7 @@ mod tests {
         let tool = CommandTool::new("echo").allow("echo *");
         let ctx = test_tool_context();
         let input = serde_json::json!({ "command": "echo hello" });
-        let result = Tool::from(tool.clone()).call(input, &ctx).await;
+        let result = Tool::from(tool.clone()).invoke(input, &ctx).await;
         let content = result.get_content();
         assert!(content.contains("hello"));
         assert!(result.get_name() == Event::TOOL_CALL_FINISHED);
@@ -513,10 +508,46 @@ mod tests {
         let tool = CommandTool::new("sleep").allow("sleep *");
         let ctx = test_tool_context();
         let input = serde_json::json!({ "command": "sleep 10", "timeout_ms": 100 });
-        let result = Tool::from(tool.clone()).call(input, &ctx).await;
+        let result = Tool::from(tool.clone()).invoke(input, &ctx).await;
         let content = result.get_content();
         assert!(result.get_name() == Event::TOOL_CALL_FAILED);
-        assert!(content.contains("was stopped after 100ms"));
+        assert_eq!(result.get_directive(), Some(TOOL_TIMED_OUT));
+        assert!(content.contains("Tool `sleep` timed out after 100ms"));
+    }
+
+    #[tokio::test]
+    async fn a_zero_command_timeout_is_infinite() {
+        let tool = CommandTool::new("sleep").allow("sleep *");
+        let input = serde_json::json!({ "command": "sleep 0.02", "timeout_ms": 0 });
+
+        let result = Tool::from(tool).invoke(input, &test_tool_context()).await;
+
+        assert_eq!(result.get_name(), Event::TOOL_CALL_FINISHED);
+    }
+
+    #[tokio::test]
+    async fn a_host_timeout_replaces_the_command_input_timeout() {
+        let tool = Tool::from(CommandTool::new("sleep").allow("sleep *"))
+            .timeout(Duration::from_millis(10));
+        let input = serde_json::json!({ "command": "sleep 1", "timeout_ms": 0 });
+
+        let result = tool.invoke(input, &test_tool_context()).await;
+
+        assert_eq!(result.get_name(), Event::TOOL_CALL_FAILED);
+        assert_eq!(result.get_directive(), Some(TOOL_TIMED_OUT));
+        assert!(result
+            .get_content()
+            .contains("Tool `sleep` timed out after 10ms"));
+    }
+
+    #[tokio::test]
+    async fn a_zero_host_timeout_ignores_the_command_input_timeout() {
+        let tool = Tool::from(CommandTool::new("sleep").allow("sleep *")).timeout(Duration::ZERO);
+        let input = serde_json::json!({ "command": "sleep 0.02", "timeout_ms": 1 });
+
+        let result = tool.invoke(input, &test_tool_context()).await;
+
+        assert_eq!(result.get_name(), Event::TOOL_CALL_FINISHED);
     }
 
     #[tokio::test]

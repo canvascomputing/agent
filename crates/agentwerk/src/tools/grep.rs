@@ -4,7 +4,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use grep::searcher::sinks::UTF8;
 use serde_json::{Map, Value};
@@ -12,7 +12,7 @@ use serde_json::{Map, Value};
 use super::tool::{Event, Tool, ToolContext};
 use crate::prompts::directives::{
     DirectiveStore, GREP_CANCELLED, GREP_FAILED, GREP_FILE_TYPE_UNKNOWN, GREP_GLOB_REJECTED,
-    GREP_PATTERN_REJECTED, GREP_TIMED_OUT,
+    GREP_PATTERN_REJECTED,
 };
 
 /// Search the working directory for a regular-expression `pattern` and return a
@@ -49,6 +49,7 @@ impl From<GrepTool> for Tool {
             .description(include_str!("grep.tool.md"))
             .schema(include_str!("grep.schema.json"))
             .concurrent(true)
+            .default_timeout(SEARCH_TIMEOUT)
             .handler_with_context(run)
     }
 }
@@ -57,33 +58,34 @@ async fn run(args: GrepArgs, ctx: ToolContext) -> Event {
     let query = Query::from_args(args);
 
     // The `grep`/`ignore` engine is synchronous, so run it on a blocking
-    // thread: `grep` is parallel-callable and a 180s search must not stall
-    // a runtime worker. The interrupt flag and deadline let it bail between
-    // files, since a spawn_blocking task cannot be force-killed.
+    // thread: `grep` is parallel-callable and a long search must not stall a
+    // runtime worker. The interrupt flag lets it bail between files, since a
+    // spawn_blocking task cannot be force-killed.
     let dir = ctx.dir.clone();
     let interrupt = Arc::new(AtomicBool::new(false));
+    let _interrupt_on_drop = InterruptOnDrop(Arc::clone(&interrupt));
     let searching = Arc::clone(&interrupt);
-    let deadline = Instant::now() + SEARCH_TIMEOUT;
     let searching_directives = Arc::clone(&ctx.directives);
     let handle = tokio::task::spawn_blocking(move || {
-        search_corpus(&dir, &query, &searching, deadline, &searching_directives)
+        search_corpus(&dir, &query, &searching, &searching_directives)
     });
 
-    let outcome = tokio::select! {
+    tokio::select! {
         biased;
         _ = ctx.cancelled() => Event::error(ctx.directives.render(GREP_CANCELLED, &[])).directive(GREP_CANCELLED),
-        r = tokio::time::timeout(SEARCH_TIMEOUT, handle) => match r {
-            Err(_) => Event::error(ctx.directives.render(
-                GREP_TIMED_OUT,
-                &[("seconds", &SEARCH_TIMEOUT.as_secs().to_string())],
-            )),
-            Ok(Err(_)) => Event::error(ctx.directives.render(GREP_FAILED, &[])).directive(GREP_FAILED),
-            Ok(Ok(result)) => result,
+        r = handle => match r {
+            Err(_) => Event::error(ctx.directives.render(GREP_FAILED, &[])).directive(GREP_FAILED),
+            Ok(result) => result,
         },
-    };
-    // Whichever branch lost, the blocking thread is still walking files.
-    interrupt.store(true, Ordering::Relaxed);
-    outcome
+    }
+}
+
+struct InterruptOnDrop(Arc<AtomicBool>);
+
+impl Drop for InterruptOnDrop {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
 }
 
 /// Which shape the result takes.
@@ -117,7 +119,7 @@ impl OutputMode {
 }
 
 /// The parsed, validated search parameters, kept apart from where and when the
-/// search runs (the directory, interrupt flag, and deadline).
+/// search runs (the directory and interrupt flag).
 pub(super) struct Query {
     pub(super) pattern: String,
     path: Option<String>,
@@ -207,12 +209,11 @@ fn default_head_limit() -> usize {
 /// result for the requested `output_mode`. `standard_filters(false)` searches
 /// every file, hidden and gitignored included, so the scan never makes a payload
 /// invisible; narrow with `path`/`glob` instead. Runs on a blocking thread; the
-/// interrupt flag and deadline let a long or cancelled search bail between files.
+/// interrupt flag lets a long or cancelled search bail between files.
 fn search_corpus(
     dir: &Path,
     query: &Query,
     interrupt: &AtomicBool,
-    deadline: Instant,
     directives: &DirectiveStore,
 ) -> Event {
     let root = match &query.path {
@@ -252,11 +253,11 @@ fn search_corpus(
         }
     }
 
-    let files = collect_files(walk.build(), dir, interrupt, deadline);
+    let files = collect_files(walk.build(), dir, interrupt);
 
     match query.syntax {
-        Syntax::Regex => run_regex(&files, query, interrupt, deadline, directives),
-        Syntax::Code => super::code::run(&files, query, interrupt, deadline, directives),
+        Syntax::Regex => run_regex(&files, query, interrupt, directives),
+        Syntax::Code => super::code::run(&files, query, interrupt, directives),
     }
 }
 
@@ -267,7 +268,6 @@ fn run_regex(
     files: &[(PathBuf, String)],
     query: &Query,
     interrupt: &AtomicBool,
-    deadline: Instant,
     directives: &DirectiveStore,
 ) -> Event {
     // Ripgrep's Rust-regex matcher, line-oriented. `dot_matches_new_line` and the
@@ -325,7 +325,7 @@ fn run_regex(
                 .max_columns_preview(true)
                 .build_no_color(Vec::<u8>::new());
             for (path, display) in files {
-                if interrupt.load(Ordering::Relaxed) || Instant::now() >= deadline {
+                if interrupt.load(Ordering::Relaxed) {
                     break;
                 }
                 let mut sink = printer.sink_with_path(&matcher, display);
@@ -337,7 +337,7 @@ fn run_regex(
         OutputMode::FilesWithMatches => {
             let mut hits = Vec::new();
             for (path, display) in files {
-                if interrupt.load(Ordering::Relaxed) || Instant::now() >= deadline {
+                if interrupt.load(Ordering::Relaxed) {
                     break;
                 }
                 let mut matched = false;
@@ -361,7 +361,7 @@ fn run_regex(
         OutputMode::Count => {
             let mut rows = Vec::new();
             for (path, display) in files {
-                if interrupt.load(Ordering::Relaxed) || Instant::now() >= deadline {
+                if interrupt.load(Ordering::Relaxed) {
                     break;
                 }
                 let mut matches = 0u64;
@@ -386,17 +386,12 @@ fn run_regex(
 }
 
 /// Collect the searchable files under the walk, relativized to `dir` for display.
-/// Directory traversal is cheap; searching each file is where the deadline and
-/// interrupt flag do their real work, so they are re-checked in the per-mode loop.
-fn collect_files(
-    walk: ignore::Walk,
-    dir: &Path,
-    interrupt: &AtomicBool,
-    deadline: Instant,
-) -> Vec<(PathBuf, String)> {
+/// Directory traversal is cheap; searching each file is where the interrupt
+/// flag does its real work, so it is re-checked in the per-mode loop.
+fn collect_files(walk: ignore::Walk, dir: &Path, interrupt: &AtomicBool) -> Vec<(PathBuf, String)> {
     let mut files = Vec::new();
     for result in walk {
-        if interrupt.load(Ordering::Relaxed) || Instant::now() >= deadline {
+        if interrupt.load(Ordering::Relaxed) {
             break;
         }
         let Ok(entry) = result else { continue };
@@ -492,6 +487,7 @@ pub(super) fn render_count(rows: &[(String, u64)], query: &Query) -> Event {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::prompts::directives::TOOL_TIMED_OUT;
 
     #[test]
     fn every_example_the_schema_shows_deserializes_into_the_arguments() {
@@ -503,6 +499,30 @@ mod tests {
             serde_json::from_value::<GrepArgs>(example.clone())
                 .unwrap_or_else(|error| panic!("{example}: {error}"));
         }
+    }
+
+    #[tokio::test]
+    async fn a_grep_timeout_uses_the_shared_tool_event() {
+        let tmp = setup_test_dir();
+        let tool = Tool::from(GrepTool)
+            .timeout(Duration::from_millis(10))
+            .handler(|_: Value| async {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                Event::success("late")
+            });
+
+        let result = tool
+            .invoke(
+                serde_json::json!({"pattern": "Hello"}),
+                &test_ctx(tmp.path()),
+            )
+            .await;
+
+        assert_eq!(result.get_name(), Event::TOOL_CALL_FAILED);
+        assert_eq!(result.get_directive(), Some(TOOL_TIMED_OUT));
+        assert!(result
+            .get_content()
+            .contains("Tool `grep` timed out after 10ms"));
     }
     use std::fs;
 

@@ -2,7 +2,6 @@
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Instant;
 
 use serde_json::Value;
 
@@ -23,7 +22,6 @@ pub(super) fn run(
     files: &[(PathBuf, String)],
     query: &Query,
     interrupt: &AtomicBool,
-    deadline: Instant,
     directives: &DirectiveStore,
 ) -> Event {
     let mut conf = Conf::default_multiline();
@@ -44,7 +42,7 @@ pub(super) fn run(
     match query.output_mode {
         OutputMode::Content => {
             let mut lines = Vec::new();
-            for_each_file(files, interrupt, deadline, |display, content| {
+            for_each_file(files, interrupt, |display, content| {
                 for found in codegrep::search(&pattern, content) {
                     if !satisfies_constraints(&found, &constraints) {
                         continue;
@@ -64,7 +62,7 @@ pub(super) fn run(
         }
         OutputMode::FilesWithMatches => {
             let mut hits = Vec::new();
-            for_each_file(files, interrupt, deadline, |display, content| {
+            for_each_file(files, interrupt, |display, content| {
                 if codegrep::search(&pattern, content)
                     .iter()
                     .any(|found| satisfies_constraints(found, &constraints))
@@ -76,7 +74,7 @@ pub(super) fn run(
         }
         OutputMode::Count => {
             let mut rows = Vec::new();
-            for_each_file(files, interrupt, deadline, |display, content| {
+            for_each_file(files, interrupt, |display, content| {
                 let count = codegrep::search(&pattern, content)
                     .iter()
                     .filter(|found| satisfies_constraints(found, &constraints))
@@ -91,16 +89,15 @@ pub(super) fn run(
 }
 
 /// Read each file and hand its display path and contents to `visit`, skipping
-/// unreadable ones. Stops between files on interrupt or deadline, so a long or
-/// cancelled search bails the same way in every output mode.
+/// unreadable ones. Stops between files on interrupt, so a cancelled or timed
+/// out search bails the same way in every output mode.
 fn for_each_file(
     files: &[(PathBuf, String)],
     interrupt: &AtomicBool,
-    deadline: Instant,
     mut visit: impl FnMut(&str, &str),
 ) {
     for (path, display) in files {
-        if interrupt.load(Ordering::Relaxed) || Instant::now() >= deadline {
+        if interrupt.load(Ordering::Relaxed) {
             break;
         }
         let Ok(content) = std::fs::read_to_string(path) else {
