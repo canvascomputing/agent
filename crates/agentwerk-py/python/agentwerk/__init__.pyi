@@ -310,103 +310,6 @@ class Event:
     def get_created_at(self) -> int: ...
     def __repr__(self) -> str: ...
 
-class Directive:
-    """Every directive agentwerk can send, one constant per key."""
-
-    REPLY_REJECTED: str
-    NO_TOOL_CALLED: str
-    ARGUMENTS_REJECTED: str
-    ARGUMENTS_EXPECTED: str
-    RESULT_SCHEMA_REQUIRED: str
-    SUMMARY_REQUESTED: str
-    KNOWLEDGE_INDEX_TRUNCATED: str
-    TOOL_NOT_FOUND: str
-    NO_TOOLS_REGISTERED: str
-    TOOL_PANICKED: str
-    TOOL_TIMED_OUT: str
-    TOOL_OUTPUT_EMPTY: str
-    TOOL_OUTPUT_OFFLOADED: str
-    EDIT_FILE_READ_FAILED: str
-    EDIT_FILE_OLD_STRING_NOT_FOUND: str
-    EDIT_FILE_OLD_STRING_NOT_UNIQUE: str
-    EDIT_FILE_WRITE_FAILED: str
-    WRITE_FILE_PARENT_NOT_CREATED: str
-    WRITE_FILE_FAILED: str
-    READ_FILE_PATH_IS_DIRECTORY: str
-    READ_FILE_PATH_IS_DIRECTORY_WITH_ENTRIES: str
-    READ_FILE_IS_BINARY: str
-    READ_FILE_NOT_FOUND: str
-    READ_FILE_FAILED: str
-    LIST_DIRECTORY_PATH_IS_FILE: str
-    LIST_DIRECTORY_NOT_FOUND: str
-    LIST_DIRECTORY_FAILED: str
-    PATH_HINT_DIRECTORY_LISTED: str
-    PATH_HINT_SUGGESTION: str
-    PATH_HINT_WORKING_DIRECTORY: str
-    COMMAND_CANCELLED: str
-    COMMAND_NOT_STARTED: str
-    COMMAND_MISSING: str
-    COMMAND_SHELL_OPERATOR_FOUND: str
-    COMMAND_QUOTE_UNTERMINATED: str
-    COMMAND_CONTROL_CHARACTER_FOUND: str
-    COMMAND_ASSIGNMENT_FOUND: str
-    COMMAND_FLAG_DENIED: str
-    COMMAND_PATTERN_DENIED: str
-    COMMAND_NOT_ALLOWED: str
-    COMMAND_FLAG_NOT_ALLOWED: str
-    GREP_CANCELLED: str
-    GREP_FAILED: str
-    GREP_GLOB_REJECTED: str
-    GREP_FILE_TYPE_UNKNOWN: str
-    GREP_PATTERN_REJECTED: str
-    CODE_PATTERN_REJECTED: str
-    CODE_CONSTRAINT_INCOMPLETE: str
-    CODE_CONSTRAINT_METAVARIABLE_UNKNOWN: str
-    CODE_CONSTRAINT_REGEX_REJECTED: str
-    FETCH_TOO_LONG: str
-    FETCH_SCHEME_MISSING: str
-    FETCH_SCHEME_UNSUPPORTED: str
-    FETCH_CREDENTIALS_PRESENT: str
-    FETCH_HOST_MISSING: str
-    FETCH_HOST_NOT_RESOLVABLE: str
-    FETCH_TOO_MANY_REDIRECTS: str
-    FETCH_REQUEST_FAILED: str
-    FETCH_BODY_NOT_READ: str
-    FETCH_RESPONSE_TOO_LARGE: str
-    FETCH_REDIRECT_LOCATION_MISSING: str
-    KNOWLEDGE_PAGE_NOT_FOUND: str
-    KNOWLEDGE_WRITE_FAILED: str
-    KNOWLEDGE_REMOVE_FAILED: str
-    WERK_UNAVAILABLE: str
-    TASK_ID_MISSING: str
-    TASK_NOT_ASSIGNED: str
-    TASK_NOT_FOUND: str
-    TASK_RESULT_MISSING: str
-    TASK_QUERY_INVALID: str
-    TASK_EDIT_INCOMPLETE: str
-    TASK_TRANSITION_REJECTED: str
-    HANDOVER_RESULT_MISSING: str
-    HANDOVER_SCHEMA_INVALID: str
-    SCHEMA_FALSE_REJECTED: str
-    SCHEMA_TYPE_MISMATCHED: str
-    SCHEMA_CONST_MISMATCHED: str
-    SCHEMA_ENUM_MISMATCHED: str
-    SCHEMA_ANY_OF_UNMATCHED: str
-    SCHEMA_ONE_OF_AMBIGUOUS: str
-    SCHEMA_NOT_MATCHED: str
-    SCHEMA_PROPERTY_MISSING: str
-    SCHEMA_PROPERTY_UNEXPECTED: str
-    SCHEMA_ARRAY_TOO_SHORT: str
-    SCHEMA_ARRAY_TOO_LONG: str
-    SCHEMA_STRING_TOO_SHORT: str
-    SCHEMA_STRING_TOO_LONG: str
-    SCHEMA_PATTERN_UNMATCHED: str
-    SCHEMA_NUMBER_TOO_SMALL: str
-    SCHEMA_NUMBER_TOO_LARGE: str
-    SCHEMA_HINT_UNQUOTE: str
-    SCHEMA_HINT_JSON: str
-    SCHEMA_HINT_QUOTE: str
-
 class Agent:
     """An LLM agent that uses the tools you provide to complete tasks."""
 
@@ -423,7 +326,8 @@ class Agent:
     def handover(self, task: Task) -> "Agent": ...
     def dir(self, dir: str) -> "Agent": ...
     def knowledge(self, store: Knowledge) -> "Agent": ...
-    def directives(self, compute: Callable[[str], Optional[str]]) -> "Agent": ...
+    def directive(self, key: str, template: str) -> "Agent": ...
+    def directives(self, overrides: dict[str, str]) -> "Agent": ...
     def tool(self, tool: Any) -> "Agent": ...
     def tools(self, tools: list) -> "Agent": ...
     def get_id(self) -> str: ...

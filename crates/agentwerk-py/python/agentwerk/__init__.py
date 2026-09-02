@@ -42,7 +42,6 @@ from ._agentwerk import (
     EventTool,
     FinishTool,
     CommandTool,
-    Directive,
 )
 
 
@@ -236,7 +235,6 @@ __all__ = [
     "tool",
     "Agent",
     "Policy",
-    "Directive",
     "Event",
     "Knowledge",
     "Model",

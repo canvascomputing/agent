@@ -4,7 +4,6 @@ use pyo3::prelude::*;
 
 mod agent;
 mod convert;
-mod directives;
 mod event;
 mod knowledge;
 mod policy;
@@ -29,7 +28,6 @@ fn _agentwerk(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<trajectory::PyTrajectory>()?;
     m.add_class::<schema::PySchema>()?;
     m.add_class::<event::PyEvent>()?;
-    directives::register(m)?;
     m.add_class::<knowledge::PyKnowledge>()?;
     m.add_class::<knowledge::PyPages>()?;
     m.add_class::<knowledge::PyPage>()?;

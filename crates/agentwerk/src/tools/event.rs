@@ -112,13 +112,46 @@ pub(super) fn dispatch(
 
     let task_id = ctx.task_id.as_deref().unwrap_or_default();
     let agent_id = ctx.agent_id.as_deref().unwrap_or_default();
-    werk.emit_event(
-        Event::new(name)
-            .data(data)
-            .task_id(task_id)
-            .agent_id(agent_id),
-    );
-    Ok(Event::success(format!("Event {name} published")))
+    let acknowledgement = event_directive(name, &data, &ctx.directives);
+    let mut event = Event::new(name)
+        .data(data)
+        .task_id(task_id)
+        .agent_id(agent_id);
+    if acknowledgement.is_some() {
+        event = event.directive(name);
+    }
+    werk.emit_event(event);
+
+    Ok(match acknowledgement {
+        Some(content) => Event::success(content).directive(name),
+        None => Event::success(format!("Event {name} published")),
+    })
+}
+
+/// Render an explicit application-event override from its JSON payload. The
+/// complete payload is `{data}`; top-level object fields are variables of
+/// their own.
+fn event_directive(name: &str, data: &Value, directives: &DirectiveStore) -> Option<String> {
+    let mut owned = vec![("data".to_string(), json_template_value(data))];
+    if let Some(fields) = data.as_object() {
+        owned.extend(
+            fields
+                .iter()
+                .map(|(key, value)| (key.clone(), json_template_value(value))),
+        );
+    }
+    let values: Vec<(&str, &str)> = owned
+        .iter()
+        .map(|(key, value)| (key.as_str(), value.as_str()))
+        .collect();
+    directives.render_override(name, &values)
+}
+
+fn json_template_value(value: &Value) -> String {
+    match value {
+        Value::String(value) => value.clone(),
+        value => value.to_string(),
+    }
 }
 
 fn finish(
@@ -385,6 +418,8 @@ mod tests {
             .await;
 
         assert_eq!(outcome.get_name(), Event::TOOL_CALL_FINISHED);
+        assert_eq!(outcome.get_content(), "Event candidate_found published");
+        assert_eq!(outcome.get_directive(), None);
         let event = seen.lock().unwrap().clone().expect("event observed");
         assert_eq!(event.get_task_id(), id);
         assert_eq!(event.get_agent_id(), "alice");
@@ -397,6 +432,60 @@ mod tests {
         assert_eq!(persisted.get_task_id(), id);
         assert_eq!(persisted.get_data()["path"], "src/auth.rs");
         assert!(werk.get_task(&id).unwrap().is_in_progress());
+    }
+
+    #[tokio::test]
+    async fn a_custom_event_override_binds_its_data_and_marks_the_events() {
+        let (_dir, werk, _id, ctx) = claimed_task();
+        let mut directives = DirectiveStore::default();
+        directives.insert(
+            "candidate_found",
+            "Found {path} at {line} with {meta}; keep {missing}. Payload: {data}",
+        );
+        let ctx = ctx.directives(Arc::new(directives));
+
+        let outcome = Tool::from(EventTool)
+            .call(
+                serde_json::json!({
+                    "name": "candidate_found",
+                    "data": {
+                        "data": "shadow",
+                        "path": "src/auth.rs",
+                        "line": 42,
+                        "meta": {"reviewed": true}
+                    }
+                }),
+                &ctx,
+            )
+            .await;
+
+        assert_eq!(outcome.get_directive(), Some("candidate_found"));
+        assert!(outcome
+            .get_content()
+            .starts_with("Found src/auth.rs at 42 with {\"reviewed\":true}; keep {missing}."));
+        assert!(outcome.get_content().contains("\"path\":\"src/auth.rs\""));
+        assert!(outcome.get_content().contains("\"data\":\"shadow\""));
+        assert_eq!(
+            werk.find_event(r#"event = "candidate_found""#)
+                .unwrap()
+                .get_directive(),
+            Some("candidate_found"),
+        );
+    }
+
+    #[tokio::test]
+    async fn a_catalogue_key_used_as_an_event_name_keeps_the_generic_acknowledgement() {
+        let (_dir, _werk, _id, ctx) = claimed_task();
+
+        let outcome = Tool::from(EventTool)
+            .call(
+                serde_json::json!({ "name": "grep_failed", "data": { "path": "src" } }),
+                &ctx,
+            )
+            .await;
+
+        assert_eq!(outcome.get_content(), "Event grep_failed published");
+        assert_eq!(outcome.get_directive(), None);
     }
 
     #[tokio::test]
@@ -456,6 +545,27 @@ mod tests {
             Some(&serde_json::json!({ "verdict": "safe" }))
         );
         assert_eq!(werk.find_events(Event::TASK_FINISHED).len(), 1);
+    }
+
+    #[tokio::test]
+    async fn task_finished_does_not_use_an_event_name_override() {
+        let (_dir, werk, id, ctx) = claimed_task();
+        let mut directives = DirectiveStore::default();
+        directives.insert(Event::TASK_FINISHED, "keep working");
+        let ctx = ctx.directives(Arc::new(directives));
+
+        let outcome = Tool::from(EventTool)
+            .call(
+                serde_json::json!({
+                    "name": Event::TASK_FINISHED,
+                    "data": {"result": "done"}
+                }),
+                &ctx,
+            )
+            .await;
+
+        assert!(werk.get_task(&id).unwrap().is_finished());
+        assert!(!outcome.get_content().contains("keep working"));
     }
 
     #[tokio::test]

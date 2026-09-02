@@ -192,12 +192,18 @@ impl PyAgent {
         slf
     }
 
-    /// Decide what the agent tells the model when a call fails.
-    ///
-    /// `compute` sees every directive before it renders and returns the text to
-    /// send, or `None` for the ones it leaves as they are.
-    fn directives<'py>(mut slf: PyRefMut<'py, Self>, compute: Py<PyAny>) -> PyRefMut<'py, Self> {
-        slf.set(|agent| agent.directives(crate::directives::compute(compute)));
+    /// Override one model-facing directive or application-event acknowledgement.
+    fn directive(mut slf: PyRefMut<'_, Self>, key: String, template: String) -> PyRefMut<'_, Self> {
+        slf.set(|agent| agent.directive(key, template));
+        slf
+    }
+
+    /// Override several model-facing directives.
+    fn directives(
+        mut slf: PyRefMut<'_, Self>,
+        overrides: BTreeMap<String, String>,
+    ) -> PyRefMut<'_, Self> {
+        slf.set(|agent| agent.directives(overrides));
         slf
     }
 
