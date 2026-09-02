@@ -734,9 +734,9 @@ The rules the tables never repeat.
 | Rust | `HTML_HEAD: string` | private |
 | Rust | `trajectory_path(dir: string, id: string): string` | private |
 
-## `crates/agentwerk-codegrep/src/ast.rs`
+## `crates/agentwerk/src/codegrep/ast.rs`
 
-Unpublished internal crate, reached by agentwerk and use-cases through `agentwerk-codegrep`; Python reaches it through `GrepTool()` with `syntax="code"`.
+Public Rust module used by `GrepTool`; Python reaches it through `GrepTool()` with `syntax="code"`.
 
 ### Public
 
@@ -773,7 +773,7 @@ Unpublished internal crate, reached by agentwerk and use-cases through `agentwer
 | Rust | `walk_metavars(nodes: Node[], seen: Record<string, MetavariableKind>): void throws ParseError` | private |
 | Rust | `record_kind(name: string, kind: MetavariableKind, seen: Record<string, MetavariableKind>): void throws ParseError` | private |
 
-## `crates/agentwerk-codegrep/src/conf.rs`
+## `crates/agentwerk/src/codegrep/conf.rs`
 
 Not bound, like the rest of `codegrep`.
 
@@ -795,7 +795,7 @@ Not bound, like the rest of `codegrep`.
 |----------|------|------------|
 | Rust | `word_chars(): string[]` | private |
 
-## `crates/agentwerk-codegrep/src/matcher.rs`
+## `crates/agentwerk/src/codegrep/matcher.rs`
 
 Not bound, like the rest of `codegrep`.
 
@@ -835,7 +835,7 @@ Not bound, like the rest of `codegrep`.
 | Rust | `is_multiline_ellipsis(node: Node, params: MatchParams): boolean` | private |
 | Rust | `word_eq(a: string, b: string, caseless: boolean): boolean` | private |
 
-## `crates/agentwerk-codegrep/src/lib.rs`
+## `crates/agentwerk/src/codegrep/mod.rs`
 
 Not bound, like the rest of `codegrep`.
 
@@ -846,7 +846,7 @@ Not bound, like the rest of `codegrep`.
 | Rust | `mod ast`, `mod conf`, `mod matcher`, `mod token` | pub |
 | Rust | re-exports `MetavariableKind`, `Node`, `ParseError`, `Pattern`, `Conf`, `ConfError`, `search`, `search_tokens`, `Loc`, `Match`, `Metavariable`, `tokenize_pattern`, `tokenize_target`, `Token` | pub |
 
-## `crates/agentwerk-codegrep/src/token.rs`
+## `crates/agentwerk/src/codegrep/token.rs`
 
 Not bound, like the rest of `codegrep`.
 

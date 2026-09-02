@@ -7,7 +7,6 @@ Where code, tests, bindings, examples, and repository guidance live.
 **Keep each crate responsible for one layer.**
 
 - `crates/agentwerk/` contains the public Rust library.
-- `crates/agentwerk-codegrep/` contains the unpublished structural matcher used by `GrepTool`.
 - `crates/agentwerk-py/` contains the PyO3 bindings and the pure-Python package surface.
 - `crates/use-cases/` contains runnable examples and depends on the libraries, never the reverse.
 - Keep `agentwerk-py` outside `default-members` because its extension links against Python.
@@ -17,6 +16,7 @@ Where code, tests, bindings, examples, and repository guidance live.
 **Place code under the domain that owns its behavior.**
 
 - `src/lib.rs` declares modules and re-exports the small root API.
+- `src/codegrep/` contains the structural matcher used by `GrepTool`.
 - `src/event.rs` owns `Event`; `src/persistence.rs` owns shared file primitives and stays crate-private.
 - `src/agents/` owns agent configuration, tasks, orchestration, policy, queries, statistics, retries, compaction, and knowledge.
 - `src/providers/`, `src/tools/`, and `src/schemas/` own LLM providers, agent actions, and result validation.

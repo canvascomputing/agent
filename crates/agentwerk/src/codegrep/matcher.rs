@@ -7,22 +7,29 @@ use std::collections::{HashMap, HashSet};
 /// Byte-range location into the target string, plus the matched substring.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Loc {
+    /// Zero-based byte offset where the match starts.
     pub start: usize,
+    /// Length of the match in bytes.
     pub length: usize,
+    /// Exact slice of the target covered by the match.
     pub substring: String,
 }
 
 /// A captured metavariable: name without the leading `$` and its kind.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Metavariable {
+    /// Whether the metavariable captures one word or a span.
     pub kind: MetavariableKind,
+    /// Name without the leading `$` or ellipsis.
     pub bare_name: String,
 }
 
 /// One match of a pattern against a target string.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Match {
+    /// Location of the complete match.
     pub loc: Loc,
+    /// Metavariables and the locations they captured, in token order.
     pub captures: Vec<(Metavariable, Loc)>,
 }
 
