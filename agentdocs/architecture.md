@@ -83,7 +83,7 @@ The invariants that govern orchestration, tools, providers, events, and durable 
 
 **Keep `Knowledge` optional, durable, and shared only by explicit handle.**
 
-- Store pages as an OKF v0.1 bundle under `<dir>/knowledge/` and rebuild `index.md` from page frontmatter on load.
+- Treat the directory passed to `Knowledge::load` as the OKF v0.1 bundle root and rebuild `index.md` from page frontmatter on load.
 - Inject only the index into the prompt; let `KnowledgeTool` read full pages on demand.
 - Read the index once per task so writes become visible on the next task without changing an active prompt prefix.
 - Cap injected index characters through `Knowledge::set_index_char_limit` without limiting stored page content.

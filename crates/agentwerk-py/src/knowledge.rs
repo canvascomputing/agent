@@ -17,11 +17,11 @@ pub struct PyKnowledge {
 
 #[pymethods]
 impl PyKnowledge {
-    /// Open a knowledge store at `store_dir/knowledge`, or seed one from the
-    /// pages already there.
+    /// Open a knowledge store at `knowledge_dir`, or seed one from the pages
+    /// already there.
     #[staticmethod]
-    fn load(store_dir: &str) -> PyResult<Self> {
-        let inner = Knowledge::load(store_dir).map_err(runtime_error)?;
+    fn load(knowledge_dir: &str) -> PyResult<Self> {
+        let inner = Knowledge::load(knowledge_dir).map_err(runtime_error)?;
         Ok(PyKnowledge { inner })
     }
 

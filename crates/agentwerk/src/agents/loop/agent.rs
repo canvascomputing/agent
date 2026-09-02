@@ -1641,14 +1641,13 @@ mod tests {
             prompts[3]
         );
 
-        let bundle_dir = knowledge_dir.path().join("knowledge");
-        let page_path = bundle_dir.join("pages").join("api-config.md");
+        let page_path = knowledge_dir.path().join("pages").join("api-config.md");
         assert!(page_path.exists(), "page file should exist on disk");
         let page_raw = std::fs::read_to_string(&page_path).unwrap();
         assert!(page_raw.contains("Rate limit: 100 req/min"));
         assert!(page_raw.contains("---"));
 
-        let index_path = bundle_dir.join("index.md");
+        let index_path = knowledge_dir.path().join("index.md");
         assert!(index_path.exists(), "index.md should exist on disk");
         let index_raw = std::fs::read_to_string(&index_path).unwrap();
         assert!(index_raw.contains("* [api-config](pages/api-config.md) - API runs on port 3000"));

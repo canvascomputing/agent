@@ -1,5 +1,7 @@
 """Test LLM providers, model settings, and the knowledge store."""
 
+from pathlib import Path
+
 import pytest
 
 import agentwerk as aw
@@ -108,6 +110,8 @@ def test_saved_page_is_readable_and_indexed(knowledge_dir):
     assert page.get_description() == "How the project is built."
     assert page.get_tags() == ["build"]
     assert "build-command" in store.get_index()
+    assert (Path(knowledge_dir) / "pages" / "build-command.md").exists()
+    assert not (Path(knowledge_dir) / "knowledge").exists()
 
 
 def test_page_kind_defaults_to_the_store_default(knowledge_dir):

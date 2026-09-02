@@ -98,7 +98,7 @@ async fn main() {
         ..Default::default()
     });
 
-    let knowledge = Knowledge::load(&store_dir).expect("open knowledge store");
+    let knowledge = Knowledge::load(store_dir.join("knowledge")).expect("open knowledge store");
 
     werk.on_event(move |_, e| handler(e));
     let _agent = werk.add_agent(

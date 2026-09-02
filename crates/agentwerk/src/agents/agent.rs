@@ -127,7 +127,7 @@ impl Agent {
     ///
     /// Give it a provider and a model before it starts work.
     pub fn new() -> Self {
-        let knowledge = Knowledge::load(".agentwerk").expect("open knowledge store");
+        let knowledge = Knowledge::load(".agentwerk/knowledge").expect("open knowledge store");
         let mut agent = Self {
             id: OnceLock::new(),
             provider: None,
@@ -994,12 +994,7 @@ mod tests {
                 tags: vec![],
             })
             .unwrap();
-        assert!(dir
-            .path()
-            .join("knowledge")
-            .join("pages")
-            .join("from-store.md")
-            .exists());
+        assert!(dir.path().join("pages").join("from-store.md").exists());
     }
 
     #[test]

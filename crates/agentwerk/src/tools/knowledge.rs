@@ -20,7 +20,7 @@ use super::tool::{Tool, ToolContext};
 /// ```no_run
 /// use agentwerk::{Agent, Knowledge};
 ///
-/// let store = Knowledge::load(".agentwerk").expect("knowledge dir");
+/// let store = Knowledge::load(".agentwerk/knowledge").expect("knowledge dir");
 /// Agent::new().knowledge(&store);
 /// ```
 pub struct KnowledgeTool {
