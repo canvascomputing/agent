@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "agentwerk"
-version = "0.1.28"
+version = "0.1.29"
 dependencies = [
  "grep",
  "ignore",
@@ -17,7 +17,7 @@ dependencies = [
 
 [[package]]
 name = "agentwerk-py"
-version = "0.1.28"
+version = "0.1.29"
 dependencies = [
  "agentwerk",
  "pyo3",
