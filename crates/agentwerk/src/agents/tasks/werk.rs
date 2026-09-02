@@ -1839,9 +1839,14 @@ mod tests {
 
     #[test]
     fn find_event_answers_the_first_in_the_order_the_query_names() {
-        let (werk, _tmp) = test_werk();
-        werk.add_task("a");
-        werk.add_task("b");
+        let (werk, tmp) = test_werk();
+        for (task_id, created_at) in [("t-1", 100), ("t-2", 200)] {
+            let event = Event {
+                created_at,
+                ..Event::task_created().task_id(task_id)
+            };
+            Stats::append(tmp.path(), &event).unwrap();
+        }
 
         let newest = werk.find_event("task_created ORDER BY created DESC");
         assert_eq!(newest.unwrap().task_id, "t-2");
