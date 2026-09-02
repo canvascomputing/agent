@@ -302,6 +302,28 @@ impl std::fmt::Debug for Tool {
 }
 
 impl Tool {
+    pub(crate) fn find_tool<'a>(tools: &'a [Self], tool_name: &str) -> Option<&'a Self> {
+        let tool_name = tool_name.trim();
+        if let Some(found) = tools.iter().find(|tool| tool.get_name() == tool_name) {
+            return Some(found);
+        }
+
+        let tool_name = Self::normalize_name(tool_name);
+        let mut folded = tools
+            .iter()
+            .filter(|tool| Self::normalize_name(tool.get_name()) == tool_name);
+        let found = folded.next()?;
+        folded.next().is_none().then_some(found)
+    }
+
+    fn normalize_name(tool_name: &str) -> String {
+        let name = tool_name.trim().to_lowercase().replace('-', "_");
+        match name.strip_suffix("_tool") {
+            Some(stem) if !stem.is_empty() => stem.to_string(),
+            _ => name,
+        }
+    }
+
     /// Create the tool the model calls by `name`. Say what it does with
     /// `.description(...)`, what it accepts with `.schema(...)`, and what it
     /// runs with `.handler(...)` before registering it on an agent.
@@ -471,9 +493,7 @@ impl Tool {
             None => call.await,
         };
         let mut result = validate_tool_event(self.get_name(), event);
-        if result.name == Event::TOOL_CALL_FINISHED {
-            result.prepend_repairs(repairs.iter().map(|pointer| retype_message(pointer)));
-        }
+        result.prepend_repairs(repairs.iter().map(|pointer| retype_message(pointer)));
         result
     }
 
@@ -525,19 +545,21 @@ where
 }
 
 fn validate_tool_event(tool: &str, mut event: Event) -> Event {
+    let repairs_are_valid = event.data.get("repairs").is_none_or(|repairs| {
+        repairs
+            .as_array()
+            .is_some_and(|repairs| repairs.iter().all(Value::is_string))
+    });
     let valid = match event.name.as_str() {
         Event::TOOL_CALL_FINISHED => {
             event.data.get("output").is_some_and(Value::is_string)
                 && event.data.get("output_path").is_none_or(Value::is_string)
-                && event.data.get("repairs").is_none_or(|repairs| {
-                    repairs
-                        .as_array()
-                        .is_some_and(|repairs| repairs.iter().all(Value::is_string))
-                })
+                && repairs_are_valid
         }
         Event::TOOL_CALL_FAILED => {
             event.data.get("message").is_some_and(Value::is_string)
                 && event.data.get("reason").is_none()
+                && repairs_are_valid
         }
         _ => false,
     };
@@ -1360,12 +1382,15 @@ mod tests {
 
     #[test]
     fn malformed_terminal_metadata_becomes_a_recoverable_failure() {
-        for data in [
-            serde_json::json!({"output": "ok", "output_path": 42}),
-            serde_json::json!({"output": "ok", "repairs": ["valid", 42]}),
+        for event in [
+            Event::new(Event::TOOL_CALL_FINISHED)
+                .data(serde_json::json!({"output": "ok", "output_path": 42})),
+            Event::new(Event::TOOL_CALL_FINISHED)
+                .data(serde_json::json!({"output": "ok", "repairs": ["valid", 42]})),
+            Event::new(Event::TOOL_CALL_FAILED)
+                .data(serde_json::json!({"message": "no", "repairs": ["valid", 42]})),
         ] {
-            let event =
-                validate_tool_event("broken", Event::new(Event::TOOL_CALL_FINISHED).data(data));
+            let event = validate_tool_event("broken", event);
             assert_eq!(event.get_name(), Event::TOOL_CALL_FAILED);
             assert!(event.get_content().contains("returned an invalid event"));
         }

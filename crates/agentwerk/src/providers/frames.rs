@@ -6,11 +6,16 @@
 //! answers "missing required parameter" for one delivered empty.
 
 use std::collections::{HashMap, HashSet};
+use std::ops::Range;
 use std::sync::Arc;
 
 use serde_json::{Map, Value};
 
-use super::types::{ContentBlock, ModelResponse, ResponseStatus, StreamEvent, ToolDeclineKind};
+use super::types::{
+    ContentBlock, Message, ModelRequest, ModelResponse, ResponseStatus, StreamEvent,
+    ToolDeclineKind,
+};
+use crate::tools::Tool;
 
 const TOOL_CALL_OPEN: &str = "<tool_call>";
 const TOOL_CALL_CLOSE: &str = "</tool_call>";
@@ -19,280 +24,407 @@ const FUNCTION_CLOSE: &str = "</function>";
 const PARAMETER_OPEN: &str = "<parameter=";
 const PARAMETER_CLOSE: &str = "</parameter>";
 
-/// Nothing is invented: a call runs only if the reply ended of the model's own
-/// accord. A name no tool answers to still runs, so the registry's error names
-/// the tools that exist rather than the call vanishing into the reply text.
-pub(crate) fn recover_framed_calls(
-    response: &mut ModelResponse,
-    on_event: &Arc<dyn Fn(StreamEvent) + Send + Sync>,
-) {
-    let framed = find_framed_calls(response);
-    if framed.is_empty() {
-        return;
-    }
-    // Read before the syntax leaves the reply: a batch nothing runs keeps its
-    // text, which is then all that is left of it.
-    if let Some(reason) = decline_reason(&response.status) {
-        for call in &framed {
-            report_declined(call, reason, on_event);
-        }
-        return;
-    }
-    strip_framed_syntax(response);
-    apply_framed_calls(response, &framed, on_event);
-}
-
-/// Read every framed call the reply carries, leaving the reply as it is.
-fn find_framed_calls(response: &ModelResponse) -> Vec<FramedCall> {
-    let mut framed = Vec::new();
-    for block in &response.content {
-        // Thinking is read but never stripped: the endpoint takes the block
-        // back verbatim.
-        let text = match block {
-            ContentBlock::Text { text } => text,
-            ContentBlock::Thinking { thinking, .. } => thinking,
-            _ => continue,
-        };
-        framed.extend(split_framed_calls(text).1);
-    }
-    framed
-}
-
-fn strip_framed_syntax(response: &mut ModelResponse) {
-    for block in &mut response.content {
-        if let ContentBlock::Text { text } = block {
-            *text = split_framed_calls(text).0;
-        }
-    }
-    response
-        .content
-        .retain(|block| !matches!(block, ContentBlock::Text { text } if text.is_empty()));
-}
-
-fn report_declined(
-    call: &FramedCall,
-    reason: ToolDeclineKind,
-    on_event: &Arc<dyn Fn(StreamEvent) + Send + Sync>,
-) {
-    on_event(StreamEvent::ToolCallDeclined {
-        tool_name: call.name.clone(),
-        kind: reason,
-    });
-}
-
-fn decline_reason(status: &ResponseStatus) -> Option<ToolDeclineKind> {
-    // Any terminal but the model's own can end a reply just past a complete
-    // `</function>`, leaving whole-looking syntax it never committed to.
-    match status {
-        ResponseStatus::EndTurn | ResponseStatus::ToolUse => None,
-        ResponseStatus::OutputTruncated => Some(ToolDeclineKind::OutputTruncated),
-        ResponseStatus::StopSequence | ResponseStatus::Refused | ResponseStatus::PauseTurn => {
-            Some(ToolDeclineKind::ReplyNotFinished)
-        }
-    }
-}
-
-/// Each framed call either fills the call the endpoint delivered empty at the
-/// same position among its same-named siblings, or is added under a name the
-/// endpoint delivered nothing for. Matching a delivered name by position only is
-/// what keeps a call the endpoint delivered from running twice.
-fn apply_framed_calls(
-    response: &mut ModelResponse,
-    framed: &[FramedCall],
-    on_event: &Arc<dyn Fn(StreamEvent) + Send + Sync>,
-) {
-    // Read before anything is added, so one added call cannot hide a same-named
-    // sibling behind it.
-    let delivered: HashSet<String> = response
-        .content
-        .iter()
-        .filter_map(tool_call_name)
-        .map(str::to_string)
-        .collect();
-    let mut seen: HashMap<&str, usize> = HashMap::new();
-    let mut added = Vec::new();
-
-    for (offset, call) in framed.iter().enumerate() {
-        let position = seen.entry(call.name.as_str()).or_default();
-        let at = *position;
-        *position += 1;
-
-        let Some(input) = nth_delivered_input(response, &call.name, at) else {
-            if delivered.contains(call.name.as_str()) {
-                // Delivered under this name already, just not this many times:
-                // what the model wrote here has nowhere left to go.
-                report_declined(call, ToolDeclineKind::AlreadyDelivered, on_event);
-            } else {
-                let call_id = format!("repaired_{offset}");
-                added.push(ContentBlock::ToolUse {
-                    id: call_id.clone(),
-                    name: call.name.clone(),
-                    input: arguments_as_object(call),
-                });
-                report_repaired(call, call_id, on_event);
-            }
-            continue;
-        };
-
-        let (call_id, input) = input;
-        if input.as_object().is_none_or(|fields| fields.is_empty()) {
-            *input = arguments_as_object(call);
-            report_repaired(call, call_id, on_event);
-        } else if !is_same_call(call, input) {
-            report_declined(call, ToolDeclineKind::AlreadyDelivered, on_event);
-        }
-        // A delivered call whose arguments already match is the call the model
-        // wrote twice: nothing to repair, and nothing lost.
-    }
-
-    if !added.is_empty() {
-        response.content.extend(added);
-        // Without the flip the reply reads as an answer and nothing added runs.
-        response.status = ResponseStatus::ToolUse;
-    }
-}
-
-fn tool_call_name(block: &ContentBlock) -> Option<&str> {
-    match block {
-        ContentBlock::ToolUse { name, .. } => Some(name.as_str()),
-        _ => None,
-    }
-}
-
-fn nth_delivered_input<'a>(
+/// One transactional pass over the calls a model wrote as text.
+pub(crate) struct FrameRecovery<'a> {
+    request: &'a ModelRequest,
     response: &'a mut ModelResponse,
-    name: &str,
-    at: usize,
-) -> Option<(String, &'a mut Value)> {
-    response
-        .content
-        .iter_mut()
-        .filter_map(|block| match block {
-            ContentBlock::ToolUse {
-                id,
-                name: delivered,
-                input,
-                ..
-            } if delivered == name => Some((id.clone(), input)),
-            _ => None,
-        })
-        .nth(at)
+    on_event: &'a Arc<dyn Fn(StreamEvent) + Send + Sync>,
+    calls: Vec<FramedCall>,
+    native_calls: Vec<NativeCall>,
+    native_positions: HashMap<String, Vec<usize>>,
+    used_call_ids: HashSet<String>,
+    next_call_id: usize,
+    applied_frames: AppliedFrames,
+    input_updates: Vec<(usize, Value)>,
+    added_calls: Vec<ContentBlock>,
 }
 
-fn report_repaired(
-    call: &FramedCall,
-    call_id: impl Into<String>,
-    on_event: &Arc<dyn Fn(StreamEvent) + Send + Sync>,
-) {
-    on_event(StreamEvent::ToolCallRepaired {
-        tool_name: call.name.clone(),
-        call_id: call_id.into(),
-    });
-}
+impl<'a> FrameRecovery<'a> {
+    pub(crate) fn new(
+        request: &'a ModelRequest,
+        response: &'a mut ModelResponse,
+        on_event: &'a Arc<dyn Fn(StreamEvent) + Send + Sync>,
+    ) -> Self {
+        Self {
+            request,
+            response,
+            on_event,
+            calls: Vec::new(),
+            native_calls: Vec::new(),
+            native_positions: HashMap::new(),
+            used_call_ids: HashSet::new(),
+            next_call_id: 0,
+            applied_frames: AppliedFrames::default(),
+            input_updates: Vec::new(),
+            added_calls: Vec::new(),
+        }
+    }
 
-/// Every value stays the text the model typed: the registry retypes a call's
-/// arguments against the schema the tool advertises, reading the unions,
-/// nested properties, and enums a second engine here never would.
-fn arguments_as_object(call: &FramedCall) -> Value {
-    let fields = call
-        .arguments
-        .iter()
-        .map(|(name, text)| (name.clone(), Value::String(text.clone())));
-    Value::Object(Map::from_iter(fields))
-}
+    /// Recover complete calls only after the model finished the reply itself.
+    pub(crate) fn recover_response(mut self) {
+        self.parse_calls();
+        if self.calls.is_empty() {
+            return;
+        }
+        if let Some(reason) = Self::determine_decline_reason(&self.response.status) {
+            for call in &self.calls {
+                self.emit_decline(call, reason);
+            }
+            return;
+        }
 
-/// Read whether `delivered` is the call `framed` writes a second time. A framed
-/// value is always text, so a delivered one is compared by what it reads as:
-/// `offset=100` and the number 100 are one call, not two.
-fn is_same_call(framed: &FramedCall, delivered: &Value) -> bool {
-    let Some(fields) = delivered.as_object() else {
-        return false;
-    };
-    fields.len() == framed.arguments.len()
-        && framed.arguments.iter().all(|(name, text)| {
-            fields.get(name).is_some_and(|value| match value {
-                Value::String(delivered) => delivered == text,
-                other => serde_json::from_str::<Value>(text).is_ok_and(|read| read == *other),
+        self.index_native_calls();
+        self.collect_call_ids();
+        self.reconcile_calls();
+        self.commit_inputs();
+        self.remove_frames();
+        self.commit_status();
+    }
+
+    /// Read every framed call while leaving the response unchanged.
+    fn parse_calls(&mut self) {
+        for (content_index, block) in self.response.content.iter().enumerate() {
+            // Thinking is read but never stripped: the endpoint takes the block
+            // back verbatim.
+            let (source, text) = match block {
+                ContentBlock::Text { text } => (FrameSource::Text { content_index }, text),
+                ContentBlock::Thinking { thinking, .. } => (FrameSource::Thinking, thinking),
+                _ => continue,
+            };
+            if !text.contains(TOOL_CALL_OPEN) {
+                continue;
+            }
+
+            let mut cursor = 0;
+            while let Some(relative_start) = text[cursor..].find(TOOL_CALL_OPEN) {
+                let start = cursor + relative_start;
+                let body_start = start + TOOL_CALL_OPEN.len();
+                let next_open = text[body_start..]
+                    .find(TOOL_CALL_OPEN)
+                    .map(|offset| body_start + offset);
+                let Some(body_end) = text[body_start..]
+                    .find(TOOL_CALL_CLOSE)
+                    .map(|offset| body_start + offset)
+                else {
+                    break;
+                };
+                if next_open.is_some_and(|nested| nested < body_end) {
+                    cursor = next_open.expect("checked as present");
+                    continue;
+                }
+                let end = body_end + TOOL_CALL_CLOSE.len();
+                if let Some(call) =
+                    FramedCall::parse_frame(source, start..end, &text[body_start..body_end])
+                {
+                    self.calls.push(call);
+                }
+                cursor = end;
+            }
+        }
+    }
+
+    fn index_native_calls(&mut self) {
+        self.native_calls = self
+            .response
+            .content
+            .iter()
+            .enumerate()
+            .filter_map(|(content_index, block)| match block {
+                ContentBlock::ToolUse {
+                    id, name, input, ..
+                } => Some(NativeCall {
+                    content_index,
+                    id: id.clone(),
+                    identity: self.resolve_tool_identity(name),
+                    input: input.clone(),
+                }),
+                _ => None,
             })
-        })
+            .collect();
+        for (index, call) in self.native_calls.iter().enumerate() {
+            self.native_positions
+                .entry(call.identity.clone())
+                .or_default()
+                .push(index);
+        }
+    }
+
+    fn collect_call_ids(&mut self) {
+        for message in &self.request.messages {
+            let blocks = match message {
+                Message::User { content } | Message::Assistant { content } => content,
+                Message::System { .. } => continue,
+            };
+            for block in blocks {
+                match block {
+                    ContentBlock::ToolUse { id, .. } => {
+                        self.used_call_ids.insert(id.clone());
+                    }
+                    ContentBlock::ToolResult { tool_use_id, .. } => {
+                        self.used_call_ids.insert(tool_use_id.clone());
+                    }
+                    _ => {}
+                }
+            }
+        }
+        self.used_call_ids
+            .extend(self.native_calls.iter().map(|call| call.id.clone()));
+    }
+
+    /// Match calls by position among same-named siblings to avoid running a
+    /// native call twice while still recovering a separate framed call.
+    fn reconcile_calls(&mut self) {
+        let mut seen: HashMap<String, usize> = HashMap::new();
+        for call in std::mem::take(&mut self.calls) {
+            let identity = self.resolve_tool_identity(&call.name);
+            let position = seen.entry(identity.clone()).or_default();
+            let at = *position;
+            *position += 1;
+
+            let Some(native_index) = self
+                .native_positions
+                .get(&identity)
+                .and_then(|matches| matches.get(at))
+                .copied()
+            else {
+                if self.native_positions.contains_key(&identity) {
+                    self.emit_decline(&call, ToolDeclineKind::AlreadyDelivered);
+                } else {
+                    let call_id = self.allocate_call_id();
+                    self.added_calls.push(ContentBlock::ToolUse {
+                        id: call_id.clone(),
+                        name: call.name.clone(),
+                        input: call.build_input(),
+                    });
+                    self.emit_repair(&call, call_id);
+                    self.applied_frames.record_frame(&call);
+                }
+                continue;
+            };
+
+            let native = &self.native_calls[native_index];
+            if native.input.as_object().is_some_and(Map::is_empty) {
+                self.input_updates
+                    .push((native.content_index, call.build_input()));
+                self.emit_repair(&call, native.id.clone());
+                self.applied_frames.record_frame(&call);
+            } else if call.matches_native_input(&native.input) {
+                self.applied_frames.record_frame(&call);
+            } else {
+                self.emit_decline(&call, ToolDeclineKind::AlreadyDelivered);
+            }
+        }
+    }
+
+    fn commit_inputs(&mut self) {
+        for (content_index, repaired_input) in std::mem::take(&mut self.input_updates) {
+            let ContentBlock::ToolUse { input, .. } = &mut self.response.content[content_index]
+            else {
+                unreachable!("native call index still names a tool call");
+            };
+            *input = repaired_input;
+        }
+    }
+
+    fn remove_frames(&mut self) {
+        self.applied_frames.rebuild_response(self.response);
+    }
+
+    fn commit_status(&mut self) {
+        if self.added_calls.is_empty() {
+            return;
+        }
+        self.response.content.append(&mut self.added_calls);
+        // Without the flip the reply reads as an answer and nothing added runs.
+        self.response.status = ResponseStatus::ToolUse;
+    }
+
+    fn allocate_call_id(&mut self) -> String {
+        loop {
+            let id = format!("repaired_{}", self.next_call_id);
+            self.next_call_id += 1;
+            if self.used_call_ids.insert(id.clone()) {
+                return id;
+            }
+        }
+    }
+
+    fn resolve_tool_identity(&self, name: &str) -> String {
+        Tool::find_tool(&self.request.tools, name)
+            .map(|tool| tool.get_name())
+            .unwrap_or(name)
+            .to_string()
+    }
+
+    fn determine_decline_reason(status: &ResponseStatus) -> Option<ToolDeclineKind> {
+        // Any terminal but the model's own can end a reply just past a complete
+        // `</function>`, leaving whole-looking syntax it never committed to.
+        match status {
+            ResponseStatus::EndTurn | ResponseStatus::ToolUse => None,
+            ResponseStatus::OutputTruncated => Some(ToolDeclineKind::OutputTruncated),
+            ResponseStatus::StopSequence | ResponseStatus::Refused | ResponseStatus::PauseTurn => {
+                Some(ToolDeclineKind::ReplyNotFinished)
+            }
+        }
+    }
+
+    fn emit_decline(&self, call: &FramedCall, kind: ToolDeclineKind) {
+        (self.on_event)(StreamEvent::ToolCallDeclined {
+            tool_name: call.name.clone(),
+            kind,
+        });
+    }
+
+    fn emit_repair(&self, call: &FramedCall, call_id: impl Into<String>) {
+        (self.on_event)(StreamEvent::ToolCallRepaired {
+            tool_name: call.name.clone(),
+            call_id: call_id.into(),
+        });
+    }
+}
+
+struct NativeCall {
+    content_index: usize,
+    id: String,
+    identity: String,
+    input: Value,
+}
+
+#[derive(Clone, Copy)]
+enum FrameSource {
+    Text { content_index: usize },
+    Thinking,
+}
+
+#[derive(Default)]
+struct AppliedFrames {
+    spans: HashMap<usize, Vec<Range<usize>>>,
+}
+
+impl AppliedFrames {
+    fn record_frame(&mut self, call: &FramedCall) {
+        let FrameSource::Text { content_index } = call.source else {
+            return;
+        };
+        self.spans
+            .entry(content_index)
+            .or_default()
+            .push(call.span.clone());
+    }
+
+    fn rebuild_response(&mut self, response: &mut ModelResponse) {
+        for spans in self.spans.values_mut() {
+            spans.sort_by_key(|span| span.start);
+        }
+        for (content_index, block) in response.content.iter_mut().enumerate() {
+            let ContentBlock::Text { text } = block else {
+                continue;
+            };
+            let Some(spans) = self.spans.get(&content_index) else {
+                continue;
+            };
+            let mut kept = String::with_capacity(text.len());
+            let mut after = 0;
+            for span in spans {
+                kept.push_str(&text[after..span.start]);
+                after = span.end;
+            }
+            kept.push_str(&text[after..]);
+            *text = kept;
+        }
+        response
+            .content
+            .retain(|block| !matches!(block, ContentBlock::Text { text } if text.is_empty()));
+    }
 }
 
 /// A tool call the model wrote as text instead of emitting it; every value is
 /// the text the model typed.
 struct FramedCall {
+    source: FrameSource,
+    span: Range<usize>,
     name: String,
     arguments: Vec<(String, String)>,
 }
 
-/// The prose and the framed calls in one pass, so what is removed from the reply
-/// and what runs can never disagree. The `<tool_call>` frame is required: it is
-/// the model's own syntax for making a call, which is what separates one from a
-/// call it merely wrote about.
-fn split_framed_calls(text: &str) -> (String, Vec<FramedCall>) {
-    // Almost no reply carries one, so the common path costs a search rather
-    // than a copy of the whole text.
-    if !text.contains(TOOL_CALL_OPEN) {
-        return (text.to_string(), Vec::new());
+impl FramedCall {
+    fn parse_frame(source: FrameSource, span: Range<usize>, body: &str) -> Option<Self> {
+        let after_open = body.trim_start().strip_prefix(FUNCTION_OPEN)?;
+        let (name, inner) = after_open.split_once('>')?;
+        let (parameters, trailing) = inner.split_once(FUNCTION_CLOSE)?;
+        if !trailing.trim().is_empty() || !Self::validate_tool_name(name) {
+            return None;
+        }
+        Some(Self {
+            source,
+            span,
+            name: name.to_string(),
+            arguments: Self::parse_parameters(parameters)?,
+        })
     }
-    let mut prose = String::with_capacity(text.len());
-    let mut calls = Vec::new();
-    let mut rest = text;
-    while let Some((before, framed)) = rest.split_once(TOOL_CALL_OPEN) {
-        let Some((body, remainder)) = framed.split_once(TOOL_CALL_CLOSE) else {
-            break;
-        };
-        prose.push_str(before);
-        match read_function_block(body) {
-            Some(call) => calls.push(call),
-            None => {
-                prose.push_str(TOOL_CALL_OPEN);
-                prose.push_str(body);
-                prose.push_str(TOOL_CALL_CLOSE);
+
+    fn parse_parameters(mut body: &str) -> Option<Vec<(String, String)>> {
+        let mut arguments = Vec::new();
+        let mut names = HashSet::new();
+        loop {
+            body = body.trim_start_matches(char::is_whitespace);
+            if body.is_empty() {
+                return Some(arguments);
             }
-        }
-        rest = remainder;
-    }
-    prose.push_str(rest);
-    (prose.trim().to_string(), calls)
-}
-
-fn read_function_block(body: &str) -> Option<FramedCall> {
-    let (_, after_open) = body.split_once(FUNCTION_OPEN)?;
-    let (name, inner) = after_open.split_once('>')?;
-    let (parameters, _) = inner.split_once(FUNCTION_CLOSE)?;
-    if !is_tool_name(name) {
-        return None;
-    }
-    Some(FramedCall {
-        name: name.to_string(),
-        arguments: read_parameters(parameters),
-    })
-}
-
-fn read_parameters(body: &str) -> Vec<(String, String)> {
-    let mut arguments = Vec::new();
-    let mut rest = body;
-    while let Some((_, after_open)) = rest.split_once(PARAMETER_OPEN) {
-        let Some((key, after_key)) = after_open.split_once('>') else {
-            break;
-        };
-        let Some((value, remainder)) = after_key.split_once(PARAMETER_CLOSE) else {
-            break;
-        };
-        rest = remainder;
-        if !key.is_empty() {
-            // The newlines around a value are the format, not what was typed.
-            arguments.push((key.to_string(), value.trim().to_string()));
+            let after_open = body.strip_prefix(PARAMETER_OPEN)?;
+            let (name, after_name) = after_open.split_once('>')?;
+            if name.is_empty() || !names.insert(name) {
+                return None;
+            }
+            let (value, remainder) = after_name.split_once(PARAMETER_CLOSE)?;
+            arguments.push((
+                name.to_string(),
+                Self::remove_layout_newline(value).to_string(),
+            ));
+            body = remainder;
         }
     }
-    arguments
-}
 
-fn is_tool_name(name: &str) -> bool {
-    !name.is_empty()
-        && name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    /// Leave values as text for schema validation to retype against the tool.
+    fn build_input(&self) -> Value {
+        let fields = self
+            .arguments
+            .iter()
+            .map(|(name, text)| (name.clone(), Value::String(text.clone())));
+        Value::Object(Map::from_iter(fields))
+    }
+
+    /// Compare text values by what JSON reads them as when the native call is typed.
+    fn matches_native_input(&self, delivered: &Value) -> bool {
+        let Some(fields) = delivered.as_object() else {
+            return false;
+        };
+        fields.len() == self.arguments.len()
+            && self.arguments.iter().all(|(name, text)| {
+                fields.get(name).is_some_and(|value| match value {
+                    Value::String(delivered) => delivered == text,
+                    other => serde_json::from_str::<Value>(text).is_ok_and(|read| read == *other),
+                })
+            })
+    }
+
+    fn remove_layout_newline(mut value: &str) -> &str {
+        value = value
+            .strip_prefix("\r\n")
+            .or_else(|| value.strip_prefix('\n'))
+            .unwrap_or(value);
+        value
+            .strip_suffix("\r\n")
+            .or_else(|| value.strip_suffix('\n'))
+            .unwrap_or(value)
+    }
+
+    fn validate_tool_name(name: &str) -> bool {
+        !name.is_empty()
+            && name.chars().all(|character| {
+                character.is_ascii_alphanumeric() || character == '_' || character == '-'
+            })
+    }
 }
 
 #[cfg(test)]
@@ -300,7 +432,8 @@ mod tests {
     use std::sync::Mutex;
 
     use super::*;
-    use crate::providers::TokenUsage;
+    use crate::providers::{ReasoningEffort, TokenUsage};
+    use crate::tools::Tool;
 
     fn is_tool_use(block: &ContentBlock) -> bool {
         matches!(block, ContentBlock::ToolUse { .. })
@@ -330,12 +463,12 @@ mod tests {
         content: Vec<ContentBlock>,
         status: ResponseStatus,
     ) -> (Vec<ContentBlock>, Vec<StreamEvent>) {
-        let (response, events) = recover_response(content, status);
+        let (response, events) = recover_response(request(&[], Vec::new()), content, status);
         (response.content, events)
     }
 
-    /// The same, for the tests that read the reply's status.
     fn recover_response(
+        request: ModelRequest,
         content: Vec<ContentBlock>,
         status: ResponseStatus,
     ) -> (ModelResponse, Vec<StreamEvent>) {
@@ -349,80 +482,32 @@ mod tests {
             usage: TokenUsage::default(),
             model: "test".into(),
         };
-        recover_framed_calls(&mut response, &sink);
+        FrameRecovery::new(&request, &mut response, &sink).recover_response();
         let events = seen.lock().unwrap().clone();
         (response, events)
     }
 
-    /// The calls `text` carried, for the tests that do not read the prose.
-    fn framed_in(text: &str) -> Vec<FramedCall> {
-        split_framed_calls(text).1
+    fn request(tools: &[&str], messages: Vec<Message>) -> ModelRequest {
+        ModelRequest {
+            model: "test".into(),
+            system_prompt: String::new(),
+            messages,
+            tools: tools.iter().map(|name| Tool::new(*name)).collect(),
+            max_request_tokens: None,
+            reasoning_effort: ReasoningEffort::Off,
+        }
     }
 
     #[test]
-    fn framed_block_parses_into_a_call() {
-        let calls = framed_in(FRAMED_GREP);
-        assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].name, "grep");
-        assert_eq!(
-            calls[0].arguments,
-            vec![
-                ("-n".to_string(), "true".to_string()),
-                ("output_mode".to_string(), "content".to_string()),
-                ("pattern".to_string(), "plugin.Open(...)".to_string()),
-            ]
+    fn a_committed_frame_becomes_one_tool_call() {
+        let (response, events) = recover_response(
+            request(&[], Vec::new()),
+            vec![thinking(FRAMED_READ)],
+            ResponseStatus::EndTurn,
         );
-    }
-
-    #[test]
-    fn bare_function_block_is_not_a_call() {
-        // Without the frame the same text is a call the model wrote about, not
-        // one it emitted, so promoting it would run what it only considered.
-        let bare = FRAMED_GREP
-            .replace(TOOL_CALL_OPEN, "")
-            .replace(TOOL_CALL_CLOSE, "");
-        assert!(framed_in(&bare).is_empty());
-    }
-
-    #[test]
-    fn a_block_cut_off_before_its_close_stays_in_the_prose() {
-        // Half a call is not a call, and the text is then all that is left of it.
-        let truncated = "<tool_call>\n<function=read_file>\n<parameter=path>\n/Users/m";
-        let (prose, calls) = split_framed_calls(truncated);
-        assert!(calls.is_empty());
-        assert_eq!(prose, truncated);
-    }
-
-    #[test]
-    fn a_complete_block_parses_alongside_a_truncated_one() {
-        let text = format!("{FRAMED_GREP}\n<tool_call>\n<function=grep>\n<parameter=pattern>\nFunction(...)\n</parameter>");
-        assert_eq!(framed_in(&text).len(), 1);
-    }
-
-    #[test]
-    fn a_framed_block_leaves_the_prose_around_it() {
-        let text = format!("Let me just run 5 searches:\n{FRAMED_GREP}\nDone.");
-        assert_eq!(
-            split_framed_calls(&text).0,
-            "Let me just run 5 searches:\n\nDone."
-        );
-    }
-
-    #[test]
-    fn a_name_that_is_not_an_identifier_is_not_a_call() {
-        // Removing it too would lose what the model wrote, with no call to
-        // show for it.
-        let spaced = FRAMED_READ.replace("read_file", "read file");
-        let (prose, calls) = split_framed_calls(&spaced);
-        assert!(calls.is_empty());
-        assert_eq!(prose, spaced);
-    }
-
-    #[test]
-    fn framed_call_promotes_when_the_reply_carries_none() {
-        let (content, events) = recover(vec![thinking(FRAMED_READ)], ResponseStatus::EndTurn);
+        assert_eq!(response.status, ResponseStatus::ToolUse);
         assert!(matches!(
-            content.last(),
+            response.content.last(),
             Some(ContentBlock::ToolUse { name, input, .. })
                 if name == "read_file"
                     && *input == serde_json::json!({"path": "/Users/mav/dev/lambda/README.md"})
@@ -461,12 +546,6 @@ mod tests {
     }
 
     #[test]
-    fn promoting_turns_the_reply_into_a_tool_use() {
-        let (response, _) = recover_response(vec![thinking(FRAMED_READ)], ResponseStatus::EndTurn);
-        assert_eq!(response.status, ResponseStatus::ToolUse);
-    }
-
-    #[test]
     fn a_framed_call_beside_a_delivered_one_is_still_promoted() {
         // The endpoint delivered `read_file` and converted nothing for `grep`,
         // whose block is the only record of it.
@@ -495,13 +574,11 @@ mod tests {
 
     #[test]
     fn a_framed_call_the_endpoint_answered_differently_is_declined() {
-        // The endpoint delivered `read_file` for one path while the model wrote
-        // a block for another. Nothing runs the block, and the prose no longer
-        // shows it, so the event is all that is left of it.
+        let written = framed_read("/wanted.md");
         let (content, events) = recover(
             vec![
                 ContentBlock::Text {
-                    text: framed_read("/wanted.md"),
+                    text: written.clone(),
                 },
                 ContentBlock::ToolUse {
                     id: "call_1".into(),
@@ -512,6 +589,7 @@ mod tests {
             ResponseStatus::ToolUse,
         );
         assert_eq!(content.iter().filter(|b| is_tool_use(b)).count(), 1);
+        assert!(matches!(&content[0], ContentBlock::Text { text } if *text == written));
         assert!(matches!(
             &events[..],
             [StreamEvent::ToolCallDeclined { tool_name, kind }]
@@ -623,49 +701,6 @@ mod tests {
     }
 
     #[test]
-    fn a_reply_carrying_no_framed_call_keeps_its_own_whitespace() {
-        // Every reply on this path is scanned, so one with nothing to repair
-        // must come back exactly as the model wrote it.
-        let written = "  an answer, indented on purpose  ";
-        let (content, events) = recover(
-            vec![ContentBlock::Text {
-                text: written.into(),
-            }],
-            ResponseStatus::EndTurn,
-        );
-        assert!(matches!(
-            &content[..],
-            [ContentBlock::Text { text }] if text == written
-        ));
-        assert!(events.is_empty());
-    }
-
-    #[test]
-    fn a_delivered_call_with_arguments_is_left_alone() {
-        // Overwriting one would run the endpoint's call with the framed block's
-        // arguments; adding one would run the same call twice.
-        let delivered = serde_json::json!({"path": "/other.md"});
-        let (content, events) = recover(
-            vec![
-                thinking(FRAMED_READ),
-                ContentBlock::ToolUse {
-                    id: "call_1".into(),
-                    name: "read_file".into(),
-                    input: delivered.clone(),
-                },
-            ],
-            ResponseStatus::ToolUse,
-        );
-        assert_eq!(content.len(), 2);
-        assert!(matches!(&content[1], ContentBlock::ToolUse { input, .. } if *input == delivered));
-        assert!(matches!(
-            &events[..],
-            [StreamEvent::ToolCallDeclined { kind, .. }]
-                if *kind == ToolDeclineKind::AlreadyDelivered
-        ));
-    }
-
-    #[test]
     fn a_delivered_call_the_model_also_framed_is_one_call() {
         // A framed value is text and a delivered one is typed, so comparing
         // them as they stand would report the same call as two.
@@ -682,6 +717,221 @@ mod tests {
             ResponseStatus::ToolUse,
         );
         assert!(events.is_empty(), "{events:?}");
+    }
+
+    #[test]
+    fn a_native_call_and_its_framed_alias_remain_one_call() {
+        let (response, events) = recover_response(
+            request(&["read_file"], Vec::new()),
+            vec![
+                thinking(FRAMED_READ),
+                ContentBlock::ToolUse {
+                    id: "call_1".into(),
+                    name: "read_file_tool".into(),
+                    input: serde_json::json!({"path": "/Users/mav/dev/lambda/README.md"}),
+                },
+            ],
+            ResponseStatus::ToolUse,
+        );
+
+        assert_eq!(
+            response
+                .content
+                .iter()
+                .filter(|block| is_tool_use(block))
+                .count(),
+            1
+        );
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn a_framed_alias_fills_an_empty_native_call() {
+        let (response, events) = recover_response(
+            request(&["read_file"], Vec::new()),
+            vec![
+                thinking(FRAMED_READ),
+                ContentBlock::ToolUse {
+                    id: "call_1".into(),
+                    name: "read_file_tool".into(),
+                    input: serde_json::json!({}),
+                },
+            ],
+            ResponseStatus::ToolUse,
+        );
+
+        assert!(matches!(
+            &response.content[1],
+            ContentBlock::ToolUse { input, .. }
+                if *input == serde_json::json!({"path": "/Users/mav/dev/lambda/README.md"})
+        ));
+        assert!(matches!(
+            &events[..],
+            [StreamEvent::ToolCallRepaired { call_id, .. }] if call_id == "call_1"
+        ));
+    }
+
+    #[test]
+    fn distinct_exact_tool_names_are_not_deduplicated() {
+        let (response, _) = recover_response(
+            request(&["read_file", "read_file_tool"], Vec::new()),
+            vec![
+                thinking(FRAMED_READ),
+                ContentBlock::ToolUse {
+                    id: "call_1".into(),
+                    name: "read_file_tool".into(),
+                    input: serde_json::json!({"path": "/other.md"}),
+                },
+            ],
+            ResponseStatus::ToolUse,
+        );
+
+        assert_eq!(
+            response
+                .content
+                .iter()
+                .filter(|block| is_tool_use(block))
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn repaired_ids_skip_current_and_historical_collisions() {
+        let history = vec![
+            Message::Assistant {
+                content: vec![ContentBlock::ToolUse {
+                    id: "repaired_0".into(),
+                    name: "grep".into(),
+                    input: serde_json::json!({}),
+                }],
+            },
+            Message::User {
+                content: vec![ContentBlock::ToolResult {
+                    tool_use_id: "repaired_0".into(),
+                    content: "done".into(),
+                    succeeded: true,
+                }],
+            },
+        ];
+        let (response, events) = recover_response(
+            request(&[], history),
+            vec![
+                thinking(FRAMED_READ),
+                ContentBlock::ToolUse {
+                    id: "repaired_1".into(),
+                    name: "grep".into(),
+                    input: serde_json::json!({}),
+                },
+            ],
+            ResponseStatus::ToolUse,
+        );
+
+        assert!(matches!(
+            response.content.last(),
+            Some(ContentBlock::ToolUse { id, name, .. })
+                if id == "repaired_2" && name == "read_file"
+        ));
+        assert!(matches!(
+            &events[..],
+            [StreamEvent::ToolCallRepaired { call_id, .. }] if call_id == "repaired_2"
+        ));
+    }
+
+    #[test]
+    fn malformed_frames_remain_text_and_produce_no_call() {
+        let cases = [
+            (
+                "incomplete parameter",
+                "<tool_call><function=read_file><parameter=path>/a</function></tool_call>",
+            ),
+            (
+                "duplicate parameter",
+                "<tool_call><function=read_file><parameter=path>/a</parameter><parameter=path>/b</parameter></function></tool_call>",
+            ),
+            (
+                "trailing syntax",
+                "<tool_call><function=read_file></function>trailing</tool_call>",
+            ),
+            (
+                "second function",
+                "<tool_call><function=read_file></function><function=grep></function></tool_call>",
+            ),
+        ];
+
+        for (case, written) in cases {
+            let (content, events) = recover(
+                vec![ContentBlock::Text {
+                    text: written.into(),
+                }],
+                ResponseStatus::EndTurn,
+            );
+            assert!(
+                matches!(
+                    &content[..],
+                    [ContentBlock::Text { text }] if text == written
+                ),
+                "{case}"
+            );
+            assert!(events.is_empty(), "{case}: {events:?}");
+        }
+    }
+
+    #[test]
+    fn a_valid_frame_survives_a_separate_malformed_frame() {
+        let malformed = "<tool_call><function=read_file><parameter=path>/unfinished";
+        let written = format!("{FRAMED_READ}\n{malformed}");
+        let (content, events) = recover(
+            vec![ContentBlock::Text { text: written }],
+            ResponseStatus::EndTurn,
+        );
+
+        assert!(matches!(
+            &content[..],
+            [ContentBlock::Text { text }, ContentBlock::ToolUse { .. }]
+                if text == &format!("\n{malformed}")
+        ));
+        assert_eq!(events.len(), 1);
+    }
+
+    #[test]
+    fn parameter_layout_is_removed_without_trimming_its_value() {
+        let framed = "<tool_call>\r\n<function=echo>\r\n<parameter=text>\r\n  first\nsecond  \r\n</parameter>\r\n</function>\r\n</tool_call>";
+        let (content, _) = recover(vec![thinking(framed)], ResponseStatus::EndTurn);
+
+        assert!(matches!(
+            content.last(),
+            Some(ContentBlock::ToolUse { input, .. })
+                if *input == serde_json::json!({"text": "  first\nsecond  "})
+        ));
+    }
+
+    #[test]
+    fn nonempty_native_input_is_never_replaced() {
+        let written = FRAMED_READ.to_string();
+        let (content, events) = recover(
+            vec![
+                ContentBlock::Text {
+                    text: written.clone(),
+                },
+                ContentBlock::ToolUse {
+                    id: "call_1".into(),
+                    name: "read_file".into(),
+                    input: Value::String("encoded arguments".into()),
+                },
+            ],
+            ResponseStatus::ToolUse,
+        );
+
+        assert!(matches!(&content[0], ContentBlock::Text { text } if *text == written));
+        assert!(
+            matches!(&content[1], ContentBlock::ToolUse { input, .. } if input == "encoded arguments")
+        );
+        assert!(matches!(
+            &events[..],
+            [StreamEvent::ToolCallDeclined { kind, .. }]
+                if *kind == ToolDeclineKind::AlreadyDelivered
+        ));
     }
 
     #[test]
@@ -706,26 +956,6 @@ mod tests {
             &events[..],
             [StreamEvent::ToolCallDeclined { kind, .. }]
                 if *kind == ToolDeclineKind::ReplyNotFinished
-        ));
-    }
-
-    #[test]
-    fn a_promoted_call_carries_the_text_the_model_wrote() {
-        // The registry retypes them a moment later, against the schema of the
-        // tool that will run.
-        let (content, events) = recover(vec![thinking(FRAMED_GREP)], ResponseStatus::EndTurn);
-        assert!(matches!(
-            content.last(),
-            Some(ContentBlock::ToolUse { name, input, .. })
-                if name == "grep"
-                    && *input == serde_json::json!({
-                        "-n": "true", "output_mode": "content", "pattern": "plugin.Open(...)"
-                    })
-        ));
-        assert!(matches!(
-            &events[..],
-            [StreamEvent::ToolCallRepaired { tool_name, call_id }]
-                if tool_name == "grep" && call_id == "repaired_0"
         ));
     }
 
@@ -759,7 +989,7 @@ mod tests {
         assert!(matches!(
             &content[..],
             [ContentBlock::Text { text }, ContentBlock::ToolUse { name, .. }]
-                if text == "Reading it now." && name == "read_file"
+                if text == "Reading it now.\n" && name == "read_file"
         ));
         assert!(matches!(
             &events[..],
@@ -769,8 +999,8 @@ mod tests {
     }
 
     #[test]
-    fn a_reply_without_framed_calls_is_untouched() {
-        let answer = "Just an answer.";
+    fn a_reply_without_frames_is_preserved_exactly() {
+        let answer = "  Just an answer.\n";
         let (content, events) = recover(
             vec![ContentBlock::Text {
                 text: answer.into(),

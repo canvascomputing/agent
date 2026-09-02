@@ -129,20 +129,20 @@ impl Agent {
             let ContentBlock::ToolUse { id, name, .. } = call else {
                 continue;
             };
+            for message in result.repairs() {
+                events.push(
+                    Event::new(Event::TOOL_CALL_REPAIRED).data(serde_json::json!({
+                        "tool_name": name,
+                        "call_id": id,
+                        "kind": "value_mistyped",
+                        "message": message,
+                    })),
+                );
+            }
             let succeeded = result.get_name() == Event::TOOL_CALL_FINISHED;
             let content = if succeeded {
                 let content = result.get_content().to_string();
                 *consecutive_schema_failures = 0;
-                for message in result.repairs() {
-                    events.push(
-                        Event::new(Event::TOOL_CALL_REPAIRED).data(serde_json::json!({
-                            "tool_name": name,
-                            "call_id": id,
-                            "kind": "value_mistyped",
-                            "message": message,
-                        })),
-                    );
-                }
                 let mut event = result.clone();
                 if let Some(data) = event.data.as_object_mut() {
                     data.insert("tool_name".into(), name.clone().into());
@@ -269,6 +269,7 @@ mod tests {
     use crate::agents::r#loop::test_util::*;
     use crate::agents::tasks::{Status, Task, Werk};
     use crate::event::Event;
+    use crate::providers::ContentBlock;
     use crate::schemas::Schema;
 
     #[tokio::test]
@@ -360,6 +361,10 @@ mod tests {
         assert_eq!(schema_retries.len(), 1);
         let message = &schema_retries[0].2;
         assert!(message.contains("`task` rejected"), "{message}");
+        assert!(!events.iter().any(|event| {
+            event.get_name() == Event::TOOL_CALL_REPAIRED
+                && event.get_data()["kind"] == "value_mistyped"
+        }));
         // `partial_sum` belongs to the finish tool's schema, which is the one
         // the message must not print.
         assert!(!message.contains("partial_sum"), "{message}");
@@ -811,8 +816,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_repaired_result_is_reported_under_the_finishing_tool() {
-        // The retype happens in `invoke`, before the tool runs, so one note.
+    async fn a_retyped_argument_emits_its_pointer_before_success() {
         let provider = MockProvider::with_results(vec![Ok(write_result_value(
             serde_json::json!({"partial_sum": "42"}),
         ))]);
@@ -836,9 +840,94 @@ mod tests {
             repairs,
             vec![("finish", "call-1", "value_mistyped", "/partial_sum retyped")]
         );
+        let sequence: Vec<&str> = events
+            .iter()
+            .filter(|event| event.get_data()["call_id"] == "call-1")
+            .map(Event::get_name)
+            .collect();
+        assert_eq!(
+            sequence,
+            vec![
+                Event::TOOL_CALL_STARTED,
+                Event::TOOL_CALL_REPAIRED,
+                Event::TOOL_CALL_FINISHED,
+            ]
+        );
+        assert!(events.iter().any(|event| {
+            event.get_name() == Event::TOOL_CALL_STARTED
+                && event.get_data()["input"]["partial_sum"] == "42"
+        }));
         assert!(events.iter().any(|event| {
             event.get_name() == Event::TOOL_CALL_FINISHED
                 && event.get_data()["repairs"] == serde_json::json!(["/partial_sum retyped"])
+        }));
+    }
+
+    #[tokio::test]
+    async fn a_retyped_argument_is_reported_before_tool_failure() {
+        let failed_call = crate::providers::types::ModelResponse {
+            content: vec![ContentBlock::ToolUse {
+                id: "boom-1".into(),
+                name: "boom".into(),
+                input: serde_json::json!({"count": "3"}),
+            }],
+            status: crate::providers::types::ResponseStatus::ToolUse,
+            usage: crate::providers::types::TokenUsage::default(),
+            model: "mock".into(),
+        };
+        let provider =
+            MockProvider::with_results(vec![Ok(failed_call), Ok(write_result_response("done"))]);
+        let boom = crate::tools::Tool::new("boom")
+            .description("Always fails")
+            .schema(serde_json::json!({
+                "type": "object",
+                "properties": {"count": {"type": "integer"}},
+                "required": ["count"],
+            }))
+            .handler(|_: Value| async { Event::error("boom") });
+        let results_dir = crate::test_util::TempDir::new().unwrap();
+        let werk = Werk::new();
+        werk.set_dir(results_dir.path().to_path_buf())
+            .set_policy(Policy {
+                max_request_retries: 0,
+                request_retry_delay: Duration::from_millis(1),
+                max_schema_retries: Some(3),
+                max_time: Some(Duration::from_millis(500)),
+                ..Default::default()
+            });
+        let collected = collect_events(&werk);
+        werk.add_agent(
+            Agent::new()
+                .provider(provider)
+                .model("mock")
+                .role("test")
+                .tool(boom),
+        );
+        werk.add_task("go");
+
+        let _ = werk.finish_all_tasks().await;
+
+        let events = collected.lock().unwrap().clone();
+        let sequence: Vec<&str> = events
+            .iter()
+            .filter(|event| event.get_data()["call_id"] == "boom-1")
+            .map(Event::get_name)
+            .collect();
+        assert_eq!(
+            sequence,
+            vec![
+                Event::TOOL_CALL_STARTED,
+                Event::TOOL_CALL_REPAIRED,
+                Event::TOOL_CALL_FAILED,
+            ]
+        );
+        assert!(events.iter().any(|event| {
+            event.get_name() == Event::TOOL_CALL_STARTED
+                && event.get_data()["input"]["count"] == "3"
+        }));
+        assert!(events.iter().any(|event| {
+            event.get_name() == Event::TOOL_CALL_REPAIRED
+                && event.get_data()["message"] == "/count retyped"
         }));
     }
 

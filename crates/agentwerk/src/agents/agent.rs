@@ -366,24 +366,7 @@ impl Agent {
     }
 
     pub(crate) fn get_tool(&self, tools: &[Tool], tool_name: &str) -> Option<Tool> {
-        let tool_name = tool_name.trim();
-        if let Some(found) = tools.iter().find(|tool| tool.get_name() == tool_name) {
-            return Some(found.clone());
-        }
-
-        let normalize = |tool_name: &str| {
-            let name = tool_name.trim().to_lowercase().replace('-', "_");
-            match name.strip_suffix("_tool") {
-                Some(stem) if !stem.is_empty() => stem.to_string(),
-                _ => name,
-            }
-        };
-        let tool_name = normalize(tool_name);
-        let mut folded = tools
-            .iter()
-            .filter(|tool| normalize(tool.get_name()) == tool_name);
-        let found = folded.next()?;
-        folded.next().is_none().then(|| found.clone())
+        Tool::find_tool(tools, tool_name).cloned()
     }
 
     fn register_tool(&mut self, tool: impl Into<Tool>) {

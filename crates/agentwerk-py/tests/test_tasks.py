@@ -143,6 +143,19 @@ def test_schema_validate_decodes_a_double_encoded_value():
     assert repaired == [""]
 
 
+def test_schema_validate_preserves_a_quoted_large_integer():
+    schema = aw.Schema({"type": "number"})
+    kept, repaired = schema.validate("9007199254740993")
+    assert kept == 9007199254740993
+    assert repaired == [""]
+
+
+def test_schema_validate_does_not_fold_a_string_into_a_non_string_enum():
+    schema = aw.Schema({"enum": [None]})
+    with pytest.raises(RuntimeError):
+        schema.validate("null")
+
+
 def test_schema_validate_rejects_a_violating_value():
     schema = aw.Schema({"type": "object", "required": ["status"]})
     with pytest.raises(RuntimeError):
