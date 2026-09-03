@@ -191,11 +191,10 @@ mod tests {
                 "properties": {"summary": {"type": "string"}},
                 "required": ["summary"],
             }),
-            // A task field named like a control key needs no special prose:
-            // it sits inside `result`, not next to `handover`.
+            // A task field named like the result argument needs no special prose.
             serde_json::json!({
                 "type": "object",
-                "properties": { "handover": { "type": "string" } },
+                "properties": { "result": { "type": "string" } },
             }),
             serde_json::json!({ "type": "string" }),
         ];

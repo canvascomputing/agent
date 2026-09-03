@@ -1,11 +1,9 @@
-//! Deep Research with handover chain.
+//! Deep Research with result-routed stages.
 //!
 //! One `Werk` holds both research stages. The program enqueues a
-//! single starter task pinned to `researcher_1`. Each researcher calls
-//! `brave_search` and hands off to the next agent through its configured
-//! handover. The report contract is attached to the task researcher_2 creates.
-//! The report writer reads that research chain and finishes it with a plain
-//! `finish`.
+//! single starter task pinned to `researcher_1`. Result hooks route each
+//! completed research pass into the next stage, and the final task carries
+//! both passes to the report writer.
 //!
 //! Usage: deep-research <QUESTION>
 //!
@@ -18,7 +16,7 @@ use std::sync::Arc;
 use agentwerk::event::Event;
 use agentwerk::providers::{Model, Provider};
 use agentwerk::schemas::Schema;
-use agentwerk::tools::{FetchTool, TaskTool, Tool};
+use agentwerk::tools::{FetchTool, Tool};
 use agentwerk::{Agent, FinishReason, Task, Werk};
 
 const RESEARCHER_1_ROLE: &str = include_str!("prompts/researcher-1.role.md");
@@ -48,15 +46,15 @@ async fn main() {
     });
     werk.on_event(move |_, e| event_handler(e));
 
+    let report_schema =
+        Schema::new(final_report_schema_value()).expect("report schema is well-formed");
+    route_research_results(&werk, report_schema);
+
     let researcher_1 = Agent::new()
         .provider(provider.clone())
         .model(Model::from_env().expect("model name required"))
         .role(RESEARCHER_1_ROLE)
         .label("researcher_1")
-        .handover(Task::labeled(
-            "researcher_2",
-            "Researcher 1 task: {parent_id}\n\nResearcher 1 findings:\n{parent_result}\n\nDeepen and broaden these facts with causes, consequences, criticisms, or alternative perspectives.",
-        ))
         .tool(brave_search_tool(brave_key.clone()))
         .tool(FetchTool::new().impersonate());
 
@@ -65,16 +63,6 @@ async fn main() {
         .model(Model::from_env().expect("model name required"))
         .role(RESEARCHER_2_ROLE)
         .label("researcher_2")
-        .handover(
-            Task::labeled(
-                "report",
-                "Synthesize both research passes into a structured final report.\n\nResearcher 2 task: {parent_id}\n\nResearcher 2 findings:\n{parent_result}",
-            )
-            .schema(
-                Schema::new(final_report_schema_value())
-                    .expect("report schema is well-formed"),
-            ),
-        )
         .tool(brave_search_tool(brave_key.clone()))
         .tool(FetchTool::new().impersonate());
 
@@ -82,19 +70,20 @@ async fn main() {
         .provider(provider.clone())
         .model(Model::from_env().expect("model name required"))
         .role(REPORT_WRITER_ROLE)
-        .label("report")
-        .tool(TaskTool);
+        .label("report");
 
     werk.add_agent(researcher_1);
     werk.add_agent(researcher_2);
     werk.add_agent(report_writer);
 
-    let starter =
-        format!("Question: {question}\n\nEstablish one angle with source-backed evidence.");
+    let starter = serde_json::json!({
+        "question": question,
+        "instruction": "Establish one angle with source-backed evidence."
+    });
     // The schema-bound starter forces researcher_1 to produce a real
     // result: a text-only reply leaves none attached, and the loop's
     // terminal-reply path then transitions the task to `failed`
-    // rather than silently `Done`. Configured handovers keep the chain going.
+    // rather than silently `Done`. Result hooks keep the stages going.
     let starter_schema = Schema::new(serde_json::json!({
         "type": "string",
         "minLength": 100
@@ -120,6 +109,35 @@ async fn main() {
     }
 }
 
+fn route_research_results(werk: &Arc<Werk>, report_schema: Schema) {
+    werk.on_result(move |werk, done, result| match done.get_label() {
+        Some("researcher_1") => {
+            werk.add_task(Task::labeled(
+                "researcher_2",
+                serde_json::json!({
+                    "question": done.get_task()["question"].clone(),
+                    "researcher_1": result,
+                    "instruction": "Deepen and broaden these facts with causes, consequences, criticisms, or alternative perspectives."
+                }),
+            ));
+        }
+        Some("researcher_2") => {
+            werk.add_task(
+                Task::labeled(
+                    "report",
+                    serde_json::json!({
+                        "question": done.get_task()["question"].clone(),
+                        "researcher_1": done.get_task()["researcher_1"].clone(),
+                        "researcher_2": result
+                    }),
+                )
+                .schema(report_schema.clone()),
+            );
+        }
+        _ => {}
+    });
+}
+
 fn print_research_outcome(werk: &Werk, outcome: &Outcome) {
     eprintln!("\n══════════════════════════════════════════════════════════");
     match outcome {
@@ -133,7 +151,9 @@ fn print_research_outcome(werk: &Werk, outcome: &Outcome) {
         Outcome::Cancelled | Outcome::Stalled => {
             let label = match outcome {
                 Outcome::Cancelled => "PARTIAL RESEARCH: cancelled before report writer finished",
-                Outcome::Stalled => "PARTIAL RESEARCH: chain stalled before report writer finished",
+                Outcome::Stalled => {
+                    "PARTIAL RESEARCH: workflow stalled before report writer finished"
+                }
                 Outcome::Report(_) => unreachable!(),
             };
             eprintln!(" {label}");
@@ -162,7 +182,7 @@ enum Outcome {
 
 /// Read the run's outcome off the drained Werk: a finished report
 /// task wins, an external cancel is surfaced, anything else means the
-/// chain stopped without reaching the report step.
+/// workflow stopped without reaching the report step.
 fn classify_outcome(werk: &Werk) -> Outcome {
     let reported = werk.find_results("task.label = report").pop();
     if let Some(result) = reported {
@@ -175,17 +195,13 @@ fn classify_outcome(werk: &Werk) -> Outcome {
 }
 
 fn print_chain_summary(werk: &Werk) {
-    eprintln!("\nChain summary:");
+    eprintln!("\nTask summary:");
     let all = werk.get_tasks();
     if all.is_empty() {
         eprintln!("  (no tasks)");
         return;
     }
     for t in &all {
-        let parent = t
-            .get_parent()
-            .map(|p| format!(" ⟵ {p}"))
-            .unwrap_or_default();
         let label = match t.get_label() {
             Some(l) => format!(" [{l}]"),
             None => String::new(),
@@ -195,7 +211,7 @@ fn print_chain_summary(werk: &Werk) {
             .map(|v| truncate(&plain_text(v), 100))
             .unwrap_or_else(|| "(no result)".into());
         eprintln!(
-            "  {id} {status}{label}{parent}\n      → {preview}",
+            "  {id} {status}{label}\n      → {preview}",
             id = t.get_id(),
             status = t.get_status(),
         );
@@ -366,23 +382,10 @@ fn format_tool_call(tool_name: &str, input: &serde_json::Value) -> Vec<String> {
             };
             vec![format!("📖 read tasks {action}{suffix}")]
         }
-        // A `handover` in the arguments is what tells a chaining finish
-        // apart from the terminal one that ends the run.
-        "finish" => match input.get("handover").and_then(|v| v.as_str()) {
-            Some(to) => {
-                let task = preview_value(input.get("task"), 70);
-                let result = preview_value(input.get("result"), 70);
-                vec![
-                    format!("📤 handoff → {to}"),
-                    format!("      · task    : {task}"),
-                    format!("      · findings: {result}"),
-                ]
-            }
-            None => {
-                let result = preview_value(input.get("result"), 80);
-                vec![format!("✅ final result: {result}")]
-            }
-        },
+        "finish" => {
+            let result = preview_value(input.get("result"), 80);
+            vec![format!("✅ final result: {result}")]
+        }
         _ => vec![format!(
             "{tool_name}: {}",
             serde_json::to_string(input).unwrap_or_default()
@@ -441,4 +444,32 @@ fn check_required_env() -> String {
         std::process::exit(1);
     }
     brave_key
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn result_router_files_each_remaining_stage_once() {
+        let werk = Werk::new();
+        let report_schema = Schema::new(final_report_schema_value()).unwrap();
+        route_research_results(&werk, report_schema);
+        let first = werk.add_task(Task::labeled(
+            "researcher_1",
+            serde_json::json!({"question": "Why?"}),
+        ));
+
+        werk.set_task_finished(&first, "first findings").unwrap();
+        let second = werk.find_task("task.label = researcher_2").unwrap();
+        assert_eq!(second.get_task()["researcher_1"], "first findings");
+
+        werk.set_task_finished(second.get_id(), "second findings")
+            .unwrap();
+        let reports = werk.find_tasks("task.label = report");
+        assert_eq!(reports.len(), 1);
+        assert_eq!(reports[0].get_task()["researcher_1"], "first findings");
+        assert_eq!(reports[0].get_task()["researcher_2"], "second findings");
+        assert!(reports[0].get_schema().is_some());
+    }
 }

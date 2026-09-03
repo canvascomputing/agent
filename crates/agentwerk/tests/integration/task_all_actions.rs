@@ -1,4 +1,4 @@
-//! Verifies a real LLM can read, list, query, create, and edit tasks from intent-only instructions. A real handover provides the parent result, and the role does not name actions or query syntax.
+//! Verifies a real LLM can read, list, query, create, and edit tasks from intent-only instructions. A result hook files the audit task, and the role does not name query syntax.
 
 use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
@@ -46,6 +46,17 @@ async fn walks_every_task_action() -> std::result::Result<(), Box<dyn std::error
             }
         }
     });
+    werk.on_result(|werk, done, _| {
+        if done.get_label() == Some("archive") {
+            werk.add_task(Task::labeled(
+                "auditor",
+                serde_json::json!({
+                    "source_task_id": done.get_id(),
+                    "instruction": "Audit the archived record."
+                }),
+            ));
+        }
+    });
 
     werk.add_agent(
         Agent::new()
@@ -54,9 +65,8 @@ async fn walks_every_task_action() -> std::result::Result<(), Box<dyn std::error
             .label("archive")
             .role(
                 "{context}\n\n\
-                 Finish your task in a single call: pass the combination from \
-                 your task as your result, hand the work over to `auditor`, and \
-                 give the new task the task `Audit the archived record.`",
+                 Finish your task in a single call, passing the combination from \
+                 your task as your result.",
             ),
     );
     werk.add_agent(
@@ -68,8 +78,8 @@ async fn walks_every_task_action() -> std::result::Result<(), Box<dyn std::error
                 "{context}\n\n\
                  Work your task with the task tool, one call at a time, in \
                  this order, then call `finish`:\n\
-                 1. Read your own task and note the parent it names.\n\
-                 2. Read what that parent produced: it holds a vault combination.\n\
+                 1. Read your own task and note its `source_task_id`.\n\
+                 2. Read what that source task produced: it holds a vault combination.\n\
                  3. Find out how many tasks the Werk holds right now.\n\
                  4. Without reading the whole Werk again, ask it for the one \
                  task whose body carries the phrase `sealed archive room`.\n\
@@ -116,11 +126,11 @@ async fn walks_every_task_action() -> std::result::Result<(), Box<dyn std::error
 
     let audit = werk
         .find_task("task.label = auditor AND task.status = finished")
-        .expect("the auditor must finish the task handed to it");
+        .expect("the auditor must finish the task filed for it");
     let answer = audit.get_result().cloned().unwrap_or_default().to_string();
     assert!(
         answer.contains(&secret.to_string()),
-        "the answer must quote the combination {secret}, which only the parent's \
+        "the answer must quote the combination {secret}, which only the source task's \
          result carries; got: {answer}"
     );
 

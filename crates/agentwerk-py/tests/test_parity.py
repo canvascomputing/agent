@@ -91,6 +91,8 @@ def test_removed_api_names_are_absent_from_runtime_exports_and_stub():
     assert removed.isdisjoint(aw.__all__)
     assert removed.isdisjoint(stub_top_level_names())
     assert "task" not in stub_class_members("Agent")
+    assert "handover" not in stub_class_members("Agent")
+    assert "get_parent" not in stub_class_members("Task")
 
 
 def test_every_class_member_is_declared_in_the_stub():

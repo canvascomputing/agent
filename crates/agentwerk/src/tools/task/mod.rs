@@ -98,9 +98,6 @@ fn render_task(t: &Task) -> String {
         "- label: {}\n",
         t.label.as_deref().unwrap_or("(none)")
     ));
-    if let Some(parent) = t.parent.as_deref() {
-        out.push_str(&format!("- parent: {parent}\n"));
-    }
     out.push('\n');
     push_value(&mut out, &t.task);
     out.push_str("\n## Result\n");

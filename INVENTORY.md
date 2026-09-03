@@ -59,7 +59,7 @@ The rules the tables never repeat.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `Agent { label: string?, interactive: boolean, werk: WerkRef, id: OnceLock<string>, provider: Provider?, model: Model?, role: string, templates: [string, string][], handover: Task?, tools: Tool[], dir: string, knowledge: Knowledge, directives: DirectiveStore }` | pub with private fields |
+| Rust | `Agent { label: string?, interactive: boolean, werk: WerkRef, id: OnceLock<string>, provider: Provider?, model: Model?, role: string, templates: [string, string][], tools: Tool[], dir: string, knowledge: Knowledge, directives: DirectiveStore }` | pub with private fields |
 | Rust | `impl Clone for Agent` | pub |
 | Rust | `.new(): this` | pub |
 | Python | `Agent()` | |
@@ -74,7 +74,6 @@ The rules the tables never repeat.
 | both | `.template(key: string, value: string): this` | pub |
 | Rust | `.templates(variables: [string, string][]): this` | pub |
 | Python | `.templates(variables)`: a mapping, so the bulk bind applies in key order where Rust preserves insertion order | |
-| both | `.handover(task: Task): this` | pub |
 | both | `.tool(tool: Tool): this` | pub |
 | both | `.tools(tools: Tool[]): this` | pub |
 | both | `.dir(dir: string): this` | pub |
@@ -568,7 +567,7 @@ The rules the tables never repeat.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `Task { task: json, label: string?, schema: Schema?, id: string, status: Status, reporter: string, assignee: string?, created_at: number, started_at: number?, finished_at: number?, failed_at: number?, result: json?, errors: Event[], parent: string?, replies: Reply[] }` | pub with crate-private fields |
+| Rust | `Task { task: json, label: string?, schema: Schema?, id: string, status: Status, reporter: string, assignee: string?, created_at: number, started_at: number?, finished_at: number?, failed_at: number?, result: json?, errors: Event[], replies: Reply[] }` | pub with crate-private fields |
 | Python | `Task`: values are read through the same `get_*` methods as Rust; replies and errors are converted on access | |
 | Rust | `.new(task: json): this` | pub |
 | Python | `Task(task)` | |
@@ -578,8 +577,6 @@ The rules the tables never repeat.
 | Python | `Task(task, label=l)` | |
 | Rust | `.schema(schema: Schema): this` | pub |
 | Python | `Task(task, schema=s)` | |
-| Rust | `.parent(id: string): this` | pub |
-| Python | `Task(task, parent=id)` | |
 | both | `.get_task(): json` | pub |
 | both | `.get_label(): string?` | pub |
 | both | `.get_schema(): Schema?` | pub |
@@ -593,7 +590,6 @@ The rules the tables never repeat.
 | both | `.get_failed_at(): number?` | pub |
 | both | `.get_result(): json?` | pub |
 | both | `.get_errors(): Event[]` | pub |
-| both | `.get_parent(): string?` | pub |
 | both | `.get_replies(): Reply[]` | pub |
 | both | `.is_todo(): boolean` | pub |
 | both | `.is_finished(): boolean` | pub |
@@ -1018,7 +1014,7 @@ Not bound directly: callers configure its crate-private store through `Agent.dir
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | crate-private key constants, one per catalogue heading: `REPLY_REJECTED`, `NO_TOOL_CALLED`, `ARGUMENTS_REJECTED`, `ARGUMENTS_EXPECTED`, `RESULT_SCHEMA_REQUIRED`, `SUMMARY_REQUESTED`, `KNOWLEDGE_INDEX_TRUNCATED`, `TOOL_NOT_FOUND`, `NO_TOOLS_REGISTERED`, `TOOL_PANICKED`, `TOOL_TIMED_OUT`, `TOOL_OUTPUT_EMPTY`, `TOOL_OUTPUT_OFFLOADED`, `EDIT_FILE_READ_FAILED`, `EDIT_FILE_OLD_STRING_NOT_FOUND`, `EDIT_FILE_OLD_STRING_NOT_UNIQUE`, `EDIT_FILE_WRITE_FAILED`, `WRITE_FILE_PARENT_NOT_CREATED`, `WRITE_FILE_FAILED`, `READ_FILE_PATH_IS_DIRECTORY`, `READ_FILE_PATH_IS_DIRECTORY_WITH_ENTRIES`, `READ_FILE_IS_BINARY`, `READ_FILE_NOT_FOUND`, `READ_FILE_FAILED`, `LIST_DIRECTORY_PATH_IS_FILE`, `LIST_DIRECTORY_NOT_FOUND`, `LIST_DIRECTORY_FAILED`, `PATH_HINT_DIRECTORY_LISTED`, `PATH_HINT_SUGGESTION`, `PATH_HINT_WORKING_DIRECTORY`, `COMMAND_CANCELLED`, `COMMAND_NOT_STARTED`, `COMMAND_MISSING`, `COMMAND_SHELL_OPERATOR_FOUND`, `COMMAND_QUOTE_UNTERMINATED`, `COMMAND_CONTROL_CHARACTER_FOUND`, `COMMAND_ASSIGNMENT_FOUND`, `COMMAND_FLAG_DENIED`, `COMMAND_PATTERN_DENIED`, `COMMAND_NOT_ALLOWED`, `COMMAND_FLAG_NOT_ALLOWED`, `GREP_CANCELLED`, `GREP_FAILED`, `GREP_GLOB_REJECTED`, `GREP_FILE_TYPE_UNKNOWN`, `GREP_PATTERN_REJECTED`, `CODE_PATTERN_REJECTED`, `CODE_CONSTRAINT_INCOMPLETE`, `CODE_CONSTRAINT_METAVARIABLE_UNKNOWN`, `CODE_CONSTRAINT_REGEX_REJECTED`, `FETCH_TOO_LONG`, `FETCH_SCHEME_MISSING`, `FETCH_SCHEME_UNSUPPORTED`, `FETCH_CREDENTIALS_PRESENT`, `FETCH_HOST_MISSING`, `FETCH_HOST_NOT_RESOLVABLE`, `FETCH_TOO_MANY_REDIRECTS`, `FETCH_REQUEST_FAILED`, `FETCH_BODY_NOT_READ`, `FETCH_RESPONSE_TOO_LARGE`, `FETCH_REDIRECT_LOCATION_MISSING`, `KNOWLEDGE_PAGE_NOT_FOUND`, `KNOWLEDGE_WRITE_FAILED`, `KNOWLEDGE_REMOVE_FAILED`, `WERK_UNAVAILABLE`, `TASK_ID_MISSING`, `TASK_NOT_ASSIGNED`, `TASK_NOT_FOUND`, `TASK_RESULT_MISSING`, `TASK_QUERY_INVALID`, `TASK_EDIT_INCOMPLETE`, `TASK_TRANSITION_REJECTED`, `HANDOVER_RESULT_MISSING`, `HANDOVER_SCHEMA_INVALID`, `SCHEMA_FALSE_REJECTED`, `SCHEMA_TYPE_MISMATCHED`, `SCHEMA_CONST_MISMATCHED`, `SCHEMA_ENUM_MISMATCHED`, `SCHEMA_ANY_OF_UNMATCHED`, `SCHEMA_ONE_OF_AMBIGUOUS`, `SCHEMA_NOT_MATCHED`, `SCHEMA_PROPERTY_MISSING`, `SCHEMA_PROPERTY_UNEXPECTED`, `SCHEMA_ARRAY_TOO_SHORT`, `SCHEMA_ARRAY_TOO_LONG`, `SCHEMA_STRING_TOO_SHORT`, `SCHEMA_STRING_TOO_LONG`, `SCHEMA_PATTERN_UNMATCHED`, `SCHEMA_NUMBER_TOO_SMALL`, `SCHEMA_NUMBER_TOO_LARGE`, `SCHEMA_HINT_UNQUOTE`, `SCHEMA_HINT_JSON`, `SCHEMA_HINT_QUOTE` | crate |
+| Rust | crate-private key constants, one per catalogue heading: `REPLY_REJECTED`, `NO_TOOL_CALLED`, `ARGUMENTS_REJECTED`, `ARGUMENTS_EXPECTED`, `RESULT_SCHEMA_REQUIRED`, `SUMMARY_REQUESTED`, `KNOWLEDGE_INDEX_TRUNCATED`, `TOOL_NOT_FOUND`, `NO_TOOLS_REGISTERED`, `TOOL_PANICKED`, `TOOL_TIMED_OUT`, `TOOL_OUTPUT_EMPTY`, `TOOL_OUTPUT_OFFLOADED`, `EDIT_FILE_READ_FAILED`, `EDIT_FILE_OLD_STRING_NOT_FOUND`, `EDIT_FILE_OLD_STRING_NOT_UNIQUE`, `EDIT_FILE_WRITE_FAILED`, `WRITE_FILE_PARENT_NOT_CREATED`, `WRITE_FILE_FAILED`, `READ_FILE_PATH_IS_DIRECTORY`, `READ_FILE_PATH_IS_DIRECTORY_WITH_ENTRIES`, `READ_FILE_IS_BINARY`, `READ_FILE_NOT_FOUND`, `READ_FILE_FAILED`, `LIST_DIRECTORY_PATH_IS_FILE`, `LIST_DIRECTORY_NOT_FOUND`, `LIST_DIRECTORY_FAILED`, `PATH_HINT_DIRECTORY_LISTED`, `PATH_HINT_SUGGESTION`, `PATH_HINT_WORKING_DIRECTORY`, `COMMAND_CANCELLED`, `COMMAND_NOT_STARTED`, `COMMAND_MISSING`, `COMMAND_SHELL_OPERATOR_FOUND`, `COMMAND_QUOTE_UNTERMINATED`, `COMMAND_CONTROL_CHARACTER_FOUND`, `COMMAND_ASSIGNMENT_FOUND`, `COMMAND_FLAG_DENIED`, `COMMAND_PATTERN_DENIED`, `COMMAND_NOT_ALLOWED`, `COMMAND_FLAG_NOT_ALLOWED`, `GREP_CANCELLED`, `GREP_FAILED`, `GREP_GLOB_REJECTED`, `GREP_FILE_TYPE_UNKNOWN`, `GREP_PATTERN_REJECTED`, `CODE_PATTERN_REJECTED`, `CODE_CONSTRAINT_INCOMPLETE`, `CODE_CONSTRAINT_METAVARIABLE_UNKNOWN`, `CODE_CONSTRAINT_REGEX_REJECTED`, `FETCH_TOO_LONG`, `FETCH_SCHEME_MISSING`, `FETCH_SCHEME_UNSUPPORTED`, `FETCH_CREDENTIALS_PRESENT`, `FETCH_HOST_MISSING`, `FETCH_HOST_NOT_RESOLVABLE`, `FETCH_TOO_MANY_REDIRECTS`, `FETCH_REQUEST_FAILED`, `FETCH_BODY_NOT_READ`, `FETCH_RESPONSE_TOO_LARGE`, `FETCH_REDIRECT_LOCATION_MISSING`, `KNOWLEDGE_PAGE_NOT_FOUND`, `KNOWLEDGE_WRITE_FAILED`, `KNOWLEDGE_REMOVE_FAILED`, `WERK_UNAVAILABLE`, `TASK_ID_MISSING`, `TASK_NOT_ASSIGNED`, `TASK_NOT_FOUND`, `TASK_RESULT_MISSING`, `TASK_QUERY_INVALID`, `TASK_EDIT_INCOMPLETE`, `TASK_TRANSITION_REJECTED`, `SCHEMA_FALSE_REJECTED`, `SCHEMA_TYPE_MISMATCHED`, `SCHEMA_CONST_MISMATCHED`, `SCHEMA_ENUM_MISMATCHED`, `SCHEMA_ANY_OF_UNMATCHED`, `SCHEMA_ONE_OF_AMBIGUOUS`, `SCHEMA_NOT_MATCHED`, `SCHEMA_PROPERTY_MISSING`, `SCHEMA_PROPERTY_UNEXPECTED`, `SCHEMA_ARRAY_TOO_SHORT`, `SCHEMA_ARRAY_TOO_LONG`, `SCHEMA_STRING_TOO_SHORT`, `SCHEMA_STRING_TOO_LONG`, `SCHEMA_PATTERN_UNMATCHED`, `SCHEMA_NUMBER_TOO_SMALL`, `SCHEMA_NUMBER_TOO_LARGE`, `SCHEMA_HINT_UNQUOTE`, `SCHEMA_HINT_JSON`, `SCHEMA_HINT_QUOTE` | crate |
 | Rust | `directives!(name = key, ..)`, declaring each crate-private key constant and its `ALL` entry | private |
 | Rust | `ALL: string[]` | private, test only |
 | Rust | `CATALOGUE: string[]` | private |
@@ -1735,19 +1731,13 @@ Not bound: it is how `CommandTool` reads one command line.
 | Rust | `SCHEMA: string` | private |
 | Rust | `FINISH_SCHEMA: string` | private |
 | Rust | `EventTool.NAME: string = "event"` | crate |
-| Rust | `.from_schema(schema: Schema?, handover: Task?): Tool` | crate |
-| Rust | `task_finished_schema(schema: Schema?, handover: Task?): json` | super |
-| Rust | `dispatch(input: json, ctx: ToolContext, schema: Schema?, handover: Task?, tool_name: string): Event throws Event` | super |
+| Rust | `.from_schema(schema: Schema?): Tool` | crate |
+| Rust | `task_finished_schema(schema: Schema?): json` | super |
+| Rust | `dispatch(input: json, ctx: ToolContext, schema: Schema?, tool_name: string): Event throws Event` | super |
 | Rust | `event_directive(name: string, data: json, directives: DirectiveStore): string?` | private |
 | Rust | `json_template_value(value: json): string` | private |
-| Rust | `finish(werk: Werk, input: json, ctx: ToolContext, schema: Schema?, handover: Task?, tool_name: string): Event throws Event` | private |
-| Rust | `hand_over(werk: Werk, parent_id: string, agent: string, result: json, schema: Schema?, tool_name: string, child: Task, directives: DirectiveStore): Event throws Event` | private |
-| Rust | `resolve_handover(input: json, configured: Task?, directives: DirectiveStore): Task? throws Event` | private |
-| Rust | `required_label(fields: Record<string, json>): string throws Event` | private |
-| Rust | `invalid_handover_schema(error: string, directives: DirectiveStore): Event` | private |
+| Rust | `finish(werk: Werk, input: json, ctx: ToolContext, schema: Schema?, tool_name: string): Event throws Event` | private |
 | Rust | `mark_finished(werk: Werk, id: string, agent: string, directives: DirectiveStore): void throws Event` | private |
-| Rust | `apply_handover_templates(task: json, parent_id: string, result_path: string, result: string): void` | private |
-| Rust | `substitute_handover_text(text: string, parent_id: string, result_path: string, result: string): string` | private |
 | Rust | `attach_result(werk: Werk, id: string, result: json, schema: Schema?, tool_name: string, directives: DirectiveStore): [json, string[]] throws Event` | private |
 
 ## `crates/agentwerk/src/tools/fetch.rs`
@@ -1968,7 +1958,7 @@ Not bound: it is how `CommandTool` reads one command line.
 |----------|------|------------|
 | Rust | `DEFINITION: string` | private |
 | Rust | `FinishTool.NAME: string = "finish"` | crate |
-| Rust | `.from_schema(schema: Schema?, handover: Task?): Tool` | crate |
+| Rust | `.from_schema(schema: Schema?): Tool` | crate |
 | Rust | `arguments_schema(schema: Schema?, envelope: json): json` | private |
 | Rust | `normalize_input(input: json, envelope: json): json` | private |
 
@@ -2146,7 +2136,6 @@ Binds `agents/agent.rs`, whose section holds the Python spelling of each method.
 | Rust | `.interactive(): this` | python |
 | Rust | `.template(key: string, value: string): this` | python |
 | Rust | `.templates(variables: Record<string, string>): this` | python |
-| Rust | `.handover(task: PyTask): this throws PyErr` | python |
 | Rust | `.dir(dir: string): this` | python |
 | Rust | `.knowledge(store: PyKnowledge): this` | python |
 | Rust | `.directive(key: string, template: string): this` | python |
@@ -2384,7 +2373,7 @@ Binds `agents/tasks/task.rs`.
 | Language | Item | Visibility |
 |----------|------|------------|
 | Rust | `PyTask { inner: Task }` | python |
-| Rust | `.new(task: any, label: string?, schema: PySchema?, parent: string?): this throws PyErr` | python |
+| Rust | `.new(task: any, label: string?, schema: PySchema?): this throws PyErr` | python |
 | Rust | `.is_todo(): boolean` | python |
 | Rust | `.is_finished(): boolean` | python |
 | Rust | `.is_failed(): boolean` | python |
@@ -2397,7 +2386,6 @@ Binds `agents/tasks/task.rs`.
 | Rust | `.get_result(): any? throws PyErr` | python |
 | Rust | `.get_label(): string?` | python |
 | Rust | `.get_schema(): PySchema?` | python |
-| Rust | `.get_parent(): string?` | python |
 | Rust | `.get_reporter(): string` | python |
 | Rust | `.get_assignee(): string?` | python |
 | Rust | `.get_created_at(): number` | python |

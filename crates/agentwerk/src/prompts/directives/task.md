@@ -1,4 +1,4 @@
-<!-- What task operations say when an ID, a result, or a handover is missing. -->
+<!-- What task operations say when an ID or result is missing. -->
 
 ## werk_unavailable
 Task actions are unavailable here, so no task can be read or changed.
@@ -23,9 +23,3 @@ An edit requires `task`, `label`, or both. Provide the fields to change and retr
 
 ## task_transition_rejected
 {error}
-
-## handover_result_missing
-A follow-up requires a non-null, non-empty result. Retry the completion call with a value that meets those requirements.
-
-## handover_schema_invalid
-`handover.schema` is not a valid JSON Schema: {error}. Correct that field or omit it.

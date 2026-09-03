@@ -211,8 +211,8 @@ fn event_tool() -> PyTool {
     handle(EventTool)
 }
 
-/// Write the result for the current task and mark it finished, handing work
-/// on to a child task when needed. Registered on every agent.
+/// Write the result for the current task and mark it finished. Registered on
+/// every agent.
 #[pyfunction]
 #[pyo3(name = "FinishTool")]
 fn finish_tool() -> PyTool {

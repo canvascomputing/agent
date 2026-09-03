@@ -133,7 +133,7 @@ impl PyWerk {
     /// waits in memory until a `finish` drains it.
     ///
     /// Handlers run only while `finish_tasks` or `finish_all_tasks` is awaited, and MUST
-    /// NOT call either themselves: that waits forever on the handover the
+    /// NOT call either themselves: that waits forever on the handler the
     /// handler is running inside.
     fn on_event_async<'py>(slf: PyRef<'py, Self>, handler: Py<PyAny>) -> PyRef<'py, Self> {
         slf.inner.on_event_async(move |werk, event: Event| {
@@ -166,7 +166,7 @@ impl PyWerk {
     /// `on_event_async` sets.
     ///
     /// Handlers run only while `finish_tasks` or `finish_all_tasks` is awaited, and MUST
-    /// NOT call either themselves: that waits forever on the handover the
+    /// NOT call either themselves: that waits forever on the handler the
     /// handler is running inside.
     fn on_result_async<'py>(slf: PyRef<'py, Self>, handler: Py<PyAny>) -> PyRef<'py, Self> {
         slf.inner
@@ -200,7 +200,7 @@ impl PyWerk {
     /// `on_event_async` sets.
     ///
     /// Handlers run only while `finish_tasks` or `finish_all_tasks` is awaited, and MUST
-    /// NOT call either themselves: that waits forever on the handover the
+    /// NOT call either themselves: that waits forever on the handler the
     /// handler is running inside.
     fn on_failure_async<'py>(slf: PyRef<'py, Self>, handler: Py<PyAny>) -> PyRef<'py, Self> {
         slf.inner
@@ -277,7 +277,7 @@ impl PyWerk {
     /// sets.
     ///
     /// Handlers run only while `finish_tasks` or `finish_all_tasks` is awaited, and MUST
-    /// NOT call either themselves: that waits forever on the handover the
+    /// NOT call either themselves: that waits forever on the handler the
     /// handler is running inside.
     fn on_task_async<'py>(slf: PyRef<'py, Self>, handler: Py<PyAny>) -> PyRef<'py, Self> {
         slf.inner
@@ -484,7 +484,7 @@ fn as_py_werk<'py>(py: Python<'py>, werk: &Arc<Werk>) -> PyResult<Bound<'py, PyA
 }
 
 /// Call a Python function with the Werk, task, and result every `on_result`
-/// hook hands over.
+/// hook passes in.
 fn call_with_result<'py>(
     py: Python<'py>,
     callable: &Py<PyAny>,
@@ -500,7 +500,7 @@ fn call_with_result<'py>(
 }
 
 /// Call a Python function with the Werk, event, and task the `on_task` and
-/// `on_failure` hooks hand over.
+/// `on_failure` hooks pass in.
 fn call_with_task<'py>(
     py: Python<'py>,
     callable: &Py<PyAny>,
@@ -515,7 +515,7 @@ fn call_with_task<'py>(
 }
 
 /// Await what an `async def` handler returned, printing whatever it raised:
-/// there is no Python frame behind a handover to raise into.
+/// there is no Python frame behind an awaited handler to raise into.
 async fn await_coroutine(coroutine: PyResult<impl Future<Output = PyResult<Py<PyAny>>> + Send>) {
     match coroutine {
         Ok(future) => {

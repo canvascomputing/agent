@@ -50,16 +50,6 @@ def test_templates_chain_singly_and_in_bulk():
     assert configured is agent
 
 
-def test_handover_accepts_one_labeled_task_and_chains():
-    agent = aw.Agent()
-    assert agent.handover(aw.Task({"kind": "report"}, label="report")) is agent
-
-
-def test_handover_rejects_an_unlabeled_task():
-    with pytest.raises(RuntimeError, match="labeled Task"):
-        aw.Agent().handover(aw.Task("write"))
-
-
 def test_an_explicit_provider_and_model_let_the_agent_take_a_task(offline_agent):
     assert offline_agent.add_task("go").startswith("t-")
 

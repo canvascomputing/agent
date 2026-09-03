@@ -15,8 +15,8 @@ use super::reply::{Author, Reply, ReplyContent};
 
 /// Define work with an optional assignment label and result schema.
 ///
-/// You set the task with [`Task::new`] and optionally use the `label`, `schema`,
-/// and `parent` builders. The rest is set for you at insertion time and as the
+/// You set the task with [`Task::new`] and optionally use the `label` and
+/// `schema` builders. The rest is set for you at insertion time and as the
 /// agent works.
 ///
 /// ```no_run
@@ -81,8 +81,6 @@ pub struct Task {
     /// `Werk::load`, so it is not part of the task record.
     #[serde(skip)]
     pub(crate) errors: Vec<Event>,
-    /// The parent task if a handover was performed.
-    pub(crate) parent: Option<String>,
     /// Messages exchanged with the model.
     #[serde(skip)]
     pub(crate) replies: Vec<Reply>,
@@ -110,7 +108,6 @@ impl Task {
             failed_at: None,
             result: None,
             errors: Vec::new(),
-            parent: None,
             replies: Vec::new(),
         }
     }
@@ -129,15 +126,6 @@ impl Task {
     /// Constrain the result to a schema.
     pub fn schema(mut self, schema: crate::schemas::Schema) -> Self {
         self.schema = Some(schema);
-        self
-    }
-
-    /// Name the task this one came from.
-    ///
-    /// What the relationship means is up to you. A `finish` handover uses it to
-    /// chain a child to the task that handed off.
-    pub fn parent(mut self, id: impl Into<String>) -> Self {
-        self.parent = Some(id.into());
         self
     }
 
@@ -204,11 +192,6 @@ impl Task {
     /// Failures recorded against the task.
     pub fn get_errors(&self) -> &[Event] {
         &self.errors
-    }
-
-    /// The parent task ID, if any.
-    pub fn get_parent(&self) -> Option<&str> {
-        self.parent.as_deref()
     }
 
     /// Messages exchanged with the model.
@@ -578,7 +561,6 @@ mod tests {
         assert_eq!(task.get_failed_at(), None);
         assert_eq!(task.get_result(), None);
         assert!(task.get_errors().is_empty());
-        assert_eq!(task.get_parent(), None);
         assert!(task.get_replies().is_empty());
     }
 

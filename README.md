@@ -114,7 +114,6 @@ The [prompt skill](skills/prompt/SKILL.md) provides a compact template for writi
 | **Configure** | `role(role)` | Define who the agent is and how it should work. |
 | | `tool(tool)` / `tools(tools)` | Register a tool the agent may call. |
 | | `label(label)` | Restrict the agent to tasks carrying this label. |
-| | `handover(task)` | Set the task this agent creates when it finishes. |
 | | `dir(dir)` | Set the directory the agent has access to. |
 | | `template(key, value)` | Inject data into prompts with template strings. |
 | | `templates(variables)` | Inject more than one entry into prompts. |
@@ -346,7 +345,7 @@ werk.find_results("event.name = task_finished");
 
 | Origin | Fields |
 |--------|--------|
-| **Task** | `task.id`, `task.label`, `task.status`, `task.pending`, `task.cancelled`, `task.assignee`, `task.parent_id`, `task.input`, `task.result`, `task.errors`, `task.created`, `task.started`, `task.finished`, `task.failed` |
+| **Task** | `task.id`, `task.label`, `task.status`, `task.pending`, `task.cancelled`, `task.assignee`, `task.input`, `task.result`, `task.errors`, `task.created`, `task.started`, `task.finished`, `task.failed` |
 | **Event** | `event.name`, `event.agent_id`, `event.task_id`, `event.label`, `event.created`, `event.data` |
 
 Queries using both namespaces are inner joins: events without a task and events
@@ -425,7 +424,6 @@ Task members:
 | **Identity** | `get_id()` | Get the task ID, of the form `t-N`. |
 | | `get_task()` | Get the work the agent is asked to do. |
 | | `get_label()` | Get the label carried by the task. |
-| | `get_parent()` | Get the parent task ID after a handover. |
 | | `get_reporter()` | Get the ID of the agent that created the task. |
 | | `get_assignee()` | Get the ID of the agent that claimed the task. |
 | **Outcome** | `get_status()` | Get the task's current status. |
@@ -448,44 +446,19 @@ See [`Task`](https://docs.rs/agentwerk/latest/agentwerk/struct.Task.html).
 
 </details>
 
-### Handover
+### Sharing results
 
-Agents can pass work and results in five ways:
+Agents can pass work and results in four ways:
 
-1. **Agent handover API**: `Agent::handover` creates a configured child task when the agent finishes.
-2. **Result hook**: `on_result` creates follow-up tasks from completed work.
-3. **Knowledge**: the `knowledge` tool shares durable pages between agents.
-4. **Task tool**: the `task` tool reads any finished task's result by ID.
-5. **Read result file**: the `read_file` tool opens a task's `result.json` in the session directory.
+1. **Result hook**: `on_result` creates follow-up tasks from completed work.
+2. **Knowledge**: the `knowledge` tool shares durable pages between agents.
+3. **Task tool**: the `task` tool reads any finished task's result by ID.
+4. **Read result file**: the `read_file` tool opens a task's `result.json` in the session directory.
 
 <details>
 <summary>All ways agents pass data</summary>
 
-#### 1. Agent handover API
-
-Set the follow-up task on the first agent. The model can then finish with only its result:
-
-```rust
-let analyst = Agent::from_env()
-    .label("analysis")
-    .role("You are a product analyst.")
-    .handover(Task::labeled(
-        "report",
-        "Write the board report from {parent_result}.",
-    ));
-
-let writer = Agent::from_env()
-    .label("report")
-    .role("You write concise board reports.");
-
-let werk = Werk::new();
-werk.add_agent(analyst).add_agent(writer);
-werk.add_task(Task::labeled("analysis", "Rank all products by value."));
-```
-
-Finishing the analysis creates the `report` task and links it to its parent. The task may use `{parent_id}`, `{parent_result}`, and `{parent_result_path}`. Calling `handover` again replaces it. Bound object results keep this handover host-owned; the legacy envelope for scalar or unbound results may override its task or schema, but not its label.
-
-#### 2. Result hook
+#### 1. Result hook
 
 Use hooks to create new tasks when certain results arrive:
 
@@ -497,7 +470,7 @@ werk.on_result(|werk, done, result| {
 });
 ```
 
-#### 3. Knowledge
+#### 2. Knowledge
 
 Hand both agents one store, and either can write a page the other reads:
 
@@ -510,7 +483,7 @@ let writer = Agent::from_env().label("report").knowledge(&store);
 analyst.add_task("Rank the products by value, then save the ranking to your knowledge.");
 ```
 
-#### 4. Task tool
+#### 3. Task tool
 
 Give the writer `TaskTool`, and it reads what any finished task produced, by ID:
 
@@ -522,7 +495,7 @@ let writer = Agent::from_env()
 writer.add_task("Read the result of t-1, then write the board report.");
 ```
 
-#### 5. Read result file
+#### 4. Read result file
 
 Give the writer `ReadFileTool` instead, and it opens the result file named at the end of its task:
 
@@ -564,21 +537,6 @@ For small models, use shallow, focused schemas with few required fields, clear n
 | **Schema** | `Schema::new(document)` | Create a schema. |
 | | `validate(value)` | Validate content. |
 | | `get_raw_schema()` | Read the JSON Schema document the schema was built from. |
-A schema for a handover child belongs on its configured `Task`. This lets a small model create the child with a result-only `finish` call:
-
-```rust
-let report_schema = Schema::new(json!({
-    "type": "object",
-    "properties": { "title": { "type": "string" } },
-    "required": ["title"]
-}))?;
-
-let analyst = Agent::from_env().handover(
-    Task::labeled("report", "Write the report from {parent_result}")
-        .schema(report_schema),
-);
-```
-
 See [`Schema`](https://docs.rs/agentwerk/latest/agentwerk/schemas/struct.Schema.html).
 
 </details>
@@ -743,15 +701,11 @@ let patient_fetch = FetchTool::new().timeout(Duration::ZERO);
 
 `FinishTool` and `KnowledgeTool` are registered automatically on every agent. Agents use them to finish queued tasks or work with shared knowledge. An [interactive agent](#interactive) gets no `FinishTool` by default, since finishing its task would end the conversation. `FinishTool` is the compatibility wrapper around `EventTool`'s `task_finished` event; `EventTool` remains opt-in.
 
-When a task carries an object schema, its displayed fields are the `finish` call: pass them directly. Its configured handover runs automatically. Scalar and unbound tasks retain the explicit `result` envelope, which also supports an inline handover:
+When a task carries an object schema, its displayed fields are the `finish` call: pass them directly. Scalar and unbound tasks retain the explicit `result` envelope:
 
 ```json
 {
-  "result": "...",
-  "handover": {
-    "label": "...",
-    "task": "..."
-  }
+  "result": "..."
 }
 ```
 
@@ -784,7 +738,7 @@ werk.on_event(|_, event| {
 let events = werk.find_events("event.name = event_name");
 ```
 
-Event names are open-ended; lowercase snake case is conventional. Publishing an event does not change the task's status. The exception is the built-in `task_finished` event, which has the same result and handover behavior as `FinishTool`:
+Event names are open-ended; lowercase snake case is conventional. Publishing an event does not change the task's status. The exception is the built-in `task_finished` event, which has the same result behavior as `FinishTool`:
 
 ```json
 {
@@ -929,7 +883,7 @@ The first event's name, data, and context are stored as:
 
 `emit_event` adds the timestamp and a known task's label. Lowercase snake case is conventional, but other names are accepted; quote names containing spaces or punctuation in AQL. Built-in events have named constructors, such as `Event::task_finished()` and `Event::request_started("model")`; their names are also available as constants. Publishing one runs its hooks and updates its statistics. It is saved according to the event's normal rules, but it does not change task or execution state.
 
-`Werk::emit_event` never changes a task's status. To let a model finish its current task through an event, register `EventTool` on its agent. When the model emits `task_finished`, the tool validates and stores `data.result`, optionally creates a handover task, and marks the current task finished. All other names only publish an event.
+`Werk::emit_event` never changes a task's status. To let a model finish its current task through an event, register `EventTool` on its agent. When the model emits `task_finished`, the tool validates and stores `data.result`, then marks the current task finished. All other names only publish an event.
 
 Events are saved to `.agentwerk/events.jsonl`. `text_chunk_received` events are not saved. Read events through the Werk with these methods:
 

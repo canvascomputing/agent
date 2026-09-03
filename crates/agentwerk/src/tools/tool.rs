@@ -1213,7 +1213,7 @@ mod tests {
             "required": ["partial_sum"],
         }))
         .unwrap();
-        let finish = crate::tools::FinishTool::from_schema(Some(task), None);
+        let finish = crate::tools::FinishTool::from_schema(Some(task));
         let shown = finish.get_input_schema().get_raw_schema().clone();
         let content = finish
             .invoke(serde_json::json!({}), &test_ctx())
