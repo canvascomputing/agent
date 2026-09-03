@@ -34,6 +34,23 @@ make test_integration name=command_usage
 - Set `name=<test name>` to filter the Rust integration binary.
 - Export provider variables in the shell before live tests; the target does not load a `.env` file.
 
+## AQL Benchmarks
+
+**Compare parser, matcher, storage, and join costs without making machine timing a CI contract.**
+
+```bash
+make bench_aql
+make bench_aql args='joined/find_tasks --save-baseline before'
+make bench_aql args='joined/find_tasks --baseline before'
+make bench_aql args='joined/find_tasks --profile-time 20'
+```
+
+- The full suite builds deterministic sessions up to 10,000 tasks and 100,000 events before measurement starts.
+- The harness reports warm-cache median latency, its 10th–90th percentile range, and throughput without adding a benchmarking dependency.
+- Saved baselines live under `target/aql-bench` and compare changes on the same machine.
+- Use `--profile-time` with a CPU or allocation profiler to repeat one named scenario without sampling overhead.
+- Benchmarks are diagnostic and local. CI compiles them but enforces no machine-dependent timing threshold.
+
 ## Python Bindings
 
 **Build and test the extension inside an activated virtual environment.**

@@ -22,10 +22,11 @@ The invariants that govern orchestration, tools, providers, events, and durable 
 
 ## Queries and Lifecycle
 
-**Use origin-qualified AQL for every string selection over tasks or events.**
+**Use origin-qualified fields in AQL selections over tasks or events.**
 
-- Keep `Query` non-generic; its namespaced fields infer one private task or event source origin at runtime. Read finders may project between them through `Event::task_id`; lifecycle operations remain Task-only.
-- Treat a bare `t-<n>` as `task.id = t-<n>`; reject every other unqualified field or shorthand.
+- Keep `Query` non-generic; its namespaced fields infer a private task, event, or joined source at runtime. A joined query evaluates `(Task, Event)` pairs linked through `Event::task_id`, and every finder or lifecycle operation projects those matches to tasks.
+- Snapshot task IDs when an event or joined query enters a lifecycle operation. Keep task-only cancellation queries live so they also apply to tasks added later.
+- Treat a lone value as `task.label = value`, except that a bare `t-<n>` takes precedence as `task.id = t-<n>`. Keep fields in full expressions origin-qualified.
 - Use `Query::new` for runtime input so invalid AQL returns `QueryError`; infallible string conversions may panic.
 - Define pending work as unfinished, uncancelled work selected by the query; a task paused for caller input does not keep a `finish_*` wait open.
 - Keep cancellation scoped to the current run: `start()` clears cancellation without changing `Status`.

@@ -201,8 +201,14 @@ def test_find_tasks_compiles_the_string_as_a_query(werk):
     werk.add_task(aw.Task("alpha", label="a"))
     werk.add_task(aw.Task("beta", label="b"))
 
-    assert [t.get_task() for t in werk.find_tasks("task.label = b")] == ["beta"]
-    assert [t.get_task() for t in werk.find_tasks("task.label = a")] == ["alpha"]
+    assert [t.get_task() for t in werk.find_tasks("b")] == ["beta"]
+    assert [t.get_task() for t in werk.find_tasks("a")] == ["alpha"]
+
+
+def test_quoted_label_shorthand_supports_spaces(werk):
+    werk.add_task(aw.Task("review it", label="needs review"))
+
+    assert werk.find_task('"needs review"').get_task() == "review it"
 
 
 def test_a_malformed_query_string_raises_value_error(werk):
@@ -226,6 +232,23 @@ def test_an_event_query_projects_its_referenced_tasks(werk):
     assert werk.find_task("event.name = task_created").get_id() == id
 
 
+def test_a_mixed_query_projects_joined_rows_to_each_finder(werk):
+    scan = werk.add_task(aw.Task("scan", label="scan"))
+    report = werk.add_task(aw.Task("report", label="report"))
+    werk.set_task_finished(scan, {"verdict": "clean"})
+    werk.set_task_finished(report, {"summary": "done"})
+    werk.emit_event(aw.Event("selected").task_id(scan))
+    werk.emit_event(aw.Event("selected").task_id(report))
+    query = aw.Query("scan AND event.name = selected")
+
+    assert [task.get_id() for task in werk.find_tasks(query)] == [scan]
+    assert werk.find_task(query).get_id() == scan
+    assert [event.get_task_id() for event in werk.find_events(query)] == [scan]
+    assert werk.find_event(query).get_task_id() == scan
+    assert werk.find_results(query) == [{"verdict": "clean"}]
+    assert werk.find_result(query) == {"verdict": "clean"}
+
+
 def test_task_takes_a_bare_task_without_a_task_object(werk):
     id = werk.add_task("scan the corpus")
 
@@ -238,8 +261,8 @@ def test_find_results_selects_by_label(werk):
     werk.set_task_finished(scan, {"verdict": "clean"})
     werk.set_task_finished(report, {"summary": "nothing found"})
 
-    assert werk.find_results("task.label = scan") == [{"verdict": "clean"}]
-    assert werk.find_result(aw.Query("task.label = report")) == {
+    assert werk.find_results("scan") == [{"verdict": "clean"}]
+    assert werk.find_result(aw.Query("report")) == {
         "summary": "nothing found"
     }
 
@@ -356,7 +379,7 @@ def test_cancel_takes_the_matching_tasks_off_the_queue(werk):
     scan = werk.add_task(aw.Task("scan the corpus", label="scan"))
     werk.add_task(aw.Task("write it up", label="report"))
 
-    assert isinstance(werk.cancel_tasks("task.label = scan"), aw.Werk)
+    assert isinstance(werk.cancel_tasks("scan"), aw.Werk)
 
     assert [task.get_id() for task in werk.find_tasks("task.cancelled = true")] == [scan]
     assert [task.get_label() for task in werk.find_tasks("task.cancelled = false")] == [
@@ -574,13 +597,22 @@ def test_a_task_query_projects_the_tasks_events(werk):
     assert werk.find_event("task.status = todo").get_task_id() == id
 
 
-def test_event_queries_remain_invalid_for_task_lifecycle_operations(werk):
+def test_event_cancellation_snapshots_current_referenced_tasks(werk):
+    first = werk.add_task("first")
     query = aw.Query("event.name = task_created")
+    werk.cancel_tasks(query)
+    second = werk.add_task("second")
 
-    with pytest.raises(ValueError):
-        werk.cancel_tasks(query)
-    with pytest.raises(ValueError):
-        werk.finish_tasks(query)
+    assert werk.get_task(first).is_cancelled()
+    assert not werk.get_task(second).is_cancelled()
+
+
+@pytest.mark.asyncio
+async def test_event_query_is_accepted_by_finish(werk):
+    task_id = werk.add_task("done")
+    werk.set_task_finished(task_id, {"answer": 42})
+
+    assert await werk.finish_tasks("event.name = task_finished") == [{"answer": 42}]
 
 
 def test_an_event_carries_the_label_of_the_task_it_concerns(werk):
@@ -915,9 +947,10 @@ async def test_on_result_async_runs_the_handler_on_the_callers_event_loop(werk):
 
 
 async def test_finish_hands_back_the_results_its_filter_named(werk):
-    id = werk.add_task("work")
-    werk.set_task_finished(id, {"verdict": "clean"})
-    assert await werk.finish_tasks(lambda t: t.get_id() == id) == [{"verdict": "clean"}]
+    scan = werk.add_task(aw.Task("work", label="scan"))
+    werk.add_task(aw.Task("other", label="report"))
+    werk.set_task_finished(scan, {"verdict": "clean"})
+    assert await werk.finish_tasks("scan") == [{"verdict": "clean"}]
 
 
 async def test_finish_all_hands_back_the_results_of_every_pool(werk):

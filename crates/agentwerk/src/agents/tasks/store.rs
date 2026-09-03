@@ -7,7 +7,7 @@ use crate::event::Event;
 use crate::persistence::Persist;
 use crate::schemas::SchemaViolations;
 
-use super::super::query::Query;
+use super::super::query::{Origin, Query};
 use super::error::TaskError;
 use super::reply::Reply;
 use super::task::{Status, Task};
@@ -52,7 +52,7 @@ impl Werk {
             .lock()
             .unwrap()
             .iter()
-            .any(|query| query.matches_task(&task));
+            .any(|filter| filter.matches(&task));
         let mut store = self.tasks.lock().unwrap();
         let id = task.id.clone();
         let reporter = task.reporter.clone();
@@ -94,15 +94,26 @@ impl Werk {
     /// The earliest candidate must itself be `todo`, so a query naming no
     /// status never reaches past a task already claimed.
     pub(crate) fn claim(&self, query: &Query, agent_id: &str) -> Option<String> {
+        let projected = match query.origin() {
+            Origin::Task => None,
+            Origin::Event | Origin::Joined => {
+                Some(self.tasks_selected_by(query).into_iter().next()?.id)
+            }
+        };
         let now = now_millis();
         let id = {
             let mut store = self.tasks.lock().unwrap();
-            let mut candidates: Vec<&Task> = store
-                .values()
-                .filter(|task| query.matches_task(task))
-                .collect();
-            query.sort_tasks(&mut candidates);
-            let id = candidates.first()?.id.clone();
+            let id = match projected {
+                Some(id) => id,
+                None => {
+                    let mut candidates: Vec<&Task> = store
+                        .values()
+                        .filter(|task| query.matches_task(task))
+                        .collect();
+                    query.sort_tasks(&mut candidates);
+                    candidates.first()?.id.clone()
+                }
+            };
             let task = store.get_mut(&id)?;
             if task.status != Status::Todo {
                 return None;
