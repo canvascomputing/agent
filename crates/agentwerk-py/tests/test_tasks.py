@@ -54,11 +54,11 @@ def test_unstarted_task_carries_its_id_and_no_messages(werk):
 def test_task_selection_uses_aql_status_and_pending_fields(werk):
     id = werk.add_task(aw.Task("scan the corpus"))
 
-    assert [task.get_id() for task in werk.find_tasks("status = todo")] == [id]
-    assert [task.get_id() for task in werk.find_tasks("pending = true")] == [id]
-    assert werk.find_tasks("status = in_progress") == []
-    assert werk.find_tasks("status = finished") == []
-    assert werk.find_tasks("status = failed") == []
+    assert [task.get_id() for task in werk.find_tasks("task.status = todo")] == [id]
+    assert [task.get_id() for task in werk.find_tasks("task.pending = true")] == [id]
+    assert werk.find_tasks("task.status = in_progress") == []
+    assert werk.find_tasks("task.status = finished") == []
+    assert werk.find_tasks("task.status = failed") == []
 
 
 def test_task_predicates_follow_label_status_and_cancellation(werk):
@@ -75,7 +75,7 @@ def test_task_predicates_follow_label_status_and_cancellation(werk):
     unlabeled_key = werk.add_task(aw.Task("unscoped"))
     assert werk.get_task(unlabeled_key).get_label() is None
 
-    werk.cancel_tasks("label = scan")
+    werk.cancel_tasks("task.label = scan")
     cancelled = werk.get_task(todo_key)
     assert cancelled.is_cancelled()
     assert not cancelled.is_pending()
@@ -185,7 +185,7 @@ def test_find_task_returns_the_first_match(werk):
     werk.add_task(aw.Task("alpha", label="a"))
     werk.add_task(aw.Task("beta", label="b"))
 
-    found = werk.find_task("status = todo")
+    found = werk.find_task("task.status = todo")
     assert found.get_task() == "alpha"
 
 
@@ -193,7 +193,7 @@ def test_find_tasks_filters_by_query(werk):
     werk.add_task(aw.Task("alpha", label="a"))
     werk.add_task(aw.Task("beta", label="b"))
 
-    matches = werk.find_tasks(aw.Query("label = a"))
+    matches = werk.find_tasks(aw.Query("task.label = a"))
     assert [t.get_task() for t in matches] == ["alpha"]
 
 
@@ -201,8 +201,8 @@ def test_find_tasks_compiles_the_string_as_a_query(werk):
     werk.add_task(aw.Task("alpha", label="a"))
     werk.add_task(aw.Task("beta", label="b"))
 
-    assert [t.get_task() for t in werk.find_tasks("b")] == ["beta"]
-    assert [t.get_task() for t in werk.find_tasks("label = a")] == ["alpha"]
+    assert [t.get_task() for t in werk.find_tasks("task.label = b")] == ["beta"]
+    assert [t.get_task() for t in werk.find_tasks("task.label = a")] == ["alpha"]
 
 
 def test_a_malformed_query_string_raises_value_error(werk):
@@ -212,12 +212,18 @@ def test_a_malformed_query_string_raises_value_error(werk):
 
 def test_a_query_compiles_its_string_on_construction():
     with pytest.raises(ValueError):
-        aw.Query("label =")
+        aw.Query("task.label =")
 
-
-def test_an_event_query_raises_where_tasks_are_selected(werk):
     with pytest.raises(ValueError):
-        werk.find_tasks(aw.Query("event = task_finished"))
+        aw.Query("result.value ~ clean")
+
+
+def test_an_event_query_projects_its_referenced_tasks(werk):
+    id = werk.add_task("seed")
+    query = aw.Query("event.name = task_created")
+
+    assert [task.get_id() for task in werk.find_tasks(query)] == [id]
+    assert werk.find_task("event.name = task_created").get_id() == id
 
 
 def test_task_takes_a_bare_task_without_a_task_object(werk):
@@ -232,8 +238,10 @@ def test_find_results_selects_by_label(werk):
     werk.set_task_finished(scan, {"verdict": "clean"})
     werk.set_task_finished(report, {"summary": "nothing found"})
 
-    assert werk.find_results("scan") == [{"verdict": "clean"}]
-    assert werk.find_result(aw.Query("label = report")) == {"summary": "nothing found"}
+    assert werk.find_results("task.label = scan") == [{"verdict": "clean"}]
+    assert werk.find_result(aw.Query("task.label = report")) == {
+        "summary": "nothing found"
+    }
 
 
 def test_find_results_takes_a_callable(werk):
@@ -243,6 +251,24 @@ def test_find_results_takes_a_callable(werk):
     werk.set_task_finished(report, {"summary": "nothing found"})
 
     assert werk.find_results(lambda task: task.get_label() == "scan") == [{"verdict": "clean"}]
+
+
+def test_result_finders_query_the_producing_tasks(werk):
+    scan = werk.add_task(aw.Task({"kind": "scan"}, label="scan"))
+    unfinished = werk.add_task(aw.Task({"kind": "draft"}, label="scan"))
+    werk.set_task_finished(scan, {"verdict": "clean"})
+    werk.get_task(unfinished)
+
+    query = aw.Query("task.input ~ scan AND task.result ~ clean")
+    assert werk.find_results(query) == [
+        {"verdict": "clean"}
+    ]
+    assert [task.get_id() for task in werk.find_tasks(query)] == [scan]
+    assert werk.find_results("task.status = todo") == []
+    assert werk.find_results(aw.Query("event.name = task_finished")) == [
+        {"verdict": "clean"}
+    ]
+    assert werk.find_result("event.name = task_finished") == {"verdict": "clean"}
 
 
 def test_get_task_returns_none_for_unknown_id(werk):
@@ -312,7 +338,7 @@ def test_find_tasks_returns_every_status_not_just_finished(werk):
     werk.add_task(aw.Task("alpha", label="a"))
     werk.add_task(aw.Task("beta", label="b"))
 
-    tasks = [task.get_task() for task in werk.find_tasks("label = a")]
+    tasks = [task.get_task() for task in werk.find_tasks("task.label = a")]
     assert tasks == ["alpha"]
 
 
@@ -330,39 +356,41 @@ def test_cancel_takes_the_matching_tasks_off_the_queue(werk):
     scan = werk.add_task(aw.Task("scan the corpus", label="scan"))
     werk.add_task(aw.Task("write it up", label="report"))
 
-    assert isinstance(werk.cancel_tasks("label = scan"), aw.Werk)
+    assert isinstance(werk.cancel_tasks("task.label = scan"), aw.Werk)
 
-    assert [task.get_id() for task in werk.find_tasks("cancelled = true")] == [scan]
-    assert [task.get_label() for task in werk.find_tasks("cancelled = false")] == ["report"]
+    assert [task.get_id() for task in werk.find_tasks("task.cancelled = true")] == [scan]
+    assert [task.get_label() for task in werk.find_tasks("task.cancelled = false")] == [
+        "report"
+    ]
     assert werk.get_task(scan).is_cancelled()
 
 
 def test_cancel_applies_to_matching_tasks_inserted_later(werk):
-    werk.cancel_tasks("label = scan")
+    werk.cancel_tasks("task.label = scan")
 
     scan = werk.add_task(aw.Task("scan the corpus", label="scan"))
     werk.add_task(aw.Task("write it up", label="report"))
 
-    assert werk.find_task("cancelled = true").get_id() == scan
+    assert werk.find_task("task.cancelled = true").get_id() == scan
 
 
 async def test_start_clears_cancellation_flags_and_filters(werk):
     werk.add_task(aw.Task("first", label="scan"))
-    werk.cancel_tasks("label = scan")
-    assert len(werk.find_tasks("cancelled = true")) == 1
+    werk.cancel_tasks("task.label = scan")
+    assert len(werk.find_tasks("task.cancelled = true")) == 1
 
     werk.start()
     werk.add_task(aw.Task("second", label="scan"))
 
-    assert werk.find_tasks("cancelled = true") == []
-    assert len(werk.find_tasks("pending = true")) == 2
+    assert werk.find_tasks("task.cancelled = true") == []
+    assert len(werk.find_tasks("task.pending = true")) == 2
     werk.cancel_all_tasks()
     await werk.finish_all_tasks()
 
 
 def test_task_json_does_not_persist_cancellation(werk, tmp_path):
     id = werk.add_task(aw.Task("scan", label="scan"))
-    werk.cancel_tasks("label = scan")
+    werk.cancel_tasks("task.label = scan")
     werk.set_task_failed(id)
 
     record = json.loads((tmp_path / "tasks" / id / "task.json").read_text())
@@ -371,8 +399,8 @@ def test_task_json_does_not_persist_cancellation(werk, tmp_path):
     assert "cancelled" not in record
 
     reopened = aw.Werk.load(str(tmp_path))
-    assert reopened.find_tasks("cancelled = true") == []
-    assert len(reopened.find_tasks("cancelled = false")) == 1
+    assert reopened.find_tasks("task.cancelled = true") == []
+    assert len(reopened.find_tasks("task.cancelled = false")) == 1
 
 
 def test_a_werk_that_has_not_run_records_nothing(werk):
@@ -414,10 +442,12 @@ def test_find_events_takes_an_aql_string(werk, tmp_path):
     werk.add_task(aw.Task("scan", label="scout"))
     werk.add_task("two")
 
-    assert len(werk.find_events("task_created")) == 2
-    assert len(werk.find_events("event = task_created AND label = scout")) == 1
-    assert len(werk.find_events("t-2")) == 1
-    assert werk.find_events("run_finished") == []
+    assert len(werk.find_events("event.name = task_created")) == 2
+    assert len(
+        werk.find_events("event.name = task_created AND event.label = scout")
+    ) == 1
+    assert len(werk.find_events("event.task_id = t-2")) == 1
+    assert werk.find_events("event.name = run_finished") == []
 
     events_path = tmp_path / "events.jsonl"
     records = [json.loads(line) for line in events_path.read_text().splitlines()]
@@ -425,17 +455,26 @@ def test_find_events_takes_an_aql_string(werk, tmp_path):
         record["created_at"] = created_at
     events_path.write_text("".join(f"{json.dumps(record)}\n" for record in records))
 
-    newest = werk.find_event("task_created ORDER BY created DESC")
+    newest = werk.find_event("event.name = task_created ORDER BY event.created DESC")
     assert newest.get_task_id() == "t-2"
 
 
 def test_find_events_takes_a_compiled_query(werk):
     werk.add_task("seed")
 
-    assert len(werk.find_events(aw.Query("task_created"))) == 1
-    assert werk.find_events(aw.Query("event = task_exploded")) == []
+    assert len(werk.find_events(aw.Query("event.name = task_created"))) == 1
+    assert werk.find_events(aw.Query("event.name = task_exploded")) == []
     with pytest.raises(ValueError):
-        werk.find_events("event = ")
+        werk.find_events("event.name = ")
+
+
+def test_event_data_does_not_include_the_event_name(werk):
+    werk.emit_event(aw.Event("needle").data({"message": "other"}))
+    werk.emit_event(aw.Event("other").data({"message": "needle"}))
+
+    assert len(werk.find_events("event.name = needle")) == 1
+    found = werk.find_events("event.data ~ needle")
+    assert [event.get_name() for event in found] == ["other"]
 
 
 def test_emit_event_publishes_named_data_with_optional_context(werk, tmp_path):
@@ -460,7 +499,7 @@ def test_emit_event_publishes_named_data_with_optional_context(werk, tmp_path):
     assert len(seen) == 1
     assert seen[0].get_name() == "document_indexed"
     assert seen[0].get_data() == {"documents": 42}
-    assert werk.find_event("event = document_indexed").get_data() == {"documents": 42}
+    assert werk.find_event("event.name = document_indexed").get_data() == {"documents": 42}
 
     records = [json.loads(line) for line in (tmp_path / "events.jsonl").read_text().splitlines()]
     record = next(record for record in records if record["name"] == "document_indexed")
@@ -468,7 +507,7 @@ def test_emit_event_publishes_named_data_with_optional_context(werk, tmp_path):
     assert "task_key" not in record
 
     reopened = aw.Werk.load(str(tmp_path))
-    restored = reopened.find_event("event = document_indexed")
+    restored = reopened.find_event("event.name = document_indexed")
     assert restored.get_data() == {"documents": 42}
     assert restored.get_label() == "scout"
 
@@ -518,21 +557,30 @@ def test_emit_event_accepts_arbitrary_names(werk, name):
     emitted = werk.emit_event(aw.Event(name))
 
     assert emitted.get_name() == name
-    assert werk.find_event(f'event = "{name}"').get_name() == name
+    assert werk.find_event(f'event.name = "{name}"').get_name() == name
 
 
-def test_a_query_neither_field_set_accepts_raises_on_construction():
+def test_an_unqualified_field_raises_on_query_construction():
     with pytest.raises(ValueError):
         aw.Query("assignee = alice")
 
 
-def test_a_task_query_raises_where_events_are_selected(werk):
-    werk.add_task("seed")
-    tasks_only = aw.Query("status = finished")
+def test_a_task_query_projects_the_tasks_events(werk):
+    id = werk.add_task("seed")
+    tasks_only = aw.Query("task.status = todo")
 
-    assert werk.find_tasks(tasks_only) == []
+    assert [task.get_id() for task in werk.find_tasks(tasks_only)] == [id]
+    assert [event.get_task_id() for event in werk.find_events(tasks_only)] == [id]
+    assert werk.find_event("task.status = todo").get_task_id() == id
+
+
+def test_event_queries_remain_invalid_for_task_lifecycle_operations(werk):
+    query = aw.Query("event.name = task_created")
+
     with pytest.raises(ValueError):
-        werk.find_events(tasks_only)
+        werk.cancel_tasks(query)
+    with pytest.raises(ValueError):
+        werk.finish_tasks(query)
 
 
 def test_an_event_carries_the_label_of_the_task_it_concerns(werk):
@@ -630,7 +678,7 @@ def test_on_event_files_a_follow_up_for_any_kind(werk):
 
     werk.set_task_finished(id, {"verdict": "clean"})
 
-    filed = werk.find_tasks("label = report")
+    filed = werk.find_tasks("task.label = report")
     assert [t.get_task() for t in filed] == ["report"]
 
 
@@ -888,11 +936,11 @@ async def test_finish_task_hands_back_the_first_result_in_query_order(werk):
     werk.set_task_finished(report, {"pages": 2})
     werk.set_task_finished(scan, {"verdict": "clean"})
 
-    assert await werk.finish_task("ORDER BY id DESC") == {"pages": 2}
+    assert await werk.finish_task("ORDER BY task.id DESC") == {"pages": 2}
 
 
 async def test_finish_task_is_none_when_nothing_finished(werk):
-    assert await werk.finish_task("status = finished") is None
+    assert await werk.finish_task("task.status = finished") is None
 
 
 async def test_a_cancelled_run_reports_its_reason(werk):

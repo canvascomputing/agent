@@ -38,7 +38,7 @@ async def test_invokes_a_builtin_tool(tmp_path):
     agent.add_task("Read secret.txt and report the exact token it contains.")
     werk = agent.start()
     assert "THE-TOKEN-IS-42" in str(
-        await werk.finish_task("ORDER BY created DESC")
+        await werk.finish_task("ORDER BY task.created DESC")
     )
 
 

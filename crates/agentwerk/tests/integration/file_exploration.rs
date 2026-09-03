@@ -33,7 +33,9 @@ async fn file_tools_explore_the_repository() -> std::result::Result<(), Box<dyn 
     werk.finish_all_tasks().await;
     common::print_result(&werk);
 
-    assert!(!werk.find_events("tool_call_started").is_empty());
+    assert!(!werk
+        .find_events("event.name = tool_call_started")
+        .is_empty());
 
     Ok(())
 }

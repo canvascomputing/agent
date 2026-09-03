@@ -1,6 +1,6 @@
-//! Exposes AQL queries over tasks and events through one Python class.
+//! Exposes origin-aware AQL queries through one Python class.
 
-use agentwerk::agents::{Matcher, QueryError};
+use agentwerk::agents::Matcher;
 use agentwerk::event::Event;
 use agentwerk::{Query, Task};
 use pyo3::prelude::*;
@@ -8,48 +8,27 @@ use pyo3::prelude::*;
 use crate::event::to_py_event;
 use crate::task::PyTask;
 
-/// Selects tasks or recorded events by field values, compiled from AQL.
+/// Selects tasks or events by origin-qualified field values.
 #[pyclass(name = "Query")]
 pub struct PyQuery {
     source: String,
-    tasks: Result<Query<Task>, QueryError>,
-    events: Result<Query<Event>, QueryError>,
+    query: Query,
 }
 
 #[pymethods]
 impl PyQuery {
     /// Compile an AQL string, the same syntax a string argument carries.
     ///
-    /// A string the task fields reject still selects events, and the other
-    /// way round. Only one the two field sets both reject raises here.
     #[new]
     fn new(query: &str) -> PyResult<Self> {
-        let compiled = PyQuery {
+        Ok(PyQuery {
             source: query.to_string(),
-            tasks: Query::<Task>::new(query),
-            events: Query::<Event>::new(query),
-        };
-        match (&compiled.tasks, &compiled.events) {
-            (Err(over_tasks), Err(over_events)) => Err(rejected(over_tasks, over_events)),
-            _ => Ok(compiled),
-        }
+            query: Query::new(query).map_err(|error| value_error(error.to_string()))?,
+        })
     }
 
     fn __repr__(&self) -> String {
         format!("Query({:?})", self.source)
-    }
-}
-
-/// The error a string neither field set accepts raises. One message where both
-/// answered the same, so a malformed query is not reported twice.
-fn rejected(over_tasks: &QueryError, over_events: &QueryError) -> PyErr {
-    let over_tasks = over_tasks.to_string();
-    let over_events = over_events.to_string();
-    match over_tasks == over_events {
-        true => value_error(over_tasks),
-        false => value_error(format!(
-            "Over tasks: {over_tasks} Over events: {over_events}"
-        )),
     }
 }
 
@@ -60,15 +39,20 @@ fn value_error(message: impl Into<String>) -> PyErr {
 /// Read a Python argument as a task query: a `Query`, a string in AQL, or a
 /// callable as a condition of its own. A string that does not compile raises
 /// `ValueError` rather than panicking across the binding.
-pub fn to_task_matcher(py: Python<'_>, arg: &Py<PyAny>) -> PyResult<Query<Task>> {
+pub fn to_task_matcher(py: Python<'_>, arg: &Py<PyAny>) -> PyResult<Query> {
     if let Ok(query) = arg.extract::<PyRef<'_, PyQuery>>(py) {
-        return match &query.tasks {
-            Ok(compiled) => Ok(compiled.clone()),
-            Err(error) => Err(value_error(error.to_string())),
-        };
+        query
+            .query
+            .expects_task()
+            .map_err(|error| value_error(error.to_string()))?;
+        return Ok(query.query.clone());
     }
     if let Ok(query) = arg.extract::<String>(py) {
-        return Query::<Task>::new(&query).map_err(|error| value_error(error.to_string()));
+        let query = Query::new(&query).map_err(|error| value_error(error.to_string()))?;
+        query
+            .expects_task()
+            .map_err(|error| value_error(error.to_string()))?;
+        return Ok(query);
     }
     let callable = arg.clone_ref(py);
     Ok(Matcher::into_query(move |task: &Task| {
@@ -76,16 +60,29 @@ pub fn to_task_matcher(py: Python<'_>, arg: &Py<PyAny>) -> PyResult<Query<Task>>
     }))
 }
 
-/// Read a Python argument as an event query, the way a task filter is read.
-pub fn to_event_matcher(py: Python<'_>, arg: &Py<PyAny>) -> PyResult<Query<Event>> {
+/// Read a task or result finder's query. Named AQL may originate from tasks
+/// or events; callables continue to receive the destination task.
+pub fn to_task_finder(py: Python<'_>, arg: &Py<PyAny>) -> PyResult<Query> {
     if let Ok(query) = arg.extract::<PyRef<'_, PyQuery>>(py) {
-        return match &query.events {
-            Ok(compiled) => Ok(compiled.clone()),
-            Err(error) => Err(value_error(error.to_string())),
-        };
+        return Ok(query.query.clone());
     }
     if let Ok(query) = arg.extract::<String>(py) {
-        return Query::<Event>::new(&query).map_err(|error| value_error(error.to_string()));
+        return Query::new(&query).map_err(|error| value_error(error.to_string()));
+    }
+    let callable = arg.clone_ref(py);
+    Ok(Matcher::into_query(move |task: &Task| {
+        task_predicate(&callable, task)
+    }))
+}
+
+/// Read an event finder's query. Named AQL may originate from tasks or events;
+/// callables continue to receive the destination event.
+pub fn to_event_matcher(py: Python<'_>, arg: &Py<PyAny>) -> PyResult<Query> {
+    if let Ok(query) = arg.extract::<PyRef<'_, PyQuery>>(py) {
+        return Ok(query.query.clone());
+    }
+    if let Ok(query) = arg.extract::<String>(py) {
+        return Query::new(&query).map_err(|error| value_error(error.to_string()));
     }
     let callable = arg.clone_ref(py);
     Ok(Matcher::into_query(move |event: &Event| {

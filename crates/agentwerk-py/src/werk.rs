@@ -13,7 +13,7 @@ use crate::agent::PyAgent;
 use crate::convert::{py_to_value, runtime_error, value_to_py};
 use crate::event::{to_py_event, PyEvent};
 use crate::policy::PyPolicy;
-use crate::query::{to_event_matcher, to_task_matcher};
+use crate::query::{to_event_matcher, to_task_finder, to_task_matcher};
 use crate::reply::{py_to_replies, replies_to_py};
 use crate::task::{to_task, PyTask};
 
@@ -237,18 +237,20 @@ impl PyWerk {
             .collect()
     }
 
-    /// Get every task matching a Query or callable.
+    /// Get tasks selected directly by a task query or through an event query.
+    /// A callable always receives a task.
     fn find_tasks(&self, py: Python<'_>, predicate: Py<PyAny>) -> PyResult<Vec<Py<PyTask>>> {
-        let tasks = self.inner.find_tasks(to_task_matcher(py, &predicate)?);
+        let tasks = self.inner.find_tasks(to_task_finder(py, &predicate)?);
         tasks
             .iter()
             .map(|task| Py::new(py, PyTask::from_task(task)))
             .collect()
     }
 
-    /// Get the first task matching a Query or callable.
+    /// Get the first task selected directly or through a matching event.
+    /// A callable always receives a task.
     fn find_task(&self, py: Python<'_>, predicate: Py<PyAny>) -> PyResult<Option<Py<PyTask>>> {
-        let task = self.inner.find_task(to_task_matcher(py, &predicate)?);
+        let task = self.inner.find_task(to_task_finder(py, &predicate)?);
         match task {
             Some(task) => Ok(Some(Py::new(py, PyTask::from_task(&task))?)),
             None => Ok(None),
@@ -404,16 +406,15 @@ impl PyWerk {
         slf
     }
 
-    /// Get every recorded event matching a `Query`, an AQL string, or a
-    /// callable, oldest first. Counting is `len()`, and a total is a fold over
-    /// the events themselves.
+    /// Get events selected directly by an event query or through a task query.
+    /// A callable always receives an event.
     fn find_events(&self, matches: Py<PyAny>, py: Python<'_>) -> PyResult<Vec<PyEvent>> {
         let found = self.inner.find_events(to_event_matcher(py, &matches)?);
         Ok(found.iter().map(to_py_event).collect())
     }
 
-    /// Get the earliest recorded event matching a `Query`, an AQL string, or a
-    /// callable, or the first in the order an `ORDER BY` names.
+    /// Get the first event selected directly or through a matching task.
+    /// A callable always receives an event.
     fn find_event(&self, matches: Py<PyAny>, py: Python<'_>) -> PyResult<Option<PyEvent>> {
         let found = self.inner.find_event(to_event_matcher(py, &matches)?);
         Ok(found.as_ref().map(to_py_event))
@@ -444,25 +445,25 @@ impl PyWerk {
             .collect()
     }
 
-    /// Get every result whose task matches the Query or callable, in query
-    /// order. Status defaults to `"finished"`.
+    /// Get results selected through matching tasks or events, in source-query
+    /// order. A callable receives a task. Task queries default status to
+    /// `"finished"`; event queries always return finished task results.
     fn find_results<'py>(
         &self,
         py: Python<'py>,
         query: Py<PyAny>,
     ) -> PyResult<Vec<Bound<'py, PyAny>>> {
-        let results = self.inner.find_results(to_task_matcher(py, &query)?);
+        let results = self.inner.find_results(to_task_finder(py, &query)?);
         results.iter().map(|value| value_to_py(py, value)).collect()
     }
 
-    /// Get the first result whose task matches the Query or callable.
-    /// Status defaults to `"finished"`.
+    /// Get the first result selected through a matching task or event.
     fn find_result<'py>(
         &self,
         py: Python<'py>,
         query: Py<PyAny>,
     ) -> PyResult<Option<Bound<'py, PyAny>>> {
-        let result = self.inner.find_result(to_task_matcher(py, &query)?);
+        let result = self.inner.find_result(to_task_finder(py, &query)?);
         match result {
             Some(value) => Ok(Some(value_to_py(py, &value)?)),
             None => Ok(None),

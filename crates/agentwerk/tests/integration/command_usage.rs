@@ -63,7 +63,7 @@ async fn command_tools_produce_the_schema_bound_result(
     );
 
     let json = werk
-        .finish_task("ORDER BY created DESC")
+        .finish_task("ORDER BY task.created DESC")
         .await
         .unwrap_or_default();
     common::print_result(&werk);

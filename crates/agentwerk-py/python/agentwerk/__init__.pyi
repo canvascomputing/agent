@@ -125,7 +125,9 @@ class Reply:
 class Query:
     """Select tasks or recorded events with AQL.
 
-    The query may include ``ORDER BY <field> ASC | DESC``. Construction raises ``ValueError`` only when both task and event fields reject the query; a query valid for one field set may still fail when used with the other.
+    Fields are qualified with ``task.`` or ``event.`` and infer the query's
+    source origin. Read finders project between tasks and events through
+    ``event.task_id``. The query may include ``ORDER BY <field> ASC | DESC``.
     """
 
     def __init__(self, query: str) -> None: ...

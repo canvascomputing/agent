@@ -328,12 +328,30 @@ See [`Werk`](https://docs.rs/agentwerk/latest/agentwerk/struct.Werk.html).
 
 ### Queries
 
-Use queries to choose tasks by label, ID, status, or time.
+Agent Query Language (AQL) filters tasks, events, and results. Pass an AQL
+string directly, or compile it with `Query` to reuse it.
+
+Each query selects tasks with `task.*` fields or events with `event.*` fields;
+it cannot mix the two. All `find_*` methods accept either query. A task query
+passed to `find_events` returns events attached to the matching tasks. An event
+query passed to a task or result finder returns the referenced tasks or their
+results.
 
 ```python
-werk.find_tasks("scan")                          # Tasks labeled scan.
-werk.find_results("t-3")                         # The result of task t-3.
-werk.find_results("scan ORDER BY finished DESC") # Scan results, newest first.
+# Find tasks labeled "scan".
+werk.find_tasks("task.label = scan")
+
+# Find tasks referenced by failed tool-call events.
+werk.find_tasks("event.name = tool_call_failed")
+
+# Find events attached to tasks labeled "scan".
+werk.find_events("task.label = scan")
+
+# Find the result produced by task "t-3".
+werk.find_results("t-3")
+
+# Find results produced by tasks with finished events.
+werk.find_results("event.name = task_finished")
 ```
 
 <details>
@@ -349,45 +367,46 @@ werk.find_results("scan ORDER BY finished DESC") # Scan results, newest first.
 | **Search** | `field ~ text`, `field !~ text` | Include or exclude case-insensitive text. |
 | **Compare** | `field > value`, `>=`, `<`, `<=` | Compare a time field. |
 | **Combine** | `A AND B`, `A OR B`, `NOT A`, `(A OR B)` | Combine or group conditions. |
-| **Shorthand** | `scan`, `t-3` | Short for `label = scan` and `id = t-3`. |
+| **Task ID** | `t-3` | Short for `task.id = t-3`; this is the only unqualified form. |
 | **Sort** | `ORDER BY field DESC` | Sort matches; `ASC` is the default. |
 
 #### Fields
 
-| Kind | Fields | Meaning |
-|------|--------|---------|
-| **Identity** | `id`, `label`, `status` | Task identity and current state. |
-| **Run state** | `pending`, `cancelled` | Whether this run may schedule the task. |
-| **Relationship** | `agent`, `parent` | Claiming agent and handover parent. |
-| **Text** | `task`, `result`, `errors` | Task body, result, and recorded failures. |
-| **Time** | `created`, `started`, `finished`, `failed` | Creation, start, finish, and failure times. |
+| Origin | Fields |
+|--------|--------|
+| **Task** | `task.id`, `task.label`, `task.status`, `task.pending`, `task.cancelled`, `task.assignee`, `task.parent_id`, `task.input`, `task.result`, `task.errors`, `task.created`, `task.started`, `task.finished`, `task.failed` |
+| **Event** | `event.name`, `event.agent_id`, `event.task_id`, `event.label`, `event.created`, `event.data` |
+
+Result finders return raw results from referenced tasks. Task queries default
+`task.status` to `finished` unless they name a status; Event queries always
+select finished tasks. Tasks without results are skipped.
 
 #### Rules
 
 Write the field, followed by what it must match:
 
-- Exact value: `label = scan`
-- Contains text: `result ~ timeout`
-- Time range: `failed > -1h`
-- Has no value: `agent IS EMPTY`
+- Exact value: `task.label = scan`
+- Contains text: `task.result ~ timeout`
+- Time range: `task.failed > -1h`
+- Has no value: `task.assignee IS EMPTY`
 
-Missing values do not match `!=`. For example, `label != scan` leaves out tasks with no label. To include them, use `label IS EMPTY OR label != scan`.
+Missing values do not match `!=`. For example, `task.label != scan` leaves out tasks with no label. To include them, use `task.label IS EMPTY OR task.label != scan`.
 
-Quote values containing spaces: `label = "needs review"`. Put lists in parentheses: `label IN (scan, report)`.
+Quote values containing spaces: `task.label = "needs review"`. Put lists in parentheses: `task.label IN (scan, report)`.
 
 Use parentheses when mixing `AND` and `OR` to make the order clear. `NOT` applies to the condition or parenthesized group after it. Query words such as `AND` ignore case; labels and IDs do not.
 
 Relative times such as `-30m`, `-2h`, `-7d`, and `-1w` are measured when the query runs.
 
-`ORDER BY field` sorts from lowest to highest. Add `DESC` for the reverse. Tasks with no value for that field come last. Without `ORDER BY`, tasks remain in creation order.
+`ORDER BY field` sorts source records from lowest to highest. Add `DESC` for the reverse. Records with no value for that field come last. Projected tasks and results follow matching event order, with each task returned once. Projected events are grouped by matching task order and retain log order within each task.
 
 #### Examples
 
 ```python
-werk.find_results("report AND result ~ risk")           # reports that mention risk
-werk.find_tasks("errors ~ tool_call_failed")          # saw a tool call fail
-werk.find_tasks("status = todo AND agent IS EMPTY")   # waiting, never claimed
-werk.find_tasks("failed > -1h ORDER BY failed DESC")  # the last hour's failures
+werk.find_results("task.label = report AND task.result ~ risk")
+werk.find_tasks("task.errors ~ tool_call_failed")
+werk.find_tasks("task.status = todo AND task.assignee IS EMPTY")
+werk.find_tasks("task.failed > -1h ORDER BY task.failed DESC")
 werk.find_tasks(lambda t: len(t.get_replies()) > 4)       # a callable, for what no field carries
 ```
 
@@ -417,7 +436,7 @@ if answer is not None:
 | **Cancel** | `cancel_tasks(query)` | Stop work on matching tasks. |
 | | `cancel_all_tasks()` | Stop work on every task. |
 
-Cancellation applies only to the current execution: it does not change `status` or remain attached to the task. `start()` clears cancellation so unfinished tasks can resume. Use `task.is_cancelled()` for a task you hold, or `cancelled = true` and `pending = true` to select by execution state.
+Cancellation applies only to the current execution: it does not change `status` or remain attached to the task. `start()` clears cancellation so unfinished tasks can resume. Use `task.is_cancelled()` for a task you hold, or `task.cancelled = true` and `task.pending = true` to select by execution state.
 
 Task members:
 
@@ -770,7 +789,7 @@ Agentwerk records the current task and agent on every event. Werk handlers can r
 
 ```python
 werk.on_event(lambda _, event: print(event.get_name()))
-events = werk.find_events("event = event_name")
+events = werk.find_events("event.name = event_name")
 ```
 
 Event names are open-ended; lowercase snake case is conventional. Publishing an event does not change the task's status. The exception is the built-in `task_finished` event, which has the same result and handover behavior as `FinishTool()`:
@@ -915,8 +934,8 @@ Events are saved to `.agentwerk/events.jsonl`. `text_chunk_received` events are 
 | Method | Description |
 |--------|-------------|
 | `emit_event(event)` | Publish an event for querying and observation. |
-| `find_event(query)` | Get the first matching event in query order. Without `ORDER BY`, this is the earliest one. |
-| `find_events(query)` | Get every matching event in query order. Without `ORDER BY`, this is oldest first. |
+| `find_event(query)` | Get the first event selected directly or through a matching task. |
+| `find_events(query)` | Get events selected directly or through matching tasks, in query order. |
 | `get_input_tokens()` / `get_output_tokens()` | Get token counts across the run's requests. |
 | `get_duration()` | Get the elapsed execution duration. |
 
@@ -930,30 +949,26 @@ An event handler usually checks `get_name()` and then reads its payload with `ge
 You can query events with AQL or a condition you supply.
 
 ```python
-werk.find_events("tool_call_failed")
-werk.find_events("event = request_finished AND agent = research-1")
-werk.find_events("task = t-3 ORDER BY created DESC")
-werk.find_events("payload ~ timeout AND created > -1h")
+werk.find_events("event.name = tool_call_failed")
+werk.find_events("event.name = request_finished AND event.agent_id = research-1")
+werk.find_events("event.task_id = t-3 ORDER BY event.created DESC")
+werk.find_events("event.data ~ timeout AND event.created > -1h")
 ```
 
 | | Field | Description |
 |-|-------|-------------|
-| **Match** | `event` | The event name, such as `run_started` or `tool_call_failed`. |
-| | `agent` | The attributed agent ID, when the event has agent context. |
-| | `task` | The attributed task ID, when the event has task context. |
-| | `label` | The attributed task's label, when the task is known and labelled. |
-| **Search** | `payload` | Search the event name and data together as text. |
-| **Compare** | `created` | When the event was recorded. |
+| **Match** | `event.name` | The event name, such as `run_started` or `tool_call_failed`. |
+| | `event.agent_id` | The attributed agent ID, when the event has agent context. |
+| | `event.task_id` | The attributed task ID, when the event has task context. |
+| | `event.label` | The attributed task's label, when the task is known and labelled. |
+| **Search** | `event.data` | Search only the serialized raw event data as text. |
+| **Compare** | `event.created` | When the event was recorded. |
 
-Event queries follow the same [rules as task queries](#queries). Match `event`, `agent`, `task`, and `label` exactly; use `~` to search `payload`; and use `<` or `>` with `created`. Some events have no agent, task, or label. Find them with `IS EMPTY`. Without `ORDER BY`, events remain oldest first.
+Event queries follow the same [rules as task queries](#queries). Some events
+have no agent, task, or label; find them with `IS EMPTY`. `event.data` does not
+include the event name. Without `ORDER BY`, events remain oldest first.
 
-You can also search with one word. Agentwerk reads it as:
-
-1. A task ID such as `t-3` means `task = t-3`.
-2. A built-in event name such as `tool_call_failed` means `event = tool_call_failed`.
-3. Any other value such as `scan` means `label = scan`.
-
-For your own event names, write `event = document_indexed`. If a label has the same name as a built-in event, write `label = knowledge_read`.
+For your own event names, write `event.name = document_indexed`. Event labels use `event.label`, so they are never ambiguous with names.
 
 An invalid query string raises `ValueError`. `Query(query)` checks a query without running it and raises the same error.
 

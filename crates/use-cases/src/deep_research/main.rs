@@ -139,7 +139,7 @@ fn print_research_outcome(werk: &Werk, outcome: &Outcome) {
             eprintln!(" {label}");
             eprintln!("══════════════════════════════════════════════════════════\n");
             let researched: Vec<(String, String)> = werk
-                .find_tasks("status = finished AND label != report")
+                .find_tasks("task.status = finished AND task.label != report")
                 .iter()
                 .filter_map(|t| Some((t.get_id().to_string(), plain_text(t.get_result()?))))
                 .collect();
@@ -164,7 +164,7 @@ enum Outcome {
 /// task wins, an external cancel is surfaced, anything else means the
 /// chain stopped without reaching the report step.
 fn classify_outcome(werk: &Werk) -> Outcome {
-    let reported = werk.find_results("report").pop();
+    let reported = werk.find_results("task.label = report").pop();
     if let Some(result) = reported {
         return Outcome::Report(result);
     }
@@ -205,7 +205,7 @@ fn print_chain_summary(werk: &Werk) {
 fn print_stats(werk: &Werk) {
     eprintln!("\nStats:");
     eprintln!("  Duration : {:?}", werk.get_duration().unwrap_or_default());
-    let count = |name: &str| werk.find_events(name).len() as u64;
+    let count = |name: &str| werk.find_events(format!("event.name = {name}")).len() as u64;
     let done = count(Event::TASK_FINISHED);
     let failed = count(Event::TASK_FAILED);
     let resolved = done + failed;

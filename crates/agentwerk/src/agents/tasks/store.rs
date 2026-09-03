@@ -52,7 +52,7 @@ impl Werk {
             .lock()
             .unwrap()
             .iter()
-            .any(|query| query.matches(&task));
+            .any(|query| query.matches_task(&task));
         let mut store = self.tasks.lock().unwrap();
         let id = task.id.clone();
         let reporter = task.reporter.clone();
@@ -97,8 +97,11 @@ impl Werk {
         let now = now_millis();
         let id = {
             let mut store = self.tasks.lock().unwrap();
-            let mut candidates: Vec<&Task> = store.values().filter(|t| query.matches(t)).collect();
-            query.sort(&mut candidates);
+            let mut candidates: Vec<&Task> = store
+                .values()
+                .filter(|task| query.matches_task(task))
+                .collect();
+            query.sort_tasks(&mut candidates);
             let id = candidates.first()?.id.clone();
             let task = store.get_mut(&id)?;
             if task.status != Status::Todo {
@@ -553,7 +556,9 @@ mod tests {
     fn claim_transitions_todo_to_in_progress_and_sets_the_assignee() {
         let (werk, _tmp) = test_werk();
         werk.add_task("hello");
-        let id = werk.claim(&Query::from("status = todo"), "alice").unwrap();
+        let id = werk
+            .claim(&Query::from("task.status = todo"), "alice")
+            .unwrap();
         assert_eq!(id, "t-1");
         let t = werk.get_task(&id).unwrap();
         assert_eq!(t.status, Status::InProgress);
@@ -565,7 +570,9 @@ mod tests {
     fn claim_leaves_the_label_the_task_was_filed_with() {
         let (werk, _tmp) = test_werk();
         werk.add_task(Task::new("hello").label("analysis"));
-        let id = werk.claim(&Query::from("analysis"), "alice").unwrap();
+        let id = werk
+            .claim(&Query::from("task.label = analysis"), "alice")
+            .unwrap();
         assert_eq!(
             werk.get_task(&id).unwrap().label.as_deref(),
             Some("analysis")
@@ -576,7 +583,9 @@ mod tests {
     fn claim_returns_none_when_no_task_matches() {
         let (werk, _tmp) = test_werk();
         werk.add_task("hello");
-        assert!(werk.claim(&Query::from("nonexistent"), "alice").is_none());
+        assert!(werk
+            .claim(&Query::from("task.label = nonexistent"), "alice")
+            .is_none());
     }
 
     #[test]
@@ -596,7 +605,9 @@ mod tests {
         werk.add_task("a");
         werk.add_task("b");
         werk.add_task("c");
-        let id = werk.claim(&Query::from("status = todo"), "alice").unwrap();
+        let id = werk
+            .claim(&Query::from("task.status = todo"), "alice")
+            .unwrap();
         assert_eq!(id, "t-1");
     }
 
@@ -604,7 +615,7 @@ mod tests {
     fn claim_logs_the_task_starting() {
         let (werk, dir) = test_werk();
         werk.add_task("hello");
-        werk.claim(&Query::from("status = todo"), "alice");
+        werk.claim(&Query::from("task.status = todo"), "alice");
         let lines = read_events_log(dir.path());
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[0]["name"], "task_created");
@@ -617,7 +628,7 @@ mod tests {
     fn set_finished_transitions_to_finished() {
         let (werk, _tmp) = test_werk();
         let id = werk.add_task("hello");
-        werk.claim(&Query::from("status = todo"), "alice");
+        werk.claim(&Query::from("task.status = todo"), "alice");
         werk.set_finished_by(&id, "alice").unwrap();
         let t = werk.get_task(&id).unwrap();
         assert_eq!(t.status, Status::Finished);
@@ -667,7 +678,7 @@ mod tests {
         drop(werk);
 
         let resumed = Werk::load(dir.path()).unwrap();
-        let event = resumed.find_event(Event::TASK_FINISHED).unwrap();
+        let event = resumed.find_event("event.name = task_finished").unwrap();
         assert_eq!(event.get_data()["result"], "done");
         assert_eq!(resumed.get_results(), vec![serde_json::json!("done")]);
     }
@@ -676,7 +687,7 @@ mod tests {
     fn set_failed_transitions_to_failed() {
         let (werk, _tmp) = test_werk();
         let id = werk.add_task("hello");
-        werk.claim(&Query::from("status = todo"), "alice");
+        werk.claim(&Query::from("task.status = todo"), "alice");
         werk.set_task_failed(&id).unwrap();
         let t = werk.get_task(&id).unwrap();
         assert_eq!(t.status, Status::Failed);
@@ -687,7 +698,7 @@ mod tests {
     fn a_finished_task_is_not_reopened_by_a_later_failure() {
         let (werk, _tmp) = test_werk();
         let id = werk.add_task("hello");
-        werk.claim(&Query::from("status = todo"), "alice");
+        werk.claim(&Query::from("task.status = todo"), "alice");
         werk.set_task_finished(&id, "host result").unwrap();
 
         // Alice was still turning the task and gives up after the host
@@ -709,7 +720,7 @@ mod tests {
     fn a_failed_task_is_not_reopened_by_a_later_finish() {
         let (werk, _tmp) = test_werk();
         let id = werk.add_task("hello");
-        werk.claim(&Query::from("status = todo"), "alice");
+        werk.claim(&Query::from("task.status = todo"), "alice");
         werk.set_failed_by(&id, "alice").unwrap();
 
         werk.set_task_finished(&id, "late result").unwrap();
@@ -913,7 +924,7 @@ mod tests {
         original.set_dir(dir.path().to_path_buf());
         original.add_task("mid flight");
         original
-            .claim(&Query::from("status = todo"), "alice")
+            .claim(&Query::from("task.status = todo"), "alice")
             .unwrap();
         drop(original);
 
@@ -1071,7 +1082,7 @@ mod tests {
         let werk = Werk::new();
         werk.set_dir(dir.path().to_path_buf());
         let id = werk.add_task(Task::new("hello").label("scan"));
-        werk.cancel_tasks("label = scan");
+        werk.cancel_tasks("task.label = scan");
         werk.set_task_failed(&id).unwrap();
 
         let stored =
@@ -1080,8 +1091,8 @@ mod tests {
         assert!(record.get("cancelled").is_none());
 
         let resumed = Werk::load(dir.path()).unwrap();
-        assert!(resumed.find_tasks("cancelled = true").is_empty());
-        assert_eq!(resumed.find_tasks("cancelled = false").len(), 1);
+        assert!(resumed.find_tasks("task.cancelled = true").is_empty());
+        assert_eq!(resumed.find_tasks("task.cancelled = false").len(), 1);
     }
 
     #[test]
@@ -1127,12 +1138,13 @@ mod tests {
     fn task_lifecycle_writes_its_events_to_the_log() {
         let (werk, _dir) = test_werk();
         werk.add_task("seed");
-        werk.claim(&Query::from("status = todo"), "alice").unwrap();
+        werk.claim(&Query::from("task.status = todo"), "alice")
+            .unwrap();
         werk.set_result("t-1", serde_json::Value::Null).unwrap();
         werk.set_finished_by("t-1", "agent").unwrap();
 
-        assert_eq!(werk.find_events("task_created").len(), 1);
-        assert_eq!(werk.find_events("task_finished").len(), 1);
+        assert_eq!(werk.find_events("event.name = task_created").len(), 1);
+        assert_eq!(werk.find_events("event.name = task_finished").len(), 1);
     }
 
     #[test]

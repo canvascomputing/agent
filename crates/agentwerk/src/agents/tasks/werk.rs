@@ -876,52 +876,83 @@ impl Werk {
 
     /// Get every task in creation order.
     pub fn get_tasks(&self) -> Vec<Task> {
-        self.matching_tasks(&Query::all())
+        self.matching_tasks(&Query::all().task())
     }
 
-    /// Get every task matching a condition, in creation order unless the
-    /// query names another with `ORDER BY`.
+    /// Get every task selected by a task query or referenced by an event query.
+    /// The query's source order determines the returned order.
     ///
     /// Your condition MUST NOT call another `Werk` method that reads
     /// the task store, or the call deadlocks.
     pub fn find_tasks(&self, predicate: impl Matcher<Task>) -> Vec<Task> {
-        self.matching_tasks(&predicate.into_query())
+        let query = predicate.into_query().task_if_originless();
+        self.tasks_selected_by(&query)
     }
 
-    /// Get the first task matching a condition, the earliest one unless the
-    /// query names another order.
+    /// Get the first task selected by a task query or referenced by an event
+    /// query.
     ///
     /// Your condition MUST NOT call another `Werk` method that reads
     /// the task store, or the call deadlocks.
     pub fn find_task(&self, predicate: impl Matcher<Task>) -> Option<Task> {
-        self.first_matching_task(&predicate.into_query())
+        let query = predicate.into_query().task_if_originless();
+        match query.is_event() {
+            true => self.tasks_referenced_by(&query).into_iter().next(),
+            false => self.first_matching_task(&query),
+        }
+    }
+
+    fn tasks_selected_by(&self, query: &Query) -> Vec<Task> {
+        match query.is_event() {
+            true => self.tasks_referenced_by(query),
+            false => self.matching_tasks(query),
+        }
     }
 
     fn matching_tasks(&self, query: &Query) -> Vec<Task> {
         let store = self.tasks.lock().unwrap();
-        let mut matching: Vec<&Task> = store.values().filter(|t| query.matches(t)).collect();
-        query.sort(&mut matching);
+        let mut matching: Vec<&Task> = store
+            .values()
+            .filter(|task| query.matches_task(task))
+            .collect();
+        query.sort_tasks(&mut matching);
         matching.into_iter().cloned().collect()
     }
 
     /// The first of those, and the only task copied.
     fn first_matching_task(&self, query: &Query) -> Option<Task> {
         let store = self.tasks.lock().unwrap();
-        let mut matching: Vec<&Task> = store.values().filter(|t| query.matches(t)).collect();
-        query.sort(&mut matching);
+        let mut matching: Vec<&Task> = store
+            .values()
+            .filter(|task| query.matches_task(task))
+            .collect();
+        query.sort_tasks(&mut matching);
         matching.into_iter().next().cloned()
     }
 
-    /// Get every recorded event matching a condition, oldest first, or in the
-    /// order an `ORDER BY` names.
+    fn tasks_referenced_by(&self, query: &Query) -> Vec<Task> {
+        let events = self.matching_events(query);
+        let store = self.tasks.lock().unwrap();
+        let mut seen = HashSet::new();
+        events
+            .into_iter()
+            .filter_map(|event| {
+                let task = store.get(&event.task_id)?;
+                seen.insert(event.task_id).then(|| task.clone())
+            })
+            .collect()
+    }
+
+    /// Get every event selected by an event query or attached to tasks selected
+    /// by a task query, in source-query order.
     ///
-    /// The condition is an AQL string, a [`Query<Event>`](crate::Query), or a
+    /// The condition is an AQL string, a [`Query`](crate::Query), or a
     /// closure, the way [`Self::find_tasks`] takes any of the three.
     ///
     /// ```no_run
     /// # use agentwerk::Werk;
     /// let werk = Werk::new();
-    /// werk.find_events("tool_call_failed AND created > -1h");
+    /// werk.find_events("event.name = tool_call_failed AND event.created > -1h");
     /// ```
     ///
     /// Read from the session's `events.jsonl`, so this answers for a run that
@@ -930,16 +961,20 @@ impl Werk {
     /// finds nothing, and `TextChunkReceived` is never recorded, so a condition
     /// naming it never matches.
     pub fn find_events(&self, matcher: impl Matcher<Event>) -> Vec<Event> {
-        let query = matcher.into_query();
-        let mut out = self.collect_events(&query, usize::MAX);
-        query.sort(&mut out);
-        out
+        let query = matcher.into_query().event_if_originless();
+        match query.is_event() {
+            true => self.matching_events(&query),
+            false => self.events_referencing_tasks(&query),
+        }
     }
 
-    /// Get the earliest recorded event matching a condition, or the first in
-    /// the order an `ORDER BY` names.
+    /// Get the first event selected by an event query or attached to a task
+    /// selected by a task query.
     pub fn find_event(&self, matcher: impl Matcher<Event>) -> Option<Event> {
-        let query = matcher.into_query();
+        let query = matcher.into_query().event_if_originless();
+        if !query.is_event() {
+            return self.events_referencing_tasks(&query).into_iter().next();
+        }
         // Without an order the log's own is the answer, so one match ends the
         // read instead of the whole log being copied to be sorted.
         let wanted = match query.is_ordered() {
@@ -947,15 +982,37 @@ impl Werk {
             false => 1,
         };
         let mut found = self.collect_events(&query, wanted);
-        query.sort(&mut found);
+        query.sort_events(&mut found);
         found.into_iter().next()
     }
 
+    fn matching_events(&self, query: &Query) -> Vec<Event> {
+        let mut events = self.collect_events(query, usize::MAX);
+        query.sort_events(&mut events);
+        events
+    }
+
+    fn events_referencing_tasks(&self, query: &Query) -> Vec<Event> {
+        let tasks = self.matching_tasks(query);
+        let positions: HashMap<&str, usize> = tasks
+            .iter()
+            .enumerate()
+            .map(|(position, task)| (task.id.as_str(), position))
+            .collect();
+        let mut grouped = vec![Vec::new(); tasks.len()];
+        let _ = Stats::for_each_event(&self.get_dir(), |event| {
+            if let Some(position) = positions.get(event.task_id.as_str()) {
+                grouped[*position].push(event.clone());
+            }
+        });
+        grouped.into_iter().flatten().collect()
+    }
+
     /// In log order: the caller sorts if its query named one.
-    fn collect_events(&self, query: &Query<Event>, wanted: usize) -> Vec<Event> {
+    fn collect_events(&self, query: &Query, wanted: usize) -> Vec<Event> {
         let mut out = Vec::new();
         let _ = Stats::for_each_event(&self.get_dir(), |event| {
-            if out.len() < wanted && query.matches(event) {
+            if out.len() < wanted && query.matches_event(event) {
                 out.push(event.clone());
             }
         });
@@ -975,13 +1032,13 @@ impl Werk {
     /// ```no_run
     /// # use agentwerk::Werk;
     /// let werk = Werk::new();
-    /// werk.cancel_tasks("scan");
+    /// werk.cancel_tasks("task.label = scan");
     /// ```
     pub fn cancel_tasks(&self, matches: impl Matcher<Task>) -> &Self {
-        let query = matches.into_query();
+        let query = matches.into_query().task();
         self.cancel_filters.lock().unwrap().push(query.clone());
         for task in self.tasks.lock().unwrap().values_mut() {
-            if query.matches(task) {
+            if query.matches_task(task) {
                 task.cancelled = true;
             }
         }
@@ -993,7 +1050,7 @@ impl Werk {
     /// [`Self::finish_all_tasks`] then reports `FinishReason::Cancelled`. Like
     /// [`Self::cancel_tasks`], nothing waits, so a ctrl-c handler can call it.
     pub fn cancel_all_tasks(&self) -> &Self {
-        self.cancel_tasks(Query::all())
+        self.cancel_tasks(Query::all().task())
     }
 
     /// True while any matching task still has work for an agent.
@@ -1011,7 +1068,7 @@ impl Werk {
         let interactive = self.interactive_agents();
         let tasks = self.tasks.lock().unwrap();
         tasks.values().any(|t| {
-            matches.matches(t)
+            matches.matches_task(t)
                 && t.is_pending()
                 && !(t.is_paused()
                     && t.assignee
@@ -1174,13 +1231,13 @@ impl Werk {
     /// # use agentwerk::Werk;
     /// # async fn run() {
     /// let werk = Werk::new();
-    /// for finding in werk.finish_tasks("research").await {
+    /// for finding in werk.finish_tasks("task.label = research").await {
     ///     println!("{finding}");
     /// }
     /// # }
     /// ```
     pub async fn finish_tasks(&self, matches: impl Matcher<Task>) -> Vec<serde_json::Value> {
-        let query = matches.into_query();
+        let query = matches.into_query().task();
         if self.join_handle.lock().unwrap().is_none()
             && (!self.run.is_finished() || self.anything_claimable())
         {
@@ -1208,8 +1265,8 @@ impl Werk {
             self.join_handle.lock().unwrap().take();
         }
         // `and_status`, not the `find_results` default: a caller who waited on
-        // `status = todo` receives finished results, not the matching unfinished tasks.
-        self.matching_tasks(&query.and_status(Status::Finished))
+        // `task.status = todo` receives finished results, not the matching unfinished tasks.
+        self.matching_tasks(&query.and_task_status(Status::Finished))
             .into_iter()
             .filter_map(|t| t.result)
             .collect()
@@ -1230,7 +1287,7 @@ impl Werk {
     /// # }
     /// ```
     pub async fn finish_all_tasks(&self) -> Vec<serde_json::Value> {
-        self.finish_tasks(Query::all()).await
+        self.finish_tasks(Query::all().task()).await
     }
 
     /// Wait for the matching tasks to be done, then get the first available
@@ -1243,7 +1300,7 @@ impl Werk {
     /// # use agentwerk::Werk;
     /// # async fn run() {
     /// let werk = Werk::new();
-    /// if let Some(answer) = werk.finish_task("ORDER BY created DESC").await {
+    /// if let Some(answer) = werk.finish_task("ORDER BY task.created DESC").await {
     ///     println!("{answer}");
     /// }
     /// # }
@@ -1281,48 +1338,54 @@ impl Werk {
     /// still running, or finished without a result, contributes nothing, so
     /// this is shorter than [`Self::get_tasks`] rather than aligned with it.
     pub fn get_results(&self) -> Vec<serde_json::Value> {
-        self.find_results(Query::all())
+        self.find_results(Query::all().task())
     }
 
-    /// Get every result whose task matches the query, in query order, or
-    /// creation order when the query names none.
+    /// Get every result whose task is selected directly or through a matching
+    /// event, in source-query order.
     ///
-    /// Status defaults to `finished` when the filter names none, which is
-    /// every closure and any query that leaves it unset. A caller that sets
-    /// `.status(Status::Failed)` keeps that filter. A task contributes a
-    /// result only when it has one, so this is shorter than the set the
-    /// filter named.
+    /// A task query defaults status to `finished` when it names none. Event
+    /// queries always project only finished tasks. A task contributes a result
+    /// only when it has one, so this is shorter than the set the filter named.
     ///
     /// ```no_run
     /// # use agentwerk::Werk;
     /// let werk = Werk::new();
-    /// let scans = werk.find_results("scan");
+    /// let scans = werk.find_results("task.label = scan");
     /// ```
     pub fn find_results(&self, matches: impl Matcher<Task>) -> Vec<serde_json::Value> {
-        self.matching_tasks(&results_of(matches))
+        self.result_tasks(matches)
             .into_iter()
-            .filter_map(|t| t.result)
+            .filter_map(|task| task.result)
             .collect()
     }
 
-    /// Get the first result whose task matches the query.
+    /// Get the first result selected through a matching task or event.
     ///
     /// Status defaults to `finished` as in [`Self::find_results`], and the
     /// order is that method's too.
     pub fn find_result(&self, matches: impl Matcher<Task>) -> Option<serde_json::Value> {
-        self.first_matching_task(&results_of(matches))
-            .and_then(|t| t.result)
+        self.result_tasks(matches)
+            .into_iter()
+            .next()
+            .and_then(|task| task.result)
     }
-}
 
-/// The tasks that contribute to `find_results`. The result term is why
-/// `find_result` answers with the first match carrying one, not the first
-/// match.
-fn results_of(matches: impl Matcher<Task>) -> Query {
-    matches
-        .into_query()
-        .default_status(Status::Finished)
-        .and_result()
+    fn result_tasks(&self, matches: impl Matcher<Task>) -> Vec<Task> {
+        let query = matches.into_query().task_if_originless();
+        if query.is_event() {
+            return self
+                .tasks_referenced_by(&query)
+                .into_iter()
+                .filter(|task| task.status == Status::Finished && task.result.is_some())
+                .collect();
+        }
+        self.matching_tasks(
+            &query
+                .default_task_status(Status::Finished)
+                .and_task_result(),
+        )
+    }
 }
 
 #[cfg(test)]
@@ -1396,7 +1459,7 @@ mod tests {
         werk.add_task("b");
         werk.add_task("c");
         let ids: Vec<String> = werk
-            .find_tasks("status = todo")
+            .find_tasks("task.status = todo")
             .into_iter()
             .map(|t| t.id)
             .collect();
@@ -1408,8 +1471,8 @@ mod tests {
         let (werk, _tmp) = test_werk();
         werk.add_task("a");
         werk.add_task("b");
-        werk.cancel_tasks("ORDER BY id DESC");
-        assert_eq!(werk.find_tasks("cancelled = true").len(), 2);
+        werk.cancel_tasks("ORDER BY task.id DESC");
+        assert_eq!(werk.find_tasks("task.cancelled = true").len(), 2);
     }
 
     #[test]
@@ -1419,7 +1482,7 @@ mod tests {
         werk.add_task("b");
         werk.add_task("c");
         let ids: Vec<String> = werk
-            .find_tasks("ORDER BY id DESC")
+            .find_tasks("ORDER BY task.id DESC")
             .into_iter()
             .map(|t| t.id)
             .collect();
@@ -1431,7 +1494,7 @@ mod tests {
         let (werk, _tmp) = test_werk();
         werk.add_task("a");
         werk.add_task("b");
-        let found = werk.find_task("ORDER BY id DESC").expect("a task");
+        let found = werk.find_task("ORDER BY task.id DESC").expect("a task");
         assert_eq!(found.id, "t-2");
     }
 
@@ -1443,8 +1506,75 @@ mod tests {
         attach_done_result(&werk, "t-1", "first");
         attach_done_result(&werk, "t-2", "second");
         assert_eq!(
-            werk.find_results("ORDER BY id DESC"),
+            werk.find_results("ORDER BY task.id DESC"),
             vec![serde_json::json!("second"), serde_json::json!("first")]
+        );
+    }
+
+    #[test]
+    fn one_task_query_can_select_tasks_and_their_results() {
+        let (werk, _tmp) = test_werk();
+        werk.add_task(Task::labeled("scan", "a"));
+        werk.add_task(Task::labeled("scan", "b"));
+        werk.add_task(Task::labeled("report", "c"));
+        attach_done_result(&werk, "t-1", "clean one");
+        attach_done_result(&werk, "t-2", "clean two");
+        attach_done_result(&werk, "t-3", "reported");
+        let query =
+            Query::new("task.label = scan AND task.result ~ clean ORDER BY task.id DESC").unwrap();
+
+        let ids = werk
+            .find_tasks(query.clone())
+            .into_iter()
+            .map(|task| task.id)
+            .collect::<Vec<_>>();
+        assert_eq!(ids, ["t-2", "t-1"]);
+        assert_eq!(
+            werk.find_results(query),
+            [
+                serde_json::json!("clean two"),
+                serde_json::json!("clean one")
+            ]
+        );
+    }
+
+    #[test]
+    fn compiled_queries_work_with_singular_and_plural_finders() {
+        let (werk, _tmp) = test_werk();
+        werk.add_task(Task::labeled("scan", "a"));
+        attach_done_result(&werk, "t-1", "clean");
+
+        let tasks = Query::new("task.label = scan").unwrap();
+        assert_eq!(werk.find_task(tasks.clone()).unwrap().id, "t-1");
+        assert_eq!(werk.find_tasks(tasks.clone()).len(), 1);
+        assert_eq!(
+            werk.find_result(tasks.clone()),
+            Some(serde_json::json!("clean"))
+        );
+        assert_eq!(werk.find_results(tasks), [serde_json::json!("clean")]);
+        assert_eq!(
+            werk.find_result(|task: &Task| task.label.as_deref() == Some("scan")),
+            Some(serde_json::json!("clean"))
+        );
+
+        let events = Query::new("event.name = task_created").unwrap();
+        assert_eq!(werk.find_event(events.clone()).unwrap().task_id, "t-1");
+        assert_eq!(werk.find_events(events).len(), 1);
+    }
+
+    #[test]
+    fn find_result_accepts_a_bare_task_id_and_skips_tasks_without_results() {
+        let (werk, _tmp) = test_werk();
+        werk.add_task("no result");
+        werk.add_task("has result");
+        werk.set_finished_by("t-1", "agent").unwrap();
+        attach_done_result(&werk, "t-2", "answer");
+
+        assert_eq!(werk.find_result("t-1"), None);
+        assert_eq!(werk.find_result("t-2"), Some(serde_json::json!("answer")));
+        assert_eq!(
+            werk.find_result("task.status = finished"),
+            Some(serde_json::json!("answer"))
         );
     }
 
@@ -1489,14 +1619,14 @@ mod tests {
     }
 
     #[test]
-    fn find_results_takes_a_label_in_place_of_a_query() {
+    fn find_results_selects_by_task_label() {
         let (werk, _tmp) = test_werk();
         werk.add_task(Task::labeled("scan", "a"));
         werk.add_task(Task::labeled("report", "b"));
         attach_done_result(&werk, "t-1", "scanned");
         attach_done_result(&werk, "t-2", "reported");
         assert_eq!(
-            werk.find_results("scan"),
+            werk.find_results("task.label = scan"),
             vec![serde_json::json!("scanned")]
         );
     }
@@ -1508,7 +1638,7 @@ mod tests {
         werk.add_task(Task::labeled("scan", "b"));
         attach_done_result(&werk, "t-1", "scanned");
         assert_eq!(
-            werk.find_results("scan"),
+            werk.find_results("task.label = scan"),
             vec![serde_json::json!("scanned")]
         );
     }
@@ -1517,10 +1647,12 @@ mod tests {
     fn find_results_keeps_the_status_the_query_names() {
         let (werk, _tmp) = test_werk();
         werk.add_task(Task::labeled("scan", "a"));
-        attach_done_result(&werk, "t-1", "scanned");
-        assert!(werk
-            .find_results("label = scan AND status = todo")
-            .is_empty());
+        werk.set_result("t-1", serde_json::json!("mid-flight"))
+            .unwrap();
+        assert_eq!(
+            werk.find_results("task.label = scan AND task.status = todo"),
+            vec![serde_json::json!("mid-flight")]
+        );
     }
 
     #[test]
@@ -1531,7 +1663,7 @@ mod tests {
         attach_done_result(&werk, "t-1", "scanned");
         attach_done_result(&werk, "t-2", "reported");
         assert_eq!(
-            werk.find_results("label = scan"),
+            werk.find_results(|task: &Task| task.label.as_deref() == Some("scan")),
             vec![serde_json::json!("scanned")]
         );
     }
@@ -1544,7 +1676,118 @@ mod tests {
         // leaves out because a closure names no status of its own.
         werk.set_result("t-1", serde_json::json!("mid-flight"))
             .unwrap();
-        assert!(werk.find_results("label = scan").is_empty());
+        assert!(werk
+            .find_results(|task: &Task| task.label.as_deref() == Some("scan"))
+            .is_empty());
+    }
+
+    #[test]
+    fn event_queries_project_ordered_unique_referenced_tasks() {
+        let (werk, tmp) = test_werk();
+        werk.add_task("first");
+        werk.add_task("second");
+        for (task_id, created_at) in [
+            ("t-2", 100),
+            ("", 150),
+            ("t-404", 175),
+            ("t-1", 200),
+            ("t-2", 300),
+        ] {
+            let event = Event {
+                created_at,
+                ..Event::new("selected").task_id(task_id)
+            };
+            Stats::append(tmp.path(), &event).unwrap();
+        }
+        let query = Query::new("event.name = selected ORDER BY event.created").unwrap();
+
+        let ids = werk
+            .find_tasks(query.clone())
+            .into_iter()
+            .map(|task| task.id)
+            .collect::<Vec<_>>();
+        assert_eq!(ids, ["t-2", "t-1"]);
+        assert_eq!(
+            werk.find_task("event.name = selected ORDER BY event.created")
+                .unwrap()
+                .id,
+            "t-2"
+        );
+    }
+
+    #[test]
+    fn task_queries_project_events_grouped_in_task_order() {
+        let (werk, tmp) = test_werk();
+        werk.add_task(Task::labeled("scan", "first"));
+        werk.add_task(Task::labeled("scan", "second"));
+        werk.add_task(Task::labeled("report", "third"));
+        Stats::append(tmp.path(), &Event::new("noted").task_id("t-2")).unwrap();
+        Stats::append(tmp.path(), &Event::new("noted").task_id("t-1")).unwrap();
+        let query = Query::new("task.label = scan ORDER BY task.id DESC").unwrap();
+
+        let events = werk.find_events(query.clone());
+        let identified = events
+            .iter()
+            .map(|event| (event.task_id.as_str(), event.name.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            identified,
+            [
+                ("t-2", Event::TASK_CREATED),
+                ("t-2", "noted"),
+                ("t-1", Event::TASK_CREATED),
+                ("t-1", "noted"),
+            ]
+        );
+        assert_eq!(
+            werk.find_event("task.label = scan ORDER BY task.id DESC")
+                .unwrap()
+                .task_id,
+            "t-2"
+        );
+    }
+
+    #[test]
+    fn event_queries_project_finished_results_in_event_order() {
+        let (werk, tmp) = test_werk();
+        for task in ["first", "mid-flight", "empty", "fourth"] {
+            werk.add_task(task);
+        }
+        attach_done_result(&werk, "t-1", "first");
+        werk.set_result("t-2", serde_json::json!("mid-flight"))
+            .unwrap();
+        werk.set_finished_by("t-3", "agent").unwrap();
+        attach_done_result(&werk, "t-4", "fourth");
+        for (task_id, created_at) in [
+            ("t-4", 100),
+            ("t-3", 200),
+            ("t-2", 300),
+            ("t-1", 400),
+            ("t-4", 500),
+        ] {
+            let event = Event {
+                created_at,
+                ..Event::new("selected").task_id(task_id)
+            };
+            Stats::append(tmp.path(), &event).unwrap();
+        }
+        let query = Query::new("event.name = selected ORDER BY event.created").unwrap();
+
+        assert_eq!(
+            werk.find_results(query.clone()),
+            [serde_json::json!("fourth"), serde_json::json!("first")]
+        );
+        assert_eq!(
+            werk.find_result("event.name = selected ORDER BY event.created"),
+            Some(serde_json::json!("fourth"))
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "requires a task query")]
+    fn lifecycle_operations_still_reject_event_queries() {
+        let (werk, _tmp) = test_werk();
+        werk.cancel_tasks(Query::new("event.name = task_created").unwrap());
     }
 
     #[test]
@@ -1552,7 +1795,7 @@ mod tests {
         let (werk, _tmp) = test_werk();
         werk.add_task(Task::labeled("scan", "a"));
         werk.add_task(Task::labeled("report", "b"));
-        let found = werk.find_tasks("label = report AND status = todo");
+        let found = werk.find_tasks("task.label = report AND task.status = todo");
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].task, serde_json::json!("b"));
     }
@@ -1568,15 +1811,16 @@ mod tests {
     fn pending_only_for_the_matching_tasks() {
         let (werk, _tmp) = test_werk();
         werk.add_task(Task::new("a").label("research"));
-        assert!(werk.pending(&Query::from("research")));
-        assert!(!werk.pending(&Query::from("report")));
+        assert!(werk.pending(&Query::from("task.label = research")));
+        assert!(!werk.pending(&Query::from("task.label = report")));
     }
 
     #[test]
     fn pending_while_a_claimed_task_awaits_the_model() {
         let (werk, _tmp) = test_werk();
         werk.add_task("x");
-        werk.claim(&Query::from("status = todo"), "agent").unwrap();
+        werk.claim(&Query::from("task.status = todo"), "agent")
+            .unwrap();
         assert!(werk.pending(&Query::all()));
     }
 
@@ -1584,7 +1828,9 @@ mod tests {
     fn pending_when_a_text_only_reply_pauses_a_non_interactive_agent() {
         let (werk, _tmp) = test_werk();
         werk.add_task("x");
-        let id = werk.claim(&Query::from("status = todo"), "agent").unwrap();
+        let id = werk
+            .claim(&Query::from("task.status = todo"), "agent")
+            .unwrap();
         werk.append_reply(
             &id,
             Reply::assistant(&[crate::providers::ContentBlock::Text {
@@ -1611,7 +1857,7 @@ mod tests {
     fn not_pending_on_a_cancelled_task() {
         let (werk, _tmp) = test_werk();
         werk.add_task(Task::new("a").label("research"));
-        werk.cancel_tasks("label = research");
+        werk.cancel_tasks("task.label = research");
         assert!(!werk.pending(&Query::all()));
     }
 
@@ -1699,17 +1945,17 @@ mod tests {
     }
 
     #[test]
-    fn find_events_takes_the_same_syntax_a_task_query_is_written_in() {
+    fn find_events_accepts_namespaced_event_fields() {
         let (werk, _tmp) = test_werk();
         werk.add_task(Task::new("scan").label("scout"));
         werk.add_task("b");
         werk.claim(&Query::from("t-1"), "scout-1");
 
-        assert_eq!(werk.find_events("task_created").len(), 2);
-        assert_eq!(werk.find_events("t-1").len(), 2);
-        assert_eq!(werk.find_events("event = task_started").len(), 1);
-        assert_eq!(werk.find_events("agent = scout-1").len(), 1);
-        assert!(werk.find_events("run_finished").is_empty());
+        assert_eq!(werk.find_events("event.name = task_created").len(), 2);
+        assert_eq!(werk.find_events("event.task_id = t-1").len(), 2);
+        assert_eq!(werk.find_events("event.name = task_started").len(), 1);
+        assert_eq!(werk.find_events("event.agent_id = scout-1").len(), 1);
+        assert!(werk.find_events("event.name = run_finished").is_empty());
     }
 
     #[test]
@@ -1776,7 +2022,9 @@ mod tests {
         drop(werk);
 
         let resumed = Werk::load(dir.path()).unwrap();
-        let found = resumed.find_event(r#"event = "Document Indexed""#).unwrap();
+        let found = resumed
+            .find_event(r#"event.name = "Document Indexed""#)
+            .unwrap();
         assert_eq!(found.get_name(), "Document Indexed");
         assert_eq!(found.get_data(), &serde_json::json!({ "documents": 42 }));
     }
@@ -1832,7 +2080,7 @@ mod tests {
         werk.emit_event(Event::new(Event::TASK_FINISHED).task_id(&id));
 
         assert_eq!(werk.get_task(&id).unwrap().status, Status::Todo);
-        assert_eq!(werk.find_events("event = task_finished").len(), 1);
+        assert_eq!(werk.find_events("event.name = task_finished").len(), 1);
         assert_eq!(task_calls.load(Ordering::Relaxed), 2);
     }
 
@@ -1847,9 +2095,9 @@ mod tests {
             Stats::append(tmp.path(), &event).unwrap();
         }
 
-        let newest = werk.find_event("task_created ORDER BY created DESC");
+        let newest = werk.find_event("event.name = task_created ORDER BY event.created DESC");
         assert_eq!(newest.unwrap().task_id, "t-2");
-        let oldest = werk.find_event("task_created");
+        let oldest = werk.find_event("event.name = task_created");
         assert_eq!(oldest.unwrap().task_id, "t-1");
     }
 
@@ -1859,7 +2107,7 @@ mod tests {
         // crate keeping one.
         let (werk, _tmp) = test_werk();
         werk.add_task(Task::new("scan").label("scout"));
-        werk.claim(&Query::from("scout"), "scout-1");
+        werk.claim(&Query::from("task.label = scout"), "scout-1");
 
         assert_eq!(
             werk.find_events(|e: &Event| e.label.as_deref() == Some("scout"))
@@ -1928,7 +2176,7 @@ mod tests {
         assert_eq!(werk.stats.event_count(Event::REQUEST_FINISHED), 1);
         assert_eq!(werk.get_input_tokens(), 0);
         assert_eq!(werk.get_output_tokens(), 0);
-        assert_eq!(werk.find_events("event = request_finished").len(), 1);
+        assert_eq!(werk.find_events("event.name = request_finished").len(), 1);
     }
 
     #[test]
@@ -1943,9 +2191,9 @@ mod tests {
         let research = werk.add_task(Task::new("x").label("research"));
         werk.add_task(Task::new("x").label("analysis"));
         werk.add_task(Task::new("x"));
-        werk.cancel_tasks("label = research");
+        werk.cancel_tasks("task.label = research");
 
-        let cancelled = werk.find_tasks("cancelled = true");
+        let cancelled = werk.find_tasks("task.cancelled = true");
         assert_eq!(cancelled.len(), 1);
         assert_eq!(cancelled[0].id, research);
     }
@@ -1953,29 +2201,29 @@ mod tests {
     #[test]
     fn cancel_applies_to_matching_tasks_inserted_later() {
         let (werk, _tmp) = test_werk();
-        werk.cancel_tasks("label = research");
+        werk.cancel_tasks("task.label = research");
         let research = werk.add_task(Task::new("x").label("research"));
         werk.add_task(Task::new("x").label("analysis"));
 
         assert_eq!(
-            werk.find_task("cancelled = true").map(|task| task.id),
+            werk.find_task("task.cancelled = true").map(|task| task.id),
             Some(research),
         );
-        assert_eq!(werk.find_tasks("cancelled = false").len(), 1);
+        assert_eq!(werk.find_tasks("task.cancelled = false").len(), 1);
     }
 
     #[tokio::test]
     async fn start_clears_cancellation_flags_and_filters() {
         let (werk, _tmp) = test_werk();
         werk.add_task(Task::new("first").label("research"));
-        werk.cancel_tasks("label = research");
-        assert_eq!(werk.find_tasks("cancelled = true").len(), 1);
+        werk.cancel_tasks("task.label = research");
+        assert_eq!(werk.find_tasks("task.cancelled = true").len(), 1);
 
         werk.start();
         werk.add_task(Task::new("second").label("research"));
 
-        assert!(werk.find_tasks("cancelled = true").is_empty());
-        assert_eq!(werk.find_tasks("pending = true").len(), 2);
+        assert!(werk.find_tasks("task.cancelled = true").is_empty());
+        assert_eq!(werk.find_tasks("task.pending = true").len(), 2);
         werk.cancel_all_tasks();
         werk.finish_all_tasks().await;
     }
@@ -1985,15 +2233,15 @@ mod tests {
         let (werk, _tmp) = test_werk();
         werk.add_task(Task::new("work").label("research"));
         werk.start();
-        werk.cancel_tasks("pending = true AND label = research");
+        werk.cancel_tasks("task.pending = true AND task.label = research");
         werk.finish_all_tasks().await;
 
-        assert_eq!(werk.find_events("event = run_started").len(), 1);
-        werk.finish_tasks("label = research").await;
-        assert_eq!(werk.find_events("event = run_started").len(), 1);
+        assert_eq!(werk.find_events("event.name = run_started").len(), 1);
+        werk.finish_tasks("task.label = research").await;
+        assert_eq!(werk.find_events("event.name = run_started").len(), 1);
 
         werk.start();
-        assert_eq!(werk.find_events("event = run_started").len(), 2);
+        assert_eq!(werk.find_events("event.name = run_started").len(), 2);
         werk.cancel_all_tasks();
         werk.finish_all_tasks().await;
     }
@@ -2034,7 +2282,9 @@ mod tests {
             }
         });
         werk.add_task(Task::new("a").label("scan"));
-        let id = werk.claim(&Query::from("scan"), "scout").unwrap();
+        let id = werk
+            .claim(&Query::from("task.label = scan"), "scout")
+            .unwrap();
         werk.set_result(&id, serde_json::json!("done")).unwrap();
         werk.set_finished_by(&id, "scout").unwrap();
 
@@ -2107,7 +2357,7 @@ mod tests {
                 .push((task.id.clone(), result.clone()))
         });
         werk.add_task(Task::new("x").label("L"));
-        let id = werk.claim(&Query::from("L"), "agent").unwrap();
+        let id = werk.claim(&Query::from("task.label = L"), "agent").unwrap();
 
         attach_done_result(&werk, &id, "lead");
 
@@ -2255,7 +2505,7 @@ mod tests {
 
         werk.set_task_failed(&id).unwrap();
 
-        let retry = werk.find_task(format!("parent = {id}")).unwrap();
+        let retry = werk.find_task(format!("task.parent_id = {id}")).unwrap();
         assert_eq!(retry.task, serde_json::json!("work"));
     }
 
@@ -2271,21 +2521,23 @@ mod tests {
 
         emit_event(&werk, &id, "agent", Event::new(Event::TURN_STARTED));
 
-        assert_eq!(werk.find_tasks("label = report").len(), 1);
+        assert_eq!(werk.find_tasks("task.label = report").len(), 1);
     }
 
     #[test]
     fn on_result_links_a_follow_up_to_the_finished_parent() {
         let (werk, _tmp) = test_werk();
         werk.add_task(Task::new("scout").label("scout"));
-        let id = werk.claim(&Query::from("scout"), "agent").unwrap();
+        let id = werk
+            .claim(&Query::from("task.label = scout"), "agent")
+            .unwrap();
         werk.set_result(&id, serde_json::json!("lead")).unwrap();
         werk.set_finished_by(&id, "agent").unwrap();
         werk.on_result(|werk, done, _| {
             werk.add_task(Task::new("hunt").label("sniper").parent(&done.id));
         });
         emit_event(&werk, &id, "agent", Event::new(Event::TASK_FINISHED));
-        let spawned = werk.find_task("label = sniper").unwrap();
+        let spawned = werk.find_task("task.label = sniper").unwrap();
         assert_eq!(spawned.parent, Some(id));
     }
 
@@ -2306,7 +2558,10 @@ mod tests {
         let counts = Arc::new(Mutex::new(Vec::new()));
         let record = Arc::clone(&counts);
         werk.on_result(move |werk, _, _| {
-            record.lock().unwrap().push(werk.find_results("scan").len());
+            record
+                .lock()
+                .unwrap()
+                .push(werk.find_results("task.label = scan").len());
         });
         for id in scans(&werk, 2) {
             werk.set_task_finished(&id, "clean").unwrap();
@@ -2549,7 +2804,7 @@ mod tests {
 
         werk.finish_all_tasks().await;
 
-        let spawned = werk.find_task("label = sniper").unwrap();
+        let spawned = werk.find_task("task.label = sniper").unwrap();
         assert_eq!(spawned.parent, Some(id));
     }
 
@@ -2592,17 +2847,17 @@ mod tests {
     fn a_hook_waits_for_the_results_it_needs_before_filing_the_next_step() {
         let (werk, _tmp) = test_werk();
         werk.on_result(|werk, _, _| {
-            if werk.find_results("scan").len() == 2 {
+            if werk.find_results("task.label = scan").len() == 2 {
                 werk.add_task(Task::new("write the report").label("report"));
             }
         });
         let scans = scans(&werk, 2);
 
         werk.set_task_finished(&scans[0], "clean").unwrap();
-        assert!(werk.find_tasks("label = report").is_empty());
+        assert!(werk.find_tasks("task.label = report").is_empty());
 
         werk.set_task_finished(&scans[1], "clean").unwrap();
-        assert_eq!(werk.find_tasks("label = report").len(), 1);
+        assert_eq!(werk.find_tasks("task.label = report").len(), 1);
     }
 
     #[test]
@@ -2614,7 +2869,9 @@ mod tests {
             }
         });
         werk.add_task(Task::new("scout").label("scout"));
-        let id = werk.claim(&Query::from("scout"), "agent").unwrap();
+        let id = werk
+            .claim(&Query::from("task.label = scout"), "agent")
+            .unwrap();
         werk.set_result(&id, serde_json::json!("lead")).unwrap();
         werk.set_finished_by(&id, "agent").unwrap();
         // The handler ran inside `set_finished_by`, so the Werk is never
@@ -2638,7 +2895,9 @@ mod tests {
             }
         });
         werk.add_task(Task::new("scan").label("scan"));
-        let id = werk.claim(&Query::from("scan"), "analyst").unwrap();
+        let id = werk
+            .claim(&Query::from("task.label = scan"), "analyst")
+            .unwrap();
         werk.append_reply(&id, Reply::user_text("hello"));
         werk.set_result(&id, serde_json::json!("done")).unwrap();
         werk.set_finished_by(&id, "analyst").unwrap();
@@ -2662,7 +2921,9 @@ mod tests {
         let seen = Arc::new(Mutex::new(Vec::new()));
         let record = Arc::clone(&seen);
         werk.add_task(Task::new("scan").label("scan"));
-        let id = werk.claim(&Query::from("scan"), "analyst").unwrap();
+        let id = werk
+            .claim(&Query::from("task.label = scan"), "analyst")
+            .unwrap();
         // Installed after the claim, so only the turn is in the handler's view.
         werk.on_task(move |_, _, task| record.lock().unwrap().push(task.id.clone()));
         emit_event(&werk, &id, "analyst", Event::new(Event::TURN_STARTED));
@@ -2690,7 +2951,9 @@ mod tests {
         werk.on_task(move |_, _, task| record.lock().unwrap().push(task.id.clone()));
         werk.add_task(Task::new("scan").label("scan"));
         // The claim is the lifecycle event; no second publication is needed.
-        let id = werk.claim(&Query::from("scan"), "analyst").unwrap();
+        let id = werk
+            .claim(&Query::from("task.label = scan"), "analyst")
+            .unwrap();
 
         assert_eq!(*seen.lock().unwrap(), vec![id]);
         assert!(logged.lock().unwrap().contains(&"task_started".to_string()));
@@ -2758,7 +3021,7 @@ mod tests {
         attach_done_result(&werk, "t-2", "reported");
 
         assert_eq!(
-            werk.finish_tasks("label = scan").await,
+            werk.finish_tasks("task.label = scan").await,
             vec![serde_json::json!("scanned")]
         );
     }
@@ -2787,7 +3050,7 @@ mod tests {
         attach_done_result(&werk, "t-1", "scanned");
 
         assert_eq!(
-            werk.finish_task("ORDER BY id DESC").await,
+            werk.finish_task("ORDER BY task.id DESC").await,
             Some(serde_json::json!("reported"))
         );
     }
@@ -2796,7 +3059,7 @@ mod tests {
     async fn finish_task_is_none_when_nothing_finished() {
         let (werk, _tmp) = test_werk();
 
-        assert_eq!(werk.finish_task("status = finished").await, None);
+        assert_eq!(werk.finish_task("task.status = finished").await, None);
     }
 
     #[tokio::test]

@@ -545,7 +545,7 @@ mod tests {
             if done.get_label() != Some("scan") {
                 return;
             }
-            let scans = werk.find_results("label = scan AND status = finished");
+            let scans = werk.find_results("task.label = scan AND task.status = finished");
             if scans.len() < 2 || filed.swap(true, Ordering::SeqCst) {
                 return;
             }
@@ -574,14 +574,14 @@ mod tests {
             .await
             .expect("finish did not finish within 5s");
 
-        let report = werk.find_task("label = report").unwrap();
+        let report = werk.find_task("task.label = report").unwrap();
         assert_eq!(
             report.task,
             serde_json::json!("Write the report from \"clean\" and \"clean\".")
         );
         assert_eq!(report.status, Status::Finished);
         assert_eq!(
-            werk.find_results("label = report"),
+            werk.find_results("task.label = report"),
             vec![serde_json::json!("report-done")]
         );
     }
@@ -1108,7 +1108,7 @@ mod tests {
 
         // Cancel research tasks in the current execution before adding both tasks; analysis continues.
         werk.start();
-        werk.cancel_tasks("label = research");
+        werk.cancel_tasks("task.label = research");
         werk.add_task(Task::new("hunt").label("research"));
         werk.add_task(Task::new("triage").label("analysis"));
 

@@ -387,7 +387,7 @@ mod tests {
         werk.set_dir(path.clone());
         werk.insert(Task::new("work").label("alice"), "tester".into());
         let id = werk
-            .claim(&Query::from("status = todo"), "alice")
+            .claim(&Query::from("task.status = todo"), "alice")
             .expect("claim must succeed");
         let ctx = ToolContext::new(path)
             .werk(Arc::clone(&werk))
@@ -427,7 +427,7 @@ mod tests {
         assert_eq!(event.get_data()["line"], 42);
         assert_eq!(werk.stats.event_count("candidate_found"), 1);
         let persisted = werk
-            .find_event(r#"event = "candidate_found""#)
+            .find_event(r#"event.name = "candidate_found""#)
             .expect("event persisted to the session log");
         assert_eq!(persisted.get_task_id(), id);
         assert_eq!(persisted.get_data()["path"], "src/auth.rs");
@@ -466,7 +466,7 @@ mod tests {
         assert!(outcome.get_content().contains("\"path\":\"src/auth.rs\""));
         assert!(outcome.get_content().contains("\"data\":\"shadow\""));
         assert_eq!(
-            werk.find_event(r#"event = "candidate_found""#)
+            werk.find_event(r#"event.name = "candidate_found""#)
                 .unwrap()
                 .get_directive(),
             Some("candidate_found"),
@@ -501,7 +501,9 @@ mod tests {
 
         assert!(werk.get_task(&id).unwrap().is_in_progress());
         assert_eq!(
-            werk.find_event(Event::TASK_FAILED).unwrap().get_data()["reason"],
+            werk.find_event("event.name = task_failed")
+                .unwrap()
+                .get_data()["reason"],
             "reported"
         );
     }
@@ -544,7 +546,7 @@ mod tests {
             werk.get_task(&id).unwrap().get_result(),
             Some(&serde_json::json!({ "verdict": "safe" }))
         );
-        assert_eq!(werk.find_events(Event::TASK_FINISHED).len(), 1);
+        assert_eq!(werk.find_events("event.name = task_finished").len(), 1);
     }
 
     #[tokio::test]
@@ -650,7 +652,7 @@ mod tests {
             "tester".into(),
         );
         let id = werk
-            .claim(&Query::from("status = todo"), "alice")
+            .claim(&Query::from("task.status = todo"), "alice")
             .expect("claim must succeed");
         let ctx = ToolContext::new(dir.path().to_path_buf())
             .werk(Arc::clone(&werk))

@@ -21,7 +21,7 @@
 //!
 //! agent.add_task("Find every `pub trait` defined under src/ and explain each in one sentence.");
 //! let werk = agent.start();
-//! let result = werk.finish_task("ORDER BY created DESC").await.unwrap();
+//! let result = werk.finish_task("ORDER BY task.created DESC").await.unwrap();
 //!
 //! println!("{}", result.as_str().unwrap_or_default());
 //! # }
@@ -68,7 +68,7 @@
 //! - [`Agent`]: picks up tasks and produces results.
 //! - [`Werk`]: stores tasks and runs agents.
 //! - [`Task`]: defines work with an optional label and schema.
-//! - [`Query`]: a reusable AQL task selection.
+//! - [`Query`]: a reusable origin-aware AQL selection over tasks or events.
 //! - [`Knowledge`]: durable memory the agent shares across tasks and other agents.
 //! - [`Event`]: records requests, tool usage, failures, and other activity.
 //! - [`tools`]: the built-in tools agents call, for files, search, commands, web, knowledge, and tasks.

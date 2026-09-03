@@ -109,13 +109,13 @@ async fn traces_three_hop_call_path() -> std::result::Result<(), Box<dyn std::er
     );
 
     let json = werk
-        .finish_task("ORDER BY created DESC")
+        .finish_task("ORDER BY task.created DESC")
         .await
         .unwrap_or_default();
     common::print_result(&werk);
 
     assert!(
-        werk.find_events("tool_call_started").len() >= 2,
+        werk.find_events("event.name = tool_call_started").len() >= 2,
         "tracing a call path requires at least two read-only tool calls"
     );
 

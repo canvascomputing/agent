@@ -341,18 +341,20 @@ The rules the tables never repeat.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `trait Matcher<R: Queryable> { into_query(): Query<R> }` | pub |
-| Rust | `impl Matcher<R> for F where F: Fn(R) => boolean + Send + Sync + 'static` | pub |
+| Rust | `trait Matcher<R> { into_query(): Query }` | pub |
+| Rust | `impl Matcher<Task> for F where F: Fn(Task) => boolean + Send + Sync + 'static` | pub |
+| Rust | `impl Matcher<Event> for F where F: Fn(Event) => boolean + Send + Sync + 'static` | pub |
 | Rust | `impl Matcher<R> for &str` | pub |
 | Rust | `impl Matcher<R> for String` | pub |
-| Rust | `impl Matcher<R> for Query<R>` | pub |
+| Rust | `impl Matcher<R> for Query` | pub |
 | Python | an AQL string or a callable stands in for the `Query` wherever one is accepted | |
-| Rust | `Query<R: Queryable = Task>(Compiled<R.Field>)` | pub |
-| Python | `Query(query: str)`: one class over both field sets, compiled over each at construction | |
+| Rust | `Query(Compiled)` | pub with private fields |
+| Python | `Query(query: str)`: one class whose task or event origin is inferred at construction | |
 | Rust | `.new(query: string): this throws QueryError` | pub |
-| Rust | `impl From<&str> for Query<R>` | pub |
-| Rust | `impl From<String> for Query<R>` | pub |
-| Rust | `enum QueryError { TermsMissing, FieldUnrecognized, StatusUnrecognized, TimeMalformed, OperatorNotAllowed, FieldRepeated, TokenRejected, TermUnfinished }` | pub |
+| Rust | `.expects_task(): void throws QueryError` | pub, hidden from docs |
+| Rust | `impl From<&str> for Query` | pub |
+| Rust | `impl From<String> for Query` | pub |
+| Rust | `enum QueryError { TermsMissing, FieldUnrecognized, OriginsMixed, OriginMismatch, StatusUnrecognized, TimeMalformed, OperatorNotAllowed, FieldRepeated, TokenRejected, TermUnfinished }` | pub |
 | Rust | `impl Display for QueryError` | pub |
 | Rust | `impl Error for QueryError` | pub |
 
@@ -360,51 +362,77 @@ The rules the tables never repeat.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `trait Queryable { Field }` | private |
-| Rust | `impl Queryable for Task` | private |
-| Rust | `impl Queryable for Event` | private |
 | Rust | `Query.all(): this` | crate |
-| Rust | `.matches(record: R): boolean` | crate |
-| Rust | `.and(other: Query<R>): this` | crate |
+| Rust | `.matches_task(task: Task): boolean` | crate |
+| Rust | `.matches_event(event: Event): boolean` | crate |
+| Rust | `.and(other: Query): this` | crate |
 | Rust | `.is_ordered(): boolean` | crate |
-| Rust | `.sort(records: R[]): void` | crate |
-| Rust | `Query<Task>.default_status(status: Status): this` | crate |
-| Rust | `.and_status(status: Status): this` | crate |
-| Rust | `.and_result(): this` | crate |
-| Rust | `enum Condition<F: QueryField> { All(Condition<F>[]), Any(Condition<F>[]), Not(Condition<F>), Term(F, Match), Test(Predicate<F.Record>) }` | private |
-| Rust | `.matches(record: F.Record): boolean` | private |
-| Rust | `.mentions(field: F): boolean` | private |
-| Rust | `Predicate<R>((record: R) => boolean)` | private |
-| Rust | `impl Clone for Predicate<R>` | private |
-| Rust | `impl Debug for Predicate<R>` | private |
-| Rust | `Compiled<F: QueryField> { root: Condition<F>, order: Sort<F>? }` | private |
+| Rust | `.sort_tasks(records: Task[]): void` | crate |
+| Rust | `.sort_events(records: Event[]): void` | crate |
+| Rust | `.task(): this` | crate |
+| Rust | `.task_if_originless(): this` | crate |
+| Rust | `.event_if_originless(): this` | crate |
+| Rust | `.is_event(): boolean` | crate |
+| Rust | `.assert_origin(expected: Origin): void` | private |
+| Rust | `.and_task_status(status: Status): this` | crate |
+| Rust | `.default_task_status(status: Status): this` | crate |
+| Rust | `.and_task_result(): this` | crate |
+| Rust | `enum Condition { All(Condition[]), Any(Condition[]), Not(Condition), Term(Field, Match), Test(Predicate) }` | private |
+| Rust | `.matches(record: View): boolean` | private |
+| Rust | `.mentions(field: Field): boolean` | private |
+| Rust | `enum Predicate { Task((task: Task) => boolean), Event((event: Event) => boolean) }` | private |
+| Rust | `.test(record: View): boolean` | private |
+| Rust | `impl Clone for Predicate` | private |
+| Rust | `impl Debug for Predicate` | private |
+| Rust | `Compiled { root: Condition, order: Sort?, origin: Origin? }` | private |
 | Rust | `.new(query: string): this throws QueryError` | private |
 | Rust | `.all(): this` | private |
-| Rust | `.test(check: (record: F.Record) => boolean): this` | private |
-| Rust | `.term(field: F, matcher: Match): this` | private |
-| Rust | `.rooted(root: Condition<F>): this` | private |
-| Rust | `.and(other: Compiled<F>): this` | private |
-| Rust | `.matches(record: F.Record): boolean` | private |
-| Rust | `.mentions(field: F): boolean` | private |
+| Rust | `.test(check: Predicate): this` | private |
+| Rust | `.term(field: Field, matcher: Match): this` | private |
+| Rust | `.rooted(root: Condition): this` | private |
+| Rust | `.and(other: Compiled): this` | private |
+| Rust | `.matches(record: View): boolean` | private |
+| Rust | `.mentions(field: Field): boolean` | private |
 | Rust | `.is_ordered(): boolean` | private |
-| Rust | `.sort(records: T[]): void` | private |
-| Rust | `trait QueryField: Copy + PartialEq + Debug + 'static { Record, FIELDS, of, kind, is_optional, shorthand, label, tie_break, sort_unordered, canonical, compare, named, name, spellings, allows, operators }` | private |
-| Rust | `enum TaskField { Id, Label, Status, Pending, Cancelled, Agent, Parent, Task, Result, Errors, Created, Started, Finished, Failed }` | private |
-| Rust | `impl QueryField for TaskField` | private |
-| Rust | `enum EventField { Event, Agent, Task, Label, Created, Payload }` | private |
-| Rust | `impl QueryField for EventField` | private |
+| Rust | `.sort_tasks(records: Task[]): void` | private |
+| Rust | `.sort_events(records: Event[]): void` | private |
+| Rust | `.expects(expected: Origin): void throws QueryError` | private |
+| Rust | `.bind(expected: Origin): void` | private |
+| Rust | `.bind_if_originless(origin: Origin): void` | private |
+| Rust | `enum Origin { Task, Event }` | private |
+| Rust | `.name(): string` | private |
+| Rust | `merge_origins(left: Origin?, right: Origin?): Origin? throws QueryError` | private |
+| Rust | `enum View { Task(Task), Event(Event) }` | private |
+| Rust | `.value(field: Field): string?` | private |
+| Rust | `.tie_break(): [number, number]` | private |
+| Rust | `enum Field { TaskId, TaskLabel, TaskStatus, TaskPending, TaskCancelled, TaskAssignee, TaskParentId, TaskInput, TaskResult, TaskErrors, TaskCreated, TaskStarted, TaskFinished, TaskFailed, EventName, EventAgentId, EventTaskId, EventLabel, EventCreated, EventData }` | private |
+| Rust | `.FIELDS: [string, Field][]` | private |
+| Rust | `.named(name: string): Field?` | private |
+| Rust | `.spellings(): string` | private |
+| Rust | `.name(): string` | private |
+| Rust | `.origin(): Origin` | private |
+| Rust | `.kind(): Kind` | private |
+| Rust | `.is_optional(): boolean` | private |
+| Rust | `.allows(matcher: Match): boolean` | private |
+| Rust | `.operators(): string` | private |
+| Rust | `.canonical(value: string): string throws QueryError` | private |
+| Rust | `.literal(value: string): string throws QueryError` | private |
+| Rust | `.compare(left: string, right: string): Ordering` | private |
+| Rust | `.of_task(task: Task): string?` | private |
+| Rust | `.of_event(event: Event): string?` | private |
 | Rust | `enum Kind { Value, Text, Time }` | private |
+| Rust | `serialized_errors(task: Task): string?` | private |
 | Rust | `is_task_id(word: string): boolean` | private |
 | Rust | `carried(value: string): string?` | private |
 | Rust | `event_named(value: string): string?` | private |
 | Rust | `as_text(value: json): string` | private |
-| Rust | `Sort<F: QueryField> { field: F, descending: boolean }` | private |
-| Rust | `.compare(left: F.Record, right: F.Record): Ordering` | private |
+| Rust | `Sort { field: Field, descending: boolean }` | private |
+| Rust | `.compare(left: View, right: View): Ordering` | private |
 | Rust | `STATUSES: Status[]` | private |
 | Rust | `millis_text(millis: number): string` | private |
 | Rust | `bool_text(value: boolean): string` | private |
 | Rust | `millis(value: string): number` | private |
-| Rust | `time_value(field: F, value: string): number throws QueryError` | private |
+| Rust | `time_value(field: Field, value: string): number throws QueryError` | private |
 | Rust | `ago(offset: string): number?` | private |
 | Rust | `date_millis(value: string): number?` | private |
 | Rust | `status_rank(value: string): number` | private |
@@ -414,20 +442,27 @@ The rules the tables never repeat.
 | Rust | `.spelling(): string` | private |
 | Rust | `.is_keyword(keyword: string): boolean` | private |
 | Rust | `tokenize(query: string): Token[] throws QueryError` | private |
-| Rust | `parse_query<F>(query: string): [Condition<F>, Sort<F>?] throws QueryError` | private |
-| Rust | `Parser<F: QueryField> { tokens: Token[], at: number }` | private |
+| Rust | `parse_query(query: string): [Condition, Sort?, Origin] throws QueryError` | private |
+| Rust | `Parser { tokens: Token[], at: number, origin_field: Field? }` | private |
+| Rust | `.peek(): Token?` | private |
+| Rust | `.peek_after(): Token?` | private |
+| Rust | `.next(): Token?` | private |
+| Rust | `.take_keyword(keyword: string): boolean` | private |
 | Rust | `.at_order_by(): boolean` | private |
-| Rust | `.order_by(): Sort<F>? throws QueryError` | private |
-| Rust | `.any(): Condition<F> throws QueryError` | private |
-| Rust | `.all(): Condition<F> throws QueryError` | private |
-| Rust | `.unary(): Condition<F> throws QueryError` | private |
-| Rust | `.term(): Condition<F> throws QueryError` | private |
-| Rust | `.operator(field: F): Match throws QueryError` | private |
-| Rust | `.value(field: F): string throws QueryError` | private |
-| Rust | `.time(field: F): number throws QueryError` | private |
-| Rust | `.values(field: F): string[] throws QueryError` | private |
-| Rust | `one_or<F>(group: (Condition<F>[]) => Condition<F>, terms: Condition<F>[]): Condition<F>` | private |
-| Rust | `reject_repeated_field<F>(terms: Condition<F>[]): void throws QueryError` | private |
+| Rust | `.order_by(): Sort? throws QueryError` | private |
+| Rust | `.any(): Condition throws QueryError` | private |
+| Rust | `.all(): Condition throws QueryError` | private |
+| Rust | `.unary(): Condition throws QueryError` | private |
+| Rust | `.term(): Condition throws QueryError` | private |
+| Rust | `.at_operator(): boolean` | private |
+| Rust | `.operator(field: Field): Match throws QueryError` | private |
+| Rust | `.value(field: Field): string throws QueryError` | private |
+| Rust | `.time(field: Field): number throws QueryError` | private |
+| Rust | `.values(field: Field): string[] throws QueryError` | private |
+| Rust | `.field(name: string): Field throws QueryError` | private |
+| Rust | `.record_field(field: Field): void throws QueryError` | private |
+| Rust | `one_or(group: (Condition[]) => Condition, terms: Condition[]): Condition` | private |
+| Rust | `reject_repeated_field(terms: Condition[]): void throws QueryError` | private |
 
 ## `crates/agentwerk/src/agents/tasks/error.rs`
 
@@ -638,11 +673,13 @@ The rules the tables never repeat.
 | both | `.emit_event(event: Event): Event` | pub |
 | both | `.get_task(id: string): Task?` | pub |
 | both | `.get_tasks(): Task[]` | pub |
-| both | `.find_tasks(predicate: Matcher<Task>): Task[]` | pub |
-| Python | `.find_tasks(predicate)`: accepts a `Query` or a callable | |
-| both | `.find_task(predicate: Matcher<Task>): Task?` | pub |
-| both | `.find_events(matcher: Matcher<Event>): Event[]`: an AQL string stands in for the `Query<Event>` | pub |
-| both | `.find_event(matcher: Matcher<Event>): Event?` | pub |
+| both | `.find_tasks(predicate: Matcher<Task>): Task[]`: AQL selects tasks directly or through matching events | pub |
+| Python | `.find_tasks(predicate)`: accepts a `Query`, AQL string, or task callable | |
+| both | `.find_task(predicate: Matcher<Task>): Task?`: singular form of `find_tasks` | pub |
+| Python | `.find_task(predicate)`: accepts a `Query`, AQL string, or task callable | |
+| both | `.find_events(matcher: Matcher<Event>): Event[]`: AQL selects events directly or through matching tasks | pub |
+| both | `.find_event(matcher: Matcher<Event>): Event?`: singular form of `find_events` | pub |
+| Python | `.find_events(matches)` and `.find_event(matches)`: accept a `Query`, AQL string, or event callable | |
 | both | `.cancel_tasks(matches: Matcher<Task>): this` | pub |
 | Python | `.cancel_tasks(matches)`: accepts a `Query` or a callable | |
 | both | `.cancel_all_tasks(): this` | pub |
@@ -655,10 +692,10 @@ The rules the tables never repeat.
 | Rust | `.get_finish_reason(): FinishReason?` | pub |
 | Python | `.get_finish_reason(): str?`: the string it prints as, such as `policy_violated(turns)` | |
 | both | `.get_results(): json[]` | pub |
-| both | `.find_results(matches: Matcher<Task>): json[]` | pub |
-| both | `.find_results(query)`: an AQL string stands in for the `Query` | |
-| both | `.find_result(matches: Matcher<Task>): json?` | pub |
-| both | `.find_result(query)`: an AQL string stands in for the `Query` | |
+| both | `.find_results(matches: Matcher<Task>): json[]`: AQL selects producing tasks directly or through matching events | pub |
+| Python | `.find_results(query)`: accepts a `Query`, AQL string, or task callable | |
+| both | `.find_result(matches: Matcher<Task>): json?`: singular form of `find_results` | pub |
+| Python | `.find_result(query)`: accepts a `Query`, AQL string, or task callable | |
 
 ### Internal
 
@@ -695,10 +732,13 @@ The rules the tables never repeat.
 | Rust | `.label_for(id: string): string?` | private |
 | Rust | `.result_path(id: string): string` | crate |
 | Rust | `.dispatch(task: Task): string` | private |
+| Rust | `.tasks_selected_by(query: Query): Task[]` | private |
 | Rust | `.matching_tasks(query: Query): Task[]` | private |
 | Rust | `.first_matching_task(query: Query): Task?` | private |
-| Python | `Werk.find_task(predicate)`: accepts a `Query` or a callable | |
-| Rust | `.collect_events(query: Query<Event>, wanted: number): Event[]` | private |
+| Rust | `.tasks_referenced_by(query: Query): Task[]` | private |
+| Rust | `.matching_events(query: Query): Event[]` | private |
+| Rust | `.events_referencing_tasks(query: Query): Event[]` | private |
+| Rust | `.collect_events(query: Query, wanted: number): Event[]` | private |
 | Rust | `.pending(matches: Query): boolean` | crate |
 | Rust | `.ending_reason(): FinishReason?` | crate |
 | Rust | `.anything_claimable(): boolean` | private |
@@ -709,7 +749,7 @@ The rules the tables never repeat.
 | Rust | `.has_agent(id: string): boolean` | crate |
 | Rust | `.clone_agents(): Agent[]` | crate |
 | Rust | `.next_event_or_end(stream: Event): Promise<boolean>` | private |
-| Rust | `results_of(matches: Matcher<Task>): Query` | private |
+| Rust | `.result_tasks(matches: Matcher<Task>): Task[]` | private |
 
 ## `crates/agentwerk/src/agents/tasks/trajectory.rs`
 
@@ -2266,24 +2306,24 @@ Binds `providers/`.
 
 ## `crates/agentwerk-py/src/query.rs`
 
-Binds `agents/query.rs`. One class covers both field sets: Python carries no type parameter, so the string is compiled over the task fields and the event fields at once.
+Binds `agents/query.rs`. Python stores the same single, origin-aware compiled query as Rust.
 
 ### Public
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `PyQuery { source: string, tasks: Query<Task> throws QueryError, events: Query<Event> throws QueryError }` | python |
-| Rust | `.new(query: string): this throws PyErr`, raising only where both field sets reject the string | python |
+| Rust | `PyQuery { source: string, query: Query }` | python with private fields |
+| Rust | `.new(query: string): this throws PyErr` | python |
 | Rust | `.__repr__(): string` | python |
 
 ### Internal
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `rejected(over_tasks: QueryError, over_events: QueryError): PyErr` | private |
 | Rust | `value_error(message: string): PyErr` | private |
-| Rust | `to_task_matcher(arg: any): Query<Task> throws PyErr` | crate |
-| Rust | `to_event_matcher(arg: any): Query<Event> throws PyErr` | crate |
+| Rust | `to_task_matcher(arg: any): Query throws PyErr` | crate |
+| Rust | `to_task_finder(arg: any): Query throws PyErr` | crate |
+| Rust | `to_event_matcher(arg: any): Query throws PyErr` | crate |
 | Rust | `task_predicate(predicate: any, task: Task): boolean` | private |
 | Rust | `event_predicate(predicate: any, event: Event): boolean` | private |
 
