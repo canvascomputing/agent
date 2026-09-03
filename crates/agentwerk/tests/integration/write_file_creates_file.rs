@@ -45,7 +45,9 @@ async fn creates_file_with_token() -> std::result::Result<(), Box<dyn std::error
     common::print_result(&werk);
 
     assert!(
-        !werk.find_events("tool_call_started").is_empty(),
+        !werk
+            .find_events("event.name = tool_call_started")
+            .is_empty(),
         "agent must call at least one tool"
     );
 

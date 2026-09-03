@@ -72,7 +72,7 @@ pub(super) fn resolve_current_id(werk: &Werk, ctx: &ToolContext) -> Result<Strin
     if let Some(id) = ctx.task_id.as_deref() {
         return Ok(id.to_string());
     }
-    // A closure, never `agent = {id}`: an id derives from a host-supplied label,
+    // A closure, never `task.assignee = {id}`: an id derives from a host-supplied label,
     // and AQL binds no values, so one carrying `=` or a quote rewrites the query.
     let agent_id = ctx.agent_id.clone().ok_or_else(|| {
         Event::error(ctx.directives.render(TASK_ID_MISSING, &[])).directive(TASK_ID_MISSING)
@@ -208,7 +208,14 @@ fn action_result(werk: &Werk, id: Option<String>, ctx: &ToolContext) -> Event {
 
 fn action_list(werk: &Werk, aql: Option<String>, directives: &DirectiveStore) -> Event {
     let pool: Vec<Task> = match aql.as_deref().map(Query::new) {
-        Some(Ok(query)) => werk.find_tasks(query),
+        Some(Ok(query)) => match query.expects_task() {
+            Ok(()) => werk.find_tasks(query),
+            Err(error) => {
+                return Event::error(
+                    directives.render(TASK_QUERY_INVALID, &[("error", &error.to_string())]),
+                )
+            }
+        },
         Some(Err(error)) => {
             return Event::error(
                 directives.render(TASK_QUERY_INVALID, &[("error", &error.to_string())]),
@@ -295,7 +302,7 @@ mod tests {
         werk.set_dir(isolated_test_dir());
         werk.insert(Task::new("body").label(agent), "tester".into());
         let id = werk
-            .claim(&Query::from("status = todo"), agent)
+            .claim(&Query::from("task.status = todo"), agent)
             .expect("claim must succeed");
         (werk, id)
     }
@@ -461,7 +468,7 @@ mod tests {
         let ctx = ctx_with(Arc::clone(&werk), "alice");
         let result = call(
             TaskTool,
-            serde_json::json!({"action": "list", "aql": "status = in_progress"}),
+            serde_json::json!({"action": "list", "aql": "task.status = in_progress"}),
             &ctx,
         )
         .await;
@@ -476,7 +483,7 @@ mod tests {
         let ctx = ctx_with(Arc::clone(&werk), "alice");
         let result = call(
             TaskTool,
-            serde_json::json!({"action": "list", "aql": "ORDER BY id DESC"}),
+            serde_json::json!({"action": "list", "aql": "ORDER BY task.id DESC"}),
             &ctx,
         )
         .await;
@@ -490,7 +497,7 @@ mod tests {
         let ctx = ctx_with(Arc::clone(&werk), "alice");
         let result = call(
             TaskTool,
-            serde_json::json!({"action": "list", "aql": "created > -1h"}),
+            serde_json::json!({"action": "list", "aql": "task.created > -1h"}),
             &ctx,
         )
         .await;
@@ -499,7 +506,7 @@ mod tests {
 
         let result = call(
             TaskTool,
-            serde_json::json!({"action": "list", "aql": "created < -1h"}),
+            serde_json::json!({"action": "list", "aql": "task.created < -1h"}),
             &ctx,
         )
         .await;
@@ -512,7 +519,7 @@ mod tests {
         let ctx = ctx_with(Arc::clone(&werk), "alice");
         let result = call(
             TaskTool,
-            serde_json::json!({"action": "list", "aql": "status = finished"}),
+            serde_json::json!({"action": "list", "aql": "task.status = finished"}),
             &ctx,
         )
         .await;
@@ -531,6 +538,21 @@ mod tests {
         .await;
         assert!(result.get_name() == Event::TOOL_CALL_FAILED, "{result:?}");
         assert!(unwrap_text(&result).contains("agent"));
+    }
+
+    #[tokio::test]
+    async fn list_rejects_an_event_query_as_a_task_query() {
+        let werk = werk_with_two_tasks();
+        let ctx = ctx_with(Arc::clone(&werk), "alice");
+        let result = call(
+            TaskTool,
+            serde_json::json!({"action": "list", "aql": "event.name = task_created"}),
+            &ctx,
+        )
+        .await;
+
+        assert!(result.get_name() == Event::TOOL_CALL_FAILED, "{result:?}");
+        assert!(unwrap_text(&result).contains("requires a task query"));
     }
 
     #[tokio::test]

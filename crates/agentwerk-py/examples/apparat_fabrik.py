@@ -329,12 +329,12 @@ async def main(pruefer, meister, monteur):
     )
     rulings = [
         task.get_result()
-        for task in werk.find_tasks("label = abnahme AND status = finished")
+        for task in werk.find_tasks("task.label = abnahme AND task.status = finished")
         if isinstance(task.get_result(), dict)
     ]
     fitted = [
         task.get_result()
-        for task in werk.find_tasks("label = montage AND status = finished")
+        for task in werk.find_tasks("task.label = montage AND task.status = finished")
         if isinstance(task.get_result(), dict) and task.get_result().get("eingebaut")
     ]
     scrap = [ruling for ruling in rulings if not ruling.get("passt")]

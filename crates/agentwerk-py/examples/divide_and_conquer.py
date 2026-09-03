@@ -154,7 +154,9 @@ async def main(n, partitions, agents):
         else:
             failures.append((task.get_id(), task.get_status()))
 
-    event_counts = Counter(event.get_name() for event in werk.find_events("ORDER BY created"))
+    event_counts = Counter(
+        event.get_name() for event in werk.find_events("ORDER BY event.created")
+    )
     duration = werk.get_duration() or 0.0
     print(
         f"\nfinished in {duration:.1f}s: "

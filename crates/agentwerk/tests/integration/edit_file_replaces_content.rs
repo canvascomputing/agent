@@ -47,7 +47,9 @@ async fn replaces_substring_in_place() -> std::result::Result<(), Box<dyn std::e
     common::print_result(&werk);
 
     assert!(
-        !werk.find_events("tool_call_started").is_empty(),
+        !werk
+            .find_events("event.name = tool_call_started")
+            .is_empty(),
         "agent must call at least one tool"
     );
 

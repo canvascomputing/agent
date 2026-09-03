@@ -92,7 +92,7 @@ async fn walks_every_task_action() -> std::result::Result<(), Box<dyn std::error
     // Not `finish_all_tasks`: the decoy and the record the agent files are labelled
     // for nobody, so they stay `todo` and a wait on the whole Werk only ever
     // ends at the time cap.
-    werk.finish_tasks("label IN (archive, auditor)").await;
+    werk.finish_tasks("task.label IN (archive, auditor)").await;
     common::print_result(&werk);
 
     let used = seen.lock().unwrap().clone();
@@ -110,12 +110,12 @@ async fn walks_every_task_action() -> std::result::Result<(), Box<dyn std::error
     // the intent has to reach, not every attempt on the way there.
     let written = written.lock().unwrap().clone();
     assert!(
-        written.iter().any(|q| Query::<Task>::new(q).is_ok()),
+        written.iter().any(|q| Query::new(q).is_ok()),
         "the narrowing intent reached no query that compiles; it wrote {written:?}"
     );
 
     let audit = werk
-        .find_task("label = auditor AND status = finished")
+        .find_task("task.label = auditor AND task.status = finished")
         .expect("the auditor must finish the task handed to it");
     let answer = audit.get_result().cloned().unwrap_or_default().to_string();
     assert!(

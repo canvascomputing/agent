@@ -69,13 +69,15 @@ async fn separates_files_and_directories() -> std::result::Result<(), Box<dyn st
     );
 
     let json = werk
-        .finish_task("ORDER BY created DESC")
+        .finish_task("ORDER BY task.created DESC")
         .await
         .unwrap_or_default();
     common::print_result(&werk);
 
     assert!(
-        !werk.find_events("tool_call_started").is_empty(),
+        !werk
+            .find_events("event.name = tool_call_started")
+            .is_empty(),
         "agent must call at least one tool"
     );
 
